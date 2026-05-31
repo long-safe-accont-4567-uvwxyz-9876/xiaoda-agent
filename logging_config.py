@@ -1,28 +1,30 @@
-import os
 import sys
-import logging
+from pathlib import Path
 from loguru import logger
+from config import LOG_DIR
 
 
-def setup_logging(level: str = "INFO", log_dir: str = "logs"):
-    os.makedirs(log_dir, exist_ok=True)
-
+def setup_logging():
     logger.remove()
+    logger.configure(extra={"trace_id": ""})
 
     logger.add(
         sys.stderr,
-        level=level,
-        format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>",
+        format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{extra[trace_id]}</cyan> | {message}",
+        level="DEBUG",
     )
 
+    log_dir = LOG_DIR
+    log_dir.mkdir(exist_ok=True)
+    log_path = log_dir / "agent_{time:YYYY-MM-DD}.json"
     logger.add(
-        os.path.join(log_dir, "nahida_{time:YYYY-MM-DD}.log"),
-        level="DEBUG",
-        rotation="1 day",
-        retention="7 days",
+        str(log_path),
+        format="{time} {level} {extra[trace_id]} {message}",
+        serialize=True,
+        rotation="00:00",
+        retention="30 days",
+        level="INFO",
         encoding="utf-8",
     )
 
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("openai").setLevel(logging.WARNING)
+    logger.info("日志系统就绪")
