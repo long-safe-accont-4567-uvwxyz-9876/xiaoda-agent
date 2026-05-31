@@ -1,388 +1,689 @@
 import os
 import ctypes
-import ctypes.util
-import numpy as np
 from pathlib import Path
-from dataclasses import dataclass
-from typing import Any
 
+import numpy as np
 from loguru import logger
 
+_vip_initialized = False
 
-@dataclass
-class NPUBuffer:
-    ptr: ctypes.c_void_p
-    size: int
-    dtype: np.dtype
-    shape: tuple
+VIP_SUCCESS = 0
+VIP_BUFFER_FORMAT_FP32 = 0
+VIP_BUFFER_FORMAT_FP16 = 1
+VIP_BUFFER_FORMAT_UINT8 = 2
+VIP_BUFFER_FORMAT_INT8 = 3
+VIP_BUFFER_QUANTIZE_NONE = 0
+VIP_BUFFER_QUANTIZE_DYNAMIC_FIXED_POINT = 1
+VIP_BUFFER_QUANTIZE_TF_ASYMM = 2
+VIP_CREATE_NETWORK_FROM_FILE = 0x01
+VIP_NETWORK_PROP_INPUT_COUNT = 1
+VIP_NETWORK_PROP_OUTPUT_COUNT = 2
+VIP_BUFFER_PROP_QUANT_FORMAT = 0
+VIP_BUFFER_PROP_NUM_OF_DIMENSION = 1
+VIP_BUFFER_PROP_SIZES_OF_DIMENSION = 2
+VIP_BUFFER_PROP_DATA_FORMAT = 3
+VIP_BUFFER_PROP_FIXED_POINT_POS = 4
+VIP_BUFFER_PROP_TF_SCALE = 5
+VIP_BUFFER_PROP_TF_ZERO_POINT = 6
+VIP_BUFFER_OPER_TYPE_FLUSH = 1
+VIP_BUFFER_OPER_TYPE_INVALIDATE = 2
+VIP_BUFFER_MEMORY_TYPE_DEFAULT = 0
+
+INPUT_SIZE = 640
+
+DEFAULT_MODEL_PATH = str(Path(__file__).parent / "models" / "yolov5.nb")
+
+YOLOV5_ANCHORS = [
+    [(10, 13), (16, 30), (33, 23)],
+    [(30, 61), (62, 45), (59, 119)],
+    [(116, 90), (156, 198), (373, 326)],
+]
+
+COCO_LABELS = [
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
+    "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
+    "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack",
+    "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball",
+    "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
+    "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake",
+    "chair", "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop",
+    "mouse", "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
+    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier",
+    "toothbrush",
+]
+
+
+class _QuantDFP(ctypes.Structure):
+    _fields_ = [("fixed_point_pos", ctypes.c_int32)]
+
+
+class _QuantAffine(ctypes.Structure):
+    _fields_ = [("scale", ctypes.c_float), ("zeroPoint", ctypes.c_int32)]
+
+
+class _QuantData(ctypes.Union):
+    _fields_ = [("dfp", _QuantDFP), ("affine", _QuantAffine)]
+
+
+class vip_buffer_create_params_t(ctypes.Structure):
+    _fields_ = [
+        ("num_of_dims", ctypes.c_uint32),
+        ("sizes", ctypes.c_uint32 * 6),
+        ("data_format", ctypes.c_int32),
+        ("quant_format", ctypes.c_int32),
+        ("quant_data", _QuantData),
+        ("memory_type", ctypes.c_uint32),
+    ]
+
+
+class VIPLite:
+    def __init__(self):
+        self._lib = None
+        self._load_library()
+
+    def _load_library(self):
+        try:
+            self._lib = ctypes.CDLL("/usr/lib/libNBGlinker.so")
+            self._setup_argtypes()
+        except OSError as e:
+            logger.warning("failed to load libNBGlinker.so: {}", e)
+            self._lib = None
+
+    def _setup_argtypes(self):
+        lib = self._lib
+        lib.vip_init.argtypes = []
+        lib.vip_init.restype = ctypes.c_int32
+        lib.vip_destroy.argtypes = []
+        lib.vip_destroy.restype = ctypes.c_int32
+        lib.vip_get_version.argtypes = []
+        lib.vip_get_version.restype = ctypes.c_uint32
+        lib.vip_create_network.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int32,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        lib.vip_create_network.restype = ctypes.c_int32
+        lib.vip_destroy_network.argtypes = [ctypes.c_void_p]
+        lib.vip_destroy_network.restype = ctypes.c_int32
+        lib.vip_prepare_network.argtypes = [ctypes.c_void_p]
+        lib.vip_prepare_network.restype = ctypes.c_int32
+        lib.vip_run_network.argtypes = [ctypes.c_void_p]
+        lib.vip_run_network.restype = ctypes.c_int32
+        lib.vip_finish_network.argtypes = [ctypes.c_void_p]
+        lib.vip_finish_network.restype = ctypes.c_int32
+        lib.vip_query_network.argtypes = [
+            ctypes.c_void_p, ctypes.c_int32, ctypes.c_void_p,
+        ]
+        lib.vip_query_network.restype = ctypes.c_int32
+        lib.vip_query_input.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int32, ctypes.c_void_p,
+        ]
+        lib.vip_query_input.restype = ctypes.c_int32
+        lib.vip_query_output.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int32, ctypes.c_void_p,
+        ]
+        lib.vip_query_output.restype = ctypes.c_int32
+        lib.vip_set_input.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p,
+        ]
+        lib.vip_set_input.restype = ctypes.c_int32
+        lib.vip_set_output.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p,
+        ]
+        lib.vip_set_output.restype = ctypes.c_int32
+        lib.vip_create_buffer.argtypes = [
+            ctypes.POINTER(vip_buffer_create_params_t),
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        lib.vip_create_buffer.restype = ctypes.c_int32
+        lib.vip_map_buffer.argtypes = [ctypes.c_void_p]
+        lib.vip_map_buffer.restype = ctypes.c_void_p
+        lib.vip_unmap_buffer.argtypes = [ctypes.c_void_p]
+        lib.vip_unmap_buffer.restype = ctypes.c_int32
+        lib.vip_destroy_buffer.argtypes = [ctypes.c_void_p]
+        lib.vip_destroy_buffer.restype = ctypes.c_int32
+        lib.vip_get_buffer_size.argtypes = [ctypes.c_void_p]
+        lib.vip_get_buffer_size.restype = ctypes.c_uint32
+        lib.vip_flush_buffer.argtypes = [ctypes.c_void_p, ctypes.c_int32]
+        lib.vip_flush_buffer.restype = ctypes.c_int32
+        lib.vip_query_hardware.argtypes = [
+            ctypes.c_int32, ctypes.c_uint32, ctypes.c_void_p,
+        ]
+        lib.vip_query_hardware.restype = ctypes.c_int32
+
+    @property
+    def available(self):
+        return self._lib is not None
+
+    def init(self):
+        global _vip_initialized
+        if _vip_initialized:
+            return True
+        if not self.available:
+            return False
+        status = self._lib.vip_init()
+        if status != VIP_SUCCESS:
+            logger.warning("vip_init failed: {}", status)
+            return False
+        _vip_initialized = True
+        logger.info("vip_init success")
+        return True
+
+    def destroy(self):
+        global _vip_initialized
+        if not _vip_initialized or not self.available:
+            return
+        self._lib.vip_destroy()
+        _vip_initialized = False
+
+    def create_network(self, model_path):
+        if not self.available:
+            return None
+        network = ctypes.c_void_p()
+        path_bytes = model_path.encode("utf-8") if isinstance(model_path, str) else model_path
+        status = self._lib.vip_create_network(
+            path_bytes, 0, VIP_CREATE_NETWORK_FROM_FILE, ctypes.byref(network),
+        )
+        if status != VIP_SUCCESS:
+            logger.warning("vip_create_network failed: {}", status)
+            return None
+        return network
+
+    def prepare_network(self, network):
+        if not self.available or not network:
+            return False
+        status = self._lib.vip_prepare_network(network)
+        if status != VIP_SUCCESS:
+            logger.warning("vip_prepare_network failed: {}", status)
+            return False
+        return True
+
+    def run_network(self, network):
+        if not self.available or not network:
+            return False
+        status = self._lib.vip_run_network(network)
+        if status != VIP_SUCCESS:
+            logger.warning("vip_run_network failed: {}", status)
+            return False
+        return True
+
+    def finish_network(self, network):
+        if not self.available or not network:
+            return
+        self._lib.vip_finish_network(network)
+
+    def destroy_network(self, network):
+        if not self.available or not network:
+            return
+        self._lib.vip_destroy_network(network)
+
+    def query_network_u32(self, network, prop):
+        val = ctypes.c_uint32()
+        self._lib.vip_query_network(network, prop, ctypes.byref(val))
+        return val.value
+
+    def query_input_u32(self, network, index, prop):
+        val = ctypes.c_uint32()
+        self._lib.vip_query_input(network, index, prop, ctypes.byref(val))
+        return val.value
+
+    def query_input_float(self, network, index, prop):
+        val = ctypes.c_float()
+        self._lib.vip_query_input(network, index, prop, ctypes.byref(val))
+        return val.value
+
+    def query_input_sizes(self, network, index):
+        sizes = (ctypes.c_uint32 * 6)()
+        self._lib.vip_query_input(network, index, VIP_BUFFER_PROP_SIZES_OF_DIMENSION, sizes)
+        return list(sizes)
+
+    def query_output_u32(self, network, index, prop):
+        val = ctypes.c_uint32()
+        self._lib.vip_query_output(network, index, prop, ctypes.byref(val))
+        return val.value
+
+    def query_output_float(self, network, index, prop):
+        val = ctypes.c_float()
+        self._lib.vip_query_output(network, index, prop, ctypes.byref(val))
+        return val.value
+
+    def query_output_sizes(self, network, index):
+        sizes = (ctypes.c_uint32 * 6)()
+        self._lib.vip_query_output(network, index, VIP_BUFFER_PROP_SIZES_OF_DIMENSION, sizes)
+        return list(sizes)
+
+    def create_buffer(self, params):
+        if not self.available:
+            return None
+        buf = ctypes.c_void_p()
+        status = self._lib.vip_create_buffer(
+            ctypes.byref(params), ctypes.sizeof(params), ctypes.byref(buf),
+        )
+        if status != VIP_SUCCESS:
+            logger.warning("vip_create_buffer failed: {}", status)
+            return None
+        return buf
+
+    def map_buffer(self, buf):
+        if not self.available or not buf:
+            return None
+        return self._lib.vip_map_buffer(buf)
+
+    def unmap_buffer(self, buf):
+        if not self.available or not buf:
+            return
+        self._lib.vip_unmap_buffer(buf)
+
+    def destroy_buffer(self, buf):
+        if not self.available or not buf:
+            return
+        self._lib.vip_destroy_buffer(buf)
+
+    def get_buffer_size(self, buf):
+        if not self.available or not buf:
+            return 0
+        return self._lib.vip_get_buffer_size(buf)
+
+    def flush_buffer(self, buf, op_type=VIP_BUFFER_OPER_TYPE_FLUSH):
+        if not self.available or not buf:
+            return
+        self._lib.vip_flush_buffer(buf, op_type)
+
+    def set_input(self, network, index, buf):
+        if not self.available or not network or not buf:
+            return False
+        status = self._lib.vip_set_input(network, index, buf)
+        if status != VIP_SUCCESS:
+            logger.warning("vip_set_input failed: {}", status)
+            return False
+        return True
+
+    def set_output(self, network, index, buf):
+        if not self.available or not network or not buf:
+            return False
+        status = self._lib.vip_set_output(network, index, buf)
+        if status != VIP_SUCCESS:
+            logger.warning("vip_set_output failed: {}", status)
+            return False
+        return True
+
+
+class BufferInfo:
+    __slots__ = ("num_dims", "sizes", "data_format", "quant_format", "scale", "zero_point", "fixed_point_pos")
+
+    def __init__(self):
+        self.num_dims = 0
+        self.sizes = []
+        self.data_format = 0
+        self.quant_format = 0
+        self.scale = 1.0
+        self.zero_point = 0
+        self.fixed_point_pos = 0
 
 
 class NPUModel:
-    def __init__(self, model_path: str, device_id: int = 0):
-        self._model_path = model_path
-        self._device_id = device_id
-        self._handle = None
-        self._input_buffers: dict[str, NPUBuffer] = {}
-        self._output_buffers: dict[str, NPUBuffer] = {}
-        self._input_info: list[dict] = []
-        self._output_info: list[dict] = []
-        self._available = False
+    def __init__(self, model_path):
+        self._vip = VIPLite()
+        self._network = None
+        self._input_buffers = []
+        self._output_buffers = []
+        self._input_infos = []
+        self._output_infos = []
+        self._loaded = False
 
-    def _load_library(self):
-        lib_names = ["libNBGlinker.so", "libviplite.so", "libovx.so"]
-        for name in lib_names:
-            lib_path = ctypes.util.find_library(name.replace("lib", "").replace(".so", ""))
-            if lib_path:
-                return ctypes.CDLL(lib_path)
-            for search_dir in ["/usr/lib", "/usr/local/lib", "/opt/vip/lib"]:
-                full = os.path.join(search_dir, name)
-                if os.path.exists(full):
-                    return ctypes.CDLL(full)
-        return None
-
-    def load(self) -> bool:
-        lib = self._load_library()
-        if not lib:
-            logger.warning("npu.library_not_found")
-            return False
-
-        try:
-            if hasattr(lib, "vip_create_kl"):
-                lib.vip_create_kl.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)]
-                lib.vip_create_kl.restype = ctypes.c_int
-
-                handle = ctypes.c_void_p()
-                model_bytes = self._model_path.encode("utf-8")
-                ret = lib.vip_create_kl(model_bytes, self._device_id, ctypes.byref(handle))
-                if ret != 0:
-                    logger.error("npu.model_load_failed", path=self._model_path, ret=ret)
-                    return False
-
-                self._handle = (lib, handle)
-                self._available = True
-                logger.info("npu.model_loaded", path=self._model_path)
-                return True
-            else:
-                logger.warning("npu.vip_create_kl_not_found")
-                return False
-
-        except Exception as e:
-            logger.error("npu.load_exception", error=str(e))
-            return False
-
-    def allocate_buffers(self, input_shapes: dict[str, tuple], output_shapes: dict[str, tuple],
-                         dtype: np.dtype = np.float32):
-        if not self._available:
+        if not self._vip.available:
+            logger.warning("VIP Lite library not available")
             return
 
-        for name, shape in input_shapes.items():
-            size = int(np.prod(shape)) * np.dtype(dtype).itemsize
-            buf = np.zeros(shape, dtype=dtype)
-            self._input_buffers[name] = NPUBuffer(
-                ptr=buf.ctypes.data_as(ctypes.c_void_p),
-                size=size,
-                dtype=dtype,
-                shape=shape,
-            )
-            self._input_info.append({"name": name, "shape": shape, "dtype": str(dtype)})
+        if not self._vip.init():
+            logger.warning("VIP init failed")
+            return
 
-        for name, shape in output_shapes.items():
-            size = int(np.prod(shape)) * np.dtype(dtype).itemsize
-            buf = np.zeros(shape, dtype=dtype)
-            self._output_buffers[name] = NPUBuffer(
-                ptr=buf.ctypes.data_as(ctypes.c_void_p),
-                size=size,
-                dtype=dtype,
-                shape=shape,
-            )
-            self._output_info.append({"name": name, "shape": shape, "dtype": str(dtype)})
+        self._network = self._vip.create_network(model_path)
+        if not self._network:
+            logger.warning("failed to create network from {}", model_path)
+            return
 
-    def set_input(self, name: str, data: np.ndarray):
-        buf = self._input_buffers.get(name)
-        if not buf:
-            raise ValueError(f"Input buffer '{name}' not found")
-        if data.shape != buf.shape:
-            data = data.reshape(buf.shape)
-        ctypes.memmove(buf.ptr, data.ctypes.data, buf.size)
+        if not self._vip.prepare_network(self._network):
+            logger.warning("failed to prepare network")
+            return
 
-    def get_output(self, name: str) -> np.ndarray:
-        buf = self._output_buffers.get(name)
-        if not buf:
-            raise ValueError(f"Output buffer '{name}' not found")
-        return np.frombuffer((ctypes.c_char * buf.size).from_address(buf.ptr.value), dtype=buf.dtype).reshape(buf.shape)
+        self._query_buffer_info()
+        self._create_buffers()
+        self._attach_buffers()
+        self._loaded = True
+        logger.info("NPU model loaded: {}", model_path)
 
-    def run(self) -> bool:
-        if not self._available or not self._handle:
-            return False
+    def _query_buffer_info(self):
+        num_inputs = self._vip.query_network_u32(self._network, VIP_NETWORK_PROP_INPUT_COUNT)
+        num_outputs = self._vip.query_network_u32(self._network, VIP_NETWORK_PROP_OUTPUT_COUNT)
 
-        try:
-            lib, handle = self._handle
-            if hasattr(lib, "vip_run_kl"):
-                lib.vip_run_kl.argtypes = [ctypes.c_void_p]
-                lib.vip_run_kl.restype = ctypes.c_int
-                ret = lib.vip_run_kl(handle)
-                if ret != 0:
-                    logger.error("npu.run_failed", ret=ret)
-                    return False
-                return True
-            return False
-        except Exception as e:
-            logger.error("npu.run_exception", error=str(e))
-            return False
+        for i in range(num_inputs):
+            info = BufferInfo()
+            info.num_dims = self._vip.query_input_u32(self._network, i, VIP_BUFFER_PROP_NUM_OF_DIMENSION)
+            info.sizes = self._vip.query_input_sizes(self._network, i)[:info.num_dims]
+            info.data_format = self._vip.query_input_u32(self._network, i, VIP_BUFFER_PROP_DATA_FORMAT)
+            info.quant_format = self._vip.query_input_u32(self._network, i, VIP_BUFFER_PROP_QUANT_FORMAT)
+            if info.quant_format == VIP_BUFFER_QUANTIZE_TF_ASYMM:
+                info.scale = self._vip.query_input_float(self._network, i, VIP_BUFFER_PROP_TF_SCALE)
+                info.zero_point = self._vip.query_input_u32(self._network, i, VIP_BUFFER_PROP_TF_ZERO_POINT)
+            elif info.quant_format == VIP_BUFFER_QUANTIZE_DYNAMIC_FIXED_POINT:
+                info.fixed_point_pos = self._vip.query_input_u32(self._network, i, VIP_BUFFER_PROP_FIXED_POINT_POS)
+            self._input_infos.append(info)
 
-    def release(self):
-        if self._handle:
+        for i in range(num_outputs):
+            info = BufferInfo()
+            info.num_dims = self._vip.query_output_u32(self._network, i, VIP_BUFFER_PROP_NUM_OF_DIMENSION)
+            info.sizes = self._vip.query_output_sizes(self._network, i)[:info.num_dims]
+            info.data_format = self._vip.query_output_u32(self._network, i, VIP_BUFFER_PROP_DATA_FORMAT)
+            info.quant_format = self._vip.query_output_u32(self._network, i, VIP_BUFFER_PROP_QUANT_FORMAT)
+            if info.quant_format == VIP_BUFFER_QUANTIZE_TF_ASYMM:
+                info.scale = self._vip.query_output_float(self._network, i, VIP_BUFFER_PROP_TF_SCALE)
+                info.zero_point = self._vip.query_output_u32(self._network, i, VIP_BUFFER_PROP_TF_ZERO_POINT)
+            elif info.quant_format == VIP_BUFFER_QUANTIZE_DYNAMIC_FIXED_POINT:
+                info.fixed_point_pos = self._vip.query_output_u32(self._network, i, VIP_BUFFER_PROP_FIXED_POINT_POS)
+            self._output_infos.append(info)
+
+    def _create_buffers(self):
+        for info in self._input_infos:
+            params = vip_buffer_create_params_t()
+            params.num_of_dims = info.num_dims
+            for j, s in enumerate(info.sizes):
+                params.sizes[j] = s
+            params.data_format = info.data_format
+            params.quant_format = info.quant_format
+            if info.quant_format == VIP_BUFFER_QUANTIZE_TF_ASYMM:
+                params.quant_data.affine.scale = info.scale
+                params.quant_data.affine.zeroPoint = info.zero_point
+            elif info.quant_format == VIP_BUFFER_QUANTIZE_DYNAMIC_FIXED_POINT:
+                params.quant_data.dfp.fixed_point_pos = info.fixed_point_pos
+            params.memory_type = VIP_BUFFER_MEMORY_TYPE_DEFAULT
+            buf = self._vip.create_buffer(params)
+            if buf:
+                self._input_buffers.append(buf)
+            else:
+                logger.warning("failed to create input buffer {}", len(self._input_buffers))
+
+        for info in self._output_infos:
+            params = vip_buffer_create_params_t()
+            params.num_of_dims = info.num_dims
+            for j, s in enumerate(info.sizes):
+                params.sizes[j] = s
+            params.data_format = info.data_format
+            params.quant_format = info.quant_format
+            if info.quant_format == VIP_BUFFER_QUANTIZE_TF_ASYMM:
+                params.quant_data.affine.scale = info.scale
+                params.quant_data.affine.zeroPoint = info.zero_point
+            elif info.quant_format == VIP_BUFFER_QUANTIZE_DYNAMIC_FIXED_POINT:
+                params.quant_data.dfp.fixed_point_pos = info.fixed_point_pos
+            params.memory_type = VIP_BUFFER_MEMORY_TYPE_DEFAULT
+            buf = self._vip.create_buffer(params)
+            if buf:
+                self._output_buffers.append(buf)
+            else:
+                logger.warning("failed to create output buffer {}", len(self._output_buffers))
+
+    def _attach_buffers(self):
+        for i, buf in enumerate(self._input_buffers):
+            self._vip.set_input(self._network, i, buf)
+        for i, buf in enumerate(self._output_buffers):
+            self._vip.set_output(self._network, i, buf)
+
+    @property
+    def loaded(self):
+        return self._loaded
+
+    @property
+    def input_infos(self):
+        return self._input_infos
+
+    @property
+    def output_infos(self):
+        return self._output_infos
+
+    def run(self, input_data: bytes) -> list:
+        if not self._loaded:
+            logger.warning("model not loaded")
+            return []
+
+        if not self._input_buffers:
+            logger.warning("no input buffers")
+            return []
+
+        input_buf = self._input_buffers[0]
+        mapped = self._vip.map_buffer(input_buf)
+        if not mapped:
+            logger.warning("failed to map input buffer")
+            return []
+
+        buf_size = self._vip.get_buffer_size(input_buf)
+        write_size = min(len(input_data), buf_size)
+        ctypes.memmove(mapped, input_data, write_size)
+        self._vip.flush_buffer(input_buf, VIP_BUFFER_OPER_TYPE_FLUSH)
+
+        if not self._vip.run_network(self._network):
+            logger.warning("network run failed")
+            return []
+
+        results = []
+        for buf in self._output_buffers:
+            self._vip.flush_buffer(buf, VIP_BUFFER_OPER_TYPE_INVALIDATE)
+            mapped_out = self._vip.map_buffer(buf)
+            if not mapped_out:
+                results.append(b"")
+                continue
+            out_size = self._vip.get_buffer_size(buf)
+            out_data = (ctypes.c_uint8 * out_size)()
+            ctypes.memmove(out_data, mapped_out, out_size)
+            results.append(bytes(out_data))
+
+        return results
+
+    def __del__(self):
+        for buf in self._output_buffers:
             try:
-                lib, handle = self._handle
-                if hasattr(lib, "vip_destroy_kl"):
-                    lib.vip_destroy_kl.argtypes = [ctypes.c_void_p]
-                    lib.vip_destroy_kl.restype = ctypes.c_int
-                    lib.vip_destroy_kl(handle)
+                self._vip.destroy_buffer(buf)
             except Exception:
                 pass
-            self._handle = None
-        self._input_buffers.clear()
-        self._output_buffers.clear()
-        self._available = False
+        for buf in self._input_buffers:
+            try:
+                self._vip.destroy_buffer(buf)
+            except Exception:
+                pass
+        if self._network:
+            try:
+                self._vip.finish_network(self._network)
+                self._vip.destroy_network(self._network)
+            except Exception:
+                pass
 
-    @property
-    def available(self) -> bool:
-        return self._available
 
-    @property
-    def info(self) -> dict:
-        return {
-            "model_path": self._model_path,
-            "device_id": self._device_id,
-            "available": self._available,
-            "inputs": self._input_info,
-            "outputs": self._output_info,
-        }
+def _sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -500, 500)))
 
 
 class YOLOv5PostProcessor:
-    def __init__(self, input_size: int = 640, conf_threshold: float = 0.25,
-                 iou_threshold: float = 0.45, num_classes: int = 80):
-        self._input_size = input_size
-        self._conf_threshold = conf_threshold
-        self._iou_threshold = iou_threshold
-        self._num_classes = num_classes
-        self._anchors = [
-            [(10, 13), (16, 30), (33, 23)],
-            [(30, 61), (62, 45), (59, 119)],
-            [(116, 90), (156, 198), (373, 326)],
-        ]
+    def __init__(self, conf_threshold=0.45, nms_threshold=0.45, max_detections=100):
+        self.conf_threshold = conf_threshold
+        self.nms_threshold = nms_threshold
+        self.max_detections = max_detections
+        self.labels = COCO_LABELS
+        self.anchors = YOLOV5_ANCHORS
 
-    def _sigmoid(self, x: np.ndarray) -> np.ndarray:
-        return 1.0 / (1.0 + np.exp(-np.clip(x, -500, 500)))
+    def _iou(self, a, b):
+        ix1 = max(a["x1"], b["x1"])
+        iy1 = max(a["y1"], b["y1"])
+        ix2 = min(a["x2"], b["x2"])
+        iy2 = min(a["y2"], b["y2"])
+        iw = max(0, ix2 - ix1)
+        ih = max(0, iy2 - iy1)
+        inter = iw * ih
+        area_a = max(0, a["x2"] - a["x1"]) * max(0, a["y2"] - a["y1"])
+        area_b = max(0, b["x2"] - b["x1"]) * max(0, b["y2"] - b["y1"])
+        union = area_a + area_b - inter
+        if union <= 0:
+            return 0.0
+        return inter / union
 
-    def _decode_predictions(self, predictions: np.ndarray, stride: int, anchors: list) -> np.ndarray:
-        batch, grid_h, grid_w, _ = predictions.shape
-        num_anchors = len(anchors)
-        predictions = predictions.reshape(batch, grid_h, grid_w, num_anchors, 5 + self._num_classes)
-
-        grid_x, grid_y = np.meshgrid(np.arange(grid_w), np.arange(grid_h))
-        grid_x = grid_x[..., np.newaxis]
-        grid_y = grid_y[..., np.newaxis]
-
-        xy = self._sigmoid(predictions[..., 0:2])
-        xy[..., 0] = (xy[..., 0] * 2.0 - 0.5 + grid_x) * stride
-        xy[..., 1] = (xy[..., 1] * 2.0 - 0.5 + grid_y) * stride
-
-        wh = np.exp(predictions[..., 2:4])
-        for i, (aw, ah) in enumerate(anchors):
-            wh[..., i, 0] *= aw
-            wh[..., i, 1] *= ah
-
-        obj_conf = self._sigmoid(predictions[..., 4:5])
-        class_probs = self._sigmoid(predictions[..., 5:])
-        scores = obj_conf * class_probs
-
-        boxes = np.concatenate([xy, wh], axis=-1)
-        return boxes.reshape(-1, 4), scores.reshape(-1, self._num_classes)
-
-    def _nms(self, boxes: np.ndarray, scores: np.ndarray) -> list[int]:
-        x1 = boxes[:, 0] - boxes[:, 2] / 2
-        y1 = boxes[:, 1] - boxes[:, 3] / 2
-        x2 = boxes[:, 0] + boxes[:, 2] / 2
-        y2 = boxes[:, 1] + boxes[:, 3] / 2
-        areas = (x2 - x1) * (y2 - y1)
-
-        max_scores = scores.max(axis=1)
-        order = max_scores.argsort()[::-1]
-
+    def _nms(self, detections):
+        if not detections:
+            return []
+        detections.sort(key=lambda d: d["confidence"], reverse=True)
+        detections = detections[:self.max_detections * 3]
         keep = []
-        while order.size > 0:
-            i = order[0]
-            keep.append(i)
-
-            xx1 = np.maximum(x1[i], x1[order[1:]])
-            yy1 = np.maximum(y1[i], y1[order[1:]])
-            xx2 = np.minimum(x2[i], x2[order[1:]])
-            yy2 = np.minimum(y2[i], y2[order[1:]])
-
-            w = np.maximum(0, xx2 - xx1)
-            h = np.maximum(0, yy2 - yy1)
-            inter = w * h
-            iou = inter / (areas[i] + areas[order[1:]] - inter)
-
-            inds = np.where(iou <= self._iou_threshold)[0]
-            order = order[inds + 1]
-
+        while detections:
+            best = detections.pop(0)
+            keep.append(best)
+            if len(keep) >= self.max_detections:
+                break
+            detections = [d for d in detections if self._iou(best, d) < self.nms_threshold]
         return keep
 
-    def process(self, outputs: list[np.ndarray], img_w: int, img_h: int) -> list[dict]:
-        all_boxes = []
-        all_scores = []
+    def process(self, outputs: list, input_shape: tuple = (INPUT_SIZE, INPUT_SIZE)) -> list:
+        all_detections = []
         strides = [8, 16, 32]
 
-        for i, (output, stride, anchors) in enumerate(zip(outputs, strides, self._anchors)):
-            boxes, scores = self._decode_predictions(output, stride, anchors)
-            all_boxes.append(boxes)
-            all_scores.append(scores)
+        for scale_idx, output_data in enumerate(outputs):
+            if not output_data or scale_idx >= len(strides):
+                continue
 
-        boxes = np.concatenate(all_boxes, axis=0)
-        scores = np.concatenate(all_scores, axis=0)
+            data = np.frombuffer(output_data, dtype=np.float32)
+            stride = strides[scale_idx]
+            grid_h = INPUT_SIZE // stride
+            grid_w = INPUT_SIZE // stride
 
-        max_scores = scores.max(axis=1)
-        mask = max_scores > self._conf_threshold
-        boxes = boxes[mask]
-        scores = scores[mask]
+            expected_size = 3 * grid_h * grid_w * 85
+            if data.size < expected_size:
+                continue
 
-        if len(boxes) == 0:
-            return []
+            output = data.reshape(3, grid_h, grid_w, 85)
+            anchors = self.anchors[scale_idx]
 
-        scale_x = img_w / self._input_size
-        scale_y = img_h / self._input_size
-        boxes[:, 0] *= scale_x
-        boxes[:, 2] *= scale_x
-        boxes[:, 1] *= scale_y
-        boxes[:, 3] *= scale_y
+            gx, gy = np.meshgrid(np.arange(grid_w), np.arange(grid_h))
+            gx = gx[:, :, np.newaxis].astype(np.float32)
+            gy = gy[:, :, np.newaxis].astype(np.float32)
 
-        results = []
-        for cls_id in range(self._num_classes):
-            cls_scores = scores[:, cls_id]
-            keep = self._nms(boxes, cls_scores)
-            for idx in keep:
-                if cls_scores[idx] > self._conf_threshold:
-                    cx, cy, w, h = boxes[idx]
-                    results.append({
-                        "class_id": cls_id,
-                        "score": float(cls_scores[idx]),
-                        "bbox": [
-                            float(cx - w / 2),
-                            float(cy - h / 2),
-                            float(w),
-                            float(h),
-                        ],
+            for a_i in range(3):
+                aw, ah = anchors[a_i]
+                tx = output[a_i, :, :, 1]
+                ty = output[a_i, :, :, 2]
+                tw = output[a_i, :, :, 3]
+                th = output[a_i, :, :, 4]
+                obj_conf = _sigmoid(output[a_i, :, :, 0])
+                class_scores = _sigmoid(output[a_i, :, :, 5:85])
+
+                cx = ((_sigmoid(tx) * 2 - 0.5 + gx) * stride).squeeze(-1)
+                cy = ((_sigmoid(ty) * 2 - 0.5 + gy) * stride).squeeze(-1)
+                w = (_sigmoid(tw) * 2) ** 2 * aw
+                h = (_sigmoid(th) * 2) ** 2 * ah
+
+                max_class_score = np.max(class_scores, axis=-1)
+                confidence = obj_conf * max_class_score
+
+                mask = confidence > self.conf_threshold
+                indices = np.argwhere(mask)
+
+                for idx in indices:
+                    gy_i, gx_i = int(idx[0]), int(idx[1])
+                    det_cx = float(cx[gy_i, gx_i])
+                    det_cy = float(cy[gy_i, gx_i])
+                    det_w = float(w[gy_i, gx_i])
+                    det_h = float(h[gy_i, gx_i])
+                    if det_w < 1 or det_h < 1:
+                        continue
+                    det_conf = float(confidence[gy_i, gx_i])
+                    cid = int(np.argmax(class_scores[gy_i, gx_i]))
+
+                    x1 = det_cx - det_w / 2
+                    y1 = det_cy - det_h / 2
+                    x2 = det_cx + det_w / 2
+                    y2 = det_cy + det_h / 2
+
+                    label = self.labels[cid] if cid < len(self.labels) else f"class_{cid}"
+
+                    all_detections.append({
+                        "label": label,
+                        "confidence": det_conf,
+                        "x1": x1,
+                        "y1": y1,
+                        "x2": x2,
+                        "y2": y2,
                     })
 
-        results.sort(key=lambda x: x["score"], reverse=True)
-        return results
+        return self._nms(all_detections)
 
 
 class NPUInference:
-    def __init__(self, model_path: str = "", input_size: int = 640,
-                 conf_threshold: float = 0.25, iou_threshold: float = 0.45):
-        self._model_path = model_path
-        self._input_size = input_size
-        self._model: NPUModel | None = None
-        self._post_processor = YOLOv5PostProcessor(
-            input_size=input_size,
-            conf_threshold=conf_threshold,
-            iou_threshold=iou_threshold,
-        )
-        self._available = False
-        self._warmup_done = False
+    def __init__(self, model_path=None):
+        self.available = False
+        self._model = None
+        self._postprocessor = YOLOv5PostProcessor(conf_threshold=0.15, nms_threshold=0.45, max_detections=100)
 
-    async def init(self) -> bool:
-        if not self._model_path or not os.path.exists(self._model_path):
-            logger.info("npu_inference.no_model", path=self._model_path)
-            return False
-
-        try:
-            self._model = NPUModel(self._model_path)
-            if not self._model.load():
-                logger.warning("npu_inference.model_load_failed")
-                return False
-
-            input_shapes = {"images": (1, 3, self._input_size, self._input_size)}
-            output_shapes = {
-                "output_0": (1, 80, 80, 255),
-                "output_1": (1, 40, 40, 255),
-                "output_2": (1, 20, 20, 255),
-            }
-            self._model.allocate_buffers(input_shapes, output_shapes)
-
-            self._available = True
-            logger.info("npu_inference.ready", model=self._model_path)
-            return True
-
-        except Exception as e:
-            logger.error("npu_inference.init_failed", error=str(e))
-            return False
-
-    async def warmup(self):
-        if not self._available or self._warmup_done:
+        if not self.is_available():
+            logger.warning("NPU device not available (/dev/vipcore not found)")
             return
+
+        if model_path is None:
+            model_path = DEFAULT_MODEL_PATH
+
+        if not os.path.isfile(model_path):
+            logger.warning("model file not found: {}", model_path)
+            return
+
         try:
-            dummy = np.random.randn(1, 3, self._input_size, self._input_size).astype(np.float32)
-            self._model.set_input("images", dummy)
-            self._model.run()
-            self._warmup_done = True
-            logger.info("npu_inference.warmup_done")
+            self._model = NPUModel(model_path)
+            if not self._model.loaded:
+                logger.warning("failed to load NPU model")
+                return
+            self.available = True
+            logger.info("NPU inference ready")
         except Exception as e:
-            logger.warning("npu_inference.warmup_failed", error=str(e))
+            logger.warning("NPU init failed: {}", e)
+            self.available = False
 
-    def preprocess(self, image: np.ndarray) -> np.ndarray:
-        if len(image.shape) == 3 and image.shape[2] == 3:
-            image = cv2.resize(image, (self._input_size, self._input_size))
-            image = image.astype(np.float32) / 255.0
-            image = np.transpose(image, (2, 0, 1))
-            image = np.expand_dims(image, axis=0)
-        return np.ascontiguousarray(image)
+    @staticmethod
+    def is_available() -> bool:
+        return os.path.exists("/dev/vipcore")
 
-    async def detect(self, image: np.ndarray) -> list[dict]:
-        if not self._available or not self._model:
+    def detect(self, frame) -> list:
+        if not self.available or not self._model:
             return []
 
         try:
-            img_h, img_w = image.shape[:2]
-            input_data = self.preprocess(image)
+            import cv2
+        except ImportError:
+            logger.warning("opencv not available for preprocessing")
+            return []
 
-            self._model.set_input("images", input_data)
-            if not self._model.run():
+        try:
+            orig_h, orig_w = frame.shape[:2]
+            img = cv2.resize(frame, (INPUT_SIZE, INPUT_SIZE))
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+            input_info = self._model.input_infos[0] if self._model.input_infos else None
+            if input_info and input_info.data_format == VIP_BUFFER_FORMAT_UINT8:
+                input_bytes = img.astype(np.uint8).tobytes()
+            else:
+                img_float = img.astype(np.float32) / 255.0
+                img_float = img_float.transpose(2, 0, 1)
+                input_bytes = img_float.tobytes()
+
+            outputs = self._model.run(input_bytes)
+            if not outputs:
                 return []
 
-            outputs = []
-            for name in ["output_0", "output_1", "output_2"]:
-                out = self._model.get_output(name)
-                if len(out.shape) == 4:
-                    out = np.transpose(out, (0, 2, 3, 1))
-                outputs.append(out)
+            detections = self._postprocessor.process(outputs, (INPUT_SIZE, INPUT_SIZE))
 
-            detections = self._post_processor.process(outputs, img_w, img_h)
+            scale_x = orig_w / INPUT_SIZE
+            scale_y = orig_h / INPUT_SIZE
+            for det in detections:
+                det["x1"] = max(0, det["x1"] * scale_x)
+                det["y1"] = max(0, det["y1"] * scale_y)
+                det["x2"] = min(orig_w, det["x2"] * scale_x)
+                det["y2"] = min(orig_h, det["y2"] * scale_y)
+
             return detections
-
         except Exception as e:
-            logger.error("npu_inference.detect_failed", error=str(e))
+            logger.warning("NPU detection failed: {}", e)
             return []
-
-    @property
-    def available(self) -> bool:
-        return self._available
-
-    async def close(self):
-        if self._model:
-            self._model.release()
-            self._model = None
-        self._available = False
-
-    @property
-    def info(self) -> dict:
-        return {
-            "available": self._available,
-            "model_path": self._model_path,
-            "input_size": self._input_size,
-            "model_info": self._model.info if self._model else None,
-        }
