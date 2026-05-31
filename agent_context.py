@@ -75,7 +75,7 @@ class AgentContext:
                 self._cached_portrait = portrait
                 self._portrait_cache_ts = now
             if portrait:
-                parts.append(f"[人家对旅行者的印象]\n{portrait}")
+                parts.append(f"[人家对爸爸的印象]\n{portrait}")
 
         learned = self.learned_rules or ""
         if learned:
@@ -115,7 +115,7 @@ class AgentContext:
         parts = []
 
         if self.emotion_hint:
-            parts.append(f"[感知到旅行者的情绪：{self.emotion_hint}]")
+            parts.append(f"[感知到爸爸的情绪：{self.emotion_hint}]")
 
         if self.memory_retrieval:
             mem_texts = []
@@ -161,7 +161,7 @@ class AgentContext:
                     continue
                 user_preview = user_msg[:60].replace("\n", " ") if user_msg else ""
                 asst_preview = asst_msg[:60].replace("\n", " ") if asst_msg else ""
-                summaries.append(f"· 旅行者: {user_preview} → 纳西妲: {asst_preview}")
+                summaries.append(f"· 爸爸: {user_preview} → 纳西妲: {asst_preview}")
 
             if summaries:
                 self._restored_summary = "\n".join(summaries[-10:])
