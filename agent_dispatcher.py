@@ -98,7 +98,7 @@ class SubAgent:
 
     async def chat(self, message: str, context: str = "", status_callback=None) -> str:
         if not self.available:
-            return f"{self.config.display_name}现在有点累了...等会儿再来吧！\u0001f4a4"
+            return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
 
         if status_callback:
             try:
@@ -129,7 +129,7 @@ class SubAgent:
                 except Exception as e2:
                     logger.warning("sub_agent.fallback_failed", name=self.config.name, error=str(e2))
 
-        return f"{self.config.display_name}现在有点累了...等会儿再来吧！\u0001f4a4"
+        return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
 
     async def _handle_tool_result(self, tool_name: str, result: ToolResult) -> str:
         result_text = ""
@@ -165,11 +165,13 @@ class SubAgent:
             )
             req_mark = "必填" if required else ""
             lines.append(f'- {f["name"]}({param_desc}) {req_mark}: {f.get("description", "")}')
-        lines.append("""\n调用格式示例:\n<\uff5c\uff5cDSML\uff5c\uff5ctool_calls>
-<\uff5c\uff5cDSML\uff5c\uff5cinvoke name="web_search">
-<\uff5c\uff5cDSML\uff5c\uff5cparameter name="query">搜索关键词</\uff5c\uff5cDSML\uff5c\uff5cparameter>
-</\uff5c\uff5cDSML\uff5c\uff5cinvoke>
-</\uff5c\uff5cDSML\uff5c\uff5ctool_calls>
+        lines.append("""
+调用格式示例:
+<｜｜DSML｜｜tool_calls>
+<｜｜DSML｜｜invoke name="web_search">
+<｜｜DSML｜｜parameter name="query">搜索关键词</｜｜DSML｜｜parameter>
+</｜｜DSML｜｜invoke>
+</｜｜DSML｜｜tool_calls>
 
 重要：需要调用工具时必须使用上述DSML格式，不要用其他格式。不需要调用工具时直接回复即可。""")
         return "\n".join(lines)
@@ -316,7 +318,7 @@ class SubAgent:
 
         remaining = total_deadline - asyncio.get_event_loop().time()
         if remaining < 5:
-            return f"{self.config.display_name}现在有点累了...等会儿再来吧！\u0001f4a4"
+            return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
 
         last_tool = working[-1] if working else {}
         if isinstance(last_tool, dict) and last_tool.get("role") == "tool":
@@ -350,7 +352,7 @@ class SubAgent:
                         formatted += f"\n...（共{len(lines)}行）"
                     return formatted
                 return raw_content
-            return f"{self.config.display_name}现在有点累了...等会儿再来吧！\u0001f4a4"
+            return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
 
     async def synthesize(self, text: str, style: str = "") -> Path | None:
         if not self.config.voice_ref:
