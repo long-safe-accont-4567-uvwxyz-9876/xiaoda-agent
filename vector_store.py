@@ -78,6 +78,7 @@ class VectorStore:
             return
 
         import sqlite3
+
         self._vec_conn = sqlite3.connect(self._db_path)
         self._vec_conn.enable_load_extension(True)
         sqlite_vec.load(self._vec_conn)
@@ -93,6 +94,7 @@ class VectorStore:
             USING vec0(embedding float[1024])
         """)
         self._vec_conn.commit()
+
         self._initialized = True
         logger.info("vector_store.ready", pragmas="WAL+cache+mmap")
 
@@ -100,13 +102,17 @@ class VectorStore:
         if self._vec_conn:
             self._vec_conn.close()
             self._vec_conn = None
+        if self._cache.stats["size"] > 0:
+            logger.info("vector_store.cache_stats", **self._cache.stats)
 
     async def embed(self, text: str) -> list[float]:
         if not self._embed_client:
             return []
+
         cached = self._cache.get(text)
         if cached:
             return cached
+
         try:
             response = await self._embed_client.embeddings.create(
                 model=self._embed_model,
@@ -122,10 +128,13 @@ class VectorStore:
     async def upsert(self, row_id: int, text: str) -> bool:
         if not self._initialized or not self._vec_conn:
             return False
+
         vec = await self.embed(text)
         if not vec:
             return False
+
         vec_json = json.dumps(vec)
+
         try:
             try:
                 self._vec_conn.execute("DELETE FROM memories_vec WHERE rowid=?", [row_id])
@@ -141,13 +150,43 @@ class VectorStore:
             logger.warning("vector_store.upsert_failed", error=str(e))
             return False
 
+    async def batch_upsert(self, items: list[tuple[int, str]]) -> int:
+        if not self._initialized or not self._vec_conn:
+            return 0
+
+        success = 0
+        for row_id, text in items:
+            vec = await self.embed(text)
+            if not vec:
+                continue
+            vec_json = json.dumps(vec)
+            try:
+                try:
+                    self._vec_conn.execute("DELETE FROM memories_vec WHERE rowid=?", [row_id])
+                except Exception:
+                    pass
+                self._vec_conn.execute(
+                    "INSERT INTO memories_vec(rowid, embedding) VALUES (?, vec_f32(?))",
+                    [row_id, vec_json],
+                )
+                success += 1
+            except Exception as e:
+                logger.warning("vector_store.batch_upsert_item_failed", row_id=row_id, error=str(e))
+
+        if success > 0:
+            self._vec_conn.commit()
+        return success
+
     async def search(self, query_text: str, top_k: int = 5) -> list[tuple[int, float]]:
         if not self._initialized or not self._vec_conn:
             return []
+
         vec = await self.embed(query_text)
         if not vec:
             return []
+
         vec_json = json.dumps(vec)
+
         try:
             rows = self._vec_conn.execute(
                 "SELECT rowid, distance FROM memories_vec "
