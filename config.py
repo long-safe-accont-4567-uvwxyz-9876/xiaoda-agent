@@ -1,102 +1,184 @@
 import os
-import sys
+import re
 import json
-import asyncio
+import time
 from pathlib import Path
 from dotenv import load_dotenv
-from loguru import logger
 
 load_dotenv()
 
-BASE_DIR = Path(__file__).parent
+_KIOXIA_BASE = Path(os.getenv("KIOXIA_DATA_DIR", "/media/orangepi/KIOXIA/nahida-data"))
+_FALLBACK_BASE = Path(__file__).resolve().parent
 
-MEMORY_PERSONALITY = BASE_DIR / "config" / "workspace" / "IDENTITY.md"
-MEMORY_SOUL = BASE_DIR / "config" / "workspace" / "SOUL.md"
-AGENT_CONFIG = BASE_DIR / "config" / "agent.json5"
+def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
+    if kioxia_path.exists() or kioxia_path.parent.exists():
+        kioxia_path.mkdir(parents=True, exist_ok=True)
+        return kioxia_path
+    fallback_path.mkdir(parents=True, exist_ok=True)
+    return fallback_path
 
-PERSONALITY_FILES = {
-    "nahida": BASE_DIR / "nahida_personality.md",
-    "klee": BASE_DIR / "klee_personality.md",
-    "yinlang": BASE_DIR / "yinlang_personality.md",
-    "xilian": BASE_DIR / "xilian_personality.md",
-    "nico": BASE_DIR / "nike_personality.md",
-}
+DATA_DIR = _resolve_data_path(_KIOXIA_BASE / "db", _FALLBACK_BASE / "data")
+LOG_DIR = _resolve_data_path(_KIOXIA_BASE / "logs", _FALLBACK_BASE / "logs")
+WORKSPACE_DIR = _resolve_data_path(_KIOXIA_BASE / "config" / "workspace", Path(os.path.expanduser("~/.ai-agent/workspace")))
+CREDENTIALS_DIR = _resolve_data_path(_KIOXIA_BASE / "credentials", Path(os.path.expanduser("~/.ai-agent/credentials")))
+AGENT_CONFIG_PATH = (_KIOXIA_BASE / "config" / "agent.json5") if (_KIOXIA_BASE / "config").exists() else Path(os.path.expanduser("~/.ai-agent/agent.json5"))
+STICKER_DIR = _KIOXIA_BASE / "stickers"
+KLEE_STICKER_DIR = _KIOXIA_BASE / "klee-stickers"
+FILE_DIR = _KIOXIA_BASE / "files"
 
-type SafetyLevel = str
+_KIOXIA_AVAILABLE = (_KIOXIA_BASE / "db").exists()
+
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "mimo-v2.5")
+
+MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
+MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+MIMO_MODEL = os.getenv("MIMO_MODEL_NAME", "mimo-v2.5")
 
 
-def load_config() -> dict:
-    mimo_api_key = os.getenv("MIMO_API_KEY", "")
-    mimo_base_url = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
-    mimo_model = os.getenv("MIMO_MODEL_NAME", "mimo-v2.5")
-    mimo_pro_model = os.getenv("MIMO_PRO_MODEL_NAME", "mimo-v2.5-pro")
+def _strip_json5_comments(text: str) -> str:
+    result = []
+    in_string = False
+    in_block_comment = False
+    i = 0
+    while i < len(text):
+        if in_block_comment:
+            if text[i:i+2] == '*/':
+                in_block_comment = False
+                i += 2
+                continue
+            i += 1
+            continue
+        if in_string:
+            result.append(text[i])
+            if text[i] == '\\' and i + 1 < len(text):
+                result.append(text[i+1])
+                i += 2
+                continue
+            if text[i] == '"':
+                in_string = False
+            i += 1
+            continue
+        if text[i:i+2] == '/*':
+            in_block_comment = True
+            i += 2
+            continue
+        if text[i:i+2] == '//':
+            while i < len(text) and text[i] != '\n':
+                i += 1
+            continue
+        if text[i] == '"':
+            in_string = True
+            result.append(text[i])
+            i += 1
+            continue
+        result.append(text[i])
+        i += 1
+    cleaned = ''.join(result)
+    cleaned = re.sub(r',\s*([}\]])', r'\1', cleaned)
+    return cleaned
 
-    owner_ids_raw = os.getenv("OWNER_IDS", "")
-    owner_ids = [oid.strip() for oid in owner_ids_raw.split(",") if oid.strip()]
 
-    agent_name = os.getenv("AGENT_NAME", "nahida").strip().lower()
-    if agent_name not in PERSONALITY_FILES:
-        agent_name = "nahida"
+def load_agent_config() -> dict:
+    if not AGENT_CONFIG_PATH.exists():
+        return {}
+    raw = AGENT_CONFIG_PATH.read_text(encoding="utf-8")
+    cleaned = _strip_json5_comments(raw)
+    return json.loads(cleaned)
 
-    data_dir = os.getenv("KIOXIA_DATA_DIR", "")
-    if data_dir and Path(data_dir).is_dir():
-        db_path = Path(data_dir) / "agent.db"
-        file_dir = Path(data_dir) / "files"
+
+def load_workspace_file(filename: str) -> str:
+    filepath = WORKSPACE_DIR / filename
+    if filepath.exists():
+        return filepath.read_text(encoding="utf-8").strip()
+    return ""
+
+
+_SYSTEM_PROMPT_CACHE: str = ""
+_SYSTEM_PROMPT_CACHE_TS: float = 0.0
+_SYSTEM_PROMPT_CACHE_TTL: float = 5.0
+
+def build_system_prompt(extra_context: str = "") -> str:
+    global _SYSTEM_PROMPT_CACHE, _SYSTEM_PROMPT_CACHE_TS
+
+    now = time.time()
+    if _SYSTEM_PROMPT_CACHE and (now - _SYSTEM_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL:
+        system_prompt = _SYSTEM_PROMPT_CACHE
     else:
-        db_path = BASE_DIR / "data" / "agent.db"
-        file_dir = BASE_DIR / "data" / "files"
+        from datetime import datetime
+        current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M") + " (北京时间)"
 
-    return {
-        "mimo_api_key": mimo_api_key,
-        "mimo_base_url": mimo_base_url,
-        "mimo_model": mimo_model,
-        "mimo_pro_model": mimo_pro_model,
-        "owner_ids": owner_ids,
-        "agent_name": agent_name,
-        "personality_file": PERSONALITY_FILES.get(agent_name, PERSONALITY_FILES["nahida"]),
-        "db_path": db_path,
-        "file_dir": file_dir,
-        "base_dir": BASE_DIR,
-        "memory_personality": MEMORY_PERSONALITY,\n        "memory_soul": MEMORY_SOUL,
-        "agent_config": AGENT_CONFIG,
-        "embed_api_key": os.getenv("EMBED_API_KEY", ""),
-        "embed_base_url": os.getenv("EMBED_BASE_URL", ""),
-        "embed_model": os.getenv("EMBED_MODEL", ""),
-        "imgbb_api_key": os.getenv("IMGBB_API_KEY", ""),
-        "tavily_api_key": os.getenv("TAVILY_API_KEY", ""),
-        "siliconflow_api_key": os.getenv("SILICONFLOW_API_KEY", ""),
-        "openrouter_api_key": os.getenv("OPENROUTER_API_KEY", ""),
-        "qqbot_app_id": os.getenv("QQBOT_APP_ID", ""),
-        "qqbot_app_secret": os.getenv("QQBOT_APP_SECRET", ""),
-        "nudge_enabled": os.getenv("NUDGE_ENABLED", "true").lower() == "true",
-        "nudge_user_openid": os.getenv("NUDGE_USER_OPENID", ""),
-        "nudge_greeting_threshold": int(os.getenv("NUDGE_GREETING_THRESHOLD", "3600")),
-        "nudge_dnd_start": int(os.getenv("NUDGE_DND_START", "23")),
-        "nudge_dnd_end": int(os.getenv("NUDGE_DND_END", "7")),
-    }
+        sections = []
+
+        time_section = f"[当前时间] {current_time}"
+        sections.append(time_section)
+
+        agents_rules = load_workspace_file("AGENTS.md")
+        if agents_rules:
+            sections.append(agents_rules)
+
+        soul = load_workspace_file("SOUL.md")
+        if soul:
+            sections.append(soul)
+
+        identity = load_workspace_file("IDENTITY.md")
+        if identity:
+            sections.append(identity)
+
+        user = load_workspace_file("USER.md")
+        if user:
+            sections.append(user)
+
+        tools_rules = load_workspace_file("TOOLS.md")
+        if tools_rules:
+            sections.append(tools_rules)
+
+        memory = load_workspace_file("MEMORY.md")
+        if memory:
+            sections.append(memory)
+
+        heartbeat = load_workspace_file("HEARTBEAT.md")
+        if heartbeat:
+            sections.append(heartbeat)
+
+        hw_context = (
+            "[香橙派硬件信息]\n"
+            "板卡: Orange Pi 4 Pro | SoC: 全志 T507 | 架构: ARMv8 (6×A55 + 2×A76 big.LITTLE)\n"
+            "系统: Debian 12 (bookworm) arm64\n"
+            "可用接口: GPIO (40pin排针) / I2C / SPI / UART / PWM\n"
+            "可用工具: gpio_control(引脚控制) / i2c_comm(I2C通信) / hardware_status(硬件监控) / service_manage(服务管理) / network_diag(网络诊断) / dev_assist(开发辅助) / camera_capture(拍照) / vision_analyze(视觉分析)\n"
+            "数据存储: KIOXIA 外挂存储 (/media/orangepi/KIOXIA/nahida-data/)\n"
+            "摄像头: Q8 HD Webcam (/dev/video0) | 视觉模型: YOLOv10-nano (ncnn CPU) | NPU视觉识别已禁用"
+        )
+        sections.append(hw_context)
+
+        system_prompt = "\n\n---\n\n".join(sections)
+
+        _SYSTEM_PROMPT_CACHE = system_prompt
+        _SYSTEM_PROMPT_CACHE_TS = now
+
+    if extra_context:
+        system_prompt += f"\n\n---\n\n{extra_context}"
+
+    return system_prompt
 
 
-def build_system_prompt(cfg: dict, personality_override: str | None = None) -> str:
-    personality_file = personality_override or cfg.get("personality_file")
-    if personality_file and Path(personality_file).is_file():
-        return Path(personality_file).read_text(encoding="utf-8").strip()
-    return "你是纳西妲，须弥的草神，智慧之神。温柔、善良、充满好奇心。"
+AGENT_CONFIG = load_agent_config()
 
-
-def _load_json5(path: Path) -> dict:
-    if not path.is_file():
-        return {}
-    raw = path.read_text(encoding="utf-8")
-    import re
-    raw = re.sub(r'//.*?\n', '\n', raw)
-    raw = re.sub(r'/\*.*?\*/', '', raw, flags=re.DOTALL)
-    raw = re.sub(r',\s*([}\]])', r'\1', raw)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("config.json5_parse_failed", path=str(path))
-        return {}
-
-
-def get_agent_config() -> dict:
-    return _load_json5(AGENT_CONFIG)
+__all__ = [
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_BASE_URL",
+    "MODEL_NAME",
+    "AGENT_CONFIG",
+    "DATA_DIR",
+    "LOG_DIR",
+    "WORKSPACE_DIR",
+    "CREDENTIALS_DIR",
+    "STICKER_DIR",
+    "KLEE_STICKER_DIR",
+    "FILE_DIR",
+    "build_system_prompt",
+    "load_agent_config",
+    "load_workspace_file",
+]
