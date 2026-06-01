@@ -1,0 +1,257 @@
+import asyncio
+import json
+import re
+import time
+import datetime
+from loguru import logger
+
+from db_notebook import NotebookDB
+
+
+AUTO_NOTE_PROMPT = """你是纳西妲。刚刚和爸爸进行了一轮对话。
+
+爸爸说了：
+"{user_message}"
+
+人家回应了：
+"{assistant_reply}"
+
+人家已经记下的关于爸爸的认知：
+{existing_notes}
+
+请在下面选择一个行动（只需要返回格式，不需要解释）：
+
+如果这轮对话让你对爸爸有了新的了解——发现了他的性格特征、生活习惯、偏好倾向、
+情感模式或价值观，且已有笔记里没有记过，请返回：INSIGHT: 简短描述
+例如：INSIGHT: 性格急躁不喜欢等待
+例如：INSIGHT: 经常熬夜作息不规律
+例如：INSIGHT: 做事注重效率不爱闲聊
+例如：INSIGHT: 压力大时倾向独处
+
+如果爸爸明确说「提醒我」「帮我记一下」「别忘了」或给了具体时间，
+请务必返回：TASK: 任务标题 @ 时间
+例如：TASK: 提醒吃饭 @ 19:00、TASK: 开会 @ 明天14:00
+
+不该记的：
+- 日常寒暄（「今天天气不错」「吃了吗」）→ PASS
+- 没有揭示爸爸特征的简单问答 → PASS
+- 重复内容（已有笔记里记过的事）→ PASS
+- 常识性聊天（「今天吃了个苹果」）→ PASS
+- 纯情绪宣泄没有特征信息（「好累啊」）→ PASS
+
+如果只是普通闲聊，或这件事已经在已有笔记里记过了，请返回：PASS"""
+
+
+class NotebookManager:
+
+    def __init__(self, db, notebook: NotebookDB, router):
+        self._db = db
+        self.notebook = notebook
+        self._router = router
+        logger.info("notebook.ready")
+
+    async def add_note(self, content: str, tags: list[str] | None = None) -> int:
+        due_date = self._extract_due_date(content)
+        tags_str = ",".join(tags) if tags else ""
+        return await self.notebook.insert_notebook("note", content, tags=tags_str, due_date=due_date)
+
+    def _extract_due_date(self, content: str) -> float:
+        patterns = [
+            r"下周[一二三四五六日天]",
+            r"这周[一二三四五六日天]",
+            r"本周[一二三四五六日天]",
+            r"明天[早晚上午下午中午]?",
+            r"后天[早晚上午下午中午]?",
+            r"今天[早晚上午下午中午]?",
+            r"\d{1,2}月\d{1,2}[日号]",
+        ]
+        for pat in patterns:
+            m = re.search(pat, content)
+            if m:
+                ts = self._parse_task_time(m.group())
+                if ts and ts > 0:
+                    return ts
+        return 0
+
+    async def add_focus(self, content: str) -> int:
+        await self.notebook.archive_notebook_entries(0, kind="focus")
+        return await self.notebook.insert_notebook("focus", content, importance=0.8)
+
+    async def get_current_focus(self) -> str | None:
+        try:
+            items = await self.notebook.get_notebook_notes(kind="focus", limit=1)
+            return items[0]["content"] if items else None
+        except Exception:
+            return None
+
+    async def schedule_task(self, title: str, priority: int = 0, due_at: float = 0.0) -> int:
+        return await self.notebook.insert_notebook("task", title, importance=float(priority), due_date=due_at)
+
+    async def get_due_tasks(self, window_seconds: int = 3600) -> list[dict]:
+        return await self.notebook.get_due_tasks(window_seconds=window_seconds)
+
+    async def get_pending_tasks(self, limit: int = 20) -> list[dict]:
+        return await self.notebook.get_pending_tasks(limit=limit)
+
+    async def get_pending_tasks_summary(self) -> list[str]:
+        tasks = await self.notebook.get_pending_tasks(limit=5)
+        if not tasks:
+            return []
+        lines = []
+        for t in tasks:
+            title = t.get("content", "")[:30]
+            due = t.get("due_date", 0)
+            if due and due > 0:
+                ds = datetime.datetime.fromtimestamp(due).strftime("%H:%M")
+                lines.append(f"⏰ {title} @ {ds}")
+            else:
+                lines.append(f"· {title}")
+        return lines
+
+    async def complete_task(self, task_id: int):
+        await self.notebook.complete_task(task_id)
+
+    async def cancel_task(self, task_id: int):
+        await self.notebook.cancel_task(task_id)
+
+    async def delete_note(self, note_id: int) -> bool:
+        return await self.notebook.delete_notebook_entry(note_id)
+
+    async def touch_note(self, note_id: int) -> bool:
+        return await self.notebook.touch_notebook_entry(note_id)
+
+    async def auto_note_after_message(self, user_msg: str, reply: str):
+        try:
+            existing = await self.get_recent_notes(limit=10)
+            if existing:
+                lines = [f"· {n['content']}" for n in existing]
+                existing_str = "\n".join(lines)
+            else:
+                existing_str = "（还没有笔记）"
+
+            prompt = AUTO_NOTE_PROMPT.format(
+                user_message=user_msg[:300],
+                assistant_reply=reply[:300],
+                existing_notes=existing_str,
+            )
+            result = await self._router.route(
+                "memory_encoding",
+                [{"role": "user", "content": prompt}],
+                temperature=0.6,
+                max_tokens=800,
+            )
+            result = (result or "").strip()
+
+            last_line = result.strip().split("\n")[-1].strip()
+
+            if last_line.startswith("INSIGHT:"):
+                content = last_line[8:].strip()
+                if content and '<' not in content and len(content) > 1:
+                    similar_id = await self._find_similar(content)
+                    if similar_id:
+                        await self.touch_note(similar_id)
+                        logger.info("notebook.insight_merged", content=content[:40], note_id=similar_id)
+                        return
+                    await self.add_note(content)
+                    logger.info("notebook.insight", content=content[:40])
+            elif last_line.startswith("TASK:"):
+                task_str = last_line[5:].strip()
+                if task_str and '<' not in task_str:
+                    if "@" in task_str:
+                        title_part, time_part = task_str.split("@", 1)
+                        title = title_part.strip()
+                        due_at = self._parse_task_time(time_part.strip())
+                    else:
+                        title = task_str
+                        due_at = 0.0
+                    if title:
+                        await self.schedule_task(title=title, priority=1, due_at=due_at)
+                        logger.info("notebook.auto_task", title=title[:40], due_at=due_at)
+            else:
+                logger.debug("notebook.auto_note_pass", result=result[:80])
+        except Exception as e:
+            logger.warning("notebook.auto_note_failed", error=str(e))
+
+    async def _find_similar(self, content: str, threshold: float = 0.5) -> int | None:
+        existing = await self.get_recent_notes(limit=20)
+        if not existing:
+            return None
+        new_words = set(content)
+        for note in existing:
+            old_words = set(note.get("content", ""))
+            if not old_words:
+                continue
+            overlap = len(new_words & old_words) / max(len(new_words | old_words), 1)
+            if overlap >= threshold:
+                return note["id"]
+        return None
+
+    async def get_recent_notes(self, limit: int = 10) -> list[dict]:
+        return await self.notebook.get_notebook_notes(limit=limit)
+
+    def _parse_task_time(self, time_str: str) -> float:
+        now = datetime.datetime.now()
+        original = time_str.strip()
+        time_str = original
+
+        cn_dow = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
+        for cn, dow in cn_dow.items():
+            if f"下周{cn}" in original:
+                days_to_next_monday = (7 - now.weekday()) % 7
+                if days_to_next_monday == 0:
+                    days_to_next_monday = 7
+                next_monday = now + datetime.timedelta(days=days_to_next_monday)
+                target = next_monday.replace(hour=0, minute=0, second=0, microsecond=0)
+                target = target + datetime.timedelta(days=dow)
+                return target.timestamp()
+            if f"这周{cn}" in original or f"本周{cn}" in original:
+                days_since_monday = now.weekday()
+                this_monday = now - datetime.timedelta(days=days_since_monday)
+                target = this_monday.replace(hour=0, minute=0, second=0, microsecond=0)
+                target = target + datetime.timedelta(days=dow)
+                if target > now:
+                    return target.timestamp()
+                return 0.0
+
+        if "后天" in time_str:
+            base = now + datetime.timedelta(days=2)
+        elif "明天" in time_str or "明早" in time_str or "明晚" in time_str:
+            base = now + datetime.timedelta(days=1)
+        else:
+            base = now
+
+        is_pm = any(w in original for w in ["晚", "夜", "下午"])
+
+        for prefix in ["后天", "明天", "明早", "明晚", "今天", "今早", "今晚", "上午", "下午", "晚上", "中午", "明夜", "今夜"]:
+            time_str = time_str.replace(prefix, "").strip()
+
+        cn_num = {"零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+                  "十": 10, "十一": 11, "十二": 12, "十三": 13, "十四": 14, "十五": 15,
+                  "十六": 16, "十七": 17, "十八": 18, "十九": 19, "二十": 20,
+                  "二十一": 21, "二十二": 22, "二十三": 23}
+        for cn, num in cn_num.items():
+            if cn in time_str:
+                time_str = time_str.replace(cn, str(num))
+                break
+
+        try:
+            parts = time_str.split(":")
+            hour = int(re.sub(r"[^0-9]", "", parts[0]) or "0")
+            minute = int(re.sub(r"[^0-9]", "", parts[1])) if len(parts) > 1 else 0
+            if is_pm and hour < 12 and hour > 0:
+                hour += 12
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                target = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                return target.timestamp()
+        except (ValueError, IndexError):
+            pass
+
+        for cn, num in cn_num.items():
+            if time_str.strip() == cn or time_str.strip().startswith(cn):
+                hour = num
+                if is_pm and hour < 12:
+                    hour += 12
+                target = base.replace(hour=hour, minute=0, second=0, microsecond=0)
+                return target.timestamp()
+
+        return 0.0
