@@ -1,0 +1,51 @@
+{
+  // ===== 网关配置 =====
+  "gateway": {
+    "port": 8080,
+    "host": "0.0.0.0"
+  },
+
+  // ===== AI 模型配置 =====
+  "model": {
+    "provider": "deepseek",
+    "name": "deepseek-v4-pro",
+    "base_url": "https://api.deepseek.com/v1",
+    "temperature": 0.7,
+    "max_iterations": 15
+  },
+
+  // ===== 插件开关 =====
+  "plugins": {
+    "qq_bot": true,
+    "web_ui": true,
+    "cli_agent": true
+  },
+
+  // ===== QQ Bot 配置 =====
+  "qq_bot": {
+    "is_sandbox": false,
+    "max_reply_length": 2000,
+    "private_chat": true,
+    "group_at_only": true
+  },
+
+  // ===== 安全策略 =====
+  "security": {
+    "dangerous_commands_require_confirm": true,
+    "max_output_length": 10000,
+    "forbidden_paths": [
+      "/etc/shadow",
+      "/etc/passwd",
+      "~/.ssh/"
+    ],
+    "log_sensitive_ops": true
+  },
+
+  // ===== 工作区路径 =====
+  "workspace": {
+    "dir": "~/.ai-agent/workspace",
+    "credentials_dir": "~/.ai-agent/credentials",
+    "memory_file": "MEMORY.md",
+    "bootstrap_file": "BOOTSTRAP.md"
+  }
+}
