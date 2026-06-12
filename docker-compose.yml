@@ -1,0 +1,31 @@
+version: "3.8"
+
+services:
+  agent:
+    build: .
+    container_name: nahida-agent
+    ports:
+      - "${WEBUI_PORT:-8080}:8080"
+    volumes:
+      - agent-data:/data
+      - ./.env:/app/.env:ro
+    environment:
+      - KIOXIA_DATA_DIR=/data
+      - WEBUI_HOST=0.0.0.0
+      - WEBUI_PORT=8080
+    env_file:
+      - .env
+    restart: unless-stopped
+    # 硬件直通（可选，ARM 设备如 Orange Pi）
+    # devices:
+    #   - /dev/i2c-0:/dev/i2c-0
+    #   - /dev/video0:/dev/video0
+    #   - /sys/class/gpio:/sys/class/gpio
+    #   - /sys/class/pwm:/sys/class/pwm
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+
+volumes:
+  agent-data:

@@ -3,7 +3,7 @@
   "display_name": "可莉",
   "provider": "mimo",
   "model": "mimo-v2.5-pro",
-  "personality_file": "/home/orangepi/ai-agent/klee_personality.md",
+  "personality_file": "klee_personality.md",
   "voice_ref": "keli",
   "excluded_tools": [
     "call_klee",
