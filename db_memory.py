@@ -21,9 +21,24 @@ class MemoryDB:
                VALUES (?, ?, ?, ?, ?, ?)""",
             (time.time(), summary, importance, emotion_label, session_id, embedding_id),
         )
+        mem_id = cursor.lastrowid
         if auto_commit:
             await self._conn.commit()
-        return cursor.lastrowid
+        # 同步写入 FTS 索引
+        try:
+            from memory_manager import _tokenize_for_fts
+            tokenized = _tokenize_for_fts(summary)
+            if tokenized.strip():
+                await self._conn.execute(
+                    "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
+                    (mem_id, tokenized),
+                )
+                if auto_commit:
+                    await self._conn.commit()
+        except Exception as e:
+            from loguru import logger
+            logger.debug("db_memory.fts_insert_failed", error=str(e))
+        return mem_id
 
     async def get_memory_by_id(self, memory_id: int) -> dict | None:
         cursor = await self._conn.execute(
@@ -51,6 +66,35 @@ class MemoryDB:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
+    async def search_memories_fts(self, query: str, limit: int = 10) -> list[dict]:
+        """FTS5 BM25 全文检索"""
+        from memory_manager import _build_fts_query
+        fts_query = _build_fts_query(query)
+        if not fts_query:
+            return []
+        try:
+            cursor = await self._conn.execute(
+                """SELECT em.*, bm25(episodic_memory_fts) AS score
+                   FROM episodic_memory_fts
+                   JOIN episodic_memories em ON em.id = episodic_memory_fts.id
+                   WHERE episodic_memory_fts MATCH ?
+                   ORDER BY score ASC, em.importance DESC, em.timestamp DESC
+                   LIMIT ?""",
+                (fts_query, limit),
+            )
+            rows = await cursor.fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                # bm25 returns negative values, convert to positive score
+                d["score"] = -d.get("score", 0)
+                results.append(d)
+            return results
+        except Exception as e:
+            from loguru import logger
+            logger.warning("db_memory.fts_search_failed", error=str(e))
+            return []
+
     async def get_all_memories(self):
         cursor = await self._conn.execute(
             "SELECT * FROM episodic_memories ORDER BY timestamp DESC"
@@ -60,6 +104,12 @@ class MemoryDB:
 
     async def delete_memory(self, memory_id: int, auto_commit: bool = True):
         await self._conn.execute("DELETE FROM episodic_memories WHERE id=?", (memory_id,))
+        # 同步删除 FTS 记录
+        try:
+            await self._conn.execute("DELETE FROM episodic_memory_fts WHERE id=?", (memory_id,))
+        except Exception as e:
+            from loguru import logger
+            logger.debug("db_memory.fts_delete_failed", error=str(e))
         if auto_commit:
             await self._conn.commit()
 
@@ -104,3 +154,26 @@ class MemoryDB:
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+    async def insert_consolidation_candidate(self, source: str, kind: str, summary: str,
+                                              confidence: float = 0.5, importance: float = 0.5,
+                                              metadata_json: str = "{}",
+                                              auto_commit: bool = True) -> int:
+        cursor = await self._conn.execute(
+            """INSERT INTO consolidation_candidates
+               (timestamp, source, kind, summary, confidence, importance, status, metadata_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
+            (time.time(), source, kind, summary, confidence, importance, metadata_json, time.time()),
+        )
+        if auto_commit:
+            await self._conn.commit()
+        return cursor.lastrowid
+
+    async def mark_candidate_applied(self, candidate_id: int, target_memory_id: int,
+                                      auto_commit: bool = True):
+        await self._conn.execute(
+            "UPDATE consolidation_candidates SET status='applied', target_memory_id=? WHERE id=?",
+            (target_memory_id, candidate_id),
+        )
+        if auto_commit:
+            await self._conn.commit()

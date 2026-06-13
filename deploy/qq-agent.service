@@ -1,5 +1,5 @@
 [Unit]
-Description=纳西妲 QQ Bot AI Agent
+Description=纳西妲 AI Agent (Web UI + QQ Bot)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=300
@@ -13,7 +13,7 @@ WorkingDirectory=REPLACE_WITH_PROJECT_PATH
 # 可选：检查数据目录是否就绪
 # ExecStartPre=/bin/bash -c "test -d /data/db || exit 1"
 
-ExecStart=REPLACE_WITH_PROJECT_PATH/.venv/bin/python qq_bot_adapter.py
+ExecStart=REPLACE_WITH_PROJECT_PATH/.venv/bin/python agent.py --web --host 0.0.0.0 --port 8080
 Restart=always
 RestartSec=10
 StartLimitBurst=20

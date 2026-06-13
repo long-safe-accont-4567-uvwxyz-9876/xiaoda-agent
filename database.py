@@ -87,6 +87,48 @@ class DatabaseManager:
             await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (2, ?)", (time.time(),))
             logger.info("database.migration_v2", desc="conversation_logs.session_id")
 
+        if current < 3:
+            try:
+                # 创建 FTS5 虚拟表
+                await self._conn.executescript("""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5(
+                        id UNINDEXED,
+                        summary_index
+                    );
+                """)
+                # 回填已有记忆数据到 FTS 索引
+                rows = await self._conn.execute_fetchall("SELECT id, summary FROM episodic_memories")
+                for row in rows:
+                    from memory_manager import _tokenize_for_fts
+                    tokenized = _tokenize_for_fts(row[1])
+                    if tokenized.strip():
+                        await self._conn.execute(
+                            "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
+                            (row[0], tokenized),
+                        )
+                # 创建审计表
+                await self._conn.executescript("""
+                    CREATE TABLE IF NOT EXISTS consolidation_candidates (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp REAL NOT NULL,
+                        source TEXT NOT NULL DEFAULT 'rule',
+                        kind TEXT NOT NULL DEFAULT 'fact',
+                        summary TEXT NOT NULL,
+                        confidence REAL DEFAULT 0.5,
+                        importance REAL DEFAULT 0.5,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        target_memory_id INTEGER DEFAULT -1,
+                        metadata_json TEXT DEFAULT '{}',
+                        created_at REAL NOT NULL
+                    );
+                """)
+                logger.info("database.migration_v3_backfill", rows=len(rows))
+            except Exception as e:
+                logger.warning(f"数据库迁移 v3 失败: {e}")
+            await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (3, ?)", (time.time(),))
+            await self._conn.commit()
+            logger.info("database.migration_v3", desc="fts5_index+consolidation_candidates")
+
         await self._conn.commit()
 
     async def fetch_all(self, sql: str, params: tuple = ()) -> list[dict]:
@@ -292,6 +334,25 @@ class DatabaseManager:
             CREATE INDEX IF NOT EXISTS idx_conv_source ON conversation_logs(source);
             CREATE INDEX IF NOT EXISTS idx_episodic_session ON episodic_memories(session_id);
             CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_logs(event_type);
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5(
+                id UNINDEXED,
+                summary_index
+            );
+
+            CREATE TABLE IF NOT EXISTS consolidation_candidates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                source TEXT NOT NULL DEFAULT 'rule',
+                kind TEXT NOT NULL DEFAULT 'fact',
+                summary TEXT NOT NULL,
+                confidence REAL DEFAULT 0.5,
+                importance REAL DEFAULT 0.5,
+                status TEXT NOT NULL DEFAULT 'pending',
+                target_memory_id INTEGER DEFAULT -1,
+                metadata_json TEXT DEFAULT '{}',
+                created_at REAL NOT NULL
+            );
 
             CREATE TABLE IF NOT EXISTS learnings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

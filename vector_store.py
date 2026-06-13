@@ -57,11 +57,13 @@ class EmbedCache:
 class VectorStore:
 
     def __init__(self, db_path: str | Path, embed_api_key: str = "",
-                 embed_base_url: str = "", embed_model: str = "BAAI/bge-m3"):
+                 embed_base_url: str = "", embed_model: str = "BAAI/bge-m3",
+                 dimensions: int = 0):
         self._db_path = str(db_path)
         self._embed_api_key = embed_api_key
         self._embed_base_url = embed_base_url
         self._embed_model = embed_model
+        self._dimensions = dimensions
         self._initialized = False
         self._closed = False
         self._lock = threading.Lock()
@@ -83,6 +85,10 @@ class VectorStore:
     def enabled(self) -> bool:
         return self._initialized
 
+    @property
+    def dimensions(self) -> int:
+        return self._dimensions
+
     async def init(self):
         if not HAS_SQLITE_VEC:
             logger.warning("vector_store.sqlite_vec_missing")
@@ -102,9 +108,11 @@ class VectorStore:
                 conn.execute("PRAGMA cache_size=-20000")
                 conn.execute("PRAGMA mmap_size=67108864")
 
-                conn.execute("""
+                # Use configured dimensions, or default 1024 until auto-detected
+                dims = self._dimensions if self._dimensions > 0 else 1024
+                conn.execute(f"""
                     CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec
-                    USING vec0(embedding float[1024])
+                    USING vec0(embedding float[{dims}])
                 """)
                 conn.commit()
                 return conn
@@ -144,6 +152,12 @@ class VectorStore:
                     input=text,
                 )
                 vec = response.data[0].embedding
+                # Auto-detect dimensions from first API response
+                if self._dimensions == 0 and vec:
+                    self._dimensions = len(vec)
+                    logger.info("vector_store.dimensions_detected", dimensions=self._dimensions)
+                elif vec and len(vec) != self._dimensions:
+                    logger.warning("vector_store.dimension_mismatch", expected=self._dimensions, actual=len(vec))
                 self._cache.put(text, vec)
                 return vec
             except Exception as e:
