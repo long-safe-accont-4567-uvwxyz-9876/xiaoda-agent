@@ -1,1 +1,0 @@
-import{ak as n,r as t,aw as o}from"./index-C01jxU0r.js";const l=n("agents",()=>{const e=t([]),a=t(!1);async function s(){a.value=!0;try{e.value=await o("/agents")}finally{a.value=!1}}return{agents:e,loading:a,load:s}});export{l as u};
