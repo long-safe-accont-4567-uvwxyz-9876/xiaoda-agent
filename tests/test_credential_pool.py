@@ -7,8 +7,8 @@ import unittest
 import asyncio
 import time
 from unittest.mock import patch, MagicMock
-from credential_pool import CredentialPool, Credential, CredentialState, EXHAUSTED_COOLDOWN
-from error_classifier import ClassifiedError, FailoverReason, RecoveryAction
+from utils.credential_pool import CredentialPool, Credential, CredentialState, EXHAUSTED_COOLDOWN
+from utils.error_classifier import ClassifiedError, FailoverReason, RecoveryAction
 
 
 def _run_async(coro):

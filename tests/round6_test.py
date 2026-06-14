@@ -172,7 +172,7 @@ async def test_tts_sticker_memory():
     # TTS 引擎测试
     print("\n[1] TTS 引擎...")
     try:
-        from tts_engine import MiMoTTS
+        from emotion.tts_engine import MiMoTTS
         tts = MiMoTTS()
         # 测试情绪标签映射
         if hasattr(tts, 'EMOTION_STYLE_MAP'):
@@ -204,7 +204,7 @@ async def test_tts_sticker_memory():
     # 表情包管理器测试
     print("\n[2] 表情包管理器...")
     try:
-        from sticker_manager import StickerManager
+        from emotion.sticker_manager import StickerManager
         sm = StickerManager()
         # 测试情绪匹配
         test_emotions = ["happy", "sad", "angry", "neutral", "surprised"]
@@ -223,7 +223,7 @@ async def test_tts_sticker_memory():
     # 情绪检测测试
     print("\n[3] 情绪检测...")
     try:
-        from emotion_simple import detect_emotion
+        from emotion.emotion_simple import detect_emotion
         test_cases = [
             ("今天好开心啊！", "happy"),
             ("我好难过", "sad"),
@@ -243,7 +243,7 @@ async def test_tts_sticker_memory():
     # 记忆管理器测试
     print("\n[4] 记忆管理器...")
     try:
-        from memory_manager import MemoryManager
+        from memory.memory_manager import MemoryManager
         mm = MemoryManager(security_filter=None)
         # 测试基本记忆操作
         print(f"    OK: MemoryManager 初始化成功")
@@ -293,8 +293,8 @@ async def test_error_recovery():
     # 测试 ErrorClassifier + CredentialPool 恢复
     print("\n[2] ErrorClassifier + CredentialPool 恢复...")
     try:
-        from error_classifier import ErrorClassifier, FailoverReason, RecoveryAction
-        from credential_pool import CredentialPool, Credential, CredentialState
+        from utils.error_classifier import ErrorClassifier, FailoverReason, RecoveryAction
+        from utils.credential_pool import CredentialPool, Credential, CredentialState
 
         ec = ErrorClassifier()
         pool = CredentialPool()
@@ -302,7 +302,7 @@ async def test_error_recovery():
         pool.add_credential(Credential(provider="test", api_key="sk-test2", base_url="https://api2.test"))
 
         # 模拟限速 -> 凭证轮换 -> 恢复
-        from error_classifier import ClassifiedError
+        from utils.error_classifier import ClassifiedError
 
         # 第一次限速
         err1 = ClassifiedError(
@@ -335,7 +335,7 @@ async def test_error_recovery():
     # 测试 ContextCompressor 降级
     print("\n[3] ContextCompressor 无 LLM 降级...")
     try:
-        from context_compressor import ContextCompressor
+        from memory.context_compressor import ContextCompressor
         comp = ContextCompressor(router=None)  # 无 LLM
 
         # 测试确定性回退
@@ -382,7 +382,7 @@ async def test_concurrent_operations():
     # 并发凭证池操作
     print("\n[1] 并发凭证池操作...")
     try:
-        from credential_pool import CredentialPool, Credential
+        from utils.credential_pool import CredentialPool, Credential
         pool = CredentialPool()
         pool.add_credential(Credential(provider="test", api_key="sk-key1", base_url="https://api1.test"))
 
@@ -405,7 +405,7 @@ async def test_concurrent_operations():
     # 并发工具护栏操作
     print("\n[2] 并发工具护栏操作...")
     try:
-        from tool_guardrails import ToolGuardrails
+        from tool_engine.tool_guardrails import ToolGuardrails
         g = ToolGuardrails()
 
         async def check_and_record(i):
@@ -424,7 +424,7 @@ async def test_concurrent_operations():
     print("\n[3] 并发原子写入...")
     try:
         import tempfile
-        from atomic_write import atomic_write
+        from utils.atomic_write import atomic_write
 
         with tempfile.TemporaryDirectory() as td:
             async def write_file(i):

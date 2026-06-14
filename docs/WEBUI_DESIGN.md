@@ -130,7 +130,7 @@
 **关键决策：**
 
 1. **进程内集成，不是独立服务。** FastAPI 与 AgentCore 跑在同一个 asyncio 事件循环里（与 `qq_bot_adapter.py` 共存）。网关在 `lifespan` 中复用已初始化的 `AgentCore` 单例。这样 Web 改的配置（如关掉某 Agent 的某工具）对 QQ Bot 通道**同时生效**——这正是 R7"及时获取权限"的实现基础。
-2. **启动方式**：`start.sh` 增加分支。`python agent.py --web` 或环境变量 `WEB_UI_ENABLED=true` 时，在主循环中 `uvicorn.Server(config).serve()` 作为 task 启动，端口取 `agent.json5` 的 `gateway.port`（现为 8080）。
+2. **启动方式**：`scripts/start.sh` 增加分支。`python agent.py --web` 或环境变量 `WEB_UI_ENABLED=true` 时，在主循环中 `uvicorn.Server(config).serve()` 作为 task 启动，端口取 `agent.json5` 的 `gateway.port`（现为 8080）。
 3. **前端构建在开发机完成**，产物 `web/dist/` 提交到仓库（Orange Pi 不装 Node）。
 4. **所有 UI 可改配置走 `ConfigService`**（§5.1），落盘 `config/webui_overrides.json5`，并立即应用到内存对象，重启后亦能恢复。
 
@@ -334,7 +334,7 @@ MCP 工具进入 registry 后自动出现在 §4.5 工具列表（source=`mcp:<s
 | `agent_dispatcher.py` | `register_sub_agent()/unregister_sub_agent()`、`SubAgent.rebuild_tools()` |
 | `tts_engine.py` | `list_voices()` 反射常量；`get_status()` 已有，直接复用 |
 | `database.py` | 新表建表语句（§14） |
-| `start.sh` / `agent.py` | `--web` 启动分支，uvicorn 挂入主 loop |
+| `scripts/start.sh` / `agent.py` | `--web` 启动分支，uvicorn 挂入主 loop |
 | `hooks.py` | `fire_post_tool_use` 增加 WS 广播 hook（工具过程可视化） |
 
 ---

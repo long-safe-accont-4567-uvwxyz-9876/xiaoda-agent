@@ -18,3 +18,6 @@ state/
 .trae/
 config/webui_overrides.json
 data/
+web/dist/
+web/frontend/tsconfig.tsbuildinfo
+tests/benchmark_results.json

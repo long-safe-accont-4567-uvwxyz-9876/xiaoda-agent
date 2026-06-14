@@ -9,7 +9,7 @@ from openai import AsyncOpenAI
 
 from loguru import logger
 from agent_dispatcher import AgentDispatcher
-from emoji_config import get_status_msg
+from emotion.emoji_config import get_status_msg
 from config import AGENT_ROUTE_KEYWORDS, DATA_DIR
 from belief_router import BeliefRouter
 

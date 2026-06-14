@@ -22,5 +22,5 @@ def get_all_tools():
     import tools.vision_tools
     import tools.memory_tool
     import tools.nudge_tool
-    from tool_registry import get_all_tool_dicts
+    from tool_engine.tool_registry import get_all_tool_dicts
     return [_ToolProxy(t) for t in get_all_tool_dicts().values()]

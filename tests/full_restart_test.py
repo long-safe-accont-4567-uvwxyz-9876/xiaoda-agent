@@ -254,7 +254,7 @@ async def phase3_tools(core):
     # 3.3 工具护栏
     print("\n[3.3] 工具护栏:")
     try:
-        from tool_guardrails import get_tool_guardrails
+        from tool_engine.tool_guardrails import get_tool_guardrails
         guardrails = get_tool_guardrails()
 
         # 正常调用
@@ -292,7 +292,7 @@ async def phase3_tools(core):
     # 3.5 工具注册表
     print("\n[3.5] 工具注册表:")
     try:
-        from tool_registry import list_tools, to_openai_tools, unregister_tool, register_tool, ToolPermission, ToolResult
+        from tool_engine.tool_registry import list_tools, to_openai_tools, unregister_tool, register_tool, ToolPermission, ToolResult
         tools = list_tools()
         print(f"    OK: 注册了 {len(tools)} 个工具")
 
@@ -330,7 +330,7 @@ async def phase4_tts_sticker_emotion():
     # 4.1 情绪检测
     print("\n[4.1] 情绪检测:")
     try:
-        from emotion_simple import detect_emotion
+        from emotion.emotion_simple import detect_emotion
         tests = [
             ("今天好开心啊！", "喜悦"),
             ("我好难过", "悲伤"),
@@ -351,7 +351,7 @@ async def phase4_tts_sticker_emotion():
     # 4.2 TTS 引擎
     print("\n[4.2] TTS 引擎:")
     try:
-        from tts_engine import MiMoTTS
+        from emotion.tts_engine import MiMoTTS
         tts = MiMoTTS()
         if hasattr(tts, 'EMOTION_STYLE_MAP'):
             emotions = list(tts.EMOTION_STYLE_MAP.keys())
@@ -371,7 +371,7 @@ async def phase4_tts_sticker_emotion():
     # 4.3 表情包管理器
     print("\n[4.3] 表情包管理器:")
     try:
-        from sticker_manager import StickerManager
+        from emotion.sticker_manager import StickerManager
         import inspect
         sig = inspect.signature(StickerManager.__init__)
         print(f"    INFO: 构造函数签名: {sig}")
@@ -398,7 +398,7 @@ async def phase5_credential_error_fallback():
     # 5.1 错误分类器
     print("\n[5.1] 错误分类器:")
     try:
-        from error_classifier import ErrorClassifier, FailoverReason, RecoveryAction
+        from utils.error_classifier import ErrorClassifier, FailoverReason, RecoveryAction
         ec = ErrorClassifier()
         tests = [
             (Exception("rate limit exceeded"), FailoverReason.RATE_LIMIT),
@@ -420,8 +420,8 @@ async def phase5_credential_error_fallback():
     # 5.2 凭证池
     print("\n[5.2] 凭证池:")
     try:
-        from credential_pool import CredentialPool, Credential, CredentialState
-        from error_classifier import ClassifiedError, FailoverReason, RecoveryAction
+        from utils.credential_pool import CredentialPool, Credential, CredentialState
+        from utils.error_classifier import ClassifiedError, FailoverReason, RecoveryAction
 
         pool = CredentialPool()
         pool.add_credential(Credential(provider="test", api_key="sk-key1", base_url="https://api1.test"))
@@ -476,7 +476,7 @@ async def phase5_credential_error_fallback():
     # 5.4 Prompt Caching
     print("\n[5.4] Prompt Caching:")
     try:
-        from prompt_caching import apply_cache_control
+        from utils.prompt_caching import apply_cache_control
         msgs = [{"role": "system", "content": "system"}] + \
                [{"role": "user", "content": f"msg{i}"} for i in range(5)]
         result = apply_cache_control(msgs)
@@ -506,7 +506,7 @@ async def phase6_db_memory_belief():
     # 6.1 数据库 CRUD
     print("\n[6.1] 数据库 CRUD:")
     try:
-        from database import DatabaseManager
+        from db.database import DatabaseManager
         with tempfile.TemporaryDirectory() as td:
             db = DatabaseManager(os.path.join(td, "test.db"))
             await db.init()
@@ -535,7 +535,7 @@ async def phase6_db_memory_belief():
     # 6.2 记忆管理器
     print("\n[6.2] 记忆管理器:")
     try:
-        from memory_manager import MemoryManager
+        from memory.memory_manager import MemoryManager
         mm = MemoryManager(security_filter=None)
         print("    OK: MemoryManager 创建成功")
     except TypeError as e:
@@ -578,7 +578,7 @@ async def phase6_db_memory_belief():
     # 6.5 原子写入
     print("\n[6.5] 原子写入:")
     try:
-        from atomic_write import atomic_write, atomic_json_write
+        from utils.atomic_write import atomic_write, atomic_json_write
         with tempfile.TemporaryDirectory() as td:
             atomic_write(os.path.join(td, "test.txt"), "hello world")
             atomic_json_write(os.path.join(td, "test.json"), {"key": "value"})
@@ -594,7 +594,7 @@ async def phase6_db_memory_belief():
     # 6.6 安全过滤器
     print("\n[6.6] 安全过滤器:")
     try:
-        from security import SecurityFilter
+        from security.security import SecurityFilter
         sf = SecurityFilter()
 
         injection_tests = [
@@ -640,7 +640,7 @@ async def phase7_concurrent_edge():
     # 7.1 并发凭证池
     print("\n[7.1] 并发凭证池:")
     try:
-        from credential_pool import CredentialPool, Credential
+        from utils.credential_pool import CredentialPool, Credential
         pool = CredentialPool()
         pool.add_credential(Credential(provider="test", api_key="sk-key1", base_url="https://api1.test"))
 
@@ -660,7 +660,7 @@ async def phase7_concurrent_edge():
     # 7.2 并发原子写入
     print("\n[7.2] 并发原子写入:")
     try:
-        from atomic_write import atomic_write
+        from utils.atomic_write import atomic_write
         with tempfile.TemporaryDirectory() as td:
             async def write_file(i):
                 path = os.path.join(td, f"file_{i}.txt")

@@ -5,7 +5,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 from loguru import logger
-from tool_registry import register_tool, ToolResult, ToolPermission
+from tool_engine.tool_registry import register_tool, ToolResult, ToolPermission
 from config import AGNES_API_KEY, AGNES_BASE_URL, AGNES_IMAGE_MODEL, AGNES_VIDEO_MODEL, FILE_DIR
 
 # 速率限制：滑动窗口
@@ -136,7 +136,7 @@ async def agnes_video_generate(prompt: str, seconds: float = 5, fps: int = 24) -
         return ToolResult.fail(rate_err)
 
     try:
-        from lazy_deps import ensure
+        from utils.lazy_deps import ensure
         if not ensure("httpx"):
             return ToolResult.fail("httpx 未安装，无法生成视频")
 

@@ -9,7 +9,7 @@ import json
 import tempfile
 import shutil
 from pathlib import Path
-from atomic_write import atomic_write, atomic_json_write
+from utils.atomic_write import atomic_write, atomic_json_write
 
 
 class TestAtomicWrite(unittest.TestCase):

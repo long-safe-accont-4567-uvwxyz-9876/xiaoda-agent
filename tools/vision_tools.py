@@ -1,4 +1,4 @@
-from tool_registry import register_tool, ToolPermission, ToolResult
+from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 
 _vision_service = None
 
@@ -6,7 +6,7 @@ _vision_service = None
 def _get_vision_service():
     global _vision_service
     if _vision_service is None:
-        from vision_service import VisionService
+        from utils.vision_service import VisionService
         _vision_service = VisionService()
     return _vision_service
 

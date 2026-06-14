@@ -134,7 +134,7 @@ async def test_tool_execution_flow():
     # 测试工具护栏
     print("\n[3] 测试工具护栏...")
     try:
-        from tool_guardrails import get_tool_guardrails
+        from tool_engine.tool_guardrails import get_tool_guardrails
         guardrails = get_tool_guardrails()
 
         # 正常调用
@@ -162,7 +162,7 @@ async def test_tool_execution_flow():
     print("\n[4] 测试 PostToolUse 钩子...")
     try:
         from hooks import HookResult
-        from tool_registry import ToolResult
+        from tool_engine.tool_registry import ToolResult
         result = await core._hook_engine.fire_post_tool_use(
             tool_name="read_file",
             arguments={"path": "/tmp/test"},

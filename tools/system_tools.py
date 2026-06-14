@@ -1,6 +1,6 @@
 import asyncio
 import os
-from tool_registry import register_tool, ToolPermission, ToolResult
+from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 
 
 PROTECTED_SERVICES = {"sshd", "systemd", "systemd-journald", "systemd-logind", "systemd-udevd", "dbus", "cron", "rsyslog", "networking", "NetworkManager", "ufw"}

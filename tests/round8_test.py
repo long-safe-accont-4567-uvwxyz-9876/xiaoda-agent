@@ -103,7 +103,7 @@ async def test_database_crud():
     bugs = []
 
     try:
-        from database import DatabaseManager
+        from db.database import DatabaseManager
     except ImportError:
         print("    SKIP: DatabaseManager 不可导入")
         return bugs
@@ -342,7 +342,7 @@ async def test_context_compressor_deep():
     print("=" * 60)
     bugs = []
 
-    from context_compressor import ContextCompressor
+    from memory.context_compressor import ContextCompressor
 
     comp = ContextCompressor(router=None)  # 无 LLM，使用确定性回退
 
@@ -375,7 +375,7 @@ async def test_context_compressor_deep():
     # 测试 3: SUMMARY_PREFIX 存在
     print("\n[3] SUMMARY_PREFIX 检查...")
     try:
-        from context_compressor import SUMMARY_PREFIX
+        from memory.context_compressor import SUMMARY_PREFIX
         if SUMMARY_PREFIX and len(SUMMARY_PREFIX) > 50:
             print(f"    OK: SUMMARY_PREFIX 存在 ({len(SUMMARY_PREFIX)} chars)")
         else:

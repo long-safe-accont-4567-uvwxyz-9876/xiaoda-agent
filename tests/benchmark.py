@@ -10,7 +10,7 @@ import os
 
 def benchmark_context_compression():
     """测试上下文压缩性能"""
-    from context_compressor import ContextCompressor
+    from memory.context_compressor import ContextCompressor
 
     compressor = ContextCompressor()
     results = {}
@@ -72,7 +72,7 @@ def benchmark_context_compression():
 
 def benchmark_error_classifier():
     """测试错误分类器性能"""
-    from error_classifier import ErrorClassifier
+    from utils.error_classifier import ErrorClassifier
 
     classifier = ErrorClassifier()
     results = {}
@@ -100,7 +100,7 @@ def benchmark_error_classifier():
 
 def benchmark_credential_pool():
     """测试凭证池性能"""
-    from credential_pool import CredentialPool, Credential, CredentialState
+    from utils.credential_pool import CredentialPool, Credential, CredentialState
 
     pool = CredentialPool()
     # 添加测试凭证
@@ -125,7 +125,7 @@ def benchmark_credential_pool():
     }
 
     # 状态转换延迟
-    from error_classifier import ClassifiedError, FailoverReason, RecoveryAction
+    from utils.error_classifier import ClassifiedError, FailoverReason, RecoveryAction
     test_error = ClassifiedError(
         reason=FailoverReason.RATE_LIMIT,
         action=RecoveryAction.BACKOFF_RETRY,
@@ -149,7 +149,7 @@ def benchmark_credential_pool():
 
 def benchmark_tool_guardrails():
     """测试工具护栏性能"""
-    from tool_guardrails import ToolGuardrails
+    from tool_engine.tool_guardrails import ToolGuardrails
 
     guardrails = ToolGuardrails()
     results = {}
@@ -181,7 +181,7 @@ def benchmark_tool_guardrails():
 
 def benchmark_prompt_caching():
     """测试 Prompt Caching 性能"""
-    from prompt_caching import apply_cache_control
+    from utils.prompt_caching import apply_cache_control
 
     results = {}
 
@@ -209,7 +209,7 @@ def benchmark_prompt_caching():
 def benchmark_atomic_write():
     """测试原子写入性能"""
     import tempfile
-    from atomic_write import atomic_write, atomic_json_write
+    from utils.atomic_write import atomic_write, atomic_json_write
 
     results = {}
 

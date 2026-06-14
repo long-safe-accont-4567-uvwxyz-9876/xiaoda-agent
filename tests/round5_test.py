@@ -94,7 +94,7 @@ async def test_agent_chat_flow():
     # 测试 5: 错误分类器完整流程
     print("\n[5] 错误分类器完整流程...")
     try:
-        from error_classifier import ErrorClassifier, FailoverReason, RecoveryAction
+        from utils.error_classifier import ErrorClassifier, FailoverReason, RecoveryAction
         ec = ErrorClassifier()
 
         test_cases = [
@@ -117,8 +117,8 @@ async def test_agent_chat_flow():
     # 测试 6: 凭证池完整流程
     print("\n[6] 凭证池完整流程...")
     try:
-        from credential_pool import CredentialPool, Credential, CredentialState
-        from error_classifier import ClassifiedError, FailoverReason, RecoveryAction
+        from utils.credential_pool import CredentialPool, Credential, CredentialState
+        from utils.error_classifier import ClassifiedError, FailoverReason, RecoveryAction
 
         pool = CredentialPool()
         pool.add_credential(Credential(provider="test", api_key="sk-key1", base_url="https://api1.test.com"))
@@ -218,7 +218,7 @@ async def test_edge_cases():
     # 测试 4: 原子写入边界条件
     print("\n[4] 原子写入边界条件...")
     try:
-        from atomic_write import atomic_write, atomic_json_write
+        from utils.atomic_write import atomic_write, atomic_json_write
         with tempfile.TemporaryDirectory() as td:
             # 写入空文件
             atomic_write(os.path.join(td, "empty.txt"), "")
@@ -242,7 +242,7 @@ async def test_edge_cases():
     # 测试 5: 工具护栏边界条件
     print("\n[5] 工具护栏边界条件...")
     try:
-        from tool_guardrails import ToolGuardrails
+        from tool_engine.tool_guardrails import ToolGuardrails
         g = ToolGuardrails()
 
         # 空参数
@@ -268,7 +268,7 @@ async def test_edge_cases():
     # 测试 6: Prompt Caching 边界条件
     print("\n[6] Prompt Caching 边界条件...")
     try:
-        from prompt_caching import apply_cache_control
+        from utils.prompt_caching import apply_cache_control
 
         # 空消息列表
         result = apply_cache_control([])
@@ -298,7 +298,7 @@ async def test_edge_cases():
     # 测试 7: 安全过滤器边界条件
     print("\n[7] 安全过滤器边界条件...")
     try:
-        from security import SecurityFilter
+        from security.security import SecurityFilter
         sf = SecurityFilter()
 
         # 空输入
@@ -416,7 +416,7 @@ async def test_tool_registry():
     print("=" * 60)
     bugs = []
 
-    from tool_registry import list_tools, to_openai_tools, unregister_tool, register_tool, ToolPermission, ToolResult
+    from tool_engine.tool_registry import list_tools, to_openai_tools, unregister_tool, register_tool, ToolPermission, ToolResult
 
     # 测试 1: 获取所有工具
     print("\n[1] 获取所有工具...")

@@ -176,7 +176,7 @@ python3 setup_wizard.py
 ### 方式一：一键启动（推荐）
 
 ```bash
-bash start.sh
+bash scripts/start.sh
 ```
 
 启动流程：

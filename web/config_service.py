@@ -84,7 +84,7 @@ class ConfigService:
 
     def _save(self):
         try:
-            from atomic_write import atomic_write
+            from utils.atomic_write import atomic_write
             self._path.parent.mkdir(parents=True, exist_ok=True)
             atomic_write(self._path, json.dumps(self._data, ensure_ascii=False, indent=2))
         except Exception:

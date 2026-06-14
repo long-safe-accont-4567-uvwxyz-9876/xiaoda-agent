@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from tool_registry import register_tool, ToolPermission, ToolResult
+from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from tools.file_tools_v2 import _validate_path
 
 

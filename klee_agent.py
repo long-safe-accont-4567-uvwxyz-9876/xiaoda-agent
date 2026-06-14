@@ -4,11 +4,11 @@ from pathlib import Path
 from openai import AsyncOpenAI
 
 from loguru import logger
-from tool_registry import to_openai_tools
-from tool_executor import ToolExecutor, ToolResult
-from tool_repair import ToolCallRepair
-from text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_dsml
-from tts_engine import TTSEngine
+from tool_engine.tool_registry import to_openai_tools
+from tool_engine.tool_executor import ToolExecutor, ToolResult
+from tool_engine.tool_repair import ToolCallRepair
+from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_dsml
+from emotion.tts_engine import TTSEngine
 
 
 PROVIDERS = [
@@ -79,7 +79,7 @@ class KleeAgent:
             self._clients.append((provider["name"], client, provider["models"]))
             logger.info("klee.provider_ready", provider=provider["name"], models=len(provider["models"]))
 
-        personality_path = Path(__file__).parent / "klee_personality.md"
+        personality_path = Path(__file__).parent / "config" / "agents" / "klee_personality.md"
         if personality_path.exists():
             self._personality = personality_path.read_text(encoding="utf-8")
         else:

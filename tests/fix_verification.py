@@ -33,7 +33,7 @@ async def main():
     core = AgentCore()
 
     # get_sticker_info 中的映射
-    from emotion_simple import detect_emotion
+    from emotion.emotion_simple import detect_emotion
     anxious = detect_emotion("我好焦虑啊")
     primary = anxious.get("primary", "")
     clean, sticker = core.get_sticker_info("回复", user_emotion=primary)
@@ -51,7 +51,7 @@ async def main():
 
     # ---- Fix 2: _DESC_EMOTION_MAP ----
     print("\n[Fix 2] _DESC_EMOTION_MAP 分类修正")
-    from sticker_manager import StickerManager
+    from emotion.sticker_manager import StickerManager
     sm = StickerManager("/media/orangepi/KIOXIA/nahida-data/stickers")
     desc_map = sm._DESC_EMOTION_MAP
 
@@ -82,7 +82,7 @@ async def main():
 
     # ---- TTS 回归测试 ----
     print("\n[TTS 回归] TTS 引擎可用性")
-    from tts_engine import TTSEngine
+    from emotion.tts_engine import TTSEngine
     tts = TTSEngine()
     await tts.init()
     check("TTS available", tts.available, "TTS 不可用")

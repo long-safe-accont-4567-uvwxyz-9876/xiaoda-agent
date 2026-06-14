@@ -135,7 +135,7 @@ class MediaTaskQueue:
         return self._publish(Path(path), "tts")
 
     async def _do_image(self, prompt: str, params: dict) -> str:
-        from tool_registry import get_tool
+        from tool_engine.tool_registry import get_tool
         tool = get_tool("agnes_image_generate")
         if not tool:
             raise RuntimeError("agnes_image_generate 工具未注册")
@@ -147,7 +147,7 @@ class MediaTaskQueue:
         return await self._extract_media(str(result.data), "image")
 
     async def _do_video(self, prompt: str, params: dict) -> str:
-        from tool_registry import get_tool
+        from tool_engine.tool_registry import get_tool
         tool = get_tool("agnes_video_generate")
         if not tool:
             raise RuntimeError("agnes_video_generate 工具未注册")

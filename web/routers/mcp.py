@@ -75,7 +75,7 @@ async def list_servers(request: Request):
 
 async def start_server(request: Request, name: str, record: dict) -> dict:
     """启动（或重启）一个 MCP server 并发现工具。"""
-    from mcp_client import MCPClient
+    from tool_engine.mcp_client import MCPClient
     mgr = _manager(request)
     old = mgr._clients.get(name)
     if old:

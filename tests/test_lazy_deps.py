@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
-from lazy_deps import ensure, is_available, _spec_is_safe, LAZY_DEPS
+from utils.lazy_deps import ensure, is_available, _spec_is_safe, LAZY_DEPS
 
 
 class TestLazyDeps(unittest.TestCase):

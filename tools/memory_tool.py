@@ -1,7 +1,7 @@
 import time
-from tool_registry import register_tool, ToolPermission, ToolResult
+from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from loguru import logger
-from metrics import metrics
+from utils.metrics import metrics
 
 # 模块级 MemoryManager 单例（由 agent_core.init() 注入）
 _memory_manager = None

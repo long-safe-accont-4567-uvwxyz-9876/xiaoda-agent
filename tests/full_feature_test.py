@@ -52,7 +52,7 @@ async def main():
 
     # ━━━ 2. 工具注册 ━━━
     print("\n━━━ 2. 工具注册 ━━━")
-    from tool_registry import to_openai_tools, get_tool
+    from tool_engine.tool_registry import to_openai_tools, get_tool
     tools = to_openai_tools()
     tool_names = [t["function"]["name"] for t in tools]
     record(f"工具数量 {len(tools)}", len(tools) >= 15)
@@ -66,7 +66,7 @@ async def main():
 
     # ━━━ 3. 向量存储 ━━━
     print("\n━━━ 3. 向量存储 ━━━")
-    from vector_store import VectorStore
+    from memory.vector_store import VectorStore
     try:
         vs = VectorStore(db_path="/media/orangepi/KIOXIA/nahida-data/db/vector.db")
         await vs.init()
@@ -81,7 +81,7 @@ async def main():
 
     # ━━━ 4. 知识图谱 ━━━
     print("\n━━━ 4. 知识图谱 ━━━")
-    from knowledge_graph import KnowledgeGraph
+    from memory.knowledge_graph import KnowledgeGraph
     try:
         kg = KnowledgeGraph()
         record("初始化", True)
@@ -91,7 +91,7 @@ async def main():
 
     # ━━━ 5. 情绪检测 ━━━
     print("\n━━━ 5. 情绪检测 ━━━")
-    from emotion_simple import detect_emotion
+    from emotion.emotion_simple import detect_emotion
     for text, expected in [("我好开心啊！", "喜悦"), ("我很难过", "悲伤"),
                            ("气死我了！", "愤怒"), ("好害怕", "焦虑")]:
         result = detect_emotion(text)
@@ -100,7 +100,7 @@ async def main():
 
     # ━━━ 6. 表情包 ━━━
     print("\n━━━ 6. 表情包 ━━━")
-    from sticker_manager import StickerManager
+    from emotion.sticker_manager import StickerManager
     try:
         sm = StickerManager(sticker_dir="/media/orangepi/KIOXIA/nahida-data/stickers")
         record("get_sticker 方法", hasattr(sm, 'get_sticker'))
@@ -130,7 +130,7 @@ async def main():
 
     # ━━━ 8. 权限管理器 ━━━
     print("\n━━━ 8. 权限管理器 ━━━")
-    from permission_manager import get_permission_manager, PermissionMode
+    from security.permission_manager import get_permission_manager, PermissionMode
     try:
         pm = get_permission_manager()
         record("默认 BYPASS", pm.mode == PermissionMode.BYPASS)
@@ -182,7 +182,7 @@ async def main():
 
     # ━━━ 10. 上下文监控 ━━━
     print("\n━━━ 10. 上下文监控 ━━━")
-    from context_usage import compute_context_usage, estimate_token_count
+    from memory.context_usage import compute_context_usage, estimate_token_count
     try:
         record("中文 token", estimate_token_count("你好世界") > 0)
         record("英文 token", estimate_token_count("Hello World") > 0)
@@ -198,7 +198,7 @@ async def main():
 
     # ━━━ 11. 会话存储 ━━━
     print("\n━━━ 11. 会话存储 ━━━")
-    from session_store import fold_session_summary, summary_to_session_info, SessionSummaryEntry
+    from db.session_store import fold_session_summary, summary_to_session_info, SessionSummaryEntry
     try:
         entry = SessionSummaryEntry(session_id="test-123", mtime=0, data={})
         new_entry = fold_session_summary(
@@ -213,7 +213,7 @@ async def main():
 
     # ━━━ 12. 数据库 ━━━
     print("\n━━━ 12. 数据库 ━━━")
-    from database import DatabaseManager
+    from db.database import DatabaseManager
     try:
         db = DatabaseManager()
         await db.init()
@@ -229,8 +229,8 @@ async def main():
 
     # ━━━ 13. 安全过滤 ━━━
     print("\n━━━ 13. 安全过滤 ━━━")
-    from security import SecurityFilter
-    from permission_manager import get_permission_manager
+    from security.security import SecurityFilter
+    from security.permission_manager import get_permission_manager
     try:
         sf = SecurityFilter()
         pm = get_permission_manager()
@@ -244,7 +244,7 @@ async def main():
 
     # ━━━ 14. 沙箱 ━━━
     print("\n━━━ 14. 沙箱 ━━━")
-    from sandbox_config import check_domain_allowed, DEFAULT_SANDBOX
+    from security.sandbox_config import check_domain_allowed, DEFAULT_SANDBOX
     try:
         record("不限制域名", len(DEFAULT_SANDBOX.network.allowed_domains) == 0)
         record("不限制端口", len(DEFAULT_SANDBOX.network.allowed_ports) == 0)
@@ -256,7 +256,7 @@ async def main():
 
     # ━━━ 15. 进程内 MCP ━━━
     print("\n━━━ 15. 进程内 MCP ━━━")
-    from mcp_client import create_sdk_mcp_server, sdk_tool, SdkMcpServer, MCPManager
+    from tool_engine.mcp_client import create_sdk_mcp_server, sdk_tool, SdkMcpServer, MCPManager
     try:
         @sdk_tool("test_tool", "测试工具", {"query": str})
         async def test_handler(args):

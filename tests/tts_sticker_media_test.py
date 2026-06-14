@@ -21,7 +21,7 @@ async def test_tts():
     print("Part 1: TTS 语音合成")
     print("=" * 60)
 
-    from tts_engine import TTSEngine, EMOTION_STYLE_MAP, VOICE_REFERENCES, VOICE_STYLES
+    from emotion.tts_engine import TTSEngine, EMOTION_STYLE_MAP, VOICE_REFERENCES, VOICE_STYLES
 
     # 1.1 引擎初始化
     print("\n[1.1] TTSEngine 初始化:")
@@ -127,7 +127,7 @@ async def test_sticker():
     print("Part 2: 表情包发送")
     print("=" * 60)
 
-    from sticker_manager import StickerManager
+    from emotion.sticker_manager import StickerManager
 
     # 2.1 使用真实表情包目录
     sticker_dirs = [
@@ -387,7 +387,7 @@ async def test_agent_integration():
 
     # 5.3 检查 Agnes 工具注册
     print("\n[5.3] Agnes 工具注册:")
-    from tool_registry import list_tools
+    from tool_engine.tool_registry import list_tools
     tools = list_tools()
     agnes_tools = [t for t in tools if 'agnes' in t['name'].lower()]
     for t in agnes_tools:
@@ -413,7 +413,7 @@ async def test_agent_integration():
 
     # 5.5 检查 agnes_image_generate 在 tool_executor 中可用
     print("\n[5.5] 工具执行器中的 Agnes 工具:")
-    from tool_registry import get_tool
+    from tool_engine.tool_registry import get_tool
     for name in ['agnes_image_generate', 'agnes_video_generate']:
         tool = get_tool(name)
         if tool:

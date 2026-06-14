@@ -317,7 +317,7 @@ class SecurityPreCheck(BaseHook):
     def _get_filter(self):
         """延迟导入 SecurityFilter，避免循环依赖"""
         if self._filter is None:
-            from security import SecurityFilter
+            from security.security import SecurityFilter
             self._filter = SecurityFilter()
         return self._filter
 
@@ -341,7 +341,7 @@ class SecurityPreCheck(BaseHook):
         result = sec_filter.check_user_input(check_text)
 
         if result.action == "block":
-            from permission_manager import get_permission_manager
+            from security.permission_manager import get_permission_manager
             pm = get_permission_manager()
             if pm.is_dev_mode():
                 # 开发板模式：降级为 warn，不阻断

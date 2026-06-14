@@ -1,5 +1,5 @@
 import random
-from tool_registry import register_tool, ToolPermission, ToolResult
+from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from loguru import logger
 
 

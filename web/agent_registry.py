@@ -254,11 +254,11 @@ class AgentRegistry:
 
     @staticmethod
     def _all_tool_names() -> list[str]:
-        from tool_registry import list_tools
+        from tool_engine.tool_registry import list_tools
         return [t["name"] for t in list_tools()]
 
     def get_permissions(self, name: str) -> dict:
-        from tool_registry import list_tools
+        from tool_engine.tool_registry import list_tools
         blocked = self._blocked()
         if name == "nahida":
             # 主体不经 dispatcher 过滤，所有工具可用（受全局开关控制）

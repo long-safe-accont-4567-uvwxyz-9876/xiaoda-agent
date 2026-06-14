@@ -29,7 +29,7 @@ def _run_cli():
 
 def _run_web(host: str, port: int):
     import uvicorn
-    from logging_config import setup_logging
+    from utils.logging_config import setup_logging
     setup_logging()
 
     from loguru import logger

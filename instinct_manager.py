@@ -2,7 +2,7 @@ import time
 import difflib
 from loguru import logger
 
-from database import DatabaseManager
+from db.database import DatabaseManager
 from model_router import ModelRouter
 
 EXTRACT_PROMPT = """请分析以下对话，提取可复用的模式、经验或用户偏好。每个模式用一句话描述，附带0-1的置信度。

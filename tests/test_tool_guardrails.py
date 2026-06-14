@@ -5,7 +5,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
 import asyncio
-from tool_guardrails import ToolGuardrails
+from tool_engine.tool_guardrails import ToolGuardrails
 
 
 class TestToolGuardrails(unittest.TestCase):

@@ -19,11 +19,11 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 if TYPE_CHECKING:
-    from database import DatabaseManager
-    from memory_manager import MemoryManager
-    from notebook_manager import NotebookManager
-    from portrait_manager import PortraitManager
-    from learning_manager import LearningManager
+    from db.database import DatabaseManager
+    from memory.memory_manager import MemoryManager
+    from memory.notebook_manager import NotebookManager
+    from emotion.portrait_manager import PortraitManager
+    from memory.learning_manager import LearningManager
     from instinct_manager import InstinctManager
     from agent_context import AgentContext
 

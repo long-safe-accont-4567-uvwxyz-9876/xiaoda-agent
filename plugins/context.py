@@ -50,7 +50,7 @@ class PluginContext:
             logger.warning("plugin.tool_registry_unavailable", plugin=self._plugin_id)
             return
         full_name = f"{self._plugin_id}__{name}" if "__" not in name else name
-        from tool_registry import register_tool_direct, ToolPermission
+        from tool_engine.tool_registry import register_tool_direct, ToolPermission
         register_tool_direct(
             name=full_name,
             description=description,
@@ -68,7 +68,7 @@ class PluginContext:
     def unregister_tool(self, name: str) -> None:
         """取消注册工具"""
         if self._tool_registry is not None:
-            from tool_registry import unregister_tool
+            from tool_engine.tool_registry import unregister_tool
             try:
                 unregister_tool(name)
                 self._registered_tools.discard(name)
@@ -190,7 +190,7 @@ class PluginContext:
         """清除所有注册（工具、事件）"""
         for tool_name in self._registered_tools:
             try:
-                from tool_registry import unregister_tool
+                from tool_engine.tool_registry import unregister_tool
                 unregister_tool(tool_name)
             except Exception:
                 pass

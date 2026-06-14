@@ -255,7 +255,7 @@ async def update_route(task: str, body: dict, request: Request):
 
 @router.get("/models/credentials/status", response_model=Envelope[list[dict]])
 async def credentials_status():
-    from credential_pool import get_credential_pool
+    from utils.credential_pool import get_credential_pool
     pool = get_credential_pool()
     out = []
     for provider, creds in getattr(pool, "_pool", {}).items():

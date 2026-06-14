@@ -49,7 +49,7 @@ async def _apply_model_overrides(core):
 async def _start_user_mcp_servers(core):
     """启动 WebUI 管理的 MCP server。"""
     from web.config_service import get_config_service
-    from mcp_client import MCPClient
+    from tool_engine.mcp_client import MCPClient
     cfg = get_config_service()
     for name, rec in (cfg.get("mcp", {}) or {}).items():
         if not isinstance(rec, dict) or not rec.get("enabled", True):
@@ -105,7 +105,7 @@ async def lifespan(app: FastAPI):
         agent_core=core,
     )
     # Set tool_registry reference
-    import tool_registry as _tool_registry_mod
+    import tool_engine.tool_registry as _tool_registry_mod
     plugin_manager._tool_registry = _tool_registry_mod
     # Discover plugins
     plugin_manager.discover()

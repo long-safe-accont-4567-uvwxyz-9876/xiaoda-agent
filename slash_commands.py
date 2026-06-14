@@ -419,7 +419,7 @@ class SlashCommandHandler:
         if not self._is_owner(user_id):
             return "只有主人才能使用摄像头哦~"
         try:
-            from vision_service import VisionService
+            from utils.vision_service import VisionService
             vs = VisionService()
             ok, frame = vs.capture_frame(device=0)
             if not ok:
@@ -474,7 +474,7 @@ class SlashCommandHandler:
             lines.append("🎭 上下文未就绪")
         if self._agent:
             try:
-                from emotion_simple import detect_emotion
+                from emotion.emotion_simple import detect_emotion
                 last_input = ""
                 if self._context and hasattr(self._context, 'history') and self._context.history:
                     for msg in reversed(self._context.history):
@@ -521,7 +521,7 @@ class SlashCommandHandler:
         lines = ["🔧 内部状态（调试）"]
         # Metrics snapshot
         try:
-            from metrics import metrics
+            from utils.metrics import metrics
             snapshot = metrics.get_snapshot()
             counters = snapshot.get("counters", {})
             gauges = snapshot.get("gauges", {})

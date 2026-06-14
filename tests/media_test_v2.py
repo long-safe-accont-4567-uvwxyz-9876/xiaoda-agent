@@ -24,8 +24,8 @@ def test_sticker_integration():
     print("Part 1: 表情包集成流程测试")
     print("=" * 60)
 
-    from sticker_manager import StickerManager
-    from emotion_simple import detect_emotion
+    from emotion.sticker_manager import StickerManager
+    from emotion.emotion_simple import detect_emotion
 
     # 1.1 真实表情包目录
     sticker_dir = "/media/orangepi/KIOXIA/nahida-data/stickers"
@@ -143,7 +143,7 @@ async def test_agnes_tools():
 
     # 2.2 图片生成工具 - 无 Key 降级测试
     print("\n[2.2] 图片生成工具 - 无 Key 降级测试:")
-    from tool_registry import ToolResult
+    from tool_engine.tool_registry import ToolResult
     from tools.agnes_tools import agnes_image_generate, agnes_video_generate
 
     # 保存原始 Key
@@ -273,7 +273,7 @@ async def test_agent_integration():
 
     # 3.3 焦虑情绪映射测试
     print("\n[3.3] 焦虑情绪映射测试:")
-    from emotion_simple import detect_emotion
+    from emotion.emotion_simple import detect_emotion
     anxious_result = detect_emotion("我好焦虑啊，怎么办")
     primary = anxious_result.get("primary", "")
     print(f"  detect_emotion('我好焦虑啊'): primary={primary}")
@@ -292,8 +292,8 @@ async def test_agent_integration():
 
     # 3.4 TTS 情绪标签与 EMOTION_STYLE_MAP 一致性
     print("\n[3.4] TTS 情绪标签一致性:")
-    from tts_engine import EMOTION_STYLE_MAP
-    from sticker_manager import StickerManager
+    from emotion.tts_engine import EMOTION_STYLE_MAP
+    from emotion.sticker_manager import StickerManager
     sm = StickerManager("/media/orangepi/KIOXIA/nahida-data/stickers")
 
     tts_emotions = set(EMOTION_STYLE_MAP.keys())

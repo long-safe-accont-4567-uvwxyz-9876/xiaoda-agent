@@ -19,7 +19,7 @@ _start_time = time.time()
 @router.get("/system/status", response_model=Envelope[SystemStatus])
 async def get_status(request: Request):
     core = request.app.state.core
-    from permission_manager import get_permission_manager
+    from security.permission_manager import get_permission_manager
     try:
         from web.ws_hub import manager as ws_manager
         active = ws_manager.active_count
@@ -60,7 +60,7 @@ async def get_audit(request: Request,
 
 @router.get("/system/metrics", response_model=Envelope[dict])
 async def get_metrics():
-    from metrics import metrics
+    from utils.metrics import metrics
     return Envelope(data=metrics.get_snapshot())
 
 
@@ -109,7 +109,7 @@ async def put_config(body: dict, request: Request):
 
 @router.get("/system/permission-mode", response_model=Envelope[dict])
 async def get_permission_mode():
-    from permission_manager import get_permission_manager, PermissionMode
+    from security.permission_manager import get_permission_manager, PermissionMode
     return Envelope(data={
         "mode": get_permission_manager().mode.value,
         "options": [m.value for m in PermissionMode if m.value != "bypass"],
@@ -121,7 +121,7 @@ async def set_permission_mode(body: dict, request: Request):
     mode = (body.get("mode") or "").lower()
     if mode == "bypass":
         raise HTTPException(400, "UI 禁止设置 BYPASS 模式")
-    from permission_manager import get_permission_manager, PermissionMode
+    from security.permission_manager import get_permission_manager, PermissionMode
     valid = {m.value for m in PermissionMode}
     if mode not in valid:
         raise HTTPException(400, f"未知模式 {mode}")

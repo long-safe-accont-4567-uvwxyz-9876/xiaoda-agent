@@ -5,8 +5,8 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 from loguru import logger
-from tool_registry import register_tool, ToolPermission, ToolResult
-from sandbox_config import check_domain_allowed
+from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+from security.sandbox_config import check_domain_allowed
 
 _CONTENT_LIMIT = 8000
 

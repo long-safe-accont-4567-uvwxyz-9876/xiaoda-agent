@@ -74,7 +74,7 @@ class AgentContext:
         # 尝试使用 ContextCompressor 进行更好的压缩
         if self._compressor is None and self._router:
             try:
-                from context_compressor import get_context_compressor
+                from memory.context_compressor import get_context_compressor
                 self._compressor = get_context_compressor(router=self._router)
             except Exception:
                 self._compressor = None

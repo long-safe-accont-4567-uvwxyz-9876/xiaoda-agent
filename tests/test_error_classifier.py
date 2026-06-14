@@ -5,7 +5,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
 from unittest.mock import MagicMock, patch
-from error_classifier import ErrorClassifier, FailoverReason, RecoveryAction, RECOVERY_MAP
+from utils.error_classifier import ErrorClassifier, FailoverReason, RecoveryAction, RECOVERY_MAP
 
 
 class TestErrorClassifier(unittest.TestCase):

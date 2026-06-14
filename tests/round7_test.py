@@ -125,7 +125,7 @@ async def test_mcp_client():
     bugs = []
 
     try:
-        from mcp_client import MCPClient, MCPManager
+        from tool_engine.mcp_client import MCPClient, MCPManager
     except ImportError:
         print("    SKIP: MCP 模块不可导入")
         return bugs
@@ -180,7 +180,7 @@ async def test_database_integrity():
     bugs = []
 
     try:
-        from database import DatabaseManager
+        from db.database import DatabaseManager
     except ImportError:
         print("    SKIP: DatabaseManager 不可导入")
         return bugs
@@ -396,7 +396,7 @@ async def test_security_deep():
     print("=" * 60)
     bugs = []
 
-    from security import SecurityFilter
+    from security.security import SecurityFilter
     sf = SecurityFilter()
 
     # 测试各种注入模式

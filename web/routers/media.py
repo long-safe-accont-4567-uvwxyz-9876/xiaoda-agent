@@ -70,7 +70,7 @@ async def synthesize_tts(body: dict, request: Request):
 
 @router.get("/media/tts/voices", response_model=Envelope[dict])
 async def tts_voices():
-    from tts_engine import VOICE_REFERENCES, VOICE_STYLES, EMOTION_STYLE_MAP
+    from emotion.tts_engine import VOICE_REFERENCES, VOICE_STYLES, EMOTION_STYLE_MAP
     return Envelope(data={
         "voices": [{"id": v, "description": VOICE_STYLES.get(v, "")}
                    for v in VOICE_REFERENCES.keys()],
@@ -93,7 +93,7 @@ async def put_tts_config(body: dict, request: Request):
     if "auto_speak" in body:
         cfg.set("tts.auto_speak", bool(body["auto_speak"]))
     if body.get("default_voice"):
-        from tts_engine import VOICE_REFERENCES
+        from emotion.tts_engine import VOICE_REFERENCES
         if body["default_voice"] not in VOICE_REFERENCES:
             raise HTTPException(400, f"未知音色 {body['default_voice']}")
         cfg.set("tts.default_voice", body["default_voice"])

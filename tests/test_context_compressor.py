@@ -8,7 +8,7 @@ import tempfile
 import shutil
 from pathlib import Path
 from unittest.mock import patch
-from context_compressor import ContextCompressor, SUMMARY_PREFIX, CompressionResult
+from memory.context_compressor import ContextCompressor, SUMMARY_PREFIX, CompressionResult
 
 
 class TestContextCompressor(unittest.TestCase):
@@ -19,7 +19,7 @@ class TestContextCompressor(unittest.TestCase):
         self.tmp_dir = Path(tempfile.mkdtemp())
         self.cache_dir = self.tmp_dir / "ccr_cache"
         # mock DATA_DIR 为临时目录，使 ContextCompressor.CACHE_DIR 指向临时目录
-        with patch('context_compressor.DATA_DIR', self.tmp_dir):
+        with patch('memory.context_compressor.DATA_DIR', self.tmp_dir):
             self.compressor = ContextCompressor(router=None)
             # 确保缓存目录正确
             self.compressor._cache_dir = self.cache_dir

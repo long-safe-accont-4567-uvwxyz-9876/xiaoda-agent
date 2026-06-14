@@ -71,7 +71,7 @@ def test_error_classifier_logic():
     print("=" * 60)
     print("3. ErrorClassifier 逻辑测试")
     print("=" * 60)
-    from error_classifier import ErrorClassifier, FailoverReason
+    from utils.error_classifier import ErrorClassifier, FailoverReason
 
     ec = ErrorClassifier()
     bugs = []
@@ -120,8 +120,8 @@ def test_credential_pool_integration():
     print("=" * 60)
     print("4. CredentialPool 集成测试")
     print("=" * 60)
-    from credential_pool import CredentialPool, Credential, CredentialState
-    from error_classifier import ClassifiedError, FailoverReason, RecoveryAction
+    from utils.credential_pool import CredentialPool, Credential, CredentialState
+    from utils.error_classifier import ClassifiedError, FailoverReason, RecoveryAction
 
     bugs = []
     pool = CredentialPool()
@@ -179,10 +179,10 @@ def test_prompt_caching_fix():
     print("5. PromptCaching 修复验证")
     print("=" * 60)
     bugs = []
-    from prompt_caching import apply_cache_control
+    from utils.prompt_caching import apply_cache_control
 
     # 验证不再有 CACHE_TTL_1H
-    import prompt_caching
+    import utils.prompt_caching
     if hasattr(prompt_caching, 'CACHE_TTL_1H'):
         print("  BUG: CACHE_TTL_1H 仍然存在")
         bugs.append("CACHE_TTL_1H not removed")
@@ -215,7 +215,7 @@ def test_context_compressor_tool_messages():
     print("6. ContextCompressor tool 消息保留测试")
     print("=" * 60)
     bugs = []
-    from context_compressor import ContextCompressor
+    from memory.context_compressor import ContextCompressor
 
     comp = ContextCompressor(router=None)
 
@@ -249,7 +249,7 @@ def test_security_filter_injection():
     bugs = []
     try:
         from agent_core import AgentCore
-        from security import SecurityFilter
+        from security.security import SecurityFilter
         core = AgentCore()
 
         # 检查 AgentContext 是否使用了注入的 security_filter

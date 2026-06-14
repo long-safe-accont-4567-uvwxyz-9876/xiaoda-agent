@@ -4,7 +4,7 @@ import asyncio
 import time
 from typing import Any
 from loguru import logger
-from tool_registry import register_tool, ToolPermission, ToolResult
+from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 

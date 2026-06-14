@@ -13,7 +13,7 @@ load_dotenv()
 # 安全加固：不再全局 monkey patch ssl.create_default_context
 # botpy 内部已使用 SSLContext() 处理 WebSocket SSL，无需全局禁用证书验证
 
-from logging_config import setup_logging
+from utils.logging_config import setup_logging
 setup_logging()
 
 from loguru import logger
@@ -26,8 +26,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agent_core import AgentCore, ProcessResult
 from config import AGENT_CONFIG
-from nudge_engine import NudgeEngine
-from text_utils import encode_image_to_base64
+from emotion.nudge_engine import NudgeEngine
+from utils.text_utils import encode_image_to_base64
 
 _original_is_system_event = BotWebSocket._is_system_event
 
@@ -648,7 +648,7 @@ class AIQQBot(botpy.Client):
         return tmp_path
 
     async def _send_reply_with_sticker(self, message, result: ProcessResult):
-        from text_utils import smart_truncate, split_long_reply
+        from utils.text_utils import smart_truncate, split_long_reply
 
         reply = result.reply
         clean_reply = self.agent.strip_emotion_tag(reply)

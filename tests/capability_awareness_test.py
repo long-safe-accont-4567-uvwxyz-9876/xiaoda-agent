@@ -30,7 +30,7 @@ for name, result in checks:
 print(f"  通过: {ok}/{len(checks)}")
 
 # 2. 工具注册
-from tool_registry import to_openai_tools
+from tool_engine.tool_registry import to_openai_tools
 tools = to_openai_tools()
 tool_names = [t["function"]["name"] for t in tools]
 print(f"\n[2] 已注册工具 ({len(tool_names)} 个):")

@@ -8,7 +8,7 @@ import ast
 import os
 import math
 from datetime import datetime, timezone, timedelta
-from tool_registry import register_tool, ToolPermission, ToolResult
+from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from loguru import logger
 
 # python_executor 执行超时（秒）

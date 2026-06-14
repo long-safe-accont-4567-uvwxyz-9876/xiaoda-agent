@@ -61,7 +61,7 @@ async def probe_video_config() -> dict:
         key = os.getenv("AGNES_API_KEY", "")
         if not key:
             return {"ok": False, "latency_ms": 0, "error": "AGNES_API_KEY 未配置"}
-        from tool_registry import get_tool
+        from tool_engine.tool_registry import get_tool
         if not get_tool("agnes_video_generate"):
             return {"ok": False, "latency_ms": 0, "error": "视频生成工具未注册"}
         return {"ok": True, "latency_ms": int((time.time() - t0) * 1000),

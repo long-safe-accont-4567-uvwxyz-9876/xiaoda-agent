@@ -7,14 +7,14 @@ from typing import Protocol, runtime_checkable
 from openai import AsyncOpenAI
 
 from loguru import logger
-from tool_registry import to_openai_tools
-from tool_executor import ToolExecutor, ToolResult
-from tool_repair import ToolCallRepair
-from text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_dsml
-from tts_engine import TTSEngine
-from emoji_config import get_status_msg
-from tool_guardrails import get_tool_guardrails
-from credential_pool import get_credential_pool, CredentialPool
+from tool_engine.tool_registry import to_openai_tools
+from tool_engine.tool_executor import ToolExecutor, ToolResult
+from tool_engine.tool_repair import ToolCallRepair
+from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_dsml
+from emotion.tts_engine import TTSEngine
+from emotion.emoji_config import get_status_msg
+from tool_engine.tool_guardrails import get_tool_guardrails
+from utils.credential_pool import get_credential_pool, CredentialPool
 
 
 # ── ToolCallExtractor 统一接口 ──────────────────────────────

@@ -12,7 +12,7 @@ from typing import Any
 from dotenv import load_dotenv
 load_dotenv()
 
-from logging_config import setup_logging
+from utils.logging_config import setup_logging
 setup_logging()
 
 from loguru import logger
@@ -22,31 +22,31 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import MIMO_MODEL, AGENT_CONFIG, WORKSPACE_DIR, STICKER_DIR, KLEE_STICKER_DIR, FILE_DIR, build_system_prompt, SIMPLE_TASK_KEYWORDS, PRO_TASK_KEYWORDS
 from model_router import ModelRouter
 from agent_context import AgentContext
-from database import DatabaseManager
-from security import SecurityFilter
-from tool_registry import to_openai_tools
-from tool_executor import ToolExecutor
-from tool_repair import ToolCallRepair
-from memory_manager import MemoryManager
-from emotion_simple import detect_emotion, build_emotion_hint
-from emotion_enum import CN_TO_EN, is_unified, ensure_emotion_tag
-from result_wrapper import ResultWrapper
-from text_utils import strip_dsml, has_dsml_tool_calls, parse_dsml_tool_calls, humanize, encode_image_to_base64
-from portrait_manager import PortraitManager
-from notebook_manager import NotebookManager
-from learning_manager import LearningManager
+from db.database import DatabaseManager
+from security.security import SecurityFilter
+from tool_engine.tool_registry import to_openai_tools
+from tool_engine.tool_executor import ToolExecutor
+from tool_engine.tool_repair import ToolCallRepair
+from memory.memory_manager import MemoryManager
+from emotion.emotion_simple import detect_emotion, build_emotion_hint
+from emotion.emotion_enum import CN_TO_EN, is_unified, ensure_emotion_tag
+from utils.result_wrapper import ResultWrapper
+from utils.text_utils import strip_dsml, has_dsml_tool_calls, parse_dsml_tool_calls, humanize, encode_image_to_base64
+from emotion.portrait_manager import PortraitManager
+from memory.notebook_manager import NotebookManager
+from memory.learning_manager import LearningManager
 from slash_commands import SlashCommandHandler
-from sticker_manager import StickerManager
-from file_receiver import FileReceiver
-from tool_call_handler import ToolCallHandler
+from emotion.sticker_manager import StickerManager
+from utils.file_receiver import FileReceiver
+from tool_engine.tool_call_handler import ToolCallHandler
 from klee_agent import KleeAgent
-from tts_engine import TTSEngine
+from emotion.tts_engine import TTSEngine
 from agent_dispatcher import AgentDispatcher
-from mcp_client import MCPManager
+from tool_engine.mcp_client import MCPManager
 from task_orchestrator import TaskGraph, run_task_graph
 from instinct_manager import InstinctManager
-from credential_pool import get_credential_pool
-from error_classifier import ErrorClassifier
+from utils.credential_pool import get_credential_pool
+from utils.error_classifier import ErrorClassifier
 from hooks import get_hook_engine, HookEngine
 
 import tools.file_tools_v2
@@ -152,7 +152,7 @@ class AgentCore:
         )
         self._task_graph: TaskGraph | None = None
         self._agent_route_configs: dict = {}
-        self._tool_call_handler = ToolCallHandler(self.tool_executor, self.tool_repair, self._clean_reply, self.context, self.router, klee_delegate=self.delegate_to_klee, agent_name="nahida", personality_file=str(Path(__file__).parent / "nahida_personality.md"), tool_execute_callback=self._execute_tool_with_hooks)
+        self._tool_call_handler = ToolCallHandler(self.tool_executor, self.tool_repair, self._clean_reply, self.context, self.router, klee_delegate=self.delegate_to_klee, agent_name="nahida", personality_file=str(Path(__file__).parent / "config" / "agents" / "nahida_personality.md"), tool_execute_callback=self._execute_tool_with_hooks)
         self._user_chat_target: dict[str, str] = {}
         self._chat_target_lock = asyncio.Lock()
         self._router_engine = RouterEngine(belief_router=None)  # belief_router 灰度期暂不接入
@@ -543,7 +543,7 @@ class AgentCore:
                                         user_id: str = "", safe_mode: bool = False,
                                         user_input: str = "") -> 'ToolResult':
         """带钩子的工具执行"""
-        from tool_registry import ToolResult
+        from tool_engine.tool_registry import ToolResult
 
         # PreToolUse 钩子
         hook_result = await self._hook_engine.fire_pre_tool_use(
@@ -566,7 +566,7 @@ class AgentCore:
             pass
 
         # 工具护栏检查
-        from tool_guardrails import get_tool_guardrails
+        from tool_engine.tool_guardrails import get_tool_guardrails
         guardrails = get_tool_guardrails()
         action, guard_msg = await guardrails.check(tool_name, arguments)
         if action == "halt":
@@ -1114,13 +1114,13 @@ class AgentCore:
 
     async def set_permission_mode(self, mode: str) -> None:
         """设置权限模式"""
-        from permission_manager import get_permission_manager, PermissionMode
+        from security.permission_manager import get_permission_manager, PermissionMode
         pm = get_permission_manager()
         pm.set_mode(mode)
 
     async def get_context_usage(self) -> dict:
         """获取当前上下文窗口使用情况"""
-        from context_usage import compute_context_usage
+        from memory.context_usage import compute_context_usage
         from dataclasses import asdict
 
         # 获取系统提示词

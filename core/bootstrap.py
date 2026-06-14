@@ -52,7 +52,7 @@ class AgentCoreBootstrapper:
     # ── 基础设施 ──────────────────────────────────────────
 
     async def _init_infrastructure(self) -> None:
-        from vector_store import VectorStore
+        from memory.vector_store import VectorStore
 
         core = self.core
         await core.db.init()
@@ -76,11 +76,11 @@ class AgentCoreBootstrapper:
     # ── 认知系统 ──────────────────────────────────────────
 
     async def _init_cognitive(self) -> None:
-        from memory_manager import MemoryManager
-        from knowledge_graph import KnowledgeGraph
-        from notebook_manager import NotebookManager
-        from learning_manager import LearningManager
-        from portrait_manager import PortraitManager
+        from memory.memory_manager import MemoryManager
+        from memory.knowledge_graph import KnowledgeGraph
+        from memory.notebook_manager import NotebookManager
+        from memory.learning_manager import LearningManager
+        from emotion.portrait_manager import PortraitManager
         from instinct_manager import InstinctManager
 
         core = self.core
@@ -128,7 +128,7 @@ class AgentCoreBootstrapper:
             display_name="可莉",
             provider="mimo",
             model="mimo-v2.5-pro",
-            personality_file=str(Path(__file__).resolve().parent.parent / "klee_personality.md"),
+            personality_file=str(Path(__file__).resolve().parent.parent / "config" / "agents" / "klee_personality.md"),
             voice_ref="keli",
             excluded_tools={"call_klee", "shell_command", "python_executor", "write_file", "search_files", "read_file", "list_files", "web_browse", "document_reader", "multi_search", "wolfram_query"},
             base_url="https://api.xiaomimimo.com/v1",
@@ -142,7 +142,7 @@ class AgentCoreBootstrapper:
             display_name="银狼",
             provider="mimo",
             model="mimo-v2.5-pro",
-            personality_file=str(Path(__file__).resolve().parent.parent / "yinlang_personality.md"),
+            personality_file=str(Path(__file__).resolve().parent.parent / "config" / "agents" / "yinlang_personality.md"),
             voice_ref=None,
             excluded_tools={"call_klee", "call_nahida"},
             base_url="https://api.xiaomimimo.com/v1",
@@ -157,7 +157,7 @@ class AgentCoreBootstrapper:
             display_name="昔涟",
             provider="mimo",
             model="mimo-v2.5-pro",
-            personality_file=str(Path(__file__).resolve().parent.parent / "xilian_personality.md"),
+            personality_file=str(Path(__file__).resolve().parent.parent / "config" / "agents" / "xilian_personality.md"),
             voice_ref=None,
             excluded_tools={"call_klee", "call_nahida", "shell_command", "python_executor", "write_file"},
             base_url="https://api.xiaomimimo.com/v1",
@@ -171,7 +171,7 @@ class AgentCoreBootstrapper:
             display_name="尼可",
             provider="mimo",
             model="mimo-v2.5-pro",
-            personality_file=str(Path(__file__).resolve().parent.parent / "nike_personality.md"),
+            personality_file=str(Path(__file__).resolve().parent.parent / "config" / "agents" / "nike_personality.md"),
             voice_ref=None,
             excluded_tools={"call_klee", "call_nahida", "shell_command", "write_file"},
             base_url="https://api.xiaomimimo.com/v1",
@@ -193,7 +193,7 @@ class AgentCoreBootstrapper:
 
     def _register_delegate_tool(self) -> None:
         """注册通用 delegate_task 工具，描述动态嵌入各子代理的 route_description。"""
-        from tool_registry import register_tool_direct, ToolPermission
+        from tool_engine.tool_registry import register_tool_direct, ToolPermission
 
         core = self.core
         roster = "；".join(
@@ -202,7 +202,7 @@ class AgentCoreBootstrapper:
             if cfg.get("route_description"))
 
         async def delegate_task(agent: str, task: str):
-            from tool_executor import ToolResult
+            from tool_engine.tool_executor import ToolResult
             reply = await core.delegate_to_agent(agent.strip().lower(), task)
             return ToolResult.ok(reply)
 
@@ -248,7 +248,7 @@ class AgentCoreBootstrapper:
     # ── 交互层 ────────────────────────────────────────────
 
     async def _init_interaction(self) -> None:
-        from smart_error_handler import get_error_handler
+        from utils.smart_error_handler import get_error_handler
         from slash_commands import SlashCommandHandler
 
         core = self.core

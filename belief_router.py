@@ -6,7 +6,7 @@ import time
 import sqlite3
 from dataclasses import dataclass
 from loguru import logger
-from atomic_write import atomic_json_write
+from utils.atomic_write import atomic_json_write
 
 
 @dataclass

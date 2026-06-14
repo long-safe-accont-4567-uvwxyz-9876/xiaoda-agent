@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dotenv import load_dotenv
 load_dotenv()
 
-from logging_config import setup_logging
+from utils.logging_config import setup_logging
 setup_logging()
 logger.remove()
 logger.add(

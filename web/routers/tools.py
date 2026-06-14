@@ -27,7 +27,7 @@ def _tool_source(name: str) -> str:
 
 
 def list_tools_meta() -> list[dict]:
-    from tool_registry import to_openai_tools, list_tools
+    from tool_engine.tool_registry import to_openai_tools, list_tools
     to_openai_tools()  # 确保所有工具模块已导入注册
     out = []
     for t in list_tools():
@@ -48,7 +48,7 @@ def list_tools_meta() -> list[dict]:
 
 def apply_tool_overrides():
     """启动时调用：把 webui_overrides 中的工具设置应用到 registry。"""
-    from tool_registry import get_tool
+    from tool_engine.tool_registry import get_tool
     overrides = _cfg().get("tools", {}) or {}
     for name, o in overrides.items():
         tool = get_tool(name)
@@ -69,7 +69,7 @@ async def get_tools():
 
 @router.put("/tools/{name}", response_model=Envelope[dict])
 async def update_tool(name: str, body: dict, request: Request):
-    from tool_registry import get_tool, to_openai_tools
+    from tool_engine.tool_registry import get_tool, to_openai_tools
     to_openai_tools()
     tool = get_tool(name)
     if not tool:
@@ -105,7 +105,7 @@ async def update_tool(name: str, body: dict, request: Request):
 @router.post("/tools/{name}/invoke", response_model=Envelope[dict])
 async def invoke_tool(name: str, body: dict, request: Request):
     """调试执行（真实执行，走完整审计）。"""
-    from tool_registry import get_tool, to_openai_tools
+    from tool_engine.tool_registry import get_tool, to_openai_tools
     to_openai_tools()
     tool = get_tool(name)
     if not tool:
@@ -135,7 +135,7 @@ async def tool_stats(name: str, request: Request, days: int = Query(default=7, g
         "SUM(CASE WHEN detail LIKE '%\"success\": true%' OR detail LIKE '%success=True%' THEN 1 ELSE 0 END) AS ok "
         "FROM audit_logs WHERE event_type LIKE 'tool%' AND detail LIKE ? AND timestamp > ?",
         (f"%{name}%", since))
-    from metrics import metrics
+    from utils.metrics import metrics
     snap = metrics.get_snapshot()
     counters = snap.get("counters", {}) if isinstance(snap, dict) else {}
     return Envelope(data={
