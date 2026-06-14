@@ -27,12 +27,20 @@ echo   =     Nahida Agent            =
 echo   ================================
 echo.
 
-:: Check if executable exists
-if not exist "%~dp0dist\nahida-agent\nahida-agent.exe" (
+:: Find the executable
+:: Onedir build: exe is either in same dir as this bat, or in dist\nahida-agent\
+set "EXE_PATH="
+if exist "%~dp0nahida-agent.exe" (
+    set "EXE_PATH=%~dp0nahida-agent.exe"
+) else if exist "%~dp0dist\nahida-agent\nahida-agent.exe" (
+    set "EXE_PATH=%~dp0dist\nahida-agent\nahida-agent.exe"
+) else (
     echo   [ERROR] nahida-agent.exe not found!
-    echo   Expected location: %~dp0dist\nahida-agent\nahida-agent.exe
+    echo   Looked in:
+    echo     %~dp0nahida-agent.exe
+    echo     %~dp0dist\nahida-agent\nahida-agent.exe
     echo.
-    echo   Please build the project first or check the installation path.
+    echo   Please check the installation path.
     goto :pause_exit
 )
 
@@ -43,12 +51,12 @@ cd /d "%~dp0"
 if /i "%~1"=="--web" (
     echo   Starting Nahida Agent in Web mode...
     echo.
-    dist\nahida-agent\nahida-agent.exe --web
+    "%EXE_PATH%" --web
 ) else (
     echo   Starting Nahida Agent in CLI mode...
     echo   (Use --web flag for Web UI mode)
     echo.
-    dist\nahida-agent\nahida-agent.exe
+    "%EXE_PATH%"
 )
 
 :: Check exit code
