@@ -255,6 +255,8 @@ class SecurityFilter:
     def is_owner(self, user_id: str) -> bool:
         if user_id.startswith("cli"):
             return True
+        if user_id == "webui":
+            return True
         return bool(self.owner_ids) and user_id in self.owner_ids
 
     @property
