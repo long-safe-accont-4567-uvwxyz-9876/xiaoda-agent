@@ -1,0 +1,107 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            platform: windows-x64
+            artifact: nahida-agent-windows-x64
+            is_self_hosted: false
+          - runner: ubuntu-latest
+            platform: linux-x86_64
+            artifact: nahida-agent-linux-x86_64
+            is_self_hosted: false
+          - runner: self-hosted,aarch64
+            platform: linux-aarch64
+            artifact: nahida-agent-linux-aarch64
+            is_self_hosted: true
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        if: ${{ !matrix.is_self_hosted }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        if: ${{ !matrix.is_self_hosted }}
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build with PyInstaller
+        run: pyinstaller nahida-agent.spec --clean --noconfirm
+
+      - name: Extract version
+        id: version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $zipName = "nahida-agent-windows-x64-v${version}.zip"
+          Compress-Archive -Path dist/nahida-agent/*, scripts/start-windows.bat -DestinationPath $zipName
+
+      - name: Package (Linux x86_64)
+        if: matrix.platform == 'linux-x86_64'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          tar -czf nahida-agent-linux-x86_64-v${VERSION}.tar.gz -C dist nahida-agent
+
+      - name: Package (Linux aarch64)
+        if: matrix.platform == 'linux-aarch64'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          tar -czf nahida-agent-linux-aarch64-v${VERSION}.tar.gz -C dist nahida-agent
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            nahida-agent-windows-x64-*.zip
+            nahida-agent-linux-x86_64-*.tar.gz
+            nahida-agent-linux-aarch64-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          files: |
+            artifacts/nahida-agent-windows-x64-*.zip
+            artifacts/nahida-agent-linux-x86_64-*.tar.gz
+            artifacts/nahida-agent-linux-aarch64-*.tar.gz

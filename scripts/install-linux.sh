@@ -1,0 +1,240 @@
+#!/bin/bash
+# =============================================================================
+#  Nahida Agent — Linux Self-Extracting Installer
+#  纳西妲 AI Agent / Nahida Agent
+#
+#  This script is a template that gets prepended to a tar.gz archive to
+#  create a .run self-extracting installer. The archive begins after the
+#  __ARCHIVE_BELOW__ marker line.
+# =============================================================================
+
+set -euo pipefail
+
+# ---- Constants ---------------------------------------------------------------
+PROJECT_NAME="Nahida Agent"
+PROJECT_NAME_ZH="纳西妲 AI Agent"
+DEFAULT_PREFIX="$HOME/.local/share/nahida-agent"
+ARCHIVE_MARKER="__ARCHIVE_BELOW__"
+
+# ---- Helpers -----------------------------------------------------------------
+bold()  { printf '\033[1m%s\033[0m' "$*"; }
+green() { printf '\033[32m%s\033[0m' "$*"; }
+red()   { printf '\033[31m%s\033[0m' "$*"; }
+yellow(){ printf '\033[33m%s\033[0m' "$*"; }
+
+print_banner() {
+    echo ""
+    echo "  ╔═══════════════════════════════════════════════╗"
+    echo "  ║                                               ║"
+    echo "  ║        ${PROJECT_NAME_ZH}              ║"
+    echo "  ║            ${PROJECT_NAME}                  ║"
+    echo "  ║                                               ║"
+    echo "  ╚═══════════════════════════════════════════════╝"
+    echo ""
+}
+
+print_help() {
+    print_banner
+    cat <<EOF
+  Usage: $(basename "$0") [OPTIONS]
+
+  Options:
+    --prefix PATH    Install to a custom directory
+                     (default: ${DEFAULT_PREFIX})
+
+    --uninstall      Remove ${PROJECT_NAME} from the system
+
+    --help           Show this help message and exit
+
+  Examples:
+    $(basename "$0")                        # Install to default location
+    $(basename "$0") --prefix /opt/nahida   # Install to /opt/nahida
+    $(basename "$0") --uninstall            # Uninstall
+
+EOF
+}
+
+die() {
+    red "[ERROR] $*"
+    echo "" >&2
+    exit 1
+}
+
+info() {
+    green "[INFO] $*"
+}
+
+# ---- Uninstall ----------------------------------------------------------------
+do_uninstall() {
+    print_banner
+    local prefix="${NAHIDA_PREFIX:-${DEFAULT_PREFIX}}"
+
+    echo "  $(yellow "Uninstalling ${PROJECT_NAME}...")"
+    echo ""
+
+    # Remove the installed directory
+    if [ -d "$prefix" ]; then
+        rm -rf "$prefix"
+        info "Removed install directory: $prefix"
+    else
+        echo "  Install directory not found: $prefix (already removed?)"
+    fi
+
+    # Remove the wrapper script
+    local wrapper="$HOME/.local/bin/nahida-agent"
+    if [ -L "$wrapper" ] || [ -f "$wrapper" ]; then
+        rm -f "$wrapper"
+        info "Removed wrapper script: $wrapper"
+    else
+        echo "  Wrapper script not found: $wrapper"
+    fi
+
+    # Remove the .desktop file
+    local desktop="$HOME/.local/share/applications/nahida-agent.desktop"
+    if [ -f "$desktop" ]; then
+        rm -f "$desktop"
+        info "Removed desktop entry: $desktop"
+    else
+        echo "  Desktop entry not found: $desktop"
+    fi
+
+    # Update desktop database
+    if command -v update-desktop-database &>/dev/null; then
+        update-desktop-database "$HOME/.local/share/applications/" 2>/dev/null || true
+    fi
+
+    echo ""
+    green "  ${PROJECT_NAME} has been uninstalled."
+    echo ""
+    exit 0
+}
+
+# ---- Install ------------------------------------------------------------------
+do_install() {
+    local prefix="${NAHIDA_PREFIX:-${DEFAULT_PREFIX}}"
+
+    print_banner
+
+    # --- Locate the archive within this script --------------------------------
+    local archive_line
+    archive_line=$(grep -n "^${ARCHIVE_MARKER}$" "$0" | head -1 | cut -d: -f1)
+    if [ -z "$archive_line" ]; then
+        die "Archive marker not found. This installer may be corrupted."
+    fi
+    local skip_lines=$((archive_line + 1))
+
+    echo "  $(bold "Installing ${PROJECT_NAME} to: $prefix")"
+    echo ""
+
+    # --- Create the install directory -----------------------------------------
+    mkdir -p "$prefix"
+
+    # --- Extract the embedded archive -----------------------------------------
+    info "Extracting files..."
+    tail -n +"$skip_lines" "$0" | tar xzf - -C "$prefix" --strip-components=1
+    if [ $? -ne 0 ]; then
+        die "Extraction failed. The installer may be corrupted."
+    fi
+    green "  Files extracted successfully."
+
+    # --- Verify the binary exists ---------------------------------------------
+    local binary="$prefix/nahida-agent"
+    if [ ! -f "$binary" ]; then
+        die "Binary not found at $binary after extraction. The package may be incomplete."
+    fi
+    chmod +x "$binary"
+    info "Binary verified: $binary"
+
+    # --- Create wrapper script ------------------------------------------------
+    local bindir="$HOME/.local/bin"
+    mkdir -p "$bindir"
+    local wrapper="$bindir/nahida-agent"
+
+    cat > "$wrapper" <<WRAPPER_EOF
+#!/bin/bash
+# Nahida Agent wrapper — auto-generated by the installer
+exec "$prefix/nahida-agent" "\$@"
+WRAPPER_EOF
+    chmod +x "$wrapper"
+    info "Created wrapper script: $wrapper"
+
+    # --- Create .desktop file -------------------------------------------------
+    local appdir="$HOME/.local/share/applications"
+    mkdir -p "$appdir"
+    local desktop="$appdir/nahida-agent.desktop"
+
+    cat > "$desktop" <<DESKTOP_EOF
+[Desktop Entry]
+Type=Application
+Name=Nahida Agent
+Name[zh_CN]=纳西妲 AI Agent
+Comment=Multi-agent AI assistant powered by Nahida
+Comment[zh_CN]=多智能体 AI 助手 — 以《原神》纳西妲为灵魂
+Exec=$prefix/nahida-agent --web
+Icon=$prefix/icon.png
+Terminal=true
+Categories=Network;Chat;AI;
+Keywords=ai;agent;chatbot;nahida;
+StartupNotify=true
+DESKTOP_EOF
+    info "Created desktop entry: $desktop"
+
+    # Update desktop database
+    if command -v update-desktop-database &>/dev/null; then
+        update-desktop-database "$appdir" 2>/dev/null || true
+    fi
+
+    # --- Done -----------------------------------------------------------------
+    echo ""
+    echo "  ╔═══════════════════════════════════════════════╗"
+    green "  ║  ${PROJECT_NAME} installed successfully!      ║"
+    echo "  ╚═══════════════════════════════════════════════╝"
+    echo ""
+    echo "  To run the agent:"
+    echo ""
+    echo "    $(bold "nahida-agent")              # Start in CLI mode"
+    echo "    $(bold "nahida-agent --web")        # Start in Web UI mode"
+    echo ""
+    if [ ! ":$PATH:" == *":$bindir:"* ]; then
+        echo "  $(yellow "NOTE:") $bindir is not in your PATH."
+        echo "  Add it by running:"
+        echo ""
+        echo "    echo 'export PATH=\"\$PATH:$bindir\"' >> ~/.bashrc"
+        echo "    source ~/.bashrc"
+        echo ""
+    fi
+    echo "  To uninstall, run:"
+    echo ""
+    echo "    $(basename "$0") --uninstall"
+    echo ""
+}
+
+# ---- Main ---------------------------------------------------------------------
+if [ $# -gt 0 ]; then
+    case "$1" in
+        --prefix)
+            if [ -z "${2:-}" ]; then
+                die "--prefix requires a path argument."
+            fi
+            export NAHIDA_PREFIX="$2"
+            shift 2
+            ;;
+        --uninstall)
+            do_uninstall
+            ;;
+        --help|-h)
+            print_help
+            exit 0
+            ;;
+        *)
+            die "Unknown option: $1. Use --help for usage information."
+            ;;
+    esac
+fi
+
+do_install
+
+exit 0
+
+# The archive marker — everything below this line is the tar.gz payload
+__ARCHIVE_BELOW__

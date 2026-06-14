@@ -21,3 +21,7 @@ data/
 web/frontend/tsconfig.tsbuildinfo
 tests/benchmark_results.json
 *.log
+
+# Build artifacts
+build/
+dist/
