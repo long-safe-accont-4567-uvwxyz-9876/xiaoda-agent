@@ -27,6 +27,11 @@ echo   =     Nahida Agent            =
 echo   ================================
 echo.
 
+:: Auto-update check (if enabled)
+if exist "%~dp0auto-update.bat" (
+    call "%~dp0auto-update.bat"
+)
+
 :: Find the executable
 :: Onedir build: exe is either in same dir as this bat, or in dist\nahida-agent\
 set "EXE_PATH="
