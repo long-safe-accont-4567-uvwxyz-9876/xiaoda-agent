@@ -11,6 +11,7 @@ class _C:
     RST = "\033[0m"
     BOLD = "\033[1m"
     DIM = "\033[2m"
+    UNDERLINE = "\033[4m"
     GREEN = "\033[32m"
     LGREEN = "\033[92m"
     DGREEN = "\033[38;2;76;153;0m"
@@ -20,6 +21,8 @@ class _C:
     MAGENTA = "\033[35m"
     LMAGENTA = "\033[95m"
     LEAF = "\033[38;2;107;142;35m"
+    BLUE = "\033[34m"
+    LBLUE = "\033[94m"
 
 
 WIZARD_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,60 +33,103 @@ REQUIRED_KEYS = [
     {
         "key": "MIMO_API_KEY",
         "label": "MiMo API 密钥",
-        "desc": "小米 MiMo 大模型 API 密钥，从 https://xiaomimimo.com 获取",
+        "desc": "小米 MiMo 大模型 API 密钥（主 LLM + TTS + Vision）",
+        "url": "https://xiaomimimo.com",
+        "url_desc": "注册 → 控制台 → API Keys",
     },
     {
         "key": "QQBOT_APP_ID",
         "label": "QQ Bot App ID",
         "desc": "QQ 机器人应用 ID",
+        "url": "https://q.qq.com",
+        "url_desc": "创建机器人应用 → 获取 AppID",
     },
     {
         "key": "QQBOT_APP_SECRET",
         "label": "QQ Bot App Secret",
         "desc": "QQ 机器人应用密钥",
+        "url": "https://q.qq.com",
+        "url_desc": "同一页面的 AppSecret",
     },
     {
         "key": "OWNER_IDS",
         "label": "主人 ID",
-        "desc": "QQ 主人的 OpenID，多个用逗号分隔",
+        "desc": "QQ 主人的 OpenID，多个用逗号分隔（启动后从日志获取）",
+        "url": "",
+        "url_desc": "",
     },
 ]
 
 OPTIONAL_KEYS = [
     {
+        "key": "WEBUI_PASSWORD",
+        "label": "Web UI 密码",
+        "desc": "留空则无需密码登录",
+        "url": "",
+        "url_desc": "",
+    },
+    {
         "key": "EMBED_API_KEY",
         "label": "向量嵌入 API 密钥",
-        "desc": "用于记忆向量搜索的嵌入模型密钥",
-    },
-    {
-        "key": "EMBED_BASE_URL",
-        "label": "向量嵌入 API 地址",
-        "desc": "",
-    },
-    {
-        "key": "EMBED_MODEL",
-        "label": "向量嵌入模型名称",
-        "desc": "",
+        "desc": "用于记忆向量搜索的嵌入模型密钥（推荐 SiliconFlow 免费额度）",
+        "url": "https://siliconflow.cn",
+        "url_desc": "注册 → API Keys",
     },
     {
         "key": "IMGBB_API_KEY",
         "label": "ImgBB 图片上传密钥",
-        "desc": "",
+        "desc": "图片上传服务 API Key",
+        "url": "https://api.imgbb.com",
+        "url_desc": "注册 → API Key",
     },
     {
         "key": "TAVILY_API_KEY",
         "label": "Tavily 搜索 API 密钥",
-        "desc": "",
+        "desc": "AI 搜索引擎 API Key",
+        "url": "https://tavily.com",
+        "url_desc": "注册 → API Keys",
     },
     {
         "key": "SILICONFLOW_API_KEY",
         "label": "SiliconFlow API 密钥",
-        "desc": "",
+        "desc": "SiliconFlow 平台 API Key",
+        "url": "https://siliconflow.cn",
+        "url_desc": "注册 → API Keys",
     },
     {
         "key": "OPENROUTER_API_KEY",
         "label": "OpenRouter API 密钥",
-        "desc": "",
+        "desc": "第三方 LLM 路由平台 API Key",
+        "url": "https://openrouter.ai",
+        "url_desc": "注册 → API Keys",
+    },
+    {
+        "key": "WOLFRAMALPHA_API_KEY",
+        "label": "WolframAlpha 知识计算密钥",
+        "desc": "知识计算引擎 API Key",
+        "url": "https://products.wolframalpha.com/api/",
+        "url_desc": "注册 → Get AppID",
+    },
+    {
+        "key": "AGNES_API_KEY",
+        "label": "Agnes AI 图像/视频密钥",
+        "desc": "Agnes AI 图像和视频生成 API Key",
+        "url": "https://agnes-ai.com",
+        "url_desc": "注册 → API Keys",
+    },
+    {
+        "key": "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "label": "GitHub 个人访问令牌",
+        "desc": "GitHub MCP Server 所需（需 repo, read:org 权限）",
+        "url": "https://github.com/settings/tokens",
+        "url_desc": "Generate new token (classic)",
+    },
+    {
+        "key": "DEEPSEEK_API_KEY",
+        "label": "DeepSeek API 密钥",
+        "desc": "DeepSeek 大模型 API Key（Legacy，可用 MiMo 替代）",
+        "url": "https://platform.deepseek.com",
+        "url_desc": "注册 → API Keys",
     },
 ]
 
@@ -171,6 +217,8 @@ def _ask_key(item: dict, current_val: str, is_required: bool) -> str:
     key = item["key"]
     label = item["label"]
     desc = item["desc"]
+    url = item.get("url", "")
+    url_desc = item.get("url_desc", "")
 
     print()
     tag = f"{_C.LYELLOW}[必填]{_C.RST}" if is_required else f"{_C.CYAN}[选填]{_C.RST}"
@@ -178,6 +226,11 @@ def _ask_key(item: dict, current_val: str, is_required: bool) -> str:
 
     if desc:
         print(f"  {_C.DIM}{desc}{_C.RST}")
+
+    if url:
+        print(f"  {_C.BLUE}\u2192{_C.RST} 获取地址: {_C.LBLUE}{_C.UNDERLINE}{url}{_C.RST}")
+        if url_desc:
+            print(f"  {_C.DIM}   操作: {url_desc}{_C.RST}")
 
     if current_val:
         masked = _mask_value(current_val)
@@ -222,9 +275,20 @@ def _print_summary(configured: dict):
             status = f"{_C.DIM}\u25cb{_C.RST}"
             val_display = f"{_C.DIM}未配置（可选）{_C.RST}"
 
-        print(f"  {status} {_C.BOLD}{key:<24}{_C.RST} {val_display}  {_C.DIM}{label}{_C.RST}")
+        print(f"  {status} {_C.BOLD}{key:<30}{_C.RST} {val_display}  {_C.DIM}{label}{_C.RST}")
 
     print(f"  {_C.DIM}+------------------------------------------------+{_C.RST}")
+
+
+def is_first_run() -> bool:
+    """检测是否为首次运行（.env 不存在或必填 key 未配置）"""
+    if not os.path.exists(ENV_PATH):
+        return True
+    vals = _load_env_values()
+    # MIMO_API_KEY 是最核心的必填项
+    if not vals.get("MIMO_API_KEY", "").strip():
+        return True
+    return False
 
 
 def main():
@@ -283,7 +347,7 @@ def main():
     else:
         print()
         print(f"  {_C.LGREEN}{_C.BOLD}\U0001f33f 配置完成！{_C.RST}")
-        print(f"  运行 {_C.CYAN}python cli.py{_C.RST} 或 {_C.CYAN}bash scripts/start.sh{_C.RST} 启动纳西妲")
+        print(f"  运行 {_C.CYAN}python agent.py{_C.RST} 或 {_C.CYAN}bash scripts/start.sh{_C.RST} 启动纳西妲")
 
     print()
 
