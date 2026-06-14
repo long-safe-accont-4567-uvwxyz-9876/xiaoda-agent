@@ -4,6 +4,7 @@ import { NConfigProvider, NMessageProvider, NDialogProvider, darkTheme } from 'n
 import type { GlobalThemeOverrides } from 'naive-ui'
 import { useAuthStore } from './stores/auth'
 import { useRouter } from 'vue-router'
+import { api } from './api'
 import GrassParticles from './components/fx/GrassParticles.vue'
 
 const auth = useAuthStore()
@@ -12,7 +13,18 @@ const particlesRef = ref<InstanceType<typeof GrassParticles> | null>(null)
 
 provide('particles', particlesRef)
 
-onMounted(() => {
+onMounted(async () => {
+  // 首次运行检测：如果 API Key 未配置，跳转到引导页面
+  try {
+    const data = await api.getSetupFirstRun()
+    if (data?.first_run) {
+      router.replace('/setup')
+      return
+    }
+  } catch {
+    // 检测失败，继续正常流程
+  }
+  // 正常流程：未登录则跳转登录页
   if (!auth.isLoggedIn) {
     router.replace('/login')
   }

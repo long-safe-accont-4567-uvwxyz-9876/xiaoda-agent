@@ -71,9 +71,6 @@ def list_providers_data(cfg) -> list[dict]:
         {"id": "mimo", "label": "小米 MiMo", "format": "openai",
          "base_url": os.getenv("MIMO_BASE_URL", ""), "builtin": True,
          "key_masked": _mask(os.getenv("MIMO_API_KEY", "")), "enabled": True},
-        {"id": "agnes", "label": "Agnes", "format": "openai",
-         "base_url": os.getenv("AGNES_BASE_URL", ""), "builtin": True,
-         "key_masked": _mask(os.getenv("AGNES_API_KEY", "")), "enabled": True},
     ]
     custom = cfg.get("models.providers", {}) or {}
     for pid, p in custom.items():
@@ -102,7 +99,7 @@ async def create_provider(body: dict, request: Request):
     base_url = (body.get("base_url") or "").strip()
     if not pid or not pid.replace("-", "_").isidentifier():
         raise HTTPException(400, "id 必须是合法标识符（字母/数字/-/_）")
-    if pid in ("mimo", "agnes"):
+    if pid in ("mimo",):
         raise HTTPException(400, "不能覆盖内置 provider")
     if fmt not in ("openai", "anthropic"):
         raise HTTPException(400, "format 必须是 openai 或 anthropic")
@@ -131,7 +128,7 @@ async def create_provider(body: dict, request: Request):
 async def update_provider(pid: str, body: dict, request: Request):
     cfg = _cfg(request)
     record = cfg.get(f"models.providers.{pid}")
-    if pid in ("mimo", "agnes") or not record:
+    if pid in ("mimo",) or not record:
         raise HTTPException(404 if not record else 400,
                             "内置 provider 不可修改" if record else f"provider {pid} 不存在")
     for f in ("label", "format", "base_url", "default_model", "enabled"):
@@ -220,7 +217,7 @@ async def update_route(task: str, body: dict, request: Request):
         raise HTTPException(404, f"未知路由任务 {task}")
     cfg = _cfg(request)
     provider = body.get("provider")
-    if provider and provider not in ("mimo", "agnes") \
+    if provider and provider not in ("mimo",) \
             and not cfg.get(f"models.providers.{provider}"):
         raise HTTPException(400, f"provider {provider} 不存在")
     entry = ROUTE_TABLE[task]

@@ -57,6 +57,58 @@ export const api = {
 
   tts: (text: string, voice?: string, style?: string) =>
     post<{ audio_url: string; cached: boolean }>('/media/tts', { text, voice, style }),
+
+  // Setup wizard APIs (no token required — first-run before login)
+  getSetupFirstRun: () => {
+    return fetch(`${BASE}/setup/first-run`).then(r => r.json()).then(b => b.data)
+  },
+
+  getSetupKeys: () => {
+    return fetch(`${BASE}/setup/keys`).then(r => r.json()).then(b => b.data) as Promise<{ keys: any[] }>
+  },
+
+  saveSetupKeys: (keys: Record<string, string>) => {
+    return fetch(`${BASE}/setup/keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys }),
+    }).then(r => r.json()).then(b => {
+      if (!b.ok) throw new Error(b.error?.message || 'Save failed')
+      return b.data
+    })
+  },
+
+  // Custom provider (needs auth)
+  createProvider: (data: { id: string; label: string; format: string; base_url: string; default_model: string; api_key: string }) =>
+    post('/models/providers', data),
+
+  uploadImage: async (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    const token = localStorage.getItem('token')
+    const res = await fetch(`${BASE}/chat/upload-image`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: formData,
+    })
+    const body = await res.json()
+    if (!res.ok || !body.ok) throw new Error(body?.error?.message || 'Upload failed')
+    return body.data as { url: string; name: string }
+  },
+
+  speechToText: async (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    const token = localStorage.getItem('token')
+    const res = await fetch(`${BASE}/chat/speech-to-text`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: formData,
+    })
+    const body = await res.json()
+    if (!res.ok || !body.ok) throw new Error(body?.error?.message || 'STT failed')
+    return body.data as { text: string }
+  },
 }
 
 export function exportSessionUrl(sessionId: string): string {

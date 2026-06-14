@@ -8,7 +8,9 @@ import { api, exportSessionUrl } from '../api'
 import { renderMarkdown } from '../utils/markdown'
 import ToolCallCard from '../components/chat/ToolCallCard.vue'
 import SlashPalette from '../components/chat/SlashPalette.vue'
+import PromptInput from '../components/chat/PromptInput.vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
+import ModelSelector from '../components/chat/ModelSelector.vue'
 
 const chat = useChatStore()
 const ui = useUiStore()
@@ -88,6 +90,21 @@ function handleSend() {
   const rect = inputEl.value?.getBoundingClientRect()
   if (rect) particles?.value?.burst?.(rect.left + rect.width / 2, rect.top, 10)
   autoGrow()
+}
+
+function handlePromptSend(text: string, options: { search?: boolean; think?: boolean; imageUrl?: string }) {
+  if (!text || chat.isProcessing) return
+  let finalText = text
+  if (options.search) finalText = `[Search: ${text}]`
+  else if (options.think) finalText = `[Think: ${text}]`
+  if (options.imageUrl) {
+    finalText += `\n[Image: ${options.imageUrl}]`
+  }
+  chat.sendMessage(finalText)
+  inputText.value = ''
+  // 发送特效
+  const rect = inputEl.value?.getBoundingClientRect()
+  if (rect) particles?.value?.burst?.(rect.left + rect.width / 2, rect.top, 10)
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -180,6 +197,7 @@ const emotionColors: Record<string, string> = {
       </n-button>
       <a v-if="chat.sessionId" class="export-link"
          :href="exportSessionUrl(chat.sessionId)" target="_blank">⬇ 导出</a>
+      <ModelSelector style="margin-left: auto" />
       <span class="session-label">{{ chat.sessionId }}</span>
     </div>
 
@@ -248,24 +266,16 @@ const emotionColors: Record<string, string> = {
       </transition>
     </teleport>
 
-    <div class="input-area glass-panel">
+    <div class="input-area-wrapper">
       <SlashPalette ref="paletteRef" :commands="commands" :filter="inputText"
                     :visible="showPalette" @select="selectCommand" />
-      <textarea
-        ref="inputEl"
+      <PromptInput
         v-model="inputText"
-        class="chat-input dendro-input"
-        placeholder="输入消息，/ 唤起命令面板…  (Enter 发送, Shift+Enter 换行)"
-        rows="1"
-        @keydown="handleKeydown"
-        @input="autoGrow"
-      ></textarea>
-      <n-button v-if="chat.isProcessing" type="error" secondary @click="chat.abort()">
-        ⏹ 中断
-      </n-button>
-      <button v-else class="send-btn dendro-btn" @click="handleSend" :disabled="!inputText.trim()">
-        <SumeruIcon name="send" :size="16" /> 发送
-      </button>
+        :is-loading="chat.isProcessing"
+        placeholder="输入消息，/ 唤起命令面板…"
+        @send="handlePromptSend"
+        @abort="chat.abort()"
+      />
     </div>
 
     <n-drawer v-model:show="showSessions" :width="340" placement="left">
@@ -322,7 +332,6 @@ const emotionColors: Record<string, string> = {
 .export-link:hover { color: var(--dendro); }
 
 .session-label {
-  margin-left: auto;
   font-size: 11px;
   color: rgba(242, 247, 238, 0.3);
   font-family: 'JetBrains Mono', monospace;
@@ -457,8 +466,6 @@ const emotionColors: Record<string, string> = {
 .lightbox-fade-enter-active, .lightbox-fade-leave-active { transition: opacity 0.25s; }
 .lightbox-fade-enter-from, .lightbox-fade-leave-to { opacity: 0; }
 
-.send-btn { display: inline-flex; align-items: center; gap: 6px; }
-
 .bubble-footer {
   display: flex;
   align-items: center;
@@ -483,25 +490,10 @@ const emotionColors: Record<string, string> = {
 .footer-btn:hover { color: var(--dendro); transform: scale(1.15); }
 .footer-btn.playing { animation: breathe 1s ease-in-out infinite; }
 
-.input-area {
-  display: flex;
-  gap: 10px;
-  padding: 12px 16px;
-  align-items: flex-end;
-  flex-shrink: 0;
+.input-area-wrapper {
   position: relative;
+  flex-shrink: 0;
 }
-
-.chat-input {
-  flex: 1;
-  resize: none;
-  min-height: 40px;
-  max-height: 120px;
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.send-btn { flex-shrink: 0; height: 40px; min-width: 72px; }
 
 .session-list { display: flex; flex-direction: column; gap: 8px; }
 

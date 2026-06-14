@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { useRouter } from 'vue-router'
+import { api } from '../api'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import DendroEmblem from '../components/fx/DendroEmblem.vue'
 
@@ -10,6 +11,17 @@ const router = useRouter()
 const password = ref('')
 const error = ref('')
 const loading = ref(false)
+
+onMounted(async () => {
+  try {
+    const data = await api.getSetupFirstRun()
+    if (data?.first_run) {
+      router.replace('/setup')
+    }
+  } catch {
+    // 忽略
+  }
+})
 
 async function handleLogin() {
   error.value = ''

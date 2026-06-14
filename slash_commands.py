@@ -1,8 +1,9 @@
+import os
 import time
 from loguru import logger
 
 
-OWNER_ONLY_COMMANDS = {"/model", "/reset", "/agent", "/debug"}
+OWNER_ONLY_COMMANDS: set[str] = set()  # 所有命令均不设权限限制
 
 COMMAND_DESCRIPTIONS = {
     "/cost": "查看 API 消费成本（可加 7d）",
@@ -177,6 +178,7 @@ class SlashCommandHandler:
         if not self._router:
             return "路由器还没准备好呢～"
 
+        # MiMo 预设
         if args in ("mimo",):
             self._router.set_model_preference("mimo")
             if self._agent and hasattr(self._agent, 'klee'):
@@ -193,10 +195,48 @@ class SlashCommandHandler:
         elif args in ("mimo-mini", "mini", "mimo_mini"):
             self._router.set_model_preference("mimo-mini")
             return "已切换到 MiMo Mini 模式 🐣（使用小米 MiMo-V2.5 轻量任务）"
+        # 第三方模型 provider/model_id 格式
+        elif "/" in args:
+            parts = args.split("/", 1)
+            provider = parts[0]
+            model_id = parts[1]
+            ok = self._router.set_model_preference(args)
+            if ok is False:
+                return f"切换失败：不支持 {provider}/{model_id}"
+            return f"已切换到 {model_id}（{provider}）"
+        # 无参数：显示当前模型和可用第三方
         else:
             pref = self._router.get_model_preference()
             label = self._router.get_model_preference_label()
-            return f"当前: {label}\n用法: /model [mimo|mimo-pro|mimo-flash|mimo-mini]"
+            lines = [f"当前: {label}"]
+            lines.append("预设: /model [mimo|mimo-pro|mimo-flash|mimo-mini]")
+            third_party = []
+            if os.environ.get("SILICONFLOW_API_KEY"):
+                third_party.append("siliconflow")
+            if os.environ.get("OPENROUTER_API_KEY"):
+                third_party.append("openrouter")
+            if third_party:
+                lines.append("第三方模型:")
+                # 尝试从模型发现缓存中读取具体模型名
+                cache_available = False
+                try:
+                    from web.routers.model_discovery import _cache as discovery_cache
+                    cache_data = discovery_cache.get("data")
+                    if cache_data:
+                        for pg in cache_data:
+                            provider = pg.get("provider", "")
+                            models = pg.get("models", [])
+                            if provider in third_party and models:
+                                cache_available = True
+                                model_names = [m["display_name"] for m in models[:6]]
+                                suffix = "..." if len(models) > 6 else ""
+                                lines.append(f"  {provider}: {', '.join(model_names)}{suffix}")
+                except Exception:
+                    pass
+                if not cache_available:
+                    for tp in third_party:
+                        lines.append(f"  · {tp}: 已配置（使用 /model {tp}/模型名 切换）")
+            return "\n".join(lines)
 
     async def _cmd_forget(self, args: str, user_id: str) -> str:
         if not self._context:

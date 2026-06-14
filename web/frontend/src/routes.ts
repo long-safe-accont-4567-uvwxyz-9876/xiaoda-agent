@@ -7,6 +7,11 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('./views/LoginView.vue'),
   },
   {
+    path: '/setup',
+    name: 'setup',
+    component: () => import('./views/SetupWizardView.vue'),
+  },
+  {
     path: '/',
     component: () => import('./components/layout/AppLayout.vue'),
     children: [

@@ -61,13 +61,26 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
+          # Create version file and auto-update flag
+          Set-Content -Path "dist/nahida-agent/.version" -Value $version -NoNewline
+          New-Item -Path "dist/nahida-agent/.auto_update" -ItemType File -Force
+          # Copy auto-update scripts
+          Copy-Item "scripts/start-windows.bat" "dist/nahida-agent/"
+          Copy-Item "scripts/auto-update.bat" "dist/nahida-agent/"
           $zipName = "nahida-agent-windows-x64-v${version}.zip"
-          Compress-Archive -Path dist/nahida-agent/*, scripts/start-windows.bat -DestinationPath $zipName
+          Compress-Archive -Path dist/nahida-agent/* -DestinationPath $zipName
 
       - name: Package (Linux x86_64)
         if: matrix.platform == 'linux-x86_64'
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+          # Create version file and auto-update flag
+          echo -n "$VERSION" > dist/nahida-agent/.version
+          touch dist/nahida-agent/.auto_update
+          # Copy auto-update script
+          mkdir -p dist/nahida-agent/scripts
+          cp scripts/auto-update.sh dist/nahida-agent/scripts/
+          chmod +x dist/nahida-agent/scripts/auto-update.sh
           tar -czf nahida-agent-linux-x86_64-v${VERSION}.tar.gz -C dist nahida-agent
 
       - name: Upload artifact
