@@ -179,6 +179,16 @@ StartupNotify=true
 DESKTOP_EOF
     info "Created desktop entry: $desktop"
 
+    # --- Enable auto-update by default ----------------------------------------
+    touch "$prefix/.auto_update"
+    info "Auto-update enabled (delete $prefix/.auto_update to disable)"
+
+    # --- Copy auto-update script -----------------------------------------------
+    if [ -f "$prefix/scripts/auto-update.sh" ]; then
+        chmod +x "$prefix/scripts/auto-update.sh"
+        info "Auto-update script installed"
+    fi
+
     # Update desktop database
     if command -v update-desktop-database &>/dev/null; then
         update-desktop-database "$appdir" 2>/dev/null || true
