@@ -14,12 +14,44 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 async def _apply_model_overrides(core):
     """重启后恢复：自定义 provider 注册 + 路由表覆盖。"""
+    import os
     from web.config_service import get_config_service
     from web.custom_providers import register_into_router
     from web.routers.models import load_provider_key
     from model_router import ROUTE_TABLE
 
     cfg = get_config_service()
+
+    # 自动注册已知免费模型平台（从 .env 读取 key）
+    _KNOWN_ENV_PROVIDERS = {
+        "SILICONFLOW_API_KEY": ("siliconflow", "openai", "https://api.siliconflow.cn/v1", "SiliconFlow 硅基流动"),
+        "OPENROUTER_API_KEY": ("openrouter", "openai", "https://openrouter.ai/api/v1", "OpenRouter"),
+        "MODELSCOPE_ACCESS_TOKEN": ("modelscope", "openai", "https://api-inference.modelscope.cn/v1", "ModelScope 魔搭"),
+        "AGNES_API_KEY": ("agnes", "openai", os.getenv("AGNES_BASE_URL", "https://api.agnes-ai.com/v1"), "Agnes AI"),
+    }
+    for env_key, (pid, fmt, base_url, label) in _KNOWN_ENV_PROVIDERS.items():
+        api_key = os.getenv(env_key, "").strip()
+        if not api_key:
+            continue
+        # 确保配置中有记录
+        existing = cfg.get("models.providers", {}) or {}
+        if pid not in existing:
+            cfg.set(f"models.providers.{pid}", {
+                "label": label, "format": fmt, "base_url": base_url,
+                "default_model": "", "enabled": True,
+            })
+        # 确保证书文件存在
+        from pathlib import Path
+        cred_dir = Path(__file__).resolve().parent.parent / "credentials"
+        cred_dir.mkdir(parents=True, exist_ok=True)
+        fp = cred_dir / f"provider_{pid}.key"
+        if not fp.exists() or fp.read_text(encoding="utf-8").strip() != api_key:
+            fp.write_text(api_key, encoding="utf-8")
+            try:
+                os.chmod(fp, 0o600)
+            except OSError:
+                pass
+
     for pid, p in (cfg.get("models.providers", {}) or {}).items():
         key = load_provider_key(pid)
         if key and p.get("enabled", True):
@@ -172,10 +204,13 @@ def create_app() -> FastAPI:
     from web.routers.media import router as media_router
     from web.routers.health import router as health_router
     from web.routers.plugins import router as plugins_router
+    from web.routers.setup import router as setup_router
+    from web.routers.model_discovery import router as model_discovery_router
 
     for r in (auth_router, chat_router, system_router, agents_router,
               models_router, tools_router, mcp_router, insight_router,
-              schedule_router, media_router, health_router, plugins_router):
+              schedule_router, media_router, health_router, plugins_router,
+              setup_router, model_discovery_router):
         app.include_router(r, prefix="/api/v1")
 
     from web.ws_hub import router as ws_router
