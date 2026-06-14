@@ -240,7 +240,7 @@ class MCPClient:
 
         # Unregister tools from tool_registry (使用公共 API)
         for name in self._registered_names:
-            tool_registry.unregister_tool(name)
+            _tool_registry_mod.unregister_tool(name)
         self._registered_names.clear()
         self._tool_names.clear()
 
@@ -426,7 +426,7 @@ class MCPClient:
         _mcp_client_ref = self
 
         # Register via the decorator pattern: register_tool returns a decorator
-        tool_registry.register_tool(
+        _tool_registry_mod.register_tool(
             name=prefixed_name,
             description=description,
             schema=input_schema,
@@ -657,7 +657,7 @@ class MCPManager:
             if not client or not client.available:
                 continue
             for prefixed_name in client._registered_names:
-                tool = tool_registry.get_tool(prefixed_name)
+                tool = _tool_registry_mod.get_tool(prefixed_name)
                 if tool and tool.get("max_frequency", 0) > 0:
                     # Check tool-level permission
                     original_name = prefixed_name.removeprefix(f"mcp_{server_name}_")
