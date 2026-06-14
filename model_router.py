@@ -88,6 +88,8 @@ class ModelRouter:
         self._credential_pool = get_credential_pool()
         self._credential_lock = asyncio.Lock()
 
+        self._custom_clients: dict[str, AsyncOpenAI] = {}
+        self._current_chat_model: dict | None = None
         self._cache_stats = {
             "total_calls": 0,
             "hit_tokens": 0,
@@ -115,8 +117,29 @@ class ModelRouter:
         """获取指定提供商的 Transport"""
         return self._transports.get(provider)
 
+    def set_chat_model(self, provider: str, model_id: str) -> dict:
+        ROUTE_TABLE["chat"]["model"] = model_id
+        ROUTE_TABLE["chat"]["client"] = provider
+        if provider not in ("mimo", "agnes"):
+            if provider not in self._custom_clients:
+                raise RuntimeError(f"自定义 provider {provider} 未注册，请先注册客户端")
+        self._current_chat_model = {"provider": provider, "model_id": model_id}
+        logger.info("router.chat_model_changed", provider=provider, model=model_id)
+        return {"provider": provider, "model_id": model_id}
+
+    def get_current_chat_model(self) -> dict:
+        if self._current_chat_model is not None:
+            return self._current_chat_model
+        return {"provider": "mimo", "model_id": ROUTE_TABLE.get("chat", {}).get("model", MIMO_MODEL)}
+
     def set_model_preference(self, preference: str) -> bool:
         if preference in MODEL_PREFERENCES:
+            self._model_preference = preference
+            logger.info("router.preference_changed", preference=preference)
+            return True
+        if "/" in preference:
+            provider, model_id = preference.split("/", 1)
+            self.set_chat_model(provider, model_id)
             self._model_preference = preference
             logger.info("router.preference_changed", preference=preference)
             return True
@@ -126,9 +149,13 @@ class ModelRouter:
         return self._model_preference
 
     def get_model_preference_label(self) -> str:
+        if "/" in self._model_preference:
+            return self._model_preference.split("/", 1)[1]
         return MODEL_PREFERENCES.get(self._model_preference, {}).get("label", "未知")
 
     def resolve_task_type(self, base_task: str) -> str:
+        if "/" in self._model_preference:
+            return base_task
         if self._model_preference == "mimo-pro":
             return "chat_pro"
         if self._model_preference == "mimo-flash":
