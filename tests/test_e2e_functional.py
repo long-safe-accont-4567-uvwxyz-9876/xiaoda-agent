@@ -386,6 +386,8 @@ class TestSubAgentSticker:
                 # BackgroundTaskManager mock（架构拆分后必需）
                 core._bg_task_manager = MagicMock()
                 core._bg_task_manager.run_background_tasks = MagicMock()
+                core.context = MagicMock()
+                core.context.add_message = AsyncMock()
 
                 result = asyncio.get_event_loop().run_until_complete(
                     core._dispatch_single_sub_agent("keli", "你好", "user1", "qq", "", MagicMock())

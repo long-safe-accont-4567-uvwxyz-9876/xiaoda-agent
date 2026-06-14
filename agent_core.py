@@ -459,7 +459,8 @@ class AgentCore:
                         reply = error_reply
                     else:
                         reply = DEGRADED_REPLY
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"agent.error_handler_fallback: {e}")
                     reply = DEGRADED_REPLY
             else:
                 try:
@@ -468,7 +469,8 @@ class AgentCore:
                         user_openid=user_openid, session_id=session_id,
                     )
                     reply = self._clean_reply(result) if isinstance(result, str) else DEGRADED_REPLY
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"agent.flash_fallback: {e}")
                     reply = DEGRADED_REPLY
 
         # 从工具结果中提取媒体路径，并清理回复中的冗余路径描述
@@ -562,8 +564,8 @@ class AgentCore:
         try:
             from web.tool_events import emit_tool_event
             await emit_tool_event("start", tool_name, actual_args)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"agent.tool_event_start_failed: {e}")
 
         # 工具护栏检查
         from tool_guardrails import get_tool_guardrails
@@ -579,8 +581,8 @@ class AgentCore:
             from web.tool_events import emit_tool_event
             await emit_tool_event("end", tool_name, ok=result.success,
                                   elapsed_ms=int((_time.time() - _tool_t0) * 1000))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"agent.tool_event_end_failed: {e}")
 
         # 记录工具调用到护栏
         await guardrails.record_call(tool_name, arguments, result.success,

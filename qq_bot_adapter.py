@@ -225,8 +225,8 @@ async def run_qq_bot(agent: "AgentCore", *, sandbox: bool = False) -> None:
         except asyncio.CancelledError:
             try:
                 await client.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"qq_bot.close_on_cancel_failed: {e}")
             raise
         except Exception as e:
             logger.error("qq_bot.crashed_retrying error={} delay={}", str(e)[:200], delay)
