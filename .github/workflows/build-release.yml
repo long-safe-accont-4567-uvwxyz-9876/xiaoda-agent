@@ -38,7 +38,11 @@ jobs:
 
       - name: Install dependencies
         if: ${{ !matrix.is_self_hosted }}
-        run: pip install -r requirements.txt pyinstaller
+        run: |
+          pip install pyinstaller
+          pip install -r requirements.txt || pip install -r requirements.txt --no-binary :all: 2>/dev/null || true
+          # Ensure core deps are installed even if optional ones fail
+          pip install fastapi uvicorn[standard] websockets python-multipart sse-starlette httpx Pillow numpy rich python-dotenv loguru openai aiosqlite pydantic jieba pyyaml
 
       - name: Build with PyInstaller
         run: pyinstaller nahida-agent.spec --clean --noconfirm
