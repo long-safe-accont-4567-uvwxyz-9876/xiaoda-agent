@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 import time
 import uuid
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import PlainTextResponse
 from loguru import logger
 
@@ -14,6 +17,10 @@ from web.routers.auth import get_current_user
 router = APIRouter(tags=["chat"], dependencies=[Depends(get_current_user)])
 
 _EMOTION_TAG = re.compile(r"\[emotion:[^\]]*\]")
+
+UPLOAD_DIR = Path(__file__).resolve().parent.parent / "media" / "upload"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
 
 
 def _strip_tags(text: str) -> str:
@@ -139,3 +146,50 @@ async def chat(req: ChatRequest, request: Request):
     except Exception as e:
         logger.error("webui.chat.failed error={}", str(e))
         return Envelope(ok=False, error={"code": "CHAT_ERROR", "message": str(e)})
+
+
+@router.post("/chat/upload-image", response_model=Envelope[dict])
+async def upload_image(file: UploadFile = File(...)):
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(400, "仅允许上传图片文件")
+    content = await file.read()
+    if len(content) > MAX_IMAGE_SIZE:
+        raise HTTPException(400, "图片大小不能超过 10MB")
+    ext = Path(file.filename or "image.png").suffix or ".png"
+    filename = f"{uuid.uuid4().hex[:12]}{ext}"
+    dest = UPLOAD_DIR / filename
+    dest.write_bytes(content)
+    return Envelope(data={"url": f"/media/upload/{filename}", "name": filename})
+
+
+@router.post("/chat/speech-to-text", response_model=Envelope[dict])
+async def speech_to_text(file: UploadFile = File(...)):
+    content = await file.read()
+    if len(content) > 20 * 1024 * 1024:  # 20MB
+        raise HTTPException(400, "音频大小不能超过 20MB")
+
+    try:
+        api_key = os.getenv("MIMO_API_KEY", "")
+        base_url = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+        if not api_key:
+            raise HTTPException(503, "ASR 不可用：未配置 MIMO_API_KEY")
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key, base_url=base_url)
+            with open(tmp_path, "rb") as audio_file:
+                transcript = client.audio.transcriptions.create(
+                    model="mimo-v2.5-asr",
+                    file=audio_file,
+                )
+            return Envelope(data={"text": transcript.text})
+        finally:
+            os.unlink(tmp_path)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(503, f"ASR 不可用：{str(e)}")
