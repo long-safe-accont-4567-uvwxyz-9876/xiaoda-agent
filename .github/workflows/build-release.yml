@@ -44,7 +44,13 @@ jobs:
 
       - name: Clean old frontend dist
         shell: bash
-        run: rm -rf web/dist
+        run: |
+          rm -rf web/dist
+          # 确保 .env 和敏感文件不被打包进安装包
+          rm -f .env .env.prod .env.local
+          rm -f config/webui_overrides.json
+          rm -rf credentials/
+          find . -name "*.key" -not -path "./.git/*" -delete 2>/dev/null || true
 
       - name: Build frontend
         working-directory: web/frontend
@@ -71,6 +77,37 @@ jobs:
 
       - name: Build with PyInstaller
         run: pyinstaller nahida-agent.spec --clean --noconfirm
+
+      - name: Strip secrets from build output
+        shell: bash
+        run: |
+          # 强制删除构建产物中的敏感文件（双重保险）
+          find dist/nahida-agent -name ".env" -not -name ".env.example" -delete 2>/dev/null || true
+          find dist/nahida-agent -name "webui_overrides.json" -delete 2>/dev/null || true
+          find dist/nahida-agent -name "*.key" -delete 2>/dev/null || true
+          find dist/nahida-agent -type d -name "credentials" -exec rm -rf {} + 2>/dev/null || true
+          echo "Stripped secrets from build output"
+
+      - name: Verify no secrets in build
+        shell: bash
+        run: |
+          echo "=== Scanning for leaked secrets ==="
+          FOUND=0
+          # Check for .env files
+          find dist/nahida-agent -name ".env" -not -name ".env.example" 2>/dev/null && FOUND=1
+          # Check for .key files
+          find dist/nahida-agent -name "*.key" 2>/dev/null && FOUND=1
+          # Check for credentials directory
+          find dist/nahida-agent -type d -name "credentials" 2>/dev/null && FOUND=1
+          # Check for webui_overrides.json
+          find dist/nahida-agent -name "webui_overrides.json" 2>/dev/null && FOUND=1
+          # Check for sk- patterns in text files
+          grep -r "sk-[a-zA-Z0-9]\{10,\}" dist/nahida-agent/ --include="*.json" --include="*.env" --include="*.key" --include="*.txt" -l 2>/dev/null && FOUND=1
+          if [ $FOUND -eq 1 ]; then
+            echo "ERROR: Leaked secrets found in build!"
+            exit 1
+          fi
+          echo "No secrets found - OK"
 
       - name: Extract version
         id: version

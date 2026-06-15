@@ -106,17 +106,26 @@ async def process_and_serialize(core, text: str, session_id: str,
         if registry and not registry.is_enabled(agent):
             raise ValueError(f"Agent {agent} 已被禁用")
         if not core.dispatcher.get_agent(agent):
-            raise ValueError(f"Agent {agent} 不存在")
-        # 走与 QQ 通道相同的完整子代理流程：表情包/情绪/TTS/落库都不缺
-        from loguru import logger as _logger
-        from agent_core import RequestContext
-        ctx = RequestContext(session_id=session_id, user_id="webui",
-                             user_input=text, status_callback=status_callback)
-        trace = _logger.bind(trace_id=f"web{int(time.time()*1000) % 1000000:06d}")
-        result = await core._dispatch_single_sub_agent(
-            agent, text, user_id="webui", source="web",
-            session_id=session_id, trace=trace, ctx=ctx)
-        data = serialize_result(result)
+            # 降级模式：子 Agent 未注册时回退到主 Agent
+            from loguru import logger as _logger
+            _logger.warning("ws.agent_fallback agent={} msg='not registered, falling back to nahida'", agent)
+            agent = "nahida"
+        else:
+            # 走与 QQ 通道相同的完整子代理流程：表情包/情绪/TTS/落库都不缺
+            from loguru import logger as _logger
+            from agent_core import RequestContext
+            ctx = RequestContext(session_id=session_id, user_id="webui",
+                                 user_input=text, status_callback=status_callback)
+            trace = _logger.bind(trace_id=f"web{int(time.time()*1000) % 1000000:06d}")
+            result = await core._dispatch_single_sub_agent(
+                agent, text, user_id="webui", source="web",
+                session_id=session_id, trace=trace, ctx=ctx)
+            data = serialize_result(result)
+            data["agent"] = agent
+            data["elapsed_ms"] = int((time.time() - t0) * 1000)
+            if app is not None and data.get("emotion"):
+                app.state.last_emotion = {"primary": data["emotion"], "timestamp": time.time()}
+            return data
     else:
         result = await core.process(
             user_input=text, user_id="webui", source="web",
@@ -134,12 +143,14 @@ async def process_and_serialize(core, text: str, session_id: str,
 
 @router.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket, token: str = ""):
+    # 先 accept 再验证，避免 403
+    await ws.accept()
+
     from web.routers.auth import _validate_token
     if not token or not _validate_token(token):
+        await ws.send_json({"type": "error", "code": "UNAUTHORIZED", "message": "Invalid or missing token"})
         await ws.close(code=4001, reason="Unauthorized")
         return
-
-    await ws.accept()
     conn_id = manager.register(ws)
     logger.info("ws.connected conn_id={}", conn_id)
     await manager.send_to(conn_id, {

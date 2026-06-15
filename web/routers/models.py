@@ -67,20 +67,26 @@ async def _broadcast_changed():
 
 
 def list_providers_data(cfg) -> list[dict]:
-    out = [
-        {"id": "mimo", "label": "小米 MiMo", "format": "openai",
-         "base_url": os.getenv("MIMO_BASE_URL", ""), "builtin": True,
-         "key_masked": _mask(os.getenv("MIMO_API_KEY", "")), "enabled": True},
-    ]
+    out = []
+    # MiMo 内置 provider — 只在有 API key 时显示
+    mimo_key = os.getenv("MIMO_API_KEY", "")
+    if mimo_key:
+        out.append({"id": "mimo", "label": "小米 MiMo", "format": "openai",
+                     "base_url": os.getenv("MIMO_BASE_URL", ""), "builtin": True,
+                     "key_masked": _mask(mimo_key), "enabled": True})
     custom = cfg.get("models.providers", {}) or {}
     for pid, p in custom.items():
+        key = load_provider_key(pid)
+        # 没有 API key 的自定义 provider 不显示
+        if not key:
+            continue
         out.append({
             "id": pid,
             "label": p.get("label", pid),
             "format": p.get("format", "openai"),
             "base_url": p.get("base_url", ""),
             "builtin": False,
-            "key_masked": _mask(load_provider_key(pid)),
+            "key_masked": _mask(key),
             "enabled": p.get("enabled", True),
             "default_model": p.get("default_model", ""),
         })

@@ -140,7 +140,7 @@ class AgentRegistry:
             "display_name": stub.get("display_name", name),
             "builtin": True,
             "is_main": False,
-            "enabled": False,
+            "enabled": True,
             "provider": stub.get("provider", ""),
             "model": stub.get("model", ""),
             "base_url": "",
@@ -226,9 +226,12 @@ class AgentRegistry:
         if name == "nahida":
             return self.list()[0]
         agent = self.core.dispatcher.get_agent(name)
-        if not agent:
-            return None
-        return self._serialize(agent.config, enabled=name not in self._disabled)
+        if agent:
+            return self._serialize(agent.config, enabled=name not in self._disabled)
+        # 降级模式：返回桩数据
+        if name in BUILTIN_AGENTS:
+            return self._builtin_stub(name)
+        return None
 
     # ── 增删改 ──────────────────────────────────────────
 

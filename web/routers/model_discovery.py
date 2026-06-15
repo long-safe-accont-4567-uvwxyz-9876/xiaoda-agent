@@ -177,22 +177,24 @@ async def discover_models():
 
     result = []
 
-    # MiMo 内置
-    try:
-        result.append(_build_mimo_provider())
-    except Exception as e:
-        logger.warning("discover.mimo_failed error={}", str(e))
+    # MiMo 内置 — 只在有 API key 时显示
+    mimo_key = os.getenv("MIMO_API_KEY", "")
+    if mimo_key:
+        try:
+            result.append(_build_mimo_provider())
+        except Exception as e:
+            logger.warning("discover.mimo_failed error={}", str(e))
 
-    # SiliconFlow
-    if sf_models is not None:
+    # SiliconFlow — 只在有 API key 时显示
+    if sf_models:
         result.append({"provider": "siliconflow", "models": sf_models})
 
-    # OpenRouter
-    if or_models is not None:
+    # OpenRouter — 只在有 API key 时显示
+    if or_models:
         result.append({"provider": "openrouter", "models": or_models})
 
-    # ModelScope
-    if ms_models is not None:
+    # ModelScope — 只在有 API key 时显示
+    if ms_models:
         result.append({"provider": "modelscope", "models": ms_models})
 
     _cache["data"] = result

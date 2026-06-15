@@ -148,13 +148,32 @@ async def last_report(request: Request):
 
 @router.get("/health/system", response_model=Envelope[dict])
 async def system_info():
-    data: dict = {"timestamp": time.time()}
+    import platform
+    import subprocess
+    data: dict = {"timestamp": time.time(), "platform": platform.system()}
+
+    # ── CPU 负载 ──
     try:
         load1, load5, load15 = os.getloadavg()
         data["load"] = [load1, load5, load15]
-        data["cpu_count"] = os.cpu_count()
     except OSError:
         pass
+    if "load" not in data and platform.system() == "Windows":
+        try:
+            # Windows: 用 wmic 获取 CPU 使用率
+            out = subprocess.check_output(
+                "wmic cpu get loadpercentage /value", shell=True, timeout=5
+            ).decode(errors="ignore")
+            for line in out.strip().splitlines():
+                if line.startswith("LoadPercentage="):
+                    pct_val = int(line.split("=", 1)[1])
+                    data["load"] = [pct_val / 100.0, 0, 0]
+                    break
+        except Exception:
+            pass
+    data["cpu_count"] = os.cpu_count()
+
+    # ── 内存 ──
     try:
         meminfo = Path("/proc/meminfo").read_text()
         mem = {}
@@ -165,12 +184,50 @@ async def system_info():
         data["mem_available"] = mem.get("MemAvailable", 0)
     except Exception:
         pass
+    if "mem_total" not in data and platform.system() == "Windows":
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            STATUS_INFO_LENGTH_MISMATCH = 0xC0000004
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong),
+                            ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(stat)
+            kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
+            data["mem_total"] = stat.ullTotalPhys
+            data["mem_available"] = stat.ullAvailPhys
+        except Exception:
+            pass
+
+    # ── 磁盘 ──
     try:
         st = os.statvfs("/")
         data["disk_total"] = st.f_blocks * st.f_frsize
         data["disk_free"] = st.f_bavail * st.f_frsize
-    except Exception:
+    except (AttributeError, OSError):
         pass
+    if "disk_total" not in data and platform.system() == "Windows":
+        try:
+            import ctypes
+            free_bytes = ctypes.c_ulonglong(0)
+            total_bytes = ctypes.c_ulonglong(0)
+            ctypes.windll.kernel32.GetDiskFreeSpaceExW(
+                None, ctypes.pointer(free_bytes),
+                ctypes.pointer(total_bytes), None)
+            data["disk_total"] = total_bytes.value
+            data["disk_free"] = free_bytes.value
+        except Exception:
+            pass
+
+    # ── 温度 ──
     temps = []
     try:
         for zone in sorted(Path("/sys/class/thermal").glob("thermal_zone*")):
@@ -183,10 +240,14 @@ async def system_info():
     except Exception:
         pass
     data["temperatures"] = temps
+
+    # ── 运行时间 ──
     try:
         data["uptime"] = float(Path("/proc/uptime").read_text().split()[0])
     except Exception:
         pass
+
+    # ── 进程内存 ──
     try:
         status = Path("/proc/self/status").read_text()
         for line in status.splitlines():
@@ -195,4 +256,11 @@ async def system_info():
                 break
     except Exception:
         pass
+    if "process_rss" not in data and platform.system() == "Windows":
+        try:
+            import psutil
+            data["process_rss"] = psutil.Process().memory_info().rss
+        except Exception:
+            pass
+
     return Envelope(data=data)
