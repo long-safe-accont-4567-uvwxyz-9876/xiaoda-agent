@@ -141,7 +141,7 @@ function gb(bytes: number): string {
 
     <div class="chart-row">
       <div class="glass-panel chart-box monitor">
-        <h4>Orange Pi 系统监控 <span class="hint">5s 轮询</span></h4>
+        <h4>{{ system.platform === 'Windows' ? 'Windows' : 'Orange Pi' }} 系统监控 <span class="hint">5s 轮询</span></h4>
         <div class="monitor-grid">
           <div class="m-item">
             <span class="m-label">负载</span>
@@ -223,7 +223,7 @@ function gb(bytes: number): string {
 .hint { font-size: 11px; color: var(--moon-dim); font-weight: 400; }
 .chart { height: 220px; }
 
-.monitor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.monitor-grid { display: grid; grid-columns: 1fr 1fr; gap: 10px; }
 .m-item {
   display: flex; flex-direction: column; gap: 2px;
   padding: 8px 10px; border-radius: 8px;

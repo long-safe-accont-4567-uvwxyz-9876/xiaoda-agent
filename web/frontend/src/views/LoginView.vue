@@ -11,15 +11,37 @@ const router = useRouter()
 const password = ref('')
 const error = ref('')
 const loading = ref(false)
+const noPassword = ref(false)
 
 onMounted(async () => {
   try {
     const data = await api.getSetupFirstRun()
     if (data?.first_run) {
       router.replace('/setup')
+      return
     }
   } catch {
     // 忽略
+  }
+  // 检测是否设置了密码
+  try {
+    // 尝试空密码登录来检测
+    const resp = await fetch('/api/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: '' }),
+    })
+    if (resp.ok) {
+      // 无密码，自动获取 token
+      const result = await resp.json()
+      if (result.data?.token) {
+        noPassword.value = true
+      }
+    } else {
+      noPassword.value = false
+    }
+  } catch {
+    noPassword.value = false
   }
 })
 
@@ -27,6 +49,7 @@ async function handleLogin() {
   error.value = ''
   loading.value = true
   try {
+    // 无密码时传空字符串，后端会自动放行
     await auth.login(password.value)
     router.replace('/')
   } catch (e: any) {
@@ -52,6 +75,7 @@ async function handleLogin() {
 
         <form @submit.prevent="handleLogin" class="login-form">
           <input
+            v-if="!noPassword"
             v-model="password"
             type="password"
             class="dendro-input"
@@ -59,6 +83,7 @@ async function handleLogin() {
             :disabled="loading"
             autofocus
           />
+          <p v-if="noPassword" class="hint-text">未设置密码，点击按钮直接进入</p>
           <p v-if="error" class="error-text">{{ error }}</p>
           <button type="submit" class="dendro-btn login-btn" :disabled="loading">
             {{ loading ? '草元素汇聚中…' : '进入世界树' }}
@@ -130,4 +155,5 @@ async function handleLogin() {
 .login-btn { width: 100%; padding: 12px; font-size: 16px; margin-top: 6px; }
 
 .error-text { color: var(--alert); font-size: 13px; }
+.hint-text { color: var(--wisdom); font-size: 13px; opacity: 0.7; }
 </style>

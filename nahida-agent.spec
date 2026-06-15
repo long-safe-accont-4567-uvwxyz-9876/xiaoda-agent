@@ -16,8 +16,11 @@ SPECPATH = os.path.dirname(os.path.abspath(SPEC))  # /home/orangepi/ai-agent
 def _tree_datas(root, prefix):
     """Return list of (src, dest) tuples for every file under *root*."""
     result = []
+    _exclude = {'.env', '.env.prod', '.env.local'}
     for dirpath, _dirnames, filenames in os.walk(root):
         for fn in filenames:
+            if fn in _exclude:
+                continue
             src = os.path.join(dirpath, fn)
             rel = os.path.relpath(src, SPECPATH)
             result.append((src, os.path.dirname(rel)))

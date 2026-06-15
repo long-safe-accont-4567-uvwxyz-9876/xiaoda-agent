@@ -44,7 +44,10 @@ jobs:
 
       - name: Clean old frontend dist
         shell: bash
-        run: rm -rf web/dist
+        run: |
+          rm -rf web/dist
+          # 确保 .env 不被打包进安装包
+          rm -f .env .env.prod .env.local
 
       - name: Build frontend
         working-directory: web/frontend
