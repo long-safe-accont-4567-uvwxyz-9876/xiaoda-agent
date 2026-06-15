@@ -12,7 +12,7 @@ from loguru import logger
 from web.schemas import Envelope
 from web.routers.auth import get_current_user
 
-router = APIRouter(tags=["agents"], dependencies=[Depends(get_current_user)])
+router = APIRouter(tags=["agents"])
 
 
 def _registry(request: Request):
@@ -34,7 +34,7 @@ async def list_agents(request: Request):
 
 
 @router.get("/agents/{name}", response_model=Envelope[dict])
-async def get_agent(name: str, request: Request):
+async def get_agent(name: str, request: Request, _user: str = Depends(get_current_user)):
     data = _registry(request).get(name)
     if not data:
         raise HTTPException(404, f"Agent {name} 不存在")
@@ -42,7 +42,7 @@ async def get_agent(name: str, request: Request):
 
 
 @router.post("/agents", response_model=Envelope[dict])
-async def create_agent(body: dict, request: Request):
+async def create_agent(body: dict, request: Request, _user: str = Depends(get_current_user)):
     try:
         data = await _registry(request).create(body)
     except (ValueError, KeyError) as e:
@@ -52,7 +52,7 @@ async def create_agent(body: dict, request: Request):
 
 
 @router.put("/agents/{name}", response_model=Envelope[dict])
-async def update_agent(name: str, body: dict, request: Request):
+async def update_agent(name: str, body: dict, request: Request, _user: str = Depends(get_current_user)):
     try:
         data = await _registry(request).update(name, body)
     except KeyError as e:
@@ -64,7 +64,7 @@ async def update_agent(name: str, body: dict, request: Request):
 
 
 @router.delete("/agents/{name}", response_model=Envelope[dict])
-async def delete_agent(name: str, request: Request):
+async def delete_agent(name: str, request: Request, _user: str = Depends(get_current_user)):
     if request.headers.get("X-Confirm") != "yes":
         raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     try:
@@ -76,7 +76,7 @@ async def delete_agent(name: str, request: Request):
 
 
 @router.post("/agents/{name}/enable", response_model=Envelope[dict])
-async def enable_agent(name: str, request: Request):
+async def enable_agent(name: str, request: Request, _user: str = Depends(get_current_user)):
     try:
         _registry(request).set_enabled(name, True)
     except KeyError as e:
@@ -86,7 +86,7 @@ async def enable_agent(name: str, request: Request):
 
 
 @router.post("/agents/{name}/disable", response_model=Envelope[dict])
-async def disable_agent(name: str, request: Request):
+async def disable_agent(name: str, request: Request, _user: str = Depends(get_current_user)):
     try:
         _registry(request).set_enabled(name, False)
     except KeyError as e:
@@ -96,7 +96,7 @@ async def disable_agent(name: str, request: Request):
 
 
 @router.get("/agents/{name}/permissions", response_model=Envelope[dict])
-async def get_permissions(name: str, request: Request):
+async def get_permissions(name: str, request: Request, _user: str = Depends(get_current_user)):
     try:
         return Envelope(data=_registry(request).get_permissions(name))
     except KeyError as e:
@@ -104,7 +104,7 @@ async def get_permissions(name: str, request: Request):
 
 
 @router.put("/agents/{name}/permissions", response_model=Envelope[dict])
-async def set_permissions(name: str, body: dict, request: Request):
+async def set_permissions(name: str, body: dict, request: Request, _user: str = Depends(get_current_user)):
     try:
         data = _registry(request).set_permissions(name, body)
     except KeyError as e:
@@ -125,7 +125,7 @@ async def set_permissions(name: str, body: dict, request: Request):
 
 
 @router.get("/agents/{name}/personality", response_model=Envelope[dict])
-async def get_personality(name: str, request: Request):
+async def get_personality(name: str, request: Request, _user: str = Depends(get_current_user)):
     try:
         text = _registry(request).get_personality(name)
     except KeyError as e:
@@ -134,7 +134,7 @@ async def get_personality(name: str, request: Request):
 
 
 @router.put("/agents/{name}/personality", response_model=Envelope[dict])
-async def set_personality(name: str, body: dict, request: Request):
+async def set_personality(name: str, body: dict, request: Request, _user: str = Depends(get_current_user)):
     text = body.get("personality", "")
     try:
         await _registry(request).set_personality(name, text)
@@ -150,7 +150,7 @@ _EXT = {"png": "png", "jpg": "jpg", "jpeg": "jpg", "webp": "webp"}
 
 
 @router.post("/agents/{name}/wallpaper", response_model=Envelope[dict])
-async def upload_wallpaper(name: str, body: dict, request: Request):
+async def upload_wallpaper(name: str, body: dict, request: Request, _user: str = Depends(get_current_user)):
     """上传背景板（data URL），保存后写入该 Agent 的 wallpaper 字段。"""
     registry = _registry(request)
     if not registry.get(name):
@@ -181,7 +181,7 @@ async def upload_wallpaper(name: str, body: dict, request: Request):
 
 
 @router.post("/agents/{name}/test", response_model=Envelope[dict])
-async def test_agent(name: str, request: Request):
+async def test_agent(name: str, request: Request, _user: str = Depends(get_current_user)):
     """对该 Agent 发一条固定测试语句。"""
     core = request.app.state.core
     t0 = time.time()

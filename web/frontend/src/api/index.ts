@@ -63,8 +63,17 @@ export const api = {
     return fetch(`${BASE}/setup/first-run`).then(r => r.json()).then(b => b.data)
   },
 
-  getSetupKeys: () => {
-    return fetch(`${BASE}/setup/keys`).then(r => r.json()).then(b => b.data) as Promise<{ keys: any[] }>
+  getSetupKeys: async () => {
+    try {
+      const r = await fetch(`${BASE}/setup/keys`)
+      const b = await r.json()
+      if (!r.ok || !b.ok) {
+        throw new Error(b?.error?.message || `HTTP ${r.status}`)
+      }
+      return b.data as { keys: any[] }
+    } catch (e: any) {
+      throw new Error(e.message || 'Failed to load setup keys')
+    }
   },
 
   testSetupKey: (keyName: string, keyValue: string, extra?: Record<string, string>) => {

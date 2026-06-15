@@ -30,9 +30,9 @@ Section "MainSection" SEC01
 SetOutPath "$INSTDIR"
 SetOverwrite on
 File /r "dist\nahida-agent\*.*"
-CreateShortCut "$DESKTOP\纳西妲Agent.lnk" "$INSTDIR\start-windows.bat" "" "$INSTDIR\nahida-agent.exe" 0
+CreateShortCut "$DESKTOP\纳西妲Agent.lnk" "$INSTDIR\start-windows.bat" "" "$INSTDIR\nahida-icon.ico" 0
 CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
-CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\纳西妲Agent.lnk" "$INSTDIR\start-windows.bat" "" "$INSTDIR\nahida-agent.exe" 0
+CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\纳西妲Agent.lnk" "$INSTDIR\start-windows.bat" "" "$INSTDIR\nahida-icon.ico" 0
 CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\卸载.lnk" "$INSTDIR\uninstall.exe"
 SectionEnd
 

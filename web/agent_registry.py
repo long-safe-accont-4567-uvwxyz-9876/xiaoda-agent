@@ -108,6 +108,57 @@ class AgentRegistry:
 
     # ── 查询 ────────────────────────────────────────────
 
+    # ── 内置 Agent 桩数据（降级模式下 dispatcher 未注册时使用）──
+
+    _BUILTIN_STUBS: dict[str, dict] = {
+        "keli": {
+            "display_name": "可莉", "provider": "mimo", "model": "mimo-v2.5-pro",
+            "route_description": "日常聊天、玩耍、轻松有趣的对话",
+            "capabilities": ["chat", "play", "fun"],
+        },
+        "yinlang": {
+            "display_name": "银狼", "provider": "mimo", "model": "mimo-v2.5-pro",
+            "route_description": "编程、代码编写、调试、技术问题、硬件控制、系统运维、开发辅助",
+            "capabilities": ["coding", "debug", "script", "programming", "hardware", "system", "devops"],
+        },
+        "xilian": {
+            "display_name": "昔涟", "provider": "mimo", "model": "mimo-v2.5-pro",
+            "route_description": "搜索信息、查询资料、探索发现",
+            "capabilities": ["search", "lookup", "query", "explore", "discover"],
+        },
+        "nike": {
+            "display_name": "尼可", "provider": "mimo", "model": "mimo-v2.5-pro",
+            "route_description": "研究分析、学术思考、深度解读",
+            "capabilities": ["research", "analysis", "study", "academic"],
+        },
+    }
+
+    def _builtin_stub(self, name: str) -> dict:
+        stub = self._BUILTIN_STUBS.get(name, {})
+        return {
+            "name": name,
+            "display_name": stub.get("display_name", name),
+            "builtin": True,
+            "is_main": False,
+            "enabled": False,
+            "provider": stub.get("provider", ""),
+            "model": stub.get("model", ""),
+            "base_url": "",
+            "api_key_env": "",
+            "voice_ref": None,
+            "route_description": stub.get("route_description", ""),
+            "capabilities": stub.get("capabilities", []),
+            "excluded_tools": [],
+            "mcp_servers": [],
+            "max_turns": 8,
+            "effort": "medium",
+            "permission_mode": "default",
+            "memory_scope": "shared",
+            "background": None,
+            "wallpaper": DEFAULT_WALLPAPERS.get(name, ""),
+            "tool_count": 0,
+        }
+
     def list(self) -> list[dict]:
         main = dict(MAIN_AGENT_META,
                     model=self._main_model(),
@@ -121,13 +172,19 @@ class AgentRegistry:
         except Exception:
             pass
         out = [main]
+        registered_names: set[str] = set()
         for info in self.core.dispatcher.list_agents():
             name = info.get("name", "")
+            registered_names.add(name)
             agent = self.core.dispatcher.get_agent(name)
             if not agent:
                 continue
             cfg = agent.config
             out.append(self._serialize(cfg, enabled=name not in self._disabled))
+        # 降级模式下 dispatcher 未注册内置 Agent，用桩数据补齐
+        for name in BUILTIN_AGENTS:
+            if name not in registered_names:
+                out.append(self._builtin_stub(name))
         return out
 
     def _main_model(self) -> str:

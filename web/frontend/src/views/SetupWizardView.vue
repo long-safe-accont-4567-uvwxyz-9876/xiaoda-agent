@@ -13,6 +13,7 @@ const saving = ref(false)
 const showOptional = ref(false)
 const error = ref('')
 const testingAll = ref(false)
+const loading = ref(true)
 
 const testStatuses = reactive<Record<string, TestStatus>>({})
 const testMessages = reactive<Record<string, string>>({})
@@ -28,7 +29,9 @@ onMounted(async () => {
       testMessages[k.key] = ''
     }
   } catch (e: any) {
-    error.value = e.message
+    error.value = e.message || '加载配置项失败，请检查服务是否正常运行'
+  } finally {
+    loading.value = false
   }
 })
 
@@ -163,9 +166,16 @@ async function handleSave() {
           <p class="subtitle">世界的记忆，由我来守护</p>
         </div>
 
-        <div class="setup-body">
-          <h2 class="section-title required-title">── 必填配置 ──</h2>
-          <KeyAccordion
+        <div v-if="loading" class="setup-body">
+          <p class="loading-text">加载配置项中...</p>
+        </div>
+
+        <div v-else class="setup-body">
+          <p v-if="error && keys.length === 0" class="error-text load-error">{{ error }}</p>
+
+          <template v-if="keys.length > 0">
+            <h2 class="section-title required-title">── 必填配置 ──</h2>
+            <KeyAccordion
             :items="requiredKeys"
             :test-statuses="testStatuses"
             :test-messages="testMessages"
@@ -174,9 +184,9 @@ async function handleSave() {
           />
 
           <button
-            class="dendro-btn test-all-btn"
-            :disabled="testingAll || !hasUpdates"
-            @click="handleTestAllRequired"
+                       class="dendro-btn test-all-btn"
+                       :disabled="testingAll || !hasUpdates"
+                       @click="handleTestAllRequired"
           >
             {{ testingAll ? '测试中…' : '测试全部必填项' }}
           </button>
@@ -197,17 +207,18 @@ async function handleSave() {
             </div>
           </Transition>
 
-          <p v-if="error" class="error-text">{{ error }}</p>
+          <p v-if="error && keys.length > 0" class="error-text">{{ error }}</p>
 
           <button
+                       v-if="keys.length > 0"
             class="dendro-btn save-btn"
-            :disabled="saving || !hasUpdates || !allRequiredTestedAndPassed"
-            @click="handleSave"
+                       :disabled="saving || !hasUpdates || !allRequiredTestedAndPassed"
+                       @click="handleSave"
           >
             {{ saving ? '草元素汇聚中…' : '保存配置' }}
           </button>
 
-          <p class="status-hint">
+          <p v-if="keys.length > 0" class="status-hint">
             <template v-if="!allRequiredTestedAndPassed && hasUpdates">
               请先测试所有必填 API Key
             </template>
@@ -218,6 +229,7 @@ async function handleSave() {
               请配置必填项后保存
             </template>
           </p>
+          </template>
         </div>
       </div>
     </div>
@@ -250,6 +262,8 @@ async function handleSave() {
   padding: 40px 36px;
   text-align: center;
   position: relative;
+  background: rgba(12, 28, 18, 0.88);
+  border: 1px solid rgba(127, 214, 80, 0.3);
 }
 
 /* 藤蔓角饰 */
@@ -369,6 +383,21 @@ async function handleSave() {
   color: var(--alert);
   font-size: 13px;
   margin: 0;
+}
+
+.load-error {
+  font-size: 14px;
+  padding: 16px;
+  text-align: center;
+  line-height: 1.6;
+}
+
+.loading-text {
+  color: var(--dendro);
+  font-size: 14px;
+  text-align: center;
+  padding: 20px 0;
+  animation: breathe 2s ease-in-out infinite;
 }
 
 .save-btn {

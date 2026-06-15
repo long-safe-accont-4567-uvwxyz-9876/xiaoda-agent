@@ -425,6 +425,15 @@ async def save_keys(body: dict):
                     from web.server import _apply_model_overrides
                     await _apply_model_overrides(core)
                     logger.info("setup.core_reinitialized")
+                    # 刷新 AgentRegistry（注册内置子代理）
+                    try:
+                        from web.agent_registry import AgentRegistry
+                        registry = getattr(app.state, "agent_registry", None)
+                        if registry:
+                            await registry.load_persisted()
+                            logger.info("setup.registry_refreshed")
+                    except Exception as e:
+                        logger.warning("setup.registry_refresh_failed error={}", str(e))
     except Exception as e:
         logger.warning("setup.core_reinit_failed error={}", str(e))
 
