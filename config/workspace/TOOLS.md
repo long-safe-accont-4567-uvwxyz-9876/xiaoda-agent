@@ -27,7 +27,7 @@
 ### 可直接使用
 
 - python_executor：执行 Python 代码
-- calculator：数学计算
+- calculator：简单四则运算和基础数学表达式（如 2+2、sqrt(16)、3.14*5^2）
 
 ### 注意事项
 
@@ -38,10 +38,24 @@
 
 ### 可直接使用
 
-- web_search：搜索互联网
+- web_search：搜索互联网（新闻、资讯、生活常识、百科知识等）
 - get_weather：获取天气
 - multi_search：多引擎搜索（国内：Bing/Baidu/Sogou/360，国际：DuckDuckGo）
-- wolfram_query：WolframAlpha知识计算（数学/单位转换/科学查询）
+- wolfram_query：WolframAlpha 知识计算引擎，适用于以下场景（query 建议用英文）：
+  - 解方程/不等式（如 solve x^2+3x-4=0）
+  - 单位转换（如 100 km/h to mph）
+  - 科学数据查询（如 boiling point of ethanol）
+  - 化学分子量/配平（如 molar mass of H2SO4）
+  - 物理常数查询（如 speed of light）
+  - 微积分/函数分析（如 integrate sin(x) from 0 to pi）
+
+### 工具选择规则
+
+- **简单四则运算**（加减乘除、简单公式）→ 用 calculator
+- **方程求解、微积分、科学数据** → 用 wolfram_query
+- **搜索新闻/资讯/百科/生活常识** → 用 web_search
+- **天气查询** → 用 get_weather（不要用搜索）
+- **不确定用哪个时**：数学/科学问题优先 wolfram_query，信息检索优先 web_search
 
 ### 注意事项
 

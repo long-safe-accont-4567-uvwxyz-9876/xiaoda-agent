@@ -1,11 +1,33 @@
 import asyncio
 import os
+import re
 import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from loguru import logger
 
 from db.db_analytics import AnalyticsDB
+
+
+# 推理模型会输出 <think>...</think> 或 CoT 前缀（"嗯，用户..."）。统一清洗。
+_THINK_TAG_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINK_PREFIX_PATTERNS = [
+    re.compile(r"^\s*<think\b[^>]*>.*", re.DOTALL | re.IGNORECASE),
+    re.compile(r"^\s*(嗯[，,].*?(?:\n\s*\n|。\s*\n))", re.DOTALL),
+    re.compile(r"^\s*(首先[，,].*?(?:\n\s*\n|。\s*\n))", re.DOTALL),
+]
+
+
+def _strip_thinking(text: str) -> str:
+    if not text:
+        return ""
+    text = _THINK_TAG_RE.sub("", text)
+    for pat in _THINK_PREFIX_PATTERNS:
+        m = pat.match(text)
+        if m:
+            text = text[m.end():]
+            break
+    return text.strip()
 
 
 class NudgeEngine:
@@ -162,7 +184,7 @@ class NudgeEngine:
                 f"要求：1.语气温柔可爱 2.不要重复之前的问候 3.可以提时间/天气/吃饭/休息等 4.不要加情绪标签 5.不要用emoji过多"
             )
             messages = [
-                {"role": "system", "content": "你是纳西妲，一个温柔可爱的小草神，正在给爸爸发主动问候消息。只输出消息内容，不要加引号或其他格式。"},
+                {"role": "system", "content": "你是纳西妲，一个温柔可爱的小草神，正在给爸爸发主动问候消息。只输出消息内容，不要思考过程，不要加引号或其他格式。"},
                 {"role": "user", "content": prompt},
             ]
             result = await asyncio.wait_for(
@@ -170,9 +192,10 @@ class NudgeEngine:
                 timeout=15,
             )
             if isinstance(result, str):
-                greeting = result.strip()
+                greeting = result
             else:
-                greeting = (result.choices[0].message.content or "").strip()
+                greeting = (result.choices[0].message.content or "")
+            greeting = _strip_thinking(greeting).strip()
 
             if len(greeting) > 100:
                 greeting = greeting[:100]

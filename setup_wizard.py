@@ -92,7 +92,7 @@ OPTIONAL_KEYS = [
     {
         "key": "WOLFRAMALPHA_API_KEY",
         "label": "WolframAlpha 知识计算密钥",
-        "desc": "知识计算引擎 API Key",
+        "desc": "知识计算引擎（数学方程求解、单位转换、科学数据查询、化学方程式配平、物理常数查询）",
         "url": "https://products.wolframalpha.com/api/",
         "url_desc": "注册 → Get AppID",
     },
@@ -138,7 +138,7 @@ def _print_banner():
     print(f"  {flower}  {_C.DGREEN}{_C.BOLD}世  界  的  记  忆  ，  由  我  来  守  护{_C.RST}  {flower}")
     print()
     print(f"  {flower}  {_C.LGREEN}{_C.BOLD}     _   _____    __  __________  ___ {_C.RST}  {flower}")
-    print(f"  {flower}  {_C.LGREEN}{_C.BOLD}    / | / /   |  / / / /  _/ __ \\/   |{_C.RST}  {flower}")
+    print(f"  {flower}  {_C.LGREEN}{_C.BOLD}    / | / /   |  / / / /  _/ __ \/   |{_C.RST}  {flower}")
     print(f"  {flower}  {_C.LGREEN}{_C.BOLD}   /  |/ / /| | / /_/ // // / / / /| |{_C.RST}  {flower}")
     print(f"  {flower}  {_C.LGREEN}{_C.BOLD}  / /|  / ___ |/ __  // // /_/ / ___ |{_C.RST}  {flower}")
     print(f"  {flower}  {_C.LGREEN}{_C.BOLD} /_/ |_/_/  |_/_/ /_/___/_____/_/  |_|{_C.RST}  {flower}")
