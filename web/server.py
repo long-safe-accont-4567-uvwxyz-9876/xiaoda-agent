@@ -27,7 +27,7 @@ async def _apply_model_overrides(core):
         "SILICONFLOW_API_KEY": ("siliconflow", "openai", "https://api.siliconflow.cn/v1", "SiliconFlow 硅基流动"),
         "OPENROUTER_API_KEY": ("openrouter", "openai", "https://openrouter.ai/api/v1", "OpenRouter"),
         "MODELSCOPE_ACCESS_TOKEN": ("modelscope", "openai", "https://api-inference.modelscope.cn/v1", "ModelScope 魔搭"),
-        "AGNES_API_KEY": ("agnes", "openai", os.getenv("AGNES_BASE_URL", "https://api.agnes-ai.com/v1"), "Agnes AI"),
+        "AGNES_API_KEY": ("agnes", "openai", os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1"), "Agnes AI"),
     }
     for env_key, (pid, fmt, base_url, label) in _KNOWN_ENV_PROVIDERS.items():
         api_key = os.getenv(env_key, "").strip()
