@@ -67,11 +67,22 @@ export const api = {
     return fetch(`${BASE}/setup/keys`).then(r => r.json()).then(b => b.data) as Promise<{ keys: any[] }>
   },
 
-  saveSetupKeys: (keys: Record<string, string>) => {
+  testSetupKey: (keyName: string, keyValue: string, extra?: Record<string, string>) => {
+    return fetch(`${BASE}/setup/test-key`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key_name: keyName, key_value: keyValue, ...(extra ? { extra } : {}) }),
+    }).then(r => r.json()).then(b => {
+      if (!b.ok) throw new Error(b.error?.message || 'Test failed')
+      return b.data as { success: boolean; message: string }
+    })
+  },
+
+  saveSetupKeys: (keys: Record<string, string>, testRequired = false) => {
     return fetch(`${BASE}/setup/keys`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keys }),
+      body: JSON.stringify({ keys, test_required: testRequired }),
     }).then(r => r.json()).then(b => {
       if (!b.ok) throw new Error(b.error?.message || 'Save failed')
       return b.data

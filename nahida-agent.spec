@@ -41,6 +41,9 @@ datas.append((os.path.join(SPECPATH, 'db', 'schema.sql'), 'db'))
 # .env.example
 datas.append((os.path.join(SPECPATH, '.env.example'), '.'))
 
+# assets/ directory (icons and other resources)
+datas += _tree_datas(os.path.join(SPECPATH, 'assets'), 'assets')
+
 # ---------------------------------------------------------------------------
 # Collect data files from packages that ship non-Python assets
 # ---------------------------------------------------------------------------

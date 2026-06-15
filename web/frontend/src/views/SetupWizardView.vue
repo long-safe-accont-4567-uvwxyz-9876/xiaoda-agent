@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import DendroShader from '../components/fx/DendroShader.vue'
 import DendroEmblem from '../components/fx/DendroEmblem.vue'
-import KeyAccordion from '../components/setup/KeyAccordion.vue'
+import KeyAccordion, { type TestStatus } from '../components/setup/KeyAccordion.vue'
 import { api } from '../api'
 
 const router = useRouter()
@@ -12,11 +12,21 @@ const updates = ref<Record<string, string>>({})
 const saving = ref(false)
 const showOptional = ref(false)
 const error = ref('')
+const testingAll = ref(false)
+
+const testStatuses = reactive<Record<string, TestStatus>>({})
+const testMessages = reactive<Record<string, string>>({})
+const testedRequiredKeys = ref<Set<string>>(new Set())
 
 onMounted(async () => {
   try {
     const data = await api.getSetupKeys()
     keys.value = data.keys
+    // Initialize test statuses
+    for (const k of data.keys) {
+      testStatuses[k.key] = 'untested'
+      testMessages[k.key] = ''
+    }
   } catch (e: any) {
     error.value = e.message
   }
@@ -27,14 +37,98 @@ const optionalKeys = computed(() => keys.value.filter(k => !k.required))
 
 function handleUpdate(key: string, value: string) {
   updates.value[key] = value
+  // Reset test status when value changes
+  if (testStatuses[key] === 'passed' || testStatuses[key] === 'failed') {
+    testStatuses[key] = 'untested'
+    testMessages[key] = ''
+    testedRequiredKeys.value.delete(key)
+  }
 }
 
+function getExtraForKey(keyName: string): Record<string, string> | undefined {
+  if (keyName === 'QQBOT_APP_ID') {
+    const secret = updates.value['QQBOT_APP_SECRET']
+    return secret ? { QQBOT_APP_SECRET: secret } : undefined
+  }
+  if (keyName === 'QQBOT_APP_SECRET') {
+    const appId = updates.value['QQBOT_APP_ID']
+    return appId ? { QQBOT_APP_ID: appId } : undefined
+  }
+  return undefined
+}
+
+async function handleTestKey(keyName: string) {
+  const keyValue = updates.value[keyName]
+  if (!keyValue) return
+
+  testStatuses[keyName] = 'testing'
+  testMessages[keyName] = ''
+
+  try {
+    const extra = getExtraForKey(keyName)
+    const result = await api.testSetupKey(keyName, keyValue, extra)
+    if (result.success) {
+      testStatuses[keyName] = 'passed'
+      testMessages[keyName] = result.message || '测试通过'
+      // Track tested required key
+      const keyItem = keys.value.find(k => k.key === keyName)
+      if (keyItem?.required) {
+        testedRequiredKeys.value.add(keyName)
+      }
+    } else {
+      testStatuses[keyName] = 'failed'
+      testMessages[keyName] = result.message || '测试失败'
+      testedRequiredKeys.value.delete(keyName)
+    }
+  } catch (e: any) {
+    testStatuses[keyName] = 'failed'
+    testMessages[keyName] = e.message || '测试请求失败'
+    testedRequiredKeys.value.delete(keyName)
+  }
+}
+
+async function handleTestAllRequired() {
+  testingAll.value = true
+  for (const k of requiredKeys.value) {
+    const value = updates.value[k.key]
+    if (!value) continue
+    if (testStatuses[k.key] === 'passed') continue
+    await handleTestKey(k.key)
+  }
+  testingAll.value = false
+}
+
+const allRequiredTestedAndPassed = computed(() => {
+  const required = requiredKeys.value
+  if (required.length === 0) return true
+  return required.every(k => {
+    const hasValue = k.configured || updates.value[k.key]
+    if (!hasValue) return false
+    // If the key has a value (configured or updated), it must be tested and passed
+    // Only check updates that were entered by the user
+    if (updates.value[k.key]) {
+      return testedRequiredKeys.value.has(k.key) && testStatuses[k.key] === 'passed'
+    }
+    // Already configured keys that weren't modified are considered OK
+    return true
+  })
+})
+
+const hasUpdates = computed(() => Object.keys(updates.value).length > 0)
+
 async function handleSave() {
-  if (Object.keys(updates.value).length === 0) return
+  if (!hasUpdates.value) return
+
+  // Check if all required keys with new values have been tested
+  if (!allRequiredTestedAndPassed.value) {
+    error.value = '请先测试所有必填 API Key'
+    return
+  }
+
   saving.value = true
   error.value = ''
   try {
-    await api.saveSetupKeys(updates.value)
+    await api.saveSetupKeys(updates.value, true)
     const allRequired = requiredKeys.value.every(k =>
       k.configured || updates.value[k.key]
     )
@@ -42,7 +136,13 @@ async function handleSave() {
       router.replace('/')
     }
   } catch (e: any) {
-    error.value = e.message
+    // Check for KEY_TEST_FAILED error
+    const msg = e.message || ''
+    if (msg.includes('KEY_TEST_FAILED')) {
+      error.value = `部分 Key 测试未通过：${msg}`
+    } else {
+      error.value = msg
+    }
   } finally {
     saving.value = false
   }
@@ -65,7 +165,21 @@ async function handleSave() {
 
         <div class="setup-body">
           <h2 class="section-title required-title">── 必填配置 ──</h2>
-          <KeyAccordion :items="requiredKeys" @update="handleUpdate" />
+          <KeyAccordion
+            :items="requiredKeys"
+            :test-statuses="testStatuses"
+            :test-messages="testMessages"
+            @update="handleUpdate"
+            @test="handleTestKey"
+          />
+
+          <button
+            class="dendro-btn test-all-btn"
+            :disabled="testingAll || !hasUpdates"
+            @click="handleTestAllRequired"
+          >
+            {{ testingAll ? '测试中…' : '测试全部必填项' }}
+          </button>
 
           <div class="optional-toggle" @click="showOptional = !showOptional">
             <span class="section-title optional-title">── 选填配置 ──</span>
@@ -73,7 +187,13 @@ async function handleSave() {
           </div>
           <Transition name="collapse">
             <div v-if="showOptional" class="optional-body">
-              <KeyAccordion :items="optionalKeys" @update="handleUpdate" />
+              <KeyAccordion
+                :items="optionalKeys"
+                :test-statuses="testStatuses"
+                :test-messages="testMessages"
+                @update="handleUpdate"
+                @test="handleTestKey"
+              />
             </div>
           </Transition>
 
@@ -81,14 +201,22 @@ async function handleSave() {
 
           <button
             class="dendro-btn save-btn"
-            :disabled="saving || Object.keys(updates).length === 0"
+            :disabled="saving || !hasUpdates || !allRequiredTestedAndPassed"
             @click="handleSave"
           >
             {{ saving ? '草元素汇聚中…' : '保存配置' }}
           </button>
 
           <p class="status-hint">
-            {{ Object.keys(updates).length > 0 ? `已修改 ${Object.keys(updates).length} 项配置` : '请配置必填项后保存' }}
+            <template v-if="!allRequiredTestedAndPassed && hasUpdates">
+              请先测试所有必填 API Key
+            </template>
+            <template v-else-if="hasUpdates">
+              已修改 {{ Object.keys(updates).length }} 项配置，全部必填项测试通过
+            </template>
+            <template v-else>
+              请配置必填项后保存
+            </template>
           </p>
         </div>
       </div>
@@ -175,6 +303,19 @@ async function handleSave() {
 
 .optional-title {
   color: var(--cyan, #67e8f9);
+}
+
+.test-all-btn {
+  width: 100%;
+  height: 36px;
+  font-size: 14px;
+}
+
+.test-all-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 .optional-toggle {

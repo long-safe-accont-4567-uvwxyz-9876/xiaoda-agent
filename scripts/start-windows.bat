@@ -52,17 +52,10 @@ if exist "%~dp0nahida-agent.exe" (
 :: Change to the script directory
 cd /d "%~dp0"
 
-:: Start in the appropriate mode
-if /i "%~1"=="--web" (
-    echo   Starting Nahida Agent in Web mode...
-    echo.
-    "%EXE_PATH%" --web
-) else (
-    echo   Starting Nahida Agent in CLI mode...
-    echo   (Use --web flag for Web UI mode)
-    echo.
-    "%EXE_PATH%"
-)
+:: Start in Web mode by default (first-run will auto-trigger setup wizard)
+echo   Starting Nahida Agent...
+echo.
+"%EXE_PATH%" --web
 
 :: Check exit code
 if %errorlevel% neq 0 (

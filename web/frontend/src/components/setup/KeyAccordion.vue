@@ -12,12 +12,17 @@ export interface KeyItem {
   masked_value: string
 }
 
+export type TestStatus = 'untested' | 'testing' | 'passed' | 'failed'
+
 const props = defineProps<{
   items: KeyItem[]
+  testStatuses: Record<string, TestStatus>
+  testMessages: Record<string, string>
 }>()
 
 const emit = defineEmits<{
   update: [key: string, value: string]
+  test: [key: string]
 }>()
 
 const expandedKeys = ref<Set<string>>(new Set())
@@ -40,6 +45,10 @@ function onInput(key: string, value: string) {
   inputValues.value[key] = value
   emit('update', key, value)
 }
+
+function onTest(key: string) {
+  emit('test', key)
+}
 </script>
 
 <template>
@@ -57,8 +66,29 @@ function onInput(key: string, value: string) {
         </span>
         <span class="key-name">{{ item.key }}</span>
         <span class="key-label">{{ item.label }}</span>
-        <span class="status-icon" :class="item.configured ? 'status-ok' : 'status-missing'">
-          {{ item.configured ? '✓' : '✗' }}
+        <!-- 测试状态图标 -->
+        <span
+          class="test-status-icon"
+          :class="{
+            'status-untested': testStatuses[item.key] === 'untested' || !testStatuses[item.key],
+            'status-testing': testStatuses[item.key] === 'testing',
+            'status-passed': testStatuses[item.key] === 'passed',
+            'status-failed': testStatuses[item.key] === 'failed',
+          }"
+          :title="testMessages[item.key] || ''"
+        >
+          <template v-if="!testStatuses[item.key] || testStatuses[item.key] === 'untested'">
+            <span class="circle-gray"></span>
+          </template>
+          <template v-else-if="testStatuses[item.key] === 'testing'">
+            <span class="spinner"></span>
+          </template>
+          <template v-else-if="testStatuses[item.key] === 'passed'">
+            ✓
+          </template>
+          <template v-else-if="testStatuses[item.key] === 'failed'">
+            ✗
+          </template>
         </span>
         <span class="arrow" :class="{ 'arrow-open': isExpanded(item.key) }">❯</span>
       </div>
@@ -80,8 +110,23 @@ function onInput(key: string, value: string) {
               @input="onInput(item.key, ($event.target as HTMLInputElement).value)"
             />
           </div>
+          <div class="action-row">
+            <button
+              class="dendro-btn test-btn"
+              :disabled="!inputValues[item.key] || testStatuses[item.key] === 'testing'"
+              @click.stop="onTest(item.key)"
+            >
+              {{ testStatuses[item.key] === 'testing' ? '测试中…' : '测试' }}
+            </button>
+          </div>
           <p v-if="item.configured && item.masked_value" class="current-value">
             当前值：{{ item.masked_value }}
+          </p>
+          <p v-if="testStatuses[item.key] === 'failed' && testMessages[item.key]" class="test-error-text">
+            {{ testMessages[item.key] }}
+          </p>
+          <p v-if="testStatuses[item.key] === 'passed'" class="test-success-text">
+            测试通过
           </p>
         </div>
       </Transition>
@@ -157,19 +202,56 @@ function onInput(key: string, value: string) {
   white-space: nowrap;
 }
 
-.status-icon {
+/* 测试状态图标 */
+.test-status-icon {
   font-size: 14px;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
 }
 
-.status-ok {
+.test-status-icon.status-untested {
+  color: #888;
+}
+
+.test-status-icon.status-testing {
+  color: var(--dendro);
+}
+
+.test-status-icon.status-passed {
   color: #4ade80;
   text-shadow: 0 0 6px rgba(74, 222, 128, 0.5);
 }
 
-.status-missing {
-  color: var(--wisdom);
-  text-shadow: 0 0 6px rgba(232, 213, 163, 0.4);
+.test-status-icon.status-failed {
+  color: #f87171;
+  text-shadow: 0 0 6px rgba(248, 113, 113, 0.5);
+}
+
+.circle-gray {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #666;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(127, 214, 80, 0.3);
+  border-top-color: var(--dendro);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
 .arrow {
@@ -236,11 +318,44 @@ function onInput(key: string, value: string) {
   box-sizing: border-box;
 }
 
+.action-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.test-btn {
+  padding: 6px 16px;
+  font-size: 13px;
+  height: 32px;
+  white-space: nowrap;
+}
+
+.test-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 .current-value {
   color: var(--moon-dim);
   font-size: 12px;
   margin: 0;
   font-family: 'Courier New', monospace;
+}
+
+.test-error-text {
+  color: #f87171;
+  font-size: 12px;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.test-success-text {
+  color: #4ade80;
+  font-size: 12px;
+  margin: 0;
 }
 
 /* 手风琴过渡动画 */

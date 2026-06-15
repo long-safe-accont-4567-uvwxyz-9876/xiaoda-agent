@@ -143,6 +143,9 @@ do_build() {
         cp "$SCRIPT_DIR/start-windows.bat" "$dist_dir/start-windows.bat"
         cp "$SCRIPT_DIR/auto-update.bat" "$dist_dir/auto-update.bat"
 
+        # Copy icon file for NSIS
+        cp "$PROJECT_ROOT/assets/nahida-icon.ico" "$dist_dir/nahida-icon.ico"
+
         # Try NSIS first for .exe installer
         if command -v makensis &>/dev/null; then
             info "Creating NSIS installer (.exe)..."
@@ -161,6 +164,8 @@ RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
 !include "MUI2.nsh"
+!define MUI_ICON "$dist_dir\\nahida-icon.ico"
+!define MUI_UNICON "$dist_dir\\nahida-icon.ico"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -180,9 +185,9 @@ Section "MainSection" SEC01
   SetOverwrite on
   File /r "$dist_dir\\*.*"
 
-  CreateShortCut "\$DESKTOP\\纳西妲.lnk" "\$INSTDIR\\start-windows.bat" "" "\$INSTDIR\\nahida-agent.exe" 0
+  CreateShortCut "\$DESKTOP\\纳西妲Agent.lnk" "\$INSTDIR\\start-windows.bat" "" "\$INSTDIR\\nahida-agent.exe" 0
   CreateDirectory "\$SMPROGRAMS\\\${PRODUCT_NAME}"
-  CreateShortCut "\$SMPROGRAMS\\\${PRODUCT_NAME}\\纳西妲.lnk" "\$INSTDIR\\start-windows.bat" "" "\$INSTDIR\\nahida-agent.exe" 0
+  CreateShortCut "\$SMPROGRAMS\\\${PRODUCT_NAME}\\纳西妲Agent.lnk" "\$INSTDIR\\start-windows.bat" "" "\$INSTDIR\\nahida-agent.exe" 0
   CreateShortCut "\$SMPROGRAMS\\\${PRODUCT_NAME}\\卸载.lnk" "\$INSTDIR\\uninstall.exe"
 SectionEnd
 
@@ -197,7 +202,7 @@ SectionEnd
 
 Section Uninstall
   RMDir /r "\$INSTDIR"
-  Delete "\$DESKTOP\\纳西妲.lnk"
+  Delete "\$DESKTOP\\纳西妲Agent.lnk"
   RMDir /r "\$SMPROGRAMS\\\${PRODUCT_NAME}"
   DeleteRegKey HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\\${PRODUCT_NAME}"
   DeleteRegKey HKLM "Software\\\${PRODUCT_NAME}"

@@ -1,1 +1,0 @@
-import{ar as s,r as t,an as r}from"./index-AvOOMMDp.js";const l=s("agents",()=>{const e=t([]),a=t(!1);async function n(){a.value=!0;try{e.value=await r("/agents")}finally{a.value=!1}}return{agents:e,loading:a,load:n}});export{l as u};

@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 from typing import Any
 
+import httpx
 from fastapi import APIRouter
 from loguru import logger
 
@@ -57,12 +58,286 @@ async def get_keys():
     return Envelope(data={"keys": keys})
 
 
+_TIMEOUT = 10.0
+
+
+async def _test_mimo(key_value: str) -> tuple[bool, str]:
+    """测试 MiMo API Key。"""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(
+                "https://xiaomimimo.com/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {key_value}"},
+                json={
+                    "model": "mimo-v2.5",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 5,
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("choices"):
+                    return True, "MiMo API Key 验证成功"
+                return False, "MiMo 返回了异常响应（无 choices）"
+            return False, f"MiMo API 返回 HTTP {resp.status_code}"
+    except httpx.TimeoutException:
+        return False, "MiMo API 请求超时"
+    except Exception as e:
+        return False, f"MiMo API 请求失败: {e}"
+
+
+async def _test_qqbot(app_id: str, app_secret: str) -> tuple[bool, str]:
+    """测试 QQ Bot App ID + App Secret。"""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(
+                "https://bots.qq.com/app/getAppAccessToken",
+                json={
+                    "appId": app_id,
+                    "clientSecret": app_secret,
+                    "grant_type": "client_credentials",
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("access_token"):
+                    return True, "QQ Bot 凭证验证成功"
+                return False, f"QQ Bot 返回了异常响应: {data.get('message', '无 access_token')}"
+            return False, f"QQ Bot API 返回 HTTP {resp.status_code}"
+    except httpx.TimeoutException:
+        return False, "QQ Bot API 请求超时"
+    except Exception as e:
+        return False, f"QQ Bot API 请求失败: {e}"
+
+
+async def _test_siliconflow_embed(key_value: str) -> tuple[bool, str]:
+    """测试 SiliconFlow 嵌入 API Key（EMBED_API_KEY）。"""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(
+                "https://api.siliconflow.cn/v1/embeddings",
+                headers={"Authorization": f"Bearer {key_value}"},
+                json={"model": "BAAI/bge-large-zh-v1.5", "input": "test"},
+            )
+            if resp.status_code == 200:
+                return True, "SiliconFlow 嵌入 API Key 验证成功"
+            return False, f"SiliconFlow 嵌入 API 返回 HTTP {resp.status_code}"
+    except httpx.TimeoutException:
+        return False, "SiliconFlow 嵌入 API 请求超时"
+    except Exception as e:
+        return False, f"SiliconFlow 嵌入 API 请求失败: {e}"
+
+
+async def _test_siliconflow(key_value: str) -> tuple[bool, str]:
+    """测试 SiliconFlow API Key。"""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(
+                "https://api.siliconflow.cn/v1/embeddings",
+                headers={"Authorization": f"Bearer {key_value}"},
+                json={"model": "BAAI/bge-large-zh-v1.5", "input": "test"},
+            )
+            if resp.status_code == 200:
+                return True, "SiliconFlow API Key 验证成功"
+            return False, f"SiliconFlow API 返回 HTTP {resp.status_code}"
+    except httpx.TimeoutException:
+        return False, "SiliconFlow API 请求超时"
+    except Exception as e:
+        return False, f"SiliconFlow API 请求失败: {e}"
+
+
+async def _test_openrouter(key_value: str) -> tuple[bool, str]:
+    """测试 OpenRouter API Key。"""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": f"Bearer {key_value}"},
+            )
+            if resp.status_code == 200:
+                return True, "OpenRouter API Key 验证成功"
+            return False, f"OpenRouter API 返回 HTTP {resp.status_code}"
+    except httpx.TimeoutException:
+        return False, "OpenRouter API 请求超时"
+    except Exception as e:
+        return False, f"OpenRouter API 请求失败: {e}"
+
+
+async def _test_agnes(key_value: str) -> tuple[bool, str]:
+    """测试 Agnes AI API Key。"""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(
+                "https://api.agnes-ai.com/v1/models",
+                headers={"Authorization": f"Bearer {key_value}"},
+            )
+            if resp.status_code == 200:
+                return True, "Agnes AI API Key 验证成功"
+            return False, f"Agnes AI API 返回 HTTP {resp.status_code}"
+    except httpx.TimeoutException:
+        return False, "Agnes AI API 请求超时"
+    except Exception as e:
+        return False, f"Agnes AI API 请求失败: {e}"
+
+
+async def _test_wolframalpha(key_value: str) -> tuple[bool, str]:
+    """测试 WolframAlpha API Key。"""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(
+                "https://api.wolframalpha.com/v2/query",
+                params={
+                    "appid": key_value,
+                    "input": "test",
+                    "format": "plaintext",
+                    "output": "json",
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                query_result = data.get("queryresult", {})
+                if query_result.get("success") is True or query_result.get("error") is False:
+                    return True, "WolframAlpha API Key 验证成功"
+                # 即使查询本身失败（如 input 不明确），只要 key 有效就会返回 200
+                # 检查是否有 error 字段表明 key 无效
+                if query_result.get("error", {}).get("code") == 1:
+                    return False, "WolframAlpha API Key 无效"
+                return True, "WolframAlpha API Key 验证成功"
+            return False, f"WolframAlpha API 返回 HTTP {resp.status_code}"
+    except httpx.TimeoutException:
+        return False, "WolframAlpha API 请求超时"
+    except Exception as e:
+        return False, f"WolframAlpha API 请求失败: {e}"
+
+
+async def _test_modelscope(key_value: str) -> tuple[bool, str]:
+    """测试 ModelScope Access Token。"""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(
+                "https://modelscope.cn/api/v1/models",
+                headers={"Authorization": f"Bearer {key_value}"},
+            )
+            if resp.status_code == 200:
+                return True, "ModelScope Access Token 验证成功"
+            return False, f"ModelScope API 返回 HTTP {resp.status_code}"
+    except httpx.TimeoutException:
+        return False, "ModelScope API 请求超时"
+    except Exception as e:
+        return False, f"ModelScope API 请求失败: {e}"
+
+
+async def _test_tavily(key_value: str) -> tuple[bool, str]:
+    """测试 Tavily API Key。"""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": key_value,
+                    "query": "test",
+                    "max_results": 1,
+                },
+            )
+            if resp.status_code == 200:
+                return True, "Tavily API Key 验证成功"
+            return False, f"Tavily API 返回 HTTP {resp.status_code}"
+    except httpx.TimeoutException:
+        return False, "Tavily API 请求超时"
+    except Exception as e:
+        return False, f"Tavily API 请求失败: {e}"
+
+
+async def _test_github(key_value: str) -> tuple[bool, str]:
+    """测试 GitHub Personal Access Token。"""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(
+                "https://api.github.com/user",
+                headers={
+                    "Authorization": f"Bearer {key_value}",
+                    "Accept": "application/vnd.github.v3+json",
+                },
+            )
+            if resp.status_code == 200:
+                return True, "GitHub Personal Access Token 验证成功"
+            if resp.status_code == 401:
+                return False, "GitHub Token 无效或已过期"
+            return False, f"GitHub API 返回 HTTP {resp.status_code}"
+    except httpx.TimeoutException:
+        return False, "GitHub API 请求超时"
+    except Exception as e:
+        return False, f"GitHub API 请求失败: {e}"
+
+
+async def test_single_key(key_name: str, key_value: str, extra: dict | None = None) -> tuple[bool, str]:
+    """根据 key_name 调用对应的测试函数，返回 (success, message)。"""
+    extra = extra or {}
+
+    if key_name == "MIMO_API_KEY":
+        return await _test_mimo(key_value)
+
+    if key_name == "QQBOT_APP_ID":
+        app_secret = extra.get("QQBOT_APP_SECRET", "")
+        if not app_secret:
+            return False, "QQ Bot 需要同时提供 APP_ID 和 APP_SECRET"
+        return await _test_qqbot(key_value, app_secret)
+
+    if key_name == "QQBOT_APP_SECRET":
+        app_id = extra.get("QQBOT_APP_ID", "")
+        if not app_id:
+            return False, "QQ Bot 需要同时提供 APP_ID 和 APP_SECRET"
+        return await _test_qqbot(app_id, key_value)
+
+    if key_name == "EMBED_API_KEY":
+        return await _test_siliconflow_embed(key_value)
+
+    if key_name == "SILICONFLOW_API_KEY":
+        return await _test_siliconflow(key_value)
+
+    if key_name == "OPENROUTER_API_KEY":
+        return await _test_openrouter(key_value)
+
+    if key_name == "AGNES_API_KEY":
+        return await _test_agnes(key_value)
+
+    if key_name == "WOLFRAMALPHA_API_KEY":
+        return await _test_wolframalpha(key_value)
+
+    if key_name == "MODELSCOPE_ACCESS_TOKEN":
+        return await _test_modelscope(key_value)
+
+    if key_name == "TAVILY_API_KEY":
+        return await _test_tavily(key_value)
+
+    if key_name == "GITHUB_PERSONAL_ACCESS_TOKEN":
+        return await _test_github(key_value)
+
+    return False, "未知的 API Key 类型"
+
+
+@router.post("/setup/test-key", response_model=Envelope[dict])
+async def test_key(body: dict):
+    """测试 API Key 是否有效。"""
+    key_name = body.get("key_name", "")
+    key_value = body.get("key_value", "")
+
+    if not key_name or not key_value:
+        return Envelope(ok=False, error={"code": "INVALID_BODY", "message": "需要提供 key_name 和 key_value"})
+
+    extra = body.get("extra", {})
+    success, message = await test_single_key(key_name, key_value, extra)
+
+    return Envelope(data={"success": success, "message": message})
+
+
 @router.post("/setup/keys", response_model=Envelope[dict])
 async def save_keys(body: dict):
     """将提供的 Key-Value 写入 .env 文件。"""
     from setup_wizard import (
         ENV_PATH,
         ENV_EXAMPLE_PATH,
+        REQUIRED_KEYS,
         _parse_env_lines,
         _write_env,
         _load_env_values,
@@ -71,6 +346,45 @@ async def save_keys(body: dict):
     updates = body.get("keys")
     if not updates or not isinstance(updates, dict):
         return Envelope(ok=False, error={"code": "INVALID_BODY", "message": "需要提供 keys 字段（dict）"})
+
+    # 当 test_required=true 时，对必填 Key 逐一测试，全部通过才保存
+    test_required = body.get("test_required", False)
+    if test_required:
+        failed: list[dict[str, str]] = []
+        required_key_names = [item["key"] for item in REQUIRED_KEYS]
+        for rk in required_key_names:
+            rv = updates.get(rk, "").strip()
+            if not rv:
+                # 未提供的必填 Key 跳过测试（由后续逻辑判断）
+                continue
+            # QQBOT_APP_ID 和 QQBOT_APP_SECRET 需要一起测试
+            extra = {}
+            if rk == "QQBOT_APP_ID":
+                extra["QQBOT_APP_SECRET"] = updates.get("QQBOT_APP_SECRET", "")
+            elif rk == "QQBOT_APP_SECRET":
+                extra["QQBOT_APP_ID"] = updates.get("QQBOT_APP_ID", "")
+            success, message = await test_single_key(rk, rv, extra)
+            if not success:
+                failed.append({"key": rk, "message": message})
+        # QQBOT 组合测试去重：如果两个都失败了，只保留一条
+        seen_qqbot = False
+        deduped_failed: list[dict[str, str]] = []
+        for f in failed:
+            if f["key"] in ("QQBOT_APP_ID", "QQBOT_APP_SECRET"):
+                if not seen_qqbot:
+                    deduped_failed.append({"key": "QQBOT_APP_ID + QQBOT_APP_SECRET", "message": f["message"]})
+                    seen_qqbot = True
+            else:
+                deduped_failed.append(f)
+        if deduped_failed:
+            return Envelope(
+                ok=False,
+                error={
+                    "code": "KEY_TEST_FAILED",
+                    "message": "必填 Key 验证失败，未保存",
+                    "failed_keys": deduped_failed,
+                },
+            )
 
     # 如果 .env 不存在，从 .env.example 复制
     import os

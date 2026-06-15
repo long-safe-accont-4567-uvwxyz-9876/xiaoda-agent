@@ -1,1 +1,0 @@
-import{d as n,G as t}from"./index-AvOOMMDp.js";const u=n({props:{onFocus:Function,onBlur:Function},setup(o){return()=>t("div",{style:"width: 0; height: 0",tabindex:0,onFocus:o.onFocus,onBlur:o.onBlur})}});export{u as F};
