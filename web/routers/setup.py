@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 from typing import Any
 
@@ -15,14 +16,62 @@ router = APIRouter(tags=["setup"])
 @router.get("/setup/first-run", response_model=Envelope[dict])
 async def get_first_run():
     """检测是否首次运行（.env 不存在或 MIMO_API_KEY 为空）。"""
-    from setup_wizard import is_first_run
-    return Envelope(data={"first_run": is_first_run()})
+    try:
+        from setup_wizard import is_first_run
+        return Envelope(data={"first_run": is_first_run()})
+    except Exception as e:
+        logger.error("setup.first_run_import_failed error={}", str(e))
+        # 降级：直接检查 .env 文件
+        import sys
+        if getattr(sys, 'frozen', False):
+            env_dir = os.path.dirname(sys.executable)
+        else:
+            env_dir = os.path.dirname(os.path.abspath(__file__))
+            # web/routers/setup.py -> 向上3级到项目根
+            for _ in range(3):
+                env_dir = os.path.dirname(env_dir)
+        env_path = os.path.join(env_dir, ".env")
+        if not os.path.exists(env_path):
+            return Envelope(data={"first_run": True})
+        # 简单检查 MIMO_API_KEY
+        try:
+            with open(env_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if line.strip().startswith("MIMO_API_KEY="):
+                        val = line.strip().split("=", 1)[1].strip().strip("'\"")
+                        if val:
+                            return Envelope(data={"first_run": False})
+        except Exception:
+            pass
+        return Envelope(data={"first_run": True})
 
 
 @router.get("/setup/keys", response_model=Envelope[dict])
 async def get_keys():
     """返回所有 Key 的配置状态（脱敏）。"""
-    from setup_wizard import REQUIRED_KEYS, OPTIONAL_KEYS, _load_env_values, _mask_value
+    try:
+        from setup_wizard import REQUIRED_KEYS, OPTIONAL_KEYS, _load_env_values, _mask_value
+    except Exception as e:
+        logger.error("setup.import_failed error={}", str(e))
+        # 降级：返回硬编码的 key 列表
+        REQUIRED_KEYS = [
+            {"key": "MIMO_API_KEY", "label": "MiMo API 密钥", "desc": "小米 MiMo 大模型 API 密钥", "url": "https://xiaomimimo.com", "url_desc": "注册 → 控制台 → API Keys"},
+            {"key": "QQBOT_APP_ID", "label": "QQ Bot App ID", "desc": "QQ 机器人应用 ID", "url": "https://q.qq.com", "url_desc": "创建机器人应用 → 获取 AppID"},
+            {"key": "QQBOT_APP_SECRET", "label": "QQ Bot App Secret", "desc": "QQ 机器人应用密钥", "url": "https://q.qq.com", "url_desc": "同一页面的 AppSecret"},
+            {"key": "EMBED_API_KEY", "label": "向量嵌入 API 密钥", "desc": "硅基流动嵌入模型密钥", "url": "https://siliconflow.cn", "url_desc": "注册 → API Keys → 复制"},
+        ]
+        OPTIONAL_KEYS = [
+            {"key": "WEBUI_PASSWORD", "label": "Web UI 密码", "desc": "留空则无需密码登录", "url": "", "url_desc": ""},
+            {"key": "TAVILY_API_KEY", "label": "Tavily 搜索 API 密钥", "desc": "AI 搜索引擎", "url": "https://tavily.com", "url_desc": "注册 → API Keys"},
+            {"key": "SILICONFLOW_API_KEY", "label": "SiliconFlow API 密钥", "desc": "硅基流动 API 密钥", "url": "https://siliconflow.cn", "url_desc": "注册 → API Keys"},
+            {"key": "OPENROUTER_API_KEY", "label": "OpenRouter API 密钥", "desc": "OpenRouter API 密钥", "url": "https://openrouter.ai", "url_desc": "注册 → API Keys"},
+            {"key": "WOLFRAMALPHA_API_KEY", "label": "WolframAlpha 知识计算密钥", "desc": "知识计算引擎", "url": "https://products.wolframalpha.com/api/", "url_desc": "注册 → Get AppID"},
+            {"key": "AGNES_API_KEY", "label": "Agnes AI 图像/视频密钥", "desc": "图片生成和视频生成的核心依赖", "url": "https://agnes-ai.com", "url_desc": "注册 → API Keys"},
+            {"key": "GITHUB_PERSONAL_ACCESS_TOKEN", "label": "GitHub 个人访问令牌", "desc": "GitHub MCP Server 所需", "url": "https://github.com/settings/tokens", "url_desc": "Generate new token"},
+            {"key": "MODELSCOPE_ACCESS_TOKEN", "label": "魔搭 Access Token", "desc": "魔搭 ModelScope 免费模型发现", "url": "https://modelscope.cn", "url_desc": "注册 → 个人中心 → 访问令牌"},
+        ]
+        _load_env_values = lambda: {}
+        _mask_value = lambda v: (v[:4] + "****") if v and len(v) > 4 else (v[:1] + "****" if v else "")
 
     current = _load_env_values()
     keys: list[dict[str, Any]] = []

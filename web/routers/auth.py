@@ -74,7 +74,9 @@ def _validate_token(token: str) -> bool:
 
 
 def _is_private_ip(ip: str) -> bool:
-    """Check RFC1918 private IP."""
+    """Check RFC1918 private IP or loopback."""
+    if ip in ("127.0.0.1", "::1", "localhost"):
+        return True
     parts = ip.split(".")
     if len(parts) != 4:
         return False

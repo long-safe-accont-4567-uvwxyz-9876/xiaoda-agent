@@ -4,7 +4,23 @@ import shutil
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from dotenv import dotenv_values
+try:
+    from dotenv import dotenv_values
+except ImportError:
+    # PyInstaller 打包后可能找不到 dotenv，提供降级方案
+    def dotenv_values(path):
+        vals = {}
+        if not os.path.exists(path):
+            return vals
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    k, _, v = line.partition("=")
+                    vals[k.strip()] = v.strip().strip("'\"")
+        return vals
 
 
 class _C:
@@ -26,6 +42,9 @@ class _C:
 
 
 WIZARD_DIR = os.path.dirname(os.path.abspath(__file__))
+# PyInstaller 打包后 __file__ 在 _internal/ 下，.env 应该在 exe 同级目录
+if getattr(sys, 'frozen', False):
+    WIZARD_DIR = os.path.dirname(sys.executable)
 ENV_PATH = os.path.join(WIZARD_DIR, ".env")
 ENV_EXAMPLE_PATH = os.path.join(WIZARD_DIR, ".env.example")
 
