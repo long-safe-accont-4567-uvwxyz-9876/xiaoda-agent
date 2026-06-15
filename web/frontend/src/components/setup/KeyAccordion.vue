@@ -119,8 +119,8 @@ function onTest(key: string) {
               {{ testStatuses[item.key] === 'testing' ? '测试中…' : '测试' }}
             </button>
           </div>
-          <p v-if="item.configured" class="current-value">
-            ✓ 已配置（如需更新请输入新值）
+          <p v-if="item.configured && item.masked_value" class="current-value">
+            当前值：{{ item.masked_value }}
           </p>
           <p v-if="testStatuses[item.key] === 'failed' && testMessages[item.key]" class="test-error-text">
             {{ testMessages[item.key] }}
@@ -339,9 +339,10 @@ function onTest(key: string) {
 }
 
 .current-value {
-  color: #4ade80;
+  color: var(--moon-dim);
   font-size: 12px;
   margin: 0;
+  font-family: 'Courier New', monospace;
 }
 
 .test-error-text {
