@@ -407,7 +407,28 @@ async def save_keys(body: dict):
     _auto_register_providers(updates)
 
     logger.info("setup.keys_saved count={}", len(updates))
-    return Envelope(data={"saved": list(updates.keys())})
+
+    # 重新加载环境变量，使新配置立即生效
+    import os
+    from dotenv import load_dotenv
+    load_dotenv(ENV_PATH, override=True)
+
+    # 尝试重新初始化 core（从降级模式恢复）
+    try:
+        from web.server import app
+        if hasattr(app, "state") and hasattr(app.state, "core"):
+            core = app.state.core
+            if not core._initialized:
+                logger.info("setup.reinitializing_core")
+                await core.init()
+                if core._initialized:
+                    from web.server import _apply_model_overrides
+                    await _apply_model_overrides(core)
+                    logger.info("setup.core_reinitialized")
+    except Exception as e:
+        logger.warning("setup.core_reinit_failed error={}", str(e))
+
+    return Envelope(data={"saved": list(updates.keys()), "need_restart": True})
 
 
 # 已知免费模型平台 → Provider 映射
