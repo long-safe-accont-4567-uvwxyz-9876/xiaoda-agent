@@ -28,7 +28,8 @@ onMounted(async () => {
       testMessages[k.key] = ''
     }
   } catch (e: any) {
-    error.value = e.message
+    error.value = `加载配置项失败: ${e.message || '未知错误'}。请确认服务已启动，然后刷新页面。`
+    console.error('[SetupWizard] getSetupKeys failed:', e)
   }
 })
 
@@ -161,6 +162,7 @@ async function handleSave() {
           <DendroEmblem :size="84" spin />
           <h1>纳西妲 · 配置向导</h1>
           <p class="subtitle">世界的记忆，由我来守护</p>
+          <p class="version-tag">v0.3.5</p>
         </div>
 
         <div class="setup-body">
@@ -278,9 +280,16 @@ async function handleSave() {
 .subtitle {
   color: var(--wisdom);
   font-size: 13px;
-  margin-bottom: 30px;
+  margin-bottom: 6px;
   font-family: 'Noto Serif SC', serif;
   opacity: 0.85;
+}
+
+.version-tag {
+  color: var(--moon-dim);
+  font-size: 11px;
+  margin-bottom: 24px;
+  opacity: 0.5;
 }
 
 .setup-body {

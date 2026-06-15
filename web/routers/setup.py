@@ -49,10 +49,13 @@ async def get_first_run():
 @router.get("/setup/keys", response_model=Envelope[dict])
 async def get_keys():
     """返回所有 Key 的配置状态（脱敏）。"""
+    import sys
+    logger.info("setup.keys.called frozen={} exe={}", getattr(sys, 'frozen', False), getattr(sys, 'executable', 'N/A'))
     try:
         from setup_wizard import REQUIRED_KEYS, OPTIONAL_KEYS, _load_env_values, _mask_value
+        logger.info("setup.keys.import_ok")
     except Exception as e:
-        logger.error("setup.import_failed error={}", str(e))
+        logger.error("setup.keys.import_failed error={}", str(e))
         # 降级：返回硬编码的 key 列表
         REQUIRED_KEYS = [
             {"key": "MIMO_API_KEY", "label": "MiMo API 密钥", "desc": "小米 MiMo 大模型 API 密钥", "url": "https://xiaomimimo.com", "url_desc": "注册 → 控制台 → API Keys"},
@@ -73,7 +76,12 @@ async def get_keys():
         _load_env_values = lambda: {}
         _mask_value = lambda v: (v[:4] + "****") if v and len(v) > 4 else (v[:1] + "****" if v else "")
 
-    current = _load_env_values()
+    try:
+        current = _load_env_values()
+    except Exception as e:
+        logger.error("setup.keys.load_env_failed error={}", str(e))
+        current = {}
+
     keys: list[dict[str, Any]] = []
 
     for item in REQUIRED_KEYS:
