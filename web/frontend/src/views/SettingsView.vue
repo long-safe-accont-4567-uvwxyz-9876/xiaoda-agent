@@ -120,6 +120,15 @@ const permDesc: Record<string, string> = {
       <pre class="log-box">{{ logs.join('\n') || '（空）' }}</pre>
     </section>
 
+    <section class="glass-panel section">
+      <h3>API Key 配置</h3>
+      <p class="apikey-desc">配置和管理 API 密钥，测试密钥是否有效</p>
+      <div class="setting-row">
+        <span class="s-label">打开 API Key 设置向导</span>
+        <n-button type="primary" secondary @click="router.push('/setup')">打开 API Key 设置</n-button>
+      </div>
+    </section>
+
     <section class="glass-panel section danger">
       <h3>危险操作</h3>
       <div class="setting-row">
@@ -166,6 +175,7 @@ const permDesc: Record<string, string> = {
 .s-label { font-size: 13.5px; }
 
 .perm-desc { font-size: 12.5px; color: var(--wisdom); margin-top: 10px; }
+.apikey-desc { font-size: 12.5px; color: var(--wisdom); margin: 0 0 12px; }
 
 .log-ops { display: flex; gap: 8px; }
 .log-box {

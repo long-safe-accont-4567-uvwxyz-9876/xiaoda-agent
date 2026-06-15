@@ -67,6 +67,8 @@ jobs:
           # Copy auto-update scripts
           Copy-Item "scripts/start-windows.bat" "dist/nahida-agent/"
           Copy-Item "scripts/auto-update.bat" "dist/nahida-agent/"
+          # Copy icon file for NSIS
+          Copy-Item "assets\nahida-icon.ico" "dist\nahida-agent\nahida-icon.ico"
 
           # Install NSIS
           choco install nsis -y
@@ -87,8 +89,8 @@ jobs:
           SetCompressor /SOLID lzma
 
           !include "MUI2.nsh"
-          !define MUI_ICON "web\frontend\public\assets\favicon.ico"
-          !define MUI_UNICON "web\frontend\public\assets\favicon.ico"
+          !define MUI_ICON "dist\nahida-agent\nahida-icon.ico"
+          !define MUI_UNICON "dist\nahida-agent\nahida-icon.ico"
 
           !insertmacro MUI_PAGE_WELCOME
           !insertmacro MUI_PAGE_DIRECTORY
@@ -108,9 +110,9 @@ jobs:
             SetOverwrite on
             File /r "dist\nahida-agent\*.*"
 
-            CreateShortCut "`$DESKTOP\纳西妲.lnk" "`$INSTDIR\start-windows.bat" "" "`$INSTDIR\nahida-agent.exe" 0
+            CreateShortCut "`$DESKTOP\纳西妲Agent.lnk" "`$INSTDIR\start-windows.bat" "" "`$INSTDIR\nahida-agent.exe" 0
             CreateDirectory "`$SMPROGRAMS\`${PRODUCT_NAME}"
-            CreateShortCut "`$SMPROGRAMS\`${PRODUCT_NAME}\纳西妲.lnk" "`$INSTDIR\start-windows.bat" "" "`$INSTDIR\nahida-agent.exe" 0
+            CreateShortCut "`$SMPROGRAMS\`${PRODUCT_NAME}\纳西妲Agent.lnk" "`$INSTDIR\start-windows.bat" "" "`$INSTDIR\nahida-agent.exe" 0
             CreateShortCut "`$SMPROGRAMS\`${PRODUCT_NAME}\卸载.lnk" "`$INSTDIR\uninstall.exe"
           SectionEnd
 
@@ -129,7 +131,7 @@ jobs:
 
           Section Uninstall
             RMDir /r "`$INSTDIR"
-            Delete "`$DESKTOP\纳西妲.lnk"
+            Delete "`$DESKTOP\纳西妲Agent.lnk"
             RMDir /r "`$SMPROGRAMS\`${PRODUCT_NAME}"
             DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\`${PRODUCT_NAME}"
             DeleteRegKey HKLM "Software\`${PRODUCT_NAME}"
