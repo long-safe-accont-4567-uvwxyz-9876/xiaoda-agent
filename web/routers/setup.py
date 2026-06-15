@@ -66,7 +66,7 @@ async def _test_mimo(key_value: str) -> tuple[bool, str]:
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.post(
-                "https://xiaomimimo.com/api/v1/chat/completions",
+                "https://api.xiaomimimo.com/v1/chat/completions",
                 headers={"Authorization": f"Bearer {key_value}"},
                 json={
                     "model": "mimo-v2.5",
@@ -168,7 +168,7 @@ async def _test_agnes(key_value: str) -> tuple[bool, str]:
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.get(
-                "https://api.agnes-ai.com/v1/models",
+                "https://apihub.agnes-ai.com/v1/models",
                 headers={"Authorization": f"Bearer {key_value}"},
             )
             if resp.status_code == 200:
@@ -455,7 +455,7 @@ _KNOWN_PROVIDERS = {
         "id": "agnes",
         "label": "Agnes AI",
         "format": "openai",
-        "base_url": "https://api.agnes-ai.com/v1",
+        "base_url": "https://apihub.agnes-ai.com/v1",
     },
 }
 
