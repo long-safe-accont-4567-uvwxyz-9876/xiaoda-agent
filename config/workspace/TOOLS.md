@@ -41,7 +41,7 @@
 - web_search：搜索互联网
 - get_weather：获取天气
 - multi_search：多引擎搜索（国内：Bing/Baidu/Sogou/360，国际：DuckDuckGo）
-- wolfram_query：WolframAlpha知识计算（数学/单位转换/科学查询）
+- wolfram_query：WolframAlpha知识计算（数学方程求解、单位转换、科学数据查询、化学方程式配平、物理常数查询；配置 WOLFRAMALPHA_API_KEY 可获得更稳定的结果）
 
 ### 注意事项
 

@@ -1,9 +1,11 @@
 import os
 import json
+from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolResult, ToolPermission
 from tools.web_tools_v2 import _bing_search_sync, _tavily_search_sync, _format_results, _clean_query
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+WOLFRAMALPHA_API_KEY = os.getenv("WOLFRAMALPHA_API_KEY", "")
 
 
 def _deep_search(query: str, max_results: int = 10) -> tuple[list[dict], str]:
@@ -48,6 +50,62 @@ def _deep_search(query: str, max_results: int = 10) -> tuple[list[dict], str]:
 #     return ToolResult.ok(formatted)
 
 
+def _wolfram_api_query(query: str) -> ToolResult | None:
+    """使用 WolframAlpha Full Results API v2 查询，失败返回 None 以便回退。"""
+    try:
+        import urllib.request, urllib.parse
+        params = urllib.parse.urlencode({
+            "appid": WOLFRAMALPHA_API_KEY,
+            "input": query,
+            "format": "plaintext",
+            "output": "json",
+        })
+        url = f"https://api.wolframalpha.com/v2/query?{params}"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        qr = data.get("queryresult", {})
+        if not qr.get("success", False):
+            return ToolResult.fail(f"WolframAlpha 无法理解查询: {query}")
+
+        pods = qr.get("pods", [])
+        if not pods:
+            return ToolResult.fail(f"WolframAlpha 无结果: {query}")
+
+        lines: list[str] = []
+        extra_count = 0
+        for pod in pods:
+            pod_id = pod.get("id", "")
+            title = pod.get("title", "")
+            is_primary = pod.get("primary", False)
+            subpods = pod.get("subpods", [])
+            plaintexts = [sp.get("plaintext", "") for sp in subpods if sp.get("plaintext")]
+            content = " | ".join(plaintexts)
+            if not content:
+                continue
+
+            if pod_id == "Input":
+                lines.insert(0, f"【{title}】{content}")
+            elif is_primary:
+                # 插入到 Input 之后（位置 1），确保主结果紧跟输入解释
+                if lines and lines[0].startswith("【Input"):
+                    lines.insert(1, f"【{title}】{content}")
+                else:
+                    lines.insert(0, f"【{title}】{content}")
+            else:
+                extra_count += 1
+                if extra_count <= 3:
+                    lines.append(f"【{title}】{content}")
+
+        if not lines:
+            return ToolResult.fail(f"WolframAlpha 无可用结果: {query}")
+
+        return ToolResult.ok(f"WolframAlpha: {query}\n" + "\n".join(lines))
+    except Exception:
+        return None
+
+
 @register_tool(
     name="wolfram_query",
     description="WolframAlpha知识计算。用于数学计算、单位转换、科学查询等。",
@@ -63,6 +121,17 @@ def _deep_search(query: str, max_results: int = 10) -> tuple[list[dict], str]:
     max_frequency=5,
 )
 def wolfram_query(query: str) -> ToolResult:
+    # 优先使用 API
+    if WOLFRAMALPHA_API_KEY:
+        result = _wolfram_api_query(query)
+        if result is not None:
+            return result
+        # API 失败，回退到 web scraping
+
+    if not WOLFRAMALPHA_API_KEY:
+        logger.warning("WOLFRAMALPHA_API_KEY 未设置，使用不可靠的 web scraping 回退方案")
+
+    # 回退：web scraping
     try:
         import urllib.request, urllib.parse, re
         url = f"https://www.wolframalpha.com/input?i={urllib.parse.quote(query)}"

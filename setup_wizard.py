@@ -92,7 +92,7 @@ OPTIONAL_KEYS = [
     {
         "key": "WOLFRAMALPHA_API_KEY",
         "label": "WolframAlpha 知识计算密钥",
-        "desc": "知识计算引擎 API Key",
+        "desc": "知识计算引擎（数学方程求解、单位转换、科学数据查询、化学方程式配平、物理常数查询）",
         "url": "https://products.wolframalpha.com/api/",
         "url_desc": "注册 → Get AppID",
     },
