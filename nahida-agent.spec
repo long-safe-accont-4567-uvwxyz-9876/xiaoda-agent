@@ -208,7 +208,18 @@ hiddenimports = [
     'web.routers.tools',
     'web.routers.setup',
     'web.routers.model_discovery',
+    'web.model_capabilities',
     'setup_wizard',
+
+    # Top-level modules imported by agent_core.py (imported in web.server lifespan)
+    'model_router',
+    'agent_context',
+    'slash_commands',
+    'klee_agent',
+    'agent_dispatcher',
+    'task_orchestrator',
+    'instinct_manager',
+    'hooks',
 ]
 
 # Collect any sub-modules that static analysis might miss
