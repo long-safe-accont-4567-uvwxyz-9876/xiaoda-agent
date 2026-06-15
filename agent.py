@@ -39,10 +39,10 @@ def main():
     if is_first_run():
         if args.web:
             # Web 模式下不弹出 CLI 向导，由 WebUI /setup 页面引导配置
-            print("\n  \033[93m⚠ 检测到首次运行，将以降级模式启动 WebUI\033[0m")
-            print("  \033[93m  请在浏览器中打开 WebUI 完成 API Key 配置\033[0m\n")
+            print("\n  [!] 检测到首次运行，将以降级模式启动 WebUI")
+            print("      请在浏览器中打开 WebUI 完成 API Key 配置\n")
         else:
-            print("\n  \033[93m⚠ 检测到首次运行，启动配置向导...\033[0m\n")
+            print("\n  [!] 检测到首次运行，启动配置向导...\n")
             from setup_wizard import main as wizard_main
             wizard_main()
             # 向导完成后重新加载 .env
