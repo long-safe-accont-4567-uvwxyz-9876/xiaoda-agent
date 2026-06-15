@@ -37,7 +37,18 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build frontend
+        working-directory: web/frontend
+        run: |
+          npm install
+          npm run build
+
+      - name: Install Python dependencies
         run: |
           pip install pyinstaller
           pip install -r requirements.txt || true

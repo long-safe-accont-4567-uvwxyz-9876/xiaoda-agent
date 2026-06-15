@@ -55,6 +55,11 @@ cd /d "%~dp0"
 :: Start in Web mode by default (first-run will auto-trigger setup wizard)
 echo   Starting Nahida Agent...
 echo.
+
+:: Open browser after a short delay (in background)
+start "" cmd /c "timeout /t 5 /nobreak >nul & start http://localhost:8080/#/setup"
+
+:: Run the main executable
 "%EXE_PATH%" --web
 
 :: Check exit code

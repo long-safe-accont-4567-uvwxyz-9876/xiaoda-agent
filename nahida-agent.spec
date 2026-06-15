@@ -206,6 +206,8 @@ hiddenimports = [
     'web.routers.schedule',
     'web.routers.system',
     'web.routers.tools',
+    'web.routers.setup',
+    'web.routers.model_discovery',
 ]
 
 # Collect any sub-modules that static analysis might miss
