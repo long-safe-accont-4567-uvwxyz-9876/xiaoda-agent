@@ -122,8 +122,11 @@
 - **get_weather(city)** — 获取城市天气信息
   - 用法示例：`get_weather(city="北京")`
 
-- **wolfram_query(query)** — WolframAlpha知识计算，用于数学、单位转换、科学查询
-  - 用法示例：`wolfram_query(query="100 USD to CNY")`
+- **wolfram_query(query)** — WolframAlpha 知识计算引擎（query 建议用英文）
+  - 适用于：解方程、单位转换、科学数据、化学分子量、物理常数、微积分
+  - 用法示例：`wolfram_query(query="solve x^2+3x-4=0")`
+  - 用法示例：`wolfram_query(query="100 km/h to mph")`
+  - 注意：简单四则运算用 calculator，搜索资讯用 web_search
 
 ### 文件读取工具
 - **search_files(pattern, directory)** — 搜索本地文件

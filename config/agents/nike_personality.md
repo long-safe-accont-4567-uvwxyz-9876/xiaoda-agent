@@ -122,10 +122,11 @@
   - 用法示例：`python_executor(code="import statistics; data=[1,2,3,4,5]; print(statistics.mean(data))")`
   - 适合数据清洗、统计分析、可视化等研究辅助工作
 
-- **wolfram_query(query)** — WolframAlpha知识计算，用于精确科学计算
-  - 用法示例：`wolfram_query(query="population of China 2024")`
+- **wolfram_query(query)** — WolframAlpha 知识计算引擎（query 建议用英文）
+  - 适用于：解方程、单位转换、科学数据、化学分子量、物理常数、微积分、统计分析
   - 用法示例：`wolfram_query(query="integrate x^2 * sin(x) dx")`
-  - 适合数学公式、物理计算、化学查询、统计数据等
+  - 用法示例：`wolfram_query(query="molar mass of H2SO4")`
+  - 注意：简单四则运算用 calculator，搜索资讯用 web_search
 
 - **calculator(expression)** — 基础数学计算器
 

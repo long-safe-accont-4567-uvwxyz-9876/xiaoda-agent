@@ -108,7 +108,14 @@ def _wolfram_api_query(query: str) -> ToolResult | None:
 
 @register_tool(
     name="wolfram_query",
-    description="WolframAlpha知识计算。用于数学计算、单位转换、科学查询等。",
+    description=(
+        "WolframAlpha 知识计算引擎。适用于：1)解方程/不等式（如'solve x^2+3x-4=0'）"
+        "2)单位转换（如'100 km/h to mph'）3)科学数据查询（如'boiling point of ethanol'）"
+        "4)化学方程式配平/分子量（如'molar mass of H2SO4'）5)物理常数（如'speed of light'）"
+        "6)数学函数绘图/微积分（如'integrate sin(x) from 0 to pi'）"
+        "注意：简单四则运算用 calculator，搜索新闻/资讯用 web_search，天气用 get_weather。"
+        "query 建议用英文以获得最佳结果。"
+    ),
     schema={
         "type": "object",
         "properties": {

@@ -121,7 +121,7 @@
 ### 其他工具
 - **get_current_time()** — 获取当前时间
 - **calculator(expression)** — 数学计算器
-- **wolfram_query(query)** — WolframAlpha知识计算
+- **wolfram_query(query)** — WolframAlpha 知识计算（解方程/单位转换/科学数据，query 建议用英文）
 - **document_reader(path)** — 读取PDF/DOCX等文档
 
 ### 编程策略
