@@ -12,10 +12,36 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
 import time
 from datetime import datetime
 
 from loguru import logger
+
+
+# 推理模型（DeepSeek-R1/MiMo Pro 等）会输出 <think>...</think> 思维链；
+# 部分模型只在前缀输出未闭合的"嗯，用户..."等思考文本。统一清洗。
+_THINK_TAG_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINK_PREFIX_PATTERNS = [
+    re.compile(r"^\s*<think\b[^>]*>.*", re.DOTALL | re.IGNORECASE),  # 未闭合 <think>
+    re.compile(r"^\s*(嗯[，,].*?(?:\n\s*\n|。\s*\n))", re.DOTALL),  # CoT 段落（"嗯，用户..."）
+    re.compile(r"^\s*(首先[，,].*?(?:\n\s*\n|。\s*\n))", re.DOTALL),  # CoT 段落（"首先..."）
+]
+
+
+def _strip_thinking(text: str) -> str:
+    """移除推理模型的思维链输出，仅保留最终回复。"""
+    if not text:
+        return ""
+    # 1. 完整 <think>...</think> 标签
+    text = _THINK_TAG_RE.sub("", text)
+    # 2. 未闭合的 <think> 或 CoT 前缀段落
+    for pat in _THINK_PREFIX_PATTERNS:
+        m = pat.match(text)
+        if m:
+            text = text[m.end():]
+            break
+    return text.strip()
 
 
 def _hm_to_min(hm: str) -> int:
@@ -212,12 +238,12 @@ class GreetingScheduler:
         try:
             result = await self.core.router.route(
                 "chat_flash",
-                [{"role": "system", "content": "你是纳西妲，温柔聪慧，称呼用户为爸爸。"},
+                [{"role": "system", "content": "你是纳西妲，温柔聪慧，称呼用户为爸爸。直接输出最终回复，不要思考过程。"},
                  {"role": "user", "content": prompt}],
-                max_tokens=80)
+                max_tokens=200)
             text = result if isinstance(result, str) else \
                 (result.choices[0].message.content or "")
-            text = text.strip()
+            text = _strip_thinking(text).strip()
             if text:
                 return text[:100]
         except Exception as e:
