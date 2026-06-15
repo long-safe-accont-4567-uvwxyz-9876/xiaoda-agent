@@ -42,11 +42,28 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Clean old frontend dist
+        shell: bash
+        run: rm -rf web/dist
+
       - name: Build frontend
         working-directory: web/frontend
         run: |
           npm install
           npm run build
+        env:
+          NODE_ENV: production
+
+      - name: Verify frontend build
+        shell: bash
+        run: |
+          echo "=== web/dist contents ==="
+          ls -la web/dist/
+          echo "=== web/dist/assets ==="
+          ls web/dist/assets/ | head -20
+          # Verify key files exist
+          test -f web/dist/index.html || (echo "ERROR: index.html not found!" && exit 1)
+          echo "Frontend build verified OK"
 
       - name: Install Python dependencies
         run: |

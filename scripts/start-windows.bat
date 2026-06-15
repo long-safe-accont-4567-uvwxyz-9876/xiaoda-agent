@@ -56,8 +56,8 @@ cd /d "%~dp0"
 echo   Starting Nahida Agent...
 echo.
 
-:: Open browser after a short delay (in background)
-start "" cmd /c "timeout /t 5 /nobreak >nul & start http://localhost:8080/#/setup"
+:: Launch browser once server is ready (background polling)
+start "" powershell -NoProfile -Command "while($true){try{$r=Invoke-WebRequest -Uri 'http://localhost:8080/api/v1/setup/first-run' -UseBasicParsing -TimeoutSec 2;if($r.StatusCode -eq 200){Start-Process 'http://localhost:8080/#/setup';break}}catch{};Start-Sleep -Seconds 1}"
 
 :: Run the main executable
 "%EXE_PATH%" --web
