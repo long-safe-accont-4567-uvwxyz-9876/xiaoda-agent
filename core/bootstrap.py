@@ -37,7 +37,19 @@ class AgentCoreBootstrapper:
         self.core = core
 
     async def bootstrap(self) -> None:
-        """执行完整的初始化流程。"""
+        """执行完整的初始化流程。缺少 API Key 时降级启动，仅提供 WebUI 设置页面。"""
+        from config import MIMO_API_KEY as _mimo_key
+        if not _mimo_key or not _mimo_key.strip():
+            logger.warning("agent_core.degraded_mode reason=no_mimo_api_key")
+            # 仅初始化数据库等不依赖 API Key 的基础设施
+            try:
+                await self._init_infrastructure()
+                await self._init_cognitive()
+            except Exception as e:
+                logger.warning("agent_core.degraded_init_partial_error error={}", str(e))
+            # _initialized 保持 False → process() 返回降级回复
+            return
+
         await self._init_infrastructure()
         await self._init_cognitive()
         await self.core.klee.init()
