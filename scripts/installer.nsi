@@ -29,8 +29,6 @@ SetCompressor /SOLID lzma
 Section "MainSection" SEC01
 SetOutPath "$INSTDIR"
 SetOverwrite on
-; Remove old config to ensure clean install (prevent stale .env from previous version)
-Delete "$INSTDIR\.env"
 File /r "dist\nahida-agent\*.*"
 CreateShortCut "$DESKTOP\纳西妲Agent.lnk" "$INSTDIR\start-windows.bat" "" "$INSTDIR\nahida-agent.exe" 0
 CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
