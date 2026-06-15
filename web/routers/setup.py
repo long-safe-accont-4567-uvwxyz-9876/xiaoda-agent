@@ -66,7 +66,7 @@ async def _test_mimo(key_value: str) -> tuple[bool, str]:
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.post(
-                "https://xiaomimimo.com/api/v1/chat/completions",
+                "https://api.xiaomimimo.com/v1/chat/completions",
                 headers={"Authorization": f"Bearer {key_value}"},
                 json={
                     "model": "mimo-v2.5",
@@ -168,7 +168,7 @@ async def _test_agnes(key_value: str) -> tuple[bool, str]:
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.get(
-                "https://api.agnes-ai.com/v1/models",
+                "https://apihub.agnes-ai.com/v1/models",
                 headers={"Authorization": f"Bearer {key_value}"},
             )
             if resp.status_code == 200:
@@ -407,7 +407,37 @@ async def save_keys(body: dict):
     _auto_register_providers(updates)
 
     logger.info("setup.keys_saved count={}", len(updates))
-    return Envelope(data={"saved": list(updates.keys())})
+
+    # 重新加载环境变量，使新配置立即生效
+    import os
+    from dotenv import load_dotenv
+    load_dotenv(ENV_PATH, override=True)
+
+    # 尝试重新初始化 core（从降级模式恢复）
+    try:
+        from web.server import app
+        if hasattr(app, "state") and hasattr(app.state, "core"):
+            core = app.state.core
+            if not core._initialized:
+                logger.info("setup.reinitializing_core")
+                await core.init()
+                if core._initialized:
+                    from web.server import _apply_model_overrides
+                    await _apply_model_overrides(core)
+                    logger.info("setup.core_reinitialized")
+                    # 刷新 AgentRegistry（注册内置子代理）
+                    try:
+                        from web.agent_registry import AgentRegistry
+                        registry = getattr(app.state, "agent_registry", None)
+                        if registry:
+                            await registry.load_persisted()
+                            logger.info("setup.registry_refreshed")
+                    except Exception as e:
+                        logger.warning("setup.registry_refresh_failed error={}", str(e))
+    except Exception as e:
+        logger.warning("setup.core_reinit_failed error={}", str(e))
+
+    return Envelope(data={"saved": list(updates.keys()), "need_restart": True})
 
 
 # 已知免费模型平台 → Provider 映射
@@ -434,7 +464,7 @@ _KNOWN_PROVIDERS = {
         "id": "agnes",
         "label": "Agnes AI",
         "format": "openai",
-        "base_url": "https://api.agnes-ai.com/v1",
+        "base_url": "https://apihub.agnes-ai.com/v1",
     },
 }
 

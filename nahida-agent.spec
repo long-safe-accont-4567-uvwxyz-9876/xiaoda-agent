@@ -59,6 +59,8 @@ for pkg in ('jieba',):
 hiddenimports = [
     # Core dependencies
     'aiosqlite',
+    'dotenv',
+    'httpx',
     'loguru',
     'openai',
     'pydantic',
@@ -206,6 +208,21 @@ hiddenimports = [
     'web.routers.schedule',
     'web.routers.system',
     'web.routers.tools',
+    'web.routers.setup',
+    'web.routers.model_discovery',
+    'web.model_capabilities',
+    'setup_wizard',
+
+    # Top-level modules imported by agent_core.py (imported in web.server lifespan)
+    'model_router',
+    'agent_context',
+    'slash_commands',
+    'klee_agent',
+    'agent_dispatcher',
+    'task_orchestrator',
+    'instinct_manager',
+    'belief_router',
+    'hooks',
 ]
 
 # Collect any sub-modules that static analysis might miss
@@ -242,9 +259,7 @@ excludes = [
     'win32com',
     'pythoncom',
     'pywin',
-    'winreg',
     'msvcrt',
-    'ntpath',
 ]
 
 # ---------------------------------------------------------------------------
@@ -288,6 +303,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=os.path.join(SPECPATH, 'assets', 'nahida-icon.ico'),
 )
 
 # ---------------------------------------------------------------------------

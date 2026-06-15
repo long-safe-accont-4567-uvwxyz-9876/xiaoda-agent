@@ -52,9 +52,17 @@ if exist "%~dp0nahida-agent.exe" (
 :: Change to the script directory
 cd /d "%~dp0"
 
+:: Force UTF-8 output encoding (prevents UnicodeEncodeError with GBK on Chinese Windows)
+set PYTHONIOENCODING=utf-8
+
 :: Start in Web mode by default (first-run will auto-trigger setup wizard)
 echo   Starting Nahida Agent...
 echo.
+
+:: Launch browser once server is ready (background polling)
+start "" powershell -NoProfile -Command "while($true){try{$r=Invoke-WebRequest -Uri 'http://localhost:8080/api/v1/setup/first-run' -UseBasicParsing -TimeoutSec 2;if($r.StatusCode -eq 200){Start-Process 'http://localhost:8080/#/setup';break}}catch{};Start-Sleep -Seconds 1}"
+
+:: Run the main executable
 "%EXE_PATH%" --web
 
 :: Check exit code

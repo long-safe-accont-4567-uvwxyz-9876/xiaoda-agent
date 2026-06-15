@@ -27,7 +27,7 @@ async def _apply_model_overrides(core):
         "SILICONFLOW_API_KEY": ("siliconflow", "openai", "https://api.siliconflow.cn/v1", "SiliconFlow 硅基流动"),
         "OPENROUTER_API_KEY": ("openrouter", "openai", "https://openrouter.ai/api/v1", "OpenRouter"),
         "MODELSCOPE_ACCESS_TOKEN": ("modelscope", "openai", "https://api-inference.modelscope.cn/v1", "ModelScope 魔搭"),
-        "AGNES_API_KEY": ("agnes", "openai", os.getenv("AGNES_BASE_URL", "https://api.agnes-ai.com/v1"), "Agnes AI"),
+        "AGNES_API_KEY": ("agnes", "openai", os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1"), "Agnes AI"),
     }
     for env_key, (pid, fmt, base_url, label) in _KNOWN_ENV_PROVIDERS.items():
         api_key = os.getenv(env_key, "").strip()
@@ -122,51 +122,63 @@ async def lifespan(app: FastAPI):
     await registry.load_persisted()
     app.state.agent_registry = registry
 
-    await _apply_model_overrides(core)
-    apply_tool_overrides()
-    await _start_user_mcp_servers(core)
+    # 降级模式（无 API Key）：仅启动 WebUI，提供 /setup 配置页面
+    if not core._initialized:
+        logger.info("webui.degraded_mode")
+        # 初始化空的 plugin/media/scheduler 避免后续 AttributeError
+        app.state.plugin_manager = None
+        app.state.media_queue = None
+        app.state.greeting_scheduler = None
+        app.state.qq_task = None
+        app.state.last_emotion = None
+        logger.info("webui.lifespan.ready_degraded")
+    else:
+        await _apply_model_overrides(core)
+        apply_tool_overrides()
+        await _start_user_mcp_servers(core)
 
-    # Initialize Plugin Manager
-    from plugins.manager import PluginManager
-    plugin_manager = PluginManager(
-        tool_registry=None,
-        hook_engine=core._hook_engine if hasattr(core, "_hook_engine") else None,
-        memory_manager=core.memory if hasattr(core, "memory") else None,
-        knowledge_graph=core.kg if hasattr(core, "kg") else None,
-        mcp_manager=core._mcp_manager,
-        agent_core=core,
-    )
-    # Set tool_registry reference
-    import tool_engine.tool_registry as _tool_registry_mod
-    plugin_manager._tool_registry = _tool_registry_mod
-    # Discover plugins
-    plugin_manager.discover()
-    app.state.plugin_manager = plugin_manager
+        # Initialize Plugin Manager
+        from plugins.manager import PluginManager
+        plugin_manager = PluginManager(
+            tool_registry=None,
+            hook_engine=core._hook_engine if hasattr(core, "_hook_engine") else None,
+            memory_manager=core.memory if hasattr(core, "memory") else None,
+            knowledge_graph=core.kg if hasattr(core, "kg") else None,
+            mcp_manager=core._mcp_manager,
+            agent_core=core,
+        )
+        # Set tool_registry reference
+        import tool_engine.tool_registry as _tool_registry_mod
+        plugin_manager._tool_registry = _tool_registry_mod
+        # Discover plugins
+        plugin_manager.discover()
+        app.state.plugin_manager = plugin_manager
 
-    queue = MediaTaskQueue(core, manager.broadcast)
-    queue.start()
-    app.state.media_queue = queue
+        queue = MediaTaskQueue(core, manager.broadcast)
+        queue.start()
+        app.state.media_queue = queue
 
-    scheduler = GreetingScheduler(core, get_config_service(), manager.broadcast)
-    scheduler.start()
-    app.state.greeting_scheduler = scheduler
+        scheduler = GreetingScheduler(core, get_config_service(), manager.broadcast)
+        scheduler.start()
+        app.state.greeting_scheduler = scheduler
 
-    # QQ Bot 与 WebUI 同进程：共享同一个 AgentCore，会话/记忆/问候全部同步
-    qq_task = None
-    if os.getenv("QQBOT_APP_ID") and os.getenv("ENABLE_QQ_BOT", "true").lower() in ("true", "1", "yes"):
-        from qq_bot_adapter import run_qq_bot
-        from config import AGENT_CONFIG
-        qq_task = asyncio.create_task(
-            run_qq_bot(core, sandbox=AGENT_CONFIG.get("qq_bot", {}).get("is_sandbox", False)))
-        logger.info("webui.qq_bot_task_started")
-    app.state.qq_task = qq_task
+        # QQ Bot 与 WebUI 同进程：共享同一个 AgentCore，会话/记忆/问候全部同步
+        qq_task = None
+        if os.getenv("QQBOT_APP_ID") and os.getenv("ENABLE_QQ_BOT", "true").lower() in ("true", "1", "yes"):
+            from qq_bot_adapter import run_qq_bot
+            from config import AGENT_CONFIG
+            qq_task = asyncio.create_task(
+                run_qq_bot(core, sandbox=AGENT_CONFIG.get("qq_bot", {}).get("is_sandbox", False)))
+            logger.info("webui.qq_bot_task_started")
+        app.state.qq_task = qq_task
 
-    app.state.last_emotion = None
-    logger.info("webui.lifespan.ready")
+        app.state.last_emotion = None
+        logger.info("webui.lifespan.ready")
 
     yield
 
     logger.info("webui.lifespan.shutdown")
+    qq_task = getattr(app.state, "qq_task", None)
     if qq_task:
         qq_task.cancel()
         try:
@@ -180,8 +192,12 @@ async def lifespan(app: FastAPI):
             await plugin_mgr.shutdown_all()
         except Exception:
             pass
-    await scheduler.stop()
-    await queue.stop()
+    greeting_scheduler = getattr(app.state, "greeting_scheduler", None)
+    if greeting_scheduler:
+        await greeting_scheduler.stop()
+    media_queue = getattr(app.state, "media_queue", None)
+    if media_queue:
+        await media_queue.stop()
     if owns_core:
         try:
             await core.shutdown()
