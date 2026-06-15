@@ -52,6 +52,9 @@ if exist "%~dp0nahida-agent.exe" (
 :: Change to the script directory
 cd /d "%~dp0"
 
+:: Force UTF-8 output encoding (prevents UnicodeEncodeError with GBK on Chinese Windows)
+set PYTHONIOENCODING=utf-8
+
 :: Start in Web mode by default (first-run will auto-trigger setup wizard)
 echo   Starting Nahida Agent...
 echo.
