@@ -59,6 +59,7 @@ for pkg in ('jieba',):
 hiddenimports = [
     # Core dependencies
     'aiosqlite',
+    'dotenv',
     'httpx',
     'loguru',
     'openai',
