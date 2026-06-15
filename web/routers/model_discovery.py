@@ -243,7 +243,7 @@ def _ensure_custom_provider(provider: str, router_obj) -> None:
         base_url = "https://api-inference.modelscope.cn/v1"
     elif provider == "agnes":
         api_key = os.getenv("AGNES_API_KEY", "")
-        base_url = os.getenv("AGNES_BASE_URL", "https://api.agnes-ai.com/v1")
+        base_url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
     else:
         logger.warning("discover.unknown_provider provider={}", provider)
         return
