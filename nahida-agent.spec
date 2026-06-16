@@ -14,12 +14,10 @@ SPECPATH = os.path.dirname(os.path.abspath(SPEC))  # /home/orangepi/ai-agent
 # Helper: recursively collect all files under a directory as datas tuples
 # ---------------------------------------------------------------------------
 def _tree_datas(root, prefix):
-    """Return list of (src, dest) tuples for every file under *root*."""
     result = []
     _exclude = {'.env', '.env.prod', '.env.local', 'webui_overrides.json'}
     _exclude_dirs = {'credentials', '__pycache__', '.git', 'node_modules'}
     for dirpath, _dirnames, filenames in os.walk(root):
-        # 跳过排除的目录
         _dirnames[:] = [d for d in _dirnames if d not in _exclude_dirs]
         for fn in filenames:
             if fn in _exclude:
@@ -33,7 +31,7 @@ def _tree_datas(root, prefix):
 
 
 # ---------------------------------------------------------------------------
-# Data files to bundle
+# Data files – folders that Python code reads at runtime
 # ---------------------------------------------------------------------------
 datas = []
 
@@ -42,6 +40,9 @@ datas += _tree_datas(os.path.join(SPECPATH, 'config'), 'config')
 
 # web/dist/ directory (pre-built Vue frontend)
 datas += _tree_datas(os.path.join(SPECPATH, 'web', 'dist'), os.path.join('web', 'dist'))
+
+# web/routers/__init__.py (required for package imports in PyInstaller)
+datas.append((os.path.join(SPECPATH, 'web', 'routers', '__init__.py'), os.path.join('web', 'routers')))
 
 # db/schema.sql
 datas.append((os.path.join(SPECPATH, 'db', 'schema.sql'), 'db'))
@@ -65,23 +66,71 @@ for pkg in ('jieba',):
 # Hidden imports
 # ---------------------------------------------------------------------------
 hiddenimports = [
-    # Core dependencies
-    'aiosqlite',
-    'dotenv',
-    'httpx',
-    'loguru',
+    # LLM clients
     'openai',
+    'httpx',
+    # QQ bot
+    'qq_bot_adapter',
+    # Plugins
+    'plugins',
+    'plugins.manager',
+    'plugins.hello',
+    'plugins.builtin',
+    'plugins.weather_plugin',
+    'plugins.translation_plugin',
+    'plugins.news_plugin',
+    'plugins.market_plugin',
+    'plugins.calendar_plugin',
+    'plugins.code_plugin',
+    'plugins.file_plugin',
+    'plugins.email_plugin',
+    'plugins.reminder_plugin',
+    'plugins.search_plugin',
+    'plugins.stock_plugin',
+    'plugins.time_plugin',
+    'plugins.wolfram_plugin',
+    # MCP tools
+    'tool_engine',
+    'tool_engine.mcp_client',
+    'tool_engine.tool_registry',
+    # Web modules
+    'web',
+    'web.ws_hub',
+    'web.config_service',
+    'web.custom_providers',
+    'web.media_tasks',
+    'web.greeting_scheduler',
+    'web.agent_registry',
+    # CLI
+    'cli_client',
+    'cli',
+    # Config
+    'config',
+    'utils',
+    'utils.logging_config',
+    'utils.vision_service',
+    # Core
+    'agent_core',
+    'core',
+    'model_router',
+    'setup_wizard',
+    'knowledge_graph',
+    'memory',
+    'models',
+    # Database
+    'aiosqlite',
+    'sqlite3',
+    # Logging
+    'loguru',
+    # Serialization
     'pydantic',
+    'yaml',
+    # Data processing
     'jieba',
-    'pilk',
-    'pdfplumber',
-    'docx',
-    'pptx',
-    'openpyxl',
-    'html2text',
-
-    # Uvicorn internals (often missed by static analysis)
-    'uvicorn.logging',
+    'numpy',
+    'PIL',
+    # Web server
+    'uvicorn',
     'uvicorn.loops',
     'uvicorn.loops.auto',
     'uvicorn.protocols',
@@ -89,120 +138,25 @@ hiddenimports = [
     'uvicorn.protocols.http.auto',
     'uvicorn.protocols.websockets',
     'uvicorn.protocols.websockets.auto',
-    'uvicorn.lifespan',
-    'uvicorn.lifespan.on',
-
-    # Web framework
+    'websockets',
     'sse_starlette',
+    'python_multipart',
     'starlette',
-    'anyio',
+    # Rich console
+    'rich',
+    # Other
+    'dotenv',
+]
 
-    # QQ bot SDK
-    'qq_botpy',
-    'botpy',
+# submodules collect
+for pkg in ('plugins', 'web', 'config', 'utils', 'tool_engine'):
+    try:
+        hiddenimports += collect_submodules(pkg)
+    except Exception:
+        pass
 
-    # Search
-    'duckduckgo_search',
-
-    # SQLite extensions
-    'sqlite_vec',
-
-    # Project sub-packages (ensure PyInstaller picks them up)
-    'core',
-    'core.background_tasks',
-    'core.bootstrap',
-    'core.chat_processor',
-    'core.delegation',
-    'core.router_engine',
-    'core.tool_orchestrator',
-    'db',
-    'db.database',
-    'db.db_analytics',
-    'db.db_knowledge',
-    'db.db_learning',
-    'db.db_memory',
-    'db.db_notebook',
-    'db.session_store',
-    'emotion',
-    'emotion.emoji_config',
-    'emotion.emotion_enum',
-    'emotion.emotion_simple',
-    'emotion.nudge_engine',
-    'emotion.portrait_manager',
-    'emotion.sticker_manager',
-    'emotion.tts_engine',
-    'memory',
-    'memory.context_compressor',
-    'memory.context_usage',
-    'memory.knowledge_graph',
-    'memory.learning_manager',
-    'memory.memory_manager',
-    'memory.notebook_manager',
-    'memory.vector_store',
-    'plugins',
-    'plugins.context',
-    'plugins.discovery',
-    'plugins.echo.echo_plugin',
-    'plugins.manager',
-    'plugins.manifest',
-    'plugins.permissions',
-    'plugins.sdk',
-    'plugins.testing',
-    'security',
-    'security.permission_manager',
-    'security.sandbox_config',
-    'security.security',
-    'tool_engine',
-    'tool_engine.mcp_client',
-    'tool_engine.tool_call_handler',
-    'tool_engine.tool_executor',
-    'tool_engine.tool_guardrails',
-    'tool_engine.tool_registry',
-    'tool_engine.tool_repair',
-    'tools',
-    'tools.agnes_tools',
-    'tools.code_tools_v2',
-    'tools.document_tools',
-    'tools.file_tools_v2',
-    'tools.hardware_tools',
-    'tools.memory_tool',
-    'tools.multi_search_tools',
-    'tools.nudge_tool',
-    'tools.system_tools',
-    'tools.vision_tools',
-    'tools.web_browse_tools',
-    'tools.web_tools_v2',
-    'transports',
-    'transports.agnes_transport',
-    'transports.base',
-    'transports.mimo_transport',
-    'utils',
-    'utils.atomic_write',
-    'utils.credential_pool',
-    'utils.error_classifier',
-    'utils.file_receiver',
-    'utils.lazy_deps',
-    'utils.logging_config',
-    'utils.metrics',
-    'utils.nahida_acp',
-    'utils.npu_inference',
-    'utils.prompt_caching',
-    'utils.result_wrapper',
-    'utils.smart_error_handler',
-    'utils.text_utils',
-    'utils.vision_service',
-    'web',
-    'web.agent_registry',
-    'web.app',
-    'web.config_service',
-    'web.custom_providers',
-    'web.greeting_scheduler',
-    'web.media_tasks',
-    'web.probes',
-    'web.schemas',
-    'web.server',
-    'web.tool_events',
-    'web.ws_hub',
+# web/routers – every router module MUST be listed for PyInstaller
+_router_mods = [
     'web.routers',
     'web.routers.agents',
     'web.routers.auth',
@@ -218,63 +172,22 @@ hiddenimports = [
     'web.routers.tools',
     'web.routers.setup',
     'web.routers.model_discovery',
-    'web.model_capabilities',
-    'setup_wizard',
-
-    # Top-level modules imported by agent_core.py (imported in web.server lifespan)
-    'model_router',
-    'agent_context',
-    'slash_commands',
-    'klee_agent',
-    'agent_dispatcher',
-    'task_orchestrator',
-    'instinct_manager',
-    'belief_router',
-    'hooks',
 ]
+hiddenimports.extend(_router_mods)
 
-# Collect any sub-modules that static analysis might miss
-for pkg in ('openai', 'pydantic', 'starlette', 'anyio', 'uvicorn'):
-    try:
-        hiddenimports += collect_submodules(pkg)
-    except Exception:
-        pass
+try:
+    hiddenimports += collect_submodules('web.routers')
+except Exception:
+    pass
 
-# ---------------------------------------------------------------------------
-# Excludes – trim the bundle by removing unused heavy modules
-# ---------------------------------------------------------------------------
-excludes = [
-    'tkinter',
-    '_tkinter',
-    'Tkinter',
-    'tcl',
-    'tk',
-    'curses',
-    'pdb',
-    'pydoc',
-    'doctest',
-    'unittest',
-    'test',
-    'tests',
-    'setuptools',
-    'pip',
-    'wheel',
-    'distutils',
-    'lib2to3',
-    'xmlrpc',
-    'py_compile',
-    'compileall',
-    'win32com',
-    'pythoncom',
-    'pywin',
-    'msvcrt',
-]
+# Exclude large unnecessary packages
+excluded = []
 
 # ---------------------------------------------------------------------------
 # Analysis
 # ---------------------------------------------------------------------------
 a = Analysis(
-    [os.path.join(SPECPATH, 'agent.py')],
+    ['agent.py'],
     pathex=[SPECPATH],
     binaries=[],
     datas=datas,
@@ -282,13 +195,13 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=excludes,
+    excludes=excluded,
     noarchive=False,
     optimize=0,
 )
 
 # ---------------------------------------------------------------------------
-# PYZ – compressed Python modules archive
+# PYZ – all pure-Python modules compiled into a zip
 # ---------------------------------------------------------------------------
 pyz = PYZ(a.pure)
 
