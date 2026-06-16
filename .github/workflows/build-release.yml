@@ -42,11 +42,13 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Build frontend
+      - name: Install frontend deps
         working-directory: web/frontend
-        run: |
-          npm install
-          npx vite build
+        run: npm install
+
+      - name: Build frontend (vite)
+        working-directory: web/frontend
+        run: node ./node_modules/vite/bin/vite.js build
 
       - name: Verify frontend build
         shell: bash
@@ -62,6 +64,17 @@ jobs:
 
       - name: Build with PyInstaller
         run: pyinstaller nahida-agent.spec --clean --noconfirm
+
+      - name: Extract version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Package (Windows - NSIS Installer)
         if: runner.os == 'Windows'
@@ -101,17 +114,6 @@ jobs:
           cp scripts/auto-update.sh dist/nahida-agent/scripts/
           chmod +x dist/nahida-agent/scripts/auto-update.sh
           tar -czf nahida-agent-linux-x86_64-v${VERSION}.tar.gz -C dist nahida-agent
-
-      - name: Extract version
-        id: version
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ inputs.version }}"
-          else
-            VERSION="${GITHUB_REF_NAME#v}"
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
