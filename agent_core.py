@@ -379,10 +379,9 @@ class AgentCore:
         # 但保留天气、搜索等用户可能期望模型主动使用的工具
         tools = ChatProcessor.filter_tools_for_simple_task(tools, clean_input, self._is_simple_task)
 
-        # 表情包意图时禁用委托：sticker 由主体流程附带，委托出去反而丢失
+        # 表情包意图时禁用所有工具：sticker 由系统自动附带，模型只需回复文字
         if _sticker_intent and tools:
-            tools = [t for t in tools
-                     if t.get("function", {}).get("name") not in ("call_klee", "delegate_task")] or None
+            tools = None
 
         should_escalate, reason = self._should_escalate_to_pro(user_input, tools)
         base_task = "chat_pro" if should_escalate else "chat"
