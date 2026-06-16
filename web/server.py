@@ -128,8 +128,11 @@ async def lifespan(app: FastAPI):
     await registry.load_persisted()
     app.state.agent_registry = registry
 
-    # 降级模式（无 API Key）：仅启动 WebUI，提供 /setup 配置页面
-    if not core._initialized:
+    # 降级模式：直接从 .env 文件检查 MIMO_API_KEY（不用 os.environ，防止 key 泄露）
+    from setup_wizard import _load_env_values
+    env_vals = _load_env_values()
+    mimo_key = env_vals.get("MIMO_API_KEY", "").strip() if env_vals else ""
+    if not mimo_key:
         logger.info("webui.degraded_mode")
         # 初始化空的 plugin/media/scheduler 避免后续 AttributeError
         app.state.plugin_manager = None
