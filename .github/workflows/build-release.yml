@@ -58,6 +58,12 @@ jobs:
         run: |
           npm install
           npm run build
+          # Move dist to a fresh location to avoid any stale file issues
+          rm -rf ../dist-new 2>/dev/null || true
+          mv ../dist ../dist-new 2>/dev/null || true
+          mkdir -p ../dist
+          cp -r ../dist-new/* ../dist/
+          rm -rf ../dist-new
 
       - name: Verify frontend build
         shell: bash
