@@ -370,6 +370,11 @@ async def test_single_key(key_name: str, key_value: str, extra: dict | None = No
     if key_name == "GITHUB_PERSONAL_ACCESS_TOKEN":
         return await _test_github(key_value)
 
+    # 不需要调用外部 API 的配置项，简单校验即可
+    _NO_API_TEST_KEYS = {"WEBUI_PASSWORD"}
+    if key_name in _NO_API_TEST_KEYS:
+        return True, "配置已保存"
+
     return False, "未知的 API Key 类型"
 
 
