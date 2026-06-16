@@ -157,7 +157,7 @@ def _print_banner():
     print(f"  {flower}  {_C.DGREEN}{_C.BOLD}世  界  的  记  忆  ，  由  我  来  守  护{_C.RST}  {flower}")
     print()
     print(f"  {flower}  {_C.LGREEN}{_C.BOLD}     _   _____    __  __________  ___ {_C.RST}  {flower}")
-    print(f"  {flower}  {_C.LGREEN}{_C.BOLD}    / | / /   |  / / / /  _/ __ \/   |{_C.RST}  {flower}")
+    print(f"  {flower}  {_C.LGREEN}{_C.BOLD}    / | / /   |  / / / /  _/ __ \\/   |{_C.RST}  {flower}")
     print(f"  {flower}  {_C.LGREEN}{_C.BOLD}   /  |/ / /| | / /_/ // // / / / /| |{_C.RST}  {flower}")
     print(f"  {flower}  {_C.LGREEN}{_C.BOLD}  / /|  / ___ |/ __  // // /_/ / ___ |{_C.RST}  {flower}")
     print(f"  {flower}  {_C.LGREEN}{_C.BOLD} /_/ |_/_/  |_/_/ /_/___/_____/_/  |_|{_C.RST}  {flower}")

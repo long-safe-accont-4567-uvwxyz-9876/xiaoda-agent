@@ -16,10 +16,15 @@ SPECPATH = os.path.dirname(os.path.abspath(SPEC))  # /home/orangepi/ai-agent
 def _tree_datas(root, prefix):
     """Return list of (src, dest) tuples for every file under *root*."""
     result = []
-    _exclude = {'.env', '.env.prod', '.env.local'}
+    _exclude = {'.env', '.env.prod', '.env.local', 'webui_overrides.json'}
+    _exclude_dirs = {'credentials', '__pycache__', '.git', 'node_modules'}
     for dirpath, _dirnames, filenames in os.walk(root):
+        # 跳过排除的目录
+        _dirnames[:] = [d for d in _dirnames if d not in _exclude_dirs]
         for fn in filenames:
             if fn in _exclude:
+                continue
+            if fn.endswith('.key') or fn.endswith('.secret'):
                 continue
             src = os.path.join(dirpath, fn)
             rel = os.path.relpath(src, SPECPATH)

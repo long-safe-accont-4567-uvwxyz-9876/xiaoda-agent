@@ -223,7 +223,7 @@ function gb(bytes: number): string {
 .hint { font-size: 11px; color: var(--moon-dim); font-weight: 400; }
 .chart { height: 220px; }
 
-.monitor-grid { display: grid; grid-columns: 1fr 1fr; gap: 10px; }
+.monitor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .m-item {
   display: flex; flex-direction: column; gap: 2px;
   padding: 8px 10px; border-radius: 8px;

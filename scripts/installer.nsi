@@ -30,6 +30,9 @@ Section "MainSection" SEC01
 SetOutPath "$INSTDIR"
 SetOverwrite on
 File /r "dist\nahida-agent\*.*"
+; 安装后清理可能残留的敏感文件（旧版升级时 .env 可能被保留）
+Delete "$INSTDIR\_internal\config\webui_overrides.json"
+Delete "$INSTDIR\config\webui_overrides.json"
 CreateShortCut "$DESKTOP\纳西妲Agent.lnk" "$INSTDIR\start-windows.bat" "" "$INSTDIR\nahida-icon.ico" 0
 CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
 CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\纳西妲Agent.lnk" "$INSTDIR\start-windows.bat" "" "$INSTDIR\nahida-icon.ico" 0
