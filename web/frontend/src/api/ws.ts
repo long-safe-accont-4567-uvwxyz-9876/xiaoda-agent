@@ -9,11 +9,15 @@ export class WsClient {
   private maxReconnectDelay = 30000
   private listeners: Map<string, Set<(data: WsEvent) => void>> = new Map()
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null
+  private _unauthorized = false
   public connected = false
 
   constructor(private url: string) {}
 
+  get unauthorized() { return this._unauthorized }
+
   connect(token: string) {
+    this._unauthorized = false
     this.disconnect()
     const wsUrl = `${this.url}?token=${token}`
     this.ws = new WebSocket(wsUrl)
@@ -28,14 +32,29 @@ export class WsClient {
     this.ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data) as WsEvent
+        // Token 失效：服务端发送 UNAUTHORIZED 错误后关闭连接
+        // 立即停止重连，避免循环弹错
+        if (data.type === 'error' && data.code === 'UNAUTHORIZED') {
+          this._unauthorized = true
+          this.disconnect()
+          // 清除本地 token 并跳转登录页
+          localStorage.removeItem('token')
+          localStorage.removeItem('expires_at')
+          if (!location.hash.includes('/login')) {
+            location.hash = '#/login'
+          }
+          return
+        }
         this.emit(data)
       } catch { /* ignore */ }
     }
 
-    this.ws.onclose = () => {
+    this.ws.onclose = (event) => {
       this.connected = false
       this.stopHeartbeat()
       this.emit({ type: 'ws_disconnected' })
+      // 4001 = token 失效，不重连
+      if (event.code === 4001 || this._unauthorized) return
       this.scheduleReconnect(token)
     }
 
