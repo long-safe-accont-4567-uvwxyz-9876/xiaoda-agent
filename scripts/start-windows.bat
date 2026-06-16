@@ -1,76 +1,57 @@
+:: ================================================================
+:: Nahida Agent Windows 启动脚本
+:: ================================================================
 @echo off
-setlocal
+setlocal enabledelayedexpansion
+chcp 65001 >nul 2>&1
 
-:: ============================================
-::   Nahida Agent - Windows Launcher
-:: ============================================
-
-:: Handle Ctrl+C gracefully
-if "%~1"=="" goto :main
-if /i "%~1"=="--web" goto :main
-goto :usage
-
-:usage
 echo.
-echo   Usage: start-windows.bat [--web]
-echo.
-echo   Options:
-echo     --web    Start in Web UI mode
-echo.
-goto :eof
-
-:main
-:: Banner
-echo.
-echo   ================================
-echo   =     Nahida Agent            =
-echo   ================================
+echo   ********************************************************
+echo   *          Nahida Agent - Windows 启动脚本              *
+echo   ********************************************************
 echo.
 
-:: Auto-update check (if enabled)
-if exist "%~dp0auto-update.bat" (
-    call "%~dp0auto-update.bat"
-)
+:: Get the directory where this script is located
+set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%"
 
-:: Find the executable
-:: Onedir build: exe is either in same dir as this bat, or in dist\nahida-agent\
-set "EXE_PATH="
-if exist "%~dp0nahida-agent.exe" (
-    set "EXE_PATH=%~dp0nahida-agent.exe"
-) else if exist "%~dp0dist\nahida-agent\nahida-agent.exe" (
-    set "EXE_PATH=%~dp0dist\nahida-agent\nahida-agent.exe"
-) else (
-    echo   [ERROR] nahida-agent.exe not found!
-    echo   Looked in:
-    echo     %~dp0nahida-agent.exe
-    echo     %~dp0dist\nahida-agent\nahida-agent.exe
-    echo.
-    echo   Please check the installation path.
-    goto :pause_exit
-)
-
-:: Change to the script directory
-cd /d "%~dp0"
-
-:: Force UTF-8 output encoding (prevents UnicodeEncodeError with GBK on Chinese Windows)
+:: Set encoding to UTF-8
 set PYTHONIOENCODING=utf-8
+set PYTHONUTF8=1
 
-:: Start in Web mode by default (first-run will auto-trigger setup wizard)
-echo   Starting Nahida Agent...
+:: Check for .env and copy from .env.example if needed
+if not exist ".env" (
+    if exist ".env.example" (
+        echo.
+        echo   [!] .env 文件不存在，正在从 .env.example 复制...
+        copy ".env.example" ".env" >nul
+        echo   [OK] 已创建 .env 文件，请根据需要编辑配置
+    )
+)
+
+:: Determine executable name
+if exist "nahida-agent.exe" (
+    set "EXE=nahida-agent.exe"
+) else if exist "agent.py" (
+    set "EXE=python agent.py"
+) else (
+    echo   [ERROR] 找不到 nahida-agent.exe 或 agent.py
+    pause
+    exit /b 1
+)
+
+echo.
+echo   [*] 启动 Nahida Agent...
+echo   [*] 可执行文件: %EXE%
+echo   [*] 工作目录: %CD%
 echo.
 
 :: Launch browser once server is ready (background polling)
-start "" powershell -NoProfile -Command "while($true){try{$r=Invoke-WebRequest -Uri 'http://localhost:8080/api/v1/setup/first-run' -UseBasicParsing -TimeoutSec 2;if($r.StatusCode -eq 200){Start-Process 'http://localhost:8080/#/setup';break}}catch{};Start-Sleep -Seconds 1}"
+start "" powershell -NoProfile -Command "while($true){try{$r=Invoke-WebRequest -Uri 'http://localhost:8082/api/v1/setup/first-run' -UseBasicParsing -TimeoutSec 2;if($r.StatusCode -eq 200){Start-Process 'http://localhost:8082/#/setup';break}}catch{};Start-Sleep -Seconds 1}"
 
 :: Run the main executable
-"%EXE_PATH%" --web
+%EXE% --web
 
-:: Check exit code
-if %errorlevel% neq 0 (
-    echo.
-    echo   [ERROR] Nahida Agent exited with code %errorlevel%
-)
-
-:pause_exit
 echo.
+echo   [*] Nahida Agent 已退出
 pause
