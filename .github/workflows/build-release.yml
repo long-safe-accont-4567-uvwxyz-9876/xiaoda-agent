@@ -52,11 +52,13 @@ jobs:
           rm -rf credentials/ 2>/dev/null || true
           find . -name "*.key" -not -path "./.git/*" -delete 2>/dev/null || true
 
-      - name: Build frontend
+      - name: Install frontend deps
         working-directory: web/frontend
-        run: |
-          npm install
-          npm run build
+        run: npm install
+
+      - name: Build frontend (vite)
+        working-directory: web/frontend
+        run: npm run build
 
       - name: Verify frontend build
         shell: bash
