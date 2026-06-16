@@ -46,7 +46,6 @@ jobs:
         shell: bash
         run: |
           rm -rf web/dist 2>/dev/null || true
-          mkdir -p web/dist
           # 确保 .env 和敏感文件不被打包进安装包
           rm -f .env .env.prod .env.local 2>/dev/null || true
           rm -f config/webui_overrides.json 2>/dev/null || true
@@ -58,12 +57,6 @@ jobs:
         run: |
           npm install
           npm run build
-          # Move dist to a fresh location to avoid any stale file issues
-          rm -rf ../dist-new 2>/dev/null || true
-          mv ../dist ../dist-new 2>/dev/null || true
-          mkdir -p ../dist
-          cp -r ../dist-new/* ../dist/
-          rm -rf ../dist-new
 
       - name: Verify frontend build
         shell: bash
@@ -80,10 +73,6 @@ jobs:
           else
             echo "WARNING: /setup route NOT in main chunk, checking all chunks..."
             ls -la web/dist/assets/ | grep -i setup || true
-            echo "Listing all JS chunks:"
-            ls web/dist/assets/*.js 2>/dev/null | while read f; do
-              echo "  $(basename $f) ($(wc -c < $f) bytes)"
-            done
           fi
           echo "Frontend build verified OK"
 
