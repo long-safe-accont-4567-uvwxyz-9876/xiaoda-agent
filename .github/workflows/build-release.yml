@@ -67,6 +67,13 @@ jobs:
           ls web/dist/assets/ | head -20
           # Verify key files exist
           test -f web/dist/index.html || (echo "ERROR: index.html not found!" && exit 1)
+          # Verify SetupWizardView chunk exists (critical for /setup route)
+          if ls web/dist/assets/SetupWizardView-*.js 2>/dev/null | grep -q .; then
+            echo "SetupWizardView chunk found - OK"
+          else
+            echo "ERROR: SetupWizardView chunk not found! /setup route will be blank."
+            exit 1
+          fi
           echo "Frontend build verified OK"
 
       - name: Install Python dependencies
