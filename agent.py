@@ -8,6 +8,7 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except Exception as e:
+    # dotenv 加载失败时写日志，防止 exe 静默崩溃
     import traceback, pathlib
     try:
         log_dir = pathlib.Path(os.environ.get("APPDATA", ".")) / "nahida-agent"
@@ -28,6 +29,7 @@ def main():
     parser.add_argument("--setup", action="store_true", help="运行配置向导")
     args = parser.parse_args()
 
+    # 首次启动自动触发配置向导
     if args.setup:
         from setup_wizard import main as wizard_main
         wizard_main()
@@ -36,12 +38,14 @@ def main():
     from setup_wizard import is_first_run
     if is_first_run():
         if args.web:
+            # Web 模式下不弹出 CLI 向导，由 WebUI /setup 页面引导配置
             print("\n  [!] 检测到首次运行，将以降级模式启动 WebUI")
             print("      请在浏览器中打开 WebUI 完成 API Key 配置\n")
         else:
             print("\n  [!] 检测到首次运行，启动配置向导...\n")
             from setup_wizard import main as wizard_main
             wizard_main()
+            # 向导完成后重新加载 .env
             load_dotenv(override=True)
 
     if args.web or os.getenv("WEB_UI_ENABLED", "").lower() in ("true", "1", "yes"):
@@ -63,8 +67,8 @@ def _run_web(host: str, port: int):
 
     from loguru import logger
     logger.info("agent.web.start", port=port)
-    print(f"[DEBUG] WEBUI_PORT env={os.getenv('WEBUI_PORT', 'NOT SET')} using_port={port}", flush=True)
 
+    # 直接传 app 对象，避免 uvicorn 动态导入失败（PyInstaller 兼容）
     try:
         from web.server import app
     except Exception as e:
@@ -87,6 +91,7 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
+        # 顶层异常兜底：写日志文件，防止 exe 静默崩溃
         import traceback, pathlib
         try:
             log_dir = pathlib.Path(os.environ.get("APPDATA", ".")) / "nahida-agent"
@@ -96,5 +101,6 @@ if __name__ == "__main__":
             )
         except Exception:
             pass
+        # 同时输出到 stderr（如果终端可见的话）
         traceback.print_exc()
         sys.exit(1)
