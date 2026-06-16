@@ -1,17 +1,15 @@
 import type { RouteRecordRaw } from 'vue-router'
-import LoginView from './views/LoginView.vue'
-import SetupWizardView from './views/SetupWizardView.vue'
 
 export const routes: RouteRecordRaw[] = [
   {
     path: '/login',
     name: 'login',
-    component: LoginView,
+    component: () => import('./views/LoginView.vue'),
   },
   {
     path: '/setup',
     name: 'setup',
-    component: SetupWizardView,
+    component: () => import('./views/SetupWizardView.vue'),
   },
   {
     path: '/',
