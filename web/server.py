@@ -176,7 +176,7 @@ async def lifespan(app: FastAPI):
     if getattr(_sys, 'frozen', False):
         _env_dir = _os.path.dirname(_sys.executable)
     else:
-        _env_dir = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+        _env_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
     _env_path = _os.path.join(_env_dir, ".env")
     _mimo = ""
     if _os.path.exists(_env_path):
