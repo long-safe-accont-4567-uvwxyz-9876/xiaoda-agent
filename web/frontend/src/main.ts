@@ -4,10 +4,6 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
 import { routes } from './routes'
 
-// 预加载 setup 和 login，确保 Vite 不会在 CI 构建时跳过这些 chunk
-import('./views/SetupWizardView.vue')
-import('./views/LoginView.vue')
-
 const pinia = createPinia()
 const router = createRouter({
   history: createWebHashHistory(),
