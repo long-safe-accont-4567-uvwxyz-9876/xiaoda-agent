@@ -12,7 +12,10 @@ from typing import Any, Callable
 
 from loguru import logger
 
-_OVERRIDES_PATH = Path(__file__).resolve().parent.parent / "config" / "webui_overrides.json"
+
+def _get_overrides_path() -> Path:
+    from config import get_config_dir
+    return get_config_dir() / "webui_overrides.json"
 
 _DEFAULTS: dict[str, Any] = {
     "schedule": {
@@ -29,8 +32,8 @@ _DEFAULTS: dict[str, Any] = {
 
 
 class ConfigService:
-    def __init__(self, path: Path = _OVERRIDES_PATH):
-        self._path = path
+    def __init__(self, path: Path | None = None):
+        self._path = path or _get_overrides_path()
         self._lock = threading.Lock()
         self._data: dict[str, Any] = json.loads(json.dumps(_DEFAULTS))
         self._watchers: dict[str, list[Callable[[Any], None]]] = {}

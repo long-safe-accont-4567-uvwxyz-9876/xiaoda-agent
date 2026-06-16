@@ -5,8 +5,11 @@ import DendroShader from '../components/fx/DendroShader.vue'
 import DendroEmblem from '../components/fx/DendroEmblem.vue'
 import KeyAccordion, { type TestStatus } from '../components/setup/KeyAccordion.vue'
 import { api } from '../api'
+import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
+const authStore = useAuthStore()
+const version = ref('dev')
 const keys = ref<any[]>([])
 const updates = ref<Record<string, string>>({})
 const saving = ref(false)
@@ -28,8 +31,24 @@ onMounted(async () => {
       testMessages[k.key] = ''
     }
   } catch (e: any) {
-    error.value = `加载配置项失败: ${e.message || '未知错误'}。请确认服务已启动，然后刷新页面。`
     console.error('[SetupWizard] getSetupKeys failed:', e)
+    // Fallback: 显示硬编码的 key 列表，确保页面不会空白
+    keys.value = [
+      { key: 'MIMO_API_KEY', label: 'MiMo API 密钥', desc: '小米 MiMo 大模型 API 密钥（主 LLM + TTS + Vision）', url: 'https://xiaomimimo.com', url_desc: '注册 → 控制台 → API Keys', required: true, configured: false, masked_value: '' },
+      { key: 'QQBOT_APP_ID', label: 'QQ Bot App ID', desc: 'QQ 机器人应用 ID', url: 'https://q.qq.com', url_desc: '创建机器人应用 → 获取 AppID', required: true, configured: false, masked_value: '' },
+      { key: 'QQBOT_APP_SECRET', label: 'QQ Bot App Secret', desc: 'QQ 机器人应用密钥', url: 'https://q.qq.com', url_desc: '同一页面的 AppSecret', required: true, configured: false, masked_value: '' },
+      { key: 'EMBED_API_KEY', label: '向量嵌入 API 密钥', desc: '硅基流动嵌入模型密钥', url: 'https://siliconflow.cn', url_desc: '注册 → API Keys → 复制', required: true, configured: false, masked_value: '' },
+      { key: 'WEBUI_PASSWORD', label: 'Web UI 密码', desc: '留空则无需密码登录', url: '', url_desc: '', required: false, configured: false, masked_value: '' },
+      { key: 'SILICONFLOW_API_KEY', label: 'SiliconFlow API 密钥', desc: '硅基流动 API 密钥', url: 'https://siliconflow.cn', url_desc: '注册 → API Keys', required: false, configured: false, masked_value: '' },
+      { key: 'OPENROUTER_API_KEY', label: 'OpenRouter API 密钥', desc: 'OpenRouter API 密钥', url: 'https://openrouter.ai', url_desc: '注册 → API Keys', required: false, configured: false, masked_value: '' },
+      { key: 'AGNES_API_KEY', label: 'Agnes AI 图像/视频密钥', desc: '图片生成和视频生成的核心依赖', url: 'https://agnes-ai.com', url_desc: '注册 → API Keys', required: false, configured: false, masked_value: '' },
+      { key: 'MODELSCOPE_ACCESS_TOKEN', label: '魔搭 Access Token', desc: '魔搭 ModelScope 免费模型发现', url: 'https://modelscope.cn', url_desc: '注册 → 个人中心 → 访问令牌', required: false, configured: false, masked_value: '' },
+    ]
+    for (const k of keys.value) {
+      testStatuses[k.key] = 'untested'
+      testMessages[k.key] = ''
+    }
+    error.value = 'API 加载失败，显示默认配置项。请刷新页面重试。'
   }
 })
 
@@ -134,6 +153,12 @@ async function handleSave() {
       k.configured || updates.value[k.key]
     )
     if (allRequired) {
+      // 自动登录以获取 token，避免跳转后被重定向到登录页
+      try {
+        await authStore.login('')
+      } catch {
+        // 登录失败不影响跳转
+      }
       router.replace('/')
     }
   } catch (e: any) {
@@ -162,7 +187,7 @@ async function handleSave() {
           <DendroEmblem :size="84" spin />
           <h1>纳西妲 · 配置向导</h1>
           <p class="subtitle">世界的记忆，由我来守护</p>
-          <p class="version-tag">v0.3.5</p>
+          <p class="version-tag">v{{ version }}</p>
         </div>
 
         <div class="setup-body">

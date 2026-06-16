@@ -2,13 +2,35 @@ import os
 import re
 import json
 import time
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+def get_base_dir() -> Path:
+    """获取项目根目录。PyInstaller 打包后返回可执行文件所在目录，开发模式返回项目根目录。"""
+    if getattr(sys, 'frozen', False):
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent
+
+
+load_dotenv(get_base_dir() / ".env")
 
 _KIOXIA_BASE = Path(os.getenv("KIOXIA_DATA_DIR", "/media/orangepi/KIOXIA/nahida-data"))
 _FALLBACK_BASE = Path(__file__).resolve().parent
+
+def get_credentials_dir() -> Path:
+    """获取凭证目录。优先使用 KIOXIA 外置存储，否则使用可执行文件同级 credentials/。"""
+    kioxia_cred = _KIOXIA_BASE / "credentials"
+    if kioxia_cred.exists() or kioxia_cred.parent.exists():
+        kioxia_cred.mkdir(parents=True, exist_ok=True)
+        return kioxia_cred
+    fallback = get_base_dir() / "credentials"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+def get_config_dir() -> Path:
+    """获取配置目录（用于 webui_overrides.json 等可写配置）。"""
+    return get_base_dir() / "config"
 
 def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
     if kioxia_path.exists() or kioxia_path.parent.exists():
@@ -20,7 +42,7 @@ def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
 DATA_DIR = _resolve_data_path(_KIOXIA_BASE / "db", _FALLBACK_BASE / "data")
 LOG_DIR = _resolve_data_path(_KIOXIA_BASE / "logs", _FALLBACK_BASE / "logs")
 WORKSPACE_DIR = _resolve_data_path(_KIOXIA_BASE / "config" / "workspace", Path(os.path.expanduser("~/.ai-agent/workspace")))
-CREDENTIALS_DIR = _resolve_data_path(_KIOXIA_BASE / "credentials", Path(os.path.expanduser("~/.ai-agent/credentials")))
+CREDENTIALS_DIR = get_credentials_dir()
 AGENT_CONFIG_PATH = (_KIOXIA_BASE / "config" / "agent.json5") if (_KIOXIA_BASE / "config").exists() else Path(os.path.expanduser("~/.ai-agent/agent.json5"))
 STICKER_DIR = _KIOXIA_BASE / "stickers"
 KLEE_STICKER_DIR = _KIOXIA_BASE / "klee-stickers"
@@ -296,6 +318,9 @@ MCP_SERVERS = {
 }
 
 __all__ = [
+    "get_base_dir",
+    "get_credentials_dir",
+    "get_config_dir",
     "DEEPSEEK_API_KEY",
     "DEEPSEEK_BASE_URL",
     "MODEL_NAME",

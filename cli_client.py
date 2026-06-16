@@ -256,7 +256,7 @@ class NahidaCLI:
 def main():
     parser = argparse.ArgumentParser(description="纳西妲 CLI（连接 WebUI 网关）")
     parser.add_argument("--host", default=os.getenv("WEBUI_HOST_CLI", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("WEBUI_PORT", "8080")))
+    parser.add_argument("--port", type=int, default=int(os.getenv("WEBUI_PORT", "8082")))
     parser.add_argument("--password", default=os.getenv("WEBUI_PASSWORD", ""))
     args = parser.parse_args()
     try:

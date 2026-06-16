@@ -25,5 +25,6 @@ tests/benchmark_results.json
 # Build artifacts
 build/
 dist/
+web/dist/
 botpy.log.*
 docs/juejin-article.md

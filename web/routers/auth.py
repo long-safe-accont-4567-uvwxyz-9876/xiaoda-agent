@@ -22,8 +22,12 @@ _tokens: dict[str, float] = {}
 _rate_limit: dict[str, tuple[int, float]] = {}
 
 # Secret for HMAC
-_SECRET_PATH = Path(__file__).parent.parent.parent / "credentials" / "webui_secret"
 _SECRET: str = ""
+
+
+def _get_secret_path() -> Path:
+    from config import get_credentials_dir
+    return get_credentials_dir() / "webui_secret"
 
 
 def _load_or_create_secret() -> str:
@@ -32,12 +36,13 @@ def _load_or_create_secret() -> str:
     if env_secret:
         _SECRET = env_secret
         return _SECRET
-    if _SECRET_PATH.exists():
-        _SECRET = _SECRET_PATH.read_text().strip()
+    secret_path = _get_secret_path()
+    if secret_path.exists():
+        _SECRET = secret_path.read_text().strip()
     else:
         _SECRET = secrets.token_hex(32)
-        _SECRET_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _SECRET_PATH.write_text(_SECRET)
+        secret_path.parent.mkdir(parents=True, exist_ok=True)
+        secret_path.write_text(_SECRET)
     return _SECRET
 
 

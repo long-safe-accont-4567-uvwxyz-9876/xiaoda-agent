@@ -60,10 +60,10 @@ echo   Starting Nahida Agent...
 echo.
 
 :: Launch browser once server is ready (background polling)
-start "" powershell -NoProfile -Command "while($true){try{$r=Invoke-WebRequest -Uri 'http://localhost:8080/api/v1/setup/first-run' -UseBasicParsing -TimeoutSec 2;if($r.StatusCode -eq 200){Start-Process 'http://localhost:8080/#/setup';break}}catch{};Start-Sleep -Seconds 1}"
+start "" powershell -NoProfile -Command "while($true){try{$r=Invoke-WebRequest -Uri 'http://localhost:8082/api/v1/setup/first-run' -UseBasicParsing -TimeoutSec 2;if($r.StatusCode -eq 200){$j=$r.Content|ConvertFrom-Json;if($j.data.first_run){Start-Process 'http://localhost:8082/#/setup'}else{Start-Process 'http://localhost:8082/#/login'};break}}catch{};Start-Sleep -Seconds 1}"
 
 :: Run the main executable
-"%EXE_PATH%" --web
+"%EXE_PATH%" --web --port 8082
 
 :: Check exit code
 if %errorlevel% neq 0 (

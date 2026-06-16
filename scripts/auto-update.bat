@@ -34,7 +34,7 @@ powershell -NoProfile -Command ^
     "  $latest = $release.tag_name -replace '^v',''; " ^
     "  if ($latest -eq $curVer) { Write-Host '  Already up to date v' + $latest; exit 0 }; " ^
     "  Write-Host '  New version available: v' + $latest + ' (current: v' + $curVer + ')'; " ^
-    "  $asset = $release.assets | Where-Object { $_.name -like '*windows-x64*' } | Select-Object -First 1; " ^
+    "$asset = $release.assets | Where-Object { $_.name -like '*windows-x64*.tar.gz' } | Select-Object -First 1; " ^
     "  if (-not $asset) { Write-Host '  No Windows installer found, skipping'; exit 0 }; " ^
     "  Write-Host '  Downloading ' + $asset.name + ' ...'; " ^
     "  $tmp = [System.IO.Path]::GetTempPath() + '\' + $asset.name; " ^
@@ -42,7 +42,8 @@ powershell -NoProfile -Command ^
     "  Write-Host '  Download complete, extracting...'; " ^
     "  $extractDir = [System.IO.Path]::GetTempPath() + '\nahida-agent-update'; " ^
     "  if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }; " ^
-    "  Expand-Archive -Path $tmp -DestinationPath $extractDir -Force; " ^
+    "  New-Item -ItemType Directory -Path $extractDir | Out-Null; " ^
+    "  tar xzf $tmp -C $extractDir; " ^
     "  Write-Host '  Backing up configuration...'; " ^
     "  $backupDir = $installDir + '\.backup_v' + $curVer; " ^
     "  if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir | Out-Null }; " ^
@@ -71,5 +72,8 @@ powershell -NoProfile -Command ^
     "  Write-Host '  Update check failed:' $_.Exception.Message; " ^
     "  exit 0; " ^
     "}" 2>nul
+
+:: Ensure .auto_update flag file exists
+if not exist "%AUTO_UPDATE_FLAG%" type nul > "%AUTO_UPDATE_FLAG%"
 
 goto :eof

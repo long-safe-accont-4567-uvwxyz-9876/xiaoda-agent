@@ -22,15 +22,21 @@ async def _apply_model_overrides(core):
 
     cfg = get_config_service()
 
-    # 自动注册已知免费模型平台（从 .env 读取 key）
+    # 自动注册已知免费模型平台（从 .env 文件读取 key，不从 os.environ 读取，避免 CI 环境变量泄露）
     _KNOWN_ENV_PROVIDERS = {
         "SILICONFLOW_API_KEY": ("siliconflow", "openai", "https://api.siliconflow.cn/v1", "SiliconFlow 硅基流动"),
         "OPENROUTER_API_KEY": ("openrouter", "openai", "https://openrouter.ai/api/v1", "OpenRouter"),
         "MODELSCOPE_ACCESS_TOKEN": ("modelscope", "openai", "https://api-inference.modelscope.cn/v1", "ModelScope 魔搭"),
         "AGNES_API_KEY": ("agnes", "openai", os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1"), "Agnes AI"),
     }
+    # 从 .env 文件读取，而非 os.environ，防止构建环境变量泄露到用户安装包
+    try:
+        from setup_wizard import _load_env_values
+        env_values = _load_env_values()
+    except Exception:
+        env_values = {}
     for env_key, (pid, fmt, base_url, label) in _KNOWN_ENV_PROVIDERS.items():
-        api_key = os.getenv(env_key, "").strip()
+        api_key = env_values.get(env_key, "").strip()
         if not api_key:
             continue
         # 确保配置中有记录
@@ -41,8 +47,8 @@ async def _apply_model_overrides(core):
                 "default_model": "", "enabled": True,
             })
         # 确保证书文件存在
-        from pathlib import Path
-        cred_dir = Path(__file__).resolve().parent.parent / "credentials"
+        from config import get_credentials_dir
+        cred_dir = get_credentials_dir()
         cred_dir.mkdir(parents=True, exist_ok=True)
         fp = cred_dir / f"provider_{pid}.key"
         if not fp.exists() or fp.read_text(encoding="utf-8").strip() != api_key:
@@ -98,15 +104,58 @@ async def _start_user_mcp_servers(core):
             logger.warning("webui.mcp_restore_failed name={} error={}", name, str(e))
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    from agent_core import AgentCore
-    from web.agent_registry import AgentRegistry
+async def _start_services(app, core):
+    """启动正常模式下的所有服务组件（PluginManager、MediaTaskQueue、GreetingScheduler、QQ Bot）。"""
     from web.config_service import get_config_service
     from web.media_tasks import MediaTaskQueue
     from web.greeting_scheduler import GreetingScheduler
     from web.routers.tools import apply_tool_overrides
     from web.ws_hub import manager
+
+    await _apply_model_overrides(core)
+    apply_tool_overrides()
+    await _start_user_mcp_servers(core)
+
+    # Initialize Plugin Manager
+    from plugins.manager import PluginManager
+    plugin_manager = PluginManager(
+        tool_registry=None,
+        hook_engine=core._hook_engine if hasattr(core, "_hook_engine") else None,
+        memory_manager=core.memory if hasattr(core, "memory") else None,
+        knowledge_graph=core.kg if hasattr(core, "kg") else None,
+        mcp_manager=core._mcp_manager,
+        agent_core=core,
+    )
+    import tool_engine.tool_registry as _tool_registry_mod
+    plugin_manager._tool_registry = _tool_registry_mod
+    plugin_manager.discover()
+    app.state.plugin_manager = plugin_manager
+
+    queue = MediaTaskQueue(core, manager.broadcast)
+    queue.start()
+    app.state.media_queue = queue
+
+    scheduler = GreetingScheduler(core, get_config_service(), manager.broadcast)
+    scheduler.start()
+    app.state.greeting_scheduler = scheduler
+
+    # QQ Bot
+    qq_task = None
+    if os.getenv("QQBOT_APP_ID") and os.getenv("ENABLE_QQ_BOT", "true").lower() in ("true", "1", "yes"):
+        from qq_bot_adapter import run_qq_bot
+        from config import AGENT_CONFIG
+        qq_task = asyncio.create_task(
+            run_qq_bot(core, sandbox=AGENT_CONFIG.get("qq_bot", {}).get("is_sandbox", False)))
+        logger.info("webui.qq_bot_task_started")
+    app.state.qq_task = qq_task
+    app.state.last_emotion = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from agent_core import AgentCore
+    from web.agent_registry import AgentRegistry
+    from web.config_service import get_config_service
 
     logger.info("webui.lifespan.start")
     core = getattr(app.state, "core", None)
@@ -122,8 +171,22 @@ async def lifespan(app: FastAPI):
     await registry.load_persisted()
     app.state.agent_registry = registry
 
-    # 降级模式（无 API Key）：仅启动 WebUI，提供 /setup 配置页面
-    if not core._initialized:
+    # 降级模式：直接读 .env 文件检查 MIMO_API_KEY
+    import os as _os, sys as _sys
+    if getattr(_sys, 'frozen', False):
+        _env_dir = _os.path.dirname(_sys.executable)
+    else:
+        _env_dir = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    _env_path = _os.path.join(_env_dir, ".env")
+    _mimo = ""
+    if _os.path.exists(_env_path):
+        with open(_env_path, "r", encoding="utf-8", errors="ignore") as _f:
+            for _line in _f:
+                _s = _line.strip()
+                if _s.startswith("MIMO_API_KEY="):
+                    _mimo = _s.split("=", 1)[1].strip().strip("'\"")
+                    break
+    if not _mimo:
         logger.info("webui.degraded_mode")
         # 初始化空的 plugin/media/scheduler 避免后续 AttributeError
         app.state.plugin_manager = None
@@ -133,46 +196,7 @@ async def lifespan(app: FastAPI):
         app.state.last_emotion = None
         logger.info("webui.lifespan.ready_degraded")
     else:
-        await _apply_model_overrides(core)
-        apply_tool_overrides()
-        await _start_user_mcp_servers(core)
-
-        # Initialize Plugin Manager
-        from plugins.manager import PluginManager
-        plugin_manager = PluginManager(
-            tool_registry=None,
-            hook_engine=core._hook_engine if hasattr(core, "_hook_engine") else None,
-            memory_manager=core.memory if hasattr(core, "memory") else None,
-            knowledge_graph=core.kg if hasattr(core, "kg") else None,
-            mcp_manager=core._mcp_manager,
-            agent_core=core,
-        )
-        # Set tool_registry reference
-        import tool_engine.tool_registry as _tool_registry_mod
-        plugin_manager._tool_registry = _tool_registry_mod
-        # Discover plugins
-        plugin_manager.discover()
-        app.state.plugin_manager = plugin_manager
-
-        queue = MediaTaskQueue(core, manager.broadcast)
-        queue.start()
-        app.state.media_queue = queue
-
-        scheduler = GreetingScheduler(core, get_config_service(), manager.broadcast)
-        scheduler.start()
-        app.state.greeting_scheduler = scheduler
-
-        # QQ Bot 与 WebUI 同进程：共享同一个 AgentCore，会话/记忆/问候全部同步
-        qq_task = None
-        if os.getenv("QQBOT_APP_ID") and os.getenv("ENABLE_QQ_BOT", "true").lower() in ("true", "1", "yes"):
-            from qq_bot_adapter import run_qq_bot
-            from config import AGENT_CONFIG
-            qq_task = asyncio.create_task(
-                run_qq_bot(core, sandbox=AGENT_CONFIG.get("qq_bot", {}).get("is_sandbox", False)))
-            logger.info("webui.qq_bot_task_started")
-        app.state.qq_task = qq_task
-
-        app.state.last_emotion = None
+        await _start_services(app, core)
         logger.info("webui.lifespan.ready")
 
     yield

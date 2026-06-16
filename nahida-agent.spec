@@ -43,11 +43,19 @@ datas += _tree_datas(os.path.join(SPECPATH, 'config'), 'config')
 # web/dist/ directory (pre-built Vue frontend)
 datas += _tree_datas(os.path.join(SPECPATH, 'web', 'dist'), os.path.join('web', 'dist'))
 
+# web/routers/__init__.py (required for package imports in PyInstaller)
+datas.append((os.path.join(SPECPATH, 'web', 'routers', '__init__.py'), os.path.join('web', 'routers')))
+
 # db/schema.sql
 datas.append((os.path.join(SPECPATH, 'db', 'schema.sql'), 'db'))
 
 # .env.example
 datas.append((os.path.join(SPECPATH, '.env.example'), '.'))
+
+# web/media/stickers/ (placeholder for sticker files)
+_stickers_gitkeep = os.path.join(SPECPATH, 'web', 'media', 'stickers', '.gitkeep')
+if os.path.exists(_stickers_gitkeep):
+    datas.append((_stickers_gitkeep, os.path.join('web', 'media', 'stickers')))
 
 # assets/ directory (icons and other resources)
 datas += _tree_datas(os.path.join(SPECPATH, 'assets'), 'assets')
@@ -220,6 +228,7 @@ hiddenimports = [
     'web.routers.model_discovery',
     'web.model_capabilities',
     'setup_wizard',
+    'qq_bot_adapter',
 
     # Top-level modules imported by agent_core.py (imported in web.server lifespan)
     'model_router',

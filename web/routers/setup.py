@@ -470,6 +470,12 @@ async def save_keys(body: dict):
     from dotenv import load_dotenv
     load_dotenv(ENV_PATH, override=True)
 
+    # 更新 config 模块级变量，使 core.init() 能读到新的 API Key
+    import config
+    config.MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
+    config.DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+    config.AGNES_API_KEY = os.getenv("AGNES_API_KEY", "")
+
     # 尝试重新初始化 core（从降级模式恢复）
     try:
         from web.server import app
@@ -479,10 +485,10 @@ async def save_keys(body: dict):
                 logger.info("setup.reinitializing_core")
                 await core.init()
                 if core._initialized:
-                    from web.server import _apply_model_overrides
-                    await _apply_model_overrides(core)
+                    from web.server import _start_services
+                    await _start_services(app, core)
                     logger.info("setup.core_reinitialized")
-                    # 刷新 AgentRegistry（注册内置子代理）
+                    # 刷新 AgentRegistry
                     try:
                         from web.agent_registry import AgentRegistry
                         registry = getattr(app.state, "agent_registry", None)
@@ -544,8 +550,8 @@ def _auto_register_providers(updates: dict) -> None:
 
         # 写入凭证文件
         from web.routers.models import _key_file
-        from pathlib import Path
-        cred_dir = Path(__file__).resolve().parent.parent.parent / "credentials"
+        from config import get_credentials_dir
+        cred_dir = get_credentials_dir()
         cred_dir.mkdir(parents=True, exist_ok=True)
         fp = cred_dir / f"provider_{pid}.key"
         fp.write_text(api_key, encoding="utf-8")

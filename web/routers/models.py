@@ -14,7 +14,10 @@ from web.routers.auth import get_current_user
 
 router = APIRouter(tags=["models"], dependencies=[Depends(get_current_user)])
 
-_CRED_DIR = Path(__file__).resolve().parent.parent.parent / "credentials"
+
+def _get_cred_dir() -> Path:
+    from config import get_credentials_dir
+    return get_credentials_dir()
 
 ROUTE_EDITABLE_FIELDS = {"model", "client", "max_tokens", "thinking", "timeout"}
 
@@ -27,7 +30,7 @@ def _mask(key: str) -> str:
 
 def _key_file(provider_id: str) -> Path:
     safe = "".join(c for c in provider_id if c.isalnum() or c in "-_")
-    return _CRED_DIR / f"provider_{safe}.key"
+    return _get_cred_dir() / f"provider_{safe}.key"
 
 
 def load_provider_key(provider_id: str) -> str:
@@ -172,7 +175,7 @@ async def delete_provider(pid: str, request: Request):
 
 def _save_key_and_register(request: Request, pid: str, fmt: str,
                            base_url: str, api_key: str):
-    _CRED_DIR.mkdir(parents=True, exist_ok=True)
+    _get_cred_dir().mkdir(parents=True, exist_ok=True)
     fp = _key_file(pid)
     fp.write_text(api_key, encoding="utf-8")
     try:
