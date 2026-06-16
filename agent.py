@@ -24,7 +24,7 @@ except Exception as e:
 def main():
     parser = argparse.ArgumentParser(description="纳西妲 AI Agent")
     parser.add_argument("--web", action="store_true", help="启动 Web UI 模式")
-    parser.add_argument("--port", type=int, default=int(os.getenv("WEBUI_PORT", "8080")), help="Web UI 端口")
+    parser.add_argument("--port", type=int, default=int(os.getenv("WEBUI_PORT", "8082")), help="Web UI 端口")
     parser.add_argument("--host", type=str, default=os.getenv("WEBUI_HOST", "0.0.0.0"), help="Web UI 监听地址")
     parser.add_argument("--setup", action="store_true", help="运行配置向导")
     args = parser.parse_args()
