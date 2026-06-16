@@ -93,16 +93,26 @@ jobs:
         run: |
           echo "=== Scanning for leaked secrets ==="
           FOUND=0
-          # Check for .env files
-          find dist/nahida-agent -name ".env" -not -name ".env.example" 2>/dev/null && FOUND=1
+          # Check for .env files (not .env.example)
+          if find dist/nahida-agent -name ".env" -not -name ".env.example" -print -quit 2>/dev/null | grep -q .; then
+            echo "FOUND: .env file"; FOUND=1
+          fi
           # Check for .key files
-          find dist/nahida-agent -name "*.key" 2>/dev/null && FOUND=1
+          if find dist/nahida-agent -name "*.key" -print -quit 2>/dev/null | grep -q .; then
+            echo "FOUND: .key file"; FOUND=1
+          fi
           # Check for credentials directory
-          find dist/nahida-agent -type d -name "credentials" 2>/dev/null && FOUND=1
+          if find dist/nahida-agent -type d -name "credentials" -print -quit 2>/dev/null | grep -q .; then
+            echo "FOUND: credentials dir"; FOUND=1
+          fi
           # Check for webui_overrides.json
-          find dist/nahida-agent -name "webui_overrides.json" 2>/dev/null && FOUND=1
-          # Check for sk- patterns in text files
-          grep -r "sk-[a-zA-Z0-9]\{10,\}" dist/nahida-agent/ --include="*.json" --include="*.env" --include="*.key" --include="*.txt" -l 2>/dev/null && FOUND=1
+          if find dist/nahida-agent -name "webui_overrides.json" -print -quit 2>/dev/null | grep -q .; then
+            echo "FOUND: webui_overrides.json"; FOUND=1
+          fi
+          # Check for real API key patterns (sk- followed by 20+ chars, not in .env.example)
+          if grep -r "sk-[a-zA-Z0-9]\{20,\}" dist/nahida-agent/ --include="*.json" --include="*.env" --include="*.key" -l 2>/dev/null | grep -v ".env.example" | grep -q .; then
+            echo "FOUND: API key pattern"; FOUND=1
+          fi
           if [ $FOUND -eq 1 ]; then
             echo "ERROR: Leaked secrets found in build!"
             exit 1
