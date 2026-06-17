@@ -116,11 +116,18 @@ class AgentCoreBootstrapper:
         else:
             logger.info("reranker.disabled_by_config")
 
-        # 初始化 QueryTransformer
+        # 初始化 QueryTransformer（使用硅基流动免费模型，不占用主模型配额）
         query_transformer = None
         if getattr(config, "QUERY_TRANSFORM_ENABLED", True):
-            query_transformer = QueryTransformer(router=core.router)
-            logger.info("query_transformer.enabled")
+            qt_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
+            if qt_api_key:
+                query_transformer = QueryTransformer(
+                    api_key=qt_api_key,
+                    base_url="https://api.siliconflow.cn/v1",
+                )
+                logger.info("query_transformer.enabled", model="Qwen/Qwen3-8B (free)")
+            else:
+                logger.info("query_transformer.disabled_no_api_key")
         else:
             logger.info("query_transformer.disabled_by_config")
 
