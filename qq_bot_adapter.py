@@ -431,10 +431,15 @@ class AIQQBot(botpy.Client):
         user_id = f"qq_{member_openid}" if member_openid else "qq_unknown"
         logger.info("qq_bot.group_message", user_id=user_id, openid=member_openid, content=user_input[:80])
 
-        # 主人识别：对比 openid 与 MASTER_QQ_OPENID
+        # 主人识别：同时检查 group member_openid 和 private user_openid
+        # QQ 开放平台对私聊和群聊分配不同的 OpenID，
+        # 用户可能从私聊或群聊任一渠道获取 MASTER_QQ_OPENID
         master_openid = os.getenv("MASTER_QQ_OPENID", "").strip()
-        is_master = bool(master_openid) and member_openid == master_openid
-        if not is_master:
+        user_openid = getattr(message.author, 'user_openid', '') if hasattr(message, 'author') else ''
+        is_master = bool(master_openid) and (member_openid == master_openid or user_openid == master_openid)
+        if is_master:
+            logger.info("qq_bot.master_identified", member_openid=member_openid, user_openid=user_openid)
+        else:
             logger.info("qq_bot.non_master_message", user_id=user_id, openid=member_openid, content=user_input[:80])
 
         if self.nudge_engine:
