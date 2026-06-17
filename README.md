@@ -1,9 +1,9 @@
 # Nahida Agent 🌿
 
-> 运行在 Orange Pi 上的多智能体 AI 助手 — 以《原神》纳西妲为灵魂，40+ 工具赋能，三通道交互，认知系统闭环
+> 运行在 Orange Pi 上的多智能体 AI 助手 — 以《原神》纳西妲为灵魂，40+ 工具赋能，三通道交互，认知系统闭环，RAG 检索增强
 
 <p align="center">
-  <strong>多智能体</strong> · <strong>认知闭环</strong> · <strong>工具链</strong> · <strong>边缘部署</strong> · <strong>多模态</strong> · <strong>Web UI</strong>
+  <strong>多智能体</strong> · <strong>认知闭环</strong> · <strong>RAG 增强</strong> · <strong>插件系统</strong> · <strong>MCP 协议</strong> · <strong>边缘部署</strong>
 </p>
 
 ***
@@ -12,15 +12,17 @@
 
 市面上有大量 AI Chatbot 项目，但 Nahida Agent 不只是"套壳 ChatGPT"。它是一个**完整的认知智能体**——能记住、能学习、能感知情绪、能调用工具、能自我改进。
 
-| 对比维度 | 通用 Chatbot    | Nahida Agent               |
-| ---- | ------------- | -------------------------- |
-| 记忆   | 无状态 / 简单上下文窗口 | 情景记忆 + 向量检索 + 知识图谱 + 用户画像  |
-| 学习   | 不会从对话中学习      | 自动提取规则、发现模式、自我改进           |
-| 情绪   | 无             | 9 类情绪检测 → 贴纸 + 语音风格联动      |
-| 工具   | 少量 API 调用     | 40+ 工具，含硬件控制（GPIO/I2C/PWM） |
-| 多智能体 | 单一模型          | 5 角色人格 + 图编排 + 委托机制        |
-| 部署   | 云端依赖          | 边缘设备运行，Docker 一键部署         |
-| 交互   | 单一通道          | QQ Bot + Web UI + CLI 三通道  |
+| 对比维度   | 通用 Chatbot        | Nahida Agent                   |
+| -------- | ------------------ | ------------------------------ |
+| 记忆      | 无状态 / 简单上下文窗口 | 情景记忆 + 向量检索 + Reranker 精排 + 知识图谱 + 用户画像 |
+| 检索      | 单路向量召回          | FTS5 BM25 + bge-m3 向量 → RRF 融合 → 交叉编码器精排 + KG 增强 |
+| 学习      | 不会从对话中学习       | 自动提取规则、发现模式、自我改进           |
+| 情绪      | 无                  | 9 类情绪检测 → 贴纸 + 语音风格联动      |
+| 工具      | 少量 API 调用        | 40+ 内置工具 + MCP 协议扩展 + 插件系统  |
+| 多智能体   | 单一模型             | 5 角色人格 + 图编排 + 委托机制        |
+| 部署      | 云端依赖             | 边缘设备运行，Docker / 安装包一键部署    |
+| 交互      | 单一通道             | QQ Bot + Web UI + CLI 三通道    |
+| 配置      | 改配置文件重启        | WebUI 热生效配置（DND/问候/模型/工具）  |
 
 ***
 
@@ -64,7 +66,33 @@
 - **画像自动演进**：无需冷启动问卷，从对话中自动建立和维护用户画像
 - **学习闭环**：从对话中提取 insight → 分类（错误/功能请求/模式）→ 优先级排序 → 状态追踪
 
-### 🔧 40+ 工具链
+### 🔍 RAG 检索增强（三阶段优化）
+
+从"单路向量召回"升级为"多路召回 → 融合 → 精排"的专业 RAG 管线：
+
+```
+用户查询
+  ├→ QueryTransformer（查询变换）
+  │    └→ 免费模型改写 + 多视角扩展（不占主模型配额）
+  ├→ 双路召回
+  │    ├→ FTS5 BM25 全文检索（关键词精确匹配）
+  │    └→ bge-m3 向量检索（语义相似度）
+  ├→ RRF 融合（Reciprocal Rank Fusion）
+  │    └→ 过采样 3x 候选集
+  ├→ Reranker 精排
+  │    └→ bge-reranker-v2-m3 交叉编码器（SiliconFlow 免费）
+  └→ KG 增强
+       └→ 实体重叠 + 关系路径加权（最高 +0.5）
+```
+
+**独到之处**：
+
+- **零成本精排**：Reranker 使用 SiliconFlow 免费 API，不增加任何开销
+- **查询变换免费化**：QueryTransformer 使用 Qwen3-8B 免费模型，不占主模型配额
+- **KG 评分融合**：`final = 0.65×rerank + 0.15×kg_boost + 0.20×(importance×decay)`
+- **降级容错**：Reranker/QueryTransformer 不可用时自动降级，不影响主流程
+
+### 🔧 工具链（40+ 内置 + MCP 扩展 + 插件）
 
 | 类别        | 工具                          | 亮点                              |
 | --------- | --------------------------- | ------------------------------- |
@@ -79,6 +107,7 @@
 | **视觉识别**  | 摄像头 + YOLOv5                | NPU 加速（RK3588S），实时目标检测          |
 | **记忆管理**  | remember / recall / forget  | 工具级记忆操作，用户可控                    |
 | **知识查询**  | Wolfram Alpha / 天气          | 结构化知识获取                         |
+| **MCP 协议** | 外部 MCP 服务器工具                | stdio/SSE/HTTP 三传输，自动发现注册       |
 
 **独到之处**：
 
@@ -86,6 +115,27 @@
 - **AST 沙箱**：Python 执行器使用语法树审查，比正则更难绕过
 - **SSRF 防护**：DNS 解析预检 + HTTP 层 IP 验证，防 DNS Rebinding
 - **每工具超时**：视频生成 240s、文档读取 120s、默认 60s，不再一刀切
+- **结果压缩**：超长工具输出用免费模型压缩到 1/3，节省上下文窗口
+- **MCP 扩展**：支持连接外部 MCP 服务器，工具能力无限扩展
+
+### 🧩 插件系统
+
+完整的插件生命周期管理，支持第三方扩展：
+
+```
+plugins/
+  ├── manifest.py      # YAML 清单解析
+  ├── discovery.py     # 目录扫描发现
+  ├── permissions.py   # 声明式权限白名单
+  ├── sdk.py           # Plugin ABC + @register_tool + @subscribe
+  ├── context.py       # 注入 memory/kg/mcp 等能力
+  ├── manager.py       # FOUND→LOADED→ENABLED 状态机
+  └── echo/            # 示例插件
+```
+
+- **声明式权限**：插件在 YAML 中声明网络/文件系统/工具权限，运行时强制检查
+- **能力注入**：插件通过 Context 访问记忆、知识图谱、MCP 等系统能力
+- **事件订阅**：`@subscribe` 装饰器订阅对话事件，无需轮询
 
 ### 🛡️ 安全与可靠性
 
@@ -121,16 +171,37 @@
 
 | 通道         | 入口                  | 特点                                 |
 | ---------- | ------------------- | ---------------------------------- |
-| **QQ Bot** | `qq_bot_adapter.py` | 生产级，消息去重 + 分段发送 + SILK 语音          |
+| **QQ Bot** | `qq_bot_adapter.py` | 生产级，消息去重 + 分段发送 + SILK 语音 + 主人自动绑定 |
 | **Web UI** | `web/server.py`     | FastAPI + Vue 3 + WebSocket，须弥主题   |
 | **CLI**    | `cli.py`            | 打字机效果 + readline 历史 + NO\_COLOR 支持 |
+
+**QQ Bot 特色**：
+
+- 主人身份自动绑定：私聊首消息 / 拉群事件自动识别，无需手动配置 OpenID
+- 群聊双 OpenID 匹配：同时检查 user_openid 和 member_openid
+- 主动问候引擎：闲置超阈值自动发问候，时区感知 DND，与 WebUI 共享配额
 
 **Web UI 特色**：
 
 - 须弥主题（草元素配色 + 粒子特效 + 3D 卡片交互）
-- 12 个功能视图：Chat / Agents / Models / Tools / MCP / Insight / Schedule / Media / Health / Dashboard / Settings / Login
+- 13 个功能视图：Chat / Agents / Models / Tools / MCP / Plugins / Insight / Schedule / Media / Health / Dashboard / Settings / Setup
 - WebSocket 实时推送（工具调用状态 / 情绪变化 / 健康检查）
 - Agent 独立壁纸系统
+- **热生效配置**：DND 时段 / 问候配额 / 模型路由 / 工具开关，改完即时生效无需重启
+- **Setup 向导**：首次运行引导，10+ Provider Key 在线验证（测试通过再保存）
+
+### ⏰ 主动行为系统
+
+双引擎协同，WebUI 统一调控：
+
+| 引机 | 通道 | 触发方式 | 特色 |
+| --- | --- | --- | --- |
+| **NudgeEngine** | QQ | 用户闲置超阈值 | 问候 + 任务提醒 + 学习晋升 + 画像整合 + 数据清理 |
+| **GreetingScheduler** | Web + QQ | 定时/随机计划 | fixed 定点 + random 窗口抽签，多段跨午夜 DND，补发机制 |
+
+- **共享配额**：两引擎共享 `greeting_log` 表计数，不会超过 WebUI 设置的每日上限
+- **DND 统一**：两引擎读取同一份 `schedule.dnd_periods` 配置
+- **CoT 清洗**：自动剥离推理模型思维链（`<think>` 标签 + CoT 前缀），防止泄漏到消息
 
 ***
 
@@ -167,11 +238,15 @@
               ┌──────────────────────────┼──────────────────────────┐
               │                          │                          │
     ┌─────────▼──────────┐  ┌───────────▼──────────┐  ┌───────────▼──────────┐
-    │    认知系统         │  │     工具链 (40+)      │  │    输出系统           │
-    │  情景记忆           │  │  文件/代码/搜索       │  │  情绪检测             │
-    │  知识图谱           │  │  网络/系统/硬件       │  │  贴纸选择             │
-    │  用户画像           │  │  AI生成/文档/视觉     │  │  TTS 语音合成         │
-    │  学习系统           │  │  记忆/知识查询        │  │  文本去AI化           │
+    │    认知系统         │  │     工具链            │  │    输出系统           │
+    │  情景记忆           │  │  40+ 内置工具         │  │  情绪检测             │
+    │  RAG 检索增强       │  │  MCP 协议扩展         │  │  贴纸选择             │
+    │  ├ QueryTransform  │  │  插件系统             │  │  TTS 语音合成         │
+    │  ├ Reranker 精排   │  │  文件/代码/搜索       │  │  文本去AI化           │
+    │  └ KG 增强         │  │  网络/系统/硬件       │  │                      │
+    │  知识图谱           │  │  AI生成/文档/视觉     │  │  主动行为系统         │
+    │  用户画像           │  │  记忆/知识查询        │  │  ├ NudgeEngine       │
+    │  学习系统           │  │                      │  │  └ GreetingScheduler │
     │  笔记本             │  │                      │  │                      │
     └────────────────────┘  └──────────────────────┘  └──────────────────────┘
 ```
@@ -199,19 +274,26 @@ AgentCore 从 1431 行 God Class 拆分为 5 个子模块：
   │     ├─ 直接回复（nahida）
   │     ├─ 委托子智能体（keli/yinlang/xilian/nike）
   │     └─ 图编排（TaskGraph）
-  ├─ 4. LLM 调用（ModelRouter + CredentialPool + ErrorClassifier）
+  ├─ 4. 记忆检索（RAG 管线）
+  │     ├─ QueryTransformer 查询变换（免费模型）
+  │     ├─ FTS5 BM25 + bge-m3 向量双路召回
+  │     ├─ RRF 融合 → Reranker 精排
+  │     └─ KG 增强（实体重叠 + 关系路径加权）
+  ├─ 5. LLM 调用（ModelRouter + CredentialPool + ErrorClassifier）
   │     ├─ 工具调用 → ToolCallExtractor → ToolGuardrails → ToolExecutor
+  │     │    └─ ResultWrapper 结果压缩（免费模型）
   │     └─ 纯文本回复
-  ├─ 5. 后处理
+  ├─ 6. 后处理
   │     ├─ 情绪检测 → ensure_emotion_tag → strip_emotion_tag
   │     ├─ 贴纸选择（StickerManager）
   │     ├─ TTS 语音合成（TTSEngine + 缓存）
   │     └─ 文本去AI化（humanize）
-  └─ 6. 后台任务（异步）
-        ├─ 记忆编码（MemoryManager + VectorStore）
+  └─ 7. 后台任务（异步）
+        ├─ 记忆编码（MemoryManager + VectorStore，免费模型）
+        ├─ 知识图谱提取（KnowledgeGraph，免费模型）
         ├─ 画像更新（PortraitManager）
         ├─ 学习提取（LearningManager）
-        └─ 笔记记录（NotebookManager）
+        └─ 笔记记录（NotebookManager，免费模型）
 ```
 
 ### 监控体系
@@ -242,36 +324,78 @@ nahida-agent/
 ├── agent_dispatcher.py       # 子智能体调度器 + ToolCallExtractor
 ├── task_orchestrator.py      # TaskGraph 图编排引擎
 ├── model_router.py           # LLM API 路由 + 凭证池 + 错误分类
-├── tool_call_handler.py      # 工具调用处理（并行信号量）
-├── tool_executor.py          # 工具执行器（每工具超时）
-├── tool_registry.py          # 工具注册表
-├── tool_repair.py            # 工具调用修复（JSON 规范化）
-├── tool_guardrails.py        # 工具护栏（频率+风暴检测）
-├── permission_manager.py     # 权限管理（4 级分级）
-├── sandbox_config.py         # 沙箱安全配置
-├── error_classifier.py       # 错误分类器（HTTP 状态码匹配）
-├── credential_pool.py        # API 凭证池（并发安全）
-├── emotion_enum.py           # 情感统一枚举系统
-├── emotion_simple.py         # 情绪检测
-├── sticker_manager.py        # 贴纸管理
-├── tts_engine.py             # TTS 语音合成（缓存持久化）
-├── security.py               # 安全过滤
-├── text_utils.py             # 文本处理（去AI化/截断/分段）
-├── context_compressor.py     # 上下文压缩（Token 驱动）
-├── agent_context.py          # 对话上下文管理
-├── knowledge_graph.py        # 知识图谱
-├── portrait_manager.py       # 用户画像
-├── memory_manager.py         # 情景记忆
-├── vector_store.py           # 向量存储（线程安全 + 事务原子化）
-├── nudge_engine.py           # 主动问候引擎（时区支持）
-├── slash_commands.py         # 15+ Slash 命令
-├── qq_bot_adapter.py         # QQ Bot 适配器
-├── config.py                 # 配置中心（环境变量驱动）
-├── database.py               # 数据库管理（自动迁移）
-├── metrics.py                # 监控指标框架
-├── cli.py                    # CLI 交互界面
-├── cli_client.py             # WebSocket CLI 客户端
-├── tools/                    # 工具模块
+├── transports/               # Provider Transport 抽象层
+│   ├── base.py               #   统一接口 + TransportResponse
+│   ├── mimo_transport.py     #   小米 MiMo 适配
+│   └── agnes_transport.py    #   Agnes AI 适配
+├── tool_engine/              # 工具引擎
+│   ├── tool_call_handler.py  #   工具调用处理（并行信号量）
+│   ├── tool_executor.py      #   工具执行器（每工具超时）
+│   ├── tool_registry.py      #   工具注册表
+│   ├── tool_repair.py        #   工具调用修复（JSON 规范化）
+│   ├── tool_guardrails.py    #   工具护栏（频率+风暴检测）
+│   └── mcp_client.py         #   MCP 协议客户端（stdio/SSE/HTTP）
+├── plugins/                  # 插件系统
+│   ├── manifest.py           #   YAML 清单解析
+│   ├── discovery.py          #   目录扫描发现
+│   ├── permissions.py        #   声明式权限白名单
+│   ├── sdk.py                #   Plugin ABC + 装饰器
+│   ├── context.py            #   能力注入上下文
+│   ├── manager.py            #   生命周期管理
+│   └── echo/                 #   示例插件
+├── memory/                   # 认知系统
+│   ├── memory_manager.py     #   情景记忆 + RAG 管线集成
+│   ├── vector_store.py       #   向量存储（线程安全 + 事务原子化）
+│   ├── reranker.py           #   bge-reranker-v2-m3 交叉编码器精排
+│   ├── query_transform.py    #   查询变换（免费模型改写+扩展）
+│   ├── knowledge_graph.py    #   知识图谱 + 检索增强评分
+│   ├── learning_manager.py   #   学习系统
+│   ├── notebook_manager.py   #   笔记本（免费模型编码）
+│   ├── portrait_manager.py   #   用户画像（移至 emotion/）
+│   ├── context_compressor.py #   上下文压缩（Token 驱动）
+│   └── context_usage.py      #   上下文使用分析
+├── emotion/                  # 情感与主动行为
+│   ├── emotion_enum.py       #   情感统一枚举系统
+│   ├── emotion_simple.py     #   情绪检测
+│   ├── sticker_manager.py    #   贴纸管理
+│   ├── tts_engine.py         #   TTS 语音合成（缓存持久化）
+│   ├── nudge_engine.py       #   主动问候引擎（QQ 通道）
+│   └── portrait_manager.py   #   用户画像
+├── web/                      # Web UI
+│   ├── server.py             #   FastAPI 服务
+│   ├── app.py                #   应用工厂
+│   ├── ws_hub.py             #   WebSocket 中心
+│   ├── config_service.py     #   WebUI 热生效配置层
+│   ├── greeting_scheduler.py #   问候调度器（Web+QQ 通道）
+│   ├── media_tasks.py        #   媒体任务管理
+│   ├── routers/              #   13 个 API 路由模块
+│   │   ├── setup.py          #     Setup 向导（10+ Key 在线验证）
+│   │   ├── schedule.py       #     问候调度配置
+│   │   ├── plugins.py        #     插件管理
+│   │   ├── mcp.py            #     MCP 服务器管理
+│   │   └── ...
+│   ├── frontend/             #   Vue 3 + Naive UI 前端源码
+│   └── dist/                 #   前端构建产物
+├── utils/                    # 工具函数
+│   ├── result_wrapper.py     #   工具结果压缩（免费模型）
+│   ├── prompt_caching.py     #   提示词缓存（KV 缓存断点）
+│   ├── credential_pool.py    #   API 凭证池（并发安全）
+│   ├── error_classifier.py   #   错误分类器
+│   ├── metrics.py            #   监控指标框架
+│   ├── text_utils.py         #   文本处理（去AI化/截断/分段）
+│   ├── atomic_write.py       #   原子文件写入
+│   ├── lazy_deps.py          #   懒加载依赖
+│   ├── npu_inference.py      #   NPU 推理（RK3588S）
+│   ├── vision_service.py     #   视觉服务
+│   ├── file_receiver.py      #   文件接收
+│   ├── smart_error_handler.py #  智能错误处理
+│   ├── nahida_acp.py         #   纳西妲 ACP 协议
+│   └── logging_config.py     #   日志配置
+├── security/                 # 安全模块
+│   ├── security.py           #   安全过滤
+│   ├── permission_manager.py #   权限管理（4 级分级）
+│   └── sandbox_config.py     #   沙箱安全配置
+├── tools/                    # 内置工具模块
 │   ├── system_tools.py       #   Shell/进程/Docker/服务
 │   ├── hardware_tools.py     #   GPIO/I2C/PWM/传感器
 │   ├── code_tools_v2.py      #   Python 沙箱（AST 审查）
@@ -282,28 +406,40 @@ nahida-agent/
 │   ├── document_tools.py     #   文档阅读（PDF/DOCX/XLSX/PPT）
 │   ├── memory_tool.py        #   记忆工具（bind 注入）
 │   ├── agnes_tools.py        #   AI 生成（速率限制）
-│   └── ...
-├── web/                      # Web UI
-│   ├── server.py             #   FastAPI 服务
-│   ├── ws_hub.py             #   WebSocket 中心
-│   ├── routers/              #   12 个 API 路由模块
-│   ├── frontend/             #   Vue 3 + Naive UI 前端源码
-│   └── dist/                 #   前端构建产物
-├── db/
-│   └── schema.sql            # 数据库 Schema（21 表 + 22 索引）
-├── deploy/
-│   └── qq-agent.service      # systemd 服务参考
-├── docs/
-│   ├── IMPROVEMENT_PLAN.md   # 改进计划（517 行深度审查）
-│   └── WEBUI_DESIGN.md       # Web UI 设计文档
-├── config/
-│   ├── agent.json5           # 主配置
-│   ├── agents/keli.json      # 子智能体配置
-│   └── workspace/*.md        # 7 个 Workspace Prompt
+│   ├── vision_tools.py       #   视觉识别
+│   └── nudge_tool.py         #   主动消息工具
+├── db/                       # 数据库
+│   ├── database.py           #   数据库管理（自动迁移）
+│   ├── schema.sql            #   Schema（21 表 + 22 索引）
+│   ├── db_analytics.py       #   分析数据
+│   ├── db_memory.py          #   记忆数据
+│   ├── db_knowledge.py       #   知识数据
+│   ├── db_learning.py        #   学习数据
+│   ├── db_notebook.py        #   笔记本数据
+│   └── session_store.py      #   会话存储
+├── scripts/                  # 部署与运维脚本
+│   ├── install-linux.sh      #   Linux 自解压安装器
+│   ├── install-windows.ps1   #   Windows 安装
+│   ├── installer.nsi         #   NSIS 安装包定义
+│   ├── auto-update.sh/.bat   #   GitHub Release 自动更新
+│   ├── healthcheck.sh        #   健康检查
+│   ├── start.sh/.bat         #   启动脚本
+│   └── build-release.sh      #   构建发布
+├── config/                   # 配置
+│   ├── agent.json5           #   主配置
+│   ├── agents/               #   子智能体配置
+│   └── workspace/*.md        #   8 个 Workspace Prompt
+├── setup_wizard.py           # CLI 安装向导
+├── config.py                 # 配置中心（环境变量驱动）
+├── qq_bot_adapter.py         # QQ Bot 适配器
+├── slash_commands.py         # 15+ Slash 命令
+├── agent_context.py          # 对话上下文管理
 ├── Dockerfile                # Docker 镜像定义
 ├── docker-compose.yml        # 一键编排
+├── nahida-agent.spec         # PyInstaller 打包定义
 ├── requirements.txt          # Python 依赖
 ├── .env.example              # 环境变量模板
+├── .github/workflows/        # CI/CD（构建发布）
 └── SETUP.md                  # 部署指南
 ```
 
@@ -313,7 +449,7 @@ nahida-agent/
 
 ### Docker 一键部署（推荐）
 
-```MariaDB&#x20;SQL
+```bash
 git clone https://github.com/long-safe-accont-4567-uvwxyz-9876/nahida-agent.git
 cd nahida-agent
 cp .env.example .env
@@ -323,9 +459,28 @@ docker compose up -d
 
 访问 `http://localhost:8080` 即可使用。
 
+### 安装包部署
+
+从 [GitHub Releases](https://github.com/long-safe-accont-4567-uvwxyz-9876/nahida-agent/releases) 下载对应平台的安装包：
+
+- **Linux**：`.run` 自解压安装器，`sudo bash nahida-agent-installer.run`
+- **Windows**：`.exe` NSIS 安装包，双击运行
+
+安装后通过 WebUI Setup 向导配置 API Key（支持在线验证）。
+
 ### 手动部署
 
 详见 [SETUP.md](SETUP.md)。
+
+### 必填 API Key
+
+| Key | 用途 | 获取方式 |
+| --- | --- | --- |
+| `MIMO_API_KEY` | 主 LLM 模型（对话/工具调用） | [小米 MiMo](https://mimo.xiaomi.com) |
+| `QQBOT_APP_ID` + `QQBOT_APP_SECRET` | QQ Bot | [QQ 开放平台](https://q.qq.com) |
+| `EMBED_API_KEY` | 向量嵌入（bge-m3） | [SiliconFlow](https://siliconflow.cn) |
+
+选填：`SILICONFLOW_API_KEY`（Reranker/查询变换，免费）、`AGNES_API_KEY`（AI 生成）、`WOLFRAM_ALPHA_KEY`（知识查询）等。
 
 ***
 
@@ -333,14 +488,16 @@ docker compose up -d
 
 | 指标         | 数值           |
 | ---------- | ------------ |
-| Python 模块  | 60+          |
-| 生产代码       | \~15,000 行   |
+| Python 模块  | 80+          |
+| 生产代码       | \~18,000 行   |
 | 测试代码       | \~6,000 行    |
-| 工具数量       | 40+          |
+| 内置工具       | 40+          |
 | 角色人格       | 5 个          |
 | 数据库表       | 21 张 + 22 索引 |
-| Web API 路由 | 12 模块        |
-| Web UI 视图  | 12 个         |
+| Web API 路由 | 13 模块        |
+| Web UI 视图  | 13 个         |
+| RAG 优化阶段   | 3 阶段（P0-P2） |
+| MCP 传输协议   | 3 种          |
 
 ***
 
@@ -349,13 +506,18 @@ docker compose up -d
 | 决策      | 选择                 | 理由                         |
 | ------- | ------------------ | -------------------------- |
 | LLM API | MiMo (小米)          | 国产模型，延迟低，成本可控，支持 TTS       |
+| 免费模型    | SiliconFlow Qwen3-8B | 查询变换/记忆编码/结果压缩，零成本         |
+| Reranker | bge-reranker-v2-m3 | SiliconFlow 免费 API，交叉编码器精排  |
 | 数据库     | SQLite (aiosqlite) | 单设备部署，零运维，WAL 模式并发         |
 | 向量检索    | sqlite-vec         | 小规模数据无需 ANN，与 SQLite 统一存储  |
+| 全文检索    | FTS5 BM25          | SQLite 原生，关键词精确匹配          |
 | 情感系统    | 统一枚举 Emotion       | 9 类情绪 → 贴纸/语音/显示 三路映射      |
 | 工具调用    | ToolCallExtractor  | 标准 tool\_calls + DSML 统一提取 |
+| 工具扩展    | MCP 协议 + 插件系统      | 外部工具无限扩展，声明式权限管理           |
 | 代码沙箱    | AST 审查             | 比正则更难绕过，禁止模块/内建白名单         |
 | Web 框架  | FastAPI + Vue 3    | 异步原生 + 现代前端，WebSocket 实时通信 |
-| 部署      | Docker             | 一键复现，volume 持久化，硬件可选直通     |
+| 配置管理    | ConfigService 热生效  | WebUI 改配置即时生效，无需重启         |
+| 部署      | Docker + 安装包       | 一键复现，volume 持久化，跨平台安装包     |
 
 ***
 
