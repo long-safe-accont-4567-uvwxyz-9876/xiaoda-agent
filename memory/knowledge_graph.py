@@ -73,8 +73,42 @@ class KnowledgeGraph:
     def set_router(self, router):
         self._router = router
 
+    def set_free_model_client(self, api_key: str, base_url: str, model: str):
+        """配置硅基流动免费模型客户端，用于知识提取（不占用主模型配额）"""
+        self._free_api_key = api_key
+        self._free_base_url = base_url
+        self._free_model = model
+
+    async def _call_free_model(self, messages: list, temperature: float = 0.1,
+                                max_tokens: int = 800) -> str | None:
+        """调用硅基流动免费模型"""
+        if not getattr(self, '_free_api_key', ''):
+            return None
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.post(
+                    f"{self._free_base_url}/chat/completions",
+                    json={
+                        "model": self._free_model,
+                        "messages": messages,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                    },
+                    headers={
+                        "Authorization": f"Bearer {self._free_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        except Exception as e:
+            logger.warning("kg.free_model_failed", error=str(e))
+            return None
+
     async def extract_from_summary(self, summary: str) -> dict:
-        if not self._router or not summary:
+        if not summary:
             return {"entities": [], "relations": []}
 
         try:
@@ -83,13 +117,16 @@ class KnowledgeGraph:
                 {"role": "system", "content": "你是一个知识提取助手，只输出纯JSON，不要输出任何其他内容，不要用markdown代码块包裹。"},
                 {"role": "user", "content": prompt},
             ]
-            result = await self._router.route(
-                "memory_encoding",
-                messages,
-                temperature=0.1,
-                user_openid="system",
-                session_id="kg_extract",
-            )
+            # 优先使用免费模型，降级到主路由
+            result = await self._call_free_model(messages, temperature=0.1, max_tokens=800)
+            if result is None and self._router:
+                result = await self._router.route(
+                    "memory_encoding",
+                    messages,
+                    temperature=0.1,
+                    user_openid="system",
+                    session_id="kg_extract",
+                )
             if isinstance(result, str):
                 cleaned = _clean_json_response(result)
                 parsed = json.loads(cleaned)

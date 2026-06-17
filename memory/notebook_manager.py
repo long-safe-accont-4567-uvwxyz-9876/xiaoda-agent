@@ -1,8 +1,10 @@
 import asyncio
 import json
+import os
 import re
 import time
 import datetime
+import httpx
 from loguru import logger
 
 from db.db_notebook import NotebookDB
@@ -48,7 +50,37 @@ class NotebookManager:
         self._db = db
         self.notebook = notebook
         self._router = router
+        self._free_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
+        self._free_base_url = "https://api.siliconflow.cn/v1"
+        self._free_model = "Qwen/Qwen3-8B"
         logger.info("notebook.ready")
+
+    async def _call_free_model(self, messages: list, temperature: float = 0.6,
+                                max_tokens: int = 800) -> str | None:
+        """调用硅基流动免费模型"""
+        if not self._free_api_key:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.post(
+                    f"{self._free_base_url}/chat/completions",
+                    json={
+                        "model": self._free_model,
+                        "messages": messages,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                    },
+                    headers={
+                        "Authorization": f"Bearer {self._free_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        except Exception as e:
+            logger.warning("notebook.free_model_failed", error=str(e))
+            return None
 
     async def add_note(self, content: str, tags: list[str] | None = None) -> int:
         due_date = self._extract_due_date(content)
@@ -134,12 +166,18 @@ class NotebookManager:
                 assistant_reply=reply[:300],
                 existing_notes=existing_str,
             )
-            result = await self._router.route(
-                "memory_encoding",
+            # 优先使用免费模型，降级到主路由
+            result = await self._call_free_model(
                 [{"role": "user", "content": prompt}],
-                temperature=0.6,
-                max_tokens=800,
+                temperature=0.6, max_tokens=800,
             )
+            if result is None and self._router:
+                result = await self._router.route(
+                    "memory_encoding",
+                    [{"role": "user", "content": prompt}],
+                    temperature=0.6,
+                    max_tokens=800,
+                )
             result = (result or "").strip()
 
             last_line = result.strip().split("\n")[-1].strip()

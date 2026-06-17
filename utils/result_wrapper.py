@@ -1,5 +1,7 @@
 import json
+import os
 import re
+import httpx
 from loguru import logger
 
 from agent_context import estimate_tokens
@@ -26,6 +28,36 @@ class ResultWrapper:
 
     def __init__(self, router=None):
         self.router = router
+        self._free_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
+        self._free_base_url = "https://api.siliconflow.cn/v1"
+        self._free_model = "Qwen/Qwen3-8B"
+
+    async def _call_free_model(self, messages: list, temperature: float = 0.3,
+                                max_tokens: int = 500) -> str | None:
+        """调用硅基流动免费模型"""
+        if not self._free_api_key:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.post(
+                    f"{self._free_base_url}/chat/completions",
+                    json={
+                        "model": self._free_model,
+                        "messages": messages,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                    },
+                    headers={
+                        "Authorization": f"Bearer {self._free_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        except Exception as e:
+            logger.warning("result_wrapper.free_model_failed", error=str(e))
+            return None
 
     async def wrap(self, tool_name: str, result, user_context: str = "") -> str:
         from tool_engine.tool_registry import ToolResult
@@ -74,12 +106,18 @@ class ResultWrapper:
 
 压缩摘要："""
 
-            compacted = await self.router.route(
-                "tool_result_wrap",
+            # 优先使用免费模型，降级到主路由
+            compacted = await self._call_free_model(
                 [{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=500,
+                temperature=0.3, max_tokens=500,
             )
+            if compacted is None and self.router:
+                compacted = await self.router.route(
+                    "tool_result_wrap",
+                    [{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                    max_tokens=500,
+                )
 
             if compacted and len(compacted) > 20:
                 return compacted
