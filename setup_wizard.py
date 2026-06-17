@@ -77,13 +77,6 @@ REQUIRED_KEYS = [
         "url": "https://siliconflow.cn",
         "url_desc": "注册 → API Keys → 复制",
     },
-    {
-        "key": "MASTER_QQ_OPENID",
-        "label": "主人 QQ OpenID",
-        "desc": "主人的 QQ OpenID（用于识别爸爸身份）。获取方式：在 QQ 中向机器人发送 /whoami，将返回的 OpenID 填入此处",
-        "url": "",
-        "url_desc": "",
-    },
 ]
 
 OPTIONAL_KEYS = [

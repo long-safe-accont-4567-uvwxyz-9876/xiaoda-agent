@@ -62,7 +62,6 @@ async def get_keys():
             {"key": "QQBOT_APP_ID", "label": "QQ Bot App ID", "desc": "QQ 机器人应用 ID", "url": "https://q.qq.com", "url_desc": "创建机器人应用 → 获取 AppID"},
             {"key": "QQBOT_APP_SECRET", "label": "QQ Bot App Secret", "desc": "QQ 机器人应用密钥", "url": "https://q.qq.com", "url_desc": "同一页面的 AppSecret"},
             {"key": "EMBED_API_KEY", "label": "向量嵌入 API 密钥", "desc": "硅基流动嵌入模型密钥", "url": "https://siliconflow.cn", "url_desc": "注册 → API Keys → 复制"},
-            {"key": "MASTER_QQ_OPENID", "label": "主人 QQ OpenID", "desc": "主人的 QQ OpenID（用于识别爸爸身份）。获取方式：在 QQ 中向机器人发送 /whoami，将返回的 OpenID 填入此处", "url": "", "url_desc": ""},
         ]
         OPTIONAL_KEYS = [
             {"key": "WEBUI_PASSWORD", "label": "Web UI 密码", "desc": "留空则无需密码登录", "url": "", "url_desc": ""},
@@ -372,7 +371,7 @@ async def test_single_key(key_name: str, key_value: str, extra: dict | None = No
         return await _test_github(key_value)
 
     # 不需要调用外部 API 的配置项，简单校验即可
-    _NO_API_TEST_KEYS = {"WEBUI_PASSWORD", "MASTER_QQ_OPENID"}
+    _NO_API_TEST_KEYS = {"WEBUI_PASSWORD"}
     if key_name in _NO_API_TEST_KEYS:
         return True, "配置已保存"
 

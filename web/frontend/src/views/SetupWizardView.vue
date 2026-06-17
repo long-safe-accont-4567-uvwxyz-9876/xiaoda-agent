@@ -38,7 +38,6 @@ onMounted(async () => {
       { key: 'QQBOT_APP_ID', label: 'QQ Bot App ID', desc: 'QQ 机器人应用 ID', url: 'https://q.qq.com', url_desc: '创建机器人应用 → 获取 AppID', required: true, configured: false, masked_value: '' },
       { key: 'QQBOT_APP_SECRET', label: 'QQ Bot App Secret', desc: 'QQ 机器人应用密钥', url: 'https://q.qq.com', url_desc: '同一页面的 AppSecret', required: true, configured: false, masked_value: '' },
       { key: 'EMBED_API_KEY', label: '向量嵌入 API 密钥', desc: '硅基流动嵌入模型密钥', url: 'https://siliconflow.cn', url_desc: '注册 → API Keys → 复制', required: true, configured: false, masked_value: '' },
-      { key: 'MASTER_QQ_OPENID', label: '主人 QQ OpenID', desc: '主人的 QQ OpenID（用于识别爸爸身份）。获取方式：在 QQ 中向机器人发送 /whoami，将返回的 OpenID 填入此处', url: '', url_desc: '', required: true, configured: false, masked_value: '' },
       { key: 'WEBUI_PASSWORD', label: 'Web UI 密码', desc: '留空则无需密码登录', url: '', url_desc: '', required: false, configured: false, masked_value: '' },
       { key: 'SILICONFLOW_API_KEY', label: 'SiliconFlow API 密钥', desc: '硅基流动 API 密钥', url: 'https://siliconflow.cn', url_desc: '注册 → API Keys', required: false, configured: false, masked_value: '' },
       { key: 'OPENROUTER_API_KEY', label: 'OpenRouter API 密钥', desc: 'OpenRouter API 密钥', url: 'https://openrouter.ai', url_desc: '注册 → API Keys', required: false, configured: false, masked_value: '' },
@@ -200,6 +199,7 @@ async function handleSave() {
             @update="handleUpdate"
             @test="handleTestKey"
           />
+          <p class="auto-bind-hint">主人身份自动绑定：私聊第一条消息自动识别；拉群时自动绑定群主身份，无需手动配置。</p>
 
           <button
             class="dendro-btn test-all-btn"
@@ -344,6 +344,14 @@ async function handleSave() {
   width: 100%;
   height: 36px;
   font-size: 14px;
+}
+
+.auto-bind-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+  text-align: center;
+  margin: 8px 0 0;
+  line-height: 1.6;
 }
 
 .test-all-btn:disabled {
