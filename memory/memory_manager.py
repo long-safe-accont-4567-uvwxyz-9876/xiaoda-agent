@@ -130,13 +130,16 @@ class MemoryManager:
 
     def __init__(self, db: DatabaseManager, memory: MemoryDB,
                  vector_store: VectorStore | None = None,
-                 router=None, knowledge_graph=None, security_filter=None):
+                 router=None, knowledge_graph=None, security_filter=None,
+                 reranker=None, query_transformer=None):
         self.db = db
         self.memory = memory
         self.vec = vector_store
         self.router = router
         self.kg = knowledge_graph
         self._security_filter = security_filter
+        self._reranker = reranker
+        self._query_transformer = query_transformer
         self._last_message_time: float = 0
         self._last_encode_time: float = 0
         self._pending_encode = False
@@ -169,7 +172,7 @@ class MemoryManager:
         self._pending_encode = True
 
     async def retrieve_memories_hybrid(self, query: str, k: int = 5) -> list[dict]:
-        """FTS + 向量 RRF 混合检索"""
+        """FTS + 向量 RRF 混合检索 + Reranker 精排"""
         fts_items = []
         vec_items = []
 
@@ -201,14 +204,47 @@ class MemoryManager:
         if not vec_items:
             return fts_items[:k]
 
-        # RRF 融合
+        # RRF 融合 - 过采样 3x 供 Reranker 筛选
+        oversample_k = k * 3
         fts_ids = [str(item["id"]) for item in fts_items]
         vec_ids = [str(item["id"]) for item in vec_items]
-        fused = reciprocal_rank_fusion([fts_ids, vec_ids], limit=k)
+        fused = reciprocal_rank_fusion([fts_ids, vec_ids], limit=oversample_k)
 
         # 按 RRF 排序获取完整记录
         score_by_id = dict(fused)
         all_items = {str(item["id"]): item for item in fts_items + vec_items}
+
+        # Reranker 精排
+        if self._reranker and self._reranker.available and len(fused) > k:
+            docs = []
+            idx_map = {}
+            for i, (item_id, rrf_score) in enumerate(fused):
+                if item_id in all_items:
+                    docs.append(all_items[item_id].get("summary", ""))
+                    idx_map[i] = item_id
+
+            if docs:
+                try:
+                    reranked = await self._reranker.rerank(
+                        query=query,
+                        documents=docs,
+                        top_n=k,
+                    )
+                    results = []
+                    for item in reranked:
+                        orig_idx = item["index"]
+                        item_id = idx_map.get(orig_idx)
+                        if item_id and item_id in all_items:
+                            mem = all_items[item_id]
+                            mem["rerank_score"] = item["relevance_score"]
+                            mem["rrf_score"] = dict(fused).get(item_id, 0)
+                            results.append(mem)
+                    if results:
+                        return results[:k]
+                except Exception as e:
+                    logger.warning("memory.rerank_failed", error=str(e))
+
+        # 降级：无 Reranker 或 Reranker 失败时走原 RRF 逻辑
         results = []
         for item_id, rrf_score in fused:
             if item_id in all_items:
@@ -218,14 +254,43 @@ class MemoryManager:
 
         return results[:k]
 
-    async def retrieve_memories(self, query: str, k: int = 5) -> list[dict]:
+    async def retrieve_memories(self, query: str, k: int = 5, context: str = "") -> list[dict]:
+        import config
         results = []
 
-        # 优先混合检索
-        try:
-            results = await self.retrieve_memories_hybrid(query, k=k)
-        except Exception as e:
-            logger.warning("memory.hybrid_search_failed", error=str(e))
+        # 查询变换：改写 + 扩展
+        queries = [query]
+        if self._query_transformer and getattr(config, "QUERY_TRANSFORM_ENABLED", True):
+            try:
+                rewritten = await self._query_transformer.rewrite_query(query, context)
+                if rewritten and rewritten != query:
+                    queries = [rewritten]
+                    logger.debug("memory.query_rewritten", original=query[:50], rewritten=rewritten[:50])
+
+                expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2)
+                if expand_count > 0:
+                    expanded = await self._query_transformer.expand_query(rewritten, n=expand_count)
+                    if expanded and len(expanded) > 1:
+                        queries = expanded
+                        logger.debug("memory.query_expanded", count=len(queries))
+            except Exception as e:
+                logger.warning("memory.query_transform_failed", error=str(e))
+
+        # 多查询并行检索
+        all_results = []
+        seen_ids = set()
+        for q in queries:
+            try:
+                hybrid_results = await self.retrieve_memories_hybrid(q, k=k)
+                for r in hybrid_results:
+                    rid = str(r.get("id", ""))
+                    if rid and rid not in seen_ids:
+                        seen_ids.add(rid)
+                        all_results.append(r)
+            except Exception as e:
+                logger.warning("memory.hybrid_search_failed", query=q[:50], error=str(e))
+
+        results = all_results
 
         # 降级：纯向量检索
         if not results and self.vec:
@@ -249,15 +314,38 @@ class MemoryManager:
             except Exception as e:
                 logger.warning("memory.fallback_search_failed", error=str(e))
 
+        # 计算时效性衰减
         now = time.time()
         for r in results:
             age_hours = (now - r.get("timestamp", 0)) / 3600
             importance = r.get("importance", 0.5)
-            r["effective_score"] = importance * max(0.1, 1.0 - age_hours / 168)
+            r["time_decay"] = max(0.1, 1.0 - age_hours / 168)
+            r["effective_score"] = importance * r["time_decay"]
 
-        results.sort(key=lambda x: x.get("effective_score", 0), reverse=True)
+        # KG 增强评分
+        kg_boosts = []
+        if self.kg and results:
+            try:
+                summaries = [r.get("summary", "") for r in results]
+                kg_boosts = await self.kg.get_relevance_boost(query, summaries)
+            except Exception as e:
+                logger.debug("memory.kg_boost_failed", error=str(e))
+
+        # 综合评分: final = α×rerank + β×kg_boost + γ×(importance×decay)
+        alpha = getattr(config, "RAG_RERANK_WEIGHT", 0.65)
+        beta = getattr(config, "RAG_KG_WEIGHT", 0.15)
+        gamma = getattr(config, "RAG_IMPORTANCE_WEIGHT", 0.20)
+
+        for i, r in enumerate(results):
+            rerank_score = r.get("rerank_score", r.get("rrf_score", r.get("effective_score", 0.5)))
+            kg_boost = kg_boosts[i] if i < len(kg_boosts) else 0.0
+            importance_decay = r.get("effective_score", 0.5)
+            r["final_score"] = alpha * rerank_score + beta * kg_boost + gamma * importance_decay
+
+        results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
         results = results[:k]
 
+        # KG 上下文增强（保留原有逻辑）
         if self.kg and results:
             try:
                 entity_names = []

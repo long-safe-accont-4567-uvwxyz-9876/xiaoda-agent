@@ -162,6 +162,48 @@ class KnowledgeGraph:
             logger.warning("kg.get_related_failed", error=str(e))
             return []
 
+    async def get_relevance_boost(self, query: str, memory_summaries: list[str]) -> list[float]:
+        """基于知识图谱的检索增强评分"""
+        boosts = []
+
+        query_entities = set()
+        try:
+            entities = await self.extract_from_summary(query)
+            for ent in entities.get("entities", []):
+                query_entities.add(ent.get("name", ""))
+        except Exception as e:
+            logger.debug("kg.query_entities_failed", error=str(e))
+
+        for summary in memory_summaries:
+            boost = 0.0
+            summary_entities = set()
+            try:
+                entities = await self.extract_from_summary(summary)
+                for ent in entities.get("entities", []):
+                    summary_entities.add(ent.get("name", ""))
+            except Exception as e:
+                logger.debug("kg.summary_entities_failed", error=str(e))
+
+            overlap = query_entities & summary_entities
+            if overlap:
+                boost += len(overlap) * 0.15
+
+            if self.knowledge_db and query_entities and summary_entities:
+                try:
+                    for qe in list(query_entities)[:3]:
+                        for se in list(summary_entities)[:3]:
+                            relations = await self.knowledge_db.get_knowledge_relations(qe)
+                            for rel in relations[:5]:
+                                if rel.get("to_entity") == se or rel.get("from_entity") == se:
+                                    boost += 0.05
+                                    break
+                except Exception as e:
+                    logger.debug("kg.relation_boost_failed", error=str(e))
+
+            boosts.append(min(boost, 0.5))
+
+        return boosts
+
     async def format_knowledge_context(self, knowledge: list[dict]) -> str:
         if not knowledge:
             return ""

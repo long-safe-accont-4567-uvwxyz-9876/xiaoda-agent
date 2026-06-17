@@ -92,15 +92,45 @@ class AgentCoreBootstrapper:
         from memory.knowledge_graph import KnowledgeGraph
         from memory.notebook_manager import NotebookManager
         from memory.learning_manager import LearningManager
+        from memory.reranker import Reranker
+        from memory.query_transform import QueryTransformer
         from emotion.portrait_manager import PortraitManager
         from instinct_manager import InstinctManager
+        import config
 
         core = self.core
+
+        # 初始化 Reranker（SiliconFlow 免费常驻）
+        reranker = None
+        if getattr(config, "RERANKER_ENABLED", True):
+            rerank_api_key = config.RERANKER_API_KEY or os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
+            if rerank_api_key:
+                reranker = Reranker(
+                    api_key=rerank_api_key,
+                    base_url=config.RERANKER_BASE_URL,
+                    model=config.RERANKER_MODEL,
+                )
+                logger.info("reranker.enabled", model=config.RERANKER_MODEL)
+            else:
+                logger.info("reranker.disabled_no_api_key")
+        else:
+            logger.info("reranker.disabled_by_config")
+
+        # 初始化 QueryTransformer
+        query_transformer = None
+        if getattr(config, "QUERY_TRANSFORM_ENABLED", True):
+            query_transformer = QueryTransformer(router=core.router)
+            logger.info("query_transformer.enabled")
+        else:
+            logger.info("query_transformer.disabled_by_config")
+
         core.memory = MemoryManager(
             db=core.db,
             memory=core.db.memory,
             vector_store=core._vec_store,
             router=core.router,
+            reranker=reranker,
+            query_transformer=query_transformer,
         )
         core.knowledge_graph = KnowledgeGraph(db=core.db, knowledge_db=core.db.knowledge, router=core.router)
         core.memory.set_knowledge_graph(core.knowledge_graph)

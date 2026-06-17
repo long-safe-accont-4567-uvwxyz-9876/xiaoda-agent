@@ -302,6 +302,22 @@ AGENT_ROUTE_KEYWORDS = {
     ],
 }
 
+# ── RAG 优化配置（SiliconFlow 免费常驻） ──
+RERANKER_API_KEY = os.getenv("RERANKER_API_KEY", "")
+RERANKER_BASE_URL = os.getenv("RERANKER_BASE_URL", "https://api.siliconflow.cn/v1")
+RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
+RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "true").lower() in ("1", "true", "yes")
+RERANKER_OVERSAMPLE_RATIO = int(os.getenv("RERANKER_OVERSAMPLE_RATIO", "3"))
+
+# Query Transform
+QUERY_TRANSFORM_ENABLED = os.getenv("QUERY_TRANSFORM_ENABLED", "true").lower() in ("1", "true", "yes")
+QUERY_EXPAND_COUNT = int(os.getenv("QUERY_EXPAND_COUNT", "2"))
+
+# RAG Fusion Weights
+RAG_RERANK_WEIGHT = float(os.getenv("RAG_RERANK_WEIGHT", "0.65"))
+RAG_KG_WEIGHT = float(os.getenv("RAG_KG_WEIGHT", "0.15"))
+RAG_IMPORTANCE_WEIGHT = float(os.getenv("RAG_IMPORTANCE_WEIGHT", "0.20"))
+
 MCP_SERVERS = {
     "git": {
         "command": "/home/orangepi/.local/bin/uvx",
@@ -344,4 +360,14 @@ __all__ = [
     "AGNES_TEXT_MODEL",
     "AGNES_IMAGE_MODEL",
     "AGNES_VIDEO_MODEL",
+    "RERANKER_API_KEY",
+    "RERANKER_BASE_URL",
+    "RERANKER_MODEL",
+    "RERANKER_ENABLED",
+    "RERANKER_OVERSAMPLE_RATIO",
+    "QUERY_TRANSFORM_ENABLED",
+    "QUERY_EXPAND_COUNT",
+    "RAG_RERANK_WEIGHT",
+    "RAG_KG_WEIGHT",
+    "RAG_IMPORTANCE_WEIGHT",
 ]
