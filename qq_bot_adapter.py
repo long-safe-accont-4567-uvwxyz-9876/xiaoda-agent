@@ -185,8 +185,67 @@ def _next_msg_seq() -> int:
         return _msg_seq_counter
 
 
+def _save_master_openid(openid: str) -> None:
+    """将 openid 追加到 MASTER_QQ_OPENID（逗号分隔），并更新运行时环境变量。"""
+    existing = os.getenv("MASTER_QQ_OPENID", "").strip()
+    ids = [x.strip() for x in existing.split(",") if x.strip()]
+    if openid in ids:
+        return
+    ids.append(openid)
+    value = ",".join(ids)
+
+    from pathlib import Path
+    env_path = Path(__file__).parent / ".env"
+    if not env_path.exists():
+        env_path.write_text(f"MASTER_QQ_OPENID={value}\n", encoding="utf-8")
+    else:
+        lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        found = False
+        for i, line in enumerate(lines):
+            if line.strip().startswith("MASTER_QQ_OPENID="):
+                lines[i] = f"MASTER_QQ_OPENID={value}\n"
+                found = True
+                break
+        if not found:
+            lines.append(f"\nMASTER_QQ_OPENID={value}\n")
+        env_path.write_text("".join(lines), encoding="utf-8")
+    os.environ["MASTER_QQ_OPENID"] = value
+    logger.info("qq_bot.master_openid_saved", openid=openid, total=len(ids))
+
+
 # 当前活跃的 bot 实例（同进程内 GreetingScheduler 等主动消息入口使用）
 _ACTIVE_BOT: "AIQQBot | None" = None
+
+
+def _save_master_openid(openid: str) -> bool:
+    """将 MASTER_QQ_OPENID 写入 .env 文件，永久生效。"""
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    try:
+        lines = []
+        if os.path.exists(env_path):
+            with open(env_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+
+        found = False
+        for i, line in enumerate(lines):
+            if line.strip().startswith("MASTER_QQ_OPENID="):
+                lines[i] = f"MASTER_QQ_OPENID={openid}\n"
+                found = True
+                break
+        if not found:
+            if lines and not lines[-1].endswith("\n"):
+                lines.append("\n")
+            lines.append(f"MASTER_QQ_OPENID={openid}\n")
+
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+
+        os.environ["MASTER_QQ_OPENID"] = openid
+        logger.info("qq_bot.master_openid_saved", openid=openid)
+        return True
+    except Exception as e:
+        logger.error("qq_bot.master_openid_save_failed", error=str(e))
+        return False
 
 
 async def send_proactive_message(text: str, openid: str = "") -> bool:
@@ -353,6 +412,16 @@ class AIQQBot(botpy.Client):
             attachment_info = " ".join(str(p) for p in parts)
         return image_data, attachment_info
 
+    async def on_group_add_robot(self, event):
+        """机器人被拉入群时，自动将拉入者绑定为主人。"""
+        op_openid = getattr(event, "op_member_openid", "")
+        group_openid = getattr(event, "group_openid", "")
+        if not op_openid:
+            logger.warning("qq_bot.group_add_robot.no_openid", group=group_openid)
+            return
+        logger.info("qq_bot.group_add_robot", group=group_openid, op_openid=op_openid)
+        _save_master_openid(op_openid)
+
     async def on_c2c_message_create(self, message: C2CMessage):
         content = message.content.strip()
 
@@ -369,9 +438,17 @@ class AIQQBot(botpy.Client):
             self._last_c2c_openid = user_openid
         logger.info("qq_bot.c2c_message", user_id=user_id, openid=user_openid, content=user_input[:80])
 
-        # 主人识别：对比 openid 与 MASTER_QQ_OPENID
-        master_openid = os.getenv("MASTER_QQ_OPENID", "").strip()
-        is_master = bool(master_openid) and user_openid == master_openid
+        # 主人识别：对比 openid 与 MASTER_QQ_OPENID（逗号分隔多值）
+        master_raw = os.getenv("MASTER_QQ_OPENID", "").strip()
+        master_ids = [x.strip() for x in master_raw.split(",") if x.strip()]
+        is_master = bool(master_ids) and user_openid in master_ids
+
+        # 私聊自动绑定：首次私聊自动将发送者绑定为主人
+        if not is_master and user_openid and not master_ids:
+            _save_master_openid(user_openid)
+            is_master = True
+            logger.info("qq_bot.c2c_auto_bind", openid=user_openid)
+
         if not is_master:
             logger.info("qq_bot.non_master_message", user_id=user_id, openid=user_openid, content=user_input[:80])
 
@@ -431,14 +508,13 @@ class AIQQBot(botpy.Client):
         user_id = f"qq_{member_openid}" if member_openid else "qq_unknown"
         logger.info("qq_bot.group_message", user_id=user_id, openid=member_openid, content=user_input[:80])
 
-        # 主人识别：同时检查 group member_openid 和 private user_openid
-        # QQ 开放平台对私聊和群聊分配不同的 OpenID，
-        # 用户可能从私聊或群聊任一渠道获取 MASTER_QQ_OPENID
-        master_openid = os.getenv("MASTER_QQ_OPENID", "").strip()
-        user_openid = getattr(message.author, 'user_openid', '') if hasattr(message, 'author') else ''
-        is_master = bool(master_openid) and (member_openid == master_openid or user_openid == master_openid)
+        # 主人识别：对比 member_openid 与 MASTER_QQ_OPENID（逗号分隔多值）
+        # on_group_add_robot 已自动绑定拉群者的 member_openid
+        master_raw = os.getenv("MASTER_QQ_OPENID", "").strip()
+        master_ids = [x.strip() for x in master_raw.split(",") if x.strip()]
+        is_master = bool(master_ids) and member_openid in master_ids
         if is_master:
-            logger.info("qq_bot.master_identified", member_openid=member_openid, user_openid=user_openid)
+            logger.info("qq_bot.master_identified", member_openid=member_openid)
         else:
             logger.info("qq_bot.non_master_message", user_id=user_id, openid=member_openid, content=user_input[:80])
 
