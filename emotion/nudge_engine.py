@@ -9,13 +9,18 @@ from loguru import logger
 from db.db_analytics import AnalyticsDB
 
 
-# 推理模型会输出 <think>...</think> 或 CoT 前缀（"嗯，用户..."）。统一清洗。
+# 推理模型会输出 <think>...</think> 或 CoT 前缀。统一清洗。
 _THINK_TAG_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
 _THINK_PREFIX_PATTERNS = [
     re.compile(r"^\s*<think\b[^>]*>.*", re.DOTALL | re.IGNORECASE),
     re.compile(r"^\s*(嗯[，,].*?(?:\n\s*\n|。\s*\n))", re.DOTALL),
     re.compile(r"^\s*(首先[，,].*?(?:\n\s*\n|。\s*\n))", re.DOTALL),
+    re.compile(r"^\s*(作为[^。，]+[，,].*?(?:\n\s*\n|。\s*\n))", re.DOTALL),
+    re.compile(r"^\s*(我的角色是.*?(?:\n\s*\n|。\s*\n))", re.DOTALL),
+    re.compile(r"^\s*(关键点[：:].*?(?:\n\s*\n|$))", re.DOTALL),
 ]
+# 如果清洗后仍包含推理痕迹，整段丢弃
+_REASONING_INDICATORS = re.compile(r"关键点[：:]|我的角色是|问候主题[是：]|所以，在.*中，我必须")
 
 
 def _strip_thinking(text: str) -> str:
@@ -27,7 +32,16 @@ def _strip_thinking(text: str) -> str:
         if m:
             text = text[m.end():]
             break
-    return text.strip()
+    text = text.strip()
+    # 清洗后仍含推理痕迹 → 尝试取最后一句短句，否则丢弃
+    if _REASONING_INDICATORS.search(text):
+        sentences = re.split(r'[。！？\n]', text)
+        for s in reversed(sentences):
+            s = s.strip()
+            if s and len(s) <= 40 and not _REASONING_INDICATORS.search(s):
+                return s
+        return ""
+    return text
 
 
 class NudgeEngine:
@@ -39,7 +53,8 @@ class NudgeEngine:
                  greeting_max_per_day: int = 3,
                  dnd_start: int = 23,
                  dnd_end: int = 8,
-                 portrait_manager=None):
+                 portrait_manager=None,
+                 config_service=None):
         self._db = db
         self._analytics = analytics
         self._router = router
@@ -62,6 +77,7 @@ class NudgeEngine:
         self.dnd_end = dnd_end
 
         self._portrait_manager = portrait_manager
+        self._config_service = config_service
 
     async def start(self):
         self._running = True
@@ -80,8 +96,6 @@ class NudgeEngine:
 
     def poke(self):
         self._last_user_message_time = time.time()
-        # 用户活跃时重置主动消息冷却，避免长时间离开后冷却仍阻止问候
-        self._last_proactive_time = 0
 
     async def _loop(self):
         while self._running:
@@ -122,10 +136,43 @@ class NudgeEngine:
             tz = ZoneInfo(tz_name)
         except Exception:
             tz = ZoneInfo("Asia/Shanghai")
-        hour = datetime.now(tz).hour
+        now = datetime.now(tz)
+        now_min = now.hour * 60 + now.minute
+
+        # 优先读取 WebUI 配置（与 GreetingScheduler 共享）
+        if self._config_service:
+            dnd_periods = self._config_service.get("schedule.dnd_periods", [])
+            if dnd_periods:
+                for p in dnd_periods:
+                    try:
+                        s_h, s_m = p["start"].split(":")
+                        e_h, e_m = p["end"].split(":")
+                        s, e = int(s_h) * 60 + int(s_m), int(e_h) * 60 + int(e_m)
+                    except Exception:
+                        continue
+                    if s <= e:
+                        if s <= now_min < e:
+                            return True
+                    else:  # 跨午夜
+                        if now_min >= s or now_min < e:
+                            return True
+                return False
+
+        # 降级：使用环境变量配置
         if self.dnd_start > self.dnd_end:
-            return hour >= self.dnd_start or hour < self.dnd_end
-        return self.dnd_start <= hour < self.dnd_end
+            return now.hour >= self.dnd_start or now.hour < self.dnd_end
+        return self.dnd_start <= now.hour < self.dnd_end
+
+    async def _sent_today_count(self) -> int:
+        """查询 greeting_log 表今日已发数量（与 GreetingScheduler 共享计数）。"""
+        try:
+            midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+            row = await self._db.fetch_one(
+                "SELECT COUNT(*) AS c FROM greeting_log WHERE fired_at >= ?", (midnight,))
+            return int(row["c"]) if row else 0
+        except Exception:
+            # greeting_log 表不存在时降级到内存计数
+            return self._proactive_count_today
 
     async def _check_greeting(self):
         now = time.time()
@@ -133,15 +180,23 @@ class NudgeEngine:
         if now - self._last_proactive_time < self.MIN_PROACTIVE_INTERVAL:
             return
 
+        # 读取 WebUI 配置
+        if self._config_service:
+            if not self._config_service.get("schedule.enabled", True):
+                return
+            max_per_day = int(self._config_service.get("schedule.greeting_max_per_day", self.greeting_max_per_day))
+        else:
+            if not self.greeting_enabled:
+                return
+            max_per_day = self.greeting_max_per_day
+
         idle_seconds = now - self._last_user_message_time
         if idle_seconds < self.greeting_threshold:
             return
 
-        today = datetime.now().date()
-        if today != self._today_date:
-            self._today_date = today
-            self._proactive_count_today = 0
-        if self._proactive_count_today >= self.greeting_max_per_day:
+        # 共享 greeting_log 表计数
+        sent_count = await self._sent_today_count()
+        if sent_count >= max_per_day:
             return
 
         greeting = await self._generate_idle_greeting(idle_seconds)
@@ -298,6 +353,14 @@ class NudgeEngine:
                 message_type=msg_type,
                 content=content,
             )
+            # 同步写入 greeting_log 表，与 GreetingScheduler 共享计数
+            try:
+                await self._db.execute(
+                    "INSERT INTO greeting_log(schedule_id, fired_at, content, channel, reason) "
+                    "VALUES (?,?,?,?,?)",
+                    (0, time.time(), content, "qq", f"nudge_{msg_type}"))
+            except Exception:
+                pass  # greeting_log 表不存在时静默忽略
             self._last_proactive_time = time.time()
             self._proactive_count_today += 1
             logger.info("nudge.sent", type=msg_type, content=content[:60], count_today=self._proactive_count_today)
