@@ -20,13 +20,17 @@ from loguru import logger
 
 
 # 推理模型（DeepSeek-R1/MiMo Pro 等）会输出 <think>...</think> 思维链；
-# 部分模型只在前缀输出未闭合的"嗯，用户..."等思考文本。统一清洗。
+# 部分模型只在前缀输出未闭合的思考文本。统一清洗。
 _THINK_TAG_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
 _THINK_PREFIX_PATTERNS = [
     re.compile(r"^\s*<think\b[^>]*>.*", re.DOTALL | re.IGNORECASE),  # 未闭合 <think>
     re.compile(r"^\s*(嗯[，,].*?(?:\n\s*\n|。\s*\n))", re.DOTALL),  # CoT 段落（"嗯，用户..."）
     re.compile(r"^\s*(首先[，,].*?(?:\n\s*\n|。\s*\n))", re.DOTALL),  # CoT 段落（"首先..."）
+    re.compile(r"^\s*(作为[^。，]+[，,].*?(?:\n\s*\n|。\s*\n))", re.DOTALL),  # 角色分析（"作为纳西妲，..."）
+    re.compile(r"^\s*(我的角色是.*?(?:\n\s*\n|。\s*\n))", re.DOTALL),  # 角色声明
+    re.compile(r"^\s*(关键点[：:].*?(?:\n\s*\n|$))", re.DOTALL),  # 要点列举
 ]
+_REASONING_INDICATORS = re.compile(r"关键点[：:]|我的角色是|问候主题[是：]|所以，在.*中，我必须")
 
 
 def _strip_thinking(text: str) -> str:
@@ -41,7 +45,16 @@ def _strip_thinking(text: str) -> str:
         if m:
             text = text[m.end():]
             break
-    return text.strip()
+    text = text.strip()
+    # 3. 清洗后仍含推理痕迹 → 尝试取最后一句短句，否则丢弃
+    if _REASONING_INDICATORS.search(text):
+        sentences = re.split(r'[。！？\n]', text)
+        for s in reversed(sentences):
+            s = s.strip()
+            if s and len(s) <= 40 and not _REASONING_INDICATORS.search(s):
+                return s
+        return ""
+    return text
 
 
 def _hm_to_min(hm: str) -> int:

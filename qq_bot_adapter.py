@@ -321,6 +321,14 @@ class AIQQBot(botpy.Client):
         self._processed_msg_ids[msg_id] = now
         return False
 
+    @staticmethod
+    def _get_config_service():
+        try:
+            from web.config_service import get_config_service
+            return get_config_service()
+        except Exception:
+            return None
+
     async def on_ready(self):
         logger.info("qq_bot.connected", app_id=APP_ID)
 
@@ -346,6 +354,7 @@ class AIQQBot(botpy.Client):
                         dnd_start=int(os.getenv("NUDGE_DND_START", "23")),
                         dnd_end=int(os.getenv("NUDGE_DND_END", "8")),
                         portrait_manager=self.agent.portrait_manager,
+                        config_service=self._get_config_service(),
                     )
                     await self.nudge_engine.start()
                 except Exception as e:
