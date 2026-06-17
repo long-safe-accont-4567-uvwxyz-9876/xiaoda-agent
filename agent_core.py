@@ -122,6 +122,7 @@ class RequestContext:
     handled_by_tool_call: bool = False
     last_user_emotion: str = ""
     delegate_depth: int = 0
+    is_master: bool = True
 
 
 class AgentCore:
@@ -185,7 +186,8 @@ class AgentCore:
                       user_openid: str = "",
                       session_id: str = "",
                       status_callback=None,
-                      image_data: list[dict] | None = None) -> ProcessResult:
+                      image_data: list[dict] | None = None,
+                      is_master: bool = True) -> ProcessResult:
         if not self._initialized:
             return ProcessResult(reply=DEGRADED_REPLY)
 
@@ -195,16 +197,18 @@ class AgentCore:
             user_id=user_id,
             user_input=user_input,
             status_callback=status_callback,
+            is_master=is_master,
         )
         _ctx_token = _current_request_ctx.set(ctx)
         try:
-            return await self._process_impl(ctx, user_input, user_id, source, user_openid, session_id, status_callback, image_data)
+            return await self._process_impl(ctx, user_input, user_id, source, user_openid, session_id, status_callback, image_data, is_master)
         finally:
             _current_request_ctx.reset(_ctx_token)
 
     async def _process_impl(self, ctx: RequestContext, user_input: str, user_id: str,
                              source: str, user_openid: str, session_id: str,
-                             status_callback, image_data: list[dict] | None) -> ProcessResult:
+                             status_callback, image_data: list[dict] | None,
+                             is_master: bool = True) -> ProcessResult:
         if self._tool_call_handler:
             self._tool_call_handler._tool_repair.clear_storm_window()
 
@@ -297,7 +301,7 @@ class AgentCore:
         self.context.emotion_hint = emotion_hint
         ctx.last_user_emotion = emotion.get("primary", "")
 
-        if self.memory:
+        if self.memory and is_master:
             self.memory.signal_new_message()
             try:
                 memories = await self.memory.retrieve_memories(user_input, k=3)
@@ -310,6 +314,22 @@ class AgentCore:
 
         effective_input = user_input
         messages = self.context.build_messages(effective_input)
+
+        # 非主人消息：注入隐私保护约束
+        if not is_master:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "[安全约束] 当前与你对话的不是爸爸本人，而是其他人。请遵守以下规则：\n"
+                    "1. 礼貌友好地回复，保持纳西妲的温柔风格\n"
+                    "2. 绝对不泄露爸爸的任何隐私信息（姓名、偏好、记忆内容、项目信息、设备信息等）\n"
+                    "3. 不执行任何敏感操作（文件操作、系统命令、记忆写入等）\n"
+                    "4. 如果对方询问爸爸的个人信息或隐私，温柔但坚定地拒绝\n"
+                    "5. 坚决维护爸爸，不对外人透露爸爸的任何情况\n"
+                    "6. 可以进行日常闲聊、知识问答等无害对话\n"
+                    "7. 不要称呼对方为'爸爸'，可以用'你'或友好地称呼"
+                )
+            })
 
         if image_data:
             logger.info("agent.vision_start", image_count=len(image_data), total_b64_size=sum(len(img.get('data', '')) for img in image_data))
@@ -382,6 +402,12 @@ class AgentCore:
         # 表情包意图时禁用所有工具：sticker 由系统自动附带，模型只需回复文字
         if _sticker_intent and tools:
             tools = None
+
+        # 非主人消息：过滤敏感工具，仅保留聊天能力
+        if not is_master and tools:
+            _SAFE_TOOLS_FOR_STRANGER = set()  # 外人不可使用任何工具，纯聊天
+            tools = None
+            logger.info("agent.tools_filtered_for_non_master", user_id=user_id)
 
         should_escalate, reason = self._should_escalate_to_pro(user_input, tools)
         base_task = "chat_pro" if should_escalate else "chat"

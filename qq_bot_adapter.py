@@ -369,6 +369,12 @@ class AIQQBot(botpy.Client):
             self._last_c2c_openid = user_openid
         logger.info("qq_bot.c2c_message", user_id=user_id, openid=user_openid, content=user_input[:80])
 
+        # 主人识别：对比 openid 与 MASTER_QQ_OPENID
+        master_openid = os.getenv("MASTER_QQ_OPENID", "").strip()
+        is_master = bool(master_openid) and user_openid == master_openid
+        if not is_master:
+            logger.info("qq_bot.non_master_message", user_id=user_id, openid=user_openid, content=user_input[:80])
+
         if self.nudge_engine:
             self.nudge_engine.poke()
 
@@ -386,6 +392,11 @@ class AIQQBot(botpy.Client):
         if msg_id and self._is_duplicate_msg(msg_id):
             return
 
+        # /whoami 指令：回复发送者的 openid（用于主人在 Setup 中填写）
+        if content.strip() in ("/whoami", "/whoami "):
+            await message.reply(content=f"你的 OpenID 是：\n{user_openid}\n\n在 Setup 配置页面的「主人 QQ OpenID」填入此值即可绑定主人身份。", msg_seq=_next_msg_seq())
+            return
+
         try:
             await message.reply(content="纳西妲收到啦，正在想～🌿", msg_seq=_next_msg_seq())
 
@@ -395,7 +406,8 @@ class AIQQBot(botpy.Client):
             result = await self.agent.process(user_input, user_id=user_id, source="qq_c2c",
                                               user_openid=user_openid, session_id=session_id,
                                               status_callback=status_notify,
-                                              image_data=image_data if image_data else None)
+                                              image_data=image_data if image_data else None,
+                                              is_master=is_master)
             if result.reply:
                 await self._send_reply_with_sticker(message, result)
         except Exception as e:
@@ -419,11 +431,22 @@ class AIQQBot(botpy.Client):
         user_id = f"qq_{member_openid}" if member_openid else "qq_unknown"
         logger.info("qq_bot.group_message", user_id=user_id, openid=member_openid, content=user_input[:80])
 
+        # 主人识别：对比 openid 与 MASTER_QQ_OPENID
+        master_openid = os.getenv("MASTER_QQ_OPENID", "").strip()
+        is_master = bool(master_openid) and member_openid == master_openid
+        if not is_master:
+            logger.info("qq_bot.non_master_message", user_id=user_id, openid=member_openid, content=user_input[:80])
+
         if self.nudge_engine:
             self.nudge_engine.poke()
 
         msg_id = getattr(message, 'id', '') or getattr(message, 'message_id', '')
         if msg_id and self._is_duplicate_msg(msg_id):
+            return
+
+        # /whoami 指令：回复发送者的 openid（用于主人在 Setup 中填写）
+        if content.strip() in ("/whoami", "/whoami "):
+            await message.reply(content=f"你的 OpenID 是：\n{member_openid}\n\n在 Setup 配置页面的「主人 QQ OpenID」填入此值即可绑定主人身份。", msg_seq=_next_msg_seq())
             return
 
         try:
@@ -435,7 +458,8 @@ class AIQQBot(botpy.Client):
             result = await self.agent.process(user_input, user_id=user_id, source="qq_group",
                                               user_openid=member_openid,
                                               status_callback=status_notify,
-                                              image_data=image_data if image_data else None)
+                                              image_data=image_data if image_data else None,
+                                              is_master=is_master)
             if result.reply:
                 await self._send_reply_with_sticker(message, result)
         except Exception as e:

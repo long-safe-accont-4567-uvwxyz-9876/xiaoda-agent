@@ -188,12 +188,26 @@ async def test_agent(name: str, request: Request, _user: str = Depends(get_curre
     test_msg = "请简短地自我介绍一下（30字以内）"
     try:
         if name == "nahida":
-            result = await core.process(test_msg, user_id="webui", source="web",
-                                        session_id="webui_agent_test")
-            reply = result.reply
+            # 绕过路由/委派逻辑，直接用纳西妲 system prompt 发起纯对话
+            from config import build_system_prompt
+            system_prompt = build_system_prompt()
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": test_msg},
+            ]
+            result = await core.router.route("chat", messages, temperature=0.7)
+            if isinstance(result, str):
+                reply = core._clean_reply(result)
+            else:
+                reply = core._clean_reply(result.choices[0].message.content or "")
+            ok = bool(reply and reply.strip())
         else:
             reply = await core.dispatcher.dispatch(name, test_msg)
-        ok = bool(reply and reply.strip())
+            if not reply or not reply.strip():
+                reply = "Agent 不可用（可能处于降级模式）"
+                ok = False
+            else:
+                ok = True
         return Envelope(data={
             "ok": ok,
             "elapsed_ms": int((time.time() - t0) * 1000),
