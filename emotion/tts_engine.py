@@ -18,7 +18,7 @@ _voice_ref_dir = os.getenv("VOICE_REF_DIR", "")
 if _voice_ref_dir:
     KIOXIA_BASE = Path(_voice_ref_dir)
 else:
-    _kioxia_data = Path(os.getenv("KIOXIA_DATA_DIR", "/media/orangepi/KIOXIA/nahida-data"))
+    _kioxia_data = Path(os.getenv("KIOXIA_DATA_DIR", str(Path.home() / ".ai-agent" / "data")))
     # 安全检查：如果 .parent 是根目录，则回退到 KIOXIA_DATA_DIR 本身
     KIOXIA_BASE = _kioxia_data.parent if _kioxia_data.parent != Path("/") else _kioxia_data
 

@@ -139,6 +139,33 @@ jobs:
           if grep -r "sk-[a-zA-Z0-9]\{20,\}" dist/nahida-agent/ --include="*.json" --include="*.env" --include="*.key" -l 2>/dev/null | grep -v ".env.example" | grep -q .; then
             echo "FOUND: API key pattern"; FOUND=1
           fi
+          # === 新增：开发者个人信息扫描 ===
+          # Check for Chinese name (developer PII)
+          if grep -rI "刘润飞" dist/nahida-agent/ 2>/dev/null; then
+            echo "❌ 发现敏感信息：中文姓名"
+            exit 1
+          fi
+          # Check for GitHub username (developer PII)
+          if grep -rI "liu-runfei" dist/nahida-agent/ 2>/dev/null; then
+            echo "❌ 发现敏感信息：GitHub 用户名"
+            exit 1
+          fi
+          # Check for local absolute paths (developer PII)
+          if grep -rI "/home/orangepi" dist/nahida-agent/ 2>/dev/null; then
+            echo "❌ 发现敏感信息：本地路径 /home/orangepi"
+            exit 1
+          fi
+          if grep -rI "/media/orangepi" dist/nahida-agent/ 2>/dev/null; then
+            echo "❌ 发现敏感信息：本地路径 /media/orangepi"
+            exit 1
+          fi
+          # Check for workspace personal files that should be excluded
+          for f in USER.md SOUL.md IDENTITY.md MEMORY.md; do
+            if find dist/nahida-agent -name "$f" -not -path "*/node_modules/*" | grep -q .; then
+              echo "❌ 发现应被排除的文件：$f"
+              exit 1
+            fi
+          done
           if [ $FOUND -eq 1 ]; then
             echo "ERROR: Leaked secrets found in build!"
             exit 1

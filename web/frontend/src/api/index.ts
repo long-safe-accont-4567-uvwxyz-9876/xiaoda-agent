@@ -131,6 +131,10 @@ export const api = {
   },
 }
 
+export async function getSetupVersion(): Promise<{ version: string }> {
+  return get('/setup/version')
+}
+
 export function exportSessionUrl(sessionId: string): string {
   return `${BASE}/sessions/${sessionId}/export`
 }

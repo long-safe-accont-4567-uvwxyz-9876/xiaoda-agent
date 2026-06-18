@@ -6,7 +6,11 @@ setlocal enabledelayedexpansion
 ::   Checks GitHub Release for new versions
 :: ============================================
 
-set "REPO=liu-runfei/nahida-agent"
+if defined GITHUB_REPO (
+    set "REPO=%GITHUB_REPO%"
+) else (
+    set "REPO=nahida-agent/nahida-agent"
+)
 set "INSTALL_DIR=%~dp0.."
 set "VERSION_FILE=%INSTALL_DIR%\.version"
 set "AUTO_UPDATE_FLAG=%INSTALL_DIR%\.auto_update"

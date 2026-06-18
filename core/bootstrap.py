@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from config import MIMO_API_KEY, MIMO_BASE_URL
+from config import MIMO_API_KEY, MIMO_BASE_URL, _ensure_workspace_template
 from core.background_tasks import BackgroundTaskManager
 
 if TYPE_CHECKING:
@@ -44,6 +44,7 @@ class AgentCoreBootstrapper:
             # 仅初始化数据库等不依赖 API Key 的基础设施
             try:
                 await self._init_infrastructure()
+                _ensure_workspace_template()
                 await self._init_cognitive()
             except Exception as e:
                 logger.warning("agent_core.degraded_init_partial_error error={}", str(e))
@@ -51,6 +52,7 @@ class AgentCoreBootstrapper:
             return
 
         await self._init_infrastructure()
+        _ensure_workspace_template()
         await self._init_cognitive()
         await self.core.klee.init()
         await self.core.tts.init()

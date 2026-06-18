@@ -19,7 +19,7 @@ ALLOWED_BASE_DIRS = [
     "/tmp",
     "/var/tmp",
     os.path.join(_PROJECT_DIR, "tts_cache"),                               # tts_cache 目录
-    os.environ.get("NAHIDA_DATA_DIR", "/media/orangepi/KIOXIA/nahida-data"),  # 数据目录
+    os.environ.get("NAHIDA_DATA_DIR", os.path.expanduser("~/.ai-agent/data")),  # 数据目录
 ]
 
 # 敏感路径黑名单（即使白名单通过也不允许访问）

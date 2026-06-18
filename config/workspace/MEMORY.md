@@ -2,7 +2,7 @@
 
 ## 项目信息
 
-- 爸爸的 AI Agent 项目位于 /home/orangepi/ai-agent/
+- 爸爸的 AI Agent 项目位于本地项目目录
 - 使用 MiMo (mimo-v2.5) 作为主 LLM 后端
 - QQ Bot 使用 qq-botpy 框架
 - 运行设备：Orange Pi（ARM Linux）

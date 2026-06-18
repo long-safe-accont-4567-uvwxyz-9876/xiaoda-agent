@@ -136,6 +136,13 @@ async def get_personality(name: str, request: Request, _user: str = Depends(get_
 @router.put("/agents/{name}/personality", response_model=Envelope[dict])
 async def set_personality(name: str, body: dict, request: Request, _user: str = Depends(get_current_user)):
     text = body.get("personality", "")
+    # 主体 nahida 特殊处理：人格写入 SOUL.md，build_system_prompt 按 mtime 自动失效缓存
+    if name == "nahida":
+        from config import WORKSPACE_DIR
+        soul_path = WORKSPACE_DIR / "SOUL.md"
+        soul_path.write_text(text, encoding="utf-8")
+        await _audit(request, "personality", name)
+        return Envelope(data={"name": name, "saved": True})
     try:
         await _registry(request).set_personality(name, text)
     except KeyError as e:
