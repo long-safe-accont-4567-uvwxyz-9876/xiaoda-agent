@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import DendroShader from '../components/fx/DendroShader.vue'
 import DendroEmblem from '../components/fx/DendroEmblem.vue'
 import KeyAccordion, { type TestStatus } from '../components/setup/KeyAccordion.vue'
-import { api } from '../api'
+import { api, getSetupVersion } from '../api'
 import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
@@ -22,6 +22,12 @@ const testMessages = reactive<Record<string, string>>({})
 const testedRequiredKeys = ref<Set<string>>(new Set())
 
 onMounted(async () => {
+  // 获取版本号
+  try {
+    const data = await getSetupVersion()
+    version.value = data.version || 'dev'
+  } catch { /* 降级为 dev */ }
+
   try {
     const data = await api.getSetupKeys()
     keys.value = data.keys

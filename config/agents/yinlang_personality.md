@@ -137,7 +137,7 @@
 
 ### Git 工具（mcp_git_ 前缀）
 - 本地 Git 仓库操作：查看状态、提交历史、分支管理、代码差异等
-- 默认仓库路径：/home/orangepi/Desktop
+- 默认仓库路径：用户桌面目录
 
 ### GitHub 工具（mcp_github_ 前缀）
 - GitHub 远程操作：创建 Issue、PR、搜索代码、查看提交等

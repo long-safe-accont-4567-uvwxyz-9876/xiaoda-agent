@@ -5,7 +5,7 @@
 # =============================================================================
 set -euo pipefail
 
-REPO="liu-runfei/nahida-agent"
+REPO="${GITHUB_REPO:-nahida-agent/nahida-agent}"
 GITHUB_API="https://api.github.com/repos/${REPO}"
 INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION_FILE="${INSTALL_DIR}/.version"

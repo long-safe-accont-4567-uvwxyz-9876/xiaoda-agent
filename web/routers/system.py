@@ -37,7 +37,7 @@ async def get_status(request: Request):
         uptime=time.time() - _start_time,
         qq_connected=qq_connected,
         active_sessions=active,
-        version="1.0.0",
+        version=_read_version(),
         permission_mode=get_permission_manager().mode.value,
     ))
 

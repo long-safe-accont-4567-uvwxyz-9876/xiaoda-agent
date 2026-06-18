@@ -258,6 +258,17 @@ class AgentRegistry:
         return self._serialize(cfg)
 
     async def update(self, name: str, data: dict) -> dict:
+        # 主体 nahida 特殊处理：不在 dispatcher 中，只更新壁纸/人格
+        if name == "nahida":
+            if data.get("wallpaper"):
+                from web.config_service import get_config_service
+                get_config_service().set("ui.main_wallpaper", data["wallpaper"])
+            personality_text = data.pop("personality_text", None)
+            if personality_text is not None:
+                from config import WORKSPACE_DIR
+                soul_path = WORKSPACE_DIR / "SOUL.md"
+                soul_path.write_text(personality_text, encoding="utf-8")
+            return self.get("nahida")
         agent = self._require(name)
         personality_text = data.pop("personality_text", None)
         self._apply_fields(agent.config, data)
@@ -372,6 +383,12 @@ class AgentRegistry:
     # ── 人格 ────────────────────────────────────────────
 
     def get_personality(self, name: str) -> str:
+        if name == "nahida":
+            from config import WORKSPACE_DIR
+            soul_path = WORKSPACE_DIR / "SOUL.md"
+            if soul_path.exists():
+                return soul_path.read_text(encoding="utf-8")
+            return ""
         agent = self._require(name)
         pf = agent.config.personality_file
         if pf and Path(pf).exists():
@@ -379,6 +396,11 @@ class AgentRegistry:
         return ""
 
     async def set_personality(self, name: str, text: str) -> None:
+        if name == "nahida":
+            from config import WORKSPACE_DIR
+            soul_path = WORKSPACE_DIR / "SOUL.md"
+            soul_path.write_text(text, encoding="utf-8")
+            return
         agent = self._require(name)
         pf = Path(agent.config.personality_file) if agent.config.personality_file \
             else self._personality_file(name)

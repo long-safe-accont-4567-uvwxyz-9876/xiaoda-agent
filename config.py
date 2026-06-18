@@ -3,6 +3,8 @@ import re
 import json
 import time
 import sys
+import platform
+import socket
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -15,7 +17,7 @@ def get_base_dir() -> Path:
 
 load_dotenv(get_base_dir() / ".env")
 
-_KIOXIA_BASE = Path(os.getenv("KIOXIA_DATA_DIR", "/media/orangepi/KIOXIA/nahida-data"))
+_KIOXIA_BASE = Path(os.getenv("KIOXIA_DATA_DIR", str(Path.home() / ".ai-agent" / "data")))
 _FALLBACK_BASE = Path(__file__).resolve().parent
 
 def get_credentials_dir() -> Path:
@@ -117,6 +119,57 @@ def load_agent_config() -> dict:
     return json.loads(cleaned)
 
 
+def _detect_device_info() -> dict:
+    """运行时检测设备信息"""
+    info = {
+        "hostname": socket.gethostname(),
+        "system": platform.system(),
+        "machine": platform.machine(),
+        "processor": platform.processor() or "未知",
+    }
+    # 尝试获取更详细的系统信息
+    try:
+        import distro
+        info["distro"] = f"{distro.name()} {distro.version()}"
+    except ImportError:
+        info["distro"] = platform.platform()
+    return info
+
+
+def _ensure_workspace_template():
+    """首次运行时生成 USER.md 模板（不覆盖已有文件）"""
+    workspace = WORKSPACE_DIR
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    user_md = workspace / "USER.md"
+    if not user_md.exists():
+        dev = _detect_device_info()
+        tz = time.tzname[0] if time.tzname else "Asia/Shanghai"
+        content = f"""# USER.md - 爸爸的资料与偏好
+
+## 用户信息
+- 称呼：爸爸
+- 姓名：（待填写）
+- 设备：{dev['hostname']}（{dev['system']} {dev['machine']}）
+- 时区：{tz}
+
+## 偏好设置
+- 助手人格：温柔聪慧
+- 回复偏好：自然对话，避免模板化
+- 项目偏好：简洁高效
+"""
+        user_md.write_text(content, encoding="utf-8")
+
+    # 同理生成 SOUL.md 模板
+    soul_md = workspace / "SOUL.md"
+    if not soul_md.exists():
+        soul_content = """# SOUL.md - 纳西妲的灵魂设定
+
+你是纳西妲，是爸爸最贴心、最温柔、最聪慧的小棉袄。
+"""
+        soul_md.write_text(soul_content, encoding="utf-8")
+
+
 def load_workspace_file(filename: str) -> str:
     filepath = WORKSPACE_DIR / filename
     if filepath.exists():
@@ -208,13 +261,15 @@ def build_system_prompt(extra_context: str = "") -> str:
                 sections.append("[已安装的 Skills]\n\n" + skill_texts)
 
         _npu_status = "NPU视觉识别已启用" if os.getenv("ENABLE_NPU", "").lower() in ("1", "true", "yes") else "视觉识别（ncnn后端）"
+        _uname = platform.uname()
+        _hostname = socket.gethostname()
         hw_context = (
-            "[香橙派硬件信息]\n"
-            "板卡: Orange Pi 4 Pro | SoC: 全志 T507 | 架构: ARMv8 (6×A55 + 2×A76 big.LITTLE)\n"
-            "系统: Debian 12 (bookworm) arm64\n"
+            "[本机硬件信息]\n"
+            f"主机名: {_hostname} | 架构: {_uname.machine} | 处理器: {_uname.processor or '未知'}\n"
+            f"系统: {_uname.system} {_uname.release} ({_uname.machine})\n"
             "可用接口: GPIO (40pin排针) / I2C / SPI / UART / PWM\n"
             "可用工具: gpio_control(引脚控制) / i2c_comm(I2C通信) / hardware_status(硬件监控) / service_manage(服务管理) / network_diag(网络诊断) / dev_assist(开发辅助) / camera_capture(拍照) / vision_analyze(视觉分析)\n"
-            "数据存储: KIOXIA 外挂存储 (/media/orangepi/KIOXIA/nahida-data/)\n"
+            f"数据存储: {DATA_DIR}\n"
             f"摄像头: Q8 HD Webcam (/dev/video0) | 视觉模型: YOLOv10-nano (ncnn CPU) | {_npu_status}"
         )
         sections.append(hw_context)
@@ -320,13 +375,13 @@ RAG_IMPORTANCE_WEIGHT = float(os.getenv("RAG_IMPORTANCE_WEIGHT", "0.20"))
 
 MCP_SERVERS = {
     "git": {
-        "command": "/home/orangepi/.local/bin/uvx",
-        "args": ["mcp-server-git", "--repository", "/home/orangepi/Desktop"],
+        "command": str(Path.home() / ".local" / "bin" / "uvx"),
+        "args": ["mcp-server-git", "--repository", str(Path.home() / "Desktop")],
         "env": {"UV_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple"},
         "agents": ["yinlang"],  # which agents can use this MCP server's tools
     },
     "github": {
-        "command": "/home/orangepi/.trae-cn-server/binaries/node/versions/22.22.3/bin/npx",
+        "command": str(Path.home() / ".trae-cn-server" / "binaries" / "node" / "versions" / "22.22.3" / "bin" / "npx"),
         "args": ["-y", "@modelcontextprotocol/server-github"],
         "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN", "")},
         "agents": ["yinlang"],

@@ -70,6 +70,8 @@ const effortOptions = ['low', 'medium', 'high'].map(v => ({ label: v, value: v }
 const permModeOptions = ['default', 'dev', 'strict'].map(v => ({ label: v, value: v }))
 const memScopeOptions = ['shared', 'isolated'].map(v => ({ label: v, value: v }))
 
+const isMain = computed(() => editing.value?.name === 'nahida' || editing.value?.is_main === true)
+
 const toolGroups = computed(() => {
   const groups: Record<string, Array<[string, any]>> = {}
   for (const [name, info] of Object.entries<any>(permissions.value.tools || {})) {
@@ -267,41 +269,41 @@ async function runTest() {
             <n-form-item label="显示名">
               <n-input v-model:value="editing.display_name" placeholder="如 胡桃" />
             </n-form-item>
-            <n-form-item label="provider">
+            <n-form-item label="provider" v-if="!isMain">
               <n-select v-if="providerOptions.length" v-model:value="editing.provider"
                         :options="providerOptions" filterable tag
                         placeholder="选择 provider（可输入自建 id）" />
               <n-input v-else v-model:value="editing.provider" placeholder="mimo / agnes / 自建 provider id" />
             </n-form-item>
-            <n-form-item label="model">
+            <n-form-item label="model" v-if="!isMain">
               <n-input v-model:value="editing.model" placeholder="模型名（留空用 provider 默认）" />
             </n-form-item>
-            <n-form-item label="base_url">
+            <n-form-item label="base_url" v-if="!isMain">
               <n-input v-model:value="editing.base_url" placeholder="可选，覆盖 provider 的接口地址" />
             </n-form-item>
-            <n-form-item label="api_key_env">
+            <n-form-item label="api_key_env" v-if="!isMain">
               <n-input v-model:value="editing.api_key_env" placeholder="可选，密钥环境变量名" />
             </n-form-item>
-            <n-form-item label="路由描述">
+            <n-form-item label="路由描述" v-if="!isMain">
               <n-input v-model:value="editing.route_description" type="textarea" :rows="2"
                        placeholder="自然语言描述何时召唤该 Agent（主体据此自动委托）" />
             </n-form-item>
-            <n-form-item label="capabilities">
+            <n-form-item label="capabilities" v-if="!isMain">
               <n-dynamic-tags v-model:value="editing.capabilities" />
             </n-form-item>
-            <n-form-item label="max_turns">
+            <n-form-item label="max_turns" v-if="!isMain">
               <n-input-number v-model:value="editing.max_turns" :min="1" :max="30" />
             </n-form-item>
-            <n-form-item label="effort">
+            <n-form-item label="effort" v-if="!isMain">
               <n-select v-model:value="editing.effort" :options="effortOptions" />
             </n-form-item>
-            <n-form-item label="权限模式">
+            <n-form-item label="权限模式" v-if="!isMain">
               <n-select v-model:value="editing.permission_mode" :options="permModeOptions" />
             </n-form-item>
-            <n-form-item label="记忆隔离">
+            <n-form-item label="记忆隔离" v-if="!isMain">
               <n-select v-model:value="editing.memory_scope" :options="memScopeOptions" />
             </n-form-item>
-            <n-form-item label="voice_ref">
+            <n-form-item label="voice_ref" v-if="!isMain">
               <n-input v-model:value="editing.voice_ref" placeholder="TTS 音色（nahida / keli），自动朗读时使用" />
             </n-form-item>
             <n-form-item label="背景板">

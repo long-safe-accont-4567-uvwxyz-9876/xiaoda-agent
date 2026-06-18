@@ -196,7 +196,7 @@ async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> 
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": ["git_status", "pip_check", "logs", "project_tree"], "description": "操作类型"},
-            "path": {"type": "string", "description": "项目路径，默认/home/orangepi/ai-agent", "default": "/home/orangepi/ai-agent"},
+            "path": {"type": "string", "description": "项目路径", "default": _DEFAULT_PROJECT_DIR},
             "lines": {"type": "integer", "description": "日志行数，默认50", "default": 50},
             "service": {"type": "string", "description": "服务名称(用于日志)，默认nahida", "default": "nahida"},
         },
@@ -206,7 +206,7 @@ async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> 
     category="system",
     max_frequency=15,
 )
-async def dev_assist(action: str, path: str = "/home/orangepi/ai-agent", lines: int = 50, service: str = "nahida") -> ToolResult:
+async def dev_assist(action: str, path: str = _DEFAULT_PROJECT_DIR, lines: int = 50, service: str = "nahida") -> ToolResult:
     try:
         if action == "git_status":
             if not os.path.isdir(os.path.join(path, ".git")):
