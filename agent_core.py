@@ -272,7 +272,7 @@ class AgentCore:
                         session_id=session_id,
                     )
                     emotion_label = emotion.get("primary", "")
-                    clean_reply = self.klee_sticker_manager.strip_emotion_tag(graph_result.final_output)
+                    clean_reply = humanize(self.klee_sticker_manager.strip_emotion_tag(graph_result.final_output), style="nahida")
                     sticker_path = None
                     audio_path = None
                     should_generate_voice = self._voice_mode or force_voice
@@ -789,7 +789,7 @@ class AgentCore:
             session_id=session_id,
         )
 
-        clean_sub_reply = self.klee_sticker_manager.strip_emotion_tag(sub_reply)
+        clean_sub_reply = humanize(self.klee_sticker_manager.strip_emotion_tag(sub_reply), style=target)
 
         # 单Agent直接使用其回复，跳过nahida重新总结
 
@@ -884,6 +884,7 @@ class AgentCore:
 
         emotion_label = emotion.get("primary", "")
         clean_reply, sticker_path = self.get_sticker_info(all_replies, _ctx.last_user_emotion if _ctx else "")
+        clean_reply = humanize(clean_reply, style="nahida")
 
         audio_path = None
         should_generate_voice = self._voice_mode or force_voice
