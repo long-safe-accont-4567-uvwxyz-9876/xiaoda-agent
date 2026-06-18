@@ -2,6 +2,7 @@ import asyncio
 import os
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 
+_DEFAULT_PROJECT_DIR = os.path.expanduser("~/ai-agent")
 
 PROTECTED_SERVICES = {"sshd", "systemd", "systemd-journald", "systemd-logind", "systemd-udevd", "dbus", "cron", "rsyslog", "networking", "NetworkManager", "ufw"}
 AGENT_SERVICES = {"qq-agent", "napcat", "qqbot", "nginx", "frpc", "docker"}
