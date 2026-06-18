@@ -53,7 +53,7 @@ REQUIRED_KEYS = [
         "key": "MIMO_API_KEY",
         "label": "MiMo API 密钥",
         "desc": "小米 MiMo 大模型 API 密钥（主 LLM + TTS + Vision）",
-        "url": "https://xiaomimimo.com",
+        "url": "https://platform.xiaomimimo.com?ref=SU5WDZ",
         "url_desc": "注册 → 控制台 → API Keys",
     },
     {
