@@ -253,7 +253,23 @@ class SecurityFilter:
         self._emergency_stop = False
 
     def is_owner(self, user_id: str) -> bool:
-        return True
+        """判断 user_id 是否为主人，兼容 qq_{openid} 和裸 openid 两种格式。"""
+        if not user_id:
+            return False
+        if not self.owner_ids:
+            return True  # 未配置 OWNER_IDS 时默认所有人都是主人（向后兼容）
+        # 直接匹配
+        if user_id in self.owner_ids:
+            return True
+        # 兼容 qq_{openid} 格式：如果 user_id 以 qq_ 开头，检查去掉前缀后是否匹配
+        if user_id.startswith("qq_"):
+            bare_openid = user_id[3:]
+            if bare_openid in self.owner_ids:
+                return True
+        # 反向兼容：如果 OWNER_IDS 配置了带 qq_ 前缀的，检查 user_id 加上前缀是否匹配
+        if f"qq_{user_id}" in self.owner_ids:
+            return True
+        return False
 
     @property
     def is_stopped(self) -> bool:

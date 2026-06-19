@@ -32,6 +32,22 @@ MIMO_PRICING = {
     },
 }
 
+# Provider 级别定价表（USD/百万 tokens）
+# 自定义 provider 默认使用 default 档；未知 provider 也使用 default
+PROVIDER_PRICING = {
+    "mimo": MIMO_PRICING,  # mimo 内部按 model 名再细分 standard/pro
+    "agnes": {
+        "input_per_m": 0.15,
+        "cache_hit_per_m": 0.015,
+        "output_per_m": 0.30,
+    },
+    "default": {
+        "input_per_m": 0.20,
+        "cache_hit_per_m": 0.02,
+        "output_per_m": 0.40,
+    },
+}
+
 ROUTE_TABLE = {
     "chat": {"model": MIMO_MODEL, "max_tokens": 1500, "client": "mimo"},
     "chat_pro": {"model": MIMO_PRO_MODEL, "max_tokens": 2000, "client": "mimo", "thinking": {"type": "enabled", "budget_tokens": 2048}},
@@ -166,18 +182,23 @@ class ModelRouter:
 
     def _calc_cost(self, prompt_tokens: int, completion_tokens: int,
                    cache_hit_tokens: int = 0, cache_miss_tokens: int = 0,
-                   model: str = "") -> float:
+                   model: str = "", provider: str = "") -> float:
         cache_miss = cache_miss_tokens if cache_miss_tokens > 0 else (prompt_tokens - cache_hit_tokens)
         if cache_miss < 0:
             cache_miss = prompt_tokens
-        pricing = MIMO_PRICING.get("pro") if "pro" in model else MIMO_PRICING.get("standard")
+        # 按 provider 查定价表
+        if provider == "mimo":
+            pricing = MIMO_PRICING.get("pro") if "pro" in model else MIMO_PRICING.get("standard")
+        else:
+            pricing = PROVIDER_PRICING.get(provider, PROVIDER_PRICING["default"])
         input_cost = (cache_miss / 1_000_000) * pricing["input_per_m"]
         cache_cost = (cache_hit_tokens / 1_000_000) * pricing["cache_hit_per_m"]
         output_cost = (completion_tokens / 1_000_000) * pricing["output_per_m"]
         return input_cost + cache_cost + output_cost
 
     async def _record_usage(self, task_type: str, model: str, response,
-                             user_openid: str = "", session_id: str = ""):
+                             user_openid: str = "", session_id: str = "",
+                             provider: str = ""):
         try:
             usage = response.usage
             if not usage:
@@ -186,7 +207,7 @@ class ModelRouter:
             completion_tokens = getattr(usage, "completion_tokens", 0) or 0
             cache_hit = getattr(usage, "prompt_cache_hit_tokens", 0) or 0
             cache_miss = getattr(usage, "prompt_cache_miss_tokens", 0) or 0
-            cost = self._calc_cost(prompt_tokens, completion_tokens, cache_hit, cache_miss, model)
+            cost = self._calc_cost(prompt_tokens, completion_tokens, cache_hit, cache_miss, model, provider)
 
             record = {
                 "user_openid": user_openid,
@@ -209,6 +230,41 @@ class ModelRouter:
                 logger.debug("router.usage_no_db", task=task_type, cost=f"${cost:.6f}")
         except Exception as e:
             logger.warning("router.usage_record_failed", error=str(e))
+
+    async def _record_stream_usage(self, task_type: str, model: str, stream_response,
+                                    user_openid: str = "", session_id: str = "",
+                                    provider: str = ""):
+        """流式调用结束后记录费用：聚合 chunk 的 usage（OpenAI 在最后一个 chunk 提供）。"""
+        try:
+            usage = getattr(stream_response, "usage", None)
+            if not usage:
+                # 部分 SDK 需要消费完流才能拿到 usage，这里尝试读取已关闭流的属性
+                return
+            prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+            completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+            cache_hit = getattr(usage, "prompt_cache_hit_tokens", 0) or 0
+            cache_miss = getattr(usage, "prompt_cache_miss_tokens", 0) or 0
+            cost = self._calc_cost(prompt_tokens, completion_tokens, cache_hit, cache_miss, model, provider)
+            record = {
+                "user_openid": user_openid,
+                "session_id": session_id,
+                "model": model,
+                "task_type": task_type,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cache_hit_tokens": cache_hit,
+                "cache_miss_tokens": cache_miss,
+                "cost_usd": cost,
+                "created_at": time.time(),
+            }
+            if self._analytics:
+                self._cost_buffer.append(record)
+                if len(self._cost_buffer) >= self._cost_flush_threshold:
+                    await self._flush_cost_buffer()
+            else:
+                logger.debug("router.stream_usage_no_db", task=task_type, cost=f"${cost:.6f}")
+        except Exception as e:
+            logger.warning("router.stream_usage_record_failed", error=str(e))
 
     async def _flush_cost_buffer(self):
         if not self._cost_buffer or not self._analytics:
@@ -362,10 +418,16 @@ class ModelRouter:
                 )
 
                 if stream:
+                    # 流式调用：在返回前尝试记录费用（部分 provider 在流结束时提供 usage）
+                    try:
+                        await self._record_stream_usage(task_type, model, response,
+                                                        user_openid, session_id, provider)
+                    except Exception:
+                        pass
                     return response
 
                 self._track_cache(response)
-                await self._record_usage(task_type, model, response, user_openid, session_id)
+                await self._record_usage(task_type, model, response, user_openid, session_id, provider)
                 self._check_cache_health()
 
                 # 报告凭证成功

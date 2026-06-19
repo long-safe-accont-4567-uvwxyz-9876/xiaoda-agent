@@ -47,12 +47,21 @@ class MemoryDB:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
-    async def get_recent_conversations(self, limit: int = 20):
-        cursor = await self._conn.execute(
-            """SELECT * FROM conversation_logs
-               ORDER BY id DESC LIMIT ?""",
-            (limit,),
-        )
+    async def get_recent_conversations(self, limit: int = 20, user_id: str = ""):
+        """获取最近的对话记录。支持按 user_id 过滤（群聊场景下隔离不同用户的历史）。"""
+        if user_id:
+            cursor = await self._conn.execute(
+                """SELECT * FROM conversation_logs
+                   WHERE user_id = ?
+                   ORDER BY id DESC LIMIT ?""",
+                (user_id, limit),
+            )
+        else:
+            cursor = await self._conn.execute(
+                """SELECT * FROM conversation_logs
+                   ORDER BY id DESC LIMIT ?""",
+                (limit,),
+            )
         rows = await cursor.fetchall()
         return [dict(r) for r in reversed(rows)]
 

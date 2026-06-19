@@ -184,7 +184,7 @@ const healthMap = ref<Record<string, string>>({})
 async function checkHealth(name: string) {
   try {
     const res = await get<any>(`/mcp/servers/${name}/health`)
-    healthMap.value[name] = res.status || 'healthy'
+    healthMap.value[name] = res.connected ? 'healthy' : 'unhealthy'
   } catch {
     healthMap.value[name] = 'unhealthy'
   }
@@ -201,7 +201,7 @@ function healthDotColor(name: string, serverStatus: string) {
 // ── 工具级开关 ──────────────────────────────────────────────
 async function toggleTool(serverName: string, toolName: string, enabled: boolean) {
   try {
-    await put(`/mcp/servers/${serverName}/tools/${toolName}`, { enabled })
+    await put(`/mcp/servers/${serverName}/tools/${toolName}/enabled`, { enabled })
     message.success(`${toolName} 已${enabled ? '启用' : '禁用'} ✓`)
     await load()
   } catch (e: any) {
