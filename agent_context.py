@@ -7,7 +7,8 @@ from loguru import logger
 def estimate_tokens(text: str) -> int:
     cn = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
     en = len(text) - cn
-    return int(cn * 1.5 + en * 0.5)
+    # 英文系数 0.25 与 context_usage.py 保持一致（之前是 0.5，导致估算偏高）
+    return int(cn * 1.5 + en * 0.25)
 
 
 class AgentContext:
@@ -46,6 +47,12 @@ class AgentContext:
         self._restored_summary: str = ""
         self._compressed_summary: str = ""
         self._compress_count: int = 0
+        # 动态称谓（由运行时身份解析层设置，默认"爸爸"保持向后兼容）
+        self.current_address_term: str = "爸爸"
+        # Stable 层缓存（跨请求复用，TTL 300 秒）
+        self._cached_stable_prompt: str = ""
+        self._stable_cache_ts: float = 0.0
+        self.STABLE_CACHE_TTL: int = 300
         # 上下文压缩器
         self._compressor = None
         # 并发安全锁
@@ -220,10 +227,10 @@ class AgentContext:
         parts = []
 
         if self._compressed_summary:
-            parts.append(f"[已压缩的早期对话摘要（仅供参考，不需要回应。根据当前用户意图独立判断是否需要调用工具）]\n{self._compressed_summary}")
+            parts.append(f"[已压缩的早期对话摘要（仅供参考，不需要回应。当前用户身份：{self.current_address_term}。根据当前用户意图独立判断是否需要调用工具）]\n{self._compressed_summary}")
 
         if self._restored_summary:
-            parts.append(f"[近期对话摘要（仅供参考，不需要回应。根据当前用户意图独立判断是否需要调用工具）]\n{self._restored_summary}")
+            parts.append(f"[近期对话摘要（仅供参考，不需要回应。当前用户身份：{self.current_address_term}。根据当前用户意图独立判断是否需要调用工具）]\n{self._restored_summary}")
 
         portrait = self.user_portrait or ""
         if portrait:
@@ -233,7 +240,7 @@ class AgentContext:
                 self._cached_portrait = portrait
                 self._portrait_cache_ts = now
             if portrait:
-                parts.append(f"[人家对爸爸的印象]\n{portrait}")
+                parts.append(f"[人家对{self.current_address_term}的印象]\n{portrait}")
 
         learned = self.learned_rules or ""
         if learned:
@@ -256,17 +263,26 @@ class AgentContext:
         self._portrait_cache_ts = 0.0
         self._cached_learned = ""
         self._learned_cache_ts = 0.0
+        # 同时清除 Stable 层缓存
+        self._cached_stable_prompt = ""
+        self._stable_cache_ts = 0.0
 
     def build_messages(self, user_input: str) -> list[dict]:
         # === Stable 层（跨会话缓存，极少变化）===
-        stable_parts = []
-        base_prompt = self._system_prompt_loader() if self._system_prompt_loader else self.system_prompt
+        now = time.time()
+        if self._cached_stable_prompt and (now - self._stable_cache_ts) < self.STABLE_CACHE_TTL:
+            stable_content = self._cached_stable_prompt
+        else:
+            stable_parts = []
+            base_prompt = self._system_prompt_loader() if self._system_prompt_loader else self.system_prompt
 
-        if base_prompt:
-            stable_parts.append(base_prompt)
-        if self.instinct_prompt:
-            stable_parts.append(self.instinct_prompt)
-        stable_content = "\n\n---\n\n".join(stable_parts) if stable_parts else ""
+            if base_prompt:
+                stable_parts.append(base_prompt)
+            if self.instinct_prompt:
+                stable_parts.append(self.instinct_prompt)
+            stable_content = "\n\n---\n\n".join(stable_parts) if stable_parts else ""
+            self._cached_stable_prompt = stable_content
+            self._stable_cache_ts = now
 
         # === Context 层（按项目/用户缓存，偶尔变化）===
         context_parts = []
@@ -283,7 +299,7 @@ class AgentContext:
         _time_str = f"{_now.strftime('%Y年%m月%d日')} 星期{_weekday_map[_now.weekday()]} {_now.strftime('%H:%M:%S')}"
         volatile_parts.append(f"[当前时间] {_time_str}")
         if self.emotion_hint:
-            volatile_parts.append(f"[感知到爸爸的情绪：{self.emotion_hint}]")
+            volatile_parts.append(f"[感知到{self.current_address_term}的情绪：{self.emotion_hint}]")
         if self.memory_retrieval:
             mem_texts = []
             for m in self.memory_retrieval[:3]:
@@ -324,11 +340,21 @@ class AgentContext:
         messages.append({"role": "user", "content": user_input})
         return messages
 
-    async def restore_from_db(self, db):
+    async def restore_from_db(self, db, user_id: str = "", address_term: str = ""):
+        """从数据库恢复历史对话摘要。
+
+        Args:
+            db: 数据库实例
+            user_id: 当前用户 ID，用于按用户过滤历史（群聊场景下不同用户历史不混合）
+            address_term: 动态称谓（主人→"爸爸"，其他→"用户"），替代硬编码"爸爸"
+        """
         if not db:
             return
+        # 使用传入的称谓，未传则用当前上下文的称谓，再不行默认"爸爸"
+        term = address_term or self.current_address_term or "爸爸"
         try:
-            rows = await db.memory.get_recent_conversations(limit=20)
+            # 按 user_id 过滤，limit 从 20 缩减到 10（实际只用了 10 条）
+            rows = await db.memory.get_recent_conversations(limit=10, user_id=user_id) if user_id else await db.memory.get_recent_conversations(limit=10)
             if not rows:
                 return
 
@@ -340,11 +366,11 @@ class AgentContext:
                     continue
                 user_preview = user_msg[:60].replace("\n", " ") if user_msg else ""
                 asst_preview = asst_msg[:60].replace("\n", " ") if asst_msg else ""
-                summaries.append(f"· 爸爸: {user_preview} → 纳西妲: {asst_preview}")
+                summaries.append(f"· {term}: {user_preview} → 纳西妲: {asst_preview}")
 
             if summaries:
                 self._restored_summary = "\n".join(summaries[-10:])
-                logger.info("context.restored", items=len(summaries))
+                logger.info("context.restored", items=len(summaries), user_id=user_id, term=term)
         except Exception as e:
             logger.warning("context.restore_failed", error=str(e))
 

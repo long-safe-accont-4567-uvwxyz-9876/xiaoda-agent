@@ -1,4 +1,5 @@
 import time
+import uuid
 import aiosqlite
 from loguru import logger
 
@@ -19,8 +20,7 @@ class AnalyticsDB:
                                 cost_usd: float = 0.0,
                                 auto_commit: bool = True) -> str:
         now = time.time()
-        date_str = time.strftime("%Y%m%d", time.localtime(now))
-        usage_id = f"API-{date_str}-{int(now % 100000):05d}"
+        usage_id = f"API-{uuid.uuid4().hex}"
         try:
             await self._conn.execute(
                 """INSERT INTO api_usage
@@ -43,10 +43,9 @@ class AnalyticsDB:
         if not records:
             return
         now = time.time()
-        date_str = time.strftime("%Y%m%d", time.localtime(now))
         rows = []
-        for i, r in enumerate(records):
-            usage_id = f"API-{date_str}-{(int(now) + i) % 100000:05d}"
+        for r in records:
+            usage_id = f"API-{uuid.uuid4().hex}"
             rows.append((
                 usage_id,
                 r.get("user_openid", ""),

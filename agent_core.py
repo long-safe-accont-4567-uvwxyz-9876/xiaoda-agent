@@ -123,6 +123,23 @@ class RequestContext:
     last_user_emotion: str = ""
     delegate_depth: int = 0
     is_master: bool = True
+    identity: Any = None  # UserIdentity 运行时身份解析结果
+
+
+@dataclass
+class UserIdentity:
+    """运行时用户身份解析结果。基于 openID/UID 稳定标识，不依赖消息内容。"""
+    is_owner: bool
+    display_name: str
+    address_term: str  # 称谓：主人→"爸爸"，其他→"用户"
+
+    @staticmethod
+    def default_owner() -> "UserIdentity":
+        return UserIdentity(is_owner=True, display_name="爸爸", address_term="爸爸")
+
+    @staticmethod
+    def default_guest() -> "UserIdentity":
+        return UserIdentity(is_owner=False, display_name="用户", address_term="用户")
 
 
 class AgentCore:
@@ -131,6 +148,11 @@ class AgentCore:
         self.db = DatabaseManager()
         _owner_ids = os.getenv("OWNER_IDS", "").split(",")
         _owner_ids = [x.strip() for x in _owner_ids if x.strip()]
+        # 合并 MASTER_QQ_OPENID（QQ 场景下的主人标识，由 qq_bot_adapter 自动绑定）
+        # 确保 _resolve_identity 能正确识别主人，即使 OWNER_IDS 未配置
+        _master_qq = os.getenv("MASTER_QQ_OPENID", "").split(",")
+        _master_qq = [x.strip() for x in _master_qq if x.strip()]
+        _owner_ids = list(dict.fromkeys(_owner_ids + _master_qq))  # 去重保序
         self.security = SecurityFilter(owner_ids=_owner_ids)
         self.context = AgentContext(system_prompt_loader=build_system_prompt, router=self.router, security_filter=self.security)
         self.tool_executor = ToolExecutor(db=self.db)
@@ -181,6 +203,17 @@ class AgentCore:
         bootstrapper = AgentCoreBootstrapper(self)
         await bootstrapper.bootstrap()
 
+    def _resolve_identity(self, user_id: str, user_openid: str = "") -> UserIdentity:
+        """运行时身份解析：基于 openID/UID 稳定标识判断用户身份，不依赖消息内容。"""
+        # 优先用 user_openid 判断（QQ 群聊场景下的稳定标识），其次用 user_id
+        check_id = user_openid or user_id
+        if not check_id:
+            return UserIdentity.default_owner()
+        is_owner = self.security.is_owner(check_id)
+        if is_owner:
+            return UserIdentity(is_owner=True, display_name="爸爸", address_term="爸爸")
+        return UserIdentity(is_owner=False, display_name="用户", address_term="用户")
+
     async def process(self, user_input: str, user_id: str = "qq_user",
                       source: str = "qq",
                       user_openid: str = "",
@@ -191,6 +224,13 @@ class AgentCore:
         if not self._initialized:
             return ProcessResult(reply=DEGRADED_REPLY)
 
+        # 运行时身份解析：基于稳定标识决定称谓，不依赖消息内容
+        identity = self._resolve_identity(user_id, user_openid)
+        # 用身份解析结果覆盖 is_master（更准确，兼容旧调用方仍传 is_master）
+        is_master = identity.is_owner
+        # 设置上下文的动态称谓
+        self.context.current_address_term = identity.address_term
+
         ctx = RequestContext(
             session_id=session_id,
             user_openid=user_openid,
@@ -199,6 +239,7 @@ class AgentCore:
             status_callback=status_callback,
             is_master=is_master,
         )
+        ctx.identity = identity
         _ctx_token = _current_request_ctx.set(ctx)
         try:
             return await self._process_impl(ctx, user_input, user_id, source, user_openid, session_id, status_callback, image_data, is_master)
@@ -220,6 +261,16 @@ class AgentCore:
         if not allowed:
             trace.warning("agent.blocked", reason=reason)
             return ProcessResult(reply="")
+
+        # 按当前用户重新恢复历史摘要（群聊场景下不同用户历史不混合）
+        # 使用 user_openid 优先（QQ 群聊稳定标识），其次 user_id
+        _restore_id = user_openid or user_id
+        if _restore_id and self.db:
+            try:
+                await self.context.restore_from_db(self.db, user_id=_restore_id,
+                                                    address_term=self.context.current_address_term)
+            except Exception as e:
+                logger.warning("agent.restore_failed", error=str(e))
 
         if self.slash_handler and self.slash_handler.is_slash_command(user_input):
             slash_reply = await self.slash_handler.handle(user_input, user_id)
@@ -272,7 +323,7 @@ class AgentCore:
                         session_id=session_id,
                     )
                     emotion_label = emotion.get("primary", "")
-                    clean_reply = humanize(self.klee_sticker_manager.strip_emotion_tag(graph_result.final_output), style="nahida")
+                    clean_reply = self._finalize_reply(graph_result.final_output, style="nahida")
                     sticker_path = None
                     audio_path = None
                     should_generate_voice = self._voice_mode or force_voice
@@ -301,16 +352,25 @@ class AgentCore:
         self.context.emotion_hint = emotion_hint
         ctx.last_user_emotion = emotion.get("primary", "")
 
-        if self.memory and is_master:
-            self.memory.signal_new_message()
-            try:
-                memories = await self.memory.retrieve_memories(user_input, k=3)
-                self.context.memory_retrieval = memories if memories else None
-            except Exception as e:
-                logger.warning("memory.retrieve_failed", error=str(e))
-                self.context.memory_retrieval = None
+        # 记忆检索与 notebook 上下文加载并行化（asyncio.gather）
+        async def _retrieve_memories():
+            if self.memory and is_master:
+                self.memory.signal_new_message()
+                try:
+                    return await self.memory.retrieve_memories(user_input, k=3)
+                except Exception as e:
+                    logger.warning("memory.retrieve_failed", error=str(e))
+                    return None
+            return None
 
-        await self._load_notebook_context()
+        async def _load_notebook():
+            try:
+                await self._load_notebook_context()
+            except Exception as e:
+                logger.warning("notebook.load_failed", error=str(e))
+
+        memories, _ = await asyncio.gather(_retrieve_memories(), _load_notebook())
+        self.context.memory_retrieval = memories if memories else None
 
         effective_input = user_input
         messages = self.context.build_messages(effective_input)
@@ -532,10 +592,12 @@ class AgentCore:
                 emotion_label = ensured_emotion.value
 
         if _pre_picked_sticker:
-            clean_reply = self.sticker_manager.strip_emotion_tag(reply)
+            clean_reply = self._finalize_reply(reply, strip_emotion=True, style="nahida")
             sticker_path = _pre_picked_sticker
         else:
             clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
+            # get_sticker_info 已做 strip_emotion_tag，这里补 humanize
+            clean_reply = humanize(clean_reply, style="nahida")
 
         audio_path = None
         should_generate_voice = self._voice_mode or force_voice
@@ -747,6 +809,18 @@ class AgentCore:
         text = humanize(text, style="nahida")
         return text
 
+    def _finalize_reply(self, reply: str, strip_emotion: bool = True, style: str = "nahida") -> str:
+        """统一的回复文本处理：strip_emotion_tag + humanize。
+
+        所有回复路径（主 nahida、单子 Agent、并行子 Agent、TaskGraph）统一调用此方法，
+        确保回复清洗流程一致。
+        """
+        text = reply.strip() if reply else ""
+        if strip_emotion:
+            text = self.klee_sticker_manager.strip_emotion_tag(text)
+        text = humanize(text, style=style)
+        return text
+
     def get_sticker_info(self, reply: str, user_emotion: str = "", force_sticker: bool = False) -> tuple[str, Path | None]:
         clean_reply = self.sticker_manager.strip_emotion_tag(reply)
         sticker_path = None
@@ -789,7 +863,7 @@ class AgentCore:
             session_id=session_id,
         )
 
-        clean_sub_reply = humanize(self.klee_sticker_manager.strip_emotion_tag(sub_reply), style=target)
+        clean_sub_reply = self._finalize_reply(sub_reply, style=target)
 
         # 单Agent直接使用其回复，跳过nahida重新总结
 
@@ -884,6 +958,7 @@ class AgentCore:
 
         emotion_label = emotion.get("primary", "")
         clean_reply, sticker_path = self.get_sticker_info(all_replies, _ctx.last_user_emotion if _ctx else "")
+        # get_sticker_info 已做 strip_emotion_tag，这里补 humanize（与主 nahida 路径一致）
         clean_reply = humanize(clean_reply, style="nahida")
 
         audio_path = None

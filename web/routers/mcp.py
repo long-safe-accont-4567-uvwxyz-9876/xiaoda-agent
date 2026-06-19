@@ -39,7 +39,7 @@ async def _broadcast_changed():
         pass
 
 
-def _serialize(name: str, client, cfg_record: dict | None) -> dict:
+def _serialize(name: str, client, cfg_record: dict | None, mgr=None) -> dict:
     record = cfg_record or {}
     if client:
         status = "running" if client.available else "stopped"
@@ -52,6 +52,16 @@ def _serialize(name: str, client, cfg_record: dict | None) -> dict:
         command = record.get("command", "")
         args = record.get("args", [])
         env_keys = sorted((record.get("env") or {}).keys())
+    # 获取已禁用工具列表
+    disabled_tools = []
+    if mgr is not None:
+        try:
+            disabled_tools = sorted([
+                t for t in tool_names
+                if not mgr._tool_enabled_map.get((name, t), True)
+            ])
+        except Exception:
+            pass
     return {
         "name": name,
         "command": command,
@@ -59,6 +69,7 @@ def _serialize(name: str, client, cfg_record: dict | None) -> dict:
         "env_keys": env_keys,
         "status": status,
         "tool_names": tool_names,
+        "disabled_tools": disabled_tools,
         "managed_by_webui": cfg_record is not None,
         "last_error": getattr(client, "last_error", "") if client else "",
     }
@@ -70,7 +81,7 @@ async def list_servers(request: Request):
     custom = _cfg().get("mcp", {}) or {}
     names = set(mgr._clients.keys()) | set(custom.keys())
     return Envelope(data=[
-        _serialize(n, mgr._clients.get(n), custom.get(n)) for n in sorted(names)])
+        _serialize(n, mgr._clients.get(n), custom.get(n), mgr) for n in sorted(names)])
 
 
 async def start_server(request: Request, name: str, record: dict) -> dict:
