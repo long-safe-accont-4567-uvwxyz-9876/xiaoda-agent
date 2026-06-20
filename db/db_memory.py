@@ -12,14 +12,26 @@ class MemoryDB:
     async def commit(self):
         await self._conn.commit()
 
+    async def migrate_add_source_column(self):
+        """迁移：为旧库的 episodic_memories 表添加 source 列（已存在则忽略）"""
+        try:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN source TEXT DEFAULT 'user'"
+            )
+            await self._conn.commit()
+        except Exception as e:
+            # 列已存在时忽略
+            logger.debug(f"db_memory.migrate_add_source_column skipped: {e}")
+
     async def insert_episodic_memory(self, summary: str, importance: float = 0.5,
                                       emotion_label: str = "", session_id: str = "user",
-                                      embedding_id: int = -1, auto_commit: bool = True):
+                                      embedding_id: int = -1, auto_commit: bool = True,
+                                      source: str = "user"):
         cursor = await self._conn.execute(
             """INSERT INTO episodic_memories
-               (timestamp, summary, importance, emotion_label, session_id, embedding_id)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (time.time(), summary, importance, emotion_label, session_id, embedding_id),
+               (timestamp, summary, importance, emotion_label, session_id, embedding_id, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (time.time(), summary, importance, emotion_label, session_id, embedding_id, source),
         )
         mem_id = cursor.lastrowid
         if auto_commit:
@@ -47,12 +59,50 @@ class MemoryDB:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
-    async def get_recent_conversations(self, limit: int = 20):
+    async def get_memories_by_ids(self, ids: list[int]) -> list[dict]:
+        """批量获取记忆记录（向量检索后批量 JOIN 主表，消除 N 次逐条查询）"""
+        if not ids:
+            return []
+        # 参数化占位符，防止 SQL 注入
+        placeholders = ",".join("?" * len(ids))
         cursor = await self._conn.execute(
-            """SELECT * FROM conversation_logs
-               ORDER BY id DESC LIMIT ?""",
-            (limit,),
+            f"SELECT * FROM episodic_memories WHERE id IN ({placeholders})",
+            ids,
         )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def increment_access_count(self, memory_id: int):
+        """递增记忆访问计数（检索强化）"""
+        await self._conn.execute(
+            "UPDATE episodic_memories SET access_count = access_count + 1 WHERE id = ?",
+            (memory_id,),
+        )
+        await self._conn.commit()
+
+    async def archive_memory(self, memory_id: int):
+        """归档记忆（标记为已归档，不删除）"""
+        await self._conn.execute(
+            "UPDATE episodic_memories SET session_id = 'archived' WHERE id = ?",
+            (memory_id,),
+        )
+        await self._conn.commit()
+
+    async def get_recent_conversations(self, limit: int = 20, user_id: str = ""):
+        """获取最近的对话记录。支持按 user_id 过滤（群聊场景下隔离不同用户的历史）。"""
+        if user_id:
+            cursor = await self._conn.execute(
+                """SELECT * FROM conversation_logs
+                   WHERE user_id = ?
+                   ORDER BY id DESC LIMIT ?""",
+                (user_id, limit),
+            )
+        else:
+            cursor = await self._conn.execute(
+                """SELECT * FROM conversation_logs
+                   ORDER BY id DESC LIMIT ?""",
+                (limit,),
+            )
         rows = await cursor.fetchall()
         return [dict(r) for r in reversed(rows)]
 
@@ -95,9 +145,11 @@ class MemoryDB:
             logger.warning("db_memory.fts_search_failed", error=str(e))
             return []
 
-    async def get_all_memories(self):
+    async def get_all_memories(self, limit: int = 100):
+        """获取所有活跃记忆（排除已归档）"""
         cursor = await self._conn.execute(
-            "SELECT * FROM episodic_memories ORDER BY timestamp DESC"
+            "SELECT * FROM episodic_memories WHERE session_id != 'archived' ORDER BY timestamp DESC LIMIT ?",
+            (limit,),
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]

@@ -9,6 +9,7 @@ from tool_engine.tool_executor import ToolExecutor, ToolResult
 from tool_engine.tool_repair import ToolCallRepair
 from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_dsml
 from emotion.tts_engine import TTSEngine
+from core.message import AgentMessage
 
 
 PROVIDERS = [
@@ -160,8 +161,17 @@ class KleeAgent:
         delegation_req = None
         if result.success and isinstance(result.data, DelegationRequest):
             delegation_req = result.data
+        elif result.success and isinstance(result.data, AgentMessage) and result.data.is_delegate_request():
+            # 优先用 AgentMessage 结构化协议识别
+            delegation_req = DelegationRequest(
+                type="nahida", question=result.data.content, delegator="klee"
+            )
         elif result.success and isinstance(result.data, str) and result.data.startswith("[NAHIDA_PENDING]"):
-            # 兼容旧格式
+            # fallback: 旧字符串匹配（过渡期保留）
+            import logging
+            logging.getLogger(__name__).warning(
+                "使用废弃的 [NAHIDA_PENDING] 字符串匹配识别委托，请迁移到 AgentMessage 协议"
+            )
             delegation_req = DelegationRequest(
                 type="nahida", question=result.data[len("[NAHIDA_PENDING]"):], delegator="klee"
             )

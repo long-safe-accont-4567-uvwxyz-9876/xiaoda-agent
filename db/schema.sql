@@ -41,7 +41,29 @@ CREATE TABLE IF NOT EXISTS episodic_memories (
     importance REAL DEFAULT 0.5,
     emotion_label TEXT DEFAULT '',
     session_id TEXT DEFAULT 'user',
-    embedding_id INTEGER DEFAULT -1
+    embedding_id INTEGER DEFAULT -1,
+    source TEXT DEFAULT 'user'
+);
+
+-- 情景记忆全文索引（FTS5）
+CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5(
+    id UNINDEXED,
+    summary_index
+);
+
+-- 记忆合并候选（审计）
+CREATE TABLE IF NOT EXISTS consolidation_candidates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp REAL NOT NULL,
+    source TEXT NOT NULL DEFAULT 'rule',
+    kind TEXT NOT NULL DEFAULT 'fact',
+    summary TEXT NOT NULL,
+    confidence REAL DEFAULT 0.5,
+    importance REAL DEFAULT 0.5,
+    status TEXT NOT NULL DEFAULT 'pending',
+    target_memory_id INTEGER DEFAULT -1,
+    metadata_json TEXT DEFAULT '{}',
+    created_at REAL NOT NULL
 );
 
 -- 定时任务上次运行时间
@@ -180,6 +202,27 @@ CREATE TABLE IF NOT EXISTS knowledge_entities (
     updated_at REAL NOT NULL
 );
 
+-- 知识实体全文索引（FTS5）
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_entities_fts USING fts5(
+    id UNINDEXED,
+    name_index
+);
+
+CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ai AFTER INSERT ON knowledge_entities BEGIN
+    INSERT INTO knowledge_entities_fts(id, name_index)
+    VALUES (new.id, new.name);
+END;
+CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ad AFTER DELETE ON knowledge_entities BEGIN
+    INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index)
+    VALUES ('delete', old.id, old.name);
+END;
+CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_au AFTER UPDATE ON knowledge_entities BEGIN
+    INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index)
+    VALUES ('delete', old.id, old.name);
+    INSERT INTO knowledge_entities_fts(id, name_index)
+    VALUES (new.id, new.name);
+END;
+
 -- 知识图谱 - 关系（v1: 已合并 valid_from/valid_to/confidence）
 CREATE TABLE IF NOT EXISTS knowledge_relations (
     id TEXT PRIMARY KEY,
@@ -297,6 +340,11 @@ CREATE INDEX IF NOT EXISTS idx_errors_status ON errors(status);
 CREATE INDEX IF NOT EXISTS idx_featreq_status ON feature_requests(status);
 CREATE INDEX IF NOT EXISTS idx_session_entries_sid ON session_entries(session_id);
 CREATE INDEX IF NOT EXISTS idx_session_entries_created ON session_entries(created_at);
+
+-- Task 2 新增索引
+CREATE INDEX IF NOT EXISTS idx_conv_session ON conversation_logs(session_id);
+CREATE INDEX IF NOT EXISTS idx_kg_rel_type ON knowledge_relations(relation_type);
+CREATE INDEX IF NOT EXISTS idx_media_status ON media_tasks(status);
 
 -- ============================================================
 -- 默认数据
