@@ -20,6 +20,7 @@ const testingAll = ref(false)
 const testStatuses = reactive<Record<string, TestStatus>>({})
 const testMessages = reactive<Record<string, string>>({})
 const testedRequiredKeys = ref<Set<string>>(new Set())
+const modifiedKeys = ref<Set<string>>(new Set())
 
 onMounted(async () => {
   // 获取版本号
@@ -31,8 +32,12 @@ onMounted(async () => {
   try {
     const data = await api.getSetupKeys()
     keys.value = data.keys
-    // Initialize test statuses
+    // 将已配置的密钥值同步到 updates，这样保存时会包含它们
     for (const k of data.keys) {
+      if (k.configured && k.raw_value) {
+        updates.value[k.key] = k.raw_value
+      }
+      // Initialize test statuses
       testStatuses[k.key] = 'untested'
       testMessages[k.key] = ''
     }
@@ -40,15 +45,15 @@ onMounted(async () => {
     console.error('[SetupWizard] getSetupKeys failed:', e)
     // Fallback: 显示硬编码的 key 列表，确保页面不会空白
     keys.value = [
-      { key: 'MIMO_API_KEY', label: 'MiMo API 密钥', desc: '小米 MiMo 大模型 API 密钥（主 LLM + TTS + Vision）', url: 'https://platform.xiaomimimo.com?ref=SU5WDZ', url_desc: '注册 → 控制台 → API Keys', required: true, configured: false, masked_value: '' },
-      { key: 'QQBOT_APP_ID', label: 'QQ Bot App ID', desc: 'QQ 机器人应用 ID', url: 'https://q.qq.com', url_desc: '创建机器人应用 → 获取 AppID', required: true, configured: false, masked_value: '' },
-      { key: 'QQBOT_APP_SECRET', label: 'QQ Bot App Secret', desc: 'QQ 机器人应用密钥', url: 'https://q.qq.com', url_desc: '同一页面的 AppSecret', required: true, configured: false, masked_value: '' },
-      { key: 'EMBED_API_KEY', label: '向量嵌入 API 密钥', desc: '硅基流动嵌入模型密钥', url: 'https://siliconflow.cn', url_desc: '注册 → API Keys → 复制', required: true, configured: false, masked_value: '' },
-      { key: 'WEBUI_PASSWORD', label: 'Web UI 密码', desc: '留空则无需密码登录', url: '', url_desc: '', required: false, configured: false, masked_value: '' },
-      { key: 'SILICONFLOW_API_KEY', label: 'SiliconFlow API 密钥', desc: '硅基流动 API 密钥', url: 'https://siliconflow.cn', url_desc: '注册 → API Keys', required: false, configured: false, masked_value: '' },
-      { key: 'OPENROUTER_API_KEY', label: 'OpenRouter API 密钥', desc: 'OpenRouter API 密钥', url: 'https://openrouter.ai', url_desc: '注册 → API Keys', required: false, configured: false, masked_value: '' },
-      { key: 'AGNES_API_KEY', label: 'Agnes AI 图像/视频密钥', desc: '图片生成和视频生成的核心依赖', url: 'https://agnes-ai.com', url_desc: '注册 → API Keys', required: false, configured: false, masked_value: '' },
-      { key: 'MODELSCOPE_ACCESS_TOKEN', label: '魔搭 Access Token', desc: '魔搭 ModelScope 免费模型发现', url: 'https://modelscope.cn', url_desc: '注册 → 个人中心 → 访问令牌', required: false, configured: false, masked_value: '' },
+      { key: 'MIMO_API_KEY', label: 'MiMo API 密钥', desc: '小米 MiMo 大模型 API 密钥（主 LLM + TTS + Vision）', url: 'https://platform.xiaomimimo.com?ref=SU5WDZ', url_desc: '注册 → 控制台 → API Keys', required: true, configured: false, masked_value: '', raw_value: '' },
+      { key: 'QQBOT_APP_ID', label: 'QQ Bot App ID', desc: 'QQ 机器人应用 ID', url: 'https://q.qq.com', url_desc: '创建机器人应用 → 获取 AppID', required: true, configured: false, masked_value: '', raw_value: '' },
+      { key: 'QQBOT_APP_SECRET', label: 'QQ Bot App Secret', desc: 'QQ 机器人应用密钥', url: 'https://q.qq.com', url_desc: '同一页面的 AppSecret', required: true, configured: false, masked_value: '', raw_value: '' },
+      { key: 'EMBED_API_KEY', label: '向量嵌入 API 密钥', desc: '硅基流动嵌入模型密钥', url: 'https://siliconflow.cn', url_desc: '注册 → API Keys → 复制', required: true, configured: false, masked_value: '', raw_value: '' },
+      { key: 'WEBUI_PASSWORD', label: 'Web UI 密码', desc: '留空则无需密码登录', url: '', url_desc: '', required: false, configured: false, masked_value: '', raw_value: '' },
+      { key: 'SILICONFLOW_API_KEY', label: 'SiliconFlow API 密钥', desc: '硅基流动 API 密钥', url: 'https://siliconflow.cn', url_desc: '注册 → API Keys', required: false, configured: false, masked_value: '', raw_value: '' },
+      { key: 'OPENROUTER_API_KEY', label: 'OpenRouter API 密钥', desc: 'OpenRouter API 密钥', url: 'https://openrouter.ai', url_desc: '注册 → API Keys', required: false, configured: false, masked_value: '', raw_value: '' },
+      { key: 'AGNES_API_KEY', label: 'Agnes AI 图像/视频密钥', desc: '图片生成和视频生成的核心依赖', url: 'https://agnes-ai.com', url_desc: '注册 → API Keys', required: false, configured: false, masked_value: '', raw_value: '' },
+      { key: 'MODELSCOPE_ACCESS_TOKEN', label: '魔搭 Access Token', desc: '魔搭 ModelScope 免费模型发现', url: 'https://modelscope.cn', url_desc: '注册 → 个人中心 → 访问令牌', required: false, configured: false, masked_value: '', raw_value: '' },
     ]
     for (const k of keys.value) {
       testStatuses[k.key] = 'untested'
@@ -63,6 +68,7 @@ const optionalKeys = computed(() => keys.value.filter(k => !k.required))
 
 function handleUpdate(key: string, value: string) {
   updates.value[key] = value
+  modifiedKeys.value.add(key)
   // Reset test status when value changes
   if (testStatuses[key] === 'passed' || testStatuses[key] === 'failed') {
     testStatuses[key] = 'untested'
@@ -130,9 +136,8 @@ const allRequiredTestedAndPassed = computed(() => {
   return required.every(k => {
     const hasValue = k.configured || updates.value[k.key]
     if (!hasValue) return false
-    // If the key has a value (configured or updated), it must be tested and passed
-    // Only check updates that were entered by the user
-    if (updates.value[k.key]) {
+    // Only require testing for keys that were modified by the user
+    if (modifiedKeys.value.has(k.key)) {
       return testedRequiredKeys.value.has(k.key) && testStatuses[k.key] === 'passed'
     }
     // Already configured keys that weren't modified are considered OK
@@ -140,21 +145,26 @@ const allRequiredTestedAndPassed = computed(() => {
   })
 })
 
-const hasUpdates = computed(() => Object.keys(updates.value).length > 0)
+const hasUpdates = computed(() => modifiedKeys.value.size > 0)
 
 async function handleSave() {
   if (!hasUpdates.value) return
 
-  // Check if all required keys with new values have been tested
+  // Check if all modified required keys have been tested
   if (!allRequiredTestedAndPassed.value) {
-    error.value = '请先测试所有必填 API Key'
+    error.value = '请先测试所有修改的必填 API Key'
     return
   }
 
   saving.value = true
   error.value = ''
   try {
-    await api.saveSetupKeys(updates.value, true)
+    // Only save modified keys
+    const keysToSave: Record<string, string> = {}
+    for (const key of modifiedKeys.value) {
+      keysToSave[key] = updates.value[key]
+    }
+    await api.saveSetupKeys(keysToSave, true)
     const allRequired = requiredKeys.value.every(k =>
       k.configured || updates.value[k.key]
     )
@@ -243,13 +253,13 @@ async function handleSave() {
 
           <p class="status-hint">
             <template v-if="!allRequiredTestedAndPassed && hasUpdates">
-              请先测试所有必填 API Key
+              请先测试所有修改的必填 API Key
             </template>
             <template v-else-if="hasUpdates">
-              已修改 {{ Object.keys(updates).length }} 项配置，全部必填项测试通过
+              已修改 {{ modifiedKeys.size }} 项配置，全部必填项测试通过
             </template>
             <template v-else>
-              请配置必填项后保存
+              所有配置项已就绪，可修改后保存
             </template>
           </p>
         </div>

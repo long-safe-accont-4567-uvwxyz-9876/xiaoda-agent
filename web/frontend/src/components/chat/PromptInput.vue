@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
+import { useMessage } from 'naive-ui'
 import { api } from '../../api'
 
 const props = withDefaults(defineProps<{
@@ -18,9 +19,12 @@ const emit = defineEmits<{
   'abort': []
 }>()
 
+const message = useMessage()
+
 const showSearch = ref(false)
 const showThink = ref(false)
 const isRecording = ref(false)
+const isTranscribing = ref(false)
 const uploadedImage = ref<{ url: string; name: string } | null>(null)
 const imagePreviewUrl = ref('')
 const recordingTime = ref(0)
@@ -160,6 +164,7 @@ async function onPaste(e: ClipboardEvent) {
 
 // 语音录音
 async function toggleRecording() {
+  if (isTranscribing.value) return  // 识别中不允许操作
   if (isRecording.value) {
     stopRecording()
   } else {
@@ -178,15 +183,31 @@ async function startRecording() {
     mediaRecorder.onstop = async () => {
       stream.getTracks().forEach(t => t.stop())
       const blob = new Blob(audioChunks, { type: 'audio/webm' })
+      isTranscribing.value = true
       try {
         const result = await api.speechToText(new File([blob], 'recording.webm', { type: 'audio/webm' }))
         if (result.text) {
           emit('update:modelValue', props.modelValue + result.text)
-          nextTick(() => autoGrow())
+          nextTick(() => {
+            autoGrow()
+            // 自动聚焦输入框
+            const textarea = document.querySelector('.prompt-input textarea') as HTMLTextAreaElement
+            if (textarea) textarea.focus()
+          })
         }
-      } catch { /* STT 不可用时静默 */ }
-      isRecording.value = false
-      recordingTime.value = 0
+      } catch (e) {
+        // 识别失败显示提示，不再静默吞错
+        const win = window as any
+        if (win.$message) {
+          win.$message.error('语音识别失败')
+        } else {
+          message.error('语音识别失败')
+        }
+      } finally {
+        isTranscribing.value = false
+        isRecording.value = false
+        recordingTime.value = 0
+      }
     }
     mediaRecorder.start()
     isRecording.value = true
@@ -327,11 +348,14 @@ watch(() => props.modelValue, () => {
         <button
           v-if="!hasContent && !isLoading"
           class="tool-btn ghost"
+          :class="{ 'is-transcribing': isTranscribing }"
           title="语音输入"
           @click="toggleRecording"
-          :disabled="disabled"
+          :disabled="disabled || isTranscribing"
+          :loading="isTranscribing"
         >
-          🎤
+          <span v-if="isTranscribing" class="transcribing-spinner"></span>
+          <span v-else>🎤</span>
         </button>
 
         <!-- 发送按钮（有内容时显示） -->
@@ -573,6 +597,25 @@ watch(() => props.modelValue, () => {
 
 .tool-btn.ghost:hover {
   background: rgba(127, 214, 80, 0.08);
+}
+
+.tool-btn.is-transcribing {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.transcribing-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: transcribing-spin 0.8s linear infinite;
+}
+
+@keyframes transcribing-spin {
+  to { transform: rotate(360deg); }
 }
 
 .tool-btn.search-active {

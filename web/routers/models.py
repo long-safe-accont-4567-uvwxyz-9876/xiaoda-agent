@@ -276,6 +276,33 @@ async def credentials_status():
                 "error_count": c.error_count,
                 "last_used_at": c.last_used_at,
             })
+    # 也包含自定义 provider 的 key 状态
+    from web.config_service import get_config_service as _get_cfg
+    try:
+        cfg = _get_cfg()
+        custom_providers = cfg.get("models.providers", {}) or {}
+        for pid, p in custom_providers.items():
+            try:
+                key = load_provider_key(pid)
+                if not key:
+                    continue
+                # 避免和 credential_pool 中已有的重复
+                if any(o["provider"] == pid for o in out):
+                    continue
+                out.append({
+                    "provider": pid,
+                    "index": 0,
+                    "key_masked": _mask(key),
+                    "state": "ok",
+                    "last_error": None,
+                    "use_count": 0,
+                    "error_count": 0,
+                    "last_used_at": None,
+                })
+            except Exception as e:
+                logger.error(f"[credentials_status] pid={pid} error: {e}")
+    except Exception as e:
+        logger.error(f"[credentials_status] custom providers block error: {e}")
     return Envelope(data=out)
 
 

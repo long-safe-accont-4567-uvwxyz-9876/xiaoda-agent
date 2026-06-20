@@ -64,6 +64,15 @@ async def _apply_model_overrides(core):
             try:
                 register_into_router(core.router, pid, p.get("format", "openai"),
                                      p.get("base_url", ""), key)
+                # 也注册到 credential_pool，以便追踪使用次数和错误
+                from utils.credential_pool import get_credential_pool, Credential, CredentialState
+                pool = get_credential_pool()
+                if pid not in pool._pool:
+                    pool.add_credential(Credential(
+                        api_key=key,
+                        provider=pid,
+                        base_url=p.get("base_url", ""),
+                    ))
             except Exception as e:
                 logger.warning("webui.provider_restore_failed id={} error={}", pid, str(e))
     for task, o in (cfg.get("models.routes", {}) or {}).items():
