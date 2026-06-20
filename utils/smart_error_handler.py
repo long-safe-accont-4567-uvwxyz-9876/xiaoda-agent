@@ -1,5 +1,4 @@
-"""
-智能错误处理和自我修复模块
+"""智能错误处理和自我修复模块
 增强 Agent 的错误诊断、自动修复和学习能力
 """
 
@@ -52,7 +51,7 @@ class SmartErrorHandler:
         file_path = file_match.group(1) if file_match else ""
         line_number = int(file_match.group(2)) if file_match else 0
         
-        # 对于 AttributeError，提取详细信息
+        # 对于 AttributeError ，提取详细信息
         if error_type == "AttributeError":
             attr_match = re.search(r"'(\w+)' object has no attribute '(\w+)'", error_str)
             if attr_match:
@@ -190,6 +189,78 @@ class SmartErrorHandler:
         )
         
         logger.info("error_handler.learned", pattern=pattern_key)
+
+    async def search_similar_errors(self, error: str, top_k: int = 3) -> list:
+        """检索相似错误经验（从 learnings 表，参数化查询）"""
+        if not self._db:
+            return []
+        try:
+            # learnings 表中 error_pattern 类别存储错误经验，summary 包含错误摘要
+            cursor = await self._db._conn.execute(
+                "SELECT * FROM learnings WHERE category='error_pattern' AND summary LIKE ? "
+                "ORDER BY recurrence_count DESC LIMIT ?",
+                (f"%{error[:100]}%", top_k),
+            )
+            rows = await cursor.fetchall()
+            # 映射字段，供 FailureTrigger._reflect 使用
+            result = []
+            for r in rows:
+                d = dict(r)
+                d["correction"] = d.get("suggested_action", "")
+                d["error_pattern"] = d.get("summary", "")
+                result.append(d)
+            return result
+        except Exception:
+            return []
+
+    async def count_by_error_type(self, error_type: str) -> int:
+        """统计同类错误次数（pattern_key 以 error_type 为前缀）"""
+        if not self._db:
+            return 0
+        try:
+            cursor = await self._db._conn.execute(
+                "SELECT COUNT(*) as cnt FROM learnings "
+                "WHERE category='error_pattern' AND pattern_key LIKE ?",
+                (f"{error_type}:%",),
+            )
+            row = await cursor.fetchone()
+            return row["cnt"] if row else 0
+        except Exception:
+            return 0
+
+    async def promote_error_pattern(self, error_type: str, correction: str):
+        """提升错误模式为系统提示规则（status → promoted）"""
+        if not self._db:
+            return
+        try:
+            await self._db._conn.execute(
+                "UPDATE learnings SET status='promoted' "
+                "WHERE category='error_pattern' AND pattern_key LIKE ? AND status != 'promoted'",
+                (f"{error_type}:%",),
+            )
+            await self._db._conn.commit()
+        except Exception as e:
+            logger.warning(f"smart_error_handler.promote_failed: {e}")
+
+    async def log_error(self, task: str = "", error: str = "",
+                        error_type: str = "", correction: str = "",
+                        outcome: str = ""):
+        """归档错误经验到 learnings 表（供 FailureTrigger 调用）"""
+        if not self._db or not hasattr(self._db, 'learning'):
+            return
+        try:
+            pattern_key = f"{error_type}:{error[:50]}" if error_type else f"unknown:{error[:50]}"
+            await self._db.learning.insert_learning(
+                category="error_pattern",
+                priority="high" if outcome == "failure" else "medium",
+                summary=f"{error_type}: {error[:100]}" if error_type else error[:100],
+                details=f"task: {task[:200]}\noutcome: {outcome}\ncorrection: {correction[:200]}",
+                suggested_action=correction[:300],
+                source="failure_trigger",
+                pattern_key=pattern_key,
+            )
+        except Exception as e:
+            logger.warning(f"smart_error_handler.log_error_failed: {e}")
 
     def should_delegate_to_specialist(self, error_ctx: ErrorContext | str = None,
                                       context: dict | None = None) -> str | None:

@@ -89,6 +89,8 @@ class TaskState:
     _dispatcher: Any = None
     _agent_configs: dict = field(default_factory=dict)
     skip_synthesis: bool = False
+    # 子代理上下文（由调用方注入，传递给 dispatcher.dispatch 的 context 参数）
+    sub_agent_context: str = ""
 
     def update(self, updates: dict) -> "TaskState":
         for k, v in updates.items():
@@ -364,43 +366,6 @@ class RouterNode:
             if not targets:
                 targets = ["nahida"]
 
-        # # Original LLM routing (kept as reference):
-        # prompt = self._build_route_prompt(user_input, agent_configs)
-        # response = await self._client.chat.completions.create(
-        #     model=self._model,
-        #     messages=[{"role": "user", "content": prompt}],
-        #     max_tokens=30,
-        #     temperature=0.1,
-        # )
-        # msg = response.choices[0].message
-        # raw_result = msg.content.strip() if msg.content else ""
-        # if not raw_result:
-        #     rc = getattr(msg, "reasoning_content", None) or ""
-        #     raw_result = rc[:50] if rc else ""
-        # name_map = {}
-        # for n, cfg in agent_configs.items():
-        #     name_map[n] = n
-        #     name_map[cfg.get("display_name", "")] = n
-        # name_map["nahida"] = "nahida"
-        # name_map["纳西妲"] = "nahida"
-        # targets = []
-        # seen = set()
-        # for part in raw_result.replace("，", ",").split(","):
-        #     part = part.strip()
-        #     if not part:
-        #         continue
-        #     matched = name_map.get(part)
-        #     if not matched:
-        #         for key, val in name_map.items():
-        #             if key and key in part and val not in seen:
-        #                 matched = val
-        #                 break
-        #     if matched and matched not in seen:
-        #         targets.append(matched)
-        #         seen.add(matched)
-        # if not targets:
-        #     targets = ["nahida"]
-
         valid_targets = [t for t in targets if t in agent_configs or t == "nahida"]
         if not valid_targets:
             valid_targets = ["nahida"]
@@ -429,6 +394,7 @@ class ParallelAgentNode:
         self._route_client = route_client
         self._route_model = route_model
         self._belief_router = belief_router
+        self._agent_configs: dict = {}
 
     def _build_decompose_prompt(self, user_input: str, targets: list[str], agent_configs: dict) -> str:
         target_descs = []
@@ -504,6 +470,102 @@ class ParallelAgentNode:
 
         return sub_tasks
 
+    async def _decompose_task_v2(self, user_input: str, targets: list[str]) -> dict[str, str]:
+        """用 LLM 做智能任务拆分，返回 {agent_name: task_description}。
+
+        - 单一 Agent 场景直接短路，不调用 LLM。
+        - LLM 调用或 JSON 解析失败时 fallback 到原 _decompose_task 逻辑。
+        """
+        # 单一 Agent 场景：直接返回，不调用 LLM
+        if len(targets) == 1:
+            return {targets[0]: user_input}
+
+        agent_configs = self._agent_configs
+
+        # 构建 agent 描述列表
+        agent_descriptions = []
+        for t in targets:
+            if t in agent_configs:
+                cfg = agent_configs[t]
+                display_name = cfg.get("display_name", t)
+                desc = cfg.get("route_description", "")
+                caps = cfg.get("capabilities", [])
+                caps_str = ", ".join(caps) if caps else "综合分析"
+                agent_descriptions.append(
+                    f"- {t}（{display_name}）：专长 [{desc}]，能力 [{caps_str}]"
+                )
+            else:
+                agent_descriptions.append(f"- {t}：通用Agent")
+
+        agents_block = "\n".join(agent_descriptions)
+
+        prompt = f"""你是一个智能任务分解器。需要将用户的复杂请求拆分为给不同Agent的子任务。
+
+用户原始请求：
+{user_input}
+
+可用 Agent 及其专长：
+{agents_block}
+
+请为每个 Agent 生成一个针对性的子任务描述。要求：
+1. 每个子任务必须聚焦于该 Agent 擅长的领域，充分利用其专长
+2. 子任务之间不应有重复的工作，职责边界清晰
+3. 子任务要具体、可执行，包含明确的输入上下文和期望输出格式
+4. 如果存在依赖关系，请在任务描述中标注（例如"等待xxx的结果后再执行"）
+5. 保持原问题的核心意图，不要遗漏关键信息
+6. 必须为上述每一个 Agent 都分配子任务
+
+请严格按以下 JSON 格式输出，不要输出任何其他内容：
+{{"agent_name": "针对该Agent的具体子任务描述"}}
+
+其中 agent_name 必须是上面列出的 Agent 名称之一。"""
+
+        try:
+            # response_format 仅部分模型支持，不支持时降级为普通调用
+            try:
+                response = await self._route_client.chat.completions.create(
+                    model=self._route_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"},
+                    temperature=0.3,
+                )
+            except Exception:
+                response = await self._route_client.chat.completions.create(
+                    model=self._route_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                )
+
+            content = (response.choices[0].message.content or "").strip()
+
+            # 解析 JSON：先直接解析，失败则尝试从文本中提取
+            try:
+                result = json.loads(content)
+            except json.JSONDecodeError:
+                match = re.search(r'\{[\s\S]*\}', content)
+                if not match:
+                    raise ValueError("LLM 响应中未找到 JSON")
+                result = json.loads(match.group(0))
+
+            # 校验：确保每个 target 都有非空任务
+            sub_tasks: dict[str, str] = {}
+            for t in targets:
+                task_desc = result.get(t)
+                if isinstance(task_desc, str) and task_desc.strip():
+                    sub_tasks[t] = task_desc
+                else:
+                    raise ValueError(f"Agent {t} 缺失子任务或任务为空")
+
+            if len(sub_tasks) != len(targets):
+                raise ValueError("子任务数量与目标 Agent 数量不匹配")
+
+            return sub_tasks
+
+        except Exception as e:
+            logger.warning("decompose_task_v2.fallback", error=str(e))
+            # fallback 到原 _decompose_task 逻辑
+            return await self._decompose_task(user_input, targets, agent_configs)
+
     async def execute_single(self, target: str, task_prompt: str, state: TaskState) -> dict | None:
         agent = self._dispatcher.get_agent(target)
         if not agent or not agent.available:
@@ -514,8 +576,10 @@ class ParallelAgentNode:
 
         display_name = agent.config.display_name
         try:
+            # 传递子代理上下文（由调用方通过 state.sub_agent_context 注入）
+            _context = state.sub_agent_context or None
             reply = await asyncio.wait_for(
-                self._dispatcher.dispatch(target, task_prompt, status_callback=None),
+                self._dispatcher.dispatch(target, task_prompt, context=_context, status_callback=None),
                 timeout=180,
             )
             if reply is None:
@@ -551,13 +615,14 @@ class ParallelAgentNode:
 
         await state.push_progress(f"⚡ 启动并行模式，同时调度 {len(targets)} 个Agent...")
 
-        sub_tasks = await self._decompose_task(state.user_input, targets, state._agent_configs)
+        # 将 agent_configs 暴露到 self，供 _decompose_task_v2 使用
+        self._agent_configs = state._agent_configs
+        sub_tasks = await self._decompose_task_v2(state.user_input, targets)
 
         for t in targets:
             display_name = t
             if t in state._agent_configs:
                 display_name = state._agent_configs[t].get("display_name", t)
-            # await state.push_progress(get_status_msg(t, "thinking", f"{display_name}准备就绪...", None))  # 节流：并行模式下由外层统一汇报
 
         tasks = [
             self.execute_single(t, sub_tasks.get(t, state.user_input), state)
@@ -575,7 +640,6 @@ class ParallelAgentNode:
                 display_name = r.get("display_name", r.get("agent", ""))
                 status = "done" if not r.get("error") else "error"
                 emoji = "✅" if not r.get("error") else "❌"
-                # await state.push_progress(f"{emoji} {display_name}已完成 ({status})")  # 节流：并行模式下由外层统一汇报
                 intermediate.append(r)
 
         all_replies = "\n\n".join([f"【{r['display_name']}】\n{r['reply']}" for r in intermediate])
