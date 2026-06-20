@@ -85,7 +85,7 @@ def serialize_result(result) -> dict:
     return {
         "reply": result.reply,
         "emotion": result.emotion or "",
-        "sticker_url": _publish_file(result.sticker_path, "stickers", link=True),
+        "sticker_url": _publish_file(result.sticker_path, "stickers", link=False),
         "audio_url": _publish_file(result.audio_path, "tts"),
         "image_urls": [u for u in (_publish_file(p, "image")
                                    for p in (result.image_paths or [])) if u],

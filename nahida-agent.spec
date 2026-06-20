@@ -53,10 +53,7 @@ datas.append((os.path.join(SPECPATH, 'db', 'schema.sql'), 'db'))
 # .env.example
 datas.append((os.path.join(SPECPATH, '.env.example'), '.'))
 
-# web/media/stickers/ (placeholder for sticker files)
-_stickers_gitkeep = os.path.join(SPECPATH, 'web', 'media', 'stickers', '.gitkeep')
-if os.path.exists(_stickers_gitkeep):
-    datas.append((_stickers_gitkeep, os.path.join('web', 'media', 'stickers')))
+# web/media/stickers/ (runtime cache, populated by StickerManager)
 
 # assets/ directory (icons and other resources)
 datas += _tree_datas(os.path.join(SPECPATH, 'assets'), 'assets')
