@@ -144,8 +144,32 @@ jobs:
           pip install -r requirements.txt || true
           pip install fastapi uvicorn[standard] websockets python-multipart sse-starlette httpx Pillow numpy rich python-dotenv loguru openai aiosqlite pydantic jieba pyyaml
 
+      - name: Verify assets before build
+        shell: bash
+        run: |
+          echo "=== assets/ file count and total size ==="
+          find assets/ -type f | wc -l
+          du -sh assets/
+          du -sh assets/stickers/ assets/voice_refs/ 2>/dev/null
+          echo "=== Sample files ==="
+          find assets/ -type f | head -10
+          echo "=== Total bytes ==="
+          find assets/ -type f -exec stat --format='%s' {} + 2>/dev/null | awk '{s+=$1} END {print s}'
+
       - name: Build with PyInstaller
         run: pyinstaller nahida-agent.spec --clean --noconfirm
+
+      - name: Verify assets in build output
+        shell: bash
+        run: |
+          echo "=== dist/nahida-agent/assets/ file count and total size ==="
+          find dist/nahida-agent/assets/ -type f 2>/dev/null | wc -l
+          du -sh dist/nahida-agent/assets/ 2>/dev/null
+          du -sh dist/nahida-agent/assets/stickers/ dist/nahida-agent/assets/voice_refs/ 2>/dev/null
+          echo "=== Sample files in dist ==="
+          find dist/nahida-agent/assets/ -type f 2>/dev/null | head -10
+          echo "=== Total bytes in dist assets ==="
+          find dist/nahida-agent/assets/ -type f -exec stat --format='%s' {} + 2>/dev/null | awk '{s+=$1} END {print s}'
 
       - name: Strip secrets from build output
         shell: bash
