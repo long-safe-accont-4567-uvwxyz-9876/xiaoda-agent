@@ -16,8 +16,7 @@ SPECPATH = os.path.dirname(os.path.abspath(SPEC))  # /home/orangepi/ai-agent
 def _tree_datas(root, prefix):
     """Return list of (src, dest) tuples for every file under *root*."""
     result = []
-    _exclude = {'.env', '.env.prod', '.env.local', 'webui_overrides.json',
-                'USER.md', 'SOUL.md', 'IDENTITY.md', 'MEMORY.md'}
+    _exclude = {'.env', '.env.prod', '.env.local', 'webui_overrides.json'}
     _exclude_dirs = {'credentials', '__pycache__', '.git', 'node_modules'}
     for dirpath, _dirnames, filenames in os.walk(root):
         # 跳过排除的目录
@@ -53,10 +52,24 @@ datas.append((os.path.join(SPECPATH, 'db', 'schema.sql'), 'db'))
 # .env.example
 datas.append((os.path.join(SPECPATH, '.env.example'), '.'))
 
-# web/media/stickers/ (runtime cache, populated by StickerManager)
+# web/media/stickers/ (placeholder for sticker files)
+_stickers_gitkeep = os.path.join(SPECPATH, 'web', 'media', 'stickers', '.gitkeep')
+if os.path.exists(_stickers_gitkeep):
+    datas.append((_stickers_gitkeep, os.path.join('web', 'media', 'stickers')))
 
 # assets/ directory (icons and other resources)
-datas += _tree_datas(os.path.join(SPECPATH, 'assets'), 'assets')
+# 用 glob 代替 os.walk，避免 CI 环境非 UTF-8 locale 下中文文件名被遗漏
+import glob as _glob
+_assets_root = os.path.join(SPECPATH, 'assets')
+_exclude_assets = {'.env', '.env.prod', '.env.local', 'webui_overrides.json'}
+for _src in _glob.glob(os.path.join(_assets_root, '**', '*'), recursive=True):
+    if not os.path.isfile(_src):
+        continue
+    _fn = os.path.basename(_src)
+    if _fn in _exclude_assets or _fn.endswith('.key') or _fn.endswith('.secret'):
+        continue
+    _rel = os.path.relpath(_src, SPECPATH)
+    datas.append((_src, os.path.dirname(_rel)))
 
 # ---------------------------------------------------------------------------
 # Collect data files from packages that ship non-Python assets
