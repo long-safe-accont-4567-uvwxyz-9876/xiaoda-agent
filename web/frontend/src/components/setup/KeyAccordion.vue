@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 
 export interface KeyItem {
   key: string
@@ -10,6 +10,7 @@ export interface KeyItem {
   required: boolean
   configured: boolean
   masked_value: string
+  raw_value: string
 }
 
 export type TestStatus = 'untested' | 'testing' | 'passed' | 'failed'
@@ -40,6 +41,21 @@ function isExpanded(key: string): boolean {
 }
 
 const inputValues = ref<Record<string, string>>({})
+
+// 初始化：用 raw_value 预填充已配置的密钥
+watch(() => props.items, (items) => {
+  for (const item of items) {
+    if (item.raw_value && !inputValues.value[item.key]) {
+      inputValues.value[item.key] = item.raw_value
+    }
+  }
+}, { immediate: true })
+
+const showPassword = ref<Record<string, boolean>>({})
+
+function toggleVisibility(key: string) {
+  showPassword.value[key] = !showPassword.value[key]
+}
 
 function onInput(key: string, value: string) {
   inputValues.value[key] = value
@@ -103,12 +119,22 @@ function onTest(key: string) {
           </div>
           <p class="item-steps">{{ item.url_desc }}</p>
           <div class="input-row">
-            <input
-              class="dendro-input"
-              :placeholder="'请输入 ' + item.key"
-              :value="inputValues[item.key] ?? ''"
-              @input="onInput(item.key, ($event.target as HTMLInputElement).value)"
-            />
+            <div class="input-wrapper">
+              <input
+                class="dendro-input"
+                :type="showPassword[item.key] ? 'text' : 'password'"
+                :placeholder="'请输入 ' + item.key"
+                :value="inputValues[item.key] ?? ''"
+                @input="onInput(item.key, ($event.target as HTMLInputElement).value)"
+              />
+              <button
+                class="toggle-visibility"
+                @click.stop="toggleVisibility(item.key)"
+                :title="showPassword[item.key] ? '隐藏' : '显示'"
+              >
+                {{ showPassword[item.key] ? '🙈' : '👁' }}
+              </button>
+            </div>
           </div>
           <div class="action-row">
             <button
@@ -313,9 +339,33 @@ function onTest(key: string) {
   margin-top: 4px;
 }
 
-.input-row .dendro-input {
+.input-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.input-wrapper .dendro-input {
   width: 100%;
   box-sizing: border-box;
+  padding-right: 36px;
+}
+
+.toggle-visibility {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 4px;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+
+.toggle-visibility:hover {
+  opacity: 1;
 }
 
 .action-row {

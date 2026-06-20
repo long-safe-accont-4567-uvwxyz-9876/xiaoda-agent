@@ -169,26 +169,47 @@ async def speech_to_text(file: UploadFile = File(...)):
         raise HTTPException(400, "音频大小不能超过 20MB")
 
     try:
-        api_key = os.getenv("MIMO_API_KEY", "")
-        base_url = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
-        if not api_key:
-            raise HTTPException(503, "ASR 不可用：未配置 MIMO_API_KEY")
+        from config import ASR_API_KEY, ASR_BASE_URL, ASR_MODEL
+        if not ASR_API_KEY:
+            # 降级：尝试使用 MIMO ASR（向后兼容）
+            mimo_key = os.getenv("MIMO_API_KEY", "")
+            if not mimo_key:
+                raise HTTPException(503, "ASR 不可用：未配置 SILICONFLOW_API_KEY 或 MIMO_API_KEY")
+            # MIMO 降级路径
+            from openai import OpenAI
+            client = OpenAI(api_key=mimo_key, base_url=os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1"))
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+            try:
+                with open(tmp_path, "rb") as audio_file:
+                    transcript = client.audio.transcriptions.create(
+                        model="mimo-v2.5-asr",
+                        file=audio_file,
+                    )
+                return Envelope(data={"text": transcript.text})
+            finally:
+                os.unlink(tmp_path)
+
+        # 主路径：SiliconFlow + TeleSpeechASR
+        from openai import OpenAI
+        client = OpenAI(api_key=ASR_API_KEY, base_url=ASR_BASE_URL)
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             tmp.write(content)
             tmp_path = tmp.name
 
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key, base_url=base_url)
             with open(tmp_path, "rb") as audio_file:
                 transcript = client.audio.transcriptions.create(
-                    model="mimo-v2.5-asr",
+                    model=ASR_MODEL,
                     file=audio_file,
+                    response_format="text",
                 )
-            return Envelope(data={"text": transcript.text})
+            return Envelope(data={"text": transcript.text if hasattr(transcript, 'text') else str(transcript)})
         finally:
             os.unlink(tmp_path)
+
     except HTTPException:
         raise
     except Exception as e:

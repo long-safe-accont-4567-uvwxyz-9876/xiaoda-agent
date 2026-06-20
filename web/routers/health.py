@@ -53,7 +53,33 @@ async def _probe_provider(request: Request, provider_id: str) -> dict:
         return {"ok": False, "error": "未配置 API Key", "latency_ms": 0}
     model = record.get("default_model") or ""
     if not model:
-        return {"ok": False, "error": "未配置 default_model", "latency_ms": 0}
+        # 从路由表中查找该 provider 对应的模型作为 fallback
+        from model_router import ROUTE_TABLE
+        for _route_cfg in ROUTE_TABLE.values():
+            if _route_cfg.get("client") == provider_id and _route_cfg.get("model"):
+                model = _route_cfg["model"]
+                break
+    if not model:
+        # 尝试通过 API 列出可用模型，优先选择免费/轻量模型
+        try:
+            client = build_client(record.get("format", "openai"), record["base_url"], key)
+            models_resp = await asyncio.wait_for(client.models.list(), timeout=10)
+            model_list = models_resp.data if hasattr(models_resp, "data") else []
+            if model_list:
+                # 优先选择免费对话模型（排除 code/content-safety 等非对话模型）
+                _free_chat = [m for m in model_list
+                              if hasattr(m, "id") and ":free" in m.id
+                              and not any(kw in m.id.lower()
+                              for kw in ("code", "content-safety", "nano-omni", "vl"))]
+                _light = [m for m in model_list
+                          if hasattr(m, "id") and any(kw in m.id.lower()
+                          for kw in ("qwen2.5-7b", "qwen2-7b", "gpt-3.5", "llama-3", "deepseek-chat"))]
+                _pick = (_free_chat or _light or model_list)[0]
+                model = _pick.id if hasattr(_pick, "id") else str(_pick)
+        except Exception:
+            pass
+    if not model:
+        return {"ok": False, "error": "未配置 default_model，请在该 provider 设置中填写默认模型名称", "latency_ms": 0}
     try:
         client = build_client(record.get("format", "openai"), record["base_url"], key)
         resp = await asyncio.wait_for(
@@ -67,8 +93,16 @@ async def _probe_provider(request: Request, provider_id: str) -> dict:
                 "model": model, "reply_excerpt": text[:60],
                 "error": "" if text.strip() else "空回复"}
     except Exception as e:
+        err_msg = str(e)[:200]
+        # 识别常见错误并给出友好提示
+        if "402" in err_msg or "Insufficient credits" in err_msg or "never purchased" in err_msg:
+            err_msg = "账户余额不足，请充值后再试"
+        elif "403" in err_msg and "region" in err_msg:
+            err_msg = "该模型在当前地区不可用"
+        elif "403" in err_msg and "not available" in err_msg:
+            err_msg = "该模型不可用，请更换 default_model"
         return {"ok": False, "latency_ms": int((time.time() - t0) * 1000),
-                "model": model, "error": str(e)[:200]}
+                "model": model, "error": err_msg}
 
 
 @router.post("/health/test/tts", response_model=Envelope[dict])

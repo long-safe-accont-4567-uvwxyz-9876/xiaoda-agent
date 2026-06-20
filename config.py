@@ -60,6 +60,11 @@ MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
 MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
 MIMO_MODEL = os.getenv("MIMO_MODEL_NAME", "mimo-v2.5")
 
+# ── ASR 语音识别配置 ──
+ASR_API_KEY = os.getenv("ASR_API_KEY", "") or os.getenv("SILICONFLOW_API_KEY", "")
+ASR_BASE_URL = os.getenv("ASR_BASE_URL", "https://api.siliconflow.cn/v1")
+ASR_MODEL = os.getenv("ASR_MODEL", "FunAudioLLM/SenseVoiceSmall")
+
 # Agnes AI 配置
 AGNES_API_KEY = os.getenv("AGNES_API_KEY", "")
 AGNES_BASE_URL = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
@@ -428,4 +433,7 @@ __all__ = [
     "RAG_RERANK_WEIGHT",
     "RAG_KG_WEIGHT",
     "RAG_IMPORTANCE_WEIGHT",
+    "ASR_API_KEY",
+    "ASR_BASE_URL",
+    "ASR_MODEL",
 ]
