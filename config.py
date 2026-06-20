@@ -48,7 +48,7 @@ CREDENTIALS_DIR = get_credentials_dir()
 AGENT_CONFIG_PATH = (_KIOXIA_BASE / "config" / "agent.json5") if (_KIOXIA_BASE / "config").exists() else Path(os.path.expanduser("~/.ai-agent/agent.json5"))
 STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "stickers", _FALLBACK_BASE / "stickers")
 KLEE_STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "klee-stickers", _FALLBACK_BASE / "klee-stickers")
-FILE_DIR = _KIOXIA_BASE / "files"
+FILE_DIR = _resolve_data_path(_KIOXIA_BASE / "files", _FALLBACK_BASE / "files")
 
 _KIOXIA_AVAILABLE = (_KIOXIA_BASE / "db").exists()
 
