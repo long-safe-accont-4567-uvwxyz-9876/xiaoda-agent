@@ -19,6 +19,10 @@ def _tree_datas(root, prefix):
     _exclude = {'.env', '.env.prod', '.env.local', 'webui_overrides.json',
                 'USER.md', 'SOUL.md', 'IDENTITY.md', 'MEMORY.md'}
     _exclude_dirs = {'credentials', '__pycache__', '.git', 'node_modules'}
+    if not os.path.isdir(root):
+        print(f'[spec] WARNING: root dir does not exist: {root}')
+        return result
+    walk_count = 0
     for dirpath, _dirnames, filenames in os.walk(root):
         # 跳过排除的目录
         _dirnames[:] = [d for d in _dirnames if d not in _exclude_dirs]
@@ -30,6 +34,8 @@ def _tree_datas(root, prefix):
             src = os.path.join(dirpath, fn)
             rel = os.path.relpath(src, SPECPATH)
             result.append((src, os.path.dirname(rel)))
+            walk_count += 1
+    print(f'[spec] _tree_datas({root!r}) found {walk_count} files')
     return result
 
 
@@ -57,6 +63,16 @@ datas.append((os.path.join(SPECPATH, '.env.example'), '.'))
 
 # assets/ directory (icons and other resources)
 datas += _tree_datas(os.path.join(SPECPATH, 'assets'), 'assets')
+
+# Debug: print summary of datas
+print(f'[spec] SPECPATH = {SPECPATH}')
+print(f'[spec] Total datas entries: {len(datas)}')
+assets_datas = [d for d in datas if 'assets' in d[1] or 'assets' in d[0]]
+print(f'[spec] Datas entries containing "assets": {len(assets_datas)}')
+for i, (src, dst) in enumerate(assets_datas[:5]):
+    print(f'[spec]   assets[{i}]: src={src!r} dest={dst!r}')
+if len(assets_datas) > 5:
+    print(f'[spec]   ... and {len(assets_datas) - 5} more')
 
 # ---------------------------------------------------------------------------
 # Collect data files from packages that ship non-Python assets
