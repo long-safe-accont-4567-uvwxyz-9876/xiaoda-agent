@@ -172,6 +172,20 @@ jobs:
           fi
           echo "No secrets found - OK"
 
+      - name: Ensure assets bundled in dist
+        shell: bash
+        run: |
+          mkdir -p dist/nahida-agent/assets
+          cp -r assets/* dist/nahida-agent/assets/ 2>/dev/null || true
+          echo "=== dist/nahida-agent/assets 内容 ==="
+          find dist/nahida-agent/assets -type f | head -20
+          echo "voice_refs 文件数: $(find dist/nahida-agent/assets/voice_refs -type f 2>/dev/null | wc -l)"
+          echo "stickers 文件数: $(find dist/nahida-agent/assets/stickers -type f 2>/dev/null | wc -l)"
+          test -f dist/nahida-agent/assets/voice_refs/keli.mp3 || (echo "ERROR: keli.mp3 missing!" && exit 1)
+          test -f dist/nahida-agent/assets/voice_refs/nahida.wav || (echo "ERROR: nahida.wav missing!" && exit 1)
+          test -f dist/nahida-agent/assets/voice_refs/nahida_hq.wav || (echo "ERROR: nahida_hq.wav missing!" && exit 1)
+          echo "Assets bundled OK"
+
       - name: Extract version
         id: version
         shell: bash
