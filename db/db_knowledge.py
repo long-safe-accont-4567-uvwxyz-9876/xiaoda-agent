@@ -79,8 +79,30 @@ class KnowledgeDB:
         return [dict(r) for r in rows]
 
     async def search_knowledge_entities(self, query: str, limit: int = 10) -> list[dict]:
+        from memory.memory_manager import _build_fts_query
+        fts_query = _build_fts_query(query)
+
+        if fts_query:
+            try:
+                cursor = await self._conn.execute(
+                    """SELECT ke.*, bm25(knowledge_entities_fts) AS score
+                       FROM knowledge_entities_fts
+                       JOIN knowledge_entities ke ON ke.id = knowledge_entities_fts.id
+                       WHERE knowledge_entities_fts MATCH ?
+                       ORDER BY score ASC, ke.updated_at DESC
+                       LIMIT ?""",
+                    (fts_query, limit),
+                )
+                rows = await cursor.fetchall()
+                if rows:
+                    return [dict(r) for r in rows]
+            except Exception as e:
+                logger.warning(f"knowledge.fts_search_failed, fallback to LIKE: {e}")
+
         cursor = await self._conn.execute(
-            "SELECT * FROM knowledge_entities WHERE name LIKE ? LIMIT ?",
+            """SELECT * FROM knowledge_entities
+               WHERE name LIKE ?
+               ORDER BY updated_at DESC LIMIT ?""",
             (f"%{query}%", limit),
         )
         rows = await cursor.fetchall()
@@ -170,7 +192,6 @@ class KnowledgeDB:
             next_frontier = []
             if not frontier:
                 break
-            # Batch fetch entities for current frontier
             placeholders = ",".join("?" * len(frontier))
             cursor = await self._conn.execute(
                 f"SELECT * FROM knowledge_entities WHERE name IN ({placeholders})",
@@ -178,7 +199,6 @@ class KnowledgeDB:
             )
             entity_rows = await cursor.fetchall()
             entity_map = {r["name"]: dict(r) for r in entity_rows}
-            # Batch fetch relations for current frontier
             cursor = await self._conn.execute(
                 f"SELECT * FROM knowledge_relations WHERE from_entity IN ({placeholders}) OR to_entity IN ({placeholders})",
                 frontier + frontier,
@@ -191,7 +211,6 @@ class KnowledgeDB:
                 if rel_key not in seen_rel_keys:
                     seen_rel_keys.add(rel_key)
                     all_relations.append(rel)
-                # Index by both endpoints for frontier expansion
                 rel_map.setdefault(rel.get("from_entity", ""), []).append(rel)
                 rel_map.setdefault(rel.get("to_entity", ""), []).append(rel)
             for name in frontier:
