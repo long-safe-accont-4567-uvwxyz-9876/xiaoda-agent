@@ -96,6 +96,9 @@ from core.bootstrap import AgentCoreBootstrapper
 from core.router_engine import RouterEngine, RoutingDecision
 from core.chat_processor import ChatProcessor
 from core.tool_orchestrator import ToolOrchestrator
+from core.circuit_breaker import CognitiveState, CircuitBreaker, CircuitState
+from core.failure_trigger import FailureTrigger
+from utils.smart_error_handler import SmartErrorHandler
 
 _current_request_ctx: ContextVar["RequestContext | None"] = ContextVar("_current_request_ctx", default=None)
 
@@ -123,6 +126,23 @@ class RequestContext:
     last_user_emotion: str = ""
     delegate_depth: int = 0
     is_master: bool = True
+    identity: Any = None  # UserIdentity 运行时身份解析结果
+
+
+@dataclass
+class UserIdentity:
+    """运行时用户身份解析结果。基于 openID/UID 稳定标识，不依赖消息内容。"""
+    is_owner: bool
+    display_name: str
+    address_term: str  # 称谓：主人→"爸爸"，其他→"用户"
+
+    @staticmethod
+    def default_owner() -> "UserIdentity":
+        return UserIdentity(is_owner=True, display_name="爸爸", address_term="爸爸")
+
+    @staticmethod
+    def default_guest() -> "UserIdentity":
+        return UserIdentity(is_owner=False, display_name="用户", address_term="用户")
 
 
 class AgentCore:
@@ -131,6 +151,9 @@ class AgentCore:
         self.db = DatabaseManager()
         _owner_ids = os.getenv("OWNER_IDS", "").split(",")
         _owner_ids = [x.strip() for x in _owner_ids if x.strip()]
+        _master_qq = os.getenv("MASTER_QQ_OPENID", "").split(",")
+        _master_qq = [x.strip() for x in _master_qq if x.strip()]
+        _owner_ids = list(dict.fromkeys(_owner_ids + _master_qq))
         self.security = SecurityFilter(owner_ids=_owner_ids)
         self.context = AgentContext(system_prompt_loader=build_system_prompt, router=self.router, security_filter=self.security)
         self.tool_executor = ToolExecutor(db=self.db)
@@ -161,7 +184,7 @@ class AgentCore:
         self._tool_call_handler = ToolCallHandler(self.tool_executor, self.tool_repair, self._clean_reply, self.context, self.router, klee_delegate=self.delegate_to_klee, agent_name="nahida", personality_file=str(Path(__file__).parent / "config" / "agents" / "nahida_personality.md"), tool_execute_callback=self._execute_tool_with_hooks)
         self._user_chat_target: dict[str, str] = {}
         self._chat_target_lock = asyncio.Lock()
-        self._router_engine = RouterEngine(belief_router=None)  # belief_router 灰度期暂不接入
+        self._router_engine = RouterEngine(belief_router=None)
         self._chat_processor = ChatProcessor(self)
         self._tool_orchestrator = ToolOrchestrator(self)
         self._voice_mode: bool = False
@@ -172,6 +195,14 @@ class AgentCore:
         self._error_classifier = ErrorClassifier()
         self._hook_engine = get_hook_engine()
         self._bg_task_manager: BackgroundTaskManager | None = None
+        self._cognitive_state = CognitiveState()
+        self._circuit_breaker = CircuitBreaker()
+        self._smart_error_handler = SmartErrorHandler(db=self.db, dispatcher=self.dispatcher)
+        self._failure_trigger = FailureTrigger(
+            memory_db=self.memory.memory if self.memory else None,
+            learning_manager=self._smart_error_handler,
+        )
+        self._hook_engine._failure_trigger = self._failure_trigger
 
     @property
     def hook_engine(self):
@@ -180,6 +211,15 @@ class AgentCore:
     async def init(self) -> None:
         bootstrapper = AgentCoreBootstrapper(self)
         await bootstrapper.bootstrap()
+
+    def _resolve_identity(self, user_id: str, user_openid: str = "") -> UserIdentity:
+        check_id = user_openid or user_id
+        if not check_id:
+            return UserIdentity.default_owner()
+        is_owner = self.security.is_owner(check_id)
+        if is_owner:
+            return UserIdentity(is_owner=True, display_name="爸爸", address_term="爸爸")
+        return UserIdentity(is_owner=False, display_name="用户", address_term="用户")
 
     async def process(self, user_input: str, user_id: str = "qq_user",
                       source: str = "qq",
@@ -191,6 +231,10 @@ class AgentCore:
         if not self._initialized:
             return ProcessResult(reply=DEGRADED_REPLY)
 
+        identity = self._resolve_identity(user_id, user_openid)
+        is_master = identity.is_owner
+        self.context.current_address_term = identity.address_term
+
         ctx = RequestContext(
             session_id=session_id,
             user_openid=user_openid,
@@ -199,6 +243,7 @@ class AgentCore:
             status_callback=status_callback,
             is_master=is_master,
         )
+        ctx.identity = identity
         _ctx_token = _current_request_ctx.set(ctx)
         try:
             return await self._process_impl(ctx, user_input, user_id, source, user_openid, session_id, status_callback, image_data, is_master)
@@ -220,6 +265,14 @@ class AgentCore:
         if not allowed:
             trace.warning("agent.blocked", reason=reason)
             return ProcessResult(reply="")
+
+        _restore_id = user_openid or user_id
+        if _restore_id and self.db:
+            try:
+                await self.context.restore_from_db(self.db, user_id=_restore_id,
+                                                    address_term=self.context.current_address_term)
+            except Exception as e:
+                logger.warning("agent.restore_failed", error=str(e))
 
         if self.slash_handler and self.slash_handler.is_slash_command(user_input):
             slash_reply = await self.slash_handler.handle(user_input, user_id)
@@ -264,7 +317,6 @@ class AgentCore:
                 if graph_result.final_output:
                     emotion = detect_emotion(clean_input)
                     ctx.last_user_emotion = emotion.get("primary", "")
-                    # 关键：写入对话历史，否则下一轮上下文丢失（"葡萄牙呢"类追问失忆 bug）
                     await self.context.add_message("user", clean_input)
                     await self.context.add_message("assistant", graph_result.final_output)
                     self._bg_task_manager.run_background_tasks(
@@ -272,7 +324,7 @@ class AgentCore:
                         session_id=session_id,
                     )
                     emotion_label = emotion.get("primary", "")
-                    clean_reply = humanize(self.klee_sticker_manager.strip_emotion_tag(graph_result.final_output), style="nahida")
+                    clean_reply = self._finalize_reply(graph_result.final_output, style="nahida")
                     sticker_path = None
                     audio_path = None
                     should_generate_voice = self._voice_mode or force_voice
@@ -301,21 +353,28 @@ class AgentCore:
         self.context.emotion_hint = emotion_hint
         ctx.last_user_emotion = emotion.get("primary", "")
 
-        if self.memory and is_master:
-            self.memory.signal_new_message()
-            try:
-                memories = await self.memory.retrieve_memories(user_input, k=3)
-                self.context.memory_retrieval = memories if memories else None
-            except Exception as e:
-                logger.warning("memory.retrieve_failed", error=str(e))
-                self.context.memory_retrieval = None
+        async def _retrieve_memories():
+            if self.memory and is_master:
+                self.memory.signal_new_message()
+                try:
+                    return await self.memory.retrieve_memories(user_input, k=3)
+                except Exception as e:
+                    logger.warning("memory.retrieve_failed", error=str(e))
+                    return None
+            return None
 
-        await self._load_notebook_context()
+        async def _load_notebook():
+            try:
+                await self._load_notebook_context()
+            except Exception as e:
+                logger.warning("notebook.load_failed", error=str(e))
+
+        memories, _ = await asyncio.gather(_retrieve_memories(), _load_notebook())
+        self.context.memory_retrieval = memories if memories else None
 
         effective_input = user_input
         messages = self.context.build_messages(effective_input)
 
-        # 非主人消息：注入隐私保护约束
         if not is_master:
             messages.append({
                 "role": "system",
@@ -395,17 +454,13 @@ class AgentCore:
         if has_image and tools:
             tools = None
 
-        # 简单任务（问候/闲聊）时过滤掉系统级工具，避免模型自作主张查硬件等
-        # 但保留天气、搜索等用户可能期望模型主动使用的工具
         tools = ChatProcessor.filter_tools_for_simple_task(tools, clean_input, self._is_simple_task)
 
-        # 表情包意图时禁用所有工具：sticker 由系统自动附带，模型只需回复文字
         if _sticker_intent and tools:
             tools = None
 
-        # 非主人消息：过滤敏感工具，仅保留聊天能力
         if not is_master and tools:
-            _SAFE_TOOLS_FOR_STRANGER = set()  # 外人不可使用任何工具，纯聊天
+            _SAFE_TOOLS_FOR_STRANGER = set()
             tools = None
             logger.info("agent.tools_filtered_for_non_master", user_id=user_id)
 
@@ -422,11 +477,27 @@ class AgentCore:
         _model_cfg = AGENT_CONFIG.get("model", {})
         is_owner = self.security.is_owner(user_id)
 
+        circuit_state = self._circuit_breaker.check(self._cognitive_state)
+        if circuit_state == CircuitState.RED:
+            logger.warning("agent.circuit_breaker_red")
+            return ProcessResult(reply="系统需要休息一下，请稍后再试吧～")
+        elif circuit_state == CircuitState.HALF_OPEN:
+            logger.info("agent.circuit_breaker_half_open_probe")
+
+        _cb_max_tokens = None
+        if circuit_state == CircuitState.YELLOW:
+            messages.append({
+                "role": "system",
+                "content": "[系统警告] 当前认知状态不佳，请简化回复。"
+            })
+            _cb_max_tokens = int(_model_cfg.get("max_tokens", 1500) * 0.8)
+
         try:
             result = await self.router.route(
                 task_type,
                 messages,
                 temperature=_model_cfg.get("temperature", 0.7),
+                max_tokens=_cb_max_tokens,
                 tools=tools,
                 tool_choice="auto" if tools else None,
                 user_openid=user_openid,
@@ -465,7 +536,7 @@ class AgentCore:
                         for tc in msg.tool_calls
                     ]
                     reasoning = getattr(msg, "reasoning_content", None)
-                    self.router.pop_reasoning_content()  # clear stale value since we extract directly
+                    self.router.pop_reasoning_content()
                     reply, tool_results = await self._handle_tool_calls(
                         tc_list, messages, trace,
                         assistant_content=msg.content or "",
@@ -478,8 +549,16 @@ class AgentCore:
                 else:
                     reply = self._clean_reply(msg.content or "")
                     logger.info("agent.got_string_reply", length=len(reply), preview=reply[:80])
+            if circuit_state == CircuitState.HALF_OPEN:
+                self._circuit_breaker.on_half_open_success(self._cognitive_state)
+            else:
+                self._circuit_breaker.on_success(self._cognitive_state)
         except Exception as e:
             trace.error("agent.model_error", error=str(e))
+            if circuit_state == CircuitState.HALF_OPEN:
+                self._circuit_breaker.on_half_open_failure(self._cognitive_state)
+            else:
+                self._circuit_breaker.on_failure(self._cognitive_state)
             if self._error_handler:
                 try:
                     error_reply = await self._error_handler.handle_error_with_intelligence(
@@ -503,7 +582,6 @@ class AgentCore:
                     logger.debug(f"agent.flash_fallback: {e}")
                     reply = DEGRADED_REPLY
 
-        # 从工具结果中提取媒体路径，并清理回复中的冗余路径描述
         media_image_paths, media_video_path, reply = await self._extract_media_from_tool_results(tool_results, reply)
 
         if not ctx.handled_by_tool_call:
@@ -525,17 +603,17 @@ class AgentCore:
 
         emotion_label = emotion.get("primary", "")
 
-        # 确保情绪标签存在且合法（LLM 可能漏标或标错）
         if is_unified():
             reply, ensured_emotion = ensure_emotion_tag(reply)
             if ensured_emotion.value != emotion_label:
                 emotion_label = ensured_emotion.value
 
         if _pre_picked_sticker:
-            clean_reply = self.sticker_manager.strip_emotion_tag(reply)
+            clean_reply = self._finalize_reply(reply, strip_emotion=True, style="nahida")
             sticker_path = _pre_picked_sticker
         else:
             clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
+            clean_reply = humanize(clean_reply, style="nahida")
 
         audio_path = None
         should_generate_voice = self._voice_mode or force_voice
@@ -548,7 +626,6 @@ class AgentCore:
         if audio_path:
             clean_reply = clean_reply + "\n\n🎙️ 语音消息已发送～"
 
-        # PostResponse 钩子（批量后处理）
         _spawn(self._hook_engine.fire_post_response())
 
         return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path, audio_path=audio_path, tool_results=tool_results, image_paths=media_image_paths, video_path=media_video_path)
@@ -574,10 +651,8 @@ class AgentCore:
     async def _execute_tool_with_hooks(self, tool_name: str, arguments: dict,
                                         user_id: str = "", safe_mode: bool = False,
                                         user_input: str = "") -> 'ToolResult':
-        """带钩子的工具执行"""
         from tool_engine.tool_registry import ToolResult
 
-        # PreToolUse 钩子
         hook_result = await self._hook_engine.fire_pre_tool_use(
             tool_name=tool_name, arguments=arguments,
             user_input=user_input, safe_mode=safe_mode
@@ -585,10 +660,8 @@ class AgentCore:
         if not hook_result.allowed:
             return ToolResult.fail(hook_result.reason or "工具执行被安全策略阻止")
 
-        # 使用修改后的参数（如果有）
         actual_args = hook_result.modified_args or arguments
 
-        # WebUI 工具过程可视化（无 WebUI 时为 no-op）
         import time as _time
         _tool_t0 = _time.time()
         try:
@@ -597,15 +670,18 @@ class AgentCore:
         except Exception as e:
             logger.debug(f"WebUI工具事件(start)发送失败，非关键: {e}")
 
-        # 工具护栏检查
         from tool_engine.tool_guardrails import get_tool_guardrails
         guardrails = get_tool_guardrails()
         action, guard_msg = await guardrails.check(tool_name, arguments)
         if action == "halt":
             return ToolResult.fail(guard_msg)
 
-        # 执行工具
         result = await self.tool_executor.execute(tool_name, actual_args, user_id, safe_mode)
+
+        if result.success:
+            self._circuit_breaker.on_success(self._cognitive_state, is_tool=True)
+        else:
+            self._circuit_breaker.on_failure(self._cognitive_state, is_tool=True)
 
         try:
             from web.tool_events import emit_tool_event
@@ -614,27 +690,22 @@ class AgentCore:
         except Exception as e:
             logger.debug(f"WebUI工具事件(end)发送失败，非关键: {e}")
 
-        # 记录工具调用到护栏
         await guardrails.record_call(tool_name, arguments, result.success,
                                str(result.data)[:100] if result.data else "")
 
-        # PostToolUse 钩子
         post_result = await self._hook_engine.fire_post_tool_use(
             tool_name=tool_name, arguments=actual_args,
             output=str(result.data) if result.data else result.error or "",
             user_input=user_input
         )
 
-        # 如果钩子修改了输出
         if post_result.modified_output is not None:
             if result.success:
                 return ToolResult.ok(post_result.modified_output)
             else:
                 return ToolResult.fail(post_result.modified_output)
 
-        # 护栏警告注入
         if action == "warn" and guard_msg:
-            # 在输出中注入警告
             if result.success:
                 result = ToolResult.ok(f"[护栏警告: {guard_msg}]\n{result.data}")
 
@@ -665,17 +736,15 @@ class AgentCore:
             logger.warning("notebook.context_load_failed", error=str(e))
 
     async def _extract_media_from_tool_results(self, tool_results: list, reply: str) -> tuple[list[Path], Path | None, str]:
-        """从工具结果中提取图片/视频路径，并清理回复文本中的冗余路径描述。"""
         image_paths: list[Path] = []
         video_path: Path | None = None
-        extracted_paths: list[str] = []  # 用于清理回复文本
+        extracted_paths: list[str] = []
 
         for result in tool_results:
             if not result.success or not result.data:
                 continue
             data_str = result.data if isinstance(result.data, str) else json.dumps(result.data, ensure_ascii=False)
 
-            # 提取图片路径：匹配 "图片已保存到: /path" 或 "图片URL: https://..."
             for m in re.finditer(r'图片已保存到:\s*(\S+)', data_str):
                 try:
                     p = Path(m.group(1))
@@ -689,7 +758,6 @@ class AgentCore:
             for m in re.finditer(r'图片URL:\s*(\S+)', data_str):
                 try:
                     url = m.group(1).rstrip('`')
-                    # 下载 URL 图片到本地，以便通过 QQ 富媒体消息发送
                     try:
                         import httpx
                         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as dl_client:
@@ -707,7 +775,6 @@ class AgentCore:
                 except Exception as e:
                     logger.warning("media.image_url_parse_failed", raw=m.group(1), error=str(e))
 
-            # 提取视频路径：匹配 "视频生成完成！本地路径: /path" 或 "视频已保存到: /path"
             for m in re.finditer(r'(?:视频生成完成！本地路径|视频已保存到):\s*(\S+)', data_str):
                 try:
                     p = Path(m.group(1))
@@ -718,7 +785,6 @@ class AgentCore:
                 except Exception as e:
                     logger.warning("media.video_path_parse_failed", raw=m.group(1), error=str(e))
 
-        # 清理回复文本中包含已提取路径的行
         clean_reply = reply
         if extracted_paths:
             lines = clean_reply.split('\n')
@@ -732,7 +798,6 @@ class AgentCore:
                 if not should_remove:
                     filtered_lines.append(line)
             clean_reply = '\n'.join(filtered_lines).strip()
-            # 清理可能残留的空行
             clean_reply = re.sub(r'\n{3,}', '\n\n', clean_reply)
 
         return image_paths, video_path, clean_reply
@@ -745,6 +810,13 @@ class AgentCore:
                 text = text[len(p):].strip()
         text = strip_dsml(text)
         text = humanize(text, style="nahida")
+        return text
+
+    def _finalize_reply(self, reply: str, strip_emotion: bool = True, style: str = "nahida") -> str:
+        text = reply.strip() if reply else ""
+        if strip_emotion:
+            text = self.klee_sticker_manager.strip_emotion_tag(text)
+        text = humanize(text, style=style)
         return text
 
     def get_sticker_info(self, reply: str, user_emotion: str = "", force_sticker: bool = False) -> tuple[str, Path | None]:
@@ -781,7 +853,6 @@ class AgentCore:
         emotion = detect_emotion(clean_input)
         if _ctx:
             _ctx.last_user_emotion = emotion.get("primary", "")
-        # 子代理对话也写入主体历史：切回纳西妲或追问时上下文不断档
         await self.context.add_message("user", clean_input)
         await self.context.add_message("assistant", f"[{display_name}] {sub_reply}")
         self._bg_task_manager.run_background_tasks(
@@ -789,25 +860,19 @@ class AgentCore:
             session_id=session_id,
         )
 
-        clean_sub_reply = humanize(self.klee_sticker_manager.strip_emotion_tag(sub_reply), style=target)
-
-        # 单Agent直接使用其回复，跳过nahida重新总结
+        clean_sub_reply = self._finalize_reply(sub_reply, style=target)
 
         emotion_label = emotion.get("primary", "")
         sticker_path = None
 
-        # 子 Agent 表情包：使用对应的 sticker_manager
         sub_sticker_mgr = self.klee_sticker_manager if target.lower() in ("keli", "klee") else self.sticker_manager
         if sub_sticker_mgr.available:
-            # 1. 使用 sticker_manager 对子Agent的回复文本进行情绪检测
             detected = sub_sticker_mgr.detect_emotion(clean_sub_reply)
-            # 2. 如果 sticker_manager 未检测到，使用 emotion_simple 对子Agent回复进行情绪检测
             if not detected:
                 sub_reply_emotion = detect_emotion(clean_sub_reply)
                 sub_reply_emotion_label = sub_reply_emotion.get("primary", "")
                 if sub_reply_emotion_label:
                     detected = CN_TO_EN.get(sub_reply_emotion_label, "")
-            # 3. 如果检测到情绪且 should_send() 返回 True，则 pick() 选择表情包
             if sub_sticker_mgr.should_send(clean_sub_reply, detected_emotion=detected):
                 sticker_path = sub_sticker_mgr.pick(detected)
 
@@ -880,8 +945,6 @@ class AgentCore:
             session_id=session_id,
         )
 
-        # 并行结果直接使用，跳过nahida重新总结（SynthesisNode已负责综合）
-
         emotion_label = emotion.get("primary", "")
         clean_reply, sticker_path = self.get_sticker_info(all_replies, _ctx.last_user_emotion if _ctx else "")
         clean_reply = humanize(clean_reply, style="nahida")
@@ -900,14 +963,13 @@ class AgentCore:
         return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path, audio_path=audio_path)
 
     async def delegate_to_agent(self, name: str, task: str) -> str:
-        """通用子代理委托（delegate_task 工具的执行端）。"""
         if name in ("keli", "klee"):
             return await self.delegate_to_klee(task)
         _ctx = _current_request_ctx.get()
         agent = self.dispatcher.get_agent(name)
         if not agent:
             return f"（找不到名为 {name} 的子代理）"
-        context = self._build_sub_agent_context()
+        context = self._build_sub_agent_context(task_hint=task)
         result = await self.dispatcher.dispatch(
             name, task, context=context,
             status_callback=_ctx.status_callback if _ctx else None)
@@ -926,9 +988,9 @@ class AgentCore:
             return "可莉现在有点累了...等会儿再来找大哥哥玩吧！蹦蹦...💤"
         return result
 
-    def _build_sub_agent_context(self) -> str:
+    def _build_sub_agent_context(self, task_hint: str = "") -> str:
         parts = []
-        recent = self.context.get_last_n(4)
+        recent = self.context.get_last_n(12)
         if recent:
             conv_lines = []
             for m in recent:
@@ -936,10 +998,33 @@ class AgentCore:
                 content = m.get("content", "")
                 if not content or role == "tool":
                     continue
-                prefix = {"user": "用户", "assistant": "纳西妲"}.get(role, role)
-                conv_lines.append(f"{prefix}: {content[:80]}")
+                prefix = {"user": "用户:", "assistant": "纳西妲:"}.get(role, f"{role}:")
+                conv_lines.append(f"{prefix} {content[:120]}")
             if conv_lines:
-                parts.append("[近期对话]\n" + "\n".join(conv_lines))
+                parts.append("[对话历史]\n" + "\n".join(conv_lines))
+
+        if task_hint:
+            parts.append(f"[当前任务]\n{task_hint}")
+
+        partner_lines = []
+        configs = getattr(self, "_agent_route_configs", {}) or {}
+        if configs:
+            for _name, cfg in configs.items():
+                if not isinstance(cfg, dict):
+                    continue
+                display_name = cfg.get("display_name", _name)
+                route_desc = cfg.get("route_description", "")
+                if route_desc:
+                    partner_lines.append(f"{display_name}：{route_desc}")
+                else:
+                    partner_lines.append(f"{display_name}")
+        else:
+            partner_lines = [
+                "可莉：擅长搜索、查资料、活泼的小帮手",
+                "银狼：擅长代码、技术分析、黑客思维",
+            ]
+        if partner_lines:
+            parts.append("[可用的伙伴]\n" + "\n".join(partner_lines) + "\n需要时可以通过 delegate_task 工具向她们求助")
 
         if self.context._compressed_summary:
             parts.append(f"[早期对话摘要]\n{self.context._compressed_summary[:300]}")
@@ -982,7 +1067,6 @@ class AgentCore:
         return any(tag in user_input for tag in ["@可莉", "@银狼", "@昔涟", "@尼可", "@纳西妲"])
 
     def _is_simple_task(self, user_input: str) -> bool:
-        # 否定指令（告诉助手不要做某事）优先判断，属于简单对话，不应路由到子Agent
         negative_patterns = [
             r"(?:不|别|不要|不用|不需要|没必要)\s*(?:要|用|调用|查|检查|执行|运行|搜索|搜|找|看)",
             r"(?:不需要|不用|别)\s*(?:调用|使用)\s*(?:这个|那个|任何)?\s*(?:工具|功能)",
@@ -994,7 +1078,6 @@ class AgentCore:
         if any(kw in user_input for kw in complex_keywords):
             return False
 
-        # 对话性消息关键词 — 这些是日常聊天，不是复杂任务
         chat_keywords = SIMPLE_TASK_KEYWORDS["chat"]
         if any(kw in user_input for kw in chat_keywords):
             return True
@@ -1019,7 +1102,6 @@ class AgentCore:
         return any(kw in q for kw in voice_keywords)
 
     async def _describe_images(self, image_data: list[dict]) -> str:
-        """使用 MiMo Vision API 识别图片内容"""
         try:
             if not self.router or not self.router._client:
                 logger.warning("agent.vision_no_client")
@@ -1132,9 +1214,7 @@ class AgentCore:
         return await self.file_receiver.receive(attachment)
 
     def strip_emotion_tag(self, text: str) -> str:
-        # 先提取情绪值（供 sticker_manager 使用）
         result = self.sticker_manager.strip_emotion_tag(text)
-        # 兜底：强制剥离所有 [emotion:xxx] 标签（防止 LLM 在句中/句尾输出标签泄露给用户）
         import re
         result = re.sub(r'\[emotion:[^\]]*\]', '', result).strip()
         return result
@@ -1146,30 +1226,24 @@ class AgentCore:
         return self._voice_mode
 
     async def set_permission_mode(self, mode: str) -> None:
-        """设置权限模式"""
         from security.permission_manager import get_permission_manager, PermissionMode
         pm = get_permission_manager()
         pm.set_mode(mode)
 
     async def get_context_usage(self) -> dict:
-        """获取当前上下文窗口使用情况"""
         from memory.context_usage import compute_context_usage
         from dataclasses import asdict
 
-        # 获取系统提示词
         system_prompt = ""
         if self.context._system_prompt_loader:
             system_prompt = self.context._system_prompt_loader()
         elif self.context.system_prompt:
             system_prompt = self.context.system_prompt
 
-        # 获取工具定义
         tools_json = json.dumps(to_openai_tools(), ensure_ascii=False)
 
-        # 获取对话历史
         messages = self.context.history
 
-        # 获取模型信息
         model = self.router.get_model_preference_label() if self.router else ""
 
         result = compute_context_usage(
@@ -1181,16 +1255,13 @@ class AgentCore:
         return asdict(result)
 
     async def shutdown(self) -> None:
-        """安全释放所有资源，不抛异常。"""
         try:
-            # Stop MCP servers
             if self._mcp_manager:
                 await self._mcp_manager.stop_all()
         except Exception as e:
             logger.warning("shutdown.mcp_stop_failed", error=str(e))
 
         try:
-            # 取消所有后台任务
             bg_tasks = BackgroundTaskManager.get_bg_tasks()
             for task in list(bg_tasks):
                 if not task.done():
