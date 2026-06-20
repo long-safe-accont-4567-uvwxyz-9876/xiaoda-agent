@@ -31,6 +31,74 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore assets from git history
+        shell: bash
+        run: |
+          # Contents API pushes may not be in the shallow checkout's tree.
+          # Walk recent commits to find assets/ files and restore them.
+          echo "=== Checking assets/ directory ==="
+          ls -la assets/ 2>/dev/null || echo "assets/ not found"
+          ls -la assets/voice_refs/ 2>/dev/null || echo "assets/voice_refs/ not found"
+          ls -la assets/stickers/ 2>/dev/null || echo "assets/stickers/ not found"
+
+          # Try to restore from git history
+          MISSING=0
+          if [ ! -d "assets/voice_refs" ] || [ -z "$(ls -A assets/voice_refs/ 2>/dev/null)" ]; then
+            MISSING=1
+          fi
+          if [ ! -d "assets/stickers" ] || [ -z "$(ls -A assets/stickers/ 2>/dev/null)" ]; then
+            MISSING=1
+          fi
+
+          if [ "$MISSING" -eq 1 ]; then
+            echo "Assets missing from checkout, restoring from git history..."
+            # Find the latest commit that added assets/ files
+            ASSET_COMMIT=$(git log --all --diff-filter=A --name-only --pretty=format:"%H" -- "assets/" | head -1)
+            if [ -n "$ASSET_COMMIT" ]; then
+              echo "Restoring from commit: $ASSET_COMMIT"
+              git checkout "$ASSET_COMMIT" -- assets/ 2>/dev/null || true
+            fi
+
+            # If still missing, try downloading from GitHub API
+            if [ ! -d "assets/voice_refs" ] || [ -z "$(ls -A assets/voice_refs/ 2>/dev/null)" ]; then
+              echo "Still missing, downloading from GitHub API..."
+              python3 -c "
+          import requests, os, base64
+          TOKEN = os.environ.get('GITHUB_TOKEN', '')
+          H = {'Authorization': f'Bearer {TOKEN}', 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'}
+          OWNER = '${{ github.repository }}'.split('/')[0]
+          REPO = '${{ github.repository }}'.split('/')[1]
+
+          def download_tree(path, local_base):
+              r = requests.get(f'https://api.github.com/repos/{OWNER}/{REPO}/contents/{path}?ref=main', headers=H)
+              if r.status_code != 200: return
+              for item in r.json():
+                  local = os.path.join(local_base, item['name'])
+                  if item['type'] == 'dir':
+                      os.makedirs(local, exist_ok=True)
+                      download_tree(item['path'], local)
+                  else:
+                      r2 = requests.get(item['url'], headers=H)
+                      if r2.status_code == 200:
+                          with open(local, 'wb') as f:
+                              f.write(base64.b64decode(r2.json()['content']))
+                          print(f'  Downloaded: {item[\"path\"]} ({item[\"size\"]} bytes)')
+
+          os.makedirs('assets/voice_refs', exist_ok=True)
+          os.makedirs('assets/stickers', exist_ok=True)
+          download_tree('assets/voice_refs', 'assets/voice_refs')
+          download_tree('assets/stickers', 'assets/stickers')
+          " || true
+            fi
+          fi
+
+          echo "=== Final assets/ contents ==="
+          find assets/ -type f | head -30
+          echo "..."
+          find assets/ -type f | wc -l
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
