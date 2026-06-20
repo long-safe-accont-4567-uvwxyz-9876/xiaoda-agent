@@ -55,6 +55,9 @@ class AgentCoreBootstrapper:
         _ensure_workspace_template()
         await self._init_cognitive()
         await self.core.klee.init()
+        # 确保参考音频已复制到用户数据目录
+        self._ensure_voice_refs()
+        self._ensure_stickers()
         await self.core.tts.init()
         await self._register_sub_agents()
         await self._build_task_graph()
@@ -64,6 +67,72 @@ class AgentCoreBootstrapper:
         logger.info("agent_core.initialized")
 
     # ── 基础设施 ──────────────────────────────────────────
+
+    def _get_bundled_assets_dir(self) -> Path:
+        """获取安装包内置 assets 目录"""
+        try:
+            import sys
+            if getattr(sys, 'frozen', False):
+                return Path(sys._MEIPASS) / "assets"
+            else:
+                return Path(__file__).resolve().parent.parent / "assets"
+        except Exception:
+            return Path(__file__).resolve().parent.parent / "assets"
+
+    def _ensure_voice_refs(self) -> None:
+        """首次运行时将参考音频从安装包复制到用户数据目录"""
+        import shutil
+        from emotion.tts_engine import KIOXIA_BASE
+        bundled_dir = self._get_bundled_assets_dir() / "voice_refs"
+        if not bundled_dir.exists():
+            return
+        KIOXIA_BASE.mkdir(parents=True, exist_ok=True)
+        for filename in ("nahida_hq.wav", "nahida.wav", "keli.mp3"):
+            dest = KIOXIA_BASE / filename
+            if not dest.exists():
+                src = bundled_dir / filename
+                if src.exists():
+                    try:
+                        shutil.copy2(src, dest)
+                        logger.info("bootstrap.voice_ref_copied", file=filename)
+                    except Exception as e:
+                        logger.warning("bootstrap.voice_ref_copy_failed", file=filename, error=str(e))
+
+    def _ensure_stickers(self) -> None:
+        """首次运行时将表情包从安装包复制到用户数据目录"""
+        import shutil
+        from config import STICKER_DIR, KLEE_STICKER_DIR
+        bundled_dir = self._get_bundled_assets_dir() / "stickers"
+        if not bundled_dir.exists():
+            return
+
+        # 复制 nahida 表情包
+        nahida_src = bundled_dir / "nahida"
+        if nahida_src.exists() and nahida_src.is_dir():
+            STICKER_DIR.mkdir(parents=True, exist_ok=True)
+            for emotion_dir in nahida_src.iterdir():
+                if emotion_dir.is_dir():
+                    dest_emotion = STICKER_DIR / emotion_dir.name
+                    if not dest_emotion.exists():
+                        try:
+                            shutil.copytree(emotion_dir, dest_emotion)
+                            logger.info("bootstrap.stickers_copied", voice="nahida", emotion=emotion_dir.name)
+                        except Exception as e:
+                            logger.warning("bootstrap.stickers_copy_failed", voice="nahida", emotion=emotion_dir.name, error=str(e))
+
+        # 复制 klee 表情包
+        klee_src = bundled_dir / "klee"
+        if klee_src.exists() and klee_src.is_dir():
+            KLEE_STICKER_DIR.mkdir(parents=True, exist_ok=True)
+            for emotion_dir in klee_src.iterdir():
+                if emotion_dir.is_dir():
+                    dest_emotion = KLEE_STICKER_DIR / emotion_dir.name
+                    if not dest_emotion.exists():
+                        try:
+                            shutil.copytree(emotion_dir, dest_emotion)
+                            logger.info("bootstrap.stickers_copied", voice="klee", emotion=emotion_dir.name)
+                        except Exception as e:
+                            logger.warning("bootstrap.stickers_copy_failed", voice="klee", emotion=emotion_dir.name, error=str(e))
 
     async def _init_infrastructure(self) -> None:
         from memory.vector_store import VectorStore
@@ -357,3 +426,12 @@ class AgentCoreBootstrapper:
                 logger.info("mcp.servers_started", count=len(core._mcp_manager._clients))
             except Exception as e:
                 logger.warning("mcp.start_failed", error=str(e))
+
+
+def get_base_dir() -> Path:
+    """获取应用基础目录（PyInstaller 打包环境或开发环境）"""
+    import sys
+    if getattr(sys, 'frozen', False):
+        return Path(sys._MEIPASS)
+    else:
+        return Path(__file__).resolve().parent.parent

@@ -204,9 +204,16 @@ async def speech_to_text(file: UploadFile = File(...)):
                 transcript = client.audio.transcriptions.create(
                     model=ASR_MODEL,
                     file=audio_file,
-                    response_format="text",
                 )
-            return Envelope(data={"text": transcript.text if hasattr(transcript, 'text') else str(transcript)})
+            text = transcript.text if hasattr(transcript, "text") else str(transcript)
+            # 如果返回的是 JSON 字符串，尝试解析提取 text 字段
+            if text.startswith("{") and '"text"' in text:
+                import json as _json
+                try:
+                    text = _json.loads(text).get("text", text)
+                except Exception:
+                    pass
+            return Envelope(data={"text": text})
         finally:
             os.unlink(tmp_path)
 

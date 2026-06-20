@@ -14,6 +14,12 @@ MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
 MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
 MIMO_TTS_MODEL = os.getenv("MIMO_TTS_MODEL", "mimo-v2.5-tts-voiceclone")
 
+
+def _get_mimo_api_key() -> str:
+    """动态读取 MIMO_API_KEY，确保 setup 保存后能生效"""
+    return os.getenv("MIMO_API_KEY", "") or MIMO_API_KEY
+
+
 _voice_ref_dir = os.getenv("VOICE_REF_DIR", "")
 if _voice_ref_dir:
     KIOXIA_BASE = Path(_voice_ref_dir)
@@ -22,9 +28,31 @@ else:
     # 安全检查：如果 .parent 是根目录，则回退到 KIOXIA_DATA_DIR 本身
     KIOXIA_BASE = _kioxia_data.parent if _kioxia_data.parent != Path("/") else _kioxia_data
 
+def _resolve_voice_ref(filename: str) -> Path:
+    """查找参考音频：先查用户数据目录，再查安装包内置路径"""
+    # 1. 用户数据目录
+    user_path = KIOXIA_BASE / filename
+    if user_path.exists():
+        return user_path
+    # 2. 安装包内置路径（开发环境 / PyInstaller 打包环境）
+    try:
+        from core.bootstrap import get_base_dir
+        bundled_path = get_base_dir() / "assets" / "voice_refs" / filename
+        if bundled_path.exists():
+            return bundled_path
+    except Exception:
+        pass
+    # 3. 开发环境 fallback
+    dev_path = Path(__file__).resolve().parent.parent / "assets" / "voice_refs" / filename
+    if dev_path.exists():
+        return dev_path
+    # 返回用户数据目录路径（即使不存在，用于错误提示）
+    return user_path
+
+
 VOICE_REFERENCES = {
-    "nahida": KIOXIA_BASE / "nahida_hq.wav" if (KIOXIA_BASE / "nahida_hq.wav").exists() else KIOXIA_BASE / "nahida.wav",
-    "keli": KIOXIA_BASE / "keli.mp3",
+    "nahida": _resolve_voice_ref("nahida_hq.wav") if _resolve_voice_ref("nahida_hq.wav").exists() else _resolve_voice_ref("nahida.wav"),
+    "keli": _resolve_voice_ref("keli.mp3"),
 }
 
 VOICE_STYLES = {
@@ -175,11 +203,12 @@ class TTSEngine:
             logger.warning("tts.cache_index_save_failed", error=str(e))
 
     async def init(self, output_dir: str | Path | None = None):
-        if not MIMO_API_KEY:
+        api_key = _get_mimo_api_key()
+        if not api_key:
             logger.warning("tts.no_api_key")
             return
 
-        self._client = AsyncOpenAI(api_key=MIMO_API_KEY, base_url=MIMO_BASE_URL)
+        self._client = AsyncOpenAI(api_key=api_key, base_url=MIMO_BASE_URL)
 
         if output_dir:
             self._output_dir = Path(output_dir)
