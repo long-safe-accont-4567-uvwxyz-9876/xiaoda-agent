@@ -6,6 +6,7 @@ from loguru import logger
 from db.database import DatabaseManager
 from db.db_memory import MemoryDB
 from .vector_store import VectorStore
+from .fluid_memory import FluidMemory
 from utils.atomic_write import atomic_json_write
 
 
@@ -187,9 +188,15 @@ class MemoryManager:
         if self.vec:
             try:
                 vec_results = await self.vec.search(query, top_k=k * 2)
+                # 批量 JOIN：一次查询获取所有向量命中的记忆记录
                 if vec_results:
+                    vec_ids = [row_id for row_id, _ in vec_results]
+                    vec_mems = await self.memory.get_memories_by_ids(vec_ids)
+                    # 构建 id -> memory 映射
+                    vec_mem_map = {m["id"]: m for m in vec_mems}
+                    # 按 distance 排序组装结果
                     for row_id, distance in vec_results:
-                        mem = await self.memory.get_memory_by_id(row_id)
+                        mem = vec_mem_map.get(row_id)
                         if mem:
                             mem["score"] = 1.0 - distance
                             vec_items.append(mem)
@@ -296,9 +303,15 @@ class MemoryManager:
         if not results and self.vec:
             try:
                 vec_results = await self.vec.search(query, top_k=k)
+                # 批量 JOIN：一次查询获取所有向量命中的记忆记录
                 if vec_results:
+                    vec_ids = [row_id for row_id, _ in vec_results]
+                    vec_mems = await self.memory.get_memories_by_ids(vec_ids)
+                    # 构建 id -> memory 映射
+                    vec_mem_map = {m["id"]: m for m in vec_mems}
+                    # 按 distance 排序组装结果
                     for row_id, distance in vec_results:
-                        mem = await self.memory.get_memory_by_id(row_id)
+                        mem = vec_mem_map.get(row_id)
                         if mem:
                             mem["score"] = 1.0 - distance
                             results.append(mem)
@@ -314,13 +327,19 @@ class MemoryManager:
             except Exception as e:
                 logger.warning("memory.fallback_search_failed", error=str(e))
 
-        # 计算时效性衰减
-        now = time.time()
+        # 流体记忆评分（艾宾浩斯遗忘曲线 + 访问强化）
+        _fluid = FluidMemory()
         for r in results:
-            age_hours = (now - r.get("timestamp", 0)) / 3600
+            created_at = r.get("timestamp", time.time())
+            access_count = r.get("access_count", 0)
+            similarity = r.get("score", 0.5)  # 向量相似度或 FTS 分数
+            fluid_score = _fluid.score(similarity, created_at, access_count)
+            if _fluid.should_filter(fluid_score):
+                continue  # 过滤低分记忆
             importance = r.get("importance", 0.5)
-            r["time_decay"] = max(0.1, 1.0 - age_hours / 168)
-            r["effective_score"] = importance * r["time_decay"]
+            r["effective_score"] = importance * fluid_score
+            # 检索强化：递增访问计数
+            await self.memory.increment_access_count(r["id"])
 
         # KG 增强评分
         kg_boosts = []

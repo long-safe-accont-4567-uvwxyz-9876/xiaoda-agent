@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from loguru import logger
 
+from core.risk_classifier import RiskClassifier, EvidenceGate, PostValidator, RiskLevel
+
 
 # ── 钩子类型 ──────────────────────────────────────────────
 
@@ -79,6 +81,7 @@ class HookEngine:
     def __init__(self):
         self._hooks: dict[HookType, list[BaseHook]] = {t: [] for t in HookType}
         self._pending_post_actions: list[str] = []
+        self._failure_trigger = None  # 失败触发器，由 AgentCore 注入
 
     def register(self, hook: BaseHook):
         """注册钩子"""
@@ -195,6 +198,42 @@ class HookEngine:
             except Exception as e:
                 logger.error("hooks.post_tool_use_failure.error", hook=hook.name, error=str(e))
                 continue
+
+        # 接入失败触发器（失败→反思→重试→经验归档）
+        if self._failure_trigger:
+            try:
+                from core.failure_trigger import FailureContext
+                _task = arguments.get("task", tool_name) if isinstance(arguments, dict) else tool_name
+                # 从错误信息推断错误类型，供反思策略使用
+                _error_lower = error.lower() if error else ""
+                if "timeout" in _error_lower or "timed out" in _error_lower:
+                    _error_type = "timeout"
+                elif "auth" in _error_lower or "permission" in _error_lower or "unauthorized" in _error_lower:
+                    _error_type = "auth_error"
+                elif "not found" in _error_lower or "404" in _error_lower:
+                    _error_type = "not found"
+                else:
+                    _error_type = "tool_error"
+                context = FailureContext(
+                    task=_task,
+                    tool_name=tool_name,
+                    error=error,
+                    error_type=_error_type,
+                    attempted_steps=[],
+                )
+                ft_result = await self._failure_trigger.on_failure(context)
+                if ft_result.get("action") == "retry":
+                    retry_hint = f"[失败触发器建议重试] 调整: {ft_result.get('adjustment', '')}"
+                    final_result.additional_context = (final_result.additional_context or "") + retry_hint + "\n"
+                elif ft_result.get("action") == "alternative":
+                    alt_hint = f"[失败触发器建议替代方案] 方法: {ft_result.get('method', '')}"
+                    final_result.additional_context = (final_result.additional_context or "") + alt_hint + "\n"
+                elif ft_result.get("action") == "report":
+                    report_hint = f"[失败触发器报告] 原因: {ft_result.get('reason', '')}"
+                    final_result.additional_context = (final_result.additional_context or "") + report_hint + "\n"
+            except Exception as e:
+                logger.warning("hooks.failure_trigger.error", error=str(e))
+
         return final_result
 
     async def fire_user_prompt_submit(self, user_input: str, user_id: str = "") -> HookResult:
@@ -375,43 +414,88 @@ class SecurityPreCheck(BaseHook):
 
 
 class GateGuardHook(BaseHook):
-    """质量门禁：对修改性工具，检查是否已先读取/了解目标。"""
+    """质量门禁：危险分级 + 证据门禁 — 对修改性工具执行风险预检。"""
 
     name = "gate_guard"
     hook_type = HookType.PRE_TOOL_USE
-    tool_filter = {"write_file", "shell_command", "edit_file", "create_file", "python_executor"}
+    tool_filter = None  # 匹配所有工具，以便追踪读取操作并执行证据门禁
+
+    def __init__(self):
+        self._risk_classifier = RiskClassifier()
+        self._evidence_gate = EvidenceGate()
+        self._post_validator = PostValidator()
 
     async def execute(self, context: dict) -> HookResult:
         tool_name = context.get("tool_name", "")
         arguments = context.get("arguments", {})
-        user_input = context.get("user_input", "")
 
         # 提取目标路径
-        target_path = (
+        file_path = (
             arguments.get("file_path", "")
             or arguments.get("path", "")
             or arguments.get("filename", "")
         )
-        if not target_path:
-            return HookResult(allowed=True)
 
-        # 检查用户输入中是否提到了目标路径相关内容
-        path_parts = target_path.replace("\\", "/").rstrip("/").split("/")
-        keywords = []
-        if len(path_parts) >= 1:
-            keywords.append(path_parts[-1])
-        if len(path_parts) >= 2:
-            keywords.append(path_parts[-2])
+        # 证据门禁：检查是否已读取目标
+        has_read = self._evidence_gate.has_read(file_path) if file_path else False
+        check_result = self._risk_classifier.pre_check(
+            tool_name, arguments, has_read_target=has_read
+        )
 
-        mentioned = any(kw and kw in user_input for kw in keywords)
+        if not check_result["allow"]:
+            reason = check_result["reason"]
+            if check_result.get("need_confirm"):
+                return HookResult(
+                    allowed=False,
+                    reason=reason,
+                    additional_context="需要用户确认后才能执行此高风险操作",
+                )
+            return HookResult(allowed=False, reason=reason)
 
-        if not mentioned and user_input:
-            logger.info("hooks.gate_guard.target_not_mentioned",
-                        tool=tool_name, target=target_path)
-            return HookResult(allowed=True,
-                              reason=f"用户输入中未提及目标 {target_path}，请确认是否已了解该文件")
+        # 如果是读取操作，标记已读取（用于后续证据门禁）
+        if tool_name in ("read_file", "cat", "list_dir") and file_path:
+            self._evidence_gate.mark_read(file_path)
 
         return HookResult(allowed=True)
+
+
+class PostValidateHook(BaseHook):
+    """改完验证：L2+ 操作执行后自动验证结果完整性。"""
+
+    name = "post_validate"
+    hook_type = HookType.POST_TOOL_USE
+    tool_filter = None  # 所有工具，内部按风险等级过滤
+
+    def __init__(self):
+        self._risk_classifier = RiskClassifier()
+        self._post_validator = PostValidator()
+
+    async def execute(self, context: dict) -> HookResult:
+        tool_name = context.get("tool_name", "")
+        arguments = context.get("arguments", {})
+        output = context.get("output", "")
+
+        risk = self._risk_classifier.classify(tool_name, arguments)
+        if risk >= RiskLevel.MEDIUM:
+            file_path = (
+                arguments.get("file_path", "")
+                or arguments.get("path", "")
+                or arguments.get("filename", "")
+            )
+            result = {"output": output, "file_path": file_path}
+            validation = self._post_validator.validate(tool_name, result, risk)
+            if not validation["valid"]:
+                logger.warning(
+                    "post_validate.failed",
+                    tool=tool_name,
+                    reason=validation["reason"],
+                )
+                return HookResult(
+                    reason=validation["reason"],
+                    additional_context=validation["reason"],
+                )
+
+        return HookResult()
 
 
 class OutputCompressionHook(BaseHook):
@@ -490,5 +574,6 @@ def _register_builtin_hooks(engine: HookEngine):
     """注册内置钩子"""
     engine.register(SecurityPreCheck())
     engine.register(GateGuardHook())
+    engine.register(PostValidateHook())
     engine.register(OutputCompressionHook())
     engine.register(AuditLogHook())

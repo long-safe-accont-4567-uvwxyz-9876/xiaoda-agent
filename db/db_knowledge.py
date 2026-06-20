@@ -79,8 +79,32 @@ class KnowledgeDB:
         return [dict(r) for r in rows]
 
     async def search_knowledge_entities(self, query: str, limit: int = 10) -> list[dict]:
+        """搜索知识实体（优先 FTS5，降级 LIKE）"""
+        from memory.memory_manager import _build_fts_query
+        fts_query = _build_fts_query(query)
+
+        if fts_query:
+            try:
+                cursor = await self._conn.execute(
+                    """SELECT ke.*, bm25(knowledge_entities_fts) AS score
+                       FROM knowledge_entities_fts
+                       JOIN knowledge_entities ke ON ke.id = knowledge_entities_fts.id
+                       WHERE knowledge_entities_fts MATCH ?
+                       ORDER BY score ASC, ke.updated_at DESC
+                       LIMIT ?""",
+                    (fts_query, limit),
+                )
+                rows = await cursor.fetchall()
+                if rows:
+                    return [dict(r) for r in rows]
+            except Exception as e:
+                logger.warning(f"knowledge.fts_search_failed, fallback to LIKE: {e}")
+
+        # 降级：LIKE 查询（原逻辑）
         cursor = await self._conn.execute(
-            "SELECT * FROM knowledge_entities WHERE name LIKE ? LIMIT ?",
+            """SELECT * FROM knowledge_entities
+               WHERE name LIKE ?
+               ORDER BY updated_at DESC LIMIT ?""",
             (f"%{query}%", limit),
         )
         rows = await cursor.fetchall()

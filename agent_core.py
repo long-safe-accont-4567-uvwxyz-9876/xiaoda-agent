@@ -96,6 +96,9 @@ from core.bootstrap import AgentCoreBootstrapper
 from core.router_engine import RouterEngine, RoutingDecision
 from core.chat_processor import ChatProcessor
 from core.tool_orchestrator import ToolOrchestrator
+from core.circuit_breaker import CognitiveState, CircuitBreaker, CircuitState
+from core.failure_trigger import FailureTrigger
+from utils.smart_error_handler import SmartErrorHandler
 
 _current_request_ctx: ContextVar["RequestContext | None"] = ContextVar("_current_request_ctx", default=None)
 
@@ -194,6 +197,16 @@ class AgentCore:
         self._error_classifier = ErrorClassifier()
         self._hook_engine = get_hook_engine()
         self._bg_task_manager: BackgroundTaskManager | None = None
+        self._cognitive_state = CognitiveState()
+        self._circuit_breaker = CircuitBreaker()
+        # 启用 SmartErrorHandler + FailureTrigger（失败触发器与反思闭环）
+        self._smart_error_handler = SmartErrorHandler(db=self.db, dispatcher=self.dispatcher)
+        self._failure_trigger = FailureTrigger(
+            memory_db=self.memory.memory if self.memory else None,
+            learning_manager=self._smart_error_handler,
+        )
+        # 将失败触发器注入钩子引擎，供 fire_post_tool_use_failure 使用
+        self._hook_engine._failure_trigger = self._failure_trigger
 
     @property
     def hook_engine(self):
@@ -482,11 +495,29 @@ class AgentCore:
         _model_cfg = AGENT_CONFIG.get("model", {})
         is_owner = self.security.is_owner(user_id)
 
+        # 熔断器检查
+        circuit_state = self._circuit_breaker.check(self._cognitive_state)
+        if circuit_state == CircuitState.RED:
+            logger.warning("agent.circuit_breaker_red")
+            return ProcessResult(reply="系统需要休息一下，请稍后再试吧～")
+        elif circuit_state == CircuitState.HALF_OPEN:
+            logger.info("agent.circuit_breaker_half_open_probe")
+
+        # YELLOW 状态处理：注入警告并降低 max_tokens 20%
+        _cb_max_tokens = None
+        if circuit_state == CircuitState.YELLOW:
+            messages.append({
+                "role": "system",
+                "content": "[系统警告] 当前认知状态不佳，请简化回复。"
+            })
+            _cb_max_tokens = int(_model_cfg.get("max_tokens", 1500) * 0.8)
+
         try:
             result = await self.router.route(
                 task_type,
                 messages,
                 temperature=_model_cfg.get("temperature", 0.7),
+                max_tokens=_cb_max_tokens,
                 tools=tools,
                 tool_choice="auto" if tools else None,
                 user_openid=user_openid,
@@ -538,8 +569,18 @@ class AgentCore:
                 else:
                     reply = self._clean_reply(msg.content or "")
                     logger.info("agent.got_string_reply", length=len(reply), preview=reply[:80])
+            # LLM 调用成功后更新认知状态
+            if circuit_state == CircuitState.HALF_OPEN:
+                self._circuit_breaker.on_half_open_success(self._cognitive_state)
+            else:
+                self._circuit_breaker.on_success(self._cognitive_state)
         except Exception as e:
             trace.error("agent.model_error", error=str(e))
+            # LLM 调用失败后更新认知状态
+            if circuit_state == CircuitState.HALF_OPEN:
+                self._circuit_breaker.on_half_open_failure(self._cognitive_state)
+            else:
+                self._circuit_breaker.on_failure(self._cognitive_state)
             if self._error_handler:
                 try:
                     error_reply = await self._error_handler.handle_error_with_intelligence(
@@ -668,6 +709,12 @@ class AgentCore:
 
         # 执行工具
         result = await self.tool_executor.execute(tool_name, actual_args, user_id, safe_mode)
+
+        # 工具调用后更新认知状态（is_tool=True）
+        if result.success:
+            self._circuit_breaker.on_success(self._cognitive_state, is_tool=True)
+        else:
+            self._circuit_breaker.on_failure(self._cognitive_state, is_tool=True)
 
         try:
             from web.tool_events import emit_tool_event
@@ -982,7 +1029,7 @@ class AgentCore:
         agent = self.dispatcher.get_agent(name)
         if not agent:
             return f"（找不到名为 {name} 的子代理）"
-        context = self._build_sub_agent_context()
+        context = self._build_sub_agent_context(task_hint=task)
         result = await self.dispatcher.dispatch(
             name, task, context=context,
             status_callback=_ctx.status_callback if _ctx else None)
@@ -1001,9 +1048,9 @@ class AgentCore:
             return "可莉现在有点累了...等会儿再来找大哥哥玩吧！蹦蹦...💤"
         return result
 
-    def _build_sub_agent_context(self) -> str:
+    def _build_sub_agent_context(self, task_hint: str = "") -> str:
         parts = []
-        recent = self.context.get_last_n(4)
+        recent = self.context.get_last_n(12)
         if recent:
             conv_lines = []
             for m in recent:
@@ -1011,10 +1058,33 @@ class AgentCore:
                 content = m.get("content", "")
                 if not content or role == "tool":
                     continue
-                prefix = {"user": "用户", "assistant": "纳西妲"}.get(role, role)
-                conv_lines.append(f"{prefix}: {content[:80]}")
+                prefix = {"user": "用户:", "assistant": "纳西妲:"}.get(role, f"{role}:")
+                conv_lines.append(f"{prefix} {content[:120]}")
             if conv_lines:
-                parts.append("[近期对话]\n" + "\n".join(conv_lines))
+                parts.append("[对话历史]\n" + "\n".join(conv_lines))
+
+        if task_hint:
+            parts.append(f"[当前任务]\n{task_hint}")
+
+        partner_lines = []
+        configs = getattr(self, "_agent_route_configs", {}) or {}
+        if configs:
+            for _name, cfg in configs.items():
+                if not isinstance(cfg, dict):
+                    continue
+                display_name = cfg.get("display_name", _name)
+                route_desc = cfg.get("route_description", "")
+                if route_desc:
+                    partner_lines.append(f"{display_name}：{route_desc}")
+                else:
+                    partner_lines.append(f"{display_name}")
+        else:
+            partner_lines = [
+                "可莉：擅长搜索、查资料、活泼的小帮手",
+                "银狼：擅长代码、技术分析、黑客思维",
+            ]
+        if partner_lines:
+            parts.append("[可用的伙伴]\n" + "\n".join(partner_lines) + "\n需要时可以通过 delegate_task 工具向她们求助")
 
         if self.context._compressed_summary:
             parts.append(f"[早期对话摘要]\n{self.context._compressed_summary[:300]}")

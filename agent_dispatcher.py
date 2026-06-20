@@ -15,6 +15,7 @@ from emotion.tts_engine import TTSEngine
 from emotion.emoji_config import get_status_msg
 from tool_engine.tool_guardrails import get_tool_guardrails
 from utils.credential_pool import get_credential_pool, CredentialPool
+from core.message import AgentMessage
 
 
 # ── ToolCallExtractor 统一接口 ──────────────────────────────
@@ -150,6 +151,8 @@ class SubAgent:
         self._personality: str = ""
         self._initialized = False
         self._credential_pool: CredentialPool | None = None
+        self._memory_submit_count = 0  # 子代理单次任务记忆提交计数（上限 3）
+        self._communicating_with: str | None = None  # 子代理间直接通信防循环标记
 
     async def init(self):
         api_key = _read_env_key(self.config.api_key_env)
@@ -212,6 +215,55 @@ class SubAgent:
         excluded = self.config.excluded_tools
         tools = [t for t in all_tools if t["function"]["name"] not in excluded]
 
+        # 子代理专属工具：submit_memory（受控记忆提交，实例方法拦截执行）
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "submit_memory",
+                "description": "向主记忆提交重要观察（单次任务最多 3 次）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "key_points": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "关键观察点列表",
+                        },
+                        "importance": {
+                            "type": "integer",
+                            "description": "重要程度(0-4)，默认 3，最大 4",
+                            "default": 3,
+                            "maximum": 4,
+                        },
+                    },
+                    "required": ["key_points"],
+                },
+            },
+        })
+
+        # 子代理专属工具：send_message_to_agent（子代理间直接通信，实例方法拦截执行）
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "send_message_to_agent",
+                "description": "直接向另一个子代理发消息获取响应（无需通过纳西妲中转）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "target_agent": {
+                            "type": "string",
+                            "description": "要联系的小伙伴名字",
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "要发送的消息内容",
+                        },
+                    },
+                    "required": ["target_agent", "message"],
+                },
+            },
+        })
+
         # Add MCP tools if available
         if hasattr(self._core, '_mcp_manager') and self._core._mcp_manager:
             mcp_server_names = self.config.mcp_servers
@@ -225,11 +277,17 @@ class SubAgent:
         if not self._tool_executor:
             return set()
         excluded = self.config.excluded_tools
-        return {t["function"]["name"] for t in to_openai_tools() if t["function"]["name"] not in excluded}
+        names = {t["function"]["name"] for t in to_openai_tools() if t["function"]["name"] not in excluded}
+        names.add("submit_memory")  # 子代理专属工具
+        names.add("send_message_to_agent")  # 子代理专属工具：子代理间直接通信
+        return names
 
     async def chat(self, message: str, context: str = "", status_callback=None) -> str:
         if not self.available:
             return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
+
+        # 单次任务开始时重置记忆提交计数
+        self._memory_submit_count = 0
 
         if status_callback:
             try:
@@ -268,8 +326,17 @@ class SubAgent:
         delegation_req = None
         if result.success and isinstance(result.data, DelegationRequest):
             delegation_req = result.data
+        elif result.success and isinstance(result.data, AgentMessage) and result.data.is_delegate_request():
+            # 优先用 AgentMessage 结构化协议识别
+            delegation_req = DelegationRequest(
+                type="nahida", question=result.data.content, delegator=self.config.name
+            )
         elif result.success and isinstance(result.data, str) and result.data.startswith("[NAHIDA_PENDING]"):
-            # 兼容旧格式
+            # fallback: 旧字符串匹配（过渡期保留）
+            import logging
+            logging.getLogger(__name__).warning(
+                "使用废弃的 [NAHIDA_PENDING] 字符串匹配识别委托，请迁移到 AgentMessage 协议"
+            )
             delegation_req = DelegationRequest(
                 type="nahida", question=result.data[len("[NAHIDA_PENDING]"):], delegator=self.config.name
             )
@@ -438,6 +505,24 @@ class SubAgent:
                     }, ensure_ascii=False)
                     return {"tool_call_id": tc.id, "content": tool_result_content}
 
+                # 子代理专属工具：submit_memory（实例方法拦截，不走全局 executor）
+                if tool_name == "submit_memory":
+                    try:
+                        result_text = await self.submit_memory(**args)
+                    except Exception as e:
+                        logger.warning("sub_agent.submit_memory_call_failed", error=str(e)[:200])
+                        result_text = f"错误: {e}"
+                    return {"tool_call_id": tc.id, "content": result_text}
+
+                # 子代理专属工具：send_message_to_agent（实例方法拦截，不走全局 executor）
+                if tool_name == "send_message_to_agent":
+                    try:
+                        result_text = await self.send_message_to_agent(**args)
+                    except Exception as e:
+                        logger.warning("sub_agent.send_message_to_agent_call_failed", error=str(e)[:200])
+                        result_text = f"错误: {e}"
+                    return {"tool_call_id": tc.id, "content": result_text}
+
                 # 工具护栏检查
                 guardrails = get_tool_guardrails()
                 action, guard_msg = await guardrails.check(tool_name, args)
@@ -511,6 +596,94 @@ class SubAgent:
                     return formatted
                 return raw_content
             return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
+
+    async def submit_memory(self, key_points: list[str], importance: int = 3) -> str:
+        """子代理向主记忆提交关键信息（受控写入）"""
+        # 频率限制：单次任务最多 3 次
+        if self._memory_submit_count >= 3:
+            return "已达本次任务记忆提交上限（3次）"
+
+        # importance 上限校验：防止子代理提权写入高敏感记忆
+        if importance > 4:
+            importance = 4
+
+        # 拼接内容
+        memory_text = f"[{self.config.display_name}观察] " + "; ".join(key_points)
+
+        # 检查记忆系统可用性（实际属性名为 memory，非 memory_manager）
+        if not self._core or not hasattr(self._core, "memory") or self._core.memory is None:
+            return "（记忆系统不可用）"
+
+        try:
+            mm = self._core.memory
+            # 适配实际接口：MemoryManager.memory.insert_episodic_memory(summary, importance:float, emotion_label)
+            # importance 整数(0-4) 归一化到 float(0-1)
+            importance_float = importance / 4.0
+            mem_id = await mm.memory.insert_episodic_memory(
+                summary=memory_text,
+                importance=importance_float,
+                emotion_label="",
+                source="sub_agent",
+            )
+            # 同步写入向量索引（与 remember 工具保持一致）
+            if getattr(mm, "vec", None) and memory_text:
+                try:
+                    await mm.vec.upsert(mem_id, memory_text)
+                except Exception as ve:
+                    logger.warning("sub_agent.submit_memory.vec_failed", error=str(ve)[:200])
+
+            self._memory_submit_count += 1
+            logger.info("sub_agent.submit_memory", name=self.config.name, count=self._memory_submit_count)
+            return f"已记录：{memory_text[:50]}..."
+        except Exception as e:
+            logger.warning("sub_agent.submit_memory_failed", error=str(e)[:200])
+            return "（记忆系统不可用）"
+
+    async def send_message_to_agent(self, target_agent: str, message: str) -> str:
+        """子代理直接给另一个子代理发消息，无需主代理中转"""
+        # 防循环：消息内容包含本工具名，或目标已在通信栈中
+        if "send_message_to_agent" in message or self._communicating_with == target_agent:
+            return "（避免循环通信）"
+
+        # 检查通信渠道
+        if not self._core or not hasattr(self._core, "dispatcher") or self._core.dispatcher is None:
+            return "（找不到通信渠道）"
+
+        dispatcher = self._core.dispatcher
+
+        # 获取目标 Agent：优先按内部 name 查找，再按 display_name 匹配
+        target = None
+        try:
+            target = dispatcher.get_agent(target_agent)
+        except Exception:
+            target = None
+
+        if target is None:
+            agents_dict = getattr(dispatcher, "_agents", {}) or {}
+            for _, agent in agents_dict.items():
+                if getattr(agent.config, "display_name", "") == target_agent:
+                    target = agent
+                    break
+
+        if target is None:
+            return f"（找不到 {target_agent}）"
+
+        # 调用目标 Agent 的 chat 方法
+        context = f"这是{self.config.display_name}发来的消息：\n{message}"
+        self._communicating_with = target_agent
+        try:
+            reply = await target.chat(message, context=context)
+            return reply if reply else f"（{target_agent} 没有回应）"
+        except Exception as e:
+            logger.warning(
+                "sub_agent.send_message_failed",
+                sender=self.config.name,
+                target=target_agent,
+                error=str(e)[:200],
+            )
+            return f"（{target_agent} 暂时无法响应：{e}）"
+        finally:
+            self._communicating_with = None
 
     async def synthesize(self, text: str, style: str = "", emotion: str = "") -> Path | None:
         if not self.config.voice_ref:

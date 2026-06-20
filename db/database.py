@@ -39,8 +39,31 @@ class DatabaseManager:
     async def init(self):
         self._conn = await aiosqlite.connect(str(self.db_path))
         self._conn.row_factory = aiosqlite.Row
-        await self._create_tables()
+        # WAL 模式 + 缓存优化（与向量库保持一致）
+        for pragma_sql in [
+            "PRAGMA journal_mode=WAL",
+            "PRAGMA synchronous=NORMAL",
+            "PRAGMA cache_size=-20000",      # ~20MB
+            "PRAGMA mmap_size=67108864",     # 64MB
+            "PRAGMA temp_store=MEMORY",
+        ]:
+            try:
+                await self._conn.execute(pragma_sql)
+            except Exception as e:
+                logger.warning(f"PRAGMA 失败: {pragma_sql} - {e}")
+        # 验证 WAL 模式
+        try:
+            cursor = await self._conn.execute("PRAGMA journal_mode")
+            row = await cursor.fetchone()
+            mode = row[0] if row else "unknown"
+            if mode.lower() != "wal":
+                logger.warning(f"journal_mode 未生效，当前: {mode}")
+            else:
+                logger.info("database.wal_enabled")
+        except Exception as e:
+            logger.warning(f"验证 journal_mode 失败: {e}")
         self.memory = MemoryDB(self._conn)
+        await self._create_tables()
         self.notebook = NotebookDB(self._conn)
         self.learning = LearningDB(self._conn)
         self.knowledge = KnowledgeDB(self._conn)
@@ -68,27 +91,34 @@ class DatabaseManager:
 
         if current < 1:
             try:
+                await self._conn.execute("BEGIN TRANSACTION")
                 await self._conn.executescript("""
                     ALTER TABLE knowledge_relations ADD COLUMN valid_from REAL DEFAULT 0;
                     ALTER TABLE knowledge_relations ADD COLUMN valid_to REAL DEFAULT 0;
                     ALTER TABLE knowledge_relations ADD COLUMN confidence REAL DEFAULT 1.0;
                 """)
+                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (1, ?)", (time.time(),))
+                await self._conn.commit()
+                logger.info("database.migration_v1", desc="temporal_knowledge_graph")
             except Exception as e:
-                logger.debug(f"数据库迁移 v1 ALTER TABLE 失败(可能列已存在): {e}")
-            await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (1, ?)", (time.time(),))
-            logger.info("database.migration_v1", desc="temporal_knowledge_graph")
+                await self._conn.execute("ROLLBACK")
+                logger.error(f"数据库迁移 v1 失败: {e}")
 
         if current < 2:
             try:
+                await self._conn.execute("BEGIN TRANSACTION")
                 await self._conn.execute(
                     "ALTER TABLE conversation_logs ADD COLUMN session_id TEXT DEFAULT ''")
+                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (2, ?)", (time.time(),))
+                await self._conn.commit()
+                logger.info("database.migration_v2", desc="conversation_logs.session_id")
             except Exception as e:
-                logger.debug(f"数据库迁移 v2 ALTER TABLE 失败(可能列已存在): {e}")
-            await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (2, ?)", (time.time(),))
-            logger.info("database.migration_v2", desc="conversation_logs.session_id")
+                await self._conn.execute("ROLLBACK")
+                logger.error(f"数据库迁移 v2 失败: {e}")
 
         if current < 3:
             try:
+                await self._conn.execute("BEGIN TRANSACTION")
                 # 创建 FTS5 虚拟表
                 await self._conn.executescript("""
                     CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5(
@@ -123,11 +153,56 @@ class DatabaseManager:
                     );
                 """)
                 logger.info("database.migration_v3_backfill", rows=len(rows))
+                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (3, ?)", (time.time(),))
+                await self._conn.commit()
+                logger.info("database.migration_v3", desc="fts5_index+consolidation_candidates")
             except Exception as e:
-                logger.warning(f"数据库迁移 v3 失败: {e}")
-            await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (3, ?)", (time.time(),))
-            await self._conn.commit()
-            logger.info("database.migration_v3", desc="fts5_index+consolidation_candidates")
+                await self._conn.execute("ROLLBACK")
+                logger.error(f"数据库迁移 v3 失败: {e}")
+
+        if current < 4:
+            try:
+                await self._conn.execute("BEGIN TRANSACTION")
+                await self.memory.migrate_add_source_column()
+                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (4, ?)", (time.time(),))
+                await self._conn.commit()
+                logger.info("database.migration_v4", desc="episodic_memories.source")
+            except Exception as e:
+                await self._conn.execute("ROLLBACK")
+                logger.error(f"数据库迁移 v4 失败: {e}")
+
+        if current < 5:
+            try:
+                await self._conn.execute("BEGIN TRANSACTION")
+                # 回填现有 knowledge_entities 数据到 FTS 索引
+                cursor = await self._conn.execute("SELECT id, name FROM knowledge_entities")
+                rows = await cursor.fetchall()
+                from memory.memory_manager import _tokenize_for_fts
+                for row in rows:
+                    name_tokenized = _tokenize_for_fts(row["name"]) if row["name"] else ""
+                    await self._conn.execute(
+                        "INSERT OR IGNORE INTO knowledge_entities_fts(id, name_index) VALUES (?, ?)",
+                        (row["id"], name_tokenized),
+                    )
+                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (5, ?)", (time.time(),))
+                await self._conn.commit()
+                logger.info("database.migration_v5", desc="knowledge_entities_fts_backfill", rows=len(rows))
+            except Exception as e:
+                await self._conn.execute("ROLLBACK")
+                logger.error(f"数据库迁移 v5 失败: {e}")
+
+        if current < 6:
+            try:
+                await self._conn.execute("BEGIN TRANSACTION")
+                await self._conn.execute(
+                    "ALTER TABLE episodic_memories ADD COLUMN access_count INTEGER DEFAULT 0"
+                )
+                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (6, ?)", (time.time(),))
+                await self._conn.commit()
+                logger.info("database.migration_v6", desc="episodic_memories.access_count")
+            except Exception as e:
+                await self._conn.execute("ROLLBACK")
+                logger.error(f"数据库迁移 v6 失败: {e}")
 
         await self._conn.commit()
 
@@ -177,7 +252,9 @@ class DatabaseManager:
                 importance REAL DEFAULT 0.5,
                 emotion_label TEXT DEFAULT '',
                 session_id TEXT DEFAULT 'user',
-                embedding_id INTEGER DEFAULT -1
+                embedding_id INTEGER DEFAULT -1,
+                source TEXT DEFAULT 'user',
+                access_count INTEGER DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS cron_last_run (
@@ -334,11 +411,34 @@ class DatabaseManager:
             CREATE INDEX IF NOT EXISTS idx_conv_source ON conversation_logs(source);
             CREATE INDEX IF NOT EXISTS idx_episodic_session ON episodic_memories(session_id);
             CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_logs(event_type);
+            CREATE INDEX IF NOT EXISTS idx_conv_session ON conversation_logs(session_id);
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_type ON knowledge_relations(relation_type);
+            CREATE INDEX IF NOT EXISTS idx_media_status ON media_tasks(status);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5(
                 id UNINDEXED,
                 summary_index
             );
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_entities_fts USING fts5(
+                id UNINDEXED,
+                name_index
+            );
+
+            CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ai AFTER INSERT ON knowledge_entities BEGIN
+                INSERT INTO knowledge_entities_fts(id, name_index)
+                VALUES (new.id, new.name);
+            END;
+            CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ad AFTER DELETE ON knowledge_entities BEGIN
+                INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index)
+                VALUES ('delete', old.id, old.name);
+            END;
+            CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_au AFTER UPDATE ON knowledge_entities BEGIN
+                INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index)
+                VALUES ('delete', old.id, old.name);
+                INSERT INTO knowledge_entities_fts(id, name_index)
+                VALUES (new.id, new.name);
+            END;
 
             CREATE TABLE IF NOT EXISTS consolidation_candidates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

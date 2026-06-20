@@ -159,6 +159,13 @@ class BackgroundTaskManager:
         # 8. 会话自动归档
         _spawn(self._auto_archive_sessions())
 
+        # 9. 梦境归档（每日一次）
+        try:
+            if await self._should_run("dream_archive", interval_hours=24):
+                _spawn(self._dream_archive_task())
+        except Exception as e:
+            logger.warning("bg.dream_archive_schedule_failed", error=str(e))
+
     async def _auto_archive_sessions(self) -> None:
         try:
             archived = await self.db.auto_archive_stale_sessions(idle_seconds=3600)
@@ -175,6 +182,29 @@ class BackgroundTaskManager:
                 logger.info("portrait.cold_start_done", length=len(result))
         except Exception as e:
             logger.warning("portrait.cold_start_failed", error=str(e))
+
+    async def _should_run(self, task_name: str, interval_hours: float) -> bool:
+        """检查周期任务是否应运行（基于 cron_last_run 表）"""
+        try:
+            last_run = await self.db.get_cron_last_run(task_name)
+            if last_run is None:
+                return True
+            return (time.time() - last_run) >= interval_hours * 3600
+        except Exception:
+            return False
+
+    async def _dream_archive_task(self) -> None:
+        """梦境归档 — 每日整理低频记忆"""
+        try:
+            from memory.fluid_memory import FluidMemory
+            fluid = FluidMemory()
+            if self.memory:
+                archived = await fluid.dream(self.memory.memory)
+                if archived > 0:
+                    logger.info("dream.archive_completed", archived=archived)
+            await self.db.set_cron_last_run("dream_archive")
+        except Exception as e:
+            logger.warning("dream.archive_failed", error=str(e))
 
     @staticmethod
     def get_bg_tasks() -> set[asyncio.Task]:

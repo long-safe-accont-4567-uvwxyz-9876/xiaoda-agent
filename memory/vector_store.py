@@ -1,4 +1,5 @@
 import json
+import os
 import asyncio
 import hashlib
 import threading
@@ -70,6 +71,10 @@ class VectorStore:
         self._embed_client = None
         self._vec_conn = None
         self._cache = EmbedCache(max_size=128)
+
+        # 并发嵌入限制（避免 API 限流），可通过环境变量配置
+        _embed_concurrency = int(os.getenv("VECTOR_EMBED_CONCURRENCY", "8"))
+        self._embed_semaphore = asyncio.Semaphore(_embed_concurrency)
 
         if HAS_OPENAI and embed_api_key:
             self._embed_client = AsyncOpenAI(
@@ -227,40 +232,72 @@ class VectorStore:
             return False
 
     async def batch_upsert(self, items: list[tuple[int, str]]) -> int:
+        """批量写入向量（并发嵌入 + 单事务写入）"""
         if not self._initialized or not self._vec_conn:
             return 0
 
-        # Embed all items first (these are already async)
-        embed_results = []
-        for row_id, text in items:
-            vec = await self.embed(text)
-            embed_results.append((row_id, vec))
+        if not items:
+            return 0
 
+        # 并发嵌入（受 Semaphore 限制，避免 API 限流）
+        async def _embed_one(row_id: int, text: str) -> tuple[int, str, list[float]]:
+            async with self._embed_semaphore:
+                vec = await self.embed(text)
+                return (row_id, text, vec)
+
+        embed_results = await asyncio.gather(
+            *[_embed_one(row_id, text) for row_id, text in items],
+            return_exceptions=True,
+        )
+
+        # 过滤成功的嵌入结果（日志不记录文本内容，可能含 PII）
+        valid_items: list[tuple[int, str, list[float]]] = []
+        for result in embed_results:
+            if isinstance(result, Exception):
+                logger.warning("vector.batch_embed_failed", error=str(result)[:200])
+                continue
+            row_id, text, vec = result
+            if vec:
+                valid_items.append((row_id, text, vec))
+
+        if not valid_items:
+            return 0
+
+        # 单事务批量写入（保持原有逻辑）
         def _do_batch():
             with self._lock:
                 if self._closed:
                     return 0
+                conn = self._vec_conn
                 success = 0
-                for row_id, vec in embed_results:
-                    if not vec:
-                        continue
-                    vec_json = json.dumps(vec)
-                    try:
+                try:
+                    conn.execute("BEGIN TRANSACTION")
+                    for row_id, text, vec in valid_items:
+                        vec_json = json.dumps(vec)
                         try:
-                            self._vec_conn.execute("DELETE FROM memories_vec WHERE rowid=?", [row_id])
+                            conn.execute("DELETE FROM memories_vec WHERE rowid=?", [row_id])
                         except Exception as e:
                             logger.debug(f"vector_store batch_upsert 删除旧记录失败(rowid={row_id}): {e}")
-                        self._vec_conn.execute(
-                            "INSERT INTO memories_vec(rowid, embedding) VALUES (?, vec_f32(?))",
-                            [row_id, vec_json],
-                        )
-                        success += 1
-                    except Exception as e:
-                        logger.warning("vector_store.batch_upsert_item_failed", row_id=row_id, error=str(e))
-
-                if success > 0:
-                    self._vec_conn.commit()
-                return success
+                        try:
+                            conn.execute(
+                                "INSERT INTO memories_vec(rowid, embedding) VALUES (?, vec_f32(?))",
+                                [row_id, vec_json],
+                            )
+                            success += 1
+                        except Exception as e:
+                            logger.warning("vector_store.batch_upsert_item_failed", row_id=row_id, error=str(e))
+                    if success > 0:
+                        conn.commit()
+                    else:
+                        conn.rollback()
+                    return success
+                except Exception as e:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    logger.error("vector.batch_upsert_failed", error=str(e)[:200])
+                    return 0
 
         return await asyncio.to_thread(_do_batch)
 
