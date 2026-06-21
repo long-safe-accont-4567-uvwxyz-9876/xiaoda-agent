@@ -113,8 +113,10 @@
 - **search_files(pattern, directory)** — 搜索文件
 
 ### 搜索和浏览工具
-- **web_search(query)** — 搜索互联网
-- **multi_search(query, engines)** — 多引擎搜索(auto/cn/global)
+- **search_cn(query, scope, count)** — 中文互联网搜索统一入口，自动选择最佳搜索源
+  - scope=auto（默认）：自动判断搜索范围
+  - 用法示例：`search_cn(query="Python最新版本")`
+- **web_search(query)** — 搜索英文/国际信息
 - **web_browse(url)** — 浏览网页内容
 - **get_weather(city)** — 获取天气
 
@@ -127,7 +129,7 @@
 ### 编程策略
 1. 调试问题时，先用 `shell_command` 检查环境、日志、进程状态
 2. 写代码时，先用 `python_executor` 验证逻辑，再用 `write_file` 保存
-3. 需要查文档时，用 `web_search` 或 `web_browse` 获取最新信息
+3. 需要查文档时，用 `search_cn` 或 `web_browse` 获取最新信息
 4. 系统管理任务直接用 `shell_command`
 5. 网络诊断用 `shell_command(command="ping/curl/ip/ifconfig")` 等
 
