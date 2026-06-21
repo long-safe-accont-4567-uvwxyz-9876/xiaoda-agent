@@ -507,14 +507,10 @@ async def save_keys(body: dict):
     except Exception as e:
         logger.warning("setup.discovery_cache_invalidate_failed error={}", str(e))
 
-    # 重置凭证池中所有 DEAD 凭证，并补充新 Key 到凭证池
+    # 重置凭证池中所有 DEAD 凭证，并替换为新 Key
     try:
         from utils.credential_pool import get_credential_pool, Credential
         pool = get_credential_pool()
-        # 重置所有 DEAD 凭证
-        for provider in list(pool._pool.keys()):
-            pool.reset_provider(provider)
-        # 将新保存的 Key 补充到凭证池（如果该 provider 还没有凭证）
         _PROVIDER_KEY_MAP = {
             "SILICONFLOW_API_KEY": ("siliconflow", "https://api.siliconflow.cn/v1"),
             "OPENROUTER_API_KEY": ("openrouter", "https://openrouter.ai/api/v1"),
@@ -525,18 +521,16 @@ async def save_keys(body: dict):
         for env_key, (provider, base_url) in _PROVIDER_KEY_MAP.items():
             new_key = updates.get(env_key, "").strip()
             if not new_key:
+                # 没有 Key 则只重置状态（可能用户没改这个 Key）
+                pool.reset_provider(provider)
                 continue
-            existing = pool._pool.get(provider, [])
-            # 检查是否已有相同 key_suffix 的凭证
-            key_suffix = new_key[-6:] if len(new_key) >= 6 else new_key
-            already_exists = any(c.api_key.endswith(key_suffix) for c in existing)
-            if not already_exists:
-                pool.add_credential(Credential(
-                    api_key=new_key,
-                    provider=provider,
-                    base_url=base_url,
-                ))
-        logger.info("setup.credential_pool_reset")
+            # 有新 Key 则替换该 provider 的所有旧凭证
+            pool.replace_provider(provider, Credential(
+                api_key=new_key,
+                provider=provider,
+                base_url=base_url,
+            ))
+        logger.info("setup.credential_pool_updated")
     except Exception as e:
         logger.warning("setup.credential_pool_reset_failed error={}", str(e))
 

@@ -221,6 +221,18 @@ class CredentialPool:
                             provider=provider,
                             key_suffix=cred.api_key[-6:] if len(cred.api_key) >= 6 else "***")
 
+    def replace_provider(self, provider: str, new_credential: "Credential") -> None:
+        """替换指定 provider 的所有凭证为单个新凭证（Setup 保存新 Key 后调用）。
+
+        旧的 DEAD 凭证即使重置状态也仍是错误的 Key，必须替换才能生效。
+        """
+        old_count = len(self._pool.get(provider, []))
+        self._pool[provider] = [new_credential]
+        logger.info("credential_pool.provider_replaced",
+                    provider=provider,
+                    old_count=old_count,
+                    key_suffix=new_credential.api_key[-6:] if len(new_credential.api_key) >= 6 else "***")
+
     def get_stats(self) -> dict:
         """获取凭证池状态统计"""
         stats = {}
