@@ -130,6 +130,59 @@ class ModelRouter:
             self._credential_locks[provider] = asyncio.Lock()
         return self._credential_locks[provider]
 
+    def refresh_client(self) -> None:
+        """重建 MiMo / Agnes 客户端（Setup 保存新 Key 后调用）。
+
+        ModelRouter.__init__ 只在启动时读取一次环境变量创建客户端，
+        后续通过 Setup 页面保存的新 Key 不会自动生效。此方法从当前
+        os.environ 重新读取 Key 并重建客户端，使新配置立即生效。
+        """
+        new_mimo_key = os.getenv("MIMO_API_KEY", "")
+        new_mimo_url = os.getenv("MIMO_BASE_URL", MIMO_BASE_URL)
+        if new_mimo_key:
+            self._client = AsyncOpenAI(api_key=new_mimo_key, base_url=new_mimo_url)
+            logger.info("router.mimo_client_refreshed",
+                        key_suffix=new_mimo_key[-6:] if len(new_mimo_key) >= 6 else "***")
+        else:
+            self._client = None
+
+        new_agnes_key = os.getenv("AGNES_API_KEY", "")
+        new_agnes_url = os.getenv("AGNES_BASE_URL", AGNES_BASE_URL)
+        if new_agnes_key:
+            self._agnes_client = AsyncOpenAI(api_key=new_agnes_key, base_url=new_agnes_url)
+            logger.info("router.agnes_client_refreshed",
+                        key_suffix=new_agnes_key[-6:] if len(new_agnes_key) >= 6 else "***")
+        else:
+            self._agnes_client = None
+
+        # 同步更新凭证池：重置 DEAD 凭证 + 补充新 Key
+        try:
+            from utils.credential_pool import get_credential_pool, Credential
+            pool = get_credential_pool()
+            for provider in list(pool._pool.keys()):
+                pool.reset_provider(provider)
+            # 补充/更新 MiMo 凭证
+            if new_mimo_key:
+                self._ensure_credential_in_pool(pool, "mimo", new_mimo_key, new_mimo_url)
+            # 补充/更新 Agnes 凭证
+            if new_agnes_key:
+                self._ensure_credential_in_pool(pool, "agnes", new_agnes_key, new_agnes_url)
+        except Exception as e:
+            logger.warning("router.credential_pool_sync_failed error={}", str(e))
+
+    @staticmethod
+    def _ensure_credential_in_pool(pool, provider: str, api_key: str, base_url: str) -> None:
+        """确保凭证池中有该 provider 的最新凭证。"""
+        existing = pool._pool.get(provider, [])
+        key_suffix = api_key[-6:] if len(api_key) >= 6 else api_key
+        already_exists = any(c.api_key.endswith(key_suffix) for c in existing)
+        if not already_exists:
+            pool.add_credential(Credential(
+                api_key=api_key,
+                provider=provider,
+                base_url=base_url,
+            ))
+
     def set_db(self, db, analytics: AnalyticsDB | None = None):
         self._db = db
         self._analytics = analytics
@@ -156,6 +209,28 @@ class ModelRouter:
         if self._current_chat_model is not None:
             return self._current_chat_model
         return {"provider": "mimo", "model_id": ROUTE_TABLE.get("chat", {}).get("model", MIMO_MODEL)}
+
+    # 已知自定义 provider 的默认模型映射
+    _CUSTOM_PROVIDER_DEFAULT_MODELS = {
+        "siliconflow": "Qwen/Qwen3-8B",
+        "openrouter": "meta-llama/llama-3.3-8b-instruct:free",
+        "modelscope": "Qwen/Qwen2.5-7B-Instruct",
+    }
+
+    def _get_custom_provider_default_model(self, provider: str) -> str:
+        """获取自定义 provider 的默认模型 ID。"""
+        # 优先从配置服务获取
+        try:
+            from web.config_service import get_config_service
+            cfg = get_config_service()
+            record = cfg.get(f"models.providers.{provider}", {}) or {}
+            dm = record.get("default_model", "")
+            if dm:
+                return dm
+        except Exception:
+            pass
+        # 回退到内置映射
+        return self._CUSTOM_PROVIDER_DEFAULT_MODELS.get(provider, "")
 
     def set_model_preference(self, preference: str) -> bool:
         if preference in MODEL_PREFERENCES:
@@ -355,6 +430,29 @@ class ModelRouter:
                         return result
                 except Exception as agnes_err:
                     logger.error("router.agnes_fallback_failed", error=str(agnes_err))
+
+            # 最终降级：尝试已注册的自定义 provider（SiliconFlow/OpenRouter/ModelScope 等）
+            if task_type.startswith("chat") and self._custom_clients:
+                for cp_name, cp_client in list(self._custom_clients.items()):
+                    try:
+                        # 获取该 provider 的默认模型
+                        cp_model = self._get_custom_provider_default_model(cp_name)
+                        if not cp_model:
+                            continue
+                        cp_config = {"model": cp_model, "max_tokens": 1000, "client": cp_name}
+                        logger.warning("router.custom_provider_fallback",
+                                       original_task=task_type, provider=cp_name, model=cp_model)
+                        cp_tools = self._filter_tools_for_model(tools, cp_model)
+                        result = await self._route_with_retry(
+                            f"chat_{cp_name}", cp_config, messages, temperature,
+                            1000, stream, cp_tools, tool_choice, timeout,
+                            user_openid, session_id,
+                        )
+                        return result
+                    except Exception as cp_err:
+                        logger.error("router.custom_provider_fallback_failed",
+                                     provider=cp_name, error=str(cp_err))
+                        continue
             raise
 
     @staticmethod

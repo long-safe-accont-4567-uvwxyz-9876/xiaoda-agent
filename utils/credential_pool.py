@@ -35,6 +35,7 @@ class Credential:
 
 
 EXHAUSTED_COOLDOWN = 60.0  # exhausted 凭证冷却期 60 秒
+AUTH_ERROR_DEAD_THRESHOLD = 3  # 连续 AUTH_ERROR 达到此数才标记 DEAD
 
 
 class CredentialPool:
@@ -120,12 +121,25 @@ class CredentialPool:
 
             # 状态转换
             if error.reason == FailoverReason.AUTH_ERROR:
-                # ok -> dead: 认证错误（token无效）
-                target.state = CredentialState.DEAD
-                logger.error("credential_pool.credential_dead",
-                             provider=provider,
-                             key_suffix=target.api_key[-6:] if len(target.api_key) >= 6 else "***",
-                             reason=error.reason.value)
+                # 认证错误：不再一次就 DEAD，先 EXHAUSTED 给恢复机会
+                # 连续 AUTH_ERROR 达到阈值才标记 DEAD
+                if target.error_count >= AUTH_ERROR_DEAD_THRESHOLD:
+                    target.state = CredentialState.DEAD
+                    logger.error("credential_pool.credential_dead",
+                                 provider=provider,
+                                 key_suffix=target.api_key[-6:] if len(target.api_key) >= 6 else "***",
+                                 reason=error.reason.value,
+                                 consecutive_auth_errors=target.error_count)
+                else:
+                    # 首次/二次 AUTH_ERROR → EXHAUSTED，冷却后可重试
+                    target.state = CredentialState.EXHAUSTED
+                    target.exhausted_at = time.time()
+                    target.cooldown_until = time.time() + EXHAUSTED_COOLDOWN
+                    logger.warning("credential_pool.credential_auth_exhausted",
+                                   provider=provider,
+                                   key_suffix=target.api_key[-6:] if len(target.api_key) >= 6 else "***",
+                                   error_count=target.error_count,
+                                   threshold=AUTH_ERROR_DEAD_THRESHOLD)
             elif error.reason == FailoverReason.RATE_LIMIT:
                 # ok -> exhausted: 限速错误
                 target.state = CredentialState.EXHAUSTED
@@ -152,9 +166,13 @@ class CredentialPool:
             if target and target.state == CredentialState.EXHAUSTED:
                 target.state = CredentialState.OK
                 target.exhausted_at = 0.0
+                target.cooldown_until = 0.0
+                target.error_count = 0  # 成功后重置错误计数
                 logger.info("credential_pool.recovered_on_success",
                             provider=provider,
                             key_suffix=target.api_key[-6:] if len(target.api_key) >= 6 else "***")
+            elif target and target.state == CredentialState.OK:
+                target.error_count = 0  # 成功后重置错误计数，避免非连续 AUTH_ERROR 累积
 
     def _recover_exhausted(self, provider: str):
         """检查并恢复冷却期结束的 exhausted 凭证"""
@@ -190,6 +208,18 @@ class CredentialPool:
         if not active:
             return None
         return max(active, key=lambda c: c.last_used_at)
+
+    def reset_provider(self, provider: str) -> None:
+        """重置指定 provider 的所有凭证状态为 OK（用于 Setup 保存新 Key 后恢复）。"""
+        creds = self._pool.get(provider, [])
+        for cred in creds:
+            if cred.state == CredentialState.DEAD:
+                cred.state = CredentialState.OK
+                cred.error_count = 0
+                cred.last_error = ""
+                logger.info("credential_pool.dead_reset",
+                            provider=provider,
+                            key_suffix=cred.api_key[-6:] if len(cred.api_key) >= 6 else "***")
 
     def get_stats(self) -> dict:
         """获取凭证池状态统计"""
@@ -241,6 +271,21 @@ class CredentialPool:
                 provider="agnes",
                 base_url=agnes_url,
             ))
+
+        # 加载免费模型平台凭证
+        _KNOWN_PROVIDERS = {
+            "SILICONFLOW_API_KEY": ("siliconflow", "https://api.siliconflow.cn/v1"),
+            "OPENROUTER_API_KEY": ("openrouter", "https://openrouter.ai/api/v1"),
+            "MODELSCOPE_ACCESS_TOKEN": ("modelscope", "https://api-inference.modelscope.cn/v1"),
+        }
+        for env_key, (provider, base_url) in _KNOWN_PROVIDERS.items():
+            key = os.getenv(env_key, "")
+            if key:
+                self.add_credential(Credential(
+                    api_key=key,
+                    provider=provider,
+                    base_url=base_url,
+                ))
 
         # 统计
         total = sum(len(creds) for creds in self._pool.values())

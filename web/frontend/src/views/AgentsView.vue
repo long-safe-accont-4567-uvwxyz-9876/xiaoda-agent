@@ -23,7 +23,7 @@ const testing = ref(false)
 const saving = ref(false)
 const wpInput = ref<HTMLInputElement | null>(null)
 const uploadingWp = ref(false)
-const discoveredModels = ref<Array<{ provider: string; models: Array<{ id: string; display_name: string }> }>>([])
+const discoveredModels = ref<Array<{ provider: string; label?: string; models: Array<{ id: string; display_name: string; free: boolean }> }>>([])
 const advancedTouched = ref(false)
 const switchingModel = ref(false)
 
@@ -34,7 +34,7 @@ onMounted(() => {
 
 async function loadDiscoveredModels() {
   try {
-    const data = await get<Array<{ provider: string; models: Array<{ id: string; display_name: string }> }>>('/models/discover')
+    const data = await get<Array<{ provider: string; label?: string; models: Array<{ id: string; display_name: string; free: boolean }> }>>('/models/discover')
     discoveredModels.value = data || []
   } catch { /* 忽略，保留手输 */ }
 }

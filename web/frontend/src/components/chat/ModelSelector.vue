@@ -13,6 +13,7 @@ interface ModelInfo {
 
 interface ProviderGroup {
   provider: string
+  label?: string
   models: ModelInfo[]
 }
 
@@ -104,7 +105,7 @@ const emit = defineEmits<{
       <NSpin :show="loading" size="small">
         <div class="panel-scroll">
           <div v-for="pg in providers" :key="pg.provider" class="provider-group">
-            <div class="provider-label">{{ pg.provider }}</div>
+            <div class="provider-label">{{ pg.label || pg.provider }}</div>
             <div
               v-for="m in pg.models"
               :key="m.id"

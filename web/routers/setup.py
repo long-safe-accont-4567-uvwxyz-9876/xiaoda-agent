@@ -507,11 +507,55 @@ async def save_keys(body: dict):
     except Exception as e:
         logger.warning("setup.discovery_cache_invalidate_failed error={}", str(e))
 
+    # 重置凭证池中所有 DEAD 凭证，并补充新 Key 到凭证池
+    try:
+        from utils.credential_pool import get_credential_pool, Credential
+        pool = get_credential_pool()
+        # 重置所有 DEAD 凭证
+        for provider in list(pool._pool.keys()):
+            pool.reset_provider(provider)
+        # 将新保存的 Key 补充到凭证池（如果该 provider 还没有凭证）
+        _PROVIDER_KEY_MAP = {
+            "SILICONFLOW_API_KEY": ("siliconflow", "https://api.siliconflow.cn/v1"),
+            "OPENROUTER_API_KEY": ("openrouter", "https://openrouter.ai/api/v1"),
+            "MODELSCOPE_ACCESS_TOKEN": ("modelscope", "https://api-inference.modelscope.cn/v1"),
+            "MIMO_API_KEY": ("mimo", "https://api.xiaomimimo.com/v1"),
+            "AGNES_API_KEY": ("agnes", ""),
+        }
+        for env_key, (provider, base_url) in _PROVIDER_KEY_MAP.items():
+            new_key = updates.get(env_key, "").strip()
+            if not new_key:
+                continue
+            existing = pool._pool.get(provider, [])
+            # 检查是否已有相同 key_suffix 的凭证
+            key_suffix = new_key[-6:] if len(new_key) >= 6 else new_key
+            already_exists = any(c.api_key.endswith(key_suffix) for c in existing)
+            if not already_exists:
+                pool.add_credential(Credential(
+                    api_key=new_key,
+                    provider=provider,
+                    base_url=base_url,
+                ))
+        logger.info("setup.credential_pool_reset")
+    except Exception as e:
+        logger.warning("setup.credential_pool_reset_failed error={}", str(e))
+
     # 更新 config 模块级变量，使 core.init() 能读到新的 API Key
     import config
     config.MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
     config.DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
     config.AGNES_API_KEY = os.getenv("AGNES_API_KEY", "")
+
+    # 重建 ModelRouter 的 MiMo/Agnes 客户端（核心修复：使新 Key 立即生效）
+    try:
+        from web.server import app
+        if hasattr(app, "state") and hasattr(app.state, "core"):
+            router_obj = getattr(app.state.core, "router", None)
+            if router_obj and hasattr(router_obj, "refresh_client"):
+                router_obj.refresh_client()
+                logger.info("setup.router_client_refreshed")
+    except Exception as e:
+        logger.warning("setup.router_client_refresh_failed error={}", str(e))
 
     # 尝试重新初始化 core（从降级模式恢复）
     try:
