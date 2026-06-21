@@ -172,8 +172,13 @@ class MemoryManager:
         self._last_message_time = time.time()
         self._pending_encode = True
 
-    async def retrieve_memories_hybrid(self, query: str, k: int = 5) -> list[dict]:
-        """FTS + 向量 RRF 混合检索 + Reranker 精排"""
+    async def retrieve_memories_hybrid(self, query: str, k: int = 5, use_reranker: bool = True) -> list[dict]:
+        """FTS + 向量 RRF 混合检索 + Reranker 精排
+
+        Args:
+            use_reranker: 是否在本方法内调用 Reranker 精排。A3 并行检索场景下会置为
+                False，由调用方对合并后的候选池做一次性批量 Reranker。
+        """
         fts_items = []
         vec_items = []
 
@@ -222,7 +227,7 @@ class MemoryManager:
         all_items = {str(item["id"]): item for item in fts_items + vec_items}
 
         # Reranker 精排
-        if self._reranker and self._reranker.available and len(fused) > k:
+        if use_reranker and self._reranker and self._reranker.available and len(fused) > k:
             docs = []
             idx_map = {}
             for i, (item_id, rrf_score) in enumerate(fused):
@@ -261,41 +266,178 @@ class MemoryManager:
 
         return results[:k]
 
+    def _is_retrieval_simple(self, query: str) -> bool:
+        """A1: 判断查询是否足够简单，可跳过查询变换直接走混合检索
+
+        判定规则（按顺序短路）:
+        1. 计算有效长度（中文字符 ×2 + 其他字符 ×1），<=15 直接判定为简单
+        2. 命中 SIMPLE_TASK_KEYWORDS["chat"] → 简单
+        3. 命中 SIMPLE_TASK_KEYWORDS["complex"] → 非简单
+        4. 有效长度 <=20 且无复杂关键词 → 简单
+        5. 否则 → 非简单
+        """
+        if not query:
+            return True
+
+        # 计算有效长度：中文字符 ×2 + 其他字符 ×1
+        effective_len = 0
+        for ch in query:
+            if '\u4e00' <= ch <= '\u9fff' or '\u3400' <= ch <= '\u4dbf':
+                effective_len += 2
+            else:
+                effective_len += 1
+
+        # 规则 1：极短查询直接跳过变换
+        if effective_len <= 15:
+            return True
+
+        # 规则 2 & 3：关键词匹配
+        try:
+            from config import SIMPLE_TASK_KEYWORDS
+            chat_keywords = SIMPLE_TASK_KEYWORDS.get("chat", [])
+            complex_keywords = SIMPLE_TASK_KEYWORDS.get("complex", [])
+        except Exception:
+            chat_keywords = []
+            complex_keywords = []
+
+        for kw in chat_keywords:
+            if kw in query:
+                return True
+
+        for kw in complex_keywords:
+            if kw in query:
+                return False
+
+        # 规则 4：中等长度且无复杂关键词
+        if effective_len <= 20:
+            return True
+
+        # 规则 5
+        return False
+
     async def retrieve_memories(self, query: str, k: int = 5, context: str = "") -> list[dict]:
         import config
         results = []
 
+        # A1: 智能短路 - 简单查询跳过查询变换，直接走混合检索
+        if getattr(config, "RETRIEVAL_SMART_SKIP", True) and self._is_retrieval_simple(query):
+            return await self.retrieve_memories_hybrid(query, k=k)
+
         # 查询变换：改写 + 扩展
         queries = [query]
         if self._query_transformer and getattr(config, "QUERY_TRANSFORM_ENABLED", True):
+            parallel_transform = getattr(config, "RETRIEVAL_PARALLEL_TRANSFORM", True)
             try:
-                rewritten = await self._query_transformer.rewrite_query(query, context)
-                if rewritten and rewritten != query:
-                    queries = [rewritten]
-                    logger.debug("memory.query_rewritten", original=query[:50], rewritten=rewritten[:50])
+                if parallel_transform:
+                    # A2: 并行执行 rewrite + expand（各自独立的 LLM 调用）
+                    expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2)
+                    rewrite_task = asyncio.create_task(
+                        self._query_transformer.rewrite_query(query, context)
+                    )
+                    expand_task = asyncio.create_task(
+                        self._query_transformer.expand_query(query, n=expand_count)
+                    )
+                    rewritten, expanded = await asyncio.gather(
+                        rewrite_task, expand_task, return_exceptions=True
+                    )
 
-                expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2)
-                if expand_count > 0:
-                    expanded = await self._query_transformer.expand_query(rewritten, n=expand_count)
-                    if expanded and len(expanded) > 1:
-                        queries = expanded
+                    # 异常降级：rewrite 失败用原查询，expand 失败用 [query]
+                    if isinstance(rewritten, Exception):
+                        logger.warning("memory.rewrite_failed", error=str(rewritten))
+                        rewritten = query
+                    if isinstance(expanded, Exception):
+                        logger.warning("memory.expand_failed", error=str(expanded))
+                        expanded = [query]
+                    if not rewritten:
+                        rewritten = query
+                    if not expanded:
+                        expanded = [query]
+
+                    if rewritten != query:
+                        logger.debug("memory.query_rewritten",
+                                     original=query[:50], rewritten=rewritten[:50])
+
+                    # 合并：[rewritten] + [q for q in expanded if q != rewritten]
+                    merged = [rewritten]
+                    for q in expanded:
+                        if q != rewritten:
+                            merged.append(q)
+                    queries = merged
+                    if len(queries) > 1:
                         logger.debug("memory.query_expanded", count=len(queries))
+                else:
+                    # 串行降级（原有逻辑）
+                    rewritten = await self._query_transformer.rewrite_query(query, context)
+                    if rewritten and rewritten != query:
+                        queries = [rewritten]
+                        logger.debug("memory.query_rewritten", original=query[:50], rewritten=rewritten[:50])
+
+                    expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2)
+                    if expand_count > 0:
+                        expanded = await self._query_transformer.expand_query(rewritten, n=expand_count)
+                        if expanded and len(expanded) > 1:
+                            queries = expanded
+                            logger.debug("memory.query_expanded", count=len(queries))
             except Exception as e:
                 logger.warning("memory.query_transform_failed", error=str(e))
 
-        # 多查询并行检索
+        # 多查询检索
         all_results = []
         seen_ids = set()
-        for q in queries:
-            try:
-                hybrid_results = await self.retrieve_memories_hybrid(q, k=k)
-                for r in hybrid_results:
+        parallel_search = getattr(config, "RETRIEVAL_PARALLEL_SEARCH", True)
+
+        if parallel_search and len(queries) > 1:
+            # A3: 并行多查询检索 + 批量 Reranker
+            # 各子查询检索时关闭内部 Reranker，统一在合并池上做一次批量精排
+            hybrid_tasks = [
+                self.retrieve_memories_hybrid(q, k=k * 2, use_reranker=False)
+                for q in queries
+            ]
+            hybrid_results = await asyncio.gather(*hybrid_tasks, return_exceptions=True)
+
+            for i, res in enumerate(hybrid_results):
+                if isinstance(res, Exception):
+                    logger.warning("memory.hybrid_search_failed",
+                                   query=queries[i][:50], error=str(res))
+                    continue
+                for r in res:
                     rid = str(r.get("id", ""))
                     if rid and rid not in seen_ids:
                         seen_ids.add(rid)
                         all_results.append(r)
-            except Exception as e:
-                logger.warning("memory.hybrid_search_failed", query=q[:50], error=str(e))
+
+            # 批量 Reranker：对合并后的候选池用原始 query 重排一次
+            if self._reranker and self._reranker.available and len(all_results) > k:
+                try:
+                    docs = [r.get("summary", "") for r in all_results]
+                    reranked = await self._reranker.rerank(
+                        query=query,
+                        documents=docs,
+                        top_n=k,
+                    )
+                    reranked_results = []
+                    for item in reranked:
+                        idx = item.get("index", -1)
+                        if 0 <= idx < len(all_results):
+                            mem = all_results[idx]
+                            mem["rerank_score"] = item.get("relevance_score", 0.0)
+                            reranked_results.append(mem)
+                    if reranked_results:
+                        all_results = reranked_results
+                except Exception as e:
+                    logger.warning("memory.batch_rerank_failed", error=str(e))
+        else:
+            # 串行降级（原有逻辑）
+            for q in queries:
+                try:
+                    hybrid_results = await self.retrieve_memories_hybrid(q, k=k)
+                    for r in hybrid_results:
+                        rid = str(r.get("id", ""))
+                        if rid and rid not in seen_ids:
+                            seen_ids.add(rid)
+                            all_results.append(r)
+                except Exception as e:
+                    logger.warning("memory.hybrid_search_failed", query=q[:50], error=str(e))
 
         results = all_results
 

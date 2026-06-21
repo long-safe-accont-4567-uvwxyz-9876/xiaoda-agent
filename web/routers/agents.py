@@ -224,3 +224,32 @@ async def test_agent(name: str, request: Request, _user: str = Depends(get_curre
         logger.warning("webui.agent_test_failed name={} error={}", name, str(e))
         return Envelope(data={"ok": False, "elapsed_ms": int((time.time() - t0) * 1000),
                               "reply": "", "error": str(e)[:200]})
+
+
+@router.post("/agents/{name}/model", response_model=Envelope[dict])
+async def set_agent_model(name: str, body: dict, request: Request, _user: str = Depends(get_current_user)):
+    """一键切换子 Agent 的模型。
+
+    body: {"provider": str, "model_id": str}
+    后端自动解析 base_url 和 api_key_env，热重载并持久化。
+    """
+    provider = (body.get("provider") or "").strip()
+    model_id = (body.get("model_id") or "").strip()
+    if not provider or not model_id:
+        raise HTTPException(400, "provider 和 model_id 不能为空")
+    try:
+        data = await _registry(request).set_agent_model(name, provider, model_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    await _audit(request, "model",
+                 json.dumps({"agent": name, "provider": provider, "model_id": model_id},
+                            ensure_ascii=False))
+    # 通知所有标签页刷新
+    try:
+        from web.ws_hub import manager
+        await manager.broadcast({"type": "config_changed", "domain": "agents"})
+    except Exception:
+        pass
+    return Envelope(data=data)

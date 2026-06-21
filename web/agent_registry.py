@@ -408,3 +408,83 @@ class AgentRegistry:
         agent.config.personality_file = str(pf)
         await agent.init()
         self._save_config(agent.config)
+
+    # ── 模型一键切换 ────────────────────────────────────
+
+    # 已知 provider → (api_key_env, base_url)
+    # base_url 优先读环境变量覆盖，便于私有化部署
+    _KNOWN_PROVIDERS: dict[str, tuple[str, str]] = {
+        "mimo": ("MIMO_API_KEY", "https://api.xiaomimimo.com/v1"),
+        "siliconflow": ("SILICONFLOW_API_KEY", "https://api.siliconflow.cn/v1"),
+        "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
+        "modelscope": ("MODELSCOPE_ACCESS_TOKEN", "https://api-inference.modelscope.cn/v1"),
+        "agnes": ("AGNES_API_KEY", "https://apihub.agnes-ai.com/v1"),
+    }
+
+    @classmethod
+    def _resolve_provider_info(cls, provider: str) -> tuple[str, str]:
+        """解析 provider 的 (base_url, api_key_env)。
+
+        已知 provider 走标准 env var；自定义 provider 从 config_service 读取 base_url，
+        并把文件中的 key 注入到 os.environ，使 SubAgent._read_env_key 能取到。
+        """
+        import os
+
+        if provider in cls._KNOWN_PROVIDERS:
+            api_key_env, default_base_url = cls._KNOWN_PROVIDERS[provider]
+            # 允许环境变量覆盖 base_url（私有化部署）
+            base_url = os.getenv(f"{provider.upper()}_BASE_URL", default_base_url)
+            if provider == "mimo":
+                base_url = os.getenv("MIMO_BASE_URL", default_base_url)
+            elif provider == "agnes":
+                base_url = os.getenv("AGNES_BASE_URL", default_base_url)
+            return base_url, api_key_env
+
+        # 自定义 provider → 从 config_service 读取
+        from web.config_service import get_config_service
+        from web.routers.models import load_provider_key
+        cfg = get_config_service()
+        record = cfg.get(f"models.providers.{provider}")
+        if not record:
+            raise ValueError(f"未知 provider: {provider}")
+        base_url = record.get("base_url", "")
+        if not base_url:
+            raise ValueError(f"Provider {provider} 缺少 base_url")
+
+        # 自定义 provider 的 key 存在文件中，注入到 os.environ 让 SubAgent 能读到
+        key = load_provider_key(provider)
+        if not key:
+            raise ValueError(f"Provider {provider} 的 API Key 未配置")
+        env_name = f"PROVIDER_{provider.upper().replace('-', '_')}_KEY"
+        os.environ[env_name] = key
+        return base_url, env_name
+
+    async def set_agent_model(self, name: str, provider: str, model_id: str) -> dict:
+        """一键切换子 Agent 的模型：自动解析 base_url 和 api_key_env，热重载并持久化。
+
+        - 拒绝修改主体 nahida
+        - provider/model_id 不能为空
+        - provider 必须在已知列表或自定义 provider 配置中
+        """
+        if name == "nahida":
+            raise ValueError("主体纳西妲的模型不可通过此接口修改")
+        agent = self._require(name)  # raises KeyError if not found
+
+        provider = (provider or "").strip()
+        model_id = (model_id or "").strip()
+        if not provider or not model_id:
+            raise ValueError("provider 和 model_id 不能为空")
+
+        # 解析 provider 信息（可能抛 ValueError）
+        base_url, api_key_env = self._resolve_provider_info(provider)
+
+        # 热重载：创建新 client 并原子替换，不重新探活
+        ok = await agent.reload_model_config(provider, model_id, base_url, api_key_env)
+        if not ok:
+            raise ValueError(f"模型热重载失败（检查 {api_key_env} 是否配置）")
+
+        # 持久化到 config/agents/{name}.json
+        self._save_config(agent.config)
+        logger.info("agent_registry.model_set name={} provider={} model={}",
+                    name, provider, model_id)
+        return self._serialize(agent.config, enabled=name not in self._disabled)

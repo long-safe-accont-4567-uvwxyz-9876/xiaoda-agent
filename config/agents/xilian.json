@@ -1,0 +1,34 @@
+{
+  "name": "xilian",
+  "display_name": "昔涟",
+  "provider": "siliconflow",
+  "model": "Nex-N2-Pro",
+  "personality_file": "/home/orangepi/ai-agent/config/agents/xilian_personality.md",
+  "voice_ref": null,
+  "excluded_tools": [
+    "call_klee",
+    "call_nahida",
+    "python_executor",
+    "shell_command",
+    "write_file"
+  ],
+  "base_url": "https://api.xiaomimimo.com/v1",
+  "api_key_env": "MIMO_API_KEY",
+  "capabilities": [
+    "search",
+    "lookup",
+    "query",
+    "explore",
+    "discover"
+  ],
+  "route_description": "搜索信息、查询资料、探索发现",
+  "mcp_servers": [],
+  "max_spawn_depth": 1,
+  "max_turns": null,
+  "effort": null,
+  "permission_mode": null,
+  "memory_scope": null,
+  "background": false,
+  "wallpaper": "/assets/wallpapers/xilian.jpg",
+  "_saved_at": 1782049117.8027668
+}

@@ -1,0 +1,36 @@
+{
+  "name": "yinlang",
+  "display_name": "银狼",
+  "provider": "siliconflow",
+  "model": "Nex-N2-Pro",
+  "personality_file": "/home/orangepi/ai-agent/config/agents/yinlang_personality.md",
+  "voice_ref": null,
+  "excluded_tools": [
+    "call_klee",
+    "call_nahida"
+  ],
+  "base_url": "https://api.xiaomimimo.com/v1",
+  "api_key_env": "MIMO_API_KEY",
+  "capabilities": [
+    "coding",
+    "debug",
+    "script",
+    "programming",
+    "hardware",
+    "system",
+    "devops"
+  ],
+  "route_description": "编程、代码编写、调试、技术问题、硬件控制、系统运维、开发辅助",
+  "mcp_servers": [
+    "git",
+    "github"
+  ],
+  "max_spawn_depth": 1,
+  "max_turns": null,
+  "effort": null,
+  "permission_mode": null,
+  "memory_scope": null,
+  "background": false,
+  "wallpaper": "/assets/wallpapers/yinlang.jpg",
+  "_saved_at": 1782049095.419793
+}

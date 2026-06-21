@@ -11,6 +11,8 @@ from pathlib import Path
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from loguru import logger
 
+from config import TTS_ASYNC_MODE, STREAM_STATUS_PUSH
+
 router = APIRouter()
 
 MEDIA_ROOT = Path(__file__).resolve().parent / "media"
@@ -93,12 +95,73 @@ def serialize_result(result) -> dict:
     }
 
 
+async def _async_tts_task(core, agent: str, tts_text: str, emotion: str,
+                           conn_id: str, msg_id: str):
+    """Task 6: 后台 TTS 合成任务 —— 合成完成后推送 audio_ready 事件。"""
+    try:
+        if agent == "nahida":
+            audio_path = await core.tts.synthesize_nahida(tts_text, emotion=emotion)
+        else:
+            sub_agent = core.dispatcher.get_agent(agent)
+            if sub_agent:
+                audio_path = await sub_agent.synthesize(tts_text, emotion=emotion)
+            else:
+                audio_path = await core.tts.synthesize_nahida(tts_text, emotion=emotion)
+
+        audio_url = _publish_file(audio_path, "tts") if audio_path else None
+        if audio_url:
+            await manager.send_to(conn_id, {
+                "type": "audio_ready", "msg_id": msg_id, "audio_url": audio_url
+            })
+        else:
+            logger.warning("ws.async_tts_no_audio", conn_id=conn_id, msg_id=msg_id)
+    except Exception as e:
+        logger.error("ws.async_tts_failed", conn_id=conn_id, msg_id=msg_id, error=str(e))
+
+
+async def _synthesize_tts_sync(core, agent: str, tts_text: str, emotion: str) -> str | None:
+    """同步 TTS 合成（HTTP 端点等无 WebSocket 连接场景的回退）。"""
+    try:
+        if agent == "nahida":
+            audio_path = await core.tts.synthesize_nahida(tts_text, emotion=emotion)
+        else:
+            sub_agent = core.dispatcher.get_agent(agent)
+            if sub_agent:
+                audio_path = await sub_agent.synthesize(tts_text, emotion=emotion)
+            else:
+                audio_path = await core.tts.synthesize_nahida(tts_text, emotion=emotion)
+        return _publish_file(audio_path, "tts") if audio_path else None
+    except Exception as e:
+        logger.error("ws.sync_tts_failed", error=str(e))
+        return None
+
+
+async def _resolve_pending_tts(core, agent: str, result, data: dict,
+                                conn_id: str, msg_id: str):
+    """Task 6: 处理 tts_pending 结果 —— WebSocket 走异步，HTTP 走同步回退。"""
+    if not getattr(result, "tts_pending", False):
+        return
+    if conn_id and msg_id:
+        # WebSocket：启动后台合成任务，先返回 audio_pending
+        data["audio_pending"] = True
+        asyncio.create_task(_async_tts_task(
+            core, agent, result.tts_text, result.emotion, conn_id, msg_id))
+    else:
+        # HTTP 端点等无 WS 连接：同步合成回退
+        audio_url = await _synthesize_tts_sync(
+            core, agent, result.tts_text, result.emotion)
+        if audio_url:
+            data["audio_url"] = audio_url
+
+
 async def process_and_serialize(core, text: str, session_id: str,
                                 agent: str = "nahida",
-                                status_callback=None, app=None) -> dict:
+                                status_callback=None, app=None,
+                                conn_id: str = "", msg_id: str = "") -> dict:
     """统一处理入口：主体走 AgentCore.process；子代理直达 dispatcher（R5）。
 
     斜杠命令（/ 开头）始终走主体 process（内部路由到 SlashCommandHandler）。
+    Task 6: 当 TTS_ASYNC_MODE 开启且结果标记 tts_pending 时，启动后台合成任务。
     """
     t0 = time.time()
     if agent != "nahida" and not text.strip().startswith("/"):
@@ -125,6 +188,8 @@ async def process_and_serialize(core, text: str, session_id: str,
             data["elapsed_ms"] = int((time.time() - t0) * 1000)
             if app is not None and data.get("emotion"):
                 app.state.last_emotion = {"primary": data["emotion"], "timestamp": time.time()}
+            # Task 6: 异步 TTS —— WebSocket 走异步，HTTP 走同步回退
+            await _resolve_pending_tts(core, agent, result, data, conn_id, msg_id)
             return data
     else:
         result = await core.process(
@@ -135,6 +200,8 @@ async def process_and_serialize(core, text: str, session_id: str,
     data["elapsed_ms"] = int((time.time() - t0) * 1000)
     if app is not None and data.get("emotion"):
         app.state.last_emotion = {"primary": data["emotion"], "timestamp": time.time()}
+    # Task 6: 异步 TTS —— WebSocket 走异步，HTTP 走同步回退
+    await _resolve_pending_tts(core, agent, result, data, conn_id, msg_id)
     return data
 
 
@@ -214,17 +281,21 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket):
     from web.tool_events import current_msg_id
     token = current_msg_id.set(msg_id)
 
+    # Task 7: 流式状态推送回调 —— 受 STREAM_STATUS_PUSH 开关控制
     async def on_status(message):
-        await manager.send_to(conn_id, {
-            "type": "status", "msg_id": msg_id,
-            "stage": "tool", "text": str(message)[:200],
-        })
+        if STREAM_STATUS_PUSH:
+            await manager.send_to(conn_id, {
+                "type": "status", "msg_id": msg_id,
+                "stage": "thinking", "text": str(message)[:200],
+            })
 
     try:
-        await manager.send_to(conn_id, {"type": "status", "msg_id": msg_id, "stage": "thinking"})
+        if STREAM_STATUS_PUSH:
+            await manager.send_to(conn_id, {"type": "status", "msg_id": msg_id, "stage": "thinking"})
         data = await process_and_serialize(
             core, text, session_id=session_id, agent=agent,
-            status_callback=on_status, app=app)
+            status_callback=on_status, app=app,
+            conn_id=conn_id, msg_id=msg_id)
         data.update({"type": "final", "msg_id": msg_id})
         await manager.send_to(conn_id, data)
     except asyncio.CancelledError:

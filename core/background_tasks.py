@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -166,6 +167,13 @@ class BackgroundTaskManager:
         except Exception as e:
             logger.warning("bg.dream_archive_schedule_failed", error=str(e))
 
+        # 10. 嵌入缓存预热（每 5 分钟）
+        try:
+            if await self._should_run("warm_embedding_cache", interval_hours=5 / 60):
+                _spawn(self._warm_embedding_cache())
+        except Exception as e:
+            logger.warning("bg.warm_embedding_cache_schedule_failed", error=str(e))
+
     async def _auto_archive_sessions(self) -> None:
         try:
             archived = await self.db.auto_archive_stale_sessions(idle_seconds=3600)
@@ -205,6 +213,22 @@ class BackgroundTaskManager:
             await self.db.set_cron_last_run("dream_archive")
         except Exception as e:
             logger.warning("dream.archive_failed", error=str(e))
+
+    async def _warm_embedding_cache(self) -> None:
+        """预热嵌入缓存：将最近 30 条情景记忆摘要写入向量缓存，减少查询时 cache miss。"""
+        try:
+            if not self.memory or not getattr(self.memory, "vec", None):
+                return
+            recent = await self.memory.memory.get_episodic_recent(limit=30)
+            if not recent:
+                await self.db.set_cron_last_run("warm_embedding_cache")
+                return
+            summaries = [r.get("summary", "") for r in recent if r.get("summary")]
+            if summaries:
+                await self.memory.vec.warm_cache(summaries)
+            await self.db.set_cron_last_run("warm_embedding_cache")
+        except Exception as e:
+            logger.warning("bg.warm_embedding_cache_failed", error=str(e))
 
     @staticmethod
     def get_bg_tasks() -> set[asyncio.Task]:

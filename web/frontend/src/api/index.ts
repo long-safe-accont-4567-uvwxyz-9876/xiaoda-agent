@@ -54,6 +54,8 @@ export const api = {
 
   getAgents: () => get<any[]>('/agents'),
   getPermissions: (name: string) => get(`/agents/${name}/permissions`),
+  setAgentModel: (name: string, provider: string, model_id: string) =>
+    post<any>(`/agents/${name}/model`, { provider, model_id }),
 
   tts: (text: string, voice?: string, style?: string) =>
     post<{ audio_url: string; cached: boolean }>('/media/tts', { text, voice, style }),

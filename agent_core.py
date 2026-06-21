@@ -24,7 +24,7 @@ from loguru import logger
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import MIMO_MODEL, AGENT_CONFIG, WORKSPACE_DIR, STICKER_DIR, KLEE_STICKER_DIR, FILE_DIR, build_system_prompt, SIMPLE_TASK_KEYWORDS, PRO_TASK_KEYWORDS
+from config import MIMO_MODEL, AGENT_CONFIG, WORKSPACE_DIR, STICKER_DIR, KLEE_STICKER_DIR, FILE_DIR, build_system_prompt, SIMPLE_TASK_KEYWORDS, PRO_TASK_KEYWORDS, TTS_ASYNC_MODE, SIMPLE_CHAT_FASTPATH
 from model_router import ModelRouter
 from agent_context import AgentContext
 from db.database import DatabaseManager
@@ -112,6 +112,9 @@ class ProcessResult:
     tool_results: list = field(default_factory=list)
     image_paths: list[Path] = field(default_factory=list)
     video_path: Path | None = None
+    # Task 6: TTS 异步化标记。为 True 时 audio_path 为空，需由调用方在后台合成并推送
+    tts_pending: bool = False
+    tts_text: str = ""
 
 
 @dataclass
@@ -314,6 +317,100 @@ class AgentCore:
                     force_voice=force_voice, ctx=ctx,
                 )
 
+        # Task 9: 简单对话快速路径（方案 E）—— 跳过记忆检索，使用最小上下文
+        if SIMPLE_CHAT_FASTPATH and self._is_simple_chat(clean_input) \
+                and not image_data and not ("[图片:" in user_input and "已保存到" in user_input):
+            trace.info("chat.fast_path", input_preview=clean_input[:50])
+
+            emotion = detect_emotion(user_input)
+            emotion_hint = build_emotion_hint(emotion)
+            self.context.emotion_hint = emotion_hint
+            ctx.last_user_emotion = emotion.get("primary", "")
+            emotion_label = emotion.get("primary", "")
+
+            # 构建最小上下文：系统提示 + 最近 3 轮历史 + 用户输入
+            system_prompt = self.context._system_prompt_loader() if self.context._system_prompt_loader else self.context.system_prompt
+            messages = [{"role": "system", "content": system_prompt}]
+            for msg in self.context.get_last_n(6):
+                m = {"role": msg["role"], "content": str(msg.get("content", "")) if msg.get("content") is not None else ""}
+                messages.append(m)
+            messages.append({"role": "user", "content": user_input})
+
+            # 非主人消息：注入隐私保护约束
+            if not is_master:
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "[安全约束] 当前与你对话的不是爸爸本人，而是其他人。请遵守以下规则：\n"
+                        "1. 礼貌友好地回复，保持纳西妲的温柔风格\n"
+                        "2. 绝对不泄露爸爸的任何隐私信息\n"
+                        "3. 不执行任何敏感操作\n"
+                        "4. 坚决维护爸爸，不对外人透露爸爸的任何情况"
+                    )
+                })
+
+            _model_cfg = AGENT_CONFIG.get("model", {})
+            reply = ""
+            try:
+                # Task 7: 流式状态推送 —— 快速路径 LLM 调用前通知
+                await self._notify_status("正在思考回复...")
+                result = await self.router.route(
+                    "chat", messages,
+                    temperature=_model_cfg.get("temperature", 0.7),
+                    user_openid=user_openid, session_id=session_id,
+                )
+                if isinstance(result, str):
+                    reply = self._clean_reply(result)
+                else:
+                    reply = self._clean_reply(result.choices[0].message.content or "")
+            except Exception as e:
+                logger.warning("agent.fast_path_failed", error=str(e))
+                reply = DEGRADED_REPLY
+
+            await self.context.add_message("user", user_input)
+            await self.context.add_message("assistant", reply)
+
+            self._bg_task_manager.run_background_tasks(
+                user_input, reply, user_id, source, emotion, [],
+                session_id=session_id,
+            )
+
+            try:
+                await self.router.flush_costs()
+            except Exception as e:
+                logger.error(f"费用统计刷新失败: {e}")
+
+            # 确保情绪标签存在且合法
+            if is_unified():
+                reply, ensured_emotion = ensure_emotion_tag(reply)
+                if ensured_emotion.value != emotion_label:
+                    emotion_label = ensured_emotion.value
+
+            clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
+            clean_reply = humanize(clean_reply, style="nahida")
+
+            audio_path = None
+            tts_pending = False
+            tts_text = ""
+            should_generate_voice = self._voice_mode or force_voice
+            if should_generate_voice and self.tts.available and len(clean_reply) > 2:
+                if TTS_ASYNC_MODE:
+                    tts_pending = True
+                    tts_text = self._clean_reply(clean_reply)
+                else:
+                    try:
+                        audio_path = await self.tts.synthesize_nahida(self._clean_reply(clean_reply), emotion=emotion_label)
+                    except Exception as e:
+                        logger.warning("agent.tts_failed", error=str(e))
+
+            if audio_path:
+                clean_reply = clean_reply + "\n\n🎙️ 语音消息已发送～"
+
+            _spawn(self._hook_engine.fire_post_response())
+            trace.info("agent.fast_path.done", reply_preview=clean_reply[:100])
+            return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path,
+                                 audio_path=audio_path, tts_pending=tts_pending, tts_text=tts_text)
+
         if "nahida" in chat_targets and self._task_graph and not self._is_manual_target(user_input, user_id) and not self._is_simple_task(clean_input) and not force_voice and not image_data and not ("[图片:" in user_input and "已保存到" in user_input):
             try:
                 graph_result = await run_task_graph(
@@ -339,17 +436,24 @@ class AgentCore:
                     clean_reply = self._finalize_reply(graph_result.final_output, style="nahida")
                     sticker_path = None
                     audio_path = None
+                    tts_pending = False
+                    tts_text = ""
                     should_generate_voice = self._voice_mode or force_voice
                     if should_generate_voice and len(clean_reply) > 2:
-                        try:
-                            target_agent = self.dispatcher.get_agent(graph_result.route_target)
-                            if target_agent:
-                                audio_path = await target_agent.synthesize(self._clean_reply(clean_reply), emotion=emotion_label)
-                        except Exception as e:
-                            logger.warning("agent.routed_tts_failed", error=str(e))
+                        if TTS_ASYNC_MODE:
+                            # Task 6: 异步 TTS
+                            tts_pending = True
+                            tts_text = self._clean_reply(clean_reply)
+                        else:
+                            try:
+                                target_agent = self.dispatcher.get_agent(graph_result.route_target)
+                                if target_agent:
+                                    audio_path = await target_agent.synthesize(self._clean_reply(clean_reply), emotion=emotion_label)
+                            except Exception as e:
+                                logger.warning("agent.routed_tts_failed", error=str(e))
                     if audio_path:
                         clean_reply = clean_reply + "\n\n🎙️ 语音消息已发送～"
-                    return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path, audio_path=audio_path)
+                    return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path, audio_path=audio_path, tts_pending=tts_pending, tts_text=tts_text)
             except Exception as e:
                 logger.warning("agent.task_graph_failed", error=str(e))
                 return ProcessResult(reply=DEGRADED_REPLY)
@@ -366,6 +470,9 @@ class AgentCore:
         ctx.last_user_emotion = emotion.get("primary", "")
 
         # 记忆检索与 notebook 上下文加载并行化（asyncio.gather）
+        # Task 7: 流式状态推送 —— 记忆检索前通知
+        await self._notify_status("正在回忆相关记忆...")
+
         async def _retrieve_memories():
             if self.memory and is_master:
                 self.memory.signal_new_message()
@@ -513,6 +620,8 @@ class AgentCore:
             _cb_max_tokens = int(_model_cfg.get("max_tokens", 1500) * 0.8)
 
         try:
+            # Task 7: 流式状态推送 —— 主 LLM 调用前通知
+            await self._notify_status("正在思考回复...")
             result = await self.router.route(
                 task_type,
                 messages,
@@ -641,12 +750,19 @@ class AgentCore:
             clean_reply = humanize(clean_reply, style="nahida")
 
         audio_path = None
+        tts_pending = False
+        tts_text = ""
         should_generate_voice = self._voice_mode or force_voice
         if should_generate_voice and self.tts.available and len(clean_reply) > 2:
-            try:
-                audio_path = await self.tts.synthesize_nahida(self._clean_reply(clean_reply), emotion=emotion_label)
-            except Exception as e:
-                logger.warning("agent.tts_failed", error=str(e))
+            if TTS_ASYNC_MODE:
+                # Task 6: 异步 TTS —— 跳过同步合成，标记 pending 供调用方后台处理
+                tts_pending = True
+                tts_text = self._clean_reply(clean_reply)
+            else:
+                try:
+                    audio_path = await self.tts.synthesize_nahida(self._clean_reply(clean_reply), emotion=emotion_label)
+                except Exception as e:
+                    logger.warning("agent.tts_failed", error=str(e))
 
         if audio_path:
             clean_reply = clean_reply + "\n\n🎙️ 语音消息已发送～"
@@ -654,7 +770,7 @@ class AgentCore:
         # PostResponse 钩子（批量后处理）
         _spawn(self._hook_engine.fire_post_response())
 
-        return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path, audio_path=audio_path, tool_results=tool_results, image_paths=media_image_paths, video_path=media_video_path)
+        return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path, audio_path=audio_path, tool_results=tool_results, image_paths=media_image_paths, video_path=media_video_path, tts_pending=tts_pending, tts_text=tts_text)
 
     async def process_text(self, user_input: str, user_openid: str = "cli", session_id: str = "cli") -> str:
         result = await self.process(user_input, user_id="cli_owner", source="cli", user_openid=user_openid, session_id=session_id)
@@ -708,6 +824,8 @@ class AgentCore:
             return ToolResult.fail(guard_msg)
 
         # 执行工具
+        # Task 7: 流式状态推送 —— 工具执行前通知
+        await self._notify_status(f"正在使用工具: {tool_name}")
         result = await self.tool_executor.execute(tool_name, actual_args, user_id, safe_mode)
 
         # 工具调用后更新认知状态（is_tool=True）
@@ -827,9 +945,17 @@ class AgentCore:
                 except Exception as e:
                     logger.warning("media.video_path_parse_failed", raw=m.group(1), error=str(e))
 
-        # 清理回复文本中包含已提取路径的行
+        # 收集已提取的图片 URL（用于清理回复文本中的裸 URL 引用）
+        extracted_urls: list[str] = []
+        for m in re.finditer(r'图片URL:\s*(\S+)', '\n'.join(
+            r.data if isinstance(r.data, str) else json.dumps(r.data, ensure_ascii=False)
+            for r in tool_results if r.success and r.data
+        )):
+            extracted_urls.append(m.group(1).rstrip('`'))
+
+        # 清理回复文本中包含已提取路径或裸 URL 的行
         clean_reply = reply
-        if extracted_paths:
+        if extracted_paths or extracted_urls:
             lines = clean_reply.split('\n')
             filtered_lines = []
             for line in lines:
@@ -838,6 +964,11 @@ class AgentCore:
                     if ep in line:
                         should_remove = True
                         break
+                if not should_remove:
+                    for url in extracted_urls:
+                        if url in line:
+                            should_remove = True
+                            break
                 if not should_remove:
                     filtered_lines.append(line)
             clean_reply = '\n'.join(filtered_lines).strip()
@@ -933,17 +1064,24 @@ class AgentCore:
                 sticker_path = sub_sticker_mgr.pick(detected)
 
         sub_audio_path = None
+        sub_tts_pending = False
+        sub_tts_text = ""
         should_generate_voice = self._voice_mode or force_voice
         if should_generate_voice and len(clean_sub_reply) > 2:
-            try:
-                sub_audio_path = await sub_agent.synthesize(self._clean_reply(clean_sub_reply), emotion=emotion_label)
-            except Exception as e:
-                logger.warning("agent.sub_tts_failed", target=target, error=str(e))
+            if TTS_ASYNC_MODE:
+                # Task 6: 异步 TTS
+                sub_tts_pending = True
+                sub_tts_text = self._clean_reply(clean_sub_reply)
+            else:
+                try:
+                    sub_audio_path = await sub_agent.synthesize(self._clean_reply(clean_sub_reply), emotion=emotion_label)
+                except Exception as e:
+                    logger.warning("agent.sub_tts_failed", target=target, error=str(e))
 
         if sub_audio_path:
             clean_sub_reply = clean_sub_reply + "\n\n🎙️ 语音消息已发送～"
 
-        return ProcessResult(reply=clean_sub_reply, emotion=emotion_label, sticker_path=sticker_path, audio_path=sub_audio_path)
+        return ProcessResult(reply=clean_sub_reply, emotion=emotion_label, sticker_path=sticker_path, audio_path=sub_audio_path, tts_pending=sub_tts_pending, tts_text=sub_tts_text)
 
     async def _dispatch_parallel_sub_agents(self, targets: list[str], clean_input: str,
                                             user_id: str, source: str, session_id: str, trace,
@@ -1009,17 +1147,24 @@ class AgentCore:
         clean_reply = humanize(clean_reply, style="nahida")
 
         audio_path = None
+        tts_pending = False
+        tts_text = ""
         should_generate_voice = self._voice_mode or force_voice
         if should_generate_voice and self.tts.available and len(clean_reply) > 2:
-            try:
-                audio_path = await self.tts.synthesize_nahida(self._clean_reply(clean_reply), emotion=emotion_label)
-            except Exception as e:
-                logger.warning("agent.parallel_tts_failed", error=str(e))
+            if TTS_ASYNC_MODE:
+                # Task 6: 异步 TTS
+                tts_pending = True
+                tts_text = self._clean_reply(clean_reply)
+            else:
+                try:
+                    audio_path = await self.tts.synthesize_nahida(self._clean_reply(clean_reply), emotion=emotion_label)
+                except Exception as e:
+                    logger.warning("agent.parallel_tts_failed", error=str(e))
 
         if audio_path:
             clean_reply = clean_reply + "\n\n🎙️ 语音消息已发送～"
 
-        return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path, audio_path=audio_path)
+        return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path, audio_path=audio_path, tts_pending=tts_pending, tts_text=tts_text)
 
     async def delegate_to_agent(self, name: str, task: str) -> str:
         """通用子代理委托（delegate_task 工具的执行端）。"""
@@ -1150,6 +1295,29 @@ class AgentCore:
             return True
         simple_tool_patterns = ["天气", "气温", "时间", "几点", "日期", "星期", "翻译"]
         if effective_len <= 25 and any(kw in user_input for kw in simple_tool_patterns):
+            return True
+        return False
+
+    def _is_simple_chat(self, query: str) -> bool:
+        """Task 9: 判断是否为简单闲聊，可走快速路径（跳过记忆检索）。
+
+        判定规则（满足任一即返回 True）：
+        1. 命中 SIMPLE_TASK_KEYWORDS["chat"] 中的闲聊关键词
+        2. 有效长度（中文×2 + 其他×1）≤ 10
+        但若命中 complex 关键词则返回 False，避免误判。
+        """
+        # 复杂任务关键词优先排除
+        complex_keywords = SIMPLE_TASK_KEYWORDS["complex"]
+        if any(kw in query for kw in complex_keywords):
+            return False
+        # 闲聊关键词命中
+        chat_keywords = SIMPLE_TASK_KEYWORDS["chat"]
+        if any(kw in query for kw in chat_keywords):
+            return True
+        # 有效长度 ≤ 10 视为简单闲聊
+        cn_chars = sum(1 for c in query if '\u4e00' <= c <= '\u9fff')
+        effective_len = cn_chars * 2 + len(query) - cn_chars
+        if effective_len <= 10:
             return True
         return False
 

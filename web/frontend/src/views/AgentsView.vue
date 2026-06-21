@@ -2,9 +2,10 @@
 import { ref, onMounted, computed } from 'vue'
 import {
   NButton, NSwitch, NModal, NForm, NFormItem, NInput, NInputNumber,
-  NSelect, NTabs, NTabPane, NTag, NPopconfirm, NDynamicTags, useMessage,
+  NSelect, NTabs, NTabPane, NTag, NPopconfirm, NDynamicTags, NCollapse,
+  NCollapseItem, useMessage,
 } from 'naive-ui'
-import { get, post, put, del } from '../api'
+import { get, post, put, del, api } from '../api'
 import { useAgentsStore } from '../stores/agents'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 
@@ -20,22 +21,79 @@ const permDirty = ref(false)
 const testResult = ref<any>(null)
 const testing = ref(false)
 const saving = ref(false)
-const providerOptions = ref<Array<{ label: string; value: string }>>([])
 const wpInput = ref<HTMLInputElement | null>(null)
 const uploadingWp = ref(false)
+const discoveredModels = ref<Array<{ provider: string; models: Array<{ id: string; display_name: string }> }>>([])
+const advancedTouched = ref(false)
+const switchingModel = ref(false)
 
 onMounted(() => {
   agentsStore.load().catch((e) => message.error(e.message))
-  loadProviders()
+  loadDiscoveredModels()
 })
 
-async function loadProviders() {
+async function loadDiscoveredModels() {
   try {
-    const ps = await get<any[]>('/models/providers')
-    providerOptions.value = ps
-      .filter(p => p.enabled !== false)
-      .map(p => ({ label: p.label ? `${p.label}（${p.id}）` : p.id, value: p.id }))
+    const data = await get<Array<{ provider: string; models: Array<{ id: string; display_name: string }> }>>('/models/discover')
+    discoveredModels.value = data || []
   } catch { /* 忽略，保留手输 */ }
+}
+
+const modelOptions = computed(() => {
+  return discoveredModels.value.map(pg => ({
+    type: 'group' as const,
+    label: pg.provider,
+    key: pg.provider,
+    children: pg.models.map(m => ({
+      label: `${pg.provider} - ${m.display_name}`,
+      value: `${pg.provider}|${m.id}`,
+    })),
+  }))
+})
+
+const selectedModel = computed<string | null>({
+  get: () => {
+    const p = editing.value?.provider
+    const m = editing.value?.model
+    if (!p || !m) return null
+    return `${p}|${m}`
+  },
+  set: () => { /* 由 onModelChange 处理 */ },
+})
+
+async function onModelChange(val: string | null) {
+  if (!val) {
+    editing.value.provider = ''
+    editing.value.model = ''
+    return
+  }
+  const sepIdx = val.indexOf('|')
+  const provider = val.slice(0, sepIdx)
+  const model_id = val.slice(sepIdx + 1)
+  editing.value.provider = provider
+  editing.value.model = model_id
+  // 选择新模型后，后端会自动解析 base_url / api_key_env，清空本地高级配置避免覆盖
+  editing.value.base_url = ''
+  editing.value.api_key_env = ''
+  advancedTouched.value = false
+
+  // 仅在编辑已存在的 Agent 时即时调用后端热重载
+  if (!isCreate.value && editing.value.name) {
+    switchingModel.value = true
+    try {
+      await api.setAgentModel(editing.value.name, provider, model_id)
+      message.success(`模型已切换为 ${provider} / ${model_id} ✓`)
+      await agentsStore.load()
+    } catch (e: any) {
+      message.error(e.message || '切换模型失败')
+    } finally {
+      switchingModel.value = false
+    }
+  }
+}
+
+function onAdvancedInput() {
+  advancedTouched.value = true
 }
 
 function pickWallpaper(e: Event) {
@@ -95,6 +153,7 @@ async function openEditor(agent: any | null) {
   isCreate.value = !agent
   testResult.value = null
   permDirty.value = false
+  advancedTouched.value = false
   if (agent) {
     editing.value = JSON.parse(JSON.stringify(agent))
     try {
@@ -123,6 +182,12 @@ async function save() {
   try {
     const body = { ...editing.value, personality_text: personality.value || undefined }
     delete body.tool_count
+    // 仅当用户手动编辑过高级配置时才下发 base_url / api_key_env，
+    // 否则保留后端通过 /agents/{name}/model 自动解析的值
+    if (!advancedTouched.value) {
+      delete body.base_url
+      delete body.api_key_env
+    }
     if (isCreate.value) {
       await post('/agents', body)
       message.success(`Agent ${editing.value.display_name || editing.value.name} 已创建并即时生效 ✓`)
@@ -269,20 +334,29 @@ async function runTest() {
             <n-form-item label="显示名">
               <n-input v-model:value="editing.display_name" placeholder="如 胡桃" />
             </n-form-item>
-            <n-form-item label="provider" v-if="!isMain">
-              <n-select v-if="providerOptions.length" v-model:value="editing.provider"
-                        :options="providerOptions" filterable tag
-                        placeholder="选择 provider（可输入自建 id）" />
-              <n-input v-else v-model:value="editing.provider" placeholder="mimo / agnes / 自建 provider id" />
+            <n-form-item label="模型" v-if="!isMain">
+              <n-select v-model:value="selectedModel" :options="modelOptions"
+                        :loading="switchingModel" filterable tag
+                        placeholder="选择模型（按 provider 分组，格式：provider|model_id）"
+                        @update:value="(v: string | null) => onModelChange(v)" />
             </n-form-item>
-            <n-form-item label="model" v-if="!isMain">
-              <n-input v-model:value="editing.model" placeholder="模型名（留空用 provider 默认）" />
-            </n-form-item>
-            <n-form-item label="base_url" v-if="!isMain">
-              <n-input v-model:value="editing.base_url" placeholder="可选，覆盖 provider 的接口地址" />
-            </n-form-item>
-            <n-form-item label="api_key_env" v-if="!isMain">
-              <n-input v-model:value="editing.api_key_env" placeholder="可选，密钥环境变量名" />
+            <n-form-item label="高级配置" v-if="!isMain">
+              <n-collapse :default-expanded-names="[]">
+                <n-collapse-item title="高级配置（手动覆盖 base_url / api_key_env）" name="advanced">
+                  <n-form label-placement="left" label-width="130" style="margin-top: 4px">
+                    <n-form-item label="base_url">
+                      <n-input v-model:value="editing.base_url"
+                               placeholder="可选，覆盖 provider 的接口地址"
+                               @update:value="onAdvancedInput" />
+                    </n-form-item>
+                    <n-form-item label="api_key_env">
+                      <n-input v-model:value="editing.api_key_env"
+                               placeholder="可选，密钥环境变量名"
+                               @update:value="onAdvancedInput" />
+                    </n-form-item>
+                  </n-form>
+                </n-collapse-item>
+              </n-collapse>
             </n-form-item>
             <n-form-item label="路由描述" v-if="!isMain">
               <n-input v-model:value="editing.route_description" type="textarea" :rows="2"

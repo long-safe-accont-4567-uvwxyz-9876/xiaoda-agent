@@ -204,6 +204,24 @@ class DatabaseManager:
                 await self._conn.execute("ROLLBACK")
                 logger.error(f"数据库迁移 v6 失败: {e}")
 
+        if current < 7:
+            try:
+                await self._conn.execute("BEGIN TRANSACTION")
+                # 修复旧版 episodic_memories 表缺少 session_id 和 embedding_id 列的问题
+                # 这些列在后续版本的 CREATE TABLE 中已加入，但遗漏了对应的 ALTER TABLE 迁移
+                await self._conn.execute(
+                    "ALTER TABLE episodic_memories ADD COLUMN session_id TEXT DEFAULT 'user'"
+                )
+                await self._conn.execute(
+                    "ALTER TABLE episodic_memories ADD COLUMN embedding_id INTEGER DEFAULT -1"
+                )
+                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (7, ?)", (time.time(),))
+                await self._conn.commit()
+                logger.info("database.migration_v7", desc="episodic_memories.session_id+embedding_id")
+            except Exception as e:
+                await self._conn.execute("ROLLBACK")
+                logger.error(f"数据库迁移 v7 失败: {e}")
+
         await self._conn.commit()
 
     async def fetch_all(self, sql: str, params: tuple = ()) -> list[dict]:
@@ -225,6 +243,7 @@ class DatabaseManager:
         return cur.lastrowid or 0
 
     async def _create_tables(self):
+        # ── Phase 1: 建表（仅 DDL，不含依赖新列的索引）─────────
         await self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS conversation_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -389,32 +408,6 @@ class DatabaseManager:
                 updated_at REAL NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS idx_conv_ts ON conversation_logs(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_mem_ts ON episodic_memories(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_mem_importance ON episodic_memories(importance);
-            CREATE INDEX IF NOT EXISTS idx_portrait_created ON user_portrait(created_at);
-            CREATE INDEX IF NOT EXISTS idx_notebook_kind ON notebook_entries(kind);
-            CREATE INDEX IF NOT EXISTS idx_notebook_status ON notebook_entries(status);
-            CREATE INDEX IF NOT EXISTS idx_notebook_due ON notebook_entries(due_date);
-            CREATE INDEX IF NOT EXISTS idx_proactive_user ON proactive_messages(user_id);
-            CREATE INDEX IF NOT EXISTS idx_api_usage_ts ON api_usage(created_at);
-            CREATE INDEX IF NOT EXISTS idx_api_usage_user ON api_usage(user_openid);
-            CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_openid);
-            CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
-            CREATE INDEX IF NOT EXISTS idx_events_type ON agent_events(event_type);
-            CREATE INDEX IF NOT EXISTS idx_events_ts ON agent_events(created_at);
-            CREATE INDEX IF NOT EXISTS idx_kg_entity_name ON knowledge_entities(name);
-            CREATE INDEX IF NOT EXISTS idx_kg_entity_updated ON knowledge_entities(updated_at);
-            CREATE INDEX IF NOT EXISTS idx_kg_rel_from ON knowledge_relations(from_entity);
-            CREATE INDEX IF NOT EXISTS idx_kg_rel_to ON knowledge_relations(to_entity);
-            CREATE INDEX IF NOT EXISTS idx_conv_user ON conversation_logs(user_id);
-            CREATE INDEX IF NOT EXISTS idx_conv_source ON conversation_logs(source);
-            CREATE INDEX IF NOT EXISTS idx_episodic_session ON episodic_memories(session_id);
-            CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_logs(event_type);
-            CREATE INDEX IF NOT EXISTS idx_conv_session ON conversation_logs(session_id);
-            CREATE INDEX IF NOT EXISTS idx_kg_rel_type ON knowledge_relations(relation_type);
-            CREATE INDEX IF NOT EXISTS idx_media_status ON media_tasks(status);
-
             CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5(
                 id UNINDEXED,
                 summary_index
@@ -500,12 +493,6 @@ class DatabaseManager:
                 created_at REAL NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS idx_learnings_cat ON learnings(category);
-            CREATE INDEX IF NOT EXISTS idx_learnings_status ON learnings(status);
-            CREATE INDEX IF NOT EXISTS idx_learnings_pattern ON learnings(pattern_key);
-            CREATE INDEX IF NOT EXISTS idx_errors_status ON errors(status);
-            CREATE INDEX IF NOT EXISTS idx_featreq_status ON feature_requests(status);
-
             CREATE TABLE IF NOT EXISTS session_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL,
@@ -519,15 +506,55 @@ class DatabaseManager:
                 summary_data TEXT NOT NULL DEFAULT '{}'
             );
 
-            CREATE INDEX IF NOT EXISTS idx_session_entries_sid ON session_entries(session_id);
-            CREATE INDEX IF NOT EXISTS idx_session_entries_created ON session_entries(created_at);
-
             CREATE TABLE IF NOT EXISTS cleanup_config (
                 table_name TEXT PRIMARY KEY,
                 retention_days INTEGER NOT NULL,
                 date_column TEXT NOT NULL DEFAULT 'timestamp',
                 enabled INTEGER DEFAULT 1
             );
+        """)
+
+        # ── Phase 2: 迁移（在建表之后、索引创建之前执行）────────
+        # 重要：迁移必须在这里执行，因为旧数据库可能缺少 session_id 等列，
+        # 而后续的索引创建依赖这些列存在。
+        # 如果把 _run_migrations 放在 executescript 末尾，索引创建会先于迁移执行，
+        # 导致 "no such column: session_id" 错误，且迁移永远无法到达。
+        await self._run_migrations()
+
+        # ── Phase 3: 创建索引（含依赖迁移列的索引）──────────────────
+        await self._conn.executescript("""
+            CREATE INDEX IF NOT EXISTS idx_conv_ts ON conversation_logs(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_mem_ts ON episodic_memories(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_mem_importance ON episodic_memories(importance);
+            CREATE INDEX IF NOT EXISTS idx_portrait_created ON user_portrait(created_at);
+            CREATE INDEX IF NOT EXISTS idx_notebook_kind ON notebook_entries(kind);
+            CREATE INDEX IF NOT EXISTS idx_notebook_status ON notebook_entries(status);
+            CREATE INDEX IF NOT EXISTS idx_notebook_due ON notebook_entries(due_date);
+            CREATE INDEX IF NOT EXISTS idx_proactive_user ON proactive_messages(user_id);
+            CREATE INDEX IF NOT EXISTS idx_api_usage_ts ON api_usage(created_at);
+            CREATE INDEX IF NOT EXISTS idx_api_usage_user ON api_usage(user_openid);
+            CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_openid);
+            CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+            CREATE INDEX IF NOT EXISTS idx_events_type ON agent_events(event_type);
+            CREATE INDEX IF NOT EXISTS idx_events_ts ON agent_events(created_at);
+            CREATE INDEX IF NOT EXISTS idx_kg_entity_name ON knowledge_entities(name);
+            CREATE INDEX IF NOT EXISTS idx_kg_entity_updated ON knowledge_entities(updated_at);
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_from ON knowledge_relations(from_entity);
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_to ON knowledge_relations(to_entity);
+            CREATE INDEX IF NOT EXISTS idx_conv_user ON conversation_logs(user_id);
+            CREATE INDEX IF NOT EXISTS idx_conv_source ON conversation_logs(source);
+            CREATE INDEX IF NOT EXISTS idx_episodic_session ON episodic_memories(session_id);
+            CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_logs(event_type);
+            CREATE INDEX IF NOT EXISTS idx_conv_session ON conversation_logs(session_id);
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_type ON knowledge_relations(relation_type);
+            CREATE INDEX IF NOT EXISTS idx_media_status ON media_tasks(status);
+            CREATE INDEX IF NOT EXISTS idx_learnings_cat ON learnings(category);
+            CREATE INDEX IF NOT EXISTS idx_learnings_status ON learnings(status);
+            CREATE INDEX IF NOT EXISTS idx_learnings_pattern ON learnings(pattern_key);
+            CREATE INDEX IF NOT EXISTS idx_errors_status ON errors(status);
+            CREATE INDEX IF NOT EXISTS idx_featreq_status ON feature_requests(status);
+            CREATE INDEX IF NOT EXISTS idx_session_entries_sid ON session_entries(session_id);
+            CREATE INDEX IF NOT EXISTS idx_session_entries_created ON session_entries(created_at);
         """)
 
         # 插入默认清理策略（仅当表为空时）
@@ -546,7 +573,6 @@ class DatabaseManager:
         except Exception as e:
             logger.warning(f"插入默认清理策略失败: {e}")
 
-        await self._run_migrations()
         await self._conn.commit()
 
     async def insert_conversation_log(self, user_id: str, source: str,

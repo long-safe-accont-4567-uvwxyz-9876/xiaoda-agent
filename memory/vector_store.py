@@ -22,11 +22,15 @@ except ImportError:
 
 class EmbedCache:
 
-    def __init__(self, max_size: int = 128):
+    def __init__(self, max_size: int = 256):
         self._cache: OrderedDict[str, list[float]] = OrderedDict()
         self._max_size = max_size
         self._hits = 0
         self._misses = 0
+
+    def __contains__(self, text: str) -> bool:
+        key = hashlib.md5(text[:300].encode()).hexdigest()
+        return key in self._cache
 
     def get(self, text: str) -> list[float] | None:
         key = hashlib.md5(text[:300].encode()).hexdigest()
@@ -70,7 +74,7 @@ class VectorStore:
         self._lock = threading.Lock()
         self._embed_client = None
         self._vec_conn = None
-        self._cache = EmbedCache(max_size=128)
+        self._cache = EmbedCache(max_size=256)
 
         # 并发嵌入限制（避免 API 限流），可通过环境变量配置
         _embed_concurrency = int(os.getenv("VECTOR_EMBED_CONCURRENCY", "8"))
@@ -171,6 +175,18 @@ class VectorStore:
                     continue
                 logger.warning("vector_store.embed_failed", error=str(e), attempts=max_retries + 1)
                 return []
+
+    async def warm_cache(self, texts: list[str]) -> None:
+        """预热嵌入缓存：对未缓存文本调用 embed 填充缓存，单条失败不影响整体。"""
+        if not self._embed_client or not texts:
+            return
+        for text in texts:
+            if not text or text in self._cache:
+                continue
+            try:
+                await self.embed(text)
+            except Exception as e:
+                logger.warning("vector_store.warm_cache_item_failed", error=str(e))
 
     async def upsert(self, row_id: int, text: str) -> bool:
         if not self._initialized or not self._vec_conn:

@@ -376,6 +376,19 @@ RERANKER_OVERSAMPLE_RATIO = int(os.getenv("RERANKER_OVERSAMPLE_RATIO", "3"))
 QUERY_TRANSFORM_ENABLED = os.getenv("QUERY_TRANSFORM_ENABLED", "true").lower() in ("1", "true", "yes")
 QUERY_EXPAND_COUNT = int(os.getenv("QUERY_EXPAND_COUNT", "2"))
 
+# Retrieval Optimization (A1/A2/A3)
+RETRIEVAL_SMART_SKIP = os.getenv("RETRIEVAL_SMART_SKIP", "true").lower() in ("1", "true", "yes")
+RETRIEVAL_PARALLEL_TRANSFORM = os.getenv("RETRIEVAL_PARALLEL_TRANSFORM", "true").lower() in ("1", "true", "yes")
+RETRIEVAL_PARALLEL_SEARCH = os.getenv("RETRIEVAL_PARALLEL_SEARCH", "true").lower() in ("1", "true", "yes")
+
+# ── 性能优化开关 ──────────────────────────────────────────────
+# Task 6: TTS 异步化（方案 B）—— 开启后 TTS 在后台合成，先返回文字回复
+TTS_ASYNC_MODE = os.getenv("TTS_ASYNC_MODE", "true").lower() in ("1", "true", "yes")
+# Task 7: 流式中间状态推送（方案 C1）—— 开启后推送细粒度思考状态
+STREAM_STATUS_PUSH = os.getenv("STREAM_STATUS_PUSH", "false").lower() in ("1", "true", "yes")
+# Task 9: 简单对话快速路径（方案 E）—— 开启后简单闲聊跳过记忆检索
+SIMPLE_CHAT_FASTPATH = os.getenv("SIMPLE_CHAT_FASTPATH", "true").lower() in ("1", "true", "yes")
+
 # RAG Fusion Weights
 RAG_RERANK_WEIGHT = float(os.getenv("RAG_RERANK_WEIGHT", "0.65"))
 RAG_KG_WEIGHT = float(os.getenv("RAG_KG_WEIGHT", "0.15"))
@@ -430,6 +443,12 @@ __all__ = [
     "RERANKER_OVERSAMPLE_RATIO",
     "QUERY_TRANSFORM_ENABLED",
     "QUERY_EXPAND_COUNT",
+    "RETRIEVAL_SMART_SKIP",
+    "RETRIEVAL_PARALLEL_TRANSFORM",
+    "RETRIEVAL_PARALLEL_SEARCH",
+    "TTS_ASYNC_MODE",
+    "STREAM_STATUS_PUSH",
+    "SIMPLE_CHAT_FASTPATH",
     "RAG_RERANK_WEIGHT",
     "RAG_KG_WEIGHT",
     "RAG_IMPORTANCE_WEIGHT",

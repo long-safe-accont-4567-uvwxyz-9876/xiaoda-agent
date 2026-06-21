@@ -204,6 +204,36 @@ class SubAgent:
         """设置凭证池（由父代理传递）"""
         self._credential_pool = pool
 
+    async def reload_model_config(self, provider: str, model: str,
+                                  base_url: str, api_key_env: str) -> bool:
+        """热重载模型配置：用新配置创建客户端并原子替换，不重新运行启动探活。
+
+        用于一键切换子 Agent 模型时避免服务重启。
+        """
+        api_key = _read_env_key(api_key_env)
+        if not api_key or not base_url:
+            logger.warning("sub_agent.reload_failed",
+                           name=self.config.name,
+                           reason="missing_api_key_or_base_url",
+                           api_key_env=api_key_env)
+            return False
+        try:
+            new_client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        except Exception as e:
+            logger.warning("sub_agent.reload_client_failed",
+                           name=self.config.name, error=str(e)[:200])
+            return False
+        # 原子替换：先就位再切，避免半成品状态
+        self._client = new_client
+        self.config.provider = provider
+        self.config.model = model
+        self.config.base_url = base_url
+        self.config.api_key_env = api_key_env
+        self._initialized = True
+        logger.info("sub_agent.model_reloaded",
+                    name=self.config.name, provider=provider, model=model)
+        return True
+
     @property
     def available(self) -> bool:
         return self._initialized and self._client is not None

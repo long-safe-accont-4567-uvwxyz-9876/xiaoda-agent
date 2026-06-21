@@ -102,7 +102,7 @@ class ModelRouter:
         self._last_cache_warning = 0.0
         self._error_classifier = ErrorClassifier()
         self._credential_pool = get_credential_pool()
-        self._credential_lock = asyncio.Lock()
+        self._credential_locks: dict[str, asyncio.Lock] = {}
 
         self._custom_clients: dict[str, AsyncOpenAI] = {}
         self._current_chat_model: dict | None = None
@@ -120,6 +120,15 @@ class ModelRouter:
         if agnes.is_available():
             self._transports["agnes"] = agnes
         logger.info("router.transports", available=list(self._transports.keys()))
+
+    def _get_credential_lock(self, provider: str) -> asyncio.Lock:
+        """返回指定 provider 的凭证锁，按需创建。
+
+        不同 provider 之间不再互相阻塞，相同 provider 仍然串行化以保护凭证轮换。
+        """
+        if provider not in self._credential_locks:
+            self._credential_locks[provider] = asyncio.Lock()
+        return self._credential_locks[provider]
 
     def set_db(self, db, analytics: AnalyticsDB | None = None):
         self._db = db
@@ -377,7 +386,8 @@ class ModelRouter:
 
         for attempt in range(MAX_RETRIES + 1):
             try:
-                async with self._credential_lock:
+                lock = self._get_credential_lock(provider)
+                async with lock:
                     client = self._client
                     if provider == "agnes" and self._agnes_client:
                         client = self._agnes_client
@@ -458,7 +468,8 @@ class ModelRouter:
                     # 尝试轮换凭证
                     new_cred = await self._credential_pool.get_credential(provider)
                     # 获取当前使用的 API key
-                    async with self._credential_lock:
+                    rotate_lock = self._get_credential_lock(provider)
+                    async with rotate_lock:
                         current_key = ""
                         if provider == "mimo" and self._client:
                             current_key = self._client.api_key or ""

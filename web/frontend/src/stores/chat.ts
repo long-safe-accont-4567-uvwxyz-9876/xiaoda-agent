@@ -20,6 +20,7 @@ export interface Message {
   emotion?: string
   stickerUrl?: string
   audioUrl?: string
+  audioPending?: boolean
   imageUrls?: string[]
   videoUrl?: string
   toolCalls?: ToolCall[]
@@ -101,6 +102,7 @@ export const useChatStore = defineStore('chat', () => {
     msg.emotion = (e.emotion as string) || undefined
     msg.stickerUrl = (e.sticker_url as string) || undefined
     msg.audioUrl = (e.audio_url as string) || undefined
+    msg.audioPending = (e.audio_pending as boolean) || false
     msg.imageUrls = (e.image_urls as string[]) || []
     msg.videoUrl = (e.video_url as string) || undefined
     msg.agent = e.agent as string
@@ -110,6 +112,16 @@ export const useChatStore = defineStore('chat', () => {
     currentStage.value = ''
     statusText.value = ''
     pendingMsgId.value = ''
+  })
+
+  // Task 6: 异步 TTS 合成完成 —— 更新对应消息的 audioUrl
+  ws.on('audio_ready', (e: WsEvent) => {
+    const msgId = e.msg_id as string
+    const msg = messages.value.find(m => m.id === `a-${msgId}`)
+    if (msg) {
+      msg.audioUrl = (e.audio_url as string) || undefined
+      msg.audioPending = false
+    }
   })
 
   ws.on('error', (e: WsEvent) => {
