@@ -78,6 +78,10 @@ def _run_web(host: str, port: int):
         log_path.write_text(f"Failed to import web.server:\n{traceback.format_exc()}", encoding="utf-8")
         raise
 
+    # 显示友好的访问地址（0.0.0.0 对用户不友好）
+    display_host = "localhost" if host == "0.0.0.0" else host
+    logger.info(f"Web UI: http://{display_host}:{port}")
+
     uvicorn.run(
         app,
         host=host,

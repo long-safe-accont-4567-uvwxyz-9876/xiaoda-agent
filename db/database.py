@@ -209,12 +209,16 @@ class DatabaseManager:
                 await self._conn.execute("BEGIN TRANSACTION")
                 # 修复旧版 episodic_memories 表缺少 session_id 和 embedding_id 列的问题
                 # 这些列在后续版本的 CREATE TABLE 中已加入，但遗漏了对应的 ALTER TABLE 迁移
-                await self._conn.execute(
-                    "ALTER TABLE episodic_memories ADD COLUMN session_id TEXT DEFAULT 'user'"
-                )
-                await self._conn.execute(
-                    "ALTER TABLE episodic_memories ADD COLUMN embedding_id INTEGER DEFAULT -1"
-                )
+                # 新安装时 CREATE TABLE 已包含这些列，需先检查再添加
+                cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
+                if "session_id" not in cols:
+                    await self._conn.execute(
+                        "ALTER TABLE episodic_memories ADD COLUMN session_id TEXT DEFAULT 'user'"
+                    )
+                if "embedding_id" not in cols:
+                    await self._conn.execute(
+                        "ALTER TABLE episodic_memories ADD COLUMN embedding_id INTEGER DEFAULT -1"
+                    )
                 await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (7, ?)", (time.time(),))
                 await self._conn.commit()
                 logger.info("database.migration_v7", desc="episodic_memories.session_id+embedding_id")
