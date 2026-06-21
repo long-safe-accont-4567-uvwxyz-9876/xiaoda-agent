@@ -154,11 +154,11 @@ const statusType: Record<string, any> = { running: 'success', stopped: 'default'
 // ── 模板功能 ──────────────────────────────────────────────
 const showTemplates = ref(false)
 const TEMPLATES = [
-  { name: 'filesystem', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/path/to/dir'], desc: '文件系统读写' },
+  { name: 'filesystem', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '选择目录'], desc: '文件系统读写' },
   { name: 'fetch', command: 'npx', args: ['-y', '@modelcontextprotocol/server-fetch'], desc: 'HTTP 请求抓取网页' },
   { name: 'memory', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'], desc: '知识图谱记忆' },
   { name: 'brave-search', command: 'npx', args: ['-y', '@modelcontextprotocol/server-brave-search'], desc: 'Brave 搜索（需 BRAVE_API_KEY）', env: { BRAVE_API_KEY: '' } },
-  { name: 'sqlite', command: 'uvx', args: ['mcp-server-sqlite', '--db-path', '/path/to/db.sqlite'], desc: 'SQLite 数据库' },
+  { name: 'sqlite', command: 'uvx', args: ['mcp-server-sqlite', '--db-path', '选择数据库路径'], desc: 'SQLite 数据库' },
   { name: 'github', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], desc: 'GitHub 操作（需 GITHUB_TOKEN）', env: { GITHUB_TOKEN: '' } },
 ]
 

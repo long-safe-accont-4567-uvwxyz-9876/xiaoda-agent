@@ -28,6 +28,7 @@ _DEFAULTS: dict[str, Any] = {
     "tools": {},      # {tool_name: {"enabled": false, "max_frequency": 5}}
     "mcp": {},        # {server_name: {command, args, env, agents, enabled}} 用户新增的
     "models": {"providers": {}, "routes": {}},
+    "dashboard": {"system_monitor_enabled": False},
 }
 
 

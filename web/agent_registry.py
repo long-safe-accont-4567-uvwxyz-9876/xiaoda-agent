@@ -17,6 +17,17 @@ from loguru import logger
 
 AGENTS_DIR = Path(__file__).resolve().parent.parent / "config" / "agents"
 BUILTIN_AGENTS = {"keli", "yinlang", "xilian", "nike"}
+
+# 内置 Agent 的 excluded_tools（与 core/bootstrap.py 中 _register_sub_agents 保持一致）
+# 用于降级模式下 _builtin_stub() 计算实际 tool_count
+BUILTIN_EXCLUDED_TOOLS: dict[str, set[str]] = {
+    "keli": {"call_klee", "shell_command", "python_executor", "write_file",
+             "search_files", "read_file", "list_files", "web_browse",
+             "document_reader", "multi_search", "wolfram_query"},
+    "yinlang": {"call_klee", "call_nahida"},
+    "xilian": {"call_klee", "call_nahida", "shell_command", "python_executor", "write_file"},
+    "nike": {"call_klee", "call_nahida", "shell_command", "write_file"},
+}
 # 内置 Agent 默认背景板（打包在前端 dist/assets/wallpapers/ 下）
 DEFAULT_WALLPAPERS = {
     "nahida": "/assets/webui_background.jpg",
@@ -135,6 +146,11 @@ class AgentRegistry:
 
     def _builtin_stub(self, name: str) -> dict:
         stub = self._BUILTIN_STUBS.get(name, {})
+        excluded = BUILTIN_EXCLUDED_TOOLS.get(name, set())
+        blocked = self._blocked()
+        # 实际 tool_count = 全部工具 - 该 agent 排除的工具 - 子代理禁用工具
+        tool_count = len([t for t in self._all_tool_names()
+                          if t not in excluded and t not in blocked])
         return {
             "name": name,
             "display_name": stub.get("display_name", name),
@@ -148,7 +164,7 @@ class AgentRegistry:
             "voice_ref": None,
             "route_description": stub.get("route_description", ""),
             "capabilities": stub.get("capabilities", []),
-            "excluded_tools": [],
+            "excluded_tools": sorted(excluded),
             "mcp_servers": [],
             "max_turns": 8,
             "effort": "medium",
@@ -156,7 +172,8 @@ class AgentRegistry:
             "memory_scope": "shared",
             "background": None,
             "wallpaper": DEFAULT_WALLPAPERS.get(name, ""),
-            "tool_count": 0,
+            "tool_count": tool_count,
+            "degraded": True,
         }
 
     def list(self) -> list[dict]:
@@ -180,7 +197,8 @@ class AgentRegistry:
             if not agent:
                 continue
             cfg = agent.config
-            out.append(self._serialize(cfg, enabled=name not in self._disabled))
+            out.append(self._serialize(cfg, enabled=name not in self._disabled,
+                                       degraded=getattr(agent, "degraded", False)))
         # 降级模式下 dispatcher 未注册内置 Agent，用桩数据补齐
         for name in BUILTIN_AGENTS:
             if name not in registered_names:
@@ -194,7 +212,7 @@ class AgentRegistry:
         except Exception:
             return ""
 
-    def _serialize(self, cfg, enabled: bool = True) -> dict:
+    def _serialize(self, cfg, enabled: bool = True, degraded: bool = False) -> dict:
         excluded = set(cfg.excluded_tools or set())
         tool_count = len([t for t in self._all_tool_names()
                           if t not in excluded and t not in self._blocked()])
@@ -220,6 +238,7 @@ class AgentRegistry:
             "background": cfg.background,
             "wallpaper": getattr(cfg, "wallpaper", "") or DEFAULT_WALLPAPERS.get(cfg.name, ""),
             "tool_count": tool_count,
+            "degraded": degraded,
         }
 
     def get(self, name: str) -> dict | None:
@@ -227,7 +246,8 @@ class AgentRegistry:
             return self.list()[0]
         agent = self.core.dispatcher.get_agent(name)
         if agent:
-            return self._serialize(agent.config, enabled=name not in self._disabled)
+            return self._serialize(agent.config, enabled=name not in self._disabled,
+                                   degraded=getattr(agent, "degraded", False))
         # 降级模式：返回桩数据
         if name in BUILTIN_AGENTS:
             return self._builtin_stub(name)

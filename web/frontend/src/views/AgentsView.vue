@@ -304,6 +304,7 @@ async function runTest() {
             <n-tag size="small" :bordered="false" :type="a.builtin || a.is_main ? 'warning' : 'info'">
               {{ a.is_main ? '主体' : a.builtin ? '内置' : '自建' }}
             </n-tag>
+            <n-tag v-if="a.degraded" size="small" :bordered="false" type="warning">降级模式</n-tag>
           </div>
           <div class="card-stats">
             🛠 {{ a.tool_count ?? '—' }} 个工具

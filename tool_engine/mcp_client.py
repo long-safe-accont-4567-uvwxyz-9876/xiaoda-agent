@@ -7,6 +7,7 @@ and registers them into the existing tool_registry.
 import asyncio
 import json
 import os
+import shutil
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -14,6 +15,25 @@ from loguru import logger
 
 import tool_engine.tool_registry as _tool_registry_mod
 from .tool_registry import ToolPermission, ToolResult
+
+
+def _resolve_command_path(command: str) -> str:
+    """自动检测命令的完整路径，兼容 Windows 和 Linux。
+
+    - 如果 command 是 npx/uvx/node 等短命令名，用 shutil.which() 查找完整路径
+    - Windows 上 shutil.which("npx") 可能返回 C:\\Program Files\\nodejs\\npx.cmd
+    - 如果找不到，返回原始 command（让子进程启动时报错）
+    """
+    if not command:
+        return command
+    # 如果已经是绝对路径且存在，直接返回
+    if os.path.isabs(command) and os.path.exists(command):
+        return command
+    # 用 shutil.which 查找
+    resolved = shutil.which(command)
+    if resolved:
+        return resolved
+    return command  # 返回原始值，让子进程报错
 
 
 @dataclass
@@ -95,8 +115,10 @@ class MCPClient:
             if self._config.env:
                 proc_env.update(self._config.env)
 
+            # 解析命令完整路径，兼容 Windows（npx.cmd / uvx.exe 等）
+            resolved_command = _resolve_command_path(self._config.command)
             self._process = await asyncio.create_subprocess_exec(
-                self._config.command,
+                resolved_command,
                 *self._config.args,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,

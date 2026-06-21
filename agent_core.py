@@ -655,6 +655,7 @@ class AgentCore:
                         reply = self._clean_reply(result)
                         logger.info("agent.got_string_reply", length=len(reply), preview=reply[:80])
                 else:
+                    # 即使 tools 为 None（如 has_image=True），也通过 _clean_reply -> strip_dsml 清理非标准 [TOOL_CALL] 格式文本
                     reply = self._clean_reply(result)
                     logger.info("agent.got_string_reply", length=len(reply), preview=reply[:80])
             else:

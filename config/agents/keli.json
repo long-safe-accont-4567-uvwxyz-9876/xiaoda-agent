@@ -1,8 +1,8 @@
 {
   "name": "keli",
   "display_name": "可莉",
-  "provider": "mimo",
-  "model": "mimo-v2.5-pro",
+  "provider": "siliconflow",
+  "model": "Nex-N2-Pro",
   "personality_file": "klee_personality.md",
   "voice_ref": "keli",
   "excluded_tools": [
@@ -32,7 +32,6 @@
   "permission_mode": null,
   "memory_scope": null,
   "background": false,
-  "wallpaper": "",
-  "_saved_at": 1781246761.7828388,
-  "_disabled": false
+  "wallpaper": "/assets/wallpapers/keli.jpg",
+  "_saved_at": 1782050413.0912962
 }

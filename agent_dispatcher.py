@@ -150,6 +150,7 @@ class SubAgent:
         self._client: AsyncOpenAI | None = None
         self._personality: str = ""
         self._initialized = False
+        self._degraded = False  # 探活失败时进入降级模式：仍注册但不可实际调用
         self._credential_pool: CredentialPool | None = None
         self._memory_submit_count = 0  # 子代理单次任务记忆提交计数（上限 3）
         self._communicating_with: str | None = None  # 子代理间直接通信防循环标记
@@ -195,8 +196,8 @@ class SubAgent:
                     logger.info("sub_agent.probe_ok", name=self.config.name)
                 except Exception as e:
                     logger.warning("sub_agent.probe_failed", name=self.config.name, error=str(e)[:200])
-                    self._initialized = False
-                    self._client = None
+                    # 降级模式：保留 client 供后续重试，但标记为不可用
+                    self._degraded = True
             else:
                 logger.info("sub_agent.initialized", name=self.config.name, provider=self.config.provider, model=self.config.model)
 
@@ -236,7 +237,12 @@ class SubAgent:
 
     @property
     def available(self) -> bool:
-        return self._initialized and self._client is not None
+        return self._initialized and self._client is not None and not self._degraded
+
+    @property
+    def degraded(self) -> bool:
+        """降级模式：探活失败但仍注册，实际调用时回退到主体 agent。"""
+        return self._degraded
 
     def _filtered_tools(self) -> list[dict] | None:
         if not self._tool_executor:
@@ -749,12 +755,16 @@ class AgentDispatcher:
         )
         await agent.init()
 
-        if not agent.available:
+        # 降级模式下仍注册子 agent（探活失败但保留配置，实际调用时回退到主体 agent）
+        if not agent.available and not agent.degraded:
             logger.warning("dispatcher.register_unavailable", name=config.name)
             return False
 
         self._agents[config.name] = agent
-        logger.info("dispatcher.registered", name=config.name, display_name=config.display_name)
+        if agent.degraded:
+            logger.warning("dispatcher.registered_degraded", name=config.name, display_name=config.display_name)
+        else:
+            logger.info("dispatcher.registered", name=config.name, display_name=config.display_name)
         return True
 
     def unregister(self, name: str) -> bool:

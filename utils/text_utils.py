@@ -100,18 +100,25 @@ FAKE_XML_TOOL_PATTERN = re.compile(
     re.DOTALL,
 )
 
+# 非标准工具调用格式：[TOOL_CALL] {tool => "...", args => {...}} [/TOOL_CALL]
+# 使用非贪婪匹配避免误删过多内容；[\s\S] 匹配任意字符（含换行）
+TOOL_CALL_PATTERN = re.compile(
+    r'\[TOOL_CALL\][\s\S]*?\[/TOOL_CALL\]',
+)
+
 
 def strip_dsml(text: str) -> str:
     text = DSML_PATTERN.sub('', text)
     text = DSML_INVOKE_PATTERN.sub('', text)
     text = DSML_LEFTOVER.sub('', text)
     text = FAKE_XML_TOOL_PATTERN.sub('', text)
+    text = TOOL_CALL_PATTERN.sub('', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
 
 def has_dsml_tool_calls(text: str) -> bool:
-    return bool(DSML_INVOKE_PATTERN.search(text))
+    return bool(DSML_INVOKE_PATTERN.search(text)) or bool(TOOL_CALL_PATTERN.search(text))
 
 
 def parse_dsml_tool_calls(text: str, allowed_tools: set | None = None) -> list[dict]:

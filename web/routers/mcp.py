@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
@@ -37,6 +40,40 @@ async def _broadcast_changed():
         await manager.broadcast({"type": "config_changed", "domain": "mcp"})
     except Exception:
         pass
+
+
+def _resolve_command_path(command: str) -> str:
+    """自动检测命令的完整路径，兼容 Windows 和 Linux。
+
+    - 如果 command 是 npx/uvx/node 等短命令名，用 shutil.which() 查找完整路径
+    - Windows 上 shutil.which("npx") 可能返回 C:\\Program Files\\nodejs\\npx.cmd
+    - 如果找不到，返回原始 command（让子进程启动时报错）
+    """
+    if not command:
+        return command
+    # 如果已经是绝对路径且存在，直接返回
+    if os.path.isabs(command) and os.path.exists(command):
+        return command
+    # 用 shutil.which 查找
+    resolved = shutil.which(command)
+    if resolved:
+        return resolved
+    return command  # 返回原始值，让子进程报错
+
+
+# 路径占位符 → 实际路径的映射（创建 MCP Server 时自动替换）
+_PATH_PLACEHOLDERS = {
+    "/path/to/dir": str(Path.home()),
+    "/path/to/db": str(Path.home() / "nahida-agent" / "data.db"),
+    "/path/to/db.sqlite": str(Path.home() / "nahida-agent" / "data.db"),
+    "选择目录": str(Path.home()),
+    "选择数据库路径": str(Path.home() / "nahida-agent" / "data.db"),
+}
+
+
+def _replace_path_placeholders(args: list) -> list:
+    """将 args 中的路径占位符替换为实际路径。"""
+    return [_PATH_PLACEHOLDERS.get(str(a), a) for a in args]
 
 
 def _serialize(name: str, client, cfg_record: dict | None, mgr=None) -> dict:
@@ -94,8 +131,11 @@ async def start_server(request: Request, name: str, record: dict) -> dict:
             await old.stop()
         except Exception:
             pass
-    client = MCPClient(name, record.get("command", ""),
-                       record.get("args", []), record.get("env") or None)
+    # 解析命令完整路径（兼容 Windows），并替换路径占位符
+    resolved_command = _resolve_command_path(record.get("command", ""))
+    resolved_args = _replace_path_placeholders(record.get("args", []))
+    client = MCPClient(name, resolved_command,
+                       resolved_args, record.get("env") or None)
     mgr._clients[name] = client
     await client.start()
     return _serialize(name, client, record)
@@ -115,7 +155,7 @@ async def create_server(body: dict, request: Request):
         raise HTTPException(400, f"MCP server {name} 已存在")
     record = {
         "command": command,
-        "args": [str(a) for a in (body.get("args") or [])],
+        "args": _replace_path_placeholders([str(a) for a in (body.get("args") or [])]),
         "env": {str(k): str(v) for k, v in (body.get("env") or {}).items()},
         "enabled": True,
     }
@@ -230,7 +270,14 @@ MCP_TEMPLATES = [
         "description": "文件系统访问",
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "选择目录"],
+    },
+    {
+        "name": "memory",
+        "description": "知识图谱记忆",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-memory"],
     },
     {
         "name": "github",
@@ -253,7 +300,7 @@ MCP_TEMPLATES = [
         "description": "SQLite 数据库",
         "transport": "stdio",
         "command": "uvx",
-        "args": ["mcp-server-sqlite", "--db-path", "/path/to/db"],
+        "args": ["mcp-server-sqlite", "--db-path", "选择数据库路径"],
     },
     {
         "name": "fetch",

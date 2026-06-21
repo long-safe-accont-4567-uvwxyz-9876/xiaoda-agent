@@ -3,6 +3,7 @@ import re
 import json
 import time
 import sys
+import shutil
 import platform
 import socket
 from pathlib import Path
@@ -394,15 +395,17 @@ RAG_RERANK_WEIGHT = float(os.getenv("RAG_RERANK_WEIGHT", "0.65"))
 RAG_KG_WEIGHT = float(os.getenv("RAG_KG_WEIGHT", "0.15"))
 RAG_IMPORTANCE_WEIGHT = float(os.getenv("RAG_IMPORTANCE_WEIGHT", "0.20"))
 
+# MCP_SERVERS：使用 shutil.which() 动态解析命令路径，兼容 Windows/Linux/macOS
+# 不再硬编码 Orange Pi 上的绝对路径，避免在其他设备上失效
 MCP_SERVERS = {
     "git": {
-        "command": str(Path.home() / ".local" / "bin" / "uvx"),
+        "command": shutil.which("uvx") or "uvx",
         "args": ["mcp-server-git", "--repository", str(Path.home() / "Desktop")],
         "env": {"UV_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple"},
         "agents": ["yinlang"],  # which agents can use this MCP server's tools
     },
     "github": {
-        "command": str(Path.home() / ".trae-cn-server" / "binaries" / "node" / "versions" / "22.22.3" / "bin" / "npx"),
+        "command": shutil.which("npx") or "npx",
         "args": ["-y", "@modelcontextprotocol/server-github"],
         "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN", "")},
         "agents": ["yinlang"],

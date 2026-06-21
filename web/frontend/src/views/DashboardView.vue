@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { useMessage } from 'naive-ui'
-import { get } from '../api'
+import { useMessage, NButton } from 'naive-ui'
+import { get, put } from '../api'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import * as echarts from 'echarts/core'
 import { LineChart, BarChart } from 'echarts/charts'
@@ -14,6 +14,7 @@ const message = useMessage()
 
 const stats = ref({ messages: 0, cost: 0, toolCalls: 0, memories: 0 })
 const system = ref<any>({})
+const monitorEnabled = ref(false)
 const audit = ref<any[]>([])
 const permissionMode = ref('')
 const costChartEl = ref<HTMLElement | null>(null)
@@ -21,11 +22,45 @@ const toolChartEl = ref<HTMLElement | null>(null)
 let timer: ReturnType<typeof setInterval> | null = null
 
 onMounted(async () => {
+  await loadMonitorConfig()
   await loadAll()
-  timer = setInterval(loadSystem, 5000)
 })
 
-onBeforeUnmount(() => { if (timer) clearInterval(timer) })
+onBeforeUnmount(() => { stopPolling() })
+
+async function loadMonitorConfig() {
+  try {
+    const cfg = await get('/system/config')
+    monitorEnabled.value = !!cfg?.dashboard?.system_monitor_enabled
+  } catch { /* */ }
+}
+
+function startPolling() {
+  if (timer) clearInterval(timer)
+  timer = setInterval(loadSystem, 5000)
+}
+
+function stopPolling() {
+  if (timer) { clearInterval(timer); timer = null }
+}
+
+async function enableMonitor() {
+  monitorEnabled.value = true
+  try {
+    await put('/system/config', { path: 'dashboard.system_monitor_enabled', value: true })
+  } catch { /* */ }
+  await loadSystem()
+  startPolling()
+}
+
+async function disableMonitor() {
+  monitorEnabled.value = false
+  stopPolling()
+  system.value = {}
+  try {
+    await put('/system/config', { path: 'dashboard.system_monitor_enabled', value: false })
+  } catch { /* */ }
+}
 
 async function loadAll() {
   try {
@@ -47,7 +82,10 @@ async function loadAll() {
     await nextTick()
     renderCostChart(usage.series)
     renderToolChart()
-    loadSystem()
+    if (monitorEnabled.value) {
+      loadSystem()
+      startPolling()
+    }
   } catch (e: any) {
     message.error(e.message)
   }
@@ -141,8 +179,12 @@ function gb(bytes: number): string {
 
     <div class="chart-row">
       <div class="glass-panel chart-box monitor">
-        <h4>{{ system.platform === 'Windows' ? 'Windows' : 'Orange Pi' }} 系统监控 <span class="hint">5s 轮询</span></h4>
-        <div class="monitor-grid">
+        <div class="section-header">
+          <h4>{{ system.platform || 'Linux' }} 系统监控 <span v-if="monitorEnabled" class="hint">5s 轮询</span></h4>
+          <NButton v-if="!monitorEnabled" size="small" type="primary" @click="enableMonitor">开启监控</NButton>
+          <NButton v-else size="small" @click="disableMonitor">关闭监控</NButton>
+        </div>
+        <div v-if="monitorEnabled" class="monitor-grid">
           <div class="m-item">
             <span class="m-label">负载</span>
             <span class="m-value mono">{{ (system.load || []).map((l: number) => l.toFixed(2)).join(' / ') || '—' }}</span>
@@ -167,6 +209,9 @@ function gb(bytes: number): string {
             <span class="m-label">进程内存</span>
             <span class="m-value mono">{{ system.process_rss ? gb(system.process_rss) + 'G' : '—' }}</span>
           </div>
+        </div>
+        <div v-else class="monitor-disabled-hint">
+          系统监控已关闭，点击"开启监控"查看系统资源使用情况
         </div>
       </div>
       <div class="glass-panel chart-box">
@@ -223,7 +268,10 @@ function gb(bytes: number): string {
 .hint { font-size: 11px; color: var(--moon-dim); font-weight: 400; }
 .chart { height: 220px; }
 
+.section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.section-header h4 { margin-bottom: 0; }
 .monitor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.monitor-disabled-hint { color: var(--moon-dim); font-size: 12px; padding: 24px 10px; text-align: center; }
 .m-item {
   display: flex; flex-direction: column; gap: 2px;
   padding: 8px 10px; border-radius: 8px;
