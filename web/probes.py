@@ -10,11 +10,8 @@ from loguru import logger
 
 async def probe_llm(core, route: str = "chat") -> dict:
     """直连指定路由发送固定探针。"""
-    # 确保使用最新的 API Key（Setup 页面保存的新 Key 不会自动生效）
-    try:
-        core.router.refresh_client()
-    except Exception as e:
-        logger.debug("probes.refresh_client_failed error={}", str(e))
+    # 注意：不再每次探活都 refresh_client()，避免频繁重建客户端
+    # Setup 保存 Key 后会主动调用 refresh_client()
     from model_router import ROUTE_TABLE
     if route not in ROUTE_TABLE:
         return {"ok": False, "error": f"未知路由 {route}", "latency_ms": 0}

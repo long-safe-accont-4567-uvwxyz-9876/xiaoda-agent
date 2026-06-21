@@ -51,11 +51,11 @@ class PermissionManager:
         if env_val in ("1", "true", "yes"):
             return PermissionMode.DEV
 
-        # 未显式配置 → 默认 DEFAULT 并打印警告
-        logger.critical(
-            "permission_manager.no_explicit_mode",
-            msg="未设置 AGENT_PERMISSION_MODE 环境变量，默认使用 DEFAULT 模式。"
-                "生产环境请显式设置 AGENT_PERMISSION_MODE=default/dev/strict/bypass",
+        # 未显式配置 → 默认 DEFAULT 并打印提示
+        logger.info(
+            "permission_manager.using_default_mode",
+            msg="未设置 AGENT_PERMISSION_MODE，使用 DEFAULT 模式。"
+                "可设置 AGENT_PERMISSION_MODE=default/dev/strict/bypass 切换",
         )
         return PermissionMode.DEFAULT
 

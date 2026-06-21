@@ -155,12 +155,10 @@ class ModelRouter:
         else:
             self._agnes_client = None
 
-        # 同步更新凭证池：重置 DEAD 凭证 + 补充新 Key
+        # 同步更新凭证池：确保 MiMo/Agnes 凭证与当前环境变量一致
         try:
             from utils.credential_pool import get_credential_pool, Credential
             pool = get_credential_pool()
-            for provider in list(pool._pool.keys()):
-                pool.reset_provider(provider)
             # 补充/更新 MiMo 凭证
             if new_mimo_key:
                 self._ensure_credential_in_pool(pool, "mimo", new_mimo_key, new_mimo_url)

@@ -548,6 +548,11 @@ async def save_keys(body: dict):
             if router_obj and hasattr(router_obj, "refresh_client"):
                 router_obj.refresh_client()
                 logger.info("setup.router_client_refreshed")
+            # 同时刷新 TTS 引擎客户端
+            tts_engine = getattr(app.state.core, "tts_engine", None)
+            if tts_engine and hasattr(tts_engine, "refresh_client"):
+                tts_engine.refresh_client()
+                logger.info("setup.tts_client_refreshed")
     except Exception as e:
         logger.warning("setup.router_client_refresh_failed error={}", str(e))
 

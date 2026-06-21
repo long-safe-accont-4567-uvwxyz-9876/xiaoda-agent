@@ -247,6 +247,17 @@ class TTSEngine:
     def available(self) -> bool:
         return self._available and self._client is not None
 
+    def refresh_client(self) -> None:
+        """重建 TTS 客户端（Setup 保存新 Key 后调用）。"""
+        api_key = _get_mimo_api_key()
+        if api_key:
+            self._client = AsyncOpenAI(api_key=api_key, base_url=MIMO_BASE_URL)
+            logger.info("tts.client_refreshed",
+                        key_suffix=api_key[-6:] if len(api_key) >= 6 else "***")
+        else:
+            self._client = None
+            self._available = False
+
     async def synthesize(
         self,
         text: str,
