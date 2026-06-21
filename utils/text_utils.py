@@ -88,15 +88,17 @@ FAKE_XML_TOOL_PATTERN = re.compile(
     r'<function=\w+>.*?</function>|'
     r'<parameter=\w+>.*?</parameter>|'
     r'<(read_file|write_file|list_files|search_files|vision_analyze|camera_capture|'
-    r'multi_search|web_browse|shell_command|python_executor|document_reader|'
+    r'multi_search|web_browse|web_search|search_cn|shell_command|python_executor|document_reader|'
     r'save_memory|recall_memory|search_memory|nudge|get_hardware_info|'
     r'control_gpio|read_sensor|wolfram_query|analyze_code|run_code|edit_code|'
-    r'create_file|arg)\b[^>]*/?>.*?</\1>|'
+    r'create_file|arg|calculator|get_weather|get_current_time|'
+    r'agnes_image|agnes_video|agnes_tts)\b[^>]*/?>.*?</\1>|'
     r'<(read_file|write_file|list_files|search_files|vision_analyze|camera_capture|'
-    r'multi_search|web_browse|shell_command|python_executor|document_reader|'
+    r'multi_search|web_browse|web_search|search_cn|shell_command|python_executor|document_reader|'
     r'save_memory|recall_memory|search_memory|nudge|get_hardware_info|'
     r'control_gpio|read_sensor|wolfram_query|analyze_code|run_code|edit_code|'
-    r'create_file|arg)\b[^>]*/>',
+    r'create_file|arg|calculator|get_weather|get_current_time|'
+    r'agnes_image|agnes_video|agnes_tts)\b[^>]*/>',
     re.DOTALL,
 )
 
@@ -113,6 +115,17 @@ def strip_dsml(text: str) -> str:
     text = DSML_LEFTOVER.sub('', text)
     text = FAKE_XML_TOOL_PATTERN.sub('', text)
     text = TOOL_CALL_PATTERN.sub('', text)
+    # 清理其他常见的工具调用泄露格式
+    # 1. 代码块中的 function_call JSON
+    text = re.sub(r'```(?:json)?\s*\{[^}]*?function_call[^}]*?\}\s*```', '', text, flags=re.DOTALL)
+    # 2. 纯 JSON 格式的工具调用
+    text = re.sub(r'\{\s*"function_call"\s*:\s*\{[^}]*?\}\s*\}', '', text)
+    # 3. 残留的 <think>...</think> 标签
+    text = re.sub(r'<think>[\s\S]*?</think>', '', text)
+    # 4. 残留的 tool_call 代码块
+    text = re.sub(r'```tool_call[\s\S]*?```', '', text)
+    # 5. 空的代码块
+    text = re.sub(r'```\s*```', '', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 

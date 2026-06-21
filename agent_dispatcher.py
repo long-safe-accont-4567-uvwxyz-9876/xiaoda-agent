@@ -494,6 +494,8 @@ class SubAgent:
                     rc = getattr(msg, "reasoning_content", None) or ""
                     if rc:
                         content = rc
+                # 清理可能泄露的 DSML/TOOL_CALL 格式文本
+                content = strip_dsml(content)
                 logger.info("sub_agent.chat.ok", name=self.config.name, model=self.config.model, rounds=round_idx)
                 return content.strip()
 
@@ -618,7 +620,7 @@ class SubAgent:
             )
             reply = response.choices[0].message.content or ""
             rc = getattr(response.choices[0].message, "reasoning_content", None) or ""
-            return (reply or rc).strip()
+            return strip_dsml((reply or rc)).strip()
         except (asyncio.TimeoutError, Exception):
             last_tool = working[-1] if working else {}
             if isinstance(last_tool, dict) and last_tool.get("role") == "tool":
