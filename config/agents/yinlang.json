@@ -3,7 +3,7 @@
   "display_name": "银狼",
   "provider": "siliconflow",
   "model": "Nex-N2-Pro",
-  "personality_file": "/home/orangepi/ai-agent/config/agents/yinlang_personality.md",
+  "personality_file": "yinlang_personality.md",
   "voice_ref": null,
   "excluded_tools": [
     "call_klee",
