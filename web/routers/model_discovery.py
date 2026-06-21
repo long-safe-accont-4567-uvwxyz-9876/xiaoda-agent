@@ -162,6 +162,12 @@ def _build_mimo_provider() -> dict:
     return {"provider": "mimo", "models": models}
 
 
+def invalidate_discovery_cache() -> None:
+    """清除模型发现缓存，使下次请求重新获取。"""
+    _cache["data"] = None
+    _cache["ts"] = 0.0
+
+
 @router.get("/models/discover", response_model=Envelope[list[dict]])
 async def discover_models():
     """发现各 provider 的可用模型，结果缓存 30 分钟。"""

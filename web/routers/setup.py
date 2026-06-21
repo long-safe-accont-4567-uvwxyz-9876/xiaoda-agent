@@ -499,6 +499,14 @@ async def save_keys(body: dict):
     from dotenv import load_dotenv
     load_dotenv(ENV_PATH, override=True)
 
+    # 清除模型发现缓存，使新 API Key 能立即生效
+    try:
+        from web.routers.model_discovery import invalidate_discovery_cache
+        invalidate_discovery_cache()
+        logger.info("setup.discovery_cache_invalidated")
+    except Exception as e:
+        logger.warning("setup.discovery_cache_invalidate_failed error={}", str(e))
+
     # 更新 config 模块级变量，使 core.init() 能读到新的 API Key
     import config
     config.MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
