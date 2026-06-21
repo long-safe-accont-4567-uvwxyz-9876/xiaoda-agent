@@ -100,7 +100,7 @@ function handlePromptSend(text: string, options: { search?: boolean; think?: boo
   if (options.imageUrl) {
     finalText += `\n[Image: ${options.imageUrl}]`
   }
-  chat.sendMessage(finalText)
+  chat.sendMessage(finalText, options.imageUrl)
   inputText.value = ''
   // 发送特效
   const rect = inputEl.value?.getBoundingClientRect()
@@ -218,9 +218,13 @@ const emotionColors: Record<string, string> = {
             <ToolCallCard v-for="(tc, i) in msg.toolCalls" :key="i" :call="tc" />
           </div>
 
-          <div v-if="msg.role === 'assistant'" class="message-content md-body"
+          <div v-if="msg.role === 'assistant'" class="message-content md_body"
                v-html="renderMarkdown(msg.content)"></div>
-          <div v-else class="message-content plain">{{ msg.content }}</div>
+          <div v-else class="message-content plain">
+            {{ msg.content }}
+            <img v-if="msg.imageUrl" :src="msg.imageUrl" class="user-upload-img"
+                 loading="lazy" title="点击放大" @click="lightboxUrl = msg.imageUrl!" />
+          </div>
           <span v-if="msg.streaming && !msg.content" class="cursor-blink">▌</span>
 
           <!-- 生成产物区（工具产出的图/视频/语音，与表情包分离） -->
@@ -415,6 +419,10 @@ const emotionColors: Record<string, string> = {
 @keyframes blink { 50% { opacity: 0; } }
 
 .message-content.plain { white-space: pre-wrap; }
+.user-upload-img {
+  max-width: 240px; max-height: 240px; border-radius: 10px;
+  object-fit: cover; cursor: zoom-in; margin-top: 6px; display: block;
+}
 
 .tool-calls { margin-bottom: 6px; }
 

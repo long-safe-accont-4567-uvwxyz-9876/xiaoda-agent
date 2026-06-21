@@ -157,7 +157,8 @@ async def _resolve_pending_tts(core, agent: str, result, data: dict,
 async def process_and_serialize(core, text: str, session_id: str,
                                 agent: str = "nahida",
                                 status_callback=None, app=None,
-                                conn_id: str = "", msg_id: str = "") -> dict:
+                                conn_id: str = "", msg_id: str = "",
+                                image_data: list[dict] | None = None) -> dict:
     """统一处理入口：主体走 AgentCore.process；子代理直达 dispatcher（R5）。
 
     斜杠命令（/ 开头）始终走主体 process（内部路由到 SlashCommandHandler）。
@@ -194,7 +195,8 @@ async def process_and_serialize(core, text: str, session_id: str,
     else:
         result = await core.process(
             user_input=text, user_id="webui", source="web",
-            session_id=session_id, status_callback=status_callback)
+            session_id=session_id, status_callback=status_callback,
+            image_data=image_data)
         data = serialize_result(result)
     data["agent"] = agent
     data["elapsed_ms"] = int((time.time() - t0) * 1000)
@@ -281,6 +283,27 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket):
     from web.tool_events import current_msg_id
     token = current_msg_id.set(msg_id)
 
+    # 从文本中提取 [Image: URL] 标记，构建 image_data
+    image_data = None
+    import re as _re
+    _image_urls = _re.findall(r'\[Image:\s*([^\]]+)\]', text)
+    if _image_urls:
+        from pathlib import Path as _Path
+        from utils.text_utils import encode_image_to_base64
+        image_data = []
+        for url in _image_urls:
+            try:
+                # URL 格式: /media/upload/xxx.png → 映射到本地文件
+                local_path = _Path(__file__).resolve().parent / "media" / "upload" / _Path(url).name
+                if local_path.exists():
+                    mime, img_b64 = encode_image_to_base64(str(local_path))
+                    image_data.append({"mimeType": mime, "data": img_b64})
+                    logger.info("ws.image_loaded url={} size={}KB", url, len(img_b64) // 1024)
+                else:
+                    logger.warning("ws.image_not_found url={} path={}", url, local_path)
+            except Exception as e:
+                logger.warning("ws.image_load_failed url={} error={}", url, str(e))
+
     # Task 7: 流式状态推送回调 —— 受 STREAM_STATUS_PUSH 开关控制
     async def on_status(message):
         if STREAM_STATUS_PUSH:
@@ -295,7 +318,8 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket):
         data = await process_and_serialize(
             core, text, session_id=session_id, agent=agent,
             status_callback=on_status, app=app,
-            conn_id=conn_id, msg_id=msg_id)
+            conn_id=conn_id, msg_id=msg_id,
+            image_data=image_data)
         data.update({"type": "final", "msg_id": msg_id})
         await manager.send_to(conn_id, data)
     except asyncio.CancelledError:

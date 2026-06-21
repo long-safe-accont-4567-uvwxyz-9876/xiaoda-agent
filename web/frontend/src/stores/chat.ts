@@ -27,6 +27,7 @@ export interface Message {
   streaming?: boolean
   agent?: string
   timestamp: number
+  imageUrl?: string  // 用户上传的图片 URL（用于气泡内显示预览）
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -153,11 +154,14 @@ export const useChatStore = defineStore('chat', () => {
     greetingPing.value++
   })
 
-  function sendMessage(text: string) {
+  function sendMessage(text: string, imageUrl?: string) {
     if (!text.trim() || isProcessing.value) return
     const msgId = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    // 用户消息文本中去掉 [Image: ...] 标记，图片通过 imageUrl 字段单独展示
+    const displayText = text.replace(/\n?\[Image: [^\]]+\]\s*/g, '').trim() || '📷 图片'
     messages.value.push({
-      id: `u-${msgId}`, role: 'user', content: text, timestamp: Date.now(),
+      id: `u-${msgId}`, role: 'user', content: displayText, timestamp: Date.now(),
+      imageUrl,
     })
     isProcessing.value = true
     pendingMsgId.value = msgId
