@@ -111,6 +111,7 @@ def to_openai_tools() -> list[dict]:
     import tools.vision_tools
     import tools.memory_tool
     import tools.nudge_tool
+    import tools.domestic_search_tools
     if _schema_cache is not None:
         metrics.inc("tool_registry.schema_cache.hit")
         return _schema_cache
