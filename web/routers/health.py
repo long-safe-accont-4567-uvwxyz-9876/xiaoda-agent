@@ -118,124 +118,113 @@ async def last_report(request: Request):
 @router.get("/health/system", response_model=Envelope[dict])
 async def system_info():
     import platform
-    import subprocess
     data: dict = {"timestamp": time.time(), "platform": platform.system()}
 
-    # ── CPU 负载 ──
+    try:
+        import psutil
+    except ImportError:
+        # psutil 不可用时返回基本平台信息
+        return Envelope(data=data)
+
+    # ── CPU ──
+    try:
+        data["cpu_percent"] = psutil.cpu_percent(interval=0.5)
+        data["cpu_count"] = psutil.cpu_count(logical=True)
+        data["cpu_count_physical"] = psutil.cpu_count(logical=False)
+    except Exception:
+        pass
     try:
         load1, load5, load15 = os.getloadavg()
         data["load"] = [load1, load5, load15]
     except OSError:
         pass
-    if "load" not in data and platform.system() == "Windows":
-        try:
-            # Windows: 用 wmic 获取 CPU 使用率
-            out = subprocess.check_output(
-                "wmic cpu get loadpercentage /value", shell=True, timeout=5
-            ).decode(errors="ignore")
-            for line in out.strip().splitlines():
-                if line.startswith("LoadPercentage="):
-                    pct_val = int(line.split("=", 1)[1])
-                    data["load"] = [pct_val / 100.0, 0, 0]
-                    break
-        except Exception:
-            pass
-    data["cpu_count"] = os.cpu_count()
 
     # ── 内存 ──
     try:
-        meminfo = Path("/proc/meminfo").read_text()
-        mem = {}
-        for line in meminfo.splitlines()[:5]:
-            k, v = line.split(":", 1)
-            mem[k.strip()] = int(v.strip().split()[0]) * 1024
-        data["mem_total"] = mem.get("MemTotal", 0)
-        data["mem_available"] = mem.get("MemAvailable", 0)
+        mem = psutil.virtual_memory()
+        data["mem_total"] = mem.total
+        data["mem_available"] = mem.available
+        data["mem_percent"] = mem.percent
     except Exception:
         pass
-    if "mem_total" not in data and platform.system() == "Windows":
-        try:
-            import ctypes
-            kernel32 = ctypes.windll.kernel32
-            STATUS_INFO_LENGTH_MISMATCH = 0xC0000004
-            class MEMORYSTATUSEX(ctypes.Structure):
-                _fields_ = [("dwLength", ctypes.c_ulong),
-                            ("dwMemoryLoad", ctypes.c_ulong),
-                            ("ullTotalPhys", ctypes.c_ulonglong),
-                            ("ullAvailPhys", ctypes.c_ulonglong),
-                            ("ullTotalPageFile", ctypes.c_ulonglong),
-                            ("ullAvailPageFile", ctypes.c_ulonglong),
-                            ("ullTotalVirtual", ctypes.c_ulonglong),
-                            ("ullAvailVirtual", ctypes.c_ulonglong),
-                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
-            stat = MEMORYSTATUSEX()
-            stat.dwLength = ctypes.sizeof(stat)
-            kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
-            data["mem_total"] = stat.ullTotalPhys
-            data["mem_available"] = stat.ullAvailPhys
-        except Exception:
-            pass
 
-    # ── 磁盘 ──
+    # ── 交换区 ──
     try:
-        st = os.statvfs("/")
-        data["disk_total"] = st.f_blocks * st.f_frsize
-        data["disk_free"] = st.f_bavail * st.f_frsize
-    except (AttributeError, OSError):
+        swap = psutil.swap_memory()
+        data["swap_total"] = swap.total
+        data["swap_used"] = swap.used
+        data["swap_percent"] = swap.percent
+    except Exception:
         pass
-    if "disk_total" not in data and platform.system() == "Windows":
-        try:
-            import ctypes
-            free_bytes = ctypes.c_ulonglong(0)
-            total_bytes = ctypes.c_ulonglong(0)
-            ctypes.windll.kernel32.GetDiskFreeSpaceExW(
-                None, ctypes.pointer(free_bytes),
-                ctypes.pointer(total_bytes), None)
-            data["disk_total"] = total_bytes.value
-            data["disk_free"] = free_bytes.value
-        except Exception:
-            pass
+
+    # ── 磁盘（所有分区）──
+    try:
+        disks = []
+        for part in psutil.disk_partitions(all=False):
+            try:
+                usage = psutil.disk_usage(part.mountpoint)
+                disks.append({
+                    "device": part.device,
+                    "mountpoint": part.mountpoint,
+                    "fstype": part.fstype,
+                    "total": usage.total,
+                    "used": usage.used,
+                    "free": usage.free,
+                    "percent": usage.percent,
+                })
+            except (PermissionError, OSError):
+                continue
+        data["disks"] = disks
+    except Exception:
+        pass
 
     # ── 温度 ──
-    temps = []
     try:
-        for zone in sorted(Path("/sys/class/thermal").glob("thermal_zone*")):
-            try:
-                t = int((zone / "temp").read_text().strip()) / 1000.0
-                name = (zone / "type").read_text().strip()
-                temps.append({"zone": name, "temp_c": round(t, 1)})
-            except Exception:
-                continue
+        temps = psutil.sensors_temperatures()
+        temp_list = []
+        for name, entries in temps.items():
+            for entry in entries:
+                temp_list.append({
+                    "label": entry.label or name,
+                    "current": entry.current,
+                    "high": entry.high,
+                    "critical": entry.critical,
+                })
+        data["temperatures"] = temp_list
     except Exception:
-        pass
-    data["temperatures"] = temps
+        data["temperatures"] = []
 
     # ── 运行时间 ──
     try:
-        data["uptime"] = float(Path("/proc/uptime").read_text().split()[0])
+        data["uptime"] = time.time() - psutil.boot_time()
     except Exception:
         pass
-    if "uptime" not in data and platform.system() == "Windows":
-        try:
-            import ctypes
-            data["uptime"] = ctypes.windll.kernel32.GetTickCount64() / 1000.0
-        except Exception:
-            pass
 
     # ── 进程内存 ──
     try:
-        status = Path("/proc/self/status").read_text()
-        for line in status.splitlines():
-            if line.startswith("VmRSS:"):
-                data["process_rss"] = int(line.split()[1]) * 1024
-                break
+        proc = psutil.Process()
+        mem_info = proc.memory_info()
+        data["process_rss"] = mem_info.rss
+        data["process_vms"] = mem_info.vms
     except Exception:
         pass
-    if "process_rss" not in data and platform.system() == "Windows":
-        try:
-            import psutil
-            data["process_rss"] = psutil.Process().memory_info().rss
-        except Exception:
-            pass
+
+    # ── 网络 ──
+    try:
+        net = psutil.net_io_counters()
+        data["net_bytes_sent"] = net.bytes_sent
+        data["net_bytes_recv"] = net.bytes_recv
+    except Exception:
+        pass
+
+    # ── 电池（笔记本）──
+    try:
+        bat = psutil.sensors_battery()
+        if bat is not None:
+            data["battery_percent"] = bat.percent
+            data["battery_plugged"] = bat.power_plugged
+            data["battery_secs_left"] = bat.secsleft
+    except Exception:
+        pass
 
     return Envelope(data=data)

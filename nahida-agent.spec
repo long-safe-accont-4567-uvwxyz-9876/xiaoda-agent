@@ -129,6 +129,8 @@ hiddenimports = [
     # SQLite extensions
     'sqlite_vec',
 
+    'psutil',
+
     # Project sub-packages (ensure PyInstaller picks them up)
     'core',
     'core.background_tasks',

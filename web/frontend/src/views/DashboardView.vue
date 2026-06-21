@@ -141,6 +141,28 @@ function pct(used: number, total: number): number {
 function gb(bytes: number): string {
   return (bytes / 1024 / 1024 / 1024).toFixed(1)
 }
+
+function mb(bytes: number): string {
+  return (bytes / 1024 / 1024).toFixed(0)
+}
+
+function uptimeFmt(s: number): string {
+  const d = Math.floor(s / 86400)
+  const h = Math.floor((s % 86400) / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  return d > 0 ? `${d}天${h}时${m}分` : h > 0 ? `${h}时${m}分` : `${m}分`
+}
+
+const platformLabel: Record<string, string> = {
+  Windows: 'Windows',
+  Linux: 'Linux',
+  Darwin: 'macOS',
+}
+
+function diskLabel(d: any): string {
+  if (system.value.platform === 'Windows') return d.mountpoint
+  return d.mountpoint === '/' ? '/' : d.mountpoint.split('/').pop() || d.mountpoint
+}
 </script>
 
 <template>
@@ -180,34 +202,77 @@ function gb(bytes: number): string {
     <div class="chart-row">
       <div class="glass-panel chart-box monitor">
         <div class="section-header">
-          <h4>{{ system.platform || 'Linux' }} 系统监控 <span v-if="monitorEnabled" class="hint">5s 轮询</span></h4>
+          <h4>{{ platformLabel[system.platform] || system.platform || '系统' }} 监控 <span v-if="monitorEnabled" class="hint">5s 轮询</span></h4>
           <NButton v-if="!monitorEnabled" size="small" type="primary" @click="enableMonitor">开启监控</NButton>
           <NButton v-else size="small" @click="disableMonitor">关闭监控</NButton>
         </div>
         <div v-if="monitorEnabled" class="monitor-grid">
+          <!-- CPU -->
           <div class="m-item">
-            <span class="m-label">负载</span>
-            <span class="m-value mono">{{ (system.load || []).map((l: number) => l.toFixed(2)).join(' / ') || '—' }}</span>
+            <span class="m-label">CPU</span>
+            <span class="m-value mono">
+              {{ system.cpu_percent != null ? system.cpu_percent + '%' : '—' }}
+              <span v-if="system.load" class="m-sub">负载 {{ system.load.map((l: number) => l.toFixed(2)).join(' / ') }}</span>
+            </span>
+            <span v-if="system.cpu_count" class="m-sub">{{ system.cpu_count_physical || system.cpu_count }} 核</span>
           </div>
+          <!-- 内存 -->
           <div class="m-item">
             <span class="m-label">内存</span>
             <span class="m-value mono">
-              {{ system.mem_total ? `${pct(system.mem_total - system.mem_available, system.mem_total)}% · 可用 ${gb(system.mem_available)}G` : '—' }}
+              {{ system.mem_total ? `${system.mem_percent}% · 可用 ${gb(system.mem_available)}G / ${gb(system.mem_total)}G` : '—' }}
             </span>
+            <div v-if="system.mem_total" class="m-bar">
+              <div class="m-bar-fill" :style="{ width: system.mem_percent + '%' }" :class="{ warn: system.mem_percent > 85 }"></div>
+            </div>
           </div>
-          <div class="m-item">
+          <!-- 交换区 -->
+          <div class="m-item" v-if="system.swap_total">
+            <span class="m-label">交换区</span>
+            <span class="m-value mono">{{ system.swap_percent }}% · {{ gb(system.swap_used) }}G / {{ gb(system.swap_total) }}G</span>
+          </div>
+          <!-- 磁盘（所有分区）-->
+          <div class="m-item m-item-wide" v-if="system.disks?.length">
             <span class="m-label">磁盘</span>
-            <span class="m-value mono">
-              {{ system.disk_total ? `余 ${gb(system.disk_free)}G / ${gb(system.disk_total)}G` : '—' }}
-            </span>
+            <div class="disk-list">
+              <div v-for="d in system.disks" :key="d.mountpoint" class="disk-row">
+                <span class="disk-name mono">{{ diskLabel(d) }}</span>
+                <div class="m-bar">
+                  <div class="m-bar-fill" :style="{ width: d.percent + '%' }" :class="{ warn: d.percent > 90 }"></div>
+                </div>
+                <span class="disk-info mono">{{ d.percent }}% · 余 {{ gb(d.free) }}G / {{ gb(d.total) }}G</span>
+              </div>
+            </div>
           </div>
-          <div class="m-item" v-for="t in (system.temperatures || []).slice(0, 4)" :key="t.zone">
-            <span class="m-label">🌡 {{ t.zone }}</span>
-            <span class="m-value mono" :class="{ hot: t.temp_c > 70 }">{{ t.temp_c }}°C</span>
+          <!-- 温度 -->
+          <div class="m-item" v-if="system.temperatures?.length">
+            <span class="m-label">温度</span>
+            <div class="temp-list">
+              <div v-for="t in system.temperatures.slice(0, 6)" :key="t.label" class="temp-row">
+                <span class="temp-label">{{ t.label }}</span>
+                <span class="m-value mono" :class="{ hot: t.current > 70, warm: t.current > 55 && t.current <= 70 }">{{ t.current?.toFixed(0) }}°C</span>
+              </div>
+            </div>
           </div>
+          <!-- 网络 -->
+          <div class="m-item" v-if="system.net_bytes_recv != null">
+            <span class="m-label">网络 I/O</span>
+            <span class="m-value mono">↓ {{ mb(system.net_bytes_recv) }}MB · ↑ {{ mb(system.net_bytes_sent) }}MB</span>
+          </div>
+          <!-- 进程 -->
           <div class="m-item">
             <span class="m-label">进程内存</span>
-            <span class="m-value mono">{{ system.process_rss ? gb(system.process_rss) + 'G' : '—' }}</span>
+            <span class="m-value mono">{{ system.process_rss ? mb(system.process_rss) + 'MB' : '—' }}</span>
+          </div>
+          <!-- 运行时间 -->
+          <div class="m-item" v-if="system.uptime">
+            <span class="m-label">运行时间</span>
+            <span class="m-value mono">{{ uptimeFmt(system.uptime) }}</span>
+          </div>
+          <!-- 电池 -->
+          <div class="m-item" v-if="system.battery_percent != null">
+            <span class="m-label">电池</span>
+            <span class="m-value mono" :class="{ warn: system.battery_percent < 20 }">{{ system.battery_percent }}% {{ system.battery_plugged ? '充电中' : '' }}</span>
           </div>
         </div>
         <div v-else class="monitor-disabled-hint">
@@ -271,6 +336,7 @@ function gb(bytes: number): string {
 .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .section-header h4 { margin-bottom: 0; }
 .monitor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.m-item-wide { grid-column: 1 / -1; }
 .monitor-disabled-hint { color: var(--moon-dim); font-size: 12px; padding: 24px 10px; text-align: center; }
 .m-item {
   display: flex; flex-direction: column; gap: 2px;
@@ -279,7 +345,32 @@ function gb(bytes: number): string {
 }
 .m-label { font-size: 11px; color: var(--moon-dim); }
 .m-value { font-size: 14px; }
+.m-sub { font-size: 11px; color: var(--moon-dim); }
 .m-value.hot { color: var(--alert); }
+.m-value.warm { color: #e8a838; }
+.m-value.warn { color: #e8a838; }
+
+.m-bar {
+  height: 4px; border-radius: 2px;
+  background: rgba(127, 214, 80, 0.1);
+  margin-top: 4px; overflow: hidden;
+}
+.m-bar-fill {
+  height: 100%; border-radius: 2px;
+  background: var(--dendro);
+  transition: width 0.5s ease;
+}
+.m-bar-fill.warn { background: #e8a838; }
+
+.disk-list { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.disk-row { display: flex; align-items: center; gap: 8px; }
+.disk-name { font-size: 12px; min-width: 50px; color: var(--wisdom); }
+.disk-row .m-bar { flex: 1; margin: 0; }
+.disk-info { font-size: 11px; color: var(--moon-dim); white-space: nowrap; }
+
+.temp-list { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
+.temp-row { display: flex; align-items: center; gap: 4px; }
+.temp-label { font-size: 11px; color: var(--moon-dim); }
 .mono { font-family: 'JetBrains Mono', monospace; }
 
 .audit-list { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }

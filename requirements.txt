@@ -20,6 +20,9 @@ rich>=13.9.0
 # ── SILK 音频编码 ──
 pilk>=0.2.2
 
+# ── 系统监控 ──
+psutil>=6.0.0
+
 # ── 核心 ──
 python-dotenv>=1.2.2
 loguru>=0.7.3
