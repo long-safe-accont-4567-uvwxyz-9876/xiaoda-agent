@@ -274,6 +274,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ inputs.version }}"
+            VERSION="${VERSION#v}"
           else
             VERSION="${GITHUB_REF_NAME#v}"
           fi
