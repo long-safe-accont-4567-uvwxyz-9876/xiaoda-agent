@@ -184,19 +184,22 @@ async def system_info():
     except Exception as e:
         logger.warning("health.disks_failed error={}", str(e))
 
-    # ── 温度 ──
+    # ── 温度（Windows 不支持 sensors_temperatures）──
     try:
-        temps = psutil.sensors_temperatures()
-        temp_list = []
-        for name, entries in temps.items():
-            for entry in entries:
-                temp_list.append({
-                    "label": entry.label or name,
-                    "current": entry.current,
-                    "high": entry.high,
-                    "critical": entry.critical,
-                })
-        data["temperatures"] = temp_list
+        if hasattr(psutil, 'sensors_temperatures'):
+            temps = psutil.sensors_temperatures()
+            temp_list = []
+            for name, entries in temps.items():
+                for entry in entries:
+                    temp_list.append({
+                        "label": entry.label or name,
+                        "current": entry.current,
+                        "high": entry.high,
+                        "critical": entry.critical,
+                    })
+            data["temperatures"] = temp_list
+        else:
+            data["temperatures"] = []
     except Exception as e:
         logger.warning("health.temps_failed error={}", str(e))
         data["temperatures"] = []

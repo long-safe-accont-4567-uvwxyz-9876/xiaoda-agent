@@ -198,7 +198,7 @@ class TTSEngine:
             if data:
                 logger.info("tts.cache_index_loaded", total=len(data), restored=len(self._synthesis_cache), removed=removed)
         except Exception as e:
-            logger.warning("tts.cache_index_load_failed", error=str(e))
+            logger.warning("tts.cache_index_load_failed error={}", str(e))
 
     def _save_cache_index(self):
         """将缓存索引保存到 JSON 文件"""
@@ -213,7 +213,7 @@ class TTSEngine:
                     data[key] = path.name
             self._cache_index_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
-            logger.warning("tts.cache_index_save_failed", error=str(e))
+            logger.warning("tts.cache_index_save_failed error={}", str(e))
 
     async def init(self, output_dir: str | Path | None = None):
         api_key = _get_mimo_api_key()
@@ -241,7 +241,7 @@ class TTSEngine:
                     any_voice_available = True
                     logger.info("tts.voice_ready", voice=name)
                 except Exception as e:
-                    logger.warning("tts.voice_load_failed", voice=name, error=str(e))
+                    logger.warning("tts.voice_load_failed voice={} error={}", name, str(e))
             else:
                 logger.warning("tts.voice_file_missing", voice=name, path=str(path))
 
@@ -310,7 +310,7 @@ class TTSEngine:
         try:
             voice_data_url = _encode_voice_file(voice_path)
         except Exception as e:
-            logger.error("tts.voice_encode_failed", error=str(e))
+            logger.error("tts.voice_encode_failed error={}", str(e))
             return None
 
         context = style or VOICE_STYLES.get(voice, "")
@@ -386,7 +386,7 @@ class TTSEngine:
             return out
 
         except Exception as e:
-            logger.error("tts.synthesize_failed", voice=voice, error=str(e))
+            logger.error("tts.synthesize_failed voice={} error={}", voice, str(e))
             return None
 
     async def synthesize_nahida(self, text: str, style: str = "", emotion: str = "") -> Path | None:

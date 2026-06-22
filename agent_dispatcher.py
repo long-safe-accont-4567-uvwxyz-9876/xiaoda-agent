@@ -350,13 +350,13 @@ class SubAgent:
             reply = await self._chat_loop(messages, tools)
             return reply
         except Exception as e:
-            logger.warning("sub_agent.chat_failed", name=self.config.name, error=str(e))
+            logger.warning("sub_agent.chat_failed name={} error={}", self.config.name, str(e))
             if tools and _is_tool_unsupported_error(str(e)):
                 try:
                     reply = await self._chat_loop(messages, None)
                     return reply
                 except Exception as e2:
-                    logger.warning("sub_agent.fallback_failed", name=self.config.name, error=str(e2))
+                    logger.warning("sub_agent.fallback_failed name={} error={}", self.config.name, str(e2))
 
         return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
 
