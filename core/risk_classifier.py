@@ -45,7 +45,11 @@ class RiskClassifier:
     LOW_RISK_TOOLS = {"create_file", "mkdir", "touch"}
 
     # L0 安全工具名
-    SAFE_TOOLS = {"read_file", "list_dir", "search", "test", "ping", "cat", "ls", "grep"}
+    SAFE_TOOLS = {
+        "read_file", "list_dir", "search", "test", "ping", "cat", "ls", "grep",
+        # 只读生成类工具：不修改任何文件，无需证据门禁
+        "agnes_image_generate", "agnes_video_generate",
+    }
 
     def classify(self, tool_name: str, params: dict) -> RiskLevel:
         """根据工具名和参数分类风险等级"""

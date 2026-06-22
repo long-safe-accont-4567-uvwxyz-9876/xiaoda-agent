@@ -406,15 +406,41 @@ RAG_IMPORTANCE_WEIGHT = float(os.getenv("RAG_IMPORTANCE_WEIGHT", "0.20"))
 
 # MCP_SERVERS：使用 shutil.which() 动态解析命令路径，兼容 Windows/Linux/macOS
 # 不再硬编码 Orange Pi 上的绝对路径，避免在其他设备上失效
+
+
+def _resolve_command(name: str) -> str:
+    """解析命令完整路径，兼容 systemd 等受限 PATH 环境。"""
+    path = shutil.which(name)
+    if path:
+        return path
+    # shutil.which 在 systemd 等环境中可能找不到 ~/.local/bin 下的命令
+    # 检查常见安装路径
+    for candidate in [
+        Path.home() / ".local" / "bin" / name,
+        Path("/usr/local/bin") / name,
+        Path.home() / ".cargo" / "bin" / name,
+    ]:
+        if candidate.exists():
+            return str(candidate)
+    # Windows: 检查 npm 全局目录
+    if sys.platform == "win32":
+        appdata = os.getenv("APPDATA", "")
+        if appdata:
+            npm_path = Path(appdata) / "npm" / f"{name}.cmd"
+            if npm_path.exists():
+                return str(npm_path)
+    return name  # fallback: 返回命令名本身
+
+
 MCP_SERVERS = {
     "git": {
-        "command": shutil.which("uvx") or "uvx",
+        "command": _resolve_command("uvx"),
         "args": ["mcp-server-git", "--repository", str(Path.home() / "Desktop")],
         "env": {"UV_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple"},
         "agents": ["yinlang"],  # which agents can use this MCP server's tools
     },
     "github": {
-        "command": shutil.which("npx") or "npx",
+        "command": _resolve_command("npx"),
         "args": ["-y", "@modelcontextprotocol/server-github"],
         "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN", "")},
         "agents": ["yinlang"],

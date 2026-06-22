@@ -798,7 +798,7 @@ class AIQQBot(botpy.Client):
         # 2. 语音和图片并行发送
         send_tasks = []
 
-        # TTS 语音发送
+        # TTS 语音发送（同步模式：audio_path 已有缓存文件）
         if result.audio_path and result.audio_path.exists():
             async def _send_cached_audio():
                 try:
@@ -806,6 +806,21 @@ class AIQQBot(botpy.Client):
                 except Exception as e:
                     logger.warning("qq_bot.audio_send_failed", error=str(e))
             send_tasks.append(_send_cached_audio())
+
+        # TTS 语音发送（异步模式：tts_pending=True 时现场合成）
+        elif getattr(result, "tts_pending", False) and result.tts_text:
+            async def _send_async_tts():
+                try:
+                    audio_path = await self.agent.tts.synthesize_nahida(
+                        result.tts_text, emotion=result.emotion or ""
+                    )
+                    if audio_path and audio_path.exists():
+                        await self._send_audio(message, audio_path)
+                    else:
+                        logger.warning("qq_bot.async_tts_no_audio")
+                except Exception as e:
+                    logger.warning("qq_bot.async_tts_failed", error=str(e))
+            send_tasks.append(_send_async_tts())
 
         # 视频发送
         if result.video_path and result.video_path.exists():
