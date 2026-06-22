@@ -49,23 +49,8 @@ async def get_first_run():
 @router.get("/setup/version", response_model=Envelope[dict])
 async def get_version():
     """获取安装包版本号（无需认证）"""
-    version = "dev"
-    # 尝试读取 .version 文件
-    from pathlib import Path
-    # PyInstaller 打包后的路径
-    base = Path(__file__).resolve().parent.parent.parent
-    version_file = base / ".version"
-    if not version_file.exists():
-        # 尝试 _internal 目录（PyInstaller onedir）
-        version_file = base / "_internal" / ".version"
-    if not version_file.exists():
-        # 尝试可执行文件同目录
-        import sys
-        if getattr(sys, 'frozen', False):
-            version_file = Path(sys.executable).parent / ".version"
-    if version_file.exists():
-        version = version_file.read_text(encoding="utf-8").strip() or "dev"
-    return Envelope(data={"version": version})
+    from web.routers.system import _read_version
+    return Envelope(data={"version": _read_version()})
 
 
 @router.get("/setup/keys", response_model=Envelope[dict])

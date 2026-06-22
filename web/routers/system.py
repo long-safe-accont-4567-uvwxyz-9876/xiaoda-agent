@@ -16,6 +16,28 @@ router = APIRouter(tags=["system"], dependencies=[Depends(get_current_user)])
 _start_time = time.time()
 
 
+def _read_version() -> str:
+    """读取安装包版本号，从 .version 文件获取"""
+    version = "dev"
+    from pathlib import Path
+    import sys
+
+    # PyInstaller onedir 模式：.version 在可执行文件同目录
+    if getattr(sys, 'frozen', False):
+        base = Path(sys.executable).parent
+    else:
+        base = Path(__file__).resolve().parent.parent.parent
+
+    for candidate in [
+        base / ".version",
+        base / "_internal" / ".version",
+    ]:
+        if candidate.exists():
+            version = candidate.read_text(encoding="utf-8").strip() or "dev"
+            break
+    return version
+
+
 @router.get("/system/status", response_model=Envelope[SystemStatus])
 async def get_status(request: Request):
     core = request.app.state.core

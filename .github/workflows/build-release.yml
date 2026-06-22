@@ -293,6 +293,7 @@ jobs:
           New-Item -Path "dist/nahida-agent/.auto_update" -ItemType File -Force
           Copy-Item "scripts/start-windows.bat" "dist/nahida-agent/"
           Copy-Item "scripts/auto-update.bat" "dist/nahida-agent/"
+          Copy-Item "scripts/open-browser.ps1" "dist/nahida-agent/"
           Copy-Item "assets/nahida-icon.ico" "dist/nahida-agent/nahida-icon.ico"
 
           choco install nsis -y --no-progress
