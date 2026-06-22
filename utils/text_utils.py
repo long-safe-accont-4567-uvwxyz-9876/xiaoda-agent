@@ -126,6 +126,11 @@ def strip_dsml(text: str) -> str:
     text = re.sub(r'```tool_call[\s\S]*?```', '', text)
     # 5. 空的代码块
     text = re.sub(r'```\s*```', '', text)
+    # 6. 裸 JSON 工具参数（不在代码块内的独立 JSON）
+    # 6a. JSON 数组格式：[{"city": "...", ...}]
+    text = re.sub(r'(?<!```)\n?\s*\[\s*\{[\s\S]*?\}\s*\]\s*(?!```)', '', text)
+    # 6b. JSON 对象格式（含工具参数特征字段）：{"city": "...", ...}
+    text = re.sub(r'(?<!```)\n?\s*\{\s*"(?:city|query_type|search_query|query|url|keyword|prompt|text|input)"\s*:[\s\S]*?\}\s*(?!```)', '', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 

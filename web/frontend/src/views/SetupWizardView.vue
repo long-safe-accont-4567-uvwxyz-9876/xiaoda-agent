@@ -75,6 +75,14 @@ function handleUpdate(key: string, value: string) {
     testMessages[key] = ''
     testedRequiredKeys.value.delete(key)
   }
+  // SiliconFlow Key 联动：填一个自动填充另一个（如果另一个为空）
+  if (key === 'EMBED_API_KEY' && value && !updates.value['SILICONFLOW_API_KEY']) {
+    updates.value['SILICONFLOW_API_KEY'] = value
+    modifiedKeys.value.add('SILICONFLOW_API_KEY')
+  } else if (key === 'SILICONFLOW_API_KEY' && value && !updates.value['EMBED_API_KEY']) {
+    updates.value['EMBED_API_KEY'] = value
+    modifiedKeys.value.add('EMBED_API_KEY')
+  }
 }
 
 function getExtraForKey(keyName: string): Record<string, string> | undefined {

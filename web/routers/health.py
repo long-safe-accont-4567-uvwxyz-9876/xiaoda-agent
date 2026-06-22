@@ -124,9 +124,11 @@ async def system_info():
         import psutil
     except ImportError as e:
         logger.error("health.psutil_import_failed error={}", str(e))
+        data["error"] = f"psutil导入失败: {str(e)}"
         return Envelope(data=data)
     except Exception as e:
         logger.error("health.psutil_init_failed error={}", str(e))
+        data["error"] = f"psutil初始化失败: {str(e)}"
         return Envelope(data=data)
 
     # ── CPU ──
@@ -134,8 +136,8 @@ async def system_info():
         data["cpu_percent"] = psutil.cpu_percent(interval=0.5)
         data["cpu_count"] = psutil.cpu_count(logical=True)
         data["cpu_count_physical"] = psutil.cpu_count(logical=False)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("health.cpu_failed error={}", str(e))
     try:
         load1, load5, load15 = os.getloadavg()
         data["load"] = [load1, load5, load15]
@@ -148,8 +150,8 @@ async def system_info():
         data["mem_total"] = mem.total
         data["mem_available"] = mem.available
         data["mem_percent"] = mem.percent
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("health.mem_failed error={}", str(e))
 
     # ── 交换区 ──
     try:
@@ -157,8 +159,8 @@ async def system_info():
         data["swap_total"] = swap.total
         data["swap_used"] = swap.used
         data["swap_percent"] = swap.percent
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("health.swap_failed error={}", str(e))
 
     # ── 磁盘（所有分区）──
     try:
@@ -178,8 +180,8 @@ async def system_info():
             except (PermissionError, OSError):
                 continue
         data["disks"] = disks
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("health.disks_failed error={}", str(e))
 
     # ── 温度 ──
     try:
@@ -194,14 +196,15 @@ async def system_info():
                     "critical": entry.critical,
                 })
         data["temperatures"] = temp_list
-    except Exception:
+    except Exception as e:
+        logger.warning("health.temps_failed error={}", str(e))
         data["temperatures"] = []
 
     # ── 运行时间 ──
     try:
         data["uptime"] = time.time() - psutil.boot_time()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("health.uptime_failed error={}", str(e))
 
     # ── 进程内存 ──
     try:
@@ -209,16 +212,16 @@ async def system_info():
         mem_info = proc.memory_info()
         data["process_rss"] = mem_info.rss
         data["process_vms"] = mem_info.vms
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("health.process_mem_failed error={}", str(e))
 
     # ── 网络 ──
     try:
         net = psutil.net_io_counters()
         data["net_bytes_sent"] = net.bytes_sent
         data["net_bytes_recv"] = net.bytes_recv
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("health.net_failed error={}", str(e))
 
     # ── 电池（笔记本）──
     try:
@@ -227,7 +230,7 @@ async def system_info():
             data["battery_percent"] = bat.percent
             data["battery_plugged"] = bat.power_plugged
             data["battery_secs_left"] = bat.secsleft
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("health.battery_failed error={}", str(e))
 
     return Envelope(data=data)

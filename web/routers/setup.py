@@ -487,6 +487,17 @@ async def save_keys(body: dict):
     current = _load_env_values()
     merged = dict(current)
     merged.update(updates)
+
+    # SiliconFlow Key 双向同步：EMBED_API_KEY 和 SILICONFLOW_API_KEY 互相填充
+    embed_key = merged.get("EMBED_API_KEY", "").strip()
+    sf_key = merged.get("SILICONFLOW_API_KEY", "").strip()
+    if embed_key and not sf_key:
+        merged["SILICONFLOW_API_KEY"] = embed_key
+        logger.info("setup.siliconflow_key_synced direction=embed→sf")
+    elif sf_key and not embed_key:
+        merged["EMBED_API_KEY"] = sf_key
+        logger.info("setup.siliconflow_key_synced direction=sf→embed")
+
     _write_env(existing_lines, merged)
 
     # 自动注册免费模型平台为自定义 Provider
