@@ -29,6 +29,9 @@ SetCompressor /SOLID lzma
 Section "MainSection" SEC01
 SetOutPath "$INSTDIR"
 SetOverwrite on
+; 安装前清理旧的前端文件，避免 vite hash 文件名导致的缓存问题
+RMDir /r "$INSTDIR\_internal\web\dist"
+RMDir /r "$INSTDIR\web\dist"
 File /r "dist\nahida-agent\*.*"
 ; Explicitly include dotfiles (NSIS *.* may skip files starting with .)
 File "dist\nahida-agent\.version"

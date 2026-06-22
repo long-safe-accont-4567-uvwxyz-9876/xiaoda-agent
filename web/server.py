@@ -280,14 +280,15 @@ def create_app() -> FastAPI:
 
 class NoCacheHTMLStaticFiles(StaticFiles):
     """index.html 禁缓存（否则改版后旧 HTML 引用已删除的旧 chunk，导航全挂）；
-    带 hash 的 /assets/* 长缓存。"""
+    带 hash 的 /assets/* 短缓存（升级后浏览器会重新验证）。"""
 
     async def get_response(self, path, scope):
         response = await super().get_response(path, scope)
         if path in ("index.html", ".") or path.endswith(".html"):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
         elif path.startswith("assets/"):
-            response.headers["Cache-Control"] = "public, max-age=604800, immutable"
+            # 不使用 immutable，确保升级后浏览器会重新请求
+            response.headers["Cache-Control"] = "public, max-age=300"
         return response
 
 
