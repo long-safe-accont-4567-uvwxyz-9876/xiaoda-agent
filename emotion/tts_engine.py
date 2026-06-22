@@ -265,8 +265,9 @@ class TTSEngine:
         api_key = _get_mimo_api_key()
         if api_key:
             self._client = AsyncOpenAI(api_key=api_key, base_url=MIMO_BASE_URL)
-            logger.info("tts.client_refreshed",
-                        key_suffix=api_key[-6:] if len(api_key) >= 6 else "***")
+            self._available = True
+            logger.info("tts.client_refreshed key_suffix={}",
+                        api_key[-6:] if len(api_key) >= 6 else "***")
         else:
             self._client = None
             self._available = False
