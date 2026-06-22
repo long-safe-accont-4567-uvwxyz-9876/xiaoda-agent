@@ -531,6 +531,13 @@ async def save_keys(body: dict):
     from dotenv import load_dotenv
     load_dotenv(ENV_PATH, override=True)
 
+    # 兜底：如果 load_dotenv 未生效（Windows/PyInstaller 环境常见），
+    # 直接将用户提交的值写入 os.environ
+    for k, v in updates.items():
+        v = v.strip() if isinstance(v, str) else ""
+        if v and not os.getenv(k, ""):
+            os.environ[k] = v
+
     # 清除模型发现缓存，使新 API Key 能立即生效
     try:
         from web.routers.model_discovery import invalidate_discovery_cache
@@ -567,10 +574,11 @@ async def save_keys(body: dict):
         logger.warning("setup.credential_pool_reset_failed error={}", str(e))
 
     # 更新 config 模块级变量，使 core.init() 能读到新的 API Key
+    # 优先使用用户刚提交的值（updates），回退到 os.getenv（load_dotenv 可能不生效）
     import config
-    config.MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
-    config.DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-    config.AGNES_API_KEY = os.getenv("AGNES_API_KEY", "")
+    config.MIMO_API_KEY = updates.get("MIMO_API_KEY", os.getenv("MIMO_API_KEY", ""))
+    config.DEEPSEEK_API_KEY = updates.get("DEEPSEEK_API_KEY", os.getenv("DEEPSEEK_API_KEY"))
+    config.AGNES_API_KEY = updates.get("AGNES_API_KEY", os.getenv("AGNES_API_KEY", ""))
 
     # 重建 ModelRouter 的 MiMo/Agnes 客户端（核心修复：使新 Key 立即生效）
     try:
