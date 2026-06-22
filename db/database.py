@@ -194,9 +194,11 @@ class DatabaseManager:
         if current < 6:
             try:
                 await self._conn.execute("BEGIN TRANSACTION")
-                await self._conn.execute(
-                    "ALTER TABLE episodic_memories ADD COLUMN access_count INTEGER DEFAULT 0"
-                )
+                cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
+                if "access_count" not in cols:
+                    await self._conn.execute(
+                        "ALTER TABLE episodic_memories ADD COLUMN access_count INTEGER DEFAULT 0"
+                    )
                 await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (6, ?)", (time.time(),))
                 await self._conn.commit()
                 logger.info("database.migration_v6", desc="episodic_memories.access_count")

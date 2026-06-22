@@ -26,8 +26,9 @@ _CACHE_TTL = 30 * 60  # 30 minutes
 # 非聊天模型关键词（用于过滤 /v1/models 返回的专用模型）
 _NON_CHAT_KEYWORDS = (
     "embed", "tts", "asr", "stt", "rerank",
-    "image-gen", "diffusion", "ocr", "captioner",
-    "mt-", "translation", "speech",
+    "image-gen", "image", "diffusion", "ocr", "captioner",
+    "mt-", "translation", "speech", "video",
+    "whisper", "parakeet", "bge",
 )
 
 
@@ -41,6 +42,9 @@ async def _fetch_openai_compatible_models(
 
     返回模型列表，每个模型包含 id/display_name/free/tool_calling/vision/provider。
     对于无法确定免费/付费的模型，默认标记为 free=True。
+
+    支持多种响应格式：标准 {"data": [...]}、备用 {"models": [...]}、根数组 [...]，
+    以及列表元素为字符串或含 id/name/model 字段的 dict。
     """
     try:
         import httpx
@@ -53,9 +57,38 @@ async def _fetch_openai_compatible_models(
             resp.raise_for_status()
             body = resp.json()
 
+        # 从多种响应格式中提取模型列表
+        raw_items = None
+        if isinstance(body, list):
+            raw_items = body
+        elif isinstance(body, dict):
+            data = body.get("data")
+            if isinstance(data, list):
+                raw_items = data
+            elif isinstance(data, dict) and isinstance(data.get("models"), list):
+                raw_items = data["models"]
+            elif isinstance(body.get("models"), list):
+                raw_items = body["models"]
+
+        if raw_items is None:
+            body_preview = str(body)[:500]
+            logger.warning(
+                "discover.unsupported_format provider={} body_preview={}",
+                provider_id, body_preview,
+            )
+            return []
+
         models = []
-        for item in body.get("data", []):
-            model_id = item.get("id", "")
+        for item in raw_items:
+            # item 可能是字符串或 dict
+            if isinstance(item, str):
+                model_id = item
+                item = {}
+            elif isinstance(item, dict):
+                model_id = item.get("id", "") or item.get("name", "") or item.get("model", "")
+            else:
+                continue
+
             if not model_id:
                 continue
 
@@ -245,7 +278,13 @@ def _get_all_providers() -> list[dict]:
         from web.routers.models import load_provider_key
         cfg = get_config_service()
         custom = cfg.get("models.providers", {}) or {}
-        for pid, p in custom.items():
+        # 按 order 字段升序排列；未设置 order 的排在已设置之后，按字典插入顺序
+        keys_order = list(custom.keys())
+        sorted_custom = sorted(
+            custom.items(),
+            key=lambda kv: (kv[1].get("order", 9999), keys_order.index(kv[0]))
+        )
+        for pid, p in sorted_custom:
             if not p.get("enabled", True):
                 continue
             key = load_provider_key(pid)
@@ -258,6 +297,7 @@ def _get_all_providers() -> list[dict]:
                 "base_url": p.get("base_url", ""),
                 "api_key": key,
                 "builtin": False,
+                "order": p.get("order", 9999),
             })
     except Exception as e:
         logger.warning("discover.load_providers_failed error={}", str(e))
@@ -369,6 +409,15 @@ async def set_chat_model(body: dict, request: Request):
     try:
         info = router_obj.set_chat_model(provider, model_id)
         logger.info("discover.chat_model_set provider={} model={}", provider, model_id)
+        # 广播 config_changed WS 事件，通知前端刷新 Agent 模型选项
+        try:
+            from web.ws_hub import manager
+            await manager.broadcast({
+                "type": "config_changed",
+                "payload": {"type": "chat_model", "provider": provider, "model_id": model_id},
+            })
+        except Exception as e:
+            logger.warning("discover.chat_model_broadcast_failed error={}", str(e))
         return Envelope(data=info)
     except Exception as e:
         logger.error("discover.set_chat_model_failed error={}", str(e))
@@ -421,18 +470,3 @@ def _ensure_custom_provider(provider: str, router_obj) -> None:
             return
 
     logger.warning("discover.unknown_provider provider={}", provider)
-
-
-# ── GET /models/chat-model ───────────────────────────────────────
-
-
-@router.get("/models/chat-model", response_model=Envelope[dict])
-async def get_chat_model(request: Request):
-    """获取当前聊天模型信息。"""
-    try:
-        router_obj = request.app.state.core.router
-        info = router_obj.get_current_chat_model()
-        return Envelope(data=info or {})
-    except Exception as e:
-        logger.error("discover.get_chat_model_failed error={}", str(e))
-        return Envelope(data={})

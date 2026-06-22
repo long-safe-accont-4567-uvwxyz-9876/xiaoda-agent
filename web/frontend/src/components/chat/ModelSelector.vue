@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { NPopover, NTag, NSpin, useMessage } from 'naive-ui'
 import { get, post } from '../../api'
 
@@ -17,27 +17,48 @@ interface ProviderGroup {
   models: ModelInfo[]
 }
 
+interface CurrentModel {
+  provider: string
+  model_id: string
+  label: string
+}
+
 const message = useMessage()
 
-const currentProvider = ref('')
-const currentModelId = ref('')
+const currentModel = ref<CurrentModel>({
+  provider: '',
+  model_id: '',
+  label: '选择模型'
+})
 const providers = ref<ProviderGroup[]>([])
 const loading = ref(false)
 const showPopover = ref(false)
 
-const currentDisplayName = computed(() => {
+function buildModelLabel(provider: string, modelId: string): string {
+  if (!provider && !modelId) return '选择模型'
+  let providerLabel = provider
+  let modelDisplayName = modelId
   for (const pg of providers.value) {
-    for (const m of pg.models) {
-      if (pg.provider === currentProvider.value && m.id === currentModelId.value) {
-        return m.display_name
+    if (pg.provider === provider) {
+      providerLabel = pg.label || pg.provider
+      for (const m of pg.models) {
+        if (m.id === modelId) {
+          modelDisplayName = m.display_name
+          break
+        }
       }
+      break
     }
   }
-  return currentModelId.value || '选择模型'
-})
+  return `${providerLabel} / ${modelDisplayName}`
+}
+
+function updateCurrentModelLabel() {
+  currentModel.value.label = buildModelLabel(currentModel.value.provider, currentModel.value.model_id)
+}
 
 function isCurrent(provider: string, modelId: string): boolean {
-  return provider === currentProvider.value && modelId === currentModelId.value
+  return provider === currentModel.value.provider && modelId === currentModel.value.model_id
 }
 
 async function selectModel(provider: string, model: ModelInfo) {
@@ -47,8 +68,11 @@ async function selectModel(provider: string, model: ModelInfo) {
   }
   try {
     await post('/models/chat-model', { provider, model_id: model.id })
-    currentProvider.value = provider
-    currentModelId.value = model.id
+    currentModel.value = {
+      provider,
+      model_id: model.id,
+      label: buildModelLabel(provider, model.id)
+    }
     showPopover.value = false
     emit('change', provider, model.id)
     if (!model.tool_calling) {
@@ -62,8 +86,11 @@ async function selectModel(provider: string, model: ModelInfo) {
 async function fetchCurrentModel() {
   try {
     const data = await get<{ provider: string; model_id: string }>('/models/chat-model')
-    currentProvider.value = data.provider
-    currentModelId.value = data.model_id
+    currentModel.value = {
+      provider: data.provider,
+      model_id: data.model_id,
+      label: buildModelLabel(data.provider, data.model_id)
+    }
   } catch { /* 静默 */ }
 }
 
@@ -72,6 +99,8 @@ async function fetchModels() {
   try {
     const data = await get<ProviderGroup[]>('/models/discover')
     providers.value = data
+    // providers 加载完成后，重新计算当前模型标签（处理异步加载顺序）
+    updateCurrentModelLabel()
   } catch { /* 静默 */ }
   loading.value = false
 }
@@ -96,7 +125,7 @@ const emit = defineEmits<{
   >
     <template #trigger>
       <button class="model-chip">
-        <span class="model-name">{{ currentDisplayName }}</span>
+        <span class="model-name">{{ currentModel.label }}</span>
         <span class="arrow-icon" :class="{ open: showPopover }">▾</span>
       </button>
     </template>
@@ -154,7 +183,7 @@ const emit = defineEmits<{
 }
 
 .model-name {
-  max-width: 140px;
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

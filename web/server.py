@@ -36,6 +36,8 @@ async def _apply_model_overrides(core):
         env_values = _load_env_values()
     except Exception:
         env_values = {}
+    # _KNOWN_ENV_PROVIDERS 保持现有顺序（SiliconFlow 第一）
+    known_env_keys = list(_KNOWN_ENV_PROVIDERS.keys())
     for env_key, (pid, fmt, base_url, label) in _KNOWN_ENV_PROVIDERS.items():
         # Ollama 特殊处理：env 值是 base_url 而非 API Key
         if env_key == "OLLAMA_BASE_URL":
@@ -53,6 +55,7 @@ async def _apply_model_overrides(core):
             cfg.set(f"models.providers.{pid}", {
                 "label": label, "format": fmt, "base_url": base_url,
                 "default_model": "", "enabled": True,
+                "order": known_env_keys.index(env_key),
             })
         # 确保证书文件存在
         from config import get_credentials_dir
@@ -66,7 +69,14 @@ async def _apply_model_overrides(core):
             except OSError:
                 pass
 
-    for pid, p in (cfg.get("models.providers", {}) or {}).items():
+    # 按 order 字段处理 Provider 注册顺序；未设置 order 的排在已设置之后，按字典插入顺序
+    all_providers = cfg.get("models.providers", {}) or {}
+    all_keys_order = list(all_providers.keys())
+    sorted_providers = sorted(
+        all_providers.items(),
+        key=lambda kv: (kv[1].get("order", 9999), all_keys_order.index(kv[0]))
+    )
+    for pid, p in sorted_providers:
         key = load_provider_key(pid)
         if key and p.get("enabled", True):
             try:
@@ -99,6 +109,23 @@ async def _apply_model_overrides(core):
             entry.pop("thinking", None)
         if o.get("timeout"):
             core.router.TASK_TIMEOUTS[task] = o["timeout"]
+
+    # 恢复上次聊天模型（从 config_service 的 models.chat_model 读取）
+    chat_model = cfg.get("models.chat_model")
+    if isinstance(chat_model, dict) and chat_model.get("provider") and chat_model.get("model_id"):
+        provider = chat_model["provider"]
+        model_id = chat_model["model_id"]
+        try:
+            core.router.set_chat_model(provider, model_id)
+            logger.info("webui.chat_model_restored provider={} model={}", provider, model_id)
+        except Exception as e:
+            logger.warning("webui.chat_model_restore_failed provider={} model={} error={} fallback_to_mimo", provider, model_id, str(e))
+            # Provider 或模型已失效，回退到 MiMo 默认模型
+            try:
+                from model_router import MIMO_MODEL
+                core.router.set_chat_model("mimo", MIMO_MODEL)
+            except Exception:
+                pass
 
 
 async def _start_user_mcp_servers(core):

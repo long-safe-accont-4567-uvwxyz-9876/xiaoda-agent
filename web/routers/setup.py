@@ -664,6 +664,8 @@ def _auto_register_providers(updates: dict) -> None:
 
     cfg = get_config_service()
     existing = cfg.get("models.providers", {}) or {}
+    # 基于 _KNOWN_PROVIDERS 插入顺序计算 order 索引
+    known_keys = list(_KNOWN_PROVIDERS.keys())
 
     for env_key, provider_info in _KNOWN_PROVIDERS.items():
         # Ollama 特殊处理：无需 API Key，只需要 base_url
@@ -700,9 +702,10 @@ def _auto_register_providers(updates: dict) -> None:
                 "base_url": base_url,
                 "default_model": "",
                 "enabled": True,
+                "order": known_keys.index(env_key),
             }
             cfg.set(f"models.providers.{pid}", record)
-            logger.info("setup.auto_provider_registered id={}", pid)
+            logger.info("setup.auto_provider_registered id={} order={}", pid, known_keys.index(env_key))
 
         # 注册到运行时 router
         try:

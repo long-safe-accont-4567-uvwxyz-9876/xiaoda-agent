@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import {
   NButton, NSwitch, NModal, NForm, NFormItem, NInput, NInputNumber,
   NSelect, NTabs, NTabPane, NTag, NPopconfirm, NDynamicTags, NCollapse,
@@ -7,10 +7,12 @@ import {
 } from 'naive-ui'
 import { get, post, put, del, api } from '../api'
 import { useAgentsStore } from '../stores/agents'
+import { getWsClient } from '../api/ws'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 
 const message = useMessage()
 const agentsStore = useAgentsStore()
+const ws = getWsClient()
 
 const showEditor = ref(false)
 const isCreate = ref(false)
@@ -27,9 +29,21 @@ const discoveredModels = ref<Array<{ provider: string; label?: string; models: A
 const advancedTouched = ref(false)
 const switchingModel = ref(false)
 
+function onConfigChanged(e: any) {
+  const payload = e.payload as { type?: string } | undefined
+  if (payload?.type === 'chat_model') {
+    loadDiscoveredModels()
+  }
+}
+
 onMounted(() => {
   agentsStore.load().catch((e) => message.error(e.message))
   loadDiscoveredModels()
+  ws.on('config_changed', onConfigChanged)
+})
+
+onBeforeUnmount(() => {
+  ws.off('config_changed', onConfigChanged)
 })
 
 async function loadDiscoveredModels() {

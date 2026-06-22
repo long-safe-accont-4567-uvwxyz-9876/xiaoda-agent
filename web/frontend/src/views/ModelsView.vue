@@ -4,6 +4,7 @@ import {
   NButton, NSwitch, NModal, NForm, NFormItem, NInput, NInputNumber,
   NSelect, NTag, NPopconfirm, NRadioGroup, NRadio, useMessage,
 } from 'naive-ui'
+import draggable from 'vuedraggable'
 import { get, post, put, del } from '../api'
 import * as echarts from 'echarts/core'
 import { BarChart } from 'echarts/charts'
@@ -28,6 +29,14 @@ const chartEl = ref<HTMLElement | null>(null)
 
 const providerOptions = computed(() =>
   providers.value.map(p => ({ label: `${p.label} (${p.id})`, value: p.id })))
+
+const builtinProviders = computed(() => providers.value.filter(p => p.builtin))
+const customProviders = computed({
+  get: () => providers.value.filter(p => !p.builtin),
+  set: (val: any[]) => {
+    providers.value = [...builtinProviders.value, ...val]
+  },
+})
 
 onMounted(loadAll)
 
@@ -151,6 +160,17 @@ async function testRoute(task: string) {
   }
 }
 
+async function onDragEnd() {
+  try {
+    const order = customProviders.value.map(p => p.id)
+    await post('/models/providers/reorder', { order })
+    message.success('Provider 顺序已更新 ✓')
+  } catch (e: any) {
+    message.error(e.message)
+    await loadAll()
+  }
+}
+
 const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning', dead: 'error' }
 </script>
 
@@ -164,7 +184,7 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
     <section class="glass-panel section">
       <h3>Provider 列表</h3>
       <div class="provider-list">
-        <div v-for="p in providers" :key="p.id" class="provider-row">
+        <div v-for="p in builtinProviders" :key="p.id" class="provider-row">
           <div class="provider-info">
             <span class="p-label">{{ p.label }}</span>
             <n-tag size="small" :type="p.format === 'anthropic' ? 'warning' : 'info'" :bordered="false">
@@ -180,13 +200,42 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
               {{ testResults[p.id].ok ? `✓ ${testResults[p.id].latency_ms}ms` : `✗ ${testResults[p.id].error?.slice(0, 60)}` }}
             </span>
             <n-button size="tiny" :loading="testingId === p.id" @click="testProvider(p.id)">测试</n-button>
-            <n-button v-if="!p.builtin" size="tiny" @click="openProviderForm(p)">编辑</n-button>
-            <n-popconfirm v-if="!p.builtin" @positive-click="removeProvider(p.id)">
-              <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
-              确认删除 provider {{ p.id }}？
-            </n-popconfirm>
           </div>
         </div>
+        <draggable
+          v-model="customProviders"
+          item-key="id"
+          :disabled="false"
+          handle=".drag-handle"
+          @end="onDragEnd"
+        >
+          <template #item="{ element: p }">
+            <div class="provider-row">
+              <div class="provider-info">
+                <span class="drag-handle" title="拖拽排序">☰</span>
+                <span class="p-label">{{ p.label }}</span>
+                <n-tag size="small" :type="p.format === 'anthropic' ? 'warning' : 'info'" :bordered="false">
+                  {{ p.format === 'anthropic' ? 'Anthropic 兼容' : 'OpenAI 兼容' }}
+                </n-tag>
+                <n-tag v-if="p.builtin" size="small" :bordered="false">内置</n-tag>
+                <span class="p-url">{{ p.base_url }}</span>
+                <span class="p-key">{{ p.key_masked || '（未配置 Key）' }}</span>
+              </div>
+              <div class="provider-ops">
+                <span v-if="testResults[p.id]" class="test-badge"
+                      :class="{ ok: testResults[p.id].ok }">
+                  {{ testResults[p.id].ok ? `✓ ${testResults[p.id].latency_ms}ms` : `✗ ${testResults[p.id].error?.slice(0, 60)}` }}
+                </span>
+                <n-button size="tiny" :loading="testingId === p.id" @click="testProvider(p.id)">测试</n-button>
+                <n-button v-if="!p.builtin" size="tiny" @click="openProviderForm(p)">编辑</n-button>
+                <n-popconfirm v-if="!p.builtin" @positive-click="removeProvider(p.id)">
+                  <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
+                  确认删除 provider {{ p.id }}？
+                </n-popconfirm>
+              </div>
+            </div>
+          </template>
+        </draggable>
       </div>
     </section>
 
@@ -310,6 +359,16 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
 .p-url { font-size: 12px; color: var(--moon-dim); font-family: 'JetBrains Mono', monospace; }
 .p-key { font-size: 12px; color: var(--wisdom); font-family: 'JetBrains Mono', monospace; }
 .provider-ops { display: flex; align-items: center; gap: 6px; }
+
+.drag-handle {
+  cursor: grab;
+  color: var(--moon-dim);
+  font-size: 14px;
+  user-select: none;
+  padding: 0 4px;
+  line-height: 1;
+}
+.drag-handle:active { cursor: grabbing; }
 
 .test-badge { font-size: 12px; color: var(--alert); max-width: 260px; }
 .test-badge.ok { color: var(--dendro); }

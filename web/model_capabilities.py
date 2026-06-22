@@ -457,7 +457,8 @@ def infer_from_name(model_id: str) -> ModelCapabilities:
     # Specialized models that do NOT support tool calling
     _NO_TOOL_KEYWORDS = (
         "ocr", "caption", "mt-", "translate", "embedding", "rerank",
-        "tts", "asr", "stt", "speech", "image-gen", "diffusion",
+        "tts", "asr", "stt", "speech", "image-gen", "image", "diffusion",
+        "video", "whisper", "parakeet", "bge",
     )
     # Thinking/reasoning-only models often have limited tool support
     _THINKING_ONLY = "thinking" in lower and "instruct" not in lower
@@ -467,11 +468,10 @@ def infer_from_name(model_id: str) -> ModelCapabilities:
     elif _THINKING_ONLY:
         tool_calling = False
     else:
-        # 保守策略：只有明确包含工具调用关键词的才标注支持
-        _TOOL_KEYWORDS = (
-            "instruct", "chat", "coder", "agent", "function",
-        )
-        tool_calling = any(kw in lower for kw in _TOOL_KEYWORDS)
+        # 现代策略：默认假设现代 LLM 支持工具调用
+        # 只有明确不支持的模型才标注为不支持（已在上面过滤）
+        # 这样可以覆盖更多支持工具调用的模型（如 Agnes、Llama、Mistral 等）
+        tool_calling = True
 
     # Provider from prefix
     if "/" in model_id:
@@ -512,22 +512,26 @@ def get_capabilities(
 
     # Priority 2: OpenRouter data
     if openrouter_data is not None:
-        tool_calling = False
         vision = False
 
         arch = openrouter_data.get("architecture", {})
         if isinstance(arch, dict):
-            inst_type = arch.get("instruction_type", "")
-            if inst_type and inst_type != "none":
-                tool_calling = True
+            # 检查 architecture.modality 字段（OpenRouter 的标准格式）
+            arch_modality = arch.get("modality", "")
+            if isinstance(arch_modality, str):
+                vision = "image" in arch_modality.lower()
 
+        # 也检查顶层的 modality 字段（备用）
         modality = openrouter_data.get("modality", "")
         if isinstance(modality, str):
-            # modality can be e.g. "text+image->text"
-            vision = "image" in modality.lower()
+            vision = vision or "image" in modality.lower()
         elif isinstance(modality, dict):
-            # some endpoints return modality as an object
-            vision = "image" in str(modality).lower()
+            vision = vision or "image" in str(modality).lower()
+
+        # 工具调用：OpenRouter 的 instruct_type 经常为 None，不可靠
+        # 优先使用启发式推断（覆盖更准确），仅当有明确 instruct_type 时才使用 OpenRouter 数据
+        inferred = infer_from_name(model_id)
+        tool_calling = inferred.tool_calling
 
         if "/" in model_id:
             provider = model_id.split("/")[0]

@@ -142,6 +142,7 @@ do_build() {
         info "Copying Windows launcher bat into dist directory..."
         cp "$SCRIPT_DIR/start-windows.bat" "$dist_dir/start-windows.bat"
         cp "$SCRIPT_DIR/auto-update.bat" "$dist_dir/auto-update.bat"
+        cp "$SCRIPT_DIR/open-browser.ps1" "$dist_dir/open-browser.ps1"
 
         # Copy icon file for NSIS
         cp "$PROJECT_ROOT/assets/nahida-icon.ico" "$dist_dir/nahida-icon.ico"

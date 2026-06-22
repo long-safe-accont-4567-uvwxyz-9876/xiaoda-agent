@@ -71,14 +71,20 @@ async def _broadcast_changed():
 
 def list_providers_data(cfg) -> list[dict]:
     out = []
-    # MiMo 内置 provider — 只在有 API key 时显示
+    # MiMo 内置 provider — 只在有 API key 时显示（始终第一位，order=-1）
     mimo_key = os.getenv("MIMO_API_KEY", "")
     if mimo_key:
         out.append({"id": "mimo", "label": "小米 MiMo", "format": "openai",
                      "base_url": os.getenv("MIMO_BASE_URL", ""), "builtin": True,
                      "key_masked": _mask(mimo_key), "enabled": True})
     custom = cfg.get("models.providers", {}) or {}
-    for pid, p in custom.items():
+    # 按 order 字段升序排列；未设置 order 的排在已设置之后，按字典插入顺序
+    keys_order = list(custom.keys())
+    sorted_custom = sorted(
+        custom.items(),
+        key=lambda kv: (kv[1].get("order", 9999), keys_order.index(kv[0]))
+    )
+    for pid, p in sorted_custom:
         key = load_provider_key(pid)
         # 没有 API key 的自定义 provider 不显示
         if not key:
@@ -92,6 +98,7 @@ def list_providers_data(cfg) -> list[dict]:
             "key_masked": _mask(key),
             "enabled": p.get("enabled", True),
             "default_model": p.get("default_model", ""),
+            "order": p.get("order", 9999),
         })
     return out
 
@@ -201,6 +208,27 @@ async def set_provider_key(pid: str, body: dict, request: Request):
     return Envelope(data={"id": pid, "key_masked": _mask(api_key)})
 
 
+@router.post("/models/providers/reorder", response_model=Envelope[dict])
+async def reorder_providers(body: dict, request: Request):
+    order_list = body.get("order")
+    if not isinstance(order_list, list):
+        raise HTTPException(400, "order 必须是字符串数组")
+    cfg = _cfg(request)
+    custom = cfg.get("models.providers", {}) or {}
+    # 忽略 mimo（内置 provider 不可重排序）
+    filtered = [pid for pid in order_list if pid != "mimo"]
+    # 仅更新列表中且实际存在的 provider；不在列表中的 provider 保留原 order 值
+    for idx, pid in enumerate(filtered):
+        if pid in custom:
+            record = dict(custom[pid])
+            record["order"] = idx
+            cfg.set(f"models.providers.{pid}", record)
+    await _audit(request, "provider.reorder", json.dumps(filtered, ensure_ascii=False))
+    await _broadcast_changed()
+    logger.info("providers.reordered count={}", len(filtered))
+    return Envelope(data={"ok": True})
+
+
 # ── routes（任务路由表）──────────────────────────────────────────
 
 
@@ -254,6 +282,24 @@ async def update_route(task: str, body: dict, request: Request):
     await _broadcast_changed()
     return Envelope(data={"task": task, "model": entry["model"],
                           "provider": entry.get("client", "mimo")})
+
+
+@router.get("/models/chat-model", response_model=Envelope[dict])
+async def get_chat_model(request: Request):
+    cfg = _cfg(request)
+    # 优先从 config_service 的 models.chat_model 读取（如果存在）
+    chat_model = cfg.get("models.chat_model")
+    if isinstance(chat_model, dict) and chat_model.get("provider") \
+            and chat_model.get("model_id"):
+        return Envelope(data={"provider": chat_model["provider"],
+                              "model_id": chat_model["model_id"]})
+    # 否则从 model_router.ROUTE_TABLE["chat"] 读取
+    from model_router import ROUTE_TABLE
+    chat_route = ROUTE_TABLE.get("chat", {})
+    return Envelope(data={
+        "provider": chat_route.get("client", "mimo"),
+        "model_id": chat_route.get("model", ""),
+    })
 
 
 # ── 凭证池状态 ───────────────────────────────────────────────────

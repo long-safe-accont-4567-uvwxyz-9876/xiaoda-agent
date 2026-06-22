@@ -200,6 +200,15 @@ class ModelRouter:
             if provider not in self._custom_clients:
                 raise RuntimeError(f"自定义 provider {provider} 未注册，请先注册客户端")
         self._current_chat_model = {"provider": provider, "model_id": model_id}
+        # 持久化到 config_service，以便重启后恢复上次聊天模型
+        try:
+            from web.config_service import get_config_service
+            get_config_service().set(
+                "models.chat_model",
+                {"provider": provider, "model_id": model_id},
+            )
+        except Exception as e:
+            logger.warning("router.chat_model_persist_failed error={}", str(e))
         logger.info("router.chat_model_changed", provider=provider, model=model_id)
         return {"provider": provider, "model_id": model_id}
 

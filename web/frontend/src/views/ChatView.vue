@@ -173,6 +173,10 @@ function clearAll() {
   message.success('对话已清空（历史记录仍可在会话抽屉找回）')
 }
 
+function onModelChange(provider: string, modelId: string) {
+  console.log('[ChatView] 模型已切换:', provider, modelId)
+}
+
 function fmtTime(ts: number): string {
   return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
@@ -197,7 +201,7 @@ const emotionColors: Record<string, string> = {
       </n-button>
       <a v-if="chat.sessionId" class="export-link"
          :href="exportSessionUrl(chat.sessionId)" target="_blank">⬇ 导出</a>
-      <ModelSelector style="margin-left: auto" />
+      <ModelSelector style="margin-left: auto" @change="onModelChange" />
       <span class="session-label">{{ chat.sessionId }}</span>
     </div>
 
