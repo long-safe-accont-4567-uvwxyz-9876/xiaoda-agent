@@ -18,6 +18,15 @@ def get_base_dir() -> Path:
 
 load_dotenv(get_base_dir() / ".env")
 
+# 确保 PyInstaller 打包后 HTTPS 请求能找到 CA 证书
+# certifi 的 cacert.pem 必须被正确打包，否则所有 API 请求都会因 SSL 错误失败
+try:
+    import certifi
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+except ImportError:
+    pass
+
 _KIOXIA_BASE = Path(os.getenv("KIOXIA_DATA_DIR", str(Path.home() / ".ai-agent" / "data")))
 _FALLBACK_BASE = Path(__file__).resolve().parent
 
