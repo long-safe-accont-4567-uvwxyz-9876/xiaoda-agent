@@ -139,9 +139,10 @@ async def system_info():
     except Exception as e:
         logger.warning("health.cpu_failed error={}", str(e))
     try:
+        # os.getloadavg() 仅存在于 Unix/Linux，Windows 上会抛 AttributeError
         load1, load5, load15 = os.getloadavg()
         data["load"] = [load1, load5, load15]
-    except OSError:
+    except (AttributeError, OSError):
         pass
 
     # ── 内存 ──

@@ -361,6 +361,12 @@ class TTSEngine:
 
             audio_bytes = base64.b64decode(message.audio.data)
 
+            # 音频数据过小检查：小于 1KB 说明 API 返回了无效数据
+            if len(audio_bytes) < 1024:
+                logger.warning("tts.audio_too_small", voice=voice,
+                               size=len(audio_bytes), text_len=len(text))
+                return None
+
             if output_path:
                 out = Path(output_path)
             else:

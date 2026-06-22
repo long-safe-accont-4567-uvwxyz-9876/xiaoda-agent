@@ -186,25 +186,11 @@ class SubAgent:
 
         self._initialized = self._client is not None
         if self._initialized:
-            # API Key 探活：发一个极短请求验证凭证有效性
-            probe_enabled = os.environ.get("SUBAGENT_PROBE_ENABLED", "on").lower() in ("on", "1", "true")
-            if probe_enabled:
-                try:
-                    await asyncio.wait_for(
-                        self._client.chat.completions.create(
-                            model=self.config.model,
-                            messages=[{"role": "user", "content": "hi"}],
-                            max_tokens=1,
-                        ),
-                        timeout=15,
-                    )
-                    logger.info("sub_agent.probe_ok", name=self.config.name)
-                except Exception as e:
-                    logger.warning("sub_agent.probe_failed", name=self.config.name, error=str(e)[:200])
-                    # 降级模式：保留 client 供后续重试，但标记为不可用
-                    self._degraded = True
-            else:
-                logger.info("sub_agent.initialized", name=self.config.name, provider=self.config.provider, model=self.config.model)
+            # 探活已禁用：max_tokens=1 在某些 API 上会被拒绝，
+            # 且 4 个子 Agent 串行探活会消耗配额/触发限流。
+            # 实际调用时如果 Key 无效会自然报错，无需提前探活。
+            logger.info("sub_agent.initialized", name=self.config.name,
+                        provider=self.config.provider, model=self.config.model)
 
     def set_credential_pool(self, pool: CredentialPool):
         """设置凭证池（由父代理传递）"""
