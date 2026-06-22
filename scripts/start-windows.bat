@@ -63,7 +63,7 @@ echo.
 if exist "%~dp0open-browser.ps1" (
     start "" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0open-browser.ps1" -Port 8082
 ) else (
-    start "" powershell -NoProfile -ExecutionPolicy Bypass -Command "$u='http://localhost:8082/api/v1/setup/first-run';for($i=0;$i -lt 300;$i++){try{$r=Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 2 -NoProxy 'localhost';if($r.StatusCode -eq 200){$j=$r.Content|ConvertFrom-Json;if($j.data.first_run){Start-Process 'http://localhost:8082/#/setup'}else{Start-Process 'http://localhost:8082/#/login'};break}}catch{};Start-Sleep -Seconds 1}"
+    start "" powershell -NoProfile -ExecutionPolicy Bypass -Command "[System.Net.WebRequest]::DefaultWebProxy=New-Object System.Net.WebProxy; $u='http://localhost:8082/api/v1/setup/first-run'; for($i=0;$i -lt 300;$i++){try{$r=Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop;if($r.StatusCode -eq 200){$j=$r.Content|ConvertFrom-Json;try{$fr=[bool]$j.data.first_run}catch{$fr=$false}; if($fr){Start-Process 'http://localhost:8082/#/setup'}else{Start-Process 'http://localhost:8082/#/login'};break}}catch{};Start-Sleep -Seconds 1}"
 )
 
 :: Run the main executable
