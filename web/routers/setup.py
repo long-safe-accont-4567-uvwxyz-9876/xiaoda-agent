@@ -553,6 +553,11 @@ async def save_keys(body: dict):
             if tts_engine and hasattr(tts_engine, "refresh_client"):
                 tts_engine.refresh_client()
                 logger.info("setup.tts_client_refreshed")
+            # 刷新所有子 Agent 客户端（清除降级标记，用新 Key 重建）
+            dispatcher = getattr(app.state.core, "dispatcher", None)
+            if dispatcher and hasattr(dispatcher, "refresh_all_clients"):
+                n = dispatcher.refresh_all_clients()
+                logger.info("setup.sub_agents_refreshed", count=n)
     except Exception as e:
         logger.warning("setup.router_client_refresh_failed error={}", str(e))
 

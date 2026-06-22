@@ -231,6 +231,7 @@ class SubAgent:
         self.config.base_url = base_url
         self.config.api_key_env = api_key_env
         self._initialized = True
+        self._degraded = False  # 清除降级标记：新 Key 已就位，允许调用
         logger.info("sub_agent.model_reloaded",
                     name=self.config.name, provider=provider, model=model)
         return True
@@ -319,6 +320,18 @@ class SubAgent:
         return names
 
     async def chat(self, message: str, context: str = "", status_callback=None) -> str:
+        # 降级模式下尝试自动恢复：用最新环境变量中的 Key 重建客户端
+        if self._degraded:
+            api_key = _read_env_key(self.config.api_key_env)
+            if api_key and self.config.base_url:
+                try:
+                    self._client = AsyncOpenAI(api_key=api_key, base_url=self.config.base_url)
+                    self._degraded = False
+                    self._initialized = True
+                    logger.info("sub_agent.auto_recovered", name=self.config.name)
+                except Exception:
+                    pass
+
         if not self.available:
             return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
 
@@ -795,3 +808,23 @@ class AgentDispatcher:
     @property
     def agent_names(self) -> list[str]:
         return list(self._agents.keys())
+
+    def refresh_all_clients(self) -> int:
+        """刷新所有子 Agent 的客户端（Setup 保存新 Key 后调用）。
+
+        清除降级标记，用最新环境变量中的 Key 重建客户端。
+        返回成功刷新的子 Agent 数量。
+        """
+        count = 0
+        for name, agent in self._agents.items():
+            try:
+                api_key = _read_env_key(agent.config.api_key_env)
+                if api_key and agent.config.base_url:
+                    agent._client = AsyncOpenAI(api_key=api_key, base_url=agent.config.base_url)
+                    agent._initialized = True
+                    agent._degraded = False  # 清除降级标记
+                    count += 1
+                    logger.info("sub_agent.client_refreshed", name=name)
+            except Exception as e:
+                logger.warning("sub_agent.client_refresh_failed", name=name, error=str(e)[:200])
+        return count
