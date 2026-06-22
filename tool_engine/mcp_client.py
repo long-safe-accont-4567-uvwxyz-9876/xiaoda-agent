@@ -8,7 +8,9 @@ import asyncio
 import json
 import os
 import shutil
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -22,7 +24,8 @@ def _resolve_command_path(command: str) -> str:
 
     - 如果 command 是 npx/uvx/node 等短命令名，用 shutil.which() 查找完整路径
     - Windows 上 shutil.which("npx") 可能返回 C:\\Program Files\\nodejs\\npx.cmd
-    - 如果找不到，返回原始 command（让子进程启动时报错）
+    - 如果找不到，检查常见安装路径（systemd 等受限 PATH 环境）
+    - 如果仍找不到，返回原始 command（让子进程启动时报错）
     """
     if not command:
         return command
@@ -33,6 +36,21 @@ def _resolve_command_path(command: str) -> str:
     resolved = shutil.which(command)
     if resolved:
         return resolved
+    # shutil.which 在 systemd 等环境中可能找不到 ~/.local/bin 下的命令
+    for candidate in [
+        Path.home() / ".local" / "bin" / command,
+        Path("/usr/local/bin") / command,
+        Path.home() / ".cargo" / "bin" / command,
+    ]:
+        if candidate.exists():
+            return str(candidate)
+    # Windows: 检查 npm 全局目录
+    if sys.platform == "win32":
+        appdata = os.getenv("APPDATA", "")
+        if appdata:
+            npm_path = Path(appdata) / "npm" / f"{command}.cmd"
+            if npm_path.exists():
+                return str(npm_path)
     return command  # 返回原始值，让子进程报错
 
 
@@ -129,7 +147,7 @@ class MCPClient:
             # Start reading loop
             self._read_task = asyncio.create_task(self._read_loop())
 
-            # 1) initialize
+            # 1) initialize（uvx/npx 首次运行需下载安装包，给 60 秒超时）
             init_result = await self._request({
                 "jsonrpc": "2.0",
                 "method": "initialize",
@@ -138,7 +156,7 @@ class MCPClient:
                     "capabilities": {},
                     "clientInfo": {"name": "nahida-agent", "version": "1.0.0"},
                 },
-            })
+            }, timeout=60.0)
 
             if not init_result:
                 raise RuntimeError(f"MCP server '{self.server_name}' initialize failed: no response")
@@ -156,7 +174,7 @@ class MCPClient:
             tools_result = await self._request({
                 "jsonrpc": "2.0",
                 "method": "tools/list",
-            })
+            }, timeout=30.0)
 
             if not tools_result:
                 raise RuntimeError(f"MCP server '{self.server_name}' tools/list failed: no response")

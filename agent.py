@@ -61,12 +61,31 @@ def _run_cli():
 
 
 def _run_web(host: str, port: int):
+    import socket
     import uvicorn
     from utils.logging_config import setup_logging
     setup_logging()
 
     from loguru import logger
     logger.info("agent.web.start", port=port)
+
+    # 端口冲突检测：启动前检查端口是否可用，等待旧进程释放
+    for attempt in range(30):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.settimeout(1)
+                s.bind((host, port))
+                break
+        except OSError:
+            if attempt == 0:
+                logger.warning(f"agent.port_in_use port={port}, waiting for old process to release...")
+            if attempt < 29:
+                import time
+                time.sleep(2)
+            else:
+                logger.error(f"agent.port_still_in_use port={port}, giving up after 60s")
+                sys.exit(1)
 
     # 直接传 app 对象，避免 uvicorn 动态导入失败（PyInstaller 兼容）
     try:
