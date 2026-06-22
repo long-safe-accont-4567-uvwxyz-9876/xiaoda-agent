@@ -299,6 +299,15 @@ class CredentialPool:
                     base_url=base_url,
                 ))
 
+        # Ollama 本地部署，无需真实 API Key，使用占位 Key
+        ollama_url = os.getenv("OLLAMA_BASE_URL", "")
+        if ollama_url:
+            self.add_credential(Credential(
+                api_key="ollama",  # 占位 Key
+                provider="ollama",
+                base_url=ollama_url,
+            ))
+
         # 统计
         total = sum(len(creds) for creds in self._pool.values())
         providers = list(self._pool.keys())

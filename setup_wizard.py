@@ -136,6 +136,13 @@ OPTIONAL_KEYS = [
         "url": "https://modelscope.cn",
         "url_desc": "注册 → 个人中心 → 访问令牌",
     },
+    {
+        "key": "OLLAMA_BASE_URL",
+        "label": "Ollama 本地大模型",
+        "desc": "本地部署的 Ollama 服务地址（需带 /v1 后缀），用于接入本地大模型（如 Qwen、Llama 等）。示例：http://localhost:11434/v1。填入后可在聊天和 Agent 配置中切换使用。本地部署无需 API Key，留空即可。",
+        "url": "https://ollama.com",
+        "url_desc": "下载安装 Ollama",
+    },
 ]
 
 ALL_KEYS = REQUIRED_KEYS + OPTIONAL_KEYS

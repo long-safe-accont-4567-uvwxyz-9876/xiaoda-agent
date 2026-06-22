@@ -28,6 +28,7 @@ async def _apply_model_overrides(core):
         "OPENROUTER_API_KEY": ("openrouter", "openai", "https://openrouter.ai/api/v1", "OpenRouter"),
         "MODELSCOPE_ACCESS_TOKEN": ("modelscope", "openai", "https://api-inference.modelscope.cn/v1", "ModelScope 魔搭"),
         "AGNES_API_KEY": ("agnes", "openai", os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1"), "Agnes AI"),
+        "OLLAMA_BASE_URL": ("ollama", "openai", os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"), "Ollama 本地大模型"),
     }
     # 从 .env 文件读取，而非 os.environ，防止构建环境变量泄露到用户安装包
     try:
@@ -36,9 +37,16 @@ async def _apply_model_overrides(core):
     except Exception:
         env_values = {}
     for env_key, (pid, fmt, base_url, label) in _KNOWN_ENV_PROVIDERS.items():
-        api_key = env_values.get(env_key, "").strip()
-        if not api_key:
-            continue
+        # Ollama 特殊处理：env 值是 base_url 而非 API Key
+        if env_key == "OLLAMA_BASE_URL":
+            api_key = "ollama"  # 占位 Key
+            base_url = env_values.get(env_key, "").strip() or base_url
+            if not base_url:
+                continue
+        else:
+            api_key = env_values.get(env_key, "").strip()
+            if not api_key:
+                continue
         # 确保配置中有记录
         existing = cfg.get("models.providers", {}) or {}
         if pid not in existing:

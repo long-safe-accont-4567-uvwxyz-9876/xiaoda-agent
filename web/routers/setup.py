@@ -351,6 +351,24 @@ async def _test_github(key_value: str) -> tuple[bool, str]:
         return False, f"GitHub API 请求失败: {e}"
 
 
+async def _test_ollama(base_url: str) -> tuple[bool, str]:
+    """测试 Ollama 服务连通性。"""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(f"{base_url.rstrip('/')}/models")
+            if resp.status_code == 200:
+                data = resp.json()
+                models = data.get("data", [])
+                return True, f"Ollama 可用，发现 {len(models)} 个模型"
+            return False, f"Ollama 返回 HTTP {resp.status_code}"
+    except httpx.ConnectError:
+        return False, f"无法连接到 Ollama 服务（{base_url}），请确认 Ollama 已启动"
+    except httpx.TimeoutException:
+        return False, "Ollama 连接超时"
+    except Exception as e:
+        return False, f"Ollama 请求失败: {e}"
+
+
 async def test_single_key(key_name: str, key_value: str, extra: dict | None = None) -> tuple[bool, str]:
     """根据 key_name 调用对应的测试函数，返回 (success, message)。"""
     extra = extra or {}
@@ -393,6 +411,9 @@ async def test_single_key(key_name: str, key_value: str, extra: dict | None = No
 
     if key_name == "GITHUB_PERSONAL_ACCESS_TOKEN":
         return await _test_github(key_value)
+
+    if key_name == "OLLAMA_BASE_URL":
+        return await _test_ollama(key_value)
 
     # 不需要调用外部 API 的配置项，简单校验即可
     _NO_API_TEST_KEYS = {"WEBUI_PASSWORD"}
@@ -625,6 +646,13 @@ _KNOWN_PROVIDERS = {
         "format": "openai",
         "base_url": "https://apihub.agnes-ai.com/v1",
     },
+    "OLLAMA_BASE_URL": {
+        "id": "ollama",
+        "label": "Ollama 本地大模型",
+        "format": "openai",
+        "base_url": "",  # 从 OLLAMA_BASE_URL 环境变量动态读取
+        "requires_key": False,
+    },
 }
 
 
@@ -638,9 +666,17 @@ def _auto_register_providers(updates: dict) -> None:
     existing = cfg.get("models.providers", {}) or {}
 
     for env_key, provider_info in _KNOWN_PROVIDERS.items():
-        api_key = updates.get(env_key, "").strip()
-        if not api_key:
-            continue
+        # Ollama 特殊处理：无需 API Key，只需要 base_url
+        if env_key == "OLLAMA_BASE_URL":
+            base_url = updates.get(env_key, "").strip()
+            if not base_url:
+                continue
+            api_key = "ollama"  # 占位 Key
+        else:
+            api_key = updates.get(env_key, "").strip()
+            if not api_key:
+                continue
+            base_url = provider_info["base_url"]
 
         pid = provider_info["id"]
 
@@ -661,7 +697,7 @@ def _auto_register_providers(updates: dict) -> None:
             record = {
                 "label": provider_info["label"],
                 "format": provider_info["format"],
-                "base_url": provider_info["base_url"],
+                "base_url": base_url,
                 "default_model": "",
                 "enabled": True,
             }
@@ -685,7 +721,7 @@ def _auto_register_providers(updates: dict) -> None:
                 register_into_router(
                     router_obj, pid,
                     provider_info["format"],
-                    provider_info["base_url"],
+                    base_url,
                     api_key,
                 )
                 logger.info("setup.auto_provider_runtime id={}", pid)
