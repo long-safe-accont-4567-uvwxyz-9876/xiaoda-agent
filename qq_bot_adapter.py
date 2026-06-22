@@ -540,10 +540,19 @@ class AIQQBot(botpy.Client):
             return
 
         try:
-            await message.reply(content="纳西妲收到啦，正在想～🌿", msg_seq=_next_msg_seq())
+            # 群聊被动回复有次数限制（5分钟内最多2次），不要浪费在"收到啦"上
+            # 只在处理时间较长时通过 status_notify 通知
 
             async def status_notify(msg: str):
-                await message.reply(content=msg, msg_seq=_next_msg_seq())
+                # 群聊中使用主动消息发送状态通知，避免消耗被动回复配额
+                try:
+                    await self.api.post_group_message(
+                        group_openid=message.group_openid,
+                        msg_type=0, content=msg,
+                        msg_seq=_next_msg_seq(),
+                    )
+                except Exception as _e:
+                    logger.debug("qq_bot.status_notify_failed", error=str(_e))
 
             result = await self.agent.process(user_input, user_id=user_id, source="qq_group",
                                               user_openid=member_openid,
@@ -590,16 +599,33 @@ class AIQQBot(botpy.Client):
                         group_openid=group_openid, file_type=1, url=image_url
                     )
                     file_info = media.file_info
-                await self.api.post_group_message(
-                    group_openid=group_openid, msg_id=message.id,
-                    msg_type=7, content=reply,
-                    media={"file_info": file_info}, msg_seq=_next_msg_seq()
-                )
+                try:
+                    # 先尝试被动回复（需要 msg_id）
+                    await self.api.post_group_message(
+                        group_openid=group_openid, msg_id=message.id,
+                        msg_type=7, content=reply,
+                        media={"file_info": file_info}, msg_seq=_next_msg_seq()
+                    )
+                except Exception as e:
+                    if "被动回复" in str(e) or "超过限制" in str(e):
+                        # 被动回复超限，改用主动消息（不需要 msg_id）
+                        logger.info("qq_bot.passive_reply_limited_switching_to_proactive")
+                        await self.api.post_group_message(
+                            group_openid=group_openid,
+                            msg_type=7, content=reply,
+                            media={"file_info": file_info}, msg_seq=_next_msg_seq()
+                        )
+                    else:
+                        raise
             else:
                 await message.reply(content=reply, msg_seq=_next_msg_seq())
         except Exception as e:
             logger.warning("qq_bot.media_send_failed", error=str(e))
-            await message.reply(content=reply, msg_seq=_next_msg_seq())
+            # 最终兜底：尝试纯文本回复
+            try:
+                await message.reply(content=reply, msg_seq=_next_msg_seq())
+            except Exception as _e:
+                logger.debug("qq_bot.fallback_reply_failed", error=str(_e))
 
     async def _upload_c2c_base64(self, openid: str, image_path: Path, file_type: int = 1) -> str:
         from botpy.http import Route
@@ -864,14 +890,27 @@ class AIQQBot(botpy.Client):
                 )
             elif isinstance(message, GroupMessage):
                 file_info = await self._upload_group_base64(message.group_openid, video_path, file_type=2)
-                await self.api.post_group_message(
-                    group_openid=message.group_openid,
-                    msg_type=7,
-                    content="",
-                    media={"file_info": file_info},
-                    msg_seq=_next_msg_seq(),
-                    msg_id=message.id
-                )
+                try:
+                    await self.api.post_group_message(
+                        group_openid=message.group_openid,
+                        msg_type=7,
+                        content="",
+                        media={"file_info": file_info},
+                        msg_seq=_next_msg_seq(),
+                        msg_id=message.id
+                    )
+                except Exception as e:
+                    if "被动回复" in str(e) or "超过限制" in str(e):
+                        logger.info("qq_bot.video_passive_limited_switching_to_proactive")
+                        await self.api.post_group_message(
+                            group_openid=message.group_openid,
+                            msg_type=7,
+                            content="",
+                            media={"file_info": file_info},
+                            msg_seq=_next_msg_seq(),
+                        )
+                    else:
+                        raise
             logger.info("qq_bot.video_sent", video_path=str(video_path))
         except Exception as e:
             logger.error("qq_bot.video_send_error", error=str(e), video_path=str(video_path))
@@ -901,11 +940,22 @@ class AIQQBot(botpy.Client):
             elif isinstance(message, GroupMessage):
                 group_openid = message.group_openid
                 file_info = await self._upload_group_base64(group_openid, silk_path, file_type=3)
-                await self.api.post_group_message(
-                    group_openid=group_openid, msg_id=message.id,
-                    msg_type=7, content="",
-                    media={"file_info": file_info}, msg_seq=_next_msg_seq()
-                )
+                try:
+                    await self.api.post_group_message(
+                        group_openid=group_openid, msg_id=message.id,
+                        msg_type=7, content="",
+                        media={"file_info": file_info}, msg_seq=_next_msg_seq()
+                    )
+                except Exception as e:
+                    if "被动回复" in str(e) or "超过限制" in str(e):
+                        logger.info("qq_bot.audio_passive_limited_switching_to_proactive")
+                        await self.api.post_group_message(
+                            group_openid=group_openid,
+                            msg_type=7, content="",
+                            media={"file_info": file_info}, msg_seq=_next_msg_seq()
+                        )
+                    else:
+                        raise
         except Exception as e:
             logger.warning("qq_bot.audio_send_error", error=str(e))
         finally:
