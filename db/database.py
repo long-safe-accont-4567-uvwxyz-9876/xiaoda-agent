@@ -37,6 +37,13 @@ class DatabaseManager:
         self.analytics: AnalyticsDB | None = None
 
     async def init(self):
+        # 幂等性：如果已有活跃连接，先关闭旧连接再创建新连接
+        if self._conn is not None:
+            try:
+                await self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
         self._conn = await aiosqlite.connect(str(self.db_path))
         self._conn.row_factory = aiosqlite.Row
         # WAL 模式 + 缓存优化（与向量库保持一致）

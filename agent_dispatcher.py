@@ -191,6 +191,12 @@ class SubAgent:
             # 实际调用时如果 Key 无效会自然报错，无需提前探活。
             logger.info("sub_agent.initialized", name=self.config.name,
                         provider=self.config.provider, model=self.config.model)
+        else:
+            # 客户端创建失败（API Key 未找到或 base_url 缺失），
+            # 标记为降级模式：仍注册但实际调用时回退到主 Agent
+            self._degraded = True
+            logger.warning("sub_agent.degraded_no_client", name=self.config.name,
+                           reason="api_key_missing" if not _read_env_key(self.config.api_key_env) else "no_base_url")
 
     def set_credential_pool(self, pool: CredentialPool):
         """设置凭证池（由父代理传递）"""

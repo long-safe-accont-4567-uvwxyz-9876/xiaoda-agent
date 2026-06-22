@@ -36,35 +36,85 @@ class AgentCoreBootstrapper:
     def __init__(self, core: AgentCore):
         self.core = core
 
-    async def bootstrap(self) -> None:
-        """执行完整的初始化流程。缺少 API Key 时降级启动，仅提供 WebUI 设置页面。"""
+    async def bootstrap(self, reinit: bool = False) -> None:
+        """执行完整的初始化流程。缺少 API Key 时降级启动，仅提供 WebUI 设置页面。
+
+        Args:
+            reinit: 为 True 时跳过已初始化的基础设施和认知系统，
+                    仅执行降级模式中未完成的步骤（klee/tts/sub_agents 等）。
+                    各步骤独立容错，单个步骤失败不会阻止核心聊天功能。
+        """
         from config import MIMO_API_KEY as _mimo_key
         if not _mimo_key or not _mimo_key.strip():
             logger.warning("agent_core.degraded_mode reason=no_mimo_api_key")
-            # 仅初始化数据库等不依赖 API Key 的基础设施
-            try:
-                await self._init_infrastructure()
-                _ensure_workspace_template()
-                await self._init_cognitive()
-            except Exception as e:
-                logger.warning("agent_core.degraded_init_partial_error error={}", str(e))
+            if not reinit:
+                # 首次降级启动：初始化基础设施
+                try:
+                    await self._init_infrastructure()
+                    _ensure_workspace_template()
+                    await self._init_cognitive()
+                except Exception as e:
+                    logger.warning("agent_core.degraded_init_partial_error error={}", str(e))
             # _initialized 保持 False → process() 返回降级回复
             return
 
-        await self._init_infrastructure()
-        _ensure_workspace_template()
-        await self._init_cognitive()
-        await self.core.klee.init()
-        # 确保参考音频已复制到用户数据目录
-        self._ensure_voice_refs()
-        self._ensure_stickers()
-        await self.core.tts.init()
-        await self._register_sub_agents()
-        await self._build_task_graph()
-        await self._init_interaction()
-        await self._init_mcp()
+        if reinit:
+            # 降级模式恢复：跳过已初始化的基础设施和认知系统
+            logger.info("agent_core.reinit_skipping_infrastructure")
+        else:
+            await self._init_infrastructure()
+            _ensure_workspace_template()
+            await self._init_cognitive()
+
+        # 以下步骤各自独立容错：单个可选功能失败不应阻止核心聊天
+        # klee 子代理（可选）
+        try:
+            await self.core.klee.init()
+        except Exception as e:
+            logger.warning("agent_core.reinit_klee_failed error={}", str(e))
+
+        # 参考音频和表情包（可选，仅复制文件）
+        try:
+            self._ensure_voice_refs()
+        except Exception as e:
+            logger.warning("agent_core.reinit_voice_refs_failed error={}", str(e))
+        try:
+            self._ensure_stickers()
+        except Exception as e:
+            logger.warning("agent_core.reinit_stickers_failed error={}", str(e))
+
+        # TTS 引擎（可选）
+        try:
+            await self.core.tts.init()
+        except Exception as e:
+            logger.warning("agent_core.reinit_tts_failed error={}", str(e))
+
+        # 子代理注册（可选，失败不影响主 Agent 聊天）
+        try:
+            await self._register_sub_agents()
+        except Exception as e:
+            logger.warning("agent_core.reinit_sub_agents_failed error={}", str(e))
+
+        # 任务图（可选，复杂任务路由需要）
+        try:
+            await self._build_task_graph()
+        except Exception as e:
+            logger.warning("agent_core.reinit_task_graph_failed error={}", str(e))
+
+        # 交互层（可选，包含斜杠命令、画像等）
+        try:
+            await self._init_interaction()
+        except Exception as e:
+            logger.warning("agent_core.reinit_interaction_failed error={}", str(e))
+
+        # MCP 服务器（可选）
+        try:
+            await self._init_mcp()
+        except Exception as e:
+            logger.warning("agent_core.reinit_mcp_failed error={}", str(e))
+
         self.core._initialized = True
-        logger.info("agent_core.initialized")
+        logger.info("agent_core.initialized" + (" (reinit)" if reinit else ""))
 
     # ── 基础设施 ──────────────────────────────────────────
 

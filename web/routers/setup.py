@@ -594,17 +594,19 @@ async def save_keys(body: dict):
         logger.warning("setup.router_client_refresh_failed error={}", str(e))
 
     # 尝试重新初始化 core（从降级模式恢复）
+    need_restart = True
     try:
         from web.server import app
         if hasattr(app, "state") and hasattr(app.state, "core"):
             core = app.state.core
             if not core._initialized:
                 logger.info("setup.reinitializing_core")
-                await core.init()
+                await core.init(reinit=True)
                 if core._initialized:
                     from web.server import _start_services
                     await _start_services(app, core)
                     logger.info("setup.core_reinitialized")
+                    need_restart = False
                     # 刷新 AgentRegistry
                     try:
                         from web.agent_registry import AgentRegistry
@@ -614,10 +616,16 @@ async def save_keys(body: dict):
                             logger.info("setup.registry_refreshed")
                     except Exception as e:
                         logger.warning("setup.registry_refresh_failed error={}", str(e))
+                else:
+                    logger.error("setup.core_reinit_failed reason=still_not_initialized")
+            else:
+                # core 已经初始化（非降级模式），无需重新初始化
+                need_restart = False
     except Exception as e:
-        logger.warning("setup.core_reinit_failed error={}", str(e))
+        import traceback
+        logger.error("setup.core_reinit_failed error={} traceback={}", str(e), traceback.format_exc())
 
-    return Envelope(data={"saved": list(updates.keys()), "need_restart": True})
+    return Envelope(data={"saved": list(updates.keys()), "need_restart": need_restart})
 
 
 # 已知免费模型平台 → Provider 映射

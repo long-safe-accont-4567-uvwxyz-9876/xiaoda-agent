@@ -215,9 +215,9 @@ class AgentCore:
     def hook_engine(self):
         return self._hook_engine
 
-    async def init(self) -> None:
+    async def init(self, reinit: bool = False) -> None:
         bootstrapper = AgentCoreBootstrapper(self)
-        await bootstrapper.bootstrap()
+        await bootstrapper.bootstrap(reinit=reinit)
 
     def _resolve_identity(self, user_id: str, user_openid: str = "") -> UserIdentity:
         """运行时身份解析：基于 openID/UID 稳定标识判断用户身份，不依赖消息内容。"""
