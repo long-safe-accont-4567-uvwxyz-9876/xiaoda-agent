@@ -89,6 +89,8 @@ jobs:
         shell: bash
         run: |
           [ -d web/dist ] && rm -rf web/dist || true
+          # 清理 PyInstaller 构建缓存，确保全量重建（--clean 只清理 build/ 不清理 dist/）
+          rm -rf build/ dist/ 2>/dev/null || true
           # 确保 .env 和敏感文件不被打包进安装包
           rm -f .env .env.prod .env.local 2>/dev/null || true
           rm -f config/webui_overrides.json 2>/dev/null || true

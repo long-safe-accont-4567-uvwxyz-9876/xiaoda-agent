@@ -17,7 +17,20 @@ MIMO_TTS_MODEL = os.getenv("MIMO_TTS_MODEL", "mimo-v2.5-tts-voiceclone")
 
 def _get_mimo_api_key() -> str:
     """动态读取 MIMO_API_KEY，确保 setup 保存后能生效"""
-    return os.getenv("MIMO_API_KEY", "") or MIMO_API_KEY
+    key = os.getenv("MIMO_API_KEY", "") or MIMO_API_KEY
+    if key:
+        return key
+    # fallback: 从 .env 文件读取（PyInstaller 打包后 os.getenv 可能为空）
+    import sys
+    if getattr(sys, 'frozen', False):
+        env_path = Path(sys.executable).parent / ".env"
+    else:
+        env_path = Path(__file__).resolve().parent.parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("MIMO_API_KEY="):
+                return line.split("=", 1)[1].strip()
+    return ""
 
 
 _voice_ref_dir = os.getenv("VOICE_REF_DIR", "")
