@@ -122,8 +122,11 @@ async def system_info():
 
     try:
         import psutil
-    except ImportError:
-        # psutil 不可用时返回基本平台信息
+    except ImportError as e:
+        logger.error("health.psutil_import_failed error={}", str(e))
+        return Envelope(data=data)
+    except Exception as e:
+        logger.error("health.psutil_init_failed error={}", str(e))
         return Envelope(data=data)
 
     # ── CPU ──
