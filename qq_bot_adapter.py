@@ -545,11 +545,15 @@ class AIQQBot(botpy.Client):
                 await message.reply(content=f"你的 OpenID 是：\n{member_openid}\n\n在 Setup 配置页面的「主人 QQ OpenID」填入此值即可绑定主人身份。", msg_seq=_next_msg_seq())
                 return
 
-            # 群聊被动回复有次数限制（5分钟内最多2次），不要浪费在"收到啦"上
-            # 只在处理时间较长时通过 status_notify 通知
+            # 群聊被动回复有次数限制（5分钟内最多2次）
+            # 先用 1 次被动回复发"收到啦"给用户即时反馈，剩余配额留给最终回复
+            try:
+                await message.reply(content="纳西妲收到啦，正在想～🌿", msg_seq=_next_msg_seq())
+            except Exception as _e:
+                logger.debug("qq_bot.ack_reply_failed", error=str(_e))
 
             async def status_notify(msg: str):
-                # 群聊中使用主动消息发送状态通知，避免消耗被动回复配额
+                # 后续状态通知用主动消息，避免消耗被动回复配额
                 try:
                     await self.api.post_group_message(
                         group_openid=message.group_openid,
