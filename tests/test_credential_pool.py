@@ -105,7 +105,7 @@ class TestCredentialPool(unittest.TestCase):
         self.assertEqual(stats["mimo"]["ok"], 0)
 
     def test_report_error_auth(self):
-        """认证错误将凭证标记为 dead"""
+        """认证错误将凭证标记为 exhausted（连续 AUTH_ERROR 达阈值才 DEAD）"""
         cred = Credential(api_key="sk-auth1234567", provider="mimo")
         self.pool.add_credential(cred)
         # 先使用一次
@@ -121,9 +121,10 @@ class TestCredentialPool(unittest.TestCase):
         )
         _run_async(self.pool.report_error("mimo", error))
 
-        # 验证凭证状态变为 dead
+        # 验证凭证状态变为 exhausted（首次 AUTH_ERROR 不直接 DEAD）
         stats = self.pool.get_stats()
-        self.assertEqual(stats["mimo"]["dead"], 1)
+        self.assertEqual(stats["mimo"]["dead"], 0)
+        self.assertEqual(stats["mimo"]["exhausted"], 1)
         self.assertEqual(stats["mimo"]["ok"], 0)
 
 

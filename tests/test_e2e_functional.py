@@ -376,6 +376,7 @@ class TestSubAgentSticker:
                 core = AgentCore()
                 core.sticker_manager = mock_sticker
                 core.klee_sticker_manager = MagicMock(available=False)
+                core.klee_sticker_manager.strip_emotion_tag.side_effect = lambda x: x
                 core.dispatcher = MagicMock()
                 core.dispatcher.get_agent.return_value = MagicMock(
                     available=True,
