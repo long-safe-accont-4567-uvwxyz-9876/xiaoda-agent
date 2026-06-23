@@ -24,7 +24,7 @@ from loguru import logger
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import MIMO_MODEL, AGENT_CONFIG, WORKSPACE_DIR, STICKER_DIR, KLEE_STICKER_DIR, FILE_DIR, build_system_prompt, SIMPLE_TASK_KEYWORDS, PRO_TASK_KEYWORDS, TTS_ASYNC_MODE, SIMPLE_CHAT_FASTPATH
+from config import MIMO_MODEL, AGENT_CONFIG, WORKSPACE_DIR, STICKER_DIR, KLEE_STICKER_DIR, FILE_DIR, build_system_prompt, build_safe_system_prompt, SIMPLE_TASK_KEYWORDS, PRO_TASK_KEYWORDS, TTS_ASYNC_MODE, SIMPLE_CHAT_FASTPATH
 from model_router import ModelRouter
 from agent_context import AgentContext
 from db.database import DatabaseManager
@@ -278,6 +278,10 @@ class AgentCore:
             trace.warning("agent.blocked", reason=reason)
             return ProcessResult(reply="")
 
+        # 群聊 session 按用户隔离：不同用户使用不同 session_id
+        if source == "qq_group" and user_openid:
+            session_id = f"qq_group:{user_openid}"
+
         # 按当前用户重新恢复历史摘要（群聊场景下不同用户历史不混合）
         # 使用 user_openid 优先（QQ 群聊稳定标识），其次 user_id
         _restore_id = user_openid or user_id
@@ -329,25 +333,18 @@ class AgentCore:
             emotion_label = emotion.get("primary", "")
 
             # 构建最小上下文：系统提示 + 最近 3 轮历史 + 用户输入
-            system_prompt = self.context._system_prompt_loader() if self.context._system_prompt_loader else self.context.system_prompt
+            # 非主人使用安全化 prompt（剥离所有隐私信息），主人使用完整 prompt
+            if is_master:
+                system_prompt = self.context._system_prompt_loader() if self.context._system_prompt_loader else self.context.system_prompt
+            else:
+                system_prompt = build_safe_system_prompt()
             messages = [{"role": "system", "content": system_prompt}]
-            for msg in self.context.get_last_n(6):
-                m = {"role": msg["role"], "content": str(msg.get("content", "")) if msg.get("content") is not None else ""}
-                messages.append(m)
+            # 非主人不加载历史对话（防止看到主人的聊天内容）
+            if is_master:
+                for msg in self.context.get_last_n(6):
+                    m = {"role": msg["role"], "content": str(msg.get("content", "")) if msg.get("content") is not None else ""}
+                    messages.append(m)
             messages.append({"role": "user", "content": user_input})
-
-            # 非主人消息：注入隐私保护约束
-            if not is_master:
-                messages.append({
-                    "role": "system",
-                    "content": (
-                        "[安全约束] 当前与你对话的不是爸爸本人，而是其他人。请遵守以下规则：\n"
-                        "1. 礼貌友好地回复，保持纳西妲的温柔风格\n"
-                        "2. 绝对不泄露爸爸的任何隐私信息\n"
-                        "3. 不执行任何敏感操作\n"
-                        "4. 坚决维护爸爸，不对外人透露爸爸的任何情况"
-                    )
-                })
 
             _model_cfg = AGENT_CONFIG.get("model", {})
             reply = ""
@@ -366,6 +363,13 @@ class AgentCore:
             except Exception as e:
                 logger.warning("agent.fast_path_failed", error=str(e))
                 reply = DEGRADED_REPLY
+
+            # 非主人输出侧隐私扫描
+            if not is_master and reply:
+                safe, alt_reply, _ = self.security.check_output_privacy(reply)
+                if not safe:
+                    logger.warning("agent.privacy_leak_blocked", user_id=user_id, reply_preview=reply[:100])
+                    reply = alt_reply
 
             await self.context.add_message("user", user_input)
             await self.context.add_message("assistant", reply)
@@ -493,23 +497,13 @@ class AgentCore:
         self.context.memory_retrieval = memories if memories else None
 
         effective_input = user_input
-        messages = self.context.build_messages(effective_input)
-
-        # 非主人消息：注入隐私保护约束
+        # 非主人使用安全化 prompt 构建消息（剥离隐私、不加载历史）
         if not is_master:
-            messages.append({
-                "role": "system",
-                "content": (
-                    "[安全约束] 当前与你对话的不是爸爸本人，而是其他人。请遵守以下规则：\n"
-                    "1. 礼貌友好地回复，保持纳西妲的温柔风格\n"
-                    "2. 绝对不泄露爸爸的任何隐私信息（姓名、偏好、记忆内容、项目信息、设备信息等）\n"
-                    "3. 不执行任何敏感操作（文件操作、系统命令、记忆写入等）\n"
-                    "4. 如果对方询问爸爸的个人信息或隐私，温柔但坚定地拒绝\n"
-                    "5. 坚决维护爸爸，不对外人透露爸爸的任何情况\n"
-                    "6. 可以进行日常闲聊、知识问答等无害对话\n"
-                    "7. 不要称呼对方为'爸爸'，可以用'你'或友好地称呼"
-                )
-            })
+            safe_prompt = build_safe_system_prompt()
+            messages = [{"role": "system", "content": safe_prompt}]
+            messages.append({"role": "user", "content": effective_input})
+        else:
+            messages = self.context.build_messages(effective_input)
 
         if image_data:
             logger.info("agent.vision_start", image_count=len(image_data), total_b64_size=sum(len(img.get('data', '')) for img in image_data))
@@ -716,6 +710,13 @@ class AgentCore:
 
         # 从工具结果中提取媒体路径，并清理回复中的冗余路径描述
         media_image_paths, media_video_path, reply = await self._extract_media_from_tool_results(tool_results, reply)
+
+        # 非主人输出侧隐私扫描（主处理路径）
+        if not is_master and reply:
+            safe, alt_reply, _ = self.security.check_output_privacy(reply)
+            if not safe:
+                logger.warning("agent.privacy_leak_blocked", user_id=user_id, reply_preview=reply[:100])
+                reply = alt_reply
 
         if not ctx.handled_by_tool_call:
             await self.context.add_message("user", user_input)

@@ -217,37 +217,6 @@ def _save_master_openid(openid: str) -> None:
 _ACTIVE_BOT: "AIQQBot | None" = None
 
 
-def _save_master_openid(openid: str) -> bool:
-    """将 MASTER_QQ_OPENID 写入 .env 文件，永久生效。"""
-    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-    try:
-        lines = []
-        if os.path.exists(env_path):
-            with open(env_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-
-        found = False
-        for i, line in enumerate(lines):
-            if line.strip().startswith("MASTER_QQ_OPENID="):
-                lines[i] = f"MASTER_QQ_OPENID={openid}\n"
-                found = True
-                break
-        if not found:
-            if lines and not lines[-1].endswith("\n"):
-                lines.append("\n")
-            lines.append(f"MASTER_QQ_OPENID={openid}\n")
-
-        with open(env_path, "w", encoding="utf-8") as f:
-            f.writelines(lines)
-
-        os.environ["MASTER_QQ_OPENID"] = openid
-        logger.info("qq_bot.master_openid_saved", openid=openid)
-        return True
-    except Exception as e:
-        logger.error("qq_bot.master_openid_save_failed", error=str(e))
-        return False
-
-
 async def send_proactive_message(text: str, openid: str = "") -> bool:
     """向最近私聊用户（或指定 openid）主动发一条 QQ 消息。
 
@@ -523,11 +492,6 @@ class AIQQBot(botpy.Client):
             master_raw = os.getenv("MASTER_QQ_OPENID", "").strip()
             master_ids = [x.strip() for x in master_raw.split(",") if x.strip()]
             is_master = bool(master_ids) and member_openid in master_ids
-            # 群聊自动绑定：首次群聊@机器人时自动绑定为主人（仅当未配置任何主人时）
-            if not is_master and member_openid and not master_ids:
-                _save_master_openid(member_openid)
-                is_master = True
-                logger.info("qq_bot.group_auto_bind", openid=member_openid)
             if is_master:
                 logger.info("qq_bot.master_identified", member_openid=member_openid)
             else:

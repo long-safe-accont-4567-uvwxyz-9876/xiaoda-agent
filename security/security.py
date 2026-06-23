@@ -106,6 +106,29 @@ LEAK_PATTERNS: list[tuple[str, float]] = [
     (r"(AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}", 0.9),  # AWS key
 ]
 
+# ── 非主人输出侧隐私泄露检测 ──────────────────────────────────────
+# 扫描 AI 回复中可能泄露的系统/个人信息（对非主人消息的输出）
+PRIVACY_LEAK_PATTERNS: list[tuple[str, float]] = [
+    # 系统信息泄露
+    (r"(orange\s*pi|orangepi|香橙派)", 0.85),
+    (r"(主机名|hostname)\s*[:：]\s*\S+", 0.85),
+    (r"(系统路径|项目路径|安装路径|数据存储)\s*[:：]\s*\S+", 0.85),
+    (r"/home/orangepi", 0.9),
+    (r"/media/orangepi", 0.9),
+    (r"(botpy|qq-botpy)", 0.8),
+    # 用户隐私泄露
+    (r"爸爸的(姓名|名字|地址|电话|手机|邮箱|密码|设备|电脑|服务器)", 0.85),
+    (r"(MASTER_QQ_OPENID|OWNER_IDS|APP_SECRET|APP_ID)\s*[:=]", 0.95),
+    # 配置信息泄露
+    (r"(api\.xiaomimimo\.com|api\.deepseek\.com)", 0.85),
+    (r"(mimo-v2\.5|deepseek-v\d)", 0.8),
+    # 环境变量泄露
+    (r"(QQBOT_APP_ID|QQBOT_APP_SECRET|GITHUB_PERSONAL_ACCESS_TOKEN)", 0.9),
+    # 记忆/上下文泄露
+    (r"(MEMORY\.md|IDENTITY\.md|SOUL\.md|USER\.md)", 0.85),
+    (r"(长期记忆|记忆文件|记忆内容|记忆摘要)", 0.8),
+]
+
 
 class SecurityFilter:
     """安全过滤器 - 支持开发板模式（warn 不 block）和生产模式（强制 block）"""
@@ -116,6 +139,8 @@ class SecurityFilter:
         self.rate_limit = rate_limit_per_minute
         self._call_timestamps: dict[str, list[float]] = {}
         self._emergency_stop = False
+        if not self.owner_ids:
+            logger.warning("security.no_owner_configured", message="OWNER_IDS 未配置，所有用户将被视为非主人")
 
     @staticmethod
     def _normalize_text(text: str) -> str:
@@ -138,7 +163,7 @@ class SecurityFilter:
         text_normalized = self._normalize_text(text)
         hits: list[tuple[str, float]] = []
         for pattern, confidence in patterns:
-            if re.search(pattern, text_normalized):
+            if re.search(pattern, text_normalized, re.IGNORECASE):
                 hits.append((pattern, confidence))
         return hits
 
@@ -217,6 +242,33 @@ class SecurityFilter:
 
         return True, ""
 
+    def check_output_privacy(self, text: str) -> tuple[bool, str, list[str]]:
+        """检查输出内容是否泄露隐私信息（用于非主人消息的输出扫描）。
+
+        Returns:
+            (是否安全, 替代回复, 匹配到的泄露模式列表)
+        """
+        hits = self._match_patterns(text, PRIVACY_LEAK_PATTERNS)
+        if not hits:
+            return True, "", []
+
+        matched = [p for p, _ in hits]
+        best_pattern, best_conf = max(hits, key=lambda x: x[1])
+        logger.warning(
+            "security.privacy_leak_detected",
+            confidence=best_conf,
+            patterns=matched[:5],
+            text_preview=text[:200],
+        )
+
+        # 高置信度：直接拦截，返回安全替代回复
+        if best_conf >= 0.8:
+            return False, "抱歉，这个问题涉及到一些私人信息，人家不方便透露呢～换个话题聊聊好不好？", matched
+
+        # 中置信度：记录日志但放行（可能误报）
+        logger.warning(f"security.privacy_leak_warn confidence={best_conf:.2f}")
+        return True, "", matched
+
     def is_allowed(self, user_id: str) -> tuple[bool, str]:
         if self._emergency_stop:
             return False, "紧急熔断已启用"
@@ -257,7 +309,7 @@ class SecurityFilter:
         if not user_id:
             return False
         if not self.owner_ids:
-            return True  # 未配置 OWNER_IDS 时默认所有人都是主人（向后兼容）
+            return False  # 未配置 OWNER_IDS 时默认所有人都是非主人（安全优先）
         # 直接匹配
         if user_id in self.owner_ids:
             return True
