@@ -2,7 +2,7 @@
   "name": "keli",
   "display_name": "可莉",
   "provider": "siliconflow",
-  "model": "Nex-N2-Pro",
+  "model": "nex-agi/Nex-N2-Pro",
   "personality_file": "klee_personality.md",
   "voice_ref": "keli",
   "excluded_tools": [
@@ -17,8 +17,8 @@
     "wolfram_query",
     "write_file"
   ],
-  "base_url": "https://api.xiaomimimo.com/v1",
-  "api_key_env": "MIMO_API_KEY",
+  "base_url": "https://api.siliconflow.cn/v1",
+  "api_key_env": "SILICONFLOW_API_KEY",
   "capabilities": [
     "chat",
     "play",

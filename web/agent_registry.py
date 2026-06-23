@@ -291,7 +291,29 @@ class AgentRegistry:
             return self.get("nahida")
         agent = self._require(name)
         personality_text = data.pop("personality_text", None)
+        # 记录旧值，用于判断是否需要热重载客户端
+        old_provider = agent.config.provider
+        old_model = agent.config.model
+        # 当 provider 变更时，自动解析 base_url/api_key_env，避免不一致配置
+        new_provider = data.get("provider")
+        if new_provider and new_provider != old_provider:
+            try:
+                base_url, api_key_env = self._resolve_provider_info(new_provider)
+                data.setdefault("base_url", base_url)
+                data.setdefault("api_key_env", api_key_env)
+            except ValueError:
+                pass  # 未知 provider 时不强制覆盖
         self._apply_fields(agent.config, data)
+        # provider 或 model 变更后，尝试热重载客户端
+        provider_changed = new_provider is not None and new_provider != old_provider
+        model_changed = "model" in data and data["model"] != old_model
+        if provider_changed or model_changed:
+            try:
+                await agent.reload_model_config(
+                    agent.config.provider, agent.config.model,
+                    agent.config.base_url, agent.config.api_key_env)
+            except Exception:
+                pass  # 热重载失败不阻断保存，下次启动时会重试
         if personality_text is not None:
             pf = Path(agent.config.personality_file) if agent.config.personality_file \
                 else self._personality_file(name)
