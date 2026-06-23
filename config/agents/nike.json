@@ -3,7 +3,7 @@
   "display_name": "尼可",
   "provider": "siliconflow",
   "model": "nex-agi/Nex-N2-Pro",
-  "personality_file": "/home/orangepi/ai-agent/config/agents/nike_personality.md",
+  "personality_file": "nike_personality.md",
   "voice_ref": null,
   "excluded_tools": [
     "call_klee",
