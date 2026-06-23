@@ -1,15 +1,18 @@
 """Agnes Transport - 适配 Agnes AI API"""
+import os
 import asyncio
 from openai import AsyncOpenAI
 from loguru import logger
 from transports.base import ProviderTransport, TransportResponse
-from config import AGNES_API_KEY, AGNES_BASE_URL, AGNES_TEXT_MODEL
 
 
 class AgnesTransport(ProviderTransport):
 
     def __init__(self):
-        self._client = AsyncOpenAI(api_key=AGNES_API_KEY, base_url=AGNES_BASE_URL) if AGNES_API_KEY else None
+        # 从 os.getenv() 实时读取，避免使用 config 模块级冻结变量
+        _key = os.getenv("AGNES_API_KEY", "")
+        _url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
+        self._client = AsyncOpenAI(api_key=_key, base_url=_url) if _key else None
 
     @property
     def provider_name(self) -> str:

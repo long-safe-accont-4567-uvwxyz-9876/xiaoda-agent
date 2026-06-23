@@ -1,4 +1,5 @@
 """Agnes AI 图像/视频生成工具"""
+import os
 import asyncio
 import base64
 import time
@@ -6,7 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolResult, ToolPermission
-from config import AGNES_API_KEY, AGNES_BASE_URL, AGNES_IMAGE_MODEL, AGNES_VIDEO_MODEL, FILE_DIR
+from config import AGNES_IMAGE_MODEL, AGNES_VIDEO_MODEL, FILE_DIR
 
 # 速率限制：滑动窗口
 _RATE_LIMITS = {
@@ -40,7 +41,9 @@ def _get_agnes_openai_client():
     global _agnes_openai_client
     if _agnes_openai_client is None:
         from openai import AsyncOpenAI
-        _agnes_openai_client = AsyncOpenAI(api_key=AGNES_API_KEY, base_url=AGNES_BASE_URL)
+        _key = os.getenv("AGNES_API_KEY", "")
+        _url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
+        _agnes_openai_client = AsyncOpenAI(api_key=_key, base_url=_url)
     return _agnes_openai_client
 
 
@@ -71,7 +74,7 @@ def _get_agnes_http_client():
 async def agnes_image_generate(prompt: str, image_url: str = "",
                                 size: str = "1024x1024", n: int = 1) -> ToolResult:
     """生成图片"""
-    if not AGNES_API_KEY:
+    if not os.getenv("AGNES_API_KEY", ""):
         return ToolResult.fail("Agnes API Key 未配置")
 
     rate_err = _check_rate_limit("image")
@@ -128,7 +131,7 @@ async def agnes_image_generate(prompt: str, image_url: str = "",
 )
 async def agnes_video_generate(prompt: str, seconds: float = 5, fps: int = 24) -> ToolResult:
     """生成视频（异步任务模式）"""
-    if not AGNES_API_KEY:
+    if not os.getenv("AGNES_API_KEY", ""):
         return ToolResult.fail("Agnes API Key 未配置")
 
     rate_err = _check_rate_limit("video")
@@ -147,10 +150,12 @@ async def agnes_video_generate(prompt: str, seconds: float = 5, fps: int = 24) -
         num_frames = min(8 * n + 1, 441)
 
         client = _get_agnes_http_client()
+        _agnes_key = os.getenv("AGNES_API_KEY", "")
+        _agnes_url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
         # 创建视频生成任务
         resp = await client.post(
-            f"{AGNES_BASE_URL}/video/generations",
-            headers={"Authorization": f"Bearer {AGNES_API_KEY}"},
+            f"{_agnes_url}/video/generations",
+            headers={"Authorization": f"Bearer {_agnes_key}"},
             json={
                 "model": AGNES_VIDEO_MODEL,
                 "prompt": prompt,
@@ -174,8 +179,8 @@ async def agnes_video_generate(prompt: str, seconds: float = 5, fps: int = 24) -
             await asyncio.sleep(interval)
             poll_count += 1
             status_resp = await client.get(
-                f"{AGNES_BASE_URL}/video/generations/{video_id}",
-                headers={"Authorization": f"Bearer {AGNES_API_KEY}"},
+                f"{_agnes_url}/video/generations/{video_id}",
+                headers={"Authorization": f"Bearer {_agnes_key}"},
             )
             status_resp.raise_for_status()
             status_data = status_resp.json()

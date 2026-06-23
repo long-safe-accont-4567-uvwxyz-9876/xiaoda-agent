@@ -416,11 +416,15 @@ class AgentCoreBootstrapper:
     async def _build_task_graph(self) -> None:
         from openai import AsyncOpenAI as _AOI
         from task_orchestrator import build_task_graph
+        import os as _os
 
         core = self.core
+        # 从 os.getenv() 实时读取，避免使用模块级冻结的空 API Key
+        _key = _os.getenv("MIMO_API_KEY", "")
+        _url = _os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
         route_client = _AOI(
-            api_key=MIMO_API_KEY,
-            base_url=MIMO_BASE_URL,
+            api_key=_key,
+            base_url=_url,
         )
         core._task_graph = build_task_graph(
             dispatcher=core.dispatcher,

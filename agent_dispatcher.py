@@ -426,7 +426,7 @@ class SubAgent:
             params = f.get("parameters", {}).get("properties", {})
             required = f.get("parameters", {}).get("required", [])
             param_desc = ", ".join(
-                f'{k}({", ".join(v.get("enum", []))})' if "enum" in v else k
+                f'{k}({", ".join(str(x) for x in v.get("enum", []))})' if "enum" in v else k
                 for k, v in params.items()
             )
             req_mark = "必填" if required else ""

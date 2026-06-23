@@ -16,7 +16,7 @@ def get_base_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
-load_dotenv(get_base_dir() / ".env")
+load_dotenv(get_base_dir() / ".env", override=True)
 
 # 确保 PyInstaller 打包后 HTTPS 请求能找到 CA 证书
 # certifi 的 cacert.pem 必须被正确打包，否则所有 API 请求都会因 SSL 错误失败

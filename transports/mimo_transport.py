@@ -1,15 +1,18 @@
 """MiMo Transport - 适配小米 MiMo API"""
+import os
 import asyncio
 from openai import AsyncOpenAI
 from loguru import logger
 from transports.base import ProviderTransport, TransportResponse
-from config import MIMO_API_KEY, MIMO_BASE_URL
 
 
 class MiMoTransport(ProviderTransport):
 
     def __init__(self):
-        self._client = AsyncOpenAI(api_key=MIMO_API_KEY, base_url=MIMO_BASE_URL) if MIMO_API_KEY else None
+        # 从 os.getenv() 实时读取，避免使用 config 模块级冻结变量
+        _key = os.getenv("MIMO_API_KEY", "")
+        _url = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+        self._client = AsyncOpenAI(api_key=_key, base_url=_url) if _key else None
 
     @property
     def provider_name(self) -> str:

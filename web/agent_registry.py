@@ -94,7 +94,20 @@ class AgentRegistry:
                 if name in BUILTIN_AGENTS:
                     agent = self.core.dispatcher.get_agent(name)
                     if agent:
+                        old_provider = agent.config.provider
+                        old_model = agent.config.model
+                        old_base_url = agent.config.base_url
                         self._apply_fields(agent.config, data)
+                        # 如果 provider/model/base_url 变了，重建客户端
+                        if (agent.config.provider != old_provider
+                                or agent.config.model != old_model
+                                or agent.config.base_url != old_base_url):
+                            await agent.reload_model_config(
+                                agent.config.provider,
+                                agent.config.model,
+                                agent.config.base_url,
+                                agent.config.api_key_env,
+                            )
                         logger.info("agent_registry.builtin_override name={}", name)
                 else:
                     kwargs = {f: data[f] for f in _CONFIG_FIELDS if f in data and data[f] is not None}

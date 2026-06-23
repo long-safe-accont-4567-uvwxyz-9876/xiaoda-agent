@@ -6,7 +6,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    # PyInstaller frozen 模式下从 exe 所在目录加载 .env，避免 CWD 不同导致找不到文件
+    if getattr(sys, 'frozen', False):
+        _env_path = os.path.join(os.path.dirname(sys.executable), ".env")
+    else:
+        _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    load_dotenv(_env_path, override=True)
 except Exception as e:
     # dotenv 加载失败时写日志，防止 exe 静默崩溃
     import traceback, pathlib

@@ -517,10 +517,10 @@ async def save_keys(body: dict):
     load_dotenv(ENV_PATH, override=True)
 
     # 兜底：如果 load_dotenv 未生效（Windows/PyInstaller 环境常见），
-    # 直接将用户提交的值写入 os.environ
+    # 直接将用户提交的值写入 os.environ（始终覆盖，避免旧值残留）
     for k, v in updates.items():
         v = v.strip() if isinstance(v, str) else ""
-        if v and not os.getenv(k, ""):
+        if v:
             os.environ[k] = v
 
     # 清除模型发现缓存，使新 API Key 能立即生效

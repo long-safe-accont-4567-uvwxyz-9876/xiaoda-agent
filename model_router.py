@@ -7,7 +7,7 @@ from loguru import logger
 
 from db.db_analytics import AnalyticsDB
 from utils.metrics import metrics
-from config import AGNES_API_KEY, AGNES_BASE_URL, AGNES_TEXT_MODEL
+from config import AGNES_BASE_URL, AGNES_TEXT_MODEL
 from transports import ProviderTransport, MiMoTransport, AgnesTransport
 from utils.prompt_caching import apply_cache_control
 from utils.error_classifier import ErrorClassifier, ClassifiedError, RecoveryAction
@@ -93,8 +93,13 @@ class ModelRouter:
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None,
                  api_key_2: str | None = None, db=None):
-        self._client = AsyncOpenAI(api_key=MIMO_API_KEY, base_url=MIMO_BASE_URL) if MIMO_API_KEY else None
-        self._agnes_client = AsyncOpenAI(api_key=AGNES_API_KEY, base_url=AGNES_BASE_URL) if AGNES_API_KEY else None
+        # 从 os.getenv() 实时读取，避免使用模块级冻结变量
+        _mimo_key = api_key or os.getenv("MIMO_API_KEY", "")
+        _mimo_url = base_url or os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+        self._client = AsyncOpenAI(api_key=_mimo_key, base_url=_mimo_url) if _mimo_key else None
+        _agnes_key = os.getenv("AGNES_API_KEY", "")
+        _agnes_url = os.getenv("AGNES_BASE_URL", AGNES_BASE_URL)
+        self._agnes_client = AsyncOpenAI(api_key=_agnes_key, base_url=_agnes_url) if _agnes_key else None
         self._db = db
         self._model_preference = "mimo"
         self._cost_buffer: list[dict] = []
@@ -446,7 +451,7 @@ class ModelRouter:
                                      error=f"{type(fb_err).__name__}: {fb_err}")
 
             # 如果主提供商连续失败，尝试 Agnes 作为最终降级
-            if task_type not in ("chat_agnes",) and AGNES_API_KEY:
+            if task_type not in ("chat_agnes",) and self._agnes_client:
                 try:
                     agnes_config = ROUTE_TABLE.get("chat_agnes")
                     if agnes_config and self._agnes_client:
