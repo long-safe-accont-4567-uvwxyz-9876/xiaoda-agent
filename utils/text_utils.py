@@ -135,6 +135,60 @@ def strip_dsml(text: str) -> str:
     return text.strip()
 
 
+# ── 推理/思考内容剥离 ──────────────────────────────────────────
+# 匹配各种推理标签格式
+_REASONING_TAG_PATTERN = re.compile(
+    r'<(?:think|thinking|reasoning|analysis|reflection|thought|scratchpad)[\s\S]*?'
+    r'</(?:think|thinking|reasoning|analysis|reflection|thought|scratchpad)>',
+    re.IGNORECASE,
+)
+# 自闭合推理标签（无闭合标签的情况）
+_REASONING_OPEN_PATTERN = re.compile(
+    r'<(?:think|thinking|reasoning|analysis|reflection|thought|scratchpad)\s*/?>',
+    re.IGNORECASE,
+)
+# 裸文本推理特征：以 "Need " / "Let me " / "I should " / "I need " 开头的英文推理行
+# 这些是模型将内部推理当作正文输出的典型特征
+_REASONING_PHRASES = [
+    r"Need\s+(?:think|no\s+tool|to\s+answer|to\s+recall|to\s+check|to\s+consider|to\s+mention|to\s+include|to\s+decide)",
+    r"Let\s+me\s+(?:think|recall|check|consider|analyze|review|craft|construct|formulate|ensure|make\s+sure)",
+    r"I\s+(?:should|need to|must|have to|will)\s+(?:think|recall|check|consider|analyze|review|craft|construct|formulate|ensure|include|mention|decide|answer|respond)",
+    r"(?:Must|Should)\s+(?:exactly|also|not|be|include|end|avoid|use|ensure)",
+    r"(?:First|Next|Then|Now|Also|Finally),\s+(?:I|let me|need to)",
+]
+_REASONING_LINE_PATTERN = re.compile(
+    r'^(?:' + '|'.join(_REASONING_PHRASES) + r')[^\n]*$',
+    re.MULTILINE | re.IGNORECASE,
+)
+# 多行连续推理块（3行以上以 "Need "/"Let me "/"I should " 开头的英文行）
+_REASONING_BLOCK_PATTERN = re.compile(
+    r'(?:^[' + ''.join(re.escape(c) for c in 'Need Let I Mus Sho Fir Nex The Now Als Fin') + r'].*\n){3,}',
+    re.MULTILINE,
+)
+
+
+def strip_reasoning(text: str) -> str:
+    """剥离模型输出中的推理/思考内容。
+
+    处理以下情况：
+    1. <think>...</think> 等标签包裹的推理
+    2. 裸文本推理行（Need think about... / Let me recall... 等）
+    3. 连续多行英文推理块
+    """
+    if not text:
+        return text
+    # 1. 标签包裹的推理
+    text = _REASONING_TAG_PATTERN.sub('', text)
+    text = _REASONING_OPEN_PATTERN.sub('', text)
+    # 2. 裸文本推理行
+    text = _REASONING_LINE_PATTERN.sub('', text)
+    # 3. 连续多行英文推理块（3行以上）
+    text = _REASONING_BLOCK_PATTERN.sub('', text)
+    # 清理多余空行
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 def has_dsml_tool_calls(text: str) -> bool:
     return bool(DSML_INVOKE_PATTERN.search(text)) or bool(TOOL_CALL_PATTERN.search(text))
 

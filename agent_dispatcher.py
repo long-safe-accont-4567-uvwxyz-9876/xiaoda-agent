@@ -10,7 +10,7 @@ from loguru import logger
 from tool_engine.tool_registry import to_openai_tools
 from tool_engine.tool_executor import ToolExecutor, ToolResult
 from tool_engine.tool_repair import ToolCallRepair
-from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_dsml
+from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_dsml, strip_reasoning
 from emotion.tts_engine import TTSEngine
 from emotion.emoji_config import get_status_msg
 from tool_engine.tool_guardrails import get_tool_guardrails
@@ -411,7 +411,10 @@ class SubAgent:
 
     def _is_reasoning_model(self) -> bool:
         model = self.config.model.lower()
-        return any(kw in model for kw in ["v4-flash", "v4-pro", "v3", "reasoner", "r1"])
+        return any(kw in model for kw in [
+            "v4-flash", "v4-pro", "v3", "reasoner", "r1",
+            "nex-n2", "nex-agi", "thinking", "o1", "o3", "o4",
+        ])
 
     def _build_dsml_tool_prompt(self) -> str:
         tools = self._filtered_tools()
@@ -504,8 +507,9 @@ class SubAgent:
                     rc = getattr(msg, "reasoning_content", None) or ""
                     if rc:
                         content = rc
-                # 清理可能泄露的 DSML/TOOL_CALL 格式文本
+                # 清理可能泄露的 DSML/TOOL_CALL 格式文本和推理内容
                 content = strip_dsml(content)
+                content = strip_reasoning(content)
                 logger.info("sub_agent.chat.ok", name=self.config.name, model=self.config.model, rounds=round_idx)
                 return content.strip()
 
@@ -630,7 +634,7 @@ class SubAgent:
             )
             reply = response.choices[0].message.content or ""
             rc = getattr(response.choices[0].message, "reasoning_content", None) or ""
-            return strip_dsml((reply or rc)).strip()
+            return strip_reasoning(strip_dsml((reply or rc))).strip()
         except (asyncio.TimeoutError, Exception):
             last_tool = working[-1] if working else {}
             if isinstance(last_tool, dict) and last_tool.get("role") == "tool":

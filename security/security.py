@@ -127,6 +127,13 @@ PRIVACY_LEAK_PATTERNS: list[tuple[str, float]] = [
     # 记忆/上下文泄露
     (r"(MEMORY\.md|IDENTITY\.md|SOUL\.md|USER\.md)", 0.85),
     (r"(长期记忆|记忆文件|记忆内容|记忆摘要)", 0.8),
+    # 推理过程/系统提示词泄露
+    (r"<(?:think|thinking|reasoning|analysis|reflection|thought|scratchpad)[\s\S]*?>", 0.9),
+    (r"Need\s+(?:think|no\s+tool|to\s+answer|to\s+recall|to\s+check|to\s+consider)", 0.85),
+    (r"Let\s+me\s+(?:think|recall|check|consider|analyze|review|craft|construct)", 0.85),
+    (r"I\s+(?:should|need to|must)\s+(?:think|recall|check|consider|analyze|review|craft)", 0.85),
+    (r"(?:Must|Should)\s+(?:exactly|also|not|be|include|end|avoid|use|ensure)\s+", 0.8),
+    (r"(?:emotion\s*tag|情绪标签|system\s*prompt|系统提示)", 0.85),
 ]
 
 

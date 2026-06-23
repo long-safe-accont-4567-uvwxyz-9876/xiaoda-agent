@@ -1045,7 +1045,15 @@ class AgentCore:
 
         clean_sub_reply = self._finalize_reply(sub_reply, style=target)
 
-        # 单Agent直接使用其回复，跳过nahida重新总结
+        # 子代理回复隐私扫描（与主 Agent 路径一致）
+        is_master = self.security.is_owner(user_id) if user_id else False
+        if not is_master and clean_sub_reply:
+            safe, alt_reply, _ = self.security.check_output_privacy(clean_sub_reply)
+            if not safe:
+                logger.warning("agent.sub_agent_privacy_leak_blocked",
+                               target=target, user_id=user_id,
+                               reply_preview=clean_sub_reply[:100])
+                clean_sub_reply = alt_reply or f"{display_name}不方便回答这个问题呢～"
 
         emotion_label = emotion.get("primary", "")
         sticker_path = None
