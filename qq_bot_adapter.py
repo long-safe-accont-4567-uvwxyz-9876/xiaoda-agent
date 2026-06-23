@@ -432,7 +432,7 @@ class AIQQBot(botpy.Client):
         _save_master_openid(op_openid)
 
     async def on_c2c_message_create(self, message: C2CMessage):
-        content = message.content.strip()
+        content = (getattr(message, 'content', None) or "").strip()
 
         image_data, attachment_info = await self._process_message_attachments(message)
 
@@ -504,42 +504,47 @@ class AIQQBot(botpy.Client):
                 logger.error(f"qq_bot.c2c_fallback_reply_failed: {e}")
 
     async def on_group_at_message_create(self, message: GroupMessage):
-        content = message.content.strip()
-
-        image_data, attachment_info = await self._process_message_attachments(message)
-
-        if not content and not attachment_info:
-            return
-
-        user_input = f"{content} {attachment_info}".strip() if content else attachment_info
-
-        member_openid = getattr(message.author, 'member_openid', '') if hasattr(message, 'author') else ''
-        user_id = f"qq_{member_openid}" if member_openid else "qq_unknown"
-        logger.info("qq_bot.group_message", user_id=user_id, openid=member_openid, content=user_input[:80])
-
-        # 主人识别：对比 member_openid 与 MASTER_QQ_OPENID（逗号分隔多值）
-        # on_group_add_robot 已自动绑定拉群者的 member_openid
-        master_raw = os.getenv("MASTER_QQ_OPENID", "").strip()
-        master_ids = [x.strip() for x in master_raw.split(",") if x.strip()]
-        is_master = bool(master_ids) and member_openid in master_ids
-        if is_master:
-            logger.info("qq_bot.master_identified", member_openid=member_openid)
-        else:
-            logger.info("qq_bot.non_master_message", user_id=user_id, openid=member_openid, content=user_input[:80])
-
-        if self.nudge_engine:
-            self.nudge_engine.poke()
-
-        msg_id = getattr(message, 'id', '') or getattr(message, 'message_id', '')
-        if msg_id and self._is_duplicate_msg(msg_id):
-            return
-
-        # /whoami 指令：回复发送者的 openid（用于主人在 Setup 中填写）
-        if content.strip() in ("/whoami", "/whoami "):
-            await message.reply(content=f"你的 OpenID 是：\n{member_openid}\n\n在 Setup 配置页面的「主人 QQ OpenID」填入此值即可绑定主人身份。", msg_seq=_next_msg_seq())
-            return
-
         try:
+            content = (getattr(message, 'content', None) or "").strip()
+
+            image_data, attachment_info = await self._process_message_attachments(message)
+
+            if not content and not attachment_info:
+                return
+
+            user_input = f"{content} {attachment_info}".strip() if content else attachment_info
+
+            member_openid = getattr(message.author, 'member_openid', '') if hasattr(message, 'author') else ''
+            user_id = f"qq_{member_openid}" if member_openid else "qq_unknown"
+            logger.info("qq_bot.group_message", user_id=user_id, openid=member_openid, content=user_input[:80])
+
+            # 主人识别：对比 member_openid 与 MASTER_QQ_OPENID（逗号分隔多值）
+            # on_group_add_robot 已自动绑定拉群者的 member_openid
+            master_raw = os.getenv("MASTER_QQ_OPENID", "").strip()
+            master_ids = [x.strip() for x in master_raw.split(",") if x.strip()]
+            is_master = bool(master_ids) and member_openid in master_ids
+            # 群聊自动绑定：首次群聊@机器人时自动绑定为主人（仅当未配置任何主人时）
+            if not is_master and member_openid and not master_ids:
+                _save_master_openid(member_openid)
+                is_master = True
+                logger.info("qq_bot.group_auto_bind", openid=member_openid)
+            if is_master:
+                logger.info("qq_bot.master_identified", member_openid=member_openid)
+            else:
+                logger.info("qq_bot.non_master_message", user_id=user_id, openid=member_openid, content=user_input[:80])
+
+            if self.nudge_engine:
+                self.nudge_engine.poke()
+
+            msg_id = getattr(message, 'id', '') or getattr(message, 'message_id', '')
+            if msg_id and self._is_duplicate_msg(msg_id):
+                return
+
+            # /whoami 指令：回复发送者的 openid（用于主人在 Setup 中填写）
+            if content.strip() in ("/whoami", "/whoami "):
+                await message.reply(content=f"你的 OpenID 是：\n{member_openid}\n\n在 Setup 配置页面的「主人 QQ OpenID」填入此值即可绑定主人身份。", msg_seq=_next_msg_seq())
+                return
+
             # 群聊被动回复有次数限制（5分钟内最多2次），不要浪费在"收到啦"上
             # 只在处理时间较长时通过 status_notify 通知
 
@@ -562,11 +567,11 @@ class AIQQBot(botpy.Client):
             if result.reply:
                 await self._send_reply_with_sticker(message, result)
         except Exception as e:
-            logger.error(f"qq_bot.group_error: {e}")
+            logger.error(f"qq_bot.group_error: {e}", exc_info=True)
             try:
                 await message.reply(content="嗯……出了点小问题，等会儿再聊好不好？", msg_seq=_next_msg_seq())
-            except Exception as e:
-                logger.error(f"qq_bot.group_fallback_reply_failed: {e}")
+            except Exception as e2:
+                logger.error(f"qq_bot.group_fallback_reply_failed: {e2}")
 
     async def _send_reply_with_media(self, message, reply: str,
                                       image_path: Path | None = None,
