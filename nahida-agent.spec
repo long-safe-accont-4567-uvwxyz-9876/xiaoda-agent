@@ -77,7 +77,7 @@ if len(assets_datas) > 5:
 # ---------------------------------------------------------------------------
 # Collect data files from packages that ship non-Python assets
 # ---------------------------------------------------------------------------
-for pkg in ('jieba', 'psutil', 'certifi', 'openai'):
+for pkg in ('jieba', 'psutil', 'certifi', 'openai', 'PIL'):
     try:
         datas += collect_data_files(pkg)
     except Exception:
@@ -259,7 +259,7 @@ hiddenimports = [
 ]
 
 # Collect any sub-modules that static analysis might miss
-for pkg in ('openai', 'pydantic', 'starlette', 'anyio', 'uvicorn', 'psutil', 'httpx', 'certifi', 'httpcore', 'pilk'):
+for pkg in ('openai', 'pydantic', 'starlette', 'anyio', 'uvicorn', 'psutil', 'httpx', 'certifi', 'httpcore', 'pilk', 'PIL'):
     try:
         hiddenimports += collect_submodules(pkg)
     except Exception:

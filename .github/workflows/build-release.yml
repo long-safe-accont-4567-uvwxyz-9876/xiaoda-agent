@@ -194,6 +194,25 @@ jobs:
           fi
           echo "pilk C extension verified OK"
 
+      - name: Verify Pillow C extension bundled (image compression)
+        shell: bash
+        run: |
+          echo "=== Checking Pillow C extension in build output ==="
+          PIL_FOUND=0
+          # Windows: _imaging.cp311-win_amd64.pyd
+          # Linux: _imaging.cpython-311-*.so
+          if find dist/nahida-agent -name "_imaging*" -print -quit 2>/dev/null | grep -q .; then
+            echo "OK: Pillow _imaging C extension found:"
+            find dist/nahida-agent -name "_imaging*" -exec ls -lh {} \;
+            PIL_FOUND=1
+          fi
+          if [ $PIL_FOUND -eq 0 ]; then
+            echo "FATAL: Pillow _imaging C extension not found in build output!"
+            echo "Image compression for QQ image sending will fail."
+            exit 1
+          fi
+          echo "Pillow C extension verified OK"
+
       - name: Ensure assets bundled in dist
         shell: bash
         run: |
