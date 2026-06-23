@@ -34,6 +34,14 @@ function onConfigChanged(e: any) {
   if (payload?.type === 'chat_model') {
     loadDiscoveredModels()
   }
+  // Provider 排序/增删 → 刷新模型选项列表
+  if (e.domain === 'models') {
+    loadDiscoveredModels()
+  }
+  // Agent 模型变更 → 刷新 Agent 卡片（含子 Agent 模型标签）
+  if (e.domain === 'agents') {
+    agentsStore.load()
+  }
 }
 
 onMounted(() => {

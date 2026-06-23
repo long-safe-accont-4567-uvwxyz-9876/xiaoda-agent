@@ -247,3 +247,41 @@ class MemoryDB:
         )
         if auto_commit:
             await self._conn.commit()
+
+    async def update_rag_status(self, memory_id: int, rag_status: str, rag_synced_at: float = None):
+        """更新记忆的 RAG 索引状态"""
+        valid_statuses = ('pending', 'indexed', 'failed', 'excluded')
+        if rag_status not in valid_statuses:
+            raise ValueError(f"rag_status must be one of {valid_statuses}, got '{rag_status}'")
+        if rag_status == 'indexed' and rag_synced_at is None:
+            rag_synced_at = time.time()
+        if rag_synced_at is not None:
+            await self._conn.execute(
+                "UPDATE episodic_memories SET rag_status=?, rag_synced_at=? WHERE id=?",
+                (rag_status, rag_synced_at, memory_id),
+            )
+        else:
+            await self._conn.execute(
+                "UPDATE episodic_memories SET rag_status=? WHERE id=?",
+                (rag_status, memory_id),
+            )
+        await self._conn.commit()
+
+    async def update_doc_id(self, memory_id: int, doc_id: str):
+        """更新记忆关联的文档 ID"""
+        await self._conn.execute(
+            "UPDATE episodic_memories SET doc_id=? WHERE id=?",
+            (doc_id, memory_id),
+        )
+        await self._conn.commit()
+
+    async def get_pending_memories(self, limit: int = 100) -> list[dict]:
+        """查询待索引的 RAG 记忆（rag_status='pending'），按时间升序"""
+        cursor = await self._conn.execute(
+            """SELECT id, timestamp, summary, importance FROM episodic_memories
+               WHERE rag_status='pending'
+               ORDER BY timestamp ASC LIMIT ?""",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]

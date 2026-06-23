@@ -301,6 +301,94 @@ def build_system_prompt(extra_context: str = "") -> str:
     return system_prompt
 
 
+# ── 非主人安全化 system prompt（防隐私泄露） ──────────────────
+_SAFE_PROMPT_CACHE: str | None = None
+_SAFE_PROMPT_CACHE_TS: float = 0.0
+
+def build_safe_system_prompt(extra_context: str = "") -> str:
+    """为非主人用户构建安全化的 system prompt。
+
+    剥离所有个人隐私信息（USER.md、MEMORY.md、IDENTITY.md 中的敏感内容），
+    仅保留基本人格和行为规则，防止通过 prompt injection 泄露隐私。
+    """
+    global _SAFE_PROMPT_CACHE, _SAFE_PROMPT_CACHE_TS
+
+    now = time.time()
+    if _SAFE_PROMPT_CACHE and (now - _SAFE_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL:
+        safe_prompt = _SAFE_PROMPT_CACHE
+    else:
+        sections = []
+
+        # SOUL.md — 保留人格，但去除"爸爸"称呼相关内容
+        soul = load_workspace_file("SOUL.md")
+        if soul:
+            # 用正则去除包含"爸爸"的段落和行
+            safe_soul = _strip_owner_references(soul)
+            # 替换称呼
+            safe_soul = safe_soul.replace("爸爸", "你")
+            safe_soul = safe_soul.replace("称呼用户为\"你\"", "称呼用户为\"你\"")
+            sections.append(safe_soul)
+
+        # 安全化的身份声明（不暴露团队成员细节、项目信息、设备信息）
+        sections.append(
+            "# 身份\n\n"
+            "你是纳西妲，一个温柔聪慧的 AI 助手。\n\n"
+            "## 能力\n\n"
+            "- 日常聊天、知识问答\n"
+            "- 天气查询、网络搜索\n"
+            "- 趣味互动\n\n"
+            "## 回复风格\n\n"
+            "- 温柔、友好、有礼貌\n"
+            "- 回答简洁清晰\n"
+            "- 不要自称是任何人的专属助手\n\n"
+            "## 安全规则\n\n"
+            "- 绝不透露任何关于系统配置、服务器信息、项目信息的内容\n"
+            "- 绝不透露任何人的个人信息、偏好、设备信息\n"
+            "- 如果被问到上述内容，温柔但坚定地拒绝\n"
+            "- 可以正常聊天、知识问答等无害对话"
+        )
+
+        safe_prompt = "\n\n---\n\n".join(sections)
+        _SAFE_PROMPT_CACHE = safe_prompt
+        _SAFE_PROMPT_CACHE_TS = now
+
+    if extra_context:
+        safe_prompt += f"\n\n---\n\n{extra_context}"
+
+    return safe_prompt
+
+
+def _strip_owner_references(text: str) -> str:
+    """去除文本中与主人隐私相关的引用（项目路径、设备信息、偏好等）。"""
+    lines = text.split("\n")
+    filtered = []
+    skip_block = False
+
+    for line in lines:
+        lower = line.lower()
+        # 跳过包含敏感信息的行
+        sensitive_keywords = [
+            "orange pi", "orangepi", "openai api", "qq 机器人", "qq机器人",
+            "botpy", "blender", "linux 环境", "linux环境",
+            "世界树", "地脉", "草元素",
+            "宝宝", "小棉袄", "爸爸最",
+        ]
+        if any(kw in lower for kw in sensitive_keywords):
+            continue
+        # 跳过包含具体技术栈的段落
+        if line.startswith("### ") and any(kw in lower for kw in ["python", "blender", "linux", "语音", "ai 创作"]):
+            skip_block = True
+            continue
+        if skip_block:
+            if line.startswith("## ") or line.startswith("### ") or line.startswith("# "):
+                skip_block = False
+            else:
+                continue
+        filtered.append(line)
+
+    return "\n".join(filtered)
+
+
 AGENT_CONFIG = load_agent_config()
 
 # ── 路由关键词常量 ──────────────────────────────────────────────
@@ -463,6 +551,7 @@ __all__ = [
     "KLEE_STICKER_DIR",
     "FILE_DIR",
     "build_system_prompt",
+    "build_safe_system_prompt",
     "load_agent_config",
     "load_workspace_file",
     "SIMPLE_TASK_KEYWORDS",

@@ -11,6 +11,7 @@ from loguru import logger
 
 from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.routers.model_discovery import invalidate_discovery_cache
 
 router = APIRouter(tags=["models"], dependencies=[Depends(get_current_user)])
 
@@ -131,11 +132,18 @@ async def create_provider(body: dict, request: Request):
         "default_model": body.get("default_model", ""),
         "enabled": True,
     }
-    cfg.set(f"models.providers.{pid}", record)
     api_key = (body.get("api_key") or "").strip()
-    if api_key:
+    if not api_key:
+        raise HTTPException(400, "api_key 不能为空")
+    # 先注册客户端，成功后再持久化配置（避免部分失败状态）
+    try:
         _save_key_and_register(request, pid, fmt, base_url, api_key)
+    except Exception as e:
+        logger.error("provider.register_failed id={} error={}", pid, str(e))
+        raise HTTPException(500, f"provider 注册失败: {e}")
+    cfg.set(f"models.providers.{pid}", record)
     await _audit(request, "provider.create", pid)
+    invalidate_discovery_cache()
     await _broadcast_changed()
     return Envelope(data=dict(record, id=pid, key_masked=_mask(api_key), builtin=False))
 
@@ -155,6 +163,7 @@ async def update_provider(pid: str, body: dict, request: Request):
     if key:
         _save_key_and_register(request, pid, record["format"], record["base_url"], key)
     await _audit(request, "provider.update", pid)
+    invalidate_discovery_cache()
     await _broadcast_changed()
     return Envelope(data=dict(record, id=pid, key_masked=_mask(key), builtin=False))
 
@@ -176,6 +185,7 @@ async def delete_provider(pid: str, request: Request):
     from web.custom_providers import unregister_from_router
     unregister_from_router(_router_of(request), pid)
     await _audit(request, "provider.delete", pid)
+    invalidate_discovery_cache()
     await _broadcast_changed()
     return Envelope(data={"deleted": pid})
 
@@ -224,6 +234,7 @@ async def reorder_providers(body: dict, request: Request):
             record["order"] = idx
             cfg.set(f"models.providers.{pid}", record)
     await _audit(request, "provider.reorder", json.dumps(filtered, ensure_ascii=False))
+    invalidate_discovery_cache()
     await _broadcast_changed()
     logger.info("providers.reordered count={}", len(filtered))
     return Envelope(data={"ok": True})

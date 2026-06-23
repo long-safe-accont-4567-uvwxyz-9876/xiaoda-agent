@@ -130,6 +130,27 @@ class ModelRouter:
             self._credential_locks[provider] = asyncio.Lock()
         return self._credential_locks[provider]
 
+    def _lazy_register_provider(self, provider: str) -> None:
+        """懒注册：从 config_service 恢复未注册的自定义 provider。"""
+        try:
+            from web.config_service import get_config_service
+            from web.routers.models import load_provider_key
+            from web.custom_providers import register_into_router
+            cfg = get_config_service()
+            record = cfg.get(f"models.providers.{provider}")
+            if record:
+                api_key = load_provider_key(provider)
+                if api_key:
+                    register_into_router(
+                        self, provider,
+                        record.get("format", "openai"),
+                        record.get("base_url", ""),
+                        api_key,
+                    )
+                    logger.info("router.lazy_registered provider={}", provider)
+        except Exception as e:
+            logger.warning("router.lazy_register_failed provider={} error={}", provider, str(e))
+
     def refresh_client(self) -> None:
         """重建 MiMo / Agnes 客户端（Setup 保存新 Key 后调用）。
 
@@ -197,6 +218,8 @@ class ModelRouter:
         ROUTE_TABLE["chat"]["model"] = model_id
         ROUTE_TABLE["chat"]["client"] = provider
         if provider not in ("mimo", "agnes"):
+            if provider not in self._custom_clients:
+                self._lazy_register_provider(provider)
             if provider not in self._custom_clients:
                 raise RuntimeError(f"自定义 provider {provider} 未注册，请先注册客户端")
         self._current_chat_model = {"provider": provider, "model_id": model_id}
@@ -498,6 +521,10 @@ class ModelRouter:
                         client = self._agnes_client
                     elif provider not in ("mimo", "agnes"):
                         custom = getattr(self, "_custom_clients", {}).get(provider)
+                        if custom is None:
+                            # 懒注册：从 config_service 恢复未注册的自定义 provider
+                            self._lazy_register_provider(provider)
+                            custom = getattr(self, "_custom_clients", {}).get(provider)
                         if custom is None:
                             raise RuntimeError(f"自定义 provider {provider} 未注册或缺少 API Key")
                         client = custom

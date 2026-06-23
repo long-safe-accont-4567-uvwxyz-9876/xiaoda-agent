@@ -22,6 +22,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
+CURRENT_SCHEMA_VERSION = 8
 
 
 class DatabaseManager:
@@ -235,6 +236,29 @@ class DatabaseManager:
                 await self._conn.execute("ROLLBACK")
                 logger.error(f"数据库迁移 v7 失败: {e}")
 
+        if current < 8:
+            try:
+                await self._conn.execute("BEGIN TRANSACTION")
+                cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
+                if "rag_status" not in cols:
+                    await self._conn.execute(
+                        "ALTER TABLE episodic_memories ADD COLUMN rag_status TEXT DEFAULT 'pending'"
+                    )
+                if "rag_synced_at" not in cols:
+                    await self._conn.execute(
+                        "ALTER TABLE episodic_memories ADD COLUMN rag_synced_at REAL DEFAULT 0"
+                    )
+                if "doc_id" not in cols:
+                    await self._conn.execute(
+                        "ALTER TABLE episodic_memories ADD COLUMN doc_id TEXT DEFAULT ''"
+                    )
+                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (8, ?)", (time.time(),))
+                await self._conn.commit()
+                logger.info("database.migration_v8", desc="episodic_memories.rag_status+rag_synced_at+doc_id")
+            except Exception as e:
+                await self._conn.execute("ROLLBACK")
+                logger.error(f"数据库迁移 v8 失败: {e}")
+
         await self._conn.commit()
 
     async def fetch_all(self, sql: str, params: tuple = ()) -> list[dict]:
@@ -285,6 +309,9 @@ class DatabaseManager:
                 emotion_label TEXT DEFAULT '',
                 session_id TEXT DEFAULT 'user',
                 embedding_id INTEGER DEFAULT -1,
+                rag_status TEXT DEFAULT 'pending',
+                rag_synced_at REAL DEFAULT 0,
+                doc_id TEXT DEFAULT '',
                 source TEXT DEFAULT 'user',
                 access_count INTEGER DEFAULT 0
             );

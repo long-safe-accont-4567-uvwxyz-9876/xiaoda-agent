@@ -1,7 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch, onBeforeUnmount } from 'vue'
 import { NPopover, NTag, NSpin, useMessage } from 'naive-ui'
-import { get, post } from '../../api'
+import { get, post, api } from '../../api'
+import { useChatStore } from '../../stores/chat'
+import { useAgentsStore } from '../../stores/agents'
+import { getWsClient } from '../../api/ws'
+
+const chat = useChatStore()
+const agentsStore = useAgentsStore()
+const ws = getWsClient()
 
 interface ModelInfo {
   id: string
@@ -67,7 +74,16 @@ async function selectModel(provider: string, model: ModelInfo) {
     return
   }
   try {
-    await post('/models/chat-model', { provider, model_id: model.id })
+    const agent = chat.currentAgent
+    if (agent && agent !== 'nahida') {
+      // 子 Agent 活跃：更新该子 Agent 的模型配置
+      await api.setAgentModel(agent, provider, model.id)
+      // 刷新 agentsStore 以同步 Agent 管理卡片
+      await agentsStore.load()
+    } else {
+      // 主体 nahida 活跃：更新 ROUTE_TABLE["chat"]
+      await post('/models/chat-model', { provider, model_id: model.id })
+    }
     currentModel.value = {
       provider,
       model_id: model.id,
@@ -80,6 +96,26 @@ async function selectModel(provider: string, model: ModelInfo) {
     }
   } catch (e: any) {
     message.error(e.message || '切换模型失败')
+  }
+}
+
+/** 从 agentsStore 同步当前活跃 Agent 的模型显示 */
+function syncCurrentModelFromStore() {
+  const agent = chat.currentAgent
+  if (!agent) return
+  if (agent === 'nahida') {
+    // 主体：从后端 API 获取
+    fetchCurrentModel()
+    return
+  }
+  // 子 Agent：从 agentsStore 读取
+  const info = agentsStore.agents.find(a => a.name === agent)
+  if (info && info.provider && info.model) {
+    currentModel.value = {
+      provider: info.provider,
+      model_id: info.model,
+      label: buildModelLabel(info.provider, info.model)
+    }
   }
 }
 
@@ -105,8 +141,26 @@ async function fetchModels() {
   loading.value = false
 }
 
+/** WS 事件处理：Provider 排序/增删后刷新模型列表 */
+function onConfigChanged(e: any) {
+  if (e.domain === 'models') {
+    fetchModels()
+  }
+}
+
 onMounted(async () => {
+  await agentsStore.load()
   await Promise.all([fetchCurrentModel(), fetchModels()])
+  ws.on('config_changed', onConfigChanged)
+})
+
+onBeforeUnmount(() => {
+  ws.off('config_changed', onConfigChanged)
+})
+
+// 监听 Agent 切换，同步当前模型显示
+watch(() => chat.currentAgent, () => {
+  syncCurrentModelFromStore()
 })
 
 const emit = defineEmits<{
