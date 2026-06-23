@@ -144,7 +144,18 @@ jobs:
         run: |
           pip install pyinstaller
           pip install -r requirements.txt || true
-          pip install fastapi uvicorn[standard] websockets python-multipart sse-starlette httpx Pillow numpy rich python-dotenv loguru openai aiosqlite pydantic jieba pyyaml
+          pip install fastapi uvicorn[standard] websockets python-multipart sse-starlette httpx Pillow numpy rich python-dotenv loguru openai aiosqlite pydantic jieba pyyaml pilk
+
+      - name: Verify pilk installed (SILK codec for voice messages)
+        shell: python
+        run: |
+          try:
+              import pilk
+              print(f"pilk version: {pilk.__version__}")
+              print("pilk OK - voice messages will work")
+          except ImportError:
+              print("FATAL: pilk not installed! Voice messages will fail.")
+              raise SystemExit(1)
 
       - name: Verify assets before build
         shell: bash
@@ -163,6 +174,25 @@ jobs:
         env:
           LC_ALL: C.UTF-8
           LANG: C.UTF-8
+
+      - name: Verify pilk C extension bundled (voice messages)
+        shell: bash
+        run: |
+          echo "=== Checking pilk C extension in build output ==="
+          PILK_FOUND=0
+          # Windows: _pilk.cp311-win_amd64.pyd
+          # Linux: _pilk.cpython-311-*.so
+          if find dist/nahida-agent -name "_pilk*" -print -quit 2>/dev/null | grep -q .; then
+            echo "OK: pilk C extension found:"
+            find dist/nahida-agent -name "_pilk*" -exec ls -lh {} \;
+            PILK_FOUND=1
+          fi
+          if [ $PILK_FOUND -eq 0 ]; then
+            echo "FATAL: pilk C extension (_pilk.so/.pyd) not found in build output!"
+            echo "Voice messages will fail with '缺少 SILK 编码库' error."
+            exit 1
+          fi
+          echo "pilk C extension verified OK"
 
       - name: Ensure assets bundled in dist
         shell: bash

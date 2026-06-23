@@ -259,11 +259,20 @@ hiddenimports = [
 ]
 
 # Collect any sub-modules that static analysis might miss
-for pkg in ('openai', 'pydantic', 'starlette', 'anyio', 'uvicorn', 'psutil', 'httpx', 'certifi', 'httpcore'):
+for pkg in ('openai', 'pydantic', 'starlette', 'anyio', 'uvicorn', 'psutil', 'httpx', 'certifi', 'httpcore', 'pilk'):
     try:
         hiddenimports += collect_submodules(pkg)
     except Exception:
         pass
+
+# 确保 pilk 的 C 扩展二进制（_pilk.so/.pyd）被正确打包
+# pilk 在 try/except 中懒加载，PyInstaller 静态分析容易漏掉 C 扩展
+binaries = []
+try:
+    from PyInstaller.utils.hooks import collect_dynamic_libs
+    binaries += collect_dynamic_libs('pilk')
+except Exception:
+    pass
 
 # ---------------------------------------------------------------------------
 # Excludes – trim the bundle by removing unused heavy modules
@@ -301,7 +310,7 @@ excludes = [
 a = Analysis(
     [os.path.join(SPECPATH, 'agent.py')],
     pathex=[SPECPATH],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
