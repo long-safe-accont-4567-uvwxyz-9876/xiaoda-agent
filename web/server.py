@@ -222,6 +222,20 @@ async def lifespan(app: FastAPI):
     else:
         _env_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
     _env_path = _os.path.join(_env_dir, ".env")
+    # 确保 .env 文件存在（首次启动时 agent.py 已创建，这里做兜底）
+    if not _os.path.exists(_env_path):
+        try:
+            from setup_wizard import ENV_EXAMPLE_PATH
+            if _os.path.exists(ENV_EXAMPLE_PATH):
+                import shutil as _shutil
+                _shutil.copy2(ENV_EXAMPLE_PATH, _env_path)
+                logger.info("webui.env_created_from_example")
+            else:
+                with open(_env_path, "w", encoding="utf-8") as _f:
+                    _f.write("")
+                logger.info("webui.env_created_empty")
+        except Exception as _e:
+            logger.warning("webui.env_create_failed error={}", str(_e))
     _mimo = ""
     if _os.path.exists(_env_path):
         with open(_env_path, "r", encoding="utf-8", errors="ignore") as _f:

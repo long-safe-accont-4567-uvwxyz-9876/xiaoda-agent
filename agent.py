@@ -40,8 +40,21 @@ def main():
         wizard_main()
         return
 
-    from setup_wizard import is_first_run
+    from setup_wizard import is_first_run, ENV_PATH, ENV_EXAMPLE_PATH
     if is_first_run():
+        # 确保 .env 文件存在（从 .env.example 复制），这样 WebUI Setup 页面能读取默认值
+        if not os.path.exists(ENV_PATH):
+            import shutil
+            if os.path.exists(ENV_EXAMPLE_PATH):
+                shutil.copy2(ENV_EXAMPLE_PATH, ENV_PATH)
+                print(f"  [i] 已从 .env.example 创建 .env 配置文件")
+            else:
+                with open(ENV_PATH, "w", encoding="utf-8") as f:
+                    f.write("")
+                print(f"  [i] 已创建空 .env 配置文件")
+            # 重新加载 .env 使默认值生效
+            load_dotenv(ENV_PATH, override=True)
+
         if args.web:
             # Web 模式下不弹出 CLI 向导，由 WebUI /setup 页面引导配置
             print("\n  [!] 检测到首次运行，将以降级模式启动 WebUI")
@@ -51,7 +64,7 @@ def main():
             from setup_wizard import main as wizard_main
             wizard_main()
             # 向导完成后重新加载 .env
-            load_dotenv(override=True)
+            load_dotenv(ENV_PATH, override=True)
 
     if args.web or os.getenv("WEB_UI_ENABLED", "").lower() in ("true", "1", "yes"):
         _run_web(args.host, args.port)

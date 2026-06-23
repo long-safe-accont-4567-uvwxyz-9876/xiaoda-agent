@@ -46,11 +46,16 @@ WIZARD_DIR = os.path.dirname(os.path.abspath(__file__))
 if getattr(sys, 'frozen', False):
     WIZARD_DIR = os.path.dirname(sys.executable)
 ENV_PATH = os.path.join(WIZARD_DIR, ".env")
-# .env.example 可能在 exe 同级目录或 _internal/ 子目录（PyInstaller onedir 模式）
-_ENV_EXAMPLE_CANDIDATES = [
+# .env.example 在 PyInstaller onedir 模式下被打包到 _internal/ (sys._MEIPASS)
+# 开发模式下在项目根目录（即 __file__ 所在目录）
+_MEIPASS = getattr(sys, '_MEIPASS', '')
+_ENV_EXAMPLE_CANDIDATES = []
+if _MEIPASS:
+    _ENV_EXAMPLE_CANDIDATES.append(os.path.join(_MEIPASS, ".env.example"))
+_ENV_EXAMPLE_CANDIDATES.extend([
     os.path.join(WIZARD_DIR, ".env.example"),
     os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.example"),
-]
+])
 ENV_EXAMPLE_PATH = next(
     (p for p in _ENV_EXAMPLE_CANDIDATES if os.path.isfile(p)),
     os.path.join(WIZARD_DIR, ".env.example"),
