@@ -13,19 +13,46 @@ const saving = ref(false)
 const error = ref('')
 const success = ref(false)
 
-const fields = ref({
-  address_term: '',
+// 热门时区列表
+const timezones = [
+  { value: 'Asia/Shanghai', label: '中国标准时间 (UTC+8)' },
+  { value: 'Asia/Hong_Kong', label: '香港时间 (UTC+8)' },
+  { value: 'Asia/Taipei', label: '台北时间 (UTC+8)' },
+  { value: 'Asia/Tokyo', label: '日本标准时间 (UTC+9)' },
+  { value: 'Asia/Seoul', label: '韩国标准时间 (UTC+9)' },
+  { value: 'Asia/Singapore', label: '新加坡时间 (UTC+8)' },
+  { value: 'Asia/Bangkok', label: '泰国时间 (UTC+7)' },
+  { value: 'Asia/Kolkata', label: '印度时间 (UTC+5:30)' },
+  { value: 'Asia/Dubai', label: '迪拜时间 (UTC+4)' },
+  { value: 'Europe/London', label: '伦敦时间 (UTC+0)' },
+  { value: 'Europe/Paris', label: '巴黎时间 (UTC+1)' },
+  { value: 'Europe/Berlin', label: '柏林时间 (UTC+1)' },
+  { value: 'Europe/Moscow', label: '莫斯科时间 (UTC+3)' },
+  { value: 'America/New_York', label: '纽约时间 (UTC-5)' },
+  { value: 'America/Chicago', label: '芝加哥时间 (UTC-6)' },
+  { value: 'America/Denver', label: '丹佛时间 (UTC-7)' },
+  { value: 'America/Los_Angeles', label: '洛杉矶时间 (UTC-8)' },
+  { value: 'America/Sao_Paulo', label: '圣保罗时间 (UTC-3)' },
+  { value: 'Australia/Sydney', label: '悉尼时间 (UTC+10)' },
+  { value: 'Pacific/Auckland', label: '奥克兰时间 (UTC+12)' },
+]
+
+// 默认值（作为示例，用户可编辑）
+const defaultFields = {
+  address_term: '爸爸',
   name: '',
   device: '',
-  timezone: '',
-  preferred_personality: '',
-  preferred_tone: '',
-  like_to_be_called: '',
-  liked_reply_style: '',
-  disliked_reply_style: '',
-  project_preferences: '',
+  timezone: 'Asia/Shanghai',
+  preferred_personality: '纳西妲，小吉祥草王风格',
+  preferred_tone: '温柔、软萌、清晰、有陪伴感',
+  like_to_be_called: '爸爸',
+  liked_reply_style: '有条理、能直接执行的方案',
+  disliked_reply_style: '冷冰冰、敷衍或只有抽象建议的回答',
+  project_preferences: '- 修改代码前先理解现有结构\n- 尽量不要大改项目，优先最小修改\n- 优先解决实际报错\n- 命令和路径要写清楚\n- 遇到危险操作要提醒确认',
   history_notes: '',
-})
+}
+
+const fields = ref({ ...defaultFields })
 
 onMounted(async () => {
   try {
@@ -35,9 +62,15 @@ onMounted(async () => {
 
   try {
     const data = await api.getSetupUserProfile()
-    Object.assign(fields.value, data)
+    // 用 API 返回的数据覆盖默认值（保留默认值中 API 没返回的字段）
+    for (const key of Object.keys(defaultFields) as (keyof typeof defaultFields)[]) {
+      if (data[key] !== undefined && data[key] !== '') {
+        (fields.value as any)[key] = data[key]
+      }
+    }
   } catch (e: any) {
     console.error('[UserProfileSetup] load failed:', e)
+    // 加载失败时使用默认值
   }
 })
 
@@ -74,7 +107,7 @@ function handleSkip() {
         <div class="setup-header">
           <DendroEmblem :size="84" spin />
           <h1>个人资料 · 偏好设置</h1>
-          <p class="subtitle">告诉我关于你的一切</p>
+          <p class="subtitle">初次见面，请多指教</p>
           <p class="version-tag">v{{ version }}</p>
         </div>
 
@@ -101,26 +134,13 @@ function handleSkip() {
             />
           </div>
 
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">设备</label>
-              <input
-                v-model="fields.device"
-                class="dendro-input"
-                type="text"
-                placeholder="自动检测"
-                readonly
-              />
-            </div>
-            <div class="form-group">
-              <label class="form-label">时区</label>
-              <input
-                v-model="fields.timezone"
-                class="dendro-input"
-                type="text"
-                placeholder="Asia/Shanghai"
-              />
-            </div>
+          <div class="form-group">
+            <label class="form-label">时区</label>
+            <select v-model="fields.timezone" class="dendro-input dendro-select">
+              <option v-for="tz in timezones" :key="tz.value" :value="tz.value">
+                {{ tz.label }}
+              </option>
+            </select>
           </div>
 
           <h2 class="section-title section-gap">── 助手人格 ──</h2>
@@ -305,15 +325,6 @@ function handleSkip() {
   gap: 6px;
 }
 
-.form-row {
-  display: flex;
-  gap: 12px;
-}
-
-.form-row .form-group {
-  flex: 1;
-}
-
 .form-label {
   font-size: 12px;
   color: var(--moon-dim);
@@ -344,9 +355,18 @@ function handleSkip() {
   color: rgba(242, 247, 238, 0.3);
 }
 
-.dendro-input[readonly] {
-  opacity: 0.6;
-  cursor: default;
+.dendro-select {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%237fd650' d='M6 8L0 0h12z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  padding-right: 36px;
+}
+
+.dendro-select option {
+  background: #0f1f17;
+  color: var(--moon);
 }
 
 .dendro-textarea {
