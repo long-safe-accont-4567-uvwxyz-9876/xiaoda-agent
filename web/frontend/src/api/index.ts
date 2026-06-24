@@ -100,6 +100,31 @@ export const api = {
     })
   },
 
+  getSetupUserProfile: async () => {
+    const token = localStorage.getItem('token')
+    const r = await fetch(`${BASE}/setup/user-profile`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    const b = await r.json()
+    if (!r.ok || !b.ok) throw new Error(b?.error?.message || `HTTP ${r.status}`)
+    return b.data as Record<string, string>
+  },
+
+  saveSetupUserProfile: (fields: Record<string, string>) => {
+    const token = localStorage.getItem('token')
+    return fetch(`${BASE}/setup/user-profile`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(fields),
+    }).then(r => r.json()).then(b => {
+      if (!b.ok) throw new Error(b.error?.message || 'Save failed')
+      return b.data
+    })
+  },
+
   // Custom provider (needs auth)
   createProvider: (data: { id: string; label: string; format: string; base_url: string; default_model: string; api_key: string }) =>
     post('/models/providers', data),

@@ -760,3 +760,230 @@ def _auto_register_providers(updates: dict) -> None:
                 logger.info("setup.auto_provider_runtime id={}", pid)
         except Exception as e:
             logger.debug("setup.auto_provider_runtime_skip error={}", str(e))
+
+
+# ── USER.md 个人资料配置 ────────────────────────────────────
+
+import re as _re
+import time as _time
+import platform as _platform
+import socket as _socket
+
+
+def _detect_device_info_for_profile() -> dict:
+    """检测设备信息用于 USER.md"""
+    info = {
+        "hostname": _socket.gethostname(),
+        "system": _platform.system(),
+        "machine": _platform.machine(),
+    }
+    try:
+        import distro
+        info["distro"] = f"{distro.name()} {distro.version()}"
+    except ImportError:
+        info["distro"] = _platform.platform()
+    return info
+
+
+def _parse_user_md(content: str) -> dict:
+    """解析 USER.md 内容为结构化字段"""
+    fields = {
+        "address_term": "",
+        "name": "",
+        "device": "",
+        "timezone": "",
+        "preferred_personality": "",
+        "preferred_tone": "",
+        "like_to_be_called": "",
+        "liked_reply_style": "",
+        "disliked_reply_style": "",
+        "project_preferences": "",
+        "history_notes": "",
+    }
+
+    # 解析 "## 用户信息" 区块
+    user_info_match = _re.search(r'## 用户信息\s*\n(.*?)(?=\n## |\Z)', content, _re.DOTALL)
+    if user_info_match:
+        block = user_info_match.group(1)
+        m = _re.search(r'-\s*称呼[：:]\s*(.+)', block)
+        if m: fields["address_term"] = m.group(1).strip()
+        m = _re.search(r'-\s*姓名[：:]\s*(.+)', block)
+        if m: fields["name"] = m.group(1).strip()
+        m = _re.search(r'-\s*设备[：:]\s*(.+)', block)
+        if m: fields["device"] = m.group(1).strip()
+        m = _re.search(r'-\s*时区[：:]\s*(.+)', block)
+        if m: fields["timezone"] = m.group(1).strip()
+
+    # 解析 "### 助手人格" 区块
+    personality_match = _re.search(r'### 助手人格\s*\n(.*?)(?=\n### |\n## |\Z)', content, _re.DOTALL)
+    if personality_match:
+        block = personality_match.group(1)
+        m = _re.search(r'-\s*偏好的助手人格[：:]\s*(.+)', block)
+        if m: fields["preferred_personality"] = m.group(1).strip()
+        m = _re.search(r'-\s*偏好语气[：:]\s*(.+)', block)
+        if m: fields["preferred_tone"] = m.group(1).strip()
+        m = _re.search(r'-\s*喜欢被称呼为[：:]\s*(.+)', block)
+        if m: fields["like_to_be_called"] = m.group(1).strip()
+
+    # 解析 "### 回复偏好" 区块
+    reply_match = _re.search(r'### 回复偏好\s*\n(.*?)(?=\n### |\n## |\Z)', content, _re.DOTALL)
+    if reply_match:
+        block = reply_match.group(1)
+        m = _re.search(r'-\s*喜欢的回复风格[：:]\s*(.+)', block)
+        if m: fields["liked_reply_style"] = m.group(1).strip()
+        m = _re.search(r'-\s*不喜欢的回复风格[：:]\s*(.+)', block)
+        if m: fields["disliked_reply_style"] = m.group(1).strip()
+
+    # 解析 "### 项目偏好" 区块
+    project_match = _re.search(r'### 项目偏好\s*\n(.*?)(?=\n## |\Z)', content, _re.DOTALL)
+    if project_match:
+        block = project_match.group(1).strip()
+        fields["project_preferences"] = block
+
+    # 解析 "## 历史交互要点" 区块
+    history_match = _re.search(r'## 历史交互要点\s*\n(.*?)(?=\n## |\Z)', content, _re.DOTALL)
+    if history_match:
+        block = history_match.group(1).strip()
+        # 去除 "（暂无..." 等占位文字
+        if block and not block.startswith("（暂无"):
+            fields["history_notes"] = block
+
+    return fields
+
+
+def _build_user_md(fields: dict) -> str:
+    """从结构化字段重建 USER.md 内容"""
+    dev = fields.get("device", "") or "（待自动检测）"
+    tz = fields.get("timezone", "") or "Asia/Shanghai"
+
+    lines = [
+        "# USER.md - 用户资料与偏好",
+        "",
+        "> 首次使用时自动生成，请根据需要修改以下内容。",
+        "",
+        "## 用户信息",
+        "",
+        f"- 称呼：{fields.get('address_term', '') or '（待填写）'}",
+        f"- 姓名：{fields.get('name', '') or '（待填写）'}",
+        f"- 设备：{dev}",
+        f"- 时区：{tz}",
+        "",
+        "## 偏好设置",
+        "",
+        "### 助手人格",
+        "",
+        f"- 偏好的助手人格：{fields.get('preferred_personality', '') or '（待填写）'}",
+        f"- 偏好语气：{fields.get('preferred_tone', '') or '（待填写）'}",
+        f"- 喜欢被称呼为：{fields.get('like_to_be_called', '') or '（待填写）'}",
+        "",
+        "### 回复偏好",
+        "",
+        f"- 喜欢的回复风格：{fields.get('liked_reply_style', '') or '（待填写）'}",
+        f"- 不喜欢的回复风格：{fields.get('disliked_reply_style', '') or '（待填写）'}",
+        "",
+        "### 项目偏好",
+        "",
+    ]
+
+    proj_prefs = fields.get("project_preferences", "").strip()
+    if proj_prefs:
+        for line in proj_prefs.split("\n"):
+            line = line.strip()
+            if line:
+                if not line.startswith("-"):
+                    line = f"- {line}"
+                lines.append(line)
+    else:
+        lines.extend([
+            "- 修改代码前先理解现有结构",
+            "- 尽量不要大改项目，优先最小修改",
+            "- 优先解决实际报错",
+            "- 命令和路径要写清楚",
+            "- 遇到危险操作要提醒确认",
+        ])
+
+    lines.extend([
+        "",
+        "## 历史交互要点",
+        "",
+    ])
+
+    history = fields.get("history_notes", "").strip()
+    if history:
+        for line in history.split("\n"):
+            line = line.strip()
+            if line:
+                if not line.startswith("-"):
+                    line = f"- {line}"
+                lines.append(line)
+    else:
+        lines.append("- （暂无，使用过程中会自动积累）")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+@router.get("/setup/user-profile", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
+async def get_user_profile():
+    """读取 USER.md 内容并返回结构化字段"""
+    from config import WORKSPACE_DIR
+
+    user_md_path = WORKSPACE_DIR / "USER.md"
+    content = ""
+    if user_md_path.exists():
+        try:
+            content = user_md_path.read_text(encoding="utf-8-sig")
+        except Exception:
+            try:
+                content = user_md_path.read_text(encoding="utf-8")
+            except Exception:
+                content = ""
+
+    fields = _parse_user_md(content)
+
+    # 自动检测设备信息和时区（如果未填写）
+    if not fields["device"] or fields["device"] == "（待自动检测）":
+        dev = _detect_device_info_for_profile()
+        fields["device"] = f"{dev['hostname']}（{dev['system']} {dev['machine']}）"
+
+    if not fields["timezone"] or fields["timezone"] == "（待自动检测）":
+        fields["timezone"] = _time.tzname[0] if _time.tzname else "Asia/Shanghai"
+
+    return Envelope(data=fields)
+
+
+@router.post("/setup/user-profile", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
+async def save_user_profile(body: dict):
+    """保存用户资料到 USER.md"""
+    from config import WORKSPACE_DIR
+
+    fields = {
+        "address_term": body.get("address_term", "").strip(),
+        "name": body.get("name", "").strip(),
+        "device": body.get("device", "").strip(),
+        "timezone": body.get("timezone", "").strip(),
+        "preferred_personality": body.get("preferred_personality", "").strip(),
+        "preferred_tone": body.get("preferred_tone", "").strip(),
+        "like_to_be_called": body.get("like_to_be_called", "").strip(),
+        "liked_reply_style": body.get("liked_reply_style", "").strip(),
+        "disliked_reply_style": body.get("disliked_reply_style", "").strip(),
+        "project_preferences": body.get("project_preferences", "").strip(),
+        "history_notes": body.get("history_notes", "").strip(),
+    }
+
+    content = _build_user_md(fields)
+
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    user_md_path = WORKSPACE_DIR / "USER.md"
+    user_md_path.write_text(content, encoding="utf-8-sig")
+
+    # 清除 system prompt 缓存，使修改立即生效
+    try:
+        import prompt_builder
+        prompt_builder._SYSTEM_PROMPT_CACHE = ""
+        prompt_builder._SYSTEM_PROMPT_CACHE_TS = 0.0
+    except Exception:
+        pass
+
+    logger.info("setup.user_profile_saved path={}", str(user_md_path))
+    return Envelope(data={"saved": True})

@@ -183,7 +183,7 @@ async function handleSave() {
       } catch {
         // 登录失败不影响跳转
       }
-      router.replace('/')
+      router.replace('/setup/profile')
     }
   } catch (e: any) {
     // Check for KEY_TEST_FAILED error
