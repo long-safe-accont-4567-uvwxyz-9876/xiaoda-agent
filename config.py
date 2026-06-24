@@ -93,7 +93,23 @@ def get_credentials_dir() -> Path:
     return fallback
 
 def get_config_dir() -> Path:
-    """获取配置目录（用于 webui_overrides.json 等可写配置）。"""
+    """获取配置目录（用于 webui_overrides.json 等可写配置）。
+
+    frozen 模式下使用用户目录 ~/.ai-agent/config/，
+    避免写入 C:\\Program Files\\ 等需要管理员权限的目录。
+    """
+    if getattr(sys, 'frozen', False):
+        user_config = Path.home() / ".ai-agent" / "config"
+        # 迁移：如果旧安装目录有配置文件但用户目录没有，复制过来
+        old_config = get_base_dir() / "config"
+        if old_config.exists() and not user_config.exists():
+            import shutil
+            try:
+                shutil.copytree(old_config, user_config, dirs_exist_ok=True)
+            except Exception:
+                pass
+        user_config.mkdir(parents=True, exist_ok=True)
+        return user_config
     return get_base_dir() / "config"
 
 def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
