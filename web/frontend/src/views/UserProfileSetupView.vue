@@ -79,7 +79,9 @@ async function handleSave() {
   error.value = ''
   success.value = false
   try {
-    await api.saveSetupUserProfile(fields.value)
+    // 同步 like_to_be_called = address_term（合并字段）
+    const payload = { ...fields.value, like_to_be_called: fields.value.address_term }
+    await api.saveSetupUserProfile(payload)
     success.value = true
     setTimeout(() => {
       router.replace('/')
@@ -115,19 +117,9 @@ function handleSkip() {
           <h2 class="section-title">── 用户信息 ──</h2>
 
           <div class="form-group">
-            <label class="form-label">称呼</label>
-            <input
-              v-model="fields.address_term"
-              class="dendro-input"
-              type="text"
-              placeholder="如：主人 / 爸爸 / 你的名字"
-            />
-          </div>
-
-          <div class="form-group">
             <label class="form-label">希望被称呼为</label>
             <input
-              v-model="fields.like_to_be_called"
+              v-model="fields.address_term"
               class="dendro-input"
               type="text"
               placeholder="如：爸爸 / 主人 / 朋友"
@@ -135,12 +127,12 @@ function handleSkip() {
           </div>
 
           <div class="form-group">
-            <label class="form-label">姓名</label>
+            <label class="form-label">昵称</label>
             <input
               v-model="fields.name"
               class="dendro-input"
               type="text"
-              placeholder="你的真实姓名（可选）"
+              placeholder="你的昵称（可选）"
             />
           </div>
 
