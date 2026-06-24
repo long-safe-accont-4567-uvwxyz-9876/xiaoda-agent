@@ -45,7 +45,6 @@ const graphEl = ref<HTMLElement | null>(null)
 const graphEntity = ref('用户')
 const graphDepth = ref(1)
 const activeTab = ref('emotion')
-let knowledgeLoaded = false
 let knowledgeChart: echarts.ECharts | null = null
 const notes = ref<any[]>([])
 const learnings = ref<any[]>([])
@@ -182,14 +181,8 @@ onMounted(async () => {
 
 watch(activeTab, async (tab) => {
   if (tab === 'knowledge') {
-    if (!knowledgeLoaded) {
-      knowledgeLoaded = true
-      await nextTick()
-      await loadKnowledge()
-    } else if (knowledgeChart) {
-      await nextTick()
-      knowledgeChart.resize()
-    }
+    await nextTick()
+    await loadKnowledge()
   }
 })
 
