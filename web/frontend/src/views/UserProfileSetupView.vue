@@ -125,6 +125,16 @@ function handleSkip() {
           </div>
 
           <div class="form-group">
+            <label class="form-label">希望被称呼为</label>
+            <input
+              v-model="fields.like_to_be_called"
+              class="dendro-input"
+              type="text"
+              placeholder="如：爸爸 / 主人 / 朋友"
+            />
+          </div>
+
+          <div class="form-group">
             <label class="form-label">姓名</label>
             <input
               v-model="fields.name"
@@ -143,7 +153,7 @@ function handleSkip() {
             </select>
           </div>
 
-          <h2 class="section-title section-gap">── 助手人格 ──</h2>
+          <h2 class="section-title section-gap">── 主 Agent 人格 ──</h2>
 
           <div class="form-group">
             <label class="form-label">偏好的助手人格</label>
@@ -162,16 +172,6 @@ function handleSkip() {
               class="dendro-input"
               type="text"
               placeholder="如：温柔、软萌、清晰"
-            />
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">喜欢被称呼为</label>
-            <input
-              v-model="fields.like_to_be_called"
-              class="dendro-input"
-              type="text"
-              placeholder="如：爸爸 / 主人 / 朋友"
             />
           </div>
 
