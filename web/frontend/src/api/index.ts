@@ -140,3 +140,62 @@ export async function getSetupVersion(): Promise<{ version: string }> {
 export function exportSessionUrl(sessionId: string): string {
   return `${BASE}/sessions/${sessionId}/export`
 }
+
+// ── 记忆管理 ──
+export const createMemory = (data: { summary: string; importance?: number; emotion_label?: string }) =>
+  post<{ id: number }>('/insight/memories', data)
+
+export const updateMemory = (id: number, data: { summary?: string; importance?: number; emotion_label?: string }) =>
+  put<{ id: number; updated: boolean }>(`/insight/memories/${id}`, data)
+
+export const deleteMemory = (id: number) =>
+  del<{ deleted: number }>(`/insight/memories/${id}`, true)
+
+// ── 笔记管理 ──
+export const getNotes = (params?: Record<string, any>) =>
+  get<any[]>('/insight/notebook' + (params ? '?' + new URLSearchParams(params as any).toString() : ''))
+
+export const createNote = (data: { content: string; kind?: string; tags?: string; importance?: number }) =>
+  post<{ id: number }>('/insight/notebook', data)
+
+export const updateNote = (noteId: number, data: { content?: string; tags?: string; kind?: string; status?: string; importance?: number }) =>
+  put<{ id: number; updated: boolean }>(`/insight/notebook/${noteId}`, data)
+
+export const deleteNote = (noteId: number) =>
+  del<{ deleted: number }>(`/insight/notebook/${noteId}`, true)
+
+// ── 学习记录管理 ──
+export const createLearning = (data: { summary: string; pattern?: string; priority?: string }) =>
+  post<{ id: number }>('/insight/learnings', data)
+
+export const updateLearning = (id: number, data: { summary?: string; pattern?: string; priority?: string }) =>
+  put<{ id: number; updated: boolean }>(`/insight/learnings/${id}`, data)
+
+export const deleteLearning = (id: number) =>
+  del<{ deleted: number }>(`/insight/learnings/${id}`, true)
+
+// ── 本能管理 ──
+export const createInstinct = (data: { content: string; trigger_pattern?: string; confidence?: number }) =>
+  post<{ id: number }>('/insight/instincts', data)
+
+export const updateInstinct = (id: number, data: { content?: string; trigger_pattern?: string; confidence?: number }) =>
+  put<{ id: number; updated: boolean }>(`/insight/instincts/${id}`, data)
+
+export const deleteInstinct = (id: number) =>
+  del<{ deleted: number }>(`/insight/instincts/${id}`, true)
+
+// ── 知识图谱管理 ──
+export const createKnowledgeEntity = (data: { name: string; kind?: string; observations?: string }) =>
+  post<{ name: string }>('/insight/knowledge/entities', data)
+
+export const updateKnowledgeEntity = (name: string, data: { kind?: string; observations?: string }) =>
+  put<{ name: string; updated: boolean }>(`/insight/knowledge/entities/${encodeURIComponent(name)}`, data)
+
+export const deleteKnowledgeEntity = (name: string) =>
+  del<{ deleted: string }>(`/insight/knowledge/entities/${encodeURIComponent(name)}`, true)
+
+export const createKnowledgeRelation = (data: { from: string; to: string; relation: string }) =>
+  post<{ from: string; to: string; relation: string }>('/insight/knowledge/relations', data)
+
+export const deleteKnowledgeRelation = (id: number) =>
+  del<{ deleted: number }>(`/insight/knowledge/relations/${id}`, true)

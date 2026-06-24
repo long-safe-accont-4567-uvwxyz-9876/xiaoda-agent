@@ -1,10 +1,17 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick, watch } from 'vue'
+import { ref, reactive, onMounted, nextTick, watch } from 'vue'
 import {
   NTabs, NTabPane, NButton, NInput, NSlider, NTag, NPopconfirm,
-  NCollapse, NCollapseItem, useMessage,
+  NCollapse, NCollapseItem, NModal, NForm, NFormItem, NSelect,
+  NSpace, useMessage,
 } from 'naive-ui'
 import { get, post, del } from '../api'
+import {
+  createMemory, updateMemory, deleteMemory,
+  createNote, updateNote, deleteNote,
+  createLearning, updateLearning, deleteLearning,
+  createInstinct, updateInstinct, deleteInstinct,
+} from '../api'
 import { getWsClient } from '../api/ws'
 import { renderMarkdown } from '../utils/markdown'
 import * as echarts from 'echarts/core'
@@ -39,9 +46,124 @@ const graphEntity = ref('用户')
 const graphDepth = ref(1)
 const activeTab = ref('emotion')
 let knowledgeLoaded = false
+let knowledgeChart: echarts.ECharts | null = null
 const notes = ref<any[]>([])
 const learnings = ref<any[]>([])
 const instincts = ref<any[]>([])
+
+// ── CRUD 模态框 ──
+type ModalType = 'memory' | 'note' | 'learning' | 'instinct' | null
+const showModal = ref(false)
+const modalType = ref<ModalType>(null)
+const editingId = ref<number | null>(null)
+const formModel = reactive<Record<string, any>>({})
+
+const noteKindOptions = [
+  { label: '笔记', value: 'note' },
+  { label: '任务', value: 'task' },
+  { label: '灵感', value: 'idea' },
+]
+const priorityOptions = [
+  { label: '低', value: 'low' },
+  { label: '中', value: 'medium' },
+  { label: '高', value: 'high' },
+]
+
+function openAddModal(type: ModalType) {
+  modalType.value = type
+  editingId.value = null
+  Object.keys(formModel).forEach(k => delete formModel[k])
+  if (type === 'memory') {
+    formModel.summary = ''
+    formModel.importance = 0.5
+    formModel.emotion_label = ''
+  } else if (type === 'note') {
+    formModel.content = ''
+    formModel.kind = 'note'
+    formModel.tags = ''
+  } else if (type === 'learning') {
+    formModel.summary = ''
+    formModel.pattern = ''
+    formModel.priority = 'medium'
+  } else if (type === 'instinct') {
+    formModel.content = ''
+    formModel.trigger_pattern = ''
+    formModel.confidence = 0.5
+  }
+  showModal.value = true
+}
+
+function openEditModal(type: ModalType, item: any) {
+  modalType.value = type
+  editingId.value = item.id
+  Object.keys(formModel).forEach(k => delete formModel[k])
+  if (type === 'memory') {
+    formModel.summary = item.summary || ''
+    formModel.importance = item.importance ?? 0.5
+    formModel.emotion_label = item.emotion_label || ''
+  } else if (type === 'note') {
+    formModel.content = item.content || ''
+    formModel.kind = item.kind || 'note'
+    formModel.tags = item.tags || ''
+  } else if (type === 'learning') {
+    formModel.summary = item.summary || ''
+    formModel.pattern = item.pattern || ''
+    formModel.priority = item.priority || 'medium'
+  } else if (type === 'instinct') {
+    formModel.content = item.content || item.summary || ''
+    formModel.trigger_pattern = item.trigger_pattern || ''
+    formModel.confidence = item.confidence ?? 0.5
+  }
+  showModal.value = true
+}
+
+async function handleModalOk() {
+  try {
+    if (modalType.value === 'memory') {
+      if (!formModel.summary) { message.warning('请输入记忆摘要'); return }
+      if (editingId.value) {
+        await updateMemory(editingId.value, { summary: formModel.summary, importance: formModel.importance, emotion_label: formModel.emotion_label })
+      } else {
+        await createMemory({ summary: formModel.summary, importance: formModel.importance, emotion_label: formModel.emotion_label })
+      }
+      await loadMemories()
+    } else if (modalType.value === 'note') {
+      if (!formModel.content) { message.warning('请输入笔记内容'); return }
+      if (editingId.value) {
+        await updateNote(editingId.value, { content: formModel.content, kind: formModel.kind, tags: formModel.tags })
+      } else {
+        await createNote({ content: formModel.content, kind: formModel.kind, tags: formModel.tags })
+      }
+      await loadNotes()
+    } else if (modalType.value === 'learning') {
+      if (!formModel.summary) { message.warning('请输入学习摘要'); return }
+      if (editingId.value) {
+        await updateLearning(editingId.value, { summary: formModel.summary, pattern: formModel.pattern, priority: formModel.priority })
+      } else {
+        await createLearning({ summary: formModel.summary, pattern: formModel.pattern, priority: formModel.priority })
+      }
+      await loadLearning()
+    } else if (modalType.value === 'instinct') {
+      if (!formModel.content) { message.warning('请输入本能内容'); return }
+      if (editingId.value) {
+        await updateInstinct(editingId.value, { content: formModel.content, trigger_pattern: formModel.trigger_pattern, confidence: formModel.confidence })
+      } else {
+        await createInstinct({ content: formModel.content, trigger_pattern: formModel.trigger_pattern, confidence: formModel.confidence })
+      }
+      await loadLearning()
+    }
+    showModal.value = false
+    message.success(editingId.value ? '已更新' : '已创建')
+  } catch (e: any) {
+    message.error(e.message)
+  }
+}
+
+const modalTitle = () => {
+  const prefix = editingId.value ? '编辑' : '添加'
+  const names: Record<string, string> = { memory: '记忆', note: '笔记', learning: '学习记录', instinct: '本能' }
+  return prefix + (names[modalType.value || ''] || '')
+}
 
 const EMOTION_COLORS: Record<string, string> = {
   '喜悦': '#7fd650', '悲伤': '#60a5fa', '愤怒': '#f87171', '焦虑': '#fbbf24',
@@ -59,10 +181,15 @@ onMounted(async () => {
 })
 
 watch(activeTab, async (tab) => {
-  if (tab === 'knowledge' && !knowledgeLoaded) {
-    knowledgeLoaded = true
-    await nextTick()
-    loadKnowledge()
+  if (tab === 'knowledge') {
+    if (!knowledgeLoaded) {
+      knowledgeLoaded = true
+      await nextTick()
+      await loadKnowledge()
+    } else if (knowledgeChart) {
+      await nextTick()
+      knowledgeChart.resize()
+    }
   }
 })
 
@@ -154,9 +281,33 @@ async function loadMemories() {
 
 async function removeMemory(id: number) {
   try {
-    await del(`/insight/memories/${id}`, true)
+    await deleteMemory(id)
     memories.value = memories.value.filter(m => m.id !== id)
     message.success('记忆已删除（含向量索引）')
+  } catch (e: any) { message.error(e.message) }
+}
+
+async function removeNote(id: number) {
+  try {
+    await deleteNote(id)
+    notes.value = notes.value.filter(n => n.id !== id)
+    message.success('笔记已归档')
+  } catch (e: any) { message.error(e.message) }
+}
+
+async function removeLearning(id: number) {
+  try {
+    await deleteLearning(id)
+    learnings.value = learnings.value.filter(l => l.id !== id)
+    message.success('学习记录已删除')
+  } catch (e: any) { message.error(e.message) }
+}
+
+async function removeInstinct(id: number) {
+  try {
+    await deleteInstinct(id)
+    instincts.value = instincts.value.filter(i => i.id !== id)
+    message.success('本能规则已删除')
   } catch (e: any) { message.error(e.message) }
 }
 
@@ -166,8 +317,9 @@ async function loadKnowledge() {
       `/insight/knowledge/graph?entity=${encodeURIComponent(graphEntity.value)}&depth=${graphDepth.value}`)
     await nextTick()
     if (!graphEl.value) return
-    const chart = echarts.init(graphEl.value)
-    chart.setOption({
+    if (knowledgeChart) { knowledgeChart.dispose() }
+    knowledgeChart = echarts.init(graphEl.value)
+    knowledgeChart.setOption({
       tooltip: {},
       series: [{
         type: 'graph', layout: 'force', roam: true,
@@ -270,6 +422,7 @@ function fmtTs(ts: number): string {
 
       <n-tab-pane name="memory" tab="记忆">
         <div class="mem-toolbar glass-panel">
+          <n-button size="small" type="primary" @click="openAddModal('memory')">+ 添加记忆</n-button>
           <n-input v-model:value="memQuery" placeholder="语义搜索记忆…" clearable
                    style="max-width: 280px" @keydown.enter="loadMemories" />
           <label class="slider-label">
@@ -290,6 +443,7 @@ function fmtTs(ts: number): string {
                 <n-tag v-if="m.via === 'vector'" size="tiny" type="info" :bordered="false">语义命中</n-tag>
               </div>
             </div>
+            <n-button size="tiny" quaternary @click="openEditModal('memory', m)">编辑</n-button>
             <n-popconfirm @positive-click="removeMemory(m.id)">
               <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
               连带删除向量索引，不可恢复。确认？
@@ -313,31 +467,119 @@ function fmtTs(ts: number): string {
       </n-tab-pane>
 
       <n-tab-pane name="notes" tab="笔记">
-        <div v-for="n in notes" :key="n.id" class="note-row">
-          <n-tag size="tiny" :bordered="false">{{ n.kind }}</n-tag>
-          <span class="note-content">{{ n.content }}</span>
+        <div class="tab-toolbar glass-panel">
+          <n-button size="small" type="primary" @click="openAddModal('note')">+ 添加笔记</n-button>
+        </div>
+        <div class="item-list">
+          <div v-for="n in notes" :key="n.id" class="list-row glass-panel">
+            <n-tag size="tiny" :bordered="false">{{ n.kind }}</n-tag>
+            <span class="note-content">{{ n.content }}</span>
+            <n-button size="tiny" quaternary @click="openEditModal('note', n)">编辑</n-button>
+            <n-popconfirm @positive-click="removeNote(n.id)">
+              <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
+              确认归档此笔记？
+            </n-popconfirm>
+          </div>
         </div>
         <div v-if="!notes.length" class="empty-state"><p>还没有笔记哦～</p></div>
       </n-tab-pane>
 
       <n-tab-pane name="learnings" tab="学习记录">
-        <div v-for="l in learnings" :key="l.id" class="note-row">
-          <n-tag size="tiny" :type="l.priority === 'high' ? 'error' : l.priority === 'medium' ? 'warning' : 'default'"
-                 :bordered="false">{{ l.priority }}</n-tag>
-          <span class="note-content">{{ l.summary }}</span>
-          <span class="note-extra">× {{ l.recurrence_count }}</span>
+        <div class="tab-toolbar glass-panel">
+          <n-button size="small" type="primary" @click="openAddModal('learning')">+ 添加学习记录</n-button>
+        </div>
+        <div class="item-list">
+          <div v-for="l in learnings" :key="l.id" class="list-row glass-panel">
+            <n-tag size="tiny" :type="l.priority === 'high' ? 'error' : l.priority === 'medium' ? 'warning' : 'default'"
+                   :bordered="false">{{ l.priority }}</n-tag>
+            <span class="note-content">{{ l.summary }}</span>
+            <span class="note-extra">× {{ l.recurrence_count }}</span>
+            <n-button size="tiny" quaternary @click="openEditModal('learning', l)">编辑</n-button>
+            <n-popconfirm @positive-click="removeLearning(l.id)">
+              <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
+              确认删除此学习记录？
+            </n-popconfirm>
+          </div>
         </div>
         <div v-if="!learnings.length" class="empty-state"><p>还没有学习记录哦～</p></div>
       </n-tab-pane>
 
       <n-tab-pane name="instincts" tab="本能">
-        <div v-for="ins in instincts" :key="ins.id" class="note-row">
-          <span class="note-content">{{ ins.content || ins.summary || ins.trigger_pattern }}</span>
-          <span class="note-extra">置信 {{ ((ins.confidence || 0) * 100).toFixed(0) }}%</span>
+        <div class="tab-toolbar glass-panel">
+          <n-button size="small" type="primary" @click="openAddModal('instinct')">+ 添加本能</n-button>
+        </div>
+        <div class="item-list">
+          <div v-for="ins in instincts" :key="ins.id" class="list-row glass-panel">
+            <span class="note-content">{{ ins.content || ins.summary || ins.trigger_pattern }}</span>
+            <span class="note-extra">置信 {{ ((ins.confidence || 0) * 100).toFixed(0) }}%</span>
+            <n-button size="tiny" quaternary @click="openEditModal('instinct', ins)">编辑</n-button>
+            <n-popconfirm @positive-click="removeInstinct(ins.id)">
+              <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
+              确认删除此本能规则？
+            </n-popconfirm>
+          </div>
         </div>
         <div v-if="!instincts.length" class="empty-state"><p>还没有本能规则哦～</p></div>
       </n-tab-pane>
     </n-tabs>
+
+    <!-- 共享 CRUD 模态框 -->
+    <n-modal v-model:show="showModal" preset="card" :title="modalTitle()" style="max-width: 480px">
+      <!-- 记忆表单 -->
+      <n-form v-if="modalType === 'memory'" label-placement="left" label-width="70">
+        <n-form-item label="摘要">
+          <n-input v-model:value="formModel.summary" type="textarea" placeholder="记忆内容…" :rows="3" />
+        </n-form-item>
+        <n-form-item label="重要度">
+          <n-slider v-model:value="formModel.importance" :min="0" :max="1" :step="0.1" />
+        </n-form-item>
+        <n-form-item label="情绪标签">
+          <n-input v-model:value="formModel.emotion_label" placeholder="如：喜悦、焦虑" />
+        </n-form-item>
+      </n-form>
+      <!-- 笔记表单 -->
+      <n-form v-if="modalType === 'note'" label-placement="left" label-width="70">
+        <n-form-item label="内容">
+          <n-input v-model:value="formModel.content" type="textarea" placeholder="笔记内容…" :rows="4" />
+        </n-form-item>
+        <n-form-item label="类型">
+          <n-select v-model:value="formModel.kind" :options="noteKindOptions" />
+        </n-form-item>
+        <n-form-item label="标签">
+          <n-input v-model:value="formModel.tags" placeholder="逗号分隔" />
+        </n-form-item>
+      </n-form>
+      <!-- 学习记录表单 -->
+      <n-form v-if="modalType === 'learning'" label-placement="left" label-width="70">
+        <n-form-item label="摘要">
+          <n-input v-model:value="formModel.summary" type="textarea" placeholder="学到了什么…" :rows="3" />
+        </n-form-item>
+        <n-form-item label="模式">
+          <n-input v-model:value="formModel.pattern" placeholder="触发模式" />
+        </n-form-item>
+        <n-form-item label="优先级">
+          <n-select v-model:value="formModel.priority" :options="priorityOptions" />
+        </n-form-item>
+      </n-form>
+      <!-- 本能表单 -->
+      <n-form v-if="modalType === 'instinct'" label-placement="left" label-width="70">
+        <n-form-item label="内容">
+          <n-input v-model:value="formModel.content" type="textarea" placeholder="本能规则…" :rows="3" />
+        </n-form-item>
+        <n-form-item label="触发模式">
+          <n-input v-model:value="formModel.trigger_pattern" placeholder="触发条件" />
+        </n-form-item>
+        <n-form-item label="置信度">
+          <n-slider v-model:value="formModel.confidence" :min="0" :max="1" :step="0.1" />
+        </n-form-item>
+      </n-form>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showModal = false">取消</n-button>
+          <n-button type="primary" @click="handleModalOk">确定</n-button>
+        </n-space>
+      </template>
+    </n-modal>
   </div>
 </template>
 
@@ -404,6 +646,10 @@ function fmtTs(ts: number): string {
 .note-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 13px; }
 .note-content { flex: 1; }
 .note-extra { font-size: 11px; color: var(--moon-dim); }
+
+.tab-toolbar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; margin-bottom: 10px; }
+.item-list { display: flex; flex-direction: column; gap: 6px; }
+.list-row { display: flex; align-items: center; gap: 10px; padding: 8px 14px; font-size: 13px; }
 
 .empty-state { padding: 30px; text-align: center; color: var(--moon-dim); }
 
