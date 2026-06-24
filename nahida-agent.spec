@@ -16,7 +16,8 @@ SPECPATH = os.path.dirname(os.path.abspath(SPEC))
 def _tree_datas(root, prefix):
     """Return list of (src, dest) tuples for every file under *root*."""
     result = []
-    _exclude = {'.env', '.env.prod', '.env.local', 'webui_overrides.json'}
+    _exclude = {'.env', '.env.prod', '.env.local', 'webui_overrides.json',
+                'USER.md', 'SOUL.md', 'IDENTITY.md', 'MEMORY.md'}
     _exclude_dirs = {'credentials', '__pycache__', '.git', 'node_modules'}
     if not os.path.isdir(root):
         print(f'[spec] WARNING: root dir does not exist: {root}')

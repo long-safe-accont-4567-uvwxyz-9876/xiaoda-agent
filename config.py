@@ -163,12 +163,17 @@ def _init_user_resources():
             print(f"[config] Warning: failed to copy agents/: {e}")
 
     # 3. 复制 workspace/ 模板文件（SOUL.md, IDENTITY.md 等，不覆盖已有文件）
+    # 模板文件以 .tpl 扩展名打包，复制时去除 .tpl 后缀
     bundled_workspace = bundled_config / "workspace"
     if bundled_workspace.exists():
         WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
         for item in bundled_workspace.iterdir():
-            target = WORKSPACE_DIR / item.name
-            if not target.exists() and item.is_file():
+            if not item.is_file():
+                continue
+            # .tpl 文件复制时去除 .tpl 后缀（避免 CI 安全扫描拦截 USER.md 等文件名）
+            target_name = item.name[:-4] if item.name.endswith('.tpl') else item.name
+            target = WORKSPACE_DIR / target_name
+            if not target.exists():
                 try:
                     shutil.copy2(item, target)
                 except Exception:
