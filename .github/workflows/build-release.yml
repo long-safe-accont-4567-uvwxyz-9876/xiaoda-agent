@@ -173,8 +173,12 @@ jobs:
         shell: bash
         run: |
           # Remove developer personal info from workspace templates before bundling
-          sed -i 's/刘润飞/（用户姓名）/g' config/workspace/USER.md 2>/dev/null || true
-          sed -i 's/刘润飞/（用户姓名）/g' config/workspace/SOUL.md 2>/dev/null || true
+          # 支持 .md 和 .tpl 扩展名
+          for f in config/workspace/USER.md config/workspace/SOUL.md config/workspace/USER.md.tpl config/workspace/SOUL.md.tpl; do
+            if [ -f "$f" ]; then
+              sed -i 's/刘润飞/（用户姓名）/g' "$f"
+            fi
+          done
           echo "Sanitized developer PII from config/workspace/"
 
       - name: Build with PyInstaller
