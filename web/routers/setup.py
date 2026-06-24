@@ -39,7 +39,10 @@ async def _is_first_run_or_authenticated(request: Request) -> str:
     return await get_current_user(request)
 
 
-router = APIRouter(tags=["setup"], dependencies=[Depends(_is_first_run_or_authenticated)])
+router = APIRouter(tags=["setup"])
+
+# 需要认证的端点共享的依赖列表（首次运行时免认证）
+_AUTH_DEPS = [Depends(_is_first_run_or_authenticated)]
 
 
 @router.get("/setup/first-run", response_model=Envelope[dict])
@@ -82,7 +85,7 @@ async def get_version():
     return Envelope(data={"version": _read_version()})
 
 
-@router.get("/setup/keys", response_model=Envelope[dict])
+@router.get("/setup/keys", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
 async def get_keys():
     """返回所有 Key 的配置状态（脱敏）。"""
     import sys
@@ -434,7 +437,7 @@ async def test_single_key(key_name: str, key_value: str, extra: dict | None = No
     return False, "未知的 API Key 类型"
 
 
-@router.post("/setup/test-key", response_model=Envelope[dict])
+@router.post("/setup/test-key", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
 async def test_key(body: dict):
     """测试 API Key 是否有效。"""
     key_name = body.get("key_name", "")
@@ -449,7 +452,7 @@ async def test_key(body: dict):
     return Envelope(data={"success": success, "message": message})
 
 
-@router.post("/setup/keys", response_model=Envelope[dict])
+@router.post("/setup/keys", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
 async def save_keys(body: dict):
     """将提供的 Key-Value 写入 .env 文件。"""
     from setup_wizard import (
