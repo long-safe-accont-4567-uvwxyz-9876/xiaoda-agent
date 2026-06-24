@@ -267,7 +267,7 @@ class AgentCoreBootstrapper:
             core.knowledge_graph.set_free_model_client(
                 api_key=sf_key,
                 base_url="https://api.siliconflow.cn/v1",
-                model="Qwen/Qwen3-8B",
+                model="THUDM/GLM-4-9B-0414",
             )
         core.memory.set_knowledge_graph(core.knowledge_graph)
         # 注入 MemoryManager 到 memory_tool，修复记忆工具不可用问题
