@@ -421,8 +421,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ inputs.version || github.ref_name }}
-          name: Release v${{ inputs.version || github.ref_name }}
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Release v${{ steps.version.outputs.version }}
           files: |
             artifacts/nahida-agent-windows-x64-*-setup.exe
             artifacts/nahida-agent-windows-x64-*.zip
