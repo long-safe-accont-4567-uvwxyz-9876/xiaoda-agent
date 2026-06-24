@@ -59,7 +59,7 @@ onMounted(async () => {
 })
 
 watch(activeTab, async (tab) => {
-  if (tab === 'memory' && !knowledgeLoaded) {
+  if (tab === 'knowledge' && !knowledgeLoaded) {
     knowledgeLoaded = true
     await nextTick()
     loadKnowledge()
@@ -268,7 +268,7 @@ function fmtTs(ts: number): string {
         </div>
       </n-tab-pane>
 
-      <n-tab-pane name="memory" tab="记忆与知识">
+      <n-tab-pane name="memory" tab="记忆">
         <div class="mem-toolbar glass-panel">
           <n-input v-model:value="memQuery" placeholder="语义搜索记忆…" clearable
                    style="max-width: 280px" @keydown.enter="loadMemories" />
@@ -296,10 +296,11 @@ function fmtTs(ts: number): string {
             </n-popconfirm>
           </div>
         </div>
+      </n-tab-pane>
 
-        <div class="glass-panel chart-box" style="margin-top: 14px">
+      <n-tab-pane name="knowledge" tab="知识图谱">
+        <div class="glass-panel chart-box">
           <div class="kg-toolbar">
-            <h4>知识图谱</h4>
             <n-input v-model:value="graphEntity" placeholder="输入实体名聚焦…" size="small"
                      style="max-width: 200px" @keydown.enter="loadKnowledge" />
             <n-button size="tiny" :type="graphDepth === 1 ? 'primary' : 'default'"
@@ -309,29 +310,32 @@ function fmtTs(ts: number): string {
           </div>
           <div ref="graphEl" class="chart tall"></div>
         </div>
+      </n-tab-pane>
 
-        <n-collapse style="margin-top: 14px">
-          <n-collapse-item :title="`📝 笔记（${notes.length}）`" name="notes">
-            <div v-for="n in notes" :key="n.id" class="note-row">
-              <n-tag size="tiny" :bordered="false">{{ n.kind }}</n-tag>
-              <span class="note-content">{{ n.content }}</span>
-            </div>
-          </n-collapse-item>
-          <n-collapse-item :title="`🎓 学习记录（${learnings.length}）`" name="learnings">
-            <div v-for="l in learnings" :key="l.id" class="note-row">
-              <n-tag size="tiny" :type="l.priority === 'high' ? 'error' : l.priority === 'medium' ? 'warning' : 'default'"
-                     :bordered="false">{{ l.priority }}</n-tag>
-              <span class="note-content">{{ l.summary }}</span>
-              <span class="note-extra">× {{ l.recurrence_count }}</span>
-            </div>
-          </n-collapse-item>
-          <n-collapse-item :title="`⚡ 本能（${instincts.length}）`" name="instincts">
-            <div v-for="ins in instincts" :key="ins.id" class="note-row">
-              <span class="note-content">{{ ins.content || ins.summary || ins.trigger_pattern }}</span>
-              <span class="note-extra">置信 {{ ((ins.confidence || 0) * 100).toFixed(0) }}%</span>
-            </div>
-          </n-collapse-item>
-        </n-collapse>
+      <n-tab-pane name="notes" tab="笔记">
+        <div v-for="n in notes" :key="n.id" class="note-row">
+          <n-tag size="tiny" :bordered="false">{{ n.kind }}</n-tag>
+          <span class="note-content">{{ n.content }}</span>
+        </div>
+        <div v-if="!notes.length" class="empty-state"><p>还没有笔记哦～</p></div>
+      </n-tab-pane>
+
+      <n-tab-pane name="learnings" tab="学习记录">
+        <div v-for="l in learnings" :key="l.id" class="note-row">
+          <n-tag size="tiny" :type="l.priority === 'high' ? 'error' : l.priority === 'medium' ? 'warning' : 'default'"
+                 :bordered="false">{{ l.priority }}</n-tag>
+          <span class="note-content">{{ l.summary }}</span>
+          <span class="note-extra">× {{ l.recurrence_count }}</span>
+        </div>
+        <div v-if="!learnings.length" class="empty-state"><p>还没有学习记录哦～</p></div>
+      </n-tab-pane>
+
+      <n-tab-pane name="instincts" tab="本能">
+        <div v-for="ins in instincts" :key="ins.id" class="note-row">
+          <span class="note-content">{{ ins.content || ins.summary || ins.trigger_pattern }}</span>
+          <span class="note-extra">置信 {{ ((ins.confidence || 0) * 100).toFixed(0) }}%</span>
+        </div>
+        <div v-if="!instincts.length" class="empty-state"><p>还没有本能规则哦～</p></div>
       </n-tab-pane>
     </n-tabs>
   </div>
