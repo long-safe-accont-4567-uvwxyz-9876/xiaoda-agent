@@ -123,6 +123,60 @@ DATA_DIR = _resolve_data_path(_KIOXIA_BASE / "db", _FALLBACK_BASE / "data")
 LOG_DIR = _resolve_data_path(_KIOXIA_BASE / "logs", _FALLBACK_BASE / "logs")
 WORKSPACE_DIR = _resolve_data_path(_KIOXIA_BASE / "config" / "workspace", _FALLBACK_BASE / "workspace")
 CREDENTIALS_DIR = get_credentials_dir()
+
+
+def _init_user_resources():
+    """frozen 模式下首次运行时，从打包资源（_MEIPASS）复制配置文件到用户目录。
+
+    解决问题：agent.json5/workspace 模板打包在 _internal/config/ 里，
+    但用户目录 ~/.ai-agent/data/config/ 首次运行时是空的，导致配置丢失。
+    """
+    if not getattr(sys, 'frozen', False):
+        return
+    meipass = getattr(sys, '_MEIPASS', '')
+    if not meipass:
+        return
+    bundled_config = Path(meipass) / "config"
+    if not bundled_config.exists():
+        return
+
+    # 1. 复制 agent.json5 到用户配置目录（首次运行）
+    user_config_dir = _KIOXIA_BASE / "config"
+    user_config_dir.mkdir(parents=True, exist_ok=True)
+    bundled_agent_json5 = bundled_config / "agent.json5"
+    user_agent_json5 = user_config_dir / "agent.json5"
+    if bundled_agent_json5.exists() and not user_agent_json5.exists():
+        try:
+            shutil.copy2(bundled_agent_json5, user_agent_json5)
+            print(f"[config] agent.json5 initialized from bundled resource")
+        except Exception as e:
+            print(f"[config] Warning: failed to copy agent.json5: {e}")
+
+    # 2. 复制 agents/ 子目录（子 Agent 配置和人格文件）
+    bundled_agents = bundled_config / "agents"
+    user_agents = user_config_dir / "agents"
+    if bundled_agents.exists() and not user_agents.exists():
+        try:
+            shutil.copytree(bundled_agents, user_agents)
+            print(f"[config] agents/ initialized from bundled resource")
+        except Exception as e:
+            print(f"[config] Warning: failed to copy agents/: {e}")
+
+    # 3. 复制 workspace/ 模板文件（SOUL.md, IDENTITY.md 等，不覆盖已有文件）
+    bundled_workspace = bundled_config / "workspace"
+    if bundled_workspace.exists():
+        WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+        for item in bundled_workspace.iterdir():
+            target = WORKSPACE_DIR / item.name
+            if not target.exists() and item.is_file():
+                try:
+                    shutil.copy2(item, target)
+                except Exception:
+                    pass
+
+
+_init_user_resources()
+
 AGENT_CONFIG_PATH = (_KIOXIA_BASE / "config" / "agent.json5") if (_KIOXIA_BASE / "config").exists() else _FALLBACK_BASE / "agent.json5"
 STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "stickers", _FALLBACK_BASE / "stickers")
 KLEE_STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "klee-stickers", _FALLBACK_BASE / "klee-stickers")
