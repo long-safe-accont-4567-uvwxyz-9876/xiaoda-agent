@@ -82,6 +82,34 @@ def _run_cli():
     cli.run()
 
 
+def _get_lan_addresses():
+    """检测本机所有非回环的局域网 IPv4 地址（不产生实际网络流量）。"""
+    import socket
+    ips = []
+    try:
+        # 方法1：通过 UDP 连接获取主网卡 IP（不产生实际流量）
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
+        s.connect(("8.8.8.8", 80))
+        primary_ip = s.getsockname()[0]
+        s.close()
+        if primary_ip and not primary_ip.startswith("127."):
+            ips.append(primary_ip)
+    except Exception:
+        pass
+    try:
+        # 方法2：遍历所有网卡获取多网卡环境下的所有 IP
+        hostname = socket.gethostname()
+        all_addrs = socket.getaddrinfo(hostname, None, socket.AF_INET)
+        for addr_info in all_addrs:
+            ip = addr_info[4][0]
+            if ip and not ip.startswith("127.") and ip not in ips:
+                ips.append(ip)
+    except Exception:
+        pass
+    return ips
+
+
 def _run_web(host: str, port: int):
     import socket
     import uvicorn
@@ -122,6 +150,14 @@ def _run_web(host: str, port: int):
     # 显示友好的访问地址（0.0.0.0 对用户不友好）
     display_host = "localhost" if host == "0.0.0.0" else host
     logger.info(f"Web UI: http://{display_host}:{port}")
+
+    # 检测局域网 IP，打印手机可访问的地址
+    if host == "0.0.0.0":
+        lan_ips = _get_lan_addresses()
+        if lan_ips:
+            logger.info("手机访问（同一 WiFi 下）:")
+            for ip in lan_ips:
+                logger.info(f"  http://{ip}:{port}")
 
     uvicorn.run(
         app,
