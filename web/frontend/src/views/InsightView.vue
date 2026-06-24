@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, nextTick, watch } from 'vue'
 import {
   NTabs, NTabPane, NButton, NInput, NSlider, NTag, NPopconfirm,
   NCollapse, NCollapseItem, useMessage,
@@ -37,6 +37,8 @@ const importanceMin = ref(0)
 const graphEl = ref<HTMLElement | null>(null)
 const graphEntity = ref('用户')
 const graphDepth = ref(1)
+const activeTab = ref('emotion')
+let knowledgeLoaded = false
 const notes = ref<any[]>([])
 const learnings = ref<any[]>([])
 const instincts = ref<any[]>([])
@@ -52,9 +54,16 @@ onMounted(async () => {
   loadToday()
   loadMemories()
   loadNotes()
-  loadKnowledge()
   loadLearning()
   ws.on('portrait_consolidated', onConsolidated)
+})
+
+watch(activeTab, async (tab) => {
+  if (tab === 'memory' && !knowledgeLoaded) {
+    knowledgeLoaded = true
+    await nextTick()
+    loadKnowledge()
+  }
 })
 
 function onConsolidated(e: any) {
@@ -200,7 +209,7 @@ function fmtTs(ts: number): string {
 <template>
   <div class="insight-view">
     <h2 class="view-title">🌱 内在世界</h2>
-    <n-tabs type="line" animated>
+    <n-tabs type="line" animated v-model:value="activeTab">
       <n-tab-pane name="emotion" tab="情绪">
         <div class="emotion-current glass-panel">
           <span class="emo-big" :style="{ color: EMOTION_COLORS[currentEmotion.primary] }">
