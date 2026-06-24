@@ -134,6 +134,7 @@ async def get_keys():
             "required": True,
             "configured": bool(val.strip()),
             "masked_value": _mask_key_value(val),
+            "raw_value": val,
         })
 
     for item in OPTIONAL_KEYS:
@@ -148,6 +149,7 @@ async def get_keys():
             "required": False,
             "configured": bool(val.strip()),
             "masked_value": _mask_key_value(val),
+            "raw_value": val,
         })
 
     return Envelope(data={"keys": keys})
