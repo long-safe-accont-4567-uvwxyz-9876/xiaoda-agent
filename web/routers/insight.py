@@ -228,6 +228,38 @@ async def knowledge_graph(request: Request,
     return Envelope(data={"nodes": list(nodes.values()), "edges": edges})
 
 
+@router.get("/insight/knowledge/entities", response_model=Envelope[list[dict]])
+async def list_entities(request: Request, limit: int = Query(default=200, le=500)):
+    core = request.app.state.core
+    kdb = core.db.knowledge
+    rows = await kdb.get_all_entities()
+    return Envelope(data=rows[:limit])
+
+
+@router.get("/insight/knowledge/relations", response_model=Envelope[list[dict]])
+async def list_relations(request: Request, limit: int = Query(default=200, le=500)):
+    core = request.app.state.core
+    kdb = core.db.knowledge
+    rows = await kdb.get_all_relations()
+    return Envelope(data=rows[:limit])
+
+
+@router.put("/insight/knowledge/relations/{relation_id}", response_model=Envelope[dict])
+async def update_relation(relation_id: str, body: dict, request: Request):
+    core = request.app.state.core
+    kdb = core.db.knowledge
+    rel_type = (body.get("relation") or body.get("relation_type") or "").strip()
+    if not rel_type:
+        raise HTTPException(400, "relation 不能为空")
+    n = await core.db.execute(
+        "UPDATE knowledge_relations SET relation_type=?, updated_at=? WHERE id=?",
+        (rel_type, time.time(), relation_id))
+    if not n:
+        raise HTTPException(404, f"关系 {relation_id} 不存在")
+    await core.db.commit()
+    return Envelope(data={"id": relation_id, "updated": True})
+
+
 # ── 笔记 ─────────────────────────────────────────────────────────
 
 
@@ -287,7 +319,9 @@ async def update_note(note_id: int, body: dict, request: Request):
 @router.delete("/insight/notebook/{note_id}", response_model=Envelope[dict])
 async def delete_note(note_id: int, request: Request):
     core = request.app.state.core
-    await core.db.notebook.delete_notebook_entry(note_id)
+    n = await core.db.execute("DELETE FROM notebook_entries WHERE id=?", (note_id,))
+    if not n:
+        raise HTTPException(404, f"笔记 {note_id} 不存在")
     await core.db.commit()
     return Envelope(data={"deleted": note_id})
 
@@ -389,11 +423,14 @@ async def create_learning(body: dict, request: Request):
         raise HTTPException(400, "summary 不能为空")
     pattern = body.get("pattern", "")
     priority = body.get("priority", "medium")
+    category = body.get("category", "insight")
     now = time.time()
+    learning_id = f"learn_{int(now * 1000)}"
     lid = await core.db.execute(
-        "INSERT INTO learnings (summary, pattern, priority, recurrence_count, "
-        "first_seen, last_seen) VALUES (?, ?, ?, 1, ?, ?)",
-        (summary, pattern, priority, now, now))
+        "INSERT INTO learnings (learning_id, category, priority, summary, pattern_key, "
+        "recurrence_count, first_seen, last_seen, created_at) "
+        "VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
+        (learning_id, category, priority, summary, pattern, now, now, now))
     await core.db.commit()
     return Envelope(data={"id": lid})
 
@@ -402,10 +439,11 @@ async def create_learning(body: dict, request: Request):
 async def update_learning(learning_id: int, body: dict, request: Request):
     core = request.app.state.core
     sets, params = [], []
-    for field in ("summary", "pattern", "priority", "status"):
-        if field in body and body[field] is not None:
-            sets.append(f"{field}=?")
-            params.append(body[field])
+    field_map = {"summary": "summary", "pattern": "pattern_key", "priority": "priority", "status": "status"}
+    for api_field, db_field in field_map.items():
+        if api_field in body and body[api_field] is not None:
+            sets.append(f"{db_field}=?")
+            params.append(body[api_field])
     if not sets:
         raise HTTPException(400, "无可更新字段")
     n = await core.db.execute(
@@ -436,13 +474,12 @@ async def create_instinct(body: dict, request: Request):
     content = (body.get("content") or body.get("summary") or "").strip()
     if not content:
         raise HTTPException(400, "content 不能为空")
-    trigger = body.get("trigger_pattern", "")
     confidence = float(body.get("confidence", 0.5))
     now = time.time()
     iid = await core.db.execute(
-        "INSERT INTO instincts (content, summary, trigger_pattern, confidence, "
-        "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (content, content, trigger, confidence, now, now))
+        "INSERT INTO instincts (content, confidence, created_at, last_used_at, use_count) "
+        "VALUES (?, ?, ?, ?, 0)",
+        (content, confidence, now, now))
     await core.db.commit()
     return Envelope(data={"id": iid})
 
@@ -451,7 +488,7 @@ async def create_instinct(body: dict, request: Request):
 async def update_instinct(instinct_id: int, body: dict, request: Request):
     core = request.app.state.core
     sets, params = [], []
-    for field in ("content", "summary", "trigger_pattern", "status"):
+    for field in ("content", "status"):
         if field in body and body[field] is not None:
             sets.append(f"{field}=?")
             params.append(body[field])
@@ -460,7 +497,7 @@ async def update_instinct(instinct_id: int, body: dict, request: Request):
         params.append(float(body["confidence"]))
     if not sets:
         raise HTTPException(400, "无可更新字段")
-    sets.append("updated_at=?")
+    sets.append("last_used_at=?")
     params.append(time.time())
     n = await core.db.execute(
         f"UPDATE instincts SET {', '.join(sets)} WHERE id=?",
@@ -506,10 +543,15 @@ async def update_entity(name: str, body: dict, request: Request):
     existing = await kdb.get_knowledge_entity(name)
     if not existing:
         raise HTTPException(404, f"实体 {name} 不存在")
-    await kdb.upsert_knowledge_entity(
-        name=name,
-        kind=body.get("kind", existing.get("kind", "")),
-        observations=body.get("observations", existing.get("observations", "")))
+    new_kind = body.get("kind", existing.get("kind", ""))
+    new_obs = body.get("observations", existing.get("observations", ""))
+    if isinstance(new_obs, str):
+        obs_json = new_obs
+    else:
+        obs_json = json.dumps(new_obs or [], ensure_ascii=False)
+    await kdb._conn.execute(
+        "UPDATE knowledge_entities SET kind=?, observations=?, updated_at=? WHERE name=?",
+        (new_kind, obs_json, time.time(), name))
     await core.db.commit()
     return Envelope(data={"name": name, "updated": True})
 
@@ -531,14 +573,15 @@ async def create_relation(body: dict, request: Request):
     rel = (body.get("relation") or "").strip()
     if not from_e or not to_e or not rel:
         raise HTTPException(400, "from/to/relation 不能为空")
+    relation_id = f"REL-{int(time.time() * 1000)}"
     kdb = core.db.knowledge
-    await kdb.upsert_knowledge_relation(from_e, to_e, rel)
+    await kdb.insert_knowledge_relation(relation_id, from_e, rel, to_e)
     await core.db.commit()
-    return Envelope(data={"from": from_e, "to": to_e, "relation": rel})
+    return Envelope(data={"id": relation_id, "from": from_e, "to": to_e, "relation": rel})
 
 
 @router.delete("/insight/knowledge/relations/{relation_id}", response_model=Envelope[dict])
-async def delete_relation(relation_id: int, request: Request):
+async def delete_relation(relation_id: str, request: Request):
     core = request.app.state.core
     kdb = core.db.knowledge
     await kdb.delete_knowledge_relation(relation_id)

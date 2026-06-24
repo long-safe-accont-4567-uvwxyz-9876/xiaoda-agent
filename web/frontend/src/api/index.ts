@@ -197,5 +197,17 @@ export const deleteKnowledgeEntity = (name: string) =>
 export const createKnowledgeRelation = (data: { from: string; to: string; relation: string }) =>
   post<{ from: string; to: string; relation: string }>('/insight/knowledge/relations', data)
 
-export const deleteKnowledgeRelation = (id: number) =>
-  del<{ deleted: number }>(`/insight/knowledge/relations/${id}`, true)
+export const deleteKnowledgeRelation = (id: string) =>
+  del<{ deleted: string }>(`/insight/knowledge/relations/${id}`, true)
+
+export const listKnowledgeEntities = (limit = 200) =>
+  get<any[]>(`/insight/knowledge/entities?limit=${limit}`)
+
+export const listKnowledgeRelations = (limit = 200) =>
+  get<any[]>(`/insight/knowledge/relations?limit=${limit}`)
+
+export const updateKnowledgeRelation = (id: string, data: { relation: string }) =>
+  put<{ id: string; updated: boolean }>(`/insight/knowledge/relations/${id}`, data)
+
+export const getKnowledgeGraph = (entity = '', depth = 1) =>
+  get<{ nodes: any[]; edges: any[] }>(`/insight/knowledge/graph?entity=${encodeURIComponent(entity)}&depth=${depth}`)

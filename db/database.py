@@ -1,4 +1,5 @@
 import json
+import sys
 import time
 import uuid
 from typing import Any
@@ -25,6 +26,35 @@ DB_PATH = DB_DIR / "agent.db"
 CURRENT_SCHEMA_VERSION = 8
 
 
+def _detect_fs_type(path: Path) -> str:
+    """检测路径所在文件系统类型（如 ext4/vfat/exfat/ntfs）。失败返回空串。"""
+    try:
+        p = path.resolve()
+        # Windows: 用 ctypes 获取卷文件系统类型
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                root = ctypes.create_unicode_buffer(260)
+                ctypes.windll.kernel32.GetVolumePathNameW(str(p), root, 260)
+                fs_buf = ctypes.create_unicode_buffer(260)
+                ctypes.windll.kernel32.GetVolumeInformationW(
+                    root, None, 0, None, None, None, fs_buf, 260)
+                return fs_buf.value.lower()
+            except Exception:
+                return ""
+        # Linux: 读取 /proc/mounts
+        while not p.is_mount() and p != p.parent:
+            p = p.parent
+        with open("/proc/mounts") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 3 and parts[1] == str(p):
+                    return parts[2]
+    except Exception:
+        pass
+    return ""
+
+
 class DatabaseManager:
 
     def __init__(self, db_path: str | Path | None = None):
@@ -47,27 +77,37 @@ class DatabaseManager:
             self._conn = None
         self._conn = await aiosqlite.connect(str(self.db_path))
         self._conn.row_factory = aiosqlite.Row
-        # WAL 模式 + 缓存优化（与向量库保持一致）
-        for pragma_sql in [
-            "PRAGMA journal_mode=WAL",
+        # vfat/exfat 不支持 WAL 共享内存和 FTS5 delete 命令，必须用 DELETE 模式
+        # NTFS 完全支持 WAL 和 FTS5，不需要特殊处理
+        fs_type = _detect_fs_type(self.db_path)
+        self._is_fat_fs = fs_type in ("vfat", "fat", "msdos", "exfat", "fat32")
+        if self._is_fat_fs:
+            logger.info(f"database.fat_fs_detected fs={fs_type} → 使用 DELETE journal_mode, 禁用 FTS5 触发器")
+        journal_mode_sql = "PRAGMA journal_mode=DELETE" if self._is_fat_fs else "PRAGMA journal_mode=WAL"
+        pragmas = [
+            journal_mode_sql,
             "PRAGMA synchronous=NORMAL",
             "PRAGMA cache_size=-20000",      # ~20MB
-            "PRAGMA mmap_size=67108864",     # 64MB
             "PRAGMA temp_store=MEMORY",
-        ]:
+        ]
+        # mmap 在 vfat 上不可靠，仅在非 fat 文件系统启用
+        if not self._is_fat_fs:
+            pragmas.append("PRAGMA mmap_size=67108864")  # 64MB
+        for pragma_sql in pragmas:
             try:
                 await self._conn.execute(pragma_sql)
             except Exception as e:
                 logger.warning(f"PRAGMA 失败: {pragma_sql} - {e}")
-        # 验证 WAL 模式
+        # 验证 journal_mode
         try:
             cursor = await self._conn.execute("PRAGMA journal_mode")
             row = await cursor.fetchone()
             mode = row[0] if row else "unknown"
-            if mode.lower() != "wal":
-                logger.warning(f"journal_mode 未生效，当前: {mode}")
+            expected = "delete" if self._is_fat_fs else "wal"
+            if mode.lower() != expected:
+                logger.warning(f"journal_mode 未生效，期望={expected} 当前={mode}")
             else:
-                logger.info("database.wal_enabled")
+                logger.info(f"database.journal_mode={mode}")
         except Exception as e:
             logger.warning(f"验证 journal_mode 失败: {e}")
         self.memory = MemoryDB(self._conn)
@@ -273,11 +313,14 @@ class DatabaseManager:
         return rows[0] if rows else None
 
     async def execute(self, sql: str, params: tuple = (), auto_commit: bool = True) -> int:
-        """通用写语句，返回 lastrowid。"""
+        """通用写语句。INSERT 返回 lastrowid，UPDATE/DELETE 返回 rowcount。"""
         cur = await self._conn.execute(sql, params)
         if auto_commit:
             await self._conn.commit()
-        return cur.lastrowid or 0
+        # INSERT 返回 lastrowid，UPDATE/DELETE 返回 rowcount
+        if sql.strip().upper().startswith("INSERT"):
+            return cur.lastrowid or 0
+        return cur.rowcount
 
     async def _create_tables(self):
         # ── Phase 1: 建表（仅 DDL，不含依赖新列的索引）─────────
@@ -458,21 +501,6 @@ class DatabaseManager:
                 name_index
             );
 
-            CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ai AFTER INSERT ON knowledge_entities BEGIN
-                INSERT INTO knowledge_entities_fts(id, name_index)
-                VALUES (new.id, new.name);
-            END;
-            CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ad AFTER DELETE ON knowledge_entities BEGIN
-                INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index)
-                VALUES ('delete', old.id, old.name);
-            END;
-            CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_au AFTER UPDATE ON knowledge_entities BEGIN
-                INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index)
-                VALUES ('delete', old.id, old.name);
-                INSERT INTO knowledge_entities_fts(id, name_index)
-                VALUES (new.id, new.name);
-            END;
-
             CREATE TABLE IF NOT EXISTS consolidation_candidates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL NOT NULL,
@@ -612,6 +640,35 @@ class DatabaseManager:
                 )
         except Exception as e:
             logger.warning(f"插入默认清理策略失败: {e}")
+
+        # FTS5 触发器管理：vfat 上 FTS5 "delete" 命令不工作，必须禁用触发器
+        if getattr(self, "_is_fat_fs", False):
+            # 删除可能存在的触发器（防止之前版本创建的触发器残留）
+            for trig in ["knowledge_entities_fts_ai", "knowledge_entities_fts_ad", "knowledge_entities_fts_au"]:
+                try:
+                    await self._conn.execute(f"DROP TRIGGER IF EXISTS {trig}")
+                except Exception:
+                    pass
+            logger.info("database.fts5_triggers_disabled (vfat)")
+        else:
+            # 非 fat 文件系统：创建 FTS5 触发器
+            try:
+                await self._conn.executescript("""
+                    CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ai AFTER INSERT ON knowledge_entities BEGIN
+                        INSERT INTO knowledge_entities_fts(id, name_index) VALUES (new.id, new.name);
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ad AFTER DELETE ON knowledge_entities BEGIN
+                        INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index)
+                        VALUES ('delete', old.id, old.name);
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_au AFTER UPDATE ON knowledge_entities BEGIN
+                        INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index)
+                        VALUES ('delete', old.id, old.name);
+                        INSERT INTO knowledge_entities_fts(id, name_index) VALUES (new.id, new.name);
+                    END;
+                """)
+            except Exception as e:
+                logger.warning(f"创建 FTS5 触发器失败: {e}")
 
         await self._conn.commit()
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, nextTick, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import {
   NTabs, NTabPane, NButton, NInput, NSlider, NTag, NPopconfirm,
   NCollapse, NCollapseItem, NModal, NForm, NFormItem, NSelect,
@@ -11,6 +11,9 @@ import {
   createNote, updateNote, deleteNote,
   createLearning, updateLearning, deleteLearning,
   createInstinct, updateInstinct, deleteInstinct,
+  createKnowledgeEntity, updateKnowledgeEntity, deleteKnowledgeEntity,
+  createKnowledgeRelation, updateKnowledgeRelation, deleteKnowledgeRelation,
+  listKnowledgeEntities, listKnowledgeRelations, getKnowledgeGraph,
 } from '../api'
 import { getWsClient } from '../api/ws'
 import { renderMarkdown } from '../utils/markdown'
@@ -46,15 +49,17 @@ const graphEntity = ref('用户')
 const graphDepth = ref(1)
 const activeTab = ref('emotion')
 let knowledgeChart: echarts.ECharts | null = null
+const kgEntities = ref<any[]>([])
+const kgRelations = ref<any[]>([])
 const notes = ref<any[]>([])
 const learnings = ref<any[]>([])
 const instincts = ref<any[]>([])
 
 // ── CRUD 模态框 ──
-type ModalType = 'memory' | 'note' | 'learning' | 'instinct' | null
+type ModalType = 'memory' | 'note' | 'learning' | 'instinct' | 'entity' | 'relation' | null
 const showModal = ref(false)
 const modalType = ref<ModalType>(null)
-const editingId = ref<number | null>(null)
+const editingId = ref<number | string | null>(null)
 const formModel = reactive<Record<string, any>>({})
 
 const noteKindOptions = [
@@ -86,8 +91,15 @@ function openAddModal(type: ModalType) {
     formModel.priority = 'medium'
   } else if (type === 'instinct') {
     formModel.content = ''
-    formModel.trigger_pattern = ''
     formModel.confidence = 0.5
+  } else if (type === 'entity') {
+    formModel.name = ''
+    formModel.kind = ''
+    formModel.observations = ''
+  } else if (type === 'relation') {
+    formModel.from = ''
+    formModel.to = ''
+    formModel.relation = ''
   }
   showModal.value = true
 }
@@ -110,8 +122,17 @@ function openEditModal(type: ModalType, item: any) {
     formModel.priority = item.priority || 'medium'
   } else if (type === 'instinct') {
     formModel.content = item.content || item.summary || ''
-    formModel.trigger_pattern = item.trigger_pattern || ''
     formModel.confidence = item.confidence ?? 0.5
+  } else if (type === 'entity') {
+    editingId.value = item.name
+    formModel.name = item.name || ''
+    formModel.kind = item.kind || ''
+    formModel.observations = item.observations || ''
+  } else if (type === 'relation') {
+    editingId.value = item.id
+    formModel.from = item.from_entity || ''
+    formModel.to = item.to_entity || ''
+    formModel.relation = item.relation_type || ''
   }
   showModal.value = true
 }
@@ -121,7 +142,7 @@ async function handleModalOk() {
     if (modalType.value === 'memory') {
       if (!formModel.summary) { message.warning('请输入记忆摘要'); return }
       if (editingId.value) {
-        await updateMemory(editingId.value, { summary: formModel.summary, importance: formModel.importance, emotion_label: formModel.emotion_label })
+        await updateMemory(editingId.value as number, { summary: formModel.summary, importance: formModel.importance, emotion_label: formModel.emotion_label })
       } else {
         await createMemory({ summary: formModel.summary, importance: formModel.importance, emotion_label: formModel.emotion_label })
       }
@@ -129,7 +150,7 @@ async function handleModalOk() {
     } else if (modalType.value === 'note') {
       if (!formModel.content) { message.warning('请输入笔记内容'); return }
       if (editingId.value) {
-        await updateNote(editingId.value, { content: formModel.content, kind: formModel.kind, tags: formModel.tags })
+        await updateNote(editingId.value as number, { content: formModel.content, kind: formModel.kind, tags: formModel.tags })
       } else {
         await createNote({ content: formModel.content, kind: formModel.kind, tags: formModel.tags })
       }
@@ -137,7 +158,7 @@ async function handleModalOk() {
     } else if (modalType.value === 'learning') {
       if (!formModel.summary) { message.warning('请输入学习摘要'); return }
       if (editingId.value) {
-        await updateLearning(editingId.value, { summary: formModel.summary, pattern: formModel.pattern, priority: formModel.priority })
+        await updateLearning(editingId.value as number, { summary: formModel.summary, pattern: formModel.pattern, priority: formModel.priority })
       } else {
         await createLearning({ summary: formModel.summary, pattern: formModel.pattern, priority: formModel.priority })
       }
@@ -145,11 +166,27 @@ async function handleModalOk() {
     } else if (modalType.value === 'instinct') {
       if (!formModel.content) { message.warning('请输入本能内容'); return }
       if (editingId.value) {
-        await updateInstinct(editingId.value, { content: formModel.content, trigger_pattern: formModel.trigger_pattern, confidence: formModel.confidence })
+        await updateInstinct(editingId.value as number, { content: formModel.content, confidence: formModel.confidence })
       } else {
-        await createInstinct({ content: formModel.content, trigger_pattern: formModel.trigger_pattern, confidence: formModel.confidence })
+        await createInstinct({ content: formModel.content, confidence: formModel.confidence })
       }
       await loadLearning()
+    } else if (modalType.value === 'entity') {
+      if (!formModel.name) { message.warning('请输入实体名称'); return }
+      if (editingId.value) {
+        await updateKnowledgeEntity(editingId.value as string, { kind: formModel.kind, observations: formModel.observations })
+      } else {
+        await createKnowledgeEntity({ name: formModel.name, kind: formModel.kind, observations: formModel.observations })
+      }
+      await loadKnowledgeData()
+    } else if (modalType.value === 'relation') {
+      if (!formModel.from || !formModel.to || !formModel.relation) { message.warning('请填写完整的关系信息'); return }
+      if (editingId.value) {
+        await updateKnowledgeRelation(editingId.value as string, { relation: formModel.relation })
+      } else {
+        await createKnowledgeRelation({ from: formModel.from, to: formModel.to, relation: formModel.relation })
+      }
+      await loadKnowledgeData()
     }
     showModal.value = false
     message.success(editingId.value ? '已更新' : '已创建')
@@ -160,7 +197,7 @@ async function handleModalOk() {
 
 const modalTitle = () => {
   const prefix = editingId.value ? '编辑' : '添加'
-  const names: Record<string, string> = { memory: '记忆', note: '笔记', learning: '学习记录', instinct: '本能' }
+  const names: Record<string, string> = { memory: '记忆', note: '笔记', learning: '学习记录', instinct: '本能', entity: '实体', relation: '关系' }
   return prefix + (names[modalType.value || ''] || '')
 }
 
@@ -177,12 +214,30 @@ onMounted(async () => {
   loadNotes()
   loadLearning()
   ws.on('portrait_consolidated', onConsolidated)
+  window.addEventListener('resize', handleResize)
 })
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+  if (resizeTimer) clearTimeout(resizeTimer)
+  knowledgeChart?.dispose()
+})
+
+let resizeTimer: ReturnType<typeof setTimeout> | null = null
+function handleResize() {
+  if (resizeTimer) clearTimeout(resizeTimer)
+  resizeTimer = setTimeout(() => {
+    knowledgeChart?.resize()
+  }, 200)
+}
 
 watch(activeTab, async (tab) => {
   if (tab === 'knowledge') {
     await nextTick()
-    await loadKnowledge()
+    // 延迟等待 tab 动画完成后再初始化
+    setTimeout(async () => {
+      await loadKnowledgeData()
+    }, 100)
   }
 })
 
@@ -306,17 +361,65 @@ async function removeInstinct(id: number) {
 
 async function loadKnowledge() {
   try {
-    const data = await get(
-      `/insight/knowledge/graph?entity=${encodeURIComponent(graphEntity.value)}&depth=${graphDepth.value}`)
+    const data = await getKnowledgeGraph(graphEntity.value, graphDepth.value)
     await nextTick()
     if (!graphEl.value) return
     if (knowledgeChart) { knowledgeChart.dispose() }
     knowledgeChart = echarts.init(graphEl.value)
+
+    // 按节点对分组，计算每条边的独立曲率，避免重叠
+    const pairKey = (a: string, b: string) => [a, b].sort().join('||')
+    const pairCount: Record<string, number> = {}
+    const pairIdx: Record<string, number> = {}
+    for (const e of data.edges) {
+      const k = pairKey(e.from, e.to)
+      pairCount[k] = (pairCount[k] || 0) + 1
+    }
+
+    const links = data.edges.map((e: any) => {
+      const k = pairKey(e.from, e.to)
+      const total = pairCount[k]
+      const idx = pairIdx[k] || 0
+      pairIdx[k] = idx + 1
+      // 单条边用小曲率，多条边均匀展开
+      let curveness: number
+      if (total === 1) {
+        curveness = 0.1
+      } else {
+        // 均匀分布在 -0.4 ~ 0.4 之间
+        curveness = -0.4 + (idx / (total - 1)) * 0.8
+      }
+      return {
+        source: e.from,
+        target: e.to,
+        relation: e.relation,
+        lineStyle: { curveness },
+      }
+    })
+
+    // 力导向布局，拖拽后固定
+    const nodeData = data.nodes.map((n: any) => ({
+      name: n.name,
+      value: n.kind,
+      symbolSize: 26,
+    }))
+
     knowledgeChart.setOption({
-      tooltip: {},
+      tooltip: {
+        triggerOn: 'click',
+        formatter: (p: any) => {
+          if (p.dataType === 'node') {
+            return `<b>${p.data.name}</b><br/>类型: ${p.data.value || ''}`
+          }
+          if (p.dataType === 'edge') {
+            return `${p.data.source} → <b>${p.data.relation}</b> → ${p.data.target}`
+          }
+          return ''
+        },
+      },
       series: [{
-        type: 'graph', layout: 'force', roam: true,
-        force: { repulsion: 220, edgeLength: 110 },
+        type: 'graph', layout: 'force', roam: true, draggable: true,
+        force: { repulsion: 260, edgeLength: 120, gravity: 0.08, friction: 0.32 },
         label: { show: true, color: '#f2f7ee', fontSize: 11 },
         edgeLabel: {
           show: true, fontSize: 9, color: '#e8d5a3',
@@ -324,10 +427,61 @@ async function loadKnowledge() {
         },
         itemStyle: { color: '#7fd650' },
         lineStyle: { color: 'rgba(232, 213, 163, 0.5)' },
-        data: data.nodes.map((n: any) => ({ name: n.name, value: n.kind, symbolSize: 26 })),
-        links: data.edges.map((e: any) => ({ source: e.from, target: e.to, relation: e.relation })),
+        emphasis: { disabled: true },
+        select: {
+          focus: 'adjacency',
+          lineStyle: { width: 3, color: '#fbbf24' },
+          label: { fontSize: 14 },
+          itemStyle: { shadowBlur: 10, shadowColor: '#fbbf24' },
+        },
+        data: nodeData,
+        links,
       }],
     })
+
+    // 拖拽松手后固定节点，不弹回
+    knowledgeChart.on('mouseup', (params: any) => {
+      if (params.dataType === 'node' && params.data) {
+        const opt = knowledgeChart?.getOption() as any
+        if (opt?.series?.[0]?.data) {
+          const sData = opt.series[0].data.map((d: any) => {
+            if (d.name === params.data.name) {
+              return { ...d, fixed: true, x: params.data.x, y: params.data.y }
+            }
+            return d
+          })
+          knowledgeChart?.setOption({ series: [{ data: sData }] }, false)
+        }
+      }
+    })
+  } catch (e: any) { message.error(e.message) }
+}
+
+async function loadKnowledgeData() {
+  try {
+    const [ents, rels] = await Promise.all([listKnowledgeEntities(), listKnowledgeRelations()])
+    kgEntities.value = ents || []
+    kgRelations.value = rels || []
+    await loadKnowledge()
+  } catch (e: any) { message.error(e.message) }
+}
+
+async function removeKgEntity(name: string) {
+  try {
+    await deleteKnowledgeEntity(name)
+    kgEntities.value = kgEntities.value.filter(e => e.name !== name)
+    kgRelations.value = kgRelations.value.filter(r => r.from_entity !== name && r.to_entity !== name)
+    message.success('实体已删除')
+    await loadKnowledge()
+  } catch (e: any) { message.error(e.message) }
+}
+
+async function removeKgRelation(id: string) {
+  try {
+    await deleteKnowledgeRelation(id)
+    kgRelations.value = kgRelations.value.filter(r => String(r.id) !== id)
+    message.success('关系已删除')
+    await loadKnowledge()
   } catch (e: any) { message.error(e.message) }
 }
 
@@ -449,13 +603,48 @@ function fmtTs(ts: number): string {
         <div class="glass-panel chart-box">
           <div class="kg-toolbar">
             <n-input v-model:value="graphEntity" placeholder="输入实体名聚焦…" size="small"
-                     style="max-width: 200px" @keydown.enter="loadKnowledge" />
+                     style="max-width: 200px" @keydown.enter="loadKnowledgeData" />
             <n-button size="tiny" :type="graphDepth === 1 ? 'primary' : 'default'"
-                      @click="graphDepth = 1; loadKnowledge()">深度1</n-button>
+                      @click="graphDepth = 1; loadKnowledgeData()">深度1</n-button>
             <n-button size="tiny" :type="graphDepth === 2 ? 'primary' : 'default'"
-                      @click="graphDepth = 2; loadKnowledge()">深度2</n-button>
+                      @click="graphDepth = 2; loadKnowledgeData()">深度2</n-button>
+            <n-button size="tiny" type="primary" @click="openAddModal('entity')">+ 实体</n-button>
+            <n-button size="tiny" type="primary" @click="openAddModal('relation')">+ 关系</n-button>
           </div>
           <div ref="graphEl" class="chart tall"></div>
+        </div>
+        <div class="kg-lists">
+          <div class="kg-section">
+            <h4>实体 ({{ kgEntities.length }})</h4>
+            <div class="item-list">
+              <div v-for="e in kgEntities" :key="e.name" class="list-row glass-panel">
+                <n-tag size="tiny" :bordered="false" v-if="e.kind">{{ e.kind }}</n-tag>
+                <span class="note-content">{{ e.name }}</span>
+                <n-button size="tiny" quaternary @click="openEditModal('entity', e)">编辑</n-button>
+                <n-popconfirm @positive-click="removeKgEntity(e.name)">
+                  <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
+                  删除实体将同时删除相关关系，确认？
+                </n-popconfirm>
+              </div>
+              <div v-if="!kgEntities.length" class="empty-state"><p>暂无实体</p></div>
+            </div>
+          </div>
+          <div class="kg-section">
+            <h4>关系 ({{ kgRelations.length }})</h4>
+            <div class="item-list">
+              <div v-for="r in kgRelations" :key="r.id" class="list-row glass-panel">
+                <span class="kg-rel-from">{{ r.from_entity }}</span>
+                <n-tag size="tiny" type="info" :bordered="false">{{ r.relation_type }}</n-tag>
+                <span class="kg-rel-to">{{ r.to_entity }}</span>
+                <n-button size="tiny" quaternary @click="openEditModal('relation', r)">编辑</n-button>
+                <n-popconfirm @positive-click="removeKgRelation(r.id)">
+                  <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
+                  确认删除此关系？
+                </n-popconfirm>
+              </div>
+              <div v-if="!kgRelations.length" class="empty-state"><p>暂无关系</p></div>
+            </div>
+          </div>
         </div>
       </n-tab-pane>
 
@@ -559,11 +748,32 @@ function fmtTs(ts: number): string {
         <n-form-item label="内容">
           <n-input v-model:value="formModel.content" type="textarea" placeholder="本能规则…" :rows="3" />
         </n-form-item>
-        <n-form-item label="触发模式">
-          <n-input v-model:value="formModel.trigger_pattern" placeholder="触发条件" />
-        </n-form-item>
         <n-form-item label="置信度">
           <n-slider v-model:value="formModel.confidence" :min="0" :max="1" :step="0.1" />
+        </n-form-item>
+      </n-form>
+      <!-- 实体表单 -->
+      <n-form v-if="modalType === 'entity'" label-placement="left" label-width="70">
+        <n-form-item label="名称">
+          <n-input v-model:value="formModel.name" placeholder="实体名称" :disabled="!!editingId" />
+        </n-form-item>
+        <n-form-item label="类型">
+          <n-input v-model:value="formModel.kind" placeholder="如：人物、地点、概念" />
+        </n-form-item>
+        <n-form-item label="描述">
+          <n-input v-model:value="formModel.observations" type="textarea" placeholder="实体描述…" :rows="3" />
+        </n-form-item>
+      </n-form>
+      <!-- 关系表单 -->
+      <n-form v-if="modalType === 'relation'" label-placement="left" label-width="70">
+        <n-form-item label="起点实体">
+          <n-input v-model:value="formModel.from" placeholder="起点实体名" :disabled="!!editingId" />
+        </n-form-item>
+        <n-form-item label="关系">
+          <n-input v-model:value="formModel.relation" placeholder="如：属于、创建了、位于" />
+        </n-form-item>
+        <n-form-item label="终点实体">
+          <n-input v-model:value="formModel.to" placeholder="终点实体名" :disabled="!!editingId" />
         </n-form-item>
       </n-form>
       <template #footer>
@@ -651,4 +861,10 @@ function fmtTs(ts: number): string {
   color: var(--dendro); margin: 10px 0 6px; font-size: 16px;
 }
 :deep(.md-body ul) { padding-left: 20px; }
+
+.kg-lists { display: flex; gap: 14px; margin-top: 14px; flex-wrap: wrap; }
+.kg-section { flex: 1; min-width: 300px; }
+.kg-section h4 { font-size: 13px; color: var(--dendro); margin-bottom: 8px; }
+.kg-rel-from, .kg-rel-to { font-size: 12px; color: var(--moon); }
+.kg-rel-from::after { content: ' →'; color: var(--wisdom); margin: 0 4px; }
 </style>
