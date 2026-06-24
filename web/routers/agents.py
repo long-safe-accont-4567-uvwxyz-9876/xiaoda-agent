@@ -151,7 +151,12 @@ async def set_personality(name: str, body: dict, request: Request, _user: str = 
     return Envelope(data={"name": name, "saved": True})
 
 
-_WALLPAPER_DIR = Path(__file__).resolve().parent.parent / "media" / "wallpapers"
+# 壁纸目录使用用户数据目录，避免写入 _MEIPASS 只读目录
+try:
+    from config import MEDIA_DIR
+    _WALLPAPER_DIR = MEDIA_DIR / "wallpapers"
+except ImportError:
+    _WALLPAPER_DIR = Path(__file__).resolve().parent.parent / "media" / "wallpapers"
 _DATAURL_RE = re.compile(r"^data:image/(png|jpe?g|webp);base64,(.+)$", re.DOTALL)
 _EXT = {"png": "png", "jpg": "jpg", "jpeg": "jpg", "webp": "webp"}
 

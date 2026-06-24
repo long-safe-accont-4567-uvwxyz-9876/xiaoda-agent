@@ -181,6 +181,17 @@ AGENT_CONFIG_PATH = (_KIOXIA_BASE / "config" / "agent.json5") if (_KIOXIA_BASE /
 STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "stickers", _FALLBACK_BASE / "stickers")
 KLEE_STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "klee-stickers", _FALLBACK_BASE / "klee-stickers")
 FILE_DIR = _resolve_data_path(_KIOXIA_BASE / "files", _FALLBACK_BASE / "files")
+# 媒体目录（用户上传图片、生成的 TTS/图片/视频、壁纸等可写资源）
+MEDIA_DIR = _resolve_data_path(_KIOXIA_BASE / "media", _FALLBACK_BASE / "media")
+# 记忆状态目录（记忆编码状态等运行时可写数据）
+MEMORY_STATE_DIR = _resolve_data_path(_KIOXIA_BASE / "memory_state", _FALLBACK_BASE / "memory_state")
+# 插件配置目录
+PLUGINS_CONFIG_DIR = _resolve_data_path(_KIOXIA_BASE / "plugins", _FALLBACK_BASE / "plugins")
+# 子 Agent 配置目录（人格文件、配置 JSON）
+AGENTS_CONFIG_DIR = _KIOXIA_BASE / "config" / "agents"
+if not AGENTS_CONFIG_DIR.exists():
+    AGENTS_CONFIG_DIR = _FALLBACK_BASE / "config" / "agents"
+AGENTS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── 数据迁移：frozen 模式下从 exe 目录迁移到用户目录 ──
 # 解决更新安装包导致数据丢失（"刷机"）的问题
@@ -438,6 +449,10 @@ __all__ = [
     "STICKER_DIR",
     "KLEE_STICKER_DIR",
     "FILE_DIR",
+    "MEDIA_DIR",
+    "MEMORY_STATE_DIR",
+    "PLUGINS_CONFIG_DIR",
+    "AGENTS_CONFIG_DIR",
     "build_system_prompt",
     "build_safe_system_prompt",
     "load_agent_config",

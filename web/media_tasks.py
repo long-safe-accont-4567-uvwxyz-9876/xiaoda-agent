@@ -15,7 +15,12 @@ from pathlib import Path
 
 from loguru import logger
 
-MEDIA_ROOT = Path(__file__).resolve().parent / "media"
+# 媒体目录使用用户数据目录，避免写入 _MEIPASS 只读目录
+try:
+    from config import MEDIA_DIR
+    MEDIA_ROOT = MEDIA_DIR
+except ImportError:
+    MEDIA_ROOT = Path(__file__).resolve().parent / "media"
 
 
 class MediaTaskQueue:

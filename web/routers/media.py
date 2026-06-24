@@ -14,7 +14,12 @@ from web.routers.auth import get_current_user
 
 router = APIRouter(tags=["media"], dependencies=[Depends(get_current_user)])
 
-MEDIA_ROOT = Path(__file__).resolve().parent.parent / "media"
+# 媒体目录使用用户数据目录，避免写入 _MEIPASS 只读目录
+try:
+    from config import MEDIA_DIR
+    MEDIA_ROOT = MEDIA_DIR
+except ImportError:
+    MEDIA_ROOT = Path(__file__).resolve().parent.parent / "media"
 
 
 def _cfg():

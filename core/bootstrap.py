@@ -299,6 +299,11 @@ class AgentCoreBootstrapper:
 
     async def _register_sub_agents(self) -> None:
         from agent_dispatcher import SubAgentConfig
+        # frozen 模式下使用用户目录中的 agents 配置（_init_user_resources 已复制模板）
+        try:
+            from config import AGENTS_CONFIG_DIR as _agents_dir
+        except ImportError:
+            _agents_dir = Path(__file__).resolve().parent.parent / "config" / "agents"
 
         core = self.core
         keli_config = SubAgentConfig(
@@ -306,7 +311,7 @@ class AgentCoreBootstrapper:
             display_name="可莉",
             provider="mimo",
             model="mimo-v2.5-pro",
-            personality_file=str(Path(__file__).resolve().parent.parent / "config" / "agents" / "klee_personality.md"),
+            personality_file=str(_agents_dir / "klee_personality.md"),
             voice_ref="keli",
             excluded_tools={"call_klee", "shell_command", "python_executor", "write_file", "search_files", "read_file", "list_files", "web_browse", "document_reader", "multi_search", "wolfram_query"},
             base_url="https://api.xiaomimimo.com/v1",
@@ -349,7 +354,7 @@ class AgentCoreBootstrapper:
             display_name="尼可",
             provider="mimo",
             model="mimo-v2.5-pro",
-            personality_file=str(Path(__file__).resolve().parent.parent / "config" / "agents" / "nike_personality.md"),
+            personality_file=str(_agents_dir / "nike_personality.md"),
             voice_ref=None,
             excluded_tools={"call_klee", "call_nahida", "shell_command", "write_file"},
             base_url="https://api.xiaomimimo.com/v1",

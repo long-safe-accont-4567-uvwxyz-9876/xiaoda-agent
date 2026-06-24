@@ -18,7 +18,12 @@ router = APIRouter(tags=["chat"], dependencies=[Depends(get_current_user)])
 
 _EMOTION_TAG = re.compile(r"\[emotion:[^\]]*\]")
 
-UPLOAD_DIR = Path(__file__).resolve().parent.parent / "media" / "upload"
+# 上传目录使用用户数据目录，避免写入 _MEIPASS 只读目录
+try:
+    from config import MEDIA_DIR
+    UPLOAD_DIR = MEDIA_DIR / "upload"
+except ImportError:
+    UPLOAD_DIR = Path(__file__).resolve().parent.parent / "media" / "upload"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
 

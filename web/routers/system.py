@@ -89,7 +89,14 @@ async def get_metrics():
 @router.get("/system/logs", response_model=Envelope[list[str]])
 async def get_logs(lines: int = Query(default=200, le=1000),
                    level: str = Query(default="")):
-    log_path = Path(__file__).resolve().parent.parent.parent / "botpy.log"
+    # botpy.log 在用户数据目录或 exe 同级目录
+    try:
+        from config import LOG_DIR, get_base_dir
+        log_path = LOG_DIR / "botpy.log"
+        if not log_path.exists():
+            log_path = get_base_dir() / "botpy.log"
+    except ImportError:
+        log_path = Path(__file__).resolve().parent.parent.parent / "botpy.log"
     if not log_path.exists():
         return Envelope(data=["（日志文件不存在）"])
     try:

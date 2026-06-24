@@ -112,10 +112,19 @@ class VectorStore:
                 sqlite_vec.load(conn)
                 conn.enable_load_extension(False)
 
-                conn.execute("PRAGMA journal_mode=WAL")
+                # 检测文件系统类型，vfat/exfat 不支持 WAL
+                from pathlib import Path
+                from db.database import _detect_fs_type
+                fs_type = _detect_fs_type(Path(self._db_path))
+                is_fat = fs_type in ("vfat", "fat", "msdos", "exfat", "fat32")
+                if is_fat:
+                    conn.execute("PRAGMA journal_mode=DELETE")
+                else:
+                    conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute("PRAGMA synchronous=NORMAL")
                 conn.execute("PRAGMA cache_size=-20000")
-                conn.execute("PRAGMA mmap_size=67108864")
+                if not is_fat:
+                    conn.execute("PRAGMA mmap_size=67108864")
 
                 # Use configured dimensions, or default 1024 until auto-detected
                 dims = self._dimensions if self._dimensions > 0 else 1024

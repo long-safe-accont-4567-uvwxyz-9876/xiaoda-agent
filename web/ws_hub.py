@@ -15,7 +15,12 @@ from config import TTS_ASYNC_MODE, STREAM_STATUS_PUSH
 
 router = APIRouter()
 
-MEDIA_ROOT = Path(__file__).resolve().parent / "media"
+# 媒体目录使用用户数据目录，避免写入 _MEIPASS 只读目录
+try:
+    from config import MEDIA_DIR
+    MEDIA_ROOT = MEDIA_DIR
+except ImportError:
+    MEDIA_ROOT = Path(__file__).resolve().parent / "media"
 
 
 class ConnectionManager:
@@ -294,7 +299,7 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket):
         for url in _image_urls:
             try:
                 # URL 格式: /media/upload/xxx.png → 映射到本地文件
-                local_path = _Path(__file__).resolve().parent / "media" / "upload" / _Path(url).name
+                local_path = MEDIA_ROOT / "upload" / _Path(url).name
                 if local_path.exists():
                     mime, img_b64 = encode_image_to_base64(str(local_path))
                     image_data.append({"mimeType": mime, "data": img_b64})

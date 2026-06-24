@@ -315,7 +315,12 @@ def create_app() -> FastAPI:
     from web.ws_hub import router as ws_router
     app.include_router(ws_router)
 
-    media_dir = Path(__file__).parent / "media"
+    # 媒体目录使用用户数据目录，避免写入 _MEIPASS 只读目录
+    try:
+        from config import MEDIA_DIR
+        media_dir = MEDIA_DIR
+    except ImportError:
+        media_dir = Path(__file__).parent / "media"
     media_dir.mkdir(parents=True, exist_ok=True)
     # follow_symlink：表情包等媒体是指向外置盘的符号链接
     app.mount("/media", StaticFiles(directory=str(media_dir), follow_symlink=True),

@@ -10,8 +10,15 @@ from tool_engine.tool_registry import ToolResult
 
 logger = logging.getLogger("vision_service")
 
+# 模型目录（只读资源，可从 _MEIPASS 加载）
 MODELS_DIR = Path(__file__).parent / "models"
-CAPTURES_DIR = Path(__file__).parent / "captures"
+# 捕获目录（可写，使用用户数据目录避免 _MEIPASS 只读）
+try:
+    from config import MEDIA_DIR
+    CAPTURES_DIR = MEDIA_DIR / "captures"
+    CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
+except ImportError:
+    CAPTURES_DIR = Path(__file__).parent / "captures"
 
 COCO_LABELS = [
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",

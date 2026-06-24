@@ -15,7 +15,9 @@ from pathlib import Path
 
 from loguru import logger
 
-AGENTS_DIR = Path(__file__).resolve().parent.parent / "config" / "agents"
+# frozen 模式下使用用户目录（~/.ai-agent/data/config/agents/），避免写入 _MEIPASS 只读目录
+from config import AGENTS_CONFIG_DIR
+AGENTS_DIR = AGENTS_CONFIG_DIR
 BUILTIN_AGENTS = {"keli", "yinlang", "xilian", "nike"}
 
 # 内置 Agent 的 excluded_tools（与 core/bootstrap.py 中 _register_sub_agents 保持一致）

@@ -650,7 +650,12 @@ class MemoryManager:
         """原子写入记忆状态到 JSON 文件"""
         try:
             from pathlib import Path
-            state_dir = Path(__file__).parent / "state"
+            # 使用用户数据目录，避免写入 _MEIPASS 只读目录
+            try:
+                from config import MEMORY_STATE_DIR
+                state_dir = MEMORY_STATE_DIR
+            except ImportError:
+                state_dir = Path(__file__).parent / "state"
             state_dir.mkdir(parents=True, exist_ok=True)
             state_path = str(state_dir / "memory_state.json")
             data = {

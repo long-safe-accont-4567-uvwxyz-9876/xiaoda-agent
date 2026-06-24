@@ -39,9 +39,14 @@ def _read_env_key(env_var: str) -> str:
     key = os.environ.get(env_var, "")
     if key:
         return key
-    env_path = Path(__file__).parent / ".env"
+    # frozen 模式下 .env 在用户目录 ~/.ai-agent/.env
+    try:
+        from config import ENV_PATH
+        env_path = Path(ENV_PATH)
+    except ImportError:
+        env_path = Path(__file__).parent / ".env"
     if env_path.exists():
-        for line in env_path.read_text().splitlines():
+        for line in env_path.read_text(encoding="utf-8-sig").splitlines():
             if line.startswith(f"{env_var}="):
                 return line.split("=", 1)[1].strip()
     return ""

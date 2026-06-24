@@ -260,7 +260,12 @@ class PluginManager:
         if not record:
             return {}
         import json
-        config_path = Path(f"config/plugins/{plugin_id}/config.json")
+        # 使用用户目录下的插件配置目录，避免相对路径依赖 CWD
+        try:
+            from config import PLUGINS_CONFIG_DIR
+            config_path = PLUGINS_CONFIG_DIR / plugin_id / "config.json"
+        except ImportError:
+            config_path = Path(f"config/plugins/{plugin_id}/config.json")
         if config_path.exists():
             try:
                 return json.loads(config_path.read_text(encoding="utf-8"))
@@ -271,6 +276,10 @@ class PluginManager:
     def set_plugin_config(self, plugin_id: str, config: dict) -> None:
         """保存插件配置"""
         import json
-        config_path = Path(f"config/plugins/{plugin_id}/config.json")
+        try:
+            from config import PLUGINS_CONFIG_DIR
+            config_path = PLUGINS_CONFIG_DIR / plugin_id / "config.json"
+        except ImportError:
+            config_path = Path(f"config/plugins/{plugin_id}/config.json")
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")

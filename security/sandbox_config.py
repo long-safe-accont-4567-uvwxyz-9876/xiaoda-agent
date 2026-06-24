@@ -33,7 +33,18 @@ class SandboxSettings:
 
 
 # ── 项目根目录（用于默认沙箱配置）──
+import sys
+import tempfile
 _PROJECT_ROOT = str(Path(__file__).parent)
+# 跨平台临时目录
+_TEMP_DIR = tempfile.gettempdir()
+# 用户数据目录（frozen 模式下为 ~/.ai-agent，开发模式下为项目根）
+try:
+    from config import DATA_DIR, WORKSPACE_DIR, FILE_DIR, MEDIA_DIR
+    _USER_DATA_DIRS = [str(DATA_DIR), str(WORKSPACE_DIR), str(FILE_DIR), str(MEDIA_DIR)]
+except ImportError:
+    _USER_DATA_DIRS = []
+# KIOXIA 外置存储（Linux 特定路径，Windows 下不存在）
 _KIOXIA_DATA = "/mnt/kioxia" if Path("/mnt/kioxia").exists() else ""
 
 # ── 默认沙箱配置（安全加固）──────────────────────────
@@ -56,10 +67,14 @@ DEFAULT_SANDBOX = SandboxSettings(
     ),
     allowed_base_dirs=[
         _PROJECT_ROOT,
-        "/tmp",
-    ] + ([_KIOXIA_DATA] if _KIOXIA_DATA else []),
+        _TEMP_DIR,
+    ] + _USER_DATA_DIRS + ([_KIOXIA_DATA] if _KIOXIA_DATA else []),
     sensitive_paths=[
+        # Linux 特定
         "/etc/passwd", "/etc/shadow", "/etc/ssh",
+        # Windows 特定
+        "C:\\Windows\\System32\\config",
+        # 跨平台
         "~/.ssh", ".env", "credentials", "credentials.json",
         "config/secrets", ".git",
     ],

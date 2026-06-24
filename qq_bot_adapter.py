@@ -195,7 +195,12 @@ def _save_master_openid(openid: str) -> None:
     value = ",".join(ids)
 
     from pathlib import Path
-    env_path = Path(__file__).parent / ".env"
+    # frozen 模式下 .env 在用户目录 ~/.ai-agent/.env
+    try:
+        from config import ENV_PATH
+        env_path = Path(ENV_PATH)
+    except ImportError:
+        env_path = Path(__file__).parent / ".env"
     if not env_path.exists():
         env_path.write_text(f"MASTER_QQ_OPENID={value}\n", encoding="utf-8-sig")
     else:

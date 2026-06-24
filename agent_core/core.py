@@ -189,7 +189,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         )
         self._task_graph: TaskGraph | None = None
         self._agent_route_configs: dict = {}
-        self._tool_call_handler = ToolCallHandler(self.tool_executor, self.tool_repair, self._clean_reply, self.context, self.router, klee_delegate=self.delegate_to_klee, agent_name="nahida", personality_file=str(Path(__file__).parent.parent / "config" / "agents" / "nahida_personality.md"), tool_execute_callback=self._execute_tool_with_hooks)
+        self._tool_call_handler = ToolCallHandler(self.tool_executor, self.tool_repair, self._clean_reply, self.context, self.router, klee_delegate=self.delegate_to_klee, agent_name="nahida", personality_file=self._get_nahida_personality_file(), tool_execute_callback=self._execute_tool_with_hooks)
         self._user_chat_target: dict[str, str] = {}
         self._chat_target_lock = asyncio.Lock()
         self._router_engine = RouterEngine(belief_router=None)  # belief_router 灰度期暂不接入
@@ -221,6 +221,14 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
     async def init(self, reinit: bool = False) -> None:
         bootstrapper = AgentCoreBootstrapper(self)
         await bootstrapper.bootstrap(reinit=reinit)
+
+    def _get_nahida_personality_file(self) -> str:
+        """获取 nahida 人格文件路径（frozen 模式下使用用户目录）"""
+        try:
+            from config import AGENTS_CONFIG_DIR
+            return str(AGENTS_CONFIG_DIR / "nahida_personality.md")
+        except ImportError:
+            return str(Path(__file__).parent.parent / "config" / "agents" / "nahida_personality.md")
 
     def _resolve_identity(self, user_id: str, user_openid: str = "",
                           source: str = "") -> UserIdentity:
