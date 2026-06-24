@@ -1,6 +1,6 @@
-# Nahida Agent 🌿
+# Naxida Agent 🌿
 
-> 运行在 Orange Pi 上的多智能体 AI 助手 — 以《原神》纳西妲为灵魂，40+ 工具赋能，三通道交互，认知系统闭环，RAG 检索增强
+> 运行在 windows和Linux系统上的多智能体 AI 助手 ，40+ 工具赋能，三通道交互，认知系统闭环，RAG 检索增强
 
 <p align="center">
   <strong>多智能体</strong> · <strong>认知闭环</strong> · <strong>RAG 增强</strong> · <strong>插件系统</strong> · <strong>MCP 协议</strong> · <strong>边缘部署</strong>
@@ -8,7 +8,7 @@
 
 ***
 
-## 为什么选择 Nahida Agent？
+## 为什么选择 xiaoNaxida Agent？
 
 市面上有大量 AI Chatbot 项目，但 Nahida Agent 不只是"套壳 ChatGPT"。它是一个**完整的认知智能体**——能记住、能学习、能感知情绪、能调用工具、能自我改进。
 
