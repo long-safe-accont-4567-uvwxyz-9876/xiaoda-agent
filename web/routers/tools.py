@@ -178,7 +178,7 @@ async def get_skill(name: str):
     fp = _skills_dir() / f"{_safe_skill_name(name)}.md"
     if not fp.exists():
         raise HTTPException(404, f"Skill {name} 不存在")
-    return Envelope(data={"name": name, "content": fp.read_text(encoding="utf-8")})
+    return Envelope(data={"name": name, "content": fp.read_text(encoding="utf-8-sig")})
 
 
 @router.put("/skills/{name}", response_model=Envelope[dict])
@@ -190,7 +190,7 @@ async def save_skill(name: str, body: dict, request: Request):
         raise HTTPException(400, "content 不能为空")
     if len(content) > 256 * 1024:
         raise HTTPException(400, "SKILL.md 不能超过 256KB")
-    (_skills_dir() / f"{name}.md").write_text(content, encoding="utf-8")
+    (_skills_dir() / f"{name}.md").write_text(content, encoding="utf-8-sig")
     core = request.app.state.core
     try:
         await core.db.insert_audit_log("webui.skills.save", "webui", name)

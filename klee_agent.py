@@ -82,7 +82,7 @@ class KleeAgent:
 
         personality_path = Path(__file__).parent / "config" / "agents" / "klee_personality.md"
         if personality_path.exists():
-            self._personality = personality_path.read_text(encoding="utf-8")
+            self._personality = personality_path.read_text(encoding="utf-8-sig")
         else:
             self._personality = "你是可莉，蒙德城的火花骑士！活泼可爱，称呼用户为大哥哥或大姐姐。"
 

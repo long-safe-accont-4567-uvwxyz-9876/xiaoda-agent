@@ -140,7 +140,7 @@ async def set_personality(name: str, body: dict, request: Request, _user: str = 
     if name == "nahida":
         from config import WORKSPACE_DIR
         soul_path = WORKSPACE_DIR / "SOUL.md"
-        soul_path.write_text(text, encoding="utf-8")
+        soul_path.write_text(text, encoding="utf-8-sig")
         await _audit(request, "personality", name)
         return Envelope(data={"name": name, "saved": True})
     try:

@@ -197,9 +197,9 @@ def _save_master_openid(openid: str) -> None:
     from pathlib import Path
     env_path = Path(__file__).parent / ".env"
     if not env_path.exists():
-        env_path.write_text(f"MASTER_QQ_OPENID={value}\n", encoding="utf-8")
+        env_path.write_text(f"MASTER_QQ_OPENID={value}\n", encoding="utf-8-sig")
     else:
-        lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        lines = env_path.read_text(encoding="utf-8-sig").splitlines(keepends=True)
         found = False
         for i, line in enumerate(lines):
             if line.strip().startswith("MASTER_QQ_OPENID="):
@@ -208,7 +208,7 @@ def _save_master_openid(openid: str) -> None:
                 break
         if not found:
             lines.append(f"\nMASTER_QQ_OPENID={value}\n")
-        env_path.write_text("".join(lines), encoding="utf-8")
+        env_path.write_text("".join(lines), encoding="utf-8-sig")
     os.environ["MASTER_QQ_OPENID"] = value
     logger.info("qq_bot.master_openid_saved", openid=openid, total=len(ids))
 

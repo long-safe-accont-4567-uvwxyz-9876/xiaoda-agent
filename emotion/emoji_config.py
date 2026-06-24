@@ -13,7 +13,7 @@ def load_agent_emoji(agent_name: str, personality_file: str | None = None) -> di
     config = dict(DEFAULT_EMOJI.get(agent_name, DEFAULT_EMOJI["nahida"]))
     if personality_file and Path(personality_file).exists():
         try:
-            text = Path(personality_file).read_text(encoding="utf-8")
+            text = Path(personality_file).read_text(encoding="utf-8-sig")
             for key in ["thinking", "using", "done"]:
                 m = re.search(rf'^\s*-\s*{key}:\s*(\S+)', text, re.MULTILINE)
                 if m:

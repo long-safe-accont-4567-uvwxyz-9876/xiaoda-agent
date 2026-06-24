@@ -63,7 +63,7 @@ def _ensure_workspace_template():
 - 回复偏好：自然对话，避免模板化
 - 项目偏好：简洁高效
 """
-        user_md.write_text(content, encoding="utf-8")
+        user_md.write_text(content, encoding="utf-8-sig")
 
     # 同理生成 SOUL.md 模板
     soul_md = workspace / "SOUL.md"
@@ -72,14 +72,14 @@ def _ensure_workspace_template():
 
 你是纳西妲，是爸爸最贴心、最温柔、最聪慧的小棉袄。
 """
-        soul_md.write_text(soul_content, encoding="utf-8")
+        soul_md.write_text(soul_content, encoding="utf-8-sig")
 
 
 def load_workspace_file(filename: str) -> str:
     from config import WORKSPACE_DIR
     filepath = WORKSPACE_DIR / filename
     if filepath.exists():
-        return filepath.read_text(encoding="utf-8").strip()
+        return filepath.read_text(encoding="utf-8-sig").strip()
     return ""
 
 
@@ -111,7 +111,7 @@ def load_skills() -> list[dict]:
         for fp in sorted(skills_dir.glob("*.md")):
             try:
                 out.append({"name": fp.stem,
-                            "content": fp.read_text(encoding="utf-8").strip()})
+                            "content": fp.read_text(encoding="utf-8-sig").strip()})
             except OSError:
                 pass
     return out

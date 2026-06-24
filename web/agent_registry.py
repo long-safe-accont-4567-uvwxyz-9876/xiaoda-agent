@@ -281,7 +281,7 @@ class AgentRegistry:
         kwargs["excluded_tools"] = set(kwargs.get("excluded_tools") or [])
         if personality_text:
             pf = self._personality_file(name)
-            pf.write_text(personality_text, encoding="utf-8")
+            pf.write_text(personality_text, encoding="utf-8-sig")
             kwargs["personality_file"] = str(pf)
         cfg = SubAgentConfig(**kwargs)
         ok = await self.core.dispatcher.register(cfg)
@@ -300,7 +300,7 @@ class AgentRegistry:
             if personality_text is not None:
                 from config import WORKSPACE_DIR
                 soul_path = WORKSPACE_DIR / "SOUL.md"
-                soul_path.write_text(personality_text, encoding="utf-8")
+                soul_path.write_text(personality_text, encoding="utf-8-sig")
             return self.get("nahida")
         agent = self._require(name)
         personality_text = data.pop("personality_text", None)
@@ -330,7 +330,7 @@ class AgentRegistry:
         if personality_text is not None:
             pf = Path(agent.config.personality_file) if agent.config.personality_file \
                 else self._personality_file(name)
-            pf.write_text(personality_text, encoding="utf-8")
+            pf.write_text(personality_text, encoding="utf-8-sig")
             agent.config.personality_file = str(pf)
             await agent.init()  # 重载人格
         self._save_config(agent.config)
@@ -442,12 +442,12 @@ class AgentRegistry:
             from config import WORKSPACE_DIR
             soul_path = WORKSPACE_DIR / "SOUL.md"
             if soul_path.exists():
-                return soul_path.read_text(encoding="utf-8")
+                return soul_path.read_text(encoding="utf-8-sig")
             return ""
         agent = self._require(name)
         pf = agent.config.personality_file
         if pf and Path(pf).exists():
-            return Path(pf).read_text(encoding="utf-8")
+            return Path(pf).read_text(encoding="utf-8-sig")
         return ""
 
     async def set_personality(self, name: str, text: str) -> None:

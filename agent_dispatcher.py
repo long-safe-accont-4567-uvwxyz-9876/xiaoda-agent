@@ -168,7 +168,7 @@ class SubAgent:
         if self.config.personality_file:
             p = Path(self.config.personality_file)
             if p.exists():
-                self._personality = p.read_text(encoding="utf-8")
+                self._personality = p.read_text(encoding="utf-8-sig")
 
         if not self._personality:
             self._personality = f"你是{self.config.display_name}。"
