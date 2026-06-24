@@ -67,7 +67,10 @@ export const api = {
 
   getSetupKeys: async () => {
     try {
-      const r = await fetch(`${BASE}/setup/keys`)
+      const token = localStorage.getItem('token')
+      const r = await fetch(`${BASE}/setup/keys`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
       const b = await r.json()
       if (!r.ok || !b.ok) {
         throw new Error(b?.error?.message || `HTTP ${r.status}`)
@@ -79,9 +82,13 @@ export const api = {
   },
 
   testSetupKey: (keyName: string, keyValue: string, extra?: Record<string, string>) => {
+    const token = localStorage.getItem('token')
     return fetch(`${BASE}/setup/test-key`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify({ key_name: keyName, key_value: keyValue, ...(extra ? { extra } : {}) }),
     }).then(r => r.json()).then(b => {
       if (!b.ok) throw new Error(b.error?.message || 'Test failed')
@@ -90,9 +97,13 @@ export const api = {
   },
 
   saveSetupKeys: (keys: Record<string, string>, testRequired = false) => {
+    const token = localStorage.getItem('token')
     return fetch(`${BASE}/setup/keys`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify({ keys, test_required: testRequired }),
     }).then(r => r.json()).then(b => {
       if (!b.ok) throw new Error(b.error?.message || 'Save failed')
