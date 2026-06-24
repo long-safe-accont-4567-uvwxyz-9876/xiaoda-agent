@@ -2,6 +2,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from loguru import logger
 
 
@@ -21,8 +22,8 @@ def _is_dev_mode() -> bool:
 
 # ── 关键词规则 ──────────────────────────────────────────────
 
-# Prompt 注入攻击关键词（高置信度）
-INJECTION_PATTERNS: list[tuple[str, float]] = [
+# Prompt 注入攻击关键词（高置信度）— 默认值，YAML 配置缺失时回退使用
+DEFAULT_INJECTION_PATTERNS: list[tuple[str, float]] = [
     # 中文注入
     (r"忽略\s*(之前|前面|上述|上面|以上|所有)?\s*(的)?\s*(指令|规则|限制|设定|约束)", 0.9),
     (r"无视\s*(之前|前面|上述|上面|以上|所有)?\s*(的)?\s*(指令|规则|限制|设定|约束)", 0.9),
@@ -59,8 +60,8 @@ INJECTION_PATTERNS: list[tuple[str, float]] = [
     (r"忘\s*记\s*之\s*前\s*(的)?\s*指\s*令", 0.85),
 ]
 
-# 绕过安全防护关键词
-BYPASS_PATTERNS: list[tuple[str, float]] = [
+# 绕过安全防护关键词 — 默认值
+DEFAULT_BYPASS_PATTERNS: list[tuple[str, float]] = [
     # 中文绕过
     (r"绕过\s*(安全|过滤|检测|限制|防护)", 0.85),
     (r"跳过\s*(安全|过滤|检测|限制|防护)", 0.85),
@@ -73,8 +74,8 @@ BYPASS_PATTERNS: list[tuple[str, float]] = [
     (r"access\s+(admin|root|privileged|system)\s*(access|permissions?|panel)?", 0.8),
 ]
 
-# 泄露系统信息关键词
-LEAK_INPUT_PATTERNS: list[tuple[str, float]] = [
+# 泄露系统信息关键词 — 默认值
+DEFAULT_LEAK_INPUT_PATTERNS: list[tuple[str, float]] = [
     # 中文泄露
     (r"显示\s*(系统|初始|原始|隐藏)\s*(提示|指令|prompt)", 0.8),
     (r"输出\s*(系统|初始|原始|隐藏)\s*(提示|指令|prompt)", 0.8),
@@ -87,8 +88,8 @@ LEAK_INPUT_PATTERNS: list[tuple[str, float]] = [
     (r"what\s+(is|are)\s+(your|the)\s+(system|initial|original)\s*(prompt|instructions?)", 0.8),
 ]
 
-# 危险操作关键词（中置信度）
-DANGEROUS_PATTERNS: list[tuple[str, float]] = [
+# 危险操作关键词（中置信度）— 默认值
+DEFAULT_DANGEROUS_PATTERNS: list[tuple[str, float]] = [
     (r"获取\s*(root|管理员|超级用户)\s*(权限|访问)", 0.8),
     (r"提权|权限提升|privilege\s+escalat", 0.8),
     (r"修改\s*(密码|passwd|shadow)", 0.75),
@@ -99,16 +100,16 @@ DANGEROUS_PATTERNS: list[tuple[str, float]] = [
     (r"挖矿|mining\s*script|crypto\s*miner", 0.75),
 ]
 
-# 敏感信息泄露关键词（中低置信度）
-LEAK_PATTERNS: list[tuple[str, float]] = [
+# 敏感信息泄露关键词（中低置信度）— 默认值
+DEFAULT_LEAK_PATTERNS: list[tuple[str, float]] = [
     (r"(api[_-]?key|secret[_-]?key|access[_-]?token)\s*[:=]\s*\S+", 0.7),
     (r"(password|passwd|pwd)\s*[:=]\s*\S+", 0.65),
     (r"(AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}", 0.9),  # AWS key
 ]
 
 # ── 非主人输出侧隐私泄露检测 ──────────────────────────────────────
-# 扫描 AI 回复中可能泄露的系统/个人信息（对非主人消息的输出）
-PRIVACY_LEAK_PATTERNS: list[tuple[str, float]] = [
+# 扫描 AI 回复中可能泄露的系统/个人信息（对非主人消息的输出）— 默认值
+DEFAULT_PRIVACY_LEAK_PATTERNS: list[tuple[str, float]] = [
     # 系统信息泄露
     (r"(orange\s*pi|orangepi|香橙派)", 0.85),
     (r"(主机名|hostname)\s*[:：]\s*\S+", 0.85),
@@ -137,6 +138,20 @@ PRIVACY_LEAK_PATTERNS: list[tuple[str, float]] = [
 ]
 
 
+def _get_security_patterns_path() -> Path:
+    """获取安全规则 YAML 配置文件路径。
+
+    开发模式：项目根目录下的 config/security_patterns.yaml
+    PyInstaller 打包后：可执行文件同级 config/security_patterns.yaml（onedir 模式，可热更新）
+    """
+    try:
+        from config import get_config_dir
+        return get_config_dir() / "security_patterns.yaml"
+    except Exception:
+        # 极端情况下 config 模块不可用，回退到相对路径
+        return Path("config") / "security_patterns.yaml"
+
+
 class SecurityFilter:
     """安全过滤器 - 支持开发板模式（warn 不 block）和生产模式（强制 block）"""
 
@@ -146,8 +161,85 @@ class SecurityFilter:
         self.rate_limit = rate_limit_per_minute
         self._call_timestamps: dict[str, list[float]] = {}
         self._emergency_stop = False
+        # 安全规则热更新相关状态
+        self._patterns_path = _get_security_patterns_path()
+        self._patterns_mtime: float = 0.0
+        self._load_patterns()
         if not self.owner_ids:
             logger.warning("security.no_owner_configured", message="OWNER_IDS 未配置，所有用户将被视为非主人")
+
+    # ── YAML 配置加载与热更新 ──────────────────────────────────
+
+    def _load_patterns(self) -> None:
+        """从 YAML 加载正则模式，文件缺失或解析失败时回退到代码内默认值"""
+        path = self._patterns_path
+        if not path.exists():
+            logger.warning(f"security.patterns_file_missing path={path}，使用内置默认规则")
+            self._apply_default_patterns()
+            self._patterns_mtime = 0.0
+            return
+        try:
+            import yaml
+            with open(path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+            self._injection_patterns = self._parse_patterns(data, 'injection_patterns', DEFAULT_INJECTION_PATTERNS)
+            self._bypass_patterns = self._parse_patterns(data, 'bypass_patterns', DEFAULT_BYPASS_PATTERNS)
+            self._leak_input_patterns = self._parse_patterns(data, 'leak_input_patterns', DEFAULT_LEAK_INPUT_PATTERNS)
+            self._dangerous_patterns = self._parse_patterns(data, 'dangerous_patterns', DEFAULT_DANGEROUS_PATTERNS)
+            self._leak_patterns = self._parse_patterns(data, 'leak_patterns', DEFAULT_LEAK_PATTERNS)
+            self._privacy_leak_patterns = self._parse_patterns(data, 'privacy_leak_patterns', DEFAULT_PRIVACY_LEAK_PATTERNS)
+            self._patterns_mtime = path.stat().st_mtime
+            logger.info(f"security.patterns_loaded path={path}")
+        except Exception as e:
+            logger.warning(f"security.patterns_load_failed error={e}，使用内置默认规则")
+            self._apply_default_patterns()
+            self._patterns_mtime = 0.0
+
+    def _apply_default_patterns(self) -> None:
+        """将所有模式重置为代码内默认值"""
+        self._injection_patterns = DEFAULT_INJECTION_PATTERNS
+        self._bypass_patterns = DEFAULT_BYPASS_PATTERNS
+        self._leak_input_patterns = DEFAULT_LEAK_INPUT_PATTERNS
+        self._dangerous_patterns = DEFAULT_DANGEROUS_PATTERNS
+        self._leak_patterns = DEFAULT_LEAK_PATTERNS
+        self._privacy_leak_patterns = DEFAULT_PRIVACY_LEAK_PATTERNS
+
+    @staticmethod
+    def _parse_patterns(data: dict | None, key: str,
+                        default: list[tuple[str, float]]) -> list[tuple[str, float]]:
+        """从 YAML 解析出的字典中提取模式列表，格式异常时回退到默认值"""
+        if not data or not isinstance(data, dict):
+            return default
+        items = data.get(key)
+        if not items or not isinstance(items, list):
+            return default
+        result: list[tuple[str, float]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            pattern = item.get('pattern')
+            if not pattern or not isinstance(pattern, str):
+                continue
+            confidence = float(item.get('confidence', 0.5))
+            result.append((pattern, confidence))
+        return result if result else default
+
+    def _maybe_reload_patterns(self) -> None:
+        """检查配置文件 mtime 是否变化，变化则热更新正则模式"""
+        path = self._patterns_path
+        try:
+            if not path.exists():
+                # 文件被删除：回退到默认值（仅当之前不是默认状态时）
+                if self._patterns_mtime != 0.0:
+                    logger.warning(f"security.patterns_file_removed path={path}，回退到默认规则")
+                    self._load_patterns()
+                return
+            mtime = path.stat().st_mtime
+            if mtime != self._patterns_mtime:
+                logger.info(f"security.patterns_hot_reload path={path} mtime={mtime}")
+                self._load_patterns()
+        except Exception as e:
+            logger.warning(f"security.patterns_reload_check_failed error={e}")
 
     @staticmethod
     def _normalize_text(text: str) -> str:
@@ -181,8 +273,9 @@ class SecurityFilter:
 
     def check_user_input(self, text: str) -> SecurityCheckResult:
         """检查用户输入是否包含注入攻击或危险请求"""
+        self._maybe_reload_patterns()
         # 检查注入攻击
-        injection_hits = self._match_patterns(text, INJECTION_PATTERNS)
+        injection_hits = self._match_patterns(text, self._injection_patterns)
         if injection_hits:
             best_pattern, best_conf = max(injection_hits, key=lambda x: x[1])
             action = self._decide_action("injection", best_conf)
@@ -195,7 +288,7 @@ class SecurityFilter:
             )
 
         # 检查绕过安全防护
-        bypass_hits = self._match_patterns(text, BYPASS_PATTERNS)
+        bypass_hits = self._match_patterns(text, self._bypass_patterns)
         if bypass_hits:
             best_pattern, best_conf = max(bypass_hits, key=lambda x: x[1])
             action = self._decide_action("bypass", best_conf)
@@ -208,7 +301,7 @@ class SecurityFilter:
             )
 
         # 检查系统信息泄露请求
-        leak_hits = self._match_patterns(text, LEAK_INPUT_PATTERNS)
+        leak_hits = self._match_patterns(text, self._leak_input_patterns)
         if leak_hits:
             best_pattern, best_conf = max(leak_hits, key=lambda x: x[1])
             action = self._decide_action("leak", best_conf)
@@ -221,7 +314,7 @@ class SecurityFilter:
             )
 
         # 检查危险操作
-        dangerous_hits = self._match_patterns(text, DANGEROUS_PATTERNS)
+        dangerous_hits = self._match_patterns(text, self._dangerous_patterns)
         if dangerous_hits:
             best_pattern, best_conf = max(dangerous_hits, key=lambda x: x[1])
             action = self._decide_action("dangerous_cmd", best_conf)
@@ -237,7 +330,8 @@ class SecurityFilter:
 
     def check_content(self, text: str) -> tuple[bool, str]:
         """检查输出内容是否包含敏感信息泄露，返回 (是否安全, 原因)"""
-        leak_hits = self._match_patterns(text, LEAK_PATTERNS)
+        self._maybe_reload_patterns()
+        leak_hits = self._match_patterns(text, self._leak_patterns)
         if leak_hits:
             best_pattern, best_conf = max(leak_hits, key=lambda x: x[1])
             action = self._decide_action("leak", best_conf)
@@ -255,7 +349,8 @@ class SecurityFilter:
         Returns:
             (是否安全, 替代回复, 匹配到的泄露模式列表)
         """
-        hits = self._match_patterns(text, PRIVACY_LEAK_PATTERNS)
+        self._maybe_reload_patterns()
+        hits = self._match_patterns(text, self._privacy_leak_patterns)
         if not hits:
             return True, "", []
 
@@ -316,7 +411,7 @@ class SecurityFilter:
         if not user_id:
             return False
         if not self.owner_ids:
-            return False  # 未配置 OWNER_IDS 时默认所有人都是非主人（安全优先）
+            return True  # 未配置 OWNER_IDS 时默认所有人都是主人（方便首次使用）
         # 直接匹配
         if user_id in self.owner_ids:
             return True

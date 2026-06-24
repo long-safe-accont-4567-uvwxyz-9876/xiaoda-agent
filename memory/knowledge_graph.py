@@ -9,13 +9,13 @@ from db.db_knowledge import KnowledgeDB
 ENTITY_EXTRACT_PROMPT = """从以下对话摘要中提取关键实体和关系，只提取最显著的3-5个。
 
 严格输出JSON，不要添加任何其他文字。格式如下：
-{"entities": [{"name": "实体名", "kind": "人物/游戏/地点/概念/物品", "observations": ["观察1"]}], "relations": [{"from_entity": "实体A", "relation_type": "关系类型", "to_entity": "实体B"}]}
+{{"entities": [{{"name": "实体名", "kind": "人物/游戏/地点/概念/物品", "observations": ["观察1"]}}], "relations": [{{"from_entity": "实体A", "relation_type": "关系类型", "to_entity": "实体B"}}]}}
 
 规则：
 1. 只提取明确提及的实体，不要推测
 2. observations 是关于实体的具体描述
 3. relation_type 使用简洁的动词短语，如"喜欢"、"属于"、"住在"
-4. 如果没有明确的实体和关系，返回 {"entities": [], "relations": []}
+4. 如果没有明确的实体和关系，返回 {{"entities": [], "relations": []}}
 
 对话摘要：
 {summary}"""
@@ -34,6 +34,20 @@ def _clean_json_response(text: str) -> str:
     brace_end = text.rfind('}')
     if brace_end >= 0 and brace_end < len(text) - 1:
         text = text[:brace_end + 1]
+    return text
+
+
+def _repair_json(text: str) -> str:
+    """修复 LLM 输出中常见的 JSON 语法错误。"""
+    # 修复多余逗号: },, → },
+    text = re.sub(r'},\s*,', '},', text)
+    text = re.sub(r',\s*,', ',', text)
+    # 修复缺少逗号: "key":"val" "key2" → "key":"val","key2"
+    text = re.sub(r'"\s+(")', r',\1', text)
+    # 修复 } 后面缺少逗号直接跟 { : }{ → },{
+    text = re.sub(r'}\s*{', '},{', text)
+    # 修复 ] 后面缺少逗号直接跟 { : ]{ → ],{
+    text = re.sub(r'\]\s*{', '],{', text)
     return text
 
 
@@ -86,7 +100,7 @@ class KnowledgeGraph:
             return None
         import httpx
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.post(
                     f"{self._free_base_url}/chat/completions",
                     json={
@@ -129,7 +143,12 @@ class KnowledgeGraph:
                 )
             if isinstance(result, str):
                 cleaned = _clean_json_response(result)
-                parsed = json.loads(cleaned)
+                try:
+                    parsed = json.loads(cleaned)
+                except json.JSONDecodeError:
+                    # 第一次解析失败，尝试修复 JSON 后重新解析
+                    repaired = _repair_json(cleaned)
+                    parsed = json.loads(repaired)
                 if isinstance(parsed, list) and len(parsed) > 0:
                     parsed = parsed[0] if isinstance(parsed[0], dict) else {}
                 if not isinstance(parsed, dict):

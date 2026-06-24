@@ -433,19 +433,23 @@ class TestSilentExceptionFix:
         assert len(matches) == 0, f"qq_bot_adapter.py 中仍存在 `except Exception: pass`: {matches}"
 
     def test_agent_core_no_bare_except_pass(self):
-        """搜索 agent_core.py 中不再有 `except Exception: pass`"""
-        core_path = Path(__file__).parent.parent / "agent_core.py"
-        content = core_path.read_text(encoding="utf-8")
+        """搜索 agent_core 包中不再有 `except Exception: pass`"""
+        # agent_core.py 已拆分为 agent_core/ 包，需读取包内所有 .py 文件
+        core_dir = Path(__file__).parent.parent / "agent_core"
+        content = ""
+        for py_file in core_dir.glob("*.py"):
+            content += py_file.read_text(encoding="utf-8") + "\n"
         pattern = r"except\s+Exception\s*:\s*pass"
         matches = re.findall(pattern, content)
-        assert len(matches) == 0, f"agent_core.py 中仍存在 `except Exception: pass`: {matches}"
+        assert len(matches) == 0, f"agent_core 包中仍存在 `except Exception: pass`: {matches}"
 
     def test_flush_costs_has_logging(self):
         """验证 flush_costs 有日志记录"""
-        core_path = Path(__file__).parent.parent / "agent_core.py"
+        # flush_costs 调用位于 agent_core/core.py 的 shutdown 流程中
+        core_path = Path(__file__).parent.parent / "agent_core" / "core.py"
         content = core_path.read_text(encoding="utf-8")
         # 查找 flush_costs 相关代码段
-        assert "flush_costs" in content, "agent_core.py 应包含 flush_costs"
+        assert "flush_costs" in content, "agent_core/core.py 应包含 flush_costs"
         # 验证 flush_costs 的 except 块有日志
         # 搜索 flush_costs 附近的 except 块
         idx = content.find("flush_costs()")
@@ -455,9 +459,10 @@ class TestSilentExceptionFix:
 
     def test_notify_status_has_logging(self):
         """验证 _notify_status 有日志记录"""
-        core_path = Path(__file__).parent.parent / "agent_core.py"
+        # _notify_status 定义在 agent_core/sub_agent_manager.py 中
+        core_path = Path(__file__).parent.parent / "agent_core" / "sub_agent_manager.py"
         content = core_path.read_text(encoding="utf-8")
-        assert "_notify_status" in content, "agent_core.py 应包含 _notify_status"
+        assert "_notify_status" in content, "agent_core/sub_agent_manager.py 应包含 _notify_status"
         # 查找 _notify_status 方法附近的 except 块
         idx = content.find("async def _notify_status")
         if idx > 0:

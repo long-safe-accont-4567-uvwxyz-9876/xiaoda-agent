@@ -312,3 +312,235 @@ async def list_instincts(request: Request, limit: int = Query(default=50, le=200
     except Exception:
         rows = []
     return Envelope(data=rows)
+
+
+# ── 记忆增改 ─────────────────────────────────────────────────────
+
+
+@router.post("/insight/memories", response_model=Envelope[dict])
+async def create_memory(body: dict, request: Request):
+    core = request.app.state.core
+    summary = (body.get("summary") or "").strip()
+    if not summary:
+        raise HTTPException(400, "summary 不能为空")
+    importance = float(body.get("importance", 0.5))
+    emotion_label = body.get("emotion_label", "")
+    timestamp = float(body.get("timestamp", time.time()))
+    mid = await core.db.insert_episodic_memory(
+        summary=summary, importance=importance,
+        emotion_label=emotion_label, timestamp=timestamp)
+    # 写入向量索引
+    try:
+        if core.memory:
+            await core.memory.vector_store.upsert_vectors([{
+                "id": f"ep_{mid}",
+                "text": summary,
+                "metadata": {"memory_id": mid, "importance": importance}
+            }])
+    except Exception:
+        pass
+    await core.db.commit()
+    return Envelope(data={"id": mid})
+
+
+@router.put("/insight/memories/{memory_id}", response_model=Envelope[dict])
+async def update_memory(memory_id: int, body: dict, request: Request):
+    core = request.app.state.core
+    sets, params = [], []
+    if "summary" in body and body["summary"]:
+        sets.append("summary=?")
+        params.append(body["summary"])
+    if "importance" in body:
+        sets.append("importance=?")
+        params.append(float(body["importance"]))
+    if "emotion_label" in body:
+        sets.append("emotion_label=?")
+        params.append(body["emotion_label"])
+    if not sets:
+        raise HTTPException(400, "无可更新字段")
+    n = await core.db.execute(
+        f"UPDATE episodic_memories SET {', '.join(sets)} WHERE id=?",
+        tuple(params) + (memory_id,))
+    if not n:
+        raise HTTPException(404, f"记忆 {memory_id} 不存在")
+    # 同步更新向量索引
+    if "summary" in body and body["summary"]:
+        try:
+            if core.memory:
+                await core.memory.vector_store.upsert_vectors([{
+                    "id": f"ep_{memory_id}",
+                    "text": body["summary"],
+                    "metadata": {"memory_id": memory_id}
+                }])
+        except Exception:
+            pass
+    await core.db.commit()
+    return Envelope(data={"id": memory_id, "updated": True})
+
+
+# ── 学习记录增删改 ────────────────────────────────────────────────
+
+
+@router.post("/insight/learnings", response_model=Envelope[dict])
+async def create_learning(body: dict, request: Request):
+    core = request.app.state.core
+    summary = (body.get("summary") or "").strip()
+    if not summary:
+        raise HTTPException(400, "summary 不能为空")
+    pattern = body.get("pattern", "")
+    priority = body.get("priority", "medium")
+    now = time.time()
+    lid = await core.db.execute(
+        "INSERT INTO learnings (summary, pattern, priority, recurrence_count, "
+        "first_seen, last_seen) VALUES (?, ?, ?, 1, ?, ?)",
+        (summary, pattern, priority, now, now))
+    await core.db.commit()
+    return Envelope(data={"id": lid})
+
+
+@router.put("/insight/learnings/{learning_id}", response_model=Envelope[dict])
+async def update_learning(learning_id: int, body: dict, request: Request):
+    core = request.app.state.core
+    sets, params = [], []
+    for field in ("summary", "pattern", "priority", "status"):
+        if field in body and body[field] is not None:
+            sets.append(f"{field}=?")
+            params.append(body[field])
+    if not sets:
+        raise HTTPException(400, "无可更新字段")
+    n = await core.db.execute(
+        f"UPDATE learnings SET {', '.join(sets)} WHERE id=?",
+        tuple(params) + (learning_id,))
+    if not n:
+        raise HTTPException(404, f"学习记录 {learning_id} 不存在")
+    await core.db.commit()
+    return Envelope(data={"id": learning_id, "updated": True})
+
+
+@router.delete("/insight/learnings/{learning_id}", response_model=Envelope[dict])
+async def delete_learning(learning_id: int, request: Request):
+    core = request.app.state.core
+    n = await core.db.execute("DELETE FROM learnings WHERE id=?", (learning_id,))
+    if not n:
+        raise HTTPException(404, f"学习记录 {learning_id} 不存在")
+    await core.db.commit()
+    return Envelope(data={"deleted": learning_id})
+
+
+# ── 本能增删改 ────────────────────────────────────────────────────
+
+
+@router.post("/insight/instincts", response_model=Envelope[dict])
+async def create_instinct(body: dict, request: Request):
+    core = request.app.state.core
+    content = (body.get("content") or body.get("summary") or "").strip()
+    if not content:
+        raise HTTPException(400, "content 不能为空")
+    trigger = body.get("trigger_pattern", "")
+    confidence = float(body.get("confidence", 0.5))
+    now = time.time()
+    iid = await core.db.execute(
+        "INSERT INTO instincts (content, summary, trigger_pattern, confidence, "
+        "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (content, content, trigger, confidence, now, now))
+    await core.db.commit()
+    return Envelope(data={"id": iid})
+
+
+@router.put("/insight/instincts/{instinct_id}", response_model=Envelope[dict])
+async def update_instinct(instinct_id: int, body: dict, request: Request):
+    core = request.app.state.core
+    sets, params = [], []
+    for field in ("content", "summary", "trigger_pattern", "status"):
+        if field in body and body[field] is not None:
+            sets.append(f"{field}=?")
+            params.append(body[field])
+    if "confidence" in body and body["confidence"] is not None:
+        sets.append("confidence=?")
+        params.append(float(body["confidence"]))
+    if not sets:
+        raise HTTPException(400, "无可更新字段")
+    sets.append("updated_at=?")
+    params.append(time.time())
+    n = await core.db.execute(
+        f"UPDATE instincts SET {', '.join(sets)} WHERE id=?",
+        tuple(params) + (instinct_id,))
+    if not n:
+        raise HTTPException(404, f"本能 {instinct_id} 不存在")
+    await core.db.commit()
+    return Envelope(data={"id": instinct_id, "updated": True})
+
+
+@router.delete("/insight/instincts/{instinct_id}", response_model=Envelope[dict])
+async def delete_instinct(instinct_id: int, request: Request):
+    core = request.app.state.core
+    n = await core.db.execute("DELETE FROM instincts WHERE id=?", (instinct_id,))
+    if not n:
+        raise HTTPException(404, f"本能 {instinct_id} 不存在")
+    await core.db.commit()
+    return Envelope(data={"deleted": instinct_id})
+
+
+# ── 知识图谱实体和关系增删 ─────────────────────────────────────────
+
+
+@router.post("/insight/knowledge/entities", response_model=Envelope[dict])
+async def create_entity(body: dict, request: Request):
+    core = request.app.state.core
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name 不能为空")
+    kdb = core.db.knowledge
+    await kdb.upsert_knowledge_entity(
+        name=name,
+        kind=body.get("kind", ""),
+        observations=body.get("observations", ""))
+    await core.db.commit()
+    return Envelope(data={"name": name})
+
+
+@router.put("/insight/knowledge/entities/{name}", response_model=Envelope[dict])
+async def update_entity(name: str, body: dict, request: Request):
+    core = request.app.state.core
+    kdb = core.db.knowledge
+    existing = await kdb.get_knowledge_entity(name)
+    if not existing:
+        raise HTTPException(404, f"实体 {name} 不存在")
+    await kdb.upsert_knowledge_entity(
+        name=name,
+        kind=body.get("kind", existing.get("kind", "")),
+        observations=body.get("observations", existing.get("observations", "")))
+    await core.db.commit()
+    return Envelope(data={"name": name, "updated": True})
+
+
+@router.delete("/insight/knowledge/entities/{name}", response_model=Envelope[dict])
+async def delete_entity(name: str, request: Request):
+    core = request.app.state.core
+    kdb = core.db.knowledge
+    await kdb.delete_knowledge_entity(name)
+    await core.db.commit()
+    return Envelope(data={"deleted": name})
+
+
+@router.post("/insight/knowledge/relations", response_model=Envelope[dict])
+async def create_relation(body: dict, request: Request):
+    core = request.app.state.core
+    from_e = (body.get("from") or "").strip()
+    to_e = (body.get("to") or "").strip()
+    rel = (body.get("relation") or "").strip()
+    if not from_e or not to_e or not rel:
+        raise HTTPException(400, "from/to/relation 不能为空")
+    kdb = core.db.knowledge
+    await kdb.upsert_knowledge_relation(from_e, to_e, rel)
+    await core.db.commit()
+    return Envelope(data={"from": from_e, "to": to_e, "relation": rel})
+
+
+@router.delete("/insight/knowledge/relations/{relation_id}", response_model=Envelope[dict])
+async def delete_relation(relation_id: int, request: Request):
+    core = request.app.state.core
+    kdb = core.db.knowledge
+    await kdb.delete_knowledge_relation(relation_id)
+    await core.db.commit()
+    return Envelope(data={"deleted": relation_id})
