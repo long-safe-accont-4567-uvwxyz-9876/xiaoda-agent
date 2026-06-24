@@ -1,4 +1,5 @@
 import os
+import shutil
 import time
 from loguru import logger
 
@@ -405,10 +406,10 @@ class SlashCommandHandler:
                 logger.debug("slash.hw.mem_read_failed", error=str(e))
                 lines.append("💾 内存: 无法读取")
             try:
-                stat = os.statvfs('/')
-                total = stat.f_blocks * stat.f_frsize
-                free = stat.f_bavail * stat.f_frsize
-                used = total - free
+                usage = shutil.disk_usage('/')
+                total = usage.total
+                free = usage.free
+                used = usage.used
                 pct = used / total * 100 if total > 0 else 0
                 lines.append(f"💿 磁盘: {used//1073741824}G / {total//1073741824}G ({pct:.0f}%)")
             except Exception as e:

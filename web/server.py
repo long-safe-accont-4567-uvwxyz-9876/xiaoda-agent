@@ -219,10 +219,11 @@ async def lifespan(app: FastAPI):
     # 使用用户目录中的 .env（与 config.get_env_path() 一致）
     import os as _os, sys as _sys
     from pathlib import Path as _Path
-    if getattr(_sys, 'frozen', False):
+    try:
+        from config import ENV_PATH
+        _env_path = str(ENV_PATH)
+    except ImportError:
         _env_path = str(_Path.home() / ".ai-agent" / ".env")
-    else:
-        _env_path = str(_Path(__file__).resolve().parent.parent / ".env")
     # 确保 .env 文件存在（首次启动时 agent.py 已创建，这里做兜底）
     if not _os.path.exists(_env_path):
         try:

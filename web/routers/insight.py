@@ -366,11 +366,7 @@ async def create_memory(body: dict, request: Request):
     # 写入向量索引
     try:
         if core.memory:
-            await core.memory.vector_store.upsert_vectors([{
-                "id": f"ep_{mid}",
-                "text": summary,
-                "metadata": {"memory_id": mid, "importance": importance}
-            }])
+            await core.memory.vec.upsert(mid, summary)
     except Exception:
         pass
     await core.db.commit()
@@ -401,11 +397,7 @@ async def update_memory(memory_id: int, body: dict, request: Request):
     if "summary" in body and body["summary"]:
         try:
             if core.memory:
-                await core.memory.vector_store.upsert_vectors([{
-                    "id": f"ep_{memory_id}",
-                    "text": body["summary"],
-                    "metadata": {"memory_id": memory_id}
-                }])
+                await core.memory.vec.upsert(memory_id, body["summary"])
         except Exception:
             pass
     await core.db.commit()

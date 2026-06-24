@@ -1,4 +1,5 @@
 import os
+import shutil
 import asyncio
 import time
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
@@ -453,10 +454,10 @@ def _read_memory():
 
 def _read_disk():
     try:
-        stat = os.statvfs("/")
-        total = stat.f_blocks * stat.f_frsize
-        free = stat.f_bfree * stat.f_frsize
-        used = total - free
+        usage = shutil.disk_usage("/")
+        total = usage.total
+        free = usage.free
+        used = usage.used
         usage_pct = (used / total * 100) if total > 0 else 0
         return total, used, free, usage_pct
     except Exception:

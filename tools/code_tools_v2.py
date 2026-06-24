@@ -224,18 +224,37 @@ def python_executor(code: str) -> ToolResult:
         }
 
         # 使用 contextlib.redirect_stdout/stderr 替代全局 sys.stdout 重定向，确保线程安全
-        # 使用 signal.alarm 设置执行超时
-        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.alarm(_EXEC_TIMEOUT)
+        # 跨平台执行超时：UNIX 用 signal.alarm，Windows（无 SIGALRM）用守护线程 + join 超时
+        _exec_state = {}
 
-        try:
-            with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-                exec(code, exec_globals, local_vars)
-        except _ExecutionTimeout:
-            return ToolResult.fail(f"代码执行超时（{_EXEC_TIMEOUT}秒）")
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
+        def _run_code():
+            try:
+                with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+                    exec(code, exec_globals, local_vars)
+            except BaseException as e:  # 捕获后交由主线程重新抛出
+                _exec_state['error'] = e
+
+        if hasattr(signal, 'SIGALRM'):
+            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(_EXEC_TIMEOUT)
+            try:
+                _run_code()
+            except _ExecutionTimeout:
+                return ToolResult.fail(f"代码执行超时（{_EXEC_TIMEOUT}秒）")
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
+        else:
+            # Windows 不支持 SIGALRM，改用守护线程执行 + join 超时
+            _exec_thread = threading.Thread(target=_run_code, daemon=True)
+            _exec_thread.start()
+            _exec_thread.join(_EXEC_TIMEOUT)
+            if _exec_thread.is_alive():
+                return ToolResult.fail(f"代码执行超时（{_EXEC_TIMEOUT}秒）")
+
+        # 重新抛出 exec 内部异常（如 MemoryError），交由外层 except 统一处理
+        if 'error' in _exec_state:
+            raise _exec_state['error']
 
         output = stdout_buf.getvalue()
         error = stderr_buf.getvalue()

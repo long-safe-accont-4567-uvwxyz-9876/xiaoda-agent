@@ -4,8 +4,10 @@
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
+import socket
 from dataclasses import dataclass, field
 from pathlib import Path
 from loguru import logger
@@ -133,6 +135,24 @@ def check_domain_allowed(url: str, sandbox: SandboxSettings | None = None) -> tu
         if _domain_matches(hostname, denied):
             return False, f"域名 {hostname} 在黑名单中"
 
+    # 检查内网 IP（SSRF 防护）
+    if net_config.block_private_ips and hostname:
+        try:
+            # 先尝试把 hostname 当作 IP 字面量解析
+            ip = ipaddress.ip_address(hostname)
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                return False, f"内网/回环 IP {hostname} 被阻止（SSRF 防护）"
+        except ValueError:
+            # hostname 不是 IP 字面量，尝试 DNS 解析
+            try:
+                resolved = socket.gethostbyname(hostname)
+                ip = ipaddress.ip_address(resolved)
+                if ip.is_private or ip.is_loopback or ip.is_link_local:
+                    return False, f"域名 {hostname} 解析到内网 IP {resolved}（SSRF 防护）"
+            except (socket.gaierror, ValueError):
+                # DNS 解析失败，交给后续逻辑处理
+                pass
+
     # 如果有白名单，检查是否匹配
     if net_config.allowed_domains:
         matched = False
@@ -147,8 +167,16 @@ def check_domain_allowed(url: str, sandbox: SandboxSettings | None = None) -> tu
 
 
 def _domain_matches(hostname: str, pattern: str) -> bool:
-    """检查域名是否匹配模式（支持通配符 *）"""
+    """检查域名是否匹配模式（支持通配符 *）
+
+    支持两种通配符形式：
+    - ``*.suffix``：匹配 suffix 本身及其所有子域（如 ``*.example.com`` 匹配 ``example.com`` 和 ``a.b.example.com``）
+    - ``prefix.*``：匹配 prefix 本身及其所有同前缀子域（如 ``10.*`` 匹配 ``10`` 和 ``10.0.0.1``）
+    """
     if pattern.startswith("*."):
         suffix = pattern[2:]
         return hostname == suffix or hostname.endswith("." + suffix)
+    if pattern.endswith(".*"):
+        prefix = pattern[:-2]
+        return hostname == prefix or hostname.startswith(prefix + ".")
     return hostname == pattern

@@ -235,7 +235,8 @@ def shell_command(command: str) -> ToolResult:
 
     try:
         # 使用 shlex.split 解析参数，避免 shell=True 的命令注入风险
-        args = shlex.split(command)
+        # Windows 下反斜杠是路径分隔符，需用 posix=False 防止被当作转义字符
+        args = shlex.split(command, posix=os.name != "nt")
         if not args:
             return ToolResult.fail("空命令")
 
@@ -258,7 +259,7 @@ def shell_command(command: str) -> ToolResult:
     except ValueError as e:
         return ToolResult.fail(f"命令解析错误（可能包含不合法的引号或转义）: {str(e)}")
     except FileNotFoundError:
-        return ToolResult.fail(f"命令未找到: {shlex.split(command)[0] if command else ''}")
+        return ToolResult.fail(f"命令未找到: {shlex.split(command, posix=os.name != 'nt')[0] if command else ''}")
     except Exception as e:
         return ToolResult.fail(f"执行错误: {str(e)}")
 

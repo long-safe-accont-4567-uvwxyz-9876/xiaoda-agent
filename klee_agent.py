@@ -85,7 +85,11 @@ class KleeAgent:
             self._clients.append((provider["name"], client, provider["models"]))
             logger.info("klee.provider_ready", provider=provider["name"], models=len(provider["models"]))
 
-        personality_path = Path(__file__).parent / "config" / "agents" / "klee_personality.md"
+        try:
+            from config import AGENTS_CONFIG_DIR
+            personality_path = AGENTS_CONFIG_DIR / "klee_personality.md"
+        except ImportError:
+            personality_path = Path(__file__).parent / "config" / "agents" / "klee_personality.md"
         if personality_path.exists():
             self._personality = personality_path.read_text(encoding="utf-8-sig")
         else:

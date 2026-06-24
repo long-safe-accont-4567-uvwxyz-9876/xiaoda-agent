@@ -178,6 +178,9 @@ MAX_REPLY_LEN = _qq_cfg.get("max_reply_length", 8000)
 _msg_seq_counter = int(time.time() * 1000) % (10 ** 8)
 _msg_seq_lock = threading.Lock()
 
+# 保护 .env 文件读-改-写操作，防止并发 QQ 消息损坏 .env
+_env_write_lock = threading.Lock()
+
 def _next_msg_seq() -> int:
     global _msg_seq_counter
     with _msg_seq_lock:
@@ -187,35 +190,36 @@ def _next_msg_seq() -> int:
 
 def _save_master_openid(openid: str) -> None:
     """将 openid 追加到 MASTER_QQ_OPENID（逗号分隔），并更新运行时环境变量。"""
-    existing = os.getenv("MASTER_QQ_OPENID", "").strip()
-    ids = [x.strip() for x in existing.split(",") if x.strip()]
-    if openid in ids:
-        return
-    ids.append(openid)
-    value = ",".join(ids)
+    with _env_write_lock:
+        existing = os.getenv("MASTER_QQ_OPENID", "").strip()
+        ids = [x.strip() for x in existing.split(",") if x.strip()]
+        if openid in ids:
+            return
+        ids.append(openid)
+        value = ",".join(ids)
 
-    from pathlib import Path
-    # frozen 模式下 .env 在用户目录 ~/.ai-agent/.env
-    try:
-        from config import ENV_PATH
-        env_path = Path(ENV_PATH)
-    except ImportError:
-        env_path = Path(__file__).parent / ".env"
-    if not env_path.exists():
-        env_path.write_text(f"MASTER_QQ_OPENID={value}\n", encoding="utf-8-sig")
-    else:
-        lines = env_path.read_text(encoding="utf-8-sig").splitlines(keepends=True)
-        found = False
-        for i, line in enumerate(lines):
-            if line.strip().startswith("MASTER_QQ_OPENID="):
-                lines[i] = f"MASTER_QQ_OPENID={value}\n"
-                found = True
-                break
-        if not found:
-            lines.append(f"\nMASTER_QQ_OPENID={value}\n")
-        env_path.write_text("".join(lines), encoding="utf-8-sig")
-    os.environ["MASTER_QQ_OPENID"] = value
-    logger.info("qq_bot.master_openid_saved", openid=openid, total=len(ids))
+        from pathlib import Path
+        # frozen 模式下 .env 在用户目录 ~/.ai-agent/.env
+        try:
+            from config import ENV_PATH
+            env_path = Path(ENV_PATH)
+        except ImportError:
+            env_path = Path(__file__).parent / ".env"
+        if not env_path.exists():
+            env_path.write_text(f"MASTER_QQ_OPENID={value}\n", encoding="utf-8-sig")
+        else:
+            lines = env_path.read_text(encoding="utf-8-sig").splitlines(keepends=True)
+            found = False
+            for i, line in enumerate(lines):
+                if line.strip().startswith("MASTER_QQ_OPENID="):
+                    lines[i] = f"MASTER_QQ_OPENID={value}\n"
+                    found = True
+                    break
+            if not found:
+                lines.append(f"\nMASTER_QQ_OPENID={value}\n")
+            env_path.write_text("".join(lines), encoding="utf-8-sig")
+        os.environ["MASTER_QQ_OPENID"] = value
+        logger.info("qq_bot.master_openid_saved", openid=openid, total=len(ids))
 
 
 # 当前活跃的 bot 实例（同进程内 GreetingScheduler 等主动消息入口使用）

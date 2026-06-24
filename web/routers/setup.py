@@ -5,12 +5,41 @@ import shutil
 from typing import Any
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
 from loguru import logger
 
+from web.routers.auth import get_current_user
 from web.schemas import Envelope
 
-router = APIRouter(tags=["setup"])
+
+def _mask_key_value(val: str) -> str:
+    """脱敏：显示前4位和后4位，中间用 ***...*** 代替；空值返回空字符串。
+
+    过短的值（<=8）仅显示首字符，避免泄露过多内容。
+    """
+    if not val:
+        return ""
+    if len(val) <= 8:
+        return val[:1] + "****"
+    return val[:4] + "***...***" + val[-4:]
+
+
+async def _is_first_run_or_authenticated(request: Request) -> str:
+    """认证依赖：首次运行（.env 不存在或 MIMO_API_KEY 为空）时允许无认证访问；
+    非首次运行时必须携带有效 Bearer Token。返回用户标识。"""
+    try:
+        from setup_wizard import is_first_run
+        first_run = is_first_run()
+    except Exception as e:
+        # 降级：无法判断时允许访问，避免把首次安装流程锁死
+        logger.warning("setup.first_run_check_failed error={} -> allow", str(e))
+        first_run = True
+    if first_run:
+        return "setup"
+    return await get_current_user(request)
+
+
+router = APIRouter(tags=["setup"], dependencies=[Depends(_is_first_run_or_authenticated)])
 
 
 @router.get("/setup/first-run", response_model=Envelope[dict])
@@ -59,7 +88,7 @@ async def get_keys():
     import sys
     logger.info("setup.keys.called frozen={} exe={}", getattr(sys, 'frozen', False), getattr(sys, 'executable', 'N/A'))
     try:
-        from setup_wizard import REQUIRED_KEYS, OPTIONAL_KEYS, _load_env_values, _mask_value
+        from setup_wizard import REQUIRED_KEYS, OPTIONAL_KEYS, _load_env_values
         logger.info("setup.keys.import_ok")
     except Exception as e:
         logger.error("setup.keys.import_failed error={}", str(e))
@@ -81,7 +110,6 @@ async def get_keys():
             {"key": "MODELSCOPE_ACCESS_TOKEN", "label": "魔搭 Access Token", "desc": "魔搭 ModelScope 免费模型发现", "url": "https://modelscope.cn", "url_desc": "注册 → 个人中心 → 访问令牌"},
         ]
         _load_env_values = lambda: {}
-        _mask_value = lambda v: (v[:4] + "****") if v and len(v) > 4 else (v[:1] + "****" if v else "")
 
     try:
         current = _load_env_values()
@@ -102,8 +130,7 @@ async def get_keys():
             "url_desc": item.get("url_desc", ""),
             "required": True,
             "configured": bool(val.strip()),
-            "masked_value": _mask_value(val) if val else "",
-            "raw_value": val,
+            "masked_value": _mask_key_value(val),
         })
 
     for item in OPTIONAL_KEYS:
@@ -117,8 +144,7 @@ async def get_keys():
             "url_desc": item.get("url_desc", ""),
             "required": False,
             "configured": bool(val.strip()),
-            "masked_value": _mask_value(val) if val else "",
-            "raw_value": val,
+            "masked_value": _mask_key_value(val),
         })
 
     return Envelope(data={"keys": keys})

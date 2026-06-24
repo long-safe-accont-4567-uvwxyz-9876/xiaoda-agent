@@ -38,11 +38,11 @@ def _load_or_create_secret() -> str:
         return _SECRET
     secret_path = _get_secret_path()
     if secret_path.exists():
-        _SECRET = secret_path.read_text().strip()
+        _SECRET = secret_path.read_text(encoding="utf-8").strip()
     else:
         _SECRET = secrets.token_hex(32)
         secret_path.parent.mkdir(parents=True, exist_ok=True)
-        secret_path.write_text(_SECRET)
+        secret_path.write_text(_SECRET, encoding="utf-8")
     return _SECRET
 
 
