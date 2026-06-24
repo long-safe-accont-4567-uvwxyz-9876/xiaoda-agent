@@ -38,14 +38,15 @@ const timezones = [
 ]
 
 // 默认值（作为示例，用户可编辑）
+// 必填字段首次运行为空，其他字段保留默认值供用户参考
 const defaultFields = {
-  address_term: '爸爸',
-  name: '',
+  address_term: '',  // 必填，首次运行为空
+  name: '',           // 必填，首次运行为空
   device: '',
   timezone: 'Asia/Shanghai',
   preferred_personality: '纳西妲，小吉祥草王风格',
   preferred_tone: '温柔、软萌、清晰、有陪伴感',
-  like_to_be_called: '爸爸',
+  like_to_be_called: '',
   liked_reply_style: '有条理、能直接执行的方案',
   disliked_reply_style: '冷冰冰、敷衍或只有抽象建议的回答',
   project_preferences: '- 修改代码前先理解现有结构\n- 尽量不要大改项目，优先最小修改\n- 优先解决实际报错\n- 命令和路径要写清楚\n- 遇到危险操作要提醒确认',
@@ -75,6 +76,15 @@ onMounted(async () => {
 })
 
 async function handleSave() {
+  // 必填字段验证
+  if (!fields.value.address_term.trim()) {
+    error.value = '请填写「希望被称呼为」'
+    return
+  }
+  if (!fields.value.name.trim()) {
+    error.value = '请填写「昵称」'
+    return
+  }
   saving.value = true
   error.value = ''
   success.value = false
@@ -117,7 +127,7 @@ function handleSkip() {
           <h2 class="section-title">── 用户信息 ──</h2>
 
           <div class="form-group">
-            <label class="form-label">希望被称呼为</label>
+            <label class="form-label">希望被称呼为 <span class="required">*</span></label>
             <input
               v-model="fields.address_term"
               class="dendro-input"
@@ -127,12 +137,12 @@ function handleSkip() {
           </div>
 
           <div class="form-group">
-            <label class="form-label">昵称</label>
+            <label class="form-label">昵称 <span class="required">*</span></label>
             <input
               v-model="fields.name"
               class="dendro-input"
               type="text"
-              placeholder="你的昵称（可选）"
+              placeholder="你的昵称"
             />
           </div>
 
@@ -322,6 +332,11 @@ function handleSkip() {
   color: var(--moon-dim);
   font-family: 'Noto Sans SC', sans-serif;
   letter-spacing: 1px;
+}
+
+.required {
+  color: var(--alert);
+  font-weight: bold;
 }
 
 .dendro-input {
