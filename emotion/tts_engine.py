@@ -23,7 +23,7 @@ def _get_mimo_api_key() -> str:
     # fallback: 从 .env 文件读取（PyInstaller 打包后 os.getenv 可能为空）
     import sys
     if getattr(sys, 'frozen', False):
-        env_path = Path(sys.executable).parent / ".env"
+        env_path = Path.home() / ".ai-agent" / ".env"
     else:
         env_path = Path(__file__).resolve().parent.parent / ".env"
     if env_path.exists():

@@ -216,12 +216,13 @@ async def lifespan(app: FastAPI):
     app.state.agent_registry = registry
 
     # 降级模式：直接读 .env 文件检查 MIMO_API_KEY
+    # 使用用户目录中的 .env（与 config.get_env_path() 一致）
     import os as _os, sys as _sys
+    from pathlib import Path as _Path
     if getattr(_sys, 'frozen', False):
-        _env_dir = _os.path.dirname(_sys.executable)
+        _env_path = str(_Path.home() / ".ai-agent" / ".env")
     else:
-        _env_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    _env_path = _os.path.join(_env_dir, ".env")
+        _env_path = str(_Path(__file__).resolve().parent.parent / ".env")
     # 确保 .env 文件存在（首次启动时 agent.py 已创建，这里做兜底）
     if not _os.path.exists(_env_path):
         try:

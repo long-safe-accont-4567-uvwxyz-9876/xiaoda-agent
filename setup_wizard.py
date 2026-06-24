@@ -42,10 +42,18 @@ class _C:
 
 
 WIZARD_DIR = os.path.dirname(os.path.abspath(__file__))
-# PyInstaller 打包后 __file__ 在 _internal/ 下，.env 应该在 exe 同级目录
 if getattr(sys, 'frozen', False):
     WIZARD_DIR = os.path.dirname(sys.executable)
-ENV_PATH = os.path.join(WIZARD_DIR, ".env")
+
+# .env 文件路径：打包模式下使用用户目录（~/.ai-agent/.env），
+# 因为安装到 C:\Program Files\ 时非管理员用户无法写入
+if getattr(sys, 'frozen', False):
+    _env_dir = os.path.join(os.path.expanduser("~"), ".ai-agent")
+    os.makedirs(_env_dir, exist_ok=True)
+    ENV_PATH = os.path.join(_env_dir, ".env")
+else:
+    ENV_PATH = os.path.join(WIZARD_DIR, ".env")
+
 # .env.example 在 PyInstaller onedir 模式下被打包到 _internal/ (sys._MEIPASS)
 # 开发模式下在项目根目录（即 __file__ 所在目录）
 _MEIPASS = getattr(sys, '_MEIPASS', '')

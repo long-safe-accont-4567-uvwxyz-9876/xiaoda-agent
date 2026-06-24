@@ -121,10 +121,10 @@ def _read_env_key(env_var: str) -> str:
     key = os.environ.get(env_var, "")
     if key:
         return key
-    # PyInstaller 打包后从 exe 同级目录读取 .env，开发模式从源码目录读取
+    # PyInstaller 打包后从用户目录读取 .env，开发模式从源码目录读取
     import sys
     if getattr(sys, 'frozen', False):
-        env_path = Path(sys.executable).parent / ".env"
+        env_path = Path.home() / ".ai-agent" / ".env"
     else:
         env_path = Path(__file__).parent / ".env"
     if env_path.exists():

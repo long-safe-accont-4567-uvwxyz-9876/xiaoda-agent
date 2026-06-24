@@ -1,14 +1,18 @@
 import os
 import sys
 import argparse
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from dotenv import load_dotenv
-    # PyInstaller frozen 模式下从 exe 所在目录加载 .env，避免 CWD 不同导致找不到文件
+    # PyInstaller frozen 模式下使用用户目录（~/.ai-agent/.env），
+    # 因为安装到 C:\Program Files\ 时非管理员用户无法写入 .env
     if getattr(sys, 'frozen', False):
-        _env_path = os.path.join(os.path.dirname(sys.executable), ".env")
+        _env_dir = Path.home() / ".ai-agent"
+        _env_dir.mkdir(parents=True, exist_ok=True)
+        _env_path = str(_env_dir / ".env")
     else:
         _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     load_dotenv(_env_path, override=True)

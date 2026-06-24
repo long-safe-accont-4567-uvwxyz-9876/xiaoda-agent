@@ -12,10 +12,10 @@ from typing import Any
 from dotenv import load_dotenv
 import sys as _sys
 if getattr(_sys, 'frozen', False):
-    _env_path = str(Path(_sys.executable).parent / ".env")
+    _env_path = str(Path.home() / ".ai-agent" / ".env")
 else:
     _env_path = str(Path(__file__).resolve().parent / ".env")
-load_dotenv(_env_path)
+load_dotenv(_env_path, override=True)
 
 from utils.logging_config import setup_logging
 setup_logging()

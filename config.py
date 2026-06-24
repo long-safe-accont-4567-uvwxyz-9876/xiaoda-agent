@@ -16,7 +16,33 @@ def get_base_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
-load_dotenv(get_base_dir() / ".env", override=True)
+def get_env_path() -> Path:
+    """返回 .env 文件路径。
+
+    PyInstaller 打包后，如果安装到 C:\\Program Files\\ 等系统保护目录，
+    非管理员用户无法写入。此时将 .env 存放到用户目录 ~/.ai-agent/.env，
+    确保所有用户都能正常读写配置。
+    """
+    if getattr(sys, 'frozen', False):
+        user_env = Path.home() / ".ai-agent" / ".env"
+        user_env.parent.mkdir(parents=True, exist_ok=True)
+        # 迁移：如果用户目录没有 .env 但 exe 目录有（旧版以管理员运行过），自动迁移
+        if not user_env.exists():
+            old_env = Path(sys.executable).parent / ".env"
+            if old_env.exists():
+                try:
+                    import shutil
+                    shutil.copy2(old_env, user_env)
+                    print(f"[config] .env migrated from {old_env} to {user_env}")
+                except Exception:
+                    pass  # 迁移失败不阻塞启动，用户可在 Setup 页面重新配置
+        return user_env
+    # 开发模式：使用项目根目录
+    return Path(__file__).resolve().parent / ".env"
+
+
+ENV_PATH = get_env_path()
+load_dotenv(ENV_PATH, override=True)
 
 # 确保 PyInstaller 打包后 HTTPS 请求能找到 CA 证书
 # certifi 的 cacert.pem 必须被正确打包，否则所有 API 请求都会因 SSL 错误失败
