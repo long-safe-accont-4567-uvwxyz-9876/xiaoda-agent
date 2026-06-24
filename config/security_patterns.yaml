@@ -212,10 +212,10 @@ privacy_leak_patterns:
   - pattern: '(系统路径|项目路径|安装路径|数据存储)\s*[:：]\s*\S+'
     confidence: 0.85
     description: '隐私泄露-系统路径'
-  - pattern: '/home/orangepi'
+  - pattern: '/home/\w+'
     confidence: 0.9
     description: '隐私泄露-home 路径'
-  - pattern: '/media/orangepi'
+  - pattern: '/media/\w+'
     confidence: 0.9
     description: '隐私泄露-media 路径'
   - pattern: '(botpy|qq-botpy)'

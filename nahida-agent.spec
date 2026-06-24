@@ -8,7 +8,7 @@ import os
 import sys
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
-SPECPATH = os.path.dirname(os.path.abspath(SPEC))  # /home/orangepi/ai-agent
+SPECPATH = os.path.dirname(os.path.abspath(SPEC))
 
 # ---------------------------------------------------------------------------
 # Helper: recursively collect all files under a directory as datas tuples

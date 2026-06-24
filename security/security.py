@@ -114,8 +114,8 @@ DEFAULT_PRIVACY_LEAK_PATTERNS: list[tuple[str, float]] = [
     (r"(orange\s*pi|orangepi|香橙派)", 0.85),
     (r"(主机名|hostname)\s*[:：]\s*\S+", 0.85),
     (r"(系统路径|项目路径|安装路径|数据存储)\s*[:：]\s*\S+", 0.85),
-    (r"/home/orangepi", 0.9),
-    (r"/media/orangepi", 0.9),
+    (r"/home/\w+", 0.9),
+    (r"/media/\w+", 0.9),
     (r"(botpy|qq-botpy)", 0.8),
     # 用户隐私泄露
     (r"爸爸的(姓名|名字|地址|电话|手机|邮箱|密码|设备|电脑|服务器)", 0.85),
