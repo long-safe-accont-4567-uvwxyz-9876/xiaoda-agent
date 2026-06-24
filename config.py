@@ -54,7 +54,33 @@ except ImportError:
     pass
 
 _KIOXIA_BASE = Path(os.getenv("KIOXIA_DATA_DIR", str(Path.home() / ".ai-agent" / "data")))
-_FALLBACK_BASE = Path(__file__).resolve().parent
+
+def _get_fallback_base() -> Path:
+    """获取 fallback 基础路径。
+    PyInstaller 打包后使用用户目录 ~/.ai-agent/，确保更新安装包时数据不会丢失。
+    开发模式使用项目根目录。
+    """
+    if getattr(sys, 'frozen', False):
+        return Path.home() / ".ai-agent"
+    return Path(__file__).resolve().parent
+
+_FALLBACK_BASE = _get_fallback_base()
+
+
+def _migrate_old_data(old_dir: Path, new_dir: Path, name: str):
+    """将旧目录的数据迁移到新目录（仅首次）。
+    用于从 exe 目录迁移到用户目录，解决更新安装包导致数据丢失的问题。
+    """
+    if new_dir.exists() and any(new_dir.iterdir()):
+        return  # 新目录已有数据，跳过
+    if not old_dir.exists() or not any(old_dir.iterdir()):
+        return  # 旧目录无数据，跳过
+    try:
+        import shutil
+        shutil.copytree(old_dir, new_dir, dirs_exist_ok=True)
+        print(f"[config] {name} migrated from {old_dir} to {new_dir}")
+    except Exception as e:
+        print(f"[config] Warning: failed to migrate {name}: {e}")
 
 def get_credentials_dir() -> Path:
     """获取凭证目录。优先使用 KIOXIA 外置存储，否则使用可执行文件同级 credentials/。"""
@@ -79,12 +105,27 @@ def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
 
 DATA_DIR = _resolve_data_path(_KIOXIA_BASE / "db", _FALLBACK_BASE / "data")
 LOG_DIR = _resolve_data_path(_KIOXIA_BASE / "logs", _FALLBACK_BASE / "logs")
-WORKSPACE_DIR = _resolve_data_path(_KIOXIA_BASE / "config" / "workspace", Path(os.path.expanduser("~/.ai-agent/workspace")))
+WORKSPACE_DIR = _resolve_data_path(_KIOXIA_BASE / "config" / "workspace", _FALLBACK_BASE / "workspace")
 CREDENTIALS_DIR = get_credentials_dir()
-AGENT_CONFIG_PATH = (_KIOXIA_BASE / "config" / "agent.json5") if (_KIOXIA_BASE / "config").exists() else Path(os.path.expanduser("~/.ai-agent/agent.json5"))
+AGENT_CONFIG_PATH = (_KIOXIA_BASE / "config" / "agent.json5") if (_KIOXIA_BASE / "config").exists() else _FALLBACK_BASE / "agent.json5"
 STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "stickers", _FALLBACK_BASE / "stickers")
 KLEE_STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "klee-stickers", _FALLBACK_BASE / "klee-stickers")
 FILE_DIR = _resolve_data_path(_KIOXIA_BASE / "files", _FALLBACK_BASE / "files")
+
+# ── 数据迁移：frozen 模式下从 exe 目录迁移到用户目录 ──
+# 解决更新安装包导致数据丢失（"刷机"）的问题
+if getattr(sys, 'frozen', False):
+    _exe_base = Path(sys.executable).parent
+    # 迁移记忆数据库
+    _migrate_old_data(_exe_base / "data", DATA_DIR, "database")
+    # 迁移日志
+    _migrate_old_data(_exe_base / "logs", LOG_DIR, "logs")
+    # 迁移工作区（知识笔记、SOUL.md 等）
+    _migrate_old_data(Path(os.path.expanduser("~/.ai-agent/workspace")), WORKSPACE_DIR, "workspace")
+    # 迁移贴纸
+    _migrate_old_data(_exe_base / "stickers", STICKER_DIR, "stickers")
+    # 迁移文件存储
+    _migrate_old_data(_exe_base / "files", FILE_DIR, "files")
 
 _KIOXIA_AVAILABLE = (_KIOXIA_BASE / "db").exists()
 
