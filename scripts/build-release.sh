@@ -106,6 +106,11 @@ do_build() {
         die "Expected output directory not found: $dist_dir"
     fi
 
+    # --- Write version stamp into dist directory --------------------------------
+    echo -n "$version" > "$dist_dir/.version"
+    echo -n "enabled" > "$dist_dir/.auto_update"
+    info "Version stamp: $dist_dir/.version ($version)"
+
     # --- Create the distribution package ---------------------------------------
     local output_dir="$PROJECT_ROOT/dist/release"
     mkdir -p "$output_dir"

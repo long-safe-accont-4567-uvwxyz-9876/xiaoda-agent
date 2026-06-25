@@ -59,6 +59,12 @@ datas.append((os.path.join(SPECPATH, 'db', 'schema.sql'), 'db'))
 # .env.example
 datas.append((os.path.join(SPECPATH, '.env.example'), '.'))
 
+# .version / .auto_update (runtime version display & auto-update flag)
+for _vfile in ('.version', '.auto_update'):
+    _vpath = os.path.join(SPECPATH, _vfile)
+    if os.path.isfile(_vpath):
+        datas.append((_vpath, '.'))
+
 # web/media/stickers/ (runtime cache, populated by StickerManager)
 
 # assets/ directory (icons and other resources)

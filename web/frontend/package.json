@@ -1,7 +1,7 @@
 {
   "name": "nahida-webui",
   "private": true,
-  "version": "1.0.0",
+  "version": "0.3.98",
   "type": "module",
   "scripts": {
     "dev": "vite",

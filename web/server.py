@@ -290,7 +290,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Nahida Agent WebUI", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(title="Nahida Agent WebUI", version="0.3.98", lifespan=lifespan)
 
     from web.routers.auth import router as auth_router
     from web.routers.chat import router as chat_router
