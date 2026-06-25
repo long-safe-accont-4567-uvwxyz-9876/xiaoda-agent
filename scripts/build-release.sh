@@ -27,7 +27,16 @@ info() {
 # ---- Read version from pyproject.toml ----------------------------------------
 read_version() {
     local version
-    version=$(grep -E '^version\s*=' "$PROJECT_ROOT/pyproject.toml" | head -1 | sed -E 's/^version\s*=\s*["'\''"']([^"'\''"']+)["'\''"']/\1/')
+    version=$(python3 -c "
+import re, sys
+with open('$PROJECT_ROOT/pyproject.toml') as f:
+    for line in f:
+        m = re.match(r'^version\s*=\s*\"(.+?)\"', line)
+        if m:
+            print(m.group(1))
+            sys.exit(0)
+print('dev')
+")
     if [ -z "$version" ]; then
         die "Could not read version from pyproject.toml"
     fi
