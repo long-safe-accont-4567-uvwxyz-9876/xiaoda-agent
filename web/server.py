@@ -343,8 +343,8 @@ class NoCacheHTMLStaticFiles(StaticFiles):
         if path in ("index.html", ".") or path.endswith(".html"):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
         elif path.startswith("assets/"):
-            # 不使用 immutable，确保升级后浏览器会重新请求
-            response.headers["Cache-Control"] = "public, max-age=300"
+            # no-cache：每次使用前向服务器验证，升级后立即生效
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
 
 
