@@ -141,19 +141,21 @@ async def get_permission_mode():
     from security.permission_manager import get_permission_manager, PermissionMode
     return Envelope(data={
         "mode": get_permission_manager().mode.value,
-        "options": [m.value for m in PermissionMode if m.value != "bypass"],
+        "options": [m.value for m in PermissionMode],
     })
 
 
 @router.put("/system/permission-mode", response_model=Envelope[dict])
 async def set_permission_mode(body: dict, request: Request):
     mode = (body.get("mode") or "").lower()
-    if mode == "bypass":
-        raise HTTPException(400, "UI 禁止设置 BYPASS 模式")
+    confirm = body.get("confirm", "").lower()
     from security.permission_manager import get_permission_manager, PermissionMode
     valid = {m.value for m in PermissionMode}
     if mode not in valid:
         raise HTTPException(400, f"未知模式 {mode}")
+    # GOAT 模式需要二次确认
+    if mode == "goat" and confirm != "yes":
+        raise HTTPException(400, "梭哈模式需要二次确认，请传入 confirm: yes")
     get_permission_manager().set_mode(mode)
     core = request.app.state.core
     await core.db.insert_audit_log("webui.permission_mode.set", "webui", mode)

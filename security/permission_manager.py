@@ -14,9 +14,10 @@ from loguru import logger
 class PermissionMode(Enum):
     """权限模式"""
     DEFAULT = "default"    # 默认：安全威胁按置信度决定 block/warn
-    DEV = "dev"            # 开发模式：block 降级为 warn，修改性工具自动允许
+    DEV = "dev"            # 开发模式：block 降级为 warn，只读查询放行
     STRICT = "strict"      # 严格模式：所有威胁 block，修改性工具需确认
-    BYPASS = "bypass"      # 绕过模式：跳过所有安全检查（仅限受信环境）
+    BYPASS = "bypass"      # 绕过模式：跳过所有安全检查（兼容旧代码）
+    GOAT = "goat"          # 梭哈模式：全部权限开放，最大自由度
 
 
 # 敏感操作工具列表（strict 模式下需要确认）
@@ -87,8 +88,12 @@ class PermissionManager:
         return self._mode == PermissionMode.DEV
 
     def is_bypass_mode(self) -> bool:
-        """是否绕过模式"""
-        return self._mode == PermissionMode.BYPASS
+        """是否绕过/梭哈模式"""
+        return self._mode in (PermissionMode.BYPASS, PermissionMode.GOAT)
+
+    def is_goat_mode(self) -> bool:
+        """是否梭哈模式"""
+        return self._mode == PermissionMode.GOAT
 
     def is_strict_mode(self) -> bool:
         """是否严格模式"""
@@ -100,9 +105,11 @@ class PermissionManager:
         Returns:
             (allowed, reason) 元组
         """
-        if self._mode == PermissionMode.BYPASS:
+        # GOAT/BYPASS 模式：全部放行
+        if self._mode in (PermissionMode.BYPASS, PermissionMode.GOAT):
             return True, ""
 
+        # STRICT 模式：敏感工具需要确认
         if self._mode == PermissionMode.STRICT:
             if tool_name in _SENSITIVE_TOOLS:
                 return False, f"严格模式下 {tool_name} 需要确认"
@@ -117,16 +124,18 @@ class PermissionManager:
         Returns:
             "allow" / "warn" / "block"
         """
-        if self._mode == PermissionMode.BYPASS:
-            # BYPASS 模式下高置信度威胁仍记录 CRITICAL 日志
+        # GOAT/BYPASS 模式：跳过所有安全检查
+        if self._mode in (PermissionMode.BYPASS, PermissionMode.GOAT):
+            # 高置信度威胁仍记录 CRITICAL 日志
             if confidence >= 0.95:
                 logger.critical(
                     "permission_manager.bypass_high_confidence_threat",
                     threat_type=threat_type, confidence=confidence,
-                    msg="BYPASS 模式下检测到高置信度安全威胁，已放行但强烈建议检查",
+                    msg=f"{self._mode.value.upper()} 模式下检测到高置信度安全威胁，已放行但强烈建议检查",
                 )
             return "allow"
 
+        # 基于置信度的基础动作
         if confidence >= 0.8:
             base_action = "block"
         elif confidence >= 0.6:
@@ -134,14 +143,21 @@ class PermissionManager:
         else:
             return "allow"
 
-        if self._mode == PermissionMode.DEV and base_action == "block":
-            logger.warning(f"[DEV_MODE] 安全威胁降级为 warn: {threat_type} (置信度={confidence:.2f})")
-            return "warn"
+        # DEV 模式：block 降级为 warn，只读查询直接放行
+        if self._mode == PermissionMode.DEV:
+            # 只读类威胁（查看信息、查询数据）在 DEV 模式下直接放行
+            readonly_keywords = ["leak", "info_disclosure", "read_only", "query", "inspect"]
+            if any(kw in threat_type.lower() for kw in readonly_keywords):
+                logger.info(f"[DEV_MODE] 只读操作放行: {threat_type} (置信度={confidence:.2f})")
+                return "allow"
+            # 其他 block 威胁降级为 warn
+            if base_action == "block":
+                logger.warning(f"[DEV_MODE] 安全威胁降级为 warn: {threat_type} (置信度={confidence:.2f})")
+                return "warn"
 
-        if self._mode == PermissionMode.STRICT:
-            # strict 模式下 warn 也升级为 block
-            if base_action == "warn":
-                return "block"
+        # STRICT 模式：warn 也升级为 block
+        if self._mode == PermissionMode.STRICT and base_action == "warn":
+            return "block"
 
         return base_action
 

@@ -2,7 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import {
   NButton, NSwitch, NRadioGroup, NRadioButton, NInput, NModal,
-  NSelect, NSlider, useMessage,
+  NSelect, NSlider, NCheckbox, useMessage,
 } from 'naive-ui'
 import { get, put, post } from '../api'
 import { useUiStore } from '../stores/ui'
@@ -21,6 +21,8 @@ const logLevel = ref<string | null>(null)
 const logLoading = ref(false)
 const showRestart = ref(false)
 const restartConfirmText = ref('')
+const showGoatConfirm = ref(false)
+const goatConfirmChecked = ref(false)
 
 onMounted(async () => {
   await ui.loadRemote()
@@ -33,10 +35,25 @@ onMounted(async () => {
 })
 
 async function setPermMode(mode: string) {
+  if (mode === 'goat') {
+    showGoatConfirm.value = true
+    goatConfirmChecked.value = false
+    return
+  }
   try {
     await put('/system/permission-mode', { mode })
     permissionMode.value = mode
     message.success(`权限模式已切换为 ${mode.toUpperCase()} ✓ 即时生效`)
+  } catch (e: any) { message.error(e.message) }
+}
+
+async function confirmGoatMode() {
+  if (!goatConfirmChecked.value) return
+  try {
+    await put('/system/permission-mode', { mode: 'goat', confirm: 'yes' })
+    permissionMode.value = 'goat'
+    showGoatConfirm.value = false
+    message.success('梭哈模式已开启 ✓ 全部权限开放')
   } catch (e: any) { message.error(e.message) }
 }
 
@@ -67,8 +84,10 @@ function logout() {
 
 const permDesc: Record<string, string> = {
   default: '默认 — 危险操作需要确认',
-  dev: '开发 — 放宽部分写权限（自用调试）',
+  dev: '开发 — 放宽部分写权限，只读查询放行',
   strict: '严格 — 拒绝一切写/执行类工具',
+  bypass: '绕过 — 跳过所有安全检查（兼容模式）',
+  goat: '梭哈 — 全部权限开放，最大自由度 ⚡',
 }
 </script>
 
@@ -179,6 +198,34 @@ const permDesc: Record<string, string> = {
           <n-button @click="showRestart = false">取消</n-button>
           <n-button type="error" :disabled="restartConfirmText !== 'RESTART'" @click="doRestart">
             确认重启
+          </n-button>
+        </div>
+      </template>
+    </n-modal>
+
+    <n-modal v-model:show="showGoatConfirm" preset="card" title="⚡ 开启梭哈模式"
+             style="width: min(420px, 94vw)">
+      <div style="margin-bottom: 16px; font-size: 13.5px">
+        <p style="margin-bottom: 12px">
+          <b>梭哈模式</b>将开放全部权限，包括：
+        </p>
+        <ul style="margin: 0 0 12px 20px; line-height: 1.8">
+          <li>跳过所有安全检查</li>
+          <li>允许所有工具执行</li>
+          <li>无需确认直接操作</li>
+        </ul>
+        <p style="color: #e8833a; font-size: 12.5px">
+          ⚠️ 仅限受信环境使用，开启后 Agent 将拥有最大自由度
+        </p>
+      </div>
+      <n-checkbox v-model:checked="goatConfirmChecked">
+        我已了解风险，确认开启梭哈模式
+      </n-checkbox>
+      <template #footer>
+        <div style="display:flex; justify-content:flex-end; gap:10px">
+          <n-button @click="showGoatConfirm = false">取消</n-button>
+          <n-button type="warning" :disabled="!goatConfirmChecked" @click="confirmGoatMode">
+            确认开启
           </n-button>
         </div>
       </template>
