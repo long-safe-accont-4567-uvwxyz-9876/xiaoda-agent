@@ -1,5 +1,5 @@
 !define PRODUCT_NAME "Nahida Agent"
-!define PRODUCT_VERSION "0.3.98"
+!define PRODUCT_VERSION "${VERSION}"
 !define PRODUCT_PUBLISHER "Nahida Agent Team"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
