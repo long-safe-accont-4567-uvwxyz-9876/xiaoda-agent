@@ -15,10 +15,21 @@ provide('particles', particlesRef)
 
 onMounted(async () => {
   // 1. 首次运行检测：API Key 未配置 → 跳转 setup 向导
+  //    API Key 已配置但用户资料未完成 → 跳转资料编辑页
   try {
     const data = await api.getSetupFirstRun()
     if (data?.first_run) {
       router.replace('/setup')
+      return
+    }
+    // API Key 已配置，检查用户资料是否完成
+    if (!data?.profile_done) {
+      // 需要先登录才能访问需要认证的 /setup/profile
+      if (!auth.isLoggedIn) {
+        router.replace('/login')
+      } else {
+        router.replace('/setup/profile')
+      }
       return
     }
   } catch {

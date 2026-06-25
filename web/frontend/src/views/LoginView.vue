@@ -51,6 +51,20 @@ async function handleLogin() {
   try {
     // 无密码时传空字符串，后端会自动放行
     await auth.login(password.value)
+    // 登录成功后检查用户资料是否完成
+    try {
+      const data = await api.getSetupFirstRun()
+      if (data?.first_run) {
+        router.replace('/setup')
+        return
+      }
+      if (!data?.profile_done) {
+        router.replace('/setup/profile')
+        return
+      }
+    } catch {
+      // 检查失败，走正常流程
+    }
     router.replace('/')
   } catch (e: any) {
     error.value = e.message || '登录失败'

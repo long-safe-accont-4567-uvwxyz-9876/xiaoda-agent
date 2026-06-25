@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 from enum import Enum
 from loguru import logger
@@ -26,6 +27,63 @@ _SENSITIVE_TOOLS = {
     "write_file", "edit_file", "create_file",
     "agnes_image", "agnes_video",
 }
+
+# ── 防傻机制：即使用梭哈模式也会拦截的危险操作 ──────────────
+# 匹配 shell 命令中的致命操作（不区分大小写）
+_GOAT_DANGEROUS_SHELL_PATTERNS = [
+    # ── Linux/macOS ──
+    # 根目录删除
+    r'rm\s+(-[a-zA-Z]*\s+)*(--recursive\s+)?(/|/\*|\.\s+)',
+    r'rm\s+(-[a-zA-Z]*f[a-zA-Z]*r|rfa?|rf)\s+(/|/\*)',
+    r'rm\s+-[a-zA-Z]*\s*/\s*$',
+    # 磁盘格式化 / 覆写
+    r'mkfs\.',
+    r'dd\s+if=.*of=/dev/',
+    r'>\s*/dev/sd[a-z]',
+    # 叉子炸弹
+    r':\(\)\{.*\|.*&\}',
+    r'fork\s*bomb',
+    # 关键系统文件破坏
+    r'chmod\s+(-[a-zA-Z]*\s+)?(000|777)\s+/',
+    r'chown\s+.*\s+/',
+    # init / systemd 杀进程
+    r'kill\s+-9\s+1\b',
+    r'killall\s+(init|systemd|sshd)',
+    r'pkill\s+-(9|SIGKILL)\s+(init|systemd|sshd)',
+    # 网络破坏
+    r'iptables\s+-F',
+    r'ip\s+link\s+set\s+.*down',
+
+    # ── Windows ──
+    # 磁盘格式化
+    r'format\s+[a-zA-Z]:',
+    # 递归删除根目录/系统目录
+    r'(del|erase)\s+/[sS]\s+/[qQ]\s+[a-zA-Z]:\\?\s*$',
+    r'(rd|smdir)\s+/[sS]\s+/[qQ]\s+[a-zA-Z]:\\?\s*$',
+    # 危险系统命令
+    r'rd\s+/[sS]\s+/[qQ]\s+(C:\\|C:\\Windows)',
+    r'del\s+/[fF]\s+/[sS]\s+/[qQ]\s+C:\\',
+    # 关键进程强杀
+    r'taskkill\s+/[fF]\s+/[iI][mM]\s+(csrss|smss|wininit|services)\s*\.exe',
+    # 启动配置破坏
+    r'bcdedit\s+(/delete|/set)',
+    # 磁盘分区操作
+    r'diskpart',
+    # 关机/重启（强制无延迟）
+    r'shutdown\s+(/[sSrR]|/g)\s+.*(/[tT]\s*0)',
+    # 注册表破坏
+    r'reg\s+(delete|import)\s+HKLM\\SYSTEM',
+]
+
+_GOAT_DANGEROUS_SHELL_RE = [
+    re.compile(p, re.IGNORECASE) for p in _GOAT_DANGEROUS_SHELL_PATTERNS
+]
+
+# 高危安全威胁类型（即使用梭哈模式也记录并返回 warn）
+_GOAT_WARN_THREAT_KEYWORDS = [
+    "privilege_escalation", "code_injection", "remote_code_execution",
+    "data_exfiltration", "credential_theft", "backdoor",
+]
 
 
 class PermissionManager:
@@ -99,14 +157,42 @@ class PermissionManager:
         """是否严格模式"""
         return self._mode == PermissionMode.STRICT
 
-    def check_tool_permission(self, tool_name: str) -> tuple[bool, str]:
+    def check_goat_dangerous_command(self, command: str) -> tuple[bool, str]:
+        """梭哈模式防傻检查：拦截明显致命的 shell 命令
+
+        Returns:
+            (is_dangerous, reason) — is_dangerous=True 时应拒绝执行
+        """
+        for pattern in _GOAT_DANGEROUS_SHELL_RE:
+            if pattern.search(command):
+                reason = f"防傻拦截：检测到致命操作 [{pattern.pattern}]，即使用梭哈模式也不允许执行"
+                logger.critical("permission_manager.goat_dangerous_blocked",
+                                pattern=pattern.pattern, command=command[:200])
+                return True, reason
+        return False, ""
+
+    def check_tool_permission(self, tool_name: str, tool_input: dict | None = None) -> tuple[bool, str]:
         """检查工具是否被允许执行
+
+        Args:
+            tool_name: 工具名称
+            tool_input: 工具输入参数（可选，用于梭哈模式防傻检查）
 
         Returns:
             (allowed, reason) 元组
         """
-        # GOAT/BYPASS 模式：全部放行
-        if self._mode in (PermissionMode.BYPASS, PermissionMode.GOAT):
+        # GOAT 模式：全部放行，但对 shell 命令做防傻检查
+        if self._mode == PermissionMode.GOAT:
+            if tool_name == "shell_command" and tool_input:
+                cmd = tool_input.get("command", "")
+                if cmd:
+                    is_dangerous, reason = self.check_goat_dangerous_command(cmd)
+                    if is_dangerous:
+                        return False, reason
+            return True, ""
+
+        # BYPASS 模式：全部放行（无防傻检查）
+        if self._mode == PermissionMode.BYPASS:
             return True, ""
 
         # STRICT 模式：敏感工具需要确认
@@ -124,14 +210,30 @@ class PermissionManager:
         Returns:
             "allow" / "warn" / "block"
         """
-        # GOAT/BYPASS 模式：跳过所有安全检查
-        if self._mode in (PermissionMode.BYPASS, PermissionMode.GOAT):
-            # 高置信度威胁仍记录 CRITICAL 日志
+        # GOAT 模式：跳过安全检查，但高危威胁返回 warn（不 block，仅警告）
+        if self._mode == PermissionMode.GOAT:
+            if any(kw in threat_type.lower() for kw in _GOAT_WARN_THREAT_KEYWORDS):
+                logger.warning(
+                    "permission_manager.goat_high_risk_warn",
+                    threat_type=threat_type, confidence=confidence,
+                    msg="梭哈模式下检测到高危威胁，返回 warn 但不拦截",
+                )
+                return "warn"
+            if confidence >= 0.95:
+                logger.critical(
+                    "permission_manager.goat_high_confidence_threat",
+                    threat_type=threat_type, confidence=confidence,
+                    msg="梭哈模式下检测到高置信度安全威胁，已放行但强烈建议检查",
+                )
+            return "allow"
+
+        # BYPASS 模式：跳过所有安全检查（兼容旧代码）
+        if self._mode == PermissionMode.BYPASS:
             if confidence >= 0.95:
                 logger.critical(
                     "permission_manager.bypass_high_confidence_threat",
                     threat_type=threat_type, confidence=confidence,
-                    msg=f"{self._mode.value.upper()} 模式下检测到高置信度安全威胁，已放行但强烈建议检查",
+                    msg="BYPASS 模式下检测到高置信度安全威胁，已放行但强烈建议检查",
                 )
             return "allow"
 

@@ -175,6 +175,15 @@ const permDesc: Record<string, string> = {
       </div>
     </section>
 
+    <section class="glass-panel section">
+      <h3>用户资料</h3>
+      <p class="apikey-desc">编辑个人资料与偏好设置，帮助纳西妲更好地了解你</p>
+      <div class="setting-row">
+        <span class="s-label">编辑用户资料</span>
+        <n-button type="primary" secondary @click="router.push('/setup/profile')">编辑资料</n-button>
+      </div>
+    </section>
+
     <section class="glass-panel section danger">
       <h3>危险操作</h3>
       <div class="setting-row">

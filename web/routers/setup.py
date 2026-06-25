@@ -47,35 +47,57 @@ _AUTH_DEPS = [Depends(_is_first_run_or_authenticated)]
 
 @router.get("/setup/first-run", response_model=Envelope[dict])
 async def get_first_run():
-    """检测是否首次运行（.env 不存在或 MIMO_API_KEY 为空）。"""
+    """检测是否首次运行（.env 不存在或 MIMO_API_KEY 为空），
+    以及用户资料是否已配置。"""
+    # 1. 检测 API Key 是否已配置
+    first_run = True
     try:
         from setup_wizard import is_first_run
-        return Envelope(data={"first_run": is_first_run()})
+        first_run = is_first_run()
     except Exception as e:
         logger.error("setup.first_run_import_failed error={}", str(e))
-        # 降级：直接检查 .env 文件
         import sys
         if getattr(sys, 'frozen', False):
             env_dir = os.path.dirname(sys.executable)
         else:
             env_dir = os.path.dirname(os.path.abspath(__file__))
-            # web/routers/setup.py -> 向上3级到项目根
             for _ in range(3):
                 env_dir = os.path.dirname(env_dir)
         env_path = os.path.join(env_dir, ".env")
         if not os.path.exists(env_path):
-            return Envelope(data={"first_run": True})
-        # 简单检查 MIMO_API_KEY
-        try:
-            with open(env_path, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    if line.strip().startswith("MIMO_API_KEY="):
-                        val = line.strip().split("=", 1)[1].strip().strip("'\"")
-                        if val:
-                            return Envelope(data={"first_run": False})
-        except Exception:
-            pass
-        return Envelope(data={"first_run": True})
+            first_run = True
+        else:
+            try:
+                with open(env_path, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        if line.strip().startswith("MIMO_API_KEY="):
+                            val = line.strip().split("=", 1)[1].strip().strip("'\"")
+                            if val:
+                                first_run = False
+                                break
+            except Exception:
+                pass
+
+    # 2. 检测用户资料是否已配置（USER.md 存在且有实际填写的称呼和姓名）
+    profile_done = False
+    try:
+        from config import WORKSPACE_DIR
+        user_md = WORKSPACE_DIR / "USER.md"
+        if user_md.exists():
+            content = user_md.read_text(encoding="utf-8-sig")
+            # 检查称呼和姓名字段是否已填写（不是占位符）
+            import re as _re
+            addr = _re.search(r'-\s*称呼[：:]\s*(.+)', content)
+            name = _re.search(r'-\s*姓名[：:]\s*(.+)', content)
+            if addr and name:
+                addr_val = addr.group(1).strip()
+                name_val = name.group(1).strip()
+                if addr_val and not addr_val.startswith("（") and name_val and not name_val.startswith("（"):
+                    profile_done = True
+    except Exception:
+        pass
+
+    return Envelope(data={"first_run": first_run, "profile_done": profile_done})
 
 
 @router.get("/setup/version", response_model=Envelope[dict])
@@ -617,39 +639,37 @@ async def save_keys(body: dict):
     except Exception as e:
         logger.warning("setup.router_client_refresh_failed error={}", str(e))
 
-    # 尝试重新初始化 core（从降级模式恢复）
-    need_restart = True
-    try:
-        from web.server import app
-        if hasattr(app, "state") and hasattr(app.state, "core"):
-            core = app.state.core
-            if not core._initialized:
-                logger.info("setup.reinitializing_core")
-                await core.init(reinit=True)
-                if core._initialized:
-                    from web.server import _start_services
-                    await _start_services(app, core)
-                    logger.info("setup.core_reinitialized")
-                    need_restart = False
-                    # 刷新 AgentRegistry
-                    try:
-                        from web.agent_registry import AgentRegistry
-                        registry = getattr(app.state, "agent_registry", None)
-                        if registry:
-                            await registry.load_persisted()
-                            logger.info("setup.registry_refreshed")
-                    except Exception as e:
-                        logger.warning("setup.registry_refresh_failed error={}", str(e))
-                else:
-                    logger.error("setup.core_reinit_failed reason=still_not_initialized")
-            else:
-                # core 已经初始化（非降级模式），无需重新初始化
-                need_restart = False
-    except Exception as e:
-        import traceback
-        logger.error("setup.core_reinit_failed error={} traceback={}", str(e), traceback.format_exc())
+    # 核心重初始化放到后台异步执行，不阻塞 API 返回
+    import asyncio
+    async def _background_reinit():
+        try:
+            from web.server import app as _app
+            if hasattr(_app, "state") and hasattr(_app.state, "core"):
+                core = _app.state.core
+                if not core._initialized:
+                    logger.info("setup.reinitializing_core")
+                    await core.init(reinit=True)
+                    if core._initialized:
+                        from web.server import _start_services
+                        await _start_services(_app, core)
+                        logger.info("setup.core_reinitialized")
+                        try:
+                            from web.agent_registry import AgentRegistry
+                            registry = getattr(_app.state, "agent_registry", None)
+                            if registry:
+                                await registry.load_persisted()
+                                logger.info("setup.registry_refreshed")
+                        except Exception as e:
+                            logger.warning("setup.registry_refresh_failed error={}", str(e))
+                    else:
+                        logger.error("setup.core_reinit_failed reason=still_not_initialized")
+        except Exception as e:
+            import traceback
+            logger.error("setup.core_reinit_failed error={} traceback={}", str(e), traceback.format_exc())
 
-    return Envelope(data={"saved": list(updates.keys()), "need_restart": need_restart})
+    asyncio.create_task(_background_reinit())
+
+    return Envelope(data={"saved": list(updates.keys()), "need_restart": False})
 
 
 # 已知免费模型平台 → Provider 映射
