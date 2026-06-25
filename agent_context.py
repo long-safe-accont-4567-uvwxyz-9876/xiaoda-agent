@@ -57,6 +57,8 @@ class AgentContext:
         self._compressor = None
         # 并发安全锁
         self._lock = asyncio.Lock()
+        # 子代理 A2A 共享黑板（由 AgentCore 注入，None 时跳过黑板逻辑）
+        self.shared_blackboard: Any = None
 
     async def add_message(self, role: str, content: str, **kwargs):
         msg = {"role": role, "content": str(content) if content is not None else ""}

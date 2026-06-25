@@ -14,7 +14,7 @@ from loguru import logger
 
 from config import (MIMO_MODEL, AGENT_CONFIG, build_safe_system_prompt,
                     SIMPLE_TASK_KEYWORDS, PRO_TASK_KEYWORDS, TTS_ASYNC_MODE,
-                    SIMPLE_CHAT_FASTPATH)
+                    SIMPLE_CHAT_FASTPATH, STREAM_TEXT_PUSH)
 from core.chat_processor import ChatProcessor
 from core.circuit_breaker import CircuitState
 from core.background_tasks import _spawn
@@ -388,16 +388,25 @@ class MessageProcessorMixin:
         try:
             # Task 7: 流式状态推送 —— 主 LLM 调用前通知
             await self._notify_status("正在思考回复...")
-            result = await self.router.route(
-                task_type,
-                messages,
-                temperature=_model_cfg.get("temperature", 0.7),
-                max_tokens=_cb_max_tokens,
-                tools=tools,
-                tool_choice="auto" if tools else None,
-                user_openid=user_openid,
-                session_id=session_id,
-            )
+            if STREAM_TEXT_PUSH and status_callback and not tools:
+                # P0: 流式文本推送 —— 仅在无工具调用时启用，内部失败自动降级到同步
+                result = await self._stream_llm_response(
+                    messages, status_callback=status_callback, task_type=task_type,
+                    temperature=_model_cfg.get("temperature", 0.7),
+                    max_tokens=_cb_max_tokens,
+                    user_openid=user_openid, session_id=session_id,
+                )
+            else:
+                result = await self.router.route(
+                    task_type,
+                    messages,
+                    temperature=_model_cfg.get("temperature", 0.7),
+                    max_tokens=_cb_max_tokens,
+                    tools=tools,
+                    tool_choice="auto" if tools else None,
+                    user_openid=user_openid,
+                    session_id=session_id,
+                )
 
             if isinstance(result, str):
                 if has_dsml_tool_calls(result) and tools:
@@ -545,6 +554,36 @@ class MessageProcessorMixin:
         _spawn(self._hook_engine.fire_post_response())
 
         return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path, audio_path=audio_path, tool_results=tool_results, image_paths=media_image_paths, video_path=media_video_path, tts_pending=tts_pending, tts_text=tts_text)
+
+    async def _stream_llm_response(self, messages: list, status_callback=None,
+                                    task_type: str = "chat", **kwargs) -> str:
+        """流式调用 LLM，逐 token 推送给前端。
+
+        当 STREAM_TEXT_PUSH=true 时使用此方法。
+        失败时降级到原有同步调用。
+        """
+        if not STREAM_TEXT_PUSH:
+            return await self.router.route(task_type, messages, **kwargs)
+
+        full_response = []
+        try:
+            async for delta in self.router.chat_stream(messages, task_type=task_type, **kwargs):
+                if delta:
+                    full_response.append(delta)
+                    if status_callback:
+                        try:
+                            await status_callback({
+                                "type": "stream_text",
+                                "delta": delta,
+                                "accumulated": "".join(full_response),
+                            })
+                        except Exception as cb_err:
+                            logger.debug("agent.stream_callback_failed: {}", str(cb_err)[:100])
+        except Exception as e:
+            logger.warning("message_processor.stream_llm_failed: {}", str(e)[:200])
+            # 降级到同步调用（丢弃已积累的部分流式内容）
+            return await self.router.route(task_type, messages, **kwargs)
+        return "".join(full_response)
 
     def _should_escalate_to_pro(self, user_msg: str, tools: list | None) -> tuple[bool, str]:
         tool_keywords = PRO_TASK_KEYWORDS["tool"]

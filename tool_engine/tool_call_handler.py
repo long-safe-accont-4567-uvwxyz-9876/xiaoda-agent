@@ -7,6 +7,8 @@ from .tool_repair import ToolCallRepair
 from .tool_registry import get_tool, to_openai_tools
 from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, smart_truncate
 from emotion.emoji_config import get_status_msg
+from config import ERROR_RULE_STRICT_MODE
+from core.background_tasks import _spawn
 
 
 DEGRADED_REPLY = "嗯……人家现在有点不太舒服，等会儿再聊好不好？"
@@ -34,7 +36,7 @@ class ToolCallHandler:
     def __init__(self, tool_executor: ToolExecutor, tool_repair: ToolCallRepair,
                  clean_reply_callback, context=None, router=None, klee_delegate=None,
                  status_callback=None, agent_name: str = "nahida", personality_file: str | None = None,
-                 tool_execute_callback=None):
+                 tool_execute_callback=None, error_pipeline=None):
         self._tool_executor = tool_executor
         self._tool_repair = tool_repair
         self._clean_reply = clean_reply_callback
@@ -45,10 +47,15 @@ class ToolCallHandler:
         self._agent_name = agent_name
         self._personality_file = personality_file
         self._tool_execute_callback = tool_execute_callback  # 带钩子的工具执行回调
+        self._error_pipeline = error_pipeline  # P5: 失败经验→规则闭环（可选）
         self._exec_semaphore = asyncio.Semaphore(5)  # 限制并发工具执行数
 
     def set_status_callback(self, callback):
         self._status_callback = callback
+
+    def set_error_pipeline(self, pipeline) -> None:
+        """注入 ErrorRulePipeline（P5）。允许 bootstrap 阶段延后注入。"""
+        self._error_pipeline = pipeline
 
     async def _notify_status(self, message: str):
         if self._status_callback:
@@ -56,6 +63,31 @@ class ToolCallHandler:
                 await self._status_callback(message)
             except Exception as e:
                 logger.warning(f"工具调用状态回调通知失败: {e}")
+
+    async def _notify_tool_status(self, tool_name: str, stage: str, detail: str = ""):
+        """推送工具调用的中间状态（P0）。
+
+        Args:
+            tool_name: 工具名称，如 "web_search"、"memory_search"
+            stage: "started" / "completed" / "failed"
+            detail: 详细信息
+        """
+        from config import STREAM_TOOL_STATUS
+        if not STREAM_TOOL_STATUS or not self._status_callback:
+            return
+        stage_labels = {"started": "正在调用", "completed": "完成", "failed": "失败"}
+        label = stage_labels.get(stage, stage)
+        display = TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
+        try:
+            await self._status_callback({
+                "type": "tool_status",
+                "tool": tool_name,
+                "stage": stage,
+                "label": f"{label} {display}...",
+                "detail": detail[:100] if detail else "",
+            })
+        except Exception as e:
+            logger.debug(f"tool_status_push_failed: {e}")
 
     async def handle(self, tool_calls: list[dict], messages: list[dict],
                      trace, *, assistant_content: str = "",
@@ -109,11 +141,46 @@ class ToolCallHandler:
                 except json.JSONDecodeError:
                     t_args = {}
 
+                # P5: 调用前检查历史失败规则
+                if self._error_pipeline is not None:
+                    try:
+                        matched_rules = await self._error_pipeline.check_rules(t_name, t_args)
+                    except Exception as e:
+                        trace.warning("error_rule.check_failed", error=str(e))
+                        matched_rules = []
+                    if matched_rules:
+                        rule = matched_rules[0]
+                        rule_text = rule.get("rule_text", "") or ""
+                        rule_id = rule.get("id")
+                        # 累计 hit_count（失败安全）
+                        try:
+                            await self._error_pipeline.increment_hit_count(rule_id)
+                        except Exception:
+                            pass
+                        logger.warning("error_rule.hit",
+                                       tool_name=t_name, rule_id=rule_id,
+                                       rule_text=rule_text)
+                        if ERROR_RULE_STRICT_MODE:
+                            trace.warning("error_rule.blocked",
+                                          tool=t_name, rule_id=rule_id)
+                            blocked_msg = f"根据历史失败经验已拦截：{rule_text}"
+                            return (tc["id"],
+                                    ToolResult.fail(blocked_msg),
+                                    f"错误: {blocked_msg}",
+                                    display_name)
+                        # 非严格模式：仅记录警告，继续执行
+
                 # 优先使用带钩子的工具执行回调，否则直接执行
-                if self._tool_execute_callback:
-                    result = await self._tool_execute_callback(t_name, t_args, user_id=user_id, safe_mode=safe_mode)
-                else:
-                    result = await self._tool_executor.execute(t_name, t_args, safe_mode=safe_mode)
+                await self._notify_tool_status(t_name, "started")
+                try:
+                    if self._tool_execute_callback:
+                        result = await self._tool_execute_callback(t_name, t_args, user_id=user_id, safe_mode=safe_mode)
+                    else:
+                        result = await self._tool_executor.execute(t_name, t_args, safe_mode=safe_mode)
+                except Exception as e:
+                    # 工具执行抛异常时推送 failed 状态，避免前端卡在"正在调用 X..."
+                    await self._notify_tool_status(t_name, "failed", detail=str(e)[:100])
+                    raise
 
                 # 处理委托请求（DelegationRequest dataclass 或旧格式字符串前缀）
                 from core.delegation import DelegationRequest
@@ -135,8 +202,17 @@ class ToolCallHandler:
                 result_text = ""
                 if result.success:
                     result_text = json.dumps(result.data, ensure_ascii=False) if not isinstance(result.data, str) else result.data
+                    await self._notify_tool_status(t_name, "completed")
                 else:
                     result_text = f"错误: {result.error}"
+                    await self._notify_tool_status(t_name, "failed", detail=str(result.error)[:100])
+                    # P5: 工具失败后异步触发规则提取（不阻塞主流程）
+                    if self._error_pipeline is not None and result.error:
+                        try:
+                            _spawn(self._error_pipeline.extract_rule(
+                                t_name, t_args, result.error))
+                        except Exception as e:
+                            trace.warning("error_rule.spawn_failed", error=str(e))
 
                 return tc["id"], result, result_text, display_name
 

@@ -181,3 +181,47 @@ def test_on_success_tool_tracking():
     assert state._total_tool_calls == 2
     assert state._failed_tool_calls == 1
     assert state.tool_fail_rate == pytest.approx(0.5)
+
+
+# ── 指数退避（Task 12.3）──
+
+
+def test_exponential_backoff():
+    """连续探测失败冷却时间翻倍，且不超过 MAX_COOLDOWN"""
+    cb = CircuitBreaker(cooldown=60, max_cooldown=600)
+    state = CognitiveState(consecutive_fails=5)
+    assert cb.RED_RECOVERY_SECONDS == 60
+
+    # 第一次探测失败：60 → 120
+    cb.on_half_open_failure(state)
+    assert cb.RED_RECOVERY_SECONDS == 120
+
+    # 第二次：120 → 240
+    cb.on_half_open_failure(state)
+    assert cb.RED_RECOVERY_SECONDS == 240
+
+    # 第三次：240 → 480
+    cb.on_half_open_failure(state)
+    assert cb.RED_RECOVERY_SECONDS == 480
+
+    # 第四次：480 → 600（被 MAX_COOLDOWN 截断）
+    cb.on_half_open_failure(state)
+    assert cb.RED_RECOVERY_SECONDS == 600
+
+    # 再失败仍为上限 600
+    cb.on_half_open_failure(state)
+    assert cb.RED_RECOVERY_SECONDS == 600
+
+
+def test_exponential_backoff_reset_on_success():
+    """探测成功后冷却时间重置为初始值"""
+    cb = CircuitBreaker(cooldown=60, max_cooldown=600)
+    state = CognitiveState(consecutive_fails=5)
+    # 累积退避到 240
+    cb.on_half_open_failure(state)
+    cb.on_half_open_failure(state)
+    assert cb.RED_RECOVERY_SECONDS == 240
+
+    # 探测成功 → 重置为初始 60
+    cb.on_half_open_success(state)
+    assert cb.RED_RECOVERY_SECONDS == 60

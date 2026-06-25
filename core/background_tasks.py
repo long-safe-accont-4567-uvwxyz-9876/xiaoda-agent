@@ -175,6 +175,15 @@ class BackgroundTaskManager:
         except Exception as e:
             logger.warning("bg.warm_embedding_cache_schedule_failed", error=str(e))
 
+        # 11. 记忆蒸馏压缩（每 6 小时，仅 MEMORY_DISTILL_ENABLED=true 时启用）
+        try:
+            import config
+            if getattr(config, "MEMORY_DISTILL_ENABLED", False):
+                if await self._should_run("memory_distill", interval_hours=6):
+                    _spawn(self._distill_memories_task())
+        except Exception as e:
+            logger.warning("bg.memory_distill_schedule_failed", error=str(e))
+
     async def _auto_archive_sessions(self) -> None:
         try:
             archived = await self.db.auto_archive_stale_sessions(idle_seconds=3600)
@@ -231,6 +240,19 @@ class BackgroundTaskManager:
             await self.db.set_cron_last_run("warm_embedding_cache")
         except Exception as e:
             logger.warning("bg.warm_embedding_cache_failed", error=str(e))
+
+    async def _distill_memories_task(self) -> None:
+        """记忆蒸馏压缩 — 将超过阈值的旧记忆蒸馏为摘要，控制上下文长度。"""
+        try:
+            if not self.memory:
+                await self.db.set_cron_last_run("memory_distill")
+                return
+            distilled = await self.memory.distill_old_memories()
+            if distilled > 0:
+                logger.info("memory.distill_task_completed", distilled=distilled)
+            await self.db.set_cron_last_run("memory_distill")
+        except Exception as e:
+            logger.warning("bg.memory_distill_task_failed", error=str(e))
 
     @staticmethod
     def get_bg_tasks() -> set[asyncio.Task]:

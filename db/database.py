@@ -23,7 +23,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -299,6 +299,31 @@ class DatabaseManager:
                 await self._conn.execute("ROLLBACK")
                 logger.error(f"数据库迁移 v8 失败: {e}")
 
+        if current < 9:
+            try:
+                await self._conn.execute("BEGIN TRANSACTION")
+                # P3 记忆蒸馏：新增 memory_summaries 表
+                await self._conn.execute("""
+                    CREATE TABLE IF NOT EXISTS memory_summaries (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        summary_text TEXT NOT NULL,
+                        created_at REAL NOT NULL,
+                        memory_count INTEGER DEFAULT 0
+                    )
+                """)
+                # episodic_memories 新增 distilled 列（已存在则忽略）
+                cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
+                if "distilled" not in cols:
+                    await self._conn.execute(
+                        "ALTER TABLE episodic_memories ADD COLUMN distilled INTEGER DEFAULT 0"
+                    )
+                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (9, ?)", (time.time(),))
+                await self._conn.commit()
+                logger.info("database.migration_v9", desc="memory_summaries+episodic_memories.distilled")
+            except Exception as e:
+                await self._conn.execute("ROLLBACK")
+                logger.error(f"数据库迁移 v9 失败: {e}")
+
         await self._conn.commit()
 
     async def fetch_all(self, sql: str, params: tuple = ()) -> list[dict]:
@@ -356,7 +381,15 @@ class DatabaseManager:
                 rag_synced_at REAL DEFAULT 0,
                 doc_id TEXT DEFAULT '',
                 source TEXT DEFAULT 'user',
-                access_count INTEGER DEFAULT 0
+                access_count INTEGER DEFAULT 0,
+                distilled INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS memory_summaries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                summary_text TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                memory_count INTEGER DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS cron_last_run (
@@ -580,6 +613,16 @@ class DatabaseManager:
                 date_column TEXT NOT NULL DEFAULT 'timestamp',
                 enabled INTEGER DEFAULT 1
             );
+
+            -- P5: 失败经验→规则闭环
+            CREATE TABLE IF NOT EXISTS tool_error_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool_name TEXT NOT NULL,
+                pattern TEXT NOT NULL,
+                rule_text TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                hit_count INTEGER DEFAULT 0
+            );
         """)
 
         # ── Phase 2: 迁移（在建表之后、索引创建之前执行）────────
@@ -623,6 +666,7 @@ class DatabaseManager:
             CREATE INDEX IF NOT EXISTS idx_featreq_status ON feature_requests(status);
             CREATE INDEX IF NOT EXISTS idx_session_entries_sid ON session_entries(session_id);
             CREATE INDEX IF NOT EXISTS idx_session_entries_created ON session_entries(created_at);
+            CREATE INDEX IF NOT EXISTS idx_tool_error_rules_tool ON tool_error_rules(tool_name);
         """)
 
         # 插入默认清理策略（仅当表为空时）

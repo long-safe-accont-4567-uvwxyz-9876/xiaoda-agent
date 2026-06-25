@@ -12,6 +12,8 @@ import platform
 import socket
 from pathlib import Path
 
+from loguru import logger
+
 
 # ── system prompt 缓存变量 ────────────────────────────────────
 _SYSTEM_PROMPT_CACHE: str = ""
@@ -23,6 +25,129 @@ _SYSTEM_PROMPT_CACHE_ADDR_TERM: str = ""
 # ── 非主人安全化 system prompt 缓存变量（防隐私泄露） ──────────
 _SAFE_PROMPT_CACHE: str | None = None
 _SAFE_PROMPT_CACHE_TS: float = 0.0
+
+# ── P6: 增量上下文构建（稳定段缓存） ──────────────────────────
+# 稳定段只随 address_term 变化，缓存计算结果；动态段每次构建
+# mtime 校验：编辑 SOUL.md/AGENTS.md 等文件后自动失效缓存
+_stable_prompt_cache: dict = {}
+_stable_prompt_cache_mtimes: dict = None
+
+
+def _get_stable_section_mtimes() -> dict[str, float]:
+    """获取稳定段文件的 mtime 指纹，用于缓存失效判断。"""
+    from config import WORKSPACE_DIR
+    mtimes: dict[str, float] = {}
+    for name in ("AGENTS.md", "SOUL.md", "IDENTITY.md", "TOOLS.md"):
+        fp = WORKSPACE_DIR / name
+        try:
+            mtimes[name] = fp.stat().st_mtime
+        except OSError:
+            mtimes[name] = 0.0
+    # skills 目录
+    try:
+        skills_dir = WORKSPACE_DIR / "skills"
+        if skills_dir.exists():
+            for fp in sorted(skills_dir.glob("*.md")):
+                mtimes[f"skills/{fp.name}"] = fp.stat().st_mtime
+    except OSError:
+        pass
+    return mtimes
+
+
+def _build_stable_prompt(address_term: str) -> str:
+    """构建系统提示「稳定段」：SOUL.md/AGENTS.md/IDENTITY.md/TOOLS.md/skills/硬件信息。
+
+    这些内容不随请求变化，只随 address_term 变化，因此用模块级 dict 缓存。
+    缓存通过 workspace 文件 mtime 失效：编辑任意稳定段文件后，下次调用重新构建。
+    """
+    global _stable_prompt_cache_mtimes
+    # 获取当前稳定段文件的 mtime 指纹
+    current_mtimes = _get_stable_section_mtimes()
+    if _stable_prompt_cache_mtimes is None or current_mtimes != _stable_prompt_cache_mtimes:
+        # mtime 变化（或首次调用），清空整个缓存
+        _stable_prompt_cache.clear()
+        _stable_prompt_cache_mtimes = current_mtimes
+
+    cache_key = address_term
+    if cache_key in _stable_prompt_cache:
+        return _stable_prompt_cache[cache_key]
+
+    sections = []
+
+    agents_rules = load_workspace_file("AGENTS.md")
+    if agents_rules:
+        sections.append(agents_rules)
+
+    soul = load_workspace_file("SOUL.md")
+    if soul:
+        if "{address_term}" in soul:
+            soul = soul.replace("{address_term}", address_term)
+        sections.append(soul)
+
+    identity = load_workspace_file("IDENTITY.md")
+    if identity:
+        sections.append(identity)
+
+    tools_rules = load_workspace_file("TOOLS.md")
+    if tools_rules:
+        sections.append(tools_rules)
+
+    skills = load_skills()
+    if skills:
+        skill_texts = "\n\n".join(
+            f"### Skill: {s['name']}\n{s['content']}" for s in skills if s["content"])
+        if skill_texts:
+            sections.append("[已安装的 Skills]\n\n" + skill_texts)
+
+    # 硬件上下文（稳定，不随请求变化）
+    from config import DATA_DIR
+    _npu_status = "NPU视觉识别已启用" if os.getenv("ENABLE_NPU", "").lower() in ("1", "true", "yes") else "视觉识别（ncnn后端）"
+    _uname = platform.uname()
+    _hostname = socket.gethostname()
+    hw_context = (
+        "[本机硬件信息]\n"
+        f"主机名: {_hostname} | 架构: {_uname.machine} | 处理器: {_uname.processor or '未知'}\n"
+        f"系统: {_uname.system} {_uname.release} ({_uname.machine})\n"
+        "可用接口: GPIO (40pin排针) / I2C / SPI / UART / PWM\n"
+        "可用工具: gpio_control(引脚控制) / i2c_comm(I2C通信) / hardware_status(硬件监控) / service_manage(服务管理) / network_diag(网络诊断) / dev_assist(开发辅助) / camera_capture(拍照) / vision_analyze(视觉分析)\n"
+        f"数据存储: {DATA_DIR}\n"
+        f"摄像头: Q8 HD Webcam (/dev/video0) | 视觉模型: YOLOv10-nano (ncnn CPU) | {_npu_status}"
+    )
+    sections.append(hw_context)
+
+    result = "\n\n---\n\n".join(sections)
+    _stable_prompt_cache[cache_key] = result
+    return result
+
+
+def _build_dynamic_prompt(extra_context: str = "") -> str:
+    """构建系统提示「动态段」：USER.md/MEMORY.md/HEARTBEAT.md/extra_context。
+
+    每次请求可能变化，不缓存。
+    """
+    sections = []
+
+    user = load_workspace_file("USER.md")
+    if user:
+        sections.append(user)
+
+    memory = load_workspace_file("MEMORY.md")
+    if memory:
+        sections.append(memory)
+
+    heartbeat = load_workspace_file("HEARTBEAT.md")
+    if heartbeat:
+        sections.append(heartbeat)
+
+    result = "\n\n---\n\n".join(sections)
+
+    if extra_context:
+        if result:
+            result += f"\n\n---\n\n{extra_context}"
+        else:
+            result = extra_context
+
+    return result
 
 
 def _detect_device_info() -> dict:
@@ -159,6 +284,23 @@ def load_skills() -> list[dict]:
 
 
 def build_system_prompt(extra_context: str = "", address_term: str = "爸爸") -> str:
+    # P6: 增量上下文构建路径 —— 稳定段缓存 + 动态段每次构建
+    try:
+        from config import PROMPT_CACHING_ENABLED
+    except ImportError:
+        PROMPT_CACHING_ENABLED = False
+
+    if PROMPT_CACHING_ENABLED:
+        try:
+            stable = _build_stable_prompt(address_term)
+            dynamic = _build_dynamic_prompt(extra_context)
+            if dynamic:
+                return stable + "\n\n---\n\n" + dynamic
+            return stable
+        except Exception as e:
+            # 失败安全：降级到原始构建
+            logger.debug("prompt_builder.incremental_fallback error={}", str(e))
+
     global _SYSTEM_PROMPT_CACHE, _SYSTEM_PROMPT_CACHE_TS, _SYSTEM_PROMPT_CACHE_MTIMES, _SYSTEM_PROMPT_CACHE_ADDR_TERM
     from config import DATA_DIR
 
@@ -331,4 +473,6 @@ __all__ = [
     "_detect_device_info",
     "_get_workspace_mtimes",
     "_strip_owner_references",
+    "_build_stable_prompt",
+    "_build_dynamic_prompt",
 ]

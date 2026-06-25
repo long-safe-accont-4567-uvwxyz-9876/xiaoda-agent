@@ -64,6 +64,28 @@ export const useChatStore = defineStore('chat', () => {
     statusText.value = (e.text as string) || ''
   })
 
+  // P0: 流式文本推送 —— 逐 token 拼接，实时渲染（在消息列表中显示"正在输入"的临时消息）
+  ws.on('stream_text', (e: WsEvent) => {
+    const msgId = e.msg_id as string
+    if (!msgId) return
+    let msg = messages.value.find(m => m.id === `a-${msgId}`)
+    if (!msg) {
+      msg = {
+        id: `a-${msgId}`, role: 'assistant', content: '',
+        streaming: true, timestamp: Date.now(),
+      }
+      messages.value.push(msg)
+    }
+    msg.content = (e.accumulated as string) || ''
+    msg.streaming = true
+  })
+
+  // P0: 工具调用中间状态 —— 显示"正在调用 web_search..."
+  ws.on('tool_status', (e: WsEvent) => {
+    currentStage.value = 'tool'
+    statusText.value = (e.label as string) || ''
+  })
+
   ws.on('tool_event', (e: WsEvent) => {
     const msgId = (e.msg_id as string) || pendingMsgId.value
     if (!msgId) return

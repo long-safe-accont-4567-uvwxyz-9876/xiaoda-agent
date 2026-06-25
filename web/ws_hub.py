@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from loguru import logger
 
-from config import TTS_ASYNC_MODE, STREAM_STATUS_PUSH
+from config import TTS_ASYNC_MODE, STREAM_STATUS_PUSH, STREAM_TEXT_PUSH, STREAM_TOOL_STATUS
 
 router = APIRouter()
 
@@ -311,6 +311,26 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket):
 
     # Task 7: 流式状态推送回调 —— 受 STREAM_STATUS_PUSH 开关控制
     async def on_status(message):
+        # P0: 流式文本推送 —— 独立于 STREAM_STATUS_PUSH，由 STREAM_TEXT_PUSH 控制
+        if STREAM_TEXT_PUSH and isinstance(message, dict) and message.get("type") == "stream_text":
+            await manager.send_to(conn_id, {
+                "type": "stream_text",
+                "msg_id": msg_id,
+                "delta": message.get("delta", ""),
+                "accumulated": message.get("accumulated", ""),
+            })
+            return
+        # P0: 工具调用中间状态推送 —— 由 STREAM_TOOL_STATUS 控制
+        if STREAM_TOOL_STATUS and isinstance(message, dict) and message.get("type") == "tool_status":
+            await manager.send_to(conn_id, {
+                "type": "tool_status",
+                "msg_id": msg_id,
+                "tool": message.get("tool", ""),
+                "stage": message.get("stage", ""),
+                "label": message.get("label", ""),
+                "detail": message.get("detail", ""),
+            })
+            return
         if STREAM_STATUS_PUSH:
             await manager.send_to(conn_id, {
                 "type": "status", "msg_id": msg_id,

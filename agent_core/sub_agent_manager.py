@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -127,18 +128,41 @@ class SubAgentManagerMixin:
             desc = agent_configs.get(t, {}).get("route_description", t)
             sub_tasks[t] = f"关于「{clean_input}」中属于{desc or t}范畴的部分，请进行专业分析和处理。"
 
+        # A2A 共享黑板：父代理在汇总时可读取黑板中已有子代理产出，避免重复计算
+        bb = getattr(self.context, "shared_blackboard", None)
+
         async def _run_one(t: str) -> dict:
             agent = self.dispatcher.get_agent(t)
             display_name = agent.config.display_name if agent else t
             if not agent or not agent.available:
                 return {"agent": t, "display_name": display_name, "reply": f"{display_name}暂时不可用", "error": True}
+            sub_task = sub_tasks.get(t, clean_input)
+            # 20.1/20.3: 委托前读取黑板中该子代理对同一任务的已有产出
+            task_key = self._bb_task_key(t, sub_task)
+            if bb is not None:
+                try:
+                    cached = await bb.get(task_key)
+                    if cached is not None:
+                        logger.debug("blackboard.parallel_hit key={} agent={}", task_key, t)
+                        return {"agent": t, "display_name": display_name, "reply": cached}
+                except Exception as e:
+                    logger.debug("blackboard.get_failed key={} error={}", task_key, e)
             try:
                 reply = await asyncio.wait_for(
-                    self.dispatcher.dispatch(t, sub_tasks.get(t, clean_input), context=sub_context, status_callback=None),
+                    self.dispatcher.dispatch(t, sub_task, context=sub_context, status_callback=None),
                     timeout=180,
                 )
                 if reply is None:
-                    reply = f"{display_name}现在有点累了...等会儿再来吧！💤"
+                    # 降级回复不缓存（与 delegate_to_agent / delegate_to_klee 行为一致），
+                    # 避免后续 10 分钟内对同一任务持续返回降级文案
+                    return {"agent": t, "display_name": display_name,
+                            "reply": f"{display_name}现在有点累了...等会儿再来吧！💤"}
+                # 20.2: 子代理完成后将结果写入共享黑板，供父代理汇总或其他流程复用
+                if bb is not None and reply:
+                    try:
+                        await bb.put(task_key, reply, agent_name=t)
+                    except Exception as e:
+                        logger.debug("blackboard.put_failed key={} error={}", task_key, e)
                 return {"agent": t, "display_name": display_name, "reply": reply}
             except asyncio.TimeoutError:
                 return {"agent": t, "display_name": display_name, "reply": f"{display_name}处理超时", "error": True}
@@ -213,16 +237,44 @@ class SubAgentManagerMixin:
         agent = self.dispatcher.get_agent(name)
         if not agent:
             return f"（找不到名为 {name} 的子代理）"
+        # A2A 共享黑板：委托前读取已有产出，避免重复工作（黑板为 None 时跳过）
+        bb = getattr(self.context, "shared_blackboard", None)
+        task_key = self._bb_task_key(name, task)
+        if bb is not None:
+            try:
+                cached = await bb.get(task_key)
+                if cached is not None:
+                    logger.debug("blackboard.delegate_hit key={} agent={}", task_key, name)
+                    return cached
+            except Exception as e:
+                logger.debug("blackboard.get_failed key={} error={}", task_key, e)
         context = self._build_sub_agent_context(task_hint=task)
         result = await self.dispatcher.dispatch(
             name, task, context=context,
             status_callback=_ctx.status_callback if _ctx else None)
         if result is None:
             return f"{agent.config.display_name}现在有点累了...等会儿再试吧💤"
+        # A2A 共享黑板：委托完成后写入产出，供父代理汇总或其他子代理复用
+        if bb is not None:
+            try:
+                await bb.put(task_key, result, agent_name=name)
+            except Exception as e:
+                logger.debug("blackboard.put_failed key={} error={}", task_key, e)
         return result
 
     async def delegate_to_klee(self, task: str, factual: bool = False) -> str:
         _ctx = _current_request_ctx.get()
+        # A2A 共享黑板：委托前读取已有产出（factual 与非 factual 结果不同，需区分 key）
+        bb = getattr(self.context, "shared_blackboard", None)
+        task_key = self._bb_task_key("keli", task, suffix="factual" if factual else "")
+        if bb is not None:
+            try:
+                cached = await bb.get(task_key)
+                if cached is not None:
+                    logger.debug("blackboard.delegate_hit key={} agent=keli", task_key)
+                    return cached
+            except Exception as e:
+                logger.debug("blackboard.get_failed key={} error={}", task_key, e)
         if factual:
             context = "这是纳西妲委托的查询任务。请直接返回查询结果，不要加任何个人风格、感叹号或角色扮演，只报告事实数据。"
         else:
@@ -230,7 +282,25 @@ class SubAgentManagerMixin:
         result = await self.dispatcher.dispatch("keli", task, context=context, status_callback=_ctx.status_callback if _ctx else None)
         if result is None:
             return "可莉现在有点累了...等会儿再来找大哥哥玩吧！蹦蹦...💤"
+        # A2A 共享黑板：委托完成后写入产出
+        if bb is not None:
+            try:
+                await bb.put(task_key, result, agent_name="keli")
+            except Exception as e:
+                logger.debug("blackboard.put_failed key={} error={}", task_key, e)
         return result
+
+    @staticmethod
+    def _bb_task_key(agent_name: str, task: str, suffix: str = "") -> str:
+        """计算共享黑板中子代理委托结果的稳定 key。
+
+        基于 agent_name + task 内容的 md5 摘要，保证相同任务命中缓存。
+        """
+        h = hashlib.md5(task.encode("utf-8")).hexdigest()[:16]
+        key = f"bb:delegate:{agent_name}:{h}"
+        if suffix:
+            key += f":{suffix}"
+        return key
 
     def _build_sub_agent_context(self, task_hint: str = "") -> str:
         parts = []

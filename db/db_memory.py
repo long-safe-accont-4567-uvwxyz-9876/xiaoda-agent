@@ -285,3 +285,92 @@ class MemoryDB:
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+    # ── P3 记忆蒸馏相关 ──────────────────────────────────────
+
+    async def get_episodic_count_undistilled(self) -> int:
+        """统计未蒸馏的情景记忆数量（distilled=0）"""
+        try:
+            cursor = await self._conn.execute(
+                "SELECT COUNT(*) as cnt FROM episodic_memories WHERE distilled=0"
+            )
+            row = await cursor.fetchone()
+            return row["cnt"] if row else 0
+        except Exception as e:
+            # 旧库可能没有 distilled 列，降级返回总计数
+            logger.debug("db_memory.undistilled_count_failed", error=str(e))
+            return await self.get_episodic_count()
+
+    async def get_distill_candidates(self, limit: int = 30) -> list[dict]:
+        """查询最旧的未蒸馏记忆（按时间升序），用于蒸馏压缩"""
+        try:
+            cursor = await self._conn.execute(
+                """SELECT id, timestamp, summary, importance FROM episodic_memories
+                   WHERE distilled=0
+                   ORDER BY timestamp ASC LIMIT ?""",
+                (limit,),
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning("db_memory.distill_candidates_failed", error=str(e))
+            return []
+
+    async def mark_memories_distilled(self, memory_ids: list[int],
+                                       auto_commit: bool = True):
+        """将指定记忆标记为已蒸馏（distilled=1），保留不删除"""
+        if not memory_ids:
+            return
+        placeholders = ",".join("?" * len(memory_ids))
+        try:
+            await self._conn.execute(
+                f"UPDATE episodic_memories SET distilled=1 WHERE id IN ({placeholders})",
+                memory_ids,
+            )
+            if auto_commit:
+                await self._conn.commit()
+        except Exception as e:
+            logger.warning("db_memory.mark_distilled_failed", error=str(e))
+
+    async def insert_memory_summary(self, summary_text: str, memory_count: int,
+                                     auto_commit: bool = True) -> int:
+        """写入一条蒸馏摘要记录，返回摘要 id"""
+        cursor = await self._conn.execute(
+            """INSERT INTO memory_summaries (summary_text, created_at, memory_count)
+               VALUES (?, ?, ?)""",
+            (summary_text, time.time(), memory_count),
+        )
+        if auto_commit:
+            await self._conn.commit()
+        return cursor.lastrowid
+
+    async def get_memory_summaries(self, limit: int = 5) -> list[dict]:
+        """获取最近的蒸馏摘要（按时间降序）"""
+        try:
+            cursor = await self._conn.execute(
+                """SELECT id, summary_text, created_at, memory_count
+                   FROM memory_summaries
+                   ORDER BY created_at DESC LIMIT ?""",
+                (limit,),
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning("db_memory.get_summaries_failed", error=str(e))
+            return []
+
+    async def get_recent_undistilled(self, limit: int = 20) -> list[dict]:
+        """获取最近的未蒸馏记忆（按时间降序），用于构建记忆提示"""
+        try:
+            cursor = await self._conn.execute(
+                """SELECT id, timestamp, summary, importance FROM episodic_memories
+                   WHERE distilled=0
+                   ORDER BY timestamp DESC LIMIT ?""",
+                (limit,),
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            # 旧库可能没有 distilled 列，降级返回所有最近记忆
+            logger.debug("db_memory.recent_undistilled_failed", error=str(e))
+            return await self.get_episodic_recent(limit=limit)

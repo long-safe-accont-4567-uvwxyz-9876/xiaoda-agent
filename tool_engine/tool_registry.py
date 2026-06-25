@@ -104,6 +104,7 @@ def to_openai_tools() -> list[dict]:
     import tools.web_tools_v2
     import tools.document_tools
     import tools.web_browse_tools
+    import tools.web_browse_enhanced
     import tools.multi_search_tools
     import tools.agnes_tools
     import tools.hardware_tools

@@ -235,6 +235,9 @@ AGNES_TEXT_MODEL = os.getenv("AGNES_TEXT_MODEL", "agnes-2.0-flash")
 AGNES_IMAGE_MODEL = os.getenv("AGNES_IMAGE_MODEL", "agnes-image-2.1-flash")
 AGNES_VIDEO_MODEL = os.getenv("AGNES_VIDEO_MODEL", "agnes-video-v2.0")
 
+# Jina Reader API key（可选）：有则 500 RPM，无则免费 20 RPM
+JINA_API_KEY = os.getenv("JINA_API_KEY", "")
+
 
 def _strip_json5_comments(text: str) -> str:
     result = []
@@ -391,10 +394,31 @@ STREAM_STATUS_PUSH = os.getenv("STREAM_STATUS_PUSH", "false").lower() in ("1", "
 # Task 9: 简单对话快速路径（方案 E）—— 开启后简单闲聊跳过记忆检索
 SIMPLE_CHAT_FASTPATH = os.getenv("SIMPLE_CHAT_FASTPATH", "true").lower() in ("1", "true", "yes")
 
+# P0: WebSocket 流式文本推送 —— LLM 流式调用 + 逐 token 推送
+STREAM_TEXT_PUSH = os.getenv("STREAM_TEXT_PUSH", "false").lower() in ("1", "true", "yes")
+# P0: 工具调用中间状态推送（started/completed/failed）
+STREAM_TOOL_STATUS = os.getenv("STREAM_TOOL_STATUS", "true").lower() in ("1", "true", "yes")
+
+# Task 12: 熔断器智能恢复配置（P2）
+CIRCUIT_BREAKER_COOLDOWN = int(os.getenv("CIRCUIT_BREAKER_COOLDOWN", "60"))
+CIRCUIT_BREAKER_HALF_OPEN_PROBES = int(os.getenv("CIRCUIT_BREAKER_HALF_OPEN_PROBES", "1"))
+CIRCUIT_BREAKER_MAX_COOLDOWN = int(os.getenv("CIRCUIT_BREAKER_MAX_COOLDOWN", "600"))
+
+# P5: 失败经验→规则闭环 —— 命中规则时是否拒绝调用（true=拒绝，false=仅记录警告日志）
+ERROR_RULE_STRICT_MODE = os.getenv("ERROR_RULE_STRICT_MODE", "false").lower() in ("1", "true", "yes")
+
+# P6: 增量上下文构建与 Prompt Caching —— 开启后拆分系统提示稳定段/动态段并标记缓存
+PROMPT_CACHING_ENABLED = os.getenv("PROMPT_CACHING_ENABLED", "false").lower() in ("1", "true", "yes")
+
 # RAG Fusion Weights
 RAG_RERANK_WEIGHT = float(os.getenv("RAG_RERANK_WEIGHT", "0.65"))
 RAG_KG_WEIGHT = float(os.getenv("RAG_KG_WEIGHT", "0.15"))
 RAG_IMPORTANCE_WEIGHT = float(os.getenv("RAG_IMPORTANCE_WEIGHT", "0.20"))
+
+# ── P3 记忆蒸馏压缩配置 ──
+MAX_EPISODIC_MEMORIES = int(os.getenv("MAX_EPISODIC_MEMORIES", "200"))
+MEMORY_DISTILL_BATCH = int(os.getenv("MEMORY_DISTILL_BATCH", "30"))
+MEMORY_DISTILL_ENABLED = os.getenv("MEMORY_DISTILL_ENABLED", "false").lower() in ("1", "true", "yes")
 
 # MCP_SERVERS：使用 shutil.which() 动态解析命令路径，兼容 Windows/Linux/macOS
 # 不再硬编码 Orange Pi 上的绝对路径，避免在其他设备上失效
@@ -473,6 +497,7 @@ __all__ = [
     "AGNES_TEXT_MODEL",
     "AGNES_IMAGE_MODEL",
     "AGNES_VIDEO_MODEL",
+    "JINA_API_KEY",
     "RERANKER_API_KEY",
     "RERANKER_BASE_URL",
     "RERANKER_MODEL",
@@ -486,9 +511,19 @@ __all__ = [
     "TTS_ASYNC_MODE",
     "STREAM_STATUS_PUSH",
     "SIMPLE_CHAT_FASTPATH",
+    "STREAM_TEXT_PUSH",
+    "STREAM_TOOL_STATUS",
+    "CIRCUIT_BREAKER_COOLDOWN",
+    "CIRCUIT_BREAKER_HALF_OPEN_PROBES",
+    "CIRCUIT_BREAKER_MAX_COOLDOWN",
+    "ERROR_RULE_STRICT_MODE",
+    "PROMPT_CACHING_ENABLED",
     "RAG_RERANK_WEIGHT",
     "RAG_KG_WEIGHT",
     "RAG_IMPORTANCE_WEIGHT",
+    "MAX_EPISODIC_MEMORIES",
+    "MEMORY_DISTILL_BATCH",
+    "MEMORY_DISTILL_ENABLED",
     "ASR_API_KEY",
     "ASR_BASE_URL",
     "ASR_MODEL",

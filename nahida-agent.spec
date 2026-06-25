@@ -101,6 +101,7 @@ hiddenimports = [
     'pptx',
     'openpyxl',
     'html2text',
+    'lxml.html',
 
     # Uvicorn internals (often missed by static analysis)
     'uvicorn.logging',
@@ -195,6 +196,7 @@ hiddenimports = [
     'tools.system_tools',
     'tools.vision_tools',
     'tools.web_browse_tools',
+    'tools.web_browse_enhanced',
     'tools.web_tools_v2',
     'transports',
     'transports.agnes_transport',

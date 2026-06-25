@@ -7,7 +7,7 @@ from loguru import logger
 
 from db.db_analytics import AnalyticsDB
 from utils.metrics import metrics
-from config import AGNES_BASE_URL, AGNES_TEXT_MODEL
+from config import AGNES_BASE_URL, AGNES_TEXT_MODEL, PROMPT_CACHING_ENABLED
 from transports import ProviderTransport, MiMoTransport, AgnesTransport
 from utils.prompt_caching import apply_cache_control
 from utils.error_classifier import ErrorClassifier, ClassifiedError, RecoveryAction
@@ -116,6 +116,9 @@ class ModelRouter:
             "hit_tokens": 0,
             "miss_tokens": 0,
         }
+        # P6: 缓存命中统计累计计数器（每 100 次请求输出一次统计）
+        self._request_count = 0
+        self._cached_tokens_total = 0
 
         self._transports: dict[str, ProviderTransport] = {}
         mimo = MiMoTransport()
@@ -406,7 +409,8 @@ class ModelRouter:
                     tool_choice: str | None = None,
                     timeout: int | None = None,
                     user_openid: str = "",
-                    session_id: str = "") -> str | object:
+                    session_id: str = "",
+                    extra_headers: dict | None = None) -> str | object:
         config = ROUTE_TABLE.get(task_type, ROUTE_TABLE["chat"])
         model = config["model"]
         mt = max_tokens or config.get("max_tokens", 1500)
@@ -415,11 +419,20 @@ class ModelRouter:
 
         self._cache_stats["total_calls"] += 1
 
+        # P6: 当 PROMPT_CACHING_ENABLED 时自动补充缓存标识头
+        if PROMPT_CACHING_ENABLED and extra_headers is None:
+            extra_headers = {}
+        if PROMPT_CACHING_ENABLED and extra_headers is not None:
+            # Anthropic 兼容接口的 prompt caching beta 标识；不支持时由 API 端忽略或返回 400，
+            # _route_with_retry 的错误处理会静默降级。
+            extra_headers.setdefault("anthropic-beta", "prompt-caching-2024-07-31")
+
         _start = time.time()
         try:
             result = await self._route_with_retry(
                 task_type, config, messages, temperature, mt, stream,
                 tools, tool_choice, timeout, user_openid, session_id,
+                extra_headers=extra_headers,
             )
             metrics.inc(f"model_route.{task_type}.success")
             metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
@@ -443,6 +456,7 @@ class ModelRouter:
                             fallback_type, fallback_config, messages, temperature,
                             fallback_config.get("max_tokens", 1000), stream,
                             fallback_tools, tool_choice, timeout, user_openid, session_id,
+                            extra_headers=extra_headers,
                         )
                         return result
                     except Exception as fb_err:
@@ -461,6 +475,7 @@ class ModelRouter:
                             "chat_agnes", agnes_config, messages, temperature,
                             agnes_config.get("max_tokens", 2000), stream,
                             agnes_tools, tool_choice, timeout, user_openid, session_id,
+                            extra_headers=extra_headers,
                         )
                         return result
                 except Exception as agnes_err:
@@ -482,6 +497,7 @@ class ModelRouter:
                             f"chat_{cp_name}", cp_config, messages, temperature,
                             1000, stream, cp_tools, tool_choice, timeout,
                             user_openid, session_id,
+                            extra_headers=extra_headers,
                         )
                         return result
                     except Exception as cp_err:
@@ -489,6 +505,114 @@ class ModelRouter:
                                      provider=cp_name, error=str(cp_err))
                         continue
             raise
+
+    async def chat_stream(self, messages: list, task_type: str = "chat",
+                          temperature: float = 0.7, max_tokens: int = 2000,
+                          user_openid: str = "", session_id: str = "",
+                          extra_headers: dict | None = None):
+        """流式调用 LLM，yield 每个 chunk 的 delta content。
+
+        当 STREAM_TEXT_PUSH=true 时使用此方法。
+        异常时记录日志并重新抛出（由调用方降级）。
+        """
+        config = ROUTE_TABLE.get(task_type, ROUTE_TABLE["chat"])
+        model = config["model"]
+        mt = max_tokens or config.get("max_tokens", 1500)
+        provider = config.get("client", "mimo")
+        timeout = self.TASK_TIMEOUTS.get(task_type, 30)
+
+        # 应用 Prompt Caching（仅 MiMo 支持 cache_control 字段；
+        # 自定义 OpenAI 兼容端点收到该字段可能直接 400，导致静默降级）
+        if provider == "mimo":
+            messages = apply_cache_control(messages)
+        elif PROMPT_CACHING_ENABLED:
+            # P6: 对硅基流动/Qwen 等 OpenAI 兼容端点尝试启用 cache_control，
+            # 不支持时由 API 端返回 400，下方的错误处理会静默降级。
+            try:
+                messages = apply_cache_control(messages)
+                logger.debug("router.cache_control_applied provider={}", provider)
+            except Exception as ce:
+                logger.debug("router.cache_control_skip provider={} error={}",
+                             provider, str(ce))
+
+        # P6: 当 PROMPT_CACHING_ENABLED 时自动补充缓存标识头
+        if PROMPT_CACHING_ENABLED and extra_headers is None:
+            extra_headers = {}
+        if PROMPT_CACHING_ENABLED and extra_headers is not None:
+            # Anthropic 兼容接口的 prompt caching beta 标识；不支持时由 API 端忽略或返回 400，
+            # 错误处理会静默降级。
+            extra_headers.setdefault("anthropic-beta", "prompt-caching-2024-07-31")
+
+        # 选择客户端（参考 _route_with_retry 的逻辑）
+        lock = self._get_credential_lock(provider)
+        async with lock:
+            client = self._client
+            if provider == "agnes" and self._agnes_client:
+                client = self._agnes_client
+            elif provider not in ("mimo", "agnes"):
+                custom = getattr(self, "_custom_clients", {}).get(provider)
+                if custom is None:
+                    self._lazy_register_provider(provider)
+                    custom = getattr(self, "_custom_clients", {}).get(provider)
+                if custom is None:
+                    raise RuntimeError(f"自定义 provider {provider} 未注册或缺少 API Key")
+                client = custom
+            if not client:
+                raise RuntimeError("MiMo client not initialized, check MIMO_API_KEY")
+
+        kwargs = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": mt,
+            "stream": True,
+        }
+        # P6: 传递缓存标识头（Anthropic 兼容接口或自定义 header）
+        if extra_headers:
+            kwargs["extra_headers"] = extra_headers
+        # 支持 thinking 参数（Agnes Thinking 模式）
+        thinking_config = config.get("thinking")
+        if thinking_config and provider == "agnes":
+            kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": True}
+            }
+
+        _start = time.time()
+        stream = None
+        try:
+            stream = await asyncio.wait_for(
+                client.chat.completions.create(**kwargs),
+                timeout=timeout,
+            )
+            async for chunk in stream:
+                try:
+                    delta = chunk.choices[0].delta.content
+                except (AttributeError, IndexError):
+                    delta = None
+                if delta:
+                    yield delta
+            metrics.inc(f"model_route.{task_type}.success")
+            metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
+            metrics.maybe_report()
+        except Exception as e:
+            metrics.inc(f"model_route.{task_type}.failure")
+            metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
+            metrics.maybe_report()
+            logger.warning("router.chat_stream_failed task={} model={} error={}: {}",
+                           task_type, model, type(e).__name__, str(e)[:200])
+            # 报告凭证错误（best-effort，不阻塞异常传播）
+            try:
+                classified = self._error_classifier.classify(e)
+                await self._credential_pool.report_error(provider, classified)
+            except Exception:
+                pass
+            raise
+        finally:
+            if stream is not None:
+                try:
+                    await stream.close()
+                except Exception:
+                    pass
 
     @staticmethod
     def _classify_error(exc: Exception) -> str:
@@ -504,10 +628,11 @@ class ModelRouter:
         return 'unknown'
 
     async def _route_with_retry(self, task_type: str, config: dict,
-                                 messages: list[dict], temperature: float,
-                                 max_tokens: int, stream: bool,
-                                 tools: list[dict] | None, tool_choice: str | None,
-                                 timeout: int, user_openid: str, session_id: str) -> str | object:
+                                messages: list[dict], temperature: float,
+                                max_tokens: int, stream: bool,
+                                tools: list[dict] | None, tool_choice: str | None,
+                                timeout: int, user_openid: str, session_id: str,
+                                extra_headers: dict | None = None) -> str | object:
         model = config["model"]
         last_error = None
         provider = config.get("client", "mimo")
@@ -516,6 +641,15 @@ class ModelRouter:
         # 自定义 OpenAI 兼容端点收到该字段可能直接 400，导致静默降级）
         if provider == "mimo":
             messages = apply_cache_control(messages)
+        elif PROMPT_CACHING_ENABLED:
+            # P6: 对硅基流动/Qwen 等 OpenAI 兼容端点尝试启用 cache_control，
+            # 不支持时由 API 端返回 400，下方的错误处理会静默降级。
+            try:
+                messages = apply_cache_control(messages)
+                logger.debug("router.cache_control_applied provider={}", provider)
+            except Exception as ce:
+                logger.debug("router.cache_control_skip provider={} error={}",
+                             provider, str(ce))
 
         for attempt in range(MAX_RETRIES + 1):
             try:
@@ -546,6 +680,10 @@ class ModelRouter:
                 if tools:
                     kwargs["tools"] = tools
                     kwargs["tool_choice"] = tool_choice or "auto"
+
+                # P6: 传递缓存标识头（Anthropic 兼容接口或自定义 header）
+                if extra_headers:
+                    kwargs["extra_headers"] = extra_headers
 
                 # 支持 thinking 参数（Agnes Thinking 模式）
                 thinking_config = config.get("thinking")
@@ -657,9 +795,39 @@ class ModelRouter:
     def _track_cache(self, response):
         try:
             usage = response.usage
-            if usage and hasattr(usage, "prompt_cache_hit_tokens"):
-                self._cache_stats["hit_tokens"] += getattr(usage, "prompt_cache_hit_tokens", 0)
-                self._cache_stats["miss_tokens"] += getattr(usage, "prompt_cache_miss_tokens", 0)
+            if not usage:
+                return
+            # MiMo 格式：prompt_cache_hit_tokens / prompt_cache_miss_tokens
+            mimo_hit = 0
+            if hasattr(usage, "prompt_cache_hit_tokens"):
+                mimo_hit = getattr(usage, "prompt_cache_hit_tokens", 0) or 0
+                self._cache_stats["hit_tokens"] += mimo_hit
+                self._cache_stats["miss_tokens"] += getattr(usage, "prompt_cache_miss_tokens", 0) or 0
+
+            # P6 Task 27.1: OpenAI 兼容格式 cached_tokens
+            # 优先 prompt_tokens_details.cached_tokens（标准 OpenAI 协议），
+            # 仅当其为 0 或缺失时才回退到顶层 cached_tokens（部分 provider 简化字段），
+            # 避免同一缓存命中值被两个字段同时累加导致统计翻倍。
+            cached_from_details = 0
+            prompt_details = getattr(usage, "prompt_tokens_details", None)
+            if prompt_details is not None:
+                cached_from_details = getattr(prompt_details, "cached_tokens", 0) or 0
+            cached_top = getattr(usage, "cached_tokens", 0) or 0
+            cached_tokens = cached_from_details if cached_from_details > 0 else cached_top
+
+            # 去重：若 MiMo 的 prompt_cache_hit_tokens 与 OpenAI 的 cached_tokens 同时存在，
+            # 只累加一次（避免 hit_tokens 重复计数）。
+            if cached_tokens > 0 and mimo_hit == 0:
+                self._cache_stats["hit_tokens"] += cached_tokens
+            # _cached_tokens_total 只累加一次（已通过 cached_tokens 去重）
+            if cached_tokens > 0:
+                self._cached_tokens_total += cached_tokens
+
+            # P6 Task 27.2: 每 100 次请求输出一次缓存命中统计
+            self._request_count += 1
+            if self._request_count % 100 == 0:
+                logger.info("prompt_cache.stats requests={} cached_tokens={}",
+                            self._request_count, self._cached_tokens_total)
         except Exception as e:
             logger.debug(f"缓存统计追踪失败: {e}")
 

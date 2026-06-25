@@ -22,6 +22,7 @@ from config import (MIMO_MODEL, AGENT_CONFIG, WORKSPACE_DIR, STICKER_DIR, KLEE_S
                     PRO_TASK_KEYWORDS, TTS_ASYNC_MODE, SIMPLE_CHAT_FASTPATH)
 from model_router import ModelRouter
 from agent_context import AgentContext
+from agent_core.shared_blackboard import SharedBlackboard
 from db.database import DatabaseManager
 from security.security import SecurityFilter
 from tool_engine.tool_registry import to_openai_tools
@@ -55,6 +56,7 @@ import tools.code_tools_v2
 import tools.web_tools_v2
 import tools.document_tools
 import tools.web_browse_tools
+import tools.web_browse_enhanced
 import tools.multi_search_tools
 import tools.hardware_tools
 import tools.vision_tools
@@ -163,7 +165,12 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         _master_qq = [x.strip() for x in _master_qq if x.strip()]
         _owner_ids = list(dict.fromkeys(_owner_ids + _master_qq))  # 去重保序
         self.security = SecurityFilter(owner_ids=_owner_ids)
+        # 子代理 A2A 共享黑板（在 context 创建前初始化，并注入 context 供子代理访问）
+        self._shared_blackboard = SharedBlackboard()
+        # 后台周期清理任务引用（bootstrap 中创建，shutdown 中取消）
+        self._shared_blackboard_cleanup_task = None
         self.context = AgentContext(system_prompt_loader=build_system_prompt, router=self.router, security_filter=self.security)
+        self.context.shared_blackboard = self._shared_blackboard
         self.tool_executor = ToolExecutor(db=self.db)
         self.tool_repair = ToolCallRepair(
             allowed_tool_names=set(t["function"]["name"] for t in to_openai_tools())
@@ -199,6 +206,8 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         self._error_handler = None
         self._mcp_manager = MCPManager()
         self.instinct_manager: InstinctManager | None = None
+        # P5: 失败经验→规则闭环（bootstrap 阶段注入，失败时保持 None）
+        self.error_pipeline = None
         self._credential_pool = get_credential_pool()
         self._error_classifier = ErrorClassifier()
         self._hook_engine = get_hook_engine()
@@ -375,6 +384,15 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
 
     async def shutdown(self) -> None:
         """安全释放所有资源，不抛异常。"""
+        try:
+            # 取消共享黑板后台清理任务
+            cleanup_task = getattr(self, "_shared_blackboard_cleanup_task", None)
+            if cleanup_task and not cleanup_task.done():
+                cleanup_task.cancel()
+                await cleanup_task
+        except Exception as e:
+            logger.warning("shutdown.blackboard_cleanup_cancel_failed", error=str(e))
+
         try:
             # Stop MCP servers
             if self._mcp_manager:

@@ -7,6 +7,7 @@ from db.database import DatabaseManager
 from db.db_memory import MemoryDB
 from .vector_store import VectorStore
 from .fluid_memory import FluidMemory
+from .memory_distiller import MemoryDistiller
 from utils.atomic_write import atomic_json_write
 
 
@@ -144,6 +145,8 @@ class MemoryManager:
         self._last_message_time: float = 0
         self._last_encode_time: float = 0
         self._pending_encode = False
+        # P3 记忆蒸馏器（使用硅基流动免费模型，失败降级到 router）
+        self.distiller = MemoryDistiller(router=router)
 
     def set_knowledge_graph(self, kg):
         self.kg = kg
@@ -667,6 +670,91 @@ class MemoryManager:
             atomic_json_write(state_path, data)
         except Exception as e:
             logger.warning("memory.state_json_save_failed", error=str(e))
+
+    async def distill_old_memories(self) -> int:
+        """P3: 蒸馏超过阈值的旧记忆为摘要。
+
+        查询未蒸馏记忆数量，若超过 MAX_EPISODIC_MEMORIES 阈值，
+        取最旧的 MEMORY_DISTILL_BATCH 条蒸馏为摘要，并标记为 distilled=1。
+
+        Returns:
+            本次蒸馏的记忆条数（0 表示未触发或无候选）
+        """
+        import config
+        max_memories = getattr(config, "MAX_EPISODIC_MEMORIES", 200)
+        batch = getattr(config, "MEMORY_DISTILL_BATCH", 30)
+
+        try:
+            count = await self.memory.get_episodic_count_undistilled()
+            if count <= max_memories:
+                return 0
+
+            candidates = await self.memory.get_distill_candidates(limit=batch)
+            if not candidates:
+                return 0
+
+            summary = await self.distiller.distill(candidates)
+            if not summary:
+                logger.warning("memory.distill_empty_summary", candidates=len(candidates))
+                return 0
+
+            # 写入摘要表 + 标记原记忆为已蒸馏（同一事务，避免重复蒸馏）
+            memory_ids = [c["id"] for c in candidates if c.get("id") is not None]
+            await self.memory.insert_memory_summary(
+                summary_text=summary, memory_count=len(candidates), auto_commit=False,
+            )
+            await self.memory.mark_memories_distilled(memory_ids, auto_commit=False)
+            await self.memory.commit()
+
+            logger.info("memory.distilled",
+                        count=len(candidates),
+                        undistilled_before=count,
+                        summary_len=len(summary))
+            return len(candidates)
+        except Exception as e:
+            logger.warning("memory.distill_failed", error=str(e))
+            return 0
+
+    async def build_memory_prompt(self, recent_limit: int = 20,
+                                   summary_limit: int = 5) -> str:
+        """P3: 构建记忆提示文本，优先使用蒸馏摘要 + 近期未蒸馏记忆。
+
+        Args:
+            recent_limit: 近期未蒸馏记忆条数上限
+            summary_limit: 蒸馏摘要条数上限
+
+        Returns:
+            记忆提示文本，无内容时返回空串。
+        """
+        try:
+            summaries = await self.memory.get_memory_summaries(limit=summary_limit)
+            recent = await self.memory.get_recent_undistilled(limit=recent_limit)
+        except Exception as e:
+            logger.debug("memory.build_prompt_failed", error=str(e))
+            return ""
+
+        if not summaries and not recent:
+            return ""
+
+        parts = []
+        if summaries:
+            parts.append("[历史记忆摘要]")
+            for s in summaries:
+                text = (s.get("summary_text") or "").strip()
+                if text:
+                    parts.append(f"· {text}")
+
+        if recent:
+            if parts:
+                parts.append("[近期记忆]")
+            else:
+                parts.append("[记忆]")
+            for r in reversed(recent):  # 按时间升序展示
+                text = (r.get("summary") or "").strip()
+                if text:
+                    parts.append(f"· {text}")
+
+        return "\n".join(parts)
 
     async def shutdown(self) -> str:
         if self.vec:

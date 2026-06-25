@@ -66,6 +66,14 @@ class AgentCoreBootstrapper:
             _ensure_workspace_template()
             await self._init_cognitive()
 
+        # 共享黑板后台清理任务（避免过期条目堆积，惰性清理之外的周期兜底）
+        try:
+            if self.core._shared_blackboard is not None:
+                self.core._shared_blackboard_cleanup_task = await self.core._shared_blackboard.start_cleanup_task()
+                logger.info("blackboard.cleanup_task_started")
+        except Exception as e:
+            logger.warning("agent_core.blackboard_cleanup_start_failed error={}", str(e))
+
         # 以下步骤各自独立容错：单个可选功能失败不应阻止核心聊天
         # klee 子代理（可选）
         try:
@@ -291,6 +299,25 @@ class AgentCoreBootstrapper:
         if instinct_prompt:
             core.context.instinct_prompt = instinct_prompt
         logger.info("instinct_manager.initialized")
+
+        # P5: 失败经验→规则闭环（可选组件，失败安全）
+        try:
+            from tool_engine.error_rule_pipeline import ErrorRulePipeline
+            core.error_pipeline = ErrorRulePipeline(db=core.db, router=core.router)
+            # 规则提取改用硅基流动免费模型（不占用主模型配额）
+            if sf_key:
+                core.error_pipeline.set_free_model_client(
+                    api_key=sf_key,
+                    base_url="https://api.siliconflow.cn/v1",
+                    model="Qwen/Qwen2.5-7B-Instruct",
+                )
+            # 注入到 ToolCallHandler（延后注入，避免构造期循环依赖）
+            if getattr(core, "_tool_call_handler", None) is not None:
+                core._tool_call_handler.set_error_pipeline(core.error_pipeline)
+            logger.info("error_rule_pipeline.initialized")
+        except Exception as e:
+            core.error_pipeline = None
+            logger.warning("error_rule_pipeline.init_failed", error=str(e))
 
         # 初始化后台任务管理器
         core._bg_task_manager = BackgroundTaskManager(
