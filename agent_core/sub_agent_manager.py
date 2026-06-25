@@ -226,7 +226,7 @@ class SubAgentManagerMixin:
         if factual:
             context = "这是纳西妲委托的查询任务。请直接返回查询结果，不要加任何个人风格、感叹号或角色扮演，只报告事实数据。"
         else:
-            context = "纳西妲姐姐委托可莉的任务。纳西妲是须弥的草神，温柔聪慧，可莉叫她'纳西妲姐姐'。用户是纳西妲的爸爸，也是可莉的大哥哥/大姐姐。"
+            context = f"纳西妲姐姐委托可莉的任务。纳西妲是须弥的草神，温柔聪慧，可莉叫她'纳西妲姐姐'。用户是纳西妲的{self.context.current_address_term}，也是可莉的大哥哥/大姐姐。"
         result = await self.dispatcher.dispatch("keli", task, context=context, status_callback=_ctx.status_callback if _ctx else None)
         if result is None:
             return "可莉现在有点累了...等会儿再来找大哥哥玩吧！蹦蹦...💤"

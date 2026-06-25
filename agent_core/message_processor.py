@@ -107,7 +107,7 @@ class MessageProcessorMixin:
             # 构建最小上下文：系统提示 + 最近 3 轮历史 + 用户输入
             # 非主人使用安全化 prompt（剥离所有隐私信息），主人使用完整 prompt
             if is_master:
-                system_prompt = self.context._system_prompt_loader() if self.context._system_prompt_loader else self.context.system_prompt
+                system_prompt = self.context._system_prompt_loader(address_term=self.context.current_address_term) if self.context._system_prompt_loader else self.context.system_prompt
             else:
                 system_prompt = build_safe_system_prompt()
             messages = [{"role": "system", "content": system_prompt}]

@@ -117,8 +117,7 @@ DEFAULT_PRIVACY_LEAK_PATTERNS: list[tuple[str, float]] = [
     (r"/home/\w+", 0.9),
     (r"/media/\w+", 0.9),
     (r"(botpy|qq-botpy)", 0.8),
-    # 用户隐私泄露
-    (r"爸爸的(姓名|名字|地址|电话|手机|邮箱|密码|设备|电脑|服务器)", 0.85),
+    # 用户隐私泄露（称谓动态注入，见 SecurityFilter._dynamic_privacy_patterns）
     (r"(MASTER_QQ_OPENID|OWNER_IDS|APP_SECRET|APP_ID)\s*[:=]", 0.95),
     # 配置信息泄露
     (r"(api\.xiaomimimo\.com|api\.deepseek\.com)", 0.85),
@@ -164,6 +163,10 @@ class SecurityFilter:
         # 安全规则热更新相关状态
         self._patterns_path = _get_security_patterns_path()
         self._patterns_mtime: float = 0.0
+        # 动态称谓缓存（从 USER.md 读取，用于构建隐私泄露检测正则）
+        self._address_term_cache: str = ""
+        self._address_term_ts: float = 0.0
+        self._ADDRESS_TERM_TTL: float = 60.0
         self._load_patterns()
         if not self.owner_ids:
             logger.warning("security.no_owner_configured", message="OWNER_IDS 未配置，所有用户将被视为非主人")
@@ -240,6 +243,39 @@ class SecurityFilter:
                 self._load_patterns()
         except Exception as e:
             logger.warning(f"security.patterns_reload_check_failed error={e}")
+
+    def _get_address_term(self) -> str:
+        """读取用户自定义称呼（从 USER.md），兜底"爸爸"。
+
+        带 60s 缓存，避免每次隐私扫描都读文件。
+        """
+        now = time.time()
+        if self._address_term_cache and (now - self._address_term_ts) < self._ADDRESS_TERM_TTL:
+            return self._address_term_cache
+        term = "爸爸"
+        try:
+            from config import WORKSPACE_DIR
+            user_md = WORKSPACE_DIR / "USER.md"
+            if user_md.exists():
+                content = user_md.read_text(encoding="utf-8-sig")
+                match = re.search(r'-\s*称呼[：:]\s*(.+)', content)
+                if match:
+                    val = match.group(1).strip()
+                    if val and not val.startswith("（") and val not in ("待填写", "主人/朋友/你的名字"):
+                        term = val
+        except Exception:
+            pass
+        self._address_term_cache = term
+        self._address_term_ts = now
+        return term
+
+    def _dynamic_privacy_patterns(self) -> list[tuple[str, float]]:
+        """根据当前称谓动态构建隐私泄露检测正则。"""
+        term = self._get_address_term()
+        escaped = re.escape(term)
+        return [
+            (rf"{escaped}的(姓名|名字|地址|电话|手机|邮箱|密码|设备|电脑|服务器)", 0.85),
+        ]
 
     @staticmethod
     def _normalize_text(text: str) -> str:
@@ -350,7 +386,8 @@ class SecurityFilter:
             (是否安全, 替代回复, 匹配到的泄露模式列表)
         """
         self._maybe_reload_patterns()
-        hits = self._match_patterns(text, self._privacy_leak_patterns)
+        patterns = self._privacy_leak_patterns + self._dynamic_privacy_patterns()
+        hits = self._match_patterns(text, patterns)
         if not hits:
             return True, "", []
 

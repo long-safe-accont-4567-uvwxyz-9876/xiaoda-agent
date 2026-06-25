@@ -1,22 +1,39 @@
+import os
 import time
 import difflib
+import httpx
 from loguru import logger
 
 from db.database import DatabaseManager
 from model_router import ModelRouter
 
-EXTRACT_PROMPT = """请分析以下对话，提取可复用的模式、经验或用户偏好。每个模式用一句话描述，附带0-1的置信度。
+# LLM 思考过程特征词 — 包含这些词的行不是有效的本能
+_LLM_THINKING_KEYWORDS = {
+    "首先", "好的", "格式要求", "用户要求", "任务是", "我需要", "让我分析",
+    "根据对话", "从对话中可以看出", "分析给定的对话", "提取可复用",
+    "模式描述", "置信度", "每行一个", "现在请",
+}
 
-格式要求（每行一个）：
+# prompt 示例内容 — 防止 LLM 直接复制示例
+_PROMPT_EXAMPLE_FRAGMENTS = {
+    "用户喜欢用中文交流", "用户是开发者", "经常需要代码调试",
+    "用户偏好浓香入味的菜品", "用户倾向于直接处理问题",
+}
+
+EXTRACT_PROMPT = """从以下对话中提取可复用的用户偏好或行为模式。只输出结果，不要解释。
+
+严格格式（每行一条，用 | 分隔）：
 模式描述 | 置信度
 
-示例：
-用户喜欢用中文交流，偶尔夹杂英文技术术语 | 0.9
-用户是开发者，经常需要代码调试帮助 | 0.85
+示例（不要输出这些，仅作格式参考）：
+用户偏好浓香入味的菜品 | 0.8
+用户倾向于直接处理问题 | 0.75
 
 对话内容：
 用户：{user_input}
-助手：{reply}"""
+助手：{reply}
+
+提取结果："""
 
 
 class InstinctManager:
@@ -25,6 +42,42 @@ class InstinctManager:
         self.db = db
         self.router = router
         self._available = db is not None
+        self._free_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
+        self._free_base_url = "https://api.siliconflow.cn/v1"
+        self._free_model = "Qwen/Qwen2.5-7B-Instruct"
+
+    def set_free_model_client(self, api_key: str, base_url: str, model: str):
+        """配置硅基流动免费模型客户端"""
+        self._free_api_key = api_key
+        self._free_base_url = base_url
+        self._free_model = model
+
+    async def _call_free_model(self, messages: list, temperature: float = 0.6,
+                                max_tokens: int = 800) -> str | None:
+        """调用硅基流动免费模型"""
+        if not self._free_api_key:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.post(
+                    f"{self._free_base_url}/chat/completions",
+                    json={
+                        "model": self._free_model,
+                        "messages": messages,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                    },
+                    headers={
+                        "Authorization": f"Bearer {self._free_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        except Exception as e:
+            logger.warning("instinct.free_model_failed", error=str(e))
+            return None
 
     async def init(self):
         """创建 instincts 表"""
@@ -53,16 +106,21 @@ class InstinctManager:
         if not self._available:
             return
         prompt = EXTRACT_PROMPT.format(user_input=user_input, reply=reply)
-        try:
-            result = await self.router.route(
-                task_type="chat_mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=400,
-            )
-        except Exception as e:
-            logger.warning("instinct.extract_llm_failed", error=str(e))
-            return
+        messages = [{"role": "user", "content": prompt}]
+
+        # 优先调用硅基流动免费模型，失败则降级到 router
+        result = await self._call_free_model(messages, temperature=0.3, max_tokens=400)
+        if result is None:
+            try:
+                result = await self.router.route(
+                    task_type="chat_mini",
+                    messages=messages,
+                    temperature=0.3,
+                    max_tokens=400,
+                )
+            except Exception as e:
+                logger.warning("instinct.extract_llm_failed", error=str(e))
+                return
 
         if not result or not isinstance(result, str):
             return
@@ -71,19 +129,29 @@ class InstinctManager:
         inserted = 0
         for line in result.strip().splitlines():
             line = line.strip()
+            # 去掉 <think> 标签内容
+            if line.startswith("<think>") or line.startswith("</think>"):
+                continue
             if "|" not in line:
                 continue
             parts = line.rsplit("|", 1)
             if len(parts) != 2:
                 continue
-            content = parts[0].strip()
+            content = parts[0].strip().lstrip("-").strip()  # 去掉前导 "- "
             try:
                 confidence = float(parts[1].strip())
             except ValueError:
-                confidence = 0.5
+                continue  # 置信度不是数字，跳过（不是有效行）
             confidence = max(0.0, min(1.0, confidence))
 
-            if not content or confidence < 0.5:
+            # 过滤无效内容
+            if not content or len(content) < 5 or confidence < 0.5:
+                continue
+            # 过滤 LLM 思考过程
+            if any(kw in content for kw in _LLM_THINKING_KEYWORDS):
+                continue
+            # 过滤 prompt 示例被复制
+            if any(frag in content for frag in _PROMPT_EXAMPLE_FRAGMENTS):
                 continue
 
             try:

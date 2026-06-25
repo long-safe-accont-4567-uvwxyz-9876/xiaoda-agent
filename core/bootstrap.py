@@ -246,7 +246,7 @@ class AgentCoreBootstrapper:
                     api_key=qt_api_key,
                     base_url="https://api.siliconflow.cn/v1",
                 )
-                logger.info("query_transformer.enabled", model="Qwen/Qwen3-8B (free)")
+                logger.info("query_transformer.enabled", model="Qwen/Qwen2.5-7B-Instruct (free)")
             else:
                 logger.info("query_transformer.disabled_no_api_key")
         else:
@@ -278,6 +278,14 @@ class AgentCoreBootstrapper:
         core.portrait_manager = PortraitManager(db=core.db, memory=core.db.memory, router=core.router, notebook=core.db.notebook)
         core.instinct_manager = InstinctManager(db=core.db, router=core.router)
         await core.instinct_manager.init()
+        # Instinct 提取改用硅基流动免费模型
+        sf_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
+        if sf_key:
+            core.instinct_manager.set_free_model_client(
+                api_key=sf_key,
+                base_url="https://api.siliconflow.cn/v1",
+                model="Qwen/Qwen2.5-7B-Instruct",
+            )
         # 加载 Instinct 提示到上下文
         instinct_prompt = await core.instinct_manager.build_instinct_prompt()
         if instinct_prompt:

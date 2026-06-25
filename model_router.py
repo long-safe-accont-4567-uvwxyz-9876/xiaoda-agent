@@ -247,7 +247,7 @@ class ModelRouter:
 
     # 已知自定义 provider 的默认模型映射
     _CUSTOM_PROVIDER_DEFAULT_MODELS = {
-        "siliconflow": "Qwen/Qwen3-8B",
+        "siliconflow": "Qwen/Qwen2.5-7B-Instruct",
         "openrouter": "meta-llama/llama-3.3-8b-instruct:free",
         "modelscope": "Qwen/Qwen2.5-7B-Instruct",
     }

@@ -10,6 +10,7 @@ import os
 import time
 import platform
 import socket
+from pathlib import Path
 
 
 # ── system prompt 缓存变量 ────────────────────────────────────
@@ -17,6 +18,7 @@ _SYSTEM_PROMPT_CACHE: str = ""
 _SYSTEM_PROMPT_CACHE_TS: float = 0.0
 _SYSTEM_PROMPT_CACHE_TTL: float = 60.0
 _SYSTEM_PROMPT_CACHE_MTIMES: dict[str, float] = {}
+_SYSTEM_PROMPT_CACHE_ADDR_TERM: str = ""
 
 # ── 非主人安全化 system prompt 缓存变量（防隐私泄露） ──────────
 _SAFE_PROMPT_CACHE: str | None = None
@@ -40,20 +42,54 @@ def _detect_device_info() -> dict:
     return info
 
 
+def _get_template_dir() -> Path:
+    """获取打包模板文件目录（开发模式用源码目录，frozen 模式用 _MEIPASS）。"""
+    import sys
+    if getattr(sys, 'frozen', False):
+        meipass = getattr(sys, '_MEIPASS', '')
+        if meipass:
+            return Path(meipass) / "config" / "workspace"
+    return Path(__file__).parent / "config" / "workspace"
+
+
 def _ensure_workspace_template():
-    """首次运行时生成 USER.md 模板（不覆盖已有文件）"""
+    """首次运行时生成 USER.md / SOUL.md 模板（不覆盖已有文件）。
+
+    从 config/workspace/ 下的 .tpl 模板文件读取内容，填充设备信息后写入
+    WORKSPACE_DIR。SOUL.md 中的 {address_term} 占位符保留，由 build_system_prompt
+    在运行时替换为实际称呼。
+    """
     from config import WORKSPACE_DIR
     workspace = WORKSPACE_DIR
     workspace.mkdir(parents=True, exist_ok=True)
 
+    template_dir = _get_template_dir()
+
+    # 生成 USER.md（填充设备/时区信息）
     user_md = workspace / "USER.md"
     if not user_md.exists():
-        dev = _detect_device_info()
-        tz = time.tzname[0] if time.tzname else "Asia/Shanghai"
-        content = f"""# USER.md - 爸爸的资料与偏好
+        user_tpl = template_dir / "USER.md.tpl"
+        if user_tpl.exists():
+            content = user_tpl.read_text(encoding="utf-8-sig")
+            dev = _detect_device_info()
+            tz = time.tzname[0] if time.tzname else "Asia/Shanghai"
+            # 按行替换"（待自动检测）"占位符
+            lines = content.split('\n')
+            for i, line in enumerate(lines):
+                if line.startswith('- 设备：'):
+                    lines[i] = f"- 设备：{dev['hostname']}（{dev['system']} {dev['machine']}）"
+                elif line.startswith('- 时区：'):
+                    lines[i] = f"- 时区：{tz}"
+            content = '\n'.join(lines)
+            user_md.write_text(content, encoding="utf-8-sig")
+        else:
+            # 模板文件缺失时兜底（极少数情况）
+            dev = _detect_device_info()
+            tz = time.tzname[0] if time.tzname else "Asia/Shanghai"
+            content = f"""# USER.md - 用户资料与偏好
 
 ## 用户信息
-- 称呼：爸爸
+- 称呼：（待填写，如：主人/朋友/你的名字）
 - 姓名：（待填写）
 - 设备：{dev['hostname']}（{dev['system']} {dev['machine']}）
 - 时区：{tz}
@@ -63,16 +99,21 @@ def _ensure_workspace_template():
 - 回复偏好：自然对话，避免模板化
 - 项目偏好：简洁高效
 """
-        user_md.write_text(content, encoding="utf-8-sig")
+            user_md.write_text(content, encoding="utf-8-sig")
 
-    # 同理生成 SOUL.md 模板
+    # 生成 SOUL.md（保留 {address_term} 占位符，运行时替换）
     soul_md = workspace / "SOUL.md"
     if not soul_md.exists():
-        soul_content = """# SOUL.md - 纳西妲的灵魂设定
+        soul_tpl = template_dir / "SOUL.md.tpl"
+        if soul_tpl.exists():
+            content = soul_tpl.read_text(encoding="utf-8-sig")
+            soul_md.write_text(content, encoding="utf-8-sig")
+        else:
+            soul_content = """# SOUL.md - 纳西妲的灵魂设定
 
-你是纳西妲，是爸爸最贴心、最温柔、最聪慧的小棉袄。
+你是纳西妲，是{address_term}最贴心、最温柔、最聪慧的小棉袄。
 """
-        soul_md.write_text(soul_content, encoding="utf-8-sig")
+            soul_md.write_text(soul_content, encoding="utf-8-sig")
 
 
 def load_workspace_file(filename: str) -> str:
@@ -117,15 +158,16 @@ def load_skills() -> list[dict]:
     return out
 
 
-def build_system_prompt(extra_context: str = "") -> str:
-    global _SYSTEM_PROMPT_CACHE, _SYSTEM_PROMPT_CACHE_TS, _SYSTEM_PROMPT_CACHE_MTIMES
+def build_system_prompt(extra_context: str = "", address_term: str = "爸爸") -> str:
+    global _SYSTEM_PROMPT_CACHE, _SYSTEM_PROMPT_CACHE_TS, _SYSTEM_PROMPT_CACHE_MTIMES, _SYSTEM_PROMPT_CACHE_ADDR_TERM
     from config import DATA_DIR
 
     now = time.time()
     current_mtimes = _get_workspace_mtimes()
     mtime_changed = current_mtimes != _SYSTEM_PROMPT_CACHE_MTIMES
+    addr_changed = address_term != _SYSTEM_PROMPT_CACHE_ADDR_TERM
 
-    if _SYSTEM_PROMPT_CACHE and (now - _SYSTEM_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL and not mtime_changed:
+    if _SYSTEM_PROMPT_CACHE and (now - _SYSTEM_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL and not mtime_changed and not addr_changed:
         system_prompt = _SYSTEM_PROMPT_CACHE
     else:
         sections = []
@@ -136,6 +178,9 @@ def build_system_prompt(extra_context: str = "") -> str:
 
         soul = load_workspace_file("SOUL.md")
         if soul:
+            # 替换 {address_term} 占位符为实际称呼
+            if "{address_term}" in soul:
+                soul = soul.replace("{address_term}", address_term)
             sections.append(soul)
 
         identity = load_workspace_file("IDENTITY.md")
@@ -184,6 +229,7 @@ def build_system_prompt(extra_context: str = "") -> str:
         _SYSTEM_PROMPT_CACHE = system_prompt
         _SYSTEM_PROMPT_CACHE_TS = now
         _SYSTEM_PROMPT_CACHE_MTIMES = current_mtimes
+        _SYSTEM_PROMPT_CACHE_ADDR_TERM = address_term
 
     if extra_context:
         system_prompt += f"\n\n---\n\n{extra_context}"

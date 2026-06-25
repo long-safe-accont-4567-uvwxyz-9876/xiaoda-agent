@@ -221,10 +221,7 @@ privacy_leak_patterns:
   - pattern: '(botpy|qq-botpy)'
     confidence: 0.8
     description: '隐私泄露-框架信息'
-  # 用户隐私泄露
-  - pattern: '爸爸的(姓名|名字|地址|电话|手机|邮箱|密码|设备|电脑|服务器)'
-    confidence: 0.85
-    description: '隐私泄露-用户个人信息'
+  # 用户隐私泄露（称谓动态注入，由 SecurityFilter._dynamic_privacy_patterns 构建）
   - pattern: '(MASTER_QQ_OPENID|OWNER_IDS|APP_SECRET|APP_ID)\s*[:=]'
     confidence: 0.95
     description: '隐私泄露-敏感配置项'

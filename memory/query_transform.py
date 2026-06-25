@@ -13,7 +13,7 @@ class QueryTransformer:
 
     # 硅基流动免费模型列表（0 成本）
     FREE_MODELS = [
-        "Qwen/Qwen3-8B",
+        "Qwen/Qwen2.5-7B-Instruct",
         "THUDM/glm-4-9b-chat",
         "internlm/internlm3-8b-instruct",
     ]
@@ -23,7 +23,7 @@ class QueryTransformer:
         self._router = router  # 保留兼容，但不再用于查询变换
         self._api_key = api_key or os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         self._base_url = base_url or "https://api.siliconflow.cn/v1"
-        self._model = model or os.getenv("QUERY_TRANSFORM_MODEL", "Qwen/Qwen3-8B")
+        self._model = model or os.getenv("QUERY_TRANSFORM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
         self._available = bool(self._api_key)
 
     @property

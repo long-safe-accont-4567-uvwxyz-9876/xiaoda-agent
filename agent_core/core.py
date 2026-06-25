@@ -230,6 +230,35 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         except ImportError:
             return str(Path(__file__).parent.parent / "config" / "agents" / "nahida_personality.md")
 
+    @staticmethod
+    def _read_address_term_from_user_md() -> str | None:
+        """从 USER.md 读取用户自定义称呼。
+
+        匹配 "- 称呼：xxx" 或 "- 称呼: xxx"，过滤占位符文本。
+        文件不存在或格式不正确时返回 None，由调用方兜底。
+        """
+        from config import WORKSPACE_DIR
+        user_md = WORKSPACE_DIR / "USER.md"
+        if not user_md.exists():
+            return None
+        try:
+            content = user_md.read_text(encoding="utf-8-sig")
+            # 匹配 "- 称呼：xxx" 或 "- 称呼: xxx"
+            match = re.search(r'-\s*称呼[：:]\s*(.+)', content)
+            if match:
+                val = match.group(1).strip()
+                # 过滤占位符文本（USER.md.tpl 中的提示语）
+                if val and not val.startswith("（") and val not in ("待填写", "主人/朋友/你的名字"):
+                    return val
+        except Exception as e:
+            logger.debug("core.read_address_term_failed", error=str(e))
+        return None
+
+    def _build_owner_identity(self) -> UserIdentity:
+        """构建主人身份，address_term 从 USER.md 读取，兜底"爸爸"。"""
+        addr = self._read_address_term_from_user_md() or "爸爸"
+        return UserIdentity(is_owner=True, display_name="爸爸", address_term=addr)
+
     def _resolve_identity(self, user_id: str, user_openid: str = "",
                           source: str = "") -> UserIdentity:
         """运行时身份解析：基于 openID/UID 稳定标识判断用户身份，不依赖消息内容。
@@ -240,14 +269,14 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         """
         # 非 QQ 群聊场景默认主人（webui/cli/单聊等均为爸爸本人使用）
         if source != "qq_group":
-            return UserIdentity.default_owner()
+            return self._build_owner_identity()
         # QQ 群聊场景：基于 openID 严格判断
         check_id = user_openid or user_id
         if not check_id:
-            return UserIdentity.default_owner()
+            return self._build_owner_identity()
         is_owner = self.security.is_owner(check_id)
         if is_owner:
-            return UserIdentity(is_owner=True, display_name="爸爸", address_term="爸爸")
+            return self._build_owner_identity()
         return UserIdentity(is_owner=False, display_name="用户", address_term="用户")
 
     async def process(self, user_input: str, user_id: str = "qq_user",

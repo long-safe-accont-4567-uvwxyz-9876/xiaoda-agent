@@ -21,7 +21,7 @@ class AgentContext:
     MAX_COMPRESS_ROUNDS = 5        # 最大压缩轮数
     MAX_COMPRESSED_SUMMARY_LEN = 3000
 
-    def __init__(self, system_prompt: str = "", system_prompt_loader: Callable[[], str] | None = None,
+    def __init__(self, system_prompt: str = "", system_prompt_loader: Callable[..., str] | None = None,
                  router=None, security_filter=None):
         self.system_prompt = system_prompt
         self._system_prompt_loader = system_prompt_loader
@@ -274,7 +274,7 @@ class AgentContext:
             stable_content = self._cached_stable_prompt
         else:
             stable_parts = []
-            base_prompt = self._system_prompt_loader() if self._system_prompt_loader else self.system_prompt
+            base_prompt = self._system_prompt_loader(address_term=self.current_address_term) if self._system_prompt_loader else self.system_prompt
 
             if base_prompt:
                 stable_parts.append(base_prompt)
@@ -386,7 +386,7 @@ class AgentContext:
         nahida_prompt = getattr(self, "system_prompt", "") or ""
         if not nahida_prompt and hasattr(self, "_system_prompt_loader") and self._system_prompt_loader:
             try:
-                nahida_prompt = self._system_prompt_loader()
+                nahida_prompt = self._system_prompt_loader(address_term=self.current_address_term)
             except Exception as e:
                 logger.warning(f"加载纳西妲系统提示词失败: {e}")
         if not nahida_prompt:

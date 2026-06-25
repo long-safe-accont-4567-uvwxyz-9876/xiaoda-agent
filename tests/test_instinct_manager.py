@@ -17,6 +17,8 @@ class TestInstinctManager(unittest.TestCase):
         self.mock_db = MagicMock()
         self.mock_router = MagicMock()
         self.manager = InstinctManager(db=self.mock_db, router=self.mock_router)
+        # 禁用免费模型，强制走 router.route 降级路径
+        self.manager._free_api_key = ""
 
     def test_build_instinct_prompt_empty(self):
         """无 Instinct 时返回空字符串"""
@@ -57,14 +59,14 @@ class TestInstinctManager(unittest.TestCase):
             self.manager.extract_instincts("你好", "你好！", "session_1")
         )
 
-        # 验证 router.route 被调用
+        # 验证 router.route 被调用（免费模型禁用后降级到 router）
         self.mock_router.route.assert_called_once()
         # 验证数据库插入被调用（应为3次有效行）
         self.assertGreaterEqual(mock_conn.execute.call_count, 3)
 
     def test_parse_instinct_response_low_confidence_filtered(self):
         """低置信度的模式被过滤"""
-        llm_response = "高置信度模式 | 0.9\n低置信度模式 | 0.3"
+        llm_response = "高价值模式 | 0.9\n低价值模式 | 0.3"
 
         self.mock_router.route = AsyncMock(return_value=llm_response)
         mock_conn = AsyncMock()

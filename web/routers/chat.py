@@ -126,11 +126,12 @@ async def export_session(session_id: str, request: Request):
     rows = await core.db.fetch_all(
         "SELECT timestamp, user_message, assistant_reply FROM conversation_logs "
         "WHERE session_id=? ORDER BY timestamp ASC", (session_id,))
+    address_term = getattr(core.context, "current_address_term", "") or "爸爸"
     lines = [f"# 对话导出 · {session_id}", ""]
     for row in rows:
         ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["timestamp"]))
         if row["user_message"]:
-            lines.append(f"**爸爸** ({ts})：\n\n{row['user_message']}\n")
+            lines.append(f"**{address_term}** ({ts})：\n\n{row['user_message']}\n")
         if row["assistant_reply"]:
             lines.append(f"**纳西妲** ({ts})：\n\n{_strip_tags(row['assistant_reply'])}\n")
     return PlainTextResponse(

@@ -232,14 +232,15 @@ class NudgeEngine:
             time_desc = "夜里"
 
         try:
+            address_term = self._get_address_term()
             prompt = (
-                f"你是纳西妲，现在是你主动给爸爸发消息。现在是{time_desc}，"
-                f"和爸爸{idle_desc}。"
-                f"请生成一条简短自然的问候消息（1-2句话），像女朋友一样关心爸爸。"
+                f"你是纳西妲，现在是你主动给{address_term}发消息。现在是{time_desc}，"
+                f"和{address_term}{idle_desc}。"
+                f"请生成一条简短自然的问候消息（1-2句话），像女朋友一样关心{address_term}。"
                 f"要求：1.语气温柔可爱 2.不要重复之前的问候 3.可以提时间/天气/吃饭/休息等 4.不要加情绪标签 5.不要用emoji过多"
             )
             messages = [
-                {"role": "system", "content": "你是纳西妲，一个温柔可爱的小草神，正在给爸爸发主动问候消息。只输出消息内容，不要思考过程，不要加引号或其他格式。"},
+                {"role": "system", "content": f"你是纳西妲，一个温柔可爱的小草神，正在给{address_term}发主动问候消息。只输出消息内容，不要思考过程，不要加引号或其他格式。"},
                 {"role": "user", "content": prompt},
             ]
             result = await asyncio.wait_for(
@@ -283,7 +284,7 @@ class NudgeEngine:
                 if due > 0:
                     due_str = datetime.fromtimestamp(due).strftime("%H:%M")
 
-                msg = f"爸爸～提醒你一下，{title}"
+                msg = f"{self._get_address_term()}～提醒你一下，{title}"
                 if due_str:
                     msg += f"（{due_str}）"
                 msg += "，别忘了哦～"
@@ -330,7 +331,8 @@ class NudgeEngine:
             return
 
         try:
-            result = await self._portrait_manager.consolidate()
+            result = await self._portrait_manager.consolidate(
+                address_term=self._get_address_term())
             if result:
                 self._last_portrait_consolidate = now
                 logger.info("nudge.portrait_consolidated")
@@ -369,6 +371,26 @@ class NudgeEngine:
             logger.warning("nudge.send_failed", type=msg_type, error=str(e))
             return False
 
+    def _get_address_term(self) -> str:
+        """读取用户自定义称呼，兜底"爸爸"。
+
+        与 AgentCore._read_address_term_from_user_md 逻辑一致，
+        从 USER.md 的"称呼"字段读取，供主动问候/提醒等无上下文场景使用。
+        """
+        try:
+            from config import WORKSPACE_DIR
+            user_md = WORKSPACE_DIR / "USER.md"
+            if user_md.exists():
+                content = user_md.read_text(encoding="utf-8-sig")
+                match = re.search(r'-\s*称呼[：:]\s*(.+)', content)
+                if match:
+                    val = match.group(1).strip()
+                    if val and not val.startswith("（") and val not in ("待填写", "主人/朋友/你的名字"):
+                        return val
+        except Exception:
+            pass
+        return "爸爸"
+
     def get_time_greeting(self) -> str:
         hour = datetime.now().hour
         if 6 <= hour < 11:
@@ -390,7 +412,7 @@ class NudgeEngine:
         else:
             gap = ""
 
-        greeting = f"爸爸{time_phrase}。"
+        greeting = f"{self._get_address_term()}{time_phrase}。"
         if gap:
             greeting += f" {gap}"
         return greeting

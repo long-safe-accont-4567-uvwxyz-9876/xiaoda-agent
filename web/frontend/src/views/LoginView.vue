@@ -84,7 +84,7 @@ async function handleLogin() {
         <div class="login-header">
           <DendroEmblem :size="84" spin />
           <h1>纳西妲 · 世界树</h1>
-          <p class="subtitle">智慧之神在此恭候，爸爸</p>
+          <p class="subtitle">智慧之神在此恭候你</p>
         </div>
 
         <form @submit.prevent="handleLogin" class="login-form">

@@ -73,7 +73,8 @@ async def consolidate_portrait(request: Request):
 
     async def _run():
         try:
-            result = await core.portrait_manager.consolidate(force=True)
+            result = await core.portrait_manager.consolidate(
+                force=True, address_term=core.context.current_address_term)
             from web.ws_hub import manager
             await manager.broadcast({"type": "portrait_consolidated",
                                      "ok": bool(result)})

@@ -15,7 +15,7 @@ from loguru import logger
 
 from config import FILE_DIR
 from emotion.emotion_enum import CN_TO_EN
-from utils.text_utils import strip_dsml, humanize
+from utils.text_utils import strip_dsml, strip_reasoning, humanize
 
 from agent_core.core import _current_request_ctx
 
@@ -221,16 +221,18 @@ class ToolExecutorMixin:
             if text.startswith(p):
                 text = text[len(p):].strip()
         text = strip_dsml(text)
+        text = strip_reasoning(text)
         text = humanize(text, style="nahida")
         return text
 
     def _finalize_reply(self, reply: str, strip_emotion: bool = True, style: str = "nahida") -> str:
-        """统一的回复文本处理：strip_emotion_tag + humanize。
+        """统一的回复文本处理：strip_reasoning + strip_emotion_tag + humanize。
 
         所有回复路径（主 nahida、单子 Agent、并行子 Agent、TaskGraph）统一调用此方法，
         确保回复清洗流程一致。
         """
         text = reply.strip() if reply else ""
+        text = strip_reasoning(text)
         if strip_emotion:
             text = self.klee_sticker_manager.strip_emotion_tag(text)
         text = humanize(text, style=style)

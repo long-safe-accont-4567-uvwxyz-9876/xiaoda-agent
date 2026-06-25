@@ -242,8 +242,9 @@ class GreetingScheduler:
         period = ("清晨" if now.hour < 9 else "上午" if now.hour < 12 else
                   "中午" if now.hour < 14 else "下午" if now.hour < 18 else
                   "傍晚" if now.hour < 20 else "夜晚")
+        address_term = getattr(self.core.context, "current_address_term", "") or "爸爸"
         prompt = (
-            f"现在是{period} {now.strftime('%H:%M')}。请以纳西妲的口吻主动向爸爸发一句简短温柔的问候"
+            f"现在是{period} {now.strftime('%H:%M')}。请以纳西妲的口吻主动向{address_term}发一句简短温柔的问候"
             f"（30字以内，不要列表不要解释）。"
         )
         if hint:
@@ -251,7 +252,7 @@ class GreetingScheduler:
         try:
             result = await self.core.router.route(
                 "chat_flash",
-                [{"role": "system", "content": "你是纳西妲，温柔聪慧，称呼用户为爸爸。直接输出最终回复，不要思考过程。"},
+                [{"role": "system", "content": f"你是纳西妲，温柔聪慧，称呼用户为{address_term}。直接输出最终回复，不要思考过程。"},
                  {"role": "user", "content": prompt}],
                 max_tokens=200)
             text = result if isinstance(result, str) else \
@@ -261,7 +262,7 @@ class GreetingScheduler:
                 return text[:100]
         except Exception as e:
             logger.warning("greeting.generate_failed error={}", str(e))
-        return f"爸爸，{period}好呀～纳西妲在这里陪着你哦 🌱"
+        return f"{address_term}，{period}好呀～纳西妲在这里陪着你哦 🌱"
 
     async def _send_qq(self, text: str) -> str | None:
         """发 QQ 主动消息。成功返回 None，失败返回错误描述（供测试接口回显）。"""

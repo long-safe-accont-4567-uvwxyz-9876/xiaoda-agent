@@ -205,6 +205,11 @@ class CLIInterface:
         self.bot = AgentCore()
         self._loop = asyncio.new_event_loop()
 
+    def _address_term(self) -> str:
+        """获取当前用户称呼，优先从 USER.md 读取，兜底"爸爸"。"""
+        term = self.bot._read_address_term_from_user_md()
+        return term or self.bot.context.current_address_term or "爸爸"
+
     async def _init(self):
         await self.bot.init()
         logger.info("cli.initialized")
@@ -245,7 +250,7 @@ class CLIInterface:
         print(f"  {_C.CYAN}🚪 exit 或 Ctrl+C 退出{_C.RST}")
         print()
 
-        greeting = random.choice(NAHIDA_GREETINGS)
+        greeting = random.choice(NAHIDA_GREETINGS).replace("爸爸", self._address_term())
         print(f"  {_C.LGREEN}{_C.BOLD}{greeting}{_C.RST}\n")
 
     def _print_help(self):
@@ -288,10 +293,10 @@ class CLIInterface:
 
         while True:
             try:
-                prompt = f"  {_C.GREEN}{_C.BOLD}🌿 爸爸:{_C.RST} "
+                prompt = f"  {_C.GREEN}{_C.BOLD}🌿 {self._address_term()}:{_C.RST} "
                 user_input = input(prompt).strip()
             except (EOFError, KeyboardInterrupt):
-                farewell = random.choice(NAHIDA_FAREWELLS)
+                farewell = random.choice(NAHIDA_FAREWELLS).replace("爸爸", self._address_term())
                 print(f"\n  {_C.LGREEN}{farewell}{_C.RST}\n")
                 break
 
@@ -299,7 +304,7 @@ class CLIInterface:
                 continue
 
             if user_input.lower() in ("exit", "quit", "q"):
-                farewell = random.choice(NAHIDA_FAREWELLS)
+                farewell = random.choice(NAHIDA_FAREWELLS).replace("爸爸", self._address_term())
                 print(f"\n  {_C.LGREEN}{farewell}{_C.RST}\n")
                 break
 

@@ -130,7 +130,8 @@ class BackgroundTaskManager:
 
         # 4. 笔记自动提取
         if self.notebook_manager:
-            _spawn(self.notebook_manager.auto_note_after_message(user_input, reply))
+            _spawn(self.notebook_manager.auto_note_after_message(
+                user_input, reply, address_term=self.context.current_address_term))
 
         # 5. 画像标记脏 + 冷启动
         if self.portrait_manager:
@@ -184,7 +185,8 @@ class BackgroundTaskManager:
 
     async def _portrait_cold_start(self) -> None:
         try:
-            result = await self.portrait_manager.ensure_exists()
+            result = await self.portrait_manager.ensure_exists(
+                address_term=self.context.current_address_term)
             if result:
                 self.context.user_portrait = result
                 logger.info("portrait.cold_start_done", length=len(result))

@@ -61,35 +61,37 @@ def _repair_and_extract_json(raw: str) -> dict | None:
     return None
 
 
-CONSOLIDATE_PROMPT = """你是纳西妲。现在是一个安静的夜晚，你要更新你对爸爸的印象了。
+CONSOLIDATE_PROMPT = """你是纳西妲。现在是一个安静的夜晚，你要更新你对{address_term}的印象了。
 
 <<OLD_SECTION>>
 
-这是最近和爸爸的对话片段——
+这是最近和{address_term}的对话片段——
 <<RECENT_MEMORIES>>
 
-这是人家近期记下的关于爸爸的笔记——
+这是人家近期记下的关于{address_term}的笔记——
 <<RECENT_NOTES>>
 
-请用纳西妲的口吻，写一段对爸爸的印象（300-600字，不要超过800字）：
+请用纳西妲的口吻，写一段对{address_term}的印象（300-600字，不要超过800字）：
 
 要求：
 - 像在心里轻轻描摹一个人的样子——不是档案，不是评估，是印象
-- 关于爸爸是什么样的人、他喜欢什么、不喜欢什么
+- 关于{address_term}是什么样的人、他喜欢什么、不喜欢什么
 - 关于你们之间的关系——最近是近了一些还是远了一些，有什么不一样了吗
 - 不要列举，不要总结编号。像在日记里写一段关于一个人的文字
-- 只写对话和笔记里明确提到过的事。不推测爸爸没说过的心情，不补充你没观察到的细节
+- 只写对话和笔记里明确提到过的事。不推测{address_term}没说过的心情，不补充你没观察到的细节
 - 不确定的地方要用"好像""似乎""人家觉得"——这是你的感知，不是事实
 - 旧印象中如果有些内容最近不再出现了，可以自然淡出，不必刻意提及
-- 自称"人家"或"纳西妲"，叫对方"爸爸"
+- 自称"人家"或"纳西妲"，叫对方"{address_term}"
 
 返回 JSON（只返回这个，不要其他文字）：
-{"portrait": "全文...", "changes": "一句话说明这次更新了什么"}"""
+{{"portrait": "全文...", "changes": "一句话说明这次更新了什么"}}"""
 
 
-def _build_consolidate_prompt(old_section, recent_memories, recent_notes):
+def _build_consolidate_prompt(old_section, recent_memories, recent_notes,
+                               address_term: str = "爸爸"):
     return (
         CONSOLIDATE_PROMPT
+        .replace("{address_term}", address_term)
         .replace("<<OLD_SECTION>>", old_section)
         .replace("<<RECENT_MEMORIES>>", recent_memories)
         .replace("<<RECENT_NOTES>>", recent_notes)
@@ -112,7 +114,8 @@ class PortraitManager:
     async def get_current_portrait(self) -> dict | None:
         return await self.memory.get_latest_portrait()
 
-    async def consolidate(self, force: bool = False) -> str | None:
+    async def consolidate(self, force: bool = False,
+                          address_term: str = "爸爸") -> str | None:
         if not force and not self._dirty:
             logger.debug("portrait.clean_skipped")
             return None
@@ -137,7 +140,7 @@ class PortraitManager:
         old_section = ""
         version = 1
         if old and old.get("content"):
-            old_section = f"这是人家之前对爸爸的印象——\n{old['content']}"
+            old_section = f"这是人家之前对{address_term}的印象——\n{old['content']}"
             version = old.get("version", 0) + 1
 
         mem_lines = []
@@ -158,6 +161,7 @@ class PortraitManager:
             old_section=old_section,
             recent_memories=recent_memories,
             recent_notes=recent_notes,
+            address_term=address_term,
         )
 
         try:
@@ -213,7 +217,7 @@ class PortraitManager:
                 logger.error("portrait.db_write_failed", error=str(e))
                 return None
 
-    async def ensure_exists(self) -> str | None:
+    async def ensure_exists(self, address_term: str = "爸爸") -> str | None:
         existing = await self.memory.get_latest_portrait()
         if existing:
             return None
@@ -223,4 +227,4 @@ class PortraitManager:
             return None
 
         logger.info("portrait.cold_start", episodic_count=count)
-        return await self.consolidate()
+        return await self.consolidate(address_term=address_term)

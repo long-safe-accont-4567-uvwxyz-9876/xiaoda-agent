@@ -94,6 +94,7 @@ class NahidaCLI:
         self.agent = "nahida"
         self._pending: dict[str, asyncio.Future] = {}
         self._greeting_queue: list[str] = []
+        self.address_term = "爸爸"
 
     # ── 连接 ──────────────────────────────────────────
 
@@ -104,6 +105,18 @@ class NahidaCLI:
         hello = json.loads(await self.ws.recv())
         self.session_id = hello.get("session_id", "")
         asyncio.create_task(self._listener())
+        # 拉取用户称呼，用于问候语和输入提示符
+        try:
+            req = urllib.request.Request(
+                f"{self.base}/api/v1/setup/user-profile",
+                headers={"Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.load(resp).get("data", {})
+                term = data.get("address_term", "")
+                if term and not term.startswith("（"):
+                    self.address_term = term
+        except Exception:
+            pass
 
     _status_handler = None
 
@@ -151,7 +164,7 @@ class NahidaCLI:
         console.print()
         label, color, icon = AGENT_LABELS[self.agent]
         console.print(Panel(
-            Text(random.choice(GREETINGS), style="white"),
+            Text(random.choice(GREETINGS).replace("爸爸", self.address_term), style="white"),
             title=f"{icon} {label}", title_align="left",
             border_style=color, expand=False, padding=(0, 2)))
         console.print(Text(
@@ -204,7 +217,7 @@ class NahidaCLI:
             try:
                 label, color, icon = AGENT_LABELS.get(self.agent, (self.agent, DENDRO, "🌿"))
                 user_input = await asyncio.to_thread(
-                    console.input, f"[bold {color}]爸爸 ›[/] ")
+                    console.input, f"[bold {color}]{self.address_term} ›[/] ")
             except (EOFError, KeyboardInterrupt):
                 break
             user_input = user_input.strip()
@@ -246,7 +259,7 @@ class NahidaCLI:
 
         console.print()
         console.print(Panel(
-            Text(random.choice(FAREWELLS), style="white"),
+            Text(random.choice(FAREWELLS).replace("爸爸", self.address_term), style="white"),
             title="🌿 纳西妲", title_align="left",
             border_style=DENDRO, expand=False, padding=(0, 2)))
         if self.ws:

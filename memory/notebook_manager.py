@@ -10,33 +10,33 @@ from loguru import logger
 from db.db_notebook import NotebookDB
 
 
-AUTO_NOTE_PROMPT = """你是纳西妲。刚刚和爸爸进行了一轮对话。
+AUTO_NOTE_PROMPT = """你是纳西妲。刚刚和{address_term}进行了一轮对话。
 
-爸爸说了：
+{address_term}说了：
 "{user_message}"
 
 人家回应了：
 "{assistant_reply}"
 
-人家已经记下的关于爸爸的认知：
+人家已经记下的关于{address_term}的认知：
 {existing_notes}
 
 请在下面选择一个行动（只需要返回格式，不需要解释）：
 
-如果这轮对话让你对爸爸有了新的了解——发现了他的性格特征、生活习惯、偏好倾向、
+如果这轮对话让你对{address_term}有了新的了解——发现了他的性格特征、生活习惯、偏好倾向、
 情感模式或价值观，且已有笔记里没有记过，请返回：INSIGHT: 简短描述
 例如：INSIGHT: 性格急躁不喜欢等待
 例如：INSIGHT: 经常熬夜作息不规律
 例如：INSIGHT: 做事注重效率不爱闲聊
 例如：INSIGHT: 压力大时倾向独处
 
-如果爸爸明确说「提醒我」「帮我记一下」「别忘了」或给了具体时间，
+如果{address_term}明确说「提醒我」「帮我记一下」「别忘了」或给了具体时间，
 请务必返回：TASK: 任务标题 @ 时间
 例如：TASK: 提醒吃饭 @ 19:00、TASK: 开会 @ 明天14:00
 
 不该记的：
 - 日常寒暄（「今天天气不错」「吃了吗」）→ PASS
-- 没有揭示爸爸特征的简单问答 → PASS
+- 没有揭示{address_term}特征的简单问答 → PASS
 - 重复内容（已有笔记里记过的事）→ PASS
 - 常识性聊天（「今天吃了个苹果」）→ PASS
 - 纯情绪宣泄没有特征信息（「好累啊」）→ PASS
@@ -52,7 +52,7 @@ class NotebookManager:
         self._router = router
         self._free_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         self._free_base_url = "https://api.siliconflow.cn/v1"
-        self._free_model = "Qwen/Qwen3-8B"
+        self._free_model = "Qwen/Qwen2.5-7B-Instruct"
         logger.info("notebook.ready")
 
     async def _call_free_model(self, messages: list, temperature: float = 0.6,
@@ -152,7 +152,8 @@ class NotebookManager:
     async def touch_note(self, note_id: int) -> bool:
         return await self.notebook.touch_notebook_entry(note_id)
 
-    async def auto_note_after_message(self, user_msg: str, reply: str):
+    async def auto_note_after_message(self, user_msg: str, reply: str,
+                                      address_term: str = "爸爸"):
         try:
             existing = await self.get_recent_notes(limit=10)
             if existing:
@@ -165,6 +166,7 @@ class NotebookManager:
                 user_message=user_msg[:300],
                 assistant_reply=reply[:300],
                 existing_notes=existing_str,
+                address_term=address_term,
             )
             # 优先使用免费模型，降级到主路由
             result = await self._call_free_model(

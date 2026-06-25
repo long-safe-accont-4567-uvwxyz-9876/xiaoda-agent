@@ -192,11 +192,13 @@ class ToolCallHandler:
             if self._context:
                 nahida_prompt = self._context.get_nahida_prompt()
 
+            address_term = (self._context.current_address_term
+                            if self._context else "爸爸") or "爸爸"
             summary_prompt = (
-                f"爸爸刚才问的是：{user_input}\n\n"
-                "工具查到结果了！你看看这些信息，帮人家整理一下回复给爸爸吧～\n\n"
-                "记住：人家是在跟爸爸聊天，不是在写报告！\n"
-                "- 用平时聊天的语气说话，就像面对面跟爸爸说一样\n"
+                f"{address_term}刚才问的是：{user_input}\n\n"
+                f"工具查到结果了！你看看这些信息，帮人家整理一下回复给{address_term}吧～\n\n"
+                f"记住：人家是在跟{address_term}聊天，不是在写报告！\n"
+                f"- 用平时聊天的语气说话，就像面对面跟{address_term}说一样\n"
                 "- 绝对不要用 **加粗**、*列表符号*、##标题 这种格式，就纯文字聊天\n"
                 "- 不要用「总体概述」「团队成员汇报」这种官方词儿\n"
                 "- 数据自然地嵌在句子里就行，比如「CPU温度45度呢」「内存用了60%」\n"
