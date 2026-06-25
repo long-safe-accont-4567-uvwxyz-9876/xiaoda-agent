@@ -32,18 +32,18 @@ onMounted(async () => {
 
 const themeOverrides: GlobalThemeOverrides = {
   common: {
-    primaryColor: '#7fd650',
-    primaryColorHover: '#92e065',
-    primaryColorPressed: '#5cb830',
-    primaryColorSuppl: '#7fd650',
+    primaryColor: '#8fe560',
+    primaryColorHover: '#a2f070',
+    primaryColorPressed: '#6bc840',
+    primaryColorSuppl: '#8fe560',
     bodyColor: 'transparent',
     cardColor: 'rgba(20, 40, 28, 0.45)',
     modalColor: 'rgba(20, 40, 28, 0.92)',
     popoverColor: 'rgba(18, 36, 26, 0.96)',
     tableColor: 'transparent',
     inputColor: 'rgba(15, 31, 23, 0.5)',
-    borderColor: 'rgba(127, 214, 80, 0.18)',
-    successColor: '#7fd650',
+    borderColor: 'rgba(143, 229, 96, 0.18)',
+    successColor: '#8fe560',
     errorColor: '#d96a5f',
     warningColor: '#e8d5a3',
   },
@@ -79,6 +79,12 @@ html, body, #app {
   height: 100%;
   width: 100%;
   overflow: hidden;
+}
+
+/* 亮度调节：通过 CSS filter 全局应用 */
+#app {
+  filter: brightness(var(--app-brightness, 1.05));
+  transition: filter 0.4s ease;
 }
 
 body {

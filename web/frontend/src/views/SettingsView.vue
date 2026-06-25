@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import {
   NButton, NSwitch, NRadioGroup, NRadioButton, NInput, NModal,
-  NSelect, useMessage,
+  NSelect, NSlider, useMessage,
 } from 'naive-ui'
 import { get, put, post } from '../api'
 import { useUiStore } from '../stores/ui'
@@ -95,6 +95,33 @@ const permDesc: Record<string, string> = {
         <span class="s-label">自动朗读回复</span>
         <n-switch :value="ui.autoSpeak" @update:value="(v: boolean) => ui.setAutoSpeak(v).then(() => message.success('已生效 ✓')).catch((e: any) => message.error(e.message))" />
       </div>
+      <div class="setting-row brightness-row">
+        <div class="brightness-label">
+          <span class="s-label">界面亮度</span>
+          <span class="brightness-value">{{ Math.round(ui.brightness * 100) }}%</span>
+        </div>
+        <div class="brightness-controls">
+          <n-switch :value="ui.autoBrightness" @update:value="ui.setAutoBrightness">
+            <template #checked>自适应</template>
+            <template #unchecked>手动</template>
+          </n-switch>
+          <n-slider
+            :value="ui.manualBrightness"
+            :min="0.5"
+            :max="1.5"
+            :step="0.05"
+            :disabled="ui.autoBrightness"
+            style="width: 200px; margin-left: 12px"
+            @update:value="ui.setManualBrightness"
+          />
+        </div>
+      </div>
+      <p class="brightness-hint" v-if="ui.autoBrightness">
+        自适应模式：白天 115% · 傍晚 95% · 夜间 70%（护眼）
+      </p>
+      <p class="brightness-hint" v-else>
+        手动模式：拖动滑块调节亮度（50% ~ 150%）
+      </p>
     </section>
 
     <section class="glass-panel section">
@@ -190,5 +217,33 @@ const permDesc: Record<string, string> = {
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* 亮度控制 */
+.brightness-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.brightness-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.brightness-value {
+  font-size: 13px;
+  color: var(--dendro);
+  font-family: 'JetBrains Mono', monospace;
+}
+.brightness-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.brightness-hint {
+  font-size: 11.5px;
+  color: var(--moon-dim);
+  margin: 4px 0 0;
+  opacity: 0.7;
 }
 </style>
