@@ -3,11 +3,25 @@ import { createPinia } from 'pinia'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
 import { routes } from './routes'
+import { useAuthStore } from './stores/auth'
 
 const pinia = createPinia()
 const router = createRouter({
   history: createWebHashHistory(),
   routes,
+})
+
+// 路由守卫：需要认证的路由必须已登录
+router.beforeEach((to, _from, next) => {
+  if (to.meta?.requiresAuth) {
+    const auth = useAuthStore()
+    if (!auth.isLoggedIn) {
+      // 未登录时跳转登录页
+      next({ name: 'login' })
+      return
+    }
+  }
+  next()
 })
 
 // 部署更新后旧页面引用的懒加载 chunk 会 404，导致导航静默失败——

@@ -1,4 +1,5 @@
 import type { RouteRecordRaw } from 'vue-router'
+import { useAuthStore } from './stores/auth'
 
 export const routes: RouteRecordRaw[] = [
   {
@@ -15,10 +16,12 @@ export const routes: RouteRecordRaw[] = [
     path: '/setup/profile',
     name: 'setup-profile',
     component: () => import('./views/UserProfileSetupView.vue'),
+    meta: { requiresAuth: true },
   },
   {
     path: '/',
     component: () => import('./components/layout/AppLayout.vue'),
+    meta: { requiresAuth: true },
     children: [
       { path: '', name: 'chat', component: () => import('./views/ChatView.vue') },
       { path: 'insight', name: 'insight', component: () => import('./views/InsightView.vue') },
