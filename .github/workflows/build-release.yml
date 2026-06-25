@@ -338,8 +338,11 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ inputs.version }}"
             VERSION="${VERSION#v}"
-          else
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
+          else
+            # main branch push — read from pyproject.toml
+            VERSION=$(python3 -c "import re; print(re.search(r'version\s*=\s*\"(.+?)\"', open('pyproject.toml').read()).group(1))")
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -416,6 +419,8 @@ jobs:
 
   release:
     needs: build
+    # Only create release on tag push or manual dispatch, NOT on main branch push
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -437,8 +442,10 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ inputs.version }}"
             VERSION="${VERSION#v}"
-          else
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION=$(python3 -c "import re; print(re.search(r'version\s*=\s*\"(.+?)\"', open('pyproject.toml').read()).group(1))")
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
