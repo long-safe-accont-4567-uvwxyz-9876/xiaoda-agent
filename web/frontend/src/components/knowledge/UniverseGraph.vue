@@ -36,6 +36,12 @@ interface StarLayer {
   speed: number
 }
 
+interface Ripple {
+  mesh: THREE.Mesh
+  startTime: number
+  duration: number
+}
+
 interface OrbitLikeControls {
   autoRotate: boolean
   autoRotateSpeed: number
@@ -72,6 +78,11 @@ const nodeCount = ref(0)
 const degraded = ref(false)
 const webglUnavailable = ref(false)
 
+// 性能监测（Performance API）—— 帧率采集 + 自适应降级
+const fps = ref(0)
+const qualityTier = ref<'high' | 'medium' | 'low'>('high')
+const toolbarCollapsed = ref(false)
+
 // 模态内部可控的检索 / 深度状态（与 prop 同步，但允许在浮层内独立切换）
 const searchText = ref(props.entity || '')
 const activeDepth = ref<1 | 2>(props.depth)
@@ -81,6 +92,7 @@ let composer: ReturnType<ForceGraph3DInstance['postProcessingComposer']> | null 
 let bloomPass: UnrealBloomPass | null = null
 let starLayers: StarLayer[] = []
 let starRAF = 0
+let ripples: Ripple[] = []
 let idleTimer: ReturnType<typeof setTimeout> | null = null
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -94,6 +106,12 @@ let initialized = false
 let bypassDegrade = false
 // 节点 id -> 邻居 id 集合（用于 hover 高亮）
 let neighborsCache = new Map<string, Set<string>>()
+
+// 性能监测内部变量
+let perfRAF = 0
+let frameCount = 0
+let lastPerfTime = 0
+let lowFpsStreak = 0
 
 // ── 配色 ──
 const COLOR_DENDRO = '#8fe560'
@@ -243,6 +261,99 @@ async function loadGraph(retries = 0) {
   }
 }
 
+// ── 性能监测 + 自适应降级 ──
+// 每 500ms 采样帧率；连续低帧率自动降级质量档位
+// high → medium: 关 Bloom、星层减半
+// medium → low: 关链路粒子、节点降到 6 段
+function startPerfMonitor() {
+  if (perfRAF) return
+  frameCount = 0
+  lastPerfTime = performance.now()
+  const tick = () => {
+    if (destroyed) return
+    frameCount++
+    const now = performance.now()
+    const elapsed = now - lastPerfTime
+    if (elapsed >= 500) {
+      fps.value = Math.round((frameCount * 1000) / elapsed)
+      if (fps.value < 30) {
+        lowFpsStreak++
+        if (lowFpsStreak >= 2 && qualityTier.value === 'high') {
+          qualityTier.value = 'medium'
+          applyQualityTier()
+        } else if (lowFpsStreak >= 4 && qualityTier.value === 'medium') {
+          qualityTier.value = 'low'
+          applyQualityTier()
+        }
+      } else {
+        lowFpsStreak = 0
+      }
+      frameCount = 0
+      lastPerfTime = now
+    }
+    perfRAF = requestAnimationFrame(tick)
+  }
+  perfRAF = requestAnimationFrame(tick)
+}
+
+function applyQualityTier() {
+  const g = graph.value
+  if (!g) return
+  const tier = qualityTier.value
+  // Bloom 仅在 high 档启用
+  if (bloomPass) bloomPass.enabled = (tier === 'high')
+  // 链路粒子：low 档关闭，medium 档 1 个，high 档 2 个
+  g.linkDirectionalParticles(tier === 'low' ? 0 : tier === 'medium' ? 1 : 2)
+  // 节点分辨率：low 档 6 段，其余 8 段（原 20 段过高）
+  g.nodeResolution(tier === 'low' ? 6 : 8)
+}
+
+// 开灯/关灯：Bloom 二态开关（high=灯开，medium=灯关）
+function toggleLight() {
+  qualityTier.value = qualityTier.value === 'high' ? 'medium' : 'high'
+  lowFpsStreak = 0
+  applyQualityTier()
+}
+
+// ── 点击涟漪 ──
+// 在节点位置生成一个线框球体，向外扩散并淡出
+function spawnRipple(x: number, y: number, z: number, color: string) {
+  const g = graph.value
+  if (!g) return
+  const geo = new THREE.SphereGeometry(1, 16, 12)
+  const mat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(color),
+    transparent: true,
+    opacity: 0.6,
+    wireframe: true,
+    depthWrite: false,
+  })
+  const mesh = new THREE.Mesh(geo, mat)
+  mesh.position.set(x, y, z)
+  g.scene().add(mesh)
+  ripples.push({ mesh, startTime: performance.now(), duration: 800 })
+}
+
+function updateRipples() {
+  if (!ripples.length) return
+  const g = graph.value
+  const now = performance.now()
+  ripples = ripples.filter(r => {
+    const t = (now - r.startTime) / r.duration
+    if (t >= 1) {
+      g?.scene().remove(r.mesh)
+      r.mesh.geometry.dispose()
+      ;(r.mesh.material as THREE.Material).dispose()
+      return false
+    }
+    // ease-out 扩散
+    const scale = 1 + (1 - (1 - t) * (1 - t)) * 25
+    r.mesh.scale.setScalar(scale)
+    ;(r.mesh.material as THREE.MeshBasicMaterial).opacity = 0.6 * (1 - t)
+    return true
+  })
+}
+
 // ── 初始化 3D 场景 ──
 function initGraph() {
   const el = containerEl.value
@@ -250,20 +361,26 @@ function initGraph() {
 
   graph.value = new ForceGraph3D(el, {
     controlType: 'orbit',
-    rendererConfig: { antialias: true, alpha: false },
+    // 关闭 MSAA —— 高 DPI 屏上 MSAA 开销极大，改用 Bloom 的模糊自然平滑边缘
+    rendererConfig: { antialias: false, alpha: false },
   })
   initialized = true
 
   const g = graph.value
+  // 像素比上限 2.0 —— Windows 3x DPI 屏原本渲染 9 倍像素，限制后降至 4 倍
+  try {
+    g.renderer().setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  } catch { /* renderer 尚未就绪时忽略 */ }
   const w = el.clientWidth || window.innerWidth
   const h = el.clientHeight || window.innerHeight
   g.width(w).height(h)
   g.backgroundColor(BG_DEEP)
 
   // 节点外观：默认 sphere（保留 nodeColor 切换能力），尺寸按 val 缩放
+  // nodeResolution 8 段（原 20 段过高，借鉴 Obsidian 粒子星图的低多边形策略）
   g.nodeRelSize(6)
     .nodeOpacity(1.0)
-    .nodeResolution(20)
+    .nodeResolution(8)
     .nodeColor((node: NodeObject) => colorForKind((node as GraphNode).kind))
     .nodeLabel((node: NodeObject) => {
       const n = node as GraphNode
@@ -290,6 +407,8 @@ function initGraph() {
     bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.35, 0.4, 0.45)
     composer.addPass(bloomPass)
   }
+  // 应用初始质量档位（默认 medium → 关 Bloom、减粒子）
+  applyQualityTier()
 
   // OrbitControls 配置：Blender 风格，中键 PAN（默认是 DOLLY）
   const controls = g.controls() as any
@@ -299,6 +418,9 @@ function initGraph() {
 
   // 星空自转循环（独立 RAF，仅更新 Points 旋转，渲染由引擎每帧执行）
   startStarLoop()
+
+  // 性能监测 + 自适应降级（Performance API 帧率采集）
+  startPerfMonitor()
 
   // 交互
   g.onNodeHover((node: NodeObject | null) => {
@@ -311,6 +433,7 @@ function initGraph() {
       selectedNode.value = n
       updateHighlight()
       focusOnNode(n)
+      spawnRipple(n.x ?? 0, n.y ?? 0, n.z ?? 0, colorForKind(n.kind))
       resetIdleTimer()
     })
     .onBackgroundClick(() => {
@@ -322,28 +445,41 @@ function initGraph() {
     .onNodeDragEnd(() => resetIdleTimer())
 }
 
-// ── 星空三层 ──
+// ── 星空三层（Fibonacci 螺旋分布 + HSL 闪烁，借鉴 Obsidian 粒子星图知识）──
 function addStarLayers(scene: THREE.Scene) {
+  // 星层数量略减以兼顾性能；Fibonacci 分布比随机分布更均匀优雅
   const layers: Array<{ count: number; rMin: number; rMax: number; size: number; color: string; opacity: number; speed: number }> = [
-    { count: 800, rMin: 800, rMax: 1000, size: 1, color: COLOR_DENDRO, opacity: 0.3, speed: 0.00015 },
-    { count: 400, rMin: 400, rMax: 600, size: 1.5, color: COLOR_WISDOM, opacity: 0.5, speed: 0.00028 },
-    { count: 200, rMin: 200, rMax: 300, size: 2, color: COLOR_MOON, opacity: 0.7, speed: 0.00045 },
+    { count: 600, rMin: 800, rMax: 1000, size: 1, color: COLOR_DENDRO, opacity: 0.3, speed: 0.00015 },
+    { count: 300, rMin: 400, rMax: 600, size: 1.5, color: COLOR_WISDOM, opacity: 0.5, speed: 0.00028 },
+    { count: 150, rMin: 200, rMax: 300, size: 2, color: COLOR_MOON, opacity: 0.7, speed: 0.00045 },
   ]
   starLayers = layers.map(cfg => {
     const positions = new Float32Array(cfg.count * 3)
+    // 顶点颜色：HSL 随机亮度，模拟星星闪烁
+    const colors = new Float32Array(cfg.count * 3)
+    const base = new THREE.Color(cfg.color)
+    const hsl = { h: 0, s: 0, l: 0 }
+    base.getHSL(hsl)
     for (let i = 0; i < cfg.count; i++) {
+      // Fibonacci 球面分布：phi 均匀铺纬度，theta 螺旋铺经度 → 星云光带效果
+      const phi = Math.acos(-1 + (2 * i) / cfg.count)
+      const theta = Math.sqrt(cfg.count * Math.PI) * phi
       const r = cfg.rMin + Math.random() * (cfg.rMax - cfg.rMin)
-      const theta = Math.random() * Math.PI * 2
-      const phi = Math.acos(2 * Math.random() - 1)
-      positions[i * 3] = r * Math.sin(phi) * Math.cos(theta)
-      positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta)
-      positions[i * 3 + 2] = r * Math.cos(phi)
+      positions[i * 3] = r * Math.cos(theta) * Math.sin(phi)
+      positions[i * 3 + 1] = r * Math.cos(phi)
+      positions[i * 3 + 2] = r * Math.sin(theta) * Math.sin(phi)
+      // HSL 随机亮度（0.6~1.0），让星星有明暗差异，模拟闪烁
+      const c = new THREE.Color().setHSL(hsl.h, hsl.s, hsl.l * (0.6 + Math.random() * 0.4))
+      colors[i * 3] = c.r
+      colors[i * 3 + 1] = c.g
+      colors[i * 3 + 2] = c.b
     }
     const geo = new THREE.BufferGeometry()
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
     const mat = new THREE.PointsMaterial({
       size: cfg.size,
-      color: new THREE.Color(cfg.color),
+      vertexColors: true,
       transparent: true,
       opacity: cfg.opacity,
       sizeAttenuation: true,
@@ -363,6 +499,7 @@ function startStarLoop() {
       layer.points.rotation.y += layer.speed
       layer.points.rotation.x += layer.speed * 0.3
     }
+    updateRipples()
     starRAF = requestAnimationFrame(loop)
   }
   starRAF = requestAnimationFrame(loop)
@@ -501,6 +638,16 @@ function onGraphChanged(_e: WsEvent) {
   }, 500)
 }
 
+// ── FPS 指示器配色 ──
+const fpsClass = computed(() => {
+  if (fps.value >= 50) return 'fps-good'
+  if (fps.value >= 30) return 'fps-mid'
+  return 'fps-low'
+})
+
+// ── 开灯/关灯标签（high 档=灯开，其余=灯关）──
+const lightLabel = computed(() => qualityTier.value === 'high' ? '关灯' : '开灯')
+
 // ── 详情面板：选中节点的关系 ──
 const selectedRelations = computed(() => {
   const node = selectedNode.value
@@ -544,6 +691,15 @@ onBeforeUnmount(() => {
   if (releaseTimer) clearTimeout(releaseTimer)
   if (starRAF) cancelAnimationFrame(starRAF)
   starRAF = 0
+  if (perfRAF) cancelAnimationFrame(perfRAF)
+  perfRAF = 0
+  // 清理涟漪
+  for (const r of ripples) {
+    graph.value?.scene().remove(r.mesh)
+    r.mesh.geometry.dispose()
+    ;(r.mesh.material as THREE.Material).dispose()
+  }
+  ripples = []
   resizeObserver?.disconnect()
   resizeObserver = null
   if (graph.value) {
@@ -585,28 +741,34 @@ function kindLabel(kind?: string): string {
 
 <template>
   <div class="universe-root">
-    <!-- 顶部工具栏 -->
-    <div class="universe-toolbar glass-panel">
-      <n-input
-        v-model:value="searchText"
-        size="small"
-        placeholder="搜索实体定位…"
-        style="max-width: 200px"
-        @keydown.enter="onSearchEnter"
-      />
-      <n-button
-        size="tiny"
-        :type="activeDepth === 1 ? 'primary' : 'default'"
-        @click="setActiveDepth(1)"
-      >深度1</n-button>
-      <n-button
-        size="tiny"
-        :type="activeDepth === 2 ? 'primary' : 'default'"
-        @click="setActiveDepth(2)"
-      >深度2</n-button>
-      <span class="universe-count">节点 {{ nodeCount }}</span>
-      <n-button size="tiny" quaternary @click="loadGraph()">刷新</n-button>
-      <n-button class="universe-close" size="tiny" type="primary" @click="emit('close')">✕ 关闭</n-button>
+    <!-- 顶部工具栏（可收起） -->
+    <div class="universe-toolbar glass-panel" :class="{ collapsed: toolbarCollapsed }">
+      <template v-if="!toolbarCollapsed">
+        <n-input
+          v-model:value="searchText"
+          size="small"
+          placeholder="搜索实体定位…"
+          style="max-width: 200px"
+          @keydown.enter="onSearchEnter"
+        />
+        <n-button
+          size="tiny"
+          :type="activeDepth === 1 ? 'primary' : 'default'"
+          @click="setActiveDepth(1)"
+        >深度1</n-button>
+        <n-button
+          size="tiny"
+          :type="activeDepth === 2 ? 'primary' : 'default'"
+          @click="setActiveDepth(2)"
+        >深度2</n-button>
+        <span class="universe-count">节点 {{ nodeCount }}</span>
+        <span class="universe-fps" :class="fpsClass">{{ fps }} fps · {{ qualityTier }}</span>
+        <n-button size="tiny" quaternary @click="toggleLight">{{ lightLabel }}</n-button>
+        <n-button size="tiny" quaternary @click="loadGraph()">刷新</n-button>
+        <n-button class="universe-close" size="tiny" type="primary" @click="emit('close')">✕ 关闭</n-button>
+        <n-button size="tiny" quaternary @click="toolbarCollapsed = true">▴</n-button>
+      </template>
+      <n-button v-else size="tiny" quaternary @click="toolbarCollapsed = false">▾ 控制栏</n-button>
     </div>
 
     <!-- 3D 容器 -->
@@ -677,12 +839,37 @@ function kindLabel(kind?: string): string {
   gap: 10px;
   padding: 8px 14px;
   z-index: 10;
+  transition: padding 0.2s ease;
+}
+
+.universe-toolbar.collapsed {
+  padding: 4px 12px;
 }
 
 .universe-count {
   font-size: 12px;
   color: var(--moon-dim);
   margin-left: 4px;
+}
+
+.universe-fps {
+  font-size: 11px;
+  font-family: monospace;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.universe-fps.fps-good {
+  color: var(--dendro);
+}
+
+.universe-fps.fps-mid {
+  color: var(--wisdom);
+}
+
+.universe-fps.fps-low {
+  color: var(--alert);
 }
 
 .universe-close {
