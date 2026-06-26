@@ -341,8 +341,8 @@ jobs:
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
-            # main branch push — read from pyproject.toml
-            VERSION=$(python -c "import re; print(re.search(r'version\s*=\s*\"(.+?)\"', open('pyproject.toml').read()).group(1))")
+            # main branch push — read from pyproject.toml (pure bash, no Python dependency)
+            VERSION=$(grep -m1 '^version\s*=' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -445,7 +445,7 @@ jobs:
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
-            VERSION=$(python -c "import re; print(re.search(r'version\s*=\s*\"(.+?)\"', open('pyproject.toml').read()).group(1))")
+            VERSION=$(grep -m1 '^version\s*=' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
