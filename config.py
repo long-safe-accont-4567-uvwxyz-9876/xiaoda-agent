@@ -261,14 +261,6 @@ AGNES_VIDEO_MODEL = os.getenv("AGNES_VIDEO_MODEL", "agnes-video-v2.0")
 # Jina Reader API key（可选）：有则 500 RPM，无则免费 20 RPM
 JINA_API_KEY = os.getenv("JINA_API_KEY", "")
 
-# SearXNG 本地搜索元引擎（可选）：Docker 部署后聚合 70+ 搜索引擎，无追踪无 API Key
-# 配置后 web_search 优先走本地 SearXNG，连不上自动降级到 Bing/Tavily
-# Docker 部署留空即可（由 docker-compose 注入 http://searxng:8080）
-# 裸机部署设为 http://localhost:8888（或你映射的端口）
-SEARXNG_URL = os.getenv("SEARXNG_URL", "")
-SEARXNG_ENABLED = os.getenv("SEARXNG_ENABLED", "true").lower() in ("1", "true", "yes", "on")
-SEARXNG_TIMEOUT = float(os.getenv("SEARXNG_TIMEOUT", "8"))
-
 
 def _strip_json5_comments(text: str) -> str:
     result = []
@@ -529,9 +521,6 @@ __all__ = [
     "AGNES_IMAGE_MODEL",
     "AGNES_VIDEO_MODEL",
     "JINA_API_KEY",
-    "SEARXNG_URL",
-    "SEARXNG_ENABLED",
-    "SEARXNG_TIMEOUT",
     "RERANKER_API_KEY",
     "RERANKER_BASE_URL",
     "RERANKER_MODEL",

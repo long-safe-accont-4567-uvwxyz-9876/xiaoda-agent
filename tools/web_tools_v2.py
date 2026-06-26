@@ -8,11 +8,6 @@ from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
-# SearXNG 本地搜索元引擎配置（聚合 70+ 引擎，无追踪，无需 API Key）
-SEARXNG_URL = os.getenv("SEARXNG_URL", "")
-SEARXNG_ENABLED = os.getenv("SEARXNG_ENABLED", "true").lower() in ("1", "true", "yes", "on")
-SEARXNG_TIMEOUT = float(os.getenv("SEARXNG_TIMEOUT", "8"))
-
 # 搜索结果缓存：5分钟TTL
 _search_cache: dict[str, tuple[float, Any]] = {}
 _SEARCH_CACHE_TTL = 300.0  # 5分钟
@@ -22,11 +17,6 @@ _primp_client = None
 
 # 模块级 TavilyClient 单例（懒初始化）
 _tavily_client = None
-
-# SearXNG 可用性缓存：失败后冷却期内跳过，避免每次搜索都等超时
-_searxng_status: dict[str, Any] = {"available": True, "last_check": 0.0, "last_error": ""}
-_SEARXNG_FAIL_COOLDOWN = 30.0  # 失败冷却 30 秒
-_SEARXNG_OK_TTL = 120.0  # 可用状态 120 秒内免探测
 
 
 def _get_primp_client():
@@ -116,56 +106,6 @@ def _tavily_search_sync(query: str, max_results: int = 6, search_depth: str = "b
     return results, (response.get("answer") or "")
 
 
-def _searxng_should_try() -> bool:
-    """是否应该尝试 SearXNG。
-
-    - 未配置 URL 或禁用 → False
-    - 标记可用且在 OK_TTL 内 → True
-    - 标记不可用但在冷却期外 → True（重新尝试）
-    - 标记不可用且在冷却期内 → False（跳过避免等超时）
-    """
-    if not SEARXNG_URL or not SEARXNG_ENABLED:
-        return False
-    now = time.monotonic()
-    if _searxng_status["available"]:
-        return True
-    # 不可用：冷却期外才重试
-    return (now - _searxng_status["last_check"]) > _SEARXNG_FAIL_COOLDOWN
-
-
-def _searxng_search_sync(query: str, max_results: int = 8, news: bool = False) -> list[dict]:
-    """SearXNG 本地元搜索。失败抛异常，由调用方降级。
-
-    news=True 走 news 分类（聚合 Google News/Bing News 等），结果带 publishedDate。
-    """
-    import urllib.request, urllib.parse
-    base = SEARXNG_URL.rstrip("/")
-    params = {
-        "q": query,
-        "format": "json",
-        "pageno": "1",
-        "language": "auto",
-        "categories": "news" if news else "general",
-    }
-    url = f"{base}/search?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={
-        "User-Agent": "nahida-agent/1.0",
-        "Accept": "application/json",
-    })
-    with urllib.request.urlopen(req, timeout=SEARXNG_TIMEOUT) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    results = []
-    for r in data.get("results", [])[:max_results]:
-        published = r.get("publishedDate") or ""
-        results.append({
-            "title": r.get("title", ""),
-            "url": r.get("url", ""),
-            "content": r.get("content", ""),
-            "date": published[:10] if published else "",
-        })
-    return results
-
-
 # 时效性关键词：命中则优先走新闻搜索
 _FRESH_KEYWORDS = (
     "最新", "近期", "今天", "昨天", "本周", "这周", "本月", "今年", "现在",
@@ -215,32 +155,14 @@ async def _do_search(query: str, max_results: int = 8,
     """引擎降级策略，返回 (results, engine, ai_answer)。
 
     优先级：
-    1. SearXNG（本地元引擎，聚合 Google/Bing/DDG 等 70+ 源，无追踪）— 不可用自动降级
-    2. 时效性查询 → Tavily 新闻（带日期+AI摘要）
-    3. Bing 抓取（免费，重试一次）
-    4. Tavily basic（兜底）
+    1. 时效性查询 → Tavily 新闻（带日期+AI摘要）
+    2. Bing 抓取（免费，重试一次）
+    3. Tavily basic（兜底）
     """
     time_sensitive = _is_time_sensitive(query)
     logger.info("web_search.do_search query={} fresh={}", query[:40], time_sensitive)
 
-    # 1. 优先本地 SearXNG（普通+新闻都支持，聚合多源结果最全）
-    if _searxng_should_try():
-        try:
-            results = await asyncio.to_thread(
-                _searxng_search_sync, query, max_results, time_sensitive)
-            _searxng_status.update(available=True, last_check=time.monotonic(),
-                                   last_error="")
-            if results:
-                engine = "SearXNG新闻" if time_sensitive else "SearXNG"
-                return _dedup_results(results), engine, ""
-            # 有响应但无结果，继续降级到其它引擎
-        except Exception as e:
-            _searxng_status.update(available=False, last_check=time.monotonic(),
-                                   last_error=repr(e)[:120])
-            logger.info("searxng.failed query={} error={} → 降级到 Bing/Tavily",
-                        query[:40], repr(e)[:120])
-
-    # 2. 时效性查询 → Tavily 新闻优先（带日期+AI摘要）
+    # 1. 时效性查询 → Tavily 新闻优先（带日期+AI摘要）
     if time_sensitive and use_tavily and TAVILY_API_KEY:
         try:
             results, answer = await asyncio.to_thread(
@@ -250,7 +172,7 @@ async def _do_search(query: str, max_results: int = 8,
         except Exception as e:
             logger.warning("tavily.news_failed error={}", repr(e)[:150])
 
-    # 3. Bing 抓取（免费）
+    # 2. Bing 抓取（免费）
     results = await asyncio.to_thread(_bing_search_sync, query, max_results)
     if results:
         return _dedup_results(results), "Bing", ""
@@ -260,7 +182,7 @@ async def _do_search(query: str, max_results: int = 8,
     if results:
         return _dedup_results(results), "Bing", ""
 
-    # 4. Tavily basic 兜底
+    # 3. Tavily basic 兜底
     if use_tavily and TAVILY_API_KEY:
         try:
             results, answer = await asyncio.to_thread(
