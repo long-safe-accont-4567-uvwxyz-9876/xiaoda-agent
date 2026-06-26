@@ -174,15 +174,19 @@ def strip_dsml(text: str) -> str:
 
 
 # ── 推理/思考内容剥离 ──────────────────────────────────────────
-# 匹配各种推理标签格式
+# 匹配各种推理标签格式（尖括号 <think>...</think> 和方括号 [thinking]...[/thinking]）
 _REASONING_TAG_PATTERN = re.compile(
-    r'<(?:think|thinking|reasoning|analysis|reflection|thought|scratchpad)[\s\S]*?'
-    r'</(?:think|thinking|reasoning|analysis|reflection|thought|scratchpad)>',
+    r'[<\[](?:think|thinking|reasoning|analysis|reflection|thought|scratchpad)[\s\S]*?'
+    r'</(?:think|thinking|reasoning|analysis|reflection|thought|scratchpad)>'
+    r'|'
+    r'\[(?:think|thinking|reasoning|analysis|reflection|thought|scratchpad)[\s\S]*?'
+    r'\[/(?:think|thinking|reasoning|analysis|reflection|thought|scratchpad)\]',
     re.IGNORECASE,
 )
 # 自闭合推理标签（无闭合标签的情况）
 _REASONING_OPEN_PATTERN = re.compile(
-    r'<(?:think|thinking|reasoning|analysis|reflection|thought|scratchpad)\s*/?>',
+    r'<(?:think|thinking|reasoning|analysis|reflection|thought|scratchpad)\s*/?>'
+    r'|\[(?:think|thinking|reasoning|analysis|reflection|thought|scratchpad)\s*/?\]',
     re.IGNORECASE,
 )
 # 裸文本推理特征：以 "Need " / "Let me " / "I should " / "I need " 开头的英文推理行

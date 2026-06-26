@@ -467,13 +467,22 @@ class AIQQBot(botpy.Client):
             async def status_notify(msg: str):
                 await message.reply(content=msg, msg_seq=_next_msg_seq())
 
-            result = await self.agent.process(user_input, user_id=user_id, source="qq_c2c",
-                                              user_openid=user_openid, session_id=session_id,
-                                              status_callback=status_notify,
-                                              image_data=image_data if image_data else None,
-                                              is_master=is_master)
+            result = await asyncio.wait_for(
+                self.agent.process(user_input, user_id=user_id, source="qq_c2c",
+                                  user_openid=user_openid, session_id=session_id,
+                                  status_callback=status_notify,
+                                  image_data=image_data if image_data else None,
+                                  is_master=is_master),
+                timeout=28,  # 留 2s 余量给回复发送，避免 QQ 框架 30s 超时
+            )
             if result.reply:
                 await self._send_reply_with_sticker(message, result)
+        except asyncio.TimeoutError:
+            logger.warning("qq_bot.c2c_timeout user=%s", user_id)
+            try:
+                await message.reply(content="纳西妲想得太入神了……能再说一次吗？🌱", msg_seq=_next_msg_seq())
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"qq_bot.c2c_error: {e}")
             try:
@@ -536,13 +545,22 @@ class AIQQBot(botpy.Client):
                 except Exception as _e:
                     logger.debug("qq_bot.status_notify_failed", error=str(_e))
 
-            result = await self.agent.process(user_input, user_id=user_id, source="qq_group",
-                                              user_openid=member_openid,
-                                              status_callback=status_notify,
-                                              image_data=image_data if image_data else None,
-                                              is_master=is_master)
+            result = await asyncio.wait_for(
+                self.agent.process(user_input, user_id=user_id, source="qq_group",
+                                  user_openid=member_openid,
+                                  status_callback=status_notify,
+                                  image_data=image_data if image_data else None,
+                                  is_master=is_master),
+                timeout=28,  # 留 2s 余量给回复发送，避免 QQ 框架 30s 超时
+            )
             if result.reply:
                 await self._send_reply_with_sticker(message, result)
+        except asyncio.TimeoutError:
+            logger.warning("qq_bot.group_timeout user=%s", user_id)
+            try:
+                await message.reply(content="纳西妲想得太入神了……能再说一次吗？🌱", msg_seq=_next_msg_seq())
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"qq_bot.group_error: {e}", exc_info=True)
             try:
