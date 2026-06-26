@@ -41,9 +41,18 @@ class MessageProcessorMixin:
         if self._tool_call_handler:
             self._tool_call_handler._tool_repair.clear_storm_window()
 
-        trace = logger.bind(trace_id=f"{int(time.time()*1000)%1000000:06d}")
+        _trace_id = f"{int(time.time()*1000)%1000000:06d}"
+        trace = logger.bind(trace_id=_trace_id)
         trace.info("agent.process.start", source=source, user_id=user_id,
                     msg_preview=user_input[:80])
+
+        # 尽早发送"收到，正在想..."提示，让用户 <1 秒看到响应
+        # （restore_from_db 读外置硬盘数据库需要 1-2 秒，提前发送避免用户等待）
+        if status_callback:
+            try:
+                await status_callback("收到，正在想...")
+            except Exception:
+                pass
 
         allowed, reason = self.security.is_allowed(user_id)
         if not allowed:
@@ -111,6 +120,20 @@ class MessageProcessorMixin:
             else:
                 system_prompt = build_safe_system_prompt()
             messages = [{"role": "system", "content": system_prompt}]
+            # 轻量 FTS 记忆检索（毫秒级，让 fast_path 也能"记住"之前的内容）
+            # 只检索 2 条摘要，避免 prompt 过长拖慢 LLM
+            if is_master and self.memory and getattr(self.memory, 'memory', None):
+                try:
+                    _fts_mems = await self.memory.memory.search_memories_fts(user_input, limit=2)
+                    if _fts_mems:
+                        _mem_lines = [m.get("summary", "")[:120] for m in _fts_mems if m.get("summary")]
+                        if _mem_lines:
+                            messages.append({
+                                "role": "system",
+                                "content": "[相关长期记忆]\n" + "\n---\n".join(_mem_lines)
+                            })
+                except Exception as e:
+                    logger.debug(f"fast_path.fts_failed: {e}")
             # 非主人不加载历史对话（防止看到主人的聊天内容）
             if is_master:
                 for msg in self.context.get_last_n(6):
@@ -152,7 +175,7 @@ class MessageProcessorMixin:
             )
 
             try:
-                await self.router.flush_costs()
+                _spawn(self.router.flush_costs())
             except Exception as e:
                 logger.error(f"费用统计刷新失败: {e}")
 
@@ -510,7 +533,7 @@ class MessageProcessorMixin:
         )
 
         try:
-            await self.router.flush_costs()
+            _spawn(self.router.flush_costs())
         except Exception as e:
             logger.error(f"费用统计刷新失败，可能丢失费用数据: {e}")
 

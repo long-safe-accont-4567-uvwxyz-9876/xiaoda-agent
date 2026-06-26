@@ -133,9 +133,9 @@ class VectorStore:
                     USING vec0(embedding float[{dims}])
                 """)
                 conn.commit()
-                return conn
+                return conn, is_fat
 
-        self._vec_conn = await asyncio.to_thread(_init_db)
+        self._vec_conn, is_fat = await asyncio.to_thread(_init_db)
 
         self._initialized = True
         pragma_desc = "DELETE+cache" if is_fat else "WAL+cache+mmap"

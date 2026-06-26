@@ -238,7 +238,14 @@ class ToolCallHandler:
 
         messages.extend(tool_messages)
 
-        final_reply = await self._summarize_results(current_user_input, tool_results, tool_calls, trace, user_openid=user_openid, session_id=session_id)
+        # 工具全部失败（被 hooks 拦截）时跳过 _summarize_results，避免第二次 LLM 调用导致超时
+        # 直接用 LLM 第一次的文本回复（assistant_content）
+        _all_failed = all(not r.success for r in tool_results) if tool_results else True
+        if _all_failed and assistant_content.strip():
+            final_reply = self._clean_reply(assistant_content)
+            trace.info("tool.all_failed_skip_summarize", tool_count=len(tool_results))
+        else:
+            final_reply = await self._summarize_results(current_user_input, tool_results, tool_calls, trace, user_openid=user_openid, session_id=session_id)
         rc = assistant_msg.get("reasoning_content", "")
         await self._context.add_message("user", current_user_input)
         await self._context.add_message("assistant", final_reply,
