@@ -138,7 +138,8 @@ class VectorStore:
         self._vec_conn = await asyncio.to_thread(_init_db)
 
         self._initialized = True
-        logger.info("vector_store.ready", pragmas="WAL+cache+mmap")
+        pragma_desc = "DELETE+cache" if is_fat else "WAL+cache+mmap"
+        logger.info("vector_store.ready", pragmas=pragma_desc)
 
     async def close(self):
         def _do_close():

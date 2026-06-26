@@ -204,7 +204,7 @@ class AgentCoreBootstrapper:
         if embed_api_key:
             try:
                 core._vec_store = VectorStore(
-                    db_path=str(core.db.db_path).replace(".db", "_vec.db"),
+                    db_path=str(core.db.db_path.parent / (core.db.db_path.stem + "_vec.db")),
                     embed_api_key=embed_api_key,
                     embed_base_url=embed_base_url,
                 )

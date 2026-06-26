@@ -83,7 +83,7 @@ if len(assets_datas) > 5:
 # ---------------------------------------------------------------------------
 # Collect data files from packages that ship non-Python assets
 # ---------------------------------------------------------------------------
-for pkg in ('jieba', 'psutil', 'certifi', 'openai', 'PIL'):
+for pkg in ('jieba', 'psutil', 'certifi', 'openai', 'PIL', 'sqlite_vec'):
     try:
         datas += collect_data_files(pkg)
     except Exception:
@@ -279,6 +279,7 @@ binaries = []
 try:
     from PyInstaller.utils.hooks import collect_dynamic_libs
     binaries += collect_dynamic_libs('pilk')
+    binaries += collect_dynamic_libs('sqlite_vec')
 except Exception:
     pass
 
@@ -309,7 +310,6 @@ excludes = [
     'win32com',
     'pythoncom',
     'pywin',
-    'msvcrt',
 ]
 
 # ---------------------------------------------------------------------------

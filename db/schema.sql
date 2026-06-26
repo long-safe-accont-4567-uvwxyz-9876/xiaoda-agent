@@ -45,7 +45,9 @@ CREATE TABLE IF NOT EXISTS episodic_memories (
     rag_status TEXT DEFAULT 'pending',         -- RAG 同步状态: pending(待索引)/indexed(已索引)/failed(索引失败)/excluded(排除索引)
     rag_synced_at REAL DEFAULT 0,              -- 最后 RAG 同步时间戳
     doc_id TEXT DEFAULT '',                    -- 关联外部向量数据库文档 ID
-    source TEXT DEFAULT 'user'
+    source TEXT DEFAULT 'user',
+    access_count INTEGER DEFAULT 0,            -- 检索命中次数
+    distilled INTEGER DEFAULT 0                -- 是否已被蒸馏提取
 );
 
 -- 情景记忆全文索引（FTS5）

@@ -712,7 +712,7 @@ class DatabaseManager:
                     END;
                 """)
             except Exception as e:
-                logger.warning(f"创建 FTS5 触发器失败: {e}")
+                logger.warning(f"database.fts5_trigger_failed: {e} — FTS搜索将降级为LIKE查询")
 
         await self._conn.commit()
 

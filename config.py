@@ -85,10 +85,13 @@ def _migrate_old_data(old_dir: Path, new_dir: Path, name: str):
 def get_credentials_dir() -> Path:
     """获取凭证目录。优先使用 KIOXIA 外置存储，否则使用可执行文件同级 credentials/。"""
     kioxia_cred = _KIOXIA_BASE / "credentials"
-    if kioxia_cred.exists() or kioxia_cred.parent.exists():
-        kioxia_cred.mkdir(parents=True, exist_ok=True)
-        return kioxia_cred
-    fallback = get_base_dir() / "credentials"
+    try:
+        if kioxia_cred.exists() or kioxia_cred.parent.exists():
+            kioxia_cred.mkdir(parents=True, exist_ok=True)
+            return kioxia_cred
+    except (OSError, PermissionError):
+        pass
+    fallback = _FALLBACK_BASE / "credentials"
     fallback.mkdir(parents=True, exist_ok=True)
     return fallback
 
@@ -113,15 +116,35 @@ def get_config_dir() -> Path:
     return get_base_dir() / "config"
 
 def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
-    if kioxia_path.exists() or kioxia_path.parent.exists():
-        kioxia_path.mkdir(parents=True, exist_ok=True)
-        return kioxia_path
-    fallback_path.mkdir(parents=True, exist_ok=True)
+    """解析数据路径，优先使用 KIOXIA 外置存储，失败时降级到 fallback。
+
+    注意：fallback_path 必须与 kioxia_path 结构一致（如都是 .../db），
+    避免首次/二次启动路径翻转导致数据孤立。
+    """
+    import os
+    kioxia_env = os.getenv("KIOXIA_DATA_DIR", "")
+    try:
+        if kioxia_path.exists() or kioxia_path.parent.exists():
+            kioxia_path.mkdir(parents=True, exist_ok=True)
+            return kioxia_path
+    except (OSError, PermissionError):
+        pass
+    # 外置盘未挂载或不可写时降级到 fallback，并输出警告
+    if kioxia_env:
+        print(f"[config] WARNING: KIOXIA_DATA_DIR={kioxia_env} not available, "
+              f"falling back to {fallback_path}")
+    try:
+        fallback_path.mkdir(parents=True, exist_ok=True)
+    except (OSError, PermissionError):
+        # 连 fallback 都失败，使用临时目录
+        import tempfile
+        fallback_path = Path(tempfile.gettempdir()) / "nahida-agent" / fallback_path.name
+        fallback_path.mkdir(parents=True, exist_ok=True)
     return fallback_path
 
-DATA_DIR = _resolve_data_path(_KIOXIA_BASE / "db", _FALLBACK_BASE / "data")
+DATA_DIR = _resolve_data_path(_KIOXIA_BASE / "db", _FALLBACK_BASE / "db")
 LOG_DIR = _resolve_data_path(_KIOXIA_BASE / "logs", _FALLBACK_BASE / "logs")
-WORKSPACE_DIR = _resolve_data_path(_KIOXIA_BASE / "config" / "workspace", _FALLBACK_BASE / "workspace")
+WORKSPACE_DIR = _resolve_data_path(_KIOXIA_BASE / "config" / "workspace", _FALLBACK_BASE / "config" / "workspace")
 CREDENTIALS_DIR = get_credentials_dir()
 
 

@@ -51,7 +51,7 @@ class NotebookManager:
         self.notebook = notebook
         self._router = router
         self._free_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
-        self._free_base_url = "https://api.siliconflow.cn/v1"
+        self._free_base_url = os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
         self._free_model = "Qwen/Qwen2.5-7B-Instruct"
         logger.info("notebook.ready")
 

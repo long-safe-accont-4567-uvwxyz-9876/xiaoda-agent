@@ -52,7 +52,7 @@ powershell -NoProfile -Command ^
     "  $backupDir = $installDir + '\.backup_v' + $curVer; " ^
     "  if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir | Out-Null }; " ^
     "  foreach ($item in @('.env', 'config', 'credentials', 'data')) { " ^
-    "    $src = $installDir + '\' + $item; " ^
+    "    $src = $env:USERPROFILE + '\.ai-agent\' + $item; " ^
     "    if (Test-Path $src) { Copy-Item -Recurse -Force $src $backupDir\ }; " ^
     "  }; " ^
     "  Write-Host '  Installing update...'; " ^
@@ -64,7 +64,7 @@ powershell -NoProfile -Command ^
     "  }; " ^
     "  foreach ($item in @('.env', 'config', 'credentials', 'data')) { " ^
     "    $src = $backupDir + '\' + $item; " ^
-    "    if (Test-Path $src) { Copy-Item -Recurse -Force $src $installDir\ }; " ^
+    "    if (Test-Path $src) { Copy-Item -Recurse -Force $src ($env:USERPROFILE + '\.ai-agent\') }; " ^
     "  }; " ^
     "  Set-Content -Path $verFile -Value $latest -NoNewline; " ^
     "  Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue; " ^

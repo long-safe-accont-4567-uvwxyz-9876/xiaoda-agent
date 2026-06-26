@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -30,8 +31,8 @@ async def _broadcast_kg_change(action: str, target: str, name: str) -> None:
             "target": target,
             "name": name,
         })
-    except Exception:
-        logger.debug(f"insight.kg.broadcast_failed action={action} target={target}")
+    except Exception as e:
+        logger.warning(f"insight.kg.broadcast_failed action={action} target={target}: {e}")
 
 
 # ── 情绪 ─────────────────────────────────────────────────────────
@@ -247,16 +248,16 @@ async def knowledge_graph(request: Request,
 async def list_entities(request: Request, limit: int = Query(default=200, le=500)):
     core = request.app.state.core
     kdb = core.db.knowledge
-    rows = await kdb.get_all_entities()
-    return Envelope(data=rows[:limit])
+    rows = await kdb.get_all_entities(limit=limit)
+    return Envelope(data=rows)
 
 
 @router.get("/insight/knowledge/relations", response_model=Envelope[list[dict]])
 async def list_relations(request: Request, limit: int = Query(default=200, le=500)):
     core = request.app.state.core
     kdb = core.db.knowledge
-    rows = await kdb.get_all_relations()
-    return Envelope(data=rows[:limit])
+    rows = await kdb.get_all_relations(limit=limit)
+    return Envelope(data=rows)
 
 
 @router.put("/insight/knowledge/relations/{relation_id}", response_model=Envelope[dict])
@@ -379,12 +380,12 @@ async def create_memory(body: dict, request: Request):
     mid = await core.db.insert_episodic_memory(
         summary=summary, importance=importance,
         emotion_label=emotion_label, timestamp=timestamp)
-    # 写入向量索引
+    # 写入向量索引（失败时记录警告，不静默吞掉）
     try:
         if core.memory:
             await core.memory.vec.upsert(mid, summary)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"insight.create_memory.vec_failed mid={mid}: {e}")
     await core.db.commit()
     return Envelope(data={"id": mid})
 
@@ -433,7 +434,7 @@ async def create_learning(body: dict, request: Request):
     priority = body.get("priority", "medium")
     category = body.get("category", "insight")
     now = time.time()
-    learning_id = f"learn_{int(now * 1000)}"
+    learning_id = f"LRN-{uuid.uuid4().hex[:12]}"
     lid = await core.db.execute(
         "INSERT INTO learnings (learning_id, category, priority, summary, pattern_key, "
         "recurrence_count, first_seen, last_seen, created_at) "
@@ -536,10 +537,18 @@ async def create_entity(body: dict, request: Request):
     if not name:
         raise HTTPException(400, "name 不能为空")
     kdb = core.db.knowledge
+    # observations 统一转为 list，避免字符串被拆成字符数组
+    raw_obs = body.get("observations", "")
+    if isinstance(raw_obs, str):
+        observations = [raw_obs] if raw_obs.strip() else []
+    elif isinstance(raw_obs, list):
+        observations = raw_obs
+    else:
+        observations = []
     await kdb.upsert_knowledge_entity(
         name=name,
         kind=body.get("kind", ""),
-        observations=body.get("observations", ""))
+        observations=observations)
     await core.db.commit()
     await _broadcast_kg_change("create", "entity", name)
     return Envelope(data={"name": name})
@@ -553,15 +562,22 @@ async def update_entity(name: str, body: dict, request: Request):
     if not existing:
         raise HTTPException(404, f"实体 {name} 不存在")
     new_kind = body.get("kind", existing.get("kind", ""))
-    new_obs = body.get("observations", existing.get("observations", ""))
+    new_obs = body.get("observations", existing.get("observations", []))
+    # observations 统一转为 list
     if isinstance(new_obs, str):
-        obs_json = new_obs
+        new_obs = [new_obs] if new_obs.strip() else []
+    elif isinstance(new_obs, list):
+        pass
     else:
-        obs_json = json.dumps(new_obs or [], ensure_ascii=False)
-    await kdb._conn.execute(
-        "UPDATE knowledge_entities SET kind=?, observations=?, updated_at=? WHERE name=?",
-        (new_kind, obs_json, time.time(), name))
-    await core.db.commit()
+        # existing 中可能是 JSON 字符串
+        if isinstance(new_obs, str):
+            try:
+                new_obs = json.loads(new_obs)
+            except (json.JSONDecodeError, TypeError):
+                new_obs = []
+        else:
+            new_obs = []
+    await kdb.update_knowledge_entity(name, new_kind, new_obs)
     await _broadcast_kg_change("update", "entity", name)
     return Envelope(data={"name": name, "updated": True})
 
@@ -570,8 +586,9 @@ async def update_entity(name: str, body: dict, request: Request):
 async def delete_entity(name: str, request: Request):
     core = request.app.state.core
     kdb = core.db.knowledge
-    await kdb.delete_knowledge_entity(name)
-    await core.db.commit()
+    deleted = await kdb.delete_knowledge_entity(name)
+    if not deleted:
+        raise HTTPException(404, f"实体 {name} 不存在")
     await _broadcast_kg_change("delete", "entity", name)
     return Envelope(data={"deleted": name})
 
@@ -584,10 +601,9 @@ async def create_relation(body: dict, request: Request):
     rel = (body.get("relation") or "").strip()
     if not from_e or not to_e or not rel:
         raise HTTPException(400, "from/to/relation 不能为空")
-    relation_id = f"REL-{int(time.time() * 1000)}"
+    relation_id = f"REL-{uuid.uuid4().hex[:12]}"
     kdb = core.db.knowledge
     await kdb.insert_knowledge_relation(relation_id, from_e, rel, to_e)
-    await core.db.commit()
     await _broadcast_kg_change("create", "relation", relation_id)
     return Envelope(data={"id": relation_id, "from": from_e, "to": to_e, "relation": rel})
 
@@ -596,7 +612,8 @@ async def create_relation(body: dict, request: Request):
 async def delete_relation(relation_id: str, request: Request):
     core = request.app.state.core
     kdb = core.db.knowledge
-    await kdb.delete_knowledge_relation(relation_id)
-    await core.db.commit()
+    deleted = await kdb.delete_knowledge_relation(relation_id)
+    if not deleted:
+        raise HTTPException(404, f"关系 {relation_id} 不存在")
     await _broadcast_kg_change("delete", "relation", relation_id)
     return Envelope(data={"deleted": relation_id})

@@ -669,7 +669,8 @@ class MemoryManager:
                 from config import MEMORY_STATE_DIR
                 state_dir = MEMORY_STATE_DIR
             except ImportError:
-                state_dir = Path(__file__).parent / "state"
+                # 避免在 PyInstaller frozen 模式下写入 _MEIPASS 只读目录
+                state_dir = Path.home() / ".ai-agent" / "memory_state"
             state_dir.mkdir(parents=True, exist_ok=True)
             state_path = str(state_dir / "memory_state.json")
             data = {

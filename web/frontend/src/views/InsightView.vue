@@ -216,6 +216,7 @@ onMounted(async () => {
   loadNotes()
   loadLearning()
   ws.on('portrait_consolidated', onConsolidated)
+  ws.on('knowledge_graph_changed', loadKnowledgeData)
   window.addEventListener('resize', handleResize)
 })
 

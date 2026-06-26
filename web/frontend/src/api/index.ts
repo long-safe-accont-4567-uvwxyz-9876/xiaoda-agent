@@ -234,7 +234,7 @@ export const createKnowledgeRelation = (data: { from: string; to: string; relati
   post<{ from: string; to: string; relation: string }>('/insight/knowledge/relations', data)
 
 export const deleteKnowledgeRelation = (id: string) =>
-  del<{ deleted: string }>(`/insight/knowledge/relations/${id}`, true)
+  del<{ deleted: string }>(`/insight/knowledge/relations/${encodeURIComponent(id)}`, true)
 
 export const listKnowledgeEntities = (limit = 200) =>
   get<any[]>(`/insight/knowledge/entities?limit=${limit}`)

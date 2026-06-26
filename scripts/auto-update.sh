@@ -60,8 +60,8 @@ if [ "$OS" = "Linux" ] && [ "$ARCH" = "x86_64" ]; then
     EXT="tar.gz"
     EXTRACT_CMD="tar xzf"
 elif [ "$OS" = "Linux" ] && [ "$ARCH" = "aarch64" ]; then
-    PLATFORM="linux-arm64"
-    EXT="run"
+    PLATFORM="linux-aarch64"
+    EXT="tar.gz"
     EXTRACT_CMD=""
 else
     echo "  不支持的平台: ${OS}-${ARCH}，跳过自动更新"
@@ -118,15 +118,15 @@ done
 
 # 解压更新
 if [ "$EXT" = "tar.gz" ]; then
+    mkdir -p "${TMP_DIR}/extract"
     tar xzf "${TMP_DIR}/${FILENAME}" -C "${TMP_DIR}/extract"
     # 将新文件复制到安装目录
     cp -rf "${TMP_DIR}/extract/nahida-agent/"* "${INSTALL_DIR}/"
 elif [ "$EXT" = "run" ]; then
-    # .run 安装包需要交互式安装，跳过自动更新
-    echo "  $(yellow "ARM64 版本需要手动安装更新")"
-    echo "  下载文件: ${TMP_DIR}/${FILENAME}"
-    rm -rf "$TMP_DIR"
-    exit 0
+    mkdir -p "${TMP_DIR}/extract"
+    tar xzf "${TMP_DIR}/${FILENAME}" -C "${TMP_DIR}/extract"
+    # 将新文件复制到安装目录
+    cp -rf "${TMP_DIR}/extract/nahida-agent/"* "${INSTALL_DIR}/"
 fi
 
 # 恢复用户配置

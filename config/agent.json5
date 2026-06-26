@@ -35,7 +35,7 @@
   // ===== 日志配置 =====
   "logging": {
     "level": "INFO",
-    "file_path": "logs/agent.log"
+    "file_path": "~/.ai-agent/logs/agent.log"
   },
 
   // ===== 插件开关 =====

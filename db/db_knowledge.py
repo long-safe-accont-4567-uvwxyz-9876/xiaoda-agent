@@ -1,5 +1,6 @@
 import time
 import json
+import uuid
 import aiosqlite
 from loguru import logger
 
@@ -37,7 +38,7 @@ class KnowledgeDB:
                                        auto_commit: bool = True):
         obs_json = json.dumps(observations or [], ensure_ascii=False)
         now = time.time()
-        entity_id = f"ENT-{int(now % 100000):05d}"
+        entity_id = f"ENT-{uuid.uuid4().hex[:12]}"
         await self._conn.execute(
             """INSERT INTO knowledge_entities (id, name, kind, observations, updated_at)
                VALUES (?, ?, ?, ?, ?)
@@ -54,7 +55,7 @@ class KnowledgeDB:
                                          relation_type: str, to_entity: str,
                                          auto_commit: bool = True):
         await self._conn.execute(
-            """INSERT OR IGNORE INTO knowledge_relations (id, from_entity, relation_type, to_entity, updated_at)
+            """INSERT OR REPLACE INTO knowledge_relations (id, from_entity, relation_type, to_entity, updated_at)
                VALUES (?, ?, ?, ?, ?)""",
             (relation_id, from_entity, relation_type, to_entity, time.time()),
         )
@@ -111,6 +112,11 @@ class KnowledgeDB:
         return [dict(r) for r in rows]
 
     async def delete_knowledge_entity(self, name: str, auto_commit: bool = True) -> bool:
+        # 级联清理引用该实体的关系
+        await self._conn.execute(
+            "DELETE FROM knowledge_relations WHERE from_entity=? OR to_entity=?",
+            (name, name),
+        )
         cursor = await self._conn.execute(
             "DELETE FROM knowledge_entities WHERE name=?", (name,)
         )
@@ -126,19 +132,60 @@ class KnowledgeDB:
             await self._conn.commit()
         return cursor.rowcount > 0
 
-    async def get_all_entities(self) -> list[dict]:
+    async def get_all_entities(self, limit: int = 500) -> list[dict]:
         cursor = await self._conn.execute(
-            "SELECT * FROM knowledge_entities ORDER BY updated_at DESC"
+            "SELECT * FROM knowledge_entities ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
-    async def get_all_relations(self) -> list[dict]:
+    async def get_all_relations(self, limit: int = 500) -> list[dict]:
         cursor = await self._conn.execute(
-            "SELECT * FROM knowledge_relations ORDER BY updated_at DESC"
+            "SELECT * FROM knowledge_relations ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+    async def update_knowledge_entity(self, name: str, kind: str = "",
+                                       observations: list | None = None,
+                                       auto_commit: bool = True):
+        """更新知识实体（公开方法，避免路由绕过封装）"""
+        obs_json = json.dumps(observations or [], ensure_ascii=False)
+        await self._conn.execute(
+            "UPDATE knowledge_entities SET kind=?, observations=?, updated_at=? WHERE name=?",
+            (kind, obs_json, time.time(), name),
+        )
+        if auto_commit:
+            await self._conn.commit()
+
+    async def update_knowledge_relation(self, relation_id: str, from_entity: str = None,
+                                         relation_type: str = None, to_entity: str = None,
+                                         auto_commit: bool = True):
+        """更新知识关系（公开方法）"""
+        sets = []
+        params = []
+        if from_entity is not None:
+            sets.append("from_entity=?")
+            params.append(from_entity)
+        if relation_type is not None:
+            sets.append("relation_type=?")
+            params.append(relation_type)
+        if to_entity is not None:
+            sets.append("to_entity=?")
+            params.append(to_entity)
+        if not sets:
+            return
+        sets.append("updated_at=?")
+        params.append(time.time())
+        params.append(relation_id)
+        await self._conn.execute(
+            f"UPDATE knowledge_relations SET {', '.join(sets)} WHERE id=?",
+            params,
+        )
+        if auto_commit:
+            await self._conn.commit()
 
     async def merge_entity(self, entity: dict, auto_commit: bool = True):
         name = entity.get("name", "")
@@ -165,7 +212,7 @@ class KnowledgeDB:
             if auto_commit:
                 await self._conn.commit()
         else:
-            entity_id = entity.get("id", f"ENT-{int(time.time() % 100000):05d}")
+            entity_id = entity.get("id", f"ENT-{uuid.uuid4().hex[:12]}")
             await self.insert_knowledge_entity(entity_id, name, kind, new_obs,
                                                 auto_commit=auto_commit)
 
@@ -175,7 +222,7 @@ class KnowledgeDB:
         to_entity = relation.get("to_entity", relation.get("to", relation.get("target", "")))
         if not from_entity or not relation_type or not to_entity:
             return
-        rel_id = relation.get("id", f"REL-{int(time.time() % 100000):05d}")
+        rel_id = relation.get("id", f"REL-{uuid.uuid4().hex[:12]}")
         await self._conn.execute(
             """INSERT OR IGNORE INTO knowledge_relations (id, from_entity, relation_type, to_entity, updated_at)
                VALUES (?, ?, ?, ?, ?)""",

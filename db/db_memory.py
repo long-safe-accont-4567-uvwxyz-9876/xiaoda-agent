@@ -189,7 +189,8 @@ class MemoryDB:
             try:
                 await vector_store.delete(memory_id)
             except Exception as e:
-                logger.warning("db_memory.vec_delete_failed", memory_id=memory_id, error=str(e))
+                logger.error("db_memory.vec_delete_failed", memory_id=memory_id, error=str(e))
+                raise
         await self.delete_memory(memory_id, auto_commit=auto_commit)
 
     async def get_episodic_recent(self, limit: int = 50):
