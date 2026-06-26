@@ -1,8 +1,8 @@
 {
   "name": "xilian",
   "display_name": "昔涟",
-  "provider": "siliconflow",
-  "model": "nex-agi/Nex-N2-Pro",
+  "provider": "agnes",
+  "model": "agnes-2.0-flash",
   "personality_file": "xilian_personality.md",
   "voice_ref": null,
   "excluded_tools": [
@@ -12,8 +12,8 @@
     "shell_command",
     "write_file"
   ],
-  "base_url": "https://api.siliconflow.cn/v1",
-  "api_key_env": "SILICONFLOW_API_KEY",
+  "base_url": "https://apihub.agnes-ai.com/v1",
+  "api_key_env": "AGNES_API_KEY",
   "capabilities": [
     "search",
     "lookup",
@@ -30,5 +30,5 @@
   "memory_scope": null,
   "background": false,
   "wallpaper": "/assets/wallpapers/xilian.jpg",
-  "_saved_at": 1782209392.8894658
+  "_saved_at": 1782406890.276899
 }

@@ -16,6 +16,7 @@ import {
   listKnowledgeEntities, listKnowledgeRelations, getKnowledgeGraph,
 } from '../api'
 import { getWsClient } from '../api/ws'
+import UniverseGraph from '../components/knowledge/UniverseGraph.vue'
 import { renderMarkdown } from '../utils/markdown'
 import * as echarts from 'echarts/core'
 import { LineChart, PieChart, GraphChart } from 'echarts/charts'
@@ -46,7 +47,8 @@ const memQuery = ref('')
 const importanceMin = ref(0)
 const graphEl = ref<HTMLElement | null>(null)
 const graphEntity = ref('用户')
-const graphDepth = ref(1)
+const graphDepth = ref<1 | 2>(1)
+const showUniverse = ref(false)
 const activeTab = ref('emotion')
 let knowledgeChart: echarts.ECharts | null = null
 const kgEntities = ref<any[]>([])
@@ -610,6 +612,7 @@ function fmtTs(ts: number): string {
                       @click="graphDepth = 2; loadKnowledgeData()">深度2</n-button>
             <n-button size="tiny" type="primary" @click="openAddModal('entity')">+ 实体</n-button>
             <n-button size="tiny" type="primary" @click="openAddModal('relation')">+ 关系</n-button>
+            <n-button size="tiny" type="primary" @click="showUniverse = true">🌌 全屏</n-button>
           </div>
           <div ref="graphEl" class="chart tall"></div>
         </div>
@@ -782,6 +785,19 @@ function fmtTs(ts: number): string {
           <n-button type="primary" @click="handleModalOk">确定</n-button>
         </n-space>
       </template>
+    </n-modal>
+
+    <!-- 纳西妲宇宙 3D 全屏图谱 -->
+    <n-modal
+      v-model:show="showUniverse"
+      :trap-focus="false"
+      :close-on-esc="true"
+      :mask-closable="true"
+      :show-mask="false"
+      display-directive="show"
+      style="width:100vw;height:100vh;max-width:none;max-height:none"
+    >
+      <UniverseGraph :entity="graphEntity" :depth="graphDepth" @close="showUniverse = false" />
     </n-modal>
   </div>
 </template>

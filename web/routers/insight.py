@@ -11,6 +11,7 @@ from loguru import logger
 
 from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.ws_hub import manager
 
 router = APIRouter(tags=["insight"], dependencies=[Depends(get_current_user)])
 
@@ -18,6 +19,19 @@ router = APIRouter(tags=["insight"], dependencies=[Depends(get_current_user)])
 def _today_start() -> float:
     now = datetime.now()
     return datetime(now.year, now.month, now.day).timestamp()
+
+
+async def _broadcast_kg_change(action: str, target: str, name: str) -> None:
+    """广播知识图谱变更事件"""
+    try:
+        await manager.broadcast({
+            "type": "knowledge_graph_changed",
+            "action": action,
+            "target": target,
+            "name": name,
+        })
+    except Exception:
+        logger.debug(f"insight.kg.broadcast_failed action={action} target={target}")
 
 
 # ── 情绪 ─────────────────────────────────────────────────────────
@@ -258,6 +272,7 @@ async def update_relation(relation_id: str, body: dict, request: Request):
     if not n:
         raise HTTPException(404, f"关系 {relation_id} 不存在")
     await core.db.commit()
+    await _broadcast_kg_change("update", "relation", relation_id)
     return Envelope(data={"id": relation_id, "updated": True})
 
 
@@ -526,6 +541,7 @@ async def create_entity(body: dict, request: Request):
         kind=body.get("kind", ""),
         observations=body.get("observations", ""))
     await core.db.commit()
+    await _broadcast_kg_change("create", "entity", name)
     return Envelope(data={"name": name})
 
 
@@ -546,6 +562,7 @@ async def update_entity(name: str, body: dict, request: Request):
         "UPDATE knowledge_entities SET kind=?, observations=?, updated_at=? WHERE name=?",
         (new_kind, obs_json, time.time(), name))
     await core.db.commit()
+    await _broadcast_kg_change("update", "entity", name)
     return Envelope(data={"name": name, "updated": True})
 
 
@@ -555,6 +572,7 @@ async def delete_entity(name: str, request: Request):
     kdb = core.db.knowledge
     await kdb.delete_knowledge_entity(name)
     await core.db.commit()
+    await _broadcast_kg_change("delete", "entity", name)
     return Envelope(data={"deleted": name})
 
 
@@ -570,6 +588,7 @@ async def create_relation(body: dict, request: Request):
     kdb = core.db.knowledge
     await kdb.insert_knowledge_relation(relation_id, from_e, rel, to_e)
     await core.db.commit()
+    await _broadcast_kg_change("create", "relation", relation_id)
     return Envelope(data={"id": relation_id, "from": from_e, "to": to_e, "relation": rel})
 
 
@@ -579,4 +598,5 @@ async def delete_relation(relation_id: str, request: Request):
     kdb = core.db.knowledge
     await kdb.delete_knowledge_relation(relation_id)
     await core.db.commit()
+    await _broadcast_kg_change("delete", "relation", relation_id)
     return Envelope(data={"deleted": relation_id})

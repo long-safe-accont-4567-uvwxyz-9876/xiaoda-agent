@@ -444,13 +444,23 @@ class GateGuardHook(BaseHook):
 
         if not check_result["allow"]:
             reason = check_result["reason"]
-            if check_result.get("need_confirm"):
+            # 检查权限模式：bypass/goat 模式下放行高风险操作（仅记录警告）
+            from security.permission_manager import get_permission_manager
+            pm = get_permission_manager()
+            if pm.is_bypass_mode():
+                logger.warning(
+                    f"GateGuardHook.bypass: tool={tool_name}, reason={reason}, "
+                    f"mode={pm.mode.value}"
+                )
+                # 继续执行，不阻断
+            elif check_result.get("need_confirm"):
                 return HookResult(
                     allowed=False,
                     reason=reason,
                     additional_context="需要用户确认后才能执行此高风险操作",
                 )
-            return HookResult(allowed=False, reason=reason)
+            else:
+                return HookResult(allowed=False, reason=reason)
 
         # 如果是读取操作，标记已读取（用于后续证据门禁）
         if tool_name in ("read_file", "cat", "list_dir") and file_path:

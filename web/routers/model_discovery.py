@@ -31,6 +31,14 @@ _NON_CHAT_KEYWORDS = (
     "whisper", "parakeet", "bge",
 )
 
+# 不支持 /models 端点的 provider，用内置已知模型列表作为降级
+# Agnes AI 没有 /v1/models 列表端点，只有一个文本模型
+BUILTIN_FALLBACK_MODELS = {
+    "agnes": [
+        {"id": "agnes-2.0-flash", "display_name": "Agnes Flash 2.0", "free": True, "tool_calling": True, "vision": False},
+    ],
+}
+
 
 async def _fetch_openai_compatible_models(
     provider_id: str,
@@ -358,6 +366,12 @@ async def discover_models():
             ))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # 对标注为内置降级的 provider，若 results 中返回异常或空列表，使用 fallback
+    for i, (pid, models_or_exc) in enumerate(zip(provider_ids, results)):
+        if pid in BUILTIN_FALLBACK_MODELS:
+            if isinstance(models_or_exc, Exception) or (isinstance(models_or_exc, list) and not models_or_exc):
+                results[i] = BUILTIN_FALLBACK_MODELS[pid]
 
     result = []
     for pid, models_or_exc in zip(provider_ids, results):

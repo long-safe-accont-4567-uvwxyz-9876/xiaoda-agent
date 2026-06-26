@@ -41,14 +41,18 @@ class RiskClassifier:
     # L2 中风险工具名
     MEDIUM_RISK_TOOLS = {"write_file", "edit_file", "shell_command", "python_executor", "create_file"}
 
-    # L1 低风险工具名
-    LOW_RISK_TOOLS = {"create_file", "mkdir", "touch"}
+    # L1 低风险工具名（create_file 已移至 MEDIUM：能覆盖已存在文件，需证据门禁）
+    LOW_RISK_TOOLS = {"mkdir", "touch"}
 
     # L0 安全工具名
     SAFE_TOOLS = {
         "read_file", "list_dir", "search", "test", "ping", "cat", "ls", "grep",
         # 只读生成类工具：不修改任何文件，无需证据门禁
         "agnes_image_generate", "agnes_video_generate",
+        # 只读/查询类工具
+        "recall", "web_search", "web_browse", "search_cn", "get_weather",
+        "get_current_time", "calculator", "list_files", "search_files",
+        "hardware_status", "document_reader", "wolfram_query", "nudge_greeting",
     }
 
     def classify(self, tool_name: str, params: dict) -> RiskLevel:

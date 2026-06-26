@@ -1,8 +1,8 @@
 {
   "name": "keli",
   "display_name": "可莉",
-  "provider": "siliconflow",
-  "model": "nex-agi/Nex-N2-Pro",
+  "provider": "agnes",
+  "model": "agnes-2.0-flash",
   "personality_file": "klee_personality.md",
   "voice_ref": "keli",
   "excluded_tools": [
@@ -17,8 +17,8 @@
     "wolfram_query",
     "write_file"
   ],
-  "base_url": "https://api.siliconflow.cn/v1",
-  "api_key_env": "SILICONFLOW_API_KEY",
+  "base_url": "https://apihub.agnes-ai.com/v1",
+  "api_key_env": "AGNES_API_KEY",
   "capabilities": [
     "chat",
     "play",
@@ -33,5 +33,5 @@
   "memory_scope": null,
   "background": false,
   "wallpaper": "/media/wallpapers/keli.png?v=1782344046",
-  "_saved_at": 1782344048.0512714
+  "_saved_at": 1782406860.477056
 }

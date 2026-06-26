@@ -185,15 +185,20 @@ class MemoryManager:
         fts_items = []
         vec_items = []
 
-        # FTS 检索
-        if self.memory:
+        async def _fts_search() -> list[dict]:
+            """FTS 检索"""
+            if not self.memory:
+                return []
             try:
-                fts_items = await self.memory.search_memories_fts(query, limit=k * 2)
+                return await self.memory.search_memories_fts(query, limit=k * 2)
             except Exception as e:
                 logger.warning("memory.fts_search_failed", error=str(e))
+                return []
 
-        # 向量检索
-        if self.vec:
+        async def _vec_search() -> list[dict]:
+            """向量检索 + 批量 JOIN"""
+            if not self.vec:
+                return []
             try:
                 vec_results = await self.vec.search(query, top_k=k * 2)
                 # 批量 JOIN：一次查询获取所有向量命中的记忆记录
@@ -203,13 +208,20 @@ class MemoryManager:
                     # 构建 id -> memory 映射
                     vec_mem_map = {m["id"]: m for m in vec_mems}
                     # 按 distance 排序组装结果
+                    items = []
                     for row_id, distance in vec_results:
                         mem = vec_mem_map.get(row_id)
                         if mem:
                             mem["score"] = 1.0 - distance
-                            vec_items.append(mem)
+                            items.append(mem)
+                    return items
+                return []
             except Exception as e:
                 logger.warning("memory.vec_search_failed", error=str(e))
+                return []
+
+        # 并行执行 FTS 与向量检索
+        fts_items, vec_items = await asyncio.gather(_fts_search(), _vec_search())
 
         # 降级：只有一路有结果
         if not fts_items and not vec_items:
@@ -226,7 +238,6 @@ class MemoryManager:
         fused = reciprocal_rank_fusion([fts_ids, vec_ids], limit=oversample_k)
 
         # 按 RRF 排序获取完整记录
-        score_by_id = dict(fused)
         all_items = {str(item["id"]): item for item in fts_items + vec_items}
 
         # Reranker 精排

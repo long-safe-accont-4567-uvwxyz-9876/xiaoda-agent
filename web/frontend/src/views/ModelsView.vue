@@ -26,9 +26,38 @@ const isCreateProvider = ref(false)
 const testResults = ref<Record<string, any>>({})
 const testingId = ref('')
 const chartEl = ref<HTMLElement | null>(null)
+// 已发现的模型列表（按 provider 分组），用于路由表下拉选择
+const discoveredModels = ref<any[]>([])
 
 const providerOptions = computed(() =>
   providers.value.map(p => ({ label: `${p.label} (${p.id})`, value: p.id })))
+
+// 路由表 model 下拉选项：按 provider 分组，和对话页面 ModelSelector 一样
+const modelSelectOptions = computed(() => {
+  return discoveredModels.value
+    .filter(pg => pg.models && pg.models.length)
+    .map(pg => ({
+      type: 'group' as const,
+      label: pg.label || pg.provider,
+      key: pg.provider,
+      children: pg.models.map((m: any) => ({
+        label: m.display_name || m.id,
+        value: m.id,
+      })),
+    }))
+})
+
+// 路由表选择模型时自动同步 provider
+function onRouteModelChange(r: any, modelId: string) {
+  r.model = modelId
+  // 找到该模型属于哪个 provider，自动同步
+  for (const pg of discoveredModels.value) {
+    if ((pg.models || []).some((m: any) => m.id === modelId)) {
+      r.provider = pg.provider
+      break
+    }
+  }
+}
 
 const builtinProviders = computed(() => providers.value.filter(p => p.builtin))
 const customProviders = computed({
@@ -42,17 +71,19 @@ onMounted(loadAll)
 
 async function loadAll() {
   try {
-    const [p, r, c, u] = await Promise.all([
+    const [p, r, c, u, dm] = await Promise.all([
       get<any[]>('/models/providers'),
       get('/models/routes'),
       get<any[]>('/models/credentials/status'),
       get('/models/usage?days=7'),
+      get<any[]>('/models/discover').catch(() => []),
     ])
     providers.value = p
     routes.value = r.routes
     fallback.value = r.fallback
     credentials.value = c
     usage.value = u
+    discoveredModels.value = dm
     renderChart()
   } catch (e: any) {
     message.error(e.message)
@@ -243,14 +274,21 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
       <h3>任务路由表 <span class="hint">改完即生效，无须重启</span></h3>
       <table class="route-table">
         <thead>
-          <tr><th>任务</th><th>model</th><th>provider</th><th>max_tokens</th><th>thinking</th><th></th></tr>
+          <tr><th>任务</th><th>model</th><th>max_tokens</th><th>thinking</th><th></th></tr>
         </thead>
         <tbody>
           <tr v-for="(r, task) in routes" :key="task">
             <td class="mono">{{ task }}</td>
-            <td><n-input v-model:value="r.model" size="small" /></td>
-            <td><n-select v-model:value="r.provider" size="small" :options="providerOptions" style="min-width:130px"
-                          @update:value="(v: string) => onRouteProviderChange(r, v)" /></td>
+            <td>
+              <n-select
+                v-model:value="r.model"
+                size="small"
+                filterable
+                :options="modelSelectOptions"
+                style="min-width:220px"
+                @update:value="(v: string) => onRouteModelChange(r, v)"
+              />
+            </td>
             <td><n-input-number v-model:value="r.max_tokens" size="small" :min="64" :max="32768" :show-button="false" style="width:90px" /></td>
             <td><n-switch v-model:value="r.thinking" size="small" /></td>
             <td class="route-ops">
