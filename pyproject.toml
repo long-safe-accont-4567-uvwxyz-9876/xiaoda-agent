@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nahida-agent"
-version = "0.3.99"
+version = "0.4.0"
 description = "多智能体 AI 助手 — 以《原神》纳西妲为灵魂，40+ 工具赋能，三通道交互"
 readme = "README.md"
 license = {text = "MIT"}
