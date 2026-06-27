@@ -544,6 +544,11 @@ class SubAgent:
                 args_str = tc.arguments_json
 
                 if self._tool_repair:
+                    # 风暴检测：拦截重复调用同一工具+相同参数的循环
+                    if self._tool_repair.detect_storm(tool_name, args_str):
+                        logger.warning("sub_agent.storm_detected", tool=tool_name)
+                        return {"tool_call_id": tc.id, "content": "错误: 该工具调用已被风暴检测拦截，请换个思路尝试"}
+
                     repaired = self._tool_repair.repair_truncation(args_str)
                     if repaired:
                         args_str = repaired

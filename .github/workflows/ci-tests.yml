@@ -10,7 +10,12 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout code
@@ -30,10 +35,13 @@ jobs:
       - name: Run tests
         run: pytest tests/ -v --tb=short --junitxml=pytest-report.xml
 
+      - name: Run Harness benchmark
+        run: python tests/benchmark_harness.py
+
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pytest-report
+          name: pytest-report-${{ matrix.os }}
           path: pytest-report.xml
           if-no-files-found: warn

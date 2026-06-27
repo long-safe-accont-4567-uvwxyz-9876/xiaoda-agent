@@ -35,6 +35,178 @@ if TYPE_CHECKING:
 class MessageProcessorMixin:
     """消息处理相关方法的 Mixin，由 AgentCore 组合使用。"""
 
+    # ── Harness 验收循环常量 ──────────────────────────────────
+    MAX_VERIFICATION_TURNS = 8          # 最大循环轮次
+    VERIFICATION_WALL_TIMEOUT = 50      # 墙钟超时（秒）
+    MAX_CONSECUTIVE_TOOL_FAILURES = 3   # 连续工具失败上限
+    LLM_CALL_TIMEOUT = 30               # 单次 LLM 调用超时
+
+    async def _run_verification_loop(
+        self,
+        first_result,
+        messages: list[dict],
+        tools: list[dict] | None,
+        trace,
+        *,
+        task_type: str,
+        temperature: float,
+        max_tokens: int | None,
+        user_openid: str,
+        session_id: str,
+        is_owner: bool,
+        ctx: 'RequestContext',
+        user_input: str,
+    ) -> tuple[str, list]:
+        """Harness 验收循环：工具执行 → 结果回填 → 模型验收 → 循环。
+
+        核心思想：工具调用后不直接 summarize，而是将结果追加到 messages，
+        再次调用 LLM 让模型「验收」工具结果并生成最终回复。
+        最多循环 MAX_VERIFICATION_TURNS 轮，墙钟超时 VERIFICATION_WALL_TIMEOUT 秒。
+        """
+        loop_start = time.time()
+        consecutive_failures = 0
+        all_tool_results: list = []
+        _model_cfg = AGENT_CONFIG.get("model", {})
+
+        # 解析首轮 LLM 输出
+        current_result = first_result
+        current_tool_calls = None
+        current_assistant_content = ""
+        current_reasoning = None
+
+        # 提取首轮的 tool_calls（如果有的话）
+        if isinstance(current_result, str):
+            if has_dsml_tool_calls(current_result) and tools:
+                dsml_calls = parse_dsml_tool_calls(current_result, self.tool_repair._allowed_tools)
+                if dsml_calls:
+                    current_tool_calls = dsml_calls
+                    current_assistant_content = current_result
+                    current_reasoning = self.router.pop_reasoning_content()
+        else:
+            msg = current_result.choices[0].message
+            if msg.tool_calls:
+                current_tool_calls = [
+                    {"id": str(tc.id), "type": "function",
+                     "function": {"name": tc.function.name,
+                                  "arguments": str(tc.function.arguments) if tc.function.arguments else "{}"}}
+                    for tc in msg.tool_calls
+                ]
+                current_assistant_content = msg.content or ""
+                current_reasoning = getattr(msg, "reasoning_content", None)
+                self.router.pop_reasoning_content()
+
+        # 如果首轮没有 tool_calls，直接返回文本
+        if not current_tool_calls:
+            if isinstance(current_result, str):
+                return self._clean_reply(current_result), []
+            else:
+                return self._clean_reply(current_result.choices[0].message.content or ""), []
+
+        # ── 验收循环 ─────────────────────────────────────────
+        last_tool_calls = current_tool_calls  # 追踪最近一次 tool_calls，供 summarize 使用
+        for turn_idx in range(self.MAX_VERIFICATION_TURNS):
+            # 墙钟超时检查
+            elapsed = time.time() - loop_start
+            if elapsed > self.VERIFICATION_WALL_TIMEOUT:
+                trace.warning("verification.wall_timeout", turn=turn_idx, elapsed=round(elapsed, 1))
+                break
+
+            # 执行工具（skip_summarize=True：不 summarize，不更新上下文）
+            _, turn_tool_results = await self._handle_tool_calls(
+                current_tool_calls, messages, trace,
+                assistant_content=current_assistant_content,
+                reasoning_content=current_reasoning,
+                user_openid=user_openid, session_id=session_id,
+                safe_mode=not is_owner, ctx=ctx,
+                skip_summarize=True,
+            )
+            all_tool_results.extend(turn_tool_results)
+            last_tool_calls = current_tool_calls  # 记录本次执行的 tool_calls
+
+            # 连续失败检查
+            turn_failed = all(not r.success for r in turn_tool_results)
+            if turn_failed:
+                consecutive_failures += 1
+                if consecutive_failures >= self.MAX_CONSECUTIVE_TOOL_FAILURES:
+                    trace.warning("verification.max_failures", failures=consecutive_failures)
+                    break
+            else:
+                consecutive_failures = 0
+
+            # 再次调用 LLM，让模型验收工具结果
+            remaining = self.VERIFICATION_WALL_TIMEOUT - (time.time() - loop_start)
+            if remaining < 3:
+                trace.warning("verification.no_time_left")
+                break
+
+            try:
+                current_result = await asyncio.wait_for(
+                    self.router.route(
+                        task_type, messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        tools=tools,
+                        tool_choice="auto" if tools else None,
+                        user_openid=user_openid,
+                        session_id=session_id,
+                    ),
+                    timeout=min(self.LLM_CALL_TIMEOUT, remaining),
+                )
+            except asyncio.TimeoutError:
+                trace.warning("verification.llm_timeout", turn=turn_idx)
+                break
+            except Exception as e:
+                trace.error("verification.llm_error", turn=turn_idx, error=str(e))
+                break
+
+            # 解析 LLM 输出
+            current_tool_calls = None
+            current_assistant_content = ""
+            current_reasoning = None
+
+            if isinstance(current_result, str):
+                if has_dsml_tool_calls(current_result) and tools:
+                    dsml_calls = parse_dsml_tool_calls(current_result, self.tool_repair._allowed_tools)
+                    if dsml_calls:
+                        current_tool_calls = dsml_calls
+                        current_assistant_content = current_result
+                        current_reasoning = self.router.pop_reasoning_content()
+                else:
+                    # LLM 返回纯文本 → 验收通过
+                    return self._clean_reply(current_result), all_tool_results
+            else:
+                msg = current_result.choices[0].message
+                if msg.tool_calls:
+                    current_tool_calls = [
+                        {"id": str(tc.id), "type": "function",
+                         "function": {"name": tc.function.name,
+                                      "arguments": str(tc.function.arguments) if tc.function.arguments else "{}"}}
+                        for tc in msg.tool_calls
+                    ]
+                    current_assistant_content = msg.content or ""
+                    current_reasoning = getattr(msg, "reasoning_content", None)
+                    self.router.pop_reasoning_content()
+                else:
+                    # LLM 返回纯文本 → 验收通过
+                    return self._clean_reply(msg.content or ""), all_tool_results
+
+            trace.info("verification.loop", turn=turn_idx + 1,
+                       tool_calls=[tc["function"]["name"] for tc in current_tool_calls])
+
+        # ── 循环结束：最终 summarize ─────────────────────────
+        trace.info("verification.summarize_fallback", tool_count=len(all_tool_results))
+        if all_tool_results:
+            final_reply = await self._tool_call_handler._summarize_results(
+                user_input, all_tool_results, last_tool_calls or [],
+                trace, user_openid=user_openid, session_id=session_id,
+            )
+        elif current_assistant_content.strip():
+            final_reply = self._clean_reply(current_assistant_content)
+        else:
+            final_reply = DEGRADED_REPLY
+
+        return final_reply, all_tool_results
+
     async def _process_impl(self, ctx: RequestContext, user_input: str, user_id: str,
                              source: str, user_openid: str, session_id: str,
                              status_callback, image_data: list[dict] | None,
@@ -531,52 +703,19 @@ class MessageProcessorMixin:
                     session_id=session_id,
                 )
 
-            if isinstance(result, str):
-                if has_dsml_tool_calls(result) and tools:
-                    dsml_calls = parse_dsml_tool_calls(result, self.tool_repair._allowed_tools)
-                    if dsml_calls:
-                        logger.info("agent.dsml_in_content", count=len(dsml_calls))
-                        for dc in dsml_calls:
-                            fn = dc.get("function", {})
-                            logger.info("agent.dsml_tool_call", tool=fn.get("name",""), args=str(fn.get("arguments",""))[:200])
-                        dsml_reasoning = self.router.pop_reasoning_content()
-                        reply, tool_results = await self._handle_tool_calls(
-                            dsml_calls, messages, trace,
-                            assistant_content=result,
-                            reasoning_content=dsml_reasoning,
-                            user_openid=user_openid, session_id=session_id,
-                            safe_mode=not is_owner, ctx=ctx,
-                        )
-                        ctx.handled_by_tool_call = True
-                        logger.info("agent.got_dsml_tool_reply", length=len(reply), preview=reply[:80])
-                    else:
-                        reply = self._clean_reply(result)
-                        logger.info("agent.got_string_reply", length=len(reply), preview=reply[:80])
-                else:
-                    # 即使 tools 为 None（如 has_image=True），也通过 _clean_reply -> strip_dsml 清理非标准 [TOOL_CALL] 格式文本
-                    reply = self._clean_reply(result)
-                    logger.info("agent.got_string_reply", length=len(reply), preview=reply[:80])
-            else:
-                msg = result.choices[0].message
-                if msg.tool_calls:
-                    tc_list = [
-                        {"id": str(tc.id), "type": "function", "function": {"name": tc.function.name, "arguments": str(tc.function.arguments) if tc.function.arguments else "{}"}}
-                        for tc in msg.tool_calls
-                    ]
-                    reasoning = getattr(msg, "reasoning_content", None)
-                    self.router.pop_reasoning_content()  # clear stale value since we extract directly
-                    reply, tool_results = await self._handle_tool_calls(
-                        tc_list, messages, trace,
-                        assistant_content=msg.content or "",
-                        reasoning_content=reasoning,
-                        user_openid=user_openid, session_id=session_id,
-                        safe_mode=not is_owner, ctx=ctx,
-                    )
-                    ctx.handled_by_tool_call = True
-                    logger.info("agent.got_tool_reply", length=len(reply), preview=reply[:80])
-                else:
-                    reply = self._clean_reply(msg.content or "")
-                    logger.info("agent.got_string_reply", length=len(reply), preview=reply[:80])
+            # ── Harness 验收循环：工具执行 → 结果回填 → 模型验收 ──
+            reply, tool_results = await self._run_verification_loop(
+                result, messages, tools, trace,
+                task_type=task_type,
+                temperature=_model_cfg.get("temperature", 0.7),
+                max_tokens=_cb_max_tokens,
+                user_openid=user_openid, session_id=session_id,
+                is_owner=is_owner, ctx=ctx, user_input=user_input,
+            )
+            if tool_results:
+                ctx.handled_by_tool_call = True
+            logger.info("agent.got_reply", length=len(reply), preview=reply[:80],
+                        tool_count=len(tool_results))
             # LLM 调用成功后更新认知状态
             if circuit_state == CircuitState.HALF_OPEN:
                 self._circuit_breaker.on_half_open_success(self._cognitive_state)

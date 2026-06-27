@@ -95,7 +95,8 @@ class ToolCallHandler:
                      user_openid: str = "", session_id: str = "",
                      safe_mode: bool = False,
                      current_user_input: str = "",
-                     user_id: str = "") -> tuple[str, list]:
+                     user_id: str = "",
+                     skip_summarize: bool = False) -> tuple[str, list]:
         if not tool_calls:
             return self._clean_reply(assistant_content), []
 
@@ -238,6 +239,11 @@ class ToolCallHandler:
 
         messages.extend(tool_messages)
 
+        # skip_summarize=True：验收循环模式，工具结果已追加到 messages，
+        # 跳过 summarize 和上下文记录，由调用方决定下一步
+        if skip_summarize:
+            return "", tool_results
+
         # 工具全部失败（被 hooks 拦截）时跳过 _summarize_results，避免第二次 LLM 调用导致超时
         # 直接用 LLM 第一次的文本回复（assistant_content）
         _all_failed = all(not r.success for r in tool_results) if tool_results else True
@@ -290,19 +296,25 @@ class ToolCallHandler:
                 f"工具返回的结果：\n{combined}"
             )
 
-            summary = await self._router.route(
-                "chat",
-                [
-                    {"role": "system", "content": nahida_prompt},
-                    {"role": "user", "content": user_input},
-                    {"role": "user", "content": summary_prompt},
-                ],
-                temperature=0.6,
-                user_openid=user_openid,
-                session_id=session_id,
+            # 独立超时保护：summarize 最多 10s，不占用核心预算
+            summary = await asyncio.wait_for(
+                self._router.route(
+                    "chat",
+                    [
+                        {"role": "system", "content": nahida_prompt},
+                        {"role": "user", "content": user_input},
+                        {"role": "user", "content": summary_prompt},
+                    ],
+                    temperature=0.6,
+                    user_openid=user_openid,
+                    session_id=session_id,
+                ),
+                timeout=10,
             )
             if isinstance(summary, str) and summary.strip():
                 return self._clean_reply(summary)
+        except asyncio.TimeoutError:
+            logger.warning("tool.summarize_timeout", tool_count=len(tool_results))
         except Exception as e:
             trace.error("tool.summarize_failed", error=str(e))
 

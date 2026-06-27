@@ -56,6 +56,13 @@ class ToolExecutorMixin:
         # 工具护栏检查
         from tool_engine.tool_guardrails import get_tool_guardrails
         guardrails = get_tool_guardrails()
+
+        # L1/L2/L3 参数验证（在循环检测之前）
+        valid, reason = guardrails.validate_args(tool_name, arguments)
+        if not valid:
+            logger.warning("tool.validation_failed", tool=tool_name, reason=reason)
+            return ToolResult.fail(f"参数验证失败: {reason}")
+
         action, guard_msg = await guardrails.check(tool_name, arguments)
         if action == "halt":
             return ToolResult.fail(guard_msg)
@@ -111,10 +118,11 @@ class ToolExecutorMixin:
                                   user_openid: str = "",
                                   session_id: str = "",
                                   safe_mode: bool = False,
-                                  ctx: RequestContext | None = None) -> tuple[str, list]:
+                                  ctx: RequestContext | None = None,
+                                  skip_summarize: bool = False) -> tuple[str, list]:
         _ctx = ctx or _current_request_ctx.get()
         self._tool_call_handler.set_status_callback(_ctx.status_callback if _ctx else None)
-        return await self._tool_call_handler.handle(tool_calls, messages, trace, assistant_content=assistant_content, reasoning_content=reasoning_content, user_openid=user_openid, session_id=session_id, safe_mode=safe_mode, current_user_input=_ctx.user_input if _ctx else "", user_id=_ctx.user_id if _ctx else "")
+        return await self._tool_call_handler.handle(tool_calls, messages, trace, assistant_content=assistant_content, reasoning_content=reasoning_content, user_openid=user_openid, session_id=session_id, safe_mode=safe_mode, current_user_input=_ctx.user_input if _ctx else "", user_id=_ctx.user_id if _ctx else "", skip_summarize=skip_summarize)
 
     async def _load_notebook_context(self) -> None:
         try:

@@ -28,6 +28,13 @@ class ToolExecutor:
     TOOL_TIMEOUTS: dict[str, float] = {
         "agnes_video_generate": 240,
         "document_reader": 120,
+        "web_browse": 30,           # 网页渲染较慢
+        "multi_search": 25,         # 多引擎并发搜索
+        "web_search": 15,           # 单次网络搜索
+        "wolfram_query": 20,        # 知识计算引擎
+        "python_executor": 30,      # 代码执行可能较慢
+        "shell_command": 20,        # Shell 命令执行
+        "delegate_task": 60,        # 子代理委托
         "default": 60.0,
     }
 

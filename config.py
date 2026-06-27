@@ -421,7 +421,7 @@ STREAM_STATUS_PUSH = os.getenv("STREAM_STATUS_PUSH", "false").lower() in ("1", "
 SIMPLE_CHAT_FASTPATH = os.getenv("SIMPLE_CHAT_FASTPATH", "true").lower() in ("1", "true", "yes")
 
 # P0: WebSocket 流式文本推送 —— LLM 流式调用 + 逐 token 推送
-STREAM_TEXT_PUSH = os.getenv("STREAM_TEXT_PUSH", "false").lower() in ("1", "true", "yes")
+STREAM_TEXT_PUSH = os.getenv("STREAM_TEXT_PUSH", "true").lower() in ("1", "true", "yes")
 # P0: 工具调用中间状态推送（started/completed/failed）
 STREAM_TOOL_STATUS = os.getenv("STREAM_TOOL_STATUS", "true").lower() in ("1", "true", "yes")
 
@@ -432,7 +432,7 @@ CIRCUIT_BREAKER_HALF_OPEN_PROBES = int(os.getenv("CIRCUIT_BREAKER_HALF_OPEN_PROB
 CIRCUIT_BREAKER_MAX_COOLDOWN = int(os.getenv("CIRCUIT_BREAKER_MAX_COOLDOWN", "300"))
 
 # P5: 失败经验→规则闭环 —— 命中规则时是否拒绝调用（true=拒绝，false=仅记录警告日志）
-ERROR_RULE_STRICT_MODE = os.getenv("ERROR_RULE_STRICT_MODE", "false").lower() in ("1", "true", "yes")
+ERROR_RULE_STRICT_MODE = os.getenv("ERROR_RULE_STRICT_MODE", "true").lower() in ("1", "true", "yes")
 
 # P6: 增量上下文构建与 Prompt Caching —— 开启后拆分系统提示稳定段/动态段并标记缓存
 PROMPT_CACHING_ENABLED = os.getenv("PROMPT_CACHING_ENABLED", "false").lower() in ("1", "true", "yes")

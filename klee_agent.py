@@ -1,5 +1,7 @@
 import os
 import json
+import asyncio
+import time
 from pathlib import Path
 from openai import AsyncOpenAI
 
@@ -203,17 +205,30 @@ class KleeAgent:
                          messages: list[dict], tools: list[dict] | None,
                          provider_name: str) -> str:
         max_rounds = 5
+        api_timeout = 30                    # 单次 API 调用超时
+        total_deadline = time.time() + 90   # Klee 总超时 90s
         working = list(messages)
 
         for round_idx in range(max_rounds):
-            response = await client.chat.completions.create(
-                model=model,
-                messages=working,
-                max_tokens=1024 if tools else 300,
-                temperature=0.9,
-                tools=tools,
-                tool_choice="auto" if tools else None,
-            )
+            # 墙钟超时检查
+            remaining = total_deadline - time.time()
+            if remaining < 5:
+                return f"可莉处理超时了，请稍后再试吧～"
+            try:
+                response = await asyncio.wait_for(
+                    client.chat.completions.create(
+                        model=model,
+                        messages=working,
+                        max_tokens=1024 if tools else 300,
+                        temperature=0.9,
+                        tools=tools,
+                        tool_choice="auto" if tools else None,
+                    ),
+                    timeout=min(api_timeout, remaining),
+                )
+            except asyncio.TimeoutError:
+                logger.warning("klee.api_timeout", round=round_idx, model=model)
+                return f"可莉思考时间太长了，请稍后再试吧～"
 
             msg = response.choices[0].message
 
