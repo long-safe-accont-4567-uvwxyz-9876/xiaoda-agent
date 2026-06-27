@@ -3,7 +3,7 @@ version: "3.8"
 services:
   agent:
     build: .
-    container_name: nahida-agent
+    container_name: xiaoda-agent
     ports:
       - "${WEBUI_PORT:-8080}:8080"
     volumes:

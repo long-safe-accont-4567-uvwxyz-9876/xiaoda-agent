@@ -1,25 +1,25 @@
 <#
 .SYNOPSIS
-    Installs or uninstalls nahida-agent on Windows.
+    Installs or uninstalls xiaoda-agent on Windows.
 
 .DESCRIPTION
     Creates a Start Menu shortcut, adds the install directory to the
     user-level PATH, and optionally removes them with -Uninstall.
 
 .PARAMETER InstallPath
-    Directory where nahida-agent is installed.
-    Default: $env:LOCALAPPDATA\nahida-agent
+    Directory where xiaoda-agent is installed.
+    Default: $env:LOCALAPPDATA\xiaoda-agent
 
 .PARAMETER Uninstall
     Switch to remove shortcuts and PATH entry instead of installing.
 
 .EXAMPLE
     .\install-windows.ps1
-    Installs nahida-agent with default settings.
+    Installs xiaoda-agent with default settings.
 
 .EXAMPLE
-    .\install-windows.ps1 -InstallPath "C:\Tools\nahida-agent"
-    Installs nahida-agent from a custom directory.
+    .\install-windows.ps1 -InstallPath "C:\Tools\xiaoda-agent"
+    Installs xiaoda-agent from a custom directory.
 
 .EXAMPLE
     .\install-windows.ps1 -Uninstall
@@ -27,7 +27,7 @@
 #>
 
 param(
-    [string]$InstallPath = "$env:LOCALAPPDATA\nahida-agent",
+    [string]$InstallPath = "$env:LOCALAPPDATA\xiaoda-agent",
     [switch]$Uninstall
 )
 
@@ -92,7 +92,7 @@ if ($Uninstall) {
 
     # Remove Start Menu shortcut
     $startMenuDir = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
-    $shortcutFile = "$startMenuDir\nahida-agent.lnk"
+    $shortcutFile = "$startMenuDir\xiaoda-agent.lnk"
     if (Test-Path $shortcutFile) {
         Remove-Item $shortcutFile -Force
         Write-Host "  [OK]   Removed shortcut: $shortcutFile" -ForegroundColor Green
@@ -120,7 +120,7 @@ Write-Host "  ================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Verify executable exists
-$exePath = Join-Path $InstallPath "dist\nahida-agent\nahida-agent.exe"
+$exePath = Join-Path $InstallPath "dist\xiaoda-agent\xiaoda-agent.exe"
 if (-not (Test-Path $exePath)) {
     Write-Host "  [WARN] Executable not found at: $exePath" -ForegroundColor Yellow
     Write-Host "         Installation will continue, but you may need to build first." -ForegroundColor Yellow
@@ -129,7 +129,7 @@ if (-not (Test-Path $exePath)) {
 
 # Create Start Menu shortcut
 $startMenuDir = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
-$shortcutPath = "$startMenuDir\nahida-agent.lnk"
+$shortcutPath = "$startMenuDir\xiaoda-agent.lnk"
 
 if (Test-Path $exePath) {
     Create-Shortcut -TargetExe $exePath -ShortcutPath $shortcutPath -Description "Nahida Agent"
@@ -152,9 +152,9 @@ Write-Host "  Executable   : $exePath"
 Write-Host "  Shortcut     : $shortcutPath"
 Write-Host "  PATH updated : Yes (user-level)"
 Write-Host ""
-Write-Host "  To start nahida-agent, open a NEW terminal and run:"
-Write-Host "    nahida-agent.exe          (CLI mode)"
-Write-Host "    nahida-agent.exe --web    (Web UI mode)"
+Write-Host "  To start xiaoda-agent, open a NEW terminal and run:"
+Write-Host "    xiaoda-agent.exe          (CLI mode)"
+Write-Host "    xiaoda-agent.exe --web    (Web UI mode)"
 Write-Host ""
 Write-Host "  Or use the Start Menu shortcut."
 Write-Host ""

@@ -9,7 +9,7 @@ setlocal enabledelayedexpansion
 if defined GITHUB_REPO (
     set "REPO=%GITHUB_REPO%"
 ) else (
-    set "REPO=nahida-agent/nahida-agent"
+    set "REPO=xiaoda-agent/xiaoda-agent"
 )
 set "INSTALL_DIR=%~dp0.."
 set "VERSION_FILE=%INSTALL_DIR%\.version"
@@ -44,7 +44,7 @@ powershell -NoProfile -Command ^
     "  $tmp = [System.IO.Path]::GetTempPath() + '\' + $asset.name; " ^
     "  Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmp -TimeoutSec 120; " ^
     "  Write-Host '  Download complete, extracting...'; " ^
-    "  $extractDir = [System.IO.Path]::GetTempPath() + '\nahida-agent-update'; " ^
+    "  $extractDir = [System.IO.Path]::GetTempPath() + '\xiaoda-agent-update'; " ^
     "  if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }; " ^
     "  New-Item -ItemType Directory -Path $extractDir | Out-Null; " ^
     "  tar xzf $tmp -C $extractDir; " ^

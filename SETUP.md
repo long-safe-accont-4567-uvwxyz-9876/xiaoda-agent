@@ -8,8 +8,8 @@
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/long-safe-accont-4567-uvwxyz-9876/nahida-agent.git
-cd nahida-agent
+git clone https://github.com/long-safe-accont-4567-uvwxyz-9876/xiaoda-agent.git
+cd xiaoda-agent
 
 # 2. 配置环境变量
 cp .env.example .env
@@ -162,8 +162,8 @@ docker compose up -d --build
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/long-safe-accont-4567-uvwxyz-9876/nahida-agent.git
-cd nahida-agent
+git clone https://github.com/long-safe-accont-4567-uvwxyz-9876/xiaoda-agent.git
+cd xiaoda-agent
 
 # 2. 创建虚拟环境
 python -m venv .venv

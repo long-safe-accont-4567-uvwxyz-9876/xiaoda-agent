@@ -33,17 +33,17 @@ if exist "%~dp0auto-update.bat" (
 )
 
 :: Find the executable
-:: Onedir build: exe is either in same dir as this bat, or in dist\nahida-agent\
+:: Onedir build: exe is either in same dir as this bat, or in dist\xiaoda-agent\
 set "EXE_PATH="
-if exist "%~dp0nahida-agent.exe" (
-    set "EXE_PATH=%~dp0nahida-agent.exe"
-) else if exist "%~dp0dist\nahida-agent\nahida-agent.exe" (
-    set "EXE_PATH=%~dp0dist\nahida-agent\nahida-agent.exe"
+if exist "%~dp0xiaoda-agent.exe" (
+    set "EXE_PATH=%~dp0xiaoda-agent.exe"
+) else if exist "%~dp0dist\xiaoda-agent\xiaoda-agent.exe" (
+    set "EXE_PATH=%~dp0dist\xiaoda-agent\xiaoda-agent.exe"
 ) else (
-    echo   [ERROR] nahida-agent.exe not found!
+    echo   [ERROR] xiaoda-agent.exe not found!
     echo   Looked in:
-    echo     %~dp0nahida-agent.exe
-    echo     %~dp0dist\nahida-agent\nahida-agent.exe
+    echo     %~dp0xiaoda-agent.exe
+    echo     %~dp0dist\xiaoda-agent\xiaoda-agent.exe
     echo.
     echo   Please check the installation path.
     goto :pause_exit

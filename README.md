@@ -313,7 +313,7 @@ Metrics.histogram("tool.exec.duration", t)  # 直方图
 ## 项目结构
 
 ```
-nahida-agent/
+xiaoda-agent/
 ├── agent.py                  # 主入口（Web/CLI 模式切换）
 ├── agent_core.py             # AgentCore 核心编排器
 ├── core/                     # AgentCore 子模块
@@ -438,7 +438,7 @@ nahida-agent/
 ├── agent_context.py          # 对话上下文管理
 ├── Dockerfile                # Docker 镜像定义
 ├── docker-compose.yml        # 一键编排
-├── nahida-agent.spec         # PyInstaller 打包定义
+├── xiaoda-agent.spec         # PyInstaller 打包定义
 ├── requirements.txt          # Python 依赖
 ├── .env.example              # 环境变量模板
 ├── .github/workflows/        # CI/CD（构建发布）
@@ -452,8 +452,8 @@ nahida-agent/
 ### Docker 一键部署（推荐）
 
 ```bash
-git clone https://github.com/long-safe-accont-4567-uvwxyz-9876/nahida-agent.git
-cd nahida-agent
+git clone https://github.com/long-safe-accont-4567-uvwxyz-9876/xiaoda-agent.git
+cd xiaoda-agent
 cp .env.example .env
 # 编辑 .env 填写 API 密钥
 docker compose up -d
@@ -463,9 +463,9 @@ docker compose up -d
 
 ### 安装包部署
 
-从 [GitHub Releases](https://github.com/long-safe-accont-4567-uvwxyz-9876/nahida-agent/releases) 下载对应平台的安装包：
+从 [GitHub Releases](https://github.com/long-safe-accont-4567-uvwxyz-9876/xiaoda-agent/releases) 下载对应平台的安装包：
 
-- **Linux**：`.run` 自解压安装器，`sudo bash nahida-agent-installer.run`
+- **Linux**：`.run` 自解压安装器，`sudo bash xiaoda-agent-installer.run`
 - **Windows**：`.exe` NSIS 安装包，双击运行
 
 安装后通过 WebUI Setup 向导配置 API Key（支持在线验证）。

@@ -58,8 +58,8 @@
 ### 2.1 克隆项目
 
 ```bash
-git clone <repo-url> nahida-agent
-cd nahida-agent
+git clone <repo-url> xiaoda-agent
+cd xiaoda-agent
 ```
 
 ### 2.2 安装 Python 依赖

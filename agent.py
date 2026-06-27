@@ -20,7 +20,7 @@ except Exception as e:
     # dotenv 加载失败时写日志，防止 exe 静默崩溃
     import traceback, pathlib
     try:
-        log_dir = pathlib.Path(os.environ.get("APPDATA", ".")) / "nahida-agent"
+        log_dir = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent"
         log_dir.mkdir(parents=True, exist_ok=True)
         (log_dir / "crash.log").write_text(
             f"Failed to load dotenv:\n{traceback.format_exc()}", encoding="utf-8"
@@ -133,7 +133,7 @@ def _run_web(host: str, port: int):
         from web.server import app
     except Exception as e:
         import traceback, pathlib
-        log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "nahida-agent" / "crash.log"
+        log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent" / "crash.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(f"Failed to import web.server:\n{traceback.format_exc()}", encoding="utf-8")
         raise
@@ -195,7 +195,7 @@ def _run_desktop(host: str, port: int):
         from web.server import app
     except Exception as e:
         import traceback, pathlib
-        log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "nahida-agent" / "crash.log"
+        log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent" / "crash.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(f"Failed to import web.server:\n{traceback.format_exc()}", encoding="utf-8")
         raise
@@ -273,10 +273,10 @@ if __name__ == "__main__":
         # 顶层异常兜底：写日志文件，防止 exe 静默崩溃
         import traceback, pathlib
         try:
-            log_dir = pathlib.Path(os.environ.get("APPDATA", ".")) / "nahida-agent"
+            log_dir = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent"
             log_dir.mkdir(parents=True, exist_ok=True)
             (log_dir / "crash.log").write_text(
-                f"nahida-agent crash:\n{traceback.format_exc()}", encoding="utf-8"
+                f"xiaoda-agent crash:\n{traceback.format_exc()}", encoding="utf-8"
             )
         except Exception:
             pass

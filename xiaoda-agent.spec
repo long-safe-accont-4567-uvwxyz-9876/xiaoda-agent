@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec file for nahida-agent
+PyInstaller spec file for xiaoda-agent
 Multi-agent AI assistant with QQ bot, web UI, and CLI interfaces.
 """
 
@@ -354,7 +354,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='nahida-agent',
+    name='xiaoda-agent',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -378,5 +378,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='nahida-agent',
+    name='xiaoda-agent',
 )

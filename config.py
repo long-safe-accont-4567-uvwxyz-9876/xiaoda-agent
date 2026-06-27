@@ -138,7 +138,7 @@ def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
     except (OSError, PermissionError):
         # 连 fallback 都失败，使用临时目录
         import tempfile
-        fallback_path = Path(tempfile.gettempdir()) / "nahida-agent" / fallback_path.name
+        fallback_path = Path(tempfile.gettempdir()) / "xiaoda-agent" / fallback_path.name
         fallback_path.mkdir(parents=True, exist_ok=True)
     return fallback_path
 

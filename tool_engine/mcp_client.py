@@ -154,7 +154,7 @@ class MCPClient:
                 "params": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {},
-                    "clientInfo": {"name": "nahida-agent", "version": "1.0.0"},
+                    "clientInfo": {"name": "xiaoda-agent", "version": "1.0.0"},
                 },
             }, timeout=60.0)
 

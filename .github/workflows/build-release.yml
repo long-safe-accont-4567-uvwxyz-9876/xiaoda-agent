@@ -21,10 +21,10 @@ jobs:
         include:
           - runner: windows-latest
             platform: windows-x64
-            artifact: nahida-agent-windows-x64
+            artifact: xiaoda-agent-windows-x64
           - runner: ubuntu-latest
             platform: linux-x86_64
-            artifact: nahida-agent-linux-x86_64
+            artifact: xiaoda-agent-linux-x86_64
 
     runs-on: ${{ matrix.runner }}
 
@@ -182,7 +182,7 @@ jobs:
           echo "Sanitized developer PII from config/workspace/"
 
       - name: Build with PyInstaller
-        run: pyinstaller nahida-agent.spec --clean --noconfirm
+        run: pyinstaller xiaoda-agent.spec --clean --noconfirm
         env:
           LC_ALL: C.UTF-8
           LANG: C.UTF-8
@@ -194,9 +194,9 @@ jobs:
           PILK_FOUND=0
           # Windows: _pilk.cp311-win_amd64.pyd
           # Linux: _pilk.cpython-311-*.so
-          if find dist/nahida-agent -name "_pilk*" -print -quit 2>/dev/null | grep -q .; then
+          if find dist/xiaoda-agent -name "_pilk*" -print -quit 2>/dev/null | grep -q .; then
             echo "OK: pilk C extension found:"
-            find dist/nahida-agent -name "_pilk*" -exec ls -lh {} \;
+            find dist/xiaoda-agent -name "_pilk*" -exec ls -lh {} \;
             PILK_FOUND=1
           fi
           if [ $PILK_FOUND -eq 0 ]; then
@@ -213,9 +213,9 @@ jobs:
           PIL_FOUND=0
           # Windows: _imaging.cp311-win_amd64.pyd
           # Linux: _imaging.cpython-311-*.so
-          if find dist/nahida-agent -name "_imaging*" -print -quit 2>/dev/null | grep -q .; then
+          if find dist/xiaoda-agent -name "_imaging*" -print -quit 2>/dev/null | grep -q .; then
             echo "OK: Pillow _imaging C extension found:"
-            find dist/nahida-agent -name "_imaging*" -exec ls -lh {} \;
+            find dist/xiaoda-agent -name "_imaging*" -exec ls -lh {} \;
             PIL_FOUND=1
           fi
           if [ $PIL_FOUND -eq 0 ]; then
@@ -229,36 +229,36 @@ jobs:
         shell: bash
         run: |
           # 确保 assets 资源（stickers/voice_refs）进入安装包
-          mkdir -p dist/nahida-agent/assets
-          cp -r assets/* dist/nahida-agent/assets/ 2>/dev/null || true
+          mkdir -p dist/xiaoda-agent/assets
+          cp -r assets/* dist/xiaoda-agent/assets/ 2>/dev/null || true
           # 验证关键资源文件存在
-          echo "=== dist/nahida-agent/assets 内容 ==="
-          find dist/nahida-agent/assets -type f | head -20
+          echo "=== dist/xiaoda-agent/assets 内容 ==="
+          find dist/xiaoda-agent/assets -type f | head -20
           echo "=== 资源文件计数 ==="
-          echo "voice_refs 文件数: $(find dist/nahida-agent/assets/voice_refs -type f 2>/dev/null | wc -l)"
-          echo "stickers 文件数: $(find dist/nahida-agent/assets/stickers -type f 2>/dev/null | wc -l)"
+          echo "voice_refs 文件数: $(find dist/xiaoda-agent/assets/voice_refs -type f 2>/dev/null | wc -l)"
+          echo "stickers 文件数: $(find dist/xiaoda-agent/assets/stickers -type f 2>/dev/null | wc -l)"
           # 关键文件必须存在
-          test -f dist/nahida-agent/assets/voice_refs/keli.mp3 || (echo "ERROR: keli.mp3 missing!" && exit 1)
-          test -f dist/nahida-agent/assets/voice_refs/nahida.wav || (echo "ERROR: nahida.wav missing!" && exit 1)
-          test -f dist/nahida-agent/assets/voice_refs/nahida_hq.wav || (echo "ERROR: nahida_hq.wav missing!" && exit 1)
+          test -f dist/xiaoda-agent/assets/voice_refs/keli.mp3 || (echo "ERROR: keli.mp3 missing!" && exit 1)
+          test -f dist/xiaoda-agent/assets/voice_refs/nahida.wav || (echo "ERROR: nahida.wav missing!" && exit 1)
+          test -f dist/xiaoda-agent/assets/voice_refs/nahida_hq.wav || (echo "ERROR: nahida_hq.wav missing!" && exit 1)
           echo "Assets bundled OK"
 
       - name: Verify assets in build output
         shell: bash
         continue-on-error: true
         run: |
-          echo "=== dist/nahida-agent/assets/ file count and total size ==="
-          ASSETS_COUNT=$(find dist/nahida-agent/assets/ -type f 2>/dev/null | wc -l)
+          echo "=== dist/xiaoda-agent/assets/ file count and total size ==="
+          ASSETS_COUNT=$(find dist/xiaoda-agent/assets/ -type f 2>/dev/null | wc -l)
           echo "Files in dist assets: $ASSETS_COUNT"
-          du -sh dist/nahida-agent/assets/ 2>/dev/null || echo "dist/nahida-agent/assets/ not found"
-          du -sh dist/nahida-agent/assets/stickers/ 2>/dev/null || echo "stickers dir not found"
-          du -sh dist/nahida-agent/assets/voice_refs/ 2>/dev/null || echo "voice_refs dir not found"
+          du -sh dist/xiaoda-agent/assets/ 2>/dev/null || echo "dist/xiaoda-agent/assets/ not found"
+          du -sh dist/xiaoda-agent/assets/stickers/ 2>/dev/null || echo "stickers dir not found"
+          du -sh dist/xiaoda-agent/assets/voice_refs/ 2>/dev/null || echo "voice_refs dir not found"
           echo "=== Sample files in dist ==="
-          find dist/nahida-agent/assets/ -type f 2>/dev/null | head -10
+          find dist/xiaoda-agent/assets/ -type f 2>/dev/null | head -10
           echo "=== Total bytes in dist assets ==="
-          find dist/nahida-agent/assets/ -type f -exec stat --format='%s' {} + 2>/dev/null | awk '{s+=$1} END {print s+0}'
-          echo "=== dist/nahida-agent/ top-level dirs ==="
-          ls -la dist/nahida-agent/ 2>/dev/null | head -30
+          find dist/xiaoda-agent/assets/ -type f -exec stat --format='%s' {} + 2>/dev/null | awk '{s+=$1} END {print s+0}'
+          echo "=== dist/xiaoda-agent/ top-level dirs ==="
+          ls -la dist/xiaoda-agent/ 2>/dev/null | head -30
           if [ "$ASSETS_COUNT" -lt 50 ]; then
             echo "WARNING: Expected 50+ files in dist assets, got $ASSETS_COUNT"
           fi
@@ -267,10 +267,10 @@ jobs:
         shell: bash
         run: |
           # 强制删除构建产物中的敏感文件（双重保险）
-          find dist/nahida-agent -name ".env" -not -name ".env.example" -delete 2>/dev/null || true
-          find dist/nahida-agent -name "webui_overrides.json" -delete 2>/dev/null || true
-          find dist/nahida-agent -name "*.key" -delete 2>/dev/null || true
-          find dist/nahida-agent -type d -name "credentials" -exec rm -rf {} + 2>/dev/null || true
+          find dist/xiaoda-agent -name ".env" -not -name ".env.example" -delete 2>/dev/null || true
+          find dist/xiaoda-agent -name "webui_overrides.json" -delete 2>/dev/null || true
+          find dist/xiaoda-agent -name "*.key" -delete 2>/dev/null || true
+          find dist/xiaoda-agent -type d -name "credentials" -exec rm -rf {} + 2>/dev/null || true
           echo "Stripped secrets from build output"
 
       - name: Verify no secrets in build
@@ -279,48 +279,48 @@ jobs:
           echo "=== Scanning for leaked secrets ==="
           FOUND=0
           # Check for .env files (not .env.example)
-          if find dist/nahida-agent -name ".env" -not -name ".env.example" -print -quit 2>/dev/null | grep -q .; then
+          if find dist/xiaoda-agent -name ".env" -not -name ".env.example" -print -quit 2>/dev/null | grep -q .; then
             echo "FOUND: .env file"; FOUND=1
           fi
           # Check for .key files
-          if find dist/nahida-agent -name "*.key" -print -quit 2>/dev/null | grep -q .; then
+          if find dist/xiaoda-agent -name "*.key" -print -quit 2>/dev/null | grep -q .; then
             echo "FOUND: .key file"; FOUND=1
           fi
           # Check for credentials directory
-          if find dist/nahida-agent -type d -name "credentials" -print -quit 2>/dev/null | grep -q .; then
+          if find dist/xiaoda-agent -type d -name "credentials" -print -quit 2>/dev/null | grep -q .; then
             echo "FOUND: credentials dir"; FOUND=1
           fi
           # Check for webui_overrides.json
-          if find dist/nahida-agent -name "webui_overrides.json" -print -quit 2>/dev/null | grep -q .; then
+          if find dist/xiaoda-agent -name "webui_overrides.json" -print -quit 2>/dev/null | grep -q .; then
             echo "FOUND: webui_overrides.json"; FOUND=1
           fi
           # Check for real API key patterns (sk- followed by 20+ chars, not in .env.example)
-          if grep -r "sk-[a-zA-Z0-9]\{20,\}" dist/nahida-agent/ --include="*.json" --include="*.env" --include="*.key" -l 2>/dev/null | grep -v ".env.example" | grep -q .; then
+          if grep -r "sk-[a-zA-Z0-9]\{20,\}" dist/xiaoda-agent/ --include="*.json" --include="*.env" --include="*.key" -l 2>/dev/null | grep -v ".env.example" | grep -q .; then
             echo "FOUND: API key pattern"; FOUND=1
           fi
           # === 新增：开发者个人信息扫描 ===
           # Check for Chinese name (developer PII)
-          if grep -rI "刘润飞" dist/nahida-agent/ 2>/dev/null; then
+          if grep -rI "刘润飞" dist/xiaoda-agent/ 2>/dev/null; then
             echo "❌ 发现敏感信息：中文姓名"
             exit 1
           fi
           # Check for GitHub username (developer PII)
-          if grep -rI "liu-runfei" dist/nahida-agent/ 2>/dev/null; then
+          if grep -rI "liu-runfei" dist/xiaoda-agent/ 2>/dev/null; then
             echo "❌ 发现敏感信息：GitHub 用户名"
             exit 1
           fi
           # Check for local absolute paths (developer PII)
-          if grep -rI "/home/orangepi" dist/nahida-agent/ 2>/dev/null; then
+          if grep -rI "/home/orangepi" dist/xiaoda-agent/ 2>/dev/null; then
             echo "❌ 发现敏感信息：本地路径 /home/orangepi"
             exit 1
           fi
-          if grep -rI "/media/orangepi" dist/nahida-agent/ 2>/dev/null; then
+          if grep -rI "/media/orangepi" dist/xiaoda-agent/ 2>/dev/null; then
             echo "❌ 发现敏感信息：本地路径 /media/orangepi"
             exit 1
           fi
           # Check for workspace personal files that should be excluded
           for f in USER.md SOUL.md IDENTITY.md MEMORY.md; do
-            if find dist/nahida-agent -name "$f" -not -path "*/node_modules/*" | grep -q .; then
+            if find dist/xiaoda-agent -name "$f" -not -path "*/node_modules/*" | grep -q .; then
               echo "❌ 发现应被排除的文件：$f"
               exit 1
             fi
@@ -353,12 +353,12 @@ jobs:
           $version = "${{ steps.version.outputs.version }}"
           $ErrorActionPreference = "Continue"
 
-          Set-Content -Path "dist/nahida-agent/.version" -Value $version -NoNewline
-          New-Item -Path "dist/nahida-agent/.auto_update" -ItemType File -Force
-          Copy-Item "scripts/start-windows.bat" "dist/nahida-agent/"
-          Copy-Item "scripts/auto-update.bat" "dist/nahida-agent/"
-          Copy-Item "scripts/open-browser.ps1" "dist/nahida-agent/"
-          Copy-Item "assets/nahida-icon.ico" "dist/nahida-agent/nahida-icon.ico"
+          Set-Content -Path "dist/xiaoda-agent/.version" -Value $version -NoNewline
+          New-Item -Path "dist/xiaoda-agent/.auto_update" -ItemType File -Force
+          Copy-Item "scripts/start-windows.bat" "dist/xiaoda-agent/"
+          Copy-Item "scripts/auto-update.bat" "dist/xiaoda-agent/"
+          Copy-Item "scripts/open-browser.ps1" "dist/xiaoda-agent/"
+          Copy-Item "assets/nahida-icon.ico" "dist/xiaoda-agent/nahida-icon.ico"
 
           choco install nsis -y --no-progress
           $nsisPath = "C:\Program Files (x86)\NSIS\makensis.exe"
@@ -376,45 +376,45 @@ jobs:
             & $nsisPath installer.nsi
             if ($LASTEXITCODE -ne 0) {
               Write-Host "NSIS build failed, falling back to ZIP..."
-              Compress-Archive -Path "dist\nahida-agent" -DestinationPath "nahida-agent-windows-x64-v${version}.zip"
+              Compress-Archive -Path "dist\xiaoda-agent" -DestinationPath "xiaoda-agent-windows-x64-v${version}.zip"
             } else {
-              $installerPath = "nahida-agent-windows-x64-v${version}-setup.exe"
+              $installerPath = "xiaoda-agent-windows-x64-v${version}-setup.exe"
               if (Test-Path $installerPath) {
                 Write-Host "Installer created: $installerPath ($([math]::Round((Get-Item $installerPath).Length / 1MB, 1)) MB)"
               } else {
                 Write-Host "Installer not found, falling back to ZIP..."
-                Compress-Archive -Path "dist\nahida-agent" -DestinationPath "nahida-agent-windows-x64-v${version}.zip"
+                Compress-Archive -Path "dist\xiaoda-agent" -DestinationPath "xiaoda-agent-windows-x64-v${version}.zip"
               }
             }
           } else {
             Write-Host "NSIS not found, creating ZIP..."
-            Compress-Archive -Path "dist\nahida-agent" -DestinationPath "nahida-agent-windows-x64-v${version}.zip"
+            Compress-Archive -Path "dist\xiaoda-agent" -DestinationPath "xiaoda-agent-windows-x64-v${version}.zip"
           }
 
           # Create tar.gz for auto-update (Windows 10 1803+ includes tar)
           Write-Host "Creating tar.gz for auto-update..."
-          tar -czf "nahida-agent-windows-x64-v${version}.tar.gz" -C dist nahida-agent
+          tar -czf "xiaoda-agent-windows-x64-v${version}.tar.gz" -C dist xiaoda-agent
 
       - name: Package (Linux x86_64)
         if: matrix.platform == 'linux-x86_64'
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          echo -n "$VERSION" > dist/nahida-agent/.version
-          touch dist/nahida-agent/.auto_update
-          mkdir -p dist/nahida-agent/scripts
-          cp scripts/auto-update.sh dist/nahida-agent/scripts/
-          chmod +x dist/nahida-agent/scripts/auto-update.sh
-          tar -czf nahida-agent-linux-x86_64-v${VERSION}.tar.gz -C dist nahida-agent
+          echo -n "$VERSION" > dist/xiaoda-agent/.version
+          touch dist/xiaoda-agent/.auto_update
+          mkdir -p dist/xiaoda-agent/scripts
+          cp scripts/auto-update.sh dist/xiaoda-agent/scripts/
+          chmod +x dist/xiaoda-agent/scripts/auto-update.sh
+          tar -czf xiaoda-agent-linux-x86_64-v${VERSION}.tar.gz -C dist xiaoda-agent
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: |
-            nahida-agent-windows-x64-*-setup.exe
-            nahida-agent-windows-x64-*.zip
-            nahida-agent-windows-x64-*.tar.gz
-            nahida-agent-linux-x86_64-*.tar.gz
+            xiaoda-agent-windows-x64-*-setup.exe
+            xiaoda-agent-windows-x64-*.zip
+            xiaoda-agent-windows-x64-*.tar.gz
+            xiaoda-agent-linux-x86_64-*.tar.gz
           if-no-files-found: warn
 
   docker:
@@ -499,7 +499,7 @@ jobs:
           tag_name: v${{ steps.version.outputs.version }}
           name: Release v${{ steps.version.outputs.version }}
           files: |
-            artifacts/nahida-agent-windows-x64-*-setup.exe
-            artifacts/nahida-agent-windows-x64-*.zip
-            artifacts/nahida-agent-windows-x64-*.tar.gz
-            artifacts/nahida-agent-linux-x86_64-*.tar.gz
+            artifacts/xiaoda-agent-windows-x64-*-setup.exe
+            artifacts/xiaoda-agent-windows-x64-*.zip
+            artifacts/xiaoda-agent-windows-x64-*.tar.gz
+            artifacts/xiaoda-agent-linux-x86_64-*.tar.gz

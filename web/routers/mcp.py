@@ -64,10 +64,10 @@ def _resolve_command_path(command: str) -> str:
 # 路径占位符 → 实际路径的映射（创建 MCP Server 时自动替换）
 _PATH_PLACEHOLDERS = {
     "/path/to/dir": str(Path.home()),
-    "/path/to/db": str(Path.home() / "nahida-agent" / "data.db"),
-    "/path/to/db.sqlite": str(Path.home() / "nahida-agent" / "data.db"),
+    "/path/to/db": str(Path.home() / "xiaoda-agent" / "data.db"),
+    "/path/to/db.sqlite": str(Path.home() / "xiaoda-agent" / "data.db"),
     "选择目录": str(Path.home()),
-    "选择数据库路径": str(Path.home() / "nahida-agent" / "data.db"),
+    "选择数据库路径": str(Path.home() / "xiaoda-agent" / "data.db"),
 }
 
 

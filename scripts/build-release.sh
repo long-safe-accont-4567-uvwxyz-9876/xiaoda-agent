@@ -68,10 +68,10 @@ _create_windows_zip() {
     local dist_dir="$1" output_dir="$2" zip_name="$3"
     if command -v zip &>/dev/null; then
         cd "$PROJECT_ROOT/dist"
-        zip -r "$output_dir/$zip_name" nahida-agent/
+        zip -r "$output_dir/$zip_name" xiaoda-agent/
     elif command -v 7z &>/dev/null; then
         cd "$PROJECT_ROOT/dist"
-        7z a "$output_dir/$zip_name" nahida-agent/
+        7z a "$output_dir/$zip_name" xiaoda-agent/
     else
         die "Neither 'zip' nor '7z' found. Please install one to create Windows packages."
     fi
@@ -95,7 +95,7 @@ do_build() {
     echo ""
 
     # --- Check spec file exists ------------------------------------------------
-    local spec_file="$PROJECT_ROOT/nahida-agent.spec"
+    local spec_file="$PROJECT_ROOT/xiaoda-agent.spec"
     if [ ! -f "$spec_file" ]; then
         die "Spec file not found: $spec_file"
     fi
@@ -103,14 +103,14 @@ do_build() {
     # --- Run PyInstaller -------------------------------------------------------
     info "Running PyInstaller..."
     cd "$PROJECT_ROOT"
-    pyinstaller nahida-agent.spec --clean --noconfirm
+    pyinstaller xiaoda-agent.spec --clean --noconfirm
     if [ $? -ne 0 ]; then
         die "PyInstaller build failed."
     fi
     green "  PyInstaller build completed."
 
     # --- Verify the output directory -------------------------------------------
-    local dist_dir="$PROJECT_ROOT/dist/nahida-agent"
+    local dist_dir="$PROJECT_ROOT/dist/xiaoda-agent"
     if [ ! -d "$dist_dir" ]; then
         die "Expected output directory not found: $dist_dir"
     fi
@@ -124,7 +124,7 @@ do_build() {
     local output_dir="$PROJECT_ROOT/dist/release"
     mkdir -p "$output_dir"
 
-    local pkg_name="nahida-agent-${os}-${arch}-v${version}"
+    local pkg_name="xiaoda-agent-${os}-${arch}-v${version}"
 
     cd "$PROJECT_ROOT/dist"
 
@@ -134,7 +134,7 @@ do_build() {
         local run_name="${pkg_name}.run"
 
         info "Creating tar.gz archive..."
-        tar czf "$tar_name" nahida-agent
+        tar czf "$tar_name" xiaoda-agent
 
         info "Creating self-extracting installer..."
         cat "$SCRIPT_DIR/install-linux.sh" "$tar_name" > "$output_dir/$run_name"
@@ -200,9 +200,9 @@ Section "MainSection" SEC01
   SetOverwrite on
   File /r "$dist_dir\\*.*"
 
-  CreateShortCut "\$DESKTOP\\纳西妲Agent.lnk" "\$INSTDIR\\start-windows.bat" "" "\$INSTDIR\\nahida-agent.exe" 0
+  CreateShortCut "\$DESKTOP\\小妲Agent.lnk" "\$INSTDIR\\start-windows.bat" "" "\$INSTDIR\\xiaoda-agent.exe" 0
   CreateDirectory "\$SMPROGRAMS\\\${PRODUCT_NAME}"
-  CreateShortCut "\$SMPROGRAMS\\\${PRODUCT_NAME}\\纳西妲Agent.lnk" "\$INSTDIR\\start-windows.bat" "" "\$INSTDIR\\nahida-agent.exe" 0
+  CreateShortCut "\$SMPROGRAMS\\\${PRODUCT_NAME}\\小妲Agent.lnk" "\$INSTDIR\\start-windows.bat" "" "\$INSTDIR\\xiaoda-agent.exe" 0
   CreateShortCut "\$SMPROGRAMS\\\${PRODUCT_NAME}\\卸载.lnk" "\$INSTDIR\\uninstall.exe"
 SectionEnd
 
@@ -217,7 +217,7 @@ SectionEnd
 
 Section Uninstall
   RMDir /r "\$INSTDIR"
-  Delete "\$DESKTOP\\纳西妲Agent.lnk"
+  Delete "\$DESKTOP\\小妲Agent.lnk"
   RMDir /r "\$SMPROGRAMS\\\${PRODUCT_NAME}"
   DeleteRegKey HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\\${PRODUCT_NAME}"
   DeleteRegKey HKLM "Software\\\${PRODUCT_NAME}"
@@ -243,7 +243,7 @@ NSIS_EOF
         local tar_name="${pkg_name}.tar.gz"
 
         info "Creating tar.gz archive..."
-        tar czf "$output_dir/$tar_name" nahida-agent
+        tar czf "$output_dir/$tar_name" xiaoda-agent
 
         green "  Package created: $output_dir/$tar_name"
     fi

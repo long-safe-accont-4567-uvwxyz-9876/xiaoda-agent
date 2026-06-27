@@ -5,7 +5,7 @@
 # =============================================================================
 set -euo pipefail
 
-REPO="${GITHUB_REPO:-nahida-agent/nahida-agent}"
+REPO="${GITHUB_REPO:-xiaoda-agent/xiaoda-agent}"
 GITHUB_API="https://api.github.com/repos/${REPO}"
 INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION_FILE="${INSTALL_DIR}/.version"
@@ -69,7 +69,7 @@ else
 fi
 
 # 查找下载 URL
-PATTERN="nahida-agent-${PLATFORM}-v${LATEST_VERSION}.${EXT}"
+PATTERN="xiaoda-agent-${PLATFORM}-v${LATEST_VERSION}.${EXT}"
 DOWNLOAD_URL=$(echo "$LATEST_JSON" | grep -o "\"browser_download_url\":\s*\"[^\"]*${PATTERN}[^\"]*\"" | sed -E 's/.*"browser_download_url":\s*"([^"]+)".*/\1/' | head -1)
 
 if [ -z "$DOWNLOAD_URL" ]; then
@@ -105,7 +105,7 @@ fi
 
 # 停止运行中的实例
 echo "  停止运行中的服务..."
-pkill -f "nahida-agent" 2>/dev/null || true
+pkill -f "xiaoda-agent" 2>/dev/null || true
 sleep 1
 
 # 备份关键文件（.env, config, credentials, data）
@@ -121,12 +121,12 @@ if [ "$EXT" = "tar.gz" ]; then
     mkdir -p "${TMP_DIR}/extract"
     tar xzf "${TMP_DIR}/${FILENAME}" -C "${TMP_DIR}/extract"
     # 将新文件复制到安装目录
-    cp -rf "${TMP_DIR}/extract/nahida-agent/"* "${INSTALL_DIR}/"
+    cp -rf "${TMP_DIR}/extract/xiaoda-agent/"* "${INSTALL_DIR}/"
 elif [ "$EXT" = "run" ]; then
     mkdir -p "${TMP_DIR}/extract"
     tar xzf "${TMP_DIR}/${FILENAME}" -C "${TMP_DIR}/extract"
     # 将新文件复制到安装目录
-    cp -rf "${TMP_DIR}/extract/nahida-agent/"* "${INSTALL_DIR}/"
+    cp -rf "${TMP_DIR}/extract/xiaoda-agent/"* "${INSTALL_DIR}/"
 fi
 
 # 恢复用户配置
