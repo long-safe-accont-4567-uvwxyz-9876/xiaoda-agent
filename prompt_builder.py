@@ -32,14 +32,26 @@ _SAFE_PROMPT_CACHE_TS: float = 0.0
 _stable_prompt_cache: dict = {}
 _stable_prompt_cache_mtimes: dict = None
 
-# ── 场景感知动态排序 ─────────────────────────────────────────
-# 每个模块独立缓存，按请求场景动态调整拼接顺序
-# 靠近末尾 = 靠近用户输入 = LLM 注意力最强
+# ── 场景感知动态排序 v2 ───────────────────────────────────────
+# 三层优化：加权混合检测 + 场景签名缓存 + 场景粘性
+# 核心目标：最小化 system prompt 变化次数 → 最大化 KV Cache 命中率
 _module_cache: dict[str, str] = {}
 _module_cache_mtimes: dict[str, float] = {}
 
+# 场景签名缓存：{排序签名元组: 拼接后的 prompt 字符串}
+# 不同输入只要产生相同模块排序 → 共享缓存 → KV Cache 命中
+_scene_prompt_cache: dict[tuple, str] = {}
+
+# 当前会话的场景签名（粘性：避免频繁切换）
+_current_scene_sig: tuple = ()
+# 场景切换阈值：新场景主导权重需超过此值才切换
+_SCENE_SWITCH_THRESHOLD: float = 0.6
+
+# 缓存统计（可观测性）
+_scene_cache_hits: int = 0
+_scene_cache_misses: int = 0
+
 # 优先级矩阵：分数越高越靠近用户输入（末尾）
-# 行 = 模块，列 = 场景
 import re as _re
 _MODULE_SCENE_PRIORITY: dict[str, dict[str, int]] = {
     "AGENTS.md":   {"default": 5, "greeting": 2, "task": 8, "emotional": 3, "identity": 4, "tool": 7},
@@ -69,15 +81,46 @@ _SCENE_KEYWORDS: dict[str, list[str]] = {
 
 
 def _classify_scene(user_input: str) -> str:
-    """轻量级场景分类——纯本地关键词匹配，不调 LLM，<0.01ms。"""
+    """向后兼容：返回主导场景名（单一字符串）。
+    内部使用 _classify_scene_blended 的结果，取权重最高的场景。
+    """
+    weights = _classify_scene_blended(user_input)
+    if not weights or weights.get("default", 0) == 1.0:
+        return "default"
+    return max(weights, key=weights.get)
+
+
+def _classify_scene_blended(user_input: str) -> dict[str, float]:
+    """加权多场景检测——返回 {scene: weight}，权重之和=1.0。
+
+    替代旧版硬匹配：不再只取第一个命中的场景，
+    而是检测所有场景信号并按命中数加权混合。
+    示例："好累啊，帮我查下天气" → {emotional: 0.5, tool: 0.5}
+    """
     clean = user_input.strip().lower()
     if not clean:
-        return "default"
+        return {"default": 1.0}
+    scores: dict[str, float] = {}
     for scene, keywords in _SCENE_KEYWORDS.items():
-        for kw in keywords:
-            if kw in clean:
-                return scene
-    return "default"
+        hits = sum(1 for kw in keywords if kw in clean)
+        if hits > 0:
+            scores[scene] = float(hits)
+    if not scores:
+        return {"default": 1.0}
+    total = sum(scores.values())
+    return {s: w / total for s, w in scores.items()}
+
+
+def _compute_scene_signature(weights: dict[str, float], module_names: list[str]) -> tuple:
+    """根据混合权重计算模块排序签名。
+
+    签名 = 排序后的模块名元组。不同输入只要产生相同排序 → 共享缓存。
+    """
+    def _blended_priority(name: str) -> float:
+        base = _MODULE_SCENE_PRIORITY.get(name, {})
+        return sum(w * base.get(s, base.get("default", 0)) for s, w in weights.items())
+
+    return tuple(sorted(module_names, key=_blended_priority))
 
 
 def _get_stable_section_mtimes() -> dict[str, float]:
@@ -231,30 +274,66 @@ def _load_cached_modules(address_term: str) -> dict[str, str]:
 
 
 def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸") -> str:
-    """场景感知的动态排序系统提示词构建器。
+    """场景感知的动态排序系统提示词构建器 v2。
 
-    核心思路：不同场景下，不同 MD 文件的重要性不同。
-    靠近末尾 = 靠近用户输入 = LLM 注意力最强。
-    根据用户输入自动检测场景，将最相关的模块排到末尾。
+    三层优化：
+    1. 加权多场景检测 —— 不再硬匹配单一场景，而是混合多个场景信号
+    2. 场景签名缓存 —— 相同排序的 prompt 只拼接一次，后续直接返回（KV Cache 友好）
+    3. 场景粘性 —— 新场景主导权重不足时保持当前场景，避免频繁切换
 
     Returns:
         按场景优先级排序后的完整 system prompt 字符串
     """
+    global _current_scene_sig, _scene_cache_hits, _scene_cache_misses
+
     modules = _load_cached_modules(address_term)
     if not modules:
         return ""
 
-    scene = _classify_scene(user_input)
+    # Layer 1: 加权多场景检测
+    weights = _classify_scene_blended(user_input)
+    new_sig = _compute_scene_signature(weights, list(modules.keys()))
 
-    # 按优先级排序：分数低的在前（远离用户输入），分数高的在后（靠近用户输入）
-    def _priority(name: str) -> int:
-        scene_map = _MODULE_SCENE_PRIORITY.get(name, {"default": 0})
-        return scene_map.get(scene, scene_map.get("default", 0))
+    # Layer 3: 场景粘性 — 新场景主导权重不足时保持当前场景
+    max_weight = max(weights.values()) if weights else 0
+    if _current_scene_sig and max_weight < _SCENE_SWITCH_THRESHOLD:
+        # 权重不够强 → 保持当前场景（避免 flip-flop）
+        new_sig = _current_scene_sig
+    else:
+        _current_scene_sig = new_sig
 
-    sorted_names = sorted(modules.keys(), key=_priority)
+    # Layer 2: 场景签名缓存 — 命中则直接返回（零开销）
+    if new_sig in _scene_prompt_cache:
+        _scene_cache_hits += 1
+        return _scene_prompt_cache[new_sig]
 
-    sections = [modules[name] for name in sorted_names if modules[name]]
-    return "\n\n---\n\n".join(sections)
+    # 未命中 → 拼接并缓存
+    _scene_cache_misses += 1
+    sections = [modules[name] for name in new_sig if modules.get(name)]
+    prompt = "\n\n---\n\n".join(sections)
+    _scene_prompt_cache[new_sig] = prompt
+    return prompt
+
+
+def get_scene_cache_stats() -> dict:
+    """返回场景缓存统计（可观测性）。"""
+    total = _scene_cache_hits + _scene_cache_misses
+    return {
+        "hits": _scene_cache_hits,
+        "misses": _scene_cache_misses,
+        "hit_rate": _scene_cache_hits / total if total > 0 else 0.0,
+        "cached_signatures": len(_scene_prompt_cache),
+        "current_sig": _current_scene_sig,
+    }
+
+
+def reset_scene_cache() -> None:
+    """重置场景缓存和当前签名（用于测试或会话重置）。"""
+    global _current_scene_sig, _scene_cache_hits, _scene_cache_misses
+    _scene_prompt_cache.clear()
+    _current_scene_sig = ()
+    _scene_cache_hits = 0
+    _scene_cache_misses = 0
 
 
 def _build_dynamic_prompt(extra_context: str = "") -> str:

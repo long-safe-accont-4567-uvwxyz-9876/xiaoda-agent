@@ -208,3 +208,77 @@ class TestRound3E2ESmoke:
         dispatcher_path = Path(__file__).parent.parent / "agent_dispatcher.py"
         content = dispatcher_path.read_text(encoding="utf-8")
         assert "detect_storm" in content
+
+
+class TestSceneAwareV2:
+    """场景感知 v2 新功能验证：加权混合检测 + 签名缓存 + 场景粘性。"""
+
+    def test_blended_detection_single_scene(self):
+        """单一场景输入应返回该场景权重=1.0"""
+        from prompt_builder import _classify_scene_blended
+        weights = _classify_scene_blended("帮我写个脚本")
+        assert "task" in weights
+        assert weights["task"] == 1.0
+
+    def test_blended_detection_multi_scene(self):
+        """多场景输入应返回混合权重"""
+        from prompt_builder import _classify_scene_blended
+        weights = _classify_scene_blended("好累啊，查天气怎么样")
+        assert "emotional" in weights
+        assert "tool" in weights
+        # 两个场景都应有非零权重
+        assert weights["emotional"] > 0
+        assert weights["tool"] > 0
+
+    def test_blended_detection_default(self):
+        """无匹配输入应返回 default"""
+        from prompt_builder import _classify_scene_blended
+        weights = _classify_scene_blended("random xyz 12345")
+        assert weights.get("default") == 1.0
+
+    def test_scene_cache_hit(self):
+        """相同场景的第二次调用应命中缓存"""
+        from prompt_builder import reset_scene_cache, build_scene_aware_prompt, get_scene_cache_stats
+        reset_scene_cache()
+        build_scene_aware_prompt("帮我写脚本", "爸爸")
+        stats1 = get_scene_cache_stats()
+        assert stats1["misses"] >= 1
+        build_scene_aware_prompt("帮我改代码", "爸爸")
+        stats2 = get_scene_cache_stats()
+        assert stats2["hits"] >= 1
+
+    def test_scene_stickiness(self):
+        """多场景混合且主导权重<0.6时应保持当前场景"""
+        from prompt_builder import reset_scene_cache, build_scene_aware_prompt
+        import prompt_builder
+        reset_scene_cache()
+        # 首次：强信号 task（权重=1.0 > 0.6 阈值）
+        build_scene_aware_prompt("帮我写个脚本", "爸爸")
+        sig_after_task = prompt_builder._current_scene_sig
+        assert sig_after_task != ()
+        # 第二次：多场景混合（emotional:0.5 + task:0.5，max=0.5 < 0.6）
+        # 应保持当前场景（粘性）
+        build_scene_aware_prompt("好累帮我", "爸爸")
+        sig_after_weak = prompt_builder._current_scene_sig
+        # 粘性：弱信号应保持原场景
+        assert sig_after_weak == sig_after_task
+
+    def test_cache_stats_function(self):
+        """缓存统计函数应返回正确结构"""
+        from prompt_builder import reset_scene_cache, get_scene_cache_stats
+        reset_scene_cache()
+        stats = get_scene_cache_stats()
+        assert "hits" in stats
+        assert "misses" in stats
+        assert "hit_rate" in stats
+        assert "cached_signatures" in stats
+
+    def test_reset_scene_cache(self):
+        """重置后缓存应为空"""
+        from prompt_builder import reset_scene_cache, build_scene_aware_prompt, get_scene_cache_stats
+        build_scene_aware_prompt("测试", "爸爸")
+        reset_scene_cache()
+        stats = get_scene_cache_stats()
+        assert stats["hits"] == 0
+        assert stats["misses"] == 0
+        assert stats["cached_signatures"] == 0
