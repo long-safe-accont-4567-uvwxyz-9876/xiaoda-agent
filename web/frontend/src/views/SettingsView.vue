@@ -23,6 +23,7 @@ const showRestart = ref(false)
 const restartConfirmText = ref('')
 const showGoatConfirm = ref(false)
 const goatConfirmChecked = ref(false)
+const lanInfo = ref<{ localhost: string; lan_urls: string[]; port: number } | null>(null)
 
 onMounted(async () => {
   await ui.loadRemote()
@@ -32,7 +33,23 @@ onMounted(async () => {
     permissionOptions.value = p.options
   } catch (e: any) { message.error(e.message) }
   loadLogs()
+  loadLanInfo()
 })
+
+async function loadLanInfo() {
+  try {
+    const data = await get('/system/lan-addresses')
+    lanInfo.value = data
+  } catch { /* 忽略 */ }
+}
+
+function copyUrl(url: string) {
+  navigator.clipboard.writeText(url).then(() => {
+    message.success('已复制到剪贴板')
+  }).catch(() => {
+    message.warning('复制失败，请手动复制')
+  })
+}
 
 async function setPermMode(mode: string) {
   if (mode === 'goat') {
@@ -166,6 +183,21 @@ const permDesc: Record<string, string> = {
       <pre class="log-box">{{ logs.join('\n') || '（空）' }}</pre>
     </section>
 
+    <section class="glass-panel section" v-if="lanInfo">
+      <h3>局域网访问</h3>
+      <p class="apikey-desc">同一 WiFi 下的手机或其他设备可通过以下地址访问</p>
+      <div class="setting-row">
+        <span class="s-label">本机访问</span>
+        <span class="url-link" @click="copyUrl(lanInfo!.localhost)">{{ lanInfo!.localhost }}</span>
+      </div>
+      <div class="setting-row" v-for="url in lanInfo!.lan_urls" :key="url">
+        <span class="s-label">手机访问</span>
+        <span class="url-link" @click="copyUrl(url)">{{ url }}</span>
+      </div>
+      <p class="perm-desc" v-if="!lanInfo!.lan_urls?.length">未检测到局域网 IP，请确认已连接 WiFi</p>
+      <p class="perm-desc" v-else>点击地址可复制到剪贴板</p>
+    </section>
+
     <section class="glass-panel section">
       <h3>API Key 配置</h3>
       <p class="apikey-desc">配置和管理 API 密钥，测试密钥是否有效</p>
@@ -256,6 +288,14 @@ const permDesc: Record<string, string> = {
   padding: 8px 0; gap: 16px; flex-wrap: wrap;
 }
 .s-label { font-size: 13.5px; }
+.url-link {
+  font-size: 13.5px;
+  color: var(--dendro);
+  cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+  word-break: break-all;
+}
+.url-link:hover { text-decoration: underline; }
 
 .perm-desc { font-size: 12.5px; color: var(--wisdom); margin-top: 10px; }
 .apikey-desc { font-size: 12.5px; color: var(--wisdom); margin: 0 0 12px; }

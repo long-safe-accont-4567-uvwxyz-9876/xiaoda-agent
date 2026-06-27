@@ -158,6 +158,31 @@ async def get_logs(lines: int = Query(default=200, le=1000),
     return Envelope(data=out[-lines:])
 
 
+@router.get("/system/lan-addresses", response_model=Envelope[dict])
+async def get_lan_addresses():
+    """返回局域网访问地址，供同一 WiFi 下手机访问。"""
+    import socket
+    port = int(os.getenv("WEB_UI_PORT", "5078"))
+    # 获取本机局域网 IP
+    lan_ips = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
+        s.connect(("8.8.8.8", 80))
+        primary_ip = s.getsockname()[0]
+        s.close()
+        if primary_ip and not primary_ip.startswith("127."):
+            lan_ips.append(primary_ip)
+    except Exception:
+        pass
+    return Envelope(data={
+        "localhost": f"http://localhost:{port}",
+        "lan_ips": lan_ips,
+        "lan_urls": [f"http://{ip}:{port}" for ip in lan_ips],
+        "port": port,
+    })
+
+
 @router.get("/system/config", response_model=Envelope[dict])
 async def get_config():
     """合并后的 webui 配置（不含密钥）。"""
