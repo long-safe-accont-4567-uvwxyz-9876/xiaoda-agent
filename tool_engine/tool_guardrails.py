@@ -63,6 +63,54 @@ _TOOL_VALIDATION_RULES: dict[str, dict] = {
             ("file_path", "no_path_traversal", "文件路径包含非法遍历"),
         ],
     },
+    "list_files": {
+        "required": [],
+        "checks": [
+            ("path", "no_path_traversal", "目录路径包含非法遍历"),
+        ],
+    },
+    "read_file": {
+        "required": ["path"],
+        "checks": [
+            ("path", "non_empty_str", "文件路径不能为空"),
+            ("path", "no_path_traversal", "文件路径包含非法遍历"),
+        ],
+    },
+    "write_file": {
+        "required": ["input_str"],
+        "checks": [
+            ("input_str", "non_empty_str", "输入不能为空"),
+            ("input_str", "max_len:50000", "写入内容过长（>50000字符）"),
+        ],
+    },
+    "search_files": {
+        "required": ["pattern"],
+        "checks": [
+            ("pattern", "non_empty_str", "搜索模式不能为空"),
+            ("pattern", "max_len:500", "搜索模式过长"),
+        ],
+    },
+    "calculator": {
+        "required": ["expression"],
+        "checks": [
+            ("expression", "non_empty_str", "数学表达式不能为空"),
+            ("expression", "max_len:500", "数学表达式过长"),
+        ],
+    },
+    "get_weather": {
+        "required": ["city"],
+        "checks": [
+            ("city", "non_empty_str", "城市名称不能为空"),
+            ("city", "max_len:50", "城市名称过长"),
+        ],
+    },
+    "wolfram_query": {
+        "required": ["query"],
+        "checks": [
+            ("query", "non_empty_str", "查询不能为空"),
+            ("query", "max_len:500", "查询过长"),
+        ],
+    },
 }
 
 # L3: 一致性检查 —— 禁止危险模式
