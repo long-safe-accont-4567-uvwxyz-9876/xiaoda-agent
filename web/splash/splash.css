@@ -21,6 +21,18 @@ html, body {
     pointer-events: none;
 }
 
+/* ========== 墨迹转场 overlay ========== */
+#ink-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    pointer-events: none;
+    opacity: 0;
+}
+#ink-overlay.active {
+    opacity: 1;
+}
+
 /* ========== 中央内容 ========== */
 .center-content {
     position: absolute;

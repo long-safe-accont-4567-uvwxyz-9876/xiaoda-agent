@@ -217,32 +217,21 @@ def _run_desktop(host: str, port: int):
         splash_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web', 'splash')
 
     splash_path = os.path.join(splash_dir, 'splash.html')
-    splash_url = f"file://{splash_path}"
+    splash_url = f"file://{splash_path}#{port}"
     webui_url = f"http://localhost:{port}"
 
     logger.info(f"Desktop splash: {splash_url}")
     logger.info(f"Desktop WebUI: {webui_url}")
 
-    # pywebview JS API
-    class DesktopAPI:
-        def enter_world(self):
-            """用户点击'进入提瓦特大陆'按钮后，切换到 WebUI"""
-            import webview
-            for w in webview.windows:
-                w.load_url(webui_url)
-            return True
-
-    # 创建 pywebview 窗口
+    # 创建 pywebview 窗口（不使用 js_api，避免导航时桥接回调丢失）
     import webview
-    api = DesktopAPI()
     window = webview.create_window(
-        title="Nahida Agent",
+        title="Xiaoda Agent",
         url=splash_url,
         width=1280,
         height=800,
         min_size=(960, 600),
         text_select=False,
-        js_api=api,
     )
 
     # 后台线程：等待服务就绪后通知 splash.js 显示进入按钮
