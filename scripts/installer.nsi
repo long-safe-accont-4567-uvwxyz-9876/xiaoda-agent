@@ -1,6 +1,6 @@
-!define PRODUCT_NAME "Nahida Agent"
+!define PRODUCT_NAME "Xiaoda Agent"
 !define PRODUCT_VERSION "${VERSION}"
-!define PRODUCT_PUBLISHER "Nahida Agent Team"
+!define PRODUCT_PUBLISHER "Xiaoda Agent Team"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
 OutFile "nahida-agent-windows-x64-v${PRODUCT_VERSION}-setup.exe"

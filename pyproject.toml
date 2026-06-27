@@ -3,14 +3,14 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nahida-agent"
-version = "0.4.12"
+name = "xiaoda-agent"
+version = "0.4.13"
 description = "多智能体 AI 助手 — 40+ 工具赋能，三通道交互"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 authors = [
-    {name = "Nahida Agent Team"},
+    {name = "Xiaoda Agent Team"},
 ]
 keywords = ["ai", "agent", "chatbot", "qq-bot", "multi-agent"]
 classifiers = [

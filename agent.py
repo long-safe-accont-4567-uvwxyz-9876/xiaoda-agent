@@ -161,6 +161,8 @@ def _run_web(host: str, port: int):
 
 def _run_desktop(host: str, port: int):
     """桌面模式：pywebview 包装 WebUI，带启动动画"""
+    # 控制台已在文件顶部隐藏，此处无需重复
+
     import threading
     import socket
     import time
@@ -170,16 +172,6 @@ def _run_desktop(host: str, port: int):
 
     from loguru import logger
     logger.info("agent.desktop.start", port=port)
-
-    # Windows 下隐藏控制台窗口
-    if sys.platform == 'win32':
-        try:
-            import ctypes
-            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
-            if hwnd:
-                ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
-        except Exception:
-            pass
 
     # 端口冲突检测（复用 _run_web 的逻辑）
     for attempt in range(30):

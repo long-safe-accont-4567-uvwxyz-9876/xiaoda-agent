@@ -1,4 +1,6 @@
-# Naxida Agent 🌿
+# Xiaoda Agent 🌿
+
+> 本项目为社区二创作品，非官方项目，仅供个人学习 Agent 技术使用。
 
 > 运行在 windows和Linux系统上的多智能体 AI 助手 ，40+ 工具赋能，三通道交互，认知系统闭环，RAG 检索增强
 
@@ -8,11 +10,11 @@
 
 ***
 
-## 为什么选择 xiaoNaxida Agent？
+## 为什么选择 Xiaoda Agent？
 
-市面上有大量 AI Chatbot 项目，但 Nahida Agent 不只是"套壳 ChatGPT"。它是一个**完整的认知智能体**——能记住、能学习、能感知情绪、能调用工具、能自我改进。
+市面上有大量 AI Chatbot 项目，但 Xiaoda Agent 不只是"套壳 ChatGPT"。它是一个**完整的认知智能体**——能记住、能学习、能感知情绪、能调用工具、能自我改进。
 
-| 对比维度   | 通用 Chatbot        | Nahida Agent                   |
+| 对比维度   | 通用 Chatbot        | Xiaoda Agent                   |
 | -------- | ------------------ | ------------------------------ |
 | 记忆      | 无状态 / 简单上下文窗口 | 情景记忆 + 向量检索 + Reranker 精排 + 知识图谱 + 用户画像 |
 | 检索      | 单路向量召回          | FTS5 BM25 + bge-m3 向量 → RRF 融合 → 交叉编码器精排 + KG 增强 |
@@ -34,7 +36,7 @@
 
 | 角色      | 定位        | 特色             |
 | ------- | --------- | -------------- |
-| **纳西妲** | 主人格 / 调度者 | 温柔智慧，负责路由和综合   |
+| **小妲** | 主人格 / 调度者 | 温柔智慧，负责路由和综合   |
 | **可莉**  | 玩伴        | 活泼可爱，擅长聊天和游戏   |
 | **银狼**  | 编程专家      | 技术导向，擅长代码和系统管理 |
 | **昔涟**  | 知性助手      | 冷静理性，擅长分析和文档   |
@@ -271,7 +273,7 @@ AgentCore 从 1431 行 God Class 拆分为 5 个子模块：
   ├─ 1. 安全过滤（SecurityFilter）
   ├─ 2. 斜杠命令检查（SlashCommandHandler）
   ├─ 3. 路由决策（RouterEngine → RoutingDecision）
-  │     ├─ 直接回复（nahida）
+  │     ├─ 直接回复（xiaoda）
   │     ├─ 委托子智能体（keli/yinlang/xilian/nike）
   │     └─ 图编排（TaskGraph）
   ├─ 4. 记忆检索（RAG 管线）
@@ -389,7 +391,7 @@ nahida-agent/
 │   ├── vision_service.py     #   视觉服务
 │   ├── file_receiver.py      #   文件接收
 │   ├── smart_error_handler.py #  智能错误处理
-│   ├── nahida_acp.py         #   纳西妲 ACP 协议
+│   ├── nahida_acp.py         #   小妲 ACP 协议
 │   └── logging_config.py     #   日志配置
 ├── security/                 # 安全模块
 │   ├── security.py           #   安全过滤
