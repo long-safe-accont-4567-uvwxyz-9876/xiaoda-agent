@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>纳西妲 Agent</title>
+    <link rel="stylesheet" href="splash.css">
+</head>
+<body>
+    <!-- GlowHorizon 发光地平线 -->
+    <div class="glow-horizon">
+        <div class="arc arc-4"></div>
+        <div class="arc arc-3"></div>
+        <div class="arc arc-2"></div>
+        <div class="arc arc-1"></div>
+    </div>
+
+    <!-- 中央内容 -->
+    <div class="center-content">
+        <!-- SiriWave 波纹 Canvas -->
+        <canvas id="siri-wave"></canvas>
+
+        <!-- 纳西妲图标（SVG 草叶） -->
+        <div class="icon-wrapper">
+            <svg class="nahida-leaf" viewBox="0 0 100 120" width="64" height="76">
+                <defs>
+                    <linearGradient id="leafGrad" x1="50%" y1="0%" x2="50%" y2="100%">
+                        <stop offset="0%" stop-color="#8fe560"/>
+                        <stop offset="50%" stop-color="#5cb830"/>
+                        <stop offset="100%" stop-color="#1d3b2a"/>
+                    </linearGradient>
+                    <filter id="leafGlow">
+                        <feGaussianBlur stdDeviation="2" result="blur"/>
+                        <feMerge>
+                            <feMergeNode in="blur"/>
+                            <feMergeNode in="SourceGraphic"/>
+                        </feMerge>
+                    </filter>
+                </defs>
+                <path d="M50 5 C25 30 20 60 50 115 C80 60 75 30 50 5 Z"
+                      fill="url(#leafGrad)"
+                      filter="url(#leafGlow)"/>
+                <path d="M50 5 L50 115" stroke="#0f1f17" stroke-width="1" opacity="0.3"/>
+            </svg>
+        </div>
+
+        <!-- 标题 -->
+        <h1 class="title">纳西妲 Agent</h1>
+
+        <!-- 加载提示 -->
+        <p class="loading-text" id="loading-text">世界树正在苏醒...</p>
+
+        <!-- 进入按钮 -->
+        <button class="enter-btn" id="enter-btn">
+            <span class="btn-text">进入提瓦特大陆</span>
+            <span class="btn-glow"></span>
+        </button>
+    </div>
+
+    <script src="splash.js"></script>
+</body>
+</html>

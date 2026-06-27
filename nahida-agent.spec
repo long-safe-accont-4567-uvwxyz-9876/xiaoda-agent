@@ -50,6 +50,9 @@ datas += _tree_datas(os.path.join(SPECPATH, 'config'), 'config')
 # web/dist/ directory (pre-built Vue frontend)
 datas += _tree_datas(os.path.join(SPECPATH, 'web', 'dist'), os.path.join('web', 'dist'))
 
+# web/splash/ directory (desktop mode splash screen)
+datas += _tree_datas(os.path.join(SPECPATH, 'web', 'splash'), os.path.join('web', 'splash'))
+
 # web/routers/__init__.py (required for package imports in PyInstaller)
 datas.append((os.path.join(SPECPATH, 'web', 'routers', '__init__.py'), os.path.join('web', 'routers')))
 
@@ -83,7 +86,7 @@ if len(assets_datas) > 5:
 # ---------------------------------------------------------------------------
 # Collect data files from packages that ship non-Python assets
 # ---------------------------------------------------------------------------
-for pkg in ('jieba', 'psutil', 'certifi', 'openai', 'PIL', 'sqlite_vec'):
+for pkg in ('jieba', 'psutil', 'certifi', 'openai', 'PIL', 'sqlite_vec', 'webview'):
     try:
         datas += collect_data_files(pkg)
     except Exception:
@@ -135,6 +138,15 @@ hiddenimports = [
 
     # SQLite extensions
     'sqlite_vec',
+    'webview',
+    'webview.guilib',
+    'webview.platforms.edgechromium',
+    'webview.platforms.winforms',
+    'webview.util',
+    'webview.screen',
+    'webview.menu',
+    'webview.window',
+    'webview.events',
 
     'psutil',
 
@@ -267,7 +279,7 @@ hiddenimports = [
 ]
 
 # Collect any sub-modules that static analysis might miss
-for pkg in ('openai', 'pydantic', 'starlette', 'anyio', 'uvicorn', 'psutil', 'httpx', 'certifi', 'httpcore', 'pilk', 'PIL'):
+for pkg in ('openai', 'pydantic', 'starlette', 'anyio', 'uvicorn', 'psutil', 'httpx', 'certifi', 'httpcore', 'pilk', 'PIL', 'webview'):
     try:
         hiddenimports += collect_submodules(pkg)
     except Exception:

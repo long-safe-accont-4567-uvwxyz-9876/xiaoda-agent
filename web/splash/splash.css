@@ -1,0 +1,209 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #0f1f17;
+    font-family: 'Noto Sans SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+}
+
+/* ==================== GlowHorizon 发光地平线 ==================== */
+.glow-horizon {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    isolation: isolate;
+    z-index: 1;
+}
+
+.arc {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 100%;
+    transform: translateY(-100%);
+    animation: glowEnter 2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* 第1层：浅绿高光 #f2f7ee (moon) */
+.arc-1 {
+    background: #f2f7ee;
+    transform: translateY(-100%) scale(1.32);
+    box-shadow: 0 -4px 23px 0px rgba(242, 247, 238, 0.71);
+    animation-delay: 1.2s;
+    z-index: 4;
+}
+
+/* 第2层：草绿主光晕 #8fe560 (dendro) */
+.arc-2 {
+    background: #8fe560;
+    transform: translateY(-100%) scale(1.20);
+    filter: blur(31px);
+    animation-delay: 0.6s;
+    z-index: 3;
+}
+
+/* 第3层：深绿内层 #5cb830 */
+.arc-3 {
+    background: #5cb830;
+    transform: translateY(-100%) scale(1.24);
+    filter: blur(21px);
+    animation-delay: 0s;
+    z-index: 2;
+}
+
+/* 第4层：暗绿底层 #1d3b2a (forest) */
+.arc-4 {
+    background: #1d3b2a;
+    transform: translateY(-100%) scale(1.20);
+    filter: blur(51px);
+    animation-delay: 0s;
+    z-index: 1;
+}
+
+@keyframes glowEnter {
+    0% {
+        transform: translateY(-100%) scale(1.5);
+        opacity: 0;
+    }
+    100% {
+        transform: translateY(-50%) scale(1);
+        opacity: 1;
+    }
+}
+
+/* ==================== 中央内容 ==================== */
+.center-content {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+}
+
+#siri-wave {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: -1;
+    pointer-events: none;
+}
+
+.icon-wrapper {
+    margin-bottom: 8px;
+    animation: breathe 3s ease-in-out infinite;
+}
+
+.nahida-leaf {
+    filter: drop-shadow(0 0 12px rgba(143, 229, 96, 0.5));
+}
+
+.title {
+    font-size: 32px;
+    font-weight: 300;
+    letter-spacing: 4px;
+    color: #f2f7ee;
+    text-shadow: 0 0 20px rgba(143, 229, 96, 0.4);
+    animation: fadeInUp 1.2s cubic-bezier(0.16, 1, 0.3, 1) 0.5s both;
+}
+
+.loading-text {
+    font-size: 14px;
+    color: rgba(242, 247, 238, 0.6);
+    letter-spacing: 2px;
+    animation: breathe 2s ease-in-out infinite;
+}
+
+/* ==================== 进入按钮 ==================== */
+.enter-btn {
+    margin-top: 24px;
+    padding: 12px 36px;
+    background: transparent;
+    border: 1px solid rgba(143, 229, 96, 0.4);
+    border-radius: 12px;
+    color: #8fe560;
+    font-size: 16px;
+    font-weight: 500;
+    letter-spacing: 3px;
+    cursor: pointer;
+    opacity: 0;
+    transform: translateY(20px);
+    transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    position: relative;
+    overflow: hidden;
+    display: none;
+}
+
+.enter-btn.ready {
+    display: block;
+    opacity: 1;
+    transform: translateY(0);
+    animation: btnGlow 2s ease-in-out infinite;
+}
+
+.enter-btn:hover {
+    background: rgba(143, 229, 96, 0.1);
+    border-color: rgba(143, 229, 96, 0.8);
+    box-shadow: 0 0 24px rgba(143, 229, 96, 0.3);
+    transform: translateY(-2px);
+}
+
+.enter-btn:active {
+    transform: translateY(0);
+}
+
+.btn-glow {
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(143, 229, 96, 0.15), transparent);
+    animation: shimmer 3s infinite;
+}
+
+/* ==================== 动画 ==================== */
+@keyframes breathe {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes btnGlow {
+    0%, 100% {
+        box-shadow: 0 0 12px rgba(143, 229, 96, 0.2);
+    }
+    50% {
+        box-shadow: 0 0 24px rgba(143, 229, 96, 0.4);
+    }
+}
+
+@keyframes shimmer {
+    0% { left: -100%; }
+    100% { left: 100%; }
+}

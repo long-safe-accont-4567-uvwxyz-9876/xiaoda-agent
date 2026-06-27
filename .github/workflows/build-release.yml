@@ -144,7 +144,7 @@ jobs:
         run: |
           pip install pyinstaller
           pip install -r requirements.txt || true
-          pip install fastapi uvicorn[standard] websockets python-multipart sse-starlette httpx Pillow numpy rich python-dotenv loguru openai aiosqlite pydantic jieba pyyaml pilk
+          pip install fastapi uvicorn[standard] websockets python-multipart sse-starlette httpx Pillow numpy rich python-dotenv loguru openai aiosqlite pydantic jieba pyyaml pilk pywebview
 
       - name: Verify pilk installed (SILK codec for voice messages)
         shell: python

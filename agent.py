@@ -33,6 +33,7 @@ except Exception as e:
 def main():
     parser = argparse.ArgumentParser(description="纳西妲 AI Agent")
     parser.add_argument("--web", action="store_true", help="启动 Web UI 模式")
+    parser.add_argument("--desktop", action="store_true", help="启动桌面模式（pywebview 原生窗口）")
     parser.add_argument("--port", type=int, default=int(os.getenv("WEBUI_PORT", "8082")), help="Web UI 端口")
     parser.add_argument("--host", type=str, default=os.getenv("WEBUI_HOST", "0.0.0.0"), help="Web UI 监听地址")
     parser.add_argument("--setup", action="store_true", help="运行配置向导")
@@ -70,7 +71,9 @@ def main():
             # 向导完成后重新加载 .env
             load_dotenv(ENV_PATH, override=True)
 
-    if args.web or os.getenv("WEB_UI_ENABLED", "").lower() in ("true", "1", "yes"):
+    if args.desktop:
+        _run_desktop(args.host, args.port)
+    elif args.web or os.getenv("WEB_UI_ENABLED", "").lower() in ("true", "1", "yes"):
         _run_web(args.host, args.port)
     else:
         _run_cli()
@@ -154,6 +157,121 @@ def _run_web(host: str, port: int):
         log_level="info",
         access_log=False,
     )
+
+
+def _run_desktop(host: str, port: int):
+    """桌面模式：pywebview 包装 WebUI，带纳西妲风格启动动画"""
+    import threading
+    import socket
+    import time
+    import urllib.request
+    from utils.logging_config import setup_logging
+    setup_logging()
+
+    from loguru import logger
+    logger.info("agent.desktop.start", port=port)
+
+    # Windows 下隐藏控制台窗口
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
+        except Exception:
+            pass
+
+    # 端口冲突检测（复用 _run_web 的逻辑）
+    for attempt in range(30):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.settimeout(1)
+                s.bind((host, port))
+                break
+        except OSError:
+            if attempt == 0:
+                logger.warning(f"agent.port_in_use port={port}, waiting for old process to release...")
+            if attempt < 29:
+                time.sleep(2)
+            else:
+                logger.error(f"agent.port_still_in_use port={port}, giving up after 60s")
+                sys.exit(1)
+
+    # 导入 web.server
+    try:
+        from web.server import app
+    except Exception as e:
+        import traceback, pathlib
+        log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "nahida-agent" / "crash.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(f"Failed to import web.server:\n{traceback.format_exc()}", encoding="utf-8")
+        raise
+
+    # 后台线程启动 uvicorn
+    import uvicorn
+    server_config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
+    server = uvicorn.Server(server_config)
+    server_thread = threading.Thread(target=server.run, daemon=True)
+    server_thread.start()
+
+    # 确定 splash screen 路径
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+        splash_dir = os.path.join(base_dir, '_internal', 'web', 'splash')
+        if not os.path.isdir(splash_dir):
+            splash_dir = os.path.join(base_dir, 'web', 'splash')
+    else:
+        splash_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web', 'splash')
+
+    splash_path = os.path.join(splash_dir, 'splash.html')
+    splash_url = f"file://{splash_path}"
+    webui_url = f"http://localhost:{port}"
+
+    logger.info(f"Desktop splash: {splash_url}")
+    logger.info(f"Desktop WebUI: {webui_url}")
+
+    # pywebview JS API
+    class DesktopAPI:
+        def enter_world(self):
+            """用户点击'进入提瓦特大陆'按钮后，切换到 WebUI"""
+            import webview
+            for w in webview.windows:
+                w.load_url(webui_url)
+            return True
+
+    # 创建 pywebview 窗口
+    import webview
+    api = DesktopAPI()
+    window = webview.create_window(
+        title="纳西妲 Agent",
+        url=splash_url,
+        width=1280,
+        height=800,
+        min_size=(960, 600),
+        text_select=False,
+        js_api=api,
+    )
+
+    # 后台线程：等待服务就绪后通知 splash.js 显示进入按钮
+    def wait_for_server():
+        for _ in range(120):
+            try:
+                urllib.request.urlopen(f"http://localhost:{port}/", timeout=2)
+                window.evaluate_js("if(typeof onServerReady==='function')onServerReady();")
+                return
+            except Exception:
+                time.sleep(1)
+        window.evaluate_js("if(typeof onServerTimeout==='function')onServerTimeout();")
+
+    checker_thread = threading.Thread(target=wait_for_server, daemon=True)
+    checker_thread.start()
+
+    # 启动 pywebview（主线程阻塞）
+    webview.start(debug=False)
+
+    # 窗口关闭后退出进程
+    os._exit(0)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nahida-agent"
-version = "0.4.0"
+version = "0.4.1"
 description = "多智能体 AI 助手 — 以《原神》纳西妲为灵魂，40+ 工具赋能，三通道交互"
 readme = "README.md"
 license = {text = "MIT"}
@@ -51,6 +51,7 @@ dependencies = [
     "python-pptx>=1.0.2",
     "openpyxl>=3.1.5",
     "html2text>=2025.4.15",
+    "pywebview>=5.0",
 ]
 
 [project.optional-dependencies]
