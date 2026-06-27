@@ -159,10 +159,11 @@ async def get_logs(lines: int = Query(default=200, le=1000),
 
 
 @router.get("/system/lan-addresses", response_model=Envelope[dict])
-async def get_lan_addresses():
+async def get_lan_addresses(request: Request):
     """返回局域网访问地址，供同一 WiFi 下手机访问。"""
     import socket
-    port = int(os.getenv("WEB_UI_PORT", "5078"))
+    # 从请求中获取实际运行端口，而非环境变量
+    port = request.url.port or 8082
     # 获取本机局域网 IP
     lan_ips = []
     try:
