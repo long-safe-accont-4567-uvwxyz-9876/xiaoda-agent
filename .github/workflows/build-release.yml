@@ -462,7 +462,7 @@ jobs:
             org.opencontainers.image.licenses=MIT
 
   release:
-    needs: [build, docker]
+    needs: build
     # Only create release on tag push or manual dispatch, NOT on main branch push
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
