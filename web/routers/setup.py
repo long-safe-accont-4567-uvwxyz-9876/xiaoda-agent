@@ -823,44 +823,55 @@ def _parse_user_md(content: str) -> dict:
         "history_notes": "",
     }
 
+    def _clean(val: str) -> str:
+        """清除模板占位符，返回空字符串"""
+        v = val.strip()
+        if v.startswith("（") or v.startswith("("):
+            return ""
+        if v in ("待填写", "待自动检测", "暂无"):
+            return ""
+        return v
+
     # 解析 "## 用户信息" 区块
     user_info_match = _re.search(r'## 用户信息\s*\n(.*?)(?=\n## |\Z)', content, _re.DOTALL)
     if user_info_match:
         block = user_info_match.group(1)
         m = _re.search(r'-\s*称呼[：:]\s*(.+)', block)
-        if m: fields["address_term"] = m.group(1).strip()
+        if m: fields["address_term"] = _clean(m.group(1))
         m = _re.search(r'-\s*姓名[：:]\s*(.+)', block)
-        if m: fields["name"] = m.group(1).strip()
+        if m: fields["name"] = _clean(m.group(1))
         m = _re.search(r'-\s*设备[：:]\s*(.+)', block)
-        if m: fields["device"] = m.group(1).strip()
+        if m: fields["device"] = _clean(m.group(1))
         m = _re.search(r'-\s*时区[：:]\s*(.+)', block)
-        if m: fields["timezone"] = m.group(1).strip()
+        if m: fields["timezone"] = _clean(m.group(1))
 
     # 解析 "### 助手人格" 区块
     personality_match = _re.search(r'### 助手人格\s*\n(.*?)(?=\n### |\n## |\Z)', content, _re.DOTALL)
     if personality_match:
         block = personality_match.group(1)
         m = _re.search(r'-\s*偏好的助手人格[：:]\s*(.+)', block)
-        if m: fields["preferred_personality"] = m.group(1).strip()
+        if m: fields["preferred_personality"] = _clean(m.group(1))
         m = _re.search(r'-\s*偏好语气[：:]\s*(.+)', block)
-        if m: fields["preferred_tone"] = m.group(1).strip()
+        if m: fields["preferred_tone"] = _clean(m.group(1))
         m = _re.search(r'-\s*喜欢被称呼为[：:]\s*(.+)', block)
-        if m: fields["like_to_be_called"] = m.group(1).strip()
+        if m: fields["like_to_be_called"] = _clean(m.group(1))
 
     # 解析 "### 回复偏好" 区块
     reply_match = _re.search(r'### 回复偏好\s*\n(.*?)(?=\n### |\n## |\Z)', content, _re.DOTALL)
     if reply_match:
         block = reply_match.group(1)
         m = _re.search(r'-\s*喜欢的回复风格[：:]\s*(.+)', block)
-        if m: fields["liked_reply_style"] = m.group(1).strip()
+        if m: fields["liked_reply_style"] = _clean(m.group(1))
         m = _re.search(r'-\s*不喜欢的回复风格[：:]\s*(.+)', block)
-        if m: fields["disliked_reply_style"] = m.group(1).strip()
+        if m: fields["disliked_reply_style"] = _clean(m.group(1))
 
     # 解析 "### 项目偏好" 区块
     project_match = _re.search(r'### 项目偏好\s*\n(.*?)(?=\n## |\Z)', content, _re.DOTALL)
     if project_match:
         block = project_match.group(1).strip()
-        fields["project_preferences"] = block
+        # 过滤掉纯占位内容
+        if not block.startswith("（"):
+            fields["project_preferences"] = block
 
     # 解析 "## 历史交互要点" 区块
     history_match = _re.search(r'## 历史交互要点\s*\n(.*?)(?=\n## |\Z)', content, _re.DOTALL)

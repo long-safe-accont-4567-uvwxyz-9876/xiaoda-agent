@@ -28,7 +28,7 @@ const navItems = [
     <div class="sidebar-inner">
       <div class="sidebar-logo">
         <DendroEmblem :size="30" spin />
-        <span v-if="expanded" class="logo-text">纳西妲 · 世界树</span>
+        <span v-if="expanded" class="logo-text">Nahida Agent</span>
       </div>
 
       <div class="nav-items">
@@ -46,7 +46,7 @@ const navItems = [
       </div>
 
       <div class="sidebar-foot" v-if="expanded">
-        <span class="foot-text">「智慧，是世界树结出的果实」</span>
+        <span class="foot-text">「知识是智慧的种子」</span>
       </div>
     </div>
   </nav>

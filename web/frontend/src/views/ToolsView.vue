@@ -185,7 +185,7 @@ async function removeSkill(s: any) {
           </n-popconfirm>
         </div>
       </div>
-      <p v-else class="skills-empty">还没有 Skill。上传 SKILL.md 后其内容会注入系统提示词，纳西妲下一条消息即掌握该技能。</p>
+      <p v-else class="skills-empty">还没有 Skill。上传 SKILL.md 后其内容会注入系统提示词，助手下一条消息即掌握该技能。</p>
     </div>
 
     <div class="filters glass-panel">

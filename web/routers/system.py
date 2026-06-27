@@ -89,28 +89,73 @@ async def get_metrics():
 @router.get("/system/logs", response_model=Envelope[list[str]])
 async def get_logs(lines: int = Query(default=200, le=1000),
                    level: str = Query(default="")):
-    # botpy.log 在用户数据目录或 exe 同级目录
     try:
-        from config import LOG_DIR, get_base_dir
-        log_path = LOG_DIR / "botpy.log"
-        if not log_path.exists():
-            log_path = get_base_dir() / "botpy.log"
+        from config import LOG_DIR
     except ImportError:
-        log_path = Path(__file__).resolve().parent.parent.parent / "botpy.log"
-    if not log_path.exists():
-        return Envelope(data=["（日志文件不存在）"])
+        LOG_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "logs"
+
+    out: list[str] = []
+
+    # 优先读取 loguru 的 agent_YYYY-MM-DD.json 日志
     try:
-        with open(log_path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            f.seek(max(0, size - 512 * 1024))
-            content = f.read().decode("utf-8", errors="replace")
-        out = content.splitlines()
-        if level:
-            out = [l for l in out if f"| {level.upper()}" in l or f"[{level.upper()}]" in l]
-        return Envelope(data=out[-lines:])
-    except Exception as e:
-        return Envelope(ok=False, error={"code": "LOG_READ_ERROR", "message": str(e)})
+        import json as _json
+        import datetime as _dt
+        today = _dt.date.today().isoformat()
+        agent_log = LOG_DIR / f"agent_{today}.json"
+        # 如果今天的日志不存在，找最近的一个
+        if not agent_log.exists():
+            candidates = sorted(LOG_DIR.glob("agent_*.json"), reverse=True)
+            if candidates:
+                agent_log = candidates[0]
+        if agent_log.exists():
+            with open(agent_log, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                f.seek(max(0, size - 512 * 1024))
+                content = f.read().decode("utf-8", errors="replace")
+            for raw_line in content.splitlines():
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    obj = _json.loads(raw_line)
+                    # loguru serialize 格式：text 字段包含完整格式化文本
+                    text = obj.get("text", "").rstrip("\n")
+                    if not text:
+                        continue
+                    # 按级别过滤
+                    rec = obj.get("record", {})
+                    lvl = rec.get("level", {}).get("name", "")
+                    if level and lvl.upper() != level.upper():
+                        continue
+                    out.append(text)
+                except _json.JSONDecodeError:
+                    continue
+    except Exception:
+        pass
+
+    # 兜底：如果 agent 日志为空，尝试读取 botpy.log
+    if not out:
+        try:
+            from config import get_base_dir
+            log_path = LOG_DIR / "botpy.log"
+            if not log_path.exists():
+                log_path = get_base_dir() / "botpy.log"
+            if log_path.exists():
+                with open(log_path, "rb") as f:
+                    f.seek(0, os.SEEK_END)
+                    size = f.tell()
+                    f.seek(max(0, size - 512 * 1024))
+                    content = f.read().decode("utf-8", errors="replace")
+                out = content.splitlines()
+                if level:
+                    out = [l for l in out if f"| {level.upper()}" in l or f"[{level.upper()}]" in l]
+        except Exception:
+            pass
+
+    if not out:
+        return Envelope(data=["（暂无日志）"])
+    return Envelope(data=out[-lines:])
 
 
 @router.get("/system/config", response_model=Envelope[dict])

@@ -8,7 +8,7 @@ html, body {
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background: #0f1f17;
+    background: #0a1a12;
     font-family: 'Noto Sans SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
 }
 
@@ -26,59 +26,58 @@ html, body {
 
 .arc {
     position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    border-radius: 100%;
-    transform: translateY(-100%);
-    animation: glowEnter 2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    left: 50%;
+    width: 200%;
+    height: 200%;
+    border-radius: 50%;
+    transform: translate(-50%, 60%);
+    opacity: 0;
+    animation: glowPulse 3s ease-in-out infinite;
 }
 
-/* 第1层：浅绿高光 #f2f7ee (moon) */
+/* 第1层：浅绿高光 #f2f7ee */
 .arc-1 {
-    background: #f2f7ee;
-    transform: translateY(-100%) scale(1.32);
-    box-shadow: 0 -4px 23px 0px rgba(242, 247, 238, 0.71);
-    animation-delay: 1.2s;
+    background: radial-gradient(ellipse at 50% 30%, #f2f7ee 0%, transparent 60%);
+    box-shadow: 0 0 80px 20px rgba(242, 247, 238, 0.15);
+    animation-delay: 0.4s;
     z-index: 4;
 }
 
-/* 第2层：草绿主光晕 #8fe560 (dendro) */
+/* 第2层：草绿主光晕 #8fe560 */
 .arc-2 {
-    background: #8fe560;
-    transform: translateY(-100%) scale(1.20);
-    filter: blur(31px);
-    animation-delay: 0.6s;
+    background: radial-gradient(ellipse at 50% 35%, #8fe560 0%, transparent 55%);
+    filter: blur(40px);
+    animation-delay: 0.2s;
     z-index: 3;
 }
 
 /* 第3层：深绿内层 #5cb830 */
 .arc-3 {
-    background: #5cb830;
-    transform: translateY(-100%) scale(1.24);
-    filter: blur(21px);
+    background: radial-gradient(ellipse at 50% 40%, #5cb830 0%, transparent 50%);
+    filter: blur(25px);
     animation-delay: 0s;
     z-index: 2;
 }
 
-/* 第4层：暗绿底层 #1d3b2a (forest) */
+/* 第4层：暗绿底层 #1d3b2a */
 .arc-4 {
-    background: #1d3b2a;
-    transform: translateY(-100%) scale(1.20);
-    filter: blur(51px);
+    background: radial-gradient(ellipse at 50% 45%, #1d3b2a 0%, transparent 50%);
+    filter: blur(60px);
     animation-delay: 0s;
     z-index: 1;
 }
 
-@keyframes glowEnter {
+@keyframes glowPulse {
     0% {
-        transform: translateY(-100%) scale(1.5);
+        transform: translate(-50%, 65%) scale(0.95);
         opacity: 0;
     }
-    100% {
-        transform: translateY(-50%) scale(1);
+    50% {
         opacity: 1;
+    }
+    100% {
+        transform: translate(-50%, 55%) scale(1.05);
+        opacity: 0.8;
     }
 }
 
@@ -100,8 +99,9 @@ html, body {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    z-index: -1;
+    z-index: 2;
     pointer-events: none;
+    background: transparent;
 }
 
 .icon-wrapper {
@@ -109,7 +109,7 @@ html, body {
     animation: breathe 3s ease-in-out infinite;
 }
 
-.nahida-leaf {
+.leaf-icon {
     filter: drop-shadow(0 0 12px rgba(143, 229, 96, 0.5));
 }
 

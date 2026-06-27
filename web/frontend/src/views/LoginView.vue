@@ -83,8 +83,8 @@ async function handleLogin() {
 
         <div class="login-header">
           <DendroEmblem :size="84" spin />
-          <h1>纳西妲 · 世界树</h1>
-          <p class="subtitle">智慧之神在此恭候你</p>
+          <h1>Nahida Agent</h1>
+          <p class="subtitle">智慧助手在此恭候</p>
         </div>
 
         <form @submit.prevent="handleLogin" class="login-form">
@@ -100,7 +100,7 @@ async function handleLogin() {
           <p v-if="noPassword" class="hint-text">未设置密码，点击按钮直接进入</p>
           <p v-if="error" class="error-text">{{ error }}</p>
           <button type="submit" class="dendro-btn login-btn" :disabled="loading">
-            {{ loading ? '草元素汇聚中…' : '进入世界树' }}
+            {{ loading ? '正在连接…' : '进入系统' }}
           </button>
         </form>
       </div>

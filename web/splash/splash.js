@@ -1,6 +1,7 @@
-// ==================== SiriWave WebGL 圆形波纹（纳西妲草绿色系） ====================
+// ==================== SiriWave WebGL 圆形波纹（草绿色系） ====================
 const canvas = document.getElementById('siri-wave');
-const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true })
+    || canvas.getContext('experimental-webgl', { alpha: true, premultipliedAlpha: true });
 
 let animationId = null;
 
@@ -16,6 +17,9 @@ function resizeCanvas() {
 }
 
 if (gl) {
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
     const vsSource = `
         attribute vec2 aPos;
         void main() {
@@ -24,7 +28,7 @@ if (gl) {
     `;
 
     // 圆形波纹 Shader - 从中心向外扩散的多层环形波纹
-    // 颜色：草元素绿 #8fe560 = rgb(143, 229, 96) = vec3(0.56, 0.90, 0.38)
+    // 颜色：草绿 #8fe560 = rgb(143, 229, 96) = vec3(0.56, 0.90, 0.38)
     const fsSource = `
         precision highp float;
         uniform vec2 iResolution;
@@ -39,25 +43,25 @@ if (gl) {
             float wave1 = sin(dist * 30.0 - iTime * 2.0);
             float wave2 = sin(dist * 50.0 - iTime * 3.5);
             float wave3 = sin(dist * 70.0 - iTime * 5.0);
-
             float waves = wave1 * 0.5 + wave2 * 0.3 + wave3 * 0.2;
 
-            // 距离衰减 - 中心亮，边缘暗
+            // 距离衰减
             float falloff = 1.0 - smoothstep(0.0, 0.5, dist);
             falloff = falloff * falloff;
 
             // 发光环带
             float ring = 0.04 / abs(waves);
+            ring = min(ring, 8.0);
 
-            // 草元素绿色
+            // 草绿色 + 中心发光
             vec3 dendroColor = vec3(0.56, 0.90, 0.38);
-            vec3 color = dendroColor * ring * falloff;
-
-            // 中心发光
             float centerGlow = 0.08 / (dist + 0.08);
-            color += dendroColor * centerGlow * 0.2;
+            vec3 color = dendroColor * ring * falloff + dendroColor * centerGlow * 0.15;
 
-            gl_FragColor = vec4(color, 1.0);
+            // 预乘 alpha：亮度转透明度
+            float brightness = dot(color, vec3(0.299, 0.587, 0.114));
+            float alpha = clamp(brightness * 2.0, 0.0, 1.0);
+            gl_FragColor = vec4(color * alpha, alpha);
         }
     `;
 
@@ -100,8 +104,6 @@ if (gl) {
         animationId = requestAnimationFrame(render);
     }
     render();
-} else {
-    console.warn('WebGL not supported, splash animation disabled');
 }
 
 // ==================== 加载提示文字轮换 ====================
@@ -109,11 +111,11 @@ const loadingText = document.getElementById('loading-text');
 const enterBtn = document.getElementById('enter-btn');
 
 const loadingMessages = [
-    '世界树正在苏醒...',
-    '梦境之花绽放中...',
-    '草元素之力凝聚...',
-    '地脉能量连接中...',
-    '知识之叶飘落...',
+    '正在初始化系统...',
+    '加载智能引擎...',
+    '连接数据模块...',
+    '准备就绪中...',
+    '即将进入主界面...',
 ];
 
 let msgIndex = 0;
@@ -127,7 +129,7 @@ const msgInterval = setInterval(() => {
 // Python 端服务就绪后调用此函数
 window.onServerReady = function() {
     clearInterval(msgInterval);
-    loadingText.textContent = '世界树已苏醒';
+    loadingText.textContent = '系统就绪';
     enterBtn.classList.add('ready');
 };
 

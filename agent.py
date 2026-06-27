@@ -31,7 +31,7 @@ except Exception as e:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="纳西妲 AI Agent")
+    parser = argparse.ArgumentParser(description="Nahida AI Agent")
     parser.add_argument("--web", action="store_true", help="启动 Web UI 模式")
     parser.add_argument("--desktop", action="store_true", help="启动桌面模式（pywebview 原生窗口）")
     parser.add_argument("--port", type=int, default=int(os.getenv("WEBUI_PORT", "8082")), help="Web UI 端口")
@@ -160,7 +160,7 @@ def _run_web(host: str, port: int):
 
 
 def _run_desktop(host: str, port: int):
-    """桌面模式：pywebview 包装 WebUI，带纳西妲风格启动动画"""
+    """桌面模式：pywebview 包装 WebUI，带启动动画"""
     import threading
     import socket
     import time
@@ -244,7 +244,7 @@ def _run_desktop(host: str, port: int):
     import webview
     api = DesktopAPI()
     window = webview.create_window(
-        title="纳西妲 Agent",
+        title="Nahida Agent",
         url=splash_url,
         width=1280,
         height=800,

@@ -540,7 +540,7 @@ function fmtTs(ts: number): string {
           </n-button>
         </div>
         <div class="glass-panel portrait-card md-body"
-             v-html="renderMarkdown(portrait.content || '（还没有形成画像呢～多和纳西妲聊聊吧）')"></div>
+             v-html="renderMarkdown(portrait.content || '（还没有形成画像呢～多聊聊吧）')"></div>
         <n-collapse style="margin-top: 12px">
           <n-collapse-item title="版本变更记录" name="log">
             <div v-for="h in portraitHistory" :key="h.version" class="history-row">

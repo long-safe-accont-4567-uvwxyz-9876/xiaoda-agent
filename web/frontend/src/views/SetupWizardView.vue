@@ -209,8 +209,8 @@ async function handleSave() {
 
         <div class="setup-header">
           <DendroEmblem :size="84" spin />
-          <h1>纳西妲 · 配置向导</h1>
-          <p class="subtitle">世界的记忆，由我来守护</p>
+          <h1>Nahida Agent · 配置向导</h1>
+          <p class="subtitle">初次见面，请多指教</p>
           <p class="version-tag">v{{ version }}</p>
         </div>
 

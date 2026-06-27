@@ -208,7 +208,7 @@ const emotionColors: Record<string, string> = {
     <div class="messages-area" ref="messagesEl">
       <div v-if="chat.messages.length === 0" class="empty-state">
         <div class="empty-icon">🌿</div>
-        <p>这里还没有长出叶子哦～向纳西妲说点什么吧</p>
+        <p>这里还没有长出叶子哦～说点什么吧</p>
       </div>
 
       <transition-group name="msg-fade">

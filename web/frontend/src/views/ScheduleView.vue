@@ -177,7 +177,7 @@ const reasonLabel: Record<string, string> = {
             </n-popconfirm>
           </div>
         </div>
-        <div v-if="!greetings.length" class="empty-hint">还没有计划，点「新增」让纳西妲主动找你说话～</div>
+        <div v-if="!greetings.length" class="empty-hint">还没有计划，点「新增」让助手主动联系你～</div>
       </div>
     </section>
 

@@ -37,15 +37,14 @@ const timezones = [
   { value: 'Pacific/Auckland', label: '奥克兰时间 (UTC+12)' },
 ]
 
-// 默认值（作为示例，用户可编辑）
-// 必填字段首次运行为空，其他字段保留默认值供用户参考
+// 默认值（用户可编辑，预填项目默认模板）
 const defaultFields = {
-  address_term: '',  // 必填，首次运行为空
-  name: '',           // 必填，首次运行为空
+  address_term: '',
+  name: '',
   device: '',
   timezone: 'Asia/Shanghai',
-  preferred_personality: '纳西妲，小吉祥草王风格',
-  preferred_tone: '温柔、软萌、清晰、有陪伴感',
+  preferred_personality: '温柔聪慧的 AI 助手',
+  preferred_tone: '温柔、清晰、有条理',
   like_to_be_called: '',
   liked_reply_style: '有条理、能直接执行的方案',
   disliked_reply_style: '冷冰冰、敷衍或只有抽象建议的回答',
@@ -76,21 +75,17 @@ onMounted(async () => {
 })
 
 async function handleSave() {
-  // 必填字段验证
-  if (!fields.value.address_term.trim()) {
-    error.value = '请填写「希望被称呼为」'
-    return
-  }
-  if (!fields.value.name.trim()) {
-    error.value = '请填写「昵称」'
-    return
-  }
   saving.value = true
   error.value = ''
   success.value = false
   try {
-    // 同步 like_to_be_called = address_term（合并字段）
-    const payload = { ...fields.value, like_to_be_called: fields.value.address_term }
+    // 空字段使用默认值，减少用户输入
+    const payload = {
+      ...fields.value,
+      address_term: fields.value.address_term.trim() || '朋友',
+      name: fields.value.name.trim() || 'User',
+      like_to_be_called: fields.value.address_term.trim() || '朋友',
+    }
     await api.saveSetupUserProfile(payload)
     success.value = true
     setTimeout(() => {
@@ -103,7 +98,16 @@ async function handleSave() {
   }
 }
 
-function handleSkip() {
+async function handleSkip() {
+  // 跳过时保存默认值，避免反复弹出设置页
+  try {
+    await api.saveSetupUserProfile({
+      ...fields.value,
+      address_term: fields.value.address_term.trim() || '朋友',
+      name: fields.value.name.trim() || 'User',
+      like_to_be_called: fields.value.address_term.trim() || '朋友',
+    })
+  } catch { /* 忽略保存错误 */ }
   router.replace('/')
 }
 </script>
@@ -127,22 +131,22 @@ function handleSkip() {
           <h2 class="section-title">── 用户信息 ──</h2>
 
           <div class="form-group">
-            <label class="form-label">希望被称呼为 <span class="required">*</span></label>
+            <label class="form-label">希望被称呼为</label>
             <input
               v-model="fields.address_term"
               class="dendro-input"
               type="text"
-              placeholder="如：爸爸 / 主人 / 朋友"
+              placeholder="留空则默认「朋友」"
             />
           </div>
 
           <div class="form-group">
-            <label class="form-label">昵称 <span class="required">*</span></label>
+            <label class="form-label">昵称</label>
             <input
               v-model="fields.name"
               class="dendro-input"
               type="text"
-              placeholder="你的昵称"
+              placeholder="留空则使用默认值"
             />
           </div>
 
@@ -228,7 +232,7 @@ function handleSkip() {
           </div>
 
           <p class="status-hint">
-            这些信息将保存在 USER.md 中，帮助纳西妲更好地了解你
+            信息保存在 USER.md 中，所有选项均可留空使用默认值
           </p>
         </div>
       </div>
