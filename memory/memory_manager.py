@@ -65,6 +65,88 @@ def _build_fts_query(query: str) -> str:
     return " OR ".join(quoted) if quoted else ""
 
 
+# ── 时间实体识别（解析"昨天/前天/上周/N天前"等中文时间词）──
+import datetime as _datetime
+
+# 时间词 → 相对今天的偏移天数（offset_days, span_days）
+# offset_days: 起点距今多少天前；span_days: 时间跨度
+_TEMPORAL_PATTERNS = [
+    (re.compile(r"前天|大前天"), 2, 1),       # 前天那一天
+    (re.compile(r"昨天|昨日"), 1, 1),         # 昨天那一天
+    (re.compile(r"今天|今日"), 0, 1),         # 今天
+    (re.compile(r"上周"), 7, 7),              # 上周（7-14天前那一周）
+    (re.compile(r"上个月|上月"), 30, 30),     # 上个月
+    (re.compile(r"前几天|前些天|最近"), 1, 7),# 最近一周
+]
+
+
+def _parse_temporal_query(query: str) -> tuple[float, float] | None:
+    """从用户查询中解析时间词，返回 [start_ts, end_ts] 时间戳区间（秒）。
+
+    支持的词：昨天/前天/大前天/今天/上周/上个月/前几天/最近
+    无时间词返回 None。
+
+    注意：这是一个轻量规则解析器，不调 LLM，毫秒级。
+    """
+    for pattern, offset_days, span_days in _TEMPORAL_PATTERNS:
+        if pattern.search(query):
+            now = _datetime.datetime.now()
+            # 计算起始日期的 00:00:00
+            start_date = (now - _datetime.timedelta(days=offset_days + span_days - 1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            # 结束日期的 23:59:59（用次日 00:00:00 表示开区间）
+            end_date = (now - _datetime.timedelta(days=offset_days - 1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ) if offset_days > 0 else now
+            return start_date.timestamp(), end_date.timestamp()
+    return None
+
+
+# 停用词集合（话题关键词提取时过滤）
+_TOPIC_STOPWORDS = {
+    "的", "了", "是", "在", "我", "你", "他", "她", "它", "我们", "你们", "他们",
+    "和", "与", "或", "但", "如果", "因为", "所以", "虽然", "不过", "然后",
+    "这", "那", "这个", "那个", "这些", "那些", "什么", "怎么", "为什么", "哪",
+    "有", "没有", "不", "没", "可以", "能", "会", "要", "想", "觉得", "感觉",
+    "就", "都", "也", "还", "又", "只", "才", "已经", "正在", "一直",
+    "吗", "呢", "吧", "啊", "哦", "嗯", "呀", "哈", "嘿",
+    "用户", "助手", "纳西妲", "人家", "爸爸", "妈妈",
+}
+
+
+def _extract_topic_keywords(query: str, top_n: int = 2) -> list[str]:
+    """从用户查询中抽取话题关键词（用于主动联想检索）。
+
+    优先用 jieba.extract_tags，降级到 jieba.cut + 过滤停用词。
+    返回 top_n 个关键词，每个长度 >= 2。
+    """
+    # 去除时间词（已被 _parse_temporal_query 处理）
+    for pattern, _, _ in _TEMPORAL_PATTERNS:
+        query = pattern.sub("", query)
+    query = query.strip()
+    if not query:
+        return []
+
+    try:
+        import jieba.analyse
+        keywords = jieba.analyse.extract_tags(
+            query, topK=top_n * 2, withWeight=False, allowPOS=("n", "nr", "ns", "nt", "nz", "vn", "v")
+        )
+        # 过滤停用词和过短的词
+        keywords = [kw for kw in keywords if len(kw) >= 2 and kw not in _TOPIC_STOPWORDS]
+        return keywords[:top_n]
+    except Exception:
+        # 降级到普通分词
+        try:
+            import jieba
+            words = jieba.lcut(query)
+            words = [w for w in words if len(w) >= 2 and w not in _TOPIC_STOPWORDS]
+            return words[:top_n]
+        except Exception:
+            return []
+
+
 def reciprocal_rank_fusion(ranked_lists: list[list[str]], *, k: int = 60, limit: int = 10) -> list[tuple[str, float]]:
     """Reciprocal Rank Fusion: 多路排序融合算法"""
     scores: dict[str, float] = {}
@@ -333,6 +415,32 @@ class MemoryManager:
         import config
         results = []
 
+        # 时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索
+        # 这让纳西妲能回答"昨天发生了什么"这类纯时间查询
+        _time_range = _parse_temporal_query(query)
+        if _time_range:
+            start_ts, end_ts = _time_range
+            try:
+                # 优先尝试 FTS + 时间过滤（如果 query 里有内容关键词）
+                _fts_results = await self.memory.search_memories_fts_with_time(
+                    query, start_ts, end_ts, limit=k
+                )
+                if _fts_results:
+                    logger.debug("memory.temporal_fts_hit",
+                                 query=query[:50], count=len(_fts_results))
+                    return _fts_results
+                # FTS 无结果，退回纯时间检索
+                _time_results = await self.memory.search_memories_by_time(
+                    start_ts, end_ts, limit=k * 2
+                )
+                if _time_results:
+                    logger.debug("memory.temporal_time_hit",
+                                 query=query[:50], count=len(_time_results))
+                return _time_results
+            except Exception as e:
+                logger.warning("memory.temporal_search_failed", error=str(e))
+                # 失败则继续走常规检索
+
         # A1: 智能短路 - 简单查询跳过查询变换，直接走混合检索
         if getattr(config, "RETRIEVAL_SMART_SKIP", True) and self._is_retrieval_simple(query):
             return await self.retrieve_memories_hybrid(query, k=k)
@@ -520,6 +628,37 @@ class MemoryManager:
         results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
         results = results[:k]
 
+        # 主动检索 A：话题触发器
+        # 从 query 抽取 top-N 话题关键词，对每个词做轻量 FTS 检索，
+        # 把"主题相关但未被主路命中"的记忆补充进来，扩大主动联想。
+        # 这样即使主路 RRF 没召回，话题相关的旧记忆也能浮上来。
+        try:
+            _topic_keywords = _extract_topic_keywords(query, top_n=2)
+            if _topic_keywords:
+                _existing_ids = {str(r.get("id", "")) for r in results}
+                for _kw in _topic_keywords:
+                    # 跳过和原 query 完全相同的关键词（已被主路检索过）
+                    if _kw == query or _kw in query:
+                        continue
+                    _topic_hits = await self.memory.search_memories_fts(_kw, limit=1)
+                    for _r in _topic_hits:
+                        _rid = str(_r.get("id", ""))
+                        if _rid and _rid not in _existing_ids:
+                            _existing_ids.add(_rid)
+                            # 标记话题触发来源，便于调试和上层 prompt 区分
+                            _r["topic_trigger"] = _kw
+                            # 话题触发的记忆没有 final_score，用基础分填充避免排序异常
+                            _r.setdefault("final_score", _r.get("score", 0.3) * 0.5)
+                            results.append(_r)
+                if len(results) > k:
+                    results = results[:k]
+                if _topic_keywords:
+                    logger.debug("memory.topic_trigger",
+                                 keywords=_topic_keywords,
+                                 added=sum(1 for r in results if r.get("topic_trigger")))
+        except Exception as e:
+            logger.debug("memory.topic_trigger_failed", error=str(e))
+
         # KG 上下文增强（保留原有逻辑）
         if self.kg and results:
             try:
@@ -612,6 +751,18 @@ class MemoryManager:
             logger.info("memory.encoded", summary=summary[:80], importance=importance)
 
             self._save_state_json(summary, importance, emotion)
+
+            # fire-and-forget 后台 LLM 结构化提取（不阻塞主流程）
+            # 用 GLM-4-9B-0414 提取实体/事件/决策/偏好，完成后更新记忆条目
+            try:
+                _enrich_task = asyncio.create_task(
+                    self._enrich_memory_async(mem_id, exchanges)
+                )
+                _enrich_task.add_done_callback(
+                    lambda t: t.exception() if not t.cancelled() and not t.done() else None
+                )
+            except Exception as e:
+                logger.debug("memory.enrich_spawn_failed", error=str(e))
         except Exception as e:
             logger.warning("memory.encode_failed", error=str(e))
 
@@ -633,6 +784,90 @@ class MemoryManager:
 
         summary = " | ".join(parts)
         return summary[:500]
+
+    async def _enrich_memory_async(self, mem_id: int, exchanges: list[dict]):
+        """后台 LLM 提取：用 GLM-4-9B-0414 从对话中提取结构化信息，更新记忆条目。
+
+        fire-and-forget 调用，不阻塞主流程。失败静默（记忆保留原始字符串摘要）。
+        提取内容：更高质量摘要、实体列表、事件类型、元数据（决策/话题/情绪）。
+        """
+        import json
+        try:
+            # 构建对话文本（比 _generate_summary 保留更多内容，给 LLM 更多上下文）
+            lines = []
+            for msg in exchanges[-6:]:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                if role == "user" and content:
+                    lines.append(f"用户: {content[:150]}")
+                elif role == "assistant" and content:
+                    lines.append(f"纳西妲: {content[:150]}")
+            text = "\n".join(lines)
+            if not text or len(text) < 10:
+                return
+
+            prompt = f"""你是记忆结构化提取助手。从以下对话中提取结构化信息，返回 JSON 格式（只返回 JSON，不要任何其他内容）：
+
+对话内容：
+{text}
+
+请返回以下 JSON 格式：
+{{
+  "summary": "更高质量的摘要，保留关键信息、决策、偏好，80字以内",
+  "entities": ["涉及的人物、物品、地点、技术名词等实体"],
+  "event_type": "事件类型（对话/决策/偏好/事件/闲聊/调试/学习 之一）",
+  "metadata": {{
+    "decision": "如果有决策或结论写在这里，没有则空字符串",
+    "topic": "主要话题，1-3个词",
+    "mood": "用户情绪（喜悦/悲伤/愤怒/平静/焦虑等）"
+  }}
+}}"""
+
+            messages = [{"role": "user", "content": prompt}]
+            result = await self.distiller._call_free_model(messages, temperature=0.3, max_tokens=400)
+            if not result:
+                return
+
+            # 去除可能的 <think> 标签
+            if "<think>" in result:
+                result = re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
+
+            # 提取 JSON（LLM 可能返回带 markdown 代码块的）
+            json_str = result
+            if "```json" in json_str:
+                json_str = json_str.split("```json")[1].split("```")[0]
+            elif "```" in json_str:
+                json_str = json_str.split("```")[1].split("```")[0]
+            json_str = json_str.strip()
+
+            data = json.loads(json_str)
+
+            new_summary = data.get("summary", "").strip()
+            entities = json.dumps(data.get("entities", []), ensure_ascii=False)
+            event_type = data.get("event_type", "").strip()
+            metadata = json.dumps(data.get("metadata", {}), ensure_ascii=False)
+
+            # 更新 DB（summary 只在长度足够时才更新，避免丢失信息）
+            update_summary = new_summary if new_summary and len(new_summary) >= 20 else ""
+            await self.memory.update_memory_enrichment(
+                mem_id,
+                summary=update_summary,
+                entities=entities,
+                event_type=event_type,
+                metadata_json=metadata,
+            )
+
+            # 如果 summary 更新了，重新生成向量（让向量检索也能用到更好的摘要）
+            if update_summary and self.vec:
+                try:
+                    await self.vec.upsert(mem_id, update_summary)
+                except Exception as e:
+                    logger.debug("memory.enrich_vec_failed", error=str(e))
+
+            logger.info("memory.enriched", mem_id=mem_id, event_type=event_type,
+                        entities_count=len(data.get("entities", [])))
+        except Exception as e:
+            logger.debug("memory.enrich_failed", error=str(e))
 
     def _estimate_importance(self, exchanges: list[dict], context: dict) -> float:
         importance = 0.3
@@ -727,13 +962,135 @@ class MemoryManager:
             logger.warning("memory.distill_failed", error=str(e))
             return 0
 
+    async def run_scheduled_recall(self, *, hours_back: float = 3.0,
+                                    min_importance: float = 0.6,
+                                    min_memories: int = 3) -> int:
+        """主动检索 B：定时回忆任务。
+
+        从 hours_back 小时前到现在，取重要性 >= min_importance 的记忆，
+        若数量 >= min_memories，调用 distill_recall 整理成"回忆笔记"，
+        写入 memory_recall_notes 表。后续 retrieve_memories/build_memory_prompt
+        可主动拉取这些笔记作为高密度上下文。
+
+        Args:
+            hours_back: 回顾窗口的小时数（默认 3h）
+            min_importance: 重要性下限（默认 0.6）
+            min_memories: 触发整理的最小记忆条数（少于则跳过本次）
+
+        Returns:
+            本次整理的源记忆条数（0 表示未触发或无候选）
+        """
+        try:
+            now = time.time()
+            window_start = now - hours_back * 3600.0
+            candidates = await self.memory.get_high_importance_since(
+                start_ts=window_start,
+                min_importance=min_importance,
+                limit=50,
+            )
+            if len(candidates) < min_memories:
+                logger.debug("memory.recall_skipped",
+                             reason="insufficient_memories",
+                             count=len(candidates),
+                             min=min_memories)
+                return 0
+
+            # 调用叙事风格蒸馏
+            note = await self.distiller.distill_recall(candidates)
+            if not note:
+                logger.warning("memory.recall_empty_note", candidates=len(candidates))
+                return 0
+
+            # 从候选中提取标签（前 5 个实体的并集，便于日后按标签检索）
+            tags_set: list[str] = []
+            seen = set()
+            for c in candidates[:10]:
+                ents = (c.get("entities") or "").strip()
+                if ents:
+                    for e in ents.split("|"):
+                        e = e.strip()
+                        if e and e not in seen and len(e) >= 2:
+                            seen.add(e)
+                            tags_set.append(e)
+                        if len(tags_set) >= 5:
+                            break
+                if len(tags_set) >= 5:
+                    break
+            tags = "|".join(tags_set)
+
+            # 用第一条记忆的时间戳作为 window_start 的实际值（更精确）
+            try:
+                real_start = min(float(c.get("timestamp", now)) for c in candidates)
+            except Exception:
+                real_start = window_start
+
+            source_ids = ",".join(str(c.get("id", "")) for c in candidates if c.get("id"))
+
+            note_id = await self.memory.insert_recall_note(
+                window_start=real_start,
+                window_end=now,
+                summary=note,
+                memory_count=len(candidates),
+                min_importance=min_importance,
+                source_memory_ids=source_ids,
+                title=f"回忆笔记 {time.strftime('%m-%d %H:%M', time.localtime(real_start))}~{time.strftime('%H:%M', time.localtime(now))}",
+                tags=tags,
+            )
+
+            logger.info("memory.recall_note_created",
+                        note_id=note_id,
+                        source_count=len(candidates),
+                        window_hours=hours_back,
+                        note_len=len(note))
+            return len(candidates)
+        except Exception as e:
+            logger.warning("memory.run_scheduled_recall_failed", error=str(e))
+            return 0
+
+    async def retrieve_comfort_memories(self, limit: int = 2) -> list[dict]:
+        """主动检索 C：情绪触发 — 检索"安抚性记忆"。
+
+        当检测到用户情绪低落（valence=negative）时，主动检索带正面情绪标签
+        的历史记忆（喜悦/happy），作为"安抚素材"注入上下文，让纳西妲能
+        回忆起"曾经让用户开心的事"来温柔陪伴。
+
+        DB 中 emotion_label 列历史数据是中文（喜悦），统一模式后是英文（happy），
+        所以两种标签都查，避免漏检。
+
+        Args:
+            limit: 返回条数上限（默认 2，避免上下文膨胀）
+
+        Returns:
+            安抚性记忆列表，每条带 emotion_trigger="comfort" 标记
+        """
+        try:
+            # 正面情绪标签：中文 + 英文双查
+            # 喜悦 = happy；害羞有时也带正面色彩（用户被逗笑），但保守起见只取喜悦
+            comfort_labels = ["喜悦", "happy"]
+            results = await self.memory.search_memories_by_emotion(
+                comfort_labels, limit=limit
+            )
+            for r in results:
+                # 标记来源，便于 prompt 层区分和调试
+                r["emotion_trigger"] = "comfort"
+            if results:
+                logger.debug("memory.comfort_memories_retrieved",
+                             count=len(results),
+                             labels=comfort_labels)
+            return results
+        except Exception as e:
+            logger.warning("memory.retrieve_comfort_memories_failed", error=str(e))
+            return []
+
     async def build_memory_prompt(self, recent_limit: int = 20,
-                                   summary_limit: int = 5) -> str:
+                                   summary_limit: int = 5,
+                                   include_recall_note: bool = True) -> str:
         """P3: 构建记忆提示文本，优先使用蒸馏摘要 + 近期未蒸馏记忆。
 
         Args:
             recent_limit: 近期未蒸馏记忆条数上限
             summary_limit: 蒸馏摘要条数上限
+            include_recall_note: 是否在提示开头注入最近一条定时回忆笔记
 
         Returns:
             记忆提示文本，无内容时返回空串。
@@ -741,14 +1098,26 @@ class MemoryManager:
         try:
             summaries = await self.memory.get_memory_summaries(limit=summary_limit)
             recent = await self.memory.get_recent_undistilled(limit=recent_limit)
+            recall_notes = []
+            if include_recall_note:
+                # 只取最近 1 条回忆笔记（避免上下文膨胀）
+                recall_notes = await self.memory.get_recent_recall_notes(limit=1)
         except Exception as e:
             logger.debug("memory.build_prompt_failed", error=str(e))
             return ""
 
-        if not summaries and not recent:
+        if not summaries and not recent and not recall_notes:
             return ""
 
         parts = []
+        # 定时回忆笔记放在最前（最高密度上下文，像"刚才发生了什么"的快照）
+        if recall_notes:
+            parts.append("[最近回忆笔记]")
+            for rn in recall_notes:
+                text = (rn.get("summary") or "").strip()
+                if text:
+                    parts.append(f"· {text}")
+
         if summaries:
             parts.append("[历史记忆摘要]")
             for s in summaries:

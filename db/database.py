@@ -324,6 +324,58 @@ class DatabaseManager:
                 await self._conn.execute("ROLLBACK")
                 logger.error(f"数据库迁移 v9 失败: {e}")
 
+        if current < 10:
+            try:
+                await self._conn.execute("BEGIN TRANSACTION")
+                # 记忆结构化提取：实体、事件类型、元数据（由后台 LLM 提取填充）
+                cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
+                if "entities" not in cols:
+                    await self._conn.execute(
+                        "ALTER TABLE episodic_memories ADD COLUMN entities TEXT DEFAULT ''"
+                    )
+                if "event_type" not in cols:
+                    await self._conn.execute(
+                        "ALTER TABLE episodic_memories ADD COLUMN event_type TEXT DEFAULT ''"
+                    )
+                if "metadata_json" not in cols:
+                    await self._conn.execute(
+                        "ALTER TABLE episodic_memories ADD COLUMN metadata_json TEXT DEFAULT '{}'"
+                    )
+                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (10, ?)", (time.time(),))
+                await self._conn.commit()
+                logger.info("database.migration_v10", desc="episodic_memories.entities+event_type+metadata_json")
+            except Exception as e:
+                await self._conn.execute("ROLLBACK")
+                logger.error(f"数据库迁移 v10 失败: {e}")
+
+        if current < 11:
+            try:
+                await self._conn.execute("BEGIN TRANSACTION")
+                # 主动检索 B：定时回忆笔记表
+                # 与 memory_summaries（蒸馏压缩，控制上下文长度）语义不同：
+                # memory_recall_notes 是按时间窗口 + 重要性筛选后整理出的"回忆笔记"，
+                # 用于主动检索时给 LLM 提供"最近发生了什么"的高密度上下文。
+                await self._conn.execute("""
+                    CREATE TABLE IF NOT EXISTS memory_recall_notes (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        created_at REAL NOT NULL,
+                        window_start REAL NOT NULL,
+                        window_end REAL NOT NULL,
+                        min_importance REAL DEFAULT 0.6,
+                        source_memory_ids TEXT DEFAULT '',
+                        memory_count INTEGER DEFAULT 0,
+                        title TEXT DEFAULT '',
+                        summary TEXT NOT NULL,
+                        tags TEXT DEFAULT ''
+                    )
+                """)
+                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (11, ?)", (time.time(),))
+                await self._conn.commit()
+                logger.info("database.migration_v11", desc="memory_recall_notes")
+            except Exception as e:
+                await self._conn.execute("ROLLBACK")
+                logger.error(f"数据库迁移 v11 失败: {e}")
+
         await self._conn.commit()
 
     async def fetch_all(self, sql: str, params: tuple = ()) -> list[dict]:
@@ -382,7 +434,10 @@ class DatabaseManager:
                 doc_id TEXT DEFAULT '',
                 source TEXT DEFAULT 'user',
                 access_count INTEGER DEFAULT 0,
-                distilled INTEGER DEFAULT 0
+                distilled INTEGER DEFAULT 0,
+                entities TEXT DEFAULT '',
+                event_type TEXT DEFAULT '',
+                metadata_json TEXT DEFAULT '{}'
             );
 
             CREATE TABLE IF NOT EXISTS memory_summaries (
@@ -390,6 +445,19 @@ class DatabaseManager:
                 summary_text TEXT NOT NULL,
                 created_at REAL NOT NULL,
                 memory_count INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS memory_recall_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at REAL NOT NULL,
+                window_start REAL NOT NULL,
+                window_end REAL NOT NULL,
+                min_importance REAL DEFAULT 0.6,
+                source_memory_ids TEXT DEFAULT '',
+                memory_count INTEGER DEFAULT 0,
+                title TEXT DEFAULT '',
+                summary TEXT NOT NULL,
+                tags TEXT DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS cron_last_run (

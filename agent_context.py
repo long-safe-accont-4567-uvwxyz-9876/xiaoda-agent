@@ -59,6 +59,34 @@ class AgentContext:
         self._lock = asyncio.Lock()
         # 子代理 A2A 共享黑板（由 AgentCore 注入，None 时跳过黑板逻辑）
         self.shared_blackboard: Any = None
+        # 群聊多用户上下文隔离：按 user_id 缓存各自的 history 和压缩摘要
+        # 解决群聊场景下多用户共享单例 context 导致的串话和隐私泄露
+        self._user_histories: dict[str, list[dict]] = {}
+        self._user_summaries: dict[str, str] = {}
+        self._current_user_id: str = ""
+
+    async def switch_user_context(self, user_id: str) -> None:
+        """切换当前活跃用户的上下文（群聊多用户隔离）。
+
+        - 保存当前用户的 history 和 _compressed_summary
+        - 加载目标用户的 history 和 _compressed_summary（无则初始化为空）
+        - 同一用户重复调用是无操作
+
+        注意：只在群聊场景下调用（user_id 为空时不切换，保持单聊行为）。
+        """
+        if not user_id or user_id == self._current_user_id:
+            return
+        async with self._lock:
+            # 保存当前用户上下文
+            if self._current_user_id:
+                self._user_histories[self._current_user_id] = list(self.history)
+                self._user_summaries[self._current_user_id] = self._compressed_summary
+            # 加载目标用户上下文
+            self.history = list(self._user_histories.get(user_id, []))
+            self._compressed_summary = self._user_summaries.get(user_id, "")
+            self._current_user_id = user_id
+            # memory_retrieval 是请求级的，切换用户时清空避免串味
+            self.memory_retrieval = None
 
     async def add_message(self, role: str, content: str, **kwargs):
         msg = {"role": role, "content": str(content) if content is not None else ""}
@@ -126,7 +154,7 @@ class AgentContext:
             remaining_compressible = compressible[compress_count:]
             preserved = self.history[len(self.history) - preserve_count:]
 
-            summary = self._summarize_messages(to_compress)
+            summary = await self._summarize_messages(to_compress)
             if summary:
                 self._compressed_summary = (
                     f"{self._compressed_summary}\n{summary}" if self._compressed_summary else summary
@@ -146,9 +174,14 @@ class AgentContext:
             removed = self.history.pop(0)
             logger.debug("context.force_trimmed", role=removed["role"], preview=removed["content"][:40])
 
-    def _summarize_messages(self, messages: list[dict]) -> str:
+    async def _summarize_messages(self, messages: list[dict]) -> str:
+        """用 LLM 压缩对话历史为摘要。
+
+        修复原 bug：原代码用 asyncio.get_running_loop() 检测导致 LLM 路径永远走不到。
+        现在直接 await LLM 调用，加 5s 超时回退到 _quick_summarize，避免拖慢主流程。
+        """
         if not messages or not self._router:
-            return ""
+            return self._quick_summarize(messages)
 
         lines = []
         for m in messages:
@@ -167,33 +200,25 @@ class AgentContext:
             text = text[:2000]
 
         try:
-            import asyncio
-            try:
-                asyncio.get_running_loop()
-                # 在运行中的事件循环内，不能调用 run_until_complete
-                return self._quick_summarize(messages)
-            except RuntimeError:
-                # 没有运行中的事件循环，可以安全使用
-                pass
-
-            loop = asyncio.new_event_loop()
-            try:
-                result = loop.run_until_complete(
-                    self._router.route(
-                        "chat_flash",
-                        [
-                            {"role": "system", "content": "请将以下对话记录压缩为1-2句话的摘要，保留关键信息和上下文。只输出摘要，不要加任何前缀。"},
-                            {"role": "user", "content": text},
-                        ],
-                        temperature=0.3,
-                        max_tokens=200,
-                    )
-                )
-                if isinstance(result, str) and result.strip():
-                    return result.strip()
-                return self._quick_summarize(messages)
-            finally:
-                loop.close()
+            # 5s 超时：LLM 总结失败/超时则回退到字符串截断，不拖慢主流程
+            result = await asyncio.wait_for(
+                self._router.route(
+                    "chat_flash",
+                    [
+                        {"role": "system", "content": "请将以下对话记录压缩为1-2句话的摘要，保留关键信息和上下文。只输出摘要，不要加任何前缀。"},
+                        {"role": "user", "content": text},
+                    ],
+                    temperature=0.3,
+                    max_tokens=200,
+                ),
+                timeout=5.0,
+            )
+            if isinstance(result, str) and result.strip():
+                return result.strip()
+            return self._quick_summarize(messages)
+        except asyncio.TimeoutError:
+            logger.debug("context.summarize_timeout, fallback to quick")
+            return self._quick_summarize(messages)
         except Exception as e:
             logger.debug("context.summarize_failed", error=str(e))
             return self._quick_summarize(messages)
@@ -220,6 +245,39 @@ class AgentContext:
 
     def get_last_n(self, n: int) -> list[dict]:
         return self.history[-n:] if n > 0 else []
+
+    def _build_time_context(self) -> str:
+        """生成事实化的时间语境——简洁明确，强调"这是真切感受到的此刻"。
+
+        不用文学化氛围描写（会被 LLM 当成背景而忽视），
+        而是用事实陈述 + "真切感受到"呼应 SOUL.md 的时间感知人格，
+        让 LLM 把它当成必须参照的事实，而非可选的氛围。
+        """
+        from datetime import datetime
+        now = datetime.now()
+        # Python weekday(): Monday=0, Sunday=6
+        _weekday_map = {0: "一", 1: "二", 2: "三", 3: "四", 4: "五", 5: "六", 6: "日"}
+        weekday = _weekday_map[now.weekday()]
+        hour, minute = now.hour, now.minute
+
+        if 5 <= hour < 8:
+            period = "清晨"
+        elif 8 <= hour < 11:
+            period = "上午"
+        elif 11 <= hour < 14:
+            period = "正午"
+        elif 14 <= hour < 17:
+            period = "下午"
+        elif 17 <= hour < 19:
+            period = "黄昏"
+        elif 19 <= hour < 23:
+            period = "夜晚"
+        else:
+            period = "深夜"
+
+        return (f"当前时间：{now.year}年{now.month}月{now.day}日 星期{weekday} "
+                f"{hour:02d}:{minute:02d}（{period}）。这是纳西妲真切感受到的此刻，"
+                f"是她回应时唯一参照的时间。")
 
     def _build_dynamic_prompt(self) -> str:
         now = time.time()
@@ -270,21 +328,12 @@ class AgentContext:
         self._stable_cache_ts = 0.0
 
     def build_messages(self, user_input: str) -> list[dict]:
-        # === Stable 层（跨会话缓存，极少变化）===
-        now = time.time()
-        if self._cached_stable_prompt and (now - self._stable_cache_ts) < self.STABLE_CACHE_TTL:
-            stable_content = self._cached_stable_prompt
-        else:
-            stable_parts = []
-            base_prompt = self._system_prompt_loader(address_term=self.current_address_term) if self._system_prompt_loader else self.system_prompt
-
-            if base_prompt:
-                stable_parts.append(base_prompt)
-            if self.instinct_prompt:
-                stable_parts.append(self.instinct_prompt)
-            stable_content = "\n\n---\n\n".join(stable_parts) if stable_parts else ""
-            self._cached_stable_prompt = stable_content
-            self._stable_cache_ts = now
+        # === Stable 层：场景感知动态排序 ===
+        # 根据用户输入自动调整 MD 模块顺序，让最相关的靠近用户输入
+        from prompt_builder import build_scene_aware_prompt
+        stable_content = build_scene_aware_prompt(user_input, self.current_address_term)
+        if self.instinct_prompt:
+            stable_content = stable_content + "\n\n---\n\n" + self.instinct_prompt if stable_content else self.instinct_prompt
 
         # === Context 层（按项目/用户缓存，偶尔变化）===
         context_parts = []
@@ -295,11 +344,7 @@ class AgentContext:
 
         # === Volatile 层（每次重建，频繁变化）===
         volatile_parts = []
-        from datetime import datetime
-        _now = datetime.now()
-        _weekday_map = {0: "日", 1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六"}
-        _time_str = f"{_now.strftime('%Y年%m月%d日')} 星期{_weekday_map[_now.weekday()]} {_now.strftime('%H:%M:%S')}"
-        volatile_parts.append(f"[当前时间] {_time_str}")
+        volatile_parts.append(self._build_time_context())
         if self.emotion_hint:
             volatile_parts.append(f"[感知到{self.current_address_term}的情绪：{self.emotion_hint}]")
         if self.memory_retrieval:
@@ -307,7 +352,16 @@ class AgentContext:
             for m in self.memory_retrieval[:3]:
                 summary = m.get("summary", "")
                 if summary:
-                    mem_texts.append(f"· {summary[:100]}")
+                    # 注入时间戳，让 LLM 知道每条记忆发生的时间（解决"没有时间戳"问题）
+                    ts = m.get("timestamp", 0)
+                    if ts:
+                        try:
+                            _date_str = time.strftime("%m-%d %H:%M", time.localtime(float(ts)))
+                            mem_texts.append(f"· [{_date_str}] {summary[:100]}")
+                        except (ValueError, TypeError, OSError):
+                            mem_texts.append(f"· {summary[:100]}")
+                    else:
+                        mem_texts.append(f"· {summary[:100]}")
                 kg_ctx = m.get("kg_context", "")
                 if kg_ctx:
                     mem_texts.append(kg_ctx[:200])

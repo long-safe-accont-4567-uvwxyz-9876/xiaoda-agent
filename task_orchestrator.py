@@ -146,7 +146,7 @@ class TaskGraph:
         max_node_visits = 2  # 同一节点访问超过此次数判环
         node_visit_count: dict[str, int] = {}
         global_deadline = time.monotonic() + 150  # 全局 150s 超时
-        node_timeout = 30  # 单节点 30s 超时
+        max_node_timeout = 120  # 单节点最大 120s（原 30s 会提前杀掉内层 180s 的 AgentNode）
 
         for step in range(max_steps):
             if current == END:
@@ -173,13 +173,16 @@ class TaskGraph:
             state.current_node = current
             logger.info("task_graph.executing", node=current, step=step)
 
+            # 动态计算节点超时：取"单节点上限"和"全局剩余时间"的较小值，避免外层提前杀内层
+            remaining = global_deadline - time.monotonic()
+            node_timeout = min(max_node_timeout, remaining)
             try:
                 updates = await asyncio.wait_for(handler(state), timeout=node_timeout)
                 if updates:
                     state.update(updates)
             except asyncio.TimeoutError:
                 logger.warning("task_graph.node_timeout", node=current, timeout=node_timeout)
-                state.final_output = f"节点 {current} 执行超时（{node_timeout}s）"
+                state.final_output = f"节点 {current} 执行超时（{node_timeout:.0f}s）"
                 break
             except Exception as e:
                 logger.error("task_graph.node_error", node=current, error=str(e))

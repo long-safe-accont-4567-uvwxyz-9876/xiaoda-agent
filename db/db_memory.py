@@ -207,6 +207,109 @@ class MemoryDB:
         row = await cursor.fetchone()
         return row["cnt"] if row else 0
 
+    async def search_memories_by_time(self, start_ts: float, end_ts: float, limit: int = 20) -> list[dict]:
+        """按时间范围检索记忆（用于"昨天/上周发生了什么"这类查询）。
+
+        Args:
+            start_ts: 起始时间戳（秒）
+            end_ts: 结束时间戳（秒）
+            limit: 返回条数上限
+        """
+        cursor = await self._conn.execute(
+            """SELECT * FROM episodic_memories
+               WHERE timestamp >= ? AND timestamp < ?
+               ORDER BY timestamp DESC LIMIT ?""",
+            (start_ts, end_ts, limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def search_memories_fts_with_time(self, query: str, start_ts: float,
+                                             end_ts: float, limit: int = 10) -> list[dict]:
+        """FTS 全文检索 + 时间范围过滤（混合查询）。"""
+        from memory.memory_manager import _build_fts_query
+        fts_query = _build_fts_query(query)
+        if not fts_query:
+            return []
+        try:
+            cursor = await self._conn.execute(
+                """SELECT em.*, bm25(episodic_memory_fts) AS score
+                   FROM episodic_memory_fts
+                   JOIN episodic_memories em ON em.id = episodic_memory_fts.id
+                   WHERE episodic_memory_fts MATCH ?
+                     AND em.timestamp >= ? AND em.timestamp < ?
+                   ORDER BY score ASC, em.importance DESC, em.timestamp DESC
+                   LIMIT ?""",
+                (fts_query, start_ts, end_ts, limit),
+            )
+            rows = await cursor.fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                d["score"] = -d.get("score", 0)
+                results.append(d)
+            return results
+        except Exception as e:
+            from loguru import logger
+            logger.warning("db_memory.fts_time_search_failed", error=str(e))
+            return []
+
+    async def update_memory_enrichment(self, memory_id: int, summary: str = "",
+                                        entities: str = "", event_type: str = "",
+                                        metadata_json: str = "", auto_commit: bool = True) -> bool:
+        """后台 LLM 提取完成后，更新记忆条目的结构化字段。
+
+        Args:
+            memory_id: 记忆 ID
+            summary: LLM 提取的更高质量摘要（可选，空则不更新）
+            entities: 实体列表（JSON 字符串，如 '["纳西妲", "爸爸", "QQ"]'）
+            event_type: 事件类型（如 '对话/决策/偏好/事件'）
+            metadata_json: 元数据 JSON（如 '{"decision": "重启服务", "mood": "开心"}'）
+        """
+        try:
+            sets = []
+            params = []
+            if summary:
+                sets.append("summary = ?")
+                params.append(summary)
+            if entities:
+                sets.append("entities = ?")
+                params.append(entities)
+            if event_type:
+                sets.append("event_type = ?")
+                params.append(event_type)
+            if metadata_json:
+                sets.append("metadata_json = ?")
+                params.append(metadata_json)
+            if not sets:
+                return False
+            params.append(memory_id)
+            await self._conn.execute(
+                f"UPDATE episodic_memories SET {', '.join(sets)} WHERE id = ?",
+                params,
+            )
+            if auto_commit:
+                await self._conn.commit()
+            # 如果 summary 更新了，同步更新 FTS 索引
+            if summary:
+                try:
+                    from memory.memory_manager import _tokenize_for_fts
+                    tokens = _tokenize_for_fts(summary)
+                    await self._conn.execute(
+                        "UPDATE episodic_memory_fts SET summary_index = ? WHERE id = ?",
+                        (tokens, memory_id),
+                    )
+                    if auto_commit:
+                        await self._conn.commit()
+                except Exception as e:
+                    from loguru import logger
+                    logger.debug("db_memory.fts_update_failed", error=str(e))
+            return True
+        except Exception as e:
+            from loguru import logger
+            logger.warning("db_memory.enrichment_update_failed", error=str(e))
+            return False
+
     async def insert_portrait(self, content: str, version: int = 1,
                                source_ids: str = "", change_log: str = "",
                                auto_commit: bool = True) -> int:
@@ -375,3 +478,119 @@ class MemoryDB:
             # 旧库可能没有 distilled 列，降级返回所有最近记忆
             logger.debug("db_memory.recent_undistilled_failed", error=str(e))
             return await self.get_episodic_recent(limit=limit)
+
+    # ── 主动检索 B/C：定时回忆笔记 + 情绪触发检索 ────────────────
+
+    async def search_memories_by_emotion(self, emotion_labels: list[str],
+                                          limit: int = 5) -> list[dict]:
+        """按情绪标签检索记忆（用于情绪触发主动检索）。
+
+        Args:
+            emotion_labels: 目标情绪标签列表（如 ["喜悦", "happy"]）。
+                            DB 中 emotion_label 列可能存中文或英文，调用方应同时传入两种。
+            limit: 返回条数上限
+
+        Returns:
+            匹配的记忆列表，按 importance DESC, timestamp DESC 排序
+        """
+        if not emotion_labels:
+            return []
+        # 防注入：标签是有限集合，但仍做白名单校验
+        clean_labels = [str(l).strip() for l in emotion_labels if str(l).strip()]
+        if not clean_labels:
+            return []
+        try:
+            placeholders = ",".join("?" * len(clean_labels))
+            cursor = await self._conn.execute(
+                f"""SELECT * FROM episodic_memories
+                    WHERE emotion_label IN ({placeholders})
+                      AND session_id != 'archived'
+                    ORDER BY importance DESC, timestamp DESC LIMIT ?""",
+                (*clean_labels, limit),
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning("db_memory.search_by_emotion_failed", error=str(e))
+            return []
+
+    async def get_high_importance_since(self, start_ts: float,
+                                         min_importance: float = 0.6,
+                                         limit: int = 50) -> list[dict]:
+        """获取自 start_ts 起、重要性 >= min_importance 的记忆（按重要性降序）。
+
+        供定时回忆任务筛选用：单次 SQL 完成时间窗 + 重要性组合查询，
+        避免在 Python 层二次过滤。
+        """
+        try:
+            cursor = await self._conn.execute(
+                """SELECT * FROM episodic_memories
+                   WHERE timestamp >= ? AND importance >= ?
+                   ORDER BY importance DESC, timestamp DESC LIMIT ?""",
+                (start_ts, min_importance, limit),
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning("db_memory.get_high_importance_since_failed", error=str(e))
+            return []
+
+    async def insert_recall_note(self, *, window_start: float, window_end: float,
+                                  summary: str, memory_count: int,
+                                  min_importance: float = 0.6,
+                                  source_memory_ids: str = "",
+                                  title: str = "", tags: str = "",
+                                  auto_commit: bool = True) -> int:
+        """写入一条定时回忆笔记。
+
+        Args:
+            window_start/end: 该笔记覆盖的时间窗（秒级时间戳）
+            summary: LLM 蒸馏后的回忆摘要
+            memory_count: 参与整理的源记忆条数
+            source_memory_ids: 逗号分隔的源记忆 ID 列表（便于追溯）
+            title/tags: 可选的标题和标签（便于检索）
+        """
+        try:
+            cursor = await self._conn.execute(
+                """INSERT INTO memory_recall_notes
+                   (created_at, window_start, window_end, min_importance,
+                    source_memory_ids, memory_count, title, summary, tags)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (time.time(), window_start, window_end, min_importance,
+                 source_memory_ids, memory_count, title, summary, tags),
+            )
+            note_id = cursor.lastrowid
+            if auto_commit:
+                await self._conn.commit()
+            return note_id or 0
+        except Exception as e:
+            logger.warning("db_memory.insert_recall_note_failed", error=str(e))
+            return 0
+
+    async def get_recent_recall_notes(self, limit: int = 5,
+                                       since_ts: float = 0.0) -> list[dict]:
+        """获取最近的回忆笔记（按 created_at 降序）。
+
+        Args:
+            limit: 返回条数上限
+            since_ts: 若 >0，仅返回 created_at >= since_ts 的笔记（用于"最近 N 小时"）
+        """
+        try:
+            if since_ts > 0:
+                cursor = await self._conn.execute(
+                    """SELECT * FROM memory_recall_notes
+                       WHERE created_at >= ?
+                       ORDER BY created_at DESC LIMIT ?""",
+                    (since_ts, limit),
+                )
+            else:
+                cursor = await self._conn.execute(
+                    """SELECT * FROM memory_recall_notes
+                       ORDER BY created_at DESC LIMIT ?""",
+                    (limit,),
+                )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning("db_memory.get_recent_recall_notes_failed", error=str(e))
+            return []

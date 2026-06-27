@@ -183,6 +183,15 @@ async def _start_services(app, core):
     scheduler.start()
     app.state.greeting_scheduler = scheduler
 
+    # 主动检索 B：定时回忆任务调度器（独立后台循环，每 3h 整理回忆笔记）
+    try:
+        from memory.recall_scheduler import MemoryRecallScheduler
+        recall_scheduler = MemoryRecallScheduler(core)
+        recall_scheduler.start()
+        app.state.recall_scheduler = recall_scheduler
+    except Exception as e:
+        logger.warning("webui.recall_scheduler_init_failed", error=str(e))
+
     # QQ Bot
     qq_task = None
     if os.getenv("QQBOT_APP_ID") and os.getenv("ENABLE_QQ_BOT", "true").lower() in ("true", "1", "yes"):
@@ -279,6 +288,9 @@ async def lifespan(app: FastAPI):
     greeting_scheduler = getattr(app.state, "greeting_scheduler", None)
     if greeting_scheduler:
         await greeting_scheduler.stop()
+    recall_scheduler = getattr(app.state, "recall_scheduler", None)
+    if recall_scheduler:
+        await recall_scheduler.stop()
     media_queue = getattr(app.state, "media_queue", None)
     if media_queue:
         await media_queue.stop()

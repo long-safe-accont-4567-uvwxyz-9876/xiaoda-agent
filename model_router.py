@@ -84,7 +84,7 @@ class ModelRouter:
     TASK_TIMEOUTS = {
         "emotion_analysis": 10,
         "emotion": 10,
-        "chat_flash": 15,
+        "chat_flash": 45,
         "chat": 30,
         "chat_pro": 45,
         "tool_call": 30,

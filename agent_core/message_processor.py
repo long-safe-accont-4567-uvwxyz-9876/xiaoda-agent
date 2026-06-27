@@ -15,6 +15,7 @@ from loguru import logger
 from config import (MIMO_MODEL, AGENT_CONFIG, build_safe_system_prompt,
                     SIMPLE_TASK_KEYWORDS, PRO_TASK_KEYWORDS, TTS_ASYNC_MODE,
                     SIMPLE_CHAT_FASTPATH, STREAM_TEXT_PUSH)
+from prompt_builder import build_scene_aware_prompt
 from core.chat_processor import ChatProcessor
 from core.circuit_breaker import CircuitState
 from core.background_tasks import _spawn
@@ -66,6 +67,13 @@ class MessageProcessorMixin:
         # 按当前用户重新恢复历史摘要（群聊场景下不同用户历史不混合）
         # 使用 user_openid 优先（QQ 群聊稳定标识），其次 user_id
         _restore_id = user_openid or user_id
+        # 群聊多用户上下文隔离：切换到当前用户的 history 和压缩摘要
+        # 避免不同用户共享单例 context 导致串话和隐私泄露
+        if _restore_id:
+            try:
+                await self.context.switch_user_context(_restore_id)
+            except Exception as e:
+                logger.warning("agent.switch_user_context_failed", error=str(e))
         if _restore_id and self.db:
             try:
                 await self.context.restore_from_db(self.db, user_id=_restore_id,
@@ -116,17 +124,57 @@ class MessageProcessorMixin:
             # 构建最小上下文：系统提示 + 最近 3 轮历史 + 用户输入
             # 非主人使用安全化 prompt（剥离所有隐私信息），主人使用完整 prompt
             if is_master:
-                system_prompt = self.context._system_prompt_loader(address_term=self.context.current_address_term) if self.context._system_prompt_loader else self.context.system_prompt
+                # 场景感知动态排序：根据用户输入调整 MD 模块顺序，
+                # 让最相关的模块靠近用户输入（LLM 注意力最强的位置）
+                system_prompt = build_scene_aware_prompt(user_input, self.context.current_address_term)
             else:
                 system_prompt = build_safe_system_prompt()
             messages = [{"role": "system", "content": system_prompt}]
+
+            # Context 层注入（动态提示：用户画像 + 学习规则，已缓存 ~0ms）
+            # 这是"味道"的来源 —— 没有这层，回复会变成无个性的模板
+            if is_master:
+                _dynamic = self.context._build_dynamic_prompt()
+                if _dynamic:
+                    messages.append({"role": "system", "content": _dynamic})
+
+            # Volatile 层：时间感知 + 情绪（延迟注入到用户输入前，确保 LLM 注意力最强）
+            _volatile = self.context._build_time_context()
+            if emotion_hint:
+                _addr = self.context.current_address_term if is_master else "你"
+                _volatile += f"\n[感知到{_addr}的情绪：{emotion_hint}]"
+
             # 轻量 FTS 记忆检索（毫秒级，让 fast_path 也能"记住"之前的内容）
             # 只检索 2 条摘要，避免 prompt 过长拖慢 LLM
-            if is_master and self.memory and getattr(self.memory, 'memory', None):
+            # 问候类跳过：FTS 会检索到含时间词的旧记忆（如"今天晚上过得开心吗"），
+            # 污染 LLM 的时间感知，让它 echo 用户的时间词
+            _is_greeting = bool(re.match(
+                r'^(早[上安]?|中午|下午|晚上|晚安|你好|哈喽|hi|hello|hey)[好呀～~！!。.\s]*$',
+                clean_input.strip(), re.IGNORECASE))
+
+            if is_master and not _is_greeting and self.memory and getattr(self.memory, 'memory', None):
                 try:
                     _fts_mems = await self.memory.memory.search_memories_fts(user_input, limit=2)
                     if _fts_mems:
-                        _mem_lines = [m.get("summary", "")[:120] for m in _fts_mems if m.get("summary")]
+                        # 注入时间戳，让 LLM 知道每条记忆发生的时间
+                        _mem_lines = []
+                        for m in _fts_mems:
+                            _s = m.get("summary", "")
+                            if not _s:
+                                continue
+                            # 跳过问候类记忆，避免旧问候污染时间感知
+                            # （记忆里的"爸爸晚上好呀～"会让 LLM 模仿，即使当前是中午）
+                            if re.search(r'(晚上好|早上好|中午好|下午好|晚安|早安)', _s):
+                                continue
+                            _ts = m.get("timestamp", 0)
+                            if _ts:
+                                try:
+                                    _d = time.strftime("%m-%d %H:%M", time.localtime(float(_ts)))
+                                    _mem_lines.append(f"[{_d}] {_s[:120]}")
+                                except (ValueError, TypeError, OSError):
+                                    _mem_lines.append(_s[:120])
+                            else:
+                                _mem_lines.append(_s[:120])
                         if _mem_lines:
                             messages.append({
                                 "role": "system",
@@ -134,11 +182,32 @@ class MessageProcessorMixin:
                             })
                 except Exception as e:
                     logger.debug(f"fast_path.fts_failed: {e}")
+            # 主动检索 C：情绪触发（轻量版，仅强负面情绪时检索安抚记忆）
+            if is_master and self.memory and emotion.get("valence") == "negative" \
+                    and float(emotion.get("intensity", 0.0)) >= 0.5:
+                try:
+                    _comfort = await self.memory.retrieve_comfort_memories(limit=1)
+                    if _comfort:
+                        _c_lines = []
+                        for m in _comfort:
+                            _s = m.get("summary", "")
+                            if _s:
+                                _c_lines.append(_s[:120])
+                        if _c_lines:
+                            _addr = self.context.current_address_term or "你"
+                            messages.append({
+                                "role": "system",
+                                "content": f"[曾经让{_addr}开心的回忆（温柔陪伴时可以提起）]\n" + "\n".join(_c_lines)
+                            })
+                except Exception as e:
+                    logger.debug(f"fast_path.comfort_failed: {e}")
             # 非主人不加载历史对话（防止看到主人的聊天内容）
             if is_master:
                 for msg in self.context.get_last_n(6):
                     m = {"role": msg["role"], "content": str(msg.get("content", "")) if msg.get("content") is not None else ""}
                     messages.append(m)
+            # Volatile 层：时间感知紧贴用户输入注入，LLM 对最近内容注意力最强
+            messages.append({"role": "system", "content": _volatile})
             messages.append({"role": "user", "content": user_input})
 
             _model_cfg = AGENT_CONFIG.get("model", {})
@@ -276,10 +345,41 @@ class MessageProcessorMixin:
             if self.memory and is_master:
                 self.memory.signal_new_message()
                 try:
-                    return await self.memory.retrieve_memories(user_input, k=3)
+                    results = await self.memory.retrieve_memories(user_input, k=3)
                 except Exception as e:
                     logger.warning("memory.retrieve_failed", error=str(e))
-                    return None
+                    results = None
+
+                # 主动检索 C：情绪触发
+                # 检测到用户负面情绪（valence=negative）且强度超阈值时，
+                # 并行检索"安抚性记忆"（带正面情绪标签的历史记忆），
+                # 合并到主检索结果中，让纳西妲能回忆起"曾经让用户开心的事"来温柔陪伴。
+                if results is not None:
+                    try:
+                        import config as _cfg
+                        _emo_threshold = float(getattr(_cfg, "EMOTION_TRIGGER_THRESHOLD", 0.5))
+                    except Exception:
+                        _emo_threshold = 0.5
+
+                    if (emotion.get("valence") == "negative"
+                            and float(emotion.get("intensity", 0.0)) >= _emo_threshold):
+                        try:
+                            comfort = await self.memory.retrieve_comfort_memories(limit=2)
+                            if comfort:
+                                _existing_ids = {str(r.get("id", "")) for r in results}
+                                for _r in comfort:
+                                    _rid = str(_r.get("id", ""))
+                                    if _rid and _rid not in _existing_ids:
+                                        _existing_ids.add(_rid)
+                                        results.append(_r)
+                                logger.debug("memory.emotion_trigger_activated",
+                                             valence=emotion.get("valence"),
+                                             intensity=emotion.get("intensity"),
+                                             comfort_added=len(comfort))
+                        except Exception as e:
+                            logger.debug("memory.emotion_trigger_failed", error=str(e))
+                    return results
+                return None
             return None
 
         async def _load_notebook():

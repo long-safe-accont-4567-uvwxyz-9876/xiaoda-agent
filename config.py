@@ -426,9 +426,10 @@ STREAM_TEXT_PUSH = os.getenv("STREAM_TEXT_PUSH", "false").lower() in ("1", "true
 STREAM_TOOL_STATUS = os.getenv("STREAM_TOOL_STATUS", "true").lower() in ("1", "true", "yes")
 
 # Task 12: 熔断器智能恢复配置（P2）
-CIRCUIT_BREAKER_COOLDOWN = int(os.getenv("CIRCUIT_BREAKER_COOLDOWN", "60"))
-CIRCUIT_BREAKER_HALF_OPEN_PROBES = int(os.getenv("CIRCUIT_BREAKER_HALF_OPEN_PROBES", "1"))
-CIRCUIT_BREAKER_MAX_COOLDOWN = int(os.getenv("CIRCUIT_BREAKER_MAX_COOLDOWN", "600"))
+# COOLDOWN 从 60→30：熔断后恢复更快，避免长时间快速失败拖累用户体验
+CIRCUIT_BREAKER_COOLDOWN = int(os.getenv("CIRCUIT_BREAKER_COOLDOWN", "30"))
+CIRCUIT_BREAKER_HALF_OPEN_PROBES = int(os.getenv("CIRCUIT_BREAKER_HALF_OPEN_PROBES", "2"))
+CIRCUIT_BREAKER_MAX_COOLDOWN = int(os.getenv("CIRCUIT_BREAKER_MAX_COOLDOWN", "300"))
 
 # P5: 失败经验→规则闭环 —— 命中规则时是否拒绝调用（true=拒绝，false=仅记录警告日志）
 ERROR_RULE_STRICT_MODE = os.getenv("ERROR_RULE_STRICT_MODE", "false").lower() in ("1", "true", "yes")
