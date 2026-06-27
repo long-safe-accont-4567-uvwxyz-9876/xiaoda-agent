@@ -7,54 +7,47 @@
     <link rel="stylesheet" href="splash.css">
 </head>
 <body>
-    <!-- GlowHorizon 发光地平线 -->
-    <div class="glow-horizon">
-        <div class="arc arc-4"></div>
-        <div class="arc arc-3"></div>
-        <div class="arc arc-2"></div>
-        <div class="arc arc-1"></div>
+    <!-- 底部极简光晕 -->
+    <div class="aurora">
+        <div class="aurora-layer aurora-base"></div>
+        <div class="aurora-layer aurora-glow"></div>
     </div>
+
+    <!-- SiriWave 波浪 Canvas（底部水平波浪） -->
+    <canvas id="siri-wave"></canvas>
 
     <!-- 中央内容 -->
     <div class="center-content">
-        <!-- SiriWave 波纹 Canvas -->
-        <canvas id="siri-wave"></canvas>
-
-        <!-- 草叶图标（SVG） -->
-        <div class="icon-wrapper">
-            <svg class="leaf-icon" viewBox="0 0 100 120" width="64" height="76">
+        <div class="leaf-emblem">
+            <svg viewBox="0 0 80 100" width="52" height="65">
                 <defs>
-                    <linearGradient id="leafGrad" x1="50%" y1="0%" x2="50%" y2="100%">
-                        <stop offset="0%" stop-color="#8fe560"/>
-                        <stop offset="50%" stop-color="#5cb830"/>
-                        <stop offset="100%" stop-color="#1d3b2a"/>
+                    <linearGradient id="leaf-grad" x1="50%" y1="0%" x2="50%" y2="100%">
+                        <stop offset="0%" stop-color="#b8f080"/>
+                        <stop offset="100%" stop-color="#4a9a20"/>
                     </linearGradient>
-                    <filter id="leafGlow">
-                        <feGaussianBlur stdDeviation="2" result="blur"/>
-                        <feMerge>
-                            <feMergeNode in="blur"/>
-                            <feMergeNode in="SourceGraphic"/>
-                        </feMerge>
+                    <filter id="leaf-glow">
+                        <feGaussianBlur stdDeviation="4" result="blur"/>
+                        <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
                     </filter>
                 </defs>
-                <path d="M50 5 C25 30 20 60 50 115 C80 60 75 30 50 5 Z"
-                      fill="url(#leafGrad)"
-                      filter="url(#leafGlow)"/>
-                <path d="M50 5 L50 115" stroke="#0f1f17" stroke-width="1" opacity="0.3"/>
+                <path d="M40 4 C18 28 14 56 40 96 C66 56 62 28 40 4Z" fill="url(#leaf-grad)" filter="url(#leaf-glow)" opacity="0.9"/>
+                <path d="M40 4 L40 96" stroke="#0f1f17" stroke-width="0.8" opacity="0.15"/>
+                <path d="M40 30 C32 38 26 48 28 56" stroke="#0f1f17" stroke-width="0.5" opacity="0.1" fill="none"/>
+                <path d="M40 30 C48 38 54 48 52 56" stroke="#0f1f17" stroke-width="0.5" opacity="0.1" fill="none"/>
             </svg>
         </div>
 
-        <!-- 标题 -->
         <h1 class="title">Nahida Agent</h1>
+        <p class="subtitle">AI Multi-Agent Assistant</p>
 
-        <!-- 加载提示 -->
-        <p class="loading-text" id="loading-text">正在初始化...</p>
+        <div class="loading-area">
+            <div class="loading-bar">
+                <div class="loading-bar-inner" id="loading-bar"></div>
+            </div>
+            <p class="loading-text" id="loading-text">Initializing</p>
+        </div>
 
-        <!-- 进入按钮 -->
-        <button class="enter-btn" id="enter-btn">
-            <span class="btn-text">进入主界面</span>
-            <span class="btn-glow"></span>
-        </button>
+        <button class="enter-btn" id="enter-btn">Enter</button>
     </div>
 
     <script src="splash.js"></script>

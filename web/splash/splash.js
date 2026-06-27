@@ -1,4 +1,4 @@
-// ==================== SiriWave WebGL 圆形波纹（草绿色系） ====================
+// ==================== SiriWave WebGL 水平波浪（草绿色系 wave 变体） ====================
 const canvas = document.getElementById('siri-wave');
 const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true })
     || canvas.getContext('experimental-webgl', { alpha: true, premultipliedAlpha: true });
@@ -6,14 +6,14 @@ const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true })
 let animationId = null;
 
 function resizeCanvas() {
-    const size = Math.min(window.innerWidth, window.innerHeight) * 0.6;
-    const renderScale = 1.5;
-    const dim = Math.round(size * renderScale);
-    canvas.width = dim;
-    canvas.height = dim;
-    canvas.style.width = size + 'px';
-    canvas.style.height = size + 'px';
-    if (gl) gl.viewport(0, 0, dim, dim);
+    const w = window.innerWidth;
+    const h = 100;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    if (gl) gl.viewport(0, 0, canvas.width, canvas.height);
 }
 
 if (gl) {
@@ -27,40 +27,38 @@ if (gl) {
         }
     `;
 
-    // 圆形波纹 Shader - 从中心向外扩散的多层环形波纹
-    // 颜色：草绿 #8fe560 = rgb(143, 229, 96) = vec3(0.56, 0.90, 0.38)
+    // SiriWave wave 变体 — 水平波浪线条，草绿色
+    // 参考 Obsidian SiriWave 设计提示词，3层正弦波叠加 + 发光效果
     const fsSource = `
         precision highp float;
         uniform vec2 iResolution;
         uniform float iTime;
 
         void main() {
-            vec2 uv = gl_FragCoord.xy / iResolution.xy;
-            vec2 center = vec2(0.5, 0.5);
-            float dist = distance(uv, center);
+            vec2 uv = gl_FragCoord.xy / iResolution;
+            float t = iTime;
 
-            // 多层环形波纹 - 从中心向外扩散
-            float wave1 = sin(dist * 30.0 - iTime * 2.0);
-            float wave2 = sin(dist * 50.0 - iTime * 3.5);
-            float wave3 = sin(dist * 70.0 - iTime * 5.0);
-            float waves = wave1 * 0.5 + wave2 * 0.3 + wave3 * 0.2;
+            // 3层波形叠加（主波 + 副波 + 细节波）
+            float wave = sin(uv.x * 20.0 + t * 3.0) * 0.12;
+            wave += sin(uv.x * 35.0 - t * 2.5) * 0.06;
+            wave += sin(uv.x * 50.0 + t * 4.0) * 0.03;
 
-            // 距离衰减
-            float falloff = 1.0 - smoothstep(0.0, 0.5, dist);
-            falloff = falloff * falloff;
+            // 中心波形距离
+            float d = uv.y - (0.5 + wave);
+            float glow = 0.015 / abs(d);
 
-            // 发光环带
-            float ring = 0.04 / abs(waves);
-            ring = min(ring, 8.0);
-
-            // 草绿色 + 中心发光
+            // 草绿色 #8fe560 = vec3(0.56, 0.90, 0.38)
             vec3 dendroColor = vec3(0.56, 0.90, 0.38);
-            float centerGlow = 0.08 / (dist + 0.08);
-            vec3 color = dendroColor * ring * falloff + dendroColor * centerGlow * 0.15;
+            vec3 color = dendroColor * glow;
 
-            // 预乘 alpha：亮度转透明度
+            // 边缘渐隐（左右渐出，上下渐出）
+            float edgeX = smoothstep(0.0, 0.08, uv.x) * smoothstep(1.0, 0.92, uv.x);
+            float edgeY = smoothstep(0.0, 0.15, uv.y) * smoothstep(1.0, 0.85, uv.y);
+            color *= edgeX * edgeY;
+
+            // 预乘 alpha
             float brightness = dot(color, vec3(0.299, 0.587, 0.114));
-            float alpha = clamp(brightness * 2.0, 0.0, 1.0);
+            float alpha = clamp(brightness * 1.5, 0.0, 0.85);
             gl_FragColor = vec4(color * alpha, alpha);
         }
     `;
@@ -69,74 +67,87 @@ if (gl) {
         const shader = gl.createShader(type);
         gl.shaderSource(shader, source);
         gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            console.error('Shader error:', gl.getShaderInfoLog(shader));
+            gl.deleteShader(shader);
+            return null;
+        }
         return shader;
     }
 
     const vs = createShader(gl.VERTEX_SHADER, vsSource);
     const fs = createShader(gl.FRAGMENT_SHADER, fsSource);
-    const program = gl.createProgram();
-    gl.attachShader(program, vs);
-    gl.attachShader(program, fs);
-    gl.linkProgram(program);
-    gl.useProgram(program);
 
-    const buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    if (vs && fs) {
+        const program = gl.createProgram();
+        gl.attachShader(program, vs);
+        gl.attachShader(program, fs);
+        gl.linkProgram(program);
 
-    const aPos = gl.getAttribLocation(program, 'aPos');
-    gl.enableVertexAttribArray(aPos);
-    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            console.error('Program error:', gl.getProgramInfoLog(program));
+        } else {
+            gl.useProgram(program);
 
-    const uResolution = gl.getUniformLocation(program, 'iResolution');
-    const uTime = gl.getUniformLocation(program, 'iTime');
+            const buffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
 
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
+            const aPos = gl.getAttribLocation(program, 'aPos');
+            gl.enableVertexAttribArray(aPos);
+            gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
 
-    const start = performance.now();
+            const uResolution = gl.getUniformLocation(program, 'iResolution');
+            const uTime = gl.getUniformLocation(program, 'iTime');
 
-    function render() {
-        const t = (performance.now() - start) / 1000;
-        gl.uniform2f(uResolution, canvas.width, canvas.height);
-        gl.uniform1f(uTime, t);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-        animationId = requestAnimationFrame(render);
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+
+            const start = performance.now();
+
+            function render() {
+                const t = (performance.now() - start) / 1000;
+                gl.uniform2f(uResolution, canvas.width, canvas.height);
+                gl.uniform1f(uTime, t);
+                gl.drawArrays(gl.TRIANGLES, 0, 3);
+                animationId = requestAnimationFrame(render);
+            }
+            render();
+        }
     }
-    render();
 }
 
 // ==================== 加载提示文字轮换 ====================
 const loadingText = document.getElementById('loading-text');
+const loadingBar = document.getElementById('loading-bar');
 const enterBtn = document.getElementById('enter-btn');
 
 const loadingMessages = [
-    '正在初始化系统...',
-    '加载智能引擎...',
-    '连接数据模块...',
-    '准备就绪中...',
-    '即将进入主界面...',
+    'Initializing',
+    'Loading engines',
+    'Connecting modules',
+    'Preparing workspace',
+    'Almost ready',
 ];
 
 let msgIndex = 0;
 const msgInterval = setInterval(() => {
     msgIndex = (msgIndex + 1) % loadingMessages.length;
     loadingText.textContent = loadingMessages[msgIndex];
-}, 2500);
+}, 3000);
 
 // ==================== 服务就绪回调（由 Python 端调用） ====================
 
-// Python 端服务就绪后调用此函数
 window.onServerReady = function() {
     clearInterval(msgInterval);
-    loadingText.textContent = '系统就绪';
+    loadingText.textContent = 'Ready';
+    if (loadingBar) loadingBar.style.animation = 'none';
     enterBtn.classList.add('ready');
 };
 
-// Python 端超时后调用此函数
 window.onServerTimeout = function() {
     clearInterval(msgInterval);
-    loadingText.textContent = '连接超时，请检查服务状态';
+    loadingText.textContent = 'Connection timeout';
 };
 
 // ==================== 进入按钮点击事件 ====================
@@ -144,10 +155,8 @@ enterBtn.addEventListener('click', async () => {
     enterBtn.style.opacity = '0.5';
     enterBtn.style.pointerEvents = 'none';
     try {
-        // 通过 pywebview JS API 调用 Python 端切换 URL
         await window.pywebview.api.enter_world();
     } catch (e) {
-        // Fallback: 直接跳转
         const port = window.location.hash ? window.location.hash.substring(1) : '8082';
         window.location.href = `http://localhost:${port}`;
     }
