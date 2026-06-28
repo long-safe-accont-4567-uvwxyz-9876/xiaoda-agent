@@ -207,43 +207,32 @@ def _run_desktop(host: str, port: int):
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
 
-    # 桌面模式：splash 通过 file:// 加载（瞬间完成，不依赖服务器），
-    # InkReveal 动画结束后通过 pywebview js_api 将窗口导航到 WebUI
-    def _splash_path():
+    # 桌面模式：用独立 HTTP 服务器提供 splash（避免 file:// + http:// 跨域问题）
+    # splash 中有 iframe 预加载 WebUI，InkReveal 完成后显示 iframe，实现无缝衔接
+    def _splash_dir():
         if getattr(sys, 'frozen', False):
             _base = os.path.dirname(sys.executable)
-            _p = os.path.join(_base, '_internal', 'web', 'splash', 'splash.html')
-            if os.path.exists(_p):
-                return _p
-            _p = os.path.join(_base, 'web', 'splash', 'splash.html')
-            if os.path.exists(_p):
-                return _p
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web', 'splash', 'splash.html')
+            for p in [os.path.join(_base, '_internal', 'web', 'splash'),
+                      os.path.join(_base, 'web', 'splash')]:
+                if os.path.exists(p):
+                    return p
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web', 'splash')
 
-    splash_url = 'file://' + _splash_path() + '#' + str(port)
+    import http.server, functools
+    _splash_port = 18089
+    _handler_cls = functools.partial(http.server.SimpleHTTPRequestHandler, directory=_splash_dir())
+    try:
+        _splash_httpd = http.server.HTTPServer(("127.0.0.1", _splash_port), _handler_cls)
+        threading.Thread(target=_splash_httpd.serve_forever, daemon=True).start()
+        splash_url = f'http://127.0.0.1:{_splash_port}/splash.html#{port}'
+    except OSError:
+        logger.warning(f"Splash HTTP 端口 {_splash_port} 被占用, 回退到 file://")
+        splash_url = 'file://' + os.path.join(_splash_dir(), 'splash.html') + '#' + str(port)
+
     webui_url = f"http://localhost:{port}"
 
     logger.info(f"Desktop splash: {splash_url}")
     logger.info(f"Desktop WebUI: {webui_url}")
-
-    # pywebview js_api：InkReveal 完成后由 JS 调用，将窗口导航到 WebUI
-    class _SplashAPI:
-        _window = None
-        _webui_url = webui_url
-        def navigate_to_webui(self):
-            """InkReveal 转场完成后调用，将 pywebview 窗口导航到 WebUI。
-            延迟 200ms 导航，让 js_api 回调先正常完成，避免竞态错误。"""
-            import threading
-            def _navigate():
-                if self._window:
-                    self._window.load_url(self._webui_url)
-            threading.Timer(0.2, _navigate).start()
-            return "ok"
-        def get_webui_url(self):
-            """返回 WebUI URL，供 JS 端使用"""
-            return self._webui_url
-
-    splash_api = _SplashAPI()
 
     import webview
     window = webview.create_window(
@@ -253,9 +242,7 @@ def _run_desktop(host: str, port: int):
         height=800,
         min_size=(960, 600),
         text_select=False,
-        js_api=splash_api,
     )
-    splash_api._window = window
 
     # 后台线程：等待服务就绪后通知 splash.js 显示进入按钮
     def wait_for_server():

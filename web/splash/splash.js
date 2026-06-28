@@ -279,6 +279,12 @@ window.onServerReady = function() {
     loadingText.textContent = 'Ready';
     if (loadingBar) loadingBar.style.animation = 'none';
     enterBtnWrap.classList.add('ready');
+    // 预加载 WebUI 到 iframe（HTTP 模式下无跨域问题）
+    var frame = document.getElementById('webui-frame');
+    if (frame) {
+        var port = window.__SPLASH_PORT || (location.hash.length > 1 ? location.hash.substring(1) : '8082');
+        frame.src = 'http://localhost:' + port;
+    }
 };
 
 window.onServerTimeout = function() {
@@ -485,13 +491,13 @@ enterBtn.addEventListener('click', function() {
     var cy = rect.top + rect.height / 2;
 
     inkRevealTransition(cx, cy, function() {
-        // 转场完成，通过 pywebview js_api 将窗口导航到 WebUI
-        // 不隐藏 ink-canvas: 保持墨水全覆盖, 直到 load_url() 导航到 WebUI
-        // WebView2 会保留旧页面直到新页面开始渲染, 实现无缝过渡
-        if (window.pywebview && window.pywebview.api) {
-            window.pywebview.api.navigate_to_webui();
+        // 转场完成，显示预加载的 WebUI iframe，实现无缝衔接
+        var frame = document.getElementById('webui-frame');
+        if (frame && frame.src && frame.src !== 'about:blank') {
+            // iframe 已预加载 WebUI，直接显示
+            frame.style.display = 'block';
         } else {
-            // 非 pywebview 环境（浏览器调试），直接跳转
+            // iframe 未预加载（file:// 回退模式或浏览器调试），直接跳转
             location.href = 'http://localhost:' + (window.__SPLASH_PORT || '8082');
         }
     });

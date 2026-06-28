@@ -309,6 +309,14 @@ def create_app() -> FastAPI:
     from web.middleware.rate_limit import rate_limit_middleware
     app.middleware("http")(rate_limit_middleware)
 
+    # 允许 splash HTTP 服务器嵌入 WebUI（iframe 预加载无缝衔接）
+    @app.middleware("http")
+    async def _allow_frame_embed(request, call_next):
+        response = await call_next(request)
+        response.headers["Content-Security-Policy"] = "frame-ancestors http://127.0.0.1:*"
+        response.headers["X-Frame-Options"] = "ALLOWALL"
+        return response
+
     from web.routers.auth import router as auth_router
     from web.routers.chat import router as chat_router
     from web.routers.system import router as system_router
