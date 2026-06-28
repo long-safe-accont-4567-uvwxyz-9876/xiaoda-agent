@@ -202,22 +202,14 @@ def _run_desktop(host: str, port: int):
 
     # 后台线程启动 uvicorn
     import uvicorn
+    app.state._splash_port = port  # 注入端口，供 /__splash__ 路由使用
     server_config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
     server = uvicorn.Server(server_config)
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
 
-    # 确定 splash screen 路径
-    if getattr(sys, 'frozen', False):
-        base_dir = os.path.dirname(sys.executable)
-        splash_dir = os.path.join(base_dir, '_internal', 'web', 'splash')
-        if not os.path.isdir(splash_dir):
-            splash_dir = os.path.join(base_dir, 'web', 'splash')
-    else:
-        splash_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web', 'splash')
-
-    splash_path = os.path.join(splash_dir, 'splash.html')
-    splash_url = f"file://{splash_path}#{port}"
+    # 通过 HTTP 提供 splash 页面，避免 file:// + iframe 跨域问题（Windows Edge WebView2）
+    splash_url = f"http://localhost:{port}/__splash__#{port}"
     webui_url = f"http://localhost:{port}"
 
     logger.info(f"Desktop splash: {splash_url}")
