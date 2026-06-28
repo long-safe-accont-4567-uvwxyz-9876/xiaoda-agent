@@ -140,64 +140,78 @@ class ToolGuardrails:
         Returns:
             (valid, reason): valid=True 表示通过，False 表示被拦截。
         """
-        # L1+L2: 工具特定规则
-        rules = _TOOL_VALIDATION_RULES.get(tool_name)
-        if rules:
-            for field_name in rules.get("required", []):
-                val = arguments.get(field_name)
-                if val is None or (isinstance(val, str) and not val.strip()):
-                    return False, f"L1验证失败: {rules['checks'][0][2] if rules['checks'] else field_name + ' 是必填字段'}"
+        try:
+            if not isinstance(arguments, dict):
+                return False, f"参数类型错误: 期望 dict, 得到 {type(arguments).__name__}"
 
-            for field_name, check_type, err_msg in rules.get("checks", []):
-                val = arguments.get(field_name)
-                if val is None:
-                    continue
-                if check_type == "non_empty_str":
-                    if not isinstance(val, str) or not val.strip():
-                        return False, f"L1验证失败: {err_msg}"
-                elif check_type.startswith("max_len:"):
-                    limit = int(check_type.split(":")[1])
-                    if isinstance(val, str) and len(val) > limit:
-                        return False, f"L2验证失败: {err_msg}"
-                elif check_type == "url_format":
-                    if isinstance(val, str) and not re.match(r"https?://", val):
-                        return False, f"L2验证失败: {err_msg}"
-                elif check_type == "non_empty_list":
-                    if not isinstance(val, list) or len(val) == 0:
-                        return False, f"L1验证失败: {err_msg}"
-                elif check_type.startswith("max_list_len:"):
-                    limit = int(check_type.split(":")[1])
-                    if isinstance(val, list) and len(val) > limit:
-                        return False, f"L2验证失败: {err_msg}"
-                elif check_type == "no_path_traversal":
-                    if isinstance(val, str) and ".." in val:
-                        return False, f"L3验证失败: {err_msg}"
+            # L1+L2: 工具特定规则
+            rules = _TOOL_VALIDATION_RULES.get(tool_name)
+            if rules:
+                for field_name in rules.get("required", []):
+                    val = arguments.get(field_name)
+                    if val is None or (isinstance(val, str) and not val.strip()):
+                        return False, f"L1验证失败: {rules['checks'][0][2] if rules['checks'] else field_name + ' 是必填字段'}"
 
-        # L3: 危险模式检查（主要针对 shell_command）
-        if tool_name == "shell_command":
-            cmd = arguments.get("command", "")
-            if isinstance(cmd, str):
-                for pattern, desc in _DANGEROUS_PATTERNS:
-                    if re.search(pattern, cmd):
-                        return False, f"L3验证失败: {desc}"
+                for field_name, check_type, err_msg in rules.get("checks", []):
+                    val = arguments.get(field_name)
+                    if val is None:
+                        continue
+                    if check_type == "non_empty_str":
+                        if not isinstance(val, str) or not val.strip():
+                            return False, f"L1验证失败: {err_msg}"
+                    elif check_type.startswith("max_len:"):
+                        limit = int(check_type.split(":")[1])
+                        if isinstance(val, str) and len(val) > limit:
+                            return False, f"L2验证失败: {err_msg}"
+                    elif check_type == "url_format":
+                        if isinstance(val, str) and not re.match(r"https?://", val):
+                            return False, f"L2验证失败: {err_msg}"
+                    elif check_type == "non_empty_list":
+                        if not isinstance(val, list) or len(val) == 0:
+                            return False, f"L1验证失败: {err_msg}"
+                    elif check_type.startswith("max_list_len:"):
+                        limit = int(check_type.split(":")[1])
+                        if isinstance(val, list) and len(val) > limit:
+                            return False, f"L2验证失败: {err_msg}"
+                    elif check_type == "no_path_traversal":
+                        if isinstance(val, str) and ".." in val:
+                            return False, f"L3验证失败: {err_msg}"
 
-        return True, ""
+            # L3: 危险模式检查（主要针对 shell_command）
+            if tool_name == "shell_command":
+                cmd = arguments.get("command", "")
+                if isinstance(cmd, str):
+                    for pattern, desc in _DANGEROUS_PATTERNS:
+                        try:
+                            if re.search(pattern, cmd):
+                                return False, f"L3验证失败: {desc}"
+                        except re.error:
+                            logger.warning(f"正则模式异常: {pattern}")
+                            continue
+
+            return True, ""
+        except Exception as e:
+            logger.error(f"validate_args 异常: {e}", tool_name=tool_name)
+            return False, f"验证异常: {e}"
 
     async def record_call(self, tool_name: str, arguments: dict,
                     success: bool, output: str = ""):
         """记录工具调用"""
-        args_hash = self._simple_args_hash(arguments)
-        record = ToolCallRecord(
-            tool_name=tool_name,
-            arguments_hash=args_hash,
-            success=success,
-            timestamp=time.time(),
-            output_preview=output[:100] if output else "",
-        )
-        async with self._lock:
-            self._call_history.append(record)
-            if len(self._call_history) > self._max_history:
-                self._call_history = self._call_history[-self._max_history:]
+        try:
+            args_hash = self._simple_args_hash(arguments)
+            record = ToolCallRecord(
+                tool_name=tool_name,
+                arguments_hash=args_hash,
+                success=success,
+                timestamp=time.time(),
+                output_preview=output[:100] if output else "",
+            )
+            async with self._lock:
+                self._call_history.append(record)
+                if len(self._call_history) > self._max_history:
+                    self._call_history = self._call_history[-self._max_history:]
+        except Exception as e:
+            logger.error(f"record_call 异常: {e}", tool_name=tool_name)
 
     async def check(self, tool_name: str, arguments: dict) -> tuple[str, str]:
         """检查是否应该继续执行
@@ -205,53 +219,60 @@ class ToolGuardrails:
         Returns:
             (action, message): action 为 "allow"/"warn"/"halt"，message 为提示信息
         """
-        args_hash = self._simple_args_hash(arguments)
-        async with self._lock:
-            recent = self._call_history[-20:] if self._call_history else []
+        try:
+            args_hash = self._simple_args_hash(arguments)
+            async with self._lock:
+                recent = self._call_history[-20:] if self._call_history else []
 
-        # 1. 精确失败重复检测：同工具同参数连续失败
-        exact_failures = 0
-        for r in reversed(recent):
-            if r.tool_name == tool_name and r.arguments_hash == args_hash and not r.success:
-                exact_failures += 1
-            else:
-                break
+            # 1. 精确失败重复检测：同工具同参数连续失败
+            exact_failures = 0
+            for r in reversed(recent):
+                if r.tool_name == tool_name and r.arguments_hash == args_hash and not r.success:
+                    exact_failures += 1
+                else:
+                    break
 
-        if exact_failures >= self._exact_failure_halt_after:
-            msg = f"工具 {tool_name} 以相同参数连续失败 {exact_failures} 次，已硬停止。请换一种方法或检查参数。"
-            logger.warning("guardrail.exact_failure_halt", tool=tool_name, failures=exact_failures)
-            return "halt", msg
-
-        if exact_failures >= self._exact_failure_warn_after:
-            msg = f"工具 {tool_name} 以相同参数已连续失败 {exact_failures} 次，建议更换策略。"
-            logger.warning("guardrail.exact_failure_warn", tool=tool_name, failures=exact_failures)
-            return "warn", msg
-
-        # 2. 同工具失败重复检测
-        same_tool_failures = sum(1 for r in recent if r.tool_name == tool_name and not r.success)
-        if same_tool_failures >= self._same_tool_failure_halt_after:
-            msg = f"工具 {tool_name} 已累计失败 {same_tool_failures} 次，已硬停止。请换一种方法。"
-            logger.warning("guardrail.same_tool_halt", tool=tool_name, failures=same_tool_failures)
-            return "halt", msg
-
-        # 3. 无进展循环检测：最近 N 次调用都没有新的成功输出
-        if len(recent) >= self._no_progress_halt_after:
-            last_n = recent[-self._no_progress_halt_after:]
-            successes = sum(1 for r in last_n if r.success)
-            if successes == 0:
-                msg = f"最近 {self._no_progress_halt_after} 次工具调用均未成功，检测到无进展循环。请总结当前发现并换一种方法。"
-                logger.warning("guardrail.no_progress_halt", recent_calls=len(last_n))
+            if exact_failures >= self._exact_failure_halt_after:
+                msg = f"工具 {tool_name} 以相同参数连续失败 {exact_failures} 次，已硬停止。请换一种方法或检查参数。"
+                logger.warning("guardrail.exact_failure_halt", tool=tool_name, failures=exact_failures)
                 return "halt", msg
 
-        return "allow", ""
+            if exact_failures >= self._exact_failure_warn_after:
+                msg = f"工具 {tool_name} 以相同参数已连续失败 {exact_failures} 次，建议更换策略。"
+                logger.warning("guardrail.exact_failure_warn", tool=tool_name, failures=exact_failures)
+                return "warn", msg
+
+            # 2. 同工具失败重复检测
+            same_tool_failures = sum(1 for r in recent if r.tool_name == tool_name and not r.success)
+            if same_tool_failures >= self._same_tool_failure_halt_after:
+                msg = f"工具 {tool_name} 已累计失败 {same_tool_failures} 次，已硬停止。请换一种方法。"
+                logger.warning("guardrail.same_tool_halt", tool=tool_name, failures=same_tool_failures)
+                return "halt", msg
+
+            # 3. 无进展循环检测：最近 N 次调用都没有新的成功输出
+            if len(recent) >= self._no_progress_halt_after:
+                last_n = recent[-self._no_progress_halt_after:]
+                successes = sum(1 for r in last_n if r.success)
+                if successes == 0:
+                    msg = f"最近 {self._no_progress_halt_after} 次工具调用均未成功，检测到无进展循环。请总结当前发现并换一种方法。"
+                    logger.warning("guardrail.no_progress_halt", recent_calls=len(last_n))
+                    return "halt", msg
+
+            return "allow", ""
+        except Exception as e:
+            logger.error(f"check 异常: {e}", tool_name=tool_name)
+            return "allow", ""  # 异常时默认放行, 避免阻断正常流程
 
     def _simple_args_hash(self, arguments: dict) -> str:
         """参数哈希（使用 hashlib.md5 生成更可靠的哈希）"""
-        if not arguments:
+        try:
+            if not arguments:
+                return ""
+            items = sorted(arguments.items())
+            raw = str(items)
+            return hashlib.md5(raw.encode()).hexdigest()[:16]
+        except Exception:
             return ""
-        items = sorted(arguments.items())
-        raw = str(items)
-        return hashlib.md5(raw.encode()).hexdigest()[:16]
 
     def reset(self):
         """重置调用历史"""
@@ -259,12 +280,16 @@ class ToolGuardrails:
 
     def get_stats(self) -> dict:
         """获取护栏统计"""
-        recent = self._call_history[-20:]
-        return {
-            "total_calls": len(self._call_history),
-            "recent_successes": sum(1 for r in recent if r.success),
-            "recent_failures": sum(1 for r in recent if not r.success),
-        }
+        try:
+            recent = self._call_history[-20:]
+            return {
+                "total_calls": len(self._call_history),
+                "recent_successes": sum(1 for r in recent if r.success),
+                "recent_failures": sum(1 for r in recent if not r.success),
+            }
+        except Exception as e:
+            logger.error(f"get_stats 异常: {e}")
+            return {"total_calls": 0, "recent_successes": 0, "recent_failures": 0}
 
 
 # 全局实例
