@@ -272,7 +272,7 @@ setTimeout(() => {
     });
 })();
 
-// ==================== 服务就绪回调（Python 端调用 或 自动轮询） ====================
+// ==================== 服务就绪回调（Python 端 evaluate_js 调用） ====================
 
 var _serverReadyCalled = false;
 
@@ -280,7 +280,6 @@ window.onServerReady = function() {
     if (_serverReadyCalled) return;
     _serverReadyCalled = true;
     clearInterval(msgInterval);
-    clearInterval(readyCheck);
     loadingText.textContent = 'Ready';
     if (loadingBar) loadingBar.style.animation = 'none';
     enterBtnWrap.classList.add('ready');
@@ -294,29 +293,13 @@ window.onServerReady = function() {
 
 window.onServerTimeout = function() {
     clearInterval(msgInterval);
-    clearInterval(readyCheck);
     loadingText.textContent = 'Connection timeout';
 };
 
-// 自动轮询检查 WebUI 是否就绪（不依赖 Python 端 evaluate_js）
-var readyCheck = setInterval(function() {
-    var port = window.__SPLASH_PORT || (location.hash.length > 1 ? location.hash.substring(1) : '8082');
-    fetch('http://localhost:' + port + '/', { mode: 'no-cors' })
-        .then(function() { window.onServerReady(); })
-        .catch(function() {});
-}, 1000);
-
-// 预览模式：自动显示 Enter 按钮
+// 预览模式：自动显示 Enter 按钮（仅调试用）
 if (new URLSearchParams(window.location.search).has('preview')) {
     setTimeout(() => window.onServerReady(), 2500);
 }
-
-// 键盘快捷键：按 P 键手动触发服务就绪（预览用）
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'p' || e.key === 'P') {
-        window.onServerReady();
-    }
-});
 
 // ==================== InkReveal 墨迹转场 ====================
 /**

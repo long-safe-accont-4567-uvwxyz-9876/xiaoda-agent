@@ -249,11 +249,27 @@ def _run_desktop(host: str, port: int):
         for _ in range(120):
             try:
                 urllib.request.urlopen(f"http://localhost:{port}/", timeout=2)
-                window.evaluate_js("if(typeof onServerReady==='function')onServerReady();")
-                return
+                break
             except Exception:
                 time.sleep(1)
-        window.evaluate_js("if(typeof onServerTimeout==='function')onServerTimeout();")
+        else:
+            window.evaluate_js("if(typeof onServerTimeout==='function')onServerTimeout();")
+            return
+
+        # WebUI 就绪，等待 splash 页面加载完成后调用 onServerReady
+        time.sleep(1.5)
+        for attempt in range(5):
+            try:
+                result = window.evaluate_js(
+                    "typeof onServerReady==='function' ? (onServerReady(), 'ok') : 'wait'"
+                )
+                if result and 'ok' in str(result):
+                    logger.info("splash.onServerReady() triggered")
+                    return
+            except Exception as e:
+                logger.warning(f"evaluate_js attempt {attempt}: {e}")
+            time.sleep(1)
+        logger.warning("splash.onServerReady() failed after retries")
 
     checker_thread = threading.Thread(target=wait_for_server, daemon=True)
     checker_thread.start()
