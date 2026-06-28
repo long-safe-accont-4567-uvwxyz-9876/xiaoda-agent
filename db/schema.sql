@@ -352,6 +352,24 @@ CREATE INDEX IF NOT EXISTS idx_kg_rel_type ON knowledge_relations(relation_type)
 CREATE INDEX IF NOT EXISTS idx_media_status ON media_tasks(status);
 
 -- ============================================================
+-- 复合索引优化 (Phase 2: 性能优化)
+-- ============================================================
+CREATE INDEX IF NOT EXISTS idx_episodic_timestamp_importance
+    ON episodic_memories(timestamp DESC, importance DESC);
+CREATE INDEX IF NOT EXISTS idx_episodic_session_created
+    ON episodic_memories(session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversation_session_turn
+    ON conversation_logs(session_id, turn_number);
+CREATE INDEX IF NOT EXISTS idx_api_usage_created
+    ON api_usage(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_session_entries_session
+    ON session_entries(session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_events_type_created
+    ON agent_events(event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_status_started
+    ON sessions(status, started_at DESC);
+
+-- ============================================================
 -- 默认数据
 -- ============================================================
 
