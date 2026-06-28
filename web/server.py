@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
@@ -253,7 +254,7 @@ async def lifespan(app: FastAPI):
             for _line in _f:
                 _s = _line.strip()
                 if _s.startswith("MIMO_API_KEY="):
-                    _mimo = _s.split("=", 1)[1].strip().strip("'\"")
+                    _mimo = _s.split("=", 1)[1].strip().strip('\'"')
                     break
     if not _mimo:
         logger.info("webui.degraded_mode")
@@ -327,6 +328,23 @@ def create_app() -> FastAPI:
 
     from web.ws_hub import router as ws_router
     app.include_router(ws_router)
+
+    # 桌面模式 splash 页面：通过 HTTP 提供，避免 file:// + iframe 跨域问题（Windows Edge WebView2）
+    @app.get("/__splash__", response_class=HTMLResponse)
+    async def _serve_splash():
+        import sys as _sys
+        if getattr(_sys, 'frozen', False):
+            _base = Path(_sys.executable).parent
+            _splash_dir = _base / '_internal' / 'web' / 'splash'
+            if not _splash_dir.is_dir():
+                _splash_dir = _base / 'web' / 'splash'
+        else:
+            _splash_dir = Path(__file__).parent / 'splash'
+        _splash_html = (_splash_dir / 'splash.html').read_text(encoding='utf-8')
+        # 注入端口号，splash.js 通过 window.__SPLASH_PORT 读取
+        _port_script = f'<script>window.__SPLASH_PORT={app.state._splash_port};</script>'
+        _splash_html = _splash_html.replace('</head>', f'{_port_script}</head>')
+        return _splash_html
 
     # 媒体目录使用用户数据目录，避免写入 _MEIPASS 只读目录
     try:
