@@ -303,24 +303,15 @@ document.addEventListener('keydown', (e) => {
  * 按 Obsidian InkReveal 灵动设计：
  *   多层波浪扩散 + 不规则墨点 + 飞溅簇 + 变速扩散 + 有机路径
  */
-// 提前预加载 Web UI iframe（保持隐藏，InkReveal 完成后再显示）
-(function preloadWebUI() {
-    // 优先使用服务器注入的端口号（HTTP 模式），回退到 URL hash（file:// 模式兼容）
-    var port = (window.__SPLASH_PORT || (location.hash.length > 1 ? location.hash.substring(1) : '8082'));
-    var frame = document.getElementById('webui-frame');
-    if (frame) {
-        frame.src = 'http://localhost:' + port;
-        frame.style.display = 'block';
-        frame.style.opacity = '0';
-    }
+// InkReveal 完成后通过 pywebview js_api 将窗口导航到 WebUI（无需 iframe）
+// 读取端口：URL hash（file:// 模式）或默认 8082
+(function() {
+    window.__SPLASH_PORT = (location.hash.length > 1 ? location.hash.substring(1) : '8082');
 })();
 
 function inkRevealTransition(originX, originY, onComplete) {
     var inkCanvas = document.getElementById('ink-canvas');
-    var webuiFrame = document.getElementById('webui-frame');
     if (!inkCanvas) { if (onComplete) onComplete(); return; }
-
-    // iframe 保持隐藏，直到 InkReveal 完成后再显示（防止提前露出空白页）
 
     var dpr = Math.min(devicePixelRatio, 1.5);
     var W = innerWidth, H = innerHeight;
@@ -476,8 +467,6 @@ function inkRevealTransition(originX, originY, onComplete) {
             setTimeout(function() {
                 canvas.style.display = 'none';
                 ctx.clearRect(0, 0, W, H);
-                // InkReveal 完成，显示 WebUI iframe
-                if (webuiFrame) webuiFrame.style.opacity = '1';
                 if (onComplete) onComplete();
             }, 400);
         } else if (alive) {
@@ -496,8 +485,14 @@ enterBtn.addEventListener('click', function() {
     var cy = rect.top + rect.height / 2;
 
     inkRevealTransition(cx, cy, function() {
-        // 转场完成，移除 ink-canvas，Web UI 已经通过 iframe 显示
+        // 转场完成，通过 pywebview js_api 将窗口导航到 WebUI
         var inkCanvas = document.getElementById('ink-canvas');
         if (inkCanvas) inkCanvas.style.display = 'none';
+        if (window.pywebview && window.pywebview.api) {
+            window.pywebview.api.navigate_to_webui();
+        } else {
+            // 非 pywebview 环境（浏览器调试），直接跳转
+            location.href = 'http://localhost:' + (window.__SPLASH_PORT || '8082');
+        }
     });
 });

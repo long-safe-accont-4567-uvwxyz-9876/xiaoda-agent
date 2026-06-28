@@ -169,7 +169,11 @@ class SecurityFilter:
         self._ADDRESS_TERM_TTL: float = 60.0
         self._load_patterns()
         if not self.owner_ids:
-            logger.warning("security.no_owner_configured", message="OWNER_IDS 未配置，所有用户将被视为非主人")
+            import os as _os
+            _raw_owner = _os.getenv("OWNER_IDS", "")
+            _raw_master = _os.getenv("MASTER_QQ_OPENID", "")
+            logger.warning("security.no_owner_configured",
+                           message=f"OWNER_IDS 未配置，所有用户将被视为非主人 (raw OWNER_IDS={repr(_raw_owner)}, MASTER_QQ_OPENID={repr(_raw_master)})")
 
     # ── YAML 配置加载与热更新 ──────────────────────────────────
 

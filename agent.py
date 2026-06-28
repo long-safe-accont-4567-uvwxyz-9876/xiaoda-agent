@@ -202,20 +202,44 @@ def _run_desktop(host: str, port: int):
 
     # 后台线程启动 uvicorn
     import uvicorn
-    app.state._splash_port = port  # 注入端口，供 /__splash__ 路由使用
     server_config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
     server = uvicorn.Server(server_config)
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
 
-    # 通过 HTTP 提供 splash 页面，避免 file:// + iframe 跨域问题（Windows Edge WebView2）
-    splash_url = f"http://localhost:{port}/__splash__#{port}"
+    # 桌面模式：splash 通过 file:// 加载（瞬间完成，不依赖服务器），
+    # InkReveal 动画结束后通过 pywebview js_api 将窗口导航到 WebUI
+    def _splash_path():
+        if getattr(sys, 'frozen', False):
+            _base = os.path.dirname(sys.executable)
+            _p = os.path.join(_base, '_internal', 'web', 'splash', 'splash.html')
+            if os.path.exists(_p):
+                return _p
+            _p = os.path.join(_base, 'web', 'splash', 'splash.html')
+            if os.path.exists(_p):
+                return _p
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web', 'splash', 'splash.html')
+
+    splash_url = 'file://' + _splash_path() + '#' + str(port)
     webui_url = f"http://localhost:{port}"
 
     logger.info(f"Desktop splash: {splash_url}")
     logger.info(f"Desktop WebUI: {webui_url}")
 
-    # 创建 pywebview 窗口（不使用 js_api，避免导航时桥接回调丢失）
+    # pywebview js_api：InkReveal 完成后由 JS 调用，将窗口导航到 WebUI
+    class _SplashAPI:
+        _window = None
+        _webui_url = webui_url
+        def navigate_to_webui(self):
+            """InkReveal 转场完成后调用，将 pywebview 窗口导航到 WebUI"""
+            if self._window:
+                self._window.load_url(self._webui_url)
+        def get_webui_url(self):
+            """返回 WebUI URL，供 JS 端使用"""
+            return self._webui_url
+
+    splash_api = _SplashAPI()
+
     import webview
     window = webview.create_window(
         title="Xiaoda Agent",
@@ -224,7 +248,9 @@ def _run_desktop(host: str, port: int):
         height=800,
         min_size=(960, 600),
         text_select=False,
+        js_api=splash_api,
     )
+    splash_api._window = window
 
     # 后台线程：等待服务就绪后通知 splash.js 显示进入按钮
     def wait_for_server():

@@ -84,11 +84,11 @@ class ModelRouter:
     TASK_TIMEOUTS = {
         "emotion_analysis": 10,
         "emotion": 10,
-        "chat_flash": 45,
-        "chat": 30,
-        "chat_pro": 45,
-        "tool_call": 30,
-        "image_gen": 60,
+        "chat_flash": 60,
+        "chat": 90,
+        "chat_pro": 90,
+        "tool_call": 60,
+        "image_gen": 90,
     }
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None,

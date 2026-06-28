@@ -473,7 +473,7 @@ class AIQQBot(botpy.Client):
                                   status_callback=status_notify,
                                   image_data=image_data if image_data else None,
                                   is_master=is_master),
-                timeout=60,  # status_notify 已在 1-2s 内发"正在思考"，QQ 框架已 ACK，后续回复不受 30s 限制
+                timeout=180,  # 复杂任务（多轮工具调用+重试）需要更长时间，180s 兜底
             )
             if result.reply:
                 await self._send_reply_with_sticker(message, result)
@@ -551,7 +551,7 @@ class AIQQBot(botpy.Client):
                                   status_callback=status_notify,
                                   image_data=image_data if image_data else None,
                                   is_master=is_master),
-                timeout=60,  # status_notify 已在 1-2s 内发"正在思考"，QQ 框架已 ACK，后续回复不受 30s 限制
+                timeout=180,  # 复杂任务（多轮工具调用+重试）需要更长时间，180s 兜底
             )
             if result.reply:
                 await self._send_reply_with_sticker(message, result)
