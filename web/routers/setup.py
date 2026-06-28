@@ -614,7 +614,8 @@ async def save_keys(body: dict):
     # 更新 config 模块级变量，使 core.init() 能读到新的 API Key
     # 优先使用用户刚提交的值（updates），回退到 os.getenv（load_dotenv 可能不生效）
     import config
-    config.MIMO_API_KEY = updates.get("MIMO_API_KEY", os.getenv("MIMO_API_KEY", ""))
+    from utils.encrypted_credential import protect_credential
+    config.MIMO_API_KEY = protect_credential(updates.get("MIMO_API_KEY", os.getenv("MIMO_API_KEY", "")))
     config.DEEPSEEK_API_KEY = updates.get("DEEPSEEK_API_KEY", os.getenv("DEEPSEEK_API_KEY"))
     config.AGNES_API_KEY = updates.get("AGNES_API_KEY", os.getenv("AGNES_API_KEY", ""))
 

@@ -8,6 +8,7 @@ import platform
 import socket
 from pathlib import Path
 from dotenv import load_dotenv
+from utils.encrypted_credential import protect_credential
 
 def get_base_dir() -> Path:
     """获取项目根目录。PyInstaller 打包后返回可执行文件所在目录，开发模式返回项目根目录。"""
@@ -242,7 +243,7 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "mimo-v2.5")
 
-MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
+MIMO_API_KEY = protect_credential(os.getenv("MIMO_API_KEY", ""))
 MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
 MIMO_MODEL = os.getenv("MIMO_MODEL_NAME", "mimo-v2.5")
 

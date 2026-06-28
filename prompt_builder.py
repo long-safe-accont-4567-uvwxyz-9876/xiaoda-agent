@@ -14,6 +14,13 @@ from pathlib import Path
 
 from loguru import logger
 
+from utils.canary_guard import CanaryManager
+from utils.instruction_hierarchy import InstructionBuilder, InstructionLevel
+
+
+# ── 安全：Canary Token 泄露检测管理器（全局单例） ──────────────
+_canary_manager = CanaryManager()
+
 
 # ── system prompt 缓存变量 ────────────────────────────────────
 _SYSTEM_PROMPT_CACHE: str = ""
@@ -506,92 +513,100 @@ def build_system_prompt(extra_context: str = "", address_term: str = "爸爸") -
     except ImportError:
         PROMPT_CACHING_ENABLED = False
 
+    system_prompt = ""
     if PROMPT_CACHING_ENABLED:
         try:
             stable = _build_stable_prompt(address_term)
             dynamic = _build_dynamic_prompt(extra_context)
             if dynamic:
-                return stable + "\n\n---\n\n" + dynamic
-            return stable
+                system_prompt = stable + "\n\n---\n\n" + dynamic
+            else:
+                system_prompt = stable
         except Exception as e:
             # 失败安全：降级到原始构建
             logger.debug("prompt_builder.incremental_fallback error={}", str(e))
 
-    global _SYSTEM_PROMPT_CACHE, _SYSTEM_PROMPT_CACHE_TS, _SYSTEM_PROMPT_CACHE_MTIMES, _SYSTEM_PROMPT_CACHE_ADDR_TERM
-    from config import DATA_DIR
+    if not system_prompt:
+        global _SYSTEM_PROMPT_CACHE, _SYSTEM_PROMPT_CACHE_TS, _SYSTEM_PROMPT_CACHE_MTIMES, _SYSTEM_PROMPT_CACHE_ADDR_TERM
+        from config import DATA_DIR
 
-    now = time.time()
-    current_mtimes = _get_workspace_mtimes()
-    mtime_changed = current_mtimes != _SYSTEM_PROMPT_CACHE_MTIMES
-    addr_changed = address_term != _SYSTEM_PROMPT_CACHE_ADDR_TERM
+        now = time.time()
+        current_mtimes = _get_workspace_mtimes()
+        mtime_changed = current_mtimes != _SYSTEM_PROMPT_CACHE_MTIMES
+        addr_changed = address_term != _SYSTEM_PROMPT_CACHE_ADDR_TERM
 
-    if _SYSTEM_PROMPT_CACHE and (now - _SYSTEM_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL and not mtime_changed and not addr_changed:
-        system_prompt = _SYSTEM_PROMPT_CACHE
-    else:
-        sections = []
+        if _SYSTEM_PROMPT_CACHE and (now - _SYSTEM_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL and not mtime_changed and not addr_changed:
+            system_prompt = _SYSTEM_PROMPT_CACHE
+        else:
+            sections = []
 
-        agents_rules = load_workspace_file("AGENTS.md")
-        if agents_rules:
-            sections.append(agents_rules)
+            agents_rules = load_workspace_file("AGENTS.md")
+            if agents_rules:
+                sections.append(agents_rules)
 
-        soul = load_workspace_file("SOUL.md")
-        if soul:
-            # 替换 {address_term} 占位符为实际称呼
-            if "{address_term}" in soul:
-                soul = soul.replace("{address_term}", address_term)
-            sections.append(soul)
+            soul = load_workspace_file("SOUL.md")
+            if soul:
+                # 替换 {address_term} 占位符为实际称呼
+                if "{address_term}" in soul:
+                    soul = soul.replace("{address_term}", address_term)
+                sections.append(soul)
 
-        identity = load_workspace_file("IDENTITY.md")
-        if identity:
-            sections.append(identity)
+            identity = load_workspace_file("IDENTITY.md")
+            if identity:
+                sections.append(identity)
 
-        user = load_workspace_file("USER.md")
-        if user:
-            sections.append(user)
+            user = load_workspace_file("USER.md")
+            if user:
+                sections.append(user)
 
-        tools_rules = load_workspace_file("TOOLS.md")
-        if tools_rules:
-            sections.append(tools_rules)
+            tools_rules = load_workspace_file("TOOLS.md")
+            if tools_rules:
+                sections.append(tools_rules)
 
-        memory = load_workspace_file("MEMORY.md")
-        if memory:
-            sections.append(memory)
+            memory = load_workspace_file("MEMORY.md")
+            if memory:
+                sections.append(memory)
 
-        heartbeat = load_workspace_file("HEARTBEAT.md")
-        if heartbeat:
-            sections.append(heartbeat)
+            heartbeat = load_workspace_file("HEARTBEAT.md")
+            if heartbeat:
+                sections.append(heartbeat)
 
-        skills = load_skills()
-        if skills:
-            skill_texts = "\n\n".join(
-                f"### Skill: {s['name']}\n{s['content']}" for s in skills if s["content"])
-            if skill_texts:
-                sections.append("[已安装的 Skills]\n\n" + skill_texts)
+            skills = load_skills()
+            if skills:
+                skill_texts = "\n\n".join(
+                    f"### Skill: {s['name']}\n{s['content']}" for s in skills if s["content"])
+                if skill_texts:
+                    sections.append("[已安装的 Skills]\n\n" + skill_texts)
 
-        _npu_status = "NPU视觉识别已启用" if os.getenv("ENABLE_NPU", "").lower() in ("1", "true", "yes") else "视觉识别（ncnn后端）"
-        _uname = platform.uname()
-        _hostname = socket.gethostname()
-        hw_context = (
-            "[本机硬件信息]\n"
-            f"主机名: {_hostname} | 架构: {_uname.machine} | 处理器: {_uname.processor or '未知'}\n"
-            f"系统: {_uname.system} {_uname.release} ({_uname.machine})\n"
-            "可用接口: GPIO (40pin排针) / I2C / SPI / UART / PWM\n"
-            "可用工具: gpio_control(引脚控制) / i2c_comm(I2C通信) / hardware_status(硬件监控) / service_manage(服务管理) / network_diag(网络诊断) / dev_assist(开发辅助) / camera_capture(拍照) / vision_analyze(视觉分析)\n"
-            f"数据存储: {DATA_DIR}\n"
-            f"摄像头: Q8 HD Webcam (/dev/video0) | 视觉模型: YOLOv10-nano (ncnn CPU) | {_npu_status}"
-        )
-        sections.append(hw_context)
+            _npu_status = "NPU视觉识别已启用" if os.getenv("ENABLE_NPU", "").lower() in ("1", "true", "yes") else "视觉识别（ncnn后端）"
+            _uname = platform.uname()
+            _hostname = socket.gethostname()
+            hw_context = (
+                "[本机硬件信息]\n"
+                f"主机名: {_hostname} | 架构: {_uname.machine} | 处理器: {_uname.processor or '未知'}\n"
+                f"系统: {_uname.system} {_uname.release} ({_uname.machine})\n"
+                "可用接口: GPIO (40pin排针) / I2C / SPI / UART / PWM\n"
+                "可用工具: gpio_control(引脚控制) / i2c_comm(I2C通信) / hardware_status(硬件监控) / service_manage(服务管理) / network_diag(网络诊断) / dev_assist(开发辅助) / camera_capture(拍照) / vision_analyze(视觉分析)\n"
+                f"数据存储: {DATA_DIR}\n"
+                f"摄像头: Q8 HD Webcam (/dev/video0) | 视觉模型: YOLOv10-nano (ncnn CPU) | {_npu_status}"
+            )
+            sections.append(hw_context)
 
-        system_prompt = "\n\n---\n\n".join(sections)
+            system_prompt = "\n\n---\n\n".join(sections)
 
-        _SYSTEM_PROMPT_CACHE = system_prompt
-        _SYSTEM_PROMPT_CACHE_TS = now
-        _SYSTEM_PROMPT_CACHE_MTIMES = current_mtimes
-        _SYSTEM_PROMPT_CACHE_ADDR_TERM = address_term
+            _SYSTEM_PROMPT_CACHE = system_prompt
+            _SYSTEM_PROMPT_CACHE_TS = now
+            _SYSTEM_PROMPT_CACHE_MTIMES = current_mtimes
+            _SYSTEM_PROMPT_CACHE_ADDR_TERM = address_term
 
-    if extra_context:
-        system_prompt += f"\n\n---\n\n{extra_context}"
+        if extra_context:
+            system_prompt += f"\n\n---\n\n{extra_context}"
 
+    # 安全：InstructionBuilder 分层包装(防 prompt injection) + Canary Token 注入(泄露检测)
+    _ib = InstructionBuilder()
+    _ib.add(InstructionLevel.SYSTEM, system_prompt)
+    system_prompt = _ib.build()
+    system_prompt = _canary_manager.inject(system_prompt)
     return system_prompt
 
 
@@ -693,4 +708,5 @@ __all__ = [
     "_build_stable_prompt",
     "_build_dynamic_prompt",
     "_classify_scene",
+    "_canary_manager",
 ]

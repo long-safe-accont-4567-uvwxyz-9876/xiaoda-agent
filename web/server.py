@@ -305,6 +305,10 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="Nahida Agent WebUI", version="0.3.98", lifespan=lifespan)
 
+    # 速率限制中间件（防 DDoS/滥用）
+    from web.middleware.rate_limit import rate_limit_middleware
+    app.middleware("http")(rate_limit_middleware)
+
     from web.routers.auth import router as auth_router
     from web.routers.chat import router as chat_router
     from web.routers.system import router as system_router

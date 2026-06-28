@@ -12,6 +12,7 @@ from transports import ProviderTransport, MiMoTransport, AgnesTransport
 from utils.prompt_caching import apply_cache_control
 from utils.error_classifier import ErrorClassifier, ClassifiedError, RecoveryAction
 from utils.credential_pool import get_credential_pool, CredentialPool
+from utils.ssrf_guard import get_ssrf_guard
 
 
 MIMO_MODEL = os.getenv("MIMO_MODEL_NAME", "mimo-v2.5")
@@ -79,6 +80,16 @@ FALLBACK_ROUTE = {
 _reasoning_content_var = contextvars.ContextVar('reasoning_content', default='')
 
 
+def _ssrf_check(url: str) -> None:
+    """SSRF 防护：校验 base_url 安全性（best-effort，本地 provider 如 Ollama 校验失败仅告警不阻塞）"""
+    try:
+        get_ssrf_guard().validate_url(url)
+    except ValueError as e:
+        logger.warning("router.ssrf_blocked url={} error={}", url, str(e))
+    except Exception as e:
+        logger.debug("router.ssrf_check_skip url={} error={}", url, str(e))
+
+
 class ModelRouter:
 
     TASK_TIMEOUTS = {
@@ -96,9 +107,11 @@ class ModelRouter:
         # 从 os.getenv() 实时读取，避免使用模块级冻结变量
         _mimo_key = api_key or os.getenv("MIMO_API_KEY", "")
         _mimo_url = base_url or os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+        _ssrf_check(_mimo_url)  # SSRF 防护：校验 base_url
         self._client = AsyncOpenAI(api_key=_mimo_key, base_url=_mimo_url) if _mimo_key else None
         _agnes_key = os.getenv("AGNES_API_KEY", "")
         _agnes_url = os.getenv("AGNES_BASE_URL", AGNES_BASE_URL)
+        _ssrf_check(_agnes_url)  # SSRF 防护：校验 base_url
         self._agnes_client = AsyncOpenAI(api_key=_agnes_key, base_url=_agnes_url) if _agnes_key else None
         self._db = db
         self._model_preference = "mimo"
@@ -169,6 +182,7 @@ class ModelRouter:
         new_mimo_key = os.getenv("MIMO_API_KEY", "")
         new_mimo_url = os.getenv("MIMO_BASE_URL", MIMO_BASE_URL)
         if new_mimo_key:
+            _ssrf_check(new_mimo_url)  # SSRF 防护：校验 base_url
             self._client = AsyncOpenAI(api_key=new_mimo_key, base_url=new_mimo_url)
             logger.info("router.mimo_client_refreshed",
                         key_suffix=new_mimo_key[-6:] if len(new_mimo_key) >= 6 else "***")
@@ -178,6 +192,7 @@ class ModelRouter:
         new_agnes_key = os.getenv("AGNES_API_KEY", "")
         new_agnes_url = os.getenv("AGNES_BASE_URL", AGNES_BASE_URL)
         if new_agnes_key:
+            _ssrf_check(new_agnes_url)  # SSRF 防护：校验 base_url
             self._agnes_client = AsyncOpenAI(api_key=new_agnes_key, base_url=new_agnes_url)
             logger.info("router.agnes_client_refreshed",
                         key_suffix=new_agnes_key[-6:] if len(new_agnes_key) >= 6 else "***")

@@ -45,6 +45,8 @@ class AgentCoreBootstrapper:
                     各步骤独立容错，单个步骤失败不会阻止核心聊天功能。
         """
         from config import MIMO_API_KEY as _mimo_key
+        from utils.encrypted_credential import reveal_credential
+        _mimo_key = reveal_credential(_mimo_key)
         if not _mimo_key or not _mimo_key.strip():
             logger.warning("agent_core.degraded_mode reason=no_mimo_api_key")
             if not reinit:
