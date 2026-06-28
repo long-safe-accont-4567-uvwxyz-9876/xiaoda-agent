@@ -156,7 +156,10 @@ class SecurityFilter:
 
     def __init__(self, owner_ids: list[str] | None = None,
                  rate_limit_per_minute: int = 120):
-        self.owner_ids = set(owner_ids or [])
+        # 自动从环境变量读取 owner_ids（调用方未显式传入时）
+        if owner_ids is None:
+            owner_ids = self._load_owner_ids_from_env()
+        self.owner_ids = set(owner_ids)
         self.rate_limit = rate_limit_per_minute
         self._call_timestamps: dict[str, list[float]] = {}
         self._emergency_stop = False
@@ -169,11 +172,19 @@ class SecurityFilter:
         self._ADDRESS_TERM_TTL: float = 60.0
         self._load_patterns()
         if not self.owner_ids:
-            import os as _os
-            _raw_owner = _os.getenv("OWNER_IDS", "")
-            _raw_master = _os.getenv("MASTER_QQ_OPENID", "")
             logger.warning("security.no_owner_configured",
-                           message=f"OWNER_IDS 未配置，所有用户将被视为非主人 (raw OWNER_IDS={repr(_raw_owner)}, MASTER_QQ_OPENID={repr(_raw_master)})")
+                           message="OWNER_IDS 和 MASTER_QQ_OPENID 均为空，所有用户将被视为非主人")
+
+    @staticmethod
+    def _load_owner_ids_from_env() -> list[str]:
+        """从环境变量自动加载主人 ID 列表（合并 OWNER_IDS + MASTER_QQ_OPENID，去重保序）"""
+        import os as _os
+        ids: list[str] = []
+        for key in ("OWNER_IDS", "MASTER_QQ_OPENID"):
+            raw = _os.getenv(key, "").strip()
+            if raw:
+                ids.extend(x.strip() for x in raw.split(",") if x.strip())
+        return list(dict.fromkeys(ids))  # 去重保序
 
     # ── YAML 配置加载与热更新 ──────────────────────────────────
 
