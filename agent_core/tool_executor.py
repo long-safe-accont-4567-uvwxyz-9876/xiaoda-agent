@@ -247,16 +247,29 @@ class ToolExecutorMixin:
         return text
 
     def get_sticker_info(self, reply: str, user_emotion: str = "", force_sticker: bool = False) -> tuple[str, Path | None]:
+        # Bug fix: 优先从 [emotion:xxx] 标签提取情绪，而非丢弃标签后重新检测
+        import re as _re
+        _emotion_match = _re.search(r'\[emotion:([^\]]+)\]', reply)
+        detected = ""
+        if _emotion_match:
+            from emotion.emotion_enum import resolve_emotion, STICKER_FALLBACK
+            emotion = resolve_emotion(_emotion_match.group(1))
+            detected = STICKER_FALLBACK.get(emotion, "happy")
+
         clean_reply = self.sticker_manager.strip_emotion_tag(reply)
         sticker_path = None
         if self.sticker_manager.available:
             if force_sticker:
-                detected = self.sticker_manager.detect_emotion(clean_reply) or "happy"
+                if not detected:
+                    detected = self.sticker_manager.detect_emotion(clean_reply) or "happy"
                 sticker_path = self.sticker_manager.pick(detected)
             else:
-                detected = self.sticker_manager.detect_emotion(clean_reply)
-                if not detected and user_emotion:
-                    detected = CN_TO_EN.get(user_emotion, "")
+                # 无标签时才用关键词检测
+                if not detected:
+                    detected = self.sticker_manager.detect_emotion(clean_reply)
+                # Bug fix: fallback 到 happy（agent 默认情绪）而非用户情绪
+                if not detected:
+                    detected = "happy"
                 if self.sticker_manager.should_send(clean_reply, detected_emotion=detected):
                     sticker_path = self.sticker_manager.pick(detected)
         return clean_reply, sticker_path

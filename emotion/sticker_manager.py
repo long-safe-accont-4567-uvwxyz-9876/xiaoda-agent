@@ -70,35 +70,33 @@ class StickerManager:
 
     EMOTION_PATTERN = re.compile(r'\[emotion:([a-z_]+)\]')
 
-    # 文件名描述关键词到情绪的映射（用于将放错目录的表情包重新归类）
+    # 文件名描述关键词到情绪的映射（统一到 EMOTION_ALIASES，消除三套表不一致）
     _DESC_EMOTION_MAP = {
-        # happy 相关描述
+        # happy
         "开心": "happy", "满足": "happy", "微笑": "happy", "比耶": "happy",
         "卖萌": "happy", "亮晶晶": "happy", "期待": "happy", "兴奋": "happy",
         "大笑": "happy", "星星眼": "happy", "玫瑰": "happy", "叼玫瑰": "happy",
-        "酷笑": "happy",
-        # sad 相关描述
+        "酷笑": "happy", "温柔微笑": "happy", "惊喜": "happy", "示爱": "happy",
+        "温柔": "happy",
+        # sad
         "苦笑": "sad", "晕眩": "sad", "委屈": "sad", "无奈": "sad",
         "含泪": "sad", "泪光": "sad", "流泪": "sad", "哭泣": "sad",
         "暗淡": "sad", "阴沉": "sad", "难过": "sad",
-        # angry 相关描述
+        # angry
         "愤怒": "angry", "激光": "angry", "暴怒": "angry", "生气": "angry",
-        # shy 相关描述
+        # shy
         "害羞": "shy", "小嘴": "shy", "吐舌": "shy",
-        "惊恐": "fear", "害怕": "fear",
-        # fear 相关描述
-        "恐惧": "fear", "焦虑": "fear", "紧张": "fear", "不安": "fear",
+        # fear (含 anxious 降级)
+        "恐惧": "fear", "害怕": "fear", "惊恐": "fear",
+        "焦虑": "fear", "紧张": "fear", "不安": "fear",
         "慌张": "fear", "担心": "fear", "惊吓": "fear", "颤抖": "fear",
-        # curious 相关描述
+        # curious
         "爱心眼": "curious", "喜欢": "curious", "惊讶张嘴": "curious",
         "泪汪汪": "curious", "惊讶好奇": "curious", "惊讶": "curious",
-        # greeting 相关描述
-        "惊喜": "greeting", "示爱": "greeting", "温柔": "greeting",
-        # thinking 相关描述
-        "疑惑": "thinking", "困惑": "thinking", "问号": "thinking",
-        "无聊": "thinking", "困倦": "thinking",
-        # 矛盾情绪描述（同时包含正负面情绪词，保持原分类 thinking）
-        "哭泣微笑": "thinking", "温柔微笑": "happy",
+        "疑惑": "curious",  # 与 EMOTION_ALIASES 一致：疑惑→curious
+        # thinking
+        "困惑": "thinking", "问号": "thinking",
+        "无聊": "thinking", "困倦": "thinking", "哭泣微笑": "thinking",
     }
 
     def __init__(self, sticker_dir: Path | str):
@@ -215,10 +213,11 @@ class StickerManager:
     def should_send(self, text: str, detected_emotion: str = "") -> bool:
         if not self._cache:
             return False
+        # Bug fix: 有明确情绪时提高发送概率，无情绪时降低
         if detected_emotion:
-            prob = 0.7
+            prob = 0.85
         else:
-            prob = 0.40
+            prob = 0.30
         return random.random() < prob
 
     def get_sticker(self, emotion: str = "") -> Path | None:
@@ -233,17 +232,16 @@ class StickerManager:
             if isinstance(emotion, Emotion):
                 emotion = STICKER_FALLBACK.get(emotion, "happy")
             else:
-                # 字符串标签也通过 resolve_emotion 转换
                 resolved = resolve_emotion(str(emotion))
                 emotion = STICKER_FALLBACK.get(resolved, "happy")
         if emotion:
-            # 优先：从描述归类的情绪缓存中选取
-            if emotion in self._emotion_cache:
-                candidates = self._emotion_cache[emotion]
-                return random.choice(candidates)
-            # 回退：从目录名匹配的文件中选取
+            # Bug fix: 优先从物理目录与情绪匹配的文件中选（目录名=情绪名）
             if emotion in self._cache:
                 candidates = self._cache[emotion]
+                return random.choice(candidates)
+            # 回退：从描述归类的情绪缓存中选取
+            if emotion in self._emotion_cache:
+                candidates = self._emotion_cache[emotion]
                 return random.choice(candidates)
         all_stickers = [s for v in self._cache.values() for s in v]
         return random.choice(all_stickers) if all_stickers else None

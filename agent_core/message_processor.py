@@ -224,8 +224,8 @@ class MessageProcessorMixin:
         if status_callback:
             try:
                 await status_callback("收到，正在想...")
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("agent.status_callback_failed", error=str(_e))
 
         allowed, reason = self.security.is_allowed(user_id)
         if not allowed:
@@ -623,11 +623,12 @@ class MessageProcessorMixin:
                 _detected_e = CN_TO_EN.get(emotion.get("primary", ""), "happy")
             _pre_picked_sticker = self.sticker_manager.pick(_detected_e)
             if _pre_picked_sticker:
-                _sticker_desc = _pre_picked_sticker.stem.replace("_", " ").replace("-", " ")
-                _sticker_cat = _pre_picked_sticker.parent.name
+                # Bug fix: 用检测到的情绪类别而非物理目录名，去掉文件名中的目录前缀
+                _sticker_desc = _pre_picked_sticker.stem.split("_", 1)[-1].replace("_", " ").replace("-", " ")
+                _sticker_cat = _detected_e
                 messages.append({
                     "role": "system",
-                    "content": f"[系统提示] 你正在给用户发送一张表情包图片。图片描述：「{_sticker_desc}」，分类：「{_sticker_cat}」。请在回复中自然地提到这张表情包的内容，让用户感受到你真的知道发了什么图。不要说'这是一张图片'之类的机械描述，要用你的风格自然表达。"
+                    "content": f"[系统提示] 你正在给用户发送一张表情包图片。图片描述：「{_sticker_desc}」，情绪分类：「{_sticker_cat}」。请在回复中自然地提到这张表情包的内容，让用户感受到你真的知道发了什么图。不要说'这是一张图片'之类的机械描述，要用你的风格自然表达。"
                 })
 
         tools = to_openai_tools() if to_openai_tools() else None

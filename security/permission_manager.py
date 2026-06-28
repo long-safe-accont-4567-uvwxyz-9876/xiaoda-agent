@@ -248,7 +248,7 @@ class PermissionManager:
         # DEV 模式：block 降级为 warn，只读查询直接放行
         if self._mode == PermissionMode.DEV:
             # 只读类威胁（查看信息、查询数据）在 DEV 模式下直接放行
-            readonly_keywords = ["leak", "info_disclosure", "read_only", "query", "inspect"]
+            readonly_keywords = ["info_disclosure", "read_only", "query", "inspect"]
             if any(kw in threat_type.lower() for kw in readonly_keywords):
                 logger.info(f"[DEV_MODE] 只读操作放行: {threat_type} (置信度={confidence:.2f})")
                 return "allow"

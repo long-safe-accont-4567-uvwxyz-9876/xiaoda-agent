@@ -481,8 +481,8 @@ class AIQQBot(botpy.Client):
             logger.warning("qq_bot.c2c_timeout user=%s", user_id)
             try:
                 await message.reply(content="纳西妲想得太入神了……能再说一次吗？🌱", msg_seq=_next_msg_seq())
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("qq_bot.c2c_timeout_reply_failed", error=str(_e))
         except Exception as e:
             logger.error(f"qq_bot.c2c_error: {e}")
             try:
@@ -559,8 +559,8 @@ class AIQQBot(botpy.Client):
             logger.warning("qq_bot.group_timeout user=%s", user_id)
             try:
                 await message.reply(content="纳西妲想得太入神了……能再说一次吗？🌱", msg_seq=_next_msg_seq())
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("qq_bot.group_timeout_reply_failed", error=str(_e))
         except Exception as e:
             logger.error(f"qq_bot.group_error: {e}", exc_info=True)
             try:

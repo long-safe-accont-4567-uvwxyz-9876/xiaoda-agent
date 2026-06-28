@@ -57,8 +57,8 @@ class CircuitBreaker:
 
     # 阈值配置
     THRESHOLDS = {
-        "consecutive_fails_yellow": 3,
-        "consecutive_fails_red": 8,
+        "consecutive_fails_yellow": 2,
+        "consecutive_fails_red": 5,
         "confidence_yellow": 0.5,
         "confidence_red": 0.2,
         "fatigue_yellow": 0.5,
