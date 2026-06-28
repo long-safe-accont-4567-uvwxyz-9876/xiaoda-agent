@@ -21,15 +21,15 @@ from core.circuit_breaker import CircuitState
 from core.background_tasks import _spawn
 from emotion.emotion_simple import detect_emotion, build_emotion_hint
 from emotion.emotion_enum import CN_TO_EN, is_unified, ensure_emotion_tag
-from task_orchestrator import run_task_graph
 from tool_engine.tool_registry import to_openai_tools
 from utils.text_utils import (has_dsml_tool_calls, parse_dsml_tool_calls,
                               humanize, encode_image_to_base64)
 
-from agent_core.core import DEGRADED_REPLY, ProcessResult
+# 冷启动优化: DEGRADED_REPLY 定义为本地常量, 避免导入 agent_core.core (节省 ~96ms)
+DEGRADED_REPLY = "嗯……人家现在有点不太舒服，等会儿再聊好不好？"
 
 if TYPE_CHECKING:
-    from agent_core.core import RequestContext
+    from agent_core.core import ProcessResult, RequestContext
 
 
 class MessageProcessorMixin:
@@ -453,6 +453,7 @@ class MessageProcessorMixin:
 
         if "nahida" in chat_targets and self._task_graph and not self._is_manual_target(user_input, user_id) and not self._is_simple_task(clean_input) and not force_voice and not image_data and not ("[图片:" in user_input and "已保存到" in user_input):
             try:
+                from task_orchestrator import run_task_graph  # 冷启动优化: 延迟导入 (节省 ~904ms)
                 graph_result = await run_task_graph(
                     graph=self._task_graph,
                     user_input=clean_input,

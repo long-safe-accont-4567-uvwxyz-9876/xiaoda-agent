@@ -4,6 +4,8 @@
 模块级常量（DEGRADED_REPLY / _current_request_ctx / ProcessResult / RequestContext /
 UserIdentity）必须在本文件导入各 Mixin 之前定义，以避免循环导入。
 """
+from __future__ import annotations
+
 import os
 import sys
 import asyncio
@@ -13,7 +15,7 @@ import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from loguru import logger
 
@@ -45,14 +47,16 @@ from klee_agent import KleeAgent
 from emotion.tts_engine import TTSEngine
 from agent_dispatcher import AgentDispatcher
 from tool_engine.mcp_client import MCPManager
-from task_orchestrator import TaskGraph, run_task_graph
-from instinct_manager import InstinctManager
 from utils.credential_pool import get_credential_pool
 from utils.error_classifier import ErrorClassifier
 from hooks import get_hook_engine, HookEngine
 
 import tools.file_tools_v2
 import tools.code_tools_v2
+
+if TYPE_CHECKING:
+    from task_orchestrator import TaskGraph
+    from instinct_manager import InstinctManager
 import tools.web_tools_v2
 import tools.document_tools
 import tools.web_browse_tools

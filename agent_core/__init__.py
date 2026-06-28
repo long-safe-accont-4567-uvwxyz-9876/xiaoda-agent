@@ -1,25 +1,18 @@
 """agent_core 包 —— 由原 agent_core.py 拆分而来。
 
-对外保持与原 agent_core.py 模块完全一致的接口：
-    from agent_core import AgentCore
-    from agent_core import ProcessResult, RequestContext, UserIdentity
-    from agent_core import _current_request_ctx, StickerManager
-
-原 agent_core.py 顶部的 sys.path 注入、.env 加载与日志初始化等副作用
-迁移至本 __init__.py 中执行，确保包导入时即完成环境准备。
+冷启动优化: 使用 __getattr__ 延迟导入, 避免包导入时触发全部子模块。
+只有实际访问 agent_core.AgentCore 等名称时才触发导入。
 """
 import os
 import sys
 from pathlib import Path
 
-# 将项目根目录加入 sys.path（原 agent_core.py 顶部：
-#   sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# 拆分为包后 __file__ 位于 agent_core/ 子目录，需上溯一级指向项目根目录）
+# 将项目根目录加入 sys.path
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-# 加载 .env（原 agent_core.py 顶部的 load_dotenv 逻辑）
+# 加载 .env
 import sys as _sys
 from dotenv import load_dotenv
 if getattr(_sys, 'frozen', False):
@@ -28,62 +21,52 @@ else:
     _env_path = str(Path(_PROJECT_ROOT) / ".env")
 load_dotenv(_env_path, override=True)
 
-# 日志初始化（原 agent_core.py 顶部的 setup_logging 调用）
+# 日志初始化
 from utils.logging_config import setup_logging
 setup_logging()
 
-# 导出对外接口（保持与原 agent_core.py 模块命名空间一致）
-from agent_core.core import (
-    AgentCore,
-    ProcessResult,
-    RequestContext,
-    UserIdentity,
-    DEGRADED_REPLY,
-    _current_request_ctx,
-    StickerManager,
-    # 以下名称在原 agent_core.py 顶部以 from xxx import yyy 形式导入，
-    # 测试与其他模块会通过 agent_core.XXX 形式访问（如 mock.patch），
-    # 故在此一并重新导出，以保持与原模块命名空间完全一致
-    ModelRouter,
-    DatabaseManager,
-    AgentContext,
-    ToolExecutor,
-    ToolCallRepair,
-    ResultWrapper,
-    FileReceiver,
-    KleeAgent,
-    TTSEngine,
-    AgentDispatcher,
-    MCPManager,
-    ToolCallHandler,
-    to_openai_tools,
-    get_credential_pool,
-    ErrorClassifier,
-    get_hook_engine,
-)
+# 延迟导入映射表 — 只有实际访问时才触发导入
+_LAZY_IMPORTS = {
+    "AgentCore": "agent_core.core",
+    "ProcessResult": "agent_core.core",
+    "RequestContext": "agent_core.core",
+    "UserIdentity": "agent_core.core",
+    "DEGRADED_REPLY": "agent_core.core",
+    "_current_request_ctx": "agent_core.core",
+    "StickerManager": "agent_core.core",
+    "ModelRouter": "agent_core.core",
+    "DatabaseManager": "agent_core.core",
+    "AgentContext": "agent_core.core",
+    "ToolExecutor": "agent_core.core",
+    "ToolCallRepair": "agent_core.core",
+    "ResultWrapper": "agent_core.core",
+    "FileReceiver": "agent_core.core",
+    "KleeAgent": "agent_core.core",
+    "TTSEngine": "agent_core.core",
+    "AgentDispatcher": "agent_core.core",
+    "MCPManager": "agent_core.core",
+    "ToolCallHandler": "agent_core.core",
+    "to_openai_tools": "agent_core.core",
+    "get_credential_pool": "agent_core.core",
+    "ErrorClassifier": "agent_core.core",
+    "get_hook_engine": "agent_core.core",
+    "HookEngine": "agent_core.core",
+}
 
-__all__ = [
-    "AgentCore",
-    "ProcessResult",
-    "RequestContext",
-    "UserIdentity",
-    "DEGRADED_REPLY",
-    "_current_request_ctx",
-    "StickerManager",
-    "ModelRouter",
-    "DatabaseManager",
-    "AgentContext",
-    "ToolExecutor",
-    "ToolCallRepair",
-    "ResultWrapper",
-    "FileReceiver",
-    "KleeAgent",
-    "TTSEngine",
-    "AgentDispatcher",
-    "MCPManager",
-    "ToolCallHandler",
-    "to_openai_tools",
-    "get_credential_pool",
-    "ErrorClassifier",
-    "get_hook_engine",
-]
+
+def __getattr__(name: str):
+    """模块级 __getattr__ — 延迟导入"""
+    if name in _LAZY_IMPORTS:
+        import importlib
+        module = importlib.import_module(_LAZY_IMPORTS[name])
+        value = getattr(module, name)
+        globals()[name] = value  # 缓存, 下次直接访问
+        return value
+    raise AttributeError(f"module 'agent_core' has no attribute {name!r}")
+
+
+def __dir__():
+    return list(_LAZY_IMPORTS.keys())
+
+
+__all__ = list(_LAZY_IMPORTS.keys())
