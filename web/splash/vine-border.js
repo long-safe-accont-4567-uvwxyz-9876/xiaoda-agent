@@ -81,29 +81,9 @@
             rx: 6, class: 'frame-line',
         }));
 
-        // --- 四角藤蔓（每角多层卷须） ---
-        // 螺旋卷须生成器：从起点画一条优美的螺旋曲线
-        function tendril(x, y, startAngle, length, turns, direction) {
-            let d = `M ${x} ${y}`;
-            const steps = 40;
-            let cx = x, cy = y;
-            let angle = startAngle;
-            for (let i = 1; i <= steps; i++) {
-                const t = i / steps;
-                const r = length * (1 - t) * 0.15 + 2;
-                angle += (direction * 10 * (1 - t * 0.5));
-                cx += Math.cos(angle * Math.PI / 180) * (length / steps);
-                cy += Math.sin(angle * Math.PI / 180) * (length / steps);
-                d += ` L ${cx.toFixed(1)} ${cy.toFixed(1)}`;
-            }
-            return d;
-        }
-
         const delayBase = 0.3;
 
         // === 左上角 ===
-        const tl = m;
-        // 主藤蔓：从左边中部向上卷曲到角，再向右延伸
         svg.appendChild(el('path', {
             d: `M ${m} ${m + cs}
                 C ${m} ${m + cs * 0.5}, ${m + 5} ${m + cs * 0.15}, ${m + 30} ${m + 8}
@@ -111,7 +91,6 @@
             class: 'vine-path grow',
         })).style.animationDelay = `${delayBase}s`;
 
-        // 螺旋卷须 1
         svg.appendChild(el('path', {
             d: `M ${m + 30} ${m + 8}
                 Q ${m + 20} ${m - 5}, ${m + 15} ${m - 15}
@@ -120,7 +99,6 @@
             class: 'vine-branch grow',
         })).style.animationDelay = `${delayBase + 0.2}s`;
 
-        // 螺旋卷须 2（更小）
         svg.appendChild(el('path', {
             d: `M ${m + 60} ${m + 3}
                 Q ${m + 55} ${m - 8}, ${m + 52} ${m - 18}
@@ -128,13 +106,11 @@
             class: 'vine-whisper grow',
         })).style.animationDelay = `${delayBase + 0.4}s`;
 
-        // 细枝向下延伸
         svg.appendChild(el('path', {
             d: `M ${m + 40} ${m + 5} Q ${m + 45} ${m + 30}, ${m + 38} ${m + 50}`,
             class: 'vine-branch grow',
         })).style.animationDelay = `${delayBase + 0.3}s`;
 
-        // 叶子
         [
             { x: m + 20, y: m + 12, a: 35, s: 9, d: 1.5 },
             { x: m + 55, y: m + 5, a: -15, s: 8, d: 1.7 },
@@ -144,7 +120,6 @@
             { x: m + 36, y: m + 52, a: 95, s: 6, d: 2.2 },
         ].forEach(lf => svg.appendChild(leaf(lf.x, lf.y, lf.a, lf.s, lf.d)));
 
-        // 花苞
         svg.appendChild(bud(m + 70, m + 8, -30, 4, 2.3));
         svg.appendChild(bud(m + 15, m - 28, 45, 3.5, 2.5));
 
@@ -269,31 +244,26 @@
         svg.appendChild(bud(W - m - 15, H - m + 28, 45, 3.5, 3.4));
 
         // --- 边框中段藤蔓延伸 ---
-        // 上边中段
         svg.appendChild(el('path', {
             d: `M ${W * 0.35} ${m} Q ${W * 0.4} ${m - 10}, ${W * 0.45} ${m - 6} Q ${W * 0.5} ${m - 12}, ${W * 0.55} ${m - 4} Q ${W * 0.6} ${m - 10}, ${W * 0.65} ${m}`,
             class: 'vine-whisper grow',
         })).style.animationDelay = `${delayBase + 1.5}s`;
 
-        // 下边中段
         svg.appendChild(el('path', {
             d: `M ${W * 0.35} ${H - m} Q ${W * 0.4} ${H - m + 10}, ${W * 0.45} ${H - m + 6} Q ${W * 0.5} ${H - m + 12}, ${W * 0.55} ${H - m + 4} Q ${W * 0.6} ${H - m + 10}, ${W * 0.65} ${H - m}`,
             class: 'vine-whisper grow',
         })).style.animationDelay = `${delayBase + 1.7}s`;
 
-        // 左边中段
         svg.appendChild(el('path', {
             d: `M ${m} ${H * 0.35} Q ${m - 10} ${H * 0.4}, ${m - 6} ${H * 0.45} Q ${m - 12} ${H * 0.5}, ${m - 4} ${H * 0.55} Q ${m - 10} ${H * 0.6}, ${m} ${H * 0.65}`,
             class: 'vine-whisper grow',
         })).style.animationDelay = `${delayBase + 1.6}s`;
 
-        // 右边中段
         svg.appendChild(el('path', {
             d: `M ${W - m} ${H * 0.35} Q ${W - m + 10} ${H * 0.4}, ${W - m + 6} ${H * 0.45} Q ${W - m + 12} ${H * 0.5}, ${W - m + 4} ${H * 0.55} Q ${W - m + 10} ${H * 0.6}, ${W - m} ${H * 0.65}`,
             class: 'vine-whisper grow',
         })).style.animationDelay = `${delayBase + 1.8}s`;
 
-        // --- 边框中点叶子 ---
         [
             { x: W * 0.5, y: m - 8, a: 90, s: 7, d: 3.0 },
             { x: W * 0.5, y: H - m + 8, a: -90, s: 7, d: 3.2 },
@@ -301,14 +271,20 @@
             { x: W - m + 8, y: H * 0.5, a: 180, s: 7, d: 3.3 },
         ].forEach(lf => svg.appendChild(leaf(lf.x, lf.y, lf.a, lf.s, lf.d)));
 
-        // --- 萤火虫（减少到6个） ---
+        // --- 萤火虫（12个） ---
         const sparks = [
             { x: W * 0.2, y: m + 15, r: 1.5, d: 2 },
             { x: W * 0.8, y: m + 15, r: 1.2, d: 2.5 },
-            { x: m + 15, y: H * 0.3, r: 1.5, d: 3 },
-            { x: W - m - 15, y: H * 0.7, r: 1.2, d: 3.5 },
-            { x: W * 0.3, y: H - m - 15, r: 1.5, d: 4 },
-            { x: W * 0.7, y: H - m + 15, r: 1.5, d: 4.5 },
+            { x: m + 15, y: H * 0.25, r: 1.5, d: 3 },
+            { x: W - m - 15, y: H * 0.25, r: 1.2, d: 3.5 },
+            { x: m + 15, y: H * 0.75, r: 1.5, d: 4 },
+            { x: W - m - 15, y: H * 0.75, r: 1.2, d: 4.5 },
+            { x: W * 0.3, y: H - m - 15, r: 1.5, d: 5 },
+            { x: W * 0.7, y: H - m - 15, r: 1.2, d: 5.5 },
+            { x: W * 0.5, y: m - 15, r: 1.8, d: 6 },
+            { x: W * 0.5, y: H - m + 15, r: 1.5, d: 6.5 },
+            { x: m - 15, y: H * 0.5, r: 1.5, d: 7 },
+            { x: W - m + 15, y: H * 0.5, r: 1.8, d: 7.5 },
         ];
         sparks.forEach(s => svg.appendChild(spark(s.x, s.y, s.r, s.d)));
     }

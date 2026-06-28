@@ -29,6 +29,7 @@
     stroke-width: 1.8;
     stroke-linecap: round;
     stroke-linejoin: round;
+    filter: drop-shadow(0 0 2px rgba(127, 214, 80, 0.3));
 }
 
 /* 藤蔓细枝（细层） */
@@ -72,12 +73,13 @@
     to { stroke-dashoffset: 0; }
 }
 
-/* 叶子弹入（去掉无限摇曳，减少GPU负担） */
+/* 叶子弹入 */
 .leaf-in {
     opacity: 0;
     transform-origin: center;
     transform-box: fill-box;
-    animation: leafIn 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation: leafIn 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards,
+               leafSway 6s ease-in-out 4s infinite;
 }
 
 @keyframes leafIn {
@@ -86,12 +88,18 @@
     100% { opacity: 1; transform: scale(1); }
 }
 
-/* 花苞弹入（去掉无限脉冲） */
+@keyframes leafSway {
+    0%, 100% { transform: scale(1) rotate(0deg); }
+    50% { transform: scale(1) rotate(5deg); }
+}
+
+/* 花苞脉冲 */
 .bud-in {
     opacity: 0;
     transform-origin: center;
     transform-box: fill-box;
-    animation: budIn 0.8s ease-out forwards;
+    animation: budIn 0.8s ease-out forwards,
+               budPulse 3s ease-in-out 4s infinite;
 }
 
 @keyframes budIn {
@@ -99,9 +107,16 @@
     100% { opacity: 1; transform: scale(1); }
 }
 
-/* 萤火虫（去掉drop-shadow，减到纯透明度闪烁） */
+@keyframes budPulse {
+    0%, 100% { opacity: 0.7; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.08); }
+}
+
+/* 萤火虫 */
 .spark {
     fill: rgba(180, 255, 120, 0.9);
+    filter: drop-shadow(0 0 4px rgba(143, 229, 96, 0.9))
+            drop-shadow(0 0 12px rgba(143, 229, 96, 0.3));
     opacity: 0;
     animation: sparkDrift 6s ease-in-out infinite;
 }

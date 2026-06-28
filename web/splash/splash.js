@@ -286,128 +286,219 @@ window.onServerTimeout = function() {
     loadingText.textContent = 'Connection timeout';
 };
 
-// ==================== 墨迹转场 + 进入按钮点击 ====================
+// 预览模式：自动显示 Enter 按钮
+if (new URLSearchParams(window.location.search).has('preview')) {
+    setTimeout(() => window.onServerReady(), 2500);
+}
 
+// 键盘快捷键：按 P 键手动触发服务就绪（预览用）
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'p' || e.key === 'P') {
+        window.onServerReady();
+    }
+});
+
+// ==================== InkReveal 墨迹转场 ====================
 /**
- * 墨迹擦除转场（参考 InkReveal 算法，纳西妲草绿色风格）
- * 点击 Enter 后，从按钮位置开始扩散草绿墨迹，覆盖全屏后跳转 WebUI
+ * 按 Obsidian InkReveal 灵动设计：
+ *   多层波浪扩散 + 不规则墨点 + 飞溅簇 + 变速扩散 + 有机路径
  */
-function inkTransition(originX, originY, onComplete) {
-    const canvas = document.getElementById('ink-overlay');
-    if (!canvas) { onComplete(); return; }
+// 提前预加载 Web UI iframe
+(function preloadWebUI() {
+    var isDesktop = location.hash.length > 1;
+    var port = isDesktop ? location.hash.substring(1) : '8082';
+    var frame = document.getElementById('webui-frame');
+    if (frame) {
+        frame.src = 'http://localhost:' + port;
+        frame.style.display = 'block';
+        frame.style.opacity = '0';
+    }
+})();
 
-    const ctx = canvas.getContext('2d');
-    const W = window.innerWidth;
-    const H = window.innerHeight;
-    canvas.width = W;
-    canvas.height = H;
-    canvas.classList.add('active');
+function inkRevealTransition(originX, originY, onComplete) {
+    var inkCanvas = document.getElementById('ink-canvas');
+    var webuiFrame = document.getElementById('webui-frame');
+    if (!inkCanvas) { if (onComplete) onComplete(); return; }
 
-    // 墨迹印记：从原点 + 周围散布多个点，模拟墨水晕染
-    const diag = Math.hypot(W, H);
-    const stamps = [];
-    const now = performance.now() / 1000;
-
-    // 主墨迹点（从按钮位置）
-    stamps.push({ x: originX, y: originY, rmax: diag * 0.7, born: now, delay: 0 });
-
-    // 辅助墨迹点（围绕原点散开，制造不规则边缘）
-    const auxCount = 8;
-    for (let i = 0; i < auxCount; i++) {
-        const angle = (i / auxCount) * Math.PI * 2 + Math.random() * 0.5;
-        const dist = 60 + Math.random() * 120;
-        stamps.push({
-            x: originX + Math.cos(angle) * dist,
-            y: originY + Math.sin(angle) * dist,
-            rmax: diag * (0.35 + Math.random() * 0.3),
-            born: now,
-            delay: 0.1 + Math.random() * 0.3,
-        });
+    // 确保 iframe 可见
+    if (webuiFrame) {
+        webuiFrame.style.opacity = '1';
     }
 
-    // 远端墨迹点（从屏幕角落向中心扩散，加速覆盖）
-    const corners = [
-        { x: 0, y: 0 }, { x: W, y: 0 },
-        { x: 0, y: H }, { x: W, y: H },
-        { x: W * 0.5, y: 0 }, { x: W * 0.5, y: H },
-        { x: 0, y: H * 0.5 }, { x: W, y: H * 0.5 },
-    ];
-    corners.forEach((c, i) => {
-        stamps.push({
-            x: c.x, y: c.y,
-            rmax: diag * (0.4 + Math.random() * 0.25),
-            born: now,
-            delay: 0.25 + i * 0.05,
-        });
-    });
+    var dpr = Math.min(devicePixelRatio, 1.5);
+    var W = innerWidth, H = innerHeight;
+    inkCanvas.width = W * dpr;
+    inkCanvas.height = H * dpr;
+    inkCanvas.style.width = W + 'px';
+    inkCanvas.style.height = H + 'px';
+    var ctx = inkCanvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const lifetime = 1.0; // 每个墨迹的生命周期（秒）
-    const rStart = 3;
-    const totalDuration = lifetime + 0.5; // 总转场时间
-    const startTime = performance.now();
+    // 截取当前 splash 画面到 ink-canvas
+    var bgCanvas = document.getElementById('bg-canvas');
 
-    // 墨迹颜色：深草绿底色
-    const inkColor = '#0f1f17';
-    const inkGlow = 'rgba(127, 214, 80, 0.15)';
+    // 先画背景色
+    var g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#0d140f'); g.addColorStop(0.5, '#162a1c'); g.addColorStop(1, '#192a1f');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+    // 截取 WebGL canvas
+    if (bgCanvas) {
+        try { ctx.drawImage(bgCanvas, 0, 0, W, H); } catch(e) {}
+    }
+
+    inkCanvas.style.display = 'block';
+
+    // 隐藏所有 splash 元素（iframe 在下面已经可见）
+    if (bgCanvas) bgCanvas.style.display = 'none';
+    var vineFrame = document.querySelector('.vine-frame');
+    if (vineFrame) vineFrame.style.display = 'none';
+    var center = document.querySelector('.center-content');
+    if (center) center.style.display = 'none';
+
+    var diag = Math.sqrt(W * W + H * H);
+    var now = performance.now() / 1000;
+    var stamps = [];
+
+    // 种子函数
+    function rand(n) { return Math.random() * n; }
+    function rrange(a, b) { return a + rand(b - a); }
+
+    // ===== 波浪1：核心爆裂（按钮周围，快出快散） =====
+     for (var i = 0; i < 8; i++) {
+         var angle = rand(6.283);
+         var dist = rand(180);
+         stamps.push({
+             x: originX + Math.cos(angle) * dist, y: originY + Math.sin(angle) * dist,
+             born: now + rand(0.1),
+             rmax: rrange(diag * 0.2, diag * 0.45),
+             life: rrange(0.5, 0.7)
+         });
+         // 飞溅小点
+         if (rand(1) < 0.5) {
+             stamps.push({
+                 x: originX + Math.cos(angle) * (dist + rand(50)), y: originY + Math.sin(angle) * (dist + rand(50)),
+                 born: now + 0.04 + rand(0.06),
+                 rmax: rrange(diag * 0.1, diag * 0.22),
+                 life: rrange(0.35, 0.5)
+             });
+         }
+     }
+
+     // ===== 波浪2：有机扩散（沿扇形方向，层次推进） =====
+     var branches = 5;
+     for (var b = 0; b < branches; b++) {
+         var ba = (b / branches) * 6.283 + rand(0.3);
+         var bx = originX, by = originY;
+         var steps = 4 + Math.floor(rand(3));
+         for (var s = 0; s < steps; s++) {
+             ba += rrange(-0.35, 0.35);
+             var sd = 70 + s * rrange(100, 220);
+             bx = Math.min(W, Math.max(0, bx + Math.cos(ba) * sd));
+             by = Math.min(H, Math.max(0, by + Math.sin(ba) * sd));
+             stamps.push({
+                 x: bx + rrange(-35, 35), y: by + rrange(-35, 35),
+                 born: now + 0.08 + (b * 0.06) + (s * 0.07),
+                 rmax: rrange(diag * 0.25, diag * 0.55),
+                 life: rrange(0.6, 0.85)
+             });
+         }
+     }
+
+     // ===== 波浪3：收边（四角 & 边缘，最后一批） =====
+     var edges = [[0,0],[W,0],[0,H],[W,H],[W*.5,0],[W*.5,H],[0,H*.5],[W,H*.5],[rand(W),rand(H)],[rand(W),rand(H)]];
+     for (var e = 0; e < edges.length; e++) {
+         stamps.push({
+             x: edges[e][0], y: edges[e][1],
+             born: now + 0.3 + rand(0.35),
+             rmax: rrange(diag * 0.3, diag * 0.6),
+             life: rrange(0.6, 0.8)
+         });
+     }
+
+     // 飞溅微点（散布全屏）
+     for (var sp = 0; sp < 12; sp++) {
+         stamps.push({
+             x: rand(W), y: rand(H),
+             born: now + 0.15 + rand(0.4),
+             rmax: rrange(diag * 0.06, diag * 0.2),
+             life: rrange(0.3, 0.5)
+         });
+     }
+
+    var rStart = 1.5;
+    var finished = false;
 
     function loop() {
-        const elapsed = (performance.now() - startTime) / 1000;
-        ctx.clearRect(0, 0, W, H);
+        var t = performance.now() / 1000;
+        var alive = false;
 
-        let allDone = true;
-        for (const s of stamps) {
-            const t = elapsed - s.delay;
-            if (t < 0) { allDone = false; continue; }
-            const lt = t / lifetime;
-            if (lt >= 1) continue;
-            allDone = false;
+        for (var i = stamps.length - 1; i >= 0; i--) {
+            var s = stamps[i];
+            var p = (t - s.born) / s.life;
+            if (p < 0) { alive = true; continue; }
+            if (p >= 1) { stamps.splice(i, 1); continue; }
+            alive = true;
 
-            // InkReveal 缓出曲线：ease = 1 - (1-t)³
-            const ease = 1 - Math.pow(1 - lt, 3);
-            const r = rStart + (s.rmax - rStart) * ease;
-            // 转场用：alpha 从 0 → 1（覆盖屏幕）
-            const alpha = Math.min(lt * 1.5, 1);
+            // 缓出曲线
+             var ease = 1 - Math.pow(1 - p, 2.8);
+             var r = rStart + (s.rmax - rStart) * ease;
 
-            // 主墨迹圆
-            ctx.save();
-            ctx.globalAlpha = alpha;
-            ctx.fillStyle = inkColor;
-            ctx.beginPath();
-            ctx.arc(s.x, s.y, Math.max(r, 1), 0, Math.PI * 2);
-            ctx.fill();
+             // 草绿光晕
+             ctx.save();
+             ctx.globalCompositeOperation = 'source-over';
+             var gw = Math.max(2, r * 0.25);
+             var gg = ctx.createRadialGradient(s.x, s.y, Math.max(0, r - gw), s.x, s.y, r);
+             gg.addColorStop(0, 'rgba(143,229,96,0)');
+             gg.addColorStop(0.5, 'rgba(143,229,96,0.1)');
+             gg.addColorStop(1, 'rgba(143,229,96,0)');
+             ctx.fillStyle = gg;
+             ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, 6.283); ctx.fill();
+             ctx.restore();
 
-            // 草绿色光晕边缘（纳西妲风格）
-            if (lt < 0.7) {
-                ctx.globalAlpha = alpha * 0.3 * (1 - lt / 0.7);
-                ctx.fillStyle = inkGlow;
-                ctx.beginPath();
-                ctx.arc(s.x, s.y, Math.max(r * 1.15, 1), 0, Math.PI * 2);
-                ctx.fill();
-            }
-            ctx.restore();
+             // 挖洞
+             ctx.save();
+             ctx.globalCompositeOperation = 'destination-out';
+             var ir = Math.max(0, r * 0.75);
+             var cg = ctx.createRadialGradient(s.x, s.y, ir, s.x, s.y, r);
+             cg.addColorStop(0, 'rgba(0,0,0,1)');
+             cg.addColorStop(0.8, 'rgba(0,0,0,0.5)');
+             cg.addColorStop(1, 'rgba(0,0,0,0)');
+             ctx.fillStyle = cg;
+             ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, 6.283); ctx.fill();
+             ctx.restore();
         }
 
-        if (!allDone) {
+        if (!alive && !finished) {
+            finished = true;
+            ctx.save();
+            ctx.globalCompositeOperation = 'destination-out';
+            ctx.fillStyle = 'rgba(0,0,0,1)';
+            ctx.fillRect(0, 0, W, H);
+            ctx.restore();
+            setTimeout(function() {
+                canvas.style.display = 'none';
+                ctx.clearRect(0, 0, W, H);
+                if (onComplete) onComplete();
+            }, 400);
+        } else if (alive) {
             requestAnimationFrame(loop);
-        } else {
-            // 完全覆盖后，稍等一瞬再跳转
-            setTimeout(onComplete, 100);
         }
     }
     requestAnimationFrame(loop);
 }
 
-enterBtn.addEventListener('click', () => {
+enterBtn.addEventListener('click', function() {
     enterBtn.style.opacity = '0.5';
     enterBtn.style.pointerEvents = 'none';
 
-    // 获取按钮中心位置作为墨迹原点
-    const rect = enterBtn.getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
+    var rect = enterBtn.getBoundingClientRect();
+    var cx = rect.left + rect.width / 2;
+    var cy = rect.top + rect.height / 2;
 
-    const port = window.location.hash ? window.location.hash.substring(1) : '8082';
-    inkTransition(cx, cy, () => {
-        window.location.href = `http://localhost:${port}`;
+    inkRevealTransition(cx, cy, function() {
+        // 转场完成，移除 ink-canvas，Web UI 已经通过 iframe 显示
+        var inkCanvas = document.getElementById('ink-canvas');
+        if (inkCanvas) inkCanvas.style.display = 'none';
     });
 });

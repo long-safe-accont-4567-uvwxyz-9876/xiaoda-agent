@@ -3,11 +3,19 @@
 html, body {
     width: 100%; height: 100%;
     overflow: hidden;
-    /* WebGL canvas 作为实际背景，这里用 CSS 渐变作 fallback */
     background: linear-gradient(180deg, #0d140f 0%, #162a1c 50%, #192a1f 100%);
     font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
     color: #e8f0e0;
     user-select: none;
+}
+
+/* ========== InkReveal Canvas ========== */
+#ink-canvas {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    pointer-events: none;
+    display: none;
 }
 
 /* ========== 全屏 WebGL Canvas ========== */
@@ -19,18 +27,6 @@ html, body {
     height: 100%;
     z-index: 0;
     pointer-events: none;
-}
-
-/* ========== 墨迹转场 overlay ========== */
-#ink-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 100;
-    pointer-events: none;
-    opacity: 0;
-}
-#ink-overlay.active {
-    opacity: 1;
 }
 
 /* ========== 中央内容 ========== */
@@ -45,7 +41,7 @@ html, body {
     gap: 10px;
 }
 
-/* 草元素徽记（DendroEmblem 风格：四叶 + 藤纹环 + 旋转） */
+/* 草元素徽记 */
 .leaf-emblem {
     opacity: 0;
     animation: fadeUp 1.2s cubic-bezier(0.16, 1, 0.3, 1) 0.3s forwards;
@@ -63,7 +59,6 @@ html, body {
     animation: breathe 5s ease-in-out 2s infinite;
 }
 
-/* 四片叶子依次弹入 */
 .leaf-emblem .leaf-petal {
     opacity: 0;
     transform-origin: 24px 24px;
@@ -73,14 +68,12 @@ html, body {
 .leaf-petal:nth-child(3) { animation: petalAppear 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.8s forwards; }
 .leaf-petal:nth-child(4) { animation: petalAppear 0.6s cubic-bezier(0.16, 1, 0.3, 1) 1.0s forwards; }
 
-/* 藤纹外环绘制 */
 .leaf-emblem .vine-ring {
     stroke-dasharray: 132;
     stroke-dashoffset: 132;
     animation: drawPath 1.5s ease-out 0.2s forwards;
 }
 
-/* 智慧之种弹入 */
 .leaf-emblem .seed-core {
     opacity: 0;
     transform-origin: center;
@@ -95,7 +88,7 @@ html, body {
     animation: petalAppear 0.6s cubic-bezier(0.16, 1, 0.3, 1) 1.4s forwards;
 }
 
-/* 标题（首字母大写，参考 Vibe Motion claude-typer） */
+/* 标题 */
 .title {
     font-size: 28px;
     font-weight: 200;
@@ -113,7 +106,6 @@ html, body {
     opacity: 1;
 }
 
-/* 每个字符的发光效果 */
 .title .char {
     display: inline-block;
     opacity: 0;
@@ -184,7 +176,7 @@ html, body {
     text-transform: uppercase;
 }
 
-/* 进入按钮 — 3D 转换 */
+/* 进入按钮 — 3D */
 .enter-btn-wrap {
     margin-top: 36px;
     perspective: 600px;
@@ -216,7 +208,6 @@ html, body {
     overflow: hidden;
 }
 
-/* 按钮表面反光层（跟随鼠标） */
 .enter-btn::before {
     content: '';
     position: absolute;
@@ -235,7 +226,6 @@ html, body {
     opacity: 1;
 }
 
-/* 底部厚度层（3D 立体感） */
 .enter-btn::after {
     content: '';
     position: absolute;
@@ -266,7 +256,7 @@ html, body {
     transition: transform 0.08s ease-in;
 }
 
-/* ========== 标题打字机光标（Claude CLI 方块光标） ========== */
+/* ========== 标题打字机光标 ========== */
 .title-cursor {
     display: inline-block;
     width: 2px;
@@ -281,11 +271,6 @@ html, body {
 .title-cursor.hidden {
     opacity: 0;
     animation: none;
-}
-
-@keyframes blink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0; }
 }
 
 /* ========== 通用动画 ========== */
@@ -310,24 +295,21 @@ html, body {
     100% { width: 0%; opacity: 0.3; margin-left: 100%; }
 }
 
-/* SVG 路径绘制动画 */
-@keyframes drawPath {
-    to { stroke-dashoffset: 0; }
-}
+@keyframes drawPath { to { stroke-dashoffset: 0; } }
 
-/* DendroEmblem 旋转（9秒/圈） */
-@keyframes emblem-spin {
-    to { transform: rotate(360deg); }
-}
+@keyframes emblem-spin { to { transform: rotate(360deg); } }
 
-/* 花瓣弹入 */
 @keyframes petalAppear {
     0% { opacity: 0; transform: scale(0.2); }
     60% { opacity: 1; transform: scale(1.15); }
     100% { opacity: 1; transform: scale(1); }
 }
 
-/* 字符出现动画 */
+@keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
 @keyframes charAppear {
     from { opacity: 0; transform: translateY(4px); }
     to { opacity: 1; transform: translateY(0); }

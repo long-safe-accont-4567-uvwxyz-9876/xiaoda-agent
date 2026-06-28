@@ -8,8 +8,14 @@
     <link rel="stylesheet" href="vine-border.css">
 </head>
 <body>
+    <!-- Web UI 界面（墨迹转场擦除 splash 后露出） -->
+    <iframe id="webui-frame" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;border:none;z-index:0;"></iframe>
+
     <!-- 全屏 WebGL 背景 Canvas（渐变 + 极光 + 波浪 + 粒子） -->
     <canvas id="bg-canvas"></canvas>
+
+    <!-- InkReveal 墨迹转场 Canvas -->
+    <canvas id="ink-canvas" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:9999;pointer-events:none;"></canvas>
 
     <!-- 3D 藤蔓缠绕边框 -->
     <div class="vine-frame">
@@ -52,9 +58,6 @@
             <button class="enter-btn" id="enter-btn">Enter</button>
         </div>
     </div>
-
-    <!-- 墨迹转场 overlay -->
-    <canvas id="ink-overlay"></canvas>
 
     <script src="vine-border.js"></script>
     <script src="splash.js"></script>
