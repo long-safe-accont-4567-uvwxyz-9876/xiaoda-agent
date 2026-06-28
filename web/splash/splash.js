@@ -272,10 +272,15 @@ setTimeout(() => {
     });
 })();
 
-// ==================== 服务就绪回调（由 Python 端调用） ====================
+// ==================== 服务就绪回调（Python 端调用 或 自动轮询） ====================
+
+var _serverReadyCalled = false;
 
 window.onServerReady = function() {
+    if (_serverReadyCalled) return;
+    _serverReadyCalled = true;
     clearInterval(msgInterval);
+    clearInterval(readyCheck);
     loadingText.textContent = 'Ready';
     if (loadingBar) loadingBar.style.animation = 'none';
     enterBtnWrap.classList.add('ready');
@@ -289,8 +294,17 @@ window.onServerReady = function() {
 
 window.onServerTimeout = function() {
     clearInterval(msgInterval);
+    clearInterval(readyCheck);
     loadingText.textContent = 'Connection timeout';
 };
+
+// 自动轮询检查 WebUI 是否就绪（不依赖 Python 端 evaluate_js）
+var readyCheck = setInterval(function() {
+    var port = window.__SPLASH_PORT || (location.hash.length > 1 ? location.hash.substring(1) : '8082');
+    fetch('http://localhost:' + port + '/', { mode: 'no-cors' })
+        .then(function() { window.onServerReady(); })
+        .catch(function() {});
+}, 1000);
 
 // 预览模式：自动显示 Enter 按钮
 if (new URLSearchParams(window.location.search).has('preview')) {
