@@ -231,9 +231,14 @@ def _run_desktop(host: str, port: int):
         _window = None
         _webui_url = webui_url
         def navigate_to_webui(self):
-            """InkReveal 转场完成后调用，将 pywebview 窗口导航到 WebUI"""
-            if self._window:
-                self._window.load_url(self._webui_url)
+            """InkReveal 转场完成后调用，将 pywebview 窗口导航到 WebUI。
+            延迟 200ms 导航，让 js_api 回调先正常完成，避免竞态错误。"""
+            import threading
+            def _navigate():
+                if self._window:
+                    self._window.load_url(self._webui_url)
+            threading.Timer(0.2, _navigate).start()
+            return "ok"
         def get_webui_url(self):
             """返回 WebUI URL，供 JS 端使用"""
             return self._webui_url
