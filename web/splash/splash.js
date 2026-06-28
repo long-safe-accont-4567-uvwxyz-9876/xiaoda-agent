@@ -486,8 +486,8 @@ enterBtn.addEventListener('click', function() {
 
     inkRevealTransition(cx, cy, function() {
         // 转场完成，通过 pywebview js_api 将窗口导航到 WebUI
-        var inkCanvas = document.getElementById('ink-canvas');
-        if (inkCanvas) inkCanvas.style.display = 'none';
+        // 不隐藏 ink-canvas: 保持墨水全覆盖, 直到 load_url() 导航到 WebUI
+        // WebView2 会保留旧页面直到新页面开始渲染, 实现无缝过渡
         if (window.pywebview && window.pywebview.api) {
             window.pywebview.api.navigate_to_webui();
         } else {
