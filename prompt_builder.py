@@ -545,12 +545,8 @@ def _build_xp_segment(user_id: str | None) -> str:
         return ""
 
 
-def build_system_prompt(extra_context: str = "", address_term: str = "爸爸",
-                         user_id: str | None = None,
-                         user_input: str | None = None) -> str:
-    # P6: 增量上下文构建路径 —— 稳定段缓存 + 动态段每次构建
-    # extra_context 延迟到末尾注入，保证新段落顺序:
-    # base → mental → permanent → emotional → XP → extra_context
+def _build_cached_system_prompt(address_term: str) -> str:
+    """构建系统提示词基础段（含增量路径和缓存回退）。"""
     try:
         from config import PROMPT_CACHING_ENABLED
     except ImportError:
@@ -591,45 +587,55 @@ def build_system_prompt(extra_context: str = "", address_term: str = "爸爸",
             _SYSTEM_PROMPT_CACHE_MTIMES = current_mtimes
             _SYSTEM_PROMPT_CACHE_ADDR_TERM = address_term
         # extra_context 移到末尾注入
+    return system_prompt
+
+
+def _inject_dynamic_segments(system_prompt: str, user_id: str | None, user_input: str | None) -> str:
+    """注入 per-user 动态段落（心理状态、永久记忆、情感记忆）。"""
+    if not user_id:
+        return system_prompt
 
     # === 注入新能力段落（per-user 动态段，不进入稳定段缓存） ===
-    if user_id:
-        # 1. L/M/S 心理状态段落
+    # 1. L/M/S 心理状态段落
+    try:
+        from core.mental_state import get_mental_state_manager
+        mgr = get_mental_state_manager()
+        mental_segment = mgr.get_prompt_segment()
+        if mental_segment:
+            system_prompt += "\n\n" + mental_segment
+    except Exception as e:
+        logger.warning("prompt.mental_state_inject_failed", error=str(e))
+
+    # 2. 永久记忆段落
+    try:
+        from core.permanent_memory import get_permanent_memory_manager
+        mgr = get_permanent_memory_manager()
+        permanent_segment = mgr.get_prompt_segment(user_id)
+        if permanent_segment:
+            system_prompt += "\n\n" + permanent_segment
+    except Exception as e:
+        logger.warning("prompt.permanent_memory_inject_failed", error=str(e))
+
+    # 3. 情感记忆召回段落（需要 user_input）
+    if user_input:
         try:
-            from core.mental_state import get_mental_state_manager
-            mgr = get_mental_state_manager()
-            mental_segment = mgr.get_prompt_segment()
-            if mental_segment:
-                system_prompt += "\n\n" + mental_segment
+            from memory.emotional_memory import get_emotional_memory_manager
+            from core.xp_system import get_xp_system
+            xp_sys = get_xp_system()
+            xp_state = xp_sys.get_state(user_id)
+            em_mgr = get_emotional_memory_manager()
+            emotional_segment = em_mgr.recall_and_enact(
+                user_id, user_input, xp_state.level.value
+            )
+            if emotional_segment:
+                system_prompt += "\n\n" + emotional_segment
         except Exception as e:
-            logger.warning("prompt.mental_state_inject_failed", error=str(e))
+            logger.warning("prompt.emotional_memory_inject_failed", error=str(e))
+    return system_prompt
 
-        # 2. 永久记忆段落
-        try:
-            from core.permanent_memory import get_permanent_memory_manager
-            mgr = get_permanent_memory_manager()
-            permanent_segment = mgr.get_prompt_segment(user_id)
-            if permanent_segment:
-                system_prompt += "\n\n" + permanent_segment
-        except Exception as e:
-            logger.warning("prompt.permanent_memory_inject_failed", error=str(e))
 
-        # 3. 情感记忆召回段落（需要 user_input）
-        if user_input:
-            try:
-                from memory.emotional_memory import get_emotional_memory_manager
-                from core.xp_system import get_xp_system
-                xp_sys = get_xp_system()
-                xp_state = xp_sys.get_state(user_id)
-                em_mgr = get_emotional_memory_manager()
-                emotional_segment = em_mgr.recall_and_enact(
-                    user_id, user_input, xp_state.level.value
-                )
-                if emotional_segment:
-                    system_prompt += "\n\n" + emotional_segment
-            except Exception as e:
-                logger.warning("prompt.emotional_memory_inject_failed", error=str(e))
-
+def _inject_xp_and_extra(system_prompt: str, user_id: str | None, extra_context: str) -> str:
+    """注入 XP 等级段落和 extra_context。"""
     # 4. XP 等级段落（已有，per-user 不进缓存以保持稳定段 KV Cache 命中率）
     xp_segment = _build_xp_segment(user_id)
     if xp_segment:
@@ -638,7 +644,18 @@ def build_system_prompt(extra_context: str = "", address_term: str = "爸爸",
     # 5. extra_context（末尾注入，保证顺序: base → mental → permanent → emotional → XP → extra_context）
     if extra_context:
         system_prompt += "\n\n---\n\n" + extra_context
+    return system_prompt
 
+
+def build_system_prompt(extra_context: str = "", address_term: str = "爸爸",
+                         user_id: str | None = None,
+                         user_input: str | None = None) -> str:
+    # P6: 增量上下文构建路径 —— 稳定段缓存 + 动态段每次构建
+    # extra_context 延迟到末尾注入，保证新段落顺序:
+    # base → mental → permanent → emotional → XP → extra_context
+    system_prompt = _build_cached_system_prompt(address_term)
+    system_prompt = _inject_dynamic_segments(system_prompt, user_id, user_input)
+    system_prompt = _inject_xp_and_extra(system_prompt, user_id, extra_context)
     return system_prompt
 
 

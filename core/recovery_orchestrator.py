@@ -147,6 +147,34 @@ class RecoveryOrchestrator:
         ctx = RecoveryContext(operation=operation, args=args)
 
         # 首次执行
+        result = await self._execute_first_attempt(
+            ctx, handler, args, operation, t0)
+        if result is not None:
+            return result
+
+        # 按级别递进恢复
+        result = await self._run_recovery_levels(
+            ctx, handler, max_lvl, operation, t0)
+        if result is not None:
+            return result
+
+        # 全部失败
+        self._stats["total"] += 1
+        self._stats["failed"] += 1
+        self._audit_log.append({
+            "operation": operation, "success": False,
+            "level": ctx.level.name, "attempts": ctx.attempt,
+            "duration": time.time() - t0,
+        })
+        return RecoveryResult(
+            success=False, level_used=ctx.level,
+            duration=time.time() - t0, attempts=ctx.attempt,
+        )
+
+    async def _execute_first_attempt(self, ctx: RecoveryContext, handler: Callable,
+                                      args: dict, operation: str, t0: float
+                                      ) -> Optional[RecoveryResult]:
+        """首次执行: 成功返回 RecoveryResult; 失败返回 None 并设置 ctx 的初始恢复级别"""
         try:
             if asyncio.iscoroutinefunction(handler):
                 result = await handler(**args)
@@ -169,8 +197,12 @@ class RecoveryOrchestrator:
             ctx.attempt = 1  # 首次执行失败, attempt 计为 1
             logger.info(f"Recovery.start op={operation} "
                          f"initial_level={ctx.level.name} error={str(e)[:100]}")
+            return None
 
-        # 按级别递进恢复
+    async def _run_recovery_levels(self, ctx: RecoveryContext, handler: Callable,
+                                    max_lvl: RecoveryLevel, operation: str,
+                                    t0: float) -> Optional[RecoveryResult]:
+        """按级别递进恢复: 成功返回 RecoveryResult, 全部失败返回 None"""
         while ctx.level <= max_lvl:
             ctx.attempt += 1  # 每个级别尝试计为一次执行
             try:
@@ -213,19 +245,7 @@ class RecoveryOrchestrator:
                 if next_level == ctx.level:
                     break
                 ctx.level = next_level
-
-        # 全部失败
-        self._stats["total"] += 1
-        self._stats["failed"] += 1
-        self._audit_log.append({
-            "operation": operation, "success": False,
-            "level": ctx.level.name, "attempts": ctx.attempt,
-            "duration": time.time() - t0,
-        })
-        return RecoveryResult(
-            success=False, level_used=ctx.level,
-            duration=time.time() - t0, attempts=ctx.attempt,
-        )
+        return None
 
     async def _try_recover(self, ctx: RecoveryContext,
                              handler: Callable) -> Any:
@@ -234,90 +254,88 @@ class RecoveryOrchestrator:
 
         if lvl == RecoveryLevel.RETRY:
             # 直接重试
-            if asyncio.iscoroutinefunction(handler):
-                return await handler(**ctx.args)
-            return await asyncio.to_thread(handler, **ctx.args)
+            return await self._invoke_handler(handler, ctx.args)
 
         if lvl == RecoveryLevel.BACKOFF:
             # 指数退避
-            delays = [1, 2, 4, 8, 16]
-            for i, d in enumerate(delays):
-                await asyncio.sleep(d)
-                try:
-                    if asyncio.iscoroutinefunction(handler):
-                        return await handler(**ctx.args)
-                    return await asyncio.to_thread(handler, **ctx.args)
-                except Exception:
-                    if i == len(delays) - 1:
-                        raise RecoveryError(f"Backoff exhausted after {len(delays)} retries")
-            raise RecoveryError("Backoff failed")
+            return await self._recover_with_backoff(handler, ctx.args)
 
         if lvl == RecoveryLevel.FALLBACK:
             # 降级备选
             fb = self._fallbacks.get(ctx.operation)
             if not fb:
                 raise RecoveryError(f"No fallback registered for {ctx.operation}")
-            if asyncio.iscoroutinefunction(fb):
-                return await fb(**ctx.args)
-            return await asyncio.to_thread(fb, **ctx.args)
+            return await self._invoke_handler(fb, ctx.args)
 
         if lvl == RecoveryLevel.RECONFIGURE:
             # 重新配置
             rc = self._reconfigure_handlers.get(ctx.operation)
             if rc:
-                if asyncio.iscoroutinefunction(rc):
-                    await rc(**ctx.args)
-                else:
-                    await asyncio.to_thread(rc, **ctx.args)
+                await self._invoke_handler(rc, ctx.args)
             # 配置完后重试
-            if asyncio.iscoroutinefunction(handler):
-                return await handler(**ctx.args)
-            return await asyncio.to_thread(handler, **ctx.args)
+            return await self._invoke_handler(handler, ctx.args)
 
         if lvl == RecoveryLevel.RESTART:
             # 重启子模块
             rs = self._restart_handlers.get(ctx.operation)
             if rs:
-                if asyncio.iscoroutinefunction(rs):
-                    await rs(**ctx.args)
-                else:
-                    await asyncio.to_thread(rs, **ctx.args)
+                await self._invoke_handler(rs, ctx.args)
             # 重启后重试
-            if asyncio.iscoroutinefunction(handler):
-                return await handler(**ctx.args)
-            return await asyncio.to_thread(handler, **ctx.args)
+            return await self._invoke_handler(handler, ctx.args)
 
         if lvl == RecoveryLevel.ESCALATE:
             # 上报人工
-            try:
-                from core.self_diagnostic import get_self_diagnostic, ReportLevel, SelfReport
-                diag = get_self_diagnostic()
-                # 通过回调机制上报
-                report = SelfReport(
-                    level=ReportLevel.CRITICAL,
-                    category="recovery",
-                    message=f"Recovery escalated for {ctx.operation}: "
-                              f"{str(ctx.error)[:100]}",
-                    metrics={
-                        "operation": ctx.operation,
-                        "attempts": ctx.attempt,
-                        "level": ctx.level.name,
-                    },
-                )
-                # 直接通知
-                for cb in diag._callbacks:
-                    try:
-                        if asyncio.iscoroutinefunction(cb):
-                            asyncio.create_task(cb(report))
-                        else:
-                            cb(report)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+            self._escalate_to_human(ctx)
             raise RecoveryError(f"Escalated to human, operation={ctx.operation}")
 
         raise RecoveryError(f"Unknown level {lvl}")
+
+    async def _invoke_handler(self, handler: Callable, args: dict) -> Any:
+        """根据 handler 是否为协程函数选择 await 或 to_thread 执行"""
+        if asyncio.iscoroutinefunction(handler):
+            return await handler(**args)
+        return await asyncio.to_thread(handler, **args)
+
+    async def _recover_with_backoff(self, handler: Callable, args: dict) -> Any:
+        """指数退避重试 (1/2/4/8/16s), 全部失败抛出 RecoveryError"""
+        delays = [1, 2, 4, 8, 16]
+        for i, d in enumerate(delays):
+            await asyncio.sleep(d)
+            try:
+                return await self._invoke_handler(handler, args)
+            except Exception:
+                if i == len(delays) - 1:
+                    raise RecoveryError(f"Backoff exhausted after {len(delays)} retries")
+        raise RecoveryError("Backoff failed")
+
+    def _escalate_to_human(self, ctx: RecoveryContext) -> None:
+        """上报人工介入 (通过 self_diagnostic 回调机制)"""
+        try:
+            from core.self_diagnostic import get_self_diagnostic, ReportLevel, SelfReport
+            diag = get_self_diagnostic()
+            # 通过回调机制上报
+            report = SelfReport(
+                level=ReportLevel.CRITICAL,
+                category="recovery",
+                message=f"Recovery escalated for {ctx.operation}: "
+                          f"{str(ctx.error)[:100]}",
+                metrics={
+                    "operation": ctx.operation,
+                    "attempts": ctx.attempt,
+                    "level": ctx.level.name,
+                },
+            )
+            # 直接通知
+            for cb in diag._callbacks:
+                try:
+                    if asyncio.iscoroutinefunction(cb):
+                        asyncio.create_task(cb(report))
+                    else:
+                        cb(report)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def stats(self) -> dict:
         """返回恢复统计 (含总数/成功/失败/各级别计数/审计日志大小)."""

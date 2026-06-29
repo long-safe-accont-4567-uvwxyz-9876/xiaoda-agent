@@ -375,23 +375,27 @@ class SlashCommandHandler:
             return "数据库还没准备好呢～"
         lines = ["🖥️ 香橙派硬件状态"]
         try:
+            lines.extend(await asyncio.to_thread(self._read_hw_sync))
+        except Exception:
+            pass
+        return "\n".join(lines)
+
+    @staticmethod
+    def _read_hw_sync() -> list[str]:
+        """同步读取硬件状态（通过 asyncio.to_thread 包装避免阻塞事件循环）"""
+        lines: list[str] = []
+        try:
             import os
-            temp_path = "/sys/class/thermal/thermal_zone0/temp"
             try:
-                with open(temp_path) as f:
+                with open("/sys/class/thermal/thermal_zone0/temp") as f:
                     temp_c = int(f.read().strip()) / 1000
-                temp_icon = "🌡️"
-                if temp_c > 80:
-                    temp_icon = "🔥⚠️"
-                elif temp_c > 60:
-                    temp_icon = "🌡️"
+                temp_icon = "🔥⚠️" if temp_c > 80 else "🌡️"
                 lines.append(f"{temp_icon} CPU温度: {temp_c:.1f}°C")
             except Exception as e:
                 logger.debug("slash.hw.temp_read_failed", error=str(e))
                 lines.append("🌡️ CPU温度: 无法读取")
             try:
-                freq_path = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq"
-                with open(freq_path) as f:
+                with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq") as f:
                     freq_khz = int(f.read().strip())
                 lines.append(f"⚡ CPU频率: {freq_khz // 1000} MHz")
             except Exception as e:
@@ -404,20 +408,15 @@ class SlashCommandHandler:
                 mem_avail = int([l for l in meminfo.split('\n') if 'MemAvailable' in l][0].split()[1])
                 mem_used = mem_total - mem_avail
                 mem_pct = mem_used / mem_total * 100
-                mem_icon = "💾"
-                if mem_pct > 90:
-                    mem_icon = "💾⚠️"
+                mem_icon = "💾⚠️" if mem_pct > 90 else "💾"
                 lines.append(f"{mem_icon} 内存: {mem_used//1024}M / {mem_total//1024}M ({mem_pct:.0f}%)")
             except Exception as e:
                 logger.debug("slash.hw.mem_read_failed", error=str(e))
                 lines.append("💾 内存: 无法读取")
             try:
                 usage = shutil.disk_usage('/')
-                total = usage.total
-                free = usage.free
-                used = usage.used
-                pct = used / total * 100 if total > 0 else 0
-                lines.append(f"💿 磁盘: {used//1073741824}G / {total//1073741824}G ({pct:.0f}%)")
+                pct = usage.used / usage.total * 100 if usage.total > 0 else 0
+                lines.append(f"💿 磁盘: {usage.used//1073741824}G / {usage.total//1073741824}G ({pct:.0f}%)")
             except Exception as e:
                 logger.debug("slash.hw.disk_read_failed", error=str(e))
                 lines.append("💿 磁盘: 无法读取")
@@ -430,7 +429,7 @@ class SlashCommandHandler:
                 lines.append("📊 负载: 无法读取")
         except Exception:
             pass
-        return "\n".join(lines)
+        return lines
 
     async def _cmd_sys(self, args: str, user_id: str) -> str:
         lines = ["📋 系统运行状态"]

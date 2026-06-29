@@ -85,7 +85,14 @@ class DoctorCheck:
 # 默认检查项注册
 def _create_default_doctor() -> DoctorCheck:
     doc = DoctorCheck()
+    _register_process_checks(doc)
+    _register_config_checks(doc)
+    _register_behavior_checks(doc)
+    return doc
 
+
+def _register_process_checks(doc: DoctorCheck) -> None:
+    """注册进程和端口检查（Layer 1-2）。"""
     # Layer 1: 进程
     doc.add_check("Process Running", "L1-Process", lambda: (True, f"PID={os.getpid()}"))
 
@@ -104,6 +111,9 @@ def _create_default_doctor() -> DoctorCheck:
 
     doc.add_check("Port Available", "L2-Network", _check_port)
 
+
+def _register_config_checks(doc: DoctorCheck) -> None:
+    """注册数据库、配置、记忆、安全检查（Layer 3-6）。"""
     # Layer 3: 数据库
     def _check_db() -> tuple:
         try:
@@ -143,6 +153,9 @@ def _create_default_doctor() -> DoctorCheck:
 
     doc.add_check("Security Module", "L6-Security", _check_security)
 
+
+def _register_behavior_checks(doc: DoctorCheck) -> None:
+    """注册行为健康和 zombie 进程检查（Layer 7-8）。"""
     # Layer 7: 行为健康 (Dr2)
     def _check_behavioral_health() -> tuple:
         try:
@@ -179,8 +192,6 @@ def _create_default_doctor() -> DoctorCheck:
             return False, f"Zombie check failed: {e}"
 
     doc.add_check("Zombie Processes", "L8-Zombie", _check_zombie_processes)
-
-    return doc
 
 
 def run_doctor(json_output: bool = False, auto_fix: bool = False) -> int:

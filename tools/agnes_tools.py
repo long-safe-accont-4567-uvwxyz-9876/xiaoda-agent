@@ -144,86 +144,105 @@ async def agnes_video_generate(prompt: str, seconds: float = 5, fps: int = 24) -
         if not ensure("httpx"):
             return ToolResult.fail("httpx 未安装，无法生成视频")
 
-        import math
-        # 计算帧数：num_frames = 8n + 1, 且 <= 441
-        raw_frames = int(seconds * fps)
-        n = max(1, (raw_frames - 1) // 8)
-        num_frames = min(8 * n + 1, 441)
-
         client = _get_agnes_http_client()
         _agnes_key = os.getenv("AGNES_API_KEY", "")
         _agnes_url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
-        # 创建视频生成任务
-        resp = await client.post(
-            f"{_agnes_url}/video/generations",
-            headers={"Authorization": f"Bearer {_agnes_key}"},
-            json={
-                "model": AGNES_VIDEO_MODEL,
-                "prompt": prompt,
-                "num_frames": num_frames,
-                "frame_rate": fps,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        # 任务 ID 可能在 id、video_id 或 task_id 字段
-        video_id = data.get("id") or data.get("video_id", "") or data.get("task_id", "")
 
+        video_id, data = await _agnes_create_video_task(
+            client, _agnes_url, _agnes_key, prompt, seconds, fps
+        )
         if not video_id:
             return ToolResult.fail(f"视频任务创建失败: {data}")
 
-        # 轮询等待结果（自适应间隔：前3次5s，之后10s，总等待180s）
-        poll_count = 0
-        max_polls = 24  # 3*5 + 21*10 = 225s，但实际 3*5 + 15*10 = 165s 足够
-        while poll_count < max_polls:
-            interval = 5 if poll_count < 3 else 10
-            await asyncio.sleep(interval)
-            poll_count += 1
-            status_resp = await client.get(
-                f"{_agnes_url}/video/generations/{video_id}",
-                headers={"Authorization": f"Bearer {_agnes_key}"},
-            )
-            status_resp.raise_for_status()
-            status_data = status_resp.json()
-            # 状态可能在顶层 status 或 data.status
-            status = status_data.get("status", "").lower()
-            inner_data = status_data.get("data", {})
-            if inner_data and isinstance(inner_data, dict):
-                inner_status = inner_data.get("status", "").lower()
-                if inner_status in ("completed", "succeeded", "success"):
-                    status = inner_status
-
-            if status in ("completed", "succeeded", "success"):
-                # 提取视频URL
-                video_url = status_data.get("output", {}).get("url", "")
-                if video_url:
-                    logger.info("agnes.video_url_extracted", path="output.url")
-                else:
-                    video_url = status_data.get("url", "")
-                    if video_url:
-                        logger.info("agnes.video_url_extracted", path="top_level_url")
-
-                if video_url:
-                    # 下载视频到本地
-                    try:
-                        tts_cache_dir = FILE_DIR.parent / "tts_cache"
-                        tts_cache_dir.mkdir(parents=True, exist_ok=True)
-                        video_ts = int(time.time())
-                        local_path = tts_cache_dir / f"video_{video_ts}.mp4"
-                        download_resp = await client.get(video_url)
-                        download_resp.raise_for_status()
-                        local_path.write_bytes(download_resp.content)
-                        return ToolResult.ok(f"视频生成完成！本地路径: {local_path}")
-                    except Exception as dl_err:
-                        logger.error("agnes.video_download_failed", error=str(dl_err))
-                        # 降级：返回 URL 供用户手动查看
-                        return ToolResult.ok(f"视频生成完成！下载失败，请直接访问：{video_url}")
-                return ToolResult.fail(f"视频生成完成，但未获取到URL: {status_data}")
-            elif status in ("failed", "error"):
-                error_msg = status_data.get("fail_reason", "") or status_data.get("error", "未知错误")
-                return ToolResult.fail(f"视频生成失败: {error_msg}")
-
-        return ToolResult.fail(f"视频生成超时，任务ID: {video_id}，请稍后查询")
+        return await _agnes_poll_and_download_video(
+            client, _agnes_url, _agnes_key, video_id
+        )
     except Exception as e:
         logger.error("agnes.video_generate_failed", error=str(e))
         return ToolResult.fail(f"视频生成失败: {e}")
+
+
+async def _agnes_create_video_task(
+    client: Any, url: str, key: str, prompt: str, seconds: float, fps: int
+) -> tuple[str, dict]:
+    """创建视频生成任务，返回 (video_id, data)。"""
+    import math
+    # 计算帧数：num_frames = 8n + 1, 且 <= 441
+    raw_frames = int(seconds * fps)
+    n = max(1, (raw_frames - 1) // 8)
+    num_frames = min(8 * n + 1, 441)
+
+    # 创建视频生成任务
+    resp = await client.post(
+        f"{url}/video/generations",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": AGNES_VIDEO_MODEL,
+            "prompt": prompt,
+            "num_frames": num_frames,
+            "frame_rate": fps,
+        },
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    # 任务 ID 可能在 id、video_id 或 task_id 字段
+    video_id = data.get("id") or data.get("video_id", "") or data.get("task_id", "")
+    return video_id, data
+
+
+async def _agnes_poll_and_download_video(
+    client: Any, url: str, key: str, video_id: str
+) -> ToolResult:
+    """轮询视频任务状态并下载结果。"""
+    # 轮询等待结果（自适应间隔：前3次5s，之后10s，总等待180s）
+    poll_count = 0
+    max_polls = 24  # 3*5 + 21*10 = 225s，但实际 3*5 + 15*10 = 165s 足够
+    while poll_count < max_polls:
+        interval = 5 if poll_count < 3 else 10
+        await asyncio.sleep(interval)
+        poll_count += 1
+        status_resp = await client.get(
+            f"{url}/video/generations/{video_id}",
+            headers={"Authorization": f"Bearer {key}"},
+        )
+        status_resp.raise_for_status()
+        status_data = status_resp.json()
+        # 状态可能在顶层 status 或 data.status
+        status = status_data.get("status", "").lower()
+        inner_data = status_data.get("data", {})
+        if inner_data and isinstance(inner_data, dict):
+            inner_status = inner_data.get("status", "").lower()
+            if inner_status in ("completed", "succeeded", "success"):
+                status = inner_status
+
+        if status in ("completed", "succeeded", "success"):
+            # 提取视频URL
+            video_url = status_data.get("output", {}).get("url", "")
+            if video_url:
+                logger.info("agnes.video_url_extracted", path="output.url")
+            else:
+                video_url = status_data.get("url", "")
+                if video_url:
+                    logger.info("agnes.video_url_extracted", path="top_level_url")
+
+            if video_url:
+                # 下载视频到本地
+                try:
+                    tts_cache_dir = FILE_DIR.parent / "tts_cache"
+                    tts_cache_dir.mkdir(parents=True, exist_ok=True)
+                    video_ts = int(time.time())
+                    local_path = tts_cache_dir / f"video_{video_ts}.mp4"
+                    download_resp = await client.get(video_url)
+                    download_resp.raise_for_status()
+                    local_path.write_bytes(download_resp.content)
+                    return ToolResult.ok(f"视频生成完成！本地路径: {local_path}")
+                except Exception as dl_err:
+                    logger.error("agnes.video_download_failed", error=str(dl_err))
+                    # 降级：返回 URL 供用户手动查看
+                    return ToolResult.ok(f"视频生成完成！下载失败，请直接访问：{video_url}")
+            return ToolResult.fail(f"视频生成完成，但未获取到URL: {status_data}")
+        elif status in ("failed", "error"):
+            error_msg = status_data.get("fail_reason", "") or status_data.get("error", "未知错误")
+            return ToolResult.fail(f"视频生成失败: {error_msg}")
+
+    return ToolResult.fail(f"视频生成超时，任务ID: {video_id}，请稍后查询")

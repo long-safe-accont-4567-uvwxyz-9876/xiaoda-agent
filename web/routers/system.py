@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Any
 
+import asyncio
 import json
 import os
 import time
@@ -97,13 +98,13 @@ async def get_logs(lines: int = Query(default=200, le=1000),
 
     out: list[str] = []
 
-    # 优先读取 loguru 的 agent_YYYY-MM-DD.json 日志
-    try:
+    # 优先读取 loguru 的 agent_YYYY-MM-DD.json 日志（同步 I/O 放到线程池）
+    def _read_agent_logs() -> list[str]:
         import json as _json
         import datetime as _dt
+        result: list[str] = []
         today = _dt.date.today().isoformat()
         agent_log = LOG_DIR / f"agent_{today}.json"
-        # 如果今天的日志不存在，找最近的一个
         if not agent_log.exists():
             candidates = sorted(LOG_DIR.glob("agent_*.json"), reverse=True)
             if candidates:
@@ -120,24 +121,26 @@ async def get_logs(lines: int = Query(default=200, le=1000),
                     continue
                 try:
                     obj = _json.loads(raw_line)
-                    # loguru serialize 格式：text 字段包含完整格式化文本
                     text = obj.get("text", "").rstrip("\n")
                     if not text:
                         continue
-                    # 按级别过滤
                     rec = obj.get("record", {})
                     lvl = rec.get("level", {}).get("name", "")
                     if level and lvl.upper() != level.upper():
                         continue
-                    out.append(text)
+                    result.append(text)
                 except _json.JSONDecodeError:
                     continue
+        return result
+
+    try:
+        out = await asyncio.to_thread(_read_agent_logs)
     except Exception:
         pass
 
     # 兜底：如果 agent 日志为空，尝试读取 botpy.log
     if not out:
-        try:
+        def _read_botpy_log() -> list[str]:
             from config import get_base_dir
             log_path = LOG_DIR / "botpy.log"
             if not log_path.exists():
@@ -148,9 +151,13 @@ async def get_logs(lines: int = Query(default=200, le=1000),
                     size = f.tell()
                     f.seek(max(0, size - 512 * 1024))
                     content = f.read().decode("utf-8", errors="replace")
-                out = content.splitlines()
+                lines_out = content.splitlines()
                 if level:
-                    out = [l for l in out if f"| {level.upper()}" in l or f"[{level.upper()}]" in l]
+                    lines_out = [l for l in lines_out if f"| {level.upper()}" in l or f"[{level.upper()}]" in l]
+                return lines_out
+            return []
+        try:
+            out = await asyncio.to_thread(_read_botpy_log)
         except Exception:
             pass
 

@@ -457,14 +457,7 @@ class SubAgent:
         standard_ext = StandardExtractor()
         dsml_ext = DsmlExtractor(allowed_tools=tool_names)
 
-        if is_reasoning and tools:
-            dsml_prompt = self._build_dsml_tool_prompt()
-            if dsml_prompt and working and working[0]["role"] == "system":
-                working[0] = {
-                    "role": "system",
-                    "content": working[0]["content"] + "\n\n" + dsml_prompt,
-                }
-            tools = None
+        tools = self._inject_dsml_if_needed(working, tools, is_reasoning, tool_names)
 
         for round_idx in range(max_rounds):
             if asyncio.get_running_loop().time() > total_deadline:
@@ -476,24 +469,9 @@ class SubAgent:
                 logger.warning("sub_agent.time_exhausted", name=self.config.name)
                 return f"{self.config.display_name}处理超时了，请稍后再试吧～"
 
-            try:
-                t0 = asyncio.get_running_loop().time()
-                response = await asyncio.wait_for(
-                    self._client.chat.completions.create(
-                        model=self.config.model,
-                        messages=working,
-                        max_tokens=1024 if tools else 800,
-                        temperature=0.9,
-                        tools=tools,
-                        tool_choice="auto" if tools else None,
-                    ),
-                    timeout=min(api_timeout, remaining),
-                )
-                elapsed = asyncio.get_running_loop().time() - t0
-                logger.info("sub_agent.api_ok", name=self.config.name, round=round_idx, elapsed=f"{elapsed:.1f}s")
-            except asyncio.TimeoutError:
-                logger.warning("sub_agent.api_timeout", name=self.config.name, round=round_idx)
-                return f"{self.config.display_name}思考时间太长了，请稍后再试吧～"
+            response = await self._call_llm_one_round(working, tools, remaining, round_idx)
+            if isinstance(response, str):
+                return response  # 超时提示
 
             msg = response.choices[0].message
             # 统一提取工具调用：先尝试标准，再尝试 DSML
@@ -519,22 +497,64 @@ class SubAgent:
             working.append(self._build_assistant_msg(msg, extracted, is_dsml))
 
             # 统一执行工具调用
-            tool_results = await asyncio.gather(
-                *[self._exec_one_tool_call(tc) for tc in extracted],
-                return_exceptions=True,
-            )
-            for tc, r in zip(extracted, tool_results):
-                if isinstance(r, Exception):
-                    logger.warning("sub_agent.tool_error", name=self.config.name, tool=tc.name, error=str(r))
-                    working.append({"role": "tool", "tool_call_id": tc.id, "content": f"错误: {r}"})
-                else:
-                    working.append({"role": "tool", "tool_call_id": r["tool_call_id"], "content": r["content"]})
+            await self._execute_round_tool_calls(extracted, working)
 
         # 达到最大轮次：让 LLM 基于已有工具结果做总结回复
         remaining = total_deadline - asyncio.get_running_loop().time()
         if remaining < 5:
             return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
         return await self._summarize_after_tools(working, api_timeout, remaining)
+
+    def _inject_dsml_if_needed(self, working: list[dict], tools: list[dict] | None,
+                                is_reasoning: bool,
+                                tool_names: list[str]) -> list[dict] | None:
+        """推理模型注入 DSML 工具提示并禁用原生 tools; 非推理模型保持原样返回 tools"""
+        if is_reasoning and tools:
+            dsml_prompt = self._build_dsml_tool_prompt()
+            if dsml_prompt and working and working[0]["role"] == "system":
+                working[0] = {
+                    "role": "system",
+                    "content": working[0]["content"] + "\n\n" + dsml_prompt,
+                }
+            tools = None
+        return tools
+
+    async def _call_llm_one_round(self, working: list[dict], tools: list[dict] | None,
+                                  remaining: float, round_idx: int) -> Any:
+        """单轮调用 LLM API; 超时返回用户可见的提示字符串, 成功返回响应对象"""
+        api_timeout = 60
+        try:
+            t0 = asyncio.get_running_loop().time()
+            response = await asyncio.wait_for(
+                self._client.chat.completions.create(
+                    model=self.config.model,
+                    messages=working,
+                    max_tokens=1024 if tools else 800,
+                    temperature=0.9,
+                    tools=tools,
+                    tool_choice="auto" if tools else None,
+                ),
+                timeout=min(api_timeout, remaining),
+            )
+            elapsed = asyncio.get_running_loop().time() - t0
+            logger.info("sub_agent.api_ok", name=self.config.name, round=round_idx, elapsed=f"{elapsed:.1f}s")
+            return response
+        except asyncio.TimeoutError:
+            logger.warning("sub_agent.api_timeout", name=self.config.name, round=round_idx)
+            return f"{self.config.display_name}思考时间太长了，请稍后再试吧～"
+
+    async def _execute_round_tool_calls(self, extracted: Any, working: list[dict]) -> None:
+        """并行执行本轮工具调用, 将结果 (含错误) 追加到 working"""
+        tool_results = await asyncio.gather(
+            *[self._exec_one_tool_call(tc) for tc in extracted],
+            return_exceptions=True,
+        )
+        for tc, r in zip(extracted, tool_results):
+            if isinstance(r, Exception):
+                logger.warning("sub_agent.tool_error", name=self.config.name, tool=tc.name, error=str(r))
+                working.append({"role": "tool", "tool_call_id": tc.id, "content": f"错误: {r}"})
+            else:
+                working.append({"role": "tool", "tool_call_id": r["tool_call_id"], "content": r["content"]})
 
     def _build_assistant_msg(self, msg: Any, extracted: Any, is_dsml: bool) -> dict:
         """根据 LLM 响应与提取结果构造 assistant 消息（含 tool_calls 字段）。"""

@@ -222,11 +222,36 @@ async def _start_services(app: Any, core: Any) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
+    logger.info("webui.lifespan.start")
+    core, owns_core = await _init_lifespan_resources(app)
+
+    # 降级模式：直接读 .env 文件检查 MIMO_API_KEY
+    _mimo = _resolve_env_api_key()
+    if not _mimo:
+        logger.info("webui.degraded_mode")
+        # 初始化空的 plugin/media/scheduler 避免后续 AttributeError
+        app.state.plugin_manager = None
+        app.state.media_queue = None
+        app.state.greeting_scheduler = None
+        app.state.qq_task = None
+        app.state.last_emotion = None
+        logger.info("webui.lifespan.ready_degraded")
+    else:
+        await _start_services(app, core)
+        logger.info("webui.lifespan.ready")
+
+    yield
+
+    logger.info("webui.lifespan.shutdown")
+    await _shutdown_lifespan(app, core, owns_core)
+
+
+async def _init_lifespan_resources(app: FastAPI) -> tuple[Any, bool]:
+    """初始化 core、配置服务与 agent registry, 返回 (core, owns_core)"""
     from agent_core import AgentCore
     from web.agent_registry import AgentRegistry
     from web.config_service import get_config_service
 
-    logger.info("webui.lifespan.start")
     core = getattr(app.state, "core", None)
     owns_core = core is None
     if owns_core:
@@ -239,9 +264,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
     registry = AgentRegistry(core)
     await registry.load_persisted()
     app.state.agent_registry = registry
+    return core, owns_core
 
-    # 降级模式：直接读 .env 文件检查 MIMO_API_KEY
-    # 使用用户目录中的 .env（与 config.get_env_path() 一致）
+
+def _resolve_env_api_key() -> str:
+    """读取 .env 中的 MIMO_API_KEY 用于判断降级模式, 不存在时兜底创建空 .env"""
     import os as _os, sys as _sys
     from pathlib import Path as _Path
     try:
@@ -271,22 +298,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
                 if _s.startswith("MIMO_API_KEY="):
                     _mimo = _s.split("=", 1)[1].strip().strip("'\"")
                     break
-    if not _mimo:
-        logger.info("webui.degraded_mode")
-        # 初始化空的 plugin/media/scheduler 避免后续 AttributeError
-        app.state.plugin_manager = None
-        app.state.media_queue = None
-        app.state.greeting_scheduler = None
-        app.state.qq_task = None
-        app.state.last_emotion = None
-        logger.info("webui.lifespan.ready_degraded")
-    else:
-        await _start_services(app, core)
-        logger.info("webui.lifespan.ready")
+    return _mimo
 
-    yield
 
-    logger.info("webui.lifespan.shutdown")
+async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
+    """关闭服务与资源: qq_task / 插件 / 调度器 / media / core"""
     qq_task = getattr(app.state, "qq_task", None)
     if qq_task:
         qq_task.cancel()

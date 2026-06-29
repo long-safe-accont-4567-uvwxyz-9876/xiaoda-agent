@@ -97,6 +97,20 @@ class BackgroundTaskManager:
         tool_results: list,
         session_id: str = "",
     ) -> None:
+        await self._run_persistence_tasks(user_input, reply, user_id, source, emotion, session_id)
+        await self._run_manager_tasks(user_input, reply, tool_results, session_id)
+        await self._run_scheduled_tasks()
+
+    async def _run_persistence_tasks(
+        self,
+        user_input: str,
+        reply: str,
+        user_id: str,
+        source: str,
+        emotion: dict,
+        session_id: str,
+    ) -> None:
+        """对话日志、会话更新、记忆编码等持久化任务。"""
         # 1. 对话日志
         try:
             await self.db.insert_conversation_log(
@@ -128,6 +142,14 @@ class BackgroundTaskManager:
             except Exception as e:
                 logger.warning("bg.memory_encode_failed", error=str(e))
 
+    async def _run_manager_tasks(
+        self,
+        user_input: str,
+        reply: str,
+        tool_results: list,
+        session_id: str,
+    ) -> None:
+        """笔记、画像、学习、本能等管理器任务。"""
         # 4. 笔记自动提取
         if self.notebook_manager:
             _spawn(self.notebook_manager.auto_note_after_message(
@@ -158,6 +180,8 @@ class BackgroundTaskManager:
             if should_curate:
                 _spawn(self.instinct_manager.curator_run())
 
+    async def _run_scheduled_tasks(self) -> None:
+        """会话归档、梦境归档、缓存预热、记忆蒸馏等定时任务。"""
         # 8. 会话自动归档
         _spawn(self._auto_archive_sessions())
 

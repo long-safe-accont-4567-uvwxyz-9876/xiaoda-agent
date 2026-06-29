@@ -256,6 +256,37 @@ class DegradationDetector:
 
     def check_degradation(self) -> DegradationReport:
         """检查当前退化状态, 返回 DegradationReport"""
+        degraded_metrics, silent_metrics, affected_axes, silent_axes = \
+            self._collect_metric_deviations()
+
+        severity, axis_label = self._determine_severity(
+            affected_axes, silent_axes)
+
+        all_affected = affected_axes | silent_axes
+        all_metrics = degraded_metrics + silent_metrics
+        silent = bool(silent_metrics)
+        recommendations = self._recommendations(all_affected, severity, silent)
+
+        report = DegradationReport(
+            axis=axis_label,
+            severity=severity,
+            affected_axes=sorted(all_affected, key=lambda a: a.value),
+            metrics=all_metrics,
+            recommendations=recommendations,
+            silent=silent,
+        )
+        self._last_report = report
+
+        # 触发回调与日志 (仅在非 NONE 时)
+        if severity != Severity.NONE:
+            self._notify_and_log(report, axis_label, severity, silent, all_metrics)
+        return report
+
+    def _collect_metric_deviations(self) -> tuple[
+        list[MetricDeviation], list[MetricDeviation], set[Axis], set[Axis]
+    ]:
+        """收集各轴指标的退化与静默退化偏差, 返回
+        (degraded_metrics, silent_metrics, affected_axes, silent_axes)"""
         degraded_metrics: list[MetricDeviation] = []
         silent_metrics: list[MetricDeviation] = []
         affected_axes: set[Axis] = set()
@@ -297,11 +328,13 @@ class DegradationDetector:
                     ))
                     silent_axes.add(axis)
 
-        # 综合判定严重级别 (静默轴也计入受影响轴)
+        return degraded_metrics, silent_metrics, affected_axes, silent_axes
+
+    def _determine_severity(self, affected_axes: set[Axis],
+                            silent_axes: set[Axis]) -> tuple[Severity, str]:
+        """根据受影响轴数量综合判定严重级别 (静默轴也计入受影响轴)"""
         all_affected = affected_axes | silent_axes
         n_axes = len(all_affected)
-        silent = bool(silent_metrics)
-
         if n_axes == 0:
             severity = Severity.NONE
             axis_label = "none"
@@ -314,40 +347,29 @@ class DegradationDetector:
         else:
             severity = Severity.EMERGENCY
             axis_label = "triple"
+        return severity, axis_label
 
-        all_metrics = degraded_metrics + silent_metrics
-        recommendations = self._recommendations(all_affected, severity, silent)
-
-        report = DegradationReport(
-            axis=axis_label,
-            severity=severity,
-            affected_axes=sorted(all_affected, key=lambda a: a.value),
-            metrics=all_metrics,
-            recommendations=recommendations,
-            silent=silent,
+    def _notify_and_log(self, report: DegradationReport, axis_label: str,
+                        severity: Severity, silent: bool,
+                        all_metrics: list[MetricDeviation]) -> None:
+        """触发回调并记录退化日志 (仅在非 NONE 时调用)"""
+        for cb in list(self._callbacks):
+            try:
+                cb(report)
+            except Exception as e:
+                logger.error(f"DegradationDetector 回调异常: {e!r}")
+        log_fn = (
+            logger.warning if severity == Severity.WARNING
+            else logger.error if severity == Severity.CRITICAL
+            else logger.critical
         )
-        self._last_report = report
-
-        # 触发回调与日志 (仅在非 NONE 时)
-        if severity != Severity.NONE:
-            for cb in list(self._callbacks):
-                try:
-                    cb(report)
-                except Exception as e:
-                    logger.error(f"DegradationDetector 回调异常: {e!r}")
-            log_fn = (
-                logger.warning if severity == Severity.WARNING
-                else logger.error if severity == Severity.CRITICAL
-                else logger.critical
-            )
-            log_fn(
-                f"Degradation.detected axis={axis_label} "
-                f"sev={severity.value} "
-                f"affected={[a.value for a in report.affected_axes]} "
-                f"silent={silent} "
-                f"metrics={[m.name for m in all_metrics]}"
-            )
-        return report
+        log_fn(
+            f"Degradation.detected axis={axis_label} "
+            f"sev={severity.value} "
+            f"affected={[a.value for a in report.affected_axes]} "
+            f"silent={silent} "
+            f"metrics={[m.name for m in all_metrics]}"
+        )
 
     @staticmethod
     def _recommendations(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Any
 
+import asyncio
 import os
 import re
 import tempfile
@@ -182,47 +183,49 @@ async def speech_to_text(file: UploadFile = File(...)) -> Any:
             mimo_key = os.getenv("MIMO_API_KEY", "")
             if not mimo_key:
                 raise HTTPException(503, "ASR 不可用：未配置 SILICONFLOW_API_KEY 或 MIMO_API_KEY")
-            # MIMO 降级路径
-            from openai import OpenAI
-            client = OpenAI(api_key=mimo_key, base_url=os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1"))
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                tmp.write(content)
-                tmp_path = tmp.name
-            try:
-                with open(tmp_path, "rb") as audio_file:
-                    transcript = client.audio.transcriptions.create(
-                        model="mimo-v2.5-asr",
-                        file=audio_file,
-                    )
-                return Envelope(data={"text": transcript.text})
-            finally:
-                os.unlink(tmp_path)
-
-        # 主路径：SiliconFlow + TeleSpeechASR
-        from openai import OpenAI
-        client = OpenAI(api_key=ASR_API_KEY, base_url=ASR_BASE_URL)
-
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp.write(content)
-            tmp_path = tmp.name
-
-        try:
-            with open(tmp_path, "rb") as audio_file:
-                transcript = client.audio.transcriptions.create(
-                    model=ASR_MODEL,
-                    file=audio_file,
-                )
-            text = transcript.text if hasattr(transcript, "text") else str(transcript)
-            # 如果返回的是 JSON 字符串，尝试解析提取 text 字段
-            if text.startswith("{") and '"text"' in text:
-                import json as _json
+            # MIMO 降级路径 — sync OpenAI SDK 调用放到线程池
+            def _mimo_asr() -> str:
+                from openai import OpenAI
+                client = OpenAI(api_key=mimo_key, base_url=os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1"))
+                tmp_path = None
                 try:
-                    text = _json.loads(text).get("text", text)
-                except Exception:
-                    pass
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                        tmp.write(content)
+                        tmp_path = tmp.name
+                    with open(tmp_path, "rb") as audio_file:
+                        transcript = client.audio.transcriptions.create(model="mimo-v2.5-asr", file=audio_file)
+                    return transcript.text
+                finally:
+                    if tmp_path and os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+            text = await asyncio.to_thread(_mimo_asr)
             return Envelope(data={"text": text})
-        finally:
-            os.unlink(tmp_path)
+
+        # 主路径：SiliconFlow + TeleSpeechASR — sync OpenAI SDK 调用放到线程池
+        def _siliconflow_asr() -> str:
+            from openai import OpenAI
+            client = OpenAI(api_key=ASR_API_KEY, base_url=ASR_BASE_URL)
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                    tmp.write(content)
+                    tmp_path = tmp.name
+                with open(tmp_path, "rb") as audio_file:
+                    transcript = client.audio.transcriptions.create(model=ASR_MODEL, file=audio_file)
+                return transcript.text if hasattr(transcript, "text") else str(transcript)
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+
+        text = await asyncio.to_thread(_siliconflow_asr)
+        # 如果返回的是 JSON 字符串，尝试解析提取 text 字段
+        if text.startswith("{") and '"text"' in text:
+            import json as _json
+            try:
+                text = _json.loads(text).get("text", text)
+            except Exception:
+                pass
+        return Envelope(data={"text": text})
 
     except HTTPException:
         raise

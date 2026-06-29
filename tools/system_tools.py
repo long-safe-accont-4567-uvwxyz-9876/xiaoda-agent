@@ -217,76 +217,13 @@ async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> 
 async def dev_assist(action: str, path: str = _DEFAULT_PROJECT_DIR, lines: int = 50, service: str = "nahida-web") -> ToolResult:
     try:
         if action == "git_status":
-            if not os.path.isdir(os.path.join(path, ".git")):
-                return ToolResult.fail(f"{path} 不是Git仓库")
-            _, status_out, _ = await _run_cmd(["git", "status", "--short"], timeout=30, cwd=path)
-            _, log_out, _ = await _run_cmd(["git", "log", "--oneline", "-5"], timeout=30, cwd=path)
-            parts = []
-            if status_out.strip():
-                parts.append(f"文件变更:\n{status_out.strip()}")
-            else:
-                parts.append("工作区干净，无未提交的变更")
-            if log_out.strip():
-                parts.append(f"最近提交:\n{log_out.strip()}")
-            return ToolResult.ok(f"Git仓库状态 ({path}):\n" + "\n\n".join(parts))
+            return await _dev_assist_git_status(path)
 
         elif action == "pip_check":
-            _, check_out, _ = await _run_cmd(["pip", "check"], timeout=30)
-            _, list_out, _ = await _run_cmd(["pip", "list", "--format=columns"], timeout=30)
-            key_packages = ["openai", "aiosqlite", "loguru", "qq-botpy", "aiohttp", "fastapi", "uvicorn", "pydantic", "httpx"]
-            parts = []
-            if check_out.strip():
-                parts.append(f"依赖检查:\n{check_out.strip()}")
-            else:
-                parts.append("依赖检查: 无冲突")
-            installed = {}
-            for line in list_out.strip().split("\n")[2:]:
-                cols = line.split()
-                if len(cols) >= 2:
-                    installed[cols[0].lower()] = cols[1]
-            pkg_lines = []
-            for pkg in key_packages:
-                ver = installed.get(pkg.lower())
-                if ver:
-                    pkg_lines.append(f"  ✅ {pkg} ({ver})")
-                else:
-                    pkg_lines.append(f"  ❌ {pkg} (未安装)")
-            parts.append("关键依赖包:\n" + "\n".join(pkg_lines))
-            return ToolResult.ok("\n\n".join(parts))
+            return await _dev_assist_pip_check()
 
         elif action == "logs":
-            # 优先用 config.LOG_DIR（外置盘持久化路径），其次回退到项目内 logs 目录
-            try:
-                from config import LOG_DIR
-                log_dir = LOG_DIR
-            except Exception:
-                log_dir = os.path.join(path, "logs")
-            if os.path.isdir(log_dir):
-                # 兼容 .log 和 .json 两种日志格式（logging_config 写的是 agent_YYYY-MM-DD.json）
-                log_files = sorted(
-                    [f for f in os.listdir(log_dir) if f.endswith(".log") or f.endswith(".json")],
-                    key=lambda f: os.path.getmtime(os.path.join(log_dir, f)),
-                    reverse=True
-                )
-                if not log_files:
-                    rc, log_out, _ = await _run_cmd(["journalctl", "-u", service, "-n", str(lines), "--no-pager"], timeout=30)
-                    if rc == 0 and log_out.strip() and log_out.strip() != "-- No entries --":
-                        return ToolResult.ok(f"服务 {service} 最近 {lines} 条日志:\n{log_out.strip()}")
-                    return ToolResult.fail(f"未找到日志文件，且服务 {service} 无 journalctl 记录（可能服务名错误，本机通常是 'nahida-web'）")
-                log_path = os.path.join(log_dir, log_files[0])
-                try:
-                    all_lines = await asyncio.to_thread(
-                        lambda: open(log_path, "r", encoding="utf-8", errors="replace").readlines()
-                    )
-                    recent = all_lines[-lines:]
-                    return ToolResult.ok(f"日志文件 {log_files[0]} (最后{len(recent)}行):\n{''.join(recent).strip()}")
-                except Exception as e:
-                    return ToolResult.fail(f"读取日志文件失败: {str(e)}")
-            else:
-                rc, log_out, _ = await _run_cmd(["journalctl", "-u", service, "-n", str(lines), "--no-pager"], timeout=30)
-                if rc == 0 and log_out.strip() and log_out.strip() != "-- No entries --":
-                    return ToolResult.ok(f"服务 {service} 最近 {lines} 条日志:\n{log_out.strip()}")
-                return ToolResult.fail(f"未找到日志目录或日志（服务 {service} 可能服务名错误，本机通常是 'nahida-web'）")
+            return await _dev_assist_logs(path, lines, service)
 
         elif action == "project_tree":
             if not os.path.isdir(path):
@@ -310,3 +247,81 @@ async def dev_assist(action: str, path: str = _DEFAULT_PROJECT_DIR, lines: int =
         return ToolResult.fail(f"操作超时: {action}")
     except Exception as e:
         return ToolResult.fail(f"开发辅助错误: {str(e)}")
+
+
+async def _dev_assist_git_status(path: str) -> ToolResult:
+    """查看 Git 仓库状态。"""
+    if not os.path.isdir(os.path.join(path, ".git")):
+        return ToolResult.fail(f"{path} 不是Git仓库")
+    _, status_out, _ = await _run_cmd(["git", "status", "--short"], timeout=30, cwd=path)
+    _, log_out, _ = await _run_cmd(["git", "log", "--oneline", "-5"], timeout=30, cwd=path)
+    parts = []
+    if status_out.strip():
+        parts.append(f"文件变更:\n{status_out.strip()}")
+    else:
+        parts.append("工作区干净，无未提交的变更")
+    if log_out.strip():
+        parts.append(f"最近提交:\n{log_out.strip()}")
+    return ToolResult.ok(f"Git仓库状态 ({path}):\n" + "\n\n".join(parts))
+
+
+async def _dev_assist_pip_check() -> ToolResult:
+    """检查 Python 依赖。"""
+    _, check_out, _ = await _run_cmd(["pip", "check"], timeout=30)
+    _, list_out, _ = await _run_cmd(["pip", "list", "--format=columns"], timeout=30)
+    key_packages = ["openai", "aiosqlite", "loguru", "qq-botpy", "aiohttp", "fastapi", "uvicorn", "pydantic", "httpx"]
+    parts = []
+    if check_out.strip():
+        parts.append(f"依赖检查:\n{check_out.strip()}")
+    else:
+        parts.append("依赖检查: 无冲突")
+    installed = {}
+    for line in list_out.strip().split("\n")[2:]:
+        cols = line.split()
+        if len(cols) >= 2:
+            installed[cols[0].lower()] = cols[1]
+    pkg_lines = []
+    for pkg in key_packages:
+        ver = installed.get(pkg.lower())
+        if ver:
+            pkg_lines.append(f"  ✅ {pkg} ({ver})")
+        else:
+            pkg_lines.append(f"  ❌ {pkg} (未安装)")
+    parts.append("关键依赖包:\n" + "\n".join(pkg_lines))
+    return ToolResult.ok("\n\n".join(parts))
+
+
+async def _dev_assist_logs(path: str, lines: int, service: str) -> ToolResult:
+    """查看 Agent 日志。"""
+    # 优先用 config.LOG_DIR（外置盘持久化路径），其次回退到项目内 logs 目录
+    try:
+        from config import LOG_DIR
+        log_dir = LOG_DIR
+    except Exception:
+        log_dir = os.path.join(path, "logs")
+    if os.path.isdir(log_dir):
+        # 兼容 .log 和 .json 两种日志格式（logging_config 写的是 agent_YYYY-MM-DD.json）
+        log_files = sorted(
+            [f for f in os.listdir(log_dir) if f.endswith(".log") or f.endswith(".json")],
+            key=lambda f: os.path.getmtime(os.path.join(log_dir, f)),
+            reverse=True
+        )
+        if not log_files:
+            rc, log_out, _ = await _run_cmd(["journalctl", "-u", service, "-n", str(lines), "--no-pager"], timeout=30)
+            if rc == 0 and log_out.strip() and log_out.strip() != "-- No entries --":
+                return ToolResult.ok(f"服务 {service} 最近 {lines} 条日志:\n{log_out.strip()}")
+            return ToolResult.fail(f"未找到日志文件，且服务 {service} 无 journalctl 记录（可能服务名错误，本机通常是 'nahida-web'）")
+        log_path = os.path.join(log_dir, log_files[0])
+        try:
+            all_lines = await asyncio.to_thread(
+                lambda: open(log_path, "r", encoding="utf-8", errors="replace").readlines()
+            )
+            recent = all_lines[-lines:]
+            return ToolResult.ok(f"日志文件 {log_files[0]} (最后{len(recent)}行):\n{''.join(recent).strip()}")
+        except Exception as e:
+            return ToolResult.fail(f"读取日志文件失败: {str(e)}")
+    else:
+        rc, log_out, _ = await _run_cmd(["journalctl", "-u", service, "-n", str(lines), "--no-pager"], timeout=30)
+        if rc == 0 and log_out.strip() and log_out.strip() != "-- No entries --":
+            return ToolResult.ok(f"服务 {service} 最近 {lines} 条日志:\n{log_out.strip()}")
+        return ToolResult.fail(f"未找到日志目录或日志（服务 {service} 可能服务名错误，本机通常是 'nahida-web'）")
