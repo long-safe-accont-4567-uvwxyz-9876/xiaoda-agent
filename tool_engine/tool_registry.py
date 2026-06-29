@@ -47,6 +47,35 @@ _tools: dict[str, dict] = {}
 _schema_cache: list | None = None
 _schema_version: int = 0
 
+# ── 工具数量上限管理 ──────────────────────────────────────
+# 聊天 agent 优先保证对话流畅，工具不宜过多（LLM function calling 上限约 40-64 个）
+MAX_ENABLED_TOOLS = 40
+
+# 来源优先级：builtin > plugin > mcp > dynamic
+_SOURCE_PRIORITY: dict[str, int] = {
+    "builtin": 100,
+    "plugin": 50,
+    "mcp": 30,
+    "dynamic": 20,
+    "sdk_mcp": 30,
+}
+
+# 分类优先级：对话/情感/记忆 > 文件/代码 > 系统/网络
+_CATEGORY_PRIORITY: dict[str, int] = {
+    "emotion": 95,
+    "memory": 90,
+    "conversation": 85,
+    "knowledge": 80,
+    "file": 60,
+    "code": 55,
+    "document": 50,
+    "web": 40,
+    "system": 30,
+    "hardware": 25,
+    "mcp": 20,
+    "general": 10,
+}
+
 
 def register_tool(name: str, description: str, schema: dict,
                   permission: ToolPermission = ToolPermission.READ_ONLY,
@@ -133,19 +162,36 @@ def list_tools() -> list[dict]:
     return list(_tools.values())
 
 
+def _tool_priority(tool: dict) -> int:
+    """计算工具优先级分数（越高越优先保留）"""
+    source_score = _SOURCE_PRIORITY.get(tool.get("source", ""), 10)
+    cat_score = _CATEGORY_PRIORITY.get(tool.get("category", ""), 10)
+    return source_score + cat_score
+
+
 def to_openai_tools() -> list[dict]:
-    """生成 OpenAI function-calling 格式的工具列表 (带缓存)."""
+    """生成 OpenAI function-calling 格式的工具列表 (带缓存，受上限限制)."""
     global _schema_cache, _schema_version
-    # 内置工具模块的注册由 tool_engine/__init__.py 顶层导入 _builtin_tools 完成,
-    # 此处不再需要 import tools.* (打破 tool_registry <-> tools.* 静态循环)
     if _schema_cache is not None:
         metrics.inc("tool_registry.schema_cache.hit")
         return _schema_cache
     metrics.inc("tool_registry.schema_cache.miss")
-    result = []
+
+    # 收集所有启用的工具
+    enabled = []
     for t in _tools.values():
         if t.get("max_frequency", 0) == 0:
             continue
+        if t.get("enabled") is False:
+            continue
+        enabled.append(t)
+
+    # 按优先级排序，取前 MAX_ENABLED_TOOLS 个
+    enabled.sort(key=_tool_priority, reverse=True)
+    capped = enabled[:MAX_ENABLED_TOOLS]
+
+    result = []
+    for t in capped:
         result.append({
             "type": "function",
             "function": {
@@ -154,8 +200,34 @@ def to_openai_tools() -> list[dict]:
                 "parameters": t["schema"],
             }
         })
+
+    if len(enabled) > MAX_ENABLED_TOOLS:
+        metrics.inc("tool_registry.tools_capped")
+
     _schema_cache = result
     return result
+
+
+def get_tool_stats() -> dict:
+    """获取工具注册统计信息"""
+    sources: dict[str, int] = {}
+    categories: dict[str, int] = {}
+    enabled_count = 0
+    for t in _tools.values():
+        src = t.get("source", "unknown")
+        cat = t.get("category", "unknown")
+        sources[src] = sources.get(src, 0) + 1
+        categories[cat] = categories.get(cat, 0) + 1
+        if t.get("max_frequency", 0) != 0 and t.get("enabled") is not False:
+            enabled_count += 1
+    return {
+        "total": len(_tools),
+        "enabled": enabled_count,
+        "max_enabled": MAX_ENABLED_TOOLS,
+        "remaining": max(0, MAX_ENABLED_TOOLS - enabled_count),
+        "by_source": sources,
+        "by_category": categories,
+    }
 
 
 def get_all_tool_dicts() -> dict[str, dict]:

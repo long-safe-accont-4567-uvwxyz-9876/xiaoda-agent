@@ -367,11 +367,12 @@ def create_app() -> FastAPI:
     from web.routers.plugins import router as plugins_router
     from web.routers.setup import router as setup_router
     from web.routers.model_discovery import router as model_discovery_router
+    from web.routers.market import router as market_router
 
     for r in (auth_router, chat_router, system_router, agents_router,
               models_router, tools_router, mcp_router, insight_router,
               schedule_router, media_router, health_router, plugins_router,
-              setup_router, model_discovery_router):
+              setup_router, model_discovery_router, market_router):
         app.include_router(r, prefix="/api/v1")
 
     from web.ws_hub import router as ws_router

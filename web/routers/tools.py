@@ -24,6 +24,10 @@ def _tool_source(name: str) -> str:
         parts = name.split("_", 2)
         if len(parts) >= 3:
             return f"mcp:{parts[1]}"
+    if name.startswith("sdk_"):
+        parts = name.split("_", 2)
+        if len(parts) >= 3:
+            return f"sdk_mcp:{parts[1]}"
     return "builtin"
 
 
@@ -40,8 +44,9 @@ def list_tools_meta() -> list[dict]:
             "permission": getattr(perm, "value", str(perm or "")),
             "max_frequency": t.get("max_frequency", 10),
             "requires_confirmation": bool(t.get("requires_confirmation", False)),
-            "source": _tool_source(t["name"]),
-            "enabled": t.get("enabled", True) is not False,
+            "source": t.get("source", "builtin"),
+            "plugin_id": t.get("plugin_id", ""),
+            "enabled": t.get("enabled", True) is not False and t.get("max_frequency", 10) != 0,
             "schema": t.get("schema", {}),
         })
     return sorted(out, key=lambda x: (x["source"], x["category"], x["name"]))
@@ -146,6 +151,116 @@ async def tool_stats(name: str, request: Request, days: int = Query(default=7, g
         "success_counter": counters.get(f"tool_execute.{name}.success", 0),
         "failure_counter": counters.get(f"tool_execute.{name}.failure", 0),
     })
+
+
+@router.get("/tools/limits", response_model=Envelope[dict])
+async def tool_limits() -> Any:
+    """获取工具数量上限和当前使用情况"""
+    from tool_engine.tool_registry import get_tool_stats
+    stats = get_tool_stats()
+    return Envelope(data=stats)
+
+
+@router.post("/tools/{name}/test", response_model=Envelope[dict])
+async def test_tool(name: str, request: Request) -> Any:
+    """测试单个工具是否可用（真实执行，安全参数）"""
+    import asyncio
+    from tool_engine.tool_registry import get_tool
+    from tool_engine.tool_executor import ToolExecutor
+
+    tool = get_tool(name)
+    if not tool:
+        raise HTTPException(404, f"工具 '{name}' 不存在")
+
+    # 构造安全的测试参数
+    test_args = _build_safe_test_args(tool)
+    if test_args is None:
+        return Envelope(data={
+            "name": name,
+            "status": "skip",
+            "message": "该工具没有安全的测试方式（需要用户参数或涉及危险操作）",
+        })
+
+    # 执行测试
+    core = request.app.state.core
+    executor = ToolExecutor(core.db)
+    t0 = time.monotonic()
+    try:
+        result = await asyncio.wait_for(
+            executor.execute(name, test_args, "webui-test"),
+            timeout=15,
+        )
+        elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
+        if hasattr(result, "success"):
+            ok = result.success
+            data = str(result.data)[:500] if result.data else ""
+            error = result.error if not ok else ""
+        else:
+            ok = True
+            data = str(result)[:500]
+            error = ""
+        return Envelope(data={
+            "name": name,
+            "status": "ok" if ok else "fail",
+            "elapsed_ms": elapsed_ms,
+            "data": data,
+            "error": error,
+        })
+    except asyncio.TimeoutError:
+        return Envelope(data={
+            "name": name,
+            "status": "timeout",
+            "elapsed_ms": 15000,
+            "error": "测试超时（15 秒）",
+        })
+    except Exception as e:
+        elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
+        return Envelope(data={
+            "name": name,
+            "status": "error",
+            "elapsed_ms": elapsed_ms,
+            "error": str(e)[:500],
+        })
+
+
+def _build_safe_test_args(tool: dict) -> dict | None:
+    """为工具构造安全的测试参数，无法安全测试时返回 None"""
+    name = tool.get("name", "")
+    schema = tool.get("schema", {})
+    props = schema.get("properties", {})
+    required = schema.get("required", [])
+
+    # 无需参数的工具直接调用
+    if not props or not required:
+        return {}
+
+    # 只需要简单类型参数且有默认值的工具
+    # 对于需要复杂参数的工具，返回 None 表示无法自动测试
+    safe_tools = {
+        # 文件工具：list 不需要路径
+        "list_files": {},
+        # 记忆工具
+        "recall_memory": {"query": "test", "top_k": 1},
+        # 天气工具
+        "get_weather": {"city": "北京"},
+        # 搜索工具
+        "multi_search": {"query": "test"},
+        # 角色扮演
+        "manage_persona": {"action": "get"},
+        # 情感记忆
+        "emotional_memory": {"action": "get_stats"},
+        # 知识库
+        "rag_search": {"query": "test", "top_k": 1},
+    }
+    if name in safe_tools:
+        return safe_tools[name]
+
+    # MCP 工具：尝试无参数调用
+    if name.startswith("mcp_") or name.startswith("sdk_"):
+        return {}
+
+    # 其他工具：无法安全测试
+    return None
 
 
 # ── Skills（SKILL.md 知识注入）────────────────────────────────────
