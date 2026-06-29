@@ -22,9 +22,15 @@ MCP_HUB_API = "https://www.mcp-cn.com/api/servers"
 _CACHE_DIR = Path(__file__).parent / ".cache"
 _CACHE_TTL = 3600  # 1 小时
 
-# ModelScope 分类
-_PLUGIN_CATEGORIES = ["tools", "developer-tools", "utilities"]
-_SKILL_CATEGORIES = ["skill-management", "writing", "education", "productivity", "coding"]
+# ModelScope 实际分类（基于 API 返回数据）
+_PLUGIN_CATEGORIES = [
+    "developer-tools", "code-quality-testing", "frontend-development",
+    "mobile-development", "cloud-devops",
+]
+_SKILL_CATEGORIES = [
+    "skill-management", "ai-media", "ai-automation",
+    "doc-processing", "marketing-seo", "other",
+]
 
 
 class MarketItem(BaseModel):
@@ -114,29 +120,31 @@ class ManifestFetcher:
         return None
 
     async def _fetch_modelscope(self) -> MarketManifest | None:
-        """从 ModelScope Skills API 获取插件/技能列表"""
+        """从 ModelScope Skills API 获取插件/技能列表
+
+        注意：API 的 category 参数不生效（返回全部结果），
+        因此不限制 category 参数，改为本地过滤 + 限制最大页数防止超时。
+        """
         try:
             import httpx
             all_items: list[MarketItem] = []
             page = 1
             page_size = 20  # API 最大 20
+            max_pages = 10  # 最多取 10 页（200 条），避免遍历 75000+ 条超时
 
-            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-                while True:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                while page <= max_pages:
                     params: dict[str, Any] = {
                         "page_number": page,
                         "page_size": page_size,
                     }
-                    if self._categories:
-                        # 使用第一个分类搜索，后续结果再过滤
-                        params["category"] = self._categories[0]
 
                     resp = await client.get(MODELSCOPE_SKILLS_API, params=params)
                     resp.raise_for_status()
                     body = resp.json()
 
                     if not body.get("success"):
-                        logger.warning("market.modelscope_api_error", body=body)
+                        logger.warning("market.modelscope_api_error", body=str(body)[:200])
                         break
 
                     data = body.get("data", {})
@@ -173,6 +181,8 @@ class ManifestFetcher:
                         all_items.append(item)
 
                     total = data.get("total", 0)
+                    logger.debug("market.modelscope_page", page=page,
+                                 matched=len(all_items), total=total)
                     if page * page_size >= total:
                         break
                     page += 1
@@ -184,6 +194,8 @@ class ManifestFetcher:
                     source="modelscope.cn",
                     items=all_items,
                 )
+            logger.warning("market.modelscope_no_match",
+                           categories=self._categories, pages_tried=page)
         except Exception as e:
             logger.warning("market.modelscope_fetch_failed", error=str(e))
         return None

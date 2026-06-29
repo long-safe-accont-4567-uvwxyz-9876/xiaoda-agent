@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import {
   NButton, NModal, NForm, NFormItem, NInput, NTag, NPopconfirm,
-  NDynamicInput, NSwitch, NSpace, useMessage,
+  NDynamicInput, NSwitch, NSpace, useMessage, NTabs, NTabPane, NEmpty, NTooltip,
 } from 'naive-ui'
 import { get, post, put, del } from '../api'
 
@@ -208,122 +208,221 @@ async function toggleTool(serverName: string, toolName: string, enabled: boolean
     message.error(e.message)
   }
 }
+
+// ── MCP 市场 ────────────────────────────────────────
+const mcpTab = ref('installed')
+const mcpItems = ref<any[]>([])
+const mcpLoading = ref(false)
+const mcpSearch = ref('')
+const installingMcp = ref<Record<string, boolean>>({})
+const uninstallingMcp = ref<Record<string, boolean>>({})
+
+async function loadMcpMarket() {
+  if (mcpItems.value.length > 0) return
+  mcpLoading.value = true
+  try {
+    mcpItems.value = await get<any[]>('/market/mcp')
+  } catch (e: any) {
+    message.error(`MCP 市场加载失败: ${e.message}`)
+  } finally {
+    mcpLoading.value = false
+  }
+}
+
+async function installFromMcp(item: any) {
+  installingMcp.value[item.name] = true
+  try {
+    const result = await post('/market/mcp/install', item)
+    message.success(`${item.name} 安装成功`)
+  } catch (e: any) {
+    message.error(`安装失败: ${e.message}`)
+  } finally {
+    installingMcp.value[item.name] = false
+  }
+}
+
+async function uninstallFromMcp(item: any) {
+  uninstallingMcp.value[item.name] = true
+  try {
+    await post('/market/mcp/uninstall', { name: item.name })
+    message.success(`${item.name} 已卸载`)
+  } catch (e: any) {
+    message.error(`卸载失败: ${e.message}`)
+  } finally {
+    uninstallingMcp.value[item.name] = false
+  }
+}
+
+const filteredMcpMarket = computed(() => {
+  const keyword = mcpSearch.value.toLowerCase().trim()
+  if (!keyword) return mcpItems.value
+  return mcpItems.value.filter((item: any) =>
+    item.name.toLowerCase().includes(keyword) ||
+    item.description?.toLowerCase().includes(keyword)
+  )
+})
+
+function onMcpTabChange(tab: string) {
+  if (tab === 'market-mcp') loadMcpMarket()
+}
 </script>
 
 <template>
   <div class="mcp-view">
-    <div class="view-header">
-      <h2>🔌 MCP 服务</h2>
-      <div style="display:flex; gap:8px">
-        <n-button @click="showTemplates = true">📦 模板</n-button>
-        <n-button type="primary" @click="showImport = true">📋 粘贴 JSON 导入</n-button>
-        <n-button @click="openForm(null)">＋ 手动新增</n-button>
-      </div>
-    </div>
-
-    <p class="mcp-hint">
-      新增 server → 启动握手 → 工具自动注册（source=mcp:名称）→ 出现在工具页与各 Agent 权限矩阵中。
-    </p>
-
-    <div class="server-grid">
-      <div v-for="s in servers" :key="s.name" class="server-card glass-panel glass-panel-hover">
-        <div class="server-head">
-          <n-space align="center" :size="6">
-            <span class="health-dot"
-                  :style="{ background: healthDotColor(s.name, s.status) }"
-                  :title="s.status === 'running' ? (healthMap[s.name] || '未检查') : s.status"
-                  @click="s.status === 'running' && checkHealth(s.name)"></span>
-            <span class="server-name">{{ s.name }}</span>
-          </n-space>
-          <n-tag size="small" :type="statusType[s.status]" :bordered="false">{{ s.status }}</n-tag>
-        </div>
-        <div class="server-cmd mono">{{ s.command }} {{ (s.args || []).join(' ') }}</div>
-        <div v-if="s.last_error" class="server-error">{{ s.last_error }}</div>
-        <div class="server-tools">
-          <div v-for="t in (s.tool_names || []).slice(0, 8)" :key="t" class="tool-toggle">
-            <n-switch size="small" :value="!(s.disabled_tools || []).includes(t)"
-                      @update:value="(v: boolean) => toggleTool(s.name, t, v)" />
-            <n-tag size="tiny" :bordered="false" :type="(s.disabled_tools || []).includes(t) ? 'default' : 'success'">{{ t }}</n-tag>
+    <n-tabs v-model:value="mcpTab" type="line" animated @update:value="onMcpTabChange">
+      <n-tab-pane name="installed" tab="已安装">
+        <div class="view-header">
+          <h2>🔌 MCP 服务</h2>
+          <div style="display:flex; gap:8px">
+            <n-button @click="showTemplates = true">📦 模板</n-button>
+            <n-button type="primary" @click="showImport = true">📋 粘贴 JSON 导入</n-button>
+            <n-button @click="openForm(null)">＋ 手动新增</n-button>
           </div>
-          <span v-if="(s.tool_names || []).length > 8" class="more">
-            +{{ s.tool_names.length - 8 }}
-          </span>
-          <span v-if="!s.tool_names?.length" class="more">（未发现工具）</span>
         </div>
-        <div class="server-ops">
-          <n-button v-if="s.status !== 'running'" size="tiny" type="primary" secondary
-                    :loading="busy === `${s.name}:start`" @click="lifecycle(s.name, 'start')">启动</n-button>
-          <n-button v-else size="tiny" :loading="busy === `${s.name}:stop`"
-                    @click="lifecycle(s.name, 'stop')">停止</n-button>
-          <n-button size="tiny" :loading="busy === `${s.name}:restart`"
-                    @click="lifecycle(s.name, 'restart')">重启</n-button>
-          <n-button v-if="s.managed_by_webui" size="tiny" @click="openForm(s)">编辑</n-button>
-          <n-popconfirm v-if="s.managed_by_webui" @positive-click="remove(s.name)">
-            <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
-            删除前会先停止该 server，确认？
-          </n-popconfirm>
-        </div>
-      </div>
-      <div v-if="!servers.length" class="empty-state glass-panel">
-        <p>还没有接入 MCP 服务哦～点右上角「新增」试试（例如 filesystem server）</p>
-      </div>
-    </div>
 
-    <n-modal v-model:show="showForm" preset="card"
-             :title="isCreate ? '新增 MCP Server' : `编辑 · ${form.name}`"
-             style="width: min(580px, 94vw)">
-      <n-form label-placement="left" label-width="90">
-        <n-form-item label="name" v-if="isCreate">
-          <n-input v-model:value="form.name" placeholder="如 filesystem" />
-        </n-form-item>
-        <n-form-item label="command">
-          <n-input v-model:value="form.command" placeholder="如 /usr/bin/npx 或 uvx" />
-        </n-form-item>
-        <n-form-item label="args">
-          <n-dynamic-input v-model:value="form.args" placeholder="逐行一个参数" />
-        </n-form-item>
-        <n-form-item label="env">
-          <n-dynamic-input v-model:value="form.env" preset="pair"
-                           key-placeholder="变量名" value-placeholder="值（保密处理）" />
-        </n-form-item>
-      </n-form>
-      <template #footer>
-        <div style="display:flex; justify-content:flex-end; gap:10px">
-          <n-button @click="showForm = false">取消</n-button>
-          <n-button type="primary" @click="save">保存并启动</n-button>
-        </div>
-      </template>
-    </n-modal>
+        <p class="mcp-hint">
+          新增 server → 启动握手 → 工具自动注册（source=mcp:名称）→ 出现在工具页与各 Agent 权限矩阵中。
+        </p>
 
-    <n-modal v-model:show="showImport" preset="card" title="粘贴 JSON 导入 MCP Server"
-             style="width: min(640px, 94vw)">
-      <n-input v-model:value="importJson" type="textarea" :rows="14"
-               class="mono" :placeholder="IMPORT_PLACEHOLDER" />
-      <template #footer>
-        <div style="display:flex; justify-content:flex-end; gap:10px">
-          <n-button @click="showImport = false">取消</n-button>
-          <n-button type="primary" :loading="importing" :disabled="!importJson.trim()"
-                    @click="runImport">导入并启动</n-button>
-        </div>
-      </template>
-    </n-modal>
-
-    <n-modal v-model:show="showTemplates" preset="card" title="📦 MCP Server 模板"
-             style="width: min(580px, 94vw)">
-      <p style="font-size:13px; color:var(--moon-dim); margin-bottom:12px">
-        选择预设模板，一键创建并启动 MCP Server。部分模板需要配置环境变量。
-      </p>
-      <div class="template-list">
-        <div v-for="tpl in TEMPLATES" :key="tpl.name" class="template-item glass-panel">
-          <div class="tpl-info">
-            <span class="tpl-name">{{ tpl.name }}</span>
-            <span class="tpl-desc">{{ tpl.desc }}</span>
-            <span class="tpl-cmd mono">{{ tpl.command }} {{ tpl.args.join(' ') }}</span>
+        <div class="server-grid">
+          <div v-for="s in servers" :key="s.name" class="server-card glass-panel glass-panel-hover">
+            <div class="server-head">
+              <n-space align="center" :size="6">
+                <span class="health-dot"
+                      :style="{ background: healthDotColor(s.name, s.status) }"
+                      :title="s.status === 'running' ? (healthMap[s.name] || '未检查') : s.status"
+                      @click="s.status === 'running' && checkHealth(s.name)"></span>
+                <span class="server-name">{{ s.name }}</span>
+              </n-space>
+              <n-tag size="small" :type="statusType[s.status]" :bordered="false">{{ s.status }}</n-tag>
+            </div>
+            <div class="server-cmd mono">{{ s.command }} {{ (s.args || []).join(' ') }}</div>
+            <div v-if="s.last_error" class="server-error">{{ s.last_error }}</div>
+            <div class="server-tools">
+              <div v-for="t in (s.tool_names || []).slice(0, 8)" :key="t" class="tool-toggle">
+                <n-switch size="small" :value="!(s.disabled_tools || []).includes(t)"
+                          @update:value="(v: boolean) => toggleTool(s.name, t, v)" />
+                <n-tag size="tiny" :bordered="false" :type="(s.disabled_tools || []).includes(t) ? 'default' : 'success'">{{ t }}</n-tag>
+              </div>
+              <span v-if="(s.tool_names || []).length > 8" class="more">
+                +{{ s.tool_names.length - 8 }}
+              </span>
+              <span v-if="!s.tool_names?.length" class="more">（未发现工具）</span>
+            </div>
+            <div class="server-ops">
+              <n-button v-if="s.status !== 'running'" size="tiny" type="primary" secondary
+                        :loading="busy === `${s.name}:start`" @click="lifecycle(s.name, 'start')">启动</n-button>
+              <n-button v-else size="tiny" :loading="busy === `${s.name}:stop`"
+                        @click="lifecycle(s.name, 'stop')">停止</n-button>
+              <n-button size="tiny" :loading="busy === `${s.name}:restart`"
+                        @click="lifecycle(s.name, 'restart')">重启</n-button>
+              <n-button v-if="s.managed_by_webui" size="tiny" @click="openForm(s)">编辑</n-button>
+              <n-popconfirm v-if="s.managed_by_webui" @positive-click="remove(s.name)">
+                <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
+                删除前会先停止该 server，确认？
+              </n-popconfirm>
+            </div>
           </div>
-          <n-button size="tiny" type="primary" @click="applyTemplate(tpl)">一键创建</n-button>
+          <div v-if="!servers.length" class="empty-state glass-panel">
+            <p>还没有接入 MCP 服务哦～点右上角「新增」试试（例如 filesystem server）</p>
+          </div>
         </div>
-      </div>
-    </n-modal>
+
+        <n-modal v-model:show="showForm" preset="card"
+                 :title="isCreate ? '新增 MCP Server' : `编辑 · ${form.name}`"
+                 style="width: min(580px, 94vw)">
+          <n-form label-placement="left" label-width="90">
+            <n-form-item label="name" v-if="isCreate">
+              <n-input v-model:value="form.name" placeholder="如 filesystem" />
+            </n-form-item>
+            <n-form-item label="command">
+              <n-input v-model:value="form.command" placeholder="如 /usr/bin/npx 或 uvx" />
+            </n-form-item>
+            <n-form-item label="args">
+              <n-dynamic-input v-model:value="form.args" placeholder="逐行一个参数" />
+            </n-form-item>
+            <n-form-item label="env">
+              <n-dynamic-input v-model:value="form.env" preset="pair"
+                               key-placeholder="变量名" value-placeholder="值（保密处理）" />
+            </n-form-item>
+          </n-form>
+          <template #footer>
+            <div style="display:flex; justify-content:flex-end; gap:10px">
+              <n-button @click="showForm = false">取消</n-button>
+              <n-button type="primary" @click="save">保存并启动</n-button>
+            </div>
+          </template>
+        </n-modal>
+
+        <n-modal v-model:show="showImport" preset="card" title="粘贴 JSON 导入 MCP Server"
+                 style="width: min(640px, 94vw)">
+          <n-input v-model:value="importJson" type="textarea" :rows="14"
+                   class="mono" :placeholder="IMPORT_PLACEHOLDER" />
+          <template #footer>
+            <div style="display:flex; justify-content:flex-end; gap:10px">
+              <n-button @click="showImport = false">取消</n-button>
+              <n-button type="primary" :loading="importing" :disabled="!importJson.trim()"
+                        @click="runImport">导入并启动</n-button>
+            </div>
+          </template>
+        </n-modal>
+
+        <n-modal v-model:show="showTemplates" preset="card" title="📦 MCP Server 模板"
+                 style="width: min(580px, 94vw)">
+          <p style="font-size:13px; color:var(--moon-dim); margin-bottom:12px">
+            选择预设模板，一键创建并启动 MCP Server。部分模板需要配置环境变量。
+          </p>
+          <div class="template-list">
+            <div v-for="tpl in TEMPLATES" :key="tpl.name" class="template-item glass-panel">
+              <div class="tpl-info">
+                <span class="tpl-name">{{ tpl.name }}</span>
+                <span class="tpl-desc">{{ tpl.desc }}</span>
+                <span class="tpl-cmd mono">{{ tpl.command }} {{ tpl.args.join(' ') }}</span>
+              </div>
+              <n-button size="tiny" type="primary" @click="applyTemplate(tpl)">一键创建</n-button>
+            </div>
+          </div>
+        </n-modal>
+      </n-tab-pane>
+
+      <n-tab-pane name="market-mcp" tab="MCP 市场">
+        <div class="market-toolbar" style="margin-bottom: 16px;">
+          <n-input v-model:value="mcpSearch" placeholder="搜索 MCP 服务..." clearable style="max-width: 400px" />
+        </div>
+        <n-spin :show="mcpLoading">
+          <div class="mcp-grid">
+            <div v-for="item in filteredMcpMarket" :key="item.id" class="market-card glass-panel glass-panel-hover">
+              <div class="card-header">
+                <img v-if="item.icon" :src="item.icon" :alt="item.name" class="card-icon" />
+                <div v-else class="card-icon-placeholder">🔌</div>
+                <div class="card-title-area">
+                  <h4 class="card-title">{{ item.name }}</h4>
+                  <span class="card-author">{{ item.author || '未知' }}</span>
+                </div>
+              </div>
+              <p class="card-desc">{{ item.description || '暂无描述' }}</p>
+              <div class="card-footer">
+                <span class="card-downloads">{{ item.use_count ?? 0 }} 次使用</span>
+                <div style="display: flex; gap: 6px;">
+                  <n-button size="small" type="error" secondary
+                    :loading="uninstallingMcp[item.name]"
+                    @click="uninstallFromMcp(item)">
+                    卸载
+                  </n-button>
+                  <n-button size="small" type="success" secondary
+                    :loading="installingMcp[item.name]"
+                    @click="installFromMcp(item)">
+                    安装
+                  </n-button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <n-empty v-if="!mcpLoading && filteredMcpMarket.length === 0"
+            :description="mcpSearch ? '未找到匹配的 MCP 服务' : '暂无可用的 MCP 服务'" />
+        </n-spin>
+      </n-tab-pane>
+    </n-tabs>
   </div>
 </template>
 
@@ -376,4 +475,21 @@ async function toggleTool(serverName: string, toolName: string, enabled: boolean
 .server-ops { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .empty-state { padding: 40px; text-align: center; color: var(--moon-dim); grid-column: 1 / -1; }
+
+.mcp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.market-card { padding: 14px; }
+.card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.card-icon { width: 36px; height: 36px; border-radius: 6px; object-fit: cover; }
+.card-icon-placeholder { width: 36px; height: 36px; border-radius: 6px; background: rgba(232,213,163,0.1); display: flex; align-items: center; justify-content: center; font-size: 20px; }
+.card-title-area { min-width: 0; flex: 1; }
+.card-title { font-size: 15px; font-weight: 600; margin: 0 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-author { font-size: 12px; color: var(--moon-dim); }
+.card-desc { font-size: 13px; color: var(--moon-secondary, #aaa); margin: 0 0 10px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card-footer { display: flex; align-items: center; justify-content: space-between; }
+.card-downloads { font-size: 12px; color: var(--moon-dim); }
 </style>

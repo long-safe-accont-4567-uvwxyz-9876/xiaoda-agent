@@ -159,70 +159,11 @@ async function testMarketPlugin(item: any) {
   }
 }
 
-// ── MCP 市场 ──────────────────────────────────────────────
-const mcpItems = ref<any[]>([])
-const mcpLoading = ref(false)
-const mcpSearch = ref('')
-const installingMcp = ref<Record<string, boolean>>({})
-const uninstallingMcp = ref<Record<string, boolean>>({})
-
-const filteredMcpMarket = computed(() => {
-  if (!mcpSearch.value.trim()) return mcpItems.value
-  const q = mcpSearch.value.toLowerCase()
-  return mcpItems.value.filter((i: any) =>
-    i.name.toLowerCase().includes(q) ||
-    (i.description || '').toLowerCase().includes(q) ||
-    (i.tags || []).some((t: string) => t.toLowerCase().includes(q))
-  )
-})
-
-async function loadMcpMarket(force = false) {
-  mcpLoading.value = true
-  try {
-    const data = await get<any>(`/market/mcp${force ? '?force=true' : ''}`)
-    mcpItems.value = data.items || []
-  } catch { /* 静默失败 */ } finally {
-    mcpLoading.value = false
-  }
-}
-
-async function installFromMcp(item: any) {
-  installingMcp.value[item.id] = true
-  try {
-    await post('/market/mcp/install', {
-      item_id: item.id,
-      download_url: item.download_url,
-      version: item.version,
-      sha256: item.sha256,
-    })
-    message.success(`MCP「${item.name}」安装成功`)
-    await loadMcpMarket()
-  } catch (e: any) {
-    message.error('安装失败: ' + e.message)
-  } finally {
-    installingMcp.value[item.id] = false
-  }
-}
-
-async function uninstallFromMcp(item: any) {
-  uninstallingMcp.value[item.id] = true
-  try {
-    await post('/market/mcp/uninstall', { item_id: item.id })
-    message.success(`MCP「${item.name}」已卸载`)
-    await loadMcpMarket()
-  } catch (e: any) {
-    message.error('卸载失败: ' + e.message)
-  } finally {
-    uninstallingMcp.value[item.id] = false
-  }
-}
-
 // ── Tab 切换时按需加载 ────────────────────────────────────
 const activeTab = ref('installed')
 
 function onTabChange(name: string | number) {
   if (name === 'market' && marketItems.value.length === 0) loadMarket()
-  if (name === 'mcp' && mcpItems.value.length === 0) loadMcpMarket()
 }
 
 onMounted(() => { load(); loadMarket() })
@@ -345,62 +286,6 @@ onMounted(() => { load(); loadMarket() })
         </n-spin>
       </n-tab-pane>
 
-      <!-- ── MCP 市场 ──────────────────────────────────────── -->
-      <n-tab-pane name="mcp" tab="MCP 市场">
-        <div class="market-toolbar">
-          <n-input v-model:value="mcpSearch" placeholder="搜索 MCP 工具..." clearable
-                   size="small" style="width: 200px" />
-          <n-button size="small" :loading="mcpLoading" @click="loadMcpMarket(true)">刷新</n-button>
-        </div>
-        <p class="market-hint">浏览并一键安装社区公开 MCP 服务器，安装后自动注册工具。</p>
-
-        <n-spin :show="mcpLoading">
-          <div class="market-grid">
-            <div v-for="item in filteredMcpMarket" :key="item.id"
-                 class="market-card glass-panel glass-panel-hover">
-              <div class="card-head">
-                <span class="card-icon">{{ item.icon || '🔌' }}</span>
-                <div class="card-title-group">
-                  <span class="card-name">{{ item.name }}</span>
-                  <div class="card-meta">
-                    <span class="card-version">v{{ item.version }}</span>
-                    <span v-if="item.author" class="card-author">{{ item.author }}</span>
-                  </div>
-                </div>
-              </div>
-              <div class="card-desc">{{ item.description }}</div>
-              <div v-if="item.tags?.length" class="card-tags">
-                <n-tag v-for="tag in item.tags" :key="tag" size="tiny" :bordered="false" round>{{ tag }}</n-tag>
-              </div>
-              <div class="card-footer">
-                <div class="card-status">
-                  <n-tag v-if="item.installed" size="tiny" type="success" :bordered="false">
-                    已安装 v{{ item.installed_version }}
-                  </n-tag>
-                  <span v-if="item.use_count" class="use-count">🔥 {{ item.use_count }}</span>
-                </div>
-                <div class="card-actions">
-                  <n-popconfirm v-if="item.installed"
-                                @positive-click="uninstallFromMcp(item)">
-                    <template #trigger>
-                      <n-button size="tiny" type="error" quaternary
-                                :loading="uninstallingMcp[item.id]">卸载</n-button>
-                    </template>
-                    确认卸载「{{ item.name }}」？
-                  </n-popconfirm>
-                  <n-button size="tiny" type="primary"
-                            :loading="installingMcp[item.id]"
-                            @click="installFromMcp(item)">
-                    {{ item.installed ? '更新' : '安装' }}
-                  </n-button>
-                </div>
-              </div>
-            </div>
-            <n-empty v-if="!mcpLoading && filteredMcpMarket.length === 0"
-                     description="暂无可安装的 MCP 工具" class="empty-state" />
-          </div>
-        </n-spin>
-      </n-tab-pane>
     </n-tabs>
   </div>
 </template>
@@ -467,6 +352,4 @@ onMounted(() => { load(); loadMarket() })
 .card-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
 .card-footer { display: flex; align-items: center; justify-content: space-between; }
 .card-actions { display: flex; gap: 6px; }
-.card-status { display: flex; align-items: center; gap: 6px; }
-.use-count { font-size: 11px; color: var(--moon-dim); }
 </style>
