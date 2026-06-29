@@ -331,6 +331,17 @@ class SubAgentManagerMixin:
             if len(agents) >= 2:
                 return await self._sequential_pipe(agents, task)
 
+        # I8: 3 种新协作模式
+        if "," in name:
+            agents = [a.strip().lower() for a in name.split(",") if a.strip()]
+            if len(agents) >= 2:
+                if mode == "ensemble":
+                    return await self._ensemble_agents(agents, task)
+                if mode == "retry_fallback":
+                    return await self._retry_fallback(agents, task)
+                if mode == "debate":
+                    return await self._debate_agents(agents, verifier, task)
+
         if name in ("keli", "klee"):
             return await self.delegate_to_klee(task)
         _ctx = _current_request_ctx.get()
@@ -349,9 +360,20 @@ class SubAgentManagerMixin:
             except Exception as e:
                 logger.debug("blackboard.get_failed key={} error={}", task_key, e)
         context = self._build_sub_agent_context(task_hint=task)
+        import time as _time_mod
+        _t0 = _time_mod.time()
         result = await self.dispatcher.dispatch(
             name, task, context=context,
             status_callback=_ctx.status_callback if _ctx else None)
+        _duration = _time_mod.time() - _t0
+        # I7: 记录子 Agent 工作履历 (供路由器智能调度)
+        try:
+            from core.agent_work_record import get_work_recorder
+            get_work_recorder().record(
+                name, task_type=mode, success=result is not None,
+                duration=_duration)
+        except Exception as e:
+            logger.debug("sub_agent.work_record_failed", error=str(e))
         if result is None:
             return f"{agent.config.display_name}现在有点累了...等会儿再试吧💤"
 
@@ -423,6 +445,80 @@ class SubAgentManagerMixin:
             logger.debug("agent.pipe_step step={} agent={} result_len={}",
                          i + 1, agent_name, len(result))
         return current_input
+
+    # ============================================================
+    # I8: 3 种新协作模式
+    # ============================================================
+
+    async def _ensemble_agents(self, agents: list[str], task: str) -> str:
+        """集成模式：多 agent 并行解决同一任务，选最全面的结果。
+
+        借鉴 Trae Pattern 4 (ensemble) — 多个 agent 独立尝试，取最优。
+        适用于创意任务、问题解决等有多种有效路径的场景。
+        """
+        tasks = [self.delegate_to_agent(a, task, mode="single") for a in agents]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        valid = [r for r in results if isinstance(r, str) and len(r) > 20]
+        if not valid:
+            return "（所有子代理都无法完成任务）"
+        # 启发式：选最长的结果（通常最全面），无需额外 LLM 调用
+        best = max(valid, key=len)
+        logger.info("agent.ensemble_done agents={} best_len={}",
+                    len(agents), len(best))
+        return best
+
+    async def _retry_fallback(self, agents: list[str], task: str) -> str:
+        """重试降级：按优先级依次尝试，失败/空结果则降级到下一个。
+
+        适用于可靠性要求高的任务 — 主 agent 不可用或失败时自动降级。
+        """
+        for i, agent_name in enumerate(agents):
+            try:
+                result = await self.delegate_to_agent(agent_name, task, mode="single")
+                if result and len(result) > 20:
+                    return result
+                logger.info("agent.retry_fallback_step agent={} result_short",
+                            agent_name)
+            except Exception as e:
+                logger.warning("agent.retry_fallback_failed agent={} error={}",
+                               agent_name, str(e)[:100])
+        return "（所有子代理都未能完成任务）"
+
+    async def _debate_agents(self, agents: list[str], synthesizer: str,
+                                task: str) -> str:
+        """辩论模式：两个 agent 持对立立场，综合者合并观点。
+
+        借鉴 Trae Pattern 3 (debate) — 正反方独立论证，第三方综合。
+        适用于分析、决策、评估等需要多角度思考的任务。
+        """
+        if len(agents) < 2:
+            return await self.delegate_to_agent(
+                agents[0] if agents else "nahida", task, mode="single")
+
+        pro_prompt = f"请从正面/支持角度分析以下问题，给出你的论点和论据：\n{task}"
+        con_prompt = f"请从反面/质疑角度分析以下问题，给出你的论点和论据：\n{task}"
+
+        pro_task = self.delegate_to_agent(agents[0], pro_prompt, mode="single")
+        con_task = self.delegate_to_agent(agents[1], con_prompt, mode="single")
+        pro_result, con_result = await asyncio.gather(
+            pro_task, con_task, return_exceptions=True)
+
+        # 异常降级：如果某一方失败，用另一方的结果
+        if not isinstance(pro_result, str) or len(pro_result) < 10:
+            pro_result = "（正方无法给出观点）"
+        if not isinstance(con_result, str) or len(con_result) < 10:
+            con_result = "（反方无法给出观点）"
+
+        synth_name = synthesizer or "nahida"
+        synth_prompt = (
+            f"以下是关于「{task}」的正反两方观点，请综合分析并给出平衡的结论：\n\n"
+            f"【正方观点】\n{pro_result}\n\n"
+            f"【反方观点】\n{con_result}\n\n"
+            f"请综合以上观点，给出你的判断和建议。"
+        )
+        logger.info("agent.debate_done pro={} con={} synth={}",
+                    agents[0], agents[1], synth_name)
+        return await self.delegate_to_agent(synth_name, synth_prompt, mode="single")
 
     async def delegate_to_klee(self, task: str, factual: bool = False) -> str:
         """将任务委托给可莉子代理完成并返回结果.

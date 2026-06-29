@@ -889,14 +889,26 @@ class AgentDispatcher:
         # 验证目标代理可用
         agent = self.get_agent(target)
         if not agent or not agent.available:
-            # 回退到默认代理
+            # I7: 智能回退 — 基于工作履历从可用 agent 中选成功率最高的
             default = routing.get("general", "keli")
-            if default != target:
+            fallback = default
+            try:
+                from core.agent_work_record import get_work_recorder
+                available_agents = [n for n, a in self._agents.items()
+                                    if a and a.available and n != target]
+                if available_agents:
+                    best = get_work_recorder().get_best_agent(
+                        available_agents, task_type=task_type)
+                    if best:
+                        fallback = best
+            except Exception:
+                pass
+            if fallback != target:
                 logger.info("agent.task_route_fallback",
                             task_type=task_type,
                             requested_target=target,
-                            fallback_target=default)
-                return default
+                            fallback_target=fallback)
+                return fallback
 
         logger.info("agent.task_route", task_type=task_type, target=target)
         return target

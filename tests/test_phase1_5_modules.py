@@ -341,23 +341,23 @@ class TestLearningLoop:
     """A4: 学习反馈闭环"""
 
     @pytest.mark.asyncio
-    async def test_extract_constraint(self):
+    async def test_extract_constraint(self, tmp_path):
         from core.learning_loop import LearningLoop
-        loop = LearningLoop()
+        loop = LearningLoop(persist_path=tmp_path / "ac.json")
         constraint = await loop.process_correction("不要总是说好的", "好的")
         assert constraint is not None
         assert "不要" in constraint
 
     @pytest.mark.asyncio
-    async def test_no_constraint(self):
+    async def test_no_constraint(self, tmp_path):
         from core.learning_loop import LearningLoop
-        loop = LearningLoop()
+        loop = LearningLoop(persist_path=tmp_path / "ac.json")
         constraint = await loop.process_correction("你好", "你好呀")
         assert constraint is None
 
-    def test_active_constraints(self):
+    def test_active_constraints(self, tmp_path):
         from core.learning_loop import LearningLoop
-        loop = LearningLoop()
+        loop = LearningLoop(persist_path=tmp_path / "ac.json")
         loop._active_constraints.extend(["c1", "c2", "c3"])
         assert len(loop.get_active_constraints()) == 3
 

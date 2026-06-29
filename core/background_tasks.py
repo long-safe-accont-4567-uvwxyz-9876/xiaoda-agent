@@ -208,6 +208,16 @@ class BackgroundTaskManager:
         except Exception as e:
             logger.warning("bg.memory_distill_schedule_failed", error=str(e))
 
+        # 12. 经验晋升（每 30 分钟, recurrence≥3 的学习自动晋升到 system prompt）
+        #     修复旁路触发: 此前 auto_promote 只在 nudge_engine 情绪引擎里调用,
+        #     用户没触发情绪关键词时经验晋升就不发生
+        try:
+            if self.learning_manager and await self._should_run("learning_promote", interval_hours=0.5):
+                from core.preference_pipeline import get_preference_pipeline
+                _spawn(get_preference_pipeline().check_promotion(self.learning_manager))
+        except Exception as e:
+            logger.warning("bg.learning_promote_schedule_failed", error=str(e))
+
     async def _auto_archive_sessions(self) -> None:
         try:
             archived = await self.db.auto_archive_stale_sessions(idle_seconds=3600)
@@ -239,10 +249,9 @@ class BackgroundTaskManager:
     async def _dream_archive_task(self) -> None:
         """梦境归档 — 每日整理低频记忆"""
         try:
-            from memory.fluid_memory import FluidMemory
-            fluid = FluidMemory()
+            from core.dream_consolidation import get_dream_consolidator
             if self.memory:
-                archived = await fluid.dream(self.memory.memory)
+                archived = await get_dream_consolidator().consolidate_db(self.memory.memory)
                 if archived > 0:
                     logger.info("dream.archive_completed", archived=archived)
             await self.db.set_cron_last_run("dream_archive")

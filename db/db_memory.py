@@ -164,6 +164,43 @@ class MemoryDB:
             logger.warning("db_memory.fts_search_failed", error=str(e))
             return []
 
+    async def search_memories_by_entities(self, entity_names: list[str],
+                                            limit: int = 5) -> list[dict]:
+        """按实体反查情景记忆（entities 字段为 JSON 数组字符串）。
+
+        I6: KG 召回通道 — 让 KG 关联的实体能反查到对应记忆，参与 RAG 候选池。
+        """
+        if not entity_names:
+            return []
+        try:
+            import json
+            conditions = " OR ".join(["entities LIKE ?" for _ in entity_names])
+            params = [f'%"{e}"%' for e in entity_names]
+            cursor = await self._conn.execute(
+                f"""SELECT * FROM episodic_memories
+                   WHERE session_id != 'archived' AND ({conditions})
+                   ORDER BY importance DESC, timestamp DESC LIMIT ?""",
+                params + [limit],
+            )
+            rows = await cursor.fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                # 解析 entities JSON 字符串为列表，供后续 KG 评分复用
+                raw = d.get("entities", "")
+                if isinstance(raw, str) and raw:
+                    try:
+                        d["entity_list"] = json.loads(raw)
+                    except (json.JSONDecodeError, TypeError):
+                        d["entity_list"] = []
+                else:
+                    d["entity_list"] = raw if isinstance(raw, list) else []
+                results.append(d)
+            return results
+        except Exception as e:
+            logger.warning("db_memory.entity_search_failed", error=str(e))
+            return []
+
     async def get_all_memories(self, limit: int = 100) -> Any:
         """获取所有活跃记忆（排除已归档）"""
         cursor = await self._conn.execute(

@@ -453,7 +453,13 @@ class AgentCoreBootstrapper:
                 "mode=generate_verify（生成+交叉验证，需指定 verifier，"
                 "适用于代码修改、安全分析等需要二次确认的任务）；"
                 "mode=pipe（顺序管道，agent 用逗号分隔多个，如 'xilian,nike'，"
-                "前一个的输出作为后一个的输入，适用于搜索→分析→综合等场景）。"
+                "前一个的输出作为后一个的输入，适用于搜索→分析→综合等场景）；"
+                "mode=ensemble（集成模式，agent 用逗号分隔多个，"
+                "多 agent 并行解决同一任务取最优结果，适用于创意/多解任务）；"
+                "mode=retry_fallback（重试降级，agent 用逗号分隔按优先级，"
+                "失败自动降级到下一个，适用于高可靠性任务）；"
+                "mode=debate（辩论模式，agent 填两个辩论方，verifier 填综合者，"
+                "正反方独立论证后综合，适用于分析/决策任务）。"
                 "【严格规则】以下情况绝对不要委托，必须自己回答："
                 "1. 日常闲聊、问候、寒暄（如'你好'、'在吗'、'今天怎么样'）；"
                 "2. 表情包、情感表达、陪伴对话；"
@@ -470,8 +476,9 @@ class AgentCoreBootstrapper:
                               "enum": list(core._agent_route_configs.keys())},
                     "task": {"type": "string", "description": "委托的任务描述，包含必要上下文"},
                     "mode": {"type": "string",
-                             "description": "操作模式：single(默认) / generate_verify(生成+验证) / pipe(顺序管道,agent用逗号分隔)",
-                             "enum": ["single", "generate_verify", "pipe"],
+                             "description": "操作模式：single(默认) / generate_verify(生成+验证) / pipe(顺序管道,agent用逗号分隔) / ensemble(集成,多agent并行取最优) / retry_fallback(重试降级,按优先级失败降级) / debate(辩论,正反方+综合者)",
+                             "enum": ["single", "generate_verify", "pipe",
+                                      "ensemble", "retry_fallback", "debate"],
                              "default": "single"},
                     "verifier": {"type": "string",
                                  "description": "验证子代理名（仅 mode=generate_verify 时使用）",

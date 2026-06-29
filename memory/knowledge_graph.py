@@ -261,6 +261,72 @@ class KnowledgeGraph:
 
         return boosts
 
+    async def get_query_entities(self, query: str) -> set[str]:
+        """提取 query 实体（单次 LLM 调用）。
+
+        I6: 供召回通道和快速评分共用，避免 N+1 次 LLM 调用。
+        """
+        try:
+            entities = await self.extract_from_summary(query)
+            return {ent.get("name", "") for ent in entities.get("entities", [])
+                    if ent.get("name")}
+        except Exception as e:
+            logger.debug("kg.query_entities_failed", error=str(e))
+            return set()
+
+    async def get_relevance_boost_fast(self, query_entities: set[str],
+                                         memory_entities_list: list[list[str]]) -> list[float]:
+        """快速 KG 评分 — 复用已存储的 entities 字段，不再 N+1 次 LLM 调用。
+
+        I6: 修复 get_relevance_boost 的性能黑洞（原实现每条记忆都调 extract_from_summary）。
+        """
+        boosts: list[float] = []
+        for mem_entities in memory_entities_list:
+            boost = 0.0
+            mem_set = set(mem_entities)
+            overlap = query_entities & mem_set
+            if overlap:
+                boost += len(overlap) * 0.15
+            # 关系增强：query 实体与记忆实体在 KG 中是否有边
+            if self.knowledge_db and query_entities and mem_set:
+                try:
+                    for qe in list(query_entities)[:3]:
+                        relations = await self.knowledge_db.get_knowledge_relations(qe)
+                        for rel in relations[:5]:
+                            if (rel.get("to_entity") in mem_set
+                                    or rel.get("from_entity") in mem_set):
+                                boost += 0.05
+                                break
+                except Exception:
+                    pass
+            boosts.append(min(boost, 0.5))
+        return boosts
+
+    async def recall_by_entities(self, query_entities: set[str],
+                                   limit: int = 5) -> list[str]:
+        """KG 召回: query 实体 → KG 关联实体 → 返回关联实体名列表。
+
+        I6: 供 memory_manager 反查 episodic_memories.entities 字段，
+        让 KG 真正参与召回候选池（而非仅后置评分）。
+        """
+        if not query_entities or not self.knowledge_db:
+            return []
+        try:
+            related = await self.get_related_knowledge(
+                list(query_entities)[:3], depth=1)
+            related_names: set[str] = set()
+            for item in related:
+                if item["type"] == "entity":
+                    related_names.add(item["data"].get("name", ""))
+                elif item["type"] == "relation":
+                    related_names.add(item["data"].get("from_entity", ""))
+                    related_names.add(item["data"].get("to_entity", ""))
+            # 排除 query 自身实体，只返回关联实体
+            return list(related_names - query_entities)[:limit]
+        except Exception as e:
+            logger.debug("kg.recall_failed", error=str(e))
+            return []
+
     async def format_knowledge_context(self, knowledge: list[dict]) -> str:
         if not knowledge:
             return ""

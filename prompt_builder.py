@@ -631,6 +631,43 @@ def _inject_dynamic_segments(system_prompt: str, user_id: str | None, user_input
                 system_prompt += "\n\n" + emotional_segment
         except Exception as e:
             logger.warning("prompt.emotional_memory_inject_failed", error=str(e))
+
+    # 4. 学习反馈教训段落（需要 user_input 做相关性匹配）
+    #    修复数据黑洞: record_tool_outcome/record_reflection_lesson 有写入,
+    #    但 get_relevant_lessons/get_strategy 此前零调用, 教训对推理完全不可见
+    if user_input:
+        try:
+            from core.learning_feedback import get_learning_feedback_loop
+            lf_loop = get_learning_feedback_loop()
+            relevant_lessons = lf_loop.get_relevant_lessons(user_input, top_k=3)
+            if relevant_lessons:
+                lesson_lines = ["[过往经验教训（供参考，非当前指令）]"]
+                for lesson in relevant_lessons:
+                    marker = "⚠️" if lesson.event_type.value == "failure" else "💡"
+                    lesson_lines.append(
+                        f"{marker} [{lesson.occurrence_count}次] {lesson.content[:120]}"
+                    )
+                system_prompt += "\n\n" + "\n".join(lesson_lines)
+            strategy = lf_loop.get_strategy(user_input)
+            if strategy:
+                system_prompt += f"\n\n[策略建议] {strategy[:200]}"
+        except Exception as e:
+            logger.warning("prompt.learning_feedback_inject_failed", error=str(e))
+
+    # 5. 活跃约束段落（用户纠正的实时行为边界，必须遵守）
+    #    修复数据黑洞: get_active_constraints 此前零调用, 约束提取了推理时完全不知道
+    try:
+        from core.learning_loop import get_learning_loop
+        _loop = get_learning_loop()
+        constraints = _loop.get_active_constraints()
+        if constraints:
+            constraint_lines = ["[用户明确的行为约束（必须遵守）]"]
+            for c in constraints:
+                constraint_lines.append(f"· {c}")
+            system_prompt += "\n\n" + "\n".join(constraint_lines)
+    except Exception as e:
+        logger.warning("prompt.learning_loop_inject_failed", error=str(e))
+
     return system_prompt
 
 

@@ -51,10 +51,14 @@ async def get_status(request: Request) -> Any:
         active = 0
     qq_connected = False
     try:
-        rows = await core.db.fetch_all(
-            "SELECT COUNT(*) AS c FROM conversation_logs "
-            "WHERE source='qq' AND timestamp > ?", (time.time() - 600,))
-        qq_connected = bool(rows and rows[0]["c"] > 0)
+        # 基于真实 WebSocket 连接状态判断，而非“近10分钟有无 QQ 消息”。
+        # 旧实现用 source='qq' 查询 conversation_logs，但 QQ 适配器实际写入的
+        # source 是 'qq_c2c' / 'qq_group'，精确匹配永远查不到，导致恒为 False。
+        # 且“消息活跃度”不等于“连接状态”——连上但没人发消息也会误显示离线。
+        import qq_bot_adapter
+        bot = qq_bot_adapter._ACTIVE_BOT
+        if bot is not None and not bot.is_closed():
+            qq_connected = True
     except Exception:
         pass
     return Envelope(data=SystemStatus(

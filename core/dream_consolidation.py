@@ -22,6 +22,8 @@ from typing import Any, Callable, Optional
 
 from loguru import logger
 
+from memory.fluid_memory import FluidMemory
+
 
 @dataclass
 class Memory:
@@ -55,6 +57,8 @@ class DreamConsolidator:
         self._memories: dict[str, Memory] = {}
         self._importance_threshold = threshold_importance
         self._strength_threshold = threshold_strength
+        # 复用 FluidMemory 评分公式, 统一衰减逻辑 (避免两套公式各算各的)
+        self._fluid_scorer = FluidMemory()
         self._scheduler_task: Optional[asyncio.Task] = None
         self._last_consolidate_at = 0
         self._stats = {"consolidated": 0, "decayed": 0, "merged": 0, "strengthened": 0}
@@ -103,15 +107,20 @@ class DreamConsolidator:
         t0 = time.time()
         now = time.time()
 
-        # 1. Ebbinghaus 衰减: R = e^(-t/S), S = 1/strength
+        # 1. 衰减评分: 统一用 FluidMemory.score() (sim×e^(-λ×days) + α×ln(1+access))
+        #    替代旧的手写 Ebbinghaus 公式, 与 fluid_memory 评分保持一致
         decayed_ids = []
         for mid, m in list(self._memories.items()):
-            elapsed_days = (now - m.last_access) / 86400
-            retention = math.exp(-elapsed_days * m.decay_rate / max(0.1, m.strength))
-            m.strength = retention
+            fm_score = self._fluid_scorer.score(
+                similarity=m.importance,
+                created_at=m.last_access,  # 以最后访问时间作为衰减基准
+                access_count=m.access_count,
+            )
+            m.strength = fm_score
             # 重要性也随时间衰减 (但更慢)
+            elapsed_days = (now - m.last_access) / 86400
             m.importance *= math.exp(-elapsed_days * 0.01)
-            if (m.strength < self._strength_threshold
+            if (self._fluid_scorer.should_archive(fm_score)
                     and m.importance < self._importance_threshold):
                 decayed_ids.append(mid)
 
@@ -149,6 +158,28 @@ class DreamConsolidator:
             "strengthened": strengthened,
             "total_remaining": len(self._memories),
         }
+
+    async def consolidate_db(self, memory_db: Any, batch_size: int = 100) -> int:
+        """数据库归档 — 遍历活跃记忆, 低分归档 (原 FluidMemory.dream 迁移至此)
+
+        统一入口: 遗忘+归档逻辑集中在 DreamConsolidator, FluidMemory 仅提供评分。
+        """
+        archived_count = 0
+        try:
+            memories = await memory_db.get_all_memories(limit=batch_size)
+            for mem in memories:
+                mem_id = mem.get("id")
+                created_at = mem.get("timestamp", time.time())
+                access_count = mem.get("access_count", 0)
+                s = self._fluid_scorer.score(similarity=0.5, created_at=created_at,
+                                              access_count=access_count)
+                if self._fluid_scorer.should_archive(s):
+                    await memory_db.archive_memory(mem_id)
+                    archived_count += 1
+            logger.info(f"Dream.consolidate_db archived={archived_count}")
+        except Exception as e:
+            logger.error(f"Dream.consolidate_db_failed: {e}")
+        return archived_count
 
     def _trigger_mental_state_consolidate(self) -> None:
         """触发 L/M/S 心理状态 Dream 整合 (清理 7 天前 M 层数据).

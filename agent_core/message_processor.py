@@ -588,6 +588,13 @@ class MessageProcessorMixin:
 
         self._bg_task_manager.run_background_tasks(
             user_input, reply, user_id, source, emotion, tool_results, session_id=session_id)
+        # 偏好管线: 用户纠正 → L1(约束) + L3(教训) 联动 (异步, 不阻塞回复)
+        try:
+            from core.preference_pipeline import get_preference_pipeline
+            _spawn(get_preference_pipeline().process_correction(
+                user_input, reply, self._bg_task_manager.learning_manager))
+        except Exception as e:
+            logger.debug("msg.preference_pipeline_spawn_failed", error=str(e))
         try:
             _spawn(self.router.flush_costs())
         except Exception as e:

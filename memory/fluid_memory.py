@@ -41,30 +41,5 @@ class FluidMemory:
         """是否应归档（梦境守护）"""
         return score < self.DREAM_THRESHOLD
 
-    async def dream(self, memory_db: Any, batch_size: int = 100) -> int:
-        """梦境归档 — 遍历活跃记忆，低分归档
-
-        Args:
-            memory_db: MemoryDB 实例
-            batch_size: 每批处理数量
-
-        Returns:
-            归档的记忆数量
-        """
-        archived_count = 0
-        try:
-            # 获取所有活跃记忆
-            memories = await memory_db.get_all_memories(limit=batch_size)
-            for mem in memories:
-                mem_id = mem.get("id")
-                created_at = mem.get("timestamp", time.time())
-                access_count = mem.get("access_count", 0)
-                # 使用中等相似度评估（归档不依赖查询）
-                s = self.score(similarity=0.5, created_at=created_at, access_count=access_count)
-                if self.should_archive(s):
-                    await memory_db.archive_memory(mem_id)
-                    archived_count += 1
-            logger.info("fluid_memory.dream_completed", extra={"archived": archived_count})
-        except Exception as e:
-            logger.error(f"fluid_memory.dream_failed: {e}")
-        return archived_count
+    # dream() 已迁移到 DreamConsolidator.consolidate_db() (统一遗忘+归档入口)
+    # 本模块保留纯评分函数, 供 DreamConsolidator 和其他模块复用

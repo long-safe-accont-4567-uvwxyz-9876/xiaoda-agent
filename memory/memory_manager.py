@@ -432,8 +432,38 @@ class MemoryManager:
         # 流体记忆评分（艾宾浩斯遗忘曲线 + 访问强化）
         results = await self._apply_fluid_scoring(results)
 
-        # KG 增强评分 + 综合评分
-        await self._compute_final_scores(query, results, config)
+        # I6: KG 召回通道 — query 实体 → KG 关联实体 → 反查记忆加入候选池
+        #     让 KG 真正参与召回（原实现仅在评分阶段后置增强）
+        query_entities: set[str] = set()
+        if self.kg:
+            try:
+                query_entities = await self.kg.get_query_entities(query)
+                if query_entities:
+                    related_names = await self.kg.recall_by_entities(
+                        query_entities, limit=5)
+                    if related_names:
+                        kg_hits = await self.memory.search_memories_by_entities(
+                            related_names, limit=k)
+                        _existing_ids = {str(r.get("id", "")) for r in results}
+                        _added = 0
+                        for _m in kg_hits:
+                            _mid = str(_m.get("id", ""))
+                            if _mid and _mid not in _existing_ids:
+                                _existing_ids.add(_mid)
+                                # KG 召回的记忆没有 rerank/rrf 分数，给默认值参与综合评分
+                                _m.setdefault("effective_score",
+                                              _m.get("importance", 0.5) * 0.6)
+                                _m["kg_recall"] = True
+                                results.append(_m)
+                                _added += 1
+                        if _added:
+                            logger.debug("memory.kg_recall",
+                                         entities=len(related_names), added=_added)
+            except Exception as e:
+                logger.debug("memory.kg_recall_failed", error=str(e))
+
+        # KG 增强评分 + 综合评分 (复用已提取的 query_entities, 避免 N+1 LLM)
+        await self._compute_final_scores(query, results, config, query_entities)
 
         results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
         results = results[:k]
@@ -654,19 +684,35 @@ class MemoryManager:
             filtered.append(r)
         return filtered
 
-    async def _compute_final_scores(self, query: str, results: list[dict], config: Any) -> None:
+    async def _compute_final_scores(self, query: str, results: list[dict],
+                                      config: Any,
+                                      query_entities: set[str] | None = None) -> None:
         """KG 增强评分 + 综合评分: final = α×rerank + β×kg_boost + γ×(importance×decay)。
 
-        直接修改 results 内每条记录的 final_score 字段。
+        I6: 复用已存储的 entities 字段 + 预提取的 query_entities，
+        避免 N+1 次 LLM 调用（原 get_relevance_boost 性能黑洞）。
         """
         if not results:
             return
-        # KG 增强评分
-        kg_boosts: list[float] = []
+        kg_boosts: list[float] = [0.0] * len(results)
         if self.kg:
             try:
-                summaries = [r.get("summary", "") for r in results]
-                kg_boosts = await self.kg.get_relevance_boost(query, summaries)
+                import json
+                if query_entities is None:
+                    query_entities = await self.kg.get_query_entities(query)
+                if query_entities:
+                    memory_entities_list: list[list[str]] = []
+                    for r in results:
+                        raw = r.get("entity_list") or r.get("entities", [])
+                        if isinstance(raw, str) and raw:
+                            try:
+                                raw = json.loads(raw)
+                            except (json.JSONDecodeError, TypeError):
+                                raw = []
+                        memory_entities_list.append(
+                            raw if isinstance(raw, list) else [])
+                    kg_boosts = await self.kg.get_relevance_boost_fast(
+                        query_entities, memory_entities_list)
             except Exception as e:
                 logger.debug("memory.kg_boost_failed", error=str(e))
         # 综合评分

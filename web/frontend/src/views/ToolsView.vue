@@ -199,6 +199,17 @@ async function removeSkill(s: any) {
   }
 }
 
+async function deleteFromEditor() {
+  try {
+    await del(`/skills/${skillName.value}`, true)
+    message.success(`已删除 ${skillName.value}`)
+    showSkillEditor.value = false
+    await loadSkills()
+  } catch (e: any) {
+    message.error(e.message)
+  }
+}
+
 // ── 技能市场 ──────────────────────────────────────────────
 const skillMarketItems = ref<any[]>([])
 const skillMarketLoading = ref(false)
@@ -320,15 +331,8 @@ async function testSkill(item: any) {
           </div>
           <div v-if="skills.length" class="skills-list">
             <div v-for="s in skills" :key="s.name" class="skill-chip">
-              <span class="skill-name" @click="openSkill(s)" style="cursor: pointer; flex: 1;">{{ s.name }}</span>
+              <span class="skill-name" @click="openSkill(s)" style="cursor:pointer;flex:1">{{ s.name }}</span>
               <span class="skill-size">{{ (s.size / 1024).toFixed(1) }}KB</span>
-              <n-button size="tiny" quaternary @click="openSkill(s)" title="编辑">✎</n-button>
-              <n-popconfirm @positive-click="removeSkill(s)">
-                <template #trigger>
-                  <n-button size="tiny" quaternary type="error" title="删除">✕</n-button>
-                </template>
-                删除 Skill「{{ s.name }}」？
-              </n-popconfirm>
             </div>
           </div>
           <p v-else class="skills-empty">还没有 Skill。上传 SKILL.md 后其内容会注入系统提示词，助手下一条消息即掌握该技能。</p>
@@ -373,6 +377,8 @@ async function testSkill(item: any) {
                   {{ toolTestResult[t.name]?.status === 'ok' ? '✓ 通过' :
                      toolTestResult[t.name]?.status === 'fail' ? '✕ 失败' : '测试' }}
                 </n-button>
+                <n-button size="tiny" @click="openDebug(t)">编辑</n-button>
+                <n-button size="tiny" type="error" @click="updateTool(t, { enabled: false })">删除</n-button>
               </div>
             </div>
             <div class="tool-actions">
@@ -479,9 +485,18 @@ async function testSkill(item: any) {
                  placeholder="SKILL.md 全文（Markdown）——描述这项技能的知识、步骤、注意事项" />
       </div>
       <template #footer>
-        <div style="display:flex; justify-content:flex-end; gap:10px">
-          <n-button @click="showSkillEditor = false">取消</n-button>
-          <n-button type="primary" :loading="savingSkill" @click="saveSkill">保存（下一条消息生效）</n-button>
+        <div style="display:flex; justify-content:space-between; align-items:center">
+          <n-popconfirm v-if="!skillIsCreate" @positive-click="deleteFromEditor">
+            <template #trigger>
+              <n-button type="error" quaternary>删除此 Skill</n-button>
+            </template>
+            确认删除「{{ skillName }}」？删除后无法恢复。
+          </n-popconfirm>
+          <span v-else></span>
+          <div style="display:flex; gap:10px">
+            <n-button @click="showSkillEditor = false">取消</n-button>
+            <n-button type="primary" :loading="savingSkill" @click="saveSkill">保存（下一条消息生效）</n-button>
+          </div>
         </div>
       </template>
     </n-modal>
@@ -515,6 +530,10 @@ async function testSkill(item: any) {
 .skill-chip:hover { border-color: rgba(127, 214, 80, 0.45); }
 .skill-name { font-size: 13px; font-weight: 600; }
 .skill-size { font-size: 11px; color: var(--moon-dim); }
+.skill-btn { font-size: 12px; padding: 2px 8px; border-radius: 6px; cursor: pointer; background: rgba(127,214,80,0.15); color: #7fd650; border: 1px solid rgba(127,214,80,0.3); user-select: none; }
+.skill-btn:hover { background: rgba(127,214,80,0.3); }
+.skill-btn-del { background: rgba(217,106,95,0.15); color: #d96a5f; border-color: rgba(217,106,95,0.3); }
+.skill-btn-del:hover { background: rgba(217,106,95,0.3); }
 .skills-empty { font-size: 12.5px; color: var(--moon-dim); margin-top: 8px; }
 
 .tool-list { display: flex; flex-direction: column; gap: 8px; }
