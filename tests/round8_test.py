@@ -496,7 +496,7 @@ async def test_hook_engine_deep():
 
 async def main():
     print("\n" + "=" * 60)
-    print("纳西妲 AI Agent 第八轮深度测试")
+    print("小妲 AI Agent 第八轮深度测试")
     print("=" * 60)
 
     all_bugs = []

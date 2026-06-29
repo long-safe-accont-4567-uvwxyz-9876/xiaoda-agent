@@ -86,7 +86,7 @@ function Create-Shortcut {
 if ($Uninstall) {
     Write-Host ""
     Write-Host "  ================================" -ForegroundColor Cyan
-    Write-Host "    Nahida Agent - Uninstall" -ForegroundColor Cyan
+    Write-Host "    Xiaoda Agent - Uninstall" -ForegroundColor Cyan
     Write-Host "  ================================" -ForegroundColor Cyan
     Write-Host ""
 
@@ -115,7 +115,7 @@ if ($Uninstall) {
 
 Write-Host ""
 Write-Host "  ================================" -ForegroundColor Cyan
-Write-Host "    Nahida Agent - Installer" -ForegroundColor Cyan
+Write-Host "    Xiaoda Agent - Installer" -ForegroundColor Cyan
 Write-Host "  ================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -132,10 +132,10 @@ $startMenuDir = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
 $shortcutPath = "$startMenuDir\xiaoda-agent.lnk"
 
 if (Test-Path $exePath) {
-    Create-Shortcut -TargetExe $exePath -ShortcutPath $shortcutPath -Description "Nahida Agent"
+    Create-Shortcut -TargetExe $exePath -ShortcutPath $shortcutPath -Description "Xiaoda Agent"
 } else {
     # Create shortcut pointing to install dir if exe doesn't exist yet
-    Create-Shortcut -TargetExe $InstallPath -ShortcutPath $shortcutPath -Description "Nahida Agent"
+    Create-Shortcut -TargetExe $InstallPath -ShortcutPath $shortcutPath -Description "Xiaoda Agent"
 }
 
 # Add to PATH

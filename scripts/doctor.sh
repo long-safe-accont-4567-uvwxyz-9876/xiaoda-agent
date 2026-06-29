@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================
-#   Nahida Agent - Doctor Self-Check
+#   Xiaoda Agent - Doctor Self-Check
 #   一键自检脚本 (零 API 调用, <2s)
 #   用法: ./doctor.sh [json|fix]
 # ============================================
@@ -9,7 +9,7 @@ set -e
 # Banner
 echo
 echo "  =========================================="
-echo "  |   Nahida Agent Doctor Self-Check       |"
+echo "  |   Xiaoda Agent Doctor Self-Check       |"
 echo "  |   零 API 调用, 2 秒内完成              |"
 echo "  =========================================="
 echo

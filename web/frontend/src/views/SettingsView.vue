@@ -8,6 +8,8 @@ import { get, put, post } from '../api'
 import { useUiStore } from '../stores/ui'
 import { useAuthStore } from '../stores/auth'
 import { useRouter } from 'vue-router'
+import { t, tf, setLang, state as i18nState } from '../i18n'
+import type { Lang } from '../i18n'
 
 const message = useMessage()
 const ui = useUiStore()
@@ -45,9 +47,9 @@ async function loadLanInfo() {
 
 function copyUrl(url: string) {
   navigator.clipboard.writeText(url).then(() => {
-    message.success('已复制到剪贴板')
+    message.success(t('settings.copied'))
   }).catch(() => {
-    message.warning('复制失败，请手动复制')
+    message.warning(t('settings.copyFailed'))
   })
 }
 
@@ -60,7 +62,7 @@ async function setPermMode(mode: string) {
   try {
     await put('/system/permission-mode', { mode })
     permissionMode.value = mode
-    message.success(`权限模式已切换为 ${mode.toUpperCase()} ✓ 即时生效`)
+    message.success(tf('settings.permSwitched', mode))
   } catch (e: any) { message.error(e.message) }
 }
 
@@ -70,7 +72,7 @@ async function confirmGoatMode() {
     await put('/system/permission-mode', { mode: 'goat', confirm: 'yes' })
     permissionMode.value = 'goat'
     showGoatConfirm.value = false
-    message.success('梭哈模式已开启 ✓ 全部权限开放')
+    message.success(t('settings.goatEnabled'))
   } catch (e: any) { message.error(e.message) }
 }
 
@@ -89,7 +91,7 @@ async function doRestart() {
   if (restartConfirmText.value !== 'RESTART') return
   try {
     await post('/system/restart', {}, true)
-    message.warning('服务重启中…页面将在恢复后自动重连')
+    message.warning(t('settings.restarting'))
     showRestart.value = false
   } catch (e: any) { message.error(e.message) }
 }
@@ -99,47 +101,47 @@ function logout() {
   router.replace('/login')
 }
 
-const permDesc: Record<string, string> = {
-  default: '默认 — 危险操作需要确认',
-  dev: '开发 — 放宽部分写权限，只读查询放行',
-  strict: '严格 — 拒绝一切写/执行类工具',
-  bypass: '绕过 — 跳过所有安全检查（兼容模式）',
-  goat: '梭哈 — 全部权限开放，最大自由度 ⚡',
-}
+const permDesc = computed<Record<string, string>>(() => ({
+  default: t('settings.permissionDesc.default'),
+  dev: t('settings.permissionDesc.dev'),
+  strict: t('settings.permissionDesc.strict'),
+  bypass: t('settings.permissionDesc.bypass'),
+  goat: t('settings.permissionDesc.goat'),
+}))
 </script>
 
 <template>
   <div class="settings-view">
-    <h2 class="view-title">⚙️ 系统设置</h2>
+    <h2 class="view-title">{{ t('settings.title') }}</h2>
 
     <section class="glass-panel section">
-      <h3>界面与特效</h3>
+      <h3>{{ t('settings.appearance') }}</h3>
       <div class="setting-row">
-        <span class="s-label">草元素粒子密度</span>
+        <span class="s-label">{{ t('settings.particles') }}</span>
         <n-radio-group :value="ui.particles" @update:value="ui.setParticles">
-          <n-radio-button value="off">关</n-radio-button>
-          <n-radio-button value="low">低</n-radio-button>
-          <n-radio-button value="medium">中</n-radio-button>
-          <n-radio-button value="high">高</n-radio-button>
+          <n-radio-button value="off">{{ t('settings.particlesOff') }}</n-radio-button>
+          <n-radio-button value="low">{{ t('settings.particlesLow') }}</n-radio-button>
+          <n-radio-button value="medium">{{ t('settings.particlesMedium') }}</n-radio-button>
+          <n-radio-button value="high">{{ t('settings.particlesHigh') }}</n-radio-button>
         </n-radio-group>
       </div>
       <div class="setting-row">
-        <span class="s-label">3D 卡片交互</span>
+        <span class="s-label">{{ t('settings.tilt3d') }}</span>
         <n-switch :value="ui.tilt3d" @update:value="ui.setTilt3d" />
       </div>
       <div class="setting-row">
-        <span class="s-label">自动朗读回复</span>
-        <n-switch :value="ui.autoSpeak" @update:value="(v: boolean) => ui.setAutoSpeak(v).then(() => message.success('已生效 ✓')).catch((e: any) => message.error(e.message))" />
+        <span class="s-label">{{ t('settings.autoSpeak') }}</span>
+        <n-switch :value="ui.autoSpeak" @update:value="(v: boolean) => ui.setAutoSpeak(v).then(() => message.success(t('success'))).catch((e: any) => message.error(e.message))" />
       </div>
       <div class="setting-row brightness-row">
         <div class="brightness-label">
-          <span class="s-label">界面亮度</span>
+          <span class="s-label">{{ t('settings.brightness') }}</span>
           <span class="brightness-value">{{ Math.round(ui.brightness * 100) }}%</span>
         </div>
         <div class="brightness-controls">
           <n-switch :value="ui.autoBrightness" @update:value="ui.setAutoBrightness">
-            <template #checked>自适应</template>
-            <template #unchecked>手动</template>
+            <template #checked>{{ t('settings.autoBrightness') }}</template>
+            <template #unchecked>{{ t('settings.manualBrightness') }}</template>
           </n-switch>
           <n-slider
             :value="ui.manualBrightness"
@@ -153,15 +155,26 @@ const permDesc: Record<string, string> = {
         </div>
       </div>
       <p class="brightness-hint" v-if="ui.autoBrightness">
-        自适应模式：白天 115% · 傍晚 95% · 夜间 70%（护眼）
+        {{ t('settings.brightnessAutoHint') }}
       </p>
       <p class="brightness-hint" v-else>
-        手动模式：拖动滑块调节亮度（50% ~ 150%）
+        {{ t('settings.brightnessManualHint') }}
       </p>
     </section>
 
     <section class="glass-panel section">
-      <h3>全局权限模式</h3>
+      <h3>{{ t('settings.language') }}</h3>
+      <div class="setting-row">
+        <span class="s-label">{{ t('settings.languageDesc') }}</span>
+        <n-radio-group :value="i18nState.lang" @update:value="(v: Lang) => { setLang(v); message.success(t('success')) }">
+          <n-radio-button value="zh">中文</n-radio-button>
+          <n-radio-button value="en">English</n-radio-button>
+        </n-radio-group>
+      </div>
+    </section>
+
+    <section class="glass-panel section">
+      <h3>{{ t('settings.permissionMode') }}</h3>
       <n-radio-group :value="permissionMode" @update:value="setPermMode">
         <n-radio-button v-for="m in permissionOptions" :key="m" :value="m">
           {{ m.toUpperCase() }}
@@ -172,101 +185,101 @@ const permDesc: Record<string, string> = {
 
     <section class="glass-panel section">
       <div class="section-head">
-        <h3>日志查看器</h3>
+        <h3>{{ t('settings.logViewer') }}</h3>
         <div class="log-ops">
           <n-select v-model:value="logLevel" :options="['INFO', 'WARNING', 'ERROR'].map(l => ({ label: l, value: l }))"
-                    placeholder="级别" clearable size="small" style="width: 120px"
+                    :placeholder="t('settings.logLevel')" clearable size="small" style="width: 120px"
                     @update:value="loadLogs" />
-          <n-button size="small" :loading="logLoading" @click="loadLogs">刷新</n-button>
+          <n-button size="small" :loading="logLoading" @click="loadLogs">{{ t('refresh') }}</n-button>
         </div>
       </div>
-      <pre class="log-box">{{ logs.join('\n') || '（空）' }}</pre>
+      <pre class="log-box">{{ logs.join('\n') || t('settings.logEmpty') }}</pre>
     </section>
 
     <section class="glass-panel section" v-if="lanInfo">
-      <h3>局域网访问</h3>
-      <p class="apikey-desc">同一 WiFi 下的手机或其他设备可通过以下地址访问</p>
+      <h3>{{ t('settings.lanAccess') }}</h3>
+      <p class="apikey-desc">{{ t('settings.lanDesc') }}</p>
       <div class="setting-row">
-        <span class="s-label">本机访问</span>
+        <span class="s-label">{{ t('settings.localhost') }}</span>
         <span class="url-link" @click="copyUrl(lanInfo!.localhost)">{{ lanInfo!.localhost }}</span>
       </div>
       <div class="setting-row" v-for="url in lanInfo!.lan_urls" :key="url">
-        <span class="s-label">手机访问</span>
+        <span class="s-label">{{ t('settings.phoneAccess') }}</span>
         <span class="url-link" @click="copyUrl(url)">{{ url }}</span>
       </div>
-      <p class="perm-desc" v-if="!lanInfo!.lan_urls?.length">未检测到局域网 IP，请确认已连接 WiFi</p>
-      <p class="perm-desc" v-else>点击地址可复制到剪贴板</p>
+      <p class="perm-desc" v-if="!lanInfo!.lan_urls?.length">{{ t('settings.noLanIp') }}</p>
+      <p class="perm-desc" v-else>{{ t('settings.clickToCopy') }}</p>
     </section>
 
     <section class="glass-panel section">
-      <h3>API Key 配置</h3>
-      <p class="apikey-desc">配置和管理 API 密钥，测试密钥是否有效</p>
+      <h3>{{ t('settings.apiKeyConfig') }}</h3>
+      <p class="apikey-desc">{{ t('settings.apiKeyDesc') }}</p>
       <div class="setting-row">
-        <span class="s-label">打开 API Key 设置向导</span>
-        <n-button type="primary" secondary @click="router.push('/setup')">打开 API Key 设置</n-button>
+        <span class="s-label">{{ t('settings.openApiKeyWizard') }}</span>
+        <n-button type="primary" secondary @click="router.push('/setup')">{{ t('settings.openApiKeyBtn') }}</n-button>
       </div>
     </section>
 
     <section class="glass-panel section">
-      <h3>用户资料</h3>
-      <p class="apikey-desc">编辑个人资料与偏好设置，帮助助手更好地了解你</p>
+      <h3>{{ t('settings.userProfile') }}</h3>
+      <p class="apikey-desc">{{ t('settings.userProfileDesc') }}</p>
       <div class="setting-row">
-        <span class="s-label">编辑用户资料</span>
-        <n-button type="primary" secondary @click="router.push('/setup/profile')">编辑资料</n-button>
+        <span class="s-label">{{ t('settings.editProfile') }}</span>
+        <n-button type="primary" secondary @click="router.push('/setup/profile')">{{ t('settings.editProfileBtn') }}</n-button>
       </div>
     </section>
 
     <section class="glass-panel section danger">
-      <h3>危险操作</h3>
+      <h3>{{ t('settings.dangerZone') }}</h3>
       <div class="setting-row">
-        <span class="s-label">重启 Agent 服务（systemd 自动拉起）</span>
-        <n-button type="error" secondary @click="showRestart = true">重启服务</n-button>
+        <span class="s-label">{{ t('settings.restartService') }}</span>
+        <n-button type="error" secondary @click="showRestart = true">{{ t('settings.restartBtn') }}</n-button>
       </div>
       <div class="setting-row">
-        <span class="s-label">退出登录</span>
-        <n-button secondary @click="logout">退出</n-button>
+        <span class="s-label">{{ t('settings.logout') }}</span>
+        <n-button secondary @click="logout">{{ t('settings.logoutBtn') }}</n-button>
       </div>
     </section>
 
-    <n-modal v-model:show="showRestart" preset="card" title="⚠ 确认重启"
+    <n-modal v-model:show="showRestart" preset="card" :title="t('settings.restartConfirmTitle')"
              style="width: min(420px, 94vw)">
       <p style="margin-bottom: 12px; font-size: 13.5px">
-        重启期间所有通道（Web/QQ）暂时中断。输入 <b>RESTART</b> 以确认：
+        {{ t('settings.restartConfirmDesc') }}
       </p>
       <n-input v-model:value="restartConfirmText" placeholder="RESTART" />
       <template #footer>
         <div style="display:flex; justify-content:flex-end; gap:10px">
-          <n-button @click="showRestart = false">取消</n-button>
+          <n-button @click="showRestart = false">{{ t('cancel') }}</n-button>
           <n-button type="error" :disabled="restartConfirmText !== 'RESTART'" @click="doRestart">
-            确认重启
+            {{ t('settings.restartConfirmBtn') }}
           </n-button>
         </div>
       </template>
     </n-modal>
 
-    <n-modal v-model:show="showGoatConfirm" preset="card" title="⚡ 开启梭哈模式"
+    <n-modal v-model:show="showGoatConfirm" preset="card" :title="t('settings.goatConfirmTitle')"
              style="width: min(420px, 94vw)">
       <div style="margin-bottom: 16px; font-size: 13.5px">
         <p style="margin-bottom: 12px">
-          <b>梭哈模式</b>将开放全部权限，包括：
+          <b>GOAT</b> {{ t('settings.goatConfirmDesc') }}
         </p>
         <ul style="margin: 0 0 12px 20px; line-height: 1.8">
-          <li>跳过所有安全检查</li>
-          <li>允许所有工具执行</li>
-          <li>无需确认直接操作</li>
+          <li>{{ t('settings.goatFeature1') }}</li>
+          <li>{{ t('settings.goatFeature2') }}</li>
+          <li>{{ t('settings.goatFeature3') }}</li>
         </ul>
         <p style="color: #e8833a; font-size: 12.5px">
-          ⚠️ 仅限受信环境使用，开启后 Agent 将拥有最大自由度
+          {{ t('settings.goatWarning') }}
         </p>
       </div>
       <n-checkbox v-model:checked="goatConfirmChecked">
-        我已了解风险，确认开启梭哈模式
+        {{ t('settings.goatConfirmCheckbox') }}
       </n-checkbox>
       <template #footer>
         <div style="display:flex; justify-content:flex-end; gap:10px">
-          <n-button @click="showGoatConfirm = false">取消</n-button>
+          <n-button @click="showGoatConfirm = false">{{ t('cancel') }}</n-button>
           <n-button type="warning" :disabled="!goatConfirmChecked" @click="confirmGoatMode">
-            确认开启
+            {{ t('settings.goatConfirmBtn') }}
           </n-button>
         </div>
       </template>

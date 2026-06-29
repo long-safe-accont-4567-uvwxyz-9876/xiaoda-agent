@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-#  Nahida Agent — Build Release Script
+#  Xiaoda Agent — Build Release Script
 #  Builds a distributable package for the current platform.
 # =============================================================================
 
@@ -87,7 +87,7 @@ do_build() {
     arch="${platform##*-}"
 
     echo ""
-    echo "  $(bold "Nahida Agent — Build Release")"
+    echo "  $(bold "Xiaoda Agent — Build Release")"
     echo ""
     info "Version:   $version"
     info "Platform:  $platform"
@@ -168,9 +168,9 @@ do_build() {
 
             local nsis_file="$PROJECT_ROOT/installer.nsi"
             cat > "$nsis_file" <<NSIS_EOF
-!define PRODUCT_NAME "Nahida Agent"
+!define PRODUCT_NAME "Xiaoda Agent"
 !define PRODUCT_VERSION "$version"
-!define PRODUCT_PUBLISHER "Nahida Agent Team"
+!define PRODUCT_PUBLISHER "Xiaoda Agent Team"
 
 Name "\${PRODUCT_NAME} \${PRODUCT_VERSION}"
 OutFile "$output_dir/$exe_name"

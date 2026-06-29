@@ -6,6 +6,7 @@ import DendroEmblem from '../components/fx/DendroEmblem.vue'
 import KeyAccordion, { type TestStatus } from '../components/setup/KeyAccordion.vue'
 import { api, getSetupVersion } from '../api'
 import { useAuthStore } from '../stores/auth'
+import { t } from '../i18n'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -209,7 +210,7 @@ async function handleSave() {
 
         <div class="setup-header">
           <DendroEmblem :size="84" spin />
-          <h1>Nahida Agent · 配置向导</h1>
+          <h1>{{ t('setup.title') }}</h1>
           <p class="subtitle">初次见面，请多指教</p>
           <p class="version-tag">v{{ version }}</p>
         </div>

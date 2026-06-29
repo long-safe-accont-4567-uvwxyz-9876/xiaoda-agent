@@ -1,4 +1,4 @@
-"""纳西妲 AI Agent 钩子系统
+"""小妲 AI Agent 钩子系统
 
 借鉴 ECC (Everything Claude Code) 的 Hooks 系统，
 实现 PreToolUse / PostToolUse / PostResponse 钩子机制，

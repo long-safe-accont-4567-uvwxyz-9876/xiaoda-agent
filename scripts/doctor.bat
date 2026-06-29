@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 chcp 65001 >nul
 
 :: ============================================
-::   Nahida Agent - Doctor Self-Check
+::   Xiaoda Agent - Doctor Self-Check
 ::   一键自检脚本 (零 API 调用, <2s)
 ::   双击运行即可
 :: ============================================
@@ -11,7 +11,7 @@ chcp 65001 >nul
 :: Banner
 echo.
 echo   ==========================================
-echo   ^|   Nahida Agent Doctor Self-Check       ^|
+echo   ^|   Xiaoda Agent Doctor Self-Check       ^|
 echo   ^|   零 API 调用, 2 秒内完成              ^|
 echo   ==========================================
 echo.
@@ -58,7 +58,7 @@ if defined EXE_PATH (
             echo   [ERROR] 未找到 xiaoda-agent.exe 也未找到 python
             echo.
             echo   请确认:
-            echo     1. 已通过安装程序安装 Nahida Agent
+            echo     1. 已通过安装程序安装 Xiaoda Agent
             echo     2. 或在开发环境运行 (需要 python)
             echo.
             pause

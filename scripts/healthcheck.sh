@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "=== 纳西妲 AI Agent 健康检查 ==="
+echo "=== 小妲 AI Agent 健康检查 ==="
 echo ""
 
 echo "[1] KIOXIA U盘挂载"

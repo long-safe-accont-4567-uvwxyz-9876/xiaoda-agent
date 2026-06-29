@@ -82,7 +82,7 @@ class NahidaAcpServer:
                 },
                 "agentInfo": {
                     "name": "nahida",
-                    "title": "纳西妲 AI Agent",
+                    "title": "小妲 AI Agent",
                     "version": "1.0.0"
                 },
                 "authMethods": []

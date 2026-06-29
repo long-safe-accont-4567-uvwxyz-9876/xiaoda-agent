@@ -1,4 +1,4 @@
-# Nahida Agent RAG 优化 Spec
+# Xiaoda Agent RAG 优化 Spec
 
 > 基于 SiliconFlow BAAI/bge-reranker-v2-m3 的全链路检索增强方案  
 > 版本: v1.1 | 日期: 2026-06-17 | 作者: 纳西妲 🌿

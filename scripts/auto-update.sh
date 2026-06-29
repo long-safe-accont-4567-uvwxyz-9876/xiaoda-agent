@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-#  Nahida Agent — Auto-Update Script
+#  Xiaoda Agent — Auto-Update Script
 #  检查 GitHub Release 最新版本，自动下载更新
 # =============================================================================
 set -euo pipefail

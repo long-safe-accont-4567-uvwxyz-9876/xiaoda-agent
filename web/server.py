@@ -334,7 +334,7 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Nahida Agent WebUI", version="0.3.98", lifespan=lifespan)
+    app = FastAPI(title="Xiaoda Agent WebUI", version="0.3.98", lifespan=lifespan)
 
     # 速率限制中间件（三级: 全局/用户/写端点, 防 DDoS/滥用）
     # 在路由之前注册, 尽早拦截超限请求; 限制值可通过环境变量覆盖

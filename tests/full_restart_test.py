@@ -708,7 +708,7 @@ async def phase7_concurrent_edge():
 # ============================================================
 async def main():
     print("\n" + "=" * 60)
-    print("纳西妲 AI Agent 完全重启全面功能测试")
+    print("小妲 AI Agent 完全重启全面功能测试")
     print("=" * 60)
 
     # Phase 1: 初始化

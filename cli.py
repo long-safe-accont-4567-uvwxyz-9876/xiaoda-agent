@@ -244,7 +244,7 @@ class CLIInterface:
         print(f"  {grass_l}  {_C.DGREEN}{_C.BOLD}{slogan_padded}{_C.RST}  {grass_r}")
         print()
         print(f"  {_C.DIM}+------------------------------------------------+{_C.RST}")
-        print(f"  {_C.DIM}|{_C.RST}  {_C.LGREEN}纳西妲 AI Agent{_C.RST}  ·  {_C.LEAF}{model_id}{_C.RST}  ·  {_C.DGREEN}白草净华{_C.RST}  {_C.DIM}|{_C.RST}")
+        print(f"  {_C.DIM}|{_C.RST}  {_C.LGREEN}小妲 AI Agent{_C.RST}  ·  {_C.LEAF}{model_id}{_C.RST}  ·  {_C.DGREEN}白草净华{_C.RST}  {_C.DIM}|{_C.RST}")
         print(f"  {_C.DIM}+------------------------------------------------+{_C.RST}")
         print()
         print(f"  {_C.CYAN}💬 直接输入消息跟纳西妲聊天{_C.RST}")

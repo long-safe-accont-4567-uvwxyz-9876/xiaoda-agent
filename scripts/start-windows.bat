@@ -2,7 +2,7 @@
 setlocal
 
 :: ============================================
-::   Nahida Agent - Windows Launcher
+::   Xiaoda Agent - Windows Launcher
 :: ============================================
 
 :: Handle Ctrl+C gracefully
@@ -23,7 +23,7 @@ goto :eof
 :: Banner
 echo.
 echo   ================================
-echo   =     Nahida Agent            =
+echo   =     Xiaoda Agent            =
 echo   ================================
 echo.
 
@@ -56,7 +56,7 @@ cd /d "%~dp0"
 set PYTHONIOENCODING=utf-8
 
 :: Start in Web mode by default (first-run will auto-trigger setup wizard)
-echo   Starting Nahida Agent...
+echo   Starting Xiaoda Agent...
 echo.
 
 :: Launch browser once server is ready (background polling)
@@ -72,7 +72,7 @@ if exist "%~dp0open-browser.ps1" (
 :: Check exit code
 if %errorlevel% neq 0 (
     echo.
-    echo   [ERROR] Nahida Agent exited with code %errorlevel%
+    echo   [ERROR] Xiaoda Agent exited with code %errorlevel%
 )
 
 :pause_exit

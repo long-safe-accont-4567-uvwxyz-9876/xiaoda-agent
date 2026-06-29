@@ -30,7 +30,7 @@
 
 ## 1. 项目概述与目标
 
-为现有的纳西妲 AI Agent（`/home/orangepi/ai-agent/`，Python 3.11，运行于 Orange Pi ARM64）构建一套**生产级 Web UI + HTTP/WebSocket API 网关**，替代现有的极简 Streamlit 页面（`web/app.py`，实现后废弃）。
+为现有的小妲 AI Agent（`/home/orangepi/ai-agent/`，Python 3.11，运行于 Orange Pi ARM64）构建一套**生产级 Web UI + HTTP/WebSocket API 网关**，替代现有的极简 Streamlit 页面（`web/app.py`，实现后废弃）。
 
 ### 1.1 必须实现的用户需求（原文需求逐条编号，后文以 R1~R14 引用）
 

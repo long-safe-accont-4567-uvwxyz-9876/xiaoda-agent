@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-纳西妲 AI Agent：运行在 Orange Pi 4 Pro（ARM64, Debian 12）上的多 Agent AI 助手。以《原神》纳西妲为人格主体，下辖 4 个内置子代理（keli 可莉/yinlang 银狼/xilian 昔涟/nike 尼可）。交互通道：QQ Bot、Web UI（Vue 3 + FastAPI）、CLI。
+小妲 AI Agent：运行在 Orange Pi 4 Pro（ARM64, Debian 12）上的多 Agent AI 助手。以《原神》纳西妲为人格主体，下辖 4 个内置子代理（keli 可莉/yinlang 银狼/xilian 昔涟/nike 尼可）。交互通道：QQ Bot、Web UI（Vue 3 + FastAPI）、CLI。
 
 - Python 3.11 + asyncio + aiosqlite，虚拟环境 `.venv`
 - LLM：小米 MiMo（mimo-v2.5 / -pro），降级链见 `model_router.py` 的 `ROUTE_TABLE`/`FALLBACK_ROUTE`

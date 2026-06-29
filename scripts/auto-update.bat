@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 :: ============================================
-::   Nahida Agent - Auto-Update Script
+::   Xiaoda Agent - Auto-Update Script
 ::   Checks GitHub Release for new versions
 :: ============================================
 

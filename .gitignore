@@ -28,3 +28,4 @@ dist/
 web/dist/
 botpy.log.*
 docs/juejin-article.md
+market/.cache

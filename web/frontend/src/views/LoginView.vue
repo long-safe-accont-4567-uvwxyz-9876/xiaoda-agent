@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import { api } from '../api'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import DendroEmblem from '../components/fx/DendroEmblem.vue'
+import { t } from '../i18n'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -67,7 +68,7 @@ async function handleLogin() {
     }
     router.replace('/')
   } catch (e: any) {
-    error.value = e.message || '登录失败'
+    error.value = e.message || t('login.loginFailed')
   } finally {
     loading.value = false
   }
@@ -83,8 +84,8 @@ async function handleLogin() {
 
         <div class="login-header">
           <DendroEmblem :size="84" spin />
-          <h1>Nahida Agent</h1>
-          <p class="subtitle">智慧助手在此恭候</p>
+          <h1>{{ t('login.title') }}</h1>
+          <p class="subtitle">{{ t('login.subtitle') }}</p>
         </div>
 
         <form @submit.prevent="handleLogin" class="login-form">
@@ -93,14 +94,14 @@ async function handleLogin() {
             v-model="password"
             type="password"
             class="dendro-input"
-            placeholder="输入访问密码…"
+            :placeholder="t('login.passwordPlaceholder')"
             :disabled="loading"
             autofocus
           />
-          <p v-if="noPassword" class="hint-text">未设置密码，点击按钮直接进入</p>
+          <p v-if="noPassword" class="hint-text">{{ t('login.noPassword') }}</p>
           <p v-if="error" class="error-text">{{ error }}</p>
           <button type="submit" class="dendro-btn login-btn" :disabled="loading">
-            {{ loading ? '正在连接…' : '进入系统' }}
+            {{ loading ? t('login.connecting') : t('login.enter') }}
           </button>
         </form>
       </div>

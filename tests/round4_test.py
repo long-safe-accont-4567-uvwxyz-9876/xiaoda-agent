@@ -410,7 +410,7 @@ async def test_instinct_db():
 # ============================================================
 async def main():
     print("\n" + "=" * 60)
-    print("纳西妲 AI Agent 第四轮深度测试")
+    print("小妲 AI Agent 第四轮深度测试")
     print("=" * 60)
 
     all_bugs = []

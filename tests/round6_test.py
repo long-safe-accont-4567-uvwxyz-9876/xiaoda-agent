@@ -448,7 +448,7 @@ async def test_concurrent_operations():
 
 async def main():
     print("\n" + "=" * 60)
-    print("纳西妲 AI Agent 第六轮深度测试")
+    print("小妲 AI Agent 第六轮深度测试")
     print("=" * 60)
 
     all_bugs = []

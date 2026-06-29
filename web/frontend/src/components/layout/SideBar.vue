@@ -1,23 +1,24 @@
 <script setup lang="ts">
 import SumeruIcon from '../fx/SumeruIcon.vue'
 import DendroEmblem from '../fx/DendroEmblem.vue'
+import { t, state as i18nState } from '../../i18n'
 
 defineProps<{ expanded: boolean }>()
 const emit = defineEmits<{ 'update:expanded': [value: boolean] }>()
 
 const navItems = [
-  { icon: 'chat', label: '对话', route: '/' },
-  { icon: 'agents', label: 'Agent 管理', route: '/settings/agents' },
-  { icon: 'models', label: '模型与凭证', route: '/settings/models' },
-  { icon: 'tools', label: 'Skills 工具', route: '/settings/tools' },
-  { icon: 'mcp', label: 'MCP 服务', route: '/settings/mcp' },
-  { icon: 'plugins', label: '插件管理', route: '/settings/plugins' },
-  { icon: 'insight', label: '内在世界', route: '/insight' },
-  { icon: 'schedule', label: '定时与问候', route: '/schedule' },
-  { icon: 'media', label: '媒体工坊', route: '/media' },
-  { icon: 'health', label: '测试中心', route: '/health' },
-  { icon: 'dashboard', label: '仪表盘', route: '/dashboard' },
-  { icon: 'settings', label: '系统设置', route: '/settings/system' },
+  { icon: 'chat', labelKey: 'nav.chat', route: '/' },
+  { icon: 'agents', labelKey: 'nav.agents', route: '/settings/agents' },
+  { icon: 'models', labelKey: 'nav.models', route: '/settings/models' },
+  { icon: 'tools', labelKey: 'nav.tools', route: '/settings/tools' },
+  { icon: 'mcp', labelKey: 'nav.mcp', route: '/settings/mcp' },
+  { icon: 'plugins', labelKey: 'nav.plugins', route: '/settings/plugins' },
+  { icon: 'insight', labelKey: 'nav.insight', route: '/insight' },
+  { icon: 'schedule', labelKey: 'nav.schedule', route: '/schedule' },
+  { icon: 'media', labelKey: 'nav.media', route: '/media' },
+  { icon: 'health', labelKey: 'nav.health', route: '/health' },
+  { icon: 'dashboard', labelKey: 'nav.dashboard', route: '/dashboard' },
+  { icon: 'settings', labelKey: 'nav.settings', route: '/settings/system' },
 ]
 </script>
 
@@ -28,7 +29,7 @@ const navItems = [
     <div class="sidebar-inner">
       <div class="sidebar-logo">
         <DendroEmblem :size="30" spin />
-        <span v-if="expanded" class="logo-text">Nahida Agent</span>
+        <span v-if="expanded" class="logo-text">{{ t('brand') }}</span>
       </div>
 
       <div class="nav-items">
@@ -37,16 +38,16 @@ const navItems = [
           :key="item.route"
           :to="item.route"
           class="nav-item"
-          :title="item.label"
+          :title="t(item.labelKey)"
         >
           <span class="nav-icon"><SumeruIcon :name="item.icon" :size="20" /></span>
-          <span v-if="expanded" class="nav-label">{{ item.label }}</span>
+          <span v-if="expanded" class="nav-label">{{ t(item.labelKey) }}</span>
           <span class="nav-glow"></span>
         </router-link>
       </div>
 
       <div class="sidebar-foot" v-if="expanded">
-        <span class="foot-text">「知识是智慧的种子」</span>
+        <span class="foot-text">{{ t('tagline') }}</span>
       </div>
     </div>
   </nav>
