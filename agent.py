@@ -1,3 +1,4 @@
+from typing import Any
 import os
 import sys
 import argparse
@@ -30,14 +31,27 @@ except Exception as e:
     raise
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Nahida AI Agent")
+    subparsers = parser.add_subparsers(dest="command")
+
+    # doctor 子命令: xiaoda-agent doctor [--json] [--fix]
+    doctor_parser = subparsers.add_parser("doctor", help="运行自检 (零 API 调用, <2s)")
+    doctor_parser.add_argument("--json", action="store_true", help="JSON 格式输出")
+    doctor_parser.add_argument("--fix", action="store_true", help="自动修复可修复的问题")
+
+    # 默认模式参数
     parser.add_argument("--web", action="store_true", help="启动 Web UI 模式")
     parser.add_argument("--desktop", action="store_true", help="启动桌面模式（pywebview 原生窗口）")
     parser.add_argument("--port", type=int, default=int(os.getenv("WEBUI_PORT", "8082")), help="Web UI 端口")
     parser.add_argument("--host", type=str, default=os.getenv("WEBUI_HOST", "0.0.0.0"), help="Web UI 监听地址")
     parser.add_argument("--setup", action="store_true", help="运行配置向导")
     args = parser.parse_args()
+
+    # doctor 子命令: 零 API 调用自检, <2s 完成
+    if args.command == "doctor":
+        from core.doctor import run_doctor
+        sys.exit(run_doctor(json_output=args.json, auto_fix=args.fix))
 
     # 首次启动自动触发配置向导
     if args.setup:
@@ -79,13 +93,13 @@ def main():
         _run_cli()
 
 
-def _run_cli():
+def _run_cli() -> None:
     from cli import CLIInterface
     cli = CLIInterface()
     cli.run()
 
 
-def _get_lan_addresses():
+def _get_lan_addresses() -> list:
     """检测本机主网卡的局域网 IPv4 地址（不产生实际网络流量）。"""
     import socket
     try:
@@ -101,7 +115,7 @@ def _get_lan_addresses():
     return []
 
 
-def _run_web(host: str, port: int):
+def _run_web(host: str, port: int) -> None:
     import socket
     import uvicorn
     from utils.logging_config import setup_logging
@@ -159,21 +173,11 @@ def _run_web(host: str, port: int):
     )
 
 
-def _run_desktop(host: str, port: int):
-    """桌面模式：pywebview 包装 WebUI，带启动动画"""
-    # 控制台已在文件顶部隐藏，此处无需重复
-
-    import threading
+def _wait_for_port_available(host: str, port: int) -> None:
+    """端口冲突检测：等待旧进程释放端口，最多 60s。"""
     import socket
     import time
-    import urllib.request
-    from utils.logging_config import setup_logging
-    setup_logging()
-
     from loguru import logger
-    logger.info("agent.desktop.start", port=port)
-
-    # 端口冲突检测（复用 _run_web 的逻辑）
     for attempt in range(30):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -190,26 +194,32 @@ def _run_desktop(host: str, port: int):
                 logger.error(f"agent.port_still_in_use port={port}, giving up after 60s")
                 sys.exit(1)
 
-    # 导入 web.server
+
+def _import_web_server_safe() -> Any:
+    """导入 web.server，失败时写入 crash.log 后重新抛出。"""
+    from loguru import logger
     try:
         from web.server import app
-    except Exception as e:
+        return app
+    except Exception:
         import traceback, pathlib
         log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent" / "crash.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(f"Failed to import web.server:\n{traceback.format_exc()}", encoding="utf-8")
         raise
 
-    # 后台线程启动 uvicorn
-    import uvicorn
-    server_config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
-    server = uvicorn.Server(server_config)
-    server_thread = threading.Thread(target=server.run, daemon=True)
-    server_thread.start()
 
-    # 桌面模式：用独立 HTTP 服务器提供 splash（避免 file:// + http:// 跨域问题）
-    # splash 中有 iframe 预加载 WebUI，InkReveal 完成后显示 iframe，实现无缝衔接
-    def _splash_dir():
+def _start_splash_server(port: int) -> str:
+    """启动独立 HTTP 服务器提供 splash 页面，返回 splash_url。
+
+    端口被占用时回退到 file:// 协议。
+    """
+    import threading
+    import http.server
+    import functools
+    from loguru import logger
+
+    def _splash_dir() -> Any:
         if getattr(sys, 'frozen', False):
             _base = os.path.dirname(sys.executable)
             for p in [os.path.join(_base, '_internal', 'web', 'splash'),
@@ -218,22 +228,79 @@ def _run_desktop(host: str, port: int):
                     return p
         return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web', 'splash')
 
-    import http.server, functools
     _splash_port = 18089
     _handler_cls = functools.partial(http.server.SimpleHTTPRequestHandler, directory=_splash_dir())
     try:
         _splash_httpd = http.server.HTTPServer(("127.0.0.1", _splash_port), _handler_cls)
         threading.Thread(target=_splash_httpd.serve_forever, daemon=True).start()
-        splash_url = f'http://127.0.0.1:{_splash_port}/splash.html#{port}'
+        return f'http://127.0.0.1:{_splash_port}/splash.html#{port}'
     except OSError:
         logger.warning(f"Splash HTTP 端口 {_splash_port} 被占用, 回退到 file://")
-        splash_url = 'file://' + os.path.join(_splash_dir(), 'splash.html') + '#' + str(port)
+        return 'file://' + os.path.join(_splash_dir(), 'splash.html') + '#' + str(port)
 
+
+def _wait_for_server_ready(window: Any, port: int) -> None:
+    """后台线程：等待 WebUI 就绪后调用 splash.js 的 onServerReady。"""
+    import time
+    import urllib.request
+    from loguru import logger
+
+    for _ in range(120):
+        try:
+            urllib.request.urlopen(f"http://localhost:{port}/", timeout=2)
+            break
+        except Exception:
+            time.sleep(1)
+    else:
+        window.evaluate_js("if(typeof onServerTimeout==='function')onServerTimeout();")
+        return
+
+    # WebUI 就绪，等待 splash 页面加载完成后调用 onServerReady
+    time.sleep(1.5)
+    for attempt in range(5):
+        try:
+            result = window.evaluate_js(
+                "typeof onServerReady==='function' ? (onServerReady(), 'ok') : 'wait'"
+            )
+            if result and 'ok' in str(result):
+                logger.info("splash.onServerReady() triggered")
+                return
+        except Exception as e:
+            logger.warning(f"evaluate_js attempt {attempt}: {e}")
+        time.sleep(1)
+    logger.warning("splash.onServerReady() failed after retries")
+
+
+def _run_desktop(host: str, port: int) -> None:
+    """桌面模式：pywebview 包装 WebUI，带启动动画"""
+    # 控制台已在文件顶部隐藏，此处无需重复
+    import threading
+    from utils.logging_config import setup_logging
+    setup_logging()
+
+    from loguru import logger
+    logger.info("agent.desktop.start", port=port)
+
+    # 1. 端口冲突检测
+    _wait_for_port_available(host, port)
+
+    # 2. 导入 web.server
+    app = _import_web_server_safe()
+
+    # 3. 后台线程启动 uvicorn
+    import uvicorn
+    server_config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
+    server = uvicorn.Server(server_config)
+    server_thread = threading.Thread(target=server.run, daemon=True)
+    server_thread.start()
+
+    # 4. 启动 splash 独立 HTTP 服务器
+    splash_url = _start_splash_server(port)
     webui_url = f"http://localhost:{port}"
-
     logger.info(f"Desktop splash: {splash_url}")
     logger.info(f"Desktop WebUI: {webui_url}")
 
+    # 5. 创建 pywebview 窗口
     import webview
     window = webview.create_window(
         title="Xiaoda Agent",
@@ -244,37 +311,13 @@ def _run_desktop(host: str, port: int):
         text_select=False,
     )
 
-    # 后台线程：等待服务就绪后通知 splash.js 显示进入按钮
-    def wait_for_server():
-        for _ in range(120):
-            try:
-                urllib.request.urlopen(f"http://localhost:{port}/", timeout=2)
-                break
-            except Exception:
-                time.sleep(1)
-        else:
-            window.evaluate_js("if(typeof onServerTimeout==='function')onServerTimeout();")
-            return
-
-        # WebUI 就绪，等待 splash 页面加载完成后调用 onServerReady
-        time.sleep(1.5)
-        for attempt in range(5):
-            try:
-                result = window.evaluate_js(
-                    "typeof onServerReady==='function' ? (onServerReady(), 'ok') : 'wait'"
-                )
-                if result and 'ok' in str(result):
-                    logger.info("splash.onServerReady() triggered")
-                    return
-            except Exception as e:
-                logger.warning(f"evaluate_js attempt {attempt}: {e}")
-            time.sleep(1)
-        logger.warning("splash.onServerReady() failed after retries")
-
-    checker_thread = threading.Thread(target=wait_for_server, daemon=True)
+    # 6. 后台线程：等待服务就绪后通知 splash.js 显示进入按钮
+    checker_thread = threading.Thread(
+        target=_wait_for_server_ready, args=(window, port), daemon=True
+    )
     checker_thread.start()
 
-    # 启动 pywebview（主线程阻塞）
+    # 7. 启动 pywebview（主线程阻塞）
     webview.start(debug=False)
 
     # 窗口关闭后退出进程

@@ -32,5 +32,13 @@
   "memory_scope": null,
   "background": false,
   "wallpaper": "/assets/wallpapers/yinlang.jpg",
+  "allowed_paths": [
+    "tools/hardware_tools.py",
+    "tools/system_tools.py"
+  ],
+  "forbidden_paths": [
+    "*.env",
+    "security/*"
+  ],
   "_saved_at": 1782406874.9641452
 }

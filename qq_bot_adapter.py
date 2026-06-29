@@ -1,3 +1,4 @@
+from typing import Any
 import os
 import sys
 import ssl
@@ -5,6 +6,9 @@ import asyncio
 import base64
 import threading
 import time
+import random
+import re
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -26,12 +30,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agent_core import AgentCore, ProcessResult
 from config import AGENT_CONFIG
+from security.human_approval import (
+    IMApprovalChannel, ApprovalRequest, ApprovalStatus,
+    RiskLevel, HIGH_RISK_OPERATIONS,
+)
 from emotion.nudge_engine import NudgeEngine
 from utils.text_utils import encode_image_to_base64
 
 _original_is_system_event = BotWebSocket._is_system_event
 
-async def _patched_is_system_event(self, message_event, ws):
+async def _patched_is_system_event(self, message_event: Any, ws: Any) -> Any:
     event_op = message_event.get("op")
     if event_op == BotWebSocket.WS_HEARTBEAT_ACK:
         self._last_heartbeat_ack = asyncio.get_running_loop().time()
@@ -41,7 +49,7 @@ BotWebSocket._is_system_event = _patched_is_system_event
 
 _original_send_heart = BotWebSocket._send_heart
 
-async def _patched_send_heart(self, interval):
+async def _patched_send_heart(self, interval: Any) -> None:
     _log = __import__("botpy.logging", fromlist=["get_logger"]).get_logger()
     _log.info("[botpy] 心跳维持启动（带超时检测）...")
     self._last_heartbeat_ack = asyncio.get_running_loop().time()
@@ -81,7 +89,7 @@ from botpy.client import Client as _BotpyClient
 _original_pool_init = _BotpyClient._pool_init
 
 
-async def _patched_pool_init(self, token, session_interval):
+async def _patched_pool_init(self, token: Any, session_interval: Any) -> Any:
     _botpy_log = __import__("botpy.logging", fromlist=["get_logger"]).get_logger()
     for i in range(self._ws_ap["shards"]):
         session = {
@@ -96,7 +104,7 @@ async def _patched_pool_init(self, token, session_interval):
 
     loop = self._connection.loop
 
-    def _loop_exception_handler(_loop, context):
+    def _loop_exception_handler(_loop: Any, context: Any) -> None:
         _loop.default_exception_handler(context)
         exception = context.get("exception")
         if isinstance(exception, ZeroDivisionError):
@@ -169,11 +177,16 @@ async def _patched_pool_init(self, token, session_interval):
 
 _BotpyClient._pool_init = _patched_pool_init
 
-APP_ID = os.getenv("QQBOT_APP_ID")
-APP_SECRET = os.getenv("QQBOT_APP_SECRET")
+APP_ID = os.getenv("QQBOT_APP_ID", "")
+APP_SECRET = os.getenv("QQBOT_APP_SECRET", "")
 
 _qq_cfg = AGENT_CONFIG.get("qq_bot", {})
 MAX_REPLY_LEN = _qq_cfg.get("max_reply_length", 8000)
+
+# HITL: Agent 输出中嵌入的高危操作标记，QQ 适配器拦截后触发两段式确认
+_HIGH_RISK_OP_MARKER = "__HIGH_RISK_OP__:"
+_HIGH_RISK_OP_RE = re.compile(
+    r"__HIGH_RISK_OP__:\s*(\w+)(?:\s+(.*))?\s*$", re.MULTILINE)
 
 _msg_seq_counter = int(time.time() * 1000) % (10 ** 8)
 _msg_seq_lock = threading.Lock()
@@ -272,7 +285,7 @@ async def run_qq_bot(agent: "AgentCore", *, sandbox: bool = False) -> None:
 
 
 class AIQQBot(botpy.Client):
-    def __init__(self, *args, agent: "AgentCore | None" = None, **kwargs):
+    def __init__(self, *args: Any, agent: "AgentCore | None" = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         # 支持注入共享的 AgentCore（与 WebUI 同进程同实例），未注入则自建（独立运行模式）
         self.agent = agent or AgentCore()
@@ -284,6 +297,13 @@ class AIQQBot(botpy.Client):
         self._agent_initialized = agent is not None and getattr(agent, "_initialized", False)
         # 最近一个私聊用户 openid，主动消息（问候同步）发给该用户
         self._last_c2c_openid: str = os.getenv("NUDGE_USER_OPENID", "")
+        # HITL: 高危操作两段式确认（默认开启，QQ_HITL_ENABLED=false 关闭）
+        self.hitl_enabled = os.getenv("QQ_HITL_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+        self.im_approval = IMApprovalChannel(
+            send_callback=self._send_approval_message,
+            timeout=float(os.getenv("QQ_HITL_TIMEOUT", "60")),
+        )
+        self._approval_message_ctx: Any = None  # 当前审批消息上下文（per-request 设置）
         global _ACTIVE_BOT
         _ACTIVE_BOT = self
 
@@ -300,14 +320,14 @@ class AIQQBot(botpy.Client):
         return False
 
     @staticmethod
-    def _get_config_service():
+    def _get_config_service() -> Any:
         try:
             from web.config_service import get_config_service
             return get_config_service()
         except Exception:
             return None
 
-    async def on_ready(self):
+    async def on_ready(self) -> None:
         logger.info("qq_bot.connected", app_id=APP_ID)
 
         if not self._agent_initialized:
@@ -341,17 +361,69 @@ class AIQQBot(botpy.Client):
         if self.nudge_engine:
             self.nudge_engine.poke()
 
-    async def on_error(self, error):
+    async def on_error(self, error: Any) -> None:
         logger.error("qq_bot.ws_error", error=str(error)[:200])
 
-    async def on_close(self, close_status_code, close_msg):
+    async def on_close(self, close_status_code: Any, close_msg: Any) -> None:
         logger.warning("qq_bot.ws_closed", code=close_status_code, msg=str(close_msg)[:100])
         # 注意：不在 on_close 中调用 agent.shutdown()
         # 因为 on_close 在临时断开时也会触发，而外层重连循环会复用同一实例
         # shutdown 会释放数据库等资源，导致重连后 Agent 不可用
         # shutdown 应在程序真正退出时调用
 
-    async def _process_message_attachments(self, message) -> tuple[list[dict], str]:
+    async def _send_approval_message(self, text: str) -> None:
+        """通过当前消息上下文发送审批确认请求消息（供 IMApprovalChannel 回调）。"""
+        msg = self._approval_message_ctx
+        if msg is None:
+            logger.warning("qq_bot.approval_no_message_context text=%s", text[:80])
+            return
+        try:
+            await msg.reply(content=text, msg_seq=_next_msg_seq())
+        except Exception as e:
+            logger.warning("qq_bot.approval_send_failed error=%s", str(e)[:200])
+
+    async def _check_high_risk_approval(self, result: ProcessResult, message: Any,
+                                          user_id: str, is_owner: bool) -> ProcessResult:
+        """检查 Agent 输出是否包含高危操作标记，若是则触发两段式确认。
+
+        - 检测 `__HIGH_RISK_OP__: <operation> <args>` 标记
+        - 调用 IMApprovalChannel.request_approval 等待用户确认
+        - 确认通过：去除标记后继续发送回复
+        - 取消/超时：替换回复为"已取消"
+        """
+        if not self.hitl_enabled:
+            return result
+        reply = result.reply or ""
+        if _HIGH_RISK_OP_MARKER not in reply:
+            return result
+        match = _HIGH_RISK_OP_RE.search(reply)
+        if not match:
+            return result
+        operation = match.group(1)
+        args_str = (match.group(2) or "").strip()
+        risk_level = HIGH_RISK_OPERATIONS.get(operation, RiskLevel.HIGH)
+        req = ApprovalRequest(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            operation=operation,
+            args={"raw": args_str},
+            risk_level=risk_level,
+            reason=f"High-risk operation: {operation}",
+        )
+        self._approval_message_ctx = message
+        try:
+            status = await self.im_approval.request_approval(req, is_owner=is_owner)
+        finally:
+            self._approval_message_ctx = None
+        if status in (ApprovalStatus.APPROVED, ApprovalStatus.AUTO_APPROVED):
+            # 确认通过：去除标记后继续发送
+            result.reply = _HIGH_RISK_OP_RE.sub("", reply).strip()
+        else:
+            # 取消或超时
+            result.reply = "⚠️ 高危操作已取消"
+        return result
+
+    async def _process_message_attachments(self, message: Any) -> tuple[list[dict], str]:
         """处理消息中的附件，返回图片数据和附件描述文本。
 
         遍历消息附件，接收文件、编码图片为 base64，生成附件描述文本。
@@ -399,7 +471,7 @@ class AIQQBot(botpy.Client):
             attachment_info = " ".join(str(p) for p in parts)
         return image_data, attachment_info
 
-    async def on_group_add_robot(self, event):
+    async def on_group_add_robot(self, event: Any) -> None:
         """机器人被拉入群时，自动将拉入者绑定为主人。"""
         op_openid = getattr(event, "op_member_openid", "")
         group_openid = getattr(event, "group_openid", "")
@@ -409,7 +481,7 @@ class AIQQBot(botpy.Client):
         logger.info("qq_bot.group_add_robot", group=group_openid, op_openid=op_openid)
         _save_master_openid(op_openid)
 
-    async def on_c2c_message_create(self, message: C2CMessage):
+    async def on_c2c_message_create(self, message: C2CMessage) -> None:
         content = (getattr(message, 'content', None) or "").strip()
 
         image_data, attachment_info = await self._process_message_attachments(message)
@@ -461,10 +533,16 @@ class AIQQBot(botpy.Client):
             await message.reply(content=f"你的 OpenID 是：\n{user_openid}\n\n在 Setup 配置页面的「主人 QQ OpenID」填入此值即可绑定主人身份。", msg_seq=_next_msg_seq())
             return
 
+        # HITL: 若用户有待审批请求，先尝试匹配回复（"确认"/"取消"），匹配则跳过正常处理
+        if self.hitl_enabled:
+            approval_user = user_openid or user_id
+            if await self.im_approval.handle_user_reply(approval_user, content):
+                return
+
         try:
             await message.reply(content="纳西妲收到啦，正在想～🌿", msg_seq=_next_msg_seq())
 
-            async def status_notify(msg: str):
+            async def status_notify(msg: str) -> None:
                 await message.reply(content=msg, msg_seq=_next_msg_seq())
 
             result = await asyncio.wait_for(
@@ -475,6 +553,9 @@ class AIQQBot(botpy.Client):
                                   is_master=is_master),
                 timeout=180,  # 复杂任务（多轮工具调用+重试）需要更长时间，180s 兜底
             )
+            # HITL: 高危操作两段式确认（检测 __HIGH_RISK_OP__ 标记）
+            result = await self._check_high_risk_approval(
+                result, message, user_openid or user_id, is_master)
             if result.reply:
                 await self._send_reply_with_sticker(message, result)
         except asyncio.TimeoutError:
@@ -490,7 +571,7 @@ class AIQQBot(botpy.Client):
             except Exception as e:
                 logger.error(f"qq_bot.c2c_fallback_reply_failed: {e}")
 
-    async def on_group_at_message_create(self, message: GroupMessage):
+    async def on_group_at_message_create(self, message: GroupMessage) -> None:
         try:
             content = (getattr(message, 'content', None) or "").strip()
 
@@ -527,6 +608,12 @@ class AIQQBot(botpy.Client):
                 await message.reply(content=f"你的 OpenID 是：\n{member_openid}\n\n在 Setup 配置页面的「主人 QQ OpenID」填入此值即可绑定主人身份。", msg_seq=_next_msg_seq())
                 return
 
+            # HITL: 若用户有待审批请求，先尝试匹配回复（"确认"/"取消"），匹配则跳过正常处理
+            if self.hitl_enabled:
+                approval_user = member_openid or user_id
+                if await self.im_approval.handle_user_reply(approval_user, content):
+                    return
+
             # 群聊被动回复有次数限制（5分钟内最多2次）
             # 先用 1 次被动回复发"收到啦"给用户即时反馈，剩余配额留给最终回复
             try:
@@ -534,7 +621,7 @@ class AIQQBot(botpy.Client):
             except Exception as _e:
                 logger.debug("qq_bot.ack_reply_failed", error=str(_e))
 
-            async def status_notify(msg: str):
+            async def status_notify(msg: str) -> None:
                 # 后续状态通知用主动消息，避免消耗被动回复配额
                 try:
                     await self.api.post_group_message(
@@ -553,6 +640,9 @@ class AIQQBot(botpy.Client):
                                   is_master=is_master),
                 timeout=180,  # 复杂任务（多轮工具调用+重试）需要更长时间，180s 兜底
             )
+            # HITL: 高危操作两段式确认（检测 __HIGH_RISK_OP__ 标记）
+            result = await self._check_high_risk_approval(
+                result, message, member_openid or user_id, is_master)
             if result.reply:
                 await self._send_reply_with_sticker(message, result)
         except asyncio.TimeoutError:
@@ -568,9 +658,9 @@ class AIQQBot(botpy.Client):
             except Exception as e2:
                 logger.error(f"qq_bot.group_fallback_reply_failed: {e2}")
 
-    async def _send_reply_with_media(self, message, reply: str,
+    async def _send_reply_with_media(self, message: Any, reply: str,
                                       image_path: Path | None = None,
-                                      image_url: str | None = None):
+                                      image_url: str | None = None) -> None:
         if not image_path and not image_url:
             await message.reply(content=reply, msg_seq=_next_msg_seq())
             return
@@ -632,7 +722,7 @@ class AIQQBot(botpy.Client):
 
         compressed_path: Path | None = None
         try:
-            def _read():
+            def _read() -> Any:
                 nonlocal compressed_path
                 # 图片类型且文件过大时压缩
                 path_to_upload = image_path
@@ -682,7 +772,7 @@ class AIQQBot(botpy.Client):
 
         compressed_path: Path | None = None
         try:
-            def _read():
+            def _read() -> Any:
                 nonlocal compressed_path
                 # 图片类型且文件过大时压缩
                 path_to_upload = image_path
@@ -787,46 +877,230 @@ class AIQQBot(botpy.Client):
         # 最终兜底：返回最小版本
         return tmp_path
 
-    async def _send_reply_with_sticker(self, message, result: ProcessResult):
+    def _split_text_for_streaming(self, text: str, chunk_size: int = 300) -> list[str]:
+        """将文本切片为流式发送的段。
+
+        - 短回复（< 400 字符）返回单片
+        - 长回复按 chunk_size 切片，避免切断 markdown 代码块和 URL
+        - chunk_size 默认 300，建议范围 200-400
+
+        Args:
+            text: 原始文本
+            chunk_size: 每片字符数，默认 300
+
+        Returns:
+            切片后的文本段列表
+        """
+        if not text:
+            return []
+        if len(text) < 400:
+            return [text]
+
+        segments: list[str] = []
+        pos = 0
+        text_len = len(text)
+        while pos < text_len:
+            end = min(pos + chunk_size, text_len)
+            if end >= text_len:
+                segments.append(text[pos:])
+                break
+            # 调整切片点：避免切断代码块和 URL
+            end = self._adjust_boundary_for_code_block(text, pos, end)
+            end = self._adjust_boundary_for_url(text, pos, end)
+            # 防止零长度段或回退
+            if end <= pos:
+                end = min(pos + chunk_size, text_len)
+            segments.append(text[pos:end])
+            pos = end
+        return segments
+
+    def _adjust_boundary_for_code_block(self, text: str, start: int, end: int) -> int:
+        """若切片点位于 markdown 代码块内部，向后调整到代码块结束。
+
+        通过统计 [start, end) 范围内的 ``` 数量判断是否在代码块内部。
+        若为奇数，表示切片点在代码块内部，需要向后查找下一个 ``` 并调整到其后。
+
+        Args:
+            text: 完整文本
+            start: 当前段起始位置
+            end: 原始切片点
+
+        Returns:
+            调整后的切片点
+        """
+        segment = text[start:end]
+        fence_count = segment.count('```')
+        if fence_count % 2 == 0:
+            return end  # 不在代码块内
+        # 在代码块内，找到下一个 ```
+        next_fence = text.find('```', end)
+        if next_fence == -1:
+            return len(text)  # 没有闭合，剩余全部作为一段
+        new_end = next_fence + 3
+        # 防止单段过大（超过 6000 字符则放弃调整）
+        if new_end - start > 6000:
+            return end
+        return new_end
+
+    def _adjust_boundary_for_url(self, text: str, start: int, end: int) -> int:
+        """若切片点位于 URL 中间，向后调整到 URL 结束。
+
+        在 end 之前的窗口内查找最近的 http:// 或 https://，
+        若 URL 延伸到 end 之后，则将 end 调整到 URL 结束位置。
+
+        Args:
+            text: 完整文本
+            start: 当前段起始位置
+            end: 原始切片点
+
+        Returns:
+            调整后的切片点
+        """
+        if end >= len(text):
+            return end
+        # 在 end 之前的窗口内查找最近的 http:// 或 https://
+        search_start = max(0, end - 200)
+        last_http = text.rfind('http://', search_start, end)
+        last_https = text.rfind('https://', search_start, end)
+        url_start = max(last_http, last_https)
+        if url_start == -1:
+            return end
+        # URL 结束位置：第一个空白或中英文标点
+        url_end = end
+        stop_chars = set(' \t\n\r，。；！？「」『』（）()【】[]<>「」')
+        while url_end < len(text) and text[url_end] not in stop_chars:
+            url_end += 1
+        # 防止单段过大
+        if url_end - start > 6000:
+            return end
+        return url_end if url_end > end else end
+
+    async def _send_streaming_reply(self, message: Any, full_text: str) -> None:
+        """流式分片发送回复，模拟打字效果。
+
+        - 短回复（< 400 字符）直接发送单片
+        - 长回复切片为 ~300 字符段，每片间隔 800-1200ms 随机延迟
+        - 避免切断 markdown 代码块和 URL
+        - 异常时保留已发送片，剩余内容合并为最终片发送
+
+        Args:
+            message: QQ Bot 消息对象
+            full_text: 完整回复文本
+        """
+        if not full_text:
+            return
+
+        stream_start = time.monotonic()
+        segments = self._split_text_for_streaming(full_text, chunk_size=300)
+        total_len = len(full_text)
+
+        # 短回复：直接发送单片
+        if len(segments) <= 1:
+            try:
+                single = segments[0] if segments else full_text
+                t0 = time.monotonic()
+                await message.reply(content=single, msg_seq=_next_msg_seq())
+                elapsed = (time.monotonic() - t0) * 1000
+                logger.info("qq_bot.stream_single",
+                            total_len=total_len, ms=round(elapsed, 1))
+            except Exception as e:
+                logger.error("qq_bot.stream_final_failed", error=str(e))
+            return
+
+        num_segments = len(segments)
+        logger.info("qq_bot.stream_start", total_len=total_len,
+                     segments=num_segments, chunk_size=300)
+
+        # 长回复：首片前发送打字指示（仅当回复 > 400 字符）
+        try:
+            await message.reply(content="纳西妲正在打字...", msg_seq=_next_msg_seq())
+        except Exception as e:
+            logger.warning("qq_bot.typing_indicator_failed", error=str(e))
+
+        sent_count = 0
+        for i, seg in enumerate(segments):
+            try:
+                if i > 0:
+                    await asyncio.sleep(random.uniform(0.8, 1.2))
+                t0 = time.monotonic()
+                await message.reply(content=seg, msg_seq=_next_msg_seq())
+                seg_ms = (time.monotonic() - t0) * 1000
+                sent_count += 1
+                logger.debug("qq_bot.stream_segment", index=i, size=len(seg),
+                             ms=round(seg_ms, 1), sent=sent_count)
+            except Exception as e:
+                logger.warning("qq_bot.stream_segment_failed",
+                               error=str(e), sent_segments=sent_count)
+                # 异常恢复：合并剩余内容为最终片发送
+                remaining = "".join(segments[i:])
+                try:
+                    await message.reply(content=remaining, msg_seq=_next_msg_seq())
+                    recovery_ms = (time.monotonic() - stream_start) * 1000
+                    logger.info("qq_bot.stream_recovery_done",
+                                sent=sent_count + 1, ms=round(recovery_ms, 1))
+                except Exception as e2:
+                    logger.error("qq_bot.stream_final_failed", error=str(e2))
+                return
+
+        total_ms = (time.monotonic() - stream_start) * 1000
+        logger.info("qq_bot.stream_done", total_len=total_len,
+                     segments=num_segments, sent=sent_count,
+                     ms=round(total_ms, 1))
+
+    async def _send_reply_with_sticker(self, message: Any, result: ProcessResult) -> None:
         from utils.text_utils import smart_truncate, split_long_reply
 
         reply = result.reply
         clean_reply = self.agent.strip_emotion_tag(reply)
 
-        parts = split_long_reply(clean_reply, MAX_REPLY_LEN)
-
-        if len(parts) == 1:
-            final_text = parts[0]
-        else:
-            failed = False
-            for part in parts[:-1]:
+        # 流式输出：长回复且启用环境变量时，分片流式发送
+        # 环境变量 QQ_STREAM_REPLY 默认 "true"，设为 "false"/"0"/"no" 时回退到原 message.reply
+        stream_enabled = os.getenv("QQ_STREAM_REPLY", "true").lower() in ("true", "1", "yes")
+        if stream_enabled and len(clean_reply) > 400:
+            # 流式发送整个回复（内部按 ~300 字符切片，避免切断代码块/URL）
+            await self._send_streaming_reply(message, clean_reply)
+            # 表情包发送（在最后一片后发送）
+            if result.sticker_path:
                 try:
-                    await message.reply(content=part, msg_seq=_next_msg_seq())
+                    await self._send_reply_with_media(message, "", image_path=result.sticker_path)
                 except Exception as e:
-                    logger.warning(f"qq_bot.long_reply_part_failed: {e}")
-                    failed = True
-                    break
-            if failed:
-                final_text = parts[-1] + "\n（内容过长部分发送失败）"
-            else:
-                final_text = parts[-1]
-
-        # 1. 文字+表情包立刻发送（用户最快看到回复）
-        if result.sticker_path:
-            try:
-                await self._send_reply_with_media(message, final_text, image_path=result.sticker_path)
-            except Exception as e:
-                logger.warning("qq_bot.sticker_send_failed", error=str(e))
-                await message.reply(content=final_text, msg_seq=_next_msg_seq())
+                    logger.warning("qq_bot.sticker_send_failed", error=str(e))
         else:
-            await message.reply(content=final_text, msg_seq=_next_msg_seq())
+            # 原逻辑：按字节上限分片（向后兼容 fallback）
+            parts = split_long_reply(clean_reply, MAX_REPLY_LEN)
+
+            if len(parts) == 1:
+                final_text = parts[0]
+            else:
+                failed = False
+                for part in parts[:-1]:
+                    try:
+                        await message.reply(content=part, msg_seq=_next_msg_seq())
+                    except Exception as e:
+                        logger.warning(f"qq_bot.long_reply_part_failed: {e}")
+                        failed = True
+                        break
+                if failed:
+                    final_text = parts[-1] + "\n（内容过长部分发送失败）"
+                else:
+                    final_text = parts[-1]
+
+            # 1. 文字+表情包立刻发送（用户最快看到回复）
+            if result.sticker_path:
+                try:
+                    await self._send_reply_with_media(message, final_text, image_path=result.sticker_path)
+                except Exception as e:
+                    logger.warning("qq_bot.sticker_send_failed", error=str(e))
+                    await message.reply(content=final_text, msg_seq=_next_msg_seq())
+            else:
+                await message.reply(content=final_text, msg_seq=_next_msg_seq())
 
         # 2. 语音和图片并行发送
         send_tasks = []
 
         # TTS 语音发送（同步模式：audio_path 已有缓存文件）
         if result.audio_path and result.audio_path.exists():
-            async def _send_cached_audio():
+            async def _send_cached_audio() -> None:
                 try:
                     await self._send_audio(message, result.audio_path)
                 except Exception as e:
@@ -835,7 +1109,7 @@ class AIQQBot(botpy.Client):
 
         # TTS 语音发送（异步模式：tts_pending=True 时现场合成）
         elif getattr(result, "tts_pending", False) and result.tts_text:
-            async def _send_async_tts():
+            async def _send_async_tts() -> None:
                 try:
                     audio_path = await self.agent.tts.synthesize_nahida(
                         result.tts_text, emotion=result.emotion or ""
@@ -850,7 +1124,7 @@ class AIQQBot(botpy.Client):
 
         # 视频发送
         if result.video_path and result.video_path.exists():
-            async def _send_vid():
+            async def _send_vid() -> None:
                 try:
                     await self._send_video(message, result.video_path)
                 except Exception as e:
@@ -859,7 +1133,7 @@ class AIQQBot(botpy.Client):
 
         # 图片发送
         if result.image_paths:
-            async def _send_images():
+            async def _send_images() -> None:
                 for img_path in result.image_paths:
                     try:
                         await self._send_reply_with_media(message, "", image_path=img_path)
@@ -875,7 +1149,7 @@ class AIQQBot(botpy.Client):
         if send_tasks:
             await asyncio.gather(*send_tasks, return_exceptions=True)
 
-    async def _send_video(self, message, video_path: Path):
+    async def _send_video(self, message: Any, video_path: Path) -> None:
         """发送视频消息"""
         try:
             if isinstance(message, C2CMessage):
@@ -920,7 +1194,7 @@ class AIQQBot(botpy.Client):
             except Exception as e:
                 logger.error(f"qq_bot.video_fallback_reply_failed: {e}")
 
-    async def _send_audio(self, message, audio_path: Path):
+    async def _send_audio(self, message: Any, audio_path: Path) -> None:
         silk_path = None
         try:
             silk_path = await self._convert_to_silk(audio_path)
@@ -978,7 +1252,7 @@ class AIQQBot(botpy.Client):
             pcm_path = audio_path.with_suffix('.pcm')
             silk_path = audio_path.with_suffix('.silk')
 
-            def _do_convert():
+            def _do_convert() -> bool:
                 result = subprocess.run(
                     ['ffmpeg', '-y', '-i', str(audio_path), '-ar', '16000', '-ac', '1', '-f', 's16le', str(pcm_path)],
                     capture_output=True, text=True, timeout=30
@@ -1064,6 +1338,7 @@ if __name__ == "__main__":
             )
             print(f"\n  ⚠ QQ Bot 异常退出: {str(e)[:100]}")
             print(f"  🔄 {delay:.0f} 秒后重连 (第 {retry_count} 次)...\n")
+            # __main__ 块为同步上下文（client.run 是同步调用），使用 time.sleep
             time.sleep(delay)
 
     if retry_count >= MAX_RETRIES:

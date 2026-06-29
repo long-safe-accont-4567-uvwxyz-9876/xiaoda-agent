@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from loguru import logger
 
@@ -19,6 +19,7 @@ from prompt_builder import build_scene_aware_prompt
 from core.chat_processor import ChatProcessor
 from core.circuit_breaker import CircuitState
 from core.background_tasks import _spawn
+from core.degradation_strategy import get_degradation_strategy
 from emotion.emotion_simple import detect_emotion, build_emotion_hint
 from emotion.emotion_enum import CN_TO_EN, is_unified, ensure_emotion_tag
 from tool_engine.tool_registry import to_openai_tools
@@ -29,7 +30,7 @@ from utils.text_utils import (has_dsml_tool_calls, parse_dsml_tool_calls,
 DEGRADED_REPLY = "嗯……人家现在有点不太舒服，等会儿再聊好不好？"
 
 if TYPE_CHECKING:
-    from agent_core.core import ProcessResult, RequestContext
+    from agent_core._shared import ProcessResult, RequestContext
 
 
 class MessageProcessorMixin:
@@ -43,10 +44,10 @@ class MessageProcessorMixin:
 
     async def _run_verification_loop(
         self,
-        first_result,
+        first_result: Any,
         messages: list[dict],
         tools: list[dict] | None,
-        trace,
+        trace: Any,
         *,
         task_type: str,
         temperature: float,
@@ -66,41 +67,16 @@ class MessageProcessorMixin:
         loop_start = time.time()
         consecutive_failures = 0
         all_tool_results: list = []
-        _model_cfg = AGENT_CONFIG.get("model", {})
 
-        # 解析首轮 LLM 输出
-        current_result = first_result
-        current_tool_calls = None
-        current_assistant_content = ""
-        current_reasoning = None
-
-        # 提取首轮的 tool_calls（如果有的话）
-        if isinstance(current_result, str):
-            if has_dsml_tool_calls(current_result) and tools:
-                dsml_calls = parse_dsml_tool_calls(current_result, self.tool_repair._allowed_tools)
-                if dsml_calls:
-                    current_tool_calls = dsml_calls
-                    current_assistant_content = current_result
-                    current_reasoning = self.router.pop_reasoning_content()
-        else:
-            msg = current_result.choices[0].message
-            if msg.tool_calls:
-                current_tool_calls = [
-                    {"id": str(tc.id), "type": "function",
-                     "function": {"name": tc.function.name,
-                                  "arguments": str(tc.function.arguments) if tc.function.arguments else "{}"}}
-                    for tc in msg.tool_calls
-                ]
-                current_assistant_content = msg.content or ""
-                current_reasoning = getattr(msg, "reasoning_content", None)
-                self.router.pop_reasoning_content()
+        # 解析首轮 LLM 输出（提取 tool_calls、assistant_content、reasoning）
+        current_tool_calls, current_assistant_content, current_reasoning = \
+            self._parse_verification_result(first_result, tools)
 
         # 如果首轮没有 tool_calls，直接返回文本
         if not current_tool_calls:
-            if isinstance(current_result, str):
-                return self._clean_reply(current_result), []
-            else:
-                return self._clean_reply(current_result.choices[0].message.content or ""), []
+            if isinstance(first_result, str):
+                return self._clean_reply(first_result), []
+            return self._clean_reply(first_result.choices[0].message.content or ""), []
 
         # ── 验收循环 ─────────────────────────────────────────
         last_tool_calls = current_tool_calls  # 追踪最近一次 tool_calls，供 summarize 使用
@@ -133,126 +109,49 @@ class MessageProcessorMixin:
             else:
                 consecutive_failures = 0
 
-            # 再次调用 LLM，让模型验收工具结果
-            remaining = self.VERIFICATION_WALL_TIMEOUT - (time.time() - loop_start)
-            if remaining < 3:
-                trace.warning("verification.no_time_left")
-                break
-
-            try:
-                current_result = await asyncio.wait_for(
-                    self.router.route(
-                        task_type, messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        tools=tools,
-                        tool_choice="auto" if tools else None,
-                        user_openid=user_openid,
-                        session_id=session_id,
-                    ),
-                    timeout=min(self.LLM_CALL_TIMEOUT, remaining),
+            # 再次调用 LLM 并解析结果（返回 early_reply 时表示验收通过）
+            current_tool_calls, current_assistant_content, current_reasoning, early_reply = \
+                await self._call_and_parse_verification_llm(
+                    messages, tools, task_type, temperature, max_tokens,
+                    user_openid, session_id, trace, turn_idx, loop_start,
                 )
-            except asyncio.TimeoutError:
-                trace.warning("verification.llm_timeout", turn=turn_idx)
-                break
-            except Exception as e:
-                trace.error("verification.llm_error", turn=turn_idx, error=str(e))
-                break
+            if early_reply is not None:
+                return early_reply, all_tool_results
 
-            # 解析 LLM 输出
-            current_tool_calls = None
-            current_assistant_content = ""
-            current_reasoning = None
-
-            if isinstance(current_result, str):
-                if has_dsml_tool_calls(current_result) and tools:
-                    dsml_calls = parse_dsml_tool_calls(current_result, self.tool_repair._allowed_tools)
-                    if dsml_calls:
-                        current_tool_calls = dsml_calls
-                        current_assistant_content = current_result
-                        current_reasoning = self.router.pop_reasoning_content()
-                else:
-                    # LLM 返回纯文本 → 验收通过
-                    return self._clean_reply(current_result), all_tool_results
-            else:
-                msg = current_result.choices[0].message
-                if msg.tool_calls:
-                    current_tool_calls = [
-                        {"id": str(tc.id), "type": "function",
-                         "function": {"name": tc.function.name,
-                                      "arguments": str(tc.function.arguments) if tc.function.arguments else "{}"}}
-                        for tc in msg.tool_calls
-                    ]
-                    current_assistant_content = msg.content or ""
-                    current_reasoning = getattr(msg, "reasoning_content", None)
-                    self.router.pop_reasoning_content()
-                else:
-                    # LLM 返回纯文本 → 验收通过
-                    return self._clean_reply(msg.content or ""), all_tool_results
+            if current_tool_calls is None:
+                # LLM 调用失败或超时
+                break
 
             trace.info("verification.loop", turn=turn_idx + 1,
                        tool_calls=[tc["function"]["name"] for tc in current_tool_calls])
 
         # ── 循环结束：最终 summarize ─────────────────────────
-        trace.info("verification.summarize_fallback", tool_count=len(all_tool_results))
-        if all_tool_results:
-            final_reply = await self._tool_call_handler._summarize_results(
-                user_input, all_tool_results, last_tool_calls or [],
-                trace, user_openid=user_openid, session_id=session_id,
-            )
-        elif current_assistant_content.strip():
-            final_reply = self._clean_reply(current_assistant_content)
-        else:
-            final_reply = DEGRADED_REPLY
-
-        return final_reply, all_tool_results
+        return self._finalize_verification_reply(
+            user_input, all_tool_results, last_tool_calls or [],
+            current_assistant_content, trace, user_openid, session_id,
+        )
 
     async def _process_impl(self, ctx: RequestContext, user_input: str, user_id: str,
                              source: str, user_openid: str, session_id: str,
-                             status_callback, image_data: list[dict] | None,
+                             status_callback: Any, image_data: list[dict] | None,
                              is_master: bool = True) -> ProcessResult:
-        if self._tool_call_handler:
-            self._tool_call_handler._tool_repair.clear_storm_window()
-
-        _trace_id = f"{int(time.time()*1000)%1000000:06d}"
-        trace = logger.bind(trace_id=_trace_id)
-        trace.info("agent.process.start", source=source, user_id=user_id,
-                    msg_preview=user_input[:80])
-
-        # 尽早发送"收到，正在想..."提示，让用户 <1 秒看到响应
-        # （restore_from_db 读外置硬盘数据库需要 1-2 秒，提前发送避免用户等待）
-        if status_callback:
-            try:
-                await status_callback("收到，正在想...")
-            except Exception as _e:
-                logger.debug("agent.status_callback_failed", error=str(_e))
-
-        allowed, reason = self.security.is_allowed(user_id)
+        # 初始化 + 安全检查 + 上下文恢复
+        trace, session_id, allowed, reason = await self._init_and_restore_context(
+            ctx, user_input, user_id, source, status_callback, user_openid, session_id)
         if not allowed:
             trace.warning("agent.blocked", reason=reason)
             return ProcessResult(reply="")
 
-        # 群聊 session 按用户隔离：不同用户使用不同 session_id
-        if source == "qq_group" and user_openid:
-            session_id = f"qq_group:{user_openid}"
+        # XP 自动加成（fire-and-forget，不阻塞主流程；基于消息长度）
+        try:
+            from core.xp_system import get_xp_system
+            _xp_uid = user_openid or user_id
+            if _xp_uid:
+                get_xp_system().add_chat_xp(_xp_uid, len(user_input))
+        except Exception as _e:
+            logger.warning("xp.auto_add_failed", error=str(_e))
 
-        # 按当前用户重新恢复历史摘要（群聊场景下不同用户历史不混合）
-        # 使用 user_openid 优先（QQ 群聊稳定标识），其次 user_id
-        _restore_id = user_openid or user_id
-        # 群聊多用户上下文隔离：切换到当前用户的 history 和压缩摘要
-        # 避免不同用户共享单例 context 导致串话和隐私泄露
-        if _restore_id:
-            try:
-                await self.context.switch_user_context(_restore_id)
-            except Exception as e:
-                logger.warning("agent.switch_user_context_failed", error=str(e))
-        if _restore_id and self.db:
-            try:
-                await self.context.restore_from_db(self.db, user_id=_restore_id,
-                                                    address_term=self.context.current_address_term)
-            except Exception as e:
-                logger.warning("agent.restore_failed", error=str(e))
-
+        # slash 命令
         if self.slash_handler and self.slash_handler.is_slash_command(user_input):
             slash_reply = await self.slash_handler.handle(user_input, user_id)
             return ProcessResult(reply=slash_reply)
@@ -282,223 +181,292 @@ class MessageProcessorMixin:
                     force_voice=force_voice, ctx=ctx,
                 )
 
-        # Task 9: 简单对话快速路径（方案 E）—— 跳过记忆检索，使用最小上下文
-        if SIMPLE_CHAT_FASTPATH and self._is_simple_chat(clean_input) \
-                and not image_data and not ("[图片:" in user_input and "已保存到" in user_input):
-            trace.info("chat.fast_path", input_preview=clean_input[:50])
+        # 简单对话快速路径（跳过记忆检索，使用最小上下文）
+        fast_result = await self._try_simple_chat_fast_path(
+            ctx, user_input, clean_input, is_master, image_data, force_voice,
+            session_id, user_openid, source, user_id, status_callback, trace)
+        if fast_result is not None:
+            return fast_result
 
-            emotion = detect_emotion(user_input)
-            emotion_hint = build_emotion_hint(emotion)
-            self.context.emotion_hint = emotion_hint
-            ctx.last_user_emotion = emotion.get("primary", "")
-            emotion_label = emotion.get("primary", "")
+        # 任务图路由
+        graph_result = await self._try_task_graph_route(
+            ctx, user_input, clean_input, chat_targets, force_voice, image_data,
+            is_master, user_id, source, session_id, status_callback, trace)
+        if graph_result is not None:
+            return graph_result
 
-            # 构建最小上下文：系统提示 + 最近 3 轮历史 + 用户输入
-            # 非主人使用安全化 prompt（剥离所有隐私信息），主人使用完整 prompt
-            if is_master:
-                # 场景感知动态排序：根据用户输入调整 MD 模块顺序，
-                # 让最相关的模块靠近用户输入（LLM 注意力最强的位置）
-                system_prompt = build_scene_aware_prompt(user_input, self.context.current_address_term)
-            else:
-                system_prompt = build_safe_system_prompt()
-            messages = [{"role": "system", "content": system_prompt}]
+        # 主处理路径：完整记忆检索 + LLM 调用 + 后处理
+        return await self._run_main_process_path(
+            ctx, user_input, clean_input, user_id, source, user_openid, session_id,
+            status_callback, image_data, is_master, force_voice, chat_targets, trace)
 
-            # Context 层注入（动态提示：用户画像 + 学习规则，已缓存 ~0ms）
-            # 这是"味道"的来源 —— 没有这层，回复会变成无个性的模板
-            if is_master:
-                _dynamic = self.context._build_dynamic_prompt()
-                if _dynamic:
-                    messages.append({"role": "system", "content": _dynamic})
+    async def _init_and_restore_context(self, ctx: Any, user_input: Any, user_id: Any, source: Any,
+                                         status_callback: Any, user_openid: Any, session_id: Any) -> tuple:
+        """初始化 trace、发送状态提示、安全检查、恢复用户上下文。
 
-            # Volatile 层：时间感知 + 情绪（延迟注入到用户输入前，确保 LLM 注意力最强）
-            _volatile = self.context._build_time_context()
-            if emotion_hint:
-                _addr = self.context.current_address_term if is_master else "你"
-                _volatile += f"\n[感知到{_addr}的情绪：{emotion_hint}]"
+        返回 (trace, session_id, allowed, reason)。
+        """
+        if self._tool_call_handler:
+            self._tool_call_handler._tool_repair.clear_storm_window()
 
-            # 轻量 FTS 记忆检索（毫秒级，让 fast_path 也能"记住"之前的内容）
-            # 只检索 2 条摘要，避免 prompt 过长拖慢 LLM
-            # 问候类跳过：FTS 会检索到含时间词的旧记忆（如"今天晚上过得开心吗"），
-            # 污染 LLM 的时间感知，让它 echo 用户的时间词
-            _is_greeting = bool(re.match(
-                r'^(早[上安]?|中午|下午|晚上|晚安|你好|哈喽|hi|hello|hey)[好呀～~！!。.\s]*$',
-                clean_input.strip(), re.IGNORECASE))
+        _trace_id = f"{int(time.time()*1000)%1000000:06d}"
+        trace = logger.bind(trace_id=_trace_id)
+        trace.info("agent.process.start", source=source, user_id=user_id,
+                    msg_preview=user_input[:80])
 
-            if is_master and not _is_greeting and self.memory and getattr(self.memory, 'memory', None):
-                try:
-                    _fts_mems = await self.memory.memory.search_memories_fts(user_input, limit=2)
-                    if _fts_mems:
-                        # 注入时间戳，让 LLM 知道每条记忆发生的时间
-                        _mem_lines = []
-                        for m in _fts_mems:
-                            _s = m.get("summary", "")
-                            if not _s:
-                                continue
-                            # 跳过问候类记忆，避免旧问候污染时间感知
-                            # （记忆里的"爸爸晚上好呀～"会让 LLM 模仿，即使当前是中午）
-                            if re.search(r'(晚上好|早上好|中午好|下午好|晚安|早安)', _s):
-                                continue
-                            _ts = m.get("timestamp", 0)
-                            if _ts:
-                                try:
-                                    _d = time.strftime("%m-%d %H:%M", time.localtime(float(_ts)))
-                                    _mem_lines.append(f"[{_d}] {_s[:120]}")
-                                except (ValueError, TypeError, OSError):
-                                    _mem_lines.append(_s[:120])
-                            else:
-                                _mem_lines.append(_s[:120])
-                        if _mem_lines:
-                            messages.append({
-                                "role": "system",
-                                "content": "[相关长期记忆]\n" + "\n---\n".join(_mem_lines)
-                            })
-                except Exception as e:
-                    logger.debug(f"fast_path.fts_failed: {e}")
-            # 主动检索 C：情绪触发（轻量版，仅强负面情绪时检索安抚记忆）
-            if is_master and self.memory and emotion.get("valence") == "negative" \
-                    and float(emotion.get("intensity", 0.0)) >= 0.5:
-                try:
-                    _comfort = await self.memory.retrieve_comfort_memories(limit=1)
-                    if _comfort:
-                        _c_lines = []
-                        for m in _comfort:
-                            _s = m.get("summary", "")
-                            if _s:
-                                _c_lines.append(_s[:120])
-                        if _c_lines:
-                            _addr = self.context.current_address_term or "你"
-                            messages.append({
-                                "role": "system",
-                                "content": f"[曾经让{_addr}开心的回忆（温柔陪伴时可以提起）]\n" + "\n".join(_c_lines)
-                            })
-                except Exception as e:
-                    logger.debug(f"fast_path.comfort_failed: {e}")
-            # 非主人不加载历史对话（防止看到主人的聊天内容）
-            if is_master:
-                for msg in self.context.get_last_n(6):
-                    m = {"role": msg["role"], "content": str(msg.get("content", "")) if msg.get("content") is not None else ""}
-                    messages.append(m)
-            # Volatile 层：时间感知紧贴用户输入注入，LLM 对最近内容注意力最强
-            messages.append({"role": "system", "content": _volatile})
-            messages.append({"role": "user", "content": user_input})
-
-            _model_cfg = AGENT_CONFIG.get("model", {})
-            reply = ""
+        # 尽早发送"收到，正在想..."提示，让用户 <1 秒看到响应
+        if status_callback:
             try:
-                # Task 7: 流式状态推送 —— 快速路径 LLM 调用前通知
-                await self._notify_status("正在思考回复...")
-                result = await self.router.route(
-                    "chat", messages,
-                    temperature=_model_cfg.get("temperature", 0.7),
-                    user_openid=user_openid, session_id=session_id,
-                )
-                if isinstance(result, str):
-                    reply = self._clean_reply(result)
-                else:
-                    reply = self._clean_reply(result.choices[0].message.content or "")
+                await status_callback("收到，正在想...")
+            except Exception as _e:
+                logger.debug("agent.status_callback_failed", error=str(_e))
+
+        allowed, reason = self.security.is_allowed(user_id)
+
+        # 群聊 session 按用户隔离：不同用户使用不同 session_id
+        if source == "qq_group" and user_openid:
+            session_id = f"qq_group:{user_openid}"
+
+        # 按当前用户恢复历史摘要（群聊多用户上下文隔离）
+        _restore_id = user_openid or user_id
+        if _restore_id:
+            try:
+                await self.context.switch_user_context(_restore_id)
             except Exception as e:
-                logger.warning("agent.fast_path_failed", error=str(e))
-                reply = DEGRADED_REPLY
+                logger.warning("agent.switch_user_context_failed", error=str(e))
+        if _restore_id and self.db:
+            try:
+                await self.context.restore_from_db(self.db, user_id=_restore_id,
+                                                    address_term=self.context.current_address_term)
+            except Exception as e:
+                logger.warning("agent.restore_failed", error=str(e))
 
-            # 非主人输出侧隐私扫描
-            if not is_master and reply:
-                safe, alt_reply, _ = self.security.check_output_privacy(reply)
-                if not safe:
-                    logger.warning("agent.privacy_leak_blocked", user_id=user_id, reply_preview=reply[:100])
-                    reply = alt_reply
+        return trace, session_id, allowed, reason
 
-            await self.context.add_message("user", user_input)
-            await self.context.add_message("assistant", reply)
+    async def _try_simple_chat_fast_path(self, ctx: Any, user_input: Any, clean_input: Any, is_master: Any,
+                                          image_data: Any, force_voice: Any, session_id: Any, user_openid: Any,
+                                          source: Any, user_id: Any, status_callback: Any, trace: Any) -> Any:
+        """简单对话快速路径：跳过记忆检索，使用最小上下文。返回 ProcessResult 或 None。"""
+        if not (SIMPLE_CHAT_FASTPATH and self._is_simple_chat(clean_input)
+                and not image_data and not ("[图片:" in user_input and "已保存到" in user_input)):
+            return None
 
-            self._bg_task_manager.run_background_tasks(
-                user_input, reply, user_id, source, emotion, [],
-                session_id=session_id,
+        trace.info("chat.fast_path", input_preview=clean_input[:50])
+        emotion = detect_emotion(user_input)
+        emotion_hint = build_emotion_hint(emotion)
+        self.context.emotion_hint = emotion_hint
+        ctx.last_user_emotion = emotion.get("primary", "")
+        emotion_label = emotion.get("primary", "")
+        self._update_mental_state_emotion(emotion)
+
+        # 构建最小上下文：系统提示 + 动态提示 + Volatile 层
+        if is_master:
+            system_prompt = build_scene_aware_prompt(user_input, self.context.current_address_term)
+        else:
+            system_prompt = build_safe_system_prompt()
+        messages = [{"role": "system", "content": system_prompt}]
+
+        if is_master:
+            _dynamic = self.context._build_dynamic_prompt()
+            if _dynamic:
+                messages.append({"role": "system", "content": _dynamic})
+
+        _volatile = self.context._build_time_context()
+        if emotion_hint:
+            _addr = self.context.current_address_term if is_master else "你"
+            _volatile += f"\n[感知到{_addr}的情绪：{emotion_hint}]"
+
+        # 轻量 FTS + 安抚记忆检索
+        messages = await self._fast_path_inject_memories(
+            messages, user_input, is_master, emotion)
+
+        # 历史对话（非主人不加载，防止看到主人聊天内容）
+        if is_master:
+            for msg in self.context.get_last_n(6):
+                m = {"role": msg["role"], "content": str(msg.get("content", "")) if msg.get("content") is not None else ""}
+                messages.append(m)
+        messages.append({"role": "system", "content": _volatile})
+        messages.append({"role": "user", "content": user_input})
+
+        # LLM 调用
+        _model_cfg = AGENT_CONFIG.get("model", {})
+        reply = ""
+        try:
+            await self._notify_status("正在思考回复...")
+            result = await self.router.route(
+                "chat", messages,
+                temperature=_model_cfg.get("temperature", 0.7),
+                user_openid=user_openid, session_id=session_id,
             )
+            if isinstance(result, str):
+                reply = self._clean_reply(result)
+            else:
+                reply = self._clean_reply(result.choices[0].message.content or "")
+        except Exception as e:
+            logger.warning("agent.fast_path_failed", error=str(e))
+            reply = DEGRADED_REPLY
 
+        # 非主人输出侧隐私扫描
+        if not is_master and reply:
+            safe, alt_reply, _ = self.security.check_output_privacy(reply)
+            if not safe:
+                logger.warning("agent.privacy_leak_blocked", user_id=user_id, reply_preview=reply[:100])
+                reply = alt_reply
+
+        # Persona Critic: 检查 LLM 输出人格一致性（LLM 输出后、发送给用户前）
+        self._apply_persona_critic(reply, user_openid, user_id)
+
+        await self.context.add_message("user", user_input)
+        await self.context.add_message("assistant", reply)
+        self._bg_task_manager.run_background_tasks(
+            user_input, reply, user_id, source, emotion, [], session_id=session_id)
+        try:
+            _spawn(self.router.flush_costs())
+        except Exception as e:
+            logger.error(f"费用统计刷新失败: {e}")
+
+        # 情绪标签
+        if is_unified():
+            reply, ensured_emotion = ensure_emotion_tag(reply)
+            if ensured_emotion.value != emotion_label:
+                emotion_label = ensured_emotion.value
+
+        clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
+        clean_reply = humanize(clean_reply, style="nahida")
+
+        audio_path, tts_pending, tts_text = await self._build_voice_result(
+            clean_reply, emotion_label, force_voice)
+        if audio_path:
+            clean_reply = clean_reply + "\n\n🎙️ 语音消息已发送～"
+
+        _spawn(self._hook_engine.fire_post_response())
+        trace.info("agent.fast_path.done", reply_preview=clean_reply[:100])
+        return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path,
+                             audio_path=audio_path, tts_pending=tts_pending, tts_text=tts_text)
+
+    async def _fast_path_inject_memories(self, messages: Any, user_input: Any, is_master: Any, emotion: Any) -> Any:
+        """快速路径：注入 FTS 记忆和安抚记忆到 messages。"""
+        # 降级检查: L2+ 关闭记忆检索, 直接返回不注入
+        if not get_degradation_strategy().is_feature_available("memory_search"):
+            return
+        _is_greeting = bool(re.match(
+            r'^(早[上安]?|中午|下午|晚上|晚安|你好|哈喽|hi|hello|hey)[好呀～~！!。.\s]*$',
+            user_input.strip(), re.IGNORECASE))
+
+        if is_master and not _is_greeting and self.memory and getattr(self.memory, 'memory', None):
             try:
-                _spawn(self.router.flush_costs())
-            except Exception as e:
-                logger.error(f"费用统计刷新失败: {e}")
-
-            # 确保情绪标签存在且合法
-            if is_unified():
-                reply, ensured_emotion = ensure_emotion_tag(reply)
-                if ensured_emotion.value != emotion_label:
-                    emotion_label = ensured_emotion.value
-
-            clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
-            clean_reply = humanize(clean_reply, style="nahida")
-
-            audio_path = None
-            tts_pending = False
-            tts_text = ""
-            should_generate_voice = self._voice_mode or force_voice
-            if should_generate_voice and self.tts.available and len(clean_reply) > 2:
-                if TTS_ASYNC_MODE:
-                    tts_pending = True
-                    tts_text = self._clean_reply(clean_reply)
-                else:
-                    try:
-                        audio_path = await self.tts.synthesize_nahida(self._clean_reply(clean_reply), emotion=emotion_label)
-                    except Exception as e:
-                        logger.warning("agent.tts_failed", error=str(e))
-
-            if audio_path:
-                clean_reply = clean_reply + "\n\n🎙️ 语音消息已发送～"
-
-            _spawn(self._hook_engine.fire_post_response())
-            trace.info("agent.fast_path.done", reply_preview=clean_reply[:100])
-            return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path,
-                                 audio_path=audio_path, tts_pending=tts_pending, tts_text=tts_text)
-
-        if "nahida" in chat_targets and self._task_graph and not self._is_manual_target(user_input, user_id) and not self._is_simple_task(clean_input) and not force_voice and not image_data and not ("[图片:" in user_input and "已保存到" in user_input):
-            try:
-                from task_orchestrator import run_task_graph  # 冷启动优化: 延迟导入 (节省 ~904ms)
-                graph_result = await run_task_graph(
-                    graph=self._task_graph,
-                    user_input=clean_input,
-                    user_id=user_id,
-                    session_id=session_id,
-                    status_callback=status_callback,
-                    agent_configs=self._agent_route_configs,
-                    dispatcher=self.dispatcher,
-                )
-                if graph_result.final_output:
-                    emotion = detect_emotion(clean_input)
-                    ctx.last_user_emotion = emotion.get("primary", "")
-                    # 关键：写入对话历史，否则下一轮上下文丢失（"葡萄牙呢"类追问失忆 bug）
-                    await self.context.add_message("user", clean_input)
-                    await self.context.add_message("assistant", graph_result.final_output)
-                    self._bg_task_manager.run_background_tasks(
-                        clean_input, graph_result.final_output, user_id, source, emotion, [],
-                        session_id=session_id,
-                    )
-                    emotion_label = emotion.get("primary", "")
-                    clean_reply = self._finalize_reply(graph_result.final_output, style="nahida")
-                    sticker_path = None
-                    audio_path = None
-                    tts_pending = False
-                    tts_text = ""
-                    should_generate_voice = self._voice_mode or force_voice
-                    if should_generate_voice and len(clean_reply) > 2:
-                        if TTS_ASYNC_MODE:
-                            # Task 6: 异步 TTS
-                            tts_pending = True
-                            tts_text = self._clean_reply(clean_reply)
-                        else:
+                _fts_mems = await self.memory.memory.search_memories_fts(user_input, limit=2)
+                if _fts_mems:
+                    _mem_lines = []
+                    for m in _fts_mems:
+                        _s = m.get("summary", "")
+                        if not _s:
+                            continue
+                        if re.search(r'(晚上好|早上好|中午好|下午好|晚安|早安)', _s):
+                            continue
+                        _ts = m.get("timestamp", 0)
+                        if _ts:
                             try:
-                                target_agent = self.dispatcher.get_agent(graph_result.route_target)
-                                if target_agent:
-                                    audio_path = await target_agent.synthesize(self._clean_reply(clean_reply), emotion=emotion_label)
-                            except Exception as e:
-                                logger.warning("agent.routed_tts_failed", error=str(e))
-                    if audio_path:
-                        clean_reply = clean_reply + "\n\n🎙️ 语音消息已发送～"
-                    return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path, audio_path=audio_path, tts_pending=tts_pending, tts_text=tts_text)
+                                _d = time.strftime("%m-%d %H:%M", time.localtime(float(_ts)))
+                                _mem_lines.append(f"[{_d}] {_s[:120]}")
+                            except (ValueError, TypeError, OSError):
+                                _mem_lines.append(_s[:120])
+                        else:
+                            _mem_lines.append(_s[:120])
+                    if _mem_lines:
+                        messages.append({
+                            "role": "system",
+                            "content": "[相关长期记忆]\n" + "\n---\n".join(_mem_lines)
+                        })
             except Exception as e:
-                logger.warning("agent.task_graph_failed", error=str(e))
-                return ProcessResult(reply=DEGRADED_REPLY)
+                logger.debug(f"fast_path.fts_failed: {e}")
 
+        # 主动检索 C：情绪触发（轻量版，仅强负面情绪时检索安抚记忆）
+        if is_master and self.memory and emotion.get("valence") == "negative" \
+                and float(emotion.get("intensity", 0.0)) >= 0.5:
+            try:
+                _comfort = await self.memory.retrieve_comfort_memories(limit=1)
+                if _comfort:
+                    _c_lines = []
+                    for m in _comfort:
+                        _s = m.get("summary", "")
+                        if _s:
+                            _c_lines.append(_s[:120])
+                    if _c_lines:
+                        _addr = self.context.current_address_term or "你"
+                        messages.append({
+                            "role": "system",
+                            "content": f"[曾经让{_addr}开心的回忆（温柔陪伴时可以提起）]\n" + "\n".join(_c_lines)
+                        })
+            except Exception as e:
+                logger.debug(f"fast_path.comfort_failed: {e}")
+        return messages
+
+    async def _try_task_graph_route(self, ctx: Any, user_input: Any, clean_input: Any, chat_targets: Any,
+                                     force_voice: Any, image_data: Any, is_master: Any, user_id: Any, source: Any,
+                                     session_id: Any, status_callback: Any, trace: Any) -> Any:
+        """任务图路由路径。返回 ProcessResult 或 None（None 表示继续主路径）。"""
+        if not ("nahida" in chat_targets and self._task_graph
+                and not self._is_manual_target(user_input, user_id)
+                and not self._is_simple_task(clean_input)
+                and not force_voice and not image_data
+                and not ("[图片:" in user_input and "已保存到" in user_input)):
+            return None
+
+        try:
+            from task_orchestrator import run_task_graph  # 冷启动优化: 延迟导入
+            graph_result = await run_task_graph(
+                graph=self._task_graph,
+                user_input=clean_input,
+                user_id=user_id,
+                session_id=session_id,
+                status_callback=status_callback,
+                agent_configs=self._agent_route_configs,
+                dispatcher=self.dispatcher,
+            )
+            if graph_result.final_output:
+                emotion = detect_emotion(clean_input)
+                ctx.last_user_emotion = emotion.get("primary", "")
+                # 关键：写入对话历史，否则下一轮上下文丢失
+                await self.context.add_message("user", clean_input)
+                await self.context.add_message("assistant", graph_result.final_output)
+                self._bg_task_manager.run_background_tasks(
+                    clean_input, graph_result.final_output, user_id, source, emotion, [],
+                    session_id=session_id,
+                )
+                emotion_label = emotion.get("primary", "")
+                clean_reply = self._finalize_reply(graph_result.final_output, style="nahida")
+                sticker_path = None
+                audio_path = None
+                tts_pending = False
+                tts_text = ""
+                should_generate_voice = self._voice_mode or force_voice
+                if should_generate_voice and len(clean_reply) > 2:
+                    if TTS_ASYNC_MODE:
+                        tts_pending = True
+                        tts_text = self._clean_reply(clean_reply)
+                    else:
+                        try:
+                            target_agent = self.dispatcher.get_agent(graph_result.route_target)
+                            if target_agent:
+                                audio_path = await target_agent.synthesize(
+                                    self._clean_reply(clean_reply), emotion=emotion_label)
+                        except Exception as e:
+                            logger.warning("agent.routed_tts_failed", error=str(e))
+                if audio_path:
+                    clean_reply = clean_reply + "\n\n🎙️ 语音消息已发送～"
+                return ProcessResult(reply=clean_reply, emotion=emotion_label,
+                                     sticker_path=sticker_path, audio_path=audio_path,
+                                     tts_pending=tts_pending, tts_text=tts_text)
+        except Exception as e:
+            logger.warning("agent.task_graph_failed", error=str(e))
+            return ProcessResult(reply=DEGRADED_REPLY)
+        return None
+
+    async def _run_main_process_path(self, ctx: Any, user_input: Any, clean_input: Any, user_id: Any, source: Any,
+                                      user_openid: Any, session_id: Any, status_callback: Any, image_data: Any,
+                                      is_master: Any, force_voice: Any, chat_targets: Any, trace: Any) -> Any:
+        """主处理路径：完整记忆检索 + LLM 调用 + 后处理。"""
         if "可莉" in user_input and "nahida" in chat_targets:
             klee_reply = await self.delegate_to_klee(clean_input, factual=True)
             self.context.klee_context = klee_reply
@@ -509,12 +477,98 @@ class MessageProcessorMixin:
         emotion_hint = build_emotion_hint(emotion)
         self.context.emotion_hint = emotion_hint
         ctx.last_user_emotion = emotion.get("primary", "")
+        self._update_mental_state_emotion(emotion)
 
-        # 记忆检索与 notebook 上下文加载并行化（asyncio.gather）
-        # Task 7: 流式状态推送 —— 记忆检索前通知
+        # 记忆检索与 notebook 上下文加载并行化
         await self._notify_status("正在回忆相关记忆...")
+        memories = await self._retrieve_main_memories(user_input, is_master, emotion)
+        self.context.memory_retrieval = memories if memories else None
 
-        async def _retrieve_memories():
+        # 构建消息
+        effective_input = user_input
+        if not is_master:
+            safe_prompt = build_safe_system_prompt()
+            messages = [{"role": "system", "content": safe_prompt}]
+            messages.append({"role": "user", "content": effective_input})
+        else:
+            messages = self.context.build_messages(effective_input)
+
+        # 图片描述注入
+        messages = await self._inject_image_description(messages, user_input, image_data)
+
+        # 表情包意图与工具准备
+        _pre_picked_sticker, tools = self._prepare_sticker_and_tools(
+            messages, clean_input, emotion, is_master, user_id, user_input, image_data)
+
+        # 任务类型解析与熔断器检查
+        early_result, task_type, _cb_max_tokens, circuit_state, _model_cfg = \
+            self._resolve_task_and_circuit(user_input, tools, messages, trace)
+        if early_result is not None:
+            return early_result
+
+        # 主 LLM 调用 + 验收循环
+        is_owner = self.security.is_owner(user_id)
+        reply, tool_results = await self._call_main_llm_with_verification(
+            messages, tools, task_type, _model_cfg, _cb_max_tokens, circuit_state,
+            status_callback, user_openid, session_id, trace, ctx, user_input, is_owner)
+
+        # 媒体提取与隐私扫描
+        media_image_paths, media_video_path, reply = await self._extract_media_from_tool_results(
+            tool_results, reply)
+        if not is_master and reply:
+            safe, alt_reply, _ = self.security.check_output_privacy(reply)
+            if not safe:
+                logger.warning("agent.privacy_leak_blocked", user_id=user_id, reply_preview=reply[:100])
+                reply = alt_reply
+
+        # Persona Critic: 检查 LLM 输出人格一致性（LLM 输出后、发送给用户前）
+        self._apply_persona_critic(reply, user_openid, user_id)
+
+        if not ctx.handled_by_tool_call:
+            await self.context.add_message("user", user_input)
+            rc = self.router.pop_reasoning_content()
+            await self.context.add_message("assistant", reply, reasoning_content=rc)
+
+        self._bg_task_manager.run_background_tasks(
+            user_input, reply, user_id, source, emotion, tool_results, session_id=session_id)
+        try:
+            _spawn(self.router.flush_costs())
+        except Exception as e:
+            logger.error(f"费用统计刷新失败，可能丢失费用数据: {e}")
+
+        trace.info("agent.process.done", reply_preview=reply[:100])
+        emotion_label = emotion.get("primary", "")
+
+        # 情绪标签
+        if is_unified():
+            reply, ensured_emotion = ensure_emotion_tag(reply)
+            if ensured_emotion.value != emotion_label:
+                emotion_label = ensured_emotion.value
+
+        if _pre_picked_sticker:
+            clean_reply = self._finalize_reply(reply, strip_emotion=True, style="nahida")
+            sticker_path = _pre_picked_sticker
+        else:
+            clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
+            clean_reply = humanize(clean_reply, style="nahida")
+
+        audio_path, tts_pending, tts_text = await self._build_voice_result(
+            clean_reply, emotion_label, force_voice)
+        if audio_path:
+            clean_reply = clean_reply + "\n\n🎙️ 语音消息已发送～"
+
+        _spawn(self._hook_engine.fire_post_response())
+
+        return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path,
+                             audio_path=audio_path, tool_results=tool_results, image_paths=media_image_paths,
+                             video_path=media_video_path, tts_pending=tts_pending, tts_text=tts_text)
+
+    async def _retrieve_main_memories(self, user_input: Any, is_master: Any, emotion: Any) -> Any:
+        """主路径记忆检索（含情绪触发的安抚记忆）与 notebook 加载并行。"""
+        async def _retrieve_memories() -> Any:
+            # 降级检查: L2+ 关闭记忆检索, 跳过以减少负载
+            if not get_degradation_strategy().is_feature_available("memory_search"):
+                return None
             if self.memory and is_master:
                 self.memory.signal_new_message()
                 try:
@@ -522,18 +576,12 @@ class MessageProcessorMixin:
                 except Exception as e:
                     logger.warning("memory.retrieve_failed", error=str(e))
                     results = None
-
-                # 主动检索 C：情绪触发
-                # 检测到用户负面情绪（valence=negative）且强度超阈值时，
-                # 并行检索"安抚性记忆"（带正面情绪标签的历史记忆），
-                # 合并到主检索结果中，让纳西妲能回忆起"曾经让用户开心的事"来温柔陪伴。
                 if results is not None:
                     try:
                         import config as _cfg
                         _emo_threshold = float(getattr(_cfg, "EMOTION_TRIGGER_THRESHOLD", 0.5))
                     except Exception:
                         _emo_threshold = 0.5
-
                     if (emotion.get("valence") == "negative"
                             and float(emotion.get("intensity", 0.0)) >= _emo_threshold):
                         try:
@@ -555,26 +603,20 @@ class MessageProcessorMixin:
                 return None
             return None
 
-        async def _load_notebook():
+        async def _load_notebook() -> None:
             try:
                 await self._load_notebook_context()
             except Exception as e:
                 logger.warning("notebook.load_failed", error=str(e))
 
         memories, _ = await asyncio.gather(_retrieve_memories(), _load_notebook())
-        self.context.memory_retrieval = memories if memories else None
+        return memories
 
-        effective_input = user_input
-        # 非主人使用安全化 prompt 构建消息（剥离隐私、不加载历史）
-        if not is_master:
-            safe_prompt = build_safe_system_prompt()
-            messages = [{"role": "system", "content": safe_prompt}]
-            messages.append({"role": "user", "content": effective_input})
-        else:
-            messages = self.context.build_messages(effective_input)
-
+    async def _inject_image_description(self, messages: Any, user_input: Any, image_data: Any) -> Any:
+        """向 messages 注入图片描述（直接传入图片或从用户输入提取路径）。"""
         if image_data:
-            logger.info("agent.vision_start", image_count=len(image_data), total_b64_size=sum(len(img.get('data', '')) for img in image_data))
+            logger.info("agent.vision_start", image_count=len(image_data),
+                        total_b64_size=sum(len(img.get('data', '')) for img in image_data))
             image_description = await self._describe_images(image_data)
             if image_description:
                 messages.append({
@@ -614,17 +656,21 @@ class MessageProcessorMixin:
                         "role": "system",
                         "content": "[系统提示] 用户发送了一张图片，但图片加载失败。请告诉用户你暂时无法查看这张图片。"
                     })
+        return messages
 
+    def _prepare_sticker_and_tools(self, messages: Any, clean_input: Any, emotion: Any, is_master: Any,
+                                    user_id: Any, user_input: Any, image_data: Any) -> tuple:
+        """准备表情包提示（注入 messages）与工具列表。返回 (_pre_picked_sticker, tools)。"""
         _sticker_keywords = ["表情包", "表情", "贴纸", "sticker", "贴图"]
         _sticker_intent = any(kw in clean_input for kw in _sticker_keywords)
         _pre_picked_sticker = None
-        if _sticker_intent and self.sticker_manager.available:
+        if (_sticker_intent and self.sticker_manager.available
+                and get_degradation_strategy().is_feature_available("emotion")):
             _detected_e = self.sticker_manager.detect_emotion(clean_input)
             if not _detected_e:
                 _detected_e = CN_TO_EN.get(emotion.get("primary", ""), "happy")
             _pre_picked_sticker = self.sticker_manager.pick(_detected_e)
             if _pre_picked_sticker:
-                # Bug fix: 用检测到的情绪类别而非物理目录名，去掉文件名中的目录前缀
                 _sticker_desc = _pre_picked_sticker.stem.split("_", 1)[-1].replace("_", " ").replace("-", " ")
                 _sticker_cat = _detected_e
                 messages.append({
@@ -633,47 +679,41 @@ class MessageProcessorMixin:
                 })
 
         tools = to_openai_tools() if to_openai_tools() else None
-
         has_image = image_data or ("[图片:" in user_input and "已保存到" in user_input)
         if has_image and tools:
             tools = None
 
-        # 简单任务（问候/闲聊）时过滤掉系统级工具，避免模型自作主张查硬件等
-        # 但保留天气、搜索等用户可能期望模型主动使用的工具
+        # 简单任务时过滤系统级工具
         tools = ChatProcessor.filter_tools_for_simple_task(tools, clean_input, self._is_simple_task)
-
-        # 表情包意图时禁用所有工具：sticker 由系统自动附带，模型只需回复文字
+        # 表情包意图时禁用工具
         if _sticker_intent and tools:
             tools = None
-
-        # 非主人消息：过滤敏感工具，仅保留聊天能力
+        # 非主人消息：过滤敏感工具
         if not is_master and tools:
-            _SAFE_TOOLS_FOR_STRANGER = set()  # 外人不可使用任何工具，纯聊天
             tools = None
             logger.info("agent.tools_filtered_for_non_master", user_id=user_id)
+        return _pre_picked_sticker, tools
 
+    def _resolve_task_and_circuit(self, user_input: Any, tools: Any, messages: Any, trace: Any) -> tuple:
+        """任务类型解析与熔断器检查。返回 (early_result, task_type, _cb_max_tokens, circuit_state, _model_cfg)。
+
+        early_result 非 None 时表示熔断器 RED 状态，应直接返回。
+        """
         should_escalate, reason = self._should_escalate_to_pro(user_input, tools)
         base_task = "chat_pro" if should_escalate else "chat"
         task_type = self.router.resolve_task_type(base_task)
-
         if should_escalate:
             trace.info("chat.escalated_to_pro", reason=reason)
 
-        reply = ""
-        tool_results = []
-
         _model_cfg = AGENT_CONFIG.get("model", {})
-        is_owner = self.security.is_owner(user_id)
-
-        # 熔断器检查
         circuit_state = self._circuit_breaker.check(self._cognitive_state)
         if circuit_state == CircuitState.RED:
             logger.warning("agent.circuit_breaker_red")
-            return ProcessResult(reply="系统需要休息一下，请稍后再试吧～")
+            return ProcessResult(reply="系统需要休息一下，请稍后再试吧～"), \
+                task_type, None, circuit_state, _model_cfg
         elif circuit_state == CircuitState.HALF_OPEN:
             logger.info("agent.circuit_breaker_half_open_probe")
 
-        # YELLOW 状态处理：注入警告并降低 max_tokens 20%
         _cb_max_tokens = None
         if circuit_state == CircuitState.YELLOW:
             messages.append({
@@ -681,12 +721,17 @@ class MessageProcessorMixin:
                 "content": "[系统警告] 当前认知状态不佳，请简化回复。"
             })
             _cb_max_tokens = int(_model_cfg.get("max_tokens", 1500) * 0.8)
+        return None, task_type, _cb_max_tokens, circuit_state, _model_cfg
 
+    async def _call_main_llm_with_verification(self, messages: Any, tools: Any, task_type: Any, _model_cfg: Any,
+                                                _cb_max_tokens: Any, circuit_state: Any, status_callback: Any,
+                                                user_openid: Any, session_id: Any, trace: Any, ctx: Any, user_input: Any, is_owner: Any) -> tuple:
+        """主 LLM 调用 + 验收循环 + 熔断器状态更新。返回 (reply, tool_results)。"""
+        reply = ""
+        tool_results = []
         try:
-            # Task 7: 流式状态推送 —— 主 LLM 调用前通知
             await self._notify_status("正在思考回复...")
             if STREAM_TEXT_PUSH and status_callback and not tools:
-                # P0: 流式文本推送 —— 仅在无工具调用时启用，内部失败自动降级到同步
                 result = await self._stream_llm_response(
                     messages, status_callback=status_callback, task_type=task_type,
                     temperature=_model_cfg.get("temperature", 0.7),
@@ -695,17 +740,15 @@ class MessageProcessorMixin:
                 )
             else:
                 result = await self.router.route(
-                    task_type,
-                    messages,
+                    task_type, messages,
                     temperature=_model_cfg.get("temperature", 0.7),
                     max_tokens=_cb_max_tokens,
                     tools=tools,
                     tool_choice="auto" if tools else None,
-                    user_openid=user_openid,
-                    session_id=session_id,
+                    user_openid=user_openid, session_id=session_id,
                 )
 
-            # ── Harness 验收循环：工具执行 → 结果回填 → 模型验收 ──
+            # Harness 验收循环
             reply, tool_results = await self._run_verification_loop(
                 result, messages, tools, trace,
                 task_type=task_type,
@@ -718,14 +761,12 @@ class MessageProcessorMixin:
                 ctx.handled_by_tool_call = True
             logger.info("agent.got_reply", length=len(reply), preview=reply[:80],
                         tool_count=len(tool_results))
-            # LLM 调用成功后更新认知状态
             if circuit_state == CircuitState.HALF_OPEN:
                 self._circuit_breaker.on_half_open_success(self._cognitive_state)
             else:
                 self._circuit_breaker.on_success(self._cognitive_state)
         except Exception as e:
             trace.error("agent.model_error", error=str(e))
-            # LLM 调用失败后更新认知状态
             if circuit_state == CircuitState.HALF_OPEN:
                 self._circuit_breaker.on_half_open_failure(self._cognitive_state)
             else:
@@ -752,75 +793,117 @@ class MessageProcessorMixin:
                 except Exception as e:
                     logger.debug(f"agent.flash_fallback: {e}")
                     reply = DEGRADED_REPLY
+        return reply, tool_results
 
-        # 从工具结果中提取媒体路径，并清理回复中的冗余路径描述
-        media_image_paths, media_video_path, reply = await self._extract_media_from_tool_results(tool_results, reply)
-
-        # 非主人输出侧隐私扫描（主处理路径）
-        if not is_master and reply:
-            safe, alt_reply, _ = self.security.check_output_privacy(reply)
-            if not safe:
-                logger.warning("agent.privacy_leak_blocked", user_id=user_id, reply_preview=reply[:100])
-                reply = alt_reply
-
-        if not ctx.handled_by_tool_call:
-            await self.context.add_message("user", user_input)
-            rc = self.router.pop_reasoning_content()
-            await self.context.add_message("assistant", reply, reasoning_content=rc)
-
-        self._bg_task_manager.run_background_tasks(
-            user_input, reply, user_id, source, emotion, tool_results,
-            session_id=session_id,
-        )
-
-        try:
-            _spawn(self.router.flush_costs())
-        except Exception as e:
-            logger.error(f"费用统计刷新失败，可能丢失费用数据: {e}")
-
-        trace.info("agent.process.done", reply_preview=reply[:100])
-
-        emotion_label = emotion.get("primary", "")
-
-        # 确保情绪标签存在且合法（LLM 可能漏标或标错）
-        if is_unified():
-            reply, ensured_emotion = ensure_emotion_tag(reply)
-            if ensured_emotion.value != emotion_label:
-                emotion_label = ensured_emotion.value
-
-        if _pre_picked_sticker:
-            clean_reply = self._finalize_reply(reply, strip_emotion=True, style="nahida")
-            sticker_path = _pre_picked_sticker
-        else:
-            clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
-            # get_sticker_info 已做 strip_emotion_tag，这里补 humanize
-            clean_reply = humanize(clean_reply, style="nahida")
-
+    async def _build_voice_result(self, clean_reply: Any, emotion_label: Any, force_voice: Any) -> tuple:
+        """构建语音合成结果。返回 (audio_path, tts_pending, tts_text)。"""
         audio_path = None
         tts_pending = False
         tts_text = ""
         should_generate_voice = self._voice_mode or force_voice
-        if should_generate_voice and self.tts.available and len(clean_reply) > 2:
+        if (should_generate_voice and self.tts.available and len(clean_reply) > 2
+                and get_degradation_strategy().is_feature_available("tts")):
             if TTS_ASYNC_MODE:
-                # Task 6: 异步 TTS —— 跳过同步合成，标记 pending 供调用方后台处理
                 tts_pending = True
                 tts_text = self._clean_reply(clean_reply)
             else:
                 try:
-                    audio_path = await self.tts.synthesize_nahida(self._clean_reply(clean_reply), emotion=emotion_label)
+                    audio_path = await self.tts.synthesize_nahida(
+                        self._clean_reply(clean_reply), emotion=emotion_label)
                 except Exception as e:
                     logger.warning("agent.tts_failed", error=str(e))
+        return audio_path, tts_pending, tts_text
 
-        if audio_path:
-            clean_reply = clean_reply + "\n\n🎙️ 语音消息已发送～"
+    def _parse_verification_result(self, current_result: Any, tools: list[dict] | None) -> tuple:
+        """从 LLM 输出中解析 tool_calls、assistant_content、reasoning。"""
+        current_tool_calls = None
+        current_assistant_content = ""
+        current_reasoning = None
+        if isinstance(current_result, str):
+            if has_dsml_tool_calls(current_result) and tools:
+                dsml_calls = parse_dsml_tool_calls(current_result, self.tool_repair._allowed_tools)
+                if dsml_calls:
+                    current_tool_calls = dsml_calls
+                    current_assistant_content = current_result
+                    current_reasoning = self.router.pop_reasoning_content()
+        else:
+            msg = current_result.choices[0].message
+            if msg.tool_calls:
+                current_tool_calls = [
+                    {"id": str(tc.id), "type": "function",
+                     "function": {"name": tc.function.name,
+                                  "arguments": str(tc.function.arguments) if tc.function.arguments else "{}"}}
+                    for tc in msg.tool_calls
+                ]
+                current_assistant_content = msg.content or ""
+                current_reasoning = getattr(msg, "reasoning_content", None)
+                self.router.pop_reasoning_content()
+        return current_tool_calls, current_assistant_content, current_reasoning
 
-        # PostResponse 钩子（批量后处理）
-        _spawn(self._hook_engine.fire_post_response())
+    async def _call_and_parse_verification_llm(self, messages: Any, tools: Any, task_type: Any, temperature: Any,
+                                                max_tokens: Any, user_openid: Any, session_id: Any, trace: Any,
+                                                turn_idx: Any, loop_start: Any) -> tuple:
+        """验收循环中再次调用 LLM 并解析结果。
 
-        return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path, audio_path=audio_path, tool_results=tool_results, image_paths=media_image_paths, video_path=media_video_path, tts_pending=tts_pending, tts_text=tts_text)
+        返回 (tool_calls, content, reasoning, early_reply)。
+        early_reply 非 None 时表示验收通过可直接返回；
+        tool_calls 为 None 时表示调用失败或超时应退出循环。
+        """
+        remaining = self.VERIFICATION_WALL_TIMEOUT - (time.time() - loop_start)
+        if remaining < 3:
+            trace.warning("verification.no_time_left")
+            return None, "", None, None
 
-    async def _stream_llm_response(self, messages: list, status_callback=None,
-                                    task_type: str = "chat", **kwargs) -> str:
+        try:
+            current_result = await asyncio.wait_for(
+                self.router.route(
+                    task_type, messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    tools=tools,
+                    tool_choice="auto" if tools else None,
+                    user_openid=user_openid,
+                    session_id=session_id,
+                ),
+                timeout=min(self.LLM_CALL_TIMEOUT, remaining),
+            )
+        except asyncio.TimeoutError:
+            trace.warning("verification.llm_timeout", turn=turn_idx)
+            return None, "", None, None
+        except Exception as e:
+            trace.error("verification.llm_error", turn=turn_idx, error=str(e))
+            return None, "", None, None
+
+        current_tool_calls, current_assistant_content, current_reasoning = \
+            self._parse_verification_result(current_result, tools)
+
+        # 如果没有 tool_calls，验收通过
+        if not current_tool_calls:
+            if isinstance(current_result, str):
+                early_reply = self._clean_reply(current_result)
+            else:
+                early_reply = self._clean_reply(current_result.choices[0].message.content or "")
+            return None, "", None, early_reply
+
+        return current_tool_calls, current_assistant_content, current_reasoning, None
+
+    async def _finalize_verification_reply(self, user_input: Any, all_tool_results: Any, last_tool_calls: Any,
+                                            current_assistant_content: Any, trace: Any, user_openid: Any, session_id: Any) -> tuple:
+        """验收循环结束后生成最终回复。"""
+        trace.info("verification.summarize_fallback", tool_count=len(all_tool_results))
+        if all_tool_results:
+            final_reply = await self._tool_call_handler._summarize_results(
+                user_input, all_tool_results, last_tool_calls,
+                trace, user_openid=user_openid, session_id=session_id,
+            )
+        elif current_assistant_content.strip():
+            final_reply = self._clean_reply(current_assistant_content)
+        else:
+            final_reply = DEGRADED_REPLY
+        return final_reply, all_tool_results
+
+    async def _stream_llm_response(self, messages: list, status_callback: Any=None,
+                                    task_type: str = "chat", **kwargs: Any) -> str:
         """流式调用 LLM，逐 token 推送给前端。
 
         当 STREAM_TEXT_PUSH=true 时使用此方法。
@@ -923,6 +1006,60 @@ class MessageProcessorMixin:
         q = user_input.lower()
         return any(kw in q for kw in voice_keywords)
 
+    def _update_mental_state_emotion(self, emotion: dict) -> None:
+        """将检测到的用户情绪更新到 L/M/S 心理状态模型的 S 层.
+
+        受 MENTAL_STATE_ENABLED 环境变量控制, 默认开启.
+        任何异常都被吞掉, 不影响主消息处理流程.
+        """
+        try:
+            from core.mental_state import get_mental_state_manager
+            mgr = get_mental_state_manager()
+            if mgr.enabled:
+                mgr.update_short_term(
+                    emotion="",
+                    user_emotion=emotion.get("primary", ""),
+                )
+        except Exception as e:
+            logger.debug(f"mental_state.update_failed: {e}")
+
+    def _apply_persona_critic(self, reply: str, user_openid: str, user_id: str) -> None:
+        """应用 Persona Critic 检查 LLM 输出的人格一致性.
+
+        在 LLM 输出后、发送给用户前调用.
+        零质量回退: 任何异常都不影响主流程, 仅记录日志.
+        """
+        if not reply:
+            return
+        try:
+            from core.persona_coherence import get_persona_critic
+            from core.xp_system import get_xp_system
+
+            _uid = user_openid or user_id
+            if not _uid:
+                return
+
+            critic = get_persona_critic()
+            if not critic.enabled:
+                return
+
+            xp_sys = get_xp_system()
+            xp_state = xp_sys.get_state(_uid)
+            check = critic.check(reply, xp_state.level.value)
+
+            if check.needs_rewrite:
+                logger.info("persona.rewrite_triggered",
+                           score=check.score, issues=check.issues)
+                # 实际重写逻辑可由调用方决定, 此处仅记录
+            elif check.score < 0.7:
+                # 添加案例到 Case Repository 供后续检索学习
+                try:
+                    critic._case_repo.add_case(reply, check)
+                except Exception as e:
+                    logger.debug(f"persona.add_case_failed: {e}")
+        except Exception as e:
+            logger.warning("persona.check_failed", error=str(e))
+
     async def _describe_images(self, image_data: list[dict]) -> str:
         """使用 MiMo Vision API 识别图片内容"""
         try:
@@ -997,9 +1134,16 @@ class MessageProcessorMixin:
         return decision.agent_names
 
     async def get_chat_target(self, user_id: str) -> str:
+        """获取用户的聊天目标子代理, 默认返回 'nahida'."""
         async with self._chat_target_lock:
             return self._user_chat_target.get(user_id, "nahida")
 
-    async def set_chat_target(self, user_id: str, target: str):
+    async def set_chat_target(self, user_id: str, target: str) -> None:
+        """设置用户的聊天目标子代理.
+
+        Args:
+            user_id: 用户标识
+            target: 目标子代理名
+        """
         async with self._chat_target_lock:
             self._user_chat_target[user_id] = target

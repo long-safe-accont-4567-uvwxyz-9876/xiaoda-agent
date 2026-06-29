@@ -3,7 +3,7 @@ import json
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Optional, Protocol, runtime_checkable
 from openai import AsyncOpenAI
 
 from loguru import logger
@@ -38,7 +38,7 @@ class ExtractedToolCall:
 class ToolCallExtractor(Protocol):
     """从 LLM 响应中提取工具调用的策略接口。"""
 
-    def extract(self, message) -> list[ExtractedToolCall] | None:
+    def extract(self, message: Any) -> list[ExtractedToolCall] | None:
         """从 message 中提取工具调用。返回 None 表示无工具调用。"""
         ...
 
@@ -46,7 +46,7 @@ class ToolCallExtractor(Protocol):
 class StandardExtractor:
     """从标准 message.tool_calls 中提取工具调用。"""
 
-    def extract(self, message) -> list[ExtractedToolCall] | None:
+    def extract(self, message: Any) -> list[ExtractedToolCall] | None:
         if not message.tool_calls:
             return None
         return [
@@ -62,10 +62,10 @@ class StandardExtractor:
 class DsmlExtractor:
     """从 DSML 文本标记中提取工具调用（用于推理模型）。"""
 
-    def __init__(self, allowed_tools: set[str] | None = None):
+    def __init__(self, allowed_tools: set[str] | None = None) -> None:
         self._allowed_tools = allowed_tools
 
-    def extract(self, message) -> list[ExtractedToolCall] | None:
+    def extract(self, message: Any) -> list[ExtractedToolCall] | None:
         content = message.content or ""
         if not content:
             return None
@@ -115,6 +115,8 @@ class SubAgentConfig:
     memory_scope: str | None = None        # 记忆作用域: "shared"/"isolated"
     background: bool = False               # 是否后台运行
     wallpaper: str = ""                    # 聊天背景板 URL（/assets/... 或上传后的 /media/...）
+    allowed_paths: list[str] = field(default_factory=list)    # 允许修改的路径白名单（glob 模式）
+    forbidden_paths: list[str] = field(default_factory=list)  # 禁止修改的路径黑名单
 
 
 def _read_env_key(env_var: str) -> str:
@@ -144,8 +146,8 @@ class SubAgent:
     def __init__(self, config: SubAgentConfig, tts: TTSEngine,
                  tool_executor: ToolExecutor | None = None,
                  tool_repair: ToolCallRepair | None = None,
-                 delegate_callback=None,
-                 core=None):
+                 delegate_callback: Optional[Any]=None,
+                 core: Optional[Any]=None) -> None:
         self.config = config
         self._tts = tts
         self._tool_executor = tool_executor
@@ -160,7 +162,7 @@ class SubAgent:
         self._memory_submit_count = 0  # 子代理单次任务记忆提交计数（上限 3）
         self._communicating_with: str | None = None  # 子代理间直接通信防循环标记
 
-    async def init(self):
+    async def init(self) -> None:
         api_key = _read_env_key(self.config.api_key_env)
         if api_key and self.config.base_url:
             self._client = AsyncOpenAI(api_key=api_key, base_url=self.config.base_url)
@@ -198,7 +200,7 @@ class SubAgent:
             logger.warning("sub_agent.degraded_no_client", name=self.config.name,
                            reason="api_key_missing" if not _read_env_key(self.config.api_key_env) else "no_base_url")
 
-    def set_credential_pool(self, pool: CredentialPool):
+    def set_credential_pool(self, pool: CredentialPool) -> None:
         """设置凭证池（由父代理传递）"""
         self._credential_pool = pool
 
@@ -316,7 +318,7 @@ class SubAgent:
         names.add("send_message_to_agent")  # 子代理专属工具：子代理间直接通信
         return names
 
-    async def chat(self, message: str, context: str = "", status_callback=None) -> str:
+    async def chat(self, message: str, context: str = "", status_callback: Optional[Any]=None) -> str:
         # 降级模式下尝试自动恢复：用最新环境变量中的 Key 重建客户端
         if self._degraded:
             api_key = _read_env_key(self.config.api_key_env)
@@ -443,6 +445,7 @@ class SubAgent:
         return "\n".join(lines)
 
     async def _chat_loop(self, messages: list[dict], tools: list[dict] | None) -> str:
+        """主循环：调用 LLM → 提取工具调用 → 执行 → 反馈，最多 max_rounds 轮。"""
         max_rounds = self.config.max_turns if self.config.max_turns is not None else 5
         working = list(messages)
         tool_names = self._filtered_tool_names()
@@ -493,7 +496,6 @@ class SubAgent:
                 return f"{self.config.display_name}思考时间太长了，请稍后再试吧～"
 
             msg = response.choices[0].message
-
             # 统一提取工具调用：先尝试标准，再尝试 DSML
             extracted = standard_ext.extract(msg)
             is_dsml = False
@@ -501,125 +503,127 @@ class SubAgent:
                 extracted = dsml_ext.extract(msg)
                 is_dsml = extracted is not None
 
+            # 无工具调用 → 直接返回清理后的内容
             if extracted is None:
                 content = msg.content or ""
                 if not content:
                     rc = getattr(msg, "reasoning_content", None) or ""
                     if rc:
                         content = rc
-                # 清理可能泄露的 DSML/TOOL_CALL 格式文本和推理内容
                 content = strip_dsml(content)
                 content = strip_reasoning(content)
                 logger.info("sub_agent.chat.ok", name=self.config.name, model=self.config.model, rounds=round_idx)
                 return content.strip()
 
-            # 构造 assistant 消息
-            msg_rc = getattr(msg, "reasoning_content", None) or ""
-            if is_dsml:
-                clean_content = strip_dsml(msg.content or "")
-                assistant_msg = {
-                    "role": "assistant",
-                    "content": clean_content,
-                    "tool_calls": [
-                        {"id": tc.id, "type": "function", "function": {"name": tc.name, "arguments": tc.arguments_json}}
-                        for tc in extracted
-                    ],
-                }
-            else:
-                assistant_msg = {
-                    "role": "assistant",
-                    "content": msg.content or "",
-                    "tool_calls": [
-                        {"id": tc.id, "type": "function", "function": {"name": tc.name, "arguments": tc.arguments_json}}
-                        for tc in extracted
-                    ],
-                }
-            if msg_rc:
-                assistant_msg["reasoning_content"] = msg_rc
-            working.append(assistant_msg)
+            # 构造 assistant 消息并加入 working
+            working.append(self._build_assistant_msg(msg, extracted, is_dsml))
 
             # 统一执行工具调用
-            async def _exec_one(tc: ExtractedToolCall):
-                tool_name = tc.name
-                args_str = tc.arguments_json
-
-                if self._tool_repair:
-                    # 风暴检测：拦截重复调用同一工具+相同参数的循环
-                    if self._tool_repair.detect_storm(tool_name, args_str):
-                        logger.warning("sub_agent.storm_detected", tool=tool_name)
-                        return {"tool_call_id": tc.id, "content": "错误: 该工具调用已被风暴检测拦截，请换个思路尝试"}
-
-                    repaired = self._tool_repair.repair_truncation(args_str)
-                    if repaired:
-                        args_str = repaired
-
-                args = tc.parse_arguments()
-
-                # 过滤被禁止的工具
-                if tool_name in DELEGATE_BLOCKED_TOOLS:
-                    tool_result_content = json.dumps({
-                        "error": f"工具 {tool_name} 在子代理中被禁止使用"
-                    }, ensure_ascii=False)
-                    return {"tool_call_id": tc.id, "content": tool_result_content}
-
-                # 子代理专属工具：submit_memory（实例方法拦截，不走全局 executor）
-                if tool_name == "submit_memory":
-                    try:
-                        result_text = await self.submit_memory(**args)
-                    except Exception as e:
-                        logger.warning("sub_agent.submit_memory_call_failed", error=str(e)[:200])
-                        result_text = f"错误: {e}"
-                    return {"tool_call_id": tc.id, "content": result_text}
-
-                # 子代理专属工具：send_message_to_agent（实例方法拦截，不走全局 executor）
-                if tool_name == "send_message_to_agent":
-                    try:
-                        result_text = await self.send_message_to_agent(**args)
-                    except Exception as e:
-                        logger.warning("sub_agent.send_message_to_agent_call_failed", error=str(e)[:200])
-                        result_text = f"错误: {e}"
-                    return {"tool_call_id": tc.id, "content": result_text}
-
-                # 工具护栏检查
-                guardrails = get_tool_guardrails()
-                action, guard_msg = await guardrails.check(tool_name, args)
-                if action == "halt":
-                    return {"tool_call_id": tc.id, "content": f"错误: {guard_msg}"}
-
-                result = await self._tool_executor.execute(tool_name, args)
-
-                # 记录工具调用到护栏
-                await guardrails.record_call(tool_name, args, result.success,
-                                       str(result.data)[:100] if result.data else "")
-
-                result_text = await self._handle_tool_result(tool_name, result)
-
-                # 护栏警告注入
-                if action == "warn" and guard_msg and result.success:
-                    result_text = f"[护栏警告: {guard_msg}]\n{result_text}"
-
-                return {"tool_call_id": tc.id, "content": result_text}
-
-            tool_results = await asyncio.gather(*[_exec_one(tc) for tc in extracted], return_exceptions=True)
+            tool_results = await asyncio.gather(
+                *[self._exec_one_tool_call(tc) for tc in extracted],
+                return_exceptions=True,
+            )
             for tc, r in zip(extracted, tool_results):
                 if isinstance(r, Exception):
                     logger.warning("sub_agent.tool_error", name=self.config.name, tool=tc.name, error=str(r))
-                    working.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": f"错误: {r}",
-                    })
+                    working.append({"role": "tool", "tool_call_id": tc.id, "content": f"错误: {r}"})
                 else:
-                    working.append({
-                        "role": "tool",
-                        "tool_call_id": r["tool_call_id"],
-                        "content": r["content"],
-                    })
+                    working.append({"role": "tool", "tool_call_id": r["tool_call_id"], "content": r["content"]})
 
+        # 达到最大轮次：让 LLM 基于已有工具结果做总结回复
         remaining = total_deadline - asyncio.get_running_loop().time()
         if remaining < 5:
             return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
+        return await self._summarize_after_tools(working, api_timeout, remaining)
 
+    def _build_assistant_msg(self, msg: Any, extracted: Any, is_dsml: bool) -> dict:
+        """根据 LLM 响应与提取结果构造 assistant 消息（含 tool_calls 字段）。"""
+        msg_rc = getattr(msg, "reasoning_content", None) or ""
+        if is_dsml:
+            clean_content = strip_dsml(msg.content or "")
+        else:
+            clean_content = msg.content or ""
+        assistant_msg = {
+            "role": "assistant",
+            "content": clean_content,
+            "tool_calls": [
+                {"id": tc.id, "type": "function",
+                 "function": {"name": tc.name, "arguments": tc.arguments_json}}
+                for tc in extracted
+            ],
+        }
+        if msg_rc:
+            assistant_msg["reasoning_content"] = msg_rc
+        return assistant_msg
+
+    async def _exec_one_tool_call(self, tc: Any) -> dict:
+        """执行单个工具调用：风暴检测 → 截断修复 → 护栏检查 → 执行 → 后处理。"""
+        tool_name = tc.name
+        args_str = tc.arguments_json
+
+        if self._tool_repair:
+            # 风暴检测：拦截重复调用同一工具+相同参数的循环
+            if self._tool_repair.detect_storm(tool_name, args_str):
+                logger.warning("sub_agent.storm_detected", tool=tool_name)
+                return {"tool_call_id": tc.id, "content": "错误: 该工具调用已被风暴检测拦截，请换个思路尝试"}
+
+            repaired = self._tool_repair.repair_truncation(args_str)
+            if repaired:
+                args_str = repaired
+
+        args = tc.parse_arguments()
+
+        # 过滤被禁止的工具
+        if tool_name in DELEGATE_BLOCKED_TOOLS:
+            tool_result_content = json.dumps({
+                "error": f"工具 {tool_name} 在子代理中被禁止使用"
+            }, ensure_ascii=False)
+            return {"tool_call_id": tc.id, "content": tool_result_content}
+
+        # 子代理专属工具：submit_memory（实例方法拦截，不走全局 executor）
+        if tool_name == "submit_memory":
+            try:
+                result_text = await self.submit_memory(**args)
+            except Exception as e:
+                logger.warning("sub_agent.submit_memory_call_failed", error=str(e)[:200])
+                result_text = f"错误: {e}"
+            return {"tool_call_id": tc.id, "content": result_text}
+
+        # 子代理专属工具：send_message_to_agent（实例方法拦截，不走全局 executor）
+        if tool_name == "send_message_to_agent":
+            try:
+                result_text = await self.send_message_to_agent(**args)
+            except Exception as e:
+                logger.warning("sub_agent.send_message_to_agent_call_failed", error=str(e)[:200])
+                result_text = f"错误: {e}"
+            return {"tool_call_id": tc.id, "content": result_text}
+
+        # 工具护栏检查
+        guardrails = get_tool_guardrails()
+        action, guard_msg = await guardrails.check(tool_name, args)
+        if action == "halt":
+            return {"tool_call_id": tc.id, "content": f"错误: {guard_msg}"}
+
+        result = await self._tool_executor.execute(tool_name, args)
+
+        # 记录工具调用到护栏
+        await guardrails.record_call(tool_name, args, result.success,
+                               str(result.data)[:100] if result.data else "")
+
+        result_text = await self._handle_tool_result(tool_name, result)
+
+        # 护栏警告注入
+        if action == "warn" and guard_msg and result.success:
+            result_text = f"[护栏警告: {guard_msg}]\n{result_text}"
+
+        return {"tool_call_id": tc.id, "content": result_text}
+
+    async def _summarize_after_tools(self, working: list[dict], api_timeout: int,
+                                       remaining: float) -> str:
+        """达到最大轮次后：若有未消化的 tool 结果，让 LLM 做一次总结回复。
+
+        超时或异常时降级返回 tool 内容的前若干行，避免完全无响应。
+        """
         last_tool = working[-1] if working else {}
         if isinstance(last_tool, dict) and last_tool.get("role") == "tool":
             working.append({
@@ -643,7 +647,6 @@ class SubAgent:
         except (asyncio.TimeoutError, Exception):
             last_tool = working[-1] if working else {}
             if isinstance(last_tool, dict) and last_tool.get("role") == "tool":
-                import re
                 raw_content = last_tool.get("content", "").strip()
                 lines = [l.strip() for l in raw_content.splitlines() if l.strip()]
                 if len(lines) > 1:
@@ -653,7 +656,6 @@ class SubAgent:
                     return formatted
                 return raw_content
             return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
-
     async def submit_memory(self, key_points: list[str], importance: int = 3) -> str:
         """子代理向主记忆提交关键信息（受控写入）"""
         # 频率限制：单次任务最多 3 次
@@ -752,8 +754,8 @@ class AgentDispatcher:
     def __init__(self, tts: TTSEngine,
                  tool_executor: ToolExecutor | None = None,
                  tool_repair: ToolCallRepair | None = None,
-                 delegate_callback=None,
-                 core=None):
+                 delegate_callback: Optional[Any]=None,
+                 core: Optional[Any]=None) -> None:
         self._tts = tts
         self._tool_executor = tool_executor
         self._tool_repair = tool_repair
@@ -795,12 +797,20 @@ class AgentDispatcher:
         logger.info("dispatcher.unregistered", name=name)
         return True
 
-    async def dispatch(self, name: str, task: str, context: str = "", status_callback=None) -> str | None:
+    async def dispatch_single(self, name: str, task: str, context: str = "", status_callback: Optional[Any]=None) -> str | None:
+        """单子代理调度（原 dispatch 方法）。
+
+        保留为独立方法以与并行调度（SubAgentManagerMixin.parallel_dispatch）区分；
+        ``dispatch`` 仍作为向后兼容别名指向本方法。
+        """
         agent = self._agents.get(name)
         if not agent:
             logger.warning("dispatcher.agent_not_found", name=name)
             return None
         return await agent.chat(task, context=context, status_callback=status_callback)
+
+    # 向后兼容别名：保留 dispatch 指向 dispatch_single
+    dispatch = dispatch_single
 
     def get_agent(self, name: str) -> SubAgent | None:
         return self._agents.get(name)
@@ -834,3 +844,172 @@ class AgentDispatcher:
             except Exception as e:
                 logger.warning("sub_agent.client_refresh_failed", name=name, error=str(e)[:200])
         return count
+
+    def route_task(self, task_type: str, input_text: str) -> str:
+        """根据任务类型路由到对应子代理
+
+        参考 Trae SOLO 模式：任务→代理 1:1 绑定
+
+        :param task_type: 任务类型
+            - "frontend" → 妮可（nike，编程助手）
+            - "backend" → 妮可（nike）
+            - "debug" → 妮可（nike）
+            - "security" → 银狼（yinlang，系统管理）
+            - "test" → 妮可（nike）
+            - "info_search" → 希里安（xilian，信息助手）
+            - "hardware" → 银狼（yinlang）
+            - "emotional" → 可莉（keli，萌系陪伴）
+            - "general" → 默认（keli）
+        :param input_text: 用户输入文本
+        :returns: 子代理名称（target）
+        """
+        routing = self._load_routing_config()
+        target = routing.get(task_type, routing.get("general", "keli"))
+
+        # 验证目标代理可用
+        agent = self.get_agent(target)
+        if not agent or not agent.available:
+            # 回退到默认代理
+            default = routing.get("general", "keli")
+            if default != target:
+                logger.info("agent.task_route_fallback",
+                            task_type=task_type,
+                            requested_target=target,
+                            fallback_target=default)
+                return default
+
+        logger.info("agent.task_route", task_type=task_type, target=target)
+        return target
+
+    def _load_routing_config(self) -> dict[str, str]:
+        """从 config/agent_routing.json 加载路由配置
+
+        若文件不存在或加载失败，使用内置默认配置。
+        """
+        import json
+        from pathlib import Path
+
+        config_path = Path(__file__).parent / "config" / "agent_routing.json"
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.warning("agent.routing_config_load_failed", error=str(e))
+
+        # 默认路由
+        return {
+            "frontend": "nike",
+            "backend": "nike",
+            "debug": "nike",
+            "security": "yinlang",
+            "test": "nike",
+            "info_search": "xilian",
+            "hardware": "yinlang",
+            "emotional": "keli",
+            "general": "keli",
+        }
+
+    def classify_task(self, user_input: str) -> str:
+        """根据用户输入自动分类任务类型
+
+        :param user_input: 用户输入文本
+        :returns: 任务类型（frontend/backend/debug/security/test/info_search/hardware/emotional/general）
+        """
+        import re
+        text_lower = user_input.lower()
+
+        # 关键词分类
+        rules = [
+            (["前端", "frontend", "vue", "react", "css", "html", "ui 设计"], "frontend"),
+            (["后端", "backend", "api", "数据库", "python 服务", "fastapi"], "backend"),
+            (["调试", "debug", "报错", "错误", "异常", "stack trace", "bug"], "debug"),
+            (["安全", "security", "漏洞", "加密", "权限", "认证"], "security"),
+            (["测试", "test", "pytest", "单测", "覆盖率"], "test"),
+            (["搜索", "查询", "查找", "search", "browse", "网页"], "info_search"),
+            (["硬件", "gpio", "i2c", "传感器", "摄像头", "hardware"], "hardware"),
+            (["难过", "开心", "生气", "焦虑", "陪伴", "聊天", "求安慰"], "emotional"),
+        ]
+
+        for keywords, task_type in rules:
+            for kw in keywords:
+                if kw in text_lower:
+                    return task_type
+
+        return "general"
+
+    def classify_multi(self, user_input: str) -> list[str]:
+        """检测用户输入中涉及的多个任务领域。
+
+        返回去重后的任务类型列表，如 ["frontend", "security"]。
+        单领域时返回单个元素的列表。
+        """
+        import re
+        text_lower = user_input.lower()
+        rules = [
+            (["前端", "frontend", "vue", "react", "css", "html", "ui 设计"], "frontend"),
+            (["后端", "backend", "api", "数据库", "python 服务", "fastapi"], "backend"),
+            (["调试", "debug", "报错", "错误", "异常", "stack trace", "bug"], "debug"),
+            (["安全", "security", "漏洞", "加密", "权限", "认证"], "security"),
+            (["测试", "test", "pytest", "单测", "覆盖率"], "test"),
+            (["搜索", "查询", "查找", "search", "browse", "网页"], "info_search"),
+            (["硬件", "gpio", "i2c", "传感器", "摄像头", "hardware"], "hardware"),
+            (["难过", "开心", "生气", "焦虑", "陪伴", "聊天", "求安慰"], "emotional"),
+        ]
+        found: set[str] = set()
+        for keywords, task_type in rules:
+            for kw in keywords:
+                if kw in text_lower:
+                    found.add(task_type)
+                    break
+        return sorted(found) if found else ["general"]
+
+    def route_multi(self, task_types: list[str]) -> dict:
+        """多域组合路由 — 根据多个任务类型返回编排计划。
+
+        Returns:
+            {"targets": [...], "mode": "single|parallel_fanout|pipe|generate_verify",
+             "synthesizer": "...", "verifier": "..."}
+        """
+        if len(task_types) == 1:
+            # 单领域，使用 v1 路由
+            target = self.route_task(task_types[0], "")
+            return {"targets": [target], "mode": "single", "synthesizer": "", "verifier": ""}
+
+        # 多领域，查 v2 配置
+        v2_config = self._load_routing_v2_config()
+        multi_domain = v2_config.get("multi_domain", {})
+
+        # 尝试匹配组合键（如 "frontend+security"）
+        combo_key = "+".join(task_types)
+        plan = multi_domain.get(combo_key)
+        if plan:
+            return {
+                "targets": plan.get("targets", []),
+                "mode": plan.get("mode", "parallel_fanout"),
+                "synthesizer": plan.get("synthesizer", ""),
+                "verifier": plan.get("verifier", ""),
+            }
+
+        # 无精确匹配 → 各领域独立路由后去重（直接查配置，不检查可用性）
+        routing = self._load_routing_config()
+        targets = list(dict.fromkeys(
+            routing.get(tt, routing.get("general", "keli")) for tt in task_types))
+        if len(targets) == 1:
+            return {"targets": targets, "mode": "single", "synthesizer": "", "verifier": ""}
+        return {"targets": targets, "mode": "parallel_fanout",
+                "synthesizer": "nahida", "verifier": ""}
+
+    def _load_routing_v2_config(self) -> dict:
+        """从 config/agent_routing_v2.json 加载多域路由配置。"""
+        import json
+        from pathlib import Path
+
+        config_path = Path(__file__).parent / "config" / "agent_routing_v2.json"
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.warning("agent.routing_v2_config_load_failed", error=str(e))
+        return {"single_domain": {}, "multi_domain": {}, "operation_patterns": {}}

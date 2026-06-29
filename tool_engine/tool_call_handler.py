@@ -1,5 +1,8 @@
+from typing import Any
 import asyncio
+import fnmatch
 import json
+from pathlib import Path
 
 from loguru import logger
 from .tool_executor import ToolExecutor, ToolResult
@@ -9,6 +12,49 @@ from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, smart_t
 from emotion.emoji_config import get_status_msg
 from config import ERROR_RULE_STRICT_MODE
 from core.background_tasks import _spawn
+from core.error_codes import ErrorCodeEnum
+from security.instruction_hierarchy import (
+    InstructionLevel,
+    format_instruction,
+    sanitize_external_content,
+)
+
+
+# 写操作工具集合：这些工具会修改文件系统/配置，需进行路径白名单校验
+_WRITE_TOOLS: set[str] = {
+    "write_file", "delete_file", "modify_config", "install_package",
+}
+
+
+def _extract_path_from_args(tool_name: str, args: dict) -> str:
+    """从工具参数中提取目标路径。
+
+    write_file 使用 input_str="path|||content" 格式；
+    其他工具按常见参数名（path / file_path / target_path）查找。
+    """
+    if tool_name == "write_file":
+        input_str = args.get("input_str", "") or ""
+        if "|||" in input_str:
+            return input_str.split("|||", 1)[0]
+        return input_str
+    for key in ("path", "file_path", "target_path"):
+        v = args.get(key)
+        if isinstance(v, str) and v:
+            return v
+    return ""
+
+
+def _sanitize_tool_result(text: str) -> str:
+    """清理工具结果并标记为 EXTERNAL 级别 (防 prompt injection)。
+
+    工具返回的内容 (特别是 web_browse/file_read 等外部数据) 经过
+    sanitize_external_content 清理注入模式后, 用 format_instruction
+    标记为 EXTERNAL 级别 (最低优先级), 防止外部内容覆盖系统指令。
+    """
+    if not text:
+        return text or ""
+    sanitized = sanitize_external_content(text)
+    return format_instruction(sanitized, InstructionLevel.EXTERNAL)
 
 
 DEGRADED_REPLY = "嗯……人家现在有点不太舒服，等会儿再聊好不好？"
@@ -34,9 +80,10 @@ TOOL_DISPLAY_NAMES = {
 
 class ToolCallHandler:
     def __init__(self, tool_executor: ToolExecutor, tool_repair: ToolCallRepair,
-                 clean_reply_callback, context=None, router=None, klee_delegate=None,
-                 status_callback=None, agent_name: str = "nahida", personality_file: str | None = None,
-                 tool_execute_callback=None, error_pipeline=None):
+                 clean_reply_callback: Any, context: Any=None, router: Any=None, klee_delegate: Any=None,
+                 status_callback: Any=None, agent_name: str = "nahida", personality_file: str | None = None,
+                 tool_execute_callback: Any=None, error_pipeline: Any=None,
+                 agent_config: Any=None) -> None:
         self._tool_executor = tool_executor
         self._tool_repair = tool_repair
         self._clean_reply = clean_reply_callback
@@ -49,22 +96,27 @@ class ToolCallHandler:
         self._tool_execute_callback = tool_execute_callback  # 带钩子的工具执行回调
         self._error_pipeline = error_pipeline  # P5: 失败经验→规则闭环（可选）
         self._exec_semaphore = asyncio.Semaphore(5)  # 限制并发工具执行数
+        self._agent_config = agent_config  # SubAgentConfig（子代理路径白名单校验用）
 
-    def set_status_callback(self, callback):
+    def set_agent_config(self, agent_config: Any) -> None:
+        """注入 SubAgentConfig（子代理路径白名单校验用）。"""
+        self._agent_config = agent_config
+
+    def set_status_callback(self, callback: Any) -> None:
         self._status_callback = callback
 
-    def set_error_pipeline(self, pipeline) -> None:
+    def set_error_pipeline(self, pipeline: Any) -> None:
         """注入 ErrorRulePipeline（P5）。允许 bootstrap 阶段延后注入。"""
         self._error_pipeline = pipeline
 
-    async def _notify_status(self, message: str):
+    async def _notify_status(self, message: str) -> None:
         if self._status_callback:
             try:
                 await self._status_callback(message)
             except Exception as e:
                 logger.warning(f"工具调用状态回调通知失败: {e}")
 
-    async def _notify_tool_status(self, tool_name: str, stage: str, detail: str = ""):
+    async def _notify_tool_status(self, tool_name: str, stage: str, detail: str = "") -> None:
         """推送工具调用的中间状态（P0）。
 
         Args:
@@ -89,8 +141,41 @@ class ToolCallHandler:
         except Exception as e:
             logger.debug(f"tool_status_push_failed: {e}")
 
+    def _check_path_whitelist(self, path: str, agent_config: Any = None) -> tuple[bool, str]:
+        """检查路径是否在子代理白名单内。
+
+        校验顺序：黑名单优先 → 白名单为空表示允许所有 → 白名单匹配。
+        路径使用 POSIX 风格分隔符进行 glob 匹配，兼容 Windows。
+
+        :param path: 待校验的路径
+        :param agent_config: SubAgentConfig（为 None 表示主体 Agent，允许所有）
+        :returns: (allowed, reason)
+        """
+        if not agent_config:
+            return True, "no agent config (main agent)"
+
+        # 规范化为 POSIX 风格路径，跨平台一致匹配
+        norm_path = str(Path(path)).replace("\\", "/")
+
+        # 1. 黑名单优先
+        for forbidden in agent_config.forbidden_paths or []:
+            if fnmatch.fnmatch(norm_path, forbidden):
+                return False, f"path matches forbidden pattern: {forbidden}"
+
+        # 2. 白名单为空表示允许所有
+        if not agent_config.allowed_paths:
+            return True, "no whitelist restriction"
+
+        # 3. 白名单匹配
+        for allowed in agent_config.allowed_paths:
+            if fnmatch.fnmatch(norm_path, allowed):
+                return True, f"path matches allowed pattern: {allowed}"
+
+        return False, "path not in whitelist"
+
+
     async def handle(self, tool_calls: list[dict], messages: list[dict],
-                     trace, *, assistant_content: str = "",
+                     trace: Any, *, assistant_content: str = "",
                      reasoning_content: str | None = None,
                      user_openid: str = "", session_id: str = "",
                      safe_mode: bool = False,
@@ -122,102 +207,8 @@ class ToolCallHandler:
             if has_important:
                 await self._notify_status(f"{get_status_msg(self._agent_name, 'using', '、'.join(display_names[:3]), self._personality_file)}{'等' if len(display_names) > 3 else ''}")
 
-        async def _exec_one(tc):
-            async with self._exec_semaphore:
-                t_name = tc["function"]["name"]
-                t_args_str = tc["function"]["arguments"]
-
-                display_name = TOOL_DISPLAY_NAMES.get(t_name, t_name)
-
-                if self._tool_repair.detect_storm(t_name, t_args_str):
-                    trace.warning("tool.storm_detected", tool=t_name)
-                    return tc["id"], ToolResult.fail("该工具调用已被风暴检测拦截"), "", display_name
-
-                repaired = self._tool_repair.repair_truncation(t_args_str)
-                if repaired:
-                    t_args_str = repaired
-
-                try:
-                    t_args = json.loads(t_args_str)
-                except json.JSONDecodeError:
-                    t_args = {}
-
-                # P5: 调用前检查历史失败规则
-                if self._error_pipeline is not None:
-                    try:
-                        matched_rules = await self._error_pipeline.check_rules(t_name, t_args)
-                    except Exception as e:
-                        trace.warning("error_rule.check_failed", error=str(e))
-                        matched_rules = []
-                    if matched_rules:
-                        rule = matched_rules[0]
-                        rule_text = rule.get("rule_text", "") or ""
-                        rule_id = rule.get("id")
-                        # 累计 hit_count（失败安全）
-                        try:
-                            await self._error_pipeline.increment_hit_count(rule_id)
-                        except Exception:
-                            pass
-                        logger.warning("error_rule.hit",
-                                       tool_name=t_name, rule_id=rule_id,
-                                       rule_text=rule_text)
-                        if ERROR_RULE_STRICT_MODE:
-                            trace.warning("error_rule.blocked",
-                                          tool=t_name, rule_id=rule_id)
-                            blocked_msg = f"根据历史失败经验已拦截：{rule_text}"
-                            return (tc["id"],
-                                    ToolResult.fail(blocked_msg),
-                                    f"错误: {blocked_msg}",
-                                    display_name)
-                        # 非严格模式：仅记录警告，继续执行
-
-                # 优先使用带钩子的工具执行回调，否则直接执行
-                await self._notify_tool_status(t_name, "started")
-                try:
-                    if self._tool_execute_callback:
-                        result = await self._tool_execute_callback(t_name, t_args, user_id=user_id, safe_mode=safe_mode)
-                    else:
-                        result = await self._tool_executor.execute(t_name, t_args, safe_mode=safe_mode)
-                except Exception as e:
-                    # 工具执行抛异常时推送 failed 状态，避免前端卡在"正在调用 X..."
-                    await self._notify_tool_status(t_name, "failed", detail=str(e)[:100])
-                    raise
-
-                # 处理委托请求（DelegationRequest dataclass 或旧格式字符串前缀）
-                from core.delegation import DelegationRequest
-                if result.success and result.data:
-                    delegation_req = None
-                    if isinstance(result.data, DelegationRequest):
-                        delegation_req = result.data
-                    elif isinstance(result.data, str) and result.data.startswith("[KLEE_PENDING]"):
-                        # 兼容旧格式
-                        delegation_req = DelegationRequest(
-                            type="klee", question=result.data[len("[KLEE_PENDING]"):], delegator="nahida"
-                        )
-
-                    if delegation_req and delegation_req.type == "klee":
-                        if self._klee_delegate:
-                            klee_reply = await self._klee_delegate(delegation_req.question)
-                            result = ToolResult.ok(klee_reply)
-
-                result_text = ""
-                if result.success:
-                    result_text = json.dumps(result.data, ensure_ascii=False) if not isinstance(result.data, str) else result.data
-                    await self._notify_tool_status(t_name, "completed")
-                else:
-                    result_text = f"错误: {result.error}"
-                    await self._notify_tool_status(t_name, "failed", detail=str(result.error)[:100])
-                    # P5: 工具失败后异步触发规则提取（不阻塞主流程）
-                    if self._error_pipeline is not None and result.error:
-                        try:
-                            _spawn(self._error_pipeline.extract_rule(
-                                t_name, t_args, result.error))
-                        except Exception as e:
-                            trace.warning("error_rule.spawn_failed", error=str(e))
-
-                return tc["id"], result, result_text, display_name
-
-        exec_tasks = [_exec_one(tc) for tc in tool_calls]
+        exec_tasks = [self._execute_single_tool(tc, trace, user_id=user_id, safe_mode=safe_mode)
+                      for tc in tool_calls]
         exec_results = await asyncio.gather(*exec_tasks, return_exceptions=True)
         for idx, er in enumerate(exec_results):
             if isinstance(er, Exception):
@@ -258,14 +249,137 @@ class ToolCallHandler:
                                  reasoning_content=rc if rc else None)
         return final_reply, tool_results
 
+    async def _execute_single_tool(self, tc: Any, trace: Any, *, user_id: str = "",
+                                    safe_mode: bool = False) -> Any:
+        """执行单个工具调用，返回 (tc_id, result, result_text, display_name)。"""
+        async with self._exec_semaphore:
+            t_name = tc["function"]["name"]
+            t_args_str = tc["function"]["arguments"]
+            display_name = TOOL_DISPLAY_NAMES.get(t_name, t_name)
+
+            if self._tool_repair.detect_storm(t_name, t_args_str):
+                trace.warning("tool.storm_detected", tool=t_name)
+                return tc["id"], ToolResult.fail("该工具调用已被风暴检测拦截"), "", display_name
+
+            repaired = self._tool_repair.repair_truncation(t_args_str)
+            if repaired:
+                t_args_str = repaired
+
+            try:
+                t_args = json.loads(t_args_str)
+            except json.JSONDecodeError:
+                t_args = {}
+
+            # P5: 调用前检查历史失败规则
+            if self._error_pipeline is not None:
+                blocked = await self._check_error_rules(t_name, t_args, tc, trace, display_name)
+                if blocked is not None:
+                    return blocked
+
+            # 子代理路径白名单校验：写操作工具执行前检查目标路径
+            if t_name in _WRITE_TOOLS and self._agent_config is not None:
+                target_path = _extract_path_from_args(t_name, t_args)
+                if target_path:
+                    allowed, reason = self._check_path_whitelist(target_path, self._agent_config)
+                    if not allowed:
+                        err_code = ErrorCodeEnum.E_TOOL006
+                        logger.warning(
+                            "tool.path_forbidden",
+                            agent=getattr(self._agent_config, "name", "unknown"),
+                            path=target_path,
+                            reason=reason,
+                            error_code=err_code.code,
+                        )
+                        trace.warning("tool.path_forbidden", tool=t_name,
+                                      path=target_path, reason=reason)
+                        err_msg = f"[{err_code.code}] {err_code.message}: {reason}"
+                        return (tc["id"], ToolResult.fail(err_msg), f"错误: {err_msg}", display_name)
+
+            # 优先使用带钩子的工具执行回调，否则直接执行
+            await self._notify_tool_status(t_name, "started")
+            try:
+                if self._tool_execute_callback:
+                    result = await self._tool_execute_callback(t_name, t_args, user_id=user_id, safe_mode=safe_mode)
+                else:
+                    result = await self._tool_executor.execute(t_name, t_args, safe_mode=safe_mode)
+            except Exception as e:
+                await self._notify_tool_status(t_name, "failed", detail=str(e)[:100])
+                raise
+
+            # 处理委托请求（DelegationRequest dataclass 或旧格式字符串前缀）
+            result = await self._handle_delegation(result)
+
+            result_text = ""
+            if result.success:
+                result_text = json.dumps(result.data, ensure_ascii=False) if not isinstance(result.data, str) else result.data
+                await self._notify_tool_status(t_name, "completed")
+            else:
+                result_text = f"错误: {result.error}"
+                await self._notify_tool_status(t_name, "failed", detail=str(result.error)[:100])
+                # P5: 工具失败后异步触发规则提取（不阻塞主流程）
+                if self._error_pipeline is not None and result.error:
+                    try:
+                        _spawn(self._error_pipeline.extract_rule(t_name, t_args, result.error))
+                    except Exception as e:
+                        trace.warning("error_rule.spawn_failed", error=str(e))
+
+            # S7: 工具结果标记为 EXTERNAL 级别并清理注入内容 (防 prompt injection)
+            result_text = _sanitize_tool_result(result_text)
+            return tc["id"], result, result_text, display_name
+
+    async def _check_error_rules(self, t_name: Any, t_args: Any, tc: Any, trace: Any, display_name: Any) -> Any:
+        """检查历史失败规则，返回阻塞元组或 None。"""
+        try:
+            matched_rules = await self._error_pipeline.check_rules(t_name, t_args)
+        except Exception as e:
+            trace.warning("error_rule.check_failed", error=str(e))
+            matched_rules = []
+        if not matched_rules:
+            return None
+
+        rule = matched_rules[0]
+        rule_text = rule.get("rule_text", "") or ""
+        rule_id = rule.get("id")
+        try:
+            await self._error_pipeline.increment_hit_count(rule_id)
+        except Exception:
+            pass
+        logger.warning("error_rule.hit", tool_name=t_name, rule_id=rule_id, rule_text=rule_text)
+        if ERROR_RULE_STRICT_MODE:
+            trace.warning("error_rule.blocked", tool=t_name, rule_id=rule_id)
+            blocked_msg = f"根据历史失败经验已拦截：{rule_text}"
+            return (tc["id"], ToolResult.fail(blocked_msg), f"错误: {blocked_msg}", display_name)
+        return None
+
+    async def _handle_delegation(self, result: Any) -> Any:
+        """处理工具结果中的委托请求（Klee 委托等）。"""
+        from core.delegation import DelegationRequest
+        if not (result.success and result.data):
+            return result
+
+        delegation_req = None
+        if isinstance(result.data, DelegationRequest):
+            delegation_req = result.data
+        elif isinstance(result.data, str) and result.data.startswith("[KLEE_PENDING]"):
+            delegation_req = DelegationRequest(
+                type="klee", question=result.data[len("[KLEE_PENDING]"):], delegator="nahida"
+            )
+
+        if delegation_req and delegation_req.type == "klee":
+            if self._klee_delegate:
+                klee_reply = await self._klee_delegate(delegation_req.question)
+                result = ToolResult.ok(klee_reply)
+        return result
+
     async def _summarize_results(self, user_input: str, tool_results: list,
-                                  tool_calls: list, trace,
+                                  tool_calls: list, trace: Any,
                                   user_openid: str = "", session_id: str = "") -> str:
         parts = []
         for tc, result in zip(tool_calls, tool_results):
             if result.success and result.data:
                 data_str = json.dumps(result.data, ensure_ascii=False) if not isinstance(result.data, str) else result.data
-                parts.append(data_str)
+                # S7: 工具结果标记为 EXTERNAL 级别并清理注入内容 (防 prompt injection)
+                parts.append(_sanitize_tool_result(data_str))
             elif not result.success:
                 name = TOOL_DISPLAY_NAMES.get(tc["function"]["name"], tc["function"]["name"])
                 parts.append(f"⚠️ {name}执行失败: {result.error}")

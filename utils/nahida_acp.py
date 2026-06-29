@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from typing import Any
 import sys
 import json
 import asyncio
@@ -24,7 +25,7 @@ logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="WA
 
 
 class NahidaAcpServer:
-    def __init__(self):
+    def __init__(self) -> None:
         self.agent = None
         self.sessions = {}
         self.initialized = False
@@ -33,13 +34,13 @@ class NahidaAcpServer:
         self._coze_agent_id = ""
         self._coze_session_id = ""
 
-    async def _init_agent(self):
+    async def _init_agent(self) -> None:
         from agent_core import AgentCore
         self.agent = AgentCore()
         await self.agent.init()
         logger.info("nahida_acp.agent_initialized")
 
-    def _read_message(self):
+    def _read_message(self) -> Any:
         line = sys.stdin.readline()
         if not line:
             return None
@@ -52,12 +53,12 @@ class NahidaAcpServer:
             logger.warning("nahida_acp.json_decode_error", line=line[:100])
             return None
 
-    def _write_message(self, msg):
+    def _write_message(self, msg: Any) -> None:
         payload = json.dumps(msg, ensure_ascii=False)
         sys.stdout.write(payload + '\n')
         sys.stdout.flush()
 
-    def _handle_initialize(self, msg):
+    def _handle_initialize(self, msg: Any) -> dict:
         self.initialized = True
         return {
             "jsonrpc": "2.0",
@@ -81,7 +82,7 @@ class NahidaAcpServer:
             }
         }
 
-    def _handle_session_new(self, msg):
+    def _handle_session_new(self, msg: Any) -> dict:
         params = msg.get("params", {})
         session_id = f"nahida_{uuid.uuid4().hex[:12]}"
         self.sessions[session_id] = {"created": True}
@@ -93,11 +94,11 @@ class NahidaAcpServer:
             }
         }
 
-    def _strip_coze_context(self, text):
+    def _strip_coze_context(self, text: Any) -> Any:
         cleaned = re.sub(r'<coze-context>.*?</coze-context>\s*', '', text, flags=re.DOTALL)
         return cleaned.strip()
 
-    def _extract_coze_ids(self, text):
+    def _extract_coze_ids(self, text: Any) -> Any:
         m = re.search(r'<coze-context>(.*?)</coze-context>', text, re.DOTALL)
         if not m:
             return {}
@@ -113,7 +114,7 @@ class NahidaAcpServer:
                     ids[key] = val
         return ids
 
-    def _encode_image(self, path):
+    def _encode_image(self, path: Any) -> Any:
         try:
             p = Path(path)
             if not p.exists() or not p.is_file():
@@ -128,7 +129,7 @@ class NahidaAcpServer:
         except Exception:
             return None
 
-    async def _send_audio_file(self, audio_path, acp_session_id: str):
+    async def _send_audio_file(self, audio_path: Any, acp_session_id: str) -> None:
         try:
             p = Path(audio_path)
             if not p.exists() or not p.is_file():
@@ -165,7 +166,8 @@ class NahidaAcpServer:
         except Exception as e:
             logger.warning("nahida_acp.audio_send_failed", error=str(e))
 
-    async def _handle_session_prompt(self, msg):
+    async def _handle_session_prompt(self, msg: Any) -> dict:
+        """处理 session/prompt：解析输入 → 调用 agent → 回复文本/贴纸/音频。"""
         params = msg.get("params", {})
         session_id = params.get("sessionId", "")
         prompt_blocks = params.get("prompt", [])
@@ -176,6 +178,63 @@ class NahidaAcpServer:
         if session_id and not session_id.startswith("nahida_") and not self._coze_session_id:
             self._coze_session_id = session_id
 
+        text_parts, image_data = self._parse_prompt_blocks(prompt_blocks)
+        user_text = "\n".join(text_parts).strip()
+
+        coze_ids = self._extract_coze_ids(user_text)
+        if coze_ids.get('agent-id'):
+            self._coze_agent_id = coze_ids['agent-id']
+        if coze_ids.get('session-id'):
+            self._coze_session_id = coze_ids['session-id']
+
+        user_text = self._strip_coze_context(user_text)
+        if not user_text:
+            return {
+                "jsonrpc": "2.0",
+                "id": msg.get("id", 2),
+                "result": {"stopReason": "end_turn"}
+            }
+
+        self._cancelled = False
+
+        reply, sticker_path, audio_path = await self._call_agent_process_safe(
+            user_text, session_id, image_data
+        )
+
+        if self._cancelled:
+            return {
+                "jsonrpc": "2.0",
+                "id": msg.get("id", 2),
+                "result": {"stopReason": "cancelled"}
+            }
+
+        self._write_message({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": session_id,
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": reply}
+                }
+            }
+        })
+
+        if sticker_path:
+            await self._send_sticker(sticker_path, session_id)
+
+        if audio_path:
+            await self._send_audio_file(audio_path, session_id)
+
+        return {
+            "jsonrpc": "2.0",
+            "id": msg.get("id", 2),
+            "result": {"stopReason": "end_turn"}
+        }
+
+    @staticmethod
+    def _parse_prompt_blocks(prompt_blocks: list) -> tuple:
+        """解析 prompt blocks，返回 (text_parts, image_data)。"""
         text_parts = []
         image_data = []
         for block in prompt_blocks:
@@ -195,25 +254,11 @@ class NahidaAcpServer:
                     name = block.get("name", "image")
                     if uri:
                         text_parts.append(f"[图片: {name}]")
+        return text_parts, image_data
 
-        user_text = "\n".join(text_parts).strip()
-
-        coze_ids = self._extract_coze_ids(user_text)
-        if coze_ids.get('agent-id'):
-            self._coze_agent_id = coze_ids['agent-id']
-        if coze_ids.get('session-id'):
-            self._coze_session_id = coze_ids['session-id']
-
-        user_text = self._strip_coze_context(user_text)
-        if not user_text:
-            return {
-                "jsonrpc": "2.0",
-                "id": msg.get("id", 2),
-                "result": {"stopReason": "end_turn"}
-            }
-
-        self._cancelled = False
-
+    async def _call_agent_process_safe(self, user_text: str, session_id: str,
+                                        image_data: list) -> tuple:
+        """调用 agent.process，异常时返回错误回复。返回 (reply, sticker_path, audio_path)。"""
         sticker_path = None
         audio_path = None
         try:
@@ -230,14 +275,13 @@ class NahidaAcpServer:
         except Exception as e:
             logger.error("nahida_acp.process_error", error=str(e))
             reply = f"嗯……出了点小问题：{str(e)[:200]}"
+        return reply, sticker_path, audio_path
 
-        if self._cancelled:
-            return {
-                "jsonrpc": "2.0",
-                "id": msg.get("id", 2),
-                "result": {"stopReason": "cancelled"}
-            }
-
+    def _send_inline_image(self, session_id: str, image_path: str) -> None:
+        """通过 session/update 内联发送图片（bridge 不可用时的 fallback）。"""
+        img = self._encode_image(image_path)
+        if not img:
+            return
         self._write_message({
             "jsonrpc": "2.0",
             "method": "session/update",
@@ -246,102 +290,49 @@ class NahidaAcpServer:
                 "update": {
                     "sessionUpdate": "agent_message_chunk",
                     "content": {
-                        "type": "text",
-                        "text": reply
+                        "type": "image",
+                        "mimeType": img["mimeType"],
+                        "data": img["data"]
                     }
                 }
             }
         })
 
-        if sticker_path:
-            sticker_p = Path(sticker_path)
-            if self._coze_agent_id and self._coze_session_id:
-                bridge_bin = Path.home() / ".coze" / "bridge" / "bin" / "coze-bridge"
-                if bridge_bin.exists():
-                    try:
-                        cmd = [
-                            str(bridge_bin), "send", "image", str(sticker_p),
-                            "--agent-id", self._coze_agent_id,
-                            "--session-id", self._coze_session_id,
-                            "--caption", "🌿",
-                        ]
-                        proc = await asyncio.create_subprocess_exec(
-                            *cmd,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE,
-                        )
-                        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-                        if proc.returncode == 0:
-                            logger.info("nahida_acp.sticker_sent_via_bridge", file=sticker_p.name)
-                        else:
-                            logger.warning("nahida_acp.sticker_bridge_failed",
-                                           code=proc.returncode, stderr=stderr.decode()[:200])
-                            img = self._encode_image(sticker_path)
-                            if img:
-                                self._write_message({
-                                    "jsonrpc": "2.0",
-                                    "method": "session/update",
-                                    "params": {
-                                        "sessionId": session_id,
-                                        "update": {
-                                            "sessionUpdate": "agent_message_chunk",
-                                            "content": {
-                                                "type": "image",
-                                                "mimeType": img["mimeType"],
-                                                "data": img["data"]
-                                            }
-                                        }
-                                    }
-                                })
-                    except Exception as e:
-                        logger.warning("nahida_acp.sticker_send_error", error=str(e))
-                else:
-                    img = self._encode_image(sticker_path)
-                    if img:
-                        self._write_message({
-                            "jsonrpc": "2.0",
-                            "method": "session/update",
-                            "params": {
-                                "sessionId": session_id,
-                                "update": {
-                                    "sessionUpdate": "agent_message_chunk",
-                                    "content": {
-                                        "type": "image",
-                                        "mimeType": img["mimeType"],
-                                        "data": img["data"]
-                                    }
-                                }
-                            }
-                        })
+    async def _send_sticker(self, sticker_path: str, session_id: str) -> None:
+        """发送贴纸：优先 coze-bridge，失败或无 bridge 时内联发送图片。"""
+        sticker_p = Path(sticker_path)
+        if not (self._coze_agent_id and self._coze_session_id):
+            self._send_inline_image(session_id, sticker_path)
+            return
+
+        bridge_bin = Path.home() / ".coze" / "bridge" / "bin" / "coze-bridge"
+        if not bridge_bin.exists():
+            self._send_inline_image(session_id, sticker_path)
+            return
+
+        try:
+            cmd = [
+                str(bridge_bin), "send", "image", str(sticker_p),
+                "--agent-id", self._coze_agent_id,
+                "--session-id", self._coze_session_id,
+                "--caption", "🌿",
+            ]
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            if proc.returncode == 0:
+                logger.info("nahida_acp.sticker_sent_via_bridge", file=sticker_p.name)
             else:
-                img = self._encode_image(sticker_path)
-                if img:
-                    self._write_message({
-                        "jsonrpc": "2.0",
-                        "method": "session/update",
-                        "params": {
-                            "sessionId": session_id,
-                            "update": {
-                                "sessionUpdate": "agent_message_chunk",
-                                "content": {
-                                    "type": "image",
-                                    "mimeType": img["mimeType"],
-                                    "data": img["data"]
-                                }
-                            }
-                        }
-                    })
+                logger.warning("nahida_acp.sticker_bridge_failed",
+                               code=proc.returncode, stderr=stderr.decode()[:200])
+                self._send_inline_image(session_id, sticker_path)
+        except Exception as e:
+            logger.warning("nahida_acp.sticker_send_error", error=str(e))
 
-        if audio_path:
-            await self._send_audio_file(audio_path, session_id)
-
-        return {
-            "jsonrpc": "2.0",
-            "id": msg.get("id", 2),
-            "result": {"stopReason": "end_turn"}
-        }
-
-    def _handle_session_cancel(self, msg):
+    def _handle_session_cancel(self, msg: Any) -> Any:
         self._cancelled = True
         if msg.get("id") is not None:
             return {
@@ -351,7 +342,7 @@ class NahidaAcpServer:
             }
         return None
 
-    def _handle_session_load(self, msg):
+    def _handle_session_load(self, msg: Any) -> dict:
         return {
             "jsonrpc": "2.0",
             "id": msg.get("id", 1),
@@ -361,14 +352,14 @@ class NahidaAcpServer:
             }
         }
 
-    def _make_error(self, msg, code, message):
+    def _make_error(self, msg: Any, code: Any, message: Any) -> dict:
         return {
             "jsonrpc": "2.0",
             "id": msg.get("id"),
             "error": {"code": code, "message": message}
         }
 
-    async def run(self):
+    async def run(self) -> None:
         await self._init_agent()
 
         logger.info("nahida_acp.ready")
@@ -430,7 +421,7 @@ class NahidaAcpServer:
                     )
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", action="store_true")
     parser.add_argument("--acp-version", action="store_true")

@@ -26,7 +26,7 @@ class ToolOrchestrator:
     3. 钩子触发
     """
 
-    def __init__(self, core):
+    def __init__(self, core: Any) -> None:
         """初始化 ToolOrchestrator。
 
         Args:

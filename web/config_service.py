@@ -33,14 +33,19 @@ _DEFAULTS: dict[str, Any] = {
 
 
 class ConfigService:
-    def __init__(self, path: Path | None = None):
+    def __init__(self, path: Path | None = None) -> None:
+        """初始化配置服务, 加载已存在的覆盖文件.
+
+        Args:
+            path: 覆盖配置文件路径, None 表示使用默认路径
+        """
         self._path = path or _get_overrides_path()
         self._lock = threading.Lock()
         self._data: dict[str, Any] = json.loads(json.dumps(_DEFAULTS))
         self._watchers: dict[str, list[Callable[[Any], None]]] = {}
         self._load()
 
-    def _load(self):
+    def _load(self) -> None:
         if self._path.exists():
             try:
                 saved = json.loads(self._path.read_text(encoding="utf-8"))
@@ -49,7 +54,7 @@ class ConfigService:
                 logger.warning("config_service.load_failed error={}", str(e))
 
     @staticmethod
-    def _deep_merge(base: dict, override: dict):
+    def _deep_merge(base: dict, override: dict) -> None:
         for k, v in override.items():
             if isinstance(v, dict) and isinstance(base.get(k), dict):
                 ConfigService._deep_merge(base[k], v)
@@ -57,6 +62,15 @@ class ConfigService:
                 base[k] = v
 
     def get(self, path: str, default: Any = None) -> Any:
+        """按点分路径读取配置值.
+
+        Args:
+            path: 点分路径 (如 "schedule.enabled")
+            default: 路径不存在时的默认返回值
+
+        Returns:
+            配置值或 default
+        """
         node: Any = self._data
         for part in path.split("."):
             if not isinstance(node, dict) or part not in node:
@@ -64,7 +78,13 @@ class ConfigService:
             node = node[part]
         return node
 
-    def set(self, path: str, value: Any):
+    def set(self, path: str, value: Any) -> None:
+        """按点分路径写入配置值, 落盘并通知 watcher.
+
+        Args:
+            path: 点分路径
+            value: 新值
+        """
         with self._lock:
             parts = path.split(".")
             node = self._data
@@ -74,7 +94,8 @@ class ConfigService:
             self._save()
         self._notify(path, value)
 
-    def delete(self, path: str):
+    def delete(self, path: str) -> None:
+        """按点分路径删除配置项, 落盘并通知 watcher."""
         with self._lock:
             parts = path.split(".")
             node = self._data
@@ -86,7 +107,7 @@ class ConfigService:
             self._save()
         self._notify(path, None)
 
-    def _save(self):
+    def _save(self) -> None:
         try:
             from utils.atomic_write import atomic_write
             self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -97,10 +118,16 @@ class ConfigService:
             tmp.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(self._path)
 
-    def watch(self, prefix: str, callback: Callable[[Any], None]):
+    def watch(self, prefix: str, callback: Callable[[Any], None]) -> None:
+        """注册监听器, 路径前缀匹配时回调.
+
+        Args:
+            prefix: 点分路径前缀
+            callback: 值变更回调函数
+        """
         self._watchers.setdefault(prefix, []).append(callback)
 
-    def _notify(self, path: str, value: Any):
+    def _notify(self, path: str, value: Any) -> None:
         for prefix, cbs in self._watchers.items():
             if path.startswith(prefix):
                 for cb in cbs:
@@ -114,6 +141,7 @@ _instance: ConfigService | None = None
 
 
 def get_config_service() -> ConfigService:
+    """获取全局 ConfigService 单例."""
     global _instance
     if _instance is None:
         _instance = ConfigService()

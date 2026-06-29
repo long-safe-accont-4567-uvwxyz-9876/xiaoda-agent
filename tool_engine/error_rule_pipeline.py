@@ -9,6 +9,7 @@ ERROR_RULE_STRICT_MODE 拒绝或仅警告。
 """
 
 from __future__ import annotations
+from typing import Any
 
 import json
 import os
@@ -70,7 +71,7 @@ class ErrorRulePipeline:
     _EXTRACT_THROTTLE_SECONDS = 60  # 同一 tool_name 在 60 秒内只允许一次提取
     _MAX_RULES_PER_TOOL_24H = 5     # 24h 内同 tool_name 规则数上限，超过则跳过 LLM 提取
 
-    def __init__(self, db, router):
+    def __init__(self, db: Any, router: Any) -> None:
         self.db = db
         self.router = router
         self._available = db is not None
@@ -78,7 +79,7 @@ class ErrorRulePipeline:
         self._free_base_url = "https://api.siliconflow.cn/v1"
         self._free_model = "Qwen/Qwen2.5-7B-Instruct"
 
-    def set_free_model_client(self, api_key: str, base_url: str, model: str):
+    def set_free_model_client(self, api_key: str, base_url: str, model: str) -> None:
         """配置硅基流动免费模型客户端（与 InstinctManager 接口一致）"""
         self._free_api_key = api_key
         self._free_base_url = base_url
@@ -119,60 +120,18 @@ class ErrorRulePipeline:
         """
         if not self._available:
             return None
-        # 错误或参数太短无分析价值
         if not error or len(error.strip()) < 2:
             return None
         try:
             now = time.time()
 
-            # 内存级时间窗节流：同一 tool_name 在 60 秒内只允许一次提取，
-            # 避免高频重复失败的工具反复触发 LLM 调用浪费免费配额
-            last_time = self._last_extract_time.get(tool_name, 0.0)
-            elapsed = now - last_time
-            if elapsed < self._EXTRACT_THROTTLE_SECONDS:
-                logger.debug("error_rule.throttle_skipped",
-                             tool_name=tool_name, elapsed=round(elapsed, 1))
+            # 节流 + 粗粒度去重检查
+            cutoff = await self._check_throttle_and_dedup(tool_name, now)
+            if cutoff is None:
                 return None
 
-            # 粗粒度去重：查询最近 24h 内同 tool_name 的规则数量，
-            # 已有 >= 5 条则跳过 LLM 提取（避免同一工具积累过多规则）
-            cutoff = now - 86400
-            cursor = await self.db._conn.execute(
-                "SELECT COUNT(*) FROM tool_error_rules WHERE tool_name=? AND created_at >= ?",
-                (tool_name, cutoff),
-            )
-            row = await cursor.fetchone()
-            rule_count = row[0] if row else 0
-            if rule_count >= self._MAX_RULES_PER_TOOL_24H:
-                logger.debug("error_rule.too_many_rules_skipped",
-                             tool_name=tool_name, count=rule_count)
-                return None
-
-            args_str = json.dumps(args, ensure_ascii=False)[:500]
-            prompt = EXTRACT_PROMPT.format(
-                tool_name=tool_name,
-                args=args_str,
-                error=error[:500],
-            )
-            messages = [{"role": "user", "content": prompt}]
-
-            # 即将调用 LLM，记录节流时间点（即使后续 LLM 失败也节流，防止重试风暴）
-            self._last_extract_time[tool_name] = now
-
-            # 优先硅基流动免费模型，失败降级到 router
-            result = await self._call_free_model(messages, temperature=0.3, max_tokens=200)
-            if result is None and self.router is not None:
-                try:
-                    result = await self.router.route(
-                        task_type="chat_mini",
-                        messages=messages,
-                        temperature=0.3,
-                        max_tokens=200,
-                    )
-                except Exception as e:
-                    logger.warning("error_rule.extract_llm_failed", error=str(e))
-                    return None
-
+            # 调用 LLM 提取规则
+            result = await self._call_extract_llm(tool_name, args, error, now)
             if not result or not isinstance(result, str):
                 return None
 
@@ -196,28 +155,78 @@ class ErrorRulePipeline:
                 return None
 
             # 写入数据库
-            cursor = await self.db._conn.execute(
-                """INSERT INTO tool_error_rules
-                   (tool_name, pattern, rule_text, created_at, hit_count)
-                   VALUES (?, ?, ?, ?, 0)""",
-                (tool_name, pattern, rule_text, now),
-            )
-            await self.db._conn.commit()
-            rule_id = cursor.lastrowid
-            logger.info("error_rule.extracted",
-                        tool_name=tool_name, pattern=pattern,
-                        rule_text=rule_text[:60], rule_id=rule_id)
-            return {
-                "id": rule_id,
-                "tool_name": tool_name,
-                "pattern": pattern,
-                "rule_text": rule_text,
-                "created_at": now,
-                "hit_count": 0,
-            }
+            return await self._save_rule(tool_name, pattern, rule_text, now)
         except Exception as e:
             logger.warning("error_rule.extract_failed", error=str(e))
             return None
+
+    async def _check_throttle_and_dedup(self, tool_name: str, now: float) -> Any:
+        """节流 + 粗粒度去重检查。返回 cutoff 时间戳或 None（应跳过）。"""
+        # 内存级时间窗节流：同一 tool_name 在 60 秒内只允许一次提取
+        last_time = self._last_extract_time.get(tool_name, 0.0)
+        elapsed = now - last_time
+        if elapsed < self._EXTRACT_THROTTLE_SECONDS:
+            logger.debug("error_rule.throttle_skipped",
+                         tool_name=tool_name, elapsed=round(elapsed, 1))
+            return None
+
+        # 粗粒度去重：最近 24h 内同 tool_name 规则数 >= 5 则跳过
+        cutoff = now - 86400
+        cursor = await self.db._conn.execute(
+            "SELECT COUNT(*) FROM tool_error_rules WHERE tool_name=? AND created_at >= ?",
+            (tool_name, cutoff),
+        )
+        row = await cursor.fetchone()
+        rule_count = row[0] if row else 0
+        if rule_count >= self._MAX_RULES_PER_TOOL_24H:
+            logger.debug("error_rule.too_many_rules_skipped",
+                         tool_name=tool_name, count=rule_count)
+            return None
+        return cutoff
+
+    async def _call_extract_llm(self, tool_name: str, args: dict, error: str, now: float) -> Any:
+        """调用 LLM 提取规则文本。返回结果字符串或 None。"""
+        args_str = json.dumps(args, ensure_ascii=False)[:500]
+        prompt = EXTRACT_PROMPT.format(tool_name=tool_name, args=args_str, error=error[:500])
+        messages = [{"role": "user", "content": prompt}]
+
+        # 即将调用 LLM，记录节流时间点（即使后续失败也节流，防止重试风暴）
+        self._last_extract_time[tool_name] = now
+
+        # 优先硅基流动免费模型，失败降级到 router
+        result = await self._call_free_model(messages, temperature=0.3, max_tokens=200)
+        if result is None and self.router is not None:
+            try:
+                result = await self.router.route(
+                    task_type="chat_mini", messages=messages,
+                    temperature=0.3, max_tokens=200,
+                )
+            except Exception as e:
+                logger.warning("error_rule.extract_llm_failed", error=str(e))
+                return None
+        return result
+
+    async def _save_rule(self, tool_name: str, pattern: str, rule_text: str, now: float) -> dict:
+        """将提取到的规则写入数据库。返回规则 dict。"""
+        cursor = await self.db._conn.execute(
+            """INSERT INTO tool_error_rules
+               (tool_name, pattern, rule_text, created_at, hit_count)
+               VALUES (?, ?, ?, ?, 0)""",
+            (tool_name, pattern, rule_text, now),
+        )
+        await self.db._conn.commit()
+        rule_id = cursor.lastrowid
+        logger.info("error_rule.extracted",
+                    tool_name=tool_name, pattern=pattern,
+                    rule_text=rule_text[:60], rule_id=rule_id)
+        return {
+            "id": rule_id,
+            "tool_name": tool_name,
+            "pattern": pattern,
+            "rule_text": rule_text,
+            "created_at": now,
+            "hit_count": 0,
+        }
 
     @staticmethod
     def _parse_rule_line(result: str) -> tuple[str, str] | None:

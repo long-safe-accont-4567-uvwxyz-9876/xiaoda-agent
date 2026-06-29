@@ -1,3 +1,4 @@
+from typing import Any
 import asyncio
 import json
 import os
@@ -46,7 +47,7 @@ AUTO_NOTE_PROMPT = """你是纳西妲。刚刚和{address_term}进行了一轮�
 
 class NotebookManager:
 
-    def __init__(self, db, notebook: NotebookDB, router):
+    def __init__(self, db: Any, notebook: NotebookDB, router: Any) -> None:
         self._db = db
         self.notebook = notebook
         self._router = router
@@ -140,10 +141,10 @@ class NotebookManager:
                 lines.append(f"· {title}")
         return lines
 
-    async def complete_task(self, task_id: int):
+    async def complete_task(self, task_id: int) -> None:
         await self.notebook.complete_task(task_id)
 
-    async def cancel_task(self, task_id: int):
+    async def cancel_task(self, task_id: int) -> None:
         await self.notebook.cancel_task(task_id)
 
     async def delete_note(self, note_id: int) -> bool:
@@ -153,7 +154,7 @@ class NotebookManager:
         return await self.notebook.touch_notebook_entry(note_id)
 
     async def auto_note_after_message(self, user_msg: str, reply: str,
-                                      address_term: str = "爸爸"):
+                                      address_term: str = "爸爸") -> None:
         try:
             existing = await self.get_recent_notes(limit=10)
             if existing:

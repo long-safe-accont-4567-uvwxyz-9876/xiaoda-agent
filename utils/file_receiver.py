@@ -1,3 +1,4 @@
+from typing import Any
 import asyncio
 import ipaddress
 import os
@@ -11,10 +12,10 @@ from loguru import logger
 
 
 class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def __init__(self, validator):
+    def __init__(self, validator: Any) -> None:
         self._validator = validator
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    def redirect_request(self, req: Any, fp: Any, code: Any, msg: Any, headers: Any, newurl: Any) -> Any:
         if not self._validator(newurl):
             return None
         return super().redirect_request(req, fp, code, msg, headers, newurl)
@@ -23,10 +24,10 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
 class _SSRFCheckHTTPHandler(urllib.request.HTTPHandler):
     """自定义 HTTP Handler：在连接建立后检查实际连接的远程 IP，防止 DNS Rebinding"""
 
-    def http_open(self, req):
+    def http_open(self, req: Any) -> Any:
         return self._open_with_ip_check(req)
 
-    def _open_with_ip_check(self, req):
+    def _open_with_ip_check(self, req: Any) -> Any:
         # 先执行正常请求
         response = super().http_open(req)
         # 检查实际连接的远程地址
@@ -39,7 +40,7 @@ class _SSRFCheckHTTPHandler(urllib.request.HTTPHandler):
         return response
 
     @staticmethod
-    def _check_peer_ip(ip_str: str):
+    def _check_peer_ip(ip_str: str) -> None:
         ip = ipaddress.ip_address(ip_str)
         if isinstance(ip, ipaddress.IPv4Address):
             for net in FileReceiver.PRIVATE_NETWORKS:
@@ -54,10 +55,10 @@ class _SSRFCheckHTTPHandler(urllib.request.HTTPHandler):
 class _SSRFCheckHTTPSHandler(urllib.request.HTTPSHandler):
     """自定义 HTTPS Handler：在连接建立后检查实际连接的远程 IP，防止 DNS Rebinding"""
 
-    def https_open(self, req):
+    def https_open(self, req: Any) -> Any:
         return self._open_with_ip_check(req)
 
-    def _open_with_ip_check(self, req):
+    def _open_with_ip_check(self, req: Any) -> Any:
         response = super().https_open(req)
         if response and hasattr(response, 'fp') and hasattr(response.fp, 'raw'):
             sock = getattr(response.fp.raw, '_sock', None)
@@ -99,7 +100,7 @@ class FileReceiver:
         ipaddress.ip_network("fe80::/10"),
     ]
 
-    def __init__(self, base_dir: Path):
+    def __init__(self, base_dir: Path) -> None:
         self._base = base_dir
         self._base.mkdir(parents=True, exist_ok=True)
         for sub in ("images", "documents", "other"):
@@ -174,7 +175,7 @@ class FileReceiver:
             return False
         return True
 
-    async def receive(self, attachment) -> dict:
+    async def receive(self, attachment: Any) -> dict:
         url = getattr(attachment, 'url', '')
         filename = getattr(attachment, 'filename', 'unknown')
         content_type = getattr(attachment, 'content_type', '')
@@ -196,7 +197,7 @@ class FileReceiver:
         save_path = self._base / sub_dir / save_name
 
         try:
-            def _download():
+            def _download() -> tuple:
                 req = urllib.request.Request(url, headers={
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 })

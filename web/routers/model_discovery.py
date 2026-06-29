@@ -1,5 +1,6 @@
 """模型发现路由：自动发现所有已注册 provider 的可用模型，标注免费/付费。"""
 from __future__ import annotations
+from typing import Any
 
 import asyncio
 import os
@@ -11,13 +12,10 @@ from loguru import logger
 from web.schemas import Envelope
 from web.routers.auth import get_current_user
 from web.model_capabilities import get_capabilities
+# 缓存抽到 web._discovery_cache, 避免与 web.routers.models 互相导入
+from web._discovery_cache import _cache, _CACHE_TTL, invalidate_discovery_cache
 
 router = APIRouter(tags=["model-discovery"], dependencies=[Depends(get_current_user)])
-
-# ── 简易 30 分钟缓存 ──────────────────────────────────────────────
-
-_cache: dict = {"data": None, "ts": 0.0}
-_CACHE_TTL = 30 * 60  # 30 minutes
 
 
 # ── 通用 OpenAI 兼容模型获取 ──────────────────────────────────────
@@ -283,7 +281,7 @@ def _get_all_providers() -> list[dict]:
     # 从 config_service 读取自定义 provider
     try:
         from web.config_service import get_config_service
-        from web.routers.models import load_provider_key
+        from web._provider_keys import load_provider_key
         cfg = get_config_service()
         custom = cfg.get("models.providers", {}) or {}
         # 按 order 字段升序排列；未设置 order 的排在已设置之后，按字典插入顺序
@@ -313,20 +311,12 @@ def _get_all_providers() -> list[dict]:
     return providers
 
 
-# ── 缓存管理 ──────────────────────────────────────────────────────
-
-
-def invalidate_discovery_cache() -> None:
-    """清除模型发现缓存，使下次请求重新获取。"""
-    _cache["data"] = None
-    _cache["ts"] = 0.0
-
-
 # ── GET /models/discover ──────────────────────────────────────────
+# 注: invalidate_discovery_cache 已抽到 web._discovery_cache
 
 
 @router.get("/models/discover", response_model=Envelope[list[dict]])
-async def discover_models():
+async def discover_models() -> Any:
     """发现所有已注册 provider 的可用模型，结果缓存 30 分钟。
 
     自动发现所有已注册的 provider（包括内置 MiMo 和自定义 provider），
@@ -349,7 +339,7 @@ async def discover_models():
 
         if pid == "mimo":
             # MiMo 不需要 API 调用，直接构建
-            async def _mimo_task():
+            async def _mimo_task() -> Any:
                 return _build_mimo_provider()
             tasks.append(_mimo_task())
         elif pid == "openrouter":
@@ -407,7 +397,7 @@ async def discover_models():
 
 
 @router.post("/models/chat-model", response_model=Envelope[dict])
-async def set_chat_model(body: dict, request: Request):
+async def set_chat_model(body: dict, request: Request) -> Any:
     """切换当前聊天模型。"""
     provider = (body.get("provider") or "").strip()
     model_id = (body.get("model_id") or "").strip()
@@ -438,7 +428,7 @@ async def set_chat_model(body: dict, request: Request):
         return Envelope(ok=False, error={"code": "set_failed", "message": str(e)})
 
 
-def _ensure_custom_provider(provider: str, router_obj) -> None:
+def _ensure_custom_provider(provider: str, router_obj: Any) -> None:
     """确保自定义 provider 已注册到 router。
 
     从 config_service 动态读取 provider 配置，不再硬编码。
@@ -449,7 +439,7 @@ def _ensure_custom_provider(provider: str, router_obj) -> None:
     # 先尝试从 config_service 读取
     try:
         from web.config_service import get_config_service
-        from web.routers.models import load_provider_key
+        from web._provider_keys import load_provider_key
         cfg = get_config_service()
         record = cfg.get(f"models.providers.{provider}")
         if record:

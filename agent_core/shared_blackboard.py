@@ -18,7 +18,7 @@ from loguru import logger
 class _Entry:
     __slots__ = ("value", "agent_name", "expire_at", "subscribers")
 
-    def __init__(self, value: Any, agent_name: str, ttl: float):
+    def __init__(self, value: Any, agent_name: str, ttl: float) -> None:
         self.value = value
         self.agent_name = agent_name
         # ttl <= 0 表示永不过期（订阅占位条目使用）
@@ -34,7 +34,7 @@ class SharedBlackboard:
     以保证订阅者在收到首次 put 前不会被清理。
     """
 
-    def __init__(self, default_ttl: float = 600.0):
+    def __init__(self, default_ttl: float = 600.0) -> None:
         self._store: dict[str, _Entry] = {}
         self._lock = asyncio.Lock()
         self._default_ttl = default_ttl
@@ -139,7 +139,7 @@ class SharedBlackboard:
 
         返回 asyncio.Task，调用方可保存引用以便关闭时取消。
         """
-        async def _loop():
+        async def _loop() -> None:
             while True:
                 try:
                     await asyncio.sleep(interval)

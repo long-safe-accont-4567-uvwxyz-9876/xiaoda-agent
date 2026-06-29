@@ -1,3 +1,4 @@
+from typing import Any, Optional
 import asyncio
 import json
 import time
@@ -38,7 +39,7 @@ class ToolExecutor:
         "default": 60.0,
     }
 
-    def __init__(self, db=None):
+    def __init__(self, db: Optional[Any]=None) -> None:
         self.db = db
         self._call_counts: dict[str, list[float]] = {}
         self._global_timeout: float = self.TOOL_TIMEOUTS["default"]
@@ -60,12 +61,30 @@ class ToolExecutor:
 
         _start = time.time()
         result = await self._execute_with_timeout(tool, arguments)
-        metrics.observe(f"tool_execute.{tool_name}.duration", time.time() - _start)
+        duration = time.time() - _start
+        metrics.observe(f"tool_execute.{tool_name}.duration", duration)
         if result.success:
             metrics.inc(f"tool_execute.{tool_name}.success")
         else:
             metrics.inc(f"tool_execute.{tool_name}.failure")
         metrics.maybe_report()
+        # 结构化日志：工具执行结果
+        logger.info("tool.execute", event="tool_execute", tool=tool_name,
+                    duration_ms=int(duration * 1000), user_id=user_id,
+                    success=result.success)
+
+        # A4: 工具执行结果 → 学习反馈闭环 (失败不阻塞主流程)
+        try:
+            from core.learning_feedback import record_tool_outcome
+            record_tool_outcome(
+                tool_name=tool_name,
+                arguments=arguments,
+                success=result.success,
+                error=result.error or "",
+                duration=duration,
+            )
+        except Exception as _e:
+            logger.debug(f"tool_executor.learning_feedback_failed: {_e}")
 
         if self.db:
             await self._write_audit_log(tool_name, arguments, result, user_id)
@@ -120,7 +139,7 @@ class ToolExecutor:
             return ToolResult.fail(f"出了一点小问题……等会儿再试试好不好？")
 
     async def _write_audit_log(self, tool_name: str, arguments: dict,
-                               result: ToolResult, user_id: str):
+                               result: ToolResult, user_id: str) -> None:
         try:
             # 安全加固：过滤敏感参数值
             safe_args = _filter_sensitive_args(arguments)

@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from security.sandbox_config import check_domain_allowed
+from security.ssrf_guard import validate_url as _ssrf_validate_url
 
 _CONTENT_LIMIT = 8000
 
@@ -18,7 +19,7 @@ _BROWSE_CACHE_TTL = 300.0  # 5分钟
 _primp_client = None
 
 
-def _get_primp_client():
+def _get_primp_client() -> Any:
     global _primp_client
     if _primp_client is None:
         import primp
@@ -121,11 +122,10 @@ async def web_browse(url: str) -> ToolResult:
         if not allowed:
             return ToolResult.fail(f"沙箱安全限制: {reason}")
 
-        # SSRF 防护：检查 hostname 是否解析到内网 IP
-        parsed = urlparse(url)
-        hostname = parsed.hostname
-        if hostname and await asyncio.to_thread(_is_private_ip, hostname):
-            return ToolResult.fail(f"安全限制：禁止访问内网地址 {hostname}")
+        # SSRF v2 防护：5步法 (协议白名单 + 主机名黑名单 + DNS解析 + IP分类 + DNS Pinning)
+        ok, reason = await asyncio.to_thread(_ssrf_validate_url, url)
+        if not ok:
+            return ToolResult.fail(f"安全限制：{reason}")
 
         # 检查浏览缓存
         now = time.monotonic()

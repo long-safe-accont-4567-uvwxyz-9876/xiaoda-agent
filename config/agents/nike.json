@@ -28,5 +28,14 @@
   "memory_scope": null,
   "background": false,
   "wallpaper": "",
+  "allowed_paths": [
+    "tools/code_tools_v2.py",
+    "tools/file_tools_v2.py"
+  ],
+  "forbidden_paths": [
+    "*.env",
+    "security/*",
+    "config/agents/*_personality.md"
+  ],
   "_saved_at": 1782406898.6371293
 }

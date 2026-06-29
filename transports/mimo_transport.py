@@ -8,7 +8,7 @@ from transports.base import ProviderTransport, TransportResponse
 
 class MiMoTransport(ProviderTransport):
 
-    def __init__(self):
+    def __init__(self) -> None:
         # 从 os.getenv() 实时读取，避免使用 config 模块级冻结变量
         _key = os.getenv("MIMO_API_KEY", "")
         _url = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")

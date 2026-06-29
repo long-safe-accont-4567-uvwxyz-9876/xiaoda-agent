@@ -9,7 +9,7 @@ from plugins.manifest import PluginPermissions
 
 class PermissionDenied(Exception):
     """权限被拒绝"""
-    def __init__(self, plugin_id: str, permission: str, detail: str = ""):
+    def __init__(self, plugin_id: str, permission: str, detail: str = "") -> None:
         self.plugin_id = plugin_id
         self.permission = permission
         self.detail = detail
@@ -19,7 +19,7 @@ class PermissionDenied(Exception):
 class PermissionChecker:
     """运行时权限检查器"""
 
-    def __init__(self, plugin_id: str, permissions: PluginPermissions):
+    def __init__(self, plugin_id: str, permissions: PluginPermissions) -> None:
         self._plugin_id = plugin_id
         self._permissions = permissions
 

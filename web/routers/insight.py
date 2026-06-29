@@ -1,5 +1,6 @@
 """内在世界路由（R9）：情绪/画像/今日事件/记忆/知识图谱/笔记/学习/本能。"""
 from __future__ import annotations
+from typing import Any
 
 import asyncio
 import json
@@ -39,7 +40,7 @@ async def _broadcast_kg_change(action: str, target: str, name: str) -> None:
 
 
 @router.get("/insight/emotion/current", response_model=Envelope[dict])
-async def emotion_current(request: Request):
+async def emotion_current(request: Request) -> Any:
     # 优先取网关缓存的最近一次回复情绪（ws_hub 写入）
     cached = getattr(request.app.state, "last_emotion", None)
     if cached:
@@ -55,7 +56,7 @@ async def emotion_current(request: Request):
 
 
 @router.get("/insight/emotion/history", response_model=Envelope[list[dict]])
-async def emotion_history(request: Request, days: int = Query(default=7, ge=1, le=30)):
+async def emotion_history(request: Request, days: int = Query(default=7, ge=1, le=30)) -> Any:
     core = request.app.state.core
     since = time.time() - days * 86400
     rows = await core.db.fetch_all(
@@ -70,7 +71,7 @@ async def emotion_history(request: Request, days: int = Query(default=7, ge=1, l
 
 
 @router.get("/insight/portrait", response_model=Envelope[dict])
-async def get_portrait(request: Request):
+async def get_portrait(request: Request) -> Any:
     core = request.app.state.core
     row = await core.db.fetch_one(
         "SELECT * FROM user_portrait ORDER BY version DESC LIMIT 1")
@@ -81,12 +82,12 @@ async def get_portrait(request: Request):
 
 
 @router.post("/insight/portrait/consolidate", response_model=Envelope[dict])
-async def consolidate_portrait(request: Request):
+async def consolidate_portrait(request: Request) -> Any:
     core = request.app.state.core
     if not core.portrait_manager:
         raise HTTPException(503, "画像管理器未初始化")
 
-    async def _run():
+    async def _run() -> None:
         try:
             result = await core.portrait_manager.consolidate(
                 force=True, address_term=core.context.current_address_term)
@@ -110,7 +111,7 @@ async def consolidate_portrait(request: Request):
 
 
 @router.get("/insight/today", response_model=Envelope[dict])
-async def today(request: Request):
+async def today(request: Request) -> Any:
     core = request.app.state.core
     t0 = _today_start()
     items: list[dict] = []
@@ -160,7 +161,7 @@ async def list_memories(request: Request,
                         q: str = Query(default=""),
                         importance_min: float = Query(default=0.0, ge=0, le=1),
                         page: int = Query(default=0, ge=0),
-                        limit: int = Query(default=30, le=100)):
+                        limit: int = Query(default=30, le=100)) -> Any:
     core = request.app.state.core
     if q.strip() and core.memory:
         try:
@@ -183,7 +184,7 @@ async def list_memories(request: Request,
 
 
 @router.delete("/insight/memories/{memory_id}", response_model=Envelope[dict])
-async def delete_memory(memory_id: int, request: Request):
+async def delete_memory(memory_id: int, request: Request) -> Any:
     if request.headers.get("X-Confirm") != "yes":
         raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     core = request.app.state.core
@@ -200,13 +201,13 @@ async def delete_memory(memory_id: int, request: Request):
 @router.get("/insight/knowledge/graph", response_model=Envelope[dict])
 async def knowledge_graph(request: Request,
                           entity: str = Query(default=""),
-                          depth: int = Query(default=1, ge=1, le=2)):
+                          depth: int = Query(default=1, ge=1, le=2)) -> Any:
     core = request.app.state.core
     kdb = core.db.knowledge
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
 
-    async def _node(name: str):
+    async def _node(name: str) -> None:
         if name in nodes:
             return
         ent = await kdb.get_knowledge_entity(name)
@@ -245,7 +246,7 @@ async def knowledge_graph(request: Request,
 
 
 @router.get("/insight/knowledge/entities", response_model=Envelope[list[dict]])
-async def list_entities(request: Request, limit: int = Query(default=200, le=500)):
+async def list_entities(request: Request, limit: int = Query(default=200, le=500)) -> Any:
     core = request.app.state.core
     kdb = core.db.knowledge
     rows = await kdb.get_all_entities(limit=limit)
@@ -253,7 +254,7 @@ async def list_entities(request: Request, limit: int = Query(default=200, le=500
 
 
 @router.get("/insight/knowledge/relations", response_model=Envelope[list[dict]])
-async def list_relations(request: Request, limit: int = Query(default=200, le=500)):
+async def list_relations(request: Request, limit: int = Query(default=200, le=500)) -> Any:
     core = request.app.state.core
     kdb = core.db.knowledge
     rows = await kdb.get_all_relations(limit=limit)
@@ -261,7 +262,7 @@ async def list_relations(request: Request, limit: int = Query(default=200, le=50
 
 
 @router.put("/insight/knowledge/relations/{relation_id}", response_model=Envelope[dict])
-async def update_relation(relation_id: str, body: dict, request: Request):
+async def update_relation(relation_id: str, body: dict, request: Request) -> Any:
     core = request.app.state.core
     kdb = core.db.knowledge
     rel_type = (body.get("relation") or body.get("relation_type") or "").strip()
@@ -283,7 +284,7 @@ async def update_relation(relation_id: str, body: dict, request: Request):
 @router.get("/insight/notebook", response_model=Envelope[list[dict]])
 async def list_notes(request: Request,
                      kind: str = Query(default=""),
-                     limit: int = Query(default=50, le=200)):
+                     limit: int = Query(default=50, le=200)) -> Any:
     core = request.app.state.core
     cond, params = "status != 'archived'", []
     if kind:
@@ -297,7 +298,7 @@ async def list_notes(request: Request,
 
 
 @router.post("/insight/notebook", response_model=Envelope[dict])
-async def create_note(body: dict, request: Request):
+async def create_note(body: dict, request: Request) -> Any:
     core = request.app.state.core
     content = (body.get("content") or "").strip()
     if not content:
@@ -311,7 +312,7 @@ async def create_note(body: dict, request: Request):
 
 
 @router.put("/insight/notebook/{note_id}", response_model=Envelope[dict])
-async def update_note(note_id: int, body: dict, request: Request):
+async def update_note(note_id: int, body: dict, request: Request) -> Any:
     core = request.app.state.core
     sets, params = [], []
     for field in ("content", "tags", "kind", "status"):
@@ -334,7 +335,7 @@ async def update_note(note_id: int, body: dict, request: Request):
 
 
 @router.delete("/insight/notebook/{note_id}", response_model=Envelope[dict])
-async def delete_note(note_id: int, request: Request):
+async def delete_note(note_id: int, request: Request) -> Any:
     core = request.app.state.core
     n = await core.db.execute("DELETE FROM notebook_entries WHERE id=?", (note_id,))
     if not n:
@@ -347,7 +348,7 @@ async def delete_note(note_id: int, request: Request):
 
 
 @router.get("/insight/learnings", response_model=Envelope[list[dict]])
-async def list_learnings(request: Request, limit: int = Query(default=50, le=200)):
+async def list_learnings(request: Request, limit: int = Query(default=50, le=200)) -> Any:
     core = request.app.state.core
     rows = await core.db.fetch_all(
         "SELECT * FROM learnings ORDER BY last_seen DESC LIMIT ?", (limit,))
@@ -355,7 +356,7 @@ async def list_learnings(request: Request, limit: int = Query(default=50, le=200
 
 
 @router.get("/insight/instincts", response_model=Envelope[list[dict]])
-async def list_instincts(request: Request, limit: int = Query(default=50, le=200)):
+async def list_instincts(request: Request, limit: int = Query(default=50, le=200)) -> Any:
     core = request.app.state.core
     try:
         rows = await core.db.fetch_all(
@@ -369,7 +370,7 @@ async def list_instincts(request: Request, limit: int = Query(default=50, le=200
 
 
 @router.post("/insight/memories", response_model=Envelope[dict])
-async def create_memory(body: dict, request: Request):
+async def create_memory(body: dict, request: Request) -> Any:
     core = request.app.state.core
     summary = (body.get("summary") or "").strip()
     if not summary:
@@ -391,7 +392,7 @@ async def create_memory(body: dict, request: Request):
 
 
 @router.put("/insight/memories/{memory_id}", response_model=Envelope[dict])
-async def update_memory(memory_id: int, body: dict, request: Request):
+async def update_memory(memory_id: int, body: dict, request: Request) -> Any:
     core = request.app.state.core
     sets, params = [], []
     if "summary" in body and body["summary"]:
@@ -425,7 +426,7 @@ async def update_memory(memory_id: int, body: dict, request: Request):
 
 
 @router.post("/insight/learnings", response_model=Envelope[dict])
-async def create_learning(body: dict, request: Request):
+async def create_learning(body: dict, request: Request) -> Any:
     core = request.app.state.core
     summary = (body.get("summary") or "").strip()
     if not summary:
@@ -445,7 +446,7 @@ async def create_learning(body: dict, request: Request):
 
 
 @router.put("/insight/learnings/{learning_id}", response_model=Envelope[dict])
-async def update_learning(learning_id: int, body: dict, request: Request):
+async def update_learning(learning_id: int, body: dict, request: Request) -> Any:
     core = request.app.state.core
     sets, params = [], []
     field_map = {"summary": "summary", "pattern": "pattern_key", "priority": "priority", "status": "status"}
@@ -465,7 +466,7 @@ async def update_learning(learning_id: int, body: dict, request: Request):
 
 
 @router.delete("/insight/learnings/{learning_id}", response_model=Envelope[dict])
-async def delete_learning(learning_id: int, request: Request):
+async def delete_learning(learning_id: int, request: Request) -> Any:
     core = request.app.state.core
     n = await core.db.execute("DELETE FROM learnings WHERE id=?", (learning_id,))
     if not n:
@@ -478,7 +479,7 @@ async def delete_learning(learning_id: int, request: Request):
 
 
 @router.post("/insight/instincts", response_model=Envelope[dict])
-async def create_instinct(body: dict, request: Request):
+async def create_instinct(body: dict, request: Request) -> Any:
     core = request.app.state.core
     content = (body.get("content") or body.get("summary") or "").strip()
     if not content:
@@ -494,7 +495,7 @@ async def create_instinct(body: dict, request: Request):
 
 
 @router.put("/insight/instincts/{instinct_id}", response_model=Envelope[dict])
-async def update_instinct(instinct_id: int, body: dict, request: Request):
+async def update_instinct(instinct_id: int, body: dict, request: Request) -> Any:
     core = request.app.state.core
     sets, params = [], []
     for field in ("content", "status"):
@@ -518,7 +519,7 @@ async def update_instinct(instinct_id: int, body: dict, request: Request):
 
 
 @router.delete("/insight/instincts/{instinct_id}", response_model=Envelope[dict])
-async def delete_instinct(instinct_id: int, request: Request):
+async def delete_instinct(instinct_id: int, request: Request) -> Any:
     core = request.app.state.core
     n = await core.db.execute("DELETE FROM instincts WHERE id=?", (instinct_id,))
     if not n:
@@ -531,7 +532,7 @@ async def delete_instinct(instinct_id: int, request: Request):
 
 
 @router.post("/insight/knowledge/entities", response_model=Envelope[dict])
-async def create_entity(body: dict, request: Request):
+async def create_entity(body: dict, request: Request) -> Any:
     core = request.app.state.core
     name = (body.get("name") or "").strip()
     if not name:
@@ -555,7 +556,7 @@ async def create_entity(body: dict, request: Request):
 
 
 @router.put("/insight/knowledge/entities/{name}", response_model=Envelope[dict])
-async def update_entity(name: str, body: dict, request: Request):
+async def update_entity(name: str, body: dict, request: Request) -> Any:
     core = request.app.state.core
     kdb = core.db.knowledge
     existing = await kdb.get_knowledge_entity(name)
@@ -583,7 +584,7 @@ async def update_entity(name: str, body: dict, request: Request):
 
 
 @router.delete("/insight/knowledge/entities/{name}", response_model=Envelope[dict])
-async def delete_entity(name: str, request: Request):
+async def delete_entity(name: str, request: Request) -> Any:
     core = request.app.state.core
     kdb = core.db.knowledge
     deleted = await kdb.delete_knowledge_entity(name)
@@ -594,7 +595,7 @@ async def delete_entity(name: str, request: Request):
 
 
 @router.post("/insight/knowledge/relations", response_model=Envelope[dict])
-async def create_relation(body: dict, request: Request):
+async def create_relation(body: dict, request: Request) -> Any:
     core = request.app.state.core
     from_e = (body.get("from") or "").strip()
     to_e = (body.get("to") or "").strip()
@@ -609,7 +610,7 @@ async def create_relation(body: dict, request: Request):
 
 
 @router.delete("/insight/knowledge/relations/{relation_id}", response_model=Envelope[dict])
-async def delete_relation(relation_id: str, request: Request):
+async def delete_relation(relation_id: str, request: Request) -> Any:
     core = request.app.state.core
     kdb = core.db.knowledge
     deleted = await kdb.delete_knowledge_relation(relation_id)

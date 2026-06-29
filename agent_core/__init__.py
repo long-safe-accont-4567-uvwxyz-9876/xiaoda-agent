@@ -3,6 +3,7 @@
 冷启动优化: 使用 __getattr__ 延迟导入, 避免包导入时触发全部子模块。
 只有实际访问 agent_core.AgentCore 等名称时才触发导入。
 """
+from typing import Any
 import os
 import sys
 from pathlib import Path
@@ -26,13 +27,15 @@ from utils.logging_config import setup_logging
 setup_logging()
 
 # 延迟导入映射表 — 只有实际访问时才触发导入
+# 共享类型 (ProcessResult / RequestContext / UserIdentity / DEGRADED_REPLY / _current_request_ctx)
+# 直接从 _shared 导入, 避免触发 agent_core.core 整体加载 (打破循环)
 _LAZY_IMPORTS = {
     "AgentCore": "agent_core.core",
-    "ProcessResult": "agent_core.core",
-    "RequestContext": "agent_core.core",
-    "UserIdentity": "agent_core.core",
-    "DEGRADED_REPLY": "agent_core.core",
-    "_current_request_ctx": "agent_core.core",
+    "ProcessResult": "agent_core._shared",
+    "RequestContext": "agent_core._shared",
+    "UserIdentity": "agent_core._shared",
+    "DEGRADED_REPLY": "agent_core._shared",
+    "_current_request_ctx": "agent_core._shared",
     "StickerManager": "agent_core.core",
     "ModelRouter": "agent_core.core",
     "DatabaseManager": "agent_core.core",
@@ -54,7 +57,7 @@ _LAZY_IMPORTS = {
 }
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     """模块级 __getattr__ — 延迟导入"""
     if name in _LAZY_IMPORTS:
         import importlib
@@ -65,7 +68,7 @@ def __getattr__(name: str):
     raise AttributeError(f"module 'agent_core' has no attribute {name!r}")
 
 
-def __dir__():
+def __dir__() -> list[str]:
     return list(_LAZY_IMPORTS.keys())
 
 

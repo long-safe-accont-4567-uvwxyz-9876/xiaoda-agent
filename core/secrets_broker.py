@@ -13,11 +13,11 @@ from utils.encrypted_credential import reveal_credential
 class SecretsBroker:
     """凭证代理 — LLM 只发出"我要调用X"的意图, Broker 代查凭证"""
 
-    def __init__(self, credential_store: dict | None = None):
+    def __init__(self, credential_store: dict | None = None) -> None:
         # credential_store: key_id → EncryptedCredential 或 str
         self._store: dict = credential_store or {}
 
-    def register(self, key_id: str, credential: Any):
+    def register(self, key_id: str, credential: Any) -> None:
         """注册凭证"""
         self._store[key_id] = credential
 
@@ -66,10 +66,11 @@ _broker = SecretsBroker()
 
 
 def get_secrets_broker() -> SecretsBroker:
+    """获取全局 SecretsBroker 单例."""
     return _broker
 
 
-def init_broker(env_store: dict):
+def init_broker(env_store: dict) -> None:
     """从环境变量初始化 Broker"""
     for key, val in env_store.items():
         if val and key.endswith("_API_KEY"):

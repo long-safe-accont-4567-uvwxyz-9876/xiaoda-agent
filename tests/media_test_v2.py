@@ -3,10 +3,28 @@ import sys
 import os
 import random
 import asyncio
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv()
+
+# 项目根目录 (基于当前文件位置计算，避免硬编码绝对路径)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _resolve_sticker_dir(subdir: str = "nahida") -> str:
+    """查找可用表情包目录: 优先项目内置，再尝试外部挂载路径"""
+    candidates = [
+        PROJECT_ROOT / "assets" / "stickers" / subdir,
+        Path("/media/orangepi/KIOXIA/nahida-data/stickers"),
+        Path("/media/orangepi/KIOXIA/nahida-data") / f"{subdir}-stickers",
+    ]
+    for d in candidates:
+        if d.is_dir():
+            return str(d)
+    import tempfile
+    return tempfile.mkdtemp()
 
 bugs = []
 
@@ -28,7 +46,7 @@ def test_sticker_integration():
     from emotion.emotion_simple import detect_emotion
 
     # 1.1 真实表情包目录
-    sticker_dir = "/media/orangepi/KIOXIA/nahida-data/stickers"
+    sticker_dir = _resolve_sticker_dir("nahida")
     sm = StickerManager(sticker_dir)
     print(f"[1.1] StickerManager: available={sm.available}, categories={list(sm._cache.keys())}")
 
@@ -106,7 +124,7 @@ def test_sticker_integration():
         print("  [OK] 情绪映射一致")
 
     # 1.7 子 Agent 表情包测试
-    klee_dir = "/media/orangepi/KIOXIA/nahida-data/klee-stickers"
+    klee_dir = _resolve_sticker_dir("klee")
     if os.path.exists(klee_dir):
         ksm = StickerManager(klee_dir)
         print(f"\n[1.7] 可莉表情包: available={ksm.available}, categories={list(ksm._cache.keys())}")
@@ -212,7 +230,7 @@ async def test_agnes_tools():
 
     # 2.7 Agnes API Key 缺失在 .env.example 中
     print("\n[2.7] .env.example 检查:")
-    env_example = "/home/orangepi/ai-agent/.env.example"
+    env_example = PROJECT_ROOT / ".env.example"
     if os.path.exists(env_example):
         content = open(env_example).read()
         if "AGNES_API_KEY" not in content:
@@ -294,7 +312,7 @@ async def test_agent_integration():
     print("\n[3.4] TTS 情绪标签一致性:")
     from emotion.tts_engine import EMOTION_STYLE_MAP
     from emotion.sticker_manager import StickerManager
-    sm = StickerManager("/media/orangepi/KIOXIA/nahida-data/stickers")
+    sm = StickerManager(_resolve_sticker_dir("nahida"))
 
     tts_emotions = set(EMOTION_STYLE_MAP.keys())
     sticker_emotions = set(sm.EMOTION_MAP.keys())

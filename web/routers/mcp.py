@@ -1,5 +1,6 @@
 """MCP 服务路由（R6）：server CRUD、生命周期控制、工具发现。"""
 from __future__ import annotations
+from typing import Any
 
 import json
 import os
@@ -16,16 +17,16 @@ from web.routers.auth import get_current_user
 router = APIRouter(tags=["mcp"], dependencies=[Depends(get_current_user)])
 
 
-def _cfg():
+def _cfg() -> Any:
     from web.config_service import get_config_service
     return get_config_service()
 
 
-def _manager(request: Request):
+def _manager(request: Request) -> Any:
     return request.app.state.core._mcp_manager
 
 
-async def _audit(request: Request, action: str, detail: str):
+async def _audit(request: Request, action: str, detail: str) -> None:
     core = request.app.state.core
     try:
         await core.db.insert_audit_log(f"webui.mcp.{action}", "webui", detail)
@@ -34,7 +35,7 @@ async def _audit(request: Request, action: str, detail: str):
         pass
 
 
-async def _broadcast_changed():
+async def _broadcast_changed() -> None:
     try:
         from web.ws_hub import manager
         await manager.broadcast({"type": "config_changed", "domain": "mcp"})
@@ -76,7 +77,7 @@ def _replace_path_placeholders(args: list) -> list:
     return [_PATH_PLACEHOLDERS.get(str(a), a) for a in args]
 
 
-def _serialize(name: str, client, cfg_record: dict | None, mgr=None) -> dict:
+def _serialize(name: str, client: Any, cfg_record: dict | None, mgr: Any=None) -> dict:
     record = cfg_record or {}
     if client:
         status = "running" if client.available else "stopped"
@@ -113,7 +114,7 @@ def _serialize(name: str, client, cfg_record: dict | None, mgr=None) -> dict:
 
 
 @router.get("/mcp/servers", response_model=Envelope[list[dict]])
-async def list_servers(request: Request):
+async def list_servers(request: Request) -> Any:
     mgr = _manager(request)
     custom = _cfg().get("mcp", {}) or {}
     names = set(mgr._clients.keys()) | set(custom.keys())
@@ -142,7 +143,7 @@ async def start_server(request: Request, name: str, record: dict) -> dict:
 
 
 @router.post("/mcp/servers", response_model=Envelope[dict])
-async def create_server(body: dict, request: Request):
+async def create_server(body: dict, request: Request) -> Any:
     name = (body.get("name") or "").strip()
     command = (body.get("command") or "").strip()
     if not name or not name.replace("-", "_").isidentifier():
@@ -173,7 +174,7 @@ async def create_server(body: dict, request: Request):
 
 
 @router.put("/mcp/servers/{name}", response_model=Envelope[dict])
-async def update_server(name: str, body: dict, request: Request):
+async def update_server(name: str, body: dict, request: Request) -> Any:
     cfg = _cfg()
     record = cfg.get(f"mcp.{name}")
     if not record:
@@ -203,7 +204,7 @@ async def update_server(name: str, body: dict, request: Request):
 
 
 @router.delete("/mcp/servers/{name}", response_model=Envelope[dict])
-async def delete_server(name: str, request: Request):
+async def delete_server(name: str, request: Request) -> Any:
     if request.headers.get("X-Confirm") != "yes":
         raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     cfg = _cfg()
@@ -224,7 +225,7 @@ async def delete_server(name: str, request: Request):
 
 @router.post("/mcp/servers/{name}/start", response_model=Envelope[dict])
 @router.post("/mcp/servers/{name}/restart", response_model=Envelope[dict])
-async def restart_server(name: str, request: Request):
+async def restart_server(name: str, request: Request) -> Any:
     cfg = _cfg()
     record = cfg.get(f"mcp.{name}")
     mgr = _manager(request)
@@ -243,7 +244,7 @@ async def restart_server(name: str, request: Request):
 
 
 @router.post("/mcp/servers/{name}/stop", response_model=Envelope[dict])
-async def stop_server(name: str, request: Request):
+async def stop_server(name: str, request: Request) -> Any:
     mgr = _manager(request)
     client = mgr._clients.get(name)
     if not client:
@@ -255,7 +256,7 @@ async def stop_server(name: str, request: Request):
 
 
 @router.get("/mcp/servers/{name}/tools", response_model=Envelope[list[str]])
-async def server_tools(name: str, request: Request):
+async def server_tools(name: str, request: Request) -> Any:
     client = _manager(request)._clients.get(name)
     if not client:
         raise HTTPException(404, f"MCP server {name} 不存在")
@@ -313,7 +314,7 @@ MCP_TEMPLATES = [
 
 
 @router.get("/mcp/templates", response_model=Envelope[list[dict]])
-async def get_mcp_templates():
+async def get_mcp_templates() -> Any:
     """获取 MCP 服务器模板列表"""
     return Envelope(data=MCP_TEMPLATES)
 
@@ -321,7 +322,7 @@ async def get_mcp_templates():
 # ── MCP Health ──
 
 @router.get("/mcp/servers/{server_name}/health", response_model=Envelope[dict])
-async def get_mcp_health(server_name: str, request: Request):
+async def get_mcp_health(server_name: str, request: Request) -> Any:
     """获取 MCP 服务器健康状态"""
     mgr = _manager(request)
     client = mgr._clients.get(server_name)
@@ -342,7 +343,7 @@ class ToolEnabledRequest(BaseModel):
 
 
 @router.put("/mcp/servers/{server_name}/tools/{tool_name}/enabled", response_model=Envelope[dict])
-async def set_tool_enabled(server_name: str, tool_name: str, req: ToolEnabledRequest, request: Request):
+async def set_tool_enabled(server_name: str, tool_name: str, req: ToolEnabledRequest, request: Request) -> Any:
     """设置工具级启用/禁用"""
     mgr = _manager(request)
     mgr.set_tool_enabled(server_name, tool_name, req.enabled)

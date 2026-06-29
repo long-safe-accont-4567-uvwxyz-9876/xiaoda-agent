@@ -1,6 +1,6 @@
 import asyncio
 import time
-from typing import Callable
+from typing import Any, Callable, Optional
 from loguru import logger
 
 
@@ -22,7 +22,7 @@ class AgentContext:
     MAX_COMPRESSED_SUMMARY_LEN = 3000
 
     def __init__(self, system_prompt: str = "", system_prompt_loader: Callable[..., str] | None = None,
-                 router=None, security_filter=None):
+                 router: Optional[Any]=None, security_filter: Optional[Any]=None) -> None:
         self.system_prompt = system_prompt
         self._system_prompt_loader = system_prompt_loader
         self._router = router
@@ -88,7 +88,7 @@ class AgentContext:
             # memory_retrieval 是请求级的，切换用户时清空避免串味
             self.memory_retrieval = None
 
-    async def add_message(self, role: str, content: str, **kwargs):
+    async def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         msg = {"role": role, "content": str(content) if content is not None else ""}
         if kwargs.get("reasoning_content"):
             msg["reasoning_content"] = kwargs["reasoning_content"]
@@ -99,7 +99,7 @@ class AgentContext:
             self._last_message_time = time.time()
             await self._trim_history()
 
-    async def _trim_history(self):
+    async def _trim_history(self) -> None:
         if len(self._compressed_summary) > self.MAX_COMPRESSED_SUMMARY_LEN:
             self._compressed_summary = self._compressed_summary[-self.MAX_COMPRESSED_SUMMARY_LEN:]
 
@@ -316,7 +316,7 @@ class AgentContext:
         self._dynamic_cache_ts = now
         return self._cached_dynamic_prompt
 
-    def invalidate_dynamic_cache(self):
+    def invalidate_dynamic_cache(self) -> None:
         self._cached_dynamic_prompt = ""
         self._dynamic_cache_ts = 0.0
         self._cached_portrait = ""
@@ -396,7 +396,7 @@ class AgentContext:
         messages.append({"role": "user", "content": user_input})
         return messages
 
-    async def restore_from_db(self, db, user_id: str = "", address_term: str = ""):
+    async def restore_from_db(self, db: Any, user_id: str = "", address_term: str = "") -> None:
         """从数据库恢复历史对话摘要。
 
         Args:
@@ -449,7 +449,7 @@ class AgentContext:
             nahida_prompt = "你是纳西妲，须弥的草神。"
         return nahida_prompt
 
-    def clear(self):
+    def clear(self) -> None:
         self.history.clear()
         self.memory_retrieval = None
         self.emotion_hint = ""

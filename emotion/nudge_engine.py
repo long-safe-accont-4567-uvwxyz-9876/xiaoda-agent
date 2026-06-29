@@ -1,3 +1,4 @@
+from typing import Any, Optional
 import asyncio
 import os
 import re
@@ -7,54 +8,20 @@ from zoneinfo import ZoneInfo
 from loguru import logger
 
 from db.db_analytics import AnalyticsDB
-
-
-# 推理模型会输出 <think>...</think> 或 CoT 前缀。统一清洗。
-_THINK_TAG_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
-_THINK_PREFIX_PATTERNS = [
-    re.compile(r"^\s*<think\b[^>]*>.*", re.DOTALL | re.IGNORECASE),
-    re.compile(r"^\s*(嗯[，,].*?(?:\n\s*\n|。\s*\n))", re.DOTALL),
-    re.compile(r"^\s*(首先[，,].*?(?:\n\s*\n|。\s*\n))", re.DOTALL),
-    re.compile(r"^\s*(作为[^。，]+[，,].*?(?:\n\s*\n|。\s*\n))", re.DOTALL),
-    re.compile(r"^\s*(我的角色是.*?(?:\n\s*\n|。\s*\n))", re.DOTALL),
-    re.compile(r"^\s*(关键点[：:].*?(?:\n\s*\n|$))", re.DOTALL),
-]
-# 如果清洗后仍包含推理痕迹，整段丢弃
-_REASONING_INDICATORS = re.compile(r"关键点[：:]|我的角色是|问候主题[是：]|所以，在.*中，我必须")
-
-
-def _strip_thinking(text: str) -> str:
-    if not text:
-        return ""
-    text = _THINK_TAG_RE.sub("", text)
-    for pat in _THINK_PREFIX_PATTERNS:
-        m = pat.match(text)
-        if m:
-            text = text[m.end():]
-            break
-    text = text.strip()
-    # 清洗后仍含推理痕迹 → 尝试取最后一句短句，否则丢弃
-    if _REASONING_INDICATORS.search(text):
-        sentences = re.split(r'[。！？\n]', text)
-        for s in reversed(sentences):
-            s = s.strip()
-            if s and len(s) <= 40 and not _REASONING_INDICATORS.search(s):
-                return s
-        return ""
-    return text
+from utils.llm_cleanup import strip_thinking as _strip_thinking
 
 
 class NudgeEngine:
 
     MIN_PROACTIVE_INTERVAL = 3600
 
-    def __init__(self, db, analytics: AnalyticsDB, router, api, user_openid: str,
+    def __init__(self, db: Any, analytics: AnalyticsDB, router: Any, api: Any, user_openid: str,
                  greeting_threshold: int = 3600,
                  greeting_max_per_day: int = 3,
                  dnd_start: int = 23,
                  dnd_end: int = 8,
-                 portrait_manager=None,
-                 config_service=None):
+                 portrait_manager: Optional[Any]=None,
+                 config_service: Optional[Any]=None) -> None:
         self._db = db
         self._analytics = analytics
         self._router = router
@@ -79,12 +46,12 @@ class NudgeEngine:
         self._portrait_manager = portrait_manager
         self._config_service = config_service
 
-    async def start(self):
+    async def start(self) -> None:
         self._running = True
         self._task = asyncio.create_task(self._loop())
         logger.info("nudge.started", user=self._user_openid[:8])
 
-    async def stop(self):
+    async def stop(self) -> None:
         self._running = False
         if self._task:
             self._task.cancel()
@@ -94,10 +61,10 @@ class NudgeEngine:
                 pass
         logger.info("nudge.stopped")
 
-    def poke(self):
+    def poke(self) -> None:
         self._last_user_message_time = time.time()
 
-    async def _loop(self):
+    async def _loop(self) -> None:
         while self._running:
             try:
                 await asyncio.sleep(60)
@@ -107,7 +74,7 @@ class NudgeEngine:
             except Exception as e:
                 logger.warning("nudge.tick_error", error=str(e))
 
-    async def _tick(self):
+    async def _tick(self) -> None:
         if self._is_dnd():
             return
 
@@ -174,7 +141,7 @@ class NudgeEngine:
             # greeting_log 表不存在时降级到内存计数
             return self._proactive_count_today
 
-    async def _check_greeting(self):
+    async def _check_greeting(self) -> None:
         now = time.time()
 
         if now - self._last_proactive_time < self.MIN_PROACTIVE_INTERVAL:
@@ -251,7 +218,9 @@ class NudgeEngine:
                 greeting = result
             else:
                 greeting = (result.choices[0].message.content or "")
-            greeting = _strip_thinking(greeting).strip()
+            # 记录原始 LLM 输出，便于排查推理文本泄漏
+            logger.debug("nudge.raw_llm_output raw={}", greeting[:200])
+            greeting = _strip_thinking(greeting, context="nudge").strip()
 
             if len(greeting) > 100:
                 greeting = greeting[:100]
@@ -260,7 +229,7 @@ class NudgeEngine:
             logger.warning("nudge.greeting_llm_failed", error=str(e))
             return ""
 
-    async def _check_reminders(self):
+    async def _check_reminders(self) -> None:
         now = time.time()
         if now - self._last_proactive_time < self.MIN_PROACTIVE_INTERVAL:
             return
@@ -296,7 +265,7 @@ class NudgeEngine:
         except Exception as e:
             logger.warning("nudge.reminder_check_failed", error=str(e))
 
-    async def _check_auto_promote(self):
+    async def _check_auto_promote(self) -> None:
         now = time.time()
         if now - self._last_promote_check < 600:  # 10分钟
             return
@@ -309,7 +278,7 @@ class NudgeEngine:
         except Exception as e:
             logger.debug("nudge.auto_promote_failed", error=str(e))
 
-    async def _check_data_cleanup(self):
+    async def _check_data_cleanup(self) -> None:
         now = time.time()
         if now - self._last_cleanup_check < 86400:  # 24小时
             return
@@ -322,7 +291,7 @@ class NudgeEngine:
         except Exception as e:
             logger.warning("nudge.data_cleanup_failed", error=str(e))
 
-    async def _check_portrait_consolidate(self):
+    async def _check_portrait_consolidate(self) -> None:
         if not self._portrait_manager:
             return
 

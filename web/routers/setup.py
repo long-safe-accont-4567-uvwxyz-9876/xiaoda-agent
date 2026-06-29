@@ -46,7 +46,7 @@ _AUTH_DEPS = [Depends(_is_first_run_or_authenticated)]
 
 
 @router.get("/setup/first-run", response_model=Envelope[dict])
-async def get_first_run():
+async def get_first_run() -> Any:
     """检测是否首次运行（.env 不存在或 MIMO_API_KEY 为空），
     以及用户资料是否已配置。"""
     # 1. 检测 API Key 是否已配置
@@ -101,14 +101,14 @@ async def get_first_run():
 
 
 @router.get("/setup/version", response_model=Envelope[dict])
-async def get_version():
+async def get_version() -> Any:
     """获取安装包版本号（无需认证）"""
     from web.routers.system import _read_version
     return Envelope(data={"version": _read_version()})
 
 
 @router.get("/setup/keys", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
-async def get_keys():
+async def get_keys() -> Any:
     """返回所有 Key 的配置状态（脱敏）。"""
     import sys
     logger.info("setup.keys.called frozen={} exe={}", getattr(sys, 'frozen', False), getattr(sys, 'executable', 'N/A'))
@@ -462,7 +462,7 @@ async def test_single_key(key_name: str, key_value: str, extra: dict | None = No
 
 
 @router.post("/setup/test-key", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
-async def test_key(body: dict):
+async def test_key(body: dict) -> Any:
     """测试 API Key 是否有效。"""
     key_name = body.get("key_name", "")
     key_value = body.get("key_value", "")
@@ -477,61 +477,80 @@ async def test_key(body: dict):
 
 
 @router.post("/setup/keys", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
-async def save_keys(body: dict):
+async def save_keys(body: dict) -> Any:
     """将提供的 Key-Value 写入 .env 文件。"""
     from setup_wizard import (
-        ENV_PATH,
-        ENV_EXAMPLE_PATH,
-        REQUIRED_KEYS,
-        _parse_env_lines,
-        _write_env,
-        _load_env_values,
+        ENV_PATH, ENV_EXAMPLE_PATH, REQUIRED_KEYS,
+        _parse_env_lines, _write_env, _load_env_values,
     )
 
     updates = body.get("keys")
     if not updates or not isinstance(updates, dict):
         return Envelope(ok=False, error={"code": "INVALID_BODY", "message": "需要提供 keys 字段（dict）"})
 
-    # 当 test_required=true 时，对必填 Key 逐一测试，全部通过才保存
+    # 当 test_required=true 时，对必填 Key 逐一测试
     test_required = body.get("test_required", False)
     if test_required:
-        failed: list[dict[str, str]] = []
-        required_key_names = [item["key"] for item in REQUIRED_KEYS]
-        for rk in required_key_names:
-            rv = updates.get(rk, "").strip()
-            if not rv:
-                # 未提供的必填 Key 跳过测试（由后续逻辑判断）
-                continue
-            # QQBOT_APP_ID 和 QQBOT_APP_SECRET 需要一起测试
-            extra = {}
-            if rk == "QQBOT_APP_ID":
-                extra["QQBOT_APP_SECRET"] = updates.get("QQBOT_APP_SECRET", "")
-            elif rk == "QQBOT_APP_SECRET":
-                extra["QQBOT_APP_ID"] = updates.get("QQBOT_APP_ID", "")
-            success, message = await test_single_key(rk, rv, extra)
-            if not success:
-                failed.append({"key": rk, "message": message})
-        # QQBOT 组合测试去重：如果两个都失败了，只保留一条
-        seen_qqbot = False
-        deduped_failed: list[dict[str, str]] = []
-        for f in failed:
-            if f["key"] in ("QQBOT_APP_ID", "QQBOT_APP_SECRET"):
-                if not seen_qqbot:
-                    deduped_failed.append({"key": "QQBOT_APP_ID + QQBOT_APP_SECRET", "message": f["message"]})
-                    seen_qqbot = True
-            else:
-                deduped_failed.append(f)
-        if deduped_failed:
-            return Envelope(
-                ok=False,
-                error={
-                    "code": "KEY_TEST_FAILED",
-                    "message": "必填 Key 验证失败，未保存",
-                    "failed_keys": deduped_failed,
-                },
-            )
+        test_error = _test_required_keys(updates, REQUIRED_KEYS)
+        if test_error is not None:
+            return test_error
 
-    # 如果 .env 不存在，从 .env.example 复制
+    # 写入 .env 文件
+    _write_env_file(updates, ENV_PATH, ENV_EXAMPLE_PATH, _parse_env_lines, _load_env_values, _write_env)
+    _auto_register_providers(updates)
+    logger.info("setup.keys_saved count={}", len(updates))
+
+    # 重新加载环境变量 + 清除缓存 + 重置凭证池
+    _reload_env_and_cache(updates, ENV_PATH)
+    _reset_credential_pool(updates)
+
+    # 更新 config 模块变量 + 刷新客户端
+    _update_config_and_refresh_clients(updates)
+
+    # 核心重初始化放到后台异步执行，不阻塞 API 返回
+    import asyncio
+    asyncio.create_task(_background_reinit())
+
+    return Envelope(data={"saved": list(updates.keys()), "need_restart": False})
+
+
+async def _test_required_keys(updates: Any, REQUIRED_KEYS: Any) -> Envelope | None:
+    """对必填 Key 逐一测试。返回错误 Envelope 或 None（全部通过）。"""
+    failed: list[dict[str, str]] = []
+    required_key_names = [item["key"] for item in REQUIRED_KEYS]
+    for rk in required_key_names:
+        rv = updates.get(rk, "").strip()
+        if not rv:
+            continue
+        # QQBOT_APP_ID 和 QQBOT_APP_SECRET 需要一起测试
+        extra = {}
+        if rk == "QQBOT_APP_ID":
+            extra["QQBOT_APP_SECRET"] = updates.get("QQBOT_APP_SECRET", "")
+        elif rk == "QQBOT_APP_SECRET":
+            extra["QQBOT_APP_ID"] = updates.get("QQBOT_APP_ID", "")
+        success, message = await test_single_key(rk, rv, extra)
+        if not success:
+            failed.append({"key": rk, "message": message})
+    # QQBOT 组合测试去重
+    seen_qqbot = False
+    deduped_failed: list[dict[str, str]] = []
+    for f in failed:
+        if f["key"] in ("QQBOT_APP_ID", "QQBOT_APP_SECRET"):
+            if not seen_qqbot:
+                deduped_failed.append({"key": "QQBOT_APP_ID + QQBOT_APP_SECRET", "message": f["message"]})
+                seen_qqbot = True
+        else:
+            deduped_failed.append(f)
+    if deduped_failed:
+        return Envelope(ok=False, error={
+            "code": "KEY_TEST_FAILED", "message": "必填 Key 验证失败，未保存",
+            "failed_keys": deduped_failed,
+        })
+    return None
+
+
+def _write_env_file(updates: Any, ENV_PATH: Any, ENV_EXAMPLE_PATH: Any, _parse_env_lines: Any, _load_env_values: Any, _write_env: Any) -> None:
+    """写入 .env 文件（不存在则从 .env.example 复制）。"""
     import os
     if not os.path.exists(ENV_PATH):
         if os.path.exists(ENV_EXAMPLE_PATH):
@@ -547,7 +566,7 @@ async def save_keys(body: dict):
     merged = dict(current)
     merged.update(updates)
 
-    # SiliconFlow Key 双向同步：EMBED_API_KEY 和 SILICONFLOW_API_KEY 互相填充
+    # SiliconFlow Key 双向同步
     embed_key = merged.get("EMBED_API_KEY", "").strip()
     sf_key = merged.get("SILICONFLOW_API_KEY", "").strip()
     if embed_key and not sf_key:
@@ -559,24 +578,18 @@ async def save_keys(body: dict):
 
     _write_env(existing_lines, merged)
 
-    # 自动注册免费模型平台为自定义 Provider
-    _auto_register_providers(updates)
 
-    logger.info("setup.keys_saved count={}", len(updates))
-
-    # 重新加载环境变量，使新配置立即生效
+def _reload_env_and_cache(updates: Any, ENV_PATH: Any) -> None:
+    """重新加载环境变量、清除模型发现缓存。"""
     import os
     from dotenv import load_dotenv
     load_dotenv(ENV_PATH, override=True)
-
-    # 兜底：如果 load_dotenv 未生效（Windows/PyInstaller 环境常见），
-    # 直接将用户提交的值写入 os.environ（始终覆盖，避免旧值残留）
+    # 兜底：直接写入 os.environ
     for k, v in updates.items():
         v = v.strip() if isinstance(v, str) else ""
         if v:
             os.environ[k] = v
-
-    # 清除模型发现缓存，使新 API Key 能立即生效
+    # 清除模型发现缓存
     try:
         from web.routers.model_discovery import invalidate_discovery_cache
         invalidate_discovery_cache()
@@ -584,7 +597,9 @@ async def save_keys(body: dict):
     except Exception as e:
         logger.warning("setup.discovery_cache_invalidate_failed error={}", str(e))
 
-    # 重置凭证池中所有 DEAD 凭证，并替换为新 Key
+
+def _reset_credential_pool(updates: Any) -> None:
+    """重置凭证池中所有 DEAD 凭证，并替换为新 Key。"""
     try:
         from utils.credential_pool import get_credential_pool, Credential
         pool = get_credential_pool()
@@ -598,79 +613,73 @@ async def save_keys(body: dict):
         for env_key, (provider, base_url) in _PROVIDER_KEY_MAP.items():
             new_key = updates.get(env_key, "").strip()
             if not new_key:
-                # 没有 Key 则只重置状态（可能用户没改这个 Key）
                 pool.reset_provider(provider)
                 continue
-            # 有新 Key 则替换该 provider 的所有旧凭证
             pool.replace_provider(provider, Credential(
-                api_key=new_key,
-                provider=provider,
-                base_url=base_url,
+                api_key=new_key, provider=provider, base_url=base_url,
             ))
         logger.info("setup.credential_pool_updated")
     except Exception as e:
         logger.warning("setup.credential_pool_reset_failed error={}", str(e))
 
-    # 更新 config 模块级变量，使 core.init() 能读到新的 API Key
-    # 优先使用用户刚提交的值（updates），回退到 os.getenv（load_dotenv 可能不生效）
+
+def _update_config_and_refresh_clients(updates: Any) -> None:
+    """更新 config 模块变量并刷新 router/TTS/子 Agent 客户端。"""
+    import os
     import config
     from utils.encrypted_credential import protect_credential
     config.MIMO_API_KEY = protect_credential(updates.get("MIMO_API_KEY", os.getenv("MIMO_API_KEY", "")))
-    config.DEEPSEEK_API_KEY = updates.get("DEEPSEEK_API_KEY", os.getenv("DEEPSEEK_API_KEY"))
+    config.DEEPSEEK_API_KEY = updates.get("DEEPSEEK_API_KEY", os.getenv("DEEPSEEK_API_KEY", ""))
     config.AGNES_API_KEY = updates.get("AGNES_API_KEY", os.getenv("AGNES_API_KEY", ""))
 
-    # 重建 ModelRouter 的 MiMo/Agnes 客户端（核心修复：使新 Key 立即生效）
+    # 重建 ModelRouter 的 MiMo/Agnes 客户端
     try:
-        from web.server import app
+        from web._app_ref import get_app
+        app = get_app()
         if hasattr(app, "state") and hasattr(app.state, "core"):
-            router_obj = getattr(app.state.core, "router", None)
+            core = app.state.core
+            router_obj = getattr(core, "router", None)
             if router_obj and hasattr(router_obj, "refresh_client"):
                 router_obj.refresh_client()
                 logger.info("setup.router_client_refreshed")
-            # 同时刷新 TTS 引擎客户端（TTS 引擎存储在 core.tts，不是 core.tts_engine）
-            tts_engine = getattr(app.state.core, "tts", None) or getattr(app.state.core, "tts_engine", None)
+            tts_engine = getattr(core, "tts", None) or getattr(core, "tts_engine", None)
             if tts_engine and hasattr(tts_engine, "refresh_client"):
                 tts_engine.refresh_client()
                 logger.info("setup.tts_client_refreshed")
-            # 刷新所有子 Agent 客户端（清除降级标记，用新 Key 重建）
-            dispatcher = getattr(app.state.core, "dispatcher", None)
+            dispatcher = getattr(core, "dispatcher", None)
             if dispatcher and hasattr(dispatcher, "refresh_all_clients"):
                 n = dispatcher.refresh_all_clients()
                 logger.info("setup.sub_agents_refreshed", count=n)
     except Exception as e:
         logger.warning("setup.router_client_refresh_failed error={}", str(e))
 
-    # 核心重初始化放到后台异步执行，不阻塞 API 返回
-    import asyncio
-    async def _background_reinit():
-        try:
-            from web.server import app as _app
-            if hasattr(_app, "state") and hasattr(_app.state, "core"):
-                core = _app.state.core
-                if not core._initialized:
-                    logger.info("setup.reinitializing_core")
-                    await core.init(reinit=True)
-                    if core._initialized:
-                        from web.server import _start_services
-                        await _start_services(_app, core)
-                        logger.info("setup.core_reinitialized")
-                        try:
-                            from web.agent_registry import AgentRegistry
-                            registry = getattr(_app.state, "agent_registry", None)
-                            if registry:
-                                await registry.load_persisted()
-                                logger.info("setup.registry_refreshed")
-                        except Exception as e:
-                            logger.warning("setup.registry_refresh_failed error={}", str(e))
-                    else:
-                        logger.error("setup.core_reinit_failed reason=still_not_initialized")
-        except Exception as e:
-            import traceback
-            logger.error("setup.core_reinit_failed error={} traceback={}", str(e), traceback.format_exc())
 
-    asyncio.create_task(_background_reinit())
-
-    return Envelope(data={"saved": list(updates.keys()), "need_restart": False})
+async def _background_reinit() -> None:
+    """后台异步重初始化核心（不阻塞 API 返回）。"""
+    try:
+        from web._app_ref import get_app, get_start_services
+        _app = get_app()
+        if hasattr(_app, "state") and hasattr(_app.state, "core"):
+            core = _app.state.core
+            if not core._initialized:
+                logger.info("setup.reinitializing_core")
+                await core.init(reinit=True)
+                if core._initialized:
+                    _start_services = get_start_services()
+                    await _start_services(_app, core)
+                    logger.info("setup.core_reinitialized")
+                    try:
+                        registry = getattr(_app.state, "agent_registry", None)
+                        if registry:
+                            await registry.load_persisted()
+                            logger.info("setup.registry_refreshed")
+                    except Exception as e:
+                        logger.warning("setup.registry_refresh_failed error={}", str(e))
+                else:
+                    logger.error("setup.core_reinit_failed reason=still_not_initialized")
+    except Exception as e:
+        import traceback
+        logger.error("setup.core_reinit_failed error={} traceback={}", str(e), traceback.format_exc())
 
 
 # 已知免费模型平台 → Provider 映射
@@ -763,15 +772,14 @@ def _auto_register_providers(updates: dict) -> None:
         # 注册到运行时 router
         try:
             from model_router import ModelRouter
-            # 尝试获取 router 实例
-            import web.server as srv
-            # 延迟导入，server 可能还在初始化
+            # 尝试获取 router 实例 (原 import web.server as srv 已移除, 避免循环导入)
         except Exception:
             pass
 
         # 通过 app.state 注册（如果 app 已启动）
         try:
-            from web.server import app
+            from web._app_ref import get_app
+            app = get_app()
             if hasattr(app, "state") and hasattr(app.state, "core"):
                 router_obj = app.state.core.router
                 register_into_router(
@@ -958,7 +966,7 @@ def _build_user_md(fields: dict) -> str:
 
 
 @router.get("/setup/user-profile", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
-async def get_user_profile():
+async def get_user_profile() -> Any:
     """读取 USER.md 内容并返回结构化字段"""
     from config import WORKSPACE_DIR
 
@@ -987,7 +995,7 @@ async def get_user_profile():
 
 
 @router.post("/setup/user-profile", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
-async def save_user_profile(body: dict):
+async def save_user_profile(body: dict) -> Any:
     """保存用户资料到 USER.md"""
     from config import WORKSPACE_DIR
 

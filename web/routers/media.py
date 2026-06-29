@@ -1,5 +1,6 @@
 """媒体工坊路由（R11）：TTS 同步合成（内容寻址缓存）、图/视频异步任务、画廊。"""
 from __future__ import annotations
+from typing import Any
 
 import hashlib
 import shutil
@@ -22,12 +23,12 @@ except ImportError:
     MEDIA_ROOT = Path(__file__).resolve().parent.parent / "media"
 
 
-def _cfg():
+def _cfg() -> Any:
     from web.config_service import get_config_service
     return get_config_service()
 
 
-def _queue(request: Request):
+def _queue(request: Request) -> Any:
     q = getattr(request.app.state, "media_queue", None)
     if not q:
         raise HTTPException(503, "媒体任务队列未启动")
@@ -38,7 +39,7 @@ def _queue(request: Request):
 
 
 @router.post("/media/tts", response_model=Envelope[dict])
-async def synthesize_tts(body: dict, request: Request):
+async def synthesize_tts(body: dict, request: Request) -> Any:
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "text 不能为空")
@@ -74,7 +75,7 @@ async def synthesize_tts(body: dict, request: Request):
 
 
 @router.get("/media/tts/voices", response_model=Envelope[dict])
-async def tts_voices():
+async def tts_voices() -> Any:
     from emotion.tts_engine import VOICE_REFERENCES, VOICE_STYLES, EMOTION_STYLE_MAP
     return Envelope(data={
         "voices": [{"id": v, "description": VOICE_STYLES.get(v, "")}
@@ -84,7 +85,7 @@ async def tts_voices():
 
 
 @router.get("/media/tts/config", response_model=Envelope[dict])
-async def get_tts_config():
+async def get_tts_config() -> Any:
     cfg = _cfg()
     return Envelope(data={
         "auto_speak": cfg.get("tts.auto_speak", False),
@@ -93,7 +94,7 @@ async def get_tts_config():
 
 
 @router.put("/media/tts/config", response_model=Envelope[dict])
-async def put_tts_config(body: dict, request: Request):
+async def put_tts_config(body: dict, request: Request) -> Any:
     cfg = _cfg()
     if "auto_speak" in body:
         cfg.set("tts.auto_speak", bool(body["auto_speak"]))
@@ -115,7 +116,7 @@ async def put_tts_config(body: dict, request: Request):
 
 
 @router.post("/media/image", response_model=Envelope[dict])
-async def gen_image(body: dict, request: Request):
+async def gen_image(body: dict, request: Request) -> Any:
     prompt = (body.get("prompt") or "").strip()
     if not prompt:
         raise HTTPException(400, "prompt 不能为空")
@@ -125,7 +126,7 @@ async def gen_image(body: dict, request: Request):
 
 
 @router.post("/media/video", response_model=Envelope[dict])
-async def gen_video(body: dict, request: Request):
+async def gen_video(body: dict, request: Request) -> Any:
     prompt = (body.get("prompt") or "").strip()
     if not prompt:
         raise HTTPException(400, "prompt 不能为空")
@@ -135,12 +136,12 @@ async def gen_video(body: dict, request: Request):
 
 
 @router.get("/media/tasks", response_model=Envelope[list[dict]])
-async def list_tasks(request: Request, limit: int = Query(default=50, le=200)):
+async def list_tasks(request: Request, limit: int = Query(default=50, le=200)) -> Any:
     return Envelope(data=await _queue(request).list(limit))
 
 
 @router.get("/media/tasks/{task_id}", response_model=Envelope[dict])
-async def get_task(task_id: str, request: Request):
+async def get_task(task_id: str, request: Request) -> Any:
     row = await _queue(request).get(task_id)
     if not row:
         raise HTTPException(404, f"任务 {task_id} 不存在")
@@ -148,7 +149,7 @@ async def get_task(task_id: str, request: Request):
 
 
 @router.delete("/media/tasks/{task_id}", response_model=Envelope[dict])
-async def cancel_task(task_id: str, request: Request):
+async def cancel_task(task_id: str, request: Request) -> Any:
     ok = await _queue(request).cancel(task_id)
     if not ok:
         raise HTTPException(400, "仅 queued 状态的任务可取消")
@@ -166,7 +167,7 @@ _GALLERY_DIRS = {"image": "image", "video": "video", "audio": "tts"}
 @router.get("/media/gallery", response_model=Envelope[list[dict]])
 async def gallery(type: str = Query(default="image"),
                   page: int = Query(default=0, ge=0),
-                  limit: int = Query(default=24, le=100)):
+                  limit: int = Query(default=24, le=100)) -> Any:
     if type not in _GALLERY_DIRS:
         raise HTTPException(400, "type 必须是 image/video/audio")
     d = MEDIA_ROOT / _GALLERY_DIRS[type]
@@ -183,7 +184,7 @@ async def gallery(type: str = Query(default="image"),
 
 
 @router.delete("/media/gallery/{type}/{name}", response_model=Envelope[dict])
-async def delete_media(type: str, name: str, request: Request):
+async def delete_media(type: str, name: str, request: Request) -> Any:
     if request.headers.get("X-Confirm") != "yes":
         raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     if type not in _GALLERY_DIRS or "/" in name or ".." in name:

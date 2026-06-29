@@ -64,21 +64,21 @@ class ZombieDetector:
 class BehavioralHealthMonitor:
     """行为健康监控器"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._metrics = BehavioralMetrics()
         self._tool_history: deque = deque(maxlen=100)
         self._zombie_detector = ZombieDetector()
 
-    def record_tool_call(self, tool_name: str, success: bool):
+    def record_tool_call(self, tool_name: str, success: bool) -> None:
         """记录工具调用"""
         self._tool_history.append((tool_name, success, time.time()))
         self._update_metrics()
 
-    def record_user_correction(self):
+    def record_user_correction(self) -> None:
         """记录用户纠正"""
         self._metrics.low_quality_rate = min(1.0, self._metrics.low_quality_rate + 0.05)
 
-    def _update_metrics(self):
+    def _update_metrics(self) -> None:
         """更新指标"""
         if not self._tool_history:
             return

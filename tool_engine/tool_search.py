@@ -39,7 +39,7 @@ class ToolDef:
 class BM25Index:
     """BM25 倒排索引"""
 
-    def __init__(self, k1: float = 1.5, b: float = 0.75):
+    def __init__(self, k1: float = 1.5, b: float = 0.75) -> None:
         self._k1 = k1
         self._b = b
         self._docs: list[list[str]] = []
@@ -47,7 +47,7 @@ class BM25Index:
         self._avg_len: float = 0
         self._tool_defs: list[ToolDef] = []
 
-    def add_tool(self, tool: ToolDef):
+    def add_tool(self, tool: ToolDef) -> None:
         """添加工具到索引"""
         doc = self._tokenize(f"{tool.name} {tool.description} {' '.join(tool.keywords)}")
         self._docs.append(doc)
@@ -93,14 +93,14 @@ class BM25Index:
 class ToolSearchEngine:
     """Tool Search 引擎 — 按需加载工具定义"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._index = BM25Index()
         self._always_loaded: list[ToolDef] = []  # 常驻工具 (不延迟加载)
         self._loaded_tools: dict[str, ToolDef] = {}  # 已加载的工具
         self._search_count = 0
         self._total_token_saved = 0
 
-    def register(self, tool: ToolDef, always_loaded: bool = False):
+    def register(self, tool: ToolDef, always_loaded: bool = False) -> None:
         """注册工具"""
         if always_loaded:
             tool.defer_loading = False
@@ -173,7 +173,7 @@ def get_tool_search_engine() -> ToolSearchEngine:
 
 def register_tool(name: str, description: str, parameters: dict,
                   handler_path: str = "", keywords: list[str] | None = None,
-                  always_loaded: bool = False):
+                  always_loaded: bool = False) -> None:
     """便捷注册工具"""
     tool = ToolDef(
         name=name,

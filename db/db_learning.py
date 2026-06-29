@@ -5,11 +5,11 @@ from loguru import logger
 
 class LearningDB:
 
-    def __init__(self, conn: aiosqlite.Connection):
+    def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn
         conn.row_factory = aiosqlite.Row
 
-    async def commit(self):
+    async def commit(self) -> None:
         await self._conn.commit()
 
     async def insert_learning(self, category: str, priority: str, summary: str,

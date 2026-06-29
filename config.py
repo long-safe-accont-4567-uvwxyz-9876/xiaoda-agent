@@ -3,12 +3,30 @@ import re
 import json
 import time
 import sys
+from typing import Any
 import shutil
 import platform
 import socket
 from pathlib import Path
 from dotenv import load_dotenv
 from utils.encrypted_credential import protect_credential
+from security import credential_vault
+
+
+def get_secret(name: str, default: str = "") -> str:
+    """读取敏感环境变量并自动解密 enc:v1: 格式的密文
+
+    非 enc:v1: 前缀的值视为明文直接返回（向后兼容）。
+    解密失败（如机器不匹配、HMAC 验证失败）返回空字符串，避免明文泄漏。
+    仅用于 API Key / Token / Secret 类敏感配置，普通配置仍使用 os.getenv。
+    """
+    value = os.getenv(name)
+    if value is None:
+        return default
+    if not value:
+        return value
+    return credential_vault.decrypt(value)
+
 
 def get_base_dir() -> Path:
     """获取项目根目录。PyInstaller 打包后返回可执行文件所在目录，开发模式返回项目根目录。"""
@@ -68,7 +86,7 @@ def _get_fallback_base() -> Path:
 _FALLBACK_BASE = _get_fallback_base()
 
 
-def _migrate_old_data(old_dir: Path, new_dir: Path, name: str):
+def _migrate_old_data(old_dir: Path, new_dir: Path, name: str) -> None:
     """将旧目录的数据迁移到新目录（仅首次）。
     用于从 exe 目录迁移到用户目录，解决更新安装包导致数据丢失的问题。
     """
@@ -149,7 +167,7 @@ WORKSPACE_DIR = _resolve_data_path(_KIOXIA_BASE / "config" / "workspace", _FALLB
 CREDENTIALS_DIR = get_credentials_dir()
 
 
-def _init_user_resources():
+def _init_user_resources() -> None:
     """frozen 模式下首次运行时，从打包资源（_MEIPASS）复制配置文件到用户目录。
 
     解决问题：agent.json5/workspace 模板打包在 _internal/config/ 里，
@@ -239,28 +257,29 @@ if getattr(sys, 'frozen', False):
 
 _KIOXIA_AVAILABLE = (_KIOXIA_BASE / "db").exists()
 
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_API_KEY = get_secret("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "mimo-v2.5")
 
-MIMO_API_KEY = protect_credential(os.getenv("MIMO_API_KEY", ""))
+# MIMO_API_KEY：先用 get_secret 解密 enc:v1: 密文，再交给 protect_credential 做内存态保护
+MIMO_API_KEY = protect_credential(get_secret("MIMO_API_KEY", ""))
 MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
 MIMO_MODEL = os.getenv("MIMO_MODEL_NAME", "mimo-v2.5")
 
 # ── ASR 语音识别配置 ──
-ASR_API_KEY = os.getenv("ASR_API_KEY", "") or os.getenv("SILICONFLOW_API_KEY", "")
+ASR_API_KEY = get_secret("ASR_API_KEY", "") or get_secret("SILICONFLOW_API_KEY", "")
 ASR_BASE_URL = os.getenv("ASR_BASE_URL", "https://api.siliconflow.cn/v1")
 ASR_MODEL = os.getenv("ASR_MODEL", "FunAudioLLM/SenseVoiceSmall")
 
 # Agnes AI 配置
-AGNES_API_KEY = os.getenv("AGNES_API_KEY", "")
+AGNES_API_KEY = get_secret("AGNES_API_KEY", "")
 AGNES_BASE_URL = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
 AGNES_TEXT_MODEL = os.getenv("AGNES_TEXT_MODEL", "agnes-2.0-flash")
 AGNES_IMAGE_MODEL = os.getenv("AGNES_IMAGE_MODEL", "agnes-image-2.1-flash")
 AGNES_VIDEO_MODEL = os.getenv("AGNES_VIDEO_MODEL", "agnes-video-v2.0")
 
 # Jina Reader API key（可选）：有则 500 RPM，无则免费 20 RPM
-JINA_API_KEY = os.getenv("JINA_API_KEY", "")
+JINA_API_KEY = get_secret("JINA_API_KEY", "")
 
 
 def _strip_json5_comments(text: str) -> str:
@@ -398,7 +417,7 @@ AGENT_ROUTE_KEYWORDS = {
 }
 
 # ── RAG 优化配置（SiliconFlow 免费常驻） ──
-RERANKER_API_KEY = os.getenv("RERANKER_API_KEY", "")
+RERANKER_API_KEY = get_secret("RERANKER_API_KEY", "")
 RERANKER_BASE_URL = os.getenv("RERANKER_BASE_URL", "https://api.siliconflow.cn/v1")
 RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "true").lower() in ("1", "true", "yes")
@@ -486,7 +505,7 @@ MCP_SERVERS = {
     "github": {
         "command": _resolve_command("npx"),
         "args": ["-y", "@modelcontextprotocol/server-github"],
-        "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN", "")},
+        "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": get_secret("GITHUB_PERSONAL_ACCESS_TOKEN", "")},
         "agents": ["yinlang"],
     },
 }
@@ -558,6 +577,38 @@ __all__ = [
 ]
 
 # ── 向后兼容：从 prompt_builder 重新导出已拆分的函数 ──────────
-# 放在文件末尾以避免循环导入：此时 config 的常量与 __all__ 均已定义完毕，
-# prompt_builder 内部对 config 常量的延迟导入可在调用时正常解析。
-from prompt_builder import *  # noqa: E402,F401,F403
+# 使用 PEP 562 模块级 __getattr__ 延迟导入, 彻底打破 config <-> prompt_builder 循环.
+# 此前 `from prompt_builder import *` 是顶层 import, 会立即触发 prompt_builder 加载,
+# 而 prompt_builder 在调用时 (函数内) 又会回头读 config 常量 — 虽然 prompt_builder
+# 已用函数内延迟导入规避了运行时崩溃, 但顶层 `from prompt_builder import *` 仍会在
+# 静态分析层面形成循环. 改为 __getattr__ 后, 只有实际访问这些名称时才触发导入.
+_PROMPT_BUILDER_REEXPORTS = frozenset({
+    "build_system_prompt",
+    "build_safe_system_prompt",
+    "build_scene_aware_prompt",
+    "load_workspace_file",
+    "load_skills",
+    "_ensure_workspace_template",
+    "_detect_device_info",
+    "_get_workspace_mtimes",
+    "_strip_owner_references",
+    "_build_stable_prompt",
+    "_build_dynamic_prompt",
+    "_classify_scene",
+    "_canary_manager",
+})
+
+
+def __getattr__(name: str) -> Any:
+    """模块级 __getattr__ — 从 prompt_builder 延迟导入, 避免循环导入.
+
+    只有访问 _PROMPT_BUILDER_REEXPORTS 中的名称时才触发 prompt_builder 加载.
+    首次访问后将结果缓存到 globals(), 后续直接命中, 无 import 开销.
+    """
+    if name in _PROMPT_BUILDER_REEXPORTS:
+        from importlib import import_module
+        _pb = import_module("prompt_builder")
+        value = getattr(_pb, name)
+        globals()[name] = value  # 缓存, 下次直接访问
+        return value
+    raise AttributeError(f"module 'config' has no attribute {name!r}")

@@ -1,3 +1,4 @@
+from typing import Any
 import time
 import aiosqlite
 from loguru import logger
@@ -5,14 +6,14 @@ from loguru import logger
 
 class MemoryDB:
 
-    def __init__(self, conn: aiosqlite.Connection):
+    def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn
         conn.row_factory = aiosqlite.Row
 
-    async def commit(self):
+    async def commit(self) -> None:
         await self._conn.commit()
 
-    async def migrate_add_source_column(self):
+    async def migrate_add_source_column(self) -> None:
         """迁移：为旧库的 episodic_memories 表添加 source 列（已存在则忽略）"""
         try:
             await self._conn.execute(
@@ -26,7 +27,7 @@ class MemoryDB:
     async def insert_episodic_memory(self, summary: str, importance: float = 0.5,
                                       emotion_label: str = "", session_id: str = "user",
                                       embedding_id: int = -1, auto_commit: bool = True,
-                                      source: str = "user"):
+                                      source: str = "user") -> Any:
         cursor = await self._conn.execute(
             """INSERT INTO episodic_memories
                (timestamp, summary, importance, emotion_label, session_id, embedding_id, source)
@@ -38,7 +39,7 @@ class MemoryDB:
             await self._conn.commit()
         # 同步写入 FTS 索引
         try:
-            from memory.memory_manager import _tokenize_for_fts
+            from db.fts_utils import _tokenize_for_fts
             tokenized = _tokenize_for_fts(summary)
             if tokenized.strip():
                 await self._conn.execute(
@@ -72,7 +73,7 @@ class MemoryDB:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
-    async def get_recent_conversations(self, limit: int = 20, user_id: str = ""):
+    async def get_recent_conversations(self, limit: int = 20, user_id: str = "") -> Any:
         """获取最近的对话记录。支持按 user_id 过滤（群聊场景下隔离不同用户的历史）。"""
         if user_id:
             cursor = await self._conn.execute(
@@ -90,7 +91,7 @@ class MemoryDB:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
-    async def increment_access_count(self, memory_id: int):
+    async def increment_access_count(self, memory_id: int) -> None:
         """递增记忆访问计数（检索强化）"""
         await self._conn.execute(
             "UPDATE episodic_memories SET access_count = access_count + 1 WHERE id = ?",
@@ -98,7 +99,7 @@ class MemoryDB:
         )
         await self._conn.commit()
 
-    async def archive_memory(self, memory_id: int):
+    async def archive_memory(self, memory_id: int) -> None:
         """归档记忆（标记为已归档，不删除）"""
         await self._conn.execute(
             "UPDATE episodic_memories SET session_id = 'archived' WHERE id = ?",
@@ -106,7 +107,7 @@ class MemoryDB:
         )
         await self._conn.commit()
 
-    async def get_recent_conversations(self, limit: int = 20, user_id: str = ""):
+    async def get_recent_conversations(self, limit: int = 20, user_id: str = "") -> Any:
         """获取最近的对话记录。支持按 user_id 过滤（群聊场景下隔离不同用户的历史）。"""
         if user_id:
             cursor = await self._conn.execute(
@@ -124,7 +125,7 @@ class MemoryDB:
         rows = await cursor.fetchall()
         return [dict(r) for r in reversed(rows)]
 
-    async def search_memories_by_importance(self, min_importance: float = 0.3, limit: int = 10):
+    async def search_memories_by_importance(self, min_importance: float = 0.3, limit: int = 10) -> Any:
         cursor = await self._conn.execute(
             """SELECT * FROM episodic_memories
                WHERE importance >= ?
@@ -136,7 +137,7 @@ class MemoryDB:
 
     async def search_memories_fts(self, query: str, limit: int = 10) -> list[dict]:
         """FTS5 BM25 全文检索"""
-        from memory.memory_manager import _build_fts_query
+        from db.fts_utils import _build_fts_query
         fts_query = _build_fts_query(query)
         if not fts_query:
             return []
@@ -163,7 +164,7 @@ class MemoryDB:
             logger.warning("db_memory.fts_search_failed", error=str(e))
             return []
 
-    async def get_all_memories(self, limit: int = 100):
+    async def get_all_memories(self, limit: int = 100) -> Any:
         """获取所有活跃记忆（排除已归档）"""
         cursor = await self._conn.execute(
             "SELECT * FROM episodic_memories WHERE session_id != 'archived' ORDER BY timestamp DESC LIMIT ?",
@@ -172,7 +173,7 @@ class MemoryDB:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
-    async def delete_memory(self, memory_id: int, auto_commit: bool = True):
+    async def delete_memory(self, memory_id: int, auto_commit: bool = True) -> None:
         await self._conn.execute("DELETE FROM episodic_memories WHERE id=?", (memory_id,))
         # 同步删除 FTS 记录
         try:
@@ -183,7 +184,7 @@ class MemoryDB:
         if auto_commit:
             await self._conn.commit()
 
-    async def delete_memory_with_vector(self, memory_id: int, vector_store=None, auto_commit: bool = True):
+    async def delete_memory_with_vector(self, memory_id: int, vector_store: Any=None, auto_commit: bool = True) -> None:
         """统一删除：先删向量，再删记忆"""
         if vector_store:
             try:
@@ -193,7 +194,7 @@ class MemoryDB:
                 raise
         await self.delete_memory(memory_id, auto_commit=auto_commit)
 
-    async def get_episodic_recent(self, limit: int = 50):
+    async def get_episodic_recent(self, limit: int = 50) -> Any:
         cursor = await self._conn.execute(
             """SELECT * FROM episodic_memories
                ORDER BY timestamp DESC LIMIT ?""",
@@ -227,7 +228,7 @@ class MemoryDB:
     async def search_memories_fts_with_time(self, query: str, start_ts: float,
                                              end_ts: float, limit: int = 10) -> list[dict]:
         """FTS 全文检索 + 时间范围过滤（混合查询）。"""
-        from memory.memory_manager import _build_fts_query
+        from db.fts_utils import _build_fts_query
         fts_query = _build_fts_query(query)
         if not fts_query:
             return []
@@ -293,7 +294,7 @@ class MemoryDB:
             # 如果 summary 更新了，同步更新 FTS 索引
             if summary:
                 try:
-                    from memory.memory_manager import _tokenize_for_fts
+                    from db.fts_utils import _tokenize_for_fts
                     tokens = _tokenize_for_fts(summary)
                     await self._conn.execute(
                         "UPDATE episodic_memory_fts SET summary_index = ? WHERE id = ?",
@@ -344,7 +345,7 @@ class MemoryDB:
         return cursor.lastrowid
 
     async def mark_candidate_applied(self, candidate_id: int, target_memory_id: int,
-                                      auto_commit: bool = True):
+                                      auto_commit: bool = True) -> None:
         await self._conn.execute(
             "UPDATE consolidation_candidates SET status='applied', target_memory_id=? WHERE id=?",
             (target_memory_id, candidate_id),
@@ -352,7 +353,7 @@ class MemoryDB:
         if auto_commit:
             await self._conn.commit()
 
-    async def update_rag_status(self, memory_id: int, rag_status: str, rag_synced_at: float = None):
+    async def update_rag_status(self, memory_id: int, rag_status: str, rag_synced_at: float = None) -> None:
         """更新记忆的 RAG 索引状态"""
         valid_statuses = ('pending', 'indexed', 'failed', 'excluded')
         if rag_status not in valid_statuses:
@@ -371,7 +372,7 @@ class MemoryDB:
             )
         await self._conn.commit()
 
-    async def update_doc_id(self, memory_id: int, doc_id: str):
+    async def update_doc_id(self, memory_id: int, doc_id: str) -> None:
         """更新记忆关联的文档 ID"""
         await self._conn.execute(
             "UPDATE episodic_memories SET doc_id=? WHERE id=?",
@@ -421,7 +422,7 @@ class MemoryDB:
             return []
 
     async def mark_memories_distilled(self, memory_ids: list[int],
-                                       auto_commit: bool = True):
+                                       auto_commit: bool = True) -> None:
         """将指定记忆标记为已蒸馏（distilled=1），保留不删除"""
         if not memory_ids:
             return

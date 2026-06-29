@@ -1,0 +1,74 @@
+{
+  "single_domain": {
+    "frontend": {"target": "nike", "mode": "single"},
+    "backend": {"target": "nike", "mode": "single"},
+    "debug": {"target": "nike", "mode": "single"},
+    "security": {"target": "yinlang", "mode": "single"},
+    "test": {"target": "nike", "mode": "single"},
+    "info_search": {"target": "xilian", "mode": "single"},
+    "hardware": {"target": "yinlang", "mode": "single"},
+    "emotional": {"target": "keli", "mode": "single"},
+    "general": {"target": "keli", "mode": "single"}
+  },
+  "multi_domain": {
+    "frontend+security": {
+      "targets": ["nike", "yinlang"],
+      "mode": "parallel_fanout",
+      "synthesizer": "nahida"
+    },
+    "backend+security": {
+      "targets": ["nike", "yinlang"],
+      "mode": "parallel_fanout",
+      "synthesizer": "nahida"
+    },
+    "debug+security": {
+      "targets": ["nike", "yinlang"],
+      "mode": "parallel_fanout",
+      "synthesizer": "nahida"
+    },
+    "info_search+frontend": {
+      "targets": ["xilian", "nike"],
+      "mode": "pipe",
+      "synthesizer": ""
+    },
+    "info_search+backend": {
+      "targets": ["xilian", "nike"],
+      "mode": "pipe",
+      "synthesizer": ""
+    },
+    "info_search+security": {
+      "targets": ["xilian", "yinlang"],
+      "mode": "pipe",
+      "synthesizer": ""
+    },
+    "hardware+security": {
+      "targets": ["yinlang"],
+      "mode": "single",
+      "synthesizer": ""
+    },
+    "emotional+general": {
+      "targets": ["keli"],
+      "mode": "single",
+      "synthesizer": ""
+    }
+  },
+  "operation_patterns": {
+    "code_review": {
+      "mode": "generate_verify",
+      "generator": "nike",
+      "verifier": "yinlang",
+      "description": "尼可生成代码，银狼审查安全"
+    },
+    "deep_analysis": {
+      "mode": "pipe",
+      "pipeline": ["xilian", "nike"],
+      "description": "先搜索信息，再领域分析"
+    },
+    "security_audit": {
+      "mode": "generate_verify",
+      "generator": "yinlang",
+      "verifier": "nike",
+      "description": "银狼执行安全审计，尼可验证代码影响"
+    }
+  }
+}

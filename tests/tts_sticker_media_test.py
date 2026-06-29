@@ -6,7 +6,11 @@ import os
 import time
 import tempfile
 import json
+from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+# 项目根目录 (基于当前文件位置计算，避免硬编码绝对路径)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 bugs_found = []
 
@@ -130,10 +134,11 @@ async def test_sticker():
     from emotion.sticker_manager import StickerManager
 
     # 2.1 使用真实表情包目录
+    # 优先使用项目内置目录，再尝试外部挂载路径，最后回退到临时目录
     sticker_dirs = [
+        str(PROJECT_ROOT / "assets" / "stickers" / "nahida"),
         "/media/orangepi/KIOXIA/nahida-data/stickers",
         "/mnt/usb2/stickers",
-        "/home/orangepi/ai-agent/stickers",
     ]
     sticker_dir = None
     for d in sticker_dirs:

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from loguru import logger
 
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 _bg_tasks: set[asyncio.Task] = set()
 
 
-def _spawn(coro):
+def _spawn(coro: Any) -> None:
     """创建 fire-and-forget 后台任务，自动从 _bg_tasks 中移除已完成的任务。"""
     task = asyncio.create_task(coro)
     _bg_tasks.add(task)
@@ -54,7 +54,7 @@ class BackgroundTaskManager:
         portrait_manager: PortraitManager | None = None,
         learning_manager: LearningManager | None = None,
         instinct_manager: InstinctManager | None = None,
-    ):
+    ) -> None:
         self.db = db
         self.context = context
         self.memory = memory
@@ -65,7 +65,7 @@ class BackgroundTaskManager:
         self._conversation_count = 0
         self._conv_count_lock = asyncio.Lock()
 
-    def start_background_task(self, coro):
+    def start_background_task(self, coro: Any) -> None:
         """启动一个 fire-and-forget 后台任务。"""
         _spawn(coro)
 

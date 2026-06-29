@@ -9,7 +9,13 @@ class ToolCallRepair:
 
     STORM_TTL = 120
 
-    def __init__(self, allowed_tool_names: set[str] | None = None, storm_window: int = 3):
+    def __init__(self, allowed_tool_names: set[str] | None = None, storm_window: int = 3) -> None:
+        """初始化工具调用修复器.
+
+        Args:
+            allowed_tool_names: 允许的工具名集合, None 表示空集
+            storm_window: 风暴检测窗口大小, 默认 3
+        """
         self._allowed_tools = allowed_tool_names or set()
         self._storm_window = storm_window
         self._recent_calls: list[tuple[str, str, float]] = []
@@ -18,6 +24,15 @@ class ToolCallRepair:
         return _parse_dsml(text, self._allowed_tools)
 
     def scavenge(self, reasoning_content: str | None, tool_calls: list | None) -> list:
+        """从推理内容中拾取被遗漏的工具调用.
+
+        Args:
+            reasoning_content: 推理/思考内容文本
+            tool_calls: 已有的工具调用列表
+
+        Returns:
+            解析出的工具调用列表 (优先返回原 tool_calls)
+        """
         if not reasoning_content:
             return tool_calls or []
 
@@ -59,6 +74,14 @@ class ToolCallRepair:
         return scavenged
 
     def repair_truncation(self, arguments_str: str) -> str | None:
+        """修复被截断的工具调用 JSON 参数.
+
+        Args:
+            arguments_str: 工具调用的 JSON 参数字符串
+
+        Returns:
+            修复后的合法 JSON 字符串, 无法修复返回 None
+        """
         if not arguments_str:
             return None
 
@@ -91,6 +114,15 @@ class ToolCallRepair:
             return None
 
     def detect_storm(self, tool_name: str, arguments: str) -> bool:
+        """检测工具调用风暴 (短时间内重复调用相同工具+参数).
+
+        Args:
+            tool_name: 工具名
+            arguments: JSON 参数字符串
+
+        Returns:
+            True 表示检测到风暴
+        """
         now = time.time()
         cutoff = now - self.STORM_TTL
         self._recent_calls = [(n, a, t) for n, a, t in self._recent_calls if t > cutoff]
@@ -112,7 +144,8 @@ class ToolCallRepair:
 
         return is_storm
 
-    def clear_storm_window(self):
+    def clear_storm_window(self) -> None:
+        """清空风暴检测的近期调用记录."""
         self._recent_calls.clear()
 
     @staticmethod

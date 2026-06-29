@@ -99,7 +99,12 @@ class StickerManager:
         "无聊": "thinking", "困倦": "thinking", "哭泣微笑": "thinking",
     }
 
-    def __init__(self, sticker_dir: Path | str):
+    def __init__(self, sticker_dir: Path | str) -> None:
+        """初始化表情包管理器并扫描目录.
+
+        Args:
+            sticker_dir: 表情包根目录路径
+        """
         self._dir = Path(sticker_dir) if not isinstance(sticker_dir, Path) else sticker_dir
         self._cache: dict[str, list[Path]] = {}
         self._emotion_cache: dict[str, list[Path]] = {}
@@ -125,7 +130,7 @@ class StickerManager:
                 best_len = len(keyword)
         return best_emotion
 
-    def _scan(self):
+    def _scan(self) -> None:
         if not self._dir.exists():
             return
         for emotion_dir in self._dir.iterdir():
@@ -148,12 +153,21 @@ class StickerManager:
         emotion_total = sum(len(v) for v in self._emotion_cache.values())
         logger.info(f"sticker.loaded", categories=len(self._cache), total=total, emotion_classified=emotion_total)
 
-    def reload(self):
+    def reload(self) -> None:
+        """重新扫描表情包目录 (清空缓存)."""
         self._cache.clear()
         self._emotion_cache.clear()
         self._scan()
 
     def detect_emotion(self, text: str) -> str:
+        """从文本中检测情绪标签或关键词.
+
+        Args:
+            text: 输入文本
+
+        Returns:
+            检测到的情绪名, 无匹配返回空字符串
+        """
         m = self.EMOTION_PATTERN.search(text)
         if m:
             raw_label = m.group(1)
@@ -208,9 +222,19 @@ class StickerManager:
         return best_emotion if best_score >= 1 else ""
 
     def strip_emotion_tag(self, text: str) -> str:
+        """移除文本中的 [emotion:xxx] 标签."""
         return re.sub(r'\[emotion:[^\]]*\]', '', text).rstrip()
 
     def should_send(self, text: str, detected_emotion: str = "") -> bool:
+        """按概率决定是否发送表情包 (有明确情绪时概率更高).
+
+        Args:
+            text: 原始文本
+            detected_emotion: 已检测到的情绪, 默认空字符串
+
+        Returns:
+            True 表示应发送表情包
+        """
         if not self._cache:
             return False
         # Bug fix: 有明确情绪时提高发送概率，无情绪时降低
@@ -225,6 +249,14 @@ class StickerManager:
         return self.pick(emotion)
 
     def pick(self, emotion: str | Emotion = "") -> Path | None:
+        """按情绪随机挑选一张表情包, 无匹配则从全部中随机选.
+
+        Args:
+            emotion: 目标情绪 (字符串或 Emotion 枚举), 默认空字符串
+
+        Returns:
+            表情包文件路径, 无可用时返回 None
+        """
         if not self._cache:
             return None
         # 统一模式：Emotion 枚举 → STICKER_FALLBACK 映射
@@ -248,9 +280,19 @@ class StickerManager:
 
     @property
     def available(self) -> bool:
+        """返回是否已加载任何表情包."""
         return bool(self._cache)
 
     def pick_by_text(self, text: str, detected_emotion: str = "") -> Path | None:
+        """根据文本内容挑选表情包 (优先用已检测情绪).
+
+        Args:
+            text: 原始文本
+            detected_emotion: 已检测情绪, 默认空字符串
+
+        Returns:
+            表情包路径, 无可用返回 None
+        """
         target_emotion = detected_emotion or self.detect_emotion(text)
         if not target_emotion:
             filename_match = self._detect_from_filename(text)

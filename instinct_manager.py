@@ -38,7 +38,7 @@ EXTRACT_PROMPT = """从以下对话中提取可复用的用户偏好或行为模
 
 class InstinctManager:
 
-    def __init__(self, db: DatabaseManager, router: ModelRouter):
+    def __init__(self, db: DatabaseManager, router: ModelRouter) -> None:
         self.db = db
         self.router = router
         self._available = db is not None
@@ -46,7 +46,7 @@ class InstinctManager:
         self._free_base_url = "https://api.siliconflow.cn/v1"
         self._free_model = "Qwen/Qwen2.5-7B-Instruct"
 
-    def set_free_model_client(self, api_key: str, base_url: str, model: str):
+    def set_free_model_client(self, api_key: str, base_url: str, model: str) -> None:
         """配置硅基流动免费模型客户端"""
         self._free_api_key = api_key
         self._free_base_url = base_url
@@ -79,7 +79,7 @@ class InstinctManager:
             logger.warning("instinct.free_model_failed", error=str(e))
             return None
 
-    async def init(self):
+    async def init(self) -> None:
         """创建 instincts 表"""
         if not self._available:
             return
@@ -101,7 +101,7 @@ class InstinctManager:
         await self.db._conn.commit()
         logger.info("instinct.table_ready")
 
-    async def extract_instincts(self, user_input: str, reply: str, session_id: str):
+    async def extract_instincts(self, user_input: str, reply: str, session_id: str) -> None:
         """对话结束后异步提取 Instinct，使用 LLM 分析对话提取可复用模式"""
         if not self._available:
             return
@@ -182,7 +182,7 @@ class InstinctManager:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
-    async def mark_used(self, instinct_id: int):
+    async def mark_used(self, instinct_id: int) -> None:
         """标记 Instinct 被使用"""
         if not self._available:
             return
@@ -261,7 +261,7 @@ class InstinctManager:
             logger.info("instinct.merged_duplicates", count=merge_count)
         return merge_count
 
-    async def curator_run(self):
+    async def curator_run(self) -> None:
         """Curator 一次完整运行：归档过期 + 合并重复"""
         if not self._available:
             return

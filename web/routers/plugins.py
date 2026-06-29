@@ -36,7 +36,7 @@ class PluginConfigRequest(BaseModel):
     config: dict[str, Any]
 
 
-def _get_manager(request: Request):
+def _get_manager(request: Request) -> Any:
     """获取 PluginManager 实例"""
     mgr = getattr(request.app.state, "plugin_manager", None)
     if mgr is None:
@@ -45,7 +45,7 @@ def _get_manager(request: Request):
 
 
 @router.get("", response_model=Envelope[list[PluginSummary]])
-async def list_plugins(request: Request):
+async def list_plugins(request: Request) -> Any:
     """列出所有插件"""
     mgr = _get_manager(request)
     result = []
@@ -67,7 +67,7 @@ async def list_plugins(request: Request):
 
 
 @router.get("/{plugin_id}", response_model=Envelope[PluginSummary])
-async def get_plugin(plugin_id: str, request: Request):
+async def get_plugin(plugin_id: str, request: Request) -> Any:
     """获取单个插件详情"""
     mgr = _get_manager(request)
     record = mgr.get_plugin(plugin_id)
@@ -83,7 +83,7 @@ async def get_plugin(plugin_id: str, request: Request):
 
 
 @router.post("/{plugin_id}/load", response_model=Envelope[PluginActionResponse])
-async def load_plugin(plugin_id: str, request: Request):
+async def load_plugin(plugin_id: str, request: Request) -> Any:
     mgr = _get_manager(request)
     ok = await mgr.load(plugin_id)
     record = mgr.get_plugin(plugin_id)
@@ -95,7 +95,7 @@ async def load_plugin(plugin_id: str, request: Request):
 
 
 @router.post("/{plugin_id}/enable", response_model=Envelope[PluginActionResponse])
-async def enable_plugin(plugin_id: str, request: Request):
+async def enable_plugin(plugin_id: str, request: Request) -> Any:
     mgr = _get_manager(request)
     ok = await mgr.enable(plugin_id)
     record = mgr.get_plugin(plugin_id)
@@ -107,7 +107,7 @@ async def enable_plugin(plugin_id: str, request: Request):
 
 
 @router.post("/{plugin_id}/disable", response_model=Envelope[PluginActionResponse])
-async def disable_plugin(plugin_id: str, request: Request):
+async def disable_plugin(plugin_id: str, request: Request) -> Any:
     mgr = _get_manager(request)
     ok = await mgr.disable(plugin_id)
     record = mgr.get_plugin(plugin_id)
@@ -119,7 +119,7 @@ async def disable_plugin(plugin_id: str, request: Request):
 
 
 @router.post("/{plugin_id}/reload", response_model=Envelope[PluginActionResponse])
-async def reload_plugin(plugin_id: str, request: Request):
+async def reload_plugin(plugin_id: str, request: Request) -> Any:
     mgr = _get_manager(request)
     ok = await mgr.reload(plugin_id)
     record = mgr.get_plugin(plugin_id)
@@ -131,7 +131,7 @@ async def reload_plugin(plugin_id: str, request: Request):
 
 
 @router.post("/{plugin_id}/unload", response_model=Envelope[PluginActionResponse])
-async def unload_plugin(plugin_id: str, request: Request):
+async def unload_plugin(plugin_id: str, request: Request) -> Any:
     mgr = _get_manager(request)
     ok = await mgr.unload(plugin_id)
     record = mgr.get_plugin(plugin_id)
@@ -143,14 +143,14 @@ async def unload_plugin(plugin_id: str, request: Request):
 
 
 @router.get("/{plugin_id}/config", response_model=Envelope[dict])
-async def get_plugin_config(plugin_id: str, request: Request):
+async def get_plugin_config(plugin_id: str, request: Request) -> Any:
     """获取插件配置"""
     mgr = _get_manager(request)
     return Envelope(data=mgr.get_plugin_config(plugin_id))
 
 
 @router.put("/{plugin_id}/config", response_model=Envelope[dict])
-async def set_plugin_config(plugin_id: str, req: PluginConfigRequest, request: Request):
+async def set_plugin_config(plugin_id: str, req: PluginConfigRequest, request: Request) -> Any:
     """保存插件配置"""
     mgr = _get_manager(request)
     mgr.set_plugin_config(plugin_id, req.config)
@@ -158,7 +158,7 @@ async def set_plugin_config(plugin_id: str, req: PluginConfigRequest, request: R
 
 
 @router.post("/discover", response_model=Envelope[dict])
-async def discover_plugins(request: Request):
+async def discover_plugins(request: Request) -> Any:
     """触发插件扫描"""
     mgr = _get_manager(request)
     new_ids = mgr.discover()

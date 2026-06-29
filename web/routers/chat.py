@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Any
 
 import os
 import re
@@ -33,14 +34,14 @@ def _strip_tags(text: str) -> str:
 
 
 @router.get("/commands", response_model=Envelope[list[SlashCommand]])
-async def list_commands():
+async def list_commands() -> Any:
     """斜杠命令清单（供前端 / 自动补全）。"""
     from slash_commands import list_commands as _list
     return Envelope(data=[SlashCommand(**c) for c in _list()])
 
 
 @router.get("/sessions", response_model=Envelope[list[SessionInfo]])
-async def list_sessions(request: Request):
+async def list_sessions(request: Request) -> Any:
     core = request.app.state.core
     sessions = []
     try:
@@ -74,14 +75,14 @@ async def list_sessions(request: Request):
 
 
 @router.post("/sessions", response_model=Envelope[dict])
-async def create_session():
+async def create_session() -> Any:
     return Envelope(data={"session_id": f"web_{uuid.uuid4().hex[:12]}"})
 
 
 @router.get("/sessions/{session_id}/messages", response_model=Envelope[list[MessageItem]])
 async def get_messages(session_id: str, request: Request,
                        before: float = Query(default=0),
-                       limit: int = Query(default=50, le=200)):
+                       limit: int = Query(default=50, le=200)) -> Any:
     """conversation_logs 一行 = 一轮（user_message + assistant_reply），展开为两条消息。"""
     core = request.app.state.core
     messages: list[MessageItem] = []
@@ -111,7 +112,7 @@ async def get_messages(session_id: str, request: Request,
 
 
 @router.delete("/sessions/{session_id}", response_model=Envelope[dict])
-async def delete_session(session_id: str, request: Request):
+async def delete_session(session_id: str, request: Request) -> Any:
     core = request.app.state.core
     await core.db.execute(
         "DELETE FROM conversation_logs WHERE session_id=?", (session_id,))
@@ -121,7 +122,7 @@ async def delete_session(session_id: str, request: Request):
 
 
 @router.get("/sessions/{session_id}/export")
-async def export_session(session_id: str, request: Request):
+async def export_session(session_id: str, request: Request) -> Any:
     core = request.app.state.core
     rows = await core.db.fetch_all(
         "SELECT timestamp, user_message, assistant_reply FROM conversation_logs "
@@ -140,7 +141,7 @@ async def export_session(session_id: str, request: Request):
 
 
 @router.post("/chat", response_model=Envelope[dict])
-async def chat(req: ChatRequest, request: Request):
+async def chat(req: ChatRequest, request: Request) -> Any:
     """非流式兜底端点（主通道为 /ws）。"""
     core = request.app.state.core
     try:
@@ -155,7 +156,7 @@ async def chat(req: ChatRequest, request: Request):
 
 
 @router.post("/chat/upload-image", response_model=Envelope[dict])
-async def upload_image(file: UploadFile = File(...)):
+async def upload_image(file: UploadFile = File(...)) -> Any:
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "仅允许上传图片文件")
     content = await file.read()
@@ -169,7 +170,7 @@ async def upload_image(file: UploadFile = File(...)):
 
 
 @router.post("/chat/speech-to-text", response_model=Envelope[dict])
-async def speech_to_text(file: UploadFile = File(...)):
+async def speech_to_text(file: UploadFile = File(...)) -> Any:
     content = await file.read()
     if len(content) > 20 * 1024 * 1024:  # 20MB
         raise HTTPException(400, "音频大小不能超过 20MB")

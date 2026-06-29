@@ -1,3 +1,4 @@
+from typing import Any
 import hashlib
 import json
 import os
@@ -48,9 +49,14 @@ def _resolve_voice_ref(filename: str) -> Path:
     if user_path.exists():
         return user_path
     # 2. 安装包内置路径（开发环境 / PyInstaller 打包环境）
+    # 内联 get_base_dir 逻辑, 避免从 core.bootstrap 导入 (打破 emotion.tts_engine <-> core.bootstrap 循环)
+    import sys
     try:
-        from core.bootstrap import get_base_dir
-        bundled_path = get_base_dir() / "assets" / "voice_refs" / filename
+        if getattr(sys, 'frozen', False):
+            _base_dir = Path(sys._MEIPASS)  # type: ignore[attr-defined]
+        else:
+            _base_dir = Path(__file__).resolve().parent.parent
+        bundled_path = _base_dir / "assets" / "voice_refs" / filename
         if bundled_path.exists():
             return bundled_path
     except Exception:
@@ -175,14 +181,15 @@ class TTSEngine:
         ],
     }
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """初始化 TTS 引擎 (未初始化客户端, 需调用 init)."""
         self._client: AsyncOpenAI | None = None
         self._output_dir: Path | None = None
         self._available = False
         self._synthesis_cache: OrderedDict[str, Path] = OrderedDict()
         self._cache_index_path: Path | None = None
 
-    def _load_cache_index(self):
+    def _load_cache_index(self) -> None:
         """从 JSON 文件加载缓存索引，移除文件不存在的条目"""
         if not self._cache_index_path or not self._cache_index_path.exists():
             return
@@ -200,7 +207,7 @@ class TTSEngine:
         except Exception as e:
             logger.warning("tts.cache_index_load_failed error={}", str(e))
 
-    def _save_cache_index(self):
+    def _save_cache_index(self) -> None:
         """将缓存索引保存到 JSON 文件"""
         if not self._cache_index_path or not self._output_dir:
             return
@@ -215,7 +222,12 @@ class TTSEngine:
         except Exception as e:
             logger.warning("tts.cache_index_save_failed error={}", str(e))
 
-    async def init(self, output_dir: str | Path | None = None):
+    async def init(self, output_dir: str | Path | None = None) -> None:
+        """初始化 TTS 客户端与缓存目录.
+
+        Args:
+            output_dir: 合成音频输出目录, None 表示使用默认目录
+        """
         api_key = _get_mimo_api_key()
         if not api_key:
             logger.warning("tts.no_api_key")
@@ -258,6 +270,7 @@ class TTSEngine:
 
     @property
     def available(self) -> bool:
+        """返回 TTS 是否可用 (客户端就绪且已通过健康检查)."""
         return self._available and self._client is not None
 
     def refresh_client(self) -> None:
@@ -280,6 +293,18 @@ class TTSEngine:
         emotion: str = "",
         output_path: str | Path | None = None,
     ) -> Path | None:
+        """合成语音文件, 命中缓存则直接返回路径.
+
+        Args:
+            text: 待合成文本
+            voice: 音色名, 默认 nahida
+            style: 风格描述, 默认空字符串
+            emotion: 情绪描述, 默认空字符串
+            output_path: 输出路径, None 表示自动生成
+
+        Returns:
+            合成音频文件路径, 失败返回 None
+        """
         if not self.available:
             logger.warning("tts.not_available")
             return None
@@ -293,19 +318,11 @@ class TTSEngine:
             logger.error("tts.voice_file_missing_unavailable", voice=voice, message="语音参考文件缺失，无法合成。请检查音频文件是否存在。")
             return None
 
-        # 计算缓存 key
+        # 计算缓存 key 并检查命中
         cache_key = hashlib.md5(f"{voice}:{emotion}:{text}".encode("utf-8")).hexdigest()
-
-        # 缓存命中检查
-        if cache_key in self._synthesis_cache:
-            cached_path = self._synthesis_cache[cache_key]
-            if cached_path.exists():
-                self._synthesis_cache.move_to_end(cache_key)
-                logger.info("tts.cache_hit", key=cache_key, file=str(cached_path))
-                return cached_path
-            else:
-                del self._synthesis_cache[cache_key]
-
+        cached = self._tts_cache_hit(cache_key)
+        if cached is not None:
+            return cached
         logger.info("tts.cache_miss", key=cache_key)
 
         try:
@@ -314,8 +331,44 @@ class TTSEngine:
             logger.error("tts.voice_encode_failed error={}", str(e))
             return None
 
-        context = style or VOICE_STYLES.get(voice, "")
+        messages = self._build_tts_messages(voice, text, style, emotion)
 
+        try:
+            completion = await self._call_tts_with_retry(voice, voice_data_url, messages)
+            if completion is None:
+                return None
+
+            message = completion.choices[0].message
+            if message.audio is None or not getattr(message.audio, "data", None):
+                logger.warning("tts.no_audio_returned")
+                return None
+
+            audio_bytes = base64.b64decode(message.audio.data)
+            if len(audio_bytes) < 1024:
+                logger.warning("tts.audio_too_small", voice=voice,
+                               size=len(audio_bytes), text_len=len(text))
+                return None
+
+            return self._save_tts_output(audio_bytes, voice, text, output_path, cache_key)
+        except Exception as e:
+            logger.error("tts.synthesize_failed voice={} error={}", voice, str(e))
+            return None
+
+    def _tts_cache_hit(self, cache_key: str) -> Path | None:
+        """检查 TTS 合成缓存。命中返回 Path，未命中返回 None。"""
+        if cache_key not in self._synthesis_cache:
+            return None
+        cached_path = self._synthesis_cache[cache_key]
+        if cached_path.exists():
+            self._synthesis_cache.move_to_end(cache_key)
+            logger.info("tts.cache_hit", key=cache_key, file=str(cached_path))
+            return cached_path
+        del self._synthesis_cache[cache_key]
+        return None
+
+    def _build_tts_messages(self, voice: str, text: str, style: str, emotion: str) -> list[dict]:
+        """构造 MiMo 导演模式消息：user 放角色/场景/指导，assistant 放音频标签+文本。"""
+        context = style or VOICE_STYLES.get(voice, "")
         style_tag = EMOTION_STYLE_MAP.get(emotion, EMOTION_STYLE_MAP["neutral"])
 
         # 统一模式：通过 resolve_emotion 解析后再查 TTS_STYLE_MAP
@@ -324,7 +377,6 @@ class TTSEngine:
             tts_style = TTS_STYLE_MAP.get(resolved, "neutral")
             style_tag = EMOTION_STYLE_MAP.get(tts_style, EMOTION_STYLE_MAP["neutral"])
 
-        # MiMo 导演模式：user 消息放角色/场景/指导，assistant 消息放音频标签+文本
         messages = []
         if context:
             messages.append({"role": "user", "content": context})
@@ -334,69 +386,61 @@ class TTSEngine:
                 messages.append({"role": "user", "content": voice_style})
         # 音频标签放在 assistant 消息开头，紧接要合成的文本
         messages.append({"role": "assistant", "content": f"{style_tag} {text}"})
+        return messages
 
-        try:
-            for _attempt in range(3):
-                try:
-                    completion = await self._client.chat.completions.create(
-                        model=MIMO_TTS_MODEL,
-                        messages=messages,
-                        audio={
-                            "format": "mp3",
-                        "voice": voice_data_url,
-                        },
-                    )
-                    break
-                except Exception as api_err:
-                    if "429" in str(api_err) and _attempt < 2:
-                        wait = (_attempt + 1) * 5
-                        logger.warning("tts.rate_limited_retry", voice=voice, attempt=_attempt + 1, wait=wait)
-                        await asyncio.sleep(wait)
-                    else:
-                        raise
+    async def _call_tts_with_retry(self, voice: str, voice_data_url: str,
+                                   messages: list[dict]) -> Any:
+        """调用 TTS API，429 限流时退避重试。返回 completion 或 None。"""
+        for _attempt in range(3):
+            try:
+                completion = await self._client.chat.completions.create(
+                    model=MIMO_TTS_MODEL,
+                    messages=messages,
+                    audio={
+                        "format": "mp3",
+                    "voice": voice_data_url,
+                    },
+                )
+                return completion
+            except Exception as api_err:
+                if "429" in str(api_err) and _attempt < 2:
+                    wait = (_attempt + 1) * 5
+                    logger.warning("tts.rate_limited_retry", voice=voice, attempt=_attempt + 1, wait=wait)
+                    await asyncio.sleep(wait)
+                else:
+                    raise
+        return None
 
-            message = completion.choices[0].message
-            if message.audio is None or not getattr(message.audio, "data", None):
-                logger.warning("tts.no_audio_returned")
-                return None
+    def _save_tts_output(self, audio_bytes: bytes, voice: str, text: str,
+                         output_path: str | Path | None, cache_key: str) -> Path:
+        """写入音频文件并更新缓存，返回输出 Path。"""
+        if output_path:
+            out = Path(output_path)
+        else:
+            ts = int(time.time() * 1000) % 1000000
+            out = self._output_dir / f"{voice}_{ts}.mp3"
 
-            audio_bytes = base64.b64decode(message.audio.data)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(audio_bytes)
 
-            # 音频数据过小检查：小于 1KB 说明 API 返回了无效数据
-            if len(audio_bytes) < 1024:
-                logger.warning("tts.audio_too_small", voice=voice,
-                               size=len(audio_bytes), text_len=len(text))
-                return None
+        # 写入缓存
+        if len(self._synthesis_cache) >= self._SYNTHESIS_CACHE_MAX_SIZE:
+            self._synthesis_cache.popitem(last=False)
+        self._synthesis_cache[cache_key] = out
+        self._save_cache_index()
 
-            if output_path:
-                out = Path(output_path)
-            else:
-                ts = int(time.time() * 1000) % 1000000
-                out = self._output_dir / f"{voice}_{ts}.mp3"
-
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_bytes(audio_bytes)
-
-            # 写入缓存
-            if len(self._synthesis_cache) >= self._SYNTHESIS_CACHE_MAX_SIZE:
-                self._synthesis_cache.popitem(last=False)
-            self._synthesis_cache[cache_key] = out
-            self._save_cache_index()
-
-            logger.info("tts.synthesized", voice=voice, text_len=len(text), file=str(out), size_kb=len(audio_bytes) // 1024)
-            return out
-
-        except Exception as e:
-            logger.error("tts.synthesize_failed voice={} error={}", voice, str(e))
-            return None
+        logger.info("tts.synthesized", voice=voice, text_len=len(text), file=str(out), size_kb=len(audio_bytes) // 1024)
+        return out
 
     async def synthesize_nahida(self, text: str, style: str = "", emotion: str = "") -> Path | None:
+        """使用 nahida 音色合成语音 (synthesize 的便捷封装)."""
         return await self.synthesize(text, voice="nahida", style=style, emotion=emotion)
 
     async def synthesize_keli(self, text: str, style: str = "", emotion: str = "") -> Path | None:
+        """使用 keli 音色合成语音 (synthesize 的便捷封装)."""
         return await self.synthesize(text, voice="keli", style=style, emotion=emotion)
 
-    async def precompose_phrases(self):
+    async def precompose_phrases(self) -> None:
         """逐个串行预合成短句，避免并发触发 429 限流"""
         success = 0
         for voice, phrases in self._PRECOMPOSED_PHRASES.items():
@@ -408,7 +452,7 @@ class TTSEngine:
                 await asyncio.sleep(5)
         logger.info("tts.precompose_done", total=sum(len(p) for p in self._PRECOMPOSED_PHRASES.values()), success=success)
 
-    async def close(self):
+    async def close(self) -> None:
         """关闭 TTS 引擎，释放资源"""
         if hasattr(self, '_client') and self._client is not None:
             await self._client.close()

@@ -157,6 +157,7 @@ do_build() {
         cp "$SCRIPT_DIR/start-windows.bat" "$dist_dir/start-windows.bat"
         cp "$SCRIPT_DIR/auto-update.bat" "$dist_dir/auto-update.bat"
         cp "$SCRIPT_DIR/open-browser.ps1" "$dist_dir/open-browser.ps1"
+        cp "$SCRIPT_DIR/doctor.bat" "$dist_dir/doctor.bat"
 
         # Copy icon file for NSIS
         cp "$PROJECT_ROOT/assets/nahida-icon.ico" "$dist_dir/nahida-icon.ico"
@@ -203,6 +204,7 @@ Section "MainSection" SEC01
   CreateShortCut "\$DESKTOP\\小妲Agent.lnk" "\$INSTDIR\\start-windows.bat" "" "\$INSTDIR\\xiaoda-agent.exe" 0
   CreateDirectory "\$SMPROGRAMS\\\${PRODUCT_NAME}"
   CreateShortCut "\$SMPROGRAMS\\\${PRODUCT_NAME}\\小妲Agent.lnk" "\$INSTDIR\\start-windows.bat" "" "\$INSTDIR\\xiaoda-agent.exe" 0
+  CreateShortCut "\$SMPROGRAMS\\\${PRODUCT_NAME}\\自检 (Doctor).lnk" "\$INSTDIR\\doctor.bat" "" "\$INSTDIR\\xiaoda-agent.exe" 0
   CreateShortCut "\$SMPROGRAMS\\\${PRODUCT_NAME}\\卸载.lnk" "\$INSTDIR\\uninstall.exe"
 SectionEnd
 

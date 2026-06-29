@@ -1,4 +1,5 @@
 """智能上下文压缩引擎"""
+from typing import Any, Optional
 import hashlib
 import json
 import time
@@ -42,7 +43,7 @@ class ContextCompressor:
     TOOL_OUTPUT_THRESHOLD = 2000  # 超过此长度压缩
     HISTORY_KEEP_RECENT = 5       # 保留最近 5 轮完整内容
 
-    def __init__(self, router=None):
+    def __init__(self, router: Optional[Any]=None) -> None:
         self._router = router
         self._cache_dir = self.CACHE_DIR
         self._cache_dir.mkdir(parents=True, exist_ok=True)
@@ -244,7 +245,7 @@ class ContextCompressor:
 # 全局压缩器实例
 _default_compressor: ContextCompressor | None = None
 
-def get_context_compressor(router=None) -> ContextCompressor:
+def get_context_compressor(router: Optional[Any]=None) -> ContextCompressor:
     global _default_compressor
     if _default_compressor is None:
         _default_compressor = ContextCompressor(router=router)

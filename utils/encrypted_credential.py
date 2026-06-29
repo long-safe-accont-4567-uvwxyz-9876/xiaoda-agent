@@ -13,7 +13,7 @@ from loguru import logger
 class EncryptedCredential:
     """凭证加密存储包装层"""
 
-    def __init__(self, encrypted_b64: str, salt: str = "xiaoda-agent"):
+    def __init__(self, encrypted_b64: str, salt: str = "xiaoda-agent") -> None:
         self._encrypted = encrypted_b64
         self._salt = salt
         self._machine_key = self._derive_machine_key(salt)

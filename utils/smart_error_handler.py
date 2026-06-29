@@ -7,7 +7,7 @@ import re
 import asyncio
 from loguru import logger
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 
 @dataclass
@@ -22,7 +22,7 @@ class ErrorContext:
 
 class SmartErrorHandler:
 
-    def __init__(self, db=None, dispatcher=None):
+    def __init__(self, db: Optional[Any]=None, dispatcher: Optional[Any]=None) -> None:
         self._db = db
         self._dispatcher = dispatcher
         self._recent_errors: list[ErrorContext] = []
@@ -167,7 +167,7 @@ class SmartErrorHandler:
             "\n已经帮你定位到问题了哦～ 🌿"
         )
 
-    async def _learn_from_error(self, error_ctx: ErrorContext):
+    async def _learn_from_error(self, error_ctx: ErrorContext) -> None:
         """将错误记录到学习系统，避免重复犯错"""
         if not hasattr(self._db, 'learning'):
             return
@@ -229,7 +229,7 @@ class SmartErrorHandler:
         except Exception:
             return 0
 
-    async def promote_error_pattern(self, error_type: str, correction: str):
+    async def promote_error_pattern(self, error_type: str, correction: str) -> None:
         """提升错误模式为系统提示规则（status → promoted）"""
         if not self._db:
             return
@@ -245,7 +245,7 @@ class SmartErrorHandler:
 
     async def log_error(self, task: str = "", error: str = "",
                         error_type: str = "", correction: str = "",
-                        outcome: str = ""):
+                        outcome: str = "") -> None:
         """归档错误经验到 learnings 表（供 FailureTrigger 调用）"""
         if not self._db or not hasattr(self._db, 'learning'):
             return
@@ -341,7 +341,7 @@ class SmartErrorHandler:
 _error_handler_instance: SmartErrorHandler | None = None
 
 
-def get_error_handler(db=None, dispatcher=None) -> SmartErrorHandler:
+def get_error_handler(db: Optional[Any]=None, dispatcher: Optional[Any]=None) -> SmartErrorHandler:
     """获取全局错误处理器实例"""
     global _error_handler_instance
     

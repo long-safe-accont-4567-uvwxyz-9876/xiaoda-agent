@@ -125,7 +125,7 @@ _DANGEROUS_PATTERNS = [
 class ToolGuardrails:
     """工具调用护栏"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._call_history: list[ToolCallRecord] = []
         self._lock = asyncio.Lock()
         self._max_history = 20  # 保留最近 20 次调用记录
@@ -195,7 +195,7 @@ class ToolGuardrails:
             return False, f"验证异常: {e}"
 
     async def record_call(self, tool_name: str, arguments: dict,
-                    success: bool, output: str = ""):
+                    success: bool, output: str = "") -> None:
         """记录工具调用"""
         try:
             args_hash = self._simple_args_hash(arguments)
@@ -274,7 +274,7 @@ class ToolGuardrails:
         except Exception:
             return ""
 
-    def reset(self):
+    def reset(self) -> None:
         """重置调用历史"""
         self._call_history.clear()
 

@@ -8,6 +8,7 @@ AgentCore：会话、记忆、表情包、子代理全部同步。
     .venv/bin/python cli_client.py --host 172.26.130.154
 """
 from __future__ import annotations
+from typing import Any
 
 import argparse
 import asyncio
@@ -85,7 +86,7 @@ def login(base: str, password: str) -> str:
 
 
 class NahidaCLI:
-    def __init__(self, host: str, port: int, password: str):
+    def __init__(self, host: str, port: int, password: str) -> None:
         self.base = f"http://{host}:{port}"
         self.ws_url = f"ws://{host}:{port}/ws"
         self.password = password
@@ -98,7 +99,7 @@ class NahidaCLI:
 
     # ── 连接 ──────────────────────────────────────────
 
-    async def connect(self):
+    async def connect(self) -> None:
         token = await asyncio.to_thread(login, self.base, self.password)
         self.ws = await websockets.connect(
             f"{self.ws_url}?token={token}", ping_interval=20, max_size=4 * 2**20)
@@ -120,7 +121,7 @@ class NahidaCLI:
 
     _status_handler = None
 
-    async def _listener(self):
+    async def _listener(self) -> None:
         try:
             async for raw in self.ws:
                 event = json.loads(raw)
@@ -138,7 +139,7 @@ class NahidaCLI:
 
     # ── 对话 ──────────────────────────────────────────
 
-    async def chat(self, text: str, on_status) -> dict:
+    async def chat(self, text: str, on_status: Any) -> dict:
         msg_id = uuid.uuid4().hex[:8]
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending[msg_id] = fut
@@ -152,13 +153,13 @@ class NahidaCLI:
             self._pending.pop(msg_id, None)
             self._status_handler = None
 
-    async def set_agent(self, agent: str):
+    async def set_agent(self, agent: str) -> None:
         self.agent = agent
         await self.ws.send(json.dumps({"type": "set_agent", "agent": agent}))
 
     # ── 渲染 ──────────────────────────────────────────
 
-    def print_banner(self):
+    def print_banner(self) -> None:
         console.print(Text(BANNER, style=f"bold {DENDRO}"))
         console.print(Text("  🌿  世 界 的 记 忆 ， 由 我 来 守 护  🌿", style=WISDOM))
         console.print()
@@ -172,7 +173,7 @@ class NahidaCLI:
             style=MOON_DIM))
         console.print()
 
-    def render_reply(self, event: dict):
+    def render_reply(self, event: dict) -> None:
         agent = event.get("agent") or self.agent
         label, color, icon = AGENT_LABELS.get(agent, (agent, DENDRO, "🌿"))
         reply = event.get("reply", "")
@@ -192,7 +193,7 @@ class NahidaCLI:
             subtitle=subtitle, subtitle_align="right",
             border_style=color, padding=(0, 2)))
 
-    def drain_greetings(self):
+    def drain_greetings(self) -> None:
         while self._greeting_queue:
             text = self._greeting_queue.pop(0)
             console.print(Panel(
@@ -201,7 +202,7 @@ class NahidaCLI:
 
     # ── 主循环 ────────────────────────────────────────
 
-    async def run(self):
+    async def run(self) -> None:
         try:
             await self.connect()
         except Exception as e:
@@ -243,7 +244,7 @@ class NahidaCLI:
             status_line = Text(STAGE_TEXT["thinking"], style=MOON_DIM)
             with Live(status_line, console=console, refresh_per_second=8,
                       transient=True) as live:
-                def on_status(event):
+                def on_status(event: Any) -> None:
                     stage = event.get("stage", "")
                     text = event.get("text") or STAGE_TEXT.get(stage, "🌿 处理中……")
                     live.update(Text(text, style=MOON_DIM))
@@ -266,7 +267,7 @@ class NahidaCLI:
             await self.ws.close()
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="纳西妲 CLI（连接 WebUI 网关）")
     parser.add_argument("--host", default=os.getenv("WEBUI_HOST_CLI", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("WEBUI_PORT", "8082")))

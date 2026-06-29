@@ -4,7 +4,7 @@ import logging
 import numpy as np
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from tool_engine.tool_registry import ToolResult
 
@@ -82,7 +82,7 @@ def _hsv_to_color_name(h: int, s: int, v: int) -> str:
 
 
 class VisionService:
-    def __init__(self):
+    def __init__(self) -> None:
         self.model = None
         self._npu = None
         self.model_loaded = False
@@ -101,7 +101,7 @@ class VisionService:
         except Exception:
             return False
 
-    def _load_model(self):
+    def _load_model(self) -> None:
         if self.model_loaded:
             return
         if os.getenv("ENABLE_NPU", "").lower() in ("1", "true", "yes"):
@@ -174,11 +174,11 @@ class VisionService:
             self.backend = "api_fallback"
             self.model_loaded = True
 
-    def _ensure_model(self):
+    def _ensure_model(self) -> None:
         if not self.model_loaded:
             self._load_model()
 
-    def capture_frame(self, device=0, width=640, height=480) -> tuple:
+    def capture_frame(self, device: Any=0, width: Any=640, height: Any=480) -> tuple:
         try:
             import cv2
             cap = cv2.VideoCapture(f"/dev/video{device}")
@@ -196,7 +196,7 @@ class VisionService:
         except Exception as e:
             return (False, str(e))
 
-    def save_frame(self, frame, filename=None) -> str:
+    def save_frame(self, frame: Any, filename: Any=None) -> str:
         try:
             import cv2
             CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
@@ -236,7 +236,7 @@ class VisionService:
             return 0.0
         return inter / union
 
-    def detect_objects(self, frame) -> list:
+    def detect_objects(self, frame: Any) -> list:
         self._ensure_model()
         if self.backend == "npu" and self._npu:
             try:
@@ -263,7 +263,7 @@ class VisionService:
             return self._detect_ncnn(frame)
         return []
 
-    def _detect_ncnn(self, frame) -> list:
+    def _detect_ncnn(self, frame: Any) -> list:
         try:
             import ncnn
             import cv2
@@ -320,7 +320,7 @@ class VisionService:
             logger.warning("ncnn detection failed: %s", e)
             return []
 
-    def describe_scene(self, frame) -> str:
+    def describe_scene(self, frame: Any) -> str:
         detections = self.detect_objects(frame)
         if not detections:
             return "画面中未检测到明确的目标物体"
@@ -335,7 +335,7 @@ class VisionService:
             parts.append(f"{count}个{label}" if count > 1 else f"1个{label}")
         return "画面中检测到" + "、".join(parts)
 
-    def analyze_colors(self, frame) -> list:
+    def analyze_colors(self, frame: Any) -> list:
         try:
             import cv2
             small = cv2.resize(frame, (50, 50))
@@ -362,7 +362,7 @@ class VisionService:
             logger.warning("color analysis failed: %s", e)
             return []
 
-    def unload_model(self):
+    def unload_model(self) -> None:
         if self._npu:
             self._npu = None
         self.model = None

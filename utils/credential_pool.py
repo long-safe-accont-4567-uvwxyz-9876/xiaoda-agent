@@ -41,7 +41,7 @@ AUTH_ERROR_DEAD_THRESHOLD = 3  # 连续 AUTH_ERROR 达到此数才标记 DEAD
 class CredentialPool:
     """多凭证管理池，支持凭证轮换和状态机"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         # {provider: [Credential, ...]}
         self._pool: dict[str, list[Credential]] = {}
         # {provider: int} 当前轮换索引
@@ -50,7 +50,7 @@ class CredentialPool:
         self._lock = asyncio.Lock()
         self._load_from_env()
 
-    def add_credential(self, cred: Credential):
+    def add_credential(self, cred: Credential) -> None:
         """添加凭证到池中"""
         provider = cred.provider
         if provider not in self._pool:
@@ -104,7 +104,7 @@ class CredentialPool:
             logger.error("credential_pool.all_dead", provider=provider)
             return None
 
-    async def report_error(self, provider: str, error: ClassifiedError):
+    async def report_error(self, provider: str, error: ClassifiedError) -> None:
         """报告错误，更新凭证状态"""
         async with self._lock:
             creds = self._pool.get(provider, [])
@@ -157,7 +157,7 @@ class CredentialPool:
                              provider=provider,
                              reason=error.reason.value)
 
-    async def report_success(self, provider: str):
+    async def report_success(self, provider: str) -> None:
         """报告成功"""
         async with self._lock:
             creds = self._pool.get(provider, [])
@@ -174,7 +174,7 @@ class CredentialPool:
             elif target and target.state == CredentialState.OK:
                 target.error_count = 0  # 成功后重置错误计数，避免非连续 AUTH_ERROR 累积
 
-    def _recover_exhausted(self, provider: str):
+    def _recover_exhausted(self, provider: str) -> None:
         """检查并恢复冷却期结束的 exhausted 凭证"""
         creds = self._pool.get(provider, [])
         now = time.time()
@@ -252,7 +252,7 @@ class CredentialPool:
             }
         return stats
 
-    def _load_from_env(self):
+    def _load_from_env(self) -> None:
         """从环境变量自动加载凭证"""
         # 加载 MiMo API Key
         mimo_key = os.getenv("MIMO_API_KEY", "")

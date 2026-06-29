@@ -1,3 +1,4 @@
+from typing import Any
 import os
 import sys
 import shutil
@@ -8,7 +9,7 @@ try:
     from dotenv import dotenv_values
 except ImportError:
     # PyInstaller 打包后可能找不到 dotenv，提供降级方案
-    def dotenv_values(path):
+    def dotenv_values(path: Any) -> Any:
         vals = {}
         if not os.path.exists(path):
             return vals
@@ -177,7 +178,7 @@ def _mask_value(val: str) -> str:
     return val[:4] + "****"
 
 
-def _print_banner():
+def _print_banner() -> None:
     flower = f"{_C.LEAF}✿{_C.RST}"
     grass = f"{_C.DGREEN}\U0001f33f{_C.RST}"
 
@@ -215,7 +216,7 @@ def _parse_env_lines(filepath: str) -> list:
     return lines
 
 
-def _write_env(existing_lines: list, updates: dict):
+def _write_env(existing_lines: list, updates: dict) -> None:
     key_set = set(updates.keys())
     written_keys = set()
     new_lines = []
@@ -285,7 +286,7 @@ def _ask_key(item: dict, current_val: str, is_required: bool) -> str:
     return current_val
 
 
-def _print_summary(configured: dict):
+def _print_summary(configured: dict) -> None:
     print()
     print(f"  {_C.DIM}+------------------------------------------------+{_C.RST}")
     print(f"  {_C.LGREEN}{_C.BOLD}\U0001f33f 配置摘要{_C.RST}")
@@ -324,7 +325,7 @@ def is_first_run() -> bool:
     return False
 
 
-def main():
+def main() -> None:
     _print_banner()
 
     if not os.path.exists(ENV_PATH):

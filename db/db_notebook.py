@@ -5,11 +5,11 @@ from loguru import logger
 
 class NotebookDB:
 
-    def __init__(self, conn: aiosqlite.Connection):
+    def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn
         conn.row_factory = aiosqlite.Row
 
-    async def commit(self):
+    async def commit(self) -> None:
         await self._conn.commit()
 
     async def insert_notebook(self, kind: str, content: str, tags: str = "",
@@ -45,7 +45,7 @@ class NotebookDB:
         return [dict(r) for r in rows]
 
     async def archive_notebook_entries(self, id_threshold: int = 0, kind: str | None = None,
-                                        auto_commit: bool = True):
+                                        auto_commit: bool = True) -> None:
         if kind:
             await self._conn.execute(
                 """UPDATE notebook_entries SET status='archived', updated_at=?
@@ -101,7 +101,7 @@ class NotebookDB:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
-    async def complete_task(self, task_id: int, auto_commit: bool = True):
+    async def complete_task(self, task_id: int, auto_commit: bool = True) -> None:
         await self._conn.execute(
             "UPDATE notebook_entries SET status='completed', updated_at=? WHERE id=?",
             (time.time(), task_id),
@@ -109,7 +109,7 @@ class NotebookDB:
         if auto_commit:
             await self._conn.commit()
 
-    async def remind_task(self, task_id: int, auto_commit: bool = True):
+    async def remind_task(self, task_id: int, auto_commit: bool = True) -> None:
         await self._conn.execute(
             "UPDATE notebook_entries SET status='reminded', updated_at=? WHERE id=?",
             (time.time(), task_id),
@@ -117,7 +117,7 @@ class NotebookDB:
         if auto_commit:
             await self._conn.commit()
 
-    async def cancel_task(self, task_id: int, auto_commit: bool = True):
+    async def cancel_task(self, task_id: int, auto_commit: bool = True) -> None:
         await self._conn.execute(
             "UPDATE notebook_entries SET status='cancelled', updated_at=? WHERE id=?",
             (time.time(), task_id),

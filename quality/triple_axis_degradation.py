@@ -61,7 +61,7 @@ class TripleAxisState:
 class SilentDegradationDetector:
     """静默退化检测器 — 检测 provider 偷偷切到弱模型"""
 
-    def __init__(self, baseline: TripleAxisState):
+    def __init__(self, baseline: TripleAxisState) -> None:
         self._baseline = baseline
         self._history: deque = deque(maxlen=100)
 

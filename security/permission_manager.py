@@ -89,7 +89,7 @@ _GOAT_WARN_THREAT_KEYWORDS = [
 class PermissionManager:
     """权限管理器 — 全局单例"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._mode = self._init_mode_from_env()
         self._lock = threading.Lock()
 

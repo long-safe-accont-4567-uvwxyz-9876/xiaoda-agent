@@ -1,3 +1,4 @@
+from typing import Any, Optional
 import asyncio
 import re
 import time
@@ -5,6 +6,13 @@ from loguru import logger
 
 from db.database import DatabaseManager
 from db.db_memory import MemoryDB
+# FTS5 分词工具从 db.fts_utils 导入 (打破 db <-> memory 循环); 这里 re-export
+# 保持向后兼容 (其他模块仍可 `from memory.memory_manager import _tokenize_for_fts`)
+from db.fts_utils import (
+    _tokenize_for_fts,
+    _extract_fts_keywords,
+    _build_fts_query,
+)
 from .vector_store import VectorStore
 from .fluid_memory import FluidMemory
 from .memory_distiller import MemoryDistiller
@@ -18,51 +26,6 @@ def _extract_entities(text: str) -> list[str]:
         return [w for w in words if len(w) >= 2]
     except ImportError:
         return [text[i:i+n] for n in range(2, 5) for i in range(len(text)-n+1)]
-
-
-# ── FTS5 预分词工具 ──
-_CJK_RANGE = re.compile(r'[\u4e00-\u9fff\u3400-\u4dbf]')
-_KEYWORD_SPLIT = re.compile(r'[^\w]+')
-_FTS_SPECIAL = re.compile(r'[^\w\u4e00-\u9fff]')
-
-
-def _tokenize_for_fts(text: str) -> str:
-    """将文本分词后用空格连接，用于 FTS5 预分词存储"""
-    return " ".join(_extract_fts_keywords(text))
-
-
-def _extract_fts_keywords(text: str, *, min_length: int = 2) -> list[str]:
-    """提取关键词用于 FTS5 索引和查询，jieba 优先，n-gram 降级"""
-    has_cjk = bool(_CJK_RANGE.search(text))
-    if has_cjk:
-        try:
-            import jieba
-            raw_tokens = jieba.lcut_for_search(text)
-        except ImportError:
-            # n-gram 降级
-            raw_tokens = [text[i:i+n] for n in range(2, 5) for i in range(len(text)-n+1)]
-    else:
-        raw_tokens = _KEYWORD_SPLIT.split(text.lower())
-
-    seen = set()
-    result = []
-    for token in raw_tokens:
-        token = token.strip()
-        if len(token) >= min_length and token not in seen:
-            seen.add(token)
-            result.append(token)
-    return result
-
-
-def _build_fts_query(query: str) -> str:
-    """构建 FTS5 MATCH 查询字符串，关键词 OR 连接"""
-    tokens = _extract_fts_keywords(query)
-    quoted = []
-    for token in tokens:
-        cleaned = _FTS_SPECIAL.sub(" ", token).strip()
-        if cleaned:
-            quoted.append(f'"{cleaned}"')
-    return " OR ".join(quoted) if quoted else ""
 
 
 # ── 时间实体识别（解析"昨天/前天/上周/N天前"等中文时间词）──
@@ -214,8 +177,8 @@ class MemoryManager:
 
     def __init__(self, db: DatabaseManager, memory: MemoryDB,
                  vector_store: VectorStore | None = None,
-                 router=None, knowledge_graph=None, security_filter=None,
-                 reranker=None, query_transformer=None):
+                 router: Optional[Any]=None, knowledge_graph: Optional[Any]=None, security_filter: Optional[Any]=None,
+                 reranker: Optional[Any]=None, query_transformer: Optional[Any]=None) -> None:
         self.db = db
         self.memory = memory
         self.vec = vector_store
@@ -230,7 +193,7 @@ class MemoryManager:
         # P3 记忆蒸馏器（使用硅基流动免费模型，失败降级到 router）
         self.distiller = MemoryDistiller(router=router)
 
-    def set_knowledge_graph(self, kg):
+    def set_knowledge_graph(self, kg: Any) -> None:
         self.kg = kg
 
     async def _has_duplicate(self, summary: str) -> bool:
@@ -253,7 +216,7 @@ class MemoryManager:
             pass
         return False
 
-    def signal_new_message(self):
+    def signal_new_message(self) -> None:
         self._last_message_time = time.time()
         self._pending_encode = True
 
@@ -264,54 +227,29 @@ class MemoryManager:
             use_reranker: 是否在本方法内调用 Reranker 精排。A3 并行检索场景下会置为
                 False，由调用方对合并后的候选池做一次性批量 Reranker。
         """
-        fts_items = []
-        vec_items = []
-
-        async def _fts_search() -> list[dict]:
-            """FTS 检索"""
-            if not self.memory:
-                return []
-            try:
-                return await self.memory.search_memories_fts(query, limit=k * 2)
-            except Exception as e:
-                logger.warning("memory.fts_search_failed", error=str(e))
-                return []
-
-        async def _vec_search() -> list[dict]:
-            """向量检索 + 批量 JOIN"""
-            if not self.vec:
-                return []
-            try:
-                vec_results = await self.vec.search(query, top_k=k * 2)
-                # 批量 JOIN：一次查询获取所有向量命中的记忆记录
-                if vec_results:
-                    vec_ids = [row_id for row_id, _ in vec_results]
-                    vec_mems = await self.memory.get_memories_by_ids(vec_ids)
-                    # 构建 id -> memory 映射
-                    vec_mem_map = {m["id"]: m for m in vec_mems}
-                    # 按 distance 排序组装结果
-                    items = []
-                    for row_id, distance in vec_results:
-                        mem = vec_mem_map.get(row_id)
-                        if mem:
-                            mem["score"] = 1.0 - distance
-                            items.append(mem)
-                    return items
-                return []
-            except Exception as e:
-                logger.warning("memory.vec_search_failed", error=str(e))
-                return []
-
+        _start = time.time()
         # 并行执行 FTS 与向量检索
-        fts_items, vec_items = await asyncio.gather(_fts_search(), _vec_search())
+        fts_items, vec_items = await asyncio.gather(
+            self._hybrid_fts_search(query, k),
+            self._hybrid_vec_search(query, k),
+        )
 
         # 降级：只有一路有结果
         if not fts_items and not vec_items:
+            # 结构化日志：记忆检索（无结果）
+            logger.info("memory.search", event="memory_search", query=query[:100],
+                        results=0, duration_ms=int((time.time() - _start) * 1000))
             return []
         if not fts_items:
-            return vec_items[:k]
+            results = vec_items[:k]
+            logger.info("memory.search", event="memory_search", query=query[:100],
+                        results=len(results), duration_ms=int((time.time() - _start) * 1000))
+            return results
         if not vec_items:
-            return fts_items[:k]
+            results = fts_items[:k]
+            logger.info("memory.search", event="memory_search", query=query[:100],
+                        results=len(results), duration_ms=int((time.time() - _start) * 1000))
+            return results
 
         # RRF 融合 - 过采样 3x 供 Reranker 筛选
         oversample_k = k * 3
@@ -324,33 +262,12 @@ class MemoryManager:
 
         # Reranker 精排
         if use_reranker and self._reranker and self._reranker.available and len(fused) > k:
-            docs = []
-            idx_map = {}
-            for i, (item_id, rrf_score) in enumerate(fused):
-                if item_id in all_items:
-                    docs.append(all_items[item_id].get("summary", ""))
-                    idx_map[i] = item_id
-
-            if docs:
-                try:
-                    reranked = await self._reranker.rerank(
-                        query=query,
-                        documents=docs,
-                        top_n=k,
-                    )
-                    results = []
-                    for item in reranked:
-                        orig_idx = item["index"]
-                        item_id = idx_map.get(orig_idx)
-                        if item_id and item_id in all_items:
-                            mem = all_items[item_id]
-                            mem["rerank_score"] = item["relevance_score"]
-                            mem["rrf_score"] = dict(fused).get(item_id, 0)
-                            results.append(mem)
-                    if results:
-                        return results[:k]
-                except Exception as e:
-                    logger.warning("memory.rerank_failed", error=str(e))
+            reranked = await self._hybrid_rerank(query, fused, all_items, k)
+            if reranked:
+                results = reranked[:k]
+                logger.info("memory.search", event="memory_search", query=query[:100],
+                            results=len(results), duration_ms=int((time.time() - _start) * 1000))
+                return results
 
         # 降级：无 Reranker 或 Reranker 失败时走原 RRF 逻辑
         results = []
@@ -360,7 +277,78 @@ class MemoryManager:
                 item["rrf_score"] = rrf_score
                 results.append(item)
 
-        return results[:k]
+        final = results[:k]
+        # 结构化日志：记忆检索（RRF 融合结果）
+        logger.info("memory.search", event="memory_search", query=query[:100],
+                    results=len(final), duration_ms=int((time.time() - _start) * 1000))
+        return final
+
+    async def _hybrid_fts_search(self, query: str, k: int) -> list[dict]:
+        """FTS 检索"""
+        if not self.memory:
+            return []
+        try:
+            return await self.memory.search_memories_fts(query, limit=k * 2)
+        except Exception as e:
+            logger.warning("memory.fts_search_failed", error=str(e))
+            return []
+
+    async def _hybrid_vec_search(self, query: str, k: int) -> list[dict]:
+        """向量检索 + 批量 JOIN：一次查询获取所有向量命中的记忆记录"""
+        if not self.vec:
+            return []
+        try:
+            vec_results = await self.vec.search(query, top_k=k * 2)
+            if not vec_results:
+                return []
+            vec_ids = [row_id for row_id, _ in vec_results]
+            vec_mems = await self.memory.get_memories_by_ids(vec_ids)
+            # 构建 id -> memory 映射，按 distance 排序组装结果
+            vec_mem_map = {m["id"]: m for m in vec_mems}
+            items = []
+            for row_id, distance in vec_results:
+                mem = vec_mem_map.get(row_id)
+                if mem:
+                    mem["score"] = 1.0 - distance
+                    items.append(mem)
+            return items
+        except Exception as e:
+            logger.warning("memory.vec_search_failed", error=str(e))
+            return []
+
+    async def _hybrid_rerank(self, query: str, fused: list[tuple[str, float]],
+                              all_items: dict[str, dict], k: int) -> list[dict] | None:
+        """Reranker 精排：基于 RRF 融合后的候选池重排序，返回 top_k 结果。
+
+        失败时返回 None，调用方降级到 RRF 排序。
+        """
+        docs: list[str] = []
+        idx_map: dict[int, str] = {}
+        for i, (item_id, _rrf_score) in enumerate(fused):
+            if item_id in all_items:
+                docs.append(all_items[item_id].get("summary", ""))
+                idx_map[i] = item_id
+        if not docs:
+            return None
+        try:
+            reranked = await self._reranker.rerank(
+                query=query,
+                documents=docs,
+                top_n=k,
+            )
+            results: list[dict] = []
+            for item in reranked:
+                orig_idx = item["index"]
+                item_id = idx_map.get(orig_idx)
+                if item_id and item_id in all_items:
+                    mem = all_items[item_id]
+                    mem["rerank_score"] = item["relevance_score"]
+                    mem["rrf_score"] = dict(fused).get(item_id, 0)
+                    results.append(mem)
+            return results if results else None
+        except Exception as e:
+            logger.warning("memory.rerank_failed", error=str(e))
+            return None
 
     def _is_retrieval_simple(self, query: str) -> bool:
         """A1: 判断查询是否足够简单，可跳过查询变换直接走混合检索
@@ -413,186 +401,245 @@ class MemoryManager:
 
     async def retrieve_memories(self, query: str, k: int = 5, context: str = "") -> list[dict]:
         import config
-        results = []
-
         # 时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索
         # 这让纳西妲能回答"昨天发生了什么"这类纯时间查询
-        _time_range = _parse_temporal_query(query)
-        if _time_range:
-            start_ts, end_ts = _time_range
-            try:
-                # 优先尝试 FTS + 时间过滤（如果 query 里有内容关键词）
-                _fts_results = await self.memory.search_memories_fts_with_time(
-                    query, start_ts, end_ts, limit=k
-                )
-                if _fts_results:
-                    logger.debug("memory.temporal_fts_hit",
-                                 query=query[:50], count=len(_fts_results))
-                    return _fts_results
-                # FTS 无结果，退回纯时间检索
-                _time_results = await self.memory.search_memories_by_time(
-                    start_ts, end_ts, limit=k * 2
-                )
-                if _time_results:
-                    logger.debug("memory.temporal_time_hit",
-                                 query=query[:50], count=len(_time_results))
-                return _time_results
-            except Exception as e:
-                logger.warning("memory.temporal_search_failed", error=str(e))
-                # 失败则继续走常规检索
+        temporal_results = await self._try_temporal_search(query, k)
+        if temporal_results is not None:
+            return temporal_results
 
         # A1: 智能短路 - 简单查询跳过查询变换，直接走混合检索
         if getattr(config, "RETRIEVAL_SMART_SKIP", True) and self._is_retrieval_simple(query):
             return await self.retrieve_memories_hybrid(query, k=k)
 
         # 查询变换：改写 + 扩展
-        queries = [query]
-        if self._query_transformer and getattr(config, "QUERY_TRANSFORM_ENABLED", True):
-            parallel_transform = getattr(config, "RETRIEVAL_PARALLEL_TRANSFORM", True)
-            try:
-                if parallel_transform:
-                    # A2: 并行执行 rewrite + expand（各自独立的 LLM 调用）
-                    expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2)
-                    rewrite_task = asyncio.create_task(
-                        self._query_transformer.rewrite_query(query, context)
-                    )
-                    expand_task = asyncio.create_task(
-                        self._query_transformer.expand_query(query, n=expand_count)
-                    )
-                    rewritten, expanded = await asyncio.gather(
-                        rewrite_task, expand_task, return_exceptions=True
-                    )
-
-                    # 异常降级：rewrite 失败用原查询，expand 失败用 [query]
-                    if isinstance(rewritten, Exception):
-                        logger.warning("memory.rewrite_failed", error=str(rewritten))
-                        rewritten = query
-                    if isinstance(expanded, Exception):
-                        logger.warning("memory.expand_failed", error=str(expanded))
-                        expanded = [query]
-                    if not rewritten:
-                        rewritten = query
-                    if not expanded:
-                        expanded = [query]
-
-                    if rewritten != query:
-                        logger.debug("memory.query_rewritten",
-                                     original=query[:50], rewritten=rewritten[:50])
-
-                    # 合并：[rewritten] + [q for q in expanded if q != rewritten]
-                    merged = [rewritten]
-                    for q in expanded:
-                        if q != rewritten:
-                            merged.append(q)
-                    queries = merged
-                    if len(queries) > 1:
-                        logger.debug("memory.query_expanded", count=len(queries))
-                else:
-                    # 串行降级（原有逻辑）
-                    rewritten = await self._query_transformer.rewrite_query(query, context)
-                    if rewritten and rewritten != query:
-                        queries = [rewritten]
-                        logger.debug("memory.query_rewritten", original=query[:50], rewritten=rewritten[:50])
-
-                    expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2)
-                    if expand_count > 0:
-                        expanded = await self._query_transformer.expand_query(rewritten, n=expand_count)
-                        if expanded and len(expanded) > 1:
-                            queries = expanded
-                            logger.debug("memory.query_expanded", count=len(queries))
-            except Exception as e:
-                logger.warning("memory.query_transform_failed", error=str(e))
+        queries = await self._transform_queries(query, context)
 
         # 多查询检索
-        all_results = []
-        seen_ids = set()
-        parallel_search = getattr(config, "RETRIEVAL_PARALLEL_SEARCH", True)
+        if getattr(config, "RETRIEVAL_PARALLEL_SEARCH", True) and len(queries) > 1:
+            all_results = await self._multi_query_parallel_search(queries, query, k)
+        else:
+            all_results = await self._multi_query_serial_search(queries, k)
+        results = all_results
 
-        if parallel_search and len(queries) > 1:
-            # A3: 并行多查询检索 + 批量 Reranker
-            # 各子查询检索时关闭内部 Reranker，统一在合并池上做一次批量精排
-            hybrid_tasks = [
-                self.retrieve_memories_hybrid(q, k=k * 2, use_reranker=False)
-                for q in queries
-            ]
-            hybrid_results = await asyncio.gather(*hybrid_tasks, return_exceptions=True)
+        # 降级：纯向量检索
+        if not results:
+            results = await self._vector_fallback_search(query, k)
 
-            for i, res in enumerate(hybrid_results):
-                if isinstance(res, Exception):
-                    logger.warning("memory.hybrid_search_failed",
-                                   query=queries[i][:50], error=str(res))
-                    continue
-                for r in res:
+        # 最终兜底：重要性排序
+        if not results:
+            results = await self._importance_fallback_search(k)
+
+        # 流体记忆评分（艾宾浩斯遗忘曲线 + 访问强化）
+        results = await self._apply_fluid_scoring(results)
+
+        # KG 增强评分 + 综合评分
+        await self._compute_final_scores(query, results, config)
+
+        results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
+        results = results[:k]
+
+        # 主动检索 A：话题触发器
+        # 从 query 抽取 top-N 话题关键词，对每个词做轻量 FTS 检索，
+        # 把"主题相关但未被主路命中"的记忆补充进来，扩大主动联想。
+        # 这样即使主路 RRF 没召回，话题相关的旧记忆也能浮上来。
+        results = await self._apply_topic_trigger(query, results, k)
+
+        # KG 上下文增强（保留原有逻辑）
+        await self._apply_kg_context_enhance(results)
+
+        return results
+
+    async def _try_temporal_search(self, query: str, k: int) -> list[dict] | None:
+        """时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索。
+
+        无时间词返回 None（调用方继续走常规检索）；命中则返回结果列表。
+        """
+        _time_range = _parse_temporal_query(query)
+        if not _time_range:
+            return None
+        start_ts, end_ts = _time_range
+        try:
+            # 优先尝试 FTS + 时间过滤（如果 query 里有内容关键词）
+            _fts_results = await self.memory.search_memories_fts_with_time(
+                query, start_ts, end_ts, limit=k
+            )
+            if _fts_results:
+                logger.debug("memory.temporal_fts_hit",
+                             query=query[:50], count=len(_fts_results))
+                return _fts_results
+            # FTS 无结果，退回纯时间检索
+            _time_results = await self.memory.search_memories_by_time(
+                start_ts, end_ts, limit=k * 2
+            )
+            if _time_results:
+                logger.debug("memory.temporal_time_hit",
+                             query=query[:50], count=len(_time_results))
+            return _time_results
+        except Exception as e:
+            logger.warning("memory.temporal_search_failed", error=str(e))
+            return None
+
+    async def _transform_queries(self, query: str, context: str) -> list[str]:
+        """查询变换：rewrite + expand。A2 并行执行，失败降级到 [query]。"""
+        import config
+        queries = [query]
+        if not (self._query_transformer and getattr(config, "QUERY_TRANSFORM_ENABLED", True)):
+            return queries
+        parallel_transform = getattr(config, "RETRIEVAL_PARALLEL_TRANSFORM", True)
+        try:
+            if parallel_transform:
+                # A2: 并行执行 rewrite + expand（各自独立的 LLM 调用）
+                expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2)
+                rewrite_task = asyncio.create_task(
+                    self._query_transformer.rewrite_query(query, context)
+                )
+                expand_task = asyncio.create_task(
+                    self._query_transformer.expand_query(query, n=expand_count)
+                )
+                rewritten, expanded = await asyncio.gather(
+                    rewrite_task, expand_task, return_exceptions=True
+                )
+                # 异常降级：rewrite 失败用原查询，expand 失败用 [query]
+                if isinstance(rewritten, Exception):
+                    logger.warning("memory.rewrite_failed", error=str(rewritten))
+                    rewritten = query
+                if isinstance(expanded, Exception):
+                    logger.warning("memory.expand_failed", error=str(expanded))
+                    expanded = [query]
+                if not rewritten:
+                    rewritten = query
+                if not expanded:
+                    expanded = [query]
+                if rewritten != query:
+                    logger.debug("memory.query_rewritten",
+                                 original=query[:50], rewritten=rewritten[:50])
+                # 合并：[rewritten] + [q for q in expanded if q != rewritten]
+                merged = [rewritten]
+                for q in expanded:
+                    if q != rewritten:
+                        merged.append(q)
+                queries = merged
+                if len(queries) > 1:
+                    logger.debug("memory.query_expanded", count=len(queries))
+            else:
+                # 串行降级（原有逻辑）
+                rewritten = await self._query_transformer.rewrite_query(query, context)
+                if rewritten and rewritten != query:
+                    queries = [rewritten]
+                    logger.debug("memory.query_rewritten", original=query[:50], rewritten=rewritten[:50])
+                expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2)
+                if expand_count > 0:
+                    expanded = await self._query_transformer.expand_query(rewritten, n=expand_count)
+                    if expanded and len(expanded) > 1:
+                        queries = expanded
+                        logger.debug("memory.query_expanded", count=len(queries))
+        except Exception as e:
+            logger.warning("memory.query_transform_failed", error=str(e))
+        return queries
+
+    async def _multi_query_parallel_search(self, queries: list[str], query: str,
+                                             k: int) -> list[dict]:
+        """A3: 并行多查询检索 + 批量 Reranker。
+
+        各子查询检索时关闭内部 Reranker，统一在合并池上做一次批量精排。
+        """
+        all_results: list[dict] = []
+        seen_ids: set[str] = set()
+        hybrid_tasks = [
+            self.retrieve_memories_hybrid(q, k=k * 2, use_reranker=False)
+            for q in queries
+        ]
+        hybrid_results = await asyncio.gather(*hybrid_tasks, return_exceptions=True)
+        for i, res in enumerate(hybrid_results):
+            if isinstance(res, Exception):
+                logger.warning("memory.hybrid_search_failed",
+                               query=queries[i][:50], error=str(res))
+                continue
+            for r in res:
+                rid = str(r.get("id", ""))
+                if rid and rid not in seen_ids:
+                    seen_ids.add(rid)
+                    all_results.append(r)
+        # 批量 Reranker：对合并后的候选池用原始 query 重排一次
+        if self._reranker and self._reranker.available and len(all_results) > k:
+            try:
+                docs = [r.get("summary", "") for r in all_results]
+                reranked = await self._reranker.rerank(
+                    query=query,
+                    documents=docs,
+                    top_n=k,
+                )
+                reranked_results = []
+                for item in reranked:
+                    idx = item.get("index", -1)
+                    if 0 <= idx < len(all_results):
+                        mem = all_results[idx]
+                        mem["rerank_score"] = item.get("relevance_score", 0.0)
+                        reranked_results.append(mem)
+                if reranked_results:
+                    all_results = reranked_results
+            except Exception as e:
+                logger.warning("memory.batch_rerank_failed", error=str(e))
+        return all_results
+
+    async def _multi_query_serial_search(self, queries: list[str], k: int) -> list[dict]:
+        """串行降级（原有逻辑）。"""
+        all_results: list[dict] = []
+        seen_ids: set[str] = set()
+        for q in queries:
+            try:
+                hybrid_results = await self.retrieve_memories_hybrid(q, k=k)
+                for r in hybrid_results:
                     rid = str(r.get("id", ""))
                     if rid and rid not in seen_ids:
                         seen_ids.add(rid)
                         all_results.append(r)
-
-            # 批量 Reranker：对合并后的候选池用原始 query 重排一次
-            if self._reranker and self._reranker.available and len(all_results) > k:
-                try:
-                    docs = [r.get("summary", "") for r in all_results]
-                    reranked = await self._reranker.rerank(
-                        query=query,
-                        documents=docs,
-                        top_n=k,
-                    )
-                    reranked_results = []
-                    for item in reranked:
-                        idx = item.get("index", -1)
-                        if 0 <= idx < len(all_results):
-                            mem = all_results[idx]
-                            mem["rerank_score"] = item.get("relevance_score", 0.0)
-                            reranked_results.append(mem)
-                    if reranked_results:
-                        all_results = reranked_results
-                except Exception as e:
-                    logger.warning("memory.batch_rerank_failed", error=str(e))
-        else:
-            # 串行降级（原有逻辑）
-            for q in queries:
-                try:
-                    hybrid_results = await self.retrieve_memories_hybrid(q, k=k)
-                    for r in hybrid_results:
-                        rid = str(r.get("id", ""))
-                        if rid and rid not in seen_ids:
-                            seen_ids.add(rid)
-                            all_results.append(r)
-                except Exception as e:
-                    logger.warning("memory.hybrid_search_failed", query=q[:50], error=str(e))
-
-        results = all_results
-
-        # 降级：纯向量检索
-        if not results and self.vec:
-            try:
-                vec_results = await self.vec.search(query, top_k=k)
-                # 批量 JOIN：一次查询获取所有向量命中的记忆记录
-                if vec_results:
-                    vec_ids = [row_id for row_id, _ in vec_results]
-                    vec_mems = await self.memory.get_memories_by_ids(vec_ids)
-                    # 构建 id -> memory 映射
-                    vec_mem_map = {m["id"]: m for m in vec_mems}
-                    # 按 distance 排序组装结果
-                    for row_id, distance in vec_results:
-                        mem = vec_mem_map.get(row_id)
-                        if mem:
-                            mem["score"] = 1.0 - distance
-                            results.append(mem)
             except Exception as e:
-                logger.warning("memory.vec_search_failed", error=str(e))
+                logger.warning("memory.hybrid_search_failed", query=q[:50], error=str(e))
+        return all_results
 
-        # 最终兜底：重要性排序
-        if not results and self.memory:
-            try:
-                results = await self.memory.search_memories_by_importance(
-                    min_importance=0.4, limit=k
-                )
-            except Exception as e:
-                logger.warning("memory.fallback_search_failed", error=str(e))
+    async def _vector_fallback_search(self, query: str, k: int) -> list[dict]:
+        """降级：纯向量检索 + 批量 JOIN。"""
+        if not self.vec:
+            return []
+        results: list[dict] = []
+        try:
+            vec_results = await self.vec.search(query, top_k=k)
+            if vec_results:
+                vec_ids = [row_id for row_id, _ in vec_results]
+                vec_mems = await self.memory.get_memories_by_ids(vec_ids)
+                # 构建 id -> memory 映射，按 distance 排序组装结果
+                vec_mem_map = {m["id"]: m for m in vec_mems}
+                for row_id, distance in vec_results:
+                    mem = vec_mem_map.get(row_id)
+                    if mem:
+                        mem["score"] = 1.0 - distance
+                        results.append(mem)
+        except Exception as e:
+            logger.warning("memory.vec_search_failed", error=str(e))
+        return results
 
-        # 流体记忆评分（艾宾浩斯遗忘曲线 + 访问强化）
+    async def _importance_fallback_search(self, k: int) -> list[dict]:
+        """最终兜底：按重要性排序检索。"""
+        if not self.memory:
+            return []
+        try:
+            return await self.memory.search_memories_by_importance(
+                min_importance=0.4, limit=k
+            )
+        except Exception as e:
+            logger.warning("memory.fallback_search_failed", error=str(e))
+            return []
+
+    async def _apply_fluid_scoring(self, results: list[dict]) -> list[dict]:
+        """流体记忆评分（艾宾浩斯遗忘曲线 + 访问强化），过滤低分记忆。
+
+        对保留的记忆递增 access_count 实现检索强化。
+        """
+        if not results:
+            return results
         _fluid = FluidMemory()
+        filtered: list[dict] = []
         for r in results:
             created_at = r.get("timestamp", time.time())
             access_count = r.get("access_count", 0)
@@ -604,84 +651,92 @@ class MemoryManager:
             r["effective_score"] = importance * fluid_score
             # 检索强化：递增访问计数
             await self.memory.increment_access_count(r["id"])
+            filtered.append(r)
+        return filtered
 
+    async def _compute_final_scores(self, query: str, results: list[dict], config: Any) -> None:
+        """KG 增强评分 + 综合评分: final = α×rerank + β×kg_boost + γ×(importance×decay)。
+
+        直接修改 results 内每条记录的 final_score 字段。
+        """
+        if not results:
+            return
         # KG 增强评分
-        kg_boosts = []
-        if self.kg and results:
+        kg_boosts: list[float] = []
+        if self.kg:
             try:
                 summaries = [r.get("summary", "") for r in results]
                 kg_boosts = await self.kg.get_relevance_boost(query, summaries)
             except Exception as e:
                 logger.debug("memory.kg_boost_failed", error=str(e))
-
-        # 综合评分: final = α×rerank + β×kg_boost + γ×(importance×decay)
+        # 综合评分
         alpha = getattr(config, "RAG_RERANK_WEIGHT", 0.65)
         beta = getattr(config, "RAG_KG_WEIGHT", 0.15)
         gamma = getattr(config, "RAG_IMPORTANCE_WEIGHT", 0.20)
-
         for i, r in enumerate(results):
             rerank_score = r.get("rerank_score", r.get("rrf_score", r.get("effective_score", 0.5)))
             kg_boost = kg_boosts[i] if i < len(kg_boosts) else 0.0
             importance_decay = r.get("effective_score", 0.5)
             r["final_score"] = alpha * rerank_score + beta * kg_boost + gamma * importance_decay
 
-        results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
-        results = results[:k]
+    async def _apply_topic_trigger(self, query: str, results: list[dict],
+                                     k: int) -> list[dict]:
+        """主动检索 A：话题触发器。
 
-        # 主动检索 A：话题触发器
-        # 从 query 抽取 top-N 话题关键词，对每个词做轻量 FTS 检索，
-        # 把"主题相关但未被主路命中"的记忆补充进来，扩大主动联想。
-        # 这样即使主路 RRF 没召回，话题相关的旧记忆也能浮上来。
+        从 query 抽取 top-N 话题关键词，对每个词做轻量 FTS 检索，
+        把"主题相关但未被主路命中"的记忆补充进来，扩大主动联想。
+        即使主路 RRF 没召回，话题相关的旧记忆也能浮上来。
+        """
         try:
             _topic_keywords = _extract_topic_keywords(query, top_n=2)
-            if _topic_keywords:
-                _existing_ids = {str(r.get("id", "")) for r in results}
-                for _kw in _topic_keywords:
-                    # 跳过和原 query 完全相同的关键词（已被主路检索过）
-                    if _kw == query or _kw in query:
-                        continue
-                    _topic_hits = await self.memory.search_memories_fts(_kw, limit=1)
-                    for _r in _topic_hits:
-                        _rid = str(_r.get("id", ""))
-                        if _rid and _rid not in _existing_ids:
-                            _existing_ids.add(_rid)
-                            # 标记话题触发来源，便于调试和上层 prompt 区分
-                            _r["topic_trigger"] = _kw
-                            # 话题触发的记忆没有 final_score，用基础分填充避免排序异常
-                            _r.setdefault("final_score", _r.get("score", 0.3) * 0.5)
-                            results.append(_r)
-                if len(results) > k:
-                    results = results[:k]
-                if _topic_keywords:
-                    logger.debug("memory.topic_trigger",
-                                 keywords=_topic_keywords,
-                                 added=sum(1 for r in results if r.get("topic_trigger")))
+            if not _topic_keywords:
+                return results
+            _existing_ids = {str(r.get("id", "")) for r in results}
+            for _kw in _topic_keywords:
+                # 跳过和原 query 完全相同的关键词（已被主路检索过）
+                if _kw == query or _kw in query:
+                    continue
+                _topic_hits = await self.memory.search_memories_fts(_kw, limit=1)
+                for _r in _topic_hits:
+                    _rid = str(_r.get("id", ""))
+                    if _rid and _rid not in _existing_ids:
+                        _existing_ids.add(_rid)
+                        # 标记话题触发来源，便于调试和上层 prompt 区分
+                        _r["topic_trigger"] = _kw
+                        # 话题触发的记忆没有 final_score，用基础分填充避免排序异常
+                        _r.setdefault("final_score", _r.get("score", 0.3) * 0.5)
+                        results.append(_r)
+            if len(results) > k:
+                results = results[:k]
+            logger.debug("memory.topic_trigger",
+                         keywords=_topic_keywords,
+                         added=sum(1 for r in results if r.get("topic_trigger")))
         except Exception as e:
             logger.debug("memory.topic_trigger_failed", error=str(e))
-
-        # KG 上下文增强（保留原有逻辑）
-        if self.kg and results:
-            try:
-                entity_names = []
-                for r in results[:2]:
-                    summary = r.get("summary", "")
-                    candidates = _extract_entities(summary)
-                    for word in candidates:
-                        if word not in ("用户", "助手", "人家"):
-                            entity_names.append(word)
-                entity_names = list(set(entity_names))[:3]
-                if entity_names:
-                    knowledge = await self.kg.get_related_knowledge(entity_names)
-                    if knowledge:
-                        kg_context = await self.kg.format_knowledge_context(knowledge)
-                        if kg_context and results:
-                            results[0]["kg_context"] = kg_context
-            except Exception as e:
-                logger.debug("memory.kg_expand_failed", error=str(e))
-
         return results
 
-    async def encode_memory(self, context: dict):
+    async def _apply_kg_context_enhance(self, results: list[dict]) -> None:
+        """KG 上下文增强：对 top-2 记忆提取实体并补充相关知识点。"""
+        if not (self.kg and results):
+            return
+        try:
+            entity_names: list[str] = []
+            for r in results[:2]:
+                summary = r.get("summary", "")
+                candidates = _extract_entities(summary)
+                for word in candidates:
+                    if word not in ("用户", "助手", "人家"):
+                        entity_names.append(word)
+            entity_names = list(set(entity_names))[:3]
+            if entity_names:
+                knowledge = await self.kg.get_related_knowledge(entity_names)
+                if knowledge:
+                    kg_context = await self.kg.format_knowledge_context(knowledge)
+                    if kg_context and results:
+                        results[0]["kg_context"] = kg_context
+        except Exception as e:
+            logger.debug("memory.kg_expand_failed", error=str(e))
+    async def encode_memory(self, context: dict) -> None:
         exchanges = context.get("exchanges", [])
         if not exchanges or len(exchanges) < 2:
             return
@@ -785,7 +840,7 @@ class MemoryManager:
         summary = " | ".join(parts)
         return summary[:500]
 
-    async def _enrich_memory_async(self, mem_id: int, exchanges: list[dict]):
+    async def _enrich_memory_async(self, mem_id: int, exchanges: list[dict]) -> None:
         """后台 LLM 提取：用 GLM-4-9B-0414 从对话中提取结构化信息，更新记忆条目。
 
         fire-and-forget 调用，不阻塞主流程。失败静默（记忆保留原始字符串摘要）。
@@ -884,7 +939,7 @@ class MemoryManager:
 
         return min(importance, 1.0)
 
-    async def try_idle_encode(self, context: dict, force: bool = False):
+    async def try_idle_encode(self, context: dict, force: bool = False) -> None:
         now = time.time()
         if not self._pending_encode:
             return
@@ -895,7 +950,7 @@ class MemoryManager:
 
         await self.encode_memory(context)
 
-    def _save_state_json(self, summary: str, importance: float, emotion: str):
+    def _save_state_json(self, summary: str, importance: float, emotion: str) -> None:
         """原子写入记忆状态到 JSON 文件"""
         try:
             from pathlib import Path

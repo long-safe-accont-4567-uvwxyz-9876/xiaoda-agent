@@ -3,9 +3,12 @@
 import asyncio
 import sys
 import os
+from pathlib import Path
 
-sys.path.insert(0, "/home/orangepi/ai-agent")
-os.chdir("/home/orangepi/ai-agent")
+# 项目根目录 (基于当前文件位置计算，避免硬编码绝对路径)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+os.chdir(PROJECT_ROOT)
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -68,7 +71,12 @@ async def main():
     print("\n━━━ 3. 向量存储 ━━━")
     from memory.vector_store import VectorStore
     try:
-        vs = VectorStore(db_path="/media/orangepi/KIOXIA/nahida-data/db/vector.db")
+        # 向量库路径: 优先使用项目内 data 目录，找不到则使用临时文件
+        vector_db = PROJECT_ROOT / "data" / "vector.db"
+        if not vector_db.parent.is_dir():
+            import tempfile
+            vector_db = Path(tempfile.gettempdir()) / "ai_agent_vector.db"
+        vs = VectorStore(db_path=str(vector_db))
         await vs.init()
         record("ready 属性", hasattr(vs, 'ready'))
         record("enabled 属性", hasattr(vs, 'enabled'))
@@ -102,7 +110,12 @@ async def main():
     print("\n━━━ 6. 表情包 ━━━")
     from emotion.sticker_manager import StickerManager
     try:
-        sm = StickerManager(sticker_dir="/media/orangepi/KIOXIA/nahida-data/stickers")
+        # 表情包目录: 优先使用项目内置目录，找不到则使用临时目录
+        sticker_dir = PROJECT_ROOT / "assets" / "stickers" / "nahida"
+        if not sticker_dir.is_dir():
+            import tempfile
+            sticker_dir = Path(tempfile.mkdtemp())
+        sm = StickerManager(sticker_dir=str(sticker_dir))
         record("get_sticker 方法", hasattr(sm, 'get_sticker'))
         record("pick 方法", hasattr(sm, 'pick'))
         for emotion in ["happy", "sad", "angry", "fear", "shy", "curious"]:

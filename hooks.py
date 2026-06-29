@@ -78,12 +78,12 @@ class BaseHook:
 
 class HookEngine:
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._hooks: dict[HookType, list[BaseHook]] = {t: [] for t in HookType}
         self._pending_post_actions: list[str] = []
         self._failure_trigger = None  # 失败触发器，由 AgentCore 注入
 
-    def register(self, hook: BaseHook):
+    def register(self, hook: BaseHook) -> None:
         """注册钩子"""
         self._hooks[hook.hook_type].append(hook)
         logger.debug("hooks.registered", name=hook.name, type=hook.hook_type.value)
@@ -159,7 +159,7 @@ class HookEngine:
 
         return final_result
 
-    async def fire_post_response(self):
+    async def fire_post_response(self) -> None:
         """触发 PostResponse 钩子，执行所有累积的后处理动作"""
         for hook in self._hooks[HookType.POST_RESPONSE]:
             try:
@@ -350,10 +350,10 @@ class SecurityPreCheck(BaseHook):
     tool_filter = None
     matcher = r"shell_command|execute_code|python_executor|write_file|edit_file|create_file|agnes_image|agnes_video"
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._filter = None
 
-    def _get_filter(self):
+    def _get_filter(self) -> Any:
         """延迟导入 SecurityFilter，避免循环依赖"""
         if self._filter is None:
             from security.security import SecurityFilter
@@ -420,7 +420,7 @@ class GateGuardHook(BaseHook):
     hook_type = HookType.PRE_TOOL_USE
     tool_filter = None  # 匹配所有工具，以便追踪读取操作并执行证据门禁
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._risk_classifier = RiskClassifier()
         self._evidence_gate = EvidenceGate()
         self._post_validator = PostValidator()
@@ -476,7 +476,7 @@ class PostValidateHook(BaseHook):
     hook_type = HookType.POST_TOOL_USE
     tool_filter = None  # 所有工具，内部按风险等级过滤
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._risk_classifier = RiskClassifier()
         self._post_validator = PostValidator()
 
@@ -580,7 +580,7 @@ def get_hook_engine() -> HookEngine:
     return _default_engine
 
 
-def _register_builtin_hooks(engine: HookEngine):
+def _register_builtin_hooks(engine: HookEngine) -> None:
     """注册内置钩子"""
     engine.register(SecurityPreCheck())
     engine.register(GateGuardHook())

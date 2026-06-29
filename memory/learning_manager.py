@@ -1,3 +1,4 @@
+from typing import Any
 import time
 from loguru import logger
 
@@ -13,7 +14,7 @@ FEATURE_SIGNALS = ["能不能", "可不可以", "帮我", "我希望", "要是�
 
 class LearningManager:
 
-    def __init__(self, db, learning: LearningDB, router):
+    def __init__(self, db: Any, learning: LearningDB, router: Any) -> None:
         self._db = db
         self.learning = learning
         self._router = router
@@ -72,7 +73,7 @@ class LearningManager:
         return request_id
 
     async def evaluate_after_conversation(self, user_msg: str, reply: str,
-                                           tool_results: list):
+                                           tool_results: list) -> None:
         try:
             for signal in CORRECTION_SIGNALS:
                 if signal in user_msg:
@@ -98,7 +99,7 @@ class LearningManager:
         except Exception as e:
             logger.warning("learning.evaluate_failed", error=str(e))
 
-    async def auto_promote(self):
+    async def auto_promote(self) -> None:
         try:
             promotable = await self.learning.get_promotable_learnings(min_recurrence=3)
             for learning in promotable:

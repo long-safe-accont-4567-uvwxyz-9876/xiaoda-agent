@@ -1,5 +1,6 @@
 """模型与凭证路由（R4/R13）：provider CRUD、路由表热改、凭证池状态、用量统计。"""
 from __future__ import annotations
+from typing import Any
 
 import json
 import os
@@ -11,46 +12,29 @@ from loguru import logger
 
 from web.schemas import Envelope
 from web.routers.auth import get_current_user
-from web.routers.model_discovery import invalidate_discovery_cache
+# 缓存与凭证读写抽到独立模块, 避免与 web.routers.model_discovery / model_router 互相导入
+from web._discovery_cache import invalidate_discovery_cache
+from web._provider_keys import (
+    ROUTE_EDITABLE_FIELDS,
+    _get_cred_dir,
+    _key_file,
+    _mask,
+    load_provider_key,
+)
 
 router = APIRouter(tags=["models"], dependencies=[Depends(get_current_user)])
 
 
-def _get_cred_dir() -> Path:
-    from config import get_credentials_dir
-    return get_credentials_dir()
-
-ROUTE_EDITABLE_FIELDS = {"model", "client", "max_tokens", "thinking", "timeout"}
-
-
-def _mask(key: str) -> str:
-    if not key:
-        return ""
-    return f"{key[:3]}***{key[-4:]}" if len(key) > 8 else "***"
-
-
-def _key_file(provider_id: str) -> Path:
-    safe = "".join(c for c in provider_id if c.isalnum() or c in "-_")
-    return _get_cred_dir() / f"provider_{safe}.key"
-
-
-def load_provider_key(provider_id: str) -> str:
-    fp = _key_file(provider_id)
-    if fp.exists():
-        return fp.read_text(encoding="utf-8").strip()
-    return ""
-
-
-def _cfg(request: Request):
+def _cfg(request: Request) -> Any:
     from web.config_service import get_config_service
     return get_config_service()
 
 
-def _router_of(request: Request):
+def _router_of(request: Request) -> Any:
     return request.app.state.core.router
 
 
-async def _audit(request: Request, action: str, detail: str):
+async def _audit(request: Request, action: str, detail: str) -> None:
     core = request.app.state.core
     try:
         await core.db.insert_audit_log(f"webui.models.{action}", "webui", detail)
@@ -59,7 +43,7 @@ async def _audit(request: Request, action: str, detail: str):
         pass
 
 
-async def _broadcast_changed():
+async def _broadcast_changed() -> None:
     try:
         from web.ws_hub import manager
         await manager.broadcast({"type": "config_changed", "domain": "models"})
@@ -70,7 +54,7 @@ async def _broadcast_changed():
 # ── providers ────────────────────────────────────────────────────
 
 
-def list_providers_data(cfg) -> list[dict]:
+def list_providers_data(cfg: Any) -> list[dict]:
     out = []
     # MiMo 内置 provider — 只在有 API key 时显示（始终第一位，order=-1）
     mimo_key = os.getenv("MIMO_API_KEY", "")
@@ -105,12 +89,12 @@ def list_providers_data(cfg) -> list[dict]:
 
 
 @router.get("/models/providers", response_model=Envelope[list[dict]])
-async def list_providers(request: Request):
+async def list_providers(request: Request) -> Any:
     return Envelope(data=list_providers_data(_cfg(request)))
 
 
 @router.post("/models/providers", response_model=Envelope[dict])
-async def create_provider(body: dict, request: Request):
+async def create_provider(body: dict, request: Request) -> Any:
     pid = (body.get("id") or "").strip()
     fmt = body.get("format", "openai")
     base_url = (body.get("base_url") or "").strip()
@@ -149,7 +133,7 @@ async def create_provider(body: dict, request: Request):
 
 
 @router.put("/models/providers/{pid}", response_model=Envelope[dict])
-async def update_provider(pid: str, body: dict, request: Request):
+async def update_provider(pid: str, body: dict, request: Request) -> Any:
     cfg = _cfg(request)
     record = cfg.get(f"models.providers.{pid}")
     if pid in ("mimo",) or not record:
@@ -169,7 +153,7 @@ async def update_provider(pid: str, body: dict, request: Request):
 
 
 @router.delete("/models/providers/{pid}", response_model=Envelope[dict])
-async def delete_provider(pid: str, request: Request):
+async def delete_provider(pid: str, request: Request) -> Any:
     if request.headers.get("X-Confirm") != "yes":
         raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     cfg = _cfg(request)
@@ -191,7 +175,7 @@ async def delete_provider(pid: str, request: Request):
 
 
 def _save_key_and_register(request: Request, pid: str, fmt: str,
-                           base_url: str, api_key: str):
+                           base_url: str, api_key: str) -> None:
     _get_cred_dir().mkdir(parents=True, exist_ok=True)
     fp = _key_file(pid)
     fp.write_text(api_key, encoding="utf-8")
@@ -204,7 +188,7 @@ def _save_key_and_register(request: Request, pid: str, fmt: str,
 
 
 @router.post("/models/providers/{pid}/key", response_model=Envelope[dict])
-async def set_provider_key(pid: str, body: dict, request: Request):
+async def set_provider_key(pid: str, body: dict, request: Request) -> Any:
     api_key = (body.get("api_key") or "").strip()
     if not api_key:
         raise HTTPException(400, "api_key 不能为空")
@@ -219,7 +203,7 @@ async def set_provider_key(pid: str, body: dict, request: Request):
 
 
 @router.post("/models/providers/reorder", response_model=Envelope[dict])
-async def reorder_providers(body: dict, request: Request):
+async def reorder_providers(body: dict, request: Request) -> Any:
     order_list = body.get("order")
     if not isinstance(order_list, list):
         raise HTTPException(400, "order 必须是字符串数组")
@@ -244,7 +228,7 @@ async def reorder_providers(body: dict, request: Request):
 
 
 @router.get("/models/routes", response_model=Envelope[dict])
-async def list_routes(request: Request):
+async def list_routes(request: Request) -> Any:
     from model_router import ROUTE_TABLE, FALLBACK_ROUTE
     routes = {}
     for task, c in ROUTE_TABLE.items():
@@ -259,7 +243,7 @@ async def list_routes(request: Request):
 
 
 @router.put("/models/routes/{task}", response_model=Envelope[dict])
-async def update_route(task: str, body: dict, request: Request):
+async def update_route(task: str, body: dict, request: Request) -> Any:
     from model_router import ROUTE_TABLE
     if task not in ROUTE_TABLE:
         raise HTTPException(404, f"未知路由任务 {task}")
@@ -296,7 +280,7 @@ async def update_route(task: str, body: dict, request: Request):
 
 
 @router.get("/models/chat-model", response_model=Envelope[dict])
-async def get_chat_model(request: Request):
+async def get_chat_model(request: Request) -> Any:
     cfg = _cfg(request)
     # 优先从 config_service 的 models.chat_model 读取（如果存在）
     chat_model = cfg.get("models.chat_model")
@@ -317,7 +301,7 @@ async def get_chat_model(request: Request):
 
 
 @router.get("/models/credentials/status", response_model=Envelope[list[dict]])
-async def credentials_status():
+async def credentials_status() -> Any:
     from utils.credential_pool import get_credential_pool
     pool = get_credential_pool()
     out = []
@@ -367,7 +351,7 @@ async def credentials_status():
 
 
 @router.get("/models/usage", response_model=Envelope[dict])
-async def usage(request: Request, days: int = Query(default=7, ge=1, le=90)):
+async def usage(request: Request, days: int = Query(default=7, ge=1, le=90)) -> Any:
     core = request.app.state.core
     since = time.time() - days * 86400
     rows = await core.db.fetch_all(

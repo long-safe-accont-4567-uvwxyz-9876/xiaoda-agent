@@ -4,7 +4,7 @@ import time
 import asyncio
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable, Awaitable
+from typing import Any, Awaitable, Callable, Optional
 from openai import AsyncOpenAI
 
 from loguru import logger
@@ -17,7 +17,7 @@ from belief_router import BeliefRouter
 class RouteCache:
     """LRU cache for routing decisions with TTL."""
 
-    def __init__(self, max_size: int = 200, ttl_seconds: float = 300.0):
+    def __init__(self, max_size: int = 200, ttl_seconds: float = 300.0) -> None:
         self._cache: dict[str, tuple[list[str], float]] = {}  # key -> (targets, timestamp)
         self._max_size = max_size
         self._ttl = ttl_seconds
@@ -38,7 +38,7 @@ class RouteCache:
         self._access_order.append(key)
         return targets
 
-    def put(self, user_input: str, targets: list[str]):
+    def put(self, user_input: str, targets: list[str]) -> None:
         """Cache a routing result."""
         key = self._make_key(user_input)
         if key in self._cache:
@@ -50,12 +50,12 @@ class RouteCache:
             oldest = self._access_order.pop(0)
             self._cache.pop(oldest, None)
 
-    def invalidate(self):
+    def invalidate(self) -> None:
         """Clear all cached entries."""
         self._cache.clear()
         self._access_order.clear()
 
-    def invalidate_agent(self, agent_name: str):
+    def invalidate_agent(self, agent_name: str) -> None:
         """Invalidate all cache entries that involve a specific agent."""
         keys_to_remove = [
             k for k, (targets, _) in self._cache.items()
@@ -98,7 +98,7 @@ class TaskState:
                 setattr(self, k, v)
         return self
 
-    async def push_progress(self, msg: str):
+    async def push_progress(self, msg: str) -> None:
         self.progress_log.append(msg)
         if self.status_callback:
             try:
@@ -113,19 +113,19 @@ SINGLE_EXECUTE = "__single_execute__"
 
 
 class TaskGraph:
-    def __init__(self):
+    def __init__(self) -> None:
         self._nodes: dict[str, Callable] = {}
         self._edges: dict[str, Callable] = {}
         self._entry_point: str = ""
         self._compiled = False
 
-    def add_node(self, name: str, handler: Callable[[TaskState], Awaitable[dict]]):
+    def add_node(self, name: str, handler: Callable[[TaskState], Awaitable[dict]]) -> None:
         self._nodes[name] = handler
 
-    def add_conditional_edge(self, source: str, condition_fn: Callable[[TaskState], Awaitable[str]]):
+    def add_conditional_edge(self, source: str, condition_fn: Callable[[TaskState], Awaitable[str]]) -> None:
         self._edges[source] = condition_fn
 
-    def set_entry_point(self, name: str):
+    def set_entry_point(self, name: str) -> None:
         self._entry_point = name
 
     def compile(self) -> "TaskGraph":
@@ -249,7 +249,55 @@ class RouterNode:
             return matched
         return ["nahida"]
 
-    def __init__(self, client: AsyncOpenAI, model: str = "mimo-v2.5", belief_router: BeliefRouter | None = None):
+    @staticmethod
+    def _detect_parallel_targets(user_input: str) -> list[tuple[str, str]] | None:
+        """检测用户输入是否需要多子代理并行（无依赖）。
+
+        匹配 "分别问 X 和 Y 回答..." / "让 X 和 Y 都分析..." 等显式并行请求，
+        返回 [(name, input_text), ...] 或 None。name 可能是 display_name 或内部名，
+        由 :meth:`_normalize_parallel_targets` 根据 agent_configs 归一化。
+        """
+        # 前缀 + 名称部分（贪婪到触发词前）+ 触发词 + 共同输入
+        match = re.match(
+            r"(?:分别问|让|请)\s*(.+?)(?:都\s*)?(?:回答|说|看看|分析|处理)\s*(.+)",
+            user_input,
+        )
+        if not match:
+            return None
+        names_part = match.group(1)
+        input_text = match.group(2) or user_input
+        # 名称部分按 和 / , / ， / 、 拆分
+        parts = re.split(r"[和,，、]", names_part)
+        names = [p.strip() for p in parts if p.strip()]
+        if len(names) < 2:
+            return None
+        return [(n, input_text) for n in names]
+
+    @staticmethod
+    def _normalize_parallel_targets(targets_inputs: list[tuple[str, str]],
+                                     agent_configs: dict) -> list[str]:
+        """将检测到的目标名归一化为 agent_configs 中的内部 name。
+
+        同时支持内部名（如 ``keli``）与展示名（如 ``可莉``），忽略无效目标。
+        """
+        name_map: dict[str, str] = {}
+        for name, cfg in agent_configs.items():
+            name_map[name] = name
+            name_map[name.lower()] = name
+            if isinstance(cfg, dict):
+                disp = cfg.get("display_name", "")
+                if disp:
+                    name_map[disp] = name
+        valid: list[str] = []
+        seen: set[str] = set()
+        for raw_name, _ in targets_inputs:
+            internal = name_map.get(raw_name) or name_map.get(raw_name.lower())
+            if internal and internal not in seen:
+                valid.append(internal)
+                seen.add(internal)
+        return valid
+
+    def __init__(self, client: AsyncOpenAI, model: str = "mimo-v2.5", belief_router: BeliefRouter | None = None) -> None:
         self._client = client
         self._model = model
         self._belief_router = belief_router
@@ -284,152 +332,146 @@ class RouterNode:
 请只返回Agent名称（多个用逗号分隔）:"""
 
     async def route(self, state: TaskState) -> dict:
+        """路由入口：缓存 → 规则 → 信念/LLM 路由，返回路由结果 dict。"""
         user_input = state.user_input
         agent_configs = state._agent_configs
 
         if not agent_configs:
             return {"route_targets": ["nahida"], "route_target": "nahida", "route_plan": ["nahida"]}
 
-        # Check route cache first
+        # SOLO 模式：任务→代理 1:1 绑定（参考 Trae SOLO 模式）
+        # 在并行检测之前计算建议目标；仅在用户未明确指定子代理时使用
+        suggested_target = None
+        dispatcher = getattr(state, "_dispatcher", None)
+        if dispatcher is not None:
+            try:
+                task_type = dispatcher.classify_task(user_input)
+                suggested_target = dispatcher.route_task(task_type, user_input)
+            except Exception as e:
+                logger.warning("route.solo_routing_failed", error=str(e)[:200])
+
+        # 0. 检测无依赖多子代理任务（如"分别问可莉和银狼..."）→ 直达并行路径
+        parallel_targets = self._detect_parallel_targets(user_input)
+        if parallel_targets and len(parallel_targets) >= 2:
+            valid_targets = self._normalize_parallel_targets(parallel_targets, agent_configs)
+            if len(valid_targets) >= 2:
+                self._route_cache.put(user_input, valid_targets)
+                await self._notify_route_progress(state, valid_targets, agent_configs, "并行路由")
+                return self._build_route_dict(valid_targets)
+
+        # 若用户未明确指定子代理，使用 SOLO 建议的目标（仅当建议为具体子代理时）
+        if (suggested_target
+                and suggested_target != "keli"
+                and suggested_target in agent_configs):
+            targets = [suggested_target]
+            self._route_cache.put(user_input, targets)
+            await self._notify_route_progress(state, targets, agent_configs, "SOLO路由")
+            return self._build_route_dict(targets)
+
+        # 1. 缓存命中
         cached = self._route_cache.get(user_input)
         if cached is not None:
             logger.debug("route.cache_hit", input=user_input[:50], targets=cached)
-            return {
-                "route_targets": cached,
-                "route_target": cached[0] if len(cached) == 1 else "",
-                "route_plan": cached,
-            }
+            return self._build_route_dict(cached)
 
+        # 2. 规则路由
         rule_result = self._rule_route(user_input)
         if rule_result:
             targets = [t for t in rule_result if t in agent_configs or t == "nahida"]
             if not targets:
                 targets = ["nahida"]
-            # Cache the routing result
             self._route_cache.put(user_input, targets)
-            display_names = []
-            for t in targets:
-                if t in agent_configs:
-                    display_names.append(agent_configs[t].get("display_name", t))
-                else:
-                    display_names.append(t)
-            if len(targets) == 1 and targets[0] == "nahida":
-                pass
-            else:
-                await state.push_progress(f"🔀 路由分析完成 → 交给{', '.join(display_names)}{'并行处理' if len(targets) > 1 else ''}")
-            return {
-                "route_targets": targets,
-                "route_target": targets[0] if len(targets) == 1 else "",
-                "route_plan": targets,
-            }
+            await self._notify_route_progress(state, targets, agent_configs, "路由分析")
+            return self._build_route_dict(targets)
 
-        # Thompson Sampling belief routing (replaces LLM routing as primary fallback)
+        # 3. 信念路由（Thompson Sampling，主 fallback）/ LLM 路由
         if self._belief_router:
-            selected = self._belief_router.select_agent(exclude={"nahida"})
-            targets = [selected]
+            targets = [self._belief_router.select_agent(exclude={"nahida"})]
         else:
-            # LLM routing fallback (only if belief_router is not available)
-            prompt = self._build_route_prompt(user_input, agent_configs)
-            response = await self._client.chat.completions.create(
-                model=self._model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=30,
-                temperature=0.1,
-            )
-            msg = response.choices[0].message
-            raw_result = msg.content.strip() if msg.content else ""
+            targets = await self._llm_route_targets(user_input, agent_configs)
 
-            if not raw_result:
-                rc = getattr(msg, "reasoning_content", None) or ""
-                raw_result = rc[:50] if rc else ""
-
-            name_map = {}
-            for n, cfg in agent_configs.items():
-                name_map[n] = n
-                name_map[cfg.get("display_name", "")] = n
-            name_map["nahida"] = "nahida"
-            name_map["纳西妲"] = "nahida"
-
-            targets = []
-            seen = set()
-            for part in raw_result.replace("，", ",").split(","):
-                part = part.strip()
-                if not part:
-                    continue
-                matched = name_map.get(part)
-                if not matched:
-                    for key, val in name_map.items():
-                        if key and key in part and val not in seen:
-                            matched = val
-                            break
-                if matched and matched not in seen:
-                    targets.append(matched)
-                    seen.add(matched)
-
-            if not targets:
-                targets = ["nahida"]
-
-        # # Original LLM routing (kept as reference):
-        # prompt = self._build_route_prompt(user_input, agent_configs)
-        # response = await self._client.chat.completions.create(
-        #     model=self._model,
-        #     messages=[{"role": "user", "content": prompt}],
-        #     max_tokens=30,
-        #     temperature=0.1,
-        # )
-        # msg = response.choices[0].message
-        # raw_result = msg.content.strip() if msg.content else ""
-        # if not raw_result:
-        #     rc = getattr(msg, "reasoning_content", None) or ""
-        #     raw_result = rc[:50] if rc else ""
-        # name_map = {}
-        # for n, cfg in agent_configs.items():
-        #     name_map[n] = n
-        #     name_map[cfg.get("display_name", "")] = n
-        # name_map["nahida"] = "nahida"
-        # name_map["纳西妲"] = "nahida"
-        # targets = []
-        # seen = set()
-        # for part in raw_result.replace("，", ",").split(","):
-        #     part = part.strip()
-        #     if not part:
-        #         continue
-        #     matched = name_map.get(part)
-        #     if not matched:
-        #         for key, val in name_map.items():
-        #             if key and key in part and val not in seen:
-        #                 matched = val
-        #                 break
-        #     if matched and matched not in seen:
-        #         targets.append(matched)
-        #         seen.add(matched)
-        # if not targets:
-        #     targets = ["nahida"]
-
+        # 4. 校验 + 返回
         valid_targets = [t for t in targets if t in agent_configs or t == "nahida"]
         if not valid_targets:
             valid_targets = ["nahida"]
+        route_method = "信念路由" if self._belief_router else "LLM路由"
+        await self._notify_route_progress(state, valid_targets, agent_configs, route_method)
+        return self._build_route_dict(valid_targets)
 
-        display_names = []
-        for t in valid_targets:
-            if t in agent_configs:
-                display_names.append(agent_configs[t].get("display_name", t))
-            else:
-                display_names.append(t)
-
-        if not (len(valid_targets) == 1 and valid_targets[0] == "nahida"):
-            route_method = "信念路由" if self._belief_router else "LLM路由"
-            await state.push_progress(f"🔀 {route_method}分析完成 → 交给{', '.join(display_names)}{'并行处理' if len(valid_targets) > 1 else ''}")
-
+    @staticmethod
+    def _build_route_dict(targets: list[str]) -> dict:
+        """根据 targets 列表构造统一的路由结果 dict。"""
         return {
-            "route_targets": valid_targets,
-            "route_target": valid_targets[0] if len(valid_targets) == 1 else "",
-            "route_plan": valid_targets,
+            "route_targets": targets,
+            "route_target": targets[0] if len(targets) == 1 else "",
+            "route_plan": targets,
         }
+
+    @staticmethod
+    def _build_display_names(targets: list[str], agent_configs: dict) -> list[str]:
+        """将 targets 映射为展示名（agent_configs 缺失则原样返回）。"""
+        names = []
+        for t in targets:
+            if t in agent_configs:
+                names.append(agent_configs[t].get("display_name", t))
+            else:
+                names.append(t)
+        return names
+
+    async def _notify_route_progress(self, state: TaskState, targets: list[str],
+                                     agent_configs: dict, prefix: str) -> None:
+        """路由成功后推送进度消息（仅 nahida 单路由时不打扰用户）。"""
+        if len(targets) == 1 and targets[0] == "nahida":
+            return
+        display_names = self._build_display_names(targets, agent_configs)
+        parallel = "并行处理" if len(targets) > 1 else ""
+        await state.push_progress(f"🔀 {prefix}完成 → 交给{', '.join(display_names)}{parallel}")
+
+    async def _llm_route_targets(self, user_input: str, agent_configs: dict) -> list[str]:
+        """LLM 路由 fallback：调用 LLM 解析并归一化为 agent name 列表。"""
+        prompt = self._build_route_prompt(user_input, agent_configs)
+        response = await self._client.chat.completions.create(
+            model=self._model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=30,
+            temperature=0.1,
+        )
+        msg = response.choices[0].message
+        raw_result = msg.content.strip() if msg.content else ""
+        if not raw_result:
+            rc = getattr(msg, "reasoning_content", None) or ""
+            raw_result = rc[:50] if rc else ""
+
+        # 构造 name → 规范 agent name 的映射表
+        name_map = {}
+        for n, cfg in agent_configs.items():
+            name_map[n] = n
+            name_map[cfg.get("display_name", "")] = n
+        name_map["nahida"] = "nahida"
+        name_map["纳西妲"] = "nahida"
+
+        # 模糊匹配 LLM 输出的每个部分
+        targets = []
+        seen = set()
+        for part in raw_result.replace("，", ",").split(","):
+            part = part.strip()
+            if not part:
+                continue
+            matched = name_map.get(part)
+            if not matched:
+                for key, val in name_map.items():
+                    if key and key in part and val not in seen:
+                        matched = val
+                        break
+            if matched and matched not in seen:
+                targets.append(matched)
+                seen.add(matched)
+
+        return targets if targets else ["nahida"]
 
 
 class ParallelAgentNode:
-    def __init__(self, dispatcher: AgentDispatcher, route_client: AsyncOpenAI, route_model: str = "mimo-v2.5", belief_router: BeliefRouter | None = None):
+    def __init__(self, dispatcher: AgentDispatcher, route_client: AsyncOpenAI, route_model: str = "mimo-v2.5", belief_router: BeliefRouter | None = None) -> None:
         self._dispatcher = dispatcher
         self._route_client = route_client
         self._route_model = route_model
@@ -691,7 +733,7 @@ class ParallelAgentNode:
 
 
 class AgentNode:
-    def __init__(self, dispatcher: AgentDispatcher, belief_router: BeliefRouter | None = None):
+    def __init__(self, dispatcher: AgentDispatcher, belief_router: BeliefRouter | None = None) -> None:
         self._dispatcher = dispatcher
         self._belief_router = belief_router
 
@@ -747,7 +789,7 @@ class AgentNode:
 
 
 class SynthesisNode:
-    def __init__(self, client: AsyncOpenAI, model: str = "mimo-v2.5", nahida_chat_callback=None):
+    def __init__(self, client: AsyncOpenAI, model: str = "mimo-v2.5", nahida_chat_callback: Optional[Any]=None) -> None:
         self._client = client
         self._model = model
         self._nahida_chat = nahida_chat_callback
@@ -824,7 +866,7 @@ async def route_condition(state: TaskState) -> str:
 
 def build_task_graph(dispatcher: AgentDispatcher, agent_configs: dict,
                      route_client: AsyncOpenAI, route_model: str = "mimo-v2.5",
-                     nahida_chat_callback=None) -> TaskGraph:
+                     nahida_chat_callback: Optional[Any]=None) -> TaskGraph:
     db_path = str(DATA_DIR / "agent.db")
     belief_router = BeliefRouter(db_path=db_path)
     router = RouterNode(route_client, route_model, belief_router=belief_router)
@@ -871,7 +913,7 @@ def build_task_graph(dispatcher: AgentDispatcher, agent_configs: dict,
 
 
 async def run_task_graph(graph: TaskGraph, user_input: str, user_id: str,
-                         session_id: str = "", status_callback=None,
+                         session_id: str = "", status_callback: Optional[Any]=None,
                          agent_configs: dict = None,
                          dispatcher: AgentDispatcher = None) -> TaskState:
     state = TaskState(

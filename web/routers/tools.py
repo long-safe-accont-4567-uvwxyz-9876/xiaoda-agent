@@ -1,5 +1,6 @@
 """Skills/工具路由（R6）：列表、全局开关、调试执行、统计。"""
 from __future__ import annotations
+from typing import Any
 
 import json
 import time
@@ -13,7 +14,7 @@ from web.routers.auth import get_current_user
 router = APIRouter(tags=["tools"], dependencies=[Depends(get_current_user)])
 
 
-def _cfg():
+def _cfg() -> Any:
     from web.config_service import get_config_service
     return get_config_service()
 
@@ -46,7 +47,7 @@ def list_tools_meta() -> list[dict]:
     return sorted(out, key=lambda x: (x["source"], x["category"], x["name"]))
 
 
-def apply_tool_overrides():
+def apply_tool_overrides() -> None:
     """启动时调用：把 webui_overrides 中的工具设置应用到 registry。"""
     from tool_engine.tool_registry import get_tool
     overrides = _cfg().get("tools", {}) or {}
@@ -63,12 +64,12 @@ def apply_tool_overrides():
 
 
 @router.get("/tools", response_model=Envelope[list[dict]])
-async def get_tools():
+async def get_tools() -> Any:
     return Envelope(data=list_tools_meta())
 
 
 @router.put("/tools/{name}", response_model=Envelope[dict])
-async def update_tool(name: str, body: dict, request: Request):
+async def update_tool(name: str, body: dict, request: Request) -> Any:
     from tool_engine.tool_registry import get_tool, to_openai_tools
     to_openai_tools()
     tool = get_tool(name)
@@ -103,7 +104,7 @@ async def update_tool(name: str, body: dict, request: Request):
 
 
 @router.post("/tools/{name}/invoke", response_model=Envelope[dict])
-async def invoke_tool(name: str, body: dict, request: Request):
+async def invoke_tool(name: str, body: dict, request: Request) -> Any:
     """调试执行（真实执行，走完整审计）。"""
     from tool_engine.tool_registry import get_tool, to_openai_tools
     to_openai_tools()
@@ -127,7 +128,7 @@ async def invoke_tool(name: str, body: dict, request: Request):
 
 
 @router.get("/tools/{name}/stats", response_model=Envelope[dict])
-async def tool_stats(name: str, request: Request, days: int = Query(default=7, ge=1, le=90)):
+async def tool_stats(name: str, request: Request, days: int = Query(default=7, ge=1, le=90)) -> Any:
     core = request.app.state.core
     since = time.time() - days * 86400
     row = await core.db.fetch_one(
@@ -149,7 +150,7 @@ async def tool_stats(name: str, request: Request, days: int = Query(default=7, g
 
 # ── Skills（SKILL.md 知识注入）────────────────────────────────────
 
-def _skills_dir():
+def _skills_dir() -> Any:
     from config import WORKSPACE_DIR
     d = WORKSPACE_DIR / "skills"
     d.mkdir(parents=True, exist_ok=True)
@@ -165,7 +166,7 @@ def _safe_skill_name(name: str) -> str:
 
 
 @router.get("/skills", response_model=Envelope[list[dict]])
-async def list_skills():
+async def list_skills() -> Any:
     from config import load_skills
     return Envelope(data=[
         {"name": s["name"], "size": len(s["content"]),
@@ -174,7 +175,7 @@ async def list_skills():
 
 
 @router.get("/skills/{name}", response_model=Envelope[dict])
-async def get_skill(name: str):
+async def get_skill(name: str) -> Any:
     fp = _skills_dir() / f"{_safe_skill_name(name)}.md"
     if not fp.exists():
         raise HTTPException(404, f"Skill {name} 不存在")
@@ -182,7 +183,7 @@ async def get_skill(name: str):
 
 
 @router.put("/skills/{name}", response_model=Envelope[dict])
-async def save_skill(name: str, body: dict, request: Request):
+async def save_skill(name: str, body: dict, request: Request) -> Any:
     """新建/覆盖 skill。content 即 SKILL.md 全文，保存后下一条消息生效。"""
     name = _safe_skill_name(name)
     content = body.get("content", "")
@@ -201,7 +202,7 @@ async def save_skill(name: str, body: dict, request: Request):
 
 
 @router.delete("/skills/{name}", response_model=Envelope[dict])
-async def delete_skill(name: str, request: Request):
+async def delete_skill(name: str, request: Request) -> Any:
     fp = _skills_dir() / f"{_safe_skill_name(name)}.md"
     if not fp.exists():
         raise HTTPException(404, f"Skill {name} 不存在")

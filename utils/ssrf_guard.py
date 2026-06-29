@@ -1,14 +1,22 @@
-"""SSRF 防护 v2 — Pipelock 5步法 + DNS Pinning
+"""[DEPRECATED] SSRF 防护 v2 — Pipelock 5步法 + DNS Pinning
 
-Step 1: URL规范化(解码+去嵌入凭证+规范化IP)
-Step 2: 提取hostname
-Step 3: DNS解析→获得IP
-Step 4: 校验IP不在私有网段
-Step 5: 用已校验IP发起连接(DNS Pinning)
+.. deprecated::
+    本模块已被 :mod:`security.ssrf_guard` 取代。新版实现了完整的 5 步法
+    (协议白名单 + 主机名黑名单 + DNS 解析 + IP 分类 + DNS Pinning)，
+    并支持 ``SSRF_ALLOW_HOSTS`` 白名单配置。新代码应直接使用
+    ``security.ssrf_guard.validate_url`` / ``get_pinned_ip``。
+
+    本文件保留仅为向后兼容, 内部委托给新模块实现。
 """
 import ipaddress, socket, re, urllib.parse
+import warnings
 from loguru import logger
 from typing import Optional
+
+# 模块级废弃标记 (不在此处发 warning, 避免污染导入链;
+# 真正使用 get_ssrf_guard/validate_url 时才懒触发告警)
+__deprecated__ = True
+__deprecated_reason__ = "请改用 security.ssrf_guard (5步法 + DNS Pinning)"
 
 
 class SSRFGuardV2:
@@ -90,4 +98,11 @@ _guard = SSRFGuardV2()
 
 
 def get_ssrf_guard() -> SSRFGuardV2:
+    # 懒触发废弃告警 (新代码请用 security.ssrf_guard)
+    warnings.warn(
+        "utils.ssrf_guard.get_ssrf_guard 已废弃, 请改用 "
+        "security.ssrf_guard.validate_url / get_pinned_ip (5步法 + DNS Pinning)",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return _guard

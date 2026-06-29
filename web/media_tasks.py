@@ -4,6 +4,7 @@
 每次变化通过 broadcast 推送 media_task_update 事件并落库 media_tasks 表。
 """
 from __future__ import annotations
+from typing import Any
 
 import asyncio
 import json
@@ -24,7 +25,7 @@ except ImportError:
 
 
 class MediaTaskQueue:
-    def __init__(self, core, broadcast):
+    def __init__(self, core: Any, broadcast: Any) -> None:
         self.core = core
         self.broadcast = broadcast
         self._queue: asyncio.Queue[str] = asyncio.Queue()
@@ -33,12 +34,12 @@ class MediaTaskQueue:
         for sub in ("tts", "image", "video"):
             (MEDIA_ROOT / sub).mkdir(parents=True, exist_ok=True)
 
-    def start(self):
+    def start(self) -> None:
         if not self._worker:
             self._worker = asyncio.create_task(self._run())
             logger.info("media_queue.started")
 
-    async def stop(self):
+    async def stop(self) -> None:
         if self._worker:
             self._worker.cancel()
             self._worker = None
@@ -72,7 +73,7 @@ class MediaTaskQueue:
 
     # ── worker ──────────────────────────────────────────
 
-    async def _run(self):
+    async def _run(self) -> None:
         # 启动时把上次遗留的 running 标记为失败
         await self.core.db.execute(
             "UPDATE media_tasks SET status='failed', error='服务重启中断' WHERE status='running'")
@@ -100,7 +101,7 @@ class MediaTaskQueue:
                 self._current = None
 
     async def _set_status(self, task_id: str, status: str, progress: float | None = None,
-                          result_path: str = "", error: str = ""):
+                          result_path: str = "", error: str = "") -> None:
         sets, vals = ["status=?"], [status]
         if progress is not None:
             sets.append("progress=?"); vals.append(progress)
@@ -116,7 +117,7 @@ class MediaTaskQueue:
         await self._notify(task_id, status, progress or 0, result_path, error)
 
     async def _notify(self, task_id: str, status: str, progress: float,
-                      result_url: str = "", error: str = ""):
+                      result_url: str = "", error: str = "") -> None:
         try:
             await self.broadcast({
                 "type": "media_task_update", "task_id": task_id, "status": status,

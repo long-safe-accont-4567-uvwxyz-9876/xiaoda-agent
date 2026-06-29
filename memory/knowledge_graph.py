@@ -1,3 +1,4 @@
+from typing import Any
 import json
 import re
 import time
@@ -51,7 +52,7 @@ def _repair_json(text: str) -> str:
     return text
 
 
-def _normalize_json_keys(obj):
+def _normalize_json_keys(obj: Any) -> Any:
     if isinstance(obj, dict):
         cleaned = {}
         for k, v in obj.items():
@@ -73,21 +74,21 @@ class KnowledgeGraph:
     MAX_ENTITIES = 500
     CLEANUP_AGE_DAYS = 30
 
-    def __init__(self, db=None, knowledge_db: KnowledgeDB | None = None, router=None):
+    def __init__(self, db: Any=None, knowledge_db: KnowledgeDB | None = None, router: Any=None) -> None:
         self._db = db
         self.knowledge_db = knowledge_db
         self._router = router
 
-    def set_db(self, db):
+    def set_db(self, db: Any) -> None:
         self._db = db
 
-    def set_knowledge_db(self, knowledge_db: KnowledgeDB):
+    def set_knowledge_db(self, knowledge_db: KnowledgeDB) -> None:
         self.knowledge_db = knowledge_db
 
-    def set_router(self, router):
+    def set_router(self, router: Any) -> None:
         self._router = router
 
-    def set_free_model_client(self, api_key: str, base_url: str, model: str):
+    def set_free_model_client(self, api_key: str, base_url: str, model: str) -> None:
         """配置硅基流动免费模型客户端，用于知识提取（不占用主模型配额）"""
         self._free_api_key = api_key
         self._free_base_url = base_url
@@ -175,7 +176,7 @@ class KnowledgeGraph:
 
         return {"entities": [], "relations": []}
 
-    async def merge_entities(self, entities: list[dict]):
+    async def merge_entities(self, entities: list[dict]) -> None:
         if not self.knowledge_db or not entities:
             return
 
@@ -185,7 +186,7 @@ class KnowledgeGraph:
             except Exception as e:
                 logger.warning("kg.merge_entity_failed", name=ent.get("name", ""), error=str(e))
 
-    async def merge_relations(self, relations: list[dict]):
+    async def merge_relations(self, relations: list[dict]) -> None:
         if not self.knowledge_db or not relations:
             return
 
@@ -277,7 +278,7 @@ class KnowledgeGraph:
 
         return "[知识图谱]\n" + "\n".join(parts[:8])
 
-    async def cleanup_stale(self):
+    async def cleanup_stale(self) -> None:
         if not self.knowledge_db:
             return
         try:
@@ -295,7 +296,7 @@ class KnowledgeGraph:
         except Exception:
             return 0
 
-    async def auto_extract_and_merge(self, summary: str):
+    async def auto_extract_and_merge(self, summary: str) -> None:
         if not summary:
             return
 

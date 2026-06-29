@@ -8,53 +8,16 @@
   被拦截的 fixed/random 问候在 DND 结束后 10 分钟内补发一次
 """
 from __future__ import annotations
+from typing import Any
 
 import asyncio
 import json
 import random
-import re
 import time
 from datetime import datetime
 
 from loguru import logger
-
-
-# 推理模型（DeepSeek-R1/MiMo Pro 等）会输出 <think>...</think> 思维链；
-# 部分模型只在前缀输出未闭合的思考文本。统一清洗。
-_THINK_TAG_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
-_THINK_PREFIX_PATTERNS = [
-    re.compile(r"^\s*<think\b[^>]*>.*", re.DOTALL | re.IGNORECASE),  # 未闭合 <think>
-    re.compile(r"^\s*(嗯[，,].*?(?:\n\s*\n|。\s*\n))", re.DOTALL),  # CoT 段落（"嗯，用户..."）
-    re.compile(r"^\s*(首先[，,].*?(?:\n\s*\n|。\s*\n))", re.DOTALL),  # CoT 段落（"首先..."）
-    re.compile(r"^\s*(作为[^。，]+[，,].*?(?:\n\s*\n|。\s*\n))", re.DOTALL),  # 角色分析（"作为纳西妲，..."）
-    re.compile(r"^\s*(我的角色是.*?(?:\n\s*\n|。\s*\n))", re.DOTALL),  # 角色声明
-    re.compile(r"^\s*(关键点[：:].*?(?:\n\s*\n|$))", re.DOTALL),  # 要点列举
-]
-_REASONING_INDICATORS = re.compile(r"关键点[：:]|我的角色是|问候主题[是：]|所以，在.*中，我必须")
-
-
-def _strip_thinking(text: str) -> str:
-    """移除推理模型的思维链输出，仅保留最终回复。"""
-    if not text:
-        return ""
-    # 1. 完整 <think>...</think> 标签
-    text = _THINK_TAG_RE.sub("", text)
-    # 2. 未闭合的 <think> 或 CoT 前缀段落
-    for pat in _THINK_PREFIX_PATTERNS:
-        m = pat.match(text)
-        if m:
-            text = text[m.end():]
-            break
-    text = text.strip()
-    # 3. 清洗后仍含推理痕迹 → 尝试取最后一句短句，否则丢弃
-    if _REASONING_INDICATORS.search(text):
-        sentences = re.split(r'[。！？\n]', text)
-        for s in reversed(sentences):
-            s = s.strip()
-            if s and len(s) <= 40 and not _REASONING_INDICATORS.search(s):
-                return s
-        return ""
-    return text
+from utils.llm_cleanup import strip_thinking as _strip_thinking
 
 
 def _hm_to_min(hm: str) -> int:
@@ -65,7 +28,7 @@ def _hm_to_min(hm: str) -> int:
 class GreetingScheduler:
     TICK_SECONDS = 30
 
-    def __init__(self, core, config_service, broadcast):
+    def __init__(self, core: Any, config_service: Any, broadcast: Any) -> None:
         self.core = core
         self.cfg = config_service
         self.broadcast = broadcast  # async callable(event: dict)
@@ -73,17 +36,17 @@ class GreetingScheduler:
         self._fired_today: dict[str, set[int]] = {}  # date -> schedule ids fired
         self._deferred: list[dict] = []  # DND 拦截待补发
 
-    def start(self):
+    def start(self) -> None:
         if not self._task:
             self._task = asyncio.create_task(self._loop())
             logger.info("greeting_scheduler.started")
 
-    async def stop(self):
+    async def stop(self) -> None:
         if self._task:
             self._task.cancel()
             self._task = None
 
-    async def _loop(self):
+    async def _loop(self) -> None:
         while True:
             try:
                 await self._tick()
@@ -116,7 +79,7 @@ class GreetingScheduler:
             "SELECT COUNT(*) AS c FROM greeting_log WHERE fired_at >= ?", (midnight,))
         return int(row["c"]) if row else 0
 
-    async def _tick(self):
+    async def _tick(self) -> None:
         if not self.cfg.get("schedule.enabled", True):
             return
         now = datetime.now()
@@ -257,7 +220,9 @@ class GreetingScheduler:
                 max_tokens=200)
             text = result if isinstance(result, str) else \
                 (result.choices[0].message.content or "")
-            text = _strip_thinking(text).strip()
+            # 记录原始 LLM 输出，便于排查推理文本泄漏
+            logger.debug("greeting.raw_llm_output hint={} raw={}", hint, text[:200])
+            text = _strip_thinking(text, context="greeting").strip()
             if text:
                 return text[:100]
         except Exception as e:

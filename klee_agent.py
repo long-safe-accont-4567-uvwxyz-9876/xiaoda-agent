@@ -1,3 +1,4 @@
+from typing import Any, Optional
 import os
 import json
 import asyncio
@@ -63,7 +64,7 @@ def _is_tool_unsupported_error(error_str: str) -> bool:
 class KleeAgent:
     def __init__(self, tool_executor: ToolExecutor | None = None,
                  tool_repair: ToolCallRepair | None = None,
-                 nahida_delegate=None):
+                 nahida_delegate: Optional[Any]=None) -> None:
         self._clients: list[tuple[str, AsyncOpenAI, list[str]]] = []
         self._personality: str = ""
         self._initialized = False
@@ -73,7 +74,7 @@ class KleeAgent:
         self._nahida_delegate = nahida_delegate
         self.tts = TTSEngine()
 
-    async def init(self):
+    async def init(self) -> None:
         for provider in PROVIDERS:
             api_key = _read_env_key(provider["api_key_env"])
             if not api_key:
@@ -107,14 +108,14 @@ class KleeAgent:
     def available(self) -> bool:
         return self._initialized and len(self._clients) > 0
 
-    def set_preferred_provider(self, name: str):
+    def set_preferred_provider(self, name: str) -> None:
         self._preferred_provider = name
 
     def get_preferred_provider(self) -> str:
         return self._preferred_provider
 
     async def chat(self, message: str, context: str = "",
-                   status_callback=None) -> str:
+                   status_callback: Optional[Any]=None) -> str:
         if not self.available:
             return TIRED_MSG
 
@@ -204,6 +205,7 @@ class KleeAgent:
     async def _chat_loop(self, client: AsyncOpenAI, model: str,
                          messages: list[dict], tools: list[dict] | None,
                          provider_name: str) -> str:
+        """主循环：调用 LLM → 提取工具调用 → 执行 → 反馈，最多 5 轮。"""
         max_rounds = 5
         api_timeout = 30                    # 单次 API 调用超时
         total_deadline = time.time() + 90   # Klee 总超时 90s
@@ -234,101 +236,124 @@ class KleeAgent:
 
             if not msg.tool_calls:
                 content = msg.content or ""
-
+                # 尝试 DSML 工具调用提取与执行
                 if tools and self._tool_executor and has_dsml_tool_calls(content):
-                    dsml_calls = parse_dsml_tool_calls(content, _klee_tool_names())
-                    if dsml_calls:
-                        logger.info("klee.dsml_tool_calls", count=len(dsml_calls), model=model)
-                        clean_content = strip_dsml(content)
-                        msg_rc = getattr(msg, "reasoning_content", None) or ""
-                        assistant_msg = {
-                            "role": "assistant",
-                            "content": clean_content,
-                            "tool_calls": dsml_calls,
-                        }
-                        if msg_rc:
-                            assistant_msg["reasoning_content"] = msg_rc
-                        working.append(assistant_msg)
-
-                        for tc in dsml_calls:
-                            tool_name = tc["function"]["name"]
-                            args_str = tc["function"]["arguments"]
-
-                            if self._tool_repair:
-                                repaired = self._tool_repair.repair_truncation(args_str)
-                                if repaired:
-                                    args_str = repaired
-
-                            try:
-                                args = json.loads(args_str)
-                            except json.JSONDecodeError:
-                                args = {}
-
-                            result = await self._tool_executor.execute(tool_name, args)
-                            result_text = await self._handle_tool_result(tool_name, result)
-
-                            working.append({
-                                "role": "tool",
-                                "tool_call_id": tc["id"],
-                                "content": result_text,
-                            })
-
-                            logger.info("klee.dsml_tool_executed", tool=tool_name, success=result.success,
-                                        provider=provider_name, model=model, round=round_idx)
-
+                    if await self._try_handle_dsml_calls(msg, content, working, provider_name, model, round_idx):
                         continue
-
                 logger.info("klee.chat.ok", provider=provider_name, model=model,
                             tokens=response.usage.total_tokens if response.usage else 0,
                             rounds=round_idx, used_tools=round_idx > 0)
                 return content.strip()
 
-            msg_rc = getattr(msg, "reasoning_content", None) or ""
-            assistant_msg = {
-                "role": "assistant",
-                "content": msg.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                    for tc in msg.tool_calls
-                ],
-            }
-            if msg_rc:
-                assistant_msg["reasoning_content"] = msg_rc
-            working.append(assistant_msg)
+            # 标准 tool_calls：构造 assistant 消息并执行
+            self._append_assistant_msg(msg, working)
+            await self._exec_standard_tool_calls(msg, working, provider_name, model, round_idx)
 
-            for tc in msg.tool_calls:
-                tool_name = tc.function.name
-                args_str = tc.function.arguments
+        # 达到最大轮次：尝试总结
+        return await self._summarize_klee_result(client, model, working, provider_name)
 
-                if self._tool_repair:
-                    repaired = self._tool_repair.repair_truncation(args_str)
-                    if repaired:
-                        args_str = repaired
+    async def _try_handle_dsml_calls(self, msg: Any, content: str, working: list[dict],
+                                       provider_name: str, model: str, round_idx: int) -> bool:
+        """DSML 工具调用提取与执行。成功处理返回 True，无 DSML 调用返回 False。"""
+        dsml_calls = parse_dsml_tool_calls(content, _klee_tool_names())
+        if not dsml_calls:
+            return False
+        logger.info("klee.dsml_tool_calls", count=len(dsml_calls), model=model)
+        clean_content = strip_dsml(content)
+        msg_rc = getattr(msg, "reasoning_content", None) or ""
+        assistant_msg = {
+            "role": "assistant",
+            "content": clean_content,
+            "tool_calls": dsml_calls,
+        }
+        if msg_rc:
+            assistant_msg["reasoning_content"] = msg_rc
+        working.append(assistant_msg)
 
-                try:
-                    args = json.loads(args_str)
-                except json.JSONDecodeError:
-                    args = {}
+        for tc in dsml_calls:
+            tool_name = tc["function"]["name"]
+            args_str = tc["function"]["arguments"]
 
-                result = await self._tool_executor.execute(tool_name, args)
-                result_text = await self._handle_tool_result(tool_name, result)
+            if self._tool_repair:
+                repaired = self._tool_repair.repair_truncation(args_str)
+                if repaired:
+                    args_str = repaired
 
-                working.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": result_text,
-                })
+            try:
+                args = json.loads(args_str)
+            except json.JSONDecodeError:
+                args = {}
 
-                logger.info("klee.tool_executed", tool=tool_name, success=result.success,
-                            provider=provider_name, model=model, round=round_idx)
+            result = await self._tool_executor.execute(tool_name, args)
+            result_text = await self._handle_tool_result(tool_name, result)
 
+            working.append({
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": result_text,
+            })
+
+            logger.info("klee.dsml_tool_executed", tool=tool_name, success=result.success,
+                        provider=provider_name, model=model, round=round_idx)
+        return True
+
+    def _append_assistant_msg(self, msg: Any, working: list[dict]) -> None:
+        """构造标准 assistant 消息（含 tool_calls）并追加到 working。"""
+        msg_rc = getattr(msg, "reasoning_content", None) or ""
+        assistant_msg = {
+            "role": "assistant",
+            "content": msg.content or "",
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in msg.tool_calls
+            ],
+        }
+        if msg_rc:
+            assistant_msg["reasoning_content"] = msg_rc
+        working.append(assistant_msg)
+
+    async def _exec_standard_tool_calls(self, msg: Any, working: list[dict],
+                                          provider_name: str, model: str, round_idx: int) -> None:
+        """执行标准 tool_calls：截断修复 → 执行 → 后处理 → 追加 tool 消息。"""
+        for tc in msg.tool_calls:
+            tool_name = tc.function.name
+            args_str = tc.function.arguments
+
+            if self._tool_repair:
+                repaired = self._tool_repair.repair_truncation(args_str)
+                if repaired:
+                    args_str = repaired
+
+            try:
+                args = json.loads(args_str)
+            except json.JSONDecodeError:
+                args = {}
+
+            result = await self._tool_executor.execute(tool_name, args)
+            result_text = await self._handle_tool_result(tool_name, result)
+
+            working.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": result_text,
+            })
+
+            logger.info("klee.tool_executed", tool=tool_name, success=result.success,
+                        provider=provider_name, model=model, round=round_idx)
+
+    async def _summarize_klee_result(self, client: AsyncOpenAI, model: str,
+                                      working: list[dict], provider_name: str) -> str:
+        """达到最大轮次后：尝试让 LLM 做一次总结回复。
+
+        若 working 末尾是 tool 消息则直接返回其内容；否则再调一次 LLM。
+        """
         last_msg = working[-1] if working else {}
         if isinstance(last_msg, dict) and last_msg.get("role") == "tool":
             logger.info("klee.chat.direct_result", provider=provider_name, model=model)

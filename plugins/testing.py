@@ -11,7 +11,7 @@ from plugins.context import PluginContext
 class MockPluginContext(PluginContext):
     """用于测试的 Mock PluginContext"""
 
-    def __init__(self, plugin_id: str = "test-plugin"):
+    def __init__(self, plugin_id: str = "test-plugin") -> None:
         manifest = PluginManifest(
             id=plugin_id,
             name="Test Plugin",
@@ -28,7 +28,7 @@ class MockPluginContext(PluginContext):
         self.tool_calls: list[dict] = []
         self.event_subscriptions: list[str] = []
 
-    def register_tool(self, name: str, handler: Callable, **kwargs) -> None:
+    def register_tool(self, name: str, handler: Callable, **kwargs: Any) -> None:
         self.tool_calls.append({"action": "register_tool", "name": name})
 
     def subscribe(self, event_type: str, handler: Callable) -> None:

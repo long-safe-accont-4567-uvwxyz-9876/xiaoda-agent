@@ -3,10 +3,14 @@ import sys
 import os
 import random
 import asyncio
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv()
+
+# 项目根目录 (基于当前文件位置计算，避免硬编码绝对路径)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 passed = 0
 failed = 0
@@ -52,7 +56,12 @@ async def main():
     # ---- Fix 2: _DESC_EMOTION_MAP ----
     print("\n[Fix 2] _DESC_EMOTION_MAP 分类修正")
     from emotion.sticker_manager import StickerManager
-    sm = StickerManager("/media/orangepi/KIOXIA/nahida-data/stickers")
+    # 表情包目录: 优先使用项目内置目录，找不到则使用临时目录
+    sticker_dir = PROJECT_ROOT / "assets" / "stickers" / "nahida"
+    if not sticker_dir.is_dir():
+        import tempfile
+        sticker_dir = Path(tempfile.mkdtemp())
+    sm = StickerManager(str(sticker_dir))
     desc_map = sm._DESC_EMOTION_MAP
 
     check("害怕 -> shy", desc_map.get("害怕") == "shy", f"实际: {desc_map.get('害怕')}")
@@ -75,7 +84,7 @@ async def main():
 
     # ---- Fix 4: .env.example ----
     print("\n[Fix 4] .env.example AGNES_API_KEY")
-    env_content = open("/home/orangepi/ai-agent/.env.example").read()
+    env_content = open(PROJECT_ROOT / ".env.example").read()
     check("AGNES_API_KEY 存在", "AGNES_API_KEY" in env_content, "未添加")
     check("AGNES_BASE_URL 存在", "AGNES_BASE_URL" in env_content, "未添加")
     check("AGNES_IMAGE_MODEL 存在", "AGNES_IMAGE_MODEL" in env_content, "未添加")

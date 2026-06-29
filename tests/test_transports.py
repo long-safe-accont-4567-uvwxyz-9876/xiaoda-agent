@@ -41,7 +41,7 @@ class TestMiMoTransport(unittest.TestCase):
     def test_is_available_with_key(self):
         """有 API Key 时可用"""
         import os
-        key = os.getenv("MIMO_API_KEY")
+        key = os.getenv("MIMO_API_KEY", "")
         transport = MiMoTransport()
         if key:
             self.assertTrue(transport.is_available())
@@ -59,7 +59,7 @@ class TestAgnesTransport(unittest.TestCase):
     def test_is_available_with_key(self):
         """有 API Key 时可用，无 Key 时不可用"""
         import os
-        key = os.getenv("AGNES_API_KEY")
+        key = os.getenv("AGNES_API_KEY", "")
         transport = AgnesTransport()
         if key:
             self.assertTrue(transport.is_available())

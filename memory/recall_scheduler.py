@@ -41,7 +41,7 @@ class MemoryRecallScheduler:
 
     CRON_TASK_NAME = "memory_recall"
 
-    def __init__(self, core: "AgentCore"):
+    def __init__(self, core: "AgentCore") -> None:
         self.core = core
         self._task: asyncio.Task | None = None
 

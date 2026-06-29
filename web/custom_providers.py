@@ -6,6 +6,7 @@
   这样 ModelRouter 的调用点零改动即可使用。
 """
 from __future__ import annotations
+from typing import Any
 
 from types import SimpleNamespace
 
@@ -13,11 +14,11 @@ from loguru import logger
 
 
 class _Usage(SimpleNamespace):
-    def __getattr__(self, name):
+    def __getattr__(self, name: Any) -> None:
         return None
 
 
-def _to_openai_response(content: str, model: str, input_tokens: int, output_tokens: int):
+def _to_openai_response(content: str, model: str, input_tokens: int, output_tokens: int) -> Any:
     message = SimpleNamespace(content=content, tool_calls=None, reasoning_content=None)
     choice = SimpleNamespace(message=message, finish_reason="stop")
     usage = _Usage(prompt_tokens=input_tokens, completion_tokens=output_tokens,
@@ -29,7 +30,7 @@ def _to_openai_response(content: str, model: str, input_tokens: int, output_toke
 class AnthropicCompatClient:
     """Anthropic Messages API 适配器，形状兼容 OpenAI AsyncClient。"""
 
-    def __init__(self, api_key: str, base_url: str = "https://api.anthropic.com"):
+    def __init__(self, api_key: str, base_url: str = "https://api.anthropic.com") -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         if self._base_url.endswith("/v1"):
@@ -38,7 +39,7 @@ class AnthropicCompatClient:
 
     async def _create(self, model: str, messages: list[dict],
                       temperature: float = 0.7, max_tokens: int = 1024,
-                      stream: bool = False, **kwargs):
+                      stream: bool = False, **kwargs: Any) -> Any:
         import httpx
         if stream:
             raise RuntimeError("Anthropic 适配器暂不支持流式")
@@ -86,7 +87,7 @@ class AnthropicCompatClient:
                                    usage.get("output_tokens", 0))
 
 
-def build_client(fmt: str, base_url: str, api_key: str):
+def build_client(fmt: str, base_url: str, api_key: str) -> Any:
     """按 format 构建客户端实例。"""
     if fmt == "anthropic":
         return AnthropicCompatClient(api_key=api_key, base_url=base_url)
@@ -94,7 +95,7 @@ def build_client(fmt: str, base_url: str, api_key: str):
     return AsyncOpenAI(api_key=api_key, base_url=base_url)
 
 
-def register_into_router(router, provider_id: str, fmt: str,
+def register_into_router(router: Any, provider_id: str, fmt: str,
                          base_url: str, api_key: str) -> None:
     """把自定义 provider 客户端注册进 ModelRouter._custom_clients。"""
     if not hasattr(router, "_custom_clients"):
@@ -103,6 +104,6 @@ def register_into_router(router, provider_id: str, fmt: str,
     logger.info("custom_provider.registered id={} format={}", provider_id, fmt)
 
 
-def unregister_from_router(router, provider_id: str) -> None:
+def unregister_from_router(router: Any, provider_id: str) -> None:
     if hasattr(router, "_custom_clients"):
         router._custom_clients.pop(provider_id, None)

@@ -1,7 +1,7 @@
 """失败触发器 — 自动反思 + 重试 + 经验归档"""
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ class FailureTrigger:
     MAX_RETRIES = 3            # 最大重试次数
     PATTERN_THRESHOLD = 3      # 同类失败≥3次→写入规则
 
-    def __init__(self, memory_db=None, learning_manager=None):
+    def __init__(self, memory_db: Optional[Any]=None, learning_manager: Optional[Any]=None) -> None:
         """
         Args:
             memory_db: MemoryDB 实例（用于经验检索）
@@ -64,7 +64,7 @@ class FailureTrigger:
 
         return {"action": "report", "reason": strategy.get("root_cause", "未知错误")}
 
-    async def on_success_after_retry(self, context: FailureContext, strategy: dict):
+    async def on_success_after_retry(self, context: FailureContext, strategy: dict) -> None:
         """重试成功后归档经验"""
         await self._archive_experience(context, strategy, outcome="success")
 
@@ -118,7 +118,7 @@ class FailureTrigger:
                 "root_cause": context.error_type or "未知错误",
             }
 
-    async def _archive_experience(self, context: FailureContext, strategy: dict, outcome: str):
+    async def _archive_experience(self, context: FailureContext, strategy: dict, outcome: str) -> None:
         """归档经验到 learnings 表"""
         if not self._learning_manager:
             return
@@ -144,7 +144,7 @@ class FailureTrigger:
         except Exception:
             return 0
 
-    async def _promote_to_rule(self, context: FailureContext, strategy: dict):
+    async def _promote_to_rule(self, context: FailureContext, strategy: dict) -> None:
         """高频失败提升为系统提示规则"""
         if not self._learning_manager:
             return

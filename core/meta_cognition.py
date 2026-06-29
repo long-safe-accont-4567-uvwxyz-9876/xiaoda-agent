@@ -19,6 +19,7 @@ class AgentSelfState:
 
     @property
     def health_score(self) -> float:
+        """返回综合健康分 (0~1, 融合信心/疲劳/错误率/内存压力)."""
         return max(0, min(1, (
             self.confidence * 0.3
             + (1 - self.fatigue) * 0.2
@@ -29,6 +30,7 @@ class AgentSelfState:
 
     @property
     def self_diagnosis(self) -> str:
+        """返回状态自诊描述文本, 状态良好时返回 '状态良好'."""
         parts = []
         if self.confidence < 0.5:
             parts.append(f"信心不足({self.confidence:.2f})")
@@ -44,12 +46,12 @@ class AgentSelfState:
 class MetaCognition:
     """元认知引擎 — 实时状态追踪与自省"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._state = AgentSelfState()
         self._error_history: deque = deque(maxlen=50)
         self._latency_history: deque = deque(maxlen=50)
 
-    def record_success(self, latency_ms: float, confidence: float = 1.0):
+    def record_success(self, latency_ms: float, confidence: float = 1.0) -> None:
         """记录成功调用"""
         self._latency_history.append(latency_ms)
         self._state.total_turns += 1
@@ -58,7 +60,7 @@ class MetaCognition:
         self._state.error_rate = 1 - (sum(self._error_history) / max(1, len(self._error_history)))
         self._state.fatigue = min(1.0, self._state.total_turns / 200)
 
-    def record_failure(self, latency_ms: float):
+    def record_failure(self, latency_ms: float) -> None:
         """记录失败调用"""
         self._error_history.append(0)
         self._latency_history.append(latency_ms)
@@ -68,7 +70,7 @@ class MetaCognition:
         self._state.error_rate = errors / total
         self._state.confidence = max(0, self._state.confidence - 0.1)
 
-    def set_memory_pressure(self, used: float, total: float):
+    def set_memory_pressure(self, used: float, total: float) -> None:
         """设置内存压力"""
         self._state.memory_pressure = used / total if total > 0 else 0
 
@@ -91,4 +93,5 @@ _meta_cognition = MetaCognition()
 
 
 def get_meta_cognition() -> MetaCognition:
+    """获取全局 MetaCognition 单例."""
     return _meta_cognition

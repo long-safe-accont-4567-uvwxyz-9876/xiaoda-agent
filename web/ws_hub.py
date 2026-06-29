@@ -1,5 +1,6 @@
 """WebSocket 主通道（§9 协议）：流式状态、工具事件、最终回复、问候/任务/配置广播。"""
 from __future__ import annotations
+from typing import Any
 
 import asyncio
 import json
@@ -26,25 +27,29 @@ except ImportError:
 class ConnectionManager:
     """连接管理 + 事件广播。"""
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """初始化 WebSocket 连接管理器."""
         self._connections: dict[str, WebSocket] = {}
         self._agent_map: dict[str, str] = {}      # conn_id -> 当前受话 agent
         self._session_map: dict[str, str] = {}    # conn_id -> session_id
         self._tasks: dict[str, asyncio.Task] = {}  # msg_id -> 处理任务（abort 用）
 
     def register(self, ws: WebSocket) -> str:
+        """注册一个新连接, 返回生成的连接 ID."""
         conn_id = uuid.uuid4().hex[:8]
         self._connections[conn_id] = ws
         self._agent_map[conn_id] = "nahida"
         self._session_map[conn_id] = f"web_{uuid.uuid4().hex[:12]}"
         return conn_id
 
-    def unregister(self, conn_id: str):
+    def unregister(self, conn_id: str) -> None:
+        """按连接 ID 注销连接及其会话映射."""
         self._connections.pop(conn_id, None)
         self._agent_map.pop(conn_id, None)
         self._session_map.pop(conn_id, None)
 
-    async def send_to(self, conn_id: str, event: dict):
+    async def send_to(self, conn_id: str, event: dict) -> None:
+        """向指定连接发送事件, 失败则注销该连接."""
         ws = self._connections.get(conn_id)
         if ws:
             try:
@@ -52,12 +57,14 @@ class ConnectionManager:
             except Exception:
                 self.unregister(conn_id)
 
-    async def broadcast(self, event: dict):
+    async def broadcast(self, event: dict) -> None:
+        """向所有活跃连接广播事件."""
         for conn_id in list(self._connections):
             await self.send_to(conn_id, event)
 
     @property
     def active_count(self) -> int:
+        """返回当前活跃连接数."""
         return len(self._connections)
 
 
@@ -87,7 +94,7 @@ def _publish_file(src: Path | None, kind: str, link: bool = False) -> str | None
     return f"/media/{kind}/{dest.name}"
 
 
-def serialize_result(result) -> dict:
+def serialize_result(result: Any) -> dict:
     """ProcessResult → 可下发 JSON（媒体路径转 /media/ URL）。"""
     return {
         "reply": result.reply,
@@ -100,8 +107,8 @@ def serialize_result(result) -> dict:
     }
 
 
-async def _async_tts_task(core, agent: str, tts_text: str, emotion: str,
-                           conn_id: str, msg_id: str):
+async def _async_tts_task(core: Any, agent: str, tts_text: str, emotion: str,
+                           conn_id: str, msg_id: str) -> None:
     """Task 6: 后台 TTS 合成任务 —— 合成完成后推送 audio_ready 事件。"""
     try:
         if agent == "nahida":
@@ -124,7 +131,7 @@ async def _async_tts_task(core, agent: str, tts_text: str, emotion: str,
         logger.error("ws.async_tts_failed", conn_id=conn_id, msg_id=msg_id, error=str(e))
 
 
-async def _synthesize_tts_sync(core, agent: str, tts_text: str, emotion: str) -> str | None:
+async def _synthesize_tts_sync(core: Any, agent: str, tts_text: str, emotion: str) -> str | None:
     """同步 TTS 合成（HTTP 端点等无 WebSocket 连接场景的回退）。"""
     try:
         if agent == "nahida":
@@ -141,8 +148,8 @@ async def _synthesize_tts_sync(core, agent: str, tts_text: str, emotion: str) ->
         return None
 
 
-async def _resolve_pending_tts(core, agent: str, result, data: dict,
-                                conn_id: str, msg_id: str):
+async def _resolve_pending_tts(core: Any, agent: str, result: Any, data: dict,
+                                conn_id: str, msg_id: str) -> None:
     """Task 6: 处理 tts_pending 结果 —— WebSocket 走异步，HTTP 走同步回退。"""
     if not getattr(result, "tts_pending", False):
         return
@@ -159,9 +166,9 @@ async def _resolve_pending_tts(core, agent: str, result, data: dict,
             data["audio_url"] = audio_url
 
 
-async def process_and_serialize(core, text: str, session_id: str,
+async def process_and_serialize(core: Any, text: str, session_id: str,
                                 agent: str = "nahida",
-                                status_callback=None, app=None,
+                                status_callback: Any | None=None, app: Any | None=None,
                                 conn_id: str = "", msg_id: str = "",
                                 image_data: list[dict] | None = None) -> dict:
     """统一处理入口：主体走 AgentCore.process；子代理直达 dispatcher（R5）。
@@ -216,7 +223,7 @@ async def process_and_serialize(core, text: str, session_id: str,
 
 
 @router.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket, token: str = ""):
+async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
     # 先 accept 再验证，避免 403
     await ws.accept()
 
@@ -274,7 +281,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = ""):
         manager.unregister(conn_id)
 
 
-async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket):
+async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> None:
     text = (msg.get("text") or "").strip()
     if not text:
         return
@@ -285,7 +292,7 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket):
     app = ws.scope.get("app")
     core = app.state.core
 
-    from web.tool_events import current_msg_id
+    from web._msg_context import current_msg_id
     token = current_msg_id.set(msg_id)
 
     # 从文本中提取 [Image: URL] 标记，构建 image_data
@@ -310,7 +317,7 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket):
                 logger.warning("ws.image_load_failed url={} error={}", url, str(e))
 
     # Task 7: 流式状态推送回调 —— 受 STREAM_STATUS_PUSH 开关控制
-    async def on_status(message):
+    async def on_status(message: Any) -> None:
         # P0: 流式文本推送 —— 独立于 STREAM_STATUS_PUSH，由 STREAM_TEXT_PUSH 控制
         if STREAM_TEXT_PUSH and isinstance(message, dict) and message.get("type") == "stream_text":
             await manager.send_to(conn_id, {

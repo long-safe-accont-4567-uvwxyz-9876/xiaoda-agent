@@ -2,7 +2,8 @@
 
 定义 AgentCore 基类（组合各 Mixin）以及模块级常量、dataclass 与辅助函数。
 模块级常量（DEGRADED_REPLY / _current_request_ctx / ProcessResult / RequestContext /
-UserIdentity）必须在本文件导入各 Mixin 之前定义，以避免循环导入。
+UserIdentity）已抽取到 agent_core._shared, 由各子模块共享导入, 避免循环导入。
+本模块通过 re-export 保持向后兼容 (from agent_core.core import ProcessResult 仍可用).
 """
 from __future__ import annotations
 
@@ -12,12 +13,19 @@ import asyncio
 import json
 import re
 import time
-from contextvars import ContextVar
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from loguru import logger
+
+# 共享常量与数据类型 — 从 _shared 导入并 re-export, 保持向后兼容
+from agent_core._shared import (
+    DEGRADED_REPLY,
+    _current_request_ctx,
+    ProcessResult,
+    RequestContext,
+    UserIdentity,
+)
 
 from config import (MIMO_MODEL, AGENT_CONFIG, WORKSPACE_DIR, STICKER_DIR, KLEE_STICKER_DIR, FILE_DIR,
                     build_system_prompt, build_safe_system_prompt, SIMPLE_TASK_KEYWORDS,
@@ -42,6 +50,7 @@ from memory.learning_manager import LearningManager
 from slash_commands import SlashCommandHandler
 from emotion.sticker_manager import StickerManager
 from utils.file_receiver import FileReceiver
+from core.lazy_loader import LazyLoader
 from tool_engine.tool_call_handler import ToolCallHandler
 from klee_agent import KleeAgent
 from emotion.tts_engine import TTSEngine
@@ -100,65 +109,15 @@ def _extract_delta_reasoning_content(chunk_dict: dict) -> str | None:
     return None
 
 
-DEGRADED_REPLY = "嗯……人家现在有点不太舒服，等会儿再聊好不好？"
-
-_current_request_ctx: ContextVar["RequestContext | None"] = ContextVar("_current_request_ctx", default=None)
-
-
-@dataclass
-class ProcessResult:
-    reply: str
-    emotion: str = ""
-    sticker_path: Path | None = None
-    audio_path: Path | None = None
-    tool_results: list = field(default_factory=list)
-    image_paths: list[Path] = field(default_factory=list)
-    video_path: Path | None = None
-    # Task 6: TTS 异步化标记。为 True 时 audio_path 为空，需由调用方在后台合成并推送
-    tts_pending: bool = False
-    tts_text: str = ""
-
-
-@dataclass
-class RequestContext:
-    """请求级临时状态，每次 process() 调用创建一个新实例，避免并发请求时状态互相污染。"""
-    session_id: str = ""
-    user_openid: str = ""
-    user_id: str = ""
-    user_input: str = ""
-    status_callback: Any = None
-    handled_by_tool_call: bool = False
-    last_user_emotion: str = ""
-    delegate_depth: int = 0
-    is_master: bool = True
-    identity: Any = None  # UserIdentity 运行时身份解析结果
-
-
-@dataclass
-class UserIdentity:
-    """运行时用户身份解析结果。基于 openID/UID 稳定标识，不依赖消息内容。"""
-    is_owner: bool
-    display_name: str
-    address_term: str  # 称谓：主人→"爸爸"，其他→"用户"
-
-    @staticmethod
-    def default_owner() -> "UserIdentity":
-        return UserIdentity(is_owner=True, display_name="爸爸", address_term="爸爸")
-
-    @staticmethod
-    def default_guest() -> "UserIdentity":
-        return UserIdentity(is_owner=False, display_name="用户", address_term="用户")
-
-
-# 重要：模块级常量与 dataclass 必须在导入各 Mixin 之前定义完毕，
-# 否则 Mixin 文件中 `from agent_core.core import ...` 会因名称尚未定义而失败（循环导入）。
+# 各 Mixin 从 agent_core._shared 导入共享类型, 不再依赖 agent_core.core 完成初始化,
+# 因此可以安全导入 Mixin (不再有循环导入风险).
 from agent_core.message_processor import MessageProcessorMixin
 from agent_core.tool_executor import ToolExecutorMixin
 from agent_core.sub_agent_manager import SubAgentManagerMixin
 
 
 class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
-    def __init__(self):
+    def __init__(self) -> None:
         self.router = ModelRouter()
         self.db = DatabaseManager()
         _owner_ids = os.getenv("OWNER_IDS", "").split(",")
@@ -186,9 +145,11 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         self.learning_manager: LearningManager | None = None
         self.slash_handler: SlashCommandHandler | None = None
         self._initialized = False
-        self.sticker_manager = StickerManager(STICKER_DIR)
-        self.klee_sticker_manager = StickerManager(KLEE_STICKER_DIR)
-        self.file_receiver = FileReceiver(FILE_DIR)
+        # LazyLoader: 延迟初始化重量级组件，首次访问时才加载
+        # 冷启动优化：sticker 扫描目录和 file_receiver 初始化推迟到实际使用时
+        self.sticker_manager = LazyLoader("emotion.sticker_manager.StickerManager", {"sticker_dir": STICKER_DIR})
+        self.klee_sticker_manager = LazyLoader("emotion.sticker_manager.StickerManager", {"sticker_dir": KLEE_STICKER_DIR})
+        self.file_receiver = LazyLoader("utils.file_receiver.FileReceiver", {"base_dir": FILE_DIR})
         self.klee = KleeAgent(tool_executor=self.tool_executor, tool_repair=self.tool_repair, nahida_delegate=self._nahida_delegate_for_klee)
         self.tts = TTSEngine()
         self.dispatcher = AgentDispatcher(
@@ -228,10 +189,16 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         self._hook_engine._failure_trigger = self._failure_trigger
 
     @property
-    def hook_engine(self):
+    def hook_engine(self) -> Any:
+        """返回已注册的钩子引擎实例."""
         return self._hook_engine
 
     async def init(self, reinit: bool = False) -> None:
+        """异步初始化 Agent 核心组件.
+
+        Args:
+            reinit: 是否强制重新初始化, 默认 False
+        """
         bootstrapper = AgentCoreBootstrapper(self)
         await bootstrapper.bootstrap(reinit=reinit)
 
@@ -296,9 +263,24 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
                       source: str = "qq",
                       user_openid: str = "",
                       session_id: str = "",
-                      status_callback=None,
+                      status_callback: Any=None,
                       image_data: list[dict] | None = None,
                       is_master: bool = True) -> ProcessResult:
+        """处理用户输入并返回回复结果 (统一入口, 含身份解析与上下文管理).
+
+        Args:
+            user_input: 用户输入文本
+            user_id: 用户标识, 默认 'qq_user'
+            source: 消息来源 (qq/web/cli 等), 默认 'qq'
+            user_openid: 用户 openID, 用于身份解析
+            session_id: 会话 ID
+            status_callback: 状态回调函数
+            image_data: 附带图片列表
+            is_master: 是否主人 (将被身份解析结果覆盖)
+
+        Returns:
+            ProcessResult 包含回复文本与元数据
+        """
         if not self._initialized:
             return ProcessResult(reply=DEGRADED_REPLY)
 
@@ -325,19 +307,24 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             _current_request_ctx.reset(_ctx_token)
 
     async def process_text(self, user_input: str, user_openid: str = "cli", session_id: str = "cli") -> str:
+        """处理纯文本输入并直接返回回复字符串 (CLI/Web 便捷入口)."""
         result = await self.process(user_input, user_id="cli_owner", source="cli", user_openid=user_openid, session_id=session_id)
         return result.reply
 
     async def get_session(self, user_openid: str) -> dict | None:
+        """获取指定用户的活跃会话, 不存在返回 None."""
         return await self.db.get_active_session(user_openid)
 
     async def create_session(self, user_openid: str = "") -> str:
+        """为用户创建新会话, 返回会话 ID."""
         return await self.db.create_session(user_openid)
 
-    async def receive_file(self, attachment) -> dict:
+    async def receive_file(self, attachment: Any) -> dict:
+        """接收并处理附件文件, 返回处理结果字典."""
         return await self.file_receiver.receive(attachment)
 
     def strip_emotion_tag(self, text: str) -> str:
+        """剥离文本中的 [emotion:xxx] 标签, 防止泄露给用户."""
         # 先提取情绪值（供 sticker_manager 使用）
         result = self.sticker_manager.strip_emotion_tag(text)
         # 兜底：强制剥离所有 [emotion:xxx] 标签（防止 LLM 在句中/句尾输出标签泄露给用户）
@@ -345,10 +332,12 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         result = re.sub(r'\[emotion:[^\]]*\]', '', result).strip()
         return result
 
-    def set_voice_mode(self, enabled: bool):
+    def set_voice_mode(self, enabled: bool) -> None:
+        """开启或关闭语音模式."""
         self._voice_mode = enabled
 
     def get_voice_mode(self) -> bool:
+        """返回当前语音模式是否开启."""
         return self._voice_mode
 
     async def set_permission_mode(self, mode: str) -> None:

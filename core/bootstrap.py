@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from loguru import logger
 
@@ -33,7 +33,7 @@ class AgentCoreBootstrapper:
         await bootstrapper.bootstrap()
     """
 
-    def __init__(self, core: AgentCore):
+    def __init__(self, core: AgentCore) -> None:
         self.core = core
 
     async def bootstrap(self, reinit: bool = False) -> None:
@@ -219,49 +219,22 @@ class AgentCoreBootstrapper:
     # ── 认知系统 ──────────────────────────────────────────
 
     async def _init_cognitive(self) -> None:
+        """初始化认知系统：Reranker、QueryTransformer、Memory、KG、Instinct、ErrorPipeline。"""
         from memory.memory_manager import MemoryManager
         from memory.knowledge_graph import KnowledgeGraph
         from memory.notebook_manager import NotebookManager
         from memory.learning_manager import LearningManager
-        from memory.reranker import Reranker
-        from memory.query_transform import QueryTransformer
         from emotion.portrait_manager import PortraitManager
         from instinct_manager import InstinctManager
         import config
 
         core = self.core
 
-        # 初始化 Reranker（SiliconFlow 免费常驻）
-        reranker = None
-        if getattr(config, "RERANKER_ENABLED", True):
-            rerank_api_key = config.RERANKER_API_KEY or os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
-            if rerank_api_key:
-                reranker = Reranker(
-                    api_key=rerank_api_key,
-                    base_url=config.RERANKER_BASE_URL,
-                    model=config.RERANKER_MODEL,
-                )
-                logger.info("reranker.enabled", model=config.RERANKER_MODEL)
-            else:
-                logger.info("reranker.disabled_no_api_key")
-        else:
-            logger.info("reranker.disabled_by_config")
+        # 1. Reranker + QueryTransformer（硅基流动免费模型）
+        reranker = self._init_reranker(config)
+        query_transformer = self._init_query_transformer(config)
 
-        # 初始化 QueryTransformer（使用硅基流动免费模型，不占用主模型配额）
-        query_transformer = None
-        if getattr(config, "QUERY_TRANSFORM_ENABLED", True):
-            qt_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
-            if qt_api_key:
-                query_transformer = QueryTransformer(
-                    api_key=qt_api_key,
-                    base_url="https://api.siliconflow.cn/v1",
-                )
-                logger.info("query_transformer.enabled", model="Qwen/Qwen2.5-7B-Instruct (free)")
-            else:
-                logger.info("query_transformer.disabled_no_api_key")
-        else:
-            logger.info("query_transformer.disabled_by_config")
-
+        # 2. Memory + KnowledgeGraph
         core.memory = MemoryManager(
             db=core.db,
             memory=core.db.memory,
@@ -271,7 +244,6 @@ class AgentCoreBootstrapper:
             query_transformer=query_transformer,
         )
         core.knowledge_graph = KnowledgeGraph(db=core.db, knowledge_db=core.db.knowledge, router=core.router)
-        # 知识图谱提取改用硅基流动免费模型
         sf_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         if sf_key:
             core.knowledge_graph.set_free_model_client(
@@ -286,10 +258,62 @@ class AgentCoreBootstrapper:
         core.notebook_manager = NotebookManager(db=core.db, notebook=core.db.notebook, router=core.router)
         core.learning_manager = LearningManager(db=core.db, learning=core.db.learning, router=core.router)
         core.portrait_manager = PortraitManager(db=core.db, memory=core.db.memory, router=core.router, notebook=core.db.notebook)
+
+        # 3. Instinct + ErrorRulePipeline（使用硅基流动免费模型）
+        await self._init_instinct_and_pipeline(core, sf_key)
+
+        # 4. 后台任务管理器
+        core._bg_task_manager = BackgroundTaskManager(
+            db=core.db,
+            context=core.context,
+            memory=core.memory,
+            notebook_manager=core.notebook_manager,
+            portrait_manager=core.portrait_manager,
+            learning_manager=core.learning_manager,
+            instinct_manager=core.instinct_manager,
+        )
+
+    @staticmethod
+    def _init_reranker(config: Any) -> Any:
+        """初始化 Reranker（SiliconFlow 免费常驻）。无 API Key 时返回 None。"""
+        from memory.reranker import Reranker
+        if not getattr(config, "RERANKER_ENABLED", True):
+            logger.info("reranker.disabled_by_config")
+            return None
+        rerank_api_key = config.RERANKER_API_KEY or os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
+        if not rerank_api_key:
+            logger.info("reranker.disabled_no_api_key")
+            return None
+        logger.info("reranker.enabled", model=config.RERANKER_MODEL)
+        return Reranker(
+            api_key=rerank_api_key,
+            base_url=config.RERANKER_BASE_URL,
+            model=config.RERANKER_MODEL,
+        )
+
+    @staticmethod
+    def _init_query_transformer(config: Any) -> Any:
+        """初始化 QueryTransformer（硅基流动免费模型）。无 API Key 时返回 None。"""
+        from memory.query_transform import QueryTransformer
+        if not getattr(config, "QUERY_TRANSFORM_ENABLED", True):
+            logger.info("query_transformer.disabled_by_config")
+            return None
+        qt_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
+        if not qt_api_key:
+            logger.info("query_transformer.disabled_no_api_key")
+            return None
+        logger.info("query_transformer.enabled", model="Qwen/Qwen2.5-7B-Instruct (free)")
+        return QueryTransformer(
+            api_key=qt_api_key,
+            base_url="https://api.siliconflow.cn/v1",
+        )
+
+    async def _init_instinct_and_pipeline(self, core: Any, sf_key: str) -> None:
+        """初始化 InstinctManager 和 ErrorRulePipeline，并注入 ToolCallHandler。"""
+        from instinct_manager import InstinctManager
         core.instinct_manager = InstinctManager(db=core.db, router=core.router)
         await core.instinct_manager.init()
         # Instinct 提取改用硅基流动免费模型
-        sf_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         if sf_key:
             core.instinct_manager.set_free_model_client(
                 api_key=sf_key,
@@ -306,7 +330,6 @@ class AgentCoreBootstrapper:
         try:
             from tool_engine.error_rule_pipeline import ErrorRulePipeline
             core.error_pipeline = ErrorRulePipeline(db=core.db, router=core.router)
-            # 规则提取改用硅基流动免费模型（不占用主模型配额）
             if sf_key:
                 core.error_pipeline.set_free_model_client(
                     api_key=sf_key,
@@ -320,17 +343,6 @@ class AgentCoreBootstrapper:
         except Exception as e:
             core.error_pipeline = None
             logger.warning("error_rule_pipeline.init_failed", error=str(e))
-
-        # 初始化后台任务管理器
-        core._bg_task_manager = BackgroundTaskManager(
-            db=core.db,
-            context=core.context,
-            memory=core.memory,
-            notebook_manager=core.notebook_manager,
-            portrait_manager=core.portrait_manager,
-            learning_manager=core.learning_manager,
-            instinct_manager=core.instinct_manager,
-        )
 
     # ── 子代理注册 ────────────────────────────────────────
 
@@ -421,16 +433,27 @@ class AgentCoreBootstrapper:
             for name, cfg in core._agent_route_configs.items()
             if cfg.get("route_description"))
 
-        async def delegate_task(agent: str, task: str):
+        async def delegate_task(agent: str, task: str,
+                                 mode: str = "single", verifier: str = "") -> Any:
+            """将任务委托给指定子代理完成并返回结果。
+
+            mode=generate_verify 时，verifier 指定的子代理会独立审查结果。
+            """
             from tool_engine.tool_executor import ToolResult
-            reply = await core.delegate_to_agent(agent.strip().lower(), task)
+            reply = await core.delegate_to_agent(
+                agent.strip().lower(), task, mode=mode, verifier=verifier)
             return ToolResult.ok(reply)
 
         register_tool_direct(
             name="delegate_task",
             description=(
-                "把任务委托给一位子代理独立完成并返回结果。可选子代理及各自擅长领域："
+                "把任务委托给一位子代理完成并返回结果。可选子代理及各自擅长领域："
                 f"{roster}。"
+                "【操作模式】mode=single（默认，直接执行）；"
+                "mode=generate_verify（生成+交叉验证，需指定 verifier，"
+                "适用于代码修改、安全分析等需要二次确认的任务）；"
+                "mode=pipe（顺序管道，agent 用逗号分隔多个，如 'xilian,nike'，"
+                "前一个的输出作为后一个的输入，适用于搜索→分析→综合等场景）。"
                 "【严格规则】以下情况绝对不要委托，必须自己回答："
                 "1. 日常闲聊、问候、寒暄（如'你好'、'在吗'、'今天怎么样'）；"
                 "2. 表情包、情感表达、陪伴对话；"
@@ -446,6 +469,14 @@ class AgentCoreBootstrapper:
                               "description": "子代理标识名，如 keli / yinlang / xilian / nike",
                               "enum": list(core._agent_route_configs.keys())},
                     "task": {"type": "string", "description": "委托的任务描述，包含必要上下文"},
+                    "mode": {"type": "string",
+                             "description": "操作模式：single(默认) / generate_verify(生成+验证) / pipe(顺序管道,agent用逗号分隔)",
+                             "enum": ["single", "generate_verify", "pipe"],
+                             "default": "single"},
+                    "verifier": {"type": "string",
+                                 "description": "验证子代理名（仅 mode=generate_verify 时使用）",
+                                 "enum": list(core._agent_route_configs.keys()),
+                                 "default": ""},
                 },
                 "required": ["agent", "task"],
             },

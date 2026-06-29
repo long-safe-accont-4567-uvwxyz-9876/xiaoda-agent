@@ -1,4 +1,5 @@
 # query_transform.py — 查询改写与扩展（使用硅基流动免费模型，不占用主模型配额）
+from typing import Any, Optional
 import os
 import httpx
 from loguru import logger
@@ -18,8 +19,8 @@ class QueryTransformer:
         "internlm/internlm3-8b-instruct",
     ]
 
-    def __init__(self, router=None, api_key: str = "", base_url: str = "",
-                 model: str = ""):
+    def __init__(self, router: Optional[Any]=None, api_key: str = "", base_url: str = "",
+                 model: str = "") -> None:
         self._router = router  # 保留兼容，但不再用于查询变换
         self._api_key = api_key or os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         self._base_url = base_url or "https://api.siliconflow.cn/v1"

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Any
 
 import json
 import os
@@ -39,7 +40,7 @@ def _read_version() -> str:
 
 
 @router.get("/system/status", response_model=Envelope[SystemStatus])
-async def get_status(request: Request):
+async def get_status(request: Request) -> Any:
     core = request.app.state.core
     from security.permission_manager import get_permission_manager
     try:
@@ -68,7 +69,7 @@ async def get_status(request: Request):
 async def get_audit(request: Request,
                     event_type: str = Query(default=""),
                     page: int = Query(default=0, ge=0),
-                    limit: int = Query(default=50, le=200)):
+                    limit: int = Query(default=50, le=200)) -> Any:
     core = request.app.state.core
     cond, params = "1=1", []
     if event_type:
@@ -81,14 +82,14 @@ async def get_audit(request: Request,
 
 
 @router.get("/system/metrics", response_model=Envelope[dict])
-async def get_metrics():
+async def get_metrics() -> Any:
     from utils.metrics import metrics
     return Envelope(data=metrics.get_snapshot())
 
 
 @router.get("/system/logs", response_model=Envelope[list[str]])
 async def get_logs(lines: int = Query(default=200, le=1000),
-                   level: str = Query(default="")):
+                   level: str = Query(default="")) -> Any:
     try:
         from config import LOG_DIR
     except ImportError:
@@ -159,7 +160,7 @@ async def get_logs(lines: int = Query(default=200, le=1000),
 
 
 @router.get("/system/lan-addresses", response_model=Envelope[dict])
-async def get_lan_addresses(request: Request):
+async def get_lan_addresses(request: Request) -> Any:
     """返回局域网访问地址，供同一 WiFi 下手机访问。"""
     import socket
     # 从请求中获取实际运行端口，而非环境变量
@@ -185,14 +186,14 @@ async def get_lan_addresses(request: Request):
 
 
 @router.get("/system/config", response_model=Envelope[dict])
-async def get_config():
+async def get_config() -> Any:
     """合并后的 webui 配置（不含密钥）。"""
     from web.config_service import get_config_service
     return Envelope(data=get_config_service()._data)
 
 
 @router.put("/system/config", response_model=Envelope[dict])
-async def put_config(body: dict, request: Request):
+async def put_config(body: dict, request: Request) -> Any:
     """改 webui 顶层配置项，path 形如 'ui.particles'。"""
     from web.config_service import get_config_service
     path = body.get("path", "")
@@ -208,7 +209,7 @@ async def put_config(body: dict, request: Request):
 
 
 @router.get("/system/permission-mode", response_model=Envelope[dict])
-async def get_permission_mode():
+async def get_permission_mode() -> Any:
     from security.permission_manager import get_permission_manager, PermissionMode
     return Envelope(data={
         "mode": get_permission_manager().mode.value,
@@ -217,7 +218,7 @@ async def get_permission_mode():
 
 
 @router.put("/system/permission-mode", response_model=Envelope[dict])
-async def set_permission_mode(body: dict, request: Request):
+async def set_permission_mode(body: dict, request: Request) -> Any:
     mode = (body.get("mode") or "").lower()
     confirm = body.get("confirm", "").lower()
     from security.permission_manager import get_permission_manager, PermissionMode
@@ -235,7 +236,7 @@ async def set_permission_mode(body: dict, request: Request):
 
 
 @router.post("/system/restart", response_model=Envelope[dict])
-async def restart_service(request: Request):
+async def restart_service(request: Request) -> Any:
     if request.headers.get("X-Confirm") != "yes":
         raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     core = request.app.state.core
@@ -244,7 +245,7 @@ async def restart_service(request: Request):
     import asyncio
     import sys
 
-    async def _exit():
+    async def _exit() -> None:
         await asyncio.sleep(1.0)
         logger.warning("webui.restart.exiting (systemd 将自动拉起)")
         sys.exit(0)

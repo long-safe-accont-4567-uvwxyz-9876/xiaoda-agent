@@ -7,16 +7,16 @@ from loguru import logger
 
 class KnowledgeDB:
 
-    def __init__(self, conn: aiosqlite.Connection):
+    def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn
         conn.row_factory = aiosqlite.Row
 
-    async def commit(self):
+    async def commit(self) -> None:
         await self._conn.commit()
 
     async def insert_knowledge_entity(self, entity_id: str, name: str,
                                        kind: str = "", observations: list | None = None,
-                                       auto_commit: bool = True):
+                                       auto_commit: bool = True) -> None:
         obs_json = json.dumps(observations or [], ensure_ascii=False)
         await self._conn.execute(
             """INSERT OR IGNORE INTO knowledge_entities (id, name, kind, observations, updated_at)
@@ -35,7 +35,7 @@ class KnowledgeDB:
 
     async def upsert_knowledge_entity(self, name: str, kind: str = "",
                                        observations: list | None = None,
-                                       auto_commit: bool = True):
+                                       auto_commit: bool = True) -> None:
         obs_json = json.dumps(observations or [], ensure_ascii=False)
         now = time.time()
         entity_id = f"ENT-{uuid.uuid4().hex[:12]}"
@@ -53,7 +53,7 @@ class KnowledgeDB:
 
     async def insert_knowledge_relation(self, relation_id: str, from_entity: str,
                                          relation_type: str, to_entity: str,
-                                         auto_commit: bool = True):
+                                         auto_commit: bool = True) -> None:
         await self._conn.execute(
             """INSERT OR REPLACE INTO knowledge_relations (id, from_entity, relation_type, to_entity, updated_at)
                VALUES (?, ?, ?, ?, ?)""",
@@ -150,7 +150,7 @@ class KnowledgeDB:
 
     async def update_knowledge_entity(self, name: str, kind: str = "",
                                        observations: list | None = None,
-                                       auto_commit: bool = True):
+                                       auto_commit: bool = True) -> None:
         """更新知识实体（公开方法，避免路由绕过封装）"""
         obs_json = json.dumps(observations or [], ensure_ascii=False)
         await self._conn.execute(
@@ -162,7 +162,7 @@ class KnowledgeDB:
 
     async def update_knowledge_relation(self, relation_id: str, from_entity: str = None,
                                          relation_type: str = None, to_entity: str = None,
-                                         auto_commit: bool = True):
+                                         auto_commit: bool = True) -> None:
         """更新知识关系（公开方法）"""
         sets = []
         params = []
@@ -187,7 +187,7 @@ class KnowledgeDB:
         if auto_commit:
             await self._conn.commit()
 
-    async def merge_entity(self, entity: dict, auto_commit: bool = True):
+    async def merge_entity(self, entity: dict, auto_commit: bool = True) -> None:
         name = entity.get("name", "")
         if not name:
             return
@@ -216,7 +216,7 @@ class KnowledgeDB:
             await self.insert_knowledge_entity(entity_id, name, kind, new_obs,
                                                 auto_commit=auto_commit)
 
-    async def merge_relation(self, relation: dict, auto_commit: bool = True):
+    async def merge_relation(self, relation: dict, auto_commit: bool = True) -> None:
         from_entity = relation.get("from_entity", relation.get("from", relation.get("source", "")))
         relation_type = relation.get("relation_type", relation.get("relation", relation.get("type", "")))
         to_entity = relation.get("to_entity", relation.get("to", relation.get("target", "")))

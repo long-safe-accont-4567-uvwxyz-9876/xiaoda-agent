@@ -1,3 +1,4 @@
+from typing import Any
 import subprocess
 import os
 import re
@@ -161,21 +162,21 @@ def _normalize_command(command: str) -> str:
         except Exception:
             break
     # hex 编码绕过：\xHH 格式
-    def _replace_hex(m):
+    def _replace_hex(m: Any) -> Any:
         try:
             return chr(int(m.group(1), 16))
         except ValueError:
             return m.group(0)
     normalized = re.sub(r'\\x([0-9a-fA-F]{2})', _replace_hex, normalized)
     # octal 编码绕过：\OOO 格式
-    def _replace_octal(m):
+    def _replace_octal(m: Any) -> Any:
         try:
             return chr(int(m.group(1), 8))
         except ValueError:
             return m.group(0)
     normalized = re.sub(r'\\([0-7]{3})', _replace_octal, normalized)
     # unicode 编码绕过：\uHHHH 格式
-    def _replace_unicode(m):
+    def _replace_unicode(m: Any) -> Any:
         try:
             return chr(int(m.group(1), 16))
         except ValueError:

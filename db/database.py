@@ -12,6 +12,7 @@ from .db_notebook import NotebookDB
 from .db_learning import LearningDB
 from .db_knowledge import KnowledgeDB
 from .db_analytics import AnalyticsDB
+from .index_manager import build_default_index_manager
 from .session_store import (
     SessionInfo,
     SessionSummaryEntry,
@@ -57,7 +58,7 @@ def _detect_fs_type(path: Path) -> str:
 
 class DatabaseManager:
 
-    def __init__(self, db_path: str | Path | None = None):
+    def __init__(self, db_path: str | Path | None = None) -> None:
         self.db_path = Path(db_path) if db_path else DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: aiosqlite.Connection | None = None
@@ -67,7 +68,7 @@ class DatabaseManager:
         self.knowledge: KnowledgeDB | None = None
         self.analytics: AnalyticsDB | None = None
 
-    async def init(self):
+    async def init(self) -> None:
         # 幂等性：如果已有活跃连接，先关闭旧连接再创建新连接
         if self._conn is not None:
             try:
@@ -112,22 +113,40 @@ class DatabaseManager:
             logger.warning(f"验证 journal_mode 失败: {e}")
         self.memory = MemoryDB(self._conn)
         await self._create_tables()
+        # Phase 6: 创建复合索引 (P2 性能优化)
+        # 必须在 _create_tables 之后, 因为复合索引依赖迁移后的列 (如 confidence/session_id)
+        await self._apply_composite_indexes()
         self.notebook = NotebookDB(self._conn)
         self.learning = LearningDB(self._conn)
         self.knowledge = KnowledgeDB(self._conn)
         self.analytics = AnalyticsDB(self._conn)
         logger.info("database.ready", path=str(self.db_path))
 
-    async def commit(self):
+    async def _apply_composite_indexes(self) -> None:
+        """创建内置复合索引 (幂等)
+
+        与 _create_indexes (单列索引) 互补, 专注于 WHERE 多列组合的复合索引。
+        使用 IndexManager.apply() 内部以 CREATE INDEX IF NOT EXISTS 保证幂等。
+        """
+        try:
+            mgr = build_default_index_manager()
+            count = await mgr.apply(self._conn)
+            logger.info(f"database.composite_indexes applied={count}")
+        except Exception as e:
+            # 复合索引失败不应阻塞数据库初始化
+            logger.warning(f"database.composite_indexes_failed: {e}")
+
+    async def commit(self) -> None:
         if self._conn:
             await self._conn.commit()
 
-    async def close(self):
+    async def close(self) -> None:
         if self._conn:
             await self._conn.close()
             self._conn = None
 
-    async def _run_migrations(self):
+    async def _run_migrations(self) -> None:
+        """按 version 顺序执行所有数据库迁移。每个迁移独立事务，失败时 ROLLBACK。"""
         await self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS schema_version (
                 version INTEGER PRIMARY KEY,
@@ -137,247 +156,202 @@ class DatabaseManager:
         row = await self._conn.execute_fetchall("SELECT MAX(version) FROM schema_version")
         current = row[0][0] if row and row[0][0] is not None else 0
 
-        if current < 1:
-            try:
-                await self._conn.execute("BEGIN TRANSACTION")
-                await self._conn.executescript("""
-                    ALTER TABLE knowledge_relations ADD COLUMN valid_from REAL DEFAULT 0;
-                    ALTER TABLE knowledge_relations ADD COLUMN valid_to REAL DEFAULT 0;
-                    ALTER TABLE knowledge_relations ADD COLUMN confidence REAL DEFAULT 1.0;
-                """)
-                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (1, ?)", (time.time(),))
-                await self._conn.commit()
-                logger.info("database.migration_v1", desc="temporal_knowledge_graph")
-            except Exception as e:
-                await self._conn.execute("ROLLBACK")
-                logger.error(f"数据库迁移 v1 失败: {e}")
-
-        if current < 2:
-            try:
-                await self._conn.execute("BEGIN TRANSACTION")
-                await self._conn.execute(
-                    "ALTER TABLE conversation_logs ADD COLUMN session_id TEXT DEFAULT ''")
-                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (2, ?)", (time.time(),))
-                await self._conn.commit()
-                logger.info("database.migration_v2", desc="conversation_logs.session_id")
-            except Exception as e:
-                await self._conn.execute("ROLLBACK")
-                logger.error(f"数据库迁移 v2 失败: {e}")
-
-        if current < 3:
-            try:
-                await self._conn.execute("BEGIN TRANSACTION")
-                # 创建 FTS5 虚拟表
-                await self._conn.executescript("""
-                    CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5(
-                        id UNINDEXED,
-                        summary_index
-                    );
-                """)
-                # 回填已有记忆数据到 FTS 索引
-                rows = await self._conn.execute_fetchall("SELECT id, summary FROM episodic_memories")
-                for row in rows:
-                    from memory.memory_manager import _tokenize_for_fts
-                    tokenized = _tokenize_for_fts(row[1])
-                    if tokenized.strip():
-                        await self._conn.execute(
-                            "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
-                            (row[0], tokenized),
-                        )
-                # 创建审计表
-                await self._conn.executescript("""
-                    CREATE TABLE IF NOT EXISTS consolidation_candidates (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        timestamp REAL NOT NULL,
-                        source TEXT NOT NULL DEFAULT 'rule',
-                        kind TEXT NOT NULL DEFAULT 'fact',
-                        summary TEXT NOT NULL,
-                        confidence REAL DEFAULT 0.5,
-                        importance REAL DEFAULT 0.5,
-                        status TEXT NOT NULL DEFAULT 'pending',
-                        target_memory_id INTEGER DEFAULT -1,
-                        metadata_json TEXT DEFAULT '{}',
-                        created_at REAL NOT NULL
-                    );
-                """)
-                logger.info("database.migration_v3_backfill", rows=len(rows))
-                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (3, ?)", (time.time(),))
-                await self._conn.commit()
-                logger.info("database.migration_v3", desc="fts5_index+consolidation_candidates")
-            except Exception as e:
-                await self._conn.execute("ROLLBACK")
-                logger.error(f"数据库迁移 v3 失败: {e}")
-
-        if current < 4:
-            try:
-                await self._conn.execute("BEGIN TRANSACTION")
-                await self.memory.migrate_add_source_column()
-                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (4, ?)", (time.time(),))
-                await self._conn.commit()
-                logger.info("database.migration_v4", desc="episodic_memories.source")
-            except Exception as e:
-                await self._conn.execute("ROLLBACK")
-                logger.error(f"数据库迁移 v4 失败: {e}")
-
-        if current < 5:
-            try:
-                await self._conn.execute("BEGIN TRANSACTION")
-                # 回填现有 knowledge_entities 数据到 FTS 索引
-                cursor = await self._conn.execute("SELECT id, name FROM knowledge_entities")
-                rows = await cursor.fetchall()
-                from memory.memory_manager import _tokenize_for_fts
-                for row in rows:
-                    name_tokenized = _tokenize_for_fts(row["name"]) if row["name"] else ""
-                    await self._conn.execute(
-                        "INSERT OR IGNORE INTO knowledge_entities_fts(id, name_index) VALUES (?, ?)",
-                        (row["id"], name_tokenized),
-                    )
-                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (5, ?)", (time.time(),))
-                await self._conn.commit()
-                logger.info("database.migration_v5", desc="knowledge_entities_fts_backfill", rows=len(rows))
-            except Exception as e:
-                await self._conn.execute("ROLLBACK")
-                logger.error(f"数据库迁移 v5 失败: {e}")
-
-        if current < 6:
-            try:
-                await self._conn.execute("BEGIN TRANSACTION")
-                cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
-                if "access_count" not in cols:
-                    await self._conn.execute(
-                        "ALTER TABLE episodic_memories ADD COLUMN access_count INTEGER DEFAULT 0"
-                    )
-                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (6, ?)", (time.time(),))
-                await self._conn.commit()
-                logger.info("database.migration_v6", desc="episodic_memories.access_count")
-            except Exception as e:
-                await self._conn.execute("ROLLBACK")
-                logger.error(f"数据库迁移 v6 失败: {e}")
-
-        if current < 7:
-            try:
-                await self._conn.execute("BEGIN TRANSACTION")
-                # 修复旧版 episodic_memories 表缺少 session_id 和 embedding_id 列的问题
-                # 这些列在后续版本的 CREATE TABLE 中已加入，但遗漏了对应的 ALTER TABLE 迁移
-                # 新安装时 CREATE TABLE 已包含这些列，需先检查再添加
-                cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
-                if "session_id" not in cols:
-                    await self._conn.execute(
-                        "ALTER TABLE episodic_memories ADD COLUMN session_id TEXT DEFAULT 'user'"
-                    )
-                if "embedding_id" not in cols:
-                    await self._conn.execute(
-                        "ALTER TABLE episodic_memories ADD COLUMN embedding_id INTEGER DEFAULT -1"
-                    )
-                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (7, ?)", (time.time(),))
-                await self._conn.commit()
-                logger.info("database.migration_v7", desc="episodic_memories.session_id+embedding_id")
-            except Exception as e:
-                await self._conn.execute("ROLLBACK")
-                logger.error(f"数据库迁移 v7 失败: {e}")
-
-        if current < 8:
-            try:
-                await self._conn.execute("BEGIN TRANSACTION")
-                cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
-                if "rag_status" not in cols:
-                    await self._conn.execute(
-                        "ALTER TABLE episodic_memories ADD COLUMN rag_status TEXT DEFAULT 'pending'"
-                    )
-                if "rag_synced_at" not in cols:
-                    await self._conn.execute(
-                        "ALTER TABLE episodic_memories ADD COLUMN rag_synced_at REAL DEFAULT 0"
-                    )
-                if "doc_id" not in cols:
-                    await self._conn.execute(
-                        "ALTER TABLE episodic_memories ADD COLUMN doc_id TEXT DEFAULT ''"
-                    )
-                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (8, ?)", (time.time(),))
-                await self._conn.commit()
-                logger.info("database.migration_v8", desc="episodic_memories.rag_status+rag_synced_at+doc_id")
-            except Exception as e:
-                await self._conn.execute("ROLLBACK")
-                logger.error(f"数据库迁移 v8 失败: {e}")
-
-        if current < 9:
-            try:
-                await self._conn.execute("BEGIN TRANSACTION")
-                # P3 记忆蒸馏：新增 memory_summaries 表
-                await self._conn.execute("""
-                    CREATE TABLE IF NOT EXISTS memory_summaries (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        summary_text TEXT NOT NULL,
-                        created_at REAL NOT NULL,
-                        memory_count INTEGER DEFAULT 0
-                    )
-                """)
-                # episodic_memories 新增 distilled 列（已存在则忽略）
-                cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
-                if "distilled" not in cols:
-                    await self._conn.execute(
-                        "ALTER TABLE episodic_memories ADD COLUMN distilled INTEGER DEFAULT 0"
-                    )
-                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (9, ?)", (time.time(),))
-                await self._conn.commit()
-                logger.info("database.migration_v9", desc="memory_summaries+episodic_memories.distilled")
-            except Exception as e:
-                await self._conn.execute("ROLLBACK")
-                logger.error(f"数据库迁移 v9 失败: {e}")
-
-        if current < 10:
-            try:
-                await self._conn.execute("BEGIN TRANSACTION")
-                # 记忆结构化提取：实体、事件类型、元数据（由后台 LLM 提取填充）
-                cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
-                if "entities" not in cols:
-                    await self._conn.execute(
-                        "ALTER TABLE episodic_memories ADD COLUMN entities TEXT DEFAULT ''"
-                    )
-                if "event_type" not in cols:
-                    await self._conn.execute(
-                        "ALTER TABLE episodic_memories ADD COLUMN event_type TEXT DEFAULT ''"
-                    )
-                if "metadata_json" not in cols:
-                    await self._conn.execute(
-                        "ALTER TABLE episodic_memories ADD COLUMN metadata_json TEXT DEFAULT '{}'"
-                    )
-                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (10, ?)", (time.time(),))
-                await self._conn.commit()
-                logger.info("database.migration_v10", desc="episodic_memories.entities+event_type+metadata_json")
-            except Exception as e:
-                await self._conn.execute("ROLLBACK")
-                logger.error(f"数据库迁移 v10 失败: {e}")
-
-        if current < 11:
-            try:
-                await self._conn.execute("BEGIN TRANSACTION")
-                # 主动检索 B：定时回忆笔记表
-                # 与 memory_summaries（蒸馏压缩，控制上下文长度）语义不同：
-                # memory_recall_notes 是按时间窗口 + 重要性筛选后整理出的"回忆笔记"，
-                # 用于主动检索时给 LLM 提供"最近发生了什么"的高密度上下文。
-                await self._conn.execute("""
-                    CREATE TABLE IF NOT EXISTS memory_recall_notes (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        created_at REAL NOT NULL,
-                        window_start REAL NOT NULL,
-                        window_end REAL NOT NULL,
-                        min_importance REAL DEFAULT 0.6,
-                        source_memory_ids TEXT DEFAULT '',
-                        memory_count INTEGER DEFAULT 0,
-                        title TEXT DEFAULT '',
-                        summary TEXT NOT NULL,
-                        tags TEXT DEFAULT ''
-                    )
-                """)
-                await self._conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (11, ?)", (time.time(),))
-                await self._conn.commit()
-                logger.info("database.migration_v11", desc="memory_recall_notes")
-            except Exception as e:
-                await self._conn.execute("ROLLBACK")
-                logger.error(f"数据库迁移 v11 失败: {e}")
-
+        # (version, description, migrate_fn) 三元组列表
+        migrations = [
+            (1, "temporal_knowledge_graph", self._migrate_v1),
+            (2, "conversation_logs.session_id", self._migrate_v2),
+            (3, "fts5_index+consolidation_candidates", self._migrate_v3),
+            (4, "episodic_memories.source", self._migrate_v4),
+            (5, "knowledge_entities_fts_backfill", self._migrate_v5),
+            (6, "episodic_memories.access_count", self._migrate_v6),
+            (7, "episodic_memories.session_id+embedding_id", self._migrate_v7),
+            (8, "episodic_memories.rag_status+rag_synced_at+doc_id", self._migrate_v8),
+            (9, "memory_summaries+episodic_memories.distilled", self._migrate_v9),
+            (10, "episodic_memories.entities+event_type+metadata_json", self._migrate_v10),
+            (11, "memory_recall_notes", self._migrate_v11),
+        ]
+        for version, desc, migrate_fn in migrations:
+            if current < version:
+                await self._apply_migration(version, desc, migrate_fn)
         await self._conn.commit()
 
+    async def _apply_migration(self, version: int, description: str, migrate_fn: Any) -> None:
+        """执行单个迁移：BEGIN TRANSACTION → migrate_fn → INSERT schema_version → commit。
+
+        失败时 ROLLBACK 并记录错误日志，不影响后续迁移。
+        """
+        try:
+            await self._conn.execute("BEGIN TRANSACTION")
+            await migrate_fn()
+            await self._conn.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+                (version, time.time()),
+            )
+            await self._conn.commit()
+            logger.info(f"database.migration_v{version}", desc=description)
+        except Exception as e:
+            await self._conn.execute("ROLLBACK")
+            logger.error(f"数据库迁移 v{version} 失败: {e}")
+
+    async def _migrate_v1(self) -> None:
+        """v1: knowledge_relations 新增时间字段（valid_from/valid_to/confidence）。"""
+        await self._conn.executescript("""
+            ALTER TABLE knowledge_relations ADD COLUMN valid_from REAL DEFAULT 0;
+            ALTER TABLE knowledge_relations ADD COLUMN valid_to REAL DEFAULT 0;
+            ALTER TABLE knowledge_relations ADD COLUMN confidence REAL DEFAULT 1.0;
+        """)
+
+    async def _migrate_v2(self) -> None:
+        """v2: conversation_logs 新增 session_id 列。"""
+        await self._conn.execute(
+            "ALTER TABLE conversation_logs ADD COLUMN session_id TEXT DEFAULT ''")
+
+    async def _migrate_v3(self) -> None:
+        """v3: 创建 FTS5 虚拟表 + 回填已有记忆到 FTS 索引 + 创建审计表。"""
+        # 创建 FTS5 虚拟表
+        await self._conn.executescript("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5(
+                id UNINDEXED,
+                summary_index
+            );
+        """)
+        # 回填已有记忆数据到 FTS 索引
+        rows = await self._conn.execute_fetchall("SELECT id, summary FROM episodic_memories")
+        for row in rows:
+            from db.fts_utils import _tokenize_for_fts
+            tokenized = _tokenize_for_fts(row[1])
+            if tokenized.strip():
+                await self._conn.execute(
+                    "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
+                    (row[0], tokenized),
+                )
+        # 创建审计表
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS consolidation_candidates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                source TEXT NOT NULL DEFAULT 'rule',
+                kind TEXT NOT NULL DEFAULT 'fact',
+                summary TEXT NOT NULL,
+                confidence REAL DEFAULT 0.5,
+                importance REAL DEFAULT 0.5,
+                status TEXT NOT NULL DEFAULT 'pending',
+                target_memory_id INTEGER DEFAULT -1,
+                metadata_json TEXT DEFAULT '{}',
+                created_at REAL NOT NULL
+            );
+        """)
+        logger.info("database.migration_v3_backfill", rows=len(rows))
+
+    async def _migrate_v4(self) -> None:
+        """v4: episodic_memories 新增 source 列。"""
+        await self.memory.migrate_add_source_column()
+
+    async def _migrate_v5(self) -> None:
+        """v5: 回填 knowledge_entities 数据到 FTS 索引。"""
+        cursor = await self._conn.execute("SELECT id, name FROM knowledge_entities")
+        rows = await cursor.fetchall()
+        from db.fts_utils import _tokenize_for_fts
+        for row in rows:
+            name_tokenized = _tokenize_for_fts(row["name"]) if row["name"] else ""
+            await self._conn.execute(
+                "INSERT OR IGNORE INTO knowledge_entities_fts(id, name_index) VALUES (?, ?)",
+                (row["id"], name_tokenized),
+            )
+        logger.info("database.migration_v5", desc="knowledge_entities_fts_backfill", rows=len(rows))
+
+    async def _migrate_v6(self) -> None:
+        """v6: episodic_memories 新增 access_count 列。"""
+        cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
+        if "access_count" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN access_count INTEGER DEFAULT 0"
+            )
+
+    async def _migrate_v7(self) -> None:
+        """v7: 修复旧版 episodic_memories 缺少 session_id 和 embedding_id 列。
+
+        新安装时 CREATE TABLE 已包含这些列，需先检查再添加。
+        """
+        cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
+        if "session_id" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN session_id TEXT DEFAULT 'user'"
+            )
+        if "embedding_id" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN embedding_id INTEGER DEFAULT -1"
+            )
+
+    async def _migrate_v8(self) -> None:
+        """v8: episodic_memories 新增 RAG 同步相关列（rag_status/rag_synced_at/doc_id）。"""
+        cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
+        if "rag_status" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN rag_status TEXT DEFAULT 'pending'"
+            )
+        if "rag_synced_at" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN rag_synced_at REAL DEFAULT 0"
+            )
+        if "doc_id" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN doc_id TEXT DEFAULT ''"
+            )
+
+    async def _migrate_v9(self) -> None:
+        """v9: P3 记忆蒸馏：新增 memory_summaries 表 + episodic_memories.distilled 列。"""
+        await self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory_summaries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                summary_text TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                memory_count INTEGER DEFAULT 0
+            )
+        """)
+        cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
+        if "distilled" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN distilled INTEGER DEFAULT 0"
+            )
+
+    async def _migrate_v10(self) -> None:
+        """v10: 记忆结构化提取：新增 entities/event_type/metadata_json 列。"""
+        cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
+        if "entities" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN entities TEXT DEFAULT ''"
+            )
+        if "event_type" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN event_type TEXT DEFAULT ''"
+            )
+        if "metadata_json" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN metadata_json TEXT DEFAULT '{}'"
+            )
+
+    async def _migrate_v11(self) -> None:
+        """v11: 主动检索 B：定时回忆笔记表。
+
+        与 memory_summaries（蒸馏压缩，控制上下文长度）语义不同：
+        memory_recall_notes 是按时间窗口 + 重要性筛选后整理出的"回忆笔记"，
+        用于主动检索时给 LLM 提供"最近发生了什么"的高密度上下文。
+        """
+        await self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory_recall_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at REAL NOT NULL,
+                window_start REAL NOT NULL,
+                window_end REAL NOT NULL,
+                min_importance REAL DEFAULT 0.6,
+                source_memory_ids TEXT DEFAULT '',
+                memory_count INTEGER DEFAULT 0,
+                title TEXT DEFAULT '',
+                summary TEXT NOT NULL,
+                tags TEXT DEFAULT ''
+            )
+        """)
     async def fetch_all(self, sql: str, params: tuple = ()) -> list[dict]:
         """通用只读查询，供 Web UI 等外部层使用。返回 dict 列表。"""
         if not self._conn:
@@ -399,9 +373,35 @@ class DatabaseManager:
             return cur.lastrowid or 0
         return cur.rowcount
 
-    async def _create_tables(self):
+    async def _create_tables(self) -> None:
+        """创建所有表、运行迁移、创建索引、初始化清理策略与 FTS5 触发器。"""
         # ── Phase 1: 建表（仅 DDL，不含依赖新列的索引）─────────
+        await self._create_tables_ddl()
+        # ── Phase 2: 迁移（在建表之后、索引创建之前执行）────────
+        # 重要：迁移必须在这里执行，因为旧数据库可能缺少 session_id 等列，
+        # 而后续的索引创建依赖这些列存在。
+        # 如果把 _run_migrations 放在 executescript 末尾，索引创建会先于迁移执行，
+        # 导致 "no such column: session_id" 错误，且迁移永远无法到达。
+        await self._run_migrations()
+        # ── Phase 3: 创建索引（含依赖迁移列的索引）──────────────────
+        await self._create_indexes()
+        # ── Phase 4: 插入默认清理策略（仅当表为空时）──────────────
+        await self._seed_cleanup_config()
+        # ── Phase 5: FTS5 触发器管理（vfat 上禁用）──────────────
+        await self._setup_fts5_triggers()
+        await self._conn.commit()
+
+    async def _create_tables_ddl(self) -> None:
+        """Phase 1: 建表 DDL。按领域分组调用，便于维护。"""
+        await self._ddl_memory_tables()
+        await self._ddl_schedule_api_tables()
+        await self._ddl_knowledge_tables()
+        await self._ddl_learning_error_tables()
+
+    async def _ddl_memory_tables(self) -> None:
+        """建表：对话/记忆/笔记相关表。"""
         await self._conn.executescript("""
+
             CREATE TABLE IF NOT EXISTS conversation_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL NOT NULL,
@@ -460,11 +460,6 @@ class DatabaseManager:
                 tags TEXT DEFAULT ''
             );
 
-            CREATE TABLE IF NOT EXISTS cron_last_run (
-                task_name TEXT PRIMARY KEY,
-                last_run REAL NOT NULL
-            );
-
             CREATE TABLE IF NOT EXISTS user_portrait (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 content TEXT NOT NULL,
@@ -492,6 +487,16 @@ class DatabaseManager:
                 message_type TEXT NOT NULL,
                 content TEXT NOT NULL,
                 sent_at REAL NOT NULL
+            );        """)
+
+    async def _ddl_schedule_api_tables(self) -> None:
+        """建表：调度/API/会话相关表。"""
+        await self._conn.executescript("""
+
+
+            CREATE TABLE IF NOT EXISTS cron_last_run (
+                task_name TEXT PRIMARY KEY,
+                last_run REAL NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS api_usage (
@@ -574,7 +579,12 @@ class DatabaseManager:
                 session_id TEXT DEFAULT '',
                 detail TEXT DEFAULT '',
                 created_at REAL NOT NULL
-            );
+            );        """)
+
+    async def _ddl_knowledge_tables(self) -> None:
+        """建表：知识图谱/FTS5 相关表。"""
+        await self._conn.executescript("""
+
 
             CREATE TABLE IF NOT EXISTS knowledge_entities (
                 id TEXT PRIMARY KEY,
@@ -592,16 +602,6 @@ class DatabaseManager:
                 updated_at REAL NOT NULL
             );
 
-            CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5(
-                id UNINDEXED,
-                summary_index
-            );
-
-            CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_entities_fts USING fts5(
-                id UNINDEXED,
-                name_index
-            );
-
             CREATE TABLE IF NOT EXISTS consolidation_candidates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL NOT NULL,
@@ -614,7 +614,12 @@ class DatabaseManager:
                 target_memory_id INTEGER DEFAULT -1,
                 metadata_json TEXT DEFAULT '{}',
                 created_at REAL NOT NULL
-            );
+            );        """)
+
+    async def _ddl_learning_error_tables(self) -> None:
+        """建表：学习/错误/清理相关表。"""
+        await self._conn.executescript("""
+
 
             CREATE TABLE IF NOT EXISTS learnings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -681,8 +686,6 @@ class DatabaseManager:
                 date_column TEXT NOT NULL DEFAULT 'timestamp',
                 enabled INTEGER DEFAULT 1
             );
-
-            -- P5: 失败经验→规则闭环
             CREATE TABLE IF NOT EXISTS tool_error_rules (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tool_name TEXT NOT NULL,
@@ -690,17 +693,10 @@ class DatabaseManager:
                 rule_text TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 hit_count INTEGER DEFAULT 0
-            );
-        """)
+            );        """)
 
-        # ── Phase 2: 迁移（在建表之后、索引创建之前执行）────────
-        # 重要：迁移必须在这里执行，因为旧数据库可能缺少 session_id 等列，
-        # 而后续的索引创建依赖这些列存在。
-        # 如果把 _run_migrations 放在 executescript 末尾，索引创建会先于迁移执行，
-        # 导致 "no such column: session_id" 错误，且迁移永远无法到达。
-        await self._run_migrations()
-
-        # ── Phase 3: 创建索引（含依赖迁移列的索引）──────────────────
+    async def _create_indexes(self) -> None:
+        """Phase 3: 创建所有索引（含依赖迁移列的索引）。"""
         await self._conn.executescript("""
             CREATE INDEX IF NOT EXISTS idx_conv_ts ON conversation_logs(timestamp);
             CREATE INDEX IF NOT EXISTS idx_mem_ts ON episodic_memories(timestamp);
@@ -737,7 +733,8 @@ class DatabaseManager:
             CREATE INDEX IF NOT EXISTS idx_tool_error_rules_tool ON tool_error_rules(tool_name);
         """)
 
-        # 插入默认清理策略（仅当表为空时）
+    async def _seed_cleanup_config(self) -> None:
+        """Phase 4: 插入默认清理策略（仅当 cleanup_config 表为空时）。"""
         try:
             cursor = await self._conn.execute("SELECT COUNT(*) FROM cleanup_config")
             row = await cursor.fetchone()
@@ -753,7 +750,8 @@ class DatabaseManager:
         except Exception as e:
             logger.warning(f"插入默认清理策略失败: {e}")
 
-        # FTS5 触发器管理：vfat 上 FTS5 "delete" 命令不工作，必须禁用触发器
+    async def _setup_fts5_triggers(self) -> None:
+        """Phase 5: FTS5 触发器管理。vfat/exfat 上禁用（delete 命令不工作）。"""
         if getattr(self, "_is_fat_fs", False):
             # 删除可能存在的触发器（防止之前版本创建的触发器残留）
             for trig in ["knowledge_entities_fts_ai", "knowledge_entities_fts_ad", "knowledge_entities_fts_au"]:
@@ -762,33 +760,30 @@ class DatabaseManager:
                 except Exception:
                     pass
             logger.info("database.fts5_triggers_disabled (vfat)")
-        else:
-            # 非 fat 文件系统：创建 FTS5 触发器
-            try:
-                await self._conn.executescript("""
-                    CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ai AFTER INSERT ON knowledge_entities BEGIN
-                        INSERT INTO knowledge_entities_fts(id, name_index) VALUES (new.id, new.name);
-                    END;
-                    CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ad AFTER DELETE ON knowledge_entities BEGIN
-                        INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index)
-                        VALUES ('delete', old.id, old.name);
-                    END;
-                    CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_au AFTER UPDATE ON knowledge_entities BEGIN
-                        INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index)
-                        VALUES ('delete', old.id, old.name);
-                        INSERT INTO knowledge_entities_fts(id, name_index) VALUES (new.id, new.name);
-                    END;
-                """)
-            except Exception as e:
-                logger.warning(f"database.fts5_trigger_failed: {e} — FTS搜索将降级为LIKE查询")
-
-        await self._conn.commit()
-
+            return
+        # 非 fat 文件系统：创建 FTS5 触发器
+        try:
+            await self._conn.executescript("""
+                CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ai AFTER INSERT ON knowledge_entities BEGIN
+                    INSERT INTO knowledge_entities_fts(id, name_index) VALUES (new.id, new.name);
+                END;
+                CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ad AFTER DELETE ON knowledge_entities BEGIN
+                    INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index)
+                    VALUES ('delete', old.id, old.name);
+                END;
+                CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_au AFTER UPDATE ON knowledge_entities BEGIN
+                    INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index)
+                    VALUES ('delete', old.id, old.name);
+                    INSERT INTO knowledge_entities_fts(id, name_index) VALUES (new.id, new.name);
+                END;
+            """)
+        except Exception as e:
+            logger.warning(f"database.fts5_trigger_failed: {e} — FTS搜索将降级为LIKE查询")
     async def insert_conversation_log(self, user_id: str, source: str,
                                        user_message: str, assistant_reply: str,
                                        emotion_label: str = "", model_used: str = "",
                                        session_id: str = "",
-                                       auto_commit: bool = True):
+                                       auto_commit: bool = True) -> None:
         await self._conn.execute(
             """INSERT INTO conversation_logs
                (timestamp, user_id, source, user_message, assistant_reply, emotion_label, model_used, session_id)
@@ -799,7 +794,7 @@ class DatabaseManager:
             await self._conn.commit()
 
     async def insert_audit_log(self, event_type: str, user_id: str = "", detail: str = "",
-                                auto_commit: bool = True):
+                                auto_commit: bool = True) -> None:
         await self._conn.execute(
             """INSERT INTO audit_logs (timestamp, event_type, user_id, detail)
                VALUES (?, ?, ?, ?)""",
@@ -835,7 +830,7 @@ class DatabaseManager:
 
     async def update_session(self, session_id: str, cost_usd: float = 0,
                               cache_hit: int = 0, cache_miss: int = 0,
-                              auto_commit: bool = True):
+                              auto_commit: bool = True) -> None:
         now = time.time()
         await self._conn.execute(
             """UPDATE sessions
@@ -851,7 +846,7 @@ class DatabaseManager:
             await self._conn.commit()
 
     async def archive_session(self, session_id: str, summary: str = "",
-                               auto_commit: bool = True):
+                               auto_commit: bool = True) -> None:
         now = time.time()
         await self._conn.execute(
             """UPDATE sessions
@@ -911,7 +906,7 @@ class DatabaseManager:
         return row["last_run"] if row else None
 
     async def set_cron_last_run(self, task_name: str, ts: float | None = None,
-                                 auto_commit: bool = True):
+                                 auto_commit: bool = True) -> None:
         ts = ts or time.time()
         await self._conn.execute(
             """INSERT OR REPLACE INTO cron_last_run (task_name, last_run) VALUES (?, ?)""",
@@ -924,7 +919,7 @@ class DatabaseManager:
                                 user_message: str, assistant_reply: str,
                                 emotion_label: str = "", model_used: str = "",
                                 session_id: str = "", cost_usd: float = 0,
-                                cache_hit: int = 0, cache_miss: int = 0):
+                                cache_hit: int = 0, cache_miss: int = 0) -> None:
         await self.insert_conversation_log(
             user_id=user_id, source=source,
             user_message=user_message, assistant_reply=assistant_reply,

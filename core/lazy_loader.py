@@ -2,6 +2,7 @@
 
 冷启动优化: 启动时只初始化核心组件, 非核心组件按需加载。
 """
+from typing import Any
 import importlib
 from loguru import logger
 
@@ -9,18 +10,18 @@ from loguru import logger
 class LazyLoader:
     """懒加载包装器 — 首次访问时才真正 import 和初始化"""
 
-    def __init__(self, import_path: str, init_args: dict | None = None):
+    def __init__(self, import_path: str, init_args: dict | None = None) -> None:
         self._path = import_path
         self._args = init_args or {}
         self._instance = None
         self._loaded = False
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: Any) -> Any:
         if self._instance is None:
             self._load()
         return getattr(self._instance, name)
 
-    def _load(self):
+    def _load(self) -> None:
         """实际加载"""
         if self._loaded:
             return
@@ -33,14 +34,15 @@ class LazyLoader:
 
     @property
     def is_loaded(self) -> bool:
+        """返回目标模块是否已完成首次加载."""
         return self._loaded
 
-    def preload(self):
+    def preload(self) -> None:
         """预加载"""
         if not self._loaded:
             self._load()
 
 
-def lazy_import(import_path: str):
+def lazy_import(import_path: str) -> Any:
     """惰性导入模块 — 返回一个代理,首次访问时才真正 import"""
     return LazyLoader(import_path)

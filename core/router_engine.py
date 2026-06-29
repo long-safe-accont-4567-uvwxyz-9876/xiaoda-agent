@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from loguru import logger
 
@@ -72,7 +72,7 @@ KEYWORD_PATTERNS = [
 class RouterEngine:
     """统一路由引擎，合并 @mention / 关键词 / 默认三入口。"""
 
-    def __init__(self, belief_router=None):
+    def __init__(self, belief_router: Any | None=None) -> None:
         """
         Args:
             belief_router: 可选的 BeliefRouter 实例（Thompson Sampling），

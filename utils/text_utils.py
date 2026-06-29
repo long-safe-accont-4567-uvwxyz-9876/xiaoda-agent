@@ -82,6 +82,15 @@ DOUBAO_PATTERNS = [
 
 
 def humanize(text: str, style: str = "nahida") -> str:
+    """清洗 AI 腔文本, 移除套话/客套/列表编号等机器味痕迹.
+
+    Args:
+        text: 原始文本
+        style: 风格名 (保留参数, 当前未使用), 默认 nahida
+
+    Returns:
+        清洗后的自然文本
+    """
     for pattern, replacement in AI_PATTERNS:
         text = re.sub(pattern, replacement, text, flags=re.MULTILINE)
 
@@ -148,6 +157,14 @@ TOOL_CALL_PATTERN = re.compile(
 
 
 def strip_dsml(text: str) -> str:
+    """移除文本中的 DSML/工具调用/推理标签等机器泄露内容.
+
+    Args:
+        text: 原始文本
+
+    Returns:
+        清理后的纯文本
+    """
     text = DSML_PATTERN.sub('', text)
     text = DSML_INVOKE_PATTERN.sub('', text)
     text = DSML_LEFTOVER.sub('', text)
@@ -232,10 +249,20 @@ def strip_reasoning(text: str) -> str:
 
 
 def has_dsml_tool_calls(text: str) -> bool:
+    """判断文本中是否包含 DSML/工具调用标签."""
     return bool(DSML_INVOKE_PATTERN.search(text)) or bool(TOOL_CALL_PATTERN.search(text))
 
 
 def parse_dsml_tool_calls(text: str, allowed_tools: set | None = None) -> list[dict]:
+    """从文本中解析 DSML 工具调用块为结构化列表.
+
+    Args:
+        text: 原始文本
+        allowed_tools: 允许的工具名集合, None 表示全部允许
+
+    Returns:
+        工具调用字典列表 (含 name/arguments)
+    """
     import json
     results = []
     invoke_blocks = list(DSML_INVOKE_PATTERN.finditer(text))
@@ -294,6 +321,15 @@ def _find_char_boundary(text: str, byte_limit: int) -> int:
 
 
 def smart_truncate(text: str, max_len: int = 2000) -> str:
+    """按字节上限智能截断文本, 优先在句末/换行处切分.
+
+    Args:
+        text: 原始文本
+        max_len: 保留参数, 实际使用 QQ_MSG_BYTE_LIMIT
+
+    Returns:
+        截断后的文本
+    """
     encoded = text.encode('utf-8')
     if len(encoded) <= QQ_MSG_BYTE_LIMIT:
         return text
@@ -338,6 +374,15 @@ _SEGMENT_CONTINUATIONS = [
 
 
 def split_long_reply(text: str, max_len: int = 2000) -> list[str]:
+    """将超长文本按字节上限拆分为多段, 每段附加续接提示.
+
+    Args:
+        text: 原始文本
+        max_len: 保留参数, 实际使用 QQ_MSG_BYTE_LIMIT
+
+    Returns:
+        拆分后的文本段列表
+    """
     encoded = text.encode('utf-8')
     if len(encoded) <= QQ_MSG_BYTE_LIMIT:
         return [text]

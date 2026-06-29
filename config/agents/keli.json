@@ -33,5 +33,14 @@
   "memory_scope": null,
   "background": false,
   "wallpaper": "/media/wallpapers/keli.png?v=1782344046",
+  "allowed_paths": [
+    "assets/stickers/klee/*",
+    "config/agents/klee_personality.md"
+  ],
+  "forbidden_paths": [
+    "*.env",
+    ".env.*",
+    "config/agents/*_personality.md"
+  ],
   "_saved_at": 1782406860.477056
 }

@@ -7,7 +7,11 @@ import time
 import tempfile
 import json
 import traceback
+from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+# 项目根目录 (基于当前文件位置计算，避免硬编码绝对路径)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 bugs_found = []
 
@@ -376,7 +380,8 @@ async def phase4_tts_sticker_emotion():
         sig = inspect.signature(StickerManager.__init__)
         print(f"    INFO: 构造函数签名: {sig}")
         # 尝试创建实例
-        sm = StickerManager(sticker_dir="/tmp/stickers_test")
+        # 使用临时目录测试 StickerManager (不依赖硬编码路径)
+        sm = StickerManager(sticker_dir=tempfile.mkdtemp())
         sticker = sm.get_sticker("happy")
         print(f"    OK: StickerManager 创建成功, happy sticker: {sticker[:30] if sticker else 'None'}")
     except ImportError:
@@ -683,7 +688,7 @@ async def phase7_concurrent_edge():
         import subprocess
         result = subprocess.run(
             ["grep", "-rn", "get_event_loop()", "--include=*.py",
-             "/home/orangepi/ai-agent/"],
+             str(PROJECT_ROOT) + "/"],
             capture_output=True, text=True, timeout=10
         )
         lines = [l for l in result.stdout.strip().split('\n') if l

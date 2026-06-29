@@ -1,3 +1,4 @@
+from typing import Any, Optional
 import json
 import os
 import re
@@ -26,7 +27,7 @@ FAILURE_TEMPLATES = {
 
 class ResultWrapper:
 
-    def __init__(self, router=None):
+    def __init__(self, router: Optional[Any]=None) -> None:
         self.router = router
         self._free_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         self._free_base_url = "https://api.siliconflow.cn/v1"
@@ -59,7 +60,7 @@ class ResultWrapper:
             logger.warning("result_wrapper.free_model_failed", error=str(e))
             return None
 
-    async def wrap(self, tool_name: str, result, user_context: str = "") -> str:
+    async def wrap(self, tool_name: str, result: Any, user_context: str = "") -> str:
         from tool_engine.tool_registry import ToolResult
 
         if isinstance(result, ToolResult):

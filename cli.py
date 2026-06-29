@@ -1,3 +1,4 @@
+from typing import Any
 import os
 import sys
 import time
@@ -130,6 +131,7 @@ HELP_PUBLIC = [
     ("🖥️", "/hw", "查看香橙派硬件状态"),
     ("📷", "/cam", "拍照并分析画面"),
     ("⚙️", "/sys", "查看系统运行状态"),
+    ("🩺", "/doctor [json|fix]", "运行自检（零 API 调用, <2s）"),
     ("❓", "/help", "显示此帮助"),
 ]
 
@@ -147,7 +149,7 @@ def _get_model_info() -> str:
     return f"{model_id}"
 
 
-def _typewriter(text: str, delay: float | None = None):
+def _typewriter(text: str, delay: float | None = None) -> None:
     if delay is None:
         speed = os.environ.get("NAHIDA_TYPEWRITER_SPEED", "normal").lower()
         speed_map = {"fast": 0.005, "normal": 0.02, "slow": 0.05, "off": 0}
@@ -201,7 +203,7 @@ def _status_translate(msg: str) -> str:
 
 class CLIInterface:
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.bot = AgentCore()
         self._loop = asyncio.new_event_loop()
 
@@ -210,11 +212,11 @@ class CLIInterface:
         term = self.bot._read_address_term_from_user_md()
         return term or self.bot.context.current_address_term or "爸爸"
 
-    async def _init(self):
+    async def _init(self) -> None:
         await self.bot.init()
         logger.info("cli.initialized")
 
-    def _print_welcome(self):
+    def _print_welcome(self) -> None:
         model_id = _get_model_info()
 
         ascii_lines = NAHIDA_ASCII.split("\n")
@@ -253,7 +255,7 @@ class CLIInterface:
         greeting = random.choice(NAHIDA_GREETINGS).replace("爸爸", self._address_term())
         print(f"  {_C.LGREEN}{_C.BOLD}{greeting}{_C.RST}\n")
 
-    def _print_help(self):
+    def _print_help(self) -> None:
         print(f"\n  {_C.LGREEN}{_C.BOLD}🌿 纳西妲的命令列表{_C.RST}\n")
         print(f"  {_C.LYELLOW}── 公共命令 ──{_C.RST}")
         for emoji, cmd, desc in HELP_PUBLIC:
@@ -263,7 +265,7 @@ class CLIInterface:
             print(f"  {emoji} {_C.LMAGENTA}{cmd:<24}{_C.RST} {desc}")
         print()
 
-    def _check_qq_bot(self):
+    def _check_qq_bot(self) -> Any:
         try:
             r = subprocess.run(["systemctl", "is-active", "qq-agent"],
                                capture_output=True, text=True, timeout=5)
@@ -271,7 +273,7 @@ class CLIInterface:
         except Exception:
             return False
 
-    def _ensure_service(self):
+    def _ensure_service(self) -> None:
         if not self._check_qq_bot():
             print(f"  {_C.LYELLOW}QQ Bot 服务未运行，正在启动...{_C.RST}")
             try:
@@ -286,7 +288,7 @@ class CLIInterface:
                 print(f"  {_C.LYELLOW}无法启动 QQ Bot 服务，CLI 可正常使用{_C.RST}")
             print()
 
-    def run(self):
+    def run(self) -> None:
         self._ensure_service()
         self._loop.run_until_complete(self._init())
         self._print_welcome()
@@ -313,7 +315,7 @@ class CLIInterface:
                 continue
 
             try:
-                async def status_notify(msg: str):
+                async def status_notify(msg: str) -> None:
                     translated = _status_translate(msg)
                     print(f"  {_C.DIM}{_C.LYELLOW}{translated}{_C.RST}")
 
@@ -343,7 +345,7 @@ class CLIInterface:
         self._loop.close()
 
 
-def main():
+def main() -> None:
     cli = CLIInterface()
     cli.run()
 

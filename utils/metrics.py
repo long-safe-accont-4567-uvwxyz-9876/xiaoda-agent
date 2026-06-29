@@ -4,26 +4,39 @@ from loguru import logger
 
 
 class Metrics:
-    def __init__(self):
+    def __init__(self) -> None:
+        """初始化指标采集器 (counter/timer/gauge/histogram)."""
         self._counters = defaultdict(int)
         self._timers = defaultdict(list)
         self._gauges = defaultdict(float)
         self._histograms = defaultdict(list)
         self._last_report = time.time()
 
-    def inc(self, name: str, value: int = 1):
+    def inc(self, name: str, value: int = 1) -> None:
+        """递增计数器.
+
+        Args:
+            name: 指标名
+            value: 增量, 默认 1
+        """
         self._counters[name] += value
 
-    def observe(self, name: str, duration: float):
+    def observe(self, name: str, duration: float) -> None:
+        """记录耗时样本 (保留最近 100 个).
+
+        Args:
+            name: 指标名
+            duration: 耗时秒数
+        """
         self._timers[name].append(duration)
         if len(self._timers[name]) > 100:
             self._timers[name] = self._timers[name][-100:]
 
-    def gauge(self, name: str, value: float):
+    def gauge(self, name: str, value: float) -> None:
         """设置仪表盘指标（最新值覆盖）"""
         self._gauges[name] = value
 
-    def histogram(self, name: str, value: float):
+    def histogram(self, name: str, value: float) -> None:
         """记录直方图样本（保留最近 200 个）"""
         self._histograms[name].append(value)
         if len(self._histograms[name]) > 200:
@@ -53,7 +66,12 @@ class Metrics:
                 }
         return snapshot
 
-    def maybe_report(self, interval: float = 300):
+    def maybe_report(self, interval: float = 300) -> None:
+        """按间隔阈值输出指标快照日志.
+
+        Args:
+            interval: 最小报告间隔秒, 默认 300
+        """
         now = time.time()
         if now - self._last_report < interval:
             return

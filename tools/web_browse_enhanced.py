@@ -5,10 +5,13 @@
 优先级 3：原有 primp + html2text（tools.web_browse_tools.web_browse）
 """
 import re
+import asyncio
 import httpx
 from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from config import JINA_API_KEY
+from security.ssrf_guard import validate_url as _ssrf_validate_url
+from core.degradation_strategy import get_degradation_strategy
 
 _PLATFORM_EXTRACTORS = {
     "zhihu.com": "_extract_zhihu",
@@ -127,9 +130,14 @@ async def _extract_douyin(url: str) -> tuple[str, str]:
 
 
 async def _is_private_ip_async(hostname: str) -> bool:
-    import asyncio
+    """[deprecated] 旧 IP 检查, 保留以兼容现有测试; 新流程改用 security.ssrf_guard.validate_url"""
     from tools.web_browse_tools import _is_private_ip
     return await asyncio.to_thread(_is_private_ip, hostname)
+
+
+async def _ssrf_check_async(url: str) -> tuple[bool, str]:
+    """SSRF v2 5步法校验 (在线程中执行, 避免阻塞事件循环)"""
+    return await asyncio.to_thread(_ssrf_validate_url, url)
 
 
 @register_tool(
@@ -153,6 +161,9 @@ async def _is_private_ip_async(hostname: str) -> bool:
 )
 async def web_browse_enhanced(url: str) -> ToolResult:
     try:
+        # 降级检查: L2+ 关闭网页浏览, 返回降级提示
+        if not get_degradation_strategy().is_feature_available("web_browse"):
+            return ToolResult.fail("网页浏览功能当前不可用（系统降级中）")
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
 
@@ -163,11 +174,10 @@ async def web_browse_enhanced(url: str) -> ToolResult:
         if not allowed:
             return ToolResult.fail(f"沙箱安全限制: {reason}")
 
-        # SSRF 防护：检查 hostname 是否解析到内网 IP
-        parsed = urlparse(url)
-        hostname = parsed.hostname
-        if hostname and await _is_private_ip_async(hostname):
-            return ToolResult.fail(f"安全限制：禁止访问内网地址 {hostname}")
+        # SSRF v2 防护：5步法 (协议白名单 + 主机名黑名单 + DNS解析 + IP分类 + DNS Pinning)
+        ok, reason = await _ssrf_check_async(url)
+        if not ok:
+            return ToolResult.fail(f"安全限制：{reason}")
 
         # 优先级 1：平台专有提取器
         extractor_name = _route_platform(url)

@@ -102,10 +102,10 @@ class RiskClassifier:
 class EvidenceGate:
     """证据门禁 — 追踪已读取的文件路径"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._read_targets: set[str] = set()
 
-    def mark_read(self, file_path: str):
+    def mark_read(self, file_path: str) -> None:
         """标记文件已读取"""
         if file_path:
             self._read_targets.add(str(file_path))
@@ -114,7 +114,7 @@ class EvidenceGate:
         """检查是否已读取目标文件"""
         return str(file_path) in self._read_targets
 
-    def clear(self):
+    def clear(self) -> None:
         """清空追踪记录"""
         self._read_targets.clear()
 
@@ -147,3 +147,49 @@ class PostValidator:
                 return {"valid": False, "reason": f"语法错误: {e}"}
 
         return {"valid": True}
+
+
+class OutputRiskDetector:
+    """子代理输出风险检测 — 检测输出中是否包含关键操作痕迹。
+
+    当子代理输出涉及文件修改、安全漏洞、命令执行等关键操作时，
+    自动触发交叉验证（借鉴 Trae Code Review Step 5.5 的验证机制）。
+    """
+
+    # 关键操作输出指示词
+    CRITICAL_INDICATORS = [
+        # 文件操作
+        re.compile(r"已修改|已删除|已创建|已写入|文件已更新|已覆盖", re.IGNORECASE),
+        # 安全发现
+        re.compile(r"漏洞|安全风险|注入|SSRF|XSS|越权|敏感信息泄漏", re.IGNORECASE),
+        # 代码变更
+        re.compile(r"已修复|已重构|已优化|函数已拆分|已替换", re.IGNORECASE),
+        # 命令执行
+        re.compile(r"已执行命令|命令运行完成|进程已重启|服务已停止", re.IGNORECASE),
+    ]
+
+    # 领域→默认验证子代理映射
+    DOMAIN_VERIFIER = {
+        "security": "yinlang",
+        "code": "nike",
+        "general": "yinlang",
+    }
+
+    @classmethod
+    def detect(cls, output: str) -> tuple[bool, str]:
+        """检测输出是否包含关键操作。
+
+        Returns:
+            (is_critical, suggested_verifier)
+        """
+        if not output or len(output) < 10:
+            return False, ""
+        for pattern in cls.CRITICAL_INDICATORS:
+            if pattern.search(output):
+                # 根据匹配内容推断验证者
+                if any(kw in output for kw in ("漏洞", "安全", "SSRF", "注入", "越权")):
+                    return True, cls.DOMAIN_VERIFIER["security"]
+                if any(kw in output for kw in ("修复", "重构", "拆分", "代码", "函数")):
+                    return True, cls.DOMAIN_VERIFIER["code"]
+                return True, cls.DOMAIN_VERIFIER["general"]
+        return False, ""

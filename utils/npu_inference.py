@@ -1,3 +1,4 @@
+from typing import Any
 import os
 import ctypes
 from pathlib import Path
@@ -78,11 +79,11 @@ class vip_buffer_create_params_t(ctypes.Structure):
 
 
 class VIPLite:
-    def __init__(self):
+    def __init__(self) -> None:
         self._lib = None
         self._load_library()
 
-    def _load_library(self):
+    def _load_library(self) -> None:
         try:
             self._lib = ctypes.CDLL("/usr/lib/libNBGlinker.so")
             self._setup_argtypes()
@@ -90,7 +91,7 @@ class VIPLite:
             logger.warning("failed to load libNBGlinker.so: {}", e)
             self._lib = None
 
-    def _setup_argtypes(self):
+    def _setup_argtypes(self) -> None:
         lib = self._lib
         lib.vip_init.argtypes = []
         lib.vip_init.restype = ctypes.c_int32
@@ -153,10 +154,10 @@ class VIPLite:
         lib.vip_query_hardware.restype = ctypes.c_int32
 
     @property
-    def available(self):
+    def available(self) -> Any:
         return self._lib is not None
 
-    def init(self):
+    def init(self) -> bool:
         global _vip_initialized
         if _vip_initialized:
             return True
@@ -170,14 +171,14 @@ class VIPLite:
         logger.info("vip_init success")
         return True
 
-    def destroy(self):
+    def destroy(self) -> None:
         global _vip_initialized
         if not _vip_initialized or not self.available:
             return
         self._lib.vip_destroy()
         _vip_initialized = False
 
-    def create_network(self, model_path):
+    def create_network(self, model_path: Any) -> Any:
         if not self.available:
             return None
         network = ctypes.c_void_p()
@@ -190,7 +191,7 @@ class VIPLite:
             return None
         return network
 
-    def prepare_network(self, network):
+    def prepare_network(self, network: Any) -> bool:
         if not self.available or not network:
             return False
         status = self._lib.vip_prepare_network(network)
@@ -199,7 +200,7 @@ class VIPLite:
             return False
         return True
 
-    def run_network(self, network):
+    def run_network(self, network: Any) -> bool:
         if not self.available or not network:
             return False
         status = self._lib.vip_run_network(network)
@@ -208,52 +209,52 @@ class VIPLite:
             return False
         return True
 
-    def finish_network(self, network):
+    def finish_network(self, network: Any) -> None:
         if not self.available or not network:
             return
         self._lib.vip_finish_network(network)
 
-    def destroy_network(self, network):
+    def destroy_network(self, network: Any) -> None:
         if not self.available or not network:
             return
         self._lib.vip_destroy_network(network)
 
-    def query_network_u32(self, network, prop):
+    def query_network_u32(self, network: Any, prop: Any) -> Any:
         val = ctypes.c_uint32()
         self._lib.vip_query_network(network, prop, ctypes.byref(val))
         return val.value
 
-    def query_input_u32(self, network, index, prop):
+    def query_input_u32(self, network: Any, index: Any, prop: Any) -> Any:
         val = ctypes.c_uint32()
         self._lib.vip_query_input(network, index, prop, ctypes.byref(val))
         return val.value
 
-    def query_input_float(self, network, index, prop):
+    def query_input_float(self, network: Any, index: Any, prop: Any) -> Any:
         val = ctypes.c_float()
         self._lib.vip_query_input(network, index, prop, ctypes.byref(val))
         return val.value
 
-    def query_input_sizes(self, network, index):
+    def query_input_sizes(self, network: Any, index: Any) -> Any:
         sizes = (ctypes.c_uint32 * 6)()
         self._lib.vip_query_input(network, index, VIP_BUFFER_PROP_SIZES_OF_DIMENSION, sizes)
         return list(sizes)
 
-    def query_output_u32(self, network, index, prop):
+    def query_output_u32(self, network: Any, index: Any, prop: Any) -> Any:
         val = ctypes.c_uint32()
         self._lib.vip_query_output(network, index, prop, ctypes.byref(val))
         return val.value
 
-    def query_output_float(self, network, index, prop):
+    def query_output_float(self, network: Any, index: Any, prop: Any) -> Any:
         val = ctypes.c_float()
         self._lib.vip_query_output(network, index, prop, ctypes.byref(val))
         return val.value
 
-    def query_output_sizes(self, network, index):
+    def query_output_sizes(self, network: Any, index: Any) -> Any:
         sizes = (ctypes.c_uint32 * 6)()
         self._lib.vip_query_output(network, index, VIP_BUFFER_PROP_SIZES_OF_DIMENSION, sizes)
         return list(sizes)
 
-    def create_buffer(self, params):
+    def create_buffer(self, params: Any) -> Any:
         if not self.available:
             return None
         buf = ctypes.c_void_p()
@@ -265,32 +266,32 @@ class VIPLite:
             return None
         return buf
 
-    def map_buffer(self, buf):
+    def map_buffer(self, buf: Any) -> Any:
         if not self.available or not buf:
             return None
         return self._lib.vip_map_buffer(buf)
 
-    def unmap_buffer(self, buf):
+    def unmap_buffer(self, buf: Any) -> None:
         if not self.available or not buf:
             return
         self._lib.vip_unmap_buffer(buf)
 
-    def destroy_buffer(self, buf):
+    def destroy_buffer(self, buf: Any) -> None:
         if not self.available or not buf:
             return
         self._lib.vip_destroy_buffer(buf)
 
-    def get_buffer_size(self, buf):
+    def get_buffer_size(self, buf: Any) -> Any:
         if not self.available or not buf:
             return 0
         return self._lib.vip_get_buffer_size(buf)
 
-    def flush_buffer(self, buf, op_type=VIP_BUFFER_OPER_TYPE_FLUSH):
+    def flush_buffer(self, buf: Any, op_type: Any=VIP_BUFFER_OPER_TYPE_FLUSH) -> None:
         if not self.available or not buf:
             return
         self._lib.vip_flush_buffer(buf, op_type)
 
-    def set_input(self, network, index, buf):
+    def set_input(self, network: Any, index: Any, buf: Any) -> bool:
         if not self.available or not network or not buf:
             return False
         status = self._lib.vip_set_input(network, index, buf)
@@ -299,7 +300,7 @@ class VIPLite:
             return False
         return True
 
-    def set_output(self, network, index, buf):
+    def set_output(self, network: Any, index: Any, buf: Any) -> bool:
         if not self.available or not network or not buf:
             return False
         status = self._lib.vip_set_output(network, index, buf)
@@ -312,7 +313,7 @@ class VIPLite:
 class BufferInfo:
     __slots__ = ("num_dims", "sizes", "data_format", "quant_format", "scale", "zero_point", "fixed_point_pos")
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.num_dims = 0
         self.sizes = []
         self.data_format = 0
@@ -323,7 +324,7 @@ class BufferInfo:
 
 
 class NPUModel:
-    def __init__(self, model_path):
+    def __init__(self, model_path: Any) -> None:
         self._vip = VIPLite()
         self._network = None
         self._input_buffers = []
@@ -355,7 +356,7 @@ class NPUModel:
         self._loaded = True
         logger.info("NPU model loaded: {}", model_path)
 
-    def _query_buffer_info(self):
+    def _query_buffer_info(self) -> None:
         num_inputs = self._vip.query_network_u32(self._network, VIP_NETWORK_PROP_INPUT_COUNT)
         num_outputs = self._vip.query_network_u32(self._network, VIP_NETWORK_PROP_OUTPUT_COUNT)
 
@@ -385,7 +386,7 @@ class NPUModel:
                 info.fixed_point_pos = self._vip.query_output_u32(self._network, i, VIP_BUFFER_PROP_FIXED_POINT_POS)
             self._output_infos.append(info)
 
-    def _create_buffers(self):
+    def _create_buffers(self) -> None:
         for info in self._input_infos:
             params = vip_buffer_create_params_t()
             params.num_of_dims = info.num_dims
@@ -424,22 +425,22 @@ class NPUModel:
             else:
                 logger.warning("failed to create output buffer {}", len(self._output_buffers))
 
-    def _attach_buffers(self):
+    def _attach_buffers(self) -> None:
         for i, buf in enumerate(self._input_buffers):
             self._vip.set_input(self._network, i, buf)
         for i, buf in enumerate(self._output_buffers):
             self._vip.set_output(self._network, i, buf)
 
     @property
-    def loaded(self):
+    def loaded(self) -> Any:
         return self._loaded
 
     @property
-    def input_infos(self):
+    def input_infos(self) -> Any:
         return self._input_infos
 
     @property
-    def output_infos(self):
+    def output_infos(self) -> Any:
         return self._output_infos
 
     def run(self, input_data: bytes) -> list:
@@ -480,7 +481,7 @@ class NPUModel:
 
         return results
 
-    def __del__(self):
+    def __del__(self) -> None:
         for buf in self._output_buffers:
             try:
                 self._vip.destroy_buffer(buf)
@@ -499,19 +500,19 @@ class NPUModel:
                 pass
 
 
-def _sigmoid(x):
+def _sigmoid(x: Any) -> Any:
     return 1.0 / (1.0 + np.exp(-np.clip(x, -500, 500)))
 
 
 class YOLOv5PostProcessor:
-    def __init__(self, conf_threshold=0.45, nms_threshold=0.45, max_detections=100):
+    def __init__(self, conf_threshold: Any=0.45, nms_threshold: Any=0.45, max_detections: Any=100) -> None:
         self.conf_threshold = conf_threshold
         self.nms_threshold = nms_threshold
         self.max_detections = max_detections
         self.labels = COCO_LABELS
         self.anchors = YOLOV5_ANCHORS
 
-    def _iou(self, a, b):
+    def _iou(self, a: Any, b: Any) -> Any:
         ix1 = max(a["x1"], b["x1"])
         iy1 = max(a["y1"], b["y1"])
         ix2 = min(a["x2"], b["x2"])
@@ -526,7 +527,7 @@ class YOLOv5PostProcessor:
             return 0.0
         return inter / union
 
-    def _nms(self, detections):
+    def _nms(self, detections: Any) -> Any:
         if not detections:
             return []
         detections.sort(key=lambda d: d["confidence"], reverse=True)
@@ -615,7 +616,7 @@ class YOLOv5PostProcessor:
 
 
 class NPUInference:
-    def __init__(self, model_path=None):
+    def __init__(self, model_path: Any=None) -> None:
         self.available = False
         self._model = None
         self._postprocessor = YOLOv5PostProcessor(conf_threshold=0.15, nms_threshold=0.45, max_detections=100)
@@ -646,7 +647,7 @@ class NPUInference:
     def is_available() -> bool:
         return os.path.exists("/dev/vipcore")
 
-    def detect(self, frame) -> list:
+    def detect(self, frame: Any) -> list:
         if not self.available or not self._model:
             return []
 

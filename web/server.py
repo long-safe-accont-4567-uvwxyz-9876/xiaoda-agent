@@ -1,3 +1,4 @@
+from typing import Any, AsyncIterator, Iterator
 import asyncio
 import os
 import sys
@@ -13,7 +14,7 @@ from loguru import logger
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
-async def _apply_model_overrides(core):
+async def _apply_model_overrides(core: Any) -> None:
     """重启后恢复：自定义 provider 注册 + 路由表覆盖。"""
     import os
     from web.config_service import get_config_service
@@ -23,7 +24,21 @@ async def _apply_model_overrides(core):
 
     cfg = get_config_service()
 
-    # 自动注册已知免费模型平台（从 .env 文件读取 key，不从 os.environ 读取，避免 CI 环境变量泄露）
+    # 从 .env 文件读取，而非 os.environ，防止构建环境变量泄露到用户安装包
+    try:
+        from setup_wizard import _load_env_values
+        env_values = _load_env_values()
+    except Exception:
+        env_values = {}
+
+    _register_env_providers(cfg, env_values, os)
+    _register_all_providers(cfg, core, load_provider_key, register_into_router)
+    _apply_route_overrides(cfg, core, ROUTE_TABLE)
+    _restore_chat_model(cfg, core)
+
+
+def _register_env_providers(cfg: Any, env_values: Any, os: Any) -> None:
+    """从 .env 注册已知免费模型平台 provider。"""
     _KNOWN_ENV_PROVIDERS = {
         "SILICONFLOW_API_KEY": ("siliconflow", "openai", "https://api.siliconflow.cn/v1", "SiliconFlow 硅基流动"),
         "OPENROUTER_API_KEY": ("openrouter", "openai", "https://openrouter.ai/api/v1", "OpenRouter"),
@@ -31,18 +46,10 @@ async def _apply_model_overrides(core):
         "AGNES_API_KEY": ("agnes", "openai", os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1"), "Agnes AI"),
         "OLLAMA_BASE_URL": ("ollama", "openai", os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"), "Ollama 本地大模型"),
     }
-    # 从 .env 文件读取，而非 os.environ，防止构建环境变量泄露到用户安装包
-    try:
-        from setup_wizard import _load_env_values
-        env_values = _load_env_values()
-    except Exception:
-        env_values = {}
-    # _KNOWN_ENV_PROVIDERS 保持现有顺序（SiliconFlow 第一）
     known_env_keys = list(_KNOWN_ENV_PROVIDERS.keys())
     for env_key, (pid, fmt, base_url, label) in _KNOWN_ENV_PROVIDERS.items():
-        # Ollama 特殊处理：env 值是 base_url 而非 API Key
         if env_key == "OLLAMA_BASE_URL":
-            api_key = "ollama"  # 占位 Key
+            api_key = "ollama"
             base_url = env_values.get(env_key, "").strip() or base_url
             if not base_url:
                 continue
@@ -50,7 +57,6 @@ async def _apply_model_overrides(core):
             api_key = env_values.get(env_key, "").strip()
             if not api_key:
                 continue
-        # 确保配置中有记录
         existing = cfg.get("models.providers", {}) or {}
         if pid not in existing:
             cfg.set(f"models.providers.{pid}", {
@@ -58,19 +64,25 @@ async def _apply_model_overrides(core):
                 "default_model": "", "enabled": True,
                 "order": known_env_keys.index(env_key),
             })
-        # 确保证书文件存在
-        from config import get_credentials_dir
-        cred_dir = get_credentials_dir()
-        cred_dir.mkdir(parents=True, exist_ok=True)
-        fp = cred_dir / f"provider_{pid}.key"
-        if not fp.exists() or fp.read_text(encoding="utf-8").strip() != api_key:
-            fp.write_text(api_key, encoding="utf-8")
-            try:
-                os.chmod(fp, 0o600)
-            except OSError:
-                pass
+        _ensure_provider_key_file(pid, api_key, os)
 
-    # 按 order 字段处理 Provider 注册顺序；未设置 order 的排在已设置之后，按字典插入顺序
+
+def _ensure_provider_key_file(pid: Any, api_key: Any, os: Any) -> None:
+    """确保证书文件存在且内容正确。"""
+    from config import get_credentials_dir
+    cred_dir = get_credentials_dir()
+    cred_dir.mkdir(parents=True, exist_ok=True)
+    fp = cred_dir / f"provider_{pid}.key"
+    if not fp.exists() or fp.read_text(encoding="utf-8").strip() != api_key:
+        fp.write_text(api_key, encoding="utf-8")
+        try:
+            os.chmod(fp, 0o600)
+        except OSError:
+            pass
+
+
+def _register_all_providers(cfg: Any, core: Any, load_provider_key: Any, register_into_router: Any) -> None:
+    """按 order 字段排序后注册所有 provider 到 router 和 credential_pool。"""
     all_providers = cfg.get("models.providers", {}) or {}
     all_keys_order = list(all_providers.keys())
     sorted_providers = sorted(
@@ -83,17 +95,18 @@ async def _apply_model_overrides(core):
             try:
                 register_into_router(core.router, pid, p.get("format", "openai"),
                                      p.get("base_url", ""), key)
-                # 也注册到 credential_pool，以便追踪使用次数和错误
-                from utils.credential_pool import get_credential_pool, Credential, CredentialState
+                from utils.credential_pool import get_credential_pool, Credential
                 pool = get_credential_pool()
                 if pid not in pool._pool:
                     pool.add_credential(Credential(
-                        api_key=key,
-                        provider=pid,
-                        base_url=p.get("base_url", ""),
+                        api_key=key, provider=pid, base_url=p.get("base_url", ""),
                     ))
             except Exception as e:
                 logger.warning("webui.provider_restore_failed id={} error={}", pid, str(e))
+
+
+def _apply_route_overrides(cfg: Any, core: Any, ROUTE_TABLE: Any) -> None:
+    """应用路由表覆盖（model/client/max_tokens/thinking/timeout）。"""
     for task, o in (cfg.get("models.routes", {}) or {}).items():
         entry = ROUTE_TABLE.get(task)
         if not entry or not isinstance(o, dict):
@@ -111,25 +124,27 @@ async def _apply_model_overrides(core):
         if o.get("timeout"):
             core.router.TASK_TIMEOUTS[task] = o["timeout"]
 
-    # 恢复上次聊天模型（从 config_service 的 models.chat_model 读取）
+
+def _restore_chat_model(cfg: Any, core: Any) -> None:
+    """恢复上次聊天模型（从 config_service 的 models.chat_model 读取）。"""
     chat_model = cfg.get("models.chat_model")
-    if isinstance(chat_model, dict) and chat_model.get("provider") and chat_model.get("model_id"):
-        provider = chat_model["provider"]
-        model_id = chat_model["model_id"]
+    if not (isinstance(chat_model, dict) and chat_model.get("provider") and chat_model.get("model_id")):
+        return
+    provider = chat_model["provider"]
+    model_id = chat_model["model_id"]
+    try:
+        core.router.set_chat_model(provider, model_id)
+        logger.info("webui.chat_model_restored provider={} model={}", provider, model_id)
+    except Exception as e:
+        logger.warning("webui.chat_model_restore_failed provider={} model={} error={} fallback_to_mimo", provider, model_id, str(e))
         try:
-            core.router.set_chat_model(provider, model_id)
-            logger.info("webui.chat_model_restored provider={} model={}", provider, model_id)
-        except Exception as e:
-            logger.warning("webui.chat_model_restore_failed provider={} model={} error={} fallback_to_mimo", provider, model_id, str(e))
-            # Provider 或模型已失效，回退到 MiMo 默认模型
-            try:
-                from model_router import MIMO_MODEL
-                core.router.set_chat_model("mimo", MIMO_MODEL)
-            except Exception:
-                pass
+            from model_router import MIMO_MODEL
+            core.router.set_chat_model("mimo", MIMO_MODEL)
+        except Exception:
+            pass
 
 
-async def _start_user_mcp_servers(core):
+async def _start_user_mcp_servers(core: Any) -> None:
     """启动 WebUI 管理的 MCP server。"""
     from web.config_service import get_config_service
     from tool_engine.mcp_client import MCPClient
@@ -149,7 +164,7 @@ async def _start_user_mcp_servers(core):
             logger.warning("webui.mcp_restore_failed name={} error={}", name, str(e))
 
 
-async def _start_services(app, core):
+async def _start_services(app: Any, core: Any) -> None:
     """启动正常模式下的所有服务组件（PluginManager、MediaTaskQueue、GreetingScheduler、QQ Bot）。"""
     from web.config_service import get_config_service
     from web.media_tasks import MediaTaskQueue
@@ -195,7 +210,7 @@ async def _start_services(app, core):
 
     # QQ Bot
     qq_task = None
-    if os.getenv("QQBOT_APP_ID") and os.getenv("ENABLE_QQ_BOT", "true").lower() in ("true", "1", "yes"):
+    if os.getenv("QQBOT_APP_ID", "") and os.getenv("ENABLE_QQ_BOT", "true").lower() in ("true", "1", "yes"):
         from qq_bot_adapter import run_qq_bot
         from config import AGENT_CONFIG
         qq_task = asyncio.create_task(
@@ -206,7 +221,7 @@ async def _start_services(app, core):
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
     from agent_core import AgentCore
     from web.agent_registry import AgentRegistry
     from web.config_service import get_config_service
@@ -305,17 +320,22 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="Nahida Agent WebUI", version="0.3.98", lifespan=lifespan)
 
-    # 速率限制中间件（防 DDoS/滥用）
-    from web.middleware.rate_limit import rate_limit_middleware
-    app.middleware("http")(rate_limit_middleware)
+    # 速率限制中间件（三级: 全局/用户/写端点, 防 DDoS/滥用）
+    # 在路由之前注册, 尽早拦截超限请求; 限制值可通过环境变量覆盖
+    from web.middleware.rate_limit import RateLimitMiddleware
+    app.add_middleware(RateLimitMiddleware)
 
     # 允许 splash HTTP 服务器嵌入 WebUI（iframe 预加载无缝衔接）
     @app.middleware("http")
-    async def _allow_frame_embed(request, call_next):
+    async def _allow_frame_embed(request: Any, call_next: Any) -> Any:
         response = await call_next(request)
         response.headers["Content-Security-Policy"] = "frame-ancestors http://127.0.0.1:*"
         response.headers["X-Frame-Options"] = "ALLOWALL"
         return response
+
+    # Q1: 注册统一异常处理器（AppException -> 结构化 error_code; 未捕获异常 -> E_SYS999）
+    from web.error_handler import register_error_handlers
+    register_error_handlers(app)
 
     from web.routers.auth import router as auth_router
     from web.routers.chat import router as chat_router
@@ -363,7 +383,7 @@ class NoCacheHTMLStaticFiles(StaticFiles):
     """index.html 禁缓存（否则改版后旧 HTML 引用已删除的旧 chunk，导航全挂）；
     带 hash 的 /assets/* 短缓存（升级后浏览器会重新验证）。"""
 
-    async def get_response(self, path, scope):
+    async def get_response(self, path: Any, scope: Any) -> Any:
         response = await super().get_response(path, scope)
         if path in ("index.html", ".") or path.endswith(".html"):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"

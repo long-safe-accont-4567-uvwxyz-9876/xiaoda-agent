@@ -1,5 +1,6 @@
 """健康测试中心路由（R12）：LLM/TTS/视频/MCP/DB/向量 探针、系统信息、报告。"""
 from __future__ import annotations
+from typing import Any
 
 import asyncio
 import json
@@ -18,14 +19,32 @@ router = APIRouter(tags=["health"], dependencies=[Depends(get_current_user)])
 _all_running = False
 
 
+@router.get("/health/self", response_model=Envelope[dict])
+async def agent_self(request: Request) -> Any:
+    """Agent 状态自省 — 返回当前内心状态 (认知负载/置信度/情绪/降级级别/健康度)
+
+    内部状态, 不需要单独认证 (已有 router 级 Depends)。
+    """
+    from core.agent_introspection import AgentIntrospector
+
+    core = request.app.state.core
+    # 复用全局 introspector (若有), 否则用 core/context 现场构造
+    introspector = AgentIntrospector(
+        context=getattr(core, "context", None),
+        agent=core,
+    )
+    state = introspector.get_current_state()
+    return Envelope(data=introspector.to_dict(state))
+
+
 @router.get("/health/probes", response_model=Envelope[list[dict]])
-async def list_probes(request: Request):
+async def list_probes(request: Request) -> Any:
     from web.probes import list_probe_ids
     return Envelope(data=list_probe_ids(request.app.state.core))
 
 
 @router.post("/health/test/llm", response_model=Envelope[dict])
-async def test_llm(body: dict, request: Request):
+async def test_llm(body: dict, request: Request) -> Any:
     from web.probes import probe_llm
     core = request.app.state.core
     provider_id = body.get("provider_id")
@@ -41,45 +60,45 @@ async def _probe_provider(request: Request, provider_id: str) -> dict:
 
 
 @router.post("/health/test/tts", response_model=Envelope[dict])
-async def test_tts(request: Request):
+async def test_tts(request: Request) -> Any:
     from web.probes import probe_tts
     return Envelope(data=await probe_tts(request.app.state.core))
 
 
 @router.post("/health/test/video", response_model=Envelope[dict])
-async def test_video(request: Request):
+async def test_video(request: Request) -> Any:
     from web.probes import probe_video_config
     return Envelope(data=await probe_video_config())
 
 
 @router.post("/health/test/mcp/{server}", response_model=Envelope[dict])
-async def test_mcp(server: str, request: Request):
+async def test_mcp(server: str, request: Request) -> Any:
     from web.probes import probe_mcp
     return Envelope(data=await probe_mcp(request.app.state.core, server))
 
 
 @router.post("/health/test/{probe_id:path}", response_model=Envelope[dict])
-async def test_one(probe_id: str, request: Request):
+async def test_one(probe_id: str, request: Request) -> Any:
     from web.probes import run_probe
     return Envelope(data=await run_probe(request.app.state.core, probe_id))
 
 
 @router.post("/health/test-all", response_model=Envelope[dict])
-async def test_all(request: Request):
+async def test_all(request: Request) -> Any:
     """一键全检：后台串行执行，逐项进度走 WS health_progress。"""
     global _all_running
     if _all_running:
         raise HTTPException(409, "全量自检已在进行中")
     core = request.app.state.core
 
-    async def _run():
+    async def _run() -> None:
         global _all_running
         _all_running = True
         try:
             from web.probes import run_all
             from web.ws_hub import manager
 
-            async def on_progress(item_id: str, res: dict):
+            async def on_progress(item_id: str, res: dict) -> None:
                 await manager.broadcast({
                     "type": "health_progress", "item": item_id,
                     "ok": res.get("ok", False),
@@ -102,7 +121,7 @@ async def test_all(request: Request):
 
 
 @router.get("/health/report", response_model=Envelope[dict])
-async def last_report(request: Request):
+async def last_report(request: Request) -> Any:
     core = request.app.state.core
     row = await core.db.fetch_one(
         "SELECT * FROM health_reports ORDER BY run_at DESC LIMIT 1")
@@ -116,7 +135,7 @@ async def last_report(request: Request):
 
 
 @router.get("/health/system", response_model=Envelope[dict])
-async def system_info():
+async def system_info() -> Any:
     import platform
     data: dict = {"timestamp": time.time(), "platform": platform.system()}
 
@@ -131,6 +150,15 @@ async def system_info():
         data["error"] = f"psutil初始化失败: {str(e)}"
         return Envelope(data=data)
 
+    data.update(_collect_cpu_mem_metrics(psutil))
+    data.update(_collect_disk_temp_metrics(psutil))
+    data.update(_collect_proc_net_metrics(psutil))
+    return Envelope(data=data)
+
+
+def _collect_cpu_mem_metrics(psutil: Any) -> dict:
+    """收集 CPU、内存、交换区、负载指标。"""
+    data: dict = {}
     # ── CPU ──
     try:
         data["cpu_percent"] = psutil.cpu_percent(interval=0.5)
@@ -139,7 +167,6 @@ async def system_info():
     except Exception as e:
         logger.warning("health.cpu_failed error={}", str(e))
     try:
-        # os.getloadavg() 仅存在于 Unix/Linux，Windows 上会抛 AttributeError
         load1, load5, load15 = os.getloadavg()
         data["load"] = [load1, load5, load15]
     except (AttributeError, OSError):
@@ -162,7 +189,12 @@ async def system_info():
         data["swap_percent"] = swap.percent
     except Exception as e:
         logger.warning("health.swap_failed error={}", str(e))
+    return data
 
+
+def _collect_disk_temp_metrics(psutil: Any) -> dict:
+    """收集磁盘分区和温度传感器指标。"""
+    data: dict = {}
     # ── 磁盘（所有分区）──
     try:
         disks = []
@@ -203,7 +235,12 @@ async def system_info():
     except Exception as e:
         logger.warning("health.temps_failed error={}", str(e))
         data["temperatures"] = []
+    return data
 
+
+def _collect_proc_net_metrics(psutil: Any) -> dict:
+    """收集运行时间、进程内存、网络、电池指标。"""
+    data: dict = {}
     # ── 运行时间 ──
     try:
         data["uptime"] = time.time() - psutil.boot_time()
@@ -236,5 +273,4 @@ async def system_info():
             data["battery_secs_left"] = bat.secsleft
     except Exception as e:
         logger.warning("health.battery_failed error={}", str(e))
-
-    return Envelope(data=data)
+    return data

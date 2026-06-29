@@ -7,7 +7,7 @@ import hmac
 import base64
 import secrets
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request, Depends
 from loguru import logger
@@ -111,7 +111,7 @@ _load_or_create_secret()
 
 
 @router.post("/auth/login", response_model=Envelope[LoginResponse])
-async def login(req: LoginRequest, request: Request):
+async def login(req: LoginRequest, request: Request) -> Any:
     password = os.getenv("WEBUI_PASSWORD", "")
     client_ip = request.client.host if request.client else "unknown"
 
@@ -146,6 +146,6 @@ async def login(req: LoginRequest, request: Request):
 
 
 @router.post("/auth/logout", response_model=Envelope[None])
-async def logout(user_id: str = Depends(get_current_user)):
+async def logout(user_id: str = Depends(get_current_user)) -> Any:
     # In a full impl we'd invalidate the specific token
     return Envelope(data=None)

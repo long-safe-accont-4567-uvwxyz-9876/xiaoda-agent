@@ -6,7 +6,7 @@ from loguru import logger
 class LearningLoop:
     """学习反馈闭环"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._active_constraints: deque = deque(maxlen=20)
         self._correction_count: int = 0
 
@@ -35,6 +35,7 @@ class LearningLoop:
         return None
 
     def get_stats(self) -> dict:
+        """返回学习闭环统计 (纠正总数与活跃约束数)."""
         return {
             "total_corrections": self._correction_count,
             "active_constraints": len(self._active_constraints),
@@ -45,4 +46,5 @@ _learning_loop = LearningLoop()
 
 
 def get_learning_loop() -> LearningLoop:
+    """获取全局 LearningLoop 单例."""
     return _learning_loop

@@ -1,3 +1,4 @@
+from typing import Any
 import json
 import os
 import asyncio
@@ -22,7 +23,7 @@ except ImportError:
 
 class EmbedCache:
 
-    def __init__(self, max_size: int = 256):
+    def __init__(self, max_size: int = 256) -> None:
         self._cache: OrderedDict[str, list[float]] = OrderedDict()
         self._max_size = max_size
         self._hits = 0
@@ -41,7 +42,7 @@ class EmbedCache:
         self._misses += 1
         return None
 
-    def put(self, text: str, vec: list[float]):
+    def put(self, text: str, vec: list[float]) -> None:
         key = hashlib.md5(text[:300].encode()).hexdigest()
         self._cache[key] = vec
         self._cache.move_to_end(key)
@@ -63,7 +64,7 @@ class VectorStore:
 
     def __init__(self, db_path: str | Path, embed_api_key: str = "",
                  embed_base_url: str = "", embed_model: str = "BAAI/bge-m3",
-                 dimensions: int = 0):
+                 dimensions: int = 0) -> None:
         self._db_path = str(db_path)
         self._embed_api_key = embed_api_key
         self._embed_base_url = embed_base_url
@@ -98,14 +99,14 @@ class VectorStore:
     def dimensions(self) -> int:
         return self._dimensions
 
-    async def init(self):
+    async def init(self) -> None:
         if not HAS_SQLITE_VEC:
             logger.warning("vector_store.sqlite_vec_missing")
             return
 
         import sqlite3
 
-        def _init_db():
+        def _init_db() -> tuple:
             with self._lock:
                 conn = sqlite3.connect(self._db_path, check_same_thread=False)
                 conn.enable_load_extension(True)
@@ -141,8 +142,8 @@ class VectorStore:
         pragma_desc = "DELETE+cache" if is_fat else "WAL+cache+mmap"
         logger.info("vector_store.ready", pragmas=pragma_desc)
 
-    async def close(self):
-        def _do_close():
+    async def close(self) -> None:
+        def _do_close() -> None:
             with self._lock:
                 if self._closed:
                     return
@@ -208,7 +209,7 @@ class VectorStore:
 
         vec_json = json.dumps(vec)
 
-        def _do_upsert():
+        def _do_upsert() -> bool:
             with self._lock:
                 if self._closed:
                     return False
@@ -239,7 +240,7 @@ class VectorStore:
         if not self._initialized or not self._vec_conn:
             return False
 
-        def _do_delete():
+        def _do_delete() -> bool:
             with self._lock:
                 if self._closed:
                     return False
@@ -290,7 +291,7 @@ class VectorStore:
             return 0
 
         # 单事务批量写入（保持原有逻辑）
-        def _do_batch():
+        def _do_batch() -> Any:
             with self._lock:
                 if self._closed:
                     return 0
@@ -337,7 +338,7 @@ class VectorStore:
 
         vec_json = json.dumps(vec)
 
-        def _do_search():
+        def _do_search() -> Any:
             with self._lock:
                 if self._closed:
                     return []

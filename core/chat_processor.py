@@ -25,7 +25,7 @@ class ChatProcessor:
     4. 后处理（媒体提取/情绪标签/表情包/语音）
     """
 
-    def __init__(self, core):
+    def __init__(self, core: Any) -> None:
         """初始化 ChatProcessor。
 
         Args:
@@ -33,9 +33,9 @@ class ChatProcessor:
         """
         self._core = core
 
-    async def process(self, ctx, user_input: str, user_id: str,
+    async def process(self, ctx: Any, user_input: str, user_id: str,
                       source: str, user_openid: str, session_id: str,
-                      status_callback, image_data: list[dict] | None) -> "ProcessResult":
+                      status_callback: Any, image_data: list[dict] | None) -> "ProcessResult":
         """处理单轮对话的主入口。
 
         当前实现直接委托回 AgentCore._process_impl，
@@ -49,10 +49,10 @@ class ChatProcessor:
     # ── 以下为逐步迁移的辅助方法 ──────────────────────────────────
 
     @staticmethod
-    def should_use_task_graph(chat_targets: list[str], task_graph, user_input: str,
+    def should_use_task_graph(chat_targets: list[str], task_graph: Any, user_input: str,
                                user_id: str, force_voice: bool,
-                               image_data, clean_input: str,
-                               is_manual_target_fn, is_simple_task_fn) -> bool:
+                               image_data: Any, clean_input: str,
+                               is_manual_target_fn: Any, is_simple_task_fn: Any) -> bool:
         """判断是否应使用 TaskGraph 路由。"""
         return (
             "nahida" in chat_targets
@@ -67,7 +67,7 @@ class ChatProcessor:
     @staticmethod
     def filter_tools_for_simple_task(tools: list[dict] | None,
                                       clean_input: str,
-                                      is_simple_fn) -> list[dict] | None:
+                                      is_simple_fn: Any) -> list[dict] | None:
         """简单任务时过滤掉系统级工具。"""
         if not tools or not is_simple_fn(clean_input):
             return tools

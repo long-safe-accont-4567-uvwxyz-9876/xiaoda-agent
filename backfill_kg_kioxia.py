@@ -14,7 +14,7 @@ DB_PATH = "/media/orangepi/KIOXIA/nahida-data/db/agent.db"
 SF_KEY = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
 
 
-async def main():
+async def main() -> None:
     if not SF_KEY:
         print("ERROR: 未配置 SILICONFLOW_API_KEY / EMBED_API_KEY")
         return

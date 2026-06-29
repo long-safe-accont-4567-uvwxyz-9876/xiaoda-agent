@@ -29,7 +29,7 @@ class Reranker:
 
     def __init__(self, api_key: str = "", base_url: str = "",
                  model: str = "BAAI/bge-reranker-v2-m3",
-                 max_length: int = 512, batch_size: int = 8):
+                 max_length: int = 512, batch_size: int = 8) -> None:
         self._api_key = api_key
         self._base_url = base_url or "https://api.siliconflow.cn/v1"
         self._model = model

@@ -1,8 +1,13 @@
 """验证 Agent 能力感知"""
 import sys, os
+from pathlib import Path
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv()
+
+# 项目根目录 (基于当前文件位置计算，避免硬编码绝对路径)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 print("=== Agent 能力感知验证 ===\n")
 
@@ -48,7 +53,7 @@ for t in tools:
         print(f"    参数: {params}")
 
 # 4. IDENTITY.md
-identity = open("/home/orangepi/ai-agent/config/workspace/IDENTITY.md").read()
+identity = open(PROJECT_ROOT / "config" / "workspace" / "IDENTITY.md").read()
 identity_checks = [
     ("语音合成", "语音合成" in identity),
     ("AI 图片生成", "AI 图片生成" in identity),
@@ -61,7 +66,7 @@ for name, result in identity_checks:
     print(f"  {'OK' if result else 'FAIL'}: {name}")
 
 # 5. TOOLS.md
-tools_md = open("/home/orangepi/ai-agent/config/workspace/TOOLS.md").read()
+tools_md = open(PROJECT_ROOT / "config" / "workspace" / "TOOLS.md").read()
 tools_checks = [
     ("AI 创作工具", "AI 创作工具" in tools_md),
     ("agnes_image_generate", "agnes_image_generate" in tools_md),
@@ -75,7 +80,7 @@ for name, result in tools_checks:
     print(f"  {'OK' if result else 'FAIL'}: {name}")
 
 # 6. SOUL.md
-soul_md = open("/home/orangepi/ai-agent/config/workspace/SOUL.md").read()
+soul_md = open(PROJECT_ROOT / "config" / "workspace" / "SOUL.md").read()
 soul_checks = [
     ("lonely 情绪", "lonely" in soul_md),
     ("playful 情绪", "playful" in soul_md),

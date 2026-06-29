@@ -18,11 +18,28 @@ class ToolResult:
     error: str = ""
 
     @classmethod
-    def ok(cls, data: Any, **kwargs) -> "ToolResult":
+    def ok(cls, data: Any, **kwargs: Any) -> "ToolResult":
+        """构造成功结果.
+
+        Args:
+            data: 返回数据
+            **kwargs: 额外字段
+
+        Returns:
+            标记为成功的 ToolResult
+        """
         return cls(success=True, data=data, **kwargs)
 
     @classmethod
     def fail(cls, error: str) -> "ToolResult":
+        """构造失败结果.
+
+        Args:
+            error: 错误描述
+
+        Returns:
+            标记为失败的 ToolResult
+        """
         return cls(success=False, error=error)
 
 
@@ -38,8 +55,26 @@ def register_tool(name: str, description: str, schema: dict,
                   requires_confirmation: bool = False,
                   source: str = "builtin",
                   plugin_id: str = "",
-                  version: str = ""):
-    def decorator(func):
+                  version: str = "") -> Any:
+    """装饰器: 注册一个工具函数.
+
+    Args:
+        name: 工具名
+        description: 工具描述
+        schema: JSON schema 参数定义
+        permission: 权限级别, 默认 READ_ONLY
+        category: 分类, 默认 general
+        max_frequency: 最大调用频率, 默认 10
+        requires_confirmation: 是否需要确认, 默认 False
+        source: 来源 (builtin/dynamic/plugin), 默认 builtin
+        plugin_id: 插件标识, 默认空字符串
+        version: 版本, 默认空字符串
+
+    Returns:
+        装饰器函数
+    """
+    def decorator(func: Any) -> Any:
+        """实际注册函数的装饰器内层."""
         global _schema_cache, _schema_version
         _tools[name] = {
             "name": name,
@@ -65,7 +100,7 @@ def register_tool_direct(name: str, description: str, func: callable,
                          category: str = "general",
                          source: str = "dynamic",
                          plugin_id: str = "",
-                         version: str = ""):
+                         version: str = "") -> None:
     """直接注册工具（非装饰器模式），用于程序化注册"""
     global _schema_cache, _schema_version
     _tools[name] = {
@@ -89,30 +124,20 @@ def register_tool_direct(name: str, description: str, func: callable,
 
 
 def get_tool(name: str) -> dict | None:
+    """按名称获取工具定义, 不存在返回 None."""
     return _tools.get(name)
 
 
 def list_tools() -> list[dict]:
+    """返回所有已注册工具的列表."""
     return list(_tools.values())
 
 
 def to_openai_tools() -> list[dict]:
+    """生成 OpenAI function-calling 格式的工具列表 (带缓存)."""
     global _schema_cache, _schema_version
-    # 确保所有工具模块已导入注册
-    import tools.file_tools_v2
-    import tools.code_tools_v2
-    import tools.web_tools_v2
-    import tools.document_tools
-    import tools.web_browse_tools
-    import tools.web_browse_enhanced
-    import tools.multi_search_tools
-    import tools.agnes_tools
-    import tools.hardware_tools
-    import tools.system_tools
-    import tools.vision_tools
-    import tools.memory_tool
-    import tools.nudge_tool
-    import tools.domestic_search_tools
+    # 内置工具模块的注册由 tool_engine/__init__.py 顶层导入 _builtin_tools 完成,
+    # 此处不再需要 import tools.* (打破 tool_registry <-> tools.* 静态循环)
     if _schema_cache is not None:
         metrics.inc("tool_registry.schema_cache.hit")
         return _schema_cache
@@ -138,7 +163,8 @@ def get_all_tool_dicts() -> dict[str, dict]:
     return dict(_tools)
 
 
-def clear_tools():
+def clear_tools() -> None:
+    """清空所有已注册工具并重置 schema 缓存."""
     global _schema_cache, _schema_version
     _tools.clear()
     _schema_version += 1

@@ -9,18 +9,18 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from loguru import logger
 
 from config import FILE_DIR
 from emotion.emotion_enum import CN_TO_EN
 from utils.text_utils import strip_dsml, strip_reasoning, humanize
+from core.degradation_strategy import get_degradation_strategy
 
-from agent_core.core import _current_request_ctx
+from agent_core._shared import _current_request_ctx, RequestContext
 
 if TYPE_CHECKING:
-    from agent_core.core import RequestContext
     from tool_engine.tool_registry import ToolResult
 
 
@@ -112,7 +112,7 @@ class ToolExecutorMixin:
         return result
 
     async def _handle_tool_calls(self, tool_calls: list[dict], messages: list[dict],
-                                  trace, *,
+                                  trace: Any, *,
                                   assistant_content: str = "",
                                   reasoning_content: str | None = None,
                                   user_openid: str = "",
@@ -230,6 +230,17 @@ class ToolExecutorMixin:
                 text = text[len(p):].strip()
         text = strip_dsml(text)
         text = strip_reasoning(text)
+        # S6: Canary Token 泄露检测 —— 在输出返回给用户之前扫描
+        # 检测到泄露时立即阻断, 替换为安全消息
+        try:
+            from security.canary import get_canary_detector
+            leaked, cleaned = get_canary_detector().scan_output_blocking(text)
+            if leaked:
+                logger.warning("agent.canary_leak_blocked reply_preview=%s", text[:100])
+                return "检测到潜在的系统信息泄露, 已屏蔽相关内容"
+            text = cleaned
+        except Exception as e:
+            logger.debug(f"canary.scan_failed: {e}")
         text = humanize(text, style="nahida")
         return text
 
@@ -247,6 +258,16 @@ class ToolExecutorMixin:
         return text
 
     def get_sticker_info(self, reply: str, user_emotion: str = "", force_sticker: bool = False) -> tuple[str, Path | None]:
+        """从回复中提取情绪并匹配套餐表情包路径.
+
+        Args:
+            reply: 待处理的回复文本 (可能含 [emotion:xxx] 标签)
+            user_emotion: 用户当前情绪, 默认空串
+            force_sticker: 是否强制选取表情包, 默认 False
+
+        Returns:
+            (清洗后文本, 表情包路径或 None) 元组
+        """
         # Bug fix: 优先从 [emotion:xxx] 标签提取情绪，而非丢弃标签后重新检测
         import re as _re
         _emotion_match = _re.search(r'\[emotion:([^\]]+)\]', reply)
@@ -258,7 +279,8 @@ class ToolExecutorMixin:
 
         clean_reply = self.sticker_manager.strip_emotion_tag(reply)
         sticker_path = None
-        if self.sticker_manager.available:
+        if (self.sticker_manager.available
+                and get_degradation_strategy().is_feature_available("emotion")):
             if force_sticker:
                 if not detected:
                     detected = self.sticker_manager.detect_emotion(clean_reply) or "happy"

@@ -1,5 +1,6 @@
 """健康探针（R12）— LLM / TTS / 视频 / MCP / DB / 向量库 在线探活。"""
 from __future__ import annotations
+from typing import Any
 
 import json
 import time
@@ -8,7 +9,7 @@ from pathlib import Path
 from loguru import logger
 
 
-async def probe_llm(core, route: str = "chat") -> dict:
+async def probe_llm(core: Any, route: str = "chat") -> dict:
     """直连指定路由发送固定探针。"""
     # 注意：不再每次探活都 refresh_client()，避免频繁重建客户端
     # Setup 保存 Key 后会主动调用 refresh_client()
@@ -34,7 +35,7 @@ async def probe_llm(core, route: str = "chat") -> dict:
                 "model": ROUTE_TABLE[route].get("model", ""), "error": str(e)[:200]}
 
 
-async def probe_provider(core, provider_id: str) -> dict:
+async def probe_provider(core: Any, provider_id: str) -> dict:
     """对自定义 provider 直连探活（不经过 ROUTE_TABLE）。
 
     与 probe_llm 不同，此函数绕过 ModelRouter.route()，直接用 provider
@@ -112,7 +113,8 @@ async def probe_provider(core, provider_id: str) -> dict:
                 "model": model, "error": err_msg}
 
 
-async def probe_tts(core) -> dict:
+async def probe_tts(core: Any) -> dict:
+    """探测 TTS 合成能力, 返回结果与音频 URL."""
     t0 = time.time()
     try:
         if not core.tts.available:
@@ -150,7 +152,16 @@ async def probe_video_config() -> dict:
         return {"ok": False, "latency_ms": 0, "error": str(e)[:200]}
 
 
-async def probe_mcp(core, server: str) -> dict:
+async def probe_mcp(core: Any, server: str) -> dict:
+    """探测指定 MCP server 连接状态与工具列表.
+
+    Args:
+        core: 应用核心对象
+        server: MCP server 名
+
+    Returns:
+        含 ok/latency_ms/tools/error 的探测结果
+    """
     t0 = time.time()
     try:
         client = core._mcp_manager._clients.get(server)
@@ -164,7 +175,8 @@ async def probe_mcp(core, server: str) -> dict:
         return {"ok": False, "latency_ms": 0, "error": str(e)[:200]}
 
 
-async def probe_db(core) -> dict:
+async def probe_db(core: Any) -> dict:
+    """探测数据库连接, 返回会话/记忆条目计数."""
     t0 = time.time()
     try:
         row = await core.db.fetch_one("SELECT COUNT(*) AS c FROM conversation_logs")
@@ -176,7 +188,8 @@ async def probe_db(core) -> dict:
         return {"ok": False, "latency_ms": int((time.time() - t0) * 1000), "error": str(e)[:200]}
 
 
-async def probe_vector(core) -> dict:
+async def probe_vector(core: Any) -> dict:
+    """探测向量记忆库检索能力, 返回命中数."""
     t0 = time.time()
     try:
         if not core.memory:
@@ -188,7 +201,7 @@ async def probe_vector(core) -> dict:
         return {"ok": False, "latency_ms": int((time.time() - t0) * 1000), "error": str(e)[:200]}
 
 
-def _list_custom_providers(core) -> list[dict]:
+def _list_custom_providers(core: Any) -> list[dict]:
     """枚举已注册的自定义 provider（有 Key 且非内置），返回测试项清单。"""
     out: list[dict] = []
     try:
@@ -218,7 +231,7 @@ def _list_custom_providers(core) -> list[dict]:
     return out
 
 
-def list_probe_ids(core) -> list[dict]:
+def list_probe_ids(core: Any) -> list[dict]:
     """全部可用探针清单（供测试中心渲染卡片）。"""
     from model_router import ROUTE_TABLE
     probes = [{"id": f"llm:{r}", "label": f"LLM · {r}",
@@ -237,7 +250,16 @@ def list_probe_ids(core) -> list[dict]:
     return probes
 
 
-async def run_probe(core, probe_id: str) -> dict:
+async def run_probe(core: Any, probe_id: str) -> dict:
+    """按 probe_id 执行单个探针, 返回结果字典.
+
+    Args:
+        core: 应用核心对象
+        probe_id: 探针 ID (如 llm:default/tts/mcp:xxx/db/vector)
+
+    Returns:
+        探针结果字典
+    """
     if probe_id.startswith("llm_provider:"):
         return await probe_provider(core, probe_id[len("llm_provider:"):])
     if probe_id.startswith("llm:"):
@@ -255,7 +277,16 @@ async def run_probe(core, probe_id: str) -> dict:
     return {"ok": False, "error": f"未知探针 {probe_id}"}
 
 
-async def run_all(core, on_progress=None) -> dict:
+async def run_all(core: Any, on_progress: Any | None=None) -> dict:
+    """执行全部探针, 可选回调通知单条进度.
+
+    Args:
+        core: 应用核心对象
+        on_progress: 单条探针完成后的回调 (item, res)
+
+    Returns:
+        含 total/passed/failed/results 的汇总字典
+    """
     items = list_probe_ids(core)
     results = []
     passed = 0

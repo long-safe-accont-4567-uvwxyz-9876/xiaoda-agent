@@ -45,7 +45,7 @@ def apply_cache_control(messages: list[dict],
     logger.debug("prompt_caching.applied", breakpoints=breakpoints_used, ttl=cache_ttl)
     return messages
 
-def _apply_cache_breakpoint(message: dict, cache_marker: dict):
+def _apply_cache_breakpoint(message: dict, cache_marker: dict) -> None:
     """在单条消息上应用缓存断点"""
     content = message.get("content")
 

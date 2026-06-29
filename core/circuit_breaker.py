@@ -4,6 +4,7 @@
     探测成功 → GREEN（冷却时间重置为初始值）
     探测失败 → RED（冷却时间指数退避，上限 MAX_COOLDOWN）
 """
+from typing import Any
 import time
 import threading
 from enum import Enum
@@ -72,7 +73,7 @@ class CircuitBreaker:
     def __init__(self,
                  cooldown: int = None,
                  half_open_probes: int = None,
-                 max_cooldown: int = None):
+                 max_cooldown: int = None) -> None:
         # Task 12: 自适应恢复参数
         self._initial_cooldown = int(cooldown) if cooldown is not None else int(CIRCUIT_BREAKER_COOLDOWN)
         self._half_open_probes = int(half_open_probes) if half_open_probes is not None else int(CIRCUIT_BREAKER_HALF_OPEN_PROBES)
@@ -95,7 +96,7 @@ class CircuitBreaker:
 
     # ── 内部辅助 ──
 
-    def _log_state_change(self, old, new, **kwargs):
+    def _log_state_change(self, old: Any, new: Any, **kwargs: Any) -> None:
         """Task 13.1: 状态切换日志"""
         extra = {
             "old": getattr(old, "value", old),
@@ -104,13 +105,13 @@ class CircuitBreaker:
         extra.update(kwargs)
         logger.info("circuit_breaker.state_change", **extra)
 
-    def _reset_probes(self):
+    def _reset_probes(self) -> None:
         """重置探测计数（探测本轮结束）"""
         self._probes_in_flight = 0
         self._probes_used = 0
         self._probe_start_time = 0.0
 
-    def _count_signals(self, state: CognitiveState):
+    def _count_signals(self, state: CognitiveState) -> tuple:
         """统计红/黄信号数量"""
         red_signals = 0
         yellow_signals = 0
@@ -202,7 +203,7 @@ class CircuitBreaker:
                 self._last_state = CircuitState.GREEN
             return CircuitState.GREEN
 
-    def on_failure(self, state: CognitiveState, is_tool: bool = False):
+    def on_failure(self, state: CognitiveState, is_tool: bool = False) -> None:
         """失败时更新状态"""
         with self._lock:
             state.consecutive_fails += 1
@@ -215,7 +216,7 @@ class CircuitBreaker:
             # 清除 RED 状态标记（让 check 重新判定）
             state._red_since = 0.0
 
-    def on_success(self, state: CognitiveState, is_tool: bool = False):
+    def on_success(self, state: CognitiveState, is_tool: bool = False) -> None:
         """成功时更新状态"""
         with self._lock:
             state.consecutive_fails = 0
@@ -228,7 +229,7 @@ class CircuitBreaker:
             # 成功后清除 RED 状态
             state._red_since = 0.0
 
-    def on_half_open_success(self, state: CognitiveState):
+    def on_half_open_success(self, state: CognitiveState) -> None:
         """Task 11.4: half-open 探测成功，恢复 GREEN"""
         with self._lock:
             elapsed = 0.0
@@ -250,7 +251,7 @@ class CircuitBreaker:
             )
             self._last_state = CircuitState.GREEN
 
-    def on_half_open_failure(self, state: CognitiveState):
+    def on_half_open_failure(self, state: CognitiveState) -> None:
         """Task 11.4: half-open 探测失败，回到 RED 并指数退避"""
         with self._lock:
             elapsed = 0.0

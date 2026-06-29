@@ -1,3 +1,4 @@
+from typing import Any
 import time
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from loguru import logger
@@ -7,14 +8,14 @@ from utils.metrics import metrics
 _memory_manager = None
 
 
-def bind(memory_manager):
+def bind(memory_manager: Any) -> None:
     """由 agent_core.init() 调用，注入已初始化的 MemoryManager 实例"""
     global _memory_manager
     _memory_manager = memory_manager
     logger.info("memory_tool.bound", has_vec=memory_manager.vec is not None)
 
 
-def _get_memory_manager():
+def _get_memory_manager() -> Any:
     """获取已注入的 MemoryManager 实例，未注入则抛异常"""
     if _memory_manager is None:
         raise RuntimeError("MemoryManager 未初始化，请确认 agent_core.init() 已调用 bind()")

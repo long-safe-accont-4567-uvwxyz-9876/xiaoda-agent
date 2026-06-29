@@ -15,7 +15,8 @@ from pathlib import Path
 from loguru import logger
 
 from utils.canary_guard import CanaryManager
-from utils.instruction_hierarchy import InstructionBuilder, InstructionLevel
+from utils.instruction_hierarchy import InstructionBuilder, InstructionLevel as _UtilsLevel
+from security.instruction_hierarchy import InstructionLevel, format_instruction
 
 
 # ── 安全：Canary Token 泄露检测管理器（全局单例） ──────────────
@@ -400,7 +401,7 @@ def _get_template_dir() -> Path:
     return Path(__file__).parent / "config" / "workspace"
 
 
-def _ensure_workspace_template():
+def _ensure_workspace_template() -> None:
     """首次运行时生成 USER.md / SOUL.md 模板（不覆盖已有文件）。
 
     从 config/workspace/ 下的 .tpl 模板文件读取内容，填充设备信息后写入
@@ -506,8 +507,50 @@ def load_skills() -> list[dict]:
     return out
 
 
-def build_system_prompt(extra_context: str = "", address_term: str = "爸爸") -> str:
+def _build_xp_segment(user_id: str | None) -> str:
+    """构建 XP 等级 prompt 段落。
+
+    注入到 system prompt 中，让纳西妲根据用户 XP 等级调整亲密度。
+    per-user 动态段，不进入稳定段缓存，以保持 KV Cache 命中率。
+    任何异常均被吞掉（零质量回退），不影响主流程。
+    """
+    if not user_id:
+        return ""
+
+    try:
+        from core.xp_system import get_xp_system, XPLevel
+        xp_sys = get_xp_system()
+        state = xp_sys.get_state(user_id)
+        config = xp_sys.get_intimacy_config(state.level)
+
+        segment = "\n\n[关系亲密度配置]\n"
+        segment += f"用户等级：LV{state.level.value} {config.get('label', '')}\n"
+        segment += f"XP：{state.xp}\n"
+        segment += f"称呼方式：{config.get('address_term', '你')}\n"
+        segment += f"语气风格：{config.get('tone', 'polite')}\n"
+        segment += f"主动性：{config.get('initiative', 0.3)}\n"
+        segment += f"情感丰富度：{config.get('emotion_richness', 0.3)}\n"
+
+        # 根据等级添加具体指导
+        if state.level >= XPLevel.LV3_FRIEND:
+            segment += "指导：可主动提及过往话题、使用昵称、深度情感陪伴\n"
+        elif state.level >= XPLevel.LV2_ACQUAINTANCE:
+            segment += "指导：可主动提及过往话题、使用昵称\n"
+        else:
+            segment += "指导：保持礼貌克制、不主动提及私人话题\n"
+
+        return segment
+    except Exception as e:
+        logger.warning("prompt.xp_segment_failed", error=str(e))
+        return ""
+
+
+def build_system_prompt(extra_context: str = "", address_term: str = "爸爸",
+                         user_id: str | None = None,
+                         user_input: str | None = None) -> str:
     # P6: 增量上下文构建路径 —— 稳定段缓存 + 动态段每次构建
+    # extra_context 延迟到末尾注入，保证新段落顺序:
+    # base → mental → permanent → emotional → XP → extra_context
     try:
         from config import PROMPT_CACHING_ENABLED
     except ImportError:
@@ -517,7 +560,8 @@ def build_system_prompt(extra_context: str = "", address_term: str = "爸爸") -
     if PROMPT_CACHING_ENABLED:
         try:
             stable = _build_stable_prompt(address_term)
-            dynamic = _build_dynamic_prompt(extra_context)
+            # extra_context 延迟到末尾注入（保证新段落顺序）
+            dynamic = _build_dynamic_prompt("")
             if dynamic:
                 system_prompt = stable + "\n\n---\n\n" + dynamic
             else:
@@ -538,75 +582,134 @@ def build_system_prompt(extra_context: str = "", address_term: str = "爸爸") -
         if _SYSTEM_PROMPT_CACHE and (now - _SYSTEM_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL and not mtime_changed and not addr_changed:
             system_prompt = _SYSTEM_PROMPT_CACHE
         else:
-            sections = []
-
-            agents_rules = load_workspace_file("AGENTS.md")
-            if agents_rules:
-                sections.append(agents_rules)
-
-            soul = load_workspace_file("SOUL.md")
-            if soul:
-                # 替换 {address_term} 占位符为实际称呼
-                if "{address_term}" in soul:
-                    soul = soul.replace("{address_term}", address_term)
-                sections.append(soul)
-
-            identity = load_workspace_file("IDENTITY.md")
-            if identity:
-                sections.append(identity)
-
-            user = load_workspace_file("USER.md")
-            if user:
-                sections.append(user)
-
-            tools_rules = load_workspace_file("TOOLS.md")
-            if tools_rules:
-                sections.append(tools_rules)
-
-            memory = load_workspace_file("MEMORY.md")
-            if memory:
-                sections.append(memory)
-
-            heartbeat = load_workspace_file("HEARTBEAT.md")
-            if heartbeat:
-                sections.append(heartbeat)
-
-            skills = load_skills()
-            if skills:
-                skill_texts = "\n\n".join(
-                    f"### Skill: {s['name']}\n{s['content']}" for s in skills if s["content"])
-                if skill_texts:
-                    sections.append("[已安装的 Skills]\n\n" + skill_texts)
-
-            _npu_status = "NPU视觉识别已启用" if os.getenv("ENABLE_NPU", "").lower() in ("1", "true", "yes") else "视觉识别（ncnn后端）"
-            _uname = platform.uname()
-            _hostname = socket.gethostname()
-            hw_context = (
-                "[本机硬件信息]\n"
-                f"主机名: {_hostname} | 架构: {_uname.machine} | 处理器: {_uname.processor or '未知'}\n"
-                f"系统: {_uname.system} {_uname.release} ({_uname.machine})\n"
-                "可用接口: GPIO (40pin排针) / I2C / SPI / UART / PWM\n"
-                "可用工具: gpio_control(引脚控制) / i2c_comm(I2C通信) / hardware_status(硬件监控) / service_manage(服务管理) / network_diag(网络诊断) / dev_assist(开发辅助) / camera_capture(拍照) / vision_analyze(视觉分析)\n"
-                f"数据存储: {DATA_DIR}\n"
-                f"摄像头: Q8 HD Webcam (/dev/video0) | 视觉模型: YOLOv10-nano (ncnn CPU) | {_npu_status}"
-            )
-            sections.append(hw_context)
-
+            sections = _build_workspace_sections(address_term)
+            sections.append(_build_hardware_context(DATA_DIR))
             system_prompt = "\n\n---\n\n".join(sections)
 
             _SYSTEM_PROMPT_CACHE = system_prompt
             _SYSTEM_PROMPT_CACHE_TS = now
             _SYSTEM_PROMPT_CACHE_MTIMES = current_mtimes
             _SYSTEM_PROMPT_CACHE_ADDR_TERM = address_term
+        # extra_context 移到末尾注入
 
-        if extra_context:
-            system_prompt += f"\n\n---\n\n{extra_context}"
+    # === 注入新能力段落（per-user 动态段，不进入稳定段缓存） ===
+    if user_id:
+        # 1. L/M/S 心理状态段落
+        try:
+            from core.mental_state import get_mental_state_manager
+            mgr = get_mental_state_manager()
+            mental_segment = mgr.get_prompt_segment()
+            if mental_segment:
+                system_prompt += "\n\n" + mental_segment
+        except Exception as e:
+            logger.warning("prompt.mental_state_inject_failed", error=str(e))
+
+        # 2. 永久记忆段落
+        try:
+            from core.permanent_memory import get_permanent_memory_manager
+            mgr = get_permanent_memory_manager()
+            permanent_segment = mgr.get_prompt_segment(user_id)
+            if permanent_segment:
+                system_prompt += "\n\n" + permanent_segment
+        except Exception as e:
+            logger.warning("prompt.permanent_memory_inject_failed", error=str(e))
+
+        # 3. 情感记忆召回段落（需要 user_input）
+        if user_input:
+            try:
+                from memory.emotional_memory import get_emotional_memory_manager
+                from core.xp_system import get_xp_system
+                xp_sys = get_xp_system()
+                xp_state = xp_sys.get_state(user_id)
+                em_mgr = get_emotional_memory_manager()
+                emotional_segment = em_mgr.recall_and_enact(
+                    user_id, user_input, xp_state.level.value
+                )
+                if emotional_segment:
+                    system_prompt += "\n\n" + emotional_segment
+            except Exception as e:
+                logger.warning("prompt.emotional_memory_inject_failed", error=str(e))
+
+    # 4. XP 等级段落（已有，per-user 不进缓存以保持稳定段 KV Cache 命中率）
+    xp_segment = _build_xp_segment(user_id)
+    if xp_segment:
+        system_prompt += xp_segment
+
+    # 5. extra_context（末尾注入，保证顺序: base → mental → permanent → emotional → XP → extra_context）
+    if extra_context:
+        system_prompt += "\n\n---\n\n" + extra_context
+
+    return system_prompt
+
+
+def _build_workspace_sections(address_term: str) -> list[str]:
+    """加载 workspace 配置文件并组装 sections 列表（不含硬件信息段）。"""
+    sections = []
+
+    agents_rules = load_workspace_file("AGENTS.md")
+    if agents_rules:
+        sections.append(agents_rules)
+
+    soul = load_workspace_file("SOUL.md")
+    if soul:
+        # 替换 {address_term} 占位符为实际称呼
+        if "{address_term}" in soul:
+            soul = soul.replace("{address_term}", address_term)
+        sections.append(soul)
+
+    identity = load_workspace_file("IDENTITY.md")
+    if identity:
+        sections.append(identity)
+
+    user = load_workspace_file("USER.md")
+    if user:
+        sections.append(user)
+
+    tools_rules = load_workspace_file("TOOLS.md")
+    if tools_rules:
+        sections.append(tools_rules)
+
+    memory = load_workspace_file("MEMORY.md")
+    if memory:
+        sections.append(memory)
+
+    heartbeat = load_workspace_file("HEARTBEAT.md")
+    if heartbeat:
+        sections.append(heartbeat)
+
+    skills = load_skills()
+    if skills:
+        skill_texts = "\n\n".join(
+            f"### Skill: {s['name']}\n{s['content']}" for s in skills if s["content"])
+        if skill_texts:
+            sections.append("[已安装的 Skills]\n\n" + skill_texts)
+    return sections
+
+
+def _build_hardware_context(data_dir: str) -> str:
+    """构造本机硬件信息段。"""
+    _npu_status = "NPU视觉识别已启用" if os.getenv("ENABLE_NPU", "").lower() in ("1", "true", "yes") else "视觉识别（ncnn后端）"
+    _uname = platform.uname()
+    _hostname = socket.gethostname()
+    return (
+        "[本机硬件信息]\n"
+        f"主机名: {_hostname} | 架构: {_uname.machine} | 处理器: {_uname.processor or '未知'}\n"
+        f"系统: {_uname.system} {_uname.release} ({_uname.machine})\n"
+        "可用接口: GPIO (40pin排针) / I2C / SPI / UART / PWM\n"
+        "可用工具: gpio_control(引脚控制) / i2c_comm(I2C通信) / hardware_status(硬件监控) / service_manage(服务管理) / network_diag(网络诊断) / dev_assist(开发辅助) / camera_capture(拍照) / vision_analyze(视觉分析)\n"
+        f"数据存储: {data_dir}\n"
+        f"摄像头: Q8 HD Webcam (/dev/video0) | 视觉模型: YOLOv10-nano (ncnn CPU) | {_npu_status}"
+    )
 
     # 安全：InstructionBuilder 分层包装(防 prompt injection) + Canary Token 注入(泄露检测)
+    # S6: 使用 security.canary 模块 (新格式 CANARY-{8hex}-{4check}, 支持轮换/回调)
+    from security.canary import get_canary_detector
     _ib = InstructionBuilder()
-    _ib.add(InstructionLevel.SYSTEM, system_prompt)
+    _ib.add(_UtilsLevel.SYSTEM, system_prompt)
     system_prompt = _ib.build()
-    system_prompt = _canary_manager.inject(system_prompt)
+    system_prompt = get_canary_detector().inject(system_prompt)
+    # S7: 用 security 模块的 format_instruction 标记为 SYSTEM 级别 (4级指令分层)
+    system_prompt = format_instruction(system_prompt, InstructionLevel.SYSTEM)
     return system_prompt
 
 
@@ -697,6 +800,7 @@ def _strip_owner_references(text: str) -> str:
 
 __all__ = [
     "build_system_prompt",
+    "_build_xp_segment",
     "build_safe_system_prompt",
     "build_scene_aware_prompt",
     "load_workspace_file",

@@ -43,8 +43,8 @@ class PluginManager:
 
     LIFECYCLE_TIMEOUT = 60  # seconds
 
-    def __init__(self, tool_registry=None, hook_engine=None, memory_manager=None,
-                 knowledge_graph=None, mcp_manager=None, agent_core=None):
+    def __init__(self, tool_registry: Any | None=None, hook_engine: Any | None=None, memory_manager: Any | None=None,
+                 knowledge_graph: Any | None=None, mcp_manager: Any | None=None, agent_core: Any | None=None) -> None:
         self._plugins: dict[str, PluginRecord] = {}
         self._tool_registry = tool_registry
         self._hook_engine = hook_engine

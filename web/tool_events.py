@@ -12,7 +12,7 @@ current_msg_id: contextvars.ContextVar[str] = contextvars.ContextVar("ws_msg_id"
 
 
 async def emit_tool_event(phase: str, tool_name: str, arguments: dict | None = None,
-                          ok: bool | None = None, elapsed_ms: int | None = None):
+                          ok: bool | None = None, elapsed_ms: int | None = None) -> None:
     try:
         from web.ws_hub import manager
         if manager.active_count == 0:

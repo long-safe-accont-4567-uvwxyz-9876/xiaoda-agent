@@ -30,5 +30,13 @@
   "memory_scope": null,
   "background": false,
   "wallpaper": "/assets/wallpapers/xilian.jpg",
+  "allowed_paths": [
+    "tools/web_browse_tools.py",
+    "tools/web_browse_enhanced.py"
+  ],
+  "forbidden_paths": [
+    "*.env",
+    "security/*"
+  ],
   "_saved_at": 1782406890.276899
 }

@@ -1,3 +1,4 @@
+from typing import Any
 import subprocess
 import sys
 import io
@@ -160,7 +161,7 @@ class _ExecutionTimeout(Exception):
     pass
 
 
-def _timeout_handler(signum, frame):
+def _timeout_handler(signum: Any, frame: Any) -> None:
     raise _ExecutionTimeout("代码执行超时")
 
 
@@ -227,7 +228,7 @@ def python_executor(code: str) -> ToolResult:
         # 跨平台执行超时：UNIX 用 signal.alarm，Windows（无 SIGALRM）用守护线程 + join 超时
         _exec_state = {}
 
-        def _run_code():
+        def _run_code() -> None:
             try:
                 with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
                     exec(code, exec_globals, local_vars)

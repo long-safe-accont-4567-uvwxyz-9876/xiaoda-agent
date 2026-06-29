@@ -1,4 +1,5 @@
 """流体记忆系统 — 艾宾浩斯遗忘曲线 + 访问强化"""
+from typing import Any
 import math
 import time
 import logging
@@ -40,7 +41,7 @@ class FluidMemory:
         """是否应归档（梦境守护）"""
         return score < self.DREAM_THRESHOLD
 
-    async def dream(self, memory_db, batch_size: int = 100) -> int:
+    async def dream(self, memory_db: Any, batch_size: int = 100) -> int:
         """梦境归档 — 遍历活跃记忆，低分归档
 
         Args:

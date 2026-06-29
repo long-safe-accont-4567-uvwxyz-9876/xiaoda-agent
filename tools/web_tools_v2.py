@@ -5,6 +5,7 @@ import time
 from typing import Any
 from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+from security.ssrf_guard import validate_url as _ssrf_validate_url
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
@@ -19,7 +20,7 @@ _primp_client = None
 _tavily_client = None
 
 
-def _get_primp_client():
+def _get_primp_client() -> Any:
     global _primp_client
     if _primp_client is None:
         import primp
@@ -27,7 +28,7 @@ def _get_primp_client():
     return _primp_client
 
 
-def _get_tavily_client():
+def _get_tavily_client() -> Any:
     global _tavily_client
     if _tavily_client is None and TAVILY_API_KEY:
         from tavily import TavilyClient
@@ -41,6 +42,11 @@ def _bing_search_sync(query: str, max_results: int = 8) -> list[dict]:
 
     client = _get_primp_client()
     url = f"https://cn.bing.com/search?q={quote_plus(query)}&count={max_results}&setlang=zh-Hans"
+    # SSRF 防护：5步法校验搜索 URL (防御性, host 为固定公网)
+    ok, reason = _ssrf_validate_url(url)
+    if not ok:
+        logger.warning("bing.ssrf_blocked reason={}", reason)
+        return []
     try:
         resp = client.get(url, headers={"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"})
     except Exception as e:
@@ -285,9 +291,13 @@ async def get_weather(city: str) -> ToolResult:
         if not city.strip():
             return ToolResult.fail("城市名称不能为空")
 
-        def _fetch_weather():
+        def _fetch_weather() -> Any:
             import urllib.request, urllib.parse
             url = f"https://wttr.in/{urllib.parse.quote(city)}?format=3&lang=zh"
+            # SSRF 防护：5步法校验 (city 为用户输入, 防注入内网地址)
+            ok, reason = _ssrf_validate_url(url)
+            if not ok:
+                raise ValueError(f"安全限制: {reason}")
             req = urllib.request.Request(url, headers={'User-Agent': 'curl'})
             with urllib.request.urlopen(req, timeout=10) as response:
                 return response.read().decode('utf-8').strip()

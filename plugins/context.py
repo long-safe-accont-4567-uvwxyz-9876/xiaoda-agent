@@ -17,8 +17,8 @@ class PluginContext:
     """插件与宿主之间的桥接层"""
 
     def __init__(self, manifest: PluginManifest, permissions: PermissionChecker,
-                 tool_registry=None, hook_engine=None, memory_manager=None,
-                 knowledge_graph=None, mcp_manager=None, agent_core=None):
+                 tool_registry: Any | None=None, hook_engine: Any | None=None, memory_manager: Any | None=None,
+                 knowledge_graph: Any | None=None, mcp_manager: Any | None=None, agent_core: Any | None=None) -> None:
         self._manifest = manifest
         self._permissions = permissions
         self._tool_registry = tool_registry
@@ -154,7 +154,7 @@ class PluginContext:
             return None
 
     # ── LLM ──
-    async def llm_chat(self, messages: list[dict], **kwargs) -> str:
+    async def llm_chat(self, messages: list[dict], **kwargs: Any) -> str:
         """调用 LLM"""
         self._permissions.check_llm_access()
         if self._agent_core is None:
@@ -166,7 +166,7 @@ class PluginContext:
             return ""
 
     # ── Background Tasks ──
-    def spawn_task(self, name: str, coro) -> None:
+    def spawn_task(self, name: str, coro: Any) -> None:
         """启动后台任务"""
         task = asyncio.create_task(coro)
         self._background_tasks[name] = task

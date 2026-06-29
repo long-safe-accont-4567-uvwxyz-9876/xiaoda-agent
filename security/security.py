@@ -155,7 +155,7 @@ class SecurityFilter:
     """安全过滤器 - 支持开发板模式（warn 不 block）和生产模式（强制 block）"""
 
     def __init__(self, owner_ids: list[str] | None = None,
-                 rate_limit_per_minute: int = 120):
+                 rate_limit_per_minute: int = 120) -> None:
         # 自动从环境变量读取 owner_ids（调用方未显式传入时）
         if owner_ids is None:
             owner_ids = self._load_owner_ids_from_env()
@@ -424,6 +424,14 @@ class SecurityFilter:
         return True, "", matched
 
     def is_allowed(self, user_id: str) -> tuple[bool, str]:
+        """检查用户是否被允许调用 (紧急熔断时全部拒绝).
+
+        Args:
+            user_id: 用户 ID
+
+        Returns:
+            (是否允许, 拒绝原因) 元组, 允许时原因为空串
+        """
         if self._emergency_stop:
             return False, "紧急熔断已启用"
         return True, ""
@@ -446,16 +454,18 @@ class SecurityFilter:
         timestamps.append(now)
         return True
 
-    def _cleanup_stale_users(self, now: float):
+    def _cleanup_stale_users(self, now: float) -> None:
         stale = [uid for uid, ts in self._call_timestamps.items()
                  if not ts or now - ts[-1] > 300]
         for uid in stale:
             del self._call_timestamps[uid]
 
-    def emergency_stop(self):
+    def emergency_stop(self) -> None:
+        """启用紧急熔断, 拒绝所有后续调用."""
         self._emergency_stop = True
 
-    def emergency_resume(self):
+    def emergency_resume(self) -> None:
+        """解除紧急熔断, 恢复正常服务."""
         self._emergency_stop = False
 
     def is_owner(self, user_id: str) -> bool:
@@ -479,6 +489,7 @@ class SecurityFilter:
 
     @property
     def is_stopped(self) -> bool:
+        """返回是否处于紧急熔断状态."""
         return self._emergency_stop
 
     def scan_threats(self, text: str, scope: str = "all", _skip_base_check: bool = False) -> SecurityCheckResult:

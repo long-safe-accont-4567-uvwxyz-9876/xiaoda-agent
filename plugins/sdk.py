@@ -11,7 +11,7 @@ from plugins.context import PluginContext
 
 # ── 装饰器元数据标记 ──
 
-def register_tool(name: str, description: str = "", schema: dict | None = None):
+def register_tool(name: str, description: str = "", schema: dict | None = None) -> Any:
     """装饰器：标记方法为 LLM 可调用工具"""
     def decorator(func: Callable) -> Callable:
         func.__plugin_tool__ = {
@@ -23,7 +23,7 @@ def register_tool(name: str, description: str = "", schema: dict | None = None):
     return decorator
 
 
-def subscribe(event_type: str):
+def subscribe(event_type: str) -> Any:
     """装饰器：标记方法为事件处理器"""
     def decorator(func: Callable) -> Callable:
         func.__plugin_sub__ = {
@@ -40,7 +40,7 @@ class Plugin(ABC):
     __plugin_tool_declarations__: list[dict] = []
     __plugin_sub_declarations__: list[dict] = []
 
-    def __init_subclass__(cls, **kwargs):
+    def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         # 收集装饰器声明的工具和事件订阅
         tools = []
@@ -60,7 +60,7 @@ class Plugin(ABC):
         cls.__plugin_tool_declarations__ = tools
         cls.__plugin_sub_declarations__ = subs
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._ctx: PluginContext | None = None
 
     @property

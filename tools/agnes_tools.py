@@ -1,4 +1,5 @@
 """Agnes AI 图像/视频生成工具"""
+from typing import Any
 import os
 import asyncio
 import base64
@@ -36,7 +37,7 @@ _agnes_openai_client: "AsyncOpenAI | None" = None
 _agnes_http_client: "httpx.AsyncClient | None" = None
 
 
-def _get_agnes_openai_client():
+def _get_agnes_openai_client() -> Any:
     """获取或创建 AsyncOpenAI 单例客户端"""
     global _agnes_openai_client
     if _agnes_openai_client is None:
@@ -47,7 +48,7 @@ def _get_agnes_openai_client():
     return _agnes_openai_client
 
 
-def _get_agnes_http_client():
+def _get_agnes_http_client() -> Any:
     """获取或创建 httpx.AsyncClient 单例客户端"""
     global _agnes_http_client
     if _agnes_http_client is None:

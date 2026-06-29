@@ -6,11 +6,11 @@ from loguru import logger
 
 class AnalyticsDB:
 
-    def __init__(self, conn: aiosqlite.Connection):
+    def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn
         conn.row_factory = aiosqlite.Row
 
-    async def commit(self):
+    async def commit(self) -> None:
         await self._conn.commit()
 
     async def insert_api_usage(self, user_openid: str = "", session_id: str = "",
@@ -39,7 +39,7 @@ class AnalyticsDB:
             return ""
 
     async def batch_insert_api_usage(self, records: list[dict],
-                                      auto_commit: bool = True):
+                                      auto_commit: bool = True) -> None:
         if not records:
             return
         now = time.time()
@@ -156,7 +156,7 @@ class AnalyticsDB:
         return [dict(r) for r in rows]
 
     async def batch_insert_events(self, events: list[dict],
-                                   auto_commit: bool = True):
+                                   auto_commit: bool = True) -> None:
         if not events:
             return
         rows = []

@@ -7,6 +7,7 @@
   因为 SubAgent._filtered_tools() 每次对话时实时计算）
 """
 from __future__ import annotations
+from typing import Any
 
 import dataclasses
 import json
@@ -56,11 +57,12 @@ _CONFIG_FIELDS = [
     "excluded_tools", "base_url", "api_key_env", "capabilities", "route_description",
     "mcp_servers", "max_spawn_depth", "max_turns", "effort", "permission_mode",
     "memory_scope", "background", "wallpaper",
+    "allowed_paths", "forbidden_paths",
 ]
 
 
 class AgentRegistry:
-    def __init__(self, core):
+    def __init__(self, core: Any) -> None:
         self.core = core
         self._disabled: set[str] = set()
         AGENTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -73,7 +75,7 @@ class AgentRegistry:
     def _personality_file(self, name: str) -> Path:
         return AGENTS_DIR / f"{name}_personality.md"
 
-    def _save_config(self, cfg) -> None:
+    def _save_config(self, cfg: Any) -> None:
         data = {}
         for f in _CONFIG_FIELDS:
             v = getattr(cfg, f, None)
@@ -123,7 +125,7 @@ class AgentRegistry:
                 logger.warning("agent_registry.load_failed file={} error={}", fp.name, str(e))
 
     @staticmethod
-    def _apply_fields(cfg, data: dict) -> None:
+    def _apply_fields(cfg: Any, data: dict) -> None:
         for f in _CONFIG_FIELDS:
             if f in ("name",) or f not in data or data[f] is None:
                 continue
@@ -187,6 +189,8 @@ class AgentRegistry:
             "memory_scope": "shared",
             "background": None,
             "wallpaper": DEFAULT_WALLPAPERS.get(name, ""),
+            "allowed_paths": [],
+            "forbidden_paths": [],
             "tool_count": tool_count,
             "degraded": True,
         }
@@ -227,7 +231,7 @@ class AgentRegistry:
         except Exception:
             return ""
 
-    def _serialize(self, cfg, enabled: bool = True, degraded: bool = False) -> dict:
+    def _serialize(self, cfg: Any, enabled: bool = True, degraded: bool = False) -> dict:
         excluded = set(cfg.excluded_tools or set())
         tool_count = len([t for t in self._all_tool_names()
                           if t not in excluded and t not in self._blocked()])
@@ -252,6 +256,8 @@ class AgentRegistry:
             "memory_scope": cfg.memory_scope,
             "background": cfg.background,
             "wallpaper": getattr(cfg, "wallpaper", "") or DEFAULT_WALLPAPERS.get(cfg.name, ""),
+            "allowed_paths": list(getattr(cfg, "allowed_paths", []) or []),
+            "forbidden_paths": list(getattr(cfg, "forbidden_paths", []) or []),
             "tool_count": tool_count,
             "degraded": degraded,
         }
@@ -367,7 +373,7 @@ class AgentRegistry:
     def is_enabled(self, name: str) -> bool:
         return name not in self._disabled
 
-    def _require(self, name: str):
+    def _require(self, name: str) -> Any:
         agent = self.core.dispatcher.get_agent(name)
         if not agent:
             raise KeyError(f"Agent {name} 不存在")

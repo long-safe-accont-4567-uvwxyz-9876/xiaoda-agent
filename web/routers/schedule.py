@@ -1,5 +1,6 @@
 """定时与问候路由（R10）：问候计划 CRUD、DND、立即试发、历史。"""
 from __future__ import annotations
+from typing import Any
 
 import json
 import re
@@ -15,24 +16,24 @@ router = APIRouter(tags=["schedule"], dependencies=[Depends(get_current_user)])
 _HM = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")
 
 
-def _cfg():
+def _cfg() -> Any:
     from web.config_service import get_config_service
     return get_config_service()
 
 
-def _scheduler(request: Request):
+def _scheduler(request: Request) -> Any:
     sched = getattr(request.app.state, "greeting_scheduler", None)
     if not sched:
         raise HTTPException(503, "问候调度器未启动")
     return sched
 
 
-def _check_hm(value: str, field: str):
+def _check_hm(value: str, field: str) -> None:
     if not _HM.match(value or ""):
         raise HTTPException(400, f"{field} 必须是 HH:MM 格式")
 
 
-async def _audit(request: Request, action: str, detail: str):
+async def _audit(request: Request, action: str, detail: str) -> None:
     core = request.app.state.core
     try:
         await core.db.insert_audit_log(f"webui.schedule.{action}", "webui", detail)
@@ -42,7 +43,7 @@ async def _audit(request: Request, action: str, detail: str):
 
 
 @router.get("/schedule/config", response_model=Envelope[dict])
-async def get_config():
+async def get_config() -> Any:
     cfg = _cfg()
     return Envelope(data={
         "enabled": cfg.get("schedule.enabled", True),
@@ -52,7 +53,7 @@ async def get_config():
 
 
 @router.put("/schedule/config", response_model=Envelope[dict])
-async def put_config(body: dict, request: Request):
+async def put_config(body: dict, request: Request) -> Any:
     cfg = _cfg()
     if "enabled" in body:
         cfg.set("schedule.enabled", bool(body["enabled"]))
@@ -67,12 +68,12 @@ async def put_config(body: dict, request: Request):
 
 
 @router.get("/schedule/dnd", response_model=Envelope[list[dict]])
-async def get_dnd():
+async def get_dnd() -> Any:
     return Envelope(data=_cfg().get("schedule.dnd_periods", []))
 
 
 @router.put("/schedule/dnd", response_model=Envelope[list[dict]])
-async def put_dnd(body: dict, request: Request):
+async def put_dnd(body: dict, request: Request) -> Any:
     periods = body.get("periods")
     if not isinstance(periods, list):
         raise HTTPException(400, "periods 必须是数组")
@@ -119,7 +120,7 @@ def _validate_schedule(body: dict) -> dict:
 
 
 @router.get("/schedule/greetings", response_model=Envelope[list[dict]])
-async def list_greetings(request: Request):
+async def list_greetings(request: Request) -> Any:
     core = request.app.state.core
     rows = await core.db.fetch_all(
         "SELECT * FROM greeting_schedules ORDER BY id")
@@ -127,7 +128,7 @@ async def list_greetings(request: Request):
 
 
 @router.post("/schedule/greetings", response_model=Envelope[dict])
-async def create_greeting(body: dict, request: Request):
+async def create_greeting(body: dict, request: Request) -> Any:
     core = request.app.state.core
     rec = _validate_schedule(body)
     await core.db.execute(
@@ -145,7 +146,7 @@ async def create_greeting(body: dict, request: Request):
 
 
 @router.put("/schedule/greetings/{sid}", response_model=Envelope[dict])
-async def update_greeting(sid: int, body: dict, request: Request):
+async def update_greeting(sid: int, body: dict, request: Request) -> Any:
     core = request.app.state.core
     existing = await core.db.fetch_one(
         "SELECT * FROM greeting_schedules WHERE id=?", (sid,))
@@ -176,7 +177,7 @@ async def update_greeting(sid: int, body: dict, request: Request):
 
 
 @router.delete("/schedule/greetings/{sid}", response_model=Envelope[dict])
-async def delete_greeting(sid: int, request: Request):
+async def delete_greeting(sid: int, request: Request) -> Any:
     core = request.app.state.core
     n = await core.db.execute(
         "DELETE FROM greeting_schedules WHERE id=?", (sid,))
@@ -187,7 +188,7 @@ async def delete_greeting(sid: int, request: Request):
 
 
 @router.post("/schedule/test-greeting", response_model=Envelope[dict])
-async def test_greeting(body: dict, request: Request):
+async def test_greeting(body: dict, request: Request) -> Any:
     """立即生成并推送一条问候（验证链路；尊重 DND）。"""
     sched = _scheduler(request)
     if sched.is_dnd():
@@ -202,7 +203,7 @@ async def test_greeting(body: dict, request: Request):
 
 
 @router.get("/schedule/history", response_model=Envelope[list[dict]])
-async def greeting_history(request: Request, days: int = Query(default=7, ge=1, le=90)):
+async def greeting_history(request: Request, days: int = Query(default=7, ge=1, le=90)) -> Any:
     core = request.app.state.core
     since = time.time() - days * 86400
     rows = await core.db.fetch_all(

@@ -1,3 +1,4 @@
+from typing import Any, Optional
 import os
 import shutil
 import time
@@ -24,6 +25,8 @@ COMMAND_DESCRIPTIONS = {
     "/emotion": "情绪检测",
     "/knowledge": "知识图谱查询",
     "/debug": "调试信息",
+    "/doctor": "自检 (零 API 调用, <2s)",
+    "/self": "查看 Agent 内心状态 (元认知自省)",
 }
 
 
@@ -37,9 +40,9 @@ def list_commands() -> list[dict]:
 
 class SlashCommandHandler:
 
-    def __init__(self, db=None, router=None, context=None,
-                 memory=None, learning_manager=None,
-                 notebook_manager=None, security=None, agent=None):
+    def __init__(self, db: Optional[Any]=None, router: Optional[Any]=None, context: Optional[Any]=None,
+                 memory: Optional[Any]=None, learning_manager: Optional[Any]=None,
+                 notebook_manager: Optional[Any]=None, security: Optional[Any]=None, agent: Optional[Any]=None) -> None:
         self._db = db
         self._router = router
         self._context = context
@@ -91,6 +94,8 @@ class SlashCommandHandler:
             "/emotion": self._cmd_emotion,
             "/knowledge": self._cmd_knowledge,
             "/debug": self._cmd_debug,
+            "/doctor": self._cmd_doctor,
+            "/self": self._cmd_self,
         }
 
         handler = handlers.get(command)
@@ -212,9 +217,9 @@ class SlashCommandHandler:
             lines = [f"当前: {label}"]
             lines.append("预设: /model [mimo|mimo-pro|mimo-flash|mimo-mini]")
             third_party = []
-            if os.environ.get("SILICONFLOW_API_KEY"):
+            if os.environ.get("SILICONFLOW_API_KEY", ""):
                 third_party.append("siliconflow")
-            if os.environ.get("OPENROUTER_API_KEY"):
+            if os.environ.get("OPENROUTER_API_KEY", ""):
                 third_party.append("openrouter")
             if third_party:
                 lines.append("第三方模型:")
@@ -595,6 +600,49 @@ class SlashCommandHandler:
             lines.append(f"💬 上下文历史: {hist_len}条")
         return "\n".join(lines)
 
+    async def _cmd_doctor(self, args: str, user_id: str) -> str:
+        """Doctor 自检 — 零 API 调用, <2s 完成
+
+        用法:
+            /doctor          运行自检, 文本格式输出
+            /doctor json     JSON 格式输出
+            /doctor fix       自动修复可修复的问题
+        """
+        import asyncio
+        from core.doctor import _create_default_doctor
+
+        doc = _create_default_doctor()
+        auto_fix = args.strip().lower() in ("fix", "--fix", "repair")
+        json_out = args.strip().lower() in ("json", "--json")
+
+        # doctor.run() 是同步的, 用 to_thread 避免阻塞事件循环
+        report = await asyncio.to_thread(doc.run, auto_fix=auto_fix)
+
+        if json_out:
+            import json
+            return f"```json\n{json.dumps(report, indent=2, ensure_ascii=False)}\n```"
+
+        return doc.format_text(report)
+
+    async def _cmd_self(self, args: str, user_id: str) -> str:
+        """Agent 状态自省 — 查看当前内心状态
+
+        用法:
+            /self          文本格式输出
+            /self json     JSON 格式输出
+        """
+        from core.agent_introspection import AgentIntrospector
+
+        json_out = args.strip().lower() in ("json", "--json")
+        introspector = AgentIntrospector(context=self._context, agent=self._agent)
+        state = introspector.get_current_state()
+
+        if json_out:
+            import json
+            return f"```json\n{json.dumps(introspector.to_dict(state), indent=2, ensure_ascii=False)}\n```"
+
+        return introspector.to_text(state)
+
     async def _cmd_help(self, args: str, user_id: str) -> str:
         is_owner = self._security and self._security.is_owner(user_id)
 
@@ -612,6 +660,8 @@ class SlashCommandHandler:
             ("/memory", "查看记忆统计"),
             ("/emotion", "查看当前情绪状态"),
             ("/knowledge", "查看知识图谱统计"),
+            ("/doctor [json|fix]", "运行自检（零 API 调用, <2s）"),
+            ("/self [json]", "查看 Agent 内心状态（元认知自省）"),
             ("/help", "显示此帮助"),
         ]
 

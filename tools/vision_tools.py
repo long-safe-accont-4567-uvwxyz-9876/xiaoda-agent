@@ -1,9 +1,10 @@
+from typing import Any
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 
 _vision_service = None
 
 
-def _get_vision_service():
+def _get_vision_service() -> Any:
     global _vision_service
     if _vision_service is None:
         from utils.vision_service import VisionService

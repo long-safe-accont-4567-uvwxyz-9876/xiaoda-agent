@@ -43,7 +43,7 @@ class AgentBelief:
                 if math.log(u) < 0.5 * x * x + d * (1.0 - v + math.log(v)):
                     return d * v
 
-    def update(self, success: bool):
+    def update(self, success: bool) -> None:
         """Update belief based on observation."""
         if success:
             self.alpha += 1.0
@@ -63,7 +63,7 @@ class BeliefRouter:
 
     VALID_AGENTS = ["xilian", "yinlang", "nike", "nahida"]
 
-    def __init__(self, db_path: str = ""):
+    def __init__(self, db_path: str = "") -> None:
         self._beliefs: dict[str, AgentBelief] = {name: AgentBelief() for name in self.VALID_AGENTS}
         self._db_path = db_path
         if db_path:
@@ -90,7 +90,7 @@ class BeliefRouter:
                      selected=selected)
         return selected
 
-    def update_belief(self, agent_name: str, success: bool):
+    def update_belief(self, agent_name: str, success: bool) -> None:
         """Update belief for an agent based on task result."""
         if agent_name in self._beliefs:
             self._beliefs[agent_name].update(success)
@@ -103,7 +103,7 @@ class BeliefRouter:
         """Get current belief parameters for all agents."""
         return {name: belief.to_dict() for name, belief in self._beliefs.items()}
 
-    def _load_from_db(self):
+    def _load_from_db(self) -> None:
         """Load beliefs from database."""
         try:
             conn = sqlite3.connect(self._db_path)
@@ -120,14 +120,14 @@ class BeliefRouter:
         except Exception as e:
             logger.warning("belief_router.load_failed", error=str(e))
 
-    def _save_to_db(self):
+    def _save_to_db(self) -> None:
         """Save beliefs to database (non-blocking via thread pool)."""
         try:
             import concurrent.futures
             beliefs_snapshot = {name: b.to_dict() for name, b in self._beliefs.items()}
             db_path = self._db_path
 
-            def _do_save():
+            def _do_save() -> None:
                 conn = sqlite3.connect(db_path)
                 conn.execute("""CREATE TABLE IF NOT EXISTS agent_beliefs (
                     agent_name TEXT PRIMARY KEY,
@@ -156,7 +156,7 @@ class BeliefRouter:
         # 原子写入 JSON 状态文件
         self._save_to_json()
 
-    def _save_to_json(self):
+    def _save_to_json(self) -> None:
         """原子写入信念状态到 JSON 文件"""
         if not self._db_path:
             return

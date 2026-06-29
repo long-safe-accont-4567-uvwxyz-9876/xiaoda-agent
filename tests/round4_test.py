@@ -4,7 +4,11 @@ import asyncio
 import sys
 import os
 import json
+from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+# 项目根目录 (基于当前文件位置计算，避免硬编码绝对路径)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # ============================================================
 # Part 1: 真实 ModelRouter API 调用测试
@@ -193,7 +197,7 @@ def detect_remaining_bugs():
     # Bug #6: SQL 注入检测
     print("\n[1] SQL 注入检测 (database.py)...")
     try:
-        with open("/home/orangepi/ai-agent/database.py") as f:
+        with open(PROJECT_ROOT / "database.py") as f:
             db_code = f.read()
         if "DELETE FROM {table_name}" in db_code or 'DELETE FROM "' + '{table_name}' + '"' not in db_code:
             if "DELETE FROM {table_name}" in db_code:
@@ -207,7 +211,7 @@ def detect_remaining_bugs():
     # Bug #9: memory_manager security_filter 检测
     print("\n[2] MemoryManager security_filter 检测...")
     try:
-        with open("/home/orangepi/ai-agent/memory_manager.py") as f:
+        with open(PROJECT_ROOT / "memory_manager.py") as f:
             mem_code = f.read()
         if "SecurityFilter()" in mem_code and "self._security_filter is None" in mem_code:
             print("    BUG: memory_manager 内部创建 SecurityFilter() 新实例")
@@ -220,7 +224,7 @@ def detect_remaining_bugs():
     # Bug #17: set.pop() 随机移除
     print("\n[3] QQ Bot 消息去重使用 set.pop()...")
     try:
-        with open("/home/orangepi/ai-agent/qq_bot_adapter.py") as f:
+        with open(PROJECT_ROOT / "qq_bot_adapter.py") as f:
             qq_code = f.read()
         if ".pop()" in qq_code and "_processed_msg_ids" in qq_code:
             # 检查是否是 set 的 pop
@@ -247,7 +251,7 @@ def detect_remaining_bugs():
     # Bug #19: MCP 弃用 API
     print("\n[4] MCP Client 弃用 API 检测...")
     try:
-        with open("/home/orangepi/ai-agent/mcp_client.py") as f:
+        with open(PROJECT_ROOT / "mcp_client.py") as f:
             mcp_code = f.read()
         if "get_event_loop().create_future" in mcp_code:
             print("    BUG: MCP Client 使用弃用的 get_event_loop()")
@@ -260,7 +264,7 @@ def detect_remaining_bugs():
     # Bug #20: 直接操作 tool_registry 内部数据结构
     print("\n[5] MCP Client 直接操作 tool_registry 内部数据...")
     try:
-        with open("/home/orangepi/ai-agent/mcp_client.py") as f:
+        with open(PROJECT_ROOT / "mcp_client.py") as f:
             mcp_code = f.read()
         if "tool_registry._tools" in mcp_code or "tool_registry._schema_cache" in mcp_code:
             print("    BUG: MCP Client 直接访问 tool_registry 私有属性")
@@ -273,7 +277,7 @@ def detect_remaining_bugs():
     # 检查 asyncio.create_task 遗漏
     print("\n[6] 检查遗漏的 asyncio.create_task...")
     try:
-        with open("/home/orangepi/ai-agent/agent_core.py") as f:
+        with open(PROJECT_ROOT / "agent_core.py") as f:
             ac_code = f.read()
         count = ac_code.count('asyncio.create_task(self._background_tasks')
         if count > 0:
@@ -287,7 +291,7 @@ def detect_remaining_bugs():
     # 检查 reasoning_content 泄漏
     print("\n[7] 检查 reasoning_content 泄漏到 build_messages...")
     try:
-        with open("/home/orangepi/ai-agent/agent_context.py") as f:
+        with open(PROJECT_ROOT / "agent_context.py") as f:
             ctx_code = f.read()
         if '"reasoning_content"' in ctx_code and 'm["reasoning_content"]' in ctx_code:
             print("    BUG: build_messages 仍然包含 reasoning_content 字段")
@@ -300,7 +304,7 @@ def detect_remaining_bugs():
     # 检查 CACHE_TTL_1H
     print("\n[8] 检查 CACHE_TTL_1H 是否完全移除...")
     try:
-        with open("/home/orangepi/ai-agent/prompt_caching.py") as f:
+        with open(PROJECT_ROOT / "prompt_caching.py") as f:
             pc_code = f.read()
         if "CACHE_TTL_1H" in pc_code or '"1h"' in pc_code:
             print("    BUG: CACHE_TTL_1H 或 '1h' 仍在 prompt_caching.py 中")
@@ -313,7 +317,7 @@ def detect_remaining_bugs():
     # 检查硬编码 API Key
     print("\n[9] 检查硬编码 API Key...")
     try:
-        with open("/home/orangepi/ai-agent/config.py") as f:
+        with open(PROJECT_ROOT / "config.py") as f:
             cfg_code = f.read()
         if 'sk-' in cfg_code and 'AGNES_API_KEY' in cfg_code:
             import re
@@ -331,7 +335,7 @@ def detect_remaining_bugs():
     # 检查 error_classifier 运算符优先级
     print("\n[10] 检查 error_classifier 运算符优先级修复...")
     try:
-        with open("/home/orangepi/ai-agent/error_classifier.py") as f:
+        with open(PROJECT_ROOT / "error_classifier.py") as f:
             ec_code = f.read()
         # 查找 format 相关的条件判断
         if '"format" in exc_msg or "invalid" in exc_msg and "request"' in ec_code:

@@ -33,7 +33,7 @@ class BoundedContent:
 class InstructionBuilder:
     """构建分层 prompt — 高层级不可被低层级覆盖"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._layers: dict[InstructionLevel, list[str]] = {lv: [] for lv in InstructionLevel}
 
     def add(self, level: InstructionLevel, content: str) -> "InstructionBuilder":
@@ -58,7 +58,7 @@ class InstructionBuilder:
                 parts.append(BoundedContent(level, content).render())
         return "\n\n".join(parts)
 
-    def reset(self):
+    def reset(self) -> None:
         self._layers = {lv: [] for lv in InstructionLevel}
 
 

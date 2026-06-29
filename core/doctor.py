@@ -3,6 +3,7 @@
 6层19项自检: 进程/端口/DB/配置/记忆/安全
 用法: xiaoda doctor [--json] [--fix]
 """
+from typing import Any
 import json, sys, time, os
 from loguru import logger
 
@@ -10,11 +11,11 @@ from loguru import logger
 class DoctorCheck:
     """Doctor 自检框架"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._checks: list[dict] = []
         self._results: list[dict] = []
 
-    def add_check(self, name: str, layer: str, func, fix=None):
+    def add_check(self, name: str, layer: str, func: Any, fix: Any=None) -> None:
         """注册检查项"""
         self._checks.append({
             "name": name,
@@ -89,7 +90,7 @@ def _create_default_doctor() -> DoctorCheck:
     doc.add_check("Process Running", "L1-Process", lambda: (True, f"PID={os.getpid()}"))
 
     # Layer 2: 端口
-    def _check_port():
+    def _check_port() -> tuple:
         import socket
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(1)
@@ -104,7 +105,7 @@ def _create_default_doctor() -> DoctorCheck:
     doc.add_check("Port Available", "L2-Network", _check_port)
 
     # Layer 3: 数据库
-    def _check_db():
+    def _check_db() -> tuple:
         try:
             import aiosqlite
             return True, "aiosqlite importable"
@@ -114,7 +115,7 @@ def _create_default_doctor() -> DoctorCheck:
     doc.add_check("Database Driver", "L3-Database", _check_db)
 
     # Layer 4: 配置
-    def _check_config():
+    def _check_config() -> tuple:
         from config import MIMO_API_KEY
         if not MIMO_API_KEY:
             return False, "MIMO_API_KEY not set"
@@ -123,7 +124,7 @@ def _create_default_doctor() -> DoctorCheck:
     doc.add_check("Config Loaded", "L4-Config", _check_config)
 
     # Layer 5: 记忆
-    def _check_memory():
+    def _check_memory() -> tuple:
         try:
             from memory.memory_manager import MemoryManager  # noqa: F401
             return True, "Memory module importable"
@@ -133,7 +134,7 @@ def _create_default_doctor() -> DoctorCheck:
     doc.add_check("Memory Module", "L5-Memory", _check_memory)
 
     # Layer 6: 安全
-    def _check_security():
+    def _check_security() -> tuple:
         try:
             from security.security import SecurityFilter  # noqa: F401
             return True, "Security module importable"
@@ -141,6 +142,43 @@ def _create_default_doctor() -> DoctorCheck:
             return False, f"Security import failed: {e}"
 
     doc.add_check("Security Module", "L6-Security", _check_security)
+
+    # Layer 7: 行为健康 (Dr2)
+    def _check_behavioral_health() -> tuple:
+        try:
+            from core.behavioral_health import get_behavioral_health_scorer, HealthLevel
+            scorer = get_behavioral_health_scorer()
+            metrics = scorer._collect_runtime_metrics()
+            if not metrics:
+                return True, "BHS: 无可用指标, 默认通过"
+            score = scorer.calculate(metrics)
+            if score.level.value >= HealthLevel.FAIR:
+                return True, (f"BHS: level={score.level.name} score={score.score}/5 "
+                              f"(factors={len(score.factors)})")
+            return False, (f"BHS: level={score.level.name} score={score.score}/5 "
+                          f"recommendations={len(score.recommendations)}")
+        except Exception as e:
+            return False, f"BHS check failed: {e}"
+
+    doc.add_check("Behavioral Health", "L7-Behavior", _check_behavioral_health)
+
+    # Layer 8: Zombie 进程检测 (Dr2)
+    def _check_zombie_processes() -> tuple:
+        try:
+            from core.zombie_detector import get_zombie_detector
+            det = get_zombie_detector()
+            # 自我监控 (timeout=300s, doctor 周期性调用会刷新心跳)
+            det.register_process(os.getpid(), "xiaoda-self", timeout=300)
+            det.check_heartbeat(os.getpid())
+            zombies = det.detect_zombies()
+            if not zombies:
+                return True, f"No zombie processes (monitored={det.get_status()['monitored_count']})"
+            names = ", ".join(f"{z.name}(pid={z.pid})" for z in zombies[:3])
+            return False, f"Detected {len(zombies)} zombie(s): {names}"
+        except Exception as e:
+            return False, f"Zombie check failed: {e}"
+
+    doc.add_check("Zombie Processes", "L8-Zombie", _check_zombie_processes)
 
     return doc
 

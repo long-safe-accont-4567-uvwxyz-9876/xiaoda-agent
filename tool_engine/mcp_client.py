@@ -74,7 +74,7 @@ class MCPClient:
     """MCP Client that connects to an MCP server via stdio, SSE, or HTTP."""
 
     def __init__(self, server_name: str, command: str | MCPTransportConfig = "",
-                 args: list[str] | None = None, env: dict | None = None):
+                 args: list[str] | None = None, env: dict | None = None) -> None:
         # Backward compatibility: if command is a string, wrap in MCPTransportConfig
         if isinstance(command, MCPTransportConfig):
             self._config = command
@@ -454,7 +454,7 @@ class MCPClient:
         server_name = self.server_name
         tool_name = original_name
 
-        async def _mcp_tool_wrapper(**kwargs) -> ToolResult:
+        async def _mcp_tool_wrapper(**kwargs: Any) -> ToolResult:
             # We need a reference to the client; use the captured variable
             # which refers to self at registration time
             client = _mcp_client_ref
@@ -483,7 +483,7 @@ class MCPClient:
 class MCPManager:
     """Manages multiple MCP clients."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._clients: dict[str, MCPClient] = {}
         self._sdk_servers: dict[str, SdkMcpServer] = {}
         self._health_task: asyncio.Task | None = None
@@ -586,11 +586,11 @@ class MCPManager:
 
     # ── health monitoring ────────────────────────────────────────
 
-    async def start_health_monitor(self, interval_seconds: int = 60):
+    async def start_health_monitor(self, interval_seconds: int = 60) -> None:
         """启动健康监控"""
         self._health_task = asyncio.create_task(self._health_loop(interval_seconds))
 
-    async def _health_loop(self, interval: int):
+    async def _health_loop(self, interval: int) -> None:
         while True:
             await asyncio.sleep(interval)
             for name, client in list(self._clients.items()):
@@ -610,7 +610,7 @@ class MCPManager:
                     logger.warning("mcp.health_check_error", server=name, error=str(e))
                     await self._reconnect_server(name)
 
-    async def _reconnect_server(self, name: str):
+    async def _reconnect_server(self, name: str) -> None:
         """指数退避重连"""
         client = self._clients.get(name)
         if not client:
@@ -631,7 +631,7 @@ class MCPManager:
 
     # ── tool-level permissions ───────────────────────────────────
 
-    def set_tool_enabled(self, server_name: str, tool_name: str, enabled: bool):
+    def set_tool_enabled(self, server_name: str, tool_name: str, enabled: bool) -> None:
         """设置单个工具的启用/禁用状态"""
         if server_name not in self._tool_enabled_map:
             self._tool_enabled_map[server_name] = {}
@@ -645,7 +645,7 @@ class MCPManager:
     # ── dynamic server security ──────────────────────────────────
 
     def set_security_policy(self, allowed_stdio_commands: list[str] | None = None,
-                           allowed_url_prefixes: list[str] | None = None):
+                           allowed_url_prefixes: list[str] | None = None) -> None:
         """设置动态服务器的安全策略"""
         self._allowed_stdio_commands = allowed_stdio_commands or []
         self._allowed_url_prefixes = allowed_url_prefixes or []
@@ -738,9 +738,9 @@ class MCPManager:
         logger.info(f"mcp_manager.sdk_server_registered", name=server.name,
                     tools=len(server.tools))
 
-    def _make_sdk_tool_wrapper(self, server_name: str, tool_name: str):
+    def _make_sdk_tool_wrapper(self, server_name: str, tool_name: str) -> Any:
         """创建 SDK MCP 工具的调用包装器"""
-        async def wrapper(**kwargs):
+        async def wrapper(**kwargs: Any) -> Any:
             server = self._sdk_servers.get(server_name)
             if not server:
                 from .tool_registry import ToolResult
@@ -826,7 +826,7 @@ class SdkMcpServer:
     """进程内 MCP 服务器 — 无需子进程，直接调用 Python 函数"""
 
     def __init__(self, name: str, version: str = "1.0.0",
-                 tools: list[SdkMcpTool] | None = None):
+                 tools: list[SdkMcpTool] | None = None) -> None:
         self.name = name
         self.version = version
         self.tools: dict[str, SdkMcpTool] = {}

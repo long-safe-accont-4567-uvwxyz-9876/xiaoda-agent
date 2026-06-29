@@ -10,7 +10,7 @@ from loguru import logger
 class CanaryManager:
     """Canary Token 泄露检测管理器"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._canaries: dict[str, str] = {}  # canary_id → description
 
     def inject(self, system_prompt: str) -> str:
@@ -37,6 +37,6 @@ class CanaryManager:
         cleaned = re.sub(r'\[SECRET_CANARY:\s*\w+\].*?(?=\n|$)', '', llm_output)
         return cleaned.strip()
 
-    def clear(self):
+    def clear(self) -> None:
         """清空所有 canary (每次对话结束后调用)"""
         self._canaries.clear()

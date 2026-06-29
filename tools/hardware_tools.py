@@ -1,3 +1,4 @@
+from typing import Any
 import os
 import shutil
 import asyncio
@@ -15,28 +16,28 @@ _hw_cache_ts: dict = {}
 _HW_CACHE_TTL = 5.0
 
 
-def _gpio_path(pin):
+def _gpio_path(pin: Any) -> Any:
     return os.path.join(GPIO_BASE, f"gpio{pin}")
 
 
-def _gpio_export(pin):
+def _gpio_export(pin: Any) -> None:
     gpio_dir = _gpio_path(pin)
     if not os.path.isdir(gpio_dir):
         with open(os.path.join(GPIO_BASE, "export"), "w") as f:
             f.write(str(pin))
 
 
-def _gpio_set_direction(pin, mode):
+def _gpio_set_direction(pin: Any, mode: Any) -> None:
     with open(os.path.join(_gpio_path(pin), "direction"), "w") as f:
         f.write(mode)
 
 
-def _gpio_write_value(pin, value):
+def _gpio_write_value(pin: Any, value: Any) -> None:
     with open(os.path.join(_gpio_path(pin), "value"), "w") as f:
         f.write(str(value))
 
 
-def _gpio_read_value(pin):
+def _gpio_read_value(pin: Any) -> Any:
     with open(os.path.join(_gpio_path(pin), "value"), "r") as f:
         return f.read().strip()
 
@@ -104,7 +105,7 @@ def _pwm_chip_path(chip: int) -> str:
     return os.path.join(PWM_BASE, f"pwmchip{chip}")
 
 
-def _pwm_export(chip: int, channel: int):
+def _pwm_export(chip: int, channel: int) -> None:
     export_path = os.path.join(_pwm_chip_path(chip), "export")
     pwm_dir = os.path.join(_pwm_chip_path(chip), f"pwm{channel}")
     if not os.path.isdir(pwm_dir):
@@ -112,13 +113,13 @@ def _pwm_export(chip: int, channel: int):
             f.write(str(channel))
 
 
-def _pwm_unexport(chip: int, channel: int):
+def _pwm_unexport(chip: int, channel: int) -> None:
     unexport_path = os.path.join(_pwm_chip_path(chip), "unexport")
     with open(unexport_path, "w") as f:
         f.write(str(channel))
 
 
-def _pwm_write(chip: int, channel: int, attr: str, value: str):
+def _pwm_write(chip: int, channel: int, attr: str, value: str) -> None:
     path = os.path.join(_pwm_chip_path(chip), f"pwm{channel}", attr)
     with open(path, "w") as f:
         f.write(value)
@@ -204,7 +205,7 @@ async def pwm_control(action: str, chip: int = 0, channel: int = 0,
         return ToolResult.fail(f"PWM 操作失败: {str(e)}")
 
 
-def _i2c_smbus_read(bus, addr, register, length):
+def _i2c_smbus_read(bus: Any, addr: Any, register: Any, length: Any) -> Any:
     import smbus2
     bus_obj = smbus2.SMBus(bus)
     try:
@@ -217,7 +218,7 @@ def _i2c_smbus_read(bus, addr, register, length):
         bus_obj.close()
 
 
-def _i2c_smbus_write(bus, addr, register, data):
+def _i2c_smbus_write(bus: Any, addr: Any, register: Any, data: Any) -> None:
     import smbus2
     bus_obj = smbus2.SMBus(bus)
     try:
@@ -229,7 +230,7 @@ def _i2c_smbus_write(bus, addr, register, data):
         bus_obj.close()
 
 
-def _i2c_smbus_scan(bus):
+def _i2c_smbus_scan(bus: Any) -> Any:
     import smbus2
     bus_obj = smbus2.SMBus(bus)
     found = []
@@ -245,7 +246,7 @@ def _i2c_smbus_scan(bus):
     return found
 
 
-async def _i2c_subprocess_scan(bus):
+async def _i2c_subprocess_scan(bus: Any) -> Any:
     proc = await asyncio.create_subprocess_exec(
         "i2cdetect", "-y", str(bus),
         stdout=asyncio.subprocess.PIPE,
@@ -269,7 +270,7 @@ async def _i2c_subprocess_scan(bus):
     return found
 
 
-async def _i2c_subprocess_read(bus, addr, register, length):
+async def _i2c_subprocess_read(bus: Any, addr: Any, register: Any, length: Any) -> Any:
     if length == 1:
         proc = await asyncio.create_subprocess_exec(
             "i2cget", "-y", str(bus), hex(addr), hex(register),
@@ -294,7 +295,7 @@ async def _i2c_subprocess_read(bus, addr, register, length):
         return data
 
 
-async def _i2c_subprocess_write(bus, addr, register, data):
+async def _i2c_subprocess_write(bus: Any, addr: Any, register: Any, data: Any) -> Any:
     hex_data = " ".join(hex(b) for b in data)
     proc = await asyncio.create_subprocess_exec(
         "i2cset", "-y", str(bus), hex(addr), hex(register), hex_data[0] if len(data) == 1 else hex_data,
@@ -305,7 +306,7 @@ async def _i2c_subprocess_write(bus, addr, register, data):
     return proc.returncode == 0
 
 
-def _has_smbus2():
+def _has_smbus2() -> bool:
     try:
         import smbus2
         return True
@@ -402,12 +403,12 @@ async def i2c_comm(action: str, bus: int = 0, addr: int = None, register: int = 
         return ToolResult.fail(f"I2C 操作失败: {str(e)}")
 
 
-def _read_sysfs(path):
+def _read_sysfs(path: Any) -> Any:
     with open(path, "r") as f:
         return f.read().strip()
 
 
-def _read_cpu_temp():
+def _read_cpu_temp() -> Any:
     try:
         raw = _read_sysfs("/sys/class/thermal/thermal_zone0/temp")
         temp_c = int(raw) / 1000.0
@@ -416,7 +417,7 @@ def _read_cpu_temp():
         return None
 
 
-def _read_cpu_freq():
+def _read_cpu_freq() -> Any:
     try:
         raw = _read_sysfs("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
         freq_mhz = int(raw) / 1000.0
@@ -425,7 +426,7 @@ def _read_cpu_freq():
         return None
 
 
-def _read_loadavg():
+def _read_loadavg() -> tuple:
     try:
         with open("/proc/loadavg", "r") as f:
             parts = f.read().strip().split()
@@ -434,7 +435,7 @@ def _read_loadavg():
         return None, None, None
 
 
-def _read_memory():
+def _read_memory() -> tuple:
     try:
         info = {}
         with open("/proc/meminfo", "r") as f:
@@ -452,7 +453,7 @@ def _read_memory():
         return None, None, None, None
 
 
-def _read_disk():
+def _read_disk() -> tuple:
     try:
         usage = shutil.disk_usage("/")
         total = usage.total
@@ -464,7 +465,7 @@ def _read_disk():
         return None, None, None, None
 
 
-def _read_voltage():
+def _read_voltage() -> Any:
     try:
         for name in os.listdir("/sys/class/power_supply"):
             path = os.path.join("/sys/class/power_supply", name, "voltage_now")
@@ -476,7 +477,7 @@ def _read_voltage():
         return None
 
 
-def _fmt_bytes(b):
+def _fmt_bytes(b: Any) -> str:
     if b is None:
         return "N/A"
     if b >= 1073741824:

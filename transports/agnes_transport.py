@@ -8,7 +8,7 @@ from transports.base import ProviderTransport, TransportResponse
 
 class AgnesTransport(ProviderTransport):
 
-    def __init__(self):
+    def __init__(self) -> None:
         # 从 os.getenv() 实时读取，避免使用 config 模块级冻结变量
         _key = os.getenv("AGNES_API_KEY", "")
         _url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
