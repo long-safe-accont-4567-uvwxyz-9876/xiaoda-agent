@@ -21,6 +21,7 @@ const debugging = ref(false)
 
 const testingTool = ref<Record<string, boolean>>({})
 const toolTestResult = ref<Record<string, any>>({})
+const expandedTool = ref<string | null>(null)
 
 onMounted(load)
 onMounted(loadLimits)
@@ -86,6 +87,8 @@ async function updateTool(tool: any, patch: Record<string, any>) {
     const data = await put(`/tools/${tool.name}`, patch)
     Object.assign(tool, data)
     message.success(`${tool.name} 已更新，即时生效 ✓`)
+    // 刷新 LLM 可见性计数
+    loadLimits()
   } catch (e: any) {
     message.error(e.message)
     await load()
@@ -345,32 +348,36 @@ async function testSkill(item: any) {
                 <n-tag v-if="t.source !== 'builtin'" size="tiny" type="info" :bordered="false">{{ t.source }}</n-tag>
               </div>
               <div class="tool-desc">{{ t.description }}</div>
+              <!-- 展开的高级控件 -->
+              <div v-if="expandedTool === t.name" class="tool-advanced">
+                <label class="ctl">
+                  频率
+                  <n-input-number :value="t.max_frequency" size="tiny" :min="0" :max="6000"
+                                  :show-button="false" style="width: 64px"
+                                  @update:value="(v: number | null) => v !== null && updateTool(t, { max_frequency: v })" />
+                </label>
+                <label class="ctl">
+                  需确认
+                  <n-switch :value="t.requires_confirmation" size="small"
+                            @update:value="(v: boolean) => updateTool(t, { requires_confirmation: v })" />
+                </label>
+                <n-button size="tiny" @click="openDebug(t)">调试</n-button>
+                <n-button size="tiny" :loading="testingTool[t.name]"
+                          :type="toolTestResult[t.name]?.status === 'ok' ? 'success' :
+                                 toolTestResult[t.name]?.status === 'fail' ? 'error' : 'default'"
+                          @click="testTool(t.name)">
+                  {{ toolTestResult[t.name]?.status === 'ok' ? '✓ 通过' :
+                     toolTestResult[t.name]?.status === 'fail' ? '✕ 失败' : '测试' }}
+                </n-button>
+              </div>
             </div>
-            <div class="tool-controls">
-              <label class="ctl">
-                频率
-                <n-input-number :value="t.max_frequency" size="tiny" :min="0" :max="6000"
-                                :show-button="false" style="width: 64px"
-                                @update:value="(v: number | null) => v !== null && updateTool(t, { max_frequency: v })" />
-              </label>
-              <label class="ctl">
-                需确认
-                <n-switch :value="t.requires_confirmation" size="small"
-                          @update:value="(v: boolean) => updateTool(t, { requires_confirmation: v })" />
-              </label>
-              <label class="ctl">
-                启用
-                <n-switch :value="t.enabled" size="small"
-                          @update:value="(v: boolean) => updateTool(t, { enabled: v })" />
-              </label>
-              <n-button size="tiny" @click="openDebug(t)">调试</n-button>
-              <n-button size="tiny" :loading="testingTool[t.name]"
-                        :type="toolTestResult[t.name]?.status === 'ok' ? 'success' :
-                               toolTestResult[t.name]?.status === 'fail' ? 'error' : 'default'"
-                        @click="testTool(t.name)">
-                {{ toolTestResult[t.name]?.status === 'ok' ? '✓ 通过' :
-                   toolTestResult[t.name]?.status === 'fail' ? '✕ 失败' : '测试' }}
+            <div class="tool-actions">
+              <n-button size="tiny" quaternary :type="expandedTool === t.name ? 'primary' : 'default'"
+                        @click="expandedTool = expandedTool === t.name ? null : t.name">
+                {{ expandedTool === t.name ? '收起' : '...' }}
               </n-button>
+              <n-switch :value="t.enabled" size="small"
+                        @update:value="(v: boolean) => updateTool(t, { enabled: v })" />
             </div>
           </div>
         </div>
@@ -532,6 +539,12 @@ async function testSkill(item: any) {
 }
 
 .tool-controls { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
+.tool-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.tool-advanced {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid var(--glass-border);
+}
 .ctl { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--moon-dim); }
 
 .debug-warning {

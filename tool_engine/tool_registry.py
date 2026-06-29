@@ -48,8 +48,8 @@ _schema_cache: list | None = None
 _schema_version: int = 0
 
 # ── 工具数量上限管理 ──────────────────────────────────────
-# 聊天 agent 优先保证对话流畅，工具不宜过多（LLM function calling 上限约 40-64 个）
-MAX_ENABLED_TOOLS = 40
+# 聊天 agent 优先保证对话流畅，工具不宜过多（DeepSeek function calling 舒适区间）
+MAX_ENABLED_TOOLS = 60
 
 # 来源优先级：builtin > plugin > mcp > dynamic
 _SOURCE_PRIORITY: dict[str, int] = {
