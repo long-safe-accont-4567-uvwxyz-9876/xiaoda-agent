@@ -140,6 +140,29 @@ export const api = {
   createProvider: (data: { id: string; label: string; format: string; base_url: string; default_model: string; api_key: string }) =>
     post('/models/providers', data),
 
+  // ── 表情包管理 ──
+  listStickers: (agentName: string) =>
+    get<{ stickers: Array<{ name: string; description: string; emotion: string; url: string }>; emotions: string[] }>(`/agents/${agentName}/stickers`),
+
+  uploadSticker: async (agentName: string, file: File, description: string, emotion: string) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('description', description)
+    formData.append('emotion', emotion)
+    const token = localStorage.getItem('token')
+    const res = await fetch(`${BASE}/agents/${agentName}/stickers`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: formData,
+    })
+    const body = await res.json()
+    if (!res.ok || !body.ok) throw new Error(body?.error?.message || 'Upload failed')
+    return body.data as { name: string; description: string; emotion: string; url: string }
+  },
+
+  deleteSticker: (agentName: string, filename: string) =>
+    del<{ deleted: string }>(`/agents/${agentName}/stickers/${encodeURIComponent(filename)}`, true),
+
   uploadImage: async (file: File) => {
     const formData = new FormData()
     formData.append('file', file)

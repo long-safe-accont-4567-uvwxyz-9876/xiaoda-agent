@@ -3,7 +3,7 @@ import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import {
   NButton, NSwitch, NModal, NForm, NFormItem, NInput, NInputNumber,
   NSelect, NTabs, NTabPane, NTag, NPopconfirm, NDynamicTags, NCollapse,
-  NCollapseItem, useMessage,
+  NCollapseItem, NImage, NEmpty, NSpin, useMessage,
 } from 'naive-ui'
 import { get, post, put, del, api } from '../api'
 import { useAgentsStore } from '../stores/agents'
@@ -28,6 +28,16 @@ const uploadingWp = ref(false)
 const discoveredModels = ref<Array<{ provider: string; label?: string; models: Array<{ id: string; display_name: string; free: boolean }> }>>([])
 const advancedTouched = ref(false)
 const switchingModel = ref(false)
+
+// ── 表情包管理 ──
+const stickerList = ref<Array<{ name: string; description: string; emotion: string; url: string }>>([])
+const stickerEmotions = ref<string[]>([])
+const stickerLoading = ref(false)
+const stickerUploading = ref(false)
+const stickerFile = ref<File | null>(null)
+const stickerDesc = ref('')
+const stickerEmotion = ref('happy')
+const stickerInput = ref<HTMLInputElement | null>(null)
 
 function onConfigChanged(e: any) {
   const payload = e.payload as { type?: string } | undefined
@@ -186,6 +196,7 @@ async function openEditor(agent: any | null) {
       permissions.value = await get(`/agents/${agent.name}/permissions`)
       loadToolCategories()
     } catch { permissions.value = { tools: {}, mcp_servers: {}, is_main: false } }
+    loadStickers()
   } else {
     editing.value = {
       name: '', display_name: '', provider: 'mimo', model: '',
@@ -294,6 +305,63 @@ async function runTest() {
     testResult.value = { ok: false, error: e.message }
   } finally {
     testing.value = false
+  }
+}
+
+// ── 表情包管理函数 ──
+async function loadStickers() {
+  if (!editing.value?.name) return
+  stickerLoading.value = true
+  try {
+    const data = await api.listStickers(editing.value.name)
+    stickerList.value = data.stickers || []
+    stickerEmotions.value = data.emotions || []
+  } catch {
+    stickerList.value = []
+  } finally {
+    stickerLoading.value = false
+  }
+}
+
+function onStickerFilePick(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  if (file.size > 8 * 1024 * 1024) {
+    message.error('图片不能超过 8MB')
+    input.value = ''
+    return
+  }
+  stickerFile.value = file
+}
+
+async function uploadSticker() {
+  if (!stickerFile.value || !stickerDesc.value.trim()) {
+    message.warning('请选择图片并填写描述')
+    return
+  }
+  stickerUploading.value = true
+  try {
+    await api.uploadSticker(editing.value.name, stickerFile.value, stickerDesc.value.trim(), stickerEmotion.value)
+    message.success('表情包已添加 ✓')
+    stickerFile.value = null
+    stickerDesc.value = ''
+    if (stickerInput.value) stickerInput.value.value = ''
+    await loadStickers()
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    stickerUploading.value = false
+  }
+}
+
+async function removeSticker(filename: string) {
+  try {
+    await api.deleteSticker(editing.value.name, filename)
+    message.success('已删除')
+    await loadStickers()
+  } catch (e: any) {
+    message.error(e.message)
   }
 }
 </script>
@@ -471,6 +539,55 @@ async function runTest() {
             <div class="test-reply">{{ testResult.reply || testResult.error }}</div>
           </div>
         </n-tab-pane>
+
+        <n-tab-pane name="stickers" tab="表情包" v-if="!isCreate">
+          <div class="sticker-section">
+            <!-- 上传区域 -->
+            <div class="sticker-upload glass-panel">
+              <div class="sticker-upload-title">添加表情包</div>
+              <div class="sticker-upload-row">
+                <input ref="stickerInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+                       style="display: none" @change="onStickerFilePick" />
+                <n-button size="small" @click="stickerInput?.click()">
+                  {{ stickerFile ? stickerFile.name : '选择图片' }}
+                </n-button>
+                <n-input v-model:value="stickerDesc" size="small" placeholder="表情包描述（如：开心大笑）"
+                         style="flex: 1; min-width: 120px;" />
+                <n-select v-model:value="stickerEmotion" size="small" style="width: 120px"
+                          :options="(stickerEmotions.length ? stickerEmotions : ['happy','sad','angry','curious','shy','thinking','neutral','greeting','fear']).map(e => ({ label: e, value: e }))" />
+                <n-button type="primary" size="small" :loading="stickerUploading" :disabled="!stickerFile || !stickerDesc.trim()"
+                          @click="uploadSticker">
+                  上传
+                </n-button>
+              </div>
+              <div v-if="stickerFile" class="sticker-upload-preview">
+                <img :src="URL.createObjectURL(stickerFile)" alt="preview" />
+                <span class="sticker-preview-info">{{ stickerDesc || '（未填写描述）' }} · {{ stickerEmotion }}</span>
+              </div>
+            </div>
+
+            <!-- 表情包列表 -->
+            <n-spin :show="stickerLoading">
+              <div v-if="stickerList.length" class="sticker-grid">
+                <div v-for="s in stickerList" :key="s.name" class="sticker-card">
+                  <n-image :src="s.url" width="100" height="100" object-fit="cover"
+                           :fallback-src="''" lazy class="sticker-img" />
+                  <div class="sticker-info">
+                    <span class="sticker-desc">{{ s.description }}</span>
+                    <n-tag size="tiny" :bordered="false">{{ s.emotion }}</n-tag>
+                  </div>
+                  <n-popconfirm @positive-click="removeSticker(s.name)">
+                    <template #trigger>
+                      <n-button size="tiny" type="error" quaternary class="sticker-del">删除</n-button>
+                    </template>
+                    确认删除「{{ s.description }}」？
+                  </n-popconfirm>
+                </div>
+              </div>
+              <n-empty v-else description="暂无表情包" style="padding: 32px 0" />
+            </n-spin>
+          </div>
+        </n-tab-pane>
       </n-tabs>
 
       <template #footer>
@@ -579,4 +696,43 @@ async function runTest() {
 .wallpaper-hint { font-size: 12px; color: var(--moon-dim); }
 
 .modal-footer { display: flex; justify-content: flex-end; gap: 10px; }
+
+/* ── 表情包管理 ── */
+.sticker-section { display: flex; flex-direction: column; gap: 14px; }
+.sticker-upload { padding: 12px 14px; }
+.sticker-upload-title { font-size: 13px; font-weight: 600; color: var(--dendro); margin-bottom: 8px; }
+.sticker-upload-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sticker-upload-preview {
+  display: flex; align-items: center; gap: 10px; margin-top: 10px;
+}
+.sticker-upload-preview img {
+  width: 64px; height: 64px; object-fit: cover; border-radius: 8px;
+  border: 1px solid var(--glass-border);
+}
+.sticker-preview-info { font-size: 12px; color: var(--moon-dim); }
+
+.sticker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+}
+.sticker-card {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 8px; border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--glass-border);
+  position: relative;
+}
+.sticker-card:hover { border-color: rgba(127, 214, 80, 0.3); }
+.sticker-img { border-radius: 8px; overflow: hidden; }
+.sticker-info {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 4px; margin-top: 6px; width: 100%;
+}
+.sticker-desc {
+  font-size: 11px; color: var(--moon); text-align: center;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 120px;
+}
+.sticker-del { margin-top: 4px; }
 </style>

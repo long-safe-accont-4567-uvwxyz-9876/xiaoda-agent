@@ -232,6 +232,207 @@ async def test_agent(name: str, request: Request, _user: str = Depends(get_curre
                               "reply": "", "error": str(e)[:200]})
 
 
+# ── 表情包管理 ──────────────────────────────────────────
+
+_EMOTION_CATEGORIES = ["happy", "sad", "angry", "curious", "shy", "thinking", "neutral", "greeting", "fear"]
+_IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+
+def _resolve_sticker_dir(name: str, request: Request) -> Path:
+    """解析指定 Agent 的表情包目录路径。"""
+    if name == "nahida":
+        from config import STICKER_DIR
+        return Path(STICKER_DIR)
+    core = request.app.state.core
+    # 从 _agent_route_configs 获取 sticker_dir
+    route_cfg = getattr(core, "_agent_route_configs", {}).get(name, {})
+    sticker_dir = route_cfg.get("sticker_dir", "")
+    if sticker_dir:
+        return Path(sticker_dir)
+    # fallback: AGENT_STICKER_BASE / name
+    from config import AGENT_STICKER_BASE
+    return Path(AGENT_STICKER_BASE) / name
+
+
+@router.get("/agents/{name}/stickers", response_model=Envelope[dict])
+async def list_stickers(name: str, request: Request, _user: str = Depends(get_current_user)) -> Any:
+    """列出指定 Agent 的所有表情包及描述。"""
+    sticker_dir = _resolve_sticker_dir(name, request)
+    if not sticker_dir.exists():
+        return Envelope(data={"stickers": [], "emotions": _EMOTION_CATEGORIES})
+
+    # 加载 descriptions.json
+    desc_file = sticker_dir / "descriptions.json"
+    descriptions: dict[str, str] = {}
+    if desc_file.exists():
+        try:
+            descriptions = json.loads(desc_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    stickers = []
+    for emo_dir in sorted(sticker_dir.iterdir()):
+        if not emo_dir.is_dir():
+            continue
+        for f in sorted(emo_dir.iterdir()):
+            if f.suffix.lower() not in _IMG_EXTS:
+                continue
+            desc = descriptions.get(f.name, f.stem)
+            stickers.append({
+                "name": f.name,
+                "description": desc,
+                "emotion": emo_dir.name,
+                "url": f"/api/v1/agents/{name}/stickers/file/{f.name}",
+            })
+
+    return Envelope(data={"stickers": stickers, "emotions": _EMOTION_CATEGORIES})
+
+
+@router.get("/agents/{name}/stickers/file/{filename}")
+async def serve_sticker(name: str, filename: str, request: Request) -> Any:
+    """提供表情包图片文件。"""
+    from fastapi.responses import FileResponse
+    sticker_dir = _resolve_sticker_dir(name, request)
+    if not sticker_dir.exists():
+        raise HTTPException(404, "表情包目录不存在")
+    # 在所有情绪子目录中查找文件
+    for emo_dir in sticker_dir.iterdir():
+        if not emo_dir.is_dir():
+            continue
+        fp = emo_dir / filename
+        if fp.exists() and fp.suffix.lower() in _IMG_EXTS:
+            return FileResponse(str(fp), media_type="image/jpeg")
+    raise HTTPException(404, f"表情包 {filename} 不存在")
+
+
+@router.post("/agents/{name}/stickers", response_model=Envelope[dict])
+async def upload_sticker(
+    name: str, request: Request, _user: str = Depends(get_current_user)
+) -> Any:
+    """上传表情包：multipart/form-data，字段 file (图片)、description (描述)、emotion (情绪分类)。"""
+    from fastapi import UploadFile, File, Form
+    from fastapi import Request as _Req
+    # 手动解析 multipart
+    form = await request.form()
+    file: UploadFile = form.get("file")  # type: ignore
+    description = (form.get("description") or "").strip()
+    emotion = (form.get("emotion") or "neutral").strip().lower()
+
+    if not file:
+        raise HTTPException(400, "缺少图片文件")
+    if not description:
+        raise HTTPException(400, "缺少表情包描述")
+    if emotion not in _EMOTION_CATEGORIES:
+        raise HTTPException(400, f"情绪分类必须是以下之一: {', '.join(_EMOTION_CATEGORIES)}")
+
+    # 验证文件类型
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in _IMG_EXTS:
+        raise HTTPException(400, f"仅支持 {', '.join(_IMG_EXTS)} 格式")
+
+    # 读取文件内容
+    content = await file.read()
+    if len(content) > 8 * 1024 * 1024:
+        raise HTTPException(400, "图片不能超过 8MB")
+
+    # 确定保存路径
+    sticker_dir = _resolve_sticker_dir(name, request)
+    emo_dir = sticker_dir / emotion
+    emo_dir.mkdir(parents=True, exist_ok=True)
+
+    # 生成文件名: {emotion}_{描述}.ext (用时间戳避免冲突)
+    import re as _re
+    safe_desc = _re.sub(r'[^\w\u4e00-\u9fff\-]', '_', description)[:40]
+    filename = f"{emotion}_{safe_desc}{ext}"
+    fp = emo_dir / filename
+    # 如果同名文件已存在，加时间戳
+    if fp.exists():
+        import time as _time
+        filename = f"{emotion}_{safe_desc}_{int(_time.time())}{ext}"
+        fp = emo_dir / filename
+
+    fp.write_bytes(content)
+
+    # 更新 descriptions.json
+    desc_file = sticker_dir / "descriptions.json"
+    descriptions: dict[str, str] = {}
+    if desc_file.exists():
+        try:
+            descriptions = json.loads(desc_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    descriptions[filename] = description
+    desc_file.write_text(json.dumps(descriptions, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 热重载 StickerManager 缓存
+    try:
+        core = request.app.state.core
+        mgr = core.get_sticker_manager(name)
+        if hasattr(mgr, "reload"):
+            mgr.reload()
+        elif hasattr(mgr, "_instance"):
+            mgr._instance.reload()
+    except Exception:
+        pass
+
+    await _audit(request, "sticker_upload", json.dumps({"agent": name, "file": filename}, ensure_ascii=False))
+
+    return Envelope(data={
+        "name": filename,
+        "description": description,
+        "emotion": emotion,
+        "url": f"/api/v1/agents/{name}/stickers/file/{filename}",
+    })
+
+
+@router.delete("/agents/{name}/stickers/{filename:path}", response_model=Envelope[dict])
+async def delete_sticker(
+    name: str, filename: str, request: Request, _user: str = Depends(get_current_user)
+) -> Any:
+    """删除指定表情包。"""
+    sticker_dir = _resolve_sticker_dir(name, request)
+    if not sticker_dir.exists():
+        raise HTTPException(404, "表情包目录不存在")
+
+    # 查找并删除文件
+    deleted = False
+    for emo_dir in sticker_dir.iterdir():
+        if not emo_dir.is_dir():
+            continue
+        fp = emo_dir / filename
+        if fp.exists():
+            fp.unlink()
+            deleted = True
+            break
+
+    if not deleted:
+        raise HTTPException(404, f"表情包 {filename} 不存在")
+
+    # 从 descriptions.json 移除
+    desc_file = sticker_dir / "descriptions.json"
+    if desc_file.exists():
+        try:
+            descriptions = json.loads(desc_file.read_text(encoding="utf-8"))
+            descriptions.pop(filename, None)
+            desc_file.write_text(json.dumps(descriptions, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    # 热重载缓存
+    try:
+        core = request.app.state.core
+        mgr = core.get_sticker_manager(name)
+        if hasattr(mgr, "reload"):
+            mgr.reload()
+        elif hasattr(mgr, "_instance"):
+            mgr._instance.reload()
+    except Exception:
+        pass
+
+    await _audit(request, "sticker_delete", json.dumps({"agent": name, "file": filename}, ensure_ascii=False))
+    return Envelope(data={"deleted": filename})
+
+
 @router.post("/agents/{name}/model", response_model=Envelope[dict])
 async def set_agent_model(name: str, body: dict, request: Request, _user: str = Depends(get_current_user)) -> Any:
     """一键切换子 Agent 的模型。
