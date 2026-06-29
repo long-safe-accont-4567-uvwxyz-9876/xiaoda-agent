@@ -87,7 +87,7 @@ STICKER_FALLBACK: dict[Emotion, str] = {
     Emotion.CURIOUS: "curious",
     Emotion.THINKING: "thinking",
     Emotion.FEAR: "fear",
-    Emotion.NEUTRAL: "happy",    # neutral 用 happy 表情（最安全的默认）
+    Emotion.NEUTRAL: "neutral",  # neutral 用专属中立表情包
 }
 
 # 合法标签值集合（用于 _ensure_emotion_tag 校验）

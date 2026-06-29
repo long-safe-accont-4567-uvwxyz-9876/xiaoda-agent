@@ -70,35 +70,6 @@ class StickerManager:
 
     EMOTION_PATTERN = re.compile(r'\[emotion:([a-z_]+)\]')
 
-    # 文件名描述关键词到情绪的映射（统一到 EMOTION_ALIASES，消除三套表不一致）
-    _DESC_EMOTION_MAP = {
-        # happy
-        "开心": "happy", "满足": "happy", "微笑": "happy", "比耶": "happy",
-        "卖萌": "happy", "亮晶晶": "happy", "期待": "happy", "兴奋": "happy",
-        "大笑": "happy", "星星眼": "happy", "玫瑰": "happy", "叼玫瑰": "happy",
-        "酷笑": "happy", "温柔微笑": "happy", "惊喜": "happy", "示爱": "happy",
-        "温柔": "happy",
-        # sad
-        "苦笑": "sad", "晕眩": "sad", "委屈": "sad", "无奈": "sad",
-        "含泪": "sad", "泪光": "sad", "流泪": "sad", "哭泣": "sad",
-        "暗淡": "sad", "阴沉": "sad", "难过": "sad",
-        # angry
-        "愤怒": "angry", "激光": "angry", "暴怒": "angry", "生气": "angry",
-        # shy
-        "害羞": "shy", "小嘴": "shy", "吐舌": "shy",
-        # fear (含 anxious 降级)
-        "恐惧": "fear", "害怕": "fear", "惊恐": "fear",
-        "焦虑": "fear", "紧张": "fear", "不安": "fear",
-        "慌张": "fear", "担心": "fear", "惊吓": "fear", "颤抖": "fear",
-        # curious
-        "爱心眼": "curious", "喜欢": "curious", "惊讶张嘴": "curious",
-        "泪汪汪": "curious", "惊讶好奇": "curious", "惊讶": "curious",
-        "疑惑": "curious",  # 与 EMOTION_ALIASES 一致：疑惑→curious
-        # thinking
-        "困惑": "thinking", "问号": "thinking",
-        "无聊": "thinking", "困倦": "thinking", "哭泣微笑": "thinking",
-    }
-
     def __init__(self, sticker_dir: Path | str) -> None:
         """初始化表情包管理器并扫描目录.
 
@@ -107,28 +78,7 @@ class StickerManager:
         """
         self._dir = Path(sticker_dir) if not isinstance(sticker_dir, Path) else sticker_dir
         self._cache: dict[str, list[Path]] = {}
-        self._emotion_cache: dict[str, list[Path]] = {}
         self._scan()
-
-    def _classify_by_desc(self, filename_stem: str) -> str:
-        """根据文件名描述部分判断表情包的实际情绪类别。
-
-        文件名格式: {目录名}_{实际情绪描述}.jpg
-        例如: angry_开心流汗.jpg -> 描述是"开心流汗"，匹配到 happy
-        """
-        if "_" in filename_stem:
-            desc = filename_stem.split("_", 1)[1]
-        else:
-            desc = filename_stem
-
-        # 按关键词长度降序匹配，优先匹配更长的关键词
-        best_emotion = ""
-        best_len = 0
-        for keyword, emotion in self._DESC_EMOTION_MAP.items():
-            if keyword in desc and len(keyword) > best_len:
-                best_emotion = emotion
-                best_len = len(keyword)
-        return best_emotion
 
     def _scan(self) -> None:
         if not self._dir.exists():
@@ -140,23 +90,14 @@ class StickerManager:
                     if f.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp")
                 ]
                 if files:
+                    # 以目录名为准（目录结构即情绪分类），不再根据文件名描述重分类
                     self._cache[emotion_dir.name] = files
-                    # 根据文件名描述重新归类到正确的情绪
-                    for f in files:
-                        classified_emotion = self._classify_by_desc(f.stem)
-                        if classified_emotion:
-                            self._emotion_cache.setdefault(classified_emotion, []).append(f)
-                        else:
-                            # 无法从描述判断时，使用目录名
-                            self._emotion_cache.setdefault(emotion_dir.name, []).append(f)
         total = sum(len(v) for v in self._cache.values())
-        emotion_total = sum(len(v) for v in self._emotion_cache.values())
-        logger.info(f"sticker.loaded", categories=len(self._cache), total=total, emotion_classified=emotion_total)
+        logger.info(f"sticker.loaded", categories=len(self._cache), total=total)
 
     def reload(self) -> None:
         """重新扫描表情包目录 (清空缓存)."""
         self._cache.clear()
-        self._emotion_cache.clear()
         self._scan()
 
     def detect_emotion(self, text: str) -> str:
@@ -174,7 +115,7 @@ class StickerManager:
             if is_unified():
                 emotion = resolve_emotion(raw_label)
                 return STICKER_FALLBACK.get(emotion, "happy")
-            if raw_label in self._cache or raw_label in self.EMOTION_MAP or raw_label in self._emotion_cache:
+            if raw_label in self._cache or raw_label in self.EMOTION_MAP:
                 return raw_label
 
         if is_unified():
@@ -198,28 +139,7 @@ class StickerManager:
                         continue
                     return emotion
 
-        filename_match = self._detect_from_filename(text)
-        if filename_match:
-            return filename_match
-
         return ""
-
-    def _detect_from_filename(self, text: str) -> str:
-        best_emotion = ""
-        best_score = 0
-        # 从 _DESC_EMOTION_MAP 匹配
-        for keyword, emotion in self._DESC_EMOTION_MAP.items():
-            if keyword in text:
-                idx = text.index(keyword)
-                prefix = text[max(0, idx - 2):idx]
-                exclusions = self.EMOTION_EXCLUSIONS.get(emotion, [])
-                if any(ex in prefix for ex in exclusions):
-                    continue
-                score = len(keyword)  # 长关键词权重更高
-                if score > best_score:
-                    best_score = score
-                    best_emotion = emotion
-        return best_emotion if best_score >= 1 else ""
 
     def strip_emotion_tag(self, text: str) -> str:
         """移除文本中的 [emotion:xxx] 标签."""
@@ -237,11 +157,11 @@ class StickerManager:
         """
         if not self._cache:
             return False
-        # Bug fix: 有明确情绪时提高发送概率，无情绪时降低
-        if detected_emotion:
+        # 有明确情绪时高概率发送，neutral 中立时也发送
+        if detected_emotion and detected_emotion != "neutral":
             prob = 0.85
         else:
-            prob = 0.30
+            prob = 0.5
         return random.random() < prob
 
     def get_sticker(self, emotion: str = "") -> Path | None:
@@ -271,10 +191,7 @@ class StickerManager:
             if emotion in self._cache:
                 candidates = self._cache[emotion]
                 return random.choice(candidates)
-            # 回退：从描述归类的情绪缓存中选取
-            if emotion in self._emotion_cache:
-                candidates = self._emotion_cache[emotion]
-                return random.choice(candidates)
+            return None
         all_stickers = [s for v in self._cache.values() for s in v]
         return random.choice(all_stickers) if all_stickers else None
 
@@ -295,7 +212,5 @@ class StickerManager:
         """
         target_emotion = detected_emotion or self.detect_emotion(text)
         if not target_emotion:
-            filename_match = self._detect_from_filename(text)
-            if filename_match:
-                target_emotion = filename_match
+            target_emotion = "neutral"
         return self.pick(target_emotion)

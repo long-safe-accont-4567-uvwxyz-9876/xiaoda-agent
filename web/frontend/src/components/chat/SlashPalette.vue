@@ -12,7 +12,7 @@ const filtered = computed(() => {
   const q = props.filter.toLowerCase().replace(/^\//, '')
   return props.commands
     .filter(c => c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q))
-    .slice(0, 8)
+    .slice(0, 30)
 })
 
 watch(filtered, () => { activeIndex.value = 0 })
@@ -58,7 +58,8 @@ defineExpose({ move, confirm, hasItems: () => filtered.value.length > 0 })
   backdrop-filter: blur(14px);
   border: 1px solid var(--glass-border);
   border-radius: 12px;
-  overflow: hidden;
+  overflow-y: auto;
+  max-height: 320px;
   box-shadow: var(--shadow-md);
   z-index: 30;
 }

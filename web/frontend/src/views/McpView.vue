@@ -394,8 +394,8 @@ function onMcpTabChange(tab: string) {
           <div class="mcp-grid">
             <div v-for="item in filteredMcpMarket" :key="item.id" class="market-card glass-panel glass-panel-hover">
               <div class="card-header">
-                <img v-if="item.icon" :src="item.icon" :alt="item.name" class="card-icon" />
-                <div v-else class="card-icon-placeholder">🔌</div>
+                <img v-if="item.icon && !item._iconErr" :src="item.icon" :alt="item.name" class="card-icon" @error="item._iconErr=true" />
+                <div v-else class="card-icon-placeholder">{{ (item.name||'?')[0].toUpperCase() }}</div>
                 <div class="card-title-area">
                   <h4 class="card-title">{{ item.name }}</h4>
                   <span class="card-author">{{ item.author || '未知' }}</span>

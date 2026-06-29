@@ -283,15 +283,15 @@ class ToolExecutorMixin:
                 and get_degradation_strategy().is_feature_available("emotion")):
             if force_sticker:
                 if not detected:
-                    detected = self.sticker_manager.detect_emotion(clean_reply) or "happy"
+                    detected = self.sticker_manager.detect_emotion(clean_reply) or "neutral"
                 sticker_path = self.sticker_manager.pick(detected)
             else:
                 # 无标签时才用关键词检测
                 if not detected:
                     detected = self.sticker_manager.detect_emotion(clean_reply)
-                # Bug fix: fallback 到 happy（agent 默认情绪）而非用户情绪
+                # 无明确情绪时发中立表情包
                 if not detected:
-                    detected = "happy"
+                    detected = "neutral"
                 if self.sticker_manager.should_send(clean_reply, detected_emotion=detected):
                     sticker_path = self.sticker_manager.pick(detected)
         return clean_reply, sticker_path
