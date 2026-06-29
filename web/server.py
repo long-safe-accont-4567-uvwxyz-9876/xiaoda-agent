@@ -219,6 +219,15 @@ async def _start_services(app: Any, core: Any) -> None:
     app.state.qq_task = qq_task
     app.state.last_emotion = None
 
+    # 邮件机器人轮询器（后台循环，检测新邮件→注入 Agent→邮件回复）
+    try:
+        from web.mail_poller import MailPoller
+        mail_poller = MailPoller(core, get_config_service())
+        mail_poller.start()
+        app.state.mail_poller = mail_poller
+    except Exception as e:
+        logger.warning("webui.mail_poller_init_failed error={}", str(e))
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
@@ -326,6 +335,9 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
     media_queue = getattr(app.state, "media_queue", None)
     if media_queue:
         await media_queue.stop()
+    mail_poller = getattr(app.state, "mail_poller", None)
+    if mail_poller:
+        await mail_poller.stop()
     if owns_core:
         try:
             await core.shutdown()
@@ -368,11 +380,13 @@ def create_app() -> FastAPI:
     from web.routers.setup import router as setup_router
     from web.routers.model_discovery import router as model_discovery_router
     from web.routers.market import router as market_router
+    from web.routers.mail_manage import router as mail_manage_router
 
     for r in (auth_router, chat_router, system_router, agents_router,
               models_router, tools_router, mcp_router, insight_router,
               schedule_router, media_router, health_router, plugins_router,
-              setup_router, model_discovery_router, market_router):
+              setup_router, model_discovery_router, market_router,
+              mail_manage_router):
         app.include_router(r, prefix="/api/v1")
 
     from web.ws_hub import router as ws_router

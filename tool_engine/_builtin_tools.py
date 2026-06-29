@@ -23,3 +23,4 @@ import tools.memory_tool  # noqa: F401
 import tools.nudge_tool  # noqa: F401
 import tools.domestic_search_tools  # noqa: F401
 import tools.secrets_tool  # noqa: F401
+import tools.mail_tools  # noqa: F401

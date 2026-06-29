@@ -195,7 +195,12 @@ class AgentCoreBootstrapper:
                             logger.warning("bootstrap.stickers_copy_failed", voice="klee", emotion=emotion_dir.name, error=str(e))
 
     # 表情包情绪分类子目录（用户往这些目录放图片即可自动调用）
-    _STICKER_EMOTION_DIRS = ("happy", "sad", "angry", "curious", "shy", "thinking", "neutral", "greeting")
+    _STICKER_EMOTION_DIRS = (
+        "happy", "excited", "love", "shy",
+        "sad", "angry", "surprised", "confused",
+        "thinking", "playful", "moved", "neutral",
+        "pout", "fear", "anxious",
+    )
 
     def _ensure_agent_sticker_dirs(self, core) -> None:
         """为每个子智能体自动创建专属表情包目录。

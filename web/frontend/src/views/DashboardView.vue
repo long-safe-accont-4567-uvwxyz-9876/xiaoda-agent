@@ -151,7 +151,7 @@ function uptimeFmt(s: number): string {
   const d = Math.floor(s / 86400)
   const h = Math.floor((s % 86400) / 3600)
   const m = Math.floor((s % 3600) / 60)
-  return d > 0 ? `${d}天${h}时${m}分` : h > 0 ? `${h}时${m}分` : `${m}分`
+  return d > 0 ? `${d}${t('dashboardView.day')}${h}${t('dashboardView.hour')}${m}${t('dashboardView.min')}` : h > 0 ? `${h}${t('dashboardView.hour')}${m}${t('dashboardView.min')}` : `${m}${t('dashboardView.min')}`
 }
 
 const platformLabel: Record<string, string> = {
@@ -171,7 +171,7 @@ function diskLabel(d: any): string {
     <h2 class="view-title">📊 {{ t('dashboardView.title') }}</h2>
 
     <div v-if="permissionMode === 'bypass'" class="bypass-warning">
-      ⚠ 当前权限模式为 BYPASS — 所有工具不经确认直接执行，存在安全风险！
+      {{ t('dashboardView.bypassWarning') }}
     </div>
 
     <div class="stat-grid">
@@ -203,7 +203,7 @@ function diskLabel(d: any): string {
     <div class="chart-row">
       <div class="glass-panel chart-box monitor">
         <div class="section-header">
-          <h4>{{ platformLabel[system.platform] || system.platform || '系统' }} 监控 <span v-if="monitorEnabled" class="hint">5s 轮询</span></h4>
+          <h4>{{ platformLabel[system.platform] || system.platform || '系统' }} {{ t('dashboardView.systemMonitor') }} <span v-if="monitorEnabled" class="hint">{{ t('dashboardView.polling') }}</span></h4>
           <NButton v-if="!monitorEnabled" size="small" type="primary" @click="enableMonitor">{{ t('dashboardView.enableMonitor') }}</NButton>
           <NButton v-else size="small" @click="disableMonitor">{{ t('dashboardView.disableMonitor') }}</NButton>
         </div>
@@ -221,7 +221,7 @@ function diskLabel(d: any): string {
           <div class="m-item">
             <span class="m-label">{{ t('dashboardView.memory') }}</span>
             <span class="m-value mono">
-              {{ system.mem_total ? `${system.mem_percent}% · 可用 ${gb(system.mem_available)}G / ${gb(system.mem_total)}G` : '—' }}
+              {{ system.mem_total ? `${system.mem_percent}% · ${t('dashboardView.available')} ${gb(system.mem_available)}G / ${gb(system.mem_total)}G` : '—' }}
             </span>
             <div v-if="system.mem_total" class="m-bar">
               <div class="m-bar-fill" :style="{ width: system.mem_percent + '%' }" :class="{ warn: system.mem_percent > 85 }"></div>
@@ -241,7 +241,7 @@ function diskLabel(d: any): string {
                 <div class="m-bar">
                   <div class="m-bar-fill" :style="{ width: d.percent + '%' }" :class="{ warn: d.percent > 90 }"></div>
                 </div>
-                <span class="disk-info mono">{{ d.percent }}% · 余 {{ gb(d.free) }}G / {{ gb(d.total) }}G</span>
+                <span class="disk-info mono">{{ d.percent }}% · {{ t('dashboardView.freeSpace') }} {{ gb(d.free) }}G / {{ gb(d.total) }}G</span>
               </div>
             </div>
           </div>
@@ -277,7 +277,7 @@ function diskLabel(d: any): string {
           </div>
         </div>
         <div v-else class="monitor-disabled-hint">
-          系统监控已关闭，点击"开启监控"查看系统资源使用情况
+          {{ t('dashboardView.monitorOffHint') }}
         </div>
       </div>
       <div class="glass-panel chart-box">

@@ -47,7 +47,7 @@ const memories = ref<any[]>([])
 const memQuery = ref('')
 const importanceMin = ref(0)
 const graphEl = ref<HTMLElement | null>(null)
-const graphEntity = ref('用户')
+const graphEntity = ref(t('insightView.graphEntityPh'))
 const graphDepth = ref<1 | 2>(1)
 const showUniverse = ref(false)
 const activeTab = ref('emotion')
@@ -66,14 +66,14 @@ const editingId = ref<number | string | null>(null)
 const formModel = reactive<Record<string, any>>({})
 
 const noteKindOptions = [
-  { label: '笔记', value: 'note' },
-  { label: '任务', value: 'task' },
-  { label: '灵感', value: 'idea' },
+  { label: t('insightView.noteLabel'), value: 'note' },
+  { label: t('insightView.taskLabel'), value: 'task' },
+  { label: t('insightView.ideaLabel'), value: 'idea' },
 ]
 const priorityOptions = [
-  { label: '低', value: 'low' },
-  { label: '中', value: 'medium' },
-  { label: '高', value: 'high' },
+  { label: t('insightView.impLow'), value: 'low' },
+  { label: t('insightView.impMed'), value: 'medium' },
+  { label: t('insightView.impHigh'), value: 'high' },
 ]
 
 function openAddModal(type: ModalType) {
@@ -143,7 +143,7 @@ function openEditModal(type: ModalType, item: any) {
 async function handleModalOk() {
   try {
     if (modalType.value === 'memory') {
-      if (!formModel.summary) { message.warning('请输入记忆摘要'); return }
+      if (!formModel.summary) { message.warning(t('insightView.inputMemorySummary')); return }
       if (editingId.value) {
         await updateMemory(editingId.value as number, { summary: formModel.summary, importance: formModel.importance, emotion_label: formModel.emotion_label })
       } else {
@@ -151,7 +151,7 @@ async function handleModalOk() {
       }
       await loadMemories()
     } else if (modalType.value === 'note') {
-      if (!formModel.content) { message.warning('请输入笔记内容'); return }
+      if (!formModel.content) { message.warning(t('insightView.inputNoteContent')); return }
       if (editingId.value) {
         await updateNote(editingId.value as number, { content: formModel.content, kind: formModel.kind, tags: formModel.tags })
       } else {
@@ -159,7 +159,7 @@ async function handleModalOk() {
       }
       await loadNotes()
     } else if (modalType.value === 'learning') {
-      if (!formModel.summary) { message.warning('请输入学习摘要'); return }
+      if (!formModel.summary) { message.warning(t('insightView.inputLearningSummary')); return }
       if (editingId.value) {
         await updateLearning(editingId.value as number, { summary: formModel.summary, pattern: formModel.pattern, priority: formModel.priority })
       } else {
@@ -167,7 +167,7 @@ async function handleModalOk() {
       }
       await loadLearning()
     } else if (modalType.value === 'instinct') {
-      if (!formModel.content) { message.warning('请输入本能内容'); return }
+      if (!formModel.content) { message.warning(t('insightView.inputInstinctContent')); return }
       if (editingId.value) {
         await updateInstinct(editingId.value as number, { content: formModel.content, confidence: formModel.confidence })
       } else {
@@ -175,7 +175,7 @@ async function handleModalOk() {
       }
       await loadLearning()
     } else if (modalType.value === 'entity') {
-      if (!formModel.name) { message.warning('请输入实体名称'); return }
+      if (!formModel.name) { message.warning(t('insightView.inputEntityName')); return }
       if (editingId.value) {
         await updateKnowledgeEntity(editingId.value as string, { kind: formModel.kind, observations: formModel.observations })
       } else {
@@ -183,7 +183,7 @@ async function handleModalOk() {
       }
       await loadKnowledgeData()
     } else if (modalType.value === 'relation') {
-      if (!formModel.from || !formModel.to || !formModel.relation) { message.warning('请填写完整的关系信息'); return }
+      if (!formModel.from || !formModel.to || !formModel.relation) { message.warning(t('insightView.inputRelationInfo')); return }
       if (editingId.value) {
         await updateKnowledgeRelation(editingId.value as string, { relation: formModel.relation })
       } else {
@@ -192,15 +192,15 @@ async function handleModalOk() {
       await loadKnowledgeData()
     }
     showModal.value = false
-    message.success(editingId.value ? '已更新' : '已创建')
+    message.success(editingId.value ? t('insightView.updated') : t('insightView.created'))
   } catch (e: any) {
     message.error(e.message)
   }
 }
 
 const modalTitle = () => {
-  const prefix = editingId.value ? '编辑' : '添加'
-  const names: Record<string, string> = { memory: '记忆', note: '笔记', learning: '学习记录', instinct: '本能', entity: '实体', relation: '关系' }
+  const prefix = editingId.value ? t('insightView.editPrefix') : t('insightView.addPrefix')
+  const names: Record<string, string> = { memory: t('insightView.namesMemory'), note: t('insightView.namesNote'), learning: t('insightView.namesLearning'), instinct: t('insightView.namesInstinct'), entity: t('insightView.namesEntity'), relation: t('insightView.namesRelation') }
   return prefix + (names[modalType.value || ''] || '')
 }
 
@@ -248,10 +248,10 @@ watch(activeTab, async (tab) => {
 function onConsolidated(e: any) {
   consolidating.value = false
   if (e.ok) {
-    message.success('画像整合完成 ✓')
+    message.success(t('insightView.consolidateDone'))
     loadPortrait()
   } else {
-    message.error(`整合失败：${e.error || '未知错误'}`)
+    message.error(`${t('insightView.consolidateFailed')}: ${e.error || t('insightView.unknownError')}`)
   }
 }
 
@@ -313,7 +313,7 @@ async function consolidate() {
   consolidating.value = true
   try {
     await post('/insight/portrait/consolidate')
-    message.info('整合已开始（完成后自动刷新）…')
+    message.info(t('insightView.consolidateStarted'))
   } catch (e: any) {
     consolidating.value = false
     message.error(e.message)
@@ -335,7 +335,7 @@ async function removeMemory(id: number) {
   try {
     await deleteMemory(id)
     memories.value = memories.value.filter(m => m.id !== id)
-    message.success('记忆已删除（含向量索引）')
+    message.success(t('insightView.memoryDeleted'))
   } catch (e: any) { message.error(e.message) }
 }
 
@@ -343,7 +343,7 @@ async function removeNote(id: number) {
   try {
     await deleteNote(id)
     notes.value = notes.value.filter(n => n.id !== id)
-    message.success('笔记已归档')
+    message.success(t('insightView.noteArchived'))
   } catch (e: any) { message.error(e.message) }
 }
 
@@ -351,7 +351,7 @@ async function removeLearning(id: number) {
   try {
     await deleteLearning(id)
     learnings.value = learnings.value.filter(l => l.id !== id)
-    message.success('学习记录已删除')
+    message.success(t('insightView.learningDeleted'))
   } catch (e: any) { message.error(e.message) }
 }
 
@@ -359,7 +359,7 @@ async function removeInstinct(id: number) {
   try {
     await deleteInstinct(id)
     instincts.value = instincts.value.filter(i => i.id !== id)
-    message.success('本能规则已删除')
+    message.success(t('insightView.instinctDeleted'))
   } catch (e: any) { message.error(e.message) }
 }
 
@@ -413,7 +413,7 @@ async function loadKnowledge() {
         triggerOn: 'click',
         formatter: (p: any) => {
           if (p.dataType === 'node') {
-            return `<b>${p.data.name}</b><br/>类型: ${p.data.value || ''}`
+            return `<b>${p.data.name}</b><br/>${t('insightView.typeName')} ${p.data.value || ''}`
           }
           if (p.dataType === 'edge') {
             return `${p.data.source} → <b>${p.data.relation}</b> → ${p.data.target}`
@@ -475,7 +475,7 @@ async function removeKgEntity(name: string) {
     await deleteKnowledgeEntity(name)
     kgEntities.value = kgEntities.value.filter(e => e.name !== name)
     kgRelations.value = kgRelations.value.filter(r => r.from_entity !== name && r.to_entity !== name)
-    message.success('实体已删除')
+    message.success(t('insightView.entityDeleted'))
     await loadKnowledge()
   } catch (e: any) { message.error(e.message) }
 }
@@ -484,7 +484,7 @@ async function removeKgRelation(id: string) {
   try {
     await deleteKnowledgeRelation(id)
     kgRelations.value = kgRelations.value.filter(r => String(r.id) !== id)
-    message.success('关系已删除')
+    message.success(t('insightView.relationDeleted'))
     await loadKnowledge()
   } catch (e: any) { message.error(e.message) }
 }
@@ -516,17 +516,17 @@ function fmtTs(ts: number): string {
       <n-tab-pane name="emotion" :tab="t('insightView.emotion')">
         <div class="emotion-current glass-panel">
           <span class="emo-big" :style="{ color: EMOTION_COLORS[currentEmotion.primary] }">
-            {{ currentEmotion.primary || '平静' }}
+            {{ currentEmotion.primary || t('insightView.calm') }}
           </span>
-          <span class="emo-sub">最近一次回复的情绪</span>
+          <span class="emo-sub">{{ t('insightView.lastEmotionDesc') }}</span>
         </div>
         <div class="chart-row">
           <div class="glass-panel chart-box">
-            <h4>7 天情绪河流</h4>
+            <h4>{{ t('insightView.emotionRiver7d') }}</h4>
             <div ref="emotionChartEl" class="chart"></div>
           </div>
           <div class="glass-panel chart-box small">
-            <h4>今日分布</h4>
+            <h4>{{ t('insightView.todayDist') }}</h4>
             <div ref="pieChartEl" class="chart"></div>
           </div>
         </div>
@@ -534,19 +534,19 @@ function fmtTs(ts: number): string {
 
       <n-tab-pane name="portrait" :tab="t('insightView.profile')">
         <div class="portrait-head">
-          <span v-if="portrait.version">版本 v{{ portrait.version }} ·
+          <span v-if="portrait.version">{{ t('insightView.versionLabel') }} v{{ portrait.version }} ·
             {{ new Date((portrait.created_at || 0) * 1000).toLocaleString('zh-CN') }}</span>
           <n-button size="small" type="primary" :loading="consolidating" @click="consolidate">
-            🔄 立即整合画像
+            {{ t('insightView.consolidateBtn') }}
           </n-button>
         </div>
         <div class="glass-panel portrait-card md-body"
-             v-html="renderMarkdown(portrait.content || '（还没有形成画像呢～多聊聊吧）')"></div>
+             v-html="renderMarkdown(portrait.content || t('insightView.noPortrait'))"></div>
         <n-collapse style="margin-top: 12px">
-          <n-collapse-item title="版本变更记录" name="log">
+          <n-collapse-item :title="t('insightView.changeLog')" name="log">
             <div v-for="h in portraitHistory" :key="h.version" class="history-row">
               <n-tag size="small" :bordered="false">v{{ h.version }}</n-tag>
-              <span class="history-log">{{ h.change_log || '（无说明）' }}</span>
+              <span class="history-log">{{ h.change_log || t('insightView.noDesc') }}</span>
               <span class="history-time">{{ new Date(h.created_at * 1000).toLocaleString('zh-CN') }}</span>
             </div>
           </n-collapse-item>
@@ -555,9 +555,9 @@ function fmtTs(ts: number): string {
 
       <n-tab-pane name="today" :tab="t('insightView.todayEvents')">
         <div class="today-stats glass-panel">
-          今天对话 {{ todayData.stats.conversations || 0 }} 轮 ·
-          调用工具 {{ todayData.stats.tool_calls || 0 }} 次 ·
-          新增记忆 {{ todayData.stats.memories || 0 }} 条
+          {{ t('insightView.todayRounds') }} {{ todayData.stats.conversations || 0 }} {{ t('insightView.roundsUnit') }} ·
+          {{ t('insightView.toolCalls') }} {{ todayData.stats.tool_calls || 0 }} {{ t('insightView.times') }} ·
+          {{ t('insightView.newMemories') }} {{ todayData.stats.memories || 0 }} {{ t('insightView.itemsUnit') }}
         </div>
         <div class="timeline">
           <div v-for="(item, i) in todayData.items" :key="i" class="timeline-item">
@@ -566,7 +566,7 @@ function fmtTs(ts: number): string {
             <span class="tl-text">{{ item.text || item.event_type }}</span>
           </div>
           <div v-if="!todayData.items.length" class="empty-state">
-            <p>今天还没有发生事件呢～</p>
+            <p>{{ t('insightView.noEvents') }}</p>
           </div>
         </div>
       </n-tab-pane>
@@ -574,14 +574,14 @@ function fmtTs(ts: number): string {
       <n-tab-pane name="memory" :tab="t('insightView.memory')">
         <div class="mem-toolbar glass-panel">
           <n-button size="small" type="primary" @click="openAddModal('memory')">+ {{ t('insightView.add') }}</n-button>
-          <n-input v-model:value="memQuery" placeholder="语义搜索记忆…" clearable
+          <n-input v-model:value="memQuery" :placeholder="t('insightView.searchMemoryPh')" clearable
                    style="max-width: 280px" @keydown.enter="loadMemories" />
           <label class="slider-label">
-            重要度 ≥ {{ importanceMin.toFixed(1) }}
+            {{ t('insightView.importanceMin') }} ≥ {{ importanceMin.toFixed(1) }}
             <n-slider v-model:value="importanceMin" :min="0" :max="1" :step="0.1"
                       style="width: 140px" @update:value="loadMemories" />
           </label>
-          <n-button size="small" @click="loadMemories">搜索</n-button>
+          <n-button size="small" @click="loadMemories">{{ t('insightView.searchBtn') }}</n-button>
         </div>
         <div class="mem-list">
           <div v-for="m in memories" :key="m.id" class="mem-row glass-panel">
@@ -591,13 +591,13 @@ function fmtTs(ts: number): string {
                 <span>{{ '★'.repeat(Math.round((m.importance || 0) * 5)) || '☆' }}</span>
                 <n-tag v-if="m.emotion_label" size="tiny" :bordered="false">{{ m.emotion_label }}</n-tag>
                 <span>{{ new Date(m.timestamp * 1000).toLocaleString('zh-CN') }}</span>
-                <n-tag v-if="m.via === 'vector'" size="tiny" type="info" :bordered="false">语义命中</n-tag>
+                <n-tag v-if="m.via === 'vector'" size="tiny" type="info" :bordered="false">{{ t('insightView.semanticHit') }}</n-tag>
               </div>
             </div>
             <n-button size="tiny" quaternary @click="openEditModal('memory', m)">{{ t('insightView.edit') }}</n-button>
             <n-popconfirm @positive-click="removeMemory(m.id)">
               <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
-              连带删除向量索引，不可恢复。确认？
+              {{ t('insightView.deleteMemoryConfirm') }}
             </n-popconfirm>
           </div>
         </div>
@@ -606,21 +606,21 @@ function fmtTs(ts: number): string {
       <n-tab-pane name="knowledge" :tab="t('insightView.knowledgeGraph')">
         <div class="glass-panel chart-box">
           <div class="kg-toolbar">
-            <n-input v-model:value="graphEntity" placeholder="输入实体名聚焦…" size="small"
+            <n-input v-model:value="graphEntity" :placeholder="t('insightView.entityFocusPh')" size="small"
                      style="max-width: 200px" @keydown.enter="loadKnowledgeData" />
             <n-button size="tiny" :type="graphDepth === 1 ? 'primary' : 'default'"
-                      @click="graphDepth = 1; loadKnowledgeData()">深度1</n-button>
+                      @click="graphDepth = 1; loadKnowledgeData()">{{ t('insightView.depth1') }}</n-button>
             <n-button size="tiny" :type="graphDepth === 2 ? 'primary' : 'default'"
-                      @click="graphDepth = 2; loadKnowledgeData()">深度2</n-button>
-            <n-button size="tiny" type="primary" @click="openAddModal('entity')">+ 实体</n-button>
-            <n-button size="tiny" type="primary" @click="openAddModal('relation')">+ 关系</n-button>
-            <n-button size="tiny" type="primary" @click="showUniverse = true">🌌 全屏</n-button>
+                      @click="graphDepth = 2; loadKnowledgeData()">{{ t('insightView.depth2') }}</n-button>
+            <n-button size="tiny" type="primary" @click="openAddModal('entity')">{{ t('insightView.addEntity') }}</n-button>
+            <n-button size="tiny" type="primary" @click="openAddModal('relation')">{{ t('insightView.addRelation') }}</n-button>
+            <n-button size="tiny" type="primary" @click="showUniverse = true">{{ t('insightView.fullscreen') }}</n-button>
           </div>
           <div ref="graphEl" class="chart tall"></div>
         </div>
         <div class="kg-lists">
           <div class="kg-section">
-            <h4>实体 ({{ kgEntities.length }})</h4>
+            <h4>{{ t('insightView.entitiesLabel') }} ({{ kgEntities.length }})</h4>
             <div class="item-list">
               <div v-for="e in kgEntities" :key="e.name" class="list-row glass-panel">
                 <n-tag size="tiny" :bordered="false" v-if="e.kind">{{ e.kind }}</n-tag>
@@ -628,14 +628,14 @@ function fmtTs(ts: number): string {
                 <n-button size="tiny" quaternary @click="openEditModal('entity', e)">{{ t('insightView.edit') }}</n-button>
                 <n-popconfirm @positive-click="removeKgEntity(e.name)">
                   <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
-                  删除实体将同时删除相关关系，确认？
+                  {{ t('insightView.deleteEntityConfirm') }}
                 </n-popconfirm>
               </div>
-              <div v-if="!kgEntities.length" class="empty-state"><p>暂无实体</p></div>
+              <div v-if="!kgEntities.length" class="empty-state"><p>{{ t('insightView.noEntities') }}</p></div>
             </div>
           </div>
           <div class="kg-section">
-            <h4>关系 ({{ kgRelations.length }})</h4>
+            <h4>{{ t('insightView.relationsLabel') }} ({{ kgRelations.length }})</h4>
             <div class="item-list">
               <div v-for="r in kgRelations" :key="r.id" class="list-row glass-panel">
                 <span class="kg-rel-from">{{ r.from_entity }}</span>
@@ -644,10 +644,10 @@ function fmtTs(ts: number): string {
                 <n-button size="tiny" quaternary @click="openEditModal('relation', r)">{{ t('insightView.edit') }}</n-button>
                 <n-popconfirm @positive-click="removeKgRelation(r.id)">
                   <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
-                  确认删除此关系？
+                  {{ t('insightView.deleteRelationConfirm') }}
                 </n-popconfirm>
               </div>
-              <div v-if="!kgRelations.length" class="empty-state"><p>暂无关系</p></div>
+              <div v-if="!kgRelations.length" class="empty-state"><p>{{ t('insightView.noRelations') }}</p></div>
             </div>
           </div>
         </div>
@@ -664,11 +664,11 @@ function fmtTs(ts: number): string {
             <n-button size="tiny" quaternary @click="openEditModal('note', n)">{{ t('insightView.edit') }}</n-button>
             <n-popconfirm @positive-click="removeNote(n.id)">
               <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
-              确认归档此笔记？
+              {{ t('insightView.archiveNoteConfirm') }}
             </n-popconfirm>
           </div>
         </div>
-        <div v-if="!notes.length" class="empty-state"><p>还没有笔记哦～</p></div>
+        <div v-if="!notes.length" class="empty-state"><p>{{ t('insightView.noNotes') }}</p></div>
       </n-tab-pane>
 
       <n-tab-pane name="learnings" :tab="t('insightView.learning')">
@@ -684,11 +684,11 @@ function fmtTs(ts: number): string {
             <n-button size="tiny" quaternary @click="openEditModal('learning', l)">{{ t('insightView.edit') }}</n-button>
             <n-popconfirm @positive-click="removeLearning(l.id)">
               <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
-              确认删除此学习记录？
+              {{ t('insightView.deleteLearningConfirm') }}
             </n-popconfirm>
           </div>
         </div>
-        <div v-if="!learnings.length" class="empty-state"><p>还没有学习记录哦～</p></div>
+        <div v-if="!learnings.length" class="empty-state"><p>{{ t('insightView.noLearning') }}</p></div>
       </n-tab-pane>
 
       <n-tab-pane name="instincts" :tab="t('insightView.instinct')">
@@ -698,15 +698,15 @@ function fmtTs(ts: number): string {
         <div class="item-list">
           <div v-for="ins in instincts" :key="ins.id" class="list-row glass-panel">
             <span class="note-content">{{ ins.content || ins.summary || ins.trigger_pattern }}</span>
-            <span class="note-extra">置信 {{ ((ins.confidence || 0) * 100).toFixed(0) }}%</span>
+            <span class="note-extra">{{ t('insightView.confidence') }} {{ ((ins.confidence || 0) * 100).toFixed(0) }}%</span>
             <n-button size="tiny" quaternary @click="openEditModal('instinct', ins)">{{ t('insightView.edit') }}</n-button>
             <n-popconfirm @positive-click="removeInstinct(ins.id)">
               <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
-              确认删除此本能规则？
+              {{ t('insightView.deleteInstinctConfirm') }}
             </n-popconfirm>
           </div>
         </div>
-        <div v-if="!instincts.length" class="empty-state"><p>还没有本能规则哦～</p></div>
+        <div v-if="!instincts.length" class="empty-state"><p>{{ t('insightView.noInstinct') }}</p></div>
       </n-tab-pane>
     </n-tabs>
 
@@ -714,77 +714,77 @@ function fmtTs(ts: number): string {
     <n-modal v-model:show="showModal" preset="card" :title="modalTitle()" style="max-width: 480px">
       <!-- 记忆表单 -->
       <n-form v-if="modalType === 'memory'" label-placement="left" label-width="70">
-        <n-form-item label="摘要">
-          <n-input v-model:value="formModel.summary" type="textarea" placeholder="记忆内容…" :rows="3" />
+        <n-form-item :label="t('insightView.labelSummary')">
+          <n-input v-model:value="formModel.summary" type="textarea" :placeholder="t('insightView.memoryContentPh')" :rows="3" />
         </n-form-item>
-        <n-form-item label="重要度">
+        <n-form-item :label="t('insightView.labelImportance')">
           <n-slider v-model:value="formModel.importance" :min="0" :max="1" :step="0.1" />
         </n-form-item>
-        <n-form-item label="情绪标签">
-          <n-input v-model:value="formModel.emotion_label" placeholder="如：喜悦、焦虑" />
+        <n-form-item :label="t('insightView.labelEmotionTag')">
+          <n-input v-model:value="formModel.emotion_label" :placeholder="t('insightView.emotionTagPh')" />
         </n-form-item>
       </n-form>
       <!-- 笔记表单 -->
       <n-form v-if="modalType === 'note'" label-placement="left" label-width="70">
-        <n-form-item label="内容">
-          <n-input v-model:value="formModel.content" type="textarea" placeholder="笔记内容…" :rows="4" />
+        <n-form-item :label="t('insightView.labelContent')">
+          <n-input v-model:value="formModel.content" type="textarea" :placeholder="t('insightView.noteContentPh')" :rows="4" />
         </n-form-item>
-        <n-form-item label="类型">
+        <n-form-item :label="t('insightView.labelType')">
           <n-select v-model:value="formModel.kind" :options="noteKindOptions" />
         </n-form-item>
-        <n-form-item label="标签">
-          <n-input v-model:value="formModel.tags" placeholder="逗号分隔" />
+        <n-form-item :label="t('insightView.labelTags')">
+          <n-input v-model:value="formModel.tags" :placeholder="t('insightView.tagsPh')" />
         </n-form-item>
       </n-form>
       <!-- 学习记录表单 -->
       <n-form v-if="modalType === 'learning'" label-placement="left" label-width="70">
-        <n-form-item label="摘要">
-          <n-input v-model:value="formModel.summary" type="textarea" placeholder="学到了什么…" :rows="3" />
+        <n-form-item :label="t('insightView.labelSummary')">
+          <n-input v-model:value="formModel.summary" type="textarea" :placeholder="t('insightView.learningSummaryPh')" :rows="3" />
         </n-form-item>
-        <n-form-item label="模式">
-          <n-input v-model:value="formModel.pattern" placeholder="触发模式" />
+        <n-form-item :label="t('insightView.labelMode')">
+          <n-input v-model:value="formModel.pattern" :placeholder="t('insightView.modePh')" />
         </n-form-item>
-        <n-form-item label="优先级">
+        <n-form-item :label="t('insightView.labelPriority')">
           <n-select v-model:value="formModel.priority" :options="priorityOptions" />
         </n-form-item>
       </n-form>
       <!-- 本能表单 -->
       <n-form v-if="modalType === 'instinct'" label-placement="left" label-width="70">
-        <n-form-item label="内容">
-          <n-input v-model:value="formModel.content" type="textarea" placeholder="本能规则…" :rows="3" />
+        <n-form-item :label="t('insightView.labelContent')">
+          <n-input v-model:value="formModel.content" type="textarea" :placeholder="t('insightView.instinctContentPh')" :rows="3" />
         </n-form-item>
-        <n-form-item label="置信度">
+        <n-form-item :label="t('insightView.labelConfidence')">
           <n-slider v-model:value="formModel.confidence" :min="0" :max="1" :step="0.1" />
         </n-form-item>
       </n-form>
       <!-- 实体表单 -->
       <n-form v-if="modalType === 'entity'" label-placement="left" label-width="70">
-        <n-form-item label="名称">
-          <n-input v-model:value="formModel.name" placeholder="实体名称" :disabled="!!editingId" />
+        <n-form-item :label="t('insightView.labelName')">
+          <n-input v-model:value="formModel.name" :placeholder="t('insightView.entityNamePh')" :disabled="!!editingId" />
         </n-form-item>
-        <n-form-item label="类型">
-          <n-input v-model:value="formModel.kind" placeholder="如：人物、地点、概念" />
+        <n-form-item :label="t('insightView.labelType')">
+          <n-input v-model:value="formModel.kind" :placeholder="t('insightView.entityTypePh')" />
         </n-form-item>
-        <n-form-item label="描述">
-          <n-input v-model:value="formModel.observations" type="textarea" placeholder="实体描述…" :rows="3" />
+        <n-form-item :label="t('insightView.labelDesc')">
+          <n-input v-model:value="formModel.observations" type="textarea" :placeholder="t('insightView.entityDescPh')" :rows="3" />
         </n-form-item>
       </n-form>
       <!-- 关系表单 -->
       <n-form v-if="modalType === 'relation'" label-placement="left" label-width="70">
-        <n-form-item label="起点实体">
-          <n-input v-model:value="formModel.from" placeholder="起点实体名" :disabled="!!editingId" />
+        <n-form-item :label="t('insightView.labelStartEntity')">
+          <n-input v-model:value="formModel.from" :placeholder="t('insightView.startEntityPh')" :disabled="!!editingId" />
         </n-form-item>
-        <n-form-item label="关系">
-          <n-input v-model:value="formModel.relation" placeholder="如：属于、创建了、位于" />
+        <n-form-item :label="t('insightView.labelRelation')">
+          <n-input v-model:value="formModel.relation" :placeholder="t('insightView.relationPh')" />
         </n-form-item>
-        <n-form-item label="终点实体">
-          <n-input v-model:value="formModel.to" placeholder="终点实体名" :disabled="!!editingId" />
+        <n-form-item :label="t('insightView.labelEndEntity')">
+          <n-input v-model:value="formModel.to" :placeholder="t('insightView.endEntityPh')" :disabled="!!editingId" />
         </n-form-item>
       </n-form>
       <template #footer>
         <n-space justify="end">
-          <n-button @click="showModal = false">取消</n-button>
-          <n-button type="primary" @click="handleModalOk">确定</n-button>
+          <n-button @click="showModal = false">{{ t('cancel') }}</n-button>
+          <n-button type="primary" @click="handleModalOk">{{ t('ok') }}</n-button>
         </n-space>
       </template>
     </n-modal>

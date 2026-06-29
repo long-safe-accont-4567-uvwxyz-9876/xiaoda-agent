@@ -44,12 +44,12 @@ const defaultFields = {
   name: '',
   device: '',
   timezone: 'Asia/Shanghai',
-  preferred_personality: '温柔聪慧的 AI 助手',
-  preferred_tone: '温柔、清晰、有条理',
+  preferred_personality: t('userProfileSetup.defaultPersonality'),
+  preferred_tone: t('userProfileSetup.defaultTone'),
   like_to_be_called: '',
-  liked_reply_style: '有条理、能直接执行的方案',
-  disliked_reply_style: '冷冰冰、敷衍或只有抽象建议的回答',
-  project_preferences: '- 修改代码前先理解现有结构\n- 尽量不要大改项目，优先最小修改\n- 优先解决实际报错\n- 命令和路径要写清楚\n- 遇到危险操作要提醒确认',
+  liked_reply_style: t('userProfileSetup.defaultLiked'),
+  disliked_reply_style: t('userProfileSetup.defaultDisliked'),
+  project_preferences: t('userProfileSetup.defaultPrefs'),
   history_notes: '',
 }
 
@@ -83,9 +83,9 @@ async function handleSave() {
     // 空字段使用默认值，减少用户输入
     const payload = {
       ...fields.value,
-      address_term: fields.value.address_term.trim() || '朋友',
+      address_term: fields.value.address_term.trim() || t('userProfileSetup.defaultFriend'),
       name: fields.value.name.trim() || 'User',
-      like_to_be_called: fields.value.address_term.trim() || '朋友',
+      like_to_be_called: fields.value.address_term.trim() || t('userProfileSetup.defaultFriend'),
     }
     await api.saveSetupUserProfile(payload)
     localStorage.setItem('nahida_profile_done', 'true')
@@ -94,7 +94,7 @@ async function handleSave() {
       router.replace('/')
     }, 1200)
   } catch (e: any) {
-    error.value = e.message || '保存失败'
+    error.value = e.message || t('userProfileSetup.saveFailed')
   } finally {
     saving.value = false
   }
@@ -141,7 +141,7 @@ async function handleSkip() {
               v-model="fields.name"
               class="dendro-input"
               type="text"
-              placeholder="留空则使用默认值"
+              :placeholder="t('userProfileSetup.nicknamePh')"
             />
           </div>
 
@@ -162,7 +162,7 @@ async function handleSkip() {
               v-model="fields.preferred_personality"
               class="dendro-input"
               type="text"
-              placeholder="如：温柔聪慧 / 活泼可爱"
+              :placeholder="t('userProfileSetup.personalityPh')"
             />
           </div>
 
@@ -172,7 +172,7 @@ async function handleSkip() {
               v-model="fields.preferred_tone"
               class="dendro-input"
               type="text"
-              placeholder="如：温柔、软萌、清晰"
+              :placeholder="t('userProfileSetup.tonePh')"
             />
           </div>
 
@@ -183,7 +183,7 @@ async function handleSkip() {
             <textarea
               v-model="fields.liked_reply_style"
               class="dendro-input dendro-textarea"
-              placeholder="如：有条理、能直接执行的方案"
+              :placeholder="t('userProfileSetup.likedPh')"
               rows="2"
             ></textarea>
           </div>
@@ -193,7 +193,7 @@ async function handleSkip() {
             <textarea
               v-model="fields.disliked_reply_style"
               class="dendro-input dendro-textarea"
-              placeholder="如：冷冰冰、敷衍、只有抽象建议"
+              :placeholder="t('userProfileSetup.dislikedPh')"
               rows="2"
             ></textarea>
           </div>
@@ -205,13 +205,13 @@ async function handleSkip() {
             <textarea
               v-model="fields.project_preferences"
               class="dendro-input dendro-textarea"
-              placeholder="- 修改代码前先理解现有结构&#10;- 尽量不要大改项目，优先最小修改"
+              :placeholder="t('userProfileSetup.projectPrefsPh')"
               rows="5"
             ></textarea>
           </div>
 
           <p v-if="error" class="error-text">{{ error }}</p>
-          <p v-if="success" class="success-text">保存成功！正在进入主界面…</p>
+          <p v-if="success" class="success-text">{{ t('userProfileSetup.savedSuccess') }}</p>
 
           <div class="action-row">
             <button class="dendro-btn skip-btn" @click="handleSkip" :disabled="saving">
@@ -227,7 +227,7 @@ async function handleSkip() {
           </div>
 
           <p class="status-hint">
-            信息保存在 USER.md 中，所有选项均可留空使用默认值
+            {{ t('userProfileSetup.infoHint') }}
           </p>
         </div>
       </div>

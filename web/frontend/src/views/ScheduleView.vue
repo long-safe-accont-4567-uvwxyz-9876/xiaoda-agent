@@ -41,14 +41,14 @@ async function saveConfig() {
       enabled: config.value.enabled,
       greeting_max_per_day: config.value.greeting_max_per_day,
     })
-    message.success('已生效 ✓')
+    message.success(t('scheduleView.effectDone'))
   } catch (e: any) { message.error(e.message) }
 }
 
 async function saveDnd() {
   try {
     dndPeriods.value = await put('/schedule/dnd', { periods: dndPeriods.value })
-    message.success('免打扰时段已更新 ✓')
+    message.success(t('scheduleView.quietUpdated'))
   } catch (e: any) { message.error(e.message) }
 }
 
@@ -74,10 +74,10 @@ async function saveGreeting() {
   try {
     if (isCreate.value) {
       await post('/schedule/greetings', form.value)
-      message.success('问候计划已创建 ✓')
+      message.success(t('scheduleView.planCreated'))
     } else {
       await put(`/schedule/greetings/${form.value.id}`, form.value)
-      message.success('已更新 ✓')
+      message.success(t('scheduleView.planUpdated'))
     }
     showForm.value = false
     await loadAll()
@@ -88,14 +88,14 @@ async function toggleGreeting(g: any, value: boolean) {
   try {
     await put(`/schedule/greetings/${g.id}`, { enabled: value })
     g.enabled = value ? 1 : 0
-    message.success(`计划已${value ? '启用' : '停用'} ✓`)
+    message.success(t('scheduleView.planToggled')(!!value))
   } catch (e: any) { message.error(e.message) }
 }
 
 async function removeGreeting(id: number) {
   try {
     await del(`/schedule/greetings/${id}`)
-    message.success('已删除')
+    message.success(t('scheduleView.planDeleted'))
     await loadAll()
   } catch (e: any) { message.error(e.message) }
 }
@@ -105,11 +105,11 @@ async function testFire(channels: string[] = ['web']) {
   try {
     const r = await post('/schedule/test-greeting', { prompt_hint: '', channels })
     if (!r.sent) {
-      message.warning(r.message || '所有通道投递失败')
+      message.warning(r.message || t('scheduleView.allChannelsFailed'))
     } else {
       for (const [ch, res] of Object.entries<any>(r.channels || {})) {
-        if (res.ok) message.success(`${ch === 'qq' ? 'QQ' : 'Web'} 通道已送达：「${r.text}」`)
-        else message.error(`${ch === 'qq' ? 'QQ' : 'Web'} 通道失败：${res.error || '未知原因'}`)
+        if (res.ok) message.success(`${ch === 'qq' ? 'QQ' : 'Web'} ${t('scheduleView.delivered')}：「${r.text}」`)
+        else message.error(`${ch === 'qq' ? 'QQ' : 'Web'} ${t('scheduleView.channelFailed')}: ${res.error || t('scheduleView.unknownReason')}`)
       }
     }
     history.value = await get<any[]>('/schedule/history?days=7')
@@ -122,12 +122,12 @@ async function testFire(channels: string[] = ['web']) {
 
 function describeDays(daysJson: string): string {
   const days: number[] = JSON.parse(daysJson || '[]')
-  if (days.length === 7) return '每天'
-  return '周' + days.map(d => WEEK_LABELS[d - 1]).join('/')
+  if (days.length === 7) return t('scheduleView.everyday')
+  return t('scheduleView.weekPrefix') + days.map(d => WEEK_LABELS[d - 1]).join('/')
 }
 
 const reasonLabel: Record<string, string> = {
-  fixed: '⏰ 固定', random: '🎲 随机', idle: '💤 闲置', manual_test: '🧪 试发',
+  fixed: t('scheduleView.fixedLabel'), random: t('scheduleView.randomLabel'), idle: t('scheduleView.idleLabel'), manual_test: t('scheduleView.testLabel'),
 }
 </script>
 
@@ -143,12 +143,12 @@ const reasonLabel: Record<string, string> = {
           <n-switch v-model:value="config.enabled" @update:value="saveConfig" />
         </label>
         <label class="cfg wide">
-          每日上限 {{ config.greeting_max_per_day }} 条
+          {{ t('scheduleView.dailyLimit') }} {{ config.greeting_max_per_day }} {{ t('scheduleView.greetingMaxUnit') }}
           <n-slider v-model:value="config.greeting_max_per_day" :min="0" :max="10"
                     style="width: 180px" @update:value="saveConfig" />
         </label>
-        <n-button size="small" :loading="testing" @click="testFire(['web'])">💌 试发到 Web</n-button>
-        <n-button size="small" :loading="testing" @click="testFire(['web', 'qq'])">📱 试发 Web+QQ</n-button>
+        <n-button size="small" :loading="testing" @click="testFire(['web'])">{{ t('scheduleView.testWeb') }}</n-button>
+        <n-button size="small" :loading="testing" @click="testFire(['qq'])">📱 {{ t('scheduleView.testQQ') }}</n-button>
       </div>
     </section>
 
@@ -174,18 +174,18 @@ const reasonLabel: Record<string, string> = {
             <n-button size="tiny" @click="openForm(g)">{{ t('scheduleView.edit') }}</n-button>
             <n-popconfirm @positive-click="removeGreeting(g.id)">
               <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('scheduleView.delete') }}</n-button></template>
-              确认删除该计划？
+              {{ t('scheduleView.deleteConfirm') }}
             </n-popconfirm>
           </div>
         </div>
-        <div v-if="!greetings.length" class="empty-hint">还没有计划，点「新增」让助手主动联系你～</div>
+        <div v-if="!greetings.length" class="empty-hint">{{ t('scheduleView.noPlans') }}</div>
       </div>
     </section>
 
     <section class="glass-panel section">
       <div class="section-head">
-        <h3>🌙 免打扰时段 <span class="hint">期间所有主动问候静默并顺延</span></h3>
-        <n-button size="small" @click="addDnd">＋ 加一段</n-button>
+        <h3>{{ t('scheduleView.quietHoursTitle') }} <span class="hint">{{ t('scheduleView.quietHoursDesc') }}</span></h3>
+        <n-button size="small" @click="addDnd">{{ t('scheduleView.addSlot') }}</n-button>
       </div>
       <div class="dnd-list">
         <div v-for="(p, i) in dndPeriods" :key="i" class="dnd-row">
@@ -194,14 +194,14 @@ const reasonLabel: Record<string, string> = {
           <span>—</span>
           <n-time-picker :formatted-value="p.end" format="HH:mm" value-format="HH:mm"
                          @update:formatted-value="(v: string | null) => { if (v) { p.end = v; saveDnd() } }" />
-          <n-button size="tiny" type="error" quaternary @click="removeDnd(i)">移除</n-button>
+          <n-button size="tiny" type="error" quaternary @click="removeDnd(i)">{{ t('scheduleView.remove') }}</n-button>
         </div>
-        <div v-if="!dndPeriods.length" class="empty-hint">（无免打扰时段）</div>
+        <div v-if="!dndPeriods.length" class="empty-hint">{{ t('scheduleView.noQuietHours') }}</div>
       </div>
     </section>
 
     <section class="glass-panel section">
-      <h3>近 7 天已发送</h3>
+      <h3>{{ t('scheduleView.sent7d') }}</h3>
       <div class="history-list">
         <div v-for="h in history" :key="h.id" class="history-row">
           <span class="h-time">{{ new Date(h.fired_at * 1000).toLocaleString('zh-CN') }}</span>
@@ -209,7 +209,7 @@ const reasonLabel: Record<string, string> = {
           <span class="h-content">{{ h.content }}</span>
           <span class="h-channel">{{ h.channel }}</span>
         </div>
-        <div v-if="!history.length" class="empty-hint">（暂无记录）</div>
+        <div v-if="!history.length" class="empty-hint">{{ t('scheduleView.noRecords') }}</div>
       </div>
     </section>
 
@@ -242,7 +242,7 @@ const reasonLabel: Record<string, string> = {
           </n-checkbox-group>
         </n-form-item>
         <n-form-item :label="t('scheduleView.topic')">
-          <n-input v-model:value="form.prompt_hint" placeholder="可选，如「提醒喝水」" />
+          <n-input v-model:value="form.prompt_hint" :placeholder="t('scheduleView.topicPh')" />
         </n-form-item>
         <n-form-item :label="t('scheduleView.channel')">
           <n-checkbox-group v-model:value="form.channels">

@@ -227,6 +227,10 @@ async function save() {
       message.success(`Agent ${editing.value.display_name || editing.value.name} ` + t('agentsView.createdActive'))
     } else {
       await put(`/agents/${editing.value.name}`, body)
+      // 如果权限有改动，自动同步保存
+      if (permDirty.value) {
+        await applyPermissions()
+      }
       message.success(t('agentsView.saved'))
     }
     showEditor.value = false
@@ -415,7 +419,7 @@ async function removeSticker(filename: string) {
     </div>
 
     <n-modal v-model:show="showEditor" preset="card" class="agent-modal"
-             :title="isCreate ? '新建子 Agent' : `编辑 · ${editing.display_name || editing.name}`"
+             :title="isCreate ? t('agentsView.createSub') : `${t('agentsView.editDot')}${editing.display_name || editing.name}`"
              style="width: min(860px, 94vw); max-height: 88vh; overflow-y: auto;">
       <n-tabs type="line" animated>
         <n-tab-pane name="base" :tab="t('agentsView.basicConfig')">
@@ -424,26 +428,26 @@ async function removeSticker(filename: string) {
               <n-input v-model:value="editing.name" :placeholder="t('agentsView.namePlaceholder')" />
             </n-form-item>
             <n-form-item :label="t('agentsView.displayName')">
-              <n-input v-model:value="editing.display_name" placeholder="如 胡桃" />
+              <n-input v-model:value="editing.display_name" :placeholder="t('agentsView.displayNamePh')" />
             </n-form-item>
             <n-form-item :label="t('agentsView.model')" v-if="!isMain">
               <n-select v-model:value="selectedModel" :options="modelOptions"
                         :loading="switchingModel" filterable tag
-                        placeholder="选择模型（按 provider 分组，格式：provider|model_id）"
+                        :placeholder="t('agentsView.modelPh')"
                         @update:value="(v: string | null) => onModelChange(v)" />
             </n-form-item>
             <n-form-item :label="t('agentsView.advanced')" v-if="!isMain">
               <n-collapse :default-expanded-names="[]">
-                <n-collapse-item title="高级配置（手动覆盖 base_url / api_key_env）" name="advanced">
+                <n-collapse-item :title="t('agentsView.advancedTitle')" name="advanced">
                   <n-form label-placement="left" label-width="130" style="margin-top: 4px">
                     <n-form-item label="base_url">
                       <n-input v-model:value="editing.base_url"
-                               placeholder="可选，覆盖 provider 的接口地址"
+                               :placeholder="t('agentsView.baseUrlPh')"
                                @update:value="onAdvancedInput" />
                     </n-form-item>
                     <n-form-item label="api_key_env">
                       <n-input v-model:value="editing.api_key_env"
-                               placeholder="可选，密钥环境变量名"
+                               :placeholder="t('agentsView.apiKeyPh')"
                                @update:value="onAdvancedInput" />
                     </n-form-item>
                   </n-form>
@@ -452,7 +456,7 @@ async function removeSticker(filename: string) {
             </n-form-item>
             <n-form-item :label="t('agentsView.routeDesc')" v-if="!isMain">
               <n-input v-model:value="editing.route_description" type="textarea" :rows="2"
-                       placeholder="自然语言描述何时召唤该 Agent（主体据此自动委托）" />
+                       :placeholder="t('agentsView.routeDescPh')" />
             </n-form-item>
             <n-form-item label="capabilities" v-if="!isMain">
               <n-dynamic-tags v-model:value="editing.capabilities" />
@@ -470,13 +474,13 @@ async function removeSticker(filename: string) {
               <n-select v-model:value="editing.memory_scope" :options="memScopeOptions" />
             </n-form-item>
             <n-form-item label="voice_ref" v-if="!isMain">
-              <n-input v-model:value="editing.voice_ref" placeholder="TTS 音色（nahida / keli），自动朗读时使用" />
+              <n-input v-model:value="editing.voice_ref" :placeholder="t('agentsView.voiceRefPh')" />
             </n-form-item>
             <n-form-item :label="t('agentsView.backdrop')">
               <div class="wallpaper-field">
                 <div class="wallpaper-row">
                   <n-input v-model:value="editing.wallpaper"
-                           placeholder="图片 URL（/assets/... 或 https://...），留空用默认" />
+                           :placeholder="t('agentsView.wallpaperPh')" />
                   <n-button v-if="!isCreate" :loading="uploadingWp" @click="wpInput?.click()">
                     {{ t('agentsView.uploadImage') }}
                   </n-button>
@@ -485,7 +489,7 @@ async function removeSticker(filename: string) {
                 </div>
                 <div v-if="editing.wallpaper" class="wallpaper-preview"
                      :style="{ backgroundImage: `url('${editing.wallpaper}')` }" />
-                <span v-else class="wallpaper-hint">该 Agent 接管对话时聊天背景会平滑切换为此图</span>
+                <span v-else class="wallpaper-hint">{{ t('agentsView.wallpaperHint') }}</span>
               </div>
             </n-form-item>
           </n-form>
@@ -493,7 +497,7 @@ async function removeSticker(filename: string) {
 
         <n-tab-pane name="perm" :tab="t('agentsView.permissions')" v-if="!isCreate && !permissions.is_main">
           <div class="perm-toolbar">
-            <span class="perm-hint">改动暂存，点「应用」一次写入，写完即生效（含 QQ 通道）</span>
+            <span class="perm-hint">{{ t('agentsView.permHint') }}</span>
             <n-button size="small" type="primary" :disabled="!permDirty" @click="applyPermissions">
               {{ t('agentsView.applyPerms') }}
             </n-button>
@@ -516,7 +520,7 @@ async function removeSticker(filename: string) {
             </div>
           </div>
           <div v-if="Object.keys(permissions.mcp_servers || {}).length" class="perm-group">
-            <div class="perm-group-head"><span>🔌 MCP 服务</span></div>
+            <div class="perm-group-head"><span>🔌 {{ t('agentsView.mcpServices') }}</span></div>
             <div class="perm-rows">
               <div v-for="(info, name) in permissions.mcp_servers" :key="name" class="perm-row">
                 <span class="perm-name">{{ name }}</span>
@@ -529,14 +533,14 @@ async function removeSticker(filename: string) {
 
         <n-tab-pane name="personality" :tab="t('agentsView.personality')">
           <n-input v-model:value="personality" type="textarea" :rows="14"
-                   placeholder="Markdown 人格全文（保存时写入 *_personality.md 并热重载）" />
+                   :placeholder="t('agentsView.personalityPh')" />
         </n-tab-pane>
 
         <n-tab-pane name="test" :tab="t('agentsView.test')" v-if="!isCreate">
-          <n-button :loading="testing" @click="runTest">对 {{ editing.display_name }} 发送测试语句</n-button>
+          <n-button :loading="testing" @click="runTest">{{ t('agentsView.testPrompt') }} {{ editing.display_name }} {{ t('agentsView.sendTest') }}</n-button>
           <div v-if="testResult" class="test-result glass-panel"
                :class="{ failed: !testResult.ok }">
-            <div>{{ testResult.ok ? '✓ 通过' : '✗ 失败' }} · {{ testResult.elapsed_ms }}ms</div>
+            <div>{{ testResult.ok ? t('agentsView.testPass') : t('agentsView.testFail') }} · {{ testResult.elapsed_ms }}ms</div>
             <div class="test-reply">{{ testResult.reply || testResult.error }}</div>
           </div>
         </n-tab-pane>
@@ -552,7 +556,7 @@ async function removeSticker(filename: string) {
                 <n-button size="small" @click="stickerInput?.click()">
                   {{ stickerFile ? stickerFile.name : t('agentsView.selectImage') }}
                 </n-button>
-                <n-input v-model:value="stickerDesc" size="small" placeholder="表情包描述（如：开心大笑）"
+                <n-input v-model:value="stickerDesc" size="small" :placeholder="t('agentsView.stickerDescPh')"
                          style="flex: 1; min-width: 120px;" />
                 <n-select v-model:value="stickerEmotion" size="small" style="width: 120px"
                           :options="(stickerEmotions.length ? stickerEmotions : ['happy','sad','angry','curious','shy','thinking','neutral','greeting','fear']).map(e => ({ label: e, value: e }))" />
@@ -563,7 +567,7 @@ async function removeSticker(filename: string) {
               </div>
               <div v-if="stickerFile" class="sticker-upload-preview">
                 <img :src="URL.createObjectURL(stickerFile)" alt="preview" />
-                <span class="sticker-preview-info">{{ stickerDesc || '（未填写描述）' }} · {{ stickerEmotion }}</span>
+                <span class="sticker-preview-info">{{ stickerDesc || t('agentsView.noDesc') }} · {{ stickerEmotion }}</span>
               </div>
             </div>
 
@@ -581,7 +585,7 @@ async function removeSticker(filename: string) {
                     <template #trigger>
                       <n-button size="tiny" type="error" quaternary class="sticker-del">{{ t('agentsView.delete') }}</n-button>
                     </template>
-                    确认删除「{{ s.description }}」？
+                    {{ t('agentsView.stickerDeleteConfirm') }}
                   </n-popconfirm>
                 </div>
               </div>
