@@ -211,12 +211,12 @@ async function handleSave() {
         <div class="setup-header">
           <DendroEmblem :size="84" spin />
           <h1>{{ t('setup.title') }}</h1>
-          <p class="subtitle">初次见面，请多指教</p>
+          <p class="subtitle">{{ t('setupWizard.greeting') }}</p>
           <p class="version-tag">v{{ version }}</p>
         </div>
 
         <div class="setup-body">
-          <h2 class="section-title required-title">── 必填配置 ──</h2>
+          <h2 class="section-title required-title">── {{ t('setupWizard.required') }} ──</h2>
           <KeyAccordion
             :items="requiredKeys"
             :test-statuses="testStatuses"
@@ -231,11 +231,11 @@ async function handleSave() {
             :disabled="testingAll || !hasUpdates"
             @click="handleTestAllRequired"
           >
-            {{ testingAll ? '测试中…' : '测试全部必填项' }}
+            {{ testingAll ? t('setupWizard.testing') : t('setupWizard.testAll') }}
           </button>
 
           <div class="optional-toggle" @click="showOptional = !showOptional">
-            <span class="section-title optional-title">── 选填配置 ──</span>
+            <span class="section-title optional-title">── {{ t('setupWizard.optional') }} ──</span>
             <span class="toggle-arrow" :class="{ 'arrow-open': showOptional }">❯</span>
           </div>
           <Transition name="collapse">
@@ -257,7 +257,7 @@ async function handleSave() {
             :disabled="saving || !hasUpdates || !allRequiredTestedAndPassed"
             @click="handleSave"
           >
-            {{ saving ? '草元素汇聚中…' : '保存配置' }}
+            {{ saving ? t('setupWizard.saving') : t('setupWizard.save') }}
           </button>
 
           <p class="status-hint">

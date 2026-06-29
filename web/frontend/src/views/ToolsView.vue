@@ -5,6 +5,7 @@ import {
   NTabs, NTabPane, useMessage,
 } from 'naive-ui'
 import { get, put, post, del } from '../api'
+import { t, tf } from '../i18n'
 
 const message = useMessage()
 const tools = ref<any[]>([])
@@ -54,15 +55,15 @@ async function testTool(name: string) {
     const res = await post<any>(`/tools/${name}/test`, {})
     toolTestResult.value[name] = res
     if (res.status === 'ok') {
-      message.success(`工具「${name}」测试通过 (${res.elapsed_ms}ms)`)
+      message.success(tf('toolsView.toolTestPassed', name, res.elapsed_ms))
     } else if (res.status === 'skip') {
       message.info(res.message)
     } else {
-      message.error(`工具「${name}」测试失败: ${res.error}`)
+      message.error(tf('toolsView.toolTestFailed', name, res.error))
     }
   } catch (e: any) {
     toolTestResult.value[name] = { status: 'error', error: e.message }
-    message.error(`测试失败: ` + e.message)
+    message.error(tf('toolsView.testFailed', e.message))
   } finally {
     testingTool.value[name] = false
   }
@@ -86,7 +87,7 @@ async function updateTool(tool: any, patch: Record<string, any>) {
   try {
     const data = await put(`/tools/${tool.name}`, patch)
     Object.assign(tool, data)
-    message.success(`${tool.name} 已更新，即时生效 ✓`)
+    message.success(tf('toolsView.toolUpdated', tool.name))
     // 刷新 LLM 可见性计数
     loadLimits()
   } catch (e: any) {
@@ -173,13 +174,13 @@ function openSkill(s: any | null) {
 
 async function saveSkill() {
   if (!skillName.value.trim() || !skillContent.value.trim()) {
-    message.error('名称与内容均不能为空')
+    message.error(t('toolsView.nameContentRequired'))
     return
   }
   savingSkill.value = true
   try {
     await put(`/skills/${skillName.value.trim()}`, { content: skillContent.value })
-    message.success(`Skill「${skillName.value}」已保存，下一条消息生效 ✓`)
+    message.success(tf('toolsView.skillSaved', skillName.value))
     showSkillEditor.value = false
     await loadSkills()
   } catch (e: any) {
@@ -192,7 +193,7 @@ async function saveSkill() {
 async function removeSkill(s: any) {
   try {
     await del(`/skills/${s.name}`, true)
-    message.success(`已删除 ${s.name}`)
+    message.success(tf('toolsView.deleted', s.name))
     await loadSkills()
   } catch (e: any) {
     message.error(e.message)
@@ -202,7 +203,7 @@ async function removeSkill(s: any) {
 async function deleteFromEditor() {
   try {
     await del(`/skills/${skillName.value}`, true)
-    message.success(`已删除 ${skillName.value}`)
+    message.success(tf('toolsView.deleted', skillName.value))
     showSkillEditor.value = false
     await loadSkills()
   } catch (e: any) {
@@ -248,11 +249,11 @@ async function installSkillFromMarket(item: any) {
       version: item.version,
       sha256: item.sha256,
     })
-    message.success(`技能「${item.name}」安装成功`)
+    message.success(tf('toolsView.skillInstallSuccess', item.name))
     await loadSkillMarket()
     await loadSkills()
   } catch (e: any) {
-    message.error('安装失败: ' + e.message)
+    message.error(tf('toolsView.installFailed', e.message))
   } finally {
     installingSkill.value[item.id] = false
   }
@@ -262,11 +263,11 @@ async function uninstallSkillFromMarket(item: any) {
   uninstallingSkill.value[item.id] = true
   try {
     await post('/market/skills/uninstall', { item_id: item.id })
-    message.success(`技能「${item.name}」已卸载`)
+    message.success(tf('toolsView.skillUninstalled', item.name))
     await loadSkillMarket()
     await loadSkills()
   } catch (e: any) {
-    message.error('卸载失败: ' + e.message)
+    message.error(tf('toolsView.uninstallFailed', e.message))
   } finally {
     uninstallingSkill.value[item.id] = false
   }
@@ -281,17 +282,17 @@ async function testSkill(item: any) {
     const found = skillList.find((s: any) => s.name === item.id)
     if (found && found.size > 20) {
       skillTestResult.value[item.id] = { ok: true, message: `文件有效 (${(found.size/1024).toFixed(1)}KB)` }
-      message.success(`技能「${item.name}」验证通过`)
+      message.success(tf('toolsView.skillVerified', item.name))
     } else if (found) {
       skillTestResult.value[item.id] = { ok: false, message: '文件内容过短' }
-      message.warning(`技能「${item.name}」内容过短`)
+      message.warning(tf('toolsView.skillTooShort', item.name))
     } else {
       skillTestResult.value[item.id] = { ok: false, message: '技能文件未找到' }
-      message.error(`技能「${item.name}」文件不存在`)
+      message.error(tf('toolsView.skillFileNotFound', item.name))
     }
   } catch (e: any) {
     skillTestResult.value[item.id] = { ok: false, message: e.message }
-    message.error(`验证失败: ` + e.message)
+    message.error(tf('toolsView.verifyFailed', e.message))
   } finally {
     testingSkill.value[item.id] = false
   }
@@ -301,8 +302,8 @@ async function testSkill(item: any) {
 <template>
   <div class="tools-view">
     <div class="view-header">
-      <h2>🛠 Skills 工具</h2>
-      <span class="count">共 {{ tools.length }} 个工具</span>
+      <h2>🛠 {{ t('toolsView.title') }}</h2>
+      <span class="count">{{ t('toolsView.total') }} {{ tools.length }} {{ t('toolsView.toolsUnit') }}</span>
       <span v-if="search || categoryFilter || sourceFilter" class="count">
         （筛选: {{ filtered.length }}）
       </span>
@@ -318,13 +319,13 @@ async function testSkill(item: any) {
 
     <n-tabs v-model:value="activeTab" type="line" @update:value="onTabChange">
       <!-- ── 已安装 ──────────────────────────────────────── -->
-      <n-tab-pane name="installed" tab="已安装">
+      <n-tab-pane name="installed" :tab="t('installed')">
         <div class="skills-section glass-panel">
           <div class="skills-head">
             <span class="skills-title">📜 Skills（SKILL.md 知识注入）</span>
             <div style="display:flex; gap:8px">
-              <n-button size="small" type="primary" @click="skillInput?.click()">⬆ 上传 SKILL.md</n-button>
-              <n-button size="small" @click="openSkill(null)">＋ 手写新建</n-button>
+              <n-button size="small" type="primary" @click="skillInput?.click()">⬆ {{ t('toolsView.uploadSkill') }}</n-button>
+              <n-button size="small" @click="openSkill(null)">＋ {{ t('toolsView.createNew') }}</n-button>
               <input ref="skillInput" type="file" accept=".md,text/markdown"
                      style="display:none" @change="uploadSkill" />
             </div>
@@ -335,70 +336,70 @@ async function testSkill(item: any) {
               <span class="skill-size">{{ (s.size / 1024).toFixed(1) }}KB</span>
             </div>
           </div>
-          <p v-else class="skills-empty">还没有 Skill。上传 SKILL.md 后其内容会注入系统提示词，助手下一条消息即掌握该技能。</p>
+          <p v-else class="skills-empty">{{ t('toolsView.emptyHint') }}</p>
         </div>
 
         <div class="filters glass-panel">
-          <n-input v-model:value="search" placeholder="搜索工具名/描述…" clearable style="max-width: 260px" />
+          <n-input v-model:value="search" :placeholder="t('toolsView.searchPlaceholder')" clearable style="max-width: 260px" />
           <n-select v-model:value="categoryFilter" :options="categories" placeholder="分类" clearable style="max-width: 160px" />
           <n-select v-model:value="sourceFilter" :options="sources" placeholder="来源" clearable style="max-width: 160px" />
         </div>
 
         <div class="tool-list">
-          <div v-for="t in filtered" :key="t.name" class="tool-row glass-panel"
-               :class="{ disabled: !t.enabled }">
-            <span class="perm-dot" :style="{ background: permColor[t.permission] || '#9ca3af' }"
-                  :title="`权限等级 ${t.permission}`"></span>
+          <div v-for="tool in filtered" :key="tool.name" class="tool-row glass-panel"
+               :class="{ disabled: !tool.enabled }">
+            <span class="perm-dot" :style="{ background: permColor[tool.permission] || '#9ca3af' }"
+                  :title="`权限等级 ${tool.permission}`"></span>
             <div class="tool-main">
               <div class="tool-title">
-                <span class="tool-name">{{ t.name }}</span>
-                <n-tag size="tiny" :bordered="false">{{ t.category }}</n-tag>
-                <n-tag v-if="t.source !== 'builtin'" size="tiny" type="info" :bordered="false">{{ t.source }}</n-tag>
+                <span class="tool-name">{{ tool.name }}</span>
+                <n-tag size="tiny" :bordered="false">{{ tool.category }}</n-tag>
+                <n-tag v-if="tool.source !== 'builtin'" size="tiny" type="info" :bordered="false">{{ tool.source }}</n-tag>
               </div>
-              <div class="tool-desc">{{ t.description }}</div>
+              <div class="tool-desc">{{ tool.description }}</div>
               <!-- 展开的高级控件 -->
-              <div v-if="expandedTool === t.name" class="tool-advanced">
+              <div v-if="expandedTool === tool.name" class="tool-advanced">
                 <label class="ctl">
-                  频率
-                  <n-input-number :value="t.max_frequency" size="tiny" :min="0" :max="6000"
+                  {{ t('toolsView.frequency') }}
+                  <n-input-number :value="tool.max_frequency" size="tiny" :min="0" :max="6000"
                                   :show-button="false" style="width: 64px"
-                                  @update:value="(v: number | null) => v !== null && updateTool(t, { max_frequency: v })" />
+                                  @update:value="(v: number | null) => v !== null && updateTool(tool, { max_frequency: v })" />
                 </label>
                 <label class="ctl">
-                  需确认
-                  <n-switch :value="t.requires_confirmation" size="small"
-                            @update:value="(v: boolean) => updateTool(t, { requires_confirmation: v })" />
+                  {{ t('toolsView.needConfirm') }}
+                  <n-switch :value="tool.requires_confirmation" size="small"
+                            @update:value="(v: boolean) => updateTool(tool, { requires_confirmation: v })" />
                 </label>
-                <n-button size="tiny" @click="openDebug(t)">调试</n-button>
-                <n-button size="tiny" :loading="testingTool[t.name]"
-                          :type="toolTestResult[t.name]?.status === 'ok' ? 'success' :
-                                 toolTestResult[t.name]?.status === 'fail' ? 'error' : 'default'"
-                          @click="testTool(t.name)">
-                  {{ toolTestResult[t.name]?.status === 'ok' ? '✓ 通过' :
-                     toolTestResult[t.name]?.status === 'fail' ? '✕ 失败' : '测试' }}
+                <n-button size="tiny" @click="openDebug(tool)">{{ t('toolsView.debug') }}</n-button>
+                <n-button size="tiny" :loading="testingTool[tool.name]"
+                          :type="toolTestResult[tool.name]?.status === 'ok' ? 'success' :
+                                 toolTestResult[tool.name]?.status === 'fail' ? 'error' : 'default'"
+                          @click="testTool(tool.name)">
+                  {{ toolTestResult[tool.name]?.status === 'ok' ? t('toolsView.pass') :
+                     toolTestResult[tool.name]?.status === 'fail' ? t('toolsView.fail') : t('toolsView.test') }}
                 </n-button>
-                <n-button size="tiny" @click="openDebug(t)">编辑</n-button>
-                <n-button size="tiny" type="error" @click="updateTool(t, { enabled: false })">删除</n-button>
+                <n-button size="tiny" @click="openDebug(tool)">{{ t('toolsView.edit') }}</n-button>
+                <n-button size="tiny" type="error" @click="updateTool(tool, { enabled: false })">{{ t('toolsView.delete') }}</n-button>
               </div>
             </div>
             <div class="tool-actions">
-              <n-button size="tiny" quaternary :type="expandedTool === t.name ? 'primary' : 'default'"
-                        @click="expandedTool = expandedTool === t.name ? null : t.name">
-                {{ expandedTool === t.name ? '收起' : '...' }}
+              <n-button size="tiny" quaternary :type="expandedTool === tool.name ? 'primary' : 'default'"
+                        @click="expandedTool = expandedTool === tool.name ? null : tool.name">
+                {{ expandedTool === tool.name ? '收起' : '...' }}
               </n-button>
-              <n-switch :value="t.enabled" size="small"
-                        @update:value="(v: boolean) => updateTool(t, { enabled: v })" />
+              <n-switch :value="tool.enabled" size="small"
+                        @update:value="(v: boolean) => updateTool(tool, { enabled: v })" />
             </div>
           </div>
         </div>
       </n-tab-pane>
 
       <!-- ── 技能市场 ──────────────────────────────────────── -->
-      <n-tab-pane name="skillMarket" tab="技能市场">
+      <n-tab-pane name="skillMarket" :tab="t('toolsView.market')">
         <div class="market-toolbar">
-          <n-input v-model:value="skillMarketSearch" placeholder="搜索技能..." clearable
+          <n-input v-model:value="skillMarketSearch" :placeholder="t('toolsView.searchMarket')" clearable
                    size="small" style="width: 200px" />
-          <n-button size="small" :loading="skillMarketLoading" @click="loadSkillMarket(true)">刷新</n-button>
+          <n-button size="small" :loading="skillMarketLoading" @click="loadSkillMarket(true)">{{ t('refresh') }}</n-button>
         </div>
         <p class="market-hint">浏览并一键安装社区公开技能，安装后立即生效（注入系统提示词）。</p>
 
@@ -430,26 +431,26 @@ async function testSkill(item: any) {
                             :loading="testingSkill[item.id]"
                             :type="skillTestResult[item.id]?.ok ? 'success' : 'default'"
                             @click="testSkill(item)">
-                    {{ skillTestResult[item.id]?.ok ? '✓ 通过' : '测试' }}
+                    {{ skillTestResult[item.id]?.ok ? t('toolsView.pass') : t('toolsView.test') }}
                   </n-button>
                   <n-popconfirm v-if="item.installed"
                                 @positive-click="uninstallSkillFromMarket(item)">
                     <template #trigger>
                       <n-button size="tiny" type="error" quaternary
-                                :loading="uninstallingSkill[item.id]">卸载</n-button>
+                                :loading="uninstallingSkill[item.id]">{{ t('uninstall') }}</n-button>
                     </template>
                     确认卸载「{{ item.name }}」？
                   </n-popconfirm>
                   <n-button size="tiny" type="primary"
                             :loading="installingSkill[item.id]"
                             @click="installSkillFromMarket(item)">
-                    {{ item.installed ? '更新' : '安装' }}
+                    {{ item.installed ? t('update') : t('install') }}
                   </n-button>
                 </div>
               </div>
             </div>
             <n-empty v-if="!skillMarketLoading && filteredSkillMarket.length === 0"
-                     description="暂无可安装的技能" class="empty-state" />
+                     :description="t('toolsView.marketEmpty')" class="empty-state" />
           </div>
         </n-spin>
       </n-tab-pane>
@@ -457,7 +458,7 @@ async function testSkill(item: any) {
 
     <n-modal v-model:show="showDebug" preset="card" :title="`调试执行 · ${debugTool?.name}`"
              style="width: min(640px, 94vw); max-height: 85vh; overflow-y: auto">
-      <div class="debug-warning">⚠ 将真实执行该工具，操作会写入审计日志</div>
+      <div class="debug-warning">{{ t('toolsView.debugWarning') }}</div>
       <div v-for="(v, k) in debugArgs" :key="k" class="debug-field">
         <label class="debug-label mono">{{ k }}</label>
         <n-input v-if="typeof debugArgs[k] === 'string'" v-model:value="debugArgs[k]"
@@ -466,10 +467,10 @@ async function testSkill(item: any) {
         <n-switch v-else v-model:value="debugArgs[k]" />
       </div>
       <n-button type="warning" :loading="debugging" style="margin-top: 12px" @click="runDebug">
-        执行
+        {{ t('toolsView.execute') }}
       </n-button>
       <div v-if="debugResult" class="debug-result glass-panel" :class="{ failed: !debugResult.success }">
-        <div>{{ debugResult.success ? '✓ 成功' : '✗ 失败' }}
+        <div>{{ debugResult.success ? t('toolsView.success') : t('toolsView.fail') }}
           <span v-if="debugResult.elapsed_ms"> · {{ debugResult.elapsed_ms }}ms</span></div>
         <pre class="debug-output">{{ debugResult.data || debugResult.error }}</pre>
       </div>
@@ -494,7 +495,7 @@ async function testSkill(item: any) {
           </n-popconfirm>
           <span v-else></span>
           <div style="display:flex; gap:10px">
-            <n-button @click="showSkillEditor = false">取消</n-button>
+            <n-button @click="showSkillEditor = false">{{ t('cancel') }}</n-button>
             <n-button type="primary" :loading="savingSkill" @click="saveSkill">保存（下一条消息生效）</n-button>
           </div>
         </div>

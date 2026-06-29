@@ -2,6 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { NButton, NTag, NPopconfirm, NSpin, NInput, NEmpty, NTabs, NTabPane, useMessage } from 'naive-ui'
 import { get, post } from '../api'
+import { t, tf } from '../i18n'
 
 const message = useMessage()
 const plugins = ref<any[]>([])
@@ -21,7 +22,7 @@ async function load() {
   try {
     plugins.value = await get<any[]>('/plugins')
   } catch (e: any) {
-    message.error('获取插件列表失败: ' + e.message)
+    message.error(tf('pluginsView.loadFailed', e.message))
   }
 }
 
@@ -29,10 +30,10 @@ async function discoverPlugins() {
   discovering.value = true
   try {
     const res = await post<any>('/plugins/discover', {})
-    message.success(`发现 ${res.discovered?.length || 0} 个新插件`)
+    message.success(tf('pluginsView.discovered', res.discovered?.length || 0))
     await load()
   } catch (e: any) {
-    message.error('扫描失败: ' + e.message)
+    message.error(tf('pluginsView.scanFailed', e.message))
   } finally {
     discovering.value = false
   }
@@ -42,13 +43,13 @@ async function doAction(pluginId: string, action: string) {
   try {
     const res = await post<any>(`/plugins/${pluginId}/${action}`, {})
     if (res.status === 'ok') {
-      message.success(`${action} 成功`)
+      message.success(tf('pluginsView.actionSuccess', action))
     } else {
-      message.error(`${action} 失败`)
+      message.error(tf('pluginsView.actionFailed', action))
     }
     await load()
   } catch (e: any) {
-    message.error(`${action} 失败: ` + e.message)
+    message.error(tf('pluginsView.actionFailedErr', action, e.message))
   }
 }
 
@@ -60,15 +61,15 @@ async function testPlugin(pluginId: string) {
     const res = await post<any>(`/plugins/${pluginId}/load`, {})
     if (res.status === 'ok') {
       pluginTestResult.value[pluginId] = { ok: true, message: '插件加载正常' }
-      message.success(`插件「${pluginId}」测试通过`)
+      message.success(tf('pluginsView.pluginTestPassed', pluginId))
     } else {
       pluginTestResult.value[pluginId] = { ok: false, message: res.detail || '加载失败' }
-      message.error(`插件「${pluginId}」测试失败`)
+      message.error(tf('pluginsView.pluginTestFailed', pluginId))
     }
     await load()
   } catch (e: any) {
     pluginTestResult.value[pluginId] = { ok: false, message: e.message }
-    message.error(`插件测试失败: ` + e.message)
+    message.error(tf('pluginsView.pluginTestFailedErr', e.message))
   } finally {
     testingPlugin.value[pluginId] = false
   }
@@ -112,11 +113,11 @@ async function installFromMarket(item: any) {
       version: item.version,
       sha256: item.sha256,
     })
-    message.success(`插件「${item.name}」安装成功`)
+    message.success(tf('pluginsView.installSuccess', item.name))
     await loadMarket()
     await load()
   } catch (e: any) {
-    message.error('安装失败: ' + e.message)
+    message.error(tf('pluginsView.installFailed', e.message))
   } finally {
     installingMarket.value[item.id] = false
   }
@@ -126,11 +127,11 @@ async function uninstallFromMarket(item: any) {
   uninstallingMarket.value[item.id] = true
   try {
     await post('/market/plugins/uninstall', { item_id: item.id })
-    message.success(`插件「${item.name}」已卸载`)
+    message.success(tf('pluginsView.uninstalled', item.name))
     await loadMarket()
     await load()
   } catch (e: any) {
-    message.error('卸载失败: ' + e.message)
+    message.error(tf('pluginsView.uninstallFailed', e.message))
   } finally {
     uninstallingMarket.value[item.id] = false
   }
@@ -144,16 +145,16 @@ async function testMarketPlugin(item: any) {
     const res = await post<any>(`/plugins/${item.id}/load`, {})
     if (res.status === 'ok') {
       marketPluginTestResult.value[item.id] = { ok: true, message: '插件加载正常' }
-      message.success(`插件「${item.name}」测试通过`)
+      message.success(tf('pluginsView.pluginTestPassed', item.name))
     } else {
       marketPluginTestResult.value[item.id] = { ok: false, message: res.detail || '加载失败' }
-      message.error(`插件「${item.name}」测试失败`)
+      message.error(tf('pluginsView.pluginTestFailed', item.name))
     }
     await loadMarket()
     await load()
   } catch (e: any) {
     marketPluginTestResult.value[item.id] = { ok: false, message: e.message }
-    message.error(`测试失败: ` + e.message)
+    message.error(tf('pluginsView.testFailed', e.message))
   } finally {
     testingMarketPlugin.value[item.id] = false
   }
@@ -172,13 +173,13 @@ onMounted(() => { load(); loadMarket() })
 <template>
   <div class="plugins-view">
     <div class="view-header">
-      <h2>🧩 插件管理</h2>
-      <n-button type="primary" :loading="discovering" @click="discoverPlugins">🔍 扫描插件</n-button>
+      <h2>🧩 {{ t('pluginsView.title') }}</h2>
+      <n-button type="primary" :loading="discovering" @click="discoverPlugins">🔍 {{ t('pluginsView.scan') }}</n-button>
     </div>
 
     <n-tabs v-model:value="activeTab" type="line" @update:value="onTabChange">
       <!-- ── 已安装 ──────────────────────────────────────── -->
-      <n-tab-pane name="installed" tab="已安装">
+      <n-tab-pane name="installed" :tab="t('installed')">
         <p class="plugins-hint">
           扫描插件目录发现新插件 → 加载 → 启用后自动注册工具与能力 → 在 Agent 权限矩阵中可见。
         </p>
@@ -194,28 +195,28 @@ onMounted(() => { load(); loadMarket() })
             <div v-if="p.error_message" class="plugin-error">{{ p.error_message }}</div>
             <div class="plugin-ops">
               <n-button v-if="p.state === 'found'" size="tiny" type="primary" secondary
-                        @click="doAction(p.id, 'load')">加载</n-button>
+                        @click="doAction(p.id, 'load')">{{ t('pluginsView.load') }}</n-button>
               <n-button v-if="p.state === 'loaded' || p.state === 'disabled'" size="tiny" type="primary"
-                        @click="doAction(p.id, 'enable')">启用</n-button>
+                        @click="doAction(p.id, 'enable')">{{ t('pluginsView.enable') }}</n-button>
               <n-button v-if="p.state === 'enabled'" size="tiny" type="warning"
-                        @click="doAction(p.id, 'disable')">禁用</n-button>
+                        @click="doAction(p.id, 'disable')">{{ t('pluginsView.disable') }}</n-button>
               <n-button v-if="p.state === 'enabled'" size="tiny"
-                        @click="doAction(p.id, 'reload')">重载</n-button>
+                        @click="doAction(p.id, 'reload')">{{ t('pluginsView.reload') }}</n-button>
               <n-button size="tiny" :type="pluginTestResult[p.id]?.ok === false ? 'error' : 'success'"
                         :loading="testingPlugin[p.id]" @click="testPlugin(p.id)">
-                {{ pluginTestResult[p.id]?.ok === false ? '重试' : '测试' }}
+                {{ pluginTestResult[p.id]?.ok === false ? t('pluginsView.retry') : t('pluginsView.test') }}
               </n-button>
               <n-popconfirm v-if="['loaded','disabled','error'].includes(p.state)"
                             @positive-click="doAction(p.id, 'unload')">
                 <template #trigger>
-                  <n-button size="tiny" type="error" quaternary>卸载</n-button>
+                  <n-button size="tiny" type="error" quaternary>{{ t('uninstall') }}</n-button>
                 </template>
-                确认卸载插件「{{ p.name }}」？
+                {{ t('pluginsView.confirmUninstall') }}「{{ p.name }}」？
               </n-popconfirm>
             </div>
             <div v-if="pluginTestResult[p.id]" class="plugin-test-result"
                  :class="pluginTestResult[p.id].ok ? 'test-ok' : 'test-fail'">
-              {{ pluginTestResult[p.id].ok ? '✓ 测试通过' : '✕ ' + pluginTestResult[p.id].message }}
+              {{ pluginTestResult[p.id].ok ? '✓ ' + t('pluginsView.testPass') : '✕ ' + pluginTestResult[p.id].message }}
             </div>
           </div>
 
@@ -226,11 +227,11 @@ onMounted(() => { load(); loadMarket() })
       </n-tab-pane>
 
       <!-- ── 插件市场 ──────────────────────────────────────── -->
-      <n-tab-pane name="market" tab="插件市场">
+      <n-tab-pane name="market" :tab="t('pluginsView.market')">
         <div class="market-toolbar">
-          <n-input v-model:value="marketSearch" placeholder="搜索插件..." clearable
+          <n-input v-model:value="marketSearch" :placeholder="t('pluginsView.searchPlaceholder')" clearable
                    size="small" style="width: 200px" />
-          <n-button size="small" :loading="marketLoading" @click="loadMarket(true)">刷新</n-button>
+          <n-button size="small" :loading="marketLoading" @click="loadMarket(true)">{{ t('refresh') }}</n-button>
         </div>
         <p class="market-hint">浏览并一键安装社区公开插件，安装后自动加载并启用。</p>
 
@@ -262,26 +263,26 @@ onMounted(() => { load(); loadMarket() })
                             :loading="testingMarketPlugin[item.id]"
                             :type="marketPluginTestResult[item.id]?.ok ? 'success' : 'default'"
                             @click="testMarketPlugin(item)">
-                    {{ marketPluginTestResult[item.id]?.ok ? '✓ 通过' : '测试' }}
+                    {{ marketPluginTestResult[item.id]?.ok ? t('pluginsView.testPass') : t('pluginsView.test') }}
                   </n-button>
                   <n-popconfirm v-if="item.installed"
                                 @positive-click="uninstallFromMarket(item)">
                     <template #trigger>
                       <n-button size="tiny" type="error" quaternary
-                                :loading="uninstallingMarket[item.id]">卸载</n-button>
+                                :loading="uninstallingMarket[item.id]">{{ t('uninstall') }}</n-button>
                     </template>
                     确认卸载「{{ item.name }}」？
                   </n-popconfirm>
                   <n-button size="tiny" type="primary"
                             :loading="installingMarket[item.id]"
                             @click="installFromMarket(item)">
-                    {{ item.installed ? '更新' : '安装' }}
+                    {{ item.installed ? t('update') : t('install') }}
                   </n-button>
                 </div>
               </div>
             </div>
             <n-empty v-if="!marketLoading && filteredMarket.length === 0"
-                     description="暂无可安装的插件" class="empty-state" />
+                     :description="t('pluginsView.marketEmpty')" class="empty-state" />
           </div>
         </n-spin>
       </n-tab-pane>

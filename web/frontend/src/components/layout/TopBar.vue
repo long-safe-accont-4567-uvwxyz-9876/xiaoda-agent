@@ -3,6 +3,7 @@ import { onMounted, computed } from 'vue'
 import { useChatStore } from '../../stores/chat'
 import { useAgentsStore } from '../../stores/agents'
 import EmotionAvatar from '../chat/EmotionAvatar.vue'
+import { t } from '../../i18n'
 
 const chat = useChatStore()
 const agentsStore = useAgentsStore()
@@ -15,9 +16,9 @@ const enabledAgents = computed(() =>
   agentsStore.agents.filter(a => a.enabled))
 
 const stageText: Record<string, string> = {
-  thinking: '🌿 正在思考...',
-  tool: '🛠 正在使用工具...',
-  replying: '✍️ 正在回复...',
+  thinking: '🌿 ' + t('topBar.thinking') + '...',
+  tool: '🛠 ' + t('topBar.usingTool') + '...',
+  replying: '✍️ ' + t('topBar.replying') + '...',
 }
 </script>
 
@@ -29,7 +30,7 @@ const stageText: Record<string, string> = {
         :key="a.name"
         class="agent-chip"
         :class="{ active: chat.currentAgent === a.name }"
-        :title="`${a.display_name} · ${a.model || a.provider} · ${a.tool_count ?? '?'} 个工具`"
+        :title="`${a.display_name} · ${a.model || a.provider} · ${a.tool_count ?? '?'} ${t('topBar.toolsCount')}`"
         @click="chat.setAgent(a.name)"
       >
         <span class="chip-avatar"
@@ -41,13 +42,13 @@ const stageText: Record<string, string> = {
     </div>
 
     <div v-if="chat.isProcessing" class="stage-indicator">
-      {{ chat.statusText || stageText[chat.currentStage] || '🌿 处理中...' }}
+      {{ chat.statusText || stageText[chat.currentStage] || ('🌿 ' + t('topBar.processing') + '...') }}
     </div>
 
     <div class="topbar-right">
       <EmotionAvatar />
       <span class="status-dot" :class="chat.wsConnected ? 'green' : 'red'"
-            :title="chat.wsConnected ? '已连接' : '连接中断，重连中…'"></span>
+            :title="chat.wsConnected ? t('topBar.connected') : t('topBar.reconnecting') + '...'"></span>
     </div>
   </header>
 </template>

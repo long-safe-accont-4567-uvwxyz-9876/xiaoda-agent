@@ -6,6 +6,7 @@ import {
   NTag, NPopconfirm, useMessage,
 } from 'naive-ui'
 import { get, post, put, del } from '../api'
+import { t } from '../i18n'
 
 const message = useMessage()
 
@@ -132,13 +133,13 @@ const reasonLabel: Record<string, string> = {
 
 <template>
   <div class="schedule-view">
-    <h2 class="view-title">⏰ 定时与问候</h2>
+    <h2 class="view-title">⏰ {{ t('scheduleView.title') }}</h2>
 
     <section class="glass-panel section">
-      <h3>总开关</h3>
+      <h3>{{ t('scheduleView.masterSwitch') }}</h3>
       <div class="config-row">
         <label class="cfg">
-          主动问候
+          {{ t('scheduleView.proactive') }}
           <n-switch v-model:value="config.enabled" @update:value="saveConfig" />
         </label>
         <label class="cfg wide">
@@ -153,8 +154,8 @@ const reasonLabel: Record<string, string> = {
 
     <section class="glass-panel section">
       <div class="section-head">
-        <h3>问候计划</h3>
-        <n-button size="small" type="primary" @click="openForm(null)">＋ 新增计划</n-button>
+        <h3>{{ t('scheduleView.plans') }}</h3>
+        <n-button size="small" type="primary" @click="openForm(null)">＋ {{ t('scheduleView.addPlan') }}</n-button>
       </div>
       <div class="greeting-list">
         <div v-for="g in greetings" :key="g.id" class="greeting-card">
@@ -170,9 +171,9 @@ const reasonLabel: Record<string, string> = {
           <div class="g-ops">
             <n-switch size="small" :value="!!g.enabled"
                       @update:value="(v: boolean) => toggleGreeting(g, v)" />
-            <n-button size="tiny" @click="openForm(g)">编辑</n-button>
+            <n-button size="tiny" @click="openForm(g)">{{ t('scheduleView.edit') }}</n-button>
             <n-popconfirm @positive-click="removeGreeting(g.id)">
-              <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
+              <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('scheduleView.delete') }}</n-button></template>
               确认删除该计划？
             </n-popconfirm>
           </div>
@@ -213,37 +214,37 @@ const reasonLabel: Record<string, string> = {
     </section>
 
     <n-modal v-model:show="showForm" preset="card"
-             :title="isCreate ? '新增问候计划' : '编辑计划'"
+             :title="isCreate ? t('scheduleView.addPlanTitle') : t('scheduleView.editPlanTitle')"
              style="width: min(540px, 94vw)">
       <n-form label-placement="left" label-width="100">
-        <n-form-item label="类型">
+        <n-form-item :label="t('scheduleView.type')">
           <n-radio-group v-model:value="form.type">
-            <n-radio value="fixed">固定时间</n-radio>
-            <n-radio value="random">随机窗口</n-radio>
+            <n-radio value="fixed">{{ t('scheduleView.fixed') }}</n-radio>
+            <n-radio value="random">{{ t('scheduleView.random') }}</n-radio>
           </n-radio-group>
         </n-form-item>
-        <n-form-item v-if="form.type === 'fixed'" label="时间">
+        <n-form-item v-if="form.type === 'fixed'" :label="t('scheduleView.time')">
           <n-time-picker v-model:formatted-value="form.time" format="HH:mm" value-format="HH:mm" />
         </n-form-item>
         <template v-else>
-          <n-form-item label="窗口">
+          <n-form-item :label="t('scheduleView.window')">
             <n-time-picker v-model:formatted-value="form.window_start" format="HH:mm" value-format="HH:mm" />
-            <span style="margin: 0 8px">至</span>
+            <span style="margin: 0 8px">{{ t('scheduleView.to') }}</span>
             <n-time-picker v-model:formatted-value="form.window_end" format="HH:mm" value-format="HH:mm" />
           </n-form-item>
-          <n-form-item label="每日次数">
+          <n-form-item :label="t('scheduleView.dailyCount')">
             <n-input-number v-model:value="form.count_per_day" :min="1" :max="10" />
           </n-form-item>
         </template>
-        <n-form-item label="星期">
+        <n-form-item :label="t('scheduleView.weekday')">
           <n-checkbox-group v-model:value="form.days">
             <n-checkbox v-for="(label, i) in WEEK_LABELS" :key="i" :value="i + 1" :label="label" />
           </n-checkbox-group>
         </n-form-item>
-        <n-form-item label="主题提示">
+        <n-form-item :label="t('scheduleView.topic')">
           <n-input v-model:value="form.prompt_hint" placeholder="可选，如「提醒喝水」" />
         </n-form-item>
-        <n-form-item label="通道">
+        <n-form-item :label="t('scheduleView.channel')">
           <n-checkbox-group v-model:value="form.channels">
             <n-checkbox value="web" label="Web" />
             <n-checkbox value="qq" label="QQ" />
@@ -252,8 +253,8 @@ const reasonLabel: Record<string, string> = {
       </n-form>
       <template #footer>
         <div style="display:flex; justify-content:flex-end; gap:10px">
-          <n-button @click="showForm = false">取消</n-button>
-          <n-button type="primary" @click="saveGreeting">保存</n-button>
+          <n-button @click="showForm = false">{{ t('cancel') }}</n-button>
+          <n-button type="primary" @click="saveGreeting">{{ t('save') }}</n-button>
         </div>
       </template>
     </n-modal>

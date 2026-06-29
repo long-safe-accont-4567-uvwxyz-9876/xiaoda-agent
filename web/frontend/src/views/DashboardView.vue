@@ -7,6 +7,7 @@ import * as echarts from 'echarts/core'
 import { LineChart, BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import { t } from '../i18n'
 
 echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, CanvasRenderer])
 
@@ -167,7 +168,7 @@ function diskLabel(d: any): string {
 
 <template>
   <div class="dashboard-view">
-    <h2 class="view-title">📊 仪表盘</h2>
+    <h2 class="view-title">📊 {{ t('dashboardView.title') }}</h2>
 
     <div v-if="permissionMode === 'bypass'" class="bypass-warning">
       ⚠ 当前权限模式为 BYPASS — 所有工具不经确认直接执行，存在安全风险！
@@ -175,26 +176,26 @@ function diskLabel(d: any): string {
 
     <div class="stat-grid">
       <Tilt3D><div class="stat-card glass-panel">
-        <span class="stat-num">{{ stats.messages }}</span><span class="stat-label">今日对话轮数</span>
+        <span class="stat-num">{{ stats.messages }}</span><span class="stat-label">{{ t('dashboardView.todayRounds') }}</span>
       </div></Tilt3D>
       <Tilt3D><div class="stat-card glass-panel">
-        <span class="stat-num">${{ stats.cost.toFixed(4) }}</span><span class="stat-label">今日成本</span>
+        <span class="stat-num">${{ stats.cost.toFixed(4) }}</span><span class="stat-label">{{ t('dashboardView.todayCost') }}</span>
       </div></Tilt3D>
       <Tilt3D><div class="stat-card glass-panel">
-        <span class="stat-num">{{ stats.toolCalls }}</span><span class="stat-label">今日工具调用</span>
+        <span class="stat-num">{{ stats.toolCalls }}</span><span class="stat-label">{{ t('dashboardView.todayTools') }}</span>
       </div></Tilt3D>
       <Tilt3D><div class="stat-card glass-panel">
-        <span class="stat-num">{{ stats.memories }}</span><span class="stat-label">今日新增记忆</span>
+        <span class="stat-num">{{ stats.memories }}</span><span class="stat-label">{{ t('dashboardView.todayMemories') }}</span>
       </div></Tilt3D>
     </div>
 
     <div class="chart-row">
       <div class="glass-panel chart-box">
-        <h4>7 天成本</h4>
+        <h4>{{ t('dashboardView.cost7d') }}</h4>
         <div ref="costChartEl" class="chart"></div>
       </div>
       <div class="glass-panel chart-box">
-        <h4>工具调用 Top10</h4>
+        <h4>{{ t('dashboardView.toolTop10') }}</h4>
         <div ref="toolChartEl" class="chart"></div>
       </div>
     </div>
@@ -203,8 +204,8 @@ function diskLabel(d: any): string {
       <div class="glass-panel chart-box monitor">
         <div class="section-header">
           <h4>{{ platformLabel[system.platform] || system.platform || '系统' }} 监控 <span v-if="monitorEnabled" class="hint">5s 轮询</span></h4>
-          <NButton v-if="!monitorEnabled" size="small" type="primary" @click="enableMonitor">开启监控</NButton>
-          <NButton v-else size="small" @click="disableMonitor">关闭监控</NButton>
+          <NButton v-if="!monitorEnabled" size="small" type="primary" @click="enableMonitor">{{ t('dashboardView.enableMonitor') }}</NButton>
+          <NButton v-else size="small" @click="disableMonitor">{{ t('dashboardView.disableMonitor') }}</NButton>
         </div>
         <div v-if="monitorEnabled" class="monitor-grid">
           <!-- CPU -->
@@ -212,13 +213,13 @@ function diskLabel(d: any): string {
             <span class="m-label">CPU</span>
             <span class="m-value mono">
               {{ system.cpu_percent != null ? system.cpu_percent + '%' : '—' }}
-              <span v-if="system.load" class="m-sub">负载 {{ system.load.map((l: number) => l.toFixed(2)).join(' / ') }}</span>
+              <span v-if="system.load" class="m-sub">{{ t('dashboardView.load') }} {{ system.load.map((l: number) => l.toFixed(2)).join(' / ') }}</span>
             </span>
-            <span v-if="system.cpu_count" class="m-sub">{{ system.cpu_count_physical || system.cpu_count }} 核</span>
+            <span v-if="system.cpu_count" class="m-sub">{{ system.cpu_count_physical || system.cpu_count }} {{ t('dashboardView.cores') }}</span>
           </div>
           <!-- 内存 -->
           <div class="m-item">
-            <span class="m-label">内存</span>
+            <span class="m-label">{{ t('dashboardView.memory') }}</span>
             <span class="m-value mono">
               {{ system.mem_total ? `${system.mem_percent}% · 可用 ${gb(system.mem_available)}G / ${gb(system.mem_total)}G` : '—' }}
             </span>
@@ -228,12 +229,12 @@ function diskLabel(d: any): string {
           </div>
           <!-- 交换区 -->
           <div class="m-item" v-if="system.swap_total">
-            <span class="m-label">交换区</span>
+            <span class="m-label">{{ t('dashboardView.swap') }}</span>
             <span class="m-value mono">{{ system.swap_percent }}% · {{ gb(system.swap_used) }}G / {{ gb(system.swap_total) }}G</span>
           </div>
           <!-- 磁盘（所有分区）-->
           <div class="m-item m-item-wide" v-if="system.disks?.length">
-            <span class="m-label">磁盘</span>
+            <span class="m-label">{{ t('dashboardView.disk') }}</span>
             <div class="disk-list">
               <div v-for="d in system.disks" :key="d.mountpoint" class="disk-row">
                 <span class="disk-name mono">{{ diskLabel(d) }}</span>
@@ -246,7 +247,7 @@ function diskLabel(d: any): string {
           </div>
           <!-- 温度 -->
           <div class="m-item" v-if="system.temperatures?.length">
-            <span class="m-label">温度</span>
+            <span class="m-label">{{ t('dashboardView.temp') }}</span>
             <div class="temp-list">
               <div v-for="t in system.temperatures.slice(0, 6)" :key="t.label" class="temp-row">
                 <span class="temp-label">{{ t.label }}</span>
@@ -256,23 +257,23 @@ function diskLabel(d: any): string {
           </div>
           <!-- 网络 -->
           <div class="m-item" v-if="system.net_bytes_recv != null">
-            <span class="m-label">网络 I/O</span>
+            <span class="m-label">{{ t('dashboardView.networkIo') }}</span>
             <span class="m-value mono">↓ {{ mb(system.net_bytes_recv) }}MB · ↑ {{ mb(system.net_bytes_sent) }}MB</span>
           </div>
           <!-- 进程 -->
           <div class="m-item">
-            <span class="m-label">进程内存</span>
+            <span class="m-label">{{ t('dashboardView.procMem') }}</span>
             <span class="m-value mono">{{ system.process_rss ? mb(system.process_rss) + 'MB' : '—' }}</span>
           </div>
           <!-- 运行时间 -->
           <div class="m-item" v-if="system.uptime">
-            <span class="m-label">运行时间</span>
+            <span class="m-label">{{ t('dashboardView.uptime') }}</span>
             <span class="m-value mono">{{ uptimeFmt(system.uptime) }}</span>
           </div>
           <!-- 电池 -->
           <div class="m-item" v-if="system.battery_percent != null">
-            <span class="m-label">电池</span>
-            <span class="m-value mono" :class="{ warn: system.battery_percent < 20 }">{{ system.battery_percent }}% {{ system.battery_plugged ? '充电中' : '' }}</span>
+            <span class="m-label">{{ t('dashboardView.battery') }}</span>
+            <span class="m-value mono" :class="{ warn: system.battery_percent < 20 }">{{ system.battery_percent }}% {{ system.battery_plugged ? t('dashboardView.charging') : '' }}</span>
           </div>
         </div>
         <div v-else class="monitor-disabled-hint">
@@ -280,14 +281,14 @@ function diskLabel(d: any): string {
         </div>
       </div>
       <div class="glass-panel chart-box">
-        <h4>最近审计</h4>
+        <h4>{{ t('dashboardView.recentAudit') }}</h4>
         <div class="audit-list">
           <div v-for="a in audit" :key="a.id" class="audit-row">
             <span class="a-time mono">{{ new Date(a.timestamp * 1000).toLocaleTimeString('zh-CN') }}</span>
             <span class="a-type">{{ a.event_type }}</span>
             <span class="a-detail">{{ a.detail }}</span>
           </div>
-          <div v-if="!audit.length" class="empty-hint">（暂无）</div>
+          <div v-if="!audit.length" class="empty-hint">{{ t('dashboardView.empty') }}</div>
         </div>
       </div>
     </div>

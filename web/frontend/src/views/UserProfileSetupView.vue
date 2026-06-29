@@ -5,6 +5,7 @@ import GlslHills from '../components/fx/GlslHills.vue'
 import DendroEmblem from '../components/fx/DendroEmblem.vue'
 import { api, getSetupVersion } from '../api'
 import { useAuthStore } from '../stores/auth'
+import { t } from '../i18n'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -116,26 +117,26 @@ async function handleSkip() {
 
         <div class="setup-header">
           <DendroEmblem :size="84" spin />
-          <h1>个人资料 · 偏好设置</h1>
-          <p class="subtitle">初次见面，请多指教</p>
+          <h1>{{ t('userProfileSetup.title') }}</h1>
+          <p class="subtitle">{{ t('userProfileSetup.greeting') }}</p>
           <p class="version-tag">v{{ version }}</p>
         </div>
 
         <div class="setup-body">
-          <h2 class="section-title">── 用户信息 ──</h2>
+          <h2 class="section-title">── {{ t('userProfileSetup.userInfo') }} ──</h2>
 
           <div class="form-group">
-            <label class="form-label">希望被称呼为</label>
+            <label class="form-label">{{ t('userProfileSetup.addressTerm') }}</label>
             <input
               v-model="fields.address_term"
               class="dendro-input"
               type="text"
-              placeholder="留空则默认「朋友」"
+              :placeholder="t('userProfileSetup.addressEmptyDefault')"
             />
           </div>
 
           <div class="form-group">
-            <label class="form-label">昵称</label>
+            <label class="form-label">{{ t('userProfileSetup.nickname') }}</label>
             <input
               v-model="fields.name"
               class="dendro-input"
@@ -145,7 +146,7 @@ async function handleSkip() {
           </div>
 
           <div class="form-group">
-            <label class="form-label">时区</label>
+            <label class="form-label">{{ t('userProfileSetup.timezone') }}</label>
             <select v-model="fields.timezone" class="dendro-input dendro-select">
               <option v-for="tz in timezones" :key="tz.value" :value="tz.value">
                 {{ tz.label }}
@@ -153,10 +154,10 @@ async function handleSkip() {
             </select>
           </div>
 
-          <h2 class="section-title section-gap">── 主 Agent 人格 ──</h2>
+          <h2 class="section-title section-gap">── {{ t('userProfileSetup.agentPersonality') }} ──</h2>
 
           <div class="form-group">
-            <label class="form-label">偏好的助手人格</label>
+            <label class="form-label">{{ t('userProfileSetup.preferredPersonality') }}</label>
             <input
               v-model="fields.preferred_personality"
               class="dendro-input"
@@ -166,7 +167,7 @@ async function handleSkip() {
           </div>
 
           <div class="form-group">
-            <label class="form-label">偏好语气</label>
+            <label class="form-label">{{ t('userProfileSetup.preferredTone') }}</label>
             <input
               v-model="fields.preferred_tone"
               class="dendro-input"
@@ -175,10 +176,10 @@ async function handleSkip() {
             />
           </div>
 
-          <h2 class="section-title section-gap">── 回复偏好 ──</h2>
+          <h2 class="section-title section-gap">── {{ t('userProfileSetup.replyPrefs') }} ──</h2>
 
           <div class="form-group">
-            <label class="form-label">喜欢的回复风格</label>
+            <label class="form-label">{{ t('userProfileSetup.likedStyle') }}</label>
             <textarea
               v-model="fields.liked_reply_style"
               class="dendro-input dendro-textarea"
@@ -188,7 +189,7 @@ async function handleSkip() {
           </div>
 
           <div class="form-group">
-            <label class="form-label">不喜欢的回复风格</label>
+            <label class="form-label">{{ t('userProfileSetup.dislikedStyle') }}</label>
             <textarea
               v-model="fields.disliked_reply_style"
               class="dendro-input dendro-textarea"
@@ -197,10 +198,10 @@ async function handleSkip() {
             ></textarea>
           </div>
 
-          <h2 class="section-title section-gap">── 项目偏好 ──</h2>
+          <h2 class="section-title section-gap">── {{ t('userProfileSetup.projectPrefs') }} ──</h2>
 
           <div class="form-group">
-            <label class="form-label">项目偏好（每行一条）</label>
+            <label class="form-label">{{ t('userProfileSetup.projectPrefs') }}</label>
             <textarea
               v-model="fields.project_preferences"
               class="dendro-input dendro-textarea"
@@ -214,14 +215,14 @@ async function handleSkip() {
 
           <div class="action-row">
             <button class="dendro-btn skip-btn" @click="handleSkip" :disabled="saving">
-              跳过
+              {{ t('userProfileSetup.skip') }}
             </button>
             <button
               class="dendro-btn save-btn"
               :disabled="saving"
               @click="handleSave"
             >
-              {{ saving ? '草元素汇聚中…' : '保存并进入' }}
+              {{ saving ? t('setupWizard.saving') : t('userProfileSetup.saveEnter') }}
             </button>
           </div>
 

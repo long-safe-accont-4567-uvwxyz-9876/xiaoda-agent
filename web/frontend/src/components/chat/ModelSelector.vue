@@ -5,6 +5,7 @@ import { get, post, api } from '../../api'
 import { useChatStore } from '../../stores/chat'
 import { useAgentsStore } from '../../stores/agents'
 import { getWsClient } from '../../api/ws'
+import { t } from '../../i18n'
 
 const chat = useChatStore()
 const agentsStore = useAgentsStore()
@@ -35,14 +36,14 @@ const message = useMessage()
 const currentModel = ref<CurrentModel>({
   provider: '',
   model_id: '',
-  label: '选择模型'
+  label: t('modelSelector.selectModel')
 })
 const providers = ref<ProviderGroup[]>([])
 const loading = ref(false)
 const showPopover = ref(false)
 
 function buildModelLabel(provider: string, modelId: string): string {
-  if (!provider && !modelId) return '选择模型'
+  if (!provider && !modelId) return t('modelSelector.selectModel')
   let providerLabel = provider
   let modelDisplayName = modelId
   for (const pg of providers.value) {
@@ -92,10 +93,10 @@ async function selectModel(provider: string, model: ModelInfo) {
     showPopover.value = false
     emit('change', provider, model.id)
     if (!model.tool_calling) {
-      message.warning('该模型不支持工具调用，部分功能可能受限')
+      message.warning(t('modelSelector.noToolSupport'))
     }
   } catch (e: any) {
-    message.error(e.message || '切换模型失败')
+    message.error(e.message || t('modelSelector.switchFailed'))
   }
 }
 
@@ -199,13 +200,13 @@ const emit = defineEmits<{
               <span class="model-display-name">{{ m.display_name }}</span>
               <span class="model-id">{{ m.id }}</span>
               <div class="model-badges">
-                <span v-if="m.tool_calling" class="badge tool" title="支持工具调用">🔧</span>
-                <span v-if="m.vision" class="badge vision" title="支持视觉">👁</span>
-                <NTag v-if="m.free" type="success" size="small" class="free-tag">免费</NTag>
+                <span v-if="m.tool_calling" class="badge tool" :title="t('modelSelector.toolSupport')">🔧</span>
+                <span v-if="m.vision" class="badge vision" :title="t('modelSelector.visionSupport')">👁</span>
+                <NTag v-if="m.free" type="success" size="small" class="free-tag">{{ t('modelSelector.free') }}</NTag>
               </div>
             </div>
           </div>
-          <div v-if="!loading && !providers.length" class="empty-hint">暂无可用模型</div>
+          <div v-if="!loading && !providers.length" class="empty-hint">{{ t('modelSelector.noModels') }}</div>
         </div>
       </NSpin>
     </div>

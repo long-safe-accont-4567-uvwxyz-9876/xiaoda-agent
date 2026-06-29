@@ -7,6 +7,7 @@ import {
 import { get, post, put, del } from '../api'
 import { getWsClient } from '../api/ws'
 import { useUiStore } from '../stores/ui'
+import { t } from '../i18n'
 
 const message = useMessage()
 const ui = useUiStore()
@@ -147,10 +148,10 @@ const statusType: Record<string, any> = {
 
 <template>
   <div class="media-view">
-    <h2 class="view-title">🎙 媒体工坊</h2>
+    <h2 class="view-title">🎙 {{ t('mediaView.title') }}</h2>
 
     <n-tabs type="line" animated>
-      <n-tab-pane name="tts" tab="语音合成">
+      <n-tab-pane name="tts" :tab="t('mediaView.tts')">
         <div class="panel-row">
           <div class="glass-panel panel main">
             <n-input v-model:value="ttsText" type="textarea" :rows="4"
@@ -160,14 +161,14 @@ const statusType: Record<string, any> = {
                         style="max-width: 220px" @update:value="setDefaultVoice" />
               <n-select v-model:value="ttsStyle" :options="styles" placeholder="情绪风格（自动）"
                         clearable style="max-width: 180px" />
-              <n-button type="primary" :loading="ttsLoading" @click="synthesize">🎵 合成</n-button>
+              <n-button type="primary" :loading="ttsLoading" @click="synthesize">🎵 {{ t('mediaView.synthesize') }}</n-button>
             </div>
             <audio v-if="ttsResult" :src="ttsResult" controls autoplay class="tts-player"></audio>
           </div>
           <div class="glass-panel panel side">
-            <h4>朗读设置</h4>
+            <h4>{{ t('mediaView.readSettings') }}</h4>
             <label class="cfg">
-              自动朗读回复
+              {{ t('mediaView.autoSpeak') }}
               <n-switch :value="ui.autoSpeak" @update:value="setAutoSpeak" />
             </label>
             <p class="cfg-hint">开启后，聊天页收到回复会自动合成并播放（音色跟随当前 Agent 的 voice_ref）。</p>
@@ -175,18 +176,18 @@ const statusType: Record<string, any> = {
         </div>
       </n-tab-pane>
 
-      <n-tab-pane name="image" tab="图片生成">
+      <n-tab-pane name="image" :tab="t('mediaView.imageGen')">
         <div class="glass-panel panel">
           <n-input v-model:value="imagePrompt" type="textarea" :rows="3"
                    placeholder="描述想生成的画面…" />
           <n-button type="primary" style="margin-top: 10px"
                     :loading="submitting === 'image'" @click="submitTask('image')">
-            🎨 提交生成任务
+            🎨 {{ t('mediaView.submit') }}
           </n-button>
         </div>
       </n-tab-pane>
 
-      <n-tab-pane name="video" tab="视频生成">
+      <n-tab-pane name="video" :tab="t('mediaView.videoGen')">
         <div class="glass-panel panel">
           <p class="queue-hint">⏳ 视频生成耗时较长（数分钟），队列串行执行，进度实时推送。
             当前队列 {{ tasks.filter(t => t.status === 'queued' || t.status === 'running').length }} 个任务。</p>
@@ -194,37 +195,37 @@ const statusType: Record<string, any> = {
                    placeholder="描述想生成的视频…" />
           <n-button type="primary" style="margin-top: 10px"
                     :loading="submitting === 'video'" @click="submitTask('video')">
-            🎬 提交生成任务
+            🎬 {{ t('mediaView.submit') }}
           </n-button>
         </div>
       </n-tab-pane>
     </n-tabs>
 
     <section class="glass-panel section">
-      <h3>任务队列</h3>
+      <h3>{{ t('mediaView.taskQueue') }}</h3>
       <div class="task-list">
-        <div v-for="t in tasks" :key="t.id" class="task-row">
-          <n-tag size="small" :type="statusType[t.status]" :bordered="false">{{ t.status }}</n-tag>
-          <span class="task-kind">{{ t.kind }}</span>
-          <span class="task-prompt">{{ t.prompt }}</span>
-          <n-progress v-if="t.status === 'running'" type="line" :percentage="Math.round((t.progress || 0) * 100)"
+        <div v-for="task in tasks" :key="task.id" class="task-row">
+          <n-tag size="small" :type="statusType[task.status]" :bordered="false">{{ task.status }}</n-tag>
+          <span class="task-kind">{{ task.kind }}</span>
+          <span class="task-prompt">{{ task.prompt }}</span>
+          <n-progress v-if="task.status === 'running'" type="line" :percentage="Math.round((task.progress || 0) * 100)"
                       style="max-width: 140px" :height="6" />
-          <span v-if="t.error" class="task-error">{{ t.error }}</span>
-          <a v-if="t.result_path && t.status === 'done'" :href="t.result_path" target="_blank" class="task-link">查看</a>
-          <n-button v-if="t.status === 'queued'" size="tiny" quaternary @click="cancelTask(t.id)">取消</n-button>
+          <span v-if="task.error" class="task-error">{{ task.error }}</span>
+          <a v-if="task.result_path && task.status === 'done'" :href="task.result_path" target="_blank" class="task-link">{{ t('mediaView.view') }}</a>
+          <n-button v-if="task.status === 'queued'" size="tiny" quaternary @click="cancelTask(task.id)">{{ t('cancel') }}</n-button>
         </div>
-        <div v-if="!tasks.length" class="empty-hint">（暂无任务）</div>
+        <div v-if="!tasks.length" class="empty-hint">{{ t('mediaView.queueEmpty') }}</div>
       </div>
     </section>
 
     <section class="glass-panel section">
       <div class="gallery-head">
-        <h3>画廊</h3>
+        <h3>{{ t('mediaView.gallery') }}</h3>
         <n-tabs type="segment" size="small" v-model:value="galleryType"
                 @update:value="loadGallery" style="max-width: 280px">
-          <n-tab-pane name="image" tab="图片" />
-          <n-tab-pane name="video" tab="视频" />
-          <n-tab-pane name="audio" tab="音频" />
+          <n-tab-pane name="image" :tab="t('mediaView.image')" />
+          <n-tab-pane name="video" :tab="t('mediaView.video')" />
+          <n-tab-pane name="audio" :tab="t('mediaView.audio')" />
         </n-tabs>
       </div>
       <div class="gallery-grid">

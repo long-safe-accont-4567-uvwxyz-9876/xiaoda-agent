@@ -8,6 +8,7 @@ import {
 import { get, post, put, del, api } from '../api'
 import { useAgentsStore } from '../stores/agents'
 import { getWsClient } from '../api/ws'
+import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 
 const message = useMessage()
@@ -114,10 +115,10 @@ async function onModelChange(val: string | null) {
     switchingModel.value = true
     try {
       await api.setAgentModel(editing.value.name, provider, model_id)
-      message.success(`模型已切换为 ${provider} / ${model_id} ✓`)
+      message.success(t('agentsView.modelSwitched') + ` ${provider} / ${model_id} ✓`)
       await agentsStore.load()
     } catch (e: any) {
-      message.error(e.message || '切换模型失败')
+      message.error(e.message || t('agentsView.switchModelFailed'))
     } finally {
       switchingModel.value = false
     }
@@ -133,7 +134,7 @@ function pickWallpaper(e: Event) {
   const file = input.files?.[0]
   if (!file) return
   if (file.size > 8 * 1024 * 1024) {
-    message.error('图片不能超过 8MB')
+    message.error(t('agentsView.imgTooLarge'))
     input.value = ''
     return
   }
@@ -144,7 +145,7 @@ function pickWallpaper(e: Event) {
       const r = await post<any>(`/agents/${editing.value.name}/wallpaper`,
         { data_url: reader.result })
       editing.value.wallpaper = r.wallpaper
-      message.success('背景板已更新，切到该 Agent 即可看到 ✓')
+      message.success(t('agentsView.wallpaperUpdated'))
       await agentsStore.load()
     } catch (err: any) {
       message.error(err.message)
@@ -223,10 +224,10 @@ async function save() {
     }
     if (isCreate.value) {
       await post('/agents', body)
-      message.success(`Agent ${editing.value.display_name || editing.value.name} 已创建并即时生效 ✓`)
+      message.success(`Agent ${editing.value.display_name || editing.value.name} ` + t('agentsView.createdActive'))
     } else {
       await put(`/agents/${editing.value.name}`, body)
-      message.success('已保存，下一条消息即用新配置 ✓')
+      message.success(t('agentsView.saved'))
     }
     showEditor.value = false
     await agentsStore.load()
@@ -241,7 +242,7 @@ async function toggleEnabled(agent: any, value: boolean) {
   try {
     await post(`/agents/${agent.name}/${value ? 'enable' : 'disable'}`)
     agent.enabled = value
-    message.success(`${agent.display_name} 已${value ? '启用' : '禁用'} ✓`)
+    message.success(`${agent.display_name} ` + t(value ? 'agentsView.enabled' : 'agentsView.disabled'))
   } catch (e: any) {
     message.error(e.message)
   }
@@ -250,7 +251,7 @@ async function toggleEnabled(agent: any, value: boolean) {
 async function removeAgent(agent: any) {
   try {
     await del(`/agents/${agent.name}`, true)
-    message.success(`${agent.display_name} 已删除`)
+    message.success(`${agent.display_name} ` + t('agentsView.agentDeleted'))
     await agentsStore.load()
   } catch (e: any) {
     message.error(e.message)
@@ -288,8 +289,8 @@ async function applyPermissions() {
       { tools, mcp_servers: mcp })
     permissions.value = result
     permDirty.value = false
-    const count = Object.values<any>(result.tools).filter(t => t.enabled).length
-    message.success(`${editing.value.display_name} 现在拥有 ${count} 个工具 ✓ 即时生效`)
+    const count = Object.values<any>(result.tools).filter(x => x.enabled).length
+    message.success(`${editing.value.display_name} ` + t('agentsView.hasTools') + ` ${count} ` + t('agentsView.toolsUnit') + ' ✓ ' + t('agentsView.instantEffect'))
     await agentsStore.load()
   } catch (e: any) {
     message.error(e.message)
@@ -328,7 +329,7 @@ function onStickerFilePick(e: Event) {
   const file = input.files?.[0]
   if (!file) return
   if (file.size > 8 * 1024 * 1024) {
-    message.error('图片不能超过 8MB')
+    message.error(t('agentsView.imgTooLarge'))
     input.value = ''
     return
   }
@@ -337,13 +338,13 @@ function onStickerFilePick(e: Event) {
 
 async function uploadSticker() {
   if (!stickerFile.value || !stickerDesc.value.trim()) {
-    message.warning('请选择图片并填写描述')
+    message.warning(t('agentsView.stickerWarn'))
     return
   }
   stickerUploading.value = true
   try {
     await api.uploadSticker(editing.value.name, stickerFile.value, stickerDesc.value.trim(), stickerEmotion.value)
-    message.success('表情包已添加 ✓')
+    message.success(t('agentsView.stickerAdded'))
     stickerFile.value = null
     stickerDesc.value = ''
     if (stickerInput.value) stickerInput.value.value = ''
@@ -358,7 +359,7 @@ async function uploadSticker() {
 async function removeSticker(filename: string) {
   try {
     await api.deleteSticker(editing.value.name, filename)
-    message.success('已删除')
+    message.success(t('agentsView.stickerDeleted'))
     await loadStickers()
   } catch (e: any) {
     message.error(e.message)
@@ -369,8 +370,8 @@ async function removeSticker(filename: string) {
 <template>
   <div class="agents-view">
     <div class="view-header">
-      <h2>🧚 Agent 管理</h2>
-      <n-button type="primary" @click="openEditor(null)">＋ 新建子 Agent</n-button>
+      <h2>🧚 {{ t('agentsView.title') }}</h2>
+      <n-button type="primary" @click="openEditor(null)">＋ {{ t('agentsView.createSub') }}</n-button>
     </div>
 
     <div class="agent-grid">
@@ -390,23 +391,23 @@ async function removeSticker(filename: string) {
           </div>
           <div class="card-meta">
             <n-tag size="small" :bordered="false" type="success">{{ a.provider }}</n-tag>
-            <n-tag size="small" :bordered="false">{{ a.model || '默认' }}</n-tag>
+            <n-tag size="small" :bordered="false">{{ a.model || t('agentsView.default') }}</n-tag>
             <n-tag size="small" :bordered="false" :type="a.builtin || a.is_main ? 'warning' : 'info'">
-              {{ a.is_main ? '主体' : a.builtin ? '内置' : '自建' }}
+              {{ a.is_main ? t('agentsView.main') : a.builtin ? t('agentsView.builtin') : t('agentsView.custom') }}
             </n-tag>
-            <n-tag v-if="a.degraded" size="small" :bordered="false" type="warning">降级模式</n-tag>
+            <n-tag v-if="a.degraded" size="small" :bordered="false" type="warning">{{ t('agentsView.degraded') }}</n-tag>
           </div>
           <div class="card-stats">
-            🛠 {{ a.tool_count ?? '—' }} 个工具
-            <span v-if="a.mcp_servers?.length"> · 🔌 {{ a.mcp_servers.length }} 个 MCP</span>
+            🛠 {{ a.tool_count ?? '—' }} {{ t('agentsView.toolsUnit') }}
+            <span v-if="a.mcp_servers?.length"> · 🔌 {{ a.mcp_servers.length }} {{ t('agentsView.mcpUnit') }}</span>
           </div>
-          <div class="card-desc">{{ a.route_description || '（无路由描述）' }}</div>
+          <div class="card-desc">{{ a.route_description || t('agentsView.noRouteDesc') }}</div>
           <div class="card-actions" v-if="!a.builtin && !a.is_main">
             <n-popconfirm @positive-click="removeAgent(a)">
               <template #trigger>
-                <n-button size="tiny" type="error" quaternary @click.stop>删除</n-button>
+                <n-button size="tiny" type="error" quaternary @click.stop>{{ t('agentsView.delete') }}</n-button>
               </template>
-              确认删除 {{ a.display_name }}？人格与配置文件将一并移除。
+              {{ t('agentsView.deleteConfirm') }} {{ a.display_name }}？
             </n-popconfirm>
           </div>
         </div>
@@ -417,21 +418,21 @@ async function removeSticker(filename: string) {
              :title="isCreate ? '新建子 Agent' : `编辑 · ${editing.display_name || editing.name}`"
              style="width: min(860px, 94vw); max-height: 88vh; overflow-y: auto;">
       <n-tabs type="line" animated>
-        <n-tab-pane name="base" tab="基本配置">
+        <n-tab-pane name="base" :tab="t('agentsView.basicConfig')">
           <n-form label-placement="left" label-width="130">
-            <n-form-item label="标识名 name" v-if="isCreate">
-              <n-input v-model:value="editing.name" placeholder="小写字母/数字/下划线，如 hutao" />
+            <n-form-item :label="t('agentsView.name')" v-if="isCreate">
+              <n-input v-model:value="editing.name" :placeholder="t('agentsView.namePlaceholder')" />
             </n-form-item>
-            <n-form-item label="显示名">
+            <n-form-item :label="t('agentsView.displayName')">
               <n-input v-model:value="editing.display_name" placeholder="如 胡桃" />
             </n-form-item>
-            <n-form-item label="模型" v-if="!isMain">
+            <n-form-item :label="t('agentsView.model')" v-if="!isMain">
               <n-select v-model:value="selectedModel" :options="modelOptions"
                         :loading="switchingModel" filterable tag
                         placeholder="选择模型（按 provider 分组，格式：provider|model_id）"
                         @update:value="(v: string | null) => onModelChange(v)" />
             </n-form-item>
-            <n-form-item label="高级配置" v-if="!isMain">
+            <n-form-item :label="t('agentsView.advanced')" v-if="!isMain">
               <n-collapse :default-expanded-names="[]">
                 <n-collapse-item title="高级配置（手动覆盖 base_url / api_key_env）" name="advanced">
                   <n-form label-placement="left" label-width="130" style="margin-top: 4px">
@@ -449,7 +450,7 @@ async function removeSticker(filename: string) {
                 </n-collapse-item>
               </n-collapse>
             </n-form-item>
-            <n-form-item label="路由描述" v-if="!isMain">
+            <n-form-item :label="t('agentsView.routeDesc')" v-if="!isMain">
               <n-input v-model:value="editing.route_description" type="textarea" :rows="2"
                        placeholder="自然语言描述何时召唤该 Agent（主体据此自动委托）" />
             </n-form-item>
@@ -462,22 +463,22 @@ async function removeSticker(filename: string) {
             <n-form-item label="effort" v-if="!isMain">
               <n-select v-model:value="editing.effort" :options="effortOptions" />
             </n-form-item>
-            <n-form-item label="权限模式" v-if="!isMain">
+            <n-form-item :label="t('agentsView.permMode')" v-if="!isMain">
               <n-select v-model:value="editing.permission_mode" :options="permModeOptions" />
             </n-form-item>
-            <n-form-item label="记忆隔离" v-if="!isMain">
+            <n-form-item :label="t('agentsView.memoryScope')" v-if="!isMain">
               <n-select v-model:value="editing.memory_scope" :options="memScopeOptions" />
             </n-form-item>
             <n-form-item label="voice_ref" v-if="!isMain">
               <n-input v-model:value="editing.voice_ref" placeholder="TTS 音色（nahida / keli），自动朗读时使用" />
             </n-form-item>
-            <n-form-item label="背景板">
+            <n-form-item :label="t('agentsView.backdrop')">
               <div class="wallpaper-field">
                 <div class="wallpaper-row">
                   <n-input v-model:value="editing.wallpaper"
                            placeholder="图片 URL（/assets/... 或 https://...），留空用默认" />
                   <n-button v-if="!isCreate" :loading="uploadingWp" @click="wpInput?.click()">
-                    上传图片
+                    {{ t('agentsView.uploadImage') }}
                   </n-button>
                   <input ref="wpInput" type="file" accept="image/png,image/jpeg,image/webp"
                          style="display: none" @change="pickWallpaper" />
@@ -490,19 +491,19 @@ async function removeSticker(filename: string) {
           </n-form>
         </n-tab-pane>
 
-        <n-tab-pane name="perm" tab="权限矩阵" v-if="!isCreate && !permissions.is_main">
+        <n-tab-pane name="perm" :tab="t('agentsView.permissions')" v-if="!isCreate && !permissions.is_main">
           <div class="perm-toolbar">
             <span class="perm-hint">改动暂存，点「应用」一次写入，写完即生效（含 QQ 通道）</span>
             <n-button size="small" type="primary" :disabled="!permDirty" @click="applyPermissions">
-              应用权限变更
+              {{ t('agentsView.applyPerms') }}
             </n-button>
           </div>
           <div v-for="[cat, group] in toolGroups" :key="cat" class="perm-group">
             <div class="perm-group-head">
               <span>{{ cat }}</span>
               <span class="group-ops">
-                <n-button size="tiny" quaternary @click="groupSetAll(group, true)">全开</n-button>
-                <n-button size="tiny" quaternary @click="groupSetAll(group, false)">全关</n-button>
+                <n-button size="tiny" quaternary @click="groupSetAll(group, true)">{{ t('agentsView.allOn') }}</n-button>
+                <n-button size="tiny" quaternary @click="groupSetAll(group, false)">{{ t('agentsView.allOff') }}</n-button>
               </span>
             </div>
             <div class="perm-rows">
@@ -526,12 +527,12 @@ async function removeSticker(filename: string) {
           </div>
         </n-tab-pane>
 
-        <n-tab-pane name="personality" tab="人格设定">
+        <n-tab-pane name="personality" :tab="t('agentsView.personality')">
           <n-input v-model:value="personality" type="textarea" :rows="14"
                    placeholder="Markdown 人格全文（保存时写入 *_personality.md 并热重载）" />
         </n-tab-pane>
 
-        <n-tab-pane name="test" tab="测试" v-if="!isCreate">
+        <n-tab-pane name="test" :tab="t('agentsView.test')" v-if="!isCreate">
           <n-button :loading="testing" @click="runTest">对 {{ editing.display_name }} 发送测试语句</n-button>
           <div v-if="testResult" class="test-result glass-panel"
                :class="{ failed: !testResult.ok }">
@@ -540,16 +541,16 @@ async function removeSticker(filename: string) {
           </div>
         </n-tab-pane>
 
-        <n-tab-pane name="stickers" tab="表情包" v-if="!isCreate">
+        <n-tab-pane name="stickers" :tab="t('agentsView.stickers')" v-if="!isCreate">
           <div class="sticker-section">
             <!-- 上传区域 -->
             <div class="sticker-upload glass-panel">
-              <div class="sticker-upload-title">添加表情包</div>
+              <div class="sticker-upload-title">{{ t('agentsView.addSticker') }}</div>
               <div class="sticker-upload-row">
                 <input ref="stickerInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp"
                        style="display: none" @change="onStickerFilePick" />
                 <n-button size="small" @click="stickerInput?.click()">
-                  {{ stickerFile ? stickerFile.name : '选择图片' }}
+                  {{ stickerFile ? stickerFile.name : t('agentsView.selectImage') }}
                 </n-button>
                 <n-input v-model:value="stickerDesc" size="small" placeholder="表情包描述（如：开心大笑）"
                          style="flex: 1; min-width: 120px;" />
@@ -557,7 +558,7 @@ async function removeSticker(filename: string) {
                           :options="(stickerEmotions.length ? stickerEmotions : ['happy','sad','angry','curious','shy','thinking','neutral','greeting','fear']).map(e => ({ label: e, value: e }))" />
                 <n-button type="primary" size="small" :loading="stickerUploading" :disabled="!stickerFile || !stickerDesc.trim()"
                           @click="uploadSticker">
-                  上传
+                  {{ t('agentsView.upload') }}
                 </n-button>
               </div>
               <div v-if="stickerFile" class="sticker-upload-preview">
@@ -578,13 +579,13 @@ async function removeSticker(filename: string) {
                   </div>
                   <n-popconfirm @positive-click="removeSticker(s.name)">
                     <template #trigger>
-                      <n-button size="tiny" type="error" quaternary class="sticker-del">删除</n-button>
+                      <n-button size="tiny" type="error" quaternary class="sticker-del">{{ t('agentsView.delete') }}</n-button>
                     </template>
                     确认删除「{{ s.description }}」？
                   </n-popconfirm>
                 </div>
               </div>
-              <n-empty v-else description="暂无表情包" style="padding: 32px 0" />
+              <n-empty v-else :description="t('agentsView.stickerEmpty')" style="padding: 32px 0" />
             </n-spin>
           </div>
         </n-tab-pane>
@@ -592,9 +593,9 @@ async function removeSticker(filename: string) {
 
       <template #footer>
         <div class="modal-footer">
-          <n-button @click="showEditor = false">取消</n-button>
+          <n-button @click="showEditor = false">{{ t('cancel') }}</n-button>
           <n-button type="primary" :loading="saving" @click="save">
-            {{ isCreate ? '创建（即时生效）' : '保存（即时生效）' }}
+            {{ isCreate ? t('agentsView.create') : t('save') }}
           </n-button>
         </div>
       </template>

@@ -255,11 +255,28 @@ async def restart_service(request: Request) -> Any:
     await core.db.commit()
     import asyncio
     import sys
+    import os
+
+    is_windows = sys.platform == 'win32'
 
     async def _exit() -> None:
         await asyncio.sleep(1.0)
-        logger.warning("webui.restart.exiting (systemd 将自动拉起)")
-        sys.exit(0)
+        if is_windows:
+            # Windows: 创建延迟启动脚本，等旧进程退出后再启动
+            import tempfile, subprocess
+            python = sys.executable
+            script = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else 'agent.py'
+            args = sys.argv[1:] if len(sys.argv) > 1 else ['--web', '--host', '0.0.0.0', '--port', '8080']
+            bat = tempfile.NamedTemporaryFile(suffix='.bat', delete=False, mode='w')
+            arg_str = ' '.join(args)
+            bat.write(f'@echo off\ntimeout /t 2 /nobreak >nul\n"{python}" "{script}" {arg_str}\n')
+            bat.close()
+            subprocess.Popen(['cmd', '/c', bat.name], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+            logger.warning("webui.restart.exiting (Windows auto-restart)")
+        else:
+            # Linux: 依赖 systemd 自动拉起
+            logger.warning("webui.restart.exiting (systemd 将自动拉起)")
+        os._exit(0)
 
     asyncio.create_task(_exit())
-    return Envelope(data={"restarting": True})
+    return Envelope(data={"restarting": True, "platform": "windows" if is_windows else "linux"})

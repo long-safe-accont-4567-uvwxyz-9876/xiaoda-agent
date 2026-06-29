@@ -4,6 +4,7 @@ import { NButton, useMessage } from 'naive-ui'
 import { get, post } from '../api'
 import { getWsClient } from '../api/ws'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import { t } from '../i18n'
 
 const message = useMessage()
 const ws = getWsClient()
@@ -96,13 +97,13 @@ const stateIcon: Record<string, string> = {
 <template>
   <div class="health-view">
     <div class="view-header">
-      <h2>🩺 测试中心</h2>
+      <h2>🩺 {{ t('healthView.title') }}</h2>
       <div class="header-right">
         <span v-if="lastReport?.run_at" class="last-report">
-          上次全检：{{ new Date(lastReport.run_at * 1000).toLocaleString('zh-CN') }}
-          · {{ lastReport.passed }}/{{ lastReport.total }} 通过
+          {{ t('healthView.lastCheck') }}：{{ new Date(lastReport.run_at * 1000).toLocaleString('zh-CN') }}
+          · {{ lastReport.passed }}/{{ lastReport.total }} {{ t('healthView.pass') }}
         </span>
-        <n-button type="primary" :loading="runningAll" @click="runAll">🩺 一键全检</n-button>
+        <n-button type="primary" :loading="runningAll" @click="runAll">🩺 {{ t('healthView.fullCheck') }}</n-button>
       </div>
     </div>
 
@@ -115,7 +116,7 @@ const stateIcon: Record<string, string> = {
               <span class="probe-label">{{ p.label }}</span>
             </div>
             <div class="probe-detail mono">{{ p.detail }}</div>
-            <n-button size="tiny" :loading="p.state === 'running'" @click="runOne(p)">单测</n-button>
+            <n-button size="tiny" :loading="p.state === 'running'" @click="runOne(p)">{{ t('healthView.unitTest') }}</n-button>
           </div>
           <div class="card-face back" v-else>
             <div class="probe-head">
@@ -128,7 +129,7 @@ const stateIcon: Record<string, string> = {
               <span class="info-text" :class="{ error: p.state === 'fail' }">{{ p.info }}</span>
             </div>
             <audio v-if="p.audioUrl" :src="p.audioUrl" controls class="probe-audio"></audio>
-            <n-button size="tiny" quaternary @click="runOne(p)">重测</n-button>
+            <n-button size="tiny" quaternary @click="runOne(p)">{{ t('healthView.retest') }}</n-button>
           </div>
         </div>
       </Tilt3D>

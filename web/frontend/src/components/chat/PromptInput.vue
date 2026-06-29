@@ -2,6 +2,7 @@
 import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useMessage } from 'naive-ui'
 import { api } from '../../api'
+import { t } from '../../i18n'
 
 const props = withDefaults(defineProps<{
   modelValue: string
@@ -10,7 +11,7 @@ const props = withDefaults(defineProps<{
   placeholder?: string
 }>(), {
   disabled: false,
-  placeholder: '输入消息，/ 唤起命令面板…',
+  placeholder: t('promptInput.inputPlaceholder'),
 })
 
 const emit = defineEmits<{
@@ -41,8 +42,8 @@ let recordingTimer: ReturnType<typeof setInterval> | null = null
 const hasContent = computed(() => props.modelValue.trim().length > 0)
 
 const currentPlaceholder = computed(() => {
-  if (showSearch.value) return '搜索互联网…'
-  if (showThink.value) return '深度思考中…'
+  if (showSearch.value) return t('promptInput.searchWeb') + '...'
+  if (showThink.value) return t('promptInput.thinkingDeep') + '...'
   return props.placeholder
 })
 
@@ -199,9 +200,9 @@ async function startRecording() {
         // 识别失败显示提示，不再静默吞错
         const win = window as any
         if (win.$message) {
-          win.$message.error('语音识别失败')
+          win.$message.error(t('promptInput.voiceFailed'))
         } else {
-          message.error('语音识别失败')
+          message.error(t('promptInput.voiceFailed'))
         }
       } finally {
         isTranscribing.value = false
@@ -265,9 +266,9 @@ watch(() => props.modelValue, () => {
     <transition name="preview-slide">
       <div v-if="uploadedImage || imagePreviewUrl" class="image-preview-area">
         <div class="image-thumb" @click="openLightbox">
-          <img :src="imagePreviewUrl || uploadedImage?.url" alt="预览" />
+          <img :src="imagePreviewUrl || uploadedImage?.url" :alt="t('chatView.preview')" />
         </div>
-        <button class="image-remove" @click="removeImage" title="移除图片">✕</button>
+        <button class="image-remove" @click="removeImage" :title="t('promptInput.removeImage')">✕</button>
       </div>
     </transition>
 
@@ -297,7 +298,7 @@ watch(() => props.modelValue, () => {
     <div class="prompt-toolbar">
       <div class="toolbar-left">
         <!-- 附件上传 -->
-        <button class="tool-btn" title="上传图片" @click="triggerFileInput" :disabled="disabled">
+        <button class="tool-btn" :title="t('promptInput.uploadImage')" @click="triggerFileInput" :disabled="disabled">
           📎
         </button>
         <input
@@ -315,7 +316,7 @@ watch(() => props.modelValue, () => {
         <button
           class="tool-btn"
           :class="{ active: showSearch, 'search-active': showSearch }"
-          title="搜索互联网"
+          :title="t('promptInput.searchWeb')"
           @click="toggleSearch"
           :disabled="disabled"
         >
@@ -332,7 +333,7 @@ watch(() => props.modelValue, () => {
         <button
           class="tool-btn"
           :class="{ active: showThink, 'think-active': showThink }"
-          title="深度思考"
+          :title="t('promptInput.deepThink')"
           @click="toggleThink"
           :disabled="disabled"
         >
@@ -349,7 +350,7 @@ watch(() => props.modelValue, () => {
           v-if="!hasContent && !isLoading"
           class="tool-btn ghost"
           :class="{ 'is-transcribing': isTranscribing }"
-          title="语音输入"
+          :title="t('promptInput.voiceInput')"
           @click="toggleRecording"
           :disabled="disabled || isTranscribing"
           :loading="isTranscribing"
@@ -364,7 +365,7 @@ watch(() => props.modelValue, () => {
           class="send-btn dendro-btn"
           @click="handleSend"
           :disabled="disabled"
-          title="发送"
+          :title="t('promptInput.send')"
         >
           ↑
         </button>
@@ -374,7 +375,7 @@ watch(() => props.modelValue, () => {
           v-if="isLoading"
           class="stop-btn"
           @click="emit('abort')"
-          title="中断生成"
+          :title="t('promptInput.abort')"
         >
           ⏹
         </button>
@@ -385,7 +386,7 @@ watch(() => props.modelValue, () => {
     <teleport to="body">
       <transition name="lightbox-fade">
         <div v-if="showLightbox" class="prompt-lightbox" @click="closeLightbox">
-          <img :src="imagePreviewUrl || uploadedImage?.url" alt="预览" />
+          <img :src="imagePreviewUrl || uploadedImage?.url" :alt="t('chatView.preview')" />
         </div>
       </transition>
     </teleport>

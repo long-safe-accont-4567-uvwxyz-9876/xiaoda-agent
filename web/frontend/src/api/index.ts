@@ -197,7 +197,8 @@ export async function getSetupVersion(): Promise<{ version: string }> {
 }
 
 export function exportSessionUrl(sessionId: string): string {
-  return `${BASE}/sessions/${sessionId}/export`
+  const token = localStorage.getItem('token') || ''
+  return `${BASE}/sessions/${sessionId}/export?token=${encodeURIComponent(token)}`
 }
 
 // ── 记忆管理 ──

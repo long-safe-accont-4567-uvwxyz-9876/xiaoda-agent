@@ -6,6 +6,7 @@ import {
 } from 'naive-ui'
 import draggable from 'vuedraggable'
 import { get, post, put, del } from '../api'
+import { t } from '../i18n'
 import * as echarts from 'echarts/core'
 import { BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
@@ -124,14 +125,14 @@ async function saveProvider() {
   try {
     if (isCreateProvider.value) {
       await post('/models/providers', providerForm.value)
-      message.success('provider 已创建并注册 ✓')
+      message.success(t('modelsView.providerCreated'))
     } else {
       await put(`/models/providers/${providerForm.value.id}`, providerForm.value)
       if (providerForm.value.api_key) {
         await post(`/models/providers/${providerForm.value.id}/key`,
           { api_key: providerForm.value.api_key })
       }
-      message.success('provider 已更新 ✓')
+      message.success(t('modelsView.providerUpdated'))
     }
     showProviderForm.value = false
     await loadAll()
@@ -143,7 +144,7 @@ async function saveProvider() {
 async function removeProvider(id: string) {
   try {
     await del(`/models/providers/${id}`, true)
-    message.success('已删除')
+    message.success(t('modelsView.deleted'))
     await loadAll()
   } catch (e: any) {
     message.error(e.message)
@@ -173,7 +174,7 @@ async function saveRoute(task: string) {
       model: r.model, provider: r.provider,
       max_tokens: r.max_tokens, thinking: r.thinking, timeout: r.timeout,
     })
-    message.success(`路由 ${task} 已更新，即时生效 ✓`)
+    message.success(t('modelsView.routeLabel') + ` ${task} ` + t('modelsView.updatedActive'))
   } catch (e: any) {
     message.error(e.message)
     await loadAll()
@@ -195,7 +196,7 @@ async function onDragEnd() {
   try {
     const order = customProviders.value.map(p => p.id)
     await post('/models/providers/reorder', { order })
-    message.success('Provider 顺序已更新 ✓')
+    message.success(t('modelsView.providerOrderUpdated'))
   } catch (e: any) {
     message.error(e.message)
     await loadAll()
@@ -208,12 +209,12 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
 <template>
   <div class="models-view">
     <div class="view-header">
-      <h2>🧠 模型与凭证</h2>
-      <n-button type="primary" @click="openProviderForm(null)">＋ 自定义 Provider</n-button>
+      <h2>🧠 {{ t('modelsView.title') }}</h2>
+      <n-button type="primary" @click="openProviderForm(null)">＋ {{ t('modelsView.customProvider') }}</n-button>
     </div>
 
     <section class="glass-panel section">
-      <h3>Provider 列表</h3>
+      <h3>{{ t('modelsView.providerList') }}</h3>
       <div class="provider-list">
         <div v-for="p in builtinProviders" :key="p.id" class="provider-row">
           <div class="provider-info">
@@ -221,16 +222,16 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
             <n-tag size="small" :type="p.format === 'anthropic' ? 'warning' : 'info'" :bordered="false">
               {{ p.format === 'anthropic' ? 'Anthropic 兼容' : 'OpenAI 兼容' }}
             </n-tag>
-            <n-tag v-if="p.builtin" size="small" :bordered="false">内置</n-tag>
+            <n-tag v-if="p.builtin" size="small" :bordered="false">{{ t('modelsView.builtin') }}</n-tag>
             <span class="p-url">{{ p.base_url }}</span>
-            <span class="p-key">{{ p.key_masked || '（未配置 Key）' }}</span>
+            <span class="p-key">{{ p.key_masked || t('modelsView.noKey') }}</span>
           </div>
           <div class="provider-ops">
             <span v-if="testResults[p.id]" class="test-badge"
                   :class="{ ok: testResults[p.id].ok }">
               {{ testResults[p.id].ok ? `✓ ${testResults[p.id].latency_ms}ms` : `✗ ${testResults[p.id].error?.slice(0, 60)}` }}
             </span>
-            <n-button size="tiny" :loading="testingId === p.id" @click="testProvider(p.id)">测试</n-button>
+            <n-button size="tiny" :loading="testingId === p.id" @click="testProvider(p.id)">{{ t('modelsView.test') }}</n-button>
           </div>
         </div>
         <draggable
@@ -248,20 +249,20 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
                 <n-tag size="small" :type="p.format === 'anthropic' ? 'warning' : 'info'" :bordered="false">
                   {{ p.format === 'anthropic' ? 'Anthropic 兼容' : 'OpenAI 兼容' }}
                 </n-tag>
-                <n-tag v-if="p.builtin" size="small" :bordered="false">内置</n-tag>
+                <n-tag v-if="p.builtin" size="small" :bordered="false">{{ t('modelsView.builtin') }}</n-tag>
                 <span class="p-url">{{ p.base_url }}</span>
-                <span class="p-key">{{ p.key_masked || '（未配置 Key）' }}</span>
+                <span class="p-key">{{ p.key_masked || t('modelsView.noKey') }}</span>
               </div>
               <div class="provider-ops">
                 <span v-if="testResults[p.id]" class="test-badge"
                       :class="{ ok: testResults[p.id].ok }">
                   {{ testResults[p.id].ok ? `✓ ${testResults[p.id].latency_ms}ms` : `✗ ${testResults[p.id].error?.slice(0, 60)}` }}
                 </span>
-                <n-button size="tiny" :loading="testingId === p.id" @click="testProvider(p.id)">测试</n-button>
-                <n-button v-if="!p.builtin" size="tiny" @click="openProviderForm(p)">编辑</n-button>
+                <n-button size="tiny" :loading="testingId === p.id" @click="testProvider(p.id)">{{ t('modelsView.test') }}</n-button>
+                <n-button v-if="!p.builtin" size="tiny" @click="openProviderForm(p)">{{ t('modelsView.edit') }}</n-button>
                 <n-popconfirm v-if="!p.builtin" @positive-click="removeProvider(p.id)">
-                  <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
-                  确认删除 provider {{ p.id }}？
+                  <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('modelsView.delete') }}</n-button></template>
+                  {{ t('modelsView.confirmDelete') }} provider {{ p.id }}？
                 </n-popconfirm>
               </div>
             </div>
@@ -271,7 +272,7 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
     </section>
 
     <section class="glass-panel section">
-      <h3>任务路由表 <span class="hint">改完即生效，无须重启</span></h3>
+      <h3>{{ t('modelsView.taskRouting') }} <span class="hint">改完即生效，无须重启</span></h3>
       <table class="route-table">
         <thead>
           <tr><th>任务</th><th>model</th><th>max_tokens</th><th>thinking</th><th></th></tr>
@@ -292,8 +293,8 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
             <td><n-input-number v-model:value="r.max_tokens" size="small" :min="64" :max="32768" :show-button="false" style="width:90px" /></td>
             <td><n-switch v-model:value="r.thinking" size="small" /></td>
             <td class="route-ops">
-              <n-button size="tiny" type="primary" secondary @click="saveRoute(task as string)">保存</n-button>
-              <n-button size="tiny" :loading="testingId === `route:${task}`" @click="testRoute(task as string)">测试</n-button>
+              <n-button size="tiny" type="primary" secondary @click="saveRoute(task as string)">{{ t('modelsView.save') }}</n-button>
+              <n-button size="tiny" :loading="testingId === `route:${task}`" @click="testRoute(task as string)">{{ t('modelsView.test') }}</n-button>
               <span v-if="testResults[`route:${task}`]" class="test-badge"
                     :class="{ ok: testResults[`route:${task}`].ok }">
                 {{ testResults[`route:${task}`].ok ? '✓' : '✗' }}
@@ -303,7 +304,7 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
         </tbody>
       </table>
       <div class="fallback-chain">
-        降级链：<template v-for="(to, from, i) in fallback" :key="from">
+        {{ t('modelsView.degradeChain') }}<template v-for="(to, from, i) in fallback" :key="from">
           <span v-if="i > 0" class="chain-sep"> ｜ </span>
           <span class="mono">{{ from }} → {{ to }}</span>
         </template>
@@ -311,7 +312,7 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
     </section>
 
     <section class="glass-panel section">
-      <h3>凭证池状态</h3>
+      <h3>{{ t('modelsView.credPoolStatus') }}</h3>
       <table class="route-table">
         <thead><tr><th>provider</th><th>key</th><th>状态</th><th>使用次数</th><th>最近错误</th></tr></thead>
         <tbody>
@@ -322,13 +323,13 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
             <td>{{ c.use_count }}</td>
             <td class="error-cell">{{ c.last_error || '—' }}</td>
           </tr>
-          <tr v-if="!credentials.length"><td colspan="5" class="empty-cell">（凭证池为空）</td></tr>
+          <tr v-if="!credentials.length"><td colspan="5" class="empty-cell">{{ t('modelsView.credPoolEmpty') }}</td></tr>
         </tbody>
       </table>
     </section>
 
     <section class="glass-panel section">
-      <h3>近 7 天用量
+      <h3>{{ t('modelsView.usage7days') }}
         <span class="hint" v-if="usage.total">
           共 {{ usage.total.calls || 0 }} 次调用 · {{ ((usage.total.tokens || 0) / 1000).toFixed(1) }}k tokens
           · ${{ (usage.total.cost || 0).toFixed(4) }}
@@ -366,8 +367,8 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
       </n-form>
       <template #footer>
         <div style="display:flex; justify-content:flex-end; gap:10px">
-          <n-button @click="showProviderForm = false">取消</n-button>
-          <n-button type="primary" @click="saveProvider">保存并注册</n-button>
+          <n-button @click="showProviderForm = false">{{ t('cancel') }}</n-button>
+          <n-button type="primary" @click="saveProvider">{{ t('modelsView.saveRegister') }}</n-button>
         </div>
       </template>
     </n-modal>

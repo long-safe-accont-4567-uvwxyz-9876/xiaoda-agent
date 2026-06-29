@@ -11,6 +11,7 @@ import SlashPalette from '../components/chat/SlashPalette.vue'
 import PromptInput from '../components/chat/PromptInput.vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import ModelSelector from '../components/chat/ModelSelector.vue'
+import { t } from '../i18n'
 
 const chat = useChatStore()
 const ui = useUiStore()
@@ -77,7 +78,7 @@ async function speak(msg: { content: string; audioUrl?: string }) {
     const r = await api.tts(msg.content.slice(0, 300))
     play(r.audio_url)
   } catch (e: any) {
-    message.error(e.message || 'TTS 失败')
+    message.error(e.message || t('chatView.ttsFailed'))
   }
 }
 
@@ -148,19 +149,19 @@ async function removeSession(sid: string) {
   try {
     await api.deleteSession(sid)
     sessions.value = sessions.value.filter(s => s.session_id !== sid)
-    message.success('会话已删除')
+    message.success(t('chatView.session') + ' ' + t('deleted'))
   } catch (e: any) { message.error(e.message) }
 }
 
 async function startNew() {
   await chat.newSession()
   showSessions.value = false
-  message.success('已开启新会话')
+  message.success(t('chatView.newSessionStarted'))
 }
 
 function copyText(text: string) {
   navigator.clipboard.writeText(text)
-  message.success('已复制')
+  message.success(t('chatView.copied'))
 }
 
 function resend(msg: { content: string }) {
@@ -170,7 +171,7 @@ function resend(msg: { content: string }) {
 
 function clearAll() {
   chat.clearMessages()
-  message.success('对话已清空（历史记录仍可在会话抽屉找回）')
+  message.success(t('chatView.cleared'))
 }
 
 function onModelChange(provider: string, modelId: string) {
@@ -191,16 +192,16 @@ const emotionColors: Record<string, string> = {
   <div class="chat-view">
     <div class="chat-toolbar">
       <n-button size="tiny" quaternary @click="openSessions">
-        <template #icon><SumeruIcon name="sessions" :size="15" /></template>会话
+        <template #icon><SumeruIcon name="sessions" :size="15" /></template>{{ t('chatView.session') }}
       </n-button>
       <n-button size="tiny" quaternary @click="startNew">
-        <template #icon><SumeruIcon name="sprout" :size="15" /></template>新对话
+        <template #icon><SumeruIcon name="sprout" :size="15" /></template>{{ t('chatView.newChat') }}
       </n-button>
       <n-button size="tiny" quaternary @click="clearAll">
-        <template #icon><SumeruIcon name="trash" :size="15" /></template>清空
+        <template #icon><SumeruIcon name="trash" :size="15" /></template>{{ t('chatView.clear') }}
       </n-button>
       <a v-if="chat.sessionId" class="export-link"
-         :href="exportSessionUrl(chat.sessionId)" target="_blank">⬇ 导出</a>
+         :href="exportSessionUrl(chat.sessionId)" target="_blank">⬇ {{ t('chatView.export') }}</a>
       <ModelSelector style="margin-left: auto" @change="onModelChange" />
       <span class="session-label">{{ chat.sessionId }}</span>
     </div>
@@ -208,7 +209,7 @@ const emotionColors: Record<string, string> = {
     <div class="messages-area" ref="messagesEl">
       <div v-if="chat.messages.length === 0" class="empty-state">
         <div class="empty-icon">🌿</div>
-        <p>这里还没有长出叶子哦～说点什么吧</p>
+        <p>{{ t('chatView.emptyPlaceholder') }}</p>
       </div>
 
       <transition-group name="msg-fade">
@@ -227,37 +228,37 @@ const emotionColors: Record<string, string> = {
           <div v-else class="message-content plain">
             {{ msg.content }}
             <img v-if="msg.imageUrl" :src="msg.imageUrl" class="user-upload-img"
-                 loading="lazy" title="点击放大" @click="lightboxUrl = msg.imageUrl!" />
+                 loading="lazy" :title="t('chatView.zoom')" @click="lightboxUrl = msg.imageUrl!" />
           </div>
           <span v-if="msg.streaming && !msg.content" class="cursor-blink">▌</span>
 
           <!-- 生成产物区（工具产出的图/视频/语音，与表情包分离） -->
           <div v-if="msg.imageUrls?.length || msg.videoUrl || msg.audioUrl" class="artifact-block">
-            <span class="artifact-label">🎨 生成产物</span>
+            <span class="artifact-label">🎨 {{ t('chatView.artifacts') }}</span>
             <div v-if="msg.imageUrls?.length" class="media-grid">
               <img v-for="url in msg.imageUrls" :key="url" :src="url" class="media-image"
-                   loading="lazy" title="点击放大" @click="lightboxUrl = url" />
+                   loading="lazy" :title="t('chatView.zoom')" @click="lightboxUrl = url" />
             </div>
             <video v-if="msg.videoUrl" :src="msg.videoUrl" controls class="media-video"></video>
             <audio v-if="msg.audioUrl" :src="msg.audioUrl" controls class="media-audio"></audio>
           </div>
           <!-- 表情包：贴在气泡尾部，不与产物混淆 -->
           <img v-if="msg.stickerUrl" :src="msg.stickerUrl" class="sticker-img"
-               title="点击放大" @click="lightboxUrl = msg.stickerUrl!" />
+               :title="t('chatView.zoom')" @click="lightboxUrl = msg.stickerUrl!" />
 
           <div class="bubble-footer" v-if="!msg.streaming && msg.content && msg.role !== 'system'">
             <span class="msg-time">{{ fmtTime(msg.timestamp) }}</span>
             <template v-if="msg.role === 'assistant'">
               <button class="footer-btn" :class="{ playing: playingUrl && playingUrl === msg.audioUrl }"
-                      title="朗读" @click="speak(msg)"><SumeruIcon name="speak" :size="14" /></button>
-              <button class="footer-btn" title="复制" @click="copyText(msg.content)"><SumeruIcon name="copy" :size="14" /></button>
-              <button class="footer-btn" title="重新生成" @click="chat.retryLast()"><SumeruIcon name="retry" :size="14" /></button>
+                      :title="t('chatView.readAloud')" @click="speak(msg)"><SumeruIcon name="speak" :size="14" /></button>
+              <button class="footer-btn" :title="t('chatView.copy')" @click="copyText(msg.content)"><SumeruIcon name="copy" :size="14" /></button>
+              <button class="footer-btn" :title="t('chatView.regenerate')" @click="chat.retryLast()"><SumeruIcon name="retry" :size="14" /></button>
             </template>
             <template v-else>
-              <button class="footer-btn" title="复制" @click="copyText(msg.content)"><SumeruIcon name="copy" :size="14" /></button>
-              <button class="footer-btn" title="重新发送" @click="resend(msg)"><SumeruIcon name="retry" :size="14" /></button>
+              <button class="footer-btn" :title="t('chatView.copy')" @click="copyText(msg.content)"><SumeruIcon name="copy" :size="14" /></button>
+              <button class="footer-btn" :title="t('chatView.resend')" @click="resend(msg)"><SumeruIcon name="retry" :size="14" /></button>
             </template>
-            <button class="footer-btn" title="撤回（仅从界面移除）"
+            <button class="footer-btn" :title="t('chatView.withdraw')"
                     @click="chat.deleteMessage(msg.id)"><SumeruIcon name="trash" :size="14" /></button>
           </div>
         </div>
@@ -269,7 +270,7 @@ const emotionColors: Record<string, string> = {
       <transition name="lightbox-fade">
         <div v-if="lightboxUrl" class="lightbox" @click="lightboxUrl = ''"
              @keydown.esc="lightboxUrl = ''" tabindex="-1">
-          <img :src="lightboxUrl" alt="预览" />
+          <img :src="lightboxUrl" :alt="t('chatView.preview')" />
         </div>
       </transition>
     </teleport>
@@ -280,14 +281,14 @@ const emotionColors: Record<string, string> = {
       <PromptInput
         v-model="inputText"
         :is-loading="chat.isProcessing"
-        placeholder="输入消息，/ 唤起命令面板…"
+        :placeholder="t('chatView.inputPlaceholder')"
         @send="handlePromptSend"
         @abort="chat.abort()"
       />
     </div>
 
     <n-drawer v-model:show="showSessions" :width="340" placement="left">
-      <n-drawer-content title="📂 会话历史" closable>
+      <n-drawer-content :title="'📂 ' + t('chatView.history')" closable>
         <div class="session-list">
           <div v-for="s in sessions" :key="s.session_id" class="session-item"
                :class="{ active: s.session_id === chat.sessionId }"
@@ -298,18 +299,18 @@ const emotionColors: Record<string, string> = {
               {{ s.title || s.session_id }}
             </div>
             <div class="session-meta">
-              <span>{{ s.message_count }} 条 · {{ new Date(s.updated_at * 1000).toLocaleString('zh-CN') }}</span>
+              <span>{{ s.message_count }} {{ t('chatView.messages') }} · {{ new Date(s.updated_at * 1000).toLocaleString('zh-CN') }}</span>
               <n-popconfirm @positive-click.stop="removeSession(s.session_id)">
                 <template #trigger>
                   <button class="footer-btn" @click.stop>🗑</button>
                 </template>
-                删除该会话及全部记录？
+                {{ t('chatView.deleteConfirm') }}
               </n-popconfirm>
             </div>
             <div class="session-preview">{{ s.last_message }}</div>
           </div>
           <div v-if="!sessions.length" class="empty-state small">
-            <p>还没有历史会话呢～</p>
+            <p>{{ t('chatView.noHistory') }}</p>
           </div>
         </div>
       </n-drawer-content>

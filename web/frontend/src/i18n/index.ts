@@ -9,9 +9,9 @@ import zh from './zh'
 import en from './en'
 
 export type Lang = 'zh' | 'en'
-type Dict = typeof zh
+type Dict = Record<string, any>
 
-const dicts: Record<Lang, Dict> = { zh, en }
+const dicts: Record<Lang, Dict> = { zh: zh as Dict, en: en as Dict }
 
 const state = reactive({
   lang: (localStorage.getItem('lang') as Lang) || 'zh',

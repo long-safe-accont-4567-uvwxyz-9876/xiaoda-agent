@@ -22,6 +22,7 @@ import * as echarts from 'echarts/core'
 import { LineChart, PieChart, GraphChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import { t } from '../i18n'
 
 echarts.use([LineChart, PieChart, GraphChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
@@ -510,9 +511,9 @@ function fmtTs(ts: number): string {
 
 <template>
   <div class="insight-view">
-    <h2 class="view-title">🌱 内在世界</h2>
+    <h2 class="view-title">🌱 {{ t('insightView.title') }}</h2>
     <n-tabs type="line" animated v-model:value="activeTab">
-      <n-tab-pane name="emotion" tab="情绪">
+      <n-tab-pane name="emotion" :tab="t('insightView.emotion')">
         <div class="emotion-current glass-panel">
           <span class="emo-big" :style="{ color: EMOTION_COLORS[currentEmotion.primary] }">
             {{ currentEmotion.primary || '平静' }}
@@ -531,7 +532,7 @@ function fmtTs(ts: number): string {
         </div>
       </n-tab-pane>
 
-      <n-tab-pane name="portrait" tab="认知 · 画像">
+      <n-tab-pane name="portrait" :tab="t('insightView.profile')">
         <div class="portrait-head">
           <span v-if="portrait.version">版本 v{{ portrait.version }} ·
             {{ new Date((portrait.created_at || 0) * 1000).toLocaleString('zh-CN') }}</span>
@@ -552,7 +553,7 @@ function fmtTs(ts: number): string {
         </n-collapse>
       </n-tab-pane>
 
-      <n-tab-pane name="today" tab="今日事件">
+      <n-tab-pane name="today" :tab="t('insightView.todayEvents')">
         <div class="today-stats glass-panel">
           今天对话 {{ todayData.stats.conversations || 0 }} 轮 ·
           调用工具 {{ todayData.stats.tool_calls || 0 }} 次 ·
@@ -570,9 +571,9 @@ function fmtTs(ts: number): string {
         </div>
       </n-tab-pane>
 
-      <n-tab-pane name="memory" tab="记忆">
+      <n-tab-pane name="memory" :tab="t('insightView.memory')">
         <div class="mem-toolbar glass-panel">
-          <n-button size="small" type="primary" @click="openAddModal('memory')">+ 添加记忆</n-button>
+          <n-button size="small" type="primary" @click="openAddModal('memory')">+ {{ t('insightView.add') }}</n-button>
           <n-input v-model:value="memQuery" placeholder="语义搜索记忆…" clearable
                    style="max-width: 280px" @keydown.enter="loadMemories" />
           <label class="slider-label">
@@ -593,16 +594,16 @@ function fmtTs(ts: number): string {
                 <n-tag v-if="m.via === 'vector'" size="tiny" type="info" :bordered="false">语义命中</n-tag>
               </div>
             </div>
-            <n-button size="tiny" quaternary @click="openEditModal('memory', m)">编辑</n-button>
+            <n-button size="tiny" quaternary @click="openEditModal('memory', m)">{{ t('insightView.edit') }}</n-button>
             <n-popconfirm @positive-click="removeMemory(m.id)">
-              <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
+              <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
               连带删除向量索引，不可恢复。确认？
             </n-popconfirm>
           </div>
         </div>
       </n-tab-pane>
 
-      <n-tab-pane name="knowledge" tab="知识图谱">
+      <n-tab-pane name="knowledge" :tab="t('insightView.knowledgeGraph')">
         <div class="glass-panel chart-box">
           <div class="kg-toolbar">
             <n-input v-model:value="graphEntity" placeholder="输入实体名聚焦…" size="small"
@@ -624,9 +625,9 @@ function fmtTs(ts: number): string {
               <div v-for="e in kgEntities" :key="e.name" class="list-row glass-panel">
                 <n-tag size="tiny" :bordered="false" v-if="e.kind">{{ e.kind }}</n-tag>
                 <span class="note-content">{{ e.name }}</span>
-                <n-button size="tiny" quaternary @click="openEditModal('entity', e)">编辑</n-button>
+                <n-button size="tiny" quaternary @click="openEditModal('entity', e)">{{ t('insightView.edit') }}</n-button>
                 <n-popconfirm @positive-click="removeKgEntity(e.name)">
-                  <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
+                  <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
                   删除实体将同时删除相关关系，确认？
                 </n-popconfirm>
               </div>
@@ -640,9 +641,9 @@ function fmtTs(ts: number): string {
                 <span class="kg-rel-from">{{ r.from_entity }}</span>
                 <n-tag size="tiny" type="info" :bordered="false">{{ r.relation_type }}</n-tag>
                 <span class="kg-rel-to">{{ r.to_entity }}</span>
-                <n-button size="tiny" quaternary @click="openEditModal('relation', r)">编辑</n-button>
+                <n-button size="tiny" quaternary @click="openEditModal('relation', r)">{{ t('insightView.edit') }}</n-button>
                 <n-popconfirm @positive-click="removeKgRelation(r.id)">
-                  <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
+                  <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
                   确认删除此关系？
                 </n-popconfirm>
               </div>
@@ -652,17 +653,17 @@ function fmtTs(ts: number): string {
         </div>
       </n-tab-pane>
 
-      <n-tab-pane name="notes" tab="笔记">
+      <n-tab-pane name="notes" :tab="t('insightView.notes')">
         <div class="tab-toolbar glass-panel">
-          <n-button size="small" type="primary" @click="openAddModal('note')">+ 添加笔记</n-button>
+          <n-button size="small" type="primary" @click="openAddModal('note')">+ {{ t('insightView.addNote') }}</n-button>
         </div>
         <div class="item-list">
           <div v-for="n in notes" :key="n.id" class="list-row glass-panel">
             <n-tag size="tiny" :bordered="false">{{ n.kind }}</n-tag>
             <span class="note-content">{{ n.content }}</span>
-            <n-button size="tiny" quaternary @click="openEditModal('note', n)">编辑</n-button>
+            <n-button size="tiny" quaternary @click="openEditModal('note', n)">{{ t('insightView.edit') }}</n-button>
             <n-popconfirm @positive-click="removeNote(n.id)">
-              <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
+              <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
               确认归档此笔记？
             </n-popconfirm>
           </div>
@@ -670,9 +671,9 @@ function fmtTs(ts: number): string {
         <div v-if="!notes.length" class="empty-state"><p>还没有笔记哦～</p></div>
       </n-tab-pane>
 
-      <n-tab-pane name="learnings" tab="学习记录">
+      <n-tab-pane name="learnings" :tab="t('insightView.learning')">
         <div class="tab-toolbar glass-panel">
-          <n-button size="small" type="primary" @click="openAddModal('learning')">+ 添加学习记录</n-button>
+          <n-button size="small" type="primary" @click="openAddModal('learning')">+ {{ t('insightView.addLearning') }}</n-button>
         </div>
         <div class="item-list">
           <div v-for="l in learnings" :key="l.id" class="list-row glass-panel">
@@ -680,9 +681,9 @@ function fmtTs(ts: number): string {
                    :bordered="false">{{ l.priority }}</n-tag>
             <span class="note-content">{{ l.summary }}</span>
             <span class="note-extra">× {{ l.recurrence_count }}</span>
-            <n-button size="tiny" quaternary @click="openEditModal('learning', l)">编辑</n-button>
+            <n-button size="tiny" quaternary @click="openEditModal('learning', l)">{{ t('insightView.edit') }}</n-button>
             <n-popconfirm @positive-click="removeLearning(l.id)">
-              <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
+              <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
               确认删除此学习记录？
             </n-popconfirm>
           </div>
@@ -690,17 +691,17 @@ function fmtTs(ts: number): string {
         <div v-if="!learnings.length" class="empty-state"><p>还没有学习记录哦～</p></div>
       </n-tab-pane>
 
-      <n-tab-pane name="instincts" tab="本能">
+      <n-tab-pane name="instincts" :tab="t('insightView.instinct')">
         <div class="tab-toolbar glass-panel">
-          <n-button size="small" type="primary" @click="openAddModal('instinct')">+ 添加本能</n-button>
+          <n-button size="small" type="primary" @click="openAddModal('instinct')">+ {{ t('insightView.addInstinct') }}</n-button>
         </div>
         <div class="item-list">
           <div v-for="ins in instincts" :key="ins.id" class="list-row glass-panel">
             <span class="note-content">{{ ins.content || ins.summary || ins.trigger_pattern }}</span>
             <span class="note-extra">置信 {{ ((ins.confidence || 0) * 100).toFixed(0) }}%</span>
-            <n-button size="tiny" quaternary @click="openEditModal('instinct', ins)">编辑</n-button>
+            <n-button size="tiny" quaternary @click="openEditModal('instinct', ins)">{{ t('insightView.edit') }}</n-button>
             <n-popconfirm @positive-click="removeInstinct(ins.id)">
-              <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
+              <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
               确认删除此本能规则？
             </n-popconfirm>
           </div>

@@ -5,6 +5,7 @@ import {
   NDynamicInput, NSwitch, NSpace, useMessage, NTabs, NTabPane, NEmpty, NTooltip,
 } from 'naive-ui'
 import { get, post, put, del } from '../api'
+import { t, tf } from '../i18n'
 
 const message = useMessage()
 const servers = ref<any[]>([])
@@ -32,7 +33,7 @@ async function runImport() {
   try {
     parsed = JSON.parse(importJson.value)
   } catch {
-    message.error('JSON 解析失败，请检查格式')
+    message.error(t('mcpView.jsonParseFailed'))
     return
   }
   // 兼容 {mcpServers: {...}} / 裸 {name: {command...}} / 单个 {name, command}
@@ -44,12 +45,12 @@ async function runImport() {
   } else if (typeof parsed === 'object' && !Array.isArray(parsed)) {
     entries = Object.entries(parsed)
   } else {
-    message.error('未识别的结构：需要 mcpServers 对象或 {name: {command, ...}}')
+    message.error(t('mcpView.unrecognizedStruct'))
     return
   }
   const bad = entries.find(([, v]) => !v || typeof v.command !== 'string')
   if (bad) {
-    message.error(`"${bad[0]}" 缺少 command 字段`)
+    message.error(tf('mcpView.missingCommand', bad[0]))
     return
   }
   importing.value = true
@@ -69,7 +70,7 @@ async function runImport() {
     }
   }
   importing.value = false
-  if (ok) message.success(`成功导入 ${ok} 个 MCP server ✓`)
+  if (ok) message.success(tf('mcpView.importSuccess', ok))
   for (const err of errors) message.error(err)
   if (ok && !errors.length) {
     showImport.value = false
@@ -113,11 +114,11 @@ async function save() {
     if (isCreate.value) {
       const data = await post('/mcp/servers', body)
       message.success(data.status === 'running'
-        ? `已启动，发现 ${data.tool_names.length} 个工具 ✓`
-        : `已保存但启动失败：${data.last_error}`)
+        ? tf('mcpView.startedWithTools', data.tool_names.length)
+        : tf('mcpView.savedButFailed', data.last_error))
     } else {
       await put(`/mcp/servers/${form.value.name}`, body)
-      message.success('已更新并重启 ✓')
+      message.success(t('mcpView.updatedRestarted'))
     }
     showForm.value = false
     await load()
@@ -130,7 +131,7 @@ async function lifecycle(name: string, action: 'start' | 'stop' | 'restart') {
   busy.value = `${name}:${action}`
   try {
     await post(`/mcp/servers/${name}/${action}`)
-    message.success(`${name} ${action} 完成 ✓`)
+    message.success(tf('mcpView.lifecycleDone', name, action))
     await load()
   } catch (e: any) {
     message.error(e.message)
@@ -142,7 +143,7 @@ async function lifecycle(name: string, action: 'start' | 'stop' | 'restart') {
 async function remove(name: string) {
   try {
     await del(`/mcp/servers/${name}`, true)
-    message.success('已删除')
+    message.success(t('mcpView.deleted'))
     await load()
   } catch (e: any) {
     message.error(e.message)
@@ -170,7 +171,7 @@ async function applyTemplate(tpl: typeof TEMPLATES[number]) {
       args: tpl.args,
       env: tpl.env || {},
     })
-    message.success(`模板「${tpl.name}」已创建并启动 ✓`)
+    message.success(tf('mcpView.templateCreated', tpl.name))
     showTemplates.value = false
     await load()
   } catch (e: any) {
@@ -202,7 +203,7 @@ function healthDotColor(name: string, serverStatus: string) {
 async function toggleTool(serverName: string, toolName: string, enabled: boolean) {
   try {
     await put(`/mcp/servers/${serverName}/tools/${toolName}/enabled`, { enabled })
-    message.success(`${toolName} 已${enabled ? '启用' : '禁用'} ✓`)
+    message.success(tf('mcpView.toolToggled', toolName, enabled))
     await load()
   } catch (e: any) {
     message.error(e.message)
@@ -224,7 +225,7 @@ async function loadMcpMarket() {
     const data = await get<any>('/market/mcp')
     mcpItems.value = data.items || []
   } catch (e: any) {
-    message.error(`MCP 市场加载失败: ${e.message}`)
+    message.error(tf('mcpView.marketLoadFailed', e.message))
   } finally {
     mcpLoading.value = false
   }
@@ -234,9 +235,9 @@ async function installFromMcp(item: any) {
   installingMcp.value[item.name] = true
   try {
     const result = await post('/market/mcp/install', item)
-    message.success(`${item.name} 安装成功`)
+    message.success(tf('mcpView.installSuccess', item.name))
   } catch (e: any) {
-    message.error(`安装失败: ${e.message}`)
+    message.error(tf('mcpView.installFailed', e.message))
   } finally {
     installingMcp.value[item.name] = false
   }
@@ -246,9 +247,9 @@ async function uninstallFromMcp(item: any) {
   uninstallingMcp.value[item.name] = true
   try {
     await post('/market/mcp/uninstall', { name: item.name })
-    message.success(`${item.name} 已卸载`)
+    message.success(tf('mcpView.uninstalled', item.name))
   } catch (e: any) {
-    message.error(`卸载失败: ${e.message}`)
+    message.error(tf('mcpView.uninstallFailed', e.message))
   } finally {
     uninstallingMcp.value[item.name] = false
   }
@@ -271,13 +272,13 @@ function onMcpTabChange(tab: string) {
 <template>
   <div class="mcp-view">
     <n-tabs v-model:value="mcpTab" type="line" animated @update:value="onMcpTabChange">
-      <n-tab-pane name="installed" tab="已安装">
+      <n-tab-pane name="installed" :tab="t('installed')">
         <div class="view-header">
-          <h2>🔌 MCP 服务</h2>
+          <h2>🔌 {{ t('mcpView.title') }}</h2>
           <div style="display:flex; gap:8px">
-            <n-button @click="showTemplates = true">📦 模板</n-button>
-            <n-button type="primary" @click="showImport = true">📋 粘贴 JSON 导入</n-button>
-            <n-button @click="openForm(null)">＋ 手动新增</n-button>
+            <n-button @click="showTemplates = true">📦 {{ t('mcpView.template') }}</n-button>
+            <n-button type="primary" @click="showImport = true">📋 {{ t('mcpView.importJson') }}</n-button>
+            <n-button @click="openForm(null)">＋ {{ t('mcpView.addManual') }}</n-button>
           </div>
         </div>
 
@@ -291,7 +292,7 @@ function onMcpTabChange(tab: string) {
               <n-space align="center" :size="6">
                 <span class="health-dot"
                       :style="{ background: healthDotColor(s.name, s.status) }"
-                      :title="s.status === 'running' ? (healthMap[s.name] || '未检查') : s.status"
+                      :title="s.status === 'running' ? (healthMap[s.name] || t('mcpView.notChecked')) : s.status"
                       @click="s.status === 'running' && checkHealth(s.name)"></span>
                 <span class="server-name">{{ s.name }}</span>
               </n-space>
@@ -308,19 +309,19 @@ function onMcpTabChange(tab: string) {
               <span v-if="(s.tool_names || []).length > 8" class="more">
                 +{{ s.tool_names.length - 8 }}
               </span>
-              <span v-if="!s.tool_names?.length" class="more">（未发现工具）</span>
+              <span v-if="!s.tool_names?.length" class="more">（{{ t('mcpView.noTools') }}）</span>
             </div>
             <div class="server-ops">
               <n-button v-if="s.status !== 'running'" size="tiny" type="primary" secondary
-                        :loading="busy === `${s.name}:start`" @click="lifecycle(s.name, 'start')">启动</n-button>
+                        :loading="busy === `${s.name}:start`" @click="lifecycle(s.name, 'start')">{{ t('mcpView.start') }}</n-button>
               <n-button v-else size="tiny" :loading="busy === `${s.name}:stop`"
-                        @click="lifecycle(s.name, 'stop')">停止</n-button>
+                        @click="lifecycle(s.name, 'stop')">{{ t('mcpView.stop') }}</n-button>
               <n-button size="tiny" :loading="busy === `${s.name}:restart`"
-                        @click="lifecycle(s.name, 'restart')">重启</n-button>
-              <n-button v-if="s.managed_by_webui" size="tiny" @click="openForm(s)">编辑</n-button>
+                        @click="lifecycle(s.name, 'restart')">{{ t('mcpView.restart') }}</n-button>
+              <n-button v-if="s.managed_by_webui" size="tiny" @click="openForm(s)">{{ t('mcpView.edit') }}</n-button>
               <n-popconfirm v-if="s.managed_by_webui" @positive-click="remove(s.name)">
-                <template #trigger><n-button size="tiny" type="error" quaternary>删</n-button></template>
-                删除前会先停止该 server，确认？
+                <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('mcpView.delete') }}</n-button></template>
+                {{ t('mcpView.confirmDelete') }}
               </n-popconfirm>
             </div>
           </div>
@@ -349,8 +350,8 @@ function onMcpTabChange(tab: string) {
           </n-form>
           <template #footer>
             <div style="display:flex; justify-content:flex-end; gap:10px">
-              <n-button @click="showForm = false">取消</n-button>
-              <n-button type="primary" @click="save">保存并启动</n-button>
+              <n-button @click="showForm = false">{{ t('cancel') }}</n-button>
+              <n-button type="primary" @click="save">{{ t('mcpView.saveStart') }}</n-button>
             </div>
           </template>
         </n-modal>
@@ -361,9 +362,9 @@ function onMcpTabChange(tab: string) {
                    class="mono" :placeholder="IMPORT_PLACEHOLDER" />
           <template #footer>
             <div style="display:flex; justify-content:flex-end; gap:10px">
-              <n-button @click="showImport = false">取消</n-button>
+              <n-button @click="showImport = false">{{ t('cancel') }}</n-button>
               <n-button type="primary" :loading="importing" :disabled="!importJson.trim()"
-                        @click="runImport">导入并启动</n-button>
+                        @click="runImport">{{ t('mcpView.importStart') }}</n-button>
             </div>
           </template>
         </n-modal>
@@ -380,15 +381,15 @@ function onMcpTabChange(tab: string) {
                 <span class="tpl-desc">{{ tpl.desc }}</span>
                 <span class="tpl-cmd mono">{{ tpl.command }} {{ tpl.args.join(' ') }}</span>
               </div>
-              <n-button size="tiny" type="primary" @click="applyTemplate(tpl)">一键创建</n-button>
+              <n-button size="tiny" type="primary" @click="applyTemplate(tpl)">{{ t('mcpView.createOne') }}</n-button>
             </div>
           </div>
         </n-modal>
       </n-tab-pane>
 
-      <n-tab-pane name="market-mcp" tab="MCP 市场">
+      <n-tab-pane name="market-mcp" :tab="t('mcpView.market')">
         <div class="market-toolbar" style="margin-bottom: 16px;">
-          <n-input v-model:value="mcpSearch" placeholder="搜索 MCP 服务..." clearable style="max-width: 400px" />
+          <n-input v-model:value="mcpSearch" :placeholder="t('mcpView.marketSearchPlaceholder')" clearable style="max-width: 400px" />
         </div>
         <n-spin :show="mcpLoading">
           <div class="mcp-grid">
@@ -398,29 +399,29 @@ function onMcpTabChange(tab: string) {
                 <div v-else class="card-icon-placeholder">{{ (item.name||'?')[0].toUpperCase() }}</div>
                 <div class="card-title-area">
                   <h4 class="card-title">{{ item.name }}</h4>
-                  <span class="card-author">{{ item.author || '未知' }}</span>
+                  <span class="card-author">{{ item.author || t('mcpView.unknown') }}</span>
                 </div>
               </div>
-              <p class="card-desc">{{ item.description || '暂无描述' }}</p>
+              <p class="card-desc">{{ item.description || t('mcpView.noDesc') }}</p>
               <div class="card-footer">
-                <span class="card-downloads">{{ item.use_count ?? 0 }} 次使用</span>
+                <span class="card-downloads">{{ item.use_count ?? 0 }} {{ t('mcpView.uses') }}</span>
                 <div style="display: flex; gap: 6px;">
                   <n-button size="small" type="error" secondary
                     :loading="uninstallingMcp[item.name]"
                     @click="uninstallFromMcp(item)">
-                    卸载
+                    {{ t('uninstall') }}
                   </n-button>
                   <n-button size="small" type="success" secondary
                     :loading="installingMcp[item.name]"
                     @click="installFromMcp(item)">
-                    安装
+                    {{ t('install') }}
                   </n-button>
                 </div>
               </div>
             </div>
           </div>
           <n-empty v-if="!mcpLoading && filteredMcpMarket.length === 0"
-            :description="mcpSearch ? '未找到匹配的 MCP 服务' : '暂无可用的 MCP 服务'" />
+            :description="mcpSearch ? t('mcpView.marketEmptyMatched') : t('mcpView.marketEmpty')" />
         </n-spin>
       </n-tab-pane>
     </n-tabs>
