@@ -291,7 +291,10 @@ async function testSkill(item: any) {
   <div class="tools-view">
     <div class="view-header">
       <h2>🛠 Skills 工具</h2>
-      <span class="count">{{ filtered.length }} / {{ tools.length }}</span>
+      <span class="count">共 {{ tools.length }} 个工具</span>
+      <span v-if="search || categoryFilter || sourceFilter" class="count">
+        （筛选: {{ filtered.length }}）
+      </span>
       <n-tag v-if="toolLimits" size="small"
              :type="toolLimits.enabled >= toolLimits.max_enabled ? 'error' : 'success'"
              :bordered="false">
