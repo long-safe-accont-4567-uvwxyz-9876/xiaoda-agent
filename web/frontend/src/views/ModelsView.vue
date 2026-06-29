@@ -220,7 +220,7 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
           <div class="provider-info">
             <span class="p-label">{{ p.label }}</span>
             <n-tag size="small" :type="p.format === 'anthropic' ? 'warning' : 'info'" :bordered="false">
-              {{ p.format === 'anthropic' ? 'Anthropic 兼容' : 'OpenAI 兼容' }}
+              {{ p.format === 'anthropic' ? t('modelsView.anthropicCompat') : t('modelsView.openaiCompat') }}
             </n-tag>
             <n-tag v-if="p.builtin" size="small" :bordered="false">{{ t('modelsView.builtin') }}</n-tag>
             <span class="p-url">{{ p.base_url }}</span>
@@ -244,10 +244,10 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
           <template #item="{ element: p }">
             <div class="provider-row">
               <div class="provider-info">
-                <span class="drag-handle" title="拖拽排序">☰</span>
+                <span class="drag-handle" :title="t('modelsView.dragSort')">☰</span>
                 <span class="p-label">{{ p.label }}</span>
                 <n-tag size="small" :type="p.format === 'anthropic' ? 'warning' : 'info'" :bordered="false">
-                  {{ p.format === 'anthropic' ? 'Anthropic 兼容' : 'OpenAI 兼容' }}
+                  {{ p.format === 'anthropic' ? t('modelsView.anthropicCompat') : t('modelsView.openaiCompat') }}
                 </n-tag>
                 <n-tag v-if="p.builtin" size="small" :bordered="false">{{ t('modelsView.builtin') }}</n-tag>
                 <span class="p-url">{{ p.base_url }}</span>
@@ -272,10 +272,10 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
     </section>
 
     <section class="glass-panel section">
-      <h3>{{ t('modelsView.taskRouting') }} <span class="hint">改完即生效，无须重启</span></h3>
+      <h3>{{ t('modelsView.taskRouting') }} <span class="hint">{{ t('modelsView.noRestartHint') }}</span></h3>
       <table class="route-table">
         <thead>
-          <tr><th>任务</th><th>model</th><th>max_tokens</th><th>thinking</th><th></th></tr>
+          <tr><th>{{ t('modelsView.taskCol') }}</th><th>model</th><th>max_tokens</th><th>thinking</th><th></th></tr>
         </thead>
         <tbody>
           <tr v-for="(r, task) in routes" :key="task">
@@ -314,7 +314,7 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
     <section class="glass-panel section">
       <h3>{{ t('modelsView.credPoolStatus') }}</h3>
       <table class="route-table">
-        <thead><tr><th>provider</th><th>key</th><th>状态</th><th>使用次数</th><th>最近错误</th></tr></thead>
+        <thead><tr><th>provider</th><th>key</th><th>{{ t('modelsView.statusCol') }}</th><th>{{ t('modelsView.usageCol') }}</th><th>{{ t('modelsView.errorCol') }}</th></tr></thead>
         <tbody>
           <tr v-for="c in credentials" :key="`${c.provider}-${c.index}`">
             <td>{{ c.provider }}</td>
@@ -331,7 +331,7 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
     <section class="glass-panel section">
       <h3>{{ t('modelsView.usage7days') }}
         <span class="hint" v-if="usage.total">
-          共 {{ usage.total.calls || 0 }} 次调用 · {{ ((usage.total.tokens || 0) / 1000).toFixed(1) }}k tokens
+          {{ t('modelsView.totalCalls') }} {{ usage.total.calls || 0 }} 次调用 · {{ ((usage.total.tokens || 0) / 1000).toFixed(1) }}k tokens
           · ${{ (usage.total.cost || 0).toFixed(4) }}
         </span>
       </h3>
@@ -339,30 +339,30 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
     </section>
 
     <n-modal v-model:show="showProviderForm" preset="card"
-             :title="isCreateProvider ? '新增自定义 Provider' : `编辑 · ${providerForm.id}`"
+             :title="isCreateProvider ? t('modelsView.newProvider') : `${t('modelsView.editDot')}${providerForm.id}`"
              style="width: min(560px, 94vw)">
       <n-form label-placement="left" label-width="110">
         <n-form-item label="id" v-if="isCreateProvider">
-          <n-input v-model:value="providerForm.id" placeholder="如 my-anthropic" />
+          <n-input v-model:value="providerForm.id" :placeholder="t('modelsView.idPh')" />
         </n-form-item>
-        <n-form-item label="名称">
+        <n-form-item :label="t('modelsView.nameLabel')">
           <n-input v-model:value="providerForm.label" />
         </n-form-item>
-        <n-form-item label="接口格式">
+        <n-form-item :label="t('modelsView.formatLabel')">
           <n-radio-group v-model:value="providerForm.format">
-            <n-radio value="openai">OpenAI 兼容</n-radio>
-            <n-radio value="anthropic">Anthropic 兼容</n-radio>
+            <n-radio value="openai">{{ t('modelsView.openaiCompat') }}</n-radio>
+            <n-radio value="anthropic">{{ t('modelsView.anthropicCompat') }}</n-radio>
           </n-radio-group>
         </n-form-item>
         <n-form-item label="base_url">
           <n-input v-model:value="providerForm.base_url" placeholder="https://..." />
         </n-form-item>
-        <n-form-item label="默认 model">
-          <n-input v-model:value="providerForm.default_model" placeholder="如 claude-sonnet-4-6" />
+        <n-form-item :label="t('modelsView.defaultModelLabel')">
+          <n-input v-model:value="providerForm.default_model" :placeholder="t('modelsView.modelIdPh')" />
         </n-form-item>
         <n-form-item label="API Key">
           <n-input v-model:value="providerForm.api_key" type="password" show-password-on="click"
-                   placeholder="仅提交不回显" />
+                   :placeholder="t('modelsView.keyPh')" />
         </n-form-item>
       </n-form>
       <template #footer>

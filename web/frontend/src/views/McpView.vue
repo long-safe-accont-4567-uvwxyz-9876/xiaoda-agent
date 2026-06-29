@@ -17,7 +17,7 @@ const showImport = ref(false)
 const importJson = ref('')
 const importing = ref(false)
 
-const IMPORT_PLACEHOLDER = `支持标准 mcpServers 格式，直接从文档复制粘贴：
+const IMPORT_PLACEHOLDER = computed(() => `${t('mcpView.importPlaceholder')}
 {
   "mcpServers": {
     "filesystem": {
@@ -26,7 +26,7 @@ const IMPORT_PLACEHOLDER = `支持标准 mcpServers 格式，直接从文档复�
       "env": { "KEY": "value" }
     }
   }
-}`
+}`)
 
 async function runImport() {
   let parsed: any
@@ -154,16 +154,16 @@ const statusType: Record<string, any> = { running: 'success', stopped: 'default'
 
 // ── 模板功能 ──────────────────────────────────────────────
 const showTemplates = ref(false)
-const TEMPLATES = [
-  { name: 'filesystem', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '选择目录'], desc: '文件系统读写' },
-  { name: 'fetch', command: 'npx', args: ['-y', '@modelcontextprotocol/server-fetch'], desc: 'HTTP 请求抓取网页' },
-  { name: 'memory', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'], desc: '知识图谱记忆' },
-  { name: 'brave-search', command: 'npx', args: ['-y', '@modelcontextprotocol/server-brave-search'], desc: 'Brave 搜索（需 BRAVE_API_KEY）', env: { BRAVE_API_KEY: '' } },
-  { name: 'sqlite', command: 'uvx', args: ['mcp-server-sqlite', '--db-path', '选择数据库路径'], desc: 'SQLite 数据库' },
-  { name: 'github', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], desc: 'GitHub 操作（需 GITHUB_TOKEN）', env: { GITHUB_TOKEN: '' } },
-]
+const TEMPLATES = computed(() => [
+  { name: 'filesystem', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', t('mcpView.selectDir')], desc: t('mcpView.templateFs') },
+  { name: 'fetch', command: 'npx', args: ['-y', '@modelcontextprotocol/server-fetch'], desc: t('mcpView.templateHttp') },
+  { name: 'memory', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'], desc: t('mcpView.templateKg') },
+  { name: 'brave-search', command: 'npx', args: ['-y', '@modelcontextprotocol/server-brave-search'], desc: t('mcpView.templateBrave'), env: { BRAVE_API_KEY: '' } },
+  { name: 'sqlite', command: 'uvx', args: ['mcp-server-sqlite', '--db-path', t('mcpView.selectDb')], desc: t('mcpView.templateSqlite') },
+  { name: 'github', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], desc: t('mcpView.templateGithub'), env: { GITHUB_TOKEN: '' } },
+])
 
-async function applyTemplate(tpl: typeof TEMPLATES[number]) {
+async function applyTemplate(tpl: any) {
   try {
     await post('/mcp/servers', {
       name: tpl.name,
@@ -217,6 +217,13 @@ const mcpLoading = ref(false)
 const mcpSearch = ref('')
 const installingMcp = ref<Record<string, boolean>>({})
 const uninstallingMcp = ref<Record<string, boolean>>({})
+
+// 仅本地资源（相对路径 / data URI）走 <img> 加载，外链 http(s) 图标直接用首字母 fallback，
+// 避免外站不可达时浏览器打出大量 net::ERR_* 控制台错误
+function isLocalIcon(icon: any): boolean {
+  if (typeof icon !== 'string' || !icon) return false
+  return icon.startsWith('/') || icon.startsWith('data:') || icon.startsWith('assets/')
+}
 
 async function loadMcpMarket() {
   if (mcpItems.value.length > 0) return
@@ -283,7 +290,7 @@ function onMcpTabChange(tab: string) {
         </div>
 
         <p class="mcp-hint">
-          新增 server → 启动握手 → 工具自动注册（source=mcp:名称）→ 出现在工具页与各 Agent 权限矩阵中。
+          {{ t('mcpView.addServerHint') }}
         </p>
 
         <div class="server-grid">
@@ -326,26 +333,26 @@ function onMcpTabChange(tab: string) {
             </div>
           </div>
           <div v-if="!servers.length" class="empty-state glass-panel">
-            <p>还没有接入 MCP 服务哦～点右上角「新增」试试（例如 filesystem server）</p>
+            <p>{{ t('mcpView.noMcp') }}</p>
           </div>
         </div>
 
         <n-modal v-model:show="showForm" preset="card"
-                 :title="isCreate ? '新增 MCP Server' : `编辑 · ${form.name}`"
+                 :title="isCreate ? t('mcpView.newServer') : `${t('mcpView.editServer')} · ${form.name}`"
                  style="width: min(580px, 94vw)">
           <n-form label-placement="left" label-width="90">
             <n-form-item label="name" v-if="isCreate">
-              <n-input v-model:value="form.name" placeholder="如 filesystem" />
+              <n-input v-model:value="form.name" :placeholder="t('mcpView.serverNamePh')" />
             </n-form-item>
             <n-form-item label="command">
-              <n-input v-model:value="form.command" placeholder="如 /usr/bin/npx 或 uvx" />
+              <n-input v-model:value="form.command" :placeholder="t('mcpView.commandPh')" />
             </n-form-item>
             <n-form-item label="args">
-              <n-dynamic-input v-model:value="form.args" placeholder="逐行一个参数" />
+              <n-dynamic-input v-model:value="form.args" :placeholder="t('mcpView.argsPh')" />
             </n-form-item>
             <n-form-item label="env">
               <n-dynamic-input v-model:value="form.env" preset="pair"
-                               key-placeholder="变量名" value-placeholder="值（保密处理）" />
+                               :key-placeholder="t('mcpView.envKeyPh')" :value-placeholder="t('mcpView.envValuePh')" />
             </n-form-item>
           </n-form>
           <template #footer>
@@ -356,7 +363,7 @@ function onMcpTabChange(tab: string) {
           </template>
         </n-modal>
 
-        <n-modal v-model:show="showImport" preset="card" title="粘贴 JSON 导入 MCP Server"
+        <n-modal v-model:show="showImport" preset="card" :title="t('mcpView.importTitle')"
                  style="width: min(640px, 94vw)">
           <n-input v-model:value="importJson" type="textarea" :rows="14"
                    class="mono" :placeholder="IMPORT_PLACEHOLDER" />
@@ -369,10 +376,10 @@ function onMcpTabChange(tab: string) {
           </template>
         </n-modal>
 
-        <n-modal v-model:show="showTemplates" preset="card" title="📦 MCP Server 模板"
+        <n-modal v-model:show="showTemplates" preset="card" :title="t('mcpView.templateTitle')"
                  style="width: min(580px, 94vw)">
           <p style="font-size:13px; color:var(--moon-dim); margin-bottom:12px">
-            选择预设模板，一键创建并启动 MCP Server。部分模板需要配置环境变量。
+            {{ t('mcpView.templateDesc') }}
           </p>
           <div class="template-list">
             <div v-for="tpl in TEMPLATES" :key="tpl.name" class="template-item glass-panel">
@@ -395,7 +402,7 @@ function onMcpTabChange(tab: string) {
           <div class="mcp-grid">
             <div v-for="item in filteredMcpMarket" :key="item.id" class="market-card glass-panel glass-panel-hover">
               <div class="card-header">
-                <img v-if="item.icon && !item._iconErr" :src="item.icon" :alt="item.name" class="card-icon" @error="item._iconErr=true" />
+                <img v-if="isLocalIcon(item.icon) && !item._iconErr" :src="item.icon" :alt="item.name" class="card-icon" @error="item._iconErr=true" />
                 <div v-else class="card-icon-placeholder">{{ (item.name||'?')[0].toUpperCase() }}</div>
                 <div class="card-title-area">
                   <h4 class="card-title">{{ item.name }}</h4>

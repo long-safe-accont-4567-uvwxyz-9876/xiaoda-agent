@@ -59,10 +59,10 @@ function onTaskUpdate(e: any) {
     loadTasks()
   }
   if (e.status === 'done') {
-    message.success('生成完成 ✓')
+    message.success(t('mediaView.genDone'))
     loadGallery()
   }
-  if (e.status === 'failed' && e.error) message.error(`任务失败：${e.error}`)
+  if (e.status === 'failed' && e.error) message.error(`${t('mediaView.genFailed')}：${e.error}`)
 }
 
 async function synthesize() {
@@ -73,7 +73,7 @@ async function synthesize() {
       text: ttsText.value, voice: ttsVoice.value, style: ttsStyle.value || '',
     })
     ttsResult.value = r.audio_url
-    if (r.cached) message.info('缓存命中，秒回 ⚡')
+    if (r.cached) message.info(t('mediaView.cacheHit'))
     loadGallery()
   } catch (e: any) {
     message.error(e.message)
@@ -85,7 +85,7 @@ async function synthesize() {
 async function setAutoSpeak(v: boolean) {
   try {
     await ui.setAutoSpeak(v)
-    message.success(`自动朗读已${v ? '开启' : '关闭'} ✓`)
+    message.success(`自动朗读已${v ? t('mediaView.autoSpeakOn') : t('mediaView.autoSpeakOff')} ✓`)
   } catch (e: any) { message.error(e.message) }
 }
 
@@ -102,7 +102,7 @@ async function submitTask(kind: 'image' | 'video') {
   submitting.value = kind
   try {
     await post(`/media/${kind}`, { prompt })
-    message.success('任务已入队（进度实时推送）')
+    message.success(t('mediaView.taskQueued'))
     loadTasks()
   } catch (e: any) {
     message.error(e.message)
@@ -118,7 +118,7 @@ async function loadTasks() {
 async function cancelTask(id: string) {
   try {
     await del(`/media/tasks/${id}`)
-    message.success('已取消')
+    message.success(t('mediaView.cancelled'))
     loadTasks()
   } catch (e: any) { message.error(e.message) }
 }
@@ -133,7 +133,7 @@ async function removeMedia(name: string) {
   try {
     await del(`/media/gallery/${galleryType.value}/${name}`, true)
     gallery.value = gallery.value.filter(g => g.name !== name)
-    message.success('已删除')
+    message.success(t('mediaView.deleted'))
   } catch (e: any) { message.error(e.message) }
 }
 
@@ -155,11 +155,11 @@ const statusType: Record<string, any> = {
         <div class="panel-row">
           <div class="glass-panel panel main">
             <n-input v-model:value="ttsText" type="textarea" :rows="4"
-                     placeholder="输入要合成的文本（≤500 字）…" maxlength="500" show-count />
+                     :placeholder="t('mediaView.ttsInputPh')" maxlength="500" show-count />
             <div class="tts-controls">
-              <n-select v-model:value="ttsVoice" :options="voices" placeholder="音色"
+              <n-select v-model:value="ttsVoice" :options="voices" :placeholder="t('mediaView.voicePh')"
                         style="max-width: 220px" @update:value="setDefaultVoice" />
-              <n-select v-model:value="ttsStyle" :options="styles" placeholder="情绪风格（自动）"
+              <n-select v-model:value="ttsStyle" :options="styles" :placeholder="t('mediaView.emotionPh')"
                         clearable style="max-width: 180px" />
               <n-button type="primary" :loading="ttsLoading" @click="synthesize">🎵 {{ t('mediaView.synthesize') }}</n-button>
             </div>
@@ -171,7 +171,7 @@ const statusType: Record<string, any> = {
               {{ t('mediaView.autoSpeak') }}
               <n-switch :value="ui.autoSpeak" @update:value="setAutoSpeak" />
             </label>
-            <p class="cfg-hint">开启后，聊天页收到回复会自动合成并播放（音色跟随当前 Agent 的 voice_ref）。</p>
+            <p class="cfg-hint">{{ t('mediaView.autoSpeakDesc') }}</p>
           </div>
         </div>
       </n-tab-pane>
@@ -179,7 +179,7 @@ const statusType: Record<string, any> = {
       <n-tab-pane name="image" :tab="t('mediaView.imageGen')">
         <div class="glass-panel panel">
           <n-input v-model:value="imagePrompt" type="textarea" :rows="3"
-                   placeholder="描述想生成的画面…" />
+                   :placeholder="t('mediaView.imagePromptPh')" />
           <n-button type="primary" style="margin-top: 10px"
                     :loading="submitting === 'image'" @click="submitTask('image')">
             🎨 {{ t('mediaView.submit') }}
@@ -189,10 +189,10 @@ const statusType: Record<string, any> = {
 
       <n-tab-pane name="video" :tab="t('mediaView.videoGen')">
         <div class="glass-panel panel">
-          <p class="queue-hint">⏳ 视频生成耗时较长（数分钟），队列串行执行，进度实时推送。
-            当前队列 {{ tasks.filter(t => t.status === 'queued' || t.status === 'running').length }} 个任务。</p>
+          <p class="queue-hint">{{ t('mediaView.videoHint') }}
+            当前队列 {{ tasks.filter(t => t.status === 'queued' || t.status === 'running').length }} {{ t('mediaView.queueCount') }}。</p>
           <n-input v-model:value="videoPrompt" type="textarea" :rows="3"
-                   placeholder="描述想生成的视频…" />
+                   :placeholder="t('mediaView.videoPromptPh')" />
           <n-button type="primary" style="margin-top: 10px"
                     :loading="submitting === 'video'" @click="submitTask('video')">
             🎬 {{ t('mediaView.submit') }}
@@ -237,11 +237,11 @@ const statusType: Record<string, any> = {
             <span class="g-name">{{ g.name }}</span>
             <n-popconfirm @positive-click="removeMedia(g.name)">
               <template #trigger><button class="g-del">🗑</button></template>
-              确认删除该文件？
+              {{ t('mediaView.deleteConfirm') }}
             </n-popconfirm>
           </div>
         </div>
-        <div v-if="!gallery.length" class="empty-hint">这里还没有长出叶子哦～生成点什么吧</div>
+        <div v-if="!gallery.length" class="empty-hint">{{ t('mediaView.emptyGallery') }}</div>
       </div>
     </section>
   </div>

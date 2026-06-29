@@ -15,6 +15,7 @@ const navItems = [
   { icon: 'plugins', labelKey: 'nav.plugins', route: '/settings/plugins' },
   { icon: 'insight', labelKey: 'nav.insight', route: '/insight' },
   { icon: 'schedule', labelKey: 'nav.schedule', route: '/schedule' },
+  { icon: 'mail', labelKey: 'nav.mail', route: '/settings/mail' },
   { icon: 'media', labelKey: 'nav.media', route: '/media' },
   { icon: 'health', labelKey: 'nav.health', route: '/health' },
   { icon: 'dashboard', labelKey: 'nav.dashboard', route: '/dashboard' },

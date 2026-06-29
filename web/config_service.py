@@ -29,6 +29,15 @@ _DEFAULTS: dict[str, Any] = {
     "mcp": {},        # {server_name: {command, args, env, agents, enabled}} 用户新增的
     "models": {"providers": {}, "routes": {}},
     "dashboard": {"system_monitor_enabled": False},
+    "mail": {
+        "enabled": False,
+        "mode": "off",  # off / allowlist / all
+        "allowed_senders": [],
+        "reply_channel": "mail",  # mail / mail_and_qq
+        "max_per_day": 50,
+        "dnd_start": 0,  # 免打扰开始小时（0-23），0=不启用 DND
+        "dnd_end": 0,    # 免打扰结束小时（0-23），与 dnd_start 相同=不启用
+    },
 }
 
 

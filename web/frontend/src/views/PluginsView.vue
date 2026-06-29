@@ -60,10 +60,10 @@ async function testPlugin(pluginId: string) {
     // 测试插件是否能正常加载（通过 load action 验证）
     const res = await post<any>(`/plugins/${pluginId}/load`, {})
     if (res.status === 'ok') {
-      pluginTestResult.value[pluginId] = { ok: true, message: '插件加载正常' }
+      pluginTestResult.value[pluginId] = { ok: true, message: t('pluginsView.pluginNormal') }
       message.success(tf('pluginsView.pluginTestPassed', pluginId))
     } else {
-      pluginTestResult.value[pluginId] = { ok: false, message: res.detail || '加载失败' }
+      pluginTestResult.value[pluginId] = { ok: false, message: res.detail || t('pluginsView.loadFailed') }
       message.error(tf('pluginsView.pluginTestFailed', pluginId))
     }
     await load()
@@ -144,10 +144,10 @@ async function testMarketPlugin(item: any) {
     // 通过重新加载插件来验证
     const res = await post<any>(`/plugins/${item.id}/load`, {})
     if (res.status === 'ok') {
-      marketPluginTestResult.value[item.id] = { ok: true, message: '插件加载正常' }
+      marketPluginTestResult.value[item.id] = { ok: true, message: t('pluginsView.pluginNormal') }
       message.success(tf('pluginsView.pluginTestPassed', item.name))
     } else {
-      marketPluginTestResult.value[item.id] = { ok: false, message: res.detail || '加载失败' }
+      marketPluginTestResult.value[item.id] = { ok: false, message: res.detail || t('pluginsView.loadFailed') }
       message.error(tf('pluginsView.pluginTestFailed', item.name))
     }
     await loadMarket()
@@ -181,7 +181,7 @@ onMounted(() => { load(); loadMarket() })
       <!-- ── 已安装 ──────────────────────────────────────── -->
       <n-tab-pane name="installed" :tab="t('installed')">
         <p class="plugins-hint">
-          扫描插件目录发现新插件 → 加载 → 启用后自动注册工具与能力 → 在 Agent 权限矩阵中可见。
+          {{ t('pluginsView.scanHint') }}
         </p>
 
         <div class="plugin-grid">
@@ -221,7 +221,7 @@ onMounted(() => { load(); loadMarket() })
           </div>
 
           <div v-if="!plugins.length" class="empty-state glass-panel">
-            <p>暂无插件，点击右上角「扫描插件」发现可用插件</p>
+            <p>{{ t('pluginsView.noPlugins') }}</p>
           </div>
         </div>
       </n-tab-pane>
@@ -233,7 +233,7 @@ onMounted(() => { load(); loadMarket() })
                    size="small" style="width: 200px" />
           <n-button size="small" :loading="marketLoading" @click="loadMarket(true)">{{ t('refresh') }}</n-button>
         </div>
-        <p class="market-hint">浏览并一键安装社区公开插件，安装后自动加载并启用。</p>
+        <p class="market-hint">{{ t('pluginsView.marketDesc') }}</p>
 
         <n-spin :show="marketLoading">
           <div class="market-grid">
@@ -255,7 +255,7 @@ onMounted(() => { load(); loadMarket() })
               </div>
               <div class="card-footer">
                 <n-tag v-if="item.installed" size="tiny" type="success" :bordered="false">
-                  已安装 v{{ item.installed_version }}
+                  {{ t('pluginsView.installedVersion') }} v{{ item.installed_version }}
                 </n-tag>
                 <span v-else></span>
                 <div class="card-actions">
@@ -271,7 +271,7 @@ onMounted(() => { load(); loadMarket() })
                       <n-button size="tiny" type="error" quaternary
                                 :loading="uninstallingMarket[item.id]">{{ t('uninstall') }}</n-button>
                     </template>
-                    确认卸载「{{ item.name }}」？
+                    {{ t('pluginsView.confirmUninstall') }}「{{ item.name }}」？
                   </n-popconfirm>
                   <n-button size="tiny" type="primary"
                             :loading="installingMarket[item.id]"

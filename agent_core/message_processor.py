@@ -127,7 +127,7 @@ class MessageProcessorMixin:
                        tool_calls=[tc["function"]["name"] for tc in current_tool_calls])
 
         # ── 循环结束：最终 summarize ─────────────────────────
-        return self._finalize_verification_reply(
+        return await self._finalize_verification_reply(
             user_input, all_tool_results, last_tool_calls or [],
             current_assistant_content, trace, user_openid, session_id,
         )

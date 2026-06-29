@@ -4,7 +4,7 @@ import { NButton, useMessage } from 'naive-ui'
 import { get, post } from '../api'
 import { getWsClient } from '../api/ws'
 import Tilt3D from '../components/fx/Tilt3D.vue'
-import { t } from '../i18n'
+import { t, tf } from '../i18n'
 
 const message = useMessage()
 const ws = getWsClient()
@@ -57,7 +57,7 @@ function onProgress(e: any) {
 
 function onDone(e: any) {
   runningAll.value = false
-  message.success(`全量自检完成：${e.passed}/${e.total} 通过`)
+  message.success(tf('healthView.fullCheckResult', String(e.passed), String(e.total)))
   get('/health/report').then(r => { lastReport.value = r }).catch(() => {})
 }
 

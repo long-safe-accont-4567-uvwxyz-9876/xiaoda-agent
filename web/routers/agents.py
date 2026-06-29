@@ -234,7 +234,12 @@ async def test_agent(name: str, request: Request, _user: str = Depends(get_curre
 
 # ── 表情包管理 ──────────────────────────────────────────
 
-_EMOTION_CATEGORIES = ["happy", "sad", "angry", "curious", "shy", "thinking", "neutral", "greeting", "fear"]
+_EMOTION_CATEGORIES = [
+    "happy", "excited", "love", "shy",
+    "sad", "angry", "surprised", "confused",
+    "thinking", "playful", "moved", "neutral",
+    "pout", "fear", "anxious",
+]
 _IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 
