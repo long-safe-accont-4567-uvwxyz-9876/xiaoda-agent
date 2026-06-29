@@ -14,29 +14,40 @@ class EncryptedCredential:
     """凭证加密存储包装层"""
 
     def __init__(self, encrypted_b64: str, salt: str = "xiaoda-agent") -> None:
+        """初始化加密凭证。
+
+        参数:
+            encrypted_b64: Base64 编码的密文。
+            salt: 派生密钥所用的盐值，需与加密时保持一致。
+        """
         self._encrypted = encrypted_b64
         self._salt = salt
         self._machine_key = self._derive_machine_key(salt)
 
     @classmethod
     def from_plaintext(cls, plaintext: str, salt: str = "xiaoda-agent") -> "EncryptedCredential":
+        """从明文构造加密凭证对象（工厂方法）。"""
         key = cls._derive_machine_key_static(salt)
         encrypted = cls._encrypt(plaintext, key)
         return cls(base64.urlsafe_b64encode(encrypted).decode(), salt)
 
     def decrypt(self) -> str:
+        """使用机器密钥解密并返回明文。"""
         from cryptography.fernet import Fernet
         f = Fernet(self._machine_key)
         return f.decrypt(base64.urlsafe_b64decode(self._encrypted)).decode()
 
     def __str__(self) -> str:
+        """返回遮蔽密文尾部的字符串表示，避免泄露。"""
         return f"EncryptedCredential(***{self._encrypted[-6:]})"
 
     def __repr__(self) -> str:
+        """返回与 __str__ 一致的可打印表示。"""
         return self.__str__()
 
     @staticmethod
     def _get_machine_fingerprint() -> str:
+        """获取机器指纹（CPU ID + 首个 MAC 地址）。"""
         cpu_id = platform.processor() or "unknown-cpu"
         try:
             import uuid
@@ -48,15 +59,18 @@ class EncryptedCredential:
 
     @staticmethod
     def _derive_machine_key_static(salt: str) -> bytes:
+        """由机器指纹和盐值派生 Fernet 兼容的密钥。"""
         fp = EncryptedCredential._get_machine_fingerprint()
         raw = hashlib.sha256(f"{fp}:{salt}".encode()).digest()
         return base64.urlsafe_b64encode(raw)
 
     def _derive_machine_key(self, salt: str) -> bytes:
+        """实例方法版密钥派生，委托给静态方法。"""
         return self._derive_machine_key_static(salt)
 
     @staticmethod
     def _encrypt(plaintext: str, key: bytes) -> bytes:
+        """使用 Fernet 加密明文并返回密文字节。"""
         from cryptography.fernet import Fernet
         f = Fernet(key)
         return f.encrypt(plaintext.encode())

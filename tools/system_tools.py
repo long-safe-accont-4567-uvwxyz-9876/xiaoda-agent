@@ -275,8 +275,9 @@ async def dev_assist(action: str, path: str = _DEFAULT_PROJECT_DIR, lines: int =
                     return ToolResult.fail(f"未找到日志文件，且服务 {service} 无 journalctl 记录（可能服务名错误，本机通常是 'nahida-web'）")
                 log_path = os.path.join(log_dir, log_files[0])
                 try:
-                    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-                        all_lines = f.readlines()
+                    all_lines = await asyncio.to_thread(
+                        lambda: open(log_path, "r", encoding="utf-8", errors="replace").readlines()
+                    )
                     recent = all_lines[-lines:]
                     return ToolResult.ok(f"日志文件 {log_files[0]} (最后{len(recent)}行):\n{''.join(recent).strip()}")
                 except Exception as e:

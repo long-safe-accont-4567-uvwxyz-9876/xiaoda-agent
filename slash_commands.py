@@ -1,4 +1,5 @@
 from typing import Any, Optional
+import asyncio
 import os
 import shutil
 import time
@@ -447,9 +448,12 @@ class SlashCommandHandler:
         else:
             lines.append("✅ 错误监控: 未启用")
         try:
-            import subprocess
-            result = subprocess.run(["systemctl", "is-active", "qq-agent"], capture_output=True, text=True, timeout=5)
-            status = result.stdout.strip() or "未知"
+            result = await asyncio.create_subprocess_exec(
+                "systemctl", "is-active", "qq-agent",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            stdout_bytes, _ = await asyncio.wait_for(result.communicate(), timeout=5)
+            status = stdout_bytes.decode().strip() or "未知"
             status_icon = "🟢" if status == "active" else "🔴"
             lines.append(f"{status_icon} qq-agent: {status}")
         except Exception:

@@ -62,7 +62,10 @@ _CONFIG_FIELDS = [
 
 
 class AgentRegistry:
+    """Agent 注册表，负责 Agent 的 CRUD、持久化与权限管理。"""
+
     def __init__(self, core: Any) -> None:
+        """初始化 Agent 注册表。"""
         self.core = core
         self._disabled: set[str] = set()
         AGENTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -70,12 +73,15 @@ class AgentRegistry:
     # ── 持久化 ──────────────────────────────────────────
 
     def _file(self, name: str) -> Path:
+        """返回指定 Agent 的配置文件路径。"""
         return AGENTS_DIR / f"{name}.json"
 
     def _personality_file(self, name: str) -> Path:
+        """返回指定 Agent 的人格文件路径。"""
         return AGENTS_DIR / f"{name}_personality.md"
 
     def _save_config(self, cfg: Any) -> None:
+        """将 Agent 配置持久化到 JSON 文件。"""
         data = {}
         for f in _CONFIG_FIELDS:
             v = getattr(cfg, f, None)
@@ -126,6 +132,7 @@ class AgentRegistry:
 
     @staticmethod
     def _apply_fields(cfg: Any, data: dict) -> None:
+        """将配置数据中的字段应用到 AgentConfig 对象上。"""
         for f in _CONFIG_FIELDS:
             if f in ("name",) or f not in data or data[f] is None:
                 continue
@@ -162,6 +169,7 @@ class AgentRegistry:
     }
 
     def _builtin_stub(self, name: str) -> dict:
+        """生成内置 Agent 的桩数据（降级模式下使用）。"""
         stub = self._BUILTIN_STUBS.get(name, {})
         excluded = BUILTIN_EXCLUDED_TOOLS.get(name, set())
         blocked = self._blocked()
@@ -196,6 +204,7 @@ class AgentRegistry:
         }
 
     def list(self) -> list[dict]:
+        """列出所有 Agent（主体 + 已注册子代理 + 降级桩）。"""
         main = dict(MAIN_AGENT_META,
                     model=self._main_model(),
                     tool_count=len(self._all_tool_names()),
@@ -225,6 +234,7 @@ class AgentRegistry:
         return out
 
     def _main_model(self) -> str:
+        """获取主体使用的模型名称。"""
         try:
             from model_router import ROUTE_TABLE
             return ROUTE_TABLE.get("chat", {}).get("model", "")
@@ -232,6 +242,7 @@ class AgentRegistry:
             return ""
 
     def _serialize(self, cfg: Any, enabled: bool = True, degraded: bool = False) -> dict:
+        """将 AgentConfig 序列化为 API 返回用的字典。"""
         excluded = set(cfg.excluded_tools or set())
         tool_count = len([t for t in self._all_tool_names()
                           if t not in excluded and t not in self._blocked()])
@@ -263,6 +274,7 @@ class AgentRegistry:
         }
 
     def get(self, name: str) -> dict | None:
+        """根据名称获取单个 Agent 的信息。"""
         if name == "nahida":
             return self.list()[0]
         agent = self.core.dispatcher.get_agent(name)
@@ -277,6 +289,7 @@ class AgentRegistry:
     # ── 增删改 ──────────────────────────────────────────
 
     async def create(self, data: dict) -> dict:
+        """创建新的子代理，注册到 dispatcher 并持久化配置。"""
         from agent_dispatcher import SubAgentConfig
         name = (data.get("name") or "").strip().lower()
         if not name or not name.isidentifier():
@@ -299,6 +312,7 @@ class AgentRegistry:
         return self._serialize(cfg)
 
     async def update(self, name: str, data: dict) -> dict:
+        """更新 Agent 配置，必要时热重载模型客户端并持久化。"""
         # 主体 nahida 特殊处理：不在 dispatcher 中，只更新壁纸/人格
         if name == "nahida":
             if data.get("wallpaper"):
@@ -345,6 +359,7 @@ class AgentRegistry:
         return self._serialize(agent.config, enabled=name not in self._disabled)
 
     async def delete(self, name: str) -> None:
+        """删除自定义 Agent，从 dispatcher 注销并清理配置文件。"""
         if name in BUILTIN_AGENTS or name == "nahida":
             raise ValueError("内置 Agent 不可删除，只能禁用")
         self._require(name)
@@ -353,6 +368,7 @@ class AgentRegistry:
         self._personality_file(name).unlink(missing_ok=True)
 
     def set_enabled(self, name: str, enabled: bool) -> None:
+        """启用或禁用指定 Agent 并持久化状态。"""
         agent = self._require(name)
         if enabled:
             self._disabled.discard(name)
@@ -371,9 +387,11 @@ class AgentRegistry:
         fp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def is_enabled(self, name: str) -> bool:
+        """返回指定 Agent 是否处于启用状态。"""
         return name not in self._disabled
 
     def _require(self, name: str) -> Any:
+        """获取指定 Agent，不存在时抛出 KeyError。"""
         agent = self.core.dispatcher.get_agent(name)
         if not agent:
             raise KeyError(f"Agent {name} 不存在")
@@ -383,15 +401,18 @@ class AgentRegistry:
 
     @staticmethod
     def _blocked() -> set[str]:
+        """返回子代理禁止使用的工具名称集合。"""
         from agent_dispatcher import DELEGATE_BLOCKED_TOOLS
         return set(DELEGATE_BLOCKED_TOOLS)
 
     @staticmethod
     def _all_tool_names() -> list[str]:
+        """返回所有已注册工具的名称列表。"""
         from tool_engine.tool_registry import list_tools
         return [t["name"] for t in list_tools()]
 
     def get_permissions(self, name: str) -> dict:
+        """获取指定 Agent 的工具和 MCP Server 权限矩阵。"""
         from tool_engine.tool_registry import list_tools
         blocked = self._blocked()
         if name == "nahida":
@@ -423,6 +444,7 @@ class AgentRegistry:
         return {"tools": tools, "mcp_servers": mcp, "is_main": is_main}
 
     def set_permissions(self, name: str, matrix: dict) -> dict:
+        """设置指定 Agent 的工具和 MCP Server 权限并持久化。"""
         if name == "nahida":
             raise ValueError("主体纳西妲的工具不可裁剪")
         agent = self._require(name)
@@ -446,6 +468,7 @@ class AgentRegistry:
     # ── 人格 ────────────────────────────────────────────
 
     def get_personality(self, name: str) -> str:
+        """获取指定 Agent 的人格文本内容。"""
         if name == "nahida":
             from config import WORKSPACE_DIR
             soul_path = WORKSPACE_DIR / "SOUL.md"
@@ -459,6 +482,7 @@ class AgentRegistry:
         return ""
 
     async def set_personality(self, name: str, text: str) -> None:
+        """设置 Agent 的人格文本，写入文件并重新初始化。"""
         if name == "nahida":
             from config import WORKSPACE_DIR
             soul_path = WORKSPACE_DIR / "SOUL.md"

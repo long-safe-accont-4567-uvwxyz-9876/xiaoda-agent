@@ -6,6 +6,7 @@ from tools.file_tools_v2 import _validate_path
 
 
 def _read_pdf(path: str) -> ToolResult:
+    """读取 PDF 文件的文本和表格内容（前 20 页文本、前 5 页表格）。"""
     try:
         import pdfplumber
     except ImportError:
@@ -48,6 +49,7 @@ def _read_pdf(path: str) -> ToolResult:
 
 
 def _read_docx(path: str) -> ToolResult:
+    """读取 DOCX 文件的段落文本和表格内容。"""
     try:
         from docx import Document
     except ImportError:
@@ -83,6 +85,7 @@ def _read_docx(path: str) -> ToolResult:
 
 
 def _read_pptx(path: str) -> ToolResult:
+    """读取 PPTX 文件每张幻灯片的文本内容（前 30 张）。"""
     try:
         from pptx import Presentation
     except ImportError:
@@ -117,6 +120,7 @@ def _read_pptx(path: str) -> ToolResult:
 
 
 def _read_xlsx(path: str) -> ToolResult:
+    """读取 XLSX 文件各工作表的行数据（前 5 个表，每表前 30 行）。"""
     try:
         from openpyxl import load_workbook
     except ImportError:
@@ -168,6 +172,7 @@ def _read_xlsx(path: str) -> ToolResult:
     category="document",
 )
 def document_reader(path: str) -> ToolResult:
+    """根据文件扩展名分发到对应的文档读取器并返回内容。"""
     ext = Path(os.path.expanduser(path)).suffix.lower()
     readers = {
         '.pdf': _read_pdf,

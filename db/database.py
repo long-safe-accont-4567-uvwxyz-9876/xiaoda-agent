@@ -491,26 +491,17 @@ class DatabaseManager:
 
     async def _ddl_schedule_api_tables(self) -> None:
         """建表：调度/API/会话相关表。"""
-        await self._conn.executescript("""
+        await self._ddl_schedule_greeting_tables()
+        await self._ddl_api_media_tables()
+        await self._ddl_session_agent_tables()
 
+    async def _ddl_schedule_greeting_tables(self) -> None:
+        """建表：调度与问候相关表（cron_last_run / greeting_schedules / greeting_log）。"""
+        await self._conn.executescript("""
 
             CREATE TABLE IF NOT EXISTS cron_last_run (
                 task_name TEXT PRIMARY KEY,
                 last_run REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS api_usage (
-                id TEXT PRIMARY KEY,
-                user_openid TEXT DEFAULT '',
-                session_id TEXT DEFAULT '',
-                model TEXT DEFAULT '',
-                task_type TEXT DEFAULT '',
-                prompt_tokens INTEGER DEFAULT 0,
-                completion_tokens INTEGER DEFAULT 0,
-                cache_hit_tokens INTEGER DEFAULT 0,
-                cache_miss_tokens INTEGER DEFAULT 0,
-                cost_usd REAL DEFAULT 0,
-                created_at REAL NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS greeting_schedules (
@@ -536,6 +527,24 @@ class DatabaseManager:
                 content TEXT DEFAULT '',
                 channel TEXT DEFAULT 'web',
                 reason TEXT DEFAULT ''
+            );        """)
+
+    async def _ddl_api_media_tables(self) -> None:
+        """建表：API 用量/媒体任务/健康报告相关表。"""
+        await self._conn.executescript("""
+
+            CREATE TABLE IF NOT EXISTS api_usage (
+                id TEXT PRIMARY KEY,
+                user_openid TEXT DEFAULT '',
+                session_id TEXT DEFAULT '',
+                model TEXT DEFAULT '',
+                task_type TEXT DEFAULT '',
+                prompt_tokens INTEGER DEFAULT 0,
+                completion_tokens INTEGER DEFAULT 0,
+                cache_hit_tokens INTEGER DEFAULT 0,
+                cache_miss_tokens INTEGER DEFAULT 0,
+                cost_usd REAL DEFAULT 0,
+                created_at REAL NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS media_tasks (
@@ -557,7 +566,11 @@ class DatabaseManager:
                 passed INTEGER DEFAULT 0,
                 total INTEGER DEFAULT 0,
                 detail TEXT NOT NULL DEFAULT '[]'
-            );
+            );        """)
+
+    async def _ddl_session_agent_tables(self) -> None:
+        """建表：会话与事件相关表（sessions / agent_events）。"""
+        await self._conn.executescript("""
 
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,

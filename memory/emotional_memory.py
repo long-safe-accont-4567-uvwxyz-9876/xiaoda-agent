@@ -84,7 +84,7 @@ class EmotionalMemoryManager:
     MAX_INJECT_PER_SESSION = 3  # Bounding 上限
     MAX_MEMORIES_PER_USER = 500  # 每用户上限
 
-    def __init__(self, data_dir: Path | None = None):
+    def __init__(self, data_dir: Path | None = None) -> None:
         self._data_dir = data_dir or Path("data")
         self._memories_path = self._data_dir / "emotional_memories.json"
         self._memories: dict[str, list[EmotionalMemory]] = {}  # user_id -> memories

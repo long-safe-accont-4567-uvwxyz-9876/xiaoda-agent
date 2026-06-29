@@ -163,6 +163,7 @@ def _normalize_command(command: str) -> str:
             break
     # hex 编码绕过：\xHH 格式
     def _replace_hex(m: Any) -> Any:
+        r"""将 \xHH 十六进制转义序列还原为对应字符。"""
         try:
             return chr(int(m.group(1), 16))
         except ValueError:
@@ -170,6 +171,7 @@ def _normalize_command(command: str) -> str:
     normalized = re.sub(r'\\x([0-9a-fA-F]{2})', _replace_hex, normalized)
     # octal 编码绕过：\OOO 格式
     def _replace_octal(m: Any) -> Any:
+        r"""将 \OOO 八进制转义序列还原为对应字符。"""
         try:
             return chr(int(m.group(1), 8))
         except ValueError:
@@ -177,6 +179,7 @@ def _normalize_command(command: str) -> str:
     normalized = re.sub(r'\\([0-7]{3})', _replace_octal, normalized)
     # unicode 编码绕过：\uHHHH 格式
     def _replace_unicode(m: Any) -> Any:
+        r"""将 \uHHHH Unicode 转义序列还原为对应字符。"""
         try:
             return chr(int(m.group(1), 16))
         except ValueError:
@@ -230,6 +233,7 @@ def _sanitize_output(output: str) -> str:
     max_frequency=30,
 )
 def shell_command(command: str) -> ToolResult:
+    """执行 Shell 命令（含危险命令拦截和输出敏感信息遮蔽）。"""
     danger_reason = _is_command_dangerous(command)
     if danger_reason:
         return ToolResult.fail(danger_reason)
@@ -279,6 +283,7 @@ def shell_command(command: str) -> ToolResult:
     category="file",
 )
 def list_files(path: str = "~") -> ToolResult:
+    """列出目录下的文件和文件夹，附带文件大小。"""
     try:
         target_path = os.path.expanduser(path)
 
@@ -329,6 +334,7 @@ def list_files(path: str = "~") -> ToolResult:
     category="file",
 )
 def read_file(path: str, offset: int = 0, limit: int = 200) -> ToolResult:
+    """读取指定文件的文本内容（支持行偏移和行数限制）。"""
     try:
         target_path = os.path.expanduser(path)
 
@@ -366,6 +372,7 @@ def read_file(path: str, offset: int = 0, limit: int = 200) -> ToolResult:
     max_frequency=15,
 )
 def write_file(input_str: str) -> ToolResult:
+    """将内容写入文件，输入格式为 '文件路径|||内容'。"""
     try:
         if '|||' not in input_str:
             return ToolResult.fail("格式错误。请使用: '文件路径|||内容'")
@@ -402,6 +409,7 @@ def write_file(input_str: str) -> ToolResult:
     category="file",
 )
 def search_files(pattern: str) -> ToolResult:
+    """按通配符模式搜索文件，支持递归匹配。"""
     import glob
     try:
         expanded = os.path.expanduser(pattern)

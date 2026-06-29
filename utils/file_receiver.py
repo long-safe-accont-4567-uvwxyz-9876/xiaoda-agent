@@ -12,10 +12,14 @@ from loguru import logger
 
 
 class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """安全重定向处理器，重定向前校验目标 URL。"""
+
     def __init__(self, validator: Any) -> None:
+        """初始化重定向处理器，绑定 URL 校验函数。"""
         self._validator = validator
 
     def redirect_request(self, req: Any, fp: Any, code: Any, msg: Any, headers: Any, newurl: Any) -> Any:
+        """重定向请求，仅在校验通过时允许重定向。"""
         if not self._validator(newurl):
             return None
         return super().redirect_request(req, fp, code, msg, headers, newurl)
@@ -25,9 +29,11 @@ class _SSRFCheckHTTPHandler(urllib.request.HTTPHandler):
     """自定义 HTTP Handler：在连接建立后检查实际连接的远程 IP，防止 DNS Rebinding"""
 
     def http_open(self, req: Any) -> Any:
+        """打开 HTTP 连接并检查实际连接的远程 IP。"""
         return self._open_with_ip_check(req)
 
     def _open_with_ip_check(self, req: Any) -> Any:
+        """执行请求并在连接建立后校验远程 IP 是否为内网地址。"""
         # 先执行正常请求
         response = super().http_open(req)
         # 检查实际连接的远程地址
@@ -41,6 +47,7 @@ class _SSRFCheckHTTPHandler(urllib.request.HTTPHandler):
 
     @staticmethod
     def _check_peer_ip(ip_str: str) -> None:
+        """检查远程 IP 是否属于私有网络，若是则抛出异常。"""
         ip = ipaddress.ip_address(ip_str)
         if isinstance(ip, ipaddress.IPv4Address):
             for net in FileReceiver.PRIVATE_NETWORKS:
@@ -56,9 +63,11 @@ class _SSRFCheckHTTPSHandler(urllib.request.HTTPSHandler):
     """自定义 HTTPS Handler：在连接建立后检查实际连接的远程 IP，防止 DNS Rebinding"""
 
     def https_open(self, req: Any) -> Any:
+        """打开 HTTPS 连接并检查实际连接的远程 IP。"""
         return self._open_with_ip_check(req)
 
     def _open_with_ip_check(self, req: Any) -> Any:
+        """执行 HTTPS 请求并校验远程 IP 是否为内网地址。"""
         response = super().https_open(req)
         if response and hasattr(response, 'fp') and hasattr(response.fp, 'raw'):
             sock = getattr(response.fp.raw, '_sock', None)
@@ -70,6 +79,7 @@ class _SSRFCheckHTTPSHandler(urllib.request.HTTPSHandler):
 
 
 class FileReceiver:
+    """文件接收器，支持安全下载、分类存储和文本预览。"""
     MAX_FILE_SIZE = 20 * 1024 * 1024
 
     TYPE_MAP = {
@@ -101,12 +111,14 @@ class FileReceiver:
     ]
 
     def __init__(self, base_dir: Path) -> None:
+        """初始化文件接收器，创建基础目录和分类子目录。"""
         self._base = base_dir
         self._base.mkdir(parents=True, exist_ok=True)
         for sub in ("images", "documents", "other"):
             (self._base / sub).mkdir(exist_ok=True)
 
     async def _validate_url(self, url: str) -> bool:
+        """异步校验 URL 是否合法：检查协议、域名白名单和解析 IP 是否为内网。"""
         from urllib.parse import urlparse
         parsed = urlparse(url)
         if parsed.scheme not in ("https", "http"):
@@ -176,6 +188,7 @@ class FileReceiver:
         return True
 
     async def receive(self, attachment: Any) -> dict:
+        """接收并保存附件：校验 URL、下载文件、分类存储并生成文本预览。"""
         url = getattr(attachment, 'url', '')
         filename = getattr(attachment, 'filename', 'unknown')
         content_type = getattr(attachment, 'content_type', '')
@@ -198,6 +211,7 @@ class FileReceiver:
 
         try:
             def _download() -> tuple:
+                """同步下载文件到临时路径，含大小限制检查。"""
                 req = urllib.request.Request(url, headers={
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 })
@@ -253,6 +267,7 @@ class FileReceiver:
             return {"status": "error", "filename": filename, "error": str(e)[:100]}
 
     def _classify(self, filename: str, content_type: str) -> str:
+        """根据文件扩展名或 MIME 类型分类到对应子目录。"""
         ext = Path(filename).suffix.lower() if filename else ""
         for category, exts in self.TYPE_MAP.items():
             if ext in exts:
@@ -264,6 +279,7 @@ class FileReceiver:
         return "other"
 
     def _safe_filename(self, filename: str) -> str:
+        """清理文件名中的非法字符，返回安全的文件名。"""
         if not filename or filename == "unknown":
             return "unknown"
         name = Path(filename).name
@@ -279,6 +295,7 @@ class FileReceiver:
         return name
 
     def _try_read_text(self, path: Path) -> str:
+        """尝试读取文本文件的前 2000 字符作为预览。"""
         if path.suffix.lower() in self.TEXT_EXTENSIONS:
             try:
                 return path.read_text(encoding='utf-8', errors='ignore')[:2000]

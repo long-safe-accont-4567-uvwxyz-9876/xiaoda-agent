@@ -25,7 +25,10 @@ logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="WA
 
 
 class NahidaAcpServer:
+    """纳西妲 ACP 服务器，处理 JSON-RPC 消息并调度 Agent 处理。"""
+
     def __init__(self) -> None:
+        """初始化 ACP 服务器，设置会话和状态变量。"""
         self.agent = None
         self.sessions = {}
         self.initialized = False
@@ -35,12 +38,14 @@ class NahidaAcpServer:
         self._coze_session_id = ""
 
     async def _init_agent(self) -> None:
+        """初始化并加载 AgentCore。"""
         from agent_core import AgentCore
         self.agent = AgentCore()
         await self.agent.init()
         logger.info("nahida_acp.agent_initialized")
 
     def _read_message(self) -> Any:
+        """从标准输入读取一行并解析为 JSON。"""
         line = sys.stdin.readline()
         if not line:
             return None
@@ -54,11 +59,13 @@ class NahidaAcpServer:
             return None
 
     def _write_message(self, msg: Any) -> None:
+        """将 JSON-RPC 消息写入标准输出。"""
         payload = json.dumps(msg, ensure_ascii=False)
         sys.stdout.write(payload + '\n')
         sys.stdout.flush()
 
     def _handle_initialize(self, msg: Any) -> dict:
+        """处理 initialize 请求，返回协议版本和代理能力信息。"""
         self.initialized = True
         return {
             "jsonrpc": "2.0",
@@ -83,6 +90,7 @@ class NahidaAcpServer:
         }
 
     def _handle_session_new(self, msg: Any) -> dict:
+        """处理 session/new 请求，创建新会话并返回会话 ID。"""
         params = msg.get("params", {})
         session_id = f"nahida_{uuid.uuid4().hex[:12]}"
         self.sessions[session_id] = {"created": True}
@@ -95,10 +103,12 @@ class NahidaAcpServer:
         }
 
     def _strip_coze_context(self, text: Any) -> Any:
+        """从文本中移除 <coze-context>...</coze-context> 标签块。"""
         cleaned = re.sub(r'<coze-context>.*?</coze-context>\s*', '', text, flags=re.DOTALL)
         return cleaned.strip()
 
     def _extract_coze_ids(self, text: Any) -> Any:
+        """从 <coze-context> 块中解析 agent-id / session-id 等键值对。"""
         m = re.search(r'<coze-context>(.*?)</coze-context>', text, re.DOTALL)
         if not m:
             return {}
@@ -115,6 +125,7 @@ class NahidaAcpServer:
         return ids
 
     def _encode_image(self, path: Any) -> Any:
+        """将图片文件编码为 Base64 格式的字典。"""
         try:
             p = Path(path)
             if not p.exists() or not p.is_file():
@@ -130,6 +141,7 @@ class NahidaAcpServer:
             return None
 
     async def _send_audio_file(self, audio_path: Any, acp_session_id: str) -> None:
+        """通过 coze-bridge 发送音频文件（bridge 不可用时仅记录日志）。"""
         try:
             p = Path(audio_path)
             if not p.exists() or not p.is_file():
@@ -333,6 +345,7 @@ class NahidaAcpServer:
             logger.warning("nahida_acp.sticker_send_error", error=str(e))
 
     def _handle_session_cancel(self, msg: Any) -> Any:
+        """处理 session/cancel 请求，标记当前会话为已取消。"""
         self._cancelled = True
         if msg.get("id") is not None:
             return {
@@ -343,6 +356,7 @@ class NahidaAcpServer:
         return None
 
     def _handle_session_load(self, msg: Any) -> dict:
+        """处理 session/load 请求，当前不支持该方法。"""
         return {
             "jsonrpc": "2.0",
             "id": msg.get("id", 1),
@@ -353,6 +367,7 @@ class NahidaAcpServer:
         }
 
     def _make_error(self, msg: Any, code: Any, message: Any) -> dict:
+        """构造 JSON-RPC 错误响应。"""
         return {
             "jsonrpc": "2.0",
             "id": msg.get("id"),
@@ -360,6 +375,7 @@ class NahidaAcpServer:
         }
 
     async def run(self) -> None:
+        """启动 ACP 服务器主循环，读取并分发 JSON-RPC 消息。"""
         await self._init_agent()
 
         logger.info("nahida_acp.ready")
@@ -422,6 +438,7 @@ class NahidaAcpServer:
 
 
 def main() -> None:
+    """命令行入口：解析参数并启动 ACP 服务器。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", action="store_true")
     parser.add_argument("--acp-version", action="store_true")

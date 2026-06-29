@@ -7,8 +7,10 @@ from transports.base import ProviderTransport, TransportResponse
 
 
 class MiMoTransport(ProviderTransport):
+    """小米 MiMo API 的传输适配器。"""
 
     def __init__(self) -> None:
+        """初始化 MiMo 传输适配器。"""
         # 从 os.getenv() 实时读取，避免使用 config 模块级冻结变量
         _key = os.getenv("MIMO_API_KEY", "")
         _url = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
@@ -16,9 +18,11 @@ class MiMoTransport(ProviderTransport):
 
     @property
     def provider_name(self) -> str:
+        """返回 provider 名称 'mimo'。"""
         return "mimo"
 
     def is_available(self) -> bool:
+        """返回 MiMo 客户端是否已初始化。"""
         return self._client is not None
 
     async def chat(self, model: str, messages: list[dict],
@@ -28,6 +32,7 @@ class MiMoTransport(ProviderTransport):
                    stream: bool = False,
                    timeout: int = 60,
                    thinking: dict | None = None) -> TransportResponse:
+        """调用 MiMo 对话接口，返回统一格式的 TransportResponse。"""
         if not self._client:
             raise RuntimeError("MiMo client not initialized")
 

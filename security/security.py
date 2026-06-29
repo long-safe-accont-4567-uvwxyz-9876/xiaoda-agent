@@ -8,6 +8,7 @@ from loguru import logger
 
 @dataclass
 class SecurityCheckResult:
+    """安全检查结果数据类。"""
     is_safe: bool
     threat_type: str = ""  # "injection", "bypass", "leak", "dangerous_cmd" 等
     confidence: float = 0.0  # 0.0-1.0
@@ -156,6 +157,12 @@ class SecurityFilter:
 
     def __init__(self, owner_ids: list[str] | None = None,
                  rate_limit_per_minute: int = 120) -> None:
+        """初始化安全过滤器。
+
+        参数:
+            owner_ids: 主人 ID 列表，未传入时从环境变量 OWNER_IDS / MASTER_QQ_OPENID 读取。
+            rate_limit_per_minute: 单用户每分钟最大请求次数。
+        """
         # 自动从环境变量读取 owner_ids（调用方未显式传入时）
         if owner_ids is None:
             owner_ids = self._load_owner_ids_from_env()
@@ -437,6 +444,7 @@ class SecurityFilter:
         return True, ""
 
     def _check_rate(self, user_id: str) -> bool:
+        """检查用户请求频率是否超过限制。"""
         now = time.time()
         window = 60
         timestamps = self._call_timestamps.get(user_id, [])
@@ -455,6 +463,7 @@ class SecurityFilter:
         return True
 
     def _cleanup_stale_users(self, now: float) -> None:
+        """清理超过 5 分钟未活跃的用户频率记录。"""
         stale = [uid for uid, ts in self._call_timestamps.items()
                  if not ts or now - ts[-1] > 300]
         for uid in stale:

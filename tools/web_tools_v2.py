@@ -21,6 +21,7 @@ _tavily_client = None
 
 
 def _get_primp_client() -> Any:
+    """懒初始化并返回模块级 primp.Client 单例。"""
     global _primp_client
     if _primp_client is None:
         import primp
@@ -29,6 +30,7 @@ def _get_primp_client() -> Any:
 
 
 def _get_tavily_client() -> Any:
+    """懒初始化并返回 TavilyClient 单例（API Key 存在时）。"""
     global _tavily_client
     if _tavily_client is None and TAVILY_API_KEY:
         from tavily import TavilyClient
@@ -37,6 +39,7 @@ def _get_tavily_client() -> Any:
 
 
 def _bing_search_sync(query: str, max_results: int = 8) -> list[dict]:
+    """同步抓取 Bing 搜索结果，解析标题、链接和摘要。"""
     from lxml import html as lxml_html
     from urllib.parse import quote_plus
 
@@ -121,11 +124,13 @@ _FRESH_KEYWORDS = (
 
 
 def _is_time_sensitive(query: str) -> bool:
+    """判断查询是否包含时效性关键词，决定是否走新闻搜索。"""
     return any(kw in query for kw in _FRESH_KEYWORDS)
 
 
 def _format_results(query: str, results: list[dict], engine_name: str = "",
                     answer: str = "") -> str:
+    """将搜索结果格式化为可读的字符串。"""
     if not results and not answer:
         return ""
     parts = [f"搜索: {query}"]
@@ -145,6 +150,7 @@ def _format_results(query: str, results: list[dict], engine_name: str = "",
 
 
 def _dedup_results(results: list[dict]) -> list[dict]:
+    """根据 URL 对搜索结果去重。"""
     seen_urls = set()
     unique = []
     for r in results:
@@ -202,6 +208,7 @@ async def _do_search(query: str, max_results: int = 8,
 
 
 def _clean_query(query: str) -> str:
+    """清理搜索关键词：去除前缀/语气助词等冗余文本。"""
     q = query.strip()
     question_starters = ("如何", "为什么", "什么是", "怎么", "怎样", "哪儿", "哪里", "谁", "何时", "多少")
     if q.startswith(question_starters):
@@ -243,6 +250,7 @@ def _clean_query(query: str) -> str:
     max_frequency=30,
 )
 async def web_search(query: str) -> ToolResult:
+    """搜索互联网信息，自动选择新闻或常规引擎，结果带 5 分钟缓存。"""
     try:
         query = str(query) if query is not None else ""
         if not query.strip():
@@ -286,12 +294,14 @@ async def web_search(query: str) -> ToolResult:
     category="web",
 )
 async def get_weather(city: str) -> ToolResult:
+    """获取指定城市的实时天气信息（通过 wttr.in）。"""
     try:
         city = str(city) if city is not None else ""
         if not city.strip():
             return ToolResult.fail("城市名称不能为空")
 
         def _fetch_weather() -> Any:
+            """同步请求 wttr.in 获取天气信息。"""
             import urllib.request, urllib.parse
             url = f"https://wttr.in/{urllib.parse.quote(city)}?format=3&lang=zh"
             # SSRF 防护：5步法校验 (city 为用户输入, 防注入内网地址)

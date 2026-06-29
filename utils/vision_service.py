@@ -53,6 +53,7 @@ HSV_COLOR_HEX = {
 
 @dataclass
 class Detection:
+    """目标检测结果，包含标签、置信度和边界框坐标。"""
     label: str
     confidence: float
     x1: float
@@ -63,12 +64,14 @@ class Detection:
 
 @dataclass
 class ColorInfo:
+    """颜色分析结果，包含颜色名称、十六进制值和占比。"""
     color: str
     hex_value: str
     percentage: float
 
 
 def _hsv_to_color_name(h: int, s: int, v: int) -> str:
+    """根据 HSV 分量返回对应的中文颜色名称。"""
     if v < 46:
         return "黑"
     if s < 43:
@@ -82,7 +85,10 @@ def _hsv_to_color_name(h: int, s: int, v: int) -> str:
 
 
 class VisionService:
+    """视觉服务，封装摄像头捕获、目标检测和颜色分析功能。"""
+
     def __init__(self) -> None:
+        """初始化视觉服务。"""
         self.model = None
         self._npu = None
         self.model_loaded = False
@@ -90,6 +96,7 @@ class VisionService:
         CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
 
     def _check_memory(self) -> bool:
+        """检查系统可用内存是否充足（>500MB）。"""
         try:
             with open("/proc/meminfo", "r") as f:
                 for line in f:
@@ -102,6 +109,7 @@ class VisionService:
             return False
 
     def _load_model(self) -> None:
+        """加载检测模型，按优先级尝试 NPU、NCNN 或回退到 API。"""
         if self.model_loaded:
             return
         if os.getenv("ENABLE_NPU", "").lower() in ("1", "true", "yes"):
@@ -175,10 +183,12 @@ class VisionService:
             self.model_loaded = True
 
     def _ensure_model(self) -> None:
+        """确保检测模型已加载，未加载时触发加载流程。"""
         if not self.model_loaded:
             self._load_model()
 
     def capture_frame(self, device: Any=0, width: Any=640, height: Any=480) -> tuple:
+        """从摄像头捕获一帧图像。"""
         try:
             import cv2
             cap = cv2.VideoCapture(f"/dev/video{device}")
@@ -197,6 +207,7 @@ class VisionService:
             return (False, str(e))
 
     def save_frame(self, frame: Any, filename: Any=None) -> str:
+        """将图像帧保存为 JPEG 文件，返回保存路径。"""
         try:
             import cv2
             CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
@@ -210,6 +221,7 @@ class VisionService:
             return ""
 
     def _nms(self, detections: list) -> list:
+        """对检测结果执行非极大值抑制。"""
         if not detections:
             return []
         detections.sort(key=lambda d: d.confidence, reverse=True)
@@ -222,6 +234,7 @@ class VisionService:
 
     @staticmethod
     def _iou(a: Detection, b: Detection) -> float:
+        """计算两个检测框的交并比。"""
         ix1 = max(a.x1, b.x1)
         iy1 = max(a.y1, b.y1)
         ix2 = min(a.x2, b.x2)
@@ -237,6 +250,7 @@ class VisionService:
         return inter / union
 
     def detect_objects(self, frame: Any) -> list:
+        """检测图像中的目标物体，返回 Detection 列表。"""
         self._ensure_model()
         if self.backend == "npu" and self._npu:
             try:
@@ -264,6 +278,7 @@ class VisionService:
         return []
 
     def _detect_ncnn(self, frame: Any) -> list:
+        """使用 NCNN 模型执行目标检测。"""
         try:
             import ncnn
             import cv2
@@ -321,6 +336,7 @@ class VisionService:
             return []
 
     def describe_scene(self, frame: Any) -> str:
+        """生成图像中检测到的目标的文字描述。"""
         detections = self.detect_objects(frame)
         if not detections:
             return "画面中未检测到明确的目标物体"
@@ -336,6 +352,7 @@ class VisionService:
         return "画面中检测到" + "、".join(parts)
 
     def analyze_colors(self, frame: Any) -> list:
+        """分析图像中的主要颜色及其占比。"""
         try:
             import cv2
             small = cv2.resize(frame, (50, 50))
@@ -363,6 +380,7 @@ class VisionService:
             return []
 
     def unload_model(self) -> None:
+        """卸载已加载的检测模型，释放资源。"""
         if self._npu:
             self._npu = None
         self.model = None

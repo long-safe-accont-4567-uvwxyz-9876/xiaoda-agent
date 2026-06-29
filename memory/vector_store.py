@@ -22,18 +22,22 @@ except ImportError:
 
 
 class EmbedCache:
+    """基于 LRU 的文本嵌入向量缓存。"""
 
     def __init__(self, max_size: int = 256) -> None:
+        """初始化嵌入缓存。"""
         self._cache: OrderedDict[str, list[float]] = OrderedDict()
         self._max_size = max_size
         self._hits = 0
         self._misses = 0
 
     def __contains__(self, text: str) -> bool:
+        """检查文本是否已存在于缓存中。"""
         key = hashlib.md5(text[:300].encode()).hexdigest()
         return key in self._cache
 
     def get(self, text: str) -> list[float] | None:
+        """根据文本查询缓存的嵌入向量，命中时更新 LRU 顺序。"""
         key = hashlib.md5(text[:300].encode()).hexdigest()
         if key in self._cache:
             self._cache.move_to_end(key)
@@ -43,6 +47,7 @@ class EmbedCache:
         return None
 
     def put(self, text: str, vec: list[float]) -> None:
+        """将文本和对应嵌入向量存入缓存，超出容量时淘汰最久未使用的条目。"""
         key = hashlib.md5(text[:300].encode()).hexdigest()
         self._cache[key] = vec
         self._cache.move_to_end(key)
@@ -51,6 +56,7 @@ class EmbedCache:
 
     @property
     def stats(self) -> dict:
+        """返回缓存统计信息（命中数、未命中数、命中率、当前大小）。"""
         total = self._hits + self._misses
         return {
             "hits": self._hits,
@@ -61,10 +67,12 @@ class EmbedCache:
 
 
 class VectorStore:
+    """基于 SQLite-vec 的向量存储，支持嵌入、写入、删除和相似度搜索。"""
 
     def __init__(self, db_path: str | Path, embed_api_key: str = "",
                  embed_base_url: str = "", embed_model: str = "BAAI/bge-m3",
                  dimensions: int = 0) -> None:
+        """初始化向量存储。"""
         self._db_path = str(db_path)
         self._embed_api_key = embed_api_key
         self._embed_base_url = embed_base_url
@@ -89,17 +97,21 @@ class VectorStore:
 
     @property
     def ready(self) -> bool:
+        """返回存储是否已初始化且未关闭。"""
         return self._initialized and not self._closed
 
     @property
     def enabled(self) -> bool:
+        """返回存储是否已初始化。"""
         return self._initialized
 
     @property
     def dimensions(self) -> int:
+        """返回嵌入向量的维度。"""
         return self._dimensions
 
     async def init(self) -> None:
+        """初始化 SQLite 数据库，加载 sqlite_vec 扩展并创建向量虚拟表。"""
         if not HAS_SQLITE_VEC:
             logger.warning("vector_store.sqlite_vec_missing")
             return
@@ -107,6 +119,7 @@ class VectorStore:
         import sqlite3
 
         def _init_db() -> tuple:
+            """在后台线程中初始化 SQLite 数据库，加载 sqlite_vec 扩展并创建向量虚拟表。"""
             with self._lock:
                 conn = sqlite3.connect(self._db_path, check_same_thread=False)
                 conn.enable_load_extension(True)
@@ -144,6 +157,7 @@ class VectorStore:
 
     async def close(self) -> None:
         def _do_close() -> None:
+            """在后台线程中关闭 SQLite 连接。"""
             with self._lock:
                 if self._closed:
                     return
@@ -157,6 +171,7 @@ class VectorStore:
             logger.info("vector_store.cache_stats", **self._cache.stats)
 
     async def embed(self, text: str) -> list[float]:
+        """生成文本的嵌入向量，优先使用缓存，失败时自动重试。"""
         if not self._embed_client:
             return []
 
@@ -200,6 +215,7 @@ class VectorStore:
                 logger.warning("vector_store.warm_cache_item_failed", error=str(e))
 
     async def upsert(self, row_id: int, text: str) -> bool:
+        """写入或更新指定 rowid 的向量记录（先删后插）。"""
         if not self._initialized or not self._vec_conn:
             return False
 
@@ -210,6 +226,7 @@ class VectorStore:
         vec_json = json.dumps(vec)
 
         def _do_upsert() -> bool:
+            """在后台线程中执行向量的先删后插（upsert）操作。"""
             with self._lock:
                 if self._closed:
                     return False
@@ -241,6 +258,7 @@ class VectorStore:
             return False
 
         def _do_delete() -> bool:
+            """在后台线程中删除指定 rowid 的向量记录。"""
             with self._lock:
                 if self._closed:
                     return False
@@ -268,6 +286,7 @@ class VectorStore:
 
         # 并发嵌入（受 Semaphore 限制，避免 API 限流）
         async def _embed_one(row_id: int, text: str) -> tuple[int, str, list[float]]:
+            """对单条文本执行嵌入，受并发信号量限制。"""
             async with self._embed_semaphore:
                 vec = await self.embed(text)
                 return (row_id, text, vec)
@@ -292,6 +311,7 @@ class VectorStore:
 
         # 单事务批量写入（保持原有逻辑）
         def _do_batch() -> Any:
+            """在后台线程中以单事务批量写入向量记录。"""
             with self._lock:
                 if self._closed:
                     return 0
@@ -329,6 +349,7 @@ class VectorStore:
         return await asyncio.to_thread(_do_batch)
 
     async def search(self, query_text: str, top_k: int = 5) -> list[tuple[int, float]]:
+        """基于查询文本进行向量相似度搜索，返回最相似的 top_k 条记录。"""
         if not self._initialized or not self._vec_conn:
             return []
 
@@ -339,6 +360,7 @@ class VectorStore:
         vec_json = json.dumps(vec)
 
         def _do_search() -> Any:
+            """在后台线程中执行向量相似度搜索。"""
             with self._lock:
                 if self._closed:
                     return []

@@ -67,7 +67,7 @@ class PersonaCritic:
     偏离时触发重写 (最多 1 次重试, 调用 LLM 重写)。
     """
 
-    def __init__(self, soul_content: str = "", data_dir: Path | None = None):
+    def __init__(self, soul_content: str = "", data_dir: Path | None = None) -> None:
         self._soul = soul_content
         self._data_dir = Path(data_dir) if data_dir else Path("data")
         self._case_repo = PersonaCaseRepository(self._data_dir)
@@ -230,7 +230,7 @@ class PersonaCaseRepository:
     存储历史人格一致性失败/成功案例, 供检索学习。
     """
 
-    def __init__(self, data_dir: Path | None = None):
+    def __init__(self, data_dir: Path | None = None) -> None:
         self._data_dir = Path(data_dir) if data_dir else Path("data")
         self._cases_path = self._data_dir / "persona_cases.json"
         self._cases: list[dict] = []
@@ -290,7 +290,7 @@ class PersonaDriftSuppressor:
     检测累积漂移, 触发 Persona Case Repository 检索最相似案例。
     """
 
-    def __init__(self, critic: PersonaCritic, case_repo: PersonaCaseRepository):
+    def __init__(self, critic: PersonaCritic, case_repo: PersonaCaseRepository) -> None:
         self._critic = critic
         self._case_repo = case_repo
         self._drift_history: list[dict] = []

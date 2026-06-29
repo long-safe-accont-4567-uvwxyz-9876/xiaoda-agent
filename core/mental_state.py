@@ -195,7 +195,7 @@ class MentalStateManager:
         prompt_seg = mgr.get_prompt_segment()
     """
 
-    def __init__(self, data_dir: Path | None = None):
+    def __init__(self, data_dir: Path | None = None) -> None:
         """data_dir 默认为 data/"""
         self._data_dir = Path(data_dir) if data_dir else Path("data")
         self._state_path = self._data_dir / "mental_state.json"

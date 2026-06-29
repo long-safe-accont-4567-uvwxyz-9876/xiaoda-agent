@@ -564,6 +564,24 @@ class ParallelAgentNode:
 
         agent_configs = self._agent_configs
 
+        # 构建 prompt
+        prompt = self._build_decompose_v2_prompt(user_input, targets, agent_configs)
+
+        try:
+            # LLM 调用（含 response_format 降级）
+            content = await self._call_decompose_llm(prompt)
+
+            # JSON 解析与校验
+            return self._parse_and_validate_decompose_result(content, targets)
+
+        except Exception as e:
+            logger.warning("decompose_task_v2.fallback", error=str(e))
+            # fallback 到原 _decompose_task 逻辑
+            return await self._decompose_task(user_input, targets, agent_configs)
+
+    def _build_decompose_v2_prompt(self, user_input: str, targets: list[str],
+                                     agent_configs: dict) -> str:
+        """构建任务分解 LLM 的 prompt（含 agent 描述列表与输出格式要求）。"""
         # 构建 agent 描述列表
         agent_descriptions = []
         for t in targets:
@@ -601,52 +619,53 @@ class ParallelAgentNode:
 {{"agent_name": "针对该Agent的具体子任务描述"}}
 
 其中 agent_name 必须是上面列出的 Agent 名称之一。"""
+        return prompt
 
+    async def _call_decompose_llm(self, prompt: str) -> str:
+        """调用任务分解 LLM（response_format 不支持时降级为普通调用），返回响应文本。"""
+        # response_format 仅部分模型支持，不支持时降级为普通调用
         try:
-            # response_format 仅部分模型支持，不支持时降级为普通调用
-            try:
-                response = await self._route_client.chat.completions.create(
-                    model=self._route_model,
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={"type": "json_object"},
-                    temperature=0.3,
-                )
-            except Exception:
-                response = await self._route_client.chat.completions.create(
-                    model=self._route_model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.3,
-                )
+            response = await self._route_client.chat.completions.create(
+                model=self._route_model,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                temperature=0.3,
+            )
+        except Exception:
+            response = await self._route_client.chat.completions.create(
+                model=self._route_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+            )
 
-            content = (response.choices[0].message.content or "").strip()
+        content = (response.choices[0].message.content or "").strip()
+        return content
 
-            # 解析 JSON：先直接解析，失败则尝试从文本中提取
-            try:
-                result = json.loads(content)
-            except json.JSONDecodeError:
-                match = re.search(r'\{[\s\S]*\}', content)
-                if not match:
-                    raise ValueError("LLM 响应中未找到 JSON")
-                result = json.loads(match.group(0))
+    def _parse_and_validate_decompose_result(self, content: str,
+                                               targets: list[str]) -> dict[str, str]:
+        """解析 LLM 返回的 JSON 并校验每个 target 都有非空子任务。返回 sub_tasks 字典。"""
+        # 解析 JSON：先直接解析，失败则尝试从文本中提取
+        try:
+            result = json.loads(content)
+        except json.JSONDecodeError:
+            match = re.search(r'\{[\s\S]*\}', content)
+            if not match:
+                raise ValueError("LLM 响应中未找到 JSON")
+            result = json.loads(match.group(0))
 
-            # 校验：确保每个 target 都有非空任务
-            sub_tasks: dict[str, str] = {}
-            for t in targets:
-                task_desc = result.get(t)
-                if isinstance(task_desc, str) and task_desc.strip():
-                    sub_tasks[t] = task_desc
-                else:
-                    raise ValueError(f"Agent {t} 缺失子任务或任务为空")
+        # 校验：确保每个 target 都有非空任务
+        sub_tasks: dict[str, str] = {}
+        for t in targets:
+            task_desc = result.get(t)
+            if isinstance(task_desc, str) and task_desc.strip():
+                sub_tasks[t] = task_desc
+            else:
+                raise ValueError(f"Agent {t} 缺失子任务或任务为空")
 
-            if len(sub_tasks) != len(targets):
-                raise ValueError("子任务数量与目标 Agent 数量不匹配")
+        if len(sub_tasks) != len(targets):
+            raise ValueError("子任务数量与目标 Agent 数量不匹配")
 
-            return sub_tasks
-
-        except Exception as e:
-            logger.warning("decompose_task_v2.fallback", error=str(e))
-            # fallback 到原 _decompose_task 逻辑
-            return await self._decompose_task(user_input, targets, agent_configs)
+        return sub_tasks
 
     async def execute_single(self, target: str, task_prompt: str, state: TaskState) -> dict | None:
         agent = self._dispatcher.get_agent(target)

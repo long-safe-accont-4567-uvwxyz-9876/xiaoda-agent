@@ -50,7 +50,7 @@ if __name__ == '__main__':
         by_file.setdefault(x['path'], []).append(x)
     # priority directories
     priority = ['core/', 'agent_core/', 'tool_engine/', 'web/routers', 'web/', 'memory/', 'db/', 'security/', 'utils/', 'emotion/', 'chaos/']
-    def prio_key(path):
+    def prio_key(path: str) -> tuple:
         for i, p in enumerate(priority):
             if p in path:
                 return (i, path)

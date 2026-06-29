@@ -17,10 +17,12 @@ _HW_CACHE_TTL = 5.0
 
 
 def _gpio_path(pin: Any) -> Any:
+    """获取GPIO引脚的sysfs路径。"""
     return os.path.join(GPIO_BASE, f"gpio{pin}")
 
 
 def _gpio_export(pin: Any) -> None:
+    """导出GPIO引脚到sysfs接口。"""
     gpio_dir = _gpio_path(pin)
     if not os.path.isdir(gpio_dir):
         with open(os.path.join(GPIO_BASE, "export"), "w") as f:
@@ -28,16 +30,19 @@ def _gpio_export(pin: Any) -> None:
 
 
 def _gpio_set_direction(pin: Any, mode: Any) -> None:
+    """设置GPIO引脚方向（输入或输出）。"""
     with open(os.path.join(_gpio_path(pin), "direction"), "w") as f:
         f.write(mode)
 
 
 def _gpio_write_value(pin: Any, value: Any) -> None:
+    """写入GPIO引脚电平值。"""
     with open(os.path.join(_gpio_path(pin), "value"), "w") as f:
         f.write(str(value))
 
 
 def _gpio_read_value(pin: Any) -> Any:
+    """读取GPIO引脚电平值。"""
     with open(os.path.join(_gpio_path(pin), "value"), "r") as f:
         return f.read().strip()
 
@@ -60,6 +65,7 @@ def _gpio_read_value(pin: Any) -> Any:
     max_frequency=10,
 )
 async def gpio_control(action: str, pin: int, mode: str = None, value: int = None) -> ToolResult:
+    """控制GPIO引脚：设置模式、写入电平或读取电平。"""
     try:
         if not os.path.isdir(GPIO_BASE):
             return ToolResult.fail("GPIO 接口不可用: /sys/class/gpio 不存在。请检查系统是否启用 GPIO 支持。")
@@ -102,10 +108,12 @@ async def gpio_control(action: str, pin: int, mode: str = None, value: int = Non
 # ── PWM 支持 ──────────────────────────────────────────────
 
 def _pwm_chip_path(chip: int) -> str:
+    """获取PWM芯片的sysfs路径。"""
     return os.path.join(PWM_BASE, f"pwmchip{chip}")
 
 
 def _pwm_export(chip: int, channel: int) -> None:
+    """导出PWM通道到sysfs接口。"""
     export_path = os.path.join(_pwm_chip_path(chip), "export")
     pwm_dir = os.path.join(_pwm_chip_path(chip), f"pwm{channel}")
     if not os.path.isdir(pwm_dir):
@@ -114,18 +122,21 @@ def _pwm_export(chip: int, channel: int) -> None:
 
 
 def _pwm_unexport(chip: int, channel: int) -> None:
+    """取消导出PWM通道。"""
     unexport_path = os.path.join(_pwm_chip_path(chip), "unexport")
     with open(unexport_path, "w") as f:
         f.write(str(channel))
 
 
 def _pwm_write(chip: int, channel: int, attr: str, value: str) -> None:
+    """写入PWM通道属性值。"""
     path = os.path.join(_pwm_chip_path(chip), f"pwm{channel}", attr)
     with open(path, "w") as f:
         f.write(value)
 
 
 def _pwm_read(chip: int, channel: int, attr: str) -> str:
+    """读取PWM通道属性值。"""
     path = os.path.join(_pwm_chip_path(chip), f"pwm{channel}", attr)
     with open(path, "r") as f:
         return f.read().strip()
@@ -155,6 +166,7 @@ def _pwm_read(chip: int, channel: int, attr: str) -> str:
 )
 async def pwm_control(action: str, chip: int = 0, channel: int = 0,
                       frequency: float = None, duty_cycle: float = None) -> ToolResult:
+    """控制PWM脉冲输出：启用/禁用通道、设置频率和占空比。"""
     try:
         if not os.path.isdir(PWM_BASE):
             return ToolResult.fail("PWM 接口不可用: /sys/class/pwm 不存在。请检查系统是否启用 PWM 支持。")
@@ -206,6 +218,7 @@ async def pwm_control(action: str, chip: int = 0, channel: int = 0,
 
 
 def _i2c_smbus_read(bus: Any, addr: Any, register: Any, length: Any) -> Any:
+    """使用smbus2库读取I2C设备寄存器。"""
     import smbus2
     bus_obj = smbus2.SMBus(bus)
     try:
@@ -219,6 +232,7 @@ def _i2c_smbus_read(bus: Any, addr: Any, register: Any, length: Any) -> Any:
 
 
 def _i2c_smbus_write(bus: Any, addr: Any, register: Any, data: Any) -> None:
+    """使用smbus2库写入I2C设备寄存器。"""
     import smbus2
     bus_obj = smbus2.SMBus(bus)
     try:
@@ -231,6 +245,7 @@ def _i2c_smbus_write(bus: Any, addr: Any, register: Any, data: Any) -> None:
 
 
 def _i2c_smbus_scan(bus: Any) -> Any:
+    """使用smbus2库扫描I2C总线上的设备。"""
     import smbus2
     bus_obj = smbus2.SMBus(bus)
     found = []
@@ -247,6 +262,7 @@ def _i2c_smbus_scan(bus: Any) -> Any:
 
 
 async def _i2c_subprocess_scan(bus: Any) -> Any:
+    """使用i2cdetect命令扫描I2C总线上的设备。"""
     proc = await asyncio.create_subprocess_exec(
         "i2cdetect", "-y", str(bus),
         stdout=asyncio.subprocess.PIPE,
@@ -271,6 +287,7 @@ async def _i2c_subprocess_scan(bus: Any) -> Any:
 
 
 async def _i2c_subprocess_read(bus: Any, addr: Any, register: Any, length: Any) -> Any:
+    """使用i2c工具命令读取I2C设备寄存器。"""
     if length == 1:
         proc = await asyncio.create_subprocess_exec(
             "i2cget", "-y", str(bus), hex(addr), hex(register),
@@ -296,6 +313,7 @@ async def _i2c_subprocess_read(bus: Any, addr: Any, register: Any, length: Any) 
 
 
 async def _i2c_subprocess_write(bus: Any, addr: Any, register: Any, data: Any) -> Any:
+    """使用i2c工具命令写入I2C设备寄存器。"""
     hex_data = " ".join(hex(b) for b in data)
     proc = await asyncio.create_subprocess_exec(
         "i2cset", "-y", str(bus), hex(addr), hex(register), hex_data[0] if len(data) == 1 else hex_data,
@@ -307,6 +325,7 @@ async def _i2c_subprocess_write(bus: Any, addr: Any, register: Any, data: Any) -
 
 
 def _has_smbus2() -> bool:
+    """检查smbus2库是否可用。"""
     try:
         import smbus2
         return True
@@ -334,6 +353,7 @@ def _has_smbus2() -> bool:
     max_frequency=10,
 )
 async def i2c_comm(action: str, bus: int = 0, addr: int = None, register: int = None, length: int = 1, data: list = None) -> ToolResult:
+    """I2C通信：扫描设备、读取或写入寄存器。"""
     try:
         dev_path = f"/dev/i2c-{bus}"
         if not os.path.exists(dev_path):
@@ -404,11 +424,13 @@ async def i2c_comm(action: str, bus: int = 0, addr: int = None, register: int = 
 
 
 def _read_sysfs(path: Any) -> Any:
+    """读取sysfs文件内容。"""
     with open(path, "r") as f:
         return f.read().strip()
 
 
 def _read_cpu_temp() -> Any:
+    """读取CPU温度。"""
     try:
         raw = _read_sysfs("/sys/class/thermal/thermal_zone0/temp")
         temp_c = int(raw) / 1000.0
@@ -418,6 +440,7 @@ def _read_cpu_temp() -> Any:
 
 
 def _read_cpu_freq() -> Any:
+    """读取CPU当前频率。"""
     try:
         raw = _read_sysfs("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
         freq_mhz = int(raw) / 1000.0
@@ -427,6 +450,7 @@ def _read_cpu_freq() -> Any:
 
 
 def _read_loadavg() -> tuple:
+    """读取系统负载平均值。"""
     try:
         with open("/proc/loadavg", "r") as f:
             parts = f.read().strip().split()
@@ -436,6 +460,7 @@ def _read_loadavg() -> tuple:
 
 
 def _read_memory() -> tuple:
+    """读取内存使用信息。"""
     try:
         info = {}
         with open("/proc/meminfo", "r") as f:
@@ -454,6 +479,7 @@ def _read_memory() -> tuple:
 
 
 def _read_disk() -> tuple:
+    """读取磁盘使用信息。"""
     try:
         usage = shutil.disk_usage("/")
         total = usage.total
@@ -466,6 +492,7 @@ def _read_disk() -> tuple:
 
 
 def _read_voltage() -> Any:
+    """读取电源供应器的当前电压值（伏特）。"""
     try:
         for name in os.listdir("/sys/class/power_supply"):
             path = os.path.join("/sys/class/power_supply", name, "voltage_now")
@@ -478,6 +505,7 @@ def _read_voltage() -> Any:
 
 
 def _fmt_bytes(b: Any) -> str:
+    """将字节数格式化为人类可读的字符串（KB/MB/GB）。"""
     if b is None:
         return "N/A"
     if b >= 1073741824:
@@ -554,6 +582,7 @@ def _read_all_hardware(target: str) -> list[str]:
     max_frequency=30,
 )
 async def hardware_status(target: str = "all") -> ToolResult:
+    """查询硬件状态（温度/CPU/内存/磁盘/电压），带 5 秒缓存。"""
     global _hw_cache, _hw_cache_ts
     try:
         # 检查缓存是否有效（per-target TTL）

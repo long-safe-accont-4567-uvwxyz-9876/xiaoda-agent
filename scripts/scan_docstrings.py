@@ -6,7 +6,7 @@ import ast
 import os
 
 
-def scan(root_dir='.'):
+def scan(root_dir: str = '.') -> tuple[int, list[str]]:
     missing = []
     total = 0
     skip = ['.git', '__pycache__', '.venv', 'dist', 'build', 'node_modules', 'tests']

@@ -23,7 +23,7 @@ def _json_formatter(record):
     return json.dumps(subset, ensure_ascii=False)
 
 
-def _json_sink(message):
+def _json_sink(message: object) -> None:
     """JSON sink：将日志以 JSON 格式输出到 stderr。
 
     使用 sink 函数而非 format 可调用对象，避免 loguru colorizer

@@ -7,8 +7,10 @@ from transports.base import ProviderTransport, TransportResponse
 
 
 class AgnesTransport(ProviderTransport):
+    """Agnes AI API 的传输适配器。"""
 
     def __init__(self) -> None:
+        """初始化 Agnes 传输适配器。"""
         # 从 os.getenv() 实时读取，避免使用 config 模块级冻结变量
         _key = os.getenv("AGNES_API_KEY", "")
         _url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
@@ -16,9 +18,11 @@ class AgnesTransport(ProviderTransport):
 
     @property
     def provider_name(self) -> str:
+        """返回 provider 名称 'agnes'。"""
         return "agnes"
 
     def is_available(self) -> bool:
+        """返回 Agnes 客户端是否已初始化。"""
         return self._client is not None
 
     async def chat(self, model: str, messages: list[dict],
@@ -28,6 +32,7 @@ class AgnesTransport(ProviderTransport):
                    stream: bool = False,
                    timeout: int = 60,
                    thinking: dict | None = None) -> TransportResponse:
+        """调用 Agnes 对话接口，返回统一格式的 TransportResponse。"""
         if not self._client:
             raise RuntimeError("Agnes client not initialized")
 

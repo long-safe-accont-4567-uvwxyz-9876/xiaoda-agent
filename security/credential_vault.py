@@ -60,7 +60,7 @@ def _machine_identity() -> str:
     try:
         user = getpass.getuser()
     except Exception:
-        user = os.getenv("USER") or os.getenv("USERNAME") or "unknown-user"
+        user = os.getenv("USER", "") or os.getenv("USERNAME", "") or "unknown-user"
     try:
         host = socket.gethostname()
     except Exception:

@@ -56,18 +56,22 @@ COCO_LABELS = [
 
 
 class _QuantDFP(ctypes.Structure):
+    """动态定点量化参数结构体。"""
     _fields_ = [("fixed_point_pos", ctypes.c_int32)]
 
 
 class _QuantAffine(ctypes.Structure):
+    """仿射量化参数结构体，包含缩放因子和零点。"""
     _fields_ = [("scale", ctypes.c_float), ("zeroPoint", ctypes.c_int32)]
 
 
 class _QuantData(ctypes.Union):
+    """量化数据联合体，支持定点和仿射两种格式。"""
     _fields_ = [("dfp", _QuantDFP), ("affine", _QuantAffine)]
 
 
 class vip_buffer_create_params_t(ctypes.Structure):
+    """VIP 缓冲区创建参数结构体。"""
     _fields_ = [
         ("num_of_dims", ctypes.c_uint32),
         ("sizes", ctypes.c_uint32 * 6),
@@ -79,11 +83,15 @@ class vip_buffer_create_params_t(ctypes.Structure):
 
 
 class VIPLite:
+    """VIPLite NPU 推理库的 ctypes 封装。"""
+
     def __init__(self) -> None:
+        """初始化 VIPLite 库封装。"""
         self._lib = None
         self._load_library()
 
     def _load_library(self) -> None:
+        """加载 libNBGlinker.so 共享库。"""
         try:
             self._lib = ctypes.CDLL("/usr/lib/libNBGlinker.so")
             self._setup_argtypes()
@@ -92,6 +100,7 @@ class VIPLite:
             self._lib = None
 
     def _setup_argtypes(self) -> None:
+        """配置所有 VIP C 函数的参数类型和返回类型。"""
         lib = self._lib
         lib.vip_init.argtypes = []
         lib.vip_init.restype = ctypes.c_int32
@@ -155,9 +164,11 @@ class VIPLite:
 
     @property
     def available(self) -> Any:
+        """检查 VIP Lite 库是否可用。"""
         return self._lib is not None
 
     def init(self) -> bool:
+        """初始化 VIP 运行时环境，仅执行一次。"""
         global _vip_initialized
         if _vip_initialized:
             return True
@@ -172,6 +183,7 @@ class VIPLite:
         return True
 
     def destroy(self) -> None:
+        """销毁 VIP 运行时环境。"""
         global _vip_initialized
         if not _vip_initialized or not self.available:
             return
@@ -179,6 +191,7 @@ class VIPLite:
         _vip_initialized = False
 
     def create_network(self, model_path: Any) -> Any:
+        """从模型文件创建推理网络。"""
         if not self.available:
             return None
         network = ctypes.c_void_p()
@@ -192,6 +205,7 @@ class VIPLite:
         return network
 
     def prepare_network(self, network: Any) -> bool:
+        """准备推理网络，完成编译和资源分配。"""
         if not self.available or not network:
             return False
         status = self._lib.vip_prepare_network(network)
@@ -201,6 +215,7 @@ class VIPLite:
         return True
 
     def run_network(self, network: Any) -> bool:
+        """执行推理网络的前向计算。"""
         if not self.available or not network:
             return False
         status = self._lib.vip_run_network(network)
@@ -210,51 +225,61 @@ class VIPLite:
         return True
 
     def finish_network(self, network: Any) -> None:
+        """完成推理网络运行，释放临时资源。"""
         if not self.available or not network:
             return
         self._lib.vip_finish_network(network)
 
     def destroy_network(self, network: Any) -> None:
+        """销毁推理网络并释放所有相关资源。"""
         if not self.available or not network:
             return
         self._lib.vip_destroy_network(network)
 
     def query_network_u32(self, network: Any, prop: Any) -> Any:
+        """查询网络的 uint32 类型属性值。"""
         val = ctypes.c_uint32()
         self._lib.vip_query_network(network, prop, ctypes.byref(val))
         return val.value
 
     def query_input_u32(self, network: Any, index: Any, prop: Any) -> Any:
+        """查询输入张量的 uint32 类型属性值。"""
         val = ctypes.c_uint32()
         self._lib.vip_query_input(network, index, prop, ctypes.byref(val))
         return val.value
 
     def query_input_float(self, network: Any, index: Any, prop: Any) -> Any:
+        """查询输入张量的 float 类型属性值。"""
         val = ctypes.c_float()
         self._lib.vip_query_input(network, index, prop, ctypes.byref(val))
         return val.value
 
     def query_input_sizes(self, network: Any, index: Any) -> Any:
+        """查询输入张量各维度的尺寸。"""
         sizes = (ctypes.c_uint32 * 6)()
         self._lib.vip_query_input(network, index, VIP_BUFFER_PROP_SIZES_OF_DIMENSION, sizes)
         return list(sizes)
 
     def query_output_u32(self, network: Any, index: Any, prop: Any) -> Any:
+        """查询输出张量的 uint32 类型属性值。"""
         val = ctypes.c_uint32()
         self._lib.vip_query_output(network, index, prop, ctypes.byref(val))
         return val.value
 
     def query_output_float(self, network: Any, index: Any, prop: Any) -> Any:
+        """查询输出张量的 float 类型属性值。"""
         val = ctypes.c_float()
         self._lib.vip_query_output(network, index, prop, ctypes.byref(val))
         return val.value
 
     def query_output_sizes(self, network: Any, index: Any) -> Any:
+        """查询输出张量各维度的尺寸。"""
         sizes = (ctypes.c_uint32 * 6)()
         self._lib.vip_query_output(network, index, VIP_BUFFER_PROP_SIZES_OF_DIMENSION, sizes)
         return list(sizes)
 
     def create_buffer(self, params: Any) -> Any:
+        """根据参数创建 VIP 缓冲区。"""
         if not self.available:
             return None
         buf = ctypes.c_void_p()
@@ -267,31 +292,37 @@ class VIPLite:
         return buf
 
     def map_buffer(self, buf: Any) -> Any:
+        """映射缓冲区到用户空间并返回内存地址。"""
         if not self.available or not buf:
             return None
         return self._lib.vip_map_buffer(buf)
 
     def unmap_buffer(self, buf: Any) -> None:
+        """取消缓冲区的用户空间映射。"""
         if not self.available or not buf:
             return
         self._lib.vip_unmap_buffer(buf)
 
     def destroy_buffer(self, buf: Any) -> None:
+        """销毁 VIP 缓冲区并释放资源。"""
         if not self.available or not buf:
             return
         self._lib.vip_destroy_buffer(buf)
 
     def get_buffer_size(self, buf: Any) -> Any:
+        """获取缓冲区的字节大小。"""
         if not self.available or not buf:
             return 0
         return self._lib.vip_get_buffer_size(buf)
 
     def flush_buffer(self, buf: Any, op_type: Any=VIP_BUFFER_OPER_TYPE_FLUSH) -> None:
+        """刷新缓冲区，同步缓存与内存。"""
         if not self.available or not buf:
             return
         self._lib.vip_flush_buffer(buf, op_type)
 
     def set_input(self, network: Any, index: Any, buf: Any) -> bool:
+        """将缓冲区绑定到网络的指定输入槽位。"""
         if not self.available or not network or not buf:
             return False
         status = self._lib.vip_set_input(network, index, buf)
@@ -301,6 +332,7 @@ class VIPLite:
         return True
 
     def set_output(self, network: Any, index: Any, buf: Any) -> bool:
+        """将缓冲区绑定到网络的指定输出槽位。"""
         if not self.available or not network or not buf:
             return False
         status = self._lib.vip_set_output(network, index, buf)
@@ -311,9 +343,11 @@ class VIPLite:
 
 
 class BufferInfo:
+    """存储张量缓冲区的元数据信息。"""
     __slots__ = ("num_dims", "sizes", "data_format", "quant_format", "scale", "zero_point", "fixed_point_pos")
 
     def __init__(self) -> None:
+        """初始化缓冲区信息，设置默认值。"""
         self.num_dims = 0
         self.sizes = []
         self.data_format = 0
@@ -324,7 +358,10 @@ class BufferInfo:
 
 
 class NPUModel:
+    """NPU 模型加载与推理执行管理。"""
+
     def __init__(self, model_path: Any) -> None:
+        """初始化 NPU 模型，加载并准备推理网络。"""
         self._vip = VIPLite()
         self._network = None
         self._input_buffers = []
@@ -357,6 +394,7 @@ class NPUModel:
         logger.info("NPU model loaded: {}", model_path)
 
     def _query_buffer_info(self) -> None:
+        """查询网络所有输入输出张量的维度和量化参数。"""
         num_inputs = self._vip.query_network_u32(self._network, VIP_NETWORK_PROP_INPUT_COUNT)
         num_outputs = self._vip.query_network_u32(self._network, VIP_NETWORK_PROP_OUTPUT_COUNT)
 
@@ -387,6 +425,7 @@ class NPUModel:
             self._output_infos.append(info)
 
     def _create_buffers(self) -> None:
+        """根据查询到的张量信息创建输入输出缓冲区。"""
         for info in self._input_infos:
             params = vip_buffer_create_params_t()
             params.num_of_dims = info.num_dims
@@ -426,6 +465,7 @@ class NPUModel:
                 logger.warning("failed to create output buffer {}", len(self._output_buffers))
 
     def _attach_buffers(self) -> None:
+        """将创建的缓冲区绑定到网络的输入输出槽位。"""
         for i, buf in enumerate(self._input_buffers):
             self._vip.set_input(self._network, i, buf)
         for i, buf in enumerate(self._output_buffers):
@@ -433,17 +473,21 @@ class NPUModel:
 
     @property
     def loaded(self) -> Any:
+        """模型是否已成功加载。"""
         return self._loaded
 
     @property
     def input_infos(self) -> Any:
+        """输入张量的元数据列表。"""
         return self._input_infos
 
     @property
     def output_infos(self) -> Any:
+        """输出张量的元数据列表。"""
         return self._output_infos
 
     def run(self, input_data: bytes) -> list:
+        """执行一次推理，写入输入数据并返回各输出缓冲区的字节内容。"""
         if not self._loaded:
             logger.warning("model not loaded")
             return []
@@ -482,6 +526,7 @@ class NPUModel:
         return results
 
     def __del__(self) -> None:
+        """析构时释放所有缓冲区和网络资源。"""
         for buf in self._output_buffers:
             try:
                 self._vip.destroy_buffer(buf)
@@ -501,11 +546,21 @@ class NPUModel:
 
 
 def _sigmoid(x: Any) -> Any:
+    """计算 sigmoid 激活函数值。"""
     return 1.0 / (1.0 + np.exp(-np.clip(x, -500, 500)))
 
 
 class YOLOv5PostProcessor:
+    """YOLOv5 检测结果后处理器，解码锚框并执行 NMS 过滤。"""
+
     def __init__(self, conf_threshold: Any=0.45, nms_threshold: Any=0.45, max_detections: Any=100) -> None:
+        """初始化后处理器参数。
+
+        参数:
+            conf_threshold: 置信度阈值，低于该值的检测框被丢弃。
+            nms_threshold: NMS 的 IoU 阈值，用于合并重叠框。
+            max_detections: 最终保留的最大检测框数量。
+        """
         self.conf_threshold = conf_threshold
         self.nms_threshold = nms_threshold
         self.max_detections = max_detections
@@ -513,6 +568,7 @@ class YOLOv5PostProcessor:
         self.anchors = YOLOV5_ANCHORS
 
     def _iou(self, a: Any, b: Any) -> Any:
+        """计算两个检测框的交并比。"""
         ix1 = max(a["x1"], b["x1"])
         iy1 = max(a["y1"], b["y1"])
         ix2 = min(a["x2"], b["x2"])
@@ -528,6 +584,7 @@ class YOLOv5PostProcessor:
         return inter / union
 
     def _nms(self, detections: Any) -> Any:
+        """对检测结果执行非极大值抑制，去除重叠框。"""
         if not detections:
             return []
         detections.sort(key=lambda d: d["confidence"], reverse=True)
@@ -542,6 +599,7 @@ class YOLOv5PostProcessor:
         return keep
 
     def process(self, outputs: list, input_shape: tuple = (INPUT_SIZE, INPUT_SIZE)) -> list:
+        """处理多尺度输出，解码锚框并执行 NMS，返回最终检测结果。"""
         all_detections = []
         strides = [8, 16, 32]
 
@@ -616,7 +674,10 @@ class YOLOv5PostProcessor:
 
 
 class NPUInference:
+    """NPU 推理接口，封装模型加载和目标检测流程。"""
+
     def __init__(self, model_path: Any=None) -> None:
+        """初始化 NPU 推理引擎，加载模型并准备后处理器。"""
         self.available = False
         self._model = None
         self._postprocessor = YOLOv5PostProcessor(conf_threshold=0.15, nms_threshold=0.45, max_detections=100)
@@ -645,9 +706,11 @@ class NPUInference:
 
     @staticmethod
     def is_available() -> bool:
+        """检查 NPU 设备是否可用。"""
         return os.path.exists("/dev/vipcore")
 
     def detect(self, frame: Any) -> list:
+        """对输入图像执行目标检测，返回归一化到原图尺寸的检测结果。"""
         if not self.available or not self._model:
             return []
 

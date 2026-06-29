@@ -158,10 +158,12 @@ def _audit_code(code: str) -> str | None:
 
 
 class _ExecutionTimeout(Exception):
+    """代码执行超时异常。"""
     pass
 
 
 def _timeout_handler(signum: Any, frame: Any) -> None:
+    """SIGALRM 信号处理函数，抛出执行超时异常。"""
     raise _ExecutionTimeout("代码执行超时")
 
 
@@ -177,6 +179,7 @@ def _timeout_handler(signum: Any, frame: Any) -> None:
     category="system",
 )
 def get_current_time() -> ToolResult:
+    """获取当前北京时间（含星期）。"""
     cst = timezone(timedelta(hours=8))
     now = datetime.now(cst)
     weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
@@ -198,6 +201,7 @@ def get_current_time() -> ToolResult:
     max_frequency=5,
 )
 def python_executor(code: str) -> ToolResult:
+    """执行 Python 代码并返回标准输出/错误（含安全审查和资源限制）。"""
     # 代码内容审查
     audit_result = _audit_code(code)
     if audit_result:
@@ -229,6 +233,7 @@ def python_executor(code: str) -> ToolResult:
         _exec_state = {}
 
         def _run_code() -> None:
+            """在受限全局环境中执行用户代码，捕获异常到 _exec_state。"""
             try:
                 with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
                     exec(code, exec_globals, local_vars)
@@ -291,6 +296,7 @@ def python_executor(code: str) -> ToolResult:
     category="code",
 )
 def calculator(expression: str) -> ToolResult:
+    """计算数学表达式，仅允许常用数学函数和常量。"""
     try:
         # 安全加固：禁止访问危险属性和绕过手法
         dangerous_patterns = [
@@ -344,5 +350,6 @@ def calculator(expression: str) -> ToolResult:
     category="fun",
 )
 def call_nahida(question: str) -> ToolResult:
+    """委托问题给主体纳西妲处理（返回 DelegationRequest 占位）。"""
     from core.delegation import DelegationRequest
     return ToolResult.ok(DelegationRequest(type="nahida", question=question, delegator="klee"))

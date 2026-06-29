@@ -259,6 +259,22 @@ class MessageProcessorMixin:
         emotion_label = emotion.get("primary", "")
         self._update_mental_state_emotion(emotion)
 
+        # 构建最小上下文
+        messages = await self._build_fast_path_messages(user_input, is_master, emotion, emotion_hint)
+
+        # LLM 调用
+        reply = await self._call_fast_path_llm(messages, user_openid, session_id)
+
+        # 后处理
+        result = await self._finalize_fast_path_reply(
+            reply, user_input, is_master, user_id, source, emotion,
+            emotion_label, ctx, user_openid, session_id, force_voice)
+        trace.info("agent.fast_path.done", reply_preview=result.reply[:100])
+        return result
+
+    async def _build_fast_path_messages(self, user_input: Any, is_master: Any,
+                                          emotion: Any, emotion_hint: str) -> list:
+        """构建快速路径的最小上下文消息列表：系统提示 + 动态提示 + Volatile 层 + 记忆 + 历史。"""
         # 构建最小上下文：系统提示 + 动态提示 + Volatile 层
         if is_master:
             system_prompt = build_scene_aware_prompt(user_input, self.context.current_address_term)
@@ -287,8 +303,11 @@ class MessageProcessorMixin:
                 messages.append(m)
         messages.append({"role": "system", "content": _volatile})
         messages.append({"role": "user", "content": user_input})
+        return messages
 
-        # LLM 调用
+    async def _call_fast_path_llm(self, messages: list, user_openid: Any,
+                                    session_id: Any) -> str:
+        """快速路径 LLM 调用，返回回复文本（失败时返回降级回复）。"""
         _model_cfg = AGENT_CONFIG.get("model", {})
         reply = ""
         try:
@@ -305,7 +324,13 @@ class MessageProcessorMixin:
         except Exception as e:
             logger.warning("agent.fast_path_failed", error=str(e))
             reply = DEGRADED_REPLY
+        return reply
 
+    async def _finalize_fast_path_reply(self, reply: str, user_input: Any, is_master: Any,
+                                          user_id: Any, source: Any, emotion: Any,
+                                          emotion_label: str, ctx: Any, user_openid: Any,
+                                          session_id: Any, force_voice: Any) -> ProcessResult:
+        """快速路径后处理：隐私扫描、人格校验、上下文记录、情绪标签、语音构建。返回 ProcessResult。"""
         # 非主人输出侧隐私扫描
         if not is_master and reply:
             safe, alt_reply, _ = self.security.check_output_privacy(reply)
@@ -340,7 +365,6 @@ class MessageProcessorMixin:
             clean_reply = clean_reply + "\n\n🎙️ 语音消息已发送～"
 
         _spawn(self._hook_engine.fire_post_response())
-        trace.info("agent.fast_path.done", reply_preview=clean_reply[:100])
         return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path,
                              audio_path=audio_path, tts_pending=tts_pending, tts_text=tts_text)
 
@@ -467,6 +491,36 @@ class MessageProcessorMixin:
                                       user_openid: Any, session_id: Any, status_callback: Any, image_data: Any,
                                       is_master: Any, force_voice: Any, chat_targets: Any, trace: Any) -> Any:
         """主处理路径：完整记忆检索 + LLM 调用 + 后处理。"""
+        # 记忆检索阶段
+        emotion, emotion_label = await self._setup_main_emotion_and_memory(
+            user_input, clean_input, chat_targets, is_master, ctx)
+
+        # 消息构建阶段
+        messages, _pre_picked_sticker, tools = await self._build_main_messages(
+            user_input, is_master, image_data, clean_input, emotion, user_id)
+
+        # 任务类型解析与熔断器检查
+        early_result, task_type, _cb_max_tokens, circuit_state, _model_cfg = \
+            self._resolve_task_and_circuit(user_input, tools, messages, trace)
+        if early_result is not None:
+            return early_result
+
+        # 主 LLM 调用 + 验收循环
+        is_owner = self.security.is_owner(user_id)
+        reply, tool_results = await self._call_main_llm_with_verification(
+            messages, tools, task_type, _model_cfg, _cb_max_tokens, circuit_state,
+            status_callback, user_openid, session_id, trace, ctx, user_input, is_owner)
+
+        # 后处理阶段（含媒体提取与隐私扫描）
+        return await self._finalize_main_reply(
+            reply, tool_results, user_input, user_id, source, emotion,
+            emotion_label, ctx, user_openid, is_master, _pre_picked_sticker, force_voice, trace,
+            session_id)
+
+    async def _setup_main_emotion_and_memory(self, user_input: Any, clean_input: Any,
+                                               chat_targets: Any, is_master: Any,
+                                               ctx: Any) -> tuple:
+        """主路径阶段1：Klee 委托 + 情绪检测 + 记忆检索。返回 (emotion, emotion_label)。"""
         if "可莉" in user_input and "nahida" in chat_targets:
             klee_reply = await self.delegate_to_klee(clean_input, factual=True)
             self.context.klee_context = klee_reply
@@ -484,6 +538,13 @@ class MessageProcessorMixin:
         memories = await self._retrieve_main_memories(user_input, is_master, emotion)
         self.context.memory_retrieval = memories if memories else None
 
+        emotion_label = emotion.get("primary", "")
+        return emotion, emotion_label
+
+    async def _build_main_messages(self, user_input: Any, is_master: Any, image_data: Any,
+                                     clean_input: Any, emotion: Any,
+                                     user_id: Any) -> tuple:
+        """主路径阶段2：构建消息 + 图片描述注入 + 表情包/工具准备。返回 (messages, _pre_picked_sticker, tools)。"""
         # 构建消息
         effective_input = user_input
         if not is_master:
@@ -500,18 +561,14 @@ class MessageProcessorMixin:
         _pre_picked_sticker, tools = self._prepare_sticker_and_tools(
             messages, clean_input, emotion, is_master, user_id, user_input, image_data)
 
-        # 任务类型解析与熔断器检查
-        early_result, task_type, _cb_max_tokens, circuit_state, _model_cfg = \
-            self._resolve_task_and_circuit(user_input, tools, messages, trace)
-        if early_result is not None:
-            return early_result
+        return messages, _pre_picked_sticker, tools
 
-        # 主 LLM 调用 + 验收循环
-        is_owner = self.security.is_owner(user_id)
-        reply, tool_results = await self._call_main_llm_with_verification(
-            messages, tools, task_type, _model_cfg, _cb_max_tokens, circuit_state,
-            status_callback, user_openid, session_id, trace, ctx, user_input, is_owner)
-
+    async def _finalize_main_reply(self, reply: str, tool_results: Any, user_input: Any,
+                                     user_id: Any, source: Any, emotion: Any,
+                                     emotion_label: str, ctx: Any, user_openid: Any,
+                                     is_master: Any, _pre_picked_sticker: Any,
+                                     force_voice: Any, trace: Any, session_id: Any) -> ProcessResult:
+        """主路径阶段4+5：媒体提取、隐私扫描、人格校验、上下文记录、情绪标签、语音构建。返回 ProcessResult。"""
         # 媒体提取与隐私扫描
         media_image_paths, media_video_path, reply = await self._extract_media_from_tool_results(
             tool_results, reply)
@@ -537,7 +594,6 @@ class MessageProcessorMixin:
             logger.error(f"费用统计刷新失败，可能丢失费用数据: {e}")
 
         trace.info("agent.process.done", reply_preview=reply[:100])
-        emotion_label = emotion.get("primary", "")
 
         # 情绪标签
         if is_unified():

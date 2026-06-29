@@ -1048,8 +1048,6 @@ class AIQQBot(botpy.Client):
                      ms=round(total_ms, 1))
 
     async def _send_reply_with_sticker(self, message: Any, result: ProcessResult) -> None:
-        from utils.text_utils import smart_truncate, split_long_reply
-
         reply = result.reply
         clean_reply = self.agent.strip_emotion_tag(reply)
 
@@ -1057,45 +1055,65 @@ class AIQQBot(botpy.Client):
         # 环境变量 QQ_STREAM_REPLY 默认 "true"，设为 "false"/"0"/"no" 时回退到原 message.reply
         stream_enabled = os.getenv("QQ_STREAM_REPLY", "true").lower() in ("true", "1", "yes")
         if stream_enabled and len(clean_reply) > 400:
-            # 流式发送整个回复（内部按 ~300 字符切片，避免切断代码块/URL）
-            await self._send_streaming_reply(message, clean_reply)
-            # 表情包发送（在最后一片后发送）
-            if result.sticker_path:
-                try:
-                    await self._send_reply_with_media(message, "", image_path=result.sticker_path)
-                except Exception as e:
-                    logger.warning("qq_bot.sticker_send_failed", error=str(e))
+            await self._send_streaming_reply_with_sticker(message, clean_reply, result)
         else:
-            # 原逻辑：按字节上限分片（向后兼容 fallback）
-            parts = split_long_reply(clean_reply, MAX_REPLY_LEN)
+            await self._send_fallback_reply_with_sticker(message, clean_reply, result)
 
-            if len(parts) == 1:
-                final_text = parts[0]
-            else:
-                failed = False
-                for part in parts[:-1]:
-                    try:
-                        await message.reply(content=part, msg_seq=_next_msg_seq())
-                    except Exception as e:
-                        logger.warning(f"qq_bot.long_reply_part_failed: {e}")
-                        failed = True
-                        break
-                if failed:
-                    final_text = parts[-1] + "\n（内容过长部分发送失败）"
-                else:
-                    final_text = parts[-1]
+        # 语音和图片并行发送
+        send_tasks = self._gather_media_send_tasks(message, result)
 
-            # 1. 文字+表情包立刻发送（用户最快看到回复）
-            if result.sticker_path:
+        # 并行等待所有媒体发送完成
+        if send_tasks:
+            await asyncio.gather(*send_tasks, return_exceptions=True)
+
+    async def _send_streaming_reply_with_sticker(self, message: Any, clean_reply: str,
+                                                   result: ProcessResult) -> None:
+        """流式发送长回复（内部按 ~300 字符切片，避免切断代码块/URL），并在最后一片后发送表情包。"""
+        # 流式发送整个回复
+        await self._send_streaming_reply(message, clean_reply)
+        # 表情包发送（在最后一片后发送）
+        if result.sticker_path:
+            try:
+                await self._send_reply_with_media(message, "", image_path=result.sticker_path)
+            except Exception as e:
+                logger.warning("qq_bot.sticker_send_failed", error=str(e))
+
+    async def _send_fallback_reply_with_sticker(self, message: Any, clean_reply: str,
+                                                  result: ProcessResult) -> None:
+        """按字节上限分片发送回复（向后兼容 fallback），并立即发送文字+表情包。"""
+        from utils.text_utils import split_long_reply
+
+        # 原逻辑：按字节上限分片（向后兼容 fallback）
+        parts = split_long_reply(clean_reply, MAX_REPLY_LEN)
+
+        if len(parts) == 1:
+            final_text = parts[0]
+        else:
+            failed = False
+            for part in parts[:-1]:
                 try:
-                    await self._send_reply_with_media(message, final_text, image_path=result.sticker_path)
+                    await message.reply(content=part, msg_seq=_next_msg_seq())
                 except Exception as e:
-                    logger.warning("qq_bot.sticker_send_failed", error=str(e))
-                    await message.reply(content=final_text, msg_seq=_next_msg_seq())
+                    logger.warning(f"qq_bot.long_reply_part_failed: {e}")
+                    failed = True
+                    break
+            if failed:
+                final_text = parts[-1] + "\n（内容过长部分发送失败）"
             else:
-                await message.reply(content=final_text, msg_seq=_next_msg_seq())
+                final_text = parts[-1]
 
-        # 2. 语音和图片并行发送
+        # 1. 文字+表情包立刻发送（用户最快看到回复）
+        if result.sticker_path:
+            try:
+                await self._send_reply_with_media(message, final_text, image_path=result.sticker_path)
+            except Exception as e:
+                logger.warning("qq_bot.sticker_send_failed", error=str(e))
+                await message.reply(content=final_text, msg_seq=_next_msg_seq())
+        else:
+            await message.reply(content=final_text, msg_seq=_next_msg_seq())
+
+    def _gather_media_send_tasks(self, message: Any, result: ProcessResult) -> list:
+        """构建媒体发送任务列表（TTS 语音/视频/图片），用于并行发送。"""
         send_tasks = []
 
         # TTS 语音发送（同步模式：audio_path 已有缓存文件）
@@ -1145,9 +1163,7 @@ class AIQQBot(botpy.Client):
                             logger.error(f"qq_bot.image_fallback_reply_failed: {e2}")
             send_tasks.append(_send_images())
 
-        # 并行等待所有媒体发送完成
-        if send_tasks:
-            await asyncio.gather(*send_tasks, return_exceptions=True)
+        return send_tasks
 
     async def _send_video(self, message: Any, video_path: Path) -> None:
         """发送视频消息"""
