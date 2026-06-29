@@ -319,12 +319,13 @@ async function testSkill(item: any) {
             </div>
           </div>
           <div v-if="skills.length" class="skills-list">
-            <div v-for="s in skills" :key="s.name" class="skill-chip" @click="openSkill(s)">
-              <span class="skill-name">{{ s.name }}</span>
+            <div v-for="s in skills" :key="s.name" class="skill-chip">
+              <span class="skill-name" @click="openSkill(s)" style="cursor: pointer; flex: 1;">{{ s.name }}</span>
               <span class="skill-size">{{ (s.size / 1024).toFixed(1) }}KB</span>
+              <n-button size="tiny" quaternary @click="openSkill(s)" title="编辑">✎</n-button>
               <n-popconfirm @positive-click="removeSkill(s)">
                 <template #trigger>
-                  <button class="skill-del" @click.stop title="删除">✕</button>
+                  <n-button size="tiny" quaternary type="error" title="删除">✕</n-button>
                 </template>
                 删除 Skill「{{ s.name }}」？
               </n-popconfirm>
@@ -505,8 +506,8 @@ async function testSkill(item: any) {
 .skills-title { font-weight: 600; color: var(--dendro); font-size: 14px; }
 .skills-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .skill-chip {
-  display: flex; align-items: center; gap: 8px;
-  padding: 5px 10px; border-radius: 14px; cursor: pointer;
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-radius: 14px;
   background: rgba(127, 214, 80, 0.1);
   border: 1px solid var(--glass-border);
   transition: border-color 0.2s;
@@ -514,11 +515,6 @@ async function testSkill(item: any) {
 .skill-chip:hover { border-color: rgba(127, 214, 80, 0.45); }
 .skill-name { font-size: 13px; font-weight: 600; }
 .skill-size { font-size: 11px; color: var(--moon-dim); }
-.skill-del {
-  background: none; border: none; color: var(--moon-dim);
-  cursor: pointer; font-size: 12px; padding: 0 2px;
-}
-.skill-del:hover { color: var(--alert); }
 .skills-empty { font-size: 12.5px; color: var(--moon-dim); margin-top: 8px; }
 
 .tool-list { display: flex; flex-direction: column; gap: 8px; }

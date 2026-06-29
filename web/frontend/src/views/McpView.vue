@@ -221,7 +221,8 @@ async function loadMcpMarket() {
   if (mcpItems.value.length > 0) return
   mcpLoading.value = true
   try {
-    mcpItems.value = await get<any[]>('/market/mcp')
+    const data = await get<any>('/market/mcp')
+    mcpItems.value = data.items || []
   } catch (e: any) {
     message.error(`MCP 市场加载失败: ${e.message}`)
   } finally {
