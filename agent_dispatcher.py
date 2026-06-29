@@ -115,6 +115,7 @@ class SubAgentConfig:
     memory_scope: str | None = None        # 记忆作用域: "shared"/"isolated"
     background: bool = False               # 是否后台运行
     wallpaper: str = ""                    # 聊天背景板 URL（/assets/... 或上传后的 /media/...）
+    sticker_dir: str = ""                  # 表情包目录路径（为空则自动推导）
     allowed_paths: list[str] = field(default_factory=list)    # 允许修改的路径白名单（glob 模式）
     forbidden_paths: list[str] = field(default_factory=list)  # 禁止修改的路径黑名单
 

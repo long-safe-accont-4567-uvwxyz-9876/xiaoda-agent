@@ -161,6 +161,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         )
         self._task_graph: TaskGraph | None = None
         self._agent_route_configs: dict = {}
+        self._sticker_managers: dict = {}  # name → StickerManager (动态缓存)
         self._tool_call_handler = ToolCallHandler(self.tool_executor, self.tool_repair, self._clean_reply, self.context, self.router, klee_delegate=self.delegate_to_klee, agent_name="nahida", personality_file=self._get_nahida_personality_file(), tool_execute_callback=self._execute_tool_with_hooks)
         self._user_chat_target: dict[str, str] = {}
         self._chat_target_lock = asyncio.Lock()
@@ -192,6 +193,30 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
     def hook_engine(self) -> Any:
         """返回已注册的钩子引擎实例."""
         return self._hook_engine
+
+    def get_sticker_manager(self, name: str) -> Any:
+        """获取指定智能体的表情包管理器。
+
+        - nahida/空 → 主 sticker_manager
+        - keli/klee → klee_sticker_manager
+        - 其他 → 从 _agent_route_configs 获取 sticker_dir 动态创建（LazyLoader 延迟加载）
+        - 表情包目录为空时 available 返回 False，表情包不生效
+        """
+        name_lower = (name or "").lower()
+        if name_lower in ("nahida", ""):
+            return self.sticker_manager
+        if name_lower in ("keli", "klee"):
+            return self.klee_sticker_manager
+        if name_lower in self._sticker_managers:
+            return self._sticker_managers[name_lower]
+        # 从路由配置获取 sticker_dir
+        route_cfg = self._agent_route_configs.get(name_lower, {})
+        sticker_dir = route_cfg.get("sticker_dir", "")
+        if not sticker_dir:
+            return self.sticker_manager
+        loader = LazyLoader("emotion.sticker_manager.StickerManager", {"sticker_dir": sticker_dir})
+        self._sticker_managers[name_lower] = loader
+        return loader
 
     async def init(self, reinit: bool = False) -> None:
         """异步初始化 Agent 核心组件.

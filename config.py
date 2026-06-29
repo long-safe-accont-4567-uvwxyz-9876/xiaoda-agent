@@ -227,6 +227,8 @@ _init_user_resources()
 AGENT_CONFIG_PATH = (_KIOXIA_BASE / "config" / "agent.json5") if (_KIOXIA_BASE / "config").exists() else _FALLBACK_BASE / "agent.json5"
 STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "stickers", _FALLBACK_BASE / "stickers")
 KLEE_STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "klee-stickers", _FALLBACK_BASE / "klee-stickers")
+# 通用智能体表情包根目录：每个子智能体的表情包存放在 {AGENT_STICKER_BASE}/{agent_name}/
+AGENT_STICKER_BASE = _resolve_data_path(_KIOXIA_BASE / "agent-stickers", _FALLBACK_BASE / "agent-stickers")
 FILE_DIR = _resolve_data_path(_KIOXIA_BASE / "files", _FALLBACK_BASE / "files")
 # 媒体目录（用户上传图片、生成的 TTS/图片/视频、壁纸等可写资源）
 MEDIA_DIR = _resolve_data_path(_KIOXIA_BASE / "media", _FALLBACK_BASE / "media")
@@ -524,6 +526,7 @@ __all__ = [
     "CREDENTIALS_DIR",
     "STICKER_DIR",
     "KLEE_STICKER_DIR",
+    "AGENT_STICKER_BASE",
     "FILE_DIR",
     "MEDIA_DIR",
     "MEMORY_STATE_DIR",

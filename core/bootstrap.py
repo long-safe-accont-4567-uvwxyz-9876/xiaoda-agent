@@ -194,6 +194,32 @@ class AgentCoreBootstrapper:
                         except Exception as e:
                             logger.warning("bootstrap.stickers_copy_failed", voice="klee", emotion=emotion_dir.name, error=str(e))
 
+    # 表情包情绪分类子目录（用户往这些目录放图片即可自动调用）
+    _STICKER_EMOTION_DIRS = ("happy", "sad", "angry", "curious", "shy", "thinking", "neutral", "greeting")
+
+    def _ensure_agent_sticker_dirs(self, core) -> None:
+        """为每个子智能体自动创建专属表情包目录。
+
+        - 已配置 sticker_dir 的（如 keli 复用 KLEE_STICKER_DIR）跳过自动推导
+        - 未配置的自动推导为 {AGENT_STICKER_BASE}/{agent_name}/
+        - 自动创建情绪分类子目录（空目录），用户往里放图片即可
+        - 目录为空时 StickerManager.available 返回 False，表情包不生效
+        """
+        from config import AGENT_STICKER_BASE
+        base = Path(AGENT_STICKER_BASE)
+        for name, agent in core.dispatcher._agents.items():
+            cfg = agent.config
+            if not cfg.sticker_dir:
+                sticker_path = base / name
+                cfg.sticker_dir = str(sticker_path)
+            sticker_path = Path(cfg.sticker_dir)
+            if not sticker_path.exists():
+                sticker_path.mkdir(parents=True, exist_ok=True)
+                # 创建情绪分类子目录作为引导
+                for emotion_dir in self._STICKER_EMOTION_DIRS:
+                    (sticker_path / emotion_dir).mkdir(exist_ok=True)
+                logger.info("bootstrap.agent_sticker_dir_created", agent=name, path=str(sticker_path))
+
     async def _init_infrastructure(self) -> None:
         from memory.vector_store import VectorStore
 
@@ -348,6 +374,7 @@ class AgentCoreBootstrapper:
 
     async def _register_sub_agents(self) -> None:
         from agent_dispatcher import SubAgentConfig
+        from config import KLEE_STICKER_DIR, AGENT_STICKER_BASE
         # frozen 模式下使用用户目录中的 agents 配置（_init_user_resources 已复制模板）
         try:
             from config import AGENTS_CONFIG_DIR as _agents_dir
@@ -367,6 +394,7 @@ class AgentCoreBootstrapper:
             api_key_env="MIMO_API_KEY",
             capabilities=["chat", "play", "fun"],
             route_description="日常聊天、玩耍、轻松有趣的对话",
+            sticker_dir=str(KLEE_STICKER_DIR),
         )
         await core.dispatcher.register(keli_config)
         yinlang_config = SubAgentConfig(
@@ -413,12 +441,16 @@ class AgentCoreBootstrapper:
         )
         await core.dispatcher.register(nike_config)
 
+        # 为每个子智能体自动创建表情包目录（含示例情绪分类子目录）
+        self._ensure_agent_sticker_dirs(core)
+
         # 收集路由配置
         for name, agent in core.dispatcher._agents.items():
             core._agent_route_configs[name] = {
                 "display_name": agent.config.display_name,
                 "capabilities": agent.config.capabilities,
                 "route_description": agent.config.route_description,
+                "sticker_dir": agent.config.sticker_dir,
             }
 
         self._register_delegate_tool()

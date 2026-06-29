@@ -65,8 +65,8 @@ class SubAgentManagerMixin:
         emotion_label = emotion.get("primary", "")
         sticker_path = None
 
-        # 子 Agent 表情包：使用对应的 sticker_manager
-        sub_sticker_mgr = self.klee_sticker_manager if target.lower() in ("keli", "klee") else self.sticker_manager
+        # 子 Agent 表情包：动态获取对应智能体的 sticker_manager
+        sub_sticker_mgr = self.get_sticker_manager(target)
         if sub_sticker_mgr.available:
             # 1. 使用 sticker_manager 对子Agent的回复文本进行情绪检测
             detected = sub_sticker_mgr.detect_emotion(clean_sub_reply)
