@@ -737,7 +737,16 @@ def _build_workspace_sections(address_term: str) -> list[str]:
             f"### Skill: {s['name']}\n{s['content']}" for s in skills if s["content"])
         if skill_texts:
             sections.append("[已安装的 Skills]\n\n" + skill_texts)
+
+    sections.append(_STICKER_INSTRUCTIONS)
     return sections
+
+_STICKER_INSTRUCTIONS = """[表情包系统]
+你可以发送表情包来丰富对话体验。两种方式：
+1. 调用 list_stickers 工具查看可用表情包及描述，然后在回复末尾用 [sticker:文件名] 精准指定要发送的表情包。
+2. 在回复末尾用 [emotion:情绪] 标签（如 [emotion:happy]），系统会自动从对应情绪分类中随机选取一张。
+情绪分类：happy/sad/angry/curious/shy/thinking/neutral/greeting。
+建议在需要发表情包时先调用 list_stickers 查看可用选项，用 [sticker:文件名] 精准选择最匹配的表情包。"""
 
 
 def _build_hardware_context(data_dir: str) -> str:

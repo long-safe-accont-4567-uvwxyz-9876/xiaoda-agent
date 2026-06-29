@@ -1,4 +1,5 @@
 import re
+import json
 import random
 from pathlib import Path
 from loguru import logger
@@ -78,11 +79,19 @@ class StickerManager:
         """
         self._dir = Path(sticker_dir) if not isinstance(sticker_dir, Path) else sticker_dir
         self._cache: dict[str, list[Path]] = {}
+        self._descriptions: dict[str, str] = {}
         self._scan()
 
     def _scan(self) -> None:
         if not self._dir.exists():
             return
+        # 加载描述文件（可选）
+        desc_file = self._dir / "descriptions.json"
+        if desc_file.exists():
+            try:
+                self._descriptions = json.loads(desc_file.read_text(encoding="utf-8"))
+            except Exception:
+                self._descriptions = {}
         for emotion_dir in self._dir.iterdir():
             if emotion_dir.is_dir():
                 files = [
@@ -98,6 +107,7 @@ class StickerManager:
     def reload(self) -> None:
         """重新扫描表情包目录 (清空缓存)."""
         self._cache.clear()
+        self._descriptions.clear()
         self._scan()
 
     def detect_emotion(self, text: str) -> str:
@@ -214,3 +224,59 @@ class StickerManager:
         if not target_emotion:
             target_emotion = "neutral"
         return self.pick(target_emotion)
+
+    def get_description(self, filepath: Path) -> str:
+        """获取表情包描述：优先 descriptions.json，否则从文件名提取.
+
+        文件名提取规则：去掉 emotion 前缀（如 happy_）和扩展名，分隔符替换为空格。
+        例如 happy_闭眼满足微笑.jpg → "闭眼满足微笑"
+        """
+        name = filepath.name
+        if name in self._descriptions:
+            return self._descriptions[name]
+        # 从文件名提取：去掉 前缀_ 和扩展名
+        stem = filepath.stem
+        # 去掉 emotion 前缀（如 happy_, sad_, neutral_）
+        if "_" in stem:
+            parts = stem.split("_", 1)
+            if parts[0] in self._cache or parts[0] in self.EMOTION_MAP:
+                return parts[1].replace("_", " ").replace("-", " ")
+        return stem.replace("_", " ").replace("-", " ")
+
+    def list_stickers(self, emotion: str = "") -> list[dict]:
+        """列出可用表情包及描述.
+
+        Args:
+            emotion: 指定情绪分类，为空则列出全部
+
+        Returns:
+            [{"name": 文件名, "description": 描述, "emotion": 情绪分类}, ...]
+        """
+        result = []
+        if emotion:
+            dirs = {emotion: self._cache.get(emotion, [])}
+        else:
+            dirs = self._cache
+        for emo, files in dirs.items():
+            for f in files:
+                result.append({
+                    "name": f.name,
+                    "description": self.get_description(f),
+                    "emotion": emo,
+                })
+        return result
+
+    def pick_by_name(self, filename: str) -> Path | None:
+        """按文件名精确选择表情包.
+
+        Args:
+            filename: 表情包文件名（含扩展名）
+
+        Returns:
+            表情包路径, 未找到返回 None
+        """
+        for files in self._cache.values():
+            for f in files:
+                if f.name == filename:
+                    return f
+        return None

@@ -523,7 +523,49 @@ class AgentCoreBootstrapper:
             category="fun",
         )
 
-    # ── 任务图构建 ────────────────────────────────────────
+        self._register_sticker_tool()
+
+    def _register_sticker_tool(self) -> None:
+        """注册 list_stickers 工具，让 LLM 可以查看可用表情包及描述，从而精准选择。"""
+        from tool_engine.tool_registry import register_tool_direct, ToolPermission
+
+        core = self.core
+
+        async def list_stickers(emotion: str = "") -> Any:
+            """列出当前可用的表情包及描述。
+
+            可以用 emotion 参数筛选特定情绪分类的表情包。
+            返回的 name 字段可用于在回复中用 [sticker:name] 精准指定要发送的表情包。
+            """
+            mgr = core.sticker_manager
+            if not mgr.available:
+                return {"stickers": [], "hint": "当前没有可用的表情包"}
+            stickers = mgr.list_stickers(emotion=emotion)
+            return {"stickers": stickers, "total": len(stickers)}
+
+        register_tool_direct(
+            name="list_stickers",
+            description=(
+                "列出当前可用的表情包列表及每张表情包的描述。"
+                "你可以在回复中用 [sticker:文件名] 标签精准指定要发送的表情包。"
+                "emotion 参数可选，用于筛选特定情绪（如 happy/sad/angry/curious/shy/thinking/neutral/greeting）。"
+                "不传 emotion 则列出全部。建议在需要发送表情包时先调用此工具查看可用选项。"
+            ),
+            func=list_stickers,
+            parameters={
+                "properties": {
+                    "emotion": {
+                        "type": "string",
+                        "description": "情绪分类筛选（可选）：happy/sad/angry/curious/shy/thinking/neutral/greeting",
+                        "enum": ["", "happy", "sad", "angry", "curious", "shy", "thinking", "neutral", "greeting"],
+                        "default": "",
+                    },
+                },
+                "required": [],
+            },
+            permission=ToolPermission.READ_ONLY,
+            category="fun",
+        )
 
     async def _build_task_graph(self) -> None:
         from openai import AsyncOpenAI as _AOI

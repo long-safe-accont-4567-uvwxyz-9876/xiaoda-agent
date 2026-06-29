@@ -260,16 +260,35 @@ class ToolExecutorMixin:
     def get_sticker_info(self, reply: str, user_emotion: str = "", force_sticker: bool = False) -> tuple[str, Path | None]:
         """从回复中提取情绪并匹配套餐表情包路径.
 
+        支持两种标签：
+        - [sticker:filename.jpg] — LLM 精准指定表情包（优先级最高）
+        - [emotion:xxx] — 按情绪随机选择
+
         Args:
-            reply: 待处理的回复文本 (可能含 [emotion:xxx] 标签)
+            reply: 待处理的回复文本 (可能含 [emotion:xxx] 或 [sticker:xxx] 标签)
             user_emotion: 用户当前情绪, 默认空串
             force_sticker: 是否强制选取表情包, 默认 False
 
         Returns:
             (清洗后文本, 表情包路径或 None) 元组
         """
-        # Bug fix: 优先从 [emotion:xxx] 标签提取情绪，而非丢弃标签后重新检测
         import re as _re
+        # 优先处理 [sticker:filename] 精准指定
+        _sticker_match = _re.search(r'\[sticker:([^\]]+)\]', reply)
+        if _sticker_match:
+            filename = _sticker_match.group(1).strip()
+            clean_reply = _re.sub(r'\[sticker:[^\]]*\]', '', reply).rstrip()
+            # 同时清理可能存在的 emotion 标签
+            clean_reply = self.sticker_manager.strip_emotion_tag(clean_reply)
+            if (self.sticker_manager.available
+                    and get_degradation_strategy().is_feature_available("emotion")):
+                path = self.sticker_manager.pick_by_name(filename)
+                if path:
+                    return clean_reply, path
+                logger.warning(f"sticker.not_found name={filename}")
+            return clean_reply, None
+
+        # [emotion:xxx] 标签处理
         _emotion_match = _re.search(r'\[emotion:([^\]]+)\]', reply)
         detected = ""
         if _emotion_match:
