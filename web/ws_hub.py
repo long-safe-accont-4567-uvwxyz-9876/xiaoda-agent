@@ -3,8 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 import asyncio
+import fcntl
 import json
+import os
+import pty
 import shutil
+import struct
+import termios
 import time
 import uuid
 from pathlib import Path
@@ -69,6 +74,9 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+
+# PTY 终端会话: term_sid -> {pid, fd, conn_id, shell, alive}
+_pty_sessions: dict[str, dict] = {}
 
 
 # ── 媒体路径 → URL ───────────────────────────────────────────────
@@ -268,6 +276,19 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
                 manager._tasks[msg_id] = task
                 task.add_done_callback(lambda _t, m=msg_id: manager._tasks.pop(m, None))
 
+            elif mtype == "terminal_start":
+                term_sid = str(msg.get("term_sid") or uuid.uuid4().hex[:8])
+                asyncio.create_task(_handle_terminal_start(conn_id, msg, term_sid))
+
+            elif mtype == "terminal_input":
+                _handle_terminal_input(msg)
+
+            elif mtype == "terminal_resize":
+                _handle_terminal_resize(msg)
+
+            elif mtype == "terminal_kill":
+                _handle_terminal_kill(msg)
+
             elif mtype == "abort":
                 task = manager._tasks.get(str(msg.get("msg_id") or ""))
                 if task and not task.done():
@@ -278,6 +299,10 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
     except Exception as e:
         logger.error("ws.error conn_id={} error={}", conn_id, str(e))
     finally:
+        # 清理该连接的所有 PTY 会话
+        for sid in list(_pty_sessions.keys()):
+            if sid in _pty_sessions and _pty_sessions[sid].get("conn_id") == conn_id:
+                _cleanup_pty(sid)
         manager.unregister(conn_id)
 
 
@@ -365,3 +390,169 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
             "code": "CHAT_ERROR", "message": str(e)[:300]})
     finally:
         current_msg_id.reset(token)
+
+
+async def _handle_terminal_start(conn_id: str, msg: dict, term_sid: str) -> None:
+    """启动一个真正的 PTY 终端会话（参考 Trae/WebSSH 架构）。
+
+    msg 字段：
+      shell    — Shell 类型 (bash/zsh/python/node/cmd/powershell/wsl)，默认 bash
+      cols     — 终端列数
+      rows     — 终端行数
+    """
+    shell_type = (msg.get("shell") or "bash").strip().lower()
+    cols = int(msg.get("cols") or 80)
+    rows = int(msg.get("rows") or 24)
+
+    shell_map = {
+        "bash": "bash", "zsh": "zsh",
+        "python": "python3", "node": "node",
+    }
+    shell_cmd = shell_map.get(shell_type, "bash")
+    env = os.environ.copy()
+    env["TERM"] = "xterm-256color"
+    env["SHELL"] = shell_cmd
+
+    loop = asyncio.get_event_loop()
+
+    try:
+        # pty.fork() 创建 PTY 对，子进程的 stdin/stdout/stderr 自动连接到 slave
+        child_pid, master_fd = pty.fork()
+        if child_pid == 0:
+            # ── 子进程 ──
+            os.chdir(str(Path.home()))
+            winsize = struct.pack("HHHH", rows, cols, 0, 0)
+            fcntl.ioctl(0, termios.TIOCSWINSZ, winsize)
+            os.execvpe(shell_cmd, [shell_cmd], env)
+        else:
+            # ── 父进程（event loop 侧）──
+            # 保持 master_fd 阻塞模式，用 loop.add_reader() 异步监听可读事件
+            _pty_sessions[term_sid] = {
+                "pid": child_pid, "fd": master_fd, "conn_id": conn_id,
+                "shell": shell_type, "alive": True, "loop": loop,
+            }
+            logger.info("ws.terminal.start term_sid={} shell={} pid={}", term_sid, shell_type, child_pid)
+
+            await manager.send_to(conn_id, {
+                "type": "terminal_started", "term_sid": term_sid, "shell": shell_type})
+
+            # 注册 fd 读取回调 — 这是 Trae / WebSSH 的标准做法
+            _setup_pty_reader(term_sid)
+
+    except Exception as e:
+        logger.error("ws.terminal.start.failed term_sid={} error={}", term_sid, str(e))
+        await manager.send_to(conn_id, {
+            "type": "terminal_error", "term_sid": term_sid,
+            "error": str(e)[:200]})
+
+
+def _setup_pty_reader(term_sid: str) -> None:
+    """用 loop.add_reader() 注册 PTY fd 的可读回调。"""
+    session = _pty_sessions.get(term_sid)
+    if not session:
+        return
+    fd = session["fd"]
+    conn_id = session["conn_id"]
+    loop: asyncio.AbstractEventLoop = session["loop"]
+
+    def _on_pty_readable() -> None:
+        """当 PTY master fd 有数据可读时被调用。"""
+        try:
+            data = os.read(fd, 8192)
+        except OSError:
+            # fd 已关闭或出错
+            _cleanup_pty(term_sid)
+            return
+
+        if not data:
+            # EOF — shell 已退出
+            _cleanup_pty(term_sid)
+            return
+
+        text = data.decode("utf-8", errors="replace")
+        # 在 event loop 中异步发送
+        loop.call_soon(asyncio.ensure_future, manager.send_to(conn_id, {
+            "type": "terminal_output", "term_sid": term_sid, "data": text}))
+
+    loop.add_reader(fd, _on_pty_readable)
+
+
+def _cleanup_pty(term_sid: str) -> None:
+    """清理 PTY 会话（在 reader 回调中调用，不能 await）。"""
+    session = _pty_sessions.pop(term_sid, None)
+    if not session:
+        return
+    session["alive"] = False
+    fd = session["fd"]
+    conn_id = session["conn_id"]
+    loop: asyncio.AbstractEventLoop = session["loop"]
+
+    # 移除 fd 监听
+    try:
+        loop.remove_reader(fd)
+    except Exception:
+        pass
+
+    # 等待子进程退出，获取 rc
+    try:
+        _, status = os.waitpid(session["pid"], os.WNOHANG)
+        rc = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
+    except Exception:
+        rc = -1
+
+    # 关闭 master fd
+    try:
+        os.close(fd)
+    except Exception:
+        pass
+
+    # 异步通知前端
+    asyncio.ensure_future(manager.send_to(conn_id, {
+        "type": "terminal_exit", "term_sid": term_sid, "returncode": rc}))
+    logger.info("ws.terminal.exit term_sid={} rc={}", term_sid, rc)
+
+
+def _handle_terminal_input(msg: dict) -> None:
+    """将用户输入写入 PTY stdin。"""
+    term_sid = str(msg.get("term_sid") or "")
+    data = msg.get("data", "")
+    session = _pty_sessions.get(term_sid)
+    if not session or not session["alive"]:
+        return
+    try:
+        os.write(session["fd"], data.encode("utf-8", errors="replace"))
+    except OSError:
+        pass
+
+
+def _handle_terminal_resize(msg: dict) -> None:
+    """调整 PTY 窗口大小。"""
+    term_sid = str(msg.get("term_sid") or "")
+    cols = int(msg.get("cols") or 80)
+    rows = int(msg.get("rows") or 24)
+    session = _pty_sessions.get(term_sid)
+    if not session or not session["alive"]:
+        return
+    try:
+        winsize = struct.pack("HHHH", rows, cols, 0, 0)
+        fcntl.ioctl(session["fd"], termios.TIOCSWINSZ, winsize)
+    except OSError:
+        pass
+
+
+def _handle_terminal_kill(msg: dict) -> None:
+    """终止 PTY 会话。"""
+    term_sid = str(msg.get("term_sid") or "")
+    session = _pty_sessions.pop(term_sid, None)
+    if not session:
+        return
+    session["alive"] = False
+    try:
+        os.kill(session["pid"], 9)
+    except (ProcessLookupError, OSError):
+        pass
+    try:
+        os.close(session["fd"])
+    except Exception:
+        pass
+    logger.info("ws.terminal.kill term_sid={}", term_sid)

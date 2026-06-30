@@ -7,6 +7,7 @@ import { useUiStore } from '../stores/ui'
 import { api, exportSessionUrl } from '../api'
 import { renderMarkdown } from '../utils/markdown'
 import ToolCallCard from '../components/chat/ToolCallCard.vue'
+import ChatTerminal from '../components/chat/ChatTerminal.vue'
 import SlashPalette from '../components/chat/SlashPalette.vue'
 import PromptInput from '../components/chat/PromptInput.vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
@@ -315,6 +316,9 @@ const emotionColors: Record<string, string> = {
         </div>
       </n-drawer-content>
     </n-drawer>
+
+    <!-- 纳西妲终端（右侧浮动面板，Teleport to body） -->
+    <ChatTerminal />
   </div>
 </template>
 

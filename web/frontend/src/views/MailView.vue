@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   NButton, NSwitch, NRadioGroup, NRadioButton, NSelect, NSlider,
-  NSpin, NStatistic, NTag, NEmpty, NSteps, NStep, NAlert, useMessage,
+  NSpin, NStatistic, NTag, NEmpty, NAlert, useMessage,
 } from 'naive-ui'
 import { get, put, post } from '../api'
 import { t } from '../i18n'
 
 const message = useMessage()
+const router = useRouter()
 
 interface MailConfig {
   enabled: boolean
@@ -88,6 +90,18 @@ const channelDesc = computed(() => {
     ? t('mailView.channelMailQQDesc')
     : t('mailView.channelMailDesc')
 })
+
+const setupInstruction = '请阅读 https://agent.qq.com/doc/cli-setup.md 文档，按照步骤为我安装并配置 Agent Mail CLI。'
+
+function copySetupInstruction() {
+  navigator.clipboard.writeText(setupInstruction).then(() => {
+    message.success(t('mailView.copied'))
+  }).catch(() => {})
+}
+
+function goToChat() {
+  router.push({ name: 'chat' })
+}
 
 // 邮箱连接状态：0=未安装 1=未授权 2=已授权
 const authStep = computed(() => {
@@ -264,50 +278,43 @@ onUnmounted(() => {
             </n-button>
           </div>
 
-          <!-- 未授权 -->
-          <div v-else-if="authStep === 1" class="connect-wizard">
-            <n-alert type="warning" :show-icon="true" class="connect-alert">
-              {{ t('mailView.notAuthorizedHint') }}
+          <!-- 未安装 / 未授权 — 统一引导去对话窗口 -->
+          <div v-else class="connect-wizard">
+            <n-alert type="info" :show-icon="true" class="connect-alert">
+              {{ authStep === 0 ? t('mailView.notInstalledHint') : t('mailView.notAuthorizedHint') }}
             </n-alert>
+
+            <div class="setup-intro">{{ t('mailView.setupIntro') }}</div>
+
             <div class="connect-steps">
               <div class="connect-step">
                 <div class="step-num">1</div>
                 <div class="step-content">
-                  <div class="step-title">{{ t('mailView.stepOpenBrowser') }}</div>
-                  <div class="step-desc">{{ t('mailView.stepOpenBrowserDesc') }}</div>
+                  <div class="step-title">{{ t('mailView.guideStep1Title') }}</div>
+                  <div class="step-desc">{{ t('mailView.guideStep1Desc') }}</div>
+                  <code class="setup-cmd" @click="copySetupInstruction">{{ setupInstruction }}</code>
                 </div>
               </div>
               <div class="connect-step">
                 <div class="step-num">2</div>
                 <div class="step-content">
-                  <div class="step-title">{{ t('mailView.stepAuthQQ') }}</div>
-                  <div class="step-desc">{{ t('mailView.stepAuthQQDesc') }}</div>
+                  <div class="step-title">{{ t('mailView.guideStep2Title') }}</div>
+                  <div class="step-desc">{{ t('mailView.guideStep2Desc') }}</div>
                 </div>
               </div>
               <div class="connect-step">
                 <div class="step-num">3</div>
                 <div class="step-content">
-                  <div class="step-title">{{ t('mailView.stepDone') }}</div>
-                  <div class="step-desc">{{ t('mailView.stepDoneDesc') }}</div>
+                  <div class="step-title">{{ t('mailView.guideStep3Title') }}</div>
+                  <div class="step-desc">{{ t('mailView.guideStep3Desc') }}</div>
                 </div>
               </div>
             </div>
-            <div class="connect-actions">
-              <n-button type="primary" :loading="authLogging" @click="triggerAuthLogin">
-                {{ t('mailView.startAuth') }}
-              </n-button>
-              <n-button size="small" quaternary :loading="authChecking" @click="loadAuthStatus">
-                {{ t('mailView.checkAgain') }}
-              </n-button>
-            </div>
-          </div>
 
-          <!-- 未安装 -->
-          <div v-else class="connect-wizard">
-            <n-alert type="error" :show-icon="true" class="connect-alert">
-              {{ t('mailView.notInstalledHint') }}
-            </n-alert>
             <div class="connect-actions">
+              <n-button type="primary" @click="goToChat">
+                {{ t('mailView.goToChat') }}
+              </n-button>
               <n-button size="small" quaternary :loading="authChecking" @click="loadAuthStatus">
                 {{ t('mailView.checkAgain') }}
               </n-button>
@@ -648,6 +655,34 @@ onUnmounted(() => {
 .step-desc { font-size: 12px; color: var(--moon-dim); opacity: 0.75; }
 
 .connect-actions { display: flex; align-items: center; gap: 10px; }
+
+.setup-intro {
+  font-size: 13px;
+  color: var(--wisdom);
+  line-height: 1.7;
+  padding: 8px 0;
+}
+
+.setup-cmd {
+  display: block;
+  margin-top: 8px;
+  padding: 10px 14px;
+  background: rgba(10, 24, 16, 0.6);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--dendro);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, transform 0.2s var(--ease-out);
+  word-break: break-all;
+  line-height: 1.6;
+}
+.setup-cmd:hover {
+  border-color: rgba(143, 229, 96, 0.4);
+  background: rgba(143, 229, 96, 0.08);
+  transform: translateX(2px);
+}
 
 .not-connected-hint { opacity: 0.6; }
 </style>
