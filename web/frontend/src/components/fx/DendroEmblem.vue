@@ -1,13 +1,23 @@
 <script setup lang="ts">
 // 草元素神之眼徽记（原神草元素符号的四叶印化简）
+// 性能优化：glow 默认关闭（CSS filter: drop-shadow 与 animation: rotate 组合会导致 GPU 卡顿）
+// 发光效果改用 SVG 内部渐变实现，避免 CSS filter 每帧重新光栅化
 withDefaults(defineProps<{ size?: number; spin?: boolean; glow?: boolean }>(), {
-  size: 36, spin: false, glow: true,
+  size: 36, spin: false, glow: false,
 })
 </script>
 
 <template>
-  <span class="dendro-emblem" :class="{ spin, glow }" :style="{ width: size + 'px', height: size + 'px' }">
+  <span class="dendro-emblem" :class="{ spin }" :style="{ width: size + 'px', height: size + 'px' }">
     <svg :width="size" :height="size" viewBox="0 0 48 48" fill="none">
+      <!-- 发光底层（用 SVG 渐变替代 CSS filter，零合成层开销） -->
+      <defs>
+        <radialGradient v-if="glow" id="emblem-glow">
+          <stop offset="0%" stop-color="rgba(127,214,80,0.3)" />
+          <stop offset="100%" stop-color="rgba(127,214,80,0)" />
+        </radialGradient>
+      </defs>
+      <circle v-if="glow" cx="24" cy="24" r="22" fill="url(#emblem-glow)" />
       <!-- 外环藤纹 -->
       <circle cx="24" cy="24" r="21" stroke="currentColor" stroke-width="1.2" opacity="0.35"
               stroke-dasharray="4 5" stroke-linecap="round" />
@@ -32,7 +42,13 @@ withDefaults(defineProps<{ size?: number; spin?: boolean; glow?: boolean }>(), {
   justify-content: center;
   color: var(--dendro);
 }
-.dendro-emblem.glow { filter: drop-shadow(0 0 6px rgba(127, 214, 80, 0.45)); }
-.dendro-emblem.spin svg { animation: emblem-spin 9s linear infinite; }
-@keyframes emblem-spin { to { transform: rotate(360deg); } }
+/* 旋转动画用 will-change 优化，避免每帧重新合成 */
+.dendro-emblem.spin svg {
+  animation: emblem-spin 9s linear infinite;
+  will-change: transform;
+}
+@keyframes emblem-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 </style>
