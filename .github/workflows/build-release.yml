@@ -202,6 +202,21 @@ jobs:
           fi
           echo "Pillow C extension verified OK"
 
+      - name: Ensure assets bundled in dist
+        shell: bash
+        run: |
+          # PyInstaller 的 datas 可能未正确打包 assets，手动复制确保资源存在
+          mkdir -p dist/xiaoda-agent/assets/voice_refs
+          mkdir -p dist/xiaoda-agent/assets/stickers
+          cp assets/voice_refs/* dist/xiaoda-agent/assets/voice_refs/
+          cp -r assets/stickers/* dist/xiaoda-agent/assets/stickers/
+          cp assets/nahida-icon.* dist/xiaoda-agent/assets/ 2>/dev/null || true
+          # 验证关键文件
+          test -f dist/xiaoda-agent/assets/voice_refs/keli.mp3
+          test -f dist/xiaoda-agent/assets/voice_refs/nahida.wav
+          test -f dist/xiaoda-agent/assets/voice_refs/nahida_hq.wav
+          echo "Assets bundled OK: $(find dist/xiaoda-agent/assets -type f | wc -l) files"
+
       - name: Verify assets in build output
         shell: bash
         continue-on-error: true
