@@ -6,7 +6,7 @@ import {
   NTag, NPopconfirm, useMessage,
 } from 'naive-ui'
 import { get, post, put, del } from '../api'
-import { t } from '../i18n'
+import { t, tf } from '../i18n'
 
 const message = useMessage()
 
@@ -88,7 +88,7 @@ async function toggleGreeting(g: any, value: boolean) {
   try {
     await put(`/schedule/greetings/${g.id}`, { enabled: value })
     g.enabled = value ? 1 : 0
-    message.success(t('scheduleView.planToggled')(!!value))
+    message.success(tf('scheduleView.planToggled', !!value))
   } catch (e: any) { message.error(e.message) }
 }
 

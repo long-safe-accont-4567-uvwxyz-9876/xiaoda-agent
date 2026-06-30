@@ -2,14 +2,25 @@ from __future__ import annotations
 
 import os
 import shutil
+from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
 from web.routers.auth import get_current_user
 from web.schemas import Envelope
+
+
+# 免责协议全文（模块级常量，供前端通过 API 获取）
+DISCLAIMER_TEXT = """本 Agent 由纳西妲的老父亲-"飞"个人学习用途二创开发，禁止用户生成任何违禁内容，禁止用于任何商业用途，否则一切后果与开发者无关，由用户一人承担。
+
+1. 本软件仅供个人学习研究使用，严禁用于任何商业用途
+2. 用户使用本软件生成的所有内容由用户本人承担全部责任
+3. 不得利用本软件生成违反法律法规的内容
+4. 本软件不对生成内容的准确性、完整性作任何保证
+5. 开发者不对用户使用本软件造成的任何直接或间接损失承担责任"""
 
 
 def _mask_key_value(val: str) -> str:
@@ -1029,3 +1040,139 @@ async def save_user_profile(body: dict) -> Any:
 
     logger.info("setup.user_profile_saved path={}", str(user_md_path))
     return Envelope(data={"saved": True})
+
+
+# ── 品牌署名 & 免责协议 ────────────────────────────────────
+
+
+def _read_disclaimer_status(user_md_path: Path) -> dict:
+    """读取 USER.md 中的免责协议状态。
+
+    返回 ``{"agreed": bool, "agreed_at": str}``。
+    文件不存在或未找到 ``## 法律与声明`` 区块时 ``agreed=False``。
+    """
+    result = {"agreed": False, "agreed_at": ""}
+    if not user_md_path.exists():
+        return result
+    try:
+        content = user_md_path.read_text(encoding="utf-8-sig")
+    except Exception:
+        try:
+            content = user_md_path.read_text(encoding="utf-8")
+        except Exception:
+            return result
+
+    # 匹配 ## 法律与声明 区块（直到下一个 ## 区块或文件结尾）
+    m = _re.search(r'## 法律与声明\s*\n(.*?)(?=\n## |\Z)', content, _re.DOTALL)
+    if not m:
+        return result
+    block = m.group(1)
+    agreed_m = _re.search(r'disclaimer_agreed:\s*(true|false)', block, _re.IGNORECASE)
+    if agreed_m and agreed_m.group(1).lower() == "true":
+        result["agreed"] = True
+        at_m = _re.search(r'disclaimer_agreed_at:\s*(.+)', block)
+        if at_m:
+            result["agreed_at"] = at_m.group(1).strip()
+    return result
+
+
+def _write_disclaimer_agreement(user_md_path: Path, agreed: bool) -> str:
+    """写入或替换 USER.md 的 ``## 法律与声明`` 区块，返回 agreed_at 的 ISO 时间字符串。
+
+    若已存在该区块则替换；否则追加到文件末尾。
+    """
+    from datetime import datetime
+
+    agreed_at = datetime.now().isoformat(timespec="seconds")
+    new_section = (
+        "## 法律与声明\n"
+        "\n"
+        f"disclaimer_agreed: {'true' if agreed else 'false'}\n"
+        f"disclaimer_agreed_at: {agreed_at}\n"
+        "disclaimer_version: 1\n"
+    )
+
+    content = ""
+    if user_md_path.exists():
+        try:
+            content = user_md_path.read_text(encoding="utf-8-sig")
+        except Exception:
+            try:
+                content = user_md_path.read_text(encoding="utf-8")
+            except Exception:
+                content = ""
+
+    # 匹配并替换已有的 ## 法律与声明 区块（直到下一个 ## 区块或文件结尾）
+    pattern = _re.compile(r'## 法律与声明\s*\n.*?(?=\n## |\Z)', _re.DOTALL)
+    if pattern.search(content):
+        new_content = pattern.sub(lambda _m: new_section, content)
+    else:
+        # 追加到文件末尾
+        if content and not content.endswith("\n"):
+            content += "\n"
+        new_content = content + ("\n" if content else "") + new_section
+
+    user_md_path.parent.mkdir(parents=True, exist_ok=True)
+    user_md_path.write_text(new_content, encoding="utf-8-sig")
+    return agreed_at
+
+
+@router.get("/brand/signature", response_model=Envelope[dict])
+async def get_brand_signature() -> Any:
+    """返回品牌署名信息（无需认证）。
+
+    供前端定期校验署名是否被篡改。版本号复用 ``GET /setup/version`` 逻辑。
+    """
+    from web.routers.system import _read_version
+    return Envelope(data={
+        "signature": "本 Agent 由纳西妲的老父亲-飞 个人学习用途二创开发",
+        "author": "纳西妲的老父亲-飞",
+        "version": _read_version(),
+    })
+
+
+@router.get("/setup/disclaimer-status", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
+async def get_disclaimer_status() -> Any:
+    """返回免责协议状态（是否已同意、同意时间）与协议全文。
+
+    首次运行免认证，非首次需认证。USER.md 不存在时 ``agreed=false``。
+    """
+    from config import WORKSPACE_DIR
+
+    user_md_path = WORKSPACE_DIR / "USER.md"
+    try:
+        status = _read_disclaimer_status(user_md_path)
+    except Exception as e:
+        logger.warning("setup.disclaimer_status.read_failed error={}", str(e))
+        status = {"agreed": False, "agreed_at": ""}
+
+    return Envelope(data={
+        "agreed": status["agreed"],
+        "agreed_at": status["agreed_at"],
+        "text": DISCLAIMER_TEXT,
+    })
+
+
+@router.post("/setup/agree-disclaimer", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
+async def agree_disclaimer(body: dict) -> Any:
+    """记录用户对免责协议的同意状态到 USER.md。
+
+    首次运行免认证，非首次需认证。接收 JSON body ``{"agreed": true}``，
+    写入失败返回 500。
+    """
+    from config import WORKSPACE_DIR
+
+    agreed = bool(body.get("agreed", False))
+    user_md_path = WORKSPACE_DIR / "USER.md"
+    try:
+        agreed_at = _write_disclaimer_agreement(user_md_path, agreed)
+    except Exception as e:
+        logger.error("setup.agree_disclaimer.write_failed error={}", str(e))
+        raise HTTPException(status_code=500, detail=f"写入免责协议失败: {e}")
+
+    logger.info("setup.disclaimer_agreed path={} agreed={}", str(user_md_path), agreed)
+    return Envelope(data={
+        "success": True,
+        "agreed": agreed,
+        "agreed_at": agreed_at,
+    })

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref, provide } from 'vue'
+import { onMounted, ref, provide, onUnmounted } from 'vue'
 import { NConfigProvider, NMessageProvider, NDialogProvider, darkTheme } from 'naive-ui'
 import type { GlobalThemeOverrides } from 'naive-ui'
 import { useAuthStore } from './stores/auth'
 import { useRouter } from 'vue-router'
 import { api } from './api'
+import { t } from './i18n'
 import GrassParticles from './components/fx/GrassParticles.vue'
 
 const auth = useAuthStore()
@@ -12,6 +13,42 @@ const router = useRouter()
 const particlesRef = ref<InstanceType<typeof GrassParticles> | null>(null)
 
 provide('particles', particlesRef)
+
+// 署名水印防删除
+const watermarkRef = ref<HTMLElement | null>(null)
+let observer: MutationObserver | null = null
+let signatureCheckTimer: number | null = null
+
+function setupWatermarkGuard() {
+  if (!watermarkRef.value) return
+  observer = new MutationObserver((mutations) => {
+    for (const m of mutations) {
+      for (const node of m.removedNodes) {
+        if (node === watermarkRef.value || (node as HTMLElement).classList?.contains('brand-watermark')) {
+          requestAnimationFrame(() => {
+            if (watermarkRef.value && !document.body.contains(watermarkRef.value)) {
+              document.body.appendChild(watermarkRef.value)
+            }
+          })
+        }
+      }
+    }
+  })
+  observer.observe(document.body, { childList: true, subtree: true })
+
+  signatureCheckTimer = window.setInterval(async () => {
+    try {
+      const data = await api.getBrandSignature()
+      const expected = data.signature || ''
+      const watermarks = document.querySelectorAll('.brand-watermark span')
+      watermarks.forEach(el => {
+        if (el.textContent !== expected && expected) {
+          el.textContent = expected
+        }
+      })
+    } catch { /* 静默失败 */ }
+  }, 60000)
+}
 
 onMounted(async () => {
   // 1. 首次运行检测：API Key 未配置 → 跳转 setup 向导
@@ -40,6 +77,14 @@ onMounted(async () => {
     router.replace('/login')
   }
   // 3. 已登录：路由守卫会放行，无需额外跳转
+
+  // 启动署名水印防删除守护
+  setupWatermarkGuard()
+})
+
+onUnmounted(() => {
+  observer?.disconnect()
+  if (signatureCheckTimer) clearInterval(signatureCheckTimer)
 })
 
 const themeOverrides: GlobalThemeOverrides = {
@@ -64,6 +109,9 @@ const themeOverrides: GlobalThemeOverrides = {
 
 <template>
   <n-config-provider :theme="darkTheme" :theme-overrides="themeOverrides">
+    <div ref="watermarkRef" class="brand-watermark" aria-hidden="true">
+      <span>{{ t('brand_signature.full') }}</span>
+    </div>
     <n-dialog-provider>
       <n-message-provider placement="top-right">
         <GrassParticles ref="particlesRef" />
@@ -130,4 +178,25 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(143, 229, 96, 0.3); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(143, 229, 96, 0.5); }
+
+/* 全局署名水印（非 scoped） */
+.brand-watermark {
+  position: fixed;
+  bottom: 8px;
+  right: 12px;
+  z-index: 9999;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0.18;
+  font-size: 11px;
+  color: var(--wisdom, #e8d5a3);
+  font-family: 'Noto Serif SC', serif;
+  letter-spacing: 1px;
+  text-shadow: 0 0 4px rgba(0,0,0,0.5);
+  writing-mode: vertical-rl;
+  max-height: 60vh;
+}
+.brand-watermark span {
+  display: inline-block;
+}
 </style>

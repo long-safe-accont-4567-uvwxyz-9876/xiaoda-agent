@@ -18,7 +18,7 @@ const state = reactive({
 })
 
 /** 翻译函数 */
-function t(key: string): string {
+function t(key: string): any {
   const dict = dicts[state.lang] as any
   const parts = key.split('.')
   let val: any = dict

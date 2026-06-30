@@ -40,6 +40,8 @@ const stickerDesc = ref('')
 const stickerEmotion = ref('happy')
 const stickerInput = ref<HTMLInputElement | null>(null)
 
+const createObjectURL = (f: File) => URL.createObjectURL(f)
+
 function onConfigChanged(e: any) {
   const payload = e.payload as { type?: string } | undefined
   if (payload?.type === 'chat_model') {
@@ -566,7 +568,7 @@ async function removeSticker(filename: string) {
                 </n-button>
               </div>
               <div v-if="stickerFile" class="sticker-upload-preview">
-                <img :src="URL.createObjectURL(stickerFile)" alt="preview" />
+                <img :src="createObjectURL(stickerFile)" alt="preview" />
                 <span class="sticker-preview-info">{{ stickerDesc || t('agentsView.noDesc') }} · {{ stickerEmotion }}</span>
               </div>
             </div>

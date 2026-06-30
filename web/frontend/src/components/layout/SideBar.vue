@@ -21,6 +21,7 @@ const navItems = [
   { icon: 'health', labelKey: 'nav.health', route: '/health' },
   { icon: 'dashboard', labelKey: 'nav.dashboard', route: '/dashboard' },
   { icon: 'settings', labelKey: 'nav.settings', route: '/settings/system' },
+  { icon: 'health', labelKey: 'nav.disclaimer', route: '/disclaimer' },
 ]
 </script>
 
@@ -50,6 +51,7 @@ const navItems = [
 
       <div class="sidebar-foot" v-if="expanded">
         <span class="foot-text">{{ t('tagline') }}</span>
+        <span class="foot-signature">由 {{ t('brand_signature.author') }} 二创</span>
       </div>
     </div>
   </nav>
@@ -166,6 +168,14 @@ const navItems = [
   font-family: 'Noto Serif SC', serif;
   white-space: normal;
   line-height: 1.6;
+}
+.foot-signature {
+  display: block;
+  margin-top: 6px;
+  font-size: 10px;
+  color: rgba(232, 213, 163, 0.4);
+  font-family: 'Noto Serif SC', serif;
+  letter-spacing: 1px;
 }
 
 @media (max-width: 768px) {

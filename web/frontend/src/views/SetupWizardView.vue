@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import DendroShader from '../components/fx/DendroShader.vue'
 import DendroEmblem from '../components/fx/DendroEmblem.vue'
 import KeyAccordion, { type TestStatus } from '../components/setup/KeyAccordion.vue'
-import { api, getSetupVersion } from '../api'
+import { api, getSetupVersion, getDisclaimerStatus, agreeDisclaimer } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { t } from '../i18n'
 
@@ -22,6 +22,12 @@ const testStatuses = reactive<Record<string, TestStatus>>({})
 const testMessages = reactive<Record<string, string>>({})
 const testedRequiredKeys = ref<Set<string>>(new Set())
 const modifiedKeys = ref<Set<string>>(new Set())
+
+// 免责协议状态
+const disclaimerAgreed = ref(false)        // 是否已同意（来自后端/localStorage）
+const disclaimerChecked = ref(false)        // 当前勾选状态
+const disclaimerScrolledToBottom = ref(false)
+const disclaimerScrollRef = ref<HTMLElement | null>(null)
 
 onMounted(async () => {
   // 获取版本号
@@ -61,6 +67,22 @@ onMounted(async () => {
       testMessages[k.key] = ''
     }
     error.value = t('setupWizard.apiLoadFailed')
+  }
+
+  // 加载免责协议状态
+  try {
+    const status = await getDisclaimerStatus()
+    disclaimerAgreed.value = !!status.agreed
+    disclaimerChecked.value = !!status.agreed  // 已同意则默认勾选
+    if (status.agreed) {
+      localStorage.setItem('nahida_disclaimer_agreed', 'true')
+    }
+  } catch { /* 降级：首次使用，需要勾选 */ }
+
+  // 也检查 localStorage（快速路径）
+  if (localStorage.getItem('nahida_disclaimer_agreed') === 'true') {
+    disclaimerAgreed.value = true
+    disclaimerChecked.value = true
   }
 })
 
@@ -156,8 +178,32 @@ const allRequiredTestedAndPassed = computed(() => {
 
 const hasUpdates = computed(() => modifiedKeys.value.size > 0)
 
+function handleDisclaimerScroll(e: Event) {
+  const el = e.target as HTMLElement
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 4) {
+    disclaimerScrolledToBottom.value = true
+  }
+}
+
 async function handleSave() {
   if (!hasUpdates.value) return
+
+  // 免责协议校验
+  if (!disclaimerAgreed.value && !disclaimerChecked.value) {
+    error.value = t('disclaimer.mustAgree')
+    return
+  }
+  // 首次同意则写入后端 + localStorage
+  if (!disclaimerAgreed.value && disclaimerChecked.value) {
+    try {
+      await agreeDisclaimer(true)
+      localStorage.setItem('nahida_disclaimer_agreed', 'true')
+      disclaimerAgreed.value = true
+    } catch (e: any) {
+      error.value = e.message || '保存免责协议失败'
+      return
+    }
+  }
 
   // Check if all modified required keys have been tested
   if (!allRequiredTestedAndPassed.value) {
@@ -252,9 +298,35 @@ async function handleSave() {
 
           <p v-if="error" class="error-text">{{ error }}</p>
 
+          <!-- 免责协议 -->
+          <div class="disclaimer-section" v-if="!disclaimerAgreed">
+            <h3 class="disclaimer-title">── {{ t('disclaimer.title') }} ──</h3>
+            <div
+              class="disclaimer-scroll"
+              ref="disclaimerScrollRef"
+              @scroll="handleDisclaimerScroll"
+            >
+              <pre class="disclaimer-text">{{ t('disclaimer.content') }}</pre>
+            </div>
+            <p class="disclaimer-hint">
+              {{ disclaimerScrolledToBottom ? t('disclaimer.scrolledToBottom') : t('disclaimer.scrollToAgree') }}
+            </p>
+            <label class="disclaimer-check" :class="{ disabled: !disclaimerScrolledToBottom }">
+              <input
+                type="checkbox"
+                v-model="disclaimerChecked"
+                :disabled="!disclaimerScrolledToBottom"
+              />
+              <span>{{ t('disclaimer.agree') }}</span>
+            </label>
+          </div>
+          <div class="disclaimer-section disclaimer-agreed-banner" v-else>
+            <span>✓ {{ t('disclaimer.agreed') }}</span>
+          </div>
+
           <button
             class="dendro-btn save-btn"
-            :disabled="saving || !hasUpdates || !allRequiredTestedAndPassed"
+            :disabled="saving || !hasUpdates || !allRequiredTestedAndPassed || (!disclaimerAgreed && !disclaimerChecked)"
             @click="handleSave"
           >
             {{ saving ? t('setupWizard.saving') : t('setupWizard.save') }}
@@ -458,5 +530,71 @@ async function handleSave() {
   font-size: 12px;
   text-align: center;
   margin: 0;
+}
+
+.disclaimer-section {
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: rgba(15, 31, 23, 0.35);
+  margin-top: 4px;
+}
+.disclaimer-title {
+  font-size: 13px;
+  color: var(--wisdom);
+  font-family: 'Noto Serif SC', serif;
+  margin: 0 0 8px;
+  text-align: center;
+}
+.disclaimer-scroll {
+  max-height: 180px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.disclaimer-text {
+  font-size: 12px;
+  color: var(--moon-dim);
+  font-family: 'Noto Sans SC', sans-serif;
+  white-space: pre-wrap;
+  line-height: 1.7;
+  margin: 0;
+}
+.disclaimer-hint {
+  font-size: 11px;
+  color: var(--moon-dim);
+  text-align: center;
+  margin: 0 0 8px;
+  opacity: 0.7;
+}
+.disclaimer-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--dendro);
+  cursor: pointer;
+  user-select: none;
+}
+.disclaimer-check.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.disclaimer-check input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--dendro);
+  cursor: pointer;
+}
+.disclaimer-check.disabled input[type="checkbox"] {
+  cursor: not-allowed;
+}
+.disclaimer-agreed-banner {
+  text-align: center;
+  color: var(--dendro);
+  font-size: 12px;
+  opacity: 0.7;
 }
 </style>

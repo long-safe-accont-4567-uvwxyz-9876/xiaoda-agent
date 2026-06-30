@@ -20,6 +20,29 @@ export default {
   brand: 'Xiaoda Agent',
   tagline: '"Knowledge is the seed of wisdom"',
 
+  // Brand signature
+  brand_signature: {
+    text: 'Developed by 纳西妲的老父亲-飞',
+    full: '本 Agent 由纳西妲的老父亲-"飞"个人学习用途二创开发',
+    author: '纳西妲的老父亲-飞',
+  },
+
+  // Disclaimer
+  disclaimer: {
+    title: 'Disclaimer',
+    pageTitle: 'Disclaimer',
+    readHint: 'Please scroll through the disclaimer below before checking the agree box',
+    scrollToAgree: 'Please continue scrolling to read the full content...',
+    scrolledToBottom: 'Finished reading, you may now check the agree box',
+    agree: 'I have read and agree to the disclaimer above',
+    agreeButton: 'I have read and agree',
+    mustAgree: 'You must read and agree to the disclaimer to continue',
+    agreed: 'Disclaimer agreed',
+    notAgreed: 'Not agreed yet',
+    agreedAt: 'Agreed at',
+    content: '本 Agent 由纳西妲的老父亲-"飞"个人学习用途二创开发，禁止用户生成任何违禁内容，禁止用于任何商业用途，否则一切后果与开发者无关，由用户一人承担。\n\n1. 本软件仅供个人学习研究使用，严禁用于任何商业用途\n2. 用户使用本软件生成的所有内容由用户本人承担全部责任\n3. 不得利用本软件生成违反法律法规的内容\n4. 本软件不对生成内容的准确性、完整性作任何保证\n5. 开发者不对用户使用本软件造成的任何直接或间接损失承担责任',
+  },
+
   // Sidebar navigation
   nav: {
     chat: 'Chat',
@@ -36,6 +59,7 @@ export default {
     health: 'Test Center',
     dashboard: 'Dashboard',
     settings: 'Settings',
+    disclaimer: 'Disclaimer',
   },
 
   // Settings page
@@ -549,7 +573,6 @@ export default {
     emptyMarket: 'No installable plugins',
     marketEmpty: 'No installable plugins',
     searchPlaceholder: 'Search plugins...',
-    loadFailed: (error: string) => `Failed to load plugin list: ${error}`,
     discovered: (count: number) => `Found ${count} new plugin(s)`,
     scanFailed: (error: string) => `Scan failed: ${error}`,
     actionSuccess: (action: string) => `${action} succeeded`,

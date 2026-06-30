@@ -41,6 +41,11 @@ const stageText: Record<string, string> = {
       </button>
     </div>
 
+    <div class="brand-signature" aria-label="署名">
+      <span class="sig-leaf">🌿</span>
+      <span class="sig-text">{{ t('brand_signature.text') }}</span>
+    </div>
+
     <div v-if="chat.isProcessing" class="stage-indicator">
       {{ chat.statusText || stageText[chat.currentStage] || ('🌿 ' + t('topBar.processing') + '...') }}
     </div>
@@ -127,6 +132,31 @@ const stageText: Record<string, string> = {
   animation: breathe 2s ease-in-out infinite;
 }
 
+.brand-signature {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: linear-gradient(90deg, rgba(127, 214, 80, 0.12), rgba(232, 213, 163, 0.08));
+  border: 1px solid rgba(127, 214, 80, 0.25);
+  border-radius: 16px;
+  font-size: 12px;
+  color: var(--wisdom);
+  font-family: 'Noto Serif SC', serif;
+  white-space: nowrap;
+  flex-shrink: 0;
+  pointer-events: none;
+  user-select: none;
+}
+.sig-leaf {
+  font-size: 14px;
+  animation: leaf-sway 3s ease-in-out infinite;
+}
+@keyframes leaf-sway {
+  0%, 100% { transform: rotate(-8deg); }
+  50% { transform: rotate(8deg); }
+}
+
 .topbar-right {
   display: flex;
   align-items: center;
@@ -150,5 +180,7 @@ const stageText: Record<string, string> = {
 @media (max-width: 768px) {
   .chip-name { display: none; }
   .stage-indicator { display: none; }
+  .sig-text { display: none; }
+  .brand-signature { padding: 4px 8px; }
 }
 </style>

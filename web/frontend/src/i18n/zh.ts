@@ -20,6 +20,29 @@ export default {
   brand: 'Xiaoda Agent',
   tagline: '「知识是智慧的种子」',
 
+  // 品牌署名
+  brand_signature: {
+    text: '由 纳西妲的老父亲-飞 二创开发',
+    full: '本 Agent 由纳西妲的老父亲-"飞"个人学习用途二创开发',
+    author: '纳西妲的老父亲-飞',
+  },
+
+  // 免责协议
+  disclaimer: {
+    title: '免责声明',
+    pageTitle: '免责声明',
+    readHint: '请滚动阅读完以下免责声明后方可勾选同意',
+    scrollToAgree: '请继续滚动阅读完整内容...',
+    scrolledToBottom: '已阅读完毕，可以勾选同意',
+    agree: '我已阅读并同意以上免责声明',
+    agreeButton: '我已阅读并同意',
+    mustAgree: '必须阅读并同意免责声明才能继续',
+    agreed: '已同意免责声明',
+    notAgreed: '尚未同意',
+    agreedAt: '同意时间',
+    content: '本 Agent 由纳西妲的老父亲-"飞"个人学习用途二创开发，禁止用户生成任何违禁内容，禁止用于任何商业用途，否则一切后果与开发者无关，由用户一人承担。\n\n1. 本软件仅供个人学习研究使用，严禁用于任何商业用途\n2. 用户使用本软件生成的所有内容由用户本人承担全部责任\n3. 不得利用本软件生成违反法律法规的内容\n4. 本软件不对生成内容的准确性、完整性作任何保证\n5. 开发者不对用户使用本软件造成的任何直接或间接损失承担责任',
+  },
+
   // 侧边栏导航
   nav: {
     chat: '对话',
@@ -36,6 +59,7 @@ export default {
     health: '测试中心',
     dashboard: '仪表盘',
     settings: '系统设置',
+    disclaimer: '免责声明',
   },
 
   // 系统设置页
@@ -530,7 +554,6 @@ export default {
     emptyMarket: '暂无可安装的插件',
     marketEmpty: '暂无可安装的插件',
     searchPlaceholder: '搜索插件...',
-    loadFailed: (error: string) => `获取插件列表失败: ${error}`,
     discovered: (count: number) => `发现 ${count} 个新插件`,
     scanFailed: (error: string) => `扫描失败: ${error}`,
     actionSuccess: (action: string) => `${action} 成功`,

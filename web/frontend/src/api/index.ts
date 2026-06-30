@@ -232,7 +232,7 @@ export const api = {
   getSkills: () => get<Array<{ name: string; size: number; preview: string }>>('/skills'),
   getMcpServers: () => get<Array<{ name: string; status: string; tool_names: string[] }>>('/mcp/servers'),
   getProviders: () => get<Array<{ id: string; label: string; enabled: boolean; default_model?: string }>>('/models/providers'),
-  discoverModels: () => get<Array<{ provider: string; label: string; models: Array<{ id: string; display_name: string; free?: boolean }> }>>('/models/discover'),
+  discoverModels: () => get<Array<{ provider: string; label: string; models: Array<{ id: string; display_name: string; free?: boolean; model_id?: string; name?: string }> }>>('/models/discover'),
 
   // ── 工作流管理 ──
   listWorkflows: () => get<WorkflowSummary[]>('/workflows'),
@@ -241,6 +241,11 @@ export const api = {
   updateWorkflow: (id: string, data: Workflow) => put<Workflow>('/workflows/' + id, data),
   deleteWorkflow: (id: string) => del<void>('/workflows/' + id),
   previewWorkflow: (id: string) => get<{prompt: string}>('/workflows/' + id + '/preview'),
+
+  // 品牌署名与免责协议
+  getBrandSignature: () => get<{ signature: string; author: string; version: string }>('/brand/signature'),
+  getDisclaimerStatus: () => get<{ agreed: boolean; agreed_at: string; text: string }>('/setup/disclaimer-status'),
+  agreeDisclaimer: (agreed: boolean) => post<{ success: boolean }>('/setup/agree-disclaimer', { agreed }),
 }
 
 export async function getSetupVersion(): Promise<{ version: string }> {
@@ -322,3 +327,11 @@ export const updateKnowledgeRelation = (id: string, data: { relation: string }) 
 
 export const getKnowledgeGraph = (entity = '', depth = 1) =>
   get<{ nodes: any[]; edges: any[] }>(`/insight/knowledge/graph?entity=${encodeURIComponent(entity)}&depth=${depth}`)
+
+// ── 品牌署名与免责协议 ──
+export const getBrandSignature = () =>
+  get<{ signature: string; author: string; version: string }>('/brand/signature')
+export const getDisclaimerStatus = () =>
+  get<{ agreed: boolean; agreed_at: string; text: string }>('/setup/disclaimer-status')
+export const agreeDisclaimer = (agreed: boolean) =>
+  post<{ success: boolean }>('/setup/agree-disclaimer', { agreed })
