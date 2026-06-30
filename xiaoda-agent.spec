@@ -156,6 +156,7 @@ hiddenimports = [
     'core.bootstrap',
     'core.chat_processor',
     'core.delegation',
+    'core.jieba_prewarm',
     'core.router_engine',
     'core.tool_orchestrator',
     'db',
@@ -165,6 +166,8 @@ hiddenimports = [
     'db.db_learning',
     'db.db_memory',
     'db.db_notebook',
+    'db.fts_utils',
+    'db.index_manager',
     'db.session_store',
     'emotion',
     'emotion.emoji_config',
@@ -179,6 +182,7 @@ hiddenimports = [
     'memory.context_usage',
     'memory.knowledge_graph',
     'memory.learning_manager',
+    'memory.memory_distiller',
     'memory.memory_manager',
     'memory.notebook_manager',
     'memory.vector_store',
@@ -203,6 +207,7 @@ hiddenimports = [
     'tool_engine.tool_registry',
     'tool_engine.tool_repair',
     'tools',
+    'tools._builtin_manifest',
     'tools.agnes_tools',
     'tools.code_tools_v2',
     'tools.document_tools',
@@ -284,6 +289,72 @@ hiddenimports = [
     'instinct_manager',
     'belief_router',
     'hooks',
+    'config',
+    'prompt_builder',
+    'cli',
+
+    # agent_core package (delayed __getattr__ imports — invisible to PyInstaller)
+    'agent_core',
+    'agent_core._shared',
+    'agent_core.core',
+    'agent_core.message_processor',
+    'agent_core.shared_blackboard',
+    'agent_core.sub_agent_manager',
+    'agent_core.tool_executor',
+
+    # core sub-modules (runtime imports)
+    'core.agent_introspection',
+    'core.agent_work_record',
+    'core.app_exception',
+    'core.capability_detector',
+    'core.circuit_breaker',
+    'core.degradation_strategy',
+    'core.doctor',
+    'core.dream_consolidation',
+    'core.error_codes',
+    'core.failure_trigger',
+    'core.lazy_loader',
+    'core.learning_feedback',
+    'core.learning_loop',
+    'core.mental_state',
+    'core.message',
+    'core.permanent_memory',
+    'core.persona_coherence',
+    'core.preference_pipeline',
+    'core.risk_classifier',
+    'core.xp_system',
+
+    # memory sub-modules
+    'memory.emotional_memory',
+    'memory.fluid_memory',
+    'memory.query_transform',
+    'memory.recall_scheduler',
+    'memory.reranker',
+
+    # security sub-modules
+    'security.anomaly_detector',
+    'security.canary',
+    'security.credential_vault',
+    'security.human_approval',
+    'security.instruction_hierarchy',
+    'security.secrets_broker',
+    'security.ssrf_guard',
+
+    # tool_engine sub-modules
+    'tool_engine.error_rule_pipeline',
+
+    # utils sub-modules
+    'utils.canary_guard',
+    'utils.encrypted_credential',
+    'utils.instruction_hierarchy',
+    'utils.llm_cleanup',
+
+    # web sub-modules
+    'web._app_ref',
+    'web._discovery_cache',
+    'web._provider_keys',
+    'web.error_handler',
+    'web.middleware.rate_limit',
 ]
 
 # Collect any sub-modules that static analysis might miss
