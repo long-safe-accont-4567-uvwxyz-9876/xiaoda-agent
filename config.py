@@ -210,7 +210,7 @@ def _init_user_resources() -> None:
     if bundled_workspace.exists():
         WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
         for item in bundled_workspace.iterdir():
-            if not item.is_file():
+            if item.is_dir():
                 continue
             # .tpl 文件复制时去除 .tpl 后缀（避免 CI 安全扫描拦截 USER.md 等文件名）
             target_name = item.name[:-4] if item.name.endswith('.tpl') else item.name
@@ -220,6 +220,23 @@ def _init_user_resources() -> None:
                     shutil.copy2(item, target)
                 except Exception:
                     pass
+
+        # 4. 复制 workspace/ 子目录（workflows/, skills/ 等默认资源，不覆盖已有文件）
+        for sub_name in ("workflows", "skills"):
+            bundled_sub = bundled_workspace / sub_name
+            if not bundled_sub.is_dir():
+                continue
+            user_sub = WORKSPACE_DIR / sub_name
+            user_sub.mkdir(parents=True, exist_ok=True)
+            for item in bundled_sub.iterdir():
+                if not item.is_file():
+                    continue
+                target = user_sub / item.name
+                if not target.exists():
+                    try:
+                        shutil.copy2(item, target)
+                    except Exception:
+                        pass
 
 
 _init_user_resources()

@@ -53,15 +53,15 @@ PROVIDER_PRICING = {
 }
 
 ROUTE_TABLE = {
-    "chat": {"model": MIMO_MODEL, "max_tokens": 1500, "client": "mimo"},
+    "chat": {"model": MIMO_MODEL, "max_tokens": 1500, "client": "mimo", "thinking": {"type": "disabled"}},
     "chat_pro": {"model": MIMO_PRO_MODEL, "max_tokens": 2000, "client": "mimo", "thinking": {"type": "enabled", "budget_tokens": 2048}},
-    "chat_flash": {"model": MIMO_MODEL, "max_tokens": 1000, "client": "mimo"},
-    "chat_mini": {"model": MIMO_MODEL, "max_tokens": 800, "client": "mimo"},
-    "chat_mimo": {"model": MIMO_MODEL, "max_tokens": 1500, "client": "mimo"},
-    "emotion_analysis": {"model": MIMO_MODEL, "max_tokens": 300, "client": "mimo"},
-    "tool_result_wrap": {"model": MIMO_MODEL, "max_tokens": 300, "client": "mimo"},
-    "memory_encoding": {"model": MIMO_MODEL, "max_tokens": 800, "client": "mimo"},
-    "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": 2000, "client": "agnes"},
+    "chat_flash": {"model": MIMO_MODEL, "max_tokens": 1000, "client": "mimo", "thinking": {"type": "disabled"}},
+    "chat_mini": {"model": MIMO_MODEL, "max_tokens": 800, "client": "mimo", "thinking": {"type": "disabled"}},
+    "chat_mimo": {"model": MIMO_MODEL, "max_tokens": 1500, "client": "mimo", "thinking": {"type": "disabled"}},
+    "emotion_analysis": {"model": MIMO_MODEL, "max_tokens": 300, "client": "mimo", "thinking": {"type": "disabled"}},
+    "tool_result_wrap": {"model": MIMO_MODEL, "max_tokens": 300, "client": "mimo", "thinking": {"type": "disabled"}},
+    "memory_encoding": {"model": MIMO_MODEL, "max_tokens": 800, "client": "mimo", "thinking": {"type": "disabled"}},
+    "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": 2000, "client": "agnes", "thinking": {"type": "disabled"}},
 }
 
 MODEL_PREFERENCES = {
@@ -604,12 +604,15 @@ class ModelRouter:
         }
         if extra_headers:
             kwargs["extra_headers"] = extra_headers
-        # 支持 thinking 参数（Agnes Thinking 模式）
+        # 支持 thinking 参数（通用）
         thinking_config = config.get("thinking")
-        if thinking_config and provider == "agnes":
-            kwargs["extra_body"] = {
-                "chat_template_kwargs": {"enable_thinking": True}
-            }
+        if thinking_config:
+            if provider == "agnes":
+                kwargs["extra_body"] = {
+                    "chat_template_kwargs": {"enable_thinking": thinking_config.get("type") == "enabled"}
+                }
+            else:
+                kwargs["extra_body"] = {"thinking": thinking_config}
         return kwargs
 
     async def chat_stream(self, messages: list, task_type: str = "chat",
@@ -704,17 +707,15 @@ class ModelRouter:
         if extra_headers:
             kwargs["extra_headers"] = extra_headers
 
-        # 支持 thinking 参数（Agnes Thinking 模式）
+        # 支持 thinking 参数（通用）
         thinking_config = config.get("thinking")
         if thinking_config:
             if provider == "agnes":
                 kwargs["extra_body"] = {
-                    "chat_template_kwargs": {
-                        "enable_thinking": True
-                    }
+                    "chat_template_kwargs": {"enable_thinking": thinking_config.get("type") == "enabled"}
                 }
-            # 对于 MiMo API（如果支持），添加类似参数
-            # kwargs["extra_body"] = {"thinking": thinking_config}
+            else:
+                kwargs["extra_body"] = {"thinking": thinking_config}
         return kwargs
 
     async def _handle_route_response(self, response: Any, task_type: str, model: str,

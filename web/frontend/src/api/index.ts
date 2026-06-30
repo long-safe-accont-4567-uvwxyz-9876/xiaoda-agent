@@ -232,6 +232,7 @@ export const api = {
   getSkills: () => get<Array<{ name: string; size: number; preview: string }>>('/skills'),
   getMcpServers: () => get<Array<{ name: string; status: string; tool_names: string[] }>>('/mcp/servers'),
   getProviders: () => get<Array<{ id: string; label: string; enabled: boolean; default_model?: string }>>('/models/providers'),
+  discoverModels: () => get<Array<{ provider: string; label: string; models: Array<{ id: string; display_name: string; free?: boolean }> }>>('/models/discover'),
 
   // ── 工作流管理 ──
   listWorkflows: () => get<WorkflowSummary[]>('/workflows'),
@@ -239,7 +240,7 @@ export const api = {
   createWorkflow: (data: Workflow) => post<Workflow>('/workflows', data),
   updateWorkflow: (id: string, data: Workflow) => put<Workflow>('/workflows/' + id, data),
   deleteWorkflow: (id: string) => del<void>('/workflows/' + id),
-  previewWorkflow: (id: string) => get<string>('/workflows/' + id + '/preview'),
+  previewWorkflow: (id: string) => get<{prompt: string}>('/workflows/' + id + '/preview'),
 }
 
 export async function getSetupVersion(): Promise<{ version: string }> {

@@ -28,7 +28,7 @@ COMMAND_DESCRIPTIONS = {
     "/debug": "调试信息",
     "/doctor": "自检 (零 API 调用, <2s)",
     "/self": "查看 Agent 内心状态 (元认知自省)",
-    "wf": "执行工作流（后跟工作流名称）",
+    "/wf": "执行工作流（后跟工作流名称）",
 }
 
 
@@ -656,7 +656,28 @@ class SlashCommandHandler:
         """
         args = args.strip()
         if not args:
-            return "用法: /wf <工作流ID>\n（工作流列表可通过 API: GET /api/v1/workflows 获取）"
+            # 列出所有可用工作流
+            from config import WORKSPACE_DIR
+            wf_dir = WORKSPACE_DIR / "workflows"
+            if not wf_dir.exists():
+                return "暂无工作流。可在 Web UI「工作流」页面创建。"
+            wfs = sorted(wf_dir.glob("*.json"))
+            if not wfs:
+                return "暂无工作流。可在 Web UI「工作流」页面创建。"
+            names = []
+            for fp in wfs:
+                try:
+                    import json
+                    wf = json.loads(fp.read_text(encoding="utf-8"))
+                    names.append(f"  • {fp.stem} — {wf.get('name', fp.stem)}")
+                except Exception:
+                    names.append(f"  • {fp.stem}")
+            return "可用工作流:\n" + "\n".join(names) + "\n\n用法: /wf <工作流ID>"
+
+        # 路径穿越防护
+        import re
+        if not re.fullmatch(r"[\w一-鿿-]{1,64}", args):
+            return "工作流 ID 格式不正确（只能含字母/数字/下划线/中文/连字符）"
 
         import json
         from config import WORKSPACE_DIR
@@ -698,6 +719,7 @@ class SlashCommandHandler:
             ("/knowledge", "查看知识图谱统计"),
             ("/doctor [json|fix]", "运行自检（零 API 调用, <2s）"),
             ("/self [json]", "查看 Agent 内心状态（元认知自省）"),
+            ("/wf <工作流ID>", "执行指定工作流"),
             ("/help", "显示此帮助"),
         ]
 

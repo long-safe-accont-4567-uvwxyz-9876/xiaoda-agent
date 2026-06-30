@@ -154,6 +154,7 @@ async def list_workflows() -> Any:
     for fp in sorted(d.glob("*.json")):
         try:
             wf = json.loads(fp.read_text(encoding="utf-8"))
+            wf["node_count"] = len(wf.get("nodes", []))
             out.append(wf)
         except Exception as e:
             logger.warning("workflow.list_read_failed file={} error={}", fp.name, str(e))
