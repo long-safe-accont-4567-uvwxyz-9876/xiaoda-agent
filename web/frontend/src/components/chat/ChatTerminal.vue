@@ -18,14 +18,22 @@ const panelOpen = ref(false)
 const showNewDialog = ref(false)
 const newShellType = ref('bash')
 
-// ── OS 检测（服务端） ──
-const serverOs = ref('linux')
+// ── OS 检测（优先服务端 API，fallback 到客户端 navigator） ──
+function _detectClientOs(): string {
+  const ua = navigator.userAgent.toLowerCase()
+  if (ua.includes('win')) return 'windows'
+  if (ua.includes('mac')) return 'darwin'
+  return 'linux'
+}
+const serverOs = ref(_detectClientOs())
 const isWindows = computed(() => serverOs.value === 'windows')
 
 get<{ os: string; shell: string }>('/system/os').then(res => {
   serverOs.value = res.os
   newShellType.value = res.shell
-}).catch(() => {})
+}).catch(() => {
+  // API 失败时保留客户端检测结果，不做任何覆盖
+})
 
 // ── 多终端会话 ──
 interface TermSession {

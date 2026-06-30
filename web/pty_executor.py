@@ -81,16 +81,29 @@ async def execute_on_pty(
     # 标记格式（ANSI dim + 背景色，终端中几乎不可见）：
     #   开始：\033[2m\033[38;2;6;14;10m_A_{id}_\033[0m
     #   结束：\033[2m\033[38;2;6;14;10m_Z_{id}_{exitcode}_\033[0m
-    pty_input = (
-        f"echo -e '{_DIM}{_BG}_A_{marker_id}_'{_RST}'\n"
-        f"{command}\n"
-        f"__ec=$?\n"
-        f"echo -e '{_DIM}{_BG}_Z_{marker_id}_\"${{__ec}}\"_'{_RST}'\n"
-        f"stty echo 2>/dev/null\n"
-    )
+    is_win = session.get("is_windows", False)
+    _start_marker = f"_A_{marker_id}_"
+    _end_marker = f"_Z_{marker_id}_"
+
+    if is_win:
+        # PowerShell / CMD：用 Write-Host 输出隐藏标记
+        # PowerShell 用 $LASTEXITCODE 获取退出码
+        pty_input = (
+            f"Write-Host -NoNewline '{_DIM}{_BG}{_start_marker}{_RST}'\n"
+            f"{command}\n"
+            f"$_ec = $LASTEXITCODE; if ($null -eq $_ec) {{ $_ec = 0 }}\n"
+            f"Write-Host '{_DIM}{_BG}{_end_marker}{_RST}'\"$_ec\"\n"
+        )
+    else:
+        pty_input = (
+            f"echo -e '{_DIM}{_BG}{_start_marker}{_RST}'\n"
+            f"{command}\n"
+            f"__ec=$?\n"
+            f"echo -e '{_DIM}{_BG}{_end_marker}\"${{__ec}}\"{_RST}'\n"
+            f"stty echo 2>/dev/null\n"
+        )
 
     # 写入 PTY
-    is_win = session.get("is_windows", False)
     try:
         if is_win:
             proc = session.get("proc")

@@ -79,6 +79,7 @@ class GreetingScheduler:
             "SELECT COUNT(*) AS c FROM greeting_log WHERE fired_at >= ?", (midnight,))
         return int(row["c"]) if row else 0
 
+
     async def _tick(self) -> None:
         if not self.cfg.get("schedule.enabled", True):
             return
