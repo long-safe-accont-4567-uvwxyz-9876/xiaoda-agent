@@ -56,19 +56,23 @@ async function load() {
 
 async function loadResources() {
   try {
-    const [tools, skills, mcpServers, agents, providers] = await Promise.all([
+    const [tools, skills, mcpServers, agents, discoverResult] = await Promise.all([
       api.getTools().catch(() => []),
       api.getSkills().catch(() => []),
       api.getMcpServers().catch(() => []),
       api.getAgents().catch(() => []),
-      api.getProviders().catch(() => []),
+      api.discoverModels().catch(() => []),
     ])
 
-    resourceOptions.value.tools = tools
+    const toolOpts = tools
       .filter((t: any) => t.enabled)
       .map((t: any) => ({ label: `${t.name} — ${t.description || ''}`, value: t.name }))
 
-    resourceOptions.value.skills = skills.map((s: any) => ({ label: s.name, value: s.name }))
+    const skillOpts = skills.map((s: any) => ({ label: s.name, value: s.name }))
+
+    // 工具和技能合并展示，用户不需要区分
+    resourceOptions.value.tools = toolOpts
+    resourceOptions.value.skills = [...toolOpts, ...skillOpts]
 
     const mcpOpts: Array<{ label: string; value: string }> = []
     for (const srv of mcpServers) {
@@ -82,9 +86,20 @@ async function loadResources() {
       .filter((a: any) => !a.is_main && a.enabled !== false)
       .map((a: any) => ({ label: `${a.display_name || a.name}`, value: a.name }))
 
-    resourceOptions.value.models = providers
-      .filter((p: any) => p.enabled)
-      .map((p: any) => ({ label: `${p.label} (${p.default_model || p.id})`, value: p.id }))
+    // 模型：从 discover API 获取具体模型 ID（而非供应商列表）
+    const modelOpts: Array<{ label: string; value: string }> = []
+    for (const entry of discoverResult) {
+      const providerLabel = entry.label || entry.provider
+      // MiMo 特殊处理：直接在 entry.models 中
+      const models = entry.models || []
+      for (const m of models) {
+        const modelId = m.id || m.model_id || ''
+        if (!modelId) continue
+        const displayName = m.display_name || m.name || modelId
+        modelOpts.push({ label: `${providerLabel} / ${displayName}`, value: `${entry.provider}/${modelId}` })
+      }
+    }
+    resourceOptions.value.models = modelOpts
   } catch {
     // 静默失败，下拉框为空即可
   }
@@ -165,8 +180,8 @@ async function testWorkflow() {
   if (chatStore.isProcessing) { message.warning('对话正在处理中'); return }
   testing.value = true
   try {
-    const prompt = await api.previewWorkflow(editing.value.id)
-    chatStore.sendMessage(typeof prompt === 'string' ? prompt : JSON.stringify(prompt))
+    const result = await api.previewWorkflow(editing.value.id)
+    chatStore.sendMessage(result.prompt || JSON.stringify(result))
     router.push('/')
     message.success('已发送到对话窗口')
   } catch (e: any) { message.error(e.message) }
