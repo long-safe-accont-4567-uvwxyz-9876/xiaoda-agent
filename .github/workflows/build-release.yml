@@ -48,19 +48,19 @@ jobs:
           REPO = os.environ.get('GITHUB_REPOSITORY', '')
           OWNER, REPO_NAME = REPO.split('/')
           def download_file(item, local):
-              """下载单个文件，>1MB 使用 Git Data API"""
-              size = item.get('size', 0)
-              if size > 1000000:
-                  # 大文件：通过 Git Data API 下载
-                  sha = item['sha']
-                  url = f'https://api.github.com/repos/{OWNER}/{REPO_NAME}/git/blobs/{sha}'
-                  req = urllib.request.Request(url, headers=H)
+              """下载单个文件，大文件使用 download_url"""
+              # 优先使用 download_url（直接下载，无 base64 编码限制）
+              if 'download_url' in item and item['download_url']:
+                  req = urllib.request.Request(item['download_url'], headers=H)
                   with urllib.request.urlopen(req) as r:
-                      data = json.loads(r.read())
-                  with open(local, 'wb') as f:
-                      f.write(base64.b64decode(data['content']))
+                      with open(local, 'wb') as f:
+                          while True:
+                              chunk = r.read(8192)
+                              if not chunk:
+                                  break
+                              f.write(chunk)
               else:
-                  # 小文件：通过 Contents API 下载
+                  # 回退：通过 Contents API base64 解码
                   url = item['url']
                   req = urllib.request.Request(url, headers=H)
                   with urllib.request.urlopen(req) as r:
