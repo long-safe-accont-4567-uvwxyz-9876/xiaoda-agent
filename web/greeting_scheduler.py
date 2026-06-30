@@ -203,16 +203,30 @@ class GreetingScheduler:
     async def _generate(self, hint: str) -> str:
         """通过纳西妲 agent 生成问候，保持人格一致性。"""
         now = datetime.now()
-        period = ("清晨" if now.hour < 9 else "上午" if now.hour < 12 else
-                  "中午" if now.hour < 14 else "下午" if now.hour < 18 else
-                  "傍晚" if now.hour < 20 else "夜晚")
         address_term = getattr(self.core.context, "current_address_term", "") or "爸爸"
 
-        # 构建触发纳西妲主动问候的输入
-        user_input = f"[主动问候] 现在是{period} {now.strftime('%H:%M')}，请主动向{address_term}发一句简短温柔的问候"
+        # 根据 hint 决定时间段，而不是当前时间
+        period = "早安"
         if hint:
-            user_input += f"，主题：{hint}"
-        user_input += "。只输出问候语，不要解释。"
+            # hint 直接决定问候类型
+            if "早" in hint or "晨" in hint:
+                period = "早安"
+            elif "午" in hint:
+                period = "午安"
+            elif "晚" in hint or "夜" in hint:
+                period = "晚安"
+            else:
+                period = hint  # 使用 hint 本身
+        else:
+            # 无 hint 时根据当前时间判断
+            period = ("清晨" if now.hour < 9 else "上午" if now.hour < 12 else
+                      "中午" if now.hour < 14 else "下午" if now.hour < 18 else
+                      "傍晚" if now.hour < 20 else "夜晚")
+
+        # 构建触发纳西妲主动问候的输入
+        user_input = f"[主动问候] 请向{address_term}发一句{period}问候"
+        user_input += f"。现在是{now.strftime('%H:%M')}。"
+        user_input += "只输出问候语本身，不要解释，不要输出其他内容。"
 
         try:
             # 通过纳西妲 agent 处理，保持人格和记忆
@@ -224,13 +238,13 @@ class GreetingScheduler:
                 session_id="greeting",
             )
             text = result.reply if hasattr(result, 'reply') else str(result)
-            logger.debug("greeting.raw_output hint={} raw={}", hint, text[:200])
+            logger.debug("greeting.raw_output hint={} period={} raw={}", hint, period, text[:200])
             text = _strip_thinking(text, context="greeting").strip()
             if text:
                 return text[:100]
         except Exception as e:
             logger.warning("greeting.generate_failed error={}", str(e))
-        return f"{address_term}，{period}好呀～纳西妲在这里陪着你哦 🌱"
+        return f"{address_term}，{period}好呀～"
 
     async def _send_qq(self, text: str) -> str | None:
         """发 QQ 主动消息。成功返回 None，失败返回错误描述（供测试接口回显）。"""
