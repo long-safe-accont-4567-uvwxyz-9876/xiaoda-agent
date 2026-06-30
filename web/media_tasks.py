@@ -141,25 +141,31 @@ class MediaTaskQueue:
         return self._publish(Path(path), "tts")
 
     async def _do_image(self, prompt: str, params: dict) -> str:
-        from tool_engine.tool_registry import get_tool
+        from tool_engine.tool_registry import get_tool, resolve_tool_func
         tool = get_tool("agnes_image_generate")
         if not tool:
             raise RuntimeError("agnes_image_generate 工具未注册")
-        result = await tool["func"](prompt=prompt,
-                                    size=params.get("size", "1024x1024"),
-                                    n=int(params.get("n", 1)))
+        func, lazy_err = resolve_tool_func(tool)
+        if func is None:
+            raise RuntimeError(lazy_err or "agnes_image_generate 实现未加载")
+        result = await func(prompt=prompt,
+                            size=params.get("size", "1024x1024"),
+                            n=int(params.get("n", 1)))
         if not result.success:
             raise RuntimeError(result.error or "图片生成失败")
         return await self._extract_media(str(result.data), "image")
 
     async def _do_video(self, prompt: str, params: dict) -> str:
-        from tool_engine.tool_registry import get_tool
+        from tool_engine.tool_registry import get_tool, resolve_tool_func
         tool = get_tool("agnes_video_generate")
         if not tool:
             raise RuntimeError("agnes_video_generate 工具未注册")
-        result = await tool["func"](prompt=prompt,
-                                    seconds=float(params.get("seconds", 5)),
-                                    fps=int(params.get("fps", 24)))
+        func, lazy_err = resolve_tool_func(tool)
+        if func is None:
+            raise RuntimeError(lazy_err or "agnes_video_generate 实现未加载")
+        result = await func(prompt=prompt,
+                            seconds=float(params.get("seconds", 5)),
+                            fps=int(params.get("fps", 24)))
         if not result.success:
             raise RuntimeError(result.error or "视频生成失败")
         return await self._extract_media(str(result.data), "video")

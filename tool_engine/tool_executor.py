@@ -5,7 +5,7 @@ import time
 import inspect
 from loguru import logger
 
-from .tool_registry import get_tool, ToolPermission, ToolResult
+from .tool_registry import get_tool, ToolPermission, ToolResult, resolve_tool_func
 from utils.metrics import metrics
 
 # 敏感参数关键词，匹配到的参数值会被屏蔽
@@ -108,7 +108,9 @@ class ToolExecutor:
         return True
 
     async def _execute_with_timeout(self, tool: dict, arguments: dict) -> ToolResult:
-        func = tool["func"]
+        func, lazy_err = resolve_tool_func(tool)
+        if func is None:
+            return ToolResult.fail(lazy_err or f"工具「{tool.get('name')}」实现未加载")
         tool_name = tool["name"]
         timeout = self.TOOL_TIMEOUTS.get(tool_name, self._global_timeout)
 

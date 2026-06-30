@@ -1,6 +1,7 @@
 from typing import Any
 import os
 import sys
+import asyncio
 import argparse
 from pathlib import Path
 
@@ -31,7 +32,23 @@ except Exception as e:
     raise
 
 
+def _setup_windows_event_loop() -> None:
+    """Windows: 使用 SelectorEventLoop 加速 aiosqlite 线程切换。
+
+    ProactorEventLoop 做 aiosqlite 线程间通知比 Linux 慢 3-5 倍，
+    改用 WindowsSelectorEventLoopPolicy 消除线程切换延迟。
+    非 Windows 平台不做任何改动，沿用平台默认行为。
+    必须在任何 asyncio 事件循环创建之前调用（早于 uvicorn / aiosqlite）。
+    """
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
 def main() -> None:
+    # Windows: 使用 SelectorEventLoop 加速 aiosqlite 线程切换（ProactorEventLoop 慢 3-5 倍）
+    # 必须早于任何 asyncio/uvicorn 调用，确保 _run_web/_run_desktop/_run_cli 三路径均生效
+    _setup_windows_event_loop()
+
     parser = argparse.ArgumentParser(description="Nahida AI Agent")
     subparsers = parser.add_subparsers(dest="command")
 
@@ -124,23 +141,8 @@ def _run_web(host: str, port: int) -> None:
     from loguru import logger
     logger.info("agent.web.start", port=port)
 
-    # 端口冲突检测：启动前检查端口是否可用，等待旧进程释放
-    for attempt in range(30):
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.settimeout(1)
-                s.bind((host, port))
-                break
-        except OSError:
-            if attempt == 0:
-                logger.warning(f"agent.port_in_use port={port}, waiting for old process to release...")
-            if attempt < 29:
-                import time
-                time.sleep(2)
-            else:
-                logger.error(f"agent.port_still_in_use port={port}, giving up after 60s")
-                sys.exit(1)
+    # 端口冲突检测（异步版，避免主线程 time.sleep 阻塞）
+    asyncio.run(_wait_for_port_available_async(host, port))
 
     # 直接传 app 对象，避免 uvicorn 动态导入失败（PyInstaller 兼容）
     try:
@@ -173,10 +175,12 @@ def _run_web(host: str, port: int) -> None:
     )
 
 
-def _wait_for_port_available(host: str, port: int) -> None:
-    """端口冲突检测：等待旧进程释放端口，最多 60s。"""
+async def _wait_for_port_available_async(host: str, port: int) -> None:
+    """端口冲突检测（异步版）：等待旧进程释放端口，最多 60s。
+
+    用 asyncio.sleep 替代 time.sleep，避免阻塞事件循环。
+    """
     import socket
-    import time
     from loguru import logger
     for attempt in range(30):
         try:
@@ -189,7 +193,33 @@ def _wait_for_port_available(host: str, port: int) -> None:
             if attempt == 0:
                 logger.warning(f"agent.port_in_use port={port}, waiting for old process to release...")
             if attempt < 29:
-                time.sleep(2)
+                await asyncio.sleep(2)
+            else:
+                logger.error(f"agent.port_still_in_use port={port}, giving up after 60s")
+                sys.exit(1)
+
+
+def _wait_for_port_available(host: str, port: int) -> None:
+    """端口冲突检测（桌面模式用，同步）：等待旧进程释放端口，最多 60s。
+
+    桌面模式此时 UI 尚未启动，主线程同步 sleep 仅影响 splash 显示时长，可接受。
+    重试间隔缩短到 0.5s 以减少 splash 等待。
+    """
+    import socket
+    import time
+    from loguru import logger
+    for attempt in range(120):  # 120 * 0.5s = 60s
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.settimeout(1)
+                s.bind((host, port))
+                break
+        except OSError:
+            if attempt == 0:
+                logger.warning(f"agent.port_in_use port={port}, waiting for old process to release...")
+            if attempt < 119:
+                time.sleep(0.5)
             else:
                 logger.error(f"agent.port_still_in_use port={port}, giving up after 60s")
                 sys.exit(1)
@@ -322,7 +352,7 @@ def _run_desktop(host: str, port: int) -> None:
     _reflow_js = (
         "(function(){"
         "  var b=document.body;"
-        "  void b.offsetHeight;"  // 触发一次同步 reflow
+        "  void b.offsetHeight;"  # 触发一次同步 reflow
         "  b.style.opacity='0.999';"
         "  requestAnimationFrame(function(){b.style.opacity='1';});"
         "  // 持续推进 rAF，防止合成器再次休眠（直到 onServerReady 接管）"
@@ -336,14 +366,8 @@ def _run_desktop(host: str, port: int) -> None:
             window.evaluate_js(_reflow_js)
         except Exception:
             pass
-        # 每秒补一次 reflow，兜底 WebView2 某些版本的渲染静默
-        import time as _t
-        for _ in range(30):
-            _t.sleep(1)
-            try:
-                window.evaluate_js("void document.body.offsetHeight;")
-            except Exception:
-                break
+        # 不再在 UI 线程轮询；reflow 兜底由 JS 端 setInterval 自驱（见 splash.js _reflowKicker）
+        # _on_loaded 在 1 秒内返回，避免阻塞 pywebview UI 线程导致桌面模式冻死
 
     window.events.loaded += _on_loaded
 

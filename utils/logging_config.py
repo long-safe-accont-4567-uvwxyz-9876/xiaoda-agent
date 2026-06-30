@@ -88,6 +88,7 @@ def setup_logging() -> None:
         retention="30 days",
         level="INFO",
         encoding="utf-8",
+        enqueue=True,  # 异步队列写入，避免事件循环阻塞
     )
 
     # 新增文本格式文件日志 logs/agent.log，便于直接查看
@@ -99,6 +100,7 @@ def setup_logging() -> None:
         retention="30 days",
         level="INFO",
         encoding="utf-8",
+        enqueue=True,  # 异步队列写入，避免事件循环阻塞
     )
 
     logger.info("日志系统就绪")

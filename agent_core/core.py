@@ -60,21 +60,15 @@ from utils.credential_pool import get_credential_pool
 from utils.error_classifier import ErrorClassifier
 from hooks import get_hook_engine, HookEngine
 
-import tools.file_tools_v2
-import tools.code_tools_v2
+# 内置工具改为懒注册：仅登记元数据（name/description/schema/permission/category），
+# 不 import tools.* 子模块，避免冷启动把 httpx/selenium/PIL/primp 等重依赖拉进进程。
+# 首次工具调用时由 tool_engine.tool_executor 经 resolve_tool_func 按需 import 实现。
+from tool_engine.tool_registry import register_builtin_tools_lazy
+register_builtin_tools_lazy()
 
 if TYPE_CHECKING:
     from task_orchestrator import TaskGraph
     from instinct_manager import InstinctManager
-import tools.web_tools_v2
-import tools.document_tools
-import tools.web_browse_tools
-import tools.web_browse_enhanced
-import tools.multi_search_tools
-import tools.hardware_tools
-import tools.vision_tools
-import tools.system_tools
-import tools.agnes_tools
 
 from core.background_tasks import BackgroundTaskManager, _spawn, _bg_tasks
 from core.bootstrap import AgentCoreBootstrapper
@@ -226,6 +220,14 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         """
         bootstrapper = AgentCoreBootstrapper(self)
         await bootstrapper.bootstrap(reinit=reinit)
+        # jieba 后台预热：在事件循环内 fire-and-forget 启动，避免首次对话加载
+        # ~5MB 词典阻塞 1-2 秒（db/fts_utils.py / memory/memory_manager.py 的 lazy import）。
+        # 预热失败不影响 AgentCore 初始化；幂等性由 prewarm_jieba 内部标志保证。
+        try:
+            from core.jieba_prewarm import prewarm_jieba
+            asyncio.create_task(prewarm_jieba())
+        except Exception as e:
+            logger.warning(f"jieba.prewarm_schedule_failed error={e}")
 
     def _get_nahida_personality_file(self) -> str:
         """获取 nahida 人格文件路径（frozen 模式下使用用户目录）"""

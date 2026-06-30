@@ -110,8 +110,14 @@ class BackgroundTaskManager:
         emotion: dict,
         session_id: str,
     ) -> None:
-        """对话日志、会话更新、记忆编码等持久化任务。"""
-        # 1. 对话日志
+        """对话日志、会话更新、记忆编码等持久化任务。
+
+        优化：insert_conversation_log 与 update_session 合并为单次 commit，
+        减少 aiosqlite 线程切换次数（Windows SelectorEventLoop 下每次 commit ~30ms）。
+        try_idle_encode 涉及向量存储，不纳入批量提交。
+        """
+        any_write_ok = False
+        # 1. 对话日志（不立即 commit）
         try:
             await self.db.insert_conversation_log(
                 user_id=user_id,
@@ -120,18 +126,28 @@ class BackgroundTaskManager:
                 assistant_reply=reply,
                 emotion_label=emotion.get("primary", ""),
                 session_id=session_id,
+                auto_commit=False,
             )
+            any_write_ok = True
         except Exception as e:
             logger.warning("bg.conversation_log_failed", error=str(e))
 
-        # 2. 会话更新
+        # 2. 会话更新（不立即 commit）
         if session_id:
             try:
-                await self.db.update_session(session_id)
+                await self.db.update_session(session_id, auto_commit=False)
+                any_write_ok = True
             except Exception as e:
                 logger.warning("bg.session_update_failed", error=str(e))
 
-        # 3. 记忆编码
+        # 批量提交：仅在有写入成功时调用一次 commit
+        if any_write_ok:
+            try:
+                await self.db.commit()
+            except Exception as e:
+                logger.warning("bg.batch_commit_failed", error=str(e))
+
+        # 3. 记忆编码（独立，不纳入批量提交）
         if self.memory and len(self.context.history) >= 4:
             try:
                 ctx = {

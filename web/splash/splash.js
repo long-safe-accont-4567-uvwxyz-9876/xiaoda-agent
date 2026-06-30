@@ -274,11 +274,18 @@ setTimeout(() => {
 
 // ==================== 服务就绪回调（Python 端 evaluate_js 调用） ====================
 
+// ==================== reflow 自驱（替代 Python 端 UI 线程轮询） ====================
+// 兜底 WebView2 渲染静默：每秒触发一次 reflow，直到 onServerReady 接管
+var _reflowKicker = setInterval(function() {
+    try { void document.body.offsetHeight; } catch(e) {}
+}, 1000);
+
 var _serverReadyCalled = false;
 
 window.onServerReady = function() {
     if (_serverReadyCalled) return;
     _serverReadyCalled = true;
+    if (_reflowKicker) { clearInterval(_reflowKicker); _reflowKicker = null; }
     clearInterval(msgInterval);
     loadingText.textContent = 'Ready';
     if (loadingBar) loadingBar.style.animation = 'none';
@@ -294,6 +301,7 @@ window.onServerReady = function() {
 };
 
 window.onServerTimeout = function() {
+    if (_reflowKicker) { clearInterval(_reflowKicker); _reflowKicker = null; }
     clearInterval(msgInterval);
     loadingText.textContent = 'Connection timeout';
 };

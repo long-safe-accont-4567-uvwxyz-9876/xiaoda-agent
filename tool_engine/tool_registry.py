@@ -124,6 +124,96 @@ def register_tool(name: str, description: str, schema: dict,
     return decorator
 
 
+def register_lazy_tool(name: str, description: str, schema: dict,
+                       module_path: str, func_name: str,
+                       permission: ToolPermission = ToolPermission.READ_ONLY,
+                       category: str = "general",
+                       max_frequency: int = 10,
+                       requires_confirmation: bool = False,
+                       source: str = "builtin",
+                       plugin_id: str = "",
+                       version: str = "") -> None:
+    """程序化延迟注册工具：仅登记元数据，func 留空，首次调用时按需 import。
+
+    与 ``register_tool`` 装饰器写入的字典结构一致（func 字段为 None 占位），
+    额外附加 ``_lazy``/``module_path``/``func_name`` 标记，供 ``resolve_tool_func``
+    在首次调用时解析真实实现。``to_openai_tools``/``list_tools``/``get_tool`` 只读
+    元数据字段，不读 func，因此延迟工具在加载前即可对外暴露完整 schema。
+    """
+    global _schema_cache, _schema_version
+    _tools[name] = {
+        "name": name,
+        "description": description,
+        "schema": schema,
+        "permission": permission,
+        "category": category,
+        "max_frequency": max_frequency,
+        "requires_confirmation": requires_confirmation,
+        "func": None,
+        "source": source,
+        "plugin_id": plugin_id,
+        "version": version,
+        "_lazy": True,
+        "module_path": module_path,
+        "func_name": func_name,
+    }
+    _schema_version += 1
+    _schema_cache = None
+
+
+def register_builtin_tools_lazy() -> None:
+    """登记所有内置工具的元数据（懒加载），不 import 任何 tools.* 子模块。幂等。
+
+    重复调用安全：若工具已存在（无论是懒注册还是已被真实解析），均跳过不覆盖，
+    避免把已解析的 func 重新置回懒占位。
+    """
+    from tools._builtin_manifest import BUILTIN_TOOLS
+    for entry in BUILTIN_TOOLS:
+        name = entry["name"]
+        existing = _tools.get(name)
+        if existing is not None:
+            # 已存在（懒注册或已解析）一律保留，不覆盖
+            continue
+        register_lazy_tool(
+            name=name,
+            description=entry["description"],
+            schema=entry["schema"],
+            module_path=entry["module_path"],
+            func_name=entry["func_name"],
+            permission=entry["permission"],
+            category=entry.get("category", "general"),
+            max_frequency=entry.get("max_frequency", 10),
+            requires_confirmation=entry.get("requires_confirmation", False),
+            source=entry.get("source", "builtin"),
+            plugin_id=entry.get("plugin_id", ""),
+            version=entry.get("version", ""),
+        )
+
+
+def resolve_tool_func(tool: dict) -> tuple[Any, str]:
+    """解析并返回工具的可调用 func。
+
+    对懒注册工具按需 ``importlib.import_module(module_path)`` 并
+    ``getattr(module, func_name)`` 取真实实现，回填缓存（``_lazy`` 置 False），
+    后续调用直接复用。优先用 getattr 直接拿 func，不依赖模块内 ``@register_tool``
+    装饰器的覆写副作用，避免竞态。
+
+    Returns:
+        (func, error)：func 非 None 即成功；失败时 func 为 None，error 为原因。
+    """
+    if not tool.get("_lazy"):
+        return tool.get("func"), ""
+    import importlib
+    try:
+        module = importlib.import_module(tool["module_path"])
+        func = getattr(module, tool["func_name"])
+    except Exception as e:
+        return None, f"加载工具实现失败 ({tool.get('name')}): {e}"
+    tool["func"] = func
+    tool["_lazy"] = False
+    return func, ""
+
+
 def register_tool_direct(name: str, description: str, func: callable,
                          parameters: dict, permission: ToolPermission = ToolPermission.READ_ONLY,
                          category: str = "general",
