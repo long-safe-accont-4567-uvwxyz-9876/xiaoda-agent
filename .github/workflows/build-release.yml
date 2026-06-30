@@ -205,17 +205,25 @@ jobs:
       - name: Ensure assets bundled in dist
         shell: bash
         run: |
-          # 确保 assets 资源（stickers/voice_refs）进入安装包
+          echo "=== [DEBUG] Current working directory: $(pwd) ==="
+          echo "=== [DEBUG] assets/ source directory ==="
+          ls -la assets/ 2>/dev/null || echo "ERROR: assets/ not found in $(pwd)"
+          ls -la assets/voice_refs/ 2>/dev/null || echo "ERROR: assets/voice_refs/ not found"
+          echo "=== [DEBUG] dist/ directory ==="
+          ls -la dist/ 2>/dev/null || echo "ERROR: dist/ not found"
+          ls -la dist/xiaoda-agent/ 2>/dev/null || echo "ERROR: dist/xiaoda-agent/ not found"
+          # 复制 assets 到 dist
           mkdir -p dist/xiaoda-agent/assets
-          cp -r assets/* dist/xiaoda-agent/assets/ 2>/dev/null || true
-          # 验证关键资源文件存在
-          echo "=== dist/xiaoda-agent/assets 内容 ==="
-          find dist/xiaoda-agent/assets -type f | head -20
-          echo "=== 资源文件计数 ==="
+          echo "=== [DEBUG] Running cp -r assets/* dist/xiaoda-agent/assets/ ==="
+          cp -rv assets/* dist/xiaoda-agent/assets/ 2>&1 | tail -5 || echo "cp failed with exit code: $?"
+          echo "=== [DEBUG] After copy, dist/xiaoda-agent/assets/ contents ==="
+          find dist/xiaoda-agent/assets -type f | head -30
+          echo "=== [DEBUG] File counts ==="
           echo "voice_refs 文件数: $(find dist/xiaoda-agent/assets/voice_refs -type f 2>/dev/null | wc -l)"
           echo "stickers 文件数: $(find dist/xiaoda-agent/assets/stickers -type f 2>/dev/null | wc -l)"
+          echo "total 文件数: $(find dist/xiaoda-agent/assets -type f 2>/dev/null | wc -l)"
           # 关键文件必须存在
-          test -f dist/xiaoda-agent/assets/voice_refs/keli.mp3 || (echo "ERROR: keli.mp3 missing!" && exit 1)
+          test -f dist/xiaoda-agent/assets/voice_refs/keli.mp3 || (echo "ERROR: keli.mp3 missing! Full path check:" && find dist/ -name "keli.mp3" 2>/dev/null && exit 1)
           test -f dist/xiaoda-agent/assets/voice_refs/nahida.wav || (echo "ERROR: nahida.wav missing!" && exit 1)
           test -f dist/xiaoda-agent/assets/voice_refs/nahida_hq.wav || (echo "ERROR: nahida_hq.wav missing!" && exit 1)
           echo "Assets bundled OK"
