@@ -181,6 +181,129 @@ class DreamConsolidator:
             logger.error(f"Dream.consolidate_db_failed: {e}")
         return archived_count
 
+    async def consolidate_from_db(self, memory_db: Any, batch_size: int = 500) -> dict:
+        """★ F5 修复：从DB加载记忆并执行完整4杆框架整合（替代空字典的consolidate）。
+
+        4杆框架：
+        1. Decay — Ebbinghaus指数衰减评分
+        2. Merge — 同内容前缀聚类，删除重复记忆（保留importance最高的）
+        3. Strengthen — 统计高频访问记忆（DB侧无需写入，访问计数在检索时已递增）
+        4. Evict — 低分记忆归档（非删除，可恢复）
+        """
+        t0 = time.time()
+        stats = {"total": 0, "decayed": 0, "merged": 0, "strengthened": 0, "evicted": 0}
+
+        try:
+            # 1. 从DB加载活跃记忆（排除已归档）
+            rows = await memory_db.get_all_memories(limit=batch_size)
+            stats["total"] = len(rows)
+            if not rows:
+                logger.info("Dream.consolidate_from_db empty, skip")
+                return {**stats, "duration_ms": 0.0}
+
+            # 转换DB行 → Memory对象
+            memories: dict[str, Memory] = {}
+            for row in rows:
+                mid = str(row["id"])
+                mem = Memory(
+                    id=mid,
+                    content=row.get("summary", ""),
+                    importance=0.5,
+                    strength=1.0,
+                    last_access=row.get("timestamp", time.time()),
+                    created_at=row.get("timestamp", time.time()),
+                    access_count=row.get("access_count", 0),
+                )
+                memories[mid] = mem
+
+            now = time.time()
+
+            # 2. Decay — Ebbinghaus衰减评分
+            evict_ids: list[str] = []
+            for mid, m in memories.items():
+                fm_score = self._fluid_scorer.score(
+                    similarity=m.importance,
+                    created_at=m.last_access,
+                    access_count=m.access_count,
+                )
+                m.strength = fm_score
+                elapsed_days = (now - m.last_access) / 86400
+                m.importance *= math.exp(-elapsed_days * 0.01)
+                if (self._fluid_scorer.should_archive(fm_score)
+                        and m.importance < self._importance_threshold):
+                    evict_ids.append(mid)
+
+            # 3. Evict — 低分归档（非删除，可恢复）
+            for mid in evict_ids:
+                try:
+                    await memory_db.archive_memory(int(mid))
+                    stats["evicted"] += 1
+                except Exception as e:
+                    logger.debug(f"Dream.archive_failed id={mid}: {e}")
+            stats["decayed"] = len(evict_ids)
+
+            # 从内存字典移除已归档的
+            for mid in evict_ids:
+                memories.pop(mid, None)
+
+            # 4. Merge — 同内容前缀聚类，删除重复记忆
+            merged_ids = self._merge_similar_db(memories)
+            for mid in merged_ids:
+                try:
+                    await memory_db.delete_memory(int(mid))
+                    stats["merged"] += 1
+                except Exception as e:
+                    logger.debug(f"Dream.merge_delete_failed id={mid}: {e}")
+
+            # 5. Strengthen — 统计高频访问记忆
+            for m in memories.values():
+                if m.access_count > 5:
+                    stats["strengthened"] += 1
+
+            duration = (time.time() - t0) * 1000
+            logger.info(
+                f"Dream.consolidate_from_db duration={duration:.1f}ms "
+                f"total={stats['total']} decayed={stats['decayed']} "
+                f"merged={stats['merged']} strengthened={stats['strengthened']} "
+                f"evicted={stats['evicted']}"
+            )
+
+            self._stats["consolidated"] += 1
+            self._stats["decayed"] += stats["decayed"]
+            self._stats["merged"] += stats["merged"]
+            self._stats["strengthened"] += stats["strengthened"]
+            self._last_consolidate_at = now
+
+            # 联动 L/M/S 心理状态: 清理 7 天前 M 层数据
+            self._trigger_mental_state_consolidate()
+
+            return {**stats, "duration_ms": duration}
+        except Exception as e:
+            logger.error(f"Dream.consolidate_from_db_failed: {e}")
+            return stats
+
+    def _merge_similar_db(self, memories: dict[str, Memory]) -> list[str]:
+        """合并相似记忆（基于内容前缀聚类），返回需要删除的 memory ID 列表。
+
+        保留每组中 importance 最高的记忆，删除其余重复条目。
+        """
+        groups: dict[str, list[str]] = {}
+        for mid, m in memories.items():
+            # 用前 30 字符作为聚类键
+            key = m.content[:30].lower() if m.content else ""
+            if not key:
+                continue
+            groups.setdefault(key, []).append(mid)
+
+        to_delete: list[str] = []
+        for key, ids in groups.items():
+            if len(ids) < 2:
+                continue
+            ids.sort(key=lambda i: memories[i].importance, reverse=True)
+            # 保留 importance 最高的，删除其余
+            to_delete.extend(ids[1:])
+        return to_delete
+
     def _trigger_mental_state_consolidate(self) -> None:
         """触发 L/M/S 心理状态 Dream 整合 (清理 7 天前 M 层数据).
 

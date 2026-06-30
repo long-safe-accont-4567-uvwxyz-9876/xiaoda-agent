@@ -11,6 +11,8 @@ class Metrics:
         self._gauges = defaultdict(float)
         self._histograms = defaultdict(list)
         self._last_report = time.time()
+        # F6: 限制指标键数量，防止动态键导致内存无限增长
+        self._max_keys = 500
 
     def inc(self, name: str, value: int = 1) -> None:
         """递增计数器.
@@ -19,6 +21,9 @@ class Metrics:
             name: 指标名
             value: 增量, 默认 1
         """
+        # F6: 超出键数量上限时不再记录新键（已有键正常递增）
+        if name not in self._counters and len(self._counters) >= self._max_keys:
+            return
         self._counters[name] += value
 
     def observe(self, name: str, duration: float) -> None:
@@ -28,16 +33,25 @@ class Metrics:
             name: 指标名
             duration: 耗时秒数
         """
+        # F6: 超出键数量上限时不再记录新键
+        if name not in self._timers and len(self._timers) >= self._max_keys:
+            return
         self._timers[name].append(duration)
         if len(self._timers[name]) > 100:
             self._timers[name] = self._timers[name][-100:]
 
     def gauge(self, name: str, value: float) -> None:
         """设置仪表盘指标（最新值覆盖）"""
+        # F6: 超出键数量上限时不再记录新键
+        if name not in self._gauges and len(self._gauges) >= self._max_keys:
+            return
         self._gauges[name] = value
 
     def histogram(self, name: str, value: float) -> None:
         """记录直方图样本（保留最近 200 个）"""
+        # F6: 超出键数量上限时不再记录新键
+        if name not in self._histograms and len(self._histograms) >= self._max_keys:
+            return
         self._histograms[name].append(value)
         if len(self._histograms[name]) > 200:
             self._histograms[name] = self._histograms[name][-200:]

@@ -238,6 +238,8 @@ class XPSystem:
         """
         self._state_path = (Path(data_dir) if data_dir else Path(DATA_DIR)) / "xp_state.json"
         self._states: dict[str, XPState] = {}
+        # F6: 缓存上限 — 最多 500 个用户状态，超出时淘汰最久未活跃的
+        self._max_states = 500
         self._load()
 
     # ── 持久化 ──────────────────────────────────────────────
@@ -278,6 +280,9 @@ class XPSystem:
     def get_state(self, user_id: str) -> XPState:
         """获取用户 XP 状态 (不存在则创建)"""
         if user_id not in self._states:
+            # F6: 超出上限时淘汰最久未活跃的用户
+            if len(self._states) >= self._max_states:
+                self._evict_oldest()
             now = time.time()
             self._states[user_id] = XPState(
                 user_id=user_id,
@@ -287,6 +292,19 @@ class XPSystem:
             )
             self._save()
         return self._states[user_id]
+
+    def _evict_oldest(self) -> None:
+        """F6: 淘汰最久未活跃的用户状态（按 first_seen_at 排序，淘汰最早的 10%）"""
+        if len(self._states) < self._max_states:
+            return
+        evict_count = max(1, len(self._states) // 10)
+        sorted_states = sorted(
+            self._states.items(),
+            key=lambda kv: kv[1].first_seen_at
+        )
+        for uid, _ in sorted_states[:evict_count]:
+            self._states.pop(uid, None)
+        logger.info(f"XPSystem.evicted count={evict_count} remaining={len(self._states)}")
 
     # ── 加 XP 入口 ──────────────────────────────────────────
 

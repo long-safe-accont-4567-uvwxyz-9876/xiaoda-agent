@@ -197,20 +197,10 @@ def _build_stable_prompt(address_term: str) -> str:
         if skill_texts:
             sections.append("[已安装的 Skills]\n\n" + skill_texts)
 
-    # 硬件上下文（稳定，不随请求变化）
+    # 硬件上下文（稳定，不随请求变化）—— F3: 运行时动态探测替代硬编码
     from config import DATA_DIR
-    _npu_status = "NPU视觉识别已启用" if os.getenv("ENABLE_NPU", "").lower() in ("1", "true", "yes") else "视觉识别（ncnn后端）"
-    _uname = platform.uname()
-    _hostname = socket.gethostname()
-    hw_context = (
-        "[本机硬件信息]\n"
-        f"主机名: {_hostname} | 架构: {_uname.machine} | 处理器: {_uname.processor or '未知'}\n"
-        f"系统: {_uname.system} {_uname.release} ({_uname.machine})\n"
-        "可用接口: GPIO (40pin排针) / I2C / SPI / UART / PWM\n"
-        "可用工具: gpio_control(引脚控制) / i2c_comm(I2C通信) / hardware_status(硬件监控) / service_manage(服务管理) / network_diag(网络诊断) / dev_assist(开发辅助) / camera_capture(拍照) / vision_analyze(视觉分析)\n"
-        f"数据存储: {DATA_DIR}\n"
-        f"摄像头: Q8 HD Webcam (/dev/video0) | 视觉模型: YOLOv10-nano (ncnn CPU) | {_npu_status}"
-    )
+    from core.capability_detector import detect_capabilities
+    hw_context = detect_capabilities().to_prompt_segment(data_dir=str(DATA_DIR))
     sections.append(hw_context)
 
     result = "\n\n---\n\n".join(sections)
@@ -260,21 +250,10 @@ def _load_cached_modules(address_term: str) -> dict[str, str]:
         if skill_texts:
             modules["skills"] = "[已安装的 Skills]\n\n" + skill_texts
 
-    # 硬件信息
+    # 硬件信息 —— F3: 运行时动态探测替代硬编码
     if "hardware" not in _module_cache:
-        _npu_status = "NPU视觉识别已启用" if os.getenv("ENABLE_NPU", "").lower() in ("1", "true", "yes") else "视觉识别（ncnn后端）"
-        _uname = platform.uname()
-        _hostname = socket.gethostname()
-        hw = (
-            "[本机硬件信息]\n"
-            f"主机名: {_hostname} | 架构: {_uname.machine} | 处理器: {_uname.processor or '未知'}\n"
-            f"系统: {_uname.system} {_uname.release} ({_uname.machine})\n"
-            "可用接口: GPIO (40pin排针) / I2C / SPI / UART / PWM\n"
-            "可用工具: gpio_control(引脚控制) / i2c_comm(I2C通信) / hardware_status(硬件监控) / service_manage(服务管理) / network_diag(网络诊断) / dev_assist(开发辅助) / camera_capture(拍照) / vision_analyze(视觉分析)\n"
-            f"数据存储: {DATA_DIR}\n"
-            f"摄像头: Q8 HD Webcam (/dev/video0) | 视觉模型: YOLOv10-nano (ncnn CPU) | {_npu_status}"
-        )
-        _module_cache["hardware"] = hw
+        from core.capability_detector import detect_capabilities
+        _module_cache["hardware"] = detect_capabilities().to_prompt_segment(data_dir=str(DATA_DIR))
     if _module_cache.get("hardware"):
         modules["hardware"] = _module_cache["hardware"]
 
@@ -750,30 +729,9 @@ _STICKER_INSTRUCTIONS = """[表情包系统]
 
 
 def _build_hardware_context(data_dir: str) -> str:
-    """构造本机硬件信息段。"""
-    _npu_status = "NPU视觉识别已启用" if os.getenv("ENABLE_NPU", "").lower() in ("1", "true", "yes") else "视觉识别（ncnn后端）"
-    _uname = platform.uname()
-    _hostname = socket.gethostname()
-    return (
-        "[本机硬件信息]\n"
-        f"主机名: {_hostname} | 架构: {_uname.machine} | 处理器: {_uname.processor or '未知'}\n"
-        f"系统: {_uname.system} {_uname.release} ({_uname.machine})\n"
-        "可用接口: GPIO (40pin排针) / I2C / SPI / UART / PWM\n"
-        "可用工具: gpio_control(引脚控制) / i2c_comm(I2C通信) / hardware_status(硬件监控) / service_manage(服务管理) / network_diag(网络诊断) / dev_assist(开发辅助) / camera_capture(拍照) / vision_analyze(视觉分析)\n"
-        f"数据存储: {data_dir}\n"
-        f"摄像头: Q8 HD Webcam (/dev/video0) | 视觉模型: YOLOv10-nano (ncnn CPU) | {_npu_status}"
-    )
-
-    # 安全：InstructionBuilder 分层包装(防 prompt injection) + Canary Token 注入(泄露检测)
-    # S6: 使用 security.canary 模块 (新格式 CANARY-{8hex}-{4check}, 支持轮换/回调)
-    from security.canary import get_canary_detector
-    _ib = InstructionBuilder()
-    _ib.add(_UtilsLevel.SYSTEM, system_prompt)
-    system_prompt = _ib.build()
-    system_prompt = get_canary_detector().inject(system_prompt)
-    # S7: 用 security 模块的 format_instruction 标记为 SYSTEM 级别 (4级指令分层)
-    system_prompt = format_instruction(system_prompt, InstructionLevel.SYSTEM)
-    return system_prompt
+    """构造本机硬件信息段 —— F3: 运行时动态探测替代硬编码。"""
+    from core.capability_detector import detect_capabilities
+    return detect_capabilities().to_prompt_segment(data_dir=data_dir)
 
 
 # ── 非主人安全化 system prompt（防隐私泄露） ──────────────────

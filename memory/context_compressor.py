@@ -194,7 +194,8 @@ class ContextCompressor:
         if not to_compress:
             return CompressionResult(messages=messages)
 
-        # 对早期消息生成摘要标记
+        # 对早期消息生成摘要标记 —— F7: 分层截断替代 content[:80]
+        from utils.text_utils import smart_summary_truncate
         summary_parts = []
         for msg in to_compress:
             role = msg.get("role", "")
@@ -204,10 +205,10 @@ class ContextCompressor:
             if role == "tool":
                 # 保留工具结果的关键信息，不直接跳过
                 tool_name = msg.get("name", "工具")
-                summary_parts.append(f"[{tool_name}结果]: {content[:60]}")
+                summary_parts.append(f"[{tool_name}结果]: {smart_summary_truncate(content, 'tool')}")
                 continue
             prefix = {"user": "用户", "assistant": "纳西妲"}.get(role, role)
-            summary_parts.append(f"{prefix}: {content[:80]}")
+            summary_parts.append(f"{prefix}: {smart_summary_truncate(content, role)}")
 
         if summary_parts:
             summary_text = "；".join(summary_parts[:20])

@@ -224,6 +224,7 @@ class AgentContext:
             return self._quick_summarize(messages)
 
     def _quick_summarize(self, messages: list[dict]) -> str:
+        from utils.text_utils import smart_summary_truncate
         lines = []
         for m in messages:
             role = m.get("role", "")
@@ -232,10 +233,10 @@ class AgentContext:
                 continue
             if role == "tool":
                 tool_name = m.get("name", "工具")
-                lines.append(f"[{tool_name}]: {content[:60]}")
+                lines.append(f"[{tool_name}]: {smart_summary_truncate(content, 'tool')}")
                 continue
             prefix = {"user": "用户", "assistant": "纳西妲"}.get(role, role)
-            lines.append(f"{prefix}: {content[:80]}")
+            lines.append(f"{prefix}: {smart_summary_truncate(content, role)}")
         if not lines:
             return ""
         return "；".join(lines[:10])

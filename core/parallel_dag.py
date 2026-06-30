@@ -104,6 +104,8 @@ class ToolDAG:
         self._nodes: dict[str, DAGNode] = {}
         self._max_concurrency = max_concurrency
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        # F5 DAG: 用 Event 替代 busy-wait sleep(0.05)
+        self._completion_event: asyncio.Event = asyncio.Event()
 
     def add_node(self, name: str, handler: Callable,
                   args: Optional[dict] = None,
@@ -189,6 +191,7 @@ class ToolDAG:
                             context[p] = node.result
                     logger.debug(f"DAG.node.success name={node.name} "
                                   f"duration={node.duration:.3f}s attempt={attempt+1}")
+                    self._completion_event.set()
                     return
             except Exception as e:
                 last_error = e
@@ -209,6 +212,7 @@ class ToolDAG:
                 for p in node.produces:
                     context[p] = node.result
                 logger.info(f"DAG.node.fallback_success name={node.name}")
+                self._completion_event.set()
                 return
             except Exception as e:
                 last_error = e
@@ -218,6 +222,7 @@ class ToolDAG:
         node.finished_at = time.time()
         # 把失败节点的下游标记为 SKIPPED
         self._skip_downstream(node.name)
+        self._completion_event.set()
 
     def _skip_downstream(self, name: str) -> None:
         """递归跳过失败节点的所有下游"""
@@ -240,8 +245,13 @@ class ToolDAG:
                             if n.state in (NodeState.PENDING, NodeState.RUNNING)]
                 if not pending:
                     break
-                # 有 RUNNING 中的节点, 等待
-                await asyncio.sleep(0.05)
+                # F5 DAG: 用 Event 替代 busy-wait sleep(0.05)
+                # 等待某个 RUNNING 节点完成（带 1s 超时兜底，防止极端情况死锁）
+                try:
+                    await asyncio.wait_for(self._completion_event.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
+                self._completion_event.clear()
                 continue
 
             # 并发执行所有就绪节点

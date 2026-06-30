@@ -247,13 +247,20 @@ class BackgroundTaskManager:
             return False
 
     async def _dream_archive_task(self) -> None:
-        """梦境归档 — 每日整理低频记忆"""
+        """梦境整合 — 每日执行4杆框架（Decay/Merge/Strengthen/Evict）"""
         try:
             from core.dream_consolidation import get_dream_consolidator
             if self.memory:
-                archived = await get_dream_consolidator().consolidate_db(self.memory.memory)
-                if archived > 0:
-                    logger.info("dream.archive_completed", archived=archived)
+                # ★ F5 修复：调用 consolidate_from_db 执行完整4杆框架
+                # （从DB加载记忆，替代操作空字典的 consolidate_db）
+                stats = await get_dream_consolidator().consolidate_from_db(self.memory.memory)
+                if stats.get("total", 0) > 0:
+                    logger.info("dream.consolidate_completed",
+                                total=stats.get("total", 0),
+                                decayed=stats.get("decayed", 0),
+                                merged=stats.get("merged", 0),
+                                strengthened=stats.get("strengthened", 0),
+                                evicted=stats.get("evicted", 0))
             await self.db.set_cron_last_run("dream_archive")
         except Exception as e:
             logger.warning("dream.archive_failed", error=str(e))

@@ -19,6 +19,11 @@ async function request<T>(path: string, options?: RequestInit, confirm = false):
     if (!location.hash.includes('login')) location.hash = '#/login'
     throw new Error('登录已过期，请重新登录')
   }
+  // 滑动续期：后端在响应头返回新 token 时自动替换本地存储
+  const newToken = res.headers.get('X-New-Token')
+  if (newToken) {
+    localStorage.setItem('token', newToken)
+  }
   let body: ApiEnvelope<T>
   try {
     body = await res.json()

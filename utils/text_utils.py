@@ -306,6 +306,49 @@ BREAK_PATTERNS = [
     ' ',
 ]
 
+# F7: 分层截断 —— 按角色设置不同截断上限
+SUMMARY_LIMITS = {
+    "user": 200,       # 用户消息保留更多（通常较短且重要）
+    "assistant": 150,  # 纳西妲回复保留关键决策
+    "tool": 100,       # 工具结果保留关键数据
+    "default": 120,
+}
+
+# 分层截断的句子边界优先级（从高到低）
+_SENTENCE_BREAKS = ['\n\n', '。', '！', '？', '；', '\n', '，', ',', ' ']
+
+
+def smart_summary_truncate(content: str, role: str = "default") -> str:
+    """F7 分层截断 —— 按角色设置不同上限，优先在句子边界切分。
+
+    替代原有的 content[:80] 粗暴截断：
+    - user: 200 字符
+    - assistant: 150 字符
+    - tool: 100 字符
+    - 在句子边界（。！？；\n）处切分，避免截断半句话
+    - 截断时添加 […] 标记
+    """
+    if not content:
+        return ""
+    limit = SUMMARY_LIMITS.get(role, SUMMARY_LIMITS["default"])
+    if len(content) <= limit:
+        return content
+
+    # 在 limit 附近寻找最佳句子边界
+    search_start = max(0, limit - 30)
+    search_end = min(len(content), limit + 10)
+    best_pos = -1
+    for pattern in _SENTENCE_BREAKS:
+        pos = content.rfind(pattern, search_start, search_end)
+        if pos != -1:
+            best_pos = pos + len(pattern)
+            break
+
+    if best_pos == -1 or best_pos < search_start:
+        best_pos = limit
+
+    return content[:best_pos].rstrip() + "[…]"
+
 QQ_MSG_BYTE_LIMIT = 8000
 
 

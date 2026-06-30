@@ -138,19 +138,23 @@ class L1MemoryCache:
 class L2FileCache:
     """L2 文件缓存 — 跨会话, 零依赖"""
 
-    def __init__(self, cache_dir: str | Path, default_ttl: float = 3600.0) -> None:
+    def __init__(self, cache_dir: str | Path, default_ttl: float = 3600.0,
+                  max_entries: int = 10000) -> None:
         """初始化 L2 文件缓存.
 
         Args:
             cache_dir: 缓存目录
             default_ttl: 默认 TTL 秒, 默认 3600
+            max_entries: F6 最大缓存条目数，超出时淘汰最旧的
         """
         self._dir = Path(cache_dir)
         self._dir.mkdir(parents=True, exist_ok=True)
         self._default_ttl = default_ttl
+        self._max_entries = max_entries
         self._hits = 0
         self._misses = 0
         self._lock = asyncio.Lock()
+        self._set_count = 0
 
     def _path(self, key: str) -> Path:
         # 分片存储避免单目录文件过多
@@ -188,6 +192,36 @@ class L2FileCache:
         tmp = p.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         tmp.replace(p)
+        # F6: 定期淘汰过期和最旧条目（每 100 次写入检查一次）
+        self._set_count += 1
+        if self._set_count % 100 == 0:
+            self._evict_expired_and_oldest()
+
+    def _evict_expired_and_oldest(self) -> None:
+        """F6: 淘汰过期文件，如仍超限则按 created_at 淘汰最旧的"""
+        try:
+            files = list(self._dir.rglob("*.json"))
+            now = time.time()
+            # 1. 先淘汰过期的
+            for f in files:
+                try:
+                    data = json.loads(f.read_text(encoding="utf-8"))
+                    if data.get("expires_at", 0) < now:
+                        f.unlink(missing_ok=True)
+                except Exception:
+                    f.unlink(missing_ok=True)
+            # 2. 如仍超限，按修改时间淘汰最旧的
+            files = list(self._dir.rglob("*.json"))
+            if len(files) > self._max_entries:
+                files.sort(key=lambda f: f.stat().st_mtime)
+                evict_count = len(files) - self._max_entries
+                for f in files[:evict_count]:
+                    try:
+                        f.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     def invalidate(self, prefix: str = "") -> int:
         """按前缀失效缓存文件.
@@ -226,19 +260,23 @@ class L2FileCache:
 class L3SQLiteCache:
     """L3 SQLite 持久化缓存 — 跨进程"""
 
-    def __init__(self, db_path: str | Path, default_ttl: float = 86400.0) -> None:
+    def __init__(self, db_path: str | Path, default_ttl: float = 86400.0,
+                  max_entries: int = 50000) -> None:
         """初始化 L3 SQLite 缓存并建表.
 
         Args:
             db_path: SQLite 数据库路径
             default_ttl: 默认 TTL 秒, 默认 86400
+            max_entries: F6 最大缓存条目数，超出时淘汰最旧的
         """
         self._db = Path(db_path)
         self._db.parent.mkdir(parents=True, exist_ok=True)
         self._default_ttl = default_ttl
+        self._max_entries = max_entries
         self._init_schema()
         self._hits = 0
         self._misses = 0
+        self._set_count = 0
 
     def _conn(self) -> Any:
         conn = sqlite3.connect(str(self._db), timeout=5.0)
@@ -284,6 +322,30 @@ class L3SQLiteCache:
                  time.time() + (ttl or self._default_ttl), time.time())
             )
             c.commit()
+        # F6: 定期淘汰过期和超限条目（每 100 次写入检查一次）
+        self._set_count += 1
+        if self._set_count % 100 == 0:
+            self._evict_expired_and_oldest()
+
+    def _evict_expired_and_oldest(self) -> None:
+        """F6: 淘汰过期条目，如仍超限则按 created_at 淘汰最旧的"""
+        try:
+            with self._conn() as c:
+                # 1. 先淘汰过期的
+                c.execute("DELETE FROM cache WHERE expires_at < ?", (time.time(),))
+                # 2. 如仍超限，按 created_at 淘汰最旧的
+                row = c.execute("SELECT COUNT(*) as cnt FROM cache").fetchone()
+                count = row["cnt"] if row else 0
+                if count > self._max_entries:
+                    evict_count = count - self._max_entries
+                    c.execute(
+                        "DELETE FROM cache WHERE key IN ("
+                        "SELECT key FROM cache ORDER BY created_at ASC LIMIT ?)",
+                        (evict_count,)
+                    )
+                c.commit()
+        except Exception:
+            pass
 
     def invalidate(self, prefix: str = "") -> int:
         """按前缀失效缓存.

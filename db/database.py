@@ -146,13 +146,44 @@ class DatabaseManager:
             self._conn = None
 
     async def _run_migrations(self) -> None:
-        """按 version 顺序执行所有数据库迁移。每个迁移独立事务，失败时 ROLLBACK。"""
+        """按 version 顺序执行所有数据库迁移。每个迁移独立事务，失败时 fail-fast 阻止启动。"""
         await self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS schema_version (
                 version INTEGER PRIMARY KEY,
                 applied_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS migration_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                dirty INTEGER NOT NULL DEFAULT 0,
+                last_version INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT ''
+            );
+            INSERT OR IGNORE INTO migration_state (id, dirty, last_version, last_error)
+            VALUES (1, 0, 0, '');
         """)
+
+        # Dirty state 检测：上次迁移未完成则阻止启动
+        state_row = await self._conn.execute_fetchall(
+            "SELECT dirty, last_version, last_error FROM migration_state WHERE id = 1"
+        )
+        if state_row and state_row[0][0] == 1:
+            last_ver = state_row[0][1]
+            last_err = state_row[0][2]
+            logger.critical(
+                f"⚠️ 数据库处于 dirty 状态！上次迁移 v{last_ver} 未完成：{last_err}\n"
+                f"应用无法启动以避免读到不匹配的 schema。\n"
+                f"修复方案：\n"
+                f"  1. 检查错误原因并修复数据库\n"
+                f"  2. 如已手动修复: python -m db.repair_migration --mark-clean\n"
+                f"  3. 如需回滚: python -m db.repair_migration --rollback {last_ver}\n"
+            )
+            # 关闭连接后退出，避免连接泄漏
+            try:
+                await self._conn.close()
+            except Exception:
+                pass
+            sys.exit(1)
+
         row = await self._conn.execute_fetchall("SELECT MAX(version) FROM schema_version")
         current = row[0][0] if row and row[0][0] is not None else 0
 
@@ -176,10 +207,17 @@ class DatabaseManager:
         await self._conn.commit()
 
     async def _apply_migration(self, version: int, description: str, migrate_fn: Any) -> None:
-        """执行单个迁移：BEGIN TRANSACTION → migrate_fn → INSERT schema_version → commit。
+        """执行单个迁移：标记 dirty → BEGIN TRANSACTION → migrate_fn → INSERT schema_version → commit → 清除 dirty。
 
-        失败时 ROLLBACK 并记录错误日志，不影响后续迁移。
+        失败时 ROLLBACK 并 fail-fast（sys.exit(1)），dirty state 持久化阻止下次启动。
         """
+        # 标记 dirty（独立事务，确保迁移失败后 dirty 状态持久化）
+        await self._conn.execute(
+            "UPDATE migration_state SET dirty = 1, last_version = ?, last_error = '' WHERE id = 1",
+            (version,),
+        )
+        await self._conn.commit()
+
         try:
             await self._conn.execute("BEGIN TRANSACTION")
             await migrate_fn()
@@ -188,10 +226,38 @@ class DatabaseManager:
                 (version, time.time()),
             )
             await self._conn.commit()
+            # 迁移成功：清除 dirty
+            await self._conn.execute(
+                "UPDATE migration_state SET dirty = 0, last_version = ?, last_error = '' WHERE id = 1",
+                (version,),
+            )
+            await self._conn.commit()
             logger.info(f"database.migration_v{version}", desc=description)
         except Exception as e:
+            err_msg = str(e)
             await self._conn.execute("ROLLBACK")
-            logger.error(f"数据库迁移 v{version} 失败: {e}")
+            # 记录错误到 dirty state（独立事务）
+            try:
+                await self._conn.execute(
+                    "UPDATE migration_state SET dirty = 1, last_version = ?, last_error = ? WHERE id = 1",
+                    (version, err_msg[:500]),
+                )
+                await self._conn.commit()
+            except Exception:
+                pass
+            logger.critical(
+                f"❌ 数据库迁移 v{version} 失败: {err_msg}\n"
+                f"数据库处于 dirty 状态，应用无法启动。\n"
+                f"修复方案：\n"
+                f"  1. 检查错误原因\n"
+                f"  2. 如需回滚: python -m db.repair_migration --rollback {version}\n"
+                f"  3. 如已手动修复: python -m db.repair_migration --mark-clean\n"
+            )
+            try:
+                await self._conn.close()
+            except Exception:
+                pass
+            sys.exit(1)
 
     async def _migrate_v1(self) -> None:
         """v1: knowledge_relations 新增时间字段（valid_from/valid_to/confidence）。"""

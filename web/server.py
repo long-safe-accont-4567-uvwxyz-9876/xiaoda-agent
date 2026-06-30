@@ -350,8 +350,14 @@ def create_app() -> FastAPI:
 
     # 速率限制中间件（三级: 全局/用户/写端点, 防 DDoS/滥用）
     # 在路由之前注册, 尽早拦截超限请求; 限制值可通过环境变量覆盖
+    # F7: 令牌桶状态持久化到 SQLite, 进程重启后恢复 (避免重启即放行)
     from web.middleware.rate_limit import RateLimitMiddleware
-    app.add_middleware(RateLimitMiddleware)
+    try:
+        from config import DATA_DIR
+        _rate_limit_db = str(Path(DATA_DIR) / "rate_limit_buckets.sqlite")
+    except Exception:
+        _rate_limit_db = str(Path(__file__).parent.parent / "data" / "rate_limit_buckets.sqlite")
+    app.add_middleware(RateLimitMiddleware, persist_path=_rate_limit_db)
 
     # 允许 splash HTTP 服务器嵌入 WebUI（iframe 预加载无缝衔接）
     @app.middleware("http")
@@ -359,6 +365,13 @@ def create_app() -> FastAPI:
         response = await call_next(request)
         response.headers["Content-Security-Policy"] = "frame-ancestors http://127.0.0.1:*"
         response.headers["X-Frame-Options"] = "ALLOWALL"
+        # 滑动续期：get_current_user 在 request.state 上设置了新 token 时写入响应头
+        new_token = getattr(request.state, "new_token", None)
+        if new_token:
+            response.headers["X-New-Token"] = new_token
+            new_expiry = getattr(request.state, "new_expiry", 0)
+            if new_expiry:
+                response.headers["X-New-Token-Expiry"] = str(int(new_expiry))
         return response
 
     # Q1: 注册统一异常处理器（AppException -> 结构化 error_code; 未捕获异常 -> E_SYS999）
