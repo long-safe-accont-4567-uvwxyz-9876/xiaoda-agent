@@ -203,44 +203,19 @@ class NudgeEngine:
         try:
             address_term = self._get_address_term()
 
-            # 通过纳西妲 agent 生成问候（保持人格一致性）
-            if self._core:
-                user_input = (
-                    f"[主动问候] 现在是{time_desc}，{address_term}{idle_desc}。"
-                    f"请主动向{address_term}发一句简短温柔的问候（1-2句话，像女朋友一样关心）。只输出问候语。"
-                )
-                result = await asyncio.wait_for(
-                    self._core.process(
-                        user_input=user_input,
-                        user_id="nudge_engine",
-                        source="qq",
-                        user_openid=self._user_openid,
-                        session_id="nudge",
-                    ),
-                    timeout=30,
-                )
-                greeting = result.reply if hasattr(result, 'reply') else str(result)
-            else:
-                # 降级：直接调用 router（无完整人格）
-                system_msg = (
-                    f"你是纳西妲，一个温柔可爱的小草神，正在给{address_term}发主动问候消息。"
-                    f"现在是{time_desc}，{address_term}{idle_desc}。"
-                    f"直接输出一句简短温柔的问候（1-2句话，30字以内），不要输出任何其他内容。"
-                    f"只输出问候语本身，像女朋友一样关心{address_term}。"
-                )
-                user_msg = f"请以纳西妲的口吻向{address_term}发一句简短温柔的问候。"
-                messages = [
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": user_msg},
-                ]
-                result = await asyncio.wait_for(
-                    self._router.route("chat_flash", messages, temperature=0.9),
-                    timeout=15,
-                )
-                if isinstance(result, str):
-                    greeting = result
-                else:
-                    greeting = (result.choices[0].message.content or "")
+            # 通过纳西妲 agent 生成问候
+            user_input = f"请向{address_term}发一句简短温柔的问候。"
+            result = await asyncio.wait_for(
+                self._core.process(
+                    user_input=user_input,
+                    user_id="nudge_engine",
+                    source="qq",
+                    user_openid=self._user_openid,
+                    session_id="nudge",
+                ),
+                timeout=30,
+            )
+            greeting = result.reply if hasattr(result, 'reply') else str(result)
 
             logger.debug("nudge.raw_llm_output raw={}", greeting[:200])
             greeting = _strip_thinking(greeting, context="nudge").strip()
