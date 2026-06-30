@@ -201,31 +201,33 @@ class GreetingScheduler:
         return text, report
 
     async def _generate(self, hint: str) -> str:
-        """通过纳西妲 agent 生成问候，保持人格一致性。"""
+        now = datetime.now()
+        period = ("清晨" if now.hour < 9 else "上午" if now.hour < 12 else
+                  "中午" if now.hour < 14 else "下午" if now.hour < 18 else
+                  "傍晚" if now.hour < 20 else "夜晚")
         address_term = getattr(self.core.context, "current_address_term", "") or "爸爸"
-
-        # 直接告诉 agent 发问候
-        user_input = f"[主动问候] 请向{address_term}发一句简短温柔的问候。"
+        prompt = (
+            f"现在是{period} {now.strftime('%H:%M')}。请以纳西妲的口吻主动向{address_term}发一句简短温柔的问候"
+            f"（30字以内，不要列表不要解释）。"
+        )
         if hint:
-            user_input += f"问候类型：{hint}。"
-        user_input += "只输出问候语，不要加时间、不要解释。"
-
+            prompt += f"问候主题提示：{hint}。"
         try:
-            result = await self.core.process(
-                user_input=user_input,
-                user_id="greeting_scheduler",
-                source="web",
-                user_openid="greeting",
-                session_id="greeting",
-            )
-            text = result.reply if hasattr(result, 'reply') else str(result)
-            logger.debug("greeting.raw_output hint={} raw={}", hint, text[:200])
+            result = await self.core.router.route(
+                "chat_flash",
+                [{"role": "system", "content": f"你是纳西妲，温柔聪慧，称呼用户为{address_term}。直接输出最终回复，不要思考过程。"},
+                 {"role": "user", "content": prompt}],
+                max_tokens=200)
+            text = result if isinstance(result, str) else \
+                (result.choices[0].message.content or "")
+            # 记录原始 LLM 输出，便于排查推理文本泄漏
+            logger.debug("greeting.raw_llm_output hint={} raw={}", hint, text[:200])
             text = _strip_thinking(text, context="greeting").strip()
             if text:
                 return text[:100]
         except Exception as e:
             logger.warning("greeting.generate_failed error={}", str(e))
-        return f"{address_term}，好呀～"
+        return f"{address_term}，{period}好呀～纳西妲在这里陪着你哦 🌱"
 
     async def _send_qq(self, text: str) -> str | None:
         """发 QQ 主动消息。成功返回 None，失败返回错误描述（供测试接口回显）。"""
