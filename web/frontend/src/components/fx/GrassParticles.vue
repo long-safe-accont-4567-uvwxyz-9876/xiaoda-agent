@@ -14,6 +14,7 @@ let particles: P[] = []
 let raf = 0
 let lastFrame = 0
 let running = false
+let cachedCtx: CanvasRenderingContext2D | null = null
 let mouseX = -9999
 let mouseY = -9999
 let trail: Array<{ x: number; y: number; t: number }> = []
@@ -45,6 +46,7 @@ function resize() {
   if (!c) return
   c.width = window.innerWidth
   c.height = window.innerHeight
+  cachedCtx = c.getContext('2d')
   rebuild()
 }
 
@@ -75,8 +77,9 @@ function frame(now: number) {
   lastFrame = now
   const c = canvasEl.value
   if (!c) return
-  const ctx = c.getContext('2d')
-  if (!ctx) return
+  if (!cachedCtx || cachedCtx.canvas !== c) cachedCtx = c.getContext('2d')
+  if (!cachedCtx) return
+  const ctx = cachedCtx
   const w = c.width, h = c.height
   ctx.clearRect(0, 0, w, h)
 

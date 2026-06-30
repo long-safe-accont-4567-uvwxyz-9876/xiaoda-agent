@@ -44,6 +44,7 @@ interface TermSession {
   fitAddon: FitAddon
   alive: boolean
   container: HTMLDivElement | null
+  resizeObserver?: ResizeObserver
 }
 
 const sessions = ref<TermSession[]>([])
@@ -205,10 +206,11 @@ function createSession(shell: string) {
   })
 }
 
-function mountTerminal(session: TermSession, shell: string) {
+function mountTerminal(session: TermSession, shell: string, retries = 0) {
   const container = document.getElementById(`term-viewport-${session.id}`)
   if (!container) {
-    setTimeout(() => mountTerminal(session, shell), 50)
+    if (retries >= 20 || !session.alive) return  // 超过 20 次或会话已关闭则放弃
+    setTimeout(() => mountTerminal(session, shell, retries + 1), 50)
     return
   }
   session.container = container as HTMLDivElement
@@ -238,6 +240,7 @@ function mountTerminal(session: TermSession, shell: string) {
         } catch {}
       })
       resizeObs.observe(container)
+      session.resizeObserver = resizeObs
 
       session.terminal.focus()
     })
@@ -250,6 +253,7 @@ function closeSession(id: string) {
   const s = sessions.value[idx]
   s.alive = false
   ws.send({ type: 'terminal_kill', term_sid: id })
+  s.resizeObserver?.disconnect()
   s.terminal.dispose()
   sessions.value.splice(idx, 1)
   if (activeSessionId.value === id) {

@@ -16,6 +16,12 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* 弱 GPU 设备降级：移除 backdrop-filter，避免 GPU 过载 */
+body.low-gpu .glass-panel {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
 .glass-panel-hover:hover {
   border-color: rgba(127, 214, 80, 0.35);
   box-shadow: var(--shadow-glow);

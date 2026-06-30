@@ -16,25 +16,18 @@ provide('particles', particlesRef)
 
 // 署名水印防删除
 const watermarkRef = ref<HTMLElement | null>(null)
-let observer: MutationObserver | null = null
+let watermarkCheckTimer: ReturnType<typeof setInterval> | null = null
 let signatureCheckTimer: number | null = null
 
-function setupWatermarkGuard() {
-  if (!watermarkRef.value) return
-  observer = new MutationObserver((mutations) => {
-    for (const m of mutations) {
-      for (const node of m.removedNodes) {
-        if (node === watermarkRef.value || (node as HTMLElement).classList?.contains('brand-watermark')) {
-          requestAnimationFrame(() => {
-            if (watermarkRef.value && !document.body.contains(watermarkRef.value)) {
-              document.body.appendChild(watermarkRef.value)
-            }
-          })
-        }
-      }
+function startWatermarkGuard() {
+  // 每 2 秒检查一次水印是否存在，不需要 MutationObserver
+  watermarkCheckTimer = setInterval(() => {
+    const wm = watermarkRef.value
+    if (wm && !document.body.contains(wm)) {
+      // 水印被移除，重新插入
+      document.body.appendChild(wm)
     }
-  })
-  observer.observe(document.body, { childList: true, subtree: true })
+  }, 2000)
 
   signatureCheckTimer = window.setInterval(async () => {
     try {
@@ -48,6 +41,33 @@ function setupWatermarkGuard() {
       })
     } catch { /* 静默失败 */ }
   }, 60000)
+}
+
+function stopWatermarkGuard() {
+  if (watermarkCheckTimer) {
+    clearInterval(watermarkCheckTimer)
+    watermarkCheckTimer = null
+  }
+  if (signatureCheckTimer) {
+    clearInterval(signatureCheckTimer)
+    signatureCheckTimer = null
+  }
+}
+
+// 简单 GPU 能力检测：如果 canvas getContext('webgl') 失败或 renderer 包含 SwiftShader/llvmpipe，标记为低性能
+function detectLowGpu() {
+  try {
+    const canvas = document.createElement('canvas')
+    const gl = (canvas.getContext('webgl') || canvas.getContext('experimental-webgl')) as WebGLRenderingContext | null
+    if (!gl) return true
+    const debugInfo = gl.getExtension('WEBGL_debug_renderer_info')
+    const renderer = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : ''
+    // SwiftShader / llvmpipe / 软件渲染标记为低性能
+    if (/swiftshader|llvmpipe|software|microsoft basic/i.test(renderer)) return true
+    return false
+  } catch {
+    return false
+  }
 }
 
 onMounted(async () => {
@@ -79,12 +99,16 @@ onMounted(async () => {
   // 3. 已登录：路由守卫会放行，无需额外跳转
 
   // 启动署名水印防删除守护
-  setupWatermarkGuard()
+  startWatermarkGuard()
+
+  // 弱 GPU 设备降级：移除 backdrop-filter
+  if (detectLowGpu()) {
+    document.body.classList.add('low-gpu')
+  }
 })
 
 onUnmounted(() => {
-  observer?.disconnect()
-  if (signatureCheckTimer) clearInterval(signatureCheckTimer)
+  stopWatermarkGuard()
 })
 
 const themeOverrides: GlobalThemeOverrides = {
@@ -139,12 +163,6 @@ html, body, #app {
   height: 100%;
   width: 100%;
   overflow: hidden;
-}
-
-/* 亮度调节：通过 CSS filter 全局应用 */
-#app {
-  filter: brightness(var(--app-brightness, 1.05));
-  transition: filter 0.4s ease;
 }
 
 body {

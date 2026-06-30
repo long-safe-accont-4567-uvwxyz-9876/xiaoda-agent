@@ -222,6 +222,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  ws.off('portrait_consolidated', onConsolidated)
+  ws.off('knowledge_graph_changed', loadKnowledgeData)
   window.removeEventListener('resize', handleResize)
   if (resizeTimer) clearTimeout(resizeTimer)
   knowledgeChart?.dispose()

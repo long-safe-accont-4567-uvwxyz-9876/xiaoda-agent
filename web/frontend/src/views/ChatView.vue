@@ -42,7 +42,14 @@ onMounted(async () => {
 
 watch(() => chat.messages.length, async () => {
   await nextTick()
-  messagesEl.value?.scrollTo({ top: messagesEl.value.scrollHeight, behavior: 'smooth' })
+  const el = messagesEl.value
+  if (!el) return
+  // 仅在用户位于底部附近时自动滚动，避免打断上翻阅读
+  const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+  if (distanceFromBottom > 100) return
+  // 流式期间用 auto（即时跟随），非流式时用 smooth
+  const isStreaming = chat.messages.some(m => m.streaming)
+  el.scrollTo({ top: el.scrollHeight, behavior: isStreaming ? 'auto' : 'smooth' })
 })
 
 // 问候到达 → 蒲公英雨
@@ -51,9 +58,12 @@ watch(() => chat.greetingPing, () => {
 })
 
 // 自动朗读：final 消息带 emotion 时
-watch(() => chat.messages.filter(m => m.role === 'assistant' && !m.streaming).length, async () => {
+const finalAssistantCount = computed(() =>
+  chat.messages.filter(m => m.role === 'assistant' && !m.streaming).length
+)
+watch(finalAssistantCount, async () => {
   if (!ui.autoSpeak) return
-  const last = [...chat.messages].reverse().find(m => m.role === 'assistant' && !m.streaming && m.content)
+  const last = findLastFinalAssistant()
   if (!last || last.audioUrl) {
     if (last?.audioUrl) play(last.audioUrl)
     return
@@ -63,6 +73,15 @@ watch(() => chat.messages.filter(m => m.role === 'assistant' && !m.streaming).le
     play(r.audio_url)
   } catch { /* TTS 不可用时静默 */ }
 })
+
+/** 从尾部遍历查找最后一条已完成的助手消息，避免整体 reverse 拷贝 */
+function findLastFinalAssistant() {
+  for (let i = chat.messages.length - 1; i >= 0; i--) {
+    const m = chat.messages[i]
+    if (m.role === 'assistant' && !m.streaming && m.content) return m
+  }
+  return undefined
+}
 
 function play(url: string) {
   if (audioEl) { audioEl.pause(); audioEl = null }
@@ -175,8 +194,7 @@ function clearAll() {
   message.success(t('chatView.cleared'))
 }
 
-function onModelChange(provider: string, modelId: string) {
-  console.log('[ChatView] 模型已切换:', provider, modelId)
+function onModelChange(_provider: string, _modelId: string) {
 }
 
 function fmtTime(ts: number): string {
@@ -224,7 +242,8 @@ const emotionColors: Record<string, string> = {
             <ToolCallCard v-for="(tc, i) in msg.toolCalls" :key="i" :call="tc" />
           </div>
 
-          <div v-if="msg.role === 'assistant'" class="message-content md_body"
+          <div v-if="msg.role === 'assistant' && msg.streaming" class="message-content md_body streaming-text">{{ msg.content }}</div>
+          <div v-else-if="msg.role === 'assistant'" class="message-content md_body"
                v-html="renderMarkdown(msg.content)"></div>
           <div v-else class="message-content plain">
             {{ msg.content }}
@@ -428,6 +447,7 @@ const emotionColors: Record<string, string> = {
 @keyframes blink { 50% { opacity: 0; } }
 
 .message-content.plain { white-space: pre-wrap; }
+.message-content.streaming-text { white-space: pre-wrap; }
 .user-upload-img {
   max-width: 240px; max-height: 240px; border-radius: 10px;
   object-fit: cover; cursor: zoom-in; margin-top: 6px; display: block;
