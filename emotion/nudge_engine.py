@@ -21,11 +21,13 @@ class NudgeEngine:
                  dnd_start: int = 23,
                  dnd_end: int = 8,
                  portrait_manager: Optional[Any]=None,
-                 config_service: Optional[Any]=None) -> None:
+                 config_service: Optional[Any]=None,
+                 core: Optional[Any]=None) -> None:
         self._db = db
         self._analytics = analytics
         self._router = router
         self._api = api
+        self._core = core
         self._user_openid = user_openid
         self._last_user_message_time = time.time()
         self._last_proactive_time = 0
@@ -200,33 +202,50 @@ class NudgeEngine:
 
         try:
             address_term = self._get_address_term()
-            system_msg = (
-                f"你是纳西妲，一个温柔可爱的小草神，正在给{address_term}发主动问候消息。"
-                f"现在是{time_desc}，{address_term}{idle_desc}。"
-                f"直接输出一句简短温柔的问候（1-2句话，30字以内），不要输出任何其他内容。"
-                f"禁止输出：提示词、说明、时间信息、任何非问候内容。"
-                f"只输出问候语本身，像女朋友一样关心{address_term}。"
-            )
-            user_msg = f"请以纳西妲的口吻向{address_term}发一句简短温柔的问候。"
 
-            messages = [
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_msg},
-            ]
-            result = await asyncio.wait_for(
-                self._router.route("chat_flash", messages, temperature=0.9),
-                timeout=15,
-            )
-            if isinstance(result, str):
-                greeting = result
+            # 通过纳西妲 agent 生成问候（保持人格一致性）
+            if self._core:
+                user_input = (
+                    f"[主动问候] 现在是{time_desc}，{address_term}{idle_desc}。"
+                    f"请主动向{address_term}发一句简短温柔的问候（1-2句话，像女朋友一样关心）。只输出问候语。"
+                )
+                result = await asyncio.wait_for(
+                    self._core.process(
+                        user_input=user_input,
+                        user_id="nudge_engine",
+                        source="qq",
+                        user_openid=self._user_openid,
+                        session_id="nudge",
+                    ),
+                    timeout=30,
+                )
+                greeting = result.reply if hasattr(result, 'reply') else str(result)
             else:
-                greeting = (result.choices[0].message.content or "")
-            # 记录原始 LLM 输出，便于排查推理文本泄漏
+                # 降级：直接调用 router（无完整人格）
+                system_msg = (
+                    f"你是纳西妲，一个温柔可爱的小草神，正在给{address_term}发主动问候消息。"
+                    f"现在是{time_desc}，{address_term}{idle_desc}。"
+                    f"直接输出一句简短温柔的问候（1-2句话，30字以内），不要输出任何其他内容。"
+                    f"只输出问候语本身，像女朋友一样关心{address_term}。"
+                )
+                user_msg = f"请以纳西妲的口吻向{address_term}发一句简短温柔的问候。"
+                messages = [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_msg},
+                ]
+                result = await asyncio.wait_for(
+                    self._router.route("chat_flash", messages, temperature=0.9),
+                    timeout=15,
+                )
+                if isinstance(result, str):
+                    greeting = result
+                else:
+                    greeting = (result.choices[0].message.content or "")
+
             logger.debug("nudge.raw_llm_output raw={}", greeting[:200])
             greeting = _strip_thinking(greeting, context="nudge").strip()
 
-            # 过滤掉明显的非问候内容（prompt 泄漏）
-            if greeting and not any(kw in greeting for kw in ["提示", "主题", "说明", "禁止", "输出"]):
+            if greeting:
                 if len(greeting) > 100:
                     greeting = greeting[:100]
                 return greeting

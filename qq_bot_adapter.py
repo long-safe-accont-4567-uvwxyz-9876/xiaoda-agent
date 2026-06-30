@@ -353,6 +353,7 @@ class AIQQBot(botpy.Client):
                         dnd_end=int(os.getenv("NUDGE_DND_END", "8")),
                         portrait_manager=self.agent.portrait_manager,
                         config_service=self._get_config_service(),
+                        core=self.agent,
                     )
                     await self.nudge_engine.start()
                 except Exception as e:
