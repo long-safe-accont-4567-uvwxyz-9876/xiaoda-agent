@@ -317,7 +317,37 @@ def _run_desktop(host: str, port: int) -> None:
     )
     checker_thread.start()
 
-    # 7. 启动 pywebview（主线程阻塞）
+    # 7. WebView2 合成器激活：页面加载后强制触发 reflow，
+    #    修复 Windows 上动画/JS 更新不渲染直到用户按键的问题。
+    _reflow_js = (
+        "(function(){"
+        "  var b=document.body;"
+        "  void b.offsetHeight;"  // 触发一次同步 reflow
+        "  b.style.opacity='0.999';"
+        "  requestAnimationFrame(function(){b.style.opacity='1';});"
+        "  // 持续推进 rAF，防止合成器再次休眠（直到 onServerReady 接管）"
+        "  var t0=performance.now();"
+        "  (function kick(){if(performance.now()-t0<30000)requestAnimationFrame(kick);})();"
+        "  return 'ok';"
+        "})()"
+    )
+    def _on_loaded():
+        try:
+            window.evaluate_js(_reflow_js)
+        except Exception:
+            pass
+        # 每秒补一次 reflow，兜底 WebView2 某些版本的渲染静默
+        import time as _t
+        for _ in range(30):
+            _t.sleep(1)
+            try:
+                window.evaluate_js("void document.body.offsetHeight;")
+            except Exception:
+                break
+
+    window.events.loaded += _on_loaded
+
+    # 8. 启动 pywebview（主线程阻塞）
     webview.start(debug=False)
 
     # 窗口关闭后退出进程
