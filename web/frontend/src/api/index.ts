@@ -227,6 +227,12 @@ export const api = {
     return body.data as { text: string }
   },
 
+  // ── 资源列表（工作流编辑器用） ──
+  getTools: () => get<Array<{ name: string; description: string; category: string; enabled: boolean }>>('/tools'),
+  getSkills: () => get<Array<{ name: string; size: number; preview: string }>>('/skills'),
+  getMcpServers: () => get<Array<{ name: string; status: string; tool_names: string[] }>>('/mcp/servers'),
+  getProviders: () => get<Array<{ id: string; label: string; enabled: boolean; default_model?: string }>>('/models/providers'),
+
   // ── 工作流管理 ──
   listWorkflows: () => get<WorkflowSummary[]>('/workflows'),
   getWorkflow: (id: string) => get<Workflow>('/workflows/' + id),
