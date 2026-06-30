@@ -204,11 +204,11 @@ class GreetingScheduler:
         """通过纳西妲 agent 生成问候，保持人格一致性。"""
         address_term = getattr(self.core.context, "current_address_term", "") or "爸爸"
 
-        # 直接告诉 agent 发问候，让它自己感知时间和生成内容
-        user_input = f"[主动问候] 请主动向{address_term}发一句简短温柔的问候。"
+        # 直接告诉 agent 发问候
+        user_input = f"[主动问候] 请向{address_term}发一句简短温柔的问候。"
         if hint:
-            user_input += f"问候主题：{hint}。"
-        user_input += "只输出问候语。"
+            user_input += f"问候类型：{hint}。"
+        user_input += "只输出问候语，不要加时间、不要解释。"
 
         try:
             result = await self.core.process(
