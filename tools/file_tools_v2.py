@@ -3,6 +3,7 @@ import subprocess
 import os
 import re
 import shlex
+import tempfile
 import urllib.parse
 from pathlib import Path
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
@@ -19,6 +20,7 @@ ALLOWED_BASE_DIRS = [
     os.path.expanduser("~/ai-agent"),                                      # 用户主目录下的项目目录
     "/tmp",
     "/var/tmp",
+    tempfile.gettempdir(),                                                 # 系统临时目录（Windows: C:\Users\...\AppData\Local\Temp）
     os.path.join(_PROJECT_DIR, "tts_cache"),                               # tts_cache 目录
     os.environ.get("NAHIDA_DATA_DIR", os.path.expanduser("~/.ai-agent/data")),  # 数据目录
 ]
@@ -75,12 +77,12 @@ def _validate_path(path: str, mode: str = "read") -> tuple[bool, str, str]:
         if resolved == allowed or resolved.startswith(allowed + os.sep):
             # 写入模式额外限制：只允许项目目录和 tts_cache
             if mode == "write":
-                write_allowed = [_PROJECT_DIR, os.path.join(_PROJECT_DIR, "tts_cache"), "/tmp", "/var/tmp"]
+                write_allowed = [_PROJECT_DIR, os.path.join(_PROJECT_DIR, "tts_cache"), "/tmp", "/var/tmp", tempfile.gettempdir()]
                 write_allowed = [os.path.realpath(d) for d in write_allowed]
                 for wa in write_allowed:
                     if resolved == wa or resolved.startswith(wa + os.sep):
                         return True, resolved, ""
-                return False, resolved, f"写入路径不在允许的写入目录中，仅允许项目目录、tts_cache、/tmp、/var/tmp"
+                return False, resolved, f"写入路径不在允许的写入目录中，仅允许项目目录、tts_cache、系统临时目录"
             return True, resolved, ""
 
     return False, resolved, f"路径不在允许的目录范围内: {path}"

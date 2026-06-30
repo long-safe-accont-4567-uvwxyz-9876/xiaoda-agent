@@ -9,7 +9,7 @@ setlocal enabledelayedexpansion
 if defined GITHUB_REPO (
     set "REPO=%GITHUB_REPO%"
 ) else (
-    set "REPO=xiaoda-agent/xiaoda-agent"
+    set "REPO=long-safe-accont-4567-uvwxyz-9876/xiaoda-agent"
 )
 set "INSTALL_DIR=%~dp0.."
 set "VERSION_FILE=%INSTALL_DIR%\.version"
