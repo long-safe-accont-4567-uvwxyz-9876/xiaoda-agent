@@ -205,8 +205,7 @@ class GreetingScheduler:
         now = datetime.now()
         address_term = getattr(self.core.context, "current_address_term", "") or "爸爸"
 
-        # 根据 hint 决定时间段，而不是当前时间
-        period = "早安"
+        # 根据 hint 或当前时间决定时间段
         if hint:
             # hint 直接决定问候类型
             if "早" in hint or "晨" in hint:
@@ -218,15 +217,14 @@ class GreetingScheduler:
             else:
                 period = hint  # 使用 hint 本身
         else:
-            # 无 hint 时根据当前时间判断
+            # 无 hint 时根据当前时间判断（18:00前都是下午）
             period = ("清晨" if now.hour < 9 else "上午" if now.hour < 12 else
-                      "中午" if now.hour < 14 else "下午" if now.hour < 18 else
-                      "傍晚" if now.hour < 20 else "夜晚")
+                      "中午" if now.hour < 14 else "下午" if now.hour < 21 else
+                      "夜晚")
 
         # 构建触发纳西妲主动问候的输入
-        user_input = f"[主动问候] 请向{address_term}发一句{period}问候"
-        user_input += f"。现在是{now.strftime('%H:%M')}。"
-        user_input += "只输出问候语本身，不要解释，不要输出其他内容。"
+        user_input = f"[主动问候] 请向{address_term}发一句{period}问候。"
+        user_input += f"现在是{period}，请以{period}为主题发一句简短温柔的问候。"
 
         try:
             # 通过纳西妲 agent 处理，保持人格和记忆
