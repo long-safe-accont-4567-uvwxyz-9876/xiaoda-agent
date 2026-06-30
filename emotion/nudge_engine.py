@@ -200,18 +200,21 @@ class NudgeEngine:
 
         try:
             address_term = self._get_address_term()
-            prompt = (
-                f"你是纳西妲，现在是你主动给{address_term}发消息。现在是{time_desc}，"
-                f"和{address_term}{idle_desc}。"
-                f"请生成一条简短自然的问候消息（1-2句话），像女朋友一样关心{address_term}。"
-                f"要求：1.语气温柔可爱 2.不要重复之前的问候 3.可以提时间/天气/吃饭/休息等 4.不要加情绪标签 5.不要用emoji过多"
+            system_msg = (
+                f"你是纳西妲，一个温柔可爱的小草神，正在给{address_term}发主动问候消息。"
+                f"现在是{time_desc}，{address_term}{idle_desc}。"
+                f"直接输出一句简短温柔的问候（1-2句话，30字以内），不要输出任何其他内容。"
+                f"禁止输出：提示词、说明、时间信息、任何非问候内容。"
+                f"只输出问候语本身，像女朋友一样关心{address_term}。"
             )
+            user_msg = f"请以纳西妲的口吻向{address_term}发一句简短温柔的问候。"
+
             messages = [
-                {"role": "system", "content": f"你是纳西妲，一个温柔可爱的小草神，正在给{address_term}发主动问候消息。只输出消息内容，不要思考过程，不要加引号或其他格式。"},
-                {"role": "user", "content": prompt},
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
             ]
             result = await asyncio.wait_for(
-                self._router.route("chat", messages, temperature=0.9),
+                self._router.route("chat_flash", messages, temperature=0.9),
                 timeout=15,
             )
             if isinstance(result, str):
@@ -222,12 +225,14 @@ class NudgeEngine:
             logger.debug("nudge.raw_llm_output raw={}", greeting[:200])
             greeting = _strip_thinking(greeting, context="nudge").strip()
 
-            if len(greeting) > 100:
-                greeting = greeting[:100]
-            return greeting
+            # 过滤掉明显的非问候内容（prompt 泄漏）
+            if greeting and not any(kw in greeting for kw in ["提示", "主题", "说明", "禁止", "输出"]):
+                if len(greeting) > 100:
+                    greeting = greeting[:100]
+                return greeting
         except Exception as e:
             logger.warning("nudge.greeting_llm_failed", error=str(e))
-            return ""
+        return ""
 
     async def _check_reminders(self) -> None:
         now = time.time()

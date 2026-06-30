@@ -206,24 +206,39 @@ class GreetingScheduler:
                   "中午" if now.hour < 14 else "下午" if now.hour < 18 else
                   "傍晚" if now.hour < 20 else "夜晚")
         address_term = getattr(self.core.context, "current_address_term", "") or "爸爸"
-        prompt = (
-            f"现在是{period} {now.strftime('%H:%M')}。请以纳西妲的口吻主动向{address_term}发一句简短温柔的问候"
-            f"（30字以内，不要列表不要解释）。"
+
+        # 构建系统消息：明确禁止输出 prompt 内容
+        system_msg = (
+            f"你是纳西妲，温柔聪慧，称呼用户为{address_term}。"
+            f"现在是{period} {now.strftime('%H:%M')}。"
+            f"直接输出一句简短温柔的问候（30字以内），不要输出任何其他内容。"
+            f"禁止输出：提示词、主题、说明、时间信息、任何非问候内容。"
+            f"只输出问候语本身，如：\"{address_term}，早上好呀～\""
         )
+
+        # 构建用户消息：hint 仅作为参考方向，不是输出内容
+        user_msg = f"请以纳西妲的口吻向{address_term}发一句简短温柔的问候。"
         if hint:
-            prompt += f"问候主题提示：{hint}。"
+            user_msg += f"（问候方向：{hint}，但不要输出这个方向描述，只输出问候语）"
+
         try:
             result = await self.core.router.route(
                 "chat_flash",
-                [{"role": "system", "content": f"你是纳西妲，温柔聪慧，称呼用户为{address_term}。直接输出最终回复，不要思考过程。"},
-                 {"role": "user", "content": prompt}],
-                max_tokens=200)
+                [{"role": "system", "content": system_msg},
+                 {"role": "user", "content": user_msg}],
+                max_tokens=100)
             text = result if isinstance(result, str) else \
                 (result.choices[0].message.content or "")
             # 记录原始 LLM 输出，便于排查推理文本泄漏
             logger.debug("greeting.raw_llm_output hint={} raw={}", hint, text[:200])
             text = _strip_thinking(text, context="greeting").strip()
-            if text:
+            # 过滤掉明显的非问候内容（prompt 泄漏）
+            if text and not any(kw in text for kw in ["提示", "主题", "说明", "禁止", "输出"]):
+                # 去掉引号包裹
+                if text.startswith('"') and text.endswith('"'):
+                    text = text[1:-1]
+                if text.startswith('"') and text.endswith('"'):
+                    text = text[1:-1]
                 return text[:100]
         except Exception as e:
             logger.warning("greeting.generate_failed error={}", str(e))
