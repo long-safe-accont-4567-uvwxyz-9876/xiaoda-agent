@@ -16,12 +16,28 @@ logger = logging.getLogger("vision_service")
 def _detect_discrete_gpu_index() -> int:
     """检测并返回独显的 Vulkan 设备索引。
 
-    在双显卡系统（核显 + 独显）上，Windows 默认使用核显（通常是设备 0），
+    在双显卡系统（核显 + 独显）上，Windows 默认使用核显，
     导致 GPU 加速性能低下。本函数优先选择独显，没有独显时回退到设备 0。
+
+    优先级：
+    1. 环境变量 XIAODA_GPU_INDEX（用户手动指定，最高优先级）
+    2. ncnn.get_gpu_info(i).name() 返回的设备名称匹配独显关键词
+    3. 系统命令兜底（PowerShell/lspci，注意顺序可能与 ncnn 不一致）
+    4. 默认返回 0
 
     Returns:
         独显的 Vulkan 设备索引，无独显时返回 0。
     """
+    # 1. 环境变量手动指定（最高优先级）
+    env_idx = os.environ.get("XIAODA_GPU_INDEX", "").strip()
+    if env_idx:
+        try:
+            idx = int(env_idx)
+            logger.info(f"vulkan gpu index overridden by env XIAODA_GPU_INDEX={idx}")
+            return idx
+        except ValueError:
+            logger.warning(f"invalid XIAODA_GPU_INDEX={env_idx!r}, ignoring")
+
     try:
         import ncnn
         gpu_count = ncnn.get_gpu_count()
@@ -31,32 +47,45 @@ def _detect_discrete_gpu_index() -> int:
     if gpu_count <= 1:
         return 0
 
-    # 多 GPU 系统：通过系统命令获取显卡名称列表，识别独显
+    # 2. 用 ncnn 自己的 API 获取每个设备的名称（顺序与设备索引一致）
     gpu_names: list[str] = []
-    if sys.platform == "win32":
-        # Windows: 用 PowerShell 获取显卡列表（顺序通常与 Vulkan 设备索引一致）
-        try:
-            result = subprocess.run(
-                ["powershell", "-Command",
-                 "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"],
-                capture_output=True, text=True, timeout=5,
-            )
-            gpu_names = [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
-        except Exception:
-            pass
-    else:
-        # Linux: lspci 获取显卡列表
-        try:
-            result = subprocess.run(
-                ["lspci"], capture_output=True, text=True, timeout=5,
-            )
-            for line in result.stdout.split("\n"):
-                if "VGA compatible controller" in line or "3D controller" in line or "Display controller" in line:
-                    # 提取显卡名称（冒号后部分）
-                    name = line.split(":")[-1].strip() if ":" in line else ""
-                    gpu_names.append(name)
-        except Exception:
-            pass
+    try:
+        for i in range(gpu_count):
+            info = ncnn.get_gpu_info(i)
+            # ncnn 的 GpuInfo 有 name() 方法返回设备名
+            name = ""
+            if hasattr(info, "name"):
+                name = info.name() or ""
+            elif hasattr(info, "device_name"):
+                name = info.device_name() or ""
+            gpu_names.append(name)
+    except Exception as e:
+        logger.info(f"ncnn.get_gpu_info failed: {e}, falling back to system commands")
+
+    # 3. 如果 ncnn API 失败，用系统命令兜底（注意：顺序可能与 ncnn 不一致）
+    if not gpu_names or all(not n for n in gpu_names):
+        gpu_names = []
+        if sys.platform == "win32":
+            try:
+                result = subprocess.run(
+                    ["powershell", "-Command",
+                     "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                gpu_names = [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
+            except Exception:
+                pass
+        else:
+            try:
+                result = subprocess.run(
+                    ["lspci"], capture_output=True, text=True, timeout=5,
+                )
+                for line in result.stdout.split("\n"):
+                    if "VGA compatible controller" in line or "3D controller" in line or "Display controller" in line:
+                        name = line.split(":")[-1].strip() if ":" in line else ""
+                        gpu_names.append(name)
+            except Exception:
+                pass
 
     if not gpu_names:
         logger.info(f"vulkan multi-gpu detected (count={gpu_count}), but unable to identify devices, using device 0")
@@ -69,19 +98,22 @@ def _detect_discrete_gpu_index() -> int:
     integrated_keywords = ("intel(r) uhd", "intel(r) iris", "intel hd graphics",
                            "intel(r) hd graphics", "amd radeon graphics")
 
-    logger.info(f"vulkan gpu list: {gpu_names}")
+    logger.info(f"vulkan gpu list (count={gpu_count}): {gpu_names}")
 
     # 优先选择独显
     for i, name in enumerate(gpu_names):
+        if i >= gpu_count:
+            break
         name_lower = name.lower()
         if any(kw in name_lower for kw in discrete_keywords):
-            # 排除 Intel 核显误匹配（如 "Intel Arc" 不在核显关键词中）
             if not any(kw in name_lower for kw in integrated_keywords):
                 logger.info(f"vulkan discrete gpu selected: device={i} name={name}")
                 return i
 
-    # 次优选择：非 Intel 核显的设备
+    # 次优选择：非核显的设备
     for i, name in enumerate(gpu_names):
+        if i >= gpu_count:
+            break
         name_lower = name.lower()
         if not any(kw in name_lower for kw in integrated_keywords):
             logger.info(f"vulkan non-integrated gpu selected: device={i} name={name}")
@@ -249,12 +281,10 @@ class VisionService:
             try:
                 net.opt.use_vulkan_compute = True
                 # 双显卡系统优先选择独显（Windows 默认用核显导致卡顿）
+                # 始终调用 set_vulkan_device，即使 index=0（独显可能就是设备 0）
                 gpu_index = _detect_discrete_gpu_index()
-                if gpu_index > 0:
-                    net.set_vulkan_device(gpu_index)
-                    logger.info(f"vulkan compute enabled, using discrete gpu device={gpu_index}")
-                else:
-                    logger.info("vulkan compute enabled for ncnn, using device 0")
+                net.set_vulkan_device(gpu_index)
+                logger.info(f"vulkan compute enabled, using gpu device={gpu_index}")
             except Exception as e:
                 logger.warning(f"vulkan init failed, falling back to cpu: {e}")
             net.load_param(param_file)
