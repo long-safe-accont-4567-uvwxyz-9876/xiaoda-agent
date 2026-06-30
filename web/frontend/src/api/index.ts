@@ -45,6 +45,37 @@ export const put = <T = any>(path: string, body?: unknown, confirm = false) =>
 export const del = <T = any>(path: string, confirm = false) =>
   request<T>(path, { method: 'DELETE' }, confirm)
 
+// ── 工作流类型 ──
+export interface WorkflowNode {
+  id: string
+  type: 'tool' | 'skill' | 'mcp' | 'agent' | 'model' | 'step'
+  ref?: string
+  label: string
+  params?: Record<string, any>
+  note?: string
+  expect?: string
+}
+
+export interface Workflow {
+  id: string
+  name: string
+  description: string
+  version: string
+  enabled: boolean
+  nodes: WorkflowNode[]
+  edges: [string, string][]
+  trigger: string
+}
+
+export interface WorkflowSummary {
+  id: string
+  name: string
+  description: string
+  enabled: boolean
+  node_count: number
+  version: string
+}
+
 export const api = {
   login: (password: string) =>
     post<{ token: string; expires_at: number }>('/auth/login', { password }),
@@ -195,6 +226,14 @@ export const api = {
     if (!res.ok || !body.ok) throw new Error(body?.error?.message || 'STT failed')
     return body.data as { text: string }
   },
+
+  // ── 工作流管理 ──
+  listWorkflows: () => get<WorkflowSummary[]>('/workflows'),
+  getWorkflow: (id: string) => get<Workflow>('/workflows/' + id),
+  createWorkflow: (data: Workflow) => post<Workflow>('/workflows', data),
+  updateWorkflow: (id: string, data: Workflow) => put<Workflow>('/workflows/' + id, data),
+  deleteWorkflow: (id: string) => del<void>('/workflows/' + id),
+  previewWorkflow: (id: string) => get<string>('/workflows/' + id + '/preview'),
 }
 
 export async function getSetupVersion(): Promise<{ version: string }> {

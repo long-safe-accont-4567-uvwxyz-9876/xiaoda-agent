@@ -28,6 +28,7 @@ COMMAND_DESCRIPTIONS = {
     "/debug": "调试信息",
     "/doctor": "自检 (零 API 调用, <2s)",
     "/self": "查看 Agent 内心状态 (元认知自省)",
+    "wf": "执行工作流（后跟工作流名称）",
 }
 
 
@@ -97,6 +98,7 @@ class SlashCommandHandler:
             "/debug": self._cmd_debug,
             "/doctor": self._cmd_doctor,
             "/self": self._cmd_self,
+            "/wf": self._cmd_wf,
         }
 
         handler = handlers.get(command)
@@ -645,6 +647,37 @@ class SlashCommandHandler:
             return f"```json\n{json.dumps(introspector.to_dict(state), indent=2, ensure_ascii=False)}\n```"
 
         return introspector.to_text(state)
+
+    async def _cmd_wf(self, args: str, user_id: str) -> str:
+        """执行工作流 — 读取工作流 JSON 并注入生成的 Skill 提示词。
+
+        用法:
+            /wf <工作流ID>
+        """
+        args = args.strip()
+        if not args:
+            return "用法: /wf <工作流ID>\n（工作流列表可通过 API: GET /api/v1/workflows 获取）"
+
+        import json
+        from config import WORKSPACE_DIR
+
+        wf_path = WORKSPACE_DIR / "workflows" / f"{args}.json"
+        if not wf_path.exists():
+            return f"未找到工作流: {args}"
+
+        try:
+            workflow = json.loads(wf_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("slash.wf.read_failed id={} error={}", args, str(e))
+            return f"工作流文件读取失败: {args}"
+
+        name = workflow.get("name", args)
+        skill_path = WORKSPACE_DIR / "skills" / f"wf_{name}.md"
+        if not skill_path.exists():
+            return f"工作流提示词文件缺失: {name}（可能已被禁用）"
+
+        prompt = skill_path.read_text(encoding="utf-8-sig")
+        return prompt + "\n\n请立即执行此工作流。"
 
     async def _cmd_help(self, args: str, user_id: str) -> str:
         is_owner = self._security and self._security.is_owner(user_id)

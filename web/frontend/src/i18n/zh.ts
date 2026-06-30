@@ -27,6 +27,7 @@ export default {
     models: '模型与凭证',
     tools: 'Skills 工具',
     mcp: 'MCP 服务',
+    workflows: '工作流',
     plugins: '插件管理',
     insight: '内在世界',
     schedule: '定时与问候',

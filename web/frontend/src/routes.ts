@@ -36,6 +36,7 @@ export const routes: RouteRecordRaw[] = [
       { path: 'settings/plugins', name: 'plugins', component: () => import('./views/PluginsView.vue') },
       { path: 'settings/mail', name: 'mail', component: () => import('./views/MailView.vue') },
       { path: 'settings/system', name: 'settings', component: () => import('./views/SettingsView.vue') },
+      { path: 'workflows', name: 'workflows', component: () => import('./views/WorkflowView.vue') },
     ],
   },
 ]

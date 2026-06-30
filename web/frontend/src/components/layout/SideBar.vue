@@ -12,6 +12,7 @@ const navItems = [
   { icon: 'models', labelKey: 'nav.models', route: '/settings/models' },
   { icon: 'tools', labelKey: 'nav.tools', route: '/settings/tools' },
   { icon: 'mcp', labelKey: 'nav.mcp', route: '/settings/mcp' },
+  { icon: 'flow', labelKey: 'nav.workflows', route: '/workflows' },
   { icon: 'plugins', labelKey: 'nav.plugins', route: '/settings/plugins' },
   { icon: 'insight', labelKey: 'nav.insight', route: '/insight' },
   { icon: 'schedule', labelKey: 'nav.schedule', route: '/schedule' },

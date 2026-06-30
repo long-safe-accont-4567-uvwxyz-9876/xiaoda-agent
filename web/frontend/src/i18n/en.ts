@@ -27,6 +27,7 @@ export default {
     models: 'Models & Keys',
     tools: 'Skills',
     mcp: 'MCP Servers',
+    workflows: 'Workflows',
     plugins: 'Plugins',
     insight: 'Inner World',
     schedule: 'Schedule',
