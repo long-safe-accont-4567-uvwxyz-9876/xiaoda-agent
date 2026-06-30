@@ -1,6 +1,8 @@
 import os
+import sys
 import time
 import logging
+import subprocess
 import numpy as np
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -9,6 +11,84 @@ from typing import Any, Optional
 from tool_engine.tool_registry import ToolResult
 
 logger = logging.getLogger("vision_service")
+
+
+def _detect_discrete_gpu_index() -> int:
+    """检测并返回独显的 Vulkan 设备索引。
+
+    在双显卡系统（核显 + 独显）上，Windows 默认使用核显（通常是设备 0），
+    导致 GPU 加速性能低下。本函数优先选择独显，没有独显时回退到设备 0。
+
+    Returns:
+        独显的 Vulkan 设备索引，无独显时返回 0。
+    """
+    try:
+        import ncnn
+        gpu_count = ncnn.get_gpu_count()
+    except Exception:
+        return 0
+
+    if gpu_count <= 1:
+        return 0
+
+    # 多 GPU 系统：通过系统命令获取显卡名称列表，识别独显
+    gpu_names: list[str] = []
+    if sys.platform == "win32":
+        # Windows: 用 PowerShell 获取显卡列表（顺序通常与 Vulkan 设备索引一致）
+        try:
+            result = subprocess.run(
+                ["powershell", "-Command",
+                 "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"],
+                capture_output=True, text=True, timeout=5,
+            )
+            gpu_names = [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
+        except Exception:
+            pass
+    else:
+        # Linux: lspci 获取显卡列表
+        try:
+            result = subprocess.run(
+                ["lspci"], capture_output=True, text=True, timeout=5,
+            )
+            for line in result.stdout.split("\n"):
+                if "VGA compatible controller" in line or "3D controller" in line or "Display controller" in line:
+                    # 提取显卡名称（冒号后部分）
+                    name = line.split(":")[-1].strip() if ":" in line else ""
+                    gpu_names.append(name)
+        except Exception:
+            pass
+
+    if not gpu_names:
+        logger.info(f"vulkan multi-gpu detected (count={gpu_count}), but unable to identify devices, using device 0")
+        return 0
+
+    # 独显关键词：NVIDIA / AMD / Radeon / GeForce / Arc（Intel Arc 是独显）
+    # 核显关键词：Intel UHD / Iris / HD Graphics / AMD Radeon Graphics（集成的）
+    discrete_keywords = ("nvidia", "geforce", "radeon rx", "radeon r9", "radeon r7",
+                         "arc a", "arc a370", "arc a380", "arc a580", "arc a750", "arc a770")
+    integrated_keywords = ("intel(r) uhd", "intel(r) iris", "intel hd graphics",
+                           "intel(r) hd graphics", "amd radeon graphics")
+
+    logger.info(f"vulkan gpu list: {gpu_names}")
+
+    # 优先选择独显
+    for i, name in enumerate(gpu_names):
+        name_lower = name.lower()
+        if any(kw in name_lower for kw in discrete_keywords):
+            # 排除 Intel 核显误匹配（如 "Intel Arc" 不在核显关键词中）
+            if not any(kw in name_lower for kw in integrated_keywords):
+                logger.info(f"vulkan discrete gpu selected: device={i} name={name}")
+                return i
+
+    # 次优选择：非 Intel 核显的设备
+    for i, name in enumerate(gpu_names):
+        name_lower = name.lower()
+        if not any(kw in name_lower for kw in integrated_keywords):
+            logger.info(f"vulkan non-integrated gpu selected: device={i} name={name}")
+            return i
+
+    logger.info(f"vulkan no discrete gpu found, using device 0")
+    return 0
 
 # 模型目录（只读资源，可从 _MEIPASS 加载）
 MODELS_DIR = Path(__file__).parent / "models"
@@ -168,9 +248,15 @@ class VisionService:
             net = ncnn.Net()
             try:
                 net.opt.use_vulkan_compute = True
-                logger.info("vulkan compute enabled for ncnn")
-            except Exception:
-                pass
+                # 双显卡系统优先选择独显（Windows 默认用核显导致卡顿）
+                gpu_index = _detect_discrete_gpu_index()
+                if gpu_index > 0:
+                    net.set_vulkan_device(gpu_index)
+                    logger.info(f"vulkan compute enabled, using discrete gpu device={gpu_index}")
+                else:
+                    logger.info("vulkan compute enabled for ncnn, using device 0")
+            except Exception as e:
+                logger.warning(f"vulkan init failed, falling back to cpu: {e}")
             net.load_param(param_file)
             net.load_model(bin_file)
             self.model = net
