@@ -3,16 +3,26 @@ from __future__ import annotations
 from typing import Any
 
 import asyncio
-import fcntl
 import json
 import os
-import pty
+import platform
 import shutil
 import struct
-import termios
 import time
 import uuid
 from pathlib import Path
+
+_IS_WINDOWS = platform.system() == "Windows"
+
+if _IS_WINDOWS:
+    # Windows: 使用 subprocess + 管道模拟终端
+    import subprocess as _subprocess
+    _HAS_PTY = False
+else:
+    import fcntl
+    import pty
+    import termios
+    _HAS_PTY = True
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from loguru import logger
@@ -299,7 +309,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
     except Exception as e:
         logger.error("ws.error conn_id={} error={}", conn_id, str(e))
     finally:
-        # 清理该连接的所有 PTY 会话
+        # 清理该连接的所有终端会话
         for sid in list(_pty_sessions.keys()):
             if sid in _pty_sessions and _pty_sessions[sid].get("conn_id") == conn_id:
                 _cleanup_pty(sid)
@@ -393,7 +403,7 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
 
 
 async def _handle_terminal_start(conn_id: str, msg: dict, term_sid: str) -> None:
-    """启动一个真正的 PTY 终端会话（参考 Trae/WebSSH 架构）。
+    """启动一个终端会话：Linux 用 PTY，Windows 用 subprocess 管道。
 
     msg 字段：
       shell    — Shell 类型 (bash/zsh/python/node/cmd/powershell/wsl)，默认 bash
@@ -404,46 +414,84 @@ async def _handle_terminal_start(conn_id: str, msg: dict, term_sid: str) -> None
     cols = int(msg.get("cols") or 80)
     rows = int(msg.get("rows") or 24)
 
-    shell_map = {
-        "bash": "bash", "zsh": "zsh",
-        "python": "python3", "node": "node",
-    }
-    shell_cmd = shell_map.get(shell_type, "bash")
     env = os.environ.copy()
     env["TERM"] = "xterm-256color"
-    env["SHELL"] = shell_cmd
 
-    loop = asyncio.get_event_loop()
+    if _HAS_PTY:
+        # ── Linux / macOS: PTY 方式 ──
+        shell_map = {
+            "bash": "bash", "zsh": "zsh",
+            "python": "python3", "node": "node",
+        }
+        shell_cmd = shell_map.get(shell_type, "bash")
+        env["SHELL"] = shell_cmd
+        loop = asyncio.get_event_loop()
 
-    try:
-        # pty.fork() 创建 PTY 对，子进程的 stdin/stdout/stderr 自动连接到 slave
-        child_pid, master_fd = pty.fork()
-        if child_pid == 0:
-            # ── 子进程 ──
-            os.chdir(str(Path.home()))
-            winsize = struct.pack("HHHH", rows, cols, 0, 0)
-            fcntl.ioctl(0, termios.TIOCSWINSZ, winsize)
-            os.execvpe(shell_cmd, [shell_cmd], env)
-        else:
-            # ── 父进程（event loop 侧）──
-            # 保持 master_fd 阻塞模式，用 loop.add_reader() 异步监听可读事件
+        try:
+            child_pid, master_fd = pty.fork()
+            if child_pid == 0:
+                # ── 子进程 ──
+                os.chdir(str(Path.home()))
+                winsize = struct.pack("HHHH", rows, cols, 0, 0)
+                fcntl.ioctl(0, termios.TIOCSWINSZ, winsize)
+                os.execvpe(shell_cmd, [shell_cmd], env)
+            else:
+                _pty_sessions[term_sid] = {
+                    "pid": child_pid, "fd": master_fd, "conn_id": conn_id,
+                    "shell": shell_type, "alive": True, "loop": loop,
+                    "is_windows": False,
+                }
+                logger.info("ws.terminal.start term_sid={} shell={} pid={}", term_sid, shell_type, child_pid)
+                await manager.send_to(conn_id, {
+                    "type": "terminal_started", "term_sid": term_sid, "shell": shell_type})
+                _setup_pty_reader(term_sid)
+
+        except Exception as e:
+            logger.error("ws.terminal.start.failed term_sid={} error={}", term_sid, str(e))
+            await manager.send_to(conn_id, {
+                "type": "terminal_error", "term_sid": term_sid,
+                "error": str(e)[:200]})
+    else:
+        # ── Windows: subprocess + 管道 ──
+        shell_map_win = {
+            "cmd": ["cmd.exe"],
+            "powershell": ["powershell.exe", "-NoLogo"],
+            "pwsh": ["pwsh.exe", "-NoLogo"],
+            "python": ["python.exe"],
+            "node": ["node.exe"],
+            "wsl": ["wsl.exe"],
+            "bash": ["bash.exe"],
+        }
+        cmd = shell_map_win.get(shell_type, ["cmd.exe"])
+        loop = asyncio.get_event_loop()
+
+        try:
+            proc = _subprocess.Popen(
+                cmd,
+                stdin=_subprocess.PIPE,
+                stdout=_subprocess.PIPE,
+                stderr=_subprocess.STDOUT,
+                bufsize=0,
+                env=env,
+                cwd=str(Path.home()),
+                creationflags=_subprocess.CREATE_NEW_PROCESS_GROUP
+                    if hasattr(_subprocess, "CREATE_NEW_PROCESS_GROUP") else 0,
+            )
             _pty_sessions[term_sid] = {
-                "pid": child_pid, "fd": master_fd, "conn_id": conn_id,
+                "pid": proc.pid, "proc": proc, "conn_id": conn_id,
                 "shell": shell_type, "alive": True, "loop": loop,
+                "is_windows": True,
             }
-            logger.info("ws.terminal.start term_sid={} shell={} pid={}", term_sid, shell_type, child_pid)
-
+            logger.info("ws.terminal.start term_sid={} shell={} pid={}", term_sid, shell_type, proc.pid)
             await manager.send_to(conn_id, {
                 "type": "terminal_started", "term_sid": term_sid, "shell": shell_type})
+            _setup_win_pipe_reader(term_sid)
 
-            # 注册 fd 读取回调 — 这是 Trae / WebSSH 的标准做法
-            _setup_pty_reader(term_sid)
-
-    except Exception as e:
-        logger.error("ws.terminal.start.failed term_sid={} error={}", term_sid, str(e))
-        await manager.send_to(conn_id, {
-            "type": "terminal_error", "term_sid": term_sid,
-            "error": str(e)[:200]})
+        except Exception as e:
+            logger.error("ws.terminal.start.failed term_sid={} error={}", term_sid, str(e))
+            await manager.send_to(conn_id, {
+                "type": "terminal_error", "term_sid": term_sid,
+                "error": str(e)[:200]})
 
 
 def _setup_pty_reader(term_sid: str) -> None:
@@ -460,78 +508,124 @@ def _setup_pty_reader(term_sid: str) -> None:
         try:
             data = os.read(fd, 8192)
         except OSError:
-            # fd 已关闭或出错
             _cleanup_pty(term_sid)
             return
 
         if not data:
-            # EOF — shell 已退出
             _cleanup_pty(term_sid)
             return
 
         text = data.decode("utf-8", errors="replace")
-        # 在 event loop 中异步发送
         loop.call_soon(asyncio.ensure_future, manager.send_to(conn_id, {
             "type": "terminal_output", "term_sid": term_sid, "data": text}))
 
     loop.add_reader(fd, _on_pty_readable)
 
 
+def _setup_win_pipe_reader(term_sid: str) -> None:
+    """Windows: 在后台线程中读取 subprocess stdout 管道。"""
+    session = _pty_sessions.get(term_sid)
+    if not session:
+        return
+    proc = session["proc"]
+    conn_id = session["conn_id"]
+    loop: asyncio.AbstractEventLoop = session["loop"]
+
+    def _reader_thread() -> None:
+        """后台线程：阻塞读取 stdout，推送到 event loop。"""
+        try:
+            while True:
+                data = proc.stdout.read(4096)
+                if not data:
+                    break
+                text = data.decode("utf-8", errors="replace")
+                loop.call_soon_threadsafe(asyncio.ensure_future, manager.send_to(conn_id, {
+                    "type": "terminal_output", "term_sid": term_sid, "data": text}))
+        except Exception:
+            pass
+        finally:
+            loop.call_soon_threadsafe(_cleanup_pty, term_sid)
+
+    import threading
+    t = threading.Thread(target=_reader_thread, daemon=True)
+    t.start()
+
+
 def _cleanup_pty(term_sid: str) -> None:
-    """清理 PTY 会话（在 reader 回调中调用，不能 await）。"""
+    """清理终端会话（在 reader 回调中调用，不能 await）。"""
     session = _pty_sessions.pop(term_sid, None)
     if not session:
         return
     session["alive"] = False
-    fd = session["fd"]
     conn_id = session["conn_id"]
     loop: asyncio.AbstractEventLoop = session["loop"]
+    is_win = session.get("is_windows", False)
 
-    # 移除 fd 监听
-    try:
-        loop.remove_reader(fd)
-    except Exception:
-        pass
-
-    # 等待子进程退出，获取 rc
-    try:
-        _, status = os.waitpid(session["pid"], os.WNOHANG)
-        rc = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
-    except Exception:
+    if is_win:
+        # ── Windows: 关闭 subprocess ──
+        proc = session.get("proc")
         rc = -1
+        if proc:
+            try:
+                proc.terminate()
+                rc = proc.wait(timeout=3)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                rc = -1
+    else:
+        # ── Unix: 关闭 PTY fd + 等待子进程 ──
+        fd = session["fd"]
+        try:
+            loop.remove_reader(fd)
+        except Exception:
+            pass
+        try:
+            _, status = os.waitpid(session["pid"], os.WNOHANG)
+            rc = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
+        except Exception:
+            rc = -1
+        try:
+            os.close(fd)
+        except Exception:
+            pass
 
-    # 关闭 master fd
-    try:
-        os.close(fd)
-    except Exception:
-        pass
-
-    # 异步通知前端
     asyncio.ensure_future(manager.send_to(conn_id, {
         "type": "terminal_exit", "term_sid": term_sid, "returncode": rc}))
     logger.info("ws.terminal.exit term_sid={} rc={}", term_sid, rc)
 
 
 def _handle_terminal_input(msg: dict) -> None:
-    """将用户输入写入 PTY stdin。"""
+    """将用户输入写入终端 stdin。"""
     term_sid = str(msg.get("term_sid") or "")
     data = msg.get("data", "")
     session = _pty_sessions.get(term_sid)
     if not session or not session["alive"]:
         return
     try:
-        os.write(session["fd"], data.encode("utf-8", errors="replace"))
-    except OSError:
+        if session.get("is_windows"):
+            proc = session.get("proc")
+            if proc and proc.stdin:
+                proc.stdin.write(data.encode("utf-8", errors="replace"))
+                proc.stdin.flush()
+        else:
+            os.write(session["fd"], data.encode("utf-8", errors="replace"))
+    except (OSError, BrokenPipeError):
         pass
 
 
 def _handle_terminal_resize(msg: dict) -> None:
-    """调整 PTY 窗口大小。"""
+    """调整终端窗口大小。"""
     term_sid = str(msg.get("term_sid") or "")
     cols = int(msg.get("cols") or 80)
     rows = int(msg.get("rows") or 24)
     session = _pty_sessions.get(term_sid)
     if not session or not session["alive"]:
+        return
+    if session.get("is_windows"):
+        # Windows subprocess 不支持 resize，跳过
         return
     try:
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
@@ -541,18 +635,27 @@ def _handle_terminal_resize(msg: dict) -> None:
 
 
 def _handle_terminal_kill(msg: dict) -> None:
-    """终止 PTY 会话。"""
+    """终止终端会话。"""
     term_sid = str(msg.get("term_sid") or "")
     session = _pty_sessions.pop(term_sid, None)
     if not session:
         return
     session["alive"] = False
-    try:
-        os.kill(session["pid"], 9)
-    except (ProcessLookupError, OSError):
-        pass
-    try:
-        os.close(session["fd"])
-    except Exception:
-        pass
+
+    if session.get("is_windows"):
+        proc = session.get("proc")
+        if proc:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    else:
+        try:
+            os.kill(session["pid"], 9)
+        except (ProcessLookupError, OSError):
+            pass
+        try:
+            os.close(session["fd"])
+        except Exception:
+            pass
     logger.info("ws.terminal.kill term_sid={}", term_sid)
