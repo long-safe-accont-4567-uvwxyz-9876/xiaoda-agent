@@ -516,8 +516,17 @@ def _setup_pty_reader(term_sid: str) -> None:
             return
 
         text = data.decode("utf-8", errors="replace")
+
+        # 将输出推送到前端（用户实时看到）
         loop.call_soon(asyncio.ensure_future, manager.send_to(conn_id, {
             "type": "terminal_output", "term_sid": term_sid, "data": text}))
+
+        # 送入标记符检测器（内部按行缓冲）
+        try:
+            from web.pty_executor import feed_output
+            feed_output(text)
+        except Exception:
+            pass
 
     loop.add_reader(fd, _on_pty_readable)
 
@@ -541,6 +550,13 @@ def _setup_win_pipe_reader(term_sid: str) -> None:
                 text = data.decode("utf-8", errors="replace")
                 loop.call_soon_threadsafe(asyncio.ensure_future, manager.send_to(conn_id, {
                     "type": "terminal_output", "term_sid": term_sid, "data": text}))
+
+                # 送入标记符检测器（内部按行缓冲）
+                try:
+                    from web.pty_executor import feed_output
+                    feed_output(text)
+                except Exception:
+                    pass
         except Exception:
             pass
         finally:

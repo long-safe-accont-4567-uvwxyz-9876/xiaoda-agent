@@ -1,4 +1,5 @@
 from typing import Any
+import asyncio
 import subprocess
 import os
 import re
@@ -234,15 +235,43 @@ def _sanitize_output(output: str) -> str:
     category="system",
     max_frequency=30,
 )
-def shell_command(command: str) -> ToolResult:
-    """执行 Shell 命令（含危险命令拦截和输出敏感信息遮蔽）。"""
+async def shell_command(command: str) -> ToolResult:
+    """执行 Shell 命令（含危险命令拦截和输出敏感信息遮蔽）。
+
+    优先通过虚空终端执行（用户可实时看到命令输入和输出），
+    如果没有活跃终端会话则回退到 subprocess。
+    """
     danger_reason = _is_command_dangerous(command)
     if danger_reason:
         return ToolResult.fail(danger_reason)
 
+    # 尝试通过 PTY 终端执行
     try:
-        # 使用 shlex.split 解析参数，避免 shell=True 的命令注入风险
-        # Windows 下反斜杠是路径分隔符，需用 posix=False 防止被当作转义字符
+        from web.pty_executor import execute_on_pty
+        from web.ws_hub import _pty_sessions
+
+        has_active_terminal = any(
+            sess.get("alive") for sess in _pty_sessions.values()
+        )
+
+        if has_active_terminal:
+            ok, output = await execute_on_pty("all", command, timeout=30.0)
+            if ok:
+                if output:
+                    output = _sanitize_output(output)
+                    return ToolResult.ok(output[:3000])
+                return ToolResult.ok("命令执行成功（无输出）")
+    except Exception:
+        pass
+
+    # Fallback: subprocess（无终端会话时）
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _subprocess_exec, command)
+
+
+def _subprocess_exec(command: str) -> ToolResult:
+    """使用 subprocess 执行命令（原始方式）。"""
+    try:
         args = shlex.split(command, posix=os.name != "nt")
         if not args:
             return ToolResult.fail("空命令")
@@ -255,7 +284,6 @@ def shell_command(command: str) -> ToolResult:
         )
         output = result.stdout if result.stdout else result.stderr
         if output:
-            # 对输出进行敏感信息遮蔽
             output = _sanitize_output(output)
             data = output[:3000]
         else:
