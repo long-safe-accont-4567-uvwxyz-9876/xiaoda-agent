@@ -7,6 +7,7 @@ import {
 import draggable from 'vuedraggable'
 import { get, post, put, del } from '../api'
 import { t } from '../i18n'
+import Tilt3D from '../components/fx/Tilt3D.vue'
 import * as echarts from 'echarts/core'
 import { BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
@@ -213,6 +214,7 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
       <n-button type="primary" @click="openProviderForm(null)">＋ {{ t('modelsView.customProvider') }}</n-button>
     </div>
 
+    <Tilt3D :max-x="4" :max-y="6">
     <section class="glass-panel section">
       <h3>{{ t('modelsView.providerList') }}</h3>
       <div class="provider-list">
@@ -270,7 +272,9 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
         </draggable>
       </div>
     </section>
+    </Tilt3D>
 
+    <Tilt3D :max-x="4" :max-y="6">
     <section class="glass-panel section">
       <h3>{{ t('modelsView.taskRouting') }} <span class="hint">{{ t('modelsView.noRestartHint') }}</span></h3>
       <table class="route-table">
@@ -310,7 +314,9 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
         </template>
       </div>
     </section>
+    </Tilt3D>
 
+    <Tilt3D :max-x="4" :max-y="6">
     <section class="glass-panel section">
       <h3>{{ t('modelsView.credPoolStatus') }}</h3>
       <table class="route-table">
@@ -327,7 +333,9 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
         </tbody>
       </table>
     </section>
+    </Tilt3D>
 
+    <Tilt3D :max-x="4" :max-y="6">
     <section class="glass-panel section">
       <h3>{{ t('modelsView.usage7days') }}
         <span class="hint" v-if="usage.total">
@@ -337,6 +345,7 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
       </h3>
       <div ref="chartEl" class="usage-chart"></div>
     </section>
+    </Tilt3D>
 
     <n-modal v-model:show="showProviderForm" preset="card"
              :title="isCreateProvider ? t('modelsView.newProvider') : `${t('modelsView.editDot')}${providerForm.id}`"

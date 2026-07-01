@@ -10,6 +10,7 @@ import { useAuthStore } from '../stores/auth'
 import { useRouter } from 'vue-router'
 import { t, tf, setLang, state as i18nState } from '../i18n'
 import type { Lang } from '../i18n'
+import Tilt3D from '../components/fx/Tilt3D.vue'
 
 const message = useMessage()
 const ui = useUiStore()
@@ -114,7 +115,7 @@ const permDesc = computed<Record<string, string>>(() => ({
   <div class="settings-view">
     <h2 class="view-title">{{ t('settings.title') }}</h2>
 
-    <section class="glass-panel section">
+    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
       <h3>{{ t('settings.appearance') }}</h3>
       <div class="setting-row">
         <span class="s-label">{{ t('settings.particles') }}</span>
@@ -160,9 +161,9 @@ const permDesc = computed<Record<string, string>>(() => ({
       <p class="brightness-hint" v-else>
         {{ t('settings.brightnessManualHint') }}
       </p>
-    </section>
+    </section></Tilt3D>
 
-    <section class="glass-panel section">
+    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
       <h3>{{ t('settings.language') }}</h3>
       <div class="setting-row">
         <span class="s-label">{{ t('settings.languageDesc') }}</span>
@@ -171,9 +172,9 @@ const permDesc = computed<Record<string, string>>(() => ({
           <n-radio-button value="en">English</n-radio-button>
         </n-radio-group>
       </div>
-    </section>
+    </section></Tilt3D>
 
-    <section class="glass-panel section">
+    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
       <h3>{{ t('settings.permissionMode') }}</h3>
       <n-radio-group :value="permissionMode" @update:value="setPermMode">
         <n-radio-button v-for="m in permissionOptions" :key="m" :value="m">
@@ -181,9 +182,9 @@ const permDesc = computed<Record<string, string>>(() => ({
         </n-radio-button>
       </n-radio-group>
       <p class="perm-desc">{{ permDesc[permissionMode] || '' }}</p>
-    </section>
+    </section></Tilt3D>
 
-    <section class="glass-panel section">
+    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
       <div class="section-head">
         <h3>{{ t('settings.logViewer') }}</h3>
         <div class="log-ops">
@@ -194,9 +195,9 @@ const permDesc = computed<Record<string, string>>(() => ({
         </div>
       </div>
       <pre class="log-box">{{ logs.join('\n') || t('settings.logEmpty') }}</pre>
-    </section>
+    </section></Tilt3D>
 
-    <section class="glass-panel section" v-if="lanInfo">
+    <Tilt3D v-if="lanInfo" :max-x="4" :max-y="6"><section class="glass-panel section">
       <h3>{{ t('settings.lanAccess') }}</h3>
       <p class="apikey-desc">{{ t('settings.lanDesc') }}</p>
       <div class="setting-row">
@@ -209,27 +210,27 @@ const permDesc = computed<Record<string, string>>(() => ({
       </div>
       <p class="perm-desc" v-if="!lanInfo!.lan_urls?.length">{{ t('settings.noLanIp') }}</p>
       <p class="perm-desc" v-else>{{ t('settings.clickToCopy') }}</p>
-    </section>
+    </section></Tilt3D>
 
-    <section class="glass-panel section">
+    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
       <h3>{{ t('settings.apiKeyConfig') }}</h3>
       <p class="apikey-desc">{{ t('settings.apiKeyDesc') }}</p>
       <div class="setting-row">
         <span class="s-label">{{ t('settings.openApiKeyWizard') }}</span>
         <n-button type="primary" secondary @click="router.push('/setup')">{{ t('settings.openApiKeyBtn') }}</n-button>
       </div>
-    </section>
+    </section></Tilt3D>
 
-    <section class="glass-panel section">
+    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
       <h3>{{ t('settings.userProfile') }}</h3>
       <p class="apikey-desc">{{ t('settings.userProfileDesc') }}</p>
       <div class="setting-row">
         <span class="s-label">{{ t('settings.editProfile') }}</span>
         <n-button type="primary" secondary @click="router.push('/setup/profile')">{{ t('settings.editProfileBtn') }}</n-button>
       </div>
-    </section>
+    </section></Tilt3D>
 
-    <section class="glass-panel section danger">
+    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section danger">
       <h3>{{ t('settings.dangerZone') }}</h3>
       <div class="setting-row">
         <span class="s-label">{{ t('settings.restartService') }}</span>
@@ -239,7 +240,7 @@ const permDesc = computed<Record<string, string>>(() => ({
         <span class="s-label">{{ t('settings.logout') }}</span>
         <n-button secondary @click="logout">{{ t('settings.logoutBtn') }}</n-button>
       </div>
-    </section>
+    </section></Tilt3D>
 
     <n-modal v-model:show="showRestart" preset="card" :title="t('settings.restartConfirmTitle')"
              style="width: min(420px, 94vw)">

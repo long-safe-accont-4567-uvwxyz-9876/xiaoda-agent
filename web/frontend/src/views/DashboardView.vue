@@ -203,7 +203,7 @@ function diskLabel(d: any): string {
     <div class="chart-row">
       <div class="glass-panel chart-box monitor">
         <div class="section-header">
-          <h4>{{ platformLabel[system.platform] || system.platform || '系统' }} {{ t('dashboardView.systemMonitor') }} <span v-if="monitorEnabled" class="hint">{{ t('dashboardView.polling') }}</span></h4>
+          <h4>{{ platformLabel[system.platform] || system.platform || t('dashboardView.system') }} {{ t('dashboardView.systemMonitor') }} <span v-if="monitorEnabled" class="hint">{{ t('dashboardView.polling') }}</span></h4>
           <NButton v-if="!monitorEnabled" size="small" type="primary" @click="enableMonitor">{{ t('dashboardView.enableMonitor') }}</NButton>
           <NButton v-else size="small" @click="disableMonitor">{{ t('dashboardView.disableMonitor') }}</NButton>
         </div>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import SumeruIcon from '../fx/SumeruIcon.vue'
 import DendroEmblem from '../fx/DendroEmblem.vue'
-import { t, state as i18nState } from '../../i18n'
+import { t, tf, state as i18nState } from '../../i18n'
 
 defineProps<{ expanded: boolean }>()
 const emit = defineEmits<{ 'update:expanded': [value: boolean] }>()
@@ -21,7 +21,7 @@ const navItems = [
   { icon: 'health', labelKey: 'nav.health', route: '/health' },
   { icon: 'dashboard', labelKey: 'nav.dashboard', route: '/dashboard' },
   { icon: 'settings', labelKey: 'nav.settings', route: '/settings/system' },
-  { icon: 'health', labelKey: 'nav.disclaimer', route: '/disclaimer' },
+  { icon: 'alert', labelKey: 'nav.disclaimer', route: '/disclaimer' },
 ]
 </script>
 
@@ -51,7 +51,7 @@ const navItems = [
 
       <div class="sidebar-foot" v-if="expanded">
         <span class="foot-text">{{ t('tagline') }}</span>
-        <span class="foot-signature">由 {{ t('brand_signature.author') }} 二创</span>
+        <span class="foot-signature">{{ tf('brand_signature.byAuthor', t('brand_signature.author')) }}</span>
       </div>
     </div>
   </nav>

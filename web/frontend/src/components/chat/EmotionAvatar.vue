@@ -2,6 +2,7 @@
 import { computed, watch, ref } from 'vue'
 import { useChatStore } from '../../stores/chat'
 import { useRouter } from 'vue-router'
+import { t } from '../../i18n'
 
 const chat = useChatStore()
 const router = useRouter()
@@ -31,7 +32,7 @@ watch(() => chat.lastEmotion, () => {
 <template>
   <div class="emotion-avatar" :class="{ pulse }"
        :style="{ '--ring': current.color }"
-       :title="`当前情绪：${chat.lastEmotion || '平静'}`"
+       :title="t('emotion.current') + '：' + (chat.lastEmotion || t('emotion.calm'))"
        @click="router.push('/insight')">
     <span class="face">🌱</span>
     <span class="badge">{{ current.emoji }}</span>

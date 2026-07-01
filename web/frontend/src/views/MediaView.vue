@@ -8,6 +8,7 @@ import { get, post, put, del } from '../api'
 import { getWsClient } from '../api/ws'
 import { useUiStore } from '../stores/ui'
 import { t } from '../i18n'
+import Tilt3D from '../components/fx/Tilt3D.vue'
 
 const message = useMessage()
 const ui = useUiStore()
@@ -153,7 +154,7 @@ const statusType: Record<string, any> = {
     <n-tabs type="line" animated>
       <n-tab-pane name="tts" :tab="t('mediaView.tts')">
         <div class="panel-row">
-          <div class="glass-panel panel main">
+          <Tilt3D :max-x="4" :max-y="6" style="flex: 2; min-width: 300px"><div class="glass-panel panel main">
             <n-input v-model:value="ttsText" type="textarea" :rows="4"
                      :placeholder="t('mediaView.ttsInputPh')" maxlength="500" show-count />
             <div class="tts-controls">
@@ -164,31 +165,31 @@ const statusType: Record<string, any> = {
               <n-button type="primary" :loading="ttsLoading" @click="synthesize">🎵 {{ t('mediaView.synthesize') }}</n-button>
             </div>
             <audio v-if="ttsResult" :src="ttsResult" controls autoplay class="tts-player"></audio>
-          </div>
-          <div class="glass-panel panel side">
+          </div></Tilt3D>
+          <Tilt3D :max-x="4" :max-y="6" style="flex: 1; min-width: 220px"><div class="glass-panel panel side">
             <h4>{{ t('mediaView.readSettings') }}</h4>
             <label class="cfg">
               {{ t('mediaView.autoSpeak') }}
               <n-switch :value="ui.autoSpeak" @update:value="setAutoSpeak" />
             </label>
             <p class="cfg-hint">{{ t('mediaView.autoSpeakDesc') }}</p>
-          </div>
+          </div></Tilt3D>
         </div>
       </n-tab-pane>
 
       <n-tab-pane name="image" :tab="t('mediaView.imageGen')">
-        <div class="glass-panel panel">
+        <Tilt3D :max-x="4" :max-y="6"><div class="glass-panel panel">
           <n-input v-model:value="imagePrompt" type="textarea" :rows="3"
                    :placeholder="t('mediaView.imagePromptPh')" />
           <n-button type="primary" style="margin-top: 10px"
                     :loading="submitting === 'image'" @click="submitTask('image')">
             🎨 {{ t('mediaView.submit') }}
           </n-button>
-        </div>
+        </div></Tilt3D>
       </n-tab-pane>
 
       <n-tab-pane name="video" :tab="t('mediaView.videoGen')">
-        <div class="glass-panel panel">
+        <Tilt3D :max-x="4" :max-y="6"><div class="glass-panel panel">
           <p class="queue-hint">{{ t('mediaView.videoHint') }}
             当前队列 {{ tasks.filter(t => t.status === 'queued' || t.status === 'running').length }} {{ t('mediaView.queueCount') }}。</p>
           <n-input v-model:value="videoPrompt" type="textarea" :rows="3"
@@ -197,11 +198,11 @@ const statusType: Record<string, any> = {
                     :loading="submitting === 'video'" @click="submitTask('video')">
             🎬 {{ t('mediaView.submit') }}
           </n-button>
-        </div>
+        </div></Tilt3D>
       </n-tab-pane>
     </n-tabs>
 
-    <section class="glass-panel section">
+    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
       <h3>{{ t('mediaView.taskQueue') }}</h3>
       <div class="task-list">
         <div v-for="task in tasks" :key="task.id" class="task-row">
@@ -216,7 +217,7 @@ const statusType: Record<string, any> = {
         </div>
         <div v-if="!tasks.length" class="empty-hint">{{ t('mediaView.queueEmpty') }}</div>
       </div>
-    </section>
+    </section></Tilt3D>
 
     <section class="glass-panel section">
       <div class="gallery-head">
@@ -229,7 +230,7 @@ const statusType: Record<string, any> = {
         </n-tabs>
       </div>
       <div class="gallery-grid">
-        <div v-for="g in gallery" :key="g.name" class="gallery-card">
+        <Tilt3D v-for="g in gallery" :key="g.name"><div class="gallery-card">
           <img v-if="galleryType === 'image'" :src="g.url" loading="lazy" @click="openUrl(g.url)" />
           <video v-else-if="galleryType === 'video'" :src="g.url" controls preload="metadata"></video>
           <audio v-else :src="g.url" controls></audio>
@@ -240,7 +241,7 @@ const statusType: Record<string, any> = {
               {{ t('mediaView.deleteConfirm') }}
             </n-popconfirm>
           </div>
-        </div>
+        </div></Tilt3D>
         <div v-if="!gallery.length" class="empty-hint">{{ t('mediaView.emptyGallery') }}</div>
       </div>
     </section>
@@ -295,7 +296,6 @@ const statusType: Record<string, any> = {
   transition: transform 0.2s var(--ease-out), border-color 0.2s;
 }
 .gallery-card:hover {
-  transform: perspective(600px) translateZ(8px);
   border-color: rgba(127, 214, 80, 0.4);
 }
 .gallery-card img { width: 100%; height: 140px; object-fit: cover; cursor: zoom-in; display: block; }

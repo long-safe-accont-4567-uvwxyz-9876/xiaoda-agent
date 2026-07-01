@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { t, tf } from '../../i18n'
 
 export interface KeyItem {
   key: string
@@ -78,7 +79,7 @@ function onTest(key: string) {
       <!-- 标题行 -->
       <div class="accordion-header" @click="toggle(item.key)">
         <span class="tag" :class="item.required ? 'tag-required' : 'tag-optional'">
-          {{ item.required ? '必填' : '选填' }}
+          {{ item.required ? t('keyAccordion.required') : t('keyAccordion.optional') }}
         </span>
         <span class="key-name">{{ item.key }}</span>
         <span class="key-label">{{ item.label }}</span>
@@ -114,7 +115,7 @@ function onTest(key: string) {
         <div v-if="isExpanded(item.key)" class="accordion-body">
           <p class="item-desc">{{ item.desc }}</p>
           <div class="item-url">
-            <span class="url-label">获取地址：</span>
+            <span class="url-label">{{ t('keyAccordion.getUrl') }}</span>
             <a :href="item.url" target="_blank" rel="noopener" class="url-link">{{ item.url }}</a>
           </div>
           <p class="item-steps">{{ item.url_desc }}</p>
@@ -123,7 +124,7 @@ function onTest(key: string) {
               <input
                 class="dendro-input"
                 :type="showPassword[item.key] ? 'text' : 'password'"
-                :placeholder="'请输入 ' + item.key"
+                :placeholder="tf('keyAccordion.inputPh', item.key)"
                 :value="inputValues[item.key] ?? ''"
                 @input="onInput(item.key, ($event.target as HTMLInputElement).value)"
               />
@@ -142,17 +143,17 @@ function onTest(key: string) {
               :disabled="!inputValues[item.key] || testStatuses[item.key] === 'testing'"
               @click.stop="onTest(item.key)"
             >
-              {{ testStatuses[item.key] === 'testing' ? '测试中…' : '测试' }}
+              {{ testStatuses[item.key] === 'testing' ? t('keyAccordion.testing') : t('keyAccordion.test') }}
             </button>
           </div>
           <p v-if="item.configured && item.masked_value" class="current-value">
-            当前值：{{ item.masked_value }}
+            {{ t('keyAccordion.currentValue') }}{{ item.masked_value }}
           </p>
           <p v-if="testStatuses[item.key] === 'failed' && testMessages[item.key]" class="test-error-text">
             {{ testMessages[item.key] }}
           </p>
           <p v-if="testStatuses[item.key] === 'passed'" class="test-success-text">
-            测试通过
+            {{ t('keyAccordion.testPassed') }}
           </p>
         </div>
       </Transition>

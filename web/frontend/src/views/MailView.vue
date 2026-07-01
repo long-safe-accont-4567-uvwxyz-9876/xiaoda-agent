@@ -7,6 +7,7 @@ import {
 } from 'naive-ui'
 import { get, put, post } from '../api'
 import { t } from '../i18n'
+import Tilt3D from '../components/fx/Tilt3D.vue'
 
 const message = useMessage()
 const router = useRouter()
@@ -91,7 +92,7 @@ const channelDesc = computed(() => {
     : t('mailView.channelMailDesc')
 })
 
-const setupInstruction = '请阅读 https://agent.qq.com/doc/cli-setup.md 文档，按照步骤为我安装并配置 Agent Mail CLI。'
+const setupInstruction = t('mailView.setupInstruction')
 
 function copySetupInstruction() {
   navigator.clipboard.writeText(setupInstruction).then(() => {
@@ -136,7 +137,7 @@ async function loadAuthStatus() {
       cli_path: null,
       authorized: false,
       email: '',
-      error: e.message || '检查失败',
+      error: e.message || t('mailView.checkFailed'),
     }
   } finally {
     authChecking.value = false
@@ -262,7 +263,7 @@ onUnmounted(() => {
     <h2 class="view-title">{{ t('mailView.title') }}</h2>
 
     <!-- 邮箱连接向导 -->
-    <section class="glass-panel section animate-slide-up connect-section">
+    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section animate-slide-up connect-section">
       <h3>{{ t('mailView.connectCard') }}</h3>
       <n-spin :show="authChecking">
         <div v-if="authStatus" class="connect-body">
@@ -323,12 +324,12 @@ onUnmounted(() => {
         </div>
         <n-empty v-else style="padding: 24px 0" />
       </n-spin>
-    </section>
+    </section></Tilt3D>
 
     <!-- 邮箱未连接时，下方功能置灰提示 -->
     <template v-if="authStep === 2">
       <!-- 5.1 收件处理设置 -->
-      <section class="glass-panel section animate-slide-up">
+      <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section animate-slide-up">
         <h3>{{ t('mailView.configCard') }}</h3>
         <n-spin :show="configLoading">
           <div class="cfg-body">
@@ -414,10 +415,10 @@ onUnmounted(() => {
             </div>
           </div>
         </n-spin>
-      </section>
+      </section></Tilt3D>
 
       <!-- 5.2 状态统计 -->
-      <section class="glass-panel section animate-slide-up">
+      <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section animate-slide-up">
         <div class="section-head">
           <h3>{{ t('mailView.statsCard') }}</h3>
           <n-button size="small" :loading="statsLoading" @click="loadStats">{{ t('refresh') }}</n-button>
@@ -456,7 +457,7 @@ onUnmounted(() => {
           </div>
           <n-empty v-else style="padding: 24px 0" />
         </n-spin>
-      </section>
+      </section></Tilt3D>
 
       <!-- 5.3 收件箱预览 -->
       <section class="glass-panel section animate-slide-up">
@@ -467,7 +468,7 @@ onUnmounted(() => {
         <p class="apikey-desc">{{ t('mailView.inboxHint') }}</p>
         <n-spin :show="inboxLoading">
           <div v-if="inbox.length" class="mail-list">
-            <div v-for="m in inbox" :key="m.message_id" class="mail-item" :class="{ unread: !m.is_read }">
+            <Tilt3D v-for="m in inbox" :key="m.message_id"><div class="mail-item" :class="{ unread: !m.is_read }">
               <div class="mail-from">
                 <span class="from-text" :title="senderDisplay(m)">{{ senderDisplay(m) }}</span>
                 <n-tag v-if="!m.is_read" size="tiny" type="warning" round>{{ t('mailView.unread') }}</n-tag>
@@ -475,7 +476,7 @@ onUnmounted(() => {
               </div>
               <div class="mail-subject" :title="m.subject">{{ m.subject || t('mailView.noSubject') }}</div>
               <div class="mail-time mono">{{ fmtTime(m.created_at) }}</div>
-            </div>
+            </div></Tilt3D>
           </div>
           <n-empty v-else :description="t('mailView.inboxEmpty')" style="padding: 32px 0" />
         </n-spin>
@@ -483,9 +484,9 @@ onUnmounted(() => {
     </template>
 
     <!-- 邮箱未连接时的提示 -->
-    <section v-else class="glass-panel section animate-slide-up not-connected-hint">
+    <Tilt3D v-else :max-x="4" :max-y="6"><section class="glass-panel section animate-slide-up not-connected-hint">
       <n-empty :description="t('mailView.connectFirst')" style="padding: 40px 0" />
-    </section>
+    </section></Tilt3D>
   </div>
 </template>
 

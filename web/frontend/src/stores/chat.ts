@@ -4,6 +4,7 @@ import { getWsClient } from '../api/ws'
 import type { WsEvent } from '../api/ws'
 import { api } from '../api'
 import { useAgentsStore } from './agents'
+import { t, tf } from '../i18n'
 
 export interface ToolCall {
   tool: string
@@ -154,7 +155,7 @@ export const useChatStore = defineStore('chat', () => {
     messages.value.push({
       id: `err-${Date.now()}`,
       role: 'system',
-      content: e.code === 'ABORTED' ? '已中断生成' : `出错了：${e.message}`,
+      content: e.code === 'ABORTED' ? t('chat.aborted') : t('chat.errorOccurred') + e.message,
       timestamp: Date.now(),
     })
   })
@@ -211,7 +212,7 @@ export const useChatStore = defineStore('chat', () => {
     const id = `sys-${Date.now()}`
     messages.value.push({
       id, role: 'system',
-      content: `现在由 ${display} 接管对话`,
+      content: tf('chat.agentTakeover', display),
       timestamp: Date.now(),
     })
     // 切换提示 3 秒后自动消失，不挡聊天

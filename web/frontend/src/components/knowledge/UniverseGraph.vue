@@ -18,6 +18,7 @@ import * as THREE from 'three'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { getKnowledgeGraph } from '../../api'
 import { getWsClient, type WsEvent } from '../../api/ws'
+import { t, tf } from '../../i18n'
 
 interface GraphNode extends NodeObject {
   name: string
@@ -255,7 +256,7 @@ async function loadGraph(retries = 0) {
     if (retries < RETRY_DELAYS.length) {
       retryTimer = setTimeout(() => loadGraph(retries + 1), RETRY_DELAYS[retries])
     } else {
-      message.error(e?.message || '加载知识图谱失败')
+      message.error(e?.message || t('universeGraph.loadFailed'))
       loading.value = false
     }
   }
@@ -555,7 +556,7 @@ function focusOnNode(node: GraphNode) {
 function focusOnEntity(name: string) {
   const target = nodes.value.find(n => n.name === name || (n.id as string) === name)
   if (!target) {
-    message.info(`未找到实体「${name}」`)
+    message.info(tf('universeGraph.entityNotFound', name))
     return
   }
   focusOnNode(target)
@@ -657,7 +658,7 @@ const selectedRelations = computed(() => {
     .filter(l => linkId(l.source) === id || linkId(l.target) === id)
     .slice(0, 10)
     .map(l => ({
-      relation: l.relation || '关联',
+      relation: l.relation || t('universeGraph.defaultRelation'),
       other: linkId(l.source) === id ? linkId(l.target) : linkId(l.source),
     }))
 })
@@ -728,12 +729,12 @@ function escapeHtml(s: string): string {
 }
 
 function kindLabel(kind?: string): string {
-  if (!kind) return '实体'
+  if (!kind) return t('universeGraph.kindEntity')
   const map: Record<string, string> = {
-    person: '人物', '人物': '人物',
-    place: '地点', location: '地点', '地点': '地点',
-    concept: '概念', '概念': '概念',
-    event: '事件', '事件': '事件',
+    person: t('universeGraph.kindPerson'), '人物': t('universeGraph.kindPerson'),
+    place: t('universeGraph.kindPlace'), location: t('universeGraph.kindPlace'), '地点': t('universeGraph.kindPlace'),
+    concept: t('universeGraph.kindConcept'), '概念': t('universeGraph.kindConcept'),
+    event: t('universeGraph.kindEvent'), '事件': t('universeGraph.kindEvent'),
   }
   return map[kind.toLowerCase()] || map[kind] || kind
 }
@@ -747,7 +748,7 @@ function kindLabel(kind?: string): string {
         <n-input
           v-model:value="searchText"
           size="small"
-          placeholder="搜索实体定位…"
+          :placeholder="t('universeGraph.searchPh')"
           style="max-width: 200px"
           @keydown.enter="onSearchEnter"
         />
@@ -755,20 +756,20 @@ function kindLabel(kind?: string): string {
           size="tiny"
           :type="activeDepth === 1 ? 'primary' : 'default'"
           @click="setActiveDepth(1)"
-        >深度1</n-button>
+        >{{ t('universeGraph.depth1') }}</n-button>
         <n-button
           size="tiny"
           :type="activeDepth === 2 ? 'primary' : 'default'"
           @click="setActiveDepth(2)"
-        >深度2</n-button>
-        <span class="universe-count">节点 {{ nodeCount }}</span>
+        >{{ t('universeGraph.depth2') }}</n-button>
+        <span class="universe-count">{{ nodeCount }} {{ t('universeGraph.nodeCount') }}</span>
         <span class="universe-fps" :class="fpsClass">{{ fps }} fps · {{ qualityTier }}</span>
         <n-button size="tiny" quaternary @click="toggleLight">{{ lightLabel }}</n-button>
-        <n-button size="tiny" quaternary @click="loadGraph()">刷新</n-button>
-        <n-button class="universe-close" size="tiny" type="primary" @click="emit('close')">✕ 关闭</n-button>
+        <n-button size="tiny" quaternary @click="loadGraph()">{{ t('universeGraph.refresh') }}</n-button>
+        <n-button class="universe-close" size="tiny" type="primary" @click="emit('close')">{{ t('universeGraph.close') }}</n-button>
         <n-button size="tiny" quaternary @click="toolbarCollapsed = true">▴</n-button>
       </template>
-      <n-button v-else size="tiny" quaternary @click="toolbarCollapsed = false">▾ 控制栏</n-button>
+      <n-button v-else size="tiny" quaternary @click="toolbarCollapsed = false">{{ t('universeGraph.collapseToolbar') }}</n-button>
     </div>
 
     <!-- 3D 容器 -->
@@ -777,19 +778,19 @@ function kindLabel(kind?: string): string {
     <!-- 加载中 -->
     <div v-if="loading" class="universe-loading">
       <div class="sumeru-spinner" />
-      <span>召唤须弥星图…</span>
+      <span>{{ t('universeGraph.loading') }}</span>
     </div>
 
     <!-- 降级提示 -->
     <div v-if="degraded" class="universe-degraded glass-panel">
-      <p>节点过多（{{ nodeCount }}），为避免卡顿已启用降级视图。</p>
-      <n-button size="small" type="primary" @click="forceEnter3D">仍要进入 3D</n-button>
+      <p>{{ tf('universeGraph.degradedHint', nodeCount) }}</p>
+      <n-button size="small" type="primary" @click="forceEnter3D">{{ t('universeGraph.forceEnter3d') }}</n-button>
     </div>
 
     <!-- WebGL 不可用 -->
     <div v-if="webglUnavailable" class="universe-degraded glass-panel">
-      <p>当前环境不支持 WebGL，无法渲染 3D 星图。</p>
-      <n-button size="small" type="primary" @click="emit('close')">关闭</n-button>
+      <p>{{ t('universeGraph.webglUnsupported') }}</p>
+      <n-button size="small" type="primary" @click="emit('close')">{{ t('universeGraph.close') }}</n-button>
     </div>
 
     <!-- 节点详情浮层 -->
@@ -797,7 +798,7 @@ function kindLabel(kind?: string): string {
       <div class="detail-head">
         <span class="detail-name">{{ selectedNode.name }}</span>
         <n-tag size="tiny" :bordered="false">{{ kindLabel(selectedNode.kind) }}</n-tag>
-        <span class="detail-degree">度数 {{ (selectedNode.val ?? 1) - 1 }}</span>
+        <span class="detail-degree">{{ t('universeGraph.degree') }} {{ (selectedNode.val ?? 1) - 1 }}</span>
         <n-button size="tiny" quaternary @click="selectedNode = null">✕</n-button>
       </div>
       <div class="detail-relations">
@@ -805,7 +806,7 @@ function kindLabel(kind?: string): string {
           <span class="rel-arrow">{{ r.other }}</span>
           <n-tag size="tiny" type="info" :bordered="false">{{ r.relation }}</n-tag>
         </div>
-        <div v-if="!selectedRelations.length" class="rel-empty">暂无关系</div>
+        <div v-if="!selectedRelations.length" class="rel-empty">{{ t('universeGraph.noRelations') }}</div>
       </div>
     </div>
   </div>

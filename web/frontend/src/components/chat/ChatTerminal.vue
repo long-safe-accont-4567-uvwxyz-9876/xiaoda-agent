@@ -335,7 +335,7 @@ function onPanelOpened() {
             {{ t('chatTerminal.title') }}
           </span>
           <span class="header-actions">
-            <button v-if="activeSession" class="header-btn" @click="handlePaste" title="粘贴 (Ctrl+V)">📋</button>
+            <button v-if="activeSession" class="header-btn" @click="handlePaste" :title="t('chatTerminal.paste')">📋</button>
             <span class="header-os">{{ isWindows ? 'Windows' : 'Linux' }}</span>
           </span>
         </div>

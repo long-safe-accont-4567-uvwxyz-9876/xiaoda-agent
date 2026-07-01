@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { NButton, NTag, NSpin, useMessage } from 'naive-ui'
 import { getDisclaimerStatus, agreeDisclaimer } from '../api'
 import { t } from '../i18n'
+import Tilt3D from '../components/fx/Tilt3D.vue'
 
 const message = useMessage()
 
@@ -55,7 +56,7 @@ function formatTime(ts: string): string {
 
 <template>
   <div class="disclaimer-page">
-    <div class="disclaimer-card">
+    <Tilt3D :max-x="4" :max-y="6"><div class="disclaimer-card">
       <h1 class="page-title">── {{ t('disclaimer.title') }} ──</h1>
 
       <n-spin :show="loading">
@@ -96,7 +97,7 @@ function formatTime(ts: string): string {
           </div>
         </div>
       </n-spin>
-    </div>
+    </div></Tilt3D>
   </div>
 </template>
 

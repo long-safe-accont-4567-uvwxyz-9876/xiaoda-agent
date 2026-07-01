@@ -25,6 +25,7 @@ export default {
     text: '由 纳西妲的老父亲-飞 二创开发',
     full: '本 Agent 由纳西妲的老父亲-"飞"个人学习用途二创开发',
     author: '纳西妲的老父亲-飞',
+    byAuthor: (author: string) => `由 ${author} 二创`,
   },
 
   // 免责协议
@@ -40,7 +41,7 @@ export default {
     agreed: '已同意免责声明',
     notAgreed: '尚未同意',
     agreedAt: '同意时间',
-    content: '本 Agent 由纳西妲的老父亲-"飞"个人学习用途二创开发，禁止用户生成任何违禁内容，禁止用于任何商业用途，否则一切后果与开发者无关，由用户一人承担。\n\n1. 本软件仅供个人学习研究使用，严禁用于任何商业用途\n2. 用户使用本软件生成的所有内容由用户本人承担全部责任\n3. 不得利用本软件生成违反法律法规的内容\n4. 本软件不对生成内容的准确性、完整性作任何保证\n5. 开发者不对用户使用本软件造成的任何直接或间接损失承担责任',
+    content: '本 Agent 由纳西妲的老父亲-"飞"个人学习用途二创开发，禁止用户生成任何违禁内容，禁止用于任何商业用途，否则一切后果与开发者无关，由用户一人承担。\n\n1. 本软件仅供个人学习研究使用，严禁用于任何商业用途\n2. 用户使用本软件生成的所有内容由用户本人承担全部责任\n3. 不得利用本软件生成违反法律法规的内容\n4. 本软件不对生成内容的准确性、完整性作任何保证\n5. 开发者不对用户使用本软件造成的任何直接或间接损失承担责任\n6. 数据安全与隐私：本软件在运行过程中会将用户的输入文本、对话内容、邮件数据等通过互联网传输至第三方大模型 API（如 SiliconFlow、OpenRouter、ModelScope 等）进行推理，用户应在敏感场景（如涉及个人隐私、商业机密、未成年人信息等）自行评估数据外发风险。开发者对第三方服务的隐私政策、数据留存策略、安全合规性不作任何背书或担保。\n7. AI 生成内容风险：本软件输出的文本、代码、图片、表情等内容均由人工智能模型概率性生成，可能存在事实性错误、逻辑偏差、安全漏洞或不当内容。用户在对外引用、转发、商用、发布或用于医疗、法律、金融等高风险决策场景前，必须自行核实并由具备资质的专业人士复核。开发者不对 AI 生成内容的合法性、准确性、可用性、安全性作任何保证，由此产生的后果由用户本人承担。\n8. 二创性质与第三方依赖：本软件为个人学习用途的非官方二次创作项目，不与任何原作品权利方存在隶属或授权关系。本软件集成的第三方模型服务、MCP 服务、插件、表情素材、agently-cli 邮箱能力等组件，其服务条款、计费规则、可用性、政策变更及合规风险均由对应第三方主体负责。开发者对第三方服务的稳定性、连续性、合法性不承担任何责任，因第三方服务中断、变更、合规问题等造成的损失由用户自行承担。',
   },
 
   // 侧边栏导航
@@ -138,6 +139,10 @@ export default {
     clearHistory: '清空历史',
     toolCalling: '工具调用',
     modelLabel: '模型',
+    aborted: '已中断生成',
+    errorOccurred: '出错了：',
+    imagePlaceholder: '📷 图片',
+    agentTakeover: (name: string) => `现在由 ${name} 接管对话`,
   },
 
   // Agent 管理页
@@ -186,6 +191,7 @@ export default {
     noPassword: '未设置密码，点击按钮直接进入',
     wrongPassword: '密码错误',
     loginFailed: '登录失败',
+    tokenExpired: '登录已过期，请重新登录',
   },
 
   // 设置向导
@@ -246,6 +252,7 @@ export default {
     newTerm: '新建终端',
     newTermType: '选择终端类型',
     create: '创建终端',
+    paste: '粘贴 (Ctrl+V)',
   },
 
   // TopBar.vue
@@ -257,6 +264,7 @@ export default {
     connected: '已连接',
     reconnecting: '连接中断',
     toolsCount: '个工具',
+    signature: '署名',
   },
 
   // PromptInput.vue
@@ -510,6 +518,25 @@ export default {
     uses: '次使用',
     uninstall: '卸载',
     install: '安装',
+    jsonParseFailed: 'JSON 解析失败，请检查格式',
+    unrecognizedStruct: '无法识别的结构：需要 mcpServers 对象或 {name: {command, ...}}',
+    missingCommand: (name: string) => `「${name}」缺少 command 字段`,
+    importSuccess: (count: number) => `成功导入 ${count} 个 MCP 服务 ✓`,
+    startedWithTools: (count: number) => `已启动，发现 ${count} 个工具 ✓`,
+    savedButFailed: (error: string) => `已保存但启动失败：${error}`,
+    updatedRestarted: '已更新并重启 ✓',
+    lifecycleDone: (name: string, action: string) => `${name} ${action} 完成 ✓`,
+    deleted: '已删除',
+    templateCreated: (name: string) => `模板「${name}」已创建并启动 ✓`,
+    toolToggled: (name: string, enabled: boolean) => `${name} 已${enabled ? '启用' : '禁用'} ✓`,
+    marketLoadFailed: (error: string) => `MCP 市场加载失败：${error}`,
+    installSuccess: (name: string) => `${name} 安装成功`,
+    installFailed: (error: string) => `安装失败：${error}`,
+    uninstalled: (name: string) => `${name} 已卸载`,
+    uninstallFailed: (error: string) => `卸载失败：${error}`,
+    marketSearchPlaceholder: '搜索 MCP 服务…',
+    marketEmptyMatched: '未找到匹配的 MCP 服务',
+    marketEmpty: '暂无可安装的 MCP 服务',
     importPlaceholder: '支持标准 mcpServers 格式，直接从文档复制粘贴：',
     templateFs: '文件系统读写',
     templateHttp: 'HTTP 请求抓取网页',
@@ -684,10 +711,12 @@ export default {
     everyday: '每天',
     greetingMaxUnit: '条', testBoth: '📱 试发 Web+QQ', deleteConfirm: '确认删除该计划？', noPlans: '还没有计划，点「新增」让助手主动联系你～',
     quietHoursTitle: '🌙 免扰时段', noRecords: '（暂无记录）', topicPh: '可选，如「提醒喝水」', weekPrefix: '周',
+    weekLabel1: '一', weekLabel2: '二', weekLabel3: '三', weekLabel4: '四', weekLabel5: '五', weekLabel6: '六', weekLabel7: '日',
     fixedLabel: '⏰ 固定', randomLabel: '🎲 随机', idleLabel: '💤 闲置', testLabel: '🧪 试发',
     enabled: '启用', disabled: '停用', allChannelsFailed: '所有通道投递失败', delivered: '通道已送达', channelFailed: '通道失败', unknownReason: '未知原因',
     effectDone: '已生效 ✓', quietUpdated: '免打扰时段已更新 ✓', planCreated: '问候计划已创建 ✓', planUpdated: '已更新 ✓',
     planToggled: (enabled: boolean) => `计划已${enabled ? '启用' : '停用'} ✓`, planDeleted: '已删除',
+    randomTimes: (count: number) => `随机 ${count} 次`,
   },
 
   // MediaView.vue
@@ -779,6 +808,7 @@ export default {
     systemMonitor: '监控', polling: '5s 轮询', freeSpace: '余',
     monitorOffHint: '系统监控已关闭，点击"开启监控"查看系统资源使用情况',
     day: '天', hour: '时', min: '分',
+    system: '系统',
   },
 
   // SetupWizardView.vue
@@ -803,6 +833,7 @@ export default {
     testFailed: '测试请求失败',
     testRequired: '请先测试所有修改的必填 API Key',
     someFailed: '部分 Key 测试未通过',
+    disclaimerSaveFailed: '保存免责协议失败',
     fallback: {
       MIMO_API_KEY: { label: 'MiMo API 密钥', desc: '小米 MiMo 大模型 API 密钥（主 LLM + TTS + Vision）', url_desc: '注册 → 控制台 → API Keys' },
       QQBOT_APP_ID: { label: 'QQ Bot App ID', desc: 'QQ 机器人应用 ID', url_desc: '创建机器人应用 → 获取 AppID' },
@@ -850,6 +881,28 @@ export default {
     defaultLiked: '有条理、能直接执行的方案',
     defaultDisliked: '冷冰冰、敷衍或只有抽象建议的回答',
     defaultPrefs: '- 修改代码前先理解现有结构\n- 尽量不要大改项目，优先最小修改\n- 优先解决实际报错\n- 命令和路径要写清楚\n- 遇到危险操作要提醒确认',
+    timezones: {
+      'Asia/Shanghai': '中国标准时间 (UTC+8)',
+      'Asia/Hong_Kong': '香港时间 (UTC+8)',
+      'Asia/Taipei': '台北时间 (UTC+8)',
+      'Asia/Tokyo': '日本标准时间 (UTC+9)',
+      'Asia/Seoul': '韩国标准时间 (UTC+9)',
+      'Asia/Singapore': '新加坡时间 (UTC+8)',
+      'Asia/Bangkok': '泰国时间 (UTC+7)',
+      'Asia/Kolkata': '印度时间 (UTC+5:30)',
+      'Asia/Dubai': '迪拜时间 (UTC+4)',
+      'Europe/London': '伦敦时间 (UTC+0)',
+      'Europe/Paris': '巴黎时间 (UTC+1)',
+      'Europe/Berlin': '柏林时间 (UTC+1)',
+      'Europe/Moscow': '莫斯科时间 (UTC+3)',
+      'America/New_York': '纽约时间 (UTC-5)',
+      'America/Chicago': '芝加哥时间 (UTC-6)',
+      'America/Denver': '丹佛时间 (UTC-7)',
+      'America/Los_Angeles': '洛杉矶时间 (UTC-8)',
+      'America/Sao_Paulo': '圣保罗时间 (UTC-3)',
+      'Australia/Sydney': '悉尼时间 (UTC+10)',
+      'Pacific/Auckland': '奥克兰时间 (UTC+12)',
+    },
   },
 
   // ModelSelector.vue
@@ -927,5 +980,102 @@ export default {
     checkAgain: '重新检查',
     copied: '已复制到剪贴板',
     connectFirst: '请先连接邮箱后再使用邮件功能',
+    authBrowserOpened: '已打开浏览器进行授权，请完成扫码登录',
+    authSuccess: '授权成功',
+    authFailed: '授权失败',
+    checkFailed: '检查失败',
+    setupInstruction: '请阅读 https://agent.qq.com/doc/cli-setup.md 文档，按照步骤为我安装并配置 Agent Mail CLI。',
+  },
+
+  // WorkflowView.vue
+  workflowView: {
+    title: '🌿 工作流',
+    count: '共',
+    items: '个',
+    create: '＋ 新建工作流',
+    noDesc: '（无描述）',
+    stepsUnit: '步',
+    edit: '编辑',
+    delete: '删除',
+    deleteConfirm: (name: string) => `确认删除「${name}」？`,
+    emptyHint: '还没有工作流，点「＋」创建一个吧',
+    namePh: '工作流名称（如：邮箱配置）',
+    enabled: '启用',
+    disabled: '禁用',
+    descPh: '简单描述这个工作流做什么（可选）',
+    addStepHint: '👇 点击下方按钮添加步骤',
+    addStepLabel: '添加步骤：',
+    stepNotePh: '输入操作说明…',
+    selectNodePh: (label: string) => `选择${label}…`,
+    nodeNotePh: '备注（可选）：这个步骤有什么注意事项？',
+    back: '返回',
+    test: '测试',
+    save: '保存',
+    nameRequired: '请填写工作流名称',
+    saved: '已保存 ✓',
+    saveFirst: '请先保存',
+    chatBusy: '对话正在处理中',
+    sentToChat: '已发送到对话窗口',
+    deleted: '已删除',
+    nodeType: {
+      tool: '工具',
+      skill: '技能',
+      mcp: 'MCP',
+      agent: '子智能体',
+      model: '模型',
+      step: '步骤说明',
+    },
+  },
+
+  // UniverseGraph.vue
+  universeGraph: {
+    searchPh: '搜索实体定位…',
+    depth1: '深度1',
+    depth2: '深度2',
+    nodeCount: '节点',
+    lightOff: '关灯',
+    lightOn: '开灯',
+    refresh: '刷新',
+    close: '✕ 关闭',
+    collapseToolbar: '▾ 控制栏',
+    loading: '召唤须弥星图…',
+    degradedHint: '节点过多（{{count}}），为避免卡顿已启用降级视图。',
+    forceEnter3d: '仍要进入 3D',
+    webglUnsupported: '当前环境不支持 WebGL，无法渲染 3D 星图。',
+    degree: '度数',
+    noRelations: '暂无关系',
+    entityNotFound: (name: string) => `未找到实体「${name}」`,
+    loadFailed: '加载知识图谱失败',
+    defaultRelation: '关联',
+    kindEntity: '实体',
+    kindPerson: '人物',
+    kindPlace: '地点',
+    kindConcept: '概念',
+    kindEvent: '事件',
+  },
+
+  // KeyAccordion.vue
+  keyAccordion: {
+    required: '必填',
+    optional: '选填',
+    getUrl: '获取地址：',
+    inputPh: (key: string) => `请输入 ${key}`,
+    hide: '隐藏',
+    show: '显示',
+    testing: '测试中…',
+    test: '测试',
+    currentValue: '当前值：',
+    testPassed: '测试通过',
+  },
+
+  // SlashPalette.vue
+  slashPalette: {
+    ownerOnly: '仅主人可用',
+  },
+
+  // EmotionAvatar.vue
+  emotion: {
+    current: '当前情绪',
+    calm: '平静',
   },
 } as const

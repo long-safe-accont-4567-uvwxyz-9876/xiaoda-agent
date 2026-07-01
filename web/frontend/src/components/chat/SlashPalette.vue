@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, watch, ref } from 'vue'
+import { t } from '../../i18n'
 
 interface Command { name: string; description: string; owner_only: boolean }
 
@@ -42,7 +43,7 @@ defineExpose({ move, confirm, hasItems: () => filtered.value.length > 0 })
     >
       <span class="cmd-name">/{{ cmd.name }}</span>
       <span class="cmd-desc">{{ cmd.description }}</span>
-      <span v-if="cmd.owner_only" class="cmd-crown" title="仅主人可用">👑</span>
+      <span v-if="cmd.owner_only" class="cmd-crown" :title="t('slashPalette.ownerOnly')">👑</span>
     </div>
   </div>
 </template>

@@ -1,3 +1,5 @@
+import { t } from '../i18n'
+
 const BASE = '/api/v1'
 
 interface ApiEnvelope<T> {
@@ -17,7 +19,7 @@ async function request<T>(path: string, options?: RequestInit, confirm = false):
   if (res.status === 401) {
     localStorage.removeItem('token')
     if (!location.hash.includes('login')) location.hash = '#/login'
-    throw new Error('登录已过期，请重新登录')
+    throw new Error(t('login.tokenExpired'))
   }
   // 滑动续期：后端在响应头返回新 token 时自动替换本地存储
   const newToken = res.headers.get('X-New-Token')

@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import { NButton, NTag, NPopconfirm, NSpin, NInput, NEmpty, NTabs, NTabPane, useMessage } from 'naive-ui'
 import { get, post } from '../api'
 import { t, tf } from '../i18n'
+import Tilt3D from '../components/fx/Tilt3D.vue'
 
 const message = useMessage()
 const plugins = ref<any[]>([])
@@ -185,7 +186,8 @@ onMounted(() => { load(); loadMarket() })
         </p>
 
         <div class="plugin-grid">
-          <div v-for="p in plugins" :key="p.id" class="plugin-card glass-panel glass-panel-hover">
+          <Tilt3D v-for="p in plugins" :key="p.id">
+          <div class="plugin-card glass-panel glass-panel-hover">
             <div class="plugin-head">
               <span class="plugin-name">{{ p.name }}</span>
               <n-tag size="small" :type="stateTagType(p.state)" :bordered="false">{{ p.state }}</n-tag>
@@ -219,6 +221,7 @@ onMounted(() => { load(); loadMarket() })
               {{ pluginTestResult[p.id].ok ? '✓ ' + t('pluginsView.testPass') : '✕ ' + pluginTestResult[p.id].message }}
             </div>
           </div>
+          </Tilt3D>
 
           <div v-if="!plugins.length" class="empty-state glass-panel">
             <p>{{ t('pluginsView.noPlugins') }}</p>
@@ -237,8 +240,8 @@ onMounted(() => { load(); loadMarket() })
 
         <n-spin :show="marketLoading">
           <div class="market-grid">
-            <div v-for="item in filteredMarket" :key="item.id"
-                 class="market-card glass-panel glass-panel-hover">
+            <Tilt3D v-for="item in filteredMarket" :key="item.id">
+            <div class="market-card glass-panel glass-panel-hover">
               <div class="card-head">
                 <span class="card-icon">{{ item.icon || '🧩' }}</span>
                 <div class="card-title-group">
@@ -281,6 +284,7 @@ onMounted(() => { load(); loadMarket() })
                 </div>
               </div>
             </div>
+            </Tilt3D>
             <n-empty v-if="!marketLoading && filteredMarket.length === 0"
                      :description="t('pluginsView.marketEmpty')" class="empty-state" />
           </div>

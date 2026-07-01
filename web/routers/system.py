@@ -14,16 +14,19 @@ from web.schemas import Envelope, SystemStatus
 from web.routers.auth import get_current_user
 
 router = APIRouter(tags=["system"], dependencies=[Depends(get_current_user)])
+# 公开路由（无需认证）：OS 信息不敏感，终端需在 token 未就绪/失效时也能正确探测服务端 OS，
+# 否则前端会 fallback 到客户端 navigator 检测，导致用 Windows 浏览器访问 Linux 服务时误判为 Windows。
+public_router = APIRouter(tags=["system"])
 
 _start_time = time.time()
 
 
-@router.get("/system/os", response_model=Envelope[dict])
+@public_router.get("/system/os", response_model=Envelope[dict])
 async def get_server_os() -> Any:
     """返回服务器操作系统信息，供前端选择正确的 shell 类型。"""
     import platform
     system = platform.system().lower()  # linux / darwin / windows
-    return {"os": system, "shell": "powershell" if system == "windows" else "bash"}
+    return Envelope(data={"os": system, "shell": "powershell" if system == "windows" else "bash"})
 
 
 def _read_version() -> str:

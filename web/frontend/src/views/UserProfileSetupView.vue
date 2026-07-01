@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import GlslHills from '../components/fx/GlslHills.vue'
 import DendroEmblem from '../components/fx/DendroEmblem.vue'
@@ -15,28 +15,28 @@ const error = ref('')
 const success = ref(false)
 
 // 热门时区列表
-const timezones = [
-  { value: 'Asia/Shanghai', label: '中国标准时间 (UTC+8)' },
-  { value: 'Asia/Hong_Kong', label: '香港时间 (UTC+8)' },
-  { value: 'Asia/Taipei', label: '台北时间 (UTC+8)' },
-  { value: 'Asia/Tokyo', label: '日本标准时间 (UTC+9)' },
-  { value: 'Asia/Seoul', label: '韩国标准时间 (UTC+9)' },
-  { value: 'Asia/Singapore', label: '新加坡时间 (UTC+8)' },
-  { value: 'Asia/Bangkok', label: '泰国时间 (UTC+7)' },
-  { value: 'Asia/Kolkata', label: '印度时间 (UTC+5:30)' },
-  { value: 'Asia/Dubai', label: '迪拜时间 (UTC+4)' },
-  { value: 'Europe/London', label: '伦敦时间 (UTC+0)' },
-  { value: 'Europe/Paris', label: '巴黎时间 (UTC+1)' },
-  { value: 'Europe/Berlin', label: '柏林时间 (UTC+1)' },
-  { value: 'Europe/Moscow', label: '莫斯科时间 (UTC+3)' },
-  { value: 'America/New_York', label: '纽约时间 (UTC-5)' },
-  { value: 'America/Chicago', label: '芝加哥时间 (UTC-6)' },
-  { value: 'America/Denver', label: '丹佛时间 (UTC-7)' },
-  { value: 'America/Los_Angeles', label: '洛杉矶时间 (UTC-8)' },
-  { value: 'America/Sao_Paulo', label: '圣保罗时间 (UTC-3)' },
-  { value: 'Australia/Sydney', label: '悉尼时间 (UTC+10)' },
-  { value: 'Pacific/Auckland', label: '奥克兰时间 (UTC+12)' },
-]
+const timezones = computed(() => [
+  { value: 'Asia/Shanghai', label: t('userProfileSetup.timezones.Asia/Shanghai') },
+  { value: 'Asia/Hong_Kong', label: t('userProfileSetup.timezones.Asia/Hong_Kong') },
+  { value: 'Asia/Taipei', label: t('userProfileSetup.timezones.Asia/Taipei') },
+  { value: 'Asia/Tokyo', label: t('userProfileSetup.timezones.Asia/Tokyo') },
+  { value: 'Asia/Seoul', label: t('userProfileSetup.timezones.Asia/Seoul') },
+  { value: 'Asia/Singapore', label: t('userProfileSetup.timezones.Asia/Singapore') },
+  { value: 'Asia/Bangkok', label: t('userProfileSetup.timezones.Asia/Bangkok') },
+  { value: 'Asia/Kolkata', label: t('userProfileSetup.timezones.Asia/Kolkata') },
+  { value: 'Asia/Dubai', label: t('userProfileSetup.timezones.Asia/Dubai') },
+  { value: 'Europe/London', label: t('userProfileSetup.timezones.Europe/London') },
+  { value: 'Europe/Paris', label: t('userProfileSetup.timezones.Europe/Paris') },
+  { value: 'Europe/Berlin', label: t('userProfileSetup.timezones.Europe/Berlin') },
+  { value: 'Europe/Moscow', label: t('userProfileSetup.timezones.Europe/Moscow') },
+  { value: 'America/New_York', label: t('userProfileSetup.timezones.America/New_York') },
+  { value: 'America/Chicago', label: t('userProfileSetup.timezones.America/Chicago') },
+  { value: 'America/Denver', label: t('userProfileSetup.timezones.America/Denver') },
+  { value: 'America/Los_Angeles', label: t('userProfileSetup.timezones.America/Los_Angeles') },
+  { value: 'America/Sao_Paulo', label: t('userProfileSetup.timezones.America/Sao_Paulo') },
+  { value: 'Australia/Sydney', label: t('userProfileSetup.timezones.Australia/Sydney') },
+  { value: 'Pacific/Auckland', label: t('userProfileSetup.timezones.Pacific/Auckland') },
+])
 
 // 默认值（用户可编辑，预填项目默认模板）
 const defaultFields = {

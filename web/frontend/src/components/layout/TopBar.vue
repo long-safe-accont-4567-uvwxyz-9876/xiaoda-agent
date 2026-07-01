@@ -41,7 +41,7 @@ const stageText: Record<string, string> = {
       </button>
     </div>
 
-    <div class="brand-signature" aria-label="署名">
+    <div class="brand-signature" :aria-label="t('topBar.signature')">
       <span class="sig-leaf">🌿</span>
       <span class="sig-text">{{ t('brand_signature.text') }}</span>
     </div>

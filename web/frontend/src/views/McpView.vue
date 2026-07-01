@@ -6,6 +6,7 @@ import {
 } from 'naive-ui'
 import { get, post, put, del } from '../api'
 import { t, tf } from '../i18n'
+import Tilt3D from '../components/fx/Tilt3D.vue'
 
 const message = useMessage()
 const servers = ref<any[]>([])
@@ -294,7 +295,8 @@ function onMcpTabChange(tab: string) {
         </p>
 
         <div class="server-grid">
-          <div v-for="s in servers" :key="s.name" class="server-card glass-panel glass-panel-hover">
+          <Tilt3D v-for="s in servers" :key="s.name">
+          <div class="server-card glass-panel glass-panel-hover">
             <div class="server-head">
               <n-space align="center" :size="6">
                 <span class="health-dot"
@@ -332,6 +334,7 @@ function onMcpTabChange(tab: string) {
               </n-popconfirm>
             </div>
           </div>
+          </Tilt3D>
           <div v-if="!servers.length" class="empty-state glass-panel">
             <p>{{ t('mcpView.noMcp') }}</p>
           </div>
@@ -400,7 +403,8 @@ function onMcpTabChange(tab: string) {
         </div>
         <n-spin :show="mcpLoading">
           <div class="mcp-grid">
-            <div v-for="item in filteredMcpMarket" :key="item.id" class="market-card glass-panel glass-panel-hover">
+            <Tilt3D v-for="item in filteredMcpMarket" :key="item.id">
+            <div class="market-card glass-panel glass-panel-hover">
               <div class="card-header">
                 <img v-if="isLocalIcon(item.icon) && !item._iconErr" :src="item.icon" :alt="item.name" class="card-icon" @error="item._iconErr=true" />
                 <div v-else class="card-icon-placeholder">{{ (item.name||'?')[0].toUpperCase() }}</div>
@@ -426,6 +430,7 @@ function onMcpTabChange(tab: string) {
                 </div>
               </div>
             </div>
+            </Tilt3D>
           </div>
           <n-empty v-if="!mcpLoading && filteredMcpMarket.length === 0"
             :description="mcpSearch ? t('mcpView.marketEmptyMatched') : t('mcpView.marketEmpty')" />

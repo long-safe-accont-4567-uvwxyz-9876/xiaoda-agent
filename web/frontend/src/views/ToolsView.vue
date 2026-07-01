@@ -6,6 +6,7 @@ import {
 } from 'naive-ui'
 import { get, put, post, del } from '../api'
 import { t, tf } from '../i18n'
+import Tilt3D from '../components/fx/Tilt3D.vue'
 
 const message = useMessage()
 const tools = ref<any[]>([])
@@ -320,6 +321,7 @@ async function testSkill(item: any) {
     <n-tabs v-model:value="activeTab" type="line" @update:value="onTabChange">
       <!-- ── 已安装 ──────────────────────────────────────── -->
       <n-tab-pane name="installed" :tab="t('installed')">
+        <Tilt3D>
         <div class="skills-section glass-panel">
           <div class="skills-head">
             <span class="skills-title">📜 Skills（{{ t('toolsView.skillHint') }}）</span>
@@ -338,6 +340,7 @@ async function testSkill(item: any) {
           </div>
           <p v-else class="skills-empty">{{ t('toolsView.emptyHint') }}</p>
         </div>
+        </Tilt3D>
 
         <div class="filters glass-panel">
           <n-input v-model:value="search" :placeholder="t('toolsView.searchPlaceholder')" clearable style="max-width: 260px" />
@@ -346,7 +349,8 @@ async function testSkill(item: any) {
         </div>
 
         <div class="tool-list">
-          <div v-for="tool in filtered" :key="tool.name" class="tool-row glass-panel"
+          <Tilt3D v-for="tool in filtered" :key="tool.name">
+          <div class="tool-row glass-panel"
                :class="{ disabled: !tool.enabled }">
             <span class="perm-dot" :style="{ background: permColor[tool.permission] || '#9ca3af' }"
                   :title="`${t('toolsView.permLevel')} ${tool.permission}`"></span>
@@ -391,6 +395,7 @@ async function testSkill(item: any) {
                         @update:value="(v: boolean) => updateTool(tool, { enabled: v })" />
             </div>
           </div>
+          </Tilt3D>
         </div>
       </n-tab-pane>
 
@@ -405,8 +410,8 @@ async function testSkill(item: any) {
 
         <n-spin :show="skillMarketLoading">
           <div class="market-grid">
-            <div v-for="item in filteredSkillMarket" :key="item.id"
-                 class="market-card glass-panel glass-panel-hover">
+            <Tilt3D v-for="item in filteredSkillMarket" :key="item.id">
+            <div class="market-card glass-panel glass-panel-hover">
               <div class="card-head">
                 <span class="card-icon">{{ item.icon || '📝' }}</span>
                 <div class="card-title-group">
@@ -449,6 +454,7 @@ async function testSkill(item: any) {
                 </div>
               </div>
             </div>
+            </Tilt3D>
             <n-empty v-if="!skillMarketLoading && filteredSkillMarket.length === 0"
                      :description="t('toolsView.marketEmpty')" class="empty-state" />
           </div>

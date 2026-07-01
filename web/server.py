@@ -380,7 +380,7 @@ def create_app() -> FastAPI:
 
     from web.routers.auth import router as auth_router
     from web.routers.chat import router as chat_router
-    from web.routers.system import router as system_router
+    from web.routers.system import router as system_router, public_router as system_public_router
     from web.routers.agents import router as agents_router
     from web.routers.models import router as models_router
     from web.routers.tools import router as tools_router
@@ -400,7 +400,7 @@ def create_app() -> FastAPI:
               models_router, tools_router, mcp_router, insight_router,
               schedule_router, media_router, health_router, plugins_router,
               setup_router, model_discovery_router, market_router,
-              mail_manage_router, workflows_router):
+              mail_manage_router, workflows_router, system_public_router):
         app.include_router(r, prefix="/api/v1")
 
     from web.ws_hub import router as ws_router

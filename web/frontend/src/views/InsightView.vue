@@ -23,6 +23,7 @@ import { LineChart, PieChart, GraphChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { t } from '../i18n'
+import Tilt3D from '../components/fx/Tilt3D.vue'
 
 echarts.use([LineChart, PieChart, GraphChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
@@ -516,12 +517,12 @@ function fmtTs(ts: number): string {
     <h2 class="view-title">🌱 {{ t('insightView.title') }}</h2>
     <n-tabs type="line" animated v-model:value="activeTab">
       <n-tab-pane name="emotion" :tab="t('insightView.emotion')">
-        <div class="emotion-current glass-panel">
+        <Tilt3D :max-x="4" :max-y="6"><div class="emotion-current glass-panel">
           <span class="emo-big" :style="{ color: EMOTION_COLORS[currentEmotion.primary] }">
             {{ currentEmotion.primary || t('insightView.calm') }}
           </span>
           <span class="emo-sub">{{ t('insightView.lastEmotionDesc') }}</span>
-        </div>
+        </div></Tilt3D>
         <div class="chart-row">
           <div class="glass-panel chart-box">
             <h4>{{ t('insightView.emotionRiver7d') }}</h4>
@@ -542,8 +543,8 @@ function fmtTs(ts: number): string {
             {{ t('insightView.consolidateBtn') }}
           </n-button>
         </div>
-        <div class="glass-panel portrait-card md-body"
-             v-html="renderMarkdown(portrait.content || t('insightView.noPortrait'))"></div>
+        <Tilt3D :max-x="4" :max-y="6"><div class="glass-panel portrait-card md-body"
+             v-html="renderMarkdown(portrait.content || t('insightView.noPortrait'))"></div></Tilt3D>
         <n-collapse style="margin-top: 12px">
           <n-collapse-item :title="t('insightView.changeLog')" name="log">
             <div v-for="h in portraitHistory" :key="h.version" class="history-row">
@@ -556,11 +557,11 @@ function fmtTs(ts: number): string {
       </n-tab-pane>
 
       <n-tab-pane name="today" :tab="t('insightView.todayEvents')">
-        <div class="today-stats glass-panel">
+        <Tilt3D :max-x="4" :max-y="6"><div class="today-stats glass-panel">
           {{ t('insightView.todayRounds') }} {{ todayData.stats.conversations || 0 }} {{ t('insightView.roundsUnit') }} ·
           {{ t('insightView.toolCalls') }} {{ todayData.stats.tool_calls || 0 }} {{ t('insightView.times') }} ·
           {{ t('insightView.newMemories') }} {{ todayData.stats.memories || 0 }} {{ t('insightView.itemsUnit') }}
-        </div>
+        </div></Tilt3D>
         <div class="timeline">
           <div v-for="(item, i) in todayData.items" :key="i" class="timeline-item">
             <span class="tl-time">{{ fmtTs(item.ts) }}</span>
@@ -586,7 +587,7 @@ function fmtTs(ts: number): string {
           <n-button size="small" @click="loadMemories">{{ t('insightView.searchBtn') }}</n-button>
         </div>
         <div class="mem-list">
-          <div v-for="m in memories" :key="m.id" class="mem-row glass-panel">
+          <Tilt3D v-for="m in memories" :key="m.id"><div class="mem-row glass-panel">
             <div class="mem-main">
               <span class="mem-summary">{{ m.summary }}</span>
               <div class="mem-meta">
@@ -601,7 +602,7 @@ function fmtTs(ts: number): string {
               <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
               {{ t('insightView.deleteMemoryConfirm') }}
             </n-popconfirm>
-          </div>
+          </div></Tilt3D>
         </div>
       </n-tab-pane>
 
@@ -624,7 +625,7 @@ function fmtTs(ts: number): string {
           <div class="kg-section">
             <h4>{{ t('insightView.entitiesLabel') }} ({{ kgEntities.length }})</h4>
             <div class="item-list">
-              <div v-for="e in kgEntities" :key="e.name" class="list-row glass-panel">
+              <Tilt3D v-for="e in kgEntities" :key="e.name"><div class="list-row glass-panel">
                 <n-tag size="tiny" :bordered="false" v-if="e.kind">{{ e.kind }}</n-tag>
                 <span class="note-content">{{ e.name }}</span>
                 <n-button size="tiny" quaternary @click="openEditModal('entity', e)">{{ t('insightView.edit') }}</n-button>
@@ -632,14 +633,14 @@ function fmtTs(ts: number): string {
                   <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
                   {{ t('insightView.deleteEntityConfirm') }}
                 </n-popconfirm>
-              </div>
+              </div></Tilt3D>
               <div v-if="!kgEntities.length" class="empty-state"><p>{{ t('insightView.noEntities') }}</p></div>
             </div>
           </div>
           <div class="kg-section">
             <h4>{{ t('insightView.relationsLabel') }} ({{ kgRelations.length }})</h4>
             <div class="item-list">
-              <div v-for="r in kgRelations" :key="r.id" class="list-row glass-panel">
+              <Tilt3D v-for="r in kgRelations" :key="r.id"><div class="list-row glass-panel">
                 <span class="kg-rel-from">{{ r.from_entity }}</span>
                 <n-tag size="tiny" type="info" :bordered="false">{{ r.relation_type }}</n-tag>
                 <span class="kg-rel-to">{{ r.to_entity }}</span>
@@ -648,7 +649,7 @@ function fmtTs(ts: number): string {
                   <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
                   {{ t('insightView.deleteRelationConfirm') }}
                 </n-popconfirm>
-              </div>
+              </div></Tilt3D>
               <div v-if="!kgRelations.length" class="empty-state"><p>{{ t('insightView.noRelations') }}</p></div>
             </div>
           </div>
@@ -660,7 +661,7 @@ function fmtTs(ts: number): string {
           <n-button size="small" type="primary" @click="openAddModal('note')">+ {{ t('insightView.addNote') }}</n-button>
         </div>
         <div class="item-list">
-          <div v-for="n in notes" :key="n.id" class="list-row glass-panel">
+          <Tilt3D v-for="n in notes" :key="n.id"><div class="list-row glass-panel">
             <n-tag size="tiny" :bordered="false">{{ n.kind }}</n-tag>
             <span class="note-content">{{ n.content }}</span>
             <n-button size="tiny" quaternary @click="openEditModal('note', n)">{{ t('insightView.edit') }}</n-button>
@@ -668,7 +669,7 @@ function fmtTs(ts: number): string {
               <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
               {{ t('insightView.archiveNoteConfirm') }}
             </n-popconfirm>
-          </div>
+          </div></Tilt3D>
         </div>
         <div v-if="!notes.length" class="empty-state"><p>{{ t('insightView.noNotes') }}</p></div>
       </n-tab-pane>
@@ -678,7 +679,7 @@ function fmtTs(ts: number): string {
           <n-button size="small" type="primary" @click="openAddModal('learning')">+ {{ t('insightView.addLearning') }}</n-button>
         </div>
         <div class="item-list">
-          <div v-for="l in learnings" :key="l.id" class="list-row glass-panel">
+          <Tilt3D v-for="l in learnings" :key="l.id"><div class="list-row glass-panel">
             <n-tag size="tiny" :type="l.priority === 'high' ? 'error' : l.priority === 'medium' ? 'warning' : 'default'"
                    :bordered="false">{{ l.priority }}</n-tag>
             <span class="note-content">{{ l.summary }}</span>
@@ -688,7 +689,7 @@ function fmtTs(ts: number): string {
               <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
               {{ t('insightView.deleteLearningConfirm') }}
             </n-popconfirm>
-          </div>
+          </div></Tilt3D>
         </div>
         <div v-if="!learnings.length" class="empty-state"><p>{{ t('insightView.noLearning') }}</p></div>
       </n-tab-pane>
@@ -698,7 +699,7 @@ function fmtTs(ts: number): string {
           <n-button size="small" type="primary" @click="openAddModal('instinct')">+ {{ t('insightView.addInstinct') }}</n-button>
         </div>
         <div class="item-list">
-          <div v-for="ins in instincts" :key="ins.id" class="list-row glass-panel">
+          <Tilt3D v-for="ins in instincts" :key="ins.id"><div class="list-row glass-panel">
             <span class="note-content">{{ ins.content || ins.summary || ins.trigger_pattern }}</span>
             <span class="note-extra">{{ t('insightView.confidence') }} {{ ((ins.confidence || 0) * 100).toFixed(0) }}%</span>
             <n-button size="tiny" quaternary @click="openEditModal('instinct', ins)">{{ t('insightView.edit') }}</n-button>
@@ -706,7 +707,7 @@ function fmtTs(ts: number): string {
               <template #trigger><n-button size="tiny" type="error" quaternary>{{ t('insightView.delete') }}</n-button></template>
               {{ t('insightView.deleteInstinctConfirm') }}
             </n-popconfirm>
-          </div>
+          </div></Tilt3D>
         </div>
         <div v-if="!instincts.length" class="empty-state"><p>{{ t('insightView.noInstinct') }}</p></div>
       </n-tab-pane>

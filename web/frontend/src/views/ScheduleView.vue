@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import {
   NButton, NSwitch, NModal, NForm, NFormItem, NInput, NInputNumber,
   NSlider, NRadioGroup, NRadio, NCheckboxGroup, NCheckbox, NTimePicker,
@@ -7,6 +7,7 @@ import {
 } from 'naive-ui'
 import { get, post, put, del } from '../api'
 import { t, tf } from '../i18n'
+import Tilt3D from '../components/fx/Tilt3D.vue'
 
 const message = useMessage()
 
@@ -20,7 +21,7 @@ const isCreate = ref(true)
 const form = ref<any>({})
 const testing = ref(false)
 
-const WEEK_LABELS = ['一', '二', '三', '四', '五', '六', '日']
+const weekLabels = computed(() => [1, 2, 3, 4, 5, 6, 7].map(i => t(`scheduleView.weekLabel${i}`)))
 
 onMounted(loadAll)
 
@@ -123,7 +124,7 @@ async function testFire(channels: string[] = ['web']) {
 function describeDays(daysJson: string): string {
   const days: number[] = JSON.parse(daysJson || '[]')
   if (days.length === 7) return t('scheduleView.everyday')
-  return t('scheduleView.weekPrefix') + days.map(d => WEEK_LABELS[d - 1]).join('/')
+  return t('scheduleView.weekPrefix') + days.map(d => weekLabels.value[d - 1]).join('/')
 }
 
 const reasonLabel: Record<string, string> = {
@@ -135,7 +136,7 @@ const reasonLabel: Record<string, string> = {
   <div class="schedule-view">
     <h2 class="view-title">⏰ {{ t('scheduleView.title') }}</h2>
 
-    <section class="glass-panel section">
+    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
       <h3>{{ t('scheduleView.masterSwitch') }}</h3>
       <div class="config-row">
         <label class="cfg">
@@ -150,7 +151,7 @@ const reasonLabel: Record<string, string> = {
         <n-button size="small" :loading="testing" @click="testFire(['web'])">{{ t('scheduleView.testWeb') }}</n-button>
         <n-button size="small" :loading="testing" @click="testFire(['qq'])">📱 {{ t('scheduleView.testQQ') }}</n-button>
       </div>
-    </section>
+    </section></Tilt3D>
 
     <section class="glass-panel section">
       <div class="section-head">
@@ -158,12 +159,12 @@ const reasonLabel: Record<string, string> = {
         <n-button size="small" type="primary" @click="openForm(null)">＋ {{ t('scheduleView.addPlan') }}</n-button>
       </div>
       <div class="greeting-list">
-        <div v-for="g in greetings" :key="g.id" class="greeting-card">
+        <Tilt3D v-for="g in greetings" :key="g.id"><div class="greeting-card">
           <div class="g-main">
             <span class="g-icon">{{ g.type === 'fixed' ? '⏰' : '🎲' }}</span>
             <span class="g-desc">
               <template v-if="g.type === 'fixed'">{{ describeDays(g.days) }} {{ g.time }}</template>
-              <template v-else>{{ describeDays(g.days) }} {{ g.window_start }}~{{ g.window_end }} 随机 {{ g.count_per_day }} 次</template>
+              <template v-else>{{ describeDays(g.days) }} {{ g.window_start }}~{{ g.window_end }} {{ tf('scheduleView.randomTimes', g.count_per_day) }}</template>
             </span>
             <n-tag v-if="g.prompt_hint" size="tiny" :bordered="false">{{ g.prompt_hint }}</n-tag>
             <n-tag size="tiny" type="info" :bordered="false">{{ JSON.parse(g.channels || '[]').join('+') }}</n-tag>
@@ -177,12 +178,12 @@ const reasonLabel: Record<string, string> = {
               {{ t('scheduleView.deleteConfirm') }}
             </n-popconfirm>
           </div>
-        </div>
+        </div></Tilt3D>
         <div v-if="!greetings.length" class="empty-hint">{{ t('scheduleView.noPlans') }}</div>
       </div>
     </section>
 
-    <section class="glass-panel section">
+    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
       <div class="section-head">
         <h3>{{ t('scheduleView.quietHoursTitle') }} <span class="hint">{{ t('scheduleView.quietHoursDesc') }}</span></h3>
         <n-button size="small" @click="addDnd">{{ t('scheduleView.addSlot') }}</n-button>
@@ -198,9 +199,9 @@ const reasonLabel: Record<string, string> = {
         </div>
         <div v-if="!dndPeriods.length" class="empty-hint">{{ t('scheduleView.noQuietHours') }}</div>
       </div>
-    </section>
+    </section></Tilt3D>
 
-    <section class="glass-panel section">
+    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
       <h3>{{ t('scheduleView.sent7d') }}</h3>
       <div class="history-list">
         <div v-for="h in history" :key="h.id" class="history-row">
@@ -211,7 +212,7 @@ const reasonLabel: Record<string, string> = {
         </div>
         <div v-if="!history.length" class="empty-hint">{{ t('scheduleView.noRecords') }}</div>
       </div>
-    </section>
+    </section></Tilt3D>
 
     <n-modal v-model:show="showForm" preset="card"
              :title="isCreate ? t('scheduleView.addPlanTitle') : t('scheduleView.editPlanTitle')"
@@ -238,7 +239,7 @@ const reasonLabel: Record<string, string> = {
         </template>
         <n-form-item :label="t('scheduleView.weekday')">
           <n-checkbox-group v-model:value="form.days">
-            <n-checkbox v-for="(label, i) in WEEK_LABELS" :key="i" :value="i + 1" :label="label" />
+            <n-checkbox v-for="(label, i) in weekLabels" :key="i" :value="i + 1" :label="label" />
           </n-checkbox-group>
         </n-form-item>
         <n-form-item :label="t('scheduleView.topic')">

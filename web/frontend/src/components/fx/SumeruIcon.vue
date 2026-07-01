@@ -47,6 +47,8 @@ const PATHS: Record<string, string> = {
   market: 'M3 20.5h18 M5 20.5V9l-1.5-4h17L19 9v11.5 M9 9a3 3 0 0 0 6 0 M3.5 5h17',
   // 邮箱：信封
   mail: 'M3 8l9 6 9-6M3 6h18v12H3z',
+  // 警示：三角感叹号（免责声明）
+  alert: 'M12 3.5 20.5 18.5H3.5Z M12 9v5 M12 16.5h0.01',
 }
 </script>
 

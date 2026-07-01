@@ -7,6 +7,7 @@ import KeyAccordion, { type TestStatus } from '../components/setup/KeyAccordion.
 import { api, getSetupVersion, getDisclaimerStatus, agreeDisclaimer } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { t } from '../i18n'
+import Tilt3D from '../components/fx/Tilt3D.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -200,7 +201,7 @@ async function handleSave() {
       localStorage.setItem('nahida_disclaimer_agreed', 'true')
       disclaimerAgreed.value = true
     } catch (e: any) {
-      error.value = e.message || '保存免责协议失败'
+      error.value = e.message || t('setupWizard.disclaimerSaveFailed')
       return
     }
   }
@@ -299,6 +300,7 @@ async function handleSave() {
           <p v-if="error" class="error-text">{{ error }}</p>
 
           <!-- 免责协议 -->
+          <Tilt3D>
           <div class="disclaimer-section" v-if="!disclaimerAgreed">
             <h3 class="disclaimer-title">── {{ t('disclaimer.title') }} ──</h3>
             <div
@@ -320,7 +322,8 @@ async function handleSave() {
               <span>{{ t('disclaimer.agree') }}</span>
             </label>
           </div>
-          <div class="disclaimer-section disclaimer-agreed-banner" v-else>
+          </Tilt3D>
+          <div class="disclaimer-section disclaimer-agreed-banner" v-if="disclaimerAgreed">
             <span>✓ {{ t('disclaimer.agreed') }}</span>
           </div>
 

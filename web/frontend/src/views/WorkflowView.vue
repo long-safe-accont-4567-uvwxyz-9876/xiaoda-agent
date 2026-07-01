@@ -6,7 +6,8 @@ import {
 } from 'naive-ui'
 import { api, type Workflow, type WorkflowNode, type WorkflowSummary } from '../api'
 import { useChatStore } from '../stores/chat'
-import { t } from '../i18n'
+import { t, tf } from '../i18n'
+import Tilt3D from '../components/fx/Tilt3D.vue'
 
 const message = useMessage()
 const router = useRouter()
@@ -136,7 +137,7 @@ async function editWorkflow(wf: WorkflowSummary) {
 async function deleteWorkflow(wf: WorkflowSummary) {
   try {
     await api.deleteWorkflow(wf.id)
-    message.success('已删除 ' + wf.name)
+    message.success(t('workflowView.deleted') + ' ' + wf.name)
     await load()
   } catch (e: any) { message.error(e.message) }
 }
@@ -154,7 +155,7 @@ function cancelEdit() { editing.value = null }
 
 async function save() {
   if (!editing.value) return
-  if (!editing.value.name.trim()) { message.error('请填写工作流名称'); return }
+  if (!editing.value.name.trim()) { message.error(t('workflowView.nameRequired')); return }
   saving.value = true
   try {
     const wf = editing.value
@@ -169,21 +170,21 @@ async function save() {
     } else {
       editing.value = await api.updateWorkflow(wf.id, wf)
     }
-    message.success('已保存 ✓')
+    message.success(t('workflowView.saved'))
     await load()
   } catch (e: any) { message.error(e.message) }
   finally { saving.value = false }
 }
 
 async function testWorkflow() {
-  if (!editing.value || isCreate.value) { message.warning('请先保存'); return }
-  if (chatStore.isProcessing) { message.warning('对话正在处理中'); return }
+  if (!editing.value || isCreate.value) { message.warning(t('workflowView.saveFirst')); return }
+  if (chatStore.isProcessing) { message.warning(t('workflowView.chatBusy')); return }
   testing.value = true
   try {
     const result = await api.previewWorkflow(editing.value.id)
     chatStore.sendMessage(result.prompt || JSON.stringify(result))
     router.push('/')
-    message.success('已发送到对话窗口')
+    message.success(t('workflowView.sentToChat'))
   } catch (e: any) { message.error(e.message) }
   finally { testing.value = false }
 }
@@ -194,7 +195,7 @@ function addNode(type: WorkflowNode['type']) {
   const meta = NODE_META[type]
   const node: WorkflowNode = {
     id: `n${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    type, label: meta.label,
+    type, label: t('workflowView.nodeType.' + type),
   }
   if (type !== 'step') node.ref = ''
   editing.value.nodes.push(node)
@@ -225,42 +226,42 @@ function onNodeSelect(node: WorkflowNode, value: string) {
 <template>
   <div class="workflows-view">
     <div class="view-header">
-      <h2>🌿 工作流</h2>
-      <span class="count">共 {{ workflows.length }} 个</span>
+      <h2>{{ t('workflowView.title') }}</h2>
+      <span class="count">{{ t('workflowView.count') }} {{ workflows.length }} {{ t('workflowView.items') }}</span>
     </div>
 
     <!-- ── 列表模式 ── -->
     <div v-if="!editing" class="list-section">
       <div class="list-toolbar">
-        <n-button type="primary" @click="newWorkflow">＋ 新建工作流</n-button>
+        <n-button type="primary" @click="newWorkflow">{{ t('workflowView.create') }}</n-button>
       </div>
       <n-spin :show="loading">
         <div class="wf-grid">
-          <div v-for="wf in workflows" :key="wf.id" class="wf-card glass-panel glass-panel-hover">
+          <Tilt3D v-for="wf in workflows" :key="wf.id"><div class="wf-card glass-panel glass-panel-hover">
             <div class="wf-card-head">
               <span class="wf-name">{{ wf.name }}</span>
               <n-tag size="tiny" :bordered="false">v{{ wf.version }}</n-tag>
             </div>
-            <div class="wf-desc">{{ wf.description || '（无描述）' }}</div>
+            <div class="wf-desc">{{ wf.description || t('workflowView.noDesc') }}</div>
             <div class="wf-card-footer">
               <div class="wf-meta">
-                <n-tag size="tiny" :bordered="false">{{ wf.node_count }} 步</n-tag>
+                <n-tag size="tiny" :bordered="false">{{ wf.node_count }} {{ t('workflowView.stepsUnit') }}</n-tag>
                 <n-switch :value="wf.enabled" size="small"
                           @update:value="(v: boolean) => toggleEnabled(wf, v)" />
               </div>
               <div class="wf-card-actions">
-                <n-button size="tiny" type="primary" @click="editWorkflow(wf)">编辑</n-button>
+                <n-button size="tiny" type="primary" @click="editWorkflow(wf)">{{ t('workflowView.edit') }}</n-button>
                 <n-popconfirm @positive-click="deleteWorkflow(wf)">
                   <template #trigger>
-                    <n-button size="tiny" type="error" quaternary>删除</n-button>
+                    <n-button size="tiny" type="error" quaternary>{{ t('workflowView.delete') }}</n-button>
                   </template>
-                  确认删除「{{ wf.name }}」？
+                  {{ tf('workflowView.deleteConfirm', wf.name) }}
                 </n-popconfirm>
               </div>
             </div>
-          </div>
+          </div></Tilt3D>
           <n-empty v-if="!loading && workflows.length === 0"
-                   description="还没有工作流，点「＋」创建一个吧" class="empty-state" />
+                   :description="t('workflowView.emptyHint')" class="empty-state" />
         </div>
       </n-spin>
     </div>
@@ -268,42 +269,42 @@ function onNodeSelect(node: WorkflowNode, value: string) {
     <!-- ── 编辑模式 ── -->
     <div v-else class="editor-section">
       <!-- 基本信息（简化） -->
-      <div class="basic-info glass-panel">
+      <Tilt3D :max-x="4" :max-y="6"><div class="basic-info glass-panel">
         <div class="info-row">
-          <n-input v-model:value="editing.name" placeholder="工作流名称（如：邮箱配置）" style="flex:1" />
+          <n-input v-model:value="editing.name" :placeholder="t('workflowView.namePh')" style="flex:1" />
           <n-switch v-model:value="editing.enabled" size="small" />
-          <span class="enable-label">{{ editing.enabled ? '启用' : '禁用' }}</span>
+          <span class="enable-label">{{ editing.enabled ? t('workflowView.enabled') : t('workflowView.disabled') }}</span>
         </div>
-        <n-input v-model:value="editing.description" placeholder="简单描述这个工作流做什么（可选）" />
-      </div>
+        <n-input v-model:value="editing.description" :placeholder="t('workflowView.descPh')" />
+      </div></Tilt3D>
 
       <!-- 节点链 -->
       <div class="nodes-section">
-        <div v-if="editing.nodes.length === 0" class="nodes-empty glass-panel">
-          👇 点击下方按钮添加步骤
-        </div>
+        <Tilt3D v-if="editing.nodes.length === 0" :max-x="4" :max-y="6"><div class="nodes-empty glass-panel">
+          {{ t('workflowView.addStepHint') }}
+        </div></Tilt3D>
 
         <template v-for="(node, idx) in editing.nodes" :key="node.id">
           <!-- 节点卡片 -->
-          <div class="node-card glass-panel">
+          <Tilt3D><div class="node-card glass-panel">
             <!-- 节点头部 -->
             <div class="node-head">
               <span class="node-num">{{ idx + 1 }}</span>
               <span class="node-icon">{{ NODE_META[node.type]?.icon }}</span>
               <span class="node-type" :style="{ color: NODE_META[node.type]?.color }">
-                {{ NODE_META[node.type]?.label }}
+                {{ t('workflowView.nodeType.' + node.type) }}
               </span>
               <!-- step 类型：直接输入说明文本 -->
               <n-input v-if="node.type === 'step'"
                        v-model:value="node.note"
-                       placeholder="输入操作说明…"
+                       :placeholder="t('workflowView.stepNotePh')"
                        size="small"
                        style="flex:1; min-width: 200px" />
               <!-- 其他类型：下拉选择已配置的资源 -->
               <n-select v-else
                         :value="node.ref"
                         :options="getOptions(node.type)"
-                        :placeholder="`选择${NODE_META[node.type]?.label}…`"
+                        :placeholder="tf('workflowView.selectNodePh', t('workflowView.nodeType.' + node.type))"
                         size="small"
                         filterable
                         style="flex:1; min-width: 200px"
@@ -317,10 +318,10 @@ function onNodeSelect(node: WorkflowNode, value: string) {
             <!-- 可选备注 -->
             <n-input v-if="node.type !== 'step'"
                      v-model:value="node.note"
-                     placeholder="备注（可选）：这个步骤有什么注意事项？"
+                     :placeholder="t('workflowView.nodeNotePh')"
                      size="small"
                      class="node-note" />
-          </div>
+          </div></Tilt3D>
           <!-- 连线箭头 -->
           <div v-if="idx < editing.nodes.length - 1" class="node-arrow">↓</div>
         </template>
@@ -328,18 +329,18 @@ function onNodeSelect(node: WorkflowNode, value: string) {
 
       <!-- 添加节点工具栏 -->
       <div class="node-toolbar glass-panel">
-        <span class="toolbar-label">添加步骤：</span>
+        <span class="toolbar-label">{{ t('workflowView.addStepLabel') }}</span>
         <n-button v-for="(meta, key) in NODE_META" :key="key" size="small"
                   @click="addNode(key as WorkflowNode['type'])">
-          {{ meta.icon }} {{ meta.label }}
+          {{ meta.icon }} {{ t('workflowView.nodeType.' + key) }}
         </n-button>
       </div>
 
       <!-- 操作按钮 -->
       <div class="action-bar">
-        <n-button @click="cancelEdit">返回</n-button>
-        <n-button type="info" :loading="testing" :disabled="isCreate" @click="testWorkflow">测试</n-button>
-        <n-button type="primary" :loading="saving" @click="save">保存</n-button>
+        <n-button @click="cancelEdit">{{ t('workflowView.back') }}</n-button>
+        <n-button type="info" :loading="testing" :disabled="isCreate" @click="testWorkflow">{{ t('workflowView.test') }}</n-button>
+        <n-button type="primary" :loading="saving" @click="save">{{ t('workflowView.save') }}</n-button>
       </div>
     </div>
   </div>
