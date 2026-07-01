@@ -1,0 +1,55 @@
+# Version control
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Build artifacts (PyInstaller)
+build/
+dist/
+*.spec
+
+# Frontend build (we build it in Docker)
+web/dist/
+web/frontend/node_modules/
+
+# IDE / editor
+.trae/
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Environment & secrets
+.env
+.env.prod
+.env.local
+credentials/
+*.key
+config/webui_overrides.json
+
+# Data (mounted as volume)
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+botpy.log.*
+
+# State
+state/
+
+# Docs & misc
+docs/
+market/.cache
+assets/stickers/nahida_backup/
+tests/benchmark_results.json

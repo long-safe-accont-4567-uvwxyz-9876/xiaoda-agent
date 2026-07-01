@@ -5,14 +5,14 @@ services:
     build: .
     container_name: xiaoda-agent
     ports:
-      - "${WEBUI_PORT:-8080}:8080"
+      - "${WEBUI_PORT:-8082}:${WEBUI_PORT:-8082}"
     volumes:
       - agent-data:/data
       - ./.env:/app/.env:ro
     environment:
       - KIOXIA_DATA_DIR=/data
       - WEBUI_HOST=0.0.0.0
-      - WEBUI_PORT=8080
+      - WEBUI_PORT=${WEBUI_PORT:-8082}
     env_file:
       - .env
     restart: unless-stopped

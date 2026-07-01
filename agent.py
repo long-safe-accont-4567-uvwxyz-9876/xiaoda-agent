@@ -116,6 +116,12 @@ def _run_cli() -> None:
     cli.run()
 
 
+def _is_running_in_docker() -> bool:
+    """检测当前是否在 Docker 容器内运行。"""
+    import os
+    return os.path.exists("/.dockerenv") or os.path.isfile("/proc/1/cgroup") and "docker" in open("/proc/1/cgroup", "r", errors="ignore").read()
+
+
 def _get_lan_addresses() -> list:
     """检测本机主网卡的局域网 IPv4 地址（不产生实际网络流量）。"""
     import socket
@@ -160,11 +166,16 @@ def _run_web(host: str, port: int) -> None:
 
     # 检测局域网 IP，打印手机可访问的地址
     if host == "0.0.0.0":
-        lan_ips = _get_lan_addresses()
-        if lan_ips:
-            logger.info("手机访问（同一 WiFi 下）:")
-            for ip in lan_ips:
-                logger.info(f"  http://{ip}:{port}")
+        if _is_running_in_docker():
+            # Docker 容器内检测到的是容器 IP，对用户无用
+            # 提示用户用宿主机 IP + 映射端口访问
+            logger.info("Docker 模式: 请使用宿主机 IP 访问（端口映射见 docker run -p 参数）")
+        else:
+            lan_ips = _get_lan_addresses()
+            if lan_ips:
+                logger.info("手机访问（同一 WiFi 下）:")
+                for ip in lan_ips:
+                    logger.info(f"  http://{ip}:{port}")
 
     uvicorn.run(
         app,
