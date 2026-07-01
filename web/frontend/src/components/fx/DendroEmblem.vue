@@ -3,12 +3,12 @@
 // 性能优化：glow 默认关闭（CSS filter: drop-shadow 与 animation: rotate 组合会导致 GPU 卡顿）
 // 发光效果改用 SVG 内部渐变实现，避免 CSS filter 每帧重新光栅化
 withDefaults(defineProps<{ size?: number; spin?: boolean; glow?: boolean }>(), {
-  size: 36, spin: false, glow: false,
+  size: 36, spin: false, glow: true,
 })
 </script>
 
 <template>
-  <span class="dendro-emblem" :class="{ spin }" :style="{ width: size + 'px', height: size + 'px' }">
+  <span class="dendro-emblem" :class="{ spin, glow }" :style="{ width: size + 'px', height: size + 'px' }">
     <svg :width="size" :height="size" viewBox="0 0 48 48" fill="none">
       <!-- 发光底层（用 SVG 渐变替代 CSS filter，零合成层开销） -->
       <defs>
@@ -42,11 +42,9 @@ withDefaults(defineProps<{ size?: number; spin?: boolean; glow?: boolean }>(), {
   justify-content: center;
   color: var(--dendro);
 }
-/* 旋转动画用 will-change 优化，避免每帧重新合成 */
-.dendro-emblem.spin svg {
-  animation: emblem-spin 9s linear infinite;
-  will-change: transform;
-}
+/* filter: drop-shadow 创建 GPU 合成层，旋转动画只更新 transform */
+.dendro-emblem.glow { filter: drop-shadow(0 0 6px rgba(127, 214, 80, 0.45)); }
+.dendro-emblem.spin svg { animation: emblem-spin 9s linear infinite; }
 @keyframes emblem-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }

@@ -118,16 +118,15 @@ function frame(now: number) {
     if (p.leaf) {
       drawLeaf(ctx, p.x, p.y, p.r * 2, p.drift, breathe)
     } else {
-      // 用两次绘制模拟发光，避免 shadowBlur（Canvas shadow 极耗 CPU/GPU）
-      ctx.fillStyle = '#7fd650'
-      ctx.globalAlpha = breathe * 0.25
-      ctx.beginPath()
-      ctx.arc(p.x, p.y, p.r * 2.2, 0, Math.PI * 2)
-      ctx.fill()
+      // shadowBlur 帮助浏览器将 canvas 提升为合成层，避免每帧重绘全页
       ctx.globalAlpha = breathe
+      ctx.fillStyle = '#7fd650'
+      ctx.shadowColor = '#7fd650'
+      ctx.shadowBlur = 6
       ctx.beginPath()
       ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2)
       ctx.fill()
+      ctx.shadowBlur = 0
     }
   }
 

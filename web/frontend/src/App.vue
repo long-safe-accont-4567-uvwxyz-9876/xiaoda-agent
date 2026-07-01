@@ -159,6 +159,12 @@ const themeOverrides: GlobalThemeOverrides = {
   box-sizing: border-box;
 }
 
+/* 亮度调节：filter 同时为 #app 创建 GPU 合成层，避免每帧重绘全页 */
+#app {
+  filter: brightness(var(--app-brightness, 1.05));
+  transition: filter 0.4s ease;
+}
+
 html, body, #app {
   height: 100%;
   width: 100%;
@@ -197,7 +203,7 @@ body {
 ::-webkit-scrollbar-thumb { background: rgba(143, 229, 96, 0.3); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(143, 229, 96, 0.5); }
 
-/* 全局署名水印（非 scoped） */
+/* 全局署名水印（非 scoped）——移除 writing-mode 避免每帧重排 */
 .brand-watermark {
   position: fixed;
   bottom: 8px;
@@ -211,7 +217,6 @@ body {
   font-family: 'Noto Serif SC', serif;
   letter-spacing: 1px;
   text-shadow: 0 0 4px rgba(0,0,0,0.5);
-  writing-mode: vertical-rl;
   max-height: 60vh;
 }
 .brand-watermark span {
