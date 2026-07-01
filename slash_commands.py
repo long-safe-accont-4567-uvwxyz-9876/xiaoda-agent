@@ -6,7 +6,15 @@ import time
 from loguru import logger
 
 
-OWNER_ONLY_COMMANDS: set[str] = set()  # 所有命令均不设权限限制
+OWNER_ONLY_COMMANDS: set[str] = {
+    "/reset",   # 系统重置（清空对话上下文，影响运行时状态）
+    "/sys",     # 系统运行状态（含错误日志、服务状态等敏感信息）
+    "/debug",   # 内部调试状态（指标、路由、上下文等内部信息）
+    "/model",   # 切换模型（影响 Agent 行为）
+    "/voice",   # 语音模式开关
+    "/agent",   # 切换对话目标 Agent
+    "/cam",     # 摄像头控制（隐私敏感）
+}
 
 COMMAND_DESCRIPTIONS = {
     "/cost": "查看 API 消费成本（可加 7d）",
@@ -75,7 +83,7 @@ class SlashCommandHandler:
         args = parts[1].strip() if len(parts) > 1 else ""
 
         if self.is_owner_command(command):
-            if not self._security or not self._security.is_owner(user_id):
+            if self._security and not self._security.is_owner(user_id):
                 return "这个命令只有主人才能用哦～"
 
         handlers = {

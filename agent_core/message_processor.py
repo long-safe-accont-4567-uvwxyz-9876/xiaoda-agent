@@ -342,10 +342,13 @@ class MessageProcessorMixin:
         # Persona Critic: 检查 LLM 输出人格一致性（LLM 输出后、发送给用户前）
         self._apply_persona_critic(reply, user_openid, user_id)
 
-        await self.context.add_message("user", user_input)
-        await self.context.add_message("assistant", reply)
-        self._bg_task_manager.run_background_tasks(
-            user_input, reply, user_id, source, emotion, [], session_id=session_id)
+        # 仅主人群聊消息（及非群聊场景）记入记忆
+        _should_remember = is_master or source != "qq_group"
+        if _should_remember:
+            await self.context.add_message("user", user_input)
+            await self.context.add_message("assistant", reply)
+            self._bg_task_manager.run_background_tasks(
+                user_input, reply, user_id, source, emotion, [], session_id=session_id)
         try:
             _spawn(self.router.flush_costs())
         except Exception as e:
@@ -452,13 +455,16 @@ class MessageProcessorMixin:
             if graph_result.final_output:
                 emotion = detect_emotion(clean_input)
                 ctx.last_user_emotion = emotion.get("primary", "")
-                # 关键：写入对话历史，否则下一轮上下文丢失
-                await self.context.add_message("user", clean_input)
-                await self.context.add_message("assistant", graph_result.final_output)
-                self._bg_task_manager.run_background_tasks(
-                    clean_input, graph_result.final_output, user_id, source, emotion, [],
-                    session_id=session_id,
-                )
+                # 仅主人群聊消息（及非群聊场景）记入记忆
+                _should_remember = is_master or source != "qq_group"
+                if _should_remember:
+                    # 关键：写入对话历史，否则下一轮上下文丢失
+                    await self.context.add_message("user", clean_input)
+                    await self.context.add_message("assistant", graph_result.final_output)
+                    self._bg_task_manager.run_background_tasks(
+                        clean_input, graph_result.final_output, user_id, source, emotion, [],
+                        session_id=session_id,
+                    )
                 emotion_label = emotion.get("primary", "")
                 clean_reply = self._finalize_reply(graph_result.final_output, style="nahida")
                 sticker_path = None
@@ -582,13 +588,16 @@ class MessageProcessorMixin:
         # Persona Critic: 检查 LLM 输出人格一致性（LLM 输出后、发送给用户前）
         self._apply_persona_critic(reply, user_openid, user_id)
 
-        if not ctx.handled_by_tool_call:
-            await self.context.add_message("user", user_input)
-            rc = self.router.pop_reasoning_content()
-            await self.context.add_message("assistant", reply, reasoning_content=rc)
+        # 仅主人群聊消息（及非群聊场景）记入记忆
+        _should_remember = is_master or source != "qq_group"
+        if _should_remember:
+            if not ctx.handled_by_tool_call:
+                await self.context.add_message("user", user_input)
+                rc = self.router.pop_reasoning_content()
+                await self.context.add_message("assistant", reply, reasoning_content=rc)
 
-        self._bg_task_manager.run_background_tasks(
-            user_input, reply, user_id, source, emotion, tool_results, session_id=session_id)
+            self._bg_task_manager.run_background_tasks(
+                user_input, reply, user_id, source, emotion, tool_results, session_id=session_id)
         # 偏好管线: 用户纠正 → L1(约束) + L3(教训) 联动 (异步, 不阻塞回复)
         try:
             from core.preference_pipeline import get_preference_pipeline

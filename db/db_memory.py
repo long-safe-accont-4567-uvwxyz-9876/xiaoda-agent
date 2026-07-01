@@ -73,24 +73,6 @@ class MemoryDB:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
-    async def get_recent_conversations(self, limit: int = 20, user_id: str = "") -> Any:
-        """获取最近的对话记录。支持按 user_id 过滤（群聊场景下隔离不同用户的历史）。"""
-        if user_id:
-            cursor = await self._conn.execute(
-                """SELECT * FROM conversation_logs
-                   WHERE user_id = ?
-                   ORDER BY id DESC LIMIT ?""",
-                (user_id, limit),
-            )
-        else:
-            cursor = await self._conn.execute(
-                """SELECT * FROM conversation_logs
-                   ORDER BY id DESC LIMIT ?""",
-                (limit,),
-            )
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
-
     async def increment_access_count(self, memory_id: int) -> None:
         """递增记忆访问计数（检索强化）"""
         await self._conn.execute(

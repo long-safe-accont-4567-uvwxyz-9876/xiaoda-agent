@@ -372,11 +372,11 @@ class IMApprovalChannel:
         except Exception as e:
             logger.warning("approval.im_channel.send_failed error={}", str(e)[:200])
 
-        # 注册 pending 请求与 future
+        # 注册 pending 请求与 future (以 request_id 为 key, 支持同用户并发请求)
         loop = asyncio.get_event_loop()
         future: asyncio.Future = loop.create_future()
-        self._pending[req.user_id] = req
-        self._waiters[req.user_id] = future
+        self._pending[req.id] = req
+        self._waiters[req.id] = future
 
         try:
             status = await asyncio.wait_for(future, timeout=self._timeout)
@@ -392,12 +392,20 @@ class IMApprovalChannel:
                         "system", req.decision_reason)
             return ApprovalStatus.TIMEOUT
         finally:
-            self._pending.pop(req.user_id, None)
-            self._waiters.pop(req.user_id, None)
+            self._pending.pop(req.id, None)
+            self._waiters.pop(req.id, None)
 
     async def handle_user_reply(self, user_id: str, text: str) -> bool:
-        """处理用户回复（"确认"/"取消"），返回是否匹配待审批请求"""
-        req = self._pending.get(user_id)
+        """处理用户回复（"确认"/"取消"），返回是否匹配待审批请求
+
+        _pending 以 request_id 为 key, 此处遍历查找该用户最新的待审批请求。
+        """
+        # 查找该用户最新的待审批请求 (created_at 最大者)
+        req = None
+        for r in self._pending.values():
+            if r.user_id == user_id:
+                if req is None or r.created_at > req.created_at:
+                    req = r
         if req is None:
             return False
         decision = self._classify_reply(text)
@@ -409,9 +417,9 @@ class IMApprovalChannel:
         req.decided_by = user_id
         req.decided_at = time.time()
         req.decision_reason = reason
-        future = self._waiters.pop(user_id, None)
+        future = self._waiters.pop(req.id, None)
         if future is not None and not future.done():
             future.set_result(decision)
         self._audit(req, decision, user_id, reason)
-        self._pending.pop(user_id, None)
+        self._pending.pop(req.id, None)
         return True

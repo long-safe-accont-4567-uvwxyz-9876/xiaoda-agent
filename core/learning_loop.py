@@ -69,17 +69,17 @@ class LearningLoop:
                 "constraints": list(self._active_constraints),
                 "correction_count": self._correction_count,
             }
-            tmp = self._PERSIST_PATH.with_suffix(".json.tmp")
+            tmp = self._persist_path.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(tmp, self._PERSIST_PATH)
+            os.replace(tmp, self._persist_path)
         except Exception as e:
             logger.warning(f"LearningLoop.persist_failed: {e}")
 
     def _load(self) -> None:
         """启动时从 JSON 加载约束"""
         try:
-            if self._PERSIST_PATH.exists():
-                data = json.loads(self._PERSIST_PATH.read_text(encoding="utf-8"))
+            if self._persist_path.exists():
+                data = json.loads(self._persist_path.read_text(encoding="utf-8"))
                 for c in data.get("constraints", []):
                     self._active_constraints.append(c)
                 self._correction_count = data.get("correction_count", 0)

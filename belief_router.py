@@ -107,6 +107,15 @@ class BeliefRouter:
         """Load beliefs from database."""
         try:
             conn = sqlite3.connect(self._db_path)
+            # 表 agent_beliefs 不在 db/schema.sql 中，由 _save_to_db 懒创建。
+            # 首次加载时表可能尚不存在，这里先建表（IF NOT EXISTS）再查询，
+            # 避免抛出 `no such table` 异常导致反复打印 load_failed 警告。
+            conn.execute("""CREATE TABLE IF NOT EXISTS agent_beliefs (
+                agent_name TEXT PRIMARY KEY,
+                alpha REAL NOT NULL DEFAULT 1.0,
+                beta REAL NOT NULL DEFAULT 1.0,
+                updated_at REAL NOT NULL
+            )""")
             cur = conn.execute("SELECT agent_name, alpha, beta FROM agent_beliefs")
             for row in cur:
                 name, alpha, beta = row
@@ -119,6 +128,33 @@ class BeliefRouter:
             logger.info("belief_router.loaded", beliefs=self.get_beliefs())
         except Exception as e:
             logger.warning("belief_router.load_failed", error=str(e))
+            self._load_from_json()
+
+    def _load_from_json(self) -> None:
+        """从 JSON 备份文件加载信念状态（DB 加载失败时的回退路径）。
+
+        JSON 文件由 _save_to_json 在每次 _save_to_db 时同步写入，
+        路径与 db_path 同目录、同前缀，仅后缀替换为 _beliefs.json。
+        若 JSON 也不存在，则保持 __init__ 中初始化的默认空信念。
+        """
+        if not self._db_path:
+            return
+        try:
+            import json
+            json_path = self._db_path.rsplit(".", 1)[0] + "_beliefs.json"
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for name, params in (data or {}).items():
+                if name in self._beliefs and isinstance(params, dict):
+                    alpha = max(float(params.get("alpha", 1.0)), 0.01)
+                    beta = max(float(params.get("beta", 1.0)), 0.01)
+                    self._beliefs[name] = AgentBelief(alpha=alpha, beta=beta)
+            logger.info("belief_router.loaded_from_json", beliefs=self.get_beliefs())
+        except FileNotFoundError:
+            # JSON 备份尚未生成，保持默认空信念即可，不视为异常
+            pass
+        except Exception as e:
+            logger.warning("belief_router.json_load_failed", error=str(e))
 
     def _save_to_db(self) -> None:
         """Save beliefs to database (non-blocking via thread pool)."""

@@ -33,13 +33,16 @@ import datetime as _datetime
 
 # 时间词 → 相对今天的偏移天数（offset_days, span_days）
 # offset_days: 起点距今多少天前；span_days: 时间跨度
+# 注意: "大前天" 必须排在 "前天" 之前，因 "大前天" 包含 "前天" 子串，
+# _parse_temporal_query 在首个命中即返回，顺序错误会导致 "大前天" 被误判为 "前天"。
 _TEMPORAL_PATTERNS = [
-    (re.compile(r"前天|大前天"), 2, 1),       # 前天那一天
-    (re.compile(r"昨天|昨日"), 1, 1),         # 昨天那一天
-    (re.compile(r"今天|今日"), 0, 1),         # 今天
-    (re.compile(r"上周"), 7, 7),              # 上周（7-14天前那一周）
-    (re.compile(r"上个月|上月"), 30, 30),     # 上个月
-    (re.compile(r"前几天|前些天|最近"), 1, 7),# 最近一周
+    (re.compile(r"大前天"), 3, 1),             # 大前天那一天（3天前）
+    (re.compile(r"前天"), 2, 1),               # 前天那一天（2天前）
+    (re.compile(r"昨天|昨日"), 1, 1),          # 昨天那一天
+    (re.compile(r"今天|今日"), 0, 1),          # 今天
+    (re.compile(r"上周"), 7, 7),               # 上周（7-14天前那一周）
+    (re.compile(r"上个月|上月"), 30, 30),      # 上个月
+    (re.compile(r"前几天|前些天|最近"), 1, 7), # 最近一周
 ]
 
 

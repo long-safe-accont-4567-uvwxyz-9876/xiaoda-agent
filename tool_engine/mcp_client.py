@@ -94,6 +94,7 @@ class MCPClient:
 
         self._process: asyncio.subprocess.Process | None = None
         self._http_client: Any = None  # httpx.AsyncClient for SSE/HTTP
+        self._session_id: str | None = None  # MCP session ID (streamable-http)
         self._connected: bool = False
         self._next_id: int = 1
         self._pending: dict[int, asyncio.Future] = {}
@@ -126,6 +127,49 @@ class MCPClient:
             logger.warning("mcp.unknown_transport", transport=self._config.transport)
             return False
 
+    async def _do_handshake(self) -> None:
+        """执行 MCP 初始化握手: initialize → initialized → tools/list.
+
+        成功时注册发现的工具; 失败时抛出 RuntimeError.
+        """
+        # 1) initialize（uvx/npx 首次运行需下载安装包，给 60 秒超时）
+        init_result = await self._request({
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "xiaoda-agent", "version": "1.0.0"},
+            },
+        }, timeout=60.0)
+
+        if not init_result:
+            raise RuntimeError(
+                f"MCP server '{self.server_name}' initialize failed: no response")
+
+        logger.info("mcp_client.initialized", server=self.server_name,
+                    server_info=init_result.get("serverInfo", {}))
+
+        # 2) initialized notification
+        await self._notify({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+        })
+
+        # 3) tools/list
+        tools_result = await self._request({
+            "jsonrpc": "2.0",
+            "method": "tools/list",
+        }, timeout=30.0)
+
+        if not tools_result:
+            raise RuntimeError(
+                f"MCP server '{self.server_name}' tools/list failed: no response")
+
+        tools = tools_result.get("tools", [])
+        for tool_info in tools:
+            self._register_mcp_tool(tool_info)
+
     async def _connect_stdio(self) -> bool:
         """通过 stdio 传输连接 MCP 服务器（子进程方式）"""
         try:
@@ -147,41 +191,7 @@ class MCPClient:
             # Start reading loop
             self._read_task = asyncio.create_task(self._read_loop())
 
-            # 1) initialize（uvx/npx 首次运行需下载安装包，给 60 秒超时）
-            init_result = await self._request({
-                "jsonrpc": "2.0",
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": {"name": "xiaoda-agent", "version": "1.0.0"},
-                },
-            }, timeout=60.0)
-
-            if not init_result:
-                raise RuntimeError(f"MCP server '{self.server_name}' initialize failed: no response")
-
-            logger.info("mcp_client.initialized", server=self.server_name,
-                        server_info=init_result.get("serverInfo", {}))
-
-            # 2) initialized notification
-            await self._notify({
-                "jsonrpc": "2.0",
-                "method": "notifications/initialized",
-            })
-
-            # 3) tools/list
-            tools_result = await self._request({
-                "jsonrpc": "2.0",
-                "method": "tools/list",
-            }, timeout=30.0)
-
-            if not tools_result:
-                raise RuntimeError(f"MCP server '{self.server_name}' tools/list failed: no response")
-
-            tools = tools_result.get("tools", [])
-            for tool_info in tools:
-                self._register_mcp_tool(tool_info)
+            await self._do_handshake()
 
             self._connected = True
             self._available = True
@@ -203,16 +213,16 @@ class MCPClient:
                 headers=self._config.headers or {},
                 timeout=30.0,
             )
-            # Test connection with a simple request
-            resp = await self._http_client.get("/health")
-            if resp.status_code in (200, 404):  # 404 is OK, server might not have /health
-                self._connected = True
-                self._available = True
-                logger.info("mcp.sse_connected", url=self._config.url)
-                return True
+            await self._do_handshake()
+            self._connected = True
+            self._available = True
+            logger.info("mcp.sse_connected", url=self._config.url,
+                        tools=list(self._tool_names))
+            return True
         except Exception as e:
             logger.warning("mcp.sse_connect_failed", url=self._config.url, error=str(e))
-        return False
+            await self.stop()
+            return False
 
     async def _connect_http(self) -> bool:
         """通过 Streamable HTTP 传输连接 MCP 服务器"""
@@ -223,13 +233,16 @@ class MCPClient:
                 headers=self._config.headers or {},
                 timeout=30.0,
             )
+            await self._do_handshake()
             self._connected = True
             self._available = True
-            logger.info("mcp.http_connected", url=self._config.url)
+            logger.info("mcp.http_connected", url=self._config.url,
+                        tools=list(self._tool_names))
             return True
         except Exception as e:
             logger.warning("mcp.http_connect_failed", url=self._config.url, error=str(e))
-        return False
+            await self.stop()
+            return False
 
     async def start(self) -> None:
         """Start the MCP server (backward compatible wrapper for connect)."""
@@ -348,7 +361,13 @@ class MCPClient:
     # ── JSON-RPC helpers ────────────────────────────────────────
 
     async def _request(self, msg: dict, timeout: float = 30.0) -> dict | None:
-        """Send a JSON-RPC request and wait for the response."""
+        """Send a JSON-RPC request and wait for the response.
+
+        统一入口: 优先走 HTTP/SSE 传输, 其次走 stdio 传输。
+        """
+        if self._http_client is not None:
+            return await self._request_http(msg, timeout)
+
         if not self._process or self._process.returncode is not None:
             return None
 
@@ -376,8 +395,104 @@ class MCPClient:
             self._pending.pop(msg_id, None)
             return None
 
+    async def _request_http(self, msg: dict, timeout: float = 30.0) -> dict | None:
+        """通过 HTTP/SSE 传输发送 JSON-RPC 请求并等待响应。"""
+        msg_id = self._next_id
+        self._next_id += 1
+        msg["id"] = msg_id
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        if self._session_id:
+            headers["Mcp-Session-Id"] = self._session_id
+
+        try:
+            async with self._http_client.stream(
+                "POST",
+                self._config.url,
+                json=msg,
+                headers=headers,
+                timeout=timeout,
+            ) as resp:
+                if resp.status_code >= 400:
+                    body = await resp.aread()
+                    logger.error("mcp_client.http_error_status",
+                                 server=self.server_name,
+                                 status=resp.status_code,
+                                 body=body.decode(errors="replace")[:500])
+                    return None
+
+                # 捕获服务器返回的 session id
+                session_id = resp.headers.get("mcp-session-id")
+                if session_id:
+                    self._session_id = session_id
+
+                content_type = resp.headers.get("content-type", "")
+
+                if "text/event-stream" in content_type:
+                    # SSE 事件流: 解析事件找到匹配 id 的结果
+                    return await self._parse_sse_stream(resp, msg_id)
+                else:
+                    # 普通 JSON 响应
+                    body = await resp.aread()
+                    try:
+                        data = json.loads(body)
+                    except (json.JSONDecodeError, ValueError) as e:
+                        logger.error("mcp_client.http_json_parse_error",
+                                     server=self.server_name, error=str(e))
+                        return None
+                    if "error" in data:
+                        return {"error": data["error"]}
+                    return data.get("result")
+        except Exception as e:
+            logger.error("mcp_client.http_request_error",
+                         server=self.server_name, error=str(e))
+            return None
+
+    async def _parse_sse_stream(self, resp: Any, msg_id: int) -> dict | None:
+        """解析 SSE 事件流, 返回与 msg_id 匹配的 result 字段。"""
+        data_lines: list[str] = []
+        async for line in resp.aiter_lines():
+            if line.startswith("data:"):
+                data_lines.append(line[5:].lstrip())
+            elif line == "":
+                # 事件边界 — 尝试解析已累积的 data
+                if data_lines:
+                    result = self._match_sse_data(data_lines, msg_id)
+                    if result is not None:
+                        return result
+                    data_lines = []
+        # 处理流结束时剩余的 data
+        if data_lines:
+            result = self._match_sse_data(data_lines, msg_id)
+            if result is not None:
+                return result
+        return None
+
+    @staticmethod
+    def _match_sse_data(data_lines: list[str], msg_id: int) -> dict | None:
+        """解析单个 SSE 事件的 data 行, 若 id 匹配则返回 result。"""
+        try:
+            data = json.loads("\n".join(data_lines))
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if data.get("id") == msg_id:
+            if "error" in data:
+                return {"error": data["error"]}
+            return data.get("result")
+        return None
+
     async def _notify(self, msg: dict) -> None:
-        """Send a JSON-RPC notification (no id, no response expected)."""
+        """Send a JSON-RPC notification (no id, no response expected).
+
+        统一入口: 优先走 HTTP/SSE 传输, 其次走 stdio 传输。
+        """
+        if self._http_client is not None:
+            await self._notify_http(msg)
+            return
+
         if not self._process or self._process.returncode is not None:
             return
 
@@ -387,6 +502,29 @@ class MCPClient:
             await self._process.stdin.drain()
         except Exception as e:
             logger.error("mcp_client.notify_error", server=self.server_name, error=str(e))
+
+    async def _notify_http(self, msg: dict) -> None:
+        """通过 HTTP/SSE 传输发送 JSON-RPC 通知 (无响应)。"""
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        if self._session_id:
+            headers["Mcp-Session-Id"] = self._session_id
+        try:
+            resp = await self._http_client.post(
+                self._config.url,
+                json=msg,
+                headers=headers,
+                timeout=10.0,
+            )
+            # 通知接受 202 Accepted 或 200 OK
+            if resp.status_code not in (200, 202):
+                logger.warning("mcp_client.http_notify_status",
+                               server=self.server_name, status=resp.status_code)
+        except Exception as e:
+            logger.error("mcp_client.http_notify_error",
+                         server=self.server_name, error=str(e))
 
     async def _read_loop(self) -> None:
         """Continuously read lines from stdout and resolve pending futures."""

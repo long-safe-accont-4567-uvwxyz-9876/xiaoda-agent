@@ -167,7 +167,6 @@ async def get_keys() -> Any:
             "required": True,
             "configured": bool(val.strip()),
             "masked_value": _mask_key_value(val),
-            "raw_value": val,
         })
 
     for item in OPTIONAL_KEYS:
@@ -182,7 +181,6 @@ async def get_keys() -> Any:
             "required": False,
             "configured": bool(val.strip()),
             "masked_value": _mask_key_value(val),
-            "raw_value": val,
         })
 
     return Envelope(data={"keys": keys})
@@ -502,7 +500,7 @@ async def save_keys(body: dict) -> Any:
     # 当 test_required=true 时，对必填 Key 逐一测试
     test_required = body.get("test_required", False)
     if test_required:
-        test_error = _test_required_keys(updates, REQUIRED_KEYS)
+        test_error = await _test_required_keys(updates, REQUIRED_KEYS)
         if test_error is not None:
             return test_error
 

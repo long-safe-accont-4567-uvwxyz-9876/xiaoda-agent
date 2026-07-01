@@ -771,6 +771,16 @@ class SubAgent:
         return await self._tts.synthesize(text, voice=self.config.voice_ref, style=style, emotion=emotion)
 
 
+# RouterEngine agent name → task_type 反向映射
+# 用于 classify_task 委托 RouterEngine 后保持返回格式一致（task_type 字符串）
+_AGENT_TO_TASK_TYPE = {
+    "yinlang": "security",
+    "nike": "debug",
+    "xilian": "info_search",
+    "keli": "emotional",
+}
+
+
 class AgentDispatcher:
     def __init__(self, tts: TTSEngine,
                  tool_executor: ToolExecutor | None = None,
@@ -783,6 +793,7 @@ class AgentDispatcher:
         self._delegate_callback = delegate_callback
         self._core = core
         self._agents: dict[str, SubAgent] = {}
+        self._router_engine = None  # 懒加载 RouterEngine（权威路由源），由 _get_router_engine 初始化
 
     async def register(self, config: SubAgentConfig) -> bool:
         if config.name in self._agents:
@@ -943,13 +954,39 @@ class AgentDispatcher:
             "general": "keli",
         }
 
+    def _get_router_engine(self):
+        """懒加载 RouterEngine 实例（无 belief_router，仅规则路由）。
+
+        RouterEngine 作为权威路由源：classify_task 优先委托其决策，
+        仅当其返回默认（nahida，无明确路由信号）时才回退到本地关键词分类。
+        """
+        if self._router_engine is None:
+            from core.router_engine import RouterEngine
+            self._router_engine = RouterEngine()
+        return self._router_engine
+
     def classify_task(self, user_input: str) -> str:
         """根据用户输入自动分类任务类型
+
+        已委托给 RouterEngine 作为权威路由源：先调用 RouterEngine.decide()，
+        当其给出明确子代理路由（非 nahida）时反推 task_type；仅当 RouterEngine
+        返回默认（nahida，表示无明确路由信号）时，才回退到本地关键词分类。
 
         :param user_input: 用户输入文本
         :returns: 任务类型（frontend/backend/debug/security/test/info_search/hardware/emotional/general）
         """
-        import re
+        # 委托给 RouterEngine（权威路由源）：明确子代理路由时反推 task_type
+        try:
+            engine = self._get_router_engine()
+            decision = engine.decide(user_input)
+            for agent in decision.agent_names:
+                task_type = _AGENT_TO_TASK_TYPE.get(agent)
+                if task_type:
+                    return task_type
+        except Exception as e:
+            logger.warning("classify_task.router_engine_delegate_failed", error=str(e)[:200])
+
+        # 回退：本地关键词分类（RouterEngine 无明确路由信号时）
         text_lower = user_input.lower()
 
         # 关键词分类

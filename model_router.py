@@ -432,18 +432,36 @@ class ModelRouter:
         extra_headers.setdefault("anthropic-beta", "prompt-caching-2024-07-31")
         return extra_headers
 
+    def _is_client_configured(self, provider: str) -> bool:
+        """检查指定 provider 的客户端是否已配置（有 API key 且有 base_url）。
+
+        D12: 降级链在调用前用此方法判断目标客户端是否可用，避免向未初始化
+        的客户端发起无意义调用导致兜底失效。
+        """
+        if provider == "mimo":
+            return self._client is not None
+        if provider == "agnes":
+            return self._agnes_client is not None
+        return provider in getattr(self, "_custom_clients", {})
+
     async def _try_fallback_chain(self, e: Exception, task_type: str,
                                   messages: list[dict], temperature: float,
                                   stream: bool, tools: list[dict] | None,
                                   tool_choice: str | None, timeout: int,
                                   user_openid: str, session_id: str,
                                   extra_headers: dict | None) -> str | object | None:
-        """多级 fallback：FALLBACK_ROUTE → Agnes → 自定义 provider。全部失败返回 None。"""
+        """多级 fallback：FALLBACK_ROUTE → Agnes → 自定义 provider。全部失败返回 None。
+
+        每一级降级前都会检查目标客户端是否已配置（有 API key 且有 base_url），
+        未配置的目标会被跳过，避免向未初始化的客户端发起无意义调用。
+        """
         # 1. 降级到更便宜的模型
         fallback_type = FALLBACK_ROUTE.get(task_type)
         if fallback_type:
             fallback_config = ROUTE_TABLE.get(fallback_type)
-            if fallback_config:
+            fallback_provider = fallback_config.get("client", "mimo") if fallback_config else "mimo"
+            # D12: 降级前检查目标客户端是否已配置，未配置则跳过该降级目标
+            if fallback_config and self._is_client_configured(fallback_provider):
                 logger.warning("router.fallback",
                                original_task=task_type, fallback_task=fallback_type,
                                error=f"{type(e).__name__}: {e}")
@@ -459,12 +477,16 @@ class ModelRouter:
                     logger.error("router.fallback_failed",
                                  fallback_task=fallback_type,
                                  error=f"{type(fb_err).__name__}: {fb_err}")
+            else:
+                logger.warning("router.fallback_skipped",
+                               original_task=task_type, fallback_task=fallback_type,
+                               reason="target client not configured")
 
         # 2. 尝试 Agnes 作为最终降级
-        if task_type not in ("chat_agnes",) and self._agnes_client:
+        if task_type not in ("chat_agnes",) and self._is_client_configured("agnes"):
             try:
                 agnes_config = ROUTE_TABLE.get("chat_agnes")
-                if agnes_config and self._agnes_client:
+                if agnes_config:
                     logger.warning("router.agnes_fallback", original_task=task_type)
                     agnes_tools = self._filter_tools_for_model(tools, agnes_config.get("model", ""))
                     return await self._route_with_retry(
@@ -547,7 +569,13 @@ class ModelRouter:
             )
             if fb_result is not None:
                 return fb_result
-            raise
+            # D12: 所有降级目标均不可用，抛出明确异常而非裸 re-raise，
+            # 避免上层因原始错误信息不明确而无法判断兜底已耗尽。
+            raise LLMError(
+                f"所有降级目标均不可用 (task={task_type}): {type(e).__name__}: {e}",
+                error_code=ErrorCodeEnum.E_LLM001,
+                cause=e,
+            ) from e
 
     def _apply_prompt_caching(self, provider: str, messages: list[dict]) -> list[dict]:
         """应用 Prompt Caching（MiMo 直接启用；其他 provider 在 PROMPT_CACHING_ENABLED 时尝试）。"""

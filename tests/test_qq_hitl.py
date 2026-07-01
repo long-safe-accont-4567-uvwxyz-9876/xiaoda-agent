@@ -126,7 +126,7 @@ async def test_timeout():
     status = await ch.request_approval(req, is_owner=False)
     assert status == ApprovalStatus.TIMEOUT
     # 超时后 pending 应被清理
-    assert "timeout-user" not in ch._pending
+    assert req.id not in ch._pending
     # 审计日志记录 timeout
     assert any(e["status"] == "timeout" for e in ch._audit_log)
 
@@ -148,7 +148,7 @@ async def test_invalid_reply_ignored():
     matched = await ch.handle_user_reply("invalid-user", "今天天气怎么样")
     assert matched is False
     # 请求仍在 pending
-    assert "invalid-user" in ch._pending
+    assert req.id in ch._pending
 
     # 清理：用取消结束
     await ch.handle_user_reply("invalid-user", "取消")
@@ -270,11 +270,11 @@ async def test_pending_cleared_after_decision():
 
     task = asyncio.create_task(ch.request_approval(req, is_owner=False))
     await asyncio.sleep(0.05)
-    assert "clear-user" in ch._pending
+    assert req.id in ch._pending
 
     await ch.handle_user_reply("clear-user", "取消")
     await task
 
     # 决定后 pending 和 waiters 应为空
-    assert "clear-user" not in ch._pending
-    assert "clear-user" not in ch._waiters
+    assert req.id not in ch._pending
+    assert req.id not in ch._waiters

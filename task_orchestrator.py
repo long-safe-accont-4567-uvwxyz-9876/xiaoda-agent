@@ -250,6 +250,15 @@ class RouterNode:
         return ["nahida"]
 
     @staticmethod
+    def _has_mention(user_input: str) -> bool:
+        """检测用户输入是否包含 @mention（高置信度路由信号）。
+
+        复用 RouterEngine 的 MENTION_MAP，保持 @mention 路由的最高优先级与一致性。
+        """
+        from core.router_engine import MENTION_MAP
+        return any(mention in user_input for mention in MENTION_MAP)
+
+    @staticmethod
     def _detect_parallel_targets(user_input: str) -> list[tuple[str, str]] | None:
         """检测用户输入是否需要多子代理并行（无依赖）。
 
@@ -380,6 +389,23 @@ class RouterNode:
             targets = [t for t in rule_result if t in agent_configs or t == "nahida"]
             if not targets:
                 targets = ["nahida"]
+
+            # 置信度评估：@mention 匹配高置信度（0.9），关键词正则匹配低置信度（0.5）
+            _rule_confidence = 0.9 if self._has_mention(user_input) else 0.5
+
+            # 低置信度触发 LLM 路由升级（LLM 准确率更高，优先于低置信度规则结果）
+            if _rule_confidence < 0.6:
+                try:
+                    llm_targets = await self._llm_route_targets(user_input, agent_configs)
+                    if llm_targets:
+                        llm_valid = [t for t in llm_targets if t in agent_configs or t == "nahida"]
+                        if llm_valid:
+                            self._route_cache.put(user_input, llm_valid)
+                            await self._notify_route_progress(state, llm_valid, agent_configs, "LLM路由升级")
+                            return self._build_route_dict(llm_valid)
+                except Exception as e:
+                    logger.warning("route.llm_upgrade_failed", error=str(e)[:200])
+
             self._route_cache.put(user_input, targets)
             await self._notify_route_progress(state, targets, agent_configs, "路由分析")
             return self._build_route_dict(targets)

@@ -142,15 +142,17 @@ class PortraitManager:
 
         try:
             data = _repair_and_extract_json(raw)
-            if data is None:
+            if data is None or not isinstance(data, dict):
                 logger.warning("portrait.json_parse_failed", preview=raw[:100])
-                return None
+                data = {}
         except Exception:
             logger.warning("portrait.json_parse_failed", preview=raw[:100])
-            return None
+            data = {}
 
-        portrait_text = data.get("portrait", "").strip()
-        changes = data.get("changes", "").strip()
+        portrait_val = data.get("portrait", "")
+        portrait_text = (portrait_val if isinstance(portrait_val, str) else "").strip()
+        changes_val = data.get("changes", "")
+        changes = (changes_val if isinstance(changes_val, str) else "").strip()
         if not portrait_text or len(portrait_text) < 50:
             logger.warning("portrait.too_short", length=len(portrait_text))
             return None
