@@ -299,13 +299,13 @@ class XPSystem:
         return self._states[user_id]
 
     def _evict_oldest(self) -> None:
-        """F6: 淘汰最久未活跃的用户状态（按 first_seen_at 排序，淘汰最早的 10%）"""
+        """F6: 淘汰最久未活跃的用户状态（按 last_chat_at 排序，淘汰最久未活跃的 10%）"""
         if len(self._states) < self._max_states:
             return
         evict_count = max(1, len(self._states) // 10)
         sorted_states = sorted(
             self._states.items(),
-            key=lambda kv: kv[1].first_seen_at
+            key=lambda kv: kv[1].last_chat_at
         )
         for uid, _ in sorted_states[:evict_count]:
             self._states.pop(uid, None)

@@ -200,11 +200,11 @@ async def login(req: LoginRequest, request: Request) -> Any:
             remaining = int(lock_until - time.time())
             raise HTTPException(429, f"登录尝试过多，请 {remaining} 秒后重试")
 
-    # No password set: only allow private IPs
+    # No password set: only allow loopback (127.0.0.1) — block Docker bridge & LAN
     if not password:
-        if not _is_private_ip(client_ip):
-            raise HTTPException(403, "Public access denied without password")
-        # Auto-login for LAN
+        if client_ip != "127.0.0.1" and client_ip != "::1":
+            raise HTTPException(403, "Public/LAN access denied without password. Set WEBUI_PASSWORD in .env")
+        # Auto-login for localhost only
         token, expiry = _issue_token()
         return Envelope(data=LoginResponse(token=token, expires_at=expiry))
 

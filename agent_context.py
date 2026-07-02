@@ -65,6 +65,7 @@ class AgentContext:
         # 解决群聊场景下多用户共享单例 context 导致的串话和隐私泄露
         self._user_histories: dict[str, list[dict]] = {}
         self._user_summaries: dict[str, str] = {}
+        self._user_buffers: dict[str, list[dict]] = {}  # 每用户独立的压缩暂存区
         self._current_user_id: str = ""
 
     async def switch_user_context(self, user_id: str) -> None:
@@ -79,13 +80,15 @@ class AgentContext:
         if not user_id or user_id == self._current_user_id:
             return
         async with self._lock:
-            # 保存当前用户上下文
+            # 保存当前用户上下文（含压缩暂存区）
             if self._current_user_id:
                 self._user_histories[self._current_user_id] = list(self.history)
                 self._user_summaries[self._current_user_id] = self._compressed_summary
-            # 加载目标用户上下文
+                self._user_buffers[self._current_user_id] = list(self._pre_compressed_buffer)
+            # 加载目标用户上下文（含压缩暂存区）
             self.history = list(self._user_histories.get(user_id, []))
             self._compressed_summary = self._user_summaries.get(user_id, "")
+            self._pre_compressed_buffer = list(self._user_buffers.get(user_id, []))
             self._current_user_id = user_id
             # memory_retrieval 是请求级的，切换用户时清空避免串味
             self.memory_retrieval = None

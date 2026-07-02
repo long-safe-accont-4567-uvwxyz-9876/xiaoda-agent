@@ -22,6 +22,7 @@ export class WsClient {
       return
     }
     this._unauthorized = false
+    this.reconnectAttempts = 0  // 重置重连计数器，避免 disconnect() 设置的 999 残留
     this.disconnect()
     const wsUrl = `${this.url}?token=${token}`
     this.ws = new WebSocket(wsUrl)

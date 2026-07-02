@@ -138,15 +138,21 @@ class MailPoller:
                 await self._process_one_email(msg_id, from_email, from_name,
                                               msg.get("subject", ""), msg.get("snippet", ""),
                                               reply_channel)
+            except asyncio.TimeoutError:
+                logger.warning("mail.poller.process_timeout id={}", msg_id)
+                # 超时的邮件不标记为已处理，下次轮询会重试
+                continue
             except Exception as e:
                 logger.warning("mail.poller.process_failed id={} error={}", msg_id, str(e)[:200])
 
             self._processed_ids.add(msg_id)
             self._daily_count += 1
 
-            # 裁剪去重集合，防止长时间运行内存膨胀
+            # 裁剪去重集合：保留最近 2000 条，避免全量清空导致重复处理
             if len(self._processed_ids) > 5000:
-                self._processed_ids.clear()
+                # 转为列表保留最新的 2000 条
+                recent = list(self._processed_ids)[-2000:]
+                self._processed_ids = set(recent)
 
             if self._daily_count >= int(self.cfg.get("mail.max_per_day", 50)):
                 break

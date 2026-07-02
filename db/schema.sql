@@ -358,8 +358,8 @@ CREATE INDEX IF NOT EXISTS idx_episodic_timestamp_importance
     ON episodic_memories(timestamp DESC, importance DESC);
 CREATE INDEX IF NOT EXISTS idx_episodic_session_created
     ON episodic_memories(session_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_conversation_session_turn
-    ON conversation_logs(session_id, turn_number);
+CREATE INDEX IF NOT EXISTS idx_conversation_session
+    ON conversation_logs(session_id);
 CREATE INDEX IF NOT EXISTS idx_api_usage_created
     ON api_usage(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_session_entries_session

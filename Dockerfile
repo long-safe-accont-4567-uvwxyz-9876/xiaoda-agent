@@ -49,6 +49,11 @@ RUN mkdir -p /data/agently-cli/.agently-cli
 ENV KIOXIA_DATA_DIR=/data
 RUN mkdir -p /data/db /data/logs /data/credentials /data/stickers /data/klee-stickers /data/files /data/config
 
+# 创建非特权用户并设置目录权限
+RUN useradd -r -u 1000 -g users appuser \
+    && chown -R appuser:users /app /data
+USER appuser
+
 # 默认端口（可通过环境变量 WEBUI_PORT 覆盖）
 ENV WEBUI_PORT=8082
 EXPOSE 8082

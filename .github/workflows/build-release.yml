@@ -120,7 +120,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install pyinstaller
-          pip install -r requirements.txt || true
+          pip install -r requirements.txt
           pip install fastapi uvicorn[standard] websockets python-multipart sse-starlette httpx Pillow numpy rich python-dotenv loguru openai aiosqlite pydantic jieba pyyaml pilk pywebview
 
       - name: Verify pilk installed (SILK codec for voice messages)
@@ -435,8 +435,19 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.licenses=MIT
 
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: pip install pytest pytest-asyncio
+      - run: python -m pytest tests/ -x -q --timeout=60
+
   release:
-    needs: build
+    needs: [build, test]
     # Only create release on tag push or manual dispatch, NOT on main branch push
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest

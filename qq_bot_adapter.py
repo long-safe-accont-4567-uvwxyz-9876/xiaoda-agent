@@ -1116,15 +1116,73 @@ class AIQQBot(botpy.Client):
 
     async def _send_streaming_reply_with_sticker(self, message: Any, clean_reply: str,
                                                    result: ProcessResult) -> None:
-        """流式发送长回复（内部按 ~300 字符切片，避免切断代码块/URL），并在最后一片后发送表情包。"""
-        # 流式发送整个回复
-        await self._send_streaming_reply(message, clean_reply)
-        # 表情包发送（在最后一片后发送）
-        if result.sticker_path:
+        """流式发送长回复（内部按 ~300 字符切片，避免切断代码块/URL），最后一片与表情包合并发送。"""
+        if not result.sticker_path:
+            await self._send_streaming_reply(message, clean_reply)
+            return
+
+        segments = self._split_text_for_streaming(clean_reply, chunk_size=300)
+        if len(segments) <= 1:
+            # 短回复：文字+表情包合并为一条消息发送
             try:
-                await self._send_reply_with_media(message, "", image_path=result.sticker_path)
+                await self._send_reply_with_media(message, clean_reply, image_path=result.sticker_path)
             except Exception as e:
                 logger.warning("qq_bot.sticker_send_failed", error=str(e))
+                await message.reply(content=clean_reply, msg_seq=_next_msg_seq())
+            return
+
+        # 长回复：前 N-1 片流式发送，最后一片与表情包合并发送
+        is_group = isinstance(message, GroupMessage)
+        group_openid = getattr(message, "group_openid", "") if is_group else ""
+
+        async def _send_segment(text: str, use_passive: bool) -> None:
+            if is_group and not use_passive:
+                await self.api.post_group_message(
+                    group_openid=group_openid,
+                    msg_type=0, content=text,
+                    msg_seq=_next_msg_seq(),
+                )
+            else:
+                try:
+                    await message.reply(content=text, msg_seq=_next_msg_seq())
+                except Exception as e:
+                    if is_group and ("被动回复" in str(e) or "超过限制" in str(e)):
+                        logger.info("qq_bot.stream_passive_limited_switching_to_proactive")
+                        await self.api.post_group_message(
+                            group_openid=group_openid,
+                            msg_type=0, content=text,
+                            msg_seq=_next_msg_seq(),
+                        )
+                    else:
+                        raise
+
+        # 发送前 N-1 片
+        for i, seg in enumerate(segments[:-1]):
+            try:
+                if i > 0:
+                    await asyncio.sleep(random.uniform(0.8, 1.2))
+                use_passive = (not is_group) or (i == 0)
+                await _send_segment(seg, use_passive=use_passive)
+            except Exception as e:
+                logger.warning("qq_bot.stream_segment_failed", error=str(e))
+                # 异常恢复：合并剩余内容发送
+                remaining = "".join(segments[i:])
+                try:
+                    await _send_segment(remaining, use_passive=False)
+                except Exception as e2:
+                    logger.error("qq_bot.stream_recovery_failed", error=str(e2))
+                return
+
+        # 最后一片与表情包合并发送（msg_type=7 支持图文混排）
+        last_seg = segments[-1]
+        try:
+            await self._send_reply_with_media(message, last_seg, image_path=result.sticker_path)
+        except Exception as e:
+            logger.warning("qq_bot.sticker_with_last_segment_failed", error=str(e))
+            try:
+                await _send_segment(last_seg, use_passive=False)
+            except Exception:
+                pass
 
     async def _send_fallback_reply_with_sticker(self, message: Any, clean_reply: str,
                                                   result: ProcessResult) -> None:

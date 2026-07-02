@@ -393,7 +393,7 @@ class MessageProcessorMixin:
         """快速路径：注入 FTS 记忆和安抚记忆到 messages。"""
         # 降级检查: L2+ 关闭记忆检索, 直接返回不注入
         if not get_degradation_strategy().is_feature_available("memory_search"):
-            return
+            return messages
         _is_greeting = bool(re.match(
             r'^(早[上安]?|中午|下午|晚上|晚安|你好|哈喽|hi|hello|hey)[好呀～~！!。.\s]*$',
             user_input.strip(), re.IGNORECASE))

@@ -8,6 +8,7 @@ __pycache__/
 *.sqlite3
 models/*.nb
 .DS_Store
+.dbg/
 Thumbs.db
 *.log
 .venv/

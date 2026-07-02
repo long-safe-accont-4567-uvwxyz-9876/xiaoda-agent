@@ -21,8 +21,8 @@ const testingAll = ref(false)
 
 const testStatuses = reactive<Record<string, TestStatus>>({})
 const testMessages = reactive<Record<string, string>>({})
-const testedRequiredKeys = ref<Set<string>>(new Set())
-const modifiedKeys = ref<Set<string>>(new Set())
+const testedRequiredKeys = reactive(new Set<string>())
+const modifiedKeys = reactive(new Set<string>())
 
 // 免责协议状态
 const disclaimerAgreed = ref(false)        // 是否已同意（来自后端/localStorage）
@@ -92,20 +92,20 @@ const optionalKeys = computed(() => keys.value.filter(k => !k.required))
 
 function handleUpdate(key: string, value: string) {
   updates.value[key] = value
-  modifiedKeys.value.add(key)
+  modifiedKeys.add(key)
   // Reset test status when value changes
   if (testStatuses[key] === 'passed' || testStatuses[key] === 'failed') {
     testStatuses[key] = 'untested'
     testMessages[key] = ''
-    testedRequiredKeys.value.delete(key)
+    testedRequiredKeys.delete(key)
   }
   // SiliconFlow Key 联动：填一个自动填充另一个（如果另一个为空）
   if (key === 'EMBED_API_KEY' && value && !updates.value['SILICONFLOW_API_KEY']) {
     updates.value['SILICONFLOW_API_KEY'] = value
-    modifiedKeys.value.add('SILICONFLOW_API_KEY')
+    modifiedKeys.add('SILICONFLOW_API_KEY')
   } else if (key === 'SILICONFLOW_API_KEY' && value && !updates.value['EMBED_API_KEY']) {
     updates.value['EMBED_API_KEY'] = value
-    modifiedKeys.value.add('EMBED_API_KEY')
+    modifiedKeys.add('EMBED_API_KEY')
   }
 }
 
@@ -137,17 +137,17 @@ async function handleTestKey(keyName: string) {
       // Track tested required key
       const keyItem = keys.value.find(k => k.key === keyName)
       if (keyItem?.required) {
-        testedRequiredKeys.value.add(keyName)
+        testedRequiredKeys.add(keyName)
       }
     } else {
       testStatuses[keyName] = 'failed'
       testMessages[keyName] = result.message || t('setupWizard.testFail')
-      testedRequiredKeys.value.delete(keyName)
+      testedRequiredKeys.delete(keyName)
     }
   } catch (e: any) {
     testStatuses[keyName] = 'failed'
     testMessages[keyName] = e.message || t('setupWizard.testFailed')
-    testedRequiredKeys.value.delete(keyName)
+    testedRequiredKeys.delete(keyName)
   }
 }
 
@@ -169,15 +169,15 @@ const allRequiredTestedAndPassed = computed(() => {
     const hasValue = k.configured || updates.value[k.key]
     if (!hasValue) return false
     // Only require testing for keys that were modified by the user
-    if (modifiedKeys.value.has(k.key)) {
-      return testedRequiredKeys.value.has(k.key) && testStatuses[k.key] === 'passed'
+    if (modifiedKeys.has(k.key)) {
+      return testedRequiredKeys.has(k.key) && testStatuses[k.key] === 'passed'
     }
     // Already configured keys that weren't modified are considered OK
     return true
   })
 })
 
-const hasUpdates = computed(() => modifiedKeys.value.size > 0)
+const hasUpdates = computed(() => modifiedKeys.size > 0)
 
 function handleDisclaimerScroll(e: Event) {
   const el = e.target as HTMLElement
@@ -217,7 +217,7 @@ async function handleSave() {
   try {
     // Only save modified keys
     const keysToSave: Record<string, string> = {}
-    for (const key of modifiedKeys.value) {
+    for (const key of modifiedKeys) {
       keysToSave[key] = updates.value[key]
     }
     await api.saveSetupKeys(keysToSave, true)

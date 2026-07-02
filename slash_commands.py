@@ -83,7 +83,7 @@ class SlashCommandHandler:
         args = parts[1].strip() if len(parts) > 1 else ""
 
         if self.is_owner_command(command):
-            if self._security and not self._security.is_owner(user_id):
+            if self._security is None or not self._security.is_owner(user_id):
                 return "这个命令只有主人才能用哦～"
 
         handlers = {

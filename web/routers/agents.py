@@ -294,7 +294,7 @@ async def list_stickers(name: str, request: Request, _user: str = Depends(get_cu
 
 
 @router.get("/agents/{name}/stickers/file/{filename}")
-async def serve_sticker(name: str, filename: str, request: Request) -> Any:
+async def serve_sticker(name: str, filename: str, request: Request, _user: str = Depends(get_current_user)) -> Any:
     """提供表情包图片文件。"""
     from fastapi.responses import FileResponse
     sticker_dir = _resolve_sticker_dir(name, request)

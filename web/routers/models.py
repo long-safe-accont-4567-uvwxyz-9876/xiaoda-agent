@@ -106,6 +106,11 @@ async def create_provider(body: dict, request: Request) -> Any:
         raise HTTPException(400, "format 必须是 openai 或 anthropic")
     if not base_url.startswith(("http://", "https://")):
         raise HTTPException(400, "base_url 必须是 http(s) URL")
+    # SSRF 防护：校验 URL 不指向内网/元数据服务
+    from security.ssrf_guard import validate_url
+    allowed, reason = validate_url(base_url)
+    if not allowed:
+        raise HTTPException(400, f"base_url 安全检查失败: {reason}")
     cfg = _cfg(request)
     if pid in (cfg.get("models.providers", {}) or {}):
         raise HTTPException(400, f"provider {pid} 已存在")

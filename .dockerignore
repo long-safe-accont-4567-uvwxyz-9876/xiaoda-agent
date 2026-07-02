@@ -53,3 +53,9 @@ docs/
 market/.cache
 assets/stickers/nahida_backup/
 tests/benchmark_results.json
+.dbg/
+scripts/
+.github/
+*.md
+pyproject.toml
+pytest.ini

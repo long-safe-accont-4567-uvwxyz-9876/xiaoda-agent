@@ -134,8 +134,8 @@ async def export_session(session_id: str, request: Request) -> Any:
         raise HTTPException(401, "Missing or invalid Authorization header")
     # 验证 token
     try:
-        from web.auth import _verify_token
-        _verify_token(token)
+        from web.routers.auth import _validate_token
+        _validate_token(token)
     except Exception:
         raise HTTPException(401, "Invalid or expired token")
     core = request.app.state.core

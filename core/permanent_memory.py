@@ -154,7 +154,15 @@ class PermanentMemoryManager:
                 f"users={len(self._memories)}"
             )
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
-            logger.warning(f"PermanentMemory.load corrupted: {e}")
+            logger.error(f"PermanentMemory.load FAILED — file corrupted: {e}. Backing up and starting fresh.")
+            # 备份损坏的文件，避免数据被覆盖后无法恢复
+            import shutil
+            backup = self._memories_path.with_suffix('.json.corrupt')
+            try:
+                shutil.copy2(self._memories_path, backup)
+                logger.warning(f"PermanentMemory backed up corrupt file to {backup}")
+            except Exception:
+                pass
             self._memories = {}
 
     def _save(self) -> None:
