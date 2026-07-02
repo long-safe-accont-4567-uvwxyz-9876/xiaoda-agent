@@ -615,23 +615,17 @@ class AIQQBot(botpy.Client):
                 if await self.im_approval.handle_user_reply(approval_user, content):
                     return
 
-            # 群聊被动回复有次数限制（5分钟内最多2次）
-            # 先用 1 次被动回复发"收到啦"给用户即时反馈，剩余配额留给最终回复
+            # 群聊被动回复 5 分钟内最多 2 次，无主动消息权限（40034105）
+            # 策略：每次都先发 ACK（1 次配额），再用单条发送回复（1 次配额）
+            # status_callback 静默（不消耗配额）
+            async def status_notify(msg: str) -> None:
+                pass
+
+            # 立即发送 ACK（用户要求每次回复都保留"纳西妲收到啦，正在想～🌿"）
             try:
                 await message.reply(content="纳西妲收到啦，正在想～🌿", msg_seq=_next_msg_seq())
-            except Exception as _e:
-                logger.debug("qq_bot.ack_reply_failed", error=str(_e))
-
-            async def status_notify(msg: str) -> None:
-                # 后续状态通知用主动消息，避免消耗被动回复配额
-                try:
-                    await self.api.post_group_message(
-                        group_openid=message.group_openid,
-                        msg_type=0, content=msg,
-                        msg_seq=_next_msg_seq(),
-                    )
-                except Exception as _e:
-                    logger.debug("qq_bot.status_notify_failed", error=str(_e))
+            except Exception as e:
+                logger.debug("qq_bot.ack_send_failed", error=str(e))
 
             result = await asyncio.wait_for(
                 self.agent.process(user_input, user_id=user_id, source="qq_group",
@@ -691,7 +685,7 @@ class AIQQBot(botpy.Client):
                     )
                     file_info = media.file_info
                 try:
-                    # 先尝试被动回复（需要 msg_id）
+                    # 被动回复（需要 msg_id）；无主动消息权限，超限直接失败
                     await self.api.post_group_message(
                         group_openid=group_openid, msg_id=message.id,
                         msg_type=7, content=reply,
@@ -699,13 +693,9 @@ class AIQQBot(botpy.Client):
                     )
                 except Exception as e:
                     if "被动回复" in str(e) or "超过限制" in str(e):
-                        # 被动回复超限，改用主动消息（不需要 msg_id）
-                        logger.info("qq_bot.passive_reply_limited_switching_to_proactive")
-                        await self.api.post_group_message(
-                            group_openid=group_openid,
-                            msg_type=7, content=reply,
-                            media={"file_info": file_info}, msg_seq=_next_msg_seq()
-                        )
+                        # 被动回复超限，无主动消息权限，记录后跳过（不再降级为主动消息）
+                        logger.warning("qq_bot.group_media_passive_limited_no_proactive",
+                                       error=str(e))
                     else:
                         raise
             else:
@@ -979,13 +969,11 @@ class AIQQBot(botpy.Client):
     async def _send_streaming_reply(self, message: Any, full_text: str) -> None:
         """流式分片发送回复，模拟打字效果。
 
-        - 短回复（< 400 字符）直接发送单片
-        - 长回复切片为 ~300 字符段，每片间隔 800-1200ms 随机延迟
-        - 避免切断 markdown 代码块和 URL
+        - 短回复直接发送单片
+        - 群聊：按 QQ_GROUP_MSG_BYTE_LIMIT 切片（最多 4 片），全部用 message.reply（被动回复），
+          无主动消息降级，不加衔接词。ACK 占 1 次配额，4 片占 4 次，总共 5 次（官方上限）
+        - C2C：按 ~300 字符切片，每片间隔 800-1200ms，避免切断代码块/URL
         - 异常时保留已发送片，剩余内容合并为最终片发送
-        - 群聊场景：第一片用被动回复（message.reply），后续片用主动消息
-          （post_group_message 不带 msg_id），避免触发 5 分钟 2 次被动回复限制；
-          被动回复超限时自动降级为主动消息
 
         Args:
             message: QQ Bot 消息对象
@@ -995,46 +983,34 @@ class AIQQBot(botpy.Client):
             return
 
         stream_start = time.monotonic()
-        segments = self._split_text_for_streaming(full_text, chunk_size=300)
         total_len = len(full_text)
-
-        # 群聊被动回复有次数限制（5分钟内最多2次），需区分被动/主动发送
         is_group = isinstance(message, GroupMessage)
         group_openid = getattr(message, "group_openid", "") if is_group else ""
 
-        async def _send_segment(text: str, use_passive: bool) -> None:
-            """发送单个分片。
+        # 群聊：按字节上限切片（最多 4 片，ACK+4片=5次配额）；C2C 按 300 字符切片
+        if is_group:
+            from utils.text_utils import split_for_group_passive
+            segments = split_for_group_passive(full_text)
+        else:
+            segments = self._split_text_for_streaming(full_text, chunk_size=300)
 
-            - use_passive=True: 用 message.reply（被动回复，带 msg_id）
-            - use_passive=False（群聊）: 用 post_group_message（主动消息，不带 msg_id）
-            群聊被动回复超限时自动降级为主动消息重试。
-            """
-            if is_group and not use_passive:
-                await self.api.post_group_message(
-                    group_openid=group_openid,
-                    msg_type=0, content=text,
-                    msg_seq=_next_msg_seq(),
-                )
-            else:
-                try:
-                    await message.reply(content=text, msg_seq=_next_msg_seq())
-                except Exception as e:
-                    if is_group and ("被动回复" in str(e) or "超过限制" in str(e)):
-                        logger.info("qq_bot.stream_passive_limited_switching_to_proactive")
-                        await self.api.post_group_message(
-                            group_openid=group_openid,
-                            msg_type=0, content=text,
-                            msg_seq=_next_msg_seq(),
-                        )
-                    else:
-                        raise
+        async def _send_segment(text: str) -> None:
+            """发送单个分片。群聊无主动消息权限，被动超限直接失败。"""
+            try:
+                await message.reply(content=text, msg_seq=_next_msg_seq())
+            except Exception as e:
+                if is_group and ("被动回复" in str(e) or "超过限制" in str(e)):
+                    logger.warning("qq_bot.stream_passive_limited_no_proactive",
+                                   error=str(e))
+                else:
+                    raise
 
         # 短回复：直接发送单片
         if len(segments) <= 1:
             try:
                 single = segments[0] if segments else full_text
                 t0 = time.monotonic()
-                await _send_segment(single, use_passive=True)
+                await _send_segment(single)
                 elapsed = (time.monotonic() - t0) * 1000
                 logger.info("qq_bot.stream_single",
                             total_len=total_len, ms=round(elapsed, 1))
@@ -1044,20 +1020,10 @@ class AIQQBot(botpy.Client):
 
         num_segments = len(segments)
         logger.info("qq_bot.stream_start", total_len=total_len,
-                     segments=num_segments, chunk_size=300)
+                     segments=num_segments, is_group=is_group)
 
-        # 长回复：首片前发送打字指示（仅当回复 > 400 字符）
-        # 群聊用主动消息发送打字指示，保留被动回复配额给第一片内容
-        if is_group:
-            try:
-                await self.api.post_group_message(
-                    group_openid=group_openid,
-                    msg_type=0, content="纳西妲正在打字...",
-                    msg_seq=_next_msg_seq(),
-                )
-            except Exception as e:
-                logger.warning("qq_bot.typing_indicator_failed", error=str(e))
-        else:
+        # 长回复：首片前发送打字指示（仅 C2C，群聊不发避免消耗被动回复配额）
+        if not is_group:
             try:
                 await message.reply(content="纳西妲正在打字...", msg_seq=_next_msg_seq())
             except Exception as e:
@@ -1069,9 +1035,7 @@ class AIQQBot(botpy.Client):
                 if i > 0:
                     await asyncio.sleep(random.uniform(0.8, 1.2))
                 t0 = time.monotonic()
-                # 群聊：第一片用被动回复（message.reply），后续片用主动消息
-                use_passive = (not is_group) or (i == 0)
-                await _send_segment(seg, use_passive=use_passive)
+                await _send_segment(seg)
                 seg_ms = (time.monotonic() - t0) * 1000
                 sent_count += 1
                 logger.debug("qq_bot.stream_segment", index=i, size=len(seg),
@@ -1079,10 +1043,10 @@ class AIQQBot(botpy.Client):
             except Exception as e:
                 logger.warning("qq_bot.stream_segment_failed",
                                error=str(e), sent_segments=sent_count)
-                # 异常恢复：合并剩余内容为最终片发送（群聊用主动消息）
+                # 异常恢复：合并剩余内容为最终片发送
                 remaining = "".join(segments[i:])
                 try:
-                    await _send_segment(remaining, use_passive=False)
+                    await _send_segment(remaining)
                     recovery_ms = (time.monotonic() - stream_start) * 1000
                     logger.info("qq_bot.stream_recovery_done",
                                 sent=sent_count + 1, ms=round(recovery_ms, 1))
@@ -1100,7 +1064,8 @@ class AIQQBot(botpy.Client):
         clean_reply = self.agent.strip_emotion_tag(reply)
 
         # 流式输出：长回复且启用环境变量时，分片流式发送
-        # 环境变量 QQ_STREAM_REPLY 默认 "true"，设为 "false"/"0"/"no" 时回退到原 message.reply
+        # 群聊：ACK 占 1 次配额，流式分片最多 4 次配额，总共 5 次（官方上限）
+        # C2C：按 300 字符切片
         stream_enabled = os.getenv("QQ_STREAM_REPLY", "true").lower() in ("true", "1", "yes")
         if stream_enabled and len(clean_reply) > 400:
             await self._send_streaming_reply_with_sticker(message, clean_reply, result)
@@ -1116,12 +1081,24 @@ class AIQQBot(botpy.Client):
 
     async def _send_streaming_reply_with_sticker(self, message: Any, clean_reply: str,
                                                    result: ProcessResult) -> None:
-        """流式发送长回复（内部按 ~300 字符切片，避免切断代码块/URL），最后一片与表情包合并发送。"""
+        """流式发送长回复，最后一片与表情包合并发送。
+
+        群聊：按 QQ_GROUP_MSG_BYTE_LIMIT 切片（最多 4 片），全部用 message.reply（被动回复），
+              不加衔接词。ACK 占 1 次配额，4 片占 4 次，总共 5 次（官方上限）。
+        C2C：按 ~300 字符切片，第 1 片被动回复，后续主动消息。
+        """
         if not result.sticker_path:
             await self._send_streaming_reply(message, clean_reply)
             return
 
-        segments = self._split_text_for_streaming(clean_reply, chunk_size=300)
+        is_group = isinstance(message, GroupMessage)
+        # 群聊：按字节上限切片（最多 4 片，ACK+4片=5次配额）；C2C：按 300 字符切片
+        if is_group:
+            from utils.text_utils import split_for_group_passive
+            segments = split_for_group_passive(clean_reply)
+        else:
+            segments = self._split_text_for_streaming(clean_reply, chunk_size=300)
+
         if len(segments) <= 1:
             # 短回复：文字+表情包合并为一条消息发送
             try:
@@ -1132,43 +1109,30 @@ class AIQQBot(botpy.Client):
             return
 
         # 长回复：前 N-1 片流式发送，最后一片与表情包合并发送
-        is_group = isinstance(message, GroupMessage)
         group_openid = getattr(message, "group_openid", "") if is_group else ""
 
-        async def _send_segment(text: str, use_passive: bool) -> None:
-            if is_group and not use_passive:
-                await self.api.post_group_message(
-                    group_openid=group_openid,
-                    msg_type=0, content=text,
-                    msg_seq=_next_msg_seq(),
-                )
-            else:
-                try:
-                    await message.reply(content=text, msg_seq=_next_msg_seq())
-                except Exception as e:
-                    if is_group and ("被动回复" in str(e) or "超过限制" in str(e)):
-                        logger.info("qq_bot.stream_passive_limited_switching_to_proactive")
-                        await self.api.post_group_message(
-                            group_openid=group_openid,
-                            msg_type=0, content=text,
-                            msg_seq=_next_msg_seq(),
-                        )
-                    else:
-                        raise
+        async def _send_segment(text: str) -> None:
+            try:
+                await message.reply(content=text, msg_seq=_next_msg_seq())
+            except Exception as e:
+                if is_group and ("被动回复" in str(e) or "超过限制" in str(e)):
+                    logger.warning("qq_bot.stream_passive_limited_no_proactive",
+                                   error=str(e))
+                else:
+                    raise
 
         # 发送前 N-1 片
         for i, seg in enumerate(segments[:-1]):
             try:
                 if i > 0:
                     await asyncio.sleep(random.uniform(0.8, 1.2))
-                use_passive = (not is_group) or (i == 0)
-                await _send_segment(seg, use_passive=use_passive)
+                await _send_segment(seg)
             except Exception as e:
                 logger.warning("qq_bot.stream_segment_failed", error=str(e))
                 # 异常恢复：合并剩余内容发送
                 remaining = "".join(segments[i:])
                 try:
-                    await _send_segment(remaining, use_passive=False)
+                    await _send_segment(remaining)
                 except Exception as e2:
                     logger.error("qq_bot.stream_recovery_failed", error=str(e2))
                 return
@@ -1180,33 +1144,50 @@ class AIQQBot(botpy.Client):
         except Exception as e:
             logger.warning("qq_bot.sticker_with_last_segment_failed", error=str(e))
             try:
-                await _send_segment(last_seg, use_passive=False)
+                await _send_segment(last_seg)
             except Exception as e2:
                 logger.debug("qq_bot.fallback_segment_also_failed", error=str(e2))
 
     async def _send_fallback_reply_with_sticker(self, message: Any, clean_reply: str,
                                                   result: ProcessResult) -> None:
-        """按字节上限分片发送回复（向后兼容 fallback），并立即发送文字+表情包。"""
-        from utils.text_utils import split_long_reply
+        """短回复或流式禁用时，单条发送回复+表情包。
 
-        # 原逻辑：按字节上限分片（向后兼容 fallback）
-        parts = split_long_reply(clean_reply, MAX_REPLY_LEN)
+        群聊场景：短回复（<=400字符）直接发送；流式禁用时超长按 split_for_group_passive
+        取第 1 片（无标记截断，自动闭合代码块）。
+        C2C 场景：保持原分片逻辑。
+        """
+        from utils.text_utils import split_long_reply, split_for_group_passive
 
-        if len(parts) == 1:
-            final_text = parts[0]
+        is_group = isinstance(message, GroupMessage)
+
+        if is_group:
+            # 群聊：单条被动回复，超长用 split_for_group_passive 取第 1 片（无标记截断）
+            original_len = len(clean_reply.encode('utf-8'))
+            segments = split_for_group_passive(clean_reply)
+            final_text = segments[0]  # 流式禁用时只取第 1 片（短回复不会触发截断）
+            truncated_len = len(final_text.encode('utf-8'))
+            if truncated_len < original_len:
+                logger.info("qq_bot.group_reply_truncated_no_marker",
+                            original_bytes=original_len, truncated_bytes=truncated_len,
+                            dropped_segments=len(segments) - 1)
         else:
-            failed = False
-            for part in parts[:-1]:
-                try:
-                    await message.reply(content=part, msg_seq=_next_msg_seq())
-                except Exception as e:
-                    logger.warning(f"qq_bot.long_reply_part_failed: {e}")
-                    failed = True
-                    break
-            if failed:
-                final_text = parts[-1] + "\n（内容过长部分发送失败）"
+            # C2C：保持原分片逻辑
+            parts = split_long_reply(clean_reply, MAX_REPLY_LEN)
+            if len(parts) == 1:
+                final_text = parts[0]
             else:
-                final_text = parts[-1]
+                failed = False
+                for part in parts[:-1]:
+                    try:
+                        await message.reply(content=part, msg_seq=_next_msg_seq())
+                    except Exception as e:
+                        logger.warning(f"qq_bot.long_reply_part_failed: {e}")
+                        failed = True
+                        break
+                if failed:
+                    final_text = parts[-1] + "\n（内容过长部分发送失败）"
+                else:
+                    final_text = parts[-1]
 
         # 1. 文字+表情包立刻发送（用户最快看到回复）
         if result.sticker_path:

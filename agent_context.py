@@ -11,6 +11,23 @@ def estimate_tokens(text: str) -> int:
     return int(cn * 1.5 + en * 0.25)
 
 
+def _smart_truncate_summary(text: str, max_len: int = 100) -> str:
+    """Q1-1: 按语义边界截断摘要，避免硬切断关键信息。
+
+    在 max_len 附近寻找最后一个句子边界（。！？；\n，），找不到则硬截断。
+    """
+    if len(text) <= max_len:
+        return text
+    truncated = text[:max_len]
+    # 在最后 40% 范围内寻找句子边界
+    search_start = int(max_len * 0.6)
+    for boundary in ['。', '！', '？', '；', '\n', '，', ' ']:
+        pos = truncated.rfind(boundary, search_start)
+        if pos > 0:
+            return truncated[:pos + 1].rstrip()
+    return truncated
+
+
 class AgentContext:
 
     MAX_HISTORY_TOKENS = 6000
@@ -343,13 +360,34 @@ class AgentContext:
         self._cached_stable_prompt = ""
         self._stable_cache_ts = 0.0
 
-    def build_messages(self, user_input: str) -> list[dict]:
+    def build_messages(self, user_input: str, source: str = "") -> list[dict]:
         # === Stable 层：场景感知动态排序 ===
         # 根据用户输入自动调整 MD 模块顺序，让最相关的靠近用户输入
         from prompt_builder import build_scene_aware_prompt
         stable_content = build_scene_aware_prompt(user_input, self.current_address_term)
         if self.instinct_prompt:
             stable_content = stable_content + "\n\n---\n\n" + self.instinct_prompt if stable_content else self.instinct_prompt
+
+        # Stable 层追加项目硬约束（Always，~150 token，每次必注入）
+        try:
+            from core.constraint_injector import get_stable_constraints
+            stable_constraints = get_stable_constraints()
+            if stable_constraints:
+                stable_content = (stable_content + "\n\n" + stable_constraints
+                                  if stable_content else stable_constraints)
+        except Exception as e:
+            logger.debug("agent_context.stable_constraints_inject_failed", error=str(e))
+
+        # Stable 层追加自我模型（持续身份，~400 token，每次必注入）
+        # 让 agent 拥有连续的自我概念：我是谁、价值观、成长轨迹
+        try:
+            from core.self_model import get_self_model
+            self_model = get_self_model()
+            if self_model:
+                stable_content = (stable_content + "\n\n" + self_model
+                                  if stable_content else self_model)
+        except Exception as e:
+            logger.debug("agent_context.self_model_inject_failed", error=str(e))
 
         # === Context 层（按项目/用户缓存，偶尔变化）===
         context_parts = []
@@ -361,6 +399,14 @@ class AgentContext:
         # === Volatile 层（每次重建，频繁变化）===
         volatile_parts = []
         volatile_parts.append(self._build_time_context())
+        # 注入持续情绪状态（让 agent 有情绪惯性）
+        try:
+            from emotion.emotion_state import get_emotion_state
+            emotion_desc = get_emotion_state().get_description()
+            if emotion_desc:
+                volatile_parts.append(emotion_desc)
+        except Exception as e:
+            logger.debug("agent_context.emotion_state_inject_failed", error=str(e))
         if self.emotion_hint:
             volatile_parts.append(f"[感知到{self.current_address_term}的情绪：{self.emotion_hint}]")
         if self.memory_retrieval:
@@ -369,20 +415,27 @@ class AgentContext:
                 summary = m.get("summary", "")
                 if summary:
                     # 注入时间戳，让 LLM 知道每条记忆发生的时间（解决"没有时间戳"问题）
+                    # Q1-1: 按语义边界截断，避免硬切断关键信息
                     ts = m.get("timestamp", 0)
                     if ts:
                         try:
                             _date_str = time.strftime("%m-%d %H:%M", time.localtime(float(ts)))
-                            mem_texts.append(f"· [{_date_str}] {summary[:100]}")
+                            mem_texts.append(f"· [{_date_str}] {_smart_truncate_summary(summary)}")
                         except (ValueError, TypeError, OSError):
-                            mem_texts.append(f"· {summary[:100]}")
+                            mem_texts.append(f"· {_smart_truncate_summary(summary)}")
                     else:
-                        mem_texts.append(f"· {summary[:100]}")
+                        mem_texts.append(f"· {_smart_truncate_summary(summary)}")
                 kg_ctx = m.get("kg_context", "")
                 if kg_ctx:
                     mem_texts.append(kg_ctx[:200])
             if mem_texts:
                 volatile_parts.append("[相关记忆]\n" + "\n".join(mem_texts))
+            else:
+                # 元认知：检索到记忆但无有效内容时，提示 agent
+                volatile_parts.append('[元认知提示] 我检索了记忆但没有找到有效内容，如果用户问的是过去的事，请诚实说"我不太记得了"。')
+        else:
+            # 元认知：未检索到任何记忆时，提示 agent
+            volatile_parts.append('[元认知提示] 我没有找到相关记忆。如果用户问的是过去的事，请诚实说"我不记得了"；如果是不确定的信息，请说"我不太确定"。不要假装记得或编造。')
         if self.notebook_focus:
             volatile_parts.append(f"[当前关注点] {self.notebook_focus}")
         if self.pending_tasks:
@@ -390,6 +443,17 @@ class AgentContext:
             volatile_parts.append(f"[待办提醒]\n{task_lines}")
         if self.klee_context:
             volatile_parts.append(f"[可莉的回应（仅供参考，用自己的话转述，不要直接复制）]\n{self.klee_context}")
+
+        # Volatile 层追加场景约束（按 source 动态注入，~250 token）
+        if source:
+            try:
+                from core.constraint_injector import get_scene_constraints
+                scene_constraints = get_scene_constraints(source)
+                if scene_constraints:
+                    volatile_parts.append(scene_constraints)
+            except Exception as e:
+                logger.debug("agent_context.scene_constraints_inject_failed", error=str(e))
+
         volatile_content = "\n".join(volatile_parts) if volatile_parts else ""
 
         # 拼接三层

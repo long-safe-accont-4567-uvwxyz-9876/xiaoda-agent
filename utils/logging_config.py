@@ -33,6 +33,33 @@ def _json_sink(message: object) -> None:
     sys.stderr.flush()
 
 
+def _supports_ansi() -> bool:
+    if os.environ.get("NO_COLOR", ""):
+        return False
+    if os.environ.get("FORCE_COLOR", ""):
+        return True
+    if sys.platform != "win32":
+        return sys.stderr.isatty()
+    if os.environ.get("WT_SESSION") or os.environ.get("TERM_PROGRAM"):
+        return True
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        STD_ERROR_HANDLE = -12
+        handle = kernel32.GetStdHandle(STD_ERROR_HANDLE)
+        mode = ctypes.c_ulong()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            if mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING:
+                return True
+            new_mode = mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            if kernel32.SetConsoleMode(handle, new_mode):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def setup_logging() -> None:
     """初始化日志系统。
 
@@ -67,11 +94,13 @@ def setup_logging() -> None:
             diagnose=False,
         )
     else:
-        # 默认文本格式（保留原有彩色输出）
+        # 默认文本格式（保留原有彩色输出，Windows 不支持 ANSI 时自动关闭）
+        _colorize = _supports_ansi()
         logger.add(
             sys.stderr,
             format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{extra[trace_id]}</cyan> | {message}",
             level="DEBUG",
+            colorize=_colorize,
         )
 
     # 确保日志目录存在
