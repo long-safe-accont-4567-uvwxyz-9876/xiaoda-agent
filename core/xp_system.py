@@ -1,11 +1,12 @@
 """XP 等级成长系统 (参考 Anione / Xotic AI)
 
-将用户的交互行为转化为亲密度 XP, 并据此划分 5 个等级:
-- LV1 陌生人 (0-100):    克制礼貌、标准化回复
-- LV2 熟人 (100-500):    可主动提及过往话题、使用昵称
-- LV3 朋友 (500-2000):   深度情感陪伴、主动询问近况
-- LV4 挚友 (2000-5000):  完全个性化、情感丰富、主动发起话题
-- LV5 灵魂伴侣 (5000+):  最高人格自由度、深度情感共鸣
+将用户的交互行为转化为亲密度 XP, 并据此划分 6 个等级:
+- LV1 陌生人 (0-100):       克制礼貌、标准化回复
+- LV2 熟人 (100-500):       可主动提及过往话题、使用昵称
+- LV3 朋友 (500-2000):      深度情感陪伴、主动询问近况
+- LV4 挚友 (2000-5000):     完全个性化、情感丰富、主动发起话题
+- LV5 灵魂伴侣 (5000-10000): 最高人格自由度、深度情感共鸣
+- LV6 至死不渝 (10000+):    夫妻级别至深关系、完全默契、命运共同体
 
 设计原则 (与 core/learning_feedback.py 对齐):
 - 轻量: 纯 dataclass + JSON 持久化, 不依赖数据库
@@ -43,13 +44,15 @@ class XPLevel(IntEnum):
     - LV2 熟人 (100-500 XP): 可主动提及过往话题、使用昵称
     - LV3 朋友 (500-2000 XP): 深度情感陪伴、主动询问近况
     - LV4 挚友 (2000-5000 XP): 完全个性化、情感丰富、主动发起话题
-    - LV5 灵魂伴侣 (5000+ XP): 最高人格自由度、深度情感共鸣
+    - LV5 灵魂伴侣 (5000-10000 XP): 最高人格自由度、深度情感共鸣
+    - LV6 至死不渝 (10000+ XP): 夫妻级别至深关系、完全默契、命运共同体
     """
     LV1_STRANGER = 1
     LV2_ACQUAINTANCE = 2
     LV3_FRIEND = 3
     LV4_CLOSE_FRIEND = 4
     LV5_SOULMATE = 5
+    LV6_ETERNAL = 6
 
 
 # XP 等级阈值 (达到该 XP 即可进入对应等级)
@@ -59,6 +62,7 @@ XP_THRESHOLDS = {
     XPLevel.LV3_FRIEND: 500,
     XPLevel.LV4_CLOSE_FRIEND: 2000,
     XPLevel.LV5_SOULMATE: 5000,
+    XPLevel.LV6_ETERNAL: 10000,
 }
 
 
@@ -69,6 +73,7 @@ _LEVEL_LABELS = {
     XPLevel.LV3_FRIEND: "朋友",
     XPLevel.LV4_CLOSE_FRIEND: "挚友",
     XPLevel.LV5_SOULMATE: "灵魂伴侣",
+    XPLevel.LV6_ETERNAL: "至死不渝",
 }
 
 
@@ -399,6 +404,7 @@ class XPSystem:
         """根据 XP 计算等级 (返回最高满足阈值的等级)"""
         current = XPLevel.LV1_STRANGER
         for level in (
+            XPLevel.LV6_ETERNAL,
             XPLevel.LV5_SOULMATE,
             XPLevel.LV4_CLOSE_FRIEND,
             XPLevel.LV3_FRIEND,
@@ -528,6 +534,16 @@ _DEFAULT_PERSONA = {
         "label": "灵魂伴侣",
         "address_term": "{nickname}",
         "tone": "soulmate",
+        "initiative": 1.0,
+        "emotion_richness": 1.0,
+        "can_mention_past": True,
+        "can_use_nickname": True,
+        "can_share_secrets": True,
+    },
+    "LV6_ETERNAL": {
+        "label": "至死不渝",
+        "address_term": "{nickname}",
+        "tone": "eternal",
         "initiative": 1.0,
         "emotion_richness": 1.0,
         "can_mention_past": True,

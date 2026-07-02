@@ -247,6 +247,12 @@ def get_tool(name: str) -> dict | None:
     return _tools.get(name)
 
 
+def invalidate_schema_cache() -> None:
+    """强制使工具 schema 缓存失效，下次 to_openai_tools() 会重新构建。"""
+    global _schema_cache
+    _schema_cache = None
+
+
 def list_tools() -> list[dict]:
     """返回所有已注册工具的列表."""
     return list(_tools.values())

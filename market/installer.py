@@ -84,14 +84,14 @@ class MarketInstaller:
                 installed[fp.stem] = "0.0.0"
         return installed
 
-    async def install(self, item: MarketItem) -> dict[str, Any]:
+    async def install(self, item: MarketItem, env: dict[str, str] | None = None) -> dict[str, Any]:
         """安装一个市场条目"""
         if item.type == "plugin":
             return await self._install_plugin(item)
         elif item.type == "skill":
             return await self._install_skill(item)
         elif item.type == "mcp":
-            return await self._install_mcp(item)
+            return await self._install_mcp(item, env=env)
         raise InstallError(f"未知类型: {item.type}")
 
     async def uninstall(self, item_id: str, item_type: str) -> dict[str, Any]:
@@ -269,7 +269,7 @@ class MarketInstaller:
 
     # ── MCP 工具安装 ─────────────────────────────────────────
 
-    async def _install_mcp(self, item: MarketItem) -> dict[str, Any]:
+    async def _install_mcp(self, item: MarketItem, env: dict[str, str] | None = None) -> dict[str, Any]:
         """下载并安装 MCP 工具（写入配置文件）"""
         self._mcp_config_dir.mkdir(parents=True, exist_ok=True)
         config_path = self._mcp_config_dir / f"{item.id}.json"
@@ -299,12 +299,14 @@ class MarketInstaller:
                 else:
                     config_data = json.loads(content_bytes.decode("utf-8"))
             else:
-                # 使用 connections 字段构造配置
-                config_data = {
-                    "id": item.id,
-                    "name": item.name,
-                    "connections": item.connections,
-                }
+                config_data = {}
+
+            # 解析 connections 为 MCP server 结构（{command, args, env}）
+            connections = self._parse_connections(
+                item.connections or config_data.get("connections", ""),
+                config_data,
+                env,
+            )
 
             # 写入配置文件
             config_entry = {
@@ -314,7 +316,7 @@ class MarketInstaller:
                 "description": item.description,
                 "author": item.author,
                 "qualified_name": item.qualified_name,
-                "connections": item.connections or config_data.get("connections", ""),
+                "connections": connections,
                 "installed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             }
             config_path.write_text(
@@ -324,13 +326,54 @@ class MarketInstaller:
 
             logger.info("market.mcp_installed", id=item.id, version=item.version)
             return {"status": "ok", "id": item.id, "type": "mcp",
-                    "version": item.version}
+                    "version": item.version, "connections": connections}
 
         except Exception as e:
             logger.error("market.mcp_install_failed", id=item.id, error=str(e))
             raise InstallError(f"MCP 工具安装失败: {e}")
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    @staticmethod
+    def _parse_connections(
+        connections: str | dict,
+        config_data: dict | None = None,
+        env: dict[str, str] | None = None,
+    ) -> dict:
+        """将 connections 字段解析为 MCP server 结构 {command, args, env}。"""
+        result: dict = {}
+
+        # 如果 connections 已经是 dict，直接使用
+        if isinstance(connections, dict):
+            result = dict(connections)
+        elif isinstance(connections, str) and connections:
+            # 尝试 JSON 解析
+            try:
+                parsed = json.loads(connections)
+                if isinstance(parsed, dict):
+                    result = parsed
+            except Exception:
+                # 尝试解析 "npx -y @xxx/server" 格式的命令行
+                parts = connections.strip().split()
+                if parts:
+                    result = {"command": parts[0], "args": parts[1:]}
+
+        # 从 config_data 补充（如果 connections 不完整）
+        if config_data and not result.get("command"):
+            for key in ("command", "args", "env"):
+                if key in config_data and key not in result:
+                    result[key] = config_data[key]
+
+        # 合并用户提供的 env
+        if env:
+            existing_env = result.get("env", {})
+            if isinstance(existing_env, dict):
+                existing_env.update(env)
+                result["env"] = existing_env
+            else:
+                result["env"] = env
+
+        return result
 
     async def _uninstall_mcp(self, mcp_id: str) -> dict[str, Any]:
         """卸载 MCP 工具"""

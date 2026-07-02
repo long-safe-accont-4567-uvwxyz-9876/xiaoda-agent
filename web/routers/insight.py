@@ -618,3 +618,99 @@ async def delete_relation(relation_id: str, request: Request) -> Any:
         raise HTTPException(404, f"关系 {relation_id} 不存在")
     await _broadcast_kg_change("delete", "relation", relation_id)
     return Envelope(data={"deleted": relation_id})
+
+
+# ── XP 亲密度 ───────────────────────────────────────────────────
+
+_GUIDANCE_TEMPLATES = {
+    "polite": "标准化礼貌回复",
+    "warm": "温暖友好交流、可提及近期话题",
+    "intimate": "可主动提及过往话题、使用昵称、深度情感陪伴",
+    "deep_intimate": "完全个性化、深度亲密交流、可分享秘密",
+    "soulmate": "最高人格自由度、深度情感共鸣、灵魂伴侣级交流",
+}
+
+
+def _build_guidance(config: dict) -> str:
+    tone = config.get("tone", "")
+    if tone in _GUIDANCE_TEMPLATES:
+        return _GUIDANCE_TEMPLATES[tone]
+    parts: list[str] = []
+    if config.get("can_mention_past"):
+        parts.append("可主动提及过往话题")
+    if config.get("can_use_nickname"):
+        parts.append("使用昵称")
+    if config.get("can_share_secrets"):
+        parts.append("可分享秘密")
+    return "、".join(parts) if parts else "标准交流"
+
+
+@router.get("/insight/xp", response_model=Envelope[dict])
+async def get_xp(request: Request, user_id: str = Depends(get_current_user)) -> Any:
+    from core.xp_system import get_xp_system, XPLevel, XP_THRESHOLDS, _LEVEL_LABELS
+
+    try:
+        xp_sys = get_xp_system()
+        state = xp_sys.get_state(user_id)
+
+        level = state.level
+        current_threshold = XP_THRESHOLDS.get(level, 0)
+        next_level = XPLevel(int(level) + 1) if int(level) < 6 else None
+        next_level_xp = XP_THRESHOLDS.get(next_level, current_threshold) if next_level else state.xp
+
+        level_range = next_level_xp - current_threshold
+        progress = min((state.xp - current_threshold) / level_range, 1.0) if level_range > 0 else 1.0
+
+        config_raw = xp_sys.get_intimacy_config(level)
+        level_config = {
+            "label": config_raw.get("label", _LEVEL_LABELS.get(level, "未知")),
+            "tone": config_raw.get("tone", ""),
+            "proactivity": config_raw.get("initiative", 0),
+            "emotional_richness": config_raw.get("emotion_richness", 0),
+            "guidance": _build_guidance(config_raw),
+        }
+
+        history = [h.to_dict() for h in state.history[-50:]]
+        history.reverse()
+
+        return Envelope(data={
+            "user_id": state.user_id,
+            "xp": state.xp,
+            "level": int(state.level),
+            "level_label": _LEVEL_LABELS.get(level, "未知"),
+            "next_level_xp": next_level_xp,
+            "progress": round(progress, 3),
+            "history": history,
+            "milestones": state.milestones,
+            "first_seen_at": state.first_seen_at,
+            "last_chat_at": state.last_chat_at,
+            "level_config": level_config,
+        })
+    except Exception as e:
+        logger.warning(f"insight.xp.get_failed user={user_id}: {e}")
+        raise HTTPException(500, "获取 XP 状态失败")
+
+
+@router.get("/insight/xp/levels", response_model=Envelope[dict])
+async def get_xp_levels(request: Request) -> Any:
+    from core.xp_system import XPLevel, XP_THRESHOLDS, _LEVEL_LABELS
+
+    try:
+        from core.xp_system import get_xp_system
+        xp_sys = get_xp_system()
+        levels = []
+        for lv in sorted(XPLevel, key=lambda x: int(x)):
+            config_raw = xp_sys.get_intimacy_config(lv)
+            levels.append({
+                "level": int(lv),
+                "threshold": XP_THRESHOLDS.get(lv, 0),
+                "label": config_raw.get("label", _LEVEL_LABELS.get(lv, "未知")),
+                "tone": config_raw.get("tone", ""),
+                "proactivity": config_raw.get("initiative", 0),
+                "emotional_richness": config_raw.get("emotion_richness", 0),
+                "guidance": _build_guidance(config_raw),
+            })
+        return Envelope(data={"levels": levels})
+    except Exception as e:
+        logger.warning(f"insight.xp.levels_failed: {e}")
+        raise HTTPException(500, "获取 XP 等级配置失败")

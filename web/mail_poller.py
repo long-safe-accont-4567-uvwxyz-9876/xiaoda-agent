@@ -144,6 +144,10 @@ class MailPoller:
             self._processed_ids.add(msg_id)
             self._daily_count += 1
 
+            # 裁剪去重集合，防止长时间运行内存膨胀
+            if len(self._processed_ids) > 5000:
+                self._processed_ids.clear()
+
             if self._daily_count >= int(self.cfg.get("mail.max_per_day", 50)):
                 break
 

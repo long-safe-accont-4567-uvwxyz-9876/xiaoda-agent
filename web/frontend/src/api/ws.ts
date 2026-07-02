@@ -17,6 +17,10 @@ export class WsClient {
   get unauthorized() { return this._unauthorized }
 
   connect(token: string) {
+    // 幂等：已连接且有效时，不重复断开重连（避免登录时 auth.login + AppLayout 重复调用导致竞态）
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.connected) {
+      return
+    }
     this._unauthorized = false
     this.disconnect()
     const wsUrl = `${this.url}?token=${token}`

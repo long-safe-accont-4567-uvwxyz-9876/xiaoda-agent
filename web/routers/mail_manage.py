@@ -16,6 +16,15 @@ from web.schemas import Envelope
 
 router = APIRouter(tags=["mail"], dependencies=[Depends(get_current_user)])
 
+# auth-status 缓存（避免频繁调用 CLI）
+_auth_status_cache: dict = {}
+_AUTH_CACHE_TTL = 300  # 5 分钟
+
+
+def _clear_auth_status_cache() -> None:
+    """清除 auth-status 缓存（供后台任务调用）。"""
+    _auth_status_cache.clear()
+
 
 # ── 请求/响应模型 ──────────────────────────────────────────────
 class MailConfig(BaseModel):
@@ -129,7 +138,7 @@ async def get_mail_auth_status(request: Request) -> Any:
       - installed: agently-cli 是否已安装
       - cli_path: agently-cli 路径（未安装时为 null）
       - authorized: 邮箱是否已授权
-      - email: 已授权的邮箱地址（未授权时为空）
+      - email: Agent 注册的邮箱地址（未授权时为空）
       - error: 错误信息
     """
     from tools.mail_tools import _resolve_agently_cli, _run_agently
@@ -145,13 +154,13 @@ async def get_mail_auth_status(request: Request) -> Any:
             "error": "agently-cli 未安装，请先安装",
         })
 
-    # 用 message +list --limit 1 探测授权状态
-    rc, out, err = await _run_agently(
-        ["message", "+list", "--dir", "inbox", "--limit", "1"],
-        timeout=15,
+    # 用 auth status 检查登录状态（快速，不触发 API 调用）
+    rc_auth, out_auth, err_auth = await _run_agently(
+        ["auth", "status"],
+        timeout=10,
     )
 
-    if rc == 3:
+    if rc_auth != 0:
         return Envelope(data={
             "installed": True,
             "cli_path": cli_path,
@@ -160,35 +169,114 @@ async def get_mail_auth_status(request: Request) -> Any:
             "error": "邮箱未授权或授权已失效",
         })
 
-    if rc == 99 or rc == 97:
-        return Envelope(data={
-            "installed": False,
-            "cli_path": None,
-            "authorized": False,
-            "email": "",
-            "error": "agently-cli 执行失败",
-        })
+    # 解析 auth status JSON（agently-cli 输出多行格式化 JSON，需整体解析）
+    auth_data = {}
+    try:
+        text = out_auth.strip()
+        # 取第一个完整 JSON 对象（跳过 "tip:" 行等非 JSON 后缀）
+        brace_count = 0
+        end_pos = 0
+        for i, ch in enumerate(text):
+            if ch == '{':
+                brace_count += 1
+            elif ch == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    end_pos = i + 1
+                    break
+        if end_pos:
+            auth_envelope = _json.loads(text[:end_pos])
+            auth_data = auth_envelope.get("data", {})
+    except Exception:
+        pass
 
-    if rc != 0:
+    logged_in = auth_data.get("logged_in", False)
+    if not logged_in:
         return Envelope(data={
             "installed": True,
             "cli_path": cli_path,
             "authorized": False,
             "email": "",
-            "error": f"检查失败 (exit={rc}): {err[:200]}",
+            "error": "邮箱未授权，请先完成 OAuth 登录",
         })
 
-    # 尝试从输出中提取邮箱地址
+    # 检查 token 状态
+    # token_status 为 auto_refresh 时表示 CLI 会自动刷新 token，即使 expires_at 已过期也是正常的
     email = ""
-    try:
-        text = out.strip()
-        envelope = _json.loads(text)
-        data = envelope.get("data", {})
-        if isinstance(data, dict):
-            # 尝试从 account/user 字段提取邮箱
-            email = data.get("account", "") or data.get("user", "") or data.get("email", "")
-    except Exception:
-        pass
+    token_status = auth_data.get("token_status", "")
+    if token_status not in ("auto_refresh", "valid", ""):
+        return Envelope(data={
+            "installed": True,
+            "cli_path": cli_path,
+            "authorized": False,
+            "email": "",
+            "error": f"邮箱授权状态异常: {token_status}",
+        })
+
+    # logged_in=true 且 token_status 正常，尝试获取 Agent 注册的邮箱地址
+    # 先从缓存中读取（之前成功获取时保存的）
+    cfg = _get_cfg_service(request)
+    cached_email = cfg.get("mail.agent_email", "")
+    if cached_email:
+        email = cached_email
+    else:
+        # 尝试用 message +list 获取，从收件人（to）字段提取 Agent 自己的邮箱
+        rc, out, err = await _run_agently(
+            ["message", "+list", "--dir", "inbox", "--limit", "1"],
+            timeout=15,
+        )
+        if rc == 3:
+            # invalid_grant: OAuth 授权已失效，需要重新授权
+            return Envelope(data={
+                "installed": True,
+                "cli_path": cli_path,
+                "authorized": False,
+                "email": "",
+                "error": "邮箱 OAuth 授权已失效，请重新授权",
+            })
+        if rc == 0:
+            try:
+                text = out.strip()
+                # 提取第一个完整 JSON 对象
+                brace_count = 0
+                end_pos = 0
+                for _i, _ch in enumerate(text):
+                    if _ch == '{':
+                        brace_count += 1
+                    elif _ch == '}':
+                        brace_count -= 1
+                        if brace_count == 0:
+                            end_pos = _i + 1
+                            break
+                envelope = _json.loads(text[:end_pos]) if end_pos else {}
+                data = envelope.get("data", {})
+                if isinstance(data, list) and data:
+                    first = data[0] if isinstance(data[0], dict) else {}
+                    # 从 to（收件人）提取 Agent 自己的邮箱，而非 from（发件人）
+                    to_field = first.get("to", "")
+                    if isinstance(to_field, list) and to_field:
+                        email = to_field[0].get("email", "") if isinstance(to_field[0], dict) else str(to_field[0])
+                    elif isinstance(to_field, str) and "@" in to_field:
+                        email = to_field
+                    elif isinstance(to_field, dict):
+                        email = to_field.get("email", "")
+            except Exception:
+                pass
+
+        # 如果仍未获取到，尝试正则匹配（兜底）
+        if not email:
+            try:
+                import re
+                # 尝试从 auth status 的 tip 中获取
+                m = re.search(r'[\w.+-]+@[\w.-]+\.\w+', out_auth)
+                if m:
+                    email = m.group(0)
+            except Exception:
+                pass
+
+        # 缓存到配置中，下次不再查询
+        if email:
+            cfg.set("mail.agent_email", email)
 
     return Envelope(data={
         "installed": True,
@@ -214,7 +302,6 @@ async def trigger_mail_auth_login(request: Request) -> Any:
     """
     from tools.mail_tools import _resolve_agently_cli
     import asyncio
-    import os
 
     cli_path = _resolve_agently_cli()
     if not cli_path:
@@ -224,47 +311,83 @@ async def trigger_mail_auth_login(request: Request) -> Any:
             "cli_path": None,
         })
 
-    # 构造子进程环境
+    # 构造子进程环境（与 _run_agently 保持一致）
+    import os
     env = os.environ.copy()
     cred_home = os.environ.get("AGENTLY_CLI_HOME", "").strip()
     if cred_home:
         env["HOME"] = cred_home
+    # 确保 node 在 PATH 中
+    from tools.mail_tools import _ensure_node_in_path
+    _ensure_node_in_path(env)
 
     try:
-        # 启动 auth login（非阻塞，让浏览器自动弹出）
+        # 启动 auth login（非阻塞，CLI 会输出授权 URL 或自动打开浏览器）
         proc = await asyncio.create_subprocess_exec(
-            cli_path, "auth", "login",
+            cli_path, "auth", "login", "--verbose",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
         )
 
-        # 给它 3 秒启动时间，如果还在运行说明浏览器已弹出
+        # 逐行读取 CLI 输出，在 15 秒内捕获授权 URL
+        import re
+        collected = ""
+        deadline = asyncio.get_event_loop().time() + 15
+        auth_url = ""
+
         try:
-            await asyncio.wait_for(proc.wait(), timeout=3)
-            # 3 秒内就结束了，检查结果
-            rc = proc.returncode or 0
-            if rc == 0:
-                return Envelope(data={
-                    "started": True,
-                    "message": "授权成功！邮箱已连接",
-                    "cli_path": cli_path,
-                })
-            else:
-                stdout = (await proc.stdout.read()).decode("utf-8", errors="replace") if proc.stdout else ""
-                stderr = (await proc.stderr.read()).decode("utf-8", errors="replace") if proc.stderr else ""
-                return Envelope(data={
-                    "started": False,
-                    "message": f"授权失败 (exit={rc}): {stderr[:200]}",
-                    "cli_path": cli_path,
-                })
+            while asyncio.get_event_loop().time() < deadline:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    break
+                line_bytes = await asyncio.wait_for(
+                    proc.stdout.readline(), timeout=remaining
+                )
+                if not line_bytes:
+                    break  # EOF
+                line = line_bytes.decode("utf-8", errors="replace")
+                collected += line
+                # 提取授权 URL（CLI 输出格式: "[info] 授权链接：https://..."）
+                url_match = re.search(r'(https?://\S+)', line)
+                if url_match:
+                    auth_url = url_match.group(1).rstrip(")")
+                    break
         except asyncio.TimeoutError:
-            # 还在运行 = 浏览器已弹出，等待用户操作
+            pass
+
+        if auth_url:
+            # 不杀进程，让它继续等待用户完成 OAuth 回调
             return Envelope(data={
                 "started": True,
-                "message": "浏览器已打开，请在浏览器中完成 QQ 邮箱授权",
+                "message": "请在浏览器中打开以下链接完成授权",
+                "auth_url": auth_url,
                 "cli_path": cli_path,
             })
+
+        # 没找到 URL，检查进程是否已结束
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=2)
+        except asyncio.TimeoutError:
+            pass
+
+        rc = proc.returncode
+        if rc == 0:
+            _auth_status_cache.clear()
+            return Envelope(data={
+                "started": True,
+                "message": "授权成功！邮箱已连接",
+                "auth_url": "",
+                "cli_path": cli_path,
+            })
+
+        # 超时或失败，返回已收集的输出供调试
+        return Envelope(data={
+            "started": bool(collected.strip()),
+            "message": collected.strip()[-200:] if collected.strip() else "授权流程已启动，请查看浏览器或终端输出",
+            "auth_url": "",
+            "cli_path": cli_path,
+        })
 
     except Exception as e:
         logger.error("mail.auth_login.start_failed", error=str(e))

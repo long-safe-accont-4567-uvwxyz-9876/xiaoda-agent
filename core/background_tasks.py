@@ -150,8 +150,16 @@ class BackgroundTaskManager:
         # 3. 记忆编码（独立，不纳入批量提交）
         if self.memory and len(self.context.history) >= 4:
             try:
+                # 合并压缩暂存区的消息和当前历史，确保被压缩丢弃的消息也能被记忆编码
+                pre_compressed = self.context.flush_pre_compressed_buffer()
+                exchanges = self.context.get_last_n(6)
+                if pre_compressed:
+                    # 将压缩前的消息转为 exchanges 格式并前置
+                    for msg in pre_compressed[-12:]:  # 最多取最近 12 条
+                        if msg.get("role") in ("user", "assistant") and msg.get("content"):
+                            exchanges.insert(0, {"role": msg["role"], "content": msg["content"][:500]})
                 ctx = {
-                    "exchanges": self.context.get_last_n(6),
+                    "exchanges": exchanges,
                     "emotion": emotion,
                 }
                 await self.memory.try_idle_encode(ctx, force=True)
@@ -234,6 +242,13 @@ class BackgroundTaskManager:
         except Exception as e:
             logger.warning("bg.learning_promote_schedule_failed", error=str(e))
 
+        # 13. 邮箱 OAuth token 定期刷新（每 2 小时，防止 access/refresh token 过期）
+        try:
+            if await self._should_run("mail_token_refresh", interval_hours=2):
+                _spawn(self._refresh_mail_token_task())
+        except Exception as e:
+            logger.warning("bg.mail_token_refresh_schedule_failed", error=str(e))
+
     async def _auto_archive_sessions(self) -> None:
         try:
             archived = await self.db.auto_archive_stale_sessions(idle_seconds=3600)
@@ -309,6 +324,35 @@ class BackgroundTaskManager:
             await self.db.set_cron_last_run("memory_distill")
         except Exception as e:
             logger.warning("bg.memory_distill_task_failed", error=str(e))
+
+    async def _refresh_mail_token_task(self) -> None:
+        """定期刷新邮箱 OAuth token — 每 2 小时调用一次 message +list 触发 auto_refresh，
+        防止 access/refresh token 因长期不使用而过期。"""
+        try:
+            from tools.mail_tools import _resolve_agently_cli, _run_agently
+            if not _resolve_agently_cli():
+                await self.db.set_cron_last_run("mail_token_refresh")
+                return
+            # 调用 message +list --limit 1 触发 token 自动刷新
+            rc, out, err = await _run_agently(
+                ["message", "+list", "--dir", "inbox", "--limit", "1"],
+                timeout=30,
+            )
+            if rc == 0:
+                logger.info("mail.token_refresh_ok")
+            elif rc == 3:
+                # invalid_grant: 授权失效，清除缓存让前端状态同步
+                logger.warning("mail.token_refresh_failed_invalid_grant")
+                try:
+                    from web.routers.mail_manage import _clear_auth_status_cache
+                    _clear_auth_status_cache()
+                except Exception:
+                    pass
+            else:
+                logger.warning("mail.token_refresh_failed", rc=rc, err=err[:200] if err else "")
+            await self.db.set_cron_last_run("mail_token_refresh")
+        except Exception as e:
+            logger.warning("bg.mail_token_refresh_failed", error=str(e))
 
     @staticmethod
     def get_bg_tasks() -> set[asyncio.Task]:

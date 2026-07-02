@@ -20,10 +20,26 @@ from loguru import logger
 )
 async def nudge_greeting(user_id: str, message: str = "") -> ToolResult:
     if not message:
+        # 读取用户自定义称呼，兜底"爸爸"
+        try:
+            from config import WORKSPACE_DIR
+            user_md = WORKSPACE_DIR / "USER.md"
+            if user_md.exists():
+                content = user_md.read_text(encoding="utf-8-sig")
+                import re
+                m = re.search(r"称呼[：:]\s*(.+)", content)
+                if m:
+                    address_term = m.group(1).strip().split("\n")[0].strip()
+                else:
+                    address_term = "爸爸"
+            else:
+                address_term = "爸爸"
+        except Exception:
+            address_term = "爸爸"
         greetings = [
-            "旅行者，好久不见！最近怎么样呀？🌿",
-            "旅行者，人家想你了！有什么需要帮忙的吗？",
-            "嘿！旅行者！还记得我吗？我是纳西妲～",
+            f"{address_term}，好久不见！最近怎么样呀？",
+            f"{address_term}，人家想你了！有什么需要帮忙的吗？",
+            f"嘿！{address_term}！还记得我吗？我是纳西妲～",
         ]
         message = random.choice(greetings)
     return ToolResult.ok({"user_id": user_id, "message": message, "status": "sent"})

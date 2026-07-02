@@ -45,6 +45,11 @@ export const useChatStore = defineStore('chat', () => {
 
   const ws = getWsClient()
 
+  // 初始化时主动同步 WS 状态（避免竞态：WS 在 chat store 初始化前已连接，ws_connected 事件被错过）
+  if (ws.connected) {
+    wsConnected.value = true
+  }
+
   ws.on('connected', (e: WsEvent) => {
     wsConnected.value = true
     // 重连后恢复会话与 agent（不丢状态）

@@ -123,6 +123,19 @@ class AgentCoreBootstrapper:
         except Exception as e:
             logger.warning("agent_core.reinit_mcp_failed error={}", str(e))
 
+        # 刷新 ToolCallRepair 的工具名快照（delegate_task 等动态注册的工具在 __init__ 之后才出现）
+        try:
+            from tool_engine.tool_registry import to_openai_tools
+            self.core.tool_repair._allowed_tools = set(t["function"]["name"] for t in to_openai_tools())
+        except Exception as e:
+            logger.debug("agent_core.reinit_tool_repair_refresh_failed error={}", str(e))
+
+        # 自动加载并启用插件（discover 已在 web/server.py 中完成）
+        try:
+            await self._auto_enable_plugins()
+        except Exception as e:
+            logger.warning("agent_core.reinit_plugins_failed error={}", str(e))
+
         self.core._initialized = True
         logger.info("agent_core.initialized" + (" (reinit)" if reinit else ""))
 
@@ -630,15 +643,76 @@ class AgentCoreBootstrapper:
     # ── MCP ───────────────────────────────────────────────
 
     async def _init_mcp(self) -> None:
-        from config import MCP_SERVERS
+        import json as _json
+        from config import MCP_SERVERS, WORKSPACE_DIR
 
         core = self.core
+
+        # 合并配置文件中的 MCP 服务器 + 市场安装的 MCP 服务器
+        all_servers: dict[str, Any] = {}
         if MCP_SERVERS:
+            all_servers.update(MCP_SERVERS)
+
+        # 加载市场安装的 MCP 配置（mcp_configs/*.json）
+        mcp_configs_dir = WORKSPACE_DIR / "mcp_configs"
+        if mcp_configs_dir.is_dir():
+            for fp in mcp_configs_dir.glob("*.json"):
+                try:
+                    cfg = _json.loads(fp.read_text(encoding="utf-8"))
+                    connections = cfg.get("connections", "")
+                    if isinstance(connections, str) and connections:
+                        try:
+                            connections = _json.loads(connections)
+                        except Exception:
+                            connections = {}
+                    if isinstance(connections, dict) and connections.get("command"):
+                        server_name = cfg.get("id", fp.stem)
+                        all_servers[server_name] = connections
+                        logger.debug("mcp.loaded_installed", name=server_name)
+                except Exception as e:
+                    logger.debug("mcp.load_installed_failed", file=fp.name, error=str(e))
+
+        if all_servers:
             try:
-                await core._mcp_manager.start_all(MCP_SERVERS)
+                await core._mcp_manager.start_all(all_servers)
                 logger.info("mcp.servers_started", count=len(core._mcp_manager._clients))
             except Exception as e:
                 logger.warning("mcp.start_failed", error=str(e))
+
+    # ── 插件自动启用 ──────────────────────────────────────
+
+    async def _auto_enable_plugins(self) -> None:
+        """自动加载并启用已发现的插件。
+
+        PluginManager.discover() 在 web/server.py 中已完成，
+        此处对所有已发现的插件执行 load + enable，
+        使插件注册的工具对 LLM 可见。
+        """
+        from web.app import app
+        plugin_mgr = getattr(app.state, "plugin_manager", None)
+        if not plugin_mgr:
+            return
+
+        to_enable = list(plugin_mgr.plugins.keys())
+        for pid in to_enable:
+            try:
+                loaded = await plugin_mgr.load(pid)
+                if loaded:
+                    await plugin_mgr.enable(pid)
+                    logger.info("plugin.auto_enabled", id=pid)
+            except Exception as e:
+                logger.debug("plugin.auto_enable_failed", id=pid, error=str(e))
+
+        # 刷新工具 schema 缓存，使插件注册的工具生效
+        from tool_engine.tool_registry import invalidate_schema_cache
+        invalidate_schema_cache()
+
+        # 再次刷新 ToolCallRepair 快照
+        try:
+            from tool_engine.tool_registry import to_openai_tools
+            self.core.tool_repair._allowed_tools = set(t["function"]["name"] for t in to_openai_tools())
+        except Exception:
+            pass
 
 
 def get_base_dir() -> Path:

@@ -202,20 +202,47 @@ class GreetingScheduler:
         return text, report
 
     async def _generate(self, hint: str) -> str:
-        """通过纳西妲 agent 生成问候。"""
+        """通过纳西妲 agent 生成问候（使用真实 user_id 以加载记忆上下文）。"""
         address_term = getattr(self.core.context, "current_address_term", "") or "爸爸"
 
-        user_input = f"请向{address_term}发一句简短温柔的问候。"
+        # 构建带时间上下文的问候指令
+        from datetime import datetime
+        hour = datetime.now().hour
+        if hour < 6:
+            time_hint = "深夜/凌晨"
+        elif hour < 9:
+            time_hint = "清晨"
+        elif hour < 12:
+            time_hint = "上午"
+        elif hour < 14:
+            time_hint = "中午"
+        elif hour < 18:
+            time_hint = "下午"
+        elif hour < 22:
+            time_hint = "晚上"
+        else:
+            time_hint = "深夜"
+
+        user_input = (
+            f"[主动问候] 现在是{time_hint}，请主动向{address_term}发一句简短温暖的问候。"
+            f"结合你对{address_term}的了解和最近的对话记忆，让问候有个性化和温度，不要千篇一律。"
+            f"只输出问候语（1-2句话）。"
+        )
         if hint:
-            user_input += f"问候类型：{hint}。"
+            user_input += f" 问候主题：{hint}。"
 
         try:
+            # 使用真实的 user_id 和 session，让记忆系统能加载用户上下文
+            user_openid = "webui"
+            session = await self.core.get_session(user_openid)
+            session_id = session["id"] if session else await self.core.create_session(user_openid)
+
             result = await self.core.process(
                 user_input=user_input,
-                user_id="greeting_scheduler",
+                user_id="webui",
                 source="web",
-                user_openid="greeting",
-                session_id="greeting",
+                user_openid=user_openid,
+                session_id=session_id,
             )
             text = result.reply if hasattr(result, 'reply') else str(result)
             logger.debug("greeting.raw_output hint={} raw={}", hint, text[:200])

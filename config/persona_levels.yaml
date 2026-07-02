@@ -59,3 +59,13 @@ LV5_SOULMATE:
   can_mention_past: true
   can_use_nickname: true
   can_share_secrets: true
+
+LV6_ETERNAL:
+  label: "至死不渝"
+  address_term: "{nickname}"
+  tone: "eternal"
+  initiative: 1.0
+  emotion_richness: 1.0
+  can_mention_past: true
+  can_use_nickname: true
+  can_share_secrets: true

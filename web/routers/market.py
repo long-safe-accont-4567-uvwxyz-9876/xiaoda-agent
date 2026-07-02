@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from loguru import logger
 
 from market.manifest import MarketItem, get_plugins_fetcher, get_skills_fetcher, get_mcp_fetcher
@@ -24,6 +24,7 @@ class InstallRequest(BaseModel):
     download_url: str = ""
     version: str = ""
     sha256: str = ""
+    env: dict[str, str] = Field(default_factory=dict, description="MCP 环境变量（如 API key）")
 
 
 class UninstallRequest(BaseModel):
@@ -174,7 +175,7 @@ async def install_plugin(req: InstallRequest, request: Request) -> Any:
         raise HTTPException(403, f"安全检查未通过: {'; '.join(sec_result.warnings)}")
 
     try:
-        result = await asyncio.wait_for(installer.install(item), timeout=300)
+        result = await asyncio.wait_for(installer.install(item, env=req.env or None), timeout=300)
     except asyncio.TimeoutError:
         raise HTTPException(504, "安装超时（300 秒）")
     except InstallError as e:

@@ -61,6 +61,7 @@ const inbox = ref<InboxMail[]>([])
 const authStatus = ref<AuthStatus | null>(null)
 const authChecking = ref(false)
 const authLogging = ref(false)
+const authUrl = ref('')
 
 const configLoading = ref(false)
 const statsLoading = ref(false)
@@ -98,6 +99,31 @@ function copySetupInstruction() {
   navigator.clipboard.writeText(setupInstruction).then(() => {
     message.success(t('mailView.copied'))
   }).catch(() => {})
+}
+
+function copyAuthUrl() {
+  if (authUrl.value) {
+    navigator.clipboard.writeText(authUrl.value).then(() => {
+      message.success('已复制授权链接')
+    }).catch(() => {})
+  }
+}
+
+async function checkAuthAfterReauth() {
+  authChecking.value = true
+  try {
+    await loadAuthStatus()
+    if (authStatus.value?.authorized) {
+      authUrl.value = ''
+      message.success(t('mailView.authSuccess'))
+      loadInbox()
+    } else {
+      message.warning('授权尚未完成，请在浏览器中完成扫码授权后重试')
+    }
+  } catch (_) {
+  } finally {
+    authChecking.value = false
+  }
 }
 
 function goToChat() {
@@ -146,19 +172,30 @@ async function loadAuthStatus() {
 
 async function triggerAuthLogin() {
   authLogging.value = true
+  authUrl.value = ''
   try {
-    const res = await post<{ started: boolean; message: string; cli_path: string | null }>('/mail/auth-login')
+    const res = await post<{ started: boolean; message: string; auth_url?: string; cli_path: string | null }>('/mail/auth-login')
     if (res.started) {
-      message.info(res.message || t('mailView.authBrowserOpened'))
-      // 等待 5 秒后检查授权状态
-      setTimeout(async () => {
-        await loadAuthStatus()
-        if (authStatus.value?.authorized) {
-          message.success(t('mailView.authSuccess'))
-          loadInbox()
-        }
+      if (res.auth_url) {
+        // 服务器环境，返回授权 URL 让用户手动打开
+        authUrl.value = res.auth_url
         authLogging.value = false
-      }, 5000)
+      } else {
+        message.info(res.message || t('mailView.authBrowserOpened'))
+        // 等待 5 秒后检查授权状态
+        setTimeout(async () => {
+          try {
+            await loadAuthStatus()
+            if (authStatus.value?.authorized) {
+              message.success(t('mailView.authSuccess'))
+              loadInbox()
+            }
+          } catch (_) {
+          } finally {
+            authLogging.value = false
+          }
+        }, 5000)
+      }
     } else {
       message.error(res.message || t('mailView.authFailed'))
       authLogging.value = false
@@ -279,10 +316,10 @@ onUnmounted(() => {
             </n-button>
           </div>
 
-          <!-- 未安装 / 未授权 — 统一引导去对话窗口 -->
-          <div v-else class="connect-wizard">
+          <!-- 未安装 — 引导去对话窗口安装 -->
+          <div v-else-if="authStep === 0" class="connect-wizard">
             <n-alert type="info" :show-icon="true" class="connect-alert">
-              {{ authStep === 0 ? t('mailView.notInstalledHint') : t('mailView.notAuthorizedHint') }}
+              {{ t('mailView.notInstalledHint') }}
             </n-alert>
 
             <div class="setup-intro">{{ t('mailView.setupIntro') }}</div>
@@ -320,6 +357,42 @@ onUnmounted(() => {
                 {{ t('mailView.checkAgain') }}
               </n-button>
             </div>
+          </div>
+
+          <!-- CLI 已安装但授权失效 — 直接重新授权 -->
+          <div v-else class="connect-wizard">
+            <n-alert type="warning" :show-icon="true" class="connect-alert">
+              {{ authStatus.error || t('mailView.notAuthorizedHint') }}
+            </n-alert>
+
+            <!-- 授权 URL 已获取，显示链接 -->
+            <div v-if="authUrl" class="auth-url-section">
+              <div class="setup-intro">{{ t('mailView.reAuthDesc') }}</div>
+              <a :href="authUrl" target="_blank" rel="noopener" class="auth-url-link">
+                {{ authUrl }}
+              </a>
+              <div class="auth-url-actions">
+                <n-button size="small" quaternary @click="copyAuthUrl">
+                  复制链接
+                </n-button>
+                <n-button size="small" quaternary :loading="authChecking" @click="checkAuthAfterReauth">
+                  已完成授权？点击检查
+                </n-button>
+              </div>
+            </div>
+
+            <!-- 未获取 URL，显示重新授权按钮 -->
+            <template v-else>
+              <div class="setup-intro">{{ t('mailView.reAuthDesc') }}</div>
+              <div class="connect-actions">
+                <n-button type="primary" :loading="authLogging" @click="triggerAuthLogin">
+                  {{ t('mailView.reAuthButton') }}
+                </n-button>
+                <n-button size="small" quaternary :loading="authChecking" @click="loadAuthStatus">
+                  {{ t('mailView.checkAgain') }}
+                </n-button>
+              </div>
+            </template>
           </div>
         </div>
         <n-empty v-else style="padding: 24px 0" />
@@ -662,6 +735,36 @@ onUnmounted(() => {
   color: var(--wisdom);
   line-height: 1.7;
   padding: 8px 0;
+}
+
+.auth-url-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.auth-url-link {
+  display: block;
+  padding: 12px 16px;
+  background: rgba(10, 24, 16, 0.6);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  color: #5cb8ff;
+  font-size: 14px;
+  word-break: break-all;
+  text-decoration: none;
+  transition: border-color 0.2s;
+}
+
+.auth-url-link:hover {
+  border-color: rgba(92, 184, 255, 0.5);
+  background: rgba(92, 184, 255, 0.08);
+}
+
+.auth-url-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
 .setup-cmd {

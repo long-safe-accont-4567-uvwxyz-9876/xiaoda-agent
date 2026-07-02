@@ -152,6 +152,23 @@ class MessageProcessorMixin:
         except Exception as _e:
             logger.warning("xp.auto_add_failed", error=str(_e))
 
+        # 用户画像学习：记录交互统计 + 周期性 LLM 认知抽取（fire-and-forget）
+        try:
+            from core.user_profile_learner import get_user_profile_learner
+            from core.xp_system import get_xp_system, XPLevel
+            _learner = get_user_profile_learner()
+            _xp_uid2 = user_openid or user_id
+            if _xp_uid2:
+                _is_deep = len(user_input) > 100
+                _learner.record_interaction(_xp_uid2, len(user_input), is_deep=_is_deep)
+                # 周期性触发 LLM 认知抽取（不阻塞，spawn 后台）
+                if _learner.should_run_insight(_xp_uid2):
+                    _xp_state = get_xp_system().get_state(_xp_uid2)
+                    _lv = _xp_state.level.value if hasattr(_xp_state.level, 'value') else int(_xp_state.level)
+                    _spawn(self._run_profile_insight(_xp_uid2, _lv))
+        except Exception as _e:
+            logger.warning("profile_learner.record_failed", error=str(_e))
+
         # slash 命令
         if self.slash_handler and self.slash_handler.is_slash_command(user_input):
             slash_reply = await self.slash_handler.handle(user_input, user_id)
@@ -1140,6 +1157,39 @@ class MessageProcessorMixin:
                     logger.debug(f"persona.add_case_failed: {e}")
         except Exception as e:
             logger.warning("persona.check_failed", error=str(e))
+
+    async def _run_profile_insight(self, user_id: str, xp_level: int) -> None:
+        """后台任务：调用 LLM 抽取用户认知并写入 USER.md。"""
+        try:
+            from core.user_profile_learner import get_user_profile_learner
+            learner = get_user_profile_learner()
+
+            # 从对话上下文获取近期消息
+            recent = []
+            try:
+                recent = self.context.get_last_n(20) or []
+            except Exception:
+                pass
+
+            if not recent:
+                return
+
+            prompt = learner.build_insight_prompt(recent, xp_level)
+            if not prompt:
+                return
+
+            # 轻量级 LLM 调用（使用 flash 路由，低成本）
+            response = await self.router.route(
+                task_type="chat_flash",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=200,
+                timeout=15,
+            )
+            if response:
+                learner.save_insight(user_id, str(response), xp_level)
+        except Exception as e:
+            logger.warning(f"profile_learner.insight_failed: {e}")
 
     async def _describe_images(self, image_data: list[dict]) -> str:
         """使用 MiMo Vision API 识别图片内容"""

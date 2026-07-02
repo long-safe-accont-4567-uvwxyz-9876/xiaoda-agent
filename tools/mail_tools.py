@@ -34,7 +34,8 @@ def _resolve_agently_cli() -> str | None:
     查找顺序：
     1. 环境变量 AGENTLY_CLI_PATH（最高优先级，可覆盖）
     2. PATH 中的 agently-cli
-    3. 常见 npm 全局 bin 目录（nvm / Trae 自带 node 等）
+    3. 原生 Go 二进制（静态链接，不依赖 node）
+    4. npm bin 目录中的 symlink（可能需要 node 在 PATH 中）
     """
     global _AGENTLY_CACHE, _RESOLVED
     if _RESOLVED:
@@ -46,19 +47,24 @@ def _resolve_agently_cli() -> str | None:
     env_path = os.environ.get("AGENTLY_CLI_PATH", "").strip()
     if env_path and os.path.isfile(env_path) and os.access(env_path, os.X_OK):
         _AGENTLY_CACHE = env_path
-        logger.info("mail.agently_cli.resolved", source="env", path=env_path)
+        logger.info("mail.agently_cli.resolved source=env path={}", env_path)
         return _AGENTLY_CACHE
 
     # 2. PATH 查找
     in_path = shutil.which("agently-cli")
     if in_path:
         _AGENTLY_CACHE = in_path
-        logger.info("mail.agently_cli.resolved", source="path", path=in_path)
+        logger.info("mail.agently_cli.resolved source=path path={}", in_path)
         return _AGENTLY_CACHE
 
-    # 3. 常见 npm 全局 bin 目录
+    # 3. glob 查找：优先原生 Go 二进制，跳过指向 .js 的 symlink
     home = os.path.expanduser("~")
     search_patterns = [
+        # 原生 Go 二进制（静态链接，不依赖 node，最高优先级）
+        os.path.join(home, ".trae-cn-server/binaries/node/versions/*/lib/node_modules/"
+                     "@tencent-qqmail/agently-cli/node_modules/"
+                     "@tencent-qqmail/agently-cli-*/bin/agently-cli"),
+        # npm bin 目录（通常是 symlink → run.js，需要 node 在 PATH）
         "/usr/local/bin/agently-cli",
         "/usr/bin/agently-cli",
         os.path.join(home, ".nvm/versions/node/*/bin/agently-cli"),
@@ -68,10 +74,16 @@ def _resolve_agently_cli() -> str | None:
     ]
     for pattern in search_patterns:
         for match in glob.glob(pattern):
-            if os.path.isfile(match) and os.access(match, os.X_OK):
-                _AGENTLY_CACHE = match
-                logger.info("mail.agently_cli.resolved", source="glob", path=match)
-                return _AGENTLY_CACHE
+            if not (os.path.isfile(match) and os.access(match, os.X_OK)):
+                continue
+            # 跳过指向 .js 文件的 symlink（需要 node 解释器，在服务环境中可能不可用）
+            if os.path.islink(match):
+                real = os.path.realpath(match)
+                if real.endswith(".js"):
+                    continue
+            _AGENTLY_CACHE = match
+            logger.info("mail.agently_cli.resolved source=glob path={}", match)
+            return _AGENTLY_CACHE
 
     logger.warning("mail.agently_cli.not_found")
     return None
@@ -90,6 +102,29 @@ _EXIT_CODE_HINTS: dict[int, str] = {
 
 
 # ── 底层执行与解析 ──────────────────────────────────────────────────────
+def _ensure_node_in_path(env: dict[str, str]) -> None:
+    """确保 env["PATH"] 包含 node 所在目录（symlink → run.js 需要 node）。"""
+    # 已经能找到 node 就不改
+    path_dirs = env.get("PATH", "").split(os.pathsep)
+    for d in path_dirs:
+        if os.path.isfile(os.path.join(d, "node")):
+            return
+    # 常见 node 位置
+    home = env.get("HOME", os.path.expanduser("~"))
+    node_dirs = [
+        "/usr/local/bin",
+        "/usr/bin",
+        os.path.join(home, ".trae-cn-server/binaries/node/versions/24.16.0/bin"),
+        os.path.join(home, ".nvm/versions/node/*/bin"),
+    ]
+    for pattern in node_dirs:
+        for match in glob.glob(pattern):
+            node_bin = os.path.join(match, "node")
+            if os.path.isfile(node_bin) and os.access(node_bin, os.X_OK):
+                env["PATH"] = match + os.pathsep + env.get("PATH", "")
+                return
+
+
 async def _run_agently(args: list[str], timeout: int = 60) -> tuple[int, str, str]:
     """执行 agently-cli 子命令，返回 (exit_code, stdout, stderr)。
 
@@ -111,6 +146,11 @@ async def _run_agently(args: list[str], timeout: int = 60) -> tuple[int, str, st
     if cred_home:
         env["HOME"] = cred_home
 
+    # 确保 node 在 PATH 中（symlink → run.js 需要 node 解释器）
+    _ensure_node_in_path(env)
+
+    logger.debug("mail.run_agently cli={} home={} args={}", cli, env.get("HOME", ""), " ".join(args[:3]))
+
     try:
         proc = await asyncio.create_subprocess_exec(
             cli, *args,
@@ -120,7 +160,11 @@ async def _run_agently(args: list[str], timeout: int = 60) -> tuple[int, str, st
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         rc = proc.returncode or 0
-        return rc, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
+        out = stdout.decode("utf-8", errors="replace")
+        err = stderr.decode("utf-8", errors="replace")
+        if rc != 0:
+            logger.warning("mail.run_agently.failed rc={} out={} err={}", rc, out[:300], err[:200])
+        return rc, out, err
     except asyncio.TimeoutError:
         try:
             proc.kill()

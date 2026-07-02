@@ -203,19 +203,28 @@ class NudgeEngine:
         try:
             address_term = self._get_address_term()
 
-            # 通过纳西妲 agent 生成问候（保持人格一致性）
+            # 通过纳西妲 agent 生成问候（使用真实 user_id 加载记忆上下文）
             if self._core:
                 user_input = (
                     f"[主动问候] 现在是{time_desc}，{address_term}{idle_desc}。"
-                    f"请主动向{address_term}发一句简短温柔的问候（1-2句话，像女朋友一样关心）。只输出问候语。"
+                    f"请主动向{address_term}发一句简短温暖的问候。"
+                    f"结合你对{address_term}的了解和最近的对话记忆，让问候有个性化和温度，不要千篇一律。"
+                    f"只输出问候语（1-2句话）。"
                 )
+                # 使用真实的 user_id 和 session，让记忆系统能加载用户上下文
+                real_user_id = f"qq_{self._user_openid}"
+                try:
+                    session = await self._core.get_session(self._user_openid)
+                    session_id = session["id"] if session else await self._core.create_session(self._user_openid)
+                except Exception:
+                    session_id = ""
                 result = await asyncio.wait_for(
                     self._core.process(
                         user_input=user_input,
-                        user_id="nudge_engine",
+                        user_id=real_user_id,
                         source="qq",
                         user_openid=self._user_openid,
-                        session_id="nudge",
+                        session_id=session_id,
                     ),
                     timeout=30,
                 )

@@ -55,6 +55,8 @@ class AgentContext:
         self.STABLE_CACHE_TTL: int = 300
         # 上下文压缩器
         self._compressor = None
+        # 压缩前暂存区：被压缩丢弃的消息暂存于此，供后台记忆编码任务消费
+        self._pre_compressed_buffer: list[dict] = []
         # 并发安全锁
         self._lock = asyncio.Lock()
         # 子代理 A2A 共享黑板（由 AgentCore 注入，None 时跳过黑板逻辑）
@@ -127,6 +129,9 @@ class AgentContext:
             if not compressible:
                 break
 
+            # 暂存即将被压缩的消息，供后台记忆编码任务消费
+            self._pre_compressed_buffer.extend(compressible)
+
             if self._compressor:
                 try:
                     result = self._compressor.compress_history(self.history, keep_recent=preserve_count // 2)
@@ -172,7 +177,14 @@ class AgentContext:
         # 最终强制裁剪：如果 5 轮后仍超限，强制移除最旧的消息
         while self.history and self._history_tokens() > self.MAX_HISTORY_TOKENS:
             removed = self.history.pop(0)
+            self._pre_compressed_buffer.append(removed)
             logger.debug("context.force_trimmed", role=removed["role"], preview=removed["content"][:40])
+
+    def flush_pre_compressed_buffer(self) -> list[dict]:
+        """取出并清空压缩暂存区的消息（供后台记忆编码任务消费）。"""
+        buf = self._pre_compressed_buffer
+        self._pre_compressed_buffer = []
+        return buf
 
     async def _summarize_messages(self, messages: list[dict]) -> str:
         """用 LLM 压缩对话历史为摘要。

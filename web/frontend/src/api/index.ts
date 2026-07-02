@@ -324,6 +324,46 @@ export const listKnowledgeEntities = (limit = 200) =>
 export const listKnowledgeRelations = (limit = 200) =>
   get<any[]>(`/insight/knowledge/relations?limit=${limit}`)
 
+// ── XP 亲密度 ──
+export interface XpHistoryEntry {
+  timestamp: string
+  amount: number
+  source: string
+  description: string
+}
+
+export interface XpLevelConfig {
+  level: number
+  threshold: number
+  label: string
+  tone: string
+  proactivity: number
+  emotional_richness: number
+  guidance: string
+}
+
+export interface XpState {
+  user_id: string
+  xp: number
+  level: number
+  level_label: string
+  next_level_xp: number
+  progress: number
+  history: XpHistoryEntry[]
+  milestones: Record<string, string>
+  first_seen_at: string
+  last_chat_at: string
+  level_config: XpLevelConfig
+}
+
+export async function getXpState(): Promise<XpState> {
+  return get('/insight/xp')
+}
+
+export async function getXpLevels(): Promise<{ levels: XpLevelConfig[] }> {
+  return get('/insight/xp/levels')
+}
+
 export const updateKnowledgeRelation = (id: string, data: { relation: string }) =>
   put<{ id: string; updated: boolean }>(`/insight/knowledge/relations/${id}`, data)
 

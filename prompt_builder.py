@@ -490,6 +490,7 @@ def _build_xp_segment(user_id: str | None) -> str:
     """构建 XP 等级 prompt 段落。
 
     注入到 system prompt 中，让纳西妲根据用户 XP 等级调整亲密度。
+    同时注入用户画像学习器的交互统计和 LLM 认知结果。
     per-user 动态段，不进入稳定段缓存，以保持 KV Cache 命中率。
     任何异常均被吞掉（零质量回退），不影响主流程。
     """
@@ -511,12 +512,29 @@ def _build_xp_segment(user_id: str | None) -> str:
         segment += f"情感丰富度：{config.get('emotion_richness', 0.3)}\n"
 
         # 根据等级添加具体指导
-        if state.level >= XPLevel.LV3_FRIEND:
+        if state.level >= XPLevel.LV5_SOULMATE:
+            segment += "指导：完全默契、命运共同体级别，可表达深层依恋、共享一切内心世界\n"
+        elif state.level >= XPLevel.LV3_FRIEND:
             segment += "指导：可主动提及过往话题、使用昵称、深度情感陪伴\n"
         elif state.level >= XPLevel.LV2_ACQUAINTANCE:
             segment += "指导：可主动提及过往话题、使用昵称\n"
         else:
             segment += "指导：保持礼貌克制、不主动提及私人话题\n"
+
+        # 注入用户画像学习器的交互统计和认知结果
+        try:
+            from core.user_profile_learner import get_user_profile_learner
+            learner = get_user_profile_learner()
+            stats_summary = learner.get_stats_summary(user_id)
+            if stats_summary:
+                segment += f"\n[用户交互统计]\n{stats_summary}\n"
+            # LV2+ 注入 LLM 认知结果
+            if state.level >= XPLevel.LV2_ACQUAINTANCE:
+                insight = learner.get_learned_insight(user_id)
+                if insight:
+                    segment += f"\n[对用户的认知]\n{insight}\n"
+        except Exception:
+            pass  # 画像学习器失败不影响 XP 段落
 
         return segment
     except Exception as e:
