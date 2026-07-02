@@ -6,6 +6,9 @@ RUN cd web/frontend && npm ci --no-audit --no-fund
 COPY web/frontend/ web/frontend/
 RUN cd web/frontend && npm run build
 
+# 安装 agently-cli（邮箱 OAuth 需要）
+RUN npm install -g @tencent-qqmail/agently-cli
+
 # ── Stage 2: Python 运行时 ──
 FROM python:3.11-slim-bookworm
 
@@ -30,6 +33,17 @@ COPY . .
 
 # 从 Stage 1 复制前端构建产物（web/dist 在 .gitignore 中，COPY . . 不包含它）
 COPY --from=frontend-builder /build/web/dist web/dist
+
+# 从 Stage 1 复制 agently-cli（邮箱 OAuth 工具）
+# 复制 node 二进制和 agently-cli npm 包（run.js 需要 node）
+COPY --from=frontend-builder /usr/local/bin/node /usr/local/bin/node
+COPY --from=frontend-builder /usr/local/lib/node_modules/@tencent-qqmail/agently-cli /usr/local/lib/node_modules/@tencent-qqmail/agently-cli
+RUN ln -sf /usr/local/lib/node_modules/@tencent-qqmail/agently-cli/scripts/run.js /usr/local/bin/agently-cli \
+    && chmod +x /usr/local/bin/agently-cli
+
+# 凭据目录持久化（OAuth token 存储，必须在 volume 中）
+ENV AGENTLY_CLI_HOME=/data/agently-cli
+RUN mkdir -p /data/agently-cli/.agently-cli
 
 # 数据目录（通过 volume 挂载持久化）
 ENV KIOXIA_DATA_DIR=/data

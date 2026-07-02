@@ -13,6 +13,7 @@ services:
       - KIOXIA_DATA_DIR=/data
       - WEBUI_HOST=0.0.0.0
       - WEBUI_PORT=${WEBUI_PORT:-8082}
+      - AGENTLY_CLI_HOME=/data/agently-cli
     env_file:
       - .env
     restart: unless-stopped
