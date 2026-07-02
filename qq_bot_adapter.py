@@ -1181,8 +1181,8 @@ class AIQQBot(botpy.Client):
             logger.warning("qq_bot.sticker_with_last_segment_failed", error=str(e))
             try:
                 await _send_segment(last_seg, use_passive=False)
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.debug("qq_bot.fallback_segment_also_failed", error=str(e2))
 
     async def _send_fallback_reply_with_sticker(self, message: Any, clean_reply: str,
                                                   result: ProcessResult) -> None:

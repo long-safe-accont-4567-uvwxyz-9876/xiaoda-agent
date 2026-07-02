@@ -37,8 +37,8 @@ def _get_temperature(model_cfg: dict | None = None) -> float:
         override = get_config_service().get("models.temperature")
         if override is not None:
             return float(override)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("temperature.override_read_failed", error=str(e))
     if model_cfg:
         return float(model_cfg.get("temperature", 0.7))
     return 0.7
@@ -1182,8 +1182,8 @@ class MessageProcessorMixin:
             recent = []
             try:
                 recent = self.context.get_last_n(20) or []
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("recent_messages_read_failed", error=str(e))
 
             if not recent:
                 return

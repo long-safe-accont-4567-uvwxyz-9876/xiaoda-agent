@@ -273,7 +273,9 @@ def test_compute_level_thresholds(tmp_xp):
     assert tmp_xp._compute_level(2000) == XPLevel.LV4_CLOSE_FRIEND
     assert tmp_xp._compute_level(4999) == XPLevel.LV4_CLOSE_FRIEND
     assert tmp_xp._compute_level(5000) == XPLevel.LV5_SOULMATE
-    assert tmp_xp._compute_level(99999) == XPLevel.LV5_SOULMATE
+    assert tmp_xp._compute_level(9999) == XPLevel.LV5_SOULMATE
+    assert tmp_xp._compute_level(10000) == XPLevel.LV6_ETERNAL
+    assert tmp_xp._compute_level(99999) == XPLevel.LV6_ETERNAL
 
 
 # ============================================================
