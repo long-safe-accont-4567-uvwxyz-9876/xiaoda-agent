@@ -1,250 +1,137 @@
-#!/bin/bash
-# =============================================================================
-#  Xiaoda Agent — Linux Self-Extracting Installer
-#  小妲 AI Agent / Xiaoda Agent
-#
-#  This script is a template that gets prepended to a tar.gz archive to
-#  create a .run self-extracting installer. The archive begins after the
-#  __ARCHIVE_BELOW__ marker line.
-# =============================================================================
-
+#!/usr/bin/env bash
 set -euo pipefail
 
-# ---- Constants ---------------------------------------------------------------
-PROJECT_NAME="Xiaoda Agent"
-PROJECT_NAME_ZH="小妲 AI Agent"
-DEFAULT_PREFIX="$HOME/.local/share/xiaoda-agent"
-ARCHIVE_MARKER="__ARCHIVE_BELOW__"
+# ── 小达 Agent Linux 安装脚本 ──────────────────────────────
+# 用法: curl -sL https://raw.githubusercontent.com/.../install-linux.sh | bash
+# 或:   bash install-linux.sh
 
-# ---- Helpers -----------------------------------------------------------------
-bold()  { printf '\033[1m%s\033[0m' "$*"; }
-green() { printf '\033[32m%s\033[0m' "$*"; }
-red()   { printf '\033[31m%s\033[0m' "$*"; }
-yellow(){ printf '\033[33m%s\033[0m' "$*"; }
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.xiaoda-agent}"
+SERVICE_NAME="xiaoda-agent"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
-print_banner() {
-    echo ""
-    echo "  ╔═══════════════════════════════════════════════╗"
-    echo "  ║                                               ║"
-    echo "  ║        ${PROJECT_NAME_ZH}              ║"
-    echo "  ║            ${PROJECT_NAME}                  ║"
-    echo "  ║                                               ║"
-    echo "  ╚═══════════════════════════════════════════════╝"
-    echo ""
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+info()  { echo -e "${GREEN}[✓]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
+error() { echo -e "${RED}[✗]${NC} $*"; exit 1; }
+
+# ── 检查依赖 ──────────────────────────────────────────────
+check_deps() {
+    local missing=()
+    for cmd in python3 pip3; do
+        command -v "$cmd" &>/dev/null || missing+=("$cmd")
+    done
+    if [ ${#missing[@]} -gt 0 ]; then
+        error "缺少依赖: ${missing[*]}。请先安装 Python 3.11+"
+    fi
+
+    # 检查 Python 版本 >= 3.11
+    local pyver
+    pyver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    local major minor
+    major=$(echo "$pyver" | cut -d. -f1)
+    minor=$(echo "$pyver" | cut -d. -f2)
+    if [ "$major" -lt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -lt 11 ]; }; then
+        error "需要 Python >= 3.11，当前: $pyver"
+    fi
+    info "Python $pyver"
 }
 
-print_help() {
-    print_banner
-    cat <<EOF
-  Usage: $(basename "$0") [OPTIONS]
+# ── 解压安装 ──────────────────────────────────────────────
+install_agent() {
+    local tarball="$1"
 
-  Options:
-    --prefix PATH    Install to a custom directory
-                     (default: ${DEFAULT_PREFIX})
+    mkdir -p "$INSTALL_DIR"
+    tar -xzf "$tarball" -C "$INSTALL_DIR" --strip-components=1
+    info "解压到 $INSTALL_DIR"
 
-    --uninstall      Remove ${PROJECT_NAME} from the system
+    # 安装 Python 依赖
+    if [ -f "$INSTALL_DIR/requirements.txt" ]; then
+        pip3 install -r "$INSTALL_DIR/requirements.txt" --quiet 2>/dev/null || \
+            pip3 install -r "$INSTALL_DIR/requirements.txt" 2>&1 | tail -5
+        info "Python 依赖已安装"
+    fi
 
-    --help           Show this help message and exit
+    # 创建 .env（如果不存在）
+    if [ ! -f "$INSTALL_DIR/.env" ]; then
+        cat > "$INSTALL_DIR/.env" <<'ENVEOF'
+# ── 小达 Agent 配置 ──
+WEBUI_HOST=0.0.0.0
+WEBUI_PORT=8080
+# LLM_API_KEY=sk-your-key-here
+# LLM_BASE_URL=https://api.openai.com/v1
+ENVEOF
+        info "已创建 .env 配置文件（请编辑填入 API Key）"
+    fi
+}
 
-  Examples:
-    $(basename "$0")                        # Install to default location
-    $(basename "$0") --prefix /opt/nahida   # Install to /opt/nahida
-    $(basename "$0") --uninstall            # Uninstall
+# ── 创建 systemd 服务 ─────────────────────────────────────
+setup_service() {
+    if [ ! -d /etc/systemd/system ]; then
+        warn "未检测到 systemd，跳过服务创建。请手动运行: python3 $INSTALL_DIR/agent.py --web"
+        return
+    fi
 
+    sudo tee "$SERVICE_FILE" > /dev/null <<EOF
+[Unit]
+Description=小达 AI Agent (WebUI + QQ Bot)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/.venv/bin/python $INSTALL_DIR/agent.py --web --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
 EOF
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$SERVICE_NAME"
+    sudo systemctl start "$SERVICE_NAME"
+    info "服务已创建并启动: $SERVICE_NAME"
 }
 
-die() {
-    red "[ERROR] $*"
-    echo "" >&2
-    exit 1
-}
-
-info() {
-    green "[INFO] $*"
-}
-
-# ---- Uninstall ----------------------------------------------------------------
-do_uninstall() {
-    print_banner
-    local prefix="${NAHIDA_PREFIX:-${DEFAULT_PREFIX}}"
-
-    echo "  $(yellow "Uninstalling ${PROJECT_NAME}...")"
+# ── 主流程 ────────────────────────────────────────────────
+main() {
+    echo ""
+    echo "  ╔══════════════════════════════════════╗"
+    echo "  ║    小达 Agent Linux 安装程序         ║"
+    echo "  ╚══════════════════════════════════════╝"
     echo ""
 
-    # Remove the installed directory
-    if [ -d "$prefix" ]; then
-        rm -rf "$prefix"
-        info "Removed install directory: $prefix"
+    check_deps
+
+    # 查找 tar.gz
+    local tarball=""
+    if [ -n "${1:-}" ] && [ -f "${1:-}" ]; then
+        tarball="$1"
     else
-        echo "  Install directory not found: $prefix (already removed?)"
+        # 在当前目录查找
+        tarball=$(ls xiaoda-agent-linux-x86_64-*.tar.gz 2>/dev/null | head -1)
     fi
 
-    # Remove the wrapper script
-    local wrapper="$HOME/.local/bin/xiaoda-agent"
-    if [ -L "$wrapper" ] || [ -f "$wrapper" ]; then
-        rm -f "$wrapper"
-        info "Removed wrapper script: $wrapper"
-    else
-        echo "  Wrapper script not found: $wrapper"
+    if [ -z "$tarball" ] || [ ! -f "$tarball" ]; then
+        error "请指定 tar.gz 文件: bash install-linux.sh xiaoda-agent-linux-x86_64-vX.X.X.tar.gz"
     fi
 
-    # Remove the .desktop file
-    local desktop="$HOME/.local/share/applications/xiaoda-agent.desktop"
-    if [ -f "$desktop" ]; then
-        rm -f "$desktop"
-        info "Removed desktop entry: $desktop"
-    else
-        echo "  Desktop entry not found: $desktop"
-    fi
-
-    # Update desktop database
-    if command -v update-desktop-database &>/dev/null; then
-        update-desktop-database "$HOME/.local/share/applications/" 2>/dev/null || true
-    fi
+    info "安装包: $tarball"
+    install_agent "$tarball"
+    setup_service
 
     echo ""
-    green "  ${PROJECT_NAME} has been uninstalled."
+    info "安装完成！"
     echo ""
-    exit 0
-}
-
-# ---- Install ------------------------------------------------------------------
-do_install() {
-    local prefix="${NAHIDA_PREFIX:-${DEFAULT_PREFIX}}"
-
-    print_banner
-
-    # --- Locate the archive within this script --------------------------------
-    local archive_line
-    archive_line=$(grep -n "^${ARCHIVE_MARKER}$" "$0" | head -1 | cut -d: -f1)
-    if [ -z "$archive_line" ]; then
-        die "Archive marker not found. This installer may be corrupted."
-    fi
-    local skip_lines=$((archive_line + 1))
-
-    echo "  $(bold "Installing ${PROJECT_NAME} to: $prefix")"
-    echo ""
-
-    # --- Create the install directory -----------------------------------------
-    mkdir -p "$prefix"
-
-    # --- Extract the embedded archive -----------------------------------------
-    info "Extracting files..."
-    tail -n +"$skip_lines" "$0" | tar xzf - -C "$prefix" --strip-components=1
-    if [ $? -ne 0 ]; then
-        die "Extraction failed. The installer may be corrupted."
-    fi
-    green "  Files extracted successfully."
-
-    # --- Verify the binary exists ---------------------------------------------
-    local binary="$prefix/xiaoda-agent"
-    if [ ! -f "$binary" ]; then
-        die "Binary not found at $binary after extraction. The package may be incomplete."
-    fi
-    chmod +x "$binary"
-    info "Binary verified: $binary"
-
-    # --- Create wrapper script ------------------------------------------------
-    local bindir="$HOME/.local/bin"
-    mkdir -p "$bindir"
-    local wrapper="$bindir/xiaoda-agent"
-
-    cat > "$wrapper" <<WRAPPER_EOF
-#!/bin/bash
-# Xiaoda Agent wrapper — auto-generated by the installer
-exec "$prefix/xiaoda-agent" "\$@"
-WRAPPER_EOF
-    chmod +x "$wrapper"
-    info "Created wrapper script: $wrapper"
-
-    # --- Create .desktop file -------------------------------------------------
-    local appdir="$HOME/.local/share/applications"
-    mkdir -p "$appdir"
-    local desktop="$appdir/xiaoda-agent.desktop"
-
-    cat > "$desktop" <<DESKTOP_EOF
-[Desktop Entry]
-Type=Application
-Name=Xiaoda Agent
-Name[zh_CN]=小妲 AI Agent
-Comment=Multi-agent AI assistant powered by Nahida
-Comment[zh_CN]=多智能体 AI 助手 — 以《原神》纳西妲为灵魂
-Exec=$prefix/xiaoda-agent --web
-Icon=$prefix/icon.png
-Terminal=true
-Categories=Network;Chat;AI;
-Keywords=ai;agent;chatbot;nahida;
-StartupNotify=true
-DESKTOP_EOF
-    info "Created desktop entry: $desktop"
-
-    # --- Enable auto-update by default ----------------------------------------
-    touch "$prefix/.auto_update"
-    info "Auto-update enabled (delete $prefix/.auto_update to disable)"
-
-    # --- Copy auto-update script -----------------------------------------------
-    if [ -f "$prefix/scripts/auto-update.sh" ]; then
-        chmod +x "$prefix/scripts/auto-update.sh"
-        info "Auto-update script installed"
-    fi
-
-    # Update desktop database
-    if command -v update-desktop-database &>/dev/null; then
-        update-desktop-database "$appdir" 2>/dev/null || true
-    fi
-
-    # --- Done -----------------------------------------------------------------
-    echo ""
-    echo "  ╔═══════════════════════════════════════════════╗"
-    green "  ║  ${PROJECT_NAME} installed successfully!      ║"
-    echo "  ╚═══════════════════════════════════════════════╝"
-    echo ""
-    echo "  To run the agent:"
-    echo ""
-    echo "    $(bold "xiaoda-agent")              # Start in CLI mode"
-    echo "    $(bold "xiaoda-agent --web")        # Start in Web UI mode"
-    echo ""
-    if [ ! ":$PATH:" == *":$bindir:"* ]; then
-        echo "  $(yellow "NOTE:") $bindir is not in your PATH."
-        echo "  Add it by running:"
-        echo ""
-        echo "    echo 'export PATH=\"\$PATH:$bindir\"' >> ~/.bashrc"
-        echo "    source ~/.bashrc"
-        echo ""
-    fi
-    echo "  To uninstall, run:"
-    echo ""
-    echo "    $(basename "$0") --uninstall"
+    echo "  访问地址: http://localhost:8080"
+    echo "  配置文件: $INSTALL_DIR/.env"
+    echo "  服务管理: sudo systemctl {start|stop|restart|status} $SERVICE_NAME"
     echo ""
 }
 
-# ---- Main ---------------------------------------------------------------------
-if [ $# -gt 0 ]; then
-    case "$1" in
-        --prefix)
-            if [ -z "${2:-}" ]; then
-                die "--prefix requires a path argument."
-            fi
-            export NAHIDA_PREFIX="$2"
-            shift 2
-            ;;
-        --uninstall)
-            do_uninstall
-            ;;
-        --help|-h)
-            print_help
-            exit 0
-            ;;
-        *)
-            die "Unknown option: $1. Use --help for usage information."
-            ;;
-    esac
-fi
-
-do_install
-
-exit 0
-
-# The archive marker — everything below this line is the tar.gz payload
-__ARCHIVE_BELOW__
+main "$@"

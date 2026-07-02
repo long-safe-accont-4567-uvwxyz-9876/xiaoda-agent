@@ -380,6 +380,10 @@ jobs:
           chmod +x dist/xiaoda-agent/scripts/auto-update.sh
           tar -czf xiaoda-agent-linux-x86_64-v${VERSION}.tar.gz -C dist xiaoda-agent
 
+          # 打包 Linux 安装脚本
+          cp scripts/install-linux.sh xiaoda-agent-linux-x86_64-v${VERSION}-install.sh
+          chmod +x xiaoda-agent-linux-x86_64-v${VERSION}-install.sh
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -389,6 +393,7 @@ jobs:
             xiaoda-agent-windows-x64-*.zip
             xiaoda-agent-windows-x64-*.tar.gz
             xiaoda-agent-linux-x86_64-*.tar.gz
+            xiaoda-agent-linux-x86_64-*-install.sh
           if-no-files-found: warn
 
   docker:
@@ -469,7 +474,7 @@ jobs:
         shell: bash
         run: |
           cd artifacts
-          for f in xiaoda-agent-*.tar.gz xiaoda-agent-*.zip xiaoda-agent-*-setup.exe; do
+          for f in xiaoda-agent-*.tar.gz xiaoda-agent-*.zip xiaoda-agent-*-setup.exe xiaoda-agent-*-install.sh; do
             [ -f "$f" ] && sha256sum "$f" > "${f}.sha256"
           done
           echo "--- SHA256 checksums ---"
@@ -499,4 +504,5 @@ jobs:
             artifacts/xiaoda-agent-windows-x64-*.zip
             artifacts/xiaoda-agent-windows-x64-*.tar.gz
             artifacts/xiaoda-agent-linux-x86_64-*.tar.gz
+            artifacts/xiaoda-agent-linux-x86_64-*-install.sh
             artifacts/*.sha256
