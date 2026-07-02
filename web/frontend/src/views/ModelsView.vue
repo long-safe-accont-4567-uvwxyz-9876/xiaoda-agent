@@ -2,7 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import {
   NButton, NSwitch, NModal, NForm, NFormItem, NInput, NInputNumber,
-  NSelect, NTag, NPopconfirm, NRadioGroup, NRadio, useMessage,
+  NSelect, NTag, NPopconfirm, NRadioGroup, NRadio, NSlider, useMessage,
 } from 'naive-ui'
 import draggable from 'vuedraggable'
 import { get, post, put, del } from '../api'
@@ -87,6 +87,7 @@ async function loadAll() {
     usage.value = u
     discoveredModels.value = dm
     renderChart()
+    loadTemperature()
   } catch (e: any) {
     message.error(e.message)
   }
@@ -205,6 +206,51 @@ async function onDragEnd() {
 }
 
 const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning', dead: 'error' }
+
+// Temperature 控制
+const temperature = ref(0.7)
+const tempSource = ref<'override' | 'config'>('config')
+const tempLoading = ref(false)
+let _tempSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+const tempPresets = [
+  { label: '精准', value: 0.0, desc: '确定性最高' },
+  { label: '保守', value: 0.3, desc: '偏向稳定' },
+  { label: '平衡', value: 0.7, desc: '默认推荐' },
+  { label: '创意', value: 1.0, desc: '更有想象力' },
+  { label: '狂野', value: 1.5, desc: '最大随机性' },
+]
+
+async function loadTemperature() {
+  try {
+    const res = await get<any>('/models/temperature')
+    temperature.value = res.temperature ?? 0.7
+    tempSource.value = res.source ?? 'config'
+  } catch { /* use default */ }
+}
+
+async function _doSaveTemperature() {
+  tempLoading.value = true
+  try {
+    const res = await put<any>('/models/temperature', { temperature: temperature.value })
+    temperature.value = res.temperature
+    tempSource.value = 'override'
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    tempLoading.value = false
+  }
+}
+
+function onTempChange() {
+  if (_tempSaveTimer) clearTimeout(_tempSaveTimer)
+  _tempSaveTimer = setTimeout(_doSaveTemperature, 400)
+}
+
+function setTempPreset(val: number) {
+  temperature.value = val
+  _doSaveTemperature()
+}
 </script>
 
 <template>
@@ -312,6 +358,25 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
           <span v-if="i > 0" class="chain-sep"> ｜ </span>
           <span class="mono">{{ from }} → {{ to }}</span>
         </template>
+      </div>
+    </section>
+    </Tilt3D>
+
+    <Tilt3D :max-x="4" :max-y="6">
+    <section class="glass-panel section">
+      <h3>Temperature 调节 <span class="hint">控制 LLM 回复的随机性，越低越确定，越高越发散 <span v-if="tempLoading" class="temp-saving">保存中...</span></span></h3>
+      <div class="temp-row">
+        <span class="temp-val">{{ temperature.toFixed(2) }}</span>
+        <n-slider :value="temperature" :min="0" :max="2" :step="0.05"
+                  :tooltip="false" style="flex:1; margin: 0 16px;"
+                  @update:value="(v: number) => { temperature = v; onTempChange() }" />
+      </div>
+      <div class="temp-presets">
+        <n-button v-for="p in tempPresets" :key="p.value" size="tiny" quaternary
+                  :type="Math.abs(temperature - p.value) < 0.03 ? 'primary' : 'default'"
+                  @click="setTempPreset(p.value)">
+          {{ p.label }} {{ p.value }}
+        </n-button>
       </div>
     </section>
     </Tilt3D>
@@ -433,6 +498,26 @@ const stateColor: Record<string, string> = { ok: 'success', exhausted: 'warning'
 .empty-cell { text-align: center; color: var(--moon-dim); }
 
 .fallback-chain { margin-top: 10px; font-size: 12.5px; color: var(--wisdom); }
+
+.temp-row {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+}
+.temp-val {
+  font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700;
+  color: var(--dendro); min-width: 48px; text-align: right;
+}
+.temp-presets {
+  display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px;
+}
+.temp-source {
+  font-size: 12px; color: var(--moon-dim); margin-top: 4px;
+}
+.temp-saving {
+  color: var(--dendro); font-size: 12px; font-weight: 400;
+  animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
 .usage-chart { height: 260px; }
 
 @media (max-width: 768px) {

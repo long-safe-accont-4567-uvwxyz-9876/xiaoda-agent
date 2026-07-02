@@ -465,6 +465,16 @@ jobs:
       - name: List artifacts
         run: ls -lh artifacts/
 
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          cd artifacts
+          for f in xiaoda-agent-*.tar.gz xiaoda-agent-*.zip xiaoda-agent-*-setup.exe; do
+            [ -f "$f" ] && sha256sum "$f" > "${f}.sha256"
+          done
+          echo "--- SHA256 checksums ---"
+          cat *.sha256
+
       - name: Extract version
         id: version
         shell: bash
@@ -489,3 +499,4 @@ jobs:
             artifacts/xiaoda-agent-windows-x64-*.zip
             artifacts/xiaoda-agent-windows-x64-*.tar.gz
             artifacts/xiaoda-agent-linux-x86_64-*.tar.gz
+            artifacts/*.sha256

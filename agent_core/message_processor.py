@@ -29,6 +29,20 @@ from utils.text_utils import (has_dsml_tool_calls, parse_dsml_tool_calls,
 # 冷启动优化: DEGRADED_REPLY 定义为本地常量, 避免导入 agent_core.core (节省 ~96ms)
 DEGRADED_REPLY = "嗯……人家现在有点不太舒服，等会儿再聊好不好？"
 
+
+def _get_temperature(model_cfg: dict | None = None) -> float:
+    """读取 temperature：优先 webui_overrides，回退 agent.json5 默认值。"""
+    try:
+        from web.config_service import get_config_service
+        override = get_config_service().get("models.temperature")
+        if override is not None:
+            return float(override)
+    except Exception:
+        pass
+    if model_cfg:
+        return float(model_cfg.get("temperature", 0.7))
+    return 0.7
+
 if TYPE_CHECKING:
     from agent_core._shared import ProcessResult, RequestContext
 from agent_core._shared import ProcessResult
@@ -332,7 +346,7 @@ class MessageProcessorMixin:
             await self._notify_status("正在思考回复...")
             result = await self.router.route(
                 "chat", messages,
-                temperature=_model_cfg.get("temperature", 0.7),
+                temperature=_get_temperature(_model_cfg),
                 user_openid=user_openid, session_id=session_id,
             )
             if isinstance(result, str):
@@ -832,14 +846,14 @@ class MessageProcessorMixin:
             if STREAM_TEXT_PUSH and status_callback and not tools:
                 result = await self._stream_llm_response(
                     messages, status_callback=status_callback, task_type=task_type,
-                    temperature=_model_cfg.get("temperature", 0.7),
+                    temperature=_get_temperature(_model_cfg),
                     max_tokens=_cb_max_tokens,
                     user_openid=user_openid, session_id=session_id,
                 )
             else:
                 result = await self.router.route(
                     task_type, messages,
-                    temperature=_model_cfg.get("temperature", 0.7),
+                    temperature=_get_temperature(_model_cfg),
                     max_tokens=_cb_max_tokens,
                     tools=tools,
                     tool_choice="auto" if tools else None,
@@ -850,7 +864,7 @@ class MessageProcessorMixin:
             reply, tool_results = await self._run_verification_loop(
                 result, messages, tools, trace,
                 task_type=task_type,
-                temperature=_model_cfg.get("temperature", 0.7),
+                temperature=_get_temperature(_model_cfg),
                 max_tokens=_cb_max_tokens,
                 user_openid=user_openid, session_id=session_id,
                 is_owner=is_owner, ctx=ctx, user_input=user_input,

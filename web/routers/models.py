@@ -352,6 +352,37 @@ async def credentials_status() -> Any:
     return Envelope(data=out)
 
 
+# ── Temperature 配置 ─────────────────────────────────────────────
+
+
+@router.get("/models/temperature", response_model=Envelope[dict])
+async def get_temperature(request: Request) -> Any:
+    """获取当前 temperature 设置（优先 webui_overrides，回退 agent.json5）。"""
+    cfg = _cfg(request)
+    override = cfg.get("models.temperature")
+    from config import AGENT_CONFIG
+    default = AGENT_CONFIG.get("model", {}).get("temperature", 0.7)
+    value = override if override is not None else default
+    return Envelope(data={"temperature": value, "source": "override" if override is not None else "config"})
+
+
+@router.put("/models/temperature", response_model=Envelope[dict])
+async def set_temperature(request: Request) -> Any:
+    """设置 temperature（0.0-2.0），写入 webui_overrides.json 热生效。"""
+    body = await request.json()
+    value = body.get("temperature")
+    if value is None or not isinstance(value, (int, float)):
+        raise HTTPException(400, "temperature must be a number")
+    value = round(float(value), 2)
+    if not (0.0 <= value <= 2.0):
+        raise HTTPException(400, "temperature must be between 0.0 and 2.0")
+    cfg = _cfg(request)
+    cfg.set("models.temperature", value)
+    await _audit(request, "temperature.set", f"temperature={value}")
+    await _broadcast_changed()
+    return Envelope(data={"temperature": value})
+
+
 # ── 用量统计 ─────────────────────────────────────────────────────
 
 

@@ -43,6 +43,27 @@ powershell -NoProfile -Command ^
     "  Write-Host '  Downloading ' + $asset.name + ' ...'; " ^
     "  $tmp = [System.IO.Path]::GetTempPath() + '\' + $asset.name; " ^
     "  Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmp -TimeoutSec 120; " ^
+    "  Write-Host '  Download complete, verifying SHA256...'; " ^
+    "  $sha256Url = $asset.browser_download_url + '.sha256'; " ^
+    "  $sha256File = $tmp + '.sha256'; " ^
+    "  $sha256Ok = $false; " ^
+    "  try { " ^
+    "    Invoke-WebRequest -Uri $sha256Url -OutFile $sha256File -TimeoutSec 15 -ErrorAction Stop; " ^
+    "    $expected = (Get-Content $sha256File -First 1) -split '\s+' | Select-Object -First 1; " ^
+    "    $actual = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash.ToLower(); " ^
+    "    if ($expected -ne $actual) { " ^
+    "      Write-Host '  SHA256 verification FAILED! Aborting update.'; " ^
+    "      Write-Host ('  Expected: ' + $expected); " ^
+    "      Write-Host ('  Actual:   ' + $actual); " ^
+    "      Remove-Item -Force $tmp -ErrorAction SilentlyContinue; " ^
+    "      Remove-Item -Force $sha256File -ErrorAction SilentlyContinue; " ^
+    "      exit 1; " ^
+    "    }; " ^
+    "    Write-Host '  SHA256 verification passed'; " ^
+    "    $sha256Ok = $true; " ^
+    "  } catch { " ^
+    "    if (-not $sha256Ok) { Write-Host '  Warning: SHA256 file not found, skipping verification' }; " ^
+    "  }; " ^
     "  Write-Host '  Download complete, extracting...'; " ^
     "  $extractDir = [System.IO.Path]::GetTempPath() + '\xiaoda-agent-update'; " ^
     "  if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }; " ^

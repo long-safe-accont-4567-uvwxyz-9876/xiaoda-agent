@@ -95,6 +95,24 @@ if [ ! -f "${TMP_DIR}/${FILENAME}" ]; then
     exit 1
 fi
 
+# SHA256 校验
+SHA256_URL="${DOWNLOAD_URL}.sha256"
+SHA256_FILE="${TMP_DIR}/${FILENAME}.sha256"
+if curl -sL --connect-timeout 5 --max-time 15 -o "$SHA256_FILE" "$SHA256_URL" 2>/dev/null && [ -s "$SHA256_FILE" ]; then
+    EXPECTED=$(awk '{print $1}' "$SHA256_FILE")
+    ACTUAL=$(sha256sum "${TMP_DIR}/${FILENAME}" | awk '{print $1}')
+    if [ "$EXPECTED" != "$ACTUAL" ]; then
+        echo "  $(red "SHA256 校验失败！中止更新")"
+        echo "  期望: $EXPECTED"
+        echo "  实际: $ACTUAL"
+        rm -rf "$TMP_DIR"
+        exit 1
+    fi
+    echo "  $(green "SHA256 校验通过")"
+else
+    echo "  $(yellow "警告: 未找到 SHA256 校验文件，跳过校验")"
+fi
+
 echo "  下载完成，开始更新..."
 
 # 备份当前版本
