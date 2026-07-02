@@ -132,6 +132,13 @@ def get_config_dir() -> Path:
                 pass
         user_config.mkdir(parents=True, exist_ok=True)
         return user_config
+    # Docker 环境：使用 KIOXIA_DATA_DIR（volume 挂载的持久化目录）
+    import os
+    kioxia = os.getenv("KIOXIA_DATA_DIR", "")
+    if kioxia:
+        config_dir = Path(kioxia) / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        return config_dir
     return get_base_dir() / "config"
 
 def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:

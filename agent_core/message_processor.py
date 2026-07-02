@@ -758,12 +758,20 @@ class MessageProcessorMixin:
 
         # 简单任务时过滤系统级工具
         tools = ChatProcessor.filter_tools_for_simple_task(tools, clean_input, self._is_simple_task)
-        # 表情包意图时禁用工具
+        # 表情包意图时仅保留 delegate_task
         if _sticker_intent and tools:
-            tools = None
-        # 非主人消息：过滤敏感工具
+            tools = [t for t in tools if t.get("function", {}).get("name") == "delegate_task"]
+            if not tools:
+                tools = None
+        # 非主人消息：过滤危险工具，保留安全工具（delegate_task、搜索、天气等）
         if not is_master and tools:
-            tools = None
+            _dangerous = {"shell_command", "write_file", "edit_file",
+                          "service_manage", "hardware_status", "gpio_control",
+                          "i2c_comm", "network_diag", "dev_assist",
+                          "run_background", "move_file", "delete_file"}
+            tools = [t for t in tools if t.get("function", {}).get("name") not in _dangerous]
+            if not tools:
+                tools = None
             logger.info("agent.tools_filtered_for_non_master", user_id=user_id)
         return _pre_picked_sticker, tools
 

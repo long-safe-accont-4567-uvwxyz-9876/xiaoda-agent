@@ -74,7 +74,7 @@
   "permission_mode": null,
   "memory_scope": null,
   "background": false,
-  "wallpaper": "/media/wallpapers/keli.png?v=1782344046",
+  "wallpaper": "/assets/wallpapers/keli.jpg",
   "allowed_paths": [
     "assets/stickers/klee/*",
     "config/agents/klee_personality.md"
