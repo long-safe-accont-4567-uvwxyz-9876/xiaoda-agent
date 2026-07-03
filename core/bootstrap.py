@@ -191,7 +191,7 @@ class AgentCoreBootstrapper:
                             shutil.copytree(emotion_dir, dest_emotion)
                             logger.info("bootstrap.stickers_copied", voice="nahida", emotion=emotion_dir.name)
                         except Exception as e:
-                            logger.warning("bootstrap.stickers_copy_failed", voice="nahida", emotion=emotion_dir.name, error=str(e))
+                            logger.warning("bootstrap.stickers_copy_failed", voice="nahida", emotion=emotion_dir.name)
 
         # 复制 klee 表情包
         klee_src = bundled_dir / "klee"
@@ -205,7 +205,7 @@ class AgentCoreBootstrapper:
                             shutil.copytree(emotion_dir, dest_emotion)
                             logger.info("bootstrap.stickers_copied", voice="klee", emotion=emotion_dir.name)
                         except Exception as e:
-                            logger.warning("bootstrap.stickers_copy_failed", voice="klee", emotion=emotion_dir.name, error=str(e))
+                            logger.warning("bootstrap.stickers_copy_failed", voice="klee", emotion=emotion_dir.name)
 
     # 表情包情绪分类子目录（用户往这些目录放图片即可自动调用）
     _STICKER_EMOTION_DIRS = (

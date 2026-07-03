@@ -114,7 +114,7 @@ class NudgeEngine:
             if dnd_periods:
                 for p in dnd_periods:
                     try:
-                        s_h, s_m = p["start"].split(":")
+                        s_h, s_m = p["start].split(":")
                         e_h, e_m = p["end"].split(":")
                         s, e = int(s_h) * 60 + int(s_m), int(e_h) * 60 + int(e_m)
                     except Exception:
