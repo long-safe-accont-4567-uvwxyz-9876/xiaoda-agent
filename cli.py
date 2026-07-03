@@ -40,27 +40,54 @@ except ImportError:
     pass  # readline 不可用时静默降级
 
 
-# ── NO_COLOR 支持 ─────────────────────────────────────────
-_NO_COLOR = bool(os.environ.get("NO_COLOR", ""))
+# ── 颜色支持（Windows 自动检测 + NO_COLOR / FORCE_COLOR） ─────
+def _supports_ansi() -> bool:
+    if os.environ.get("NO_COLOR", ""):
+        return False
+    if os.environ.get("FORCE_COLOR", ""):
+        return True
+    if sys.platform != "win32":
+        return sys.stdout.isatty()
+    if os.environ.get("WT_SESSION") or os.environ.get("TERM_PROGRAM"):
+        return True
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        STD_OUTPUT_HANDLE = -11
+        handle = kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+        mode = ctypes.c_ulong()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            if mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING:
+                return True
+            new_mode = mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            if kernel32.SetConsoleMode(handle, new_mode):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+_SUPPORTS_COLOR = _supports_ansi()
 
 
 class _C:
-    RST = "" if _NO_COLOR else "\033[0m"
-    BOLD = "" if _NO_COLOR else "\033[1m"
-    DIM = "" if _NO_COLOR else "\033[2m"
-    ITALIC = "" if _NO_COLOR else "\033[3m"
-    GREEN = "" if _NO_COLOR else "\033[32m"
-    LGREEN = "" if _NO_COLOR else "\033[92m"
-    DGREEN = "" if _NO_COLOR else "\033[38;2;76;153;0m"
-    CYAN = "" if _NO_COLOR else "\033[36m"
-    YELLOW = "" if _NO_COLOR else "\033[33m"
-    LYELLOW = "" if _NO_COLOR else "\033[93m"
-    MAGENTA = "" if _NO_COLOR else "\033[35m"
-    LMAGENTA = "" if _NO_COLOR else "\033[95m"
-    BLUE = "" if _NO_COLOR else "\033[34m"
-    LBLUE = "" if _NO_COLOR else "\033[94m"
-    WHITE = "" if _NO_COLOR else "\033[97m"
-    LEAF = "" if _NO_COLOR else "\033[38;2;107;142;35m"
+    RST = "\033[0m" if _SUPPORTS_COLOR else ""
+    BOLD = "\033[1m" if _SUPPORTS_COLOR else ""
+    DIM = "\033[2m" if _SUPPORTS_COLOR else ""
+    ITALIC = "\033[3m" if _SUPPORTS_COLOR else ""
+    GREEN = "\033[32m" if _SUPPORTS_COLOR else ""
+    LGREEN = "\033[92m" if _SUPPORTS_COLOR else ""
+    DGREEN = "\033[38;2;76;153;0m" if _SUPPORTS_COLOR else ""
+    CYAN = "\033[36m" if _SUPPORTS_COLOR else ""
+    YELLOW = "\033[33m" if _SUPPORTS_COLOR else ""
+    LYELLOW = "\033[93m" if _SUPPORTS_COLOR else ""
+    MAGENTA = "\033[35m" if _SUPPORTS_COLOR else ""
+    LMAGENTA = "\033[95m" if _SUPPORTS_COLOR else ""
+    BLUE = "\033[34m" if _SUPPORTS_COLOR else ""
+    LBLUE = "\033[94m" if _SUPPORTS_COLOR else ""
+    WHITE = "\033[97m" if _SUPPORTS_COLOR else ""
+    LEAF = "\033[38;2;107;142;35m" if _SUPPORTS_COLOR else ""
 
 
 NAHIDA_GREETINGS = [
