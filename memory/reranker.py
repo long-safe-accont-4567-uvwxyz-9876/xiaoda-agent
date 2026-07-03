@@ -120,11 +120,5 @@ class Reranker:
 
         except Exception as e:
             logger.warning("reranker.failed", error=str(e))
-            return [
-                {
-                    "index": i,
-                    "relevance_score": 1.0 - i * 0.1,
-                    "document": {"text": doc} if return_documents else None,
-                }
-                for i, doc in enumerate(documents[:top_n])
-            ]
+            # Q0-2: 失败返回空列表，让调用方走 RRF 降级，避免假数据污染分数
+            return []
