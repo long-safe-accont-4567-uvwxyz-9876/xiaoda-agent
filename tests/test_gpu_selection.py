@@ -177,10 +177,10 @@ def test_load_model_always_sets_device():
     之前的 bug：if gpu_index > 0 导致独显在 0 时不设置设备，ncnn 用默认核显。
     修复：删除 if 条件，始终调用 net.set_vulkan_device(gpu_index)。
     """
-    # 读取 vision_service.py 源码验证修复
-    import inspect
-    from utils.vision_service import VisionService
-    source = inspect.getsource(VisionService._load_model)
+    # 直接读取源码文件验证，避免导入 vision_service 触发 numpy 依赖
+    vision_service_path = os.path.join(os.path.dirname(__file__), '..', 'utils', 'vision_service.py')
+    with open(vision_service_path, 'r', encoding='utf-8') as f:
+        source = f.read()
     # 确保 set_vulkan_device 不在 if > 0 条件内
     assert "if gpu_index > 0" not in source, "_load_model 不应有 if gpu_index > 0 条件"
     assert "net.set_vulkan_device(gpu_index)" in source, "_load_model 应直接调用 set_vulkan_device"
