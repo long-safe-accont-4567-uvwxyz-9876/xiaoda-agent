@@ -51,7 +51,7 @@ def _validate_path(path: str, mode: str = "read") -> tuple[bool, str, str]:
         (is_allowed, resolved_path, reason)
     """
     # 展开用户目录并解析真实路径
-    expanded = os.path.expanduser(path)
+    expanded = os.path.abspath(os.path.expanduser(path))
     # 对于不存在的路径，先规范化目录部分
     if os.path.exists(expanded):
         resolved = os.path.realpath(expanded)
@@ -60,8 +60,11 @@ def _validate_path(path: str, mode: str = "read") -> tuple[bool, str, str]:
         parent = expanded
         remainder = ""
         while not os.path.exists(parent):
+            prev = parent
             parent, tail = os.path.split(parent)
             remainder = os.path.join(tail, remainder) if remainder else tail
+            if parent == prev:
+                break
         resolved_parent = os.path.realpath(parent)
         resolved = os.path.join(resolved_parent, remainder) if remainder else resolved_parent
 
