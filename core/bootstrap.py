@@ -17,6 +17,8 @@ from typing import Any, TYPE_CHECKING
 from loguru import logger
 
 from config import MIMO_API_KEY, MIMO_BASE_URL, _ensure_workspace_template
+from config import DEFAULT_PROVIDER as _DEFAULT_PROVIDER, PRO_MODEL_NAME as _PRO_MODEL
+from config import MODEL_NAME as _MODEL_NAME, get_provider_config as _get_provider_config
 from core.background_tasks import BackgroundTaskManager
 
 if TYPE_CHECKING:
@@ -400,16 +402,19 @@ class AgentCoreBootstrapper:
             _agents_dir = Path(__file__).resolve().parent.parent / "config" / "agents"
 
         core = self.core
+        _prov_cfg = _get_provider_config(_DEFAULT_PROVIDER)
+        _agent_model = _PRO_MODEL or _MODEL_NAME
+
         keli_config = SubAgentConfig(
             name="keli",
             display_name="可莉",
-            provider="mimo",
-            model="mimo-v2.5-pro",
+            provider=_DEFAULT_PROVIDER,
+            model=_agent_model,
             personality_file=str(_agents_dir / "klee_personality.md"),
             voice_ref="keli",
             excluded_tools={"call_klee", "shell_command", "python_executor", "write_file", "search_files", "read_file", "list_files", "web_browse", "document_reader", "multi_search", "wolfram_query"},
-            base_url="https://api.xiaomimimo.com/v1",
-            api_key_env="MIMO_API_KEY",
+            base_url=_prov_cfg["base_url"],
+            api_key_env=_prov_cfg["api_key_env"],
             capabilities=["chat", "play", "fun"],
             route_description="日常聊天、玩耍、轻松有趣的对话",
             sticker_dir=str(KLEE_STICKER_DIR),
@@ -418,13 +423,13 @@ class AgentCoreBootstrapper:
         yinlang_config = SubAgentConfig(
             name="yinlang",
             display_name="银狼",
-            provider="mimo",
-            model="mimo-v2.5-pro",
+            provider=_DEFAULT_PROVIDER,
+            model=_agent_model,
             personality_file=str(_agents_dir / "yinlang_personality.md"),
             voice_ref=None,
             excluded_tools={"call_klee", "call_nahida"},
-            base_url="https://api.xiaomimimo.com/v1",
-            api_key_env="MIMO_API_KEY",
+            base_url=_prov_cfg["base_url"],
+            api_key_env=_prov_cfg["api_key_env"],
             capabilities=["coding", "debug", "script", "programming", "hardware", "system", "devops"],
             route_description="编程、代码编写、调试、技术问题、硬件控制、系统运维、开发辅助",
             mcp_servers=["git", "github"],
@@ -433,13 +438,13 @@ class AgentCoreBootstrapper:
         xilian_config = SubAgentConfig(
             name="xilian",
             display_name="昔涟",
-            provider="mimo",
-            model="mimo-v2.5-pro",
+            provider=_DEFAULT_PROVIDER,
+            model=_agent_model,
             personality_file=str(_agents_dir / "xilian_personality.md"),
             voice_ref=None,
             excluded_tools={"call_klee", "call_nahida", "shell_command", "python_executor", "write_file"},
-            base_url="https://api.xiaomimimo.com/v1",
-            api_key_env="MIMO_API_KEY",
+            base_url=_prov_cfg["base_url"],
+            api_key_env=_prov_cfg["api_key_env"],
             capabilities=["search", "lookup", "query", "explore", "discover"],
             route_description="搜索信息、查询资料、探索发现",
         )
@@ -447,13 +452,13 @@ class AgentCoreBootstrapper:
         nike_config = SubAgentConfig(
             name="nike",
             display_name="尼可",
-            provider="mimo",
-            model="mimo-v2.5-pro",
+            provider=_DEFAULT_PROVIDER,
+            model=_agent_model,
             personality_file=str(_agents_dir / "nike_personality.md"),
             voice_ref=None,
             excluded_tools={"call_klee", "call_nahida", "shell_command", "write_file"},
-            base_url="https://api.xiaomimimo.com/v1",
-            api_key_env="MIMO_API_KEY",
+            base_url=_prov_cfg["base_url"],
+            api_key_env=_prov_cfg["api_key_env"],
             capabilities=["research", "analysis", "study", "academic"],
             route_description="研究分析、学术思考、深度解读",
         )

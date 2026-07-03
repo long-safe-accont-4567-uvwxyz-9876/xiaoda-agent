@@ -845,6 +845,7 @@ export default {
       EMBED_API_KEY: { label: '向量嵌入 API 密钥', desc: '硅基流动嵌入模型密钥', url_desc: '注册 → API Keys → 复制' },
       WEBUI_PASSWORD: { label: 'Web UI 密码', desc: '留空则无需密码登录', url_desc: '' },
       SILICONFLOW_API_KEY: { label: 'SiliconFlow API 密钥', desc: '硅基流动 API 密钥', url_desc: '注册 → API Keys' },
+      DEEPSEEK_API_KEY: { label: 'DeepSeek API 密钥', desc: 'DeepSeek 大模型 API 密钥', url_desc: '注册 → API Keys' },
       OPENROUTER_API_KEY: { label: 'OpenRouter API 密钥', desc: 'OpenRouter API 密钥', url_desc: '注册 → API Keys' },
       AGNES_API_KEY: { label: 'Agnes AI 图像/视频密钥', desc: '图片生成和视频生成的核心依赖', url_desc: '注册 → API Keys' },
       MODELSCOPE_ACCESS_TOKEN: { label: '魔搭 Access Token', desc: '魔搭 ModelScope 免费模型发现', url_desc: '注册 → 个人中心 → 访问令牌' },

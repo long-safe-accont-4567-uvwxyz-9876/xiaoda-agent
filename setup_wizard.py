@@ -126,7 +126,7 @@ REQUIRED_KEYS = [
         "key": "EMBED_API_KEY",
         "label": "向量嵌入 API 密钥",
         "desc": "硅基流动嵌入模型密钥（记忆向量检索必需）",
-        "url": "https://siliconflow.cn",
+        "url": "https://cloud.siliconflow.cn/i/iM5RmeWc",
         "url_desc": "注册 → API Keys → 复制",
     },
 ]
@@ -150,7 +150,14 @@ OPTIONAL_KEYS = [
         "key": "SILICONFLOW_API_KEY",
         "label": "SiliconFlow API 密钥",
         "desc": "硅基流动 API 密钥（向量检索 + 免费模型发现）",
-        "url": "https://siliconflow.cn",
+        "url": "https://cloud.siliconflow.cn/i/iM5RmeWc",
+        "url_desc": "注册 → API Keys",
+    },
+    {
+        "key": "DEEPSEEK_API_KEY",
+        "label": "DeepSeek API 密钥",
+        "desc": "DeepSeek 大模型 API 密钥",
+        "url": "https://platform.deepseek.com",
         "url_desc": "注册 → API Keys",
     },
     {

@@ -56,12 +56,6 @@ async def _broadcast_changed() -> None:
 
 def list_providers_data(cfg: Any) -> list[dict]:
     out = []
-    # MiMo 内置 provider — 只在有 API key 时显示（始终第一位，order=-1）
-    mimo_key = os.getenv("MIMO_API_KEY", "")
-    if mimo_key:
-        out.append({"id": "mimo", "label": "小米 MiMo", "format": "openai",
-                     "base_url": os.getenv("MIMO_BASE_URL", ""), "builtin": True,
-                     "key_masked": _mask(mimo_key), "enabled": True})
     custom = cfg.get("models.providers", {}) or {}
     # 按 order 字段升序排列；未设置 order 的排在已设置之后，按字典插入顺序
     keys_order = list(custom.keys())
@@ -79,7 +73,7 @@ def list_providers_data(cfg: Any) -> list[dict]:
             "label": p.get("label", pid),
             "format": p.get("format", "openai"),
             "base_url": p.get("base_url", ""),
-            "builtin": False,
+            "builtin": p.get("builtin", False),
             "key_masked": _mask(key),
             "enabled": p.get("enabled", True),
             "default_model": p.get("default_model", ""),

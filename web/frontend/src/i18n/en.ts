@@ -845,6 +845,7 @@ export default {
       EMBED_API_KEY: { label: 'Embedding API Key', desc: 'SiliconFlow embedding model key', url_desc: 'Register → API Keys → Copy' },
       WEBUI_PASSWORD: { label: 'Web UI Password', desc: 'Leave empty for no password login', url_desc: '' },
       SILICONFLOW_API_KEY: { label: 'SiliconFlow API Key', desc: 'SiliconFlow API key', url_desc: 'Register → API Keys' },
+      DEEPSEEK_API_KEY: { label: 'DeepSeek API Key', desc: 'DeepSeek LLM API key', url_desc: 'Register → API Keys' },
       OPENROUTER_API_KEY: { label: 'OpenRouter API Key', desc: 'OpenRouter API key', url_desc: 'Register → API Keys' },
       AGNES_API_KEY: { label: 'Agnes AI Image/Video Key', desc: 'Core dependency for image and video generation', url_desc: 'Register → API Keys' },
       MODELSCOPE_ACCESS_TOKEN: { label: 'ModelScope Access Token', desc: 'ModelScope free model discovery', url_desc: 'Register → Account → Access Tokens' },

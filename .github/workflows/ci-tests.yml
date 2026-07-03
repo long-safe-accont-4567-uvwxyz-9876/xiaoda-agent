@@ -33,9 +33,13 @@ jobs:
           pip install pytest pytest-asyncio
 
       - name: Run tests
+        env:
+          PYTHONIOENCODING: utf-8
         run: pytest tests/ -v --tb=short --junitxml=pytest-report.xml
 
       - name: Run Harness benchmark
+        env:
+          PYTHONIOENCODING: utf-8
         run: python tests/benchmark_harness.py
 
       - name: Upload test report

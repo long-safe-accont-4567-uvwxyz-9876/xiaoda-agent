@@ -280,12 +280,54 @@ _KIOXIA_AVAILABLE = (_KIOXIA_BASE / "db").exists()
 
 DEEPSEEK_API_KEY = get_secret("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "mimo-v2.5")
 
 # MIMO_API_KEY：先用 get_secret 解密 enc:v1: 密文，再交给 protect_credential 做内存态保护
 MIMO_API_KEY = protect_credential(get_secret("MIMO_API_KEY", ""))
 MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
 MIMO_MODEL = os.getenv("MIMO_MODEL_NAME", "mimo-v2.5")
+
+# ── 默认 Provider ──
+# 初始值：环境变量 DEFAULT_PROVIDER > mimo（MiMo 是默认兜底）
+# 运行时可通过 set_default_provider() 动态更新（Web UI 切换模型时调用）
+DEFAULT_PROVIDER = os.getenv("DEFAULT_PROVIDER", "mimo").strip().lower()
+
+
+def set_default_provider(provider: str) -> None:
+    """运行时更新 DEFAULT_PROVIDER（Web UI 切换模型时调用）。
+
+    同时更新模块级变量 DEFAULT_PROVIDER，使所有 import 了该变量的模块
+    在下次读取时获得最新值。
+    """
+    global DEFAULT_PROVIDER
+    DEFAULT_PROVIDER = provider.strip().lower()
+
+# ── Provider → 默认模型映射 ──
+# 当 MODEL_NAME 未在 .env 中显式设置时，根据 DEFAULT_PROVIDER 自动选择
+_PROVIDER_DEFAULT_MODELS: dict[str, str] = {
+    "mimo": "mimo-v2.5",
+    "siliconflow": "deepseek-ai/DeepSeek-V3-0324",
+    "deepseek": "deepseek-chat",
+    "agnes": "agnes-v1",
+}
+if os.getenv("MODEL_NAME"):
+    MODEL_NAME = os.getenv("MODEL_NAME")
+else:
+    MODEL_NAME = _PROVIDER_DEFAULT_MODELS.get(DEFAULT_PROVIDER, "mimo-v2.5")
+PRO_MODEL_NAME = os.getenv("PRO_MODEL_NAME", "")
+FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "")
+
+
+# ── Provider 配置映射（base_url / api_key_env）──
+# 子代理注册时根据 provider 自动选择正确的连接参数
+def get_provider_config(provider: str) -> dict:
+    """返回 provider 对应的 base_url 和 api_key_env。"""
+    _PROVIDER_MAP = {
+        "mimo": {"base_url": MIMO_BASE_URL, "api_key_env": "MIMO_API_KEY"},
+        "siliconflow": {"base_url": "https://api.siliconflow.cn/v1", "api_key_env": "SILICONFLOW_API_KEY"},
+        "deepseek": {"base_url": DEEPSEEK_BASE_URL, "api_key_env": "DEEPSEEK_API_KEY"},
+        "agnes": {"base_url": AGNES_BASE_URL, "api_key_env": "AGNES_API_KEY"},
+    }
+    return _PROVIDER_MAP.get(provider, {"base_url": "", "api_key_env": ""})
 
 # ── ASR 语音识别配置 ──
 ASR_API_KEY = get_secret("ASR_API_KEY", "") or get_secret("SILICONFLOW_API_KEY", "")

@@ -48,6 +48,7 @@ class TestAtomicWrite(unittest.TestCase):
         with open(target, "r", encoding="utf-8") as f:
             self.assertEqual(f.read(), content)
 
+    @unittest.skipIf(sys.platform == "win32", "Windows requires admin for symlinks")
     def test_symlink_protection(self):
         """符号链接不被替换为常规文件"""
         # 创建真实文件

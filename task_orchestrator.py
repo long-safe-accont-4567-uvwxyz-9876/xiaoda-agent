@@ -303,9 +303,9 @@ class RouterNode:
                 seen.add(internal)
         return valid
 
-    def __init__(self, client: AsyncOpenAI, model: str = "mimo-v2.5", belief_router: BeliefRouter | None = None) -> None:
+    def __init__(self, client: AsyncOpenAI, model: str = None, belief_router: BeliefRouter | None = None) -> None:
         self._client = client
-        self._model = model
+        self._model = model or os.getenv("MODEL_NAME", "mimo-v2.5")
         self._belief_router = belief_router
 
     def _build_route_prompt(self, user_input: str, agent_configs: dict) -> str:
@@ -494,10 +494,10 @@ class RouterNode:
 
 
 class ParallelAgentNode:
-    def __init__(self, dispatcher: AgentDispatcher, route_client: AsyncOpenAI, route_model: str = "mimo-v2.5", belief_router: BeliefRouter | None = None) -> None:
+    def __init__(self, dispatcher: AgentDispatcher, route_client: AsyncOpenAI, route_model: str = None, belief_router: BeliefRouter | None = None) -> None:
         self._dispatcher = dispatcher
         self._route_client = route_client
-        self._route_model = route_model
+        self._route_model = route_model or os.getenv("MODEL_NAME", "mimo-v2.5")
         self._belief_router = belief_router
         self._agent_configs: dict = {}
 
@@ -831,9 +831,9 @@ class AgentNode:
 
 
 class SynthesisNode:
-    def __init__(self, client: AsyncOpenAI, model: str = "mimo-v2.5", nahida_chat_callback: Optional[Any]=None) -> None:
+    def __init__(self, client: AsyncOpenAI, model: str = None, nahida_chat_callback: Optional[Any]=None) -> None:
         self._client = client
-        self._model = model
+        self._model = model or os.getenv("MODEL_NAME", "mimo-v2.5")
         self._nahida_chat = nahida_chat_callback
 
     async def synthesize(self, state: TaskState) -> dict:
@@ -907,11 +907,11 @@ async def route_condition(state: TaskState) -> str:
 
 
 def build_task_graph(dispatcher: AgentDispatcher, agent_configs: dict,
-                     route_client: AsyncOpenAI, route_model: str = "mimo-v2.5",
+                     route_client: AsyncOpenAI, route_model: str = None,
                      nahida_chat_callback: Optional[Any]=None) -> TaskGraph:
     db_path = str(DATA_DIR / "agent.db")
     belief_router = BeliefRouter(db_path=db_path)
-    router = RouterNode(route_client, route_model, belief_router=belief_router)
+    router = RouterNode(route_client, route_model or os.getenv("MODEL_NAME", "mimo-v2.5"), belief_router=belief_router)
     parallel_node = ParallelAgentNode(dispatcher, route_client, route_model, belief_router=belief_router)
     agent_node = AgentNode(dispatcher, belief_router=belief_router)
     synthesis = SynthesisNode(route_client, route_model, nahida_chat_callback=nahida_chat_callback)

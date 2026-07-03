@@ -74,6 +74,7 @@ async def test_async_compat_exponential_backoff():
 
 @pytest.mark.asyncio
 async def test_tiered_cache_l1_hit():
+    import gc
     from core.tiered_cache import TieredCache
     with tempfile.TemporaryDirectory() as td:
         cache = TieredCache(
@@ -85,10 +86,13 @@ async def test_tiered_cache_l1_hit():
         # 第二次应该命中 L1
         v = await cache.get("k1", loader=lambda: "should_not_load")
         assert v == "v1"
+        del cache
+        gc.collect()
 
 
 @pytest.mark.asyncio
 async def test_tiered_cache_l2_backfill():
+    import gc
     from core.tiered_cache import TieredCache, L1MemoryCache
     with tempfile.TemporaryDirectory() as td:
         cache = TieredCache(
@@ -103,10 +107,13 @@ async def test_tiered_cache_l2_backfill():
         # 第二次: 应该从 L2 命中并回填 L1
         v = await cache.get("k1", loader=lambda: "should_not_load")
         assert v == "v1"
+        del cache
+        gc.collect()
 
 
 @pytest.mark.asyncio
 async def test_tiered_cache_invalidate():
+    import gc
     from core.tiered_cache import TieredCache
     with tempfile.TemporaryDirectory() as td:
         cache = TieredCache(
@@ -118,6 +125,8 @@ async def test_tiered_cache_invalidate():
         # 失效后重新加载
         v = await cache.get("k1", loader=lambda: "v2")
         assert v == "v2"
+        del cache
+        gc.collect()
 
 
 # ============================================================

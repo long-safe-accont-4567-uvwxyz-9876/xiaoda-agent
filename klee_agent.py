@@ -15,14 +15,17 @@ from emotion.tts_engine import TTSEngine
 from core.message import AgentMessage
 
 
-PROVIDERS = [
-    {
-        "name": "mimo",
-        "base_url": "https://api.xiaomimimo.com/v1",
-        "api_key_env": "MIMO_API_KEY",
-        "models": ["mimo-v2.5"],
-    },
-]
+def _get_providers() -> list[dict]:
+    from config import DEFAULT_PROVIDER, get_provider_config, MODEL_NAME
+    cfg = get_provider_config(DEFAULT_PROVIDER)
+    return [
+        {
+            "name": DEFAULT_PROVIDER,
+            "base_url": cfg["base_url"],
+            "api_key_env": cfg["api_key_env"],
+            "models": [MODEL_NAME],
+        },
+    ]
 
 TIRED_MSG = "可莉现在有点累了...等会儿再来找大哥哥玩吧！蹦蹦...💤"
 
@@ -59,12 +62,13 @@ class KleeAgent:
         self._initialized = False
         self._tool_executor = tool_executor
         self._tool_repair = tool_repair
-        self._preferred_provider: str = "mimo"
+        from config import DEFAULT_PROVIDER
+        self._preferred_provider: str = DEFAULT_PROVIDER
         self._nahida_delegate = nahida_delegate
         self.tts = TTSEngine()
 
     async def init(self) -> None:
-        for provider in PROVIDERS:
+        for provider in _get_providers():
             api_key = _read_env_key(provider["api_key_env"])
             if not api_key:
                 logger.warning("klee.no_api_key", provider=provider["name"])

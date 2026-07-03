@@ -9,6 +9,9 @@ from loguru import logger
 from db.db_analytics import AnalyticsDB
 from utils.metrics import metrics
 from config import AGNES_BASE_URL, AGNES_TEXT_MODEL, PROMPT_CACHING_ENABLED
+from config import MODEL_NAME as _CFG_MODEL_NAME, PRO_MODEL_NAME as _CFG_PRO_MODEL
+from config import FLASH_MODEL_NAME as _CFG_FLASH_MODEL, DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
+from config import set_default_provider as _set_default_provider
 from transports import ProviderTransport, MiMoTransport, AgnesTransport
 from utils.prompt_caching import apply_cache_control
 from utils.error_classifier import ErrorClassifier, ClassifiedError, RecoveryAction
@@ -53,14 +56,14 @@ PROVIDER_PRICING = {
 }
 
 ROUTE_TABLE = {
-    "chat": {"model": MIMO_MODEL, "max_tokens": 1500, "client": "mimo", "thinking": {"type": "disabled"}},
-    "chat_pro": {"model": MIMO_PRO_MODEL, "max_tokens": 2000, "client": "mimo", "thinking": {"type": "enabled", "budget_tokens": 2048}},
-    "chat_flash": {"model": MIMO_MODEL, "max_tokens": 1000, "client": "mimo", "thinking": {"type": "disabled"}},
-    "chat_mini": {"model": MIMO_MODEL, "max_tokens": 800, "client": "mimo", "thinking": {"type": "disabled"}},
+    "chat": {"model": _CFG_MODEL_NAME, "max_tokens": 1500, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "chat_pro": {"model": _CFG_PRO_MODEL or _CFG_MODEL_NAME, "max_tokens": 2000, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "enabled", "budget_tokens": 2048}},
+    "chat_flash": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1000, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "chat_mini": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 800, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "chat_mimo": {"model": MIMO_MODEL, "max_tokens": 1500, "client": "mimo", "thinking": {"type": "disabled"}},
-    "emotion_analysis": {"model": MIMO_MODEL, "max_tokens": 300, "client": "mimo", "thinking": {"type": "disabled"}},
-    "tool_result_wrap": {"model": MIMO_MODEL, "max_tokens": 300, "client": "mimo", "thinking": {"type": "disabled"}},
-    "memory_encoding": {"model": MIMO_MODEL, "max_tokens": 800, "client": "mimo", "thinking": {"type": "disabled"}},
+    "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 300, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 300, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 800, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": 2000, "client": "agnes", "thinking": {"type": "disabled"}},
 }
 
@@ -243,6 +246,8 @@ class ModelRouter:
     def set_chat_model(self, provider: str, model_id: str) -> dict:
         ROUTE_TABLE["chat"]["model"] = model_id
         ROUTE_TABLE["chat"]["client"] = provider
+        # 同步更新全局 DEFAULT_PROVIDER，使子代理、成本统计等全部跟随
+        _set_default_provider(provider)
         if provider not in ("mimo", "agnes"):
             if provider not in self._custom_clients:
                 self._lazy_register_provider(provider)
@@ -264,7 +269,7 @@ class ModelRouter:
     def get_current_chat_model(self) -> dict:
         if self._current_chat_model is not None:
             return self._current_chat_model
-        return {"provider": "mimo", "model_id": ROUTE_TABLE.get("chat", {}).get("model", MIMO_MODEL)}
+        return {"provider": _CFG_DEFAULT_PROVIDER, "model_id": ROUTE_TABLE.get("chat", {}).get("model", _CFG_MODEL_NAME)}
 
     # 已知自定义 provider 的默认模型映射
     _CUSTOM_PROVIDER_DEFAULT_MODELS = {
@@ -459,7 +464,7 @@ class ModelRouter:
         fallback_type = FALLBACK_ROUTE.get(task_type)
         if fallback_type:
             fallback_config = ROUTE_TABLE.get(fallback_type)
-            fallback_provider = fallback_config.get("client", "mimo") if fallback_config else "mimo"
+            fallback_provider = fallback_config.get("client", _CFG_DEFAULT_PROVIDER) if fallback_config else _CFG_DEFAULT_PROVIDER
             # D12: 降级前检查目标客户端是否已配置，未配置则跳过该降级目标
             if fallback_config and self._is_client_configured(fallback_provider):
                 logger.warning("router.fallback",
@@ -655,7 +660,7 @@ class ModelRouter:
         config = ROUTE_TABLE.get(task_type, ROUTE_TABLE["chat"])
         model = config["model"]
         mt = max_tokens or config.get("max_tokens", 1500)
-        provider = config.get("client", "mimo")
+        provider = config.get("client", _CFG_DEFAULT_PROVIDER)
         timeout = self.TASK_TIMEOUTS.get(task_type, 30)
 
         messages = self._apply_prompt_caching(provider, messages)
@@ -873,7 +878,7 @@ class ModelRouter:
         """带重试的路由调用：客户端选择 → 构建 kwargs → 调用 API → 处理响应/异常。"""
         model = config["model"]
         last_error = None
-        provider = config.get("client", "mimo")
+        provider = config.get("client", _CFG_DEFAULT_PROVIDER)
 
         messages = self._apply_prompt_caching(provider, messages)
 

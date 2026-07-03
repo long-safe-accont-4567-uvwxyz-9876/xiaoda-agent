@@ -449,17 +449,45 @@ xiaoda-agent/
 
 ## 快速开始
 
-### Docker 一键部署（推荐）
+### Docker 部署（推荐）
+
+#### 方案 A：开发用户（会 Git，推荐）
+
+代码挂载模式，更新只需 `git pull` + 重启容器，无需重建镜像。
 
 ```bash
+# 1. 首次操作
 git clone https://github.com/long-safe-accont-4567-uvwxyz-9876/xiaoda-agent.git
 cd xiaoda-agent
-cp .env.example .env
-# 编辑 .env 填写 API 密钥
-docker compose up -d
+cp .env.example .env  # 编辑 .env 填写 API 密钥
+
+# 2. 启动容器（代码挂载）
+docker-compose -f docker-compose.dev.yml up -d
+
+# 3. 后续更新（无需重建镜像）
+git pull
+docker-compose -f docker-compose.dev.yml restart
 ```
 
-访问 `http://localhost:8080` 即可使用。
+#### 方案 B：部署用户（纯镜像）
+
+镜像部署模式，数据持久化，更新自动拉取增量镜像。
+
+```bash
+# 1. 首次操作
+git clone https://github.com/long-safe-accont-4567-uvwxyz-9876/xiaoda-agent.git
+cd xiaoda-agent
+cp .env.example .env  # 编辑 .env 填写 API 密钥
+
+# 2. 启动容器（镜像部署）
+docker-compose -f docker-compose.prod.yml up -d
+
+# 3. 后续更新（自动拉取增量镜像）
+docker-compose -f docker-compose.prod.yml pull
+docker-compose -f docker-compose.prod.yml up -d
+```
+
+访问 `http://localhost:8082` 即可使用。
 
 ### 安装包部署
 

@@ -133,12 +133,13 @@ async def get_keys() -> Any:
             {"key": "MIMO_API_KEY", "label": "MiMo API 密钥", "desc": "小米 MiMo 大模型 API 密钥", "url": "https://platform.xiaomimimo.com?ref=SU5WDZ", "url_desc": "注册 → 控制台 → API Keys"},
             {"key": "QQBOT_APP_ID", "label": "QQ Bot App ID", "desc": "QQ 机器人应用 ID", "url": "https://q.qq.com", "url_desc": "创建机器人应用 → 获取 AppID"},
             {"key": "QQBOT_APP_SECRET", "label": "QQ Bot App Secret", "desc": "QQ 机器人应用密钥", "url": "https://q.qq.com", "url_desc": "同一页面的 AppSecret"},
-            {"key": "EMBED_API_KEY", "label": "向量嵌入 API 密钥", "desc": "硅基流动嵌入模型密钥", "url": "https://siliconflow.cn", "url_desc": "注册 → API Keys → 复制"},
+            {"key": "EMBED_API_KEY", "label": "向量嵌入 API 密钥", "desc": "硅基流动嵌入模型密钥", "url": "https://cloud.siliconflow.cn/i/iM5RmeWc", "url_desc": "注册 → API Keys → 复制"},
         ]
         OPTIONAL_KEYS = [
             {"key": "WEBUI_PASSWORD", "label": "Web UI 密码", "desc": "留空则无需密码登录", "url": "", "url_desc": ""},
             {"key": "TAVILY_API_KEY", "label": "Tavily 搜索 API 密钥", "desc": "AI 搜索引擎", "url": "https://tavily.com", "url_desc": "注册 → API Keys"},
-            {"key": "SILICONFLOW_API_KEY", "label": "SiliconFlow API 密钥", "desc": "硅基流动 API 密钥", "url": "https://siliconflow.cn", "url_desc": "注册 → API Keys"},
+            {"key": "SILICONFLOW_API_KEY", "label": "SiliconFlow API 密钥", "desc": "硅基流动 API 密钥", "url": "https://cloud.siliconflow.cn/i/iM5RmeWc", "url_desc": "注册 → API Keys"},
+            {"key": "DEEPSEEK_API_KEY", "label": "DeepSeek API 密钥", "desc": "DeepSeek 大模型 API 密钥", "url": "https://platform.deepseek.com", "url_desc": "注册 → API Keys"},
             {"key": "OPENROUTER_API_KEY", "label": "OpenRouter API 密钥", "desc": "OpenRouter API 密钥", "url": "https://openrouter.ai", "url_desc": "注册 → API Keys"},
             {"key": "WOLFRAMALPHA_API_KEY", "label": "WolframAlpha 知识计算密钥", "desc": "知识计算引擎", "url": "https://products.wolframalpha.com/api/", "url_desc": "注册 → Get AppID"},
             {"key": "AGNES_API_KEY", "label": "Agnes AI 图像/视频密钥", "desc": "图片生成和视频生成的核心依赖", "url": "https://agnes-ai.com", "url_desc": "注册 → API Keys"},
@@ -276,6 +277,23 @@ async def _test_openrouter(key_value: str) -> tuple[bool, str]:
         return False, "OpenRouter API 请求超时"
     except Exception as e:
         return False, f"OpenRouter API 请求失败: {e}"
+
+
+async def _test_deepseek(key_value: str) -> tuple[bool, str]:
+    """测试 DeepSeek API Key。"""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(
+                "https://api.deepseek.com/v1/models",
+                headers={"Authorization": f"Bearer {key_value}"},
+            )
+            if resp.status_code == 200:
+                return True, "DeepSeek API Key 验证成功"
+            return False, f"DeepSeek API 返回 HTTP {resp.status_code}"
+    except httpx.TimeoutException:
+        return False, "DeepSeek API 请求超时"
+    except Exception as e:
+        return False, f"DeepSeek API 请求失败: {e}"
 
 
 async def _test_agnes(key_value: str) -> tuple[bool, str]:
@@ -432,6 +450,9 @@ async def test_single_key(key_name: str, key_value: str, extra: dict | None = No
 
     if key_name == "SILICONFLOW_API_KEY":
         return await _test_siliconflow(key_value)
+
+    if key_name == "DEEPSEEK_API_KEY":
+        return await _test_deepseek(key_value)
 
     if key_name == "OPENROUTER_API_KEY":
         return await _test_openrouter(key_value)
@@ -609,6 +630,7 @@ def _reset_credential_pool(updates: Any) -> None:
             "OPENROUTER_API_KEY": ("openrouter", "https://openrouter.ai/api/v1"),
             "MODELSCOPE_ACCESS_TOKEN": ("modelscope", "https://api-inference.modelscope.cn/v1"),
             "MIMO_API_KEY": ("mimo", "https://api.xiaomimimo.com/v1"),
+            "DEEPSEEK_API_KEY": ("deepseek", "https://api.deepseek.com/v1"),
             "AGNES_API_KEY": ("agnes", ""),
         }
         for env_key, (provider, base_url) in _PROVIDER_KEY_MAP.items():
@@ -683,38 +705,35 @@ async def _background_reinit() -> None:
         logger.error("setup.core_reinit_failed error={} traceback={}", str(e), traceback.format_exc())
 
 
-# 已知免费模型平台 → Provider 映射
+# 已知 Provider 映射 — 有 API Key 即自动注册
 _KNOWN_PROVIDERS = {
+    "MIMO_API_KEY": {
+        "id": "mimo", "label": "小米 MiMo", "format": "openai",
+        "base_url": "https://api.xiaomimimo.com/v1", "builtin": True,
+    },
     "SILICONFLOW_API_KEY": {
-        "id": "siliconflow",
-        "label": "SiliconFlow 硅基流动",
-        "format": "openai",
+        "id": "siliconflow", "label": "SiliconFlow 硅基流动", "format": "openai",
         "base_url": "https://api.siliconflow.cn/v1",
     },
+    "DEEPSEEK_API_KEY": {
+        "id": "deepseek", "label": "DeepSeek", "format": "openai",
+        "base_url": "https://api.deepseek.com/v1",
+    },
     "OPENROUTER_API_KEY": {
-        "id": "openrouter",
-        "label": "OpenRouter",
-        "format": "openai",
+        "id": "openrouter", "label": "OpenRouter", "format": "openai",
         "base_url": "https://openrouter.ai/api/v1",
     },
-    "MODELSCOPE_ACCESS_TOKEN": {
-        "id": "modelscope",
-        "label": "ModelScope 魔搭",
-        "format": "openai",
+    "MODELSCOPE_API_KEY": {
+        "id": "modelscope", "label": "ModelScope 魔搭", "format": "openai",
         "base_url": "https://api-inference.modelscope.cn/v1",
     },
     "AGNES_API_KEY": {
-        "id": "agnes",
-        "label": "Agnes AI",
-        "format": "openai",
+        "id": "agnes", "label": "Agnes AI", "format": "openai",
         "base_url": "https://apihub.agnes-ai.com/v1",
     },
     "OLLAMA_BASE_URL": {
-        "id": "ollama",
-        "label": "Ollama 本地大模型",
-        "format": "openai",
-        "base_url": "",  # 从 OLLAMA_BASE_URL 环境变量动态读取
-        "requires_key": False,
+        "id": "ollama", "label": "Ollama 本地大模型", "format": "openai",
+        "base_url": "http://localhost:11434/v1",
     },
 }
 
@@ -741,7 +760,7 @@ def _auto_register_providers(updates: dict) -> None:
             api_key = updates.get(env_key, "").strip()
             if not api_key:
                 continue
-            base_url = provider_info["base_url"]
+            base_url = provider_info.get("base_url", "")
 
         pid = provider_info["id"]
 
@@ -767,6 +786,8 @@ def _auto_register_providers(updates: dict) -> None:
                 "enabled": True,
                 "order": known_keys.index(env_key),
             }
+            if provider_info.get("builtin"):
+                record["builtin"] = True
             cfg.set(f"models.providers.{pid}", record)
             logger.info("setup.auto_provider_registered id={} order={}", pid, known_keys.index(env_key))
 
