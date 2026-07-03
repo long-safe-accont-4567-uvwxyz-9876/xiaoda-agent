@@ -114,7 +114,7 @@ class NudgeEngine:
             if dnd_periods:
                 for p in dnd_periods:
                     try:
-                        s_h, s_m = p["start"].split(":")
+                        s_h, s_m = p["start].split(":")
                         e_h, e_m = p["end"].split(":")
                         s, e = int(s_h) * 60 + int(s_m), int(e_h) * 60 + int(e_m)
                     except Exception:
@@ -244,7 +244,7 @@ class NudgeEngine:
                 ]
                 result = await asyncio.wait_for(
                     self._router.route("chat_flash", messages, temperature=0.9),
-                    timeout=15,
+                    timeout=30,
                 )
                 if isinstance(result, str):
                     greeting = result
