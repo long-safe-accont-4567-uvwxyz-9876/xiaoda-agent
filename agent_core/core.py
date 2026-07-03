@@ -8,11 +8,9 @@ UserIdentity）已抽取到 agent_core._shared, 由各子模块共享导入, 避
 from __future__ import annotations
 
 import os
-import sys
 import asyncio
 import json
 import re
-import time
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -355,7 +353,6 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         # 先提取情绪值（供 sticker_manager 使用）
         result = self.sticker_manager.strip_emotion_tag(text)
         # 兜底：强制剥离所有 [emotion:xxx] 标签（防止 LLM 在句中/句尾输出标签泄露给用户）
-        import re
         result = re.sub(r'\[emotion:[^\]]*\]', '', result).strip()
         return result
 

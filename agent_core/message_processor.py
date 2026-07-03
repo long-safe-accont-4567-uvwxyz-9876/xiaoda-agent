@@ -26,8 +26,8 @@ from tool_engine.tool_registry import to_openai_tools
 from utils.text_utils import (has_dsml_tool_calls, parse_dsml_tool_calls,
                               humanize, encode_image_to_base64)
 
-# 冷启动优化: DEGRADED_REPLY 定义为本地常量, 避免导入 agent_core.core (节省 ~96ms)
-DEGRADED_REPLY = "嗯……人家现在有点不太舒服，等会儿再聊好不好？"
+# 从 _shared 导入共享常量, 避免重复定义 (该模块极轻量, 无循环导入风险)
+from agent_core._shared import DEGRADED_REPLY
 
 
 def _get_temperature(model_cfg: dict | None = None) -> float:

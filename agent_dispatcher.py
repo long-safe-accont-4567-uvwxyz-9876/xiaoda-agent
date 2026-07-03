@@ -121,26 +121,15 @@ class SubAgentConfig:
 
 
 def _read_env_key(env_var: str) -> str:
-    key = os.environ.get(env_var, "")
-    if key:
-        return key
-    # PyInstaller 打包后从用户目录读取 .env，开发模式从源码目录读取
-    import sys
-    if getattr(sys, 'frozen', False):
-        env_path = Path.home() / ".ai-agent" / ".env"
-    else:
-        env_path = Path(__file__).parent / ".env"
-    if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            if line.startswith(f"{env_var}="):
-                return line.split("=", 1)[1].strip()
-    return ""
+    """读取环境变量或 .env 文件中的配置值（委托给共享模块）。"""
+    from utils.env_reader import read_env_key
+    return read_env_key(env_var)
 
 
 def _is_tool_unsupported_error(error_str: str) -> bool:
-    lower = error_str.lower()
-    keywords = ["tool", "function", "not support", "unsupported", "does not have"]
-    return any(kw in lower for kw in keywords)
+    """判断错误是否表示模型不支持工具调用（委托给共享模块）。"""
+    from utils.env_reader import is_tool_unsupported_error
+    return is_tool_unsupported_error(error_str)
 
 
 class SubAgent:
@@ -925,8 +914,10 @@ class AgentDispatcher:
         logger.info("agent.task_route", task_type=task_type, target=target)
         return target
 
+    _routing_config_cache: tuple[float, dict] | None = None  # (mtime, config)
+
     def _load_routing_config(self) -> dict[str, str]:
-        """从 config/agent_routing.json 加载路由配置
+        """从 config/agent_routing.json 加载路由配置（带文件修改时间缓存）
 
         若文件不存在或加载失败，使用内置默认配置。
         """
@@ -936,8 +927,14 @@ class AgentDispatcher:
         config_path = Path(__file__).parent / "config" / "agent_routing.json"
         if config_path.exists():
             try:
+                mtime = config_path.stat().st_mtime
+                if (self._routing_config_cache
+                        and self._routing_config_cache[0] == mtime):
+                    return self._routing_config_cache[1]
                 with open(config_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    result = json.load(f)
+                self._routing_config_cache = (mtime, result)
+                return result
             except Exception as e:
                 logger.warning("agent.routing_config_load_failed", error=str(e))
 

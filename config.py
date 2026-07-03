@@ -50,7 +50,6 @@ def get_env_path() -> Path:
             old_env = Path(sys.executable).parent / ".env"
             if old_env.exists():
                 try:
-                    import shutil
                     shutil.copy2(old_env, user_env)
                     print(f"[config] .env migrated from {old_env} to {user_env}")
                 except Exception:
@@ -95,7 +94,6 @@ def _migrate_old_data(old_dir: Path, new_dir: Path, name: str) -> None:
     if not old_dir.exists() or not any(old_dir.iterdir()):
         return  # 旧目录无数据，跳过
     try:
-        import shutil
         shutil.copytree(old_dir, new_dir, dirs_exist_ok=True)
         print(f"[config] {name} migrated from {old_dir} to {new_dir}")
     except Exception as e:
@@ -125,7 +123,6 @@ def get_config_dir() -> Path:
         # 迁移：如果旧安装目录有配置文件但用户目录没有，复制过来
         old_config = get_base_dir() / "config"
         if old_config.exists() and not user_config.exists():
-            import shutil
             try:
                 shutil.copytree(old_config, user_config, dirs_exist_ok=True)
             except Exception:
@@ -133,7 +130,6 @@ def get_config_dir() -> Path:
         user_config.mkdir(parents=True, exist_ok=True)
         return user_config
     # Docker 环境：使用 KIOXIA_DATA_DIR（volume 挂载的持久化目录）
-    import os
     kioxia = os.getenv("KIOXIA_DATA_DIR", "")
     if kioxia:
         config_dir = Path(kioxia) / "config"
@@ -147,7 +143,6 @@ def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
     注意：fallback_path 必须与 kioxia_path 结构一致（如都是 .../db），
     避免首次/二次启动路径翻转导致数据孤立。
     """
-    import os
     kioxia_env = os.getenv("KIOXIA_DATA_DIR", "")
     try:
         if kioxia_path.exists() or kioxia_path.parent.exists():

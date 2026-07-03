@@ -3,6 +3,7 @@ import re
 import time
 import asyncio
 import json
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 from openai import AsyncOpenAI
@@ -15,55 +16,51 @@ from belief_router import BeliefRouter
 
 
 class RouteCache:
-    """LRU cache for routing decisions with TTL."""
+    """LRU cache for routing decisions with TTL. Uses OrderedDict for O(1) operations."""
 
     def __init__(self, max_size: int = 200, ttl_seconds: float = 300.0) -> None:
-        self._cache: dict[str, tuple[list[str], float]] = {}  # key -> (targets, timestamp)
+        self._cache: OrderedDict[str, tuple[list[str], float]] = OrderedDict()
         self._max_size = max_size
         self._ttl = ttl_seconds
-        self._access_order: list[str] = []  # for LRU eviction
+        self._lock = asyncio.Lock()
 
-    def get(self, user_input: str) -> list[str] | None:
+    async def get(self, user_input: str) -> list[str] | None:
         """Get cached route result. Returns None if not found or expired."""
         key = self._make_key(user_input)
-        if key not in self._cache:
-            return None
-        targets, ts = self._cache[key]
-        if time.time() - ts > self._ttl:
-            del self._cache[key]
-            self._access_order.remove(key)
-            return None
-        # Move to end (most recently used)
-        self._access_order.remove(key)
-        self._access_order.append(key)
-        return targets
+        async with self._lock:
+            if key not in self._cache:
+                return None
+            targets, ts = self._cache[key]
+            if time.time() - ts > self._ttl:
+                del self._cache[key]
+                return None
+            self._cache.move_to_end(key)
+            return targets
 
-    def put(self, user_input: str, targets: list[str]) -> None:
+    async def put(self, user_input: str, targets: list[str]) -> None:
         """Cache a routing result."""
         key = self._make_key(user_input)
-        if key in self._cache:
-            self._access_order.remove(key)
-        self._cache[key] = (targets, time.time())
-        self._access_order.append(key)
-        # Evict oldest if over max size
-        while len(self._cache) > self._max_size:
-            oldest = self._access_order.pop(0)
-            self._cache.pop(oldest, None)
+        async with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            self._cache[key] = (targets, time.time())
+            while len(self._cache) > self._max_size:
+                self._cache.popitem(last=False)
 
-    def invalidate(self) -> None:
+    async def invalidate(self) -> None:
         """Clear all cached entries."""
-        self._cache.clear()
-        self._access_order.clear()
+        async with self._lock:
+            self._cache.clear()
 
-    def invalidate_agent(self, agent_name: str) -> None:
+    async def invalidate_agent(self, agent_name: str) -> None:
         """Invalidate all cache entries that involve a specific agent."""
-        keys_to_remove = [
-            k for k, (targets, _) in self._cache.items()
-            if agent_name in targets
-        ]
-        for k in keys_to_remove:
-            del self._cache[k]
-            self._access_order.remove(k)
+        async with self._lock:
+            keys_to_remove = [
+                k for k, (targets, _) in self._cache.items()
+                if agent_name in targets
+            ]
+            for k in keys_to_remove:
+                del self._cache[k]
 
     @staticmethod
     def _make_key(user_input: str) -> str:
@@ -364,7 +361,7 @@ class RouterNode:
         if parallel_targets and len(parallel_targets) >= 2:
             valid_targets = self._normalize_parallel_targets(parallel_targets, agent_configs)
             if len(valid_targets) >= 2:
-                self._route_cache.put(user_input, valid_targets)
+                await self._route_cache.put(user_input, valid_targets)
                 await self._notify_route_progress(state, valid_targets, agent_configs, "并行路由")
                 return self._build_route_dict(valid_targets)
 
@@ -373,12 +370,12 @@ class RouterNode:
                 and suggested_target != "keli"
                 and suggested_target in agent_configs):
             targets = [suggested_target]
-            self._route_cache.put(user_input, targets)
+            await self._route_cache.put(user_input, targets)
             await self._notify_route_progress(state, targets, agent_configs, "SOLO路由")
             return self._build_route_dict(targets)
 
         # 1. 缓存命中
-        cached = self._route_cache.get(user_input)
+        cached = await self._route_cache.get(user_input)
         if cached is not None:
             logger.debug("route.cache_hit", input=user_input[:50], targets=cached)
             return self._build_route_dict(cached)
@@ -400,13 +397,13 @@ class RouterNode:
                     if llm_targets:
                         llm_valid = [t for t in llm_targets if t in agent_configs or t == "nahida"]
                         if llm_valid:
-                            self._route_cache.put(user_input, llm_valid)
+                            await self._route_cache.put(user_input, llm_valid)
                             await self._notify_route_progress(state, llm_valid, agent_configs, "LLM路由升级")
                             return self._build_route_dict(llm_valid)
                 except Exception as e:
                     logger.warning("route.llm_upgrade_failed", error=str(e)[:200])
 
-            self._route_cache.put(user_input, targets)
+            await self._route_cache.put(user_input, targets)
             await self._notify_route_progress(state, targets, agent_configs, "路由分析")
             return self._build_route_dict(targets)
 
@@ -696,7 +693,7 @@ class ParallelAgentNode:
     async def execute_single(self, target: str, task_prompt: str, state: TaskState) -> dict | None:
         agent = self._dispatcher.get_agent(target)
         if not agent or not agent.available:
-            RouterNode._route_cache.invalidate_agent(target)
+            await RouterNode._route_cache.invalidate_agent(target)
             if self._belief_router:
                 self._belief_router.update_belief(target, False)
             return {"agent": target, "display_name": target, "reply": f"{target}暂时不可用", "error": True}

@@ -239,21 +239,8 @@ async def _test_qqbot(app_id: str, app_secret: str) -> tuple[bool, str]:
 
 
 async def _test_siliconflow_embed(key_value: str) -> tuple[bool, str]:
-    """测试 SiliconFlow 嵌入 API Key（EMBED_API_KEY）。"""
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.post(
-                "https://api.siliconflow.cn/v1/embeddings",
-                headers={"Authorization": f"Bearer {key_value}"},
-                json={"model": "BAAI/bge-large-zh-v1.5", "input": "test"},
-            )
-            if resp.status_code == 200:
-                return True, "SiliconFlow 嵌入 API Key 验证成功"
-            return False, f"SiliconFlow 嵌入 API 返回 HTTP {resp.status_code}"
-    except httpx.TimeoutException:
-        return False, "SiliconFlow 嵌入 API 请求超时"
-    except Exception as e:
-        return False, f"SiliconFlow 嵌入 API 请求失败: {e}"
+    """测试 SiliconFlow 嵌入 API Key（EMBED_API_KEY）。与 _test_siliconflow 共用实现。"""
+    return await _test_siliconflow(key_value)
 
 
 async def _test_siliconflow(key_value: str) -> tuple[bool, str]:

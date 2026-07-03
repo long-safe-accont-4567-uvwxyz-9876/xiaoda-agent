@@ -4,6 +4,7 @@ from typing import Any
 
 import json
 import time
+import asyncio
 from pathlib import Path
 
 from loguru import logger
@@ -278,7 +279,7 @@ async def run_probe(core: Any, probe_id: str) -> dict:
 
 
 async def run_all(core: Any, on_progress: Any | None=None) -> dict:
-    """执行全部探针, 可选回调通知单条进度.
+    """执行全部探针（并发，最多 5 个同时运行），可选回调通知单条进度.
 
     Args:
         core: 应用核心对象
@@ -288,20 +289,28 @@ async def run_all(core: Any, on_progress: Any | None=None) -> dict:
         含 total/passed/failed/results 的汇总字典
     """
     items = list_probe_ids(core)
-    results = []
+    semaphore = asyncio.Semaphore(5)
+    lock = asyncio.Lock()
+    results: list = []
     passed = 0
-    for item in items:
-        res = await run_probe(core, item["id"])
-        res["id"] = item["id"]
-        res["label"] = item["label"]
-        results.append(res)
-        if res.get("ok"):
-            passed += 1
-        if on_progress:
-            try:
-                await on_progress(item["id"], res)
-            except Exception:
-                pass
+
+    async def _run_one(item: dict) -> None:
+        nonlocal passed
+        async with semaphore:
+            res = await run_probe(core, item["id"])
+            res["id"] = item["id"]
+            res["label"] = item["label"]
+            async with lock:
+                results.append(res)
+                if res.get("ok"):
+                    passed += 1
+            if on_progress:
+                try:
+                    await on_progress(item["id"], res)
+                except Exception:
+                    pass
+
+    await asyncio.gather(*[_run_one(item) for item in items])
     report = {"run_at": time.time(), "passed": passed, "total": len(items), "detail": results}
     try:
         await core.db.execute(

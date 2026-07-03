@@ -22,16 +22,8 @@ def _get_mimo_api_key() -> str:
     if key:
         return key
     # fallback: 从 .env 文件读取（PyInstaller 打包后 os.getenv 可能为空）
-    import sys
-    if getattr(sys, 'frozen', False):
-        env_path = Path.home() / ".ai-agent" / ".env"
-    else:
-        env_path = Path(__file__).resolve().parent.parent / ".env"
-    if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            if line.startswith("MIMO_API_KEY="):
-                return line.split("=", 1)[1].strip()
-    return ""
+    from utils.env_reader import read_env_key
+    return read_env_key("MIMO_API_KEY")
 
 
 _voice_ref_dir = os.getenv("VOICE_REF_DIR", "")

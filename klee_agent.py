@@ -39,26 +39,15 @@ def _klee_tool_names() -> set[str]:
 
 
 def _read_env_key(env_var: str) -> str:
-    key = os.environ.get(env_var, "")
-    if key:
-        return key
-    # frozen 模式下 .env 在用户目录 ~/.ai-agent/.env
-    try:
-        from config import ENV_PATH
-        env_path = Path(ENV_PATH)
-    except ImportError:
-        env_path = Path(__file__).parent / ".env"
-    if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8-sig").splitlines():
-            if line.startswith(f"{env_var}="):
-                return line.split("=", 1)[1].strip()
-    return ""
+    """读取环境变量或 .env 文件中的配置值（委托给共享模块）。"""
+    from utils.env_reader import read_env_key
+    return read_env_key(env_var)
 
 
 def _is_tool_unsupported_error(error_str: str) -> bool:
-    lower = error_str.lower()
-    keywords = ["tool", "function", "not support", "unsupported", "does not have"]
-    return any(kw in lower for kw in keywords)
+    """判断错误是否表示模型不支持工具调用（委托给共享模块）。"""
+    from utils.env_reader import is_tool_unsupported_error
+    return is_tool_unsupported_error(error_str)
 
 
 class KleeAgent:
