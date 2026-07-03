@@ -230,7 +230,8 @@ class ToolExecutorMixin:
                 text = text[len(p):].strip()
         text = strip_dsml(text)
         text = strip_reasoning(text)
-        # 清除 LLM 回复中可能混入的工具定义 JSON（中转站注入导致）
+        # 清除模型生成退化泄露的工具定义 JSON（根因：模型训练数据中包含
+        # Claude/其他 AI 的工具定义，生成时发生 repetition degeneration 泄露）
         text = self._strip_injected_tool_defs(text)
         # S6: Canary Token 泄露检测 —— 在输出返回给用户之前扫描
         # 检测到泄露时立即阻断, 替换为安全消息
@@ -246,38 +247,75 @@ class ToolExecutorMixin:
         text = humanize(text, style="nahida")
         return text
 
+    # ── 工具定义泄露检测 ──────────────────────────────────
+    # 根因：模型（如 Nex-N2-Pro）在长上下文或特定对话场景下发生生成退化，
+    # 泄露训练数据中包含的第三方工具定义（如 Claude Write 工具）。
+    # 表现：正常回复后出现 JSON 工具定义，其中 "Never use..." 等安全提示重复十几次。
+    # 处理：检测到泄露特征时，截断到正常内容结束的位置。
+
+    _TOOL_DEF_MARKERS = (
+        "Never use this AI assistant tool",
+        "Never use this tool to commit",
+        "Do not edit files without",
+        "Writes a file to the specified path",
+        "The tool will return the result of the write operation",
+    )
+
     @staticmethod
     def _strip_injected_tool_defs(text: str) -> str:
-        """清除 LLM 回复中混入的工具定义 JSON 片段。
+        """清除 LLM 回复中泄露的工具定义 JSON 片段。
 
-        某些 API 中转站会在请求中注入额外工具定义（如 Write/Read），
-        LLM 可能在回复文本中引用这些定义，导致用户看到原始 JSON。
+        根因：模型生成退化（repetition degeneration）导致训练数据中的
+        工具定义（如 Claude Write 工具）被泄露到回复内容中。
+        特征：正常回复后出现 JSON，其中安全提示重复多次。
         """
-        if '"description"' not in text and '"Never use' not in text:
+        # 快速路径：无特征关键词直接返回
+        markers = ToolExecutorMixin._TOOL_DEF_MARKERS
+        if not any(m in text for m in markers) and '"description"' not in text:
             return text
-        # 检测工具定义特征：重复出现的安全提示
-        tool_def_markers = (
-            "Never use this AI assistant tool",
-            "Never use this tool to commit",
-            "Do not edit files without",
-            "Writes a file to the specified path",
+
+        cleaned = text
+
+        # 策略 1：检测重复退化（同一短语重复 >= 5 次）
+        # 这是最常见的表现：模型不断重复 "Never use this AI assistant tool for editing files"
+        # [^\\\n] 排除反斜杠和换行，防止贪婪匹配跨过重复边界
+        # 分隔符允许：字面量 \n、实际换行、空白
+        degeneration_pattern = re.search(
+            r'((?:Never use|Do not edit|Writes a file)[^\\\n]{10,80})(?:(?:\\n|\s)*\1){4,}',
+            cleaned,
         )
-        hit_count = sum(1 for m in tool_def_markers if m in text)
-        if hit_count >= 2:
-            # 移除包含工具定义的 JSON 块
+        if degeneration_pattern:
+            # 找到重复开始的位置，截断到该位置
+            cut_pos = degeneration_pattern.start()
+            # 回退到最近的段落边界
+            newline_before = cleaned.rfind('\n', 0, cut_pos)
+            if newline_before > len(cleaned) // 3:
+                cut_pos = newline_before
+            cleaned = cleaned[:cut_pos].strip()
+            logger.warning("agent.degeneration_truncated original_len={} cleaned_len={} "
+                           "repeated_phrase={}",
+                           len(text), len(cleaned),
+                           degeneration_pattern.group(1)[:60])
+
+        # 策略 2：检测并移除工具定义 JSON 块（description + Never use 组合）
+        # 这处理退化截断后残留的 JSON 片段，或无退化但有泄露的情况
+        remaining_hits = sum(1 for m in markers if m in cleaned)
+        if remaining_hits >= 1 and '"description"' in cleaned:
+            # 移除包含工具定义的 JSON 块（可能是不完整的 JSON）
             cleaned = re.sub(
-                r'\{[^{}]*"(?:description|Never use this|Do not edit)[^{}]*\}',
-                '', text, flags=re.DOTALL
+                r'"description"\s*:\s*"[^"]*(?:\\.[^"]*)*(?:Never use|Do not edit|Writes a file)[^"]*(?:\\.[^"]*)*"',
+                '', cleaned, flags=re.DOTALL
             ).strip()
             # 移除残留的纯文本工具定义片段
-            for marker in tool_def_markers:
+            for marker in markers:
                 cleaned = cleaned.replace(marker, '')
-            # 清理多余空行
             cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
-            if cleaned and len(cleaned) > 10:
-                logger.info("agent.injected_tool_def_stripped original_len=%d cleaned_len=%d",
-                            len(text), len(cleaned))
-                return cleaned
+
+        if cleaned != text and cleaned:
+            logger.warning("agent.tool_def_leak_stripped original_len={} cleaned_len={}",
+                           len(text), len(cleaned))
+            return cleaned
+
         return text
 
     def _finalize_reply(self, reply: str, strip_emotion: bool = True, style: str = "nahida") -> str:

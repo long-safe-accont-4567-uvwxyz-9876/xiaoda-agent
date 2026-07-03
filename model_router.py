@@ -729,9 +729,30 @@ class ModelRouter:
             "max_tokens": max_tokens,
             "stream": stream,
         }
+        # ── 防止模型生成退化（repetition degeneration）───
+        # 根因：自回归模型的 greedy decoding 无法逃出重复循环，且自增强效应
+        # 使重复概率越来越高，最终泄露训练数据中的高频片段。
+        # 论文 arXiv:2512.04419 的结论：
+        #   - Beam Search + early_stopping=True 是通用方案（但 OpenAI API 不支持）
+        #   - presence_penalty 仅对条件模式重复有效，对结构化内容重复无效
+        #   - frequency_penalty 论文未测试，作为合理启发式保留
+        #   - stop 序列 + 后处理清洗是 API 调用场景下的必要兜底
+        fp = config.get("frequency_penalty", 0.3)
+        if fp:
+            kwargs["frequency_penalty"] = fp
+        # 论文验证有效值为 1.2，对条件模式重复有效；对结构化重复效果有限但无副作用
+        pp = config.get("presence_penalty", 1.0)
+        if pp:
+            kwargs["presence_penalty"] = pp
+        # 退化兜底停止序列：当模型开始输出工具定义泄露时立即停止
+        kwargs["stop"] = ["Never use this AI assistant tool", "\"Never use"]
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+            # 诊断日志：记录发送给 LLM 的工具名称列表
+            tool_names = [t.get("function", {}).get("name", "?") for t in tools]
+            logger.debug("router.tools_sent provider=%s model=%s count=%d names=%s",
+                         provider, model, len(tools), tool_names)
         if extra_headers:
             kwargs["extra_headers"] = extra_headers
 
