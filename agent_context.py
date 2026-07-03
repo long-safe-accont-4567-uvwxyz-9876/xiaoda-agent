@@ -5,7 +5,7 @@ from loguru import logger
 
 
 def estimate_tokens(text: str) -> int:
-    cn = sum(1 for c in text if '一' <= c <= '鿿')
+    cn = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
     en = len(text) - cn
     # 英文系数 0.25 与 context_usage.py 保持一致（之前是 0.5，导致估算偏高）
     return int(cn * 1.5 + en * 0.25)
