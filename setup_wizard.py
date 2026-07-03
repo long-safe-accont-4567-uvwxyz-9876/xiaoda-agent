@@ -24,22 +24,52 @@ except ImportError:
         return vals
 
 
+def _supports_ansi() -> bool:
+    if os.environ.get("NO_COLOR", ""):
+        return False
+    if os.environ.get("FORCE_COLOR", ""):
+        return True
+    if sys.platform != "win32":
+        return sys.stdout.isatty()
+    if os.environ.get("WT_SESSION") or os.environ.get("TERM_PROGRAM"):
+        return True
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        STD_OUTPUT_HANDLE = -11
+        handle = kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+        mode = ctypes.c_ulong()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            if mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING:
+                return True
+            new_mode = mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            if kernel32.SetConsoleMode(handle, new_mode):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+_SUPPORTS_COLOR = _supports_ansi()
+
+
 class _C:
-    RST = "\033[0m"
-    BOLD = "\033[1m"
-    DIM = "\033[2m"
-    UNDERLINE = "\033[4m"
-    GREEN = "\033[32m"
-    LGREEN = "\033[92m"
-    DGREEN = "\033[38;2;76;153;0m"
-    CYAN = "\033[36m"
-    YELLOW = "\033[33m"
-    LYELLOW = "\033[93m"
-    MAGENTA = "\033[35m"
-    LMAGENTA = "\033[95m"
-    LEAF = "\033[38;2;107;142;35m"
-    BLUE = "\033[34m"
-    LBLUE = "\033[94m"
+    RST = "\033[0m" if _SUPPORTS_COLOR else ""
+    BOLD = "\033[1m" if _SUPPORTS_COLOR else ""
+    DIM = "\033[2m" if _SUPPORTS_COLOR else ""
+    UNDERLINE = "\033[4m" if _SUPPORTS_COLOR else ""
+    GREEN = "\033[32m" if _SUPPORTS_COLOR else ""
+    LGREEN = "\033[92m" if _SUPPORTS_COLOR else ""
+    DGREEN = "\033[38;2;76;153;0m" if _SUPPORTS_COLOR else ""
+    CYAN = "\033[36m" if _SUPPORTS_COLOR else ""
+    YELLOW = "\033[33m" if _SUPPORTS_COLOR else ""
+    LYELLOW = "\033[93m" if _SUPPORTS_COLOR else ""
+    MAGENTA = "\033[35m" if _SUPPORTS_COLOR else ""
+    LMAGENTA = "\033[95m" if _SUPPORTS_COLOR else ""
+    LEAF = "\033[38;2;107;142;35m" if _SUPPORTS_COLOR else ""
+    BLUE = "\033[34m" if _SUPPORTS_COLOR else ""
+    LBLUE = "\033[94m" if _SUPPORTS_COLOR else ""
 
 
 WIZARD_DIR = os.path.dirname(os.path.abspath(__file__))
