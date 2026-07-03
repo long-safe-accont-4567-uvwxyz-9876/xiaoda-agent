@@ -412,7 +412,13 @@ class MemoryManager:
 
         # A1: 智能短路 - 简单查询跳过查询变换，直接走混合检索
         if getattr(config, "RETRIEVAL_SMART_SKIP", True) and self._is_retrieval_simple(query):
-            return await self.retrieve_memories_hybrid(query, k=k)
+            results = await self.retrieve_memories_hybrid(query, k=k)
+            # Q0-1: 简单路径也应用流体评分，过滤已遗忘的旧记忆（零成本，纯本地计算）
+            if results:
+                results = await self._apply_fluid_scoring(results)
+                results.sort(key=lambda x: x.get("effective_score", 0), reverse=True)
+                results = results[:k]
+            return results
 
         # 查询变换：改写 + 扩展
         queries = await self._transform_queries(query, context)
@@ -486,17 +492,19 @@ class MemoryManager:
         """时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索。
 
         无时间词返回 None（调用方继续走常规检索）；命中则返回结果列表。
+        Q1-2: 时间+内容混合查询应用 reranker 精排，避免返回时间范围内不相关的记忆。
         """
         _time_range = _parse_temporal_query(query)
         if not _time_range:
             return None
         start_ts, end_ts = _time_range
         try:
-            # 优先尝试 FTS + 时间过滤（如果 query 里有内容关键词）
+            # 优先尝试 FTS + 时间过滤（多检索一些，给 reranker 精排空间）
             _fts_results = await self.memory.search_memories_fts_with_time(
-                query, start_ts, end_ts, limit=k
+                query, start_ts, end_ts, limit=k * 2
             )
             if _fts_results:
+                _fts_results = await self._apply_reranker_to_results(query, _fts_results, k)
                 logger.debug("memory.temporal_fts_hit",
                              query=query[:50], count=len(_fts_results))
                 return _fts_results
@@ -505,12 +513,40 @@ class MemoryManager:
                 start_ts, end_ts, limit=k * 2
             )
             if _time_results:
+                _time_results = await self._apply_reranker_to_results(query, _time_results, k)
                 logger.debug("memory.temporal_time_hit",
                              query=query[:50], count=len(_time_results))
             return _time_results
         except Exception as e:
             logger.warning("memory.temporal_search_failed", error=str(e))
             return None
+
+    async def _apply_reranker_to_results(self, query: str, results: list[dict],
+                                          k: int) -> list[dict]:
+        """对检索结果应用 reranker 精排（如果可用且结果数 > k）。
+
+        失败时返回原结果前 k 条（不降级到空）。
+        """
+        if not results or not self._reranker or not self._reranker.available:
+            return results[:k]
+        if len(results) <= k:
+            return results  # 结果数不足，无需精排
+        try:
+            docs = [r.get("summary", "") for r in results]
+            reranked = await self._reranker.rerank(query=query, documents=docs, top_n=k)
+            if not reranked:  # Q0-2: reranker 失败返回空列表，降级到原顺序
+                return results[:k]
+            reordered = []
+            for item in reranked:
+                idx = item.get("index", 0)
+                if 0 <= idx < len(results):
+                    mem = results[idx]
+                    mem["rerank_score"] = item.get("relevance_score", 0.0)
+                    reordered.append(mem)
+            return reordered if reordered else results[:k]
+        except Exception as e:
+            logger.debug("memory.rerank_apply_failed", error=str(e))
+            return results[:k]
 
     async def _transform_queries(self, query: str, context: str) -> list[str]:
         """查询变换：rewrite + expand。A2 并行执行，失败降级到 [query]。"""
