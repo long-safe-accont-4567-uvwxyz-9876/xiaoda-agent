@@ -69,13 +69,14 @@ class TestRound1UnitSmoke:
         assert hasattr(ToolGuardrails, "validate_args")
 
     def test_module_scene_priority_matrix(self):
-        """验证场景优先级矩阵维度: 9 模块 x 10 场景。
+        """验证场景优先级矩阵维度: 4 模块 x 10 场景 (v4 分层架构).
 
-        Hecate 结构广度优化: 6→9 模块 (新增 USER.md/MEMORY.md/HEARTBEAT.md),
-        6→10 场景 (新增 time/debug/creative/learning)。
+        v4: Stable Prefix (IDENTITY/SOUL/TOOLS/skills/hardware) 不参与场景重排,
+            仅 Scene-Aware Middle (AGENTS/USER/MEMORY/HEARTBEAT) 4 模块参与.
+        Hecate 结构广度优化: 6→10 场景 (新增 time/debug/creative/learning).
         """
         from prompt_builder import _MODULE_SCENE_PRIORITY
-        assert len(_MODULE_SCENE_PRIORITY) == 9
+        assert len(_MODULE_SCENE_PRIORITY) == 4, f"v4 应为 4 模块, 实际 {len(_MODULE_SCENE_PRIORITY)}"
         expected_scenes = {"default", "greeting", "task", "emotional", "identity", "tool",
                            "time", "debug", "creative", "learning"}
         for module, scene_map in _MODULE_SCENE_PRIORITY.items():
