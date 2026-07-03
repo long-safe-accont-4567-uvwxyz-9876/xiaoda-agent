@@ -78,6 +78,11 @@ class DatabaseManager:
             self._conn = None
         self._conn = await aiosqlite.connect(str(self.db_path))
         self._conn.row_factory = aiosqlite.Row
+        # busy_timeout 必须最先设置，防止后续 PRAGMA 因锁竞争失败
+        try:
+            await self._conn.execute("PRAGMA busy_timeout=5000")
+        except Exception as e:
+            logger.warning(f"PRAGMA busy_timeout 失败: {e}")
         # vfat/exfat 不支持 WAL 共享内存和 FTS5 delete 命令，必须用 DELETE 模式
         # NTFS 完全支持 WAL 和 FTS5，不需要特殊处理
         fs_type = _detect_fs_type(self.db_path)

@@ -1,6 +1,9 @@
 import asyncio
 import os
-import streamlit as st
+try:
+    import streamlit as st
+except ImportError:
+    raise ImportError("streamlit 未安装，请运行: pip install streamlit") from None
 from agent_core import AgentCore
 
 st.set_page_config(

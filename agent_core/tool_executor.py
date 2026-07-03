@@ -230,6 +230,8 @@ class ToolExecutorMixin:
                 text = text[len(p):].strip()
         text = strip_dsml(text)
         text = strip_reasoning(text)
+        # 清除 LLM 回复中可能混入的工具定义 JSON（中转站注入导致）
+        text = self._strip_injected_tool_defs(text)
         # S6: Canary Token 泄露检测 —— 在输出返回给用户之前扫描
         # 检测到泄露时立即阻断, 替换为安全消息
         try:
@@ -242,6 +244,40 @@ class ToolExecutorMixin:
         except Exception as e:
             logger.debug(f"canary.scan_failed: {e}")
         text = humanize(text, style="nahida")
+        return text
+
+    @staticmethod
+    def _strip_injected_tool_defs(text: str) -> str:
+        """清除 LLM 回复中混入的工具定义 JSON 片段。
+
+        某些 API 中转站会在请求中注入额外工具定义（如 Write/Read），
+        LLM 可能在回复文本中引用这些定义，导致用户看到原始 JSON。
+        """
+        if '"description"' not in text and '"Never use' not in text:
+            return text
+        # 检测工具定义特征：重复出现的安全提示
+        tool_def_markers = (
+            "Never use this AI assistant tool",
+            "Never use this tool to commit",
+            "Do not edit files without",
+            "Writes a file to the specified path",
+        )
+        hit_count = sum(1 for m in tool_def_markers if m in text)
+        if hit_count >= 2:
+            # 移除包含工具定义的 JSON 块
+            cleaned = re.sub(
+                r'\{[^{}]*"(?:description|Never use this|Do not edit)[^{}]*\}',
+                '', text, flags=re.DOTALL
+            ).strip()
+            # 移除残留的纯文本工具定义片段
+            for marker in tool_def_markers:
+                cleaned = cleaned.replace(marker, '')
+            # 清理多余空行
+            cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+            if cleaned and len(cleaned) > 10:
+                logger.info("agent.injected_tool_def_stripped original_len=%d cleaned_len=%d",
+                            len(text), len(cleaned))
+                return cleaned
         return text
 
     def _finalize_reply(self, reply: str, strip_emotion: bool = True, style: str = "nahida") -> str:

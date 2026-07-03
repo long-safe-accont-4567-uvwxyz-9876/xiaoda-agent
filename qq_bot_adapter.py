@@ -994,14 +994,17 @@ class AIQQBot(botpy.Client):
         else:
             segments = self._split_text_for_streaming(full_text, chunk_size=300)
 
+        _group_no_proactive = ("被动回复", "超过限制", "无权限", "40034105")
+
         async def _send_segment(text: str) -> None:
             """发送单个分片。群聊无主动消息权限，被动超限直接失败。"""
             try:
                 await message.reply(content=text, msg_seq=_next_msg_seq())
             except Exception as e:
-                if is_group and ("被动回复" in str(e) or "超过限制" in str(e)):
-                    logger.warning("qq_bot.stream_passive_limited_no_proactive",
-                                   error=str(e))
+                err_str = str(e)
+                if is_group and any(k in err_str for k in _group_no_proactive):
+                    logger.debug("qq_bot.stream_passive_limited_no_proactive",
+                                 error=err_str)
                 else:
                     raise
 
@@ -1022,12 +1025,12 @@ class AIQQBot(botpy.Client):
         logger.info("qq_bot.stream_start", total_len=total_len,
                      segments=num_segments, is_group=is_group)
 
-        # 长回复：首片前发送打字指示（仅 C2C，群聊不发避免消耗被动回复配额）
+        # 长回复：首片前发送打字指示（仅 C2C，群聊无主动消息权限会失败）
         if not is_group:
             try:
                 await message.reply(content="纳西妲正在打字...", msg_seq=_next_msg_seq())
             except Exception as e:
-                logger.warning("qq_bot.typing_indicator_failed", error=str(e))
+                logger.debug("qq_bot.typing_indicator_failed", error=str(e))
 
         sent_count = 0
         for i, seg in enumerate(segments):
@@ -1111,13 +1114,16 @@ class AIQQBot(botpy.Client):
         # 长回复：前 N-1 片流式发送，最后一片与表情包合并发送
         group_openid = getattr(message, "group_openid", "") if is_group else ""
 
+        _group_no_proactive_sticker = ("被动回复", "超过限制", "无权限", "40034105")
+
         async def _send_segment(text: str) -> None:
             try:
                 await message.reply(content=text, msg_seq=_next_msg_seq())
             except Exception as e:
-                if is_group and ("被动回复" in str(e) or "超过限制" in str(e)):
-                    logger.warning("qq_bot.stream_passive_limited_no_proactive",
-                                   error=str(e))
+                err_str = str(e)
+                if is_group and any(k in err_str for k in _group_no_proactive_sticker):
+                    logger.debug("qq_bot.stream_passive_limited_no_proactive",
+                                 error=err_str)
                 else:
                     raise
 
