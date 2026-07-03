@@ -167,11 +167,12 @@ class StickerManager:
         """
         if not self._cache:
             return False
-        # 有明确情绪时高概率发送，neutral 中立时也发送
+        # 有明确情绪时高概率发送，neutral/无情绪时也保持 80% 概率
+        # （日常对话大多为 neutral，50% 会导致整体发送率仅约 60%，低于 80% 目标）
         if detected_emotion and detected_emotion != "neutral":
             prob = 0.85
         else:
-            prob = 0.5
+            prob = 0.8
         return random.random() < prob
 
     def get_sticker(self, emotion: str = "") -> Path | None:
@@ -197,11 +198,11 @@ class StickerManager:
                 resolved = resolve_emotion(str(emotion))
                 emotion = STICKER_FALLBACK.get(resolved, "happy")
         if emotion:
-            # Bug fix: 优先从物理目录与情绪匹配的文件中选（目录名=情绪名）
-            if emotion in self._cache:
-                candidates = self._cache[emotion]
-                return random.choice(candidates)
-            return None
+            # 优先从物理目录与情绪匹配的文件中选（目录名=情绪名）
+            if emotion in self._cache and self._cache[emotion]:
+                return random.choice(self._cache[emotion])
+            # 指定情绪目录不存在或为空：fallback 到全部随机选
+            logger.debug(f"sticker.emotion_dir_empty fallback_to_all emotion={emotion}")
         all_stickers = [s for v in self._cache.values() for s in v]
         return random.choice(all_stickers) if all_stickers else None
 
