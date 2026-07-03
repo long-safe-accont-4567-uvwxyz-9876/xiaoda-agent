@@ -764,6 +764,18 @@ class MessageProcessorMixin:
                 memories = []
             memories.extend(lessons)
 
+        # ContextNest A2: 审计本次响应消费了哪些记忆版本 (point-in-time 重建支持)
+        if memories and hasattr(self.memory, "audit_retrieval"):
+            try:
+                from memory.context_governance import ContextGovernance
+                _response_id = ContextGovernance.new_response_id()
+                _audited = await self.memory.audit_retrieval(_response_id, memories)
+                if _audited:
+                    logger.debug("memory.audited",
+                                 response_id=_response_id, count=_audited)
+            except Exception as e:
+                logger.debug("memory.audit_call_failed", error=str(e))
+
         return memories
 
     async def _inject_image_description(self, messages: Any, user_input: Any, image_data: Any) -> Any:

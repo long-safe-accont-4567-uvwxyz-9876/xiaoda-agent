@@ -181,7 +181,8 @@ class MemoryManager:
     def __init__(self, db: DatabaseManager, memory: MemoryDB,
                  vector_store: VectorStore | None = None,
                  router: Optional[Any]=None, knowledge_graph: Optional[Any]=None, security_filter: Optional[Any]=None,
-                 reranker: Optional[Any]=None, query_transformer: Optional[Any]=None) -> None:
+                 reranker: Optional[Any]=None, query_transformer: Optional[Any]=None,
+                 governance: Optional[Any]=None) -> None:
         self.db = db
         self.memory = memory
         self.vec = vector_store
@@ -190,6 +191,7 @@ class MemoryManager:
         self._security_filter = security_filter
         self._reranker = reranker
         self._query_transformer = query_transformer
+        self._governance = governance
         self._last_message_time: float = 0
         self._last_encode_time: float = 0
         self._pending_encode = False
@@ -198,6 +200,28 @@ class MemoryManager:
 
     def set_knowledge_graph(self, kg: Any) -> None:
         self.kg = kg
+
+    def set_governance(self, governance: Any) -> None:
+        """注入 ContextGovernance 实例 (ContextNest 哈希链 + 审计追踪)。"""
+        self._governance = governance
+
+    async def audit_retrieval(self, response_id: str,
+                                memories: list[dict] | None) -> int:
+        """ContextNest A2: 审计一次检索消费了哪些记忆版本。
+
+        由调用方 (message_processor) 在 retrieve_memories 返回后显式调用,
+        记录 (response_id, memory_id, content_hash, version, score, source) 到
+        context_audit_log, 支持 point-in-time 重建。
+        """
+        if not self._governance or not memories:
+            return 0
+        try:
+            return await self._governance.audit_context_consumption(
+                response_id, memories, auto_commit=True,
+            )
+        except Exception as e:
+            logger.debug("memory.audit_retrieval_failed", error=str(e))
+            return 0
 
     async def _has_duplicate(self, summary: str) -> bool:
         """检查是否存在归一化后内容相同的已有记忆"""
@@ -231,10 +255,17 @@ class MemoryManager:
                 False，由调用方对合并后的候选池做一次性批量 Reranker。
         """
         _start = time.time()
+        # ContextNest A1: 提取确定性 selector → 候选集, 向量检索在候选集内排序
+        selectors = self._extract_deterministic_selectors(query)
+        candidate_ids = await self._get_candidate_ids_by_selectors(selectors, limit=k * 6)
+        if candidate_ids is not None:
+            logger.debug("memory.deterministic_selector",
+                         selector_keys=[k for k in selectors if k != "has_selectors"],
+                         candidate_count=len(candidate_ids))
         # 并行执行 FTS 与向量检索
         fts_items, vec_items = await asyncio.gather(
             self._hybrid_fts_search(query, k),
-            self._hybrid_vec_search(query, k),
+            self._hybrid_vec_search(query, k, candidate_ids=candidate_ids),
         )
 
         # 降级：只有一路有结果
@@ -296,12 +327,19 @@ class MemoryManager:
             logger.warning("memory.fts_search_failed", error=str(e))
             return []
 
-    async def _hybrid_vec_search(self, query: str, k: int) -> list[dict]:
-        """向量检索 + 批量 JOIN：一次查询获取所有向量命中的记忆记录"""
+    async def _hybrid_vec_search(self, query: str, k: int,
+                                 candidate_ids: list[int] | None = None) -> list[dict]:
+        """向量检索 + 批量 JOIN：一次查询获取所有向量命中的记忆记录
+
+        ContextNest A1: candidate_ids 提供时, 向量检索只在确定性候选集内排序,
+        候选集本身由 metadata selector (时间/重要性) 产生, Jaccard 1.0。
+        """
         if not self.vec:
             return []
         try:
-            vec_results = await self.vec.search(query, top_k=k * 2)
+            vec_results = await self.vec.search(
+                query, top_k=k * 2, candidate_ids=candidate_ids, deterministic=True,
+            )
             if not vec_results:
                 return []
             vec_ids = [row_id for row_id, _ in vec_results]
@@ -318,6 +356,60 @@ class MemoryManager:
         except Exception as e:
             logger.warning("memory.vec_search_failed", error=str(e))
             return []
+
+    def _extract_deterministic_selectors(self, query: str) -> dict:
+        """ContextNest A1: 从查询中提取确定性 selector (metadata-based, Jaccard 1.0)。
+
+        与向量检索 (概率性, 论文实测 mean Jaccard 0.611) 互补:
+        selector 先产生确定性候选集, 向量只在集内排序。
+
+        Returns:
+            dict 可选键:
+            - time_range: (start_ts, end_ts) 来自"昨天/前天/上周"等时间词
+            - min_importance: float  (当前留空, 由调用方按需填)
+            - has_selectors: bool   是否有任何确定性 selector 可用
+        """
+        selectors: dict = {"has_selectors": False}
+        try:
+            tr = _parse_temporal_query(query)
+            if tr:
+                selectors["time_range"] = tr
+                selectors["has_selectors"] = True
+        except Exception as e:
+            logger.debug("memory.selector_extract_failed", error=str(e))
+        return selectors
+
+    async def _get_candidate_ids_by_selectors(self, selectors: dict,
+                                                limit: int = 200) -> list[int] | None:
+        """根据确定性 selector 查询候选 rowid 集合。
+
+        无 selector 返回 None (调用方走原 KNN 全量检索)。
+        """
+        if not selectors.get("has_selectors"):
+            return None
+        clauses: list[str] = []
+        params: list = []
+        if "time_range" in selectors:
+            s, e = selectors["time_range"]
+            clauses.append("timestamp BETWEEN ? AND ?")
+            params.extend([s, e])
+        if "min_importance" in selectors:
+            clauses.append("importance >= ?")
+            params.append(selectors["min_importance"])
+        # ORDER BY id 保证候选集本身有序确定
+        where = " AND ".join(clauses) if clauses else "1=1"
+        params.append(limit)
+        try:
+            cursor = await self.memory._conn.execute(
+                f"SELECT id FROM episodic_memories WHERE {where} "
+                f"ORDER BY id LIMIT ?",
+                params,
+            )
+            rows = await cursor.fetchall()
+            return [r[0] for r in rows] if rows else []
+        except Exception as e:
+            logger.debug("memory.candidate_ids_failed", error=str(e))
+            return None
 
     async def _hybrid_rerank(self, query: str, fused: list[tuple[str, float]],
                               all_items: dict[str, dict], k: int) -> list[dict] | None:
@@ -883,6 +975,13 @@ class MemoryManager:
             # 标记候选已应用
             await self.memory.mark_candidate_applied(candidate_id, mem_id)
 
+            # ContextNest A3: 记录初始版本哈希链 (tamper-evident)
+            if self._governance:
+                try:
+                    await self._governance.record_initial_version(mem_id, summary, auto_commit=False)
+                except Exception as e:
+                    logger.debug("memory.governance_init_failed", error=str(e))
+
             if self.vec and summary:
                 await self.vec.upsert(mem_id, summary)
 
@@ -996,6 +1095,13 @@ class MemoryManager:
                 event_type=event_type,
                 metadata_json=metadata,
             )
+
+            # ContextNest A3: summary 变更时记录新版本到哈希链
+            if self._governance and update_summary:
+                try:
+                    await self._governance.record_version_update(mem_id, update_summary)
+                except Exception as e:
+                    logger.debug("memory.governance_update_failed", error=str(e))
 
             # 如果 summary 更新了，重新生成向量（让向量检索也能用到更好的摘要）
             if update_summary and self.vec:

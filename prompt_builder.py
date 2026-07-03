@@ -40,51 +40,339 @@ _SAFE_PROMPT_CACHE_TS: float = 0.0
 _stable_prompt_cache: dict = {}
 _stable_prompt_cache_mtimes: dict = None
 
-# ── 场景感知动态排序 v2 ───────────────────────────────────────
-# 三层优化：加权混合检测 + 场景签名缓存 + 场景粘性
-# 核心目标：最小化 system prompt 变化次数 → 最大化 KV Cache 命中率
+# ── 场景感知动态排序 v3 ───────────────────────────────────────
+# 设计初衷: 解决 Agent 时间观念在 LLM 后注意力机制下被稀释的痛点
+#   - 时间信息在 Volatile 层 (末尾), 但 Stable 层排序不当会分散 LLM 注意力
+#   - 让场景关键模块靠近用户输入, 使 LLM 注意力聚焦, 时间信息不被稀释
+#
+# 成本控制策略 (三级场景分级 + 4桶分桶 + 分层 LRU):
+#   1. S 级 (核心事实场景): 完整重排, 关键模块立刻拉到注意力前端
+#      - time/identity/emotional: 涉及时间/人设/历史锚点, 必须立刻重排
+#      - 哪怕刚聊完数学题, 脱口说晚安, 意图切换瞬间立刻重排
+#   2. A 级 (功能场景): 桶排序, 功能模块拉到前端
+#      - task/tool/debug: 工具/团队/自检支持
+#   3. B 级 (闲聊场景): 保持默认排序, 不重排 (节省 70% 算力)
+#      - greeting/creative/learning/default: 无事实冲突, 不破坏关键锚点权重
+#
+# 绝对禁止: TTL 切换冷却
+#   TTL 会锁定旧缓存, 关键事实出现时无法立刻重排, 周期性复现时间认知错乱 bug
 _module_cache: dict[str, str] = {}
 _module_cache_mtimes: dict[str, float] = {}
 
-# 场景签名缓存：{排序签名元组: 拼接后的 prompt 字符串}
+# 场景签名缓存: {排序签名元组: 拼接后的 prompt 字符串}
 # 不同输入只要产生相同模块排序 → 共享缓存 → KV Cache 命中
 _scene_prompt_cache: dict[tuple, str] = {}
 
-# 当前会话的场景签名（粘性：避免频繁切换）
+# 当前会话的场景签名 (用于 B 级场景保持排序连续性)
 _current_scene_sig: tuple = ()
-# 场景切换阈值：新场景主导权重需超过此值才切换
-_SCENE_SWITCH_THRESHOLD: float = 0.6
 
-# 缓存统计（可观测性）
+# 极低质量闲聊粘性阈值: 仅作用于 B 级场景, 防止低质量闲聊触发重排
+# 设计原则:
+#   - 仅 B 级场景生效 (S/A 级不受影响, 保留时间认知不乱核心初衷)
+#   - 阈值 0.5, 拦截低质量闲聊 (无意义单字、乱码、模糊输入)
+#   - 正常 B 级场景 (greeting/creative/learning) 权重通常 = 1.0, 不受影响
+_SCENE_STICKINESS_THRESHOLD: float = 0.5
+
+# 缓存统计 (可观测性)
 _scene_cache_hits: int = 0
 _scene_cache_misses: int = 0
 
+# ── 三级场景分级 (核心成本控制机制) ───────────────────────────
+# S 级: 核心事实场景 → 完整重排 (关键模块立刻拉到注意力前端)
+# A 级: 功能场景 → 桶排序 (功能模块拉到前端)
+# B 级: 闲聊场景 → 保持默认排序 (不重排, 节省 70% 算力)
+#
+# 设计原则:
+#   - S 级场景涉及时间/人设/历史锚点, 必须立刻重排, 杜绝时间认知错乱
+#   - B 级场景无事实冲突, 不破坏关键锚点权重, 跳过昂贵全局重排
+#   - 分级基于场景签名, 不是简陋关键词, 能识别隐性时间/事实冲突
+_SCENE_LEVEL: dict[str, str] = {
+    "time":      "S",  # 时间 → 核心事实 (时间认知不可稀释)
+    "identity":  "S",  # 身份 → 核心事实 (人设不可稀释)
+    "emotional": "S",  # 情感 → 核心事实 (可能含历史锚点)
+    "task":      "A",  # 任务 → 功能
+    "tool":      "A",  # 工具 → 功能
+    "debug":     "A",  # 调试 → 功能
+    "greeting":  "B",  # 问候 → 闲聊
+    "creative":  "B",  # 创作 → 闲聊
+    "learning":  "B",  # 学习 → 闲聊
+    "default":   "B",  # 默认 → 闲聊
+}
+
+# ── 成本控制: 场景分桶 (KV Cache 优化) ─────────────────────────
+# 10 个场景映射到 4 个排序桶, 减少 system prompt 变体数量
+# KV Cache 命中率: 10+ 变体 → 4 变体, 大幅降低 LLM attention 重算成本
+#
+# 桶设计 (按功能性聚类, 保留场景识别精度):
+#   桶 1 - 情感类 (greeting/emotional/time/creative): SOUL.md 靠近用户
+#          这些场景都需要人格化回应, SOUL.md (含时段感知/创作能力) 靠近末尾
+#   桶 2 - 功能类 (task/tool/debug): AGENTS/TOOLS/HEARTBEAT 靠近用户
+#          这些场景都需要工具/团队/自检支持, 功能模块靠近末尾
+#   桶 3 - 认知类 (identity/learning): IDENTITY/SOUL 靠近用户
+#          这些场景都需要身份/知识支持, 认知模块靠近末尾
+#   桶 4 - 默认 (default): 通用排序
+_SCENE_BUCKET: dict[str, str] = {
+    "greeting":  "emotion_bucket",   # 问候 → 情感桶
+    "emotional": "emotion_bucket",   # 情感 → 情感桶
+    "time":      "emotion_bucket",   # 时间 → 情感桶 (SOUL.md 含时间感知)
+    "creative":  "emotion_bucket",   # 创作 → 情感桶 (SOUL.md 含创作能力)
+    "task":      "function_bucket",  # 任务 → 功能桶
+    "tool":      "function_bucket",  # 工具 → 功能桶
+    "debug":     "function_bucket",  # 调试 → 功能桶
+    "identity":  "cognition_bucket", # 身份 → 认知桶
+    "learning":  "cognition_bucket", # 学习 → 认知桶
+    "default":   "default_bucket",   # 默认 → 默认桶
+}
+
+# 桶 → 固定排序签名 (模块名元组, 按优先级升序, 末尾靠近用户)
+# 设计原则: 每个桶的关键模块在末尾 (高优先级), 通用模块在开头 (低优先级)
+_BUCKET_ORDERINGS: dict[str, tuple] = {
+    # 桶 1 - 情感类: SOUL.md 末尾 (人格含时段感知, 避免时间观念被稀释)
+    "emotion_bucket": ("hardware", "HEARTBEAT.md", "MEMORY.md", "skills",
+                       "TOOLS.md", "IDENTITY.md", "AGENTS.md", "USER.md", "SOUL.md"),
+    # 桶 2 - 功能类: HEARTBEAT/TOOLS/AGENTS 末尾 (自检/工具/团队)
+    "function_bucket": ("IDENTITY.md", "USER.md", "SOUL.md", "hardware",
+                        "skills", "MEMORY.md", "AGENTS.md", "TOOLS.md", "HEARTBEAT.md"),
+    # 桶 3 - 认知类: IDENTITY/SOUL 末尾 (身份/人格化讲解)
+    "cognition_bucket": ("hardware", "HEARTBEAT.md", "MEMORY.md", "skills",
+                         "TOOLS.md", "AGENTS.md", "USER.md", "SOUL.md", "IDENTITY.md"),
+    # 桶 4 - 默认: SOUL.md 末尾 (人格基础)
+    "default_bucket": ("hardware", "HEARTBEAT.md", "MEMORY.md", "skills",
+                       "TOOLS.md", "IDENTITY.md", "AGENTS.md", "USER.md", "SOUL.md"),
+}
+
+# LRU 缓存上限: 限制 _scene_prompt_cache 大小, 防止内存膨胀
+_SCENE_CACHE_MAX_SIZE: int = 16
+
+# ── 分层 LRU 配额 (关键锚点桶永久驻留) ─────────────────────────
+# 桶 1 (人格认知桶: emotion/cognition) 独占 70% 配额, 关键锚点永久驻留
+# 桶 2 (功能桶: function) 占 20% 配额
+# 桶 3 (默认桶: default) 占 10% 配额, 优先淘汰
+#
+# 设计原则:
+#   - 时间、基础人设、核心长期记忆向量永久驻留, 不会被闲聊缓存挤掉
+#   - 哪怕来回切换话题, 关键事实上下文不用反复加载编码, 单次重排算力减半
+_BUCKET_LRU_QUOTA: dict[str, float] = {
+    "emotion_bucket": 0.7,    # 情感桶 (含时间/人设) 70% 配额
+    "cognition_bucket": 0.7,  # 认知桶 (含身份) 与情感桶共享 70% 配额
+    "function_bucket": 0.2,   # 功能桶 20% 配额
+    "default_bucket": 0.1,    # 默认桶 10% 配额, 优先淘汰
+}
+
+# 桶级别映射 (用于分层 LRU 淘汰策略)
+# S 级桶 (关键锚点): 永不被淘汰, 除非超过总上限
+# A 级桶 (功能): 中等优先级
+# B 级桶 (闲聊): 优先淘汰
+_BUCKET_LRU_LEVEL: dict[str, str] = {
+    "emotion_bucket": "S",    # 关键锚点桶
+    "cognition_bucket": "S",  # 关键锚点桶
+    "function_bucket": "A",   # 功能桶
+    "default_bucket": "B",    # 闲聊桶, 优先淘汰
+}
+
 # 优先级矩阵：分数越高越靠近用户输入（末尾）
+# 设计原则：功能性为基础 + 复杂度对齐为观测/优化工具 (两者结合)
+#
+# 功能性设计 (基础, 配合 agent_context._build_time_context 时间感知功能):
+#   - 矩阵设计初衷: 解决 Agent 时间观念在 LLM 后注意力机制下被稀释的痛点
+#     时间信息在 Volatile 层 (末尾), 但 Stable 层排序不当会分散 LLM 注意力
+#     → 让场景关键模块靠近用户, 使 LLM 注意力聚焦, 时间信息不被稀释
+#   - greeting/emotional/time: SOUL.md=10 (人格含时段感知, 避免时间观念被稀释)
+#   - identity:    IDENTITY.md=10 (身份信息)
+#   - task:        AGENTS.md=8 (团队成员调度)
+#   - tool:        TOOLS.md=10 (工具列表)
+#   - debug:       HEARTBEAT.md=9 (自检规则) + hardware=8 (硬件上下文)
+#   - creative:    SOUL.md=9 (人格+创作能力)
+#   - learning:    SOUL.md=7 + USER.md=6 (用户偏好,个性化教学)
+#
+# 模块扩展 (Hecate 结构广度优化):
+#   - 原矩阵 6 模块 → 9 模块 (新增 USER.md/MEMORY.md/HEARTBEAT.md)
+#   - 新模块按结构广度 (条件规则/不变量数) 配置优先级
+#   - HEARTBEAT.md: 含 6 项自检 + 5 项异常处理条件 → debug 场景高优先级
+#   - MEMORY.md:    含项目偏好/事件记录 → task/debug 场景中优先级
+#   - USER.md:      含用户偏好/XP认知 → emotional/learning 场景中高优先级
+#
+# 复杂度对齐 (观测/优化工具, memory/prompt_complexity.py):
+#   - 用于发现排序异常 (倒挂/集中/不匹配), 供人工审查参考
+#   - 不自动改矩阵: 功能性设计优先, 复杂度对齐作为辅助观测
+#   - 真正的排序异常 (如关键模块被错误低排) 才需要修复
 import re as _re
 _MODULE_SCENE_PRIORITY: dict[str, dict[str, int]] = {
-    "AGENTS.md":   {"default": 5, "greeting": 2, "task": 8, "emotional": 3, "identity": 4, "tool": 7},
-    "SOUL.md":     {"default": 6, "greeting": 10, "task": 4, "emotional": 10, "identity": 8, "tool": 3},
-    "IDENTITY.md": {"default": 4, "greeting": 3, "task": 3, "emotional": 4, "identity": 10, "tool": 2},
-    "TOOLS.md":    {"default": 3, "greeting": 1, "task": 7, "emotional": 1, "identity": 2, "tool": 10},
-    "skills":      {"default": 2, "greeting": 1, "task": 6, "emotional": 1, "identity": 1, "tool": 8},
-    "hardware":    {"default": 1, "greeting": 1, "task": 5, "emotional": 1, "identity": 1, "tool": 6},
+    # 核心模块 (原有)
+    "AGENTS.md":   {"default": 5, "greeting": 2, "task": 8,  "emotional": 3, "identity": 4,  "tool": 7,
+                    "time": 4,  "debug": 7, "creative": 4, "learning": 5},
+    "SOUL.md":     {"default": 8, "greeting": 10, "task": 4,  "emotional": 10, "identity": 8,  "tool": 3,
+                    "time": 10, "debug": 4, "creative": 9, "learning": 7},
+    "IDENTITY.md": {"default": 4, "greeting": 3,  "task": 3,  "emotional": 4,  "identity": 10, "tool": 2,
+                    "time": 2,  "debug": 3, "creative": 3, "learning": 5},
+    "TOOLS.md":    {"default": 3, "greeting": 1,  "task": 7,  "emotional": 1,  "identity": 2,  "tool": 10,
+                    "time": 2,  "debug": 5, "creative": 4, "learning": 3},
+    "skills":      {"default": 2, "greeting": 1,  "task": 6,  "emotional": 1,  "identity": 1,  "tool": 8,
+                    "time": 1,  "debug": 6, "creative": 5, "learning": 4},
+    "hardware":    {"default": 1, "greeting": 1,  "task": 5,  "emotional": 1,  "identity": 1,  "tool": 6,
+                    "time": 1,  "debug": 8, "creative": 1, "learning": 1},
+    # 新增模块 (Hecate 结构广度优化)
+    "USER.md":     {"default": 6, "greeting": 5,  "task": 4,  "emotional": 7,  "identity": 5,  "tool": 3,
+                    "time": 3,  "debug": 4, "creative": 5, "learning": 6},
+    "MEMORY.md":   {"default": 3, "greeting": 2,  "task": 7,  "emotional": 2,  "identity": 3,  "tool": 4,
+                    "time": 2,  "debug": 6, "creative": 3, "learning": 4},
+    "HEARTBEAT.md":{"default": 2, "greeting": 1,  "task": 5,  "emotional": 1,  "identity": 1,  "tool": 3,
+                    "time": 1,  "debug": 9, "creative": 2, "learning": 2},
 }
 
 # 场景关键词（轻量级，纯本地，不调 LLM）
-_SCENE_KEYWORDS: dict[str, list[str]] = {
-    "greeting": ["早上好", "早安", "上午好", "中午好", "下午好", "晚上好", "晚安",
-                 "你好呀", "你好啊", "哈喽", "hi", "hello", "hey", "嗨"],
-    "task":     ["帮我", "怎么做", "如何", "能不能", "写个", "写一下", "创建", "修改",
-                 "删除", "部署", "安装", "配置", "搭建", "开发", "实现", "修复", "解决",
-                 "优化", "重构", "调试", "测试", "上传", "下载"],
-    "emotional": ["难过", "伤心", "开心", "高兴", "生气", "害怕", "焦虑", "压力",
-                  "无聊", "孤独", "想你", "爱你", "喜欢你", "讨厌", "烦", "累",
-                  "睡不着", "做梦", "心情", "情绪"],
-    "identity":  ["你是谁", "你叫什么", "你的名字", "自我介绍", "介绍一下你",
-                  "你是什么", "你是啥", "纳西妲是谁"],
-    "tool":      ["搜索", "搜一下", "查一下", "查查", "查天气", "天气怎么样", "天气如何",
-                  "天气查询", "新闻", "翻译", "计算", "提醒", "闹钟", "定时",
-                  "打开", "关闭", "重启"],
+# 设计原则 (基于意图识别最佳实践):
+#   1. 主/次关键词分层: primary 高权重 (1.0), secondary 低权重 (0.5)
+#      - primary: 强意图词, 命中即可确定场景 (如 "早上好" → greeting)
+#      - secondary: 弱意图词, 需要多个共同命中 (如 "你好" 可能是 greeting 或他人场景)
+#   2. 高区分度: 每个关键词尽可能只属于一个场景, 减少歧义
+#   3. 同义词扩展: 覆盖口语/书面语/常见表达, 降低误判率
+#   4. 边界友好: 避免单字关键词 (易误判), 优先使用 2 字以上词组
+#   5. 否定隔离: 易在否定语境出现的词放在 secondary, 降低误判风险
+_SCENE_KEYWORDS: dict[str, dict[str, list[str]]] = {
+    # 问候场景: 打招呼/道别
+    "greeting": {
+        "primary":   ["早上好", "早安", "上午好", "中午好", "下午好", "晚上好", "晚安",
+                      "你好呀", "你好啊", "哈喽", "hi", "hello", "hey", "bye",
+                      "再见", "拜拜", "晚安啦"],
+        "secondary": ["你好", "嗨", "嘿", "在吗", "在不在", "睡了吗", "起床了",
+                      "回来了", "我回来了"],
+    },
+    # 任务场景: 委托/操作/开发
+    "task": {
+        "primary":   ["帮我", "帮我做", "帮我写", "帮我改", "帮我处理",
+                      "怎么做", "如何", "怎么办", "怎么整", "能不能帮我",
+                      "写个", "写一下", "写一段", "创建", "新建", "修改", "更新", "删除",
+                      "部署", "安装", "卸载", "配置", "设置", "搭建", "开发", "实现",
+                      "修复", "解决", "优化", "重构", "调试", "测试", "上传", "下载",
+                      "执行", "运行", "启动", "停止", "构建", "打包", "发布"],
+        "secondary": ["帮一下", "整一下", "搞一下", "处理一下", "弄一下", "跑一下",
+                      "能不能", "可不可以", "帮忙", "怎么样"],
+    },
+    # 情感场景: 情绪/心情/亲密表达
+    "emotional": {
+        "primary":   ["难过", "好难过", "伤心", "好伤心", "好开心", "好生气", "好焦虑",
+                      "压力大", "压力好大", "好孤独", "好累", "太累了", "心累",
+                      "崩溃", "emo", "抑郁", "心情不好", "情绪低落", "情绪不好",
+                      "睡不着", "失眠", "噩梦",
+                      "求安慰", "求鼓励", "陪陪我", "陪我聊聊", "陪我说话",
+                      "抱抱", "摸摸头"],
+        "secondary": ["开心", "高兴", "生气", "害怕", "焦虑", "无聊", "孤独",
+                      "想你", "爱你", "喜欢你", "好喜欢你", "讨厌", "好烦", "心烦",
+                      "失落", "失落感", "做梦",
+                      "心情好"],
+    },
+    # 身份场景: 询问 bot 身份
+    "identity": {
+        "primary":   ["你是谁", "你叫什么", "你的名字", "你叫啥名字",
+                      "自我介绍", "介绍一下你", "介绍下自己", "介绍一下自己",
+                      "纳西妲是谁", "你是纳西妲吗"],
+        "secondary": ["你是什么", "你是啥", "你是哪位",
+                      "你是机器人吗", "你是 AI 吗", "你是 ai 吗"],
+    },
+    # 工具场景: 调用工具/查信息
+    "tool": {
+        "primary":   ["搜索", "搜一下", "搜索一下", "查一下", "查查", "查询",
+                      "查天气", "天气怎么样", "天气如何", "天气查询", "今天天气",
+                      "翻译", "翻译一下", "译成",
+                      "计算", "算一下", "算算",
+                      "提醒我", "提醒", "设置提醒", "设个提醒",
+                      "闹钟", "定闹钟", "设闹钟",
+                      "定时", "倒计时"],
+        "secondary": ["新闻", "最新新闻", "看新闻",
+                      "打开", "关闭", "重启", "切换"],
+    },
+    # 时间场景: 询问时间/日期
+    "time": {
+        "primary":   ["几点了", "现在几点", "今天几号", "今天几月几号",
+                      "今天星期几", "今天周几", "现在日期", "今天日期",
+                      "当前时间", "现在时间"],
+        "secondary": ["现在什么时候", "什么时候了", "什么时候", "哪天", "几月几号"],
+    },
+    # 调试场景: 报错/异常/排错
+    "debug": {
+        "primary":   ["报错", "出错了", "异常", "失败了",
+                      "不工作", "不能用", "没法用", "跑不起来", "起不来",
+                      "崩了", "崩溃了", "挂了", "卡死了", "死循环",
+                      "traceback", "exception", "fatal",
+                      "找不到文件", "文件不存在", "路径不对",
+                      "连不上", "连不到", "网络不通",
+                      "权限不足", "permission denied"],
+        "secondary": ["错误", "失败", "为什么失败", "为什么报错", "为什么不行", "为什么出错",
+                      "排错", "排查", "定位问题", "troubleshoot",
+                      "没权限", "error"],
+    },
+    # 创作场景: 写作/绘画/创意
+    "creative": {
+        "primary":   ["写诗", "写首诗", "写一首诗", "写故事", "写个故事", "编故事",
+                      "写小说", "写歌词", "作词", "作曲",
+                      "画一张", "画一个", "画一副", "画个画", "画图",
+                      "生成图片", "生成图像", "做张图", "做一张图", "文生图",
+                      "生成视频", "做个视频", "做短视频", "生成一段视频"],
+        "secondary": ["创意", "灵感", "想个点子", "想个名字", "起名",
+                      "设计一下", "设计个", "设计一个"],
+    },
+    # 学习场景: 求知/解释/教学
+    "learning": {
+        "primary":   ["解释一下", "解释下", "什么是", "是什么", "什么叫",
+                      "什么意思", "讲讲", "讲一下", "讲解一下", "教我", "教教我", "教一下",
+                      "原理是什么", "原理是啥", "怎么理解",
+                      "举个例子", "举例说明", "示范一下"],
+        "secondary": ["说说", "说一说", "为什么",
+                      "学习", "学一下", "学学",
+                      "入门", "初学", "新手", "零基础",
+                      "区别", "对比", "比较一下"],
+    },
+}
+
+# 口语化映射表: 将口语化表达归一化为标准表达, 提高识别准确率
+# 来源: 意图识别最佳实践 - 数据预处理
+# 注意:
+#   1. 不包含 "么"→"吗" 等会破坏关键词的映射 (会把 "什么是" 变成 "什吗是")
+#   2. 长 key 优先处理 (按长度降序排序), 避免 "咋" 先于 "咋办" 处理
+#   3. 只包含明确的口语化表达, 避免歧义
+_COLLOQUIAL_MAP: dict[str, str] = {
+    "咋办": "怎么办", "咋整": "怎么整", "咋样": "怎么样",
+    "肿么": "怎么",
+    "木有": "没有",
+    "啥意思": "什么意思", "啥情况": "什么情况", "啥事": "什么事",
+    "为啥": "为什么", "干啥": "干什么",
+    "瞅瞅": "看看", "瞅一眼": "看一下",
+    "整不会了": "不会了", "搞不定": "处理不了",
+    # 单字映射放最后 (长 key 先处理时不会受影响)
+    "咋": "怎么", "啥": "什么",
+}
+
+# 场景识别置信度阈值: 主导场景权重需超过此值才确认, 否则降级为 default
+# 来源: 意图识别最佳实践 - 置信度计算
+_SCENE_CONFIDENCE_THRESHOLD: float = 0.4
+
+# 正则规则引擎: 处理结构化表达 (优先级高于关键词匹配)
+# 来源: 三层架构 - 第二层规则引擎
+import re as _re
+_SCENE_PATTERNS: dict[str, list[_re.Pattern]] = {
+    "time": [
+        _re.compile(r"几点了?\s*[？?]"),
+        _re.compile(r"现在几点"),
+        _re.compile(r"今天(星期|周)几"),
+        _re.compile(r"今天几号"),
+        _re.compile(r"现在什么时候"),
+    ],
+    "debug": [
+        _re.compile(r"(报错|出错|异常|失败).{0,10}(为什么|为啥|怎么回事)"),
+        _re.compile(r"(为什么|为啥).{0,10}(报错|出错|失败|不行|不能用)"),
+        _re.compile(r"(连不上|连不到).{0,10}(网络|服务器|数据库)"),
+        _re.compile(r"(找不到|不存在).{0,10}(文件|模块|路径)"),
+    ],
+    "identity": [
+        _re.compile(r"你(是|叫)(什么|啥|哪位)"),
+        _re.compile(r"(自我|简单)介绍"),
+    ],
+    "tool": [
+        _re.compile(r"(查|搜)(一下)?(天气|新闻|信息)"),
+        _re.compile(r"(翻译|译成)(一下|成)?\s*\w+"),
+        _re.compile(r"(设|定).{0,5}(提醒|闹钟|定时)"),
+    ],
 }
 
 
@@ -98,44 +386,164 @@ def _classify_scene(user_input: str) -> str:
     return max(weights, key=weights.get)
 
 
-def _classify_scene_blended(user_input: str) -> dict[str, float]:
-    """加权多场景检测——返回 {scene: weight}，权重之和=1.0。
+# 否定前缀词：出现这些词后跟随的关键词不应触发对应场景
+# 例: "不要烦" 不应触发 emotional, "别难过" 不应触发 emotional
+# 增强版: 包含 "莫" "勿" 等文言否定词, 检查范围扩展到 4 字 (覆盖 "不需要")
+_NEGATION_PREFIXES = ("不要", "别", "不用", "不需要", "没有", "没", "不", "未", "莫", "勿")
 
-    替代旧版硬匹配：不再只取第一个命中的场景，
-    而是检测所有场景信号并按命中数加权混合。
-    示例："好累啊，帮我查下天气" → {emotional: 0.5, tool: 0.5}
+
+def _normalize_colloquial(text: str) -> str:
+    """口语化表达归一化 (来源: 意图识别最佳实践 - 数据预处理).
+
+    将口语化表达映射为标准表达, 提高关键词匹配准确率.
+    长 key 优先处理 (按长度降序), 避免 "咋" 先于 "咋办" 处理导致 "咋办"→"怎么办"→"怎吗办".
+
+    例: "咋办" → "怎么办", "啥意思" → "什么意思"
     """
-    clean = user_input.strip().lower()
-    if not clean:
+    result = text
+    # 按 key 长度降序排序: 长 key 先处理, 避免短 key 破坏长 key
+    for colloquial, standard in sorted(_COLLOQUIAL_MAP.items(), key=lambda x: -len(x[0])):
+        if colloquial in result:
+            result = result.replace(colloquial, standard)
+    return result
+
+
+def _has_negation_before(clean: str, kw: str, kw_pos: int) -> bool:
+    """检查关键词前是否有否定前缀（往前看 1-4 字）。
+
+    增强版: 检查范围从 3 字扩展到 4 字, 覆盖 "不用" "不需要" 等长否定词.
+    """
+    for back in range(1, min(5, kw_pos + 1) + 1):
+        start = kw_pos - back
+        if start < 0:
+            break
+        prefix = clean[start:kw_pos]
+        if prefix in _NEGATION_PREFIXES:
+            return True
+    return False
+
+
+def _classify_scene_blended(user_input: str) -> dict[str, float]:
+    """三层架构意图识别 — 返回 {scene: weight}，权重之和=1.0。
+
+    基于意图识别最佳实践 (三层架构):
+      Layer 1: 正则规则引擎 (优先级最高, 命中直接确定场景)
+      Layer 2: 主/次关键词加权匹配
+        - primary 关键词权重 = len(kw) * 1.0 (强意图)
+        - secondary 关键词权重 = len(kw) * 0.5 (弱意图)
+        - 否定隔离: 关键词前有否定词时不计入
+      Layer 3: 置信度阈值过滤 (低于阈值降级为 default)
+
+    预处理:
+      - 口语化归一化 (咋/肿么/木有/啥 → 怎么/没有/什么)
+      - 小写化 (英文关键词匹配)
+
+    示例:
+      "好累啊，帮我查下天气" → {emotional: 0.5, tool: 0.5}
+      "不要难过" → {default: 1.0} (否定隔离)
+      "几点了" → {time: 1.0} (正则规则命中)
+    """
+    if not user_input or not user_input.strip():
         return {"default": 1.0}
-    scores: dict[str, float] = {}
-    for scene, keywords in _SCENE_KEYWORDS.items():
-        hits = sum(1 for kw in keywords if kw in clean)
+
+    # 预处理: 口语化归一化 + 小写化
+    normalized = _normalize_colloquial(user_input.strip())
+    clean = normalized.lower()
+
+    # Layer 1: 正则规则引擎 (优先级最高)
+    regex_scores: dict[str, float] = {}
+    for scene, patterns in _SCENE_PATTERNS.items():
+        hits = sum(1 for p in patterns if p.search(clean))
         if hits > 0:
-            scores[scene] = float(hits)
+            # 正则命中权重高 (每个命中 = 10 分)
+            regex_scores[scene] = 10.0 * hits
+
+    # Layer 2: 主/次关键词加权匹配
+    keyword_scores: dict[str, float] = {}
+    for scene, layers in _SCENE_KEYWORDS.items():
+        weighted_hits = 0.0
+        # primary 关键词 (高权重)
+        for kw in layers.get("primary", []):
+            kw_lower = kw.lower()
+            pos = clean.find(kw_lower)
+            if pos < 0:
+                continue
+            if _has_negation_before(clean, kw_lower, pos):
+                continue
+            weighted_hits += float(len(kw)) * 1.0
+        # secondary 关键词 (低权重)
+        for kw in layers.get("secondary", []):
+            kw_lower = kw.lower()
+            pos = clean.find(kw_lower)
+            if pos < 0:
+                continue
+            if _has_negation_before(clean, kw_lower, pos):
+                continue
+            weighted_hits += float(len(kw)) * 0.5
+        if weighted_hits > 0:
+            keyword_scores[scene] = weighted_hits
+
+    # 合并 Layer 1 + Layer 2 分数 (取最大值, 避免重复累加)
+    all_scenes = set(regex_scores.keys()) | set(keyword_scores.keys())
+    scores: dict[str, float] = {}
+    for scene in all_scenes:
+        scores[scene] = max(regex_scores.get(scene, 0.0), keyword_scores.get(scene, 0.0))
+
     if not scores:
         return {"default": 1.0}
+
+    # Layer 3: 置信度阈值过滤
     total = sum(scores.values())
-    return {s: w / total for s, w in scores.items()}
+    normalized_scores = {s: w / total for s, w in scores.items()}
+
+    # 主导场景权重低于阈值 → 降级为 default (避免误判)
+    max_weight = max(normalized_scores.values())
+    if max_weight < _SCENE_CONFIDENCE_THRESHOLD:
+        return {"default": 1.0}
+
+    return normalized_scores
 
 
 def _compute_scene_signature(weights: dict[str, float], module_names: list[str]) -> tuple:
-    """根据混合权重计算模块排序签名。
+    """根据混合权重计算模块排序签名（成本优化版：场景分桶）。
 
-    签名 = 排序后的模块名元组。不同输入只要产生相同排序 → 共享缓存。
+    成本控制策略:
+      1. 场景分桶: 10 场景 → 4 桶, 减少 system prompt 变体 (10+ → 4)
+      2. 桶内固定排序: 同桶场景共享同一种排序, KV Cache 命中率最大化
+      3. 保留场景识别精度: 仍用 10 场景识别, 只在排序时映射到桶
+
+    签名 = 桶排序元组 (从 _BUCKET_ORDERINGS 取, 过滤实际存在的模块)
+    不同输入只要产生相同桶 → 共享缓存 → KV Cache 命中
     """
-    def _blended_priority(name: str) -> float:
-        base = _MODULE_SCENE_PRIORITY.get(name, {})
-        return sum(w * base.get(s, base.get("default", 0)) for s, w in weights.items())
+    # 找到权重最高的场景
+    if not weights or weights.get("default", 0) == 1.0:
+        dominant_scene = "default"
+    else:
+        dominant_scene = max(weights, key=weights.get)
 
-    return tuple(sorted(module_names, key=_blended_priority))
+    # 场景 → 桶映射
+    bucket = _SCENE_BUCKET.get(dominant_scene, "default_bucket")
+
+    # 桶 → 固定排序 (过滤掉实际不存在的模块)
+    bucket_ordering = _BUCKET_ORDERINGS.get(bucket, _BUCKET_ORDERINGS["default_bucket"])
+    module_set = set(module_names)
+    filtered_ordering = tuple(name for name in bucket_ordering if name in module_set)
+
+    # 补充桶排序中未包含的模块 (按字母序追加到开头, 优先级最低)
+    remaining = [name for name in module_names if name not in module_set]
+    if remaining:
+        filtered_ordering = tuple(remaining) + filtered_ordering
+
+    return filtered_ordering
 
 
 def _get_stable_section_mtimes() -> dict[str, float]:
     """获取稳定段文件的 mtime 指纹，用于缓存失效判断。"""
     from config import WORKSPACE_DIR
     mtimes: dict[str, float] = {}
-    for name in ("AGENTS.md", "SOUL.md", "IDENTITY.md", "TOOLS.md"):
+    # 矩阵覆盖的所有模块 (9 个 MD + skills + hardware)
+    for name in ("AGENTS.md", "SOUL.md", "IDENTITY.md", "TOOLS.md",
+                 "USER.md", "MEMORY.md", "HEARTBEAT.md"):
         fp = WORKSPACE_DIR / name
         try:
             mtimes[name] = fp.stat().st_mtime
@@ -209,7 +617,10 @@ def _build_stable_prompt(address_term: str) -> str:
 
 
 def _load_cached_modules(address_term: str) -> dict[str, str]:
-    """加载各模块内容（按 mtime 缓存），返回 {模块名: 内容}。"""
+    """加载各模块内容（按 mtime 缓存），返回 {模块名: 内容}。
+
+    包含 9 个模块: AGENTS/SOUL/IDENTITY/TOOLS/USER/MEMORY/HEARTBEAT + skills + hardware
+    """
     global _module_cache_mtimes
     current_mtimes = _get_stable_section_mtimes()
     if _module_cache_mtimes is None or current_mtimes != _module_cache_mtimes:
@@ -226,7 +637,8 @@ def _load_cached_modules(address_term: str) -> dict[str, str]:
         fp = WORKSPACE_DIR / name
         try:
             content = fp.read_text(encoding="utf-8-sig").strip()
-            if name == "SOUL.md" and "{address_term}" in content:
+            # 含 {address_term} 占位符的文件统一替换
+            if "{address_term}" in content and name in ("SOUL.md", "MEMORY.md", "HEARTBEAT.md"):
                 content = content.replace("{address_term}", address_term)
             _module_cache[name] = content
             return content
@@ -236,8 +648,9 @@ def _load_cached_modules(address_term: str) -> dict[str, str]:
 
     modules: dict[str, str] = {}
 
-    # 普通 MD 文件
-    for name in ("AGENTS.md", "SOUL.md", "IDENTITY.md", "TOOLS.md"):
+    # 普通 MD 文件 (9 个, 按优先级矩阵覆盖范围)
+    for name in ("AGENTS.md", "SOUL.md", "IDENTITY.md", "TOOLS.md",
+                 "USER.md", "MEMORY.md", "HEARTBEAT.md"):
         content = _load(name)
         if content:
             modules[name] = content
@@ -260,13 +673,66 @@ def _load_cached_modules(address_term: str) -> dict[str, str]:
     return modules
 
 
-def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸") -> str:
-    """场景感知的动态排序系统提示词构建器 v2。
+def _get_scene_level(weights: dict[str, float]) -> str:
+    """根据场景权重返回场景级别 (S/A/B).
 
-    三层优化：
-    1. 加权多场景检测 —— 不再硬匹配单一场景，而是混合多个场景信号
-    2. 场景签名缓存 —— 相同排序的 prompt 只拼接一次，后续直接返回（KV Cache 友好）
-    3. 场景粘性 —— 新场景主导权重不足时保持当前场景，避免频繁切换
+    S 级: 核心事实场景 (time/identity/emotional) → 完整重排
+    A 级: 功能场景 (task/tool/debug) → 桶排序
+    B 级: 闲聊场景 (greeting/creative/learning/default) → 保持默认排序
+
+    绝对禁止 TTL 冷却: S 级场景必须立刻重排, 杜绝时间认知错乱
+    """
+    if not weights or weights.get("default", 0) == 1.0:
+        return "B"
+    dominant_scene = max(weights, key=weights.get)
+    return _SCENE_LEVEL.get(dominant_scene, "B")
+
+
+def _get_bucket_for_sig(sig: tuple) -> str:
+    """根据排序签名反查所属桶 (用于分层 LRU 淘汰)."""
+    for bucket, ordering in _BUCKET_ORDERINGS.items():
+        if sig == tuple(name for name in ordering if name in sig):
+            return bucket
+    return "default_bucket"
+
+
+def _layered_lru_evict(new_bucket: str) -> None:
+    """分层 LRU 淘汰: 按桶级别淘汰最低优先级的缓存.
+
+    淘汰优先级: B 级桶 (闲聊) > A 级桶 (功能) > S 级桶 (关键锚点)
+    S 级桶永不被淘汰 (除非超过总上限的 70% 配额)
+    """
+    if len(_scene_prompt_cache) < _SCENE_CACHE_MAX_SIZE:
+        return
+
+    # 按桶级别分组缓存键
+    bucket_groups: dict[str, list[tuple]] = {"S": [], "A": [], "B": []}
+    for sig in _scene_prompt_cache:
+        bucket = _get_bucket_for_sig(sig)
+        level = _BUCKET_LRU_LEVEL.get(bucket, "B")
+        bucket_groups[level].append(sig)
+
+    # 优先淘汰 B 级桶 (闲聊), 其次 A 级桶 (功能), 最后 S 级桶 (关键锚点)
+    for level in ("B", "A", "S"):
+        if bucket_groups[level]:
+            # 淘汰该级别中最旧的 (dict 保持插入顺序)
+            oldest_sig = bucket_groups[level][0]
+            _scene_prompt_cache.pop(oldest_sig)
+            return
+
+
+def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸") -> str:
+    """场景感知的动态排序系统提示词构建器 v3 (成本优化版).
+
+    三级场景分级 + 4桶分桶 + 分层 LRU:
+    1. S 级 (核心事实): 完整重排, 关键模块立刻拉到注意力前端
+       - 哪怕刚聊完数学题, 脱口说晚安, 意图切换瞬间立刻重排
+       - 杜绝时间认知错乱 (矩阵设计初衷)
+    2. A 级 (功能): 桶排序, 功能模块拉到前端
+    3. B 级 (闲聊): 保持当前排序, 不重排 (节省 70% 算力)
+       - 不破坏关键锚点权重, 时间/人格仍靠近用户
+
+    绝对禁止 TTL 冷却: 会锁定旧缓存, 周期性复现时间认知错乱 bug
 
     Returns:
         按场景优先级排序后的完整 system prompt 字符串
@@ -279,25 +745,49 @@ def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸") -> s
 
     # Layer 1: 加权多场景检测
     weights = _classify_scene_blended(user_input)
-    new_sig = _compute_scene_signature(weights, list(modules.keys()))
+    scene_level = _get_scene_level(weights)
 
-    # Layer 3: 场景粘性 — 新场景主导权重不足时保持当前场景
-    max_weight = max(weights.values()) if weights else 0
-    if _current_scene_sig and max_weight < _SCENE_SWITCH_THRESHOLD:
-        # 权重不够强 → 保持当前场景（避免 flip-flop）
-        new_sig = _current_scene_sig
+    # Layer 2: 三级场景分级重排
+    if scene_level == "S":
+        # S 级: 完整重排 (关键模块立刻拉到注意力前端)
+        # 绝对不受粘性阈值影响, 杜绝时间认知错乱
+        new_sig = _compute_scene_signature(weights, list(modules.keys()))
+    elif scene_level == "A":
+        # A 级: 桶排序 (功能模块拉到前端)
+        new_sig = _compute_scene_signature(weights, list(modules.keys()))
     else:
-        _current_scene_sig = new_sig
+        # B 级: 极低质量闲聊粘性
+        # 以下情况保持当前排序 (节省算力, 不值得重排):
+        #   1. default 场景 (无关键词命中, 如 "嗯"/"哦"/"asdfgh" 等无意义输入)
+        #   2. 主导权重 < 0.3 (极低质量闲聊)
+        # 正常 B 级场景 (greeting/creative/learning, 权重通常 = 1.0) → 正常桶排序
+        dominant_scene = max(weights, key=weights.get) if weights else "default"
+        max_weight = max(weights.values()) if weights else 0
+        if _current_scene_sig and (dominant_scene == "default" or max_weight < _SCENE_STICKINESS_THRESHOLD):
+            # 极低质量闲聊 → 保持当前排序 (节省算力)
+            new_sig = _current_scene_sig
+        else:
+            # 正常 B 级 → 桶排序
+            new_sig = _compute_scene_signature(weights, list(modules.keys()))
 
-    # Layer 2: 场景签名缓存 — 命中则直接返回（零开销）
+    _current_scene_sig = new_sig
+
+    # Layer 3: 场景签名缓存 — 命中则直接返回 (零开销)
     if new_sig in _scene_prompt_cache:
         _scene_cache_hits += 1
-        return _scene_prompt_cache[new_sig]
+        # LRU: 命中时移到末尾 (保持最近使用)
+        prompt = _scene_prompt_cache.pop(new_sig)
+        _scene_prompt_cache[new_sig] = prompt
+        return prompt
 
     # 未命中 → 拼接并缓存
     _scene_cache_misses += 1
     sections = [modules[name] for name in new_sig if modules.get(name)]
     prompt = "\n\n---\n\n".join(sections)
+
+    # Layer 4: 分层 LRU 淘汰 (关键锚点桶永久驻留)
+    new_bucket = _get_bucket_for_sig(new_sig)
+    _layered_lru_evict(new_bucket)
     _scene_prompt_cache[new_sig] = prompt
     return prompt
 

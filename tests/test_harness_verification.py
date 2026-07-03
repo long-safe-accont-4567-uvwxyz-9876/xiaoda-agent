@@ -69,18 +69,23 @@ class TestRound1UnitSmoke:
         assert hasattr(ToolGuardrails, "validate_args")
 
     def test_module_scene_priority_matrix(self):
-        """验证场景优先级矩阵维度: 6 模块 x 6 场景。"""
+        """验证场景优先级矩阵维度: 9 模块 x 10 场景。
+
+        Hecate 结构广度优化: 6→9 模块 (新增 USER.md/MEMORY.md/HEARTBEAT.md),
+        6→10 场景 (新增 time/debug/creative/learning)。
+        """
         from prompt_builder import _MODULE_SCENE_PRIORITY
-        assert len(_MODULE_SCENE_PRIORITY) == 6
-        expected_scenes = {"default", "greeting", "task", "emotional", "identity", "tool"}
+        assert len(_MODULE_SCENE_PRIORITY) == 9
+        expected_scenes = {"default", "greeting", "task", "emotional", "identity", "tool",
+                           "time", "debug", "creative", "learning"}
         for module, scene_map in _MODULE_SCENE_PRIORITY.items():
-            assert len(scene_map) == 6, f"模块 {module} 场景数 != 6"
+            assert len(scene_map) == 10, f"模块 {module} 场景数 != 10"
             assert set(scene_map.keys()) == expected_scenes, f"模块 {module} 场景键不匹配"
 
     def test_scene_keywords(self):
-        """验证场景关键词覆盖 5 类场景。"""
+        """验证场景关键词覆盖 9 类场景 (6 原有 + 4 新增 - 1 default 不在关键词表)。"""
         from prompt_builder import _SCENE_KEYWORDS
-        assert len(_SCENE_KEYWORDS) == 5
+        assert len(_SCENE_KEYWORDS) == 9
 
 
 # ── Round 2: 集成层 — 组件交互验证 ────────────────────────────
@@ -248,20 +253,29 @@ class TestSceneAwareV2:
         assert stats2["hits"] >= 1
 
     def test_scene_stickiness(self):
-        """多场景混合且主导权重<0.6时应保持当前场景"""
+        """三级场景分级: S级立刻重排, B级保持当前排序 (替代旧版场景粘性)
+
+        v3 设计: 删除场景粘性阈值, 改为三级场景分级
+        - S 级 (核心事实): 立刻重排 (杜绝时间认知错乱)
+        - B 级 (闲聊): 保持当前排序 (节省算力)
+        """
         from prompt_builder import reset_scene_cache, build_scene_aware_prompt
         import prompt_builder
         reset_scene_cache()
-        # 首次：强信号 task（权重=1.0 > 0.6 阈值）
+        # 首次: A 级场景 task (功能桶排序)
         build_scene_aware_prompt("帮我写个脚本", "爸爸")
         sig_after_task = prompt_builder._current_scene_sig
         assert sig_after_task != ()
-        # 第二次：多场景混合（emotional:0.5 + task:0.5，max=0.5 < 0.6）
-        # 应保持当前场景（粘性）
-        build_scene_aware_prompt("好累帮我", "爸爸")
-        sig_after_weak = prompt_builder._current_scene_sig
-        # 粘性：弱信号应保持原场景
-        assert sig_after_weak == sig_after_task
+        # 第二次: S 级场景 time (必须立刻重排, 杜绝时间认知错乱)
+        build_scene_aware_prompt("几点了", "爸爸")
+        sig_after_time = prompt_builder._current_scene_sig
+        # S 级必须立刻重排, 不能保持旧排序
+        assert sig_after_time != sig_after_task, "S 级场景必须立刻重排"
+        # 第三次: B 级场景 greeting (保持当前排序, 节省算力)
+        build_scene_aware_prompt("你好", "爸爸")
+        sig_after_greeting = prompt_builder._current_scene_sig
+        # B 级保持当前排序 (不重排)
+        assert sig_after_greeting == sig_after_time, "B 级场景应保持当前排序"
 
     def test_cache_stats_function(self):
         """缓存统计函数应返回正确结构"""

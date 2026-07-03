@@ -289,6 +289,13 @@ class AgentCoreBootstrapper:
             reranker=reranker,
             query_transformer=query_transformer,
         )
+        # ContextNest A2/A3: 注入上下文治理 (哈希链 + 审计追踪)
+        try:
+            from memory.context_governance import ContextGovernance
+            governance = ContextGovernance(conn=core.db._conn)
+            core.memory.set_governance(governance)
+        except Exception as e:
+            logger.warning("bootstrap.governance_init_failed", error=str(e))
         core.knowledge_graph = KnowledgeGraph(db=core.db, knowledge_db=core.db.knowledge, router=core.router)
         sf_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         if sf_key:

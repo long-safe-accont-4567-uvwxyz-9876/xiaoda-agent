@@ -348,8 +348,23 @@ class VectorStore:
 
         return await asyncio.to_thread(_do_batch)
 
-    async def search(self, query_text: str, top_k: int = 5) -> list[tuple[int, float]]:
-        """基于查询文本进行向量相似度搜索，返回最相似的 top_k 条记录。"""
+    async def search(self, query_text: str, top_k: int = 5,
+                     candidate_ids: list[int] | None = None,
+                     deterministic: bool = True) -> list[tuple[int, float]]:
+        """基于查询文本进行向量相似度搜索，返回最相似的 top_k 条记录。
+
+        ContextNest 论文实证: dense+HNSW 在 80% 查询上非确定 (mean Jaccard 0.611)。
+        本方法通过两项措施提升确定性:
+        1. tie-breaking: ``ORDER BY distance, rowid`` 消除距离并列时的乱序
+        2. oversample+trim: 取 top_k*2 候选再做稳定排序, 避免边界处 k 截断引入的非确定
+
+        Args:
+            query_text: 查询文本
+            top_k: 返回条数
+            candidate_ids: 确定性预过滤的候选 rowid 集合 (ContextNest selector 层)
+                提供时只在该集合内做向量排序, 候选集本身是确定的 (Jaccard 1.0)
+            deterministic: 启用 tie-breaking + oversample
+        """
         if not self._initialized or not self._vec_conn:
             return []
 
@@ -358,18 +373,30 @@ class VectorStore:
             return []
 
         vec_json = json.dumps(vec)
+        # oversample 2x 给 tie-breaking 留余量, 再稳定 trim 到 top_k
+        fetch_k = top_k * 2 if deterministic else top_k
 
         def _do_search() -> Any:
             """在后台线程中执行向量相似度搜索。"""
             with self._lock:
                 if self._closed:
                     return []
+                # sqlite-vec 的 vec0 KNN 只允许 ORDER BY distance (不允许 , rowid)
+                # 所以 tie-breaking 在 Python 层做: 按 (distance, rowid) 稳定排序
                 rows = self._vec_conn.execute(
                     "SELECT rowid, distance FROM memories_vec "
-                    "WHERE embedding MATCH vec_f32(?) AND k=? ORDER BY distance",
-                    [vec_json, top_k],
+                    "WHERE embedding MATCH vec_f32(?) AND k=? "
+                    "ORDER BY distance",
+                    [vec_json, fetch_k],
                 ).fetchall()
-                return [(row[0], row[1]) for row in rows]
+                results = [(row[0], row[1]) for row in rows]
+                if candidate_ids is not None:
+                    cand_set = set(candidate_ids)
+                    results = [r for r in results if r[0] in cand_set]
+                # deterministic tie-breaking: distance 相同时按 rowid 稳定排序
+                if deterministic:
+                    results.sort(key=lambda r: (r[1], r[0]))
+                return results[:top_k]
 
         try:
             return await asyncio.to_thread(_do_search)

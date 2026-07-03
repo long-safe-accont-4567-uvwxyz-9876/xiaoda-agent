@@ -370,6 +370,21 @@ class KnowledgeGraph:
         if entity_count > self.MAX_ENTITIES:
             await self.cleanup_stale()
 
+        # OntoLearner B1: 复杂度评分, 跳过高复杂度摘要的 KG 提取
+        # 论文实证: 失败模式与本体复杂度正相关 (非模型大小)
+        try:
+            from memory.ontology_complexity import should_extract
+            import config as _cfg
+            _threshold = float(getattr(_cfg, "ONTOLOGY_SKIP_THRESHOLD", 0.75))
+            _do_extract, _score = should_extract(summary, skip_threshold=_threshold)
+            if not _do_extract:
+                logger.debug("kg.skip_complex_summary",
+                             total=round(_score.total, 3),
+                             detail=_score.detail)
+                return
+        except Exception as e:
+            logger.debug("kg.complexity_check_failed", error=str(e))
+
         extracted = await self.extract_from_summary(summary)
         if extracted.get("entities"):
             await self.merge_entities(extracted["entities"])

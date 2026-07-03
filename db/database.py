@@ -205,6 +205,7 @@ class DatabaseManager:
             (9, "memory_summaries+episodic_memories.distilled", self._migrate_v9),
             (10, "episodic_memories.entities+event_type+metadata_json", self._migrate_v10),
             (11, "memory_recall_notes", self._migrate_v11),
+            (12, "episodic_memories.content_hash+version+memory_versions+context_audit_log", self._migrate_v12),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -423,6 +424,57 @@ class DatabaseManager:
                 tags TEXT DEFAULT ''
             )
         """)
+
+    async def _migrate_v12(self) -> None:
+        """v12: ContextNest 上下文治理 — 记忆哈希版本链 + 上下文审计追踪。
+
+        - episodic_memories 新增 content_hash (SHA-256 of summary) + version 列
+        - memory_versions 表: 哈希链 (prev_hash → content_hash), tamper-evident
+        - context_audit_log 表: 记录每次响应注入了哪些记忆版本, 支持 point-in-time 重建
+        """
+        cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
+        if "content_hash" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN content_hash TEXT DEFAULT ''"
+            )
+        if "version" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN version INTEGER DEFAULT 1"
+            )
+        await self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                memory_id INTEGER NOT NULL,
+                version INTEGER NOT NULL,
+                content_hash TEXT NOT NULL,
+                prev_hash TEXT DEFAULT '',
+                summary_snapshot TEXT DEFAULT '',
+                created_at REAL NOT NULL,
+                FOREIGN KEY (memory_id) REFERENCES episodic_memories(id)
+            )
+        """)
+        await self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS context_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                response_id TEXT NOT NULL,
+                memory_id INTEGER NOT NULL,
+                content_hash TEXT DEFAULT '',
+                version INTEGER DEFAULT 1,
+                score REAL DEFAULT 0.0,
+                source TEXT DEFAULT '',
+                rank INTEGER DEFAULT 0,
+                retrieved_at REAL NOT NULL
+            )
+        """)
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_response ON context_audit_log(response_id)"
+        )
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_memory ON context_audit_log(memory_id)"
+        )
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mv_memory ON memory_versions(memory_id, version)"
+        )
     async def fetch_all(self, sql: str, params: tuple = ()) -> list[dict]:
         """通用只读查询，供 Web UI 等外部层使用。返回 dict 列表。"""
         if not self._conn:
