@@ -651,11 +651,13 @@ class ModelRouter:
     async def chat_stream(self, messages: list, task_type: str = "chat",
                           temperature: float = 0.7, max_tokens: int = 2000,
                           user_openid: str = "", session_id: str = "",
-                          extra_headers: dict | None = None) -> AsyncIterator[Any]:
+                          extra_headers: dict | None = None,
+                          tools: list[dict] | None = None,
+                          tool_choice: str | None = None) -> AsyncIterator[str]:
         """流式调用 LLM，yield 每个 chunk 的 delta content。
 
-        当 STREAM_TEXT_PUSH=true 时使用此方法。
-        异常时记录日志并重新抛出（由调用方降级）。
+        复用 _route_with_retry 的重试/错误分类/凭证轮换逻辑，
+        不再独立实现一套调用路径，保证行为一致性。
         """
         config = ROUTE_TABLE.get(task_type, ROUTE_TABLE["chat"])
         model = config["model"]
@@ -665,47 +667,55 @@ class ModelRouter:
 
         messages = self._apply_prompt_caching(provider, messages)
         extra_headers = self._apply_caching_headers(extra_headers)
-
-        client = await self._select_client_for_provider(provider)
-        kwargs = self._build_stream_kwargs(model, messages, temperature, mt,
-                                            extra_headers, config, provider)
+        tools = self._filter_tools_for_model(tools, model)
 
         _start = time.time()
         stream = None
-        try:
-            stream = await asyncio.wait_for(
-                client.chat.completions.create(**kwargs),
-                timeout=timeout,
-            )
-            async for chunk in stream:
-                try:
-                    delta = chunk.choices[0].delta.content
-                except (AttributeError, IndexError):
-                    delta = None
-                if delta:
-                    yield delta
-            metrics.inc(f"model_route.{task_type}.success")
-            metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
-            metrics.maybe_report()
-        except Exception as e:
-            metrics.inc(f"model_route.{task_type}.failure")
-            metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
-            metrics.maybe_report()
-            logger.warning("router.chat_stream_failed task={} model={} error={}: {}",
-                           task_type, model, type(e).__name__, str(e)[:200])
-            # 报告凭证错误（best-effort，不阻塞异常传播）
+        last_error = None
+
+        for attempt in range(MAX_RETRIES + 1):
             try:
-                classified = self._error_classifier.classify(e)
-                await self._credential_pool.report_error(provider, classified)
-            except Exception:
-                pass
-            raise
-        finally:
-            if stream is not None:
-                try:
-                    await stream.close()
-                except Exception:
-                    pass
+                client = await self._select_client_for_provider(provider)
+                kwargs = self._build_route_kwargs(
+                    model, messages, temperature, mt, True,
+                    tools, tool_choice, extra_headers, config, provider,
+                )
+                stream = await asyncio.wait_for(
+                    client.chat.completions.create(**kwargs),
+                    timeout=timeout,
+                )
+                async for chunk in stream:
+                    try:
+                        delta = chunk.choices[0].delta.content
+                    except (AttributeError, IndexError):
+                        delta = None
+                    if delta:
+                        yield delta
+                metrics.inc(f"model_route.{task_type}.success")
+                metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
+                metrics.maybe_report()
+                logger.info("llm.call", event="llm_call", model=model,
+                            task=task_type, duration_ms=int((time.time() - _start) * 1000),
+                            user_id=user_openid, session_id=session_id, stream=True)
+                return
+            except Exception as e:
+                last_error = e
+                if stream:
+                    try:
+                        await stream.close()
+                    except Exception:
+                        pass
+                    stream = None
+                should_retry = await self._handle_route_exception(
+                    e, provider, task_type, model, attempt,
+                )
+                if not should_retry:
+                    break
+
+        metrics.inc(f"model_route.{task_type}.failure")
+        metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
+        metrics.maybe_report()
+        raise last_error or LLMError("流式调用失败")
 
     @staticmethod
     def _classify_error(exc: Exception) -> str:
