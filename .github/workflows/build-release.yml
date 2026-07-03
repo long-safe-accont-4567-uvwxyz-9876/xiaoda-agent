@@ -91,6 +91,10 @@ jobs:
           ls web/dist/assets/ | head -40
           # Verify key files exist
           test -f web/dist/index.html || (echo "ERROR: index.html not found!" && exit 1)
+          # Verify wallpapers exist
+          test -f web/dist/assets/wallpapers/keli.jpg || (echo "ERROR: keli.jpg wallpaper not found!" && exit 1)
+          test -f web/dist/assets/wallpapers/nike.jpg || (echo "ERROR: nike.jpg wallpaper not found!" && exit 1)
+          echo "Wallpapers verified OK"
           # Verify /setup route is included in built JS
           FOUND=0
           for f in web/dist/assets/*.js; do

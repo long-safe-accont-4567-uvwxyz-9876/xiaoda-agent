@@ -881,6 +881,8 @@ class ModelRouter:
         provider = config.get("client", _CFG_DEFAULT_PROVIDER)
 
         messages = self._apply_prompt_caching(provider, messages)
+        # 主路由路径也需过滤工具，防止小模型收到工具定义后输出退化
+        tools = self._filter_tools_for_model(tools, model)
 
         for attempt in range(MAX_RETRIES + 1):
             try:
@@ -972,10 +974,29 @@ class ModelRouter:
             "hit_ratio": round(hit / total_tokens, 3) if total_tokens > 0 else 0.0,
         }
 
-    def _filter_tools_for_model(self, tools: list[dict] | None, model: str) -> list[dict] | None:
-        """检查工具列表与目标模型的兼容性，记录不兼容的工具。
+    # 参数量 <= 14B 的小模型在接收大量工具定义时容易输出退化（乱码/JSON循环）
+    _SMALL_MODEL_PATTERNS = (
+        "7b", "8b", "4b", "3b", "1.5b", "1.8b", "0.5b",
+        "mini", "tiny", "small",
+    )
 
-        当前仅做可观测性日志，不实际移除工具。后续可根据模型能力表做过滤。
+    def _is_small_model(self, model: str) -> bool:
+        """判断是否为小模型（参数量 <= 14B），小模型不适合接收大量工具定义。"""
+        model_lower = model.lower()
+        # 明确的大模型标记
+        for big in ("72b", "70b", "67b", "104b", "236b", "pro", "max", "plus", "large"):
+            if big in model_lower:
+                return False
+        for small in self._SMALL_MODEL_PATTERNS:
+            if small in model_lower:
+                return True
+        return False
+
+    def _filter_tools_for_model(self, tools: list[dict] | None, model: str) -> list[dict] | None:
+        """检查工具列表与目标模型的兼容性，对小模型移除工具定义防止输出退化。
+
+        根因：Qwen2.5-7B 等小模型在接收 30+ 个工具定义时，输出严重退化
+        （循环输出 JSON 片段乱码），导致对话不可用。
         """
         if not tools:
             return tools
@@ -986,6 +1007,11 @@ class ModelRouter:
             tool_names = [t.get("function", {}).get("name", "?") for t in tools]
             logger.warning("router.tools_may_not_be_supported",
                            model=model, tool_count=len(tools), tools=tool_names)
+
+        # 小模型不发送工具定义，防止输出退化
+        if self._is_small_model(model):
+            logger.warning("router.tools_stripped_for_small_model model={} tool_count={}", model, len(tools))
+            return None
 
         return tools
 
