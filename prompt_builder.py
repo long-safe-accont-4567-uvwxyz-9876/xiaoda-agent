@@ -124,21 +124,34 @@ _SCENE_BUCKET: dict[str, str] = {
     "default":   "default_bucket",   # 默认 → 默认桶
 }
 
-# 桶 → 固定排序签名 (模块名元组, 按优先级升序, 末尾靠近用户)
+# ── 分层 Prompt 架构 (Prefix Cache Friendly) ──────────────────
+# 将模块分为两层, 利用 API 服务商 Prefix Caching 大幅降低成本:
+#   - Stable Prefix: 永远在前, 字节级一致, 享受 90% 缓存折扣 (推理级优化)
+#   - Scene-Aware Middle: 场景感知重排, 每次重新 prefill
+#
+# 学术支撑:
+#   - KVCache in the Wild (阿里云, 2025): 97% 缓存命中来自 System Prompt 共享
+#   - Anthropic Claude: cache reads 成本 0.1x (降 90%)
+#   - 最小 1024 tokens 才能触发缓存 (Stable Prefix ~5K tokens 满足要求)
+#
+# 为什么 SOUL.md 在 Stable Prefix (而非 Scene-Aware Middle)?
+#   - SOUL.md 含时间感知章节 (Hecate 条件规则形式), 作为"人格锚点"永久驻留
+#   - LLM 把条件规则当成必须参照的规则 (而非可选背景), 时间观念不会被稀释
+#   - 时间信息在 Volatile 层 (末尾), 会引用 SOUL.md 的时间感知规则
+_STABLE_PREFIX_ORDER: tuple = ("IDENTITY.md", "SOUL.md", "TOOLS.md", "skills", "hardware")
+
+# 桶 → 固定排序签名 (仅 Scene-Aware Middle 模块, 按优先级升序, 末尾靠近用户)
+# Scene-Aware Middle 模块: AGENTS.md / USER.md / MEMORY.md / HEARTBEAT.md
 # 设计原则: 每个桶的关键模块在末尾 (高优先级), 通用模块在开头 (低优先级)
 _BUCKET_ORDERINGS: dict[str, tuple] = {
-    # 桶 1 - 情感类: SOUL.md 末尾 (人格含时段感知, 避免时间观念被稀释)
-    "emotion_bucket": ("hardware", "HEARTBEAT.md", "MEMORY.md", "skills",
-                       "TOOLS.md", "IDENTITY.md", "AGENTS.md", "USER.md", "SOUL.md"),
-    # 桶 2 - 功能类: HEARTBEAT/TOOLS/AGENTS 末尾 (自检/工具/团队)
-    "function_bucket": ("IDENTITY.md", "USER.md", "SOUL.md", "hardware",
-                        "skills", "MEMORY.md", "AGENTS.md", "TOOLS.md", "HEARTBEAT.md"),
-    # 桶 3 - 认知类: IDENTITY/SOUL 末尾 (身份/人格化讲解)
-    "cognition_bucket": ("hardware", "HEARTBEAT.md", "MEMORY.md", "skills",
-                         "TOOLS.md", "AGENTS.md", "USER.md", "SOUL.md", "IDENTITY.md"),
-    # 桶 4 - 默认: SOUL.md 末尾 (人格基础)
-    "default_bucket": ("hardware", "HEARTBEAT.md", "MEMORY.md", "skills",
-                       "TOOLS.md", "IDENTITY.md", "AGENTS.md", "USER.md", "SOUL.md"),
+    # 桶 1 - 情感类: USER.md 末尾 (用户偏好, 个性化情感回应)
+    "emotion_bucket": ("MEMORY.md", "HEARTBEAT.md", "AGENTS.md", "USER.md"),
+    # 桶 2 - 功能类: HEARTBEAT.md 末尾 (自检规则) + AGENTS.md (团队调度)
+    "function_bucket": ("USER.md", "MEMORY.md", "AGENTS.md", "HEARTBEAT.md"),
+    # 桶 3 - 认知类: AGENTS.md 末尾 (团队成员讲解) + USER.md (个性化教学)
+    "cognition_bucket": ("MEMORY.md", "HEARTBEAT.md", "USER.md", "AGENTS.md"),
+    # 桶 4 - 默认: AGENTS.md 末尾 (通用排序)
+    "default_bucket": ("MEMORY.md", "HEARTBEAT.md", "USER.md", "AGENTS.md"),
 }
 
 # LRU 缓存上限: 限制 _scene_prompt_cache 大小, 防止内存膨胀
@@ -170,48 +183,32 @@ _BUCKET_LRU_LEVEL: dict[str, str] = {
     "default_bucket": "B",    # 闲聊桶, 优先淘汰
 }
 
-# 优先级矩阵：分数越高越靠近用户输入（末尾）
+# 优先级矩阵 (仅 Scene-Aware Middle 模块)
+# Stable Prefix 模块 (IDENTITY/SOUL/TOOLS/skills/hardware) 固定顺序, 不参与场景重排
+# 分数越高越靠近用户输入 (末尾), 享受场景感知排序功能性
+#
 # 设计原则：功能性为基础 + 复杂度对齐为观测/优化工具 (两者结合)
 #
 # 功能性设计 (基础, 配合 agent_context._build_time_context 时间感知功能):
 #   - 矩阵设计初衷: 解决 Agent 时间观念在 LLM 后注意力机制下被稀释的痛点
 #     时间信息在 Volatile 层 (末尾), 但 Stable 层排序不当会分散 LLM 注意力
 #     → 让场景关键模块靠近用户, 使 LLM 注意力聚焦, 时间信息不被稀释
-#   - greeting/emotional/time: SOUL.md=10 (人格含时段感知, 避免时间观念被稀释)
-#   - identity:    IDENTITY.md=10 (身份信息)
-#   - task:        AGENTS.md=8 (团队成员调度)
-#   - tool:        TOOLS.md=10 (工具列表)
-#   - debug:       HEARTBEAT.md=9 (自检规则) + hardware=8 (硬件上下文)
-#   - creative:    SOUL.md=9 (人格+创作能力)
-#   - learning:    SOUL.md=7 + USER.md=6 (用户偏好,个性化教学)
-#
-# 模块扩展 (Hecate 结构广度优化):
-#   - 原矩阵 6 模块 → 9 模块 (新增 USER.md/MEMORY.md/HEARTBEAT.md)
-#   - 新模块按结构广度 (条件规则/不变量数) 配置优先级
-#   - HEARTBEAT.md: 含 6 项自检 + 5 项异常处理条件 → debug 场景高优先级
-#   - MEMORY.md:    含项目偏好/事件记录 → task/debug 场景中优先级
-#   - USER.md:      含用户偏好/XP认知 → emotional/learning 场景中高优先级
+#   - SOUL.md (含时间感知章节) 在 Stable Prefix 永久驻留, 不会被稀释
+#   - Scene-Aware Middle 的 4 个模块按场景重排:
+#     * task:        AGENTS.md=8 (团队成员调度)
+#     * tool:        AGENTS.md=7 (工具调用支持)
+#     * debug:       HEARTBEAT.md=9 (自检规则) + MEMORY.md=6 (事件记录)
+#     * emotional:   USER.md=7 (用户偏好, 个性化情感)
+#     * learning:    USER.md=6 (个性化教学)
 #
 # 复杂度对齐 (观测/优化工具, memory/prompt_complexity.py):
 #   - 用于发现排序异常 (倒挂/集中/不匹配), 供人工审查参考
 #   - 不自动改矩阵: 功能性设计优先, 复杂度对齐作为辅助观测
-#   - 真正的排序异常 (如关键模块被错误低排) 才需要修复
 import re as _re
 _MODULE_SCENE_PRIORITY: dict[str, dict[str, int]] = {
-    # 核心模块 (原有)
+    # Scene-Aware Middle 模块 (场景感知重排)
     "AGENTS.md":   {"default": 5, "greeting": 2, "task": 8,  "emotional": 3, "identity": 4,  "tool": 7,
                     "time": 4,  "debug": 7, "creative": 4, "learning": 5},
-    "SOUL.md":     {"default": 8, "greeting": 10, "task": 4,  "emotional": 10, "identity": 8,  "tool": 3,
-                    "time": 10, "debug": 4, "creative": 9, "learning": 7},
-    "IDENTITY.md": {"default": 4, "greeting": 3,  "task": 3,  "emotional": 4,  "identity": 10, "tool": 2,
-                    "time": 2,  "debug": 3, "creative": 3, "learning": 5},
-    "TOOLS.md":    {"default": 3, "greeting": 1,  "task": 7,  "emotional": 1,  "identity": 2,  "tool": 10,
-                    "time": 2,  "debug": 5, "creative": 4, "learning": 3},
-    "skills":      {"default": 2, "greeting": 1,  "task": 6,  "emotional": 1,  "identity": 1,  "tool": 8,
-                    "time": 1,  "debug": 6, "creative": 5, "learning": 4},
-    "hardware":    {"default": 1, "greeting": 1,  "task": 5,  "emotional": 1,  "identity": 1,  "tool": 6,
-                    "time": 1,  "debug": 8, "creative": 1, "learning": 1},
-    # 新增模块 (Hecate 结构广度优化)
     "USER.md":     {"default": 6, "greeting": 5,  "task": 4,  "emotional": 7,  "identity": 5,  "tool": 3,
                     "time": 3,  "debug": 4, "creative": 5, "learning": 6},
     "MEMORY.md":   {"default": 3, "greeting": 2,  "task": 7,  "emotional": 2,  "identity": 3,  "tool": 4,
@@ -722,20 +719,24 @@ def _layered_lru_evict(new_bucket: str) -> None:
 
 
 def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸") -> str:
-    """场景感知的动态排序系统提示词构建器 v3 (成本优化版).
+    """分层 Prompt 架构 v4 (Prefix Cache Friendly).
 
-    三级场景分级 + 4桶分桶 + 分层 LRU:
-    1. S 级 (核心事实): 完整重排, 关键模块立刻拉到注意力前端
-       - 哪怕刚聊完数学题, 脱口说晚安, 意图切换瞬间立刻重排
-       - 杜绝时间认知错乱 (矩阵设计初衷)
-    2. A 级 (功能): 桶排序, 功能模块拉到前端
-    3. B 级 (闲聊): 保持当前排序, 不重排 (节省 70% 算力)
-       - 不破坏关键锚点权重, 时间/人格仍靠近用户
+    将 system prompt 分为两层, 利用 API 服务商 Prefix Caching 大幅降低成本:
+
+    1. Stable Prefix (永不变, 享受 90% 缓存折扣):
+       - IDENTITY.md → SOUL.md → TOOLS.md → skills → hardware
+       - 字节级一致, API 服务商 prefix cache 命中 (推理级优化)
+       - SOUL.md 含时间感知章节, 作为"人格锚点"永久驻留
+
+    2. Scene-Aware Middle (场景感知重排):
+       - AGENTS.md / USER.md / MEMORY.md / HEARTBEAT.md
+       - 三级场景分级 + 4桶分桶 + 分层 LRU + 粘性阈值 0.5
+       - S 级立刻重排 (杜绝时间认知错乱), B 级粘性 (节省算力)
 
     绝对禁止 TTL 冷却: 会锁定旧缓存, 周期性复现时间认知错乱 bug
 
     Returns:
-        按场景优先级排序后的完整 system prompt 字符串
+        Stable Prefix + Scene-Aware Middle 拼接后的完整 system prompt
     """
     global _current_scene_sig, _scene_cache_hits, _scene_cache_misses
 
@@ -743,23 +744,33 @@ def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸") -> s
     if not modules:
         return ""
 
-    # Layer 1: 加权多场景检测
+    # ── 分层: Stable Prefix + Scene-Aware Middle ──────────────
+    stable_prefix_modules = [name for name in _STABLE_PREFIX_ORDER if name in modules]
+    scene_aware_names = [name for name in modules if name not in _STABLE_PREFIX_ORDER]
+
+    # Stable Prefix: 固定顺序拼接 (字节级一致, 享受 prefix cache)
+    stable_prefix = "\n\n---\n\n".join(modules[name] for name in stable_prefix_modules)
+
+    # 无 Scene-Aware Middle 模块 → 直接返回 Stable Prefix
+    if not scene_aware_names:
+        return stable_prefix
+
+    # ── Scene-Aware Middle: 三级场景分级重排 ──────────────────
     weights = _classify_scene_blended(user_input)
     scene_level = _get_scene_level(weights)
 
-    # Layer 2: 三级场景分级重排
     if scene_level == "S":
         # S 级: 完整重排 (关键模块立刻拉到注意力前端)
         # 绝对不受粘性阈值影响, 杜绝时间认知错乱
-        new_sig = _compute_scene_signature(weights, list(modules.keys()))
+        new_sig = _compute_scene_signature(weights, scene_aware_names)
     elif scene_level == "A":
         # A 级: 桶排序 (功能模块拉到前端)
-        new_sig = _compute_scene_signature(weights, list(modules.keys()))
+        new_sig = _compute_scene_signature(weights, scene_aware_names)
     else:
         # B 级: 极低质量闲聊粘性
         # 以下情况保持当前排序 (节省算力, 不值得重排):
         #   1. default 场景 (无关键词命中, 如 "嗯"/"哦"/"asdfgh" 等无意义输入)
-        #   2. 主导权重 < 0.3 (极低质量闲聊)
+        #   2. 主导权重 < 0.5 (极低质量闲聊)
         # 正常 B 级场景 (greeting/creative/learning, 权重通常 = 1.0) → 正常桶排序
         dominant_scene = max(weights, key=weights.get) if weights else "default"
         max_weight = max(weights.values()) if weights else 0
@@ -768,28 +779,30 @@ def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸") -> s
             new_sig = _current_scene_sig
         else:
             # 正常 B 级 → 桶排序
-            new_sig = _compute_scene_signature(weights, list(modules.keys()))
+            new_sig = _compute_scene_signature(weights, scene_aware_names)
 
     _current_scene_sig = new_sig
 
-    # Layer 3: 场景签名缓存 — 命中则直接返回 (零开销)
+    # ── 缓存: 只缓存 Scene-Aware Middle (Stable Prefix 独立处理) ─
     if new_sig in _scene_prompt_cache:
         _scene_cache_hits += 1
         # LRU: 命中时移到末尾 (保持最近使用)
-        prompt = _scene_prompt_cache.pop(new_sig)
-        _scene_prompt_cache[new_sig] = prompt
-        return prompt
+        scene_middle = _scene_prompt_cache.pop(new_sig)
+        _scene_prompt_cache[new_sig] = scene_middle
+    else:
+        _scene_cache_misses += 1
+        sections = [modules[name] for name in new_sig if modules.get(name)]
+        scene_middle = "\n\n---\n\n".join(sections)
 
-    # 未命中 → 拼接并缓存
-    _scene_cache_misses += 1
-    sections = [modules[name] for name in new_sig if modules.get(name)]
-    prompt = "\n\n---\n\n".join(sections)
+        # 分层 LRU 淘汰 (关键锚点桶永久驻留)
+        new_bucket = _get_bucket_for_sig(new_sig)
+        _layered_lru_evict(new_bucket)
+        _scene_prompt_cache[new_sig] = scene_middle
 
-    # Layer 4: 分层 LRU 淘汰 (关键锚点桶永久驻留)
-    new_bucket = _get_bucket_for_sig(new_sig)
-    _layered_lru_evict(new_bucket)
-    _scene_prompt_cache[new_sig] = prompt
-    return prompt
+    # ── 拼接: Stable Prefix + Scene-Aware Middle ──────────────
+    if stable_prefix and scene_middle:
+        return stable_prefix + "\n\n---\n\n" + scene_middle
+    return stable_prefix or scene_middle
 
 
 def get_scene_cache_stats() -> dict:

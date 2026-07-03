@@ -530,11 +530,14 @@ async def test_scene_complexity_alignment():
         f"场景不匹配, 期望 {expected_scenes}, 实际 {analyzed_scenes}"
 
     # 验证每个 alignment 的结构
+    # 分层架构: Scene-Aware Middle 仅 4 个模块 (AGENTS/USER/MEMORY/HEARTBEAT)
+    # Stable Prefix 模块 (IDENTITY/SOUL/TOOLS/skills/hardware) 固定顺序, 不参与场景重排
+    scene_aware_module_count = 4
     for alignment in alignments:
         assert isinstance(alignment, SceneComplexityAlignment)
         assert alignment.scene in expected_scenes
-        assert len(alignment.ordering) == 9, \
-            f"场景 {alignment.scene} 排序长度 {len(alignment.ordering)} != 9"
+        assert len(alignment.ordering) == scene_aware_module_count, \
+            f"场景 {alignment.scene} 排序长度 {len(alignment.ordering)} != {scene_aware_module_count}"
         # 验证 ordering 是按优先级升序
         priorities = [p for _, p, _ in alignment.ordering]
         assert priorities == sorted(priorities), \
@@ -557,22 +560,25 @@ async def test_scene_complexity_alignment():
         total_concentrations += len(alignment.concentrations)
         total_mismatches += len(alignment.mismatches)
 
-    # 5.3 功能性排序断言 (核心) — 验证每个场景关键模块在最靠近用户的位置
-    # 设计原则: 功能性为基础 + 复杂度对齐为观测/优化工具 (两者结合)
+    # 5.3 功能性排序断言 (核心) — 验证 Scene-Aware Middle 关键模块在最靠近用户的位置
+    # 分层架构 v4: Stable Prefix 模块 (IDENTITY/SOUL/TOOLS) 固定在前, 不参与场景重排
+    # 仅验证 Scene-Aware Middle 模块 (AGENTS/USER/MEMORY/HEARTBEAT) 的场景排序
+    #
     # 矩阵设计初衷: 配合 agent_context._build_time_context 时间感知功能
-    #   解决时间观念在 LLM 后注意力机制下被稀释的痛点
+    #   SOUL.md (含时间感知章节) 在 Stable Prefix 永久驻留, 不会被稀释
+    #   Scene-Aware Middle 的 4 个模块按场景重排, 关键模块拉到注意力前端
     FUNCTIONAL_KEY_MODULES = {
-        "default":   ["SOUL.md"],                    # 默认人格基础 (含时段感知)
-        "greeting":  ["SOUL.md"],                    # 问候需要人格 (时段感知避免时间观念被稀释)
-        "emotional": ["SOUL.md"],                    # 情感交流需要人格 (深夜安慰 vs 清晨问候)
-        "identity":  ["IDENTITY.md"],                # 问身份需要身份信息
-        "task":      ["AGENTS.md"],                  # 任务执行需要团队成员
-        "tool":      ["TOOLS.md"],                   # 用工具需要工具列表
+        # 仅验证 Scene-Aware Middle 中有明确关键模块的场景
+        # 关键模块在 Stable Prefix 中的场景 (default/identity/time) 不验证
+        "greeting":  ["USER.md"],                    # 问候: USER.md 末尾 (个性化问候)
+        "emotional": ["USER.md"],                    # 情感: USER.md 末尾 (个性化情感)
+        "task":      ["AGENTS.md"],                  # 任务: AGENTS.md 末尾 (团队成员调度)
+        "tool":      ["AGENTS.md"],                  # 工具: AGENTS.md 末尾 (工具调用支持)
         # 新增场景 (Hecate 结构广度优化)
-        "time":      ["SOUL.md"],                    # 时间感知: SOUL.md 含时间感知章节 (Hecate 条件规则)
-        "debug":     ["HEARTBEAT.md"],               # 调试排错: HEARTBEAT.md 含自检规则 + 异常处理条件
-        "creative":  ["SOUL.md"],                    # 创作类: SOUL.md 含 AI 创作能力 + 人格风格
-        "learning":  ["SOUL.md"],                    # 学习类: SOUL.md 含技能清单 + 人格化讲解
+        "debug":     ["HEARTBEAT.md"],               # 调试: HEARTBEAT.md 末尾 (自检规则)
+        "creative":  ["USER.md"],                    # 创作: USER.md 末尾 (个性化创作)
+        "learning":  ["USER.md"],                    # 学习: USER.md 末尾 (个性化教学)
+        # default/identity/time 的关键模块 (SOUL/IDENTITY) 在 Stable Prefix, 不验证
     }
     print("\n  功能性排序验证 (核心断言):")
     functional_failures = []
