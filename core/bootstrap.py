@@ -688,7 +688,7 @@ class AgentCoreBootstrapper:
         此处对所有已发现的插件执行 load + enable，
         使插件注册的工具对 LLM 可见。
         """
-        from web.app import app
+        from web.server import app
         plugin_mgr = getattr(app.state, "plugin_manager", None)
         if not plugin_mgr:
             return

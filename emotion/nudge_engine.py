@@ -244,7 +244,7 @@ class NudgeEngine:
                 ]
                 result = await asyncio.wait_for(
                     self._router.route("chat_flash", messages, temperature=0.9),
-                    timeout=15,
+                    timeout=30,
                 )
                 if isinstance(result, str):
                     greeting = result
