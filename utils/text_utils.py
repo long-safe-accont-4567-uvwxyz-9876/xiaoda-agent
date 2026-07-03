@@ -350,6 +350,10 @@ def smart_summary_truncate(content: str, role: str = "default") -> str:
     return content[:best_pos].rstrip() + "[…]"
 
 QQ_MSG_BYTE_LIMIT = 8000
+# 群聊单条消息字节上限（保守值，避免服务端截断）。
+# QQ 官方群消息 content 字段实际限制约 2000 字符（≈6000 字节 UTF-8），
+# 取 4000 字节作为安全阈值，留出表情包/媒体混排时的余量。
+QQ_GROUP_MSG_BYTE_LIMIT = 4000
 
 
 def _find_char_boundary(text: str, byte_limit: int) -> int:
@@ -363,21 +367,21 @@ def _find_char_boundary(text: str, byte_limit: int) -> int:
     return low
 
 
-def smart_truncate(text: str, max_len: int = 2000) -> str:
+def smart_truncate(text: str, max_len: int = QQ_MSG_BYTE_LIMIT) -> str:
     """按字节上限智能截断文本, 优先在句末/换行处切分.
 
     Args:
         text: 原始文本
-        max_len: 保留参数, 实际使用 QQ_MSG_BYTE_LIMIT
+        max_len: 字节上限, 默认 QQ_MSG_BYTE_LIMIT
 
     Returns:
         截断后的文本
     """
     encoded = text.encode('utf-8')
-    if len(encoded) <= QQ_MSG_BYTE_LIMIT:
+    if len(encoded) <= max_len:
         return text
 
-    safe_limit = int(QQ_MSG_BYTE_LIMIT * 0.9)
+    safe_limit = int(max_len * 0.9)
     target_chars = _find_char_boundary(text, safe_limit)
 
     search_start = max(0, target_chars - 200)
@@ -395,7 +399,7 @@ def smart_truncate(text: str, max_len: int = 2000) -> str:
 
     truncated = text[:best_pos].rstrip()
 
-    if len(truncated.encode('utf-8')) > QQ_MSG_BYTE_LIMIT:
+    if len(truncated.encode('utf-8')) > max_len:
         truncated = truncated[:_find_char_boundary(truncated, safe_limit)].rstrip()
 
     if truncated.count('```') % 2 != 0:
@@ -416,28 +420,28 @@ _SEGMENT_CONTINUATIONS = [
 ]
 
 
-def split_long_reply(text: str, max_len: int = 2000) -> list[str]:
+def split_long_reply(text: str, max_len: int = QQ_MSG_BYTE_LIMIT) -> list[str]:
     """将超长文本按字节上限拆分为多段, 每段附加续接提示.
 
     Args:
         text: 原始文本
-        max_len: 保留参数, 实际使用 QQ_MSG_BYTE_LIMIT
+        max_len: 字节上限, 默认 QQ_MSG_BYTE_LIMIT
 
     Returns:
         拆分后的文本段列表
     """
     encoded = text.encode('utf-8')
-    if len(encoded) <= QQ_MSG_BYTE_LIMIT:
+    if len(encoded) <= max_len:
         return [text]
 
-    safe_limit = int(QQ_MSG_BYTE_LIMIT * 0.9)
+    safe_limit = int(max_len * 0.9)
     target_chars = _find_char_boundary(text, safe_limit)
     segments = []
     remaining = text
 
     while remaining:
         encoded = remaining.encode('utf-8')
-        if len(encoded) <= QQ_MSG_BYTE_LIMIT:
+        if len(encoded) <= max_len:
             segments.append(remaining)
             break
 
@@ -456,7 +460,7 @@ def split_long_reply(text: str, max_len: int = 2000) -> list[str]:
 
         chunk = remaining[:best_pos].rstrip()
 
-        if len(chunk.encode('utf-8')) > QQ_MSG_BYTE_LIMIT:
+        if len(chunk.encode('utf-8')) > max_len:
             chunk = chunk[:_find_char_boundary(chunk, safe_limit)].rstrip()
 
         if chunk.count('```') % 2 != 0:
@@ -470,6 +474,76 @@ def split_long_reply(text: str, max_len: int = 2000) -> list[str]:
         for i in range(len(segments) - 1):
             hint = random.choice(_SEGMENT_CONTINUATIONS)
             segments[i] = segments[i].rstrip() + "\n" + hint
+
+    return segments
+
+
+def split_for_group_passive(text: str, byte_limit: int = QQ_GROUP_MSG_BYTE_LIMIT,
+                            max_segments: int = 4) -> list[str]:
+    """群聊被动回复分片：按字节上限切片，最多 max_segments 片，不加衔接词。
+
+    QQ 群聊被动回复（带 msg_id）每条用户消息 5 分钟内最多 5 次。
+    策略：ACK 占 1 次，流式分片最多 4 次，总共 5 次，不超限。
+    分片之间不加任何衔接词，避免对话突兀。
+    最后一片超长时按字节截断，不加任何标记，自动闭合代码块。
+
+    Args:
+        text: 原始文本
+        byte_limit: 字节上限, 默认 QQ_GROUP_MSG_BYTE_LIMIT
+        max_segments: 最大分片数, 默认 4（ACK + 4 片 = 5 次配额）
+
+    Returns:
+        1~max_segments 片文本列表
+    """
+    encoded = text.encode('utf-8')
+    if len(encoded) <= byte_limit:
+        return [text]
+
+    segments: list[str] = []
+    remaining = text
+
+    while remaining and len(segments) < max_segments:
+        # 最后一片配额：直接按字节截断，不加标记
+        if len(segments) == max_segments - 1:
+            if len(remaining.encode('utf-8')) > byte_limit:
+                encoded_rem = remaining.encode('utf-8')
+                remaining = encoded_rem[:byte_limit].decode('utf-8', errors='ignore')
+                # 闭合截断后未结束的代码块
+                if remaining.count('```') % 2 != 0:
+                    remaining += '\n```'
+            segments.append(remaining.rstrip())
+            break
+
+        # 在字节上限附近找句子边界切分
+        safe_limit = int(byte_limit * 0.9)
+        target_chars = _find_char_boundary(remaining, safe_limit)
+        search_start = max(0, target_chars - 200)
+        search_end = min(len(remaining), target_chars + 100)
+        best_pos = -1
+        for pattern in BREAK_PATTERNS:
+            pos = remaining.rfind(pattern, search_start, search_end)
+            if pos != -1:
+                best_pos = pos + len(pattern)
+                break
+        if best_pos == -1 or best_pos < search_start:
+            best_pos = target_chars
+
+        part = remaining[:best_pos].rstrip()
+        remaining = remaining[best_pos:].lstrip('\n')
+
+        # 闭合当前片的代码块
+        if part.count('```') % 2 != 0:
+            part += '\n```'
+            # 下一片以代码块开头补全
+            remaining = '```\n' + remaining
+
+        segments.append(part)
+
+        # 剩余内容未超字节上限，作为最后一片
+        if len(remaining.encode('utf-8')) <= byte_limit:
+            if remaining.strip():
+                segments.append(remaining.rstrip())
+            break
 
     return segments
 
