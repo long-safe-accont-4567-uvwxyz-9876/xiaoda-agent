@@ -208,6 +208,24 @@ async def _start_services(app: Any, core: Any) -> None:
     except Exception as e:
         logger.warning("webui.recall_scheduler_init_failed", error=str(e))
 
+    # 自发回忆：每小时随机想 1 条记忆，生成内心独白（让 agent 有"内心生活"）
+    try:
+        from core.spontaneous_recall import SpontaneousRecall
+        spontaneous = SpontaneousRecall(core)
+        spontaneous.start()
+        app.state.spontaneous_recall = spontaneous
+    except Exception as e:
+        logger.warning("webui.spontaneous_recall_init_failed", error=str(e))
+
+    # 成长叙事：每天 23:00 生成成长总结，写入自我模型和长期记忆
+    try:
+        from core.growth_narrative import GrowthNarrative
+        growth = GrowthNarrative(core)
+        growth.start()
+        app.state.growth_narrative = growth
+    except Exception as e:
+        logger.warning("webui.growth_narrative_init_failed", error=str(e))
+
     # QQ Bot
     qq_task = None
     if os.getenv("QQBOT_APP_ID", "") and os.getenv("ENABLE_QQ_BOT", "true").lower() in ("true", "1", "yes"):
