@@ -400,6 +400,21 @@ class MessageProcessorMixin:
             clean_reply = clean_reply + "\n\n🎙️ 语音消息已发送～"
 
         _spawn(self._hook_engine.fire_post_response())
+
+        # 更新持续情绪状态（让 agent 有情绪惯性）
+        try:
+            from emotion.emotion_state import get_emotion_state
+            _intensity_map = {
+                "happy": 0.6, "excited": 0.8, "love": 0.7,
+                "shy": 0.5, "sad": 0.7, "angry": 0.8,
+                "surprised": 0.7, "confused": 0.4, "thinking": 0.3,
+                "playful": 0.6, "moved": 0.7, "anxious": 0.6,
+                "fear": 0.8, "pout": 0.5, "neutral": 0.2,
+            }
+            get_emotion_state().update(emotion_label, _intensity_map.get(emotion_label, 0.5))
+        except Exception as e:
+            logger.debug("emotion_state.update_failed", error=str(e))
+
         return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path,
                              audio_path=audio_path, tts_pending=tts_pending, tts_text=tts_text)
 
@@ -535,7 +550,7 @@ class MessageProcessorMixin:
 
         # 消息构建阶段
         messages, _pre_picked_sticker, tools = await self._build_main_messages(
-            user_input, is_master, image_data, clean_input, emotion, user_id)
+            user_input, is_master, image_data, clean_input, emotion, user_id, source)
 
         # 任务类型解析与熔断器检查
         early_result, task_type, _cb_max_tokens, circuit_state, _model_cfg = \
@@ -581,7 +596,7 @@ class MessageProcessorMixin:
 
     async def _build_main_messages(self, user_input: Any, is_master: Any, image_data: Any,
                                      clean_input: Any, emotion: Any,
-                                     user_id: Any) -> tuple:
+                                     user_id: Any, source: Any = None) -> tuple:
         """主路径阶段2：构建消息 + 图片描述注入 + 表情包/工具准备。返回 (messages, _pre_picked_sticker, tools)。"""
         # 构建消息
         effective_input = user_input
@@ -590,7 +605,7 @@ class MessageProcessorMixin:
             messages = [{"role": "system", "content": safe_prompt}]
             messages.append({"role": "user", "content": effective_input})
         else:
-            messages = self.context.build_messages(effective_input)
+            messages = self.context.build_messages(effective_input, source=source or "")
 
         # 图片描述注入
         messages = await self._inject_image_description(messages, user_input, image_data)
@@ -663,6 +678,20 @@ class MessageProcessorMixin:
 
         _spawn(self._hook_engine.fire_post_response())
 
+        # 更新持续情绪状态（让 agent 有情绪惯性）
+        try:
+            from emotion.emotion_state import get_emotion_state
+            _intensity_map = {
+                "happy": 0.6, "excited": 0.8, "love": 0.7,
+                "shy": 0.5, "sad": 0.7, "angry": 0.8,
+                "surprised": 0.7, "confused": 0.4, "thinking": 0.3,
+                "playful": 0.6, "moved": 0.7, "anxious": 0.6,
+                "fear": 0.8, "pout": 0.5, "neutral": 0.2,
+            }
+            get_emotion_state().update(emotion_label, _intensity_map.get(emotion_label, 0.5))
+        except Exception as e:
+            logger.debug("emotion_state.update_failed", error=str(e))
+
         return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path,
                              audio_path=audio_path, tool_results=tool_results, image_paths=media_image_paths,
                              video_path=media_video_path, tts_pending=tts_pending, tts_text=tts_text)
@@ -713,7 +742,28 @@ class MessageProcessorMixin:
             except Exception as e:
                 logger.warning("notebook.load_failed", error=str(e))
 
-        memories, _ = await asyncio.gather(_retrieve_memories(), _load_notebook())
+        async def _retrieve_constraint_lessons() -> list[dict]:
+            """检索 RAG 层经验教训（FTS 关键词匹配，零成本）。"""
+            try:
+                from core.constraint_injector import search_constraint_lessons
+                lessons = search_constraint_lessons(user_input, top_k=3)
+                if lessons:
+                    return [{"summary": f"[经验] {l}", "timestamp": 0,
+                             "source": "constraint_rag"}
+                            for l in lessons]
+            except Exception as e:
+                logger.debug("constraint.rag_search_failed", error=str(e))
+            return []
+
+        memories, _, lessons = await asyncio.gather(
+            _retrieve_memories(), _load_notebook(), _retrieve_constraint_lessons())
+
+        # 经验教训追加到 memories，作为 [相关记忆] 的一部分注入
+        if lessons:
+            if memories is None:
+                memories = []
+            memories.extend(lessons)
+
         return memories
 
     async def _inject_image_description(self, messages: Any, user_input: Any, image_data: Any) -> Any:
