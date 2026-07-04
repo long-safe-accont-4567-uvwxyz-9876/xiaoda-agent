@@ -494,6 +494,60 @@ class MemoryManager:
         # 规则 5
         return False
 
+    def _suggest_k(self, query: str, default_k: int = 3) -> int:
+        """根据查询内容智能建议检索条数 k。
+
+        策略：
+        - 极短闲聊（问候/确认）：k=1，避免注入无关记忆
+        - 普通对话：k=default_k（3）
+        - 技术/复杂问题：k=5~7，多检索相关上下文
+        - 情感类问题：k=3（安抚记忆由调用方额外补充）
+        """
+        if not query:
+            return 1
+
+        # 计算有效长度
+        effective_len = 0
+        for ch in query:
+            if '\u4e00' <= ch <= '\u9fff' or '\u3400' <= ch <= '\u4dbf':
+                effective_len += 2
+            else:
+                effective_len += 1
+
+        # 极短查询：问候、确认、单字回复
+        if effective_len <= 8:
+            return 1
+
+        # 短查询：闲聊
+        if effective_len <= 15:
+            return 2
+
+        # 关键词匹配：技术/复杂问题 → 多检索
+        try:
+            from config import SIMPLE_TASK_KEYWORDS
+            complex_keywords = SIMPLE_TASK_KEYWORDS.get("complex", [])
+        except Exception:
+            complex_keywords = []
+
+        for kw in complex_keywords:
+            if kw in query:
+                return min(7, default_k + 3)
+
+        # 中等长度：包含代码/文件/配置/错误等技术词
+        tech_indicators = ("代码", "bug", "错误", "报错", "配置", "安装", "部署",
+                           "docker", "api", "接口", "函数", "变量", "数据库",
+                           "sql", "python", "linux", "命令", "脚本", "文件",
+                           "怎么", "如何", "为什么", "原因", "分析", "解释")
+        for indicator in tech_indicators:
+            if indicator in query.lower():
+                return min(5, default_k + 2)
+
+        # 长查询：可能涉及多话题
+        if effective_len > 60:
+            return min(5, default_k + 2)
+
+        return default_k
+
     async def retrieve_memories(self, query: str, k: int = 5, context: str = "") -> list[dict]:
         import config
         # 时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索

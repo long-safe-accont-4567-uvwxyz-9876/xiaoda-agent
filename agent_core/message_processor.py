@@ -696,7 +696,8 @@ class MessageProcessorMixin:
             if self.memory and is_master:
                 self.memory.signal_new_message()
                 try:
-                    results = await self.memory.retrieve_memories(user_input, k=3)
+                    _k = self.memory._suggest_k(user_input, default_k=3)
+                    results = await self.memory.retrieve_memories(user_input, k=_k)
                 except Exception as e:
                     logger.warning("memory.retrieve_failed", error=str(e))
                     results = None
