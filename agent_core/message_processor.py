@@ -750,7 +750,7 @@ class MessageProcessorMixin:
                     try:
                         import config as _cfg
                         _base_threshold = float(getattr(_cfg, "EMOTION_TRIGGER_THRESHOLD", 0.5))
-                    except Exception:
+                    except (ImportError, ValueError, TypeError):
                         pass
                     _emo_threshold = self._dynamic_emotion_threshold(
                         user_input, emotion, _base_threshold
