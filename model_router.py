@@ -288,7 +288,7 @@ class ModelRouter:
             dm = record.get("default_model", "")
             if dm:
                 return dm
-        except Exception:
+        except (KeyError, AttributeError, TypeError):
             pass
         # 回退到内置映射
         return self._CUSTOM_PROVIDER_DEFAULT_MODELS.get(provider, "")
@@ -703,7 +703,7 @@ class ModelRouter:
                 if stream:
                     try:
                         await stream.close()
-                    except Exception:
+                    except (AttributeError, OSError):
                         pass
                     stream = None
                 should_retry = await self._handle_route_exception(
@@ -791,8 +791,8 @@ class ModelRouter:
             try:
                 await self._record_stream_usage(task_type, model, response,
                                                 user_openid, session_id, provider)
-            except Exception:
-                pass
+            except (AttributeError, TypeError, OSError) as e:
+                logger.debug("router.stream_usage_record_failed: %s", e)
             return response
 
         self._track_cache(response)

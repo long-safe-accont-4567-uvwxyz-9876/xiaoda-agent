@@ -102,14 +102,14 @@ def _extract_topic_keywords(query: str, top_n: int = 2) -> list[str]:
         # 过滤停用词和过短的词
         keywords = [kw for kw in keywords if len(kw) >= 2 and kw not in _TOPIC_STOPWORDS]
         return keywords[:top_n]
-    except Exception:
+    except (ImportError, OSError):
         # 降级到普通分词
         try:
             import jieba
             words = jieba.lcut(query)
             words = [w for w in words if len(w) >= 2 and w not in _TOPIC_STOPWORDS]
             return words[:top_n]
-        except Exception:
+        except (ImportError, OSError):
             return []
 
 
@@ -229,7 +229,7 @@ class MemoryManager:
             return self._memory_count_cache
         try:
             count = await self.memory.get_episodic_count()
-        except Exception:
+        except (OSError, TypeError):
             count = 0
         self._memory_count_cache = count
         self._memory_count_ts = now
@@ -294,7 +294,7 @@ class MemoryManager:
             for r in recent:
                 if _normalize_for_dedupe(r.get("summary", "")) == normalized:
                     return True
-        except Exception:
+        except (OSError, TypeError):
             pass
         return False
 
@@ -574,7 +574,7 @@ class MemoryManager:
             from config import SIMPLE_TASK_KEYWORDS
             chat_keywords = SIMPLE_TASK_KEYWORDS.get("chat", [])
             complex_keywords = SIMPLE_TASK_KEYWORDS.get("complex", [])
-        except Exception:
+        except (ImportError, AttributeError):
             chat_keywords = []
             complex_keywords = []
 
@@ -1429,7 +1429,7 @@ class MemoryManager:
             # 用第一条记忆的时间戳作为 window_start 的实际值（更精确）
             try:
                 real_start = min(float(c.get("timestamp", now)) for c in candidates)
-            except Exception:
+            except (ValueError, TypeError):
                 real_start = window_start
 
             source_ids = ",".join(str(c.get("id", "")) for c in candidates if c.get("id"))

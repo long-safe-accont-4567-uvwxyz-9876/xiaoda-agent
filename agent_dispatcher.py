@@ -724,7 +724,7 @@ class SubAgent:
         target = None
         try:
             target = dispatcher.get_agent(target_agent)
-        except Exception:
+        except (KeyError, AttributeError):
             target = None
 
         if target is None:

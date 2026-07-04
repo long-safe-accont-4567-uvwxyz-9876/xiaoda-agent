@@ -1,8 +1,11 @@
+import logging
 import os
 import re
 import json
 import time
 import sys
+
+logger = logging.getLogger(__name__)
 from typing import Any
 import shutil
 import platform
@@ -52,8 +55,8 @@ def get_env_path() -> Path:
                 try:
                     shutil.copy2(old_env, user_env)
                     print(f"[config] .env migrated from {old_env} to {user_env}")
-                except Exception:
-                    pass  # 迁移失败不阻塞启动，用户可在 Setup 页面重新配置
+                except (OSError, shutil.Error) as e:
+                    logger.debug("config.env_migrate_failed: %s", e)
         return user_env
     # 开发模式：使用项目根目录
     return Path(__file__).resolve().parent / ".env"
@@ -125,8 +128,8 @@ def get_config_dir() -> Path:
         if old_config.exists() and not user_config.exists():
             try:
                 shutil.copytree(old_config, user_config, dirs_exist_ok=True)
-            except Exception:
-                pass
+            except (OSError, shutil.Error) as e:
+                logger.debug("config.dir_migrate_failed: %s", e)
         user_config.mkdir(parents=True, exist_ok=True)
         return user_config
     # Docker 环境：使用 KIOXIA_DATA_DIR（volume 挂载的持久化目录）
@@ -220,8 +223,8 @@ def _init_user_resources() -> None:
             if not target.exists():
                 try:
                     shutil.copy2(item, target)
-                except Exception:
-                    pass
+                except (OSError, shutil.Error) as e:
+                    logger.debug("config.workspace_copy_failed %s: %s", target_name, e)
 
         # 4. 复制 workspace/ 子目录（workflows/, skills/ 等默认资源，不覆盖已有文件）
         for sub_name in ("workflows", "skills"):
@@ -237,8 +240,8 @@ def _init_user_resources() -> None:
                 if not target.exists():
                     try:
                         shutil.copy2(item, target)
-                    except Exception:
-                        pass
+                    except (OSError, shutil.Error) as e:
+                        logger.debug("config.workspace_sub_copy_failed %s: %s", target_name, e)
 
 
 _init_user_resources()
