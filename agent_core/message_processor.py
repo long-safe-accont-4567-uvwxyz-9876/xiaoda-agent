@@ -246,13 +246,6 @@ class MessageProcessorMixin:
         trace.info("agent.process.start", source=source, user_id=user_id,
                     msg_preview=user_input[:80])
 
-        # 尽早发送"收到，正在想..."提示，让用户 <1 秒看到响应
-        if status_callback:
-            try:
-                await status_callback("收到，正在想...")
-            except Exception as _e:
-                logger.debug("agent.status_callback_failed", error=str(_e))
-
         allowed, reason = self.security.is_allowed(user_id)
 
         # 群聊 session 按用户隔离：不同用户使用不同 session_id
