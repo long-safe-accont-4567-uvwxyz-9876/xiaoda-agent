@@ -9,7 +9,6 @@ logger = logging.getLogger(__name__)
 from typing import Any
 import shutil
 import platform
-import socket
 from pathlib import Path
 from dotenv import load_dotenv
 from utils.encrypted_credential import protect_credential

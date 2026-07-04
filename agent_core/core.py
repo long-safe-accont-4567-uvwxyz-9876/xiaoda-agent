@@ -25,7 +25,7 @@ from agent_core._shared import (
     UserIdentity,
 )
 
-from config import (MIMO_MODEL, AGENT_CONFIG, WORKSPACE_DIR, STICKER_DIR, KLEE_STICKER_DIR, FILE_DIR,
+from config import (AGENT_CONFIG, WORKSPACE_DIR, STICKER_DIR, KLEE_STICKER_DIR, FILE_DIR,
                     build_system_prompt, build_safe_system_prompt, SIMPLE_TASK_KEYWORDS,
                     PRO_TASK_KEYWORDS, TTS_ASYNC_MODE, SIMPLE_CHAT_FASTPATH)
 from model_router import ModelRouter
@@ -56,7 +56,7 @@ from agent_dispatcher import AgentDispatcher
 from tool_engine.mcp_client import MCPManager
 from utils.credential_pool import get_credential_pool
 from utils.error_classifier import ErrorClassifier
-from hooks import get_hook_engine, HookEngine
+from hooks import get_hook_engine
 
 # 内置工具改为懒注册：仅登记元数据（name/description/schema/permission/category），
 # 不 import tools.* 子模块，避免冷启动把 httpx/selenium/PIL/primp 等重依赖拉进进程。
@@ -68,37 +68,14 @@ if TYPE_CHECKING:
     from task_orchestrator import TaskGraph
     from instinct_manager import InstinctManager
 
-from core.background_tasks import BackgroundTaskManager, _spawn, _bg_tasks
+from core.background_tasks import BackgroundTaskManager, _bg_tasks
 from core.bootstrap import AgentCoreBootstrapper
-from core.router_engine import RouterEngine, RoutingDecision
+from core.router_engine import RouterEngine
 from core.chat_processor import ChatProcessor
 from core.tool_orchestrator import ToolOrchestrator
-from core.circuit_breaker import CognitiveState, CircuitBreaker, CircuitState
+from core.circuit_breaker import CognitiveState, CircuitBreaker
 from core.failure_trigger import FailureTrigger
 from utils.smart_error_handler import SmartErrorHandler
-
-
-def _extract_reasoning_content(response: Any) -> str | None:
-    try:
-        message = response.choices[0].message
-        if hasattr(message, "reasoning_content"):
-            return message.reasoning_content
-        if hasattr(message, "model_extra") and isinstance(message.model_extra, dict):
-            return message.model_extra.get("reasoning_content")
-        if isinstance(message, dict):
-            return message.get("reasoning_content")
-    except (AttributeError, IndexError):
-        pass
-    return None
-
-
-def _extract_delta_reasoning_content(chunk_dict: dict) -> str | None:
-    try:
-        delta = chunk_dict.get("choices", [{}])[0].get("delta", {})
-        return delta.get("reasoning_content")
-    except (IndexError, AttributeError):
-        pass
-    return None
 
 
 # 各 Mixin 从 agent_core._shared 导入共享类型, 不再依赖 agent_core.core 完成初始化,

@@ -14,7 +14,7 @@ from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_d
 from emotion.tts_engine import TTSEngine
 from emotion.emoji_config import get_status_msg
 from tool_engine.tool_guardrails import get_tool_guardrails
-from utils.credential_pool import get_credential_pool, CredentialPool
+from utils.credential_pool import CredentialPool
 from core.message import AgentMessage
 
 

@@ -1,5 +1,4 @@
 # reranker.py — bge-reranker-v2-m3 交叉编码器重排序（SiliconFlow）
-import asyncio
 import time
 import httpx
 from loguru import logger
