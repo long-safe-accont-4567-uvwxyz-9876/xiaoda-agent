@@ -282,7 +282,7 @@ async def _i2c_subprocess_scan(bus: Any) -> Any:
                 if 0x03 <= addr <= 0x77:
                     found.append(addr)
             except ValueError:
-                continue
+                logger.debug("hardware_tools.i2c_scan: skipping non-hex token={!r}", p, exc_info=True)
     return found
 
 

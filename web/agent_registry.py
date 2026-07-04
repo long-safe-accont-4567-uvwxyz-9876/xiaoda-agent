@@ -340,7 +340,7 @@ class AgentRegistry:
                 data.setdefault("base_url", base_url)
                 data.setdefault("api_key_env", api_key_env)
             except ValueError:
-                pass  # 未知 provider 时不强制覆盖
+                logger.debug("unknown provider={}, skip auto-fill base_url/api_key_env", new_provider, exc_info=True)
         self._apply_fields(agent.config, data)
         # provider 或 model 变更后，尝试热重载客户端
         provider_changed = new_provider is not None and new_provider != old_provider

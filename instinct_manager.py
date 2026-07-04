@@ -141,7 +141,8 @@ class InstinctManager:
             try:
                 confidence = float(parts[1].strip())
             except ValueError:
-                continue  # 置信度不是数字，跳过（不是有效行）
+                logger.debug("instinct_manager: skipping line with non-numeric confidence: {!r}", line, exc_info=True)
+                continue
             confidence = max(0.0, min(1.0, confidence))
 
             # 过滤无效内容

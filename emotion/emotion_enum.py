@@ -8,6 +8,7 @@
 import os
 import re
 from enum import Enum
+from loguru import logger
 
 
 class Emotion(str, Enum):
@@ -174,7 +175,7 @@ def resolve_emotion(label: str) -> Emotion:
     try:
         return Emotion(label)
     except ValueError:
-        pass
+        logger.debug("emotion_enum.resolve: label={!r} not in Emotion enum", label, exc_info=True)
     # 查别名表
     if label in EMOTION_ALIASES:
         return EMOTION_ALIASES[label]
