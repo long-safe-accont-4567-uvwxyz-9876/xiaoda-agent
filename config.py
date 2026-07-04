@@ -484,11 +484,33 @@ RERANKER_API_KEY = get_secret("RERANKER_API_KEY", "")
 RERANKER_BASE_URL = os.getenv("RERANKER_BASE_URL", "https://api.siliconflow.cn/v1")
 RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "true").lower() in ("1", "true", "yes")
-RERANKER_OVERSAMPLE_RATIO = int(os.getenv("RERANKER_OVERSAMPLE_RATIO", "3"))
+
+
+def _safe_int(env_val: str | None, default: int) -> int:
+    """安全解析整数环境变量, 非法值回退到 default."""
+    if env_val is None:
+        return default
+    try:
+        return int(env_val)
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_float(env_val: str | None, default: float) -> float:
+    """安全解析浮点数环境变量, 非法值回退到 default."""
+    if env_val is None:
+        return default
+    try:
+        return float(env_val)
+    except (ValueError, TypeError):
+        return default
+
+
+RERANKER_OVERSAMPLE_RATIO = _safe_int(os.getenv("RERANKER_OVERSAMPLE_RATIO"), 3)
 
 # Query Transform
 QUERY_TRANSFORM_ENABLED = os.getenv("QUERY_TRANSFORM_ENABLED", "true").lower() in ("1", "true", "yes")
-QUERY_EXPAND_COUNT = int(os.getenv("QUERY_EXPAND_COUNT", "2"))
+QUERY_EXPAND_COUNT = _safe_int(os.getenv("QUERY_EXPAND_COUNT"), 2)
 
 # Retrieval Optimization (A1/A2/A3)
 RETRIEVAL_SMART_SKIP = os.getenv("RETRIEVAL_SMART_SKIP", "true").lower() in ("1", "true", "yes")
@@ -510,9 +532,9 @@ STREAM_TOOL_STATUS = os.getenv("STREAM_TOOL_STATUS", "true").lower() in ("1", "t
 
 # Task 12: 熔断器智能恢复配置（P2）
 # COOLDOWN 从 60→30：熔断后恢复更快，避免长时间快速失败拖累用户体验
-CIRCUIT_BREAKER_COOLDOWN = int(os.getenv("CIRCUIT_BREAKER_COOLDOWN", "30"))
-CIRCUIT_BREAKER_HALF_OPEN_PROBES = int(os.getenv("CIRCUIT_BREAKER_HALF_OPEN_PROBES", "2"))
-CIRCUIT_BREAKER_MAX_COOLDOWN = int(os.getenv("CIRCUIT_BREAKER_MAX_COOLDOWN", "300"))
+CIRCUIT_BREAKER_COOLDOWN = _safe_int(os.getenv("CIRCUIT_BREAKER_COOLDOWN"), 30)
+CIRCUIT_BREAKER_HALF_OPEN_PROBES = _safe_int(os.getenv("CIRCUIT_BREAKER_HALF_OPEN_PROBES"), 2)
+CIRCUIT_BREAKER_MAX_COOLDOWN = _safe_int(os.getenv("CIRCUIT_BREAKER_MAX_COOLDOWN"), 300)
 
 # P5: 失败经验→规则闭环 —— 命中规则时是否拒绝调用（true=拒绝，false=仅记录警告日志）
 ERROR_RULE_STRICT_MODE = os.getenv("ERROR_RULE_STRICT_MODE", "true").lower() in ("1", "true", "yes")
@@ -521,26 +543,26 @@ ERROR_RULE_STRICT_MODE = os.getenv("ERROR_RULE_STRICT_MODE", "true").lower() in 
 PROMPT_CACHING_ENABLED = os.getenv("PROMPT_CACHING_ENABLED", "false").lower() in ("1", "true", "yes")
 
 # RAG Fusion Weights
-RAG_RERANK_WEIGHT = float(os.getenv("RAG_RERANK_WEIGHT", "0.65"))
-RAG_KG_WEIGHT = float(os.getenv("RAG_KG_WEIGHT", "0.15"))
-RAG_IMPORTANCE_WEIGHT = float(os.getenv("RAG_IMPORTANCE_WEIGHT", "0.20"))
+RAG_RERANK_WEIGHT = _safe_float(os.getenv("RAG_RERANK_WEIGHT"), 0.65)
+RAG_KG_WEIGHT = _safe_float(os.getenv("RAG_KG_WEIGHT"), 0.15)
+RAG_IMPORTANCE_WEIGHT = _safe_float(os.getenv("RAG_IMPORTANCE_WEIGHT"), 0.20)
 
 # ── 记忆/情绪阈值 (可环境变量覆盖) ──
 # 情绪触发安慰记忆检索的强度阈值 (0.0~1.0)
-EMOTION_TRIGGER_THRESHOLD = float(os.getenv("EMOTION_TRIGGER_THRESHOLD", "0.5"))
+EMOTION_TRIGGER_THRESHOLD = _safe_float(os.getenv("EMOTION_TRIGGER_THRESHOLD"), 0.5)
 # B 级场景粘性阈值: 低于此权重时不重排, 防止低质量闲聊触发重排
-SCENE_STICKINESS_THRESHOLD = float(os.getenv("SCENE_STICKINESS_THRESHOLD", "0.5"))
+SCENE_STICKINESS_THRESHOLD = _safe_float(os.getenv("SCENE_STICKINESS_THRESHOLD"), 0.5)
 
 # ── 冷启动路由配置 (环境变量覆盖) ──
 # 私有记忆条数: < COLD_MAX 为冷用户(纯FTS), COLD_MAX~WARM_MAX 为温用户(向量低权重), >= WARM_MAX 为热用户(均衡混合)
-MEMORY_COLD_MAX = int(os.getenv("MEMORY_COLD_MAX", "0"))
-MEMORY_WARM_MAX = int(os.getenv("MEMORY_WARM_MAX", "10"))
+MEMORY_COLD_MAX = _safe_int(os.getenv("MEMORY_COLD_MAX"), 0)
+MEMORY_WARM_MAX = _safe_int(os.getenv("MEMORY_WARM_MAX"), 10)
 # 温用户向量融合权重 (0.0~1.0): 冷=0.0, 温=0.2, 热=0.5(均衡)
-MEMORY_WARM_VEC_WEIGHT = float(os.getenv("MEMORY_WARM_VEC_WEIGHT", "0.2"))
+MEMORY_WARM_VEC_WEIGHT = _safe_float(os.getenv("MEMORY_WARM_VEC_WEIGHT"), 0.2)
 
 # ── P3 记忆蒸馏压缩配置 ──
-MAX_EPISODIC_MEMORIES = int(os.getenv("MAX_EPISODIC_MEMORIES", "200"))
-MEMORY_DISTILL_BATCH = int(os.getenv("MEMORY_DISTILL_BATCH", "30"))
+MAX_EPISODIC_MEMORIES = _safe_int(os.getenv("MAX_EPISODIC_MEMORIES"), 200)
+MEMORY_DISTILL_BATCH = _safe_int(os.getenv("MEMORY_DISTILL_BATCH"), 30)
 MEMORY_DISTILL_ENABLED = os.getenv("MEMORY_DISTILL_ENABLED", "false").lower() in ("1", "true", "yes")
 
 # MCP_SERVERS：使用 shutil.which() 动态解析命令路径，兼容 Windows/Linux/macOS

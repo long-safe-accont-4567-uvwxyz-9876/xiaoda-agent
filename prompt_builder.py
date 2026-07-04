@@ -1073,7 +1073,7 @@ def _build_xp_segment(user_id: str | None) -> str:
                 insight = learner.get_learned_insight(user_id)
                 if insight:
                     segment += f"\n[对用户的认知]\n{insight}\n"
-        except Exception:
+        except (AttributeError, ImportError, TypeError):
             pass  # 画像学习器失败不影响 XP 段落
 
         return segment

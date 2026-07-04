@@ -115,8 +115,8 @@ class KleeAgent:
         if status_callback:
             try:
                 await status_callback("可莉正在思考...")
-            except Exception:
-                pass
+            except (AttributeError, RuntimeError, OSError):
+                pass  # status_callback 失败不影响聊天
 
         system_prompt = self._personality
         if context:
@@ -363,5 +363,6 @@ class KleeAgent:
             rc = getattr(response.choices[0].message, "reasoning_content", None) or ""
             logger.info("klee.chat.max_rounds", provider=provider_name, model=model)
             return (reply or rc).strip()
-        except Exception:
+        except (AttributeError, ValueError, OSError) as e:
+            logger.warning("klee.chat.failed", error=str(e)[:100])
             return TIRED_MSG

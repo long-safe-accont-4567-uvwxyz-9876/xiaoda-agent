@@ -318,8 +318,8 @@ class SubAgent:
                     self._degraded = False
                     self._initialized = True
                     logger.info("sub_agent.auto_recovered", name=self.config.name)
-                except Exception:
-                    pass
+                except (ImportError, ValueError, OSError) as e:
+                    logger.debug("sub_agent.recover_failed", name=self.config.name, error=str(e)[:80])
 
         if not self.available:
             return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
@@ -330,8 +330,8 @@ class SubAgent:
         if status_callback:
             try:
                 await status_callback(get_status_msg(self.config.name, "thinking", "", self.config.personality_file))
-            except Exception:
-                pass
+            except (AttributeError, RuntimeError, OSError):
+                pass  # status_callback 失败不影响任务执行
 
         system_prompt = self._personality
         if context:
@@ -902,8 +902,8 @@ class AgentDispatcher:
                         available_agents, task_type=task_type)
                     if best:
                         fallback = best
-            except Exception:
-                pass
+            except (ImportError, AttributeError, TypeError):
+                pass  # work_record 不可用时使用默认路由
             if fallback != target:
                 logger.info("agent.task_route_fallback",
                             task_type=task_type,
