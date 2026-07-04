@@ -339,7 +339,8 @@ async def _test_wolframalpha(key_value: str) -> tuple[bool, str]:
                     return True, "WolframAlpha API Key 验证成功"
                 # 即使查询本身失败（如 input 不明确），只要 key 有效就会返回 200
                 # 检查是否有 error 字段表明 key 无效
-                if query_result.get("error", {}).get("code") == 1:
+                error_obj = query_result.get("error")
+                if isinstance(error_obj, dict) and error_obj.get("code") == 1:
                     return False, "WolframAlpha API Key 无效"
                 return True, "WolframAlpha API Key 验证成功"
             return False, f"WolframAlpha API 返回 HTTP {resp.status_code}"

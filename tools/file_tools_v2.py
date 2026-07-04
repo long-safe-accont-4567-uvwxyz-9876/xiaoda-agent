@@ -268,7 +268,7 @@ async def shell_command(command: str) -> ToolResult:
         pass
 
     # Fallback: subprocess（无终端会话时）
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _subprocess_exec, command)
 
 

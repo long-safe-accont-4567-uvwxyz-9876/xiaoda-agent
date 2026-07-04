@@ -147,8 +147,11 @@ def _is_private_ip(ip: str) -> bool:
     parts = ip.split(".")
     if len(parts) != 4:
         return False
-    first = int(parts[0])
-    second = int(parts[1])
+    try:
+        first = int(parts[0])
+        second = int(parts[1])
+    except (ValueError, IndexError):
+        return False
     if first == 10:
         return True
     if first == 172 and 16 <= second <= 31:

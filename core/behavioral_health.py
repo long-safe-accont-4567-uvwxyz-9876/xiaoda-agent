@@ -231,7 +231,7 @@ class BehavioralHealthScorer:
                 await asyncio.sleep(interval)
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
         except RuntimeError:
             return None
         task = loop.create_task(_loop())

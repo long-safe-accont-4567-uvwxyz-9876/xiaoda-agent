@@ -333,12 +333,12 @@ async def trigger_mail_auth_login(request: Request) -> Any:
         # 逐行读取 CLI 输出，在 15 秒内捕获授权 URL
         import re
         collected = ""
-        deadline = asyncio.get_event_loop().time() + 15
+        deadline = asyncio.get_running_loop().time() + 15
         auth_url = ""
 
         try:
-            while asyncio.get_event_loop().time() < deadline:
-                remaining = deadline - asyncio.get_event_loop().time()
+            while asyncio.get_running_loop().time() < deadline:
+                remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
                     break
                 line_bytes = await asyncio.wait_for(

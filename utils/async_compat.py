@@ -122,7 +122,7 @@ async def wait_for(predicate: Callable[[], bool], timeout: float = 30.0,
     用法:
         ok = await wait_for(lambda: server.is_ready(), timeout=10)
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while loop.time() < deadline:
         if predicate():

@@ -369,7 +369,7 @@ class DreamConsolidator:
                     logger.error(f"Dream.scheduler.failed: {e}")
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             self._scheduler_task = loop.create_task(_run())
             return self._scheduler_task
         except RuntimeError:

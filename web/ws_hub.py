@@ -425,7 +425,7 @@ async def _handle_terminal_start(conn_id: str, msg: dict, term_sid: str) -> None
         }
         shell_cmd = shell_map.get(shell_type, "bash")
         env["SHELL"] = shell_cmd
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         try:
             child_pid, master_fd = pty.fork()
@@ -463,7 +463,7 @@ async def _handle_terminal_start(conn_id: str, msg: dict, term_sid: str) -> None
             "bash": ["bash.exe"],
         }
         cmd = shell_map_win.get(shell_type, ["cmd.exe"])
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         try:
             proc = _subprocess.Popen(

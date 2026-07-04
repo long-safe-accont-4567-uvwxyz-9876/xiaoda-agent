@@ -203,7 +203,7 @@ class SelfDiagnostic:
                 await asyncio.sleep(self._interval)
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             self._task = loop.create_task(_loop())
             logger.info(f"SelfDiag.started interval={self._interval}s")
             return self._task

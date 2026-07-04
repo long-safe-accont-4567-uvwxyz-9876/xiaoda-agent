@@ -190,7 +190,7 @@ class HumanApprovalGate:
                                     reason=req.decision_reason)
 
         # 注册 future
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         future = loop.create_future()
         self._waiters[request_id] = future
 
@@ -373,7 +373,7 @@ class IMApprovalChannel:
             logger.warning("approval.im_channel.send_failed error={}", str(e)[:200])
 
         # 注册 pending 请求与 future (以 request_id 为 key, 支持同用户并发请求)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
         self._pending[req.id] = req
         self._waiters[req.id] = future

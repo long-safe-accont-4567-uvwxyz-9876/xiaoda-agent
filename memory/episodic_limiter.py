@@ -103,7 +103,7 @@ class EpisodicLimiter:
                     logger.error(f"EpisodicLimiter.loop_error: {e}")
                 await asyncio.sleep(interval)
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             self._task = loop.create_task(_loop())
             return self._task
         except RuntimeError:

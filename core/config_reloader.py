@@ -157,7 +157,7 @@ class ConfigReloader:
         # 异步回调 (在事件循环中)
         for acb in self._async_callbacks:
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 if asyncio.iscoroutinefunction(acb):
                     loop.create_task(acb(snap))
                 else:

@@ -216,9 +216,9 @@ class NotebookManager:
         existing = await self.get_recent_notes(limit=20)
         if not existing:
             return None
-        new_words = set(content)
+        new_words = set(content.split())
         for note in existing:
-            old_words = set(note.get("content", ""))
+            old_words = set(note.get("content", "").split())
             if not old_words:
                 continue
             overlap = len(new_words & old_words) / max(len(new_words | old_words), 1)

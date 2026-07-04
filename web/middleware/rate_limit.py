@@ -257,7 +257,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return
         try:
             now = time.time()
-            with sqlite3.connect(str(self._persist_path)) as c:
+            with sqlite3.connect(str(self._persist_path), timeout=5) as c:
+                c.execute("PRAGMA journal_mode=WAL")
                 c.execute("DELETE FROM buckets")
                 rows = []
                 for key, bucket in self._user_buckets.items():

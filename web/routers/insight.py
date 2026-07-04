@@ -8,6 +8,16 @@ import time
 import uuid
 from datetime import datetime
 
+
+def _safe_float(val: Any, default: float = 0.5) -> float:
+    """安全转换为 float，失败时返回默认值。"""
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
@@ -321,7 +331,7 @@ async def update_note(note_id: int, body: dict, request: Request) -> Any:
             params.append(body[field])
     if "importance" in body and body["importance"] is not None:
         sets.append("importance=?")
-        params.append(float(body["importance"]))
+        params.append(_safe_float(body["importance"]))
     if not sets:
         raise HTTPException(400, "无可更新字段")
     sets.append("updated_at=?")
@@ -375,9 +385,9 @@ async def create_memory(body: dict, request: Request) -> Any:
     summary = (body.get("summary") or "").strip()
     if not summary:
         raise HTTPException(400, "summary 不能为空")
-    importance = float(body.get("importance", 0.5))
+    importance = _safe_float(body.get("importance", 0.5))
     emotion_label = body.get("emotion_label", "")
-    timestamp = float(body.get("timestamp", time.time()))
+    timestamp = _safe_float(body.get("timestamp", time.time()), default=time.time())
     mid = await core.db.insert_episodic_memory(
         summary=summary, importance=importance,
         emotion_label=emotion_label, timestamp=timestamp)
@@ -400,7 +410,7 @@ async def update_memory(memory_id: int, body: dict, request: Request) -> Any:
         params.append(body["summary"])
     if "importance" in body:
         sets.append("importance=?")
-        params.append(float(body["importance"]))
+        params.append(_safe_float(body["importance"]))
     if "emotion_label" in body:
         sets.append("emotion_label=?")
         params.append(body["emotion_label"])
@@ -484,7 +494,7 @@ async def create_instinct(body: dict, request: Request) -> Any:
     content = (body.get("content") or body.get("summary") or "").strip()
     if not content:
         raise HTTPException(400, "content 不能为空")
-    confidence = float(body.get("confidence", 0.5))
+    confidence = _safe_float(body.get("confidence", 0.5))
     now = time.time()
     iid = await core.db.execute(
         "INSERT INTO instincts (content, confidence, created_at, last_used_at, use_count) "
@@ -504,7 +514,7 @@ async def update_instinct(instinct_id: int, body: dict, request: Request) -> Any
             params.append(body[field])
     if "confidence" in body and body["confidence"] is not None:
         sets.append("confidence=?")
-        params.append(float(body["confidence"]))
+        params.append(_safe_float(body["confidence"]))
     if not sets:
         raise HTTPException(400, "无可更新字段")
     sets.append("last_used_at=?")
