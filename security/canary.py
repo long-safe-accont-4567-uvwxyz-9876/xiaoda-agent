@@ -76,7 +76,7 @@ class CanaryDetector:
         """
         token = generate_canary(prefix)
         self._active_tokens.add(token)
-        logger.debug(f"canary.token_generated prefix={prefix} token={token}")
+        logger.debug("canary.token_generated prefix={}", prefix)
         return token
 
     def inject(self, system_prompt: str, prefix: str = "CANARY") -> str:

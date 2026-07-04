@@ -150,6 +150,9 @@ async def create_server(body: dict, request: Request) -> Any:
         raise HTTPException(400, "name 必须是合法标识符")
     if not command:
         raise HTTPException(400, "command 不能为空")
+    # 基础安全检查: 拒绝包含 shell 元字符的命令
+    if any(c in command for c in ("|", "&", ";", "`", "$(", "${")):
+        raise HTTPException(400, "command 包含非法字符")
     cfg = _cfg()
     mgr = _manager(request)
     if name in mgr._clients or cfg.get(f"mcp.{name}"):

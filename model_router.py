@@ -185,6 +185,9 @@ class ModelRouter:
         后续通过 Setup 页面保存的新 Key 不会自动生效。此方法从当前
         os.environ 重新读取 Key 并重建客户端，使新配置立即生效。
         """
+        old_mimo = self._client
+        old_agnes = self._agnes_client
+
         new_mimo_key = os.getenv("MIMO_API_KEY", "")
         new_mimo_url = os.getenv("MIMO_BASE_URL", MIMO_BASE_URL)
         if new_mimo_key:
@@ -204,6 +207,16 @@ class ModelRouter:
                         key_suffix=new_agnes_key[-6:] if len(new_agnes_key) >= 6 else "***")
         else:
             self._agnes_client = None
+
+        # 关闭旧客户端释放连接
+        for old in (old_mimo, old_agnes):
+            if old is not None and old not in (self._client, self._agnes_client):
+                try:
+                    import asyncio
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(old.close())
+                except RuntimeError:
+                    pass
 
         # 同步更新凭证池：确保 MiMo/Agnes 凭证与当前环境变量一致
         try:
@@ -435,6 +448,14 @@ class ModelRouter:
                     pass
         self._client = None
         self._agnes_client = None
+        # 关闭自定义 provider 客户端
+        for cp_client in list(getattr(self, "_custom_clients", {}).values()):
+            try:
+                await cp_client.close()
+            except Exception:
+                pass
+        if hasattr(self, "_custom_clients"):
+            self._custom_clients.clear()
 
     @staticmethod
     def _apply_caching_headers(extra_headers: dict | None) -> dict | None:

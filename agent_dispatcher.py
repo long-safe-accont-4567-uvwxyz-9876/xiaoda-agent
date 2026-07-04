@@ -322,11 +322,18 @@ class SubAgent:
         if self._degraded:
             api_key = _read_env_key(self.config.api_key_env)
             if api_key and self.config.base_url:
+                old_client = self._client
                 try:
                     self._client = AsyncOpenAI(api_key=api_key, base_url=self.config.base_url)
                     self._degraded = False
                     self._initialized = True
                     logger.info("sub_agent.auto_recovered", name=self.config.name)
+                    # 关闭旧客户端释放连接
+                    if old_client is not None:
+                        try:
+                            await old_client.close()
+                        except Exception:
+                            pass
                 except (ImportError, ValueError, OSError) as e:
                     logger.debug("sub_agent.recover_failed", name=self.config.name, error=str(e)[:80])
 

@@ -208,7 +208,7 @@ async def login(req: LoginRequest, request: Request) -> Any:
         token, expiry = _issue_token()
         return Envelope(data=LoginResponse(token=token, expires_at=expiry))
 
-    if req.password != password:
+    if not hmac.compare_digest(req.password, password):
         # Rate limit
         fails, lock_until = _rate_limit.get(client_ip, (0, 0))
         fails += 1

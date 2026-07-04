@@ -267,6 +267,7 @@ class TTSEngine:
 
     def refresh_client(self) -> None:
         """重建 TTS 客户端（Setup 保存新 Key 后调用）。"""
+        old_client = self._client
         api_key = _get_mimo_api_key()
         if api_key:
             self._client = AsyncOpenAI(api_key=api_key, base_url=MIMO_BASE_URL)
@@ -276,6 +277,14 @@ class TTSEngine:
         else:
             self._client = None
             self._available = False
+        # 关闭旧客户端释放连接
+        if old_client is not None and old_client is not self._client:
+            try:
+                import asyncio
+                loop = asyncio.get_running_loop()
+                loop.create_task(old_client.close())
+            except RuntimeError:
+                pass
 
     async def synthesize(
         self,
