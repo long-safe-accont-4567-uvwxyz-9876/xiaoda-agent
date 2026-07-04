@@ -579,7 +579,7 @@ docker-compose -f docker-compose.prod.yml up -d
 
 ***
 
-## 最新更新（v0.4.8）
+## 最新更新（v0.4.82）
 
 | 特性 | 说明 |
 |------|------|
