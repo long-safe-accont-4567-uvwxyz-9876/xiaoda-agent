@@ -96,6 +96,15 @@ class KleeAgent:
 
         await self.tts.init()
 
+    async def close(self) -> None:
+        """关闭所有 AsyncOpenAI 客户端, 释放 TCP 连接."""
+        for name, client, _models in self._clients:
+            try:
+                await client.close()
+            except Exception:
+                pass
+        self._clients.clear()
+
     @property
     def available(self) -> bool:
         return self._initialized and len(self._clients) > 0

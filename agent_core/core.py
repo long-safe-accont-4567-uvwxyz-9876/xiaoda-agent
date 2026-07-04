@@ -412,6 +412,31 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         except Exception as e:
             logger.warning("shutdown.flush_costs_failed", error=str(e))
 
+        # 关闭 AsyncOpenAI 客户端, 释放 TCP 连接
+        try:
+            if self.router and hasattr(self.router, 'close'):
+                await self.router.close()
+        except Exception as e:
+            logger.warning("shutdown.router_close_failed", error=str(e))
+
+        try:
+            if self.klee and hasattr(self.klee, 'close'):
+                await self.klee.close()
+        except Exception as e:
+            logger.warning("shutdown.klee_close_failed", error=str(e))
+
+        try:
+            if self.dispatcher and hasattr(self.dispatcher, 'close'):
+                await self.dispatcher.close()
+        except Exception as e:
+            logger.warning("shutdown.dispatcher_close_failed", error=str(e))
+
+        try:
+            from tools.agnes_tools import close_agnes_clients
+            await close_agnes_clients()
+        except Exception as e:
+            logger.warning("shutdown.agnes_close_failed", error=str(e))
+
         try:
             if self._vec_store and hasattr(self._vec_store, 'close'):
                 await self._vec_store.close()

@@ -425,6 +425,17 @@ class ModelRouter:
     async def flush_costs(self) -> None:
         await self._flush_cost_buffer()
 
+    async def close(self) -> None:
+        """关闭所有 AsyncOpenAI 客户端, 释放 TCP 连接."""
+        for client in (self._client, self._agnes_client):
+            if client is not None:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+        self._client = None
+        self._agnes_client = None
+
     @staticmethod
     def _apply_caching_headers(extra_headers: dict | None) -> dict | None:
         """P6: 当 PROMPT_CACHING_ENABLED 时自动补充缓存标识头。"""

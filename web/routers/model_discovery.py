@@ -187,11 +187,11 @@ def _get_siliconflow_pricing() -> dict[str, dict] | None:
         return _sf_pricing_cache
 
     try:
-        from urllib.request import urlopen, Request
         import re as _re
-        req = Request("https://siliconflow.cn/models", headers={"User-Agent": "Mozilla/5.0"})
-        with urlopen(req, timeout=15) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
+        import httpx
+        resp = httpx.get("https://siliconflow.cn/models",
+                         headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        html = resp.text
 
         # 从 Next.js RSC push 块中提取模型定价数据
         pricing_map: dict[str, dict] = {}

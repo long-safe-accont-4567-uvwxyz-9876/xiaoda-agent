@@ -194,6 +194,15 @@ class SubAgent:
         """设置凭证池（由父代理传递）"""
         self._credential_pool = pool
 
+    async def close(self) -> None:
+        """关闭 AsyncOpenAI 客户端, 释放 TCP 连接."""
+        if self._client is not None:
+            try:
+                await self._client.close()
+            except Exception:
+                pass
+            self._client = None
+
     async def reload_model_config(self, provider: str, model: str,
                                   base_url: str, api_key_env: str) -> bool:
         """热重载模型配置：用新配置创建客户端并原子替换，不重新运行启动探活。
@@ -817,6 +826,15 @@ class AgentDispatcher:
         del self._agents[name]
         logger.info("dispatcher.unregistered", name=name)
         return True
+
+    async def close(self) -> None:
+        """关闭所有 SubAgent 的 AsyncOpenAI 客户端."""
+        for agent in self._agents.values():
+            if hasattr(agent, 'close'):
+                try:
+                    await agent.close()
+                except Exception:
+                    pass
 
     async def dispatch_single(self, name: str, task: str, context: str = "", status_callback: Optional[Any]=None) -> str | None:
         """单子代理调度（原 dispatch 方法）。

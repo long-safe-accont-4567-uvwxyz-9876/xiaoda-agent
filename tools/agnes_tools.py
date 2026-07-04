@@ -57,6 +57,23 @@ def _get_agnes_http_client() -> Any:
     return _agnes_http_client
 
 
+async def close_agnes_clients() -> None:
+    """关闭全局 Agnes 单例客户端, 释放 TCP 连接."""
+    global _agnes_openai_client, _agnes_http_client
+    if _agnes_openai_client is not None:
+        try:
+            await _agnes_openai_client.close()
+        except Exception:
+            pass
+        _agnes_openai_client = None
+    if _agnes_http_client is not None:
+        try:
+            await _agnes_http_client.aclose()
+        except Exception:
+            pass
+        _agnes_http_client = None
+
+
 @register_tool(
     name="agnes_image_generate",
     description="使用 AI 生成图片。支持文生图和图生图。",
