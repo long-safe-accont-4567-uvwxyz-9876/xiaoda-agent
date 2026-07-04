@@ -495,13 +495,13 @@ class MemoryManager:
         return False
 
     def _suggest_k(self, query: str, default_k: int = 3) -> int:
-        """根据查询内容智能建议检索条数 k。
+        """根据查询内容智能建议检索条数 k（情感陪伴型 bot）。
 
         策略：
         - 极短闲聊（问候/确认）：k=1，避免注入无关记忆
-        - 普通对话：k=default_k（3）
-        - 技术/复杂问题：k=5~7，多检索相关上下文
-        - 情感类问题：k=3（安抚记忆由调用方额外补充）
+        - 日常闲聊：k=2~3
+        - 情感/回忆/个人话题：k=4~5，多检索相关情感记忆
+        - 涉及具体事件/人物/经历：k=4，召回更多上下文
         """
         if not query:
             return 1
@@ -518,29 +518,35 @@ class MemoryManager:
         if effective_len <= 8:
             return 1
 
-        # 短查询：闲聊
+        # 短查询：简单闲聊
         if effective_len <= 15:
             return 2
 
-        # 关键词匹配：技术/复杂问题 → 多检索
-        try:
-            from config import SIMPLE_TASK_KEYWORDS
-            complex_keywords = SIMPLE_TASK_KEYWORDS.get("complex", [])
-        except Exception:
-            complex_keywords = []
-
-        for kw in complex_keywords:
-            if kw in query:
-                return min(7, default_k + 3)
-
-        # 中等长度：包含代码/文件/配置/错误等技术词
-        tech_indicators = ("代码", "bug", "错误", "报错", "配置", "安装", "部署",
-                           "docker", "api", "接口", "函数", "变量", "数据库",
-                           "sql", "python", "linux", "命令", "脚本", "文件",
-                           "怎么", "如何", "为什么", "原因", "分析", "解释")
-        for indicator in tech_indicators:
-            if indicator in query.lower():
+        # 情感/回忆/个人话题 → 多检索，让回复更有温度和连贯性
+        emotional_indicators = (
+            "记得", "想起", "回忆", "以前", "之前", "那时候", "那次",
+            "喜欢", "讨厌", "开心", "难过", "伤心", "生气", "害怕",
+            "担心", "焦虑", "压力", "累", "烦", "无聊", "孤独",
+            "想你", "想ta", "分手", "吵架", "和好", "朋友", "家人",
+            "爸妈", "生日", "节日", "考试", "面试", "工作", "辞职",
+            "梦想", "未来", "以后", "遗憾", "后悔", "感恩", "幸福",
+            "害怕", "勇敢", "加油", "坚持", "放弃", "努力",
+            "心情", "感觉", "感受", "情绪", "状态", "最近",
+        )
+        query_lower = query.lower()
+        for indicator in emotional_indicators:
+            if indicator in query_lower:
                 return min(5, default_k + 2)
+
+        # 涉及具体事件/人物/经历
+        event_indicators = (
+            "发生", "那次", "那件事", "什么时候", "哪里", "谁",
+            "聊天", "说过", "告诉你", "跟我说", "你记得",
+            "上次", "上次说", "之前说", "你说过",
+        )
+        for indicator in event_indicators:
+            if indicator in query_lower:
+                return min(4, default_k + 1)
 
         # 长查询：可能涉及多话题
         if effective_len > 60:
