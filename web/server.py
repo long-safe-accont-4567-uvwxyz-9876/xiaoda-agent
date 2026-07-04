@@ -444,10 +444,54 @@ def create_app() -> FastAPI:
 
 class NoCacheHTMLStaticFiles(StaticFiles):
     """index.html 禁缓存（否则改版后旧 HTML 引用已删除的旧 chunk，导航全挂）；
-    带 hash 的 /assets/* 短缓存（升级后浏览器会重新验证）。"""
+    带 hash 的 /assets/* 短缓存（升级后浏览器会重新验证）。
+
+    SPA fallback: 非 API/WS 路径 404 时返回 index.html,
+    让 Vue Router 接管客户端路由 (刷新/直接访问 URL 不白屏)。
+    """
 
     async def get_response(self, path: Any, scope: Any) -> Any:
-        response = await super().get_response(path, scope)
+        # Starlette 1.3+ StaticFiles.get_response 在路径不存在时直接
+        # raise HTTPException(404) 而非返回 Response(status_code=404),
+        # 因此需用 try/except 捕获并回退到 index.html (SPA fallback)。
+        from starlette.exceptions import HTTPException as StarletteHTTPException
+
+        try:
+            response = await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if (
+                exc.status_code == 404
+                and scope.get("method", "") == "GET"
+                and not path.startswith(("api/", "ws", "media/"))
+                and not path.startswith(("assets/",))  # 静态资源 404 不 fallback
+            ):
+                index_file = Path(self.directory) / "index.html"
+                if index_file.exists():
+                    from starlette.responses import FileResponse
+                    return FileResponse(
+                        str(index_file),
+                        media_type="text/html",
+                        headers={"Cache-Control": "no-cache, must-revalidate"},
+                    )
+            raise  # 其它 4xx/5xx 或非 GET 路径重新抛出
+
+        # 路径存在时的 SPA fallback 兜底（如某些版本返回 404 Response 而非抛异常）
+        if (
+            response.status_code == 404
+            and scope.get("method", "") == "GET"
+            and not path.startswith(("api/", "ws", "media/"))
+            and not path.startswith(("assets/",))
+        ):
+            index_file = Path(self.directory) / "index.html"
+            if index_file.exists():
+                from starlette.responses import FileResponse
+                return FileResponse(
+                    str(index_file),
+                    media_type="text/html",
+                    headers={"Cache-Control": "no-cache, must-revalidate"},
+                )
+
+        # 原有缓存控制逻辑
         if path in ("index.html", ".") or path.endswith(".html"):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
         elif path.startswith("assets/"):
