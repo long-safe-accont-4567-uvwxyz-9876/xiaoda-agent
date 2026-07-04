@@ -687,6 +687,49 @@ class MessageProcessorMixin:
                              audio_path=audio_path, tool_results=tool_results, image_paths=media_image_paths,
                              video_path=media_video_path, tts_pending=tts_pending, tts_text=tts_text)
 
+    def _dynamic_emotion_threshold(self, user_input: str, emotion: dict, base: float = 0.5) -> float:
+        """根据对话情景动态调整情绪触发阈值。
+
+        自适应策略:
+          1. 情绪强度高 → 降低阈值 (更容易触发安慰记忆)
+          2. 用户表达情感关键词多 → 降低阈值
+          3. 对话深入 (长输入) → 降低阈值
+          4. 短/无情感输入 → 保持或提高阈值 (避免误触发)
+
+        最终阈值 clamp 在 [0.2, 0.8] 范围内, 防止极端值。
+        """
+        threshold = base
+        intensity = float(emotion.get("intensity", 0.0))
+
+        # 因子 1: 情绪强度越高, 阈值越低
+        # intensity 0.8 → threshold -= 0.15; intensity 0.3 → threshold += 0.05
+        if intensity >= 0.7:
+            threshold -= 0.15
+        elif intensity >= 0.5:
+            threshold -= 0.05
+        elif intensity <= 0.2:
+            threshold += 0.05
+
+        # 因子 2: 情感关键词密度
+        emotional_words = (
+            "难过", "伤心", "哭", "痛", "累", "烦", "压力", "焦虑",
+            "害怕", "孤独", "想你", "分手", "吵架", "遗憾", "后悔",
+            "开心", "喜欢", "幸福", "感恩", "想", "心情", "感觉",
+        )
+        query_lower = user_input.lower() if isinstance(user_input, str) else ""
+        emo_count = sum(1 for w in emotional_words if w in query_lower)
+        if emo_count >= 3:
+            threshold -= 0.1   # 密集情感表达 → 大幅降低
+        elif emo_count >= 1:
+            threshold -= 0.05  # 有情感词 → 小幅降低
+
+        # 因子 3: 输入长度 (深入对话)
+        effective_len = sum(2 if '\u4e00' <= c <= '\u9fff' else 1 for c in query_lower)
+        if effective_len > 40:
+            threshold -= 0.05  # 长输入: 用户在认真倾诉
+
+        return max(0.2, min(0.8, threshold))
+
     async def _retrieve_main_memories(self, user_input: Any, is_master: Any, emotion: Any) -> Any:
         """主路径记忆检索（含情绪触发的安抚记忆）与 notebook 加载并行。"""
         async def _retrieve_memories() -> Any:
@@ -702,11 +745,16 @@ class MessageProcessorMixin:
                     logger.warning("memory.retrieve_failed", error=str(e))
                     results = None
                 if results is not None:
+                    # 动态情绪阈值: 根据对话情景自适应调整
+                    _base_threshold = 0.5
                     try:
                         import config as _cfg
-                        _emo_threshold = float(getattr(_cfg, "EMOTION_TRIGGER_THRESHOLD", 0.5))
+                        _base_threshold = float(getattr(_cfg, "EMOTION_TRIGGER_THRESHOLD", 0.5))
                     except Exception:
-                        _emo_threshold = 0.5
+                        pass
+                    _emo_threshold = self._dynamic_emotion_threshold(
+                        user_input, emotion, _base_threshold
+                    )
                     if (emotion.get("valence") == "negative"
                             and float(emotion.get("intensity", 0.0)) >= _emo_threshold):
                         try:
