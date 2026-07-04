@@ -56,15 +56,15 @@ PROVIDER_PRICING = {
 }
 
 ROUTE_TABLE = {
-    "chat": {"model": _CFG_MODEL_NAME, "max_tokens": 1500, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "chat": {"model": _CFG_MODEL_NAME, "max_tokens": 1500, "client": _CFG_DEFAULT_PROVIDER},
     "chat_pro": {"model": _CFG_PRO_MODEL or _CFG_MODEL_NAME, "max_tokens": 2000, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "enabled", "budget_tokens": 2048}},
-    "chat_flash": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1000, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_mini": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 800, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_mimo": {"model": MIMO_MODEL, "max_tokens": 1500, "client": "mimo", "thinking": {"type": "disabled"}},
-    "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 300, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 300, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 800, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": 2000, "client": "agnes", "thinking": {"type": "disabled"}},
+    "chat_flash": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1000, "client": _CFG_DEFAULT_PROVIDER},
+    "chat_mini": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 800, "client": _CFG_DEFAULT_PROVIDER},
+    "chat_mimo": {"model": MIMO_MODEL, "max_tokens": 1500, "client": "mimo"},
+    "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 300, "client": _CFG_DEFAULT_PROVIDER},
+    "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 300, "client": _CFG_DEFAULT_PROVIDER},
+    "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 800, "client": _CFG_DEFAULT_PROVIDER},
+    "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": 2000, "client": "agnes"},
 }
 
 MODEL_PREFERENCES = {

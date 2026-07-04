@@ -541,7 +541,7 @@ class AIQQBot(botpy.Client):
                 return
 
         try:
-            await message.reply(content="纳西妲收到啦，正在想～🌿", msg_seq=_next_msg_seq())
+            await message.reply(content="🌿 收到啦~", msg_seq=_next_msg_seq())
 
             async def status_notify(msg: str) -> None:
                 await message.reply(content=msg, msg_seq=_next_msg_seq())
@@ -621,9 +621,9 @@ class AIQQBot(botpy.Client):
             async def status_notify(msg: str) -> None:
                 pass
 
-            # 立即发送 ACK（用户要求每次回复都保留"纳西妲收到啦，正在想～🌿"）
+            # 立即发送 ACK
             try:
-                await message.reply(content="纳西妲收到啦，正在想～🌿", msg_seq=_next_msg_seq())
+                await message.reply(content="🌿 收到啦~", msg_seq=_next_msg_seq())
             except Exception as e:
                 logger.debug("qq_bot.ack_send_failed", error=str(e))
 
@@ -1028,7 +1028,7 @@ class AIQQBot(botpy.Client):
         # 长回复：首片前发送打字指示（仅 C2C，群聊无主动消息权限会失败）
         if not is_group:
             try:
-                await message.reply(content="纳西妲正在打字...", msg_seq=_next_msg_seq())
+                await message.reply(content="✍️ 回复较长，分段发送中...", msg_seq=_next_msg_seq())
             except Exception as e:
                 logger.debug("qq_bot.typing_indicator_failed", error=str(e))
 

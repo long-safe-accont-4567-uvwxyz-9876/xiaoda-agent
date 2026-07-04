@@ -246,12 +246,7 @@ class MessageProcessorMixin:
         trace.info("agent.process.start", source=source, user_id=user_id,
                     msg_preview=user_input[:80])
 
-        # 尽早发送"收到，正在想..."提示，让用户 <1 秒看到响应
-        if status_callback:
-            try:
-                await status_callback("收到，正在想...")
-            except Exception as _e:
-                logger.debug("agent.status_callback_failed", error=str(_e))
+        # 状态提示已由 QQ Bot ACK 消息覆盖，此处不再重复发送
 
         allowed, reason = self.security.is_allowed(user_id)
 
@@ -343,7 +338,7 @@ class MessageProcessorMixin:
         _model_cfg = AGENT_CONFIG.get("model", {})
         reply = ""
         try:
-            await self._notify_status("正在思考回复...")
+            await self._notify_status("💭 思考中...")
             result = await self.router.route(
                 "chat", messages,
                 temperature=_get_temperature(_model_cfg),
@@ -587,7 +582,7 @@ class MessageProcessorMixin:
         self._update_mental_state_emotion(emotion)
 
         # 记忆检索与 notebook 上下文加载并行化
-        await self._notify_status("正在回忆相关记忆...")
+        await self._notify_status("🧠 回忆中...")
         memories = await self._retrieve_main_memories(user_input, is_master, emotion)
         self.context.memory_retrieval = memories if memories else None
 
@@ -904,7 +899,7 @@ class MessageProcessorMixin:
         reply = ""
         tool_results = []
         try:
-            await self._notify_status("正在思考回复...")
+            await self._notify_status("💭 思考中...")
             if STREAM_TEXT_PUSH and status_callback and not tools:
                 result = await self._stream_llm_response(
                     messages, status_callback=status_callback, task_type=task_type,
