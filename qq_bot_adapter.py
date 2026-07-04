@@ -1,7 +1,6 @@
 from typing import Any
 import os
 import sys
-import ssl
 import asyncio
 import base64
 import threading

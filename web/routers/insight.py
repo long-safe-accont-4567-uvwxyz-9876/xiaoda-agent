@@ -199,9 +199,13 @@ async def delete_memory(memory_id: int, request: Request) -> Any:
         raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     core = request.app.state.core
     vec = getattr(core, "_vec_store", None)
-    await core.db.memory.delete_memory_with_vector(memory_id, vector_store=vec)
-    await core.db.insert_audit_log("webui.memory.delete", "webui", str(memory_id))
-    await core.db.commit()
+    try:
+        await core.db.memory.delete_memory_with_vector(memory_id, vector_store=vec)
+        await core.db.insert_audit_log("webui.memory.delete", "webui", str(memory_id))
+        await core.db.commit()
+    except Exception as e:
+        logger.warning("webui.memory.delete_failed memory_id={} error={}", memory_id, e)
+        raise HTTPException(500, "操作失败")
     return Envelope(data={"deleted": memory_id})
 
 
@@ -278,12 +282,20 @@ async def update_relation(relation_id: str, body: dict, request: Request) -> Any
     rel_type = (body.get("relation") or body.get("relation_type") or "").strip()
     if not rel_type:
         raise HTTPException(400, "relation 不能为空")
-    n = await core.db.execute(
-        "UPDATE knowledge_relations SET relation_type=?, updated_at=? WHERE id=?",
-        (rel_type, time.time(), relation_id))
+    try:
+        n = await core.db.execute(
+            "UPDATE knowledge_relations SET relation_type=?, updated_at=? WHERE id=?",
+            (rel_type, time.time(), relation_id))
+    except Exception as e:
+        logger.warning("webui.knowledge.update_relation_failed relation_id={} error={}", relation_id, e)
+        raise HTTPException(500, "操作失败")
     if not n:
         raise HTTPException(404, f"关系 {relation_id} 不存在")
-    await core.db.commit()
+    try:
+        await core.db.commit()
+    except Exception as e:
+        logger.warning("webui.knowledge.update_relation_commit_failed relation_id={} error={}", relation_id, e)
+        raise HTTPException(500, "操作失败")
     await _broadcast_kg_change("update", "relation", relation_id)
     return Envelope(data={"id": relation_id, "updated": True})
 
@@ -446,12 +458,16 @@ async def create_learning(body: dict, request: Request) -> Any:
     category = body.get("category", "insight")
     now = time.time()
     learning_id = f"LRN-{uuid.uuid4().hex[:12]}"
-    lid = await core.db.execute(
-        "INSERT INTO learnings (learning_id, category, priority, summary, pattern_key, "
-        "recurrence_count, first_seen, last_seen, created_at) "
-        "VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
-        (learning_id, category, priority, summary, pattern, now, now, now))
-    await core.db.commit()
+    try:
+        lid = await core.db.execute(
+            "INSERT INTO learnings (learning_id, category, priority, summary, pattern_key, "
+            "recurrence_count, first_seen, last_seen, created_at) "
+            "VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
+            (learning_id, category, priority, summary, pattern, now, now, now))
+        await core.db.commit()
+    except Exception as e:
+        logger.warning("webui.learning.create_failed learning_id={} error={}", learning_id, e)
+        raise HTTPException(500, "操作失败")
     return Envelope(data={"id": lid})
 
 
@@ -466,22 +482,38 @@ async def update_learning(learning_id: int, body: dict, request: Request) -> Any
             params.append(body[api_field])
     if not sets:
         raise HTTPException(400, "无可更新字段")
-    n = await core.db.execute(
-        f"UPDATE learnings SET {', '.join(sets)} WHERE id=?",
-        tuple(params) + (learning_id,))
+    try:
+        n = await core.db.execute(
+            f"UPDATE learnings SET {', '.join(sets)} WHERE id=?",
+            tuple(params) + (learning_id,))
+    except Exception as e:
+        logger.warning("webui.learning.update_failed learning_id={} error={}", learning_id, e)
+        raise HTTPException(500, "操作失败")
     if not n:
         raise HTTPException(404, f"学习记录 {learning_id} 不存在")
-    await core.db.commit()
+    try:
+        await core.db.commit()
+    except Exception as e:
+        logger.warning("webui.learning.update_commit_failed learning_id={} error={}", learning_id, e)
+        raise HTTPException(500, "操作失败")
     return Envelope(data={"id": learning_id, "updated": True})
 
 
 @router.delete("/insight/learnings/{learning_id}", response_model=Envelope[dict])
 async def delete_learning(learning_id: int, request: Request) -> Any:
     core = request.app.state.core
-    n = await core.db.execute("DELETE FROM learnings WHERE id=?", (learning_id,))
+    try:
+        n = await core.db.execute("DELETE FROM learnings WHERE id=?", (learning_id,))
+    except Exception as e:
+        logger.warning("webui.learning.delete_failed learning_id={} error={}", learning_id, e)
+        raise HTTPException(500, "操作失败")
     if not n:
         raise HTTPException(404, f"学习记录 {learning_id} 不存在")
-    await core.db.commit()
+    try:
+        await core.db.commit()
+    except Exception as e:
+        logger.warning("webui.learning.delete_commit_failed learning_id={} error={}", learning_id, e)
+        raise HTTPException(500, "操作失败")
     return Envelope(data={"deleted": learning_id})
 
 
@@ -496,11 +528,15 @@ async def create_instinct(body: dict, request: Request) -> Any:
         raise HTTPException(400, "content 不能为空")
     confidence = _safe_float(body.get("confidence", 0.5))
     now = time.time()
-    iid = await core.db.execute(
-        "INSERT INTO instincts (content, confidence, created_at, last_used_at, use_count) "
-        "VALUES (?, ?, ?, ?, 0)",
-        (content, confidence, now, now))
-    await core.db.commit()
+    try:
+        iid = await core.db.execute(
+            "INSERT INTO instincts (content, confidence, created_at, last_used_at, use_count) "
+            "VALUES (?, ?, ?, ?, 0)",
+            (content, confidence, now, now))
+        await core.db.commit()
+    except Exception as e:
+        logger.warning("webui.instinct.create_failed content={} error={}", content, e)
+        raise HTTPException(500, "操作失败")
     return Envelope(data={"id": iid})
 
 
@@ -519,22 +555,38 @@ async def update_instinct(instinct_id: int, body: dict, request: Request) -> Any
         raise HTTPException(400, "无可更新字段")
     sets.append("last_used_at=?")
     params.append(time.time())
-    n = await core.db.execute(
-        f"UPDATE instincts SET {', '.join(sets)} WHERE id=?",
-        tuple(params) + (instinct_id,))
+    try:
+        n = await core.db.execute(
+            f"UPDATE instincts SET {', '.join(sets)} WHERE id=?",
+            tuple(params) + (instinct_id,))
+    except Exception as e:
+        logger.warning("webui.instinct.update_failed instinct_id={} error={}", instinct_id, e)
+        raise HTTPException(500, "操作失败")
     if not n:
         raise HTTPException(404, f"本能 {instinct_id} 不存在")
-    await core.db.commit()
+    try:
+        await core.db.commit()
+    except Exception as e:
+        logger.warning("webui.instinct.update_commit_failed instinct_id={} error={}", instinct_id, e)
+        raise HTTPException(500, "操作失败")
     return Envelope(data={"id": instinct_id, "updated": True})
 
 
 @router.delete("/insight/instincts/{instinct_id}", response_model=Envelope[dict])
 async def delete_instinct(instinct_id: int, request: Request) -> Any:
     core = request.app.state.core
-    n = await core.db.execute("DELETE FROM instincts WHERE id=?", (instinct_id,))
+    try:
+        n = await core.db.execute("DELETE FROM instincts WHERE id=?", (instinct_id,))
+    except Exception as e:
+        logger.warning("webui.instinct.delete_failed instinct_id={} error={}", instinct_id, e)
+        raise HTTPException(500, "操作失败")
     if not n:
         raise HTTPException(404, f"本能 {instinct_id} 不存在")
-    await core.db.commit()
+    try:
+        await core.db.commit()
+    except Exception as e:
+        logger.warning("webui.instinct.delete_commit_failed instinct_id={} error={}", instinct_id, e)
+        raise HTTPException(500, "操作失败")
     return Envelope(data={"deleted": instinct_id})
 
 
@@ -614,7 +666,11 @@ async def create_relation(body: dict, request: Request) -> Any:
         raise HTTPException(400, "from/to/relation 不能为空")
     relation_id = f"REL-{uuid.uuid4().hex[:12]}"
     kdb = core.db.knowledge
-    await kdb.insert_knowledge_relation(relation_id, from_e, rel, to_e)
+    try:
+        await kdb.insert_knowledge_relation(relation_id, from_e, rel, to_e)
+    except Exception as e:
+        logger.warning("webui.knowledge.create_relation_failed from={} to={} rel={} error={}", from_e, to_e, rel, e)
+        raise HTTPException(500, "操作失败")
     await _broadcast_kg_change("create", "relation", relation_id)
     return Envelope(data={"id": relation_id, "from": from_e, "to": to_e, "relation": rel})
 

@@ -284,44 +284,54 @@ class L3SQLiteCache:
         return conn
 
     def _init_schema(self) -> None:
-        with self._conn() as c:
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS cache (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    expires_at REAL NOT NULL,
-                    created_at REAL NOT NULL
-                )
-            """)
-            c.execute("CREATE INDEX IF NOT EXISTS idx_expires ON cache(expires_at)")
-            c.commit()
+        try:
+            with self._conn() as c:
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS cache (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        expires_at REAL NOT NULL,
+                        created_at REAL NOT NULL
+                    )
+                """)
+                c.execute("CREATE INDEX IF NOT EXISTS idx_expires ON cache(expires_at)")
+                c.commit()
+        except Exception as e:
+            logger.debug("_init_schema SQLite error: {}", e)
 
     def get(self, key: str) -> Optional[Any]:
         """按 key 从 SQLite 读取值, 过期则删除并返回 None."""
-        with self._conn() as c:
-            row = c.execute(
-                "SELECT value, expires_at FROM cache WHERE key=?", (key,)
-            ).fetchone()
-            if not row:
-                self._misses += 1
-                return None
-            if row["expires_at"] < time.time():
-                c.execute("DELETE FROM cache WHERE key=?", (key,))
-                c.commit()
-                self._misses += 1
-                return None
-            self._hits += 1
-            return json.loads(row["value"])
+        try:
+            with self._conn() as c:
+                row = c.execute(
+                    "SELECT value, expires_at FROM cache WHERE key=?", (key,)
+                ).fetchone()
+                if not row:
+                    self._misses += 1
+                    return None
+                if row["expires_at"] < time.time():
+                    c.execute("DELETE FROM cache WHERE key=?", (key,))
+                    c.commit()
+                    self._misses += 1
+                    return None
+                self._hits += 1
+                return json.loads(row["value"])
+        except Exception as e:
+            logger.debug("L3SQLiteCache.get({}) error: {}", key, e)
+            return None
 
     def set(self, key: str, value: Any, ttl: Optional[float] = None) -> None:
         """写入键值 (覆盖已存在记录)."""
-        with self._conn() as c:
-            c.execute(
-                "INSERT OR REPLACE INTO cache(key, value, expires_at, created_at) VALUES (?,?,?,?)",
-                (key, json.dumps(value, ensure_ascii=False),
-                 time.time() + (ttl or self._default_ttl), time.time())
-            )
-            c.commit()
+        try:
+            with self._conn() as c:
+                c.execute(
+                    "INSERT OR REPLACE INTO cache(key, value, expires_at, created_at) VALUES (?,?,?,?)",
+                    (key, json.dumps(value, ensure_ascii=False),
+                     time.time() + (ttl or self._default_ttl), time.time())
+                )
+                c.commit()
+        except Exception as e:
+            logger.debug("L3SQLiteCache.set({}) error: {}", key, e)
         # F6: 定期淘汰过期和超限条目（每 100 次写入检查一次）
         self._set_count += 1
         if self._set_count % 100 == 0:
