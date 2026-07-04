@@ -23,6 +23,7 @@ LLM 按需搜索并加载完整工具定义, 避免上下文膨胀。
 - 懒初始化: VectorIndex 首次 search 时才初始化 embed_client
 """
 import math
+import os
 import re
 import asyncio
 import threading
@@ -140,7 +141,8 @@ class VectorIndex:
         self._tool_defs: list[ToolDef] = []
         self._vectors: list[list[float]] = []
         self._query_cache: dict[str, list[float]] = {}  # query → vector (LRU)
-        self._max_cache = 128
+        self._cache_order: list[str] = []  # LRU 顺序: 最近使用在末尾
+        self._max_cache = int(os.environ.get("TOOL_SEARCH_CACHE_SIZE", "128"))
         self._enabled = embed_client is not None
 
     def add_tool(self, tool: ToolDef) -> None:
@@ -223,18 +225,22 @@ class VectorIndex:
         self._ensure_vectors_sync()
         if not any(self._vectors):
             return []
-        # 查询向量 (带缓存)
+        # 查询向量 (带 LRU 缓存)
         if query in self._query_cache:
             q_vec = self._query_cache[query]
+            # 真 LRU: 命中时移到末尾
+            self._cache_order.remove(query)
+            self._cache_order.append(query)
         else:
             q_vec = self._embed_sync(query)
             if not q_vec:
                 return []
-            # LRU 缓存
+            # LRU 缓存: 满时淘汰最久未用
             if len(self._query_cache) >= self._max_cache:
-                # 简单 LRU: 删第一个 key
-                self._query_cache.pop(next(iter(self._query_cache)))
+                oldest = self._cache_order.pop(0)
+                self._query_cache.pop(oldest, None)
             self._query_cache[query] = q_vec
+            self._cache_order.append(query)
 
         # 余弦相似度
         scores = []
@@ -302,6 +308,7 @@ class ToolSearchEngine:
         self._search_count = 0
         self._total_token_saved = 0
         self._hybrid_search_count = 0  # 混合检索次数 (统计用)
+        self._bm25_only_count = 0  # 简单查询短路次数 (统计用)
 
     def enable_vector_search(
         self,
@@ -336,13 +343,23 @@ class ToolSearchEngine:
         """搜索工具 (v2 混合检索).
 
         流程:
-          1. BM25 检索 (词法匹配)
-          2. 向量检索 (语义匹配, 如启用)
-          3. RRF 融合两路排序
-          4. 返回 top-k 工具
+          1. 简单查询短路: 短/精确查询跳过向量检索, 纯 BM25 即可
+          2. BM25 检索 (词法匹配)
+          3. 向量检索 (语义匹配, 如启用)
+          4. RRF 融合两路排序
+          5. 返回 top-k 工具
 
         向后兼容: 无向量索引时退化为纯 BM25
         """
+        # 0. 简单查询短路: BM25 结果置信度高时跳过向量 (环境变量门控)
+        if (self._vector_index is not None
+                and os.environ.get("TOOL_SEARCH_SKIP_VECTOR_ON_BM25_HIT", "").strip() in ("1", "true")):
+            bm25_results = self._index.search(query, top_k=top_k)
+            if bm25_results and bm25_results[0][1] >= 2.0:  # BM25 得分阈值: 高置信命中
+                self._bm25_only_count += 1
+                return [t for t, _ in bm25_results[:top_k]]
+            # BM25 置信度不足, 继续走混合检索
+
         # 1. BM25 检索 (扩 top_k 到 2x, 给 RRF 更多候选)
         bm25_results = self._index.search(query, top_k=top_k * 2)
         bm25_names = [t.name for t, _ in bm25_results]
@@ -416,6 +433,7 @@ class ToolSearchEngine:
             "deferred": len(self._index._tool_defs),
             "search_count": self._search_count,
             "hybrid_search_count": self._hybrid_search_count,
+            "bm25_only_count": self._bm25_only_count,
             "vector_enabled": self._vector_index is not None and self._vector_index._enabled,
             "total_token_saved": self._total_token_saved,
             "avg_token_saved": self._total_token_saved / max(1, self._search_count),

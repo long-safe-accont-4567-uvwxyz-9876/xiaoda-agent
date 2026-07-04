@@ -60,6 +60,12 @@ from typing import Any
 
 from loguru import logger
 
+# ── 轻量模式 Feature Flag ──
+# 设置 FEATURE_GOVERNANCE_LIGHT=1 可跳过 L4 A/B 测试和 L6 LLM-as-Judge,
+# 仅保留 L2 Golden Dataset + L3 优化器 + L5 效果验证 (纯本地, 0 LLM 调用)
+# 适用于: 边缘端/嵌入式/轻量客户端/CI 快速验证
+GOVERNANCE_LIGHTWEIGHT = os.environ.get("FEATURE_GOVERNANCE_LIGHT", "").strip() in ("1", "true", "yes")
+
 
 # ============================================================================
 # L2: Golden Dataset — 30 case (10 场景 × 3) + LLM-as-Judge rubric
@@ -535,8 +541,15 @@ def _run_single_case(case: GoldenCase, matrix: dict[str, dict[str, int]]) -> dic
             priorities = {m: matrix.get(m, {}).get(scene, 0) for m in matrix}
             priority_tail = max(priorities, key=priorities.get) if priorities else ""
 
-            # 缓存命中 (模拟: 同场景同输入算命中)
-            cache_hit = True  # 简化: 桶排序后同桶命中
+            # 缓存命中模拟: 场景识别正确 + 同场景桶排序结构不变 → 缓存命中
+            # 原理: prompt_builder 的场景缓存基于 scene_sig (场景+模块排序),
+            # 同场景同矩阵 → scene_sig 相同 → 缓存命中
+            if scene_correct:
+                # 同场景同矩阵: scene_sig 不变, 缓存命中
+                cache_hit = True
+            else:
+                # 场景变化: scene_sig 改变, 缓存未命中
+                cache_hit = False
         finally:
             prompt_builder._MODULE_SCENE_PRIORITY = original_matrix
 
@@ -1244,21 +1257,26 @@ def optimize_and_validate(
     if not full_eval:
         return result
 
-    # 4. shadow A/B 测试
-    runner = ABTestRunner(mode="shadow")
-    ab_report = runner.run_full_eval()
-    result["ab_test"] = ab_report.to_dict()
+    # 4. shadow A/B 测试 (轻量模式跳过 — 纯本地 0 LLM 调用不跑 A/B)
+    if GOVERNANCE_LIGHTWEIGHT:
+        logger.info("matrix_governance轻量模式跳过L4_A/B测试")
+        result["ab_test"] = {"recommendation": "skip_lightweight"}
+    else:
+        runner = ABTestRunner(mode="shadow")
+        ab_report = runner.run_full_eval()
+        result["ab_test"] = ab_report.to_dict()
 
     # 5. 效果验证 + 自动回滚
     health = evaluate_matrix_health(result["baseline"])
     result["health"] = health.to_dict()
 
-    if health.should_rollback or ab_report.recommendation == "rollback":
+    ab_rec = result["ab_test"].get("recommendation", "accept")
+    if health.should_rollback or ab_rec == "rollback":
         result["rolled_back"] = rollback_snapshot()
         logger.info("matrix_governance闭环完成_已回滚",
                     reason="health_degraded_or_ab_rollback")
     else:
         logger.info("matrix_governance闭环完成_已采纳",
-                    ab_recommendation=ab_report.recommendation)
+                    ab_recommendation=ab_rec)
 
     return result

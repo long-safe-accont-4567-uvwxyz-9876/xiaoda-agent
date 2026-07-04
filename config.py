@@ -525,6 +525,12 @@ RAG_RERANK_WEIGHT = float(os.getenv("RAG_RERANK_WEIGHT", "0.65"))
 RAG_KG_WEIGHT = float(os.getenv("RAG_KG_WEIGHT", "0.15"))
 RAG_IMPORTANCE_WEIGHT = float(os.getenv("RAG_IMPORTANCE_WEIGHT", "0.20"))
 
+# ── 记忆/情绪阈值 (可环境变量覆盖) ──
+# 情绪触发安慰记忆检索的强度阈值 (0.0~1.0)
+EMOTION_TRIGGER_THRESHOLD = float(os.getenv("EMOTION_TRIGGER_THRESHOLD", "0.5"))
+# B 级场景粘性阈值: 低于此权重时不重排, 防止低质量闲聊触发重排
+SCENE_STICKINESS_THRESHOLD = float(os.getenv("SCENE_STICKINESS_THRESHOLD", "0.5"))
+
 # ── P3 记忆蒸馏压缩配置 ──
 MAX_EPISODIC_MEMORIES = int(os.getenv("MAX_EPISODIC_MEMORIES", "200"))
 MEMORY_DISTILL_BATCH = int(os.getenv("MEMORY_DISTILL_BATCH", "30"))

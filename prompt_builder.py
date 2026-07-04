@@ -69,9 +69,12 @@ _current_scene_sig: tuple = ()
 # 极低质量闲聊粘性阈值: 仅作用于 B 级场景, 防止低质量闲聊触发重排
 # 设计原则:
 #   - 仅 B 级场景生效 (S/A 级不受影响, 保留时间认知不乱核心初衷)
-#   - 阈值 0.5, 拦截低质量闲聊 (无意义单字、乱码、模糊输入)
+#   - 阈值默认 0.5, 拦截低质量闲聊 (无意义单字、乱码、模糊输入)
 #   - 正常 B 级场景 (greeting/creative/learning) 权重通常 = 1.0, 不受影响
-_SCENE_STICKINESS_THRESHOLD: float = 0.5
+#   - 可通过环境变量 SCENE_STICKINESS_THRESHOLD 覆盖
+_SCENE_STICKINESS_THRESHOLD: float = float(
+    os.environ.get("SCENE_STICKINESS_THRESHOLD", "0.5")
+)
 
 # 缓存统计 (可观测性)
 _scene_cache_hits: int = 0
