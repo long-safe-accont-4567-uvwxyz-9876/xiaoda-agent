@@ -324,6 +324,7 @@ class AIQQBot(botpy.Client):
             from web.config_service import get_config_service
             return get_config_service()
         except Exception:
+            logger.debug("qq_bot_adapter.config_service_not_found", exc_info=True)
             return None
 
     async def on_ready(self) -> None:

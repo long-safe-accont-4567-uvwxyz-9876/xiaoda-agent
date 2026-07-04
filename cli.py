@@ -64,7 +64,7 @@ def _supports_ansi() -> bool:
             if kernel32.SetConsoleMode(handle, new_mode):
                 return True
     except Exception:
-        pass
+        logger.debug("cli.ansi_check_error", exc_info=True)
     return False
 
 
@@ -298,6 +298,7 @@ class CLIInterface:
                                capture_output=True, text=True, timeout=5)
             return r.stdout.strip() == "active"
         except Exception:
+            logger.debug("cli.qq_bot_check_error", exc_info=True)
             return False
 
     def _ensure_service(self) -> None:
@@ -312,6 +313,7 @@ class CLIInterface:
                 else:
                     print(f"  {_C.LYELLOW}QQ Bot 服务启动失败，CLI 可正常使用{_C.RST}")
             except Exception:
+                logger.debug("cli.qq_bot_start_error", exc_info=True)
                 print(f"  {_C.LYELLOW}无法启动 QQ Bot 服务，CLI 可正常使用{_C.RST}")
             print()
 

@@ -445,7 +445,7 @@ class ModelRouter:
                 try:
                     await client.close()
                 except Exception:
-                    pass
+                    logger.debug("model_router.close_client_error", exc_info=True)
         self._client = None
         self._agnes_client = None
         # 关闭自定义 provider 客户端
@@ -453,7 +453,7 @@ class ModelRouter:
             try:
                 await cp_client.close()
             except Exception:
-                pass
+                logger.debug("model_router.close_custom_client_error", exc_info=True)
         if hasattr(self, "_custom_clients"):
             self._custom_clients.clear()
 

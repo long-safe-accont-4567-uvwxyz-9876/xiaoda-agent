@@ -52,7 +52,7 @@ def _resolve_voice_ref(filename: str) -> Path:
         if bundled_path.exists():
             return bundled_path
     except Exception:
-        pass
+        logger.debug("tts.voice_ref_path_error", exc_info=True)
     # 3. 开发环境 fallback
     dev_path = Path(__file__).resolve().parent.parent / "assets" / "voice_refs" / filename
     if dev_path.exists():

@@ -47,24 +47,31 @@ async def list_sessions(request: Request) -> Any:
     sessions = []
     try:
         # 跨通道会话：web / qq / cli 同库展示（同一个 AgentCore 进程写入）
+        # 使用关联子查询在单次 SQL 中获取首次/末次消息，避免 N+1 查询
         rows = await core.db.fetch_all(
-            "SELECT session_id, COUNT(*) AS cnt, MIN(timestamp) AS created, "
-            "MAX(timestamp) AS updated, MIN(source) AS source FROM conversation_logs "
-            "WHERE session_id != '' "
-            "GROUP BY session_id ORDER BY updated DESC LIMIT 50")
+            "SELECT cl.session_id, cl.cnt, cl.created, cl.updated, cl.source, "
+            "  (SELECT user_message FROM conversation_logs cl2 "
+            "   WHERE cl2.session_id = cl.session_id "
+            "   ORDER BY cl2.timestamp ASC LIMIT 1) AS first_message, "
+            "  (SELECT assistant_reply FROM conversation_logs cl3 "
+            "   WHERE cl3.session_id = cl.session_id "
+            "   ORDER BY cl3.timestamp DESC LIMIT 1) AS last_reply "
+            "FROM ("
+            "  SELECT session_id, COUNT(*) AS cnt, MIN(timestamp) AS created, "
+            "    MAX(timestamp) AS updated, MIN(source) AS source "
+            "  FROM conversation_logs "
+            "  WHERE session_id != '' "
+            "  GROUP BY session_id "
+            "  ORDER BY updated DESC "
+            "  LIMIT 50"
+            ") cl")
         for row in rows:
             sid = row["session_id"]
             src = (row["source"] or "web").split("_")[0]  # qq_c2c/qq_group → qq
-            first = await core.db.fetch_one(
-                "SELECT user_message FROM conversation_logs "
-                "WHERE session_id=? ORDER BY timestamp ASC LIMIT 1", (sid,))
-            last = await core.db.fetch_one(
-                "SELECT assistant_reply FROM conversation_logs "
-                "WHERE session_id=? ORDER BY timestamp DESC LIMIT 1", (sid,))
             sessions.append(SessionInfo(
                 session_id=sid,
-                title=_strip_tags((first or {}).get("user_message") or sid)[:50],
-                last_message=_strip_tags((last or {}).get("assistant_reply") or "")[:80],
+                title=_strip_tags(row["first_message"] or sid)[:50],
+                last_message=_strip_tags(row["last_reply"] or "")[:80],
                 message_count=row["cnt"] * 2,
                 created_at=row["created"] or 0,
                 updated_at=row["updated"] or 0,
@@ -136,7 +143,8 @@ async def export_session(session_id: str, request: Request) -> Any:
     try:
         from web.routers.auth import _validate_token
         _validate_token(token)
-    except Exception:
+    except Exception as exc:
+        logger.debug("chat.validate_token_failed: {}", exc, exc_info=True)
         raise HTTPException(401, "Invalid or expired token")
     core = request.app.state.core
     rows = await core.db.fetch_all(
@@ -238,8 +246,8 @@ async def speech_to_text(file: UploadFile = File(...)) -> Any:
             import json as _json
             try:
                 text = _json.loads(text).get("text", text)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("chat.json_parse_failed: {}", exc, exc_info=True)
         return Envelope(data={"text": text})
 
     except HTTPException:

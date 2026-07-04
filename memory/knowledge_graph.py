@@ -298,7 +298,7 @@ class KnowledgeGraph:
                                 boost += 0.05
                                 break
                 except Exception:
-                    pass
+                    logger.debug("kg.relation_boost_fast_failed: {}", exc_info=True)
             boosts.append(min(boost, 0.5))
         return boosts
 
@@ -360,6 +360,7 @@ class KnowledgeGraph:
         try:
             return await self.knowledge_db.get_entity_count()
         except Exception:
+            logger.debug("kg.get_entity_count_failed: {}", exc_info=True)
             return 0
 
     async def auto_extract_and_merge(self, summary: str) -> None:

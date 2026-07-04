@@ -268,6 +268,7 @@ def _count_pattern_in_file(filepath: Path, patterns: list[re.Pattern]) -> list[s
     try:
         text = filepath.read_text(encoding="utf-8", errors="ignore")
     except Exception:
+        logger.debug("prompt_complexity.count_pattern_file_read_error: {}", exc_info=True)
         return []
 
     matches: list[str] = []
@@ -459,7 +460,7 @@ def score_prompt_complexity(prompt_text: str,
             try:
                 code_loc += len(p.read_text(encoding="utf-8", errors="ignore").splitlines())
             except Exception:
-                pass
+                logger.debug("prompt_complexity.code_loc_count_error: {}", exc_info=True)
         score.code_loc = code_loc
 
     return score
@@ -613,6 +614,7 @@ def analyze_prompt_components(source_dir: Path | str,
         try:
             text = pf_path.read_text(encoding="utf-8", errors="ignore")
         except Exception:
+            logger.debug("prompt_complexity.component_file_read_error: {}", exc_info=True)
             continue
         spec = parse_prompt_spec(text)
         prompt_loc = len(text.splitlines())
@@ -842,6 +844,7 @@ def compute_module_complexity_map(source_dir: Path | str) -> dict[str, float]:
             )
             complexity_map[module_name] = score.complexity_score
         except Exception:
+            logger.debug("prompt_complexity.module_complexity_error: {}", exc_info=True)
             complexity_map[module_name] = 0.0
 
     # skills 和 hardware 是动态内容, 复杂度设为低值

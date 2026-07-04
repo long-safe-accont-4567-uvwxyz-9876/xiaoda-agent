@@ -56,7 +56,7 @@ def _supports_ansi() -> bool:
             if kernel32.SetConsoleMode(handle, new_mode):
                 return True
     except Exception:
-        pass
+        logger.debug("logging_config.ansi_check_error", exc_info=True)
     return False
 
 

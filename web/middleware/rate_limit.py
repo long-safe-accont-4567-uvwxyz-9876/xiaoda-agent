@@ -370,7 +370,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if self._persist_path is not None:
             now = time.time()
             if now - self._last_save >= _SAVE_INTERVAL:
-                self._save_states()
+                self._last_save = now  # 立即重置, 防止重入
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(None, self._save_states)
                 self._evict_inactive_buckets()
 
         return await call_next(request)

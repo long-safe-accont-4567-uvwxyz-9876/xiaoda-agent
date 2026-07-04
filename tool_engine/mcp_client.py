@@ -274,7 +274,7 @@ class MCPClient:
                 self._process.stdin.close()
                 await self._process.stdin.wait_closed()
             except Exception:
-                pass
+                logger.debug("mcp.close_stdin_error", exc_info=True)
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=5.0)
             except asyncio.TimeoutError:
@@ -288,7 +288,7 @@ class MCPClient:
             try:
                 await self._http_client.aclose()
             except Exception:
-                pass
+                logger.debug("mcp.close_http_client_error", exc_info=True)
             self._http_client = None
 
         # Unregister tools from tool_registry (使用公共 API)

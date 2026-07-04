@@ -102,7 +102,7 @@ class KleeAgent:
             try:
                 await client.close()
             except Exception:
-                pass
+                logger.debug("klee_agent.close_client_error", exc_info=True)
         self._clients.clear()
 
     @property

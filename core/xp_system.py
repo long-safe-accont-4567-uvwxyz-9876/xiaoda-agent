@@ -456,6 +456,7 @@ def _persona_config_path() -> Path:
         from config import get_config_dir
         return get_config_dir() / "persona_levels.yaml"
     except Exception:
+        logger.debug("xp_system.persona_config_path_fallback: {}", exc_info=True)
         return Path(__file__).resolve().parent.parent / "config" / "persona_levels.yaml"
 
 

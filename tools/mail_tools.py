@@ -169,7 +169,7 @@ async def _run_agently(args: list[str], timeout: int = 60) -> tuple[int, str, st
         try:
             proc.kill()
         except Exception:
-            pass
+            logger.debug("mail.kill_proc_error", exc_info=True)
         return 98, "", "agently-cli 执行超时"
     except Exception as e:
         return 97, "", f"启动 agently-cli 失败: {e}"

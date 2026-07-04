@@ -104,6 +104,7 @@ class NudgeEngine:
         try:
             tz = ZoneInfo(tz_name)
         except Exception:
+            logger.debug("nudge.timezone_parse_error", exc_info=True)
             tz = ZoneInfo("Asia/Shanghai")
         now = datetime.now(tz)
         now_min = now.hour * 60 + now.minute
@@ -118,6 +119,7 @@ class NudgeEngine:
                         e_h, e_m = p["end"].split(":")
                         s, e = int(s_h) * 60 + int(s_m), int(e_h) * 60 + int(e_m)
                     except Exception:
+                        logger.debug("nudge.dnd_period_parse_error", exc_info=True)
                         continue
                     if s <= e:
                         if s <= now_min < e:
@@ -141,6 +143,7 @@ class NudgeEngine:
             return int(row["c"]) if row else 0
         except Exception:
             # greeting_log 表不存在时降级到内存计数
+            logger.debug("nudge.greeting_log_query_error", exc_info=True)
             return self._proactive_count_today
 
     async def _check_greeting(self) -> None:
@@ -364,7 +367,7 @@ class NudgeEngine:
                     "VALUES (?,?,?,?,?)",
                     (0, time.time(), content, "qq", f"nudge_{msg_type}"))
             except Exception:
-                pass  # greeting_log 表不存在时静默忽略
+                logger.debug("nudge.greeting_log_insert_error", exc_info=True)
             self._last_proactive_time = time.time()
             self._proactive_count_today += 1
             logger.info("nudge.sent", type=msg_type, content=content[:60], count_today=self._proactive_count_today)
@@ -390,7 +393,7 @@ class NudgeEngine:
                     if val and not val.startswith("（") and val not in ("待填写", "主人/朋友/你的名字"):
                         return val
         except Exception:
-            pass
+            logger.debug("nudge.user_md_read_error", exc_info=True)
         return "爸爸"
 
     def get_time_greeting(self) -> str:

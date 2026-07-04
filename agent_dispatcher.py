@@ -200,7 +200,7 @@ class SubAgent:
             try:
                 await self._client.close()
             except Exception:
-                pass
+                logger.debug("agent_dispatcher.close_client_error", exc_info=True)
             self._client = None
 
     async def reload_model_config(self, provider: str, model: str,
@@ -333,7 +333,7 @@ class SubAgent:
                         try:
                             await old_client.close()
                         except Exception:
-                            pass
+                            logger.debug("agent_dispatcher.close_old_client_error", exc_info=True)
                 except (ImportError, ValueError, OSError) as e:
                     logger.debug("sub_agent.recover_failed", name=self.config.name, error=str(e)[:80])
 
@@ -841,7 +841,7 @@ class AgentDispatcher:
                 try:
                     await agent.close()
                 except Exception:
-                    pass
+                    logger.debug("agent_dispatcher.close_sub_agent_error", exc_info=True)
 
     async def dispatch_single(self, name: str, task: str, context: str = "", status_callback: Optional[Any]=None) -> str | None:
         """单子代理调度（原 dispatch 方法）。

@@ -187,8 +187,8 @@ async def get_mail_auth_status(request: Request) -> Any:
         if end_pos:
             auth_envelope = _json.loads(text[:end_pos])
             auth_data = auth_envelope.get("data", {})
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("mail.auth_status_parse_failed: {}", exc, exc_info=True)
 
     logged_in = auth_data.get("logged_in", False)
     if not logged_in:
@@ -260,8 +260,8 @@ async def get_mail_auth_status(request: Request) -> Any:
                         email = to_field
                     elif isinstance(to_field, dict):
                         email = to_field.get("email", "")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("mail.inbox_parse_failed: {}", exc, exc_info=True)
 
         # 如果仍未获取到，尝试正则匹配（兜底）
         if not email:
@@ -271,8 +271,8 @@ async def get_mail_auth_status(request: Request) -> Any:
                 m = re.search(r'[\w.+-]+@[\w.-]+\.\w+', out_auth)
                 if m:
                     email = m.group(0)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("mail.email_regex_match_failed: {}", exc, exc_info=True)
 
         # 缓存到配置中，下次不再查询
         if email:

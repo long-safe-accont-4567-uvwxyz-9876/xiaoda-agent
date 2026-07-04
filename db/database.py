@@ -42,6 +42,7 @@ def _detect_fs_type(path: Path) -> str:
                     root, None, 0, None, None, None, fs_buf, 260)
                 return fs_buf.value.lower()
             except Exception:
+                logger.debug("database.detect_fs_type_windows_error: {}", exc_info=True)
                 return ""
         # Linux: 读取 /proc/mounts
         while not p.is_mount() and p != p.parent:
@@ -52,7 +53,7 @@ def _detect_fs_type(path: Path) -> str:
                 if len(parts) >= 3 and parts[1] == str(p):
                     return parts[2]
     except Exception:
-        pass
+        logger.debug("database.detect_fs_type_error: {}", exc_info=True)
     return ""
 
 
@@ -74,7 +75,7 @@ class DatabaseManager:
             try:
                 await self._conn.close()
             except Exception:
-                pass
+                logger.debug("database.init_close_old_connection_error: {}", exc_info=True)
             self._conn = None
         self._conn = await aiosqlite.connect(str(self.db_path))
         self._conn.row_factory = aiosqlite.Row
@@ -186,7 +187,7 @@ class DatabaseManager:
             try:
                 await self._conn.close()
             except Exception:
-                pass
+                logger.warning("database.migration_dirty_close_error: {}", exc_info=True)
             sys.exit(1)
 
         row = await self._conn.execute_fetchall("SELECT MAX(version) FROM schema_version")
@@ -250,7 +251,7 @@ class DatabaseManager:
                 )
                 await self._conn.commit()
             except Exception:
-                pass
+                logger.warning("database.migration_dirty_record_error: {}", exc_info=True)
             logger.critical(
                 f"❌ 数据库迁移 v{version} 失败: {err_msg}\n"
                 f"数据库处于 dirty 状态，应用无法启动。\n"
@@ -262,7 +263,7 @@ class DatabaseManager:
             try:
                 await self._conn.close()
             except Exception:
-                pass
+                logger.warning("database.migration_failure_close_error: {}", exc_info=True)
             sys.exit(1)
 
     async def _migrate_v1(self) -> None:
@@ -894,7 +895,7 @@ class DatabaseManager:
                 try:
                     await self._conn.execute(f"DROP TRIGGER IF EXISTS {trig}")
                 except Exception:
-                    pass
+                    logger.debug("database.fts5_trigger_drop_error: {}", exc_info=True)
             logger.info("database.fts5_triggers_disabled (vfat)")
             return
         # 非 fat 文件系统：创建 FTS5 触发器
@@ -1081,6 +1082,7 @@ class DatabaseManager:
             )
             configs = await cursor.fetchall()
         except Exception:
+            logger.debug("database.cleanup_config_read_error: {}", exc_info=True)
             return result
 
         now = time.time()

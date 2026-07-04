@@ -152,6 +152,7 @@ class AgentCoreBootstrapper:
             else:
                 return Path(__file__).resolve().parent.parent / "assets"
         except Exception:
+            logger.debug("bootstrap.bundled_assets_dir_fallback: {}", exc_info=True)
             return Path(__file__).resolve().parent.parent / "assets"
 
     def _ensure_voice_refs(self) -> None:
@@ -676,6 +677,7 @@ class AgentCoreBootstrapper:
                         try:
                             connections = _json.loads(connections)
                         except Exception:
+                            logger.debug("bootstrap.mcp_connections_json_parse_error: {}", exc_info=True)
                             connections = {}
                     if isinstance(connections, dict) and connections.get("command"):
                         server_name = cfg.get("id", fp.stem)
@@ -724,7 +726,7 @@ class AgentCoreBootstrapper:
             from tool_engine.tool_registry import to_openai_tools
             self.core.tool_repair._allowed_tools = set(t["function"]["name"] for t in to_openai_tools())
         except Exception:
-            pass
+            logger.debug("bootstrap.tool_repair_refresh_failed: {}", exc_info=True)
 
 
 def get_base_dir() -> Path:

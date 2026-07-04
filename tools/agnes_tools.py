@@ -64,13 +64,13 @@ async def close_agnes_clients() -> None:
         try:
             await _agnes_openai_client.close()
         except Exception:
-            pass
+            logger.debug("agnes.close_openai_client_error", exc_info=True)
         _agnes_openai_client = None
     if _agnes_http_client is not None:
         try:
             await _agnes_http_client.aclose()
         except Exception:
-            pass
+            logger.debug("agnes.close_http_client_error", exc_info=True)
         _agnes_http_client = None
 
 

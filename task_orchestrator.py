@@ -101,7 +101,7 @@ class TaskState:
             try:
                 await self.status_callback(msg)
             except Exception:
-                pass
+                logger.debug("orchestrator.status_callback_error", exc_info=True)
 
 
 END = "__END__"
@@ -655,6 +655,7 @@ class ParallelAgentNode:
                 temperature=0.3,
             )
         except Exception:
+            logger.debug("orchestrator.route_json_format_fallback", exc_info=True)
             response = await self._route_client.chat.completions.create(
                 model=self._route_model,
                 messages=[{"role": "user", "content": prompt}],

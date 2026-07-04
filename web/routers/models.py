@@ -39,16 +39,16 @@ async def _audit(request: Request, action: str, detail: str) -> None:
     try:
         await core.db.insert_audit_log(f"webui.models.{action}", "webui", detail)
         await core.db.commit()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("models.audit_failed: {}", exc, exc_info=True)
 
 
 async def _broadcast_changed() -> None:
     try:
         from web.ws_hub import manager
         await manager.broadcast({"type": "config_changed", "domain": "models"})
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("models.broadcast_failed: {}", exc, exc_info=True)
 
 
 # ── providers ────────────────────────────────────────────────────

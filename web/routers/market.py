@@ -107,8 +107,8 @@ def _security_check(item: MarketItem, content: bytes = b"") -> SecurityCheckResu
                 result.risk_level = "medium"
                 break
 
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("market.security_check_decode_failed: {}", exc, exc_info=True)
 
     if result.warnings and result.risk_level == "high":
         result.passed = False

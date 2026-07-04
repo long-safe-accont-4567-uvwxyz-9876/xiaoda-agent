@@ -30,16 +30,16 @@ async def _audit(request: Request, action: str, detail: str) -> None:
     try:
         await core.db.insert_audit_log(f"webui.mcp.{action}", "webui", detail)
         await core.db.commit()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("mcp.audit_failed: {}", exc, exc_info=True)
 
 
 async def _broadcast_changed() -> None:
     try:
         from web.ws_hub import manager
         await manager.broadcast({"type": "config_changed", "domain": "mcp"})
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("mcp.broadcast_failed: {}", exc, exc_info=True)
 
 
 def _resolve_command_path(command: str) -> str:
@@ -97,8 +97,8 @@ def _serialize(name: str, client: Any, cfg_record: dict | None, mgr: Any=None) -
                 t for t in tool_names
                 if not mgr._tool_enabled_map.get((name, t), True)
             ])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("mcp.disabled_tools_fetch_failed: {}", exc, exc_info=True)
     return {
         "name": name,
         "command": command,
@@ -129,8 +129,8 @@ async def start_server(request: Request, name: str, record: dict) -> dict:
     if old:
         try:
             await old.stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("mcp.server_stop_failed: {}", exc, exc_info=True)
     # 解析命令完整路径（兼容 Windows），并替换路径占位符
     resolved_command = _resolve_command_path(record.get("command", ""))
     resolved_args = _replace_path_placeholders(record.get("args", []))
@@ -190,8 +190,8 @@ async def update_server(name: str, body: dict, request: Request) -> Any:
     if client:
         try:
             await client.stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("mcp.server_stop_failed: {}", exc, exc_info=True)
         mgr._clients.pop(name, None)
     data = _serialize(name, None, record)
     if record.get("enabled", True):
@@ -217,8 +217,8 @@ async def delete_server(name: str, request: Request) -> Any:
     if client:
         try:
             await client.stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("mcp.server_stop_failed: {}", exc, exc_info=True)
     cfg.delete(f"mcp.{name}")
     await _audit(request, "delete", name)
     await _broadcast_changed()

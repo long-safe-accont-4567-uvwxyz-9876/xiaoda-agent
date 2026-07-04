@@ -136,6 +136,7 @@ class AgentContext:
                 from memory.context_compressor import get_context_compressor
                 self._compressor = get_context_compressor(router=self._router)
             except Exception:
+                logger.debug("agent_context.compressor_import_error", exc_info=True)
                 self._compressor = None
 
         # Token 目标驱动的迭代压缩，最多 MAX_COMPRESS_ROUNDS 轮

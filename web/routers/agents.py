@@ -25,8 +25,8 @@ async def _audit(request: Request, action: str, detail: str) -> None:
     try:
         await core.db.insert_audit_log(f"webui.agents.{action}", "webui", detail)
         await core.db.commit()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("agents.audit_failed: {}", exc, exc_info=True)
 
 
 @router.get("/agents", response_model=Envelope[list[dict]])
@@ -120,8 +120,8 @@ async def set_permissions(name: str, body: dict, request: Request, _user: str = 
     try:
         from web.ws_hub import manager
         await manager.broadcast({"type": "config_changed", "domain": "agents"})
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("agents.broadcast_failed: {}", exc, exc_info=True)
     return Envelope(data=data)
 
 
@@ -173,7 +173,8 @@ async def upload_wallpaper(name: str, body: dict, request: Request, _user: str =
         raise HTTPException(400, "仅支持 png/jpg/webp 的 data URL")
     try:
         raw = base64.b64decode(m.group(2), validate=True)
-    except Exception:
+    except Exception as exc:
+        logger.debug("agents.base64_decode_failed: {}", exc, exc_info=True)
         raise HTTPException(400, "base64 解码失败")
     if len(raw) > 8 * 1024 * 1024:
         raise HTTPException(400, "图片不能超过 8MB")
@@ -272,8 +273,8 @@ async def list_stickers(name: str, request: Request, _user: str = Depends(get_cu
     if desc_file.exists():
         try:
             descriptions = json.loads(desc_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("agents.sticker_desc_parse_failed: {}", exc, exc_info=True)
 
     stickers = []
     for emo_dir in sorted(sticker_dir.iterdir()):
@@ -364,8 +365,8 @@ async def upload_sticker(
     if desc_file.exists():
         try:
             descriptions = json.loads(desc_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("agents.sticker_desc_parse_failed: {}", exc, exc_info=True)
     descriptions[filename] = description
     desc_file.write_text(json.dumps(descriptions, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -377,8 +378,8 @@ async def upload_sticker(
             mgr.reload()
         elif hasattr(mgr, "_instance"):
             mgr._instance.reload()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("agents.sticker_reload_failed: {}", exc, exc_info=True)
 
     await _audit(request, "sticker_upload", json.dumps({"agent": name, "file": filename}, ensure_ascii=False))
 
@@ -420,8 +421,8 @@ async def delete_sticker(
             descriptions = json.loads(desc_file.read_text(encoding="utf-8"))
             descriptions.pop(filename, None)
             desc_file.write_text(json.dumps(descriptions, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("agents.sticker_desc_update_failed: {}", exc, exc_info=True)
 
     # 热重载缓存
     try:
@@ -431,8 +432,8 @@ async def delete_sticker(
             mgr.reload()
         elif hasattr(mgr, "_instance"):
             mgr._instance.reload()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("agents.sticker_reload_failed: {}", exc, exc_info=True)
 
     await _audit(request, "sticker_delete", json.dumps({"agent": name, "file": filename}, ensure_ascii=False))
     return Envelope(data={"deleted": filename})
@@ -462,6 +463,6 @@ async def set_agent_model(name: str, body: dict, request: Request, _user: str = 
     try:
         from web.ws_hub import manager
         await manager.broadcast({"type": "config_changed", "domain": "agents"})
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("agents.broadcast_failed: {}", exc, exc_info=True)
     return Envelope(data=data)

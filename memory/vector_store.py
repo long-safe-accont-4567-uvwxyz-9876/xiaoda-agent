@@ -246,7 +246,7 @@ class VectorStore:
                     try:
                         self._vec_conn.execute("ROLLBACK")
                     except Exception:
-                        pass
+                        logger.debug("vector_store.upsert_rollback_error: {}", exc_info=True)
                     logger.warning("vector_store.upsert_failed", row_id=row_id, error=str(e))
                     return False
 
@@ -342,7 +342,7 @@ class VectorStore:
                     try:
                         conn.rollback()
                     except Exception:
-                        pass
+                        logger.debug("vector_store.batch_upsert_rollback_error: {}", exc_info=True)
                     logger.error("vector.batch_upsert_failed", error=str(e)[:200])
                     return 0
 

@@ -122,7 +122,7 @@ class SlashCommandHandler:
                         )
                         return smart_reply
                     except Exception:
-                        pass
+                        logger.debug("slash.error_handler_fallback", exc_info=True)
                 return f"执行 /{command} 时出了点问题：{str(e)[:100]}"
 
         return await self._cmd_help("", user_id)
@@ -249,7 +249,7 @@ class SlashCommandHandler:
                                 suffix = "..." if len(models) > 6 else ""
                                 lines.append(f"  {provider}: {', '.join(model_names)}{suffix}")
                 except Exception:
-                    pass
+                    logger.debug("slash.cache_read_error", exc_info=True)
                 if not cache_available:
                     for tp in third_party:
                         lines.append(f"  · {tp}: 已配置（使用 /model {tp}/模型名 切换）")
@@ -387,7 +387,7 @@ class SlashCommandHandler:
         try:
             lines.extend(await asyncio.to_thread(self._read_hw_sync))
         except Exception:
-            pass
+            logger.debug("slash.hw_read_error", exc_info=True)
         return "\n".join(lines)
 
     @staticmethod
@@ -438,7 +438,7 @@ class SlashCommandHandler:
                 logger.debug("slash.hw.load_read_failed", error=str(e))
                 lines.append("📊 负载: 无法读取")
         except Exception:
-            pass
+            logger.debug("slash.hw_outer_error", exc_info=True)
         return lines
 
     async def _cmd_sys(self, args: str, user_id: str) -> str:
@@ -549,6 +549,7 @@ class SlashCommandHandler:
                 else:
                     lines.append("😊 感知情绪: 暂无对话")
             except Exception:
+                logger.debug("slash.emotion_detect_error", exc_info=True)
                 lines.append("😊 情绪检测: 不可用")
         return "\n".join(lines)
 
@@ -679,6 +680,7 @@ class SlashCommandHandler:
                     wf = json.loads(fp.read_text(encoding="utf-8"))
                     names.append(f"  • {fp.stem} — {wf.get('name', fp.stem)}")
                 except Exception:
+                    logger.debug("slash.wf_parse_error", exc_info=True)
                     names.append(f"  • {fp.stem}")
             return "可用工作流:\n" + "\n".join(names) + "\n\n用法: /wf <工作流ID>"
 

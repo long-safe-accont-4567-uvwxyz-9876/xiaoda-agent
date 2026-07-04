@@ -217,7 +217,7 @@ class AgentRegistry:
             if wp:
                 main["wallpaper"] = wp
         except Exception:
-            pass
+            logger.debug("registry.wallpaper_error", exc_info=True)
         out = [main]
         registered_names: set[str] = set()
         for info in self.core.dispatcher.list_agents():
@@ -241,6 +241,7 @@ class AgentRegistry:
             from model_router import ROUTE_TABLE
             return ROUTE_TABLE.get("chat", {}).get("model", "")
         except Exception:
+            logger.debug("registry.model_name_error", exc_info=True)
             return ""
 
     def _serialize(self, cfg: Any, enabled: bool = True, degraded: bool = False) -> dict:
@@ -350,7 +351,7 @@ class AgentRegistry:
                     agent.config.provider, agent.config.model,
                     agent.config.base_url, agent.config.api_key_env)
             except Exception:
-                pass  # 热重载失败不阻断保存，下次启动时会重试
+                logger.debug("registry.model_reload_error", exc_info=True)
         if personality_text is not None:
             pf = Path(agent.config.personality_file) if agent.config.personality_file \
                 else self._personality_file(name)
@@ -440,6 +441,7 @@ class AgentRegistry:
         try:
             mcp_names = list(self.core._mcp_manager._clients.keys())
         except Exception:
+            logger.debug("registry.mcp_clients_error", exc_info=True)
             mcp_names = []
         for s in mcp_names:
             mcp[s] = {"enabled": is_main or s in mcp_allowed, "locked": is_main}

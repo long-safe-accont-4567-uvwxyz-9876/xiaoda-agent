@@ -49,6 +49,7 @@ class MarketInstaller:
                     data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
                     installed[data.get("id", child.name)] = data.get("version", "0.0.0")
                 except Exception:
+                    logger.debug("installer.yaml_parse_error path={}", yaml_path, exc_info=True)
                     installed[child.name] = "0.0.0"
         return installed
 
@@ -81,6 +82,7 @@ class MarketInstaller:
                 data = json.loads(fp.read_text(encoding="utf-8"))
                 installed[fp.stem] = data.get("version", "0.0.0")
             except Exception:
+                logger.debug("installer.json_parse_error path={}", fp, exc_info=True)
                 installed[fp.stem] = "0.0.0"
         return installed
 
@@ -353,6 +355,7 @@ class MarketInstaller:
                 if isinstance(parsed, dict):
                     result = parsed
             except Exception:
+                logger.debug("installer.connections_parse_error", exc_info=True)
                 # 尝试解析 "npx -y @xxx/server" 格式的命令行
                 parts = connections.strip().split()
                 if parts:
@@ -410,7 +413,7 @@ class MarketInstaller:
                     suspicious.append(f"敏感路径: {sp}")
 
         except Exception:
-            pass
+            logger.debug("installer.security_scan_error", exc_info=True)
 
         if suspicious:
             logger.warning("market.security_scan_warnings", id=item_id,

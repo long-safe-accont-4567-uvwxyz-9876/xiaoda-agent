@@ -162,7 +162,7 @@ class PermanentMemoryManager:
                 shutil.copy2(self._memories_path, backup)
                 logger.warning(f"PermanentMemory backed up corrupt file to {backup}")
             except Exception:
-                pass
+                logger.debug("permanent_memory.corrupt_backup_copy_error: {}", exc_info=True)
             self._memories = {}
 
     def _save(self) -> None:

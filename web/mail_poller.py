@@ -224,7 +224,7 @@ class MailPoller:
                 from qq_bot_adapter import send_proactive_message
                 await send_proactive_message(f"收到来自 {from_name}({from_email}) 的邮件「{subject}」，已通过邮件回复。")
             except Exception:
-                pass  # QQ 通知失败不影响主流程
+                logger.debug("mail.qq_notify_error", exc_info=True)
 
     # ── 辅助 ──────────────────────────────────────────────────
     def _is_dnd(self) -> bool:

@@ -114,6 +114,7 @@ class NotebookManager:
             items = await self.notebook.get_notebook_notes(kind="focus", limit=1)
             return items[0]["content"] if items else None
         except Exception:
+            logger.debug("notebook.get_current_focus_failed: {}", exc_info=True)
             return None
 
     async def schedule_task(self, title: str, priority: int = 0, due_at: float = 0.0) -> int:

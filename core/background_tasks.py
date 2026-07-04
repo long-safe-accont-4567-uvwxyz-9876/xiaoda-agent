@@ -275,6 +275,7 @@ class BackgroundTaskManager:
                 return True
             return (time.time() - last_run) >= interval_hours * 3600
         except Exception:
+            logger.warning("bg.should_run_cron_check_failed: {}", exc_info=True)
             return False
 
     async def _dream_archive_task(self) -> None:
@@ -347,7 +348,7 @@ class BackgroundTaskManager:
                     from web.routers.mail_manage import _clear_auth_status_cache
                     _clear_auth_status_cache()
                 except Exception:
-                    pass
+                    logger.debug("bg.clear_auth_status_cache_error: {}", exc_info=True)
             else:
                 logger.warning("mail.token_refresh_failed", rc=rc, err=err[:200] if err else "")
             await self.db.set_cron_last_run("mail_token_refresh")

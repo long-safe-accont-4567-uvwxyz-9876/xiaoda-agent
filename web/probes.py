@@ -86,7 +86,7 @@ async def probe_provider(core: Any, provider_id: str) -> dict:
                 _pick = (_free_chat or _light or model_list)[0]
                 model = _pick.id if hasattr(_pick, "id") else str(_pick)
         except Exception:
-            pass
+            logger.debug("probes.model_list_error", exc_info=True)
     if not model:
         return {"ok": False, "error": "未配置 default_model，请在该 provider 设置中填写默认模型名称", "latency_ms": 0}
     try:
@@ -245,7 +245,7 @@ def list_probe_ids(core: Any) -> list[dict]:
         for name in core._mcp_manager._clients:
             probes.append({"id": f"mcp:{name}", "label": f"MCP · {name}", "detail": "stdio"})
     except Exception:
-        pass
+        logger.debug("probes.mcp_clients_error", exc_info=True)
     probes.append({"id": "db", "label": "数据库", "detail": "SQLite"})
     probes.append({"id": "vector", "label": "向量记忆库", "detail": "sqlite-vec"})
     return probes
@@ -308,7 +308,7 @@ async def run_all(core: Any, on_progress: Any | None=None) -> dict:
                 try:
                     await on_progress(item["id"], res)
                 except Exception:
-                    pass
+                    logger.debug("probes.progress_callback_error", exc_info=True)
 
     await asyncio.gather(*[_run_one(item) for item in items])
     report = {"run_at": time.time(), "passed": passed, "total": len(items), "detail": results}

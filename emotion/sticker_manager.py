@@ -91,6 +91,7 @@ class StickerManager:
             try:
                 self._descriptions = json.loads(desc_file.read_text(encoding="utf-8"))
             except Exception:
+                logger.debug("sticker.description_parse_error", exc_info=True)
                 self._descriptions = {}
         for emotion_dir in self._dir.iterdir():
             if emotion_dir.is_dir():
@@ -137,6 +138,7 @@ class StickerManager:
                 emotion = resolve_emotion(cn_label)
                 return STICKER_FALLBACK.get(emotion, "happy")
             except Exception:
+                logger.debug("sticker.emotion_simple_import_error", exc_info=True)
                 return ""
 
         for emotion, keywords in self.EMOTION_MAP.items():

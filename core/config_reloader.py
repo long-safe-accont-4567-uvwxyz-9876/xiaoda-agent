@@ -167,7 +167,7 @@ class ConfigReloader:
                 try:
                     acb(snap)
                 except Exception:
-                    pass
+                    logger.debug("config_reloader.async_callback_error: {}", exc_info=True)
 
     @property
     def current(self) -> ConfigSnapshot:

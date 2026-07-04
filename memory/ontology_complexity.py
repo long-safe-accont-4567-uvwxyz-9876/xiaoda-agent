@@ -76,6 +76,7 @@ def _safe_jieba_cut(text: str) -> list[str]:
         import jieba
         return [w for w in jieba.cut(text) if w.strip()]
     except Exception:
+        logger.debug("ontology_complexity.jieba_fallback: {}", exc_info=True)
         return [text[i:i+2] for i in range(0, len(text)-1, 2)]
 
 

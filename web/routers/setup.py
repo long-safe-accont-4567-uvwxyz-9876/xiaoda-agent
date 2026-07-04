@@ -92,8 +92,8 @@ async def get_first_run() -> Any:
                             if val:
                                 first_run = False
                                 break
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("setup.env_read_failed: {}", exc, exc_info=True)
 
     # 2. 检测用户资料是否已配置（USER.md 存在且有实际填写的称呼和姓名）
     profile_done = False
@@ -111,8 +111,8 @@ async def get_first_run() -> Any:
                 name_val = name.group(1).strip()
                 if addr_val and not addr_val.startswith("（") and name_val and not name_val.startswith("（"):
                     profile_done = True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("setup.profile_check_failed: {}", exc, exc_info=True)
 
     return Envelope(data={"first_run": first_run, "profile_done": profile_done})
 
@@ -802,8 +802,8 @@ def _auto_register_providers(updates: dict) -> None:
         try:
             from model_router import ModelRouter
             # 尝试获取 router 实例 (原 import web.server as srv 已移除, 避免循环导入)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("setup.model_router_import_failed: {}", exc, exc_info=True)
 
         # 通过 app.state 注册（如果 app 已启动）
         try:
@@ -1004,10 +1004,12 @@ async def get_user_profile() -> Any:
     if user_md_path.exists():
         try:
             content = user_md_path.read_text(encoding="utf-8-sig")
-        except Exception:
+        except Exception as exc:
+            logger.debug("setup.user_md_read_failed encoding=utf-8-sig: {}", exc, exc_info=True)
             try:
                 content = user_md_path.read_text(encoding="utf-8")
-            except Exception:
+            except Exception as exc2:
+                logger.debug("setup.user_md_read_failed encoding=utf-8: {}", exc2, exc_info=True)
                 content = ""
 
     fields = _parse_user_md(content)
@@ -1053,8 +1055,8 @@ async def save_user_profile(body: dict) -> Any:
         import prompt_builder
         prompt_builder._SYSTEM_PROMPT_CACHE = ""
         prompt_builder._SYSTEM_PROMPT_CACHE_TS = 0.0
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("setup.prompt_cache_clear_failed: {}", exc, exc_info=True)
 
     logger.info("setup.user_profile_saved path={}", str(user_md_path))
     return Envelope(data={"saved": True})
@@ -1074,10 +1076,12 @@ def _read_disclaimer_status(user_md_path: Path) -> dict:
         return result
     try:
         content = user_md_path.read_text(encoding="utf-8-sig")
-    except Exception:
+    except Exception as exc:
+        logger.debug("setup.disclaimer_read_failed encoding=utf-8-sig: {}", exc, exc_info=True)
         try:
             content = user_md_path.read_text(encoding="utf-8")
-        except Exception:
+        except Exception as exc2:
+            logger.debug("setup.disclaimer_read_failed encoding=utf-8: {}", exc2, exc_info=True)
             return result
 
     # 匹配 ## 法律与声明 区块（直到下一个 ## 区块或文件结尾）
@@ -1114,10 +1118,12 @@ def _write_disclaimer_agreement(user_md_path: Path, agreed: bool) -> str:
     if user_md_path.exists():
         try:
             content = user_md_path.read_text(encoding="utf-8-sig")
-        except Exception:
+        except Exception as exc:
+            logger.debug("setup.disclaimer_write_read_failed encoding=utf-8-sig: {}", exc, exc_info=True)
             try:
                 content = user_md_path.read_text(encoding="utf-8")
-            except Exception:
+            except Exception as exc2:
+                logger.debug("setup.disclaimer_write_read_failed encoding=utf-8: {}", exc2, exc_info=True)
                 content = ""
 
     # 匹配并替换已有的 ## 法律与声明 区块（直到下一个 ## 区块或文件结尾）

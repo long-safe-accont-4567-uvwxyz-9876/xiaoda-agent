@@ -110,8 +110,8 @@ async def consolidate_portrait(request: Request) -> Any:
                 from web.ws_hub import manager
                 await manager.broadcast({"type": "portrait_consolidated",
                                          "ok": False, "error": str(e)[:200]})
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("insight.portrait_broadcast_failed: {}", exc, exc_info=True)
 
     asyncio.create_task(_run())
     return Envelope(data={"started": True})
@@ -146,8 +146,8 @@ async def today(request: Request) -> Any:
             "FROM greeting_log WHERE fired_at >= ? ORDER BY fired_at", (t0,))
         for g in greetings:
             items.append(dict(g, kind="greeting"))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("insight.today_greetings_failed: {}", exc, exc_info=True)
     items.sort(key=lambda x: x.get("ts") or 0)
     conv = await core.db.fetch_one(
         "SELECT COUNT(*) AS c FROM conversation_logs WHERE timestamp >= ?", (t0,))
@@ -383,7 +383,8 @@ async def list_instincts(request: Request, limit: int = Query(default=50, le=200
     try:
         rows = await core.db.fetch_all(
             "SELECT * FROM instincts ORDER BY confidence DESC LIMIT ?", (limit,))
-    except Exception:
+    except Exception as exc:
+        logger.debug("insight.instincts_fetch_failed: {}", exc, exc_info=True)
         rows = []
     return Envelope(data=rows)
 
@@ -438,8 +439,8 @@ async def update_memory(memory_id: int, body: dict, request: Request) -> Any:
         try:
             if core.memory:
                 await core.memory.vec.upsert(memory_id, body["summary"])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("insight.memory_vec_upsert_failed: {}", exc, exc_info=True)
     await core.db.commit()
     return Envelope(data={"id": memory_id, "updated": True})
 

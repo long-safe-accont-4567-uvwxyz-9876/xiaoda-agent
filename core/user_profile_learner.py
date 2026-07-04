@@ -30,6 +30,7 @@ from loguru import logger
 try:
     from config import DATA_DIR
 except Exception:
+    logger.debug("user_profile_learner.DATA_DIR_fallback: {}", exc_info=True)
     DATA_DIR = Path(__file__).resolve().parent.parent / "data"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -193,6 +194,7 @@ class UserProfileLearner:
             from prompt_builder import _workspace_dir
             return _workspace_dir() / "USER.md"
         except Exception:
+            logger.debug("user_profile_learner.user_md_path_fallback: {}", exc_info=True)
             return Path.home() / ".ai-agent" / "workspace" / "USER.md"
 
     def _write_to_user_md(self, insight_text: str, xp_level: int):

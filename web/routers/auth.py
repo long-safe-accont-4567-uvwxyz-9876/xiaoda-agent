@@ -28,6 +28,9 @@ _SECRET: str = ""
 
 # 黑名单锁（文件读写线程安全）
 _revoked_lock = Lock()
+# 已撤销 token 内存缓存，避免每次请求都读文件
+_revoked_cache: set[str] = set()
+_revoked_cache_mtime: float = 0.0
 
 
 def _get_secret_path() -> Path:
@@ -63,7 +66,8 @@ def _extract_expiry(token: str) -> float:
         decoded = base64.urlsafe_b64decode(token.encode()).decode()
         parts = decoded.rsplit(".", 2)
         return float(parts[0]) if len(parts) == 3 else 0.0
-    except Exception:
+    except Exception as exc:
+        logger.debug("auth.extract_expiry_failed: {}", exc, exc_info=True)
         return 0.0
 
 
@@ -79,7 +83,8 @@ def _revoke_token(token: str) -> None:
                     data = {"revoked": []}
                 if not isinstance(data.get("revoked"), list):
                     data["revoked"] = []
-            except Exception:
+            except Exception as exc:
+                logger.debug("auth.revoke_json_parse_failed: {}", exc, exc_info=True)
                 data = {"revoked": []}
         if token not in data["revoked"]:
             data["revoked"].append(token)
@@ -95,13 +100,19 @@ def _revoke_token(token: str) -> None:
 
 def _is_revoked(token: str) -> bool:
     """检查 token 是否在黑名单中。"""
+    global _revoked_cache, _revoked_cache_mtime
     path = _get_revoked_path()
     if not path.exists():
         return False
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return token in data.get("revoked", [])
-    except Exception:
+        mtime = path.stat().st_mtime
+        if mtime != _revoked_cache_mtime:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            _revoked_cache = set(data.get("revoked", []))
+            _revoked_cache_mtime = mtime
+        return token in _revoked_cache
+    except Exception as exc:
+        logger.debug("auth.is_revoked_json_parse_failed: {}", exc, exc_info=True)
         return False
 
 
@@ -136,7 +147,8 @@ def _validate_token(token: str) -> bool:
         # Also register in memory for tracking
         _tokens[token] = expiry
         return True
-    except Exception:
+    except Exception as exc:
+        logger.debug("auth.validate_token_failed: {}", exc, exc_info=True)
         return False
 
 

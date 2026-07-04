@@ -70,6 +70,7 @@ class ConnectionManager:
             try:
                 await ws.send_json(event)
             except Exception:
+                logger.debug("ws.send_error conn_id={}", conn_id, exc_info=True)
                 self.unregister(conn_id)
 
     async def broadcast(self, event: dict) -> None:
@@ -526,7 +527,7 @@ def _setup_pty_reader(term_sid: str) -> None:
             from web.pty_executor import feed_output
             feed_output(text)
         except Exception:
-            pass
+            logger.debug("ws.feed_output_error", exc_info=True)
 
     loop.add_reader(fd, _on_pty_readable)
 
@@ -556,9 +557,9 @@ def _setup_win_pipe_reader(term_sid: str) -> None:
                     from web.pty_executor import feed_output
                     feed_output(text)
                 except Exception:
-                    pass
+                    logger.debug("ws.feed_output_error_win", exc_info=True)
         except Exception:
-            pass
+            logger.debug("ws.win_pipe_reader_error term_sid={}", term_sid, exc_info=True)
         finally:
             loop.call_soon_threadsafe(_cleanup_pty, term_sid)
 
@@ -586,10 +587,11 @@ def _cleanup_pty(term_sid: str) -> None:
                 proc.terminate()
                 rc = proc.wait(timeout=3)
             except Exception:
+                logger.debug("ws.process_terminate_error", exc_info=True)
                 try:
                     proc.kill()
                 except Exception:
-                    pass
+                    logger.debug("ws.process_kill_error", exc_info=True)
                 rc = -1
     else:
         # ── Unix: 关闭 PTY fd + 等待子进程 ──
@@ -597,16 +599,17 @@ def _cleanup_pty(term_sid: str) -> None:
         try:
             loop.remove_reader(fd)
         except Exception:
-            pass
+            logger.debug("ws.remove_reader_error", exc_info=True)
         try:
             _, status = os.waitpid(session["pid"], os.WNOHANG)
             rc = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
         except Exception:
+            logger.debug("ws.waitpid_error", exc_info=True)
             rc = -1
         try:
             os.close(fd)
         except Exception:
-            pass
+            logger.debug("ws.close_fd_error", exc_info=True)
 
     asyncio.ensure_future(manager.send_to(conn_id, {
         "type": "terminal_exit", "term_sid": term_sid, "returncode": rc}))
@@ -664,7 +667,7 @@ def _handle_terminal_kill(msg: dict) -> None:
             try:
                 proc.kill()
             except Exception:
-                pass
+                logger.debug("ws.force_kill_proc_error", exc_info=True)
     else:
         try:
             os.kill(session["pid"], 9)
@@ -673,5 +676,5 @@ def _handle_terminal_kill(msg: dict) -> None:
         try:
             os.close(session["fd"])
         except Exception:
-            pass
+            logger.debug("ws.force_close_fd_error", exc_info=True)
     logger.info("ws.terminal.kill term_sid={}", term_sid)

@@ -166,6 +166,7 @@ def _normalize_command(command: str) -> str:
                 break
             normalized = decoded
         except Exception:
+            logger.debug("file_tools.url_decode_error", exc_info=True)
             break
     # hex 编码绕过：\xHH 格式
     def _replace_hex(m: Any) -> Any:
@@ -265,7 +266,7 @@ async def shell_command(command: str) -> ToolResult:
                     return ToolResult.ok(output[:3000])
                 return ToolResult.ok("命令执行成功（无输出）")
     except Exception:
-        pass
+        logger.debug("file_tools.pty_exec_error", exc_info=True)
 
     # Fallback: subprocess（无终端会话时）
     loop = asyncio.get_running_loop()

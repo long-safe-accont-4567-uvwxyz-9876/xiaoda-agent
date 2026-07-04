@@ -97,7 +97,7 @@ class SpontaneousRecall:
                 try:
                     await self.core.memory.increment_access_count(mem_id)
                 except Exception:
-                    pass
+                    logger.debug("spontaneous_recall.increment_access_count_error: {}", exc_info=True)
 
             # 写入成长轨迹（如果独白有价值）
             if len(monologue) > 20 and "不记得" not in monologue[:20]:
@@ -106,7 +106,7 @@ class SpontaneousRecall:
                     summary_preview = memory.get("summary", "")[:50]
                     append_growth_entry(f"想起了：{summary_preview}")
                 except Exception:
-                    pass
+                    logger.debug("spontaneous_recall.growth_entry_error: {}", exc_info=True)
 
             logger.info("spontaneous_recall.done",
                         memory_id=mem_id,

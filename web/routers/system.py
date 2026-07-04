@@ -58,7 +58,8 @@ async def get_status(request: Request) -> Any:
     try:
         from web.ws_hub import manager as ws_manager
         active = ws_manager.active_count
-    except Exception:
+    except Exception as exc:
+        logger.debug("system.ws_manager_get_failed: {}", exc, exc_info=True)
         active = 0
     qq_connected = False
     try:
@@ -70,8 +71,8 @@ async def get_status(request: Request) -> Any:
         bot = qq_bot_adapter._ACTIVE_BOT
         if bot is not None and not bot.is_closed():
             qq_connected = True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("system.qq_status_check_failed: {}", exc, exc_info=True)
     return Envelope(data=SystemStatus(
         uptime=time.time() - _start_time,
         qq_connected=qq_connected,
@@ -150,8 +151,8 @@ async def get_logs(lines: int = Query(default=200, le=1000),
 
     try:
         out = await asyncio.to_thread(_read_agent_logs)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("system.agent_log_read_failed: {}", exc, exc_info=True)
 
     # 兜底：如果 agent 日志为空，尝试读取 botpy.log
     if not out:
@@ -173,8 +174,8 @@ async def get_logs(lines: int = Query(default=200, le=1000),
             return []
         try:
             out = await asyncio.to_thread(_read_botpy_log)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("system.botpy_log_read_failed: {}", exc, exc_info=True)
 
     if not out:
         return Envelope(data=["（暂无日志）"])
@@ -197,8 +198,8 @@ async def get_lan_addresses(request: Request) -> Any:
         s.close()
         if primary_ip and not primary_ip.startswith("127."):
             lan_ips.append(primary_ip)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("system.lan_ip_detect_failed: {}", exc, exc_info=True)
     return Envelope(data={
         "localhost": f"http://localhost:{port}",
         "lan_ips": lan_ips,

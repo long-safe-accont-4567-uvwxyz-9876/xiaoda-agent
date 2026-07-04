@@ -29,6 +29,7 @@ async def _apply_model_overrides(core: Any) -> None:
         from setup_wizard import _load_env_values
         env_values = _load_env_values()
     except Exception:
+        logger.debug("server.load_env_error", exc_info=True)
         env_values = {}
 
     _register_env_providers(cfg, env_values, os)
@@ -141,7 +142,7 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
             from model_router import MIMO_MODEL
             core.router.set_chat_model("mimo", MIMO_MODEL)
         except Exception:
-            pass
+            logger.debug("server.set_chat_model_fallback_error", exc_info=True)
 
 
 async def _start_user_mcp_servers(core: Any) -> None:
@@ -343,7 +344,7 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
         try:
             await plugin_mgr.shutdown_all()
         except Exception:
-            pass
+            logger.debug("server.plugin_shutdown_error", exc_info=True)
     greeting_scheduler = getattr(app.state, "greeting_scheduler", None)
     if greeting_scheduler:
         await greeting_scheduler.stop()
@@ -360,7 +361,7 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
         try:
             await core.shutdown()
         except Exception:
-            pass
+            logger.debug("server.core_shutdown_error", exc_info=True)
 
 
 def create_app() -> FastAPI:
@@ -374,6 +375,7 @@ def create_app() -> FastAPI:
         from config import DATA_DIR
         _rate_limit_db = str(Path(DATA_DIR) / "rate_limit_buckets.sqlite")
     except Exception:
+        logger.debug("server.config_fallback_error", exc_info=True)
         _rate_limit_db = str(Path(__file__).parent.parent / "data" / "rate_limit_buckets.sqlite")
     app.add_middleware(RateLimitMiddleware, persist_path=_rate_limit_db)
 
