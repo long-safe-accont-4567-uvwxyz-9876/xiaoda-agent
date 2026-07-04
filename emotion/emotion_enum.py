@@ -64,7 +64,7 @@ EMOTION_ALIASES: dict[str, Emotion] = {
     "embarrassed": Emotion.SHY,
     # surprised（惊讶/惊恐）
     "惊讶": Emotion.SURPRISED, "吃惊": Emotion.SURPRISED, "震惊": Emotion.SURPRISED,
-    "惊恐": Emotion.SURPRISED, "害怕": Emotion.SURPRISED, "恐惧": Emotion.SURPRISED,
+    "惊恐": Emotion.FEAR, "害怕": Emotion.FEAR, "恐惧": Emotion.FEAR,
     "surprised": Emotion.SURPRISED, "scared": Emotion.SURPRISED, "afraid": Emotion.SURPRISED,
     # confused（困惑/疑惑）
     "困惑": Emotion.CONFUSED, "疑惑": Emotion.CONFUSED, "不解": Emotion.CONFUSED,

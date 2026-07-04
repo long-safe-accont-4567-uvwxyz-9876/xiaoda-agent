@@ -952,14 +952,14 @@ class MessageProcessorMixin:
                     user_openid=user_openid, session_id=session_id,
                 )
             else:
-                result = await self.router.route(
+                result = await asyncio.wait_for(self.router.route(
                     task_type, messages,
                     temperature=_get_temperature(_model_cfg),
                     max_tokens=_cb_max_tokens,
                     tools=tools,
                     tool_choice="auto" if tools else None,
                     user_openid=user_openid, session_id=session_id,
-                )
+                ), timeout=120)
 
             # Harness 验收循环
             reply, tool_results = await self._run_verification_loop(

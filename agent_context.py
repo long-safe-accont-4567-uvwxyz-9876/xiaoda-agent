@@ -109,6 +109,8 @@ class AgentContext:
             self._current_user_id = user_id
             # memory_retrieval 是请求级的，切换用户时清空避免串味
             self.memory_retrieval = None
+            # 清除动态提示缓存，避免旧用户的摘要/画像泄露给新用户
+            self.invalidate_dynamic_cache()
 
     async def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         msg = {"role": role, "content": str(content) if content is not None else ""}

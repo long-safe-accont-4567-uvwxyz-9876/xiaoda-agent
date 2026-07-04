@@ -10,7 +10,6 @@ _POSITIVE_KEYWORDS = {
     # 从 sticker_manager happy 合并
     "嘻嘻", "太好了", "耶", "棒", "好高兴", "真棒", "好喜欢",
     "开心～", "嘻嘻～", "嘿嘿～", "好耶！", "太好了！",
-    "超开心", "超～开心", "好嗨", "好激动", "兴奋", "期待",
     "太开心", "好幸福", "满足", "好满足", "满足～",
     "好快乐", "乐", "超棒", "超好", "超喜欢",
     # 从 sticker_manager greeting 合并（问候归入喜悦）
@@ -19,6 +18,11 @@ _POSITIVE_KEYWORDS = {
     "好久不见", "早上好～", "晚安～", "深夜好", "下午好",
     "晚上好", "晚上好呀", "下午好呀", "深夜好呀",
     "回来啦", "回来啦～", "我回来啦", "我回来啦～",
+}
+
+_EXCITED_KEYWORDS = {
+    "超开心", "超～开心", "好嗨", "好激动", "兴奋", "期待",
+    "太兴奋", "超兴奋", "好兴奋", "激动死了", "嗨翻了",
 }
 
 _NEGATIVE_KEYWORDS = {
@@ -85,6 +89,7 @@ _FEAR_KEYWORDS = {
 
 # 9 类中文标签（与 Emotion 枚举对齐）
 _EMOTION_CATEGORIES = [
+    ("兴奋", _EXCITED_KEYWORDS),
     ("喜悦", _POSITIVE_KEYWORDS),
     ("悲伤", _NEGATIVE_KEYWORDS),
     ("愤怒", _ANGRY_KEYWORDS),
@@ -117,7 +122,7 @@ def detect_emotion(text: str) -> dict:
         return {"primary": "平静", "valence": "neutral", "intensity": 0.0}
 
     # 效价映射
-    _positive_labels = {"喜悦"}
+    _positive_labels = {"喜悦", "兴奋"}
     _negative_labels = {"悲伤", "愤怒", "焦虑", "恐惧"}
     if best_label in _positive_labels:
         valence = "positive"

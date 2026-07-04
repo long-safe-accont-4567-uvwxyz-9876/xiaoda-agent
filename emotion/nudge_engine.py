@@ -136,6 +136,11 @@ class NudgeEngine:
 
     async def _sent_today_count(self) -> int:
         """查询 greeting_log 表今日已发数量（与 GreetingScheduler 共享计数）。"""
+        # 跨日重置内存计数器
+        today = datetime.now().date()
+        if today != self._today_date:
+            self._proactive_count_today = 0
+            self._today_date = today
         try:
             midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
             row = await self._db.fetch_one(
@@ -177,7 +182,7 @@ class NudgeEngine:
 
     async def _generate_idle_greeting(self, idle_seconds: float) -> str:
         hour = datetime.now().hour
-        if hour < 6 or (hour >= 23):
+        if hour < self.dnd_end or (hour >= self.dnd_start):
             return ""
 
         idle_hours = int(idle_seconds // 3600)

@@ -362,9 +362,9 @@ class SubAgentManagerMixin:
         context = self._build_sub_agent_context(task_hint=task)
         import time as _time_mod
         _t0 = _time_mod.time()
-        result = await self.dispatcher.dispatch(
+        result = await asyncio.wait_for(self.dispatcher.dispatch(
             name, task, context=context,
-            status_callback=_ctx.status_callback if _ctx else None)
+            status_callback=_ctx.status_callback if _ctx else None), timeout=180)
         _duration = _time_mod.time() - _t0
         # I7: 记录子 Agent 工作履历 (供路由器智能调度)
         try:
