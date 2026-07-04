@@ -72,9 +72,41 @@ _current_scene_sig: tuple = ()
 #   - 阈值默认 0.5, 拦截低质量闲聊 (无意义单字、乱码、模糊输入)
 #   - 正常 B 级场景 (greeting/creative/learning) 权重通常 = 1.0, 不受影响
 #   - 可通过环境变量 SCENE_STICKINESS_THRESHOLD 覆盖
-_SCENE_STICKINESS_THRESHOLD: float = float(
+_BASE_STICKINESS_THRESHOLD: float = float(
     os.environ.get("SCENE_STICKINESS_THRESHOLD", "0.5")
 )
+
+
+def _dynamic_stickiness_threshold(user_input: str, scene_sig: tuple) -> float:
+    """根据对话情景动态调整 B 级场景粘性阈值。
+
+    自适应策略:
+      1. 输入越短/越无意义 → 阈值越高 (不重排, 省算力)
+      2. 输入越长/越复杂 → 阈值越低 (重排, 保持连贯)
+      3. 场景切换时 → 阈值降低 (让新场景尽快生效)
+      4. 连续相同场景 → 阈值升高 (粘性, 避免频繁重排)
+
+    返回值 clamp 在 [0.2, 0.8]。
+    """
+    threshold = _BASE_STICKINESS_THRESHOLD
+
+    # 因子 1: 输入复杂度
+    effective_len = sum(2 if '\u4e00' <= c <= '\u9fff' else 1 for c in user_input)
+    if effective_len <= 4:
+        threshold += 0.15   # "嗯"/"哦" → 高粘性, 不重排
+    elif effective_len <= 10:
+        threshold += 0.05   # 短闲聊
+    elif effective_len > 40:
+        threshold -= 0.1    # 长输入: 用户在深入交流
+
+    # 因子 2: 场景连续性
+    if scene_sig and _current_scene_sig:
+        if scene_sig == _current_scene_sig:
+            threshold += 0.05  # 同场景连续 → 增加粘性
+        else:
+            threshold -= 0.1   # 场景切换 → 降低粘性, 让新场景生效
+
+    return max(0.2, min(0.8, threshold))
 
 # 缓存统计 (可观测性)
 _scene_cache_hits: int = 0
@@ -770,14 +802,16 @@ def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸") -> s
         # A 级: 桶排序 (功能模块拉到前端)
         new_sig = _compute_scene_signature(weights, scene_aware_names)
     else:
-        # B 级: 极低质量闲聊粘性
+        # B 级: 极低质量闲聊粘性 (动态阈值)
         # 以下情况保持当前排序 (节省算力, 不值得重排):
         #   1. default 场景 (无关键词命中, 如 "嗯"/"哦"/"asdfgh" 等无意义输入)
-        #   2. 主导权重 < 0.5 (极低质量闲聊)
+        #   2. 主导权重 < 动态阈值 (根据输入复杂度+场景连续性自适应)
         # 正常 B 级场景 (greeting/creative/learning, 权重通常 = 1.0) → 正常桶排序
         dominant_scene = max(weights, key=weights.get) if weights else "default"
         max_weight = max(weights.values()) if weights else 0
-        if _current_scene_sig and (dominant_scene == "default" or max_weight < _SCENE_STICKINESS_THRESHOLD):
+        new_sig_candidate = _compute_scene_signature(weights, scene_aware_names)
+        _dyn_threshold = _dynamic_stickiness_threshold(user_input, new_sig_candidate)
+        if _current_scene_sig and (dominant_scene == "default" or max_weight < _dyn_threshold):
             # 极低质量闲聊 → 保持当前排序 (节省算力)
             new_sig = _current_scene_sig
         else:
