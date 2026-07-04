@@ -14,8 +14,6 @@
 
 > 本 Agent 由纳西妲的老父亲-"飞"个人学习用途二创开发，禁止用户生成任何违禁内容，禁止用于任何商业用途，否则一切后果与开发者无关，由用户一人承担。
 
-### 免责声明
-
 本项目是一个**非官方的二次创作**，不是原作的续作、衍生品或官方合作项目，与原作权利方没有任何隶属、授权或赞助关系。
 
 项目中用到的角色名称、形象、语音、表情素材等知识产权归原版权方所有，代码仅供个人学习研究，不用于商业目的。表情素材来自社区公开资源，如有不妥请联系我，我会立即处理。
@@ -112,6 +110,26 @@
 - **KG 评分融合**：`final = 0.65×rerank + 0.15×kg_boost + 0.20×(importance×decay)`
 - **降级容错**：Reranker/QueryTransformer 不可用时自动降级，不影响主流程
 
+### 🔧 工具搜索（Tool Search v2 混合检索）
+
+灵感来自 Anthropic Claude Tool Search，按需加载工具，号称节省 85% token：
+
+```
+用户意图
+  ├→ BM25 词法检索（中英文分词，关键词精确匹配）
+  ├→ Vector 语义检索（Embedding 向量，同义词/近义概念匹配）
+  └→ RRF 融合（Reciprocal Rank Fusion, k=60）
+       └→ Top-K 工具注入 Prompt
+```
+
+**独到之处**：
+
+- **零配置降级**：无 Embedding API 时自动降级为纯 BM25（v1 行为）
+- **LRU 缓存**：查询向量缓存 128 条，重复查询零延迟
+- **懒初始化**：向量索引首次搜索时才初始化，启动零开销
+- **常驻 + 延迟加载**：核心工具常驻，低频工具按需加载
+- **学术支撑**：BM25 (Robertson 1994) + AnyTool (arXiv:2402.04253) + RRF (Cormack 2009)
+
 ### 🔧 工具链（40+ 内置 + MCP 扩展 + 插件）
 
 | 类别         | 工具                          | 亮点                              |
@@ -187,6 +205,30 @@ plugins/
 - **情绪→语音映射**：统一枚举 `Emotion` → `TTS_STYLE_MAP` 字典
 - **TTS 缓存持久化**：合成结果缓存到磁盘，重复文本零延迟
 
+### 🧬 提示词矩阵治理（5 层闭环）
+
+不是"写完 Prompt 就完了"，而是**检测→优化→测试→验证→反馈**的自动化治理：
+
+| 层级 | 功能 | 说明 |
+|------|------|------|
+| L1 检测 | 场景复杂度分析 | 纯本地，0 LLM 调用 |
+| L2 评估 | Golden Dataset（30 case） | 10 场景 × 3 难度级别 |
+| L3 优化 | 自动优化器 | 快照 + 回滚，dry-run 预览 |
+| L4 测试 | A/B 测试 | Matched Pairs + Bootstrap CI |
+| L5 验证 | 效果验证 | 4 量化指标 + 自动回滚 |
+
+**一键执行**：`optimize_and_validate()` 完成基线捕获 → dry-run → 应用优化 → shadow A/B → 效果验证 → 自动回滚。
+
+**学术支撑**：GEM 2026 LLM-as-Judge + DSPy (ICLR 2026 oral) + Hecate (arXiv:2607.01903v1)
+
+### 🌱 自发回忆与成长叙事
+
+Agent 不只是被动回答，还能**主动思考**：
+
+- **自发回忆**（SpontaneousRecall）：每小时随机回忆 1 条记忆，生成内心独白，让 agent 有"内心生活"
+- **成长叙事**（GrowthNarrative）：每天 23:00 生成成长总结，写入自我模型和长期记忆
+- **定时回忆整理**（MemoryRecallScheduler）：每 3 小时整理回忆笔记，压缩和归档
+
 ### 🌐 三通道交互
 
 | 通道         | 入口                  | 特点                                 |
@@ -204,7 +246,7 @@ plugins/
 **Web UI 特色**：
 
 - 须弥主题（草元素配色 + 粒子特效 + 3D 卡片交互）
-- 13 个功能视图：Chat / Agents / Models / Tools / MCP / Plugins / Insight / Schedule / Media / Health / Dashboard / Settings / Setup
+- 15 个功能视图：Chat / Agents / Models / Tools / MCP / Workflows / Plugins / Insight / Schedule / Mail / Media / Health / Dashboard / Settings / Disclaimer
 - WebSocket 实时推送（工具调用状态 / 情绪变化 / 健康检查）
 - Agent 独立壁纸系统
 - **热生效配置**：DND 时段 / 问候配额 / 模型路由 / 工具开关，改完即时生效无需重启
@@ -340,7 +382,9 @@ xiaoda-agent/
 │   ├── chat_processor.py     #   对话处理
 │   ├── tool_orchestrator.py  #   工具编排
 │   ├── background_tasks.py   #   后台任务队列
-│   └── delegation.py         #   委托机制数据类
+│   ├── delegation.py         #   委托机制数据类
+│   ├── spontaneous_recall.py #   自发回忆（内心独白）
+│   └── growth_narrative.py   #   成长叙事（每日总结）
 ├── agent_dispatcher.py       # 子智能体调度器 + ToolCallExtractor
 ├── task_orchestrator.py      # TaskGraph 图编排引擎
 ├── model_router.py           # LLM API 路由 + 凭证池 + 错误分类
@@ -352,6 +396,7 @@ xiaoda-agent/
 │   ├── tool_call_handler.py  #   工具调用处理（并行信号量）
 │   ├── tool_executor.py      #   工具执行器（每工具超时）
 │   ├── tool_registry.py      #   工具注册表
+│   ├── tool_search.py        #   工具搜索（BM25 + Vector + RRF 混合检索）
 │   ├── tool_repair.py        #   工具调用修复（JSON 规范化）
 │   ├── tool_guardrails.py    #   工具护栏（频率+风暴检测）
 │   └── mcp_client.py         #   MCP 协议客户端（stdio/SSE/HTTP）
@@ -373,7 +418,9 @@ xiaoda-agent/
 │   ├── notebook_manager.py   #   笔记本（免费模型编码）
 │   ├── portrait_manager.py   #   用户画像（移至 emotion/）
 │   ├── context_compressor.py #   上下文压缩（Token 驱动）
-│   └── context_usage.py      #   上下文使用分析
+│   ├── context_usage.py      #   上下文使用分析
+│   ├── matrix_governance.py  #   提示词矩阵治理（L1-L5 闭环）
+│   └── recall_scheduler.py   #   定时回忆整理调度器
 ├── emotion/                  # 情感与主动行为
 │   ├── emotion_enum.py       #   情感统一枚举系统
 │   ├── emotion_simple.py     #   情绪检测
@@ -532,20 +579,36 @@ docker-compose -f docker-compose.prod.yml up -d
 
 ***
 
+## 最新更新（v0.4.8）
+
+| 特性 | 说明 |
+|------|------|
+| **Tool Search v2 混合检索** | BM25 + Vector + RRF 融合，按需加载工具节省 85% token |
+| **提示词矩阵治理 L1-L5** | 5 层闭环：检测→优化→A/B 测试→效果验证→自动回滚 |
+| **CI 集成 L5 验证** | GitHub Actions 自动运行矩阵治理健康检查 |
+| **Canary 真实 LLM 调用** | A/B 测试 canary 阶段使用真实 LLM-as-Judge 评分 |
+| **自发回忆与成长叙事** | Agent 主动思考：每小时回忆 + 每日成长总结 |
+| **SPA fallback 修复** | 15/15 前端路由刷新不白屏 |
+| **WebUI 15 模块** | 新增 Workflows / Mail / Disclaimer 视图 |
+| **免责声明完善** | 参考 Fairydex 专业写法，自然口语风格 |
+
+***
+
 ## 项目规模
 
 | 指标         | 数值           |
 | ---------- | ------------ |
 | Python 模块  | 80+          |
-| 生产代码       | \~18,000 行   |
+| 生产代码       | \~20,000 行   |
 | 测试代码       | \~6,000 行    |
 | 内置工具       | 40+          |
 | 角色人格       | 5 个          |
 | 数据库表       | 21 张 + 22 索引 |
-| Web API 路由 | 13 模块        |
-| Web UI 视图  | 13 个         |
+| Web API 路由 | 15 模块 + 139 端点 |
+| Web UI 视图  | 15 个         |
 | RAG 优化阶段   | 3 阶段（P0-P2）  |
 | MCP 传输协议   | 3 种          |
+| 矩阵治理层级   | 5 层（L1-L5）   |
 
 ***
 
@@ -559,10 +622,12 @@ docker-compose -f docker-compose.prod.yml up -d
 | 数据库      | SQLite (aiosqlite)   | 单设备部署，零运维，WAL 模式并发         |
 | 向量检索     | sqlite-vec           | 小规模数据无需 ANN，与 SQLite 统一存储  |
 | 全文检索     | FTS5 BM25            | SQLite 原生，关键词精确匹配          |
+| 工具搜索     | BM25 + Vector + RRF  | 混合检索，按需加载，节省 85% token    |
 | 情感系统     | 统一枚举 Emotion         | 9 类情绪 → 贴纸/语音/显示 三路映射      |
 | 工具调用     | ToolCallExtractor    | 标准 tool\_calls + DSML 统一提取 |
 | 工具扩展     | MCP 协议 + 插件系统        | 外部工具无限扩展，声明式权限管理           |
 | 代码沙箱     | AST 审查               | 比正则更难绕过，禁止模块/内建白名单         |
+| Prompt 治理 | 5 层闭环矩阵            | 检测→优化→A/B→验证→自动回滚          |
 | Web 框架   | FastAPI + Vue 3      | 异步原生 + 现代前端，WebSocket 实时通信 |
 | 配置管理     | ConfigService 热生效    | WebUI 改配置即时生效，无需重启         |
 | 部署       | Docker + 安装包         | 一键复现，volume 持久化，跨平台安装包     |
