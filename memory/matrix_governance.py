@@ -470,6 +470,10 @@ class ABTestReport:
     is_significant: bool = False
     # 决策
     recommendation: str = ""  # ship / rollback / inconclusive
+    # LLM-as-Judge 评分 (canary 阶段填充, shadow 阶段为 0)
+    llm_judge_avg_score: float = 0.0
+    llm_judge_n_cases: int = 0
+    llm_judge_note: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -488,6 +492,9 @@ class ABTestReport:
             "p_value": round(self.p_value, 6),
             "is_significant": self.is_significant,
             "recommendation": self.recommendation,
+            "llm_judge_avg_score": round(self.llm_judge_avg_score, 4),
+            "llm_judge_n_cases": self.llm_judge_n_cases,
+            "llm_judge_note": self.llm_judge_note,
             "per_case": [
                 {
                     "case_id": r.case_id,
@@ -653,10 +660,26 @@ class ABTestRunner:
       - shadow: 0% 流量, 离线全量评估 30 case (主指标: 场景识别准确率)
       - canary: 离线全量 + LLM-as-Judge (10 个 golden case, 质量指标)
       - ramp: 同 shadow, 但需要 shadow + canary 都通过
+
+    Args:
+        mode: shadow / canary / ramp
+        router: 可选 ModelRouter 实例. 注入后 canary 阶段真实调用 LLM 评分;
+                不注入时 canary 返回占位结果 (向后兼容, CI 无 router 也能跑).
+        judge_task_type: LLM-as-Judge 调用的 task_type (默认 chat_flash 控制成本)
+        response_task_type: 候选矩阵生成回复的 task_type (默认 chat)
     """
 
-    def __init__(self, mode: str = "shadow") -> None:
+    def __init__(
+        self,
+        mode: str = "shadow",
+        router: Any = None,
+        judge_task_type: str = "chat_flash",
+        response_task_type: str = "chat",
+    ) -> None:
         self.mode = mode
+        self.router = router
+        self.judge_task_type = judge_task_type
+        self.response_task_type = response_task_type
         self.dataset = get_golden_dataset()
 
     def run_shadow(self, candidate_matrix: dict | None = None) -> ABTestReport:
@@ -775,7 +798,11 @@ class ABTestRunner:
         # LLM-as-Judge (仅 10 个 case, 控制成本)
         try:
             judge_scores = self._run_llm_judge_subset(candidate_matrix)
-            # 合并到报告 (扩展字段)
+            # 填充 LLM-as-Judge 字段到 report
+            report.llm_judge_avg_score = judge_scores.get("avg_score", 0.0)
+            report.llm_judge_n_cases = judge_scores.get("judged_cases", 0)
+            report.llm_judge_note = judge_scores.get("note", "")
+            # 合并决策
             report.recommendation = self._decide_with_judge(report, judge_scores)
         except Exception as e:
             logger.warning("matrix_governance.llm_judge_failed",
@@ -787,7 +814,22 @@ class ABTestRunner:
     def _run_llm_judge_subset(self, candidate_matrix: dict) -> dict:
         """对 10 个 golden case 运行 LLM-as-Judge (质量指标).
 
-        成本控制: 只跑 10 个 case (1/3), 每个 case 调用 1 次 LLM
+        成本控制 (GEM 2026):
+          - 只跑 10 个 case (1/3), 每个场景第 1 个 (easy 难度, 控制变量)
+          - 每个 case 2 次 LLM 调用: 1 次生成回复 + 1 次评分
+          - 总计 20 次调用 (canary 阶段)
+
+        Args:
+            candidate_matrix: 候选矩阵 (用于生成回复)
+
+        Returns:
+            {
+                "judged_cases": int,
+                "scores": list[float],  # 1.0-5.0 每个案例的评分
+                "avg_score": float,     # 平均评分 (1-5)
+                "responses": list[str], # 候选矩阵生成的回复 (debug 用)
+                "note": str,
+            }
         """
         # 取每个场景的第 1 个 case (easy 难度, 控制变量)
         judged_cases = []
@@ -799,23 +841,162 @@ class ABTestRunner:
             if len(judged_cases) >= 10:
                 break
 
-        # 这里不实际调用 LLM (避免依赖 router), 返回占位结果
-        # 实际使用时由 agent.py 注入 router
+        # 无 router 时返回占位 (向后兼容, CI 无 router 也能跑)
+        if self.router is None:
+            return {
+                "judged_cases": len(judged_cases),
+                "scores": [],
+                "avg_score": 0.0,
+                "responses": [],
+                "note": "LLM-as-Judge 需注入 router, 当前返回占位",
+            }
+
+        # 真实调用 LLM 评分
+        import asyncio
+        import threading
+        import prompt_builder
+        scores: list[float] = []
+        responses: list[str] = []
+
+        def _run_coro_sync(coro):
+            """在同步上下文中运行协程, 兼容已有 event loop 的情况.
+
+            pytest-asyncio / FastAPI 等场景已有运行中的 loop,
+            asyncio.run() 会报 RuntimeError. 用线程隔离的新 loop 解决.
+            """
+            try:
+                asyncio.get_running_loop()
+                in_loop = True
+            except RuntimeError:
+                in_loop = False
+
+            if not in_loop:
+                return asyncio.run(coro)
+
+            # 已在 loop 中, 用线程隔离的新 loop
+            result_holder: list = []
+            def _run_in_new_loop():
+                new_loop = asyncio.new_event_loop()
+                try:
+                    asyncio.set_event_loop(new_loop)
+                    result_holder.append(new_loop.run_until_complete(coro))
+                finally:
+                    new_loop.close()
+            t = threading.Thread(target=_run_in_new_loop)
+            t.start()
+            t.join()
+            return result_holder[0] if result_holder else None
+
+        # 临时切换矩阵 (生成回复时用候选矩阵)
+        original_matrix = copy.deepcopy(prompt_builder._MODULE_SCENE_PRIORITY)
+        try:
+            prompt_builder._MODULE_SCENE_PRIORITY = candidate_matrix
+            for case in judged_cases:
+                try:
+                    # Step 1: 用候选矩阵构建 prompt 并生成回复
+                    system_prompt = prompt_builder.build_scene_aware_prompt(
+                        case.input, "评测员"
+                    )
+                    response = _run_coro_sync(self.router.route(
+                        task_type=self.response_task_type,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": case.input},
+                        ],
+                        temperature=0.7,
+                        max_tokens=500,
+                        timeout=30,
+                    ))
+                    response = str(response) if response else ""
+
+                    # Step 2: 用 LLM_JUDGE_RUBRIC 评分
+                    judge_prompt = LLM_JUDGE_RUBRIC.format(
+                        user_input=case.input,
+                        reference_answer=case.reference_answer or "(无参考答案)",
+                        response=response,
+                    )
+                    judge_response = _run_coro_sync(self.router.route(
+                        task_type=self.judge_task_type,
+                        messages=[{"role": "user", "content": judge_prompt}],
+                        temperature=0.0,  # GEM 2026: 评分用 greedy (这里用 0 模拟)
+                        max_tokens=100,
+                        timeout=20,
+                    ))
+                    score = self._parse_judge_score(str(judge_response))
+                    scores.append(score)
+                    responses.append(response)
+                    logger.info(
+                        "matrix_governance.llm_judge_case",
+                        case_id=case.case_id,
+                        score=score,
+                        response_len=len(response),
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "matrix_governance.llm_judge_case_failed",
+                        case_id=case.case_id,
+                        error=str(e),
+                    )
+                    scores.append(0.0)
+                    responses.append("")
+        finally:
+            prompt_builder._MODULE_SCENE_PRIORITY = original_matrix
+
+        avg_score = sum(scores) / len(scores) if scores else 0.0
         return {
             "judged_cases": len(judged_cases),
-            "scores": [],  # 实际调用后填充
-            "avg_score": 0.0,
-            "note": "LLM-as-Judge 需注入 router, 当前返回占位"
+            "scores": scores,
+            "avg_score": avg_score,
+            "responses": responses,
+            "note": f"LLM-as-Judge 完成, 平均评分 {avg_score:.2f}/5.00",
         }
 
+    @staticmethod
+    def _parse_judge_score(text: str) -> float:
+        """解析 LLM-as-Judge 返回的评分 JSON.
+
+        GEM 2026: 期望格式 {"score": <1-5>, "reason": "..."}
+        容错: 提取首个 1-5 整数作为评分.
+        """
+        import re
+        # 尝试 JSON 解析
+        try:
+            # 找到第一个 {...} 块
+            match = re.search(r'\{[^}]*"score"[^}]*\}', text, re.DOTALL)
+            if match:
+                obj = json.loads(match.group(0))
+                score = float(obj.get("score", 0))
+                if 1.0 <= score <= 5.0:
+                    return score
+        except (json.JSONDecodeError, ValueError):
+            pass
+        # 容错: 找第一个 1-5 的整数
+        m = re.search(r'\b([1-5])\b', text)
+        return float(m.group(1)) if m else 0.0
+
     def _decide_with_judge(self, report: ABTestReport, judge: dict) -> str:
-        """结合 shadow 指标和 LLM-as-Judge 评分做决策."""
-        # 简化: shadow 已显著则直接用 shadow 决策
+        """结合 shadow 指标和 LLM-as-Judge 评分做决策.
+
+        决策矩阵 (GEM 2026 + FutureAGI 2026):
+          - shadow 显著 (CI 不跨 0): 直接用 shadow 决策 (主指标已够强)
+          - shadow 不显著 + LLM 评分 >= 4.0: ship (质量好)
+          - shadow 不显著 + LLM 评分 <= 2.0: rollback (质量差)
+          - shadow 不显著 + LLM 评分 (2.0, 4.0): inconclusive
+          - 无 router (占位): 退回 shadow 决策
+        """
         if report.is_significant:
             return report.recommendation
-        # shadow 不显著时, 用 LLM-as-Judge 评分
-        # (实际实现需注入 router, 这里返回 shadow 决策)
-        return report.recommendation
+
+        # 无 router 时退回 shadow 决策
+        if not judge.get("scores"):
+            return report.recommendation
+
+        avg = judge.get("avg_score", 0.0)
+        if avg >= 4.0:
+            return "ship"
+        if avg <= 2.0:
+            return "rollback"
+        return "inconclusive"
 
     def run_full_eval(self, candidate_matrix: dict | None = None) -> ABTestReport:
         """完整评估流程 (shadow → canary 判断).

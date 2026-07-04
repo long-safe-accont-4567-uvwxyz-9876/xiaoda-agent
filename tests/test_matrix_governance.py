@@ -1,11 +1,12 @@
-"""矩阵治理闭环测试套件 — L2 Golden Dataset + L3 自动优化器 + L4 A/B 测试 + L5 效果验证.
+"""矩阵治理闭环测试套件 — L2 Golden Dataset + L3 自动优化器 + L4 A/B 测试 + L5 效果验证 + L6 LLM-as-Judge.
 
-测试 5 轮:
+测试 6 轮:
   L2: Golden Dataset 完整性 — 30 case, 10 场景 × 3, 字段齐全
   L3: 自动优化器 — dry-run / 快照 / 回滚 / diff 计算
   L4: A/B 测试 — matched pairs / bootstrap CI / shadow→canary
   L5: 效果验证 — 4 指标 / 回滚阈值 / 自动回滚
   E2E: 完整闭环 — optimize_and_validate 入口
+  L6: LLM-as-Judge 注入 — mock router 真实调用路径
 
 Run:
   python -m pytest tests/test_matrix_governance.py -v
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import asyncio
 from pathlib import Path
 
@@ -382,6 +384,141 @@ async def test_e2e_full_loop():
     return {"full_loop_completed": True}
 
 
+async def test_l6_llm_judge_injection():
+    """L6: LLM-as-Judge 注入测试 — mock router 真实调用路径.
+
+    验证:
+      1. 无 router 时返回占位 (向后兼容)
+      2. 注入 mock router 后真实调用 route() 2 次/case (生成回复 + 评分)
+      3. _parse_judge_score 能解析各种格式
+      4. _decide_with_judge 决策矩阵正确
+      5. report.llm_judge_avg_score 字段被填充
+    """
+    import copy
+    import prompt_builder
+    from memory.matrix_governance import (
+        ABTestRunner, ABTestReport, LLM_JUDGE_RUBRIC,
+    )
+
+    print("\n=== L6: LLM-as-Judge 注入 ===")
+
+    original_matrix = copy.deepcopy(prompt_builder._MODULE_SCENE_PRIORITY)
+
+    try:
+        # 1. 无 router 时返回占位
+        runner_no_router = ABTestRunner(mode="canary")
+        assert runner_no_router.router is None
+        placeholder = runner_no_router._run_llm_judge_subset(original_matrix)
+        assert placeholder["scores"] == []
+        assert placeholder["avg_score"] == 0.0
+        assert "占位" in placeholder["note"]
+        print(f"  无 router 占位 ✓: {placeholder['note']}")
+
+        # 2. _parse_judge_score 各种格式
+        parse = ABTestRunner._parse_judge_score
+        assert parse('{"score": 5, "reason": "好"}') == 5.0
+        assert parse('{"score": 1, "reason": "差"}') == 1.0
+        assert parse('评分是 4 分') == 4.0
+        assert parse('评分 3') == 3.0
+        assert parse('no score here') == 0.0
+        assert parse('{"reason": "x"}') == 0.0  # 无 score 字段
+        print(f"  _parse_judge_score 多格式解析 ✓")
+
+        # 3. 注入 mock router
+        class MockRouter:
+            """Mock router: 第 1 次调用返回回复, 第 2 次返回评分 JSON."""
+            def __init__(self):
+                self.call_count = 0
+                self.call_history = []
+
+            async def route(self, task_type, messages, temperature=0.7,
+                           max_tokens=None, timeout=None, **kwargs):
+                self.call_count += 1
+                self.call_history.append({
+                    "task_type": task_type,
+                    "n_messages": len(messages),
+                    "temperature": temperature,
+                })
+                # 根据调用次数判断: 奇数=生成回复, 偶数=评分
+                if self.call_count % 2 == 1:
+                    # 生成回复 (response_task_type)
+                    assert task_type == "chat", f"生成回复 task_type 应为 chat, 实际 {task_type}"
+                    return f"这是 case {self.call_count} 的回复内容"
+                else:
+                    # 评分 (judge_task_type)
+                    assert task_type == "chat_flash", f"评分 task_type 应为 chat_flash, 实际 {task_type}"
+                    return '{"score": 4, "reason": "回复切题"}'
+
+        mock_router = MockRouter()
+        runner = ABTestRunner(
+            mode="canary",
+            router=mock_router,
+            judge_task_type="chat_flash",
+            response_task_type="chat",
+        )
+        assert runner.router is mock_router
+
+        # 跑 canary (会触发 LLM-as-Judge)
+        report = runner.run_canary()
+        assert isinstance(report, ABTestReport)
+        assert report.mode == "canary"
+
+        # 10 个 case × 2 次调用 = 20 次
+        assert mock_router.call_count == 20, f"应调用 20 次, 实际 {mock_router.call_count}"
+        print(f"  mock router 调用次数: {mock_router.call_count} (10 case × 2) ✓")
+
+        # LLM-as-Judge 字段被填充
+        assert report.llm_judge_n_cases == 10
+        assert report.llm_judge_avg_score == 4.0, f"平均分应为 4.0, 实际 {report.llm_judge_avg_score}"
+        assert "LLM-as-Judge 完成" in report.llm_judge_note
+        print(f"  LLM-as-Judge 评分: avg={report.llm_judge_avg_score}, "
+              f"n={report.llm_judge_n_cases} ✓")
+
+        # 决策: shadow 不显著 + LLM 4.0 → ship
+        assert report.recommendation == "ship", f"应 ship, 实际 {report.recommendation}"
+        print(f"  决策: {report.recommendation} (shadow 不显著 + LLM 4.0) ✓")
+
+        # 4. _decide_with_judge 决策矩阵
+        shadow_report = ABTestReport(
+            timestamp=time.time(), mode="shadow", n_cases=30,
+            is_significant=False,  # shadow 不显著
+        )
+        # LLM 4.5 → ship
+        assert runner._decide_with_judge(shadow_report, {"scores": [4.5], "avg_score": 4.5}) == "ship"
+        # LLM 1.5 → rollback
+        assert runner._decide_with_judge(shadow_report, {"scores": [1.5], "avg_score": 1.5}) == "rollback"
+        # LLM 3.0 → inconclusive
+        assert runner._decide_with_judge(shadow_report, {"scores": [3.0], "avg_score": 3.0}) == "inconclusive"
+        # 无 scores → 退回 shadow
+        assert runner._decide_with_judge(shadow_report, {"scores": []}) == shadow_report.recommendation
+        print(f"  决策矩阵: >=4.0 ship / <=2.0 rollback / (2,4) inconclusive ✓")
+
+        # 5. shadow 显著时直接用 shadow 决策 (忽略 LLM)
+        sig_report = ABTestReport(
+            timestamp=time.time(), mode="shadow", n_cases=30,
+            is_significant=True, recommendation="rollback",
+        )
+        assert runner._decide_with_judge(sig_report, {"scores": [4.5], "avg_score": 4.5}) == "rollback"
+        print(f"  shadow 显著时覆盖 LLM 决策 ✓")
+
+        # 6. report.to_dict 含 LLM 字段
+        report_dict = report.to_dict()
+        assert "llm_judge_avg_score" in report_dict
+        assert "llm_judge_n_cases" in report_dict
+        assert "llm_judge_note" in report_dict
+        print(f"  报告序列化含 LLM 字段 ✓")
+
+    finally:
+        prompt_builder._MODULE_SCENE_PRIORITY = original_matrix
+
+    print("  L6 PASS")
+    return {
+        "mock_calls": mock_router.call_count,
+        "avg_score": report.llm_judge_avg_score,
+        "recommendation": report.recommendation,
+    }
+
+
 # ============================================================================
 # 主入口
 # ============================================================================
@@ -389,7 +526,7 @@ async def test_e2e_full_loop():
 async def main():
     """运行所有测试."""
     print("\n" + "=" * 60)
-    print("  矩阵治理闭环测试 (L2 + L3 + L4 + L5 + E2E)")
+    print("  矩阵治理闭环测试 (L2 + L3 + L4 + L5 + E2E + L6)")
     print("=" * 60)
 
     l2 = await test_l2_golden_dataset()
@@ -397,6 +534,7 @@ async def main():
     l4 = await test_l4_ab_test()
     l5 = await test_l5_health_evaluation()
     e2e = await test_e2e_full_loop()
+    l6 = await test_l6_llm_judge_injection()
 
     print("\n" + "=" * 60)
     print("  所有测试通过 ✓")
@@ -409,6 +547,8 @@ async def main():
           f"alignment={l5['complexity_alignment']:.3f}, "
           f"should_rollback={l5['should_rollback']}")
     print(f"  E2E 完整闭环: {e2e['full_loop_completed']}")
+    print(f"  L6 LLM-as-Judge 注入: {l6['mock_calls']} 次调用, "
+          f"avg={l6['avg_score']}, 决策={l6['recommendation']}")
     print("=" * 60)
 
 
