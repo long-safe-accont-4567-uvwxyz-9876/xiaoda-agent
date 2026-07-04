@@ -531,6 +531,13 @@ EMOTION_TRIGGER_THRESHOLD = float(os.getenv("EMOTION_TRIGGER_THRESHOLD", "0.5"))
 # B 级场景粘性阈值: 低于此权重时不重排, 防止低质量闲聊触发重排
 SCENE_STICKINESS_THRESHOLD = float(os.getenv("SCENE_STICKINESS_THRESHOLD", "0.5"))
 
+# ── 冷启动路由配置 (环境变量覆盖) ──
+# 私有记忆条数: < COLD_MAX 为冷用户(纯FTS), COLD_MAX~WARM_MAX 为温用户(向量低权重), >= WARM_MAX 为热用户(均衡混合)
+MEMORY_COLD_MAX = int(os.getenv("MEMORY_COLD_MAX", "0"))
+MEMORY_WARM_MAX = int(os.getenv("MEMORY_WARM_MAX", "10"))
+# 温用户向量融合权重 (0.0~1.0): 冷=0.0, 温=0.2, 热=0.5(均衡)
+MEMORY_WARM_VEC_WEIGHT = float(os.getenv("MEMORY_WARM_VEC_WEIGHT", "0.2"))
+
 # ── P3 记忆蒸馏压缩配置 ──
 MAX_EPISODIC_MEMORIES = int(os.getenv("MAX_EPISODIC_MEMORIES", "200"))
 MEMORY_DISTILL_BATCH = int(os.getenv("MEMORY_DISTILL_BATCH", "30"))
@@ -638,6 +645,9 @@ __all__ = [
     "RAG_RERANK_WEIGHT",
     "RAG_KG_WEIGHT",
     "RAG_IMPORTANCE_WEIGHT",
+    "MEMORY_COLD_MAX",
+    "MEMORY_WARM_MAX",
+    "MEMORY_WARM_VEC_WEIGHT",
     "MAX_EPISODIC_MEMORIES",
     "MEMORY_DISTILL_BATCH",
     "MEMORY_DISTILL_ENABLED",

@@ -113,12 +113,25 @@ def _extract_topic_keywords(query: str, top_n: int = 2) -> list[str]:
             return []
 
 
-def reciprocal_rank_fusion(ranked_lists: list[list[str]], *, k: int = 60, limit: int = 10) -> list[tuple[str, float]]:
-    """Reciprocal Rank Fusion: 多路排序融合算法"""
+def reciprocal_rank_fusion(ranked_lists: list[list[str]], *, k: int = 60, limit: int = 10,
+                           weights: list[float] | None = None) -> list[tuple[str, float]]:
+    """Reciprocal Rank Fusion: 多路排序融合算法
+
+    Args:
+        ranked_lists: 多路排序结果 (每路是 id 列表, 按相关性降序)
+        k: 平滑常数 (标准值 60), 防止排名 1 的项压倒一切
+        limit: 返回前 N 个
+        weights: 各通道权重 (长度须与 ranked_lists 一致)。
+            None 或全等值时退化为等权 RRF (向后兼容)。
+            空列表通道不参与融合, 自动置零 (空通道熔断)。
+    """
     scores: dict[str, float] = {}
-    for ranked in ranked_lists:
+    for i, ranked in enumerate(ranked_lists):
+        if not ranked:
+            continue  # 空通道自动跳过, 不稀释有效候选
+        w = weights[i] if weights and i < len(weights) else 1.0
         for rank, item_id in enumerate(ranked, start=1):
-            scores[item_id] = scores.get(item_id, 0.0) + 1.0 / (k + rank)
+            scores[item_id] = scores.get(item_id, 0.0) + w * 1.0 / (k + rank)
     return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
 
 
@@ -197,6 +210,9 @@ class MemoryManager:
         self._pending_encode = False
         # P3 记忆蒸馏器（使用硅基流动免费模型，失败降级到 router）
         self.distiller = MemoryDistiller(router=router)
+        # 冷启动路由: 记忆计数缓存 (TTL 60s, 避免每次检索都 COUNT 全表)
+        self._memory_count_cache: int | None = None
+        self._memory_count_ts: float = 0
 
     def set_knowledge_graph(self, kg: Any) -> None:
         self.kg = kg
@@ -204,6 +220,45 @@ class MemoryManager:
     def set_governance(self, governance: Any) -> None:
         """注入 ContextGovernance 实例 (ContextNest 哈希链 + 审计追踪)。"""
         self._governance = governance
+
+    # ── 冷启动路由: 记忆计数 + 档位判断 ──────────────────────────
+    async def _get_memory_count(self) -> int:
+        """获取用户私有记忆总数 (带 60s TTL 缓存, 避免频繁 COUNT)."""
+        now = time.time()
+        if self._memory_count_cache is not None and (now - self._memory_count_ts) < 60:
+            return self._memory_count_cache
+        try:
+            count = await self.memory.get_episodic_count()
+        except Exception:
+            count = 0
+        self._memory_count_cache = count
+        self._memory_count_ts = now
+        return count
+
+    def invalidate_memory_count_cache(self) -> None:
+        """写入新记忆后主动失效缓存, 下次检索立即感知."""
+        self._memory_count_cache = None
+        self._memory_count_ts = 0
+
+    async def get_memory_tier(self) -> str:
+        """判断当前用户记忆档位: "cold" / "warm" / "hot".
+
+        cold (0~COLD_MAX):       纯 FTS, 向量检索完全关闭
+        warm (COLD_MAX+1~WARM_MAX): 向量低权重参与, 以关键词为主
+        hot  (>WARM_MAX):        BM25+向量均衡融合
+        """
+        try:
+            import config as _cfg
+            cold_max = getattr(_cfg, "MEMORY_COLD_MAX", 0)
+            warm_max = getattr(_cfg, "MEMORY_WARM_MAX", 10)
+        except (ImportError, AttributeError):
+            cold_max, warm_max = 0, 10
+        count = await self._get_memory_count()
+        if count <= cold_max:
+            return "cold"
+        if count <= warm_max:
+            return "warm"
+        return "hot"
 
     async def audit_retrieval(self, response_id: str,
                                 memories: list[dict] | None) -> int:
@@ -250,46 +305,89 @@ class MemoryManager:
     async def retrieve_memories_hybrid(self, query: str, k: int = 5, use_reranker: bool = True) -> list[dict]:
         """FTS + 向量 RRF 混合检索 + Reranker 精排
 
+        冷启动三段路由 (工业标准, 对标 Dify/Coze):
+        - cold (0条):  纯 FTS, 向量检索完全关闭 → 零 Embedding 开销
+        - warm (1~10条): FTS + 向量低权重融合, 向量仅做补充
+        - hot  (>10条):  FTS + 向量均衡融合 (原有行为)
+
         Args:
             use_reranker: 是否在本方法内调用 Reranker 精排。A3 并行检索场景下会置为
                 False，由调用方对合并后的候选池做一次性批量 Reranker。
         """
         _start = time.time()
+
+        # ── 冷启动路由: 判断用户记忆档位 ──
+        tier = await self.get_memory_tier()
+        is_cold = tier == "cold"
+        is_warm = tier == "warm"
+
+        # 冷用户: 仅 FTS, 完全跳过向量检索 (零 Embedding 开销)
+        if is_cold:
+            fts_items = await self._hybrid_fts_search(query, k)
+            if fts_items:
+                results = fts_items[:k]
+                logger.info("memory.search", event="memory_search",
+                            query=query[:100], tier="cold", results=len(results),
+                            duration_ms=int((time.time() - _start) * 1000))
+                return results
+            # FTS 也无结果, 返回空
+            logger.info("memory.search", event="memory_search",
+                        query=query[:100], tier="cold", results=0,
+                        duration_ms=int((time.time() - _start) * 1000))
+            return []
+
+        # ── 温/热用户: 并行执行 FTS 与向量检索 ──
         # ContextNest A1: 提取确定性 selector → 候选集, 向量检索在候选集内排序
         selectors = self._extract_deterministic_selectors(query)
         candidate_ids = await self._get_candidate_ids_by_selectors(selectors, limit=k * 6)
         if candidate_ids is not None:
             logger.debug("memory.deterministic_selector",
-                         selector_keys=[k for k in selectors if k != "has_selectors"],
+                         selector_keys=[sk for sk in selectors if sk != "has_selectors"],
                          candidate_count=len(candidate_ids))
-        # 并行执行 FTS 与向量检索
         fts_items, vec_items = await asyncio.gather(
             self._hybrid_fts_search(query, k),
             self._hybrid_vec_search(query, k, candidate_ids=candidate_ids),
         )
 
-        # 降级：只有一路有结果
+        # 空通道自动剔除: 两路都空则返回
         if not fts_items and not vec_items:
-            # 结构化日志：记忆检索（无结果）
-            logger.info("memory.search", event="memory_search", query=query[:100],
-                        results=0, duration_ms=int((time.time() - _start) * 1000))
+            logger.info("memory.search", event="memory_search",
+                        query=query[:100], tier=tier, results=0,
+                        duration_ms=int((time.time() - _start) * 1000))
             return []
+        # 单路有结果: 直接返回
         if not fts_items:
             results = vec_items[:k]
-            logger.info("memory.search", event="memory_search", query=query[:100],
-                        results=len(results), duration_ms=int((time.time() - _start) * 1000))
+            logger.info("memory.search", event="memory_search",
+                        query=query[:100], tier=tier, results=len(results),
+                        duration_ms=int((time.time() - _start) * 1000))
             return results
         if not vec_items:
             results = fts_items[:k]
-            logger.info("memory.search", event="memory_search", query=query[:100],
-                        results=len(results), duration_ms=int((time.time() - _start) * 1000))
+            logger.info("memory.search", event="memory_search",
+                        query=query[:100], tier=tier, results=len(results),
+                        duration_ms=int((time.time() - _start) * 1000))
             return results
 
-        # RRF 融合 - 过采样 3x 供 Reranker 筛选
+        # ── 加权 RRF 融合 ──
+        try:
+            import config as _cfg
+            warm_vec_weight = getattr(_cfg, "MEMORY_WARM_VEC_WEIGHT", 0.2)
+        except (ImportError, AttributeError):
+            warm_vec_weight = 0.2
+        # 温用户: 向量低权重 (default 0.2:0.8); 热用户: 均衡 (1.0:1.0)
+        if is_warm:
+            fts_weight, vec_weight = 1.0, warm_vec_weight
+        else:
+            fts_weight, vec_weight = 1.0, 1.0
+
         oversample_k = k * 3
         fts_ids = [str(item["id"]) for item in fts_items]
         vec_ids = [str(item["id"]) for item in vec_items]
-        fused = reciprocal_rank_fusion([fts_ids, vec_ids], limit=oversample_k)
+        fused = reciprocal_rank_fusion(
+            [fts_ids, vec_ids], limit=oversample_k,
+            weights=[fts_weight, vec_weight],
+        )
 
         # 按 RRF 排序获取完整记录
         all_items = {str(item["id"]): item for item in fts_items + vec_items}
@@ -299,11 +397,12 @@ class MemoryManager:
             reranked = await self._hybrid_rerank(query, fused, all_items, k)
             if reranked:
                 results = reranked[:k]
-                logger.info("memory.search", event="memory_search", query=query[:100],
-                            results=len(results), duration_ms=int((time.time() - _start) * 1000))
+                logger.info("memory.search", event="memory_search",
+                            query=query[:100], tier=tier, results=len(results),
+                            duration_ms=int((time.time() - _start) * 1000))
                 return results
 
-        # 降级：无 Reranker 或 Reranker 失败时走原 RRF 逻辑
+        # 降级：无 Reranker 或 Reranker 失败时走 RRF 逻辑
         results = []
         for item_id, rrf_score in fused:
             if item_id in all_items:
@@ -312,9 +411,9 @@ class MemoryManager:
                 results.append(item)
 
         final = results[:k]
-        # 结构化日志：记忆检索（RRF 融合结果）
-        logger.info("memory.search", event="memory_search", query=query[:100],
-                    results=len(final), duration_ms=int((time.time() - _start) * 1000))
+        logger.info("memory.search", event="memory_search",
+                    query=query[:100], tier=tier, results=len(final),
+                    duration_ms=int((time.time() - _start) * 1000))
         return final
 
     async def _hybrid_fts_search(self, query: str, k: int) -> list[dict]:
@@ -1048,6 +1147,9 @@ class MemoryManager:
             self._last_encode_time = time.time()
             self._pending_encode = False
             logger.info("memory.encoded", summary=summary[:80], importance=importance)
+
+            # 冷启动路由: 新记忆写入后失效计数缓存, 下次检索立即感知档位变化
+            self.invalidate_memory_count_cache()
 
             self._save_state_json(summary, importance, emotion)
 
