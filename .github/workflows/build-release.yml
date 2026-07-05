@@ -48,17 +48,15 @@ jobs:
         run: |
           # assets 文件应在 checkout 时已检出，这里做安全检查
           echo "=== Ensure assets are present ==="
-          if [ -d "assets/voice_refs" ] && [ -d "assets/stickers" ]; then
+          if [ -d "assets" ]; then
             count=$(find assets/ -type f | wc -l)
             echo "assets/ 文件数: $count"
-            if [ "$count" -lt 55 ]; then
-              echo "ERROR: Expected 55+ files, got $count"
-              exit 1
-            fi
           else
-            echo "ERROR: assets/voice_refs 或 assets/stickers 目录不存在"
+            echo "ERROR: assets/ 目录不存在"
             exit 1
           fi
+          # 只需确认 icon 文件存在（sticker/voice 已从安装包移除）
+          ls -la assets/xiaoda-icon.* 2>/dev/null || { echo "ERROR: xiaoda-icon not found"; exit 1; }
           echo "Assets present OK"
 
       - name: Set up Node.js
