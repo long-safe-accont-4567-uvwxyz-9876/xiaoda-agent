@@ -150,14 +150,17 @@ jobs:
       - name: Verify assets before build
         shell: bash
         run: |
-          echo "=== assets/ file count and total size ==="
-          find assets/ -type f | wc -l
-          du -sh assets/
-          du -sh assets/stickers/ assets/voice_refs/ 2>/dev/null
-          echo "=== Sample files ==="
-          find assets/ -type f | head -10
-          echo "=== Total bytes ==="
-          find assets/ -type f -exec stat --format='%s' {} + 2>/dev/null | awk '{s+=$1} END {print s}'
+          echo "=== assets/ directory ==="
+          if [ -d assets/ ]; then
+            FILE_COUNT=$(find assets/ -type f | wc -l)
+            echo "File count: $FILE_COUNT"
+            du -sh assets/ 2>/dev/null || echo "empty"
+            find assets/ -type f | head -10
+          else
+            echo "WARNING: assets/ directory not found"
+          fi
+          echo "=== xiaoda-icon exists ==="
+          ls -la assets/xiaoda-icon.* 2>/dev/null || echo "WARNING: xiaoda-icon not found"
 
       - name: Sanitize developer PII from config
         shell: bash
