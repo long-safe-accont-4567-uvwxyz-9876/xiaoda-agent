@@ -90,7 +90,7 @@ jobs:
           echo "=== web/dist contents ==="
           ls -la web/dist/
           echo "=== web/dist/assets ==="
-          ls web/dist/assets/ | head -40
+          ls web/dist/assets/ | head -40 || true
           # Verify key files exist
           test -f web/dist/index.html || (echo "ERROR: index.html not found!" && exit 1)
           # Verify wallpapers exist (check for any .jpg files in wallpapers directory)
@@ -153,7 +153,7 @@ jobs:
             FILE_COUNT=$(find assets/ -type f | wc -l)
             echo "File count: $FILE_COUNT"
             du -sh assets/ 2>/dev/null || echo "empty"
-            find assets/ -type f | head -10
+            find assets/ -type f | head -10 || true
           else
             echo "WARNING: assets/ directory not found"
           fi
@@ -232,7 +232,7 @@ jobs:
           echo ""
           echo "=== dist/xiaoda-agent/assets/ (icon etc.) ==="
           if [ -d dist/xiaoda-agent/assets ]; then
-            find dist/xiaoda-agent/assets/ -type f 2>/dev/null | head -10
+            find dist/xiaoda-agent/assets/ -type f 2>/dev/null | head -10 || true
           else
             echo "No dist/xiaoda-agent/assets/ directory"
           fi
@@ -241,7 +241,7 @@ jobs:
           if [ -d dist/xiaoda-agent/web/dist/assets ]; then
             WEB_ASSETS_COUNT=$(find dist/xiaoda-agent/web/dist/assets/ -type f 2>/dev/null | wc -l)
             echo "Frontend assets: $WEB_ASSETS_COUNT files"
-            find dist/xiaoda-agent/web/dist/assets/ -type f 2>/dev/null | head -15
+            find dist/xiaoda-agent/web/dist/assets/ -type f 2>/dev/null | head -15 || true
           else
             echo "ERROR: No frontend assets found in dist/xiaoda-agent/web/dist/assets/"
             exit 1
