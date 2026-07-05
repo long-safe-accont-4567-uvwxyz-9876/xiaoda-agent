@@ -359,6 +359,8 @@ class AgentRegistry:
         kwargs["name"] = name
         kwargs["excluded_tools"] = set(kwargs.get("excluded_tools") or [])
         if personality_text:
+            from config import reverse_agent_name_replacements
+            personality_text = reverse_agent_name_replacements(personality_text)
             pf = self._personality_file(name)
             pf.write_text(personality_text, encoding="utf-8-sig")
             kwargs["personality_file"] = str(pf)
@@ -378,7 +380,8 @@ class AgentRegistry:
                 get_config_service().set("ui.main_wallpaper", data["wallpaper"])
             personality_text = data.pop("personality_text", None)
             if personality_text is not None:
-                from config import WORKSPACE_DIR
+                from config import reverse_agent_name_replacements, WORKSPACE_DIR
+                personality_text = reverse_agent_name_replacements(personality_text)
                 soul_path = WORKSPACE_DIR / "SOUL.md"
                 soul_path.write_text(personality_text, encoding="utf-8-sig")
             # voice_ref 更新
@@ -419,6 +422,8 @@ class AgentRegistry:
             except Exception:
                 logger.debug("registry.model_reload_error", exc_info=True)
         if personality_text is not None:
+            from config import reverse_agent_name_replacements
+            personality_text = reverse_agent_name_replacements(personality_text)
             pf = Path(agent.config.personality_file) if agent.config.personality_file \
                 else self._personality_file(name)
             pf.write_text(personality_text, encoding="utf-8-sig")
@@ -549,21 +554,26 @@ class AgentRegistry:
     # ── 人格 ────────────────────────────────────────────
 
     def get_personality(self, name: str) -> str:
-        """获取指定 Agent 的人格文本内容。"""
+        """获取指定 Agent 的人格文本内容（已应用 display_name 替换）。"""
+        from config import apply_agent_name_replacements
         if name == "nahida":
             from config import WORKSPACE_DIR
             soul_path = WORKSPACE_DIR / "SOUL.md"
             if soul_path.exists():
-                return soul_path.read_text(encoding="utf-8-sig")
+                raw = soul_path.read_text(encoding="utf-8-sig")
+                return apply_agent_name_replacements(raw)
             return ""
         agent = self._require(name)
         pf = agent.config.personality_file
         if pf and Path(pf).exists():
-            return Path(pf).read_text(encoding="utf-8-sig")
+            raw = Path(pf).read_text(encoding="utf-8-sig")
+            return apply_agent_name_replacements(raw)
         return ""
 
     async def set_personality(self, name: str, text: str) -> None:
-        """设置 Agent 的人格文本，写入文件并重新初始化。"""
+        """设置 Agent 的人格文本，写入文件并重新初始化。保存时还原 display_name 为原名。"""
+        from config import reverse_agent_name_replacements
+        text = reverse_agent_name_replacements(text)
         if name == "nahida":
             from config import WORKSPACE_DIR
             soul_path = WORKSPACE_DIR / "SOUL.md"

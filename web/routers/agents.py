@@ -145,7 +145,8 @@ async def set_personality(name: str, body: dict, request: Request, _user: str = 
     text = body.get("personality", "")
     # 主体 nahida 特殊处理：人格写入 SOUL.md，build_system_prompt 按 mtime 自动失效缓存
     if name == "nahida":
-        from config import WORKSPACE_DIR
+        from config import reverse_agent_name_replacements, WORKSPACE_DIR
+        text = reverse_agent_name_replacements(text)
         soul_path = WORKSPACE_DIR / "SOUL.md"
         soul_path.write_text(text, encoding="utf-8-sig")
         await _audit(request, "personality", name)

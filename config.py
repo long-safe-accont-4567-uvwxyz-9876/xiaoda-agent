@@ -432,6 +432,20 @@ def apply_agent_name_replacements(content: str) -> str:
     return content
 
 
+def reverse_agent_name_replacements(content: str) -> str:
+    """将 display_name 还原为原名（用于编辑器保存时还原模板）。
+
+    与 apply_agent_name_replacements 互为逆操作。
+    """
+    for original_name, agent_key in sorted(
+        _ORIGINAL_NAMES.items(), key=lambda x: -len(x[0])
+    ):
+        dn = get_agent_display_name(agent_key)
+        if dn and dn != original_name:
+            content = content.replace(dn, original_name)
+    return content
+
+
 # ── ASR 语音识别配置 ──
 ASR_API_KEY = get_secret("ASR_API_KEY", "") or get_secret("SILICONFLOW_API_KEY", "")
 ASR_BASE_URL = os.getenv("ASR_BASE_URL", "https://api.siliconflow.cn/v1")
