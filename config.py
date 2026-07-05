@@ -352,6 +352,14 @@ _display_name_cache: dict[str, tuple[float, str]] = {}  # {name: (mtime, display
 _display_name_en_cache: dict[str, tuple[float, str]] = {}
 
 
+def agent_names() -> list[str]:
+    """返回所有 agent key（通过扫描 config/agents/ 目录）。"""
+    return [
+        fp.stem for fp in AGENTS_CONFIG_DIR.glob("*.json")
+        if fp.stem and not fp.stem.startswith("_")
+    ]
+
+
 def get_agent_display_name(name: str) -> str:
     """读取 agent 的 display_name（从 config/agents/{name}.json）。
 
@@ -426,25 +434,34 @@ _ORIGINAL_EN_NAMES: dict[str, str] = {
 
 
 def apply_agent_name_replacements(content: str) -> str:
-    """将人格文件中所有 agent 原名替换为 config 中的 display_name。
+    """将人格文件中所有 agent 原名替换为 config 中的显示名。
 
-    同时替换中文原名和英文原名。
+    优先使用 display_name_en（英文），因为 Linux 终端不支持中文。
+    同时替换中文原名、英文原名、agent key。
     按原名长度降序替换，避免短名破坏长名。
     """
+    def _best(agent_key: str) -> str:
+        return get_agent_display_name_en(agent_key) or get_agent_display_name(agent_key) or agent_key
+
     # 替换中文原名
     for original_name, agent_key in sorted(
         _ORIGINAL_NAMES.items(), key=lambda x: -len(x[0])
     ):
-        dn = get_agent_display_name(agent_key)
+        dn = _best(agent_key)
         if dn and dn != original_name:
             content = content.replace(original_name, dn)
     # 替换英文原名
     for original_en, agent_key in sorted(
         _ORIGINAL_EN_NAMES.items(), key=lambda x: -len(x[0])
     ):
-        den = get_agent_display_name_en(agent_key)
-        if den and den != original_en:
-            content = content.replace(original_en, den)
+        dn = _best(agent_key)
+        if dn and dn != original_en:
+            content = content.replace(original_en, dn)
+    # 替换 agent key（如 nahida → Xiaoda）
+    for agent_key in agent_names():
+        dn = _best(agent_key)
+        if dn and dn != agent_key:
+            content = content.replace(agent_key, dn)
     return content
 
 
@@ -452,22 +469,30 @@ def reverse_agent_name_replacements(content: str) -> str:
     """将 display_name 还原为原名（用于编辑器保存时还原模板）。
 
     与 apply_agent_name_replacements 互为逆操作。
-    同时还原中文和英文 display_name。
+    同时还原中文显示名、英文显示名、agent key。
     """
+    def _best(agent_key: str) -> str:
+        return get_agent_display_name_en(agent_key) or get_agent_display_name(agent_key) or agent_key
+
+    # 还原 agent key（必须先还原，因为显示名可能包含 agent key）
+    for agent_key in agent_names():
+        dn = _best(agent_key)
+        if dn and dn != agent_key:
+            content = content.replace(dn, agent_key)
     # 还原中文 display_name → 原名
     for original_name, agent_key in sorted(
         _ORIGINAL_NAMES.items(), key=lambda x: -len(x[0])
     ):
-        dn = get_agent_display_name(agent_key)
+        dn = _best(agent_key)
         if dn and dn != original_name:
             content = content.replace(dn, original_name)
     # 还原英文 display_name → 原名
     for original_en, agent_key in sorted(
         _ORIGINAL_EN_NAMES.items(), key=lambda x: -len(x[0])
     ):
-        den = get_agent_display_name_en(agent_key)
-        if den and den != original_en:
-            content = content.replace(den, original_en)
+        dn = _best(agent_key)
+        if dn and dn != original_en:
+            content = content.replace(dn, original_en)
     return content
 
 
@@ -770,6 +795,7 @@ __all__ = [
     "MEMORY_STATE_DIR",
     "PLUGINS_CONFIG_DIR",
     "AGENTS_CONFIG_DIR",
+    "agent_names",
     "get_agent_display_name",
     "get_agent_display_name_en",
     "build_system_prompt",

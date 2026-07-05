@@ -161,20 +161,45 @@ async def set_personality(name: str, body: dict, request: Request, _user: str = 
 
 @router.get("/agent-names", response_model=Envelope[dict])
 async def get_agent_names(_user: str = Depends(get_current_user)) -> Any:
-    """返回 agent 原名→显示名 映射表，供前端全局替换。"""
+    """返回 agent 原名→显示名 映射表，供前端全局替换。
+
+    覆盖三类名称：中文原名、英文原名、agent key。
+    显示名优先用英文 (display_name_en)，没有则用中文 (display_name)。
+    """
     from config import (
         _ORIGINAL_NAMES, _ORIGINAL_EN_NAMES,
         get_agent_display_name, get_agent_display_name_en,
+        agent_names,
     )
-    mapping: dict[str, str] = {}
-    for original_name, agent_key in _ORIGINAL_NAMES.items():
-        dn = get_agent_display_name(agent_key)
-        if dn and dn != original_name:
-            mapping[original_name] = dn
-    for original_en, agent_key in _ORIGINAL_EN_NAMES.items():
+
+    def _best_display(agent_key: str) -> str | None:
+        """优先返回 display_name_en，没有则返回 display_name。"""
         den = get_agent_display_name_en(agent_key)
-        if den and den != original_en:
-            mapping[original_en] = den
+        if den:
+            return den
+        dn = get_agent_display_name(agent_key)
+        return dn if dn else None
+
+    mapping: dict[str, str] = {}
+
+    # 中文原名 → 显示名
+    for original_name, agent_key in _ORIGINAL_NAMES.items():
+        best = _best_display(agent_key)
+        if best and best != original_name:
+            mapping[original_name] = best
+
+    # 英文原名 → 显示名
+    for original_en, agent_key in _ORIGINAL_EN_NAMES.items():
+        best = _best_display(agent_key)
+        if best and best != original_en:
+            mapping[original_en] = best
+
+    # agent key → 显示名（如 nahida → Xiaoda）
+    for agent_key in agent_names():
+        best = _best_display(agent_key)
+        if best and best != agent_key:
+            mapping[agent_key] = best
+
     return Envelope(data={"mapping": mapping})
 
 
