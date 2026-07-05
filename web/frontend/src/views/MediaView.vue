@@ -9,6 +9,7 @@ import { getWsClient } from '../api/ws'
 import { useUiStore } from '../stores/ui'
 import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import { replaceAgentNames } from '../utils/agentNames'
 
 const message = useMessage()
 const ui = useUiStore()
@@ -266,9 +267,9 @@ const statusType: Record<string, any> = {
           <div v-if="currentAgent" class="voice-agent-block">
             <div class="voice-agent-header">
               <span class="voice-agent-name">{{ currentAgent.display_name }}</span>
-              <n-tag size="tiny" :bordered="false">{{ currentAgent.name }}</n-tag>
+              <n-tag size="tiny" :bordered="false">{{ replaceAgentNames(currentAgent.name) }}</n-tag>
               <span class="voice-agent-current">
-                {{ currentAgent.voice_ref ? currentAgent.voice_ref.split('/').pop() : t('mediaView.noVoice') }}
+                {{ replaceAgentNames(currentAgent.voice_ref ? currentAgent.voice_ref.split('/').pop() : t('mediaView.noVoice')) }}
               </span>
             </div>
             <div class="voice-agent-body">
@@ -281,14 +282,14 @@ const statusType: Record<string, any> = {
               </div>
               <div class="voice-select-row">
                 <n-select :value="currentAgent.voice_ref"
-                          :options="currentVoices.map(v => ({ label: v.name, value: v.voice_ref }))"
+                          :options="currentVoices.map(v => ({ label: replaceAgentNames(v.name), value: v.voice_ref }))"
                           :placeholder="t('mediaView.noVoice')" size="small" clearable
                           style="max-width: 240px"
                           @update:value="(v: any) => setAgentVoice(v)" />
               </div>
               <div class="voice-list">
                 <div v-for="v in currentVoices" :key="v.voice_ref" class="voice-item">
-                  <span class="voice-name" :class="{ active: currentAgent.voice_ref === v.voice_ref }">{{ v.name }}</span>
+                  <span class="voice-name" :class="{ active: currentAgent.voice_ref === v.voice_ref }">{{ replaceAgentNames(v.name) }}</span>
                   <n-popconfirm @positive-click="deleteVoice(v.name)">
                     <template #trigger>
                       <n-button size="tiny" type="error" quaternary>🗑</n-button>

@@ -5,6 +5,7 @@ import App from './App.vue'
 import { routes } from './routes'
 import { useAuthStore } from './stores/auth'
 import i18n from './i18n'
+import { loadAgentNames } from './utils/agentNames'
 
 const pinia = createPinia()
 const router = createRouter({
@@ -47,3 +48,6 @@ app.use(pinia)
 app.use(router)
 app.use(i18n)
 app.mount('#app')
+
+// 非阻塞加载 agent 名称映射表（全局替换用）
+loadAgentNames()

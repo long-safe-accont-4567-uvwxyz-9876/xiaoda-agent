@@ -159,6 +159,25 @@ async def set_personality(name: str, body: dict, request: Request, _user: str = 
     return Envelope(data={"name": name, "saved": True})
 
 
+@router.get("/agent-names", response_model=Envelope[dict])
+async def get_agent_names(_user: str = Depends(get_current_user)) -> Any:
+    """返回 agent 原名→显示名 映射表，供前端全局替换。"""
+    from config import (
+        _ORIGINAL_NAMES, _ORIGINAL_EN_NAMES,
+        get_agent_display_name, get_agent_display_name_en,
+    )
+    mapping: dict[str, str] = {}
+    for original_name, agent_key in _ORIGINAL_NAMES.items():
+        dn = get_agent_display_name(agent_key)
+        if dn and dn != original_name:
+            mapping[original_name] = dn
+    for original_en, agent_key in _ORIGINAL_EN_NAMES.items():
+        den = get_agent_display_name_en(agent_key)
+        if den and den != original_en:
+            mapping[original_en] = den
+    return Envelope(data={"mapping": mapping})
+
+
 # 壁纸目录使用用户数据目录，避免写入 _MEIPASS 只读目录
 try:
     from config import MEDIA_DIR
