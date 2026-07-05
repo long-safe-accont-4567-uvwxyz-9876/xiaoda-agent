@@ -219,16 +219,9 @@ jobs:
         shell: bash
         run: |
           # PyInstaller 的 datas 可能未正确打包 assets，手动复制确保资源存在
-          mkdir -p dist/xiaoda-agent/assets/voice_refs
-          mkdir -p dist/xiaoda-agent/assets/stickers
-          cp assets/voice_refs/* dist/xiaoda-agent/assets/voice_refs/
-          cp -r assets/stickers/* dist/xiaoda-agent/assets/stickers/
+          # 只复制图标文件（语音和表情包已从安装包中移除）
           cp assets/xiaoda-icon.* dist/xiaoda-agent/assets/ 2>/dev/null || true
-          # 验证关键文件
-          test -f dist/xiaoda-agent/assets/voice_refs/xiaoli.mp3
-          test -f dist/xiaoda-agent/assets/voice_refs/xiaoda.wav
-          test -f dist/xiaoda-agent/assets/voice_refs/xiaoda_hq.wav
-          echo "Assets bundled OK: $(find dist/xiaoda-agent/assets -type f | wc -l) files"
+          echo "Assets bundled OK: $(find dist/xiaoda-agent/assets -type f 2>/dev/null | wc -l) files"
 
       - name: Verify assets in build output
         shell: bash
@@ -238,17 +231,10 @@ jobs:
           ASSETS_COUNT=$(find dist/xiaoda-agent/assets/ -type f 2>/dev/null | wc -l)
           echo "Files in dist assets: $ASSETS_COUNT"
           du -sh dist/xiaoda-agent/assets/ 2>/dev/null || echo "dist/xiaoda-agent/assets/ not found"
-          du -sh dist/xiaoda-agent/assets/stickers/ 2>/dev/null || echo "stickers dir not found"
-          du -sh dist/xiaoda-agent/assets/voice_refs/ 2>/dev/null || echo "voice_refs dir not found"
           echo "=== Sample files in dist ==="
           find dist/xiaoda-agent/assets/ -type f 2>/dev/null | head -10
-          echo "=== Total bytes in dist assets ==="
-          find dist/xiaoda-agent/assets/ -type f -exec stat --format='%s' {} + 2>/dev/null | awk '{s+=$1} END {print s+0}'
           echo "=== dist/xiaoda-agent/ top-level dirs ==="
           ls -la dist/xiaoda-agent/ 2>/dev/null | head -30
-          if [ "$ASSETS_COUNT" -lt 50 ]; then
-            echo "WARNING: Expected 50+ files in dist assets, got $ASSETS_COUNT"
-          fi
 
       - name: Strip secrets from build output
         shell: bash
