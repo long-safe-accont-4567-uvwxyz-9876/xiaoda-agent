@@ -10,6 +10,7 @@ import { useAgentsStore } from '../stores/agents'
 import { getWsClient } from '../api/ws'
 import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import { replaceAgentNames } from '../utils/agentNames'
 
 const message = useMessage()
 const agentsStore = useAgentsStore()
@@ -51,10 +52,22 @@ const voiceOptions = computed(() => {
   const agentName = editing.value?.name
   if (agentName && voiceGroups.value[agentName]) {
     voiceGroups.value[agentName].forEach(v => {
-      opts.push({ label: v.name, value: v.voice_ref })
+      opts.push({ label: replaceAgentNames(v.name), value: v.voice_ref })
     })
   }
   return opts
+})
+
+/** 当前 voice_ref 的显示名（用于在 n-select 旁显示替换后的名称） */
+const voiceRefDisplayName = computed(() => {
+  const vr = editing.value?.voice_ref
+  if (!vr) return ''
+  const agentName = editing.value?.name
+  if (agentName && voiceGroups.value[agentName]) {
+    const found = voiceGroups.value[agentName].find(v => v.voice_ref === vr)
+    if (found) return replaceAgentNames(found.name)
+  }
+  return replaceAgentNames(vr)
 })
 
 const createObjectURL = (f: File) => URL.createObjectURL(f)
@@ -532,6 +545,9 @@ async function uploadVoiceForAgent() {
               <div class="voice-ref-field">
                 <n-select v-model:value="editing.voice_ref" :options="voiceOptions"
                           :placeholder="t('agentsView.voiceRefPh')" style="flex: 1" />
+                <n-tag v-if="voiceRefDisplayName" size="small" :bordered="false" type="info" style="margin-left: 6px">
+                  {{ voiceRefDisplayName }}
+                </n-tag>
                 <input ref="voiceInputEl" type="file" accept="audio/mpeg,audio/wav"
                        style="display: none" @change="onVoiceFilePick" />
                 <n-button size="small" @click="voiceInputEl?.click()" :loading="voiceUploading">
