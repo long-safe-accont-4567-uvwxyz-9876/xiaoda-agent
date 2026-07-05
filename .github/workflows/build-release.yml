@@ -225,16 +225,26 @@ jobs:
 
       - name: Verify assets in build output
         shell: bash
-        continue-on-error: true
         run: |
-          echo "=== dist/xiaoda-agent/assets/ file count and total size ==="
-          ASSETS_COUNT=$(find dist/xiaoda-agent/assets/ -type f 2>/dev/null | wc -l)
-          echo "Files in dist assets: $ASSETS_COUNT"
-          du -sh dist/xiaoda-agent/assets/ 2>/dev/null || echo "dist/xiaoda-agent/assets/ not found"
-          echo "=== Sample files in dist ==="
-          find dist/xiaoda-agent/assets/ -type f 2>/dev/null | head -10
-          echo "=== dist/xiaoda-agent/ top-level dirs ==="
-          ls -la dist/xiaoda-agent/ 2>/dev/null | head -30
+          echo "=== dist/xiaoda-agent/ top-level ==="
+          ls -la dist/xiaoda-agent/ 2>/dev/null | head -20 || { echo "ERROR: dist/xiaoda-agent/ not found"; exit 1; }
+          echo ""
+          echo "=== dist/xiaoda-agent/assets/ (icon etc.) ==="
+          if [ -d dist/xiaoda-agent/assets ]; then
+            find dist/xiaoda-agent/assets/ -type f 2>/dev/null | head -10
+          else
+            echo "No dist/xiaoda-agent/assets/ directory"
+          fi
+          echo ""
+          echo "=== dist/xiaoda-agent/web/dist/assets/ (wallpapers etc.) ==="
+          if [ -d dist/xiaoda-agent/web/dist/assets ]; then
+            WEB_ASSETS_COUNT=$(find dist/xiaoda-agent/web/dist/assets/ -type f 2>/dev/null | wc -l)
+            echo "Frontend assets: $WEB_ASSETS_COUNT files"
+            find dist/xiaoda-agent/web/dist/assets/ -type f 2>/dev/null | head -15
+          else
+            echo "ERROR: No frontend assets found in dist/xiaoda-agent/web/dist/assets/"
+            exit 1
+          fi
 
       - name: Strip secrets from build output
         shell: bash
