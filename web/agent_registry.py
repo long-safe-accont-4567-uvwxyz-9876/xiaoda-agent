@@ -17,7 +17,33 @@ from pathlib import Path
 from loguru import logger
 
 # frozen 模式下使用用户目录（~/.ai-agent/data/config/agents/），避免写入 _MEIPASS 只读目录
-from config import AGENTS_CONFIG_DIR, DEFAULT_PROVIDER
+from config import AGENTS_CONFIG_DIR, DEFAULT_PROVIDER, _FALLBACK_BASE
+
+
+def _resolve_personality_path(pf: str) -> str | None:
+    """将 personality_file 相对路径解析为绝对路径。
+
+    personality_file 路径（如 "config/agents/xiaoli_personality.md"）相对于项目源码根目录。
+    - dev 模式: _FALLBACK_BASE = 项目根目录
+    - frozen 模式: 先找 _MEIPASS（打包内），再找 _FALLBACK_BASE（用户目录）
+    - 最终 fallback: 在 AGENTS_DIR 下查找
+    """
+    candidates = []
+    # 1. 项目源码根目录（dev 模式下的正确位置）
+    candidates.append(_FALLBACK_BASE / pf)
+    # 2. PyInstaller 打包目录（frozen 模式）
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        candidates.append(Path(meipass) / pf)
+    # 3. 用户数据目录（之前可能保存过的位置）
+    candidates.append(AGENTS_DIR / pf)
+    # 4. 用户数据目录 + 文件名（fallback：只取文件名部分）
+    candidates.append(AGENTS_DIR / Path(pf).name)
+
+    for c in candidates:
+        if c.exists():
+            return str(c)
+    return None
 import config as _config
 AGENTS_DIR = AGENTS_CONFIG_DIR
 BUILTIN_AGENTS = {"xiaoli", "xiaolang", "xiaolian", "xiaoke"}
@@ -159,9 +185,9 @@ class AgentRegistry:
                     kwargs["excluded_tools"] = set(kwargs.get("excluded_tools") or [])
                     # 修正 personality_file 相对路径
                     pf = kwargs.get("personality_file")
-                    if pf and not Path(pf).is_absolute():
-                        abs_pf = str(AGENTS_DIR / pf)
-                        if Path(abs_pf).exists():
+                    if pf:
+                        abs_pf = _resolve_personality_path(pf)
+                        if abs_pf:
                             kwargs["personality_file"] = abs_pf
                     cfg = SubAgentConfig(**kwargs)
                     await self.core.dispatcher.register(cfg)
@@ -184,8 +210,8 @@ class AgentRegistry:
         # 修正 personality_file 相对路径 → 绝对路径
         pf = getattr(cfg, "personality_file", None)
         if pf and not Path(pf).is_absolute():
-            abs_pf = str(AGENTS_DIR / pf)
-            if Path(abs_pf).exists():
+            abs_pf = _resolve_personality_path(pf)
+            if abs_pf:
                 cfg.personality_file = abs_pf
 
     # ── 查询 ────────────────────────────────────────────
@@ -431,8 +457,11 @@ class AgentRegistry:
         if personality_text is not None:
             from config import reverse_agent_name_replacements
             personality_text = reverse_agent_name_replacements(personality_text)
-            pf = Path(agent.config.personality_file) if agent.config.personality_file \
-                else self._personality_file(name)
+            # 解析人格文件路径：优先用已有路径，否则创建新路径
+            existing_pf = _resolve_personality_path(agent.config.personality_file) \
+                if agent.config.personality_file else None
+            pf = Path(existing_pf) if existing_pf else self._personality_file(name)
+            pf.parent.mkdir(parents=True, exist_ok=True)
             pf.write_text(personality_text, encoding="utf-8-sig")
             agent.config.personality_file = str(pf)
             await agent.init()  # 重载人格
@@ -571,8 +600,9 @@ class AgentRegistry:
                 return apply_agent_name_replacements(raw)
             return ""
         agent = self._require(name)
-        pf = agent.config.personality_file
-        if pf and Path(pf).exists():
+        pf = _resolve_personality_path(agent.config.personality_file) \
+            if agent.config.personality_file else None
+        if pf:
             raw = Path(pf).read_text(encoding="utf-8-sig")
             return apply_agent_name_replacements(raw)
         return ""
@@ -587,8 +617,10 @@ class AgentRegistry:
             soul_path.write_text(text, encoding="utf-8")
             return
         agent = self._require(name)
-        pf = Path(agent.config.personality_file) if agent.config.personality_file \
-            else self._personality_file(name)
+        existing_pf = _resolve_personality_path(agent.config.personality_file) \
+            if agent.config.personality_file else None
+        pf = Path(existing_pf) if existing_pf else self._personality_file(name)
+        pf.parent.mkdir(parents=True, exist_ok=True)
         pf.write_text(text, encoding="utf-8")
         agent.config.personality_file = str(pf)
         await agent.init()

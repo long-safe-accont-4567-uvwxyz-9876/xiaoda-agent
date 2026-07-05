@@ -6,6 +6,7 @@ import { useChatStore } from '../stores/chat'
 import { useUiStore } from '../stores/ui'
 import { api, exportSessionUrl } from '../api'
 import { renderMarkdown } from '../utils/markdown'
+import { replaceAgentNames } from '../utils/agentNames'
 import ToolCallCard from '../components/chat/ToolCallCard.vue'
 import ChatTerminal from '../components/chat/ChatTerminal.vue'
 import SlashPalette from '../components/chat/SlashPalette.vue'
@@ -243,9 +244,9 @@ const emotionColors: Record<string, string> = {
             <ToolCallCard v-for="(tc, i) in msg.toolCalls" :key="i" :call="tc" />
           </div>
 
-          <div v-if="msg.role === 'assistant' && msg.streaming" class="message-content md_body streaming-text">{{ msg.content }}</div>
+          <div v-if="msg.role === 'assistant' && msg.streaming" class="message-content md_body streaming-text">{{ replaceAgentNames(msg.content) }}</div>
           <div v-else-if="msg.role === 'assistant'" class="message-content md_body"
-               v-html="renderMarkdown(msg.content)"></div>
+               v-html="renderMarkdown(replaceAgentNames(msg.content))"></div>
           <div v-else class="message-content plain">
             {{ msg.content }}
             <img v-if="msg.imageUrl" :src="msg.imageUrl" class="user-upload-img"

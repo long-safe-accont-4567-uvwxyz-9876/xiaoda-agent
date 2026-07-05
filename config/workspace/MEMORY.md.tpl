@@ -10,7 +10,7 @@
 
 ## 重要事件
 
-（纳西妲会在这里记录{address_term}确认过的重要信息和结论）
+（{agent_name}会在这里记录{address_term}确认过的重要信息和结论）
 
 ## {address_term}的技术偏好
 

@@ -264,7 +264,7 @@ async function openEditor(agent: any | null) {
 async function save() {
   saving.value = true
   try {
-    const body = { ...editing.value, personality_text: personality.value || undefined }
+    const body = { ...editing.value, personality_text: personality.value }
     delete body.tool_count
     // 仅当用户手动编辑过高级配置时才下发 base_url / api_key_env，
     // 否则保留后端通过 /agents/{name}/model 自动解析的值
