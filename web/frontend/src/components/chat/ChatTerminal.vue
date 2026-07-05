@@ -34,9 +34,7 @@ const isWindows = computed(() => serverOs.value === 'windows')
 const terminalTitle = computed(() => {
   const mainAgent = agentsStore.agents.find(a => a.is_main)
   const lang = getLang()
-  const name = lang === 'en'
-    ? (mainAgent?.display_name_en || mainAgent?.display_name || 'Nahida')
-    : (mainAgent?.display_name || '纳西妲')
+  const name = mainAgent?.display_name || '纳西妲'
   const fn = t('chatTerminal.title')
   return typeof fn === 'function' ? fn(name) : String(fn)
 })

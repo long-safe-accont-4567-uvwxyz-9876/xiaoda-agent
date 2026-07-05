@@ -5,14 +5,18 @@ import { useAgentsStore } from '../../stores/agents'
 import { getWsClient } from '../../api/ws'
 import EmotionAvatar from '../chat/EmotionAvatar.vue'
 import { t } from '../../i18n'
+import { refreshAgentNames } from '../../utils/agentNames'
 
 const chat = useChatStore()
 const agentsStore = useAgentsStore()
 const ws = getWsClient()
 
 function onConfigChanged(e: any) {
-  // display_name 等变更 → 全局联动刷新 Agent 列表
-  if (e.domain === 'agents') agentsStore.load().catch(() => {})
+  // display_name 等变更 → 全局联动刷新 Agent 列表 + 名称映射
+  if (e.domain === 'agents') {
+    agentsStore.load().catch(() => {})
+    refreshAgentNames()
+  }
 }
 
 onMounted(() => {

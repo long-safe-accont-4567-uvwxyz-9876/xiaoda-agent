@@ -43,8 +43,8 @@ DEFAULT_WALLPAPERS = {
 # 主体纳西妲不是 SubAgent，但要出现在 Agent 列表里供切换
 MAIN_AGENT_META = {
     "name": "nahida",
-    "display_name": "纳西妲",
-    "display_name_en": "Nahida",
+    "display_name": "小妲",
+    "display_name_en": "Xiao Da",
     "builtin": True,
     "is_main": True,
     "enabled": True,

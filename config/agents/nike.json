@@ -4,7 +4,7 @@
   "display_name_en": "Xiaoke",
   "provider": "agnes",
   "model": "agnes-2.0-flash",
-  "personality_file": "nike_personality.md",
+  "personality_file": "/home/orangepi/ai-agent/config/agents/nike_personality.md",
   "voice_ref": null,
   "excluded_tools": [
     "call_klee",
@@ -63,7 +63,10 @@
     "academic"
   ],
   "route_description": "研究分析、学术思考、深度解读",
-  "mcp_servers": [],
+  "mcp_servers": [
+    "git",
+    "github"
+  ],
   "max_spawn_depth": 1,
   "max_turns": null,
   "effort": null,
@@ -80,5 +83,5 @@
     "security/*",
     "config/agents/*_personality.md"
   ],
-  "_saved_at": 1782768396.38687
+  "_saved_at": 1783243012.5222273
 }

@@ -53,7 +53,7 @@ onMounted(async () => {
     console.error('[SetupWizard] getSetupKeys failed:', e)
     // Fallback: 显示硬编码的 key 列表，确保页面不会空白
     keys.value = [
-      { key: 'MIMO_API_KEY', label: t('setupWizard.fallback.MIMO_API_KEY.label'), desc: t('setupWizard.fallback.MIMO_API_KEY.desc'), url: 'https://platform.xiaomimimo.com?ref=SU5WDZ', url_desc: t('setupWizard.fallback.MIMO_API_KEY.url_desc'), required: true, configured: false, masked_value: '', raw_value: '' },
+      { key: 'MIMO_API_KEY', label: t('setupWizard.fallback.MIMO_API_KEY.label'), desc: t('setupWizard.fallback.MIMO_API_KEY.desc'), url: 'https://platform.xiaomimimo.com/', url_desc: t('setupWizard.fallback.MIMO_API_KEY.url_desc'), required: true, configured: false, masked_value: '', raw_value: '' },
       { key: 'QQBOT_APP_ID', label: t('setupWizard.fallback.QQBOT_APP_ID.label'), desc: t('setupWizard.fallback.QQBOT_APP_ID.desc'), url: 'https://q.qq.com', url_desc: t('setupWizard.fallback.QQBOT_APP_ID.url_desc'), required: true, configured: false, masked_value: '', raw_value: '' },
       { key: 'QQBOT_APP_SECRET', label: t('setupWizard.fallback.QQBOT_APP_SECRET.label'), desc: t('setupWizard.fallback.QQBOT_APP_SECRET.desc'), url: 'https://q.qq.com', url_desc: t('setupWizard.fallback.QQBOT_APP_SECRET.url_desc'), required: true, configured: false, masked_value: '', raw_value: '' },
       { key: 'EMBED_API_KEY', label: t('setupWizard.fallback.EMBED_API_KEY.label'), desc: t('setupWizard.fallback.EMBED_API_KEY.desc'), url: 'https://cloud.siliconflow.cn/i/iM5RmeWc', url_desc: t('setupWizard.fallback.EMBED_API_KEY.url_desc'), required: true, configured: false, masked_value: '', raw_value: '' },

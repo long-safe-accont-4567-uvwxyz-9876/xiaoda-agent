@@ -158,6 +158,25 @@ class SubAgent:
         if api_key and self.config.base_url:
             self._client = AsyncOpenAI(api_key=api_key, base_url=self.config.base_url)
 
+        self._load_personality()
+
+        self._initialized = self._client is not None
+        if self._initialized:
+            # 探活已禁用：max_tokens=1 在某些 API 上会被拒绝，
+            # 而 4 个子 Agent 串行探活会消耗配额/触发限流。
+            # 实际调用时如果 Key 无效会自然报错，无需提前探活。
+            logger.info("sub_agent.initialized", name=self.config.name,
+                        provider=self.config.provider, model=self.config.model)
+        else:
+            # 客户端创建失败（API Key 未找到或 base_url 缺失），
+            # 标记为降级模式：仍注册但实际调用时回退到主 Agent
+            self._degraded = True
+            logger.warning("sub_agent.degraded_no_client", name=self.config.name,
+                           reason="api_key_missing" if not _read_env_key(self.config.api_key_env) else "no_base_url")
+
+    def _load_personality(self) -> None:
+        """加载人格文件并应用全局名称替换。"""
+        self._personality = ""
         if self.config.personality_file:
             p = Path(self.config.personality_file)
             if p.exists():
@@ -181,19 +200,9 @@ class SubAgent:
             if hint:
                 self._personality = f"{self._personality}\n\n{hint}"
 
-        self._initialized = self._client is not None
-        if self._initialized:
-            # 探活已禁用：max_tokens=1 在某些 API 上会被拒绝，
-            # 且 4 个子 Agent 串行探活会消耗配额/触发限流。
-            # 实际调用时如果 Key 无效会自然报错，无需提前探活。
-            logger.info("sub_agent.initialized", name=self.config.name,
-                        provider=self.config.provider, model=self.config.model)
-        else:
-            # 客户端创建失败（API Key 未找到或 base_url 缺失），
-            # 标记为降级模式：仍注册但实际调用时回退到主 Agent
-            self._degraded = True
-            logger.warning("sub_agent.degraded_no_client", name=self.config.name,
-                           reason="api_key_missing" if not _read_env_key(self.config.api_key_env) else "no_base_url")
+    def reload_personality(self) -> None:
+        """重新加载人格文件（display_name 变更时调用）。"""
+        self._load_personality()
 
     def set_credential_pool(self, pool: CredentialPool) -> None:
         """设置凭证池（由父代理传递）"""
