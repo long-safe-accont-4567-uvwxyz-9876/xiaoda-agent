@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
 import {
   NButton, NSwitch, NModal, NForm, NFormItem, NInput, NInputNumber,
   NSelect, NTabs, NTabPane, NTag, NPopconfirm, NDynamicTags, NCollapse,
@@ -11,8 +11,17 @@ import { getWsClient } from '../api/ws'
 import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import { replaceAgentNames, refreshAgentNames } from '../utils/agentNames'
+import { pinyin } from 'pinyin-pro'
 
 const message = useMessage()
+
+// 中文转拼音（当编辑时使用）
+function translateToEn(zhName: string): string {
+  if (!zhName) return ''
+  const result = pinyin(zhName, { toneType: 'none', type: 'array' })
+  const joined = result.join('')
+  return joined.charAt(0).toUpperCase() + joined.slice(1).toLowerCase()
+}
 const agentsStore = useAgentsStore()
 const ws = getWsClient()
 
@@ -72,6 +81,13 @@ const voiceRefDisplayName = computed(() => {
 
 const createObjectURL = (f: File) => URL.createObjectURL(f)
 
+// 自动翻译显示名为英文（当显示名变化时）
+watch(() => editing.value?.display_name, (newName: string) => {
+  if (newName && editing.value) {
+    editing.value.display_name_en = translateToEn(newName)
+  }
+})
+
 function onConfigChanged(e: any) {
   const payload = e.payload as { type?: string } | undefined
   if (payload?.type === 'chat_model') {
@@ -81,9 +97,10 @@ function onConfigChanged(e: any) {
   if (e.domain === 'models') {
     loadDiscoveredModels()
   }
-  // Agent 模型变更 → 刷新 Agent 卡片（含子 Agent 模型标签）
+  // Agent 模型变更 → 刷新 Agent 卡片（含子 Agent 模型标签）+ 全局名称映射
   if (e.domain === 'agents') {
     agentsStore.load()
+    refreshAgentNames()  // 刷新全局名称映射
   }
 }
 
@@ -457,7 +474,7 @@ async function uploadVoiceForAgent() {
             </span>
             <div class="agent-names">
               <span class="agent-display">{{ a.display_name }}</span>
-              <span class="agent-id">{{ a.display_name_en || a.name }}</span>
+              <span class="agent-id">{{ a.display_name_en }}</span>
             </div>
             <n-switch v-if="!a.is_main" size="small" :value="a.enabled"
                       @click.stop @update:value="(v: boolean) => toggleEnabled(a, v)" />
@@ -498,6 +515,9 @@ async function uploadVoiceForAgent() {
             </n-form-item>
             <n-form-item :label="t('agentsView.displayName')">
               <n-input v-model:value="editing.display_name" :placeholder="t('agentsView.displayNamePh')" />
+            </n-form-item>
+            <n-form-item label="English Name" v-if="!isMain">
+              <n-input :value="editing.display_name_en" disabled placeholder="Auto-translated" />
             </n-form-item>
             <n-form-item :label="t('agentsView.model')" v-if="!isMain">
               <n-select v-model:value="selectedModel" :options="modelOptions"
@@ -545,10 +565,8 @@ async function uploadVoiceForAgent() {
             <n-form-item label="voice_ref">
               <div class="voice-ref-field">
                 <n-select v-model:value="editing.voice_ref" :options="voiceOptions"
+                          :render-label="(opt: any) => replaceAgentNames(opt.label || opt.value || '')"
                           :placeholder="t('agentsView.voiceRefPh')" style="flex: 1" />
-                <n-tag v-if="voiceRefDisplayName" size="small" :bordered="false" type="info" style="margin-left: 6px">
-                  {{ voiceRefDisplayName }}
-                </n-tag>
                 <input ref="voiceInputEl" type="file" accept="audio/mpeg,audio/wav"
                        style="display: none" @change="onVoiceFilePick" />
                 <n-button size="small" @click="voiceInputEl?.click()" :loading="voiceUploading">

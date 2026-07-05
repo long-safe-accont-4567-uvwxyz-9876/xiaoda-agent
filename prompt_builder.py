@@ -67,6 +67,17 @@ _scene_prompt_cache: dict[tuple, str] = {}
 # 当前会话的场景签名 (用于 B 级场景保持排序连续性)
 _current_scene_sig: tuple = ()
 
+
+def clear_module_cache():
+    """清除模块缓存。
+
+    当 display_name 变更时调用，确保下次构建 prompt 时获取最新内容。
+    """
+    global _module_cache_mtimes
+    _module_cache.clear()
+    _module_cache_mtimes = None
+    _scene_prompt_cache.clear()
+
 # 极低质量闲聊粘性阈值: 仅作用于 B 级场景, 防止低质量闲聊触发重排
 # 设计原则:
 #   - 仅 B 级场景生效 (S/A 级不受影响, 保留时间认知不乱核心初衷)

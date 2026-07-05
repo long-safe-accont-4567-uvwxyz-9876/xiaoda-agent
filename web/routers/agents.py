@@ -61,6 +61,18 @@ async def update_agent(name: str, body: dict, request: Request, _user: str = Dep
     except ValueError as e:
         raise HTTPException(400, str(e))
     await _audit(request, "update", name)
+    # display_name 变更时清除缓存并重新加载所有人格文件
+    if "display_name" in body:
+        from config import clear_display_name_cache
+        clear_display_name_cache(name)
+        # 重新加载所有子 Agent 的人格文件（因为人格文件中可能引用了被修改的 agent）
+        try:
+            core = request.app.state.core
+            if core and hasattr(core, 'dispatcher'):
+                for agent_name, sub_agent in core.dispatcher._dispatchers.items():
+                    sub_agent.reload_personality()
+        except Exception as exc:
+            logger.debug("agents.reload_personality_failed: {}", exc, exc_info=True)
     # 通知所有标签页刷新（display_name 等变更需全局联动）
     try:
         from web.ws_hub import manager
@@ -164,19 +176,16 @@ async def get_agent_names(_user: str = Depends(get_current_user)) -> Any:
     """返回 agent 原名→显示名 映射表，供前端全局替换。
 
     覆盖三类名称：中文原名、英文原名、agent key。
-    显示名优先用英文 (display_name_en)，没有则用中文 (display_name)。
+    只使用中文显示名 (display_name)，不使用英文显示名。
     """
     from config import (
         _ORIGINAL_NAMES, _ORIGINAL_EN_NAMES,
-        get_agent_display_name, get_agent_display_name_en,
+        get_agent_display_name,
         agent_names,
     )
 
     def _best_display(agent_key: str) -> str | None:
-        """优先返回 display_name_en，没有则返回 display_name。"""
-        den = get_agent_display_name_en(agent_key)
-        if den:
-            return den
+        """返回 display_name。"""
         dn = get_agent_display_name(agent_key)
         return dn if dn else None
 
@@ -194,7 +203,7 @@ async def get_agent_names(_user: str = Depends(get_current_user)) -> Any:
         if best and best != original_en:
             mapping[original_en] = best
 
-    # agent key → 显示名（如 nahida → Xiaoda）
+    # agent key → 显示名（如 nahida → 纳西妲）
     for agent_key in agent_names():
         best = _best_display(agent_key)
         if best and best != agent_key:
