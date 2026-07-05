@@ -98,6 +98,18 @@ export const api = {
   tts: (text: string, voice?: string, style?: string) =>
     post<{ audio_url: string; cached: boolean }>('/media/tts', { text, voice, style }),
 
+  uploadVoiceRef: async (agent: string, formData: FormData) => {
+    const token = localStorage.getItem('token')
+    const res = await fetch(`${BASE}/media/tts/voices/${agent}`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: formData,
+    })
+    const body = await res.json()
+    if (!res.ok || !body.ok) throw new Error(body?.error?.message || 'Upload failed')
+    return body.data
+  },
+
   // Setup wizard APIs (no token required — first-run before login)
   getSetupFirstRun: () => {
     return fetch(`${BASE}/setup/first-run`).then(r => r.json()).then(b => b.data)

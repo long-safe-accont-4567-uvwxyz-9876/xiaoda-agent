@@ -1,16 +1,26 @@
 <script setup lang="ts">
-import { onMounted, computed } from 'vue'
+import { onMounted, onBeforeUnmount, computed } from 'vue'
 import { useChatStore } from '../../stores/chat'
 import { useAgentsStore } from '../../stores/agents'
+import { getWsClient } from '../../api/ws'
 import EmotionAvatar from '../chat/EmotionAvatar.vue'
 import { t } from '../../i18n'
 
 const chat = useChatStore()
 const agentsStore = useAgentsStore()
+const ws = getWsClient()
+
+function onConfigChanged(e: any) {
+  // display_name 等变更 → 全局联动刷新 Agent 列表
+  if (e.domain === 'agents') agentsStore.load().catch(() => {})
+}
 
 onMounted(() => {
   if (!agentsStore.agents.length) agentsStore.load().catch(() => {})
+  ws.on('config_changed', onConfigChanged)
 })
+
+onBeforeUnmount(() => ws.off('config_changed', onConfigChanged))
 
 const enabledAgents = computed(() =>
   agentsStore.agents.filter(a => a.enabled))

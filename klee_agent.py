@@ -12,6 +12,7 @@ from tool_engine.tool_repair import ToolCallRepair
 from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_dsml
 from emotion.tts_engine import TTSEngine
 from core.message import AgentMessage
+from config import get_agent_display_name
 
 
 def _get_providers() -> list[dict]:
@@ -194,9 +195,11 @@ class KleeAgent:
             if self._nahida_delegate:
                 logger.info("klee.calling_nahida", question=question[:50])
                 nahida_reply = await self._nahida_delegate(question)
-                result_text = f"[纳西妲姐姐的回答（可莉必须用自己的话转述给大哥哥，不要直接复制纳西妲姐姐的原话，要加上可莉自己的感觉和语气）]\n{nahida_reply}"
+                _nahida_dn = get_agent_display_name('nahida')
+                _keli_dn = get_agent_display_name('keli')
+                result_text = f"[{_nahida_dn}姐姐的回答（{_keli_dn}必须用自己的话转述给大哥哥，不要直接复制{_nahida_dn}姐姐的原话，要加上{_keli_dn}自己的感觉和语气）]\n{nahida_reply}"
             else:
-                result_text = "纳西妲姐姐现在不在...可莉自己想想办法吧！"
+                result_text = f"{get_agent_display_name('nahida')}姐姐现在不在...{get_agent_display_name('keli')}自己想想办法吧！"
         elif result.success:
             result_text = json.dumps(result.data, ensure_ascii=False) if not isinstance(result.data, str) else result.data
         else:

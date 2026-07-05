@@ -3,8 +3,8 @@
   "display_name": "可莉",
   "provider": "agnes",
   "model": "agnes-2.0-flash",
-  "personality_file": "klee_personality.md",
-  "voice_ref": "keli",
+  "personality_file": "/home/orangepi/ai-agent/config/agents/klee_personality.md",
+  "voice_ref": "keli/keli",
   "excluded_tools": [
     "call_klee",
     "document_reader",
@@ -84,5 +84,5 @@
     ".env.*",
     "config/agents/*_personality.md"
   ],
-  "_saved_at": 1782768349.565845
+  "_saved_at": 1783214835.6149304
 }

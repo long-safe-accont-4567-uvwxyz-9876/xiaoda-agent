@@ -49,6 +49,7 @@ MAIN_AGENT_META = {
     "enabled": True,
     "provider": DEFAULT_PROVIDER,
     "wallpaper": DEFAULT_WALLPAPERS["nahida"],
+    "voice_ref": None,
     "route_description": "主体，默认对话对象，可委托其他子代理",
 }
 
@@ -93,6 +94,31 @@ class AgentRegistry:
         self._file(cfg.name).write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # ── 纳西妲主体配置（excluded_tools / mcp_servers） ──
+
+    def _nahida_cfg_path(self) -> Path:
+        return AGENTS_DIR / "nahida.json"
+
+    def _load_nahida_cfg(self) -> dict:
+        fp = self._nahida_cfg_path()
+        if fp.exists():
+            try:
+                return json.loads(fp.read_text(encoding="utf-8"))
+            except Exception:
+                logger.warning("nahida.json 损坏，忽略")
+        return {}
+
+    def _save_nahida_cfg(self, data: dict) -> None:
+        data["_saved_at"] = time.time()
+        self._nahida_cfg_path().write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _save_nahida_field(self, key: str, value) -> None:
+        """保存 nahida 单个字段到 nahida.json。"""
+        cfg = self._load_nahida_cfg()
+        cfg[key] = value
+        self._save_nahida_cfg(cfg)
+
     async def load_persisted(self) -> None:
         """启动时调用：恢复自建 Agent 并应用对内置 Agent 的覆盖。"""
         from agent_dispatcher import SubAgentConfig
@@ -123,6 +149,12 @@ class AgentRegistry:
                 else:
                     kwargs = {f: data[f] for f in _CONFIG_FIELDS if f in data and data[f] is not None}
                     kwargs["excluded_tools"] = set(kwargs.get("excluded_tools") or [])
+                    # 修正 personality_file 相对路径
+                    pf = kwargs.get("personality_file")
+                    if pf and not Path(pf).is_absolute():
+                        abs_pf = str(AGENTS_DIR / pf)
+                        if Path(abs_pf).exists():
+                            kwargs["personality_file"] = abs_pf
                     cfg = SubAgentConfig(**kwargs)
                     await self.core.dispatcher.register(cfg)
                     logger.info("agent_registry.custom_loaded name={}", name)
@@ -141,6 +173,12 @@ class AgentRegistry:
             if f == "excluded_tools":
                 v = set(v)
             setattr(cfg, f, v)
+        # 修正 personality_file 相对路径 → 绝对路径
+        pf = getattr(cfg, "personality_file", None)
+        if pf and not Path(pf).is_absolute():
+            abs_pf = str(AGENTS_DIR / pf)
+            if Path(abs_pf).exists():
+                cfg.personality_file = abs_pf
 
     # ── 查询 ────────────────────────────────────────────
 
@@ -211,6 +249,13 @@ class AgentRegistry:
                     provider=_config.DEFAULT_PROVIDER,
                     tool_count=len(self._all_tool_names()),
                     mcp_servers=[])
+        # 加载 nahida 持久化的 voice_ref / display_name
+        nahida_cfg = self._load_nahida_cfg()
+        if "voice_ref" in nahida_cfg:
+            main["voice_ref"] = nahida_cfg["voice_ref"]
+        if nahida_cfg.get("display_name"):
+            main["display_name"] = nahida_cfg["display_name"]
+            MAIN_AGENT_META["display_name"] = nahida_cfg["display_name"]
         try:
             from web.config_service import get_config_service
             wp = get_config_service().get("ui.main_wallpaper")
@@ -316,7 +361,7 @@ class AgentRegistry:
 
     async def update(self, name: str, data: dict) -> dict:
         """更新 Agent 配置，必要时热重载模型客户端并持久化。"""
-        # 主体 nahida 特殊处理：不在 dispatcher 中，只更新壁纸/人格
+        # 主体 nahida 特殊处理：不在 dispatcher 中，只更新壁纸/人格/voice_ref/display_name
         if name == "nahida":
             if data.get("wallpaper"):
                 from web.config_service import get_config_service
@@ -326,6 +371,13 @@ class AgentRegistry:
                 from config import WORKSPACE_DIR
                 soul_path = WORKSPACE_DIR / "SOUL.md"
                 soul_path.write_text(personality_text, encoding="utf-8-sig")
+            # voice_ref 更新
+            if "voice_ref" in data:
+                self._save_nahida_field("voice_ref", data["voice_ref"])
+            # display_name 更新：持久化 + 同步 MAIN_AGENT_META，使全局立即可见
+            if "display_name" in data and data["display_name"]:
+                self._save_nahida_field("display_name", data["display_name"])
+                MAIN_AGENT_META["display_name"] = data["display_name"]
             return self.get("nahida")
         agent = self._require(name)
         personality_text = data.pop("personality_text", None)
@@ -419,24 +471,21 @@ class AgentRegistry:
         from tool_engine.tool_registry import list_tools
         blocked = self._blocked()
         if name == "nahida":
-            # 主体不经 dispatcher 过滤，所有工具可用（受全局开关控制）
-            excluded: set[str] = set()
-            mcp_allowed: list[str] = []
-            is_main = True
+            cfg = self._load_nahida_cfg()
+            excluded = set(cfg.get("excluded_tools") or [])
+            mcp_allowed = list(cfg.get("mcp_servers") or [])
         else:
             agent = self._require(name)
             excluded = set(agent.config.excluded_tools or set())
             mcp_allowed = list(agent.config.mcp_servers or [])
-            is_main = False
         tools = {}
         for t in list_tools():
             n = t["name"]
-            if not is_main and n in blocked:
+            if n in blocked:
                 tools[n] = {"enabled": False, "locked": True,
                             "reason": "系统锁定（防递归委托/长耗时）"}
             else:
-                tools[n] = {"enabled": n not in excluded, "locked": is_main,
-                            "reason": "主体始终拥有全部工具" if is_main else ""}
+                tools[n] = {"enabled": n not in excluded, "locked": False}
         mcp = {}
         try:
             mcp_names = list(self.core._mcp_manager._clients.keys())
@@ -444,16 +493,30 @@ class AgentRegistry:
             logger.debug("registry.mcp_clients_error", exc_info=True)
             mcp_names = []
         for s in mcp_names:
-            mcp[s] = {"enabled": is_main or s in mcp_allowed, "locked": is_main}
-        return {"tools": tools, "mcp_servers": mcp, "is_main": is_main}
+            mcp[s] = {"enabled": s in mcp_allowed if mcp_allowed else True, "locked": False}
+        return {"tools": tools, "mcp_servers": mcp, "is_main": False}
 
     def set_permissions(self, name: str, matrix: dict) -> dict:
         """设置指定 Agent 的工具和 MCP Server 权限并持久化。"""
-        if name == "nahida":
-            raise ValueError("主体纳西妲的工具不可裁剪")
-        agent = self._require(name)
         blocked = self._blocked()
         tools = matrix.get("tools") or {}
+        if name == "nahida":
+            cfg = self._load_nahida_cfg()
+            excluded = set(cfg.get("excluded_tools") or [])
+            for tool_name, enabled in tools.items():
+                if tool_name in blocked:
+                    continue
+                if enabled:
+                    excluded.discard(tool_name)
+                else:
+                    excluded.add(tool_name)
+            cfg["excluded_tools"] = sorted(excluded)
+            mcp = matrix.get("mcp_servers")
+            if mcp is not None:
+                cfg["mcp_servers"] = [s for s, on in mcp.items() if on]
+            self._save_nahida_cfg(cfg)
+            return self.get_permissions(name)
+        agent = self._require(name)
         excluded = set(agent.config.excluded_tools or set())
         for tool_name, enabled in tools.items():
             if tool_name in blocked:

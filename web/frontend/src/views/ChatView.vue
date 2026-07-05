@@ -28,6 +28,7 @@ const showSessions = ref(false)
 const sessions = ref<any[]>([])
 const playingUrl = ref('')
 const lightboxUrl = ref('')
+const authToken = localStorage.getItem('token') || ''
 let audioEl: HTMLAudioElement | null = null
 
 const showPalette = computed(() => inputText.value.startsWith('/') && !inputText.value.includes(' '))
@@ -263,8 +264,8 @@ const emotionColors: Record<string, string> = {
             <audio v-if="msg.audioUrl" :src="msg.audioUrl" controls class="media-audio"></audio>
           </div>
           <!-- 表情包：贴在气泡尾部，不与产物混淆 -->
-          <img v-if="msg.stickerUrl" :src="msg.stickerUrl" class="sticker-img"
-               :title="t('chatView.zoom')" @click="lightboxUrl = msg.stickerUrl!" />
+          <img v-if="msg.stickerUrl" :src="msg.stickerUrl + '?token=' + authToken" class="sticker-img"
+               :title="t('chatView.zoom')" @click="lightboxUrl = msg.stickerUrl + '?token=' + authToken" />
 
           <div class="bubble-footer" v-if="!msg.streaming && msg.content && msg.role !== 'system'">
             <span class="msg-time">{{ fmtTime(msg.timestamp) }}</span>

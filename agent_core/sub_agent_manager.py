@@ -11,7 +11,7 @@ from typing import Any
 
 from loguru import logger
 
-from config import TTS_ASYNC_MODE, build_system_prompt
+from config import TTS_ASYNC_MODE, build_system_prompt, get_agent_display_name
 from emotion.emotion_simple import detect_emotion
 from emotion.emotion_enum import CN_TO_EN
 from utils.text_utils import humanize
@@ -545,7 +545,9 @@ class SubAgentManagerMixin:
         if factual:
             context = "这是纳西妲委托的查询任务。请直接返回查询结果，不要加任何个人风格、感叹号或角色扮演，只报告事实数据。"
         else:
-            context = f"纳西妲姐姐委托可莉的任务。纳西妲是须弥的草神，温柔聪慧，可莉叫她'纳西妲姐姐'。用户是纳西妲的{self.context.current_address_term}，也是可莉的大哥哥/大姐姐。"
+            _nahida_dn = get_agent_display_name('nahida')
+            _keli_dn = get_agent_display_name('keli')
+            context = f"{_nahida_dn}姐姐委托{_keli_dn}的任务。{_nahida_dn}是须弥的草神，温柔聪慧，{_keli_dn}叫她'{_nahida_dn}姐姐'。用户是{_nahida_dn}的{self.context.current_address_term}，也是{_keli_dn}的大哥哥/大姐姐。"
         result = await self.dispatcher.dispatch("keli", task, context=context, status_callback=_ctx.status_callback if _ctx else None)
         if result is None:
             return "可莉现在有点累了...等会儿再来找大哥哥玩吧！蹦蹦...💤"
@@ -650,7 +652,7 @@ class SubAgentManagerMixin:
     async def _nahida_delegate_for_klee(self, question: str) -> str:
         _ctx = _current_request_ctx.get()
         if _ctx and _ctx.delegate_depth >= 2:
-            return "纳西妲姐姐现在也在忙，可莉先自己想想办法吧！"
+            return f"{get_agent_display_name('nahida')}姐姐现在也在忙，可莉先自己想想办法吧！"
         if _ctx:
             _ctx.delegate_depth += 1
         try:
@@ -663,9 +665,9 @@ class SubAgentManagerMixin:
             )
             if isinstance(reply, str):
                 return reply.strip()
-            return reply.choices[0].message.content.strip() if reply.choices[0].message.content else "纳西妲姐姐说让她想想..."
+            return reply.choices[0].message.content.strip() if reply.choices[0].message.content else f"{get_agent_display_name('nahida')}姐姐说让她想想..."
         except Exception:
-            return "纳西妲姐姐现在有点忙，等会儿再问她吧！"
+            return f"{get_agent_display_name('nahida')}姐姐现在有点忙，等会儿再问她吧！"
         finally:
             if _ctx:
                 _ctx.delegate_depth -= 1

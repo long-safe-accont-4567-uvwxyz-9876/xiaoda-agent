@@ -331,6 +331,46 @@ def get_provider_config(provider: str) -> dict:
     }
     return _PROVIDER_MAP.get(provider, {"base_url": "", "api_key_env": ""})
 
+
+# ── Agent display_name 动态读取（规避 IP 风险，用户可自定义）──
+# 默认 display_name（当用户未自定义时的 fallback）
+_DEFAULT_DISPLAY_NAMES: dict[str, str] = {
+    "nahida": "纳西妲",
+    "keli": "可莉",
+    "yinlang": "银狼",
+    "xilian": "昔涟",
+    "nike": "尼可",
+}
+_display_name_cache: dict[str, tuple[float, str]] = {}  # {name: (mtime, display_name)}
+
+
+def get_agent_display_name(name: str) -> str:
+    """读取 agent 的 display_name（从 config/agents/{name}.json）。
+
+    用于规避 IP 风险：发布版可改默认值为中性名，用户拿到后改回原名即可全局生效。
+    带文件 mtime 缓存，避免频繁 IO。
+    """
+    if not name:
+        return ""
+    fp = AGENTS_CONFIG_DIR / f"{name}.json"
+    default = _DEFAULT_DISPLAY_NAMES.get(name, name)
+    try:
+        mtime = fp.stat().st_mtime
+    except OSError:
+        return default
+    cached = _display_name_cache.get(name)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        import json
+        data = json.loads(fp.read_text(encoding="utf-8"))
+        dn = data.get("display_name") or default
+    except Exception:
+        dn = default
+    _display_name_cache[name] = (mtime, dn)
+    return dn
+
+
 # ── ASR 语音识别配置 ──
 ASR_API_KEY = get_secret("ASR_API_KEY", "") or get_secret("SILICONFLOW_API_KEY", "")
 ASR_BASE_URL = os.getenv("ASR_BASE_URL", "https://api.siliconflow.cn/v1")
@@ -630,6 +670,7 @@ __all__ = [
     "MEMORY_STATE_DIR",
     "PLUGINS_CONFIG_DIR",
     "AGENTS_CONFIG_DIR",
+    "get_agent_display_name",
     "build_system_prompt",
     "build_safe_system_prompt",
     "load_agent_config",

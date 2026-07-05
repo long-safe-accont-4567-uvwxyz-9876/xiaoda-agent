@@ -24,8 +24,8 @@ DISTILL_PROMPT = """你是记忆蒸馏助手。将以下旧对话记忆压缩为
 输出 300 字以内的摘要："""
 
 
-RECALL_PROMPT = """你是纳西妲的回忆整理助手。把最近这段时间发生的重要记忆整理成一段"回忆笔记"，
-让纳西妲日后能快速回忆起这段时间的故事。
+RECALL_PROMPT_TEMPLATE = """你是{n}的回忆整理助手。把最近这段时间发生的重要记忆整理成一段"回忆笔记"，
+让{n}日后能快速回忆起这段时间的故事。
 
 要求：
 - 用自然流畅的叙述风格（像写日记），不要用列表
@@ -187,7 +187,11 @@ class MemoryDistiller:
             return ""
 
         memories_text = "\n".join(lines)
-        prompt = RECALL_PROMPT.format(memories_text=memories_text)
+        from config import get_agent_display_name
+        prompt = RECALL_PROMPT_TEMPLATE.format(
+            n=get_agent_display_name("nahida"),
+            memories_text=memories_text,
+        )
         messages = [{"role": "user", "content": prompt}]
 
         # 优先使用免费模型，失败降级到 router

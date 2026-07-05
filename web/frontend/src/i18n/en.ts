@@ -357,6 +357,10 @@ export default {
     stickerDescPh: 'Sticker description (e.g. happy laugh)',
     noDesc: '(no description)',
     stickerDeleteConfirm: 'Confirm delete?',
+    noVoice: 'None (TTS disabled)',
+    uploadVoice: 'Select audio',
+    upload: 'Upload',
+    voiceUploaded: 'Voice reference uploaded ✓',
   },
 
   // ModelsView.vue
@@ -766,6 +770,21 @@ export default {
     taskQueued: 'Task queued (real-time progress)',
     cancelled: 'Cancelled',
     deleted: 'Deleted',
+    voiceManage: 'Voice Reference Management',
+    voiceUploadHint: 'Supports .mp3 / .wav, ≤10MB. Name: letters, digits, underscore, hyphen only.',
+    voiceNamePh: 'Voice name (alphanumeric)',
+    selectAudio: 'Select audio',
+    uploadVoice: 'Upload',
+    voiceList: 'Voice list',
+    builtin: 'Built-in',
+    custom: 'Custom',
+    voiceDeleteConfirm: 'Delete this voice reference?',
+    voiceUploaded: 'Voice reference uploaded ✓',
+    voiceDeleted: 'Voice reference deleted',
+    voiceSet: 'Voice reference switched ✓',
+    noVoices: 'No voices',
+    agentPh: 'Select Agent',
+    noVoiceForAgent: 'This Agent has no voice reference enabled. Please upload and select one in the management area below',
   },
 
   // HealthView.vue

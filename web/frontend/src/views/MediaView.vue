@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import {
   NButton, NSwitch, NInput, NSelect, NTabs, NTabPane, NTag,
   NPopconfirm, NProgress, useMessage,
 } from 'naive-ui'
-import { get, post, put, del } from '../api'
+import { get, post, put, del, api } from '../api'
 import { getWsClient } from '../api/ws'
 import { useUiStore } from '../stores/ui'
 import { t } from '../i18n'
@@ -16,12 +16,19 @@ const ws = getWsClient()
 
 // TTS
 const ttsText = ref('')
-const ttsVoice = ref('nahida')
+const ttsAgent = ref('nahida')  // 选择哪个 agent 来合成
 const ttsStyle = ref<string | null>(null)
-const voices = ref<Array<{ label: string; value: string }>>([])
+const voiceGroups = ref<Record<string, Array<{ name: string; voice_ref: string }>>>({})
 const styles = ref<Array<{ label: string; value: string }>>([])
 const ttsResult = ref('')
 const ttsLoading = ref(false)
+
+// 参考音频管理
+const voiceUploading = ref(false)
+const voiceInputEl = ref<HTMLInputElement | null>(null)
+const selectedAgent = ref<string>('')  // 当前选中的 agent
+// agent 列表（从 /agents 加载）
+const agentList = ref<Array<{ name: string; display_name: string; voice_ref: string | null }>>([])
 
 // 图/视频
 const imagePrompt = ref('')
@@ -35,12 +42,18 @@ const gallery = ref<any[]>([])
 
 onMounted(async () => {
   try {
-    const v = await get('/media/tts/voices')
-    voices.value = v.voices.map((x: any) => ({ label: `${x.id}${x.description ? ' · ' + x.description.slice(0, 16) : ''}`, value: x.id }))
-    styles.value = v.styles.map((s: string) => ({ label: s, value: s }))
+    const agents = await get<any[]>('/agents')
+    agentList.value = agents.map(a => ({ name: a.name, display_name: a.display_name || a.name, voice_ref: a.voice_ref }))
+    if (agentList.value.length) selectedAgent.value = agentList.value[0].name
+  } catch { /* */ }
+  await loadVoices()
+  try {
     const cfg = await get('/media/tts/config')
     ui.autoSpeak = cfg.auto_speak
-    ttsVoice.value = cfg.default_voice || 'nahida'
+    // 默认选择 nahida agent（其 voice_ref 由管理区设置）
+    if (!ttsAgent.value || !agentList.value.find(a => a.name === ttsAgent.value)) {
+      ttsAgent.value = agentList.value[0]?.name || 'nahida'
+    }
   } catch { /* TTS 可能未配置 */ }
   loadTasks()
   loadGallery()
@@ -68,10 +81,17 @@ function onTaskUpdate(e: any) {
 
 async function synthesize() {
   if (!ttsText.value.trim()) return
+  // 查找所选 agent 的 voice_ref
+  const agent = agentList.value.find(a => a.name === ttsAgent.value)
+  const voiceRef = agent?.voice_ref
+  if (!voiceRef) {
+    message.error(t('mediaView.noVoiceForAgent'))
+    return
+  }
   ttsLoading.value = true
   try {
     const r = await post('/media/tts', {
-      text: ttsText.value, voice: ttsVoice.value, style: ttsStyle.value || '',
+      text: ttsText.value, voice: voiceRef, style: ttsStyle.value || '',
     })
     ttsResult.value = r.audio_url
     if (r.cached) message.info(t('mediaView.cacheHit'))
@@ -90,12 +110,67 @@ async function setAutoSpeak(v: boolean) {
   } catch (e: any) { message.error(e.message) }
 }
 
-async function setDefaultVoice(v: string) {
-  ttsVoice.value = v
+async function loadVoices() {
   try {
-    await put('/media/tts/config', { default_voice: v })
+    const v = await get('/media/tts/voices')
+    voiceGroups.value = v.groups || {}
+    styles.value = v.styles.map((s: string) => ({ label: s, value: s }))
   } catch { /* */ }
 }
+
+function onVoiceFilePick(e: Event) {
+  const target = e.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file || !selectedAgent.value) return
+  const name = file.name.replace(/\.[^.]+$/, '')
+  voiceUploading.value = true
+  const formData = new FormData()
+  formData.append('name', name)
+  formData.append('file', file)
+  api.uploadVoiceRef(selectedAgent.value, formData).then(async () => {
+    message.success(t('mediaView.voiceUploaded'))
+    if (voiceInputEl.value) voiceInputEl.value.value = ''
+    await loadVoices()
+    await reloadAgentVoiceRef()
+  }).catch((err: any) => {
+    message.error(err.message)
+  }).finally(() => {
+    voiceUploading.value = false
+  })
+}
+
+async function reloadAgentVoiceRef() {
+  try {
+    const agents = await get<any[]>('/agents')
+    agentList.value = agents.map(a => ({ name: a.name, display_name: a.display_name || a.name, voice_ref: a.voice_ref }))
+  } catch { /* */ }
+}
+
+const currentAgent = computed(() => agentList.value.find(a => a.name === selectedAgent.value))
+const currentVoices = computed(() => voiceGroups.value[selectedAgent.value] || [])
+
+async function setAgentVoice(voiceRef: string | null) {
+  if (!selectedAgent.value) return
+  try {
+    await put(`/agents/${selectedAgent.value}`, { voice_ref: voiceRef })
+    const a = agentList.value.find(x => x.name === selectedAgent.value)
+    if (a) a.voice_ref = voiceRef
+    message.success(t('mediaView.voiceSet'))
+  } catch (e: any) { message.error(e.message) }
+}
+
+async function deleteVoice(name: string) {
+  if (!selectedAgent.value) return
+  try {
+    await del(`/media/tts/voices/${selectedAgent.value}/${name}`)
+    message.success(t('mediaView.voiceDeleted'))
+    await loadVoices()
+  } catch (e: any) { message.error(e.message) }
+}
+
+const agentOptions = computed(() =>
+  agentList.value.map(a => ({ label: a.display_name, value: a.name }))
+)
 
 async function submitTask(kind: 'image' | 'video') {
   const prompt = kind === 'image' ? imagePrompt.value : videoPrompt.value
@@ -158,8 +233,8 @@ const statusType: Record<string, any> = {
             <n-input v-model:value="ttsText" type="textarea" :rows="4"
                      :placeholder="t('mediaView.ttsInputPh')" maxlength="500" show-count />
             <div class="tts-controls">
-              <n-select v-model:value="ttsVoice" :options="voices" :placeholder="t('mediaView.voicePh')"
-                        style="max-width: 220px" @update:value="setDefaultVoice" />
+              <n-select v-model:value="ttsAgent" :options="agentOptions" :placeholder="t('mediaView.agentPh')"
+                        style="max-width: 220px" />
               <n-select v-model:value="ttsStyle" :options="styles" :placeholder="t('mediaView.emotionPh')"
                         clearable style="max-width: 180px" />
               <n-button type="primary" :loading="ttsLoading" @click="synthesize">🎵 {{ t('mediaView.synthesize') }}</n-button>
@@ -175,6 +250,59 @@ const statusType: Record<string, any> = {
             <p class="cfg-hint">{{ t('mediaView.autoSpeakDesc') }}</p>
           </div></Tilt3D>
         </div>
+
+        <!-- 参考音频管理：选择 agent 后管理 -->
+        <Tilt3D :max-x="4" :max-y="6"><div class="glass-panel panel">
+          <h4>{{ t('mediaView.voiceManage') }}</h4>
+          <p class="cfg-hint" style="margin-bottom: 12px">{{ t('mediaView.voiceUploadHint') }}</p>
+
+          <!-- Agent 选择器 -->
+          <div class="voice-select-row" style="margin-bottom: 14px">
+            <n-select v-model:value="selectedAgent" :options="agentOptions"
+                      :placeholder="t('mediaView.voiceManage')" style="max-width: 200px" />
+          </div>
+
+          <!-- 选中 agent 的参考音频管理 -->
+          <div v-if="currentAgent" class="voice-agent-block">
+            <div class="voice-agent-header">
+              <span class="voice-agent-name">{{ currentAgent.display_name }}</span>
+              <n-tag size="tiny" :bordered="false">{{ currentAgent.name }}</n-tag>
+              <span class="voice-agent-current">
+                {{ currentAgent.voice_ref ? currentAgent.voice_ref.split('/').pop() : t('mediaView.noVoice') }}
+              </span>
+            </div>
+            <div class="voice-agent-body">
+              <div class="tts-controls" style="margin-bottom: 8px">
+                <input ref="voiceInputEl" type="file" accept="audio/mpeg,audio/wav" style="display: none"
+                       @change="onVoiceFilePick" />
+                <n-button size="small" :loading="voiceUploading" @click="voiceInputEl?.click()">
+                  📁 {{ t('mediaView.selectAudio') }}
+                </n-button>
+              </div>
+              <div class="voice-select-row">
+                <n-select :value="currentAgent.voice_ref"
+                          :options="currentVoices.map(v => ({ label: v.name, value: v.voice_ref }))"
+                          :placeholder="t('mediaView.noVoice')" size="small" clearable
+                          style="max-width: 240px"
+                          @update:value="(v: any) => setAgentVoice(v)" />
+              </div>
+              <div class="voice-list">
+                <div v-for="v in currentVoices" :key="v.voice_ref" class="voice-item">
+                  <span class="voice-name" :class="{ active: currentAgent.voice_ref === v.voice_ref }">{{ v.name }}</span>
+                  <n-popconfirm @positive-click="deleteVoice(v.name)">
+                    <template #trigger>
+                      <n-button size="tiny" type="error" quaternary>🗑</n-button>
+                    </template>
+                    {{ t('mediaView.voiceDeleteConfirm') }}
+                  </n-popconfirm>
+                </div>
+                <div v-if="!currentVoices.length" class="empty-hint" style="padding: 4px 0; text-align: left">
+                  {{ t('mediaView.noVoices') }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div></Tilt3D>
       </n-tab-pane>
 
       <n-tab-pane name="image" :tab="t('mediaView.imageGen')">
@@ -262,6 +390,20 @@ const statusType: Record<string, any> = {
 
 .cfg { display: flex; align-items: center; justify-content: space-between; font-size: 13.5px; }
 .cfg-hint { font-size: 12px; color: var(--moon-dim); margin-top: 10px; line-height: 1.6; }
+
+.voice-list { display: flex; flex-direction: column; gap: 4px; }
+.voice-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; }
+.voice-name { font-family: 'JetBrains Mono', monospace; min-width: 80px; }
+.empty-hint { font-size: 13px; color: var(--moon-dim); padding: 12px 0; text-align: center; }
+.voice-agent-list { display: flex; flex-direction: column; gap: 10px; }
+.voice-agent-block { padding: 10px 12px; border: 1px solid var(--moon-edge, rgba(255,255,255,.08)); border-radius: 8px; }
+.voice-agent-header { display: flex; align-items: center; gap: 8px; }
+.voice-agent-name { font-size: 14px; font-weight: 500; }
+.voice-agent-current { margin-left: auto; font-size: 12px; color: var(--moon-dim); font-family: 'JetBrains Mono', monospace; }
+.voice-arrow { font-size: 10px; color: var(--moon-dim); }
+.voice-agent-body { margin-top: 10px; }
+.voice-select-row { margin-bottom: 8px; }
+.voice-name.active { color: var(--wisdom, #5b8c5a); font-weight: 500; }
 
 .queue-hint { font-size: 12.5px; color: var(--wisdom); margin-bottom: 10px; }
 

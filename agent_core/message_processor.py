@@ -14,7 +14,7 @@ from loguru import logger
 
 from config import (MIMO_MODEL, AGENT_CONFIG, build_safe_system_prompt,
                     SIMPLE_TASK_KEYWORDS, PRO_TASK_KEYWORDS, TTS_ASYNC_MODE,
-                    SIMPLE_CHAT_FASTPATH, STREAM_TEXT_PUSH)
+                    SIMPLE_CHAT_FASTPATH, STREAM_TEXT_PUSH, get_agent_display_name)
 from prompt_builder import build_scene_aware_prompt
 from core.chat_processor import ChatProcessor
 from core.circuit_breaker import CircuitState
@@ -195,7 +195,10 @@ class MessageProcessorMixin:
         force_voice = voice_intent and not self._voice_mode
 
         if not clean_input:
-            target_name = "可莉" if chat_targets and chat_targets[0] == "keli" else "纳西妲"
+            if chat_targets:
+                target_name = get_agent_display_name(chat_targets[0])
+            else:
+                target_name = get_agent_display_name('nahida')
             confirm_msg = f"好～现在跟{target_name}说话啦！有什么想聊的呀？"
             trace.info("agent.chat_target_switch", target=chat_targets)
             return ProcessResult(reply=confirm_msg, emotion="greeting")

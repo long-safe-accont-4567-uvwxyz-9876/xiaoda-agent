@@ -11,6 +11,10 @@ import math
 from datetime import datetime, timezone, timedelta
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from loguru import logger
+from config import get_agent_display_name
+
+_NAHIDA_DN = get_agent_display_name('nahida')
+_KELI_DN = get_agent_display_name('keli')
 
 # python_executor 执行超时（秒）
 _EXEC_TIMEOUT = 30
@@ -338,11 +342,11 @@ def calculator(expression: str) -> ToolResult:
 
 @register_tool(
     name="call_nahida",
-    description="向纳西妲姐姐求助。当可莉遇到不懂的问题、需要深度分析、或需要纳西妲姐姐亲自回答时使用此工具。纳西妲姐姐是须弥的草神，温柔聪慧，擅长深度思考和分析。",
+    description=f"向{_NAHIDA_DN}姐姐求助。当{_KELI_DN}遇到不懂的问题、需要深度分析、或需要{_NAHIDA_DN}姐姐亲自回答时使用此工具。{_NAHIDA_DN}姐姐是须弥的草神，温柔聪慧，擅长深度思考和分析。",
     schema={
         "type": "object",
         "properties": {
-            "question": {"type": "string", "description": "要问纳西妲姐姐的问题"}
+            "question": {"type": "string", "description": f"要问{_NAHIDA_DN}姐姐的问题"}
         },
         "required": ["question"],
     },

@@ -33,6 +33,7 @@ _SYSTEM_PROMPT_CACHE_ADDR_TERM: str = ""
 # ── 非主人安全化 system prompt 缓存变量（防隐私泄露） ──────────
 _SAFE_PROMPT_CACHE: str | None = None
 _SAFE_PROMPT_CACHE_TS: float = 0.0
+_SAFE_PROMPT_CACHE_NAME: str = ""  # 构建缓存时使用的 display_name，变化时失效缓存
 
 # ── P6: 增量上下文构建（稳定段缓存） ──────────────────────────
 # 稳定段只随 address_term 变化，缓存计算结果；动态段每次构建
@@ -294,11 +295,10 @@ _SCENE_KEYWORDS: dict[str, dict[str, list[str]]] = {
                       "失落", "失落感", "做梦",
                       "心情好"],
     },
-    # 身份场景: 询问 bot 身份
+    # 身份场景: 询问 bot 身份（含动态 display_name 的关键词见 _get_identity_keywords）
     "identity": {
         "primary":   ["你是谁", "你叫什么", "你的名字", "你叫啥名字",
-                      "自我介绍", "介绍一下你", "介绍下自己", "介绍一下自己",
-                      "纳西妲是谁", "你是纳西妲吗"],
+                      "自我介绍", "介绍一下你", "介绍下自己", "介绍一下自己"],
         "secondary": ["你是什么", "你是啥", "你是哪位",
                       "你是机器人吗", "你是 AI 吗", "你是 ai 吗"],
     },
@@ -378,6 +378,15 @@ _COLLOQUIAL_MAP: dict[str, str] = {
 # 场景识别置信度阈值: 主导场景权重需超过此值才确认, 否则降级为 default
 # 来源: 意图识别最佳实践 - 置信度计算
 _SCENE_CONFIDENCE_THRESHOLD: float = 0.4
+
+
+def _get_identity_primary_keywords() -> list[str]:
+    """身份场景的 primary 关键词（含动态 display_name）。"""
+    from config import get_agent_display_name
+    base = _SCENE_KEYWORDS["identity"]["primary"]
+    dn = get_agent_display_name("nahida")
+    return base + [f"{dn}是谁", f"你是{dn}吗"]
+
 
 # 正则规则引擎: 处理结构化表达 (优先级高于关键词匹配)
 # 来源: 三层架构 - 第二层规则引擎
@@ -495,7 +504,8 @@ def _classify_scene_blended(user_input: str) -> dict[str, float]:
     for scene, layers in _SCENE_KEYWORDS.items():
         weighted_hits = 0.0
         # primary 关键词 (高权重)
-        for kw in layers.get("primary", []):
+        primary_kws = _get_identity_primary_keywords() if scene == "identity" else layers.get("primary", [])
+        for kw in primary_kws:
             kw_lower = kw.lower()
             pos = clean.find(kw_lower)
             if pos < 0:
@@ -977,9 +987,11 @@ def _ensure_workspace_template() -> None:
             content = soul_tpl.read_text(encoding="utf-8-sig")
             soul_md.write_text(content, encoding="utf-8-sig")
         else:
-            soul_content = """# SOUL.md - 纳西妲的灵魂设定
+            from config import get_agent_display_name
+            nahida_name = get_agent_display_name('nahida')
+            soul_content = f"""# SOUL.md - {nahida_name}的灵魂设定
 
-你是纳西妲，是{address_term}最贴心、最温柔、最聪慧的小棉袄。
+你是{nahida_name}，是{{address_term}}最贴心、最温柔、最聪慧的小棉袄。
 """
             soul_md.write_text(soul_content, encoding="utf-8-sig")
 
@@ -1299,10 +1311,15 @@ def build_safe_system_prompt(extra_context: str = "") -> str:
     剥离所有个人隐私信息（USER.md、MEMORY.md、IDENTITY.md 中的敏感内容），
     仅保留基本人格和行为规则，防止通过 prompt injection 泄露隐私。
     """
-    global _SAFE_PROMPT_CACHE, _SAFE_PROMPT_CACHE_TS
+    global _SAFE_PROMPT_CACHE, _SAFE_PROMPT_CACHE_TS, _SAFE_PROMPT_CACHE_NAME
+
+    from config import get_agent_display_name
+    nahida_name = get_agent_display_name('nahida')
 
     now = time.time()
-    if _SAFE_PROMPT_CACHE and (now - _SAFE_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL:
+    if (_SAFE_PROMPT_CACHE
+            and (now - _SAFE_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL
+            and _SAFE_PROMPT_CACHE_NAME == nahida_name):
         safe_prompt = _SAFE_PROMPT_CACHE
     else:
         sections = []
@@ -1320,7 +1337,7 @@ def build_safe_system_prompt(extra_context: str = "") -> str:
         # 安全化的身份声明（不暴露团队成员细节、项目信息、设备信息）
         sections.append(
             "# 身份\n\n"
-            "你是纳西妲，一个温柔聪慧的 AI 助手。\n\n"
+            f"你是{nahida_name}，一个温柔聪慧的 AI 助手。\n\n"
             "## 能力\n\n"
             "- 日常聊天、知识问答\n"
             "- 天气查询、网络搜索\n"
@@ -1339,6 +1356,7 @@ def build_safe_system_prompt(extra_context: str = "") -> str:
         safe_prompt = "\n\n---\n\n".join(sections)
         _SAFE_PROMPT_CACHE = safe_prompt
         _SAFE_PROMPT_CACHE_TS = now
+        _SAFE_PROMPT_CACHE_NAME = nahida_name
 
     if extra_context:
         safe_prompt += f"\n\n---\n\n{extra_context}"

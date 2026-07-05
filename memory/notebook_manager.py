@@ -8,9 +8,10 @@ import httpx
 from loguru import logger
 
 from db.db_notebook import NotebookDB
+from config import get_agent_display_name
 
 
-AUTO_NOTE_PROMPT = """你是纳西妲。刚刚和{address_term}进行了一轮对话。
+AUTO_NOTE_PROMPT_TEMPLATE = """你是{agent_name}。刚刚和{address_term}进行了一轮对话。
 
 {address_term}说了：
 "{user_message}"
@@ -163,11 +164,12 @@ class NotebookManager:
             else:
                 existing_str = "（还没有笔记）"
 
-            prompt = AUTO_NOTE_PROMPT.format(
+            prompt = AUTO_NOTE_PROMPT_TEMPLATE.format(
                 user_message=user_msg[:300],
                 assistant_reply=reply[:300],
                 existing_notes=existing_str,
                 address_term=address_term,
+                agent_name=get_agent_display_name("nahida"),
             )
             # 优先使用免费模型，降级到主路由
             result = await self._call_free_model(

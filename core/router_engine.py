@@ -31,8 +31,8 @@ class RoutingDecision:
 
 # ── 路由规则定义 ──────────────────────────────────────────────────
 
-# @mention 映射
-MENTION_MAP = {
+# @mention 映射（默认值，运行时会合并用户自定义 display_name）
+_DEFAULT_MENTION_MAP = {
     "@可莉": "keli",
     "@银狼": "yinlang",
     "@昔涟": "xilian",
@@ -40,10 +40,13 @@ MENTION_MAP = {
     "@纳西妲": "nahida",
 }
 
-# 否定模式：明确不要某个子代理 → 回到 nahida
-NEGATIVE_PATTERNS = [
-    r"(?:不|别|不要|不用)\s*(?:让|叫|请)?\s*(?:可莉|klee|银狼|yinlang|昔涟|xilian|尼可|nike)",
-]
+# 否定模式中的 agent 别名（内部名 + 默认 display_name）
+_DEFAULT_AGENT_ALIASES = {
+    "keli": ["可莉", "klee"],
+    "yinlang": ["银狼", "yinlang"],
+    "xilian": ["昔涟", "xilian"],
+    "nike": ["尼可", "nike"],
+}
 
 # 自指模式：用户让纳西妲自己做事
 SELF_TARGET_PATTERNS = [
@@ -55,18 +58,72 @@ VOICE_PATTERNS = [
     r"(?:语音|声音|说话|朗读|念|读|听你|听听|发语音|生成语音|语音回复|说给我听|念出来)",
 ]
 
-# 关键词意图模式
-KEYWORD_PATTERNS = [
-    (r"(?:让|叫|请|麻烦|找|切换到)\s*(?:银狼|yinlang)", "yinlang"),
-    (r"(?:让|叫|请|麻烦|找|切换到)\s*(?:可莉|klee|小炸弹)", "keli"),
-    (r"(?:让|叫|请|麻烦|找|切换到)\s*(?:昔涟|xilian|记忆)", "xilian"),
-    (r"(?:让|叫|请|麻烦|找|切换到)\s*(?:尼可|nike)", "nike"),
-    (r"(?:让|叫|请|麻烦|找|切换到)\s*(?:纳西妲|草神|小草神)", "nahida"),
-    (r"(?:银狼|yinlang)(?:帮|来|去|看一下|看看|检查|巡检|执行|处理)", "yinlang"),
-    (r"(?:可莉|klee|小炸弹)(?:帮|来|去|炸|boom)", "keli"),
-    (r"(?:昔涟|xilian)(?:帮|搜|查|找|搜索)", "xilian"),
-    (r"(?:尼可|nike)(?:帮|研究|分析|计算)", "nike"),
-]
+
+def _build_mention_map() -> dict[str, str]:
+    """构建 @mention 映射（含用户自定义 display_name）。"""
+    from config import get_agent_display_name
+    m = dict(_DEFAULT_MENTION_MAP)
+    for name in ("nahida", "keli", "yinlang", "xilian", "nike"):
+        dn = get_agent_display_name(name)
+        key = f"@{dn}"
+        if key not in m:
+            m[key] = name
+    return m
+
+
+def _build_agent_names_pattern() -> str:
+    """构建匹配所有 agent 名称的正则片段（内部名 + 所有 display_name）。"""
+    from config import get_agent_display_name
+    names: set[str] = set()
+    for name in ("nahida", "keli", "yinlang", "xilian", "nike"):
+        names.add(name)
+        dn = get_agent_display_name(name)
+        if dn:
+            names.add(dn)
+    # 也加入默认别名
+    for aliases in _DEFAULT_AGENT_ALIASES.values():
+        names.update(aliases)
+    return "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True))
+
+
+def _build_negative_patterns() -> list[str]:
+    """构建否定模式（含用户自定义 display_name）。"""
+    names_pat = _build_agent_names_pattern()
+    # 排除 nahida（否定模式只针对子代理）
+    from config import get_agent_display_name
+    sub_names: set[str] = set()
+    for name in ("keli", "yinlang", "xilian", "nike"):
+        sub_names.add(name)
+        dn = get_agent_display_name(name)
+        if dn:
+            sub_names.add(dn)
+        sub_names.update(_DEFAULT_AGENT_ALIASES.get(name, []))
+    sub_pat = "|".join(re.escape(n) for n in sorted(sub_names, key=len, reverse=True))
+    return [rf"(?:不|别|不要|不用)\s*(?:让|叫|请)?\s*(?:{sub_pat})"]
+
+
+def _build_keyword_patterns() -> list[tuple[str, str]]:
+    """构建关键词意图模式（含用户自定义 display_name）。"""
+    from config import get_agent_display_name
+    patterns: list[tuple[str, str]] = []
+    agent_keywords: dict[str, list[str]] = {
+        "yinlang": ["银狼", "yinlang"],
+        "keli": ["可莉", "klee", "小炸弹"],
+        "xilian": ["昔涟", "xilian", "记忆"],
+        "nike": ["尼可", "nike"],
+        "nahida": ["纳西妲", "草神", "小草神"],
+    }
+    for name, keywords in agent_keywords.items():
+        dn = get_agent_display_name(name)
+        if dn and dn not in keywords:
+            keywords.append(dn)
+        kw_pat = "|".join(re.escape(k) for k in keywords)
+        patterns.append((rf"(?:让|叫|请|麻烦|找|切换到)\s*(?:{kw_pat})", name))
+        if name == "nahida":
+            continue
+        # "X帮/来/去..." 模式
+        patterns.append((rf"(?:{kw_pat})(?:帮|来|去|看一下|看看|检查|巡检|执行|处理|搜|查|找|搜索|研究|分析|计算|炸|boom)", name))
+    return patterns
 
 
 class RouterEngine:
@@ -105,7 +162,7 @@ class RouterEngine:
         q = user_input.lower()
 
         # 2. 否定模式 → nahida
-        for pat in NEGATIVE_PATTERNS:
+        for pat in _build_negative_patterns():
             if re.search(pat, q):
                 return RoutingDecision(
                     agent_names=["nahida"],
@@ -146,7 +203,7 @@ class RouterEngine:
                 logger.debug("router.belief_fallback", error=str(e))
 
         # 5b. 硬编码关键词匹配
-        for pattern, target in KEYWORD_PATTERNS:
+        for pattern, target in _build_keyword_patterns():
             if re.search(pattern, q):
                 return RoutingDecision(
                     agent_names=[target],
@@ -165,7 +222,7 @@ class RouterEngine:
     def _match_mentions(user_input: str) -> list[str]:
         """提取 @mention 目标列表。"""
         targets = []
-        for mention, agent in MENTION_MAP.items():
+        for mention, agent in _build_mention_map().items():
             if mention in user_input:
                 targets.append(agent)
         return targets

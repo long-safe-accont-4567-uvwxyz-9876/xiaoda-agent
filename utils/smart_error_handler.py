@@ -275,20 +275,20 @@ class SmartErrorHandler:
         else:
             return None
 
-        # 代码相关的错误应该委托给银狼
+        # 代码相关的错误应该委托给 yinlang（路由器按内部 name 解析）
         code_error_types = {"SyntaxError", "IndentationError", "TypeError", "AttributeError"}
         if error_type in code_error_types:
-            return "银狼"
+            return "yinlang"
 
-        # 数据/搜索相关错误委托给昔涟
+        # 数据/搜索相关错误委托给 xilian
         db_error_types = {"OperationalError", "IntegrityError", "DatabaseError"}
         if error_type in db_error_types:
-            return "昔涟"
+            return "xilian"
 
-        # 研究分析相关错误委托给尼可
+        # 研究分析相关错误委托给 nike
         research_error_types = {"ValueError", "KeyError", "RuntimeError"}
         if error_type in research_error_types:
-            return "尼可"
+            return "nike"
 
         return None
 

@@ -13,7 +13,7 @@ from typing import Any, TYPE_CHECKING
 
 from loguru import logger
 
-from config import FILE_DIR
+from config import FILE_DIR, get_agent_display_name
 from emotion.emotion_enum import CN_TO_EN
 from utils.text_utils import strip_dsml, strip_reasoning, humanize
 from core.degradation_strategy import get_degradation_strategy
@@ -224,7 +224,7 @@ class ToolExecutorMixin:
 
     def _clean_reply(self, text: str) -> str:
         text = text.strip()
-        prefixes = ["昔涟：", "纳西妲：", "助手：", "AI："]
+        prefixes = [f"{get_agent_display_name(n)}：" for n in ('nahida', 'keli', 'yinlang', 'xilian', 'nike')] + ["助手：", "AI："]
         for p in prefixes:
             if text.startswith(p):
                 text = text[len(p):].strip()

@@ -61,6 +61,12 @@ async def update_agent(name: str, body: dict, request: Request, _user: str = Dep
     except ValueError as e:
         raise HTTPException(400, str(e))
     await _audit(request, "update", name)
+    # 通知所有标签页刷新（display_name 等变更需全局联动）
+    try:
+        from web.ws_hub import manager
+        await manager.broadcast({"type": "config_changed", "domain": "agents"})
+    except Exception as exc:
+        logger.debug("agents.broadcast_failed: {}", exc, exc_info=True)
     return Envelope(data=data)
 
 
@@ -295,8 +301,18 @@ async def list_stickers(name: str, request: Request, _user: str = Depends(get_cu
 
 
 @router.get("/agents/{name}/stickers/file/{filename}")
-async def serve_sticker(name: str, filename: str, request: Request, _user: str = Depends(get_current_user)) -> Any:
-    """提供表情包图片文件。"""
+async def serve_sticker(name: str, filename: str, request: Request, token: str = "") -> Any:
+    """提供表情包图片文件。支持 query token 认证（img 标签无法发 header）。"""
+    # 支持 header 或 query 参数认证
+    from web.routers.auth import _validate_token
+    auth_ok = False
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer ") and _validate_token(auth_header[7:]):
+        auth_ok = True
+    elif token and _validate_token(token):
+        auth_ok = True
+    if not auth_ok:
+        raise HTTPException(401, "未授权")
     from fastapi.responses import FileResponse
     sticker_dir = _resolve_sticker_dir(name, request)
     if not sticker_dir.exists():

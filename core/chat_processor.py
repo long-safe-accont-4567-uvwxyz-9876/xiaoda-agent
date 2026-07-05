@@ -80,4 +80,9 @@ class ChatProcessor:
     @staticmethod
     def clean_mention_from_input(user_input: str) -> str:
         """移除 @mention 标记，返回纯文本输入。"""
-        return re.sub(r'@[可莉纳西妲银狼昔涟尼可]+', '', user_input).strip()
+        from config import get_agent_display_name
+        chars: set[str] = set()
+        for name in ("nahida", "keli", "yinlang", "xilian", "nike"):
+            chars.update(get_agent_display_name(name))
+        pat = r'@[' + re.escape(''.join(sorted(chars))) + r']+'
+        return re.sub(pat, '', user_input).strip()

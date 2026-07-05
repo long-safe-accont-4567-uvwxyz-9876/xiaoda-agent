@@ -1,16 +1,20 @@
 import re
 from pathlib import Path
 
+from config import get_agent_display_name
+
 DEFAULT_EMOJI = {
-    "nahida": {"name": "纳西妲", "thinking": "🌿", "using": "🌿", "done": "🌿"},
-    "keli": {"name": "可莉", "thinking": "🔥", "using": "🔥", "done": "💣"},
-    "yinlang": {"name": "银狼", "thinking": "🎮", "using": "🎮", "done": "🐺"},
-    "xilian": {"name": "昔涟", "thinking": "📚", "using": "✨", "done": "🌸"},
-    "nike": {"name": "尼可", "thinking": "🧪", "using": "🔬", "done": "🔥"},
+    "nahida": {"thinking": "🌿", "using": "🌿", "done": "🌿"},
+    "keli": {"thinking": "🔥", "using": "🔥", "done": "💣"},
+    "yinlang": {"thinking": "🎮", "using": "🎮", "done": "🐺"},
+    "xilian": {"thinking": "📚", "using": "✨", "done": "🌸"},
+    "nike": {"thinking": "🧪", "using": "🔬", "done": "🔥"},
 }
 
 def load_agent_emoji(agent_name: str, personality_file: str | None = None) -> dict:
     config = dict(DEFAULT_EMOJI.get(agent_name, DEFAULT_EMOJI["nahida"]))
+    # 动态注入 agent display_name（从 config/agents/{name}.json 读取，规避 IP 风险）
+    config["name"] = get_agent_display_name(agent_name)
     if personality_file and Path(personality_file).exists():
         try:
             text = Path(personality_file).read_text(encoding="utf-8-sig")

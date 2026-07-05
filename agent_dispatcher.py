@@ -16,6 +16,7 @@ from emotion.emoji_config import get_status_msg
 from tool_engine.tool_guardrails import get_tool_guardrails
 from utils.credential_pool import CredentialPool
 from core.message import AgentMessage
+from config import get_agent_display_name
 
 
 # ── ToolCallExtractor 统一接口 ──────────────────────────────
@@ -281,7 +282,7 @@ class SubAgent:
             "type": "function",
             "function": {
                 "name": "send_message_to_agent",
-                "description": "直接向另一个子代理发消息获取响应（无需通过纳西妲中转）",
+                "description": f"直接向另一个子代理发消息获取响应（无需通过{get_agent_display_name('nahida')}中转）",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -403,7 +404,7 @@ class SubAgent:
                 _ctx = _current_request_ctx.get()
                 if _ctx and _ctx.delegate_depth >= 2:
                     logger.warning("delegate.depth_exceeded", depth=_ctx.delegate_depth, from_agent=self.config.name)
-                    result_text = "纳西妲姐姐现在也在忙，先自己想想办法吧！"
+                    result_text = f"{get_agent_display_name('nahida')}姐姐现在也在忙，先自己想想办法吧！"
                 else:
                     delegate_reply = await self._delegate_callback(question)
                     result_text = f"[主Agent的回答（{self.config.display_name}需要用自己的话转述，不要直接复制原话）]\n{delegate_reply}"

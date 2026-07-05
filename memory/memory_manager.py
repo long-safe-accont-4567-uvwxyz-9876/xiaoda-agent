@@ -17,6 +17,7 @@ from .vector_store import VectorStore
 from .fluid_memory import FluidMemory
 from .memory_distiller import MemoryDistiller
 from utils.atomic_write import atomic_json_write
+from config import get_agent_display_name
 
 
 def _extract_entities(text: str) -> list[str]:
@@ -70,6 +71,8 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
 
 
 # 停用词集合（话题关键词提取时过滤）
+# 注意：agent 显示名（如"纳西妲"）在 _extract_topic_keywords 中动态注入，
+# 以确保用户自定义 display_name 后仍能被正确过滤
 _TOPIC_STOPWORDS = {
     "的", "了", "是", "在", "我", "你", "他", "她", "它", "我们", "你们", "他们",
     "和", "与", "或", "但", "如果", "因为", "所以", "虽然", "不过", "然后",
@@ -77,8 +80,13 @@ _TOPIC_STOPWORDS = {
     "有", "没有", "不", "没", "可以", "能", "会", "要", "想", "觉得", "感觉",
     "就", "都", "也", "还", "又", "只", "才", "已经", "正在", "一直",
     "吗", "呢", "吧", "啊", "哦", "嗯", "呀", "哈", "嘿",
-    "用户", "助手", "纳西妲", "人家", "爸爸", "妈妈",
+    "用户", "助手", "人家", "爸爸", "妈妈",
 }
+
+
+def _get_topic_stopwords() -> set:
+    """返回带当前 agent display_name 的停用词集合。"""
+    return _TOPIC_STOPWORDS | {get_agent_display_name("nahida")}
 
 
 def _extract_topic_keywords(query: str, top_n: int = 2) -> list[str]:
@@ -100,14 +108,16 @@ def _extract_topic_keywords(query: str, top_n: int = 2) -> list[str]:
             query, topK=top_n * 2, withWeight=False, allowPOS=("n", "nr", "ns", "nt", "nz", "vn", "v")
         )
         # 过滤停用词和过短的词
-        keywords = [kw for kw in keywords if len(kw) >= 2 and kw not in _TOPIC_STOPWORDS]
+        stopwords = _get_topic_stopwords()
+        keywords = [kw for kw in keywords if len(kw) >= 2 and kw not in stopwords]
         return keywords[:top_n]
     except (ImportError, OSError):
         # 降级到普通分词
         try:
             import jieba
             words = jieba.lcut(query)
-            words = [w for w in words if len(w) >= 2 and w not in _TOPIC_STOPWORDS]
+            stopwords = _get_topic_stopwords()
+            words = [w for w in words if len(w) >= 2 and w not in stopwords]
             return words[:top_n]
         except (ImportError, OSError):
             return []
@@ -1202,7 +1212,7 @@ class MemoryManager:
                 if role == "user" and content:
                     lines.append(f"用户: {content[:150]}")
                 elif role == "assistant" and content:
-                    lines.append(f"纳西妲: {content[:150]}")
+                    lines.append(f"{get_agent_display_name('nahida')}: {content[:150]}")
             text = "\n".join(lines)
             if not text or len(text) < 10:
                 return

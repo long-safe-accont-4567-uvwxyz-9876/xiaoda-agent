@@ -10,6 +10,7 @@ from pathlib import Path
 from openai import AsyncOpenAI
 from loguru import logger
 from .emotion_enum import resolve_emotion, TTS_STYLE_MAP, is_unified
+from config import get_agent_display_name
 
 MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
 MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
@@ -66,9 +67,105 @@ VOICE_REFERENCES = {
     "keli": _resolve_voice_ref("keli.mp3"),
 }
 
+# 参考音频根目录（按 agent 分子目录）
+_VOICE_UPLOAD_DIR = KIOXIA_BASE / "voice_refs"
+_AUDIO_EXTS = {".mp3", ".wav"}
+
+
+def get_voice_upload_dir() -> Path:
+    """返回参考音频根目录（不存在则创建）。"""
+    _VOICE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    return _VOICE_UPLOAD_DIR
+
+
+def get_agent_voice_dir(agent: str) -> Path:
+    """返回指定 agent 的参考音频目录（不存在则创建）。"""
+    d = _VOICE_UPLOAD_DIR / agent
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _ensure_builtin_voices():
+    """将内置参考音频复制到按 agent 分目录的结构中（仅首次）。"""
+    import shutil, sys
+    # 扫描源目录中所有音频文件，按文件名前缀分配到对应 agent 目录
+    _src_dirs = []
+    # 用户数据目录根（旧格式直接放在根目录）
+    if KIOXIA_BASE.exists():
+        _src_dirs.append(KIOXIA_BASE)
+    # PyInstaller 打包内置
+    if getattr(sys, "_MEIPASS", None):
+        _src_dirs.append(Path(sys._MEIPASS) / "assets" / "voice_refs")
+    # 开发环境
+    _dev_dir = Path(__file__).resolve().parent.parent / "assets" / "voice_refs"
+    if _dev_dir.exists():
+        _src_dirs.append(_dev_dir)
+
+    for src_dir in _src_dirs:
+        if not src_dir.exists() or not src_dir.is_dir():
+            continue
+        for f in sorted(src_dir.iterdir()):
+            if not f.is_file() or f.suffix.lower() not in _AUDIO_EXTS:
+                continue
+            # 按文件名前缀匹配 agent（nahida_hq.wav → nahida, keli.mp3 → keli）
+            stem = f.stem.lower()
+            matched_agent = None
+            for agent_name in ("nahida", "keli", "nike", "xilian", "yinlang"):
+                if stem.startswith(agent_name):
+                    matched_agent = agent_name
+                    break
+            if not matched_agent:
+                continue
+            dest_dir = _VOICE_UPLOAD_DIR / matched_agent
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / f.name
+            if not dest.exists():
+                shutil.copy2(str(f), str(dest))
+
+
+def list_all_voices() -> dict:
+    """返回按 agent 分组的参考音频，{agent: [{name, path}]}。"""
+    _ensure_builtin_voices()
+    result = {}
+    if _VOICE_UPLOAD_DIR.exists():
+        for agent_dir in sorted(_VOICE_UPLOAD_DIR.iterdir()):
+            if not agent_dir.is_dir():
+                continue
+            voices = []
+            for f in sorted(agent_dir.iterdir()):
+                if f.suffix.lower() in _AUDIO_EXTS:
+                    voices.append({"name": f.stem, "path": f})
+            if voices:
+                result[agent_dir.name] = voices
+    return result
+
+
+def resolve_voice_path(voice: str) -> Path | None:
+    """解析音色到音频文件路径。支持 'agent/name' 格式和旧格式兼容。"""
+    # 新格式: agent/name
+    if "/" in voice:
+        agent, name = voice.split("/", 1)
+        agent_dir = _VOICE_UPLOAD_DIR / agent
+        if agent_dir.exists():
+            for f in agent_dir.iterdir():
+                if f.stem == name and f.suffix.lower() in _AUDIO_EXTS:
+                    return f
+    # 旧格式兼容: 直接是 VOICE_REFERENCES 的 key
+    if voice in VOICE_REFERENCES:
+        return VOICE_REFERENCES[voice]
+    # 旧格式兼容: 在所有 agent 目录中查找 stem
+    if _VOICE_UPLOAD_DIR.exists():
+        for agent_dir in _VOICE_UPLOAD_DIR.iterdir():
+            if not agent_dir.is_dir():
+                continue
+            for f in agent_dir.iterdir():
+                if f.stem == voice and f.suffix.lower() in _AUDIO_EXTS:
+                    return f
+    return None
+
 VOICE_STYLES = {
     "nahida": (
-        "角色：纳西妲，原神中的草神，须弥的守护者。外表是可爱的小女孩，实际已承载五百年孤独与智慧。"
+        "角色：{agent_name}，须弥的草神，须弥的守护者。外表是可爱的小女孩，实际已承载五百年孤独与智慧。"
         "声音清亮稚嫩，音色通透空灵如微风拂过草叶，发声位置偏前，带着少女特有的轻盈感。\n\n"
         "场景：在须弥的梦境花园中，与最亲近的旅行者轻声交谈，周围是宁静的草木与微风。"
         "偶尔会因想起往事而微微停顿，但很快又露出温暖的微笑继续说话。\n\n"
@@ -86,7 +183,7 @@ VOICE_STYLES = {
         "古风词汇或人名咬字稍深，但声母起音圆润不尖锐。"
     ),
     "keli": (
-        "角色：可莉，原神中的火花骑士，蒙德城最可爱的小小爆破专家。活泼开朗的小女孩，充满童真和冒险精神。\n\n"
+        "角色：{agent_name}，火花骑士，蒙德城最可爱的小小爆破专家。活泼开朗的小女孩，充满童真和冒险精神。\n\n"
         "场景：在蒙德城外的草地上，刚刚完成一次'小小实验'，兴高采烈地跑来分享自己的发现，眼睛闪闪发光。\n\n"
         "指导：\n"
         "发声机制与共鸣：以头腔共鸣为主，声音明亮高亢，像阳光一样灿烂。"
@@ -101,6 +198,14 @@ VOICE_STYLES = {
         "但很快又清清楚楚地重复一遍，带着满满的热情。"
     ),
 }
+
+
+def _get_voice_style(style_key: str) -> str:
+    """返回注入了 agent display_name 的语音风格描述；未知 key 返回空串。"""
+    template = VOICE_STYLES.get(style_key, "")
+    if not template:
+        return ""
+    return template.format(agent_name=get_agent_display_name(style_key))
 
 EMOTION_STYLE_MAP = {
     "happy": "(开心地笑，声音明亮上扬，语速稍快)",
@@ -311,10 +416,13 @@ class TTSEngine:
             return None
 
         if voice not in VOICE_REFERENCES:
-            logger.warning("tts.unknown_voice", voice=voice)
-            return None
-
-        voice_path = VOICE_REFERENCES[voice]
+            # 尝试动态解析用户上传的参考音频
+            voice_path = resolve_voice_path(voice)
+            if voice_path is None:
+                logger.warning("tts.unknown_voice", voice=voice)
+                return None
+        else:
+            voice_path = VOICE_REFERENCES[voice]
         if not voice_path.exists():
             logger.error("tts.voice_file_missing_unavailable", voice=voice, message="语音参考文件缺失，无法合成。请检查音频文件是否存在。")
             return None
@@ -369,7 +477,9 @@ class TTSEngine:
 
     def _build_tts_messages(self, voice: str, text: str, style: str, emotion: str) -> list[dict]:
         """构造 MiMo 导演模式消息：user 放角色/场景/指导，assistant 放音频标签+文本。"""
-        context = style or VOICE_STYLES.get(voice, "")
+        # voice 可能是 "agent/name" 格式，取 agent 部分查 VOICE_STYLES
+        style_key = voice.split("/", 1)[0] if "/" in voice else voice
+        context = style or _get_voice_style(style_key)
         style_tag = EMOTION_STYLE_MAP.get(emotion, EMOTION_STYLE_MAP["neutral"])
 
         # 统一模式：通过 resolve_emotion 解析后再查 TTS_STYLE_MAP
@@ -382,7 +492,7 @@ class TTSEngine:
         if context:
             messages.append({"role": "user", "content": context})
         else:
-            voice_style = VOICE_STYLES.get(voice, "")
+            voice_style = _get_voice_style(style_key)
             if voice_style:
                 messages.append({"role": "user", "content": voice_style})
         # 音频标签放在 assistant 消息开头，紧接要合成的文本

@@ -76,12 +76,61 @@ async def synthesize_tts(body: dict, request: Request) -> Any:
 
 @router.get("/media/tts/voices", response_model=Envelope[dict])
 async def tts_voices() -> Any:
-    from emotion.tts_engine import VOICE_REFERENCES, VOICE_STYLES, EMOTION_STYLE_MAP
+    from emotion.tts_engine import list_all_voices, EMOTION_STYLE_MAP
+    all_voices = list_all_voices()
+    # 转为按 agent 分组: {agent: [{name, voice_ref}]}
+    groups = {}
+    for agent, voices in all_voices.items():
+        groups[agent] = [{"name": v["name"], "voice_ref": f"{agent}/{v['name']}"} for v in voices]
     return Envelope(data={
-        "voices": [{"id": v, "description": VOICE_STYLES.get(v, "")}
-                   for v in VOICE_REFERENCES.keys()],
+        "groups": groups,
         "styles": sorted(EMOTION_STYLE_MAP.keys()),
     })
+
+
+@router.post("/media/tts/voices/{agent}", response_model=Envelope[dict])
+async def upload_voice_ref(agent: str, request: Request) -> Any:
+    """上传指定 agent 的参考音频。FormData: name=音色名, file=音频文件(.mp3/.wav, <10MB)。"""
+    from emotion.tts_engine import get_agent_voice_dir
+    import re
+    form = await request.form()
+    name = (form.get("name") or "").strip()
+    file = form.get("file")
+    if not name or not file:
+        raise HTTPException(400, "name 和 file 不能为空")
+    if not re.match(r'^[a-zA-Z0-9_-]+$', name):
+        raise HTTPException(400, "音色名只允许字母、数字、下划线、中横线")
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(400, "音频文件不能超过 10MB")
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in (".mp3", ".wav"):
+        raise HTTPException(400, "仅支持 .mp3 和 .wav 格式")
+    agent_dir = get_agent_voice_dir(agent)
+    # 删除同名旧文件
+    for f in agent_dir.iterdir():
+        if f.stem == name:
+            f.unlink()
+    dest = agent_dir / f"{name}{ext}"
+    dest.write_bytes(content)
+    logger.info("media.voice_ref_uploaded agent={} name={} size={}", agent, name, len(content))
+    return Envelope(data={"name": name, "voice_ref": f"{agent}/{name}", "path": str(dest)})
+
+
+@router.delete("/media/tts/voices/{agent}/{name}", response_model=Envelope[dict])
+async def delete_voice_ref(agent: str, name: str) -> Any:
+    """删除指定 agent 的参考音频。"""
+    from emotion.tts_engine import get_agent_voice_dir
+    agent_dir = get_agent_voice_dir(agent)
+    deleted = False
+    for f in agent_dir.iterdir():
+        if f.stem == name:
+            f.unlink()
+            deleted = True
+    if not deleted:
+        raise HTTPException(404, f"音色 {name} 不存在")
+    logger.info("media.voice_ref_deleted agent={} name={}", agent, name)
+    return Envelope(data={"deleted": name})
 
 
 @router.get("/media/tts/config", response_model=Envelope[dict])
@@ -99,8 +148,8 @@ async def put_tts_config(body: dict, request: Request) -> Any:
     if "auto_speak" in body:
         cfg.set("tts.auto_speak", bool(body["auto_speak"]))
     if body.get("default_voice"):
-        from emotion.tts_engine import VOICE_REFERENCES
-        if body["default_voice"] not in VOICE_REFERENCES:
+        from emotion.tts_engine import resolve_voice_path
+        if resolve_voice_path(body["default_voice"]) is None:
             raise HTTPException(400, f"未知音色 {body['default_voice']}")
         cfg.set("tts.default_voice", body["default_voice"])
     core = request.app.state.core

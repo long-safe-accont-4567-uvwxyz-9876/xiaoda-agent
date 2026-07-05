@@ -1,6 +1,7 @@
 import random
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from loguru import logger
+from config import get_agent_display_name
 
 
 @register_tool(
@@ -39,7 +40,7 @@ async def nudge_greeting(user_id: str, message: str = "") -> ToolResult:
         greetings = [
             f"{address_term}，好久不见！最近怎么样呀？",
             f"{address_term}，人家想你了！有什么需要帮忙的吗？",
-            f"嘿！{address_term}！还记得我吗？我是纳西妲～",
+            f"嘿！{address_term}！还记得我吗？我是{get_agent_display_name('nahida')}～",
         ]
         message = random.choice(greetings)
     return ToolResult.ok({"user_id": user_id, "message": message, "status": "sent"})

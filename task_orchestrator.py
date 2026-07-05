@@ -11,7 +11,7 @@ from openai import AsyncOpenAI
 from loguru import logger
 from agent_dispatcher import AgentDispatcher
 from emotion.emoji_config import get_status_msg
-from config import AGENT_ROUTE_KEYWORDS, DATA_DIR
+from config import AGENT_ROUTE_KEYWORDS, DATA_DIR, get_agent_display_name
 from belief_router import BeliefRouter
 
 
@@ -316,7 +316,7 @@ class RouterNode:
             caps = ", ".join(cfg.get("capabilities", []))
             desc = cfg.get("route_description", "")
             agent_list.append(f"- {name}（{cfg.get('display_name', name)}）: 能力[{caps}] {desc}")
-        agent_list.append("- nahida（纳西妲）: 能力[chat, emotion, daily, general] 日常对话、情感交流、综合分析")
+        agent_list.append(f"- nahida（{get_agent_display_name('nahida')}）: 能力[chat, emotion, daily, general] 日常对话、情感交流、综合分析")
 
         return f"""你是一个任务路由器。根据用户输入，决定应该由哪些Agent来处理。
 
@@ -471,7 +471,7 @@ class RouterNode:
             name_map[n] = n
             name_map[cfg.get("display_name", "")] = n
         name_map["nahida"] = "nahida"
-        name_map["纳西妲"] = "nahida"
+        name_map[get_agent_display_name('nahida')] = "nahida"
 
         # 模糊匹配 LLM 输出的每个部分
         targets = []
@@ -842,7 +842,7 @@ class SynthesisNode:
         if not results:
             return {"final_output": state.sub_agent_reply}
 
-        await state.push_progress(get_status_msg("nahida", "done", "纳西妲正在整理全部结果...", None))
+        await state.push_progress(get_status_msg("nahida", "done", f"{get_agent_display_name('nahida')}正在整理全部结果...", None))
 
         parts = []
         for r in results:

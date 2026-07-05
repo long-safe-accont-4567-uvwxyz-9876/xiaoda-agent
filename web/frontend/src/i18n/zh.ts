@@ -357,6 +357,10 @@ export default {
     stickerDescPh: '表情包描述（如：开心大笑）',
     noDesc: '（未填写描述）',
     stickerDeleteConfirm: '确认删除？',
+    noVoice: '无（不启用 TTS）',
+    uploadVoice: '选择音频',
+    upload: '上传',
+    voiceUploaded: '参考音频上传成功 ✓',
   },
 
   // ModelsView.vue
@@ -766,6 +770,21 @@ export default {
     taskQueued: '任务已入队（进度实时推送）',
     cancelled: '已取消',
     deleted: '已删除',
+    voiceManage: '参考音频管理',
+    voiceUploadHint: '支持 .mp3 / .wav 格式，≤10MB。音色名仅限字母、数字、下划线、中横线。',
+    voiceNamePh: '音色名称（字母数字）',
+    selectAudio: '选择音频',
+    uploadVoice: '上传',
+    voiceList: '音色列表',
+    builtin: '内置',
+    custom: '自定义',
+    voiceDeleteConfirm: '确认删除该参考音频？',
+    voiceUploaded: '参考音频上传成功 ✓',
+    voiceDeleted: '参考音频已删除',
+    voiceSet: '已切换参考音频 ✓',
+    noVoices: '暂无音色',
+    agentPh: '选择 Agent',
+    noVoiceForAgent: '该 Agent 尚未启用参考音频，请先在下方管理区上传并选择',
   },
 
   // HealthView.vue

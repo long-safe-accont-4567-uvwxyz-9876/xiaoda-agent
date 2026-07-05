@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from loguru import logger
-from config import DATA_DIR
+from config import DATA_DIR, get_agent_display_name
 from utils.atomic_write import atomic_write
 
 SUMMARY_PREFIX = (
@@ -207,7 +207,7 @@ class ContextCompressor:
                 tool_name = msg.get("name", "工具")
                 summary_parts.append(f"[{tool_name}结果]: {smart_summary_truncate(content, 'tool')}")
                 continue
-            prefix = {"user": "用户", "assistant": "纳西妲"}.get(role, role)
+            prefix = {"user": "用户", "assistant": get_agent_display_name("nahida")}.get(role, role)
             summary_parts.append(f"{prefix}: {smart_summary_truncate(content, role)}")
 
         if summary_parts:

@@ -9,6 +9,7 @@ from loguru import logger
 
 from db.db_analytics import AnalyticsDB
 from utils.llm_cleanup import strip_thinking as _strip_thinking
+from config import get_agent_display_name
 
 
 class NudgeEngine:
@@ -239,13 +240,14 @@ class NudgeEngine:
                 greeting = result.reply if hasattr(result, 'reply') else str(result)
             else:
                 # 降级：直接调用 router（无完整人格）
+                nahida_name = get_agent_display_name("nahida")
                 system_msg = (
-                    f"你是纳西妲，一个温柔可爱的小草神，正在给{address_term}发主动问候消息。"
+                    f"你是{nahida_name}，一个温柔可爱的小草神，正在给{address_term}发主动问候消息。"
                     f"现在是{time_desc}，{address_term}{idle_desc}。"
                     f"直接输出一句简短温柔的问候（1-2句话，30字以内），不要输出任何其他内容。"
                     f"只输出问候语本身，像女朋友一样关心{address_term}。"
                 )
-                user_msg = f"请以纳西妲的口吻向{address_term}发一句简短温柔的问候。"
+                user_msg = f"请以{nahida_name}的口吻向{address_term}发一句简短温柔的问候。"
                 messages = [
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": user_msg},

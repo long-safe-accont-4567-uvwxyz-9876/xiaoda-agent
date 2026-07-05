@@ -25,6 +25,7 @@ const testResult = ref<any>(null)
 const testing = ref(false)
 const saving = ref(false)
 const wpInput = ref<HTMLInputElement | null>(null)
+const token = localStorage.getItem('token') || ''
 const uploadingWp = ref(false)
 const discoveredModels = ref<Array<{ provider: string; label?: string; models: Array<{ id: string; display_name: string; free: boolean }> }>>([])
 const advancedTouched = ref(false)
@@ -39,6 +40,22 @@ const stickerFile = ref<File | null>(null)
 const stickerDesc = ref('')
 const stickerEmotion = ref('happy')
 const stickerInput = ref<HTMLInputElement | null>(null)
+
+// ── 参考音频管理 ──
+const voiceGroups = ref<Record<string, Array<{ name: string; voice_ref: string }>>>({})
+const voiceUploading = ref(false)
+const voiceFile = ref<File | null>(null)
+const voiceInputEl = ref<HTMLInputElement | null>(null)
+const voiceOptions = computed(() => {
+  const opts: Array<{ label: string; value: string | null }> = [{ label: t('agentsView.noVoice'), value: null }]
+  const agentName = editing.value?.name
+  if (agentName && voiceGroups.value[agentName]) {
+    voiceGroups.value[agentName].forEach(v => {
+      opts.push({ label: v.name, value: v.voice_ref })
+    })
+  }
+  return opts
+})
 
 const createObjectURL = (f: File) => URL.createObjectURL(f)
 
@@ -200,6 +217,7 @@ async function openEditor(agent: any | null) {
       loadToolCategories()
     } catch { permissions.value = { tools: {}, mcp_servers: {}, is_main: false } }
     loadStickers()
+    loadVoices()
   } else {
     editing.value = {
       name: '', display_name: '', provider: 'mimo', model: '',
@@ -371,6 +389,41 @@ async function removeSticker(filename: string) {
     message.error(e.message)
   }
 }
+
+// ── 参考音频 ──
+async function loadVoices() {
+  try {
+    const v = await get('/media/tts/voices')
+    voiceGroups.value = v.groups || {}
+  } catch { /* */ }
+}
+
+function onVoiceFilePick(e: Event) {
+  const input = e.target as HTMLInputElement
+  voiceFile.value = input.files?.[0] || null
+}
+
+async function uploadVoiceForAgent() {
+  if (!voiceFile.value || !editing.value?.name) return
+  const agentName = editing.value.name
+  const voiceName = `${agentName}_${Date.now().toString(36)}`
+  voiceUploading.value = true
+  try {
+    const formData = new FormData()
+    formData.append('name', voiceName)
+    formData.append('file', voiceFile.value)
+    const result = await api.uploadVoiceRef(agentName, formData)
+    message.success(t('agentsView.voiceUploaded'))
+    voiceFile.value = null
+    if (voiceInputEl.value) voiceInputEl.value.value = ''
+    editing.value.voice_ref = result.voice_ref
+    await loadVoices()
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    voiceUploading.value = false
+  }
+}
 </script>
 
 <template>
@@ -475,8 +528,19 @@ async function removeSticker(filename: string) {
             <n-form-item :label="t('agentsView.memoryScope')" v-if="!isMain">
               <n-select v-model:value="editing.memory_scope" :options="memScopeOptions" />
             </n-form-item>
-            <n-form-item label="voice_ref" v-if="!isMain">
-              <n-input v-model:value="editing.voice_ref" :placeholder="t('agentsView.voiceRefPh')" />
+            <n-form-item label="voice_ref">
+              <div class="voice-ref-field">
+                <n-select v-model:value="editing.voice_ref" :options="voiceOptions"
+                          :placeholder="t('agentsView.voiceRefPh')" style="flex: 1" />
+                <input ref="voiceInputEl" type="file" accept="audio/mpeg,audio/wav"
+                       style="display: none" @change="onVoiceFilePick" />
+                <n-button size="small" @click="voiceInputEl?.click()" :loading="voiceUploading">
+                  {{ voiceFile ? voiceFile.name : t('agentsView.uploadVoice') }}
+                </n-button>
+                <n-button size="small" type="primary" :disabled="!voiceFile" @click="uploadVoiceForAgent">
+                  {{ t('agentsView.upload') }}
+                </n-button>
+              </div>
             </n-form-item>
             <n-form-item :label="t('agentsView.backdrop')">
               <div class="wallpaper-field">
@@ -497,7 +561,7 @@ async function removeSticker(filename: string) {
           </n-form>
         </n-tab-pane>
 
-        <n-tab-pane name="perm" :tab="t('agentsView.permissions')" v-if="!isCreate && !permissions.is_main">
+        <n-tab-pane name="perm" :tab="t('agentsView.permissions')" v-if="!isCreate">
           <div class="perm-toolbar">
             <span class="perm-hint">{{ t('agentsView.permHint') }}</span>
             <n-button size="small" type="primary" :disabled="!permDirty" @click="applyPermissions">
@@ -577,7 +641,7 @@ async function removeSticker(filename: string) {
             <n-spin :show="stickerLoading">
               <div v-if="stickerList.length" class="sticker-grid">
                 <div v-for="s in stickerList" :key="s.name" class="sticker-card">
-                  <n-image :src="s.url" width="100" height="100" object-fit="cover"
+                  <n-image :src="s.url + '?token=' + token" width="100" height="100" object-fit="cover"
                            :fallback-src="''" lazy class="sticker-img" />
                   <div class="sticker-info">
                     <span class="sticker-desc">{{ s.description }}</span>
@@ -694,6 +758,7 @@ async function removeSticker(filename: string) {
 
 .wallpaper-field { display: flex; flex-direction: column; gap: 8px; width: 100%; }
 .wallpaper-row { display: flex; gap: 8px; }
+.voice-ref-field { display: flex; gap: 8px; align-items: center; width: 100%; flex-wrap: wrap; }
 .wallpaper-preview {
   height: 90px;
   border-radius: 10px;

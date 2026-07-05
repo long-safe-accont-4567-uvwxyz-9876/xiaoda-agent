@@ -96,6 +96,19 @@ class NahidaCLI:
         self._pending: dict[str, asyncio.Future] = {}
         self._greeting_queue: list[str] = []
         self.address_term = "爸爸"
+        # 动态 agent 标签：connect 成功后从 /api/v1/agents 更新；默认回退 AGENT_LABELS
+        self.agent_labels: dict[str, tuple] = dict(AGENT_LABELS)
+
+    def _agent_display_name(self, name: str) -> str:
+        """返回 agent 的 display_name，优先读动态值，回退到 AGENT_LABELS 默认。"""
+        labels = self.agent_labels or AGENT_LABELS
+        return labels.get(name, (name, DENDRO, "🌿"))[0]
+
+    def _stage_text(self, stage: str) -> str:
+        """返回阶段提示文案，thinking 阶段使用动态 agent 名。"""
+        if stage == "thinking":
+            return f"🌿 {self._agent_display_name('nahida')}正在想……"
+        return STAGE_TEXT.get(stage, "🌿 处理中……")
 
     # ── 连接 ──────────────────────────────────────────
 
@@ -116,6 +129,21 @@ class NahidaCLI:
                 term = data.get("address_term", "")
                 if term and not term.startswith("（"):
                     self.address_term = term
+        except Exception:
+            pass
+        # 拉取各 agent 的 display_name，更新 agent_labels（覆盖默认值）
+        try:
+            req = urllib.request.Request(
+                f"{self.base}/api/v1/agents",
+                headers={"Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                agents = json.load(resp).get("data", []) or []
+            for item in agents:
+                name = item.get("name", "")
+                dn = item.get("display_name", "")
+                if name and dn and name in self.agent_labels:
+                    _, color, icon = self.agent_labels[name]
+                    self.agent_labels[name] = (dn, color, icon)
         except Exception:
             pass
 
@@ -163,7 +191,7 @@ class NahidaCLI:
         console.print(Text(BANNER, style=f"bold {DENDRO}"))
         console.print(Text("  🌿  世 界 的 记 忆 ， 由 我 来 守 护  🌿", style=WISDOM))
         console.print()
-        label, color, icon = AGENT_LABELS[self.agent]
+        label, color, icon = self.agent_labels[self.agent]
         console.print(Panel(
             Text(random.choice(GREETINGS).replace("爸爸", self.address_term), style="white"),
             title=f"{icon} {label}", title_align="left",
@@ -175,7 +203,7 @@ class NahidaCLI:
 
     def render_reply(self, event: dict) -> None:
         agent = event.get("agent") or self.agent
-        label, color, icon = AGENT_LABELS.get(agent, (agent, DENDRO, "🌿"))
+        label, color, icon = self.agent_labels.get(agent, (agent, DENDRO, "🌿"))
         reply = event.get("reply", "")
         emotion = event.get("emotion", "")
         sub = []
@@ -207,7 +235,7 @@ class NahidaCLI:
             await self.connect()
         except Exception as e:
             console.print(Panel(
-                Text(f"连不上纳西妲网关（{self.ws_url}）\n{e}\n\n"
+                Text(f"连不上网关（{self.ws_url}）\n{e}\n\n"
                      f"请确认 WebUI 服务已启动：systemctl status nahida-web",
                      style="red"), border_style="red"))
             return
@@ -216,7 +244,7 @@ class NahidaCLI:
         while True:
             self.drain_greetings()
             try:
-                label, color, icon = AGENT_LABELS.get(self.agent, (self.agent, DENDRO, "🌿"))
+                label, color, icon = self.agent_labels.get(self.agent, (self.agent, DENDRO, "🌿"))
                 user_input = await asyncio.to_thread(
                     console.input, f"[bold {color}]{self.address_term} ›[/] ")
             except (EOFError, KeyboardInterrupt):
@@ -227,26 +255,26 @@ class NahidaCLI:
             if user_input in ("/quit", "/exit", "exit", "quit"):
                 break
             if user_input == "/agents":
-                for name, (label, color, icon) in AGENT_LABELS.items():
+                for name, (label, color, icon) in self.agent_labels.items():
                     marker = "▶" if name == self.agent else " "
                     console.print(f"  {marker} {icon} [bold {color}]{label}[/] ({name})")
                 continue
             if user_input.startswith("/agent"):
                 arg = user_input.removeprefix("/agent").strip()
-                if arg in AGENT_LABELS:
+                if arg in self.agent_labels:
                     await self.set_agent(arg)
-                    label, color, icon = AGENT_LABELS[arg]
+                    label, color, icon = self.agent_labels[arg]
                     console.print(Text(f"  {icon} 现在由 {label} 接管对话", style=color))
                 else:
-                    console.print(Text(f"  可选：{' / '.join(AGENT_LABELS)}", style=MOON_DIM))
+                    console.print(Text(f"  可选：{' / '.join(self.agent_labels)}", style=MOON_DIM))
                 continue
 
-            status_line = Text(STAGE_TEXT["thinking"], style=MOON_DIM)
+            status_line = Text(self._stage_text("thinking"), style=MOON_DIM)
             with Live(status_line, console=console, refresh_per_second=8,
                       transient=True) as live:
                 def on_status(event: Any) -> None:
                     stage = event.get("stage", "")
-                    text = event.get("text") or STAGE_TEXT.get(stage, "🌿 处理中……")
+                    text = event.get("text") or self._stage_text(stage)
                     live.update(Text(text, style=MOON_DIM))
                 try:
                     event = await self.chat(user_input, on_status)
@@ -261,14 +289,14 @@ class NahidaCLI:
         console.print()
         console.print(Panel(
             Text(random.choice(FAREWELLS).replace("爸爸", self.address_term), style="white"),
-            title="🌿 纳西妲", title_align="left",
+            title=f"🌿 {self._agent_display_name(self.agent)}", title_align="left",
             border_style=DENDRO, expand=False, padding=(0, 2)))
         if self.ws:
             await self.ws.close()
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="纳西妲 CLI（连接 WebUI 网关）")
+    parser = argparse.ArgumentParser(description="AI Agent CLI（连接 WebUI 网关）")
     parser.add_argument("--host", default=os.getenv("WEBUI_HOST_CLI", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("WEBUI_PORT", "8082")))
     parser.add_argument("--password", default=os.getenv("WEBUI_PASSWORD", ""))
