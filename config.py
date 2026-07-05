@@ -405,6 +405,33 @@ def get_agent_display_name_en(name: str) -> str:
     return dn
 
 
+# ── Agent 原名 → display_name 全局替换 ────────────────────────
+# 每个 agent 的人格文件中使用原名，运行时自动替换为用户配置的显示名。
+# 全局统一机制：所有 agent 共用一套替换逻辑，不分主次。
+_ORIGINAL_NAMES: dict[str, str] = {
+    "纳西妲": "nahida",
+    "可莉": "keli",
+    "银狼": "yinlang",
+    "昔涟": "xilian",
+    "尼可": "nike",
+}
+
+
+def apply_agent_name_replacements(content: str) -> str:
+    """将人格文件中所有 agent 原名替换为 config 中的 display_name。
+
+    按原名长度降序替换，避免短名破坏长名。
+    例：若用户把"纳西妲"改为"小妲"，人格文件中所有"纳西妲"都会变成"小妲"。
+    """
+    for original_name, agent_key in sorted(
+        _ORIGINAL_NAMES.items(), key=lambda x: -len(x[0])
+    ):
+        dn = get_agent_display_name(agent_key)
+        if dn and dn != original_name:
+            content = content.replace(original_name, dn)
+    return content
+
+
 # ── ASR 语音识别配置 ──
 ASR_API_KEY = get_secret("ASR_API_KEY", "") or get_secret("SILICONFLOW_API_KEY", "")
 ASR_BASE_URL = os.getenv("ASR_BASE_URL", "https://api.siliconflow.cn/v1")

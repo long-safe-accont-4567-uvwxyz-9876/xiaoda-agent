@@ -166,13 +166,9 @@ class SubAgent:
         if not self._personality:
             self._personality = f"你是{self.config.display_name}。"
 
-        # 替换 {agent_name} 占位符（主 Agent 显示名）
-        if "{agent_name}" in self._personality:
-            try:
-                from config import get_agent_display_name
-                self._personality = self._personality.replace("{agent_name}", get_agent_display_name("nahida"))
-            except Exception:
-                self._personality = self._personality.replace("{agent_name}", "纳西妲")
+        # 全局替换所有 agent 原名为 display_name（统一机制）
+        from config import apply_agent_name_replacements
+        self._personality = apply_agent_name_replacements(self._personality)
 
         # effort 思考努力程度提示
         if self.config.effort:

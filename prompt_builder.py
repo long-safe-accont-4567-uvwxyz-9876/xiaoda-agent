@@ -29,7 +29,6 @@ _SYSTEM_PROMPT_CACHE_TS: float = 0.0
 _SYSTEM_PROMPT_CACHE_TTL: float = 60.0
 _SYSTEM_PROMPT_CACHE_MTIMES: dict[str, float] = {}
 _SYSTEM_PROMPT_CACHE_ADDR_TERM: str = ""
-_SYSTEM_PROMPT_CACHE_AGENT_NAME: str = ""
 
 # ── 非主人安全化 system prompt 缓存变量（防隐私泄露） ──────────
 _SAFE_PROMPT_CACHE: str | None = None
@@ -603,16 +602,14 @@ def _get_stable_section_mtimes() -> dict[str, float]:
     return mtimes
 
 
-def _replace_placeholders(content: str, address_term: str, agent_name: str) -> str:
-    """替换 workspace 文件中的占位符。"""
+def _replace_placeholders(content: str, address_term: str) -> str:
+    """替换 workspace 文件中的 {address_term} 占位符。"""
     if "{address_term}" in content:
         content = content.replace("{address_term}", address_term)
-    if "{agent_name}" in content:
-        content = content.replace("{agent_name}", agent_name)
     return content
 
 
-def _build_stable_prompt(address_term: str, agent_name: str = "") -> str:
+def _build_stable_prompt(address_term: str) -> str:
     """构建系统提示「稳定段」：SOUL.md/AGENTS.md/IDENTITY.md/TOOLS.md/skills/硬件信息。
 
     这些内容不随请求变化，只随 address_term 变化，因此用模块级 dict 缓存。
@@ -626,7 +623,7 @@ def _build_stable_prompt(address_term: str, agent_name: str = "") -> str:
         _stable_prompt_cache.clear()
         _stable_prompt_cache_mtimes = current_mtimes
 
-    cache_key = f"{address_term}|{agent_name}"
+    cache_key = address_term
     if cache_key in _stable_prompt_cache:
         return _stable_prompt_cache[cache_key]
 
@@ -638,12 +635,12 @@ def _build_stable_prompt(address_term: str, agent_name: str = "") -> str:
 
     soul = load_workspace_file("SOUL.md")
     if soul:
-        soul = _replace_placeholders(soul, address_term, agent_name)
+        soul = _replace_placeholders(soul, address_term)
         sections.append(soul)
 
     identity = load_workspace_file("IDENTITY.md")
     if identity:
-        identity = _replace_placeholders(identity, address_term, agent_name)
+        identity = _replace_placeholders(identity, address_term)
         sections.append(identity)
 
     tools_rules = load_workspace_file("TOOLS.md")
@@ -668,7 +665,7 @@ def _build_stable_prompt(address_term: str, agent_name: str = "") -> str:
     return result
 
 
-def _load_cached_modules(address_term: str, agent_name: str = "") -> dict[str, str]:
+def _load_cached_modules(address_term: str) -> dict[str, str]:
     """加载各模块内容（按 mtime 缓存），返回 {模块名: 内容}。
 
     包含 9 个模块: AGENTS/SOUL/IDENTITY/TOOLS/USER/MEMORY/HEARTBEAT + skills + hardware
@@ -855,8 +852,13 @@ def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸") -> s
 
     # ── 拼接: Stable Prefix + Scene-Aware Middle ──────────────
     if stable_prefix and scene_middle:
-        return stable_prefix + "\n\n---\n\n" + scene_middle
-    return stable_prefix or scene_middle
+        result = stable_prefix + "\n\n---\n\n" + scene_middle
+    else:
+        result = stable_prefix or scene_middle
+
+    # 全局替换所有 agent 原名为 display_name（统一机制）
+    from config import apply_agent_name_replacements
+    return apply_agent_name_replacements(result)
 
 
 def get_scene_cache_stats() -> dict:
@@ -1101,7 +1103,7 @@ def _build_xp_segment(user_id: str | None, address_term: str = "爸爸") -> str:
         return ""
 
 
-def _build_cached_system_prompt(address_term: str, agent_name: str = "") -> str:
+def _build_cached_system_prompt(address_term: str) -> str:
     """构建系统提示词基础段（含增量路径和缓存回退）。"""
     try:
         from config import PROMPT_CACHING_ENABLED
@@ -1111,7 +1113,7 @@ def _build_cached_system_prompt(address_term: str, agent_name: str = "") -> str:
     system_prompt = ""
     if PROMPT_CACHING_ENABLED:
         try:
-            stable = _build_stable_prompt(address_term, agent_name)
+            stable = _build_stable_prompt(address_term)
             # extra_context 延迟到末尾注入（保证新段落顺序）
             dynamic = _build_dynamic_prompt("")
             if dynamic:
@@ -1123,19 +1125,18 @@ def _build_cached_system_prompt(address_term: str, agent_name: str = "") -> str:
             logger.debug("prompt_builder.incremental_fallback error={}", str(e))
 
     if not system_prompt:
-        global _SYSTEM_PROMPT_CACHE, _SYSTEM_PROMPT_CACHE_TS, _SYSTEM_PROMPT_CACHE_MTIMES, _SYSTEM_PROMPT_CACHE_ADDR_TERM, _SYSTEM_PROMPT_CACHE_AGENT_NAME
+        global _SYSTEM_PROMPT_CACHE, _SYSTEM_PROMPT_CACHE_TS, _SYSTEM_PROMPT_CACHE_MTIMES, _SYSTEM_PROMPT_CACHE_ADDR_TERM
         from config import DATA_DIR
 
         now = time.time()
         current_mtimes = _get_workspace_mtimes()
         mtime_changed = current_mtimes != _SYSTEM_PROMPT_CACHE_MTIMES
         addr_changed = address_term != _SYSTEM_PROMPT_CACHE_ADDR_TERM
-        name_changed = agent_name != _SYSTEM_PROMPT_CACHE_AGENT_NAME
 
-        if _SYSTEM_PROMPT_CACHE and (now - _SYSTEM_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL and not mtime_changed and not addr_changed and not name_changed:
+        if _SYSTEM_PROMPT_CACHE and (now - _SYSTEM_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL and not mtime_changed and not addr_changed:
             system_prompt = _SYSTEM_PROMPT_CACHE
         else:
-            sections = _build_workspace_sections(address_term, agent_name)
+            sections = _build_workspace_sections(address_term)
             sections.append(_build_hardware_context(DATA_DIR))
             system_prompt = "\n\n---\n\n".join(sections)
 
@@ -1143,7 +1144,6 @@ def _build_cached_system_prompt(address_term: str, agent_name: str = "") -> str:
             _SYSTEM_PROMPT_CACHE_TS = now
             _SYSTEM_PROMPT_CACHE_MTIMES = current_mtimes
             _SYSTEM_PROMPT_CACHE_ADDR_TERM = address_term
-            _SYSTEM_PROMPT_CACHE_AGENT_NAME = agent_name
         # extra_context 移到末尾注入
     return system_prompt
 
@@ -1245,26 +1245,19 @@ def _inject_xp_and_extra(system_prompt: str, user_id: str | None, extra_context:
 def build_system_prompt(extra_context: str = "", address_term: str = "爸爸",
                          user_id: str | None = None,
                          user_input: str | None = None) -> str:
-    # 获取 agent 显示名，用于替换模板中的 {agent_name} 占位符
-    try:
-        from config import get_agent_display_name
-        agent_name = get_agent_display_name("nahida")
-    except Exception:
-        agent_name = "纳西妲"
-
     # P6: 增量上下文构建路径 —— 稳定段缓存 + 动态段每次构建
     # extra_context 延迟到末尾注入，保证新段落顺序:
     # base → mental → permanent → emotional → XP → extra_context
-    system_prompt = _build_cached_system_prompt(address_term, agent_name)
+    system_prompt = _build_cached_system_prompt(address_term)
     system_prompt = _inject_dynamic_segments(system_prompt, user_id, user_input, address_term)
     system_prompt = _inject_xp_and_extra(system_prompt, user_id, extra_context, address_term)
-    # 安全网：替换可能因缓存而残留的占位符
-    if "{agent_name}" in system_prompt:
-        system_prompt = system_prompt.replace("{agent_name}", agent_name)
+    # 全局替换所有 agent 原名为 display_name（统一机制）
+    from config import apply_agent_name_replacements
+    system_prompt = apply_agent_name_replacements(system_prompt)
     return system_prompt
 
 
-def _build_workspace_sections(address_term: str, agent_name: str = "") -> list[str]:
+def _build_workspace_sections(address_term: str) -> list[str]:
     """加载 workspace 配置文件并组装 sections 列表（不含硬件信息段）。"""
     sections = []
 
@@ -1274,12 +1267,12 @@ def _build_workspace_sections(address_term: str, agent_name: str = "") -> list[s
 
     soul = load_workspace_file("SOUL.md")
     if soul:
-        soul = _replace_placeholders(soul, address_term, agent_name)
+        soul = _replace_placeholders(soul, address_term)
         sections.append(soul)
 
     identity = load_workspace_file("IDENTITY.md")
     if identity:
-        identity = _replace_placeholders(identity, address_term, agent_name)
+        identity = _replace_placeholders(identity, address_term)
         sections.append(identity)
 
     user = load_workspace_file("USER.md")
