@@ -219,10 +219,27 @@ jobs:
       - name: Ensure assets bundled in dist
         shell: bash
         run: |
-          # PyInstaller 的 datas 可能未正确打包 assets，手动复制确保资源存在
-          # 只复制图标文件（语音和表情包已从安装包中移除）
+          # PyInstaller 的 datas 可能未正确打包前端资源，手动复制确保资源存在
+          # 复制图标文件
+          mkdir -p dist/xiaoda-agent/assets/
           cp assets/xiaoda-icon.* dist/xiaoda-agent/assets/ 2>/dev/null || true
-          echo "Assets bundled OK: $(find dist/xiaoda-agent/assets -type f 2>/dev/null | wc -l) files"
+          echo "Icon assets: $(find dist/xiaoda-agent/assets -type f 2>/dev/null | wc -l) files"
+
+          # 确保前端资源（壁纸、JS、CSS）存在于 dist 中
+          if [ -d web/dist ] && [ ! -d dist/xiaoda-agent/web/dist ]; then
+            echo "Copying web/dist to dist/xiaoda-agent/web/dist/ ..."
+            cp -r web/dist dist/xiaoda-agent/web/dist
+          fi
+          if [ -d dist/xiaoda-agent/web/dist ]; then
+            WEB_COUNT=$(find dist/xiaoda-agent/web/dist -type f 2>/dev/null | wc -l)
+            echo "Frontend assets: $WEB_COUNT files"
+            # 验证壁纸存在
+            WP_COUNT=$(find dist/xiaoda-agent/web/dist/assets/wallpapers -name "*.jpg" 2>/dev/null | wc -l)
+            echo "Wallpapers: $WP_COUNT"
+          else
+            echo "ERROR: web/dist not found in build output"
+            exit 1
+          fi
 
       - name: Verify assets in build output
         shell: bash
@@ -237,13 +254,18 @@ jobs:
             echo "No dist/xiaoda-agent/assets/ directory"
           fi
           echo ""
-          echo "=== dist/xiaoda-agent/web/dist/assets/ (wallpapers etc.) ==="
-          if [ -d dist/xiaoda-agent/web/dist/assets ]; then
-            WEB_ASSETS_COUNT=$(find dist/xiaoda-agent/web/dist/assets/ -type f 2>/dev/null | wc -l)
-            echo "Frontend assets: $WEB_ASSETS_COUNT files"
-            find dist/xiaoda-agent/web/dist/assets/ -type f 2>/dev/null | head -15 || true
+          echo "=== dist/xiaoda-agent/web/dist/ (frontend) ==="
+          if [ -d dist/xiaoda-agent/web/dist ]; then
+            WEB_COUNT=$(find dist/xiaoda-agent/web/dist -type f 2>/dev/null | wc -l)
+            echo "Frontend files: $WEB_COUNT"
+            WP_COUNT=$(find dist/xiaoda-agent/web/dist/assets/wallpapers -name "*.jpg" 2>/dev/null | wc -l)
+            echo "Wallpapers: $WP_COUNT"
+            if [ "$WP_COUNT" -lt 4 ]; then
+              echo "ERROR: Expected 4+ wallpapers, found $WP_COUNT"
+              exit 1
+            fi
           else
-            echo "ERROR: No frontend assets found in dist/xiaoda-agent/web/dist/assets/"
+            echo "ERROR: dist/xiaoda-agent/web/dist/ not found"
             exit 1
           fi
 
