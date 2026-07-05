@@ -170,9 +170,9 @@ class OutputRiskDetector:
 
     # 领域→默认验证子代理映射
     DOMAIN_VERIFIER = {
-        "security": "yinlang",
-        "code": "nike",
-        "general": "yinlang",
+        "security": "xiaolang",
+        "code": "xiaoke",
+        "general": "xiaolang",
     }
 
     @classmethod

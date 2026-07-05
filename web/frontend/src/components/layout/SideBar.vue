@@ -50,9 +50,16 @@ const navItems = [
       </div>
 
       <div class="sidebar-foot" v-if="expanded">
+        <router-link to="/sponsor" class="sponsor-entry" :title="t('sponsor.navTitle')">
+          <span class="sponsor-icon"><SumeruIcon name="tea" :size="14" /></span>
+          <span class="sponsor-label">{{ t('sponsor.navTitle') }}</span>
+        </router-link>
         <span class="foot-text">{{ t('tagline') }}</span>
-        <span class="foot-signature">{{ tf('brand_signature.byAuthor', t('brand_signature.author')) }}</span>
+        <span class="foot-signature">{{ t('brand_signature.full') }}</span>
       </div>
+      <router-link v-else to="/sponsor" class="sponsor-entry-collapsed" :title="t('sponsor.navTitle')">
+        <span class="sponsor-icon"><SumeruIcon name="tea" :size="18" /></span>
+      </router-link>
     </div>
   </nav>
 </template>
@@ -159,8 +166,53 @@ const navItems = [
 
 .sidebar-foot {
   margin-top: auto;
-  padding: 14px 16px;
+  padding: 12px 16px 14px;
   border-top: 1px solid var(--glass-border);
+}
+.sponsor-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  color: rgba(232, 213, 163, 0.55);
+  text-decoration: none;
+  font-size: 11px;
+  font-family: 'Noto Serif SC', serif;
+  letter-spacing: 0.5px;
+  transition: background 0.2s, color 0.2s;
+}
+.sponsor-entry:hover {
+  background: rgba(127, 214, 80, 0.08);
+  color: rgba(232, 213, 163, 0.75);
+}
+.sponsor-entry.router-link-active {
+  background: rgba(127, 214, 80, 0.12);
+  color: var(--dendro);
+}
+.sponsor-entry-collapsed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  margin: 8px auto 0;
+  border-radius: 8px;
+  color: rgba(232, 213, 163, 0.55);
+  text-decoration: none;
+  transition: background 0.2s, color 0.2s;
+}
+.sponsor-entry-collapsed:hover {
+  background: rgba(127, 214, 80, 0.08);
+  color: rgba(232, 213, 163, 0.75);
+}
+.sponsor-icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.sponsor-label {
+  white-space: nowrap;
 }
 .foot-text {
   font-size: 11px;

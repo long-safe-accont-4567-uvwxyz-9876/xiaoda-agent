@@ -1,11 +1,11 @@
 {
-  "frontend": "nike",
-  "backend": "nike",
-  "debug": "nike",
-  "security": "yinlang",
-  "test": "nike",
-  "info_search": "xilian",
-  "hardware": "yinlang",
+  "frontend": "xiaoke",
+  "backend": "xiaoke",
+  "debug": "xiaoke",
+  "security": "xiaolang",
+  "test": "xiaoke",
+  "info_search": "xiaolian",
+  "hardware": "xiaolang",
   "emotional": "keli",
   "general": "keli"
 }

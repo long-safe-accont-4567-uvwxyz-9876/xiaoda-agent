@@ -47,7 +47,7 @@ RUN mkdir -p /data/agently-cli/.agently-cli
 
 # 数据目录（通过 volume 挂载持久化）
 ENV KIOXIA_DATA_DIR=/data
-RUN mkdir -p /data/db /data/logs /data/credentials /data/stickers /data/klee-stickers /data/files /data/config
+RUN mkdir -p /data/db /data/logs /data/credentials /data/stickers /data/xiaoli-stickers /data/files /data/config
 
 # 创建非特权用户并设置目录权限
 RUN groupadd -f appgroup && useradd -r -u 1000 -g appgroup appuser \

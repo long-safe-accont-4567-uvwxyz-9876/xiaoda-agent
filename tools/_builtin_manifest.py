@@ -15,8 +15,8 @@ from typing import Any
 from tool_engine.tool_registry import ToolPermission
 from config import get_agent_display_name
 
-_NAHIDA_DN = get_agent_display_name('nahida')
-_KELI_DN = get_agent_display_name('keli')
+_NAHIDA_DN = get_agent_display_name('xiaoda')
+_KELI_DN = get_agent_display_name('xiaoli')
 
 BUILTIN_TOOLS: list[dict[str, Any]] = [
     # ── tools.file_tools_v2 ──────────────────────────────────────────
@@ -145,7 +145,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
         "func_name": "calculator",
     },
     {
-        "name": "call_nahida",
+        "name": "call_xiaoda",
         "description": f"向{_NAHIDA_DN}姐姐求助。当{_KELI_DN}遇到不懂的问题、需要深度分析、或需要{_NAHIDA_DN}姐姐亲自回答时使用此工具。{_NAHIDA_DN}姐姐是须弥的草神，温柔聪慧，擅长深度思考和分析。",
         "schema": {
             "type": "object",
@@ -157,7 +157,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
         "permission": ToolPermission.READ_ONLY,
         "category": "fun",
         "module_path": "tools.code_tools_v2",
-        "func_name": "call_nahida",
+        "func_name": "call_xiaoda",
     },
     # ── tools.web_tools_v2 ───────────────────────────────────────────
     {
@@ -427,7 +427,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
                 "action": {"type": "string", "enum": ["git_status", "pip_check", "logs", "project_tree"], "description": "操作类型"},
                 "path": {"type": "string", "description": "项目路径", "default": "~/ai-agent"},
                 "lines": {"type": "integer", "description": "日志行数，默认50", "default": 50},
-                "service": {"type": "string", "description": "服务名称(用于日志)，默认nahida-web", "default": "nahida-web"},
+                "service": {"type": "string", "description": "服务名称(用于日志)，默认xiaoda-web", "default": "xiaoda-web"},
             },
             "required": ["action"],
         },

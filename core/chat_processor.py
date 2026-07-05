@@ -19,7 +19,7 @@ class ChatProcessor:
     """单轮对话主流程处理器。
 
     职责：
-    1. 路由决策（子代理 / TaskGraph / nahida 直聊）
+    1. 路由决策（子代理 / TaskGraph / xiaoda 直聊）
     2. 上下文构建（记忆/笔记/情绪/视觉）
     3. 模型调用与工具循环
     4. 后处理（媒体提取/情绪标签/表情包/语音）
@@ -55,7 +55,7 @@ class ChatProcessor:
                                is_manual_target_fn: Any, is_simple_task_fn: Any) -> bool:
         """判断是否应使用 TaskGraph 路由。"""
         return (
-            "nahida" in chat_targets
+            "xiaoda" in chat_targets
             and task_graph is not None
             and not is_manual_target_fn(user_input, user_id)
             and not is_simple_task_fn(clean_input)
@@ -82,7 +82,7 @@ class ChatProcessor:
         """移除 @mention 标记，返回纯文本输入。"""
         from config import get_agent_display_name
         chars: set[str] = set()
-        for name in ("nahida", "keli", "yinlang", "xilian", "nike"):
+        for name in ("xiaoda", "keli", "yinlang", "xilian", "xiaoke"):
             chars.update(get_agent_display_name(name))
         pat = r'@[' + re.escape(''.join(sorted(chars))) + r']+'
         return re.sub(pat, '', user_input).strip()

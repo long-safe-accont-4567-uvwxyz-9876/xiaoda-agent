@@ -43,20 +43,20 @@ async def test_tts():
             # 1.2 真实语音合成
             print("\n[1.2] 真实语音合成:")
             try:
-                result = await engine.synthesize_nahida("你好，我是纳西妲！", emotion="happy")
+                result = await engine.synthesize_xiaoda("你好，我是纳西妲！", emotion="happy")
                 if result:
                     size = result.stat().st_size
                     print(f"    OK: 合成成功 {result} ({size} bytes, {size/1024:.1f} KB)")
                 else:
                     print("    WARN: 合成返回 None")
             except Exception as e:
-                report_bug("HIGH", "tts_engine", f"synthesize_nahida 崩溃: {e}")
+                report_bug("HIGH", "tts_engine", f"synthesize_xiaoda 崩溃: {e}")
 
             # 1.3 不同情绪
             print("\n[1.3] 不同情绪合成:")
             for emotion in ["happy", "sad", "angry", "neutral"]:
                 try:
-                    result = await engine.synthesize("测试情绪", voice="nahida", emotion=emotion)
+                    result = await engine.synthesize("测试情绪", voice="xiaoda", emotion=emotion)
                     if result:
                         print(f"    OK: emotion={emotion} -> {result.name} ({result.stat().st_size/1024:.1f}KB)")
                     else:
@@ -67,13 +67,13 @@ async def test_tts():
             # 1.4 可莉语音
             print("\n[1.4] 可莉语音合成:")
             try:
-                result = await engine.synthesize_keli("可莉来啦！", emotion="excited")
+                result = await engine.synthesize_xiaoli("可莉来啦！", emotion="excited")
                 if result:
                     print(f"    OK: 可莉合成成功 ({result.stat().st_size/1024:.1f}KB)")
                 else:
                     print("    INFO: 可莉参考音频可能不存在")
             except Exception as e:
-                report_bug("MEDIUM", "tts_engine", f"synthesize_keli 崩溃: {e}")
+                report_bug("MEDIUM", "tts_engine", f"synthesize_xiaoli 崩溃: {e}")
 
     # 1.5 EMOTION_STYLE_MAP 完整性
     print("\n[1.5] EMOTION_STYLE_MAP 检查:")
@@ -99,7 +99,7 @@ async def test_tts():
     print("\n[1.8] 边界条件:")
     # 空文本
     try:
-        result = await engine.synthesize("", voice="nahida")
+        result = await engine.synthesize("", voice="xiaoda")
         print(f"    INFO: 空文本 -> {result}")
     except Exception as e:
         report_bug("LOW", "tts_engine", f"空文本崩溃: {e}")
@@ -117,7 +117,7 @@ async def test_tts():
     # 超长文本
     try:
         long_text = "这是一段很长的文本。" * 500  # ~4500 chars
-        result = await engine.synthesize(long_text, voice="nahida")
+        result = await engine.synthesize(long_text, voice="xiaoda")
         print(f"    INFO: 超长文本({len(long_text)} chars) -> {type(result).__name__}")
     except Exception as e:
         print(f"    INFO: 超长文本被拒绝: {str(e)[:60]}")
@@ -136,8 +136,8 @@ async def test_sticker():
     # 2.1 使用真实表情包目录
     # 优先使用项目内置目录，再尝试外部挂载路径，最后回退到临时目录
     sticker_dirs = [
-        str(PROJECT_ROOT / "assets" / "stickers" / "nahida"),
-        "/media/orangepi/KIOXIA/nahida-data/stickers",
+        str(PROJECT_ROOT / "assets" / "stickers" / "xiaoda"),
+        "/media/orangepi/KIOXIA/xiaoda-data/stickers",
         "/mnt/usb2/stickers",
     ]
     sticker_dir = None

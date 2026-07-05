@@ -10,8 +10,8 @@ RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
 !include "MUI2.nsh"
-!define MUI_ICON "dist\xiaoda-agent\nahida-icon.ico"
-!define MUI_UNICON "dist\xiaoda-agent\nahida-icon.ico"
+!define MUI_ICON "dist\xiaoda-agent\xiaoda-icon.ico"
+!define MUI_UNICON "dist\xiaoda-agent\xiaoda-icon.ico"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -39,9 +39,9 @@ File "dist\xiaoda-agent\.auto_update"
 ; 安装后清理可能残留的敏感文件（旧版升级时 .env 可能被保留）
 Delete "$INSTDIR\_internal\config\webui_overrides.json"
 Delete "$INSTDIR\config\webui_overrides.json"
-CreateShortCut "$DESKTOP\小妲Agent.lnk" "$INSTDIR\xiaoda-agent.exe" "--desktop" "$INSTDIR\nahida-icon.ico" 0
+CreateShortCut "$DESKTOP\小妲Agent.lnk" "$INSTDIR\xiaoda-agent.exe" "--desktop" "$INSTDIR\xiaoda-icon.ico" 0
 CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
-CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\小妲Agent.lnk" "$INSTDIR\xiaoda-agent.exe" "--desktop" "$INSTDIR\nahida-icon.ico" 0
+CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\小妲Agent.lnk" "$INSTDIR\xiaoda-agent.exe" "--desktop" "$INSTDIR\xiaoda-icon.ico" 0
 CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\卸载.lnk" "$INSTDIR\uninstall.exe"
 SectionEnd
 

@@ -50,7 +50,7 @@ class AgentContext:
         self.user_portrait: str | None = None
         self.notebook_focus: str | None = None
         self.pending_tasks: list[str] | None = None
-        self.klee_context: str | None = None
+        self.xiaoli_context: str | None = None
         self.learned_rules: str | None = None
         # 三层提示架构
         self.instinct_prompt: str = ""  # Instinct 提示（stable 层）
@@ -312,7 +312,7 @@ class AgentContext:
             period = "深夜"
 
         return (f"当前时间：{now.year}年{now.month}月{now.day}日 星期{weekday} "
-                f"{hour:02d}:{minute:02d}（{period}）。这是纳西妲真切感受到的此刻，"
+                f"{hour:02d}:{minute:02d}（{period}）。这是小妲真切感受到的此刻，"
                 f"是她回应时唯一参照的时间。")
 
     def _build_dynamic_prompt(self) -> str:
@@ -444,8 +444,8 @@ class AgentContext:
         if self.pending_tasks:
             task_lines = "\n".join(self.pending_tasks[:5])
             volatile_parts.append(f"[待办提醒]\n{task_lines}")
-        if self.klee_context:
-            volatile_parts.append(f"[可莉的回应（仅供参考，用自己的话转述，不要直接复制）]\n{self.klee_context}")
+        if self.xiaoli_context:
+            volatile_parts.append(f"[小莉的回应（仅供参考，用自己的话转述，不要直接复制）]\n{self.xiaoli_context}")
 
         # Volatile 层追加场景约束（按 source 动态注入，~250 token）
         if source:
@@ -505,7 +505,7 @@ class AgentContext:
                     continue
                 user_preview = user_msg[:60].replace("\n", " ") if user_msg else ""
                 asst_preview = asst_msg[:60].replace("\n", " ") if asst_msg else ""
-                summaries.append(f"· {term}: {user_preview} → 纳西妲: {asst_preview}")
+                summaries.append(f"· {term}: {user_preview} → 小妲: {asst_preview}")
 
             if summaries:
                 self._restored_summary = "\n".join(summaries[-10:])
@@ -513,24 +513,24 @@ class AgentContext:
         except Exception as e:
             logger.warning("context.restore_failed", error=str(e))
 
-    def get_nahida_prompt(self) -> str:
-        """获取纳西妲的系统提示词。
+    def get_xiaoda_prompt(self) -> str:
+        """获取小妲的系统提示词。
 
         依次尝试从 system_prompt 属性、_system_prompt_loader 回调获取，
         均失败时返回默认提示词。用于子 Agent 汇总、工具结果摘要等场景。
 
         Returns:
-            str: 纳西妲的系统提示词文本
+            str: 小妲的系统提示词文本
         """
-        nahida_prompt = getattr(self, "system_prompt", "") or ""
-        if not nahida_prompt and hasattr(self, "_system_prompt_loader") and self._system_prompt_loader:
+        xiaoda_prompt = getattr(self, "system_prompt", "") or ""
+        if not xiaoda_prompt and hasattr(self, "_system_prompt_loader") and self._system_prompt_loader:
             try:
-                nahida_prompt = self._system_prompt_loader(address_term=self.current_address_term)
+                xiaoda_prompt = self._system_prompt_loader(address_term=self.current_address_term)
             except Exception as e:
-                logger.warning(f"加载纳西妲系统提示词失败: {e}")
-        if not nahida_prompt:
-            nahida_prompt = "你是纳西妲，须弥的草神。"
-        return nahida_prompt
+                logger.warning(f"加载小妲系统提示词失败: {e}")
+        if not xiaoda_prompt:
+            xiaoda_prompt = "你是小妲，须弥的草神。"
+        return xiaoda_prompt
 
     def clear(self) -> None:
         self.history.clear()

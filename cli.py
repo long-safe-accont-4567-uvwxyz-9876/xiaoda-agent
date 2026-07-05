@@ -122,21 +122,20 @@ STATUS_MAP = {
     "shell": "💻 人家在跑命令～",
     "python": "🐍 人家在算东西～",
     "camera": "📷 人家看看摄像头～",
-    "nahida_done": "🌿 纳西妲整理好了！",
-    "klee_done": "💥 可莉完成啦！",
-    "xilian_done": "🌸 昔涟完成啦！",
+    "xiaoda_done": "🌿 纳西妲整理好了！",
+    "xiaoli_done": "💥 可莉完成啦！",
+    "xiaolian_done": "🌸 昔涟完成啦！",
     "yinlang_done": "🎮 银狼完成啦！",
-    "xike_done": "🔮 尼可完成啦！",
+    "xiaoke_done": "🔮 尼可完成啦！",
     "done": "✅ 搞定啦～",
 }
 
 AGENT_NAMES = {
-    "nahida": "纳西妲",
-    "klee": "可莉",
-    "xilian": "昔涟",
-    "yinlang": "银狼",
-    "nico": "尼可",
-    "xike": "尼可",
+    "xiaoda": "纳西妲",
+    "xiaoli": "可莉",
+    "xiaolian": "昔涟",
+    "xiaolang": "银狼",
+    "xiaoke": "尼可",
 }
 
 NAHIDA_ASCII = (

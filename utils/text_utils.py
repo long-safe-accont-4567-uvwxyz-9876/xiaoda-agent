@@ -81,12 +81,12 @@ DOUBAO_PATTERNS = [
 ]
 
 
-def humanize(text: str, style: str = "nahida") -> str:
+def humanize(text: str, style: str = "xiaoda") -> str:
     """清洗 AI 腔文本, 移除套话/客套/列表编号等机器味痕迹.
 
     Args:
         text: 原始文本
-        style: 风格名 (保留参数, 当前未使用), 默认 nahida
+        style: 风格名 (保留参数, 当前未使用), 默认 xiaoda
 
     Returns:
         清洗后的自然文本

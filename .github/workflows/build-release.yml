@@ -96,8 +96,8 @@ jobs:
           # Verify key files exist
           test -f web/dist/index.html || (echo "ERROR: index.html not found!" && exit 1)
           # Verify wallpapers exist
-          test -f web/dist/assets/wallpapers/keli.jpg || (echo "ERROR: keli.jpg wallpaper not found!" && exit 1)
-          test -f web/dist/assets/wallpapers/nike.jpg || (echo "ERROR: nike.jpg wallpaper not found!" && exit 1)
+          test -f web/dist/assets/wallpapers/xiaoli.jpg || (echo "ERROR: xiaoli.jpg wallpaper not found!" && exit 1)
+          test -f web/dist/assets/wallpapers/xiaoke.jpg || (echo "ERROR: xiaoke.jpg wallpaper not found!" && exit 1)
           echo "Wallpapers verified OK"
           # Verify /setup route is included in built JS
           FOUND=0
@@ -218,11 +218,11 @@ jobs:
           mkdir -p dist/xiaoda-agent/assets/stickers
           cp assets/voice_refs/* dist/xiaoda-agent/assets/voice_refs/
           cp -r assets/stickers/* dist/xiaoda-agent/assets/stickers/
-          cp assets/nahida-icon.* dist/xiaoda-agent/assets/ 2>/dev/null || true
+          cp assets/xiaoda-icon.* dist/xiaoda-agent/assets/ 2>/dev/null || true
           # 验证关键文件
-          test -f dist/xiaoda-agent/assets/voice_refs/keli.mp3
-          test -f dist/xiaoda-agent/assets/voice_refs/nahida.wav
-          test -f dist/xiaoda-agent/assets/voice_refs/nahida_hq.wav
+          test -f dist/xiaoda-agent/assets/voice_refs/xiaoli.mp3
+          test -f dist/xiaoda-agent/assets/voice_refs/xiaoda.wav
+          test -f dist/xiaoda-agent/assets/voice_refs/xiaoda_hq.wav
           echo "Assets bundled OK: $(find dist/xiaoda-agent/assets -type f | wc -l) files"
 
       - name: Verify assets in build output
@@ -340,7 +340,7 @@ jobs:
           Copy-Item "scripts/start-windows.bat" "dist/xiaoda-agent/"
           Copy-Item "scripts/auto-update.bat" "dist/xiaoda-agent/"
           Copy-Item "scripts/open-browser.ps1" "dist/xiaoda-agent/"
-          Copy-Item "assets/nahida-icon.ico" "dist/xiaoda-agent/nahida-icon.ico"
+          Copy-Item "assets/xiaoda-icon.ico" "dist/xiaoda-agent/xiaoda-icon.ico"
 
           choco install nsis -y --no-progress
           $nsisPath = "C:\Program Files (x86)\NSIS\makensis.exe"

@@ -51,7 +51,7 @@ state/
 # Docs & misc
 docs/
 market/.cache
-assets/stickers/nahida_backup/
+assets/stickers/xiaoda_backup/
 tests/benchmark_results.json
 .dbg/
 scripts/

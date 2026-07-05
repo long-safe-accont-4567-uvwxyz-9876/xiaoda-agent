@@ -112,16 +112,16 @@ def test_forbidden_path_blocked():
 def test_allowed_path_permitted():
     """路径匹配白名单模式时允许"""
     cfg = _make_config(
-        allowed_paths=["assets/stickers/klee/*", "config/agents/klee_personality.md"],
+        allowed_paths=["assets/stickers/xiaoli/*", "config/agents/xiaoli_personality.md"],
         forbidden_paths=["*.env"],
     )
     handler = _make_handler(agent_config=cfg)
     # 匹配 glob 模式
-    allowed, reason = handler._check_path_whitelist("assets/stickers/klee/happy.png", cfg)
+    allowed, reason = handler._check_path_whitelist("assets/stickers/xiaoli/happy.png", cfg)
     assert allowed is True
     assert "allowed" in reason
     # 精确匹配
-    allowed2, reason2 = handler._check_path_whitelist("config/agents/klee_personality.md", cfg)
+    allowed2, reason2 = handler._check_path_whitelist("config/agents/xiaoli_personality.md", cfg)
     assert allowed2 is True
 
 
@@ -131,12 +131,12 @@ def test_allowed_path_permitted():
 def test_non_matching_path_blocked():
     """路径不在白名单中且未被黑名单匹配时拒绝"""
     cfg = _make_config(
-        allowed_paths=["assets/stickers/klee/*"],
+        allowed_paths=["assets/stickers/xiaoli/*"],
         forbidden_paths=[],
     )
     handler = _make_handler(agent_config=cfg)
     # 不在白名单中的路径
-    allowed, reason = handler._check_path_whitelist("config/agents/nike_personality.md", cfg)
+    allowed, reason = handler._check_path_whitelist("config/agents/xiaoke_personality.md", cfg)
     assert allowed is False
     assert "not in whitelist" in reason
     # 其他目录
@@ -171,7 +171,7 @@ def test_blacklist_takes_precedence():
         forbidden_paths=["config/agents/*_personality.md"],
     )
     handler = _make_handler(agent_config=cfg)
-    allowed, reason = handler._check_path_whitelist("config/agents/klee_personality.md", cfg)
+    allowed, reason = handler._check_path_whitelist("config/agents/xiaoli_personality.md", cfg)
     assert allowed is False
     assert "forbidden" in reason
 
@@ -204,19 +204,19 @@ def test_config_files_have_path_whitelist():
     import json
     config_dir = Path(__file__).parent.parent / "config" / "agents"
     expected = {
-        "keli.json": {
-            "allowed": ["assets/stickers/klee/*", "config/agents/klee_personality.md"],
+        "xiaoli.json": {
+            "allowed": ["assets/stickers/xiaoli/*", "config/agents/xiaoli_personality.md"],
             "forbidden_count_min": 3,
         },
-        "nike.json": {
+        "xiaoke.json": {
             "allowed": ["tools/code_tools_v2.py", "tools/file_tools_v2.py"],
             "forbidden_count_min": 3,
         },
-        "xilian.json": {
+        "xiaolian.json": {
             "allowed": ["tools/web_browse_tools.py", "tools/web_browse_enhanced.py"],
             "forbidden_count_min": 2,
         },
-        "yinlang.json": {
+        "xiaolang.json": {
             "allowed": ["tools/hardware_tools.py", "tools/system_tools.py"],
             "forbidden_count_min": 2,
         },
@@ -238,14 +238,14 @@ def test_config_files_have_path_whitelist():
 def test_sub_agent_config_loads_from_dict():
     """SubAgentConfig 能从 JSON dict 正确加载路径白名单字段"""
     cfg = SubAgentConfig(
-        name="keli",
+        name="xiaoli",
         display_name="可莉",
         provider="agnes",
         model="agnes-2.0-flash",
-        allowed_paths=["assets/stickers/klee/*"],
+        allowed_paths=["assets/stickers/xiaoli/*"],
         forbidden_paths=["*.env"],
     )
-    assert cfg.allowed_paths == ["assets/stickers/klee/*"]
+    assert cfg.allowed_paths == ["assets/stickers/xiaoli/*"]
     assert cfg.forbidden_paths == ["*.env"]
 
 

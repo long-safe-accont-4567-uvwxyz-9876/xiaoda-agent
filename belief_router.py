@@ -61,7 +61,7 @@ class AgentBelief:
 class BeliefRouter:
     """Thompson Sampling router that selects agents based on historical performance."""
 
-    VALID_AGENTS = ["xilian", "yinlang", "nike", "nahida"]
+    VALID_AGENTS = ["xiaolian", "xiaolang", "xiaoke", "xiaoda"]
 
     def __init__(self, db_path: str = "") -> None:
         self._beliefs: dict[str, AgentBelief] = {name: AgentBelief() for name in self.VALID_AGENTS}
@@ -80,7 +80,7 @@ class BeliefRouter:
         """
         candidates = [a for a in self.VALID_AGENTS if a not in (exclude or set())]
         if not candidates:
-            return "nahida"
+            return "xiaoda"
 
         samples = {a: self._beliefs[a].sample() for a in candidates}
         selected = max(samples, key=samples.get)

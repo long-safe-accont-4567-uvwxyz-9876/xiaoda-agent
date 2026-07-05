@@ -111,7 +111,7 @@ async def main():
     from emotion.sticker_manager import StickerManager
     try:
         # 表情包目录: 优先使用项目内置目录，找不到则使用临时目录
-        sticker_dir = PROJECT_ROOT / "assets" / "stickers" / "nahida"
+        sticker_dir = PROJECT_ROOT / "assets" / "stickers" / "xiaoda"
         if not sticker_dir.is_dir():
             import tempfile
             sticker_dir = Path(tempfile.mkdtemp())

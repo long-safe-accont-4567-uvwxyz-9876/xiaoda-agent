@@ -1,14 +1,14 @@
 {
-  "name": "xilian",
-  "display_name": "小涟",
-  "display_name_en": "Xiaolian",
+  "name": "xiaoke",
+  "display_name": "小可",
+  "display_name_en": "Xiaoke",
   "provider": "agnes",
   "model": "agnes-2.0-flash",
-  "personality_file": "xilian_personality.md",
+  "personality_file": "/home/orangepi/ai-agent/config/agents/xiaoke_personality.md",
   "voice_ref": null,
   "excluded_tools": [
-    "call_klee",
-    "call_nahida",
+    "call_xiaoli",
+    "call_xiaoda",
     "gpio_control",
     "hardware_status",
     "i2c_comm",
@@ -51,35 +51,36 @@
     "mcp_github_update_issue",
     "mcp_github_update_pull_request_branch",
     "pwm_control",
-    "python_executor",
     "shell_command",
     "write_file"
   ],
   "base_url": "https://apihub.agnes-ai.com/v1",
   "api_key_env": "AGNES_API_KEY",
   "capabilities": [
-    "search",
-    "lookup",
-    "query",
-    "explore",
-    "discover"
+    "research",
+    "analysis",
+    "study",
+    "academic"
   ],
-  "route_description": "搜索信息、查询资料、探索发现",
-  "mcp_servers": [],
+  "route_description": "研究分析、学术思考、深度解读",
+  "mcp_servers": [
+    "git",
+    "github"
+  ],
   "max_spawn_depth": 1,
   "max_turns": null,
   "effort": null,
   "permission_mode": null,
   "memory_scope": null,
   "background": false,
-  "wallpaper": "/assets/wallpapers/xilian.jpg",
+  "wallpaper": "/assets/wallpapers/xiaoke.jpg",
   "allowed_paths": [
-    "tools/web_browse_tools.py",
-    "tools/web_browse_enhanced.py"
+    "tools/code_tools_v2.py",
+    "tools/file_tools_v2.py"
   ],
   "forbidden_paths": [
     "*.env",
-    "security/*"
-  ],
-  "_saved_at": 1782768375.3744006
+    "security/*",
+    "config/agents/*_personality.md"
+  ]
 }

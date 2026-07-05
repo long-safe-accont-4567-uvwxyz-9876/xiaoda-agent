@@ -63,8 +63,8 @@ def _resolve_voice_ref(filename: str) -> Path:
 
 
 VOICE_REFERENCES = {
-    "nahida": _resolve_voice_ref("nahida_hq.wav") if _resolve_voice_ref("nahida_hq.wav").exists() else _resolve_voice_ref("nahida.wav"),
-    "keli": _resolve_voice_ref("keli.mp3"),
+    "xiaoda": _resolve_voice_ref("xiaoda_hq.wav") if _resolve_voice_ref("xiaoda_hq.wav").exists() else _resolve_voice_ref("xiaoda.wav"),
+    "xiaoli": _resolve_voice_ref("xiaoli.mp3"),
 }
 
 # 参考音频根目录（按 agent 分子目录）
@@ -107,10 +107,10 @@ def _ensure_builtin_voices():
         for f in sorted(src_dir.iterdir()):
             if not f.is_file() or f.suffix.lower() not in _AUDIO_EXTS:
                 continue
-            # 按文件名前缀匹配 agent（nahida_hq.wav → nahida, keli.mp3 → keli）
+            # 按文件名前缀匹配 agent（xiaoda_hq.wav → xiaoda, xiaoli.mp3 → xiaoli）
             stem = f.stem.lower()
             matched_agent = None
-            for agent_name in ("nahida", "keli", "nike", "xilian", "yinlang"):
+            for agent_name in ("xiaoda", "xiaoli", "nike", "xilian", "yinlang"):
                 if stem.startswith(agent_name):
                     matched_agent = agent_name
                     break
@@ -164,7 +164,7 @@ def resolve_voice_path(voice: str) -> Path | None:
     return None
 
 VOICE_STYLES = {
-    "nahida": (
+    "xiaoda": (
         "角色：{agent_name}，须弥的草神，须弥的守护者。外表是可爱的小女孩，实际已承载五百年孤独与智慧。"
         "声音清亮稚嫩，音色通透空灵如微风拂过草叶，发声位置偏前，带着少女特有的轻盈感。\n\n"
         "场景：在须弥的梦境花园中，与最亲近的旅行者轻声交谈，周围是宁静的草木与微风。"
@@ -182,7 +182,7 @@ VOICE_STYLES = {
         "句末偶尔加一点小感叹，像是在确认对方是否在听。"
         "古风词汇或人名咬字稍深，但声母起音圆润不尖锐。"
     ),
-    "keli": (
+    "xiaoli": (
         "角色：{agent_name}，火花骑士，蒙德城最可爱的小小爆破专家。活泼开朗的小女孩，充满童真和冒险精神。\n\n"
         "场景：在蒙德城外的草地上，刚刚完成一次'小小实验'，兴高采烈地跑来分享自己的发现，眼睛闪闪发光。\n\n"
         "指导：\n"
@@ -264,7 +264,7 @@ class TTSEngine:
     _SYNTHESIS_CACHE_MAX_SIZE = 200
 
     _PRECOMPOSED_PHRASES = {
-        "nahida": [
+        "xiaoda": [
             ("你好呀，旅行者！", "greeting"),
             ("嗯嗯，我在听呢～", "caring"),
             ("让我想想……", "thinking"),
@@ -335,7 +335,7 @@ class TTSEngine:
         if output_dir:
             self._output_dir = Path(output_dir)
         else:
-            self._output_dir = KIOXIA_BASE / "nahida-data" / "tts_cache"
+            self._output_dir = KIOXIA_BASE / "xiaoda-data" / "tts_cache"
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
         # 设置缓存索引路径并加载已有缓存
@@ -394,7 +394,7 @@ class TTSEngine:
     async def synthesize(
         self,
         text: str,
-        voice: str = "nahida",
+        voice: str = "xiaoda",
         style: str = "",
         emotion: str = "",
         output_path: str | Path | None = None,
@@ -403,7 +403,7 @@ class TTSEngine:
 
         Args:
             text: 待合成文本
-            voice: 音色名, 默认 nahida
+            voice: 音色名, 默认 xiaoda
             style: 风格描述, 默认空字符串
             emotion: 情绪描述, 默认空字符串
             output_path: 输出路径, None 表示自动生成
@@ -543,13 +543,13 @@ class TTSEngine:
         logger.info("tts.synthesized", voice=voice, text_len=len(text), file=str(out), size_kb=len(audio_bytes) // 1024)
         return out
 
-    async def synthesize_nahida(self, text: str, style: str = "", emotion: str = "") -> Path | None:
-        """使用 nahida 音色合成语音 (synthesize 的便捷封装)."""
-        return await self.synthesize(text, voice="nahida", style=style, emotion=emotion)
+    async def synthesize_xiaoda(self, text: str, style: str = "", emotion: str = "") -> Path | None:
+        """使用 xiaoda 音色合成语音 (synthesize 的便捷封装)."""
+        return await self.synthesize(text, voice="xiaoda", style=style, emotion=emotion)
 
-    async def synthesize_keli(self, text: str, style: str = "", emotion: str = "") -> Path | None:
-        """使用 keli 音色合成语音 (synthesize 的便捷封装)."""
-        return await self.synthesize(text, voice="keli", style=style, emotion=emotion)
+    async def synthesize_xiaoli(self, text: str, style: str = "", emotion: str = "") -> Path | None:
+        """使用 xiaoli 音色合成语音 (synthesize 的便捷封装)."""
+        return await self.synthesize(text, voice="xiaoli", style=style, emotion=emotion)
 
     async def precompose_phrases(self) -> None:
         """逐个串行预合成短句，避免并发触发 429 限流"""

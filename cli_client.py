@@ -39,11 +39,11 @@ WISDOM = "#e8d5a3"
 MOON_DIM = "grey62"
 
 AGENT_LABELS = {
-    "nahida": ("纳西妲", DENDRO, "🌿"),
-    "keli": ("可莉", "#ff6b6b", "💥"),
-    "yinlang": ("银狼", "#6ea8fe", "🎮"),
-    "xilian": ("昔涟", "#d8b4fe", "🌸"),
-    "nike": ("尼可", WISDOM, "🔮"),
+    "xiaoda": ("纳西妲", DENDRO, "🌿"),
+    "xiaoli": ("可莉", "#ff6b6b", "💥"),
+    "xiaolang": ("银狼", "#6ea8fe", "🎮"),
+    "xiaolian": ("昔涟", "#d8b4fe", "🌸"),
+    "xiaoke": ("尼可", WISDOM, "🔮"),
 }
 
 GREETINGS = [
@@ -92,7 +92,7 @@ class NahidaCLI:
         self.password = password
         self.ws = None
         self.session_id = ""
-        self.agent = "nahida"
+        self.agent = "xiaoda"
         self._pending: dict[str, asyncio.Future] = {}
         self._greeting_queue: list[str] = []
         self.address_term = "爸爸"
@@ -107,7 +107,7 @@ class NahidaCLI:
     def _stage_text(self, stage: str) -> str:
         """返回阶段提示文案，thinking 阶段使用动态 agent 名。"""
         if stage == "thinking":
-            return f"🌿 {self._agent_display_name('nahida')}正在想……"
+            return f"🌿 {self._agent_display_name('xiaoda')}正在想……"
         return STAGE_TEXT.get(stage, "🌿 处理中……")
 
     # ── 连接 ──────────────────────────────────────────
@@ -236,7 +236,7 @@ class NahidaCLI:
         except Exception as e:
             console.print(Panel(
                 Text(f"连不上网关（{self.ws_url}）\n{e}\n\n"
-                     f"请确认 WebUI 服务已启动：systemctl status nahida-web",
+                     f"请确认 WebUI 服务已启动：systemctl status xiaoda-web",
                      style="red"), border_style="red"))
             return
         self.print_banner()

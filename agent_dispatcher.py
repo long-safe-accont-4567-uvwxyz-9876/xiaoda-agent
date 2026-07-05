@@ -295,7 +295,7 @@ class SubAgent:
             "type": "function",
             "function": {
                 "name": "send_message_to_agent",
-                "description": f"直接向另一个子代理发消息获取响应（无需通过{get_agent_display_name('nahida')}中转）",
+                "description": f"直接向另一个子代理发消息获取响应（无需通过{get_agent_display_name('xiaoda')}中转）",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -399,7 +399,7 @@ class SubAgent:
         elif result.success and isinstance(result.data, AgentMessage) and result.data.is_delegate_request():
             # 优先用 AgentMessage 结构化协议识别
             delegation_req = DelegationRequest(
-                type="nahida", question=result.data.content, delegator=self.config.name
+                type="xiaoda", question=result.data.content, delegator=self.config.name
             )
         elif result.success and isinstance(result.data, str) and result.data.startswith("[NAHIDA_PENDING]"):
             # fallback: 旧字符串匹配（过渡期保留）
@@ -408,10 +408,10 @@ class SubAgent:
                 "使用废弃的 [NAHIDA_PENDING] 字符串匹配识别委托，请迁移到 AgentMessage 协议"
             )
             delegation_req = DelegationRequest(
-                type="nahida", question=result.data[len("[NAHIDA_PENDING]"):], delegator=self.config.name
+                type="xiaoda", question=result.data[len("[NAHIDA_PENDING]"):], delegator=self.config.name
             )
 
-        if delegation_req and delegation_req.type == "nahida":
+        if delegation_req and delegation_req.type == "xiaoda":
             question = delegation_req.question
             if self._delegate_callback:
                 # 委托深度检查：超过 2 层直接返回兜底回复，防止无限循环
@@ -419,7 +419,7 @@ class SubAgent:
                 _ctx = _current_request_ctx.get()
                 if _ctx and _ctx.delegate_depth >= 2:
                     logger.warning("delegate.depth_exceeded", depth=_ctx.delegate_depth, from_agent=self.config.name)
-                    result_text = f"{get_agent_display_name('nahida')}姐姐现在也在忙，先自己想想办法吧！"
+                    result_text = f"{get_agent_display_name('xiaoda')}姐姐现在也在忙，先自己想想办法吧！"
                 else:
                     delegate_reply = await self._delegate_callback(question)
                     result_text = f"[主Agent的回答（{self.config.display_name}需要用自己的话转述，不要直接复制原话）]\n{delegate_reply}"
@@ -796,7 +796,7 @@ class SubAgent:
 # 用于 classify_task 委托 RouterEngine 后保持返回格式一致（task_type 字符串）
 _AGENT_TO_TASK_TYPE = {
     "yinlang": "security",
-    "nike": "debug",
+    "xiaoke": "debug",
     "xilian": "info_search",
     "keli": "emotional",
 }
@@ -913,11 +913,11 @@ class AgentDispatcher:
         参考 Trae SOLO 模式：任务→代理 1:1 绑定
 
         :param task_type: 任务类型
-            - "frontend" → 妮可（nike，编程助手）
-            - "backend" → 妮可（nike）
-            - "debug" → 妮可（nike）
+            - "frontend" → 妮可（xiaoke，编程助手）
+            - "backend" → 妮可（xiaoke）
+            - "debug" → 妮可（xiaoke）
             - "security" → 银狼（yinlang，系统管理）
-            - "test" → 妮可（nike）
+            - "test" → 妮可（xiaoke）
             - "info_search" → 希里安（xilian，信息助手）
             - "hardware" → 银狼（yinlang）
             - "emotional" → 可莉（keli，萌系陪伴）
@@ -981,11 +981,11 @@ class AgentDispatcher:
 
         # 默认路由
         return {
-            "frontend": "nike",
-            "backend": "nike",
-            "debug": "nike",
+            "frontend": "xiaoke",
+            "backend": "xiaoke",
+            "debug": "xiaoke",
             "security": "yinlang",
-            "test": "nike",
+            "test": "xiaoke",
             "info_search": "xilian",
             "hardware": "yinlang",
             "emotional": "keli",
@@ -996,7 +996,7 @@ class AgentDispatcher:
         """懒加载 RouterEngine 实例（无 belief_router，仅规则路由）。
 
         RouterEngine 作为权威路由源：classify_task 优先委托其决策，
-        仅当其返回默认（nahida，无明确路由信号）时才回退到本地关键词分类。
+        仅当其返回默认（xiaoda，无明确路由信号）时才回退到本地关键词分类。
         """
         if self._router_engine is None:
             from core.router_engine import RouterEngine
@@ -1007,8 +1007,8 @@ class AgentDispatcher:
         """根据用户输入自动分类任务类型
 
         已委托给 RouterEngine 作为权威路由源：先调用 RouterEngine.decide()，
-        当其给出明确子代理路由（非 nahida）时反推 task_type；仅当 RouterEngine
-        返回默认（nahida，表示无明确路由信号）时，才回退到本地关键词分类。
+        当其给出明确子代理路由（非 xiaoda）时反推 task_type；仅当 RouterEngine
+        返回默认（xiaoda，表示无明确路由信号）时，才回退到本地关键词分类。
 
         :param user_input: 用户输入文本
         :returns: 任务类型（frontend/backend/debug/security/test/info_search/hardware/emotional/general）
@@ -1106,7 +1106,7 @@ class AgentDispatcher:
         if len(targets) == 1:
             return {"targets": targets, "mode": "single", "synthesizer": "", "verifier": ""}
         return {"targets": targets, "mode": "parallel_fanout",
-                "synthesizer": "nahida", "verifier": ""}
+                "synthesizer": "xiaoda", "verifier": ""}
 
     def _load_routing_v2_config(self) -> dict:
         """从 config/agent_routing_v2.json 加载多域路由配置。"""

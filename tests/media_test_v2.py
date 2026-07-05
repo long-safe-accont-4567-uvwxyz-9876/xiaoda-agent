@@ -17,8 +17,8 @@ def _resolve_sticker_dir(subdir: str = "nahida") -> str:
     """查找可用表情包目录: 优先项目内置，再尝试外部挂载路径"""
     candidates = [
         PROJECT_ROOT / "assets" / "stickers" / subdir,
-        Path("/media/orangepi/KIOXIA/nahida-data/stickers"),
-        Path("/media/orangepi/KIOXIA/nahida-data") / f"{subdir}-stickers",
+        Path("/media/orangepi/KIOXIA/xiaoda-data/stickers"),
+        Path("/media/orangepi/KIOXIA/xiaoda-data") / f"{subdir}-stickers",
     ]
     for d in candidates:
         if d.is_dir():
@@ -124,22 +124,22 @@ def test_sticker_integration():
         print("  [OK] 情绪映射一致")
 
     # 1.7 子 Agent 表情包测试
-    klee_dir = _resolve_sticker_dir("klee")
-    if os.path.exists(klee_dir):
-        ksm = StickerManager(klee_dir)
+    xiaoli_dir = _resolve_sticker_dir("xiaoli")
+    if os.path.exists(xiaoli_dir):
+        ksm = StickerManager(xiaoli_dir)
         print(f"\n[1.7] 可莉表情包: available={ksm.available}, categories={list(ksm._cache.keys())}")
-        klee_sticker = ksm.pick("happy")
-        print(f"  可莉 happy sticker: {klee_sticker.name if klee_sticker else 'None'}")
+        xiaoli_sticker = ksm.pick("happy")
+        print(f"  可莉 happy sticker: {xiaoli_sticker.name if xiaoli_sticker else 'None'}")
     else:
-        print(f"\n[1.7] 可莉表情包目录不存在: {klee_dir}")
+        print(f"\n[1.7] 可莉表情包目录不存在: {xiaoli_dir}")
 
     # 1.8 子 Agent 不发送表情包的问题
     print("\n[1.8] 子 Agent 表情包发送检查:")
     # 在 agent_core.py _dispatch_single_sub_agent 中，sticker_path 始终为 None
-    # 即使有 klee_sticker_manager，子 Agent 也不会发送表情包
+    # 即使有 xiaoli_sticker_manager，子 Agent 也不会发送表情包
     print("  [WARN] _dispatch_single_sub_agent 中 sticker_path 始终为 None")
-    print("  [WARN] 子 Agent (如可莉) 不会发送表情包，即使有 klee_sticker_manager")
-    report_bug("LOW", "agent_core", "子 Agent 不发送表情包: _dispatch_single_sub_agent 中 sticker_path 始终为 None，未使用 klee_sticker_manager")
+    print("  [WARN] 子 Agent (如可莉) 不会发送表情包，即使有 xiaoli_sticker_manager")
+    report_bug("LOW", "agent_core", "子 Agent 不发送表情包: _dispatch_single_sub_agent 中 sticker_path 始终为 None，未使用 xiaoli_sticker_manager")
 
 
 # ============================================================
@@ -270,7 +270,7 @@ async def test_agent_integration():
         from agent_core import AgentCore
         core = AgentCore()
         print(f"  sticker_manager: available={core.sticker_manager.available}")
-        print(f"  klee_sticker_manager: available={core.klee_sticker_manager.available}")
+        print(f"  xiaoli_sticker_manager: available={core.xiaoli_sticker_manager.available}")
         print(f"  tts: available={core.tts.available}")
     except Exception as e:
         report_bug("HIGH", "agent_core", f"AgentCore 初始化失败: {e}")

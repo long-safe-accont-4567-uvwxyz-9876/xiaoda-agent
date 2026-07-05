@@ -235,7 +235,7 @@ hiddenimports = [
     'utils.lazy_deps',
     'utils.logging_config',
     'utils.metrics',
-    'utils.nahida_acp',
+    'utils.xiaoda_acp',
     'utils.npu_inference',
     'utils.prompt_caching',
     'utils.result_wrapper',
@@ -283,7 +283,7 @@ hiddenimports = [
     'model_router',
     'agent_context',
     'slash_commands',
-    'klee_agent',
+    'xiaoli_agent',
     'agent_dispatcher',
     'task_orchestrator',
     'instinct_manager',
@@ -444,7 +444,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=os.path.join(SPECPATH, 'assets', 'nahida-icon.ico'),
+    icon=os.path.join(SPECPATH, 'assets', 'xiaoda-icon.ico'),
 )
 
 # ---------------------------------------------------------------------------

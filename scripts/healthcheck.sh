@@ -11,8 +11,8 @@ else
 fi
 
 echo "[2] 数据库目录"
-if [ -d "/media/orangepi/KIOXIA/nahida-data/db" ]; then
-    DB_SIZE=$(du -sh /media/orangepi/KIOXIA/nahida-data/db/ | cut -f1)
+if [ -d "/media/orangepi/KIOXIA/xiaoda-data/db" ]; then
+    DB_SIZE=$(du -sh /media/orangepi/KIOXIA/xiaoda-data/db/ | cut -f1)
     echo "  ✅ 存在 (${DB_SIZE})"
 else
     echo "  ❌ 不存在！"
@@ -20,7 +20,7 @@ else
 fi
 
 echo "[3] 数据库文件"
-if [ -f "/media/orangepi/KIOXIA/nahida-data/db/agent.db" ]; then
+if [ -f "/media/orangepi/KIOXIA/xiaoda-data/db/agent.db" ]; then
     echo "  ✅ agent.db 存在"
 else
     echo "  ❌ agent.db 不存在！"
@@ -50,8 +50,8 @@ else
 fi
 
 echo "[6] 日志目录"
-if [ -d "/media/orangepi/KIOXIA/nahida-data/logs" ]; then
-    LOG_COUNT=$(ls /media/orangepi/KIOXIA/nahida-data/logs/*.json 2>/dev/null | wc -l)
+if [ -d "/media/orangepi/KIOXIA/xiaoda-data/logs" ]; then
+    LOG_COUNT=$(ls /media/orangepi/KIOXIA/xiaoda-data/logs/*.json 2>/dev/null | wc -l)
     echo "  ✅ 存在 (${LOG_COUNT} 个日志文件)"
 else
     echo "  ❌ 不存在！"

@@ -211,7 +211,7 @@ class RouterNode:
     def _rule_route(user_input: str) -> list[str]:
         q = user_input.lower()
         search_kw = AGENT_ROUTE_KEYWORDS["xilian"]
-        code_kw = AGENT_ROUTE_KEYWORDS["yinlang"]
+        code_kw = AGENT_ROUTE_KEYWORDS["xiaolang"]
         research_kw = AGENT_ROUTE_KEYWORDS["nike"]
         parallel_trigger_kw = AGENT_ROUTE_KEYWORDS["parallel_trigger"]
         nahida_only_patterns = AGENT_ROUTE_KEYWORDS["nahida"]
@@ -229,11 +229,11 @@ class RouterNode:
 
         matched = []
         if any(kw in q for kw in search_kw):
-            matched.append("xilian")
+            matched.append("xiaolian")
         if any(kw in q for kw in code_kw):
-            matched.append("yinlang")
+            matched.append("xiaolang")
         if any(kw in q for kw in research_kw):
-            matched.append("nike")
+            matched.append("xiaoke")
 
         if any(kw in q for kw in nahida_only_patterns):
             return ["nahida"]
@@ -244,7 +244,7 @@ class RouterNode:
             return matched
         if len(matched) == 1:
             return matched
-        return ["nahida"]
+        return ["xiaoda"]
 
     @staticmethod
     def _has_mention(user_input: str) -> bool:
@@ -311,7 +311,7 @@ class RouterNode:
     def _build_route_prompt(self, user_input: str, agent_configs: dict) -> str:
         agent_list = []
         for name, cfg in agent_configs.items():
-            if name == "keli":
+            if name == "xiaoli":
                 continue
             caps = ", ".join(cfg.get("capabilities", []))
             desc = cfg.get("route_description", "")
@@ -325,12 +325,12 @@ class RouterNode:
 
 规则:
 1. 返回Agent的name字段值，多个Agent用逗号分隔（如：yinlang,xilian）
-2. 编程/代码/技术问题 → yinlang
-3. 搜索/查询/探索/发现信息 → xilian
-4. 研究/分析/学术/深度思考 → nike
+2. 编程/代码/技术问题 → xiaolang
+3. 搜索/查询/探索/发现信息 → xiaolian
+4. 研究/分析/学术/深度思考 → xiaoke
 5. 如果用户要求全面/综合/同时处理多个方面，可以返回多个Agent名称，用逗号分隔
-6. 日常闲聊/情感/综合问题 → nahida
-7. 如果不确定，返回 nahida
+6. 日常闲聊/情感/综合问题 → xiaoda
+7. 如果不确定，返回 xiaoda
 8. 最多返回3个Agent
 
 用户输入: {user_input}
@@ -395,7 +395,7 @@ class RouterNode:
                 try:
                     llm_targets = await self._llm_route_targets(user_input, agent_configs)
                     if llm_targets:
-                        llm_valid = [t for t in llm_targets if t in agent_configs or t == "nahida"]
+                        llm_valid = [t for t in llm_targets if t in agent_configs or t == "xiaoda"]
                         if llm_valid:
                             await self._route_cache.put(user_input, llm_valid)
                             await self._notify_route_progress(state, llm_valid, agent_configs, "LLM路由升级")
@@ -409,14 +409,14 @@ class RouterNode:
 
         # 3. 信念路由（Thompson Sampling，主 fallback）/ LLM 路由
         if self._belief_router:
-            targets = [self._belief_router.select_agent(exclude={"nahida"})]
+            targets = [self._belief_router.select_agent(exclude={"xiaoda"})]
         else:
             targets = await self._llm_route_targets(user_input, agent_configs)
 
         # 4. 校验 + 返回
-        valid_targets = [t for t in targets if t in agent_configs or t == "nahida"]
+        valid_targets = [t for t in targets if t in agent_configs or t == "xiaoda"]
         if not valid_targets:
-            valid_targets = ["nahida"]
+            valid_targets = ["xiaoda"]
         route_method = "信念路由" if self._belief_router else "LLM路由"
         await self._notify_route_progress(state, valid_targets, agent_configs, route_method)
         return self._build_route_dict(valid_targets)
@@ -443,8 +443,8 @@ class RouterNode:
 
     async def _notify_route_progress(self, state: TaskState, targets: list[str],
                                      agent_configs: dict, prefix: str) -> None:
-        """路由成功后推送进度消息（仅 nahida 单路由时不打扰用户）。"""
-        if len(targets) == 1 and targets[0] == "nahida":
+        """路由成功后推送进度消息（仅 xiaoda 单路由时不打扰用户）。"""
+        if len(targets) == 1 and targets[0] == "xiaoda":
             return
         display_names = self._build_display_names(targets, agent_configs)
         parallel = "并行处理" if len(targets) > 1 else ""
@@ -470,8 +470,8 @@ class RouterNode:
         for n, cfg in agent_configs.items():
             name_map[n] = n
             name_map[cfg.get("display_name", "")] = n
-        name_map["nahida"] = "nahida"
-        name_map[get_agent_display_name('nahida')] = "nahida"
+        name_map["xiaoda"] = "xiaoda"
+        name_map[get_agent_display_name('xiaoda')] = "xiaoda"
 
         # 模糊匹配 LLM 输出的每个部分
         targets = []
@@ -731,7 +731,7 @@ class ParallelAgentNode:
 
         if len(targets) == 1:
             target = targets[0]
-            if target == "nahida":
+            if target == "xiaoda":
                 return {"final_output": "", "sub_agent_reply": ""}
             single_result = await self.execute_single(target, state.user_input, state)
             if single_result:
@@ -842,14 +842,14 @@ class SynthesisNode:
         if not results:
             return {"final_output": state.sub_agent_reply}
 
-        await state.push_progress(get_status_msg("nahida", "done", f"{get_agent_display_name('nahida')}正在整理全部结果...", None))
+        await state.push_progress(get_status_msg("xiaoda", "done", f"{get_agent_display_name('xiaoda')}正在整理全部结果...", None))
 
         parts = []
         for r in results:
             parts.append(f"【{r['display_name']}的回复】\n{r['reply']}")
         combined = "\n\n".join(parts)
 
-        if self._nahida_chat:
+        if self._xiaoda_chat:
             try:
                 agent_count = len(results)
                 agent_names = "、".join([r['display_name'] for r in results])
@@ -870,7 +870,7 @@ class SynthesisNode:
             except Exception as e:
                 logger.warning("synthesis.nahida_failed", error=str(e))
 
-        # nahida_chat不可用时，使用LLM综合作为后备
+        # xiaoda_chat不可用时，使用LLM综合作为后备
         if len(results) == 1:
             return {"final_output": results[0].get("reply", state.sub_agent_reply)}
 
@@ -909,7 +909,7 @@ async def route_condition(state: TaskState) -> str:
 
 def build_task_graph(dispatcher: AgentDispatcher, agent_configs: dict,
                      route_client: AsyncOpenAI, route_model: str = None,
-                     nahida_chat_callback: Optional[Any]=None) -> TaskGraph:
+                     xiaoda_chat_callback: Optional[Any]=None) -> TaskGraph:
     db_path = str(DATA_DIR / "agent.db")
     belief_router = BeliefRouter(db_path=db_path)
     router = RouterNode(route_client, route_model or os.getenv("MODEL_NAME", "mimo-v2.5"), belief_router=belief_router)

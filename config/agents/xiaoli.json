@@ -1,17 +1,18 @@
 {
-  "name": "nike",
-  "display_name": "小可",
-  "display_name_en": "Xiaoke",
+  "name": "xiaoli",
+  "display_name": "小莉",
+  "display_name_en": "Xiaoli",
   "provider": "agnes",
   "model": "agnes-2.0-flash",
-  "personality_file": "/home/orangepi/ai-agent/config/agents/nike_personality.md",
-  "voice_ref": null,
+  "personality_file": "/home/orangepi/ai-agent/config/agents/xiaoli_personality.md",
+  "voice_ref": "xiaoli/xiaoli",
   "excluded_tools": [
-    "call_klee",
-    "call_nahida",
+    "call_xiaoli",
+    "document_reader",
     "gpio_control",
     "hardware_status",
     "i2c_comm",
+    "list_files",
     "mcp_git_git_add",
     "mcp_git_git_branch",
     "mcp_git_git_checkout",
@@ -50,38 +51,38 @@
     "mcp_github_search_users",
     "mcp_github_update_issue",
     "mcp_github_update_pull_request_branch",
+    "multi_search",
     "pwm_control",
-    "shell_command",
+    "python_executor",
+    "read_file",
+    "search_files",
+    "web_browse",
+    "wolfram_query",
     "write_file"
   ],
   "base_url": "https://apihub.agnes-ai.com/v1",
   "api_key_env": "AGNES_API_KEY",
   "capabilities": [
-    "research",
-    "analysis",
-    "study",
-    "academic"
+    "chat",
+    "play",
+    "fun"
   ],
-  "route_description": "研究分析、学术思考、深度解读",
-  "mcp_servers": [
-    "git",
-    "github"
-  ],
+  "route_description": "日常聊天、玩耍、轻松有趣的对话",
+  "mcp_servers": [],
   "max_spawn_depth": 1,
   "max_turns": null,
   "effort": null,
   "permission_mode": null,
   "memory_scope": null,
   "background": false,
-  "wallpaper": "/assets/wallpapers/nike.jpg",
+  "wallpaper": "/assets/wallpapers/xiaoli.jpg",
   "allowed_paths": [
-    "tools/code_tools_v2.py",
-    "tools/file_tools_v2.py"
+    "assets/stickers/xiaoli/*",
+    "config/agents/xiaoli_personality.md"
   ],
   "forbidden_paths": [
     "*.env",
-    "security/*",
+    ".env.*",
     "config/agents/*_personality.md"
-  ],
-  "_saved_at": 1783243012.5222273
+  ]
 }

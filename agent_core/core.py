@@ -117,7 +117,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         # LazyLoader: 延迟初始化重量级组件，首次访问时才加载
         # 冷启动优化：sticker 扫描目录和 file_receiver 初始化推迟到实际使用时
         self.sticker_manager = LazyLoader("emotion.sticker_manager.StickerManager", {"sticker_dir": STICKER_DIR})
-        self.klee_sticker_manager = LazyLoader("emotion.sticker_manager.StickerManager", {"sticker_dir": KLEE_STICKER_DIR})
+        self.xiaoli_sticker_manager = LazyLoader("emotion.sticker_manager.StickerManager", {"sticker_dir": XIAOLI_STICKER_DIR})
         self.file_receiver = LazyLoader("utils.file_receiver.FileReceiver", {"base_dir": FILE_DIR})
         self.klee = KleeAgent(tool_executor=self.tool_executor, tool_repair=self.tool_repair, nahida_delegate=self._nahida_delegate_for_klee)
         self.tts = TTSEngine()
@@ -125,7 +125,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             tts=self.tts,
             tool_executor=self.tool_executor,
             tool_repair=self.tool_repair,
-            delegate_callback=self._nahida_delegate_for_klee,
+            delegate_callback=self._xiaoda_delegate_for_xiaoli,
             core=self,
         )
         self._task_graph: TaskGraph | None = None
@@ -167,14 +167,14 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         """获取指定智能体的表情包管理器。
 
         - nahida/空 → 主 sticker_manager
-        - keli/klee → klee_sticker_manager
+        - xiaoli/klee → klee_sticker_manager
         - 其他 → 从 _agent_route_configs 获取 sticker_dir 动态创建（LazyLoader 延迟加载）
         - 表情包目录为空时 available 返回 False，表情包不生效
         """
         name_lower = (name or "").lower()
         if name_lower in ("nahida", ""):
             return self.sticker_manager
-        if name_lower in ("keli", "klee"):
+        if name_lower in ("xiaoli", "klee"):
             return self.klee_sticker_manager
         if name_lower in self._sticker_managers:
             return self._sticker_managers[name_lower]
@@ -420,8 +420,8 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             logger.warning("shutdown.router_close_failed", error=str(e))
 
         try:
-            if self.klee and hasattr(self.klee, 'close'):
-                await self.klee.close()
+            if self.xiaoli and hasattr(self.xiaoli, 'close'):
+                await self.xiaoli.close()
         except Exception as e:
             logger.warning("shutdown.klee_close_failed", error=str(e))
 

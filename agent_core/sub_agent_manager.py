@@ -234,7 +234,7 @@ class SubAgentManagerMixin:
                 timeout=180,
             )
             if reply is None:
-                # 降级回复不缓存（与 delegate_to_agent / delegate_to_klee 行为一致），
+                # 降级回复不缓存（与 delegate_to_agent / delegate_to_xiaoli 行为一致），
                 # 避免后续 10 分钟内对同一任务持续返回降级文案
                 return {"agent": t, "display_name": display_name,
                         "reply": f"{display_name}现在有点累了...等会儿再来吧！💤"}
@@ -342,8 +342,8 @@ class SubAgentManagerMixin:
                 if mode == "debate":
                     return await self._debate_agents(agents, verifier, task)
 
-        if name in ("keli", "klee"):
-            return await self.delegate_to_klee(task)
+        if name in ("xiaoli", "xiaoli"):
+            return await self.delegate_to_xiaoli(task)
         _ctx = _current_request_ctx.get()
         agent = self.dispatcher.get_agent(name)
         if not agent:
@@ -520,7 +520,7 @@ class SubAgentManagerMixin:
                     agents[0], agents[1], synth_name)
         return await self.delegate_to_agent(synth_name, synth_prompt, mode="single")
 
-    async def delegate_to_klee(self, task: str, factual: bool = False) -> str:
+    async def delegate_to_xiaoli(self, task: str, factual: bool = False) -> str:
         """将任务委托给可莉子代理完成并返回结果.
 
         Args:
@@ -533,12 +533,12 @@ class SubAgentManagerMixin:
         _ctx = _current_request_ctx.get()
         # A2A 共享黑板：委托前读取已有产出（factual 与非 factual 结果不同，需区分 key）
         bb = getattr(self.context, "shared_blackboard", None)
-        task_key = self._bb_task_key("keli", task, suffix="factual" if factual else "")
+        task_key = self._bb_task_key("xiaoli", task, suffix="factual" if factual else "")
         if bb is not None:
             try:
                 cached = await bb.get(task_key)
                 if cached is not None:
-                    logger.debug("blackboard.delegate_hit key={} agent=keli", task_key)
+                    logger.debug("blackboard.delegate_hit key={} agent=xiaoli", task_key)
                     return cached
             except Exception as e:
                 logger.debug("blackboard.get_failed key={} error={}", task_key, e)
@@ -546,15 +546,15 @@ class SubAgentManagerMixin:
             context = "这是纳西妲委托的查询任务。请直接返回查询结果，不要加任何个人风格、感叹号或角色扮演，只报告事实数据。"
         else:
             _nahida_dn = get_agent_display_name('nahida')
-            _keli_dn = get_agent_display_name('keli')
-            context = f"{_nahida_dn}姐姐委托{_keli_dn}的任务。{_nahida_dn}是须弥的草神，温柔聪慧，{_keli_dn}叫她'{_nahida_dn}姐姐'。{self.context.current_address_term}是{_nahida_dn}最亲近的人，也是{_keli_dn}的大哥哥/大姐姐。"
-        result = await self.dispatcher.dispatch("keli", task, context=context, status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term)
+            _xiaoli_dn = get_agent_display_name('xiaoli')
+            context = f"{_nahida_dn}姐姐委托{_xiaoli_dn}的任务。{_nahida_dn}是须弥的草神，温柔聪慧，{_xiaoli_dn}叫她'{_nahida_dn}姐姐'。{self.context.current_address_term}是{_nahida_dn}最亲近的人，也是{_xiaoli_dn}的大哥哥/大姐姐。"
+        result = await self.dispatcher.dispatch("xiaoli", task, context=context, status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term)
         if result is None:
             return "可莉现在有点累了...等会儿再来找大哥哥玩吧！蹦蹦...💤"
         # A2A 共享黑板：委托完成后写入产出
         if bb is not None:
             try:
-                await bb.put(task_key, result, agent_name="keli")
+                await bb.put(task_key, result, agent_name="xiaoli")
             except Exception as e:
                 logger.debug("blackboard.put_failed key={} error={}", task_key, e)
         return result
@@ -618,11 +618,11 @@ class SubAgentManagerMixin:
 
         return "\n\n".join(parts) if parts else ""
 
-    async def _rephrase_as_nahida(self, user_input: str, klee_result: str) -> str:
+    async def _rephrase_as_nahida(self, user_input: str, xiaoli_result: str) -> str:
         try:
             prompt = (
                 f"{self.context.current_address_term}问：{user_input}\n\n"
-                f"查询结果：{klee_result}\n\n"
+                f"查询结果：{xiaoli_result}\n\n"
                 f"请用纳西妲的语气（温柔、可爱、偶尔用🌿等emoji）简短转述这个结果，"
                 f"1-2句话即可，不要提及可莉或任何查询过程。"
             )
@@ -634,9 +634,9 @@ class SubAgentManagerMixin:
             )
             if isinstance(reply, str):
                 return reply.strip()
-            return reply.choices[0].message.content.strip() if reply.choices[0].message.content else klee_result
+            return reply.choices[0].message.content.strip() if reply.choices[0].message.content else xiaoli_result
         except Exception:
-            return klee_result
+            return xiaoli_result
 
     async def _notify_status(self, message: str) -> None:
         _ctx = _current_request_ctx.get()
@@ -649,7 +649,7 @@ class SubAgentManagerMixin:
     def _is_manual_target(self, user_input: str, user_id: str) -> bool:
         return any(tag in user_input for tag in ["@可莉", "@银狼", "@昔涟", "@尼可", "@纳西妲"])
 
-    async def _nahida_delegate_for_klee(self, question: str) -> str:
+    async def _nahida_delegate_for_xiaoli(self, question: str) -> str:
         _ctx = _current_request_ctx.get()
         if _ctx and _ctx.delegate_depth >= 2:
             return f"{get_agent_display_name('nahida')}姐姐现在也在忙，可莉先自己想想办法吧！"

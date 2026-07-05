@@ -22,14 +22,14 @@ _MODIFIED_FILES = [
     "tool_engine/tool_guardrails.py",
     "tool_engine/tool_executor.py",
     "prompt_builder.py",
-    "klee_agent.py",
+    "xiaoli_agent.py",
     "agent_dispatcher.py",
     "config.py",
     "agent_context.py",
 ]
 
 _TIMEOUT_FILES = [
-    "klee_agent.py",
+    "xiaoli_agent.py",
     "tool_engine/tool_call_handler.py",
     "agent_core/message_processor.py",
 ]

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-小妲 AI Agent：运行在 Orange Pi 4 Pro（ARM64, Debian 12）上的多 Agent AI 助手。以《原神》纳西妲为人格主体，下辖 4 个内置子代理（keli 可莉/yinlang 银狼/xilian 昔涟/nike 尼可）。交互通道：QQ Bot、Web UI（Vue 3 + FastAPI）、CLI。
+小妲 AI Agent：运行在 Orange Pi 4 Pro（ARM64, Debian 12）上的多 Agent AI 助手。以小妲为人格主体，下辖 4 个内置子代理（xiaoli 小莉/xiaolang 小狼/xiaolian 小涟/xiaoke 小可）。交互通道：QQ Bot、Web UI（Vue 3 + FastAPI）、CLI。
 
 - Python 3.11 + asyncio + aiosqlite，虚拟环境 `.venv`
 - LLM：小米 MiMo（mimo-v2.5 / -pro），降级链见 `model_router.py` 的 `ROUTE_TABLE`/`FALLBACK_ROUTE`
@@ -59,7 +59,7 @@ sqlite3 /media/orangepi/KIOXIA/nahida-data/db/agent.db ".tables"
 
 - 统一工具 `delegate_task(agent, task)`，在 `core/bootstrap.py::_register_delegate_tool()` **启动时动态注册**——描述里嵌入各子代理的 `route_description`，agent 参数带 enum 约束
 - 执行端 `AgentCore.delegate_to_agent()` → `dispatcher.dispatch()`；可莉走 `delegate_to_klee()` 专用上下文
-- 子代理不能再委托（`DELEGATE_BLOCKED_TOOLS` in agent_dispatcher.py + klee_agent.py 的 `EXCLUDED_TOOLS`）
+- 子代理不能再委托（`DELEGATE_BLOCKED_TOOLS` in agent_dispatcher.py + xiaoli_agent.py 的 `EXCLUDED_TOOLS`）
 - 路由护栏：`agent_core.py` 检测到表情包意图（"表情包/贴纸"等关键词）时，当轮从工具列表硬移除 `delegate_task`——表情包由主体流程自动附带，委托出去会丢失
 - 用户在 WebUI 顶栏直接切换子代理时，`web/ws_hub.py::process_and_serialize` 走 `core._dispatch_single_sub_agent()`（与 QQ 通道同款完整流程，带表情包/情绪/落库）。**不要**改回裸 `dispatcher.dispatch()`，那会丢掉所有媒体能力
 - 子代理表情包匹配注意：可莉的标识名是 `keli`（不是 klee），判断用 `target.lower() in ("keli", "klee")`

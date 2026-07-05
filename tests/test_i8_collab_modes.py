@@ -56,7 +56,7 @@ class FakeSubAgentManager:
     async def _debate_agents(self, agents, synthesizer, task):
         if len(agents) < 2:
             return await self.delegate_to_agent(
-                agents[0] if agents else "nahida", task, mode="single")
+                agents[0] if agents else "xiaoda", task, mode="single")
         pro_prompt = f"请从正面/支持角度分析以下问题，给出你的论点和论据：\n{task}"
         con_prompt = f"请从反面/质疑角度分析以下问题，给出你的论点和论据：\n{task}"
         pro_task = self.delegate_to_agent(agents[0], pro_prompt, mode="single")
@@ -67,7 +67,7 @@ class FakeSubAgentManager:
             pro_result = "（正方无法给出观点）"
         if not isinstance(con_result, str) or len(con_result) < 10:
             con_result = "（反方无法给出观点）"
-        synth_name = synthesizer or "nahida"
+        synth_name = synthesizer or "xiaoda"
         synth_prompt = (
             f"以下是关于「{task}」的正反两方观点，请综合分析并给出平衡的结论：\n\n"
             f"【正方观点】\n{pro_result}\n\n"
@@ -90,19 +90,19 @@ def manager():
 async def test_ensemble_picks_longest(manager):
     """集成模式应选最长的结果"""
     manager.dispatch_results = {
-        "nike": "[nike] 短结果",
-        "yinlang": "[yinlang] 这是一个比较长的结果，包含了更多的分析和细节内容" * 3,
-        "xilian": "[xilian] 中等长度的结果" * 5,
+        "xiaoke": "[xiaoke] 短结果",
+        "xiaolang": "[xiaolang] 这是一个比较长的结果，包含了更多的分析和细节内容" * 3,
+        "xiaolian": "[xiaolian] 中等长度的结果" * 5,
     }
-    result = await manager._ensemble_agents(["nike", "yinlang", "xilian"], "test task")
-    assert "yinlang" in result  # yinlang 的结果最长
+    result = await manager._ensemble_agents(["xiaoke", "xiaolang", "xiaolian"], "test task")
+    assert "xiaolang" in result  # xiaolang 的结果最长
 
 
 @pytest.mark.asyncio
 async def test_ensemble_all_fail(manager):
     """所有 agent 都失败时返回兜底文本"""
-    manager.dispatch_results = {"nike": "短", "yinlang": ""}
-    result = await manager._ensemble_agents(["nike", "yinlang"], "test")
+    manager.dispatch_results = {"xiaoke": "短", "xiaolang": ""}
+    result = await manager._ensemble_agents(["xiaoke", "xiaolang"], "test")
     assert "无法完成" in result
 
 
@@ -110,11 +110,11 @@ async def test_ensemble_all_fail(manager):
 async def test_ensemble_partial_failure(manager):
     """部分 agent 失败时仍能返回有效结果"""
     manager.dispatch_results = {
-        "nike": "[nike] 有效的完整结果内容" * 5,
-        "yinlang": "x",  # 太短, 被过滤
+        "xiaoke": "[xiaoke] 有效的完整结果内容" * 5,
+        "xiaolang": "x",  # 太短, 被过滤
     }
-    result = await manager._ensemble_agents(["nike", "yinlang"], "test")
-    assert "nike" in result
+    result = await manager._ensemble_agents(["xiaoke", "xiaolang"], "test")
+    assert "xiaoke" in result
 
 
 # ============================================================
@@ -124,24 +124,24 @@ async def test_ensemble_partial_failure(manager):
 @pytest.mark.asyncio
 async def test_retry_fallback_first_success(manager):
     """第一个 agent 成功时直接返回"""
-    manager.dispatch_results = {"nike": "[nike] 成功的结果" * 10}
-    result = await manager._retry_fallback(["nike", "yinlang"], "test")
-    assert "nike" in result
+    manager.dispatch_results = {"xiaoke": "[xiaoke] 成功的结果" * 10}
+    result = await manager._retry_fallback(["xiaoke", "xiaolang"], "test")
+    assert "xiaoke" in result
 
 
 @pytest.mark.asyncio
 async def test_retry_fallback_falls_to_second(manager):
     """第一个失败时降级到第二个"""
-    manager.dispatch_results = {"nike": "短", "yinlang": "[yinlang] 降级后的完整结果" * 5}
-    result = await manager._retry_fallback(["nike", "yinlang"], "test")
-    assert "yinlang" in result
+    manager.dispatch_results = {"xiaoke": "短", "xiaolang": "[xiaolang] 降级后的完整结果" * 5}
+    result = await manager._retry_fallback(["xiaoke", "xiaolang"], "test")
+    assert "xiaolang" in result
 
 
 @pytest.mark.asyncio
 async def test_retry_fallback_all_fail(manager):
     """全部失败时返回兜底文本"""
-    manager.dispatch_results = {"nike": "", "yinlang": "x"}
-    result = await manager._retry_fallback(["nike", "yinlang"], "test")
+    manager.dispatch_results = {"xiaoke": "", "xiaolang": "x"}
+    result = await manager._retry_fallback(["xiaoke", "xiaolang"], "test")
     assert "未能完成" in result
 
 
@@ -153,29 +153,29 @@ async def test_retry_fallback_all_fail(manager):
 async def test_debate_produces_synthesis(manager):
     """辩论模式应产生综合结论"""
     result = await manager._debate_agents(
-        ["nike", "yinlang"], synthesizer="nahida", task="是否应该使用微服务架构")
-    assert "综合" in result or "nahida" in result
+        ["xiaoke", "xiaolang"], synthesizer="xiaoda", task="是否应该使用微服务架构")
+    assert "综合" in result or "xiaoda" in result
 
 
 @pytest.mark.asyncio
 async def test_debate_single_agent_degrades(manager):
     """只有一个 agent 时退化为直接委托"""
-    result = await manager._debate_agents(["nike"], synthesizer="nahida", task="test")
-    assert "nike" in result
+    result = await manager._debate_agents(["xiaoke"], synthesizer="xiaoda", task="test")
+    assert "xiaoke" in result
 
 
 @pytest.mark.asyncio
 async def test_debate_uses_synthesizer(manager):
     """辩论模式应使用指定的综合者"""
     result = await manager._debate_agents(
-        ["nike", "yinlang"], synthesizer="xilian", task="test question")
-    # 综合者 xilian 应在结果中
-    assert "xilian" in result
+        ["xiaoke", "xiaolang"], synthesizer="xiaolian", task="test question")
+    # 综合者 xiaolian 应在结果中
+    assert "xiaolian" in result
 
 
 @pytest.mark.asyncio
 async def test_debate_default_synthesizer(manager):
-    """未指定综合者时默认用 nahida"""
+    """未指定综合者时默认用 xiaoda"""
     result = await manager._debate_agents(
-        ["nike", "yinlang"], synthesizer="", task="test question")
-    assert "nahida" in result
+        ["xiaoke", "xiaolang"], synthesizer="", task="test question")
+    assert "xiaoda" in result

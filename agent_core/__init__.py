@@ -44,7 +44,7 @@ _LAZY_IMPORTS = {
     "ToolCallRepair": "agent_core.core",
     "ResultWrapper": "agent_core.core",
     "FileReceiver": "agent_core.core",
-    "KleeAgent": "agent_core.core",
+    "XiaoliAgent": "agent_core.core",
     "TTSEngine": "agent_core.core",
     "AgentDispatcher": "agent_core.core",
     "MCPManager": "agent_core.core",

@@ -43,7 +43,7 @@ class AgentCoreBootstrapper:
 
         Args:
             reinit: 为 True 时跳过已初始化的基础设施和认知系统，
-                    仅执行降级模式中未完成的步骤（klee/tts/sub_agents 等）。
+                    仅执行降级模式中未完成的步骤（xiaoli/tts/sub_agents 等）。
                     各步骤独立容错，单个步骤失败不会阻止核心聊天功能。
         """
         from config import MIMO_API_KEY as _mimo_key
@@ -79,11 +79,11 @@ class AgentCoreBootstrapper:
             logger.warning("agent_core.blackboard_cleanup_start_failed error={}", str(e))
 
         # 以下步骤各自独立容错：单个可选功能失败不应阻止核心聊天
-        # klee 子代理（可选）
+        # xiaoli 子代理（可选）
         try:
-            await self.core.klee.init()
+            await self.core.xiaoli.init()
         except Exception as e:
-            logger.warning("agent_core.reinit_klee_failed error={}", str(e))
+            logger.warning("agent_core.reinit_xiaoli_failed error={}", str(e))
 
         # 参考音频和表情包（可选，仅复制文件）
         try:
@@ -196,19 +196,19 @@ class AgentCoreBootstrapper:
                         except Exception as e:
                             logger.warning("bootstrap.stickers_copy_failed", voice="nahida", emotion=emotion_dir.name)
 
-        # 复制 klee 表情包
-        klee_src = bundled_dir / "klee"
-        if klee_src.exists() and klee_src.is_dir():
+        # 复制 xiaoli 表情包
+        xiaoli_src = bundled_dir / "xiaoli"
+        if xiaoli_src.exists() and xiaoli_src.is_dir():
             KLEE_STICKER_DIR.mkdir(parents=True, exist_ok=True)
-            for emotion_dir in klee_src.iterdir():
+            for emotion_dir in xiaoli_src.iterdir():
                 if emotion_dir.is_dir():
                     dest_emotion = KLEE_STICKER_DIR / emotion_dir.name
                     if not dest_emotion.exists():
                         try:
                             shutil.copytree(emotion_dir, dest_emotion)
-                            logger.info("bootstrap.stickers_copied", voice="klee", emotion=emotion_dir.name)
+                            logger.info("bootstrap.stickers_copied", voice="xiaoli", emotion=emotion_dir.name)
                         except Exception as e:
-                            logger.warning("bootstrap.stickers_copy_failed", voice="klee", emotion=emotion_dir.name)
+                            logger.warning("bootstrap.stickers_copy_failed", voice="xiaoli", emotion=emotion_dir.name)
 
     # 表情包情绪分类子目录（用户往这些目录放图片即可自动调用）
     _STICKER_EMOTION_DIRS = (
@@ -418,9 +418,9 @@ class AgentCoreBootstrapper:
             display_name="可莉",
             provider=_DEFAULT_PROVIDER,
             model=_agent_model,
-            personality_file=str(_agents_dir / "klee_personality.md"),
+            personality_file=str(_agents_dir / "xiaoli_personality.md"),
             voice_ref="keli",
-            excluded_tools={"call_klee", "shell_command", "python_executor", "write_file", "search_files", "read_file", "list_files", "web_browse", "document_reader", "multi_search", "wolfram_query"},
+            excluded_tools={"call_xiaoli", "shell_command", "python_executor", "write_file", "search_files", "read_file", "list_files", "web_browse", "document_reader", "multi_search", "wolfram_query"},
             base_url=_prov_cfg["base_url"],
             api_key_env=_prov_cfg["api_key_env"],
             capabilities=["chat", "play", "fun"],
@@ -435,7 +435,7 @@ class AgentCoreBootstrapper:
             model=_agent_model,
             personality_file=str(_agents_dir / "yinlang_personality.md"),
             voice_ref=None,
-            excluded_tools={"call_klee", "call_nahida"},
+            excluded_tools={"call_xiaoli", "call_xiaoda"},
             base_url=_prov_cfg["base_url"],
             api_key_env=_prov_cfg["api_key_env"],
             capabilities=["coding", "debug", "script", "programming", "hardware", "system", "devops"],
@@ -450,27 +450,27 @@ class AgentCoreBootstrapper:
             model=_agent_model,
             personality_file=str(_agents_dir / "xilian_personality.md"),
             voice_ref=None,
-            excluded_tools={"call_klee", "call_nahida", "shell_command", "python_executor", "write_file"},
+            excluded_tools={"call_xiaoli", "call_xiaoda", "shell_command", "python_executor", "write_file"},
             base_url=_prov_cfg["base_url"],
             api_key_env=_prov_cfg["api_key_env"],
             capabilities=["search", "lookup", "query", "explore", "discover"],
             route_description="搜索信息、查询资料、探索发现",
         )
         await core.dispatcher.register(xilian_config)
-        nike_config = SubAgentConfig(
-            name="nike",
+        xiaoke_config = SubAgentConfig(
+            name="xiaoke",
             display_name="尼可",
             provider=_DEFAULT_PROVIDER,
             model=_agent_model,
-            personality_file=str(_agents_dir / "nike_personality.md"),
+            personality_file=str(_agents_dir / "xiaoke_personality.md"),
             voice_ref=None,
-            excluded_tools={"call_klee", "call_nahida", "shell_command", "write_file"},
+            excluded_tools={"call_xiaoli", "call_xiaoda", "shell_command", "write_file"},
             base_url=_prov_cfg["base_url"],
             api_key_env=_prov_cfg["api_key_env"],
             capabilities=["research", "analysis", "study", "academic"],
             route_description="研究分析、学术思考、深度解读",
         )
-        await core.dispatcher.register(nike_config)
+        await core.dispatcher.register(xiaoke_config)
 
         # 为每个子智能体自动创建表情包目录（含示例情绪分类子目录）
         self._ensure_agent_sticker_dirs(core)
@@ -515,7 +515,7 @@ class AgentCoreBootstrapper:
                 "【操作模式】mode=single（默认，直接执行）；"
                 "mode=generate_verify（生成+交叉验证，需指定 verifier，"
                 "适用于代码修改、安全分析等需要二次确认的任务）；"
-                "mode=pipe（顺序管道，agent 用逗号分隔多个，如 'xilian,nike'，"
+                "mode=pipe（顺序管道，agent 用逗号分隔多个，如 'xilian,xiaoke'，"
                 "前一个的输出作为后一个的输入，适用于搜索→分析→综合等场景）；"
                 "mode=ensemble（集成模式，agent 用逗号分隔多个，"
                 "多 agent 并行解决同一任务取最优结果，适用于创意/多解任务）；"
@@ -535,7 +535,7 @@ class AgentCoreBootstrapper:
             parameters={
                 "properties": {
                     "agent": {"type": "string",
-                              "description": "子代理标识名，如 keli / yinlang / xilian / nike",
+                              "description": "子代理标识名，如 keli / yinlang / xilian / xiaoke",
                               "enum": list(core._agent_route_configs.keys())},
                     "task": {"type": "string", "description": "委托的任务描述，包含必要上下文"},
                     "mode": {"type": "string",

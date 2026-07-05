@@ -244,7 +244,7 @@ class ToolExecutorMixin:
             text = cleaned
         except Exception as e:
             logger.debug(f"canary.scan_failed: {e}")
-        text = humanize(text, style="nahida")
+        text = humanize(text, style="xiaoda")
         return text
 
     # ── 工具定义泄露检测 ──────────────────────────────────

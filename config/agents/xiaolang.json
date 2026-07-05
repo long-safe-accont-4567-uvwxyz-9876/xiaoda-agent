@@ -1,14 +1,14 @@
 {
-  "name": "yinlang",
+  "name": "xiaolang",
   "display_name": "小狼",
   "display_name_en": "Xiaolang",
   "provider": "agnes",
   "model": "agnes-2.0-flash",
-  "personality_file": "/home/orangepi/ai-agent/config/agents/yinlang_personality.md",
+  "personality_file": "/home/orangepi/ai-agent/config/agents/xiaolang_personality.md",
   "voice_ref": null,
   "excluded_tools": [
-    "call_klee",
-    "call_nahida"
+    "call_xiaoli",
+    "call_xiaoda"
   ],
   "base_url": "https://apihub.agnes-ai.com/v1",
   "api_key_env": "AGNES_API_KEY",
@@ -32,7 +32,7 @@
   "permission_mode": null,
   "memory_scope": null,
   "background": false,
-  "wallpaper": "/assets/wallpapers/yinlang.jpg",
+  "wallpaper": "/assets/wallpapers/xiaolang.jpg",
   "allowed_paths": [
     "tools/hardware_tools.py",
     "tools/system_tools.py"
@@ -40,6 +40,5 @@
   "forbidden_paths": [
     "*.env",
     "security/*"
-  ],
-  "_saved_at": 1783225451.4421847
+  ]
 }

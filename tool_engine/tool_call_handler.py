@@ -80,8 +80,8 @@ TOOL_DISPLAY_NAMES = {
 
 class ToolCallHandler:
     def __init__(self, tool_executor: ToolExecutor, tool_repair: ToolCallRepair,
-                 clean_reply_callback: Any, context: Any=None, router: Any=None, klee_delegate: Any=None,
-                 status_callback: Any=None, agent_name: str = "nahida", personality_file: str | None = None,
+                 clean_reply_callback: Any, context: Any=None, router: Any=None, xiaoli_delegate: Any=None,
+                 status_callback: Any=None, agent_name: str = "xiaoda", personality_file: str | None = None,
                  tool_execute_callback: Any=None, error_pipeline: Any=None,
                  agent_config: Any=None) -> None:
         self._tool_executor = tool_executor
@@ -89,7 +89,7 @@ class ToolCallHandler:
         self._clean_reply = clean_reply_callback
         self._context = context
         self._router = router
-        self._klee_delegate = klee_delegate
+        self._xiaoli_delegate = xiaoli_delegate
         self._status_callback = status_callback
         self._agent_name = agent_name
         self._personality_file = personality_file
@@ -362,13 +362,13 @@ class ToolCallHandler:
             delegation_req = result.data
         elif isinstance(result.data, str) and result.data.startswith("[KLEE_PENDING]"):
             delegation_req = DelegationRequest(
-                type="klee", question=result.data[len("[KLEE_PENDING]"):], delegator="nahida"
+                type="xiaoli", question=result.data[len("[KLEE_PENDING]"):], delegator="xiaoda"
             )
 
-        if delegation_req and delegation_req.type == "klee":
-            if self._klee_delegate:
-                klee_reply = await self._klee_delegate(delegation_req.question)
-                result = ToolResult.ok(klee_reply)
+        if delegation_req and delegation_req.type == "xiaoli":
+            if self._xiaoli_delegate:
+                xiaoli_reply = await self._xiaoli_delegate(delegation_req.question)
+                result = ToolResult.ok(xiaoli_reply)
         return result
 
     async def _summarize_results(self, user_input: str, tool_results: list,
@@ -391,9 +391,9 @@ class ToolCallHandler:
             return combined
 
         try:
-            nahida_prompt = ""
+            xiaoda_prompt = ""
             if self._context:
-                nahida_prompt = self._context.get_nahida_prompt()
+                xiaoda_prompt = self._context.get_xiaoda_prompt()
 
             address_term = (self._context.current_address_term
                             if self._context else "爸爸") or "爸爸"
@@ -415,7 +415,7 @@ class ToolCallHandler:
                 self._router.route(
                     "chat",
                     [
-                        {"role": "system", "content": nahida_prompt},
+                        {"role": "system", "content": xiaoda_prompt},
                         {"role": "user", "content": user_input},
                         {"role": "user", "content": summary_prompt},
                     ],

@@ -5,7 +5,7 @@ from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 _DEFAULT_PROJECT_DIR = os.path.expanduser("~/ai-agent")
 
 PROTECTED_SERVICES = {"sshd", "systemd", "systemd-journald", "systemd-logind", "systemd-udevd", "dbus", "cron", "rsyslog", "networking", "NetworkManager", "ufw"}
-AGENT_SERVICES = {"nahida-web", "qq-agent", "napcat", "qqbot", "nginx", "frpc", "docker"}
+AGENT_SERVICES = {"xiaoda-web", "qq-agent", "napcat", "qqbot", "nginx", "frpc", "docker"}
 
 
 async def _run_cmd(args: list[str], timeout: int = 30, cwd: str | None = None) -> tuple[int, str, str]:
@@ -92,12 +92,12 @@ async def service_manage(action: str, name: str = "", lines: int = 30) -> ToolRe
             rc, stdout, stderr = await _run_cmd(["journalctl", "-u", name, "-n", str(lines), "--no-pager"], timeout=30)
             if rc != 0:
                 return ToolResult.fail(f"获取服务 {name} 日志失败: {stderr.strip()}")
-            # 空结果视为失败：可能服务名错误（如 nahida 而非 nahida-web）或服务未运行
+            # 空结果视为失败：可能服务名错误（如 nahida 而非 xiaoda-web）或服务未运行
             if not stdout.strip() or stdout.strip() == "-- No entries --":
                 return ToolResult.fail(
                     f"服务 {name} 没有日志记录（可能服务名错误或服务未运行）。"
                     f"已知 Agent 服务见 service_manage(action='list')，"
-                    f"本机 Agent 服务通常是 'nahida-web'。"
+                    f"本机 Agent 服务通常是 'xiaoda-web'。"
                 )
             return ToolResult.ok(f"服务 {name} 最近 {lines} 条日志:\n{stdout.strip()}")
 
@@ -206,7 +206,7 @@ async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> 
             "action": {"type": "string", "enum": ["git_status", "pip_check", "logs", "project_tree"], "description": "操作类型"},
             "path": {"type": "string", "description": "项目路径", "default": _DEFAULT_PROJECT_DIR},
             "lines": {"type": "integer", "description": "日志行数，默认50", "default": 50},
-            "service": {"type": "string", "description": "服务名称(用于日志)，默认nahida-web", "default": "nahida-web"},
+            "service": {"type": "string", "description": "服务名称(用于日志)，默认xiaoda-web", "default": "xiaoda-web"},
         },
         "required": ["action"],
     },
@@ -214,7 +214,7 @@ async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> 
     category="system",
     max_frequency=15,
 )
-async def dev_assist(action: str, path: str = _DEFAULT_PROJECT_DIR, lines: int = 50, service: str = "nahida-web") -> ToolResult:
+async def dev_assist(action: str, path: str = _DEFAULT_PROJECT_DIR, lines: int = 50, service: str = "xiaoda-web") -> ToolResult:
     try:
         if action == "git_status":
             return await _dev_assist_git_status(path)
@@ -310,7 +310,7 @@ async def _dev_assist_logs(path: str, lines: int, service: str) -> ToolResult:
             rc, log_out, _ = await _run_cmd(["journalctl", "-u", service, "-n", str(lines), "--no-pager"], timeout=30)
             if rc == 0 and log_out.strip() and log_out.strip() != "-- No entries --":
                 return ToolResult.ok(f"服务 {service} 最近 {lines} 条日志:\n{log_out.strip()}")
-            return ToolResult.fail(f"未找到日志文件，且服务 {service} 无 journalctl 记录（可能服务名错误，本机通常是 'nahida-web'）")
+            return ToolResult.fail(f"未找到日志文件，且服务 {service} 无 journalctl 记录（可能服务名错误，本机通常是 'xiaoda-web'）")
         log_path = os.path.join(log_dir, log_files[0])
         try:
             all_lines = await asyncio.to_thread(
@@ -324,4 +324,4 @@ async def _dev_assist_logs(path: str, lines: int, service: str) -> ToolResult:
         rc, log_out, _ = await _run_cmd(["journalctl", "-u", service, "-n", str(lines), "--no-pager"], timeout=30)
         if rc == 0 and log_out.strip() and log_out.strip() != "-- No entries --":
             return ToolResult.ok(f"服务 {service} 最近 {lines} 条日志:\n{log_out.strip()}")
-        return ToolResult.fail(f"未找到日志目录或日志（服务 {service} 可能服务名错误，本机通常是 'nahida-web'）")
+        return ToolResult.fail(f"未找到日志目录或日志（服务 {service} 可能服务名错误，本机通常是 'xiaoda-web'）")

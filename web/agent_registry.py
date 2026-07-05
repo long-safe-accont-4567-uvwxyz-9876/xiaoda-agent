@@ -20,36 +20,36 @@ from loguru import logger
 from config import AGENTS_CONFIG_DIR, DEFAULT_PROVIDER
 import config as _config
 AGENTS_DIR = AGENTS_CONFIG_DIR
-BUILTIN_AGENTS = {"keli", "yinlang", "xilian", "nike"}
+BUILTIN_AGENTS = {"xiaoli", "xiaolang", "xiaolian", "xiaoke"}
 
 # 内置 Agent 的 excluded_tools（与 core/bootstrap.py 中 _register_sub_agents 保持一致）
 # 用于降级模式下 _builtin_stub() 计算实际 tool_count
 BUILTIN_EXCLUDED_TOOLS: dict[str, set[str]] = {
-    "keli": {"call_klee", "shell_command", "python_executor", "write_file",
+    "xiaoli": {"call_xiaoli", "shell_command", "python_executor", "write_file",
              "search_files", "read_file", "list_files", "web_browse",
              "document_reader", "multi_search", "wolfram_query"},
-    "yinlang": {"call_klee", "call_nahida"},
-    "xilian": {"call_klee", "call_nahida", "shell_command", "python_executor", "write_file"},
-    "nike": {"call_klee", "call_nahida", "shell_command", "write_file"},
+    "xiaolang": {"call_xiaoli", "call_xiaoda"},
+    "xiaolian": {"call_xiaoli", "call_xiaoda", "shell_command", "python_executor", "write_file"},
+    "xiaoke": {"call_xiaoli", "call_xiaoda", "shell_command", "write_file"},
 }
 # 内置 Agent 默认背景板（打包在前端 dist/assets/wallpapers/ 下）
 DEFAULT_WALLPAPERS = {
-    "nahida": "/assets/webui_background.jpg",
-    "keli": "/assets/wallpapers/keli.jpg",
-    "yinlang": "/assets/wallpapers/yinlang.jpg",
-    "xilian": "/assets/wallpapers/xilian.jpg",
-    "nike": "/assets/wallpapers/nike.jpg",
+    "xiaoda": "/assets/webui_background.jpg",
+    "xiaoli": "/assets/wallpapers/xiaoli.jpg",
+    "xiaolang": "/assets/wallpapers/xiaolang.jpg",
+    "xiaolian": "/assets/wallpapers/xiaolian.jpg",
+    "xiaoke": "/assets/wallpapers/xiaoke.jpg",
 }
 # 主体纳西妲不是 SubAgent，但要出现在 Agent 列表里供切换
 MAIN_AGENT_META = {
-    "name": "nahida",
+    "name": "xiaoda",
     "display_name": "小妲",
     "display_name_en": "Xiao Da",
     "builtin": True,
     "is_main": True,
     "enabled": True,
     "provider": DEFAULT_PROVIDER,
-    "wallpaper": DEFAULT_WALLPAPERS["nahida"],
+    "wallpaper": DEFAULT_WALLPAPERS["xiaoda"],
     "voice_ref": None,
     "route_description": "主体，默认对话对象，可委托其他子代理",
 }

@@ -1,18 +1,17 @@
 {
-  "name": "keli",
-  "display_name": "小莉",
-  "display_name_en": "Xiaoli",
+  "name": "xiaolian",
+  "display_name": "小涟",
+  "display_name_en": "Xiaolian",
   "provider": "agnes",
   "model": "agnes-2.0-flash",
-  "personality_file": "/home/orangepi/ai-agent/config/agents/klee_personality.md",
-  "voice_ref": "keli/keli",
+  "personality_file": "/home/orangepi/ai-agent/config/agents/xiaolian_personality.md",
+  "voice_ref": null,
   "excluded_tools": [
-    "call_klee",
-    "document_reader",
+    "call_xiaoli",
+    "call_xiaoda",
     "gpio_control",
     "hardware_status",
     "i2c_comm",
-    "list_files",
     "mcp_git_git_add",
     "mcp_git_git_branch",
     "mcp_git_git_checkout",
@@ -51,23 +50,21 @@
     "mcp_github_search_users",
     "mcp_github_update_issue",
     "mcp_github_update_pull_request_branch",
-    "multi_search",
     "pwm_control",
     "python_executor",
-    "read_file",
-    "search_files",
-    "web_browse",
-    "wolfram_query",
+    "shell_command",
     "write_file"
   ],
   "base_url": "https://apihub.agnes-ai.com/v1",
   "api_key_env": "AGNES_API_KEY",
   "capabilities": [
-    "chat",
-    "play",
-    "fun"
+    "search",
+    "lookup",
+    "query",
+    "explore",
+    "discover"
   ],
-  "route_description": "日常聊天、玩耍、轻松有趣的对话",
+  "route_description": "搜索信息、查询资料、探索发现",
   "mcp_servers": [],
   "max_spawn_depth": 1,
   "max_turns": null,
@@ -75,15 +72,13 @@
   "permission_mode": null,
   "memory_scope": null,
   "background": false,
-  "wallpaper": "/assets/wallpapers/keli.jpg",
+  "wallpaper": "/assets/wallpapers/xiaolian.jpg",
   "allowed_paths": [
-    "assets/stickers/klee/*",
-    "config/agents/klee_personality.md"
+    "tools/web_browse_tools.py",
+    "tools/web_browse_enhanced.py"
   ],
   "forbidden_paths": [
     "*.env",
-    ".env.*",
-    "config/agents/*_personality.md"
-  ],
-  "_saved_at": 1783214835.6149304
+    "security/*"
+  ]
 }

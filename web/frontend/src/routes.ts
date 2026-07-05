@@ -38,6 +38,7 @@ export const routes: RouteRecordRaw[] = [
       { path: 'settings/system', name: 'settings', component: () => import('./views/SettingsView.vue') },
       { path: 'workflows', name: 'workflows', component: () => import('./views/WorkflowView.vue') },
       { path: 'disclaimer', name: 'disclaimer', component: () => import('./views/DisclaimerView.vue') },
+      { path: 'sponsor', name: 'sponsor', component: () => import('./views/SponsorView.vue') },
     ],
   },
 ]

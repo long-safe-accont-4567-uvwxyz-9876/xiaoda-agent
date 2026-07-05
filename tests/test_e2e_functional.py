@@ -86,7 +86,7 @@ class TestAgentCoreInstantiation:
             patch("agent_core.ResultWrapper"),
             patch("agent_core.StickerManager"),
             patch("agent_core.FileReceiver"),
-            patch("agent_core.KleeAgent"),
+            patch("agent_core.XiaoliAgent"),
             patch("agent_core.TTSEngine"),
             patch("agent_core.AgentDispatcher"),
             patch("agent_core.MCPManager"),
@@ -350,7 +350,7 @@ class TestSubAgentSticker:
             patch("agent_core.ToolCallRepair"),
             patch("agent_core.ResultWrapper"),
             patch("agent_core.FileReceiver"),
-            patch("agent_core.KleeAgent"),
+            patch("agent_core.XiaoliAgent"),
             patch("agent_core.TTSEngine"),
             patch("agent_core.AgentDispatcher"),
             patch("agent_core.MCPManager"),
@@ -375,8 +375,8 @@ class TestSubAgentSticker:
             with patch.object(StickerManager, "__init__", lambda self, *a, **kw: None):
                 core = AgentCore()
                 core.sticker_manager = mock_sticker
-                core.klee_sticker_manager = MagicMock(available=False)
-                core.klee_sticker_manager.strip_emotion_tag.side_effect = lambda x: x
+                core.xiaoli_sticker_manager = MagicMock(available=False)
+                core.xiaoli_sticker_manager.strip_emotion_tag.side_effect = lambda x: x
                 core.dispatcher = MagicMock()
                 core.dispatcher.get_agent.return_value = MagicMock(
                     available=True,
@@ -394,7 +394,7 @@ class TestSubAgentSticker:
                 core.context.add_message = AsyncMock()
 
                 result = asyncio.run(
-                    core._dispatch_single_sub_agent("keli", "你好", "user1", "qq", "", MagicMock())
+                    core._dispatch_single_sub_agent("xiaoli", "你好", "user1", "qq", "", MagicMock())
                 )
                 assert isinstance(result, ProcessResult)
                 # sticker_path 可以为非 None（取决于 should_send 和 pick 的返回）

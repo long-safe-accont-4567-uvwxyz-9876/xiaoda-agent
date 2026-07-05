@@ -1,6 +1,6 @@
 """共享的环境变量读取与错误判断工具函数。
 
-统一了 agent_dispatcher / klee_agent / tts_engine 中的重复实现。
+统一了 agent_dispatcher / xiaoli_agent / tts_engine 中的重复实现。
 """
 from __future__ import annotations
 

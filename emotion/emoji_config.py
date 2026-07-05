@@ -8,7 +8,7 @@ DEFAULT_EMOJI = {
     "keli": {"thinking": "🔥", "using": "🔥", "done": "💣"},
     "yinlang": {"thinking": "🎮", "using": "🎮", "done": "🐺"},
     "xilian": {"thinking": "📚", "using": "✨", "done": "🌸"},
-    "nike": {"thinking": "🧪", "using": "🔬", "done": "🔥"},
+    "xiaoke": {"thinking": "🧪", "using": "🔬", "done": "🔥"},
 }
 
 def load_agent_emoji(agent_name: str, personality_file: str | None = None) -> dict:

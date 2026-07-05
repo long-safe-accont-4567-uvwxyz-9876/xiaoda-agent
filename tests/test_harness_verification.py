@@ -204,8 +204,8 @@ class TestRound3E2ESmoke:
         assert ERROR_RULE_STRICT_MODE == True
 
     def test_klee_has_timeout_protection(self):
-        """klee_agent.py 含 asyncio.wait_for 超时保护。"""
-        klee_path = Path(__file__).parent.parent / "klee_agent.py"
+        """xiaoli_agent.py 含 asyncio.wait_for 超时保护。"""
+        xiaoli_path = Path(__file__).parent.parent / "xiaoli_agent.py"
         content = klee_path.read_text(encoding="utf-8")
         assert "asyncio.wait_for" in content
 

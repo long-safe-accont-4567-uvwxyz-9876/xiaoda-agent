@@ -26,32 +26,32 @@ def _make_dispatcher(agents: dict[str, bool] | None = None) -> AgentDispatcher:
 
 # 所有子代理可用的默认注册表
 _ALL_AVAILABLE = {
-    "keli": True,
-    "nike": True,
-    "xilian": True,
-    "yinlang": True,
+    "xiaoli": True,
+    "xiaoke": True,
+    "xiaolian": True,
+    "xiaolang": True,
 }
 
 
-def test_route_frontend_to_nike():
-    """前端任务应路由到 nike（编程助手）。"""
+def test_route_frontend_to_xiaoke():
+    """前端任务应路由到 xiaoke（编程助手）。"""
     dispatcher = _make_dispatcher(_ALL_AVAILABLE)
     target = dispatcher.route_task("frontend", "帮我写个 Vue 前端页面")
-    assert target == "nike"
+    assert target == "xiaoke"
 
 
-def test_route_emotional_to_keli():
-    """情感陪伴任务应路由到 keli（萌系陪伴）。"""
+def test_route_emotional_to_xiaoli():
+    """情感陪伴任务应路由到 xiaoli（萌系陪伴）。"""
     dispatcher = _make_dispatcher(_ALL_AVAILABLE)
     target = dispatcher.route_task("emotional", "今天好难过，求安慰")
-    assert target == "keli"
+    assert target == "xiaoli"
 
 
-def test_route_hardware_to_yinlang():
-    """硬件任务应路由到 yinlang（系统管理）。"""
+def test_route_hardware_to_xiaolang():
+    """硬件任务应路由到 xiaolang（系统管理）。"""
     dispatcher = _make_dispatcher(_ALL_AVAILABLE)
     target = dispatcher.route_task("hardware", "GPIO 引脚怎么配置")
-    assert target == "yinlang"
+    assert target == "xiaolang"
 
 
 def test_classify_task_keywords():
@@ -75,14 +75,14 @@ def test_classify_task_keywords():
 
 
 def test_route_fallback_when_unavailable():
-    """目标代理不可用时应回退到默认代理（keli）。"""
-    # nike 不可用，keli 可用
-    agents = {"nike": False, "keli": True, "xilian": True, "yinlang": True}
+    """目标代理不可用时应回退到默认代理（xiaoli）。"""
+    # xiaoke 不可用，xiaoli 可用
+    agents = {"xiaoke": False, "xiaoli": True, "xiaolian": True, "xiaolang": True}
     dispatcher = _make_dispatcher(agents)
 
-    # frontend 本应路由到 nike，但 nike 不可用 → 回退到 keli
+    # frontend 本应路由到 xiaoke，但 xiaoke 不可用 → 回退到 xiaoli
     target = dispatcher.route_task("frontend", "写个 React 组件")
-    assert target == "keli"
+    assert target == "xiaoli"
 
 
 def test_routing_config_load():
@@ -91,15 +91,15 @@ def test_routing_config_load():
     config = dispatcher._load_routing_config()
 
     # 验证全部关键字段
-    assert config["frontend"] == "nike"
-    assert config["backend"] == "nike"
-    assert config["debug"] == "nike"
-    assert config["security"] == "yinlang"
-    assert config["test"] == "nike"
-    assert config["info_search"] == "xilian"
-    assert config["hardware"] == "yinlang"
-    assert config["emotional"] == "keli"
-    assert config["general"] == "keli"
+    assert config["frontend"] == "xiaoke"
+    assert config["backend"] == "xiaoke"
+    assert config["debug"] == "xiaoke"
+    assert config["security"] == "xiaolang"
+    assert config["test"] == "xiaoke"
+    assert config["info_search"] == "xiaolian"
+    assert config["hardware"] == "xiaolang"
+    assert config["emotional"] == "xiaoli"
+    assert config["general"] == "xiaoli"
 
 
 def test_classify_unknown_to_general():

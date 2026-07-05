@@ -247,7 +247,7 @@ _init_user_resources()
 
 AGENT_CONFIG_PATH = (_KIOXIA_BASE / "config" / "agent.json5") if (_KIOXIA_BASE / "config").exists() else _FALLBACK_BASE / "agent.json5"
 STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "stickers", _FALLBACK_BASE / "stickers")
-KLEE_STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "klee-stickers", _FALLBACK_BASE / "klee-stickers")
+XIAOLI_STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "xiaoli-stickers", _FALLBACK_BASE / "xiaoli-stickers")
 # 通用智能体表情包根目录：每个子智能体的表情包存放在 {AGENT_STICKER_BASE}/{agent_name}/
 AGENT_STICKER_BASE = _resolve_data_path(_KIOXIA_BASE / "agent-stickers", _FALLBACK_BASE / "agent-stickers")
 FILE_DIR = _resolve_data_path(_KIOXIA_BASE / "files", _FALLBACK_BASE / "files")
@@ -335,18 +335,18 @@ def get_provider_config(provider: str) -> dict:
 # ── Agent display_name 动态读取（规避 IP 风险，用户可自定义）──
 # 默认 display_name（当用户未自定义时的 fallback）
 _DEFAULT_DISPLAY_NAMES: dict[str, str] = {
-    "nahida": "小妲",
-    "keli": "小莉",
-    "yinlang": "小狼",
-    "xilian": "小涟",
-    "nike": "小可",
+    "xiaoda": "小妲",
+    "xiaoli": "小莉",
+    "xiaolang": "小狼",
+    "xiaolian": "小涟",
+    "xiaoke": "小可",
 }
 _DEFAULT_DISPLAY_NAMES_EN: dict[str, str] = {
-    "nahida": "Xiaoda",
-    "keli": "Xiaoli",
-    "yinlang": "Xiaolang",
-    "xilian": "Xiaolian",
-    "nike": "Xiaoke",
+    "xiaoda": "Xiaoda",
+    "xiaoli": "Xiaoli",
+    "xiaolang": "Xiaolang",
+    "xiaolian": "Xiaolian",
+    "xiaoke": "Xiaoke",
 }
 _display_name_cache: dict[str, tuple[float, str]] = {}  # {name: (mtime, display_name)}
 _display_name_en_cache: dict[str, tuple[float, str]] = {}
@@ -438,19 +438,19 @@ def get_agent_display_name_en(name: str) -> str:
 # 每个 agent 的人格文件中使用原名，运行时自动替换为用户配置的显示名。
 # 全局统一机制：所有 agent 共用一套替换逻辑，不分主次。
 _ORIGINAL_NAMES: dict[str, str] = {
-    "纳西妲": "nahida",
-    "可莉": "keli",
-    "银狼": "yinlang",
-    "昔涟": "xilian",
-    "尼可": "nike",
+    "纳西妲": "xiaoda",
+    "可莉": "xiaoli",
+    "银狼": "xiaolang",
+    "昔涟": "xiaolian",
+    "尼可": "xiaoke",
 }
 
 # 英文原名 → agent_key 映射（人格文件中的英文标识符）
 _ORIGINAL_EN_NAMES: dict[str, str] = {
-    "klee": "keli",
-    "yinlang": "yinlang",
-    "xilian": "xilian",
-    "nike": "nike",
+    "xiaoli": "xiaoli",
+    "xiaolang": "xiaolang",
+    "xiaolian": "xiaolian",
+    "xiaoke": "xiaoke",
 }
 
 
@@ -478,7 +478,7 @@ def apply_agent_name_replacements(content: str) -> str:
         dn = _best(agent_key)
         if dn and dn != original_en:
             content = content.replace(original_en, dn)
-    # 替换 agent key（如 nahida → Xiaoda）
+    # 替换 agent key（如 xiaoda → Xiaoda）
     for agent_key in agent_names():
         dn = _best(agent_key)
         if dn and dn != agent_key:
@@ -620,14 +620,14 @@ PRO_TASK_KEYWORDS = {
 
 # 用于 RouterNode._rule_route：按 Agent 分配的路由关键词
 AGENT_ROUTE_KEYWORDS = {
-    "xilian": [
+    "xiaolian": [
         "搜索", "搜一下", "查一下", "找一下", "帮我查", "帮我搜", "搜索一下",
         "查资料", "最新", "新闻", "资讯", "获取网上", "看看有没有",
         "板块", "盘整", "入场", "股票", "基金", "行情", "大盘", "涨跌",
         "市值", "财经", "证券", "a股", "港股", "美股", "币圈", "加密货币",
         "走势", "k线", "技术分析", "基本面", "财报", "市盈率",
     ],
-    "yinlang": [
+    "xiaolang": [
         "代码", "编程", "写代码", "debug", "调试", "程序", "开发", "部署",
         "git", "api", "接口", "函数", "脚本", "运行", "执行命令",
         "巡检", "检查系统", "磁盘", "内存", "cpu", "进程", "服务状态",
@@ -639,11 +639,11 @@ AGENT_ROUTE_KEYWORDS = {
         "重启服务", "部署", "服务状态", "系统服务",
         "重启", "服务",
     ],
-    "nike": [
+    "xiaoke": [
         "研究", "分析", "学术", "论文", "深度", "计算复杂度", "数学证明",
         "物理", "化学", "生物", "统计", "推导", "公式",
     ],
-    "nahida": [
+    "xiaoda": [
         "天气", "气温", "温度", "下雨", "晴天", "阴天",
         "时间", "几点", "现在几点", "日期", "今天星期几",
         "翻译", "意思是什么",
@@ -779,13 +779,13 @@ MCP_SERVERS = {
         "command": _resolve_command("uvx"),
         "args": ["mcp-server-git", "--repository", str(Path.home() / "Desktop")],
         "env": {"UV_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple"},
-        "agents": ["yinlang"],  # which agents can use this MCP server's tools
+        "agents": ["xiaolang"],  # which agents can use this MCP server's tools
     },
     "github": {
         "command": _resolve_command("npx"),
         "args": ["-y", "@modelcontextprotocol/server-github"],
         "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": get_secret("GITHUB_PERSONAL_ACCESS_TOKEN", "")},
-        "agents": ["yinlang"],
+        "agents": ["xiaolang"],
     },
 }
 
@@ -802,7 +802,7 @@ __all__ = [
     "WORKSPACE_DIR",
     "CREDENTIALS_DIR",
     "STICKER_DIR",
-    "KLEE_STICKER_DIR",
+    "XIAOLI_STICKER_DIR",
     "AGENT_STICKER_BASE",
     "FILE_DIR",
     "MEDIA_DIR",

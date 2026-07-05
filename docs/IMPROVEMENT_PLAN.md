@@ -122,7 +122,7 @@
 
 ### 2.9 委托机制无递归深度限制 — `agent_dispatcher.py:180-186` + `agent_core.py`
 
-**问题**：`[KLEE_PENDING]`/`[NAHIDA_PENDING]` 字符串前缀约定无类型校验；`RequestContext.delegate_depth` 已定义但**从未检查**，子代理与主 Agent 可能互相委托形成无限循环（在 1.5G 内存设备上会 OOM 触发 systemd 重启）。
+**问题**：`[XIAOLI_PENDING]`/`[XIAODA_PENDING]` 字符串前缀约定无类型校验；`RequestContext.delegate_depth` 已定义但**从未检查**，子代理与主 Agent 可能互相委托形成无限循环（在 1.5G 内存设备上会 OOM 触发 systemd 重启）。
 
 **修复方案**：
 - 立即：在委托回调入口检查 `delegate_depth`，超过 2 层直接返回兜底回复
@@ -140,7 +140,7 @@
 | 1 | 降级链丢失/不校验 tools 参数，降级到 agnes 后工具能力静默丢失 | `model_router.py:230-234` | 增加 `_filter_tools_for_model()`，按目标模型过滤工具并记录日志 | 1.5h |
 | 2 | `_last_reasoning_content` 实例变量在并发请求间互相覆盖 | `model_router.py:81` | 改用 `ContextVar` 管理请求级推理内容 | 1.5h |
 | 3 | TaskGraph 无循环检测、无节点级超时、15 步与 150s 总超时不匹配 | `task_orchestrator.py:145-177` | 加 deadline 检查 + 同节点访问 >2 次判环中止 + 节点级 `wait_for` | 3h |
-| 4 | DSML 与标准 tool_calls 处理混在同一循环，推理模型工具调用可能漏检 | `agent_dispatcher.py:225-346` | **不拆两条循环**（重复主流程），改为提取策略接口：`ToolCallExtractor.extract(response) -> list[ToolCall] \| None`，两个实现 `StandardExtractor`（读 `message.tool_calls`）与 `DsmlExtractor`（解析文本 DSML 标记），按模型路由选择；`_chat_loop` 保持单一主循环，只依赖统一的 `ToolCall(name, arguments, call_id)` 结构。边界约定：Extractor 只做"识别+解析"，不执行、不修复（修复仍归 tool_repair）、不感知历史。klee_agent 复用同一接口（顺带消除 5.5 提到的重复） | 4h |
+| 4 | DSML 与标准 tool_calls 处理混在同一循环，推理模型工具调用可能漏检 | `agent_dispatcher.py:225-346` | **不拆两条循环**（重复主流程），改为提取策略接口：`ToolCallExtractor.extract(response) -> list[ToolCall] \| None`，两个实现 `StandardExtractor`（读 `message.tool_calls`）与 `DsmlExtractor`（解析文本 DSML 标记），按模型路由选择；`_chat_loop` 保持单一主循环，只依赖统一的 `ToolCall(name, arguments, call_id)` 结构。边界约定：Extractor 只做"识别+解析"，不执行、不修复（修复仍归 tool_repair）、不感知历史。xiaoli_agent 复用同一接口（顺带消除 5.5 提到的重复） | 4h |
 | 5 | SubAgent 初始化不验证 API Key，失效凭证到运行时才暴露 | `agent_dispatcher.py:85-111` | init 时发一次 10 token 的探活请求，失败则降级标记并告警 | 1h |
 | 6 | 三个路由入口（@mention / 关键词 / TaskGraph）逻辑分散重复 | `agent_core.py:378-444` | 统一为 `RoutingDecision` 决策类（随 AgentCore 拆分一并做，见第 5 节） | — |
 | 7 | credential_pool 同步锁 + 游标递增无保护，凭证轮换不公平 | `credential_pool.py:252` | 实例级 `asyncio.Lock` 保护 `get_credential` | 1.5h |
@@ -210,7 +210,7 @@
 
 | 命令 | 问题 | 位置 | 修复 |
 |------|------|------|------|
-| `/sys` | 查询服务名 `nahida-bot`（实际 `qq-agent`），状态永远 🔴 | `slash_commands.py:362` | 改服务名 |
+| `/sys` | 查询服务名 `xiaoda-bot`（实际 `qq-agent`），状态永远 🔴 | `slash_commands.py:362` | 改服务名 |
 | `/sys` | `ROUTE_TABLE.get("chat", {}).get("model")` 但表值是字符串，模型永远显示 unknown | `slash_commands.py:370-372` | 改为 `ROUTE_TABLE.get("chat", "unknown")` |
 | `/cam` | 无 is_owner 权限检查，任何用户可调摄像头 | `slash_commands.py:375-392` | 加 owner 检查 |
 | `/model` | 仅支持 mimo/mimo-pro，无 flash/mini | `slash_commands.py:144-161` | 补充选项 |
@@ -267,17 +267,17 @@ agent_core.py (门面, ~150行)
 ```python
 @dataclass
 class RoutingDecision:
-    agent_names: list[str]               # ["yinlang"] / ["xilian","niko"] / ["nahida"]
+    agent_names: list[str]               # ["xiaolang"] / ["xilian","niko"] / ["xiaoda"]
     mode: Literal["single", "parallel", "task_graph"]
     reasoning: str = ""                  # 路由理由，写入日志便于调试
 ```
 
-决策顺序：显式 @mention → 关键词意图 → 复杂度评估（是否走 TaskGraph）→ 默认 nahida。
+决策顺序：显式 @mention → 关键词意图 → 复杂度评估（是否走 TaskGraph）→ 默认 xiaoda。
 已实现但未接入的 `belief_router.py`（Thompson Sampling）可作为第二层关键词路由的替代，在 RouterEngine 内以开关接入，灰度验证后替换硬编码关键词。
 
 ### 5.3 委托机制类型安全化
 
-用 `DelegationRequest(type, question, delegator, depth)` + `DelegationResult(success, reply, error)` dataclass 替代 `[KLEE_PENDING]`/`[NAHIDA_PENDING]` 字符串前缀；`ToolResult.data` 携带 DelegationRequest，`_handle_tool_result` 用 isinstance 判断；深度上限 2 层。
+用 `DelegationRequest(type, question, delegator, depth)` + `DelegationResult(success, reply, error)` dataclass 替代 `[XIAOLI_PENDING]`/`[XIAODA_PENDING]` 字符串前缀；`ToolResult.data` 携带 DelegationRequest，`_handle_tool_result` 用 isinstance 判断；深度上限 2 层。
 
 ### 5.4 单例与并发规范统一
 

@@ -27,18 +27,18 @@ def _get_providers() -> list[dict]:
         },
     ]
 
-TIRED_MSG = "可莉现在有点累了...等会儿再来找大哥哥玩吧！蹦蹦...💤"
+TIRED_MSG = "小莉现在有点累了...等会儿再来找大哥哥玩吧！蹦蹦...💤"
 
-EXCLUDED_TOOLS = {"call_klee", "delegate_task"}
+EXCLUDED_TOOLS = {"call_xiaoli", "delegate_task"}
 
 
-def _klee_tools() -> list[dict]:
+def _xiaoli_tools() -> list[dict]:
     all_tools = to_openai_tools()
     return [t for t in all_tools if t["function"]["name"] not in EXCLUDED_TOOLS]
 
 
-def _klee_tool_names() -> set[str]:
-    return {t["function"]["name"] for t in _klee_tools()}
+def _xiaoli_tool_names() -> set[str]:
+    return {t["function"]["name"] for t in _xiaoli_tools()}
 
 
 def _read_env_key(env_var: str) -> str:
@@ -53,10 +53,10 @@ def _is_tool_unsupported_error(error_str: str) -> bool:
     return is_tool_unsupported_error(error_str)
 
 
-class KleeAgent:
+class XiaoliAgent:
     def __init__(self, tool_executor: ToolExecutor | None = None,
                  tool_repair: ToolCallRepair | None = None,
-                 nahida_delegate: Optional[Any]=None) -> None:
+                 xiaoda_delegate: Optional[Any]=None) -> None:
         self._clients: list[tuple[str, AsyncOpenAI, list[str]]] = []
         self._personality: str = ""
         self._initialized = False
@@ -64,14 +64,14 @@ class KleeAgent:
         self._tool_repair = tool_repair
         from config import DEFAULT_PROVIDER
         self._preferred_provider: str = DEFAULT_PROVIDER
-        self._nahida_delegate = nahida_delegate
+        self._xiaoda_delegate = xiaoda_delegate
         self.tts = TTSEngine()
 
     async def init(self) -> None:
         for provider in _get_providers():
             api_key = _read_env_key(provider["api_key_env"])
             if not api_key:
-                logger.warning("klee.no_api_key", provider=provider["name"])
+                logger.warning("xiaoli.no_api_key", provider=provider["name"])
                 continue
 
             client = AsyncOpenAI(
@@ -79,21 +79,21 @@ class KleeAgent:
                 base_url=provider["base_url"],
             )
             self._clients.append((provider["name"], client, provider["models"]))
-            logger.info("klee.provider_ready", provider=provider["name"], models=len(provider["models"]))
+            logger.info("xiaoli.provider_ready", provider=provider["name"], models=len(provider["models"]))
 
         try:
             from config import AGENTS_CONFIG_DIR
-            personality_path = AGENTS_CONFIG_DIR / "klee_personality.md"
+            personality_path = AGENTS_CONFIG_DIR / "xiaoli_personality.md"
         except ImportError:
-            personality_path = Path(__file__).parent / "config" / "agents" / "klee_personality.md"
+            personality_path = Path(__file__).parent / "config" / "agents" / "xiaoli_personality.md"
         if personality_path.exists():
             self._personality = personality_path.read_text(encoding="utf-8-sig")
         else:
-            self._personality = "你是可莉，蒙德城的火花骑士！活泼可爱，称呼用户为大哥哥或大姐姐。"
+            self._personality = "你是小莉，蒙德城的火花骑士！活泼可爱，称呼用户为大哥哥或大姐姐。"
 
         self._initialized = len(self._clients) > 0
         if self._initialized:
-            logger.info("klee.initialized", providers=[c[0] for c in self._clients])
+            logger.info("xiaoli.initialized", providers=[c[0] for c in self._clients])
 
         await self.tts.init()
 
@@ -103,7 +103,7 @@ class KleeAgent:
             try:
                 await client.close()
             except Exception:
-                logger.debug("klee_agent.close_client_error", exc_info=True)
+                logger.debug("xiaoli_agent.close_client_error", exc_info=True)
         self._clients.clear()
 
     @property
@@ -123,21 +123,21 @@ class KleeAgent:
 
         if status_callback:
             try:
-                await status_callback("可莉正在思考...")
+                await status_callback("小莉正在思考...")
             except (AttributeError, RuntimeError, OSError):
                 pass  # status_callback 失败不影响聊天
 
         system_prompt = self._personality
         if context:
-            system_prompt += f"\n\n[背景信息]\n{context}"
+            system_prompt += f"\n\n[背景信息]\{context}"
 
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": message},
         ]
 
-        klee_tools = _klee_tools()
-        tools = klee_tools if (self._tool_executor and klee_tools) else None
+        xiaoli_tools = _xiaoli_tools()
+        tools = xiaoli_tools if (self._tool_executor and xiaoli_tools) else None
 
         ordered = self._ordered_clients()
         for provider_name, client, models in ordered:
@@ -148,20 +148,20 @@ class KleeAgent:
                 except Exception as e:
                     error_str = str(e)
                     if "429" in error_str or "rate" in error_str.lower():
-                        logger.warning("klee.rate_limited", provider=provider_name, model=model)
+                        logger.warning("xiaoli.rate_limited", provider=provider_name, model=model)
                         continue
                     if tools and _is_tool_unsupported_error(error_str):
-                        logger.warning("klee.tools_not_supported", provider=provider_name, model=model)
+                        logger.warning("xiaoli.tools_not_supported", provider=provider_name, model=model)
                         try:
                             reply = await self._chat_loop(client, model, messages, None, provider_name)
                             return reply
                         except Exception as e2:
-                            logger.warning("klee.fallback_failed", provider=provider_name, model=model, error=str(e2))
+                            logger.warning("xiaoli.fallback_failed", provider=provider_name, model=model, error=str(e2))
                             continue
-                    logger.warning("klee.chat.error", provider=provider_name, model=model, error=error_str)
+                    logger.warning("xiaoli.chat.error", provider=provider_name, model=model, error=error_str)
                     continue
 
-        logger.warning("klee.all_providers_exhausted")
+        logger.warning("xiaoli.all_providers_exhausted")
         return TIRED_MSG
 
     def _ordered_clients(self) -> list[tuple[str, AsyncOpenAI, list[str]]]:
@@ -178,28 +178,28 @@ class KleeAgent:
         elif result.success and isinstance(result.data, AgentMessage) and result.data.is_delegate_request():
             # 优先用 AgentMessage 结构化协议识别
             delegation_req = DelegationRequest(
-                type="nahida", question=result.data.content, delegator="klee"
+                type="xiaoda", question=result.data.content, delegator="xiaoli"
             )
-        elif result.success and isinstance(result.data, str) and result.data.startswith("[NAHIDA_PENDING]"):
+        elif result.success and isinstance(result.data, str) and result.data.startswith("[XIAODA_PENDING]"):
             # fallback: 旧字符串匹配（过渡期保留）
             import logging
             logging.getLogger(__name__).warning(
-                "使用废弃的 [NAHIDA_PENDING] 字符串匹配识别委托，请迁移到 AgentMessage 协议"
+                "使用废弃的 [XIAODA_PENDING] 字符串匹配识别委托，请迁移到 AgentMessage 协议"
             )
             delegation_req = DelegationRequest(
-                type="nahida", question=result.data[len("[NAHIDA_PENDING]"):], delegator="klee"
+                type="xiaoda", question=result.data[len("[XIAODA_PENDING]"):], delegator="xiaoli"
             )
 
-        if delegation_req and delegation_req.type == "nahida":
+        if delegation_req and delegation_req.type == "xiaoda":
             question = delegation_req.question
-            if self._nahida_delegate:
-                logger.info("klee.calling_nahida", question=question[:50])
-                nahida_reply = await self._nahida_delegate(question)
-                _nahida_dn = get_agent_display_name('nahida')
-                _keli_dn = get_agent_display_name('keli')
-                result_text = f"[{_nahida_dn}姐姐的回答（{_keli_dn}必须用自己的话转述给大哥哥，不要直接复制{_nahida_dn}姐姐的原话，要加上{_keli_dn}自己的感觉和语气）]\n{nahida_reply}"
+            if self._xiaoda_delegate:
+                logger.info("xiaoli.calling_xiaoda", question=question[:50])
+                xiaoda_reply = await self._xiaoda_delegate(question)
+                _xiaoda_dn = get_agent_display_name('xiaoda')
+                _xiaoli_dn = get_agent_display_name('xiaoli')
+                result_text = f"[{_xiaoda_dn}姐姐的回答（{_xiaoli_dn}必须用自己的话转述给大哥哥，不要直接复制{_xiaoda_dn}姐姐的原话，要加上{_xiaoli_dn}自己的感觉和语气）]\n{xiaoda_reply}"
             else:
-                result_text = f"{get_agent_display_name('nahida')}姐姐现在不在...{get_agent_display_name('keli')}自己想想办法吧！"
+                result_text = f"{get_agent_display_name('xiaoda')}姐姐现在不在...{get_agent_display_name('xiaoli')}自己想想办法吧！"
         elif result.success:
             result_text = json.dumps(result.data, ensure_ascii=False) if not isinstance(result.data, str) else result.data
         else:
@@ -212,14 +212,14 @@ class KleeAgent:
         """主循环：调用 LLM → 提取工具调用 → 执行 → 反馈，最多 5 轮。"""
         max_rounds = 5
         api_timeout = 30                    # 单次 API 调用超时
-        total_deadline = time.time() + 90   # Klee 总超时 90s
+        total_deadline = time.time() + 90   # Xiaoli 总超时 90s
         working = list(messages)
 
         for round_idx in range(max_rounds):
             # 墙钟超时检查
             remaining = total_deadline - time.time()
             if remaining < 5:
-                return f"可莉处理超时了，请稍后再试吧～"
+                return f"小莉处理超时了，请稍后再试吧～"
             try:
                 response = await asyncio.wait_for(
                     client.chat.completions.create(
@@ -233,8 +233,8 @@ class KleeAgent:
                     timeout=min(api_timeout, remaining),
                 )
             except asyncio.TimeoutError:
-                logger.warning("klee.api_timeout", round=round_idx, model=model)
-                return f"可莉思考时间太长了，请稍后再试吧～"
+                logger.warning("xiaoli.api_timeout", round=round_idx, model=model)
+                return f"小莉思考时间太长了，请稍后再试吧～"
 
             msg = response.choices[0].message
 
@@ -244,7 +244,7 @@ class KleeAgent:
                 if tools and self._tool_executor and has_dsml_tool_calls(content):
                     if await self._try_handle_dsml_calls(msg, content, working, provider_name, model, round_idx):
                         continue
-                logger.info("klee.chat.ok", provider=provider_name, model=model,
+                logger.info("xiaoli.chat.ok", provider=provider_name, model=model,
                             tokens=response.usage.total_tokens if response.usage else 0,
                             rounds=round_idx, used_tools=round_idx > 0)
                 return content.strip()
@@ -254,15 +254,15 @@ class KleeAgent:
             await self._exec_standard_tool_calls(msg, working, provider_name, model, round_idx)
 
         # 达到最大轮次：尝试总结
-        return await self._summarize_klee_result(client, model, working, provider_name)
+        return await self._summarize_xiaoli_result(client, model, working, provider_name)
 
     async def _try_handle_dsml_calls(self, msg: Any, content: str, working: list[dict],
                                        provider_name: str, model: str, round_idx: int) -> bool:
         """DSML 工具调用提取与执行。成功处理返回 True，无 DSML 调用返回 False。"""
-        dsml_calls = parse_dsml_tool_calls(content, _klee_tool_names())
+        dsml_calls = parse_dsml_tool_calls(content, _xiaoli_tool_names())
         if not dsml_calls:
             return False
-        logger.info("klee.dsml_tool_calls", count=len(dsml_calls), model=model)
+        logger.info("xiaoli.dsml_tool_calls", count=len(dsml_calls), model=model)
         clean_content = strip_dsml(content)
         msg_rc = getattr(msg, "reasoning_content", None) or ""
         assistant_msg = {
@@ -297,7 +297,7 @@ class KleeAgent:
                 "content": result_text,
             })
 
-            logger.info("klee.dsml_tool_executed", tool=tool_name, success=result.success,
+            logger.info("xiaoli.dsml_tool_executed", tool=tool_name, success=result.success,
                         provider=provider_name, model=model, round=round_idx)
         return True
 
@@ -349,10 +349,10 @@ class KleeAgent:
                 "content": result_text,
             })
 
-            logger.info("klee.tool_executed", tool=tool_name, success=result.success,
+            logger.info("xiaoli.tool_executed", tool=tool_name, success=result.success,
                         provider=provider_name, model=model, round=round_idx)
 
-    async def _summarize_klee_result(self, client: AsyncOpenAI, model: str,
+    async def _summarize_xiaoli_result(self, client: AsyncOpenAI, model: str,
                                       working: list[dict], provider_name: str) -> str:
         """达到最大轮次后：尝试让 LLM 做一次总结回复。
 
@@ -360,7 +360,7 @@ class KleeAgent:
         """
         last_msg = working[-1] if working else {}
         if isinstance(last_msg, dict) and last_msg.get("role") == "tool":
-            logger.info("klee.chat.direct_result", provider=provider_name, model=model)
+            logger.info("xiaoli.chat.direct_result", provider=provider_name, model=model)
             return last_msg.get("content", "").strip()[:3000]
 
         try:
@@ -372,8 +372,8 @@ class KleeAgent:
             )
             reply = response.choices[0].message.content or ""
             rc = getattr(response.choices[0].message, "reasoning_content", None) or ""
-            logger.info("klee.chat.max_rounds", provider=provider_name, model=model)
+            logger.info("xiaoli.chat.max_rounds", provider=provider_name, model=model)
             return (reply or rc).strip()
         except (AttributeError, ValueError, OSError) as e:
-            logger.warning("klee.chat.failed", error=str(e)[:100])
+            logger.warning("xiaoli.chat.failed", error=str(e)[:100])
             return TIRED_MSG

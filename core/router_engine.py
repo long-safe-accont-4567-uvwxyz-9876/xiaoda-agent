@@ -1,6 +1,6 @@
 """统一路由引擎 — 合并三个路由入口（@mention / 关键词 / 默认）为单一决策流。
 
-决策顺序：显式 @mention → 否定模式 → 自指模式 → 语音模式 → 关键词意图 → 默认 nahida
+决策顺序：显式 @mention → 否定模式 → 自指模式 → 语音模式 → 关键词意图 → 默认 xiaoda
 返回 RoutingDecision 数据类，所有出口共用。
 """
 
@@ -19,7 +19,7 @@ class RoutingDecision:
     """路由决策结果。
 
     Attributes:
-        agent_names: 目标 Agent 名称列表（如 ["nahida"], ["keli", "yinlang"]）
+        agent_names: 目标 Agent 名称列表（如 ["xiaoda"], ["keli", "xiaolang"]）
         mode: 调度模式 — single 单 Agent / parallel 并行 / task_graph 任务图
         reasoning: 路由理由（可选，用于调试和审计）
     """
@@ -34,23 +34,23 @@ class RoutingDecision:
 # @mention 映射（默认值，运行时会合并用户自定义 display_name）
 _DEFAULT_MENTION_MAP = {
     "@可莉": "keli",
-    "@银狼": "yinlang",
+    "@银狼": "xiaolang",
     "@昔涟": "xilian",
     "@尼可": "nike",
-    "@纳西妲": "nahida",
+    "@纳西妲": "xiaoda",
 }
 
 # 否定模式中的 agent 别名（内部名 + 默认 display_name）
 _DEFAULT_AGENT_ALIASES = {
-    "keli": ["可莉", "klee"],
-    "yinlang": ["银狼", "yinlang"],
+    "keli": ["可莉", "xiaoli"],
+    "xiaolang": ["银狼", "xiaolang"],
     "xilian": ["昔涟", "xilian"],
     "nike": ["尼可", "nike"],
 }
 
 # 自指模式：用户让纳西妲自己做事
 SELF_TARGET_PATTERNS = [
-    (r"(?:你|你自己|亲自)(?:去|来|帮我|帮我查|查|搜|找|看看|检查)", "nahida"),
+    (r"(?:你|你自己|亲自)(?:去|来|帮我|帮我查|查|搜|找|看看|检查)", "xiaoda"),
 ]
 
 # 语音相关模式
@@ -63,7 +63,7 @@ def _build_mention_map() -> dict[str, str]:
     """构建 @mention 映射（含用户自定义 display_name）。"""
     from config import get_agent_display_name
     m = dict(_DEFAULT_MENTION_MAP)
-    for name in ("nahida", "keli", "yinlang", "xilian", "nike"):
+    for name in ("xiaoda", "keli", "xiaolang", "xilian", "nike"):
         dn = get_agent_display_name(name)
         key = f"@{dn}"
         if key not in m:
@@ -75,7 +75,7 @@ def _build_agent_names_pattern() -> str:
     """构建匹配所有 agent 名称的正则片段（内部名 + 所有 display_name）。"""
     from config import get_agent_display_name
     names: set[str] = set()
-    for name in ("nahida", "keli", "yinlang", "xilian", "nike"):
+    for name in ("xiaoda", "keli", "xiaolang", "xilian", "nike"):
         names.add(name)
         dn = get_agent_display_name(name)
         if dn:
@@ -89,10 +89,10 @@ def _build_agent_names_pattern() -> str:
 def _build_negative_patterns() -> list[str]:
     """构建否定模式（含用户自定义 display_name）。"""
     names_pat = _build_agent_names_pattern()
-    # 排除 nahida（否定模式只针对子代理）
+    # 排除 xiaoda（否定模式只针对子代理）
     from config import get_agent_display_name
     sub_names: set[str] = set()
-    for name in ("keli", "yinlang", "xilian", "nike"):
+    for name in ("keli", "xiaolang", "xilian", "nike"):
         sub_names.add(name)
         dn = get_agent_display_name(name)
         if dn:
@@ -107,11 +107,11 @@ def _build_keyword_patterns() -> list[tuple[str, str]]:
     from config import get_agent_display_name
     patterns: list[tuple[str, str]] = []
     agent_keywords: dict[str, list[str]] = {
-        "yinlang": ["银狼", "yinlang"],
-        "keli": ["可莉", "klee", "小炸弹"],
+        "xiaolang": ["银狼", "xiaolang"],
+        "keli": ["可莉", "xiaoli", "小炸弹"],
         "xilian": ["昔涟", "xilian", "记忆"],
         "nike": ["尼可", "nike"],
-        "nahida": ["纳西妲", "草神", "小草神"],
+        "xiaoda": ["纳西妲", "草神", "小草神"],
     }
     for name, keywords in agent_keywords.items():
         dn = get_agent_display_name(name)
@@ -119,7 +119,7 @@ def _build_keyword_patterns() -> list[tuple[str, str]]:
             keywords.append(dn)
         kw_pat = "|".join(re.escape(k) for k in keywords)
         patterns.append((rf"(?:让|叫|请|麻烦|找|切换到)\s*(?:{kw_pat})", name))
-        if name == "nahida":
+        if name == "xiaoda":
             continue
         # "X帮/来/去..." 模式
         patterns.append((rf"(?:{kw_pat})(?:帮|来|去|看一下|看看|检查|巡检|执行|处理|搜|查|找|搜索|研究|分析|计算|炸|boom)", name))
@@ -161,13 +161,13 @@ class RouterEngine:
 
         q = user_input.lower()
 
-        # 2. 否定模式 → nahida
+        # 2. 否定模式 → xiaoda
         for pat in _build_negative_patterns():
             if re.search(pat, q):
                 return RoutingDecision(
-                    agent_names=["nahida"],
+                    agent_names=["xiaoda"],
                     mode="single",
-                    reasoning="negative_pattern → nahida",
+                    reasoning="negative_pattern → xiaoda",
                 )
 
         # 3. 自指模式
@@ -179,13 +179,13 @@ class RouterEngine:
                     reasoning=f"self_target_pattern → {target}",
                 )
 
-        # 4. 语音模式 → nahida
+        # 4. 语音模式 → xiaoda
         for pattern in VOICE_PATTERNS:
             if re.search(pattern, q):
                 return RoutingDecision(
-                    agent_names=["nahida"],
+                    agent_names=["xiaoda"],
                     mode="single",
-                    reasoning="voice_pattern → nahida",
+                    reasoning="voice_pattern → xiaoda",
                 )
 
         # 5. 关键词意图
@@ -193,7 +193,7 @@ class RouterEngine:
         if self._use_belief:
             try:
                 belief_target = self._belief_router.decide(user_input, user_id)
-                if belief_target and belief_target != "nahida":
+                if belief_target and belief_target != "xiaoda":
                     return RoutingDecision(
                         agent_names=[belief_target],
                         mode="single",
@@ -211,11 +211,11 @@ class RouterEngine:
                     reasoning=f"keyword_pattern → {target}",
                 )
 
-        # 6. 默认 → nahida
+        # 6. 默认 → xiaoda
         return RoutingDecision(
-            agent_names=["nahida"],
+            agent_names=["xiaoda"],
             mode="single",
-            reasoning="default → nahida",
+            reasoning="default → xiaoda",
         )
 
     @staticmethod

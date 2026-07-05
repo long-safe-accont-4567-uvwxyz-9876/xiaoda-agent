@@ -334,10 +334,10 @@ sudo systemctl status qq-agent
 
 | Agent | 名称 | 特点 | 切换命令 |
 |-------|------|------|--------|
-| nahida | 纳西妲 | 主 Agent，全能型助手 | `/agent 纳西妲` |
-| klee | 可莉 | 活泼风格，擅长搜索和探索 | `/agent 可莉` |
-| xilian | 昔涟 | 温柔风格，擅长分析和整理 | `/agent 昔涟` |
-| yinlang | 银狼 | 酷飒风格，擅长技术和游戏 | `/agent 银狼` |
+| xiaoda | 纳西妲 | 主 Agent，全能型助手 | `/agent 纳西妲` |
+| xiaoli | 小莉 | 活泼风格，擅长搜索和探索 | `/agent 小莉` |
+| xiaolian | 昔涟 | 温柔风格，擅长分析和整理 | `/agent 昔涟` |
+| xiaolang | 银狼 | 酷飒风格，擅长技术和游戏 | `/agent 银狼` |
 | nico | 尼可 | 神秘风格，擅长创意和想象 | `/agent 尼可` |
 
 > 子 Agent 的可用性取决于是否配置了对应的 API 密钥（SILICONFLOW_API_KEY / OPENROUTER_API_KEY）。纳西妲（主 Agent）始终可用。
@@ -404,7 +404,7 @@ sudo systemctl status qq-agent
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| KIOXIA_DATA_DIR | `/media/orangepi/KIOXIA/nahida-data` | 外挂存储数据目录 |
+| KIOXIA_DATA_DIR | `/media/orangepi/KIOXIA/xiaoda-data` | 外挂存储数据目录 |
 
 > 如果外挂存储不可用，系统会自动回退到项目目录下的 `data/` 子目录。
 

@@ -73,7 +73,7 @@ include = [
     "config*",
     "hooks*",
     "instinct_manager*",
-    "klee_agent*",
+    "xiaoli_agent*",
     "model_router*",
     "qq_bot_adapter*",
     "setup_wizard*",
