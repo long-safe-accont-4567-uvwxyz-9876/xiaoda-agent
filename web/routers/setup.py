@@ -870,8 +870,8 @@ def _parse_user_md(content: str) -> dict:
             return ""
         return v
 
-    # 解析 "## 用户信息" 区块
-    user_info_match = _re.search(r'## 用户信息\s*\n(.*?)(?=\n## |\Z)', content, _re.DOTALL)
+    # 解析 "## {称呼}信息" 区块（兼容动态标题）
+    user_info_match = _re.search(r'## .+信息\s*\n(.*?)(?=\n## |\Z)', content, _re.DOTALL)
     if user_info_match:
         block = user_info_match.group(1)
         m = _re.search(r'-\s*称呼[：:]\s*(.+)', block)
@@ -926,13 +926,14 @@ def _build_user_md(fields: dict) -> str:
     """从结构化字段重建 USER.md 内容"""
     dev = fields.get("device", "") or "（待自动检测）"
     tz = fields.get("timezone", "") or "Asia/Shanghai"
+    addr = fields.get('address_term', '') or '用户'
 
     lines = [
-        "# USER.md - 用户资料与偏好",
+        f"# USER.md - {addr}的资料与偏好",
         "",
         "> 首次使用时自动生成，请根据需要修改以下内容。",
         "",
-        "## 用户信息",
+        f"## {addr}信息",
         "",
         f"- 称呼：{fields.get('address_term', '') or '（待填写）'}",
         f"- 姓名：{fields.get('name', '') or '（待填写）'}",
