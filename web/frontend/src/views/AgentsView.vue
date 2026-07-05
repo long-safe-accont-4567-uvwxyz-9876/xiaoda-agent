@@ -10,7 +10,7 @@ import { useAgentsStore } from '../stores/agents'
 import { getWsClient } from '../api/ws'
 import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
-import { replaceAgentNames } from '../utils/agentNames'
+import { replaceAgentNames, refreshAgentNames } from '../utils/agentNames'
 
 const message = useMessage()
 const agentsStore = useAgentsStore()
@@ -268,6 +268,7 @@ async function save() {
     }
     showEditor.value = false
     await agentsStore.load()
+    await refreshAgentNames()  // 刷新全局名称映射
   } catch (e: any) {
     message.error(e.message)
   } finally {
