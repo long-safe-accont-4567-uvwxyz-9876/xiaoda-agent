@@ -4,7 +4,7 @@
   "display_name_en": "Xiaoli",
   "provider": "agnes",
   "model": "agnes-2.0-flash",
-  "personality_file": "/home/orangepi/ai-agent/config/agents/xiaoli_personality.md",
+  "personality_file": "config/agents/xiaoli_personality.md",
   "voice_ref": "xiaoli/xiaoli",
   "excluded_tools": [
     "call_xiaoli",
