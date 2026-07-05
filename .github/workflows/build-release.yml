@@ -95,10 +95,15 @@ jobs:
           ls web/dist/assets/ | head -40
           # Verify key files exist
           test -f web/dist/index.html || (echo "ERROR: index.html not found!" && exit 1)
-          # Verify wallpapers exist
-          test -f web/dist/assets/wallpapers/xiaoli.jpg || (echo "ERROR: xiaoli.jpg wallpaper not found!" && exit 1)
-          test -f web/dist/assets/wallpapers/xiaoke.jpg || (echo "ERROR: xiaoke.jpg wallpaper not found!" && exit 1)
-          echo "Wallpapers verified OK"
+          # Verify wallpapers exist (check for any .jpg files in wallpapers directory)
+          WALLPAPER_COUNT=$(find web/dist/assets/wallpapers -name "*.jpg" 2>/dev/null | wc -l)
+          if [ "$WALLPAPER_COUNT" -lt 4 ]; then
+            echo "ERROR: Expected at least 4 wallpapers, found $WALLPAPER_COUNT"
+            echo "Available wallpapers:"
+            ls -la web/dist/assets/wallpapers/ 2>/dev/null || echo "Directory not found"
+            exit 1
+          fi
+          echo "Found $WALLPAPER_COUNT wallpapers - OK"
           # Verify /setup route is included in built JS
           FOUND=0
           for f in web/dist/assets/*.js; do
