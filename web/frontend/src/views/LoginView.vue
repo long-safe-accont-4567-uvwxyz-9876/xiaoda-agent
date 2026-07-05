@@ -7,14 +7,25 @@ import Tilt3D from '../components/fx/Tilt3D.vue'
 import DendroEmblem from '../components/fx/DendroEmblem.vue'
 import { t } from '../i18n'
 
+const DEFAULT_BG = '/assets/webui_background.jpg'
+
 const auth = useAuthStore()
 const router = useRouter()
 const password = ref('')
 const error = ref('')
 const loading = ref(false)
 const noPassword = ref(false)
+const loginBg = ref(DEFAULT_BG)
 
 onMounted(async () => {
+  // 加载小妲壁纸，使登录页背景与聊天页一致
+  try {
+    const agents = await api.get<Array<{ name: string; wallpaper?: string }>>('/agents')
+    const main = agents.find(a => a.name === 'xiaoda')
+    if (main?.wallpaper) loginBg.value = main.wallpaper
+  } catch {
+    // 忽略，使用默认背景
+  }
   try {
     const data = await api.getSetupFirstRun()
     if (data?.first_run) {
@@ -76,7 +87,7 @@ async function handleLogin() {
 </script>
 
 <template>
-  <div class="login-page app-bg">
+  <div class="login-page app-bg" :style="{ backgroundImage: `linear-gradient(rgba(8,24,16,0.35), rgba(8,24,16,0.55)), url('${loginBg}')` }">
     <Tilt3D :max-x="5" :max-y="7">
       <div class="login-card glass-panel">
         <span class="vine corner-tl"></span>
