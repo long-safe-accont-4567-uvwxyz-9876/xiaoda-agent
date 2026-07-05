@@ -1,6 +1,6 @@
 {
   "name": "xilian",
-  "display_name": "昔涟",
+  "display_name": "小涟",
   "provider": "agnes",
   "model": "agnes-2.0-flash",
   "personality_file": "xilian_personality.md",

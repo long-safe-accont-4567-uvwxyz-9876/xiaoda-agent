@@ -335,11 +335,11 @@ def get_provider_config(provider: str) -> dict:
 # ── Agent display_name 动态读取（规避 IP 风险，用户可自定义）──
 # 默认 display_name（当用户未自定义时的 fallback）
 _DEFAULT_DISPLAY_NAMES: dict[str, str] = {
-    "nahida": "纳西妲",
-    "keli": "可莉",
-    "yinlang": "银狼",
-    "xilian": "昔涟",
-    "nike": "尼可",
+    "nahida": "小妲",
+    "keli": "小莉",
+    "yinlang": "小狼",
+    "xilian": "小涟",
+    "nike": "小可",
 }
 _display_name_cache: dict[str, tuple[float, str]] = {}  # {name: (mtime, display_name)}
 

@@ -1,6 +1,6 @@
 {
   "name": "nike",
-  "display_name": "尼可",
+  "display_name": "小可",
   "provider": "agnes",
   "model": "agnes-2.0-flash",
   "personality_file": "nike_personality.md",
