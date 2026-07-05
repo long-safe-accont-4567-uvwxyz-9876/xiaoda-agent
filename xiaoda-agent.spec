@@ -48,7 +48,8 @@ datas = []
 datas += _tree_datas(os.path.join(SPECPATH, 'config'), 'config')
 
 # web/dist/ directory (pre-built Vue frontend)
-datas += _tree_datas(os.path.join(SPECPATH, 'web', 'dist'), os.path.join('web', 'dist'))
+# 使用 append 将整个目录作为单个条目打包，避免 _tree_datas 逐文件打包导致丢失
+datas.append((os.path.join(SPECPATH, 'web', 'dist'), 'web/dist'))
 
 # web/splash/ directory (desktop mode splash screen)
 datas += _tree_datas(os.path.join(SPECPATH, 'web', 'splash'), os.path.join('web', 'splash'))
