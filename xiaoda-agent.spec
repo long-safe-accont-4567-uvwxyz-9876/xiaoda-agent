@@ -74,15 +74,7 @@ for _vfile in ('.version', '.auto_update'):
 # assets/ directory (icons and other resources)
 datas += _tree_datas(os.path.join(SPECPATH, 'assets'), 'assets')
 
-# Debug: print summary of datas
-print(f'[spec] SPECPATH = {SPECPATH}')
-print(f'[spec] Total datas entries: {len(datas)}')
-assets_datas = [d for d in datas if 'assets' in d[1] or 'assets' in d[0]]
-print(f'[spec] Datas entries containing "assets": {len(assets_datas)}')
-for i, (src, dst) in enumerate(assets_datas[:5]):
-    print(f'[spec]   assets[{i}]: src={src!r} dest={dst!r}')
-if len(assets_datas) > 5:
-    print(f'[spec]   ... and {len(assets_datas) - 5} more')
+
 
 # ---------------------------------------------------------------------------
 # Collect data files from packages that ship non-Python assets
