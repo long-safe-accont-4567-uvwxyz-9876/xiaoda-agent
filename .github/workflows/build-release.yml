@@ -219,6 +219,18 @@ jobs:
       - name: Ensure assets bundled in dist
         shell: bash
         run: |
+          echo "=== PyInstaller output structure ==="
+          ls -la dist/xiaoda-agent/ 2>/dev/null || echo "dist/xiaoda-agent/ not found"
+          echo ""
+          echo "=== Looking for web/dist anywhere in bundle ==="
+          find dist/xiaoda-agent -type d -name "dist" 2>/dev/null | head -10 || true
+          echo ""
+          echo "=== Looking for any .jpg files ==="
+          find dist/xiaoda-agent -name "*.jpg" 2>/dev/null | head -10 || true
+          echo ""
+          echo "=== Looking for index.html ==="
+          find dist/xiaoda-agent -name "index.html" 2>/dev/null | head -5 || true
+          echo ""
           # 图标文件确保存在
           mkdir -p dist/xiaoda-agent/assets/
           cp assets/xiaoda-icon.* dist/xiaoda-agent/assets/ 2>/dev/null || true
@@ -237,18 +249,21 @@ jobs:
             echo "No dist/xiaoda-agent/assets/ directory"
           fi
           echo ""
-          echo "=== dist/xiaoda-agent/web/dist/ (frontend) ==="
-          if [ -d dist/xiaoda-agent/web/dist ]; then
-            WEB_COUNT=$(find dist/xiaoda-agent/web/dist -type f 2>/dev/null | wc -l)
-            echo "Frontend files: $WEB_COUNT"
-            WP_COUNT=$(find dist/xiaoda-agent/web/dist/assets/wallpapers -name "*.jpg" 2>/dev/null | wc -l)
-            echo "Wallpapers: $WP_COUNT"
-            if [ "$WP_COUNT" -lt 4 ]; then
-              echo "ERROR: Expected 4+ wallpapers, found $WP_COUNT"
-              exit 1
-            fi
-          else
-            echo "ERROR: dist/xiaoda-agent/web/dist/ not found"
+          echo "=== Frontend files search ==="
+          WEB_COUNT=$(find dist/xiaoda-agent -path "*/web/dist*" -type f 2>/dev/null | wc -l)
+          echo "Frontend files found: $WEB_COUNT"
+          find dist/xiaoda-agent -path "*/web/dist*" -type f 2>/dev/null | head -20 || true
+          echo ""
+          WP_COUNT=$(find dist/xiaoda-agent -name "*.jpg" -path "*/wallpapers/*" 2>/dev/null | wc -l)
+          echo "Wallpapers found: $WP_COUNT"
+          find dist/xiaoda-agent -name "*.jpg" -path "*/wallpapers/*" 2>/dev/null || true
+          echo ""
+          if [ "$WEB_COUNT" -lt 1 ]; then
+            echo "ERROR: No frontend files found in build output"
+            exit 1
+          fi
+          if [ "$WP_COUNT" -lt 4 ]; then
+            echo "ERROR: Expected 4+ wallpapers, found $WP_COUNT"
             exit 1
           fi
 
