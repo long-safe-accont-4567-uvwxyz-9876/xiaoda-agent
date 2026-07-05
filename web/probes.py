@@ -120,7 +120,7 @@ async def probe_tts(core: Any) -> dict:
     try:
         if not core.tts.available:
             return {"ok": False, "latency_ms": 0, "error": "TTS 引擎不可用（缺 API Key 或参考音频）"}
-        path = await core.tts.synthesize("纳西妲在哦～", voice="nahida")
+        path = await core.tts.synthesize("小妲在哦～", voice="xiaoda")
         ok = bool(path and Path(path).exists() and Path(path).stat().st_size > 1024)
         audio_url = None
         if ok:

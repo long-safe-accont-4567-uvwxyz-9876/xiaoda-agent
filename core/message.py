@@ -18,7 +18,7 @@ class AgentMessage:
     可序列化的消息载体，便于跨 Agent 通信与日志追踪。
 
     Attributes:
-        sender: 发送方 Agent 名称（如 "klee"、"nahida"）
+        sender: 发送方 Agent 名称（如 "klee"、"xiaoda"）
         receiver: 接收方 Agent 名称
         msg_type: 消息类型 — "request"/"response"/"question"/"status"
         content: 消息正文

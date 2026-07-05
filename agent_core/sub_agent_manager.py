@@ -1,7 +1,7 @@
 """子代理管理 Mixin —— 拆分自原 agent_core.py 的 AgentCore 类。
 
-包含单/并行子代理调度、通用委托、可莉委托、子代理上下文构建、
-纳西妲转述、状态通知、手动目标判断、可莉反向委托等子代理管理相关方法。
+包含单/并行子代理调度、通用委托、小莉委托、子代理上下文构建、
+小妲转述、状态通知、手动目标判断、小莉反向委托等子代理管理相关方法。
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ class SubAgentManagerMixin:
         emotion = detect_emotion(clean_input)
         if _ctx:
             _ctx.last_user_emotion = emotion.get("primary", "")
-        # 子代理对话也写入主体历史：切回纳西妲或追问时上下文不断档
+        # 子代理对话也写入主体历史：切回小妲或追问时上下文不断档
         await self.context.add_message("user", clean_input)
         await self.context.add_message("assistant", f"[{display_name}] {sub_reply}")
         self._bg_task_manager.run_background_tasks(
@@ -117,7 +117,7 @@ class SubAgentManagerMixin:
     ) -> list[ProcessResult]:
         """并行调度多个子代理，用于无依赖任务并发执行。
 
-        例如：用户问"分别让可莉和银狼回答"，可同时调用两个子代理。
+        例如：用户问"分别让小莉和小狼回答"，可同时调用两个子代理。
 
         所有传入任务视为无依赖，用 ``asyncio.gather`` 并发执行（Windows Proactor
         上 ``asyncio.create_task`` 存在已知问题，``gather`` 更兼容）。未来若需依赖
@@ -266,7 +266,7 @@ class SubAgentManagerMixin:
                                         force_voice: bool, _ctx: Any) -> ProcessResult:
         """并行子代理结果收尾：情绪检测、表情包选择、TTS 语音合成。
 
-        并行结果直接使用，跳过 nahida 重新总结（SynthesisNode 已负责综合）。
+        并行结果直接使用，跳过小妲重新总结（SynthesisNode 已负责综合）。
         """
         emotion = detect_emotion(clean_input)
         if _ctx:
@@ -280,8 +280,8 @@ class SubAgentManagerMixin:
         clean_reply, sticker_path = self.get_sticker_info(
             all_replies, _ctx.last_user_emotion if _ctx else ""
         )
-        # get_sticker_info 已做 strip_emotion_tag，这里补 humanize（与主 nahida 路径一致）
-        clean_reply = humanize(clean_reply, style="nahida")
+        # get_sticker_info 已做 strip_emotion_tag，这里补 humanize（与主小妲路径一致）
+        clean_reply = humanize(clean_reply, style="xiaoda")
 
         audio_path = None
         tts_pending = False
@@ -295,7 +295,7 @@ class SubAgentManagerMixin:
                 tts_text = self._clean_reply(clean_reply)
             else:
                 try:
-                    audio_path = await self.tts.synthesize_nahida(
+                    audio_path = await self.tts.synthesize_xiaoda(
                         self._clean_reply(clean_reply), emotion=emotion_label
                     )
                 except Exception as e:
@@ -320,7 +320,7 @@ class SubAgentManagerMixin:
         """通用子代理委托（delegate_task 工具的执行端）。
 
         Args:
-            name: 目标子代理标识名（pipe 模式下用逗号分隔多个，如 "xilian,nike"）
+            name: 目标子代理标识名（pipe 模式下用逗号分隔多个，如 "xiaolian,xiaoke"）
             task: 任务描述
             mode: 操作模式 — single(默认) / generate_verify(生成+验证) / pipe(顺序管道)
             verifier: 当 mode=generate_verify 时，指定验证子代理名
@@ -493,7 +493,7 @@ class SubAgentManagerMixin:
         """
         if len(agents) < 2:
             return await self.delegate_to_agent(
-                agents[0] if agents else "nahida", task, mode="single")
+                agents[0] if agents else "xiaoda", task, mode="single")
 
         pro_prompt = f"请从正面/支持角度分析以下问题，给出你的论点和论据：\n{task}"
         con_prompt = f"请从反面/质疑角度分析以下问题，给出你的论点和论据：\n{task}"
@@ -509,7 +509,7 @@ class SubAgentManagerMixin:
         if not isinstance(con_result, str) or len(con_result) < 10:
             con_result = "（反方无法给出观点）"
 
-        synth_name = synthesizer or "nahida"
+        synth_name = synthesizer or "xiaoda"
         synth_prompt = (
             f"以下是关于「{task}」的正反两方观点，请综合分析并给出平衡的结论：\n\n"
             f"【正方观点】\n{pro_result}\n\n"
@@ -521,7 +521,7 @@ class SubAgentManagerMixin:
         return await self.delegate_to_agent(synth_name, synth_prompt, mode="single")
 
     async def delegate_to_xiaoli(self, task: str, factual: bool = False) -> str:
-        """将任务委托给可莉子代理完成并返回结果.
+        """将任务委托给小莉子代理完成并返回结果.
 
         Args:
             task: 任务描述文本
@@ -543,14 +543,14 @@ class SubAgentManagerMixin:
             except Exception as e:
                 logger.debug("blackboard.get_failed key={} error={}", task_key, e)
         if factual:
-            context = "这是纳西妲委托的查询任务。请直接返回查询结果，不要加任何个人风格、感叹号或角色扮演，只报告事实数据。"
+            context = "这是小妲委托的查询任务。请直接返回查询结果，不要加任何个人风格、感叹号或角色扮演，只报告事实数据。"
         else:
-            _nahida_dn = get_agent_display_name('nahida')
+            _xiaoda_dn = get_agent_display_name('xiaoda')
             _xiaoli_dn = get_agent_display_name('xiaoli')
-            context = f"{_nahida_dn}姐姐委托{_xiaoli_dn}的任务。{_nahida_dn}是须弥的草神，温柔聪慧，{_xiaoli_dn}叫她'{_nahida_dn}姐姐'。{self.context.current_address_term}是{_nahida_dn}最亲近的人，也是{_xiaoli_dn}的大哥哥/大姐姐。"
+            context = f"{_xiaoda_dn}委托{_xiaoli_dn}的任务。{_xiaoda_dn}温柔聪慧，{_xiaoli_dn}叫她'{_xiaoda_dn}姐姐'。{self.context.current_address_term}是{_xiaoda_dn}最亲近的人，也是{_xiaoli_dn}的大哥哥/大姐姐。"
         result = await self.dispatcher.dispatch("xiaoli", task, context=context, status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term)
         if result is None:
-            return "可莉现在有点累了...等会儿再来找大哥哥玩吧！蹦蹦...💤"
+            return "小莉现在有点累了...等会儿再来找大哥哥玩吧！蹦蹦...💤"
         # A2A 共享黑板：委托完成后写入产出
         if bb is not None:
             try:
@@ -581,7 +581,7 @@ class SubAgentManagerMixin:
                 content = m.get("content", "")
                 if not content or role == "tool":
                     continue
-                prefix = {"user": f"{self.context.current_address_term}:", "assistant": "纳西妲:"}.get(role, f"{role}:")
+                prefix = {"user": f"{self.context.current_address_term}:", "assistant": f"{get_agent_display_name('xiaoda')}:"}.get(role, f"{role}:")
                 conv_lines.append(f"{prefix} {content[:120]}")
             if conv_lines:
                 parts.append("[对话历史]\n" + "\n".join(conv_lines))
@@ -603,8 +603,8 @@ class SubAgentManagerMixin:
                     partner_lines.append(f"{display_name}")
         else:
             partner_lines = [
-                "可莉：擅长搜索、查资料、活泼的小帮手",
-                "银狼：擅长代码、技术分析、黑客思维",
+                "小莉：擅长搜索、查资料、活泼的小帮手",
+                "小狼：擅长代码、技术分析、黑客思维",
             ]
         if partner_lines:
             parts.append("[可用的伙伴]\n" + "\n".join(partner_lines) + "\n需要时可以通过 delegate_task 工具向她们求助")
@@ -618,13 +618,13 @@ class SubAgentManagerMixin:
 
         return "\n\n".join(parts) if parts else ""
 
-    async def _rephrase_as_nahida(self, user_input: str, xiaoli_result: str) -> str:
+    async def _rephrase_as_xiaoda(self, user_input: str, xiaoli_result: str) -> str:
         try:
             prompt = (
                 f"{self.context.current_address_term}问：{user_input}\n\n"
                 f"查询结果：{xiaoli_result}\n\n"
-                f"请用纳西妲的语气（温柔、可爱、偶尔用🌿等emoji）简短转述这个结果，"
-                f"1-2句话即可，不要提及可莉或任何查询过程。"
+                f"请用小妲的语气（温柔、可爱、偶尔用🌿等emoji）简短转述这个结果，"
+                f"1-2句话即可，不要提及小莉或任何查询过程。"
             )
             reply = await self.router.route(
                 "chat_flash",
@@ -647,12 +647,12 @@ class SubAgentManagerMixin:
                 logger.warning(f"状态回调通知失败: {e}")
 
     def _is_manual_target(self, user_input: str, user_id: str) -> bool:
-        return any(tag in user_input for tag in ["@可莉", "@银狼", "@昔涟", "@尼可", "@纳西妲"])
+        return any(tag in user_input for tag in ["@小莉", "@小狼", "@小涟", "@小可", "@小妲"])
 
-    async def _nahida_delegate_for_xiaoli(self, question: str) -> str:
+    async def _xiaoda_delegate_for_xiaoli(self, question: str) -> str:
         _ctx = _current_request_ctx.get()
         if _ctx and _ctx.delegate_depth >= 2:
-            return f"{get_agent_display_name('nahida')}姐姐现在也在忙，可莉先自己想想办法吧！"
+            return f"{get_agent_display_name('xiaoda')}姐姐现在也在忙，小莉先自己想想办法吧！"
         if _ctx:
             _ctx.delegate_depth += 1
         try:
@@ -665,9 +665,9 @@ class SubAgentManagerMixin:
             )
             if isinstance(reply, str):
                 return reply.strip()
-            return reply.choices[0].message.content.strip() if reply.choices[0].message.content else f"{get_agent_display_name('nahida')}姐姐说让她想想..."
+            return reply.choices[0].message.content.strip() if reply.choices[0].message.content else f"{get_agent_display_name('xiaoda')}姐姐说让她想想..."
         except Exception:
-            return f"{get_agent_display_name('nahida')}姐姐现在有点忙，等会儿再问她吧！"
+            return f"{get_agent_display_name('xiaoda')}姐姐现在有点忙，等会儿再问她吧！"
         finally:
             if _ctx:
                 _ctx.delegate_depth -= 1

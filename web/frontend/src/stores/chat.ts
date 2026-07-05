@@ -33,7 +33,7 @@ export interface Message {
 
 export const useChatStore = defineStore('chat', () => {
   const messages = ref<Message[]>([])
-  const currentAgent = ref('nahida')
+  const currentAgent = ref('xiaoda')
   const sessionId = ref('')
   const isProcessing = ref(false)
   const currentStage = ref('')
@@ -58,7 +58,7 @@ export const useChatStore = defineStore('chat', () => {
     } else {
       sessionId.value = e.session_id as string
     }
-    if (currentAgent.value !== 'nahida') {
+    if (currentAgent.value !== 'xiaoda') {
       ws.send({ type: 'set_agent', agent: currentAgent.value })
     }
   })

@@ -14,7 +14,7 @@ from web.schemas import Envelope
 
 
 # 免责协议全文（模块级常量，供前端通过 API 获取）
-DISCLAIMER_TEXT = """本 Agent 由纳西妲的老父亲-"飞"个人学习用途二创开发，禁止用户生成任何违禁内容，禁止用于任何商业用途，否则一切后果与开发者无关，由用户一人承担。
+DISCLAIMER_TEXT = """本 Agent 由小妲的老父亲-"飞"个人学习用途二创开发，禁止用户生成任何违禁内容，禁止用于任何商业用途，否则一切后果与开发者无关，由用户一人承担。
 
 免责声明
 
@@ -1150,8 +1150,8 @@ async def get_brand_signature() -> Any:
     """
     from web.routers.system import _read_version
     return Envelope(data={
-        "signature": "本 Agent 由纳西妲的老父亲-飞 个人学习用途二创开发",
-        "author": "纳西妲的老父亲-飞",
+        "signature": "本 Agent 由小妲的老父亲-飞 个人学习用途二创开发",
+        "author": "小妲的老父亲-飞",
         "version": _read_version(),
     })
 

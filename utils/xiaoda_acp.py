@@ -24,8 +24,8 @@ logger.remove()
 logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="WARNING")
 
 
-class NahidaAcpServer:
-    """纳西妲 ACP 服务器，处理 JSON-RPC 消息并调度 Agent 处理。"""
+class XiaodaAcpServer:
+    """小妲 ACP 服务器，处理 JSON-RPC 消息并调度 Agent 处理。"""
 
     def __init__(self) -> None:
         """初始化 ACP 服务器，设置会话和状态变量。"""
@@ -42,7 +42,7 @@ class NahidaAcpServer:
         from agent_core import AgentCore
         self.agent = AgentCore()
         await self.agent.init()
-        logger.info("nahida_acp.agent_initialized")
+        logger.info("xiaoda_acp.agent_initialized")
 
     def _read_message(self) -> Any:
         """从标准输入读取一行并解析为 JSON。"""
@@ -55,7 +55,7 @@ class NahidaAcpServer:
         try:
             return json.loads(line)
         except json.JSONDecodeError:
-            logger.warning("nahida_acp.json_decode_error", line=line[:100])
+            logger.warning("xiaoda_acp.json_decode_error", line=line[:100])
             return None
 
     def _write_message(self, msg: Any) -> None:
@@ -81,7 +81,7 @@ class NahidaAcpServer:
                     }
                 },
                 "agentInfo": {
-                    "name": "nahida",
+                    "name": "xiaoda",
                     "title": "小妲 AI Agent",
                     "version": "1.0.0"
                 },
@@ -92,7 +92,7 @@ class NahidaAcpServer:
     def _handle_session_new(self, msg: Any) -> dict:
         """处理 session/new 请求，创建新会话并返回会话 ID。"""
         params = msg.get("params", {})
-        session_id = f"nahida_{uuid.uuid4().hex[:12]}"
+        session_id = f"xiaoda_{uuid.uuid4().hex[:12]}"
         self.sessions[session_id] = {"created": True}
         return {
             "jsonrpc": "2.0",
@@ -145,7 +145,7 @@ class NahidaAcpServer:
         try:
             p = Path(audio_path)
             if not p.exists() or not p.is_file():
-                logger.warning("nahida_acp.audio_file_missing", path=str(audio_path))
+                logger.warning("xiaoda_acp.audio_file_missing", path=str(audio_path))
                 return
 
             if self._coze_agent_id and self._coze_session_id:
@@ -165,18 +165,18 @@ class NahidaAcpServer:
                     )
                     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
                     if proc.returncode == 0:
-                        logger.info("nahida_acp.audio_sent_via_bridge", file=p.name)
+                        logger.info("xiaoda_acp.audio_sent_via_bridge", file=p.name)
                     else:
-                        logger.warning("nahida_acp.audio_bridge_failed",
+                        logger.warning("xiaoda_acp.audio_bridge_failed",
                                        code=proc.returncode, stderr=stderr.decode()[:200])
                 else:
-                    logger.warning("nahida_acp.audio_no_bridge")
+                    logger.warning("xiaoda_acp.audio_no_bridge")
             else:
-                logger.warning("nahida_acp.audio_no_coze_ids",
+                logger.warning("xiaoda_acp.audio_no_coze_ids",
                                has_agent_id=bool(self._coze_agent_id),
                                has_session_id=bool(self._coze_session_id))
         except Exception as e:
-            logger.warning("nahida_acp.audio_send_failed", error=str(e))
+            logger.warning("xiaoda_acp.audio_send_failed", error=str(e))
 
     async def _handle_session_prompt(self, msg: Any) -> dict:
         """处理 session/prompt：解析输入 → 调用 agent → 回复文本/贴纸/音频。"""
@@ -187,7 +187,7 @@ class NahidaAcpServer:
         meta = params.get("_meta", {})
         if meta.get("cozeAgentId") and not self._coze_agent_id:
             self._coze_agent_id = meta["cozeAgentId"]
-        if session_id and not session_id.startswith("nahida_") and not self._coze_session_id:
+        if session_id and not session_id.startswith("xiaoda_") and not self._coze_session_id:
             self._coze_session_id = session_id
 
         text_parts, image_data = self._parse_prompt_blocks(prompt_blocks)
@@ -285,7 +285,7 @@ class NahidaAcpServer:
             sticker_path = result.sticker_path
             audio_path = result.audio_path
         except Exception as e:
-            logger.error("nahida_acp.process_error", error=str(e))
+            logger.error("xiaoda_acp.process_error", error=str(e))
             reply = f"嗯……出了点小问题：{str(e)[:200]}"
         return reply, sticker_path, audio_path
 
@@ -336,13 +336,13 @@ class NahidaAcpServer:
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
             if proc.returncode == 0:
-                logger.info("nahida_acp.sticker_sent_via_bridge", file=sticker_p.name)
+                logger.info("xiaoda_acp.sticker_sent_via_bridge", file=sticker_p.name)
             else:
-                logger.warning("nahida_acp.sticker_bridge_failed",
+                logger.warning("xiaoda_acp.sticker_bridge_failed",
                                code=proc.returncode, stderr=stderr.decode()[:200])
                 self._send_inline_image(session_id, sticker_path)
         except Exception as e:
-            logger.warning("nahida_acp.sticker_send_error", error=str(e))
+            logger.warning("xiaoda_acp.sticker_send_error", error=str(e))
 
     def _handle_session_cancel(self, msg: Any) -> Any:
         """处理 session/cancel 请求，标记当前会话为已取消。"""
@@ -378,7 +378,7 @@ class NahidaAcpServer:
         """启动 ACP 服务器主循环，读取并分发 JSON-RPC 消息。"""
         await self._init_agent()
 
-        logger.info("nahida_acp.ready")
+        logger.info("xiaoda_acp.ready")
 
         while True:
             try:
@@ -430,7 +430,7 @@ class NahidaAcpServer:
                             self._make_error(msg, -32601, f"Method not found: {method}")
                         )
             except Exception as e:
-                logger.error("nahida_acp.handler_error", method=method, error=str(e))
+                logger.error("xiaoda_acp.handler_error", method=method, error=str(e))
                 if msg_id is not None:
                     self._write_message(
                         self._make_error(msg, -32603, f"Internal error: {str(e)[:200]}")
@@ -445,10 +445,10 @@ def main() -> None:
     args, _ = parser.parse_known_args()
 
     if args.version or args.acp_version:
-        print("nahida-acp 1.0.0")
+        print("xiaoda-acp 1.0.0")
         sys.exit(0)
 
-    server = NahidaAcpServer()
+    server = XiaodaAcpServer()
     asyncio.run(server.run())
 
 

@@ -10,7 +10,7 @@ import aiosqlite
 from db.db_knowledge import KnowledgeDB
 from memory.knowledge_graph import KnowledgeGraph
 
-DB_PATH = "/media/orangepi/KIOXIA/nahida-data/db/agent.db"
+DB_PATH = "/media/orangepi/KIOXIA/xiaoda-data/db/agent.db"
 SF_KEY = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
 
 

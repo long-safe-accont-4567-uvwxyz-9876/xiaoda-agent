@@ -4,7 +4,7 @@
 1. Anchoring：将用户表达的情绪 + 事件 + 上下文存储
 2. Recalling：相关话题触发时召回（Jaccard 相似度）
 3. Bounding：避免情绪过载（同一会话最多注入 3 条）
-4. Enacting：以纳西妲口吻复述记忆
+4. Enacting：以小妲口吻复述记忆
 
 零质量回退：默认开启，可通过环境变量 EMOTIONAL_MEMORY_ENABLED 关闭
 （设为 0/false/off 时，recall_and_enact 不注入任何记忆）。
@@ -31,7 +31,7 @@ class EmotionalMemory:
     Anchoring：将用户表达的情绪+事件+上下文存储
     Recalling：相关话题触发时召回
     Bounding：避免情绪过载（同一会话最多注入 3 条）
-    Enacting：以纳西妲口吻复述记忆
+    Enacting：以小妲口吻复述记忆
     """
     id: str                       # 唯一 ID（uuid 或 timestamp-based）
     user_id: str
@@ -78,7 +78,7 @@ class EmotionalMemoryManager:
     1. Anchoring：存储情感事件
     2. Recalling：Jaccard 相似度召回
     3. Bounding：限制每次注入数量（默认 3）
-    4. Enacting：以纳西妲口吻复述
+    4. Enacting：以小妲口吻复述
     """
 
     MAX_INJECT_PER_SESSION = 3  # Bounding 上限
@@ -231,7 +231,7 @@ class EmotionalMemoryManager:
 
     # === Enacting ===
     def enact(self, memories: list[EmotionalMemory], user_xp_level: int = 1) -> str:
-        """以纳西妲口吻复述记忆
+        """以小妲口吻复述记忆
 
         :param memories: 情感记忆列表
         :param user_xp_level: 用户 XP 等级（影响口吻亲密度）

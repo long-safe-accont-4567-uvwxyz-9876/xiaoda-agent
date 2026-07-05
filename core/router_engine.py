@@ -19,7 +19,7 @@ class RoutingDecision:
     """路由决策结果。
 
     Attributes:
-        agent_names: 目标 Agent 名称列表（如 ["xiaoda"], ["keli", "xiaolang"]）
+        agent_names: 目标 Agent 名称列表（如 ["xiaoda"], ["xiaoli", "xiaolang"]）
         mode: 调度模式 — single 单 Agent / parallel 并行 / task_graph 任务图
         reasoning: 路由理由（可选，用于调试和审计）
     """
@@ -33,22 +33,28 @@ class RoutingDecision:
 
 # @mention 映射（默认值，运行时会合并用户自定义 display_name）
 _DEFAULT_MENTION_MAP = {
-    "@可莉": "keli",
+    "@小莉": "xiaoli",
+    "@小狼": "xiaolang",
+    "@小涟": "xiaolian",
+    "@小可": "xiaoke",
+    "@小妲": "xiaoda",
+    # 兼容旧名字
+    "@可莉": "xiaoli",
     "@银狼": "xiaolang",
-    "@昔涟": "xilian",
-    "@尼可": "nike",
+    "@昔涟": "xiaolian",
+    "@尼可": "xiaoke",
     "@纳西妲": "xiaoda",
 }
 
 # 否定模式中的 agent 别名（内部名 + 默认 display_name）
 _DEFAULT_AGENT_ALIASES = {
-    "keli": ["可莉", "xiaoli"],
-    "xiaolang": ["银狼", "xiaolang"],
-    "xilian": ["昔涟", "xilian"],
-    "nike": ["尼可", "nike"],
+    "xiaoli": ["小莉", "xiaoli"],
+    "xiaolang": ["小狼", "xiaolang"],
+    "xiaolian": ["小涟", "xiaolian"],
+    "xiaoke": ["小可", "xiaoke", "nike"],
 }
 
-# 自指模式：用户让纳西妲自己做事
+# 自指模式：用户让小妲自己做事
 SELF_TARGET_PATTERNS = [
     (r"(?:你|你自己|亲自)(?:去|来|帮我|帮我查|查|搜|找|看看|检查)", "xiaoda"),
 ]
@@ -63,7 +69,7 @@ def _build_mention_map() -> dict[str, str]:
     """构建 @mention 映射（含用户自定义 display_name）。"""
     from config import get_agent_display_name
     m = dict(_DEFAULT_MENTION_MAP)
-    for name in ("xiaoda", "keli", "xiaolang", "xilian", "nike"):
+    for name in ("xiaoda", "xiaoli", "xiaolang", "xiaolian", "xiaoke"):
         dn = get_agent_display_name(name)
         key = f"@{dn}"
         if key not in m:
@@ -75,7 +81,7 @@ def _build_agent_names_pattern() -> str:
     """构建匹配所有 agent 名称的正则片段（内部名 + 所有 display_name）。"""
     from config import get_agent_display_name
     names: set[str] = set()
-    for name in ("xiaoda", "keli", "xiaolang", "xilian", "nike"):
+    for name in ("xiaoda", "xiaoli", "xiaolang", "xiaolian", "xiaoke"):
         names.add(name)
         dn = get_agent_display_name(name)
         if dn:
@@ -92,7 +98,7 @@ def _build_negative_patterns() -> list[str]:
     # 排除 xiaoda（否定模式只针对子代理）
     from config import get_agent_display_name
     sub_names: set[str] = set()
-    for name in ("keli", "xiaolang", "xilian", "nike"):
+    for name in ("xiaoli", "xiaolang", "xiaolian", "xiaoke"):
         sub_names.add(name)
         dn = get_agent_display_name(name)
         if dn:
@@ -107,11 +113,11 @@ def _build_keyword_patterns() -> list[tuple[str, str]]:
     from config import get_agent_display_name
     patterns: list[tuple[str, str]] = []
     agent_keywords: dict[str, list[str]] = {
-        "xiaolang": ["银狼", "xiaolang"],
-        "keli": ["可莉", "xiaoli", "小炸弹"],
-        "xilian": ["昔涟", "xilian", "记忆"],
-        "nike": ["尼可", "nike"],
-        "xiaoda": ["纳西妲", "草神", "小草神"],
+        "xiaolang": ["小狼", "xiaolang"],
+        "xiaoli": ["小莉", "xiaoli", "小炸弹"],
+        "xiaolian": ["小涟", "xiaolian", "记忆"],
+        "xiaoke": ["小可", "xiaoke", "nike"],
+        "xiaoda": ["小妲", "xiaoda"],
     }
     for name, keywords in agent_keywords.items():
         dn = get_agent_display_name(name)

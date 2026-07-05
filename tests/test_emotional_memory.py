@@ -4,7 +4,7 @@
 - Anchoring：存储 + 自动关键词提取
 - Recalling：Jaccard 相似度召回 + 无匹配返回空
 - Bounding：注入上限 + 不重复注入 + 会话重置
-- Enacting：纳西妲口吻复述 + XP 等级影响口吻
+- Enacting：小妲口吻复述 + XP 等级影响口吻
 - 集成入口 recall_and_enact + 环境变量门控 + 持久化往返
 """
 import pytest

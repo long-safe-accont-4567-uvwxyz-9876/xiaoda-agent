@@ -30,7 +30,7 @@ class LoginResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     session_id: str = ""
-    agent: str = "nahida"
+    agent: str = "xiaoda"
     text: str = Field(..., max_length=50_000)
     image_data: list | None = None
 

@@ -210,11 +210,11 @@ class RouterNode:
     @staticmethod
     def _rule_route(user_input: str) -> list[str]:
         q = user_input.lower()
-        search_kw = AGENT_ROUTE_KEYWORDS["xilian"]
+        search_kw = AGENT_ROUTE_KEYWORDS["xiaolian"]
         code_kw = AGENT_ROUTE_KEYWORDS["xiaolang"]
-        research_kw = AGENT_ROUTE_KEYWORDS["nike"]
+        research_kw = AGENT_ROUTE_KEYWORDS["xiaoke"]
         parallel_trigger_kw = AGENT_ROUTE_KEYWORDS["parallel_trigger"]
-        nahida_only_patterns = AGENT_ROUTE_KEYWORDS["nahida"]
+        xiaoda_only_patterns = AGENT_ROUTE_KEYWORDS["xiaoda"]
 
         # 否定上下文检测：用户明确说不要做某事时，不应路由到对应Agent
         is_negative = bool(re.search(
@@ -225,7 +225,7 @@ class RouterNode:
             user_input
         ))
         if is_negative:
-            return ["nahida"]
+            return ["xiaoda"]
 
         matched = []
         if any(kw in q for kw in search_kw):
@@ -235,8 +235,8 @@ class RouterNode:
         if any(kw in q for kw in research_kw):
             matched.append("xiaoke")
 
-        if any(kw in q for kw in nahida_only_patterns):
-            return ["nahida"]
+        if any(kw in q for kw in xiaoda_only_patterns):
+            return ["xiaoda"]
 
         is_parallel = any(kw in q for kw in parallel_trigger_kw)
 
@@ -284,7 +284,7 @@ class RouterNode:
                                      agent_configs: dict) -> list[str]:
         """将检测到的目标名归一化为 agent_configs 中的内部 name。
 
-        同时支持内部名（如 ``keli``）与展示名（如 ``可莉``），忽略无效目标。
+        同时支持内部名（如 ``xiaoli``）与展示名（如 ``小莉``），忽略无效目标。
         """
         name_map: dict[str, str] = {}
         for name, cfg in agent_configs.items():
@@ -316,7 +316,7 @@ class RouterNode:
             caps = ", ".join(cfg.get("capabilities", []))
             desc = cfg.get("route_description", "")
             agent_list.append(f"- {name}（{cfg.get('display_name', name)}）: 能力[{caps}] {desc}")
-        agent_list.append(f"- nahida（{get_agent_display_name('nahida')}）: 能力[chat, emotion, daily, general] 日常对话、情感交流、综合分析")
+        agent_list.append(f"- xiaoda（{get_agent_display_name('xiaoda')}）: 能力[chat, emotion, daily, general] 日常对话、情感交流、综合分析")
 
         return f"""你是一个任务路由器。根据用户输入，决定应该由哪些Agent来处理。
 
@@ -324,7 +324,7 @@ class RouterNode:
 {chr(10).join(agent_list)}
 
 规则:
-1. 返回Agent的name字段值，多个Agent用逗号分隔（如：yinlang,xilian）
+1. 返回Agent的name字段值，多个Agent用逗号分隔（如：xiaolang,xiaolian）
 2. 编程/代码/技术问题 → xiaolang
 3. 搜索/查询/探索/发现信息 → xiaolian
 4. 研究/分析/学术/深度思考 → xiaoke
@@ -343,7 +343,7 @@ class RouterNode:
         agent_configs = state._agent_configs
 
         if not agent_configs:
-            return {"route_targets": ["nahida"], "route_target": "nahida", "route_plan": ["nahida"]}
+            return {"route_targets": ["xiaoda"], "route_target": "xiaoda", "route_plan": ["xiaoda"]}
 
         # SOLO 模式：任务→代理 1:1 绑定（参考 Trae SOLO 模式）
         # 在并行检测之前计算建议目标；仅在用户未明确指定子代理时使用
@@ -356,7 +356,7 @@ class RouterNode:
             except Exception as e:
                 logger.warning("route.solo_routing_failed", error=str(e)[:200])
 
-        # 0. 检测无依赖多子代理任务（如"分别问可莉和银狼..."）→ 直达并行路径
+        # 0. 检测无依赖多子代理任务（如"分别问小莉和小狼..."）→ 直达并行路径
         parallel_targets = self._detect_parallel_targets(user_input)
         if parallel_targets and len(parallel_targets) >= 2:
             valid_targets = self._normalize_parallel_targets(parallel_targets, agent_configs)
@@ -367,7 +367,7 @@ class RouterNode:
 
         # 若用户未明确指定子代理，使用 SOLO 建议的目标（仅当建议为具体子代理时）
         if (suggested_target
-                and suggested_target != "keli"
+                and suggested_target != "xiaoli"
                 and suggested_target in agent_configs):
             targets = [suggested_target]
             await self._route_cache.put(user_input, targets)
@@ -383,9 +383,9 @@ class RouterNode:
         # 2. 规则路由
         rule_result = self._rule_route(user_input)
         if rule_result:
-            targets = [t for t in rule_result if t in agent_configs or t == "nahida"]
+            targets = [t for t in rule_result if t in agent_configs or t == "xiaoda"]
             if not targets:
-                targets = ["nahida"]
+                targets = ["xiaoda"]
 
             # 置信度评估：@mention 匹配高置信度（0.9），关键词正则匹配低置信度（0.5）
             _rule_confidence = 0.9 if self._has_mention(user_input) else 0.5
@@ -490,7 +490,7 @@ class RouterNode:
                 targets.append(matched)
                 seen.add(matched)
 
-        return targets if targets else ["nahida"]
+        return targets if targets else ["xiaoda"]
 
 
 class ParallelAgentNode:
@@ -782,7 +782,7 @@ class AgentNode:
 
     async def execute(self, state: TaskState) -> dict:
         target = state.route_target
-        if not target or target == "nahida":
+        if not target or target == "xiaoda":
             return {"final_output": "", "sub_agent_reply": ""}
 
         agent = self._dispatcher.get_agent(target)
@@ -832,10 +832,10 @@ class AgentNode:
 
 
 class SynthesisNode:
-    def __init__(self, client: AsyncOpenAI, model: str = None, nahida_chat_callback: Optional[Any]=None) -> None:
+    def __init__(self, client: AsyncOpenAI, model: str = None, xiaoda_chat_callback: Optional[Any]=None) -> None:
         self._client = client
         self._model = model or os.getenv("MODEL_NAME", "mimo-v2.5")
-        self._nahida_chat = nahida_chat_callback
+        self._xiaoda_chat = xiaoda_chat_callback
 
     async def synthesize(self, state: TaskState) -> dict:
         results = state.intermediate_results
@@ -865,10 +865,10 @@ class SynthesisNode:
 - 不要只说空洞的感想或比喻，必须有实际信息量
 - 语气温柔但内容必须充实
 - 如果某个Agent的结果明显不完整或报错，如实说明"""
-                final = await self._nahida_chat(prompt)
+                final = await self._xiaoda_chat(prompt)
                 return {"final_output": final}
             except Exception as e:
-                logger.warning("synthesis.nahida_failed", error=str(e))
+                logger.warning("synthesis.xiaoda_failed", error=str(e))
 
         # xiaoda_chat不可用时，使用LLM综合作为后备
         if len(results) == 1:
@@ -898,7 +898,7 @@ class SynthesisNode:
 
 async def route_condition(state: TaskState) -> str:
     targets = state.route_targets
-    if not targets or (len(targets) == 1 and targets[0] == "nahida"):
+    if not targets or (len(targets) == 1 and targets[0] == "xiaoda"):
         return END
     if getattr(state, 'skip_synthesis', False):
         return END
@@ -915,7 +915,7 @@ def build_task_graph(dispatcher: AgentDispatcher, agent_configs: dict,
     router = RouterNode(route_client, route_model or os.getenv("MODEL_NAME", "mimo-v2.5"), belief_router=belief_router)
     parallel_node = ParallelAgentNode(dispatcher, route_client, route_model, belief_router=belief_router)
     agent_node = AgentNode(dispatcher, belief_router=belief_router)
-    synthesis = SynthesisNode(route_client, route_model, nahida_chat_callback=nahida_chat_callback)
+    synthesis = SynthesisNode(route_client, route_model, xiaoda_chat_callback=xiaoda_chat_callback)
 
     graph = TaskGraph()
 

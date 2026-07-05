@@ -156,7 +156,7 @@ class SpontaneousRecall:
         else:
             time_str = "之前"
 
-        prompt = f"""你是纳西妲，正在独自回忆过去。以下是一条旧记忆的摘要：
+        prompt = f"""你是小妲，正在独自回忆过去。以下是一条旧记忆的摘要：
 
 时间：{time_str}
 内容：{summary[:200]}
@@ -168,7 +168,7 @@ class SpontaneousRecall:
                 self.core.router.route(
                     "chat_flash",
                     [
-                        {"role": "system", "content": "你是纳西妲，在独自回忆过去。"},
+                        {"role": "system", "content": "你是小妲，在独自回忆过去。"},
                         {"role": "user", "content": prompt},
                     ],
                     temperature=0.7,

@@ -110,7 +110,7 @@ def _ensure_builtin_voices():
             # 按文件名前缀匹配 agent（xiaoda_hq.wav → xiaoda, xiaoli.mp3 → xiaoli）
             stem = f.stem.lower()
             matched_agent = None
-            for agent_name in ("xiaoda", "xiaoli", "nike", "xilian", "yinlang"):
+            for agent_name in ("xiaoda", "xiaoli", "xiaoke", "xiaolian", "xiaolang"):
                 if stem.startswith(agent_name):
                     matched_agent = agent_name
                     break

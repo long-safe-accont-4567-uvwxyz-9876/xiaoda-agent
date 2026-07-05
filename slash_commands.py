@@ -156,7 +156,7 @@ class SlashCommandHandler:
         return "\n".join(lines)
 
     async def _cmd_status(self, args: str, user_id: str) -> str:
-        lines = ["🌿 纳西妲状态报告"]
+        lines = ["🌿 小妲状态报告"]
 
         uptime = time.time() - self._start_time
         hours = int(uptime // 3600)
@@ -360,18 +360,18 @@ class SlashCommandHandler:
 
         if not args:
             target = await self._agent.get_chat_target(user_id)
-            target_display = "纳西妲" if target == "nahida" else target
+            target_display = "小妲" if target == "xiaoda" else target
             lines = [f"当前对话目标: {target_display}"]
             if agents:
                 lines.append("可用子Agent:")
                 for a in agents:
                     lines.append(f"  · {a['display_name']}（/agent {a['display_name']}）")
-            lines.append("  · 纳西妲（/agent 纳西妲）")
+            lines.append("  · 小妲（/agent 小妲）")
             return "\n".join(lines)
 
-        if args in ("纳西妲", "nahida"):
-            await self._agent.set_chat_target(user_id, "nahida")
-            return "已切换到纳西妲 🌿"
+        if args in ("小妲", "xiaoda"):
+            await self._agent.set_chat_target(user_id, "xiaoda")
+            return "已切换到小妲 🌿"
 
         for a in agents:
             if args in (a["display_name"], a["name"]):
@@ -713,7 +713,7 @@ class SlashCommandHandler:
     async def _cmd_help(self, args: str, user_id: str) -> str:
         is_owner = self._security and self._security.is_owner(user_id)
 
-        lines = ["🌿 纳西妲的命令列表\n"]
+        lines = ["🌿 小妲的命令列表\n"]
 
         public_cmds = [
             ("/cost [7d]", "查看API消耗（加7d看7天）"),

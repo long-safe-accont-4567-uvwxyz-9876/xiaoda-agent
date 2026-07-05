@@ -82,7 +82,7 @@ class ChatProcessor:
         """移除 @mention 标记，返回纯文本输入。"""
         from config import get_agent_display_name
         chars: set[str] = set()
-        for name in ("xiaoda", "keli", "yinlang", "xilian", "xiaoke"):
+        for name in ("xiaoda", "xiaoli", "xiaolang", "xiaolian", "xiaoke"):
             chars.update(get_agent_display_name(name))
         pat = r'@[' + re.escape(''.join(sorted(chars))) + r']+'
         return re.sub(pat, '', user_input).strip()

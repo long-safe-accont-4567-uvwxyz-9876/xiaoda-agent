@@ -3,26 +3,26 @@
     "frontend": {"target": "xiaoke", "mode": "single"},
     "backend": {"target": "xiaoke", "mode": "single"},
     "debug": {"target": "xiaoke", "mode": "single"},
-    "security": {"target": "yinlang", "mode": "single"},
+    "security": {"target": "xiaolang", "mode": "single"},
     "test": {"target": "xiaoke", "mode": "single"},
     "info_search": {"target": "xiaolian", "mode": "single"},
-    "hardware": {"target": "yinlang", "mode": "single"},
+    "hardware": {"target": "xiaolang", "mode": "single"},
     "emotional": {"target": "xiaoli", "mode": "single"},
     "general": {"target": "xiaoli", "mode": "single"}
   },
   "multi_domain": {
     "frontend+security": {
-      "targets": ["xiaoke", "yinlang"],
+      "targets": ["xiaoke", "xiaolang"],
       "mode": "parallel_fanout",
       "synthesizer": "xiaoda"
     },
     "backend+security": {
-      "targets": ["xiaoke", "yinlang"],
+      "targets": ["xiaoke", "xiaolang"],
       "mode": "parallel_fanout",
       "synthesizer": "xiaoda"
     },
     "debug+security": {
-      "targets": ["xiaoke", "yinlang"],
+      "targets": ["xiaoke", "xiaolang"],
       "mode": "parallel_fanout",
       "synthesizer": "xiaoda"
     },
@@ -37,12 +37,12 @@
       "synthesizer": ""
     },
     "info_search+security": {
-      "targets": ["xiaolian", "yinlang"],
+      "targets": ["xiaolian", "xiaolang"],
       "mode": "pipe",
       "synthesizer": ""
     },
     "hardware+security": {
-      "targets": ["yinlang"],
+      "targets": ["xiaolang"],
       "mode": "single",
       "synthesizer": ""
     },
@@ -56,8 +56,8 @@
     "code_review": {
       "mode": "generate_verify",
       "generator": "xiaoke",
-      "verifier": "yinlang",
-      "description": "尼可生成代码，银狼审查安全"
+      "verifier": "xiaolang",
+      "description": "小可生成代码，小浪审查安全"
     },
     "deep_analysis": {
       "mode": "pipe",
@@ -66,9 +66,9 @@
     },
     "security_audit": {
       "mode": "generate_verify",
-      "generator": "yinlang",
+      "generator": "xiaolang",
       "verifier": "xiaoke",
-      "description": "银狼执行安全审计，尼可验证代码影响"
+      "description": "小浪执行安全审计，小可验证代码影响"
     }
   }
 }

@@ -57,7 +57,7 @@ async def main():
     print("\n[Fix 2] _DESC_EMOTION_MAP 分类修正")
     from emotion.sticker_manager import StickerManager
     # 表情包目录: 优先使用项目内置目录，找不到则使用临时目录
-    sticker_dir = PROJECT_ROOT / "assets" / "stickers" / "nahida"
+    sticker_dir = PROJECT_ROOT / "assets" / "stickers" / "xiaoda"
     if not sticker_dir.is_dir():
         import tempfile
         sticker_dir = Path(tempfile.mkdtemp())
@@ -97,7 +97,7 @@ async def main():
     check("TTS available", tts.available, "TTS 不可用")
 
     if tts.available:
-        result = await tts.synthesize_nahida("验证测试", emotion="happy")
+        result = await tts.synthesize_xiaoda("验证测试", emotion="happy")
         check("TTS 合成成功", result is not None, "合成返回 None")
         if result:
             check("TTS 文件存在", result.exists(), f"文件不存在: {result}")

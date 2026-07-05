@@ -418,7 +418,7 @@ def main() -> None:
     else:
         print()
         print(f"  {_C.LGREEN}{_C.BOLD}\U0001f33f 配置完成！{_C.RST}")
-        print(f"  运行 {_C.CYAN}python agent.py{_C.RST} 或 {_C.CYAN}bash scripts/start.sh{_C.RST} 启动纳西妲")
+        print(f"  运行 {_C.CYAN}python agent.py{_C.RST} 或 {_C.CYAN}bash scripts/start.sh{_C.RST} 启动小妲")
 
     print()
 

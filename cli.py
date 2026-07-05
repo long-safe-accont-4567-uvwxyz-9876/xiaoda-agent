@@ -113,29 +113,29 @@ NAHIDA_FAREWELLS = [
 ]
 
 STATUS_MAP = {
-    "thinking": "🌿 纳西妲正在想……",
+    "thinking": "🌿 小妲正在想……",
     "route": "✨ 人家在看看交给谁比较好～",
-    "tool": "🌿 纳西妲正在查资料～",
+    "tool": "🌿 小妲正在查资料～",
     "search": "🔍 人家帮你搜一下～",
     "weather": "🌤️ 人家看看天气怎么样～",
     "browse": "🌐 人家去网上看看～",
     "shell": "💻 人家在跑命令～",
     "python": "🐍 人家在算东西～",
     "camera": "📷 人家看看摄像头～",
-    "xiaoda_done": "🌿 纳西妲整理好了！",
-    "xiaoli_done": "💥 可莉完成啦！",
-    "xiaolian_done": "🌸 昔涟完成啦！",
-    "yinlang_done": "🎮 银狼完成啦！",
-    "xiaoke_done": "🔮 尼可完成啦！",
+    "xiaoda_done": "🌿 小妲整理好了！",
+    "xiaoli_done": "💥 小莉完成啦！",
+    "xiaolian_done": "🌸 小涟完成啦！",
+    "xiaolang_done": "🎮 小狼完成啦！",
+    "xiaoke_done": "🔮 小可完成啦！",
     "done": "✅ 搞定啦～",
 }
 
 AGENT_NAMES = {
-    "xiaoda": "纳西妲",
-    "xiaoli": "可莉",
-    "xiaolian": "昔涟",
-    "xiaolang": "银狼",
-    "xiaoke": "尼可",
+    "xiaoda": "小妲",
+    "xiaoli": "小莉",
+    "xiaolian": "小涟",
+    "xiaolang": "小狼",
+    "xiaoke": "小可",
 }
 
 NAHIDA_ASCII = (
@@ -219,7 +219,7 @@ def _status_translate(msg: str) -> str:
         for hint, val in tool_hints.items():
             if hint in msg:
                 return val
-        return "🌿 纳西妲正在忙～"
+        return "🌿 小妲正在忙～"
     if "完成" in msg or "done" in low:
         return "✅ 搞定啦～"
     if "正在" in msg:
@@ -273,7 +273,7 @@ class CLIInterface:
         print(f"  {_C.DIM}|{_C.RST}  {_C.LGREEN}小妲 AI Agent{_C.RST}  ·  {_C.LEAF}{model_id}{_C.RST}  ·  {_C.DGREEN}白草净华{_C.RST}  {_C.DIM}|{_C.RST}")
         print(f"  {_C.DIM}+------------------------------------------------+{_C.RST}")
         print()
-        print(f"  {_C.CYAN}💬 直接输入消息跟纳西妲聊天{_C.RST}")
+        print(f"  {_C.CYAN}💬 直接输入消息跟小妲聊天{_C.RST}")
         print(f"  {_C.CYAN}📋 /help 查看所有命令{_C.RST}")
         print(f"  {_C.CYAN}🚪 exit 或 Ctrl+C 退出{_C.RST}")
         print()
@@ -282,7 +282,7 @@ class CLIInterface:
         print(f"  {_C.LGREEN}{_C.BOLD}{greeting}{_C.RST}\n")
 
     def _print_help(self) -> None:
-        print(f"\n  {_C.LGREEN}{_C.BOLD}🌿 纳西妲的命令列表{_C.RST}\n")
+        print(f"\n  {_C.LGREEN}{_C.BOLD}🌿 小妲的命令列表{_C.RST}\n")
         print(f"  {_C.LYELLOW}── 公共命令 ──{_C.RST}")
         for emoji, cmd, desc in HELP_PUBLIC:
             print(f"  {emoji} {_C.CYAN}{cmd:<24}{_C.RST} {desc}")
@@ -353,7 +353,7 @@ class CLIInterface:
                 )
 
                 print()
-                label = f"  {_C.LGREEN}{_C.BOLD}🌿 纳西妲:{_C.RST} "
+                label = f"  {_C.LGREEN}{_C.BOLD}🌿 小妲:{_C.RST} "
                 sys.stdout.write(label)
                 _typewriter(result.reply)
 
@@ -362,7 +362,7 @@ class CLIInterface:
 
             except Exception as e:
                 logger.error("cli.process_error", error=str(e))
-                print(f"\n  {_C.LYELLOW}纳西妲: 嗯……出了点小问题：{str(e)[:100]}{_C.RST}")
+                print(f"\n  {_C.LYELLOW}小妲: 嗯……出了点小问题：{str(e)[:100]}{_C.RST}")
 
         # 主循环退出时安全关闭
         try:

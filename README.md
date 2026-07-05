@@ -456,7 +456,7 @@ xiaoda-agent/
 │   ├── vision_service.py     #   视觉服务
 │   ├── file_receiver.py      #   文件接收
 │   ├── smart_error_handler.py #  智能错误处理
-│   ├── nahida_acp.py         #   小妲 ACP 协议
+│   ├── xiaoda_acp.py         #   小妲 ACP 协议
 │   └── logging_config.py     #   日志配置
 ├── security/                 # 安全模块
 │   ├── security.py           #   安全过滤

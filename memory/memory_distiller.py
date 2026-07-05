@@ -189,7 +189,7 @@ class MemoryDistiller:
         memories_text = "\n".join(lines)
         from config import get_agent_display_name
         prompt = RECALL_PROMPT_TEMPLATE.format(
-            n=get_agent_display_name("nahida"),
+            n=get_agent_display_name("xiaoda"),
             memories_text=memories_text,
         )
         messages = [{"role": "user", "content": prompt}]

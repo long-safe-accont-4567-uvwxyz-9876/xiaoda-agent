@@ -198,21 +198,21 @@ class MessageProcessorMixin:
             if chat_targets:
                 target_name = get_agent_display_name(chat_targets[0])
             else:
-                target_name = get_agent_display_name('nahida')
+                target_name = get_agent_display_name('xiaoda')
             confirm_msg = f"好～现在跟{target_name}说话啦！有什么想聊的呀？"
             trace.info("agent.chat_target_switch", target=chat_targets)
             return ProcessResult(reply=confirm_msg, emotion="greeting")
 
-        non_nahida_targets = [t for t in chat_targets if t != "nahida"]
-        if non_nahida_targets:
-            if len(non_nahida_targets) == 1:
+        non_xiaoda_targets = [t for t in chat_targets if t != "xiaoda"]
+        if non_xiaoda_targets:
+            if len(non_xiaoda_targets) == 1:
                 return await self._dispatch_single_sub_agent(
-                    non_nahida_targets[0], clean_input, user_id, source, session_id, trace,
+                    non_xiaoda_targets[0], clean_input, user_id, source, session_id, trace,
                     force_voice=force_voice, ctx=ctx,
                 )
             else:
                 return await self._dispatch_parallel_sub_agents(
-                    non_nahida_targets, clean_input, user_id, source, session_id, trace,
+                    non_xiaoda_targets, clean_input, user_id, source, session_id, trace,
                     force_voice=force_voice, ctx=ctx,
                 )
 
@@ -387,7 +387,7 @@ class MessageProcessorMixin:
                 emotion_label = ensured_emotion.value
 
         clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
-        clean_reply = humanize(clean_reply, style="nahida")
+        clean_reply = humanize(clean_reply, style="xiaoda")
 
         audio_path, tts_pending, tts_text = await self._build_voice_result(
             clean_reply, emotion_label, force_voice)
@@ -475,7 +475,7 @@ class MessageProcessorMixin:
                                      force_voice: Any, image_data: Any, is_master: Any, user_id: Any, source: Any,
                                      session_id: Any, status_callback: Any, trace: Any) -> Any:
         """任务图路由路径。返回 ProcessResult 或 None（None 表示继续主路径）。"""
-        if not ("nahida" in chat_targets and self._task_graph
+        if not ("xiaoda" in chat_targets and self._task_graph
                 and not self._is_manual_target(user_input, user_id)
                 and not self._is_simple_task(clean_input)
                 and not force_voice and not image_data
@@ -507,7 +507,7 @@ class MessageProcessorMixin:
                         session_id=session_id,
                     )
                 emotion_label = emotion.get("primary", "")
-                clean_reply = self._finalize_reply(graph_result.final_output, style="nahida")
+                clean_reply = self._finalize_reply(graph_result.final_output, style="xiaoda")
                 sticker_path = None
                 audio_path = None
                 tts_pending = False
@@ -569,7 +569,7 @@ class MessageProcessorMixin:
                                                chat_targets: Any, is_master: Any,
                                                ctx: Any) -> tuple:
         """主路径阶段1：Klee 委托 + 情绪检测 + 记忆检索。返回 (emotion, emotion_label)。"""
-        if "可莉" in user_input and "nahida" in chat_targets:
+        if ("可莉" in user_input or "小莉" in user_input) and "xiaoda" in chat_targets:
             klee_reply = await self.delegate_to_klee(clean_input, factual=True)
             self.context.klee_context = klee_reply
         else:
@@ -659,11 +659,11 @@ class MessageProcessorMixin:
                 emotion_label = ensured_emotion.value
 
         if _pre_picked_sticker:
-            clean_reply = self._finalize_reply(reply, strip_emotion=True, style="nahida")
+            clean_reply = self._finalize_reply(reply, strip_emotion=True, style="xiaoda")
             sticker_path = _pre_picked_sticker
         else:
             clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
-            clean_reply = humanize(clean_reply, style="nahida")
+            clean_reply = humanize(clean_reply, style="xiaoda")
 
         audio_path, tts_pending, tts_text = await self._build_voice_result(
             clean_reply, emotion_label, force_voice)
@@ -1024,7 +1024,7 @@ class MessageProcessorMixin:
                 tts_text = self._clean_reply(clean_reply)
             else:
                 try:
-                    audio_path = await self.tts.synthesize_nahida(
+                    audio_path = await self.tts.synthesize_xiaoda(
                         self._clean_reply(clean_reply), emotion=emotion_label)
                 except Exception as e:
                     logger.warning("agent.tts_failed", error=str(e))
@@ -1347,12 +1347,12 @@ class MessageProcessorMixin:
             logger.warning("agent.image_describe_failed", error=str(e))
             return ""
 
-    async def _nahida_synthesis_chat(self, prompt: str) -> str:
+    async def _xiaoda_synthesis_chat(self, prompt: str) -> str:
         try:
             result = await self.router.route(
                 "chat",
                 [
-                    {"role": "system", "content": """你是纳西妲，须弥的草神。你的任务是整理团队成员的工作结果，向用户汇报。
+                    {"role": "system", "content": """你是小妲，团队的核心助手。你的任务是整理团队成员的工作结果，向用户汇报。
 
 重要规则：
 1. 必须输出具体的事实信息和关键要点，不要只说空洞的比喻或感想
@@ -1370,7 +1370,7 @@ class MessageProcessorMixin:
                 return result.strip()
             return result.choices[0].message.content.strip()
         except Exception as e:
-            logger.warning("agent.nahida_synthesis_failed", error=str(e))
+            logger.warning("agent.xiaoda_synthesis_failed", error=str(e))
             return prompt
 
     async def _parse_chat_target(self, user_input: str, user_id: str) -> list[str]:
@@ -1383,9 +1383,9 @@ class MessageProcessorMixin:
         return decision.agent_names
 
     async def get_chat_target(self, user_id: str) -> str:
-        """获取用户的聊天目标子代理, 默认返回 'nahida'."""
+        """获取用户的聊天目标子代理, 默认返回 'xiaoda'."""
         async with self._chat_target_lock:
-            return self._user_chat_target.get(user_id, "nahida")
+            return self._user_chat_target.get(user_id, "xiaoda")
 
     async def set_chat_target(self, user_id: str, target: str) -> None:
         """设置用户的聊天目标子代理.

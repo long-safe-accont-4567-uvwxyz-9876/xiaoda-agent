@@ -38,12 +38,12 @@ async def test_prompt_rule_extraction():
 
     print("\n=== T1: 提示词规则提取准确性 ===")
 
-    # 测试用例 1: 纳西妲系统提示词片段 (真实样本)
-    nahida_prompt = textwrap.dedent("""
-    你是纳西妲，须弥的草神。
+    # 测试用例 1: 小妲系统提示词片段 (真实样本)
+    xiaoda_prompt = textwrap.dedent("""
+    你是小妲，团队的核心助手。
     
-    如果用户问你有什么技能时，用纳西妲的语气介绍。
-    当用户提到可莉时，纳西妲应该使用 delegate_task 工具。
+    如果用户问你有什么技能时，用小妲的语气介绍。
+    当用户提到小莉时，小妲应该使用 delegate_task 工具。
     如果输入是模糊的，请要求澄清。
     
     必须保持温柔语气，但技术内容必须清晰。
@@ -59,7 +59,7 @@ async def test_prompt_rule_extraction():
     {emotion}
     """)
 
-    spec = parse_prompt_spec(nahida_prompt)
+    spec = parse_prompt_spec(xiaoda_prompt)
 
     # 验证条件规则
     print(f"  条件规则数: {spec.n_conditional_rules}")
@@ -121,9 +121,9 @@ async def test_prompt_rule_extraction():
 
     print("  T1 PASS")
     return {
-        "nahida_rules": spec.n_conditional_rules,
-        "nahida_invariants": spec.n_invariants,
-        "nahida_preds": spec.n_state_preds,
+        "xiaoda_rules": spec.n_conditional_rules,
+        "xiaoda_invariants": spec.n_invariants,
+        "xiaoda_preds": spec.n_state_preds,
         "en_rules": en_spec.n_conditional_rules,
         "en_invariants": en_spec.n_invariants,
     }
@@ -271,7 +271,7 @@ async def test_size_independence():
 
     # 组件 B: 低结构广度, 相同 LOC (纯描述, 无规则)
     low_breadth_prompt = textwrap.dedent("""
-    纳西妲是须弥的草神，她管理着世界树和地脉。
+    小妲是须弥的草神，她管理着世界树和地脉。
     她喜欢在梦境中观察世界，了解人们的想法和感受。
     她的性格温柔而好奇，总是想要学习更多知识。
     她经常用比喻和故事来表达自己的观点。
@@ -848,8 +848,8 @@ async def run_all_tests():
 
     if "T1" in results and "error" not in results["T1"]:
         r = results["T1"]
-        print(f"  T1 纳西妲提示词: 条件规则={r['nahida_rules']}, "
-              f"不变量={r['nahida_invariants']}, 状态谓词={r['nahida_preds']}")
+        print(f"  T1 小妲提示词: 条件规则={r['xiaoda_rules']}, "
+              f"不变量={r['xiaoda_invariants']}, 状态谓词={r['xiaoda_preds']}")
         print(f"  T1 英文提示词:   条件规则={r['en_rules']}, 不变量={r['en_invariants']}")
 
     if "T2" in results and "error" not in results["T2"]:

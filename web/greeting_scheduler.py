@@ -202,7 +202,7 @@ class GreetingScheduler:
         return text, report
 
     async def _generate(self, hint: str) -> str:
-        """通过纳西妲 agent 生成问候（使用真实 user_id 以加载记忆上下文）。"""
+        """通过小妲 agent 生成问候（使用真实 user_id 以加载记忆上下文）。"""
         address_term = getattr(self.core.context, "current_address_term", "") or "爸爸"
 
         # 构建带时间上下文的问候指令

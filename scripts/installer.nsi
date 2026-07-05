@@ -39,6 +39,17 @@ File "dist\xiaoda-agent\.auto_update"
 ; 安装后清理可能残留的敏感文件（旧版升级时 .env 可能被保留）
 Delete "$INSTDIR\_internal\config\webui_overrides.json"
 Delete "$INSTDIR\config\webui_overrides.json"
+; 清理旧版 agent 配置文件（IP 风险名称迁移）
+Delete "$COMMONAPPDATA\Xiaoda Agent\config\agents\nahida.json"
+Delete "$COMMONAPPDATA\Xiaoda Agent\config\agents\keli.json"
+Delete "$COMMONAPPDATA\Xiaoda Agent\config\agents\yinlang.json"
+Delete "$COMMONAPPDATA\Xiaoda Agent\config\agents\xilian.json"
+Delete "$COMMONAPPDATA\Xiaoda Agent\config\agents\nike.json"
+Delete "$APPDATA\Xiaoda Agent\config\agents\nahida.json"
+Delete "$APPDATA\Xiaoda Agent\config\agents\keli.json"
+Delete "$APPDATA\Xiaoda Agent\config\agents\yinlang.json"
+Delete "$APPDATA\Xiaoda Agent\config\agents\xilian.json"
+Delete "$APPDATA\Xiaoda Agent\config\agents\nike.json"
 CreateShortCut "$DESKTOP\小妲Agent.lnk" "$INSTDIR\xiaoda-agent.exe" "--desktop" "$INSTDIR\xiaoda-icon.ico" 0
 CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
 CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\小妲Agent.lnk" "$INSTDIR\xiaoda-agent.exe" "--desktop" "$INSTDIR\xiaoda-icon.ico" 0

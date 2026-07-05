@@ -208,6 +208,18 @@ def _init_user_resources() -> None:
         except Exception as e:
             print(f"[config] Warning: failed to copy agents/: {e}")
 
+    # 2.1 清理旧版 agent 配置文件（升级后旧名称不应残留）
+    if user_agents.exists():
+        _deprecated_agents = {"nahida.json", "keli.json", "yinlang.json", "xilian.json", "nike.json"}
+        for old_file in _deprecated_agents:
+            old_path = user_agents / old_file
+            if old_path.exists():
+                try:
+                    old_path.unlink()
+                    print(f"[config] Removed deprecated agent config: {old_file}")
+                except Exception as e:
+                    print(f"[config] Warning: failed to remove {old_file}: {e}")
+
     # 3. 复制 workspace/ 模板文件（SOUL.md, IDENTITY.md 等，不覆盖已有文件）
     # 模板文件以 .tpl 扩展名打包，复制时去除 .tpl 后缀
     bundled_workspace = bundled_config / "workspace"
@@ -438,11 +450,11 @@ def get_agent_display_name_en(name: str) -> str:
 # 每个 agent 的人格文件中使用原名，运行时自动替换为用户配置的显示名。
 # 全局统一机制：所有 agent 共用一套替换逻辑，不分主次。
 _ORIGINAL_NAMES: dict[str, str] = {
-    "纳西妲": "xiaoda",
-    "可莉": "xiaoli",
-    "银狼": "xiaolang",
-    "昔涟": "xiaolian",
-    "尼可": "xiaoke",
+    "小妲": "xiaoda",
+    "小莉": "xiaoli",
+    "小狼": "xiaolang",
+    "小涟": "xiaolian",
+    "小可": "xiaoke",
 }
 
 # 英文原名 → agent_key 映射（人格文件中的英文标识符）

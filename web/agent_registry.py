@@ -95,30 +95,33 @@ class AgentRegistry:
         self._file(cfg.name).write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # ── 纳西妲主体配置（excluded_tools / mcp_servers） ──
+    # ── 小妲主体配置（excluded_tools / mcp_servers） ──
 
-    def _nahida_cfg_path(self) -> Path:
-        return AGENTS_DIR / "nahida.json"
+    def _xiaoda_cfg_path(self) -> Path:
+        return AGENTS_DIR / "xiaoda.json"
 
-    def _load_nahida_cfg(self) -> dict:
-        fp = self._nahida_cfg_path()
+    def _load_xiaoda_cfg(self) -> dict:
+        fp = self._xiaoda_cfg_path()
         if fp.exists():
             try:
                 return json.loads(fp.read_text(encoding="utf-8"))
             except Exception:
-                logger.warning("nahida.json 损坏，忽略")
+                logger.warning("xiaoda.json 损坏，忽略")
         return {}
 
-    def _save_nahida_cfg(self, data: dict) -> None:
+    def _save_xiaoda_cfg(self, data: dict) -> None:
         data["_saved_at"] = time.time()
-        self._nahida_cfg_path().write_text(
+        self._xiaoda_cfg_path().write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def _save_nahida_field(self, key: str, value) -> None:
-        """保存 nahida 单个字段到 nahida.json。"""
-        cfg = self._load_nahida_cfg()
+    def _save_xiaoda_field(self, key: str, value) -> None:
+        """保存小妲单个字段到 xiaoda.json。"""
+        cfg = self._load_xiaoda_cfg()
         cfg[key] = value
-        self._save_nahida_cfg(cfg)
+        self._save_xiaoda_cfg(cfg)
+
+    # 旧版 agent 名称，升级后不应被当作自定义 agent 注册
+    _DEPRECATED_AGENT_NAMES = {"nahida", "keli", "yinlang", "xilian", "nike"}
 
     async def load_persisted(self) -> None:
         """启动时调用：恢复自建 Agent 并应用对内置 Agent 的覆盖。"""
@@ -128,6 +131,10 @@ class AgentRegistry:
                 data = json.loads(fp.read_text(encoding="utf-8"))
                 name = data.get("name", "")
                 if not name:
+                    continue
+                # 跳过旧版 agent 名称，防止残留配置被当作自定义 agent 注册
+                if name in self._DEPRECATED_AGENT_NAMES:
+                    logger.info("agent_registry.deprecated_skip name={} file={}", name, fp.name)
                     continue
                 if name in BUILTIN_AGENTS:
                     agent = self.core.dispatcher.get_agent(name)
@@ -186,26 +193,26 @@ class AgentRegistry:
     # ── 内置 Agent 桩数据（降级模式下 dispatcher 未注册时使用）──
 
     _BUILTIN_STUBS: dict[str, dict] = {
-        "keli": {
-            "display_name": "可莉", "display_name_en": "Keli",
+        "xiaoli": {
+            "display_name": "小莉", "display_name_en": "Xiaoli",
             "provider": "default", "model": "default",
             "route_description": "日常聊天、玩耍、轻松有趣的对话",
             "capabilities": ["chat", "play", "fun"],
         },
-        "yinlang": {
-            "display_name": "银狼", "display_name_en": "Yinlang",
+        "xiaolang": {
+            "display_name": "小狼", "display_name_en": "Xiaolang",
             "provider": "default", "model": "default",
             "route_description": "编程、代码编写、调试、技术问题、硬件控制、系统运维、开发辅助",
             "capabilities": ["coding", "debug", "script", "programming", "hardware", "system", "devops"],
         },
-        "xilian": {
-            "display_name": "昔涟", "display_name_en": "Xilian",
+        "xiaolian": {
+            "display_name": "小涟", "display_name_en": "Xiaolian",
             "provider": "default", "model": "default",
             "route_description": "搜索信息、查询资料、探索发现",
             "capabilities": ["search", "lookup", "query", "explore", "discover"],
         },
-        "nike": {
-            "display_name": "尼可", "display_name_en": "Nike",
+        "xiaoke": {
+            "display_name": "小可", "display_name_en": "Xiaoke",
             "provider": "default", "model": "default",
             "route_description": "研究分析、学术思考、深度解读",
             "capabilities": ["research", "analysis", "study", "academic"],
@@ -255,16 +262,16 @@ class AgentRegistry:
                     provider=_config.DEFAULT_PROVIDER,
                     tool_count=len(self._all_tool_names()),
                     mcp_servers=[])
-        # 加载 nahida 持久化的 voice_ref / display_name
-        nahida_cfg = self._load_nahida_cfg()
-        if "voice_ref" in nahida_cfg:
-            main["voice_ref"] = nahida_cfg["voice_ref"]
-        if nahida_cfg.get("display_name"):
-            main["display_name"] = nahida_cfg["display_name"]
-            MAIN_AGENT_META["display_name"] = nahida_cfg["display_name"]
-        if nahida_cfg.get("display_name_en"):
-            main["display_name_en"] = nahida_cfg["display_name_en"]
-            MAIN_AGENT_META["display_name_en"] = nahida_cfg["display_name_en"]
+        # 加载小妲持久化的 voice_ref / display_name
+        xiaoda_cfg = self._load_xiaoda_cfg()
+        if "voice_ref" in xiaoda_cfg:
+            main["voice_ref"] = xiaoda_cfg["voice_ref"]
+        if xiaoda_cfg.get("display_name"):
+            main["display_name"] = xiaoda_cfg["display_name"]
+            MAIN_AGENT_META["display_name"] = xiaoda_cfg["display_name"]
+        if xiaoda_cfg.get("display_name_en"):
+            main["display_name_en"] = xiaoda_cfg["display_name_en"]
+            MAIN_AGENT_META["display_name_en"] = xiaoda_cfg["display_name_en"]
         try:
             from web.config_service import get_config_service
             wp = get_config_service().get("ui.main_wallpaper")
@@ -333,7 +340,7 @@ class AgentRegistry:
 
     def get(self, name: str) -> dict | None:
         """根据名称获取单个 Agent 的信息。"""
-        if name == "nahida":
+        if name == "xiaoda":
             return self.list()[0]
         agent = self.core.dispatcher.get_agent(name)
         if agent:
@@ -352,7 +359,7 @@ class AgentRegistry:
         name = (data.get("name") or "").strip().lower()
         if not name or not name.isidentifier():
             raise ValueError("name 必须是合法标识符（小写字母/数字/下划线）")
-        if name == "nahida" or self.core.dispatcher.get_agent(name):
+        if name == "xiaoda" or self.core.dispatcher.get_agent(name):
             raise ValueError(f"Agent {name} 已存在")
         personality_text = data.pop("personality_text", "")
         kwargs = {f: data[f] for f in _CONFIG_FIELDS if f in data and data[f] is not None}
@@ -373,8 +380,8 @@ class AgentRegistry:
 
     async def update(self, name: str, data: dict) -> dict:
         """更新 Agent 配置，必要时热重载模型客户端并持久化。"""
-        # 主体 nahida 特殊处理：不在 dispatcher 中，只更新壁纸/人格/voice_ref/display_name
-        if name == "nahida":
+        # 主体小妲特殊处理：不在 dispatcher 中，只更新壁纸/人格/voice_ref/display_name
+        if name == "xiaoda":
             if data.get("wallpaper"):
                 from web.config_service import get_config_service
                 get_config_service().set("ui.main_wallpaper", data["wallpaper"])
@@ -386,16 +393,16 @@ class AgentRegistry:
                 soul_path.write_text(personality_text, encoding="utf-8-sig")
             # voice_ref 更新
             if "voice_ref" in data:
-                self._save_nahida_field("voice_ref", data["voice_ref"])
+                self._save_xiaoda_field("voice_ref", data["voice_ref"])
             # display_name 更新：持久化 + 同步 MAIN_AGENT_META，使全局立即可见
             if "display_name" in data and data["display_name"]:
-                self._save_nahida_field("display_name", data["display_name"])
+                self._save_xiaoda_field("display_name", data["display_name"])
                 MAIN_AGENT_META["display_name"] = data["display_name"]
             # display_name_en 更新：持久化 + 同步 MAIN_AGENT_META
             if "display_name_en" in data and data["display_name_en"]:
-                self._save_nahida_field("display_name_en", data["display_name_en"])
+                self._save_xiaoda_field("display_name_en", data["display_name_en"])
                 MAIN_AGENT_META["display_name_en"] = data["display_name_en"]
-            return self.get("nahida")
+            return self.get("xiaoda")
         agent = self._require(name)
         personality_text = data.pop("personality_text", None)
         # 记录旧值，用于判断是否需要热重载客户端
@@ -434,7 +441,7 @@ class AgentRegistry:
 
     async def delete(self, name: str) -> None:
         """删除自定义 Agent，从 dispatcher 注销并清理配置文件。"""
-        if name in BUILTIN_AGENTS or name == "nahida":
+        if name in BUILTIN_AGENTS or name == "xiaoda":
             raise ValueError("内置 Agent 不可删除，只能禁用")
         self._require(name)
         self.core.dispatcher.unregister(name)
@@ -489,8 +496,8 @@ class AgentRegistry:
         """获取指定 Agent 的工具和 MCP Server 权限矩阵。"""
         from tool_engine.tool_registry import list_tools
         blocked = self._blocked()
-        if name == "nahida":
-            cfg = self._load_nahida_cfg()
+        if name == "xiaoda":
+            cfg = self._load_xiaoda_cfg()
             excluded = set(cfg.get("excluded_tools") or [])
             mcp_allowed = list(cfg.get("mcp_servers") or [])
         else:
@@ -519,8 +526,8 @@ class AgentRegistry:
         """设置指定 Agent 的工具和 MCP Server 权限并持久化。"""
         blocked = self._blocked()
         tools = matrix.get("tools") or {}
-        if name == "nahida":
-            cfg = self._load_nahida_cfg()
+        if name == "xiaoda":
+            cfg = self._load_xiaoda_cfg()
             excluded = set(cfg.get("excluded_tools") or [])
             for tool_name, enabled in tools.items():
                 if tool_name in blocked:
@@ -533,7 +540,7 @@ class AgentRegistry:
             mcp = matrix.get("mcp_servers")
             if mcp is not None:
                 cfg["mcp_servers"] = [s for s, on in mcp.items() if on]
-            self._save_nahida_cfg(cfg)
+            self._save_xiaoda_cfg(cfg)
             return self.get_permissions(name)
         agent = self._require(name)
         excluded = set(agent.config.excluded_tools or set())
@@ -556,7 +563,7 @@ class AgentRegistry:
     def get_personality(self, name: str) -> str:
         """获取指定 Agent 的人格文本内容（已应用 display_name 替换）。"""
         from config import apply_agent_name_replacements
-        if name == "nahida":
+        if name == "xiaoda":
             from config import WORKSPACE_DIR
             soul_path = WORKSPACE_DIR / "SOUL.md"
             if soul_path.exists():
@@ -574,7 +581,7 @@ class AgentRegistry:
         """设置 Agent 的人格文本，写入文件并重新初始化。保存时还原 display_name 为原名。"""
         from config import reverse_agent_name_replacements
         text = reverse_agent_name_replacements(text)
-        if name == "nahida":
+        if name == "xiaoda":
             from config import WORKSPACE_DIR
             soul_path = WORKSPACE_DIR / "SOUL.md"
             soul_path.write_text(text, encoding="utf-8")
@@ -640,12 +647,12 @@ class AgentRegistry:
     async def set_agent_model(self, name: str, provider: str, model_id: str) -> dict:
         """一键切换子 Agent 的模型：自动解析 base_url 和 api_key_env，热重载并持久化。
 
-        - 拒绝修改主体 nahida
+        - 拒绝修改主体小妲
         - provider/model_id 不能为空
         - provider 必须在已知列表或自定义 provider 配置中
         """
-        if name == "nahida":
-            raise ValueError("主体纳西妲的模型不可通过此接口修改")
+        if name == "xiaoda":
+            raise ValueError("主体小妲的模型不可通过此接口修改")
         agent = self._require(name)  # raises KeyError if not found
 
         provider = (provider or "").strip()

@@ -80,7 +80,7 @@ onMounted(async () => {
       return
     }
     // API Key 已配置，检查用户资料是否完成（localStorage 缓存优先）
-    if (!data?.profile_done && !localStorage.getItem('nahida_profile_done')) {
+    if (!data?.profile_done && !localStorage.getItem('xiaoda_profile_done')) {
       // 需要先登录才能访问需要认证的 /setup/profile
       if (!auth.isLoggedIn) {
         router.replace('/login')

@@ -554,9 +554,9 @@ async def phase6_db_memory_belief():
         from belief_router import BeliefRouter
         with tempfile.TemporaryDirectory() as td:
             router = BeliefRouter(db_path=os.path.join(td, "beliefs.db"))
-            router.update_belief("nahida", success=True)
-            router.update_belief("nahida", success=True)
-            router.update_belief("nahida", success=False)
+            router.update_belief("xiaoda", success=True)
+            router.update_belief("xiaoda", success=True)
+            router.update_belief("xiaoda", success=False)
 
             chosen = router.select_agent()
             print(f"    OK: Thompson Sampling 选择: {chosen}")

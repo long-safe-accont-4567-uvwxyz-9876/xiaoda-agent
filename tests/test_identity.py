@@ -172,7 +172,7 @@ class TestHumanizeMarkdown:
         """humanize 去除 **粗体** 标记"""
         from utils.text_utils import humanize
         text = "这是**粗体**文本"
-        result = humanize(text, style="nahida")
+        result = humanize(text, style="xiaoda")
         assert "**" not in result
         assert "粗体" in result
 
@@ -180,13 +180,13 @@ class TestHumanizeMarkdown:
         """humanize 去除 # 标题 标记"""
         from utils.text_utils import humanize
         text = "# 标题\n这是内容"
-        result = humanize(text, style="nahida")
+        result = humanize(text, style="xiaoda")
         assert "#" not in result or result.count("#") == 0
 
     def test_humanize_strips_list_items(self):
         """humanize 去除 - 列表 标记"""
         from utils.text_utils import humanize
         text = "- 列表项1\n- 列表项2"
-        result = humanize(text, style="nahida")
+        result = humanize(text, style="xiaoda")
         # 列表标记应被处理
         assert "列表项1" in result

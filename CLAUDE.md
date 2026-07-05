@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Python 3.11 + asyncio + aiosqlite，虚拟环境 `.venv`
 - LLM：小米 MiMo（mimo-v2.5 / -pro），降级链见 `model_router.py` 的 `ROUTE_TABLE`/`FALLBACK_ROUTE`
-- 数据库：SQLite + sqlite-vec，**位于外挂存储** `/media/orangepi/KIOXIA/nahida-data/`（未挂载则服务拒绝启动）
+- 数据库：SQLite + sqlite-vec，**位于外挂存储** `/media/orangepi/KIOXIA/xiaoda-data/`（未挂载则服务拒绝启动）
 - 配置/人格等 workspace 文件也在外挂存储（`config.py` 的 `WORKSPACE_DIR` 解析，回退 `~/.ai-agent/workspace`）
 
 ## 常用命令
@@ -35,7 +35,7 @@ TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v1/auth/login -H 'Content-Type
 curl -s http://127.0.0.1:8080/api/v1/agents -H "Authorization: Bearer $TOKEN"
 
 # 数据库
-sqlite3 /media/orangepi/KIOXIA/nahida-data/db/agent.db ".tables"
+sqlite3 /media/orangepi/KIOXIA/xiaoda-data/db/agent.db ".tables"
 ```
 
 注意：**QQ Bot（qq_bot_adapter.py）和 Web UI（agent.py --web → web/server.py）是两个独立进程**，各自持有一个 AgentCore 实例。改了后端代码两个都要重启；改了前端只需 `npm run build`（dist 由运行中的 FastAPI 直接服务，无需重启，浏览器强刷即可）。

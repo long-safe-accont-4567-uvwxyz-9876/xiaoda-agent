@@ -45,7 +45,7 @@ async def synthesize_tts(body: dict, request: Request) -> Any:
         raise HTTPException(400, "text 不能为空")
     if len(text) > 500:
         raise HTTPException(400, "text 最长 500 字")
-    voice = body.get("voice") or _cfg().get("tts.default_voice", "nahida")
+    voice = body.get("voice") or _cfg().get("tts.default_voice", "xiaoda")
     style = body.get("style", "")
     core = request.app.state.core
     if not core.tts.available:
@@ -138,7 +138,7 @@ async def get_tts_config() -> Any:
     cfg = _cfg()
     return Envelope(data={
         "auto_speak": cfg.get("tts.auto_speak", False),
-        "default_voice": cfg.get("tts.default_voice", "nahida"),
+        "default_voice": cfg.get("tts.default_voice", "xiaoda"),
     })
 
 

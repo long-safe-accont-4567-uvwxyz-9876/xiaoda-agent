@@ -4,15 +4,15 @@ from pathlib import Path
 from config import get_agent_display_name
 
 DEFAULT_EMOJI = {
-    "nahida": {"thinking": "🌿", "using": "🌿", "done": "🌿"},
-    "keli": {"thinking": "🔥", "using": "🔥", "done": "💣"},
-    "yinlang": {"thinking": "🎮", "using": "🎮", "done": "🐺"},
-    "xilian": {"thinking": "📚", "using": "✨", "done": "🌸"},
+    "xiaoda": {"thinking": "🌿", "using": "🌿", "done": "🌿"},
+    "xiaoli": {"thinking": "🔥", "using": "🔥", "done": "💣"},
+    "xiaolang": {"thinking": "🎮", "using": "🎮", "done": "🐺"},
+    "xiaolian": {"thinking": "📚", "using": "✨", "done": "🌸"},
     "xiaoke": {"thinking": "🧪", "using": "🔬", "done": "🔥"},
 }
 
 def load_agent_emoji(agent_name: str, personality_file: str | None = None) -> dict:
-    config = dict(DEFAULT_EMOJI.get(agent_name, DEFAULT_EMOJI["nahida"]))
+    config = dict(DEFAULT_EMOJI.get(agent_name, DEFAULT_EMOJI["xiaoda"]))
     # 动态注入 agent display_name（从 config/agents/{name}.json 读取，规避 IP 风险）
     config["name"] = get_agent_display_name(agent_name)
     if personality_file and Path(personality_file).exists():

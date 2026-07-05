@@ -77,12 +77,12 @@ onMounted(async () => {
     disclaimerAgreed.value = !!status.agreed
     disclaimerChecked.value = !!status.agreed  // 已同意则默认勾选
     if (status.agreed) {
-      localStorage.setItem('nahida_disclaimer_agreed', 'true')
+      localStorage.setItem('xiaoda_disclaimer_agreed', 'true')
     }
   } catch { /* 降级：首次使用，需要勾选 */ }
 
   // 也检查 localStorage（快速路径）
-  if (localStorage.getItem('nahida_disclaimer_agreed') === 'true') {
+  if (localStorage.getItem('xiaoda_disclaimer_agreed') === 'true') {
     disclaimerAgreed.value = true
     disclaimerChecked.value = true
   }
@@ -199,7 +199,7 @@ async function handleSave() {
   if (!disclaimerAgreed.value && disclaimerChecked.value) {
     try {
       await agreeDisclaimer(true)
-      localStorage.setItem('nahida_disclaimer_agreed', 'true')
+      localStorage.setItem('xiaoda_disclaimer_agreed', 'true')
       disclaimerAgreed.value = true
     } catch (e: any) {
       error.value = e.message || t('setupWizard.disclaimerSaveFailed')

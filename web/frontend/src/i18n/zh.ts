@@ -357,7 +357,7 @@ export default {
     baseUrlPh: '可选，覆盖 provider 的接口地址',
     apiKeyPh: '可选，密钥环境变量名',
     routeDescPh: '自然语言描述何时召唤该 Agent（主体据此自动委托）',
-    voiceRefPh: 'TTS 音色（nahida / xiaoli），自动朗读时使用',
+    voiceRefPh: 'TTS 音色（xiaoda / xiaoli），自动朗读时使用',
     wallpaperPh: '图片 URL（/assets/... 或 https://...），留空用默认',
     wallpaperHint: '该 Agent 接管对话时聊天背景会平滑切换为此图',
     permHint: '改动暂存，点「应用」一次写入，写完即生效（含 QQ 通道）',

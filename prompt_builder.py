@@ -395,7 +395,7 @@ def _get_identity_primary_keywords() -> list[str]:
     """身份场景的 primary 关键词（含动态 display_name）。"""
     from config import get_agent_display_name
     base = _SCENE_KEYWORDS["identity"]["primary"]
-    dn = get_agent_display_name("nahida")
+    dn = get_agent_display_name("xiaoda")
     return base + [f"{dn}是谁", f"你是{dn}吗"]
 
 
@@ -1008,10 +1008,10 @@ def _ensure_workspace_template() -> None:
             soul_md.write_text(content, encoding="utf-8-sig")
         else:
             from config import get_agent_display_name
-            nahida_name = get_agent_display_name('nahida')
-            soul_content = f"""# SOUL.md - {nahida_name}的灵魂设定
+            xiaoda_name = get_agent_display_name('xiaoda')
+            soul_content = f"""# SOUL.md - {xiaoda_name}的灵魂设定
 
-你是{nahida_name}，是{{address_term}}最贴心、最温柔、最聪慧的小棉袄。
+你是{xiaoda_name}，是{{address_term}}最贴心、最温柔、最聪慧的小棉袄。
 """
             soul_md.write_text(soul_content, encoding="utf-8-sig")
 
@@ -1061,7 +1061,7 @@ def load_skills() -> list[dict]:
 def _build_xp_segment(user_id: str | None, address_term: str = "爸爸") -> str:
     """构建 XP 等级 prompt 段落。
 
-    注入到 system prompt 中，让纳西妲根据用户 XP 等级调整亲密度。
+    注入到 system prompt 中，让小妲根据用户 XP 等级调整亲密度。
     同时注入用户画像学习器的交互统计和 LLM 认知结果。
     per-user 动态段，不进入稳定段缓存，以保持 KV Cache 命中率。
     任何异常均被吞掉（零质量回退），不影响主流程。
@@ -1336,12 +1336,12 @@ def build_safe_system_prompt(extra_context: str = "") -> str:
     global _SAFE_PROMPT_CACHE, _SAFE_PROMPT_CACHE_TS, _SAFE_PROMPT_CACHE_NAME
 
     from config import get_agent_display_name
-    nahida_name = get_agent_display_name('nahida')
+    xiaoda_name = get_agent_display_name('xiaoda')
 
     now = time.time()
     if (_SAFE_PROMPT_CACHE
             and (now - _SAFE_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL
-            and _SAFE_PROMPT_CACHE_NAME == nahida_name):
+            and _SAFE_PROMPT_CACHE_NAME == xiaoda_name):
         safe_prompt = _SAFE_PROMPT_CACHE
     else:
         sections = []
@@ -1359,7 +1359,7 @@ def build_safe_system_prompt(extra_context: str = "") -> str:
         # 安全化的身份声明（不暴露团队成员细节、项目信息、设备信息）
         sections.append(
             "# 身份\n\n"
-            f"你是{nahida_name}，一个温柔聪慧的 AI 助手。\n\n"
+            f"你是{xiaoda_name}，一个温柔聪慧的 AI 助手。\n\n"
             "## 能力\n\n"
             "- 日常聊天、知识问答\n"
             "- 天气查询、网络搜索\n"
@@ -1378,7 +1378,7 @@ def build_safe_system_prompt(extra_context: str = "") -> str:
         safe_prompt = "\n\n---\n\n".join(sections)
         _SAFE_PROMPT_CACHE = safe_prompt
         _SAFE_PROMPT_CACHE_TS = now
-        _SAFE_PROMPT_CACHE_NAME = nahida_name
+        _SAFE_PROMPT_CACHE_NAME = xiaoda_name
 
     if extra_context:
         safe_prompt += f"\n\n---\n\n{extra_context}"

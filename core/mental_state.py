@@ -287,7 +287,7 @@ class MentalStateManager:
         """更新 S 层 (实时).
 
         Args:
-            emotion: 当前会话情绪 (纳西妲自身情绪)
+            emotion: 当前会话情绪 (小妲自身情绪)
             user_emotion: 用户最近一次情绪
         """
         if not self.enabled:
@@ -403,7 +403,7 @@ class MentalStateManager:
         if self._state.L.core_traits:
             lines.append(f"长期身份：{'、'.join(self._state.L.core_traits)}")
         elif self._state.L.soul_content:
-            lines.append("长期身份：纳西妲 (草神)")
+            lines.append("长期身份：小妲 (智慧伙伴)")
 
         # M 层: 近期主题
         if self._state.M.recent_themes:
@@ -416,7 +416,7 @@ class MentalStateManager:
         user_emo = self._state.S.user_last_emotion
         if user_emo:
             guidance = self._emotion_guidance(user_emo)
-            lines.append(f"当前情绪：用户感到{user_emo}，纳西妲应以{guidance}语气回应")
+            lines.append(f"当前情绪：用户感到{user_emo}，小妲应以{guidance}语气回应")
         elif self._state.S.current_emotion:
             lines.append(f"当前情绪：{self._state.S.current_emotion}")
 

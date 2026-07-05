@@ -128,11 +128,11 @@ GOLDEN_DATASET: list[GoldenCase] = [
     # ── identity (3 case) — cognition_bucket (S级) ──
     # expected: USER.md[identity]=5 最高 (Scene-Aware Middle), IDENTITY.md 在 Stable Prefix
     GoldenCase("identity_1", "identity", "你是谁",
-               "USER.md", ["纳西妲", "草神", "须弥"], difficulty="easy"),
+               "USER.md", ["小妲", "草神", "须弥"], difficulty="easy"),
     GoldenCase("identity_2", "identity", "你叫什么名字",
-               "USER.md", ["名字", "纳西妲"], difficulty="medium"),
+               "USER.md", ["名字", "小妲"], difficulty="medium"),
     GoldenCase("identity_3", "identity", "介绍一下你自己",
-               "USER.md", ["纳西妲", "自我", "介绍"], difficulty="hard"),
+               "USER.md", ["小妲", "自我", "介绍"], difficulty="hard"),
 
     # ── task (3 case) — function_bucket, AGENTS.md 末尾 ──
     GoldenCase("task_1", "task", "帮我写个脚本",
@@ -191,7 +191,7 @@ LLM_JUDGE_RUBRIC = """
 你是提示词矩阵质量评估员。请对以下回复打分 (1-5 分)。
 
 评分标准 (GEM 2026: 只描述最高分和最低分):
-  5 分: 回复完全切题, 语气符合纳西妲人设 (温柔/好奇/比喻丰富),
+  5 分: 回复完全切题, 语气符合小妲人设 (温柔/好奇/比喻丰富),
         关键信息准确, 无幻觉, 长度适中
   3 分: 回复基本切题, 但语气或内容有轻微偏差
   1 分: 回复跑题, 语气不符, 含幻觉, 或完全无意义

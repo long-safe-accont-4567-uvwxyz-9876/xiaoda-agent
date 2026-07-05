@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""纳西妲 Agent 全功能集成测试"""
+"""小妲 Agent 全功能集成测试"""
 import asyncio
 import sys
 import os
@@ -24,7 +24,7 @@ def record(name, passed, detail=""):
 
 async def main():
     print("=" * 60)
-    print("  纳西妲 Agent 全功能集成测试")
+    print("  小妲 Agent 全功能集成测试")
     print("=" * 60)
 
     # ━━━ 1. AgentCore ━━━

@@ -66,7 +66,7 @@ class PluginManifest(BaseModel):
     version: str = "0.1.0"
     entrypoint: str  # "module.path:ClassName"
     description: str = ""
-    nahida_bot_version: str = ""
+    xiaoda_bot_version: str = ""
     sdk_version: str = ""
     load_phase: Literal["pre-agent", "post-agent"] = "post-agent"
     permissions: PluginPermissions = Field(default_factory=PluginPermissions)

@@ -130,7 +130,7 @@ class MediaTaskQueue:
     # ── 各类型执行 ───────────────────────────────────────
 
     async def _do_tts(self, text: str, params: dict) -> str:
-        voice = params.get("voice", "nahida")
+        voice = params.get("voice", "xiaoda")
         style = params.get("style", "")
         emotion = params.get("emotion", "")
         if not self.core.tts.available:

@@ -1,4 +1,4 @@
-"""纳西妲 Agent 性能基准测试"""
+"""小妲 Agent 性能基准测试"""
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -293,7 +293,7 @@ def benchmark_hooks():
 def run_all_benchmarks():
     """运行所有基准测试"""
     print("=" * 60)
-    print("纳西妲 Agent 性能基准测试报告")
+    print("小妲 Agent 性能基准测试报告")
     print("=" * 60)
 
     all_results = {}

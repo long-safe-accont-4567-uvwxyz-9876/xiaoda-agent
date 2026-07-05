@@ -261,7 +261,7 @@ async def test_complexity_scorer():
         "用户喜欢吃枣椰蜜糖",
         "讨论了 PLC 编程方案",
         "用户决定采用 Python 3.12",
-        "纳西妲今天很开心",
+        "小妲今天很开心",
     ]
     # 复杂摘要 — 多实体/多关系/抽象词堆砌/超长
     complex_cases = [

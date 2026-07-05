@@ -163,7 +163,7 @@ class AgentCoreBootstrapper:
         if not bundled_dir.exists():
             return
         KIOXIA_BASE.mkdir(parents=True, exist_ok=True)
-        for filename in ("nahida_hq.wav", "nahida.wav", "keli.mp3"):
+        for filename in ("xiaoda_hq.wav", "xiaoda.wav", "xiaoli.mp3"):
             dest = KIOXIA_BASE / filename
             if not dest.exists():
                 src = bundled_dir / filename
@@ -182,19 +182,19 @@ class AgentCoreBootstrapper:
         if not bundled_dir.exists():
             return
 
-        # 复制 nahida 表情包
-        nahida_src = bundled_dir / "nahida"
-        if nahida_src.exists() and nahida_src.is_dir():
+        # 复制 xiaoda 表情包
+        xiaoda_src = bundled_dir / "xiaoda"
+        if xiaoda_src.exists() and xiaoda_src.is_dir():
             STICKER_DIR.mkdir(parents=True, exist_ok=True)
-            for emotion_dir in nahida_src.iterdir():
+            for emotion_dir in xiaoda_src.iterdir():
                 if emotion_dir.is_dir():
                     dest_emotion = STICKER_DIR / emotion_dir.name
                     if not dest_emotion.exists():
                         try:
                             shutil.copytree(emotion_dir, dest_emotion)
-                            logger.info("bootstrap.stickers_copied", voice="nahida", emotion=emotion_dir.name)
+                            logger.info("bootstrap.stickers_copied", voice="xiaoda", emotion=emotion_dir.name)
                         except Exception as e:
-                            logger.warning("bootstrap.stickers_copy_failed", voice="nahida", emotion=emotion_dir.name)
+                            logger.warning("bootstrap.stickers_copy_failed", voice="xiaoda", emotion=emotion_dir.name)
 
         # 复制 xiaoli 表情包
         xiaoli_src = bundled_dir / "xiaoli"
@@ -413,13 +413,13 @@ class AgentCoreBootstrapper:
         _prov_cfg = _get_provider_config(_DEFAULT_PROVIDER)
         _agent_model = _PRO_MODEL or _MODEL_NAME
 
-        keli_config = SubAgentConfig(
-            name="keli",
-            display_name="可莉",
+        xiaoli_config = SubAgentConfig(
+            name="xiaoli",
+            display_name="小莉",
             provider=_DEFAULT_PROVIDER,
             model=_agent_model,
             personality_file=str(_agents_dir / "xiaoli_personality.md"),
-            voice_ref="keli",
+            voice_ref="xiaoli",
             excluded_tools={"call_xiaoli", "shell_command", "python_executor", "write_file", "search_files", "read_file", "list_files", "web_browse", "document_reader", "multi_search", "wolfram_query"},
             base_url=_prov_cfg["base_url"],
             api_key_env=_prov_cfg["api_key_env"],
@@ -427,13 +427,13 @@ class AgentCoreBootstrapper:
             route_description="日常聊天、玩耍、轻松有趣的对话",
             sticker_dir=str(XIAOLI_STICKER_DIR),
         )
-        await core.dispatcher.register(keli_config)
-        yinlang_config = SubAgentConfig(
-            name="yinlang",
-            display_name="银狼",
+        await core.dispatcher.register(xiaoli_config)
+        xiaolang_config = SubAgentConfig(
+            name="xiaolang",
+            display_name="小狼",
             provider=_DEFAULT_PROVIDER,
             model=_agent_model,
-            personality_file=str(_agents_dir / "yinlang_personality.md"),
+            personality_file=str(_agents_dir / "xiaolang_personality.md"),
             voice_ref=None,
             excluded_tools={"call_xiaoli", "call_xiaoda"},
             base_url=_prov_cfg["base_url"],
@@ -442,13 +442,13 @@ class AgentCoreBootstrapper:
             route_description="编程、代码编写、调试、技术问题、硬件控制、系统运维、开发辅助",
             mcp_servers=["git", "github"],
         )
-        await core.dispatcher.register(yinlang_config)
-        xilian_config = SubAgentConfig(
-            name="xilian",
-            display_name="昔涟",
+        await core.dispatcher.register(xiaolang_config)
+        xiaolian_config = SubAgentConfig(
+            name="xiaolian",
+            display_name="小涟",
             provider=_DEFAULT_PROVIDER,
             model=_agent_model,
-            personality_file=str(_agents_dir / "xilian_personality.md"),
+            personality_file=str(_agents_dir / "xiaolian_personality.md"),
             voice_ref=None,
             excluded_tools={"call_xiaoli", "call_xiaoda", "shell_command", "python_executor", "write_file"},
             base_url=_prov_cfg["base_url"],
@@ -456,10 +456,10 @@ class AgentCoreBootstrapper:
             capabilities=["search", "lookup", "query", "explore", "discover"],
             route_description="搜索信息、查询资料、探索发现",
         )
-        await core.dispatcher.register(xilian_config)
+        await core.dispatcher.register(xiaolian_config)
         xiaoke_config = SubAgentConfig(
             name="xiaoke",
-            display_name="尼可",
+            display_name="小可",
             provider=_DEFAULT_PROVIDER,
             model=_agent_model,
             personality_file=str(_agents_dir / "xiaoke_personality.md"),
@@ -515,7 +515,7 @@ class AgentCoreBootstrapper:
                 "【操作模式】mode=single（默认，直接执行）；"
                 "mode=generate_verify（生成+交叉验证，需指定 verifier，"
                 "适用于代码修改、安全分析等需要二次确认的任务）；"
-                "mode=pipe（顺序管道，agent 用逗号分隔多个，如 'xilian,xiaoke'，"
+                "mode=pipe（顺序管道，agent 用逗号分隔多个，如 'xiaolian,xiaoke'，"
                 "前一个的输出作为后一个的输入，适用于搜索→分析→综合等场景）；"
                 "mode=ensemble（集成模式，agent 用逗号分隔多个，"
                 "多 agent 并行解决同一任务取最优结果，适用于创意/多解任务）；"
@@ -535,7 +535,7 @@ class AgentCoreBootstrapper:
             parameters={
                 "properties": {
                     "agent": {"type": "string",
-                              "description": "子代理标识名，如 keli / yinlang / xilian / xiaoke",
+                              "description": "子代理标识名，如 xiaoli / xiaolang / xiaolian / xiaoke",
                               "enum": list(core._agent_route_configs.keys())},
                     "task": {"type": "string", "description": "委托的任务描述，包含必要上下文"},
                     "mode": {"type": "string",
@@ -615,7 +615,7 @@ class AgentCoreBootstrapper:
             dispatcher=core.dispatcher,
             agent_configs=core._agent_route_configs,
             route_client=route_client,
-            nahida_chat_callback=core._nahida_synthesis_chat,
+            xiaoda_chat_callback=core._xiaoda_synthesis_chat,
         )
 
     # ── 交互层 ────────────────────────────────────────────

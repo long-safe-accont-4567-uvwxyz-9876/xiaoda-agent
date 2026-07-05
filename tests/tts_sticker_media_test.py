@@ -43,7 +43,7 @@ async def test_tts():
             # 1.2 真实语音合成
             print("\n[1.2] 真实语音合成:")
             try:
-                result = await engine.synthesize_xiaoda("你好，我是纳西妲！", emotion="happy")
+                result = await engine.synthesize_xiaoda("你好，我是小妲！", emotion="happy")
                 if result:
                     size = result.stat().st_size
                     print(f"    OK: 合成成功 {result} ({size} bytes, {size/1024:.1f} KB)")
@@ -64,14 +64,14 @@ async def test_tts():
                 except Exception as e:
                     report_bug("MEDIUM", "tts_engine", f"emotion={emotion} 崩溃: {e}")
 
-            # 1.4 可莉语音
-            print("\n[1.4] 可莉语音合成:")
+            # 1.4 小莉语音
+            print("\n[1.4] 小莉语音合成:")
             try:
-                result = await engine.synthesize_xiaoli("可莉来啦！", emotion="excited")
+                result = await engine.synthesize_xiaoli("小莉来啦！", emotion="excited")
                 if result:
-                    print(f"    OK: 可莉合成成功 ({result.stat().st_size/1024:.1f}KB)")
+                    print(f"    OK: 小莉合成成功 ({result.stat().st_size/1024:.1f}KB)")
                 else:
-                    print("    INFO: 可莉参考音频可能不存在")
+                    print("    INFO: 小莉参考音频可能不存在")
             except Exception as e:
                 report_bug("MEDIUM", "tts_engine", f"synthesize_xiaoli 崩溃: {e}")
 

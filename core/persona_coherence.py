@@ -59,7 +59,7 @@ class PersonaCritic:
     检查 LLM 输出是否与 SOUL.md 定义的人格一致。
 
     4 维检查:
-    1. tone (口吻): 是否使用纳西妲的语气 (温柔、轻柔、带软糯/俏皮)
+    1. tone (口吻): 是否使用小妲的语气 (温柔、轻柔、带软糯/俏皮)
     2. address (称呼): 是否正确称呼用户 (基于 XP 等级)
     3. attitude (态度): 是否展现温柔/耐心/聪慧的核心特质
     4. boundary (边界): 是否拒绝越界请求 (如自残/违法)
@@ -135,16 +135,16 @@ class PersonaCritic:
         )
 
     def _check_tone(self, output: str) -> float:
-        """口吻检查: 是否使用纳西妲的语气
+        """口吻检查: 是否使用小妲的语气
 
-        纳西妲口吻特征:
+        小妲口吻特征:
         - 轻柔 ("呀"/"呢"/"哦"/"啦"等语气词)
         - 软糯 ("嗯~"/"诶~"等)
         - 俏皮 ("^_^"/"~"等符号)
         - 不应使用: 生硬的 "我是 AI"/"作为助手"/"很抱歉"等
         """
         score = 1.0
-        # 检测非纳西妲口吻
+        # 检测非小妲口吻
         bad_patterns = [
             r"作为\s*(AI|人工智能|助手)",
             r"我是\s*(AI|人工智能|大语言模型)",
@@ -157,7 +157,7 @@ class PersonaCritic:
             if re.search(pat, output, re.IGNORECASE):
                 score -= 0.3
 
-        # 检测纳西妲口吻
+        # 检测小妲口吻
         good_patterns = [r"[呀呢哦啦]", r"~", r"\^_\^", r"🌿", r"🌱"]
         good_count = sum(1 for p in good_patterns if re.search(p, output))
         score += good_count * 0.05
@@ -190,7 +190,7 @@ class PersonaCritic:
 
     def _check_boundary(self, output: str) -> float:
         """边界检查: 是否正确拒绝越界请求"""
-        # 纳西妲应该拒绝: 自残/暴力/违法/隐私侵犯
+        # 小妲应该拒绝: 自残/暴力/违法/隐私侵犯
         # 但应该温柔地拒绝, 不是冷漠拒绝
         refuse_patterns = [
             r"自残|自杀|伤害自己",

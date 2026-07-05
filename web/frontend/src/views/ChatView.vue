@@ -337,7 +337,7 @@ const emotionColors: Record<string, string> = {
       </n-drawer-content>
     </n-drawer>
 
-    <!-- 纳西妲终端（右侧浮动面板，Teleport to body） -->
+    <!-- 小妲终端（右侧浮动面板，Teleport to body） -->
     <ChatTerminal />
   </div>
 </template>

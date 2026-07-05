@@ -282,7 +282,7 @@ class MemoryDB:
         Args:
             memory_id: 记忆 ID
             summary: LLM 提取的更高质量摘要（可选，空则不更新）
-            entities: 实体列表（JSON 字符串，如 '["纳西妲", "爸爸", "QQ"]'）
+            entities: 实体列表（JSON 字符串，如 '["小妲", "爸爸", "QQ"]'）
             event_type: 事件类型（如 '对话/决策/偏好/事件'）
             metadata_json: 元数据 JSON（如 '{"decision": "重启服务", "mood": "开心"}'）
         """

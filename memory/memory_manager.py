@@ -71,7 +71,7 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
 
 
 # 停用词集合（话题关键词提取时过滤）
-# 注意：agent 显示名（如"纳西妲"）在 _extract_topic_keywords 中动态注入，
+# 注意：agent 显示名（如"小妲"）在 _extract_topic_keywords 中动态注入，
 # 以确保用户自定义 display_name 后仍能被正确过滤
 _TOPIC_STOPWORDS = {
     "的", "了", "是", "在", "我", "你", "他", "她", "它", "我们", "你们", "他们",
@@ -86,7 +86,7 @@ _TOPIC_STOPWORDS = {
 
 def _get_topic_stopwords() -> set:
     """返回带当前 agent display_name 的停用词集合。"""
-    return _TOPIC_STOPWORDS | {get_agent_display_name("nahida")}
+    return _TOPIC_STOPWORDS | {get_agent_display_name("xiaoda")}
 
 
 def _extract_topic_keywords(query: str, top_n: int = 2) -> list[str]:
@@ -666,7 +666,7 @@ class MemoryManager:
     async def retrieve_memories(self, query: str, k: int = 5, context: str = "") -> list[dict]:
         import config
         # 时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索
-        # 这让纳西妲能回答"昨天发生了什么"这类纯时间查询
+        # 这让小妲能回答"昨天发生了什么"这类纯时间查询
         temporal_results = await self._try_temporal_search(query, k)
         if temporal_results is not None:
             return temporal_results
@@ -1212,7 +1212,7 @@ class MemoryManager:
                 if role == "user" and content:
                     lines.append(f"用户: {content[:150]}")
                 elif role == "assistant" and content:
-                    lines.append(f"{get_agent_display_name('nahida')}: {content[:150]}")
+                    lines.append(f"{get_agent_display_name('xiaoda')}: {content[:150]}")
             text = "\n".join(lines)
             if not text or len(text) < 10:
                 return
@@ -1469,7 +1469,7 @@ class MemoryManager:
         """主动检索 C：情绪触发 — 检索"安抚性记忆"。
 
         当检测到用户情绪低落（valence=negative）时，主动检索带正面情绪标签
-        的历史记忆（喜悦/happy），作为"安抚素材"注入上下文，让纳西妲能
+        的历史记忆（喜悦/happy），作为"安抚素材"注入上下文，让小妲能
         回忆起"曾经让用户开心的事"来温柔陪伴。
 
         DB 中 emotion_label 列历史数据是中文（喜悦），统一模式后是英文（happy），

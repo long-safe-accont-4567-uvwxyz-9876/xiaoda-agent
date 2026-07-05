@@ -60,7 +60,7 @@ def get_self_model() -> str:
 
     返回带标签的文本，如：
     [自我概念]
-    # 纳西妲的自我模型
+    # 小妲的自我模型
     ...
     """
     _refresh_if_stale()

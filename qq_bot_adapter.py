@@ -1222,7 +1222,7 @@ class AIQQBot(botpy.Client):
         elif getattr(result, "tts_pending", False) and result.tts_text:
             async def _send_async_tts() -> None:
                 try:
-                    audio_path = await self.agent.tts.synthesize_nahida(
+                    audio_path = await self.agent.tts.synthesize_xiaoda(
                         result.tts_text, emotion=result.emotion or ""
                     )
                     if audio_path and audio_path.exists():

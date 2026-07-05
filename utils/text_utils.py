@@ -47,7 +47,7 @@ AI_WORDS = [
 ]
 
 # 豆包味 / AI 腔结尾套话 —— 直接删除整行或整句
-# 这些是 Doubao 等模型最典型的"客服腔"，与纳西妲人格冲突
+# 这些是 Doubao 等模型最典型的"客服腔"，与小妲人格冲突
 DOUBAO_PATTERNS = [
     # 1. 结尾客套话（整句删除）
     (r'[，,。\s]*希望[能对].*?[帮有]助.*?[。.\s]*$', ''),
@@ -63,7 +63,7 @@ DOUBAO_PATTERNS = [
     (r'[，,。\s]*相信[你一].*?[一定能定].*?[做好实现].*?[。.\s]*$', ''),
     (r'[，,。\s]*加油[！!。.\s]*$', ''),
     (r'[，,。\s]*期待[你你].*?[的表现成果].*?[。.\s]*$', ''),
-    # 3. AI 自我意识（替换为更自然的表述，纳西妲不说这种话）
+    # 3. AI 自我意识（替换为更自然的表述，小妲不说这种话）
     (r'作为[一个]?AI[，,]?\s*', ''),
     (r'作为[一个]?人工智能[，,]?\s*', ''),
     (r'我是[一个]?AI[，,]?\s*', ''),
@@ -309,7 +309,7 @@ BREAK_PATTERNS = [
 # F7: 分层截断 —— 按角色设置不同截断上限
 SUMMARY_LIMITS = {
     "user": 200,       # 用户消息保留更多（通常较短且重要）
-    "assistant": 150,  # 纳西妲回复保留关键决策
+    "assistant": 150,  # 小妲回复保留关键决策
     "tool": 100,       # 工具结果保留关键数据
     "default": 120,
 }
@@ -469,7 +469,7 @@ def split_long_reply(text: str, max_len: int = QQ_MSG_BYTE_LIMIT) -> list[str]:
         segments.append(chunk)
         remaining = remaining[best_pos:].lstrip('\n')
 
-    # 为中间段添加轻量衔接词（保持纳西妲语气）
+    # 为中间段添加轻量衔接词（保持小妲语气）
     if len(segments) > 1:
         for i in range(len(segments) - 1):
             hint = random.choice(_SEGMENT_CONTINUATIONS)

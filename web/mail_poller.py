@@ -183,7 +183,7 @@ class MailPoller:
 
         logger.info("mail.poller.processing id={} from={} subject={}", msg_id, from_email, subject[:50])
 
-        # 2. 构造用户输入，注入 Agent（用主人身份，让纳西妲以完整人设回复）
+        # 2. 构造用户输入，注入 Agent（用主人身份，让小妲以完整人设回复）
         user_input = _format_email_as_input(from_name, from_email, subject, body)
         session_id = f"mail_{from_email}"
         user_id = f"mail_{from_email}"
@@ -290,7 +290,7 @@ def _extract_messages(stdout: str) -> list[dict]:
 def _format_email_as_input(from_name: str, from_email: str, subject: str, body: str) -> str:
     """把邮件正文直接作为用户输入传给 Agent，不加任何提示词。
 
-    纳西妲的人设、语气由 AgentCore 的系统提示统一控制，
+    小妲的人设、语气由 AgentCore 的系统提示统一控制，
     邮件层只负责把内容传进去，不做任何引导。
     """
     return body.strip()[:2000] if body else "(空邮件)"

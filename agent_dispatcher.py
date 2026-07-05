@@ -795,10 +795,10 @@ class SubAgent:
 # RouterEngine agent name → task_type 反向映射
 # 用于 classify_task 委托 RouterEngine 后保持返回格式一致（task_type 字符串）
 _AGENT_TO_TASK_TYPE = {
-    "yinlang": "security",
+    "xiaolang": "security",
     "xiaoke": "debug",
-    "xilian": "info_search",
-    "keli": "emotional",
+    "xiaolian": "info_search",
+    "xiaoli": "emotional",
 }
 
 
@@ -916,23 +916,23 @@ class AgentDispatcher:
             - "frontend" → 妮可（xiaoke，编程助手）
             - "backend" → 妮可（xiaoke）
             - "debug" → 妮可（xiaoke）
-            - "security" → 银狼（yinlang，系统管理）
+            - "security" → 小狼（xiaolang，系统管理）
             - "test" → 妮可（xiaoke）
-            - "info_search" → 希里安（xilian，信息助手）
-            - "hardware" → 银狼（yinlang）
-            - "emotional" → 可莉（keli，萌系陪伴）
-            - "general" → 默认（keli）
+            - "info_search" → 希里安（xiaolian，信息助手）
+            - "hardware" → 小狼（xiaolang）
+            - "emotional" → 小莉（xiaoli，萌系陪伴）
+            - "general" → 默认（xiaoli）
         :param input_text: 用户输入文本
         :returns: 子代理名称（target）
         """
         routing = self._load_routing_config()
-        target = routing.get(task_type, routing.get("general", "keli"))
+        target = routing.get(task_type, routing.get("general", "xiaoli"))
 
         # 验证目标代理可用
         agent = self.get_agent(target)
         if not agent or not agent.available:
             # I7: 智能回退 — 基于工作履历从可用 agent 中选成功率最高的
-            default = routing.get("general", "keli")
+            default = routing.get("general", "xiaoli")
             fallback = default
             try:
                 from core.agent_work_record import get_work_recorder
@@ -984,12 +984,12 @@ class AgentDispatcher:
             "frontend": "xiaoke",
             "backend": "xiaoke",
             "debug": "xiaoke",
-            "security": "yinlang",
+            "security": "xiaolang",
             "test": "xiaoke",
-            "info_search": "xilian",
-            "hardware": "yinlang",
-            "emotional": "keli",
-            "general": "keli",
+            "info_search": "xiaolian",
+            "hardware": "xiaolang",
+            "emotional": "xiaoli",
+            "general": "xiaoli",
         }
 
     def _get_router_engine(self):
@@ -1102,7 +1102,7 @@ class AgentDispatcher:
         # 无精确匹配 → 各领域独立路由后去重（直接查配置，不检查可用性）
         routing = self._load_routing_config()
         targets = list(dict.fromkeys(
-            routing.get(tt, routing.get("general", "keli")) for tt in task_types))
+            routing.get(tt, routing.get("general", "xiaoli")) for tt in task_types))
         if len(targets) == 1:
             return {"targets": targets, "mode": "single", "synthesizer": "", "verifier": ""}
         return {"targets": targets, "mode": "parallel_fanout",

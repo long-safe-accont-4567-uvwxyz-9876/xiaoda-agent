@@ -23,7 +23,7 @@ _DEFAULTS: dict[str, Any] = {
         "greeting_max_per_day": 3,
         "dnd_periods": [{"start": "23:00", "end": "08:00"}],
     },
-    "tts": {"auto_speak": False, "default_voice": "nahida"},
+    "tts": {"auto_speak": False, "default_voice": "xiaoda"},
     "ui": {"particles": "medium", "tilt3d": True},
     "tools": {},      # {tool_name: {"enabled": false, "max_frequency": 5}}
     "mcp": {},        # {server_name: {command, args, env, agents, enabled}} 用户新增的

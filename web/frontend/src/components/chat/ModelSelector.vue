@@ -76,13 +76,13 @@ async function selectModel(provider: string, model: ModelInfo) {
   }
   try {
     const agent = chat.currentAgent
-    if (agent && agent !== 'nahida') {
+    if (agent && agent !== 'xiaoda') {
       // 子 Agent 活跃：更新该子 Agent 的模型配置
       await api.setAgentModel(agent, provider, model.id)
       // 刷新 agentsStore 以同步 Agent 管理卡片
       await agentsStore.load()
     } else {
-      // 主体 nahida 活跃：更新 ROUTE_TABLE["chat"]
+      // 主体小妲活跃：更新 ROUTE_TABLE["chat"]
       await post('/models/chat-model', { provider, model_id: model.id })
     }
     currentModel.value = {
@@ -104,7 +104,7 @@ async function selectModel(provider: string, model: ModelInfo) {
 function syncCurrentModelFromStore() {
   const agent = chat.currentAgent
   if (!agent) return
-  if (agent === 'nahida') {
+  if (agent === 'xiaoda') {
     // 主体：从后端 API 获取
     fetchCurrentModel()
     return

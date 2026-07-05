@@ -53,7 +53,7 @@ class ConnectionManager:
         """注册一个新连接, 返回生成的连接 ID."""
         conn_id = uuid.uuid4().hex[:8]
         self._connections[conn_id] = ws
-        self._agent_map[conn_id] = "nahida"
+        self._agent_map[conn_id] = "xiaoda"
         self._session_map[conn_id] = f"web_{uuid.uuid4().hex[:12]}"
         return conn_id
 
@@ -130,14 +130,14 @@ async def _async_tts_task(core: Any, agent: str, tts_text: str, emotion: str,
                            conn_id: str, msg_id: str) -> None:
     """Task 6: 后台 TTS 合成任务 —— 合成完成后推送 audio_ready 事件。"""
     try:
-        if agent == "nahida":
-            audio_path = await core.tts.synthesize_nahida(tts_text, emotion=emotion)
+        if agent == "xiaoda":
+            audio_path = await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
         else:
             sub_agent = core.dispatcher.get_agent(agent)
             if sub_agent:
                 audio_path = await sub_agent.synthesize(tts_text, emotion=emotion)
             else:
-                audio_path = await core.tts.synthesize_nahida(tts_text, emotion=emotion)
+                audio_path = await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
 
         audio_url = _publish_file(audio_path, "tts") if audio_path else None
         if audio_url:
@@ -153,14 +153,14 @@ async def _async_tts_task(core: Any, agent: str, tts_text: str, emotion: str,
 async def _synthesize_tts_sync(core: Any, agent: str, tts_text: str, emotion: str) -> str | None:
     """同步 TTS 合成（HTTP 端点等无 WebSocket 连接场景的回退）。"""
     try:
-        if agent == "nahida":
-            audio_path = await core.tts.synthesize_nahida(tts_text, emotion=emotion)
+        if agent == "xiaoda":
+            audio_path = await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
         else:
             sub_agent = core.dispatcher.get_agent(agent)
             if sub_agent:
                 audio_path = await sub_agent.synthesize(tts_text, emotion=emotion)
             else:
-                audio_path = await core.tts.synthesize_nahida(tts_text, emotion=emotion)
+                audio_path = await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
         return _publish_file(audio_path, "tts") if audio_path else None
     except Exception as e:
         logger.error("ws.sync_tts_failed", error=str(e))
@@ -186,7 +186,7 @@ async def _resolve_pending_tts(core: Any, agent: str, result: Any, data: dict,
 
 
 async def process_and_serialize(core: Any, text: str, session_id: str,
-                                agent: str = "nahida",
+                                agent: str = "xiaoda",
                                 status_callback: Any | None=None, app: Any | None=None,
                                 conn_id: str = "", msg_id: str = "",
                                 image_data: list[dict] | None = None) -> dict:
@@ -196,15 +196,15 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
     Task 6: 当 TTS_ASYNC_MODE 开启且结果标记 tts_pending 时，启动后台合成任务。
     """
     t0 = time.time()
-    if agent != "nahida" and not text.strip().startswith("/"):
+    if agent != "xiaoda" and not text.strip().startswith("/"):
         registry = getattr(app.state, "agent_registry", None) if app else None
         if registry and not registry.is_enabled(agent):
             raise ValueError(f"Agent {agent} 已被禁用")
         if not core.dispatcher.get_agent(agent):
             # 降级模式：子 Agent 未注册时回退到主 Agent
             from loguru import logger as _logger
-            _logger.warning("ws.agent_fallback agent={} msg='not registered, falling back to nahida'", agent)
-            agent = "nahida"
+            _logger.warning("ws.agent_fallback agent={} msg='not registered, falling back to xiaoda'", agent)
+            agent = "xiaoda"
         else:
             # 走与 QQ 通道相同的完整子代理流程：表情包/情绪/TTS/落库都不缺
             from loguru import logger as _logger
@@ -271,7 +271,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
                 await manager.send_to(conn_id, {"type": "pong"})
 
             elif mtype == "set_agent":
-                agent = str(msg.get("agent") or "nahida")
+                agent = str(msg.get("agent") or "xiaoda")
                 manager._agent_map[conn_id] = agent
                 await manager.send_to(conn_id, {"type": "agent_changed", "agent": agent})
 
@@ -321,7 +321,7 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
     text = (msg.get("text") or "").strip()
     if not text:
         return
-    agent = str(msg.get("agent") or manager._agent_map.get(conn_id, "nahida"))
+    agent = str(msg.get("agent") or manager._agent_map.get(conn_id, "xiaoda"))
     session_id = str(msg.get("session_id") or
                      manager._session_map.get(conn_id) or f"web_{uuid.uuid4().hex[:12]}")
     manager._session_map[conn_id] = session_id

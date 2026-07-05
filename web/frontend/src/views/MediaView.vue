@@ -17,7 +17,7 @@ const ws = getWsClient()
 
 // TTS
 const ttsText = ref('')
-const ttsAgent = ref('nahida')  // 选择哪个 agent 来合成
+const ttsAgent = ref('xiaoda')  // 选择哪个 agent 来合成
 const ttsStyle = ref<string | null>(null)
 const voiceGroups = ref<Record<string, Array<{ name: string; voice_ref: string }>>>({})
 const styles = ref<Array<{ label: string; value: string }>>([])
@@ -51,9 +51,9 @@ onMounted(async () => {
   try {
     const cfg = await get('/media/tts/config')
     ui.autoSpeak = cfg.auto_speak
-    // 默认选择 nahida agent（其 voice_ref 由管理区设置）
+    // 默认选择 xiaoda agent（其 voice_ref 由管理区设置）
     if (!ttsAgent.value || !agentList.value.find(a => a.name === ttsAgent.value)) {
-      ttsAgent.value = agentList.value[0]?.name || 'nahida'
+      ttsAgent.value = agentList.value[0]?.name || 'xiaoda'
     }
   } catch { /* TTS 可能未配置 */ }
   loadTasks()

@@ -57,8 +57,8 @@ def test_mental_state_init():
 def test_load_save_roundtrip(tmp_path):
     """保存/加载往返: 数据不丢失"""
     ms = MentalState()
-    ms.L.soul_content = "纳西妲的灵魂"
-    ms.L.identity_content = "纳西妲的身份"
+    ms.L.soul_content = "小妲的灵魂"
+    ms.L.identity_content = "小妲的身份"
     ms.L.core_traits = ["温柔", "聪慧", "耐心"]
     ms.L.last_updated = 1000.0
     ms.M.recent_themes = ["工作", "编程"]
@@ -79,8 +79,8 @@ def test_load_save_roundtrip(tmp_path):
 
     # 往返加载
     loaded = MentalState.load(path)
-    assert loaded.L.soul_content == "纳西妲的灵魂"
-    assert loaded.L.identity_content == "纳西妲的身份"
+    assert loaded.L.soul_content == "小妲的灵魂"
+    assert loaded.L.identity_content == "小妲的身份"
     assert loaded.L.core_traits == ["温柔", "聪慧", "耐心"]
     assert loaded.L.last_updated == 1000.0
     assert loaded.M.recent_themes == ["工作", "编程"]
@@ -107,18 +107,18 @@ def test_l_layer_load_from_files(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "SOUL.md").write_text(
-        "# SOUL.md\n\n你是纳西妲。\n\n## 核心人格\n\n- 温柔、聪慧、耐心、认真\n- 说话轻柔清脆\n",
+        "# SOUL.md\n\n你是小妲。\n\n## 核心人格\n\n- 温柔、聪慧、耐心、认真\n- 说话轻柔清脆\n",
         encoding="utf-8",
     )
     (workspace / "IDENTITY.md").write_text(
-        "# IDENTITY.md\n\n你是 AI 编程助手，名字是纳西妲。\n",
+        "# IDENTITY.md\n\n你是 AI 编程助手，名字是小妲。\n",
         encoding="utf-8",
     )
 
     mgr = MentalStateManager(data_dir=tmp_path)
     mgr.reload_long_term(workspace)
 
-    assert "纳西妲" in mgr.state.L.soul_content
+    assert "小妲" in mgr.state.L.soul_content
     assert "AI 编程助手" in mgr.state.L.identity_content
     # 核心特质从第一个列表项提取
     assert mgr.state.L.core_traits == ["温柔", "聪慧", "耐心", "认真"]

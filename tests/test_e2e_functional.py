@@ -380,7 +380,7 @@ class TestSubAgentSticker:
                 core.dispatcher = MagicMock()
                 core.dispatcher.get_agent.return_value = MagicMock(
                     available=True,
-                    config=MagicMock(display_name="可莉"),
+                    config=MagicMock(display_name="小莉"),
                     synthesize=AsyncMock(return_value=None),
                 )
                 core.dispatcher.dispatch = AsyncMock(return_value="开心地回复")

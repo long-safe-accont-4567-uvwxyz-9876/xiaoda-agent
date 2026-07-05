@@ -1,4 +1,4 @@
-"""纳西妲 CLI — WebSocket 瘦客户端。
+"""小妲 CLI — WebSocket 瘦客户端。
 
 连接同机的 WebUI 网关（ws://127.0.0.1:8080/ws），与 Web/QQ 共享同一个
 AgentCore：会话、记忆、表情包、子代理全部同步。
@@ -39,11 +39,11 @@ WISDOM = "#e8d5a3"
 MOON_DIM = "grey62"
 
 AGENT_LABELS = {
-    "xiaoda": ("纳西妲", DENDRO, "🌿"),
-    "xiaoli": ("可莉", "#ff6b6b", "💥"),
-    "xiaolang": ("银狼", "#6ea8fe", "🎮"),
-    "xiaolian": ("昔涟", "#d8b4fe", "🌸"),
-    "xiaoke": ("尼可", WISDOM, "🔮"),
+    "xiaoda": ("小妲", DENDRO, "🌿"),
+    "xiaoli": ("小莉", "#ff6b6b", "💥"),
+    "xiaolang": ("小狼", "#6ea8fe", "🎮"),
+    "xiaolian": ("小涟", "#d8b4fe", "🌸"),
+    "xiaoke": ("小可", WISDOM, "🔮"),
 }
 
 GREETINGS = [
@@ -68,7 +68,7 @@ BANNER = r"""
 """
 
 STAGE_TEXT = {
-    "thinking": "🌿 纳西妲正在想……",
+    "thinking": "🌿 小妲正在想……",
     "tool": "🛠 正在使用工具……",
     "replying": "✍️ 正在回复……",
 }

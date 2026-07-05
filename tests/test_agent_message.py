@@ -15,7 +15,7 @@ class TestAgentMessage(unittest.TestCase):
         """to_dict -> from_dict 后字段一致"""
         original = AgentMessage(
             sender="klee",
-            receiver="nahida",
+            receiver="xiaoda",
             msg_type="request",
             content="帮我看看这个",
             context={"depth": 1, "topic": "炸弹"},
@@ -23,7 +23,7 @@ class TestAgentMessage(unittest.TestCase):
         )
         restored = AgentMessage.from_dict(original.to_dict())
         self.assertEqual(restored.sender, "klee")
-        self.assertEqual(restored.receiver, "nahida")
+        self.assertEqual(restored.receiver, "xiaoda")
         self.assertEqual(restored.msg_type, "request")
         self.assertEqual(restored.content, "帮我看看这个")
         self.assertEqual(restored.context, {"depth": 1, "topic": "炸弹"})
@@ -65,7 +65,7 @@ class TestAgentMessage(unittest.TestCase):
     def test_is_delegate_request_true(self):
         """msg_type == request 时 is_delegate_request 返回 True"""
         msg = AgentMessage(
-            sender="klee", receiver="nahida", msg_type="request", content="help"
+            sender="klee", receiver="xiaoda", msg_type="request", content="help"
         )
         self.assertTrue(msg.is_delegate_request())
 
@@ -73,7 +73,7 @@ class TestAgentMessage(unittest.TestCase):
         """非 request 类型时 is_delegate_request 返回 False"""
         for mtype in ("response", "question", "status"):
             msg = AgentMessage(
-                sender="nahida", receiver="klee", msg_type=mtype, content="x"
+                sender="xiaoda", receiver="klee", msg_type=mtype, content="x"
             )
             self.assertFalse(msg.is_delegate_request())
 

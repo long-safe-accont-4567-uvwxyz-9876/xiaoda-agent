@@ -88,7 +88,7 @@ async function handleSave() {
       like_to_be_called: fields.value.address_term.trim() || t('userProfileSetup.defaultFriend'),
     }
     await api.saveSetupUserProfile(payload)
-    localStorage.setItem('nahida_profile_done', 'true')
+    localStorage.setItem('xiaoda_profile_done', 'true')
     success.value = true
     setTimeout(() => {
       router.replace('/')
@@ -102,7 +102,7 @@ async function handleSave() {
 
 async function handleSkip() {
   // 跳过：标记完成，不再自动弹出
-  localStorage.setItem('nahida_profile_done', 'true')
+  localStorage.setItem('xiaoda_profile_done', 'true')
   router.replace('/')
 }
 </script>

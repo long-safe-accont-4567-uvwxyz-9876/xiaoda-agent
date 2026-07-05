@@ -210,7 +210,7 @@ const effortOptions = ['low', 'medium', 'high'].map(v => ({ label: v, value: v }
 const permModeOptions = ['default', 'dev', 'strict'].map(v => ({ label: v, value: v }))
 const memScopeOptions = ['shared', 'isolated'].map(v => ({ label: v, value: v }))
 
-const isMain = computed(() => editing.value?.name === 'nahida' || editing.value?.is_main === true)
+const isMain = computed(() => editing.value?.name === 'xiaoda' || editing.value?.is_main === true)
 
 const toolGroups = computed(() => {
   const groups: Record<string, Array<[string, any]>> = {}

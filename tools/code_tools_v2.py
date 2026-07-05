@@ -354,6 +354,6 @@ def calculator(expression: str) -> ToolResult:
     category="fun",
 )
 def call_xiaoda(question: str) -> ToolResult:
-    """委托问题给主体纳西妲处理（返回 DelegationRequest 占位）。"""
+    """委托问题给主体小妲处理（返回 DelegationRequest 占位）。"""
     from core.delegation import DelegationRequest
     return ToolResult.ok(DelegationRequest(type="xiaoda", question=question, delegator="xiaoli"))

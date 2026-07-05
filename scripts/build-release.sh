@@ -160,7 +160,7 @@ do_build() {
         cp "$SCRIPT_DIR/doctor.bat" "$dist_dir/doctor.bat"
 
         # Copy icon file for NSIS
-        cp "$PROJECT_ROOT/assets/nahida-icon.ico" "$dist_dir/nahida-icon.ico"
+        cp "$PROJECT_ROOT/assets/xiaoda-icon.ico" "$dist_dir/xiaoda-icon.ico"
 
         # Try NSIS first for .exe installer
         if command -v makensis &>/dev/null; then
@@ -180,8 +180,8 @@ RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
 !include "MUI2.nsh"
-!define MUI_ICON "$dist_dir\\nahida-icon.ico"
-!define MUI_UNICON "$dist_dir\\nahida-icon.ico"
+!define MUI_ICON "$dist_dir\\xiaoda-icon.ico"
+!define MUI_UNICON "$dist_dir\\xiaoda-icon.ico"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -201,9 +201,10 @@ Section "MainSection" SEC01
   SetOverwrite on
   File /r "$dist_dir\\*.*"
 
-  CreateShortCut "\$DESKTOP\\小妲Agent.lnk" "\$INSTDIR\\start-windows.bat" "" "\$INSTDIR\\xiaoda-agent.exe" 0
+  CreateShortCut "\$DESKTOP\\小妲Agent.lnk" "\$INSTDIR\\xiaoda-agent.exe" "--desktop" "\$INSTDIR\\xiaoda-agent.exe" 0
   CreateDirectory "\$SMPROGRAMS\\\${PRODUCT_NAME}"
-  CreateShortCut "\$SMPROGRAMS\\\${PRODUCT_NAME}\\小妲Agent.lnk" "\$INSTDIR\\start-windows.bat" "" "\$INSTDIR\\xiaoda-agent.exe" 0
+  CreateShortCut "\$SMPROGRAMS\\\${PRODUCT_NAME}\\小妲Agent.lnk" "\$INSTDIR\\xiaoda-agent.exe" "--desktop" "\$INSTDIR\\xiaoda-agent.exe" 0
+  CreateShortCut "\$SMPROGRAMS\\\${PRODUCT_NAME}\\Web模式.lnk" "\$INSTDIR\\start-windows.bat" "" "\$INSTDIR\\xiaoda-agent.exe" 0
   CreateShortCut "\$SMPROGRAMS\\\${PRODUCT_NAME}\\自检 (Doctor).lnk" "\$INSTDIR\\doctor.bat" "" "\$INSTDIR\\xiaoda-agent.exe" 0
   CreateShortCut "\$SMPROGRAMS\\\${PRODUCT_NAME}\\卸载.lnk" "\$INSTDIR\\uninstall.exe"
 SectionEnd

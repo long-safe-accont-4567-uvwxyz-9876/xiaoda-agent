@@ -13,7 +13,7 @@ load_dotenv()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _resolve_sticker_dir(subdir: str = "nahida") -> str:
+def _resolve_sticker_dir(subdir: str = "xiaoda") -> str:
     """查找可用表情包目录: 优先项目内置，再尝试外部挂载路径"""
     candidates = [
         PROJECT_ROOT / "assets" / "stickers" / subdir,
@@ -46,7 +46,7 @@ def test_sticker_integration():
     from emotion.emotion_simple import detect_emotion
 
     # 1.1 真实表情包目录
-    sticker_dir = _resolve_sticker_dir("nahida")
+    sticker_dir = _resolve_sticker_dir("xiaoda")
     sm = StickerManager(sticker_dir)
     print(f"[1.1] StickerManager: available={sm.available}, categories={list(sm._cache.keys())}")
 
@@ -127,18 +127,18 @@ def test_sticker_integration():
     xiaoli_dir = _resolve_sticker_dir("xiaoli")
     if os.path.exists(xiaoli_dir):
         ksm = StickerManager(xiaoli_dir)
-        print(f"\n[1.7] 可莉表情包: available={ksm.available}, categories={list(ksm._cache.keys())}")
+        print(f"\n[1.7] 小莉表情包: available={ksm.available}, categories={list(ksm._cache.keys())}")
         xiaoli_sticker = ksm.pick("happy")
-        print(f"  可莉 happy sticker: {xiaoli_sticker.name if xiaoli_sticker else 'None'}")
+        print(f"  小莉 happy sticker: {xiaoli_sticker.name if xiaoli_sticker else 'None'}")
     else:
-        print(f"\n[1.7] 可莉表情包目录不存在: {xiaoli_dir}")
+        print(f"\n[1.7] 小莉表情包目录不存在: {xiaoli_dir}")
 
     # 1.8 子 Agent 不发送表情包的问题
     print("\n[1.8] 子 Agent 表情包发送检查:")
     # 在 agent_core.py _dispatch_single_sub_agent 中，sticker_path 始终为 None
     # 即使有 xiaoli_sticker_manager，子 Agent 也不会发送表情包
     print("  [WARN] _dispatch_single_sub_agent 中 sticker_path 始终为 None")
-    print("  [WARN] 子 Agent (如可莉) 不会发送表情包，即使有 xiaoli_sticker_manager")
+    print("  [WARN] 子 Agent (如小莉) 不会发送表情包，即使有 xiaoli_sticker_manager")
     report_bug("LOW", "agent_core", "子 Agent 不发送表情包: _dispatch_single_sub_agent 中 sticker_path 始终为 None，未使用 xiaoli_sticker_manager")
 
 
@@ -312,7 +312,7 @@ async def test_agent_integration():
     print("\n[3.4] TTS 情绪标签一致性:")
     from emotion.tts_engine import EMOTION_STYLE_MAP
     from emotion.sticker_manager import StickerManager
-    sm = StickerManager(_resolve_sticker_dir("nahida"))
+    sm = StickerManager(_resolve_sticker_dir("xiaoda"))
 
     tts_emotions = set(EMOTION_STYLE_MAP.keys())
     sticker_emotions = set(sm.EMOTION_MAP.keys())

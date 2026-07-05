@@ -224,7 +224,7 @@ class ToolExecutorMixin:
 
     def _clean_reply(self, text: str) -> str:
         text = text.strip()
-        prefixes = [f"{get_agent_display_name(n)}：" for n in ('nahida', 'keli', 'yinlang', 'xilian', 'nike')] + ["助手：", "AI："]
+        prefixes = [f"{get_agent_display_name(n)}：" for n in ('xiaoda', 'xiaoli', 'xiaolang', 'xiaolian', 'xiaoke')] + ["助手：", "AI："]
         for p in prefixes:
             if text.startswith(p):
                 text = text[len(p):].strip()
@@ -318,10 +318,10 @@ class ToolExecutorMixin:
 
         return text
 
-    def _finalize_reply(self, reply: str, strip_emotion: bool = True, style: str = "nahida") -> str:
+    def _finalize_reply(self, reply: str, strip_emotion: bool = True, style: str = "xiaoda") -> str:
         """统一的回复文本处理：strip_reasoning + strip_emotion_tag + humanize。
 
-        所有回复路径（主 nahida、单子 Agent、并行子 Agent、TaskGraph）统一调用此方法，
+        所有回复路径（主小妲、单子 Agent、并行子 Agent、TaskGraph）统一调用此方法，
         确保回复清洗流程一致。
         """
         text = reply.strip() if reply else ""

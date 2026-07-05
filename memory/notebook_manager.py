@@ -169,7 +169,7 @@ class NotebookManager:
                 assistant_reply=reply[:300],
                 existing_notes=existing_str,
                 address_term=address_term,
-                agent_name=get_agent_display_name("nahida"),
+                agent_name=get_agent_display_name("xiaoda"),
             )
             # 优先使用免费模型，降级到主路由
             result = await self._call_free_model(

@@ -83,7 +83,7 @@ def test_short_reply_no_split():
     """短回复（< 400 字符）应直接发送单片，不应有打字指示。"""
     bot = _make_bot()
     msg = FakeMessage()
-    short_text = "纳西妲收到啦，正在想～🌿"
+    short_text = "小妲收到啦，正在想～🌿"
 
     asyncio.run(bot._send_streaming_reply(msg, short_text))
 
@@ -101,7 +101,7 @@ def test_long_reply_split():
     bot = _make_bot()
     msg = FakeMessage()
     # 570 字符，会切为 2 片
-    long_text = "纳西妲来啦～" + ("今天天气真好呀，我们一起出去玩吧～" * 40)
+    long_text = "小妲来啦～" + ("今天天气真好呀，我们一起出去玩吧～" * 40)
 
     # 用 0 延迟避免测试变慢
     async def _no_sleep(_):
@@ -195,7 +195,7 @@ def test_exception_recovery():
     bot = _make_bot()
     # 第 3 次调用失败（即第 2 个分片失败：1=typing, 2=seg0 ok, 3=seg1 fail）
     msg = FlakyMessage(fail_on_call=3)
-    long_text = "纳西妲来啦～" + ("今天天气真好呀，我们一起出去玩吧～" * 40)
+    long_text = "小妲来啦～" + ("今天天气真好呀，我们一起出去玩吧～" * 40)
 
     async def _no_sleep(_):
         pass

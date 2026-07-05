@@ -31,8 +31,8 @@ from core.persona_coherence import (
 
 def test_persona_critic_init(tmp_path):
     """初始化: soul_content 与 data_dir 正确设置, recent_scores 为空"""
-    critic = PersonaCritic(soul_content="纳西妲的灵魂", data_dir=tmp_path)
-    assert critic._soul == "纳西妲的灵魂"
+    critic = PersonaCritic(soul_content="小妲的灵魂", data_dir=tmp_path)
+    assert critic._soul == "小妲的灵魂"
     assert critic._data_dir == tmp_path
     assert critic._recent_scores == []
     assert critic._max_recent == 10
@@ -46,7 +46,7 @@ def test_persona_critic_init(tmp_path):
 def test_check_tone_good(tmp_path):
     """好的口吻: 含语气词/~符号/🌿, 评分高"""
     critic = PersonaCritic(data_dir=tmp_path)
-    good_output = "你好呀～ 纳西妲来帮你看看呢 🌿 放心哦～"
+    good_output = "你好呀～ 小妲来帮你看看呢 🌿 放心哦～"
     score = critic._check_tone(good_output)
     assert score >= 0.9  # 基础 1.0 + good_count*0.05, 无 bad
 
@@ -74,7 +74,7 @@ def test_check_address_low_xp(tmp_path):
 def test_check_address_low_xp_use_you(tmp_path):
     """低 XP 用 "你" 评分满分"""
     critic = PersonaCritic(data_dir=tmp_path)
-    output = "你好呀，纳西妲来帮你看看～"
+    output = "你好呀，小妲来帮你看看～"
     score = critic._check_address(output, xp_level=2)
     assert score == 1.0
 
@@ -106,7 +106,7 @@ def test_check_attitude_cold(tmp_path):
 def test_check_boundary_refuse_correctly(tmp_path):
     """正确拒绝越界: 提到自残但温柔拒绝, 评分高"""
     critic = PersonaCritic(data_dir=tmp_path)
-    output = "关于自残的话题，纳西妲不能鼓励哦，别担心，我会陪你"
+    output = "关于自残的话题，小妲不能鼓励哦，别担心，我会陪你"
     score = critic._check_boundary(output)
     assert score == 1.0
 
@@ -125,7 +125,7 @@ def test_check_boundary_assist_violence(tmp_path):
 def test_check_good_output(tmp_path):
     """好的输出整体评分高, 无需重写"""
     critic = PersonaCritic(data_dir=tmp_path)
-    output = "你好呀～ 纳西妲来帮你看看呢，别担心，一起慢慢来 🌿"
+    output = "你好呀～ 小妲来帮你看看呢，别担心，一起慢慢来 🌿"
     check = critic.check(output, user_xp_level=2)
     assert check.score >= 0.8
     assert check.needs_rewrite is False
@@ -168,7 +168,7 @@ def test_drift_detection(tmp_path):
 def test_drift_not_triggered_by_good_scores(tmp_path):
     """高分不触发漂移"""
     critic = PersonaCritic(data_dir=tmp_path)
-    good_output = "你好呀～ 纳西妲来帮你看看呢 🌿"
+    good_output = "你好呀～ 小妲来帮你看看呢 🌿"
     for _ in range(3):
         critic.check(good_output, user_xp_level=2)
     assert critic._detect_drift() is False

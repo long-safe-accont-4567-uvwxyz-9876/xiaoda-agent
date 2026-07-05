@@ -224,7 +224,7 @@ class AgentContext:
             content = m.get("content", "")
             if not content:
                 continue
-            prefix = {"user": "用户", "assistant": "纳西妲", "tool": "工具结果"}.get(role, role)
+            prefix = {"user": "用户", "assistant": "小妲", "tool": "工具结果"}.get(role, role)
             lines.append(f"{prefix}: {content[:120]}")
 
         if not lines:
@@ -270,7 +270,7 @@ class AgentContext:
                 tool_name = m.get("name", "工具")
                 lines.append(f"[{tool_name}]: {smart_summary_truncate(content, 'tool')}")
                 continue
-            prefix = {"user": "用户", "assistant": "纳西妲"}.get(role, role)
+            prefix = {"user": "用户", "assistant": "小妲"}.get(role, role)
             lines.append(f"{prefix}: {smart_summary_truncate(content, role)}")
         if not lines:
             return ""

@@ -119,13 +119,13 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         self.sticker_manager = LazyLoader("emotion.sticker_manager.StickerManager", {"sticker_dir": STICKER_DIR})
         self.xiaoli_sticker_manager = LazyLoader("emotion.sticker_manager.StickerManager", {"sticker_dir": XIAOLI_STICKER_DIR})
         self.file_receiver = LazyLoader("utils.file_receiver.FileReceiver", {"base_dir": FILE_DIR})
-        self.xiaoli = XiaoliAgent(tool_executor=self.tool_executor, tool_repair=self.tool_repair, xiaoda_delegate=self._nahida_delegate_for_xiaoli)
+        self.xiaoli = XiaoliAgent(tool_executor=self.tool_executor, tool_repair=self.tool_repair, xiaoda_delegate=self._xiaoda_delegate_for_xiaoli)
         self.tts = TTSEngine()
         self.dispatcher = AgentDispatcher(
             tts=self.tts,
             tool_executor=self.tool_executor,
             tool_repair=self.tool_repair,
-            delegate_callback=self._nahida_delegate_for_xiaoli,
+            delegate_callback=self._xiaoda_delegate_for_xiaoli,
             core=self,
         )
         self._task_graph: TaskGraph | None = None

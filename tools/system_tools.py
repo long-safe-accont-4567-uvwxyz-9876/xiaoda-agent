@@ -92,7 +92,7 @@ async def service_manage(action: str, name: str = "", lines: int = 30) -> ToolRe
             rc, stdout, stderr = await _run_cmd(["journalctl", "-u", name, "-n", str(lines), "--no-pager"], timeout=30)
             if rc != 0:
                 return ToolResult.fail(f"获取服务 {name} 日志失败: {stderr.strip()}")
-            # 空结果视为失败：可能服务名错误（如 nahida 而非 xiaoda-web）或服务未运行
+            # 空结果视为失败：可能服务名错误（如 xiaoda 而非 xiaoda-web）或服务未运行
             if not stdout.strip() or stdout.strip() == "-- No entries --":
                 return ToolResult.fail(
                     f"服务 {name} 没有日志记录（可能服务名错误或服务未运行）。"

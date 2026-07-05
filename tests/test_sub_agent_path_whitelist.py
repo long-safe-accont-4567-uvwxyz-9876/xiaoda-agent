@@ -239,7 +239,7 @@ def test_sub_agent_config_loads_from_dict():
     """SubAgentConfig 能从 JSON dict 正确加载路径白名单字段"""
     cfg = SubAgentConfig(
         name="xiaoli",
-        display_name="可莉",
+        display_name="小莉",
         provider="agnes",
         model="agnes-2.0-flash",
         allowed_paths=["assets/stickers/xiaoli/*"],

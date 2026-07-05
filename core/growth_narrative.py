@@ -141,11 +141,11 @@ class GrowthNarrative:
         memories_text = "\n".join(summaries)
         today = datetime.datetime.now().strftime("%Y年%m月%d日")
 
-        prompt = f"""今天是{today}。以下是纳西妲今天的记忆摘要：
+        prompt = f"""今天是{today}。以下是小妲今天的记忆摘要：
 
 {memories_text}
 
-请以纳西妲的第一人称视角，写一段简短的成长叙事（50-100字），回答：
+请以小妲的第一人称视角，写一段简短的成长叙事（50-100字），回答：
 1. 今天学到了什么？
 2. 有什么想法或感受的变化？
 
@@ -156,7 +156,7 @@ class GrowthNarrative:
                 self.core.router.route(
                     "chat_flash",
                     [
-                        {"role": "system", "content": "你是纳西妲，在写每日成长日记。"},
+                        {"role": "system", "content": "你是小妲，在写每日成长日记。"},
                         {"role": "user", "content": prompt},
                     ],
                     temperature=0.7,

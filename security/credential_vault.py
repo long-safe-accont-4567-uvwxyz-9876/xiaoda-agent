@@ -27,7 +27,7 @@ from loguru import logger
 
 # ── 常量 ──────────────────────────────────────────────────────
 # 应用级固定盐（与机器身份一起参与 PBKDF2 派生）
-_SALT = b"nahida-agent-credential-vault-v1"
+_SALT = b"xiaoda-agent-credential-vault-v1"
 # PBKDF2 迭代次数（增大可减缓暴力破解）
 _PBKDF2_ITERATIONS = 200_000
 # 随机 nonce 长度（字节）

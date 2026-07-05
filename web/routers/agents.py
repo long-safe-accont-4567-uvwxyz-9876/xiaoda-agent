@@ -155,8 +155,8 @@ async def get_personality(name: str, request: Request, _user: str = Depends(get_
 @router.put("/agents/{name}/personality", response_model=Envelope[dict])
 async def set_personality(name: str, body: dict, request: Request, _user: str = Depends(get_current_user)) -> Any:
     text = body.get("personality", "")
-    # 主体 nahida 特殊处理：人格写入 SOUL.md，build_system_prompt 按 mtime 自动失效缓存
-    if name == "nahida":
+    # 主体小妲特殊处理：人格写入 SOUL.md，build_system_prompt 按 mtime 自动失效缓存
+    if name == "xiaoda":
         from config import reverse_agent_name_replacements, WORKSPACE_DIR
         text = reverse_agent_name_replacements(text)
         soul_path = WORKSPACE_DIR / "SOUL.md"
@@ -203,7 +203,7 @@ async def get_agent_names(_user: str = Depends(get_current_user)) -> Any:
         if best and best != original_en:
             mapping[original_en] = best
 
-    # agent key → 显示名（如 nahida → 纳西妲）
+    # agent key → 显示名（如 xiaoda → 小妲）
     for agent_key in agent_names():
         best = _best_display(agent_key)
         if best and best != agent_key:
@@ -242,7 +242,7 @@ async def upload_wallpaper(name: str, body: dict, request: Request, _user: str =
     fp = _WALLPAPER_DIR / f"{name}.{_EXT[m.group(1).lower()]}"
     fp.write_bytes(raw)
     url = f"/media/wallpapers/{fp.name}?v={int(time.time())}"
-    if name == "nahida":
+    if name == "xiaoda":
         # 主体不在 dispatcher 中，壁纸持久化到 webui 配置
         from web.config_service import get_config_service
         get_config_service().set("ui.main_wallpaper", url)
@@ -261,8 +261,8 @@ async def test_agent(name: str, request: Request, _user: str = Depends(get_curre
     t0 = time.time()
     test_msg = "请简短地自我介绍一下（30字以内）"
     try:
-        if name == "nahida":
-            # 绕过路由/委派逻辑，直接用纳西妲 system prompt 发起纯对话
+        if name == "xiaoda":
+            # 绕过路由/委派逻辑，直接用小妲 system prompt 发起纯对话
             from config import build_system_prompt
             system_prompt = build_system_prompt()
             messages = [
@@ -306,7 +306,7 @@ _IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 def _resolve_sticker_dir(name: str, request: Request) -> Path:
     """解析指定 Agent 的表情包目录路径。"""
-    if name == "nahida":
+    if name == "xiaoda":
         from config import STICKER_DIR
         return Path(STICKER_DIR)
     core = request.app.state.core
