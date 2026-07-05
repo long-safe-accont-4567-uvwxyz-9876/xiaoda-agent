@@ -327,7 +327,9 @@ class ToolExecutorMixin:
         text = reply.strip() if reply else ""
         text = strip_reasoning(text)
         if strip_emotion:
-            text = self.klee_sticker_manager.strip_emotion_tag(text)
+            # 根据 style（agent 名）动态获取正确的 sticker_manager
+            sticker_mgr = self.get_sticker_manager(style)
+            text = sticker_mgr.strip_emotion_tag(text)
         text = humanize(text, style=style)
         return text
 

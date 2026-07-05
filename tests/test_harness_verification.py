@@ -206,7 +206,7 @@ class TestRound3E2ESmoke:
     def test_klee_has_timeout_protection(self):
         """xiaoli_agent.py 含 asyncio.wait_for 超时保护。"""
         xiaoli_path = Path(__file__).parent.parent / "xiaoli_agent.py"
-        content = klee_path.read_text(encoding="utf-8")
+        content = xiaoli_path.read_text(encoding="utf-8")
         assert "asyncio.wait_for" in content
 
     def test_subagent_has_storm_detection(self):
