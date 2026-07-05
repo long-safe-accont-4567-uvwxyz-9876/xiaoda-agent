@@ -443,7 +443,7 @@ async function uploadVoiceForAgent() {
             </span>
             <div class="agent-names">
               <span class="agent-display">{{ a.display_name }}</span>
-              <span class="agent-id">{{ a.name }}</span>
+              <span class="agent-id">{{ a.display_name_en || a.name }}</span>
             </div>
             <n-switch v-if="!a.is_main" size="small" :value="a.enabled"
                       @click.stop @update:value="(v: boolean) => toggleEnabled(a, v)" />
