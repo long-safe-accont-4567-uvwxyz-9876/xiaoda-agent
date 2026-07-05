@@ -416,19 +416,35 @@ _ORIGINAL_NAMES: dict[str, str] = {
     "尼可": "nike",
 }
 
+# 英文原名 → agent_key 映射（人格文件中的英文标识符）
+_ORIGINAL_EN_NAMES: dict[str, str] = {
+    "klee": "keli",
+    "yinlang": "yinlang",
+    "xilian": "xilian",
+    "nike": "nike",
+}
+
 
 def apply_agent_name_replacements(content: str) -> str:
     """将人格文件中所有 agent 原名替换为 config 中的 display_name。
 
+    同时替换中文原名和英文原名。
     按原名长度降序替换，避免短名破坏长名。
-    例：若用户把"纳西妲"改为"小妲"，人格文件中所有"纳西妲"都会变成"小妲"。
     """
+    # 替换中文原名
     for original_name, agent_key in sorted(
         _ORIGINAL_NAMES.items(), key=lambda x: -len(x[0])
     ):
         dn = get_agent_display_name(agent_key)
         if dn and dn != original_name:
             content = content.replace(original_name, dn)
+    # 替换英文原名
+    for original_en, agent_key in sorted(
+        _ORIGINAL_EN_NAMES.items(), key=lambda x: -len(x[0])
+    ):
+        den = get_agent_display_name_en(agent_key)
+        if den and den != original_en:
+            content = content.replace(original_en, den)
     return content
 
 
@@ -436,13 +452,22 @@ def reverse_agent_name_replacements(content: str) -> str:
     """将 display_name 还原为原名（用于编辑器保存时还原模板）。
 
     与 apply_agent_name_replacements 互为逆操作。
+    同时还原中文和英文 display_name。
     """
+    # 还原中文 display_name → 原名
     for original_name, agent_key in sorted(
         _ORIGINAL_NAMES.items(), key=lambda x: -len(x[0])
     ):
         dn = get_agent_display_name(agent_key)
         if dn and dn != original_name:
             content = content.replace(dn, original_name)
+    # 还原英文 display_name → 原名
+    for original_en, agent_key in sorted(
+        _ORIGINAL_EN_NAMES.items(), key=lambda x: -len(x[0])
+    ):
+        den = get_agent_display_name_en(agent_key)
+        if den and den != original_en:
+            content = content.replace(den, original_en)
     return content
 
 
