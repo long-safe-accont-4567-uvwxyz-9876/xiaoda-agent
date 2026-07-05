@@ -177,7 +177,7 @@ class AgentCoreBootstrapper:
     def _ensure_stickers(self) -> None:
         """首次运行时将表情包从安装包复制到用户数据目录"""
         import shutil
-        from config import STICKER_DIR, KLEE_STICKER_DIR
+        from config import STICKER_DIR, XIAOLI_STICKER_DIR
         bundled_dir = self._get_bundled_assets_dir() / "stickers"
         if not bundled_dir.exists():
             return
@@ -199,10 +199,10 @@ class AgentCoreBootstrapper:
         # 复制 xiaoli 表情包
         xiaoli_src = bundled_dir / "xiaoli"
         if xiaoli_src.exists() and xiaoli_src.is_dir():
-            KLEE_STICKER_DIR.mkdir(parents=True, exist_ok=True)
+            XIAOLI_STICKER_DIR.mkdir(parents=True, exist_ok=True)
             for emotion_dir in xiaoli_src.iterdir():
                 if emotion_dir.is_dir():
-                    dest_emotion = KLEE_STICKER_DIR / emotion_dir.name
+                    dest_emotion = XIAOLI_STICKER_DIR / emotion_dir.name
                     if not dest_emotion.exists():
                         try:
                             shutil.copytree(emotion_dir, dest_emotion)
@@ -221,7 +221,7 @@ class AgentCoreBootstrapper:
     def _ensure_agent_sticker_dirs(self, core) -> None:
         """为每个子智能体自动创建专属表情包目录。
 
-        - 已配置 sticker_dir 的（如 keli 复用 KLEE_STICKER_DIR）跳过自动推导
+        - 已配置 sticker_dir 的（如 xiaoli 复用 XIAOLI_STICKER_DIR）跳过自动推导
         - 未配置的自动推导为 {AGENT_STICKER_BASE}/{agent_name}/
         - 自动创建情绪分类子目录（空目录），用户往里放图片即可
         - 目录为空时 StickerManager.available 返回 False，表情包不生效
@@ -402,7 +402,7 @@ class AgentCoreBootstrapper:
 
     async def _register_sub_agents(self) -> None:
         from agent_dispatcher import SubAgentConfig
-        from config import KLEE_STICKER_DIR, AGENT_STICKER_BASE
+        from config import XIAOLI_STICKER_DIR, AGENT_STICKER_BASE
         # frozen 模式下使用用户目录中的 agents 配置（_init_user_resources 已复制模板）
         try:
             from config import AGENTS_CONFIG_DIR as _agents_dir
@@ -425,7 +425,7 @@ class AgentCoreBootstrapper:
             api_key_env=_prov_cfg["api_key_env"],
             capabilities=["chat", "play", "fun"],
             route_description="日常聊天、玩耍、轻松有趣的对话",
-            sticker_dir=str(KLEE_STICKER_DIR),
+            sticker_dir=str(XIAOLI_STICKER_DIR),
         )
         await core.dispatcher.register(keli_config)
         yinlang_config = SubAgentConfig(

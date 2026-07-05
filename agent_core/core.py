@@ -25,7 +25,7 @@ from agent_core._shared import (
     UserIdentity,
 )
 
-from config import (AGENT_CONFIG, WORKSPACE_DIR, STICKER_DIR, KLEE_STICKER_DIR, FILE_DIR,
+from config import (AGENT_CONFIG, WORKSPACE_DIR, STICKER_DIR, XIAOLI_STICKER_DIR, FILE_DIR,
                     build_system_prompt, build_safe_system_prompt, SIMPLE_TASK_KEYWORDS,
                     PRO_TASK_KEYWORDS, TTS_ASYNC_MODE, SIMPLE_CHAT_FASTPATH)
 from model_router import ModelRouter
@@ -50,7 +50,7 @@ from emotion.sticker_manager import StickerManager
 from utils.file_receiver import FileReceiver
 from core.lazy_loader import LazyLoader
 from tool_engine.tool_call_handler import ToolCallHandler
-from klee_agent import KleeAgent
+from xiaoli_agent import XiaoliAgent
 from emotion.tts_engine import TTSEngine
 from agent_dispatcher import AgentDispatcher
 from tool_engine.mcp_client import MCPManager
@@ -119,7 +119,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         self.sticker_manager = LazyLoader("emotion.sticker_manager.StickerManager", {"sticker_dir": STICKER_DIR})
         self.xiaoli_sticker_manager = LazyLoader("emotion.sticker_manager.StickerManager", {"sticker_dir": XIAOLI_STICKER_DIR})
         self.file_receiver = LazyLoader("utils.file_receiver.FileReceiver", {"base_dir": FILE_DIR})
-        self.klee = KleeAgent(tool_executor=self.tool_executor, tool_repair=self.tool_repair, nahida_delegate=self._nahida_delegate_for_klee)
+        self.xiaoli = XiaoliAgent(tool_executor=self.tool_executor, tool_repair=self.tool_repair, xiaoda_delegate=self._xiaoda_delegate_for_xiaoli)
         self.tts = TTSEngine()
         self.dispatcher = AgentDispatcher(
             tts=self.tts,
@@ -131,7 +131,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         self._task_graph: TaskGraph | None = None
         self._agent_route_configs: dict = {}
         self._sticker_managers: dict = {}  # name → StickerManager (动态缓存)
-        self._tool_call_handler = ToolCallHandler(self.tool_executor, self.tool_repair, self._clean_reply, self.context, self.router, klee_delegate=self.delegate_to_klee, agent_name="nahida", personality_file=self._get_nahida_personality_file(), tool_execute_callback=self._execute_tool_with_hooks)
+        self._tool_call_handler = ToolCallHandler(self.tool_executor, self.tool_repair, self._clean_reply, self.context, self.router, xiaoli_delegate=self.delegate_to_xiaoli, agent_name="xiaoda", personality_file=self._get_xiaoda_personality_file(), tool_execute_callback=self._execute_tool_with_hooks)
         self._user_chat_target: dict[str, str] = {}
         self._chat_target_lock = asyncio.Lock()
         self._router_engine = RouterEngine(belief_router=None)  # belief_router 灰度期暂不接入
@@ -166,16 +166,16 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
     def get_sticker_manager(self, name: str) -> Any:
         """获取指定智能体的表情包管理器。
 
-        - nahida/空 → 主 sticker_manager
-        - xiaoli/klee → klee_sticker_manager
+        - xiaoda/空 → 主 sticker_manager
+        - xiaoli → xiaoli_sticker_manager
         - 其他 → 从 _agent_route_configs 获取 sticker_dir 动态创建（LazyLoader 延迟加载）
         - 表情包目录为空时 available 返回 False，表情包不生效
         """
         name_lower = (name or "").lower()
-        if name_lower in ("nahida", ""):
+        if name_lower in ("xiaoda", ""):
             return self.sticker_manager
-        if name_lower in ("xiaoli", "klee"):
-            return self.klee_sticker_manager
+        if name_lower == "xiaoli":
+            return self.xiaoli_sticker_manager
         if name_lower in self._sticker_managers:
             return self._sticker_managers[name_lower]
         # 从路由配置获取 sticker_dir
@@ -204,13 +204,13 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         except Exception as e:
             logger.warning(f"jieba.prewarm_schedule_failed error={e}")
 
-    def _get_nahida_personality_file(self) -> str:
-        """获取 nahida 人格文件路径（frozen 模式下使用用户目录）"""
+    def _get_xiaoda_personality_file(self) -> str:
+        """获取 xiaoda 人格文件路径（frozen 模式下使用用户目录）"""
         try:
             from config import AGENTS_CONFIG_DIR
-            return str(AGENTS_CONFIG_DIR / "nahida_personality.md")
+            return str(AGENTS_CONFIG_DIR / "xiaoda_personality.md")
         except ImportError:
-            return str(Path(__file__).parent.parent / "config" / "agents" / "nahida_personality.md")
+            return str(Path(__file__).parent.parent / "config" / "agents" / "xiaoda_personality.md")
 
     @staticmethod
     def _read_address_term_from_user_md() -> str | None:
@@ -423,7 +423,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             if self.xiaoli and hasattr(self.xiaoli, 'close'):
                 await self.xiaoli.close()
         except Exception as e:
-            logger.warning("shutdown.klee_close_failed", error=str(e))
+            logger.warning("shutdown.xiaoli_close_failed", error=str(e))
 
         try:
             if self.dispatcher and hasattr(self.dispatcher, 'close'):
