@@ -219,27 +219,10 @@ jobs:
       - name: Ensure assets bundled in dist
         shell: bash
         run: |
-          # PyInstaller 的 datas 可能未正确打包前端资源，手动复制确保资源存在
-          # 复制图标文件
+          # 图标文件确保存在
           mkdir -p dist/xiaoda-agent/assets/
           cp assets/xiaoda-icon.* dist/xiaoda-agent/assets/ 2>/dev/null || true
           echo "Icon assets: $(find dist/xiaoda-agent/assets -type f 2>/dev/null | wc -l) files"
-
-          # 确保前端资源（壁纸、JS、CSS）存在于 dist 中
-          if [ -d web/dist ] && [ ! -d dist/xiaoda-agent/web/dist ]; then
-            echo "Copying web/dist to dist/xiaoda-agent/web/dist/ ..."
-            cp -r web/dist dist/xiaoda-agent/web/dist
-          fi
-          if [ -d dist/xiaoda-agent/web/dist ]; then
-            WEB_COUNT=$(find dist/xiaoda-agent/web/dist -type f 2>/dev/null | wc -l)
-            echo "Frontend assets: $WEB_COUNT files"
-            # 验证壁纸存在
-            WP_COUNT=$(find dist/xiaoda-agent/web/dist/assets/wallpapers -name "*.jpg" 2>/dev/null | wc -l)
-            echo "Wallpapers: $WP_COUNT"
-          else
-            echo "ERROR: web/dist not found in build output"
-            exit 1
-          fi
 
       - name: Verify assets in build output
         shell: bash
