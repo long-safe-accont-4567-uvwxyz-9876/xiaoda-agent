@@ -634,6 +634,8 @@ def _build_stable_prompt(address_term: str) -> str:
 
     identity = load_workspace_file("IDENTITY.md")
     if identity:
+        if "{address_term}" in identity:
+            identity = identity.replace("{address_term}", address_term)
         sections.append(identity)
 
     tools_rules = load_workspace_file("TOOLS.md")
@@ -1038,7 +1040,7 @@ def load_skills() -> list[dict]:
     return out
 
 
-def _build_xp_segment(user_id: str | None) -> str:
+def _build_xp_segment(user_id: str | None, address_term: str = "爸爸") -> str:
     """构建 XP 等级 prompt 段落。
 
     注入到 system prompt 中，让纳西妲根据用户 XP 等级调整亲密度。
@@ -1056,7 +1058,7 @@ def _build_xp_segment(user_id: str | None) -> str:
         config = xp_sys.get_intimacy_config(state.level)
 
         segment = "\n\n[关系亲密度配置]\n"
-        segment += f"用户等级：LV{state.level.value} {config.get('label', '')}\n"
+        segment += f"{address_term}等级：LV{state.level.value} {config.get('label', '')}\n"
         segment += f"XP：{state.xp}\n"
         segment += f"称呼方式：{config.get('address_term', '你')}\n"
         segment += f"语气风格：{config.get('tone', 'polite')}\n"
@@ -1079,12 +1081,12 @@ def _build_xp_segment(user_id: str | None) -> str:
             learner = get_user_profile_learner()
             stats_summary = learner.get_stats_summary(user_id)
             if stats_summary:
-                segment += f"\n[用户交互统计]\n{stats_summary}\n"
+                segment += f"\n[{address_term}交互统计]\n{stats_summary}\n"
             # LV2+ 注入 LLM 认知结果
             if state.level >= XPLevel.LV2_ACQUAINTANCE:
                 insight = learner.get_learned_insight(user_id)
                 if insight:
-                    segment += f"\n[对用户的认知]\n{insight}\n"
+                    segment += f"\n[对{address_term}的认知]\n{insight}\n"
         except (AttributeError, ImportError, TypeError):
             pass  # 画像学习器失败不影响 XP 段落
 
@@ -1139,7 +1141,7 @@ def _build_cached_system_prompt(address_term: str) -> str:
     return system_prompt
 
 
-def _inject_dynamic_segments(system_prompt: str, user_id: str | None, user_input: str | None) -> str:
+def _inject_dynamic_segments(system_prompt: str, user_id: str | None, user_input: str | None, address_term: str = "爸爸") -> str:
     """注入 per-user 动态段落（心理状态、永久记忆、情感记忆）。"""
     if not user_id:
         return system_prompt
@@ -1210,7 +1212,7 @@ def _inject_dynamic_segments(system_prompt: str, user_id: str | None, user_input
         _loop = get_learning_loop()
         constraints = _loop.get_active_constraints()
         if constraints:
-            constraint_lines = ["[用户明确的行为约束（必须遵守）]"]
+            constraint_lines = [f"[{address_term}明确的行为约束（必须遵守）]"]
             for c in constraints:
                 constraint_lines.append(f"· {c}")
             system_prompt += "\n\n" + "\n".join(constraint_lines)
@@ -1220,10 +1222,10 @@ def _inject_dynamic_segments(system_prompt: str, user_id: str | None, user_input
     return system_prompt
 
 
-def _inject_xp_and_extra(system_prompt: str, user_id: str | None, extra_context: str) -> str:
+def _inject_xp_and_extra(system_prompt: str, user_id: str | None, extra_context: str, address_term: str = "爸爸") -> str:
     """注入 XP 等级段落和 extra_context。"""
     # 4. XP 等级段落（已有，per-user 不进缓存以保持稳定段 KV Cache 命中率）
-    xp_segment = _build_xp_segment(user_id)
+    xp_segment = _build_xp_segment(user_id, address_term)
     if xp_segment:
         system_prompt += xp_segment
 
@@ -1240,8 +1242,8 @@ def build_system_prompt(extra_context: str = "", address_term: str = "爸爸",
     # extra_context 延迟到末尾注入，保证新段落顺序:
     # base → mental → permanent → emotional → XP → extra_context
     system_prompt = _build_cached_system_prompt(address_term)
-    system_prompt = _inject_dynamic_segments(system_prompt, user_id, user_input)
-    system_prompt = _inject_xp_and_extra(system_prompt, user_id, extra_context)
+    system_prompt = _inject_dynamic_segments(system_prompt, user_id, user_input, address_term)
+    system_prompt = _inject_xp_and_extra(system_prompt, user_id, extra_context, address_term)
     return system_prompt
 
 

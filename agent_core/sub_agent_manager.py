@@ -547,7 +547,7 @@ class SubAgentManagerMixin:
         else:
             _nahida_dn = get_agent_display_name('nahida')
             _keli_dn = get_agent_display_name('keli')
-            context = f"{_nahida_dn}姐姐委托{_keli_dn}的任务。{_nahida_dn}是须弥的草神，温柔聪慧，{_keli_dn}叫她'{_nahida_dn}姐姐'。用户是{_nahida_dn}的{self.context.current_address_term}，也是{_keli_dn}的大哥哥/大姐姐。"
+            context = f"{_nahida_dn}姐姐委托{_keli_dn}的任务。{_nahida_dn}是须弥的草神，温柔聪慧，{_keli_dn}叫她'{_nahida_dn}姐姐'。{self.context.current_address_term}是{_nahida_dn}最亲近的人，也是{_keli_dn}的大哥哥/大姐姐。"
         result = await self.dispatcher.dispatch("keli", task, context=context, status_callback=_ctx.status_callback if _ctx else None)
         if result is None:
             return "可莉现在有点累了...等会儿再来找大哥哥玩吧！蹦蹦...💤"
@@ -581,7 +581,7 @@ class SubAgentManagerMixin:
                 content = m.get("content", "")
                 if not content or role == "tool":
                     continue
-                prefix = {"user": "用户:", "assistant": "纳西妲:"}.get(role, f"{role}:")
+                prefix = {"user": f"{self.context.current_address_term}:", "assistant": "纳西妲:"}.get(role, f"{role}:")
                 conv_lines.append(f"{prefix} {content[:120]}")
             if conv_lines:
                 parts.append("[对话历史]\n" + "\n".join(conv_lines))
@@ -614,14 +614,14 @@ class SubAgentManagerMixin:
 
         portrait = self.context.user_portrait
         if portrait:
-            parts.append(f"[用户画像]\n{portrait[:200]}")
+            parts.append(f"[{self.context.current_address_term}画像]\n{portrait[:200]}")
 
         return "\n\n".join(parts) if parts else ""
 
     async def _rephrase_as_nahida(self, user_input: str, klee_result: str) -> str:
         try:
             prompt = (
-                f"用户问：{user_input}\n\n"
+                f"{self.context.current_address_term}问：{user_input}\n\n"
                 f"查询结果：{klee_result}\n\n"
                 f"请用纳西妲的语气（温柔、可爱、偶尔用🌿等emoji）简短转述这个结果，"
                 f"1-2句话即可，不要提及可莉或任何查询过程。"
