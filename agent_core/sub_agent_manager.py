@@ -35,7 +35,7 @@ class SubAgentManagerMixin:
         display_name = sub_agent.config.display_name
         trace.info("agent.chat_target_sub", target=target, input_preview=clean_input[:50])
         context_str = self._build_sub_agent_context()
-        sub_reply = await self.dispatcher.dispatch(target, clean_input, context=context_str, status_callback=_ctx.status_callback if _ctx else None)
+        sub_reply = await self.dispatcher.dispatch(target, clean_input, context=context_str, status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term)
         if sub_reply is None:
             sub_reply = f"{display_name}现在有点累了...等会儿再来吧！💤"
 
@@ -230,7 +230,7 @@ class SubAgentManagerMixin:
                 logger.debug("blackboard.get_failed key={} error={}", task_key, e)
         try:
             reply = await asyncio.wait_for(
-                self.dispatcher.dispatch(t, sub_task, context=sub_context, status_callback=None),
+                self.dispatcher.dispatch(t, sub_task, context=sub_context, status_callback=None, address_term=self.context.current_address_term),
                 timeout=180,
             )
             if reply is None:
@@ -364,7 +364,7 @@ class SubAgentManagerMixin:
         _t0 = _time_mod.time()
         result = await asyncio.wait_for(self.dispatcher.dispatch(
             name, task, context=context,
-            status_callback=_ctx.status_callback if _ctx else None), timeout=180)
+            status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term), timeout=180)
         _duration = _time_mod.time() - _t0
         # I7: 记录子 Agent 工作履历 (供路由器智能调度)
         try:
@@ -413,7 +413,7 @@ class SubAgentManagerMixin:
         context = self._build_sub_agent_context(task_hint=verify_prompt)
         verify_result = await self.dispatcher.dispatch(
             verifier, verify_prompt, context=context,
-            status_callback=_ctx.status_callback if _ctx else None)
+            status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term)
         if verify_result is None:
             return generated  # 验证子代理不可用，退化为原结果
         # 检测验证结果是否发现问题
@@ -548,7 +548,7 @@ class SubAgentManagerMixin:
             _nahida_dn = get_agent_display_name('nahida')
             _keli_dn = get_agent_display_name('keli')
             context = f"{_nahida_dn}姐姐委托{_keli_dn}的任务。{_nahida_dn}是须弥的草神，温柔聪慧，{_keli_dn}叫她'{_nahida_dn}姐姐'。{self.context.current_address_term}是{_nahida_dn}最亲近的人，也是{_keli_dn}的大哥哥/大姐姐。"
-        result = await self.dispatcher.dispatch("keli", task, context=context, status_callback=_ctx.status_callback if _ctx else None)
+        result = await self.dispatcher.dispatch("keli", task, context=context, status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term)
         if result is None:
             return "可莉现在有点累了...等会儿再来找大哥哥玩吧！蹦蹦...💤"
         # A2A 共享黑板：委托完成后写入产出
