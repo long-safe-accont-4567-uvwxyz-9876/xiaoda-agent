@@ -4,7 +4,7 @@
   "display_name_en": "Xiaolang",
   "provider": "agnes",
   "model": "agnes-2.0-flash",
-  "personality_file": "yinlang_personality.md",
+  "personality_file": "/home/orangepi/ai-agent/config/agents/yinlang_personality.md",
   "voice_ref": null,
   "excluded_tools": [
     "call_klee",
@@ -41,5 +41,5 @@
     "*.env",
     "security/*"
   ],
-  "_saved_at": 1782406874.9641452
+  "_saved_at": 1783225451.4421847
 }
