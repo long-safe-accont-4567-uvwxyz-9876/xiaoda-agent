@@ -1,6 +1,7 @@
 {
   "name": "keli",
   "display_name": "小莉",
+  "display_name_en": "Xiaoli",
   "provider": "agnes",
   "model": "agnes-2.0-flash",
   "personality_file": "/home/orangepi/ai-agent/config/agents/klee_personality.md",

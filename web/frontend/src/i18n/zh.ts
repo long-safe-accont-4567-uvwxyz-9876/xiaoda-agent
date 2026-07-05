@@ -242,7 +242,7 @@ export default {
 
   // ChatTerminal.vue
   chatTerminal: {
-    title: '纳西妲的虚空终端',
+    title: (name: string) => `${name}的虚空终端`,
     running: '运行中',
     done: '已完成',
     empty: '暂无工具调用记录，输入命令开始操作',

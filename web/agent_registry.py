@@ -44,6 +44,7 @@ DEFAULT_WALLPAPERS = {
 MAIN_AGENT_META = {
     "name": "nahida",
     "display_name": "纳西妲",
+    "display_name_en": "Nahida",
     "builtin": True,
     "is_main": True,
     "enabled": True,
@@ -55,7 +56,7 @@ MAIN_AGENT_META = {
 
 # 配置文件中允许的字段（与 SubAgentConfig 对齐）
 _CONFIG_FIELDS = [
-    "name", "display_name", "provider", "model", "personality_file", "voice_ref",
+    "name", "display_name", "display_name_en", "provider", "model", "personality_file", "voice_ref",
     "excluded_tools", "base_url", "api_key_env", "capabilities", "route_description",
     "mcp_servers", "max_spawn_depth", "max_turns", "effort", "permission_mode",
     "memory_scope", "background", "wallpaper",
@@ -186,22 +187,26 @@ class AgentRegistry:
 
     _BUILTIN_STUBS: dict[str, dict] = {
         "keli": {
-            "display_name": "可莉", "provider": "default", "model": "default",
+            "display_name": "可莉", "display_name_en": "Keli",
+            "provider": "default", "model": "default",
             "route_description": "日常聊天、玩耍、轻松有趣的对话",
             "capabilities": ["chat", "play", "fun"],
         },
         "yinlang": {
-            "display_name": "银狼", "provider": "default", "model": "default",
+            "display_name": "银狼", "display_name_en": "Yinlang",
+            "provider": "default", "model": "default",
             "route_description": "编程、代码编写、调试、技术问题、硬件控制、系统运维、开发辅助",
             "capabilities": ["coding", "debug", "script", "programming", "hardware", "system", "devops"],
         },
         "xilian": {
-            "display_name": "昔涟", "provider": "default", "model": "default",
+            "display_name": "昔涟", "display_name_en": "Xilian",
+            "provider": "default", "model": "default",
             "route_description": "搜索信息、查询资料、探索发现",
             "capabilities": ["search", "lookup", "query", "explore", "discover"],
         },
         "nike": {
-            "display_name": "尼可", "provider": "default", "model": "default",
+            "display_name": "尼可", "display_name_en": "Nike",
+            "provider": "default", "model": "default",
             "route_description": "研究分析、学术思考、深度解读",
             "capabilities": ["research", "analysis", "study", "academic"],
         },
@@ -218,6 +223,7 @@ class AgentRegistry:
         return {
             "name": name,
             "display_name": stub.get("display_name", name),
+            "display_name_en": stub.get("display_name_en", name),
             "builtin": True,
             "is_main": False,
             "enabled": True,
@@ -256,6 +262,9 @@ class AgentRegistry:
         if nahida_cfg.get("display_name"):
             main["display_name"] = nahida_cfg["display_name"]
             MAIN_AGENT_META["display_name"] = nahida_cfg["display_name"]
+        if nahida_cfg.get("display_name_en"):
+            main["display_name_en"] = nahida_cfg["display_name_en"]
+            MAIN_AGENT_META["display_name_en"] = nahida_cfg["display_name_en"]
         try:
             from web.config_service import get_config_service
             wp = get_config_service().get("ui.main_wallpaper")
@@ -297,6 +306,7 @@ class AgentRegistry:
         return {
             "name": cfg.name,
             "display_name": cfg.display_name,
+            "display_name_en": getattr(cfg, "display_name_en", "") or cfg.name,
             "builtin": cfg.name in BUILTIN_AGENTS,
             "is_main": False,
             "enabled": enabled,
@@ -378,6 +388,10 @@ class AgentRegistry:
             if "display_name" in data and data["display_name"]:
                 self._save_nahida_field("display_name", data["display_name"])
                 MAIN_AGENT_META["display_name"] = data["display_name"]
+            # display_name_en 更新：持久化 + 同步 MAIN_AGENT_META
+            if "display_name_en" in data and data["display_name_en"]:
+                self._save_nahida_field("display_name_en", data["display_name_en"])
+                MAIN_AGENT_META["display_name_en"] = data["display_name_en"]
             return self.get("nahida")
         agent = self._require(name)
         personality_text = data.pop("personality_text", None)

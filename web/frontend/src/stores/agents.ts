@@ -5,6 +5,7 @@ import { get } from '../api'
 export interface AgentInfo {
   name: string
   display_name: string
+  display_name_en: string
   builtin: boolean
   is_main: boolean
   enabled: boolean

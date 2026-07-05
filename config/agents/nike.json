@@ -1,6 +1,7 @@
 {
   "name": "nike",
   "display_name": "小可",
+  "display_name_en": "Xiaoke",
   "provider": "agnes",
   "model": "agnes-2.0-flash",
   "personality_file": "nike_personality.md",

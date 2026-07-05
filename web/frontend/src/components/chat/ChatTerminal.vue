@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useChatStore } from '../../stores/chat'
+import { useAgentsStore } from '../../stores/agents'
 import { getWsClient } from '../../api/ws'
 import { get } from '../../api'
 import type { WsEvent } from '../../api/ws'
-import { t } from '../../i18n'
+import { t, getLang } from '../../i18n'
 
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -12,6 +13,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 
 const chat = useChatStore()
+const agentsStore = useAgentsStore()
 const ws = getWsClient()
 
 const panelOpen = ref(false)
@@ -27,6 +29,17 @@ function _detectClientOs(): string {
 }
 const serverOs = ref(_detectClientOs())
 const isWindows = computed(() => serverOs.value === 'windows')
+
+// 动态终端标题：根据当前语言和主 Agent 名称生成
+const terminalTitle = computed(() => {
+  const mainAgent = agentsStore.agents.find(a => a.is_main)
+  const lang = getLang()
+  const name = lang === 'en'
+    ? (mainAgent?.display_name_en || mainAgent?.display_name || 'Nahida')
+    : (mainAgent?.display_name || '纳西妲')
+  const fn = t('chatTerminal.title')
+  return typeof fn === 'function' ? fn(name) : String(fn)
+})
 
 get<{ os: string; shell: string }>('/system/os').then(res => {
   serverOs.value = res.os
@@ -319,7 +332,7 @@ function onPanelOpened() {
   <Teleport to="body">
     <!-- 右下角浮动按钮 -->
     <transition name="fab-scale">
-      <div v-if="!panelOpen" class="term-fab" @click="panelOpen = true" :title="t('chatTerminal.title')">
+      <div v-if="!panelOpen" class="term-fab" @click="panelOpen = true" :title="terminalTitle">
         <span class="fab-icon">▎>_</span>
         <span v-if="sessions.some(s => s.alive)" class="fab-dot"></span>
       </div>
@@ -332,7 +345,7 @@ function onPanelOpened() {
         <div class="panel-header">
           <span class="header-title">
             <span class="header-icon">▎>_</span>
-            {{ t('chatTerminal.title') }}
+            {{ terminalTitle }}
           </span>
           <span class="header-actions">
             <button v-if="activeSession" class="header-btn" @click="handlePaste" :title="t('chatTerminal.paste')">📋</button>

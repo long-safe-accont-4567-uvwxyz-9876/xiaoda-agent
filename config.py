@@ -341,7 +341,15 @@ _DEFAULT_DISPLAY_NAMES: dict[str, str] = {
     "xilian": "小涟",
     "nike": "小可",
 }
+_DEFAULT_DISPLAY_NAMES_EN: dict[str, str] = {
+    "nahida": "Xiaoda",
+    "keli": "Xiaoli",
+    "yinlang": "Xiaolang",
+    "xilian": "Xiaolian",
+    "nike": "Xiaoke",
+}
 _display_name_cache: dict[str, tuple[float, str]] = {}  # {name: (mtime, display_name)}
+_display_name_en_cache: dict[str, tuple[float, str]] = {}
 
 
 def get_agent_display_name(name: str) -> str:
@@ -368,6 +376,32 @@ def get_agent_display_name(name: str) -> str:
     except Exception:
         dn = default
     _display_name_cache[name] = (mtime, dn)
+    return dn
+
+
+def get_agent_display_name_en(name: str) -> str:
+    """读取 agent 的英文 display_name（从 config/agents/{name}.json）。
+
+    逻辑与 get_agent_display_name 一致，读取 display_name_en 字段。
+    """
+    if not name:
+        return ""
+    fp = AGENTS_CONFIG_DIR / f"{name}.json"
+    default = _DEFAULT_DISPLAY_NAMES_EN.get(name, name)
+    try:
+        mtime = fp.stat().st_mtime
+    except OSError:
+        return default
+    cached = _display_name_en_cache.get(name)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        import json
+        data = json.loads(fp.read_text(encoding="utf-8"))
+        dn = data.get("display_name_en") or default
+    except Exception:
+        dn = default
+    _display_name_en_cache[name] = (mtime, dn)
     return dn
 
 
@@ -671,6 +705,7 @@ __all__ = [
     "PLUGINS_CONFIG_DIR",
     "AGENTS_CONFIG_DIR",
     "get_agent_display_name",
+    "get_agent_display_name_en",
     "build_system_prompt",
     "build_safe_system_prompt",
     "load_agent_config",

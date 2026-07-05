@@ -242,7 +242,7 @@ export default {
 
   // ChatTerminal.vue
   chatTerminal: {
-    title: "Nahida's Akasha Terminal",
+    title: (name: string) => `${name}'s Akasha Terminal`,
     running: 'running',
     done: 'done',
     empty: 'No tool calls yet. Type a command to start.',

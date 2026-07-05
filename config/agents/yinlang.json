@@ -1,6 +1,7 @@
 {
   "name": "yinlang",
   "display_name": "小狼",
+  "display_name_en": "Xiaolang",
   "provider": "agnes",
   "model": "agnes-2.0-flash",
   "personality_file": "yinlang_personality.md",
