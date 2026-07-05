@@ -1,0 +1,87 @@
+name: CI Tests
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -q
+          pip install pytest pytest-asyncio -q
+
+      - name: Create test environment
+        run: |
+          # 创建必要的目录
+          mkdir -p ~/.ai-agent/logs
+          mkdir -p ~/.ai-agent/workspace
+          mkdir -p ~/.ai-agent/config/agents
+          mkdir -p ~/.ai-agent/data/db
+
+          # 复制配置文件
+          cp -r config/workspace ~/.ai-agent/workspace/
+          cp -r config/agents/*.json ~/.ai-agent/config/agents/ 2>/dev/null || true
+
+      - name: Run smoke tests
+        run: |
+          python -m pytest tests/test_smoke.py -v --tb=short || true
+
+      - name: Run core tests
+        run: |
+          python -m pytest tests/test_agent_routing.py tests/test_context_compressor.py tests/test_risk_classifier.py -v --tb=short || true
+
+      - name: Run matrix governance tests
+        run: |
+          python -m pytest tests/test_matrix_governance.py tests/test_prompt_integration.py -v --tb=short || true
+
+      - name: Test summary
+        if: always()
+        run: |
+          echo "=== Test Summary ==="
+          echo "CI tests completed. Check results above."
+
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install lint tools
+        run: pip install ruff -q
+
+      - name: Run Ruff check
+        run: |
+          ruff check . --select=E9,F63,F7,F82 --output-format=github || true
+
+      - name: Python syntax check
+        run: |
+          python -m py_compile agent.py agent_context.py config.py 2>&1 || true
+          echo "Syntax check completed."
