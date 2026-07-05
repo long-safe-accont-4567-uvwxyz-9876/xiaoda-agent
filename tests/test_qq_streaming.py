@@ -90,7 +90,7 @@ def test_short_reply_no_split():
     # 应只发送一次（单片），不应有打字指示
     assert len(msg.replies) == 1
     assert msg.replies[0]["content"] == short_text
-    assert msg.replies[0]["content"] != "纳西妲正在打字..."
+    assert msg.replies[0]["content"] != "小妲正在打字..."
 
 
 # ──────────────────────────────────────────────────────────────
@@ -112,7 +112,7 @@ def test_long_reply_split():
 
     # 应有打字指示 + 至少 2 个分片
     assert len(msg.replies) >= 3
-    assert msg.replies[0]["content"] == "纳西妲正在打字..."
+    assert msg.replies[0]["content"] == "小妲正在打字..."
     # 验证分片内容能拼回原文（去掉打字指示）
     actual = "".join(r["content"] for r in msg.replies[1:])
     assert actual == long_text
@@ -184,7 +184,7 @@ def test_stream_disabled_when_env_false():
     assert len(streaming_calls) == 0
     # 应通过原 message.reply 发送（无打字指示）
     assert len(msg.replies) >= 1
-    assert not any(r["content"] == "纳西妲正在打字..." for r in msg.replies)
+    assert not any(r["content"] == "小妲正在打字..." for r in msg.replies)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -208,7 +208,7 @@ def test_exception_recovery():
     # 成功记录应有 3 条：typing + seg0 + 合并剩余
     assert len(msg.replies) == 3
     # 第 1 条是打字指示
-    assert msg.replies[0]["content"] == "纳西妲正在打字..."
+    assert msg.replies[0]["content"] == "小妲正在打字..."
     # 最后一条是合并剩余内容（应包含 long_text 的部分内容）
     final_content = msg.replies[-1]["content"]
     assert "今天天气真好呀" in final_content
