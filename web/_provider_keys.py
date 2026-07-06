@@ -38,13 +38,36 @@ def _key_file(provider_id: str) -> Path:
 
 
 def _encode_key(plain: str) -> str:
-    """凭证编码存储（base64，非加密但防止明文泄露）。"""
-    import base64
-    return base64.b64encode(plain.encode("utf-8")).decode("ascii")
+    """凭证加密存储（使用 credential_vault 机器绑定 AES 加密）。
+
+    与原 base64 编码的区别：
+    - base64: 任何读文件者可解码（仅防明文泄露）
+    - credential_vault: 机器身份绑定 + HMAC 标签 + 加密（防跨机器复制）
+    """
+    from security.credential_vault import encrypt
+    return encrypt(plain)
 
 
 def _decode_key(encoded: str) -> str | None:
-    """凭证解码读取，失败返回 None（兼容旧版明文）。"""
+    """凭证解密读取，失败返回 None。
+
+    解码优先级（向后兼容旧版本文件格式）：
+    1. credential_vault enc:v1: 加密格式（新版本推荐）
+    2. 旧版 base64 编码（自动迁移到 credential_vault）
+    3. 返回 None 表示无法识别（调用方按明文兜底）
+    """
+    # 1. 优先尝试 credential_vault 解密（识别 enc:v1: 前缀）
+    try:
+        from security.credential_vault import is_encrypted, decrypt, DecryptionError
+        if is_encrypted(encoded):
+            try:
+                return decrypt(encoded)
+            except DecryptionError:
+                return None
+    except Exception:
+        pass
+
+    # 2. 兼容旧版 base64 编码
     import base64
     try:
         return base64.b64decode(encoded.encode("ascii")).decode("utf-8")
@@ -54,8 +77,10 @@ def _decode_key(encoded: str) -> str | None:
 
 def load_provider_key(provider_id: str) -> str:
     """读取 provider 凭证, 文件不存在返回空串.
-    
-    兼容旧版明文存储：先尝试 base64 解码，失败则按明文读取并自动迁移编码。
+
+    自动迁移：
+    - 旧版 base64 文件首次读取后自动升级到 credential_vault 加密格式
+    - 旧版明文文件首次读取后自动升级到 credential_vault 加密格式
     """
     fp = _key_file(provider_id)
     if not fp.exists():
@@ -63,13 +88,16 @@ def load_provider_key(provider_id: str) -> str:
     raw = fp.read_text(encoding="utf-8").strip()
     if not raw:
         return ""
-    # 先尝试 base64 解码（新版格式）
+    # 先尝试解密（credential_vault / base64）
     decoded = _decode_key(raw)
     if decoded is not None:
+        # 旧版格式（base64/明文）首次读取后自动迁移到 credential_vault
+        try:
+            from security.credential_vault import is_encrypted
+            if not is_encrypted(raw):
+                fp.write_text(_encode_key(decoded) + "\n", encoding="utf-8")
+        except OSError:
+            pass  # 迁移失败不影响本次读取
         return decoded
-    # 兼容旧版明文：返回原文，并自动迁移为编码存储
-    try:
-        fp.write_text(_encode_key(raw) + "\n", encoding="utf-8")
-    except OSError:
-        pass
+    # 3. 无法识别的格式：按明文返回
     return raw
