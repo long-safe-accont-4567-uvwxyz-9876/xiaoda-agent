@@ -464,13 +464,19 @@ class MemoryManager:
             vec_mem_map = {m["id"]: m for m in vec_mems}
             items = []
             if vec_results:
-                max_dist = max(d for _, d in vec_results) if vec_results else 1.0
-                if max_dist <= 0:
-                    max_dist = 1.0
+                if len(vec_results) == 1:
+                    # 单条结果：min-max归一化退化(除以自身=0分)，直接用原始距离
+                    _use_normalize = False
+                else:
+                    max_dist = max(d for _, d in vec_results)
+                    _use_normalize = max_dist > 0
             for row_id, distance in vec_results:
                 mem = vec_mem_map.get(row_id)
                 if mem:
-                    mem["score"] = max(0.0, 1.0 - distance / max_dist)
+                    if _use_normalize:
+                        mem["score"] = max(0.0, 1.0 - distance / max_dist)
+                    else:
+                        mem["score"] = max(0.0, 1.0 - distance)
                     items.append(mem)
             return items
         except Exception as e:
