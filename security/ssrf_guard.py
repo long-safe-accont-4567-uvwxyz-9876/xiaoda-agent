@@ -76,14 +76,14 @@ _BLOCKED_NETWORKS = [
     ipaddress.ip_network("ff00::/8"),         # 多播
 ]
 
-# ── Step 5: DNS Pinning 短期缓存 ──
-# hostname(小写) -> (锁定的 IP 字符串, 缓存时间戳)
+# ── Step 5: DNS Pinning 缓存（永不过期，专用聊天agent+本地编辑器优先可编辑性）──
+# hostname(小写) -> 锁定的 IP 字符串
 # 缓存已通过 Step4 校验的 IP, 避免每次请求重新解析, 防止 TOCTOU
+# 注意: 缓存无 TTL, 适用于专用聊天agent+本地编辑器场景;
+# 多租户公网场景应加 TTL 防 IP 漂移误用
 import threading as _threading
-import time as _time
 
-_PIN_CACHE_TTL = 60.0  # 缓存有效期 (秒), 超期后重新 DNS 解析
-_PIN_CACHE: dict[str, tuple[str, float]] = {}
+_PIN_CACHE: dict[str, str] = {}
 _PIN_CACHE_LOCK = _threading.Lock()
 
 
@@ -222,7 +222,7 @@ def validate_url(url: str) -> tuple[bool, str]:
     # Step 5: DNS Pinning — 锁定首个 IP, 缓存供 get_pinned_ip 使用
     pinned_ip = ips[0]
     with _PIN_CACHE_LOCK:
-        _PIN_CACHE[hostname.lower()] = (pinned_ip, _time.time())
+        _PIN_CACHE[hostname.lower()] = pinned_ip
     logger.debug("ssrf.passed host={} pinned_ip={} ips={}", hostname, pinned_ip, ips)
     return True, ""
 
@@ -247,23 +247,18 @@ def get_pinned_ip(url: str) -> Optional[str]:
     if not hostname:
         return None
 
-    now = _time.time()
     with _PIN_CACHE_LOCK:
         cached = _PIN_CACHE.get(hostname)
         if cached:
-            ip, ts = cached
-            if now - ts < _PIN_CACHE_TTL:
-                return ip
-            # TTL 过期, 删除旧条目
-            del _PIN_CACHE[hostname]
+            return cached
 
-    # 未缓存或已过期 → 重新校验并锁定
+    # 未缓存 → 重新校验并锁定
     ok, _ = validate_url(url)
     if not ok:
         return None
     with _PIN_CACHE_LOCK:
         cached = _PIN_CACHE.get(hostname)
-    return cached[0] if cached else None
+    return cached if cached else None
 
 
 # ── 便捷封装 ──
