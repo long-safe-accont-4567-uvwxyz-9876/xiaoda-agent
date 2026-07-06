@@ -30,7 +30,7 @@ async def _audit(request: Request, action: str, detail: str) -> None:
 
 
 @router.get("/agents", response_model=Envelope[list[dict]])
-async def list_agents(request: Request) -> Any:
+async def list_agents(request: Request, _user: str = Depends(get_current_user)) -> Any:
     return Envelope(data=_registry(request).list())
 
 
