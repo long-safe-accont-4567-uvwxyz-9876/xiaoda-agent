@@ -185,4 +185,4 @@ def test_doctor_integration_includes_bhs_and_zombie_checks():
     # 验证层级
     layers = {c["name"]: c["layer"] for c in doc._checks}
     assert layers["Behavioral Health"] == "L9-Behavior"
-    assert layers["Zombie Processes"] == "L8-Zombie"
+    assert layers["Zombie Processes"] == "L10-Zombie"
