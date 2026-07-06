@@ -240,7 +240,16 @@ def _init_user_resources() -> None:
             target_name = item.name[:-4] if item.name.endswith('.tpl') else item.name
             target = WORKSPACE_DIR / target_name
             # 强制更新文件总是覆盖，用户编辑文件不覆盖
+            # SOUL.md 特殊处理：如果包含旧名（nahida），强制更新
             should_copy = target_name in _force_update_files or not target.exists()
+            if not should_copy and target_name == "SOUL.md" and target.exists():
+                try:
+                    old_content = target.read_text(encoding="utf-8")
+                    if "nahida" in old_content.lower() or "纳西妲" in old_content:
+                        should_copy = True
+                        print(f"[config] Updating outdated SOUL.md (contains old name)")
+                except (OSError, UnicodeDecodeError):
+                    pass
             if should_copy:
                 try:
                     shutil.copy2(item, target)
