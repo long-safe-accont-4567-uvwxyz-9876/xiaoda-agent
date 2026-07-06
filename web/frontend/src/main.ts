@@ -50,4 +50,16 @@ app.use(i18n)
 app.mount('#app')
 
 // 非阻塞加载 agent 名称映射表（全局替换用）
-loadAgentNames()
+// 登录后再加载，避免未登录时 401 导致映射表永远为空
+const auth = useAuthStore()
+if (auth.isLoggedIn) {
+  loadAgentNames()
+} else {
+  // 监听登录状态变化，登录成功后加载
+  const unwatch = auth.$subscribe((_state) => {
+    if (auth.isLoggedIn) {
+      loadAgentNames()
+      unwatch()
+    }
+  })
+}

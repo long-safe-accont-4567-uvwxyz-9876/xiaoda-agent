@@ -11,6 +11,7 @@ from typing import Any
 
 import dataclasses
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -23,23 +24,28 @@ from config import AGENTS_CONFIG_DIR, DEFAULT_PROVIDER, _FALLBACK_BASE
 def _resolve_personality_path(pf: str) -> str | None:
     """将 personality_file 相对路径解析为绝对路径。
 
-    personality_file 路径（如 "config/agents/xiaoli_personality.md"）相对于项目源码根目录。
-    - dev 模式: _FALLBACK_BASE = 项目根目录
-    - frozen 模式: 先找 _MEIPASS（打包内），再找 _FALLBACK_BASE（用户目录）
-    - 最终 fallback: 在 AGENTS_DIR 下查找
+    personality_file 路径可能是：
+    - 绝对路径（如 /home/user/.ai-agent/data/config/agents/xiaoli_personality.md）
+    - 带目录前缀的相对路径（如 config/agents/xiaoli_personality.md）
+    - 纯文件名（如 xiaoli_personality.md）
     """
+    if not pf:
+        return None
+    p = Path(pf)
+    # 绝对路径直接用
+    if p.is_absolute():
+        return str(p) if p.exists() else None
     candidates = []
-    # 1. 项目源码根目录（dev 模式下的正确位置）
-    candidates.append(_FALLBACK_BASE / pf)
-    # 2. PyInstaller 打包目录（frozen 模式）
+    # 1. PyInstaller 打包目录（frozen 模式首选）
     meipass = getattr(sys, '_MEIPASS', None)
     if meipass:
         candidates.append(Path(meipass) / pf)
-    # 3. 用户数据目录（之前可能保存过的位置）
+    # 2. 用户数据目录 + 文件名（frozen 模式下 _init_user_resources 复制到这里）
+    candidates.append(AGENTS_DIR / p.name)
+    # 3. 项目源码根目录（dev 模式）
+    candidates.append(_FALLBACK_BASE / pf)
+    # 4. 用户数据目录 + 完整相对路径（兼容旧格式）
     candidates.append(AGENTS_DIR / pf)
-    # 4. 用户数据目录 + 文件名（fallback：只取文件名部分）
-    candidates.append(AGENTS_DIR / Path(pf).name)
-
     for c in candidates:
         if c.exists():
             return str(c)
