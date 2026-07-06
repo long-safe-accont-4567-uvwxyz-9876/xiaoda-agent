@@ -19,6 +19,7 @@ _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALLOWED_BASE_DIRS = [
     _PROJECT_DIR,                                                          # 项目目录
     os.path.expanduser("~/ai-agent"),                                      # 用户主目录下的项目目录
+    os.path.expanduser("~"),                                               # 用户主目录（本地编辑器需要读写桌面/文档等）
     "/tmp",
     "/var/tmp",
     tempfile.gettempdir(),                                                 # 系统临时目录（Windows: C:\Users\...\AppData\Local\Temp）
@@ -81,7 +82,7 @@ def _validate_path(path: str, mode: str = "read") -> tuple[bool, str, str]:
         if resolved == allowed or resolved.startswith(allowed + os.sep):
             # 写入模式额外限制：只允许项目目录和 tts_cache
             if mode == "write":
-                write_allowed = [_PROJECT_DIR, os.path.join(_PROJECT_DIR, "tts_cache"), "/tmp", "/var/tmp", tempfile.gettempdir()]
+                write_allowed = [_PROJECT_DIR, os.path.join(_PROJECT_DIR, "tts_cache"), "/tmp", "/var/tmp", tempfile.gettempdir(), os.path.expanduser("~")]
                 write_allowed = [os.path.realpath(d) for d in write_allowed]
                 for wa in write_allowed:
                     if resolved == wa or resolved.startswith(wa + os.sep):
@@ -121,8 +122,8 @@ _DANGEROUS_PATTERNS = [
     # 管道到 shell
     r'\|\s*(ba)?sh\b',
     r'\|\s*(ba)?sh\s+-c\b',
-    # 命令替换
-    r'\$\([^)]*\)',
+    # 命令替换（仅拦截 bash 风格，PowerShell 的 $() 是表达式不是注入）
+    r'bash\s+-c\s+.*\$\([^)]*\)',
     r'`[^`]+`',
     # 反向 shell
     r'(nc|ncat|socat)\s+.*(-e|--exec)\s+',
