@@ -653,6 +653,7 @@ def _build_stable_prompt(address_term: str) -> str:
 
     agents_rules = load_workspace_file("AGENTS.md")
     if agents_rules:
+        agents_rules = _replace_placeholders(agents_rules, address_term)
         sections.append(agents_rules)
 
     soul = load_workspace_file("SOUL.md")
@@ -667,6 +668,7 @@ def _build_stable_prompt(address_term: str) -> str:
 
     tools_rules = load_workspace_file("TOOLS.md")
     if tools_rules:
+        tools_rules = _replace_placeholders(tools_rules, address_term)
         sections.append(tools_rules)
 
     skills = load_skills()
@@ -1285,6 +1287,7 @@ def _build_workspace_sections(address_term: str) -> list[str]:
 
     agents_rules = load_workspace_file("AGENTS.md")
     if agents_rules:
+        agents_rules = _replace_placeholders(agents_rules, address_term)
         sections.append(agents_rules)
 
     soul = load_workspace_file("SOUL.md")
@@ -1303,6 +1306,7 @@ def _build_workspace_sections(address_term: str) -> list[str]:
 
     tools_rules = load_workspace_file("TOOLS.md")
     if tools_rules:
+        tools_rules = _replace_placeholders(tools_rules, address_term)
         sections.append(tools_rules)
 
     memory = load_workspace_file("MEMORY.md")
@@ -1311,6 +1315,7 @@ def _build_workspace_sections(address_term: str) -> list[str]:
 
     heartbeat = load_workspace_file("HEARTBEAT.md")
     if heartbeat:
+        heartbeat = _replace_placeholders(heartbeat, address_term)
         sections.append(heartbeat)
 
     skills = load_skills()
