@@ -88,11 +88,14 @@ async def execute_on_pty(
     if is_win:
         # PowerShell / CMD：用 Write-Host 输出隐藏标记
         # PowerShell 用 $LASTEXITCODE 获取退出码
+        # 安全：对标记值做单引号转义，防止命令注入
+        _safe_start = _start_marker.replace("'", "''")
+        _safe_end = _end_marker.replace("'", "''")
         pty_input = (
-            f"Write-Host -NoNewline '{_DIM}{_BG}{_start_marker}{_RST}'\n"
+            f"Write-Host -NoNewline '{_DIM}{_BG}{_safe_start}{_RST}'\n"
             f"{command}\n"
             f"$_ec = $LASTEXITCODE; if ($null -eq $_ec) {{ $_ec = 0 }}\n"
-            f"Write-Host '{_DIM}{_BG}{_end_marker}{_RST}'\"$_ec\"\n"
+            f"Write-Host '{_DIM}{_BG}{_safe_end}{_RST}'\"$_ec\"\n"
         )
     else:
         pty_input = (

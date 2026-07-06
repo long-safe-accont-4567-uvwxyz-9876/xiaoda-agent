@@ -24,7 +24,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from chaos.reliability_bench import BenchReport, ReliabilityBench  # noqa: E402
-from tests.fault_injection import (  # noqa: E402
+from chaos._fault_types import (  # noqa: E402
     FaultConfig,
     FaultInjectingLLMClient,
     FaultType,

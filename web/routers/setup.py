@@ -664,7 +664,7 @@ def _update_config_and_refresh_clients(updates: Any) -> None:
 
     # 重建 ModelRouter 的 MiMo/Agnes 客户端
     try:
-        from web._app_ref import get_app
+        from web.app_ref import get_app
         app = get_app()
         if hasattr(app, "state") and hasattr(app.state, "core"):
             core = app.state.core
@@ -687,7 +687,7 @@ def _update_config_and_refresh_clients(updates: Any) -> None:
 async def _background_reinit() -> None:
     """后台异步重初始化核心（不阻塞 API 返回）。"""
     try:
-        from web._app_ref import get_app, get_start_services
+        from web.app_ref import get_app, get_start_services
         _app = get_app()
         if hasattr(_app, "state") and hasattr(_app.state, "core"):
             core = _app.state.core
@@ -807,7 +807,7 @@ def _auto_register_providers(updates: dict) -> None:
 
         # 通过 app.state 注册（如果 app 已启动）
         try:
-            from web._app_ref import get_app
+            from web.app_ref import get_app
             app = get_app()
             if hasattr(app, "state") and hasattr(app.state, "core"):
                 router_obj = app.state.core.router

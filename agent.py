@@ -123,16 +123,14 @@ def _is_running_in_docker() -> bool:
 
 
 def _get_lan_addresses() -> list:
-    """检测本机主网卡的局域网 IPv4 地址（不产生实际网络流量）。"""
+    """检测本机主网卡的局域网 IPv4 地址（纯本地枚举，无网络请求）。"""
     import socket
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(0.5)
-        s.connect(("8.8.8.8", 80))
-        primary_ip = s.getsockname()[0]
-        s.close()
-        if primary_ip and not primary_ip.startswith("127."):
-            return [primary_ip]
+        # 使用本地接口枚举，避免向外部IP发送探测包
+        hostname = socket.gethostname()
+        addrs = socket.getaddrinfo(hostname, None, socket.AF_INET)
+        ips = [a[4][0] for a in addrs if not a[4][0].startswith("127.")]
+        return ips[:1] if ips else []
     except Exception:
         pass
     return []

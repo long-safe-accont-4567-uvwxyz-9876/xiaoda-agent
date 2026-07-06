@@ -35,8 +35,8 @@ from typing import Any, Optional
 
 from loguru import logger
 
-# 复用现有故障注入客户端 (避免代码重复)
-from tests.fault_injection import (
+# 从 chaos 内部导入，断开对 tests/ 的生产依赖
+from chaos._fault_types import (
     FaultConfig,
     FaultInjectingLLMClient,
     FaultType,

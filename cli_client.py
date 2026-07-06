@@ -76,13 +76,22 @@ STAGE_TEXT = {
 console = Console()
 
 
-def login(base: str, password: str) -> str:
+def login(base: str, password: str, retries: int = 3) -> str:
+    """登录 API，带重试保护。"""
     req = urllib.request.Request(
         f"{base}/api/v1/auth/login",
         data=json.dumps({"password": password}).encode(),
         headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.load(resp)["data"]["token"]
+    last_err = None
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return json.load(resp)["data"]["token"]
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
+            last_err = e
+            if attempt < retries - 1:
+                import time; time.sleep(1 * (attempt + 1))  # 递增等待
+    raise ConnectionError(f"登录失败（重试{retries}次）: {last_err}")
 
 
 class NahidaCLI:

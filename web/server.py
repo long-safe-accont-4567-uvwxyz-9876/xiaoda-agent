@@ -371,7 +371,13 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Xiaoda Agent WebUI", version="0.3.98", lifespan=lifespan)
+    # 动态读取版本号，不再硬编码
+    try:
+        from pathlib import Path as _P
+        _ver = (_P(__file__).resolve().parent.parent / "VERSION").read_text().strip()
+    except Exception:
+        _ver = "0.4.95"
+    app = FastAPI(title="Xiaoda Agent WebUI", version=_ver, lifespan=lifespan)
 
     # 速率限制中间件（三级: 全局/用户/写端点, 防 DDoS/滥用）
     # 在路由之前注册, 尽早拦截超限请求; 限制值可通过环境变量覆盖

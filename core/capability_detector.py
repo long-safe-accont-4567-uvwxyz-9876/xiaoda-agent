@@ -26,6 +26,7 @@ from loguru import logger
 @dataclass
 class CapabilityProfile:
     """Agent 运行时能力画像。"""
+    schema_version: int = 1  # 画像版本，供下游判断字段可用性
     platform_os: str = ""
     platform_arch: str = ""
     hostname: str = ""

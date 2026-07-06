@@ -24,7 +24,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 12
 
 
 def _detect_fs_type(path: Path) -> str:

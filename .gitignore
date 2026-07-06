@@ -31,3 +31,6 @@ botpy.log.*
 docs/juejin-article.md
 market/.cache
 assets/stickers/xiaoda_backup/
+
+# 调试脚本（不提交到生产）
+.dbg/

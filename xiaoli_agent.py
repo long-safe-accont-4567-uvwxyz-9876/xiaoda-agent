@@ -12,7 +12,6 @@ from tool_engine.tool_repair import ToolCallRepair
 from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_dsml
 from emotion.tts_engine import TTSEngine
 from core.message import AgentMessage
-from config import get_agent_display_name
 
 
 def _get_providers() -> list[dict]:
@@ -195,10 +194,12 @@ class XiaoliAgent:
             if self._xiaoda_delegate:
                 logger.info("xiaoli.calling_xiaoda", question=question[:50])
                 xiaoda_reply = await self._xiaoda_delegate(question)
+                from config import get_agent_display_name
                 _xiaoda_dn = get_agent_display_name('xiaoda')
                 _xiaoli_dn = get_agent_display_name('xiaoli')
                 result_text = f"[{_xiaoda_dn}姐姐的回答（{_xiaoli_dn}必须用自己的话转述给大哥哥，不要直接复制{_xiaoda_dn}姐姐的原话，要加上{_xiaoli_dn}自己的感觉和语气）]\n{xiaoda_reply}"
             else:
+                from config import get_agent_display_name
                 result_text = f"{get_agent_display_name('xiaoda')}姐姐现在不在...{get_agent_display_name('xiaoli')}自己想想办法吧！"
         elif result.success:
             result_text = json.dumps(result.data, ensure_ascii=False) if not isinstance(result.data, str) else result.data
