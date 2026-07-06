@@ -36,6 +36,7 @@ File /r "dist\xiaoda-agent\*.*"
 ; Explicitly include dotfiles (NSIS *.* may skip files starting with .)
 File "dist\xiaoda-agent\.version"
 File "dist\xiaoda-agent\.auto_update"
+File /nonfatal "dist\xiaoda-agent\.env.example"
 ; 安装后清理可能残留的敏感文件（旧版升级时 .env 可能被保留）
 Delete "$INSTDIR\_internal\config\webui_overrides.json"
 Delete "$INSTDIR\config\webui_overrides.json"

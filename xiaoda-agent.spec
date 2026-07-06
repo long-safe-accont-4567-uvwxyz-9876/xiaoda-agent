@@ -74,6 +74,12 @@ for _vfile in ('.version', '.auto_update'):
 # assets/ directory (icons and other resources)
 datas += _tree_datas(os.path.join(SPECPATH, 'assets'), 'assets')
 
+# Windows launch scripts (bundled by CI, but also declare here for local builds)
+for _script in ('start-windows.bat', 'auto-update.bat', 'open-browser.ps1'):
+    _script_path = os.path.join(SPECPATH, 'scripts', _script)
+    if os.path.isfile(_script_path):
+        datas.append((_script_path, '.'))
+
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +104,7 @@ hiddenimports = [
     'pydantic',
     'jieba',
     'pilk',
+    'yaml',
     'pdfplumber',
     'docx',
     'pptx',
@@ -160,7 +167,9 @@ hiddenimports = [
     'db.db_memory',
     'db.db_notebook',
     'db.fts_utils',
+    'db.idempotent_migrator',
     'db.index_manager',
+    'db.repair_migration',
     'db.session_store',
     'emotion',
     'emotion.emoji_config',
@@ -171,13 +180,24 @@ hiddenimports = [
     'emotion.sticker_manager',
     'emotion.tts_engine',
     'memory',
+    # memory sub-modules
+    'memory.context_governance',
     'memory.context_compressor',
     'memory.context_usage',
+    'memory.emotional_memory',
+    'memory.episodic_limiter',
+    'memory.fluid_memory',
     'memory.knowledge_graph',
     'memory.learning_manager',
+    'memory.matrix_governance',
     'memory.memory_distiller',
     'memory.memory_manager',
     'memory.notebook_manager',
+    'memory.ontology_complexity',
+    'memory.prompt_complexity',
+    'memory.query_transform',
+    'memory.recall_scheduler',
+    'memory.reranker',
     'memory.vector_store',
     'plugins',
     'plugins.context',
@@ -297,25 +317,45 @@ hiddenimports = [
 
     # core sub-modules (runtime imports)
     'core.agent_introspection',
+    'core.agent_r_reflection',
     'core.agent_work_record',
     'core.app_exception',
+    'core.behavioral_health',
     'core.capability_detector',
     'core.circuit_breaker',
+    'core.constraint_injector',
+    'core.degradation',
+    'core.degradation_detector',
     'core.degradation_strategy',
     'core.doctor',
     'core.dream_consolidation',
     'core.error_codes',
     'core.failure_trigger',
+    'core.growth_narrative',
     'core.lazy_loader',
     'core.learning_feedback',
     'core.learning_loop',
     'core.mental_state',
     'core.message',
+    'core.meta_cognition',
+    'core.metacognition_lite',
+    'core.parallel_dag',
     'core.permanent_memory',
     'core.persona_coherence',
     'core.preference_pipeline',
+    'core.preference_validator',
+    'core.recovery_orchestrator',
     'core.risk_classifier',
+    'core.secrets_broker',
+    'core.self_diagnostic',
+    'core.self_model',
+    'core.sla_exporter',
+    'core.slo_tracker',
+    'core.spontaneous_recall',
+    'core.tiered_cache',
+    'core.user_profile_learner',
     'core.xp_system',
+    'core.zombie_detector',
 
     # memory sub-modules
     'memory.emotional_memory',
@@ -333,14 +373,23 @@ hiddenimports = [
     'security.secrets_broker',
     'security.ssrf_guard',
 
+    # doctor sub-modules
+    'doctor.behavioral_health',
+
+    # quality sub-modules
+    'quality.triple_axis_degradation',
+
     # tool_engine sub-modules
     'tool_engine.error_rule_pipeline',
 
     # utils sub-modules
+    'utils.async_compat',
     'utils.canary_guard',
     'utils.encrypted_credential',
+    'utils.env_reader',
     'utils.instruction_hierarchy',
     'utils.llm_cleanup',
+    'utils.ssrf_guard',
 
     # web sub-modules
     'web._app_ref',

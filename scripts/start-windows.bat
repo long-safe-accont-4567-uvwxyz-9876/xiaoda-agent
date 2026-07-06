@@ -62,12 +62,10 @@ echo.
 :: Launch browser once server is ready (background polling)
 if exist "%~dp0open-browser.ps1" (
     start "" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0open-browser.ps1" -Port 8082
-) else (
-    start "" powershell -NoProfile -ExecutionPolicy Bypass -Command "[System.Net.WebRequest]::DefaultWebProxy=New-Object System.Net.WebProxy; $u='http://localhost:8082/api/v1/setup/first-run'; for($i=0;$i -lt 300;$i++){try{$r=Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop;if($r.StatusCode -eq 200){$j=$r.Content|ConvertFrom-Json;try{$fr=[bool]$j.data.first_run}catch{$fr=$false}; if($fr){Start-Process 'http://localhost:8082/#/setup'}else{Start-Process 'http://localhost:8082/#/login'};break}}catch{};Start-Sleep -Seconds 1}"
 )
 
-:: Run the main executable
-"%EXE_PATH%" --web --port 8082
+:: Run the main executable in desktop mode (pywebview native window)
+"%EXE_PATH%" --desktop --port 8082
 
 :: Check exit code
 if %errorlevel% neq 0 (
