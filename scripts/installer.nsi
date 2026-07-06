@@ -71,7 +71,21 @@ WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_
 SectionEnd
 
 Section Uninstall
-RMDir /r "$INSTDIR"
+; 卸载时保留用户数据（记忆数据库、配置、凭证等）
+; 仅删除程序文件，不删除用户数据目录
+RMDir /r "$INSTDIR\_internal"
+Delete "$INSTDIR\xiaoda-agent.exe"
+Delete "$INSTDIR\xiaoda-icon.ico"
+Delete "$INSTDIR\.version"
+Delete "$INSTDIR\.auto_update"
+Delete "$INSTDIR\.env.example"
+Delete "$INSTDIR\start-windows.bat"
+Delete "$INSTDIR\auto-update.bat"
+Delete "$INSTDIR\open-browser.ps1"
+Delete "$INSTDIR\${PRODUCT_NAME}.url"
+Delete "$INSTDIR\uninstall.exe"
+; 尝试移除空目录（如果用户数据仍在则不会删除）
+RMDir "$INSTDIR"
 Delete "$DESKTOP\小妲Agent.lnk"
 RMDir /r "$SMPROGRAMS\${PRODUCT_NAME}"
 DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"

@@ -18,6 +18,9 @@
   --glass-blur: 14px;
   --glass-radius: 16px;
 
+  /* Backdrop tint overlay (shared by LoginView & AgentBackdrop) */
+  --backdrop-tint: linear-gradient(rgba(8, 24, 16, 0.35), rgba(8, 24, 16, 0.55));
+
   /* Shadows */
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);

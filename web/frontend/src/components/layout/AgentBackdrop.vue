@@ -87,7 +87,7 @@ function pushLayer(url: string) {
 .backdrop-tint {
   position: absolute;
   inset: 0;
-  background: linear-gradient(rgba(8, 24, 16, 0.35), rgba(8, 24, 16, 0.55));
+  background: var(--backdrop-tint);
   pointer-events: none;
 }
 

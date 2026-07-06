@@ -20,6 +20,19 @@ def _registry(request: Request) -> Any:
     return request.app.state.agent_registry
 
 
+@router.get("/agents/public-wallpaper", response_model=Envelope[dict])
+async def get_public_wallpaper(request: Request) -> Any:
+    """无需认证的公开接口，返回主 Agent 壁纸（供登录页使用）。"""
+    try:
+        agents = _registry(request).list()
+        main = next((a for a in agents if a.get("is_main")), None)
+        if main and main.get("wallpaper"):
+            return Envelope(data={"wallpaper": main["wallpaper"]})
+    except Exception as e:
+        logger.debug("agents.public_wallpaper_failed: {}", e)
+    return Envelope(data={"wallpaper": ""})
+
+
 async def _audit(request: Request, action: str, detail: str) -> None:
     core = request.app.state.core
     try:
@@ -249,20 +262,24 @@ async def upload_wallpaper(name: str, body: dict, request: Request, _user: str =
     fp = _WALLPAPER_DIR / f"{name}_{ts}.{ext}"
     fp.write_bytes(raw)
     url = f"/media/wallpapers/{fp.name}"
-    # 清理该 agent 的旧壁纸文件（保留最新一张）
+    # 清理该 agent 的旧壁纸文件（保留最新一张，清理所有扩展名）
     try:
-        for old in _WALLPAPER_DIR.glob(f"{name}_*.{ext}"):
-            if old != fp:
+        for old in _WALLPAPER_DIR.glob(f"{name}_*.*"):
+            if old != fp and old.suffix.lstrip(".") in _EXT:
                 old.unlink(missing_ok=True)
-        # 也清理不带时间戳的旧格式文件
-        for old in _WALLPAPER_DIR.glob(f"{name}.{ext}"):
-            old.unlink(missing_ok=True)
+        for old in _WALLPAPER_DIR.glob(f"{name}.*"):
+            if old.suffix.lstrip(".") in _EXT:
+                old.unlink(missing_ok=True)
     except OSError:
         pass
     if name == "xiaoda":
         # 主体不在 dispatcher 中，壁纸持久化到 webui 配置
         from web.config_service import get_config_service
-        get_config_service().set("ui.main_wallpaper", url)
+        try:
+            get_config_service().set("ui.main_wallpaper", url)
+        except Exception as exc:
+            logger.warning("agents.wallpaper_config_save_failed: {}", exc)
+            raise HTTPException(500, "壁纸配置保存失败，请检查磁盘空间") from exc
         from web.agent_registry import MAIN_AGENT_META
         MAIN_AGENT_META["wallpaper"] = url
     else:

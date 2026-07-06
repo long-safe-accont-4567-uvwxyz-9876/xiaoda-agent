@@ -105,7 +105,7 @@ def _extract_topic_keywords(query: str, top_n: int = 2) -> list[str]:
     try:
         import jieba.analyse
         keywords = jieba.analyse.extract_tags(
-            query, topK=top_n * 2, withWeight=False, allowPOS=("n", "nr", "ns", "nt", "nz", "vn", "v")
+            query, topK=top_n * 2, withWeight=False, allowPOS=("n", "nr", "ns", "nt", "nz", "vn", "v", "eng", "a", "ad", "an")
         )
         # 过滤停用词和过短的词
         stopwords = _get_topic_stopwords()
@@ -332,6 +332,7 @@ class MemoryManager:
         is_warm = tier == "warm"
 
         # 冷用户: 仅 FTS, 完全跳过向量检索 (零 Embedding 开销)
+        # 但 FTS 无结果时仍尝试向量检索作为兜底（避免 cold_max > 0 时丢失向量召回）
         if is_cold:
             fts_items = await self._hybrid_fts_search(query, k)
             if fts_items:
@@ -340,7 +341,13 @@ class MemoryManager:
                             query=query[:100], tier="cold", results=len(results),
                             duration_ms=int((time.time() - _start) * 1000))
                 return results
-            # FTS 也无结果, 返回空
+            # FTS 无结果，尝试向量兜底
+            vec_items = await self._hybrid_vec_search(query, k)
+            if vec_items:
+                logger.info("memory.search", event="memory_search",
+                            query=query[:100], tier="cold+vec_fallback", results=len(vec_items),
+                            duration_ms=int((time.time() - _start) * 1000))
+                return vec_items[:k]
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier="cold", results=0,
                         duration_ms=int((time.time() - _start) * 1000))
@@ -456,10 +463,14 @@ class MemoryManager:
             # 构建 id -> memory 映射，按 distance 排序组装结果
             vec_mem_map = {m["id"]: m for m in vec_mems}
             items = []
+            if vec_results:
+                max_dist = max(d for _, d in vec_results) if vec_results else 1.0
+                if max_dist <= 0:
+                    max_dist = 1.0
             for row_id, distance in vec_results:
                 mem = vec_mem_map.get(row_id)
                 if mem:
-                    mem["score"] = 1.0 - distance
+                    mem["score"] = max(0.0, 1.0 - distance / max_dist)
                     items.append(mem)
             return items
         except Exception as e:
@@ -674,10 +685,17 @@ class MemoryManager:
         # A1: 智能短路 - 简单查询跳过查询变换，直接走混合检索
         if getattr(config, "RETRIEVAL_SMART_SKIP", True) and self._is_retrieval_simple(query):
             results = await self.retrieve_memories_hybrid(query, k=k)
-            # Q0-1: 简单路径也应用流体评分，过滤已遗忘的旧记忆（零成本，纯本地计算）
             if results:
+                # 简单路径使用与复杂路径一致的评分逻辑，保证评分尺度统一
                 results = await self._apply_fluid_scoring(results)
-                results.sort(key=lambda x: x.get("effective_score", 0), reverse=True)
+                query_entities: set[str] = set()
+                if self.kg:
+                    try:
+                        query_entities = await self.kg.get_query_entities(query)
+                    except Exception:
+                        pass
+                await self._compute_final_scores(query, results, config, query_entities)
+                results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
                 results = results[:k]
             return results
 

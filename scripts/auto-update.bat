@@ -78,11 +78,10 @@ powershell -NoProfile -Command ^
     "  }; " ^
     "  Write-Host '  Installing update...'; " ^
     "  $srcDir = Get-ChildItem -Path $extractDir -Directory | Select-Object -First 1; " ^
-    "  if ($srcDir) { " ^
-    "    Get-ChildItem -Path $srcDir.FullName | Copy-Item -Recurse -Force -Destination $installDir\; " ^
-    "  } else { " ^
-    "    Get-ChildItem -Path $extractDir | Copy-Item -Recurse -Force -Destination $installDir\; " ^
-    "  }; " ^
+    "  $updateSrc = if ($srcDir) { $srcDir.FullName } else { $extractDir }; " ^
+    "  Remove-Item -Recurse -Force ($installDir + '\_internal\web\dist') -ErrorAction SilentlyContinue; " ^
+    "  Remove-Item -Recurse -Force ($installDir + '\web\dist') -ErrorAction SilentlyContinue; " ^
+    "  Get-ChildItem -Path $updateSrc | Copy-Item -Recurse -Force -Destination $installDir\; " ^
     "  foreach ($item in @('.env', 'config', 'credentials', 'data')) { " ^
     "    $src = $backupDir + '\' + $item; " ^
     "    if (Test-Path $src) { Copy-Item -Recurse -Force $src ($env:USERPROFILE + '\.ai-agent\') }; " ^

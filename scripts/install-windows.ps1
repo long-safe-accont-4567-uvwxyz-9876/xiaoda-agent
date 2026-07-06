@@ -120,7 +120,7 @@ Write-Host "  ================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Verify executable exists
-$exePath = Join-Path $InstallPath "dist\xiaoda-agent\xiaoda-agent.exe"
+$exePath = Join-Path $InstallPath "xiaoda-agent.exe"
 if (-not (Test-Path $exePath)) {
     Write-Host "  [WARN] Executable not found at: $exePath" -ForegroundColor Yellow
     Write-Host "         Installation will continue, but you may need to build first." -ForegroundColor Yellow
