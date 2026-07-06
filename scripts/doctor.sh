@@ -19,29 +19,48 @@ ARGS=""
 if [ "$1" = "json" ] || [ "$1" = "--json" ]; then ARGS="--json"; fi
 if [ "$1" = "fix" ] || [ "$1" = "--fix" ]; then ARGS="--fix"; fi
 
-# 切换到脚本所在目录的上两级 (项目根目录)
+# 切换到脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR/.."
+cd "$SCRIPT_DIR"
 
-# 查找 python
-if command -v python3 >/dev/null 2>&1; then
-    PY_CMD="python3"
-elif command -v python >/dev/null 2>&1; then
-    PY_CMD="python"
-else
-    echo "  [ERROR] 未找到 python3 / python"
-    exit 1
+# 查找可执行文件
+EXE_PATH=""
+if [ -f "./xiaoda-agent" ]; then
+    EXE_PATH="./xiaoda-agent"
+elif [ -f "../xiaoda-agent" ]; then
+    EXE_PATH="../xiaoda-agent"
 fi
 
-# 运行 doctor
-if [ -f "./agent.py" ]; then
-    echo "  [i] 使用: $PY_CMD agent.py doctor $ARGS"
+if [ -n "$EXE_PATH" ]; then
+    echo "  [i] 使用打包版本: $EXE_PATH"
     echo
-    $PY_CMD agent.py doctor $ARGS
+    "$EXE_PATH" doctor $ARGS
     EXITCODE=$?
 else
-    echo "  [ERROR] 未找到 agent.py"
-    exit 1
+    # 开发模式: 查找 agent.py
+    AGENT_PY="./agent.py"
+    if [ ! -f "$AGENT_PY" ]; then
+        AGENT_PY="../agent.py"
+    fi
+    if [ ! -f "$AGENT_PY" ]; then
+        echo "  [ERROR] 未找到 xiaoda-agent 可执行文件或 agent.py"
+        exit 1
+    fi
+
+    # 查找 python
+    if command -v python3 >/dev/null 2>&1; then
+        PY_CMD="python3"
+    elif command -v python >/dev/null 2>&1; then
+        PY_CMD="python"
+    else
+        echo "  [ERROR] 未找到 python3 / python"
+        exit 1
+    fi
+
+    echo "  [i] 使用开发模式: $PY_CMD $AGENT_PY"
+    echo
+    $PY_CMD "$AGENT_PY" doctor $ARGS
+    EXITCODE=$?
 fi
 
 echo

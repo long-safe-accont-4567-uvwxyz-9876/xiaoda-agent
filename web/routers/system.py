@@ -278,7 +278,7 @@ async def restart_service(request: Request) -> Any:
             import tempfile, subprocess
             python = sys.executable
             script = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else 'agent.py'
-            args = sys.argv[1:] if len(sys.argv) > 1 else ['--web', '--host', '0.0.0.0', '--port', '8080']
+            args = sys.argv[1:] if len(sys.argv) > 1 else ['--web', '--host', '0.0.0.0', '--port', '8082']
             bat = tempfile.NamedTemporaryFile(suffix='.bat', delete=False, mode='w')
             arg_str = ' '.join(args)
             bat.write(f'@echo off\ntimeout /t 2 /nobreak >nul\n"{python}" "{script}" {arg_str}\n')
@@ -292,3 +292,19 @@ async def restart_service(request: Request) -> Any:
 
     asyncio.create_task(_exit())
     return Envelope(data={"restarting": True, "platform": "windows" if is_windows else "linux"})
+
+
+@router.get("/system/doctor", response_model=Envelope[dict])
+async def run_doctor_check(fix: bool = Query(default=False, description="自动修复可修复的问题")) -> Any:
+    from core.doctor import _create_default_doctor
+    doc = _create_default_doctor()
+    report = await asyncio.to_thread(doc.run, auto_fix=fix)
+    return Envelope(data=report)
+
+
+@router.post("/system/doctor/fix", response_model=Envelope[dict])
+async def run_doctor_fix() -> Any:
+    from core.doctor import _create_default_doctor
+    doc = _create_default_doctor()
+    report = await asyncio.to_thread(doc.run, auto_fix=True)
+    return Envelope(data=report)

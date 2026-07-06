@@ -34,3 +34,10 @@ assets/stickers/xiaoda_backup/
 
 # 调试脚本（不提交到生产）
 .dbg/
+
+# 临时/构建产物
+nul
+_test.py
+config/credential_salt.bin
+logs/
+xiaoda_agent.egg-info/

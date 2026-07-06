@@ -36,13 +36,33 @@ else:
     KIOXIA_BASE = _kioxia_data.parent if _kioxia_data.parent != Path("/") else _kioxia_data
 
 def _resolve_voice_ref(filename: str) -> Path:
-    """查找参考音频：先查用户数据目录，再查安装包内置路径"""
-    # 1. 用户数据目录
-    user_path = KIOXIA_BASE / filename
+    """查找参考音频：先查用户数据目录（新结构 voice_refs/agent/ 和旧结构），再查安装包内置路径"""
+    stem = filename.rsplit(".", 1)[0].lower()
+    agent_name = None
+    for prefix in ("xiaoda", "xiaoli", "xiaoke", "xiaolian", "xiaolang"):
+        if stem.startswith(prefix):
+            agent_name = prefix
+            break
+    # 获取与 config.py 一致的参考音频目录
+    try:
+        from config import VOICE_REF_DIR as _ref_dir
+    except ImportError:
+        _ref_dir = KIOXIA_BASE / "voice_refs"
+    # 1. 用户数据目录 — 新结构: voice_refs/{agent}/filename
+    if agent_name:
+        new_path = _ref_dir / agent_name / filename
+        if new_path.exists():
+            return new_path
+    # 2. 用户数据目录 — 旧结构: data 根目录直接存放
+    _data_base = _ref_dir.parent
+    user_path = _data_base / filename
     if user_path.exists():
         return user_path
-    # 2. 安装包内置路径（开发环境 / PyInstaller 打包环境）
-    # 内联 get_base_dir 逻辑, 避免从 core.bootstrap 导入 (打破 emotion.tts_engine <-> core.bootstrap 循环)
+    # 3. 用户数据目录 — 旧结构: .ai-agent 根目录（tts_engine 历史路径）
+    legacy_path = KIOXIA_BASE / filename
+    if legacy_path.exists() and legacy_path != user_path:
+        return legacy_path
+    # 4. 安装包内置路径（开发环境 / PyInstaller 打包环境）
     import sys
     try:
         if getattr(sys, 'frozen', False):
@@ -54,11 +74,13 @@ def _resolve_voice_ref(filename: str) -> Path:
             return bundled_path
     except Exception:
         logger.debug("tts.voice_ref_path_error", exc_info=True)
-    # 3. 开发环境 fallback
+    # 5. 开发环境 fallback
     dev_path = Path(__file__).resolve().parent.parent / "assets" / "voice_refs" / filename
     if dev_path.exists():
         return dev_path
-    # 返回用户数据目录路径（即使不存在，用于错误提示）
+    # 返回新结构路径（即使不存在，用于错误提示）
+    if agent_name:
+        return _ref_dir / agent_name / filename
     return user_path
 
 
@@ -67,8 +89,17 @@ VOICE_REFERENCES = {
     "xiaoli": _resolve_voice_ref("xiaoli.mp3"),
 }
 
+def _get_voice_upload_dir() -> Path:
+    """延迟解析参考音频根目录，避免 config 模块未初始化时路径不一致。"""
+    try:
+        from config import VOICE_REF_DIR
+        return VOICE_REF_DIR
+    except ImportError:
+        return KIOXIA_BASE / "voice_refs"
+
+
 # 参考音频根目录（按 agent 分子目录）
-_VOICE_UPLOAD_DIR = KIOXIA_BASE / "voice_refs"
+_VOICE_UPLOAD_DIR = _get_voice_upload_dir()
 _AUDIO_EXTS = {".mp3", ".wav"}
 
 
@@ -90,9 +121,17 @@ def _ensure_builtin_voices():
     import shutil, sys
     # 扫描源目录中所有音频文件，按文件名前缀分配到对应 agent 目录
     _src_dirs = []
-    # 用户数据目录根（旧格式直接放在根目录）
+    # 用户数据目录 — 旧格式直接放在 .ai-agent 根目录
     if KIOXIA_BASE.exists():
         _src_dirs.append(KIOXIA_BASE)
+    # 用户数据目录 — 旧格式放在 data 根目录
+    try:
+        from config import VOICE_REF_DIR
+        _data_base = VOICE_REF_DIR.parent
+        if _data_base.exists() and _data_base != KIOXIA_BASE:
+            _src_dirs.append(_data_base)
+    except ImportError:
+        pass
     # PyInstaller 打包内置
     if getattr(sys, "_MEIPASS", None):
         _src_dirs.append(Path(sys._MEIPASS) / "assets" / "voice_refs")
@@ -335,7 +374,11 @@ class TTSEngine:
         if output_dir:
             self._output_dir = Path(output_dir)
         else:
-            self._output_dir = KIOXIA_BASE / "xiaoda-data" / "tts_cache"
+            try:
+                from config import DATA_DIR
+                self._output_dir = DATA_DIR / "tts_cache"
+            except ImportError:
+                self._output_dir = KIOXIA_BASE / "xiaoda-data" / "tts_cache"
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
         # 设置缓存索引路径并加载已有缓存

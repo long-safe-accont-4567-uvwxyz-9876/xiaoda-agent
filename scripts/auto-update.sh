@@ -5,7 +5,7 @@
 # =============================================================================
 set -euo pipefail
 
-REPO="${GITHUB_REPO:-xiaoda-agent/xiaoda-agent}"
+REPO="${GITHUB_REPO:-long-safe-accont-4567-uvwxyz-9876/xiaoda-agent}"
 GITHUB_API="https://api.github.com/repos/${REPO}"
 INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION_FILE="${INSTALL_DIR}/.version"
@@ -58,11 +58,9 @@ ARCH="$(uname -m)"
 if [ "$OS" = "Linux" ] && [ "$ARCH" = "x86_64" ]; then
     PLATFORM="linux-x86_64"
     EXT="tar.gz"
-    EXTRACT_CMD="tar xzf"
 elif [ "$OS" = "Linux" ] && [ "$ARCH" = "aarch64" ]; then
     PLATFORM="linux-aarch64"
     EXT="tar.gz"
-    EXTRACT_CMD=""
 else
     echo "  不支持的平台: ${OS}-${ARCH}，跳过自动更新"
     exit 0
@@ -116,19 +114,17 @@ fi
 echo "  下载完成，开始更新..."
 
 # 备份当前版本
-BACKUP_DIR="${INSTALL_DIR}/.backup_v${CURRENT_VERSION:-unknown}"
-if [ -d "$BACKUP_DIR" ]; then
-    rm -rf "$BACKUP_DIR"
-fi
+BACKUP_DIR="$(mktemp -d)/xiaoda-agent-backup-v${CURRENT_VERSION:-unknown}"
+mkdir -p "$BACKUP_DIR"
 
-# 停止运行中的实例
+# 停止运行中的实例（排除自身 PID）
 echo "  停止运行中的服务..."
-pkill -f "xiaoda-agent" 2>/dev/null || true
+SELF_PID=$$
+pkill -f "agent.py" 2>/dev/null || true
 sleep 1
 
-# 备份关键文件（.env, config, credentials, data）
-mkdir -p "$BACKUP_DIR"
-for item in .env config credentials data; do
+# 备份关键文件（.env, config, credentials, data, stickers, voice_refs 等）
+for item in .env config credentials data stickers xiaoli-stickers agent-stickers media voice_refs files memory_state plugins; do
     if [ -e "${INSTALL_DIR}/${item}" ]; then
         cp -r "${INSTALL_DIR}/${item}" "$BACKUP_DIR/"
     fi
@@ -138,17 +134,11 @@ done
 if [ "$EXT" = "tar.gz" ]; then
     mkdir -p "${TMP_DIR}/extract"
     tar xzf "${TMP_DIR}/${FILENAME}" -C "${TMP_DIR}/extract"
-    # 将新文件复制到安装目录
-    cp -rf "${TMP_DIR}/extract/xiaoda-agent/"* "${INSTALL_DIR}/"
-elif [ "$EXT" = "run" ]; then
-    mkdir -p "${TMP_DIR}/extract"
-    tar xzf "${TMP_DIR}/${FILENAME}" -C "${TMP_DIR}/extract"
-    # 将新文件复制到安装目录
     cp -rf "${TMP_DIR}/extract/xiaoda-agent/"* "${INSTALL_DIR}/"
 fi
 
 # 恢复用户配置
-for item in .env config credentials data; do
+for item in .env config credentials data stickers xiaoli-stickers agent-stickers media voice_refs files memory_state plugins; do
     if [ -e "$BACKUP_DIR/$item" ]; then
         cp -rf "$BACKUP_DIR/$item" "${INSTALL_DIR}/"
     fi

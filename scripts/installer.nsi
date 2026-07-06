@@ -29,6 +29,8 @@ SetCompressor /SOLID lzma
 Section "MainSection" SEC01
 SetOutPath "$INSTDIR"
 SetOverwrite on
+; 关闭正在运行的实例，避免文件被锁定导致安装失败
+nsExec::ExecToStack 'powershell -NoProfile -Command "Stop-Process -Name xiaoda-agent -Force -ErrorAction SilentlyContinue"'
 ; 安装前清理旧的前端文件，避免 vite hash 文件名导致的缓存问题
 RMDir /r "$INSTDIR\_internal\web\dist"
 RMDir /r "$INSTDIR\web\dist"
@@ -55,6 +57,13 @@ CreateShortCut "$DESKTOP\小妲Agent.lnk" "$INSTDIR\xiaoda-agent.exe" "--desktop
 CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
 CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\小妲Agent.lnk" "$INSTDIR\xiaoda-agent.exe" "--desktop" "$INSTDIR\xiaoda-icon.ico" 0
 CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\卸载.lnk" "$INSTDIR\uninstall.exe"
+; 创建用户数据目录结构（供用户上传参考音频、表情包等）
+CreateDirectory "$PROFILE\.ai-agent\data\voice_refs"
+CreateDirectory "$PROFILE\.ai-agent\data\stickers"
+CreateDirectory "$PROFILE\.ai-agent\data\xiaoli-stickers"
+CreateDirectory "$PROFILE\.ai-agent\data\agent-stickers"
+CreateDirectory "$PROFILE\.ai-agent\data\media"
+CreateDirectory "$PROFILE\.ai-agent\data\files"
 SectionEnd
 
 Section -AdditionalIcons
@@ -71,6 +80,8 @@ WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_
 SectionEnd
 
 Section Uninstall
+; 关闭正在运行的实例
+nsExec::ExecToStack 'powershell -NoProfile -Command "Stop-Process -Name xiaoda-agent -Force -ErrorAction SilentlyContinue"'
 ; 卸载时保留用户数据（记忆数据库、配置、凭证等）
 ; 仅删除程序文件，不删除用户数据目录
 RMDir /r "$INSTDIR\_internal"
@@ -82,6 +93,7 @@ Delete "$INSTDIR\.env.example"
 Delete "$INSTDIR\start-windows.bat"
 Delete "$INSTDIR\auto-update.bat"
 Delete "$INSTDIR\open-browser.ps1"
+Delete "$INSTDIR\doctor.bat"
 Delete "$INSTDIR\${PRODUCT_NAME}.url"
 Delete "$INSTDIR\uninstall.exe"
 ; 尝试移除空目录（如果用户数据仍在则不会删除）

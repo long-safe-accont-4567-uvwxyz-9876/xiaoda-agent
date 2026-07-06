@@ -48,10 +48,16 @@ install_agent() {
     tar -xzf "$tarball" -C "$INSTALL_DIR" --strip-components=1
     info "解压到 $INSTALL_DIR"
 
-    # 安装 Python 依赖
+    # 创建 Python 虚拟环境
+    if [ ! -d "$INSTALL_DIR/.venv" ]; then
+        python3 -m venv "$INSTALL_DIR/.venv"
+        info "已创建 Python 虚拟环境"
+    fi
+
+    # 安装 Python 依赖到 venv
     if [ -f "$INSTALL_DIR/requirements.txt" ]; then
-        pip3 install -r "$INSTALL_DIR/requirements.txt" --quiet 2>/dev/null || \
-            pip3 install -r "$INSTALL_DIR/requirements.txt" 2>&1 | tail -5
+        "$INSTALL_DIR/.venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" --quiet 2>/dev/null || \
+            "$INSTALL_DIR/.venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" 2>&1 | tail -5
         info "Python 依赖已安装"
     fi
 
@@ -60,12 +66,21 @@ install_agent() {
         cat > "$INSTALL_DIR/.env" <<'ENVEOF'
 # ── 小达 Agent 配置 ──
 WEBUI_HOST=0.0.0.0
-WEBUI_PORT=8080
+WEBUI_PORT=8082
 # LLM_API_KEY=sk-your-key-here
 # LLM_BASE_URL=https://api.openai.com/v1
 ENVEOF
         info "已创建 .env 配置文件（请编辑填入 API Key）"
     fi
+
+    # 创建用户数据目录
+    mkdir -p "$HOME/.ai-agent/data/voice_refs" \
+             "$HOME/.ai-agent/data/stickers" \
+             "$HOME/.ai-agent/data/xiaoli-stickers" \
+             "$HOME/.ai-agent/data/agent-stickers" \
+             "$HOME/.ai-agent/data/media" \
+             "$HOME/.ai-agent/data/files"
+    info "用户数据目录已创建"
 }
 
 # ── 创建 systemd 服务 ─────────────────────────────────────
@@ -83,10 +98,11 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/.venv/bin/python $INSTALL_DIR/agent.py --web --host 0.0.0.0 --port 8080
+ExecStart=$INSTALL_DIR/.venv/bin/python $INSTALL_DIR/agent.py --web --host 0.0.0.0 --port \${WEBUI_PORT:-8082}
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=$INSTALL_DIR/.env
 
 [Install]
 WantedBy=multi-user.target
@@ -128,9 +144,10 @@ main() {
     echo ""
     info "安装完成！"
     echo ""
-    echo "  访问地址: http://localhost:8080"
+    echo "  访问地址: http://localhost:8082"
     echo "  配置文件: $INSTALL_DIR/.env"
     echo "  服务管理: sudo systemctl {start|stop|restart|status} $SERVICE_NAME"
+    echo "  自检工具: $INSTALL_DIR/scripts/doctor.sh"
     echo ""
 }
 

@@ -141,6 +141,22 @@ if (Test-Path $exePath) {
 # Add to PATH
 Add-UserPath -Dir $InstallPath
 
+# Create user data directory structure (for voice refs, stickers, etc.)
+$userDataDirs = @(
+    "$env:USERPROFILE\.ai-agent\data\voice_refs",
+    "$env:USERPROFILE\.ai-agent\data\stickers",
+    "$env:USERPROFILE\.ai-agent\data\xiaoli-stickers",
+    "$env:USERPROFILE\.ai-agent\data\agent-stickers",
+    "$env:USERPROFILE\.ai-agent\data\media",
+    "$env:USERPROFILE\.ai-agent\data\files"
+)
+foreach ($dir in $userDataDirs) {
+    if (-not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        Write-Host "  [OK]   Created directory: $dir" -ForegroundColor Green
+    }
+}
+
 # Print summary
 Write-Host ""
 Write-Host "  ================================" -ForegroundColor Cyan

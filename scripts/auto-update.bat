@@ -11,7 +11,9 @@ if defined GITHUB_REPO (
 ) else (
     set "REPO=long-safe-accont-4567-uvwxyz-9876/xiaoda-agent"
 )
-set "INSTALL_DIR=%~dp0.."
+set "INSTALL_DIR=%~dp0"
+:: Remove trailing backslash for consistent path joining
+if "%INSTALL_DIR:~-1%"=="\" set "INSTALL_DIR=%INSTALL_DIR:~0,-1%"
 set "VERSION_FILE=%INSTALL_DIR%\.version"
 set "AUTO_UPDATE_FLAG=%INSTALL_DIR%\.auto_update"
 
@@ -70,19 +72,21 @@ powershell -NoProfile -Command ^
     "  New-Item -ItemType Directory -Path $extractDir | Out-Null; " ^
     "  tar xzf $tmp -C $extractDir; " ^
     "  Write-Host '  Backing up configuration...'; " ^
-    "  $backupDir = $installDir + '\.backup_v' + $curVer; " ^
+    "  $backupDir = [System.IO.Path]::GetTempPath() + 'xiaoda-agent-backup-v' + $curVer; " ^
     "  if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir | Out-Null }; " ^
-    "  foreach ($item in @('.env', 'config', 'credentials', 'data')) { " ^
+    "  foreach ($item in @('.env', 'config', 'credentials', 'data', 'stickers', 'xiaoli-stickers', 'agent-stickers', 'media', 'voice_refs', 'files', 'memory_state', 'plugins')) { " ^
     "    $src = $env:USERPROFILE + '\.ai-agent\' + $item; " ^
     "    if (Test-Path $src) { Copy-Item -Recurse -Force $src $backupDir\ }; " ^
     "  }; " ^
     "  Write-Host '  Installing update...'; " ^
     "  $srcDir = Get-ChildItem -Path $extractDir -Directory | Select-Object -First 1; " ^
     "  $updateSrc = if ($srcDir) { $srcDir.FullName } else { $extractDir }; " ^
+    "  $proc = Get-Process -Name 'xiaoda-agent' -ErrorAction SilentlyContinue; " ^
+    "  if ($proc) { Write-Host '  Stopping running instance...'; Stop-Process -Name 'xiaoda-agent' -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2 }; " ^
     "  Remove-Item -Recurse -Force ($installDir + '\_internal\web\dist') -ErrorAction SilentlyContinue; " ^
     "  Remove-Item -Recurse -Force ($installDir + '\web\dist') -ErrorAction SilentlyContinue; " ^
     "  Get-ChildItem -Path $updateSrc | Copy-Item -Recurse -Force -Destination $installDir\; " ^
-    "  foreach ($item in @('.env', 'config', 'credentials', 'data')) { " ^
+    "  foreach ($item in @('.env', 'config', 'credentials', 'data', 'stickers', 'xiaoli-stickers', 'agent-stickers', 'media', 'voice_refs', 'files', 'memory_state', 'plugins')) { " ^
     "    $src = $backupDir + '\' + $item; " ^
     "    if (Test-Path $src) { Copy-Item -Recurse -Force $src ($env:USERPROFILE + '\.ai-agent\') }; " ^
     "  }; " ^

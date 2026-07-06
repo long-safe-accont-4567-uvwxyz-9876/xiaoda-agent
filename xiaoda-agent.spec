@@ -76,7 +76,7 @@ for _vfile in ('.version', '.auto_update'):
 datas += _tree_datas(os.path.join(SPECPATH, 'assets'), 'assets')
 
 # Windows launch scripts (bundled by CI, but also declare here for local builds)
-for _script in ('start-windows.bat', 'auto-update.bat', 'open-browser.ps1'):
+for _script in ('start-windows.bat', 'auto-update.bat', 'open-browser.ps1', 'doctor.bat'):
     _script_path = os.path.join(SPECPATH, 'scripts', _script)
     if os.path.isfile(_script_path):
         datas.append((_script_path, '.'))

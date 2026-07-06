@@ -8,12 +8,13 @@ services:
       - "${WEBUI_PORT:-8082}:${WEBUI_PORT:-8082}"
     volumes:
       # 代码挂载：本地代码覆盖容器内代码，更新只需 git pull + restart
+      # 注意：需要先在本地构建前端 (cd web/frontend && npm ci && npm run build)
       - ./:/app
       # 数据独立持久化，升级不丢配置
       - agent-data:/data
     environment:
       - KIOXIA_DATA_DIR=/data
-      - WEBUI_HOST=127.0.0.1
+      - WEBUI_HOST=0.0.0.0
       - WEBUI_PORT=${WEBUI_PORT:-8082}
       - AGENTLY_CLI_HOME=/data/agently-cli
     env_file:

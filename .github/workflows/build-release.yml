@@ -362,6 +362,7 @@ jobs:
           Copy-Item "scripts/start-windows.bat" "dist/xiaoda-agent/"
           Copy-Item "scripts/auto-update.bat" "dist/xiaoda-agent/"
           Copy-Item "scripts/open-browser.ps1" "dist/xiaoda-agent/"
+          Copy-Item "scripts/doctor.bat" "dist/xiaoda-agent/"
           Copy-Item "assets/xiaoda-icon.ico" "dist/xiaoda-agent/xiaoda-icon.ico"
 
           choco install nsis -y --no-progress
@@ -407,7 +408,9 @@ jobs:
           touch dist/xiaoda-agent/.auto_update
           mkdir -p dist/xiaoda-agent/scripts
           cp scripts/auto-update.sh dist/xiaoda-agent/scripts/
+          cp scripts/doctor.sh dist/xiaoda-agent/scripts/
           chmod +x dist/xiaoda-agent/scripts/auto-update.sh
+          chmod +x dist/xiaoda-agent/scripts/doctor.sh
           tar -czf xiaoda-agent-linux-x86_64-v${VERSION}.tar.gz -C dist xiaoda-agent
 
           # 打包 Linux 安装脚本

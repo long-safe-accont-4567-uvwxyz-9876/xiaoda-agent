@@ -288,6 +288,8 @@ AGENT_STICKER_BASE = _resolve_data_path(_KIOXIA_BASE / "agent-stickers", _FALLBA
 FILE_DIR = _resolve_data_path(_KIOXIA_BASE / "files", _FALLBACK_BASE / "files")
 # 媒体目录（用户上传图片、生成的 TTS/图片/视频、壁纸等可写资源）
 MEDIA_DIR = _resolve_data_path(_KIOXIA_BASE / "media", _FALLBACK_BASE / "media")
+# 参考音频目录（用户上传的 TTS 参考音频，按 agent 分子目录）
+VOICE_REF_DIR = _resolve_data_path(_KIOXIA_BASE / "voice_refs", _FALLBACK_BASE / "voice_refs")
 # 记忆状态目录（记忆编码状态等运行时可写数据）
 MEMORY_STATE_DIR = _resolve_data_path(_KIOXIA_BASE / "memory_state", _FALLBACK_BASE / "memory_state")
 # 插件配置目录
@@ -310,8 +312,20 @@ if getattr(sys, 'frozen', False):
     _migrate_old_data(Path(os.path.expanduser("~/.ai-agent/workspace")), WORKSPACE_DIR, "workspace")
     # 迁移贴纸
     _migrate_old_data(_exe_base / "stickers", STICKER_DIR, "stickers")
+    # 迁移小理贴纸
+    _migrate_old_data(_exe_base / "xiaoli-stickers", XIAOLI_STICKER_DIR, "xiaoli-stickers")
+    # 迁移通用智能体贴纸
+    _migrate_old_data(_exe_base / "agent-stickers", AGENT_STICKER_BASE, "agent-stickers")
     # 迁移文件存储
     _migrate_old_data(_exe_base / "files", FILE_DIR, "files")
+    # 迁移媒体文件（壁纸、TTS 缓存等）
+    _migrate_old_data(_exe_base / "media", MEDIA_DIR, "media")
+    # 迁移参考音频
+    _migrate_old_data(_exe_base / "voice_refs", VOICE_REF_DIR, "voice_refs")
+    # 迁移记忆状态
+    _migrate_old_data(_exe_base / "memory_state", MEMORY_STATE_DIR, "memory_state")
+    # 迁移插件配置
+    _migrate_old_data(_exe_base / "plugins", PLUGINS_CONFIG_DIR, "plugins")
 
 _KIOXIA_AVAILABLE = (_KIOXIA_BASE / "db").exists()
 
@@ -843,6 +857,7 @@ __all__ = [
     "AGENT_STICKER_BASE",
     "FILE_DIR",
     "MEDIA_DIR",
+    "VOICE_REF_DIR",
     "MEMORY_STATE_DIR",
     "PLUGINS_CONFIG_DIR",
     "AGENTS_CONFIG_DIR",

@@ -6,16 +6,22 @@ setlocal
 :: ============================================
 
 :: Handle Ctrl+C gracefully
+set "LAUNCH_MODE=--desktop"
 if "%~1"=="" goto :main
-if /i "%~1"=="--web" goto :main
+if /i "%~1"=="--web" (
+    set "LAUNCH_MODE=--web"
+    goto :main
+)
+if /i "%~1"=="--desktop" goto :main
 goto :usage
 
 :usage
 echo.
-echo   Usage: start-windows.bat [--web]
+echo   Usage: start-windows.bat [--web ^| --desktop]
 echo.
 echo   Options:
-echo     --web    Start in Web UI mode
+echo     --web       Start in Web UI mode (opens browser)
+echo     --desktop   Start in Desktop mode (default, pywebview window)
 echo.
 goto :eof
 
@@ -59,13 +65,15 @@ set PYTHONIOENCODING=utf-8
 echo   Starting Xiaoda Agent...
 echo.
 
-:: Launch browser once server is ready (background polling)
-if exist "%~dp0open-browser.ps1" (
-    start "" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0open-browser.ps1" -Port 8082
+:: Launch browser once server is ready (only in --web mode; --desktop uses pywebview native window)
+if /i "%LAUNCH_MODE%"=="--web" (
+    if exist "%~dp0open-browser.ps1" (
+        start "" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0open-browser.ps1" -Port 8082
+    )
 )
 
-:: Run the main executable in desktop mode (pywebview native window)
-"%EXE_PATH%" --desktop --port 8082
+:: Run the main executable
+"%EXE_PATH%" %LAUNCH_MODE% --port 8082
 
 :: Check exit code
 if %errorlevel% neq 0 (

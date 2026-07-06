@@ -641,7 +641,7 @@ class MCPManager:
             },
             "remote": {
                 "transport": "sse",
-                "url": "http://localhost:8080/sse",
+                "url": "http://localhost:8082/sse",
                 "headers": {"Authorization": "Bearer xxx"}
             },
             ...

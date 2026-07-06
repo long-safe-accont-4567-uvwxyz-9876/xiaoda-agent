@@ -34,6 +34,10 @@ COPY . .
 # 从 Stage 1 复制前端构建产物（web/dist 在 .gitignore 中，COPY . . 不包含它）
 COPY --from=frontend-builder /build/web/dist web/dist
 
+# 复制辅助脚本
+COPY scripts/doctor.sh scripts/doctor.sh
+RUN chmod +x scripts/doctor.sh
+
 # 从 Stage 1 复制 agently-cli（邮箱 OAuth 工具）
 # 复制 node 二进制和 agently-cli npm 包（run.js 需要 node）
 COPY --from=frontend-builder /usr/local/bin/node /usr/local/bin/node
@@ -47,7 +51,9 @@ RUN mkdir -p /data/agently-cli/.agently-cli
 
 # 数据目录（通过 volume 挂载持久化）
 ENV KIOXIA_DATA_DIR=/data
-RUN mkdir -p /data/db /data/logs /data/credentials /data/stickers /data/xiaoli-stickers /data/files /data/config
+RUN mkdir -p /data/db /data/logs /data/credentials /data/stickers /data/xiaoli-stickers \
+    /data/agent-stickers /data/files /data/media /data/voice_refs /data/config \
+    /data/memory_state /data/plugins /data/workspace
 
 # 创建非特权用户并设置目录权限
 RUN groupadd -f appgroup && useradd -r -u 1000 -g appgroup appuser \
@@ -58,9 +64,21 @@ USER appuser
 ENV WEBUI_PORT=8082
 EXPOSE 8082
 
-# 健康检查（使用 /api/v1/system/os 公开端点，无需认证）
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://localhost:{os.environ.get(\"WEBUI_PORT\", \"8082\")}/api/v1/system/os')" || exit 1
+# 健康检查：先尝试 HTTP 探针，失败则运行 doctor --fix 自动修复后重试
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD python -c "\
+import os, urllib.request, urllib.error, subprocess, sys; \
+port = os.environ.get('WEBUI_PORT', '8082'); \
+url = f'http://localhost:{port}/api/v1/system/os'; \
+try: \
+    urllib.request.urlopen(url, timeout=3); \
+except Exception: \
+    print('Health check failed, running doctor --fix...'); \
+    subprocess.run([sys.executable, 'agent.py', 'doctor', '--fix']); \
+    try: \
+        urllib.request.urlopen(url, timeout=3); \
+    except Exception: \
+        sys.exit(1)"
 
 # 启动命令（端口由 WEBUI_PORT 环境变量控制，默认 8082）
 CMD ["python", "agent.py", "--web"]

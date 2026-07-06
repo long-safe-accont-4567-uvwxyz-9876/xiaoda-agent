@@ -159,19 +159,29 @@ class AgentCoreBootstrapper:
     def _ensure_voice_refs(self) -> None:
         """首次运行时将参考音频从安装包复制到用户数据目录"""
         import shutil
-        from emotion.tts_engine import KIOXIA_BASE
+        from config import VOICE_REF_DIR
         bundled_dir = self._get_bundled_assets_dir() / "voice_refs"
         if not bundled_dir.exists():
             return
-        KIOXIA_BASE.mkdir(parents=True, exist_ok=True)
+        VOICE_REF_DIR.mkdir(parents=True, exist_ok=True)
         for filename in ("xiaoda_hq.wav", "xiaoda.wav", "xiaoli.mp3"):
-            dest = KIOXIA_BASE / filename
+            stem = filename.rsplit(".", 1)[0].lower()
+            agent_name = None
+            for prefix in ("xiaoda", "xiaoli", "xiaoke", "xiaolian", "xiaolang"):
+                if stem.startswith(prefix):
+                    agent_name = prefix
+                    break
+            if not agent_name:
+                continue
+            agent_dir = VOICE_REF_DIR / agent_name
+            agent_dir.mkdir(parents=True, exist_ok=True)
+            dest = agent_dir / filename
             if not dest.exists():
                 src = bundled_dir / filename
                 if src.exists():
                     try:
                         shutil.copy2(src, dest)
-                        logger.info("bootstrap.voice_ref_copied", file=filename)
+                        logger.info("bootstrap.voice_ref_copied", file=filename, agent=agent_name)
                     except Exception as e:
                         logger.warning("bootstrap.voice_ref_copy_failed", file=filename, error=str(e))
 
