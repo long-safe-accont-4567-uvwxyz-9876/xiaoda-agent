@@ -122,5 +122,5 @@ def test_encrypt_different_per_machine():
          patch("security.credential_vault.socket") as mock_socket:
         mock_getpass.getuser.return_value = "attacker"
         mock_socket.gethostname.return_value = "attacker-pc"
-    with pytest.raises(DecryptionError, match="HMAC 标签验证失败"):
-        decrypt(enc_default)
+        with pytest.raises(DecryptionError, match="HMAC 标签验证失败"):
+            decrypt(enc_default)
