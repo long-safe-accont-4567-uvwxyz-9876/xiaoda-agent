@@ -54,7 +54,11 @@ market/.cache
 assets/stickers/xiaoda_backup/
 tests/benchmark_results.json
 .dbg/
-scripts/
+scripts/*.bat
+scripts/*.ps1
+scripts/installer.nsi
+scripts/install-windows.ps1
+scripts/start-windows.bat
 .github/
 *.md
 pyproject.toml
