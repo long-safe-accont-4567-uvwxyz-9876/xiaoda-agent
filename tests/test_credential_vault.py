@@ -21,6 +21,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from security.credential_vault import (
+    DecryptionError,
     decrypt,
     encrypt,
     is_encrypted,
@@ -113,11 +114,13 @@ def test_encrypt_different_per_machine():
 
     # 不同机器产生不同密文
     assert enc_attacker != enc_default
-    # 本机无法解密攻击者机器的密文（HMAC 验证失败）
-    assert decrypt(enc_attacker) == ""
+    # 本机无法解密攻击者机器的密文（HMAC 验证失败）—— 修复后抛 DecryptionError
+    with pytest.raises(DecryptionError, match="HMAC 标签验证失败"):
+        decrypt(enc_attacker)
     # 攻击者机器也无法解密本机的密文
     with patch("security.credential_vault.getpass") as mock_getpass, \
          patch("security.credential_vault.socket") as mock_socket:
         mock_getpass.getuser.return_value = "attacker"
         mock_socket.gethostname.return_value = "attacker-pc"
-        assert decrypt(enc_default) == ""
+    with pytest.raises(DecryptionError, match="HMAC 标签验证失败"):
+        decrypt(enc_default)
