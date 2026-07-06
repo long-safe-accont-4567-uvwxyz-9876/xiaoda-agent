@@ -19,6 +19,7 @@ from loguru import logger
 from config import MIMO_API_KEY, MIMO_BASE_URL, _ensure_workspace_template
 from config import DEFAULT_PROVIDER as _DEFAULT_PROVIDER, PRO_MODEL_NAME as _PRO_MODEL
 from config import MODEL_NAME as _MODEL_NAME, get_provider_config as _get_provider_config
+from config import get_agent_display_name
 from core.background_tasks import BackgroundTaskManager
 
 if TYPE_CHECKING:
@@ -415,7 +416,7 @@ class AgentCoreBootstrapper:
 
         xiaoli_config = SubAgentConfig(
             name="xiaoli",
-            display_name="小莉",
+            display_name=get_agent_display_name("xiaoli"),
             provider=_DEFAULT_PROVIDER,
             model=_agent_model,
             personality_file=str(_agents_dir / "xiaoli_personality.md"),
@@ -430,7 +431,7 @@ class AgentCoreBootstrapper:
         await core.dispatcher.register(xiaoli_config)
         xiaolang_config = SubAgentConfig(
             name="xiaolang",
-            display_name="小狼",
+            display_name=get_agent_display_name("xiaolang"),
             provider=_DEFAULT_PROVIDER,
             model=_agent_model,
             personality_file=str(_agents_dir / "xiaolang_personality.md"),
@@ -445,7 +446,7 @@ class AgentCoreBootstrapper:
         await core.dispatcher.register(xiaolang_config)
         xiaolian_config = SubAgentConfig(
             name="xiaolian",
-            display_name="小涟",
+            display_name=get_agent_display_name("xiaolian"),
             provider=_DEFAULT_PROVIDER,
             model=_agent_model,
             personality_file=str(_agents_dir / "xiaolian_personality.md"),
@@ -459,7 +460,7 @@ class AgentCoreBootstrapper:
         await core.dispatcher.register(xiaolian_config)
         xiaoke_config = SubAgentConfig(
             name="xiaoke",
-            display_name="小可",
+            display_name=get_agent_display_name("xiaoke"),
             provider=_DEFAULT_PROVIDER,
             model=_agent_model,
             personality_file=str(_agents_dir / "xiaoke_personality.md"),

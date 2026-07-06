@@ -51,6 +51,10 @@ def _load_or_create_secret() -> str:
         _SECRET = secrets.token_hex(32)
         secret_path.parent.mkdir(parents=True, exist_ok=True)
         secret_path.write_text(_SECRET, encoding="utf-8")
+        try:
+            secret_path.chmod(0o600)
+        except OSError:
+            pass  # Windows 不支持 chmod
     return _SECRET
 
 

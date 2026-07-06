@@ -569,7 +569,11 @@ class MessageProcessorMixin:
                                                chat_targets: Any, is_master: Any,
                                                ctx: Any) -> tuple:
         """主路径阶段1：Klee 委托 + 情绪检测 + 记忆检索。返回 (emotion, emotion_label)。"""
-        if ("可莉" in user_input or "小莉" in user_input) and "xiaoda" in chat_targets:
+        # IP-safe: 动态读取 xiaoli 的 display_name，避免硬编码原名
+        from config import get_agent_display_name
+        _xiaoli_dn = get_agent_display_name("xiaoli")
+        _xiaoli_names = {"可莉", "小莉", _xiaoli_dn, "xiaoli"}
+        if any(n in user_input for n in _xiaoli_names) and "xiaoda" in chat_targets:
             klee_reply = await self.delegate_to_klee(clean_input, factual=True)
             self.context.klee_context = klee_reply
         else:

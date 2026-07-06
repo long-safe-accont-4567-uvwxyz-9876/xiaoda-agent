@@ -130,13 +130,12 @@ STATUS_MAP = {
     "done": "✅ 搞定啦～",
 }
 
-AGENT_NAMES = {
-    "xiaoda": "小妲",
-    "xiaoli": "小莉",
-    "xiaolian": "小涟",
-    "xiaolang": "小狼",
-    "xiaoke": "小可",
-}
+# IP-safe: 动态从 config/agents/*.json 读取 display_name，避免硬编码原名
+try:
+    from config import get_agent_display_name, agent_names
+    AGENT_NAMES = {name: get_agent_display_name(name) for name in agent_names()}
+except ImportError:
+    AGENT_NAMES = {"xiaoda": "小妲", "xiaoli": "小莉", "xiaolian": "小涟", "xiaolang": "小狼", "xiaoke": "小可"}
 
 NAHIDA_ASCII = (
     "     _   _____    __  __________  ___ \n"

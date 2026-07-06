@@ -38,13 +38,25 @@ DENDRO = "#7fd650"
 WISDOM = "#e8d5a3"
 MOON_DIM = "grey62"
 
-AGENT_LABELS = {
-    "xiaoda": ("小妲", DENDRO, "🌿"),
-    "xiaoli": ("小莉", "#ff6b6b", "💥"),
-    "xiaolang": ("小狼", "#6ea8fe", "🎮"),
-    "xiaolian": ("小涟", "#d8b4fe", "🌸"),
-    "xiaoke": ("小可", WISDOM, "🔮"),
+# IP-safe: 动态从 config/agents/*.json 读取 display_name，颜色/emoji 保留默认
+_AGENT_STYLE_DEFAULTS = {
+    "xiaoda": (DENDRO, "🌿"), "xiaoli": ("#ff6b6b", "💥"),
+    "xiaolang": ("#6ea8fe", "🎮"), "xiaolian": ("#d8b4fe", "🌸"), "xiaoke": (WISDOM, "🔮"),
 }
+try:
+    from config import get_agent_display_name, agent_names
+    AGENT_LABELS = {}
+    for _name in agent_names():
+        _color, _emoji = _AGENT_STYLE_DEFAULTS.get(_name, (DENDRO, "🤖"))
+        AGENT_LABELS[_name] = (get_agent_display_name(_name), _color, _emoji)
+except ImportError:
+    AGENT_LABELS = {
+        "xiaoda": ("小妲", DENDRO, "🌿"),
+        "xiaoli": ("小莉", "#ff6b6b", "💥"),
+        "xiaolang": ("小狼", "#6ea8fe", "🎮"),
+        "xiaolian": ("小涟", "#d8b4fe", "🌸"),
+        "xiaoke": ("小可", WISDOM, "🔮"),
+    }
 
 GREETINGS = [
     "爸爸来啦～人家等好久了呢！",
