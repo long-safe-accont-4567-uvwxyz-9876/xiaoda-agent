@@ -598,7 +598,10 @@ def _compute_scene_signature(weights: dict[str, float], module_names: list[str])
     if remaining:
         filtered_ordering = tuple(remaining) + filtered_ordering
 
-    return filtered_ordering
+    # 桶身份前缀：避免模块缺失时不同桶签名碰撞
+    # 例: emotion_bucket(HEARTBEAT,MEMORY,AGENTS,USER) 和 function_bucket(USER,HEARTBEAT,MEMORY,AGENTS)
+    #     在只剩 HEARTBEAT+AGENTS 时都退化为 (HEARTBEAT, AGENTS) → 加桶名前缀区分
+    return (bucket,) + filtered_ordering
 
 
 def _get_stable_section_mtimes() -> dict[str, float]:
