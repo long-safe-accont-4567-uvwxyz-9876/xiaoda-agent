@@ -59,6 +59,12 @@ class ToolExecutor:
             logger.warning("tool_executor.rate_limited", tool=tool_name)
             return ToolResult.fail("刚才已经帮你查过了呢……等一会儿再看好不好？")
 
+        # 沙箱安全检查：网络/文件/子进程工具执行前强制校验
+        sandbox_err = self._enforce_sandbox(tool_name, arguments)
+        if sandbox_err:
+            logger.warning("tool_executor.sandbox_blocked", tool=tool_name, reason=sandbox_err)
+            return ToolResult.fail(f"安全沙箱阻止了此操作：{sandbox_err}")
+
         _start = time.time()
         result = await self._execute_with_timeout(tool, arguments)
         duration = time.time() - _start
@@ -106,6 +112,51 @@ class ToolExecutor:
             return False
         timestamps.append(now)
         return True
+
+    # ── 沙箱安全检查 ─────────────────────────────────────────────
+    # 需要检查 URL 的网络工具
+    _NETWORK_TOOLS = {"web_browse", "web_search", "multi_search", "web_browse_enhanced"}
+    # 需要检查路径的文件工具
+    _FILE_TOOLS = {"read_file", "write_file", "list_files", "search_files", "document_reader"}
+    # 需要检查命令的子进程工具
+    _SHELL_TOOLS = {"shell_command", "python_executor"}
+    # 允许的无害子进程命令前缀（即使沙箱 strict 也放行）
+    _SAFE_SHELL_PREFIXES = ("python3 -c", "python -c", "echo", "date", "whoami", "pwd", "ls", "cat")
+
+    def _enforce_sandbox(self, tool_name: str, arguments: dict) -> str | None:
+        """工具执行前沙箱检查。返回 None 表示放行，返回字符串为拒绝原因。"""
+        from security.sandbox_config import check_domain_allowed, check_path_allowed, get_default_sandbox
+        sandbox = get_default_sandbox()
+
+        # 网络工具：检查 URL 参数
+        if tool_name in self._NETWORK_TOOLS:
+            url = arguments.get("url") or arguments.get("query") or ""
+            if url and url.startswith(("http://", "https://")):
+                allowed, reason = check_domain_allowed(url, sandbox)
+                if not allowed:
+                    return f"域名不被允许：{reason}"
+
+        # 文件工具：检查路径参数
+        if tool_name in self._FILE_TOOLS:
+            path = arguments.get("path") or arguments.get("file_path") or arguments.get("dir") or ""
+            if path:
+                allowed, reason = check_path_allowed(path, sandbox)
+                if not allowed:
+                    return f"路径不被允许：{reason}"
+
+        # 子进程工具：strict 模式下限制危险命令
+        if tool_name in self._SHELL_TOOLS:
+            cmd = arguments.get("command") or arguments.get("code") or ""
+            if cmd and sandbox.network.block_private_ips:
+                # 阻止明显的危险命令
+                dangerous = ("rm -rf /", "mkfs", "dd if=", ":(){ :|:& };:", "wget.*|.*sh",
+                             "curl.*|.*sh", "chmod 777 /", "chown root")
+                import re as _re
+                for d in dangerous:
+                    if _re.search(d, cmd):
+                        return f"命令包含危险操作：{d}"
+
+        return None
 
     async def _execute_with_timeout(self, tool: dict, arguments: dict) -> ToolResult:
         func, lazy_err = resolve_tool_func(tool)

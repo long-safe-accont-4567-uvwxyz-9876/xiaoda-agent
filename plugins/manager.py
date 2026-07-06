@@ -1,8 +1,10 @@
-"""插件管理器 — 生命周期管理 + 状态机"""
+"""插件管理器 — 生命周期管理 + 状态机 + 安全校验"""
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
+import json
 import sys
 from dataclasses import dataclass, field
 from enum import Enum
@@ -42,6 +44,8 @@ class PluginManager:
     """插件生命周期管理器"""
 
     LIFECYCLE_TIMEOUT = 60  # seconds
+    # 信任存储路径（存储已知插件的 SHA256 hash）
+    _TRUST_STORE_FILE = Path("config/plugins/trust_store.json")
 
     def __init__(self, tool_registry: Any | None=None, hook_engine: Any | None=None, memory_manager: Any | None=None,
                  knowledge_graph: Any | None=None, mcp_manager: Any | None=None, agent_core: Any | None=None) -> None:
@@ -56,6 +60,72 @@ class PluginManager:
     @property
     def plugins(self) -> dict[str, PluginRecord]:
         return self._plugins
+
+    # ── Integrity Check ──
+    @staticmethod
+    def _hash_plugin_dir(plugin_dir: Path) -> str:
+        """计算插件目录下所有 .py 文件的 SHA256 hash（排序确保确定性）。"""
+        h = hashlib.sha256()
+        py_files = sorted(plugin_dir.rglob("*.py"))
+        for f in py_files:
+            h.update(f.relative_to(plugin_dir).as_posix().encode())
+            h.update(f.read_bytes())
+        return h.hexdigest()
+
+    @classmethod
+    def _load_trust_store(cls) -> dict[str, str]:
+        """加载信任存储 {plugin_id: expected_sha256}。"""
+        try:
+            if cls._TRUST_STORE_FILE.exists():
+                return json.loads(cls._TRUST_STORE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        return {}
+
+    @classmethod
+    def _save_trust_store(cls, store: dict[str, str]) -> None:
+        """保存信任存储。"""
+        try:
+            cls._TRUST_STORE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            cls._TRUST_STORE_FILE.write_text(
+                json.dumps(store, indent=2, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _verify_integrity(self, plugin_id: str, plugin_dir: Path) -> str | None:
+        """验证插件文件完整性。
+
+        逻辑：
+        1. 如果信任存储中有该插件的 hash → 必须匹配（防篡改）
+        2. 如果信任存储中没有 → 首次加载，自动记录 hash（信任首次）
+        3. PLUGINS_TRUST_MODE=off 时跳过校验（调试用）
+
+        Returns:
+            None = 校验通过，str = 拒绝原因
+        """
+        import os
+        if os.getenv("PLUGINS_TRUST_MODE", "on").strip().lower() == "off":
+            return None  # 调试模式跳过
+
+        if not plugin_dir.exists():
+            return None  # 内置插件无需校验
+
+        current_hash = self._hash_plugin_dir(plugin_dir)
+        store = self._load_trust_store()
+
+        if plugin_id in store:
+            expected = store[plugin_id]
+            if current_hash != expected:
+                return (f"插件文件已被篡改！期望 hash={expected[:16]}…，"
+                        f"实际 hash={current_hash[:16]}…。"
+                        f"如确认安全，删除 trust_store.json 中 {plugin_id} 条目后重试")
+        else:
+            # 首次加载：信任并记录
+            store[plugin_id] = current_hash
+            self._save_trust_store(store)
+            logger.info("plugin.trust_registered", id=plugin_id, hash=current_hash[:16])
+
+        return None
 
     # ── Discovery ──
     def discover(self, search_paths: list[str | Path] | None = None) -> list[str]:
@@ -75,7 +145,7 @@ class PluginManager:
 
     # ── Load ──
     async def load(self, plugin_id: str) -> bool:
-        """加载插件：动态导入 + 创建上下文 + 实例化"""
+        """加载插件：安全校验 → 动态导入 → 创建上下文 → 实例化"""
         record = self._plugins.get(plugin_id)
         if not record:
             logger.warning("plugin.not_found", id=plugin_id)
@@ -87,6 +157,14 @@ class PluginManager:
         try:
             manifest = record.manifest
             plugin_dir = record.plugin_dir
+
+            # 安全校验：验证插件文件完整性（SHA256 hash）
+            integrity_err = self._verify_integrity(plugin_id, plugin_dir)
+            if integrity_err:
+                record.state = PluginState.ERROR
+                record.error_message = integrity_err
+                logger.error("plugin.integrity_check_failed", id=plugin_id, error=integrity_err)
+                return False
 
             # Add plugin dir to sys.path for import
             if str(plugin_dir) not in sys.path:

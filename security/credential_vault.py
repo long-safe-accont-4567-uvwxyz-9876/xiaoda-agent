@@ -26,8 +26,9 @@ from pathlib import Path
 from loguru import logger
 
 # ── 常量 ──────────────────────────────────────────────────────
-# 应用级固定盐（与机器身份一起参与 PBKDF2 派生）
-_SALT = b"xiaoda-agent-credential-vault-v1"
+# 盐：基础前缀 + 每次部署唯一随机后缀（首次启动时生成并持久化）
+_SALT_BASE = b"xiaoda-agent-credential-vault-v2-"
+_SALT_FILE = Path(os.getenv("CREDENTIAL_SALT_FILE", "config/credential_salt.bin"))
 # PBKDF2 迭代次数（增大可减缓暴力破解）
 _PBKDF2_ITERATIONS = 200_000
 # 随机 nonce 长度（字节）
@@ -68,13 +69,40 @@ def _machine_identity() -> str:
     return f"{user}@{host}"
 
 
+def _get_salt() -> bytes:
+    """获取盐：首次启动生成 32 字节随机盐并持久化，后续复用。
+
+    同一部署实例内盐稳定（可正常解密），不同实例盐不同（防跨实例碰撞）。
+    """
+    if _SALT_FILE.exists():
+        try:
+            data = _SALT_FILE.read_bytes()
+            if len(data) == 32:
+                return _SALT_BASE + data
+        except OSError:
+            pass
+    # 首次：生成随机盐并持久化
+    random_salt = os.urandom(32)
+    try:
+        _SALT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _SALT_FILE.write_bytes(random_salt)
+        # 设文件权限仅 owner 可读写（Unix）
+        try:
+            _SALT_FILE.chmod(0o600)
+        except OSError:
+            pass
+    except OSError as e:
+        logger.warning("credential_vault.salt_persist_failed", error=str(e))
+    return _SALT_BASE + random_salt
+
+
 def _derive_key() -> bytes:
     """从机器身份派生 32 字节密钥（PBKDF2-HMAC-SHA256）"""
     identity = _machine_identity()
     return hashlib.pbkdf2_hmac(
         "sha256",
         identity.encode("utf-8"),
-        _SALT,
+        _get_salt(),
         _PBKDF2_ITERATIONS,
         dklen=_KEY_LEN,
     )

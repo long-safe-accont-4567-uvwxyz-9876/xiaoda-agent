@@ -180,3 +180,43 @@ def _domain_matches(hostname: str, pattern: str) -> bool:
         prefix = pattern[:-2]
         return hostname == prefix or hostname.startswith(prefix + ".")
     return hostname == pattern
+
+
+def check_path_allowed(path: str, sandbox: SandboxSettings | None = None) -> tuple[bool, str]:
+    """检查文件路径是否被沙箱允许。
+
+    规则：
+    1. 敏感路径黑名单优先（匹配即拒绝）
+    2. 如果有白名单，路径必须在白名单目录下
+    3. 白名单为空时不额外限制（仅黑名单生效）
+
+    Returns:
+        (allowed, reason) 元组
+    """
+    sandbox = sandbox or DEFAULT_SANDBOX
+    p = Path(path).resolve()
+
+    # 检查敏感路径黑名单
+    for sensitive in sandbox.sensitive_paths:
+        sp = Path(sensitive).expanduser().resolve()
+        try:
+            p.relative_to(sp)
+            return False, f"路径 {path} 在敏感目录 {sensitive} 中"
+        except ValueError:
+            pass
+
+    # 检查白名单（非空时路径必须在允许的目录下）
+    if sandbox.allowed_base_dirs:
+        in_allowed = False
+        for base in sandbox.allowed_base_dirs:
+            bp = Path(base).resolve()
+            try:
+                p.relative_to(bp)
+                in_allowed = True
+                break
+            except ValueError:
+                pass
+        if not in_allowed:
+            return False, f"路径 {path} 不在允许的目录中"
+
+    return True, ""

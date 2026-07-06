@@ -10,6 +10,7 @@ import os
 import time
 import platform
 import socket
+import threading
 from pathlib import Path
 
 from loguru import logger
@@ -21,6 +22,9 @@ from security.instruction_hierarchy import InstructionLevel, format_instruction
 
 # ── 安全：Canary Token 泄露检测管理器（全局单例） ──────────────
 _canary_manager = CanaryManager()
+
+# ── 缓存线程锁（保护模块级全局变量，防竞态条件） ─────────────
+_cache_lock = threading.Lock()
 
 
 # ── system prompt 缓存变量 ────────────────────────────────────
@@ -74,9 +78,10 @@ def clear_module_cache():
     当 display_name 变更时调用，确保下次构建 prompt 时获取最新内容。
     """
     global _module_cache_mtimes
-    _module_cache.clear()
-    _module_cache_mtimes = None
-    _scene_prompt_cache.clear()
+    with _cache_lock:
+        _module_cache.clear()
+        _module_cache_mtimes = None
+        _scene_prompt_cache.clear()
 
 # 极低质量闲聊粘性阈值: 仅作用于 B 级场景, 防止低质量闲聊触发重排
 # 设计原则:

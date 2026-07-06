@@ -42,6 +42,8 @@ except ImportError:
 class ConnectionManager:
     """连接管理 + 事件广播。"""
 
+    MAX_CONNECTIONS = 32  # 最大并发 WebSocket 连接数（防资源耗尽）
+
     def __init__(self) -> None:
         """初始化 WebSocket 连接管理器."""
         self._connections: dict[str, WebSocket] = {}
@@ -51,6 +53,8 @@ class ConnectionManager:
 
     def register(self, ws: WebSocket) -> str:
         """注册一个新连接, 返回生成的连接 ID."""
+        if len(self._connections) >= self.MAX_CONNECTIONS:
+            raise ValueError(f"连接数已达上限 {self.MAX_CONNECTIONS}，拒绝新连接")
         conn_id = uuid.uuid4().hex[:8]
         self._connections[conn_id] = ws
         self._agent_map[conn_id] = "xiaoda"

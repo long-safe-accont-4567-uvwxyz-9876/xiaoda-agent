@@ -476,10 +476,18 @@ class DatabaseManager:
         await self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_mv_memory ON memory_versions(memory_id, version)"
         )
+    # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
+    _READONLY_PREFIXES = ("SELECT", "PRAGMA")
+
     async def fetch_all(self, sql: str, params: tuple = ()) -> list[dict]:
         """通用只读查询，供 Web UI 等外部层使用。返回 dict 列表。"""
         if not self._conn:
             return []
+        # 安全校验：仅允许 SELECT / PRAGMA，拦截写操作
+        normalized = sql.strip().upper()
+        if not any(normalized.startswith(p) for p in self._READONLY_PREFIXES):
+            logger.error("db.fetch_all.blocked_write_sql", sql=sql[:120])
+            raise ValueError(f"fetch_all 仅允许只读查询(SELECT/PRAGMA)，收到：{normalized[:30]}")
         rows = await self._conn.execute_fetchall(sql, params)
         return [dict(r) for r in rows]
 
