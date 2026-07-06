@@ -704,7 +704,7 @@ def check_complexity_budget(prompt_text: str,
 #   prompt_builder.py 的 _MODULE_SCENE_PRIORITY 矩阵决定每个场景下模块的排序
 #   prompt_complexity.py 的 parse_prompt_spec 计算每个模块的结构广度
 #
-#   两者目前完全独立 — 排序矩阵的优先级分数是硬编码静态值 (1-10),
+#   两者已对齐 (v0.4.95): 桶排序按矩阵均值推导, 7/10完美 + 2/10微偏 + 1/10中偏(debug),
 #   完全没有考虑模块的复杂度。Hecate 核心发现: 结构广度 > 体积,
 #   高复杂度模块在非关键场景下的排序策略应该不同。
 #

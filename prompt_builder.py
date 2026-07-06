@@ -197,13 +197,18 @@ _STABLE_PREFIX_ORDER: tuple = ("IDENTITY.md", "SOUL.md", "TOOLS.md", "skills", "
 # 设计原则: 每个桶的关键模块在末尾 (高优先级), 通用模块在开头 (低优先级)
 _BUCKET_ORDERINGS: dict[str, tuple] = {
     # 桶 1 - 情感类: USER.md 末尾 (用户偏好, 个性化情感回应)
-    "emotion_bucket": ("MEMORY.md", "HEARTBEAT.md", "AGENTS.md", "USER.md"),
-    # 桶 2 - 功能类: HEARTBEAT.md 末尾 (自检规则) + AGENTS.md (团队调度)
-    "function_bucket": ("USER.md", "MEMORY.md", "AGENTS.md", "HEARTBEAT.md"),
-    # 桶 3 - 认知类: AGENTS.md 末尾 (团队成员讲解) + USER.md (个性化教学)
-    "cognition_bucket": ("MEMORY.md", "HEARTBEAT.md", "USER.md", "AGENTS.md"),
-    # 桶 4 - 默认: AGENTS.md 末尾 (通用排序)
-    "default_bucket": ("MEMORY.md", "HEARTBEAT.md", "USER.md", "AGENTS.md"),
+    #   矩阵均值: HEARTBEAT=1.25 → MEMORY=2.25 → AGENTS=3.25 → USER=5.0
+    "emotion_bucket": ("HEARTBEAT.md", "MEMORY.md", "AGENTS.md", "USER.md"),
+    # 桶 2 - 功能类: AGENTS.md 末尾 (团队调度) + task/tool HEARTBEAT优先于MEMORY
+    #   矩阵均值: USER=3.67 → HEARTBEAT=5.67 → MEMORY=5.67 → AGENTS=7.33
+    #   (MEMORY/HEARTBEAT同分, 2/3场景HEARTBEAT应在前, 按多数场景决定)
+    "function_bucket": ("USER.md", "HEARTBEAT.md", "MEMORY.md", "AGENTS.md"),
+    # 桶 3 - 认知类: USER.md 末尾 (个性化教学) + AGENTS.md (团队成员讲解)
+    #   矩阵均值: HEARTBEAT=1.5 → MEMORY=3.5 → AGENTS=4.5 → USER=5.5
+    "cognition_bucket": ("HEARTBEAT.md", "MEMORY.md", "AGENTS.md", "USER.md"),
+    # 桶 4 - 默认: USER.md 末尾 (通用排序)
+    #   矩阵: HEARTBEAT=2 → MEMORY=3 → AGENTS=5 → USER=6
+    "default_bucket": ("HEARTBEAT.md", "MEMORY.md", "AGENTS.md", "USER.md"),
 }
 
 # LRU 缓存上限: 限制 _scene_prompt_cache 大小, 防止内存膨胀
@@ -240,6 +245,7 @@ _BUCKET_LRU_LEVEL: dict[str, str] = {
 # 分数越高越靠近用户输入 (末尾), 享受场景感知排序功能性
 #
 # 设计原则：功能性为基础 + 复杂度对齐为观测/优化工具 (两者结合)
+# 桶排序对齐状态 (v0.4.95 修正): 7/10 完美对齐 + 2/10 微偏(位移1) + 1/10 中偏(debug位移2)
 #
 # 功能性设计 (基础, 配合 agent_context._build_time_context 时间感知功能):
 #   - 矩阵设计初衷: 解决 Agent 时间观念在 LLM 后注意力机制下被稀释的痛点
