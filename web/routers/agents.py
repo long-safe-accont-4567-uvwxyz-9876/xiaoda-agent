@@ -224,7 +224,11 @@ _EXT = {"png": "png", "jpg": "jpg", "jpeg": "jpg", "webp": "webp"}
 
 @router.post("/agents/{name}/wallpaper", response_model=Envelope[dict])
 async def upload_wallpaper(name: str, body: dict, request: Request, _user: str = Depends(get_current_user)) -> Any:
-    """上传背景板（data URL），保存后写入该 Agent 的 wallpaper 字段。"""
+    """上传背景板（data URL），保存后写入该 Agent 的 wallpaper 字段。
+    
+    每次上传生成带时间戳的新文件名，不覆盖旧文件，从根本上解决浏览器缓存问题。
+    同时清理该 agent 的旧壁纸文件（仅保留最新一张）。
+    """
     registry = _registry(request)
     if not registry.get(name):
         raise HTTPException(404, f"Agent {name} 不存在")
@@ -239,9 +243,22 @@ async def upload_wallpaper(name: str, body: dict, request: Request, _user: str =
     if len(raw) > 8 * 1024 * 1024:
         raise HTTPException(400, "图片不能超过 8MB")
     _WALLPAPER_DIR.mkdir(parents=True, exist_ok=True)
-    fp = _WALLPAPER_DIR / f"{name}.{_EXT[m.group(1).lower()]}"
+    # 生成带时间戳的新文件名，不覆盖旧文件 → 浏览器缓存自动失效
+    ts = int(time.time())
+    ext = _EXT[m.group(1).lower()]
+    fp = _WALLPAPER_DIR / f"{name}_{ts}.{ext}"
     fp.write_bytes(raw)
-    url = f"/media/wallpapers/{fp.name}?v={int(time.time())}"
+    url = f"/media/wallpapers/{fp.name}"
+    # 清理该 agent 的旧壁纸文件（保留最新一张）
+    try:
+        for old in _WALLPAPER_DIR.glob(f"{name}_*.{ext}"):
+            if old != fp:
+                old.unlink(missing_ok=True)
+        # 也清理不带时间戳的旧格式文件
+        for old in _WALLPAPER_DIR.glob(f"{name}.{ext}"):
+            old.unlink(missing_ok=True)
+    except OSError:
+        pass
     if name == "xiaoda":
         # 主体不在 dispatcher 中，壁纸持久化到 webui 配置
         from web.config_service import get_config_service

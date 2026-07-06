@@ -232,3 +232,7 @@ class RouterEngine:
             if mention in user_input:
                 targets.append(agent)
         return targets
+
+
+# ── 公共导出（保持向后兼容）────────────────────────────────────────
+MENTION_MAP = _build_mention_map()

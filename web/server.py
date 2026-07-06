@@ -69,13 +69,19 @@ def _register_env_providers(cfg: Any, env_values: Any, os: Any) -> None:
 
 
 def _ensure_provider_key_file(pid: Any, api_key: Any, os: Any) -> None:
-    """确保证书文件存在且内容正确。"""
+    """确保证书文件存在且内容正确（base64 编码存储，非明文）。"""
     from config import get_credentials_dir
+    from web._provider_keys import _encode_key, _decode_key
     cred_dir = get_credentials_dir()
     cred_dir.mkdir(parents=True, exist_ok=True)
     fp = cred_dir / f"provider_{pid}.key"
-    if not fp.exists() or fp.read_text(encoding="utf-8").strip() != api_key:
-        fp.write_text(api_key, encoding="utf-8")
+    # 读取现有值（兼容旧版明文）
+    existing = ""
+    if fp.exists():
+        raw = fp.read_text(encoding="utf-8").strip()
+        existing = _decode_key(raw) or raw if raw else ""
+    if existing != api_key:
+        fp.write_text(_encode_key(api_key) + "\n", encoding="utf-8")
         try:
             os.chmod(fp, 0o600)
         except OSError:
@@ -383,8 +389,8 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def _allow_frame_embed(request: Any, call_next: Any) -> Any:
         response = await call_next(request)
-        response.headers["Content-Security-Policy"] = "frame-ancestors http://127.0.0.1:*"
-        response.headers["X-Frame-Options"] = "ALLOWALL"
+        response.headers["Content-Security-Policy"] = "frame-ancestors 'self' http://127.0.0.1:*"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
         # 滑动续期：get_current_user 在 request.state 上设置了新 token 时写入响应头
         new_token = getattr(request.state, "new_token", None)
         if new_token:
@@ -434,7 +440,8 @@ def create_app() -> FastAPI:
         media_dir = Path(__file__).parent / "media"
     media_dir.mkdir(parents=True, exist_ok=True)
     # follow_symlink：表情包等媒体是指向外置盘的符号链接
-    app.mount("/media", StaticFiles(directory=str(media_dir), follow_symlink=True),
+    # 壁纸等媒体文件禁强缓存，确保换图后浏览器不使用旧缓存
+    app.mount("/media", NoCacheMediaStaticFiles(directory=str(media_dir), follow_symlink=True),
               name="media")
 
     dist_dir = Path(__file__).parent / "dist"
@@ -442,6 +449,19 @@ def create_app() -> FastAPI:
         app.mount("/", NoCacheHTMLStaticFiles(directory=str(dist_dir), html=True), name="spa")
 
     return app
+
+
+class NoCacheMediaStaticFiles(StaticFiles):
+    """媒体文件（壁纸/表情包等）禁强缓存。
+    
+    设置 Cache-Control: no-cache，浏览器每次都会向服务器验证是否有新版本，
+    换壁纸后无需清浏览器缓存即可看到新图。
+    """
+
+    async def get_response(self, path: Any, scope: Any) -> Any:
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return resp
 
 
 class NoCacheHTMLStaticFiles(StaticFiles):

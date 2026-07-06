@@ -22,7 +22,21 @@ onMounted(async () => {
   try {
     const agents = await api.get<Array<{ name: string; wallpaper?: string }>>('/agents')
     const main = agents.find(a => a.name === 'xiaoda')
-    if (main?.wallpaper) loginBg.value = main.wallpaper
+    if (main?.wallpaper) {
+      loginBg.value = main.wallpaper
+      // 同步写入 agentsStore，确保登录后聊天页与登录页背景一致
+      try {
+        const { useAgentsStore } = await import('../stores/agents')
+        const store = useAgentsStore()
+        if (!store.agents.length) {
+          // agentsStore 还没初始化，预填充主 agent 的 wallpaper
+          store.agents = agents.map(a => ({
+            ...a,
+            display_name_en: a.display_name
+          }))
+        }
+      } catch { /* 忽略 */ }
+    }
   } catch {
     // 忽略，使用默认背景
   }
