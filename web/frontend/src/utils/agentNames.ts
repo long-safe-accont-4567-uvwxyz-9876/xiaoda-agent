@@ -6,20 +6,21 @@
  * 改一次 display_name → 全项目 90% 自动同步。
  */
 
+import { ref } from 'vue'
 import { get } from '../api'
 
-let _mapping: Record<string, string> = {}
+// 使用 ref 使映射表响应式，修改后 Vue 自动重渲染
+const _mapping = ref<Record<string, string>>({})
 let _loaded = false
 
 /** 从后端加载名称映射表（应用启动时调用一次） */
 export async function loadAgentNames(): Promise<void> {
   try {
     const data = await get<{ mapping: Record<string, string> }>('/agent-names')
-    _mapping = data.mapping || {}
+    _mapping.value = data.mapping || {}
     _loaded = true
   } catch {
-    // 降级：不替换，使用原名
-    _loaded = true
+    // 降级：不替换，使用原名（但不标记为已加载，允许后续重试）
   }
 }
 
@@ -30,7 +31,7 @@ export function isAgentNamesLoaded(): boolean {
 
 /** 获取当前映射表（只读） */
 export function getAgentNamesMapping(): Readonly<Record<string, string>> {
-  return _mapping
+  return _mapping.value
 }
 
 /**
@@ -41,7 +42,7 @@ export function getAgentNamesMapping(): Readonly<Record<string, string>> {
 export function replaceAgentNames(text: string): string {
   if (!text || !_loaded) return text
   // 按 key 长度降序排列，避免短名破坏长名
-  const sorted = Object.entries(_mapping).sort((a, b) => b[0].length - a[0].length)
+  const sorted = Object.entries(_mapping.value).sort((a, b) => b[0].length - a[0].length)
   for (const [original, display] of sorted) {
     if (original !== display) {
       text = text.split(original).join(display)
@@ -52,6 +53,5 @@ export function replaceAgentNames(text: string): string {
 
 /** 刷新映射表（display_name 变更后调用） */
 export async function refreshAgentNames(): Promise<void> {
-  _loaded = false
   await loadAgentNames()
 }

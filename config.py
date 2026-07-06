@@ -201,12 +201,18 @@ def _init_user_resources() -> None:
     # 2. 复制 agents/ 子目录（子 Agent 配置和人格文件）
     bundled_agents = bundled_config / "agents"
     user_agents = user_config_dir / "agents"
-    if bundled_agents.exists() and not user_agents.exists():
-        try:
-            shutil.copytree(bundled_agents, user_agents)
-            print(f"[config] agents/ initialized from bundled resource")
-        except Exception as e:
-            print(f"[config] Warning: failed to copy agents/: {e}")
+    if bundled_agents.exists():
+        user_agents.mkdir(parents=True, exist_ok=True)
+        # 逐文件补复制缺失的配置和人格文件（升级时也补齐）
+        for item in bundled_agents.iterdir():
+            if item.is_file():
+                target = user_agents / item.name
+                if not target.exists():
+                    try:
+                        shutil.copy2(item, target)
+                        print(f"[config] Copied new agent file: {item.name}")
+                    except Exception as e:
+                        print(f"[config] Warning: failed to copy {item.name}: {e}")
 
     # 2.1 清理旧版 agent 配置文件（升级后旧名称不应残留）
     if user_agents.exists():
@@ -220,18 +226,22 @@ def _init_user_resources() -> None:
                 except Exception as e:
                     print(f"[config] Warning: failed to remove {old_file}: {e}")
 
-    # 3. 复制 workspace/ 模板文件（SOUL.md, IDENTITY.md 等，不覆盖已有文件）
-    # 模板文件以 .tpl 扩展名打包，复制时去除 .tpl 后缀
+    # 3. 复制 workspace/ 模板文件（SOUL.md, IDENTITY.md 等）
+    # 非用户编辑类文件（TOOLS.md, AGENTS.md）强制更新，用户编辑类文件不覆盖
     bundled_workspace = bundled_config / "workspace"
     if bundled_workspace.exists():
         WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+        # 这些文件用户不会编辑，每次启动强制更新
+        _force_update_files = {"TOOLS.md", "AGENTS.md", "HEARTBEAT.md"}
         for item in bundled_workspace.iterdir():
             if item.is_dir():
                 continue
-            # .tpl 文件复制时去除 .tpl 后缀（避免 CI 安全扫描拦截 USER.md 等文件名）
+            # .tpl 文件复制时去除 .tpl 后缀
             target_name = item.name[:-4] if item.name.endswith('.tpl') else item.name
             target = WORKSPACE_DIR / target_name
-            if not target.exists():
+            # 强制更新文件总是覆盖，用户编辑文件不覆盖
+            should_copy = target_name in _force_update_files or not target.exists()
+            if should_copy:
                 try:
                     shutil.copy2(item, target)
                 except (OSError, shutil.Error) as e:

@@ -318,7 +318,7 @@ const emotionColors: Record<string, string> = {
             <div class="session-title">
               <span class="session-source" :class="s.source">{{
                 s.source === 'qq' ? 'QQ' : s.source === 'cli' ? 'CLI' : 'Web' }}</span>
-              {{ s.title || s.session_id }}
+              {{ replaceAgentNames(s.title || s.session_id) }}
             </div>
             <div class="session-meta">
               <span>{{ s.message_count }} {{ t('chatView.messages') }} · {{ new Date(s.updated_at * 1000).toLocaleString('zh-CN') }}</span>
@@ -329,7 +329,7 @@ const emotionColors: Record<string, string> = {
                 {{ t('chatView.deleteConfirm') }}
               </n-popconfirm>
             </div>
-            <div class="session-preview">{{ s.last_message }}</div>
+            <div class="session-preview">{{ replaceAgentNames(s.last_message) }}</div>
           </div>
           <div v-if="!sessions.length" class="empty-state small">
             <p>{{ t('chatView.noHistory') }}</p>

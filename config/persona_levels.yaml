@@ -1,4 +1,4 @@
-# XP 等级对应的纳西妲亲密度配置
+# XP 等级对应的小妲亲密度配置
 # 参考 core/xp_system.py 中的 XPLevel 枚举
 # 字段说明:
 #   label:              等级中文标签

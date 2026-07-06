@@ -32,16 +32,21 @@ def _resolve_personality_path(pf: str) -> str | None:
     if not pf:
         return None
     p = Path(pf)
-    # 绝对路径直接用
+    # 提取文件名用于 fallback
+    fname = p.name
+    # 绝对路径：先直接检查，不存在则提取文件名走 fallback
     if p.is_absolute():
-        return str(p) if p.exists() else None
+        if p.exists():
+            return str(p)
+        # 绝对路径不存在（可能是旧 _MEIPASS 路径），提取文件名继续尝试
+        pf = fname
     candidates = []
-    # 1. PyInstaller 打包目录（frozen 模式首选）
+    # 1. 用户数据目录 + 文件名（frozen 模式首选，持久化安全）
+    candidates.append(AGENTS_DIR / fname)
+    # 2. PyInstaller 打包目录（frozen 模式只读资源）
     meipass = getattr(sys, '_MEIPASS', None)
     if meipass:
         candidates.append(Path(meipass) / pf)
-    # 2. 用户数据目录 + 文件名（frozen 模式下 _init_user_resources 复制到这里）
-    candidates.append(AGENTS_DIR / p.name)
     # 3. 项目源码根目录（dev 模式）
     candidates.append(_FALLBACK_BASE / pf)
     # 4. 用户数据目录 + 完整相对路径（兼容旧格式）
@@ -122,6 +127,13 @@ class AgentRegistry:
             v = getattr(cfg, f, None)
             if isinstance(v, set):
                 v = sorted(v)
+            # personality_file 不持久化 _MEIPASS 临时路径，只存相对路径
+            if f == "personality_file" and v:
+                pv = str(v)
+                meipass = getattr(sys, '_MEIPASS', None)
+                if meipass and pv.startswith(str(meipass)):
+                    # 提取文件名，存为相对路径
+                    v = Path(pv).name
             data[f] = v
         data["_saved_at"] = time.time()
         self._file(cfg.name).write_text(
