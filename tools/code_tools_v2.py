@@ -33,8 +33,8 @@ _SAFE_BUILTINS = {
     'isinstance': isinstance, 'issubclass': issubclass,
     'any': any, 'all': all, 'chr': chr, 'ord': ord,
     'hex': hex, 'oct': oct, 'bin': bin,
-    'repr': repr, 'format': format, 'id': id,
-    'slice': slice, 'property': property,
+    'format': format,
+    'slice': slice,
     'ValueError': ValueError, 'TypeError': TypeError,
     'KeyError': KeyError, 'IndexError': IndexError,
     'AttributeError': AttributeError, 'RuntimeError': RuntimeError,
@@ -43,6 +43,8 @@ _SAFE_BUILTINS = {
     'Exception': Exception,
     'True': True, 'False': False, 'None': None,
 }
+# 注：已移除 id()/repr()/property — id() 泄漏内存地址，repr() 可触发 __repr__
+# 副作用，property() 可用于描述符劫持逃逸
 
 # ── AST 审查：禁止导入的模块 ──
 _BANNED_MODULE_NAMES = frozenset({
@@ -256,11 +258,22 @@ def python_executor(code: str) -> ToolResult:
                 signal.signal(signal.SIGALRM, old_handler)
         else:
             # Windows 不支持 SIGALRM，改用守护线程执行 + join 超时
-            _exec_thread = threading.Thread(target=_run_code, daemon=True)
+            # 使用 Event 通知线程终止，虽 Python 无法强制 kill 线程，
+            # 但 Event 让线程在循环中可主动退出，避免无意义占用
+            _stop_event = threading.Event()
+            _original_run = _run_code
+
+            def _run_code_with_stop() -> None:
+                """在 exec 环境中注入 _stop 标志，让用户代码可检查退出信号。"""
+                local_vars["_stop"] = _stop_event.is_set
+                _original_run()
+
+            _exec_thread = threading.Thread(target=_run_code_with_stop, daemon=True)
             _exec_thread.start()
             _exec_thread.join(_EXEC_TIMEOUT)
             if _exec_thread.is_alive():
-                return ToolResult.fail(f"代码执行超时（{_EXEC_TIMEOUT}秒）")
+                _stop_event.set()  # 通知线程应停止（无法强制 kill）
+                return ToolResult.fail(f"代码执行超时（{_EXEC_TIMEOUT}秒），Windows 下线程可能仍在运行")
 
         # 重新抛出 exec 内部异常（如 MemoryError），交由外层 except 统一处理
         if 'error' in _exec_state:

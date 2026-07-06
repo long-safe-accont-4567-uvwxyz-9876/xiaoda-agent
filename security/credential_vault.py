@@ -23,6 +23,10 @@ import secrets
 import socket
 from pathlib import Path
 
+
+class DecryptionError(ValueError):
+    """凭证解密失败（机器不匹配 / 标签验证失败 / 数据损坏）。"""
+
 from loguru import logger
 
 # ── 常量 ──────────────────────────────────────────────────────
@@ -174,7 +178,7 @@ def decrypt(ciphertext: str) -> str:
     """解密 enc:v1: 格式密文
 
     - 非 enc:v1: 前缀的值视为明文直接返回（向后兼容）
-    - 解密失败（机器不匹配 / 标签验证失败 / 数据损坏）返回空字符串
+    - 解密失败（机器不匹配 / 标签验证失败 / 数据损坏）抛出 DecryptionError
     """
     if not ciphertext:
         return ciphertext or ""
@@ -187,13 +191,13 @@ def decrypt(ciphertext: str) -> str:
         payload = base64.urlsafe_b64decode(encoded.encode("ascii"))
     except Exception as e:
         logger.warning(f"凭证解密失败：base64 解码错误：{e}")
-        return ""
+        raise DecryptionError(f"base64 解码错误：{e}") from e
 
     if len(payload) < _NONCE_LEN + _TAG_LEN:
         logger.warning(
             f"凭证解密失败：密文长度不足（{len(payload)} < {_NONCE_LEN + _TAG_LEN}）"
         )
-        return ""
+        raise DecryptionError(f"密文长度不足（{len(payload)} < {_NONCE_LEN + _TAG_LEN}）")
 
     nonce = payload[:_NONCE_LEN]
     tag = payload[-_TAG_LEN:]
@@ -204,7 +208,7 @@ def decrypt(ciphertext: str) -> str:
     if not hmac.compare_digest(tag, expected_tag):
         # 机器身份不匹配或数据被篡改
         logger.warning("凭证解密失败：HMAC 标签验证失败（机器不匹配或数据损坏）")
-        return ""
+        raise DecryptionError("HMAC 标签验证失败（机器不匹配或数据损坏）")
 
     ks = _keystream(key, nonce, len(ciphertext_body))
     pt_bytes = bytes(a ^ b for a, b in zip(ciphertext_body, ks))
@@ -212,7 +216,7 @@ def decrypt(ciphertext: str) -> str:
         return pt_bytes.decode("utf-8")
     except UnicodeDecodeError as e:
         logger.warning(f"凭证解密失败：UTF-8 解码错误：{e}")
-        return ""
+        raise DecryptionError(f"UTF-8 解码错误：{e}") from e
 
 
 # ── .env 迁移 ─────────────────────────────────────────────────

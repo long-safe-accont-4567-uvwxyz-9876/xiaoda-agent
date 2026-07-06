@@ -27,7 +27,11 @@ def get_secret(name: str, default: str = "") -> str:
         return default
     if not value:
         return value
-    return credential_vault.decrypt(value)
+    try:
+        return credential_vault.decrypt(value)
+    except credential_vault.DecryptionError as e:
+        logger.warning(f"config.decrypt_failed: {name} ({e})")
+        return default
 
 
 def get_base_dir() -> Path:

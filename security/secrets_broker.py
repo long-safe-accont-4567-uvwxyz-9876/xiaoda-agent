@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import secrets
 import time
+import hmac
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -87,7 +88,11 @@ class SecretsBroker:
         """惰性解密并缓存某凭证的原始 key（仅 Broker 内部持有）"""
         entry = self._creds.get(name)
         if entry is None:
-            raw = credential_vault.decrypt(self._source[name])
+            try:
+                raw = credential_vault.decrypt(self._source[name])
+            except credential_vault.DecryptionError as e:
+                logger.error(f"secrets_broker.decrypt_failed: {name} ({e})")
+                raise RuntimeError(f"凭证 {name} 解密失败：{e}") from e
             entry = {
                 "raw_key": raw,
                 "use_count": 0,
@@ -147,7 +152,7 @@ class SecretsBroker:
             return False
         self._revoked.add(token)
         name = info["name"]
-        if self._creds.get(name, {}).get("current_token") == token:
+        if hmac.compare_digest(self._creds.get(name, {}).get("current_token", ""), token):
             self._creds[name]["current_token"] = None
         self._audit_log(caller, "revoke", name)
         logger.debug(f"SecretsBroker.revoke: name={name} caller={caller}")
