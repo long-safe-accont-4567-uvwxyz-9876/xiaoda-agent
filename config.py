@@ -478,6 +478,7 @@ _ORIGINAL_NAMES: dict[str, str] = {
 
 # 英文原名 → agent_key 映射（人格文件中的英文标识符）
 _ORIGINAL_EN_NAMES: dict[str, str] = {
+    "nahida": "xiaoda",
     "xiaoli": "xiaoli",
     "xiaolang": "xiaolang",
     "xiaolian": "xiaolian",
