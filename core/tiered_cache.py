@@ -434,12 +434,16 @@ class TieredCache:
 
     async def _get_lock(self, key: str) -> asyncio.Lock:
         async with self._locks_guard:
-            # 定期清理未使用的锁, 防止无限增长
+            if key in self._locks:
+                return self._locks[key]
+            # 高水位淘汰: 仅移除未被持有的锁, 保留正在 await 的锁
             if len(self._locks) > 256:
-                self._locks.clear()
-            if key not in self._locks:
-                self._locks[key] = asyncio.Lock()
-            return self._locks[key]
+                evictable = [k for k, v in self._locks.items() if not v.locked()]
+                for k in evictable[: len(evictable) // 2 or 1]:
+                    del self._locks[k]
+            lock = asyncio.Lock()
+            self._locks[key] = lock
+            return lock
 
     async def get(self, key: str, loader: Optional[Callable] = None,
                   ttl: Optional[float] = None) -> Any:

@@ -30,29 +30,38 @@ class EmbedCache:
         self._max_size = max_size
         self._hits = 0
         self._misses = 0
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _key(text: str) -> str:
+        """生成缓存键 — 使用 SHA256 (128 hex 前缀) 降低碰撞概率。"""
+        return hashlib.sha256(text[:300].encode()).hexdigest()[:32]
 
     def __contains__(self, text: str) -> bool:
         """检查文本是否已存在于缓存中。"""
-        key = hashlib.md5(text[:300].encode()).hexdigest()
-        return key in self._cache
+        key = self._key(text)
+        with self._lock:
+            return key in self._cache
 
     def get(self, text: str) -> list[float] | None:
         """根据文本查询缓存的嵌入向量，命中时更新 LRU 顺序。"""
-        key = hashlib.md5(text[:300].encode()).hexdigest()
-        if key in self._cache:
-            self._cache.move_to_end(key)
-            self._hits += 1
-            return self._cache[key]
-        self._misses += 1
-        return None
+        key = self._key(text)
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                self._hits += 1
+                return self._cache[key]
+            self._misses += 1
+            return None
 
     def put(self, text: str, vec: list[float]) -> None:
         """将文本和对应嵌入向量存入缓存，超出容量时淘汰最久未使用的条目。"""
-        key = hashlib.md5(text[:300].encode()).hexdigest()
-        self._cache[key] = vec
-        self._cache.move_to_end(key)
-        if len(self._cache) > self._max_size:
-            self._cache.popitem(last=False)
+        key = self._key(text)
+        with self._lock:
+            self._cache[key] = vec
+            self._cache.move_to_end(key)
+            if len(self._cache) > self._max_size:
+                self._cache.popitem(last=False)
 
     @property
     def stats(self) -> dict:

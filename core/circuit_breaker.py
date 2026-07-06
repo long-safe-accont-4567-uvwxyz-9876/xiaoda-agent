@@ -43,7 +43,6 @@ class CognitiveState:
     # 内部追踪
     _total_tool_calls: int = 0
     _failed_tool_calls: int = 0
-    _red_since: float = 0.0        # RED 状态开始时间
 
 
 class CircuitBreaker:
@@ -86,6 +85,8 @@ class CircuitBreaker:
         self._probe_start_time = 0.0
         # 上一次返回的逻辑状态（用于状态切换日志）
         self._last_state = CircuitState.GREEN
+        # Task 11.1: RED 状态开始时间（归属熔断器而非外部传入的认知状态）
+        self._red_since: float = 0.0
         # 线程安全：方法为同步调用，使用 threading.Lock 保护可变状态
         self._lock = threading.Lock()
 
@@ -149,8 +150,8 @@ class CircuitBreaker:
         """检查熔断状态"""
         with self._lock:
             # 如果当前是 RED，检查是否可以进入 half-open
-            if state._red_since > 0:
-                elapsed = time.time() - state._red_since
+            if self._red_since > 0:
+                elapsed = time.time() - self._red_since
                 if elapsed >= self._current_cooldown:
                     # Task 11.2: 冷却到期 → 尝试进入 half-open
                     # 安全网：若探测卡住（在途时间超过冷却），重置配额
@@ -178,7 +179,7 @@ class CircuitBreaker:
             red_signals, yellow_signals = self._count_signals(state)
 
             if red_signals >= 1:
-                state._red_since = time.time()
+                self._red_since = time.time()
                 self._log_state_change(
                     self._last_state, CircuitState.RED,
                     reason="red_signal", red_signals=red_signals,
@@ -214,7 +215,7 @@ class CircuitBreaker:
                 state._total_tool_calls += 1
                 state.tool_fail_rate = state._failed_tool_calls / max(1, state._total_tool_calls)
             # 清除 RED 状态标记（让 check 重新判定）
-            state._red_since = 0.0
+            self._red_since = 0.0
 
     def on_success(self, state: CognitiveState, is_tool: bool = False) -> None:
         """成功时更新状态"""
@@ -227,7 +228,7 @@ class CircuitBreaker:
                 state._total_tool_calls += 1
                 state.tool_fail_rate = state._failed_tool_calls / max(1, state._total_tool_calls)
             # 成功后清除 RED 状态
-            state._red_since = 0.0
+            self._red_since = 0.0
 
     def on_half_open_success(self, state: CognitiveState) -> None:
         """Task 11.4: half-open 探测成功，恢复 GREEN"""
@@ -235,7 +236,7 @@ class CircuitBreaker:
             elapsed = 0.0
             if self._probe_start_time > 0:
                 elapsed = max(0.0, time.time() - self._probe_start_time)
-            state._red_since = 0.0
+            self._red_since = 0.0
             state.consecutive_fails = 0
             # Task 12.1: 恢复成功 → 冷却时间重置为初始值
             self._current_cooldown = self._initial_cooldown
@@ -257,7 +258,7 @@ class CircuitBreaker:
             elapsed = 0.0
             if self._probe_start_time > 0:
                 elapsed = max(0.0, time.time() - self._probe_start_time)
-            state._red_since = time.time()
+            self._red_since = time.time()
             # Task 12.3: 连续恢复失败时冷却时间指数退避（cooldown *= 2），上限 MAX_COOLDOWN
             old_cooldown = self._current_cooldown
             self._current_cooldown = min(self._current_cooldown * 2, self._max_cooldown)

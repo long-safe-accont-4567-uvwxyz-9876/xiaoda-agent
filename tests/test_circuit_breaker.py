@@ -54,7 +54,7 @@ def test_check_red_high_consecutive_fails():
     state = CognitiveState(consecutive_fails=5)
     result = cb.check(state)
     assert result == CircuitState.RED
-    assert state._red_since > 0
+    assert cb._red_since > 0
 
 
 def test_check_red_very_low_confidence():
@@ -62,7 +62,7 @@ def test_check_red_very_low_confidence():
     state = CognitiveState(confidence=0.1)
     result = cb.check(state)
     assert result == CircuitState.RED
-    assert state._red_since > 0
+    assert cb._red_since > 0
 
 
 def test_check_red_high_fatigue():
@@ -70,7 +70,7 @@ def test_check_red_high_fatigue():
     state = CognitiveState(fatigue=0.9)
     result = cb.check(state)
     assert result == CircuitState.RED
-    assert state._red_since > 0
+    assert cb._red_since > 0
 
 
 # ── on_failure / on_success 更新 ──
@@ -102,10 +102,10 @@ def test_half_open_recovery():
     state = CognitiveState(consecutive_fails=5)
     # 首次 check 进入 RED
     cb.check(state)
-    assert state._red_since > 0
+    assert cb._red_since > 0
 
     # mock time.time 使得距离 RED 已过 60 秒
-    red_time = state._red_since
+    red_time = cb._red_since
     with patch("core.circuit_breaker.time.time", return_value=red_time + 60):
         result = cb.check(state)
     assert result == CircuitState.HALF_OPEN
@@ -117,13 +117,13 @@ def test_half_open_success_restores_green():
     cb.check(state)
 
     # 进入 half_open
-    red_time = state._red_since
+    red_time = cb._red_since
     with patch("core.circuit_breaker.time.time", return_value=red_time + 60):
         cb.check(state)
 
     # 探测成功
     cb.on_half_open_success(state)
-    assert state._red_since == 0.0
+    assert cb._red_since == 0.0
     assert state.consecutive_fails == 0
 
     # 再次 check 应该是 GREEN
@@ -137,14 +137,14 @@ def test_half_open_failure_returns_red():
     cb.check(state)
 
     # 进入 half_open
-    red_time = state._red_since
+    red_time = cb._red_since
     with patch("core.circuit_breaker.time.time", return_value=red_time + 60):
         cb.check(state)
 
     # 探测失败
     with patch("core.circuit_breaker.time.time", return_value=red_time + 70):
         cb.on_half_open_failure(state)
-    assert state._red_since > 0
+    assert cb._red_since > 0
 
     # 再次 check 应该还是 RED
     with patch("core.circuit_breaker.time.time", return_value=red_time + 71):
