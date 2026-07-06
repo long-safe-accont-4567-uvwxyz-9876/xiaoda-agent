@@ -73,13 +73,14 @@ class MemoryDB:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
-    async def increment_access_count(self, memory_id: int) -> None:
+    async def increment_access_count(self, memory_id: int, auto_commit: bool = True) -> None:
         """递增记忆访问计数（检索强化）"""
         await self._conn.execute(
             "UPDATE episodic_memories SET access_count = access_count + 1 WHERE id = ?",
             (memory_id,),
         )
-        await self._conn.commit()
+        if auto_commit:
+            await self._conn.commit()
 
     async def archive_memory(self, memory_id: int) -> None:
         """归档记忆（标记为已归档，不删除）"""

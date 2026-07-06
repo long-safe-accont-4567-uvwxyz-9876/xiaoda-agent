@@ -973,15 +973,20 @@ class MemoryManager:
         for r in results:
             created_at = r.get("timestamp", time.time())
             access_count = r.get("access_count", 0)
-            similarity = r.get("score", 0.5)  # 向量相似度或 FTS 分数
+            similarity = r.get("score", 0.5)
             fluid_score = _fluid.score(similarity, created_at, access_count)
             if _fluid.should_filter(fluid_score):
-                continue  # 过滤低分记忆
+                continue
             importance = r.get("importance", 0.5)
             r["effective_score"] = importance * fluid_score
-            # 检索强化：递增访问计数
-            await self.memory.increment_access_count(r["id"])
             filtered.append(r)
+        if filtered:
+            for r in filtered:
+                await self.memory.increment_access_count(r["id"], auto_commit=False)
+            try:
+                await self.memory.commit()
+            except Exception as e:
+                logger.debug("memory.fluid_access_count_commit_failed", error=str(e))
         return filtered
 
     async def _compute_final_scores(self, query: str, results: list[dict],
@@ -1152,7 +1157,10 @@ class MemoryManager:
                     logger.debug("memory.governance_init_failed", error=str(e))
 
             if self.vec and summary:
-                await self.vec.upsert(mem_id, summary)
+                try:
+                    await self.vec.upsert(mem_id, summary)
+                except Exception as e:
+                    logger.debug("memory.initial_vec_upsert_failed", error=str(e))
 
             self._last_encode_time = time.time()
             self._pending_encode = False
@@ -1169,9 +1177,14 @@ class MemoryManager:
                 _enrich_task = asyncio.create_task(
                     self._enrich_memory_async(mem_id, exchanges)
                 )
-                _enrich_task.add_done_callback(
-                    lambda t: t.exception() if not t.cancelled() and not t.done() else None
-                )
+                def _log_enrich_exception(t: asyncio.Task) -> None:
+                    if t.cancelled():
+                        return
+                    exc = t.exception()
+                    if exc:
+                        logger.warning("memory.enrich_async_failed", error=str(exc))
+
+                _enrich_task.add_done_callback(_log_enrich_exception)
             except Exception as e:
                 logger.debug("memory.enrich_spawn_failed", error=str(e))
         except Exception as e:
@@ -1189,11 +1202,11 @@ class MemoryManager:
             role = msg.get("role", "")
             content = msg.get("content", "")
             if role == "user" and content:
-                parts.append(f"用户: {content[:100]}")
+                parts.append(f"用户说: {content[:150]}")
             elif role == "assistant" and content:
-                parts.append(f"助手: {content[:100]}")
+                parts.append(content[:150])
 
-        summary = " | ".join(parts)
+        summary = "；".join(parts)
         return summary[:500]
 
     async def _enrich_memory_async(self, mem_id: int, exchanges: list[dict]) -> None:

@@ -891,7 +891,8 @@ class MessageProcessorMixin:
                     "content": f"[系统提示] 你正在给用户发送一张表情包图片。图片描述：「{_sticker_desc}」，情绪分类：「{_sticker_cat}」。请在回复中自然地提到这张表情包的内容，让用户感受到你真的知道发了什么图。不要说'这是一张图片'之类的机械描述，要用你的风格自然表达。"
                 })
 
-        tools = to_openai_tools() if to_openai_tools() else None
+        _tools_list = to_openai_tools()
+        tools = _tools_list if _tools_list else None
         has_image = image_data or ("[图片:" in user_input and "已保存到" in user_input)
         if has_image and tools:
             tools = None

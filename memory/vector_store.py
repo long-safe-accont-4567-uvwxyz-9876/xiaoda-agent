@@ -34,8 +34,8 @@ class EmbedCache:
 
     @staticmethod
     def _key(text: str) -> str:
-        """生成缓存键 — 使用 SHA256 (128 hex 前缀) 降低碰撞概率。"""
-        return hashlib.sha256(text[:300].encode()).hexdigest()[:32]
+        """生成缓存键 — 使用完整文本的 SHA256 哈希，避免截断导致碰撞。"""
+        return hashlib.sha256(text.encode()).hexdigest()[:32]
 
     def __contains__(self, text: str) -> bool:
         """检查文本是否已存在于缓存中。"""
@@ -392,16 +392,24 @@ class VectorStore:
                     return []
                 # sqlite-vec 的 vec0 KNN 只允许 ORDER BY distance (不允许 , rowid)
                 # 所以 tie-breaking 在 Python 层做: 按 (distance, rowid) 稳定排序
-                rows = self._vec_conn.execute(
-                    "SELECT rowid, distance FROM memories_vec "
-                    "WHERE embedding MATCH vec_f32(?) AND k=? "
-                    "ORDER BY distance",
-                    [vec_json, fetch_k],
-                ).fetchall()
-                results = [(row[0], row[1]) for row in rows]
                 if candidate_ids is not None:
                     cand_set = set(candidate_ids)
-                    results = [r for r in results if r[0] in cand_set]
+                    oversample = min(top_k * 6, len(candidate_ids) + top_k * 2)
+                    rows = self._vec_conn.execute(
+                        "SELECT rowid, distance FROM memories_vec "
+                        "WHERE embedding MATCH vec_f32(?) AND k=? "
+                        "ORDER BY distance",
+                        [vec_json, oversample],
+                    ).fetchall()
+                    results = [(row[0], row[1]) for row in rows if row[0] in cand_set]
+                else:
+                    rows = self._vec_conn.execute(
+                        "SELECT rowid, distance FROM memories_vec "
+                        "WHERE embedding MATCH vec_f32(?) AND k=? "
+                        "ORDER BY distance",
+                        [vec_json, fetch_k],
+                    ).fetchall()
+                    results = [(row[0], row[1]) for row in rows]
                 # deterministic tie-breaking: distance 相同时按 rowid 稳定排序
                 if deterministic:
                     results.sort(key=lambda r: (r[1], r[0]))

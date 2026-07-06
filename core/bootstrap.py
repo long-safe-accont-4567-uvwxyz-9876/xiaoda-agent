@@ -307,6 +307,8 @@ class AgentCoreBootstrapper:
                 model="THUDM/GLM-4-9B-0414",
             )
         core.memory.set_knowledge_graph(core.knowledge_graph)
+        if core._failure_trigger._memory_db is None:
+            core._failure_trigger._memory_db = core.memory.memory
         # 注入 MemoryManager 到 memory_tool，修复记忆工具不可用问题
         from tools import memory_tool
         memory_tool.bind(core.memory)

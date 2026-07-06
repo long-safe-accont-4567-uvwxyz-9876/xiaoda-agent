@@ -48,19 +48,21 @@ class CredentialPool:
         self._cursor: dict[str, int] = {}
         # 异步锁保护并发访问（get_credential/report_error/report_success 共享 _pool 和 _cursor）
         self._lock = asyncio.Lock()
+        self._sync_lock = threading.Lock()
         self._load_from_env()
 
     def add_credential(self, cred: Credential) -> None:
         """添加凭证到池中"""
-        provider = cred.provider
-        if provider not in self._pool:
-            self._pool[provider] = []
-            self._cursor[provider] = 0
-        self._pool[provider].append(cred)
-        logger.info("credential_pool.added",
-                    provider=provider,
-                    key_suffix=cred.api_key[-6:] if len(cred.api_key) >= 6 else "***",
-                    total=len(self._pool[provider]))
+        with self._sync_lock:
+            provider = cred.provider
+            if provider not in self._pool:
+                self._pool[provider] = []
+                self._cursor[provider] = 0
+            self._pool[provider].append(cred)
+            logger.info("credential_pool.added",
+                        provider=provider,
+                        key_suffix=cred.api_key[-6:] if len(cred.api_key) >= 6 else "***",
+                        total=len(self._pool[provider]))
 
     async def get_credential(self, provider: str) -> Credential | None:
         """获取当前可用凭证（轮换逻辑：优先 ok 状态，跳过 exhausted 和 dead）"""

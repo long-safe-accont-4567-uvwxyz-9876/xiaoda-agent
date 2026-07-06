@@ -153,9 +153,7 @@ class ModelRouter:
 
         不同 provider 之间不再互相阻塞，相同 provider 仍然串行化以保护凭证轮换。
         """
-        if provider not in self._credential_locks:
-            self._credential_locks[provider] = asyncio.Lock()
-        return self._credential_locks[provider]
+        return self._credential_locks.setdefault(provider, asyncio.Lock())
 
     def _lazy_register_provider(self, provider: str) -> None:
         """懒注册：从 config_service 恢复未注册的自定义 provider。"""

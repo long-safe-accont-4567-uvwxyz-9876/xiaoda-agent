@@ -214,8 +214,6 @@ class CircuitBreaker:
                 state._failed_tool_calls += 1
                 state._total_tool_calls += 1
                 state.tool_fail_rate = state._failed_tool_calls / max(1, state._total_tool_calls)
-            # 清除 RED 状态标记（让 check 重新判定）
-            self._red_since = 0.0
 
     def on_success(self, state: CognitiveState, is_tool: bool = False) -> None:
         """成功时更新状态"""
@@ -227,8 +225,6 @@ class CircuitBreaker:
             if is_tool:
                 state._total_tool_calls += 1
                 state.tool_fail_rate = state._failed_tool_calls / max(1, state._total_tool_calls)
-            # 成功后清除 RED 状态
-            self._red_since = 0.0
 
     def on_half_open_success(self, state: CognitiveState) -> None:
         """Task 11.4: half-open 探测成功，恢复 GREEN"""

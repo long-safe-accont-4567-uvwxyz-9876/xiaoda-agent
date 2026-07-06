@@ -37,6 +37,7 @@ class AgentContext:
     COMPRESS_TARGET_RATIO = 0.6   # 压缩目标：60% 的 MAX_HISTORY_TOKENS
     MAX_COMPRESS_ROUNDS = 5        # 最大压缩轮数
     MAX_COMPRESSED_SUMMARY_LEN = 3000
+    MAX_PRE_COMPRESSED_BUFFER = 200
 
     def __init__(self, system_prompt: str = "", system_prompt_loader: Callable[..., str] | None = None,
                  router: Optional[Any]=None, security_filter: Optional[Any]=None) -> None:
@@ -200,7 +201,8 @@ class AgentContext:
         # 最终强制裁剪：如果 5 轮后仍超限，强制移除最旧的消息
         while self.history and self._history_tokens() > self.MAX_HISTORY_TOKENS:
             removed = self.history.pop(0)
-            self._pre_compressed_buffer.append(removed)
+            if len(self._pre_compressed_buffer) < self.MAX_PRE_COMPRESSED_BUFFER:
+                self._pre_compressed_buffer.append(removed)
             logger.debug("context.force_trimmed", role=removed["role"], preview=removed["content"][:40])
 
     def flush_pre_compressed_buffer(self) -> list[dict]:
@@ -414,7 +416,7 @@ class AgentContext:
             volatile_parts.append(f"[感知到{self.current_address_term}的情绪：{self.emotion_hint}]")
         if self.memory_retrieval:
             mem_texts = []
-            for m in self.memory_retrieval[:3]:
+            for m in self.memory_retrieval[:5]:
                 summary = m.get("summary", "")
                 if summary:
                     # 注入时间戳，让 LLM 知道每条记忆发生的时间（解决"没有时间戳"问题）
