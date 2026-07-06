@@ -21,6 +21,7 @@ import os
 import re
 import secrets
 import socket
+import sys
 from pathlib import Path
 
 
@@ -32,7 +33,44 @@ from loguru import logger
 # ── 常量 ──────────────────────────────────────────────────────
 # 盐：基础前缀 + 每次部署唯一随机后缀（首次启动时生成并持久化）
 _SALT_BASE = b"xiaoda-agent-credential-vault-v2-"
-_SALT_FILE = Path(os.getenv("CREDENTIAL_SALT_FILE", "config/credential_salt.bin"))
+
+
+def _resolve_salt_file() -> Path:
+    """解析盐文件绝对路径。
+
+    必须使用绝对路径，避免 CWD 变化（systemd/docker/frozen）时找不到盐文件
+    导致已加密凭证永久无法解密。
+
+    优先级：
+    1. 环境变量 CREDENTIAL_SALT_FILE（显式指定）
+    2. frozen 模式：~/.ai-agent/config/credential_salt.bin
+    3. 开发模式：项目根目录 /config/credential_salt.bin
+    """
+    env_path = os.getenv("CREDENTIAL_SALT_FILE")
+    if env_path:
+        return Path(env_path).expanduser()
+    if getattr(sys, "frozen", False):
+        return Path.home() / ".ai-agent" / "config" / "credential_salt.bin"
+    # 开发模式：项目根目录（credential_vault.py 的上两级）
+    return Path(__file__).resolve().parent.parent / "config" / "credential_salt.bin"
+
+
+_SALT_FILE = _resolve_salt_file()
+
+# 迁移：如果新路径不存在但旧相对路径下有盐文件，复制过来避免凭证失效
+try:
+    if not _SALT_FILE.exists():
+        _legacy_salt = Path("config") / "credential_salt.bin"
+        if _legacy_salt.exists():
+            _SALT_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _SALT_FILE.write_bytes(_legacy_salt.read_bytes())
+            try:
+                _SALT_FILE.chmod(0o600)
+            except OSError:
+                pass
+            logger.info("credential_vault.salt_migrated", src=str(_legacy_salt), dst=str(_SALT_FILE))
+except Exception as e:
+    logger.debug("credential_vault.salt_migrate_failed", error=str(e))
 # PBKDF2 迭代次数（增大可减缓暴力破解）
 _PBKDF2_ITERATIONS = 200_000
 # 随机 nonce 长度（字节）

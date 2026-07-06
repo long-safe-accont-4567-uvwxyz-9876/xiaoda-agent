@@ -481,12 +481,13 @@ _ORIGINAL_NAMES: dict[str, str] = {
 }
 
 # 英文原名 → agent_key 映射（人格文件中的英文标识符）
+# 包含旧版游戏角色名 → 现名 key 的映射，确保旧人格文件中的英文标识符也能正确替换
 _ORIGINAL_EN_NAMES: dict[str, str] = {
     "nahida": "xiaoda",
-    "xiaoli": "xiaoli",
-    "xiaolang": "xiaolang",
-    "xiaolian": "xiaolian",
-    "xiaoke": "xiaoke",
+    "keli": "xiaoli",
+    "yinlang": "xiaolang",
+    "xilian": "xiaolian",
+    "nike": "xiaoke",
 }
 
 

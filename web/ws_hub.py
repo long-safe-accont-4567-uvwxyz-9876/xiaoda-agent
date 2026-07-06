@@ -255,6 +255,12 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
         await ws.send_json({"type": "error", "code": "UNAUTHORIZED", "message": "Invalid or missing token"})
         await ws.close(code=4001, reason="Unauthorized")
         return
+    # 连接数上限检查：在 try 块外提前检查，避免 ValueError 导致 WebSocket 泄漏
+    if len(manager._connections) >= manager.MAX_CONNECTIONS:
+        await ws.send_json({"type": "error", "code": "MAX_CONNECTIONS",
+                            "message": f"连接数已达上限 {manager.MAX_CONNECTIONS}，请稍后重试"})
+        await ws.close(code=4029, reason="Too many connections")
+        return
     conn_id = manager.register(ws)
     logger.info("ws.connected conn_id={}", conn_id)
     await manager.send_to(conn_id, {

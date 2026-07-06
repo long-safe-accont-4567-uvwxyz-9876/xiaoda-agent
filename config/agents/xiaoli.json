@@ -84,5 +84,6 @@
     "*.env",
     ".env.*",
     "config/agents/*_personality.md"
-  ]
+  ],
+  "_saved_at": 1783308635.0612404
 }

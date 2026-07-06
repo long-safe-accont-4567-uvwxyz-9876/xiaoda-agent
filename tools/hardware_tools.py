@@ -3,6 +3,7 @@ import os
 import shutil
 import asyncio
 import time
+from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 
 BLOCKED_PINS = {1, 2, 4, 6, 9, 14, 17, 20, 25, 30, 34, 39}

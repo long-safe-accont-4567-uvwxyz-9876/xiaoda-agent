@@ -370,7 +370,6 @@ export default {
     stickerDeleteConfirm: '确认删除？',
     noVoice: '无（不启用 TTS）',
     uploadVoice: '选择音频',
-    upload: '上传',
     voiceUploaded: '参考音频上传成功 ✓',
   },
 

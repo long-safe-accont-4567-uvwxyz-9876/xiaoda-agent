@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { useRouter } from 'vue-router'
-import { api } from '../api'
+import { api, get } from '../api'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import DendroEmblem from '../components/fx/DendroEmblem.vue'
 import { t } from '../i18n'
@@ -20,7 +20,7 @@ const loginBg = ref(DEFAULT_BG)
 onMounted(async () => {
   // 加载小妲壁纸，使登录页背景与聊天页一致
   try {
-    const agents = await api.get<Array<{ name: string; wallpaper?: string }>>('/agents')
+    const agents = await get<Array<{ name: string; wallpaper?: string; display_name?: string }>>('/agents')
     const main = agents.find(a => a.name === 'xiaoda')
     if (main?.wallpaper) {
       loginBg.value = main.wallpaper
@@ -30,10 +30,12 @@ onMounted(async () => {
         const store = useAgentsStore()
         if (!store.agents.length) {
           // agentsStore 还没初始化，预填充主 agent 的 wallpaper
+          // display_name_en 用 display_name 兜底（避免 undefined）
           store.agents = agents.map(a => ({
             ...a,
-            display_name_en: a.display_name
-          }))
+            display_name: a.display_name || a.name,
+            display_name_en: a.display_name || a.name
+          })) as any
         }
       } catch { /* 忽略 */ }
     }

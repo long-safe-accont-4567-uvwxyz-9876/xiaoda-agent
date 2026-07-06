@@ -7,6 +7,7 @@ import shlex
 import tempfile
 import urllib.parse
 from pathlib import Path
+from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 
 

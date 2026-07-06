@@ -370,7 +370,6 @@ export default {
     stickerDeleteConfirm: 'Confirm delete?',
     noVoice: 'None (TTS disabled)',
     uploadVoice: 'Select audio',
-    upload: 'Upload',
     voiceUploaded: 'Voice reference uploaded ✓',
   },
 

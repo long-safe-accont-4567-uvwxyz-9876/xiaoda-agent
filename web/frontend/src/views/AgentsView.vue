@@ -57,14 +57,14 @@ const voiceUploading = ref(false)
 const voiceFile = ref<File | null>(null)
 const voiceInputEl = ref<HTMLInputElement | null>(null)
 const voiceOptions = computed(() => {
-  const opts: Array<{ label: string; value: string | null }> = [{ label: t('agentsView.noVoice'), value: null }]
+  const opts: Array<{ label: string; value: string | null; type?: string }> = [{ label: t('agentsView.noVoice'), value: null, type: 'group' }]
   const agentName = editing.value?.name
   if (agentName && voiceGroups.value[agentName]) {
     voiceGroups.value[agentName].forEach(v => {
       opts.push({ label: replaceAgentNames(v.name), value: v.voice_ref })
     })
   }
-  return opts
+  return opts as any
 })
 
 /** 当前 voice_ref 的显示名（用于在 n-select 旁显示替换后的名称） */

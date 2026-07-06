@@ -292,6 +292,10 @@ hiddenimports = [
     'web._msg_context',
     'setup_wizard',
     'qq_bot_adapter',
+    'cli_client',
+    'market',
+    'market.installer',
+    'market.manifest',
 
     # Top-level modules imported by agent_core.py (imported in web.server lifespan)
     'model_router',

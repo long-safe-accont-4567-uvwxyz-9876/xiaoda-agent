@@ -43,14 +43,14 @@ def _resolve_personality_path(pf: str) -> str | None:
     candidates = []
     # 1. 用户数据目录 + 文件名（frozen 模式首选，持久化安全）
     candidates.append(AGENTS_DIR / fname)
-    # 2. PyInstaller 打包目录（frozen 模式只读资源）
+    # 2. PyInstaller 打包目录（frozen 模式只读资源，用完整相对路径）
     meipass = getattr(sys, '_MEIPASS', None)
     if meipass:
         candidates.append(Path(meipass) / pf)
-    # 3. 项目源码根目录（dev 模式）
+    # 3. 项目源码根目录 + 完整相对路径（dev 模式，兼容 config/agents/xxx.md 格式）
     candidates.append(_FALLBACK_BASE / pf)
-    # 4. 用户数据目录 + 完整相对路径（兼容旧格式）
-    candidates.append(AGENTS_DIR / pf)
+    # 4. 项目源码根目录 + 纯文件名（最后兜底）
+    candidates.append(_FALLBACK_BASE / fname)
     for c in candidates:
         if c.exists():
             return str(c)
