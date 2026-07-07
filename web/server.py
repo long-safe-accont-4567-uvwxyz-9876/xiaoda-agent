@@ -415,7 +415,8 @@ def create_app() -> FastAPI:
         response = await call_next(request)
         _elapsed = _time.monotonic() - _start
         _sla = getattr(app.state, "sla_exporter", None)
-        if _sla:
+        # 跳过 /metrics 自身，避免抓取指标时污染监控数据
+        if _sla and request.url.path != "/metrics":
             _sla.inc_request(request.url.path, str(response.status_code))
             _sla.observe_latency(request.url.path, _elapsed)
             if response.status_code >= 400:
@@ -472,7 +473,12 @@ def create_app() -> FastAPI:
     app.state.sla_exporter = _sla
 
     @app.get("/metrics", include_in_schema=False)
-    async def prometheus_metrics() -> Any:
+    async def prometheus_metrics(request: Any) -> Any:
+        # 限制为 localhost 访问，避免局域网暴露请求统计
+        client_host = getattr(getattr(request, "client", None), "host", "")
+        if client_host not in ("127.0.0.1", "::1", "localhost"):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=403, content={"error": "Forbidden"})
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse(_sla.export(), media_type="text/plain; version=0.0.4; charset=utf-8")
 
