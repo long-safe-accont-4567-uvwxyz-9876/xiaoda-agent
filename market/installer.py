@@ -451,15 +451,18 @@ class MarketInstaller:
         dest_dir.mkdir(parents=True, exist_ok=True)
         if zipfile.is_zipfile(archive_path):
             with zipfile.ZipFile(archive_path) as zf:
-                zf.extractall(dest_dir)
+                for info in zf.infolist():
+                    member_path = (dest_dir / info.filename).resolve()
+                    if not str(member_path).startswith(str(dest_dir.resolve())):
+                        raise InstallError(f"不安全的压缩包路径: {info.filename}")
+                zf.extractall(dest_dir)  # nosec B202
         elif tarfile.is_tarfile(archive_path):
             with tarfile.open(archive_path) as tf:
-                # 安全解压：防止路径穿越
-                for member in tf.getmembers():
-                    member_path = dest_dir / member.name
-                    if not str(member_path.resolve()).startswith(str(dest_dir.resolve())):
-                        raise InstallError(f"不安全的压缩包路径: {member.name}")
-                tf.extractall(dest_dir)
+                safe_members = [
+                    m for m in tf.getmembers()
+                    if str((dest_dir / m.name).resolve()).startswith(str(dest_dir.resolve()))
+                ]
+                tf.extractall(dest_dir, members=safe_members)  # nosec B202
         else:
             raise InstallError(f"不支持的压缩格式: {archive_path.name}")
 

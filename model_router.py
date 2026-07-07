@@ -233,6 +233,7 @@ class ModelRouter:
     @staticmethod
     def _ensure_credential_in_pool(pool: Any, provider: str, api_key: str, base_url: str) -> None:
         """确保凭证池中有该 provider 的最新凭证。"""
+        from utils.credential_pool import Credential
         existing = pool._pool.get(provider, [])
         key_suffix = api_key[-6:] if len(api_key) >= 6 else api_key
         already_exists = any(c.api_key.endswith(key_suffix) for c in existing)

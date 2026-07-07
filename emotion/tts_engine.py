@@ -472,7 +472,7 @@ class TTSEngine:
             return None
 
         # 计算缓存 key 并检查命中
-        cache_key = hashlib.md5(f"{voice}:{emotion}:{text}".encode("utf-8")).hexdigest()
+        cache_key = hashlib.md5(f"{voice}:{emotion}:{text}".encode("utf-8"), usedforsecurity=False).hexdigest()
         cached = self._tts_cache_hit(cache_key)
         if cached is not None:
             return cached

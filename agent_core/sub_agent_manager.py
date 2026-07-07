@@ -565,7 +565,7 @@ class SubAgentManagerMixin:
 
         基于 agent_name + task 内容的 md5 摘要，保证相同任务命中缓存。
         """
-        h = hashlib.md5(task.encode("utf-8")).hexdigest()[:16]
+        h = hashlib.md5(task.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
         key = f"bb:delegate:{agent_name}:{h}"
         if suffix:
             key += f":{suffix}"
