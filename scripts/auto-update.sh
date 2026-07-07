@@ -5,7 +5,13 @@
 # =============================================================================
 set -euo pipefail
 
-REPO="${GITHUB_REPO:-long-safe-accont-4567-uvwxyz-9876/xiaoda-agent}"
+REPO="${GITHUB_REPO:-}"
+if [ -z "$REPO" ]; then
+    echo "错误: 未设置 GITHUB_REPO 环境变量"
+    echo "请在 .env 中添加: GITHUB_REPO=<owner>/xiaoda-agent"
+    echo "或设置环境变量后重试: GITHUB_REPO=<owner>/xiaoda-agent $0"
+    exit 1
+fi
 GITHUB_API="https://api.github.com/repos/${REPO}"
 INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION_FILE="${INSTALL_DIR}/.version"

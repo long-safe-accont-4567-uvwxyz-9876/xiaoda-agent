@@ -17,7 +17,8 @@ def _tree_datas(root, prefix):
     """Return list of (src, dest) tuples for every file under *root*."""
     result = []
     _exclude = {'.env', '.env.prod', '.env.local', 'webui_overrides.json',
-                'USER.md', 'SOUL.md', 'IDENTITY.md', 'MEMORY.md'}
+                'USER.md', 'SOUL.md', 'IDENTITY.md', 'MEMORY.md',
+                'credential_salt.bin'}
     _exclude_dirs = {'credentials', '__pycache__', '.git', 'node_modules',
                      'stickers', 'voice_refs'}
     if not os.path.isdir(root):

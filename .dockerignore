@@ -34,6 +34,7 @@ Thumbs.db
 credentials/
 *.key
 config/webui_overrides.json
+config/credential_salt.bin
 
 # Data (mounted as volume)
 data/
