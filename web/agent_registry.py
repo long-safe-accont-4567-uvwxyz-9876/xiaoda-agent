@@ -17,7 +17,7 @@ from pathlib import Path
 from loguru import logger
 
 # frozen 模式下使用用户目录（~/.ai-agent/data/config/agents/），避免写入 _MEIPASS 只读目录
-from config import AGENTS_CONFIG_DIR, DEFAULT_PROVIDER, _FALLBACK_BASE
+from config import AGENTS_CONFIG_DIR, DEFAULT_PROVIDER, _FALLBACK_BASE, get_agent_display_name
 
 
 def _resolve_personality_path(pf: str) -> str | None:
@@ -76,10 +76,10 @@ DEFAULT_WALLPAPERS = {
     "xiaolian": "/assets/wallpapers/xiaolian.jpg",
     "xiaoke": "/assets/wallpapers/xiaoke.jpg",
 }
-# 主体纳西妲不是 SubAgent，但要出现在 Agent 列表里供切换
+# 主体小妲不是 SubAgent，但要出现在 Agent 列表里供切换
 MAIN_AGENT_META = {
     "name": "xiaoda",
-    "display_name": "小妲",
+    "display_name": get_agent_display_name("xiaoda"),
     "display_name_en": "Xiao Da",
     "builtin": True,
     "is_main": True,
