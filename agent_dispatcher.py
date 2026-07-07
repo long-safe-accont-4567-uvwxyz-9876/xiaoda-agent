@@ -215,7 +215,7 @@ class SubAgent:
         if self._client is not None:
             try:
                 await self._client.close()
-            except Exception:
+            except (OSError, RuntimeError):
                 logger.debug("agent_dispatcher.close_client_error", exc_info=True)
             self._client = None
 
@@ -234,7 +234,7 @@ class SubAgent:
             return False
         try:
             new_client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        except Exception as e:
+        except (ValueError, OSError, RuntimeError) as e:
             logger.warning("sub_agent.reload_client_failed",
                            name=self.config.name, error=str(e)[:200])
             return False
@@ -348,7 +348,7 @@ class SubAgent:
                     if old_client is not None:
                         try:
                             await old_client.close()
-                        except Exception:
+                        except (OSError, RuntimeError):
                             logger.debug("agent_dispatcher.close_old_client_error", exc_info=True)
                 except (ImportError, ValueError, OSError) as e:
                     logger.debug("sub_agent.recover_failed", name=self.config.name, error=str(e)[:80])
@@ -381,13 +381,13 @@ class SubAgent:
         try:
             reply = await self._chat_loop(messages, tools)
             return reply
-        except Exception as e:
+        except (OSError, RuntimeError, asyncio.TimeoutError, ValueError) as e:
             logger.warning("sub_agent.chat_failed name={} error={}", self.config.name, str(e))
             if tools and _is_tool_unsupported_error(str(e)):
                 try:
                     reply = await self._chat_loop(messages, None)
                     return reply
-                except Exception as e2:
+                except (OSError, RuntimeError, asyncio.TimeoutError, ValueError) as e2:
                     logger.warning("sub_agent.fallback_failed name={} error={}", self.config.name, str(e2))
 
         return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
@@ -628,7 +628,7 @@ class SubAgent:
         if tool_name == "submit_memory":
             try:
                 result_text = await self.submit_memory(**args)
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError) as e:
                 logger.warning("sub_agent.submit_memory_call_failed", error=str(e)[:200])
                 result_text = f"错误: {e}"
             return {"tool_call_id": tc.id, "content": result_text}
@@ -637,7 +637,7 @@ class SubAgent:
         if tool_name == "send_message_to_agent":
             try:
                 result_text = await self.send_message_to_agent(**args)
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError) as e:
                 logger.warning("sub_agent.send_message_to_agent_call_failed", error=str(e)[:200])
                 result_text = f"错误: {e}"
             return {"tool_call_id": tc.id, "content": result_text}
@@ -732,13 +732,13 @@ class SubAgent:
             if getattr(mm, "vec", None) and memory_text:
                 try:
                     await mm.vec.upsert(mem_id, memory_text)
-                except Exception as ve:
+                except (OSError, RuntimeError, ValueError) as ve:
                     logger.warning("sub_agent.submit_memory.vec_failed", error=str(ve)[:200])
 
             self._memory_submit_count += 1
             logger.info("sub_agent.submit_memory", name=self.config.name, count=self._memory_submit_count)
             return f"已记录：{memory_text[:50]}..."
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError) as e:
             logger.warning("sub_agent.submit_memory_failed", error=str(e)[:200])
             return "（记忆系统不可用）"
 
@@ -777,7 +777,7 @@ class SubAgent:
         try:
             reply = await target.chat(message, context=context)
             return reply if reply else f"（{target_agent} 没有回应）"
-        except Exception as e:
+        except (OSError, RuntimeError, asyncio.TimeoutError) as e:
             logger.warning(
                 "sub_agent.send_message_failed",
                 sender=self.config.name,
@@ -859,7 +859,7 @@ class AgentDispatcher:
             if hasattr(agent, 'close'):
                 try:
                     await agent.close()
-                except Exception:
+                except (OSError, RuntimeError):
                     logger.debug("agent_dispatcher.close_sub_agent_error", exc_info=True)
 
     async def dispatch_single(self, name: str, task: str, context: str = "", status_callback: Optional[Any]=None, address_term: str = "爸爸") -> str | None:
@@ -906,7 +906,7 @@ class AgentDispatcher:
                     agent._degraded = False  # 清除降级标记
                     count += 1
                     logger.info("sub_agent.client_refreshed", name=name)
-            except Exception as e:
+            except (ValueError, OSError, RuntimeError) as e:
                 logger.warning("sub_agent.client_refresh_failed", name=name, error=str(e)[:200])
         return count
 
@@ -979,7 +979,7 @@ class AgentDispatcher:
                     result = json.load(f)
                 self._routing_config_cache = (mtime, result)
                 return result
-            except Exception as e:
+            except (OSError, json.JSONDecodeError, ValueError) as e:
                 logger.warning("agent.routing_config_load_failed", error=str(e))
 
         # 默认路由
@@ -1024,7 +1024,7 @@ class AgentDispatcher:
                 task_type = _AGENT_TO_TASK_TYPE.get(agent)
                 if task_type:
                     return task_type
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError) as e:
             logger.warning("classify_task.router_engine_delegate_failed", error=str(e)[:200])
 
         # 回退：本地关键词分类（RouterEngine 无明确路由信号时）
@@ -1121,6 +1121,6 @@ class AgentDispatcher:
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except Exception as e:
+            except (OSError, json.JSONDecodeError, ValueError) as e:
                 logger.warning("agent.routing_v2_config_load_failed", error=str(e))
         return {"single_domain": {}, "multi_domain": {}, "operation_patterns": {}}

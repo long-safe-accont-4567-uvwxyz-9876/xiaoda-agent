@@ -10,9 +10,11 @@
 - Counter / Gauge / Histogram 三种 metric 类型
 - /metrics endpoint Prometheus 兼容输出
 - 不依赖 prometheus_client 库 (零依赖)
+- threading.Lock 保护并发读写 (中间件 + 后台任务)
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -43,11 +45,10 @@ class SLAExporter:
 
     def __init__(self) -> None:
         """初始化 SLA 导出器并注册标准 SLA 指标."""
+        self._lock = threading.Lock()
         self._metrics: dict[str, Metric] = {}
-        # 默认 buckets (秒)
         self._default_buckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25,
                                     0.5, 1.0, 2.5, 5.0, 10.0]
-        # 注册标准 SLA 指标
         self._register(
             "agent_requests_total", "Total HTTP requests", "counter",
             labels=["endpoint", "status"]
@@ -69,11 +70,11 @@ class SLAExporter:
         )
         self._register(
             "agent_llm_tokens_total", "LLM tokens used", "counter",
-            labels=["model", "direction"]  # direction: prompt/completion
+            labels=["model", "direction"]
         )
         self._register(
             "agent_cache_hits_total", "Cache hits", "counter",
-            labels=["layer"]  # L1/L2/L3
+            labels=["layer"]
         )
 
     def _register(self, name: str, help_: str, type_: str,
@@ -91,7 +92,8 @@ class SLAExporter:
         if not m or m.type != "counter":
             return
         key = tuple(labels.get(l, "") for l in m.labels)
-        m.values[key] = m.values.get(key, 0) + value
+        with self._lock:
+            m.values[key] = m.values.get(key, 0) + value
 
     def set(self, metric: str, value: float, **labels: Any) -> None:
         """设置 gauge"""
@@ -99,28 +101,26 @@ class SLAExporter:
         if not m or m.type != "gauge":
             return
         key = tuple(labels.get(l, "") for l in m.labels)
-        m.values[key] = value
+        with self._lock:
+            m.values[key] = value
 
     def observe(self, metric: str, value: float, **labels: Any) -> None:
-        """观察 histogram"""
+        """观察 histogram (累积桶: le=0.1 包含所有 <=0.1 的观测值)"""
         m = self._metrics.get(metric)
         if not m or m.type != "histogram":
             return
         key = tuple(labels.get(l, "") for l in m.labels)
-        # 存储桶计数
-        bucket_key = key + ("_bucket",)
-        for b in m.buckets:
-            b_k = key + (f"le={b}",)
-            if value <= b:
-                m.values[b_k] = m.values.get(b_k, 0) + 1
-        # +Inf 桶
-        inf_k = key + ("le=+Inf",)
-        m.values[inf_k] = m.values.get(inf_k, 0) + 1
-        # sum + count
-        sum_k = key + ("_sum",)
-        cnt_k = key + ("_count",)
-        m.values[sum_k] = m.values.get(sum_k, 0) + value
-        m.values[cnt_k] = m.values.get(cnt_k, 0) + 1
+        with self._lock:
+            for b in m.buckets:
+                if value <= b:
+                    b_k = key + (f"le={b}",)
+                    m.values[b_k] = m.values.get(b_k, 0) + 1
+            inf_k = key + ("le=+Inf",)
+            m.values[inf_k] = m.values.get(inf_k, 0) + 1
+            sum_k = key + ("_sum",)
+            cnt_k = key + ("_count",)
+            m.values[sum_k] = m.values.get(sum_k, 0) + value
+            m.values[cnt_k] = m.values.get(cnt_k, 0) + 1
 
     # ─── 便捷方法 ───
     def inc_request(self, endpoint: str, status: str) -> None:
@@ -149,6 +149,11 @@ class SLAExporter:
             endpoint: 关联端点, 默认空字符串
         """
         self.inc("agent_errors_total", type=error_type, endpoint=endpoint)
+        from utils.trace_context import get_trace_id
+        tid = get_trace_id()
+        if tid:
+            from loguru import logger
+            logger.debug("sla.error_trace", trace_id=tid, error_type=error_type, endpoint=endpoint)
 
     def set_active_users(self, count: int) -> None:
         """设置当前活跃用户数 (gauge).
@@ -187,38 +192,50 @@ class SLAExporter:
 
     # ─── Prometheus 格式导出 ───
     def export(self) -> str:
-        """导出为 Prometheus exposition format"""
+        """导出为 Prometheus exposition format (histogram 桶做累积输出)"""
         lines = []
-        for m in self._metrics.values():
-            lines.append(f"# HELP {m.name} {m.help}")
-            lines.append(f"# TYPE {m.name} {m.type}")
-            if m.type == "counter":
-                for k, v in m.values.items():
-                    label_str = self._format_labels(m.labels, k)
-                    lines.append(f"{m.name}{label_str} {v}")
-            elif m.type == "gauge":
-                for k, v in m.values.items():
-                    label_str = self._format_labels(m.labels, k)
-                    lines.append(f"{m.name}{label_str} {v}")
-            elif m.type == "histogram":
-                # 按主键分组输出 buckets
-                groups: dict = {}
-                for k, v in m.values.items():
-                    base = k[:-1] if k[-1].startswith(("le=", "_sum", "_count")) else k
-                    if base not in groups:
-                        groups[base] = []
-                    groups[base].append((k[-1], v))
-                for base, items in groups.items():
-                    for tag, v in items:
-                        full_k = base + (tag,)
-                        label_str = self._format_labels(m.labels + ["le"] if tag.startswith("le=") else m.labels, full_k)
-                        if tag.startswith("le="):
-                            lines.append(f"{m.name}_bucket{label_str} {v}")
-                        elif tag == "_sum":
-                            lines.append(f"{m.name}_sum{label_str} {v}")
-                        elif tag == "_count":
-                            lines.append(f"{m.name}_count{label_str} {v}")
+        with self._lock:
+            for m in self._metrics.values():
+                lines.append(f"# HELP {m.name} {m.help}")
+                lines.append(f"# TYPE {m.name} {m.type}")
+                if m.type == "counter":
+                    for k, v in m.values.items():
+                        label_str = self._format_labels(m.labels, k)
+                        lines.append(f"{m.name}{label_str} {v}")
+                elif m.type == "gauge":
+                    for k, v in m.values.items():
+                        label_str = self._format_labels(m.labels, k)
+                        lines.append(f"{m.name}{label_str} {v}")
+                elif m.type == "histogram":
+                    self._export_histogram(m, lines)
         return "\n".join(lines) + "\n"
+
+    def _export_histogram(self, m: Metric, lines: list[str]) -> None:
+        """导出 histogram: 按 label 基键分组，桶按 le 升序排列并做累积求和."""
+        groups: dict[tuple, list[tuple[str, float]]] = {}
+        for k, v in m.values.items():
+            tag = k[-1]
+            base = k[:-1]
+            if tag.startswith("le=") or tag in ("_sum", "_count"):
+                groups.setdefault(base, []).append((tag, v))
+        for base, items in groups.items():
+            buckets_raw = [(t, v) for t, v in items if t.startswith("le=")]
+            sum_val = 0.0
+            count_val = 0
+            for t, v in items:
+                if t == "_sum":
+                    sum_val = v
+                elif t == "_count":
+                    count_val = v
+            buckets_raw.sort(key=lambda x: float("inf") if x[0] == "le=+Inf" else float(x[0].split("=", 1)[1]))
+            cumulative = 0
+            for tag, v in buckets_raw:
+                cumulative += v
+                label_str = self._format_labels(m.labels + ["le"], base + (tag,))
+                lines.append(f"{m.name}_bucket{label_str} {cumulative}")
+            label_str = self._format_labels(m.labels, base)
+            lines.append(f"{m.name}_sum{label_str} {sum_val}")
+            lines.append(f"{m.name}_count{label_str} {count_val}")
 
     @staticmethod
     def _format_labels(labels: list[str], values: tuple) -> str:
@@ -228,13 +245,15 @@ class SLAExporter:
         return "{" + ",".join(pairs) + "}" if pairs else ""
 
 
-# 全局单例
 _exporter: Optional[SLAExporter] = None
+_exporter_lock = threading.Lock()
 
 
 def get_sla_exporter() -> SLAExporter:
-    """获取全局 SLA 导出器单例."""
+    """获取全局 SLA 导出器单例 (线程安全)."""
     global _exporter
     if _exporter is None:
-        _exporter = SLAExporter()
+        with _exporter_lock:
+            if _exporter is None:
+                _exporter = SLAExporter()
     return _exporter

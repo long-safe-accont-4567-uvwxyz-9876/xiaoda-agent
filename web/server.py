@@ -27,7 +27,7 @@ async def _apply_model_overrides(core: Any) -> None:
     try:
         from setup_wizard import _load_env_values
         env_values = _load_env_values()
-    except Exception:
+    except (ImportError, OSError, ValueError):
         logger.debug("server.load_env_error", exc_info=True)
         env_values = {}
 
@@ -87,13 +87,18 @@ def _ensure_provider_key_file(pid: Any, api_key: Any, os: Any) -> None:
             pass
 
 
+def _provider_sort_key(kv: tuple, key_order: list[str]) -> tuple[int, int]:
+    """provider 排序键: order 字段优先, 原始键序兜底."""
+    return (kv[1].get("order", 9999), key_order.index(kv[0]))
+
+
 def _register_all_providers(cfg: Any, core: Any, load_provider_key: Any, register_into_router: Any) -> None:
     """按 order 字段排序后注册所有 provider 到 router 和 credential_pool。"""
     all_providers = cfg.get("models.providers", {}) or {}
     all_keys_order = list(all_providers.keys())
     sorted_providers = sorted(
         all_providers.items(),
-        key=lambda kv: (kv[1].get("order", 9999), all_keys_order.index(kv[0]))
+        key=lambda kv: _provider_sort_key(kv, all_keys_order)
     )
     for pid, p in sorted_providers:
         key = load_provider_key(pid)
@@ -107,7 +112,7 @@ def _register_all_providers(cfg: Any, core: Any, load_provider_key: Any, registe
                     pool.add_credential(Credential(
                         api_key=key, provider=pid, base_url=p.get("base_url", ""),
                     ))
-            except Exception as e:
+            except (ImportError, KeyError, ValueError, OSError) as e:
                 logger.warning("webui.provider_restore_failed id={} error={}", pid, str(e))
 
 
@@ -141,12 +146,12 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
     try:
         core.router.set_chat_model(provider, model_id)
         logger.info("webui.chat_model_restored provider={} model={}", provider, model_id)
-    except Exception as e:
+    except (KeyError, ValueError, AttributeError, OSError) as e:
         logger.warning("webui.chat_model_restore_failed provider={} model={} error={} fallback_to_mimo", provider, model_id, str(e))
         try:
             from model_router import MIMO_MODEL
             core.router.set_chat_model("mimo", MIMO_MODEL)
-        except Exception:
+        except (ImportError, KeyError, ValueError):
             logger.debug("server.set_chat_model_fallback_error", exc_info=True)
 
 
@@ -166,7 +171,7 @@ async def _start_user_mcp_servers(core: Any) -> None:
         try:
             await client.start()
             logger.info("webui.mcp_restored name={}", name)
-        except Exception as e:
+        except (OSError, RuntimeError, asyncio.CancelledError) as e:
             logger.warning("webui.mcp_restore_failed name={} error={}", name, str(e))
 
 
@@ -211,7 +216,7 @@ async def _start_services(app: Any, core: Any) -> None:
         recall_scheduler = MemoryRecallScheduler(core)
         recall_scheduler.start()
         app.state.recall_scheduler = recall_scheduler
-    except Exception as e:
+    except (ImportError, AttributeError, OSError) as e:
         logger.warning("webui.recall_scheduler_init_failed", error=str(e))
 
     # 自发回忆：每小时随机想 1 条记忆，生成内心独白（让 agent 有"内心生活"）
@@ -220,7 +225,7 @@ async def _start_services(app: Any, core: Any) -> None:
         spontaneous = SpontaneousRecall(core)
         spontaneous.start()
         app.state.spontaneous_recall = spontaneous
-    except Exception as e:
+    except (ImportError, AttributeError, OSError) as e:
         logger.warning("webui.spontaneous_recall_init_failed", error=str(e))
 
     # 成长叙事：每天 23:00 生成成长总结，写入自我模型和长期记忆
@@ -229,7 +234,7 @@ async def _start_services(app: Any, core: Any) -> None:
         growth = GrowthNarrative(core)
         growth.start()
         app.state.growth_narrative = growth
-    except Exception as e:
+    except (ImportError, AttributeError, OSError) as e:
         logger.warning("webui.growth_narrative_init_failed", error=str(e))
 
     # QQ Bot
@@ -249,7 +254,7 @@ async def _start_services(app: Any, core: Any) -> None:
         mail_poller = MailPoller(core, get_config_service())
         mail_poller.start()
         app.state.mail_poller = mail_poller
-    except Exception as e:
+    except (ImportError, AttributeError, OSError) as e:
         logger.warning("webui.mail_poller_init_failed error={}", str(e))
 
 
@@ -321,7 +326,7 @@ def _resolve_env_api_key() -> str:
                 with open(_env_path, "w", encoding="utf-8") as _f:
                     _f.write("")
                 logger.info("webui.env_created_empty")
-        except Exception as _e:
+        except (OSError, PermissionError) as _e:
             logger.warning("webui.env_create_failed error={}", str(_e))
     _mimo = ""
     if _os.path.exists(_env_path):
@@ -341,7 +346,7 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
         qq_task.cancel()
         try:
             await qq_task
-        except (asyncio.CancelledError, Exception):
+        except (asyncio.CancelledError, RuntimeError):
             pass
     # 取消后台一次性任务（健康自检 / 画像整合）
     for _attr in ("health_run_task", "portrait_consolidate_task"):
@@ -350,14 +355,14 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
             _t.cancel()
             try:
                 await _t
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, RuntimeError):
                 pass
     # Shutdown plugins
     plugin_mgr = getattr(app.state, "plugin_manager", None)
     if plugin_mgr:
         try:
             await plugin_mgr.shutdown_all()
-        except Exception:
+        except (RuntimeError, OSError):
             logger.debug("server.plugin_shutdown_error", exc_info=True)
     greeting_scheduler = getattr(app.state, "greeting_scheduler", None)
     if greeting_scheduler:
@@ -377,12 +382,12 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
         if obj and hasattr(obj, "stop"):
             try:
                 await obj.stop()
-            except Exception:
+            except (RuntimeError, OSError):
                 logger.debug(f"server.{attr}_stop_error", exc_info=True)
     if owns_core:
         try:
             await core.shutdown()
-        except Exception:
+        except (RuntimeError, OSError):
             logger.debug("server.core_shutdown_error", exc_info=True)
 
 
@@ -391,7 +396,7 @@ def create_app() -> FastAPI:
     try:
         from pathlib import Path as _P
         _ver = (_P(__file__).resolve().parent.parent / "VERSION").read_text().strip()
-    except Exception:
+    except (OSError, ValueError):
         _ver = "0.4.95"
     app = FastAPI(title="Xiaoda Agent WebUI", version=_ver, lifespan=lifespan)
 
@@ -402,7 +407,7 @@ def create_app() -> FastAPI:
     try:
         from config import DATA_DIR
         _rate_limit_db = str(Path(DATA_DIR) / "rate_limit_buckets.sqlite")
-    except Exception:
+    except (ImportError, AttributeError):
         logger.debug("server.config_fallback_error", exc_info=True)
         _rate_limit_db = str(Path(__file__).parent.parent / "data" / "rate_limit_buckets.sqlite")
     app.add_middleware(RateLimitMiddleware, persist_path=_rate_limit_db)
@@ -411,6 +416,8 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def _allow_frame_embed(request: Any, call_next: Any) -> Any:
         import time as _time
+        from utils.trace_context import new_trace_id
+        _trace_id = new_trace_id()
         _start = _time.monotonic()
         response = await call_next(request)
         _elapsed = _time.monotonic() - _start
@@ -421,6 +428,7 @@ def create_app() -> FastAPI:
             _sla.observe_latency(request.url.path, _elapsed)
             if response.status_code >= 400:
                 _sla.inc_error(f"http_{response.status_code}", request.url.path)
+        response.headers["X-Trace-Id"] = _trace_id
         response.headers["Content-Security-Policy"] = "frame-ancestors 'self' http://127.0.0.1:*"
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -468,8 +476,8 @@ def create_app() -> FastAPI:
     from web.ws_hub import router as ws_router
     app.include_router(ws_router)
 
-    from core.sla_exporter import SLAExporter
-    _sla = SLAExporter()
+    from core.sla_exporter import get_sla_exporter
+    _sla = get_sla_exporter()
     app.state.sla_exporter = _sla
 
     @app.get("/metrics", include_in_schema=False)
@@ -480,7 +488,8 @@ def create_app() -> FastAPI:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=403, content={"error": "Forbidden"})
         from fastapi.responses import PlainTextResponse
-        return PlainTextResponse(_sla.export(), media_type="text/plain; version=0.0.4; charset=utf-8")
+        _exporter = getattr(request.app.state, "sla_exporter", _sla)
+        return PlainTextResponse(_exporter.export(), media_type="text/plain; version=0.0.4; charset=utf-8")
 
     # 媒体目录使用用户数据目录，避免写入 _MEIPASS 只读目录
     try:

@@ -40,7 +40,7 @@ def _detect_fs_type(path: Path) -> str:
                 ctypes.windll.kernel32.GetVolumeInformationW(
                     root, None, 0, None, None, None, fs_buf, 260)
                 return fs_buf.value.lower()
-            except Exception:
+            except (OSError, ValueError):
                 logger.debug("database.detect_fs_type_windows_error: {}", exc_info=True)
                 return ""
         # Linux: 读取 /proc/mounts
@@ -51,7 +51,7 @@ def _detect_fs_type(path: Path) -> str:
                 parts = line.split()
                 if len(parts) >= 3 and parts[1] == str(p):
                     return parts[2]
-    except Exception:
+    except (OSError, ValueError):
         logger.debug("database.detect_fs_type_error: {}", exc_info=True)
     return ""
 
@@ -74,7 +74,7 @@ class DatabaseManager:
         if self._conn is not None:
             try:
                 await self._conn.close()
-            except Exception:
+            except (OSError, RuntimeError):
                 logger.debug("database.init_close_old_connection_error: {}", exc_info=True)
             self._conn = None
         self._conn = await aiosqlite.connect(str(self.db_path))
@@ -82,7 +82,7 @@ class DatabaseManager:
         # busy_timeout 必须最先设置，防止后续 PRAGMA 因锁竞争失败
         try:
             await self._conn.execute("PRAGMA busy_timeout=5000")
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
             logger.warning(f"PRAGMA busy_timeout 失败: {e}")
         # vfat/exfat 不支持 WAL 共享内存和 FTS5 delete 命令，必须用 DELETE 模式
         # NTFS 完全支持 WAL 和 FTS5，不需要特殊处理
@@ -103,7 +103,7 @@ class DatabaseManager:
         for pragma_sql in pragmas:
             try:
                 await self._conn.execute(pragma_sql)
-            except Exception as e:
+            except (OSError, RuntimeError) as e:
                 logger.warning(f"PRAGMA 失败: {pragma_sql} - {e}")
         # 验证 journal_mode
         try:
@@ -115,7 +115,7 @@ class DatabaseManager:
                 logger.warning(f"journal_mode 未生效，期望={expected} 当前={mode}")
             else:
                 logger.info(f"database.journal_mode={mode}")
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
             logger.warning(f"验证 journal_mode 失败: {e}")
         self.memory = MemoryDB(self._conn)
         await self._create_tables()
@@ -138,7 +138,7 @@ class DatabaseManager:
             mgr = build_default_index_manager()
             count = await mgr.apply(self._conn)
             logger.info(f"database.composite_indexes applied={count}")
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
             # 复合索引失败不应阻塞数据库初始化
             logger.warning(f"database.composite_indexes_failed: {e}")
 
@@ -186,7 +186,7 @@ class DatabaseManager:
             # 关闭连接后退出，避免连接泄漏
             try:
                 await self._conn.close()
-            except Exception:
+            except (OSError, RuntimeError):
                 logger.warning("database.migration_dirty_close_error: {}", exc_info=True)
             sys.exit(1)
 
@@ -240,7 +240,7 @@ class DatabaseManager:
             )
             await self._conn.commit()
             logger.info(f"database.migration_v{version}", desc=description)
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
             err_msg = str(e)
             await self._conn.execute("ROLLBACK")
             # 记录错误到 dirty state（独立事务）
@@ -250,7 +250,7 @@ class DatabaseManager:
                     (version, err_msg[:500]),
                 )
                 await self._conn.commit()
-            except Exception:
+            except (OSError, RuntimeError):
                 logger.warning("database.migration_dirty_record_error: {}", exc_info=True)
             logger.critical(
                 f"❌ 数据库迁移 v{version} 失败: {err_msg}\n"
@@ -262,7 +262,7 @@ class DatabaseManager:
             )
             try:
                 await self._conn.close()
-            except Exception:
+            except (OSError, RuntimeError):
                 logger.warning("database.migration_failure_close_error: {}", exc_info=True)
             sys.exit(1)
 
@@ -892,7 +892,7 @@ class DatabaseManager:
                         ("sessions", 180, "ended_at"),
                     ],
                 )
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
             logger.warning(f"插入默认清理策略失败: {e}")
 
     async def _setup_fts5_triggers(self) -> None:
@@ -902,7 +902,7 @@ class DatabaseManager:
             for trig in ["knowledge_entities_fts_ai", "knowledge_entities_fts_ad", "knowledge_entities_fts_au"]:
                 try:
                     await self._conn.execute(f"DROP TRIGGER IF EXISTS {trig}")
-                except Exception:
+                except (OSError, RuntimeError):
                     logger.debug("database.fts5_trigger_drop_error: {}", exc_info=True)
             logger.info("database.fts5_triggers_disabled (vfat)")
             return
@@ -922,7 +922,7 @@ class DatabaseManager:
                     INSERT INTO knowledge_entities_fts(id, name_index) VALUES (new.id, new.name);
                 END;
             """)
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
             logger.warning(f"database.fts5_trigger_failed: {e} — FTS搜索将降级为LIKE查询")
     async def insert_conversation_log(self, user_id: str, source: str,
                                        user_message: str, assistant_reply: str,
@@ -1089,7 +1089,7 @@ class DatabaseManager:
                 "SELECT table_name, retention_days, date_column FROM cleanup_config WHERE enabled=1"
             )
             configs = await cursor.fetchall()
-        except Exception:
+        except (OSError, ValueError):
             logger.debug("database.cleanup_config_read_error: {}", exc_info=True)
             return result
 
@@ -1117,14 +1117,14 @@ class DatabaseManager:
                 if deleted > 0:
                     logger.info("database.cleanup", table=table_name,
                                 deleted=deleted, retention_days=retention_days)
-            except Exception as e:
+            except (OSError, RuntimeError) as e:
                 logger.warning("database.cleanup_failed", table=table_name, error=str(e))
                 result[table_name] = 0
 
         if auto_commit:
             try:
                 await self._conn.commit()
-            except Exception as e:
+            except (OSError, RuntimeError) as e:
                 logger.warning(f"清理过期数据提交事务失败: {e}")
         return result
 
@@ -1194,7 +1194,7 @@ class DatabaseManager:
             summary_data = {}
             try:
                 summary_data = json.loads(row["summary_data"]) if row["summary_data"] else {}
-            except (json.JSONDecodeError, TypeError) as e:
+            except (json.JSONDecodeError, TypeError):
                 logger.debug("database.summary_data_parse_failed", exc_info=True)
 
             custom_title = summary_data.get("custom_title") or summary_data.get("ai_title")

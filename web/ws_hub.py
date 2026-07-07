@@ -153,7 +153,7 @@ async def _async_tts_task(core: Any, agent: str, tts_text: str, emotion: str,
             })
         else:
             logger.warning("ws.async_tts_no_audio", conn_id=conn_id, msg_id=msg_id)
-    except Exception as e:
+    except (OSError, RuntimeError, asyncio.CancelledError) as e:
         logger.error("ws.async_tts_failed", conn_id=conn_id, msg_id=msg_id, error=str(e))
 
 
@@ -169,7 +169,7 @@ async def _synthesize_tts_sync(core: Any, agent: str, tts_text: str, emotion: st
             else:
                 audio_path = await core.tts.synthesize_xiaoda(tts_text, emotion=emotion)
         return _publish_file(audio_path, "tts") if audio_path else None
-    except Exception as e:
+    except (OSError, RuntimeError) as e:
         logger.error("ws.sync_tts_failed", error=str(e))
         return None
 
@@ -216,9 +216,11 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
             # 走与 QQ 通道相同的完整子代理流程：表情包/情绪/TTS/落库都不缺
             from loguru import logger as _logger
             from agent_core import RequestContext
+            from utils.trace_context import new_trace_id
             ctx = RequestContext(session_id=session_id, user_id="webui",
                                  user_input=text, status_callback=status_callback)
-            trace = _logger.bind(trace_id=f"web{int(time.time()*1000) % 1000000:06d}")
+            _tid = new_trace_id()
+            trace = _logger.bind(trace_id=_tid)
             result = await core._dispatch_single_sub_agent(
                 agent, text, user_id="webui", source="web",
                 session_id=session_id, trace=trace, ctx=ctx)
@@ -329,7 +331,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
 
     except WebSocketDisconnect:
         logger.info("ws.disconnected conn_id={}", conn_id)
-    except Exception as e:
+    except (RuntimeError, OSError, asyncio.CancelledError, KeyError, TypeError) as e:
         logger.error("ws.error conn_id={} error={}", conn_id, str(e))
     finally:
         # 清理该连接的所有终端会话
@@ -404,7 +406,7 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
                     logger.info("ws.image_loaded url={} size={}KB", url, len(img_b64) // 1024)
                 else:
                     logger.warning("ws.image_not_found url={} path={}", url, local_path)
-            except Exception as e:
+            except (OSError, ValueError, AttributeError) as e:
                 logger.warning("ws.image_load_failed url={} error={}", url, str(e))
 
     # Task 7: 流式状态推送回调 —— 受 STREAM_STATUS_PUSH 开关控制
@@ -441,8 +443,8 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
             from prompt_builder import _classify_scene
             scene = _classify_scene(text)
             logger.info("ws.chat.phase", phase="plan", scene=scene, agent=agent, msg_id=msg_id)
-        except Exception:
-            pass
+        except (ImportError, AttributeError, ValueError):
+            logger.debug("ws.chat.classify_scene_skip", exc_info=True)
 
         if STREAM_STATUS_PUSH:
             await manager.send_to(conn_id, {"type": "status", "msg_id": msg_id, "stage": "thinking"})
@@ -461,7 +463,7 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
         await manager.send_to(conn_id, {
             "type": "error", "msg_id": msg_id,
             "code": "ABORTED", "message": "已中断生成"})
-    except Exception as e:
+    except (RuntimeError, OSError, asyncio.CancelledError, ValueError) as e:
         logger.error("ws.chat.failed conn_id={} error={}", conn_id, str(e))
         await manager.send_to(conn_id, {
             "type": "error", "msg_id": msg_id,
@@ -515,7 +517,7 @@ async def _handle_terminal_start(conn_id: str, msg: dict, term_sid: str) -> None
                     "type": "terminal_started", "term_sid": term_sid, "shell": shell_type})
                 _setup_pty_reader(term_sid)
 
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError) as e:
             logger.error("ws.terminal.start.failed term_sid={} error={}", term_sid, str(e))
             await manager.send_to(conn_id, {
                 "type": "terminal_error", "term_sid": term_sid,
@@ -557,7 +559,7 @@ async def _handle_terminal_start(conn_id: str, msg: dict, term_sid: str) -> None
                 "type": "terminal_started", "term_sid": term_sid, "shell": shell_type})
             _setup_win_pipe_reader(term_sid)
 
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError) as e:
             logger.error("ws.terminal.start.failed term_sid={} error={}", term_sid, str(e))
             await manager.send_to(conn_id, {
                 "type": "terminal_error", "term_sid": term_sid,
@@ -683,8 +685,14 @@ def _cleanup_pty(term_sid: str) -> None:
         except OSError:
             logger.debug("ws.close_fd_error", exc_info=True)
 
-    asyncio.ensure_future(manager.send_to(conn_id, {
-        "type": "terminal_exit", "term_sid": term_sid, "returncode": rc}))
+    try:
+        loop.call_soon_threadsafe(
+            lambda: asyncio.ensure_future(
+                manager.send_to(conn_id, {
+                    "type": "terminal_exit", "term_sid": term_sid, "returncode": rc
+                }), loop=loop))
+    except RuntimeError:
+        logger.debug("ws.terminal_exit_send_failed term_sid={}", term_sid)
     logger.info("ws.terminal.exit term_sid={} rc={}", term_sid, rc)
 
 
@@ -737,7 +745,7 @@ def _handle_terminal_resize(conn_id: str, msg: dict) -> None:
 
 
 def _handle_terminal_kill(conn_id: str, msg: dict) -> None:
-    """终止终端会话。"""
+    """终止终端会话 (复用 _cleanup_pty 确保前端收到 terminal_exit)."""
     term_sid = str(msg.get("term_sid") or "")
     with _pty_sessions_lock:
         session = _pty_sessions.get(term_sid)
@@ -746,25 +754,5 @@ def _handle_terminal_kill(conn_id: str, msg: dict) -> None:
         if session.get("conn_id") != conn_id:
             logger.warning("ws.terminal_kill.denied conn_id={} owner={}", conn_id, session.get("conn_id"))
             return
-        session = _pty_sessions.pop(term_sid, None)
-    if not session:
-        return
-    session["alive"] = False
-
-    if session.get("is_windows"):
-        proc = session.get("proc")
-        if proc:
-            try:
-                proc.kill()
-            except (OSError, PermissionError):
-                logger.debug("ws.force_kill_proc_error", exc_info=True)
-    else:
-        try:
-            os.kill(session["pid"], 9)
-        except (ProcessLookupError, OSError):
-            pass
-        try:
-            os.close(session["fd"])
-        except OSError:
-            logger.debug("ws.force_close_fd_error", exc_info=True)
+    _cleanup_pty(term_sid)
     logger.info("ws.terminal.kill term_sid={}", term_sid)
