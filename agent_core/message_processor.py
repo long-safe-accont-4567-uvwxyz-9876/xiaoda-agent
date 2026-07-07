@@ -599,7 +599,8 @@ class MessageProcessorMixin:
         # 构建消息
         effective_input = user_input
         if not is_master:
-            safe_prompt = build_safe_system_prompt()
+            safe_prompt = build_safe_system_prompt(
+                address_term=self.context.current_address_term)
             messages = [{"role": "system", "content": safe_prompt}]
             messages.append({"role": "user", "content": effective_input})
         else:

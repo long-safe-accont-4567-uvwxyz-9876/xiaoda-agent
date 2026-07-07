@@ -72,5 +72,5 @@ class UserIdentity:
 
     @staticmethod
     def default_guest() -> "UserIdentity":
-        """返回默认访客身份 (称谓为 '用户')."""
-        return UserIdentity(is_owner=False, display_name="用户", address_term="用户")
+        """返回默认访客身份 (称谓为 '朋友')."""
+        return UserIdentity(is_owner=False, display_name="朋友", address_term="朋友")

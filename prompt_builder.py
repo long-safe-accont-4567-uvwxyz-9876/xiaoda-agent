@@ -1367,7 +1367,7 @@ def _build_hardware_context(data_dir: str) -> str:
 
 
 # ── 非主人安全化 system prompt（防隐私泄露） ──────────────────
-def build_safe_system_prompt(extra_context: str = "") -> str:
+def build_safe_system_prompt(extra_context: str = "", address_term: str = "你") -> str:
     """为非主人用户构建安全化的 system prompt。
 
     剥离所有个人隐私信息（USER.md、MEMORY.md、IDENTITY.md 中的敏感内容），
@@ -1394,6 +1394,8 @@ def build_safe_system_prompt(extra_context: str = "") -> str:
         soul = load_workspace_file("SOUL.md")
         if soul:
             safe_soul = _strip_owner_references(soul)
+            # 先替换占位符，再替换"爸爸"→"你"
+            safe_soul = _replace_placeholders(safe_soul, address_term, xiaoda_name)
             safe_soul = safe_soul.replace("爸爸", "你")
             safe_soul = safe_soul.replace("称呼用户为\"你\"", "称呼用户为\"你\"")
             sections.append(safe_soul)

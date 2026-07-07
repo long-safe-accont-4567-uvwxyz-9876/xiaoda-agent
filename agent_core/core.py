@@ -259,7 +259,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         is_owner = self.security.is_owner(check_id)
         if is_owner:
             return self._build_owner_identity()
-        return UserIdentity(is_owner=False, display_name="用户", address_term="用户")
+        return UserIdentity(is_owner=False, display_name="朋友", address_term="朋友")
 
     async def process(self, user_input: str, user_id: str = "qq_user",
                       source: str = "qq",
