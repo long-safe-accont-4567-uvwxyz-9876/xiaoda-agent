@@ -82,11 +82,44 @@ class MemoryDB:
         if auto_commit:
             await self._conn.commit()
 
+    async def batch_increment_access_count(self, memory_ids: list[int],
+                                            auto_commit: bool = True) -> None:
+        """批量递增记忆访问计数（消除 N+1：单条 UPDATE + IN 子句）。
+
+        行为等价于对每个 id 调用 increment_access_count(id, auto_commit=False)，
+        但只发一次 SQL。所有 id 统一 +1（与单条版本语义一致）。
+        """
+        if not memory_ids:
+            return
+        placeholders = ",".join("?" * len(memory_ids))
+        await self._conn.execute(
+            f"UPDATE episodic_memories SET access_count = access_count + 1 "
+            f"WHERE id IN ({placeholders})",
+            memory_ids,
+        )
+        if auto_commit:
+            await self._conn.commit()
+
     async def archive_memory(self, memory_id: int) -> None:
         """归档记忆（标记为已归档，不删除）"""
         await self._conn.execute(
             "UPDATE episodic_memories SET session_id = 'archived' WHERE id = ?",
             (memory_id,),
+        )
+        await self._conn.commit()
+
+    async def archive_memories_batch(self, memory_ids: list[int]) -> None:
+        """批量归档记忆（标记为已归档，不删除）。
+
+        使用 IN 子句一次 UPDATE，消除 N+1 查询。
+        与 archive_memory 行为等价（仅 DB UPDATE，无其他副作用）。
+        """
+        if not memory_ids:
+            return
+        placeholders = ",".join("?" * len(memory_ids))
+        await self._conn.execute(
+            f"UPDATE episodic_memories SET session_id = 'archived' WHERE id IN ({placeholders})",
+            memory_ids,
         )
         await self._conn.commit()
 
@@ -201,6 +234,29 @@ class MemoryDB:
         except Exception as e:
             from loguru import logger
             logger.debug("db_memory.fts_delete_failed", error=str(e))
+        if auto_commit:
+            await self._conn.commit()
+
+    async def delete_memories_batch(self, memory_ids: list[int], auto_commit: bool = True) -> None:
+        """批量删除记忆，同步批量删除 FTS 索引（消除 N+1 查询）。
+
+        保留 delete_memory 的 FTS 副作用：批量删除主表后批量删除 FTS 记录。
+        """
+        if not memory_ids:
+            return
+        placeholders = ",".join("?" * len(memory_ids))
+        await self._conn.execute(
+            f"DELETE FROM episodic_memories WHERE id IN ({placeholders})",
+            memory_ids,
+        )
+        # 同步批量删除 FTS 记录（保留 delete_memory 的副作用）
+        try:
+            await self._conn.execute(
+                f"DELETE FROM episodic_memory_fts WHERE id IN ({placeholders})",
+                memory_ids,
+            )
+        except Exception as e:
+            logger.debug("db_memory.fts_delete_batch_failed", error=str(e))
         if auto_commit:
             await self._conn.commit()
 

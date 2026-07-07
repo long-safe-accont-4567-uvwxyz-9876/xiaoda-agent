@@ -167,6 +167,7 @@ class DreamConsolidator:
         archived_count = 0
         try:
             memories = await memory_db.get_all_memories(limit=batch_size)
+            to_archive: list = []
             for mem in memories:
                 mem_id = mem.get("id")
                 created_at = mem.get("timestamp", time.time())
@@ -174,8 +175,10 @@ class DreamConsolidator:
                 s = self._fluid_scorer.score(similarity=0.5, created_at=created_at,
                                               access_count=access_count)
                 if self._fluid_scorer.should_archive(s):
-                    await memory_db.archive_memory(mem_id)
-                    archived_count += 1
+                    to_archive.append(mem_id)
+            if to_archive:
+                await memory_db.archive_memories_batch(to_archive)
+                archived_count = len(to_archive)
             logger.info(f"Dream.consolidate_db archived={archived_count}")
         except Exception as e:
             logger.error(f"Dream.consolidate_db_failed: {e}")
@@ -234,12 +237,12 @@ class DreamConsolidator:
                     evict_ids.append(mid)
 
             # 3. Evict — 低分归档（非删除，可恢复）
-            for mid in evict_ids:
+            if evict_ids:
                 try:
-                    await memory_db.archive_memory(int(mid))
-                    stats["evicted"] += 1
+                    await memory_db.archive_memories_batch([int(mid) for mid in evict_ids])
+                    stats["evicted"] = len(evict_ids)
                 except Exception as e:
-                    logger.debug(f"Dream.archive_failed id={mid}: {e}")
+                    logger.debug(f"Dream.archive_batch_failed: {e}")
             stats["decayed"] = len(evict_ids)
 
             # 从内存字典移除已归档的
@@ -248,12 +251,12 @@ class DreamConsolidator:
 
             # 4. Merge — 同内容前缀聚类，删除重复记忆
             merged_ids = self._merge_similar_db(memories)
-            for mid in merged_ids:
+            if merged_ids:
                 try:
-                    await memory_db.delete_memory(int(mid))
-                    stats["merged"] += 1
+                    await memory_db.delete_memories_batch([int(mid) for mid in merged_ids])
+                    stats["merged"] = len(merged_ids)
                 except Exception as e:
-                    logger.debug(f"Dream.merge_delete_failed id={mid}: {e}")
+                    logger.debug(f"Dream.merge_delete_batch_failed: {e}")
 
             # 5. Strengthen — 统计高频访问记忆
             for m in memories.values():

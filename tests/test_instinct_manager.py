@@ -61,8 +61,10 @@ class TestInstinctManager(unittest.TestCase):
 
         # 验证 router.route 被调用（免费模型禁用后降级到 router）
         self.mock_router.route.assert_called_once()
-        # 验证数据库插入被调用（应为3次有效行）
-        self.assertGreaterEqual(mock_conn.execute.call_count, 3)
+        # 验证数据库批量插入被调用，且包含3条有效行
+        mock_conn.executemany.assert_called_once()
+        inserted_rows = mock_conn.executemany.call_args[0][1]
+        self.assertGreaterEqual(len(inserted_rows), 3)
 
     def test_parse_instinct_response_low_confidence_filtered(self):
         """低置信度的模式被过滤"""
@@ -77,7 +79,9 @@ class TestInstinctManager(unittest.TestCase):
         )
 
         # 只插入高置信度的（0.9 >= 0.5），低置信度（0.3 < 0.5）被过滤
-        self.assertEqual(mock_conn.execute.call_count, 1)
+        mock_conn.executemany.assert_called_once()
+        inserted_rows = mock_conn.executemany.call_args[0][1]
+        self.assertEqual(len(inserted_rows), 1)
 
 
 if __name__ == '__main__':

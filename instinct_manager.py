@@ -126,7 +126,7 @@ class InstinctManager:
             return
 
         now = time.time()
-        inserted = 0
+        rows_to_insert = []
         for line in result.strip().splitlines():
             line = line.strip()
             # 去掉 <think> 标签内容
@@ -155,20 +155,20 @@ class InstinctManager:
             if any(frag in content for frag in _PROMPT_EXAMPLE_FRAGMENTS):
                 continue
 
+            rows_to_insert.append((content, confidence, session_id, now, now))
+
+        if rows_to_insert:
             try:
-                await self.db._conn.execute(
+                await self.db._conn.executemany(
                     """INSERT INTO instincts
                        (content, confidence, source_session, status, created_at, last_used_at, use_count)
                        VALUES (?, ?, ?, 'active', ?, ?, 0)""",
-                    (content, confidence, session_id, now, now),
+                    rows_to_insert,
                 )
-                inserted += 1
+                await self.db._conn.commit()
+                logger.info("instinct.extracted", count=len(rows_to_insert), session=session_id)
             except Exception as e:
-                logger.debug("instinct.insert_failed", content=content[:40], error=str(e))
-
-        if inserted > 0:
-            await self.db._conn.commit()
-            logger.info("instinct.extracted", count=inserted, session=session_id)
+                logger.debug("instinct.insert_failed", error=str(e))
 
     async def get_active_instincts(self, limit: int = 6, min_confidence: float = 0.7) -> list[dict]:
         """获取活跃的 Instinct，按置信度降序"""
@@ -232,6 +232,8 @@ class InstinctManager:
 
         merged_ids: set[int] = set()
         merge_count = 0
+        use_count_increments: dict[int, int] = {}
+        archive_ids: list[int] = []
 
         for i in range(len(rows)):
             if rows[i]["id"] in merged_ids:
@@ -245,19 +247,25 @@ class InstinctManager:
                 if ratio >= similarity_threshold:
                     # 保留置信度更高的，归档另一个
                     merged_ids.add(rows[j]["id"])
-                    # 将被合并的使用次数加到保留项上
-                    await self.db._conn.execute(
-                        """UPDATE instincts SET use_count=use_count+?
-                           WHERE id=?""",
-                        (rows[j]["use_count"], rows[i]["id"]),
-                    )
-                    await self.db._conn.execute(
-                        "UPDATE instincts SET status='archived' WHERE id=?",
-                        (rows[j]["id"],),
+                    archive_ids.append(rows[j]["id"])
+                    # 将被合并的使用次数加到保留项上（聚合后批量更新）
+                    use_count_increments[rows[i]["id"]] = (
+                        use_count_increments.get(rows[i]["id"], 0) + rows[j]["use_count"]
                     )
                     merge_count += 1
 
         if merge_count > 0:
+            if use_count_increments:
+                await self.db._conn.executemany(
+                    "UPDATE instincts SET use_count=use_count+? WHERE id=?",
+                    [(inc, id_) for id_, inc in use_count_increments.items()],
+                )
+            if archive_ids:
+                placeholders = ",".join("?" * len(archive_ids))
+                await self.db._conn.execute(
+                    f"UPDATE instincts SET status='archived' WHERE id IN ({placeholders})",
+                    archive_ids,
+                )
             await self.db._conn.commit()
             logger.info("instinct.merged_duplicates", count=merge_count)
         return merge_count
@@ -276,12 +284,19 @@ class InstinctManager:
         if not instincts:
             return ""
 
-        # 标记被使用的 Instinct
-        for inst in instincts:
-            try:
-                await self.mark_used(inst["id"])
-            except Exception:
-                pass
+        # 标记被使用的 Instinct（批量更新，避免 N+1 查询）
+        try:
+            ids = [inst["id"] for inst in instincts]
+            now = time.time()
+            placeholders = ",".join("?" * len(ids))
+            await self.db._conn.execute(
+                f"""UPDATE instincts SET last_used_at=?, use_count=use_count+1
+                   WHERE id IN ({placeholders})""",
+                [now] + ids,
+            )
+            await self.db._conn.commit()
+        except Exception:
+            pass
 
         lines = [f"· {inst['content']}" for inst in instincts]
         return "[已学习的经验模式（仅供参考，根据当前对话独立判断）]\n" + "\n".join(lines)

@@ -1003,8 +1003,10 @@ class MemoryManager:
             r["effective_score"] = importance * fluid_score
             filtered.append(r)
         if filtered:
-            for r in filtered:
-                await self.memory.increment_access_count(r["id"], auto_commit=False)
+            # 批量递增访问计数（消除 N+1：原为循环内逐条 UPDATE）
+            await self.memory.batch_increment_access_count(
+                [r["id"] for r in filtered], auto_commit=False
+            )
             try:
                 await self.memory.commit()
             except Exception as e:
