@@ -347,9 +347,12 @@ class TestHyDEAndIntent:
     async def test_hyde_degrade_without_api(self):
         """无 API Key 时 HyDE 降级"""
         from memory.query_transform import QueryTransformer
-        qt = QueryTransformer()
-        result = await qt.generate_hyde_document("test query")
-        assert result is None  # 无 API Key，降级返回 None
+        import unittest.mock
+        with unittest.mock.patch.dict("os.environ", {}, clear=True):
+            qt = QueryTransformer()
+            assert not qt.available
+            result = await qt.generate_hyde_document("test query")
+            assert result is None  # 无 API Key，降级返回 None
 
 
 class TestRetrievalAssessor:

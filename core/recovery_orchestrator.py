@@ -80,12 +80,14 @@ class RecoveryOrchestrator:
         )
     """
 
-    def __init__(self, max_level: RecoveryLevel = RecoveryLevel.ESCALATE) -> None:
+    def __init__(self, max_level: RecoveryLevel = RecoveryLevel.ESCALATE,
+                 backoff_delays: list[float] | None = None) -> None:
         self._fallbacks: dict[str, Callable] = {}
         self._reconfigure_handlers: dict[str, Callable] = {}
         self._restart_handlers: dict[str, Callable] = {}
         self._anti_patterns: dict[str, dict] = {}  # 反模式注册
         self._max_level = max_level
+        self._backoff_delays = backoff_delays or [1, 2, 4, 8, 16]
         self._audit_log: list[dict] = []
         self._stats = {"total": 0, "success": 0, "failed": 0,
                          "by_level": {l.name: 0 for l in RecoveryLevel}}
@@ -298,8 +300,8 @@ class RecoveryOrchestrator:
         return await asyncio.to_thread(handler, **args)
 
     async def _recover_with_backoff(self, handler: Callable, args: dict) -> Any:
-        """指数退避重试 (1/2/4/8/16s), 全部失败抛出 RecoveryError"""
-        delays = [1, 2, 4, 8, 16]
+        """指数退避重试 (默认 1/2/4/8/16s), 全部失败抛出 RecoveryError"""
+        delays = self._backoff_delays
         for i, d in enumerate(delays):
             await asyncio.sleep(d)
             try:

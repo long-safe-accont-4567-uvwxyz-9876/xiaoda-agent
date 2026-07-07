@@ -440,7 +440,7 @@ async def test_recovery_retry_success():
 @pytest.mark.asyncio
 async def test_recovery_fallback():
     from core.recovery_orchestrator import RecoveryOrchestrator
-    orch = RecoveryOrchestrator()
+    orch = RecoveryOrchestrator(backoff_delays=[0.01, 0.02, 0.04])
 
     async def always_fail():
         raise RuntimeError("permanent")
