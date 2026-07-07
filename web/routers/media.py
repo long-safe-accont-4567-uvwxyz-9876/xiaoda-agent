@@ -52,7 +52,7 @@ async def synthesize_tts(body: dict, request: Request) -> Any:
         raise HTTPException(503, "TTS 引擎不可用（检查 MIMO_API_KEY 与参考音频）")
 
     # 内容寻址缓存
-    digest = hashlib.sha1(f"{text}|{voice}|{style}".encode()).hexdigest()[:20]
+    digest = hashlib.sha1(f"{text}|{voice}|{style}".encode(), usedforsecurity=False).hexdigest()[:20]
     tts_dir = MEDIA_ROOT / "tts"
     tts_dir.mkdir(parents=True, exist_ok=True)
     cached = next(iter(tts_dir.glob(f"{digest}.*")), None)

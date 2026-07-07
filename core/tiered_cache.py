@@ -32,7 +32,7 @@ def _cache_key(*args: Any, **kwargs: Any) -> str:
     """生成稳定缓存键"""
     raw = json.dumps({"args": list(args), "kwargs": kwargs},
                      sort_keys=True, default=str)
-    return hashlib.md5(raw.encode()).hexdigest()
+    return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()
 
 
 # ============================================================

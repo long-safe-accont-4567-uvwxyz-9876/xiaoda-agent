@@ -307,7 +307,7 @@ class ToolGuardrails:
                 return ""
             items = sorted(arguments.items())
             raw = str(items)
-            return hashlib.md5(raw.encode()).hexdigest()[:16]
+            return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()[:16]
         except Exception:
             return ""
 

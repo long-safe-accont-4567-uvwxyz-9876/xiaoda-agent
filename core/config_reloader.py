@@ -109,7 +109,7 @@ class ConfigReloader:
         return json.loads(s)
 
     def _compute_hash(self, content: str) -> str:
-        return hashlib.md5(content.encode()).hexdigest()
+        return hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()
 
     def _load(self) -> bool:
         """加载配置 (内部使用, 调用方需持有锁)"""
