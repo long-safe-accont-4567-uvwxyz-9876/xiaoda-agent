@@ -38,6 +38,7 @@ _SYSTEM_PROMPT_CACHE_ADDR_TERM: str = ""
 _SAFE_PROMPT_CACHE: str | None = None
 _SAFE_PROMPT_CACHE_TS: float = 0.0
 _SAFE_PROMPT_CACHE_NAME: str = ""  # 构建缓存时使用的 display_name，变化时失效缓存
+_SAFE_PROMPT_CACHE_ADDR: str = ""  # 构建缓存时的 address_term，变化时失效缓存
 
 # ── P6: 增量上下文构建（稳定段缓存） ──────────────────────────
 # 稳定段只随 address_term 变化，缓存计算结果；动态段每次构建
@@ -1373,7 +1374,7 @@ def build_safe_system_prompt(extra_context: str = "", address_term: str = "你")
     剥离所有个人隐私信息（USER.md、MEMORY.md、IDENTITY.md 中的敏感内容），
     仅保留基本人格和行为规则，防止通过 prompt injection 泄露隐私。
     """
-    global _SAFE_PROMPT_CACHE, _SAFE_PROMPT_CACHE_TS, _SAFE_PROMPT_CACHE_NAME
+    global _SAFE_PROMPT_CACHE, _SAFE_PROMPT_CACHE_TS, _SAFE_PROMPT_CACHE_NAME, _SAFE_PROMPT_CACHE_ADDR
 
     from config import get_agent_display_name
     xiaoda_name = get_agent_display_name('xiaoda')
@@ -1382,7 +1383,8 @@ def build_safe_system_prompt(extra_context: str = "", address_term: str = "你")
     with _cache_lock:
         cache_hit = (_SAFE_PROMPT_CACHE
                 and (now - _SAFE_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL
-                and _SAFE_PROMPT_CACHE_NAME == xiaoda_name)
+                and _SAFE_PROMPT_CACHE_NAME == xiaoda_name
+                and _SAFE_PROMPT_CACHE_ADDR == address_term)
         if cache_hit:
             safe_prompt = _SAFE_PROMPT_CACHE
         else:
@@ -1423,6 +1425,7 @@ def build_safe_system_prompt(extra_context: str = "", address_term: str = "你")
             _SAFE_PROMPT_CACHE = safe_prompt
             _SAFE_PROMPT_CACHE_TS = now
             _SAFE_PROMPT_CACHE_NAME = xiaoda_name
+            _SAFE_PROMPT_CACHE_ADDR = address_term
 
     if extra_context:
         safe_prompt += f"\n\n---\n\n{extra_context}"
