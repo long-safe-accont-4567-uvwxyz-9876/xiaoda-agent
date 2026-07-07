@@ -168,6 +168,7 @@ async def _run_agently(args: list[str], timeout: int = 60) -> tuple[int, str, st
     except asyncio.TimeoutError:
         try:
             proc.kill()
+            await proc.wait()  # reap 子进程，避免僵尸进程累积
         except Exception:
             logger.debug("mail.kill_proc_error", exc_info=True)
         return 98, "", "agently-cli 执行超时"

@@ -90,10 +90,10 @@ async def test_all(request: Request) -> Any:
     if _all_running:
         raise HTTPException(409, "全量自检已在进行中")
     core = request.app.state.core
+    _all_running = True  # 提前设置，防止 TOCTOU 竞态
 
     async def _run() -> None:
         global _all_running
-        _all_running = True
         try:
             from web.probes import run_all
             from web.ws_hub import manager

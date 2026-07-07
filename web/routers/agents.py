@@ -391,6 +391,9 @@ async def list_stickers(name: str, request: Request, _user: str = Depends(get_cu
 @router.get("/agents/{name}/stickers/file/{filename}")
 async def serve_sticker(name: str, filename: str, request: Request, token: str = "") -> Any:
     """提供表情包图片文件。支持 query token 认证（img 标签无法发 header）。"""
+    # 路径遍历防护
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(400, "非法文件名")
     # 支持 header 或 query 参数认证
     from web.routers.auth import _validate_token
     auth_ok = False
@@ -500,6 +503,9 @@ async def delete_sticker(
     name: str, filename: str, request: Request, _user: str = Depends(get_current_user)
 ) -> Any:
     """删除指定表情包。"""
+    # 路径遍历防护：禁止 .. 和路径分隔符
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(400, "非法文件名")
     sticker_dir = _resolve_sticker_dir(name, request)
     if not sticker_dir.exists():
         raise HTTPException(404, "表情包目录不存在")

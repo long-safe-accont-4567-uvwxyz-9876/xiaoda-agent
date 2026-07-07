@@ -625,7 +625,11 @@ def load_agent_config() -> dict:
         return {}
     raw = AGENT_CONFIG_PATH.read_text(encoding="utf-8")
     cleaned = _strip_json5_comments(raw)
-    return json.loads(cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        logger.warning("config.agent_json5_parse_failed", error=str(e))
+        return {}
 
 
 # ── 系统提示词构建相关函数已拆分到 prompt_builder.py ──────────

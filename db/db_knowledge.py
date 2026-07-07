@@ -81,7 +81,7 @@ class KnowledgeDB:
 
     async def search_knowledge_entities(self, query: str, limit: int = 10) -> list[dict]:
         """搜索知识实体（优先 FTS5，降级 LIKE）"""
-        from memory.memory_manager import _build_fts_query
+        from db.fts_utils import _build_fts_query
         fts_query = _build_fts_query(query)
 
         if fts_query:

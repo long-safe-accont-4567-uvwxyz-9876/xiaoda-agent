@@ -363,6 +363,14 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
     mail_poller = getattr(app.state, "mail_poller", None)
     if mail_poller:
         await mail_poller.stop()
+    # 停止自发回忆和成长叙事后台任务（避免 shutdown 后继续访问已关闭的 db/memory）
+    for attr in ("spontaneous_recall", "growth_narrative"):
+        obj = getattr(app.state, attr, None)
+        if obj and hasattr(obj, "stop"):
+            try:
+                await obj.stop()
+            except Exception:
+                logger.debug(f"server.{attr}_stop_error", exc_info=True)
     if owns_core:
         try:
             await core.shutdown()
