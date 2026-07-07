@@ -485,57 +485,72 @@ def get_agent_display_name_en(name: str) -> str:
 # ── Agent 原名 → display_name 全局替换 ────────────────────────
 # 每个 agent 的人格文件中使用原名，运行时自动替换为用户配置的显示名。
 # 全局统一机制：所有 agent 共用一套替换逻辑，不分主次。
-_ORIGINAL_NAMES: dict[str, str] = {
-    # 新名（当前显示名 → agent_key）
-    "小妲": "xiaoda",
-    "小莉": "xiaoli",
-    "小狼": "xiaolang",
-    "小涟": "xiaolian",
-    "小可": "xiaoke",
-    # 旧名（游戏角色名 → agent_key，兼容旧人格文件）
-    "纳西妲": "xiaoda",
-    "可莉": "xiaoli",
-    "银狼": "xiaolang",
-    "昔涟": "xiaolian",
-    "尼可": "xiaoke",
+# 旧名映射从 config/agents/*.json 的 deprecated_names 字段读取，无需手动维护。
+
+# 硬编码兜底（当配置文件缺失或无 deprecated_names 时使用）
+_FALLBACK_DEPRECATED_NAMES: dict[str, str] = {
+    "纳西妲": "xiaoda", "nahida": "xiaoda",
+    "可莉": "xiaoli", "keli": "xiaoli",
+    "银狼": "xiaolang", "yinlang": "xiaolang",
+    "昔涟": "xiaolian", "xilian": "xiaolian",
+    "尼可": "xiaoke", "nike": "xiaoke",
 }
 
-# 英文原名 → agent_key 映射（人格文件中的英文标识符）
-# 包含旧版游戏角色名 → 现名 key 的映射，确保旧人格文件中的英文标识符也能正确替换
-_ORIGINAL_EN_NAMES: dict[str, str] = {
-    "nahida": "xiaoda",
-    "keli": "xiaoli",
-    "yinlang": "xiaolang",
-    "xilian": "xiaolian",
-    "nike": "xiaoke",
-}
+# 缓存: {agent_key: (mtime, deprecated_names_list)}
+_deprecated_names_cache: dict[str, tuple[float, list[str]]] = {}
+
+
+def get_agent_deprecated_names(agent_key: str) -> list[str]:
+    """读取 agent 的旧名列表（从 config/agents/{name}.json 的 deprecated_names 字段）。"""
+    fp = AGENTS_CONFIG_DIR / f"{agent_key}.json"
+    try:
+        mtime = fp.stat().st_mtime
+    except OSError:
+        return [k for k, v in _FALLBACK_DEPRECATED_NAMES.items() if v == agent_key]
+    cached = _deprecated_names_cache.get(agent_key)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        import json
+        data = json.loads(fp.read_text(encoding="utf-8"))
+        names = data.get("deprecated_names", [])
+    except Exception:
+        names = []
+    if not names:
+        names = [k for k, v in _FALLBACK_DEPRECATED_NAMES.items() if v == agent_key]
+    _deprecated_names_cache[agent_key] = (mtime, names)
+    return names
+
+
+def get_all_deprecated_names() -> dict[str, str]:
+    """返回所有旧名 → agent_key 的映射（从配置文件自动生成）。"""
+    result: dict[str, str] = {}
+    for key in agent_names():
+        for old_name in get_agent_deprecated_names(key):
+            result[old_name] = key
+    return result
 
 
 def apply_agent_name_replacements(content: str) -> str:
     """将人格文件中所有 agent 原名替换为 config 中的显示名。
 
-    只使用中文显示名 (display_name)，不使用英文显示名。
-    同时替换中文原名、英文原名、agent key。
+    替换来源（优先级从高到低）：
+    1. 配置文件 deprecated_names 字段（旧名）
+    2. 当前 display_name（新名）
+    3. agent key（如 xiaoda）
     按原名长度降序替换，避免短名破坏长名。
     """
     def _best(agent_key: str) -> str:
         return get_agent_display_name(agent_key) or agent_key
 
-    # 替换中文原名
-    for original_name, agent_key in sorted(
-        _ORIGINAL_NAMES.items(), key=lambda x: -len(x[0])
+    # 1. 替换旧名（从配置文件读取）
+    for old_name, agent_key in sorted(
+        get_all_deprecated_names().items(), key=lambda x: -len(x[0])
     ):
         dn = _best(agent_key)
-        if dn and dn != original_name:
-            content = content.replace(original_name, dn)
-    # 替换英文原名
-    for original_en, agent_key in sorted(
-        _ORIGINAL_EN_NAMES.items(), key=lambda x: -len(x[0])
-    ):
-        dn = _best(agent_key)
-        if dn and dn != original_en:
-            content = content.replace(original_en, dn)
-    # 替换 agent key（如 xiaoda → Xiaoda）
+        if dn and dn != old_name:
+            content = content.replace(old_name, dn)
+    # 2. 替换当前 display_name（如用户改了显示名，旧人格文件中的新名也要同步）
     for agent_key in agent_names():
         dn = _best(agent_key)
         if dn and dn != agent_key:
@@ -557,13 +572,15 @@ def reverse_agent_name_replacements(content: str) -> str:
         dn = _best(agent_key)
         if dn and dn != agent_key:
             content = content.replace(dn, agent_key)
-    # 还原中文 display_name → 原名
-    for original_name, agent_key in sorted(
-        _ORIGINAL_NAMES.items(), key=lambda x: -len(x[0])
-    ):
+    # 还原中文 display_name → 原名（使用配置文件中的第一个旧名）
+    for agent_key in agent_names():
         dn = _best(agent_key)
-        if dn and dn != original_name:
-            content = content.replace(dn, original_name)
+        deprecated = get_agent_deprecated_names(agent_key)
+        if dn and deprecated:
+            # 还原到第一个中文旧名（优先）
+            cn_names = [n for n in deprecated if any('\u4e00' <= c <= '\u9fff' for c in n)]
+            target = cn_names[0] if cn_names else deprecated[0]
+            content = content.replace(dn, target)
     return content
 
 

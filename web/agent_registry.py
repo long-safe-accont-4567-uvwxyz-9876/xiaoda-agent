@@ -163,11 +163,10 @@ class AgentRegistry:
         cfg[key] = value
         self._save_xiaoda_cfg(cfg)
 
-    # 旧版 agent 名称，升级后不应被当作自定义 agent 注册
-    _DEPRECATED_AGENT_NAMES = {"nahida", "keli", "yinlang", "xilian", "nike"}
-
     async def load_persisted(self) -> None:
         """启动时调用：恢复自建 Agent 并应用对内置 Agent 的覆盖。"""
+        from config import get_all_deprecated_names
+        deprecated_names = set(get_all_deprecated_names().keys())
         from agent_dispatcher import SubAgentConfig
         for fp in sorted(AGENTS_DIR.glob("*.json")):
             try:
@@ -176,7 +175,7 @@ class AgentRegistry:
                 if not name:
                     continue
                 # 跳过旧版 agent 名称，防止残留配置被当作自定义 agent 注册
-                if name in self._DEPRECATED_AGENT_NAMES:
+                if name in deprecated_names:
                     logger.info("agent_registry.deprecated_skip name={} file={}", name, fp.name)
                     continue
                 if name in BUILTIN_AGENTS:

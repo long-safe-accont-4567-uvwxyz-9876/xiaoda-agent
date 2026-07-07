@@ -2,6 +2,7 @@
   "name": "xiaoke",
   "display_name": "小可",
   "display_name_en": "Xiaoke",
+  "deprecated_names": ["尼可", "nike"],
   "provider": "agnes",
   "model": "agnes-2.0-flash",
   "personality_file": "config/agents/xiaoke_personality.md",

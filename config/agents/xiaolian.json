@@ -2,6 +2,7 @@
   "name": "xiaolian",
   "display_name": "小涟",
   "display_name_en": "Xiaolian",
+  "deprecated_names": ["昔涟", "xilian"],
   "provider": "agnes",
   "model": "agnes-2.0-flash",
   "personality_file": "config/agents/xiaolian_personality.md",

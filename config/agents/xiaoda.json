@@ -2,6 +2,7 @@
   "name": "xiaoda",
   "display_name": "小妲",
   "display_name_en": "Xiaoda",
+  "deprecated_names": ["纳西妲", "nahida"],
   "provider": "mimo",
   "model": "",
   "base_url": "",

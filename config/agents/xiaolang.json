@@ -2,6 +2,7 @@
   "name": "xiaolang",
   "display_name": "小狼",
   "display_name_en": "Xiaolang",
+  "deprecated_names": ["银狼", "yinlang"],
   "provider": "agnes",
   "model": "agnes-2.0-flash",
   "personality_file": "config/agents/xiaolang_personality.md",

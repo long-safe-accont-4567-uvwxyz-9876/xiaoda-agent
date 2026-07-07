@@ -2,6 +2,7 @@
   "name": "xiaoli",
   "display_name": "小莉",
   "display_name_en": "Xiaoli",
+  "deprecated_names": ["可莉", "keli"],
   "provider": "agnes",
   "model": "agnes-2.0-flash",
   "personality_file": "config/agents/xiaoli_personality.md",

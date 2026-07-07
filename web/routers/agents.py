@@ -189,11 +189,11 @@ async def set_personality(name: str, body: dict, request: Request, _user: str = 
 async def get_agent_names(_user: str = Depends(get_current_user)) -> Any:
     """返回 agent 原名→显示名 映射表，供前端全局替换。
 
-    覆盖三类名称：中文原名、英文原名、agent key。
+    覆盖三类名称：旧名（deprecated_names）、agent key。
     只使用中文显示名 (display_name)，不使用英文显示名。
     """
     from config import (
-        _ORIGINAL_NAMES, _ORIGINAL_EN_NAMES,
+        get_all_deprecated_names,
         get_agent_display_name,
         agent_names,
     )
@@ -205,17 +205,11 @@ async def get_agent_names(_user: str = Depends(get_current_user)) -> Any:
 
     mapping: dict[str, str] = {}
 
-    # 中文原名 → 显示名
-    for original_name, agent_key in _ORIGINAL_NAMES.items():
+    # 旧名 → 显示名（从配置文件 deprecated_names 字段读取）
+    for old_name, agent_key in get_all_deprecated_names().items():
         best = _best_display(agent_key)
-        if best and best != original_name:
-            mapping[original_name] = best
-
-    # 英文原名 → 显示名
-    for original_en, agent_key in _ORIGINAL_EN_NAMES.items():
-        best = _best_display(agent_key)
-        if best and best != original_en:
-            mapping[original_en] = best
+        if best and best != old_name:
+            mapping[old_name] = best
 
     # agent key → 显示名（如 xiaoda → 小妲）
     for agent_key in agent_names():
