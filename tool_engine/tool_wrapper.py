@@ -9,7 +9,7 @@
 import os
 import logging
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger("tool_wrapper")
 
@@ -40,7 +40,7 @@ def validate_file_path(
     if ".." in Path(abs_path).parts:
         return False, f"路径不允许包含 '..': {path}"
 
-    # 复用 file_tools_v2 的白名单
+    # 复用 file_tools_v2 的白名单（fail-closed：导入失败时拒绝访问）
     try:
         from tools.file_tools_v2 import ALLOWED_BASE_DIRS, SENSITIVE_PATHS
         # 敏感路径黑名单
@@ -48,12 +48,14 @@ def validate_file_path(
         for sp in SENSITIVE_PATHS:
             if real_path == sp or real_path.startswith(sp + os.sep):
                 return False, f"路径属于敏感路径: {path}"
-        # 白名单检查
+        # 白名单检查（追加 os.sep 防止同级目录前缀混淆）
         if ALLOWED_BASE_DIRS:
-            if not any(real_path.startswith(base) for base in ALLOWED_BASE_DIRS):
+            if not any(real_path == base or real_path.startswith(base + os.sep)
+                      for base in ALLOWED_BASE_DIRS):
                 return False, f"路径不在允许范围内: {path}"
     except ImportError:
-        pass  # 回退：不检查白名单
+        logger.warning("tool_wrapper.safety_module_unavailable")
+        return False, "安全模块不可用，拒绝访问"
 
     # 存在性检查
     if must_exist and not os.path.exists(abs_path):
@@ -108,7 +110,12 @@ def validate_tool_params(schema: dict, params: dict) -> tuple[bool, list[str]]:
         if key in properties:
             expected_type = properties[key].get("type")
             if expected_type and expected_type in type_map:
-                if not isinstance(value, type_map[expected_type]):
+                # bool 是 int 的子类，integer/number 类型需显式排除 bool
+                if expected_type in ("integer", "number") and isinstance(value, bool):
+                    errors.append(
+                        f"参数 '{key}' 类型错误: 期望 {expected_type}, 实际 bool"
+                    )
+                elif not isinstance(value, type_map[expected_type]):
                     errors.append(
                         f"参数 '{key}' 类型错误: 期望 {expected_type}, "
                         f"实际 {type(value).__name__}"

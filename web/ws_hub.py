@@ -679,19 +679,22 @@ def _handle_terminal_input(conn_id: str, msg: dict) -> None:
     data = msg.get("data", "")
     with _pty_sessions_lock:
         session = _pty_sessions.get(term_sid)
-    if not session or not session["alive"]:
-        return
-    if session.get("conn_id") != conn_id:
-        logger.warning("ws.terminal_input.denied conn_id={} owner={}", conn_id, session.get("conn_id"))
-        return
+        if not session or not session["alive"]:
+            return
+        if session.get("conn_id") != conn_id:
+            logger.warning("ws.terminal_input.denied conn_id={} owner={}", conn_id, session.get("conn_id"))
+            return
+        # 锁内获取引用，锁外做实际写入（避免阻塞其他会话）
+        is_windows = session.get("is_windows")
+        proc = session.get("proc")
+        fd = session.get("fd")
     try:
-        if session.get("is_windows"):
-            proc = session.get("proc")
+        if is_windows:
             if proc and proc.stdin:
                 proc.stdin.write(data.encode("utf-8", errors="replace"))
                 proc.stdin.flush()
         else:
-            os.write(session["fd"], data.encode("utf-8", errors="replace"))
+            os.write(fd, data.encode("utf-8", errors="replace"))
     except (OSError, BrokenPipeError):
         pass
 
@@ -703,17 +706,17 @@ def _handle_terminal_resize(conn_id: str, msg: dict) -> None:
     rows = int(msg.get("rows") or 24)
     with _pty_sessions_lock:
         session = _pty_sessions.get(term_sid)
-    if not session or not session["alive"]:
-        return
-    if session.get("conn_id") != conn_id:
-        logger.warning("ws.terminal_resize.denied conn_id={} owner={}", conn_id, session.get("conn_id"))
-        return
-    if session.get("is_windows"):
-        # Windows subprocess 不支持 resize，跳过
-        return
+        if not session or not session["alive"]:
+            return
+        if session.get("conn_id") != conn_id:
+            logger.warning("ws.terminal_resize.denied conn_id={} owner={}", conn_id, session.get("conn_id"))
+            return
+        if session.get("is_windows"):
+            return  # Windows subprocess 不支持 resize
+        fd = session.get("fd")
     try:
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
-        fcntl.ioctl(session["fd"], termios.TIOCSWINSZ, winsize)
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
     except OSError:
         pass
 
