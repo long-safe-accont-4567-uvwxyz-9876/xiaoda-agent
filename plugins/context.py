@@ -111,7 +111,7 @@ class PluginContext:
                 with open(data_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
             except Exception:
-                pass
+                logger.debug("plugin_context.data_load_failed", exc_info=True)
         data[key] = value
         with open(data_file, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -129,7 +129,7 @@ class PluginContext:
             with open(data_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception:
-            pass
+            logger.debug("plugin_context.data_delete_failed", exc_info=True)
 
     # ── Memory ──
     async def memory_search(self, query: str, k: int = 5) -> list[dict]:

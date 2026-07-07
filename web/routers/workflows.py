@@ -195,7 +195,7 @@ async def create_workflow(body: dict, request: Request) -> Any:
         await core.db.insert_audit_log("webui.workflows.create", "webui", wf_id)
         await core.db.commit()
     except Exception:
-        pass
+        logger.debug("workflows.audit_create_failed", exc_info=True)
     logger.info("workflow.created id={}", wf_id)
     return Envelope(data=body)
 
@@ -237,7 +237,7 @@ async def update_workflow(wf_id: str, body: dict, request: Request) -> Any:
         await core.db.insert_audit_log("webui.workflows.update", "webui", wf_id)
         await core.db.commit()
     except Exception:
-        pass
+        logger.debug("workflows.audit_update_failed", exc_info=True)
     logger.info("workflow.updated id={}", wf_id)
     return Envelope(data=body)
 
@@ -265,7 +265,7 @@ async def delete_workflow(wf_id: str, request: Request) -> Any:
         await core.db.insert_audit_log("webui.workflows.delete", "webui", wf_id)
         await core.db.commit()
     except Exception:
-        pass
+        logger.debug("workflows.audit_delete_failed", exc_info=True)
     logger.info("workflow.deleted id={}", wf_id)
     return Envelope(data={"deleted": wf_id})
 

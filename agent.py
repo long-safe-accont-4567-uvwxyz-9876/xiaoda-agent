@@ -5,6 +5,8 @@ import asyncio
 import argparse
 from pathlib import Path
 
+from loguru import logger
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
@@ -149,7 +151,7 @@ def _get_lan_addresses() -> list:
         ips = [a[4][0] for a in addrs if not a[4][0].startswith("127.")]
         return ips[:1] if ips else []
     except Exception:
-        pass
+        logger.debug("agent.lan_address_detect_failed", exc_info=True)
     return []
 
 

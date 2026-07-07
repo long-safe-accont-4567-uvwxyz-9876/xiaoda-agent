@@ -1193,8 +1193,8 @@ class DatabaseManager:
             summary_data = {}
             try:
                 summary_data = json.loads(row["summary_data"]) if row["summary_data"] else {}
-            except (json.JSONDecodeError, TypeError):
-                pass
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.debug("database.summary_data_parse_failed", exc_info=True)
 
             custom_title = summary_data.get("custom_title") or summary_data.get("ai_title")
             first_prompt = summary_data.get("first_prompt") if summary_data.get("first_prompt_locked") else None

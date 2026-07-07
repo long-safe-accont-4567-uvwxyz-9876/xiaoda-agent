@@ -302,8 +302,8 @@ class MemoryManager:
             for r in recent:
                 if _normalize_for_dedupe(r.get("summary", "")) == normalized:
                     return True
-        except (OSError, TypeError):
-            pass
+        except (OSError, TypeError) as e:
+            logger.debug("memory_manager.is_duplicate_check_failed", exc_info=True)
         return False
 
     def signal_new_message(self) -> None:
@@ -696,8 +696,8 @@ class MemoryManager:
                 if self.kg:
                     try:
                         query_entities = await self.kg.get_query_entities(query)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("memory_manager.query_entities_failed", exc_info=True)
                 await self._compute_final_scores(query, results, config, query_entities)
                 results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
                 results = results[:k]

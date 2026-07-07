@@ -6,6 +6,7 @@ import json
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from loguru import logger
 
 from web.schemas import Envelope
 from web.routers.auth import get_current_user
@@ -311,7 +312,7 @@ async def save_skill(name: str, body: dict, request: Request) -> Any:
         await core.db.insert_audit_log("webui.skills.save", "webui", name)
         await core.db.commit()
     except Exception:
-        pass
+        logger.debug("tools.audit_save_failed", exc_info=True)
     return Envelope(data={"name": name, "saved": True})
 
 
@@ -326,5 +327,5 @@ async def delete_skill(name: str, request: Request) -> Any:
         await core.db.insert_audit_log("webui.skills.delete", "webui", name)
         await core.db.commit()
     except Exception:
-        pass
+        logger.debug("tools.audit_delete_failed", exc_info=True)
     return Envelope(data={"deleted": name})

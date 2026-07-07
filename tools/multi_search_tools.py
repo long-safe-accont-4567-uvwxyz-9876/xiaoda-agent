@@ -20,7 +20,7 @@ def _deep_search(query: str, max_results: int = 10) -> tuple[list[dict], str]:
             if results:
                 return results, "Tavily"
         except Exception:
-            pass
+            logger.debug("multi_search.tavily_failed", exc_info=True)
 
     return [], ""
 

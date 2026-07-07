@@ -79,7 +79,7 @@ class PluginManager:
             if cls._TRUST_STORE_FILE.exists():
                 return json.loads(cls._TRUST_STORE_FILE.read_text(encoding="utf-8"))
         except Exception:
-            pass
+            logger.debug("plugin_manager.trust_store_load_failed", exc_info=True)
         return {}
 
     @classmethod
@@ -90,7 +90,7 @@ class PluginManager:
             cls._TRUST_STORE_FILE.write_text(
                 json.dumps(store, indent=2, ensure_ascii=False), encoding="utf-8")
         except OSError:
-            pass
+            logger.debug("plugin_manager.trust_store_save_failed", exc_info=True)
 
     def _verify_integrity(self, plugin_id: str, plugin_dir: Path) -> str | None:
         """验证插件文件完整性。
@@ -348,7 +348,7 @@ class PluginManager:
             try:
                 return json.loads(config_path.read_text(encoding="utf-8"))
             except Exception:
-                pass
+                logger.debug("plugin_manager.config_load_failed", exc_info=True)
         return dict(record.manifest.config)
 
     def set_plugin_config(self, plugin_id: str, config: dict) -> None:

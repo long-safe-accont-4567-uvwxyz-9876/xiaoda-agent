@@ -112,7 +112,7 @@ def get_credentials_dir() -> Path:
             kioxia_cred.mkdir(parents=True, exist_ok=True)
             return kioxia_cred
     except (OSError, PermissionError):
-        pass
+        logger.debug("config.credentials_dir_setup_failed", exc_info=True)
     fallback = _FALLBACK_BASE / "credentials"
     fallback.mkdir(parents=True, exist_ok=True)
     return fallback
@@ -154,7 +154,7 @@ def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
             kioxia_path.mkdir(parents=True, exist_ok=True)
             return kioxia_path
     except (OSError, PermissionError):
-        pass
+        logger.debug("config.data_path_resolve_failed", exc_info=True)
     # 外置盘未挂载或不可写时降级到 fallback，并输出警告
     if kioxia_env:
         print(f"[config] WARNING: KIOXIA_DATA_DIR={kioxia_env} not available, "
@@ -252,7 +252,7 @@ def _init_user_resources() -> None:
                         should_copy = True
                         print(f"[config] Updating outdated SOUL.md (contains old name)")
                 except (OSError, UnicodeDecodeError):
-                    pass
+                    logger.debug("config.soul_md_check_failed", exc_info=True)
             if should_copy:
                 try:
                     shutil.copy2(item, target)

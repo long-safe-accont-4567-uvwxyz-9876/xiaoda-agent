@@ -7,6 +7,7 @@ import re
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from loguru import logger
 
 from web.schemas import Envelope
 from web.routers.auth import get_current_user
@@ -39,7 +40,7 @@ async def _audit(request: Request, action: str, detail: str) -> None:
         await core.db.insert_audit_log(f"webui.schedule.{action}", "webui", detail)
         await core.db.commit()
     except Exception:
-        pass
+        logger.debug("schedule.audit_failed", exc_info=True)
 
 
 @router.get("/schedule/config", response_model=Envelope[dict])

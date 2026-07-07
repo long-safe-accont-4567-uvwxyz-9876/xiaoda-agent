@@ -342,7 +342,7 @@ class ToolCallHandler:
         try:
             await self._error_pipeline.increment_hit_count(rule_id)
         except Exception:
-            pass
+            logger.debug("tool_call_handler.increment_hit_count_failed", exc_info=True)
         logger.warning("error_rule.hit", tool_name=t_name, rule_id=rule_id, rule_text=rule_text)
         if ERROR_RULE_STRICT_MODE:
             trace.warning("error_rule.blocked", tool=t_name, rule_id=rule_id)

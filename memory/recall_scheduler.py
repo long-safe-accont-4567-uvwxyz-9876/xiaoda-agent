@@ -106,8 +106,8 @@ class MemoryRecallScheduler:
             logger.debug("memory_recall_scheduler.skip_no_memory_manager")
             try:
                 await self.core.db.set_cron_last_run(self.CRON_TASK_NAME)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("memory_recall_scheduler.cron_last_run_set_failed", exc_info=True)
             return
 
         # 读取 config 覆盖默认参数（方便运行时调整）

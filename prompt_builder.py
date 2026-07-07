@@ -623,7 +623,7 @@ def _get_stable_section_mtimes() -> dict[str, float]:
             for fp in sorted(skills_dir.glob("*.md")):
                 mtimes[f"skills/{fp.name}"] = fp.stat().st_mtime
     except OSError:
-        pass
+        logger.debug("prompt_builder.stable_section_mtimes_failed", exc_info=True)
     return mtimes
 
 
@@ -1066,7 +1066,7 @@ def _get_workspace_mtimes() -> dict[str, float]:
             try:
                 mtimes[f"skills/{fp.name}"] = fp.stat().st_mtime
             except OSError:
-                pass
+                logger.debug("prompt_builder.workspace_mtimes_failed", exc_info=True)
     return mtimes
 
 
@@ -1081,7 +1081,7 @@ def load_skills() -> list[dict]:
                 out.append({"name": fp.stem,
                             "content": fp.read_text(encoding="utf-8-sig").strip()})
             except OSError:
-                pass
+                logger.debug("prompt_builder.skill_read_failed", exc_info=True)
     return out
 
 
@@ -1133,7 +1133,7 @@ def _build_xp_segment(user_id: str | None, address_term: str = "爸爸") -> str:
                 if insight:
                     segment += f"\n[对{address_term}的认知]\n{insight}\n"
         except (AttributeError, ImportError, TypeError):
-            pass  # 画像学习器失败不影响 XP 段落
+            logger.debug("prompt_builder.xp_segment_learner_failed", exc_info=True)
 
         return segment
     except Exception as e:

@@ -118,8 +118,8 @@ class RecoveryOrchestrator:
                 level_str = strategy.get("level", "RETRY")
                 try:
                     return RecoveryLevel[level_str]
-                except KeyError:
-                    pass
+                except KeyError as e:
+                    logger.debug("recovery_orchestrator.invalid_recovery_level", exc_info=True)
         # 默认规则
         if "timeout" in err_str or "connection" in err_str:
             return RecoveryLevel.BACKOFF
@@ -334,8 +334,8 @@ class RecoveryOrchestrator:
                         cb(report)
                 except Exception:
                     pass
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("recovery_orchestrator.escalate_to_human_failed", exc_info=True)
 
     def stats(self) -> dict:
         """返回恢复统计 (含总数/成功/失败/各级别计数/审计日志大小)."""

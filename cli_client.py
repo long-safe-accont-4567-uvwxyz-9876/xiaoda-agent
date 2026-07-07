@@ -18,6 +18,8 @@ import random
 import sys
 import uuid
 
+from loguru import logger
+
 try:
     import websockets
     from rich.console import Console
@@ -151,7 +153,7 @@ class NahidaCLI:
                 if term and not term.startswith("（"):
                     self.address_term = term
         except Exception:
-            pass
+            logger.debug("cli_client.user_profile_fetch_failed", exc_info=True)
         # 拉取各 agent 的 display_name，更新 agent_labels（覆盖默认值）
         try:
             req = urllib.request.Request(
@@ -166,7 +168,7 @@ class NahidaCLI:
                     _, color, icon = self.agent_labels[name]
                     self.agent_labels[name] = (dn, color, icon)
         except Exception:
-            pass
+            logger.debug("cli_client.agents_fetch_failed", exc_info=True)
 
     _status_handler = None
 
@@ -184,7 +186,7 @@ class NahidaCLI:
                 elif etype == "status" and self._status_handler:
                     self._status_handler(event)
         except Exception:
-            pass
+            logger.debug("cli_client.listener_failed", exc_info=True)
 
     # ── 对话 ──────────────────────────────────────────
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 from typing import Any, Protocol, runtime_checkable
 from dataclasses import dataclass, field
 
+from loguru import logger
+
 
 @dataclass
 class SessionInfo:
@@ -101,8 +103,8 @@ def fold_session_summary(
             ms = int(datetime.fromisoformat(norm).timestamp() * 1000)
             if "created_at" not in data:
                 data["created_at"] = ms
-        except (ValueError, OSError):
-            pass
+        except (ValueError, OSError) as e:
+            logger.debug("session_store.timestamp_parse_failed", exc_info=True)
 
     # 提取首条提示词（仅用户消息，仅一次）
     if not data.get("first_prompt_locked"):

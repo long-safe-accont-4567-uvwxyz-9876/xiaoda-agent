@@ -300,7 +300,7 @@ class ModelRouter:
             if dm:
                 return dm
         except (KeyError, AttributeError, TypeError):
-            pass
+            logger.debug("model_router.default_model_lookup_failed", exc_info=True)
         # 回退到内置映射
         return self._CUSTOM_PROVIDER_DEFAULT_MODELS.get(provider, "")
 

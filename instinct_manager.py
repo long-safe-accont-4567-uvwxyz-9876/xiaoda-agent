@@ -296,7 +296,7 @@ class InstinctManager:
             )
             await self.db._conn.commit()
         except Exception:
-            pass
+            logger.debug("instinct_manager.mark_used_failed", exc_info=True)
 
         lines = [f"· {inst['content']}" for inst in instincts]
         return "[已学习的经验模式（仅供参考，根据当前对话独立判断）]\n" + "\n".join(lines)

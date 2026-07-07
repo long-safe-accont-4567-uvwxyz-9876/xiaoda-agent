@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+from loguru import logger
+
 from config import get_agent_display_name
 
 DEFAULT_EMOJI = {
@@ -22,8 +24,8 @@ def load_agent_emoji(agent_name: str, personality_file: str | None = None) -> di
                 m = re.search(rf'^\s*-\s*{key}:\s*(\S+)', text, re.MULTILINE)
                 if m:
                     config[key] = m.group(1)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("emoji_config.load_agent_emoji_failed", exc_info=True)
     return config
 
 def get_status_msg(agent_name: str, action: str, display_name: str, personality_file: str | None = None) -> str:
