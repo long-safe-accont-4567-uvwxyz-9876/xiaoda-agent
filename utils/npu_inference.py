@@ -531,18 +531,18 @@ class NPUModel:
             try:
                 self._vip.destroy_buffer(buf)
             except Exception:
-                pass
+                logger.debug("npu.destroy_output_buffer_failed", exc_info=True)
         for buf in self._input_buffers:
             try:
                 self._vip.destroy_buffer(buf)
             except Exception:
-                pass
+                logger.debug("npu.destroy_input_buffer_failed", exc_info=True)
         if self._network:
             try:
                 self._vip.finish_network(self._network)
                 self._vip.destroy_network(self._network)
             except Exception:
-                pass
+                logger.debug("npu.destroy_network_failed", exc_info=True)
 
 
 def _sigmoid(x: Any) -> Any:

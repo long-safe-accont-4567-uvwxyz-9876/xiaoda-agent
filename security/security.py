@@ -285,7 +285,7 @@ class SecurityFilter:
                     if val and not val.startswith("（") and val not in ("待填写", "主人/朋友/你的名字"):
                         term = val
         except Exception:
-            pass
+            logger.debug("security.address_term_parse_failed", exc_info=True)
         self._address_term_cache = term
         self._address_term_ts = now
         return term

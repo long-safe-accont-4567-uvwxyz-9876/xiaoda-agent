@@ -7,9 +7,10 @@ import numpy as np
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Any
+from loguru import logger as _loguru_logger
 
 
-logger = logging.getLogger("vision_service")
+_stdlib_logger = logging.getLogger("vision_service")
 
 
 def _parse_env_gpu_index() -> int | None:
@@ -69,7 +70,7 @@ def _get_gpu_names_linux() -> list[str]:
                 name = line.split(":")[-1].strip() if ":" in line else ""
                 gpu_names.append(name)
     except Exception:
-        pass
+        _loguru_logger.debug("vision.gpu_lspci_failed", exc_info=True)
     return gpu_names
 
 

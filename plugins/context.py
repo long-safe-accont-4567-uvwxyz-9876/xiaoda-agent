@@ -192,12 +192,12 @@ class PluginContext:
                 from tool_engine.tool_registry import unregister_tool
                 unregister_tool(tool_name)
             except Exception:
-                pass
+                logger.debug("plugin.unregister_tool_failed", exc_info=True)
         self._registered_tools.clear()
         for event_type, handler in self._registered_hooks:
             try:
                 self.unsubscribe(event_type, handler)
             except Exception:
-                pass
+                logger.debug("plugin.unsubscribe_failed", exc_info=True)
         self._registered_hooks.clear()
         self.cancel_all_tasks()

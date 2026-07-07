@@ -1,5 +1,6 @@
 import asyncio
 import os
+from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 
 _DEFAULT_PROJECT_DIR = os.path.expanduser("~/ai-agent")
@@ -23,7 +24,7 @@ async def _run_cmd(args: list[str], timeout: int = 30, cwd: str | None = None) -
         try:
             proc.kill()
         except Exception:
-            pass
+            logger.debug("system_tools.proc_kill_failed", exc_info=True)
         raise
 
 

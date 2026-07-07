@@ -30,7 +30,7 @@ except Exception as e:
             f"Failed to load dotenv:\n{traceback.format_exc()}", encoding="utf-8"
         )
     except Exception:
-        pass
+        logger.debug("dotenv.load_failed", exc_info=True)
     raise
 
 
@@ -393,7 +393,7 @@ def _run_desktop(host: str, port: int) -> None:
         try:
             window.evaluate_js(_reflow_js)
         except Exception:
-            pass
+            logger.debug("pywebview.reflow_js_failed", exc_info=True)
         # 不再在 UI 线程轮询；reflow 兜底由 JS 端 setInterval 自驱（见 splash.js _reflowKicker）
         # _on_loaded 在 1 秒内返回，避免阻塞 pywebview UI 线程导致桌面模式冻死
 
@@ -419,7 +419,7 @@ if __name__ == "__main__":
                 f"xiaoda-agent crash:\n{traceback.format_exc()}", encoding="utf-8"
             )
         except Exception:
-            pass
+            logger.debug("crash.log.write_failed", exc_info=True)
         # 同时输出到 stderr（如果终端可见的话）
         traceback.print_exc()
         sys.exit(1)

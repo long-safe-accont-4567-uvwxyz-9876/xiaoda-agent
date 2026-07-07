@@ -210,7 +210,7 @@ def _detect_gpu() -> dict:
                 result["has_cuda"] = True
                 result["cuda_version"] = output
         except Exception:
-            pass
+            logger.debug("capability.cuda_detect_failed", exc_info=True)
 
     # ROCm 检测（AMD GPU）
     if not result["has_gpu"] and shutil.which("rocm-smi"):

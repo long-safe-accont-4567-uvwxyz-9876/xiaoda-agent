@@ -61,7 +61,7 @@ async def _extract_zhihu(url: str) -> tuple[str, str]:
     try:
         return await _extract_via_jina(url)
     except Exception:
-        pass
+        logger.debug("zhihu.jina_extract_failed", exc_info=True)
     from urllib.parse import urlparse
     parsed = urlparse(url)
     path = parsed.path
