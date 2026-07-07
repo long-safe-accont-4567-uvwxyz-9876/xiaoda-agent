@@ -5,7 +5,7 @@
 用法: xiaoda doctor [--json] [--fix]
 """
 from typing import Any
-import json, sys, time, os, shutil
+import json, sys, time, os, shutil, subprocess
 from pathlib import Path
 from loguru import logger
 
@@ -348,11 +348,22 @@ def _register_self_heal_checks(doc: DoctorCheck) -> None:
         port = int(port_str)
         platform = _detect_platform()
         if platform == "windows":
-            os.system(f'powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue | ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}"')
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-NetTCPConnection -LocalPort {} -ErrorAction SilentlyContinue | ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}".format(port)],
+                timeout=10, capture_output=True,
+            )
         elif platform == "docker":
             logger.warning("doctor.port_conflict_docker", port=port, hint="Change WEBUI_PORT env var")
         else:
-            os.system(f"lsof -ti:{port} 2>/dev/null | xargs kill -9 2>/dev/null || true")
+            result = subprocess.run(
+                ["lsof", "-ti:{}".format(port)],
+                timeout=10, capture_output=True,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            )
+            pids = result.stdout.decode().strip().split()
+            if pids:
+                subprocess.run(["kill", "-9"] + pids, timeout=5, capture_output=True)
         time.sleep(1)
 
     doc.add_check("Port Conflict", "L8-SelfHeal", _check_port_conflict, _fix_port_conflict)
