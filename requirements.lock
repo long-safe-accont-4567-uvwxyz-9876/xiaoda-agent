@@ -1,40 +1,41 @@
 # requirements.lock — 固化依赖精确版本
 # 生成日期: 2026-07-08
 # 用法: pip install -r requirements.lock
+# 环境: Python 3.11
 
 # ── Web 服务 ──
-fastapi==0.136.1
-uvicorn==0.46.0
-websockets==16.0
-python-multipart==0.0.27
-sse-starlette==3.4.1
+fastapi==0.115.12
+uvicorn==0.34.2
+websockets==13.1
+python-multipart==0.0.20
+sse-starlette==2.2.1
 
 # ── HTTP 客户端 ──
 httpx==0.28.1
 
 # ── 图像处理 ──
-Pillow==11.3.0
+Pillow==11.2.1
 
 # ── 数值计算 ──
-numpy==2.4.4
+numpy==1.26.4
 
 # ── CLI 美化 ──
-rich==15.0.0
+rich==13.9.4
 
 # ── SILK 音频编码 ──
 pilk==0.2.4
 
 # ── 系统监控 ──
-psutil==5.9.8
+psutil==6.1.0
 
 # ── 核心 ──
-python-dotenv==1.2.2
+python-dotenv==1.1.0
 loguru==0.7.3
-openai==1.59.6
+openai==1.82.0
 aiosqlite==0.22.1
-pydantic==2.13.3
+pydantic==2.13.4
 jieba==0.42.1
-pyyaml==6.0.3
+pyyaml==6.0.2
 
 # ── QQ Bot ──
 qq-botpy==1.2.1
@@ -43,16 +44,17 @@ qq-botpy==1.2.1
 duckduckgo-search==8.1.1
 
 # ── 文档处理 ──
-pdfplumber==0.11.10
+pdfplumber==0.11.9
 python-docx==1.2.0
 python-pptx==1.0.2
 openpyxl==3.1.5
 html2text==2025.4.15
 
 # ── 桌面模式 ──
-pywebview==6.2.1
+pywebview==5.4.1
 
 # ── 开发/测试 ──
-pytest==9.1.1
-pytest-asyncio==1.4.0
-ruff==0.15.20
+pytest==8.3.5
+pytest-asyncio==0.24.0
+pytest-cov==6.1.1
+ruff==0.11.10
