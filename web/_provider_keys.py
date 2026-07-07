@@ -54,7 +54,8 @@ def _decode_key(encoded: str) -> str | None:
     解码优先级（向后兼容旧版本文件格式）：
     1. credential_vault enc:v1: 加密格式（新版本推荐）
     2. 旧版 base64 编码（自动迁移到 credential_vault）
-    3. 返回 None 表示无法识别（调用方按明文兜底）
+    3. 明文 key（如 sk-xxx，直接返回）
+    4. 返回 None 表示无法识别
     """
     # 1. 优先尝试 credential_vault 解密（识别 enc:v1: 前缀）
     try:
@@ -72,7 +73,13 @@ def _decode_key(encoded: str) -> str | None:
     try:
         return base64.b64decode(encoded.encode("ascii")).decode("utf-8")
     except Exception:
-        return None
+        pass
+
+    # 3. 明文 key（sk-、key-、token- 等常见前缀，或任意非空字符串）
+    if encoded:
+        return encoded
+
+    return None
 
 
 def load_provider_key(provider_id: str) -> str:
