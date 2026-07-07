@@ -113,7 +113,7 @@ class SlashCommandHandler:
         if handler:
             try:
                 return await handler(args, user_id)
-            except Exception as e:
+            except (RuntimeError, ValueError, KeyError, TypeError) as e:
                 logger.warning("slash.handle_error", command=command, error=str(e))
                 if self._agent and hasattr(self._agent, '_error_handler') and self._agent._error_handler:
                     try:
@@ -121,7 +121,7 @@ class SlashCommandHandler:
                             error=e, user_query=text, context=f"执行命令 /{command} 参数: {args}"
                         )
                         return smart_reply
-                    except Exception:
+                    except (RuntimeError, ValueError, KeyError):
                         logger.debug("slash.error_handler_fallback", exc_info=True)
                 return f"执行 /{command} 时出了点问题：{str(e)[:100]}"
 
@@ -248,7 +248,7 @@ class SlashCommandHandler:
                                 model_names = [m["display_name"] for m in models[:6]]
                                 suffix = "..." if len(models) > 6 else ""
                                 lines.append(f"  {provider}: {', '.join(model_names)}{suffix}")
-                except Exception:
+                except (KeyError, ValueError, OSError, json.JSONDecodeError):
                     logger.debug("slash.cache_read_error", exc_info=True)
                 if not cache_available:
                     for tp in third_party:
@@ -386,7 +386,7 @@ class SlashCommandHandler:
         lines = ["🖥️ 香橙派硬件状态"]
         try:
             lines.extend(await asyncio.to_thread(self._read_hw_sync))
-        except Exception:
+        except (OSError, RuntimeError):
             logger.debug("slash.hw_read_error", exc_info=True)
         return "\n".join(lines)
 
@@ -400,14 +400,14 @@ class SlashCommandHandler:
                     temp_c = int(f.read().strip()) / 1000
                 temp_icon = "🔥⚠️" if temp_c > 80 else "🌡️"
                 lines.append(f"{temp_icon} CPU温度: {temp_c:.1f}°C")
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 logger.debug("slash.hw.temp_read_failed", error=str(e))
                 lines.append("🌡️ CPU温度: 无法读取")
             try:
                 with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq") as f:
                     freq_khz = int(f.read().strip())
                 lines.append(f"⚡ CPU频率: {freq_khz // 1000} MHz")
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 logger.debug("slash.hw.freq_read_failed", error=str(e))
                 lines.append("⚡ CPU频率: 无法读取")
             try:
@@ -419,24 +419,24 @@ class SlashCommandHandler:
                 mem_pct = mem_used / mem_total * 100
                 mem_icon = "💾⚠️" if mem_pct > 90 else "💾"
                 lines.append(f"{mem_icon} 内存: {mem_used//1024}M / {mem_total//1024}M ({mem_pct:.0f}%)")
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 logger.debug("slash.hw.mem_read_failed", error=str(e))
                 lines.append("💾 内存: 无法读取")
             try:
                 usage = shutil.disk_usage('/')
                 pct = usage.used / usage.total * 100 if usage.total > 0 else 0
                 lines.append(f"💿 磁盘: {usage.used//1073741824}G / {usage.total//1073741824}G ({pct:.0f}%)")
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 logger.debug("slash.hw.disk_read_failed", error=str(e))
                 lines.append("💿 磁盘: 无法读取")
             try:
                 with open("/proc/loadavg") as f:
                     load = f.read().strip().split()[:3]
                 lines.append(f"📊 负载: {' '.join(load)}")
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 logger.debug("slash.hw.load_read_failed", error=str(e))
                 lines.append("📊 负载: 无法读取")
-        except Exception:
+        except (OSError, RuntimeError):
             logger.debug("slash.hw_outer_error", exc_info=True)
         return lines
 
@@ -464,7 +464,7 @@ class SlashCommandHandler:
             status = stdout_bytes.decode().strip() or "未知"
             status_icon = "🟢" if status == "active" else "🔴"
             lines.append(f"{status_icon} qq-agent: {status}")
-        except Exception:
+        except (OSError, RuntimeError):
             lines.append("🔘 qq-agent: 状态未知")
         if self._router:
             label = self._router.get_model_preference_label()
@@ -491,7 +491,7 @@ class SlashCommandHandler:
             color_str = ", ".join([f"{c.color}({c.percentage:.0f}%)" for c in colors[:3]])
             path = vs.save_frame(frame)
             return f"📷 摄像头画面分析\n{description}\n主色调: {color_str}\n图片已保存: {path}"
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError) as e:
             return f"📷 摄像头操作失败: {str(e)[:100]}"
 
     async def _cmd_memory(self, args: str, user_id: str) -> str:
@@ -500,7 +500,7 @@ class SlashCommandHandler:
             try:
                 count = await self._db.memory.get_episodic_count()
                 lines.append(f"📋 情景记忆条数: {count}")
-            except Exception as e:
+            except (OSError, KeyError, ValueError) as e:
                 lines.append(f"📋 情景记忆: 读取失败 ({str(e)[:50]})")
         else:
             lines.append("📋 数据库未就绪")
@@ -514,7 +514,7 @@ class SlashCommandHandler:
                     lines.append(f"⏰ 上次编码: {dt}（{int(elapsed // 60)}分钟前）")
                 else:
                     lines.append("⏰ 上次编码: 尚未编码")
-            except Exception:
+            except (OSError, KeyError, ValueError):
                 lines.append("⏰ 上次编码: 未知")
         else:
             lines.append("⏰ 记忆管理器未就绪")
@@ -547,7 +547,7 @@ class SlashCommandHandler:
                     lines.append(f"📊 情绪强度: {intensity:.1f}")
                 else:
                     lines.append("😊 感知情绪: 暂无对话")
-            except Exception:
+            except (RuntimeError, ValueError, KeyError):
                 logger.debug("slash.emotion_detect_error", exc_info=True)
                 lines.append("😊 情绪检测: 不可用")
         return "\n".join(lines)
@@ -558,7 +558,7 @@ class SlashCommandHandler:
             try:
                 entity_count = await self._db.knowledge.get_entity_count()
                 lines.append(f"📌 实体数量: {entity_count}")
-            except Exception as e:
+            except (OSError, KeyError, ValueError) as e:
                 lines.append(f"📌 实体数量: 读取失败 ({str(e)[:50]})")
             try:
                 relations = await self._db.knowledge.get_all_relations()
@@ -570,7 +570,7 @@ class SlashCommandHandler:
                         rel = r.get("relation_type", "?")
                         to = r.get("to_entity", "?")
                         lines.append(f"  · {fr} —[{rel}]→ {to}")
-            except Exception as e:
+            except (OSError, KeyError, ValueError) as e:
                 lines.append(f"🔗 关系数量: 读取失败 ({str(e)[:50]})")
         else:
             lines.append("数据库未就绪")

@@ -410,7 +410,16 @@ def create_app() -> FastAPI:
     # 允许 splash HTTP 服务器嵌入 WebUI（iframe 预加载无缝衔接）
     @app.middleware("http")
     async def _allow_frame_embed(request: Any, call_next: Any) -> Any:
+        import time as _time
+        _start = _time.monotonic()
         response = await call_next(request)
+        _elapsed = _time.monotonic() - _start
+        _sla = getattr(app.state, "sla_exporter", None)
+        if _sla:
+            _sla.inc_request(request.url.path, str(response.status_code))
+            _sla.observe_latency(request.url.path, _elapsed)
+            if response.status_code >= 400:
+                _sla.inc_error(f"http_{response.status_code}", request.url.path)
         response.headers["Content-Security-Policy"] = "frame-ancestors 'self' http://127.0.0.1:*"
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -457,6 +466,15 @@ def create_app() -> FastAPI:
 
     from web.ws_hub import router as ws_router
     app.include_router(ws_router)
+
+    from core.sla_exporter import SLAExporter
+    _sla = SLAExporter()
+    app.state.sla_exporter = _sla
+
+    @app.get("/metrics", include_in_schema=False)
+    async def prometheus_metrics() -> Any:
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(_sla.export(), media_type="text/plain; version=0.0.4; charset=utf-8")
 
     # 媒体目录使用用户数据目录，避免写入 _MEIPASS 只读目录
     try:

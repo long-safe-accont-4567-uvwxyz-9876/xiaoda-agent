@@ -42,7 +42,7 @@ async def _broadcast_kg_change(action: str, target: str, name: str) -> None:
             "target": target,
             "name": name,
         })
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning(f"insight.kg.broadcast_failed action={action} target={target}: {e}")
 
 
@@ -104,13 +104,13 @@ async def consolidate_portrait(request: Request) -> Any:
             from web.ws_hub import manager
             await manager.broadcast({"type": "portrait_consolidated",
                                      "ok": bool(result)})
-        except Exception as e:
+        except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
             logger.warning("webui.portrait.consolidate_failed error={}", str(e))
             try:
                 from web.ws_hub import manager
                 await manager.broadcast({"type": "portrait_consolidated",
                                          "ok": False, "error": str(e)[:200]})
-            except Exception as exc:
+            except (ValueError, TypeError, KeyError) as exc:
                 logger.debug("insight.portrait_broadcast_failed: {}", exc, exc_info=True)
 
     request.app.state.portrait_consolidate_task = asyncio.create_task(_run())
@@ -146,7 +146,7 @@ async def today(request: Request) -> Any:
             "FROM greeting_log WHERE fired_at >= ? ORDER BY fired_at", (t0,))
         for g in greetings:
             items.append(dict(g, kind="greeting"))
-    except Exception as exc:
+    except (ValueError, TypeError, KeyError) as exc:
         logger.debug("insight.today_greetings_failed: {}", exc, exc_info=True)
     items.sort(key=lambda x: x.get("ts") or 0)
     conv = await core.db.fetch_one(
@@ -183,7 +183,7 @@ async def list_memories(request: Request,
                  "timestamp": r.get("timestamp", 0), "via": "vector"}
                 for r in results
                 if (r.get("importance") or 0) >= importance_min])
-        except Exception as e:
+        except (OSError, RuntimeError, ConnectionError, TimeoutError) as e:
             logger.warning("webui.memories.search_failed error={}", str(e))
     rows = await core.db.fetch_all(
         "SELECT id, timestamp, summary, importance, emotion_label "
@@ -203,7 +203,7 @@ async def delete_memory(memory_id: int, request: Request) -> Any:
         await core.db.memory.delete_memory_with_vector(memory_id, vector_store=vec)
         await core.db.insert_audit_log("webui.memory.delete", "webui", str(memory_id))
         await core.db.commit()
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError) as e:
         logger.warning("webui.memory.delete_failed memory_id={} error={}", memory_id, e)
         raise HTTPException(500, "操作失败")
     return Envelope(data={"deleted": memory_id})
@@ -286,14 +286,14 @@ async def update_relation(relation_id: str, body: dict, request: Request) -> Any
         n = await core.db.execute(
             "UPDATE knowledge_relations SET relation_type=?, updated_at=? WHERE id=?",
             (rel_type, time.time(), relation_id))
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning("webui.knowledge.update_relation_failed relation_id={} error={}", relation_id, e)
         raise HTTPException(500, "操作失败")
     if not n:
         raise HTTPException(404, f"关系 {relation_id} 不存在")
     try:
         await core.db.commit()
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError) as e:
         logger.warning("webui.knowledge.update_relation_commit_failed relation_id={} error={}", relation_id, e)
         raise HTTPException(500, "操作失败")
     await _broadcast_kg_change("update", "relation", relation_id)
@@ -383,7 +383,7 @@ async def list_instincts(request: Request, limit: int = Query(default=50, le=200
     try:
         rows = await core.db.fetch_all(
             "SELECT * FROM instincts ORDER BY confidence DESC LIMIT ?", (limit,))
-    except Exception as exc:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("insight.instincts_fetch_failed: {}", exc, exc_info=True)
         rows = []
     return Envelope(data=rows)
@@ -408,7 +408,7 @@ async def create_memory(body: dict, request: Request) -> Any:
     try:
         if core.memory:
             await core.memory.vec.upsert(mid, summary)
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning(f"insight.create_memory.vec_failed mid={mid}: {e}")
     await core.db.commit()
     return Envelope(data={"id": mid})
@@ -439,7 +439,7 @@ async def update_memory(memory_id: int, body: dict, request: Request) -> Any:
         try:
             if core.memory:
                 await core.memory.vec.upsert(memory_id, body["summary"])
-        except Exception as exc:
+        except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
             logger.debug("insight.memory_vec_upsert_failed: {}", exc, exc_info=True)
     await core.db.commit()
     return Envelope(data={"id": memory_id, "updated": True})
@@ -466,7 +466,7 @@ async def create_learning(body: dict, request: Request) -> Any:
             "VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
             (learning_id, category, priority, summary, pattern, now, now, now))
         await core.db.commit()
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError) as e:
         logger.warning("webui.learning.create_failed learning_id={} error={}", learning_id, e)
         raise HTTPException(500, "操作失败")
     return Envelope(data={"id": lid})
@@ -487,14 +487,14 @@ async def update_learning(learning_id: int, body: dict, request: Request) -> Any
         n = await core.db.execute(
             f"UPDATE learnings SET {', '.join(sets)} WHERE id=?",
             tuple(params) + (learning_id,))
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning("webui.learning.update_failed learning_id={} error={}", learning_id, e)
         raise HTTPException(500, "操作失败")
     if not n:
         raise HTTPException(404, f"学习记录 {learning_id} 不存在")
     try:
         await core.db.commit()
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError) as e:
         logger.warning("webui.learning.update_commit_failed learning_id={} error={}", learning_id, e)
         raise HTTPException(500, "操作失败")
     return Envelope(data={"id": learning_id, "updated": True})
@@ -505,14 +505,14 @@ async def delete_learning(learning_id: int, request: Request) -> Any:
     core = request.app.state.core
     try:
         n = await core.db.execute("DELETE FROM learnings WHERE id=?", (learning_id,))
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError) as e:
         logger.warning("webui.learning.delete_failed learning_id={} error={}", learning_id, e)
         raise HTTPException(500, "操作失败")
     if not n:
         raise HTTPException(404, f"学习记录 {learning_id} 不存在")
     try:
         await core.db.commit()
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError) as e:
         logger.warning("webui.learning.delete_commit_failed learning_id={} error={}", learning_id, e)
         raise HTTPException(500, "操作失败")
     return Envelope(data={"deleted": learning_id})
@@ -535,7 +535,7 @@ async def create_instinct(body: dict, request: Request) -> Any:
             "VALUES (?, ?, ?, ?, 0)",
             (content, confidence, now, now))
         await core.db.commit()
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError) as e:
         logger.warning("webui.instinct.create_failed content={} error={}", content, e)
         raise HTTPException(500, "操作失败")
     return Envelope(data={"id": iid})
@@ -560,14 +560,14 @@ async def update_instinct(instinct_id: int, body: dict, request: Request) -> Any
         n = await core.db.execute(
             f"UPDATE instincts SET {', '.join(sets)} WHERE id=?",
             tuple(params) + (instinct_id,))
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning("webui.instinct.update_failed instinct_id={} error={}", instinct_id, e)
         raise HTTPException(500, "操作失败")
     if not n:
         raise HTTPException(404, f"本能 {instinct_id} 不存在")
     try:
         await core.db.commit()
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError) as e:
         logger.warning("webui.instinct.update_commit_failed instinct_id={} error={}", instinct_id, e)
         raise HTTPException(500, "操作失败")
     return Envelope(data={"id": instinct_id, "updated": True})
@@ -578,14 +578,14 @@ async def delete_instinct(instinct_id: int, request: Request) -> Any:
     core = request.app.state.core
     try:
         n = await core.db.execute("DELETE FROM instincts WHERE id=?", (instinct_id,))
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError) as e:
         logger.warning("webui.instinct.delete_failed instinct_id={} error={}", instinct_id, e)
         raise HTTPException(500, "操作失败")
     if not n:
         raise HTTPException(404, f"本能 {instinct_id} 不存在")
     try:
         await core.db.commit()
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError) as e:
         logger.warning("webui.instinct.delete_commit_failed instinct_id={} error={}", instinct_id, e)
         raise HTTPException(500, "操作失败")
     return Envelope(data={"deleted": instinct_id})
@@ -669,7 +669,7 @@ async def create_relation(body: dict, request: Request) -> Any:
     kdb = core.db.knowledge
     try:
         await kdb.insert_knowledge_relation(relation_id, from_e, rel, to_e)
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError) as e:
         logger.warning("webui.knowledge.create_relation_failed from={} to={} rel={} error={}", from_e, to_e, rel, e)
         raise HTTPException(500, "操作失败")
     await _broadcast_kg_change("create", "relation", relation_id)
@@ -753,7 +753,7 @@ async def get_xp(request: Request, user_id: str = Depends(get_current_user)) -> 
             "last_chat_at": state.last_chat_at,
             "level_config": level_config,
         })
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning(f"insight.xp.get_failed user={user_id}: {e}")
         raise HTTPException(500, "获取 XP 状态失败")
 
@@ -778,6 +778,6 @@ async def get_xp_levels(request: Request) -> Any:
                 "guidance": _build_guidance(config_raw),
             })
         return Envelope(data={"levels": levels})
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning(f"insight.xp.levels_failed: {e}")
         raise HTTPException(500, "获取 XP 等级配置失败")
