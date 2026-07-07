@@ -305,13 +305,13 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
                 _t.add_done_callback(lambda t: logger.warning("ws.terminal_start_task_error: {}", t.exception()) if not t.cancelled() and t.exception() else None)
 
             elif mtype == "terminal_input":
-                _handle_terminal_input(msg)
+                _handle_terminal_input(conn_id, msg)
 
             elif mtype == "terminal_resize":
-                _handle_terminal_resize(msg)
+                _handle_terminal_resize(conn_id, msg)
 
             elif mtype == "terminal_kill":
-                _handle_terminal_kill(msg)
+                _handle_terminal_kill(conn_id, msg)
 
             elif mtype == "abort":
                 task = manager._tasks.get(str(msg.get("msg_id") or ""))
@@ -638,13 +638,16 @@ def _cleanup_pty(term_sid: str) -> None:
     logger.info("ws.terminal.exit term_sid={} rc={}", term_sid, rc)
 
 
-def _handle_terminal_input(msg: dict) -> None:
+def _handle_terminal_input(conn_id: str, msg: dict) -> None:
     """将用户输入写入终端 stdin。"""
     term_sid = str(msg.get("term_sid") or "")
     data = msg.get("data", "")
     with _pty_sessions_lock:
         session = _pty_sessions.get(term_sid)
     if not session or not session["alive"]:
+        return
+    if session.get("conn_id") != conn_id:
+        logger.warning("ws.terminal_input.denied conn_id={} owner={}", conn_id, session.get("conn_id"))
         return
     try:
         if session.get("is_windows"):
@@ -658,7 +661,7 @@ def _handle_terminal_input(msg: dict) -> None:
         pass
 
 
-def _handle_terminal_resize(msg: dict) -> None:
+def _handle_terminal_resize(conn_id: str, msg: dict) -> None:
     """调整终端窗口大小。"""
     term_sid = str(msg.get("term_sid") or "")
     cols = int(msg.get("cols") or 80)
@@ -666,6 +669,9 @@ def _handle_terminal_resize(msg: dict) -> None:
     with _pty_sessions_lock:
         session = _pty_sessions.get(term_sid)
     if not session or not session["alive"]:
+        return
+    if session.get("conn_id") != conn_id:
+        logger.warning("ws.terminal_resize.denied conn_id={} owner={}", conn_id, session.get("conn_id"))
         return
     if session.get("is_windows"):
         # Windows subprocess 不支持 resize，跳过
@@ -677,10 +683,16 @@ def _handle_terminal_resize(msg: dict) -> None:
         pass
 
 
-def _handle_terminal_kill(msg: dict) -> None:
+def _handle_terminal_kill(conn_id: str, msg: dict) -> None:
     """终止终端会话。"""
     term_sid = str(msg.get("term_sid") or "")
     with _pty_sessions_lock:
+        session = _pty_sessions.get(term_sid)
+        if not session:
+            return
+        if session.get("conn_id") != conn_id:
+            logger.warning("ws.terminal_kill.denied conn_id={} owner={}", conn_id, session.get("conn_id"))
+            return
         session = _pty_sessions.pop(term_sid, None)
     if not session:
         return

@@ -46,15 +46,15 @@ jobs:
 
       - name: Run smoke tests
         run: |
-          python -m pytest tests/test_smoke.py -v --tb=short || true
+          python -m pytest tests/test_smoke.py -v --tb=short
 
       - name: Run core tests
         run: |
-          python -m pytest tests/test_agent_routing.py tests/test_context_compressor.py tests/test_risk_classifier.py -v --tb=short || true
+          python -m pytest tests/test_agent_routing.py tests/test_context_compressor.py tests/test_risk_classifier.py -v --tb=short
 
       - name: Run matrix governance tests
         run: |
-          python -m pytest tests/test_matrix_governance.py tests/test_prompt_integration.py -v --tb=short || true
+          python -m pytest tests/test_matrix_governance.py tests/test_prompt_integration.py -v --tb=short
 
       - name: Test summary
         if: always()
@@ -79,9 +79,9 @@ jobs:
 
       - name: Run Ruff check
         run: |
-          ruff check . --select=E9,F63,F7,F82 --output-format=github || true
+          ruff check . --select=E9,F63,F7,F82 --output-format=github
 
       - name: Python syntax check
         run: |
-          python -m py_compile agent.py agent_context.py config.py 2>&1 || true
+          python -m py_compile agent.py agent_context.py config.py
           echo "Syntax check completed."
