@@ -82,6 +82,8 @@ def _audit_code_ast(code: str) -> str | None:
         tree = ast.parse(code)
     except SyntaxError as e:
         return f"代码语法错误: {e}"
+    except (ValueError, TypeError) as e:
+        return f"代码解析失败: {e}"
 
     for node in ast.walk(tree):
         # 检查 import 语句
@@ -212,15 +214,9 @@ def python_executor(code: str) -> ToolResult:
         logger.warning("pyexec.audit_blocked", reason=audit_result, code_preview=code[:200])
         return ToolResult.fail(f"代码安全审查未通过: {audit_result}")
 
-    # resource 限制（子进程内存 50MB / CPU 10s）
-    _resource_limits_set = False
-    try:
-        import resource
-        resource.setrlimit(resource.RLIMIT_AS, (50 * 1024 * 1024, 50 * 1024 * 1024))
-        resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
-        _resource_limits_set = True
-    except (ImportError, ValueError, OSError):
-        pass  # 非Linux 或权限不足，跳过
+    # 注意：RLIMIT_AS/RLIMIT_CPU 是进程级限制，在主进程中设置会限制整个 agent 进程
+    # 50MB 内存上限会导致 agent 本身崩溃。真正的资源隔离应在子进程中执行用户代码。
+    # 当前依赖 SIGALRM 超时（30s）+ AST 审查兜底，不设置进程级资源限制。
 
     try:
         stdout_buf = io.StringIO()
@@ -244,7 +240,9 @@ def python_executor(code: str) -> ToolResult:
             except BaseException as e:  # 捕获后交由主线程重新抛出
                 _exec_state['error'] = e
 
-        if hasattr(signal, 'SIGALRM'):
+        _use_sigalrm = (hasattr(signal, 'SIGALRM')
+                         and threading.current_thread() is threading.main_thread())
+        if _use_sigalrm:
             old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
             signal.alarm(_EXEC_TIMEOUT)
             try:
@@ -255,7 +253,7 @@ def python_executor(code: str) -> ToolResult:
                 signal.alarm(0)
                 signal.signal(signal.SIGALRM, old_handler)
         else:
-            # Windows 不支持 SIGALRM，改用守护线程执行 + join 超时
+            # Windows 或子线程：改用守护线程执行 + join 超时
             # 使用 Event 通知线程终止，虽 Python 无法强制 kill 线程，
             # 但 Event 让线程在循环中可主动退出，避免无意义占用
             _stop_event = threading.Event()
@@ -275,7 +273,10 @@ def python_executor(code: str) -> ToolResult:
 
         # 重新抛出 exec 内部异常（如 MemoryError），交由外层 except 统一处理
         if 'error' in _exec_state:
-            raise _exec_state['error']
+            err = _exec_state['error']
+            if isinstance(err, KeyboardInterrupt):
+                return ToolResult.fail("代码执行被用户中断（Ctrl+C）")
+            raise err
 
         output = stdout_buf.getvalue()
         error = stderr_buf.getvalue()
@@ -285,14 +286,14 @@ def python_executor(code: str) -> ToolResult:
             result.append(f"输出:\n{output}")
         if error:
             result.append(f"错误:\n{error}")
-        if local_vars.get('_result'):
+        if '_result' in local_vars:
             result.append(f"结果: {local_vars['_result']}")
 
         return ToolResult.ok("\n".join(result) if result else "代码执行成功（无输出）")
     except _ExecutionTimeout:
         return ToolResult.fail(f"代码执行超时（{_EXEC_TIMEOUT}秒）")
     except MemoryError:
-        return ToolResult.fail("代码执行内存超限（50MB）")
+        return ToolResult.fail("代码执行内存超限")
     except Exception as e:
         return ToolResult.fail(f"执行错误: {str(e)}")
 
@@ -384,5 +385,9 @@ def calculator(expression: str) -> ToolResult:
 )
 def call_xiaoda(question: str) -> ToolResult:
     """委托问题给主体小妲处理（返回 DelegationRequest 占位）。"""
-    from core.delegation import DelegationRequest
+    try:
+        from core.delegation import DelegationRequest
+    except ImportError as e:
+        logger.error("call_xiaoda.delegation_unavailable", exc_info=True)
+        return ToolResult.fail(f"委托模块不可用: {e}")
     return ToolResult.ok(DelegationRequest(type="xiaoda", question=question, delegator="xiaoli"))

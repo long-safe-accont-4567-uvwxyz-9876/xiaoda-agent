@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections import OrderedDict
 from typing import Any, Awaitable, Callable, Optional
 
-import numpy as np
 from loguru import logger
+
+# numpy 为可选依赖：不可用时降级为纯 Python 向量运算，保证 agent 可启动
+try:
+    import numpy as np
+    _HAS_NUMPY = True
+except ImportError:
+    np = None  # type: ignore[assignment]
+    _HAS_NUMPY = False
 
 
 class QueryCache:
@@ -39,7 +47,7 @@ class QueryCache:
         self._threshold = float(threshold)
         self._max_size = int(max_size)
         self._ttl = int(ttl)
-        # 每个条目: {"vec": np.ndarray, "results": list[dict], "ts": float}
+        # 每个条目: {"vec": list[float], "results": list[dict], "ts": float}
         self._cache: "OrderedDict[str, dict]" = OrderedDict()
         self._lock = asyncio.Lock()
         # 统计指标
@@ -47,8 +55,8 @@ class QueryCache:
         self.misses: int = 0
         self.total_queries: int = 0
 
-    async def _embed(self, text: str) -> Optional[np.ndarray]:
-        """生成文本嵌入向量，返回 numpy 数组；不可用或失败返回 None。"""
+    async def _embed(self, text: str) -> Optional[list[float]]:
+        """生成文本嵌入向量；不可用或失败返回 None。"""
         if not self._embed_func:
             return None
         try:
@@ -58,16 +66,26 @@ class QueryCache:
             return None
         if not vec:
             return None
-        return np.asarray(vec, dtype=np.float32)
+        if _HAS_NUMPY:
+            return np.asarray(vec, dtype=np.float32).tolist()
+        return [float(x) for x in vec]
 
     @staticmethod
-    def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    def _cosine_similarity(a: list[float], b: list[float]) -> float:
         """计算两个向量的余弦相似度，零向量返回 0.0。"""
-        na = float(np.linalg.norm(a))
-        nb = float(np.linalg.norm(b))
+        if _HAS_NUMPY:
+            na = float(np.linalg.norm(a))
+            nb = float(np.linalg.norm(b))
+            if na == 0.0 or nb == 0.0:
+                return 0.0
+            return float(np.dot(a, b) / (na * nb))
+        # 纯 Python 降级实现
+        dot = sum(x * y for x, y in zip(a, b))
+        na = math.sqrt(sum(x * x for x in a))
+        nb = math.sqrt(sum(y * y for y in b))
         if na == 0.0 or nb == 0.0:
             return 0.0
-        return float(np.dot(a, b) / (na * nb))
+        return dot / (na * nb)
 
     async def get(self, query: str) -> Optional[list[dict]]:
         """查询缓存。
