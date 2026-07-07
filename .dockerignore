@@ -53,6 +53,8 @@ state/
 docs/
 market/.cache
 assets/stickers/xiaoda_backup/
+assets/stickers/
+assets/voice_refs/
 tests/benchmark_results.json
 .dbg/
 scripts/*.bat
