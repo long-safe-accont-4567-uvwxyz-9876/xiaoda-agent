@@ -93,7 +93,7 @@ class TestUserIdentity:
     def test_default_guest(self):
         identity = UserIdentity.default_guest()
         assert identity.is_owner is False
-        assert identity.address_term == "用户"
+        assert identity.address_term == "朋友"
 
     def test_owner_identity(self):
         identity = UserIdentity(is_owner=True, display_name="爸爸", address_term="爸爸")
