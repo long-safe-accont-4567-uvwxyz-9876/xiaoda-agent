@@ -1396,8 +1396,10 @@ def build_safe_system_prompt(extra_context: str = "", address_term: str = "你")
         soul = load_workspace_file("SOUL.md")
         if soul:
             safe_soul = _strip_owner_references(soul)
-            # 先替换占位符，再替换"爸爸"→"你"
+            # 先替换占位符，再替换 display_name，最后替换"爸爸"→"你"
             safe_soul = _replace_placeholders(safe_soul, address_term, xiaoda_name)
+            from config import apply_agent_name_replacements
+            safe_soul = apply_agent_name_replacements(safe_soul)
             safe_soul = safe_soul.replace("爸爸", "你")
             safe_soul = safe_soul.replace("称呼用户为\"你\"", "称呼用户为\"你\"")
             sections.append(safe_soul)
