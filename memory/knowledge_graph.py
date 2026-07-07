@@ -327,6 +327,20 @@ class KnowledgeGraph:
             logger.debug("kg.recall_failed", error=str(e))
             return []
 
+    async def recall_by_query(self, query: str, limit: int = 50) -> list[str]:
+        """一站式 KG 召回：提取实体 → 关联召回 → 返回实体名称列表
+
+        Args:
+            query: 用户查询
+            limit: 最大返回实体数
+        Returns:
+            关联实体名称列表（用于反查记忆）
+        """
+        entities = await self.get_query_entities(query)
+        if not entities:
+            return []
+        return await self.recall_by_entities(entities, limit=limit)
+
     async def format_knowledge_context(self, knowledge: list[dict]) -> str:
         if not knowledge:
             return ""

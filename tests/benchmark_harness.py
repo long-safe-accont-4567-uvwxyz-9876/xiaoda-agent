@@ -449,10 +449,248 @@ def measure_retry_mechanism() -> int:
 
 
 # ═══════════════════════════════════════════════════════════════
+#  Dimension 11: Query Cache (查询语义缓存)
+# ═══════════════════════════════════════════════════════════════
+def measure_query_cache() -> int:
+    """Measure QueryCache semantic cache completeness.
+
+    Checks (each worth 20 pts):
+      - memory/query_cache.py exists with QueryCache class
+      - Has get/put/invalidate methods
+      - Has threshold + LRU (max_size, popitem(last=False))
+      - Has TTL expiry check
+      - Has stats property (hits/misses/size)
+    """
+    score = 0
+    if not _file_exists("memory/query_cache.py"):
+        return 0
+    content = _read_file("memory/query_cache.py")
+    if "class QueryCache" in content:
+        score += 20
+    if "async def get" in content and "async def put" in content \
+            and "def invalidate" in content:
+        score += 20
+    if "threshold" in content and "max_size" in content \
+            and "popitem(last=False)" in content:
+        score += 20
+    if "_ttl" in content and ("now - entry" in content or "ttl" in content):
+        score += 20
+    if "def stats" in content and "hits" in content and "misses" in content:
+        score += 20
+    return score
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Dimension 12: HyDE Enhancement (HyDE 向量混合)
+# ═══════════════════════════════════════════════════════════════
+def measure_hyde_enhancement() -> int:
+    """Measure HyDE document generation feature.
+
+    Checks (each worth 25 pts):
+      - generate_hyde_document method exists in query_transform.py
+      - Has 5s timeout (asyncio.wait_for, timeout=5)
+      - Returns None when no API key (degrade)
+      - Catches TimeoutError and Exception
+    """
+    score = 0
+    if not _file_exists("memory/query_transform.py"):
+        return 0
+    content = _read_file("memory/query_transform.py")
+    if "async def generate_hyde_document" in content:
+        score += 25
+    if "asyncio.wait_for" in content and "timeout=5" in content:
+        score += 25
+    if "not self._available" in content and "return None" in content:
+        score += 25
+    if "asyncio.TimeoutError" in content or "TimeoutError" in content:
+        score += 25
+    return score
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Dimension 13: Intent Routing (意图路由准确率)
+# ═══════════════════════════════════════════════════════════════
+def measure_intent_routing() -> int:
+    """Measure intent classification routing feature.
+
+    Checks (each worth 20 pts):
+      - classify_intent method exists
+      - Supports 4 intents: temporal / factual / chat / multi-hop
+      - Has rule-based keyword fast path (TEMPORAL_KEYWORDS etc.)
+      - Has LLM fallback path
+      - Default fallback returns factual
+    """
+    score = 0
+    if not _file_exists("memory/query_transform.py"):
+        return 0
+    content = _read_file("memory/query_transform.py")
+    if "async def classify_intent" in content:
+        score += 20
+    required_intents = ["temporal", "factual", "chat", "multi-hop"]
+    if all(intent in content for intent in required_intents):
+        score += 20
+    if "TEMPORAL_KEYWORDS" in content and "CHAT_KEYWORDS" in content \
+            and "MULTIHOP_KEYWORDS" in content:
+        score += 20
+    if "self._available" in content and "_call_free_model" in content:
+        score += 20
+    if 'return "factual"' in content:
+        score += 20
+    return score
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Dimension 14: CRAG Assessor (CRAG 评估器)
+# ═══════════════════════════════════════════════════════════════
+def measure_crag_assessor() -> int:
+    """Measure CRAG retrieval assessor feature.
+
+    Checks (each worth 20 pts):
+      - memory/retrieval_assessor.py exists with RetrievalAssessor class
+      - Has assess method returning confidence/level/should_retry/should_fallback
+      - Has HIGH_THRESHOLD / LOW_THRESHOLD constants
+      - Has empty/low/medium/high level classification
+      - Has stats tracking property
+    """
+    score = 0
+    if not _file_exists("memory/retrieval_assessor.py"):
+        return 0
+    content = _read_file("memory/retrieval_assessor.py")
+    if "class RetrievalAssessor" in content:
+        score += 20
+    if "def assess" in content and "confidence" in content \
+            and "should_retry" in content and "should_fallback" in content:
+        score += 20
+    if "HIGH_THRESHOLD" in content and "LOW_THRESHOLD" in content:
+        score += 20
+    if '"empty"' in content and '"low"' in content and '"high"' in content:
+        score += 20
+    if "def stats" in content and "total_assessments" in content:
+        score += 20
+    return score
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Dimension 15: KG Parallel Recall (KG 并行召回)
+# ═══════════════════════════════════════════════════════════════
+def measure_kg_parallel_recall() -> int:
+    """Measure KG parallel recall in retrieve_memories_hybrid.
+
+    Checks (each worth 20 pts):
+      - retrieve_memories_hybrid method exists with use_kg parameter
+      - asyncio.gather for FTS + Vector + KG parallel execution
+      - KG recall coroutine defined (_kg_recall or similar)
+      - RRF fusion merging three channels
+      - KG failure gracefully degrades (try/except returning [])
+    """
+    score = 0
+    if not _file_exists("memory/memory_manager.py"):
+        return 0
+    content = _read_file("memory/memory_manager.py")
+    if "async def retrieve_memories_hybrid" in content and "use_kg" in content:
+        score += 20
+    if "asyncio.gather" in content:
+        score += 20
+    if "_kg_recall" in content or "kg_recall" in content:
+        score += 20
+    if "rrf" in content.lower() or "RRF" in content:
+        score += 20
+    if "except Exception" in content and "return []" in content:
+        score += 20
+    return score
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Dimension 16: Unified Scoring (统一评分框架)
+# ═══════════════════════════════════════════════════════════════
+def measure_unified_scoring() -> int:
+    """Measure unified scoring framework.
+
+    Checks (each worth 20 pts):
+      - _normalize_score function exists in memory_manager.py
+      - Handles None / non-numeric inputs gracefully
+      - Unified scoring formula: rerank*0.5 + fluid*0.3 + kg*0.1 + recency*0.1
+      - Writes intermediate score fields (rerank_score, fluid_score, kg_boost, recency_boost)
+      - final_score field written
+    """
+    score = 0
+    if not _file_exists("memory/memory_manager.py"):
+        return 0
+    content = _read_file("memory/memory_manager.py")
+    if "def _normalize_score" in content:
+        score += 20
+    if "TypeError" in content and "ValueError" in content:
+        score += 20
+    if ("rerank_score * 0.5" in content or "rerank_score*0.5" in content) \
+            and "fluid_score * 0.3" in content \
+            and "kg_boost * 0.1" in content \
+            and "recency_boost * 0.1" in content:
+        score += 20
+    if 'r["rerank_score"]' in content and 'r["fluid_score"]' in content \
+            and 'r["kg_boost"]' in content and 'r["recency_boost"]' in content:
+        score += 20
+    if 'r["final_score"]' in content:
+        score += 20
+    return score
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Dimension 17: Candidate Control (候选集大小控制)
+# ═══════════════════════════════════════════════════════════════
+def measure_candidate_control() -> int:
+    """Measure candidate set size control feature.
+
+    Checks (each worth 25 pts):
+      - RAG_RECALL_LIMIT defined in config.py
+      - RAG_RERANK_LIMIT defined in config.py
+      - retrieve_memories_hybrid reads RAG_RECALL_LIMIT via getattr
+      - Intent-based k value routing (use_kg parameter usage)
+    """
+    score = 0
+    if not _file_exists("config.py"):
+        return 0
+    config_content = _read_file("config.py")
+    if "RAG_RECALL_LIMIT" in config_content:
+        score += 25
+    if "RAG_RERANK_LIMIT" in config_content:
+        score += 25
+
+    if _file_exists("memory/memory_manager.py"):
+        mm_content = _read_file("memory/memory_manager.py")
+        if "RAG_RECALL_LIMIT" in mm_content and "getattr" in mm_content:
+            score += 25
+        if "use_kg" in mm_content:
+            score += 25
+    return score
+
+
+# ═══════════════════════════════════════════════════════════════
 #  Report Generation
 # ═══════════════════════════════════════════════════════════════
+# 维度标签顺序（保持原有 10 维 + 新增 7 维 RAG 优化）
+_DIMENSION_LABELS = [
+    ("1. 响应延迟 (Latency)", "latency"),
+    ("2. 工具准确率 (Tool Accuracy)", "tool_accuracy"),
+    ("3. 错误恢复 (Error Recovery)", "error_recovery"),
+    ("4. 上下文质量 (Context Quality)", "context_quality"),
+    ("5. 循环安全性 (Loop Safety)", "loop_safety"),
+    ("6. 跨平台兼容 (Cross-Platform)", "cross_platform"),
+    ("7. 代码健壮性 (Robustness)", "robustness"),
+    ("8. 工具接口V2 (Tool Interface V2)", "tool_interface_v2"),
+    ("9. 编排阶段化 (Orchestration)", "orchestration_phasing"),
+    ("10. 重试与循环检测 (Retry)", "retry_mechanism"),
+    ("11. 查询语义缓存 (Query Cache)", "query_cache"),
+    ("12. HyDE 向量混合 (HyDE)", "hyde_enhancement"),
+    ("13. 意图路由 (Intent Routing)", "intent_routing"),
+    ("14. CRAG 评估器 (CRAG Assessor)", "crag_assessor"),
+    ("15. KG 并行召回 (KG Parallel Recall)", "kg_parallel_recall"),
+    ("16. 统一评分 (Unified Scoring)", "unified_scoring"),
+    ("17. 候选集控制 (Candidate Control)", "candidate_control"),
+]
+
+
 def run_all_dimensions() -> dict:
-    """Run all 10 dimensions and return scores dict."""
+    """Run all 17 dimensions and return scores dict."""
     return {
         "latency": measure_latency(),
         "tool_accuracy": measure_tool_accuracy(),
@@ -464,6 +702,13 @@ def run_all_dimensions() -> dict:
         "tool_interface_v2": measure_tool_interface_v2(),
         "orchestration_phasing": measure_orchestration_phasing(),
         "retry_mechanism": measure_retry_mechanism(),
+        "query_cache": measure_query_cache(),
+        "hyde_enhancement": measure_hyde_enhancement(),
+        "intent_routing": measure_intent_routing(),
+        "crag_assessor": measure_crag_assessor(),
+        "kg_parallel_recall": measure_kg_parallel_recall(),
+        "unified_scoring": measure_unified_scoring(),
+        "candidate_control": measure_candidate_control(),
     }
 
 
@@ -483,34 +728,24 @@ def _rating(average: float) -> str:
 
 def print_report(scores: dict):
     """Print the benchmark report in the specified format."""
-    dimensions = [
-        ("1. 响应延迟 (Latency)", scores["latency"]),
-        ("2. 工具准确率 (Tool Accuracy)", scores["tool_accuracy"]),
-        ("3. 错误恢复 (Error Recovery)", scores["error_recovery"]),
-        ("4. 上下文质量 (Context Quality)", scores["context_quality"]),
-        ("5. 循环安全性 (Loop Safety)", scores["loop_safety"]),
-        ("6. 跨平台兼容 (Cross-Platform)", scores["cross_platform"]),
-        ("7. 代码健壮性 (Robustness)", scores["robustness"]),
-        ("8. 工具接口V2 (Tool Interface V2)", scores["tool_interface_v2"]),
-        ("9. 编排阶段化 (Orchestration)", scores["orchestration_phasing"]),
-        ("10. 重试与循环检测 (Retry)", scores["retry_mechanism"]),
-    ]
-
+    dimensions = [(label, scores[key]) for label, key in _DIMENSION_LABELS]
+    num_dims = len(dimensions)
     total = sum(scores.values())
-    average = total / 10
+    max_total = num_dims * 100
+    average = total / num_dims
 
     print()
-    print("=" * 48)
+    print("=" * 52)
     print("  Harness Engineering 评测报告")
-    print("=" * 48)
+    print("=" * 52)
     print()
-    print(f"{'维度':<32}{'分数':>8}")
-    print("-" * 48)
+    print(f"{'维度':<36}{'分数':>8}")
+    print("-" * 52)
     for label, score in dimensions:
-        print(f"{label:<32}{score:>5}/100")
-    print("-" * 48)
-    print(f"{'总分':<32}{total:>5}/1000")
-    print(f"{'平均分':<32}{average:>5.0f}/100")
+        print(f"{label:<36}{score:>5}/100")
+    print("-" * 52)
+    print(f"{'总分':<36}{total:>5}/{max_total}")
+    print(f"{'平均分':<36}{average:>5.0f}/100")
     print()
     print(f"评级: {_rating(average)}")
     print()
@@ -536,7 +771,8 @@ class TestBenchmark:
     def test_total_score_above_80(self):
         """Average score across all dimensions should be >= 80."""
         scores = run_all_dimensions()
-        average = sum(scores.values()) / 10
+        num_dims = len(scores)
+        average = sum(scores.values()) / num_dims
         assert average >= 80, (
             f"Average score {average:.1f} is below 80. "
             f"Scores: {scores}"

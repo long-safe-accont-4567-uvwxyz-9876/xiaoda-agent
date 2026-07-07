@@ -420,3 +420,82 @@ class VectorStore:
         except Exception as e:
             logger.warning("vector_store.search_failed", error=str(e))
             return []
+
+    async def search_with_hyde(self, query: str, hyde_doc: str | None = None,
+                               alpha: float = 0.4, k: int = 50,
+                               candidate_ids: list[str] | None = None) -> list[dict]:
+        """HyDE 向量混合搜索
+
+        原查询向量 * (1-alpha) + HyDE 向量 * alpha
+
+        Args:
+            query: 原始查询
+            hyde_doc: HyDE 假设文档（None 则降级为普通搜索）
+            alpha: HyDE 向量权重（默认 0.4）
+            k: 返回结果数
+            candidate_ids: 候选 ID 限制
+        """
+        # 候选 ID 转换为 int（search 需要 list[int]）
+        cand_int = [int(c) for c in candidate_ids] if candidate_ids else None
+
+        # 无 HyDE 文档或未初始化，降级到普通搜索
+        if not hyde_doc or not self._initialized or not self._vec_conn:
+            tuples = await self.search(query, top_k=k, candidate_ids=cand_int)
+            return [{"rowid": r, "distance": d} for r, d in tuples]
+
+        try:
+            # 1. 获取原查询向量
+            query_vec = await self.embed(query)
+            if not query_vec:
+                tuples = await self.search(query, top_k=k, candidate_ids=cand_int)
+                return [{"rowid": r, "distance": d} for r, d in tuples]
+
+            # 2. 获取 HyDE 文档向量
+            hyde_vec = await self.embed(hyde_doc)
+            if not hyde_vec:
+                tuples = await self.search(query, top_k=k, candidate_ids=cand_int)
+                return [{"rowid": r, "distance": d} for r, d in tuples]
+
+            # 3. 混合：mixed = query_vec * (1-alpha) + hyde_vec * alpha
+            mixed = [(q * (1 - alpha)) + (h * alpha) for q, h in zip(query_vec, hyde_vec)]
+
+            # 4. 归一化（除以 L2 范数）
+            norm = sum(v * v for v in mixed) ** 0.5
+            if norm > 0:
+                mixed = [v / norm for v in mixed]
+
+            # 5. 用混合向量搜索
+            vec_json = json.dumps(mixed)
+            fetch_k = k * 2  # oversample for tie-breaking
+
+            def _do_hyde_search() -> list[dict]:
+                with self._lock:
+                    if self._closed:
+                        return []
+                    if cand_int is not None:
+                        cand_set = set(cand_int)
+                        oversample = min(k * 6, len(cand_set) + k * 2)
+                        rows = self._vec_conn.execute(
+                            "SELECT rowid, distance FROM memories_vec "
+                            "WHERE embedding MATCH vec_f32(?) AND k=? "
+                            "ORDER BY distance",
+                            [vec_json, oversample],
+                        ).fetchall()
+                        results = [(row[0], row[1]) for row in rows if row[0] in cand_set]
+                    else:
+                        rows = self._vec_conn.execute(
+                            "SELECT rowid, distance FROM memories_vec "
+                            "WHERE embedding MATCH vec_f32(?) AND k=? "
+                            "ORDER BY distance",
+                            [vec_json, fetch_k],
+                        ).fetchall()
+                        results = [(row[0], row[1]) for row in rows]
+                    # tie-breaking: distance 相同时按 rowid 稳定排序
+                    results.sort(key=lambda r: (r[1], r[0]))
+                    return [{"rowid": r, "distance": d} for r, d in results[:k]]
+
+            return await asyncio.to_thread(_do_hyde_search)
+        except Exception as e:
+            logger.warning("vector_store.search_with_hyde_failed", error=str(e))
+            tuples = await self.search(query, top_k=k, candidate_ids=cand_int)
+            return [{"rowid": r, "distance": d} for r, d in tuples]

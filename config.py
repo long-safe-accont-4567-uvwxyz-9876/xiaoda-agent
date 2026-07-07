@@ -822,6 +822,10 @@ RAG_RERANK_WEIGHT = _safe_float(os.getenv("RAG_RERANK_WEIGHT"), 0.65)
 RAG_KG_WEIGHT = _safe_float(os.getenv("RAG_KG_WEIGHT"), 0.15)
 RAG_IMPORTANCE_WEIGHT = _safe_float(os.getenv("RAG_IMPORTANCE_WEIGHT"), 0.20)
 
+# RAG 候选集大小（每路召回 Top-N，RRF 融合后送 Reranker 的数量）
+RAG_RECALL_LIMIT = _safe_int(os.getenv("RAG_RECALL_LIMIT"), 50)
+RAG_RERANK_LIMIT = _safe_int(os.getenv("RAG_RERANK_LIMIT"), 50)
+
 # ── 记忆/情绪阈值 (可环境变量覆盖) ──
 # 情绪触发安慰记忆检索的强度阈值 (0.0~1.0)
 EMOTION_TRIGGER_THRESHOLD = _safe_float(os.getenv("EMOTION_TRIGGER_THRESHOLD"), 0.5)
@@ -941,6 +945,8 @@ __all__ = [
     "RAG_RERANK_WEIGHT",
     "RAG_KG_WEIGHT",
     "RAG_IMPORTANCE_WEIGHT",
+    "RAG_RECALL_LIMIT",
+    "RAG_RERANK_LIMIT",
     "MEMORY_COLD_MAX",
     "MEMORY_WARM_MAX",
     "MEMORY_WARM_VEC_WEIGHT",

@@ -16,6 +16,8 @@ from db.fts_utils import (
 from .vector_store import VectorStore
 from .fluid_memory import FluidMemory
 from .memory_distiller import MemoryDistiller
+from .query_cache import QueryCache
+from .retrieval_assessor import RetrievalAssessor
 from utils.atomic_write import atomic_json_write
 from config import get_agent_display_name
 
@@ -143,6 +145,17 @@ def reciprocal_rank_fusion(ranked_lists: list[list[str]], *, k: int = 60, limit:
     return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
 
 
+def _normalize_score(score, default=0.0):
+    """归一化分数到 0-1"""
+    if score is None:
+        return default
+    try:
+        val = float(score)
+        return max(0.0, min(1.0, val))
+    except (TypeError, ValueError):
+        return default
+
+
 class RuleBasedMemoryExtractor:
     """基于正则的即时记忆提取器"""
 
@@ -222,6 +235,26 @@ class MemoryManager:
         # 冷启动路由: 记忆计数缓存 (TTL 60s, 避免每次检索都 COUNT 全表)
         self._memory_count_cache: int | None = None
         self._memory_count_ts: float = 0
+        # 查询语义缓存：基于嵌入向量余弦相似度匹配，命中则跳过完整检索流水线
+        import config as _cfg
+        self._query_cache = QueryCache(
+            embed_func=self._get_query_embedding_func(),
+            threshold=getattr(_cfg, 'QUERY_CACHE_THRESHOLD', 0.88),
+            max_size=getattr(_cfg, 'QUERY_CACHE_MAX_SIZE', 256),
+            ttl=getattr(_cfg, 'QUERY_CACHE_TTL', 300),
+        )
+        # CRAG 检索评估器：评估检索结果质量，低置信度时触发兜底策略
+        self._assessor = RetrievalAssessor()
+
+    def _get_query_embedding_func(self):
+        """返回查询嵌入函数（复用 VectorStore.embed），不可用时返回 None。
+
+        VectorStore 未注入或未配置 embed_client 时 embed 返回空列表，
+        QueryCache 会据此降级为禁用缓存。
+        """
+        if self.vec is not None:
+            return self.vec.embed
+        return None
 
     def set_knowledge_graph(self, kg: Any) -> None:
         self.kg = kg
@@ -311,7 +344,9 @@ class MemoryManager:
         self._last_message_time = time.time()
         self._pending_encode = True
 
-    async def retrieve_memories_hybrid(self, query: str, k: int = 5, use_reranker: bool = True) -> list[dict]:
+    async def retrieve_memories_hybrid(self, query: str, k: int = 5,
+                                        use_reranker: bool = True,
+                                        use_kg: bool = True) -> list[dict]:
         """FTS + 向量 RRF 混合检索 + Reranker 精排
 
         冷启动三段路由 (工业标准, 对标 Dify/Coze):
@@ -321,9 +356,17 @@ class MemoryManager:
 
         Args:
             use_reranker: 是否在本方法内调用 Reranker 精排。A3 并行检索场景下会置为
-                False，由调用方对合并后的候选池做一次性批量 Reranker。
+                False，由调用方对合并后的候选池做一次性批量 Reranker。闲聊型查询
+                也会置为 False 以节省 Reranker 调用成本。
+            use_kg: 是否启用 KG 第三路召回。闲聊型查询置为 False 避免不必要的
+                KG 检索开销。
         """
         _start = time.time()
+
+        # 候选集大小参数化（可通过 config 配置）
+        import config as _cfg
+        recall_limit = getattr(_cfg, 'RAG_RECALL_LIMIT', 50)  # 每路召回 Top-N
+        rerank_limit = getattr(_cfg, 'RAG_RERANK_LIMIT', 50)   # RRF 融合后送 Reranker 的数量
 
         # ── 冷启动路由: 判断用户记忆档位 ──
         tier = await self.get_memory_tier()
@@ -333,7 +376,7 @@ class MemoryManager:
         # 冷用户: 仅 FTS, 完全跳过向量检索 (零 Embedding 开销)
         # 但 FTS 无结果时仍尝试向量检索作为兜底（避免 cold_max > 0 时丢失向量召回）
         if is_cold:
-            fts_items = await self._hybrid_fts_search(query, k)
+            fts_items = await self._hybrid_fts_search(query, recall_limit)
             if fts_items:
                 results = fts_items[:k]
                 logger.info("memory.search", event="memory_search",
@@ -341,7 +384,7 @@ class MemoryManager:
                             duration_ms=int((time.time() - _start) * 1000))
                 return results
             # FTS 无结果，尝试向量兜底
-            vec_items = await self._hybrid_vec_search(query, k)
+            vec_items = await self._hybrid_vec_search(query, recall_limit)
             if vec_items:
                 logger.info("memory.search", event="memory_search",
                             query=query[:100], tier="cold+vec_fallback", results=len(vec_items),
@@ -352,40 +395,63 @@ class MemoryManager:
                         duration_ms=int((time.time() - _start) * 1000))
             return []
 
-        # ── 温/热用户: 并行执行 FTS 与向量检索 ──
+        # ── 温/热用户: 并行执行 FTS、向量、KG 三路检索 ──
         # ContextNest A1: 提取确定性 selector → 候选集, 向量检索在候选集内排序
         selectors = self._extract_deterministic_selectors(query)
-        candidate_ids = await self._get_candidate_ids_by_selectors(selectors, limit=k * 6)
+        candidate_ids = await self._get_candidate_ids_by_selectors(
+            selectors, limit=recall_limit * 6)
         if candidate_ids is not None:
             logger.debug("memory.deterministic_selector",
                          selector_keys=[sk for sk in selectors if sk != "has_selectors"],
                          candidate_count=len(candidate_ids))
-        fts_items, vec_items = await asyncio.gather(
-            self._hybrid_fts_search(query, k),
-            self._hybrid_vec_search(query, k, candidate_ids=candidate_ids),
+
+        # KG 召回协程（KG 可用时启用第三路，失败/空结果自动降级为两路融合）
+        async def _kg_recall() -> list[dict]:
+            if not self.kg or not use_kg:
+                return []
+            try:
+                related_names = await self.kg.recall_by_query(query, limit=recall_limit)
+                if not related_names:
+                    return []
+                return await self.memory.search_memories_by_entities(
+                    related_names, limit=recall_limit)
+            except Exception as e:
+                logger.debug("memory.kg_recall_failed", error=str(e))
+                return []
+
+        fts_items, vec_items, kg_items = await asyncio.gather(
+            self._hybrid_fts_search(query, recall_limit),
+            self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids),
+            _kg_recall(),
         )
 
-        # 空通道自动剔除: 两路都空则返回
-        if not fts_items and not vec_items:
+        # 空通道自动剔除: 三路都空则返回
+        if not fts_items and not vec_items and not kg_items:
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=0,
                         duration_ms=int((time.time() - _start) * 1000))
             return []
         # 单路有结果: 直接返回
-        if not fts_items:
+        if not fts_items and not vec_items:
+            results = kg_items[:k]
+            logger.info("memory.search", event="memory_search",
+                        query=query[:100], tier=tier, results=len(results),
+                        duration_ms=int((time.time() - _start) * 1000))
+            return results
+        if not fts_items and not kg_items:
             results = vec_items[:k]
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
-        if not vec_items:
+        if not vec_items and not kg_items:
             results = fts_items[:k]
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
 
-        # ── 加权 RRF 融合 ──
+        # ── 加权 RRF 融合（支持三路，空通道自动剔除） ──
         try:
             import config as _cfg
             warm_vec_weight = getattr(_cfg, "MEMORY_WARM_VEC_WEIGHT", 0.2)
@@ -397,16 +463,25 @@ class MemoryManager:
         else:
             fts_weight, vec_weight = 1.0, 1.0
 
-        oversample_k = k * 3
+        oversample_k = rerank_limit  # RRF 融合后取 Top-N 送 Reranker
         fts_ids = [str(item["id"]) for item in fts_items]
         vec_ids = [str(item["id"]) for item in vec_items]
+        # 构建多路 ID 列表（KG 通道无结果时降级为两路融合）
+        ranked_lists = [fts_ids, vec_ids]
+        weights = [fts_weight, vec_weight]
+        if kg_items:
+            for _kitem in kg_items:
+                _kitem["kg_recall"] = True
+            kg_ids = [str(item["id"]) for item in kg_items]
+            ranked_lists.append(kg_ids)
+            weights.append(0.8)  # KG 通道权重
         fused = reciprocal_rank_fusion(
-            [fts_ids, vec_ids], limit=oversample_k,
-            weights=[fts_weight, vec_weight],
+            ranked_lists, limit=oversample_k,
+            weights=weights,
         )
 
-        # 按 RRF 排序获取完整记录
-        all_items = {str(item["id"]): item for item in fts_items + vec_items}
+        # 按 RRF 排序获取完整记录（合并三路候选）
+        all_items = {str(item["id"]): item for item in fts_items + vec_items + kg_items}
 
         # Reranker 精排
         if use_reranker and self._reranker and self._reranker.available and len(fused) > k:
@@ -679,8 +754,34 @@ class MemoryManager:
 
         return default_k
 
-    async def retrieve_memories(self, query: str, k: int = 5, context: str = "") -> list[dict]:
+    async def retrieve_memories(self, query: str, k: int = 5, context: str = "",
+                                 _retry_attempted: bool = False) -> list[dict]:
         import config
+        # 查询语义缓存：命中则直接返回，跳过完整检索流水线
+        if getattr(config, 'QUERY_CACHE_ENABLED', True):
+            cached = await self._query_cache.get(query)
+            if cached is not None:
+                logger.info("memory.cache_hit", query=query[:100])
+                return cached
+
+        # 意图路由：按查询意图调整 k 与检索通道（闲聊型跳过 KG/Reranker）
+        intent = "factual"
+        if self._query_transformer and self._query_transformer.available:
+            try:
+                intent = await asyncio.wait_for(
+                    self._query_transformer.classify_intent(query), timeout=5)
+            except Exception:
+                intent = "factual"
+
+        # 按意图调整 k
+        if intent == "chat":
+            k = min(k, 2)
+        elif intent == "factual":
+            k = min(k, 3)
+        elif intent == "multi-hop":
+            k = max(k, 8)
+        # temporal 保持原 k
+
         # 时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索
         # 这让小妲能回答"昨天发生了什么"这类纯时间查询
         temporal_results = await self._try_temporal_search(query, k)
@@ -689,7 +790,11 @@ class MemoryManager:
 
         # A1: 智能短路 - 简单查询跳过查询变换，直接走混合检索
         if getattr(config, "RETRIEVAL_SMART_SKIP", True) and self._is_retrieval_simple(query):
-            results = await self.retrieve_memories_hybrid(query, k=k)
+            # 闲聊型查询跳过 KG 和 Reranker，节省检索成本
+            use_reranker = intent != "chat"
+            use_kg = intent != "chat"
+            results = await self.retrieve_memories_hybrid(
+                query, k=k, use_reranker=use_reranker, use_kg=use_kg)
             if results:
                 # 简单路径使用与复杂路径一致的评分逻辑，保证评分尺度统一
                 results = await self._apply_fluid_scoring(results)
@@ -700,8 +805,40 @@ class MemoryManager:
                     except Exception as e:
                         logger.debug("memory_manager.query_entities_failed", exc_info=True)
                 await self._compute_final_scores(query, results, config, query_entities)
+
+                # CRAG 检索评估
+                assessment = self._assessor.assess(query, results)
+                if assessment["should_retry"] and not _retry_attempted:
+                    logger.info("memory.crag_low_confidence",
+                                query=query[:100], confidence=assessment["confidence"])
+                    # 扩大候选集重试一次
+                    retry_k = k * 2
+                    retry_results = await self.retrieve_memories_hybrid(
+                        query, k=retry_k, use_reranker=True, use_kg=True)
+                    if retry_results:
+                        retry_results = await self._apply_fluid_scoring(retry_results)
+                        await self._compute_final_scores(query, retry_results, config, query_entities)
+                        retry_results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
+                        results = retry_results[:k]
+                        # 重新评估
+                        reassessment = self._assessor.assess(query, results)
+                        logger.info("memory.crag_retry_done",
+                                    confidence=reassessment["confidence"],
+                                    level=reassessment["level"])
+
                 results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
                 results = results[:k]
+
+            # CRAG 兜底：空结果走 importance fallback
+            if not results:
+                assessment = self._assessor.assess(query, results)
+                if assessment["should_fallback"]:
+                    logger.info("memory.crag_fallback", query=query[:100])
+                    results = await self._importance_fallback_search(k)
+
+            # 写入缓存
+            if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
+                await self._query_cache.put(query, results)
             return results
 
         # 查询变换：改写 + 扩展
@@ -725,38 +862,41 @@ class MemoryManager:
         # 流体记忆评分（艾宾浩斯遗忘曲线 + 访问强化）
         results = await self._apply_fluid_scoring(results)
 
-        # I6: KG 召回通道 — query 实体 → KG 关联实体 → 反查记忆加入候选池
-        #     让 KG 真正参与召回（原实现仅在评分阶段后置增强）
+        # 保留实体提取用于评分增强，但不再后置追加候选
+        # （KG 召回已前移到 retrieve_memories_hybrid 的并行召回阶段，统一走 RRF + Reranker）
         query_entities: set[str] = set()
         if self.kg:
             try:
                 query_entities = await self.kg.get_query_entities(query)
-                if query_entities:
-                    related_names = await self.kg.recall_by_entities(
-                        query_entities, limit=5)
-                    if related_names:
-                        kg_hits = await self.memory.search_memories_by_entities(
-                            related_names, limit=k)
-                        _existing_ids = {str(r.get("id", "")) for r in results}
-                        _added = 0
-                        for _m in kg_hits:
-                            _mid = str(_m.get("id", ""))
-                            if _mid and _mid not in _existing_ids:
-                                _existing_ids.add(_mid)
-                                # KG 召回的记忆没有 rerank/rrf 分数，给默认值参与综合评分
-                                _m.setdefault("effective_score",
-                                              _m.get("importance", 0.5) * 0.6)
-                                _m["kg_recall"] = True
-                                results.append(_m)
-                                _added += 1
-                        if _added:
-                            logger.debug("memory.kg_recall",
-                                         entities=len(related_names), added=_added)
             except Exception as e:
-                logger.debug("memory.kg_recall_failed", error=str(e))
+                logger.debug("memory.query_entities_failed", error=str(e))
 
         # KG 增强评分 + 综合评分 (复用已提取的 query_entities, 避免 N+1 LLM)
         await self._compute_final_scores(query, results, config, query_entities)
+
+        # CRAG 检索评估
+        assessment = self._assessor.assess(query, results)
+        if assessment["should_retry"] and not _retry_attempted:
+            logger.info("memory.crag_low_confidence",
+                        query=query[:100], confidence=assessment["confidence"])
+            # 扩大候选集重试一次
+            retry_k = k * 2
+            retry_results = await self.retrieve_memories_hybrid(
+                query, k=retry_k, use_reranker=True, use_kg=True)
+            if retry_results:
+                retry_results = await self._apply_fluid_scoring(retry_results)
+                await self._compute_final_scores(query, retry_results, config, query_entities)
+                retry_results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
+                results = retry_results[:k]
+                # 重新评估
+                reassessment = self._assessor.assess(query, results)
+                logger.info("memory.crag_retry_done",
+                            confidence=reassessment["confidence"],
+                            level=reassessment["level"])
+
+        if assessment["should_fallback"] and not results:
+            logger.info("memory.crag_fallback", query=query[:100])
+            results = await self._importance_fallback_search(k)
 
         results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
         results = results[:k]
@@ -770,6 +910,9 @@ class MemoryManager:
         # KG 上下文增强（保留原有逻辑）
         await self._apply_kg_context_enhance(results)
 
+        # 写入缓存
+        if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
+            await self._query_cache.put(query, results)
         return results
 
     async def _try_temporal_search(self, query: str, k: int) -> list[dict] | None:
@@ -1000,6 +1143,7 @@ class MemoryManager:
             fluid_score = _fluid.score(similarity, created_at, access_count)
             if _fluid.should_filter(fluid_score):
                 continue
+            r["fluid_score"] = fluid_score
             importance = r.get("importance", 0.5)
             r["effective_score"] = importance * fluid_score
             filtered.append(r)
@@ -1014,16 +1158,48 @@ class MemoryManager:
                 logger.debug("memory.fluid_access_count_commit_failed", error=str(e))
         return filtered
 
+    def _compute_recency_boost(self, item: dict) -> float:
+        """计算时间新鲜度加成 (0-1)。
+
+        1.0 = 今天，0.0 = 一年前。无时间信息给中等偏低值 0.3。
+        """
+        ts = item.get("timestamp") or item.get("created_at") or item.get("updated_at")
+        if not ts:
+            return 0.3  # 无时间信息，给中等偏低值
+        try:
+            if isinstance(ts, str):
+                dt = _datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            elif isinstance(ts, (int, float)):
+                dt = _datetime.datetime.fromtimestamp(ts)
+            else:
+                return 0.3
+
+            days_ago = (_datetime.datetime.now(dt.tzinfo) - dt).days
+            if days_ago <= 0:
+                return 1.0
+            elif days_ago <= 7:
+                return 0.8
+            elif days_ago <= 30:
+                return 0.5
+            elif days_ago <= 90:
+                return 0.3
+            else:
+                return 0.1
+        except Exception:
+            return 0.3
+
     async def _compute_final_scores(self, query: str, results: list[dict],
                                       config: Any,
                                       query_entities: set[str] | None = None) -> None:
-        """KG 增强评分 + 综合评分: final = α×rerank + β×kg_boost + γ×(importance×decay)。
+        """统一评分公式: final = 0.5×rerank + 0.3×fluid + 0.1×kg + 0.1×recency。
 
+        将流体记忆评分、KG 增强评分、时间新鲜度统一到一个公式中。
         I6: 复用已存储的 entities 字段 + 预提取的 query_entities，
         避免 N+1 次 LLM 调用（原 get_relevance_boost 性能黑洞）。
         """
         if not results:
             return
+        # KG 实体匹配加成（复用已提取的 query_entities，避免 N+1 LLM 调用）
         kg_boosts: list[float] = [0.0] * len(results)
         if self.kg:
             try:
@@ -1045,15 +1221,33 @@ class MemoryManager:
                         query_entities, memory_entities_list)
             except Exception as e:
                 logger.debug("memory.kg_boost_failed", error=str(e))
-        # 综合评分
-        alpha = getattr(config, "RAG_RERANK_WEIGHT", 0.65)
-        beta = getattr(config, "RAG_KG_WEIGHT", 0.15)
-        gamma = getattr(config, "RAG_IMPORTANCE_WEIGHT", 0.20)
+        # 统一评分公式
         for i, r in enumerate(results):
-            rerank_score = r.get("rerank_score", r.get("rrf_score", r.get("effective_score", 0.5)))
-            kg_boost = kg_boosts[i] if i < len(kg_boosts) else 0.0
-            importance_decay = r.get("effective_score", 0.5)
-            r["final_score"] = alpha * rerank_score + beta * kg_boost + gamma * importance_decay
+            # rerank_score: 从 rerank_score 或 rrf_score 字段获取，归一化到 0-1
+            rerank_raw = r.get("rerank_score", r.get("rrf_score", 0.0))
+            rerank_score = _normalize_score(rerank_raw, default=0.0)
+            # fluid_score: 从 fluid_score 字段获取（_apply_fluid_scoring 已计算）
+            fluid_score = _normalize_score(r.get("fluid_score"), default=0.5)
+            # kg_boost: KG 召回标记或实体匹配加成（0.5-1.0），否则 0
+            kg_boost_val = kg_boosts[i] if i < len(kg_boosts) else 0.0
+            if r.get("kg_recall"):
+                # KG 召回候选保底 0.5
+                kg_boost_val = max(kg_boost_val, 0.5)
+            kg_boost = _normalize_score(kg_boost_val, default=0.0)
+            # recency_boost: 时间新鲜度
+            recency_boost = self._compute_recency_boost(r)
+            # 写入中间分数字段（用于调试和可观测性）
+            r["rerank_score"] = rerank_score
+            r["fluid_score"] = fluid_score
+            r["kg_boost"] = kg_boost
+            r["recency_boost"] = recency_boost
+            # 统一评分公式
+            r["final_score"] = (
+                rerank_score * 0.5      # Reranker 精排分数
+                + fluid_score * 0.3      # 流体记忆评分
+                + kg_boost * 0.1         # KG 增强分数
+                + recency_boost * 0.1    # 时间新鲜度
+            )
 
     async def _apply_topic_trigger(self, query: str, results: list[dict],
                                      k: int) -> list[dict]:
