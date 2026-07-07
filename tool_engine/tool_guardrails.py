@@ -147,52 +147,89 @@ class ToolGuardrails:
             # L1+L2: 工具特定规则
             rules = _TOOL_VALIDATION_RULES.get(tool_name)
             if rules:
-                for field_name in rules.get("required", []):
-                    val = arguments.get(field_name)
-                    if val is None or (isinstance(val, str) and not val.strip()):
-                        return False, f"L1验证失败: {rules['checks'][0][2] if rules['checks'] else field_name + ' 是必填字段'}"
+                ok, reason = self._validate_required_fields(rules, arguments)
+                if not ok:
+                    return False, reason
 
-                for field_name, check_type, err_msg in rules.get("checks", []):
-                    val = arguments.get(field_name)
-                    if val is None:
-                        continue
-                    if check_type == "non_empty_str":
-                        if not isinstance(val, str) or not val.strip():
-                            return False, f"L1验证失败: {err_msg}"
-                    elif check_type.startswith("max_len:"):
-                        limit = int(check_type.split(":")[1])
-                        if isinstance(val, str) and len(val) > limit:
-                            return False, f"L2验证失败: {err_msg}"
-                    elif check_type == "url_format":
-                        if isinstance(val, str) and not re.match(r"https?://", val):
-                            return False, f"L2验证失败: {err_msg}"
-                    elif check_type == "non_empty_list":
-                        if not isinstance(val, list) or len(val) == 0:
-                            return False, f"L1验证失败: {err_msg}"
-                    elif check_type.startswith("max_list_len:"):
-                        limit = int(check_type.split(":")[1])
-                        if isinstance(val, list) and len(val) > limit:
-                            return False, f"L2验证失败: {err_msg}"
-                    elif check_type == "no_path_traversal":
-                        if isinstance(val, str) and ".." in val:
-                            return False, f"L3验证失败: {err_msg}"
+                ok, reason = self._validate_field_checks(rules, arguments)
+                if not ok:
+                    return False, reason
 
             # L3: 危险模式检查（主要针对 shell_command）
-            if tool_name == "shell_command":
-                cmd = arguments.get("command", "")
-                if isinstance(cmd, str):
-                    for pattern, desc in _DANGEROUS_PATTERNS:
-                        try:
-                            if re.search(pattern, cmd):
-                                return False, f"L3验证失败: {desc}"
-                        except re.error:
-                            logger.warning(f"正则模式异常: {pattern}")
-                            continue
+            ok, reason = self._check_dangerous_patterns(tool_name, arguments)
+            if not ok:
+                return False, reason
 
             return True, ""
         except Exception as e:
             logger.error(f"validate_args 异常: {e}", tool_name=tool_name)
             return False, f"验证异常: {e}"
+
+    def _validate_required_fields(self, rules: dict, arguments: dict) -> tuple[bool, str]:
+        """L1: 必填字段检查。"""
+        for field_name in rules.get("required", []):
+            val = arguments.get(field_name)
+            if val is None or (isinstance(val, str) and not val.strip()):
+                err_msg = rules['checks'][0][2] if rules['checks'] else field_name + ' 是必填字段'
+                return False, f"L1验证失败: {err_msg}"
+        return True, ""
+
+    def _validate_field_checks(self, rules: dict, arguments: dict) -> tuple[bool, str]:
+        """L1/L2: 按规则检查字段类型与值范围。"""
+        for field_name, check_type, err_msg in rules.get("checks", []):
+            val = arguments.get(field_name)
+            if val is None:
+                continue
+
+            ok, level, reason = self._apply_single_check(val, check_type, err_msg)
+            if not ok:
+                return False, f"{level}验证失败: {reason}"
+        return True, ""
+
+    @staticmethod
+    def _apply_single_check(val, check_type: str, err_msg: str) -> tuple[bool, str, str]:
+        """应用单个 check 规则，返回 (ok, level, reason)。
+
+        level 为 "L1"/"L2"/"L3" 之一；ok=True 时 level/reason 无意义。
+        """
+        if check_type == "non_empty_str":
+            if not isinstance(val, str) or not val.strip():
+                return False, "L1", err_msg
+        elif check_type.startswith("max_len:"):
+            limit = int(check_type.split(":")[1])
+            if isinstance(val, str) and len(val) > limit:
+                return False, "L2", err_msg
+        elif check_type == "url_format":
+            if isinstance(val, str) and not re.match(r"https?://", val):
+                return False, "L2", err_msg
+        elif check_type == "non_empty_list":
+            if not isinstance(val, list) or len(val) == 0:
+                return False, "L1", err_msg
+        elif check_type.startswith("max_list_len:"):
+            limit = int(check_type.split(":")[1])
+            if isinstance(val, list) and len(val) > limit:
+                return False, "L2", err_msg
+        elif check_type == "no_path_traversal":
+            if isinstance(val, str) and ".." in val:
+                return False, "L3", err_msg
+        return True, "", ""
+
+    @staticmethod
+    def _check_dangerous_patterns(tool_name: str, arguments: dict) -> tuple[bool, str]:
+        """L3: 危险模式检查（主要针对 shell_command）。"""
+        if tool_name != "shell_command":
+            return True, ""
+        cmd = arguments.get("command", "")
+        if not isinstance(cmd, str):
+            return True, ""
+        for pattern, desc in _DANGEROUS_PATTERNS:
+            try:
+                if re.search(pattern, cmd):
+                    return False, f"L3验证失败: {desc}"
+            except re.error:
+                logger.warning(f"正则模式异常: {pattern}")
+                continue
+        return True, ""
 
     async def record_call(self, tool_name: str, arguments: dict,
                     success: bool, output: str = "") -> None:

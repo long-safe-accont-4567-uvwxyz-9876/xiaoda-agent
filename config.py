@@ -189,9 +189,16 @@ def _init_user_resources() -> None:
     if not bundled_config.exists():
         return
 
-    # 1. 复制 agent.json5 到用户配置目录（首次运行）
     user_config_dir = _KIOXIA_BASE / "config"
     user_config_dir.mkdir(parents=True, exist_ok=True)
+
+    _init_agent_json5(bundled_config, user_config_dir)
+    _init_agents_subdir(bundled_config, user_config_dir)
+    _init_workspace_templates(bundled_config)
+
+
+def _init_agent_json5(bundled_config: Path, user_config_dir: Path) -> None:
+    """复制 agent.json5 到用户配置目录（首次运行）"""
     bundled_agent_json5 = bundled_config / "agent.json5"
     user_agent_json5 = user_config_dir / "agent.json5"
     if bundled_agent_json5.exists() and not user_agent_json5.exists():
@@ -201,7 +208,9 @@ def _init_user_resources() -> None:
         except Exception as e:
             print(f"[config] Warning: failed to copy agent.json5: {e}")
 
-    # 2. 复制 agents/ 子目录（子 Agent 配置和人格文件）
+
+def _init_agents_subdir(bundled_config: Path, user_config_dir: Path) -> None:
+    """复制 agents/ 子目录（子 Agent 配置和人格文件）并清理旧版配置"""
     bundled_agents = bundled_config / "agents"
     user_agents = user_config_dir / "agents"
     if bundled_agents.exists():
@@ -217,7 +226,7 @@ def _init_user_resources() -> None:
                     except Exception as e:
                         print(f"[config] Warning: failed to copy {item.name}: {e}")
 
-    # 2.1 清理旧版 agent 配置文件（升级后旧名称不应残留）
+    # 清理旧版 agent 配置文件（升级后旧名称不应残留）
     if user_agents.exists():
         _deprecated_agents = {"nahida.json", "keli.json", "yinlang.json", "xilian.json", "nike.json"}
         for old_file in _deprecated_agents:
@@ -229,52 +238,58 @@ def _init_user_resources() -> None:
                 except Exception as e:
                     print(f"[config] Warning: failed to remove {old_file}: {e}")
 
-    # 3. 复制 workspace/ 模板文件（SOUL.md, IDENTITY.md 等）
-    # 非用户编辑类文件（TOOLS.md, AGENTS.md）强制更新，用户编辑类文件不覆盖
+
+def _init_workspace_templates(bundled_config: Path) -> None:
+    """复制 workspace/ 模板文件（SOUL.md, IDENTITY.md 等）及子目录
+
+    非用户编辑类文件（TOOLS.md, AGENTS.md）强制更新，用户编辑类文件不覆盖。
+    """
     bundled_workspace = bundled_config / "workspace"
-    if bundled_workspace.exists():
-        WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
-        # 这些文件用户不会编辑，每次启动强制更新
-        _force_update_files = {"TOOLS.md", "AGENTS.md", "HEARTBEAT.md"}
-        for item in bundled_workspace.iterdir():
-            if item.is_dir():
+    if not bundled_workspace.exists():
+        return
+
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    # 这些文件用户不会编辑，每次启动强制更新
+    _force_update_files = {"TOOLS.md", "AGENTS.md", "HEARTBEAT.md"}
+    for item in bundled_workspace.iterdir():
+        if item.is_dir():
+            continue
+        # .tpl 文件复制时去除 .tpl 后缀
+        target_name = item.name[:-4] if item.name.endswith('.tpl') else item.name
+        target = WORKSPACE_DIR / target_name
+        # 强制更新文件总是覆盖，用户编辑文件不覆盖
+        # SOUL.md 特殊处理：如果包含旧名（nahida），强制更新
+        should_copy = target_name in _force_update_files or not target.exists()
+        if not should_copy and target_name == "SOUL.md" and target.exists():
+            try:
+                old_content = target.read_text(encoding="utf-8")
+                if "nahida" in old_content.lower() or "纳西妲" in old_content:
+                    should_copy = True
+                    print(f"[config] Updating outdated SOUL.md (contains old name)")
+            except (OSError, UnicodeDecodeError):
+                logger.debug("config.soul_md_check_failed", exc_info=True)
+        if should_copy:
+            try:
+                shutil.copy2(item, target)
+            except (OSError, shutil.Error) as e:
+                logger.debug("config.workspace_copy_failed %s: %s", target_name, e)
+
+    # 复制 workspace/ 子目录（workflows/, skills/ 等默认资源，不覆盖已有文件）
+    for sub_name in ("workflows", "skills"):
+        bundled_sub = bundled_workspace / sub_name
+        if not bundled_sub.is_dir():
+            continue
+        user_sub = WORKSPACE_DIR / sub_name
+        user_sub.mkdir(parents=True, exist_ok=True)
+        for item in bundled_sub.iterdir():
+            if not item.is_file():
                 continue
-            # .tpl 文件复制时去除 .tpl 后缀
-            target_name = item.name[:-4] if item.name.endswith('.tpl') else item.name
-            target = WORKSPACE_DIR / target_name
-            # 强制更新文件总是覆盖，用户编辑文件不覆盖
-            # SOUL.md 特殊处理：如果包含旧名（nahida），强制更新
-            should_copy = target_name in _force_update_files or not target.exists()
-            if not should_copy and target_name == "SOUL.md" and target.exists():
-                try:
-                    old_content = target.read_text(encoding="utf-8")
-                    if "nahida" in old_content.lower() or "纳西妲" in old_content:
-                        should_copy = True
-                        print(f"[config] Updating outdated SOUL.md (contains old name)")
-                except (OSError, UnicodeDecodeError):
-                    logger.debug("config.soul_md_check_failed", exc_info=True)
-            if should_copy:
+            target = user_sub / item.name
+            if not target.exists():
                 try:
                     shutil.copy2(item, target)
                 except (OSError, shutil.Error) as e:
-                    logger.debug("config.workspace_copy_failed %s: %s", target_name, e)
-
-        # 4. 复制 workspace/ 子目录（workflows/, skills/ 等默认资源，不覆盖已有文件）
-        for sub_name in ("workflows", "skills"):
-            bundled_sub = bundled_workspace / sub_name
-            if not bundled_sub.is_dir():
-                continue
-            user_sub = WORKSPACE_DIR / sub_name
-            user_sub.mkdir(parents=True, exist_ok=True)
-            for item in bundled_sub.iterdir():
-                if not item.is_file():
-                    continue
-                target = user_sub / item.name
-                if not target.exists():
-                    try:
-                        shutil.copy2(item, target)
-                    except (OSError, shutil.Error) as e:
-                        logger.debug("config.workspace_sub_copy_failed %s: %s", target_name, e)
+                    logger.debug("config.workspace_sub_copy_failed %s: %s", item.name, e)
 
 
 _init_user_resources()

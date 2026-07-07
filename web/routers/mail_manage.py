@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import threading
 from typing import Any
 
@@ -132,6 +133,101 @@ async def get_mail_inbox(request: Request, limit: int = Query(10, ge=1, le=50)) 
 
 
 # ── 邮箱授权状态检查 ──────────────────────────────────────────
+def _extract_first_json_object(text: str, log_tag: str = "") -> dict:
+    """从文本中提取第一个完整 JSON 对象（跳过 "tip:" 行等非 JSON 后缀）。
+
+    解析失败时返回空 dict；若提供 log_tag 则记录 debug 日志。
+    """
+    text = text.strip()
+    brace_count = 0
+    end_pos = 0
+    for i, ch in enumerate(text):
+        if ch == '{':
+            brace_count += 1
+        elif ch == '}':
+            brace_count -= 1
+            if brace_count == 0:
+                end_pos = i + 1
+                break
+    if not end_pos:
+        return {}
+    try:
+        return json.loads(text[:end_pos])
+    except Exception as exc:
+        if log_tag:
+            logger.debug("mail.{}_parse_failed: {}", log_tag, exc, exc_info=True)
+        return {}
+
+
+def _extract_agent_email_from_inbox(out: str) -> str:
+    """从 inbox 列表输出中提取 Agent 自己的邮箱（收件人 to 字段）。"""
+    try:
+        envelope = _extract_first_json_object(out, log_tag="inbox")
+        data = envelope.get("data", {})
+        if isinstance(data, list) and data:
+            first = data[0] if isinstance(data[0], dict) else {}
+            # 从 to（收件人）提取 Agent 自己的邮箱，而非 from（发件人）
+            to_field = first.get("to", "")
+            if isinstance(to_field, list) and to_field:
+                return to_field[0].get("email", "") if isinstance(to_field[0], dict) else str(to_field[0])
+            if isinstance(to_field, str) and "@" in to_field:
+                return to_field
+            if isinstance(to_field, dict):
+                return to_field.get("email", "")
+    except Exception as exc:
+        logger.debug("mail.inbox_parse_failed: {}", exc, exc_info=True)
+    return ""
+
+
+def _match_email_regex(text: str) -> str:
+    """从文本中正则匹配第一个邮箱地址（兜底）。"""
+    try:
+        import re
+        m = re.search(r'[\w.+-]+@[\w.-]+\.\w+', text)
+        if m:
+            return m.group(0)
+    except Exception as exc:
+        logger.debug("mail.email_regex_match_failed: {}", exc, exc_info=True)
+    return ""
+
+
+async def _fetch_agent_email(out_auth: str, cfg: Any) -> tuple[str, str]:
+    """获取 Agent 注册的邮箱地址。
+
+    优先读缓存，否则用 message +list 查询，最后正则兜底。
+    返回 (email, error)，error 非空表示需提前返回（如 OAuth 失效）。
+    """
+    from tools.mail_tools import _run_agently
+
+    # 先从缓存中读取（之前成功获取时保存的）
+    cached_email = cfg.get("mail.agent_email", "")
+    if cached_email:
+        return cached_email, ""
+
+    # 尝试用 message +list 获取，从收件人（to）字段提取 Agent 自己的邮箱
+    rc, out, err = await _run_agently(
+        ["message", "+list", "--dir", "inbox", "--limit", "1"],
+        timeout=15,
+    )
+    if rc == 3:
+        # invalid_grant: OAuth 授权已失效，需要重新授权
+        return "", "邮箱 OAuth 授权已失效，请重新授权"
+
+    email = ""
+    if rc == 0:
+        email = _extract_agent_email_from_inbox(out)
+
+    # 如果仍未获取到，尝试正则匹配（兜底）
+    if not email:
+        email = _match_email_regex(out_auth)
+
+    # 缓存到配置中，下次不再查询
+    if email:
+        cfg.set("mail.agent_email", email)
+
+    return email, ""
+
+
 @router.get("/mail/auth-status", response_model=Envelope[dict])
 async def get_mail_auth_status(request: Request) -> Any:
     """检查 agently-cli 安装状态和邮箱授权状态。
@@ -144,7 +240,6 @@ async def get_mail_auth_status(request: Request) -> Any:
       - error: 错误信息
     """
     from tools.mail_tools import _resolve_agently_cli, _run_agently
-    import json as _json
 
     cli_path = _resolve_agently_cli()
     if not cli_path:
@@ -172,25 +267,8 @@ async def get_mail_auth_status(request: Request) -> Any:
         })
 
     # 解析 auth status JSON（agently-cli 输出多行格式化 JSON，需整体解析）
-    auth_data = {}
-    try:
-        text = out_auth.strip()
-        # 取第一个完整 JSON 对象（跳过 "tip:" 行等非 JSON 后缀）
-        brace_count = 0
-        end_pos = 0
-        for i, ch in enumerate(text):
-            if ch == '{':
-                brace_count += 1
-            elif ch == '}':
-                brace_count -= 1
-                if brace_count == 0:
-                    end_pos = i + 1
-                    break
-        if end_pos:
-            auth_envelope = _json.loads(text[:end_pos])
-            auth_data = auth_envelope.get("data", {})
-    except Exception as exc:
-        logger.debug("mail.auth_status_parse_failed: {}", exc, exc_info=True)
+    auth_envelope = _extract_first_json_object(out_auth, log_tag="auth_status")
+    auth_data = auth_envelope.get("data", {})
 
     logged_in = auth_data.get("logged_in", False)
     if not logged_in:
@@ -204,7 +282,6 @@ async def get_mail_auth_status(request: Request) -> Any:
 
     # 检查 token 状态
     # token_status 为 auto_refresh 时表示 CLI 会自动刷新 token，即使 expires_at 已过期也是正常的
-    email = ""
     token_status = auth_data.get("token_status", "")
     if token_status not in ("auto_refresh", "valid", ""):
         return Envelope(data={
@@ -216,69 +293,16 @@ async def get_mail_auth_status(request: Request) -> Any:
         })
 
     # logged_in=true 且 token_status 正常，尝试获取 Agent 注册的邮箱地址
-    # 先从缓存中读取（之前成功获取时保存的）
     cfg = _get_cfg_service(request)
-    cached_email = cfg.get("mail.agent_email", "")
-    if cached_email:
-        email = cached_email
-    else:
-        # 尝试用 message +list 获取，从收件人（to）字段提取 Agent 自己的邮箱
-        rc, out, err = await _run_agently(
-            ["message", "+list", "--dir", "inbox", "--limit", "1"],
-            timeout=15,
-        )
-        if rc == 3:
-            # invalid_grant: OAuth 授权已失效，需要重新授权
-            return Envelope(data={
-                "installed": True,
-                "cli_path": cli_path,
-                "authorized": False,
-                "email": "",
-                "error": "邮箱 OAuth 授权已失效，请重新授权",
-            })
-        if rc == 0:
-            try:
-                text = out.strip()
-                # 提取第一个完整 JSON 对象
-                brace_count = 0
-                end_pos = 0
-                for _i, _ch in enumerate(text):
-                    if _ch == '{':
-                        brace_count += 1
-                    elif _ch == '}':
-                        brace_count -= 1
-                        if brace_count == 0:
-                            end_pos = _i + 1
-                            break
-                envelope = _json.loads(text[:end_pos]) if end_pos else {}
-                data = envelope.get("data", {})
-                if isinstance(data, list) and data:
-                    first = data[0] if isinstance(data[0], dict) else {}
-                    # 从 to（收件人）提取 Agent 自己的邮箱，而非 from（发件人）
-                    to_field = first.get("to", "")
-                    if isinstance(to_field, list) and to_field:
-                        email = to_field[0].get("email", "") if isinstance(to_field[0], dict) else str(to_field[0])
-                    elif isinstance(to_field, str) and "@" in to_field:
-                        email = to_field
-                    elif isinstance(to_field, dict):
-                        email = to_field.get("email", "")
-            except Exception as exc:
-                logger.debug("mail.inbox_parse_failed: {}", exc, exc_info=True)
-
-        # 如果仍未获取到，尝试正则匹配（兜底）
-        if not email:
-            try:
-                import re
-                # 尝试从 auth status 的 tip 中获取
-                m = re.search(r'[\w.+-]+@[\w.-]+\.\w+', out_auth)
-                if m:
-                    email = m.group(0)
-            except Exception as exc:
-                logger.debug("mail.email_regex_match_failed: {}", exc, exc_info=True)
-
-        # 缓存到配置中，下次不再查询
-        if email:
-            cfg.set("mail.agent_email", email)
+    email, error = await _fetch_agent_email(out_auth, cfg)
+    if error:
+        return Envelope(data={
+            "installed": True,
+            "cli_path": cli_path,
+            "authorized": False,
+            "email": "",
+            "error": error,
+        })
 
     return Envelope(data={
         "installed": True,

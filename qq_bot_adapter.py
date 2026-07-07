@@ -483,13 +483,39 @@ class AIQQBot(botpy.Client):
         _save_master_openid(op_openid)
 
     async def on_c2c_message_create(self, message: C2CMessage) -> None:
-        content = (getattr(message, 'content', None) or "").strip()
+        parsed = await self._parse_c2c_message(message)
+        if parsed is None:
+            return
+        content, image_data, user_input, user_openid, user_id = parsed
 
-        image_data, attachment_info = await self._process_message_attachments(message)
+        is_master = self._identify_c2c_master(user_openid)
+        if not is_master:
+            logger.info("qq_bot.non_master_message", user_id=user_id, openid=user_openid, content=user_input[:80])
 
-        if not content and not attachment_info:
+        if self.nudge_engine:
+            self.nudge_engine.poke()
+
+        session_id = await self._get_or_create_c2c_session(user_openid)
+
+        msg_id = getattr(message, 'id', '') or getattr(message, 'message_id', '')
+        if msg_id and self._is_duplicate_msg(msg_id):
             return
 
+        if await self._handle_c2c_quick_commands(content, message, user_openid, user_id):
+            return
+
+        await self._process_c2c_reply(message, user_input, user_id, user_openid, session_id, is_master, image_data)
+
+    async def _parse_c2c_message(self, message: C2CMessage) -> tuple[str, list, str, str, str] | None:
+        """解析 C2C 消息内容和发送者信息。
+
+        返回 (content, image_data, user_input, user_openid, user_id)，
+        若消息为空（无文本且无附件）返回 None。
+        """
+        content = (getattr(message, 'content', None) or "").strip()
+        image_data, attachment_info = await self._process_message_attachments(message)
+        if not content and not attachment_info:
+            return None
         user_input = f"{content} {attachment_info}".strip() if content else attachment_info
 
         user_openid = getattr(message.author, 'user_openid', '') if hasattr(message, 'author') else ''
@@ -497,49 +523,49 @@ class AIQQBot(botpy.Client):
         if user_openid:
             self._last_c2c_openid = user_openid
         logger.info("qq_bot.c2c_message", user_id=user_id, openid=user_openid, content=user_input[:80])
+        return content, image_data, user_input, user_openid, user_id
 
-        # 主人识别：对比 openid 与 MASTER_QQ_OPENID（逗号分隔多值）
+    def _identify_c2c_master(self, user_openid: str) -> bool:
+        """识别发送者是否为主人；首次私聊时自动将发送者绑定为主人。"""
         master_raw = os.getenv("MASTER_QQ_OPENID", "").strip()
         master_ids = [x.strip() for x in master_raw.split(",") if x.strip()]
         is_master = bool(master_ids) and user_openid in master_ids
-
         # 私聊自动绑定：首次私聊自动将发送者绑定为主人
         if not is_master and user_openid and not master_ids:
             _save_master_openid(user_openid)
             is_master = True
             logger.info("qq_bot.c2c_auto_bind", openid=user_openid)
+        return is_master
 
-        if not is_master:
-            logger.info("qq_bot.non_master_message", user_id=user_id, openid=user_openid, content=user_input[:80])
-
-        if self.nudge_engine:
-            self.nudge_engine.poke()
-
-        session_id = ""
+    async def _get_or_create_c2c_session(self, user_openid: str) -> str:
+        """获取或创建会话，失败时返回空字符串。"""
         try:
             session = await self.agent.get_session(user_openid)
             if session:
-                session_id = session["id"]
-            else:
-                session_id = await self.agent.create_session(user_openid)
+                return session["id"]
+            return await self.agent.create_session(user_openid)
         except Exception as e:
             logger.error(f"qq_bot.c2c_session_failed: {e}")
+            return ""
 
-        msg_id = getattr(message, 'id', '') or getattr(message, 'message_id', '')
-        if msg_id and self._is_duplicate_msg(msg_id):
-            return
-
+    async def _handle_c2c_quick_commands(self, content: str, message: C2CMessage,
+                                          user_openid: str, user_id: str) -> bool:
+        """处理快速指令（/whoami、HITL 审批回复）。返回 True 表示已处理，跳过正常流程。"""
         # /whoami 指令：回复发送者的 openid（用于主人在 Setup 中填写）
         if content.strip() in ("/whoami", "/whoami "):
             await message.reply(content=f"你的 OpenID 是：\n{user_openid}\n\n在 Setup 配置页面的「主人 QQ OpenID」填入此值即可绑定主人身份。", msg_seq=_next_msg_seq())
-            return
-
+            return True
         # HITL: 若用户有待审批请求，先尝试匹配回复（"确认"/"取消"），匹配则跳过正常处理
         if self.hitl_enabled:
             approval_user = user_openid or user_id
             if await self.im_approval.handle_user_reply(approval_user, content):
-                return
+                return True
+        return False
 
+    async def _process_c2c_reply(self, message: C2CMessage, user_input: str, user_id: str,
+                                  user_openid: str, session_id: str, is_master: bool,
+                                  image_data: list) -> None:
+        """发送 ACK、调用 agent 处理消息并回复，处理超时与异常。"""
         try:
             await message.reply(content=f"{get_agent_display_name('xiaoda')}收到啦，正在想～🌿", msg_seq=_next_msg_seq())
 

@@ -365,7 +365,8 @@ class AgentContext:
         self._cached_stable_prompt = ""
         self._stable_cache_ts = 0.0
 
-    def build_messages(self, user_input: str, source: str = "") -> list[dict]:
+    def _build_stable_content(self, user_input: str) -> str:
+        """构建 Stable 层：场景感知提示 + instinct + 硬约束 + 自我模型。"""
         # === Stable 层：场景感知动态排序 ===
         # 根据用户输入自动调整 MD 模块顺序，让最相关的靠近用户输入
         from prompt_builder import build_scene_aware_prompt
@@ -394,14 +395,42 @@ class AgentContext:
         except Exception as e:
             logger.debug("agent_context.self_model_inject_failed", error=str(e))
 
-        # === Context 层（按项目/用户缓存，偶尔变化）===
-        context_parts = []
-        dynamic = self._build_dynamic_prompt()
-        if dynamic:
-            context_parts.append(dynamic)
-        context_content = context_parts[0] if context_parts else ""
+        return stable_content
 
-        # === Volatile 层（每次重建，频繁变化）===
+    def _format_memory_retrieval(self) -> str:
+        """格式化 memory_retrieval 为 volatile 层片段。
+
+        始终返回非空字符串：有记忆则拼接，无记忆或无有效内容则返回元认知提示。
+        """
+        if not self.memory_retrieval:
+            # 元认知：未检索到任何记忆时，提示 agent
+            return '[元认知提示] 我没有找到相关记忆。如果用户问的是过去的事，请诚实说"我不记得了"；如果是不确定的信息，请说"我不太确定"。不要假装记得或编造。'
+
+        mem_texts = []
+        for m in self.memory_retrieval[:5]:
+            summary = m.get("summary", "")
+            if summary:
+                # 注入时间戳，让 LLM 知道每条记忆发生的时间（解决"没有时间戳"问题）
+                # Q1-1: 按语义边界截断，避免硬切断关键信息
+                ts = m.get("timestamp", 0)
+                if ts:
+                    try:
+                        _date_str = time.strftime("%m-%d %H:%M", time.localtime(float(ts)))
+                        mem_texts.append(f"· [{_date_str}] {_smart_truncate_summary(summary)}")
+                    except (ValueError, TypeError, OSError):
+                        mem_texts.append(f"· {_smart_truncate_summary(summary)}")
+                else:
+                    mem_texts.append(f"· {_smart_truncate_summary(summary)}")
+            kg_ctx = m.get("kg_context", "")
+            if kg_ctx:
+                mem_texts.append(kg_ctx[:200])
+        if mem_texts:
+            return "[相关记忆]\n" + "\n".join(mem_texts)
+        # 元认知：检索到记忆但无有效内容时，提示 agent
+        return '[元认知提示] 我检索了记忆但没有找到有效内容，如果用户问的是过去的事，请诚实说"我不太记得了"。'
+
+    def _build_volatile_content(self, source: str) -> str:
+        """构建 Volatile 层：时间/情绪/记忆/关注点/待办/小莉/场景约束。"""
         volatile_parts = []
         volatile_parts.append(self._build_time_context())
         # 注入持续情绪状态（让 agent 有情绪惯性）
@@ -414,33 +443,7 @@ class AgentContext:
             logger.debug("agent_context.emotion_state_inject_failed", error=str(e))
         if self.emotion_hint:
             volatile_parts.append(f"[感知到{self.current_address_term}的情绪：{self.emotion_hint}]")
-        if self.memory_retrieval:
-            mem_texts = []
-            for m in self.memory_retrieval[:5]:
-                summary = m.get("summary", "")
-                if summary:
-                    # 注入时间戳，让 LLM 知道每条记忆发生的时间（解决"没有时间戳"问题）
-                    # Q1-1: 按语义边界截断，避免硬切断关键信息
-                    ts = m.get("timestamp", 0)
-                    if ts:
-                        try:
-                            _date_str = time.strftime("%m-%d %H:%M", time.localtime(float(ts)))
-                            mem_texts.append(f"· [{_date_str}] {_smart_truncate_summary(summary)}")
-                        except (ValueError, TypeError, OSError):
-                            mem_texts.append(f"· {_smart_truncate_summary(summary)}")
-                    else:
-                        mem_texts.append(f"· {_smart_truncate_summary(summary)}")
-                kg_ctx = m.get("kg_context", "")
-                if kg_ctx:
-                    mem_texts.append(kg_ctx[:200])
-            if mem_texts:
-                volatile_parts.append("[相关记忆]\n" + "\n".join(mem_texts))
-            else:
-                # 元认知：检索到记忆但无有效内容时，提示 agent
-                volatile_parts.append('[元认知提示] 我检索了记忆但没有找到有效内容，如果用户问的是过去的事，请诚实说"我不太记得了"。')
-        else:
-            # 元认知：未检索到任何记忆时，提示 agent
-            volatile_parts.append('[元认知提示] 我没有找到相关记忆。如果用户问的是过去的事，请诚实说"我不记得了"；如果是不确定的信息，请说"我不太确定"。不要假装记得或编造。')
+        volatile_parts.append(self._format_memory_retrieval())
         if self.notebook_focus:
             volatile_parts.append(f"[当前关注点] {self.notebook_focus}")
         if self.pending_tasks:
@@ -459,7 +462,20 @@ class AgentContext:
             except Exception as e:
                 logger.debug("agent_context.scene_constraints_inject_failed", error=str(e))
 
-        volatile_content = "\n".join(volatile_parts) if volatile_parts else ""
+        return "\n".join(volatile_parts) if volatile_parts else ""
+
+    def build_messages(self, user_input: str, source: str = "") -> list[dict]:
+        stable_content = self._build_stable_content(user_input)
+
+        # === Context 层（按项目/用户缓存，偶尔变化）===
+        context_parts = []
+        dynamic = self._build_dynamic_prompt()
+        if dynamic:
+            context_parts.append(dynamic)
+        context_content = context_parts[0] if context_parts else ""
+
+        # === Volatile 层（每次重建，频繁变化）===
+        volatile_content = self._build_volatile_content(source)
 
         # 拼接三层
         system_content = stable_content

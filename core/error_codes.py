@@ -217,6 +217,25 @@ def from_exception(exc: Exception) -> "ErrorCodeEnum":
     exc_msg = str(exc).lower()
 
     # 2. 优先匹配 openai 库异常类型（若已安装）
+    reason = _from_openai_exception(exc, exc_msg)
+    if reason is not None:
+        return reason
+
+    # 3. 内置异常类型匹配
+    reason = _from_builtin_exception(exc, _asyncio)
+    if reason is not None:
+        return reason
+
+    # 4. 消息关键字兜底匹配
+    reason = _from_message_keywords(exc_name, exc_msg)
+    if reason is not None:
+        return reason
+
+    return ErrorCodeEnum.E_SYS999
+
+
+def _from_openai_exception(exc: Exception, exc_msg: str) -> "ErrorCodeEnum | None":
+    """优先匹配 openai 库异常类型（若已安装）"""
     try:
         import openai as _openai
 
@@ -250,8 +269,11 @@ def from_exception(exc: Exception) -> "ErrorCodeEnum":
                 return ErrorCodeEnum.E_LLM001
     except Exception:
         pass
+    return None
 
-    # 3. 内置异常类型匹配
+
+def _from_builtin_exception(exc: Exception, _asyncio: Any) -> "ErrorCodeEnum | None":
+    """内置异常类型匹配"""
     if isinstance(exc, (TimeoutError, _asyncio.TimeoutError)):
         return ErrorCodeEnum.E_NET001
     if isinstance(exc, ConnectionError):
@@ -265,8 +287,11 @@ def from_exception(exc: Exception) -> "ErrorCodeEnum":
         return ErrorCodeEnum.E_SYS001
     if isinstance(exc, RecursionError):
         return ErrorCodeEnum.E_SYS003
+    return None
 
-    # 4. 消息关键字兜底匹配
+
+def _from_message_keywords(exc_name: str, exc_msg: str) -> "ErrorCodeEnum | None":
+    """消息关键字兜底匹配"""
     if "ssrf" in exc_msg:
         return ErrorCodeEnum.E_NET004
     if "timeout" in exc_name or "timeout" in exc_msg:
@@ -281,5 +306,4 @@ def from_exception(exc: Exception) -> "ErrorCodeEnum":
         return ErrorCodeEnum.E_LLM003
     if "connection" in exc_name or "connection" in exc_msg:
         return ErrorCodeEnum.E_NET002
-
-    return ErrorCodeEnum.E_SYS999
+    return None
