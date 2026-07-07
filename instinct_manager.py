@@ -37,6 +37,7 @@ EXTRACT_PROMPT = """从以下对话中提取可复用的用户偏好或行为模
 
 
 class InstinctManager:
+    """本能管理器，调用免费模型维护与提取本能规则。"""
 
     def __init__(self, db: DatabaseManager, router: ModelRouter) -> None:
         self.db = db

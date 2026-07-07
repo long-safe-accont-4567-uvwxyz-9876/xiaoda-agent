@@ -10,7 +10,7 @@ from typing import Any
 from loguru import logger as _loguru_logger
 
 
-_stdlib_logger = logging.getLogger("vision_service")
+logger = logging.getLogger("vision_service")
 
 
 def _parse_env_gpu_index() -> int | None:

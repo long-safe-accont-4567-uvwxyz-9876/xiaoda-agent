@@ -26,6 +26,7 @@ FAILURE_TEMPLATES = {
 
 
 class ResultWrapper:
+    """结果包装器，将工具输出转写为用户友好的回复。"""
 
     def __init__(self, router: Optional[Any]=None) -> None:
         self.router = router

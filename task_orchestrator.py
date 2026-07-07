@@ -110,6 +110,7 @@ SINGLE_EXECUTE = "__single_execute__"
 
 
 class TaskGraph:
+    """任务图，组织节点与条件边，编译后驱动从入口到结束的执行流。"""
     def __init__(self) -> None:
         self._nodes: dict[str, Callable] = {}
         self._edges: dict[str, Callable] = {}
@@ -205,6 +206,7 @@ class TaskGraph:
 
 
 class RouterNode:
+    """路由节点，按规则或模型将用户输入路由到目标 Agent。"""
     _route_cache = RouteCache()  # class-level shared cache
 
     @staticmethod
@@ -494,6 +496,7 @@ class RouterNode:
 
 
 class ParallelAgentNode:
+    """并行执行节点，将任务拆分给多个 Agent 并行处理。"""
     def __init__(self, dispatcher: AgentDispatcher, route_client: AsyncOpenAI, route_model: str = None, belief_router: BeliefRouter | None = None) -> None:
         self._dispatcher = dispatcher
         self._route_client = route_client
@@ -776,6 +779,7 @@ class ParallelAgentNode:
 
 
 class AgentNode:
+    """单 Agent 执行节点，将任务交给路由目标 Agent 处理。"""
     def __init__(self, dispatcher: AgentDispatcher, belief_router: BeliefRouter | None = None) -> None:
         self._dispatcher = dispatcher
         self._belief_router = belief_router
@@ -832,6 +836,7 @@ class AgentNode:
 
 
 class SynthesisNode:
+    """综合节点，汇总各 Agent 中间结果生成最终回复。"""
     def __init__(self, client: AsyncOpenAI, model: str = None, xiaoda_chat_callback: Optional[Any]=None) -> None:
         self._client = client
         self._model = model or os.getenv("MODEL_NAME", "mimo-v2.5")
@@ -897,6 +902,7 @@ class SynthesisNode:
 
 
 async def route_condition(state: TaskState) -> str:
+    """路由条件函数，根据目标数量决定走向并行、单执行或结束。"""
     targets = state.route_targets
     if not targets or (len(targets) == 1 and targets[0] == "xiaoda"):
         return END
@@ -910,6 +916,7 @@ async def route_condition(state: TaskState) -> str:
 def build_task_graph(dispatcher: AgentDispatcher, agent_configs: dict,
                      route_client: AsyncOpenAI, route_model: str = None,
                      xiaoda_chat_callback: Optional[Any]=None) -> TaskGraph:
+    """构建任务图，组装路由/并行/单执行/综合节点并连接条件边。"""
     db_path = str(DATA_DIR / "agent.db")
     belief_router = BeliefRouter(db_path=db_path)
     router = RouterNode(route_client, route_model or os.getenv("MODEL_NAME", "mimo-v2.5"), belief_router=belief_router)
@@ -959,6 +966,7 @@ async def run_task_graph(graph: TaskGraph, user_input: str, user_id: str,
                          session_id: str = "", status_callback: Optional[Any]=None,
                          agent_configs: dict = None,
                          dispatcher: AgentDispatcher = None) -> TaskState:
+    """运行任务图，驱动从路由到综合的完整执行流。"""
     state = TaskState(
         user_input=user_input,
         user_id=user_id,

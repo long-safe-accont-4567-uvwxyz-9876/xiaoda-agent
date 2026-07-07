@@ -284,6 +284,7 @@ async def run_qq_bot(agent: "AgentCore", *, sandbox: bool = False) -> None:
 
 
 class AIQQBot(botpy.Client):
+    """QQ 机器人适配器，处理消息接收、去重与 AgentCore 调用。"""
     def __init__(self, *args: Any, agent: "AgentCore | None" = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         # 支持注入共享的 AgentCore（与 WebUI 同进程同实例），未注入则自建（独立运行模式）

@@ -1044,6 +1044,7 @@ def _ensure_workspace_template() -> None:
 
 
 def load_workspace_file(filename: str) -> str:
+    """从 workspace 目录读取指定文件内容（不存在则返回空串）。"""
     from config import WORKSPACE_DIR
     filepath = WORKSPACE_DIR / filename
     if filepath.exists():
@@ -1288,6 +1289,7 @@ def _inject_xp_and_extra(system_prompt: str, user_id: str | None, extra_context:
 def build_system_prompt(extra_context: str = "", address_term: str = "爸爸",
                          user_id: str | None = None,
                          user_input: str | None = None) -> str:
+    """构建系统提示词，组合稳定段缓存、动态段与额外上下文。"""
     # P6: 增量上下文构建路径 —— 稳定段缓存 + 动态段每次构建
     # extra_context 延迟到末尾注入，保证新段落顺序:
     # base → mental → permanent → emotional → XP → extra_context

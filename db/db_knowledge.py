@@ -6,6 +6,7 @@ from loguru import logger
 
 
 class KnowledgeDB:
+    """管理知识实体与关系数据的持久化。"""
 
     def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn

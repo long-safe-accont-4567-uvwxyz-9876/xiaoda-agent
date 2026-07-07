@@ -23,6 +23,7 @@ from loguru import logger
 
 
 class Severity(str, Enum):
+    """异常行为严重等级枚举。"""
     INFO = "info"
     WARNING = "warning"
     CRITICAL = "critical"

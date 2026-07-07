@@ -300,6 +300,7 @@ def _encode_voice_file(path: Path) -> str:
 
 
 class TTSEngine:
+    """驱动文本到语音合成的引擎。"""
     _SYNTHESIS_CACHE_MAX_SIZE = 200
 
     _PRECOMPOSED_PHRASES = {

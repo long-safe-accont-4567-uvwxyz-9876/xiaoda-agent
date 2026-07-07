@@ -86,6 +86,7 @@ from agent_core.sub_agent_manager import SubAgentManagerMixin
 
 
 class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
+    """AI 智能体核心，集成消息处理、工具执行与子代理管理等能力。"""
     def __init__(self) -> None:
         self.router = ModelRouter()
         self.db = DatabaseManager()

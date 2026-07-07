@@ -333,6 +333,7 @@ class ToolGuardrails:
 _default_guardrails: ToolGuardrails | None = None
 
 def get_tool_guardrails() -> ToolGuardrails:
+    """获取工具护栏全局单例。"""
     global _default_guardrails
     if _default_guardrails is None:
         _default_guardrails = ToolGuardrails()

@@ -21,6 +21,7 @@ from plugins.sdk import Plugin
 
 
 class PluginState(str, Enum):
+    """插件生命周期状态枚举。"""
     FOUND = "found"
     LOADED = "loaded"
     ENABLED = "enabled"

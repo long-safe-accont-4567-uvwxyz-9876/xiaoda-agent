@@ -279,6 +279,7 @@ _singleton: Optional[UserProfileLearner] = None
 
 
 def get_user_profile_learner() -> UserProfileLearner:
+    """获取用户画像学习器单例。"""
     global _singleton
     if _singleton is None:
         _singleton = UserProfileLearner()

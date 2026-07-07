@@ -20,6 +20,7 @@ class ErrorContext:
 
 
 class SmartErrorHandler:
+    """智能错误处理器，记录并解析错误上下文。"""
 
     def __init__(self, db: Optional[Any]=None, dispatcher: Optional[Any]=None) -> None:
         self._db = db

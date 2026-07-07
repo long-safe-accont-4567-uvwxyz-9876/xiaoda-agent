@@ -13,6 +13,7 @@ from config import get_agent_display_name
 
 
 class NudgeEngine:
+    """驱动主动问候、提醒等轻推（nudge）行为的引擎。"""
 
     MIN_PROACTIVE_INTERVAL = 3600
 

@@ -195,6 +195,7 @@ class ConstraintInjector:
 
 # 模块级便捷函数（仿 permanent_memory 模式）
 def get_constraint_injector(path: Path | None = None) -> ConstraintInjector:
+    """获取约束注入器单例（模块级便捷函数）。"""
     return ConstraintInjector.get_instance(path)
 
 

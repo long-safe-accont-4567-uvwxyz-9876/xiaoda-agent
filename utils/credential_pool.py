@@ -15,6 +15,8 @@ from .error_classifier import ClassifiedError, FailoverReason
 
 
 class CredentialState(Enum):
+    """凭证状态机枚举。"""
+
     OK = "ok"
     EXHAUSTED = "exhausted"    # 限速耗尽，冷却后可恢复
     DEAD = "dead"              # 永久失败（如 token_revoked）

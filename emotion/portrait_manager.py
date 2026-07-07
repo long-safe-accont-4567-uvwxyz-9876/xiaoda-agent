@@ -102,6 +102,7 @@ def _build_consolidate_prompt(old_section: Any, recent_memories: Any, recent_not
 
 
 class PortraitManager:
+    """管理用户画像的整合、更新与读取。"""
 
     def __init__(self, db: Any, memory: MemoryDB, router: Any, notebook: Any=None) -> None:
         self._db = db

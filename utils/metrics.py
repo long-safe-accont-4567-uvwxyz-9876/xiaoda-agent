@@ -4,6 +4,8 @@ from loguru import logger
 
 
 class Metrics:
+    """指标采集器，提供计数器/计时器/仪表/直方图。"""
+
     def __init__(self) -> None:
         """初始化指标采集器 (counter/timer/gauge/histogram)."""
         self._counters = defaultdict(int)

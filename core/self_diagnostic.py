@@ -23,6 +23,7 @@ from loguru import logger
 
 
 class ReportLevel(str, Enum):
+    """自我诊断报告级别枚举，标识信息/警告/严重三档。"""
     INFO = "info"
     WARNING = "warning"
     CRITICAL = "critical"

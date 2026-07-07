@@ -7,6 +7,7 @@ from utils.metrics import metrics
 
 
 class ToolPermission(Enum):
+    """工具权限级别枚举。"""
     READ_ONLY = "read_only"
     READ_WRITE = "read_write"
     EXECUTE = "execute"

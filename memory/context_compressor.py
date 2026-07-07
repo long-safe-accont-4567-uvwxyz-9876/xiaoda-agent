@@ -247,6 +247,7 @@ class ContextCompressor:
 _default_compressor: ContextCompressor | None = None
 
 def get_context_compressor(router: Optional[Any]=None) -> ContextCompressor:
+    """获取全局默认的上下文压缩器单例。"""
     global _default_compressor
     if _default_compressor is None:
         _default_compressor = ContextCompressor(router=router)

@@ -141,6 +141,7 @@ def detect_emotion(text: str) -> dict:
 
 
 def build_emotion_hint(emotion: dict) -> str:
+    """根据情绪效价与强度生成给 LLM 的回应语调提示。"""
     valence = emotion.get("valence", "neutral")
     intensity = emotion.get("intensity", 0.0)
 

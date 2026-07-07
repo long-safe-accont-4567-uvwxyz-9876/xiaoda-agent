@@ -659,6 +659,7 @@ def _strip_json5_comments(text: str) -> str:
 
 
 def load_agent_config() -> dict:
+    """加载并解析 agent 配置文件（JSON5 风格，自动去除注释）。"""
     if not AGENT_CONFIG_PATH.exists():
         return {}
     raw = AGENT_CONFIG_PATH.read_text(encoding="utf-8")

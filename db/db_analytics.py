@@ -5,6 +5,7 @@ from loguru import logger
 
 
 class AnalyticsDB:
+    """管理 API 用量、成本等分析数据的读写。"""
 
     def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn
