@@ -436,10 +436,19 @@ class AgentRegistry:
             # voice_ref 更新
             if "voice_ref" in data:
                 self._save_xiaoda_field("voice_ref", data["voice_ref"])
-            # display_name 更新：持久化 + 同步 MAIN_AGENT_META，使全局立即可见
+            # display_name 更新：持久化 + 旧名加入 deprecated_names + 同步 MAIN_AGENT_META
             if "display_name" in data and data["display_name"]:
-                self._save_xiaoda_field("display_name", data["display_name"])
-                MAIN_AGENT_META["display_name"] = data["display_name"]
+                old_dn = self._load_xiaoda_cfg().get("display_name", "")
+                new_dn = data["display_name"]
+                if old_dn and old_dn != new_dn:
+                    # 旧显示名自动加入 deprecated_names，确保 SOUL.md 等文件中的旧名被替换
+                    cfg = self._load_xiaoda_cfg()
+                    deps = cfg.get("deprecated_names", [])
+                    if old_dn not in deps:
+                        deps.append(old_dn)
+                        self._save_xiaoda_field("deprecated_names", deps)
+                self._save_xiaoda_field("display_name", new_dn)
+                MAIN_AGENT_META["display_name"] = new_dn
             # display_name_en 更新：持久化 + 同步 MAIN_AGENT_META
             if "display_name_en" in data and data["display_name_en"]:
                 self._save_xiaoda_field("display_name_en", data["display_name_en"])
@@ -450,6 +459,22 @@ class AgentRegistry:
         # 记录旧值，用于判断是否需要热重载客户端
         old_provider = agent.config.provider
         old_model = agent.config.model
+        # display_name 更新时，旧名自动加入 deprecated_names
+        if "display_name" in data and data["display_name"]:
+            old_dn = agent.config.display_name or ""
+            new_dn = data["display_name"]
+            if old_dn and old_dn != new_dn:
+                fp = self._file(name)
+                try:
+                    cfg_data = json.loads(fp.read_text(encoding="utf-8"))
+                except Exception:
+                    cfg_data = {}
+                deps = cfg_data.get("deprecated_names", [])
+                if old_dn not in deps:
+                    deps.append(old_dn)
+                    cfg_data["deprecated_names"] = deps
+                    fp.write_text(json.dumps(cfg_data, ensure_ascii=False, indent=2),
+                                  encoding="utf-8")
         # 当 provider 变更时，自动解析 base_url/api_key_env，避免不一致配置
         new_provider = data.get("provider")
         if new_provider and new_provider != old_provider:
