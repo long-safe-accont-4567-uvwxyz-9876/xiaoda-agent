@@ -726,7 +726,7 @@ def _load_cached_modules(address_term: str) -> dict[str, str]:
                  "USER.md", "MEMORY.md", "HEARTBEAT.md"):
         content = _load(name)
         if content:
-            modules[name] = content
+            modules[name] = _replace_placeholders(content, address_term)
 
     skills = load_skills()
     if skills:
