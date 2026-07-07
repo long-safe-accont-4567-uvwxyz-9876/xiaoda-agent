@@ -81,9 +81,10 @@ async def update_agent(name: str, body: dict, request: Request, _user: str = Dep
         # 重新加载所有子 Agent 的人格文件（因为人格文件中可能引用了被修改的 agent）
         try:
             core = request.app.state.core
-            if core and hasattr(core, 'dispatcher'):
-                for agent_name, sub_agent in core.dispatcher._dispatchers.items():
-                    sub_agent.reload_personality()
+            if core and hasattr(core, 'dispatcher') and hasattr(core.dispatcher, '_agents'):
+                for agent_name, sub_agent in core.dispatcher._agents.items():
+                    if hasattr(sub_agent, 'reload_personality'):
+                        sub_agent.reload_personality()
         except Exception as exc:
             logger.debug("agents.reload_personality_failed: {}", exc, exc_info=True)
     # 通知所有标签页刷新（display_name 等变更需全局联动）

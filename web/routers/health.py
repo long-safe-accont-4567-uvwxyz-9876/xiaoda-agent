@@ -17,6 +17,7 @@ from web.routers.auth import get_current_user
 router = APIRouter(tags=["health"], dependencies=[Depends(get_current_user)])
 
 _all_running = False
+_all_running_lock = asyncio.Lock()
 
 
 @router.get("/health/self", response_model=Envelope[dict])
@@ -87,10 +88,11 @@ async def test_one(probe_id: str, request: Request) -> Any:
 async def test_all(request: Request) -> Any:
     """一键全检：后台串行执行，逐项进度走 WS health_progress。"""
     global _all_running
-    if _all_running:
+    if _all_running_lock.locked():
         raise HTTPException(409, "全量自检已在进行中")
     core = request.app.state.core
-    _all_running = True  # 提前设置，防止 TOCTOU 竞态
+    await _all_running_lock.acquire()
+    _all_running = True
 
     async def _run() -> None:
         global _all_running
@@ -115,6 +117,7 @@ async def test_all(request: Request) -> Any:
             logger.warning("health.run_all_failed error={}", str(e))
         finally:
             _all_running = False
+            _all_running_lock.release()
 
     asyncio.create_task(_run())
     return Envelope(data={"started": True})

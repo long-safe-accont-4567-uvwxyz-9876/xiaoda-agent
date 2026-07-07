@@ -57,12 +57,10 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
     """
     for pattern, offset_days, span_days in _TEMPORAL_PATTERNS:
         if pattern.search(query):
-            now = _datetime.datetime.now()
-            # 计算起始日期的 00:00:00
+            now = _datetime.datetime.now(_datetime.timezone.utc).astimezone()
             start_date = (now - _datetime.timedelta(days=offset_days + span_days - 1)).replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
-            # 结束日期的 23:59:59（用次日 00:00:00 表示开区间）
             end_date = (now - _datetime.timedelta(days=offset_days - 1)).replace(
                 hour=0, minute=0, second=0, microsecond=0
             ) if offset_days > 0 else now

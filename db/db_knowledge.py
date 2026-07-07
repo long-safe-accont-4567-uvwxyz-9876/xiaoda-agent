@@ -101,12 +101,12 @@ class KnowledgeDB:
             except Exception as e:
                 logger.warning(f"knowledge.fts_search_failed, fallback to LIKE: {e}")
 
-        # 降级：LIKE 查询（原逻辑）
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         cursor = await self._conn.execute(
             """SELECT * FROM knowledge_entities
-               WHERE name LIKE ?
+               WHERE name LIKE ? ESCAPE '\\'
                ORDER BY updated_at DESC LIMIT ?""",
-            (f"%{query}%", limit),
+            (f"%{escaped}%", limit),
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]

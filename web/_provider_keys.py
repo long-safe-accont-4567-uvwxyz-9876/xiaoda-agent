@@ -88,16 +88,15 @@ def load_provider_key(provider_id: str) -> str:
     raw = fp.read_text(encoding="utf-8").strip()
     if not raw:
         return ""
-    # 先尝试解密（credential_vault / base64）
     decoded = _decode_key(raw)
     if decoded is not None:
-        # 旧版格式（base64/明文）首次读取后自动迁移到 credential_vault
         try:
             from security.credential_vault import is_encrypted
             if not is_encrypted(raw):
                 fp.write_text(_encode_key(decoded) + "\n", encoding="utf-8")
         except OSError:
-            pass  # 迁移失败不影响本次读取
+            pass
         return decoded
-    # 3. 无法识别的格式：按明文返回
-    return raw
+    from loguru import logger
+    logger.warning("provider_key.unrecognized_format provider={} raw_len={}", provider_id, len(raw))
+    return ""

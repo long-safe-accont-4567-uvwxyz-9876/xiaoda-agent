@@ -103,7 +103,8 @@ def _migrate_old_data(old_dir: Path, new_dir: Path, name: str) -> None:
         shutil.copytree(old_dir, new_dir, dirs_exist_ok=True)
         print(f"[config] {name} migrated from {old_dir} to {new_dir}")
     except Exception as e:
-        print(f"[config] Warning: failed to migrate {name}: {e}")
+        import logging
+        logging.getLogger(__name__).warning("config.migrate_failed name=%s error=%s", name, e)
 
 def get_credentials_dir() -> Path:
     """获取凭证目录。优先使用 KIOXIA 外置存储，否则使用可执行文件同级 credentials/。"""

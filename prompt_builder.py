@@ -64,12 +64,11 @@ _stable_prompt_cache_mtimes: dict = None
 _module_cache: dict[str, str] = {}
 _module_cache_mtimes: dict[str, float] = {}
 
-# 场景签名缓存: {排序签名元组: 拼接后的 prompt 字符串}
-# 不同输入只要产生相同模块排序 → 共享缓存 → KV Cache 命中
 _scene_prompt_cache: dict[tuple, str] = {}
 
-# 当前会话的场景签名 (用于 B 级场景保持排序连续性)
 _current_scene_sig: tuple = ()
+_scene_cache_hits: int = 0
+_scene_cache_misses: int = 0
 
 
 def clear_module_cache():
@@ -641,16 +640,15 @@ def _build_stable_prompt(address_term: str) -> str:
     缓存通过 workspace 文件 mtime 失效：编辑任意稳定段文件后，下次调用重新构建。
     """
     global _stable_prompt_cache_mtimes
-    # 获取当前稳定段文件的 mtime 指纹
-    current_mtimes = _get_stable_section_mtimes()
-    if _stable_prompt_cache_mtimes is None or current_mtimes != _stable_prompt_cache_mtimes:
-        # mtime 变化（或首次调用），清空整个缓存
-        _stable_prompt_cache.clear()
-        _stable_prompt_cache_mtimes = current_mtimes
+    with _cache_lock:
+        current_mtimes = _get_stable_section_mtimes()
+        if _stable_prompt_cache_mtimes is None or current_mtimes != _stable_prompt_cache_mtimes:
+            _stable_prompt_cache.clear()
+            _stable_prompt_cache_mtimes = current_mtimes
 
-    cache_key = address_term
-    if cache_key in _stable_prompt_cache:
-        return _stable_prompt_cache[cache_key]
+        cache_key = address_term
+        if cache_key in _stable_prompt_cache:
+            return _stable_prompt_cache[cache_key]
 
     sections = []
 
@@ -688,7 +686,8 @@ def _build_stable_prompt(address_term: str) -> str:
     sections.append(hw_context)
 
     result = "\n\n---\n\n".join(sections)
-    _stable_prompt_cache[cache_key] = result
+    with _cache_lock:
+        _stable_prompt_cache[cache_key] = result
     return result
 
 
@@ -698,37 +697,37 @@ def _load_cached_modules(address_term: str) -> dict[str, str]:
     包含 9 个模块: AGENTS/SOUL/IDENTITY/TOOLS/USER/MEMORY/HEARTBEAT + skills + hardware
     """
     global _module_cache_mtimes
-    current_mtimes = _get_stable_section_mtimes()
-    if _module_cache_mtimes is None or current_mtimes != _module_cache_mtimes:
-        _module_cache.clear()
-        _module_cache_mtimes = current_mtimes.copy()
+    with _cache_lock:
+        current_mtimes = _get_stable_section_mtimes()
+        if _module_cache_mtimes is None or current_mtimes != _module_cache_mtimes:
+            _module_cache.clear()
+            _module_cache_mtimes = current_mtimes.copy()
 
     from config import WORKSPACE_DIR, DATA_DIR
 
     def _load(name: str) -> str:
-        if name in _module_cache:
-            return _module_cache[name]
+        with _cache_lock:
+            if name in _module_cache:
+                return _module_cache[name]
         if name in ("skills", "hardware"):
-            return ""  # 特殊模块单独处理
+            return ""
         fp = WORKSPACE_DIR / name
         try:
             content = fp.read_text(encoding="utf-8-sig").strip()
-            _module_cache[name] = content
-            return content
         except OSError:
-            _module_cache[name] = ""
-            return ""
+            content = ""
+        with _cache_lock:
+            _module_cache[name] = content
+        return content
 
     modules: dict[str, str] = {}
 
-    # 普通 MD 文件 (9 个, 按优先级矩阵覆盖范围)
     for name in ("AGENTS.md", "SOUL.md", "IDENTITY.md", "TOOLS.md",
                  "USER.md", "MEMORY.md", "HEARTBEAT.md"):
         content = _load(name)
         if content:
             modules[name] = content
 
-    # Skills
     skills = load_skills()
     if skills:
         skill_texts = "\n\n".join(
@@ -736,12 +735,13 @@ def _load_cached_modules(address_term: str) -> dict[str, str]:
         if skill_texts:
             modules["skills"] = "[已安装的 Skills]\n\n" + skill_texts
 
-    # 硬件信息 —— F3: 运行时动态探测替代硬编码
-    if "hardware" not in _module_cache:
-        from core.capability_detector import detect_capabilities
-        _module_cache["hardware"] = detect_capabilities().to_prompt_segment(data_dir=str(DATA_DIR))
-    if _module_cache.get("hardware"):
-        modules["hardware"] = _module_cache["hardware"]
+    with _cache_lock:
+        if "hardware" not in _module_cache:
+            from core.capability_detector import detect_capabilities
+            _module_cache["hardware"] = detect_capabilities().to_prompt_segment(data_dir=str(DATA_DIR))
+        hw = _module_cache.get("hardware", "")
+    if hw:
+        modules["hardware"] = hw
 
     return modules
 
@@ -820,62 +820,48 @@ def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸") -> s
     if not modules:
         return ""
 
-    # ── 分层: Stable Prefix + Scene-Aware Middle ──────────────
     stable_prefix_modules = [name for name in _STABLE_PREFIX_ORDER if name in modules]
     scene_aware_names = [name for name in modules if name not in _STABLE_PREFIX_ORDER]
 
-    # Stable Prefix: 固定顺序拼接 (字节级一致, 享受 prefix cache)
     stable_prefix = "\n\n---\n\n".join(modules[name] for name in stable_prefix_modules)
 
-    # 无 Scene-Aware Middle 模块 → 直接返回 Stable Prefix
     if not scene_aware_names:
         return stable_prefix
 
-    # ── Scene-Aware Middle: 三级场景分级重排 ──────────────────
     weights = _classify_scene_blended(user_input)
     scene_level = _get_scene_level(weights)
 
     if scene_level == "S":
-        # S 级: 完整重排 (关键模块立刻拉到注意力前端)
-        # 绝对不受粘性阈值影响, 杜绝时间认知错乱
         new_sig = _compute_scene_signature(weights, scene_aware_names)
     elif scene_level == "A":
-        # A 级: 桶排序 (功能模块拉到前端)
         new_sig = _compute_scene_signature(weights, scene_aware_names)
     else:
-        # B 级: 极低质量闲聊粘性 (动态阈值)
-        # 以下情况保持当前排序 (节省算力, 不值得重排):
-        #   1. default 场景 (无关键词命中, 如 "嗯"/"哦"/"asdfgh" 等无意义输入)
-        #   2. 主导权重 < 动态阈值 (根据输入复杂度+场景连续性自适应)
-        # 正常 B 级场景 (greeting/creative/learning, 权重通常 = 1.0) → 正常桶排序
         dominant_scene = max(weights, key=weights.get) if weights else "default"
         max_weight = max(weights.values()) if weights else 0
         new_sig_candidate = _compute_scene_signature(weights, scene_aware_names)
         _dyn_threshold = _dynamic_stickiness_threshold(user_input, new_sig_candidate)
-        if _current_scene_sig and (dominant_scene == "default" or max_weight < _dyn_threshold):
-            # 极低质量闲聊 → 保持当前排序 (节省算力)
-            new_sig = _current_scene_sig
+        with _cache_lock:
+            cur_sig = _current_scene_sig
+        if cur_sig and (dominant_scene == "default" or max_weight < _dyn_threshold):
+            new_sig = cur_sig
         else:
-            # 正常 B 级 → 桶排序
             new_sig = _compute_scene_signature(weights, scene_aware_names)
 
-    _current_scene_sig = new_sig
+    with _cache_lock:
+        _current_scene_sig = new_sig
 
-    # ── 缓存: 只缓存 Scene-Aware Middle (Stable Prefix 独立处理) ─
-    if new_sig in _scene_prompt_cache:
-        _scene_cache_hits += 1
-        # LRU: 命中时移到末尾 (保持最近使用)
-        scene_middle = _scene_prompt_cache.pop(new_sig)
-        _scene_prompt_cache[new_sig] = scene_middle
-    else:
-        _scene_cache_misses += 1
-        sections = [modules[name] for name in new_sig if modules.get(name)]
-        scene_middle = "\n\n---\n\n".join(sections)
+        if new_sig in _scene_prompt_cache:
+            _scene_cache_hits += 1
+            scene_middle = _scene_prompt_cache.pop(new_sig)
+            _scene_prompt_cache[new_sig] = scene_middle
+        else:
+            _scene_cache_misses += 1
+            sections = [modules[name] for name in new_sig if modules.get(name)]
+            scene_middle = "\n\n---\n\n".join(sections)
 
-        # 分层 LRU 淘汰 (关键锚点桶永久驻留)
-        new_bucket = _get_bucket_for_sig(new_sig)
-        _layered_lru_evict(new_bucket)
-        _scene_prompt_cache[new_sig] = scene_middle
+            new_bucket = _get_bucket_for_sig(new_sig)
+            _layered_lru_evict(new_bucket)
+            _scene_prompt_cache[new_sig] = scene_middle
 
     # ── 拼接: Stable Prefix + Scene-Aware Middle ──────────────
     if stable_prefix and scene_middle:
@@ -890,23 +876,27 @@ def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸") -> s
 
 def get_scene_cache_stats() -> dict:
     """返回场景缓存统计（可观测性）。"""
-    total = _scene_cache_hits + _scene_cache_misses
-    return {
-        "hits": _scene_cache_hits,
-        "misses": _scene_cache_misses,
-        "hit_rate": _scene_cache_hits / total if total > 0 else 0.0,
-        "cached_signatures": len(_scene_prompt_cache),
-        "current_sig": _current_scene_sig,
-    }
+    with _cache_lock:
+        hits = _scene_cache_hits
+        misses = _scene_cache_misses
+        total = hits + misses
+        return {
+            "hits": hits,
+            "misses": misses,
+            "hit_rate": hits / total if total > 0 else 0.0,
+            "cached_signatures": len(_scene_prompt_cache),
+            "current_sig": _current_scene_sig,
+        }
 
 
 def reset_scene_cache() -> None:
     """重置场景缓存和当前签名（用于测试或会话重置）。"""
     global _current_scene_sig, _scene_cache_hits, _scene_cache_misses
-    _scene_prompt_cache.clear()
-    _current_scene_sig = ()
-    _scene_cache_hits = 0
-    _scene_cache_misses = 0
+    with _cache_lock:
+        _scene_prompt_cache.clear()
+        _current_scene_sig = ()
+        _scene_cache_hits = 0
+        _scene_cache_misses = 0
 
 
 def _build_dynamic_prompt(extra_context: str = "") -> str:

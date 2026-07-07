@@ -130,6 +130,7 @@ def _normalize_url(url: str) -> str:
     - 多层 percent-encoding 解码直到稳定 (防 %25252e 等绕过)
     - 移除嵌入凭证 user:pass@host
     - 0x 十六进制 IP → 十进制 (e.g. 0x7f000001 → 127.0.0.1)
+      仅作用于 hostname 部分，避免误转换 path/query 中的合法 0x 内容
     """
     prev = None
     while prev != url:
@@ -137,8 +138,12 @@ def _normalize_url(url: str) -> str:
         url = urllib.parse.unquote(url)
     # 移除嵌入凭证 user:pass@host
     url = re.sub(r"(?<=://)[^/@]+@", "", url)
-    # 十六进制 IP → 十进制
-    url = re.sub(r"0x([0-9a-fA-F]+)", lambda m: str(int(m.group(1), 16)), url)
+    # 十六进制 IP → 十进制（仅作用于 :// 和 / 之间的 hostname 部分）
+    parsed = urllib.parse.urlparse(url)
+    hostname = parsed.hostname or ""
+    if re.search(r"0x[0-9a-fA-F]+", hostname):
+        new_hostname = re.sub(r"0x([0-9a-fA-F]+)", lambda m: str(int(m.group(1), 16)), hostname)
+        url = url.replace(hostname, new_hostname, 1)
     return url
 
 
