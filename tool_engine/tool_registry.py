@@ -79,6 +79,27 @@ _CATEGORY_PRIORITY: dict[str, int] = {
 }
 
 
+_V2_REQUIRED_SECTIONS = ["功能概述", "使用场景", "参数约束", "返回格式", "错误码", "注意事项"]
+
+
+def _validate_schema_v2(name: str, schema: dict, description: str) -> None:
+    """校验工具 Schema 是否符合 V2 规范，仅记录警告不阻断注册."""
+    try:
+        from loguru import logger as _logger
+    except ImportError:
+        _logger = None
+    for section in _V2_REQUIRED_SECTIONS:
+        if f"[{section}]" not in (description or ""):
+            if _logger:
+                _logger.warning("tool_registry.schema_v2_missing_section tool={} section={}", name, section)
+    props = schema.get("properties", {})
+    for prop_name, prop_def in props.items():
+        desc = prop_def.get("description", "")
+        if not desc or len(desc) < 10:
+            if _logger:
+                _logger.warning("tool_registry.schema_v2_short_prop_desc tool={} prop={} desc={}", name, prop_name, repr(desc))
+
+
 def register_tool(name: str, description: str, schema: dict,
                   permission: ToolPermission = ToolPermission.READ_ONLY,
                   category: str = "general",
@@ -86,7 +107,11 @@ def register_tool(name: str, description: str, schema: dict,
                   requires_confirmation: bool = False,
                   source: str = "builtin",
                   plugin_id: str = "",
-                  version: str = "") -> Any:
+                  version: str = "",
+                  model_overrides: dict | None = None,
+                  schema_v2: int = 1,
+                  pre_call_hook=None,
+                  post_call_hook=None) -> Any:
     """装饰器: 注册一个工具函数.
 
     Args:
@@ -100,10 +125,17 @@ def register_tool(name: str, description: str, schema: dict,
         source: 来源 (builtin/dynamic/plugin), 默认 builtin
         plugin_id: 插件标识, 默认空字符串
         version: 版本, 默认空字符串
+        model_overrides: 按模型家族覆盖 description/schema
+        schema_v2: 2 表示符合 V2 规范（含完整 description 段落 + 错误码）
+        pre_call_hook: 调用前钩子(参数校验/路径校验)
+        post_call_hook: 调用后钩子(格式转换/错误恢复)
 
     Returns:
         装饰器函数
     """
+    if schema_v2 >= 2:
+        _validate_schema_v2(name, schema, description)
+
     def decorator(func: Any) -> Any:
         """实际注册函数的装饰器内层."""
         global _schema_cache, _schema_version
@@ -119,6 +151,10 @@ def register_tool(name: str, description: str, schema: dict,
             "source": source,
             "plugin_id": plugin_id,
             "version": version,
+            "model_overrides": model_overrides,
+            "schema_v2": schema_v2,
+            "pre_call_hook": pre_call_hook,
+            "post_call_hook": post_call_hook,
         }
         with _schema_lock:
             _schema_version += 1

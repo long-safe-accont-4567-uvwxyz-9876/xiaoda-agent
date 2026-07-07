@@ -334,6 +334,28 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
         manager.unregister(conn_id)
 
 
+def _verify_response(data: dict, msg_id: str, agent: str) -> None:
+    """S2: VERIFY 阶段 — 检查响应质量，仅记录警告不修改数据."""
+    reply = (data.get("reply") or data.get("text") or "").strip()
+    # 1. 空响应或过短响应
+    if not reply:
+        logger.warning("ws.chat.verify", issue="empty_response", agent=agent, msg_id=msg_id)
+    elif len(reply) < 2:
+        logger.warning("ws.chat.verify", issue="short_response", agent=agent,
+                       msg_id=msg_id, length=len(reply))
+    # 2. 工具错误循环检测
+    error_lines = [l for l in reply.splitlines() if l.strip().startswith(("错误:", "Error:"))]
+    if error_lines:
+        from collections import Counter
+        common = Counter(error_lines).most_common(1)
+        if common and common[0][1] >= 3:
+            logger.warning("ws.chat.verify", issue="tool_error_loop", agent=agent,
+                           msg_id=msg_id, count=common[0][1])
+    # 3. 降级响应检测
+    if "DEGRADED" in reply or "降级" in reply:
+        logger.warning("ws.chat.verify", issue="degraded_reply", agent=agent, msg_id=msg_id)
+
+
 async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> None:
     text = (msg.get("text") or "").strip()
     if not text:
@@ -398,13 +420,25 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
             })
 
     try:
+        # ── S2: PLAN 阶段 ──
+        try:
+            from prompt_builder import _classify_scene
+            scene = _classify_scene(text)
+            logger.info("ws.chat.phase", phase="plan", scene=scene, agent=agent, msg_id=msg_id)
+        except Exception:
+            pass
+
         if STREAM_STATUS_PUSH:
             await manager.send_to(conn_id, {"type": "status", "msg_id": msg_id, "stage": "thinking"})
+        # ── S2: EXECUTE 阶段 ──
+        logger.info("ws.chat.phase", phase="execute", agent=agent, msg_id=msg_id)
         data = await process_and_serialize(
             core, text, session_id=session_id, agent=agent,
             status_callback=on_status, app=app,
             conn_id=conn_id, msg_id=msg_id,
             image_data=image_data)
+        # ── S2: VERIFY 阶段 ──
+        _verify_response(data, msg_id, agent)
         data.update({"type": "final", "msg_id": msg_id})
         await manager.send_to(conn_id, data)
     except asyncio.CancelledError:

@@ -146,16 +146,16 @@ def measure_error_recovery() -> int:
     """Count error recovery mechanisms present.
 
     Checks (each worth 25 pts):
-      - asyncio.wait_for in klee_agent.py
+      - asyncio.wait_for in agent_core/message_processor.py
       - asyncio.wait_for in tool_call_handler.py summarize
       - detect_storm in agent_dispatcher.py
       - CircuitBreaker state machine (GREEN/YELLOW/RED/HALF_OPEN)
     """
     score = 0
 
-    # Check 1: asyncio.wait_for in klee_agent.py (25 pts)
-    klee_content = _read_file("klee_agent.py")
-    if "asyncio.wait_for" in klee_content:
+    # Check 1: asyncio.wait_for in agent_core/message_processor.py (25 pts)
+    agent_content = _read_file("agent_core/message_processor.py")
+    if "asyncio.wait_for" in agent_content:
         score += 25
 
     # Check 2: asyncio.wait_for in tool_call_handler.py summarize (25 pts)
@@ -356,10 +356,103 @@ def measure_robustness() -> int:
 
 
 # ═══════════════════════════════════════════════════════════════
+#  Dimension 8: Tool Interface V2 (工具接口规范)
+# ═══════════════════════════════════════════════════════════════
+def measure_tool_interface_v2() -> int:
+    """Measure tool interface V2 compliance.
+
+    Checks (each worth 20 pts):
+      - tool_wrapper.py exists with validate_file_path
+      - tool_wrapper.py has validate_tool_params
+      - tool_wrapper.py has ToolResultV2 class
+      - register_tool has model_overrides parameter
+      - register_tool has schema_version parameter
+    """
+    score = 0
+
+    if _file_exists("tool_engine/tool_wrapper.py"):
+        content = _read_file("tool_engine/tool_wrapper.py")
+        if "def validate_file_path" in content:
+            score += 20
+        if "def validate_tool_params" in content:
+            score += 20
+        if "class ToolResultV2" in content:
+            score += 20
+
+    if _file_exists("tool_engine/tool_registry.py"):
+        content = _read_file("tool_engine/tool_registry.py")
+        if "model_overrides" in content:
+            score += 20
+        if "schema_version" in content:
+            score += 20
+
+    return score
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Dimension 9: Orchestration Phasing (编排阶段化)
+# ═══════════════════════════════════════════════════════════════
+def measure_orchestration_phasing() -> int:
+    """Measure orchestration loop phase decomposition.
+
+    Checks (each worth 25 pts):
+      - ws_hub.py has PLAN phase (_classify_scene call)
+      - ws_hub.py has EXECUTE phase logging
+      - ws_hub.py has VERIFY phase (_verify_response)
+      - ws_hub.py has tool error loop detection
+    """
+    score = 0
+
+    if _file_exists("web/ws_hub.py"):
+        content = _read_file("web/ws_hub.py")
+        if "_classify_scene" in content and "phase" in content and "plan" in content:
+            score += 25
+        if "phase" in content and "execute" in content:
+            score += 25
+        if "_verify_response" in content:
+            score += 25
+        if "tool_error_loop" in content or "error_loop" in content:
+            score += 25
+
+    return score
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Dimension 10: Retry & Loop Detection (重试与循环检测)
+# ═══════════════════════════════════════════════════════════════
+def measure_retry_mechanism() -> int:
+    """Measure retry and loop detection in tool_executor.
+
+    Checks (each worth 20 pts):
+      - MAX_RETRIES constant exists
+      - Exponential backoff (RETRY_BASE_DELAY / RETRY_MAX_DELAY)
+      - _is_retryable_error method exists
+      - Failure streak tracking (_failure_streaks)
+      - FAILURE_STREAK_THRESHOLD constant
+    """
+    score = 0
+
+    if _file_exists("tool_engine/tool_executor.py"):
+        content = _read_file("tool_engine/tool_executor.py")
+        if "MAX_RETRIES" in content:
+            score += 20
+        if "RETRY_BASE_DELAY" in content and "RETRY_MAX_DELAY" in content:
+            score += 20
+        if "_is_retryable_error" in content:
+            score += 20
+        if "_failure_streaks" in content:
+            score += 20
+        if "FAILURE_STREAK_THRESHOLD" in content:
+            score += 20
+
+    return score
+
+
+# ═══════════════════════════════════════════════════════════════
 #  Report Generation
 # ═══════════════════════════════════════════════════════════════
 def run_all_dimensions() -> dict:
-    """Run all 7 dimensions and return scores dict."""
+    """Run all 10 dimensions and return scores dict."""
     return {
         "latency": measure_latency(),
         "tool_accuracy": measure_tool_accuracy(),
@@ -368,6 +461,9 @@ def run_all_dimensions() -> dict:
         "loop_safety": measure_loop_safety(),
         "cross_platform": measure_cross_platform(),
         "robustness": measure_robustness(),
+        "tool_interface_v2": measure_tool_interface_v2(),
+        "orchestration_phasing": measure_orchestration_phasing(),
+        "retry_mechanism": measure_retry_mechanism(),
     }
 
 
@@ -395,23 +491,26 @@ def print_report(scores: dict):
         ("5. 循环安全性 (Loop Safety)", scores["loop_safety"]),
         ("6. 跨平台兼容 (Cross-Platform)", scores["cross_platform"]),
         ("7. 代码健壮性 (Robustness)", scores["robustness"]),
+        ("8. 工具接口V2 (Tool Interface V2)", scores["tool_interface_v2"]),
+        ("9. 编排阶段化 (Orchestration)", scores["orchestration_phasing"]),
+        ("10. 重试与循环检测 (Retry)", scores["retry_mechanism"]),
     ]
 
     total = sum(scores.values())
-    average = total / 7
+    average = total / 10
 
     print()
-    print("=" * 40)
+    print("=" * 48)
     print("  Harness Engineering 评测报告")
-    print("=" * 40)
+    print("=" * 48)
     print()
-    print(f"{'维度':<24}{'分数':>8}")
-    print("-" * 40)
+    print(f"{'维度':<32}{'分数':>8}")
+    print("-" * 48)
     for label, score in dimensions:
-        print(f"{label:<24}{score:>5}/100")
-    print("-" * 40)
-    print(f"{'总分':<24}{total:>5}/700")
-    print(f"{'平均分':<24}{average:>5.0f}/100")
+        print(f"{label:<32}{score:>5}/100")
+    print("-" * 48)
+    print(f"{'总分':<32}{total:>5}/1000")
+    print(f"{'平均分':<32}{average:>5.0f}/100")
     print()
     print(f"评级: {_rating(average)}")
     print()
@@ -437,7 +536,7 @@ class TestBenchmark:
     def test_total_score_above_80(self):
         """Average score across all dimensions should be >= 80."""
         scores = run_all_dimensions()
-        average = sum(scores.values()) / 7
+        average = sum(scores.values()) / 10
         assert average >= 80, (
             f"Average score {average:.1f} is below 80. "
             f"Scores: {scores}"

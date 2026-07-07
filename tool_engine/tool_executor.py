@@ -24,6 +24,7 @@ def _filter_sensitive_args(arguments: dict) -> dict:
 
 
 class ToolExecutor:
+    """工具执行器，按名称调度工具并应用超时控制。"""
 
     # 按工具名自定义超时（秒），default 为全局默认
     TOOL_TIMEOUTS: dict[str, float] = {
@@ -39,10 +40,23 @@ class ToolExecutor:
         "default": 60.0,
     }
 
+    # ── S3: 重试与循环检测配置 ──
+    RETRYABLE_ERRORS: set[str] = {"timeout", "connection", "temporal", "transient"}
+    MAX_RETRIES: int = 2
+    RETRY_BASE_DELAY: float = 0.5
+    RETRY_MAX_DELAY: float = 5.0
+    FAILURE_STREAK_THRESHOLD: int = 5
+
     def __init__(self, db: Optional[Any]=None) -> None:
         self.db = db
         self._call_counts: dict[str, list[float]] = {}
         self._global_timeout: float = self.TOOL_TIMEOUTS["default"]
+        self._failure_streaks: dict[str, int] = {}
+
+    def _is_retryable_error(self, error: str) -> bool:
+        """检查错误是否为瞬时错误，值得重试."""
+        error_lower = (error or "").lower()
+        return any(keyword in error_lower for keyword in self.RETRYABLE_ERRORS)
 
     async def execute(self, tool_name: str, arguments: dict,
                       user_id: str = "", safe_mode: bool = False) -> ToolResult:
@@ -55,6 +69,12 @@ class ToolExecutor:
             logger.warning("tool_executor.disabled", tool=tool_name)
             return ToolResult.fail(f"「{tool_name}」已被管理员全局停用了呢～")
 
+        # S3: 循环检测 — 连续失败次数过多则短路
+        if self._failure_streaks.get(tool_name, 0) >= self.FAILURE_STREAK_THRESHOLD:
+            logger.warning("tool_executor.failure_streak_blocked", tool=tool_name,
+                           streak=self._failure_streaks.get(tool_name, 0))
+            return ToolResult.fail(f"工具「{tool_name}」连续失败次数过多，已暂时停用")
+
         if not self._check_rate_limit(tool_name, tool):
             logger.warning("tool_executor.rate_limited", tool=tool_name)
             return ToolResult.fail("刚才已经帮你查过了呢……等一会儿再看好不好？")
@@ -66,13 +86,29 @@ class ToolExecutor:
             return ToolResult.fail(f"安全沙箱阻止了此操作：{sandbox_err}")
 
         _start = time.time()
-        result = await self._execute_with_timeout(tool, arguments)
+        # S3: 重试机制 — 瞬时错误自动重试 + 指数退避
+        attempt = 0
+        while True:
+            result = await self._execute_with_timeout(tool, arguments)
+            if result.success or attempt >= self.MAX_RETRIES or not self._is_retryable_error(result.error):
+                break
+            delay = min(self.RETRY_BASE_DELAY * (2 ** attempt), self.RETRY_MAX_DELAY)
+            logger.warning("tool_executor.retry", tool=tool_name, attempt=attempt + 1,
+                           max_retries=self.MAX_RETRIES, delay=round(delay, 2),
+                           error=result.error[:200])
+            await asyncio.sleep(delay)
+            attempt += 1
         duration = time.time() - _start
         metrics.observe(f"tool_execute.{tool_name}.duration", duration)
         if result.success:
             metrics.inc(f"tool_execute.{tool_name}.success")
+            self._failure_streaks[tool_name] = 0
         else:
             metrics.inc(f"tool_execute.{tool_name}.failure")
+            self._failure_streaks[tool_name] = self._failure_streaks.get(tool_name, 0) + 1
+            if self._failure_streaks[tool_name] == self.FAILURE_STREAK_THRESHOLD:
+                logger.warning("tool_executor.failure_streak_threshold", tool=tool_name,
+                               streak=self._failure_streaks[tool_name])
         metrics.maybe_report()
         # 结构化日志：工具执行结果
         logger.info("tool.execute", event="tool_execute", tool=tool_name,
