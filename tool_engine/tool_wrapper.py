@@ -8,6 +8,7 @@
 """
 import os
 import logging
+import contextvars
 from pathlib import Path
 from typing import Any
 
@@ -188,13 +189,14 @@ class ToolResultV2:
 # 模型特定接口适配
 # ============================================================
 
-_CURRENT_MODEL_FAMILY: str = "default"
+_CURRENT_MODEL_FAMILY: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_CURRENT_MODEL_FAMILY", default="default"
+)
 
 
 def set_model_family(family: str):
-    """设置当前模型家族."""
-    global _CURRENT_MODEL_FAMILY
-    _CURRENT_MODEL_FAMILY = family
+    """设置当前模型家族（基于 ContextVar，协程隔离）."""
+    _CURRENT_MODEL_FAMILY.set(family)
 
 
 def get_tool_description_for_model(
@@ -203,7 +205,7 @@ def get_tool_description_for_model(
     model_family: str | None = None,
 ) -> str:
     """根据当前模型家族返回适配后的工具描述."""
-    family = model_family or _CURRENT_MODEL_FAMILY
+    family = model_family or _CURRENT_MODEL_FAMILY.get()
     if model_overrides and family in model_overrides:
         return model_overrides[family].get("description", base_description)
     return base_description
@@ -215,7 +217,7 @@ def get_tool_schema_for_model(
     model_family: str | None = None,
 ) -> dict:
     """根据当前模型家族返回适配后的工具 Schema."""
-    family = model_family or _CURRENT_MODEL_FAMILY
+    family = model_family or _CURRENT_MODEL_FAMILY.get()
     if model_overrides and family in model_overrides:
         return model_overrides[family].get("schema", base_schema)
     return base_schema
