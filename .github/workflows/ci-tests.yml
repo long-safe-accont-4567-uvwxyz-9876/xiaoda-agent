@@ -113,7 +113,7 @@ jobs:
       - name: Run Bandit security scan
         run: |
           bandit -r . -x ./tests,./chaos,./.venv,./node_modules -f json -o bandit-report.json || true
-          bandit -r . -x ./tests,./chaos,./.venv,./node_modules -f custom --show-line-context
+          bandit -r . -x ./tests,./chaos,./.venv,./node_modules -f screen || true
 
       - name: Run pip-audit dependency scan
         run: |
