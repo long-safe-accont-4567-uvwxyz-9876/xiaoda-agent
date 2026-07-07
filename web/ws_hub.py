@@ -303,7 +303,15 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
             elif mtype == "terminal_start":
                 term_sid = str(msg.get("term_sid") or uuid.uuid4().hex[:8])
                 _t = asyncio.create_task(_handle_terminal_start(conn_id, msg, term_sid))
-                _t.add_done_callback(lambda t: logger.warning("ws.terminal_start_task_error: {}", t.exception()) if not t.cancelled() and t.exception() else None)
+
+                def _on_term_start_done(t):
+                    if t.cancelled():
+                        return
+                    exc = t.exception()
+                    if exc:
+                        logger.warning("ws.terminal_start_task_error: {}", exc)
+
+                _t.add_done_callback(_on_term_start_done)
 
             elif mtype == "terminal_input":
                 _handle_terminal_input(conn_id, msg)
@@ -344,14 +352,21 @@ def _verify_response(data: dict, msg_id: str, agent: str) -> None:
     elif len(reply) < 2:
         logger.warning("ws.chat.verify", issue="short_response", agent=agent,
                        msg_id=msg_id, length=len(reply))
-    # 2. 工具错误循环检测
-    error_lines = [l for l in reply.splitlines() if l.strip().startswith(("错误:", "Error:"))]
+    # 2. 工具错误循环检测（关键词 + 频次）
+    error_keywords = ("错误:", "Error:", "失败", "failed", "异常", "exception")
+    error_lines = [l for l in reply.splitlines()
+                   if any(kw in l for kw in error_keywords)]
     if error_lines:
         from collections import Counter
+        # 完全相同行重复 >=3 次 → 严重循环
         common = Counter(error_lines).most_common(1)
         if common and common[0][1] >= 3:
             logger.warning("ws.chat.verify", issue="tool_error_loop", agent=agent,
                            msg_id=msg_id, count=common[0][1])
+        # 错误行总数 >=5 → 密集错误
+        elif len(error_lines) >= 5:
+            logger.warning("ws.chat.verify", issue="dense_errors", agent=agent,
+                           msg_id=msg_id, count=len(error_lines))
     # 3. 降级响应检测
     if "DEGRADED" in reply or "降级" in reply:
         logger.warning("ws.chat.verify", issue="degraded_reply", agent=agent, msg_id=msg_id)
