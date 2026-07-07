@@ -129,7 +129,7 @@ class BackgroundTaskManager:
                 auto_commit=False,
             )
             any_write_ok = True
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError) as e:
             logger.warning("bg.conversation_log_failed", error=str(e))
 
         # 2. 会话更新（不立即 commit）
@@ -137,14 +137,14 @@ class BackgroundTaskManager:
             try:
                 await self.db.update_session(session_id, auto_commit=False)
                 any_write_ok = True
-            except Exception as e:
+            except (KeyError, OSError, RuntimeError) as e:
                 logger.warning("bg.session_update_failed", error=str(e))
 
         # 批量提交：仅在有写入成功时调用一次 commit
         if any_write_ok:
             try:
                 await self.db.commit()
-            except Exception as e:
+            except (OSError, RuntimeError) as e:
                 logger.warning("bg.batch_commit_failed", error=str(e))
 
         # 3. 记忆编码（独立，不纳入批量提交）
@@ -163,7 +163,7 @@ class BackgroundTaskManager:
                     "emotion": emotion,
                 }
                 await self.memory.try_idle_encode(ctx, force=True)
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError) as e:
                 logger.warning("bg.memory_encode_failed", error=str(e))
 
     async def _run_manager_tasks(
@@ -213,14 +213,14 @@ class BackgroundTaskManager:
         try:
             if await self._should_run("dream_archive", interval_hours=24):
                 _spawn(self._dream_archive_task())
-        except Exception as e:
+        except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.dream_archive_schedule_failed", error=str(e))
 
         # 10. 嵌入缓存预热（每 5 分钟）
         try:
             if await self._should_run("warm_embedding_cache", interval_hours=5 / 60):
                 _spawn(self._warm_embedding_cache())
-        except Exception as e:
+        except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.warm_embedding_cache_schedule_failed", error=str(e))
 
         # 11. 记忆蒸馏压缩（每 6 小时，仅 MEMORY_DISTILL_ENABLED=true 时启用）
@@ -229,7 +229,7 @@ class BackgroundTaskManager:
             if getattr(config, "MEMORY_DISTILL_ENABLED", False):
                 if await self._should_run("memory_distill", interval_hours=6):
                     _spawn(self._distill_memories_task())
-        except Exception as e:
+        except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.memory_distill_schedule_failed", error=str(e))
 
         # 12. 经验晋升（每 30 分钟, recurrence≥3 的学习自动晋升到 system prompt）
@@ -239,14 +239,14 @@ class BackgroundTaskManager:
             if self.learning_manager and await self._should_run("learning_promote", interval_hours=0.5):
                 from core.preference_pipeline import get_preference_pipeline
                 _spawn(get_preference_pipeline().check_promotion(self.learning_manager))
-        except Exception as e:
+        except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.learning_promote_schedule_failed", error=str(e))
 
         # 13. 邮箱 OAuth token 定期刷新（每 2 小时，防止 access/refresh token 过期）
         try:
             if await self._should_run("mail_token_refresh", interval_hours=2):
                 _spawn(self._refresh_mail_token_task())
-        except Exception as e:
+        except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.mail_token_refresh_schedule_failed", error=str(e))
 
     async def _auto_archive_sessions(self) -> None:
@@ -254,7 +254,7 @@ class BackgroundTaskManager:
             archived = await self.db.auto_archive_stale_sessions(idle_seconds=3600)
             if archived > 0:
                 logger.info("session.auto_archived", count=archived)
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
             logger.warning("session.auto_archive_failed", error=str(e))
 
     async def _portrait_cold_start(self) -> None:
@@ -264,7 +264,7 @@ class BackgroundTaskManager:
             if result:
                 self.context.user_portrait = result
                 logger.info("portrait.cold_start_done", length=len(result))
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError) as e:
             logger.warning("portrait.cold_start_failed", error=str(e))
 
     async def _should_run(self, task_name: str, interval_hours: float) -> bool:
@@ -274,7 +274,7 @@ class BackgroundTaskManager:
             if last_run is None:
                 return True
             return (time.time() - last_run) >= interval_hours * 3600
-        except Exception:
+        except (OSError, RuntimeError):
             logger.warning("bg.should_run_cron_check_failed: {}", exc_info=True)
             return False
 
@@ -294,7 +294,7 @@ class BackgroundTaskManager:
                                 strengthened=stats.get("strengthened", 0),
                                 evicted=stats.get("evicted", 0))
             await self.db.set_cron_last_run("dream_archive")
-        except Exception as e:
+        except (ImportError, OSError, RuntimeError) as e:
             logger.warning("dream.archive_failed", error=str(e))
 
     async def _warm_embedding_cache(self) -> None:
@@ -310,7 +310,7 @@ class BackgroundTaskManager:
             if summaries:
                 await self.memory.vec.warm_cache(summaries)
             await self.db.set_cron_last_run("warm_embedding_cache")
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError) as e:
             logger.warning("bg.warm_embedding_cache_failed", error=str(e))
 
     async def _distill_memories_task(self) -> None:
@@ -323,7 +323,7 @@ class BackgroundTaskManager:
             if distilled > 0:
                 logger.info("memory.distill_task_completed", distilled=distilled)
             await self.db.set_cron_last_run("memory_distill")
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
             logger.warning("bg.memory_distill_task_failed", error=str(e))
 
     async def _refresh_mail_token_task(self) -> None:
@@ -347,12 +347,12 @@ class BackgroundTaskManager:
                 try:
                     from web.routers.mail_manage import _clear_auth_status_cache
                     _clear_auth_status_cache()
-                except Exception:
+                except (ImportError, AttributeError):
                     logger.debug("bg.clear_auth_status_cache_error: {}", exc_info=True)
             else:
                 logger.warning("mail.token_refresh_failed", rc=rc, err=err[:200] if err else "")
             await self.db.set_cron_last_run("mail_token_refresh")
-        except Exception as e:
+        except (OSError, RuntimeError, TimeoutError) as e:
             logger.warning("bg.mail_token_refresh_failed", error=str(e))
 
     @staticmethod
