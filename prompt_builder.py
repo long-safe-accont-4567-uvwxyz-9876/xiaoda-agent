@@ -823,7 +823,10 @@ def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸") -> s
     stable_prefix_modules = [name for name in _STABLE_PREFIX_ORDER if name in modules]
     scene_aware_names = [name for name in modules if name not in _STABLE_PREFIX_ORDER]
 
-    stable_prefix = "\n\n---\n\n".join(modules[name] for name in stable_prefix_modules)
+    stable_prefix = "\n\n---\n\n".join(
+        _replace_placeholders(modules[name], address_term)
+        for name in stable_prefix_modules
+    )
 
     if not scene_aware_names:
         return stable_prefix
@@ -856,7 +859,8 @@ def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸") -> s
             _scene_prompt_cache[new_sig] = scene_middle
         else:
             _scene_cache_misses += 1
-            sections = [modules[name] for name in new_sig if modules.get(name)]
+            sections = [_replace_placeholders(modules[name], address_term)
+                        for name in new_sig if modules.get(name)]
             scene_middle = "\n\n---\n\n".join(sections)
 
             new_bucket = _get_bucket_for_sig(new_sig)
