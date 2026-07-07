@@ -326,6 +326,9 @@ class AgentRegistry:
         for info in self.core.dispatcher.list_agents():
             name = info.get("name", "")
             registered_names.add(name)
+            # xiaoda 已作为 main 硬编码，跳过避免重复
+            if name == "xiaoda":
+                continue
             agent = self.core.dispatcher.get_agent(name)
             if not agent:
                 continue
