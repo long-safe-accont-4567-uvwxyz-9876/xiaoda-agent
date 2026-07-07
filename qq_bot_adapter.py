@@ -148,12 +148,12 @@ async def _patched_pool_init(self, token: Any, session_interval: Any) -> Any:
                         }
                         self._connection.add(session)
                     _botpy_log.info("[botpy] 重新登录成功，恢复会话")
-                except Exception as login_err:
+                except (OSError, RuntimeError, ConnectionError) as login_err:
                     _botpy_log.error(f"[botpy] 重新登录失败: {login_err}")
         except KeyboardInterrupt:
             _botpy_log.info("[botpy] 服务强行停止!")
             return
-        except Exception as e:
+        except (OSError, RuntimeError, ConnectionError, asyncio.TimeoutError) as e:
             recon_attempts += 1
             delay = min(5 * (2 ** min(recon_attempts - 1, 4)), max_recon_delay)
             _botpy_log.error(f"[botpy] 会话异常: {e}, {delay}秒后重试 (第{recon_attempts}次)")
@@ -170,7 +170,7 @@ async def _patched_pool_init(self, token: Any, session_interval: Any) -> Any:
                         "shards": {"shard_id": i, "shard_count": self._ws_ap["shards"]},
                     }
                     self._connection.add(session)
-            except Exception as login_err:
+            except (OSError, RuntimeError, ConnectionError) as login_err:
                 _botpy_log.error(f"[botpy] 异常后重新登录失败: {login_err}")
 
 
@@ -274,10 +274,10 @@ async def run_qq_bot(agent: "AgentCore", *, sandbox: bool = False) -> None:
         except asyncio.CancelledError:
             try:
                 await client.close()
-            except Exception as e:
+            except (OSError, RuntimeError) as e:
                 logger.warning(f"qq_bot.close_on_cancel_failed: {e}")
             raise
-        except Exception as e:
+        except (OSError, RuntimeError, ConnectionError, asyncio.TimeoutError) as e:
             logger.error("qq_bot.crashed_retrying error={} delay={}", str(e)[:200], delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, 120)
@@ -324,7 +324,7 @@ class AIQQBot(botpy.Client):
         try:
             from web.config_service import get_config_service
             return get_config_service()
-        except Exception:
+        except (ImportError, AttributeError):
             logger.debug("qq_bot_adapter.config_service_not_found", exc_info=True)
             return None
 
@@ -357,7 +357,7 @@ class AIQQBot(botpy.Client):
                         core=self.agent,
                     )
                     await self.nudge_engine.start()
-                except Exception as e:
+                except (ImportError, AttributeError, OSError, RuntimeError) as e:
                     logger.warning("nudge.init_failed", error=str(e))
 
         if self.nudge_engine:
@@ -381,7 +381,7 @@ class AIQQBot(botpy.Client):
             return
         try:
             await msg.reply(content=text, msg_seq=_next_msg_seq())
-        except Exception as e:
+        except (OSError, RuntimeError, ConnectionError) as e:
             logger.warning("qq_bot.approval_send_failed error=%s", str(e)[:200])
 
     async def _check_high_risk_approval(self, result: ProcessResult, message: Any,
@@ -459,7 +459,7 @@ class AIQQBot(botpy.Client):
                                 image_data.append({"mimeType": mime, "data": img_b64})
                             except (FileNotFoundError, ValueError):
                                 pass
-                            except Exception as e:
+                            except (OSError, ValueError, RuntimeError) as e:
                                 logger.warning("qq_bot.image_encode_failed", error=str(e))
                         else:
                             parts.append(f"[文件: {fn}，已保存到 {result['save_path']}]")
@@ -545,7 +545,7 @@ class AIQQBot(botpy.Client):
             if session:
                 return session["id"]
             return await self.agent.create_session(user_openid)
-        except Exception as e:
+        except (KeyError, OSError, RuntimeError) as e:
             logger.error(f"qq_bot.c2c_session_failed: {e}")
             return ""
 
@@ -590,13 +590,13 @@ class AIQQBot(botpy.Client):
             logger.warning("qq_bot.c2c_timeout user=%s", user_id)
             try:
                 await message.reply(content=f"{get_agent_display_name('xiaoda')}想得太入神了……能再说一次吗？🌱", msg_seq=_next_msg_seq())
-            except Exception as _e:
+            except (OSError, RuntimeError, ConnectionError) as _e:
                 logger.debug("qq_bot.c2c_timeout_reply_failed", error=str(_e))
-        except Exception as e:
+        except (RuntimeError, OSError, asyncio.TimeoutError, ValueError) as e:
             logger.error(f"qq_bot.c2c_error: {e}")
             try:
                 await message.reply(content="嗯……出了点小问题，等会儿再聊好不好？", msg_seq=_next_msg_seq())
-            except Exception as e:
+            except (OSError, RuntimeError, ConnectionError) as e:
                 logger.error(f"qq_bot.c2c_fallback_reply_failed: {e}")
 
     async def on_group_at_message_create(self, message: GroupMessage) -> None:
@@ -651,7 +651,7 @@ class AIQQBot(botpy.Client):
             # 立即发送 ACK
             try:
                 await message.reply(content=f"{get_agent_display_name('xiaoda')}收到啦，正在想～🌿", msg_seq=_next_msg_seq())
-            except Exception as e:
+            except (OSError, RuntimeError, ConnectionError) as e:
                 logger.debug("qq_bot.ack_send_failed", error=str(e))
 
             result = await asyncio.wait_for(
@@ -671,13 +671,13 @@ class AIQQBot(botpy.Client):
             logger.warning("qq_bot.group_timeout user=%s", user_id)
             try:
                 await message.reply(content=f"{get_agent_display_name('xiaoda')}想得太入神了……能再说一次吗？🌱", msg_seq=_next_msg_seq())
-            except Exception as _e:
+            except (OSError, RuntimeError, ConnectionError) as _e:
                 logger.debug("qq_bot.group_timeout_reply_failed", error=str(_e))
-        except Exception as e:
+        except (RuntimeError, OSError, asyncio.TimeoutError, ValueError) as e:
             logger.error(f"qq_bot.group_error: {e}", exc_info=True)
             try:
                 await message.reply(content="嗯……出了点小问题，等会儿再聊好不好？", msg_seq=_next_msg_seq())
-            except Exception as e2:
+            except (OSError, RuntimeError, ConnectionError) as e2:
                 logger.error(f"qq_bot.group_fallback_reply_failed: {e2}")
 
     async def _send_reply_with_media(self, message: Any, reply: str,
@@ -718,7 +718,7 @@ class AIQQBot(botpy.Client):
                         msg_type=7, content=reply,
                         media={"file_info": file_info}, msg_seq=_next_msg_seq()
                     )
-                except Exception as e:
+                except (OSError, RuntimeError, ConnectionError) as e:
                     if "被动回复" in str(e) or "超过限制" in str(e):
                         # 被动回复超限，无主动消息权限，记录后跳过（不再降级为主动消息）
                         logger.warning("qq_bot.group_media_passive_limited_no_proactive",
@@ -727,12 +727,12 @@ class AIQQBot(botpy.Client):
                         raise
             else:
                 await message.reply(content=reply, msg_seq=_next_msg_seq())
-        except Exception as e:
+        except (OSError, RuntimeError, ConnectionError, ValueError) as e:
             logger.warning("qq_bot.media_send_failed", error=str(e))
             # 最终兜底：尝试纯文本回复
             try:
                 await message.reply(content=reply, msg_seq=_next_msg_seq())
-            except Exception as _e:
+            except (OSError, RuntimeError, ConnectionError) as _e:
                 logger.debug("qq_bot.fallback_reply_failed", error=str(_e))
 
     async def _upload_c2c_base64(self, openid: str, image_path: Path, file_type: int = 1) -> str:
@@ -770,7 +770,7 @@ class AIQQBot(botpy.Client):
                     if not file_info:
                         raise RuntimeError(f"C2C文件上传返回空file_info (openid={openid})")
                     return file_info
-                except Exception as e:
+                except (OSError, RuntimeError, ConnectionError, TimeoutError) as e:
                     last_err = e
                     if attempt < 2:
                         wait = (attempt + 1) * 3
@@ -782,7 +782,7 @@ class AIQQBot(botpy.Client):
                 try:
                     compressed_path.unlink()
                     logger.info("qq_bot.temp_file_cleaned", path=str(compressed_path))
-                except Exception as e:
+                except OSError as e:
                     logger.warning(f"qq_bot.temp_file_cleanup_failed: {e}")
 
     async def _upload_group_base64(self, group_openid: str, image_path: Path, file_type: int = 1) -> str:
@@ -820,7 +820,7 @@ class AIQQBot(botpy.Client):
                     if not file_info:
                         raise RuntimeError(f"群文件上传返回空file_info (group_openid={group_openid})")
                     return file_info
-                except Exception as e:
+                except (OSError, RuntimeError, ConnectionError, TimeoutError) as e:
                     last_err = e
                     if attempt < 2:
                         wait = (attempt + 1) * 3
@@ -832,7 +832,7 @@ class AIQQBot(botpy.Client):
                 try:
                     compressed_path.unlink()
                     logger.info("qq_bot.temp_file_cleaned", path=str(compressed_path))
-                except Exception as e:
+                except OSError as e:
                     logger.warning(f"qq_bot.temp_file_cleanup_failed: {e}")
 
     @staticmethod
