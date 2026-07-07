@@ -326,7 +326,7 @@ def _resolve_env_api_key() -> str:
                 with open(_env_path, "w", encoding="utf-8") as _f:
                     _f.write("")
                 logger.info("webui.env_created_empty")
-        except (OSError, PermissionError, shutil.Error) as _e:
+        except (OSError, PermissionError) as _e:
             logger.warning("webui.env_create_failed error={}", str(_e))
     _mimo = ""
     if _os.path.exists(_env_path):
@@ -416,6 +416,8 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def _allow_frame_embed(request: Any, call_next: Any) -> Any:
         import time as _time
+        from utils.trace_context import new_trace_id
+        _trace_id = new_trace_id()
         _start = _time.monotonic()
         response = await call_next(request)
         _elapsed = _time.monotonic() - _start
@@ -426,6 +428,7 @@ def create_app() -> FastAPI:
             _sla.observe_latency(request.url.path, _elapsed)
             if response.status_code >= 400:
                 _sla.inc_error(f"http_{response.status_code}", request.url.path)
+        response.headers["X-Trace-Id"] = _trace_id
         response.headers["Content-Security-Policy"] = "frame-ancestors 'self' http://127.0.0.1:*"
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
         response.headers["X-Content-Type-Options"] = "nosniff"

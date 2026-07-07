@@ -862,7 +862,7 @@ class AIQQBot(botpy.Client):
                 if prev_tmp is not None:
                     try:
                         prev_tmp.unlink()
-                    except Exception as e:
+                    except (OSError, RuntimeError) as e:
                         logger.warning(f"qq_bot.compress_temp_cleanup_failed: {e}")
                 if tmp_path.stat().st_size <= max_size:
                     logger.info("qq_bot.image_compressed", original=str(image_path),
@@ -884,7 +884,7 @@ class AIQQBot(botpy.Client):
                 if prev_tmp is not None:
                     try:
                         prev_tmp.unlink()
-                    except Exception as e:
+                    except (OSError, RuntimeError) as e:
                         logger.warning(f"qq_bot.resize_temp_cleanup_failed: {e}")
                 if tmp_path.stat().st_size <= max_size:
                     logger.info("qq_bot.image_resized", original=f"{img.width}x{img.height}",
@@ -1027,7 +1027,7 @@ class AIQQBot(botpy.Client):
             """发送单个分片。群聊无主动消息权限，被动超限直接失败。"""
             try:
                 await message.reply(content=text, msg_seq=_next_msg_seq())
-            except Exception as e:
+            except (OSError, RuntimeError, asyncio.TimeoutError, ValueError) as e:
                 err_str = str(e)
                 if is_group and any(k in err_str for k in _group_no_proactive):
                     logger.debug("qq_bot.stream_passive_limited_no_proactive",
@@ -1044,7 +1044,7 @@ class AIQQBot(botpy.Client):
                 elapsed = (time.monotonic() - t0) * 1000
                 logger.info("qq_bot.stream_single",
                             total_len=total_len, ms=round(elapsed, 1))
-            except Exception as e:
+            except (OSError, RuntimeError, asyncio.TimeoutError) as e:
                 logger.error("qq_bot.stream_final_failed", error=str(e))
             return
 
@@ -1056,7 +1056,7 @@ class AIQQBot(botpy.Client):
         if not is_group:
             try:
                 await message.reply(content=f"{get_agent_display_name('xiaoda')}正在打字...", msg_seq=_next_msg_seq())
-            except Exception as e:
+            except (OSError, RuntimeError) as e:
                 logger.debug("qq_bot.typing_indicator_failed", error=str(e))
 
         sent_count = 0
@@ -1070,7 +1070,7 @@ class AIQQBot(botpy.Client):
                 sent_count += 1
                 logger.debug("qq_bot.stream_segment", index=i, size=len(seg),
                              ms=round(seg_ms, 1), sent=sent_count)
-            except Exception as e:
+            except (OSError, RuntimeError, asyncio.TimeoutError) as e:
                 logger.warning("qq_bot.stream_segment_failed",
                                error=str(e), sent_segments=sent_count)
                 # 异常恢复：合并剩余内容为最终片发送
@@ -1080,7 +1080,7 @@ class AIQQBot(botpy.Client):
                     recovery_ms = (time.monotonic() - stream_start) * 1000
                     logger.info("qq_bot.stream_recovery_done",
                                 sent=sent_count + 1, ms=round(recovery_ms, 1))
-                except Exception as e2:
+                except (OSError, RuntimeError, asyncio.TimeoutError) as e2:
                     logger.error("qq_bot.stream_final_failed", error=str(e2))
                 return
 
@@ -1133,7 +1133,7 @@ class AIQQBot(botpy.Client):
             # 短回复：文字+表情包合并为一条消息发送
             try:
                 await self._send_reply_with_media(message, clean_reply, image_path=result.sticker_path)
-            except Exception as e:
+            except (OSError, RuntimeError, ConnectionError) as e:
                 logger.warning("qq_bot.sticker_send_failed", error=str(e))
                 await message.reply(content=clean_reply, msg_seq=_next_msg_seq())
             return
@@ -1146,7 +1146,7 @@ class AIQQBot(botpy.Client):
         async def _send_segment(text: str) -> None:
             try:
                 await message.reply(content=text, msg_seq=_next_msg_seq())
-            except Exception as e:
+            except (OSError, RuntimeError, asyncio.TimeoutError, ValueError) as e:
                 err_str = str(e)
                 if is_group and any(k in err_str for k in _group_no_proactive_sticker):
                     logger.debug("qq_bot.stream_passive_limited_no_proactive",
@@ -1160,13 +1160,13 @@ class AIQQBot(botpy.Client):
                 if i > 0:
                     await asyncio.sleep(random.uniform(0.8, 1.2))
                 await _send_segment(seg)
-            except Exception as e:
+            except (OSError, RuntimeError, asyncio.TimeoutError) as e:
                 logger.warning("qq_bot.stream_segment_failed", error=str(e))
                 # 异常恢复：合并剩余内容发送
                 remaining = "".join(segments[i:])
                 try:
                     await _send_segment(remaining)
-                except Exception as e2:
+                except (OSError, RuntimeError, asyncio.TimeoutError) as e2:
                     logger.error("qq_bot.stream_recovery_failed", error=str(e2))
                 return
 
@@ -1174,11 +1174,11 @@ class AIQQBot(botpy.Client):
         last_seg = segments[-1]
         try:
             await self._send_reply_with_media(message, last_seg, image_path=result.sticker_path)
-        except Exception as e:
+        except (OSError, RuntimeError, ConnectionError) as e:
             logger.warning("qq_bot.sticker_with_last_segment_failed", error=str(e))
             try:
                 await _send_segment(last_seg)
-            except Exception as e2:
+            except (OSError, RuntimeError) as e2:
                 logger.debug("qq_bot.fallback_segment_also_failed", error=str(e2))
 
     async def _send_fallback_reply_with_sticker(self, message: Any, clean_reply: str,
@@ -1213,7 +1213,7 @@ class AIQQBot(botpy.Client):
                 for part in parts[:-1]:
                     try:
                         await message.reply(content=part, msg_seq=_next_msg_seq())
-                    except Exception as e:
+                    except (OSError, RuntimeError, ConnectionError) as e:
                         logger.warning(f"qq_bot.long_reply_part_failed: {e}")
                         failed = True
                         break
@@ -1226,7 +1226,7 @@ class AIQQBot(botpy.Client):
         if result.sticker_path:
             try:
                 await self._send_reply_with_media(message, final_text, image_path=result.sticker_path)
-            except Exception as e:
+            except (OSError, RuntimeError, ConnectionError) as e:
                 logger.warning("qq_bot.sticker_send_failed", error=str(e))
                 await message.reply(content=final_text, msg_seq=_next_msg_seq())
         else:
@@ -1241,7 +1241,7 @@ class AIQQBot(botpy.Client):
             async def _send_cached_audio() -> None:
                 try:
                     await self._send_audio(message, result.audio_path)
-                except Exception as e:
+                except (OSError, RuntimeError, ConnectionError) as e:
                     logger.warning("qq_bot.audio_send_failed", error=str(e))
             send_tasks.append(_send_cached_audio())
 
@@ -1256,7 +1256,7 @@ class AIQQBot(botpy.Client):
                         await self._send_audio(message, audio_path)
                     else:
                         logger.warning("qq_bot.async_tts_no_audio")
-                except Exception as e:
+                except (OSError, RuntimeError, ValueError) as e:
                     logger.warning("qq_bot.async_tts_failed", error=str(e))
             send_tasks.append(_send_async_tts())
 
@@ -1265,7 +1265,7 @@ class AIQQBot(botpy.Client):
             async def _send_vid() -> None:
                 try:
                     await self._send_video(message, result.video_path)
-                except Exception as e:
+                except (OSError, RuntimeError, ConnectionError) as e:
                     logger.warning("qq_bot.video_send_failed", error=str(e))
             send_tasks.append(_send_vid())
 
@@ -1275,11 +1275,11 @@ class AIQQBot(botpy.Client):
                 for img_path in result.image_paths:
                     try:
                         await self._send_reply_with_media(message, "", image_path=img_path)
-                    except Exception as e:
+                    except (OSError, RuntimeError, ConnectionError) as e:
                         logger.error("qq_bot.image_send_error", error=str(e), path=str(img_path))
                         try:
                             await message.reply(content="图片生成成功，但发送失败", msg_seq=_next_msg_seq())
-                        except Exception as e2:
+                        except (OSError, RuntimeError, ConnectionError) as e2:
                             logger.error(f"qq_bot.image_fallback_reply_failed: {e2}")
             send_tasks.append(_send_images())
 
@@ -1309,7 +1309,7 @@ class AIQQBot(botpy.Client):
                         msg_seq=_next_msg_seq(),
                         msg_id=message.id
                     )
-                except Exception as e:
+                except (OSError, RuntimeError, ConnectionError, ValueError) as e:
                     if "被动回复" in str(e) or "超过限制" in str(e):
                         logger.info("qq_bot.video_passive_limited_switching_to_proactive")
                         await self.api.post_group_message(
@@ -1322,12 +1322,12 @@ class AIQQBot(botpy.Client):
                     else:
                         raise
             logger.info("qq_bot.video_sent", video_path=str(video_path))
-        except Exception as e:
+        except (OSError, RuntimeError, ConnectionError) as e:
             logger.error("qq_bot.video_send_error", error=str(e), video_path=str(video_path))
             # 降级为文本消息
             try:
                 await message.reply(content=f"视频生成成功，但发送失败: {e}", msg_seq=_next_msg_seq())
-            except Exception as e:
+            except (OSError, RuntimeError, ConnectionError) as e:
                 logger.error(f"qq_bot.video_fallback_reply_failed: {e}")
 
     async def _send_audio(self, message: Any, audio_path: Path) -> None:
@@ -1356,7 +1356,7 @@ class AIQQBot(botpy.Client):
                         msg_type=7, content="",
                         media={"file_info": file_info}, msg_seq=_next_msg_seq()
                     )
-                except Exception as e:
+                except (OSError, RuntimeError, ConnectionError, ValueError) as e:
                     if "被动回复" in str(e) or "超过限制" in str(e):
                         logger.info("qq_bot.audio_passive_limited_switching_to_proactive")
                         await self.api.post_group_message(
@@ -1366,7 +1366,7 @@ class AIQQBot(botpy.Client):
                         )
                     else:
                         raise
-        except Exception as e:
+        except (OSError, RuntimeError, ConnectionError) as e:
             logger.warning("qq_bot.audio_send_error", error=str(e))
         finally:
             # 只清理中间文件（silk），不删除输入文件（audio_path）
@@ -1376,7 +1376,7 @@ class AIQQBot(botpy.Client):
                     if p.exists():
                         p.unlink()
                         logger.info("qq_bot.temp_file_cleaned", path=str(p))
-                except Exception as e:
+                except (OSError, RuntimeError) as e:
                     logger.warning(f"qq_bot.audio_temp_cleanup_failed: {e}")
 
     async def _convert_to_silk(self, audio_path: Path) -> Path | None:
@@ -1404,7 +1404,7 @@ class AIQQBot(botpy.Client):
             # 无论成功失败，都清理 pcm 中间文件
             try:
                 pcm_path.unlink(missing_ok=True)
-            except Exception as e:
+            except (OSError, RuntimeError) as e:
                 logger.warning(f"qq_bot.pcm_cleanup_failed: {e}")
 
             if ok and silk_path.exists() and silk_path.stat().st_size > 0:
@@ -1414,13 +1414,13 @@ class AIQQBot(botpy.Client):
             # 转换失败时清理可能残留的 silk 文件
             try:
                 silk_path.unlink(missing_ok=True)
-            except Exception as e:
+            except (OSError, RuntimeError) as e:
                 logger.warning(f"qq_bot.silk_cleanup_failed: {e}")
             return None
         except ImportError:
             logger.warning("qq_bot.pilk_not_installed")
             return None
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError) as e:
             logger.warning("qq_bot.silk_convert_failed", error=str(e))
             return None
 
@@ -1463,7 +1463,7 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             logger.info("qq_bot.keyboard_interrupt")
             break
-        except Exception as e:
+        except (OSError, RuntimeError, ConnectionError, asyncio.TimeoutError) as e:
             retry_count += 1
             delay = min(BASE_DELAY * (2 ** min(retry_count - 1, 6)), MAX_DELAY)
             logger.error(

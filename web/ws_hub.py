@@ -216,9 +216,11 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
             # 走与 QQ 通道相同的完整子代理流程：表情包/情绪/TTS/落库都不缺
             from loguru import logger as _logger
             from agent_core import RequestContext
+            from utils.trace_context import new_trace_id
             ctx = RequestContext(session_id=session_id, user_id="webui",
                                  user_input=text, status_callback=status_callback)
-            trace = _logger.bind(trace_id=f"web{int(time.time()*1000) % 1000000:06d}")
+            _tid = new_trace_id()
+            trace = _logger.bind(trace_id=_tid)
             result = await core._dispatch_single_sub_agent(
                 agent, text, user_id="webui", source="web",
                 session_id=session_id, trace=trace, ctx=ctx)

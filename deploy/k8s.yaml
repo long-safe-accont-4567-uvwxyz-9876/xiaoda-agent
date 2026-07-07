@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xiaoda-agent
+  labels:
+    app: xiaoda-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: xiaoda-agent
+  template:
+    metadata:
+      labels:
+        app: xiaoda-agent
+    spec:
+      containers:
+        - name: xiaoda-agent
+          image: xiaoda-agent:latest
+          ports:
+            - containerPort: 8082
+              name: http
+          env:
+            - name: WEBUI_PORT
+              value: "8082"
+            - name: LOG_FORMAT
+              value: "json"
+          envFrom:
+            - secretRef:
+                name: xiaoda-agent-secrets
+                optional: true
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /api/v1/system/os
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/v1/system/os
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: xiaoda-agent-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: xiaoda-agent
+  labels:
+    app: xiaoda-agent
+spec:
+  selector:
+    app: xiaoda-agent
+  ports:
+    - port: 80
+      targetPort: http
+      name: http
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: xiaoda-agent-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

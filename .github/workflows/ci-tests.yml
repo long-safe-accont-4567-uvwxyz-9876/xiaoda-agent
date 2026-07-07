@@ -29,8 +29,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -q
-          pip install pytest pytest-asyncio pytest-cov -q
+          pip install -r requirements.lock -q
+          pip install pytest-cov -q
 
       - name: Create test environment
         run: |
@@ -117,7 +117,7 @@ jobs:
 
       - name: Run pip-audit dependency scan
         run: |
-          pip install -r requirements.txt -q
+          pip install -r requirements.lock -q
           pip-audit --desc || true
 
       - name: Security summary

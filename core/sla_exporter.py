@@ -149,6 +149,11 @@ class SLAExporter:
             endpoint: 关联端点, 默认空字符串
         """
         self.inc("agent_errors_total", type=error_type, endpoint=endpoint)
+        from utils.trace_context import get_trace_id
+        tid = get_trace_id()
+        if tid:
+            from loguru import logger
+            logger.debug("sla.error_trace", trace_id=tid, error_type=error_type, endpoint=endpoint)
 
     def set_active_users(self, count: int) -> None:
         """设置当前活跃用户数 (gauge).

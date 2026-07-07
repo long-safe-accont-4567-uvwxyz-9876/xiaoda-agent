@@ -5,6 +5,18 @@ from loguru import logger
 from config import LOG_DIR
 
 
+def _trace_id_patcher(record):
+    """loguru patcher：自动将 contextvars 中的 trace_id 注入每条日志。
+
+    无需每处手动 logger.bind(trace_id=...)，中间件层设置一次即可。
+    """
+    from utils.trace_context import get_trace_id
+    tid = get_trace_id()
+    if tid:
+        record["extra"]["trace_id"] = tid
+    return True
+
+
 def _json_formatter(record):
     """JSON 结构化日志格式，便于日志分析系统采集。
 
@@ -72,14 +84,17 @@ def setup_logging() -> None:
     """
     logger.remove()
     # 统一 extra 字段默认值，便于结构化日志分析
-    logger.configure(extra={
-        "trace_id": "",
-        "event": "",
-        "duration_ms": 0,
-        "user_id": "",
-        "session_id": "",
-        "error": "",
-    })
+    logger.configure(
+        patcher=_trace_id_patcher,
+        extra={
+            "trace_id": "",
+            "event": "",
+            "duration_ms": 0,
+            "user_id": "",
+            "session_id": "",
+            "error": "",
+        },
+    )
 
     # 通过环境变量切换 stderr 输出格式：json (容器环境) | text (默认，人类可读)
     log_format = os.environ.get("LOG_FORMAT", "text").lower()
