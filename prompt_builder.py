@@ -626,10 +626,12 @@ def _get_stable_section_mtimes() -> dict[str, float]:
     return mtimes
 
 
-def _replace_placeholders(content: str, address_term: str) -> str:
-    """替换 workspace 文件中的 {address_term} 占位符。"""
+def _replace_placeholders(content: str, address_term: str, agent_name: str = "") -> str:
+    """替换 workspace 文件中的 {address_term} 和 {agent_name} 占位符。"""
     if "{address_term}" in content:
         content = content.replace("{address_term}", address_term)
+    if agent_name and "{agent_name}" in content:
+        content = content.replace("{agent_name}", agent_name)
     return content
 
 
@@ -652,24 +654,31 @@ def _build_stable_prompt(address_term: str) -> str:
 
     sections = []
 
+    # 获取主体 agent 的 display_name 用于 {agent_name} 占位符替换
+    try:
+        from config import get_agent_display_name
+        _agent_dn = get_agent_display_name("xiaoda") or "xiaoda"
+    except Exception:
+        _agent_dn = "xiaoda"
+
     agents_rules = load_workspace_file("AGENTS.md")
     if agents_rules:
-        agents_rules = _replace_placeholders(agents_rules, address_term)
+        agents_rules = _replace_placeholders(agents_rules, address_term, _agent_dn)
         sections.append(agents_rules)
 
     soul = load_workspace_file("SOUL.md")
     if soul:
-        soul = _replace_placeholders(soul, address_term)
+        soul = _replace_placeholders(soul, address_term, _agent_dn)
         sections.append(soul)
 
     identity = load_workspace_file("IDENTITY.md")
     if identity:
-        identity = _replace_placeholders(identity, address_term)
+        identity = _replace_placeholders(identity, address_term, _agent_dn)
         sections.append(identity)
 
     tools_rules = load_workspace_file("TOOLS.md")
     if tools_rules:
-        tools_rules = _replace_placeholders(tools_rules, address_term)
+        tools_rules = _replace_placeholders(tools_rules, address_term, _agent_dn)
         sections.append(tools_rules)
 
     skills = load_skills()
@@ -823,8 +832,15 @@ def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸") -> s
     stable_prefix_modules = [name for name in _STABLE_PREFIX_ORDER if name in modules]
     scene_aware_names = [name for name in modules if name not in _STABLE_PREFIX_ORDER]
 
+    # 获取主体 agent 的 display_name 用于 {agent_name} 占位符替换
+    try:
+        from config import get_agent_display_name
+        _agent_dn = get_agent_display_name("xiaoda") or "xiaoda"
+    except Exception:
+        _agent_dn = "xiaoda"
+
     stable_prefix = "\n\n---\n\n".join(
-        _replace_placeholders(modules[name], address_term)
+        _replace_placeholders(modules[name], address_term, _agent_dn)
         for name in stable_prefix_modules
     )
 
@@ -859,7 +875,7 @@ def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸") -> s
             _scene_prompt_cache[new_sig] = scene_middle
         else:
             _scene_cache_misses += 1
-            sections = [_replace_placeholders(modules[name], address_term)
+            sections = [_replace_placeholders(modules[name], address_term, _agent_dn)
                         for name in new_sig if modules.get(name)]
             scene_middle = "\n\n---\n\n".join(sections)
 
@@ -1287,19 +1303,25 @@ def _build_workspace_sections(address_term: str) -> list[str]:
     """加载 workspace 配置文件并组装 sections 列表（不含硬件信息段）。"""
     sections = []
 
+    try:
+        from config import get_agent_display_name
+        _agent_dn = get_agent_display_name("xiaoda") or "xiaoda"
+    except Exception:
+        _agent_dn = "xiaoda"
+
     agents_rules = load_workspace_file("AGENTS.md")
     if agents_rules:
-        agents_rules = _replace_placeholders(agents_rules, address_term)
+        agents_rules = _replace_placeholders(agents_rules, address_term, _agent_dn)
         sections.append(agents_rules)
 
     soul = load_workspace_file("SOUL.md")
     if soul:
-        soul = _replace_placeholders(soul, address_term)
+        soul = _replace_placeholders(soul, address_term, _agent_dn)
         sections.append(soul)
 
     identity = load_workspace_file("IDENTITY.md")
     if identity:
-        identity = _replace_placeholders(identity, address_term)
+        identity = _replace_placeholders(identity, address_term, _agent_dn)
         sections.append(identity)
 
     user = load_workspace_file("USER.md")
