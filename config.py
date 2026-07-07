@@ -486,11 +486,18 @@ def get_agent_display_name_en(name: str) -> str:
 # 每个 agent 的人格文件中使用原名，运行时自动替换为用户配置的显示名。
 # 全局统一机制：所有 agent 共用一套替换逻辑，不分主次。
 _ORIGINAL_NAMES: dict[str, str] = {
+    # 新名（当前显示名 → agent_key）
     "小妲": "xiaoda",
     "小莉": "xiaoli",
     "小狼": "xiaolang",
     "小涟": "xiaolian",
     "小可": "xiaoke",
+    # 旧名（游戏角色名 → agent_key，兼容旧人格文件）
+    "纳西妲": "xiaoda",
+    "可莉": "xiaoli",
+    "银狼": "xiaolang",
+    "昔涟": "xiaolian",
+    "尼可": "xiaoke",
 }
 
 # 英文原名 → agent_key 映射（人格文件中的英文标识符）
