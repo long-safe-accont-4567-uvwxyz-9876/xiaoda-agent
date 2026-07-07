@@ -335,6 +335,24 @@ def calculator(expression: str) -> ToolResult:
             if pattern in expression:
                 return ToolResult.fail(f"表达式包含不允许的内容: {pattern}")
 
+        _BLOCKED_CALLS = frozenset({
+            '__import__', 'exec', 'eval', 'compile', 'open',
+            'getattr', 'setattr', 'delattr', 'type',
+            'vars', 'dir', 'globals', 'locals', 'input',
+        })
+        try:
+            tree = ast.parse(expression, mode='eval')
+        except SyntaxError:
+            return ToolResult.fail("表达式语法错误")
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and node.attr.startswith('_'):
+                return ToolResult.fail("表达式包含不允许的属性访问")
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id in _BLOCKED_CALLS:
+                    return ToolResult.fail(f"表达式包含不允许的函数: {node.func.id}")
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                return ToolResult.fail("表达式包含不允许的 import")
+
         import math as _math
         allowed_names = {
             'sqrt': _math.sqrt, 'sin': _math.sin, 'cos': _math.cos,

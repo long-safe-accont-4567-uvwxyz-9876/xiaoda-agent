@@ -222,6 +222,9 @@ async def put_config(body: dict, request: Request) -> Any:
     path = body.get("path", "")
     if not path or any(seg in path for seg in ("api_key", "password", "secret")):
         raise HTTPException(400, "非法配置路径")
+    _ALLOWED_PREFIXES = ("ui.", "tts.", "dashboard.", "mail.", "schedule.", "tools.", "mcp.", "models.")
+    if not any(path.startswith(p) for p in _ALLOWED_PREFIXES):
+        raise HTTPException(400, "不允许修改该配置路径")
     cfg = get_config_service()
     cfg.set(path, body.get("value"))
     core = request.app.state.core
@@ -281,7 +284,7 @@ async def restart_service(request: Request) -> Any:
             args = sys.argv[1:] if len(sys.argv) > 1 else ['--web', '--host', '0.0.0.0', '--port', '8082']
             bat = tempfile.NamedTemporaryFile(suffix='.bat', delete=False, mode='w')
             arg_str = ' '.join(args)
-            bat.write(f'@echo off\ntimeout /t 2 /nobreak >nul\n"{python}" "{script}" {arg_str}\n')
+            bat.write(f'@echo off\ntimeout /t 2 /nobreak >nul\n"{python}" "{script}" {arg_str}\ndel "%~f0"\n')
             bat.close()
             subprocess.Popen(['cmd', '/c', bat.name], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
             logger.warning("webui.restart.exiting (Windows auto-restart)")

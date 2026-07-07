@@ -726,7 +726,7 @@ def _load_cached_modules(address_term: str) -> dict[str, str]:
                  "USER.md", "MEMORY.md", "HEARTBEAT.md"):
         content = _load(name)
         if content:
-            modules[name] = _replace_placeholders(content, address_term)
+            modules[name] = content
 
     skills = load_skills()
     if skills:
@@ -1146,21 +1146,26 @@ def _build_cached_system_prompt(address_term: str) -> str:
         from config import DATA_DIR
 
         now = time.time()
-        current_mtimes = _get_workspace_mtimes()
-        mtime_changed = current_mtimes != _SYSTEM_PROMPT_CACHE_MTIMES
-        addr_changed = address_term != _SYSTEM_PROMPT_CACHE_ADDR_TERM
+        with _cache_lock:
+            current_mtimes = _get_workspace_mtimes()
+            mtime_changed = current_mtimes != _SYSTEM_PROMPT_CACHE_MTIMES
+            addr_changed = address_term != _SYSTEM_PROMPT_CACHE_ADDR_TERM
 
-        if _SYSTEM_PROMPT_CACHE and (now - _SYSTEM_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL and not mtime_changed and not addr_changed:
-            system_prompt = _SYSTEM_PROMPT_CACHE
-        else:
+            if _SYSTEM_PROMPT_CACHE and (now - _SYSTEM_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL and not mtime_changed and not addr_changed:
+                system_prompt = _SYSTEM_PROMPT_CACHE
+            else:
+                system_prompt = None
+
+        if system_prompt is None:
             sections = _build_workspace_sections(address_term)
             sections.append(_build_hardware_context(DATA_DIR))
             system_prompt = "\n\n---\n\n".join(sections)
 
-            _SYSTEM_PROMPT_CACHE = system_prompt
-            _SYSTEM_PROMPT_CACHE_TS = now
-            _SYSTEM_PROMPT_CACHE_MTIMES = current_mtimes
-            _SYSTEM_PROMPT_CACHE_ADDR_TERM = address_term
+            with _cache_lock:
+                _SYSTEM_PROMPT_CACHE = system_prompt
+                _SYSTEM_PROMPT_CACHE_TS = now
+                _SYSTEM_PROMPT_CACHE_MTIMES = current_mtimes
+                _SYSTEM_PROMPT_CACHE_ADDR_TERM = address_term
         # extra_context 移到末尾注入
     return system_prompt
 
@@ -1348,24 +1353,25 @@ def build_safe_system_prompt(extra_context: str = "") -> str:
     xiaoda_name = get_agent_display_name('xiaoda')
 
     now = time.time()
-    if (_SAFE_PROMPT_CACHE
-            and (now - _SAFE_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL
-            and _SAFE_PROMPT_CACHE_NAME == xiaoda_name):
-        safe_prompt = _SAFE_PROMPT_CACHE
-    else:
+    with _cache_lock:
+        cache_hit = (_SAFE_PROMPT_CACHE
+                and (now - _SAFE_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL
+                and _SAFE_PROMPT_CACHE_NAME == xiaoda_name)
+        if cache_hit:
+            safe_prompt = _SAFE_PROMPT_CACHE
+        else:
+            safe_prompt = None
+
+    if safe_prompt is None:
         sections = []
 
-        # SOUL.md — 保留人格，但去除"爸爸"称呼相关内容
         soul = load_workspace_file("SOUL.md")
         if soul:
-            # 用正则去除包含"爸爸"的段落和行
             safe_soul = _strip_owner_references(soul)
-            # 替换称呼
             safe_soul = safe_soul.replace("爸爸", "你")
             safe_soul = safe_soul.replace("称呼用户为\"你\"", "称呼用户为\"你\"")
             sections.append(safe_soul)
 
-        # 安全化的身份声明（不暴露团队成员细节、项目信息、设备信息）
         sections.append(
             "# 身份\n\n"
             f"你是{xiaoda_name}，一个温柔聪慧的 AI 助手。\n\n"
@@ -1385,9 +1391,10 @@ def build_safe_system_prompt(extra_context: str = "") -> str:
         )
 
         safe_prompt = "\n\n---\n\n".join(sections)
-        _SAFE_PROMPT_CACHE = safe_prompt
-        _SAFE_PROMPT_CACHE_TS = now
-        _SAFE_PROMPT_CACHE_NAME = xiaoda_name
+        with _cache_lock:
+            _SAFE_PROMPT_CACHE = safe_prompt
+            _SAFE_PROMPT_CACHE_TS = now
+            _SAFE_PROMPT_CACHE_NAME = xiaoda_name
 
     if extra_context:
         safe_prompt += f"\n\n---\n\n{extra_context}"

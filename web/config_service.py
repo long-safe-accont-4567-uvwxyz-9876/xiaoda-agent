@@ -147,11 +147,14 @@ class ConfigService:
 
 
 _instance: ConfigService | None = None
+_instance_lock = threading.Lock()
 
 
 def get_config_service() -> ConfigService:
     """获取全局 ConfigService 单例."""
     global _instance
     if _instance is None:
-        _instance = ConfigService()
+        with _instance_lock:
+            if _instance is None:
+                _instance = ConfigService()
     return _instance

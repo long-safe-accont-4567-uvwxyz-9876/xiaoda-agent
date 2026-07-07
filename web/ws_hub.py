@@ -8,6 +8,7 @@ import os
 import platform
 import shutil
 import struct
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -92,6 +93,7 @@ manager = ConnectionManager()
 
 # PTY 终端会话: term_sid -> {pid, fd, conn_id, shell, alive}
 _pty_sessions: dict[str, dict] = {}
+_pty_sessions_lock = threading.Lock()
 
 
 # ── 媒体路径 → URL ───────────────────────────────────────────────
@@ -321,8 +323,12 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
         logger.error("ws.error conn_id={} error={}", conn_id, str(e))
     finally:
         # 清理该连接的所有终端会话
-        for sid in list(_pty_sessions.keys()):
-            if sid in _pty_sessions and _pty_sessions[sid].get("conn_id") == conn_id:
+        with _pty_sessions_lock:
+            sids = list(_pty_sessions.keys())
+        for sid in sids:
+            with _pty_sessions_lock:
+                sid_session = _pty_sessions.get(sid)
+            if sid_session and sid_session.get("conn_id") == conn_id:
                 _cleanup_pty(sid)
         manager.unregister(conn_id)
 
@@ -447,11 +453,12 @@ async def _handle_terminal_start(conn_id: str, msg: dict, term_sid: str) -> None
                 fcntl.ioctl(0, termios.TIOCSWINSZ, winsize)
                 os.execvpe(shell_cmd, [shell_cmd], env)
             else:
-                _pty_sessions[term_sid] = {
-                    "pid": child_pid, "fd": master_fd, "conn_id": conn_id,
-                    "shell": shell_type, "alive": True, "loop": loop,
-                    "is_windows": False,
-                }
+                with _pty_sessions_lock:
+                    _pty_sessions[term_sid] = {
+                        "pid": child_pid, "fd": master_fd, "conn_id": conn_id,
+                        "shell": shell_type, "alive": True, "loop": loop,
+                        "is_windows": False,
+                    }
                 logger.info("ws.terminal.start term_sid={} shell={} pid={}", term_sid, shell_type, child_pid)
                 await manager.send_to(conn_id, {
                     "type": "terminal_started", "term_sid": term_sid, "shell": shell_type})
@@ -488,11 +495,12 @@ async def _handle_terminal_start(conn_id: str, msg: dict, term_sid: str) -> None
                 creationflags=_subprocess.CREATE_NEW_PROCESS_GROUP
                     if hasattr(_subprocess, "CREATE_NEW_PROCESS_GROUP") else 0,
             )
-            _pty_sessions[term_sid] = {
-                "pid": proc.pid, "proc": proc, "conn_id": conn_id,
-                "shell": shell_type, "alive": True, "loop": loop,
-                "is_windows": True,
-            }
+            with _pty_sessions_lock:
+                _pty_sessions[term_sid] = {
+                    "pid": proc.pid, "proc": proc, "conn_id": conn_id,
+                    "shell": shell_type, "alive": True, "loop": loop,
+                    "is_windows": True,
+                }
             logger.info("ws.terminal.start term_sid={} shell={} pid={}", term_sid, shell_type, proc.pid)
             await manager.send_to(conn_id, {
                 "type": "terminal_started", "term_sid": term_sid, "shell": shell_type})
@@ -507,7 +515,8 @@ async def _handle_terminal_start(conn_id: str, msg: dict, term_sid: str) -> None
 
 def _setup_pty_reader(term_sid: str) -> None:
     """用 loop.add_reader() 注册 PTY fd 的可读回调。"""
-    session = _pty_sessions.get(term_sid)
+    with _pty_sessions_lock:
+        session = _pty_sessions.get(term_sid)
     if not session:
         return
     fd = session["fd"]
@@ -544,7 +553,8 @@ def _setup_pty_reader(term_sid: str) -> None:
 
 def _setup_win_pipe_reader(term_sid: str) -> None:
     """Windows: 在后台线程中读取 subprocess stdout 管道。"""
-    session = _pty_sessions.get(term_sid)
+    with _pty_sessions_lock:
+        session = _pty_sessions.get(term_sid)
     if not session:
         return
     proc = session["proc"]
@@ -580,7 +590,8 @@ def _setup_win_pipe_reader(term_sid: str) -> None:
 
 def _cleanup_pty(term_sid: str) -> None:
     """清理终端会话（在 reader 回调中调用，不能 await）。"""
-    session = _pty_sessions.pop(term_sid, None)
+    with _pty_sessions_lock:
+        session = _pty_sessions.pop(term_sid, None)
     if not session:
         return
     session["alive"] = False
@@ -630,7 +641,8 @@ def _handle_terminal_input(msg: dict) -> None:
     """将用户输入写入终端 stdin。"""
     term_sid = str(msg.get("term_sid") or "")
     data = msg.get("data", "")
-    session = _pty_sessions.get(term_sid)
+    with _pty_sessions_lock:
+        session = _pty_sessions.get(term_sid)
     if not session or not session["alive"]:
         return
     try:
@@ -650,7 +662,8 @@ def _handle_terminal_resize(msg: dict) -> None:
     term_sid = str(msg.get("term_sid") or "")
     cols = int(msg.get("cols") or 80)
     rows = int(msg.get("rows") or 24)
-    session = _pty_sessions.get(term_sid)
+    with _pty_sessions_lock:
+        session = _pty_sessions.get(term_sid)
     if not session or not session["alive"]:
         return
     if session.get("is_windows"):
@@ -666,7 +679,8 @@ def _handle_terminal_resize(msg: dict) -> None:
 def _handle_terminal_kill(msg: dict) -> None:
     """终止终端会话。"""
     term_sid = str(msg.get("term_sid") or "")
-    session = _pty_sessions.pop(term_sid, None)
+    with _pty_sessions_lock:
+        session = _pty_sessions.pop(term_sid, None)
     if not session:
         return
     session["alive"] = False
