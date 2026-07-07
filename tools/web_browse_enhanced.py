@@ -169,7 +169,6 @@ async def web_browse_enhanced(url: str) -> ToolResult:
 
         # 沙箱域名检查
         from tools.web_browse_tools import check_domain_allowed
-        from urllib.parse import urlparse
         allowed, reason = check_domain_allowed(url)
         if not allowed:
             return ToolResult.fail(f"沙箱安全限制: {reason}")

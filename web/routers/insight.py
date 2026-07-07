@@ -113,7 +113,7 @@ async def consolidate_portrait(request: Request) -> Any:
             except Exception as exc:
                 logger.debug("insight.portrait_broadcast_failed: {}", exc, exc_info=True)
 
-    asyncio.create_task(_run())
+    request.app.state.portrait_consolidate_task = asyncio.create_task(_run())
     return Envelope(data={"started": True})
 
 

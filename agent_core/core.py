@@ -200,7 +200,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         # 预热失败不影响 AgentCore 初始化；幂等性由 prewarm_jieba 内部标志保证。
         try:
             from core.jieba_prewarm import prewarm_jieba
-            asyncio.create_task(prewarm_jieba())
+            self._prewarm_task = asyncio.create_task(prewarm_jieba())
         except Exception as e:
             logger.warning(f"jieba.prewarm_schedule_failed error={e}")
 
@@ -378,6 +378,15 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
 
     async def shutdown(self) -> None:
         """安全释放所有资源，不抛异常。"""
+        try:
+            # 取消 jieba 预热后台任务
+            prewarm_task = getattr(self, "_prewarm_task", None)
+            if prewarm_task and not prewarm_task.done():
+                prewarm_task.cancel()
+                await prewarm_task
+        except Exception as e:
+            logger.warning("shutdown.prewarm_cancel_failed", error=str(e))
+
         try:
             # 取消共享黑板后台清理任务
             cleanup_task = getattr(self, "_shared_blackboard_cleanup_task", None)

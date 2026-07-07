@@ -13,7 +13,7 @@ from web.schemas import Envelope
 from web.routers.auth import get_current_user
 from web.model_capabilities import get_capabilities
 # 缓存抽到 web._discovery_cache, 避免与 web.routers.models 互相导入
-from web._discovery_cache import _cache, _CACHE_TTL, invalidate_discovery_cache
+from web._discovery_cache import _cache, _CACHE_TTL
 
 router = APIRouter(tags=["model-discovery"], dependencies=[Depends(get_current_user)])
 

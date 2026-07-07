@@ -2,7 +2,6 @@
 import re
 import logging
 from enum import IntEnum
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 

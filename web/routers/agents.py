@@ -424,8 +424,7 @@ async def upload_sticker(
     name: str, request: Request, _user: str = Depends(get_current_user)
 ) -> Any:
     """上传表情包：multipart/form-data，字段 file (图片)、description (描述)、emotion (情绪分类)。"""
-    from fastapi import UploadFile, File, Form
-    from fastapi import Request as _Req
+    from fastapi import UploadFile
     # 手动解析 multipart
     form = await request.form()
     file: UploadFile = form.get("file")  # type: ignore

@@ -395,7 +395,6 @@ class SlashCommandHandler:
         """同步读取硬件状态（通过 asyncio.to_thread 包装避免阻塞事件循环）"""
         lines: list[str] = []
         try:
-            import os
             try:
                 with open("/sys/class/thermal/thermal_zone0/temp") as f:
                     temp_c = int(f.read().strip()) / 1000

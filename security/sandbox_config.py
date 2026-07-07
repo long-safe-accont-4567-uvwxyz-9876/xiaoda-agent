@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import ipaddress
 import os
-import re
 import socket
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,7 +34,6 @@ class SandboxSettings:
 
 
 # ── 项目根目录（用于默认沙箱配置）──
-import sys
 import tempfile
 _PROJECT_ROOT = str(Path(__file__).parent)
 # 跨平台临时目录

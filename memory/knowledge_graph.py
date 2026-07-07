@@ -1,7 +1,6 @@
 from typing import Any
 import json
 import re
-import time
 from loguru import logger
 
 from db.db_knowledge import KnowledgeDB

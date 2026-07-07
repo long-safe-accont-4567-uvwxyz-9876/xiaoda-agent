@@ -2,7 +2,7 @@ import os
 import json
 from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolResult, ToolPermission
-from tools.web_tools_v2 import _bing_search_sync, _tavily_search_sync, _format_results, _clean_query
+from tools.web_tools_v2 import _bing_search_sync, _tavily_search_sync
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 WOLFRAMALPHA_API_KEY = os.getenv("WOLFRAMALPHA_API_KEY", "")

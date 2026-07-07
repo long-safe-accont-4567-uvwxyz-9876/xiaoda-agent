@@ -328,7 +328,6 @@ def _register_self_heal_checks(doc: DoctorCheck) -> None:
     doc.add_check("Stale Lock Files", "L8-SelfHeal", _check_stale_locks, _fix_stale_locks)
 
     def _check_port_conflict() -> tuple:
-        from config import DATA_DIR
         import socket
         port = int(os.getenv("WEBUI_PORT", "8082"))
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

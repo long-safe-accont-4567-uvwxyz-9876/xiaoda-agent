@@ -5,7 +5,6 @@ from typing import Any
 import json
 import os
 import time
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
@@ -15,7 +14,6 @@ from web.routers.auth import get_current_user
 # 缓存与凭证读写抽到独立模块, 避免与 web.routers.model_discovery / model_router 互相导入
 from web._discovery_cache import invalidate_discovery_cache
 from web._provider_keys import (
-    ROUTE_EDITABLE_FIELDS,
     _get_cred_dir,
     _key_file,
     _mask,

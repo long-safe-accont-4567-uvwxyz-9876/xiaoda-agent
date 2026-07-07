@@ -2,6 +2,7 @@ import asyncio
 import ipaddress
 import socket
 import time
+from collections import OrderedDict
 from typing import Any
 from urllib.parse import urlparse
 from loguru import logger
@@ -11,9 +12,10 @@ from security.ssrf_guard import validate_url as _ssrf_validate_url
 
 _CONTENT_LIMIT = 8000
 
-# 网页浏览缓存：5分钟TTL
-_browse_cache: dict[str, tuple[float, Any]] = {}
+# 网页浏览缓存：5分钟TTL + LRU 上限
+_browse_cache: "OrderedDict[str, tuple[float, Any]]" = OrderedDict()
 _BROWSE_CACHE_TTL = 300.0  # 5分钟
+_BROWSE_CACHE_MAX_SIZE = 256
 
 # 模块级 primp.Client 单例
 _primp_client = None
@@ -130,8 +132,12 @@ async def web_browse(url: str) -> ToolResult:
         # 检查浏览缓存
         now = time.monotonic()
         cached = _browse_cache.get(url)
-        if cached is not None and (now - cached[0]) < _BROWSE_CACHE_TTL:
-            return cached[1]
+        if cached is not None:
+            if (now - cached[0]) < _BROWSE_CACHE_TTL:
+                _browse_cache.move_to_end(url)
+                return cached[1]
+            # 已过期，移除
+            _browse_cache.pop(url, None)
 
         status, html, error = await asyncio.to_thread(_fetch_html, url)
         if error:
@@ -161,6 +167,9 @@ async def web_browse(url: str) -> ToolResult:
 
         # 更新浏览缓存
         _browse_cache[url] = (now, result)
+        _browse_cache.move_to_end(url)
+        while len(_browse_cache) > _BROWSE_CACHE_MAX_SIZE:
+            _browse_cache.popitem(last=False)
 
         return result
     except Exception as e:

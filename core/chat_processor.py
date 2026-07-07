@@ -8,11 +8,11 @@
 from __future__ import annotations
 
 import re
-import time
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from loguru import logger
+
+if TYPE_CHECKING:
+    from agent_core._shared import ProcessResult
 
 
 class ChatProcessor:
@@ -35,7 +35,7 @@ class ChatProcessor:
 
     async def process(self, ctx: Any, user_input: str, user_id: str,
                       source: str, user_openid: str, session_id: str,
-                      status_callback: Any, image_data: list[dict] | None) -> "ProcessResult":
+                      status_callback: Any, image_data: list[dict] | None) -> ProcessResult:
         """处理单轮对话的主入口。
 
         当前实现直接委托回 AgentCore._process_impl，

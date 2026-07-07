@@ -1,7 +1,6 @@
 """会话存储抽象层 — 借鉴 Claude Agent SDK 的 SessionStore 设计"""
 from __future__ import annotations
 
-import time
 from typing import Any, Protocol, runtime_checkable
 from dataclasses import dataclass, field
 

@@ -772,7 +772,6 @@ def _auto_register_providers(updates: dict) -> None:
         pid = provider_info["id"]
 
         # 写入凭证文件
-        from web.routers.models import _key_file
         from config import get_credentials_dir
         cred_dir = get_credentials_dir()
         cred_dir.mkdir(parents=True, exist_ok=True)

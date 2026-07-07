@@ -11,7 +11,6 @@ import asyncio
 import functools
 from typing import Any, Callable, Iterable
 
-from loguru import logger
 
 
 async def async_sleep(seconds: float) -> None:

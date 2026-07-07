@@ -5,10 +5,9 @@ import logging
 import subprocess
 import numpy as np
 from pathlib import Path
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any
 
-from tool_engine.tool_registry import ToolResult
 
 logger = logging.getLogger("vision_service")
 

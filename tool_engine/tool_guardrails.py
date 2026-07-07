@@ -3,7 +3,7 @@ import asyncio
 import hashlib
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from loguru import logger
 
 

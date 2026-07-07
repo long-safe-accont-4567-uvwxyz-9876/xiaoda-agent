@@ -2,7 +2,6 @@
 import os
 import asyncio
 from openai import AsyncOpenAI
-from loguru import logger
 from transports.base import ProviderTransport, TransportResponse
 
 

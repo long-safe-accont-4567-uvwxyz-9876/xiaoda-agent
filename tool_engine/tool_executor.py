@@ -5,7 +5,7 @@ import time
 import inspect
 from loguru import logger
 
-from .tool_registry import get_tool, ToolPermission, ToolResult, resolve_tool_func
+from .tool_registry import get_tool, ToolResult, resolve_tool_func
 from utils.metrics import metrics
 
 # 敏感参数关键词，匹配到的参数值会被屏蔽

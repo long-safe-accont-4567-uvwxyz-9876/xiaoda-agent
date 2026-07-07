@@ -22,7 +22,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, AsyncIterator, Iterator
+from typing import Any, AsyncIterator
 
 from loguru import logger
 

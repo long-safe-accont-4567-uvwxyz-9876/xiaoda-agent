@@ -31,7 +31,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional
 
 from loguru import logger
 

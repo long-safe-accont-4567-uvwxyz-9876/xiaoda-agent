@@ -17,6 +17,7 @@ import os
 import re
 import socket
 import urllib.parse
+from collections import OrderedDict
 from typing import Optional
 
 from loguru import logger
@@ -83,7 +84,8 @@ _BLOCKED_NETWORKS = [
 # 多租户公网场景应加 TTL 防 IP 漂移误用
 import threading as _threading
 
-_PIN_CACHE: dict[str, str] = {}
+_PIN_CACHE: "OrderedDict[str, str]" = OrderedDict()
+_PIN_CACHE_MAX_SIZE = 1000
 _PIN_CACHE_LOCK = _threading.Lock()
 
 
@@ -227,7 +229,11 @@ def validate_url(url: str) -> tuple[bool, str]:
     # Step 5: DNS Pinning — 锁定首个 IP, 缓存供 get_pinned_ip 使用
     pinned_ip = ips[0]
     with _PIN_CACHE_LOCK:
-        _PIN_CACHE[hostname.lower()] = pinned_ip
+        key = hostname.lower()
+        _PIN_CACHE[key] = pinned_ip
+        _PIN_CACHE.move_to_end(key)
+        while len(_PIN_CACHE) > _PIN_CACHE_MAX_SIZE:
+            _PIN_CACHE.popitem(last=False)
     logger.debug("ssrf.passed host={} pinned_ip={} ips={}", hostname, pinned_ip, ips)
     return True, ""
 
@@ -255,6 +261,7 @@ def get_pinned_ip(url: str) -> Optional[str]:
     with _PIN_CACHE_LOCK:
         cached = _PIN_CACHE.get(hostname)
         if cached:
+            _PIN_CACHE.move_to_end(hostname)
             return cached
 
     # 未缓存 → 重新校验并锁定
@@ -263,6 +270,8 @@ def get_pinned_ip(url: str) -> Optional[str]:
         return None
     with _PIN_CACHE_LOCK:
         cached = _PIN_CACHE.get(hostname)
+        if cached:
+            _PIN_CACHE.move_to_end(hostname)
     return cached if cached else None
 
 

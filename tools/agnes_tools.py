@@ -1,14 +1,17 @@
 """Agnes AI 图像/视频生成工具"""
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import os
 import asyncio
 import base64
 import time
 from collections import defaultdict
-from pathlib import Path
 from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolResult, ToolPermission
 from config import AGNES_IMAGE_MODEL, AGNES_VIDEO_MODEL, FILE_DIR
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
+    import httpx
 
 # 速率限制：滑动窗口
 _RATE_LIMITS = {
@@ -183,7 +186,6 @@ async def _agnes_create_video_task(
     client: Any, url: str, key: str, prompt: str, seconds: float, fps: int
 ) -> tuple[str, dict]:
     """创建视频生成任务，返回 (video_id, data)。"""
-    import math
     # 计算帧数：num_frames = 8n + 1, 且 <= 441
     raw_frames = int(seconds * fps)
     n = max(1, (raw_frames - 1) // 8)

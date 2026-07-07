@@ -9,7 +9,7 @@ import asyncio
 import re
 import threading
 from enum import Enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 from loguru import logger
 

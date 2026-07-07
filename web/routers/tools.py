@@ -6,7 +6,6 @@ import json
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from loguru import logger
 
 from web.schemas import Envelope
 from web.routers.auth import get_current_user

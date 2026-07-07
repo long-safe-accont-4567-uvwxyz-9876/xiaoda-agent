@@ -1,4 +1,4 @@
-from typing import Any, AsyncIterator, Iterator
+from typing import Any, AsyncIterator
 import asyncio
 import os
 import sys
@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
@@ -303,7 +302,7 @@ async def _init_lifespan_resources(app: FastAPI) -> tuple[Any, bool]:
 
 def _resolve_env_api_key() -> str:
     """读取 .env 中的 MIMO_API_KEY 用于判断降级模式, 不存在时兜底创建空 .env"""
-    import os as _os, sys as _sys
+    import os as _os
     from pathlib import Path as _Path
     try:
         from config import ENV_PATH
@@ -344,6 +343,15 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
             await qq_task
         except (asyncio.CancelledError, Exception):
             pass
+    # 取消后台一次性任务（健康自检 / 画像整合）
+    for _attr in ("health_run_task", "portrait_consolidate_task"):
+        _t = getattr(app.state, _attr, None)
+        if _t and not _t.done():
+            _t.cancel()
+            try:
+                await _t
+            except (asyncio.CancelledError, Exception):
+                pass
     # Shutdown plugins
     plugin_mgr = getattr(app.state, "plugin_manager", None)
     if plugin_mgr:

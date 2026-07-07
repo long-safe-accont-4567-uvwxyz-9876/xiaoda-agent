@@ -18,7 +18,7 @@ from __future__ import annotations
 import secrets
 import time
 import hmac
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable
 
 from loguru import logger

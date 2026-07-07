@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import fnmatch
-from loguru import logger
 
 from plugins.manifest import PluginPermissions
 

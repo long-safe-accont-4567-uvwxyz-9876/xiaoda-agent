@@ -7,8 +7,7 @@ from pathlib import Path
 from loguru import logger
 from .tool_executor import ToolExecutor, ToolResult
 from .tool_repair import ToolCallRepair
-from .tool_registry import get_tool, to_openai_tools
-from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, smart_truncate
+from utils.text_utils import smart_truncate
 from emotion.emoji_config import get_status_msg
 from config import ERROR_RULE_STRICT_MODE
 from core.background_tasks import _spawn

@@ -4,7 +4,6 @@
 """
 
 import re
-import asyncio
 from loguru import logger
 from dataclasses import dataclass
 from typing import Any, Optional

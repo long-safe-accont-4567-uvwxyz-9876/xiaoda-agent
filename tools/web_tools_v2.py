@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import time
+from collections import OrderedDict
 from typing import Any
 from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
@@ -9,9 +10,10 @@ from security.ssrf_guard import validate_url as _ssrf_validate_url
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
-# 搜索结果缓存：5分钟TTL
-_search_cache: dict[str, tuple[float, Any]] = {}
+# 搜索结果缓存：5分钟TTL + LRU 上限
+_search_cache: "OrderedDict[str, tuple[float, Any]]" = OrderedDict()
 _SEARCH_CACHE_TTL = 300.0  # 5分钟
+_SEARCH_CACHE_MAX_SIZE = 256
 
 # 模块级 primp.Client 单例
 _primp_client = None
@@ -260,8 +262,12 @@ async def web_search(query: str) -> ToolResult:
         # 检查搜索缓存
         now = time.monotonic()
         cached = _search_cache.get(query)
-        if cached is not None and (now - cached[0]) < _SEARCH_CACHE_TTL:
-            return cached[1]
+        if cached is not None:
+            if (now - cached[0]) < _SEARCH_CACHE_TTL:
+                _search_cache.move_to_end(query)
+                return cached[1]
+            # 已过期，移除
+            _search_cache.pop(query, None)
 
         results, engine, answer = await _do_search(query, max_results=8)
         if not results and not answer:
@@ -274,6 +280,9 @@ async def web_search(query: str) -> ToolResult:
 
         # 更新搜索缓存
         _search_cache[query] = (now, result)
+        _search_cache.move_to_end(query)
+        while len(_search_cache) > _SEARCH_CACHE_MAX_SIZE:
+            _search_cache.popitem(last=False)
 
         return result
     except Exception as e:

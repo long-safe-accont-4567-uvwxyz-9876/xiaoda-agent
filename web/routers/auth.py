@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import base64
 import secrets
+from collections import OrderedDict
 from pathlib import Path
 from threading import Lock
 from typing import Any, Optional
@@ -18,10 +19,12 @@ from web.schemas import Envelope, LoginRequest, LoginResponse
 
 router = APIRouter(tags=["auth"])
 
-# Token store: token -> expiry
-_tokens: dict[str, float] = {}
+# Token store: token -> expiry (LRU + 上限保护)
+_tokens: "OrderedDict[str, float]" = OrderedDict()
+_TOKENS_MAX_SIZE = 1000
 # Rate limit: ip -> (fail_count, lock_until)
-_rate_limit: dict[str, tuple[int, float]] = {}
+_rate_limit: "OrderedDict[str, tuple[int, float]]" = OrderedDict()
+_RATE_LIMIT_MAX_SIZE = 1000
 
 # Secret for HMAC
 _SECRET: str = ""
@@ -120,13 +123,25 @@ def _is_revoked(token: str) -> bool:
         return False
 
 
+def _cleanup_expired_tokens() -> None:
+    """清理已过期的 token，防止 _tokens 无限增长。"""
+    now = time.time()
+    expired = [t for t, exp in _tokens.items() if exp < now]
+    for t in expired:
+        _tokens.pop(t, None)
+
+
 def _issue_token() -> tuple[str, float]:
     expiry = time.time() + 7 * 86400  # 7 days
     nonce = secrets.token_hex(8)
     payload = f"{expiry}.{nonce}"
     sig = hmac.new(_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
     token = base64.urlsafe_b64encode(f"{payload}.{sig}".encode()).decode()
+    _cleanup_expired_tokens()
     _tokens[token] = expiry
+    _tokens.move_to_end(token)
+    while len(_tokens) > _TOKENS_MAX_SIZE:
+        _tokens.popitem(last=False)
     return token, expiry
 
 
@@ -150,6 +165,7 @@ def _validate_token(token: str) -> bool:
             return False
         # Also register in memory for tracking
         _tokens[token] = expiry
+        _tokens.move_to_end(token)
         return True
     except Exception as exc:
         logger.debug("auth.validate_token_failed: {}", exc, exc_info=True)
@@ -207,12 +223,21 @@ async def get_current_user(request: Request) -> str:
 _load_or_create_secret()
 
 
+def _cleanup_expired_rate_limits() -> None:
+    """清理已过期的 rate limit 条目，防止 _rate_limit 无限增长。"""
+    now = time.time()
+    expired = [ip for ip, (_, lock_until) in _rate_limit.items() if lock_until < now]
+    for ip in expired:
+        _rate_limit.pop(ip, None)
+
+
 @router.post("/auth/login", response_model=Envelope[LoginResponse])
 async def login(req: LoginRequest, request: Request) -> Any:
     password = os.getenv("WEBUI_PASSWORD", "")
     client_ip = request.client.host if request.client else "unknown"
 
     # Rate limit check
+    _cleanup_expired_rate_limits()
     if client_ip in _rate_limit:
         fails, lock_until = _rate_limit[client_ip]
         if time.time() < lock_until:
@@ -235,6 +260,9 @@ async def login(req: LoginRequest, request: Request) -> Any:
             _rate_limit[client_ip] = (fails, time.time() + 600)
         else:
             _rate_limit[client_ip] = (fails, lock_until)
+        _rate_limit.move_to_end(client_ip)
+        while len(_rate_limit) > _RATE_LIMIT_MAX_SIZE:
+            _rate_limit.popitem(last=False)
         raise HTTPException(401, "Invalid password")
 
     # Success: reset rate limit

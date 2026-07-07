@@ -11,7 +11,6 @@
 import ipaddress, socket, re, urllib.parse
 import warnings
 from loguru import logger
-from typing import Optional
 
 # 模块级废弃标记 (不在此处发 warning, 避免污染导入链;
 # 真正使用 get_ssrf_guard/validate_url 时才懒触发告警)

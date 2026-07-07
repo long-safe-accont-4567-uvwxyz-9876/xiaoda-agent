@@ -16,7 +16,7 @@ from typing import Any, TYPE_CHECKING
 
 from loguru import logger
 
-from config import MIMO_API_KEY, MIMO_BASE_URL, _ensure_workspace_template
+from config import _ensure_workspace_template
 from config import DEFAULT_PROVIDER as _DEFAULT_PROVIDER, PRO_MODEL_NAME as _PRO_MODEL
 from config import MODEL_NAME as _MODEL_NAME, get_provider_config as _get_provider_config
 from config import get_agent_display_name
@@ -283,7 +283,6 @@ class AgentCoreBootstrapper:
         from memory.notebook_manager import NotebookManager
         from memory.learning_manager import LearningManager
         from emotion.portrait_manager import PortraitManager
-        from instinct_manager import InstinctManager
         import config
 
         core = self.core
@@ -415,7 +414,7 @@ class AgentCoreBootstrapper:
 
     async def _register_sub_agents(self) -> None:
         from agent_dispatcher import SubAgentConfig
-        from config import XIAOLI_STICKER_DIR, AGENT_STICKER_BASE
+        from config import XIAOLI_STICKER_DIR
         # frozen 模式下使用用户目录中的 agents 配置（_init_user_resources 已复制模板）
         try:
             from config import AGENTS_CONFIG_DIR as _agents_dir

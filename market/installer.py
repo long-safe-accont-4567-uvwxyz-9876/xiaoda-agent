@@ -1,7 +1,6 @@
 """市场安装器 — 下载、验证、安装/卸载插件与技能"""
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import shutil

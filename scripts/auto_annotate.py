@@ -22,7 +22,6 @@ import sys
 from typing import Optional
 
 import libcst as cst
-import libcst.matchers as m
 
 
 SKIP_DIRS = {'.git', '__pycache__', '.venv', 'dist', 'build', 'node_modules', 'tests', '.pytest_cache', 'frontend'}

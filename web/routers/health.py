@@ -6,7 +6,6 @@ import asyncio
 import json
 import os
 import time
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
@@ -119,7 +118,7 @@ async def test_all(request: Request) -> Any:
             _all_running = False
             _all_running_lock.release()
 
-    asyncio.create_task(_run())
+    request.app.state.health_run_task = asyncio.create_task(_run())
     return Envelope(data={"started": True})
 
 

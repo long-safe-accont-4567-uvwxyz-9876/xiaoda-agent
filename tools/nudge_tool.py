@@ -1,6 +1,5 @@
 import random
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
-from loguru import logger
 from config import get_agent_display_name
 
 

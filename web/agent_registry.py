@@ -9,7 +9,6 @@
 from __future__ import annotations
 from typing import Any
 
-import dataclasses
 import json
 import sys
 import time

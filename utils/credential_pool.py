@@ -8,7 +8,7 @@ import os
 import time
 import threading
 from enum import Enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from loguru import logger
 
 from .error_classifier import ClassifiedError, FailoverReason

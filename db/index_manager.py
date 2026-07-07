@@ -25,8 +25,7 @@ learnings/notebook_entries, 同样已适配。
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 import aiosqlite
 from loguru import logger

@@ -27,7 +27,7 @@ else:
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from loguru import logger
 
-from config import TTS_ASYNC_MODE, STREAM_STATUS_PUSH, STREAM_TEXT_PUSH, STREAM_TOOL_STATUS
+from config import STREAM_STATUS_PUSH, STREAM_TEXT_PUSH, STREAM_TOOL_STATUS
 
 router = APIRouter()
 

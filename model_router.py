@@ -1,4 +1,4 @@
-from typing import Any, AsyncIterator, Iterator
+from typing import Any, AsyncIterator
 import os
 import time
 import asyncio
@@ -14,8 +14,8 @@ from config import FLASH_MODEL_NAME as _CFG_FLASH_MODEL, DEFAULT_PROVIDER as _CF
 from config import set_default_provider as _set_default_provider
 from transports import ProviderTransport, MiMoTransport, AgnesTransport
 from utils.prompt_caching import apply_cache_control
-from utils.error_classifier import ErrorClassifier, ClassifiedError, RecoveryAction
-from utils.credential_pool import get_credential_pool, CredentialPool
+from utils.error_classifier import ErrorClassifier, RecoveryAction
+from utils.credential_pool import get_credential_pool
 from security.ssrf_guard import validate_url as _ssrf_validate_url
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
