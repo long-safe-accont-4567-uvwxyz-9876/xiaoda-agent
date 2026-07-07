@@ -14,6 +14,7 @@ DEFAULT_EMOJI = {
 }
 
 def load_agent_emoji(agent_name: str, personality_file: str | None = None) -> dict:
+    """加载 agent 的 emoji 配置，并合并人格文件中的自定义项。"""
     config = dict(DEFAULT_EMOJI.get(agent_name, DEFAULT_EMOJI["xiaoda"]))
     # 动态注入 agent display_name（从 config/agents/{name}.json 读取，规避 IP 风险）
     config["name"] = get_agent_display_name(agent_name)
@@ -29,6 +30,7 @@ def load_agent_emoji(agent_name: str, personality_file: str | None = None) -> di
     return config
 
 def get_status_msg(agent_name: str, action: str, display_name: str, personality_file: str | None = None) -> str:
+    """根据 agent 与动作生成带 emoji 的状态提示文案。"""
     emoji_cfg = load_agent_emoji(agent_name, personality_file)
     agent_display = emoji_cfg.get("name", agent_name)
     e = emoji_cfg.get(action, "🌿")

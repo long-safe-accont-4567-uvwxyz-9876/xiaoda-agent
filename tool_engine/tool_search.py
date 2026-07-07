@@ -445,6 +445,7 @@ _engine = ToolSearchEngine()
 
 
 def get_tool_search_engine() -> ToolSearchEngine:
+    """获取工具搜索引擎全局单例。"""
     return _engine
 
 

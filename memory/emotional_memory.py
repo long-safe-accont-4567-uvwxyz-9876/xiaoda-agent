@@ -291,6 +291,7 @@ _emotional_memory_manager: EmotionalMemoryManager | None = None
 
 
 def get_emotional_memory_manager() -> EmotionalMemoryManager:
+    """获取全局情绪记忆管理器单例。"""
     global _emotional_memory_manager
     if _emotional_memory_manager is None:
         _emotional_memory_manager = EmotionalMemoryManager()

@@ -3,6 +3,7 @@ import aiosqlite
 
 
 class NotebookDB:
+    """管理笔记本条目数据的持久化。"""
 
     def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn

@@ -112,4 +112,5 @@ _bh_monitor = BehavioralHealthMonitor()
 
 
 def get_behavioral_health_monitor() -> BehavioralHealthMonitor:
+    """获取行为健康监控全局单例。"""
     return _bh_monitor

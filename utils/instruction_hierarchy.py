@@ -7,6 +7,8 @@ from enum import IntEnum
 
 
 class InstructionLevel(IntEnum):
+    """指令层级枚举，数值越大优先级越高。"""
+
     SYSTEM = 4       # 不可覆盖: 核心人格/安全规则
     APPLICATION = 3  # 应用逻辑: 工具使用规则/输出格式
     USER = 2         # 用户输入: 当前任务指令
@@ -66,4 +68,5 @@ _builder = InstructionBuilder()
 
 
 def get_instruction_builder() -> InstructionBuilder:
+    """获取指令构建器全局单例。"""
     return _builder

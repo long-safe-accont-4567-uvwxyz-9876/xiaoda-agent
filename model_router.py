@@ -97,6 +97,7 @@ def _ssrf_check(url: str) -> None:
 
 
 class ModelRouter:
+    """模型路由器，按任务类型选择模型/Provider 并处理重试与凭证轮换。"""
 
     TASK_TIMEOUTS = {
         "emotion_analysis": 10,

@@ -5,6 +5,7 @@ from loguru import logger
 
 
 class MemoryDB:
+    """管理情景记忆、画像等记忆数据的读写。"""
 
     def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn

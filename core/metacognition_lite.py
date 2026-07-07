@@ -29,6 +29,7 @@ from loguru import logger
 
 
 class DriftType(str, Enum):
+    """元认知漂移类型枚举，标识幻觉、主题漂移、重复等异常状态。"""
     NONE = "none"
     HALLUCINATION = "hallucination"      # 幻觉: 输出与已知事实冲突
     TOPIC_DRIFT = "topic_drift"           # 主题漂移

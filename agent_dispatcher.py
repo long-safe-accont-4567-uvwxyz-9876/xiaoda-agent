@@ -135,6 +135,7 @@ def _is_tool_unsupported_error(error_str: str) -> bool:
 
 
 class SubAgent:
+    """单个子 Agent 实例，封装客户端、配置与调用逻辑。"""
     def __init__(self, config: SubAgentConfig, tts: TTSEngine,
                  tool_executor: ToolExecutor | None = None,
                  tool_repair: ToolCallRepair | None = None,
@@ -804,6 +805,7 @@ _AGENT_TO_TASK_TYPE = {
 
 
 class AgentDispatcher:
+    """管理多个子 Agent 的注册、调度与降级调用。"""
     def __init__(self, tts: TTSEngine,
                  tool_executor: ToolExecutor | None = None,
                  tool_repair: ToolCallRepair | None = None,

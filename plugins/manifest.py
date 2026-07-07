@@ -9,32 +9,38 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class NetworkPermission(BaseModel):
+    """插件网络访问权限配置。"""
     outbound: list[str] = Field(default_factory=list, description="允许的出站 URL glob 模式")
     inbound: bool = False
 
 
 class FilesystemPermission(BaseModel):
+    """插件文件系统访问权限配置。"""
     read: list[str] = Field(default_factory=list, description="允许读取的目录 zone")
     write: list[str] = Field(default_factory=list, description="允许写入的目录 zone")
 
 
 class MemoryPermission(BaseModel):
+    """插件记忆模块访问权限配置。"""
     read: bool = False
     write: bool = False
 
 
 class PluginDataPermission(BaseModel):
+    """插件自身数据访问权限配置。"""
     read: bool = False
     write: bool = False
 
 
 class SystemPermission(BaseModel):
+    """插件系统级资源（环境变量、子进程等）访问权限配置。"""
     env_vars: list[str] = Field(default_factory=list, description="允许访问的环境变量 fnmatch 模式")
     subprocess: bool = False
     signal_handlers: bool = False
 
 
 class PluginPermissions(BaseModel):
+    """插件权限聚合模型，汇总各类资源访问权限。"""
     network: NetworkPermission = Field(default_factory=NetworkPermission)
     filesystem: FilesystemPermission = Field(default_factory=FilesystemPermission)
     memory: MemoryPermission = Field(default_factory=MemoryPermission)
@@ -44,17 +50,20 @@ class PluginPermissions(BaseModel):
 
 
 class ToolCapability(BaseModel):
+    """插件声明的工具能力描述。"""
     name: str
     description: str = ""
 
 
 class PluginCapabilities(BaseModel):
+    """插件能力声明，包含工具、订阅与发射事件。"""
     tools: list[ToolCapability] = Field(default_factory=list)
     subscribes_to: list[str] = Field(default_factory=list)
     emits: list[str] = Field(default_factory=list)
 
 
 class PluginDependency(BaseModel):
+    """插件依赖项声明。"""
     id: str
     version: str = "*"
 

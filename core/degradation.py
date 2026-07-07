@@ -7,6 +7,7 @@ from loguru import logger
 
 
 class DegradationLevel(IntEnum):
+    """降级级别枚举，从 FULL 到 EMERGENCY 共四级递进降级。"""
     FULL = 0
     DEGRADED = 1
     MINIMAL = 2

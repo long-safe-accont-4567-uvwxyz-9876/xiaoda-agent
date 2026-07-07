@@ -5,6 +5,7 @@ from loguru import logger
 
 
 def estimate_tokens(text: str) -> int:
+    """估算文本 token 数量（中文按 1.5、英文按 0.25 系数加权）。"""
     cn = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
     en = len(text) - cn
     # 英文系数 0.25 与 context_usage.py 保持一致（之前是 0.5，导致估算偏高）
@@ -29,6 +30,7 @@ def _smart_truncate_summary(text: str, max_len: int = 100) -> str:
 
 
 class AgentContext:
+    """管理对话上下文，维护历史、系统提示、动态缓存与压缩等状态。"""
 
     MAX_HISTORY_TOKENS = 6000
     SYSTEM_PROMPT_TOKENS_BUDGET = 2000

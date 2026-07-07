@@ -49,6 +49,7 @@ def list_commands() -> list[dict]:
 
 
 class SlashCommandHandler:
+    """斜杠命令处理器，解析并分发 /xxx 命令到对应处理逻辑。"""
 
     def __init__(self, db: Optional[Any]=None, router: Optional[Any]=None, context: Optional[Any]=None,
                  memory: Optional[Any]=None, learning_manager: Optional[Any]=None,

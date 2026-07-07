@@ -34,6 +34,7 @@ from loguru import logger
 
 
 class TrajectoryType(str, Enum):
+    """反思轨迹类型枚举，区分初始/错误/正确/修正四类轨迹。"""
     INITIAL = "initial"        # 初始轨迹
     ERROR = "error"            # 错误轨迹
     CORRECT = "correct"        # 正确轨迹

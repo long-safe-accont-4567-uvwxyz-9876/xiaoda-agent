@@ -19,6 +19,7 @@ from core.risk_classifier import RiskClassifier, EvidenceGate, PostValidator, Ri
 # ── 钩子类型 ──────────────────────────────────────────────
 
 class HookType(Enum):
+    """钩子类型枚举，覆盖工具执行前后、用户提交、子代理启停等关键节点。"""
     PRE_TOOL_USE = "pre_tool_use"                   # 工具执行前
     POST_TOOL_USE = "post_tool_use"                 # 工具执行后
     POST_TOOL_USE_FAILURE = "post_tool_use_failure" # 工具执行失败
@@ -77,6 +78,7 @@ class BaseHook:
 # ── 钩子引擎 ──────────────────────────────────────────────
 
 class HookEngine:
+    """钩子引擎，负责注册并触发各类钩子链。"""
 
     def __init__(self) -> None:
         self._hooks: dict[HookType, list[BaseHook]] = {t: [] for t in HookType}

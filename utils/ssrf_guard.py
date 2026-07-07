@@ -97,6 +97,7 @@ _guard = SSRFGuardV2()
 
 
 def get_ssrf_guard() -> SSRFGuardV2:
+    """获取 SSRF 防护全局单例（已废弃）。"""
     # 懒触发废弃告警 (新代码请用 security.ssrf_guard)
     warnings.warn(
         "utils.ssrf_guard.get_ssrf_guard 已废弃, 请改用 "

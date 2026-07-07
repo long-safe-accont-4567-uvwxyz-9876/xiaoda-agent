@@ -57,6 +57,7 @@ def _detect_fs_type(path: Path) -> str:
 
 
 class DatabaseManager:
+    """管理 SQLite 数据库连接与各子 DB 模块的生命周期。"""
 
     def __init__(self, db_path: str | Path | None = None) -> None:
         self.db_path = Path(db_path) if db_path else DB_PATH

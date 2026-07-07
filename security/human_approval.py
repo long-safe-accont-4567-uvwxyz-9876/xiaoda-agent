@@ -25,6 +25,7 @@ from loguru import logger
 
 
 class ApprovalStatus(str, Enum):
+    """人工审批请求状态枚举。"""
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
@@ -33,6 +34,7 @@ class ApprovalStatus(str, Enum):
 
 
 class RiskLevel(str, Enum):
+    """操作风险等级枚举。"""
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"

@@ -6,6 +6,7 @@ from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls as _pars
 
 
 class ToolCallRepair:
+    """工具调用修复器，拾取遗漏调用并抑制调用风暴。"""
 
     STORM_TTL = 120
 

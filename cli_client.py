@@ -109,6 +109,7 @@ def login(base: str, password: str, retries: int = 3) -> str:
 
 
 class NahidaCLI:
+    """远程 Agent 的命令行客户端，通过 HTTP/WebSocket 连接服务端。"""
     def __init__(self, host: str, port: int, password: str) -> None:
         self.base = f"http://{host}:{port}"
         self.ws_url = f"ws://{host}:{port}/ws"

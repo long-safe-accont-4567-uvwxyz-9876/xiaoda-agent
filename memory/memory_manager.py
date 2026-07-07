@@ -195,6 +195,7 @@ def _normalize_for_dedupe(text: str) -> str:
 
 
 class MemoryManager:
+    """管理情景记忆的编码、检索、去重与遗忘等核心流程。"""
 
     IDLE_THRESHOLD = 30
     ENCODE_COOLDOWN = 60

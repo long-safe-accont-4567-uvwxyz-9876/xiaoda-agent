@@ -26,6 +26,7 @@ from loguru import logger
 
 
 class NodeState(str, Enum):
+    """DAG 节点执行状态枚举。"""
     PENDING = "pending"
     RUNNING = "running"
     SUCCESS = "success"

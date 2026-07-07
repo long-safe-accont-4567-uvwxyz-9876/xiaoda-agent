@@ -78,6 +78,8 @@ TOOL_DISPLAY_NAMES = {
 
 
 class ToolCallHandler:
+    """工具调用处理器，协调执行、修复与回调钩子。"""
+
     def __init__(self, tool_executor: ToolExecutor, tool_repair: ToolCallRepair,
                  clean_reply_callback: Any, context: Any=None, router: Any=None, xiaoli_delegate: Any=None,
                  status_callback: Any=None, agent_name: str = "xiaoda", personality_file: str | None = None,

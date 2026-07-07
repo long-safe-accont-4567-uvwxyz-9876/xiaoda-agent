@@ -10,6 +10,8 @@ from enum import Enum
 
 
 class FaultType(Enum):
+    """故障注入类型枚举。"""
+
     TIMEOUT = "timeout"
     RATE_LIMIT = "rate_limit"
     CONTENT_FILTER = "content_filter"

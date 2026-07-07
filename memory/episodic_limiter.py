@@ -131,6 +131,7 @@ _limiter: Optional[EpisodicLimiter] = None
 
 
 def get_episodic_limiter(db_manager: Any | None=None) -> EpisodicLimiter:
+    """获取全局情景记忆限制器单例。"""
     global _limiter
     if _limiter is None and db_manager is not None:
         _limiter = EpisodicLimiter(db_manager)

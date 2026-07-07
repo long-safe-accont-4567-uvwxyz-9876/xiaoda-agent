@@ -4,6 +4,7 @@ from loguru import logger
 
 
 class LearningDB:
+    """管理学习记录与错误反馈数据的读写。"""
 
     def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn

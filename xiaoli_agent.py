@@ -53,6 +53,7 @@ def _is_tool_unsupported_error(error_str: str) -> bool:
 
 
 class XiaoliAgent:
+    """小黎 Agent，集成多 provider 客户端与工具执行能力。"""
     def __init__(self, tool_executor: ToolExecutor | None = None,
                  tool_repair: ToolCallRepair | None = None,
                  xiaoda_delegate: Optional[Any]=None) -> None:

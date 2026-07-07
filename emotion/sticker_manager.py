@@ -7,6 +7,7 @@ from .emotion_enum import Emotion, resolve_emotion, STICKER_FALLBACK, is_unified
 
 
 class StickerManager:
+    """管理情绪关键词映射与贴纸/表情的选用。"""
     EMOTION_MAP = {
         "happy": [
             "开心", "高兴", "嘻嘻", "哈哈", "太好了", "太棒了", "好耶", "嘿嘿",

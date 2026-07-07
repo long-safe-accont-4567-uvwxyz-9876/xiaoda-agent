@@ -31,6 +31,7 @@ from loguru import logger
 
 
 class RecoveryLevel(int, Enum):
+    """故障恢复级别枚举，从重试到逐级升级共六档。"""
     RETRY = 1
     BACKOFF = 2
     FALLBACK = 3

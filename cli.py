@@ -227,6 +227,7 @@ def _status_translate(msg: str) -> str:
 
 
 class CLIInterface:
+    """命令行交互界面，封装 AgentCore 的本地终端对话循环。"""
 
     def __init__(self) -> None:
         self.bot = AgentCore()

@@ -69,6 +69,7 @@ def _normalize_json_keys(obj: Any) -> Any:
 
 
 class KnowledgeGraph:
+    """管理知识图谱实体与关系的存取、检索与清理。"""
 
     MAX_ENTITIES = 500
     CLEANUP_AGE_DAYS = 30
