@@ -105,11 +105,9 @@ class BeliefRouter:
 
     def _load_from_db(self) -> None:
         """Load beliefs from database."""
+        conn = None
         try:
             conn = sqlite3.connect(self._db_path)
-            # 表 agent_beliefs 不在 db/schema.sql 中，由 _save_to_db 懒创建。
-            # 首次加载时表可能尚不存在，这里先建表（IF NOT EXISTS）再查询，
-            # 避免抛出 `no such table` 异常导致反复打印 load_failed 警告。
             conn.execute("""CREATE TABLE IF NOT EXISTS agent_beliefs (
                 agent_name TEXT PRIMARY KEY,
                 alpha REAL NOT NULL DEFAULT 1.0,
@@ -119,16 +117,17 @@ class BeliefRouter:
             cur = conn.execute("SELECT agent_name, alpha, beta FROM agent_beliefs")
             for row in cur:
                 name, alpha, beta = row
-                # 防止除零：确保 alpha/beta > 0
                 alpha = max(alpha, 0.01)
                 beta = max(beta, 0.01)
                 if name in self._beliefs:
                     self._beliefs[name] = AgentBelief(alpha=alpha, beta=beta)
-            conn.close()
             logger.info("belief_router.loaded", beliefs=self.get_beliefs())
         except Exception as e:
             logger.warning("belief_router.load_failed", error=str(e))
             self._load_from_json()
+        finally:
+            if conn:
+                conn.close()
 
     def _load_from_json(self) -> None:
         """从 JSON 备份文件加载信念状态（DB 加载失败时的回退路径）。
@@ -164,20 +163,26 @@ class BeliefRouter:
             db_path = self._db_path
 
             def _do_save() -> None:
-                conn = sqlite3.connect(db_path)
-                conn.execute("""CREATE TABLE IF NOT EXISTS agent_beliefs (
-                    agent_name TEXT PRIMARY KEY,
-                    alpha REAL NOT NULL DEFAULT 1.0,
-                    beta REAL NOT NULL DEFAULT 1.0,
-                    updated_at REAL NOT NULL
-                )""")
-                for name, data in beliefs_snapshot.items():
-                    conn.execute(
-                        "INSERT OR REPLACE INTO agent_beliefs (agent_name, alpha, beta, updated_at) VALUES (?, ?, ?, ?)",
-                        (name, data["alpha"], data["beta"], time.time())
-                    )
-                conn.commit()
-                conn.close()
+                conn = None
+                try:
+                    conn = sqlite3.connect(db_path)
+                    conn.execute("""CREATE TABLE IF NOT EXISTS agent_beliefs (
+                        agent_name TEXT PRIMARY KEY,
+                        alpha REAL NOT NULL DEFAULT 1.0,
+                        beta REAL NOT NULL DEFAULT 1.0,
+                        updated_at REAL NOT NULL
+                    )""")
+                    for name, data in beliefs_snapshot.items():
+                        conn.execute(
+                            "INSERT OR REPLACE INTO agent_beliefs (agent_name, alpha, beta, updated_at) VALUES (?, ?, ?, ?)",
+                            (name, data["alpha"], data["beta"], time.time())
+                        )
+                    conn.commit()
+                except Exception as e:
+                    logger.warning("belief_router.save_failed", error=str(e))
+                finally:
+                    if conn:
+                        conn.close()
 
             # 使用线程池避免阻塞事件循环
             try:

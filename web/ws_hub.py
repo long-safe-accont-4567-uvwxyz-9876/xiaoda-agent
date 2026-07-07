@@ -257,13 +257,13 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
         await ws.send_json({"type": "error", "code": "UNAUTHORIZED", "message": "Invalid or missing token"})
         await ws.close(code=4001, reason="Unauthorized")
         return
-    # 连接数上限检查：在 try 块外提前检查，避免 ValueError 导致 WebSocket 泄漏
-    if len(manager._connections) >= manager.MAX_CONNECTIONS:
+    try:
+        conn_id = manager.register(ws)
+    except ValueError:
         await ws.send_json({"type": "error", "code": "MAX_CONNECTIONS",
                             "message": f"连接数已达上限 {manager.MAX_CONNECTIONS}，请稍后重试"})
         await ws.close(code=4029, reason="Too many connections")
         return
-    conn_id = manager.register(ws)
     logger.info("ws.connected conn_id={}", conn_id)
     await manager.send_to(conn_id, {
         "type": "connected", "conn_id": conn_id,
@@ -301,7 +301,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
 
             elif mtype == "terminal_start":
                 term_sid = str(msg.get("term_sid") or uuid.uuid4().hex[:8])
-                asyncio.create_task(_handle_terminal_start(conn_id, msg, term_sid))
+                _t = asyncio.create_task(_handle_terminal_start(conn_id, msg, term_sid))
+                _t.add_done_callback(lambda t: logger.warning("ws.terminal_start_task_error: {}", t.exception()) if not t.cancelled() and t.exception() else None)
 
             elif mtype == "terminal_input":
                 _handle_terminal_input(msg)
