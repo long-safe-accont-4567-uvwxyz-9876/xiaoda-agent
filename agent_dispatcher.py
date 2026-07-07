@@ -105,6 +105,7 @@ class SubAgentConfig:
     excluded_tools: set[str] = field(default_factory=set)
     base_url: str = ""
     api_key_env: str = ""
+    display_name_en: str = ""
     capabilities: list[str] = field(default_factory=list)
     route_description: str = ""
     mcp_servers: list[str] = field(default_factory=list)
