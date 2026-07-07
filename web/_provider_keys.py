@@ -54,8 +54,7 @@ def _decode_key(encoded: str) -> str | None:
     解码优先级（向后兼容旧版本文件格式）：
     1. credential_vault enc:v1: 加密格式（新版本推荐）
     2. 旧版 base64 编码（自动迁移到 credential_vault）
-    3. 明文 key（如 sk-xxx，直接返回）
-    4. 返回 None 表示无法识别
+    3. 返回 None 表示无法识别（调用方按明文兜底）
     """
     # 1. 优先尝试 credential_vault 解密（识别 enc:v1: 前缀）
     try:
@@ -73,13 +72,7 @@ def _decode_key(encoded: str) -> str | None:
     try:
         return base64.b64decode(encoded.encode("ascii")).decode("utf-8")
     except Exception:
-        pass
-
-    # 3. 明文 key（sk-、key-、token- 等常见前缀，或任意非空字符串）
-    if encoded:
-        return encoded
-
-    return None
+        return None
 
 
 def load_provider_key(provider_id: str) -> str:
@@ -87,7 +80,7 @@ def load_provider_key(provider_id: str) -> str:
 
     自动迁移：
     - 旧版 base64 文件首次读取后自动升级到 credential_vault 加密格式
-    - 旧版明文文件首次读取后自动升级到 credential_vault 加密格式
+    - 明文 key 文件首次读取后自动加密存储（后续读取走解密流程）
     """
     fp = _key_file(provider_id)
     if not fp.exists():
@@ -104,6 +97,13 @@ def load_provider_key(provider_id: str) -> str:
         except OSError:
             pass
         return decoded
+    # 明文 key 未加密：自动加密存储，后续走解密流程
+    if raw and not raw.startswith("enc:"):
+        try:
+            fp.write_text(_encode_key(raw) + "\n", encoding="utf-8")
+            return raw
+        except OSError:
+            pass
     from loguru import logger
     logger.warning("provider_key.unrecognized_format provider={} raw_len={}", provider_id, len(raw))
     return ""
