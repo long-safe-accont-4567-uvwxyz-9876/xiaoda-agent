@@ -122,6 +122,7 @@ class ConfigService:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             atomic_write(self._path, json.dumps(self._data, ensure_ascii=False, indent=2))
         except Exception:
+            logger.debug("config_service.atomic_write_fallback", exc_info=True)
             self._path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._path.with_suffix(".tmp")
             tmp.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")

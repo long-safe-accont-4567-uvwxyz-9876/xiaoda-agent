@@ -149,7 +149,7 @@ class AgentRegistry:
             try:
                 return json.loads(fp.read_text(encoding="utf-8"))
             except Exception:
-                logger.warning("xiaoda.json 损坏，忽略")
+                logger.warning("xiaoda.json 损坏，忽略", exc_info=True)
         return {}
 
     def _save_xiaoda_cfg(self, data: dict) -> None:
@@ -468,6 +468,7 @@ class AgentRegistry:
                 try:
                     cfg_data = json.loads(fp.read_text(encoding="utf-8"))
                 except Exception:
+                    logger.debug("registry.cfg_parse_error name={}", name, exc_info=True)
                     cfg_data = {}
                 deps = cfg_data.get("deprecated_names", [])
                 if old_dn not in deps:

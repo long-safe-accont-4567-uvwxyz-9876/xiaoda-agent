@@ -218,7 +218,7 @@ async def update_workflow(wf_id: str, body: dict, request: Request) -> Any:
         old_wf = json.loads(fp.read_text(encoding="utf-8"))
         old_name = old_wf.get("name", "")
     except Exception:
-        pass
+        logger.debug("workflows.read_old_name_failed", exc_info=True)
 
     body["id"] = wf_id
     fp.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -256,7 +256,7 @@ async def delete_workflow(wf_id: str, request: Request) -> Any:
         wf = json.loads(fp.read_text(encoding="utf-8"))
         name = wf.get("name", "")
     except Exception:
-        pass
+        logger.debug("workflows.read_name_before_delete_failed", exc_info=True)
 
     fp.unlink()
     _remove_skill_file(name)

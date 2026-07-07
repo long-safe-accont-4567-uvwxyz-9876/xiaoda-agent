@@ -125,7 +125,7 @@ class MediaTaskQueue:
                 "error": error or None,
             })
         except Exception:
-            pass
+            logger.debug("media_tasks.broadcast_error", exc_info=True)
 
     # ── 各类型执行 ───────────────────────────────────────
 

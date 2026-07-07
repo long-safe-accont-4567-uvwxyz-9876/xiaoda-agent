@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+from loguru import logger
 
 # 当前请求关联的 msg_id（由 ws_hub 在 process 前设置，使工具事件能对上消息气泡）
 current_msg_id: contextvars.ContextVar[str] = contextvars.ContextVar("ws_msg_id", default="")
@@ -33,4 +34,4 @@ async def emit_tool_event(phase: str, tool_name: str, arguments: dict | None = N
             "elapsed_ms": elapsed_ms,
         })
     except Exception:
-        pass
+        logger.debug("tool_events.emit_error", exc_info=True)

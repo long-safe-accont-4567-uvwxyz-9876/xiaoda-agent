@@ -101,7 +101,7 @@ async def update_tool(name: str, body: dict, request: Request) -> Any:
         from web.ws_hub import manager
         await manager.broadcast({"type": "config_changed", "domain": "tools"})
     except Exception:
-        pass
+        logger.debug("tools.broadcast_config_changed_failed", exc_info=True)
     return Envelope(data={"name": name,
                           "enabled": tool.get("enabled", True) is not False,
                           "max_frequency": tool.get("max_frequency"),

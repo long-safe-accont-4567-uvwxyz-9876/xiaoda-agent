@@ -413,6 +413,10 @@ def create_app() -> FastAPI:
         response = await call_next(request)
         response.headers["Content-Security-Policy"] = "frame-ancestors 'self' http://127.0.0.1:*"
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         # 滑动续期：get_current_user 在 request.state 上设置了新 token 时写入响应头
         new_token = getattr(request.state, "new_token", None)
         if new_token:
