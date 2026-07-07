@@ -378,8 +378,23 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
 
     async def shutdown(self) -> None:
         """安全释放所有资源，不抛异常。"""
+        await self._shutdown_cancel_prewarm_task()
+        await self._shutdown_cancel_blackboard_cleanup()
+        await self._shutdown_stop_mcp_servers()
+        await self._shutdown_cancel_background_tasks()
+        await self._shutdown_flush_router_costs()
+        await self._shutdown_close_component('router', 'router_close')
+        await self._shutdown_close_component('xiaoli', 'xiaoli_close')
+        await self._shutdown_close_component('dispatcher', 'dispatcher_close')
+        await self._shutdown_close_agnes_clients()
+        await self._shutdown_close_component('_vec_store', 'vec_store_close')
+        await self._shutdown_close_component('tts', 'tts_close')
+        await self._shutdown_close_component('db', 'db_close')
+        logger.info("agent_core.shutdown_complete")
+
+    async def _shutdown_cancel_prewarm_task(self) -> None:
+        """取消 jieba 预热后台任务。"""
         try:
-            # 取消 jieba 预热后台任务
             prewarm_task = getattr(self, "_prewarm_task", None)
             if prewarm_task and not prewarm_task.done():
                 prewarm_task.cancel()
@@ -387,8 +402,9 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         except Exception as e:
             logger.warning("shutdown.prewarm_cancel_failed", error=str(e))
 
+    async def _shutdown_cancel_blackboard_cleanup(self) -> None:
+        """取消共享黑板后台清理任务。"""
         try:
-            # 取消共享黑板后台清理任务
             cleanup_task = getattr(self, "_shared_blackboard_cleanup_task", None)
             if cleanup_task and not cleanup_task.done():
                 cleanup_task.cancel()
@@ -396,15 +412,17 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         except Exception as e:
             logger.warning("shutdown.blackboard_cleanup_cancel_failed", error=str(e))
 
+    async def _shutdown_stop_mcp_servers(self) -> None:
+        """停止所有 MCP 服务器。"""
         try:
-            # Stop MCP servers
             if self._mcp_manager:
                 await self._mcp_manager.stop_all()
         except Exception as e:
             logger.warning("shutdown.mcp_stop_failed", error=str(e))
 
+    async def _shutdown_cancel_background_tasks(self) -> None:
+        """取消所有后台任务。"""
         try:
-            # 取消所有后台任务
             bg_tasks = BackgroundTaskManager.get_bg_tasks()
             for task in list(bg_tasks):
                 if not task.done():
@@ -415,53 +433,27 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         except Exception as e:
             logger.warning("shutdown.cancel_bg_tasks_failed", error=str(e))
 
+    async def _shutdown_flush_router_costs(self) -> None:
+        """刷新路由器费用记录。"""
         try:
             if self.router:
                 await self.router.flush_costs()
         except Exception as e:
             logger.warning("shutdown.flush_costs_failed", error=str(e))
 
-        # 关闭 AsyncOpenAI 客户端, 释放 TCP 连接
-        try:
-            if self.router and hasattr(self.router, 'close'):
-                await self.router.close()
-        except Exception as e:
-            logger.warning("shutdown.router_close_failed", error=str(e))
+    async def _shutdown_close_component(self, attr_name: str, log_name: str) -> None:
+        """关闭拥有 close() 方法的组件（如路由器、xiaoli、dispatcher 等），异常不抛出。"""
+        obj = getattr(self, attr_name, None)
+        if obj and hasattr(obj, 'close'):
+            try:
+                await obj.close()
+            except Exception as e:
+                logger.warning(f"shutdown.{log_name}_failed", error=str(e))
 
-        try:
-            if self.xiaoli and hasattr(self.xiaoli, 'close'):
-                await self.xiaoli.close()
-        except Exception as e:
-            logger.warning("shutdown.xiaoli_close_failed", error=str(e))
-
-        try:
-            if self.dispatcher and hasattr(self.dispatcher, 'close'):
-                await self.dispatcher.close()
-        except Exception as e:
-            logger.warning("shutdown.dispatcher_close_failed", error=str(e))
-
+    async def _shutdown_close_agnes_clients(self) -> None:
+        """关闭 agnes 工具客户端。"""
         try:
             from tools.agnes_tools import close_agnes_clients
             await close_agnes_clients()
         except Exception as e:
             logger.warning("shutdown.agnes_close_failed", error=str(e))
-
-        try:
-            if self._vec_store and hasattr(self._vec_store, 'close'):
-                await self._vec_store.close()
-        except Exception as e:
-            logger.warning("shutdown.vec_store_close_failed", error=str(e))
-
-        try:
-            if self.tts and hasattr(self.tts, 'close'):
-                await self.tts.close()
-        except Exception as e:
-            logger.warning("shutdown.tts_close_failed", error=str(e))
-
-        try:
-            if self.db:
-                await self.db.close()
-        except Exception as e:
-            logger.warning("shutdown.db_close_failed", error=str(e))
-
-        logger.info("agent_core.shutdown_complete")

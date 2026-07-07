@@ -171,62 +171,115 @@ class ErrorClassifier:
 
         exc_name = type(exc).__name__.lower()
         exc_msg = str(exc).lower()
+        # 共享上下文，便于辅助方法复用
+        ctx = {"exc_name": exc_name, "exc_msg": exc_msg, "asyncio": asyncio, "exc": exc}
 
-        # 超时
+        for matcher in (
+            self._match_timeout_by_message,
+            self._match_auth_error_by_message,
+            self._match_rate_limit_by_message,
+            self._match_context_overflow_by_message,
+            self._match_content_policy_by_message,
+            self._match_connection_error_by_message,
+            self._match_model_not_found_by_message,
+            self._match_payload_too_large_by_message,
+            self._match_server_error_by_message,
+            self._match_format_error_by_message,
+        ):
+            reason = matcher(ctx)
+            if reason is not None:
+                return reason
+
+        return FailoverReason.UNKNOWN
+
+    def _match_timeout_by_message(self, ctx: dict) -> FailoverReason | None:
+        """超时"""
+        asyncio = ctx["asyncio"]
+        exc = ctx["exc"]
+        exc_name = ctx["exc_name"]
+        exc_msg = ctx["exc_msg"]
         if isinstance(exc, asyncio.TimeoutError) or "timeout" in exc_name or "timeout" in exc_msg:
             return FailoverReason.TIMEOUT
+        return None
 
-        # 认证失败
+    def _match_auth_error_by_message(self, ctx: dict) -> FailoverReason | None:
+        """认证失败"""
+        exc_msg = ctx["exc_msg"]
         if "401" in exc_msg or "403" in exc_msg or "unauthorized" in exc_msg or "forbidden" in exc_msg:
             return FailoverReason.AUTH_ERROR
         if "invalid api key" in exc_msg or "invalid x-api-key" in exc_msg or "authentication" in exc_msg:
             return FailoverReason.AUTH_ERROR
+        return None
 
-        # 限速
+    def _match_rate_limit_by_message(self, ctx: dict) -> FailoverReason | None:
+        """限速"""
+        exc_name = ctx["exc_name"]
+        exc_msg = ctx["exc_msg"]
         if "429" in exc_msg or "rate" in exc_msg or "rate_limit" in exc_name or "too many requests" in exc_msg:
             return FailoverReason.RATE_LIMIT
+        return None
 
-        # 上下文溢出
+    def _match_context_overflow_by_message(self, ctx: dict) -> FailoverReason | None:
+        """上下文溢出"""
+        exc_msg = ctx["exc_msg"]
         if "context" in exc_msg and ("overflow" in exc_msg or "exceed" in exc_msg or "maximum" in exc_msg):
             return FailoverReason.CONTEXT_OVERFLOW
         if "token" in exc_msg and ("limit" in exc_msg or "exceed" in exc_msg or "maximum" in exc_msg):
             return FailoverReason.CONTEXT_OVERFLOW
         if "maximum context length" in exc_msg:
             return FailoverReason.CONTEXT_OVERFLOW
+        return None
 
-        # 内容策略
+    def _match_content_policy_by_message(self, ctx: dict) -> FailoverReason | None:
+        """内容策略"""
+        exc_msg = ctx["exc_msg"]
         if "content_policy" in exc_msg or "content policy" in exc_msg or "safety" in exc_msg:
             return FailoverReason.CONTENT_POLICY
+        return None
 
-        # 连接错误
+    def _match_connection_error_by_message(self, ctx: dict) -> FailoverReason | None:
+        """连接错误"""
+        exc_name = ctx["exc_name"]
+        exc_msg = ctx["exc_msg"]
         if "connection" in exc_name or "connection" in exc_msg or "connect" in exc_msg:
             return FailoverReason.CONNECTION_ERROR
         if "network" in exc_msg or "unreachable" in exc_msg or "dns" in exc_msg:
             return FailoverReason.CONNECTION_ERROR
+        return None
 
-        # 模型不存在
+    def _match_model_not_found_by_message(self, ctx: dict) -> FailoverReason | None:
+        """模型不存在"""
+        exc_msg = ctx["exc_msg"]
         if "model" in exc_msg and ("not found" in exc_msg or "does not exist" in exc_msg):
             return FailoverReason.MODEL_NOT_FOUND
+        return None
 
-        # 请求体过大
+    def _match_payload_too_large_by_message(self, ctx: dict) -> FailoverReason | None:
+        """请求体过大"""
+        exc_msg = ctx["exc_msg"]
         if "payload" in exc_msg and "large" in exc_msg:
             return FailoverReason.PAYLOAD_TOO_LARGE
         if "413" in exc_msg:
             return FailoverReason.PAYLOAD_TOO_LARGE
+        return None
 
-        # 服务器错误
+    def _match_server_error_by_message(self, ctx: dict) -> FailoverReason | None:
+        """服务器错误"""
+        exc_msg = ctx["exc_msg"]
         if "500" in exc_msg or "502" in exc_msg or "503" in exc_msg or "504" in exc_msg:
             return FailoverReason.SERVER_ERROR
         if "internal server error" in exc_msg or "bad gateway" in exc_msg or "service unavailable" in exc_msg:
             return FailoverReason.SERVER_ERROR
+        return None
 
-        # 格式错误
+    def _match_format_error_by_message(self, ctx: dict) -> FailoverReason | None:
+        """格式错误"""
+        exc_msg = ctx["exc_msg"]
         if ("format" in exc_msg or "invalid" in exc_msg) and "request" in exc_msg:
             return FailoverReason.FORMAT_ERROR
         if "400" in exc_msg:
             return FailoverReason.FORMAT_ERROR
-
-        return FailoverReason.UNKNOWN
+        return None
 
     def _match_http_status(self, exc: Exception) -> FailoverReason | None:
         """从异常的 status_code 属性中识别失败原因"""
