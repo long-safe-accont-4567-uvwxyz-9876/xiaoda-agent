@@ -80,19 +80,29 @@ _CATEGORY_PRIORITY: dict[str, int] = {
 }
 
 
-_V2_REQUIRED_SECTIONS = ["功能概述", "使用场景", "参数约束", "返回格式", "错误码", "注意事项"]
+_V2_REQUIRED_SECTIONS = [
+    ("功能概述", "overview"),
+    ("使用场景", "usage"),
+    ("参数约束", "parameters"),
+    ("返回格式", "returns"),
+    ("错误码", "errors"),
+    ("注意事项", "notes"),
+]
 
 
 def _validate_schema_v2(name: str, schema: dict, description: str) -> None:
-    """校验工具 Schema 是否符合 V2 规范，仅记录警告不阻断注册."""
+    """校验工具 Schema 是否符合 V2 规范，仅记录警告不阻断注册.
+
+    每个段落接受中文或英文标记（如 [功能概述] 或 [overview]）。
+    """
     try:
         from loguru import logger as _logger
     except ImportError:
         _logger = None
-    for section in _V2_REQUIRED_SECTIONS:
-        if f"[{section}]" not in (description or ""):
+    for cn_section, en_section in _V2_REQUIRED_SECTIONS:
+        if f"[{cn_section}]" not in (description or "") and f"[{en_section}]" not in (description or ""):
             if _logger:
-                _logger.warning("tool_registry.schema_v2_missing_section tool={} section={}", name, section)
+                _logger.warning("tool_registry.schema_v2_missing_section tool={} section={}", name, cn_section)
     props = schema.get("properties", {})
     for prop_name, prop_def in props.items():
         desc = prop_def.get("description", "")
