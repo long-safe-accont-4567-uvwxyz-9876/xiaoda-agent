@@ -366,7 +366,7 @@ def measure_tool_interface_v2() -> int:
       - tool_wrapper.py has validate_tool_params
       - tool_wrapper.py has ToolResultV2 class
       - register_tool has model_overrides parameter
-      - register_tool has schema_version parameter
+      - register_tool has schema_v2 parameter
     """
     score = 0
 
@@ -383,7 +383,7 @@ def measure_tool_interface_v2() -> int:
         content = _read_file("tool_engine/tool_registry.py")
         if "model_overrides" in content:
             score += 20
-        if "schema_version" in content:
+        if "schema_v2" in content:
             score += 20
 
     return score
