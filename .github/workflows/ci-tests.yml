@@ -30,7 +30,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt -q
-          pip install pytest pytest-asyncio -q
+          pip install pytest pytest-asyncio pytest-cov -q
 
       - name: Create test environment
         run: |
@@ -46,15 +46,25 @@ jobs:
 
       - name: Run smoke tests
         run: |
-          python -m pytest tests/test_smoke.py -v --tb=short
+          python -m pytest tests/test_smoke.py -v --tb=short --cov=. --cov-report=term-missing --cov-report=json:coverage.json
 
       - name: Run core tests
         run: |
-          python -m pytest tests/test_agent_routing.py tests/test_context_compressor.py tests/test_risk_classifier.py -v --tb=short
+          python -m pytest tests/test_agent_routing.py tests/test_context_compressor.py tests/test_risk_classifier.py -v --tb=short --cov=. --cov-report=term-missing --cov-append --cov-report=json:coverage.json
 
       - name: Run matrix governance tests
         run: |
-          python -m pytest tests/test_matrix_governance.py tests/test_prompt_integration.py -v --tb=short
+          python -m pytest tests/test_matrix_governance.py tests/test_prompt_integration.py -v --tb=short --cov=. --cov-report=term-missing --cov-append --cov-report=json:coverage.json
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          echo "=== Coverage Summary ==="
+          if [ -f coverage.json ]; then
+            python -c "import json; d=json.load(open('coverage.json')); t=d.get('totals',{}); print(f'Line coverage: {t.get(chr(99)+chr(111)+chr(118)+chr(101)+chr(114)+chr(101)+chr(100)+chr(95)+chr(108)+chr(105)+chr(110)+chr(101)+chr(115),0)}/{t.get(chr(110)+chr(117)+chr(109)+chr(95)+chr(115)+chr(116)+chr(97)+chr(116)+chr(101)+chr(109)+chr(101)+chr(110)+chr(116)+chr(115),0)} = {t.get(chr(112)+chr(101)+chr(114)+chr(99)+chr(101)+chr(110)+chr(116)+chr(95)+chr(99)+chr(111)+chr(118)+chr(101)+chr(114)+chr(101)+chr(100),0):.1f}%')"
+          else
+            echo "No coverage data found."
+          fi
 
       - name: Test summary
         if: always()
@@ -85,3 +95,37 @@ jobs:
         run: |
           python -m py_compile agent.py agent_context.py config.py
           echo "Syntax check completed."
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install security tools
+        run: pip install bandit pip-audit -q
+
+      - name: Run Bandit security scan
+        run: |
+          bandit -r . -x ./tests,./chaos,./.venv,./node_modules -f json -o bandit-report.json || true
+          bandit -r . -x ./tests,./chaos,./.venv,./node_modules -f custom --show-line-context
+
+      - name: Run pip-audit dependency scan
+        run: |
+          pip install -r requirements.txt -q
+          pip-audit --desc || true
+
+      - name: Security summary
+        if: always()
+        run: |
+          echo "=== Security Scan Summary ==="
+          if [ -f bandit-report.json ]; then
+            python -c "import json; d=json.load(open('bandit-report.json')); h=len([r for r in d.get('results',[]) if r.get('issue_severity')=='HIGH']); m=len([r for r in d.get('results',[]) if r.get('issue_severity')=='MEDIUM']); print(f'HIGH: {h} issues, MEDIUM: {m} issues')"
+          else
+            echo "No bandit report found."
+          fi

@@ -74,7 +74,7 @@ class ConnectionManager:
         if ws:
             try:
                 await ws.send_json(event)
-            except Exception:
+            except (RuntimeError, OSError):
                 logger.debug("ws.send_error conn_id={}", conn_id, exc_info=True)
                 self.unregister(conn_id)
 
@@ -580,7 +580,7 @@ def _setup_pty_reader(term_sid: str) -> None:
         try:
             from web.pty_executor import feed_output
             feed_output(text)
-        except Exception:
+        except (ImportError, OSError, RuntimeError):
             logger.debug("ws.feed_output_error", exc_info=True)
 
     loop.add_reader(fd, _on_pty_readable)
@@ -611,9 +611,9 @@ def _setup_win_pipe_reader(term_sid: str) -> None:
                 try:
                     from web.pty_executor import feed_output
                     feed_output(text)
-                except Exception:
+                except (ImportError, OSError, RuntimeError):
                     logger.debug("ws.feed_output_error_win", exc_info=True)
-        except Exception:
+        except (OSError, RuntimeError):
             logger.debug("ws.win_pipe_reader_error term_sid={}", term_sid, exc_info=True)
         finally:
             loop.call_soon_threadsafe(_cleanup_pty, term_sid)
@@ -642,11 +642,11 @@ def _cleanup_pty(term_sid: str) -> None:
             try:
                 proc.terminate()
                 rc = proc.wait(timeout=3)
-            except Exception:
+            except (OSError, subprocess.TimeoutExpired):
                 logger.debug("ws.process_terminate_error", exc_info=True)
                 try:
                     proc.kill()
-                except Exception:
+                except (OSError, PermissionError):
                     logger.debug("ws.process_kill_error", exc_info=True)
                 rc = -1
     else:
@@ -654,17 +654,17 @@ def _cleanup_pty(term_sid: str) -> None:
         fd = session["fd"]
         try:
             loop.remove_reader(fd)
-        except Exception:
+        except (OSError, ValueError):
             logger.debug("ws.remove_reader_error", exc_info=True)
         try:
             _, status = os.waitpid(session["pid"], os.WNOHANG)
             rc = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
-        except Exception:
+        except (OSError, ChildProcessError):
             logger.debug("ws.waitpid_error", exc_info=True)
             rc = -1
         try:
             os.close(fd)
-        except Exception:
+        except OSError:
             logger.debug("ws.close_fd_error", exc_info=True)
 
     asyncio.ensure_future(manager.send_to(conn_id, {
@@ -737,7 +737,7 @@ def _handle_terminal_kill(conn_id: str, msg: dict) -> None:
         if proc:
             try:
                 proc.kill()
-            except Exception:
+            except (OSError, PermissionError):
                 logger.debug("ws.force_kill_proc_error", exc_info=True)
     else:
         try:
@@ -746,6 +746,6 @@ def _handle_terminal_kill(conn_id: str, msg: dict) -> None:
             pass
         try:
             os.close(session["fd"])
-        except Exception:
+        except OSError:
             logger.debug("ws.force_close_fd_error", exc_info=True)
     logger.info("ws.terminal.kill term_sid={}", term_sid)

@@ -71,7 +71,7 @@ async def get_first_run() -> Any:
     try:
         from setup_wizard import is_first_run
         first_run = is_first_run()
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.error("setup.first_run_import_failed error={}", str(e))
         import sys
         if getattr(sys, 'frozen', False):
@@ -92,7 +92,7 @@ async def get_first_run() -> Any:
                             if val:
                                 first_run = False
                                 break
-            except Exception as exc:
+            except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
                 logger.debug("setup.env_read_failed: {}", exc, exc_info=True)
 
     # 2. 检测用户资料是否已配置（USER.md 存在且有实际填写的称呼和姓名）
@@ -111,7 +111,7 @@ async def get_first_run() -> Any:
                 name_val = name.group(1).strip()
                 if addr_val and not addr_val.startswith("（") and name_val and not name_val.startswith("（"):
                     profile_done = True
-    except Exception as exc:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("setup.profile_check_failed: {}", exc, exc_info=True)
 
     return Envelope(data={"first_run": first_run, "profile_done": profile_done})
@@ -132,7 +132,7 @@ async def get_keys() -> Any:
     try:
         from setup_wizard import REQUIRED_KEYS, OPTIONAL_KEYS, _load_env_values
         logger.info("setup.keys.import_ok")
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.error("setup.keys.import_failed error={}", str(e))
         # 降级：返回硬编码的 key 列表
         REQUIRED_KEYS = [
@@ -156,7 +156,7 @@ async def get_keys() -> Any:
 
     try:
         current = _load_env_values()
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.error("setup.keys.load_env_failed error={}", str(e))
         current = {}
 
@@ -623,7 +623,7 @@ def _reload_env_and_cache(updates: Any, ENV_PATH: Any) -> None:
         from web.routers.model_discovery import invalidate_discovery_cache
         invalidate_discovery_cache()
         logger.info("setup.discovery_cache_invalidated")
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning("setup.discovery_cache_invalidate_failed error={}", str(e))
 
 
@@ -649,7 +649,7 @@ def _reset_credential_pool(updates: Any) -> None:
                 api_key=new_key, provider=provider, base_url=base_url,
             ))
         logger.info("setup.credential_pool_updated")
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning("setup.credential_pool_reset_failed error={}", str(e))
 
 
@@ -680,7 +680,7 @@ def _update_config_and_refresh_clients(updates: Any) -> None:
             if dispatcher and hasattr(dispatcher, "refresh_all_clients"):
                 n = dispatcher.refresh_all_clients()
                 logger.info("setup.sub_agents_refreshed", count=n)
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning("setup.router_client_refresh_failed error={}", str(e))
 
 
@@ -703,7 +703,7 @@ async def _background_reinit() -> None:
                         if registry:
                             await registry.load_persisted()
                             logger.info("setup.registry_refreshed")
-                    except Exception as e:
+                    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
                         logger.warning("setup.registry_refresh_failed error={}", str(e))
                 else:
                     logger.error("setup.core_reinit_failed reason=still_not_initialized")
@@ -802,7 +802,7 @@ def _auto_register_providers(updates: dict) -> None:
         try:
             from model_router import ModelRouter
             # 尝试获取 router 实例 (原 import web.server as srv 已移除, 避免循环导入)
-        except Exception as exc:
+        except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
             logger.debug("setup.model_router_import_failed: {}", exc, exc_info=True)
 
         # 通过 app.state 注册（如果 app 已启动）
@@ -818,7 +818,7 @@ def _auto_register_providers(updates: dict) -> None:
                     api_key,
                 )
                 logger.info("setup.auto_provider_runtime id={}", pid)
-        except Exception as e:
+        except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
             logger.debug("setup.auto_provider_runtime_skip error={}", str(e))
 
 
@@ -1005,11 +1005,11 @@ async def get_user_profile() -> Any:
     if user_md_path.exists():
         try:
             content = user_md_path.read_text(encoding="utf-8-sig")
-        except Exception as exc:
+        except (OSError, PermissionError, FileNotFoundError) as exc:
             logger.debug("setup.user_md_read_failed encoding=utf-8-sig: {}", exc, exc_info=True)
             try:
                 content = user_md_path.read_text(encoding="utf-8")
-            except Exception as exc2:
+            except (OSError, PermissionError, FileNotFoundError) as exc2:
                 logger.debug("setup.user_md_read_failed encoding=utf-8: {}", exc2, exc_info=True)
                 content = ""
 
@@ -1056,7 +1056,7 @@ async def save_user_profile(body: dict) -> Any:
         import prompt_builder
         prompt_builder._SYSTEM_PROMPT_CACHE = ""
         prompt_builder._SYSTEM_PROMPT_CACHE_TS = 0.0
-    except Exception as exc:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("setup.prompt_cache_clear_failed: {}", exc, exc_info=True)
 
     logger.info("setup.user_profile_saved path={}", str(user_md_path))
@@ -1077,11 +1077,11 @@ def _read_disclaimer_status(user_md_path: Path) -> dict:
         return result
     try:
         content = user_md_path.read_text(encoding="utf-8-sig")
-    except Exception as exc:
+    except (OSError, PermissionError, FileNotFoundError) as exc:
         logger.debug("setup.disclaimer_read_failed encoding=utf-8-sig: {}", exc, exc_info=True)
         try:
             content = user_md_path.read_text(encoding="utf-8")
-        except Exception as exc2:
+        except (OSError, PermissionError, FileNotFoundError) as exc2:
             logger.debug("setup.disclaimer_read_failed encoding=utf-8: {}", exc2, exc_info=True)
             return result
 
@@ -1119,11 +1119,11 @@ def _write_disclaimer_agreement(user_md_path: Path, agreed: bool) -> str:
     if user_md_path.exists():
         try:
             content = user_md_path.read_text(encoding="utf-8-sig")
-        except Exception as exc:
+        except (OSError, PermissionError, FileNotFoundError) as exc:
             logger.debug("setup.disclaimer_write_read_failed encoding=utf-8-sig: {}", exc, exc_info=True)
             try:
                 content = user_md_path.read_text(encoding="utf-8")
-            except Exception as exc2:
+            except (OSError, PermissionError, FileNotFoundError) as exc2:
                 logger.debug("setup.disclaimer_write_read_failed encoding=utf-8: {}", exc2, exc_info=True)
                 content = ""
 
@@ -1167,7 +1167,7 @@ async def get_disclaimer_status() -> Any:
     user_md_path = WORKSPACE_DIR / "USER.md"
     try:
         status = _read_disclaimer_status(user_md_path)
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning("setup.disclaimer_status.read_failed error={}", str(e))
         status = {"agreed": False, "agreed_at": ""}
 
@@ -1191,7 +1191,7 @@ async def agree_disclaimer(body: dict) -> Any:
     user_md_path = WORKSPACE_DIR / "USER.md"
     try:
         agreed_at = _write_disclaimer_agreement(user_md_path, agreed)
-    except Exception as e:
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.error("setup.agree_disclaimer.write_failed error={}", str(e))
         raise HTTPException(status_code=500, detail=f"写入免责协议失败: {e}")
 

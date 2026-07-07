@@ -92,7 +92,7 @@ def _ssrf_check(url: str) -> None:
         ok, reason = _ssrf_validate_url(url)
         if not ok:
             logger.warning("router.ssrf_blocked url={} reason={}", url, reason)
-    except Exception as e:
+    except (ValueError, OSError) as e:
         logger.debug("router.ssrf_check_skip url={} error={}", url, str(e))
 
 
@@ -173,7 +173,7 @@ class ModelRouter:
                         api_key,
                     )
                     logger.info("router.lazy_registered provider={}", provider)
-        except Exception as e:
+        except (ImportError, AttributeError, KeyError, ValueError) as e:
             logger.warning("router.lazy_register_failed provider={} error={}", provider, str(e))
 
     def refresh_client(self) -> None:
@@ -226,7 +226,7 @@ class ModelRouter:
             # 补充/更新 Agnes 凭证
             if new_agnes_key:
                 self._ensure_credential_in_pool(pool, "agnes", new_agnes_key, new_agnes_url)
-        except Exception as e:
+        except (KeyError, ValueError, AttributeError) as e:
             logger.warning("router.credential_pool_sync_failed error={}", str(e))
 
     @staticmethod
@@ -272,7 +272,7 @@ class ModelRouter:
                 "models.chat_model",
                 {"provider": provider, "model_id": model_id},
             )
-        except Exception as e:
+        except (OSError, KeyError, ValueError, TypeError) as e:
             logger.warning("router.chat_model_persist_failed error={}", str(e))
         logger.info("router.chat_model_changed", provider=provider, model=model_id)
         return {"provider": provider, "model_id": model_id}
@@ -384,7 +384,7 @@ class ModelRouter:
                     await self._flush_cost_buffer()
             else:
                 logger.debug("router.usage_no_db", task=task_type, cost=f"${cost:.6f}")
-        except Exception as e:
+        except (OSError, KeyError, ValueError, TypeError) as e:
             logger.warning("router.usage_record_failed", error=str(e))
 
     async def _record_stream_usage(self, task_type: str, model: str, stream_response: Any,
@@ -419,7 +419,7 @@ class ModelRouter:
                     await self._flush_cost_buffer()
             else:
                 logger.debug("router.stream_usage_no_db", task=task_type, cost=f"${cost:.6f}")
-        except Exception as e:
+        except (OSError, KeyError, ValueError, TypeError) as e:
             logger.warning("router.stream_usage_record_failed", error=str(e))
 
     async def _flush_cost_buffer(self) -> None:
@@ -430,7 +430,7 @@ class ModelRouter:
             count = len(self._cost_buffer)
             self._cost_buffer.clear()
             logger.debug("router.cost_flushed", count=count)
-        except Exception as e:
+        except (OSError, KeyError, ValueError) as e:
             logger.warning("router.cost_flush_failed", error=str(e))
 
     async def flush_costs(self) -> None:
@@ -442,7 +442,7 @@ class ModelRouter:
             if client is not None:
                 try:
                     await client.close()
-                except Exception:
+                except (RuntimeError, OSError):
                     logger.debug("model_router.close_client_error", exc_info=True)
         self._client = None
         self._agnes_client = None
@@ -450,7 +450,7 @@ class ModelRouter:
         for cp_client in list(getattr(self, "_custom_clients", {}).values()):
             try:
                 await cp_client.close()
-            except Exception:
+            except (RuntimeError, OSError):
                 logger.debug("model_router.close_custom_client_error", exc_info=True)
         if hasattr(self, "_custom_clients"):
             self._custom_clients.clear()
@@ -508,7 +508,7 @@ class ModelRouter:
                         fallback_tools, tool_choice, timeout, user_openid, session_id,
                         extra_headers=extra_headers,
                     )
-                except Exception as fb_err:
+                except (RuntimeError, OSError, KeyError, ValueError) as fb_err:
                     logger.error("router.fallback_failed",
                                  fallback_task=fallback_type,
                                  error=f"{type(fb_err).__name__}: {fb_err}")
@@ -530,7 +530,7 @@ class ModelRouter:
                         agnes_tools, tool_choice, timeout, user_openid, session_id,
                         extra_headers=extra_headers,
                     )
-            except Exception as agnes_err:
+            except (RuntimeError, OSError, KeyError, ValueError) as agnes_err:
                 logger.error("router.agnes_fallback_failed", error=str(agnes_err))
 
         # 3. 尝试已注册的自定义 provider（SiliconFlow/OpenRouter/ModelScope 等）
@@ -550,7 +550,7 @@ class ModelRouter:
                         user_openid, session_id,
                         extra_headers=extra_headers,
                     )
-                except Exception as cp_err:
+                except (RuntimeError, OSError, KeyError, ValueError) as cp_err:
                     logger.error("router.custom_provider_fallback_failed",
                                  provider=cp_name, error=str(cp_err))
                     continue
@@ -589,7 +589,7 @@ class ModelRouter:
                         task=task_type, duration_ms=int((time.time() - _start) * 1000),
                         user_id=user_openid, session_id=session_id)
             return result
-        except Exception as e:
+        except (RuntimeError, OSError, KeyError, ValueError, TypeError) as e:
             metrics.inc(f"model_route.{task_type}.failure")
             metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
             metrics.maybe_report()
@@ -623,7 +623,7 @@ class ModelRouter:
         try:
             messages = apply_cache_control(messages)
             logger.debug("router.cache_control_applied provider={}", provider)
-        except Exception as ce:
+        except (KeyError, ValueError, TypeError) as ce:
             logger.debug("router.cache_control_skip provider={} error={}", provider, str(ce))
         return messages
 
@@ -728,7 +728,7 @@ class ModelRouter:
                             task=task_type, duration_ms=int((time.time() - _start) * 1000),
                             user_id=user_openid, session_id=session_id, stream=True)
                 return
-            except Exception as e:
+            except (RuntimeError, OSError, KeyError, ValueError) as e:
                 last_error = e
                 if stream:
                     try:
@@ -941,7 +941,7 @@ class ModelRouter:
                     user_openid, session_id, provider, tools,
                 )
 
-            except Exception as e:
+            except (RuntimeError, OSError, KeyError, ValueError) as e:
                 last_error = e
                 should_retry = await self._handle_route_exception(
                     e, provider, task_type, model, attempt,
@@ -986,7 +986,7 @@ class ModelRouter:
             if self._request_count % 100 == 0:
                 logger.info("prompt_cache.stats requests={} cached_tokens={}",
                             self._request_count, self._cached_tokens_total)
-        except Exception as e:
+        except (KeyError, ValueError, OSError) as e:
             logger.debug(f"缓存统计追踪失败: {e}")
 
     def _check_cache_health(self) -> None:

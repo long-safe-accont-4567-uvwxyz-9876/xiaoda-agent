@@ -29,7 +29,7 @@ except Exception as e:
         (log_dir / "crash.log").write_text(
             f"Failed to load dotenv:\n{traceback.format_exc()}", encoding="utf-8"
         )
-    except Exception:
+    except (OSError, UnicodeDecodeError):
         logger.debug("dotenv.load_failed", exc_info=True)
     raise
 
@@ -94,7 +94,7 @@ def main() -> None:
                     with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
                         f.write("")
                     os.replace(tmp_path, ENV_PATH)
-                except Exception:
+                except (OSError, PermissionError):
                     try:
                         os.unlink(tmp_path)
                     except OSError:
@@ -150,7 +150,7 @@ def _get_lan_addresses() -> list:
         addrs = socket.getaddrinfo(hostname, None, socket.AF_INET)
         ips = [a[4][0] for a in addrs if not a[4][0].startswith("127.")]
         return ips[:1] if ips else []
-    except Exception:
+    except (OSError, socket.gaierror):
         logger.debug("agent.lan_address_detect_failed", exc_info=True)
     return []
 
@@ -259,7 +259,7 @@ def _import_web_server_safe() -> Any:
     try:
         from web.server import app
         return app
-    except Exception:
+    except (ImportError, SyntaxError, ModuleNotFoundError):
         import traceback, pathlib
         log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent" / "crash.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -307,7 +307,7 @@ def _wait_for_server_ready(window: Any, port: int) -> None:
         try:
             urllib.request.urlopen(f"http://localhost:{port}/", timeout=2)
             break
-        except Exception:
+        except (urllib.error.URLError, OSError, ConnectionError):
             time.sleep(1)
     else:
         window.evaluate_js("if(typeof onServerTimeout==='function')onServerTimeout();")
@@ -392,7 +392,7 @@ def _run_desktop(host: str, port: int) -> None:
     def _on_loaded():
         try:
             window.evaluate_js(_reflow_js)
-        except Exception:
+        except (RuntimeError, OSError):
             logger.debug("pywebview.reflow_js_failed", exc_info=True)
         # 不再在 UI 线程轮询；reflow 兜底由 JS 端 setInterval 自驱（见 splash.js _reflowKicker）
         # _on_loaded 在 1 秒内返回，避免阻塞 pywebview UI 线程导致桌面模式冻死
@@ -418,7 +418,7 @@ if __name__ == "__main__":
             (log_dir / "crash.log").write_text(
                 f"xiaoda-agent crash:\n{traceback.format_exc()}", encoding="utf-8"
             )
-        except Exception:
+        except (OSError, PermissionError):
             logger.debug("crash.log.write_failed", exc_info=True)
         # 同时输出到 stderr（如果终端可见的话）
         traceback.print_exc()
