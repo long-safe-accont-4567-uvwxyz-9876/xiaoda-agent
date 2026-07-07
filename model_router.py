@@ -4,6 +4,7 @@ import time
 import asyncio
 import contextvars
 from openai import AsyncOpenAI
+import openai as _openai_mod  # 用于 openai.APIError 异常捕获
 from loguru import logger
 
 from db.db_analytics import AnalyticsDB
@@ -444,7 +445,7 @@ class ModelRouter:
             if client is not None:
                 try:
                     await client.close()
-                except (RuntimeError, OSError):
+                except (RuntimeError, OSError, _openai_mod.APIError):
                     logger.debug("model_router.close_client_error", exc_info=True)
         self._client = None
         self._agnes_client = None
@@ -452,7 +453,7 @@ class ModelRouter:
         for cp_client in list(getattr(self, "_custom_clients", {}).values()):
             try:
                 await cp_client.close()
-            except (RuntimeError, OSError):
+            except (RuntimeError, OSError, _openai_mod.APIError):
                 logger.debug("model_router.close_custom_client_error", exc_info=True)
         if hasattr(self, "_custom_clients"):
             self._custom_clients.clear()
@@ -591,7 +592,7 @@ class ModelRouter:
                         task=task_type, duration_ms=int((time.time() - _start) * 1000),
                         user_id=user_openid, session_id=session_id)
             return result
-        except (RuntimeError, OSError, KeyError, ValueError, TypeError) as e:
+        except (RuntimeError, OSError, KeyError, ValueError, TypeError, _openai_mod.APIError) as e:
             metrics.inc(f"model_route.{task_type}.failure")
             metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
             metrics.maybe_report()
@@ -730,7 +731,7 @@ class ModelRouter:
                             task=task_type, duration_ms=int((time.time() - _start) * 1000),
                             user_id=user_openid, session_id=session_id, stream=True)
                 return
-            except (RuntimeError, OSError, KeyError, ValueError) as e:
+            except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError) as e:
                 last_error = e
                 if stream:
                     try:
@@ -943,7 +944,7 @@ class ModelRouter:
                     user_openid, session_id, provider, tools,
                 )
 
-            except (RuntimeError, OSError, KeyError, ValueError) as e:
+            except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError) as e:
                 last_error = e
                 should_retry = await self._handle_route_exception(
                     e, provider, task_type, model, attempt,

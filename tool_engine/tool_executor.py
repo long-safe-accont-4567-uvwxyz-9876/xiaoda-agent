@@ -41,17 +41,21 @@ class ToolExecutor:
     }
 
     # ── S3: 重试与循环检测配置 ──
-    RETRYABLE_ERRORS: set[str] = {"timeout", "connection", "temporal", "transient"}
+    RETRYABLE_ERRORS: set[str] = {"timeout", "connection", "temporal", "transient",
+                                  "timeouterror", "connectionerror", "apierror",
+                                  "ratelimit", "503", "502", "429"}
     MAX_RETRIES: int = 2
     RETRY_BASE_DELAY: float = 0.5
     RETRY_MAX_DELAY: float = 5.0
     FAILURE_STREAK_THRESHOLD: int = 5
+    FAILURE_STREAK_RESET_SECONDS: int = 300  # 5 分钟后半开恢复
 
     def __init__(self, db: Optional[Any]=None) -> None:
         self.db = db
         self._call_counts: dict[str, list[float]] = {}
         self._global_timeout: float = self.TOOL_TIMEOUTS["default"]
         self._failure_streaks: dict[str, int] = {}
+        self._failure_first_time: dict[str, float] = {}
 
     def _is_retryable_error(self, error: str) -> bool:
         """检查错误是否为瞬时错误，值得重试."""
@@ -69,11 +73,18 @@ class ToolExecutor:
             logger.warning("tool_executor.disabled", tool=tool_name)
             return ToolResult.fail(f"「{tool_name}」已被管理员全局停用了呢～")
 
-        # S3: 循环检测 — 连续失败次数过多则短路
+        # S3: 循环检测 — 连续失败次数过多则短路（5 分钟后半开恢复）
         if self._failure_streaks.get(tool_name, 0) >= self.FAILURE_STREAK_THRESHOLD:
-            logger.warning("tool_executor.failure_streak_blocked", tool=tool_name,
-                           streak=self._failure_streaks.get(tool_name, 0))
-            return ToolResult.fail(f"工具「{tool_name}」连续失败次数过多，已暂时停用")
+            first_time = self._failure_first_time.get(tool_name, 0)
+            if first_time and time.time() - first_time > self.FAILURE_STREAK_RESET_SECONDS:
+                # 半开恢复：重置计数，允许重试
+                self._failure_streaks[tool_name] = 0
+                self._failure_first_time.pop(tool_name, None)
+                logger.info("tool_executor.failure_streak_reset", tool=tool_name)
+            else:
+                logger.warning("tool_executor.failure_streak_blocked", tool=tool_name,
+                               streak=self._failure_streaks.get(tool_name, 0))
+                return ToolResult.fail(f"工具「{tool_name}」连续失败次数过多，已暂时停用")
 
         if not self._check_rate_limit(tool_name, tool):
             logger.warning("tool_executor.rate_limited", tool=tool_name)
@@ -103,12 +114,16 @@ class ToolExecutor:
         if result.success:
             metrics.inc(f"tool_execute.{tool_name}.success")
             self._failure_streaks[tool_name] = 0
+            self._failure_first_time.pop(tool_name, None)
         else:
             metrics.inc(f"tool_execute.{tool_name}.failure")
-            self._failure_streaks[tool_name] = self._failure_streaks.get(tool_name, 0) + 1
-            if self._failure_streaks[tool_name] == self.FAILURE_STREAK_THRESHOLD:
+            new_streak = self._failure_streaks.get(tool_name, 0) + 1
+            self._failure_streaks[tool_name] = new_streak
+            if new_streak == 1:
+                self._failure_first_time[tool_name] = time.time()
+            if new_streak == self.FAILURE_STREAK_THRESHOLD:
                 logger.warning("tool_executor.failure_streak_threshold", tool=tool_name,
-                               streak=self._failure_streaks[tool_name])
+                               streak=new_streak)
         metrics.maybe_report()
         # 结构化日志：工具执行结果
         logger.info("tool.execute", event="tool_execute", tool=tool_name,
@@ -222,10 +237,11 @@ class ToolExecutor:
         except asyncio.TimeoutError:
             logger.error("tool_executor.timeout", tool=tool_name, timeout=timeout)
             metrics.inc(f"tool.timeout.{tool_name}")
-            return ToolResult.fail("那边有点慢呢……等会儿再试试好不好？")
+            return ToolResult.fail("那边有点慢呢……等会儿再试试好不好？ [timeout]")
         except Exception as e:
             logger.error("tool_executor.error", tool=tool_name, error=str(e))
-            return ToolResult.fail(f"出了一点小问题……等会儿再试试好不好？")
+            error_type = type(e).__name__
+            return ToolResult.fail(f"出了一点小问题……等会儿再试试好不好？ [{error_type}]")
 
     async def _write_audit_log(self, tool_name: str, arguments: dict,
                                result: ToolResult, user_id: str) -> None:
