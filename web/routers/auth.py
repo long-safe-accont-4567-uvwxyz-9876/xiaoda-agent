@@ -19,18 +19,17 @@ from web.schemas import Envelope, LoginRequest, LoginResponse
 
 router = APIRouter(tags=["auth"])
 
-# Token store: token -> expiry (LRU + 上限保护)
 _tokens: "OrderedDict[str, float]" = OrderedDict()
 _TOKENS_MAX_SIZE = 1000
-# Rate limit: ip -> (fail_count, lock_until)
 _rate_limit: "OrderedDict[str, tuple[int, float]]" = OrderedDict()
 _RATE_LIMIT_MAX_SIZE = 1000
 
-# Secret for HMAC
 _SECRET: str = ""
 
-# 黑名单锁（文件读写线程安全）
+_secret_lock = Lock()
 _revoked_lock = Lock()
+_tokens_lock = Lock()
+_rate_limit_lock = Lock()
 # 已撤销 token 内存缓存，避免每次请求都读文件
 _revoked_cache: set[str] = set()
 _revoked_cache_mtime: float = 0.0
@@ -43,22 +42,25 @@ def _get_secret_path() -> Path:
 
 def _load_or_create_secret() -> str:
     global _SECRET
-    env_secret = os.getenv("WEBUI_SECRET", "")
-    if env_secret:
-        _SECRET = env_secret
+    with _secret_lock:
+        if _SECRET:
+            return _SECRET
+        env_secret = os.getenv("WEBUI_SECRET", "")
+        if env_secret:
+            _SECRET = env_secret
+            return _SECRET
+        secret_path = _get_secret_path()
+        if secret_path.exists():
+            _SECRET = secret_path.read_text(encoding="utf-8").strip()
+        else:
+            _SECRET = secrets.token_hex(32)
+            secret_path.parent.mkdir(parents=True, exist_ok=True)
+            secret_path.write_text(_SECRET, encoding="utf-8")
+            try:
+                secret_path.chmod(0o600)
+            except OSError:
+                pass
         return _SECRET
-    secret_path = _get_secret_path()
-    if secret_path.exists():
-        _SECRET = secret_path.read_text(encoding="utf-8").strip()
-    else:
-        _SECRET = secrets.token_hex(32)
-        secret_path.parent.mkdir(parents=True, exist_ok=True)
-        secret_path.write_text(_SECRET, encoding="utf-8")
-        try:
-            secret_path.chmod(0o600)
-        except OSError:
-            pass  # Windows 不支持 chmod
-    return _SECRET
 
 
 def _get_revoked_path() -> Path:
@@ -113,11 +115,12 @@ def _is_revoked(token: str) -> bool:
         return False
     try:
         mtime = path.stat().st_mtime
-        if mtime != _revoked_cache_mtime:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            _revoked_cache = set(data.get("revoked", []))
-            _revoked_cache_mtime = mtime
-        return token in _revoked_cache
+        with _revoked_lock:
+            if mtime != _revoked_cache_mtime:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                _revoked_cache = set(data.get("revoked", []))
+                _revoked_cache_mtime = mtime
+            return token in _revoked_cache
     except Exception as exc:
         logger.debug("auth.is_revoked_json_parse_failed: {}", exc, exc_info=True)
         return False
@@ -137,11 +140,12 @@ def _issue_token() -> tuple[str, float]:
     payload = f"{expiry}.{nonce}"
     sig = hmac.new(_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
     token = base64.urlsafe_b64encode(f"{payload}.{sig}".encode()).decode()
-    _cleanup_expired_tokens()
-    _tokens[token] = expiry
-    _tokens.move_to_end(token)
-    while len(_tokens) > _TOKENS_MAX_SIZE:
-        _tokens.popitem(last=False)
+    with _tokens_lock:
+        _cleanup_expired_tokens()
+        _tokens[token] = expiry
+        _tokens.move_to_end(token)
+        while len(_tokens) > _TOKENS_MAX_SIZE:
+            _tokens.popitem(last=False)
     return token, expiry
 
 
@@ -163,9 +167,9 @@ def _validate_token(token: str) -> bool:
         # 检查黑名单
         if _is_revoked(token):
             return False
-        # Also register in memory for tracking
-        _tokens[token] = expiry
-        _tokens.move_to_end(token)
+        with _tokens_lock:
+            _tokens[token] = expiry
+            _tokens.move_to_end(token)
         return True
     except Exception as exc:
         logger.debug("auth.validate_token_failed: {}", exc, exc_info=True)
@@ -237,36 +241,36 @@ async def login(req: LoginRequest, request: Request) -> Any:
     client_ip = request.client.host if request.client else "unknown"
 
     # Rate limit check
-    _cleanup_expired_rate_limits()
-    if client_ip in _rate_limit:
-        fails, lock_until = _rate_limit[client_ip]
-        if time.time() < lock_until:
-            remaining = int(lock_until - time.time())
-            raise HTTPException(429, f"登录尝试过多，请 {remaining} 秒后重试")
+    with _rate_limit_lock:
+        _cleanup_expired_rate_limits()
+        if client_ip in _rate_limit:
+            fails, lock_until = _rate_limit[client_ip]
+            if time.time() < lock_until:
+                remaining = int(lock_until - time.time())
+                raise HTTPException(429, f"登录尝试过多，请 {remaining} 秒后重试")
 
-    # No password set: allow loopback & private IPs (RFC1918), block public IPs
     if not password:
         if not _is_private_ip(client_ip):
             raise HTTPException(403, "Public access denied without password. Set WEBUI_PASSWORD in .env")
-        # Auto-login for private/loopback only
         token, expiry = _issue_token()
         return Envelope(data=LoginResponse(token=token, expires_at=expiry))
 
     if not hmac.compare_digest(req.password, password):
-        # Rate limit
-        fails, lock_until = _rate_limit.get(client_ip, (0, 0))
-        fails += 1
-        if fails >= 5:
-            _rate_limit[client_ip] = (fails, time.time() + 600)
-        else:
-            _rate_limit[client_ip] = (fails, lock_until)
-        _rate_limit.move_to_end(client_ip)
-        while len(_rate_limit) > _RATE_LIMIT_MAX_SIZE:
-            _rate_limit.popitem(last=False)
+        with _rate_limit_lock:
+            fails, lock_until = _rate_limit.get(client_ip, (0, 0))
+            fails += 1
+            if fails >= 5:
+                _rate_limit[client_ip] = (fails, time.time() + 600)
+            else:
+                _rate_limit[client_ip] = (fails, lock_until)
+            _rate_limit.move_to_end(client_ip)
+            while len(_rate_limit) > _RATE_LIMIT_MAX_SIZE:
+                _rate_limit.popitem(last=False)
         raise HTTPException(401, "Invalid password")
 
     # Success: reset rate limit
-    _rate_limit.pop(client_ip, None)
+    with _rate_limit_lock:
+        _rate_limit.pop(client_ip, None)
     token, expiry = _issue_token()
     return Envelope(data=LoginResponse(token=token, expires_at=expiry))
 

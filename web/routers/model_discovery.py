@@ -5,6 +5,7 @@ from typing import Any
 import asyncio
 import os
 import time
+import threading
 
 from fastapi import APIRouter, Depends, Request
 from loguru import logger
@@ -13,7 +14,7 @@ from web.schemas import Envelope
 from web.routers.auth import get_current_user
 from web.model_capabilities import get_capabilities
 # 缓存抽到 web._discovery_cache, 避免与 web.routers.models 互相导入
-from web._discovery_cache import _cache, _CACHE_TTL
+from web._discovery_cache import _cache, _CACHE_TTL, _cache_lock, invalidate_discovery_cache
 
 router = APIRouter(tags=["model-discovery"], dependencies=[Depends(get_current_user)])
 
@@ -173,18 +174,15 @@ def _determine_free(provider_id: str, model_id: str, item: dict) -> bool:
 
 _sf_pricing_cache: dict[str, dict] | None = None
 _sf_pricing_ts: float = 0
-_SF_PRICING_TTL = 6 * 3600  # 6 小时
+_SF_PRICING_TTL = 6 * 3600
+_sf_pricing_lock = threading.Lock()
 
 
 def _get_siliconflow_pricing() -> dict[str, dict] | None:
-    """获取 SiliconFlow 模型定价（从官网 SSR 页面解析，内存缓存 6 小时）。
-
-    返回 {model_id: {"input": price, "output": price}} 字典。
-    price 单位为 ￥/M Tokens，0 表示免费。
-    """
     global _sf_pricing_cache, _sf_pricing_ts
-    if _sf_pricing_cache and time.time() - _sf_pricing_ts < _SF_PRICING_TTL:
-        return _sf_pricing_cache
+    with _sf_pricing_lock:
+        if _sf_pricing_cache and time.time() - _sf_pricing_ts < _SF_PRICING_TTL:
+            return _sf_pricing_cache
 
     try:
         import re as _re
@@ -193,15 +191,12 @@ def _get_siliconflow_pricing() -> dict[str, dict] | None:
                          headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
         html = resp.text
 
-        # 从 Next.js RSC push 块中提取模型定价数据
         pricing_map: dict[str, dict] = {}
         for block_m in _re.finditer(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html, _re.DOTALL):
             block = block_m.group(1)
             if "inputPrice" not in block or "modelName" not in block:
                 continue
-            # 反转义: \\" → "，\\\\ → \\
             s = block.replace('\\\\', '\x00').replace('\\"', '"').replace('\x00', '\\')
-            # 按 {"modelId" 分割，每段包含一个模型的完整信息
             parts = _re.split(r'\{"modelId"', s)
             for part in parts[1:]:
                 name_m = _re.search(r'"modelName"\s*:\s*"([^"]+)"', part)
@@ -212,11 +207,12 @@ def _get_siliconflow_pricing() -> dict[str, dict] | None:
                         "input": int(input_m.group(1)),
                         "output": int(output_m.group(1)),
                     }
-            break  # 只需要一个包含定价的 block
+            break
 
         if pricing_map:
-            _sf_pricing_cache = pricing_map
-            _sf_pricing_ts = time.time()
+            with _sf_pricing_lock:
+                _sf_pricing_cache = pricing_map
+                _sf_pricing_ts = time.time()
             free_count = sum(1 for v in pricing_map.values() if v["input"] == 0 and v["output"] == 0)
             logger.info("siliconflow.pricing_loaded total={} free={}", len(pricing_map), free_count)
             return pricing_map
@@ -398,8 +394,9 @@ async def discover_models() -> Any:
     每个模型标注 free（免费/付费）。
     """
     now = time.time()
-    if _cache["data"] is not None and (now - _cache["ts"]) < _CACHE_TTL:
-        return Envelope(data=_cache["data"])
+    with _cache_lock:
+        if _cache["data"] is not None and (now - _cache["ts"]) < _CACHE_TTL:
+            return Envelope(data=_cache["data"])
 
     all_providers = _get_all_providers()
 
@@ -461,8 +458,9 @@ async def discover_models() -> Any:
                 "models": models_or_exc,
             })
 
-    _cache["data"] = result
-    _cache["ts"] = now
+    with _cache_lock:
+        _cache["data"] = result
+        _cache["ts"] = now
     return Envelope(data=result)
 
 

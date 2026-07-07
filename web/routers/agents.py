@@ -15,6 +15,16 @@ from web.routers.auth import get_current_user
 
 router = APIRouter(tags=["agents"])
 
+_SAFE_NAME_RE = re.compile(r'^[a-zA-Z0-9_\u4e00-\u9fff-]+$')
+
+
+def _validate_agent_name(name: str) -> str:
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(400, "非法 Agent 名称")
+    if not _SAFE_NAME_RE.match(name):
+        raise HTTPException(400, "Agent 名称包含非法字符")
+    return name
+
 
 def _registry(request: Request) -> Any:
     return request.app.state.agent_registry
@@ -49,6 +59,7 @@ async def list_agents(request: Request, _user: str = Depends(get_current_user)) 
 
 @router.get("/agents/{name}", response_model=Envelope[dict])
 async def get_agent(name: str, request: Request, _user: str = Depends(get_current_user)) -> Any:
+    _validate_agent_name(name)
     data = _registry(request).get(name)
     if not data:
         raise HTTPException(404, f"Agent {name} 不存在")
@@ -67,6 +78,7 @@ async def create_agent(body: dict, request: Request, _user: str = Depends(get_cu
 
 @router.put("/agents/{name}", response_model=Envelope[dict])
 async def update_agent(name: str, body: dict, request: Request, _user: str = Depends(get_current_user)) -> Any:
+    _validate_agent_name(name)
     try:
         data = await _registry(request).update(name, body)
     except KeyError as e:
@@ -98,6 +110,7 @@ async def update_agent(name: str, body: dict, request: Request, _user: str = Dep
 
 @router.delete("/agents/{name}", response_model=Envelope[dict])
 async def delete_agent(name: str, request: Request, _user: str = Depends(get_current_user)) -> Any:
+    _validate_agent_name(name)
     if request.headers.get("X-Confirm") != "yes":
         raise HTTPException(400, "缺少 X-Confirm: yes 确认头")
     try:
@@ -110,6 +123,7 @@ async def delete_agent(name: str, request: Request, _user: str = Depends(get_cur
 
 @router.post("/agents/{name}/enable", response_model=Envelope[dict])
 async def enable_agent(name: str, request: Request, _user: str = Depends(get_current_user)) -> Any:
+    _validate_agent_name(name)
     try:
         _registry(request).set_enabled(name, True)
     except KeyError as e:
@@ -120,6 +134,7 @@ async def enable_agent(name: str, request: Request, _user: str = Depends(get_cur
 
 @router.post("/agents/{name}/disable", response_model=Envelope[dict])
 async def disable_agent(name: str, request: Request, _user: str = Depends(get_current_user)) -> Any:
+    _validate_agent_name(name)
     try:
         _registry(request).set_enabled(name, False)
     except KeyError as e:
@@ -130,6 +145,7 @@ async def disable_agent(name: str, request: Request, _user: str = Depends(get_cu
 
 @router.get("/agents/{name}/permissions", response_model=Envelope[dict])
 async def get_permissions(name: str, request: Request, _user: str = Depends(get_current_user)) -> Any:
+    _validate_agent_name(name)
     try:
         return Envelope(data=_registry(request).get_permissions(name))
     except KeyError as e:
@@ -138,6 +154,7 @@ async def get_permissions(name: str, request: Request, _user: str = Depends(get_
 
 @router.put("/agents/{name}/permissions", response_model=Envelope[dict])
 async def set_permissions(name: str, body: dict, request: Request, _user: str = Depends(get_current_user)) -> Any:
+    _validate_agent_name(name)
     try:
         data = _registry(request).set_permissions(name, body)
     except KeyError as e:
@@ -159,6 +176,7 @@ async def set_permissions(name: str, body: dict, request: Request, _user: str = 
 
 @router.get("/agents/{name}/personality", response_model=Envelope[dict])
 async def get_personality(name: str, request: Request, _user: str = Depends(get_current_user)) -> Any:
+    _validate_agent_name(name)
     try:
         text = _registry(request).get_personality(name)
     except KeyError as e:
@@ -168,6 +186,7 @@ async def get_personality(name: str, request: Request, _user: str = Depends(get_
 
 @router.put("/agents/{name}/personality", response_model=Envelope[dict])
 async def set_personality(name: str, body: dict, request: Request, _user: str = Depends(get_current_user)) -> Any:
+    _validate_agent_name(name)
     text = body.get("personality", "")
     # 主体小妲特殊处理：人格写入 SOUL.md，build_system_prompt 按 mtime 自动失效缓存
     if name == "xiaoda":
@@ -238,6 +257,7 @@ _EXT = {"png": "png", "jpg": "jpg", "jpeg": "jpg", "webp": "webp"}
 
 @router.post("/agents/{name}/wallpaper", response_model=Envelope[dict])
 async def upload_wallpaper(name: str, body: dict, request: Request, _user: str = Depends(get_current_user)) -> Any:
+    _validate_agent_name(name)
     """上传背景板（data URL），保存后写入该 Agent 的 wallpaper 字段。
     
     每次上传生成带时间戳的新文件名，不覆盖旧文件，从根本上解决浏览器缓存问题。
@@ -291,6 +311,7 @@ async def upload_wallpaper(name: str, body: dict, request: Request, _user: str =
 
 @router.post("/agents/{name}/test", response_model=Envelope[dict])
 async def test_agent(name: str, request: Request, _user: str = Depends(get_current_user)) -> Any:
+    _validate_agent_name(name)
     """对该 Agent 发一条固定测试语句。"""
     core = request.app.state.core
     t0 = time.time()
@@ -357,6 +378,7 @@ def _resolve_sticker_dir(name: str, request: Request) -> Path:
 
 @router.get("/agents/{name}/stickers", response_model=Envelope[dict])
 async def list_stickers(name: str, request: Request, _user: str = Depends(get_current_user)) -> Any:
+    _validate_agent_name(name)
     """列出指定 Agent 的所有表情包及描述。"""
     sticker_dir = _resolve_sticker_dir(name, request)
     if not sticker_dir.exists():
@@ -391,6 +413,7 @@ async def list_stickers(name: str, request: Request, _user: str = Depends(get_cu
 
 @router.get("/agents/{name}/stickers/file/{filename}")
 async def serve_sticker(name: str, filename: str, request: Request, token: str = "") -> Any:
+    _validate_agent_name(name)
     """提供表情包图片文件。支持 query token 认证（img 标签无法发 header）。"""
     # 路径遍历防护
     if ".." in filename or "/" in filename or "\\" in filename:
@@ -423,6 +446,7 @@ async def serve_sticker(name: str, filename: str, request: Request, token: str =
 async def upload_sticker(
     name: str, request: Request, _user: str = Depends(get_current_user)
 ) -> Any:
+    _validate_agent_name(name)
     """上传表情包：multipart/form-data，字段 file (图片)、description (描述)、emotion (情绪分类)。"""
     from fastapi import UploadFile
     # 手动解析 multipart
@@ -502,6 +526,7 @@ async def upload_sticker(
 async def delete_sticker(
     name: str, filename: str, request: Request, _user: str = Depends(get_current_user)
 ) -> Any:
+    _validate_agent_name(name)
     """删除指定表情包。"""
     # 路径遍历防护：禁止 .. 和路径分隔符
     if ".." in filename or "/" in filename or "\\" in filename:
@@ -551,6 +576,7 @@ async def delete_sticker(
 
 @router.post("/agents/{name}/model", response_model=Envelope[dict])
 async def set_agent_model(name: str, body: dict, request: Request, _user: str = Depends(get_current_user)) -> Any:
+    _validate_agent_name(name)
     """一键切换子 Agent 的模型。
 
     body: {"provider": str, "model_id": str}

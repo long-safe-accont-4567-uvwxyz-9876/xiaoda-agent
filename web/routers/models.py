@@ -175,7 +175,8 @@ def _save_key_and_register(request: Request, pid: str, fmt: str,
                            base_url: str, api_key: str) -> None:
     _get_cred_dir().mkdir(parents=True, exist_ok=True)
     fp = _key_file(pid)
-    fp.write_text(api_key, encoding="utf-8")
+    from web._provider_keys import _encode_key
+    fp.write_text(_encode_key(api_key) + "\n", encoding="utf-8")
     try:
         os.chmod(fp, 0o600)
     except OSError:

@@ -341,7 +341,11 @@ def _register_self_heal_checks(doc: DoctorCheck) -> None:
             return False, f"Port {port} in use by another process"
 
     def _fix_port_conflict() -> None:
-        port = int(os.getenv("WEBUI_PORT", "8082"))
+        port_str = os.getenv("WEBUI_PORT", "8082")
+        if not port_str.isdigit() or not (1 <= int(port_str) <= 65535):
+            logger.warning("doctor.invalid_port value={}", port_str)
+            return
+        port = int(port_str)
         platform = _detect_platform()
         if platform == "windows":
             os.system(f'powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue | ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}"')

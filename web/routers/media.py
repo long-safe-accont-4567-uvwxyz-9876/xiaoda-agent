@@ -93,6 +93,8 @@ async def upload_voice_ref(agent: str, request: Request) -> Any:
     """上传指定 agent 的参考音频。FormData: name=音色名, file=音频文件(.mp3/.wav, <10MB)。"""
     from emotion.tts_engine import get_agent_voice_dir
     import re
+    if ".." in agent or "/" in agent or "\\" in agent:
+        raise HTTPException(400, "非法 agent 名称")
     form = await request.form()
     name = (form.get("name") or "").strip()
     file = form.get("file")
@@ -107,7 +109,6 @@ async def upload_voice_ref(agent: str, request: Request) -> Any:
     if ext not in (".mp3", ".wav"):
         raise HTTPException(400, "仅支持 .mp3 和 .wav 格式")
     agent_dir = get_agent_voice_dir(agent)
-    # 删除同名旧文件
     for f in agent_dir.iterdir():
         if f.stem == name:
             f.unlink()
@@ -121,6 +122,11 @@ async def upload_voice_ref(agent: str, request: Request) -> Any:
 async def delete_voice_ref(agent: str, name: str) -> Any:
     """删除指定 agent 的参考音频。"""
     from emotion.tts_engine import get_agent_voice_dir
+    import re
+    if ".." in agent or "/" in agent or "\\" in agent:
+        raise HTTPException(400, "非法 agent 名称")
+    if not re.match(r'^[a-zA-Z0-9_-]+$', name):
+        raise HTTPException(400, "非法音色名")
     agent_dir = get_agent_voice_dir(agent)
     deleted = False
     for f in agent_dir.iterdir():

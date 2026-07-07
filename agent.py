@@ -85,8 +85,19 @@ def main() -> None:
                 shutil.copy2(ENV_EXAMPLE_PATH, ENV_PATH)
                 print(f"  [i] 已从 .env.example 创建 .env 配置文件")
             else:
-                with open(ENV_PATH, "w", encoding="utf-8") as f:
-                    f.write("")
+                import tempfile
+                tmp_fd, tmp_path = tempfile.mkstemp(
+                    dir=os.path.dirname(ENV_PATH), prefix=".env.tmp")
+                try:
+                    with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                        f.write("")
+                    os.replace(tmp_path, ENV_PATH)
+                except Exception:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                    raise
                 print(f"  [i] 已创建空 .env 配置文件")
             # 重新加载 .env 使默认值生效
             load_dotenv(ENV_PATH, override=True)
@@ -119,7 +130,13 @@ def _run_cli() -> None:
 def _is_running_in_docker() -> bool:
     """检测当前是否在 Docker 容器内运行。"""
     import os
-    return os.path.exists("/.dockerenv") or os.path.isfile("/proc/1/cgroup") and "docker" in open("/proc/1/cgroup", "r", errors="ignore").read()
+    if os.path.exists("/.dockerenv"):
+        return True
+    try:
+        with open("/proc/1/cgroup", "r", errors="ignore") as f:
+            return "docker" in f.read()
+    except OSError:
+        return False
 
 
 def _get_lan_addresses() -> list:

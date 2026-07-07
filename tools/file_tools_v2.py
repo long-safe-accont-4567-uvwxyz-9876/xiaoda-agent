@@ -253,11 +253,12 @@ async def shell_command(command: str) -> ToolResult:
     # 尝试通过 PTY 终端执行
     try:
         from web.pty_executor import execute_on_pty
-        from web.ws_hub import _pty_sessions
+        from web.ws_hub import _pty_sessions, _pty_sessions_lock
 
-        has_active_terminal = any(
-            sess.get("alive") for sess in _pty_sessions.values()
-        )
+        with _pty_sessions_lock:
+            has_active_terminal = any(
+                sess.get("alive") for sess in _pty_sessions.values()
+            )
 
         if has_active_terminal:
             ok, output = await execute_on_pty("all", command, timeout=30.0)

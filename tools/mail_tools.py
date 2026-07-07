@@ -16,6 +16,7 @@ import glob
 import json
 import os
 import shutil
+import threading
 from typing import Any
 
 from loguru import logger
@@ -26,6 +27,7 @@ from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 # ── agently-cli 二进制路径解析 ──────────────────────────────────────────
 _AGENTLY_CACHE: str | None = None
 _RESOLVED = False
+_agently_lock = threading.Lock()
 
 
 def _resolve_agently_cli() -> str | None:
@@ -38,10 +40,10 @@ def _resolve_agently_cli() -> str | None:
     4. npm bin 目录中的 symlink（可能需要 node 在 PATH 中）
     """
     global _AGENTLY_CACHE, _RESOLVED
-    if _RESOLVED:
-        return _AGENTLY_CACHE
-
-    _RESOLVED = True
+    with _agently_lock:
+        if _RESOLVED:
+            return _AGENTLY_CACHE
+        _RESOLVED = True
 
     # 1. 环境变量覆盖
     env_path = os.environ.get("AGENTLY_CLI_PATH", "").strip()

@@ -2,6 +2,7 @@ from typing import Any
 import os
 import shutil
 import asyncio
+import threading
 import time
 from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
@@ -13,6 +14,7 @@ PWM_BASE = "/sys/class/pwm"
 
 # 硬件状态缓存：5秒TTL（per-target）
 _hw_cache: dict | None = None
+_hw_cache_lock = threading.Lock()
 _hw_cache_ts: dict = {}
 _HW_CACHE_TTL = 5.0
 
@@ -586,22 +588,22 @@ async def hardware_status(target: str = "all") -> ToolResult:
     """查询硬件状态（温度/CPU/内存/磁盘/电压），带 5 秒缓存。"""
     global _hw_cache, _hw_cache_ts
     try:
-        # 检查缓存是否有效（per-target TTL）
         now = time.monotonic()
-        cache_ts = _hw_cache_ts.get(target, 0.0)
-        if _hw_cache is not None and (now - cache_ts) < _HW_CACHE_TTL:
-            cached = _hw_cache.get(target)
-            if cached is not None:
-                return cached
+        with _hw_cache_lock:
+            cache_ts = _hw_cache_ts.get(target, 0.0)
+            if _hw_cache is not None and (now - cache_ts) < _HW_CACHE_TTL:
+                cached = _hw_cache.get(target)
+                if cached is not None:
+                    return cached
 
         lines = await asyncio.to_thread(_read_all_hardware, target)
         result = ToolResult.ok("\n".join(lines))
 
-        # 更新缓存
-        if _hw_cache is None:
-            _hw_cache = {}
-        _hw_cache[target] = result
-        _hw_cache_ts[target] = now
+        with _hw_cache_lock:
+            if _hw_cache is None:
+                _hw_cache = {}
+            _hw_cache[target] = result
+            _hw_cache_ts[target] = now
 
         return result
     except Exception as e:

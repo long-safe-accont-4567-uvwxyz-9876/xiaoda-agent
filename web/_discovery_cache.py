@@ -8,12 +8,15 @@
 该模块不依赖任何 web.routers 或 model_router, 从而打破循环.
 """
 
-# 简易 30 分钟缓存 (data: 缓存数据, ts: 写入时间戳)
+import threading
+
 _cache: dict = {"data": None, "ts": 0.0}
-_CACHE_TTL = 30 * 60  # 30 minutes
+_CACHE_TTL = 30 * 60
+_cache_lock = threading.Lock()
 
 
 def invalidate_discovery_cache() -> None:
     """清除模型发现缓存，使下次请求重新获取。"""
-    _cache["data"] = None
-    _cache["ts"] = 0.0
+    with _cache_lock:
+        _cache["data"] = None
+        _cache["ts"] = 0.0

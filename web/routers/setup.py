@@ -776,7 +776,8 @@ def _auto_register_providers(updates: dict) -> None:
         cred_dir = get_credentials_dir()
         cred_dir.mkdir(parents=True, exist_ok=True)
         fp = cred_dir / f"provider_{pid}.key"
-        fp.write_text(api_key, encoding="utf-8")
+        from web._provider_keys import _encode_key
+        fp.write_text(_encode_key(api_key) + "\n", encoding="utf-8")
         try:
             os.chmod(fp, 0o600)
         except OSError:

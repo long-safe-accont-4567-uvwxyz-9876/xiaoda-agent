@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Any
 from enum import Enum
+import threading
 
 from utils.metrics import metrics
 
@@ -46,6 +47,7 @@ class ToolResult:
 _tools: dict[str, dict] = {}
 _schema_cache: list | None = None
 _schema_version: int = 0
+_schema_lock = threading.Lock()
 
 # ── 工具数量上限管理 ──────────────────────────────────────
 # 聊天 agent 优先保证对话流畅，工具不宜过多（DeepSeek function calling 舒适区间）
@@ -118,8 +120,9 @@ def register_tool(name: str, description: str, schema: dict,
             "plugin_id": plugin_id,
             "version": version,
         }
-        _schema_version += 1
-        _schema_cache = None
+        with _schema_lock:
+            _schema_version += 1
+            _schema_cache = None
         return func
     return decorator
 
@@ -157,8 +160,9 @@ def register_lazy_tool(name: str, description: str, schema: dict,
         "module_path": module_path,
         "func_name": func_name,
     }
-    _schema_version += 1
-    _schema_cache = None
+    with _schema_lock:
+        _schema_version += 1
+        _schema_cache = None
 
 
 def register_builtin_tools_lazy() -> None:
@@ -238,8 +242,9 @@ def register_tool_direct(name: str, description: str, func: callable,
         "plugin_id": plugin_id,
         "version": version,
     }
-    _schema_version += 1
-    _schema_cache = None
+    with _schema_lock:
+        _schema_version += 1
+        _schema_cache = None
 
 
 def get_tool(name: str) -> dict | None:
@@ -250,7 +255,8 @@ def get_tool(name: str) -> dict | None:
 def invalidate_schema_cache() -> None:
     """强制使工具 schema 缓存失效，下次 to_openai_tools() 会重新构建。"""
     global _schema_cache
-    _schema_cache = None
+    with _schema_lock:
+        _schema_cache = None
 
 
 def list_tools() -> list[dict]:
@@ -268,12 +274,12 @@ def _tool_priority(tool: dict) -> int:
 def to_openai_tools() -> list[dict]:
     """生成 OpenAI function-calling 格式的工具列表 (带缓存，受上限限制)."""
     global _schema_cache, _schema_version
-    if _schema_cache is not None:
-        metrics.inc("tool_registry.schema_cache.hit")
-        return _schema_cache
+    with _schema_lock:
+        if _schema_cache is not None:
+            metrics.inc("tool_registry.schema_cache.hit")
+            return _schema_cache
     metrics.inc("tool_registry.schema_cache.miss")
 
-    # 收集所有启用的工具
     enabled = []
     for t in _tools.values():
         if t.get("max_frequency", 0) == 0:
@@ -282,7 +288,6 @@ def to_openai_tools() -> list[dict]:
             continue
         enabled.append(t)
 
-    # 按优先级排序，取前 MAX_ENABLED_TOOLS 个
     enabled.sort(key=_tool_priority, reverse=True)
     capped = enabled[:MAX_ENABLED_TOOLS]
 
@@ -300,7 +305,8 @@ def to_openai_tools() -> list[dict]:
     if len(enabled) > MAX_ENABLED_TOOLS:
         metrics.inc("tool_registry.tools_capped")
 
-    _schema_cache = result
+    with _schema_lock:
+        _schema_cache = result
     return result
 
 
@@ -335,8 +341,9 @@ def clear_tools() -> None:
     """清空所有已注册工具并重置 schema 缓存."""
     global _schema_cache, _schema_version
     _tools.clear()
-    _schema_version += 1
-    _schema_cache = None
+    with _schema_lock:
+        _schema_version += 1
+        _schema_cache = None
 
 
 def unregister_tool(name: str) -> bool:
@@ -344,8 +351,9 @@ def unregister_tool(name: str) -> bool:
     global _schema_cache, _schema_version
     if name in _tools:
         del _tools[name]
-        _schema_version += 1
-        _schema_cache = None
+        with _schema_lock:
+            _schema_version += 1
+            _schema_cache = None
         return True
     return False
 
@@ -357,6 +365,7 @@ def unregister_by_plugin(plugin_id: str) -> list[str]:
     for name in removed:
         del _tools[name]
     if removed:
-        _schema_version += 1
-        _schema_cache = None
+        with _schema_lock:
+            _schema_version += 1
+            _schema_cache = None
     return removed

@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -16,14 +17,15 @@ from web.schemas import Envelope
 
 router = APIRouter(tags=["mail"], dependencies=[Depends(get_current_user)])
 
-# auth-status 缓存（避免频繁调用 CLI）
 _auth_status_cache: dict = {}
-_AUTH_CACHE_TTL = 300  # 5 分钟
+_AUTH_CACHE_TTL = 300
+_auth_status_lock = threading.Lock()
 
 
 def _clear_auth_status_cache() -> None:
     """清除 auth-status 缓存（供后台任务调用）。"""
-    _auth_status_cache.clear()
+    with _auth_status_lock:
+        _auth_status_cache.clear()
 
 
 # ── 请求/响应模型 ──────────────────────────────────────────────
@@ -373,7 +375,8 @@ async def trigger_mail_auth_login(request: Request) -> Any:
 
         rc = proc.returncode
         if rc == 0:
-            _auth_status_cache.clear()
+            with _auth_status_lock:
+                _auth_status_cache.clear()
             return Envelope(data={
                 "started": True,
                 "message": "授权成功！邮箱已连接",

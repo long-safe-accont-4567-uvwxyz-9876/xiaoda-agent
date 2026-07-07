@@ -15,6 +15,7 @@ import asyncio
 import os
 import re
 import uuid
+import threading
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -39,8 +40,8 @@ class CommandState:
     event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
-# 当前正在等待输出的命令（同一时间最多一个）
 _pending_cmd: Optional[CommandState] = None
+_pending_lock = threading.Lock()
 
 
 async def execute_on_pty(
@@ -54,29 +55,31 @@ async def execute_on_pty(
     """
     global _pending_cmd
 
-    from web.ws_hub import _pty_sessions
+    from web.ws_hub import _pty_sessions, _pty_sessions_lock
 
-    # 找到任意活跃的终端会话
     session = None
-    for _sid, sess in _pty_sessions.items():
-        if sess.get("alive"):
-            session = sess
-            break
+    with _pty_sessions_lock:
+        for _sid, sess in _pty_sessions.items():
+            if sess.get("alive"):
+                session = sess
+                break
 
     if not session:
         return False, ""
 
-    # 如果正在执行另一个命令，等待它完成
-    if _pending_cmd and not _pending_cmd.event.is_set():
+    with _pending_lock:
+        pending = _pending_cmd
+    if pending and not pending.event.is_set():
         try:
-            await asyncio.wait_for(_pending_cmd.event.wait(), timeout=5.0)
+            await asyncio.wait_for(pending.event.wait(), timeout=5.0)
         except asyncio.TimeoutError:
-            _pending_cmd = None
+            with _pending_lock:
+                _pending_cmd = None
 
-    # 生成唯一标记
     marker_id = uuid.uuid4().hex[:10]
     state = CommandState(marker_id=marker_id)
-    _pending_cmd = state
+    with _pending_lock:
+        _pending_cmd = state
 
     # 标记格式（ANSI dim + 背景色，终端中几乎不可见）：
     #   开始：\033[2m\033[38;2;6;14;10m_A_{id}_\033[0m
@@ -117,19 +120,21 @@ async def execute_on_pty(
             fd = session["fd"]
             os.write(fd, pty_input.encode("utf-8"))
     except (OSError, BrokenPipeError) as e:
-        _pending_cmd = None
+        with _pending_lock:
+            _pending_cmd = None
         logger.error("pty_executor.write_failed error={}", str(e))
         return False, ""
 
-    # 等待输出完成或超时
     try:
         await asyncio.wait_for(state.event.wait(), timeout=timeout)
     except asyncio.TimeoutError:
-        _pending_cmd = None
+        with _pending_lock:
+            _pending_cmd = None
         logger.warning("pty_executor.timeout cmd='{}' marker={}", command[:60], marker_id)
         return True, "[命令执行超时]\n" + "\n".join(state.output_lines)
 
-    _pending_cmd = None
+    with _pending_lock:
+        _pending_cmd = None
 
     output = "\n".join(state.output_lines).strip()
     return True, output
@@ -137,9 +142,8 @@ async def execute_on_pty(
 
 def feed_output(text: str) -> None:
     """PTY 读取器每读到一块输出时调用，内部按行缓冲并检测标记。"""
-    global _pending_cmd
-
-    state = _pending_cmd
+    with _pending_lock:
+        state = _pending_cmd
     if not state:
         return
 
