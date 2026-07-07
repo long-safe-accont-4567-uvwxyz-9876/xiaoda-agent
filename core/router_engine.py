@@ -235,4 +235,7 @@ class RouterEngine:
 
 
 # ── 公共导出（保持向后兼容）────────────────────────────────────────
-MENTION_MAP = _build_mention_map()
+try:
+    MENTION_MAP = _build_mention_map()
+except Exception:
+    MENTION_MAP = dict(_DEFAULT_MENTION_MAP)
