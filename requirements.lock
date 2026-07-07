@@ -51,7 +51,7 @@ openpyxl==3.1.5
 html2text==2025.4.15
 
 # ── 桌面模式 ──
-pywebview==5.4.1
+pywebview==5.4
 
 # ── 开发/测试 ──
 pytest==8.3.5
