@@ -9,19 +9,22 @@ const chat = useChatStore()
 const agentsStore = useAgentsStore()
 
 const targetUrl = computed(() => {
+  if (!agentsStore.agents.length) return ''
   const a = agentsStore.agents.find(x => x.name === chat.currentAgent)
   return a?.wallpaper || DEFAULT_BG
 })
 
+const ready = computed(() => targetUrl.value !== '')
+
 interface Layer { url: string; key: number }
-const layers = ref<Layer[]>([{ url: DEFAULT_BG, key: 0 }])
+const layers = ref<Layer[]>([])
 let seq = 0
 let pendingUrl = ''
 
 watch(targetUrl, (url) => {
+  if (!url) return
   pendingUrl = url
   if (topUrl() === url) return
-  // 预加载完成再入场，避免切换瞬间露底闪黑
   const img = new Image()
   img.onload = () => { if (pendingUrl === url) pushLayer(url) }
   img.onerror = () => { if (pendingUrl === url) pushLayer(DEFAULT_BG) }
@@ -43,7 +46,7 @@ function pushLayer(url: string) {
 </script>
 
 <template>
-  <div class="agent-backdrop" aria-hidden="true">
+  <div class="agent-backdrop" :class="{ 'backdrop-hidden': !ready }" aria-hidden="true">
     <transition-group name="bg-fade">
       <div
         v-for="l in layers"
@@ -63,6 +66,11 @@ function pushLayer(url: string) {
   z-index: 0;
   overflow: hidden;
   background: var(--forest-deep);
+  transition: opacity 0.3s ease;
+}
+
+.backdrop-hidden {
+  opacity: 0;
 }
 
 .backdrop-layer {

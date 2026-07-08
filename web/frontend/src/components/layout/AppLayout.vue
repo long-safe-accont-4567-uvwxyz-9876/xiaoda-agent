@@ -4,11 +4,13 @@ import SideBar from './SideBar.vue'
 import TopBar from './TopBar.vue'
 import AgentBackdrop from './AgentBackdrop.vue'
 import { useAuthStore } from '../../stores/auth'
+import { useAgentsStore } from '../../stores/agents'
 import { useUiStore } from '../../stores/ui'
 import { getWsClient } from '../../api/ws'
 import { useRouter } from 'vue-router'
 
 const auth = useAuthStore()
+const agentsStore = useAgentsStore()
 const ui = useUiStore()
 const router = useRouter()
 const sidebarExpanded = ref(false)
@@ -21,6 +23,7 @@ if (!auth.isLoggedIn) {
     if (!ws.connected && auth.token) {
       ws.connect(auth.token)
     }
+    agentsStore.load().catch(() => {})
     ui.loadRemote()
   })
 }
