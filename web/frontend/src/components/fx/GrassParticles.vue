@@ -210,11 +210,12 @@ defineExpose({ burst, dandelionRain })
 // FPS 探测：启动 2s 后均值 <24fps 自动降级
 let fpsFrames = 0
 let fpsStart = 0
+let fpsRAF = 0
 function fpsProbe(now: number) {
   if (!fpsStart) fpsStart = now
   fpsFrames++
   if (now - fpsStart < 2000) {
-    requestAnimationFrame(fpsProbe)
+    fpsRAF = requestAnimationFrame(fpsProbe)
   } else {
     const fps = fpsFrames / ((now - fpsStart) / 1000)
     if (fps < 24 && ui.particles !== 'off' && ui.particles !== 'low') {
@@ -240,11 +241,12 @@ onMounted(() => {
   window.addEventListener('mousemove', onMouse, { passive: true })
   document.addEventListener('visibilitychange', onVisibility)
   start()
-  requestAnimationFrame(fpsProbe)
+  fpsRAF = requestAnimationFrame(fpsProbe)
 })
 
 onBeforeUnmount(() => {
   stop()
+  if (fpsRAF) cancelAnimationFrame(fpsRAF)
   window.removeEventListener('resize', resize)
   window.removeEventListener('mousemove', onMouse)
   document.removeEventListener('visibilitychange', onVisibility)

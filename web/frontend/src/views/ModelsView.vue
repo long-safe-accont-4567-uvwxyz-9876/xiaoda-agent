@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import {
   NButton, NSwitch, NModal, NForm, NFormItem, NInput, NInputNumber,
   NSelect, NTag, NPopconfirm, NRadioGroup, NRadio, NSlider, useMessage,
@@ -28,6 +28,7 @@ const isCreateProvider = ref(false)
 const testResults = ref<Record<string, any>>({})
 const testingId = ref('')
 const chartEl = ref<HTMLElement | null>(null)
+let usageChart: echarts.ECharts | null = null
 // 已发现的模型列表（按 provider 分组），用于路由表下拉选择
 const discoveredModels = ref<any[]>([])
 
@@ -71,6 +72,11 @@ const customProviders = computed({
 
 onMounted(loadAll)
 
+onBeforeUnmount(() => {
+  usageChart?.dispose(); usageChart = null
+  if (_tempSaveTimer) clearTimeout(_tempSaveTimer)
+})
+
 async function loadAll() {
   try {
     const [p, r, c, u, dm] = await Promise.all([
@@ -104,8 +110,8 @@ function renderChart() {
       return row ? (row.prompt_tokens + row.completion_tokens) : 0
     }),
   }))
-  const chart = echarts.init(chartEl.value)
-  chart.setOption({
+  if (!usageChart) usageChart = echarts.init(chartEl.value)
+  usageChart.setOption({
     tooltip: { trigger: 'axis' },
     legend: { textStyle: { color: '#f2f7ee' }, type: 'scroll' },
     grid: { left: 60, right: 20, top: 40, bottom: 24 },

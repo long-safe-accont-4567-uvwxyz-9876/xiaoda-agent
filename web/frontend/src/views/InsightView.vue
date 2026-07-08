@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import {
   NTabs, NTabPane, NButton, NInput, NSlider, NTag, NPopconfirm,
   NCollapse, NCollapseItem, NModal, NForm, NFormItem, NSelect,
@@ -233,7 +233,7 @@ onMounted(async () => {
   window.addEventListener('resize', handleResize)
 })
 
-onUnmounted(() => {
+onBeforeUnmount(() => {
   ws.off('portrait_consolidated', onConsolidated)
   ws.off('knowledge_graph_changed', loadKnowledgeData)
   ws.off('xp_levelup', onXpLevelUp)

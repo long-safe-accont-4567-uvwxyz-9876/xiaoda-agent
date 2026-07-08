@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, provide, onUnmounted } from 'vue'
+import { onMounted, ref, provide, onBeforeUnmount } from 'vue'
 import { NConfigProvider, NMessageProvider, NDialogProvider, darkTheme } from 'naive-ui'
 import type { GlobalThemeOverrides } from 'naive-ui'
 import { useAuthStore } from './stores/auth'
@@ -19,10 +19,25 @@ provide('particles', particlesRef)
 // 署名水印防删除
 const watermarkRef = ref<HTMLElement | null>(null)
 let watermarkObserver: MutationObserver | null = null
-let signatureCheckTimer: number | null = null
+
+async function checkSignature() {
+  try {
+    const data = await api.getBrandSignature()
+    const expected = data.signature || ''
+    const watermarks = document.querySelectorAll('.brand-watermark span')
+    watermarks.forEach(el => {
+      if (el.textContent !== expected && expected) {
+        el.textContent = expected
+      }
+    })
+  } catch { /* 静默失败 */ }
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === 'visible') checkSignature()
+}
 
 function startWatermarkGuard() {
-  // MutationObserver 监听水印节点被移除，仅在 DOM 变更时触发，零轮询开销
   const wm = watermarkRef.value
   if (wm) {
     watermarkObserver = new MutationObserver(() => {
@@ -33,18 +48,8 @@ function startWatermarkGuard() {
     watermarkObserver.observe(document.body, { childList: true, subtree: true })
   }
 
-  signatureCheckTimer = window.setInterval(async () => {
-    try {
-      const data = await api.getBrandSignature()
-      const expected = data.signature || ''
-      const watermarks = document.querySelectorAll('.brand-watermark span')
-      watermarks.forEach(el => {
-        if (el.textContent !== expected && expected) {
-          el.textContent = expected
-        }
-      })
-    } catch { /* 静默失败 */ }
-  }, 60000)
+  checkSignature()
+  document.addEventListener('visibilitychange', onVisibilityChange)
 }
 
 function stopWatermarkGuard() {
@@ -52,10 +57,7 @@ function stopWatermarkGuard() {
     watermarkObserver.disconnect()
     watermarkObserver = null
   }
-  if (signatureCheckTimer) {
-    clearInterval(signatureCheckTimer)
-    signatureCheckTimer = null
-  }
+  document.removeEventListener('visibilitychange', onVisibilityChange)
 }
 
 // 简单 GPU 能力检测：如果 canvas getContext('webgl') 失败或 renderer 包含 SwiftShader/llvmpipe，标记为低性能
@@ -111,7 +113,7 @@ onMounted(async () => {
   }
 })
 
-onUnmounted(() => {
+onBeforeUnmount(() => {
   stopWatermarkGuard()
   ui.stopAutoCheck()
 })

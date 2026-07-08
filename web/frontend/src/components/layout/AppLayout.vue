@@ -73,6 +73,7 @@ if (!auth.isLoggedIn) {
   padding: 16px;
   position: relative;
   z-index: 2;
+  contain: layout paint;
 }
 
 @media (max-width: 768px) {

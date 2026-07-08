@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useChatStore } from '../../stores/chat'
 import { useAgentsStore } from '../../stores/agents'
 import { getWsClient } from '../../api/ws'
@@ -165,11 +165,12 @@ onMounted(() => {
   document.addEventListener('keydown', _onDocKeyDown, true)
 })
 
-onUnmounted(() => {
+onBeforeUnmount(() => {
   ws.off('terminal_output', onTerminalOutput)
   ws.off('terminal_exit', onTerminalExit)
   document.removeEventListener('keydown', _onDocKeyDown, true)
   for (const s of sessions.value) {
+    s.resizeObserver?.disconnect()
     s.terminal.dispose()
   }
 })

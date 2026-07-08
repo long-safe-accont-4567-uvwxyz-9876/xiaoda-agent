@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NButton, NSwitch, NRadioGroup, NRadioButton, NSelect, NSlider,
@@ -290,7 +290,7 @@ onMounted(async () => {
   }
 })
 
-onUnmounted(() => {
+onBeforeUnmount(() => {
   if (saveTimer) clearTimeout(saveTimer)
 })
 </script>

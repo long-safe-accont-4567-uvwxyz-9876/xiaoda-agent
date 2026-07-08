@@ -7,6 +7,7 @@ import {
 } from 'naive-ui'
 import { get, post, put, del, api } from '../api'
 import { useAgentsStore } from '../stores/agents'
+import { useAuthStore } from '../stores/auth'
 import { getWsClient } from '../api/ws'
 import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
@@ -14,6 +15,7 @@ import { replaceAgentNames, refreshAgentNames } from '../utils/agentNames'
 import { pinyin } from 'pinyin-pro'
 
 const message = useMessage()
+const auth = useAuthStore()
 
 // 中文转拼音（当编辑时使用）
 function translateToEn(zhName: string): string {
@@ -35,7 +37,6 @@ const testResult = ref<any>(null)
 const testing = ref(false)
 const saving = ref(false)
 const wpInput = ref<HTMLInputElement | null>(null)
-const token = localStorage.getItem('token') || ''
 const uploadingWp = ref(false)
 const discoveredModels = ref<Array<{ provider: string; label?: string; models: Array<{ id: string; display_name: string; free: boolean }> }>>([])
 const advancedTouched = ref(false)
@@ -683,7 +684,7 @@ async function uploadVoiceForAgent() {
             <n-spin :show="stickerLoading">
               <div v-if="stickerList.length" class="sticker-grid">
                 <div v-for="s in stickerList" :key="s.name" class="sticker-card">
-                  <n-image :src="s.url + '?token=' + token" width="100" height="100" object-fit="cover"
+                  <n-image :src="s.url + '?token=' + auth.token" width="100" height="100" object-fit="cover"
                            :fallback-src="''" lazy class="sticker-img" />
                   <div class="sticker-info">
                     <span class="sticker-desc">{{ s.description }}</span>

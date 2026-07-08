@@ -9,6 +9,7 @@ export class WsClient {
   private maxReconnectDelay = 30000
   private listeners: Map<string, Set<(data: WsEvent) => void>> = new Map()
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private _unauthorized = false
   public connected = false
 
@@ -70,6 +71,7 @@ export class WsClient {
 
   disconnect() {
     this.stopHeartbeat()
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
     this.reconnectAttempts = 999 // prevent reconnect
     this.ws?.close()
     this.ws = null
@@ -123,7 +125,7 @@ export class WsClient {
     if (this.reconnectAttempts >= 20) return
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), this.maxReconnectDelay)
     this.reconnectAttempts++
-    setTimeout(() => this.connect(token), delay)
+    this.reconnectTimer = setTimeout(() => this.connect(token), delay)
   }
 }
 

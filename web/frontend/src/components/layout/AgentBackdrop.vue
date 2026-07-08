@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch, onMounted } from 'vue'
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useChatStore } from '../../stores/chat'
 import { useAgentsStore } from '../../stores/agents'
 
@@ -20,10 +20,15 @@ interface Layer { url: string; key: number }
 const layers = ref<Layer[]>([])
 let seq = 0
 let pendingUrl = ''
+let pruneTimer: ReturnType<typeof setTimeout> | null = null
 
 onMounted(() => {
   const initial = agentsStore.mainWallpaper || DEFAULT_BG
   pushLayer(initial)
+})
+
+onBeforeUnmount(() => {
+  if (pruneTimer) { clearTimeout(pruneTimer); pruneTimer = null }
 })
 
 watch(targetUrl, (url) => {
@@ -43,8 +48,10 @@ function topUrl() {
 function pushLayer(url: string) {
   if (topUrl() === url) return
   layers.value.push({ url, key: ++seq })
-  setTimeout(() => {
+  if (pruneTimer) clearTimeout(pruneTimer)
+  pruneTimer = setTimeout(() => {
     if (layers.value.length > 1) layers.value.splice(0, layers.value.length - 1)
+    pruneTimer = null
   }, 1400)
 }
 </script>
@@ -70,8 +77,6 @@ function pushLayer(url: string) {
   z-index: 0;
   overflow: hidden;
   background: var(--forest-deep);
-  filter: brightness(var(--app-brightness, 1.05));
-  transition: filter 0.4s ease;
 }
 
 .backdrop-layer {
@@ -97,6 +102,8 @@ function pushLayer(url: string) {
   inset: 0;
   background: var(--backdrop-tint);
   pointer-events: none;
+  opacity: calc(2 - var(--app-brightness, 1.05));
+  transition: opacity 0.4s ease;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -47,8 +47,9 @@ const stageText: Record<string, string> = {
         :title="`${a.display_name} · ${a.model || a.provider} · ${a.tool_count ?? '?'} ${t('topBar.toolsCount')}`"
         @click="chat.setAgent(a.name)"
       >
-        <span class="chip-avatar"
-              :style="a.wallpaper ? { backgroundImage: `url('${a.wallpaper}')` } : undefined">
+        <span class="chip-avatar">
+          <img v-if="a.wallpaper" :src="a.wallpaper" class="chip-avatar-img"
+               @error="($event: Event) => { ($event.target as HTMLImageElement).style.display = 'none' }" />
           <template v-if="!a.wallpaper">{{ a.display_name.slice(0, 1) }}</template>
         </span>
         <span class="chip-name">{{ a.display_name }}</span>
@@ -125,13 +126,21 @@ const stageText: Record<string, string> = {
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  background: rgba(127, 214, 80, 0.18) center/cover no-repeat;
+  background: rgba(127, 214, 80, 0.18);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 13px;
   font-weight: 700;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.chip-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
 }
 
 .chip-name { font-size: 13px; }

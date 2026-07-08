@@ -21,13 +21,19 @@ const permissionMode = ref('')
 const costChartEl = ref<HTMLElement | null>(null)
 const toolChartEl = ref<HTMLElement | null>(null)
 let timer: ReturnType<typeof setInterval> | null = null
+let costChart: echarts.ECharts | null = null
+let toolChart: echarts.ECharts | null = null
 
 onMounted(async () => {
   await loadMonitorConfig()
   await loadAll()
 })
 
-onBeforeUnmount(() => { stopPolling() })
+onBeforeUnmount(() => {
+  stopPolling()
+  costChart?.dispose(); costChart = null
+  toolChart?.dispose(); toolChart = null
+})
 
 async function loadMonitorConfig() {
   try {
@@ -101,7 +107,8 @@ function renderCostChart(series: any[]) {
   const days = [...new Set(series.map(s => s.day))].sort()
   const data = days.map(d => series.filter(s => s.day === d)
     .reduce((sum, s) => sum + (s.cost_usd || 0), 0))
-  echarts.init(costChartEl.value).setOption({
+  if (!costChart) costChart = echarts.init(costChartEl.value)
+  costChart.setOption({
     tooltip: { trigger: 'axis' },
     grid: { left: 60, right: 16, top: 16, bottom: 24 },
     xAxis: { type: 'category', data: days, axisLabel: { color: '#9ca3af', fontSize: 10 } },
@@ -123,7 +130,8 @@ async function renderToolChart() {
     }
     toolCounts.sort((a, b) => b[1] - a[1])
     const top = toolCounts.slice(0, 10).reverse()
-    echarts.init(toolChartEl.value).setOption({
+    if (!toolChart) toolChart = echarts.init(toolChartEl.value)
+    toolChart.setOption({
       tooltip: {},
       grid: { left: 140, right: 20, top: 10, bottom: 24 },
       xAxis: { type: 'value', axisLabel: { color: '#9ca3af' },

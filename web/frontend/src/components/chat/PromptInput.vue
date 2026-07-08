@@ -75,7 +75,7 @@ function handleSend() {
   if (showThink.value) options.think = true
   if (uploadedImage.value) options.imageUrl = uploadedImage.value.url
   emit('send', text, options)
-  // 清理状态
+  if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
   uploadedImage.value = null
   imagePreviewUrl.value = ''
   showSearch.value = false
@@ -109,10 +109,12 @@ async function onFileSelected(e: Event) {
 async function uploadFile(file: File) {
   if (!file.type.startsWith('image/')) return
   try {
+    if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
     imagePreviewUrl.value = URL.createObjectURL(file)
     const result = await api.uploadImage(file)
     uploadedImage.value = result
   } catch {
+    if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
     imagePreviewUrl.value = ''
     uploadedImage.value = null
   }

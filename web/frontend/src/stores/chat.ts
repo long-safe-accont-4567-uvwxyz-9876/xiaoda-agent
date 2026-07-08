@@ -256,6 +256,7 @@ export const useChatStore = defineStore('chat', () => {
     const text = messages.value[idx].content
     // 移除该条用户消息之后的所有消息（旧回复/错误），重新发送
     messages.value.splice(idx)
+    clearMarkdownCache()
     sendMessage(text)
   }
 
@@ -268,6 +269,7 @@ export const useChatStore = defineStore('chat', () => {
     sessionId.value = sid
     ws.send({ type: 'set_session', session_id: sid })
     const history = await api.getMessages(sid)
+    clearMarkdownCache()
     messages.value = history.map(h => ({
       id: `h-${h.id}`,
       role: h.role as Message['role'],

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, onMounted, onBeforeUnmount, computed, inject } from 'vue'
+import { ref, nextTick, watch, onMounted, onBeforeUnmount, onDeactivated, computed, inject } from 'vue'
 import type { Ref } from 'vue'
 import { NDrawer, NDrawerContent, NButton, NPopconfirm, useMessage } from 'naive-ui'
 import { useChatStore } from '../stores/chat'
+import { useAuthStore } from '../stores/auth'
 import { useUiStore } from '../stores/ui'
 import { api, exportSessionUrl } from '../api'
 import { renderMarkdown } from '../utils/markdown'
@@ -15,7 +16,10 @@ import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import ModelSelector from '../components/chat/ModelSelector.vue'
 import { t } from '../i18n'
 
+defineOptions({ name: 'ChatView' })
+
 const chat = useChatStore()
+const auth = useAuthStore()
 const ui = useUiStore()
 const message = useMessage()
 const particles = inject<Ref<any>>('particles')
@@ -29,7 +33,6 @@ const showSessions = ref(false)
 const sessions = ref<any[]>([])
 const playingUrl = ref('')
 const lightboxUrl = ref('')
-const authToken = localStorage.getItem('token') || ''
 let audioEl: HTMLAudioElement | null = null
 
 const showPalette = computed(() => inputText.value.startsWith('/') && !inputText.value.includes(' '))
@@ -43,7 +46,12 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  if (audioEl) { audioEl.pause(); audioEl.onended = null; audioEl.src = ''; audioEl = null }
+  if (audioEl) { audioEl.pause(); audioEl.onended = null; audioEl.onerror = null; audioEl.src = ''; audioEl = null }
+  playingUrl.value = ''
+})
+
+onDeactivated(() => {
+  if (audioEl) { audioEl.pause(); audioEl.onended = null; audioEl.onerror = null; audioEl.src = ''; audioEl = null }
   playingUrl.value = ''
 })
 
@@ -91,11 +99,12 @@ function findLastFinalAssistant() {
 }
 
 function play(url: string) {
-  if (audioEl) { audioEl.pause(); audioEl = null }
+  if (audioEl) { audioEl.pause(); audioEl.onended = null; audioEl.onerror = null; audioEl = null }
   if (playingUrl.value === url) { playingUrl.value = ''; return }
   audioEl = new Audio(url)
   playingUrl.value = url
   audioEl.onended = () => { playingUrl.value = '' }
+  audioEl.onerror = () => { playingUrl.value = '' }
   audioEl.play().catch(() => { playingUrl.value = '' })
 }
 
@@ -270,8 +279,8 @@ const emotionColors: Record<string, string> = {
             <audio v-if="msg.audioUrl" :src="msg.audioUrl" controls class="media-audio"></audio>
           </div>
           <!-- 表情包：贴在气泡尾部，不与产物混淆 -->
-          <img v-if="msg.stickerUrl" :src="msg.stickerUrl + '?token=' + authToken" class="sticker-img"
-               :title="t('chatView.zoom')" @click="lightboxUrl = msg.stickerUrl + '?token=' + authToken" />
+          <img v-if="msg.stickerUrl" :src="msg.stickerUrl + '?token=' + auth.token" class="sticker-img"
+               :title="t('chatView.zoom')" @click="lightboxUrl = msg.stickerUrl + '?token=' + auth.token" />
 
           <div class="bubble-footer" v-if="!msg.streaming && msg.content && msg.role !== 'system'">
             <span class="msg-time">{{ fmtTime(msg.timestamp) }}</span>
@@ -383,6 +392,7 @@ const emotionColors: Record<string, string> = {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  contain: layout paint;
 }
 
 .empty-state {
