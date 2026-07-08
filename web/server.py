@@ -42,9 +42,18 @@ def _register_env_providers(cfg: Any, env_values: Any, os: Any) -> None:
     _KNOWN_ENV_PROVIDERS = {
         "SILICONFLOW_API_KEY": ("siliconflow", "openai", "https://api.siliconflow.cn/v1", "SiliconFlow 硅基流动"),
         "OPENROUTER_API_KEY": ("openrouter", "openai", "https://openrouter.ai/api/v1", "OpenRouter"),
-        "MODELSCOPE_ACCESS_TOKEN": ("modelscope", "openai", "https://api-inference.modelscope.cn/v1", "ModelScope 魔搭"),
-        "AGNES_API_KEY": ("agnes", "openai", os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1"), "Agnes AI"),
-        "OLLAMA_BASE_URL": ("ollama", "openai", os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"), "Ollama 本地大模型"),
+        "MODELSCOPE_ACCESS_TOKEN": (
+            "modelscope", "openai",
+            "https://api-inference.modelscope.cn/v1", "ModelScope 魔搭"
+        ),
+        "AGNES_API_KEY": (
+            "agnes", "openai",
+            os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1"), "Agnes AI"
+        ),
+        "OLLAMA_BASE_URL": (
+            "ollama", "openai",
+            os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"), "Ollama 本地大模型"
+        ),
     }
     known_env_keys = list(_KNOWN_ENV_PROVIDERS.keys())
     for env_key, (pid, fmt, _default_url, label) in _KNOWN_ENV_PROVIDERS.items():
@@ -145,7 +154,10 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
         core.router.set_chat_model(provider, model_id)
         logger.info("webui.chat_model_restored provider={} model={}", provider, model_id)
     except (KeyError, ValueError, AttributeError, OSError) as e:
-        logger.warning("webui.chat_model_restore_failed provider={} model={} error={} fallback_to_mimo", provider, model_id, str(e))
+        logger.warning(
+            "webui.chat_model_restore_failed provider={} model={} "
+            "error={} fallback_to_mimo", provider, model_id, str(e)
+        )
         try:
             from model_router import MIMO_MODEL
             core.router.set_chat_model("mimo", MIMO_MODEL)

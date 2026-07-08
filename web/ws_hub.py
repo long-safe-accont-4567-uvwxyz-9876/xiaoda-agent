@@ -26,10 +26,10 @@ else:
     import termios
     _HAS_PTY = True
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from loguru import logger
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect  # noqa: E402
+from loguru import logger  # noqa: E402
 
-from config import STREAM_STATUS_PUSH, STREAM_TEXT_PUSH, STREAM_TOOL_STATUS
+from config import STREAM_STATUS_PUSH, STREAM_TEXT_PUSH, STREAM_TOOL_STATUS  # noqa: E402
 
 router = APIRouter()
 
@@ -118,6 +118,61 @@ def _publish_file(src: Path | None, kind: str, link: bool = False) -> str | None
         except OSError:
             return None
     return f"/media/{kind}/{dest.name}"
+
+
+# ── 媒体文件定期清理（仅清理动态生成的目录，不碰 stickers/背景图/参考音频）──
+
+_CLEANABLE_KINDS = frozenset({"tts", "image", "video", "upload"})
+_MEDIA_MAX_AGE_SECONDS = int(os.getenv("MEDIA_MAX_AGE_HOURS", "24")) * 3600
+_MEDIA_CLEANUP_INTERVAL_SECONDS = int(os.getenv("MEDIA_CLEANUP_INTERVAL_MINUTES", "60")) * 60
+_MEDIA_CLEANUP_TASK: asyncio.Task | None = None
+
+
+def _cleanup_old_media() -> int:
+    """删除超过 MEDIA_MAX_AGE_HOURS 的动态媒体文件（仅 tts/image/video/upload）。"""
+    if not MEDIA_ROOT.exists():
+        return 0
+    now = time.time()
+    removed = 0
+    for kind in _CLEANABLE_KINDS:
+        kind_dir = MEDIA_ROOT / kind
+        if not kind_dir.is_dir():
+            continue
+        for f in kind_dir.iterdir():
+            if not f.is_file():
+                continue
+            try:
+                if now - f.stat().st_mtime > _MEDIA_MAX_AGE_SECONDS:
+                    f.unlink()
+                    removed += 1
+            except OSError:
+                pass
+    if removed:
+        logger.info("ws.media_cleanup", removed=removed,
+                    max_age_hours=_MEDIA_MAX_AGE_SECONDS // 3600)
+    return removed
+
+
+async def _media_cleanup_loop() -> None:
+    """后台循环：定期清理过期动态媒体文件。"""
+    while True:
+        await asyncio.sleep(_MEDIA_CLEANUP_INTERVAL_SECONDS)
+        try:
+            _cleanup_old_media()
+        except (OSError, RuntimeError) as e:
+            logger.warning("ws.media_cleanup_error", error=str(e))
+
+
+def start_media_cleanup() -> None:
+    """启动媒体清理后台任务（幂等，重复调用不会创建多个任务）。"""
+    global _MEDIA_CLEANUP_TASK
+    if _MEDIA_CLEANUP_TASK is not None:
+        return
+    _cleanup_old_media()
+    _MEDIA_CLEANUP_TASK = asyncio.create_task(_media_cleanup_loop())
+    logger.info("ws.media_cleanup_started",
+                max_age_hours=_MEDIA_MAX_AGE_SECONDS // 3600,
+                interval_minutes=_MEDIA_CLEANUP_INTERVAL_SECONDS // 60)
 
 
 def serialize_result(result: Any) -> dict:
@@ -356,8 +411,8 @@ def _verify_response(data: dict, msg_id: str, agent: str) -> None:
                        msg_id=msg_id, length=len(reply))
     # 2. 工具错误循环检测（关键词 + 频次）
     error_keywords = ("错误:", "Error:", "失败", "failed", "异常", "exception")
-    error_lines = [l for l in reply.splitlines()
-                   if any(kw in l for kw in error_keywords)]
+    error_lines = [ln for ln in reply.splitlines()
+                   if any(kw in ln for kw in error_keywords)]
     if error_lines:
         from collections import Counter
         # 完全相同行重复 >=3 次 → 严重循环
