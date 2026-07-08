@@ -115,9 +115,8 @@ class IdempotentMigrator:
                     elif check_type == "index":
                         if await self._index_exists(check_args[0]):
                             should_skip = True
-                    elif check_type == "table":
-                        if await self._table_exists(check_args[0]):
-                            should_skip = True
+                    elif check_type == "table" and await self._table_exists(check_args[0]):
+                        should_skip = True
                     if not should_skip:
                         await self._conn.execute(sql)
             await self._mark_applied(version, description)

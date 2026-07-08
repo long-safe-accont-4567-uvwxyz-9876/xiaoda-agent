@@ -66,7 +66,6 @@ class _MockAgent:
 class _MockAgentNoDegrade:
     """Mock agent — 不提供降级回复"""
 
-    pass
 
 
 @pytest.fixture

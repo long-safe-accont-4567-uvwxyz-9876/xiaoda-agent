@@ -99,8 +99,7 @@ class ToolExecutorMixin:
         if post_result.modified_output is not None:
             if result.success:
                 return ToolResult.ok(post_result.modified_output)
-            else:
-                return ToolResult.fail(post_result.modified_output)
+            return ToolResult.fail(post_result.modified_output)
 
         # 护栏警告注入
         if action == "warn" and guard_msg:
@@ -243,8 +242,7 @@ class ToolExecutorMixin:
             text = cleaned
         except Exception as e:
             logger.debug(f"canary.scan_failed: {e}")
-        text = humanize(text, style="xiaoda")
-        return text
+        return humanize(text, style="xiaoda")
 
     # ── 工具定义泄露检测 ──────────────────────────────────
     # 根因：模型（如 Nex-N2-Pro）在长上下文或特定对话场景下发生生成退化，
@@ -329,8 +327,7 @@ class ToolExecutorMixin:
             # 根据 style（agent 名）动态获取正确的 sticker_manager
             sticker_mgr = self.get_sticker_manager(style)
             text = sticker_mgr.strip_emotion_tag(text)
-        text = humanize(text, style=style)
-        return text
+        return humanize(text, style=style)
 
     def get_sticker_info(self, reply: str, user_emotion: str = "", force_sticker: bool = False) -> tuple[str, Path | None]:
         """从回复中提取情绪并匹配套餐表情包路径.

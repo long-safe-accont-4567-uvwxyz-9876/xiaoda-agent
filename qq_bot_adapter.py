@@ -120,7 +120,7 @@ async def _patched_pool_init(self, token: Any, session_interval: Any) -> Any:
             coroutine = self._connection.multi_run(session_interval)
             if self.ret_coro:
                 return coroutine
-            elif coroutine:
+            if coroutine:
                 await coroutine
                 recon_attempts = 0
             else:
@@ -131,7 +131,7 @@ async def _patched_pool_init(self, token: Any, session_interval: Any) -> Any:
                 if recon_attempts > 10:
                     _botpy_log.error("[botpy] 重连次数过多，放弃重连")
                     await self.close()
-                    return
+                    return None
 
                 await asyncio.sleep(delay)
 
@@ -152,7 +152,7 @@ async def _patched_pool_init(self, token: Any, session_interval: Any) -> Any:
                     _botpy_log.error(f"[botpy] 重新登录失败: {login_err}")
         except KeyboardInterrupt:
             _botpy_log.info("[botpy] 服务强行停止!")
-            return
+            return None
         except (OSError, RuntimeError, ConnectionError, asyncio.TimeoutError) as e:
             recon_attempts += 1
             delay = min(5 * (2 ** min(recon_attempts - 1, 4)), max_recon_delay)
@@ -172,6 +172,7 @@ async def _patched_pool_init(self, token: Any, session_interval: Any) -> Any:
                     self._connection.add(session)
             except (OSError, RuntimeError, ConnectionError) as login_err:
                 _botpy_log.error(f"[botpy] 异常后重新登录失败: {login_err}")
+    return None
 
 
 _BotpyClient._pool_init = _patched_pool_init
@@ -763,10 +764,7 @@ class AIQQBot(botpy.Client):
             for attempt in range(3):
                 try:
                     result = await self.api._http.request(route, json=payload)
-                    if isinstance(result, dict):
-                        file_info = result.get("file_info", "")
-                    else:
-                        file_info = result.file_info
+                    file_info = result.get("file_info", "") if isinstance(result, dict) else result.file_info
                     if not file_info:
                         raise RuntimeError(f"C2C文件上传返回空file_info (openid={openid})")
                     return file_info
@@ -813,10 +811,7 @@ class AIQQBot(botpy.Client):
             for attempt in range(3):
                 try:
                     result = await self.api._http.request(route, json=payload)
-                    if isinstance(result, dict):
-                        file_info = result.get("file_info", "")
-                    else:
-                        file_info = result.file_info
+                    file_info = result.get("file_info", "") if isinstance(result, dict) else result.file_info
                     if not file_info:
                         raise RuntimeError(f"群文件上传返回空file_info (group_openid={group_openid})")
                     return file_info
@@ -1217,10 +1212,7 @@ class AIQQBot(botpy.Client):
                         logger.warning(f"qq_bot.long_reply_part_failed: {e}")
                         failed = True
                         break
-                if failed:
-                    final_text = parts[-1] + "\n（内容过长部分发送失败）"
-                else:
-                    final_text = parts[-1]
+                final_text = parts[-1] + "\n（内容过长部分发送失败）" if failed else parts[-1]
 
         # 1. 文字+表情包立刻发送（用户最快看到回复）
         if result.sticker_path:

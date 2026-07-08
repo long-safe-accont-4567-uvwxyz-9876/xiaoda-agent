@@ -39,10 +39,7 @@ def _repair_and_extract_json(raw: str) -> dict | None:
                 best_end = i
                 break
 
-    if best_end < 0:
-        text = text[brace_start:] + '}'
-    else:
-        text = text[brace_start:best_end + 1]
+    text = text[brace_start:] + '}' if best_end < 0 else text[brace_start:best_end + 1]
 
     text = re.sub(r',\s*([}\]])', r'\1', text)
 

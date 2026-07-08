@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from web.routers.auth import get_current_user
 from web.schemas import Envelope
+import contextlib
 
 router = APIRouter(tags=["mail"], dependencies=[Depends(get_current_user)])
 
@@ -392,10 +393,8 @@ async def trigger_mail_auth_login(request: Request) -> Any:
             })
 
         # 没找到 URL，检查进程是否已结束
-        try:
+        with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(proc.wait(), timeout=2)
-        except asyncio.TimeoutError:
-            pass
 
         rc = proc.returncode
         if rc == 0:

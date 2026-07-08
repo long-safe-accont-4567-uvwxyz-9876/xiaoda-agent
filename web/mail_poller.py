@@ -51,7 +51,7 @@ class MailPoller:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # noqa: S110
                 pass
             self._task = None
             logger.info("mail.poller.stopped")
@@ -311,7 +311,7 @@ def _clean_reply_text(reply: str) -> str:
     text = reply.strip()
 
     # 1. 如果回复是 JSON，提取其中的文本字段
-    if text.startswith('{') or text.startswith('['):
+    if text.startswith(('{', '[')):
         try:
             obj = json.loads(text)
             if isinstance(obj, dict):

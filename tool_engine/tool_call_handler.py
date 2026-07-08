@@ -366,10 +366,9 @@ class ToolCallHandler:
                 type="xiaoli", question=result.data[len("[KLEE_PENDING]"):], delegator="xiaoda"
             )
 
-        if delegation_req and delegation_req.type == "xiaoli":
-            if self._xiaoli_delegate:
-                xiaoli_reply = await self._xiaoli_delegate(delegation_req.question)
-                result = ToolResult.ok(xiaoli_reply)
+        if delegation_req and delegation_req.type == "xiaoli" and self._xiaoli_delegate:
+            xiaoli_reply = await self._xiaoli_delegate(delegation_req.question)
+            result = ToolResult.ok(xiaoli_reply)
         return result
 
     async def _summarize_results(self, user_input: str, tool_results: list,

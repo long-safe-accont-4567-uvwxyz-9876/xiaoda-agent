@@ -20,6 +20,7 @@ from utils.credential_pool import get_credential_pool
 from security.ssrf_guard import validate_url as _ssrf_validate_url
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
+import contextlib
 
 
 MIMO_MODEL = os.getenv("MIMO_MODEL_NAME", "mimo-v2.5")
@@ -734,10 +735,8 @@ class ModelRouter:
             except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError) as e:
                 last_error = e
                 if stream:
-                    try:
+                    with contextlib.suppress(AttributeError, OSError):
                         await stream.close()
-                    except (AttributeError, OSError):
-                        pass
                     stream = None
                 should_retry = await self._handle_route_exception(
                     e, provider, task_type, model, attempt,
@@ -906,11 +905,10 @@ class ModelRouter:
                            error=f"{type(e).__name__}: {e}")
             await asyncio.sleep(backoff)
             return True
-        else:
-            logger.error("router.retry_exhausted", task=task_type, model=model,
-                         attempts=MAX_RETRIES + 1, reason=classified.reason.value,
-                         error=f"{type(e).__name__}: {e}")
-            return False
+        logger.error("router.retry_exhausted", task=task_type, model=model,
+                     attempts=MAX_RETRIES + 1, reason=classified.reason.value,
+                     error=f"{type(e).__name__}: {e}")
+        return False
 
     async def _route_with_retry(self, task_type: str, config: dict,
                                 messages: list[dict], temperature: float,
@@ -1030,10 +1028,7 @@ class ModelRouter:
         for big in ("72b", "70b", "67b", "104b", "236b", "pro", "max", "plus", "large"):
             if big in model_lower:
                 return False
-        for small in self._SMALL_MODEL_PATTERNS:
-            if small in model_lower:
-                return True
-        return False
+        return any(small in model_lower for small in self._SMALL_MODEL_PATTERNS)
 
     def _filter_tools_for_model(self, tools: list[dict] | None, model: str) -> list[dict] | None:
         """检查工具列表与目标模型的兼容性，对小模型移除工具定义防止输出退化。

@@ -81,21 +81,20 @@ class RetrievalAssessor:
                 "should_retry": False,
                 "should_fallback": False,
             }
-        elif normalized >= self.LOW_THRESHOLD:
+        if normalized >= self.LOW_THRESHOLD:
             return {
                 "confidence": normalized,
                 "level": "medium",
                 "should_retry": False,
                 "should_fallback": False,
             }
-        else:
-            self._stats["low_confidence"] += 1
-            return {
-                "confidence": normalized,
-                "level": "low",
-                "should_retry": True,
-                "should_fallback": False,
-            }
+        self._stats["low_confidence"] += 1
+        return {
+            "confidence": normalized,
+            "level": "low",
+            "should_retry": True,
+            "should_fallback": False,
+        }
     
     @property
     def stats(self) -> dict:

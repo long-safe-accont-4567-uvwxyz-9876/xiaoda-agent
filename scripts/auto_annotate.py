@@ -56,10 +56,7 @@ def is_target(path: str) -> bool:
     if os.sep not in rel and rel.endswith('.py'):
         return rel in TARGET_ROOT_FILES
     # 顶层目录文件
-    for td in TARGET_DIRS:
-        if rel.startswith(td + os.sep):
-            return True
-    return False
+    return any(rel.startswith(td + os.sep) for td in TARGET_DIRS)
 
 
 def has_future_annotations(module: cst.Module) -> bool:
@@ -193,9 +190,7 @@ def needs_any_param(func: cst.FunctionDef) -> bool:
     if func.params.star_arg and isinstance(func.params.star_arg, cst.Param):
         if func.params.star_arg.annotation is None:
             return True
-    if func.params.star_kwarg and func.params.star_kwarg.annotation is None:
-        return True
-    return False
+    return bool(func.params.star_kwarg and func.params.star_kwarg.annotation is None)
 
 
 def needs_return(func: cst.FunctionDef) -> bool:

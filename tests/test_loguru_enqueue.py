@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 
 from utils.logging_config import setup_logging
+import contextlib
 
 
 @pytest.fixture
@@ -18,10 +19,8 @@ def isolated_logger():
     current_ids = set(logger._core.handlers.keys())
     saved_ids = set(saved_handlers.keys())
     for hid in list(current_ids - saved_ids):
-        try:
+        with contextlib.suppress(ValueError):
             logger.remove(hid)
-        except ValueError:
-            pass
 
 
 def _classify_handlers():

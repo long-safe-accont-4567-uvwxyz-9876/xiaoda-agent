@@ -410,7 +410,6 @@ def _get_identity_primary_keywords() -> list[str]:
 
 # 正则规则引擎: 处理结构化表达 (优先级高于关键词匹配)
 # 来源: 三层架构 - 第二层规则引擎
-import re as _re
 _SCENE_PATTERNS: dict[str, list[_re.Pattern]] = {
     "time": [
         _re.compile(r"几点了?\s*[？?]"),
@@ -578,10 +577,7 @@ def _compute_scene_signature(weights: dict[str, float], module_names: list[str])
     不同输入只要产生相同桶 → 共享缓存 → KV Cache 命中
     """
     # 找到权重最高的场景
-    if not weights or weights.get("default", 0) == 1.0:
-        dominant_scene = "default"
-    else:
-        dominant_scene = max(weights, key=weights.get)
+    dominant_scene = "default" if not weights or weights.get("default", 0) == 1.0 else max(weights, key=weights.get)
 
     # 场景 → 桶映射
     bucket = _SCENE_BUCKET.get(dominant_scene, "default_bucket")
@@ -849,9 +845,7 @@ def build_scene_aware_prompt(user_input: str, address_term: str = "爸爸") -> s
     weights = _classify_scene_blended(user_input)
     scene_level = _get_scene_level(weights)
 
-    if scene_level == "S":
-        new_sig = _compute_scene_signature(weights, scene_aware_names)
-    elif scene_level == "A":
+    if scene_level == "S" or scene_level == "A":
         new_sig = _compute_scene_signature(weights, scene_aware_names)
     else:
         dominant_scene = max(weights, key=weights.get) if weights else "default"
@@ -1153,10 +1147,7 @@ def _build_cached_system_prompt(address_term: str) -> str:
             stable = _build_stable_prompt(address_term)
             # extra_context 延迟到末尾注入（保证新段落顺序）
             dynamic = _build_dynamic_prompt("")
-            if dynamic:
-                system_prompt = stable + "\n\n---\n\n" + dynamic
-            else:
-                system_prompt = stable
+            system_prompt = stable + "\n\n---\n\n" + dynamic if dynamic else stable
         except Exception as e:
             # 失败安全：降级到原始构建
             logger.debug("prompt_builder.incremental_fallback error={}", str(e))
@@ -1296,8 +1287,7 @@ def build_system_prompt(extra_context: str = "", address_term: str = "爸爸",
     system_prompt = _inject_xp_and_extra(system_prompt, user_id, extra_context, address_term)
     # 全局替换所有 agent 原名为 display_name（统一机制）
     from config import apply_agent_name_replacements
-    system_prompt = apply_agent_name_replacements(system_prompt)
-    return system_prompt
+    return apply_agent_name_replacements(system_prompt)
 
 
 def _build_workspace_sections(address_term: str) -> list[str]:
@@ -1383,12 +1373,9 @@ def build_safe_system_prompt(extra_context: str = "", address_term: str = "你")
     with _cache_lock:
         cache_hit = (_SAFE_PROMPT_CACHE
                 and (now - _SAFE_PROMPT_CACHE_TS) < _SYSTEM_PROMPT_CACHE_TTL
-                and _SAFE_PROMPT_CACHE_NAME == xiaoda_name
-                and _SAFE_PROMPT_CACHE_ADDR == address_term)
-        if cache_hit:
-            safe_prompt = _SAFE_PROMPT_CACHE
-        else:
-            safe_prompt = None
+                and xiaoda_name == _SAFE_PROMPT_CACHE_NAME
+                and address_term == _SAFE_PROMPT_CACHE_ADDR)
+        safe_prompt = _SAFE_PROMPT_CACHE if cache_hit else None
 
     if safe_prompt is None:
         sections = []
@@ -1457,7 +1444,7 @@ def _strip_owner_references(text: str) -> str:
             skip_block = True
             continue
         if skip_block:
-            if line.startswith("## ") or line.startswith("### ") or line.startswith("# "):
+            if line.startswith(("## ", "### ", "# ")):
                 skip_block = False
             else:
                 continue

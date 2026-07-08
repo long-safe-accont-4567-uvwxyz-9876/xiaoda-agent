@@ -112,7 +112,7 @@ class ManifestFetcher:
         try:
             if self._source == "mcp_hub":
                 return await self._fetch_mcp_hub()
-            elif self._source == "modelscope":
+            if self._source == "modelscope":
                 return await self._fetch_modelscope()
         except Exception as e:
             logger.warning("market.online_fetch_failed", source=self._source,

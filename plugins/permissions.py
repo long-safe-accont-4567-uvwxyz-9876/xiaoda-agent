@@ -81,4 +81,3 @@ class PermissionChecker:
     # ── Event ──
     def check_event_emit(self, event_name: str) -> None:
         _allowed = self._permissions.capabilities.emits if hasattr(self._permissions, 'capabilities') else []
-        pass

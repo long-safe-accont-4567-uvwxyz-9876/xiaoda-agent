@@ -76,19 +76,15 @@ class Plugin(ABC):
 
     async def on_load(self) -> None:
         """首次启用前调用（一次性初始化）"""
-        pass
 
     async def on_enable(self) -> None:
         """每次启用时调用"""
-        pass
 
     async def on_disable(self) -> None:
         """每次禁用时调用"""
-        pass
 
     async def on_unload(self) -> None:
         """卸载时调用"""
-        pass
 
     # ── 装饰器注册绑定 ──
 

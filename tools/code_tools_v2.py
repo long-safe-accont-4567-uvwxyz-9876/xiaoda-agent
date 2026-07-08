@@ -117,9 +117,8 @@ def _audit_code_ast(code: str) -> str | None:
                 return f"禁止调用: {func_name}()"
 
         # 检查属性访问（dunder）
-        elif isinstance(node, ast.Attribute):
-            if node.attr in _BANNED_DUNDER:
-                return f"禁止访问危险属性: {node.attr}"
+        elif isinstance(node, ast.Attribute) and node.attr in _BANNED_DUNDER:
+            return f"禁止访问危险属性: {node.attr}"
 
     return None
 
@@ -165,7 +164,6 @@ def _audit_code(code: str) -> str | None:
 
 class _ExecutionTimeout(Exception):
     """代码执行超时异常。"""
-    pass
 
 
 def _timeout_handler(signum: Any, frame: Any) -> None:

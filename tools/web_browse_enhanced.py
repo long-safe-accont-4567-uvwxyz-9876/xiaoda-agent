@@ -46,8 +46,7 @@ async def _extract_via_jina(url: str) -> tuple[str, str]:
         content = resp.text
         title = _extract_title_from_markdown(content)
         return title, content
-    else:
-        raise RuntimeError(f"Jina Reader HTTP {resp.status_code}")
+    raise RuntimeError(f"Jina Reader HTTP {resp.status_code}")
 
 
 def _extract_title_from_markdown(md: str) -> str:

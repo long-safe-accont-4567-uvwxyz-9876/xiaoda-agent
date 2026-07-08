@@ -154,8 +154,7 @@ def strip_markers(text: str) -> str:
     # 移除开标签
     out = _OPEN_TAG_RE.sub("", text)
     # 移除闭标签
-    out = _CLOSE_TAG_RE.sub("", out)
-    return out
+    return _CLOSE_TAG_RE.sub("", out)
 
 
 def validate_hierarchy(instructions: list[Instruction]) -> bool:

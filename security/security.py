@@ -394,7 +394,7 @@ class SecurityFilter:
             action = self._decide_action("leak", best_conf)
             if action == "block":
                 return False, f"检测到敏感信息泄露风险 (置信度={best_conf:.2f})"
-            elif action == "warn":
+            if action == "warn":
                 logger.warning(f"检测到潜在信息泄露 (warn): confidence={best_conf:.2f}")
                 return True, ""  # warn 模式下仍允许，但已记录日志
 
@@ -491,9 +491,7 @@ class SecurityFilter:
             if bare_openid in self.owner_ids:
                 return True
         # 反向兼容：如果 OWNER_IDS 配置了带 qq_ 前缀的，检查 user_id 加上前缀是否匹配
-        if f"qq_{user_id}" in self.owner_ids:
-            return True
-        return False
+        return f"qq_{user_id}" in self.owner_ids
 
     @property
     def is_stopped(self) -> bool:

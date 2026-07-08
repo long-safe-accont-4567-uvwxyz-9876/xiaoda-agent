@@ -277,8 +277,7 @@ class MentalStateManager:
             if in_section and stripped.startswith("- "):
                 # 取第一个列表项, 按 、 分割
                 item = stripped[2:].strip()
-                traits = [t.strip() for t in item.split("、") if t.strip()]
-                return traits
+                return [t.strip() for t in item.split("、") if t.strip()]
         return []
 
     # ── S 层: 短期情感 (实时) ──────────────────────────

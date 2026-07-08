@@ -196,9 +196,8 @@ class PermissionManager:
             return True, ""
 
         # STRICT 模式：敏感工具需要确认
-        if self._mode == PermissionMode.STRICT:
-            if tool_name in _SENSITIVE_TOOLS:
-                return False, f"严格模式下 {tool_name} 需要确认"
+        if self._mode == PermissionMode.STRICT and tool_name in _SENSITIVE_TOOLS:
+            return False, f"严格模式下 {tool_name} 需要确认"
 
         return True, ""
 

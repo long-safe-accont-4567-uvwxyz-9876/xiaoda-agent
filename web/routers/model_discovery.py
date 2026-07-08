@@ -216,9 +216,8 @@ def _get_siliconflow_pricing() -> dict[str, dict] | None:
             free_count = sum(1 for v in pricing_map.values() if v["input"] == 0 and v["output"] == 0)
             logger.info("siliconflow.pricing_loaded total={} free={}", len(pricing_map), free_count)
             return pricing_map
-        else:
-            logger.warning("siliconflow.pricing_parse_empty")
-            return None
+        logger.warning("siliconflow.pricing_parse_empty")
+        return None
 
     except Exception as e:
         logger.warning("siliconflow.pricing_fetch_failed error={}", str(e))

@@ -187,7 +187,7 @@ class CircuitBreaker:
                 )
                 self._last_state = CircuitState.RED
                 return CircuitState.RED
-            elif yellow_signals >= 2:
+            if yellow_signals >= 2:
                 if self._last_state != CircuitState.YELLOW:
                     self._log_state_change(
                         self._last_state, CircuitState.YELLOW,

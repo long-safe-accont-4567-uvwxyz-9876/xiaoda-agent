@@ -237,7 +237,7 @@ class ErrorRulePipeline:
         # 取首个非空、含 | 的行
         for raw in text.splitlines():
             line = raw.strip()
-            if line.startswith("<think>") or line.startswith("</think>"):
+            if line.startswith(("<think>", "</think>")):
                 continue
             if "|" not in line:
                 continue

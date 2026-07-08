@@ -93,16 +93,16 @@ async def search_cn(query: str, scope: str = "auto", count: int = 8) -> ToolResu
 
         if scope == "hot":
             return await _search_hot(count)
-        elif scope == "news":
+        if scope == "news":
             return await _search_news(query, count)
-        elif scope == "movie":
+        if scope == "movie":
             return await _search_douban(query, "all", count)
-        elif scope == "zhihu":
+        if scope == "zhihu":
             return await _search_zhihu(query, count)
-        elif scope == "bilibili":
+        if scope == "bilibili":
             return await _search_bilibili(query, count)
-        else:  # web
-            return await _search_web(query, count)
+        # web
+        return await _search_web(query, count)
     except Exception as e:
         logger.warning("search_cn.error query={} error={}", query[:40], repr(e)[:200])
         return ToolResult.fail(f"搜索失败: {str(e)[:150]}")

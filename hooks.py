@@ -392,19 +392,18 @@ class SecurityPreCheck(BaseHook):
                     f"confidence={result.confidence:.2f}"
                 )
                 return HookResult(allowed=True)
-            elif pm.is_bypass_mode():
+            if pm.is_bypass_mode():
                 # 绕过模式：直接允许
                 return HookResult(allowed=True)
-            else:
-                # 生产/严格模式：阻断
-                logger.warning(
-                    f"SecurityPreCheck 阻断: tool={tool_name}, "
-                    f"threat={result.threat_type}, confidence={result.confidence:.2f}"
-                )
-                return HookResult(
-                    allowed=False,
-                    reason=f"安全预检拦截: 检测到{result.threat_type}威胁 (置信度={result.confidence:.2f})"
-                )
+            # 生产/严格模式：阻断
+            logger.warning(
+                f"SecurityPreCheck 阻断: tool={tool_name}, "
+                f"threat={result.threat_type}, confidence={result.confidence:.2f}"
+            )
+            return HookResult(
+                allowed=False,
+                reason=f"安全预检拦截: 检测到{result.threat_type}威胁 (置信度={result.confidence:.2f})"
+            )
 
         if result.action == "warn":
             logger.warning(

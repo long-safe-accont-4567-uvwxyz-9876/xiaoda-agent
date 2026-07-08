@@ -45,12 +45,11 @@ def _make_protocol(
     fault_type: str = "timeout",
 ) -> TNRProtocol:
     """构建带默认指标的 TNRProtocol (使用真实组件)"""
-    protocol = TNRProtocol(
+    return TNRProtocol(
         health_scorer=BehavioralHealthScorer(),
         recovery_orchestrator=RecoveryOrchestrator(),
         degradation_strategy=reset_degradation_strategy(),
     )
-    return protocol
 
 
 # ────────────────────────────────────────────────────────────

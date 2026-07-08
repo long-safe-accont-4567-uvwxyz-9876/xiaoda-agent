@@ -11,6 +11,7 @@ import json
 import tempfile
 from pathlib import Path
 from loguru import logger
+import contextlib
 
 
 def _resolve_symlink(path: Path) -> Path:
@@ -82,10 +83,7 @@ def atomic_write(target_path: str | Path, content: str | bytes,
         )
         tmp_path = Path(tmp_name)
 
-        if isinstance(content, str):
-            content_bytes = content.encode(encoding)
-        else:
-            content_bytes = content
+        content_bytes = content.encode(encoding) if isinstance(content, str) else content
 
         os.write(tmp_fd, content_bytes)
         os.fsync(tmp_fd)
@@ -105,15 +103,11 @@ def atomic_write(target_path: str | Path, content: str | bytes,
     except Exception:
         # 清理临时文件
         if tmp_fd is not None:
-            try:
+            with contextlib.suppress(OSError):
                 os.close(tmp_fd)
-            except OSError:
-                pass
         if tmp_path is not None and tmp_path.exists():
-            try:
+            with contextlib.suppress(OSError):
                 tmp_path.unlink()
-            except OSError:
-                pass
         raise
 
 

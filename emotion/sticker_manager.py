@@ -172,10 +172,7 @@ class StickerManager:
             return False
         # 有明确情绪时高概率发送，neutral/无情绪时也保持 80% 概率
         # （日常对话大多为 neutral，50% 会导致整体发送率仅约 60%，低于 80% 目标）
-        if detected_emotion and detected_emotion != "neutral":
-            prob = 0.85
-        else:
-            prob = 0.8
+        prob = 0.85 if detected_emotion and detected_emotion != "neutral" else 0.8
         return random.random() < prob
 
     def get_sticker(self, emotion: str = "") -> Path | None:
@@ -257,10 +254,7 @@ class StickerManager:
             [{"name": 文件名, "description": 描述, "emotion": 情绪分类}, ...]
         """
         result = []
-        if emotion:
-            dirs = {emotion: self._cache.get(emotion, [])}
-        else:
-            dirs = self._cache
+        dirs = {emotion: self._cache.get(emotion, [])} if emotion else self._cache
         for emo, files in dirs.items():
             for f in files:
                 result.append({

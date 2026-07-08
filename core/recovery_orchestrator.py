@@ -335,7 +335,7 @@ class RecoveryOrchestrator:
                         _diag_cb = asyncio.create_task(cb(report))  # noqa: RUF006
                     else:
                         cb(report)
-                except Exception:
+                except Exception:  # noqa: S110
                     pass
         except Exception:
             logger.debug("recovery_orchestrator.escalate_to_human_failed", exc_info=True)

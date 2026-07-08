@@ -172,7 +172,7 @@ def _get_gpu_names_linux() -> list[str]:
             if "VGA compatible controller" in line or "3D controller" in line or "Display controller" in line:
                 name = line.split(":")[-1].strip() if ":" in line else ""
                 gpu_names.append(name)
-    except Exception:
+    except Exception:  # noqa: S110
         pass
     return gpu_names
 
@@ -374,8 +374,7 @@ class VisionService:
                         self.backend = "npu"
                         logger.info(f"vision.npu_loaded model={model_path}")
                         return
-                    else:
-                        logger.warning(f"vision.npu_model_not_found path={model_path}")
+                    logger.warning(f"vision.npu_model_not_found path={model_path}")
                 else:
                     logger.warning("vision.npu_not_available")
             except Exception as e:

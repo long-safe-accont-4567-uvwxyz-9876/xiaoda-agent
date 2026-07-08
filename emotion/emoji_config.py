@@ -36,8 +36,8 @@ def get_status_msg(agent_name: str, action: str, display_name: str, personality_
     e = emoji_cfg.get(action, "🌿")
     if action == "thinking":
         return f"{agent_display}{e}"
-    elif action == "using":
+    if action == "using":
         return f"{agent_display}正在使用{display_name}～{e}"
-    elif action == "done":
+    if action == "done":
         return f"{display_name}完成啦～{e}"
     return f"{display_name}{e}"

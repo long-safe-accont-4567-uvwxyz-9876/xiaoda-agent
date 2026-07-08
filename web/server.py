@@ -2,7 +2,7 @@ from typing import Any, AsyncIterator
 import asyncio
 import os
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -81,10 +81,8 @@ def _ensure_provider_key_file(pid: Any, api_key: Any, os: Any) -> None:
         existing = _decode_key(raw) or raw if raw else ""
     if existing != api_key:
         fp.write_text(_encode_key(api_key) + "\n", encoding="utf-8")
-        try:
+        with suppress(OSError):
             os.chmod(fp, 0o600)
-        except OSError:
-            pass
 
 
 def _provider_sort_key(kv: tuple, key_order: list[str]) -> tuple[int, int]:
@@ -344,19 +342,15 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
     qq_task = getattr(app.state, "qq_task", None)
     if qq_task:
         qq_task.cancel()
-        try:
+        with suppress(asyncio.CancelledError, RuntimeError):
             await qq_task
-        except (asyncio.CancelledError, RuntimeError):
-            pass
     # 取消后台一次性任务（健康自检 / 画像整合）
     for _attr in ("health_run_task", "portrait_consolidate_task"):
         _t = getattr(app.state, _attr, None)
         if _t and not _t.done():
             _t.cancel()
-            try:
+            with suppress(asyncio.CancelledError, RuntimeError):
                 await _t
-            except (asyncio.CancelledError, RuntimeError):
-                pass
     # Shutdown plugins
     plugin_mgr = getattr(app.state, "plugin_manager", None)
     if plugin_mgr:

@@ -375,10 +375,9 @@ class PermanentMemoryManager:
                 opener += f"\n记得上次我们聊到{latest_milestone.value}~"
 
             return opener
-        elif days_since >= 1:
+        if days_since >= 1:
             return "又见面啦~今天想聊些什么呢？"
-        else:
-            return ""  # 短时间内重启, 不需要特殊开场
+        return ""  # 短时间内重启, 不需要特殊开场
 
     # ── 集成到 prompt ─────────────────────────────────────
 

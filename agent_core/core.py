@@ -324,8 +324,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         # 先提取情绪值（供 sticker_manager 使用）
         result = self.sticker_manager.strip_emotion_tag(text)
         # 兜底：强制剥离所有 [emotion:xxx] 标签（防止 LLM 在句中/句尾输出标签泄露给用户）
-        result = re.sub(r'\[emotion:[^\]]*\]', '', result).strip()
-        return result
+        return re.sub(r'\[emotion:[^\]]*\]', '', result).strip()
 
     def set_voice_mode(self, enabled: bool) -> None:
         """开启或关闭语音模式."""

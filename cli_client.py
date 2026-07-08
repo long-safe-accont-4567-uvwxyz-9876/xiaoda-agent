@@ -35,6 +35,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import urllib.request
+import contextlib
 
 DENDRO = "#7fd650"
 WISDOM = "#e8d5a3"
@@ -325,10 +326,8 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=int(os.getenv("WEBUI_PORT", "8082")))
     parser.add_argument("--password", default=os.getenv("WEBUI_PASSWORD", ""))
     args = parser.parse_args()
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(NahidaCLI(args.host, args.port, args.password).run())
-    except KeyboardInterrupt:
-        pass
 
 
 if __name__ == "__main__":

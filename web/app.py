@@ -92,16 +92,15 @@ if prompt := st.chat_input("输入你的问题..."):
     with st.chat_message("user"):
         st.text(prompt)
 
-    with st.chat_message("assistant"):
-        with st.spinner("思考中..."):
-            result = st.session_state._loop.run_until_complete(st.session_state.agent.process(prompt))
-            st.markdown(result.reply, unsafe_allow_html=False)
-            if result.image_paths:
-                for img_path in result.image_paths:
-                    st.image(str(img_path))
-            if result.audio_path:
-                st.audio(str(result.audio_path))
-            if result.sticker_path:
-                st.image(str(result.sticker_path))
+    with st.chat_message("assistant"), st.spinner("思考中..."):
+        result = st.session_state._loop.run_until_complete(st.session_state.agent.process(prompt))
+        st.markdown(result.reply, unsafe_allow_html=False)
+        if result.image_paths:
+            for img_path in result.image_paths:
+                st.image(str(img_path))
+        if result.audio_path:
+            st.audio(str(result.audio_path))
+        if result.sticker_path:
+            st.image(str(result.sticker_path))
 
     st.session_state.messages.append({"role": "assistant", "content": result.reply})

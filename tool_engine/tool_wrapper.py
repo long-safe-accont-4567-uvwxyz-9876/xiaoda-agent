@@ -50,10 +50,9 @@ def validate_file_path(
             if real_path == sp or real_path.startswith(sp + os.sep):
                 return False, f"路径属于敏感路径: {path}"
         # 白名单检查（追加 os.sep 防止同级目录前缀混淆）
-        if ALLOWED_BASE_DIRS:
-            if not any(real_path == base or real_path.startswith(base + os.sep)
-                      for base in ALLOWED_BASE_DIRS):
-                return False, f"路径不在允许范围内: {path}"
+        if ALLOWED_BASE_DIRS and not any(real_path == base or real_path.startswith(base + os.sep)
+                  for base in ALLOWED_BASE_DIRS):
+            return False, f"路径不在允许范围内: {path}"
     except ImportError:
         logger.warning("tool_wrapper.safety_module_unavailable")
         return False, "安全模块不可用，拒绝访问"
@@ -166,15 +165,14 @@ class ToolResultV2:
     def to_dict(self) -> dict:
         if self.ok:
             return {"ok": True, "data": self.data, "metadata": self.metadata}
-        else:
-            return {
-                "ok": False,
-                "error": {
-                    "code": self.error_code,
-                    "message": self.error_msg,
-                    "suggestion": self.suggestion,
-                },
-            }
+        return {
+            "ok": False,
+            "error": {
+                "code": self.error_code,
+                "message": self.error_msg,
+                "suggestion": self.suggestion,
+            },
+        }
 
     @classmethod
     def success(cls, data: Any = None, **metadata) -> "ToolResultV2":

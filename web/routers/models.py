@@ -19,6 +19,7 @@ from web._provider_keys import (
     _mask,
     load_provider_key,
 )
+import contextlib
 
 router = APIRouter(tags=["models"], dependencies=[Depends(get_current_user)])
 
@@ -177,10 +178,8 @@ def _save_key_and_register(request: Request, pid: str, fmt: str,
     fp = _key_file(pid)
     from web._provider_keys import _encode_key
     fp.write_text(_encode_key(api_key) + "\n", encoding="utf-8")
-    try:
+    with contextlib.suppress(OSError):
         os.chmod(fp, 0o600)
-    except OSError:
-        pass
     from web.custom_providers import register_into_router
     register_into_router(_router_of(request), pid, fmt, base_url, api_key)
 

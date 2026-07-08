@@ -114,11 +114,10 @@ class QueryTransformer:
 问题: {query}
 """
         try:
-            result = await asyncio.wait_for(
+            return await asyncio.wait_for(
                 self._call_free_model(prompt, temperature=0.3, max_tokens=100),
                 timeout=5.0,
             )
-            return result
         except asyncio.TimeoutError:
             logger.warning("query_transform.hyde_timeout", query=query[:50])
             return None

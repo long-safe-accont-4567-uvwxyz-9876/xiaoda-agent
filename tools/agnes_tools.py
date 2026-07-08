@@ -260,7 +260,7 @@ async def _agnes_poll_and_download_video(
                     # 降级：返回 URL 供用户手动查看
                     return ToolResult.ok(f"视频生成完成！下载失败，请直接访问：{video_url}")
             return ToolResult.fail(f"视频生成完成，但未获取到URL: {status_data}")
-        elif status in ("failed", "error"):
+        if status in ("failed", "error"):
             error_msg = status_data.get("fail_reason", "") or status_data.get("error", "未知错误")
             return ToolResult.fail(f"视频生成失败: {error_msg}")
 

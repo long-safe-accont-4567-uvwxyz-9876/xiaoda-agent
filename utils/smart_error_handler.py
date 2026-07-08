@@ -316,8 +316,7 @@ class SmartErrorHandler:
 3. 如何避免此类错误的建议"""
 
         try:
-            suggestion = await specialist.chat(prompt)
-            return suggestion
+            return await specialist.chat(prompt)
         except Exception as e:
             logger.warning("error_handler.agent_consult_failed", 
                           agent=agent_name, error=str(e))

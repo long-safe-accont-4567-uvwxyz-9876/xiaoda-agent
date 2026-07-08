@@ -248,10 +248,7 @@ class ReliabilityBench:
         total_recovered = sum(r.faults_recovered for r in report.scenario_results)
 
         # 容错: 故障恢复率 (恢复/注入)
-        if total_injected > 0:
-            fault_tolerance = total_recovered / total_injected
-        else:
-            fault_tolerance = 1.0
+        fault_tolerance = total_recovered / total_injected if total_injected > 0 else 1.0
 
         # 恢复速度: 1 / avg_recovery_time (秒)
         recovery_times = [

@@ -256,7 +256,7 @@ def _build_safe_test_args(tool: dict) -> dict | None:
         return safe_tools[name]
 
     # MCP 工具：尝试无参数调用
-    if name.startswith("mcp_") or name.startswith("sdk_"):
+    if name.startswith(("mcp_", "sdk_")):
         return {}
 
     # 其他工具：无法安全测试

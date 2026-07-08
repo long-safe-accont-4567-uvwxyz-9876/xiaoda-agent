@@ -129,7 +129,7 @@ class XiaoliAgent:
 
         system_prompt = self._personality
         if context:
-            system_prompt += f"\n\n[背景信息]\{context}"
+            system_prompt += f"\n\n[背景信息]{context}"
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -143,8 +143,7 @@ class XiaoliAgent:
         for provider_name, client, models in ordered:
             for model in models:
                 try:
-                    reply = await self._chat_loop(client, model, messages, tools, provider_name)
-                    return reply
+                    return await self._chat_loop(client, model, messages, tools, provider_name)
                 except Exception as e:
                     error_str = str(e)
                     if "429" in error_str or "rate" in error_str.lower():
@@ -153,8 +152,7 @@ class XiaoliAgent:
                     if tools and _is_tool_unsupported_error(error_str):
                         logger.warning("xiaoli.tools_not_supported", provider=provider_name, model=model)
                         try:
-                            reply = await self._chat_loop(client, model, messages, None, provider_name)
-                            return reply
+                            return await self._chat_loop(client, model, messages, None, provider_name)
                         except Exception as e2:
                             logger.warning("xiaoli.fallback_failed", provider=provider_name, model=model, error=str(e2))
                             continue

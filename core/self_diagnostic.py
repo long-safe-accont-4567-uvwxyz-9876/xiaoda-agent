@@ -87,7 +87,7 @@ class SelfDiagnostic:
                     message=f"Error rate {err_rate:.1%} exceeds 2x target {target:.1%}",
                     metrics={"error_rate": err_rate, "target": target},
                 )
-            elif err_rate > target:
+            if err_rate > target:
                 return SelfReport(
                     level=ReportLevel.WARNING,
                     category="error",
@@ -112,7 +112,7 @@ class SelfDiagnostic:
                     message=f"P99 latency {p99:.0f}ms exceeds 2x target {target:.0f}ms",
                     metrics={"p99_ms": p99, "target_ms": target},
                 )
-            elif p99 > target:
+            if p99 > target:
                 return SelfReport(
                     level=ReportLevel.WARNING,
                     category="performance",

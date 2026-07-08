@@ -139,9 +139,7 @@ class SecretsBroker:
             return False
         if token in self._revoked:
             return False
-        if self._clock() >= info["expires_at"]:
-            return False
-        return True
+        return not self._clock() >= info["expires_at"]
 
     def revoke(self, credential: TemporaryCredential, caller: str = "system") -> bool:
         """提前撤销某个临时凭证"""

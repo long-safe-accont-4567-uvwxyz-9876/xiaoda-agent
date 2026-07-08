@@ -84,7 +84,7 @@ async def gpio_control(action: str, pin: int, mode: Optional[str] = None, value:
             mode_label = "输入" if mode == "in" else "输出"
             return ToolResult.ok(f"✅ 引脚 {pin} 已设置为{mode_label}模式")
 
-        elif action == "write":
+        if action == "write":
             if value not in (0, 1):
                 return ToolResult.fail("value 参数必须为 0 或 1")
             await asyncio.to_thread(_gpio_export, pin)
@@ -93,14 +93,13 @@ async def gpio_control(action: str, pin: int, mode: Optional[str] = None, value:
             level_label = "高电平" if value else "低电平"
             return ToolResult.ok(f"✅ 引脚 {pin} 已写入{level_label}({value})")
 
-        elif action == "read":
+        if action == "read":
             await asyncio.to_thread(_gpio_export, pin)
             val = await asyncio.to_thread(_gpio_read_value, pin)
             level_label = "高电平" if val == "1" else "低电平"
             return ToolResult.ok(f"📊 引脚 {pin} 当前电平: {level_label}({val})")
 
-        else:
-            return ToolResult.fail(f"未知操作: {action}，支持的操作: mode, write, read")
+        return ToolResult.fail(f"未知操作: {action}，支持的操作: mode, write, read")
 
     except PermissionError:
         return ToolResult.fail("GPIO 权限不足。请尝试: sudo chmod -R 777 /sys/class/gpio 或将当前用户加入 gpio 用户组。")
@@ -185,11 +184,11 @@ async def pwm_control(action: str, chip: int = 0, channel: int = 0,
             await asyncio.to_thread(_pwm_write, chip, channel, "enable", "1")
             return ToolResult.ok(f"✅ PWM chip{chip}/pwm{channel} 已启用")
 
-        elif action == "disable":
+        if action == "disable":
             await asyncio.to_thread(_pwm_write, chip, channel, "enable", "0")
             return ToolResult.ok(f"✅ PWM chip{chip}/pwm{channel} 已禁用")
 
-        elif action == "set":
+        if action == "set":
             if frequency is None or duty_cycle is None:
                 return ToolResult.fail("action=set 时必须提供 frequency 和 duty_cycle 参数")
             if frequency < 1 or frequency > 100000:
@@ -211,8 +210,7 @@ async def pwm_control(action: str, chip: int = 0, channel: int = 0,
                 f"占空比={duty_cycle}% (高电平={duty_ns}ns)"
             )
 
-        else:
-            return ToolResult.fail(f"未知操作: {action}，支持: enable, disable, set")
+        return ToolResult.fail(f"未知操作: {action}，支持: enable, disable, set")
 
     except PermissionError:
         return ToolResult.fail("PWM 权限不足。请尝试: sudo chmod -R 777 /sys/class/pwm 或将当前用户加入 pwm 用户组。")
@@ -278,7 +276,7 @@ async def _i2c_subprocess_scan(bus: Any) -> Any:
     for line in stdout.decode().splitlines():
         parts = line.split()
         for p in parts:
-            if p.startswith("--") or p.startswith("00") or p == ":":
+            if p.startswith(("--", "00")) or p == ":":
                 continue
             try:
                 addr = int(p, 16)
@@ -302,17 +300,15 @@ async def _i2c_subprocess_read(bus: Any, addr: Any, register: Any, length: Any) 
             return None
         val = int(stdout.decode().strip(), 16)
         return [val]
-    else:
-        proc = await asyncio.create_subprocess_exec(
-            "i2ctransfer", "-y", str(bus), f"w1@{addr}", hex(register), f"r{length}",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
-        if proc.returncode != 0:
-            return None
-        data = [int(x, 16) for x in stdout.decode().strip().split()]
-        return data
+    proc = await asyncio.create_subprocess_exec(
+        "i2ctransfer", "-y", str(bus), f"w1@{addr}", hex(register), f"r{length}",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+    if proc.returncode != 0:
+        return None
+    return [int(x, 16) for x in stdout.decode().strip().split()]
 
 
 async def _i2c_subprocess_write(bus: Any, addr: Any, register: Any, data: Any) -> Any:
@@ -380,7 +376,7 @@ async def i2c_comm(action: str, bus: int = 0, addr: Optional[int] = None, regist
                 lines.append(f"  📌 0x{a:02X}")
             return ToolResult.ok("\n".join(lines))
 
-        elif action == "read":
+        if action == "read":
             if addr is None:
                 return ToolResult.fail("read 操作需要提供 addr 参数")
             if register is None:
@@ -396,7 +392,7 @@ async def i2c_comm(action: str, bus: int = 0, addr: Optional[int] = None, regist
             hex_vals = " ".join(f"0x{b:02X}" for b in result_data)
             return ToolResult.ok(f"📖 设备 0x{addr:02X} 寄存器 0x{register:02X} 读取 {length} 字节: {hex_vals}")
 
-        elif action == "write":
+        if action == "write":
             if addr is None:
                 return ToolResult.fail("write 操作需要提供 addr 参数")
             if register is None:
@@ -415,8 +411,7 @@ async def i2c_comm(action: str, bus: int = 0, addr: Optional[int] = None, regist
             hex_vals = " ".join(f"0x{b:02X}" for b in data)
             return ToolResult.ok(f"✍️ 设备 0x{addr:02X} 寄存器 0x{register:02X} 写入: {hex_vals}")
 
-        else:
-            return ToolResult.fail(f"未知操作: {action}，支持的操作: scan, read, write")
+        return ToolResult.fail(f"未知操作: {action}，支持的操作: scan, read, write")
 
     except PermissionError:
         return ToolResult.fail("I2C 权限不足。请尝试: sudo usermod -aG i2c $USER 然后重新登录。")
@@ -436,8 +431,7 @@ def _read_cpu_temp() -> Any:
     """读取CPU温度。"""
     try:
         raw = _read_sysfs("/sys/class/thermal/thermal_zone0/temp")
-        temp_c = int(raw) / 1000.0
-        return temp_c
+        return int(raw) / 1000.0
     except Exception:
         return None
 
@@ -446,8 +440,7 @@ def _read_cpu_freq() -> Any:
     """读取CPU当前频率。"""
     try:
         raw = _read_sysfs("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
-        freq_mhz = int(raw) / 1000.0
-        return freq_mhz
+        return int(raw) / 1000.0
     except Exception:
         return None
 
@@ -513,10 +506,9 @@ def _fmt_bytes(b: Any) -> str:
         return "N/A"
     if b >= 1073741824:
         return f"{b / 1073741824:.1f} GB"
-    elif b >= 1048576:
+    if b >= 1048576:
         return f"{b / 1048576:.1f} MB"
-    else:
-        return f"{b / 1024:.1f} KB"
+    return f"{b / 1024:.1f} KB"
 
 
 def _read_all_hardware(target: str) -> list[str]:

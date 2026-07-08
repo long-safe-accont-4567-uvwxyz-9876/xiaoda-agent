@@ -282,11 +282,11 @@ async def restart_service(request: Request) -> Any:
             python = sys.executable
             script = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else 'agent.py'
             args = sys.argv[1:] if len(sys.argv) > 1 else ['--web', '--host', '0.0.0.0', '--port', '8082']
-            bat = tempfile.NamedTemporaryFile(suffix='.bat', delete=False, mode='w')
-            safe_args = [shlex.quote(a) for a in args]
-            bat.write('@echo off\ntimeout /t 2 /nobreak >nul\n"{}" "{}" {}\ndel "%~f0"\n'.format(python, script, ' '.join(safe_args)))
-            bat.close()
-            bat_path = bat.name
+            bat_path = ""
+            with tempfile.NamedTemporaryFile(suffix='.bat', delete=False, mode='w') as bat:
+                safe_args = [shlex.quote(a) for a in args]
+                bat.write('@echo off\ntimeout /t 2 /nobreak >nul\n"{}" "{}" {}\ndel "%~f0"\n'.format(python, script, ' '.join(safe_args)))
+                bat_path = bat.name
             try:
                 subprocess.Popen(['cmd', '/c', bat_path], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
             except Exception as exc:

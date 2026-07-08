@@ -10,6 +10,7 @@ from loguru import logger
 from db.db_analytics import AnalyticsDB
 from utils.llm_cleanup import strip_thinking as _strip_thinking
 from config import get_agent_display_name
+import contextlib
 
 
 class NudgeEngine:
@@ -59,10 +60,8 @@ class NudgeEngine:
         self._running = False
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
         logger.info("nudge.stopped")
 
     def poke(self) -> None:
@@ -95,9 +94,8 @@ class NudgeEngine:
 
         await self._check_reminders()
         # Only check greeting if no reminder was just sent
-        if time.time() - self._last_proactive_time >= self.MIN_PROACTIVE_INTERVAL:
-            if self.greeting_enabled:
-                await self._check_greeting()
+        if time.time() - self._last_proactive_time >= self.MIN_PROACTIVE_INTERVAL and self.greeting_enabled:
+            await self._check_greeting()
 
         await self._check_portrait_consolidate()
 
@@ -257,10 +255,7 @@ class NudgeEngine:
                     self._router.route("chat_flash", messages, temperature=0.9),
                     timeout=30,
                 )
-                if isinstance(result, str):
-                    greeting = result
-                else:
-                    greeting = (result.choices[0].message.content or "")
+                greeting = result if isinstance(result, str) else result.choices[0].message.content or ""
 
             logger.debug("nudge.raw_llm_output raw={}", greeting[:200])
             greeting = _strip_thinking(greeting, context="nudge").strip()

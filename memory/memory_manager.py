@@ -1172,14 +1172,13 @@ class MemoryManager:
             days_ago = (_datetime.datetime.now(dt.tzinfo) - dt).days
             if days_ago <= 0:
                 return 1.0
-            elif days_ago <= 7:
+            if days_ago <= 7:
                 return 0.8
-            elif days_ago <= 30:
+            if days_ago <= 30:
                 return 0.5
-            elif days_ago <= 90:
+            if days_ago <= 90:
                 return 0.3
-            else:
-                return 0.1
+            return 0.1
         except Exception:
             return 0.3
 

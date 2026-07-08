@@ -241,10 +241,7 @@ class EmotionalMemoryManager:
             return ""
 
         # 根据等级调整亲密度
-        if user_xp_level >= 3:
-            opener = "记得"
-        else:
-            opener = "我想到"
+        opener = "记得" if user_xp_level >= 3 else "我想到"
 
         lines = ["[情感记忆召回]"]
         for mem in memories:
@@ -262,12 +259,11 @@ class EmotionalMemoryManager:
         delta = time.time() - ts
         if delta < 3600:
             return "刚才"
-        elif delta < 86400:
+        if delta < 86400:
             return f"{int(delta / 3600)} 小时前"
-        elif delta < 604800:
+        if delta < 604800:
             return f"{int(delta / 86400)} 天前"
-        else:
-            return f"{int(delta / 604800)} 周前"
+        return f"{int(delta / 604800)} 周前"
 
     # === 集成入口 ===
     def recall_and_enact(self, user_id: str, query: str, user_xp_level: int = 1) -> str:

@@ -107,23 +107,22 @@ def fold_session_summary(
             logger.debug("session_store.timestamp_parse_failed", exc_info=True)
 
     # 提取首条提示词（仅用户消息，仅一次）
-    if not data.get("first_prompt_locked"):
-        if entry.get("type") == "user" and not entry.get("isMeta"):
-            content = entry.get("content", "")
-            if isinstance(content, str):
-                text = content.replace("\n", " ").strip()
-            elif isinstance(content, list):
-                texts = []
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        texts.append(block.get("text", ""))
-                text = " ".join(texts).strip()
-            else:
-                text = ""
+    if not data.get("first_prompt_locked") and entry.get("type") == "user" and not entry.get("isMeta"):
+        content = entry.get("content", "")
+        if isinstance(content, str):
+            text = content.replace("\n", " ").strip()
+        elif isinstance(content, list):
+            texts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    texts.append(block.get("text", ""))
+            text = " ".join(texts).strip()
+        else:
+            text = ""
 
-            if text and len(text) <= 200:
-                data["first_prompt"] = text
-                data["first_prompt_locked"] = True
+        if text and len(text) <= 200:
+            data["first_prompt"] = text
+            data["first_prompt_locked"] = True
 
     # Last-wins 字段
     last_wins = {

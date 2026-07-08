@@ -69,9 +69,7 @@ class SlashCommandHandler:
         stripped = text.strip()
         if not stripped.startswith("/"):
             return False
-        if stripped.startswith("//"):
-            return False
-        return True
+        return not stripped.startswith("//")
 
     def is_owner_command(self, command: str) -> bool:
         return command.split()[0] in OWNER_ONLY_COMMANDS
@@ -84,9 +82,8 @@ class SlashCommandHandler:
         command = parts[0].lower()
         args = parts[1].strip() if len(parts) > 1 else ""
 
-        if self.is_owner_command(command):
-            if self._security is None or not self._security.is_owner(user_id):
-                return "这个命令只有主人才能用哦～"
+        if self.is_owner_command(command) and (self._security is None or not self._security.is_owner(user_id)):
+            return "这个命令只有主人才能用哦～"
 
         handlers = {
             "/cost": self._cmd_cost,
@@ -119,10 +116,9 @@ class SlashCommandHandler:
                 logger.warning("slash.handle_error", command=command, error=str(e))
                 if self._agent and hasattr(self._agent, '_error_handler') and self._agent._error_handler:
                     try:
-                        smart_reply = await self._agent._error_handler.handle_error_with_intelligence(
+                        return await self._agent._error_handler.handle_error_with_intelligence(
                             error=e, user_query=text, context=f"执行命令 /{command} 参数: {args}"
                         )
-                        return smart_reply
                     except (RuntimeError, ValueError, KeyError):
                         logger.debug("slash.error_handler_fallback", exc_info=True)
                 return f"执行 /{command} 时出了点问题：{str(e)[:100]}"
@@ -203,19 +199,19 @@ class SlashCommandHandler:
             if self._agent and hasattr(self._agent, 'klee'):
                 self._agent.klee.set_preferred_provider("mimo")
             return "已切换到 MiMo 模式 🍊（使用小米 MiMo-V2.5）"
-        elif args in ("mimo-pro", "pro", "mimo_pro"):
+        if args in ("mimo-pro", "pro", "mimo_pro"):
             self._router.set_model_preference("mimo-pro")
             if self._agent and hasattr(self._agent, 'klee'):
                 self._agent.klee.set_preferred_provider("mimo")
             return "已切换到 MiMo Pro 模式 🧠（使用小米 MiMo-V2.5-Pro 深度思考）"
-        elif args in ("mimo-flash", "flash", "mimo_flash"):
+        if args in ("mimo-flash", "flash", "mimo_flash"):
             self._router.set_model_preference("mimo-flash")
             return "已切换到 MiMo Flash 模式 ⚡（使用小米 MiMo-V2.5 快速响应）"
-        elif args in ("mimo-mini", "mini", "mimo_mini"):
+        if args in ("mimo-mini", "mini", "mimo_mini"):
             self._router.set_model_preference("mimo-mini")
             return "已切换到 MiMo Mini 模式 🐣（使用小米 MiMo-V2.5 轻量任务）"
         # 第三方模型 provider/model_id 格式
-        elif "/" in args:
+        if "/" in args:
             parts = args.split("/", 1)
             provider = parts[0]
             model_id = parts[1]
@@ -224,38 +220,37 @@ class SlashCommandHandler:
                 return f"切换失败：不支持 {provider}/{model_id}"
             return f"已切换到 {model_id}（{provider}）"
         # 无参数：显示当前模型和可用第三方
-        else:
-            _pref = self._router.get_model_preference()
-            label = self._router.get_model_preference_label()
-            lines = [f"当前: {label}"]
-            lines.append("预设: /model [mimo|mimo-pro|mimo-flash|mimo-mini]")
-            third_party = []
-            if os.environ.get("SILICONFLOW_API_KEY", ""):
-                third_party.append("siliconflow")
-            if os.environ.get("OPENROUTER_API_KEY", ""):
-                third_party.append("openrouter")
-            if third_party:
-                lines.append("第三方模型:")
-                # 尝试从模型发现缓存中读取具体模型名
-                cache_available = False
-                try:
-                    from web.routers.model_discovery import _cache as discovery_cache
-                    cache_data = discovery_cache.get("data")
-                    if cache_data:
-                        for pg in cache_data:
-                            provider = pg.get("provider", "")
-                            models = pg.get("models", [])
-                            if provider in third_party and models:
-                                cache_available = True
-                                model_names = [m["display_name"] for m in models[:6]]
-                                suffix = "..." if len(models) > 6 else ""
-                                lines.append(f"  {provider}: {', '.join(model_names)}{suffix}")
-                except (KeyError, ValueError, OSError, json.JSONDecodeError):
-                    logger.debug("slash.cache_read_error", exc_info=True)
-                if not cache_available:
-                    for tp in third_party:
-                        lines.append(f"  · {tp}: 已配置（使用 /model {tp}/模型名 切换）")
-            return "\n".join(lines)
+        _pref = self._router.get_model_preference()
+        label = self._router.get_model_preference_label()
+        lines = [f"当前: {label}"]
+        lines.append("预设: /model [mimo|mimo-pro|mimo-flash|mimo-mini]")
+        third_party = []
+        if os.environ.get("SILICONFLOW_API_KEY", ""):
+            third_party.append("siliconflow")
+        if os.environ.get("OPENROUTER_API_KEY", ""):
+            third_party.append("openrouter")
+        if third_party:
+            lines.append("第三方模型:")
+            # 尝试从模型发现缓存中读取具体模型名
+            cache_available = False
+            try:
+                from web.routers.model_discovery import _cache as discovery_cache
+                cache_data = discovery_cache.get("data")
+                if cache_data:
+                    for pg in cache_data:
+                        provider = pg.get("provider", "")
+                        models = pg.get("models", [])
+                        if provider in third_party and models:
+                            cache_available = True
+                            model_names = [m["display_name"] for m in models[:6]]
+                            suffix = "..." if len(models) > 6 else ""
+                            lines.append(f"  {provider}: {', '.join(model_names)}{suffix}")
+            except (KeyError, ValueError, OSError, json.JSONDecodeError):
+                logger.debug("slash.cache_read_error", exc_info=True)
+            if not cache_available:
+                for tp in third_party:
+                    lines.append(f"  · {tp}: 已配置（使用 /model {tp}/模型名 切换）")
+        return "\n".join(lines)
 
     async def _cmd_forget(self, args: str, user_id: str) -> str:
         if not self._context:
@@ -346,13 +341,12 @@ class SlashCommandHandler:
         if args in ("on", "开", "1", "true"):
             self._agent.set_voice_mode(True)
             return "语音模式已开启 🎤（回复将附带语音）"
-        elif args in ("off", "关", "0", "false"):
+        if args in ("off", "关", "0", "false"):
             self._agent.set_voice_mode(False)
             return "语音模式已关闭 🔇（仅文字回复）"
-        else:
-            mode = self._agent.get_voice_mode()
-            status = "开启 🎤" if mode else "关闭 🔇"
-            return f"语音模式: {status}\n用法: /voice [on|off]"
+        mode = self._agent.get_voice_mode()
+        status = "开启 🎤" if mode else "关闭 🔇"
+        return f"语音模式: {status}\n用法: /voice [on|off]"
 
     async def _cmd_agent(self, args: str, user_id: str) -> str:
         if not self._agent:

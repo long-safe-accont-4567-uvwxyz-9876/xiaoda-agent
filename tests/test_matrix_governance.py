@@ -444,10 +444,9 @@ async def test_l6_llm_judge_injection():
                     # 生成回复 (response_task_type)
                     assert task_type == "chat", f"生成回复 task_type 应为 chat, 实际 {task_type}"
                     return f"这是 case {self.call_count} 的回复内容"
-                else:
-                    # 评分 (judge_task_type)
-                    assert task_type == "chat_flash", f"评分 task_type 应为 chat_flash, 实际 {task_type}"
-                    return '{"score": 4, "reason": "回复切题"}'
+                # 评分 (judge_task_type)
+                assert task_type == "chat_flash", f"评分 task_type 应为 chat_flash, 实际 {task_type}"
+                return '{"score": 4, "reason": "回复切题"}'
 
         mock_router = MockRouter()
         runner = ABTestRunner(

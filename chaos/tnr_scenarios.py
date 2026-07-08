@@ -79,12 +79,11 @@ def make_scenario(
     orchestrator = recovery_orchestrator or RecoveryOrchestrator()
     strategy = degradation_strategy or reset_degradation_strategy()
 
-    protocol = TNRProtocol(
+    return TNRProtocol(
         health_scorer=scorer,
         recovery_orchestrator=orchestrator,
         degradation_strategy=strategy,
     )
-    return protocol
 
 
 def make_timeout_scenario(**kwargs) -> TNRProtocol:

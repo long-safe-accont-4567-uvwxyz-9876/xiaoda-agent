@@ -195,10 +195,7 @@ class MessageProcessorMixin:
         force_voice = voice_intent and not self._voice_mode
 
         if not clean_input:
-            if chat_targets:
-                target_name = get_agent_display_name(chat_targets[0])
-            else:
-                target_name = get_agent_display_name('xiaoda')
+            target_name = get_agent_display_name(chat_targets[0]) if chat_targets else get_agent_display_name('xiaoda')
             confirm_msg = f"好～现在跟{target_name}说话啦！有什么想聊的呀？"
             trace.info("agent.chat_target_switch", target=chat_targets)
             return ProcessResult(reply=confirm_msg, emotion="greeting")
@@ -210,11 +207,10 @@ class MessageProcessorMixin:
                     non_xiaoda_targets[0], clean_input, user_id, source, session_id, trace,
                     force_voice=force_voice, ctx=ctx,
                 )
-            else:
-                return await self._dispatch_parallel_sub_agents(
-                    non_xiaoda_targets, clean_input, user_id, source, session_id, trace,
-                    force_voice=force_voice, ctx=ctx,
-                )
+            return await self._dispatch_parallel_sub_agents(
+                non_xiaoda_targets, clean_input, user_id, source, session_id, trace,
+                force_voice=force_voice, ctx=ctx,
+            )
 
         # 简单对话快速路径（跳过记忆检索，使用最小上下文）
         fast_result = await self._try_simple_chat_fast_path(
@@ -934,7 +930,7 @@ class MessageProcessorMixin:
             logger.warning("agent.circuit_breaker_red")
             return ProcessResult(reply="系统需要休息一下，请稍后再试吧～"), \
                 task_type, None, circuit_state, _model_cfg
-        elif circuit_state == CircuitState.HALF_OPEN:
+        if circuit_state == CircuitState.HALF_OPEN:
             logger.info("agent.circuit_breaker_half_open_probe")
 
         _cb_max_tokens = None
@@ -998,10 +994,7 @@ class MessageProcessorMixin:
                     error_reply = await self._error_handler.handle_error_with_intelligence(
                         error=e, user_query=user_input, context="主处理流程模型调用错误"
                     )
-                    if error_reply and len(error_reply) > 50:
-                        reply = error_reply
-                    else:
-                        reply = DEGRADED_REPLY
+                    reply = error_reply if error_reply and len(error_reply) > 50 else DEGRADED_REPLY
                 except Exception as e:
                     logger.debug(f"agent.error_handler_fallback: {e}")
                     reply = DEGRADED_REPLY
@@ -1191,9 +1184,7 @@ class MessageProcessorMixin:
         if effective_len <= 20:
             return True
         simple_tool_patterns = ["天气", "气温", "时间", "几点", "日期", "星期", "翻译"]
-        if effective_len <= 25 and any(kw in user_input for kw in simple_tool_patterns):
-            return True
-        return False
+        return bool(effective_len <= 25 and any(kw in user_input for kw in simple_tool_patterns))
 
     def _is_simple_chat(self, query: str) -> bool:
         """Task 9: 判断是否为简单闲聊，可走快速路径（跳过记忆检索）。
@@ -1214,9 +1205,7 @@ class MessageProcessorMixin:
         # 有效长度 ≤ 10 视为简单闲聊
         cn_chars = sum(1 for c in query if '\u4e00' <= c <= '\u9fff')
         effective_len = cn_chars * 2 + len(query) - cn_chars
-        if effective_len <= 10:
-            return True
-        return False
+        return effective_len <= 10
 
     def _detect_voice_intent(self, user_input: str) -> bool:
         voice_keywords = [

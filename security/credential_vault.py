@@ -29,6 +29,7 @@ class DecryptionError(ValueError):
     """凭证解密失败（机器不匹配 / 标签验证失败 / 数据损坏）。"""
 
 from loguru import logger
+import contextlib
 
 # ── 常量 ──────────────────────────────────────────────────────
 # 盐：基础前缀 + 每次部署唯一随机后缀（首次启动时生成并持久化）
@@ -64,10 +65,8 @@ try:
         if _legacy_salt.exists():
             _SALT_FILE.parent.mkdir(parents=True, exist_ok=True)
             _SALT_FILE.write_bytes(_legacy_salt.read_bytes())
-            try:
+            with contextlib.suppress(OSError):
                 _SALT_FILE.chmod(0o600)
-            except OSError:
-                pass
             logger.info("credential_vault.salt_migrated", src=str(_legacy_salt), dst=str(_SALT_FILE))
 except Exception as e:
     logger.debug("credential_vault.salt_migrate_failed", error=str(e))
@@ -129,10 +128,8 @@ def _get_salt() -> bytes:
         _SALT_FILE.parent.mkdir(parents=True, exist_ok=True)
         _SALT_FILE.write_bytes(random_salt)
         # 设文件权限仅 owner 可读写（Unix）
-        try:
+        with contextlib.suppress(OSError):
             _SALT_FILE.chmod(0o600)
-        except OSError:
-            pass
     except OSError as e:
         logger.warning("credential_vault.salt_persist_failed", error=str(e))
     return _SALT_BASE + random_salt

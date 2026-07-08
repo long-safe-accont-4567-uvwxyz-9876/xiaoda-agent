@@ -34,10 +34,7 @@ def _make_getaddrinfo(ip_list):
         for ip in ip_list:
             addr = ipaddress.ip_address(ip)
             family = socket.AF_INET6 if addr.version == 6 else socket.AF_INET
-            if family == socket.AF_INET:
-                sockaddr = (ip, port)
-            else:
-                sockaddr = (ip, port, 0, 0)
+            sockaddr = (ip, port) if family == socket.AF_INET else (ip, port, 0, 0)
             infos.append((family, socket.SOCK_STREAM, 0, "", sockaddr))
         return infos
 

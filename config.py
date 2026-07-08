@@ -654,8 +654,7 @@ def _strip_json5_comments(text: str) -> str:
         result.append(text[i])
         i += 1
     cleaned = ''.join(result)
-    cleaned = re.sub(r',\s*([}\]])', r'\1', cleaned)
-    return cleaned
+    return re.sub(r',\s*([}\]])', r'\1', cleaned)
 
 
 def load_agent_config() -> dict:

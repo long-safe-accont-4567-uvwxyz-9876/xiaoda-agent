@@ -91,9 +91,8 @@ class RiskClassifier:
             return {"allow": False, "reason": "高风险操作，需要用户确认", "risk": risk, "need_confirm": True}
 
         # L2: 证据门禁（先读再写）
-        if risk >= RiskLevel.MEDIUM:
-            if not has_read_target:
-                return {"allow": False, "reason": "证据门禁：请先读取目标文件再修改", "risk": risk, "need_confirm": False}
+        if risk >= RiskLevel.MEDIUM and not has_read_target:
+            return {"allow": False, "reason": "证据门禁：请先读取目标文件再修改", "risk": risk, "need_confirm": False}
 
         return {"allow": True, "risk": risk, "need_confirm": False}
 

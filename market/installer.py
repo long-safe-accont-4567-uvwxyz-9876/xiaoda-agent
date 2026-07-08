@@ -89,9 +89,9 @@ class MarketInstaller:
         """安装一个市场条目"""
         if item.type == "plugin":
             return await self._install_plugin(item)
-        elif item.type == "skill":
+        if item.type == "skill":
             return await self._install_skill(item)
-        elif item.type == "mcp":
+        if item.type == "mcp":
             return await self._install_mcp(item, env=env)
         raise InstallError(f"未知类型: {item.type}")
 
@@ -99,9 +99,9 @@ class MarketInstaller:
         """卸载一个市场条目"""
         if item_type == "plugin":
             return await self._uninstall_plugin(item_id)
-        elif item_type == "skill":
+        if item_type == "skill":
             return await self._uninstall_skill(item_id)
-        elif item_type == "mcp":
+        if item_type == "mcp":
             return await self._uninstall_mcp(item_id)
         raise InstallError(f"未知类型: {item_type}")
 
@@ -237,10 +237,7 @@ class MarketInstaller:
             if content.startswith("<!--"):
                 # 已有元数据，替换 version
                 end = content.find("-->")
-                if end > 0:
-                    content = version_meta[:end + 3] + content[end + 3:]
-                else:
-                    content = version_meta + content
+                content = version_meta[:end + 3] + content[end + 3:] if end > 0 else version_meta + content
             else:
                 content = version_meta + content
 

@@ -274,7 +274,7 @@ def _count_pattern_in_file(filepath: Path, patterns: list[re.Pattern]) -> list[s
     for line_no, line in enumerate(text.splitlines(), 1):
         # 跳过注释行
         stripped = line.lstrip()
-        if stripped.startswith("#") or stripped.startswith("//"):
+        if stripped.startswith(("#", "//")):
             continue
         for pattern in patterns:
             if pattern.search(line):

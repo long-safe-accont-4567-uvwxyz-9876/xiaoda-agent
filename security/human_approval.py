@@ -199,8 +199,7 @@ class HumanApprovalGate:
         # 等待
         effective_timeout = timeout or (req.expires_at - time.time())
         try:
-            result = await asyncio.wait_for(future, timeout=max(0.1, effective_timeout))
-            return result
+            return await asyncio.wait_for(future, timeout=max(0.1, effective_timeout))
         except asyncio.TimeoutError:
             req.status = ApprovalStatus.TIMEOUT
             req.decided_at = time.time()
@@ -405,9 +404,8 @@ class IMApprovalChannel:
         # 查找该用户最新的待审批请求 (created_at 最大者)
         req = None
         for r in self._pending.values():
-            if r.user_id == user_id:
-                if req is None or r.created_at > req.created_at:
-                    req = r
+            if r.user_id == user_id and (req is None or r.created_at > req.created_at):
+                req = r
         if req is None:
             return False
         decision = self._classify_reply(text)

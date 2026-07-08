@@ -379,9 +379,8 @@ class ToolSearchEngine:
             name_to_tool = {t.name: t for t, _ in bm25_results}
             name_to_tool.update({t.name: t for t, _ in vector_results})
             return [name_to_tool[name] for name, _ in fused if name in name_to_tool]
-        else:
-            # 纯 BM25 (v1 行为)
-            return [t for t, _ in bm25_results[:top_k]]
+        # 纯 BM25 (v1 行为)
+        return [t for t, _ in bm25_results[:top_k]]
 
     def get_tools_for_llm(self, query: str = "", top_k: int = 5) -> list[dict]:
         """获取要发送给 LLM 的工具定义"""

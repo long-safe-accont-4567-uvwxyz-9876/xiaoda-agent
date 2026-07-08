@@ -23,12 +23,11 @@ class BoundedContent:
     def render(self) -> str:
         if self.level == InstructionLevel.SYSTEM:
             return f"[SYSTEM_INSTRUCTIONS]\n{self.content}\n[/SYSTEM_INSTRUCTIONS]"
-        elif self.level == InstructionLevel.EXTERNAL:
+        if self.level == InstructionLevel.EXTERNAL:
             return f"---BEGIN UNTRUSTED DATA (priority={self.level.name})---\n{self.content}\n---END UNTRUSTED DATA---"
-        elif self.level == InstructionLevel.APPLICATION:
+        if self.level == InstructionLevel.APPLICATION:
             return f"[APP_RULES (priority={self.level.name})]\n{self.content}\n[/APP_RULES]"
-        else:
-            return self.content
+        return self.content
 
 
 class InstructionBuilder:

@@ -194,8 +194,7 @@ def _normalize_command(command: str) -> str:
             return m.group(0)
     normalized = re.sub(r'\\u([0-9a-fA-F]{4})', _replace_unicode, normalized)
     # 去除多余空格
-    normalized = ' '.join(normalized.split())
-    return normalized
+    return ' '.join(normalized.split())
 
 
 def _is_command_dangerous(command: str) -> str | None:

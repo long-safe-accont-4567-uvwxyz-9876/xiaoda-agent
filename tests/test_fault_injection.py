@@ -32,6 +32,7 @@ from chaos.fault_injecting_llm_client import (
     LLMFaultError,
 )
 from chaos import verify_degradation
+import contextlib
 
 
 # ────────────────────────────────────────────────────────────
@@ -315,10 +316,8 @@ async def test_stats():
 
     # 调用 4 次 (seed=100 固定序列)
     for _ in range(4):
-        try:
+        with contextlib.suppress(asyncio.TimeoutError, LLMFaultError):
             await client.chat(messages=[{"role": "user", "content": "hi"}])
-        except (asyncio.TimeoutError, LLMFaultError):
-            pass
 
     stats = client.get_stats()
     assert stats["total_calls"] == 4

@@ -131,7 +131,7 @@ class InstinctManager:
         for line in result.strip().splitlines():
             line = line.strip()
             # 去掉 <think> 标签内容
-            if line.startswith("<think>") or line.startswith("</think>"):
+            if line.startswith(("<think>", "</think>")):
                 continue
             if "|" not in line:
                 continue

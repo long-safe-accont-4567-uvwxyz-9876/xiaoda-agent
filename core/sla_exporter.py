@@ -198,11 +198,7 @@ class SLAExporter:
             for m in self._metrics.values():
                 lines.append(f"# HELP {m.name} {m.help}")
                 lines.append(f"# TYPE {m.name} {m.type}")
-                if m.type == "counter":
-                    for k, v in m.values.items():
-                        label_str = self._format_labels(m.labels, k)
-                        lines.append(f"{m.name}{label_str} {v}")
-                elif m.type == "gauge":
+                if m.type == "counter" or m.type == "gauge":
                     for k, v in m.values.items():
                         label_str = self._format_labels(m.labels, k)
                         lines.append(f"{m.name}{label_str} {v}")

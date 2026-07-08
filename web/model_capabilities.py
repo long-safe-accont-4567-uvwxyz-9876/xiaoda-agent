@@ -463,9 +463,7 @@ def infer_from_name(model_id: str) -> ModelCapabilities:
     # Thinking/reasoning-only models often have limited tool support
     _THINKING_ONLY = "thinking" in lower and "instruct" not in lower
 
-    if any(kw in lower for kw in _NO_TOOL_KEYWORDS):
-        tool_calling = False
-    elif _THINKING_ONLY:
+    if any(kw in lower for kw in _NO_TOOL_KEYWORDS) or _THINKING_ONLY:
         tool_calling = False
     else:
         # 现代策略：默认假设现代 LLM 支持工具调用

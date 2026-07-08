@@ -149,5 +149,4 @@ class SharedBlackboard:
                 except Exception as e:
                     logger.warning("blackboard.cleanup_task_error error={}", e)
 
-        task = asyncio.create_task(_loop(), name="blackboard-cleanup")
-        return task
+        return asyncio.create_task(_loop(), name="blackboard-cleanup")

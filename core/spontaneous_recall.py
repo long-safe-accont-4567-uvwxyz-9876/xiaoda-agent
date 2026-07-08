@@ -47,7 +47,7 @@ class SpontaneousRecall:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # noqa: S110
                 pass
         self._task = None
 

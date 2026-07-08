@@ -209,9 +209,8 @@ class ToolGuardrails:
             limit = int(check_type.split(":")[1])
             if isinstance(val, list) and len(val) > limit:
                 return False, "L2", err_msg
-        elif check_type == "no_path_traversal":
-            if isinstance(val, str) and ".." in val:
-                return False, "L3", err_msg
+        elif check_type == "no_path_traversal" and isinstance(val, str) and ".." in val:
+            return False, "L3", err_msg
         return True, "", ""
 
     @staticmethod

@@ -11,6 +11,7 @@ from loguru import logger
 
 from web.routers.auth import get_current_user
 from web.schemas import Envelope
+import contextlib
 
 
 # 免责协议全文（模块级常量，供前端通过 API 获取）
@@ -152,7 +153,7 @@ async def get_keys() -> Any:
             {"key": "GITHUB_PERSONAL_ACCESS_TOKEN", "label": "GitHub 个人访问令牌", "desc": "GitHub MCP Server 所需", "url": "https://github.com/settings/tokens", "url_desc": "Generate new token"},
             {"key": "MODELSCOPE_ACCESS_TOKEN", "label": "魔搭 Access Token", "desc": "魔搭 ModelScope 免费模型发现", "url": "https://modelscope.cn", "url_desc": "注册 → 个人中心 → 访问令牌"},
         ]
-        _load_env_values = lambda: {}
+        _load_env_values = dict
 
     try:
         current = _load_env_values()
@@ -778,10 +779,8 @@ def _auto_register_providers(updates: dict) -> None:
         fp = cred_dir / f"provider_{pid}.key"
         from web._provider_keys import _encode_key
         fp.write_text(_encode_key(api_key) + "\n", encoding="utf-8")
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(fp, 0o600)
-        except OSError:
-            pass
 
         # 注册到配置（如果尚未存在）
         if pid not in existing:
@@ -864,7 +863,7 @@ def _parse_user_md(content: str) -> dict:
     def _clean(val: str) -> str:
         """清除模板占位符，返回空字符串"""
         v = val.strip()
-        if v.startswith("（") or v.startswith("("):
+        if v.startswith(("（", "(")):
             return ""
         if v in ("待填写", "待自动检测", "暂无"):
             return ""

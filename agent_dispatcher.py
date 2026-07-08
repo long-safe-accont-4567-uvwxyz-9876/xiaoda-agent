@@ -378,14 +378,12 @@ class SubAgent:
         tools = self._filtered_tools()
 
         try:
-            reply = await self._chat_loop(messages, tools)
-            return reply
+            return await self._chat_loop(messages, tools)
         except (OSError, RuntimeError, asyncio.TimeoutError, ValueError) as e:
             logger.warning("sub_agent.chat_failed name={} error={}", self.config.name, str(e))
             if tools and _is_tool_unsupported_error(str(e)):
                 try:
-                    reply = await self._chat_loop(messages, None)
-                    return reply
+                    return await self._chat_loop(messages, None)
                 except (OSError, RuntimeError, asyncio.TimeoutError, ValueError) as e2:
                     logger.warning("sub_agent.fallback_failed name={} error={}", self.config.name, str(e2))
 
@@ -582,10 +580,7 @@ class SubAgent:
     def _build_assistant_msg(self, msg: Any, extracted: Any, is_dsml: bool) -> dict:
         """根据 LLM 响应与提取结果构造 assistant 消息（含 tool_calls 字段）。"""
         msg_rc = getattr(msg, "reasoning_content", None) or ""
-        if is_dsml:
-            clean_content = strip_dsml(msg.content or "")
-        else:
-            clean_content = msg.content or ""
+        clean_content = strip_dsml(msg.content or "") if is_dsml else msg.content or ""
         assistant_msg = {
             "role": "assistant",
             "content": clean_content,

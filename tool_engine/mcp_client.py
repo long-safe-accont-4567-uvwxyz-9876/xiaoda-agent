@@ -17,6 +17,7 @@ from loguru import logger
 
 import tool_engine.tool_registry as _tool_registry_mod
 from .tool_registry import ToolPermission, ToolResult
+import contextlib
 
 
 def _resolve_command_path(command: str) -> str:
@@ -119,13 +120,12 @@ class MCPClient:
         """根据传输类型连接 MCP 服务器"""
         if self._config.transport == "stdio":
             return await self._connect_stdio()
-        elif self._config.transport == "sse":
+        if self._config.transport == "sse":
             return await self._connect_sse()
-        elif self._config.transport == "streamable-http":
+        if self._config.transport == "streamable-http":
             return await self._connect_http()
-        else:
-            logger.warning("mcp.unknown_transport", transport=self._config.transport)
-            return False
+        logger.warning("mcp.unknown_transport", transport=self._config.transport)
+        return False
 
     async def _do_handshake(self) -> None:
         """执行 MCP 初始化握手: initialize → initialized → tools/list.
@@ -263,10 +263,8 @@ class MCPClient:
 
         if self._read_task and not self._read_task.done():
             self._read_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._read_task
-            except asyncio.CancelledError:
-                pass
             self._read_task = None
 
         if self._process and self._process.returncode is None:
@@ -389,8 +387,7 @@ class MCPClient:
             return None
 
         try:
-            result = await asyncio.wait_for(fut, timeout=timeout)
-            return result
+            return await asyncio.wait_for(fut, timeout=timeout)
         except asyncio.TimeoutError:
             self._pending.pop(msg_id, None)
             return None
@@ -434,18 +431,17 @@ class MCPClient:
                 if "text/event-stream" in content_type:
                     # SSE 事件流: 解析事件找到匹配 id 的结果
                     return await self._parse_sse_stream(resp, msg_id)
-                else:
-                    # 普通 JSON 响应
-                    body = await resp.aread()
-                    try:
-                        data = json.loads(body)
-                    except (json.JSONDecodeError, ValueError) as e:
-                        logger.error("mcp_client.http_json_parse_error",
-                                     server=self.server_name, error=str(e))
-                        return None
-                    if "error" in data:
-                        return {"error": data["error"]}
-                    return data.get("result")
+                # 普通 JSON 响应
+                body = await resp.aread()
+                try:
+                    data = json.loads(body)
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.error("mcp_client.http_json_parse_error",
+                                 server=self.server_name, error=str(e))
+                    return None
+                if "error" in data:
+                    return {"error": data["error"]}
+                return data.get("result")
         except Exception as e:
             logger.error("mcp_client.http_request_error",
                          server=self.server_name, error=str(e))
@@ -699,10 +695,8 @@ class MCPManager:
         # Stop health monitor
         if self._health_task and not self._health_task.done():
             self._health_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._health_task
-            except asyncio.CancelledError:
-                pass
             self._health_task = None
 
         for server_name, client in self._clients.items():
@@ -793,11 +787,10 @@ class MCPManager:
         if config.transport == "stdio":
             if self._allowed_stdio_commands and config.command not in self._allowed_stdio_commands:
                 return f"Command '{config.command}' not in allowed list"
-        elif config.transport in ("sse", "streamable-http"):
-            if self._allowed_url_prefixes and not any(
-                config.url.startswith(prefix) for prefix in self._allowed_url_prefixes
-            ):
-                return f"URL '{config.url}' does not match any allowed prefix"
+        elif config.transport in ("sse", "streamable-http") and self._allowed_url_prefixes and not any(
+            config.url.startswith(prefix) for prefix in self._allowed_url_prefixes
+        ):
+            return f"URL '{config.url}' does not match any allowed prefix"
         return None
 
     async def add_server(self, server_name: str, config: MCPTransportConfig) -> bool:
@@ -819,9 +812,8 @@ class MCPManager:
             if await client.connect():
                 logger.info("mcp_manager.server_added", server=server_name)
                 return True
-            else:
-                logger.error("mcp_manager.server_add_failed", server=server_name)
-                return False
+            logger.error("mcp_manager.server_add_failed", server=server_name)
+            return False
         except Exception as e:
             logger.error("mcp_manager.server_add_failed",
                          server=server_name, error=str(e))
@@ -993,8 +985,7 @@ class SdkMcpServer:
             return {"error": f"Tool '{tool_name}' not found"}
 
         try:
-            result = await tool.handler(arguments)
-            return result
+            return await tool.handler(arguments)
         except Exception as e:
             logger.error("sdk_mcp_server.call_tool.error", tool=tool_name, error=str(e))
             return {"error": str(e)}

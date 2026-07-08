@@ -267,7 +267,7 @@ def _from_openai_exception(exc: Exception, exc_msg: str) -> "ErrorCodeEnum | Non
                 return ErrorCodeEnum.E_LLM006
             if status and 500 <= status < 600:
                 return ErrorCodeEnum.E_LLM001
-    except Exception:
+    except Exception:  # noqa: S110
         pass
     return None
 

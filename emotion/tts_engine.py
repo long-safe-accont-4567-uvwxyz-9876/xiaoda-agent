@@ -548,7 +548,7 @@ class TTSEngine:
         """调用 TTS API，429 限流时退避重试。返回 completion 或 None。"""
         for _attempt in range(3):
             try:
-                completion = await self._client.chat.completions.create(
+                return await self._client.chat.completions.create(
                     model=MIMO_TTS_MODEL,
                     messages=messages,
                     audio={
@@ -556,7 +556,6 @@ class TTSEngine:
                     "voice": voice_data_url,
                     },
                 )
-                return completion
             except Exception as api_err:
                 if "429" in str(api_err) and _attempt < 2:
                     wait = (_attempt + 1) * 5

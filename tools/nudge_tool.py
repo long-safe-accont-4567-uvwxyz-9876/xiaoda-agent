@@ -28,10 +28,7 @@ async def nudge_greeting(user_id: str, message: str = "") -> ToolResult:
                 content = user_md.read_text(encoding="utf-8-sig")
                 import re
                 m = re.search(r"称呼[：:]\s*(.+)", content)
-                if m:
-                    address_term = m.group(1).strip().split("\n")[0].strip()
-                else:
-                    address_term = "爸爸"
+                address_term = m.group(1).strip().split("\n")[0].strip() if m else "爸爸"
             else:
                 address_term = "爸爸"
         except Exception:

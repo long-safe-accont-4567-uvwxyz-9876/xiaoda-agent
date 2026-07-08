@@ -147,11 +147,10 @@ def build_emotion_hint(emotion: dict) -> str:
 
     if valence == "positive" and intensity > 0.5:
         return "伙伴现在心情很好，可以轻快地回应"
-    elif valence == "positive":
+    if valence == "positive":
         return "伙伴心情不错"
-    elif valence == "negative" and intensity > 0.5:
+    if valence == "negative" and intensity > 0.5:
         return "伙伴现在情绪比较低落，要温柔地陪伴，不要说教"
-    elif valence == "negative":
+    if valence == "negative":
         return "伙伴有些低落，轻轻陪着就好"
-    else:
-        return ""
+    return ""

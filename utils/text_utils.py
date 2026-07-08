@@ -2,6 +2,7 @@ import random
 import re
 import base64
 from pathlib import Path
+import contextlib
 
 AI_PATTERNS = [
     (r'此外[，,]?\s*', ''),
@@ -279,10 +280,8 @@ def parse_dsml_tool_calls(text: str, allowed_tools: set | None = None) -> list[d
         for param_match in DSML_PARAM_PATTERN.finditer(block):
             param_name = param_match.group(1)
             param_value = param_match.group(2).strip()
-            try:
+            with contextlib.suppress(json.JSONDecodeError, ValueError):
                 param_value = json.loads(param_value)
-            except (json.JSONDecodeError, ValueError):
-                pass
             args[param_name] = param_value
 
         results.append({

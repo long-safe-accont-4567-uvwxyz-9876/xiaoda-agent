@@ -74,14 +74,13 @@ def measure_latency() -> int:
 
     if elapsed < 0.5:
         return 100
-    elif elapsed < 1.0:
+    if elapsed < 1.0:
         return 80
-    elif elapsed < 2.0:
+    if elapsed < 2.0:
         return 60
-    elif elapsed < 3.0:
+    if elapsed < 3.0:
         return 40
-    else:
-        return 20
+    return 20
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -716,14 +715,13 @@ def _rating(average: float) -> str:
     """Determine rating based on average score."""
     if average >= 90:
         return "S"
-    elif average >= 80:
+    if average >= 80:
         return "A"
-    elif average >= 70:
+    if average >= 70:
         return "B"
-    elif average >= 60:
+    if average >= 60:
         return "C"
-    else:
-        return "D"
+    return "D"
 
 
 def print_report(scores: dict):

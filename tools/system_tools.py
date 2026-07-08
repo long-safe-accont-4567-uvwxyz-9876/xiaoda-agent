@@ -1,5 +1,6 @@
 import asyncio
 import os
+import pathlib
 from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 
@@ -52,15 +53,13 @@ async def service_manage(action: str, name: str = "", lines: int = 30) -> ToolRe
                 return ToolResult.fail("请指定服务名称")
             rc, stdout, stderr = await _run_cmd(["systemctl", "status", name, "--no-pager"], timeout=30)
             output = stdout or stderr
-            if rc == 0:
+            if rc == 0 or rc == 3:
                 return ToolResult.ok(f"服务 {name} 状态:\n{output.strip()}")
-            elif rc == 3:
-                return ToolResult.ok(f"服务 {name} 状态:\n{output.strip()}")
-            elif rc == 4:
+            if rc == 4:
                 return ToolResult.fail(f"服务 {name} 不存在")
             return ToolResult.ok(f"服务 {name} 状态:\n{output.strip()}")
 
-        elif action == "restart":
+        if action == "restart":
             if not name:
                 return ToolResult.fail("请指定服务名称")
             if name in PROTECTED_SERVICES:
@@ -71,7 +70,7 @@ async def service_manage(action: str, name: str = "", lines: int = 30) -> ToolRe
                 return ToolResult.ok(f"服务 {name} 已重启，当前状态: {status_out.strip()}")
             return ToolResult.fail(f"重启服务 {name} 失败: {stderr.strip()}")
 
-        elif action == "list":
+        if action == "list":
             results = []
             for svc in sorted(AGENT_SERVICES):
                 rc, check_out, _ = await _run_cmd(["systemctl", "list-unit-files", f"{svc}.service"], timeout=10)
@@ -87,7 +86,7 @@ async def service_manage(action: str, name: str = "", lines: int = 30) -> ToolRe
                 return ToolResult.ok("未找到任何Agent相关服务")
             return ToolResult.ok("Agent相关服务列表:\n" + "\n".join(results))
 
-        elif action == "logs":
+        if action == "logs":
             if not name:
                 return ToolResult.fail("请指定服务名称")
             rc, stdout, stderr = await _run_cmd(["journalctl", "-u", name, "-n", str(lines), "--no-pager"], timeout=30)
@@ -102,8 +101,7 @@ async def service_manage(action: str, name: str = "", lines: int = 30) -> ToolRe
                 )
             return ToolResult.ok(f"服务 {name} 最近 {lines} 条日志:\n{stdout.strip()}")
 
-        else:
-            return ToolResult.fail(f"不支持的操作: {action}")
+        return ToolResult.fail(f"不支持的操作: {action}")
 
     except asyncio.TimeoutError:
         return ToolResult.fail(f"操作超时: {action}")
@@ -158,7 +156,7 @@ async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> 
                 return ToolResult.ok(f"网络接口信息:\n{stdout.strip()}")
             return ToolResult.fail("获取网络接口信息失败")
 
-        elif action == "ping":
+        if action == "ping":
             rc, stdout, stderr = await _run_cmd(["ping", "-c", str(count), "-W", "3", target], timeout=30)
             if rc == 0:
                 lines = stdout.strip().split("\n")
@@ -167,7 +165,7 @@ async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> 
                 return ToolResult.ok(f"Ping {target} 结果:\n{summary}\n{stats}")
             return ToolResult.fail(f"Ping {target} 失败，目标不可达")
 
-        elif action == "ports":
+        if action == "ports":
             rc, stdout, stderr = await _run_cmd(["ss", "-tlnp"], timeout=30)
             if rc != 0:
                 rc, stdout, stderr = await _run_cmd(["netstat", "-tlnp"], timeout=30)
@@ -180,7 +178,7 @@ async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> 
                 return ToolResult.ok("监听端口列表:\n" + "\n".join(output_lines))
             return ToolResult.fail("获取监听端口信息失败")
 
-        elif action == "dns":
+        if action == "dns":
             rc, stdout, stderr = await _run_cmd(["nslookup", target], timeout=30)
             if rc == 0 and stdout.strip():
                 return ToolResult.ok(f"DNS解析 {target}:\n{stdout.strip()}")
@@ -189,8 +187,7 @@ async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> 
                 return ToolResult.ok(f"DNS解析 {target}:\n{stdout.strip()}")
             return ToolResult.fail(f"DNS解析 {target} 失败")
 
-        else:
-            return ToolResult.fail(f"不支持的操作: {action}")
+        return ToolResult.fail(f"不支持的操作: {action}")
 
     except asyncio.TimeoutError:
         return ToolResult.fail(f"操作超时: {action}")
@@ -220,13 +217,13 @@ async def dev_assist(action: str, path: str = _DEFAULT_PROJECT_DIR, lines: int =
         if action == "git_status":
             return await _dev_assist_git_status(path)
 
-        elif action == "pip_check":
+        if action == "pip_check":
             return await _dev_assist_pip_check()
 
-        elif action == "logs":
+        if action == "logs":
             return await _dev_assist_logs(path, lines, service)
 
-        elif action == "project_tree":
+        if action == "project_tree":
             if not os.path.isdir(path):
                 return ToolResult.fail(f"路径不存在: {path}")
             rc, stdout, stderr = await _run_cmd(
@@ -241,8 +238,7 @@ async def dev_assist(action: str, path: str = _DEFAULT_PROJECT_DIR, lines: int =
                 return ToolResult.ok(f"项目结构 ({path}):\n" + "\n".join(output_lines))
             return ToolResult.fail("获取项目结构失败")
 
-        else:
-            return ToolResult.fail(f"不支持的操作: {action}")
+        return ToolResult.fail(f"不支持的操作: {action}")
 
     except asyncio.TimeoutError:
         return ToolResult.fail(f"操作超时: {action}")
@@ -303,7 +299,7 @@ async def _dev_assist_logs(path: str, lines: int, service: str) -> ToolResult:
     if os.path.isdir(log_dir):
         # 兼容 .log 和 .json 两种日志格式（logging_config 写的是 agent_YYYY-MM-DD.json）
         log_files = sorted(
-            [f for f in os.listdir(log_dir) if f.endswith(".log") or f.endswith(".json")],
+            [f for f in os.listdir(log_dir) if f.endswith((".log", ".json"))],
             key=lambda f: os.path.getmtime(os.path.join(log_dir, f)),
             reverse=True
         )
@@ -315,7 +311,7 @@ async def _dev_assist_logs(path: str, lines: int, service: str) -> ToolResult:
         log_path = os.path.join(log_dir, log_files[0])
         try:
             all_lines = await asyncio.to_thread(
-                lambda: open(log_path, "r", encoding="utf-8", errors="replace").readlines()
+                lambda: pathlib.Path(log_path).read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
             )
             recent = all_lines[-lines:]
             return ToolResult.ok(f"日志文件 {log_files[0]} (最后{len(recent)}行):\n{''.join(recent).strip()}")

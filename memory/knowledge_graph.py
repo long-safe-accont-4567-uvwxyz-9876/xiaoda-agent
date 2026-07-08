@@ -47,8 +47,7 @@ def _repair_json(text: str) -> str:
     # 修复 } 后面缺少逗号直接跟 { : }{ → },{
     text = re.sub(r'}\s*{', '},{', text)
     # 修复 ] 后面缺少逗号直接跟 { : ]{ → ],{
-    text = re.sub(r'\]\s*{', '],{', text)
-    return text
+    return re.sub(r'\]\s*{', '],{', text)
 
 
 def _normalize_json_keys(obj: Any) -> Any:
@@ -56,14 +55,14 @@ def _normalize_json_keys(obj: Any) -> Any:
         cleaned = {}
         for k, v in obj.items():
             clean_key = k.strip().strip('"').strip("'").strip()
-            while clean_key.startswith('"') or clean_key.startswith("'"):
+            while clean_key.startswith(('"', "'")):
                 clean_key = clean_key[1:]
-            while clean_key.endswith('"') or clean_key.endswith("'"):
+            while clean_key.endswith(('"', "'")):
                 clean_key = clean_key[:-1]
             clean_key = clean_key.strip()
             cleaned[clean_key] = _normalize_json_keys(v)
         return cleaned
-    elif isinstance(obj, list):
+    if isinstance(obj, list):
         return [_normalize_json_keys(item) for item in obj]
     return obj
 

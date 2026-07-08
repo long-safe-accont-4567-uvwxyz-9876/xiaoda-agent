@@ -80,8 +80,7 @@ class SSRFGuardV2:
         # 移除嵌入凭证 user:pass@host
         url = re.sub(r'(?<=://)[^/@]+@', '', url)
         # 规范化十进制/十六进制 IP
-        url = re.sub(r'0x([0-9a-fA-F]+)', lambda m: str(int(m.group(1), 16)), url)
-        return url
+        return re.sub(r'0x([0-9a-fA-F]+)', lambda m: str(int(m.group(1), 16)), url)
 
     def is_safe(self, url: str, allow_private: bool = False) -> bool:
         """安全检查 (不抛异常)"""

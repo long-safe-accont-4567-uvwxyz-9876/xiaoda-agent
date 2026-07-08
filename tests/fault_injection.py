@@ -52,15 +52,15 @@ class FaultInjectingLLMClient:
         ft = config.fault_type
         if ft == FaultType.TIMEOUT:
             raise TimeoutError("Simulated LLM timeout")
-        elif ft == FaultType.RATE_LIMIT:
+        if ft == FaultType.RATE_LIMIT:
             return {"error": "rate_limit", "message": "Too many requests", "code": 429}
-        elif ft == FaultType.CONTENT_FILTER:
+        if ft == FaultType.CONTENT_FILTER:
             return {"error": "content_filter", "message": "Content filtered", "code": 451}
-        elif ft == FaultType.EMPTY_RESPONSE:
+        if ft == FaultType.EMPTY_RESPONSE:
             return {"choices": [{"message": {"content": ""}}]}
-        elif ft == FaultType.INVALID_JSON:
+        if ft == FaultType.INVALID_JSON:
             return {"choices": [{"message": {"content": "{invalid json}"}}]}
-        elif ft == FaultType.PARTIAL_RESPONSE:
+        if ft == FaultType.PARTIAL_RESPONSE:
             return {"choices": [{"message": {"content": "这是一个不完整的"}}]}
         return {}
 

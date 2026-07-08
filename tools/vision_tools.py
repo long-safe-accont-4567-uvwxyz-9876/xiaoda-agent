@@ -71,14 +71,13 @@ def vision_analyze(action: str, device: int = 0) -> ToolResult:
             n = len(objects)
             obj_list = "\n".join(f"  - {obj}" for obj in objects) if objects else "  (无)"
             return ToolResult.ok(f"🔍 检测到 {n} 个物体:\n{obj_list}")
-        elif action == "describe":
+        if action == "describe":
             description = vision_service.describe_scene(frame)
             return ToolResult.ok(f"👁️ {description}")
-        elif action == "colors":
+        if action == "colors":
             colors = vision_service.analyze_colors(frame)
             color_list = "\n".join(f"  - {c}" for c in colors) if colors else "  (无)"
             return ToolResult.ok(f"🎨 主要颜色:\n{color_list}")
-        else:
-            return ToolResult.fail(f"不支持的分析动作: {action}")
+        return ToolResult.fail(f"不支持的分析动作: {action}")
     except Exception as e:
         return ToolResult.fail(f"分析失败: {e!s}")

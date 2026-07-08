@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from loguru import logger
 
 from web.schemas import Envelope, LoginRequest, LoginResponse
+import contextlib
 
 router = APIRouter(tags=["auth"])
 
@@ -56,10 +57,8 @@ def _load_or_create_secret() -> str:
             _SECRET = secrets.token_hex(32)
             secret_path.parent.mkdir(parents=True, exist_ok=True)
             secret_path.write_text(_SECRET, encoding="utf-8")
-            try:
+            with contextlib.suppress(OSError):
                 secret_path.chmod(0o600)
-            except OSError:
-                pass
         return _SECRET
 
 
@@ -192,9 +191,7 @@ def _is_private_ip(ip: str) -> bool:
         return True
     if first == 172 and 16 <= second <= 31:
         return True
-    if first == 192 and second == 168:
-        return True
-    return False
+    return bool(first == 192 and second == 168)
 
 
 async def get_current_user(request: Request) -> str:

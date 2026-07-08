@@ -8,6 +8,7 @@ from typing import Any
 import json, sys, time, os, shutil, subprocess
 from pathlib import Path
 from loguru import logger
+import contextlib
 
 
 def _detect_platform() -> str:
@@ -432,10 +433,8 @@ def _register_self_heal_checks(doc: DoctorCheck) -> None:
     def _fix_docker_volume() -> None:
         data_dir = os.getenv("KIOXIA_DATA_DIR", "/data")
         Path(data_dir).mkdir(parents=True, exist_ok=True)
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(data_dir, 0o755)
-        except OSError:
-            pass
 
     doc.add_check("Docker Volume", "L8-SelfHeal", _check_docker_volume, _fix_docker_volume)
 

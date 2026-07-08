@@ -51,7 +51,7 @@ class FailureTrigger:
         if context.retry_count < self.MAX_RETRIES:
             if strategy.get("action") == "retry":
                 return {"action": "retry", "adjustment": strategy.get("adjustment", "")}
-            elif strategy.get("action") == "alternative":
+            if strategy.get("action") == "alternative":
                 return {"action": "alternative", "method": strategy.get("method", "")}
 
         # 4. 超过重试上限→归档失败经验
@@ -100,23 +100,22 @@ class FailureTrigger:
                 "adjustment": "增加超时时间或简化请求",
                 "root_cause": "请求超时",
             }
-        elif "auth" in error_type or "permission" in error_type:
+        if "auth" in error_type or "permission" in error_type:
             return {
                 "action": "report",
                 "root_cause": "认证/权限错误，需人工介入",
             }
-        elif "not found" in error_type or "404" in error_type:
+        if "not found" in error_type or "404" in error_type:
             return {
                 "action": "alternative",
                 "method": "尝试替代路径或方法",
                 "root_cause": "资源不存在",
             }
-        else:
-            return {
-                "action": "retry",
-                "adjustment": "检查参数和上下文后重试",
-                "root_cause": context.error_type or "未知错误",
-            }
+        return {
+            "action": "retry",
+            "adjustment": "检查参数和上下文后重试",
+            "root_cause": context.error_type or "未知错误",
+        }
 
     async def _archive_experience(self, context: FailureContext, strategy: dict, outcome: str) -> None:
         """归档经验到 learnings 表"""

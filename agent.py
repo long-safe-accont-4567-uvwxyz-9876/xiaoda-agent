@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 
 from loguru import logger
+import contextlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -95,10 +96,8 @@ def main() -> None:
                         f.write("")
                     os.replace(tmp_path, ENV_PATH)
                 except (OSError, PermissionError):
-                    try:
+                    with contextlib.suppress(OSError):
                         os.unlink(tmp_path)
-                    except OSError:
-                        pass
                     raise
                 print("  [i] 已创建空 .env 配置文件")
             # 重新加载 .env 使默认值生效

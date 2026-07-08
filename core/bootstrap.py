@@ -150,8 +150,7 @@ class AgentCoreBootstrapper:
             import sys
             if getattr(sys, 'frozen', False):
                 return Path(sys._MEIPASS) / "assets"
-            else:
-                return Path(__file__).resolve().parent.parent / "assets"
+            return Path(__file__).resolve().parent.parent / "assets"
         except Exception:
             logger.debug("bootstrap.bundled_assets_dir_fallback: {}", exc_info=True)
             return Path(__file__).resolve().parent.parent / "assets"
@@ -746,5 +745,4 @@ def get_base_dir() -> Path:
     import sys
     if getattr(sys, 'frozen', False):
         return Path(sys._MEIPASS)
-    else:
-        return Path(__file__).resolve().parent.parent
+    return Path(__file__).resolve().parent.parent

@@ -41,9 +41,7 @@ def _spec_is_safe(spec: str) -> bool:
     if re.search(r'[;&|`$]', spec):
         return False
     # 仅允许字母、数字、连字符、下划线、点、方括号、比较运算符
-    if not re.match(r'^[a-zA-Z0-9_\-\.\[\]>=<~!]+$', spec):
-        return False
-    return True
+    return re.match(r'^[a-zA-Z0-9_\-\.\[\]>=<~!]+$', spec)
 
 def ensure(feature_name: str) -> bool:
     """确保依赖可用，不可用则按需安装

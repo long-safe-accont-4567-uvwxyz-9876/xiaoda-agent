@@ -625,7 +625,7 @@ class ParallelAgentNode:
 
         agents_block = "\n".join(agent_descriptions)
 
-        prompt = f"""你是一个智能任务分解器。需要将用户的复杂请求拆分为给不同Agent的子任务。
+        return f"""你是一个智能任务分解器。需要将用户的复杂请求拆分为给不同Agent的子任务。
 
 用户原始请求：
 {user_input}
@@ -645,7 +645,6 @@ class ParallelAgentNode:
 {{"agent_name": "针对该Agent的具体子任务描述"}}
 
 其中 agent_name 必须是上面列出的 Agent 名称之一。"""
-        return prompt
 
     async def _call_decompose_llm(self, prompt: str) -> str:
         """调用任务分解 LLM（response_format 不支持时降级为普通调用），返回响应文本。"""
@@ -665,8 +664,7 @@ class ParallelAgentNode:
                 temperature=0.3,
             )
 
-        content = (response.choices[0].message.content or "").strip()
-        return content
+        return (response.choices[0].message.content or "").strip()
 
     def _parse_and_validate_decompose_result(self, content: str,
                                                targets: list[str]) -> dict[str, str]:
@@ -975,5 +973,4 @@ async def run_task_graph(graph: TaskGraph, user_input: str, user_id: str,
         _dispatcher=dispatcher,
         _agent_configs=agent_configs or {},
     )
-    result = await graph.run(state)
-    return result
+    return await graph.run(state)

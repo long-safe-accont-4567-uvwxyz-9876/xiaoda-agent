@@ -23,16 +23,15 @@ logger.add(
 
 from agent_core import AgentCore
 from model_router import ROUTE_TABLE, MODEL_PREFERENCES
+import contextlib
 
 # ── readline 支持 ──────────────────────────────────────────
 try:
     import readline
     _HIST_FILE = os.path.expanduser("~/.ai-agent/cli_history")
     _HIST_SIZE = 500
-    try:
+    with contextlib.suppress(FileNotFoundError):
         readline.read_history_file(_HIST_FILE)
-    except FileNotFoundError:
-        pass
     readline.set_history_length(_HIST_SIZE)
     import atexit
     atexit.register(lambda: readline.write_history_file(_HIST_FILE))

@@ -281,7 +281,7 @@ def _write_env(existing_lines: list, updates: dict) -> None:
 
     with open(ENV_PATH, "w", encoding="utf-8") as f:
         f.write("\n".join(new_lines))
-        if new_lines and not new_lines[-1] == "":
+        if new_lines and new_lines[-1] != "":
             f.write("\n")
 
 
@@ -358,9 +358,7 @@ def is_first_run() -> bool:
         return True
     vals = _load_env_values()
     # MIMO_API_KEY 是最核心的必填项
-    if not vals.get("MIMO_API_KEY", "").strip():
-        return True
-    return False
+    return bool(not vals.get("MIMO_API_KEY", "").strip())
 
 
 def main() -> None:
