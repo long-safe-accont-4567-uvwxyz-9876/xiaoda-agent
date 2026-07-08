@@ -72,13 +72,19 @@ class QueryCache:
 
     @staticmethod
     def _cosine_similarity(a: list[float], b: list[float]) -> float:
-        """计算两个向量的余弦相似度，零向量返回 0.0。"""
+        """计算两个向量的余弦相似度，零向量或长度不匹配返回 0.0。"""
+        if len(a) != len(b):
+            # 嵌入模型升级导致向量维度变化时不崩溃
+            return 0.0
         if _HAS_NUMPY:
-            na = float(np.linalg.norm(a))
-            nb = float(np.linalg.norm(b))
-            if na == 0.0 or nb == 0.0:
+            try:
+                na = float(np.linalg.norm(a))
+                nb = float(np.linalg.norm(b))
+                if na == 0.0 or nb == 0.0:
+                    return 0.0
+                return float(np.dot(a, b) / (na * nb))
+            except (ValueError, TypeError):
                 return 0.0
-            return float(np.dot(a, b) / (na * nb))
         # 纯 Python 降级实现
         dot = sum(x * y for x, y in zip(a, b))
         na = math.sqrt(sum(x * x for x in a))

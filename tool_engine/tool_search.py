@@ -142,7 +142,10 @@ class VectorIndex:
         self._vectors: list[list[float]] = []
         self._query_cache: dict[str, list[float]] = {}  # query → vector (LRU)
         self._cache_order: list[str] = []  # LRU 顺序: 最近使用在末尾
-        self._max_cache = int(os.environ.get("TOOL_SEARCH_CACHE_SIZE", "128"))
+        try:
+            self._max_cache = int(os.environ.get("TOOL_SEARCH_CACHE_SIZE", "128"))
+        except (TypeError, ValueError):
+            self._max_cache = 128
         self._enabled = embed_client is not None
 
     def add_tool(self, tool: ToolDef) -> None:

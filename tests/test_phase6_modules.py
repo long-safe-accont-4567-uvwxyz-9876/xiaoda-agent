@@ -149,10 +149,10 @@ async def test_dag_parallel_execution():
         completed.append("b")
         return "b_result"
 
-    async def task_c(a, b):
+    async def task_c(a_val, b_val):
         await asyncio.sleep(0.01)
         completed.append("c")
-        return f"{a}+{b}"
+        return f"{a_val}+{b_val}"
 
     dag.add_node("a", task_a, produces=["a_val"])
     dag.add_node("b", task_b, produces=["b_val"])

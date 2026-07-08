@@ -50,28 +50,30 @@ class RetrievalAssessor:
         # 取 Top-3 结果的相关性分数
         top3 = results[:3]
         scores = []
+        score_source = None  # 记录首个命中的分数键，用于决定是否需要放大
         for item in top3:
-            # 优先用 rerank_score，其次 rrf_score，最后 effective_score
-            score = (
-                item.get("rerank_score")
-                or item.get("rrf_score")
-                or item.get("effective_score")
-                or item.get("final_score")
-                or 0.0
-            )
+            # 按优先级获取分数：rerank_score > rrf_score > effective_score > final_score
+            # 使用显式键检查而非 or 链，避免 0.0 分数被 falsy 跳过
+            val = None
+            for key in ("rerank_score", "rrf_score", "effective_score", "final_score"):
+                if key in item and item[key] is not None:
+                    val = item[key]
+                    if score_source is None:
+                        score_source = key
+                    break
             try:
-                scores.append(float(score))
+                scores.append(float(val) if val is not None else 0.0)
             except (TypeError, ValueError):
                 scores.append(0.0)
-        
+
         avg_score = sum(scores) / len(scores) if scores else 0.0
-        
-        # 归一化（rrf_score 通常在 0.01-0.03 范围，需要放大）
-        # rerank_score 通常在 0-1 范围，不需要放大
-        # 简单策略：如果分数 < 0.1，认为是 rrf_score，乘以 30 放大
-        normalized = avg_score
-        if avg_score < 0.1 and avg_score > 0:
+
+        # 归一化：rrf_score 通常在 0.01-0.03 范围，需要放大；其他分数已在 0-1 范围
+        # 根据分数来源（键名）决定是否放大，而非根据分数大小推断
+        if score_source == "rrf_score" and avg_score > 0:
             normalized = min(1.0, avg_score * 30)
+        else:
+            normalized = avg_score
         
         if normalized >= self.HIGH_THRESHOLD:
             self._stats["high_confidence"] += 1

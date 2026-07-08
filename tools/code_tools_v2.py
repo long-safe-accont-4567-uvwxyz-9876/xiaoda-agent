@@ -313,26 +313,28 @@ def calculator(expression: str) -> ToolResult:
     """计算数学表达式，仅允许常用数学函数和常量。"""
     try:
         # 安全加固：禁止访问危险属性和绕过手法
+        # 使用正则 \b 单词边界匹配，避免子串误报（如 'type' 误匹配 'prototype'）
+        import re as _re
         dangerous_patterns = [
-            '__',           # 禁止所有双下划线属性（涵盖 __globals__, __builtins__, __class__ 等）
-            'import',       # 禁止 import
-            'exec',         # 禁止 exec
-            'eval',         # 禁止嵌套 eval
-            'compile',      # 禁止 compile
-            'open',         # 禁止 open
-            'getattr',      # 禁止 getattr 绕过
-            'setattr',      # 禁止 setattr
-            'delattr',      # 禁止 delattr
-            'type',         # 禁止 type 元编程
-            'vars',         # 禁止 vars
-            'dir',          # 禁止 dir
-            'globals',      # 禁止 globals
-            'locals',       # 禁止 locals
-            'input',        # 禁止 input
+            (r'__', '双下划线属性'),           # 禁止所有双下划线属性
+            (r'\bimport\b', 'import'),         # 禁止 import
+            (r'\bexec\b', 'exec'),             # 禁止 exec
+            (r'\beval\b', 'eval'),             # 禁止嵌套 eval
+            (r'\bcompile\b', 'compile'),       # 禁止 compile
+            (r'\bopen\b', 'open'),             # 禁止 open
+            (r'\bgetattr\b', 'getattr'),       # 禁止 getattr 绕过
+            (r'\bsetattr\b', 'setattr'),       # 禁止 setattr
+            (r'\bdelattr\b', 'delattr'),       # 禁止 delattr
+            (r'\btype\b', 'type'),             # 禁止 type 元编程
+            (r'\bvars\b', 'vars'),             # 禁止 vars
+            (r'\bdir\b', 'dir'),               # 禁止 dir
+            (r'\bglobals\b', 'globals'),       # 禁止 globals
+            (r'\blocals\b', 'locals'),         # 禁止 locals
+            (r'\binput\b', 'input'),           # 禁止 input
         ]
-        for pattern in dangerous_patterns:
-            if pattern in expression:
-                return ToolResult.fail(f"表达式包含不允许的内容: {pattern}")
+        for pattern, name in dangerous_patterns:
+            if _re.search(pattern, expression):
+                return ToolResult.fail(f"表达式包含不允许的内容: {name}")
 
         _BLOCKED_CALLS = frozenset({
             '__import__', 'exec', 'eval', 'compile', 'open',

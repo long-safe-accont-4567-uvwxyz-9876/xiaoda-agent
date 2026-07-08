@@ -59,7 +59,10 @@ class QueryTransformer:
                 )
                 response.raise_for_status()
                 data = response.json()
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                choices = data.get("choices", [])
+                if not choices:
+                    return None
+                content = choices[0].get("message", {}).get("content", "")
                 return content.strip() if content else None
         except Exception as e:
             logger.warning("query_transform.free_model_failed", model=self._model, error=str(e))
