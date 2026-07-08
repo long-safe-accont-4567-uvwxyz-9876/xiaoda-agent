@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, onMounted, computed, inject } from 'vue'
+import { ref, nextTick, watch, onMounted, onBeforeUnmount, computed, inject } from 'vue'
 import type { Ref } from 'vue'
 import { NDrawer, NDrawerContent, NButton, NPopconfirm, useMessage } from 'naive-ui'
 import { useChatStore } from '../stores/chat'
@@ -40,6 +40,11 @@ onMounted(async () => {
     const raw = await api.getCommands()
     commands.value = raw.map(c => ({ ...c, name: c.name.replace(/^\/+/, '') }))
   } catch { /* 忽略 */ }
+})
+
+onBeforeUnmount(() => {
+  if (audioEl) { audioEl.pause(); audioEl.onended = null; audioEl.src = ''; audioEl = null }
+  playingUrl.value = ''
 })
 
 watch(() => chat.messages.length, async () => {

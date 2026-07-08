@@ -241,9 +241,9 @@ onUnmounted(() => {
   if (resizeTimer) clearTimeout(resizeTimer)
   if (xpLevelUpTimer) clearTimeout(xpLevelUpTimer)
   if (knowledgeTabTimer) clearTimeout(knowledgeTabTimer)
-  knowledgeChart?.dispose()
-  emotionChart?.dispose()
-  pieChart?.dispose()
+  knowledgeChart?.dispose(); knowledgeChart = null
+  emotionChart?.dispose(); emotionChart = null
+  pieChart?.dispose(); pieChart = null
 })
 
 let resizeTimer: ReturnType<typeof setTimeout> | null = null
@@ -253,6 +253,8 @@ function handleResize() {
   if (resizeTimer) clearTimeout(resizeTimer)
   resizeTimer = setTimeout(() => {
     knowledgeChart?.resize()
+    emotionChart?.resize()
+    pieChart?.resize()
   }, 200)
 }
 

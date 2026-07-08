@@ -64,7 +64,15 @@ export const useChatStore = defineStore('chat', () => {
     }
   })
   ws.on('ws_connected', () => { wsConnected.value = true })
-  ws.on('ws_disconnected', () => { wsConnected.value = false })
+  ws.on('ws_disconnected', () => {
+    wsConnected.value = false
+    if (isProcessing.value) {
+      isProcessing.value = false
+      currentStage.value = ''
+      statusText.value = ''
+      pendingMsgId.value = ''
+    }
+  })
 
   ws.on('status', (e: WsEvent) => {
     currentStage.value = e.stage as string
