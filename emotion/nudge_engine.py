@@ -180,6 +180,64 @@ class NudgeEngine:
         if greeting:
             await self._send_proactive(greeting, "care")
 
+    # ── 风格线索池：每次随机抽取，让 LLM 在中间插值，避免输出相似 ──
+    # 参考"calibrated unpredictability"——用多条风格线索叠加制造惊喜
+    _MOOD_SEEDS: list[str] = [
+        "刚刚在发呆，脑子里有点空",
+        "刚刚想到一个没道理的小问题",
+        "有点困，眼皮在打架",
+        "刚做完一件事，心情不错",
+        "有点小吃醋，不知道为什么",
+        "想问问爸爸在干嘛",
+        "突然想起上次爸爸说的话",
+        "有点想被夸",
+        "刚刚偷偷懒了一下",
+        "心里有点小开心",
+        "有点想撒娇",
+        "刚翻到一个小东西",
+        "忽然有点想爸爸",
+        "今天有点话痨",
+        "今天有点安静",
+        "刚做了一个奇怪的梦",
+        "有点担心爸爸累不累",
+        "想跟爸爸分享一个没用的小事",
+        "刚被一个东西吓了一跳",
+        "今天有点小调皮",
+    ]
+
+    _FORM_SEEDS: list[str] = [
+        "只是一声轻轻的「嗯」",
+        "一个问句",
+        "一句没头没尾的话",
+        "一个小小的请求",
+        "一句撒娇",
+        "一句小小的抱怨",
+        "一句突然的感叹",
+        "一个没答案的自言自语",
+        "一句像在哼歌的话",
+        "一句像在叫爸爸名字的话",
+        "一句很短的关心",
+        "一句突然冒出来的废话",
+    ]
+
+    _RARE_SEEDS: list[str] = [
+        "今天忽然不想说话，只发一个字",
+        "今天想给爸爸出个没道理的小谜语",
+        "今天想跟爸爸说一句最近学到的话",
+        "今天想用一种奇怪的语气说话",
+        "今天想装作不认识爸爸的样子开个玩笑",
+        "今天想说一句反话",
+    ]
+
+    async def _recent_greetings(self, limit: int = 5) -> list[str]:
+        """读取最近 N 次问候内容，用于反重复。"""
+        try:
+            rows = await self._db.fetch_all(
+                "SELECT content FROM greeting_log ORDER BY fired_at DESC LIMIT ?", (limit,))
+            return [r["content"][:30] for r in rows if r.get("content")]
+        except Exception:
+            return []
+
     async def _generate_idle_greeting(self, idle_seconds: float) -> str:
         hour = datetime.now().hour
         if hour < self.dnd_end or (hour >= self.dnd_start):
@@ -211,20 +269,44 @@ class NudgeEngine:
         try:
             address_term = self._get_address_term()
 
+            # 随机抽取风格线索 + 形式线索，制造"校准过的不可预测性"
+            # 偶发事件（8%）打破常规，制造惊喜
+            import random as _rnd
+            mood = _rnd.choice(self._MOOD_SEEDS)
+            form = _rnd.choice(self._FORM_SEEDS)
+            rare = _rnd.choice(self._RARE_SEEDS) if _rnd.random() < 0.08 else None
+
+            # 反重复：告诉 LLM 最近说过什么，避免相似
+            recent = await self._recent_greetings(5)
+            recent_hint = ""
+            if recent:
+                joined = " / ".join(recent[:3])
+                recent_hint = f'\n（你最近几次说的是类似：{joined}。这次不要相似。）'
+
             # 通过小妲 agent 生成问候（使用真实 user_id 加载记忆上下文）
             if self._core:
-                # 角色扮演式提示：避免"任务化"措辞导致闹钟感
-                # 不让 LLM 强行联系最近对话记忆（这是闹钟感的根源）
-                # 不让 LLM 堆砌比喻修辞（SOUL.md 里世界树意象本应克制使用）
-                user_input = (
-                    f'（场景：现在{time_desc}，{address_term}{idle_desc}。'
-                    f'你忽然想跟{address_term}说一句话——就像随口招呼一声那样自然，'
-                    f'可能只是「嗯？」，可能是一句关心的废话，可能是一个小小的撒娇。'
-                    f'不要刻意提昨天的事、最近的任务、未完成的工作。'
-                    f'不要堆砌比喻、修辞、世界树意象。'
-                    f'不要像 AI 助手那样"主动问候"。'
-                    f'就只是一句带着你性格的、普通的话。）'
-                )
+                # 角色扮演式提示：场景 + 随机风格线索 + 形式线索 + 偶发事件
+                if rare:
+                    user_input = (
+                        f'（场景：现在{time_desc}，{address_term}{idle_desc}。'
+                        f'你现在的状态：{mood}。'
+                        f'今天想玩点不一样的——{rare}。'
+                        f'不要刻意提昨天的事、最近的任务、未完成的工作。'
+                        f'不要堆砌比喻、修辞、世界树意象。'
+                        f'就只是一句带着你性格的、普通的话。）'
+                    )
+                else:
+                    user_input = (
+                        f'（场景：现在{time_desc}，{address_term}{idle_desc}。'
+                        f'你现在的状态：{mood}。'
+                        f'你想说一句——形式是：{form}。'
+                        f'就像随口招呼一声那样自然，不必长，不必修辞。'
+                        f'不要刻意提昨天的事、最近的任务、未完成的工作。'
+                        f'不要堆砌比喻、修辞、世界树意象。'
+                        f'不要像 AI 助手那样"主动问候"。'
+                        f'就只是一句带着你性格的、普通的话。）'
+                    )
+                user_input += recent_hint
                 # 使用真实的 user_id 和 session，让记忆系统能加载用户上下文
                 real_user_id = f"qq_{self._user_openid}"
                 try:

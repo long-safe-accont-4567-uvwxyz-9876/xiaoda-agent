@@ -211,6 +211,67 @@ class GreetingScheduler:
         logger.info("greeting.fired reason={} report={} text={}", reason, report, text[:40])
         return text, report
 
+    # ── 风格线索池：每次随机抽取 1-2 条，让 LLM 在中间插值，避免输出相似 ──
+    # 设计理念：参考"calibrated unpredictability"——不靠规则堆砌，
+    # 而是用多条"风格线索"叠加，模型会在中间自动插值产生惊喜
+    _MOOD_SEEDS: list[str] = [
+        "刚刚在发呆，脑子里有点空",
+        "刚刚想到一个没道理的小问题",
+        "有点困，眼皮在打架",
+        "刚做完一件事，心情不错",
+        "有点小吃醋，不知道为什么",
+        "想问问爸爸在干嘛",
+        "突然想起上次爸爸说的话",
+        "有点想被夸",
+        "刚刚偷偷懒了一下",
+        "心里有点小开心",
+        "有点想撒娇",
+        "刚翻到一个小东西",
+        "忽然有点想爸爸",
+        "今天有点话痨",
+        "今天有点安静",
+        "刚做了一个奇怪的梦",
+        "有点担心爸爸累不累",
+        "想跟爸爸分享一个没用的小事",
+        "刚被一个东西吓了一跳",
+        "今天有点小调皮",
+    ]
+
+    # 形式线索池：随机选一种形式，打破"问候语"的固定模式
+    _FORM_SEEDS: list[str] = [
+        "只是一声轻轻的「嗯」",
+        "一个问句",
+        "一句没头没尾的话",
+        "一个小小的请求",
+        "一句撒娇",
+        "一句小小的抱怨",
+        "一句突然的感叹",
+        "一个没答案的自言自语",
+        "一句像在哼歌的话",
+        "一句像在叫爸爸名字的话",
+        "一句很短的关心",
+        "一句突然冒出来的废话",
+    ]
+
+    # 偶发事件池（低概率 8%）：偶尔来点意想不到的，制造"眼前一亮"
+    _RARE_SEEDS: list[str] = [
+        "今天忽然不想说话，只发一个字",
+        "今天想给爸爸出个没道理的小谜语",
+        "今天想跟爸爸说一句最近学到的话",
+        "今天想用一种奇怪的语气说话",
+        "今天想装作不认识爸爸的样子开个玩笑",
+        "今天想说一句反话",
+    ]
+
+    async def _recent_greetings(self, limit: int = 5) -> list[str]:
+        """读取最近 N 次问候内容，用于反重复。"""
+        try:
+            rows = await self.core.db.fetch_all(
+                "SELECT content FROM greeting_log ORDER BY fired_at DESC LIMIT ?", (limit,))
+            return [r["content"][:30] for r in rows if r.get("content")]
+        except Exception:
+            return []
+
     async def _generate(self, hint: str) -> str:
         """通过小妲 agent 生成问候（使用真实 user_id 以加载记忆上下文）。"""
         address_term = getattr(self.core.context, "current_address_term", "") or "爸爸"
@@ -233,18 +294,42 @@ class GreetingScheduler:
         else:
             time_hint, activity = "深夜", "准备睡了"
 
-        # 角色扮演式提示：避免"任务化"措辞导致闹钟感
-        # 不让 LLM 强行联系最近对话记忆（这是闹钟感的根源）
-        # 不让 LLM 堆砌比喻修辞（SOUL.md 里世界树意象本应克制使用）
-        user_input = (
-            f'（场景：现在{time_hint}，{address_term}大概{activity}了。'
-            f'你忽然想跟{address_term}说一句话——就像随口招呼一声那样自然，'
-            f'可能只是「嗯？」，可能是一句关心的废话，可能是一个小小的撒娇。'
-            f'不要刻意提昨天的事、最近的任务、未完成的工作。'
-            f'不要堆砌比喻、修辞、世界树意象。'
-            f'不要像 AI 助手那样"主动问候"。'
-            f'就只是一句带着你性格的、普通的话。）'
-        )
+        # 随机抽取风格线索 + 形式线索，制造"校准过的不可预测性"
+        # 偶发事件（8%）打破常规，制造惊喜
+        import random as _rnd
+        mood = _rnd.choice(self._MOOD_SEEDS)
+        form = _rnd.choice(self._FORM_SEEDS)
+        rare = _rnd.choice(self._RARE_SEEDS) if _rnd.random() < 0.08 else None
+
+        # 反重复：告诉 LLM 最近说过什么，避免相似
+        recent = await self._recent_greetings(5)
+        recent_hint = ""
+        if recent:
+            joined = " / ".join(recent[:3])
+            recent_hint = f'\n（你最近几次说的是类似：{joined}。这次不要相似。）'
+
+        # 角色扮演式提示：场景 + 随机风格线索 + 形式线索 + 偶发事件
+        if rare:
+            scene = (
+                f'（场景：现在{time_hint}，{address_term}大概{activity}了。'
+                f'你现在的状态：{mood}。'
+                f'今天想玩点不一样的——{rare}。'
+                f'不要刻意提昨天的事、最近的任务、未完成的工作。'
+                f'不要堆砌比喻、修辞、世界树意象。'
+                f'就只是一句带着你性格的、普通的话。）'
+            )
+        else:
+            scene = (
+                f'（场景：现在{time_hint}，{address_term}大概{activity}了。'
+                f'你现在的状态：{mood}。'
+                f'你想说一句——形式是：{form}。'
+                f'就像随口招呼一声那样自然，不必长，不必修辞。'
+                f'不要刻意提昨天的事、最近的任务、未完成的工作。'
+                f'不要堆砌比喻、修辞、世界树意象。'
+                f'不要像 AI 助手那样"主动问候"。'
+                f'就只是一句带着你性格的、普通的话。）'
+            )
+        user_input = scene + recent_hint
         if hint:
             user_input += f'\n（如果顺嘴能带一句关于「{hint}」的就带，想不到就不带。）'
 
