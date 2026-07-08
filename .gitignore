@@ -30,7 +30,9 @@ web/dist/
 botpy.log.*
 docs/juejin-article.md
 market/.cache
-assets/stickers/xiaoda_backup/
+assets/stickers/
+assets/voice_refs/
+web/frontend/public/assets/wallpapers/
 
 # 调试脚本（不提交到生产）
 .dbg/
