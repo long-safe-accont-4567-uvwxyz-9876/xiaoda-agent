@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, ClassVar
 import asyncio
 import ipaddress
 import os
@@ -82,20 +82,20 @@ class FileReceiver:
     """文件接收器，支持安全下载、分类存储和文本预览。"""
     MAX_FILE_SIZE = 20 * 1024 * 1024
 
-    TYPE_MAP = {
+    TYPE_MAP: ClassVar[dict[str, list[str]]] = {
         "images": [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"],
         "documents": [".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"],
         "other": [".txt", ".md", ".csv", ".json", ".log", ".zip", ".rar"],
     }
 
-    TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".log", ".py", ".js", ".html", ".css", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".sh", ".bat"}
+    TEXT_EXTENSIONS: ClassVar[set[str]] = {".txt", ".md", ".csv", ".json", ".log", ".py", ".js", ".html", ".css", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".sh", ".bat"}
 
-    ALLOWED_DOMAINS = {
+    ALLOWED_DOMAINS: ClassVar[set[str]] = {
         "qq.com", "qq.com.cn", "qpic.cn", "myqcloud.com",
         "gtimg.cn", "qlogo.cn",
     }
 
-    PRIVATE_NETWORKS = [
+    PRIVATE_NETWORKS: ClassVar[list[ipaddress.IPv4Network]] = [
         ipaddress.ip_network("127.0.0.0/8"),
         ipaddress.ip_network("10.0.0.0/8"),
         ipaddress.ip_network("172.16.0.0/12"),
@@ -104,7 +104,7 @@ class FileReceiver:
         ipaddress.ip_network("0.0.0.0/8"),
     ]
 
-    PRIVATE_NETWORKS_V6 = [
+    PRIVATE_NETWORKS_V6: ClassVar[list[ipaddress.IPv6Network]] = [
         ipaddress.ip_network("::1/128"),
         ipaddress.ip_network("fc00::/7"),
         ipaddress.ip_network("fe80::/10"),

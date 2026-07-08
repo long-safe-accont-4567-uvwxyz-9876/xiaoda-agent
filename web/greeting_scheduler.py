@@ -137,10 +137,10 @@ class GreetingScheduler:
                     await self.core.db.execute(
                         "UPDATE greeting_schedules SET next_fire_times=?, drawn_date=? WHERE id=?",
                         (json.dumps(times), today, sid))
-                    row = dict(row)
-                    row["next_fire_times"] = json.dumps(times)
+                    row_d = dict(row)
+                    row_d["next_fire_times"] = json.dumps(times)
                 try:
-                    fire_times = json.loads(row["next_fire_times"] or "[]")
+                    fire_times = json.loads(row_d.get("next_fire_times", row["next_fire_times"]) or "[]")
                 except Exception:
                     fire_times = []
                 for t in fire_times:

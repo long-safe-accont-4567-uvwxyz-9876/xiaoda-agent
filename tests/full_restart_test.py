@@ -690,7 +690,7 @@ async def phase7_concurrent_edge():
             ["grep", "-rn", "get_event_loop()", "--include=*.py",
              str(PROJECT_ROOT) + "/"],
             capture_output=True, text=True, timeout=10
-        )
+, check=False)
         lines = [l for l in result.stdout.strip().split('\n') if l
                  and 'test' not in l and '__pycache__' not in l and '.venv' not in l]
         if lines:

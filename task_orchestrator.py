@@ -479,13 +479,13 @@ class RouterNode:
         targets = []
         seen = set()
         for part in raw_result.replace("，", ",").split(","):
-            part = part.strip()
-            if not part:
+            p = part.strip()
+            if not p:
                 continue
-            matched = name_map.get(part)
+            matched = name_map.get(p)
             if not matched:
                 for key, val in name_map.items():
-                    if key and key in part and val not in seen:
+                    if key and key in p and val not in seen:
                         matched = val
                         break
             if matched and matched not in seen:

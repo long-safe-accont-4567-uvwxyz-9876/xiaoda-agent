@@ -187,7 +187,7 @@ class TestCallback:
         """级别变化时回调被触发, 携带新旧级别与原因"""
         strat = DegradationStrategy()
         events: list[LevelChangeEvent] = []
-        strat.on_level_change(lambda ev: events.append(ev))
+        strat.on_level_change(events.append)
 
         strat.trigger(DegradationLevel.L1_DEGRADED, reason="延迟告警")
         assert len(events) == 1
@@ -209,7 +209,7 @@ class TestCallback:
             raise RuntimeError("boom")
 
         strat.on_level_change(bad_cb)
-        strat.on_level_change(lambda ev: received.append(ev))
+        strat.on_level_change(received.append)
 
         # 不应抛出
         strat.trigger(DegradationLevel.L1_DEGRADED, reason="test")

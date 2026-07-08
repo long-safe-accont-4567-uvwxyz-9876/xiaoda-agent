@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 import asyncio
 import re
 import time
@@ -154,7 +154,7 @@ def _normalize_score(score, default=0.0):
 class RuleBasedMemoryExtractor:
     """基于正则的即时记忆提取器"""
 
-    _PATTERNS: list[tuple[str, re.Pattern, float, float]] = [
+    _PATTERNS: ClassVar[list[tuple[str, re.Pattern, float, float]]] = [
         ("memory_request", re.compile(r'请?记住|记一下|帮我记|remember|别忘了|要记得', re.I), 0.95, 0.8),
         ("preference", re.compile(r'我更?喜欢|偏好|倾向|希望|不喜欢|讨厌|以后请?默认?|prefer|我习惯', re.I), 0.78, 0.7),
         ("decision", re.compile(r'决定|确定|确认|采用|选用|改成|规划|方案|we decided|就选', re.I), 0.78, 0.7),
@@ -1652,10 +1652,10 @@ class MemoryManager:
                 ents = (c.get("entities") or "").strip()
                 if ents:
                     for e in ents.split("|"):
-                        e = e.strip()
-                        if e and e not in seen and len(e) >= 2:
-                            seen.add(e)
-                            tags_set.append(e)
+                        ent = e.strip()
+                        if ent and ent not in seen and len(ent) >= 2:
+                            seen.add(ent)
+                            tags_set.append(ent)
                         if len(tags_set) >= 5:
                             break
                 if len(tags_set) >= 5:

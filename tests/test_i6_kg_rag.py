@@ -234,7 +234,6 @@ async def test_get_query_entities_failure_returns_empty():
 # ===== RAG 优化测试 =====
 
 import pytest
-import asyncio
 
 
 class TestQueryCache:

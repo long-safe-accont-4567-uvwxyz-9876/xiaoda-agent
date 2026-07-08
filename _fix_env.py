@@ -8,7 +8,7 @@ for key in list(os.environ.keys()):
         del os.environ[key]
 
 cmd = sys.argv[1:] if len(sys.argv) > 1 else ["git", "status"]
-result = subprocess.run(cmd, capture_output=True, text=True, cwd=r"f:\naxida\xiaoda-agent")
+result = subprocess.run(cmd, capture_output=True, text=True, cwd=r"f:\naxida\xiaoda-agent", check=False)
 print(result.stdout)
 if result.stderr:
     print(result.stderr, file=sys.stderr)

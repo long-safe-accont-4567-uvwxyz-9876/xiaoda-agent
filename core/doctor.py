@@ -352,19 +352,19 @@ def _register_self_heal_checks(doc: DoctorCheck) -> None:
             subprocess.run(
                 ["powershell", "-NoProfile", "-Command",
                  "Get-NetTCPConnection -LocalPort {} -ErrorAction SilentlyContinue | ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}".format(port)],
-                timeout=10, capture_output=True,
+                timeout=10, capture_output=True, check=False,
             )
         elif platform == "docker":
             logger.warning("doctor.port_conflict_docker", port=port, hint="Change WEBUI_PORT env var")
         else:
             result = subprocess.run(
                 ["lsof", "-ti:{}".format(port)],
-                timeout=10, capture_output=True,
+                timeout=10, capture_output=True, check=False,
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             )
             pids = result.stdout.decode().strip().split()
             if pids:
-                subprocess.run(["kill", "-9"] + pids, timeout=5, capture_output=True)
+                subprocess.run(["kill", "-9"] + pids, timeout=5, capture_output=True, check=False)
         time.sleep(1)
 
     doc.add_check("Port Conflict", "L8-SelfHeal", _check_port_conflict, _fix_port_conflict)

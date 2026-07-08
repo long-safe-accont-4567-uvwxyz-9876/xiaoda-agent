@@ -50,7 +50,7 @@ def test_cold_start_does_not_import_tools_submodules():
     )
     result = subprocess.run(
         [sys.executable, "-c", script],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=60, check=False,
     )
     assert result.returncode == 0, (
         f"subprocess failed:\nstdout={result.stdout}\nstderr={result.stderr}"

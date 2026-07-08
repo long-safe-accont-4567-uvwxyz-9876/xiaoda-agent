@@ -1,4 +1,5 @@
 # reranker.py — bge-reranker-v2-m3 交叉编码器重排序（SiliconFlow）
+from typing import ClassVar
 import time
 import httpx
 from loguru import logger
@@ -13,7 +14,7 @@ class Reranker:
     - 使用 /v1/rerank 端点，Jina 兼容格式
     """
 
-    SUPPORTED_MODELS = {
+    SUPPORTED_MODELS: ClassVar[dict[str, dict[str, str | int]]] = {
         "BAAI/bge-reranker-v2-m3": {
             "max_length": 8192,
             "provider": "siliconflow",

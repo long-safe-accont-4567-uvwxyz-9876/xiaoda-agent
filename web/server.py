@@ -47,10 +47,10 @@ def _register_env_providers(cfg: Any, env_values: Any, os: Any) -> None:
         "OLLAMA_BASE_URL": ("ollama", "openai", os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"), "Ollama 本地大模型"),
     }
     known_env_keys = list(_KNOWN_ENV_PROVIDERS.keys())
-    for env_key, (pid, fmt, base_url, label) in _KNOWN_ENV_PROVIDERS.items():
+    for env_key, (pid, fmt, _default_url, label) in _KNOWN_ENV_PROVIDERS.items():
         if env_key == "OLLAMA_BASE_URL":
             api_key = "ollama"
-            base_url = env_values.get(env_key, "").strip() or base_url
+            base_url = env_values.get(env_key, "").strip() or _default_url
             if not base_url:
                 continue
         else:

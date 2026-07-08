@@ -303,7 +303,7 @@ async def main():
     print("\n━━━ 17. Coze Bridge ━━━")
     import subprocess
     try:
-        r = subprocess.run(["systemctl", "--user", "is-active", "coze-bridge.service"],
+        r = subprocess.run(["systemctl", "--user", "is-active", "coze-bridge.service"], check=False,
                           capture_output=True, text=True, timeout=5)
         record("服务状态", r.stdout.strip() == "active", f"状态: {r.stdout.strip()}")
     except Exception as e:

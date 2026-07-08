@@ -51,7 +51,7 @@ def _get_gpu_names_windows() -> list[str]:
         result = subprocess.run(
             ["powershell", "-Command",
              "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=5, check=False,
         )
         return [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
     except Exception:
@@ -63,7 +63,7 @@ def _get_gpu_names_linux() -> list[str]:
     gpu_names: list[str] = []
     try:
         result = subprocess.run(
-            ["lspci"], capture_output=True, text=True, timeout=5,
+            ["lspci"], capture_output=True, text=True, timeout=5, check=False,
         )
         for line in result.stdout.split("\n"):
             if "VGA compatible controller" in line or "3D controller" in line or "Display controller" in line:
@@ -154,7 +154,7 @@ def _get_gpu_names_windows() -> list[str]:
         result = subprocess.run(
             ["powershell", "-Command",
              "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=5, check=False,
         )
         return [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
     except Exception:
@@ -166,7 +166,7 @@ def _get_gpu_names_linux() -> list[str]:
     gpu_names: list[str] = []
     try:
         result = subprocess.run(
-            ["lspci"], capture_output=True, text=True, timeout=5,
+            ["lspci"], capture_output=True, text=True, timeout=5, check=False,
         )
         for line in result.stdout.split("\n"):
             if "VGA compatible controller" in line or "3D controller" in line or "Display controller" in line:

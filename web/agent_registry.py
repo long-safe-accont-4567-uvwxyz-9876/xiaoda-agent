@@ -7,7 +7,7 @@
   因为 SubAgent._filtered_tools() 每次对话时实时计算）
 """
 from __future__ import annotations
-from typing import Any
+from typing import Any, ClassVar
 
 import json
 import sys
@@ -234,7 +234,7 @@ class AgentRegistry:
 
     # ── 内置 Agent 桩数据（降级模式下 dispatcher 未注册时使用）──
 
-    _BUILTIN_STUBS: dict[str, dict] = {
+    _BUILTIN_STUBS: ClassVar[dict[str, dict]] = {
         "xiaoli": {
             "display_name": "小莉", "display_name_en": "Xiaoli",
             "provider": "default", "model": "default",
@@ -675,7 +675,7 @@ class AgentRegistry:
 
     # 已知 provider → (api_key_env, base_url)
     # base_url 优先读环境变量覆盖，便于私有化部署
-    _KNOWN_PROVIDERS: dict[str, tuple[str, str]] = {
+    _KNOWN_PROVIDERS: ClassVar[dict[str, tuple[str, str]]] = {
         "mimo": ("MIMO_API_KEY", "https://api.xiaomimimo.com/v1"),
         "siliconflow": ("SILICONFLOW_API_KEY", "https://api.siliconflow.cn/v1"),
         "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),

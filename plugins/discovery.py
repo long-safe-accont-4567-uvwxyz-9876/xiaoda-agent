@@ -23,10 +23,10 @@ def discover_plugins(search_paths: list[str | Path] | None = None) -> list[Disco
 
     results: list[DiscoveredPlugin] = []
     for search_path in search_paths:
-        search_path = Path(search_path)
-        if not search_path.is_dir():
+        sp = Path(search_path)
+        if not sp.is_dir():
             continue
-        for child in sorted(search_path.iterdir()):
+        for child in sorted(sp.iterdir()):
             if not child.is_dir():
                 continue
             yaml_path = child / "plugin.yaml"

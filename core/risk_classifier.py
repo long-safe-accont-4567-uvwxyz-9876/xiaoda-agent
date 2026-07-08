@@ -2,6 +2,7 @@
 import re
 import logging
 from enum import IntEnum
+from typing import ClassVar
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ class RiskClassifier:
     """危险分级器 — 根据工具名和参数分类风险等级"""
 
     # L4 禁止操作模式（静态正则，不拼接用户输入）
-    FORBIDDEN_PATTERNS = [
+    FORBIDDEN_PATTERNS: ClassVar[list[re.Pattern]] = [
         re.compile(r"rm\s+-rf\s+/", re.IGNORECASE),
         re.compile(r"DROP\s+TABLE", re.IGNORECASE),
         re.compile(r"FORMAT\s+[A-Z]:", re.IGNORECASE),
@@ -29,7 +30,7 @@ class RiskClassifier:
     ]
 
     # L3 高风险操作模式
-    HIGH_RISK_PATTERNS = [
+    HIGH_RISK_PATTERNS: ClassVar[list[re.Pattern]] = [
         re.compile(r"rm\s+-r", re.IGNORECASE),
         re.compile(r"restart|reboot|shutdown", re.IGNORECASE),
         re.compile(r"DELETE\s+FROM", re.IGNORECASE),
@@ -38,13 +39,13 @@ class RiskClassifier:
     ]
 
     # L2 中风险工具名
-    MEDIUM_RISK_TOOLS = {"write_file", "edit_file", "shell_command", "python_executor", "create_file"}
+    MEDIUM_RISK_TOOLS: ClassVar[set[str]] = {"write_file", "edit_file", "shell_command", "python_executor", "create_file"}
 
     # L1 低风险工具名（create_file 已移至 MEDIUM：能覆盖已存在文件，需证据门禁）
-    LOW_RISK_TOOLS = {"mkdir", "touch"}
+    LOW_RISK_TOOLS: ClassVar[set[str]] = {"mkdir", "touch"}
 
     # L0 安全工具名
-    SAFE_TOOLS = {
+    SAFE_TOOLS: ClassVar[set[str]] = {
         "read_file", "list_dir", "search", "test", "ping", "cat", "ls", "grep",
         # 只读生成类工具：不修改任何文件，无需证据门禁
         "agnes_image_generate", "agnes_video_generate",
@@ -155,7 +156,7 @@ class OutputRiskDetector:
     """
 
     # 关键操作输出指示词
-    CRITICAL_INDICATORS = [
+    CRITICAL_INDICATORS: ClassVar[list[re.Pattern]] = [
         # 文件操作
         re.compile(r"已修改|已删除|已创建|已写入|文件已更新|已覆盖", re.IGNORECASE),
         # 安全发现
@@ -167,7 +168,7 @@ class OutputRiskDetector:
     ]
 
     # 领域→默认验证子代理映射
-    DOMAIN_VERIFIER = {
+    DOMAIN_VERIFIER: ClassVar[dict[str, str]] = {
         "security": "xiaolang",
         "code": "xiaoke",
         "general": "xiaolang",

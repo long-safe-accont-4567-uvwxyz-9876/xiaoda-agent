@@ -115,9 +115,9 @@ class XiaodaAcpServer:
         block = m.group(1)
         ids = {}
         for line in block.strip().splitlines():
-            line = line.strip()
-            if ':' in line:
-                key, _, val = line.partition(':')
+            ln = line.strip()
+            if ':' in ln:
+                key, _, val = ln.partition(':')
                 key = key.strip().lower().replace('_', '-')
                 val = val.strip()
                 if key in ('agent-id', 'session-id', 'account-id', 'group-id'):

@@ -825,16 +825,16 @@ def compute_module_complexity_map(source_dir: Path | str) -> dict[str, float]:
     }
 
     for module_name, filepath in module_files.items():
-        if not filepath.exists():
-            # 尝试不带 .tpl 后缀
-            alt = filepath.with_suffix("")
+        fp = filepath
+        if not fp.exists():
+            alt = fp.with_suffix("")
             if alt.exists():
-                filepath = alt
+                fp = alt
             else:
                 complexity_map[module_name] = 0.0
                 continue
         try:
-            text = filepath.read_text(encoding="utf-8", errors="ignore")
+            text = fp.read_text(encoding="utf-8", errors="ignore")
             spec = parse_prompt_spec(text)
             score = PromptComplexityScore(
                 n_conditional_rules=spec.n_conditional_rules,

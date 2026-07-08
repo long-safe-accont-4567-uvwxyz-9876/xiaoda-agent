@@ -156,7 +156,7 @@ async def test_dag_parallel_execution():
 
     dag.add_node("a", task_a, produces=["a_val"])
     dag.add_node("b", task_b, produces=["b_val"])
-    dag.add_node("c", lambda a_val, b_val: task_c(a_val, b_val),
+    dag.add_node("c", task_c,
                   depends_on=["a", "b"], consumes=["a_val", "b_val"])
 
     result = await dag.execute()
@@ -410,7 +410,7 @@ async def test_self_diag_run_checks():
         )
 
     diag.add_check(custom_check)
-    diag.on_report(lambda r: triggered.append(r))
+    diag.on_report(triggered.append)
     reports = await diag.run_checks()
     assert len(reports) >= 1
     assert any(r.category == "test" for r in reports)

@@ -63,9 +63,9 @@ def strip_thinking(text: str, *, context: str = "") -> str:
     if _REASONING_INDICATORS.search(text):
         sentences = re.split(r'[。！？\n]', text)
         for s in reversed(sentences):
-            s = s.strip()
-            if s and len(s) <= 50 and not _REASONING_INDICATORS.search(s):
-                return s
+            s_c = s.strip()
+            if s_c and len(s_c) <= 50 and not _REASONING_INDICATORS.search(s_c):
+                return s_c
         # 整段都是推理文本，记录并丢弃
         logger.warning("llm_cleanup.all_reasoning_discarded",
                        context=context, raw_len=len(raw),

@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+from typing import ClassVar
 import json
 import os
 import time
@@ -107,7 +108,7 @@ class PermanentMemoryManager:
     """
 
     # 关键事件类型
-    KEY_EVENTS = {
+    KEY_EVENTS: ClassVar[dict[str, str]] = {
         "first_chat": "首次对话",
         "first_deep_chat": "首次深度对话",
         "first_emotional_support": "首次情感支持",

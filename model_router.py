@@ -1,4 +1,4 @@
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, ClassVar
 import os
 import time
 import asyncio
@@ -101,7 +101,7 @@ def _ssrf_check(url: str) -> None:
 class ModelRouter:
     """模型路由器，按任务类型选择模型/Provider 并处理重试与凭证轮换。"""
 
-    TASK_TIMEOUTS = {
+    _DEFAULT_TIMEOUTS: ClassVar[dict[str, int]] = {
         "emotion_analysis": 10,
         "emotion": 10,
         "chat_flash": 60,
@@ -113,6 +113,7 @@ class ModelRouter:
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None,
                  api_key_2: str | None = None, db: Any=None) -> None:
+        self.TASK_TIMEOUTS: dict[str, int] = dict(self._DEFAULT_TIMEOUTS)
         # 从 os.getenv() 实时读取，避免使用模块级冻结变量
         _mimo_key = api_key or os.getenv("MIMO_API_KEY", "")
         _mimo_url = base_url or os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
@@ -287,7 +288,7 @@ class ModelRouter:
         return {"provider": _CFG_DEFAULT_PROVIDER, "model_id": ROUTE_TABLE.get("chat", {}).get("model", _CFG_MODEL_NAME)}
 
     # 已知自定义 provider 的默认模型映射
-    _CUSTOM_PROVIDER_DEFAULT_MODELS = {
+    _CUSTOM_PROVIDER_DEFAULT_MODELS: ClassVar[dict[str, str]] = {
         "siliconflow": "Qwen/Qwen2.5-7B-Instruct",
         "openrouter": "meta-llama/llama-3.3-8b-instruct:free",
         "modelscope": "Qwen/Qwen2.5-7B-Instruct",

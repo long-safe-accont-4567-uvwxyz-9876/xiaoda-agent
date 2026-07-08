@@ -41,10 +41,10 @@ def _extract_fts_keywords(text: str, *, min_length: int = 2) -> list[str]:
     seen = set()
     result = []
     for token in raw_tokens:
-        token = token.strip()
-        if len(token) >= min_length and token not in seen:
-            seen.add(token)
-            result.append(token)
+        tok = token.strip()
+        if len(tok) >= min_length and tok not in seen:
+            seen.add(tok)
+            result.append(tok)
     return result
 
 

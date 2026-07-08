@@ -293,7 +293,7 @@ class CLIInterface:
     def _check_qq_bot(self) -> Any:
         try:
             r = subprocess.run(["systemctl", "is-active", "qq-agent"],
-                               capture_output=True, text=True, timeout=5)
+                               capture_output=True, text=True, timeout=5, check=False)
             return r.stdout.strip() == "active"
         except Exception:
             logger.debug("cli.qq_bot_check_error", exc_info=True)
@@ -304,7 +304,7 @@ class CLIInterface:
             print(f"  {_C.LYELLOW}QQ Bot 服务未运行，正在启动...{_C.RST}")
             try:
                 subprocess.run(["sudo", "systemctl", "start", "qq-agent"],
-                               capture_output=True, timeout=30)
+                               capture_output=True, timeout=30, check=False)
                 time.sleep(2)
                 if self._check_qq_bot():
                     print(f"  {_C.LGREEN}QQ Bot 服务已启动 ✓{_C.RST}")

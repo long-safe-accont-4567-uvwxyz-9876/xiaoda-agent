@@ -16,11 +16,11 @@ except ImportError:
             return vals
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
+                ln = line.strip()
+                if not ln or ln.startswith("#"):
                     continue
-                if "=" in line:
-                    k, _, v = line.partition("=")
+                if "=" in ln:
+                    k, _, v = ln.partition("=")
                     vals[k.strip()] = v.strip().strip("'\"")
         return vals
 

@@ -51,33 +51,33 @@ for f in wf_dir:
 
 # 3. git status
 print("\n=== git status ===")
-r = subprocess.run(["git", "status", "--short"], capture_output=True, text=True, cwd=r"f:\naxida\xiaoda-agent")
+r = subprocess.run(["git", "status", "--short"], capture_output=True, text=True, cwd=r"f:\naxida\xiaoda-agent", check=False)
 print(r.stdout)
 
 # 4. git add + commit
 print("\n=== git add & commit ===")
-subprocess.run(["git", "add", "-A"], cwd=r"f:\naxida\xiaoda-agent")
-r = subprocess.run(["git", "commit", "-m", "P0: 安全响应头 + bare except日志 + 远程workflow同步"], 
+subprocess.run(["git", "add", "-A"], cwd=r"f:\naxida\xiaoda-agent", check=False)
+r = subprocess.run(["git", "commit", "-m", "P0: 安全响应头 + bare except日志 + 远程workflow同步"], check=False,
                    capture_output=True, text=True, cwd=r"f:\naxida\xiaoda-agent")
 print(r.stdout)
 print(r.stderr)
 
 # 5. git pull --rebase + push
 print("\n=== git pull --rebase ===")
-r = subprocess.run(["git", "pull", "--rebase", "origin", "main"], 
+r = subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=False,
                    capture_output=True, text=True, cwd=r"f:\naxida\xiaoda-agent")
 print(r.stdout)
 print(r.stderr)
 
 print("\n=== git push ===")
-r = subprocess.run(["git", "push", "origin", "main"], 
+r = subprocess.run(["git", "push", "origin", "main"], check=False,
                    capture_output=True, text=True, cwd=r"f:\naxida\xiaoda-agent")
 print(r.stdout)
 print(r.stderr)
 
 # 6. 生成 requirements.lock
 print("\n=== requirements.lock ===")
-r = subprocess.run(["pip", "freeze"], capture_output=True, text=True)
+r = subprocess.run(["pip", "freeze"], capture_output=True, text=True, check=False)
 lock_path = os.path.join(r"f:\naxida\xiaoda-agent", "requirements.lock")
 with open(lock_path, "w") as fh:
     fh.write(r.stdout)

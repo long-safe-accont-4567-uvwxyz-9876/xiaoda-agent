@@ -9,7 +9,7 @@ ERROR_RULE_STRICT_MODE 拒绝或仅警告。
 """
 
 from __future__ import annotations
-from typing import Any
+from typing import Any, ClassVar
 
 import json
 import os
@@ -67,7 +67,7 @@ class ErrorRulePipeline:
     """
 
     # 内存级时间窗节流：记录每个 tool_name 的上次提取时间戳（类变量，跨实例共享）
-    _last_extract_time: dict[str, float] = {}
+    _last_extract_time: ClassVar[dict[str, float]] = {}
     _EXTRACT_THROTTLE_SECONDS = 60  # 同一 tool_name 在 60 秒内只允许一次提取
     _MAX_RULES_PER_TOOL_24H = 5     # 24h 内同 tool_name 规则数上限，超过则跳过 LLM 提取
 

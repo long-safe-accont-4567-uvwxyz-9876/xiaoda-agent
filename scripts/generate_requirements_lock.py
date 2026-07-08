@@ -25,7 +25,7 @@ def generate_requirements_lock() -> bool:
     result = subprocess.run(
         [sys.executable, "-m", "pip", "freeze"],
         capture_output=True, text=True, timeout=60
-    )
+, check=False)
     if result.returncode != 0:
         print(f"  ✗ pip freeze failed: {result.stderr}")
         return False

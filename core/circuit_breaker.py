@@ -4,7 +4,7 @@
     探测成功 → GREEN（冷却时间重置为初始值）
     探测失败 → RED（冷却时间指数退避，上限 MAX_COOLDOWN）
 """
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 import time
 import threading
 from enum import Enum
@@ -56,7 +56,7 @@ class CircuitBreaker:
     """
 
     # 阈值配置
-    THRESHOLDS = {
+    THRESHOLDS: ClassVar[dict[str, float]] = {
         "consecutive_fails_yellow": 2,
         "consecutive_fails_red": 5,
         "confidence_yellow": 0.5,

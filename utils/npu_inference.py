@@ -67,12 +67,12 @@ class _QuantAffine(ctypes.Structure):
 
 class _QuantData(ctypes.Union):
     """量化数据联合体，支持定点和仿射两种格式。"""
-    _fields_ = [("dfp", _QuantDFP), ("affine", _QuantAffine)]
+    _fields_ = [("dfp", _QuantDFP), ("affine", _QuantAffine)]  # noqa: RUF012
 
 
 class vip_buffer_create_params_t(ctypes.Structure):
     """VIP 缓冲区创建参数结构体。"""
-    _fields_ = [
+    _fields_ = [  # noqa: RUF012
         ("num_of_dims", ctypes.c_uint32),
         ("sizes", ctypes.c_uint32 * 6),
         ("data_format", ctypes.c_int32),

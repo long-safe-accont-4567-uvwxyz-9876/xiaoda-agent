@@ -766,7 +766,7 @@ async def get_xp_levels(request: Request) -> Any:
         from core.xp_system import get_xp_system
         xp_sys = get_xp_system()
         levels = []
-        for lv in sorted(XPLevel, key=lambda x: int(x)):
+        for lv in sorted(XPLevel, key=int):
             config_raw = xp_sys.get_intimacy_config(lv)
             levels.append({
                 "level": int(lv),

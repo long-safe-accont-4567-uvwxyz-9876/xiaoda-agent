@@ -174,11 +174,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         # 显式参数优先, 其次环境变量, 最后默认值
         self._global_limit = float(global_limit if global_limit is not None
-                                   else os.environ.get("RATE_LIMIT_GLOBAL", 600))
+                                   else os.environ.get("RATE_LIMIT_GLOBAL", "600"))
         self._user_limit = float(user_limit if user_limit is not None
-                                 else os.environ.get("RATE_LIMIT_USER", 60))
+                                 else os.environ.get("RATE_LIMIT_USER", "60"))
         self._write_limit = float(write_limit if write_limit is not None
-                                  else os.environ.get("RATE_LIMIT_WRITE", 30))
+                                  else os.environ.get("RATE_LIMIT_WRITE", "30"))
         self._exempt_paths = set(exempt_paths) if exempt_paths else set(_DEFAULT_EXEMPT_PATHS)
         # 额外白名单 host (测试/运维可追加); 默认已含 localhost/内网 (见 _is_whitelisted)
         self._whitelist = set(whitelist) if whitelist else set()

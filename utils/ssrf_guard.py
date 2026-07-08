@@ -8,6 +8,7 @@
 
     本文件保留仅为向后兼容, 内部委托给新模块实现。
 """
+from typing import ClassVar
 import ipaddress, socket, re, urllib.parse
 import warnings
 from loguru import logger
@@ -21,7 +22,7 @@ __deprecated_reason__ = "请改用 security.ssrf_guard (5步法 + DNS Pinning)"
 class SSRFGuardV2:
     """SSRF 防护 — Pipelock 5步法"""
 
-    BLOCKED_NETWORKS = [
+    BLOCKED_NETWORKS: ClassVar[list[ipaddress.IPv4Network | ipaddress.IPv6Network]] = [
         ipaddress.ip_network("10.0.0.0/8"),
         ipaddress.ip_network("172.16.0.0/12"),
         ipaddress.ip_network("192.168.0.0/16"),
@@ -33,7 +34,7 @@ class SSRFGuardV2:
         ipaddress.ip_network("fe80::/10"),   # IPv6 link-local
     ]
 
-    ALLOWED_DOMAINS = {
+    ALLOWED_DOMAINS: ClassVar[set[str]] = {
         "api.xiaomimimo.com", "api.siliconflow.cn",
         "api.openai.com", "api.anthropic.com",
         "api.deepseek.com", "api.moonshot.cn",

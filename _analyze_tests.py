@@ -6,7 +6,7 @@ result = subprocess.run(
      "--ignore=tests/test_database_indexes.py",
      "--ignore=tests/test_e2e_functional.py"],
     capture_output=True, text=True, cwd=r"f:\naxida\xiaoda-agent"
-)
+, check=False)
 
 errors = Counter()
 failed_tests = []

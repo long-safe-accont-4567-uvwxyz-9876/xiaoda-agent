@@ -10,6 +10,7 @@ source 取值：qq_group / qq_c2c / web / cli
 
 from __future__ import annotations
 
+from typing import ClassVar
 import re
 from pathlib import Path
 from loguru import logger
@@ -33,7 +34,7 @@ class ConstraintInjector:
     """单例约束注入器，解析 markdown 分段并按预算截断。"""
 
     _instance: "ConstraintInjector | None" = None
-    _cache: dict[str, str] = {}        # section_title -> content
+    _cache: ClassVar[dict[str, str]] = {}        # section_title -> content
     _mtime: float = 0.0
     _path: Path = _DEFAULT_PATH
 
@@ -181,9 +182,9 @@ class ConstraintInjector:
                         "啊", "哦", "嗯", "呀", "吗", "哈", "嘿"}
             keywords = []
             for w in words:
-                w = w.strip()
-                if len(w) >= 2 and w not in stopwords and not w.isdigit():
-                    keywords.append(w)
+                w_s = w.strip()
+                if len(w_s) >= 2 and w_s not in stopwords and not w_s.isdigit():
+                    keywords.append(w_s)
             return keywords[:15]  # 最多 15 个关键词
         except ImportError:
             # jieba 不可用时退化为简单分词

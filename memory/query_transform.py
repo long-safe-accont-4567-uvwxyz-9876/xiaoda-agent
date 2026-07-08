@@ -1,5 +1,5 @@
 # query_transform.py — 查询改写与扩展（使用硅基流动免费模型，不占用主模型配额）
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 import os
 import asyncio
 import httpx
@@ -14,16 +14,16 @@ class QueryTransformer:
     """
 
     # 硅基流动免费模型列表（0 成本）
-    FREE_MODELS = [
+    FREE_MODELS: ClassVar[list[str]] = [
         "Qwen/Qwen2.5-7B-Instruct",
         "THUDM/glm-4-9b-chat",
         "internlm/internlm3-8b-instruct",
     ]
 
     # 意图分类关键词（规则匹配快速路径）
-    TEMPORAL_KEYWORDS = {"昨天", "前天", "今天", "上周", "上个月", "刚才", "之前", "那次", "那天", "那次对话"}
-    CHAT_KEYWORDS = {"你好", "嗨", "谢谢", "再见", "哈哈", "早安", "晚安", "在吗", "在不在"}
-    MULTIHOP_KEYWORDS = {"和", "与", "比较", "区别", "关系", "之间", "哪个好", "对比"}
+    TEMPORAL_KEYWORDS: ClassVar[set[str]] = {"昨天", "前天", "今天", "上周", "上个月", "刚才", "之前", "那次", "那天", "那次对话"}
+    CHAT_KEYWORDS: ClassVar[set[str]] = {"你好", "嗨", "谢谢", "再见", "哈哈", "早安", "晚安", "在吗", "在不在"}
+    MULTIHOP_KEYWORDS: ClassVar[set[str]] = {"和", "与", "比较", "区别", "关系", "之间", "哪个好", "对比"}
 
     def __init__(self, router: Optional[Any]=None, api_key: str = "", base_url: str = "",
                  model: str = "") -> None:

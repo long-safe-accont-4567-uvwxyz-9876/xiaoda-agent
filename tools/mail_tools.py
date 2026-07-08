@@ -257,9 +257,9 @@ def _add_repeatable(args: list[str], flag: str, values: Any) -> None:
     if isinstance(values, str):
         values = [values]
     for v in values:
-        v = str(v).strip()
-        if v:
-            args.extend([flag, v])
+        vs = str(v).strip()
+        if vs:
+            args.extend([flag, vs])
 
 
 def _add_val(args: list[str], flag: str, value: Any) -> None:

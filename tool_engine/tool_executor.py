@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 import asyncio
 import json
 import time
@@ -27,7 +27,7 @@ class ToolExecutor:
     """工具执行器，按名称调度工具并应用超时控制。"""
 
     # 按工具名自定义超时（秒），default 为全局默认
-    TOOL_TIMEOUTS: dict[str, float] = {
+    TOOL_TIMEOUTS: ClassVar[dict[str, float]] = {
         "agnes_video_generate": 240,
         "document_reader": 120,
         "web_browse": 30,           # 网页渲染较慢
@@ -41,7 +41,7 @@ class ToolExecutor:
     }
 
     # ── S3: 重试与循环检测配置 ──
-    RETRYABLE_ERRORS: set[str] = {"timeout", "connection", "temporal", "transient",
+    RETRYABLE_ERRORS: ClassVar[set[str]] = {"timeout", "connection", "temporal", "transient",
                                   "timeouterror", "connectionerror", "apierror",
                                   "ratelimit", "503", "502", "429"}
     MAX_RETRIES: int = 2
@@ -166,13 +166,13 @@ class ToolExecutor:
 
     # ── 沙箱安全检查 ─────────────────────────────────────────────
     # 需要检查 URL 的网络工具
-    _NETWORK_TOOLS = {"web_browse", "web_search", "multi_search", "web_browse_enhanced"}
+    _NETWORK_TOOLS: ClassVar[set[str]] = {"web_browse", "web_search", "multi_search", "web_browse_enhanced"}
     # 需要检查路径的文件工具
-    _FILE_TOOLS = {"read_file", "write_file", "list_files", "search_files", "document_reader"}
+    _FILE_TOOLS: ClassVar[set[str]] = {"read_file", "write_file", "list_files", "search_files", "document_reader"}
     # 需要检查命令的子进程工具
-    _SHELL_TOOLS = {"shell_command", "python_executor"}
+    _SHELL_TOOLS: ClassVar[set[str]] = {"shell_command", "python_executor"}
     # 允许的无害子进程命令前缀（即使沙箱 strict 也放行）
-    _SAFE_SHELL_PREFIXES = ("python3 -c", "python -c", "echo", "date", "whoami", "pwd", "ls", "cat")
+    _SAFE_SHELL_PREFIXES: ClassVar[tuple[str, ...]] = ("python3 -c", "python -c", "echo", "date", "whoami", "pwd", "ls", "cat")
 
     def _enforce_sandbox(self, tool_name: str, arguments: dict) -> str | None:
         """工具执行前沙箱检查。返回 None 表示放行，返回字符串为拒绝原因。"""

@@ -132,11 +132,11 @@ async def get_logs(lines: int = Query(default=200, le=1000),
                 f.seek(max(0, size - 512 * 1024))
                 content = f.read().decode("utf-8", errors="replace")
             for raw_line in content.splitlines():
-                raw_line = raw_line.strip()
-                if not raw_line:
+                rl = raw_line.strip()
+                if not rl:
                     continue
                 try:
-                    obj = _json.loads(raw_line)
+                    obj = _json.loads(rl)
                     text = obj.get("text", "").rstrip("\n")
                     if not text:
                         continue

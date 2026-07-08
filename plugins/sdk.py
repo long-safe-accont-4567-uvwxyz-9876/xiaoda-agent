@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from abc import ABC
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 
 from plugins.context import PluginContext
@@ -36,8 +36,8 @@ class Plugin(ABC):
     """插件基类"""
 
     # 类属性，由 __init_subclass__ 填充
-    __plugin_tool_declarations__: list[dict] = []
-    __plugin_sub_declarations__: list[dict] = []
+    __plugin_tool_declarations__: ClassVar[list[dict]] = []
+    __plugin_sub_declarations__: ClassVar[list[dict]] = []
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)

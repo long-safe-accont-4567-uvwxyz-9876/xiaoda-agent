@@ -1,3 +1,4 @@
+from typing import ClassVar
 import re
 import json
 import random
@@ -8,7 +9,7 @@ from .emotion_enum import Emotion, resolve_emotion, STICKER_FALLBACK, is_unified
 
 class StickerManager:
     """管理情绪关键词映射与贴纸/表情的选用。"""
-    EMOTION_MAP = {
+    EMOTION_MAP: ClassVar[dict[str, list[str]]] = {
         "happy": [
             "开心", "高兴", "嘻嘻", "哈哈", "太好了", "太棒了", "好耶", "嘿嘿",
             "耶", "棒", "厉害", "好开心", "好高兴", "真棒", "真好", "喜欢",
@@ -62,7 +63,7 @@ class StickerManager:
         ],
     }
 
-    EMOTION_EXCLUSIONS = {
+    EMOTION_EXCLUSIONS: ClassVar[dict[str, list[str]]] = {
         "happy": ["不", "没", "别", "少"],
         "sad": ["不", "别", "不用", "不要", "不会"],
         "angry": ["不", "没", "别"],

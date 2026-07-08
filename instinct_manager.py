@@ -129,13 +129,12 @@ class InstinctManager:
         now = time.time()
         rows_to_insert = []
         for line in result.strip().splitlines():
-            line = line.strip()
-            # 去掉 <think> 标签内容
-            if line.startswith(("<think>", "</think>")):
+            ln = line.strip()
+            if ln.startswith(("<tool_call>", "```")):
                 continue
-            if "|" not in line:
+            if "|" not in ln:
                 continue
-            parts = line.rsplit("|", 1)
+            parts = ln.rsplit("|", 1)
             if len(parts) != 2:
                 continue
             content = parts[0].strip().lstrip("-").strip()  # 去掉前导 "- "

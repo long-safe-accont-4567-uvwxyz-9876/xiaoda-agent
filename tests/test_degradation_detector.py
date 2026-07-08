@@ -267,7 +267,7 @@ class TestOnDegradationCallback:
         det = DegradationDetector()
         _seed_all(det)
         calls: list[DegradationReport] = []
-        det.on_degradation(lambda r: calls.append(r))
+        det.on_degradation(calls.append)
 
         det.record_quality("error_rate", 0.5)
         det.check_degradation()
@@ -281,7 +281,7 @@ class TestOnDegradationCallback:
         det = DegradationDetector()
         _seed_all(det)
         calls = []
-        det.on_degradation(lambda r: calls.append(r))
+        det.on_degradation(calls.append)
 
         det.record_quality("error_rate", 0.011)
         det.check_degradation()
@@ -293,8 +293,8 @@ class TestOnDegradationCallback:
         det = DegradationDetector()
         _seed_all(det)
         calls_a, calls_b = [], []
-        det.on_degradation(lambda r: calls_a.append(r))
-        det.on_degradation(lambda r: calls_b.append(r))
+        det.on_degradation(calls_a.append)
+        det.on_degradation(calls_b.append)
 
         det.record_performance("p99_latency", 1000.0)
         det.check_degradation()
@@ -328,7 +328,7 @@ class TestOnDegradationCallback:
         det = DegradationDetector()
         _seed_all(det)
         calls = []
-        det.on_degradation(lambda r: calls.append(r))
+        det.on_degradation(calls.append)
         det.clear_callbacks()
 
         det.record_quality("error_rate", 0.5)

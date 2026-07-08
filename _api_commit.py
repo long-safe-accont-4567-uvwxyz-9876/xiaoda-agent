@@ -101,7 +101,7 @@ if isinstance(wf_dir, list):
 # 9. 生成requirements.lock
 print("\n8. 生成requirements.lock...")
 import subprocess
-r = subprocess.run(["pip", "freeze"], capture_output=True, text=True)
+r = subprocess.run(["pip", "freeze"], capture_output=True, text=True, check=False)
 lock_path = os.path.join(ROOT, "requirements.lock")
 with open(lock_path, "w") as fh:
     fh.write(r.stdout)

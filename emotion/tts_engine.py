@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, ClassVar
 import hashlib
 import json
 import os
@@ -303,7 +303,7 @@ class TTSEngine:
     """驱动文本到语音合成的引擎。"""
     _SYNTHESIS_CACHE_MAX_SIZE = 200
 
-    _PRECOMPOSED_PHRASES = {
+    _PRECOMPOSED_PHRASES: ClassVar[dict[str, list[tuple[str, str]]]] = {
         "xiaoda": [
             ("你好呀，旅行者！", "greeting"),
             ("嗯嗯，我在听呢～", "caring"),

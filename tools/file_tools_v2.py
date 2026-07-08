@@ -286,7 +286,7 @@ def _subprocess_exec(command: str) -> ToolResult:
             shell=False,
             capture_output=True, text=True,
             timeout=30, cwd=os.path.expanduser("~")
-        )
+, check=False)
         output = result.stdout if result.stdout else result.stderr
         if output:
             output = _sanitize_output(output)

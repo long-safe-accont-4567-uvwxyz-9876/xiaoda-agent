@@ -87,12 +87,12 @@ async def _fetch_openai_compatible_models(
 
         models = []
         for item in raw_items:
-            # item 可能是字符串或 dict
             if isinstance(item, str):
                 model_id = item
-                item = {}
+                item_dict: dict = {}
             elif isinstance(item, dict):
                 model_id = item.get("id", "") or item.get("name", "") or item.get("model", "")
+                item_dict = item
             else:
                 continue
 
@@ -105,9 +105,9 @@ async def _fetch_openai_compatible_models(
                 continue
 
             # 判断免费/付费
-            free = _determine_free(provider_id, model_id, item)
+            free = _determine_free(provider_id, model_id, item_dict)
 
-            caps = get_capabilities(model_id, openrouter_data=item if provider_id == "openrouter" else None)
+            caps = get_capabilities(model_id, openrouter_data=item_dict if provider_id == "openrouter" else None)
             models.append({
                 "id": model_id,
                 "display_name": caps.display_name,

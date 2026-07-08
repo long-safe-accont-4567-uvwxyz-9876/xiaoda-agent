@@ -843,16 +843,14 @@ class AIQQBot(botpy.Client):
         tmp_path: Path | None = None
 
         with Image.open(image_path) as img:
-            # 如果是 RGBA/P 模式，转为 RGB
-            if img.mode in ("RGBA", "P"):
-                img = img.convert("RGB")
+            save_img = img.convert("RGB") if img.mode in ("RGBA", "P") else img
 
             # 逐步降低质量直到满足大小要求
             for q in range(quality, 20, -10):
                 prev_tmp = tmp_path
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
                     tmp_path = Path(f.name)
-                img.save(tmp_path, "JPEG", quality=q)
+                save_img.save(tmp_path, "JPEG", quality=q)
                 # 清理上一次的临时文件
                 if prev_tmp is not None:
                     try:
@@ -1383,7 +1381,7 @@ class AIQQBot(botpy.Client):
             def _do_convert() -> bool:
                 result = subprocess.run(
                     ['ffmpeg', '-y', '-i', str(audio_path), '-ar', '16000', '-ac', '1', '-f', 's16le', str(pcm_path)],
-                    capture_output=True, text=True, timeout=30
+                    capture_output=True, text=True, timeout=30, check=False
                 )
                 if result.returncode != 0:
                     logger.warning("qq_bot.ffmpeg_failed", stderr=result.stderr[:200])

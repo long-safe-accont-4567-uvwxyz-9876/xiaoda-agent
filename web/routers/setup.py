@@ -616,9 +616,9 @@ def _reload_env_and_cache(updates: Any, ENV_PATH: Any) -> None:
     load_dotenv(ENV_PATH, override=True)
     # 兜底：直接写入 os.environ
     for k, v in updates.items():
-        v = v.strip() if isinstance(v, str) else ""
-        if v:
-            os.environ[k] = v
+        vs = v.strip() if isinstance(v, str) else ""
+        if vs:
+            os.environ[k] = vs
     # 清除模型发现缓存
     try:
         from web.routers.model_discovery import invalidate_discovery_cache
@@ -959,11 +959,11 @@ def _build_user_md(fields: dict) -> str:
     proj_prefs = fields.get("project_preferences", "").strip()
     if proj_prefs:
         for line in proj_prefs.split("\n"):
-            line = line.strip()
-            if line:
-                if not line.startswith("-"):
-                    line = f"- {line}"
-                lines.append(line)
+            ln = line.strip()
+            if ln:
+                if not ln.startswith("-"):
+                    ln = f"- {ln}"
+                lines.append(ln)
     else:
         lines.extend([
             "- 修改代码前先理解现有结构",
@@ -982,11 +982,11 @@ def _build_user_md(fields: dict) -> str:
     history = fields.get("history_notes", "").strip()
     if history:
         for line in history.split("\n"):
-            line = line.strip()
-            if line:
-                if not line.startswith("-"):
-                    line = f"- {line}"
-                lines.append(line)
+            ln = line.strip()
+            if ln:
+                if not ln.startswith("-"):
+                    ln = f"- {ln}"
+                lines.append(ln)
     else:
         lines.append("- （暂无，使用过程中会自动积累）")
 
