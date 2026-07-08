@@ -923,7 +923,7 @@ def analyze_scene_complexity_alignment(
 
         # 加权复杂度: 优先级越高(靠近用户)的模块复杂度权重越大
         max_priority = max((p for _, p, _ in ordering_raw), default=1)
-        for module_name, priority, complexity in ordering_raw:
+        for _module_name, priority, complexity in ordering_raw:
             weight = priority / max_priority if max_priority > 0 else 0
             alignment.weighted_complexity += weight * complexity
 

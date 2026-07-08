@@ -1201,7 +1201,7 @@ async def agree_disclaimer(body: dict) -> Any:
         agreed_at = _write_disclaimer_agreement(user_md_path, agreed)
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.error("setup.agree_disclaimer.write_failed error={}", str(e))
-        raise HTTPException(status_code=500, detail=f"写入免责协议失败: {e}")
+        raise HTTPException(status_code=500, detail=f"写入免责协议失败: {e}") from None
 
     logger.info("setup.disclaimer_agreed path={} agreed={}", str(user_md_path), agreed)
     return Envelope(data={

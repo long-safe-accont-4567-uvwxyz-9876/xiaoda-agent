@@ -237,7 +237,7 @@ class SLAExporter:
     def _format_labels(labels: list[str], values: tuple) -> str:
         if not labels or not values:
             return ""
-        pairs = [f'{label}="{v}"' for label, v in zip(labels, values) if label]
+        pairs = [f'{label}="{v}"' for label, v in zip(labels, values, strict=False) if label]
         return "{" + ",".join(pairs) + "}" if pairs else ""
 
 

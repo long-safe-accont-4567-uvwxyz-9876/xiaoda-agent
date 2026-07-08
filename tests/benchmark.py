@@ -134,7 +134,7 @@ def benchmark_credential_pool():
         backoff_seconds=5.0,
     )
     start = time.perf_counter()
-    for i in range(100):
+    for _i in range(100):
         pool.report_error("test", test_error)
     elapsed = time.perf_counter() - start
 

@@ -192,7 +192,7 @@ async def test_audit_and_hash_chain(tmp_path):
     await conn.commit()
 
     # 2. 验证初始版本哈希链完整
-    for mid, s in zip(mem_ids, summaries):
+    for mid, _s in zip(mem_ids, summaries, strict=False):
         result = await gov.verify_hash_chain(mid)
         assert result["valid"], f"记忆 {mid} 哈希链断裂: {result['detail']}"
         assert result["versions"] == 1
@@ -380,7 +380,7 @@ async def test_deterministic_selector_and_regression(tmp_path):
         assert "_get_candidate_ids_by_selectors" in dir(MemoryManager)
         print("    ✓ set_governance / audit_retrieval / _extract_deterministic_selectors 方法存在")
     except Exception as e:
-        assert False, f"MemoryManager 接口不兼容: {e}"
+        raise AssertionError(f"MemoryManager 接口不兼容: {e}") from None
 
     # 4.3 VectorStore.search 签名兼容 (新增参数有默认值)
     print("  T4.3 VectorStore.search 签名兼容性:")

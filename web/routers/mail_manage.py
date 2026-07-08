@@ -127,7 +127,7 @@ async def get_mail_inbox(request: Request, limit: int = Query(10, ge=1, le=50)) 
         if brace_end > 0:
             envelope = json.loads(text[:brace_end + 1])
         else:
-            raise HTTPException(status_code=502, detail="无法解析 agently-cli 输出")
+            raise HTTPException(status_code=502, detail="无法解析 agently-cli 输出") from None
 
     data = envelope.get("data", {})
     return Envelope(data=data if isinstance(data, dict) else {"data": data})

@@ -239,7 +239,7 @@ async def restart_server(name: str, request: Request) -> Any:
     try:
         data = await start_server(request, name, record)
     except Exception as e:
-        raise HTTPException(500, f"启动失败：{str(e)[:300]}")
+        raise HTTPException(500, f"启动失败：{str(e)[:300]}") from None
     await _audit(request, "start", name)
     await _broadcast_changed()
     return Envelope(data=data)

@@ -267,7 +267,7 @@ def parse_dsml_tool_calls(text: str, allowed_tools: set | None = None) -> list[d
     import json
     results = []
     invoke_blocks = list(DSML_INVOKE_PATTERN.finditer(text))
-    for i, invoke_match in enumerate(invoke_blocks):
+    for _i, invoke_match in enumerate(invoke_blocks):
         tool_name = invoke_match.group(1)
         if allowed_tools and tool_name not in allowed_tools:
             continue

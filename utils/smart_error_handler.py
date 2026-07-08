@@ -32,11 +32,11 @@ class SmartErrorHandler:
         """记录错误到历史"""
         error_ctx = self._parse_error(error, context)
         self._recent_errors.append(error_ctx)
-        
+
         # 保持历史记录在合理范围内
         if len(self._recent_errors) > self._max_error_history:
             self._recent_errors = self._recent_errors[-self._max_error_history:]
-        
+
         logger.warning("error_handler.recorded",
                       type=error_ctx.error_type,
                       msg=error_ctx.error_message[:100])
@@ -46,12 +46,12 @@ class SmartErrorHandler:
         """解析错误信息"""
         error_str = str(error)
         error_type = type(error).__name__
-        
+
         # 提取文件路径和行号
         file_match = re.search(r'File "(.+?)", line (\d+)', error_str)
         file_path = file_match.group(1) if file_match else ""
         line_number = int(file_match.group(2)) if file_match else 0
-        
+
         # 对于 AttributeError，提取详细信息
         if error_type == "AttributeError":
             attr_match = re.search(r"'(\w+)' object has no attribute '(\w+)'", error_str)
@@ -65,7 +65,7 @@ class SmartErrorHandler:
                     context_code=context,
                     suggested_fix=self._suggest_attribute_fix(class_name, missing_attr)
                 )
-        
+
         # 对于 ImportError
         elif error_type in ("ImportError", "ModuleNotFoundError"):
             module_match = re.search(r"No module named '(\w+)'", error_str)
@@ -76,7 +76,7 @@ class SmartErrorHandler:
                     error_message=error_str,
                     suggested_fix=f"请安装缺少的模块: pip install {module_name}"
                 )
-        
+
         return ErrorContext(
             error_type=error_type,
             error_message=error_str,
@@ -87,7 +87,7 @@ class SmartErrorHandler:
 
     def _suggest_attribute_fix(self, class_name: str, missing_attr: str) -> str:
         """为 AttributeError 生成修复建议"""
-        
+
         # 常见的 DatabaseManager 属性映射
         db_manager_attrs = {
             "learning": "LearningDB",
@@ -96,66 +96,66 @@ class SmartErrorHandler:
             "knowledge": "KnowledgeDB",
             "analytics": "AnalyticsDB"
         }
-        
+
         if class_name == "DatabaseManager":
             for attr in db_manager_attrs:
                 if missing_attr in dir(__import__(f'db.db_{attr}', fromlist=[attr])):
                     return f"应该通过 self._db.{attr}.{missing_attr}() 调用，而不是 self._db.{missing_attr}()"
-        
+
         return f"检查 {class_name} 类是否定义了 {missing_attr} 方法或属性"
 
-    async def handle_error_with_intelligence(self, error: Exception, 
+    async def handle_error_with_intelligence(self, error: Exception,
                                             user_query: str = "",
                                             context: str = "") -> str:
         """智能处理错误，返回友好的错误信息和修复建议"""
-        
+
         error_ctx = self.record_error(error, context)
-        
+
         # 生成用户友好的错误回复
         reply_parts = [
             f"⚠️ 执行时遇到了点小问题：{error_ctx.error_type}",
             f"📝 错误详情：{error_ctx.error_message[:200]}"
         ]
-        
+
         if error_ctx.suggested_fix:
             reply_parts.append(f"\n💡 修复建议：{error_ctx.suggested_fix}")
-            
+
             # 尝试自动修复简单错误
             if error_ctx.error_type == "AttributeError" and "DatabaseManager" in error_ctx.error_message:
                 auto_fix_result = await self._attempt_auto_fix(error_ctx)
                 if auto_fix_result:
                     reply_parts.append(f"\n✅ 自动修复结果：{auto_fix_result}")
-        
+
         # 如果有最近的错误历史，且用户在询问解决方案
         if self._is_asking_for_solution(user_query):
             reply_parts.append("\n\n🔧 要不要让人家尝试自动修复这个问题？")
-        
+
         # 记录到学习系统
         if self._db:
             try:
                 await self._learn_from_error(error_ctx)
             except Exception as e:
                 logger.warning("error_handler.learn_failed", error=str(e))
-        
+
         return "\n".join(reply_parts)
 
     def _is_asking_for_solution(self, query: str) -> bool:
         """判断用户是否在询问解决方案"""
         if not query or not self._recent_errors:
             return False
-            
+
         solution_keywords = ["怎么办", "怎么修", "如何解决", "修复", "fix", "help"]
         return any(kw in query.lower() for kw in solution_keywords)
 
     async def _attempt_auto_fix(self, error_ctx: ErrorContext) -> str | None:
         """尝试自动修复简单的错误"""
-        
+
         if error_ctx.error_type != "AttributeError":
             return None
-            
+
         if "DatabaseManager" not in error_ctx.error_message:
             return None
-            
+
         # 这里可以集成实际的代码修复逻辑
         # 目前返回建议信息
         return (
@@ -171,9 +171,9 @@ class SmartErrorHandler:
         """将错误记录到学习系统，避免重复犯错"""
         if not hasattr(self._db, 'learning'):
             return
-            
+
         pattern_key = f"{error_ctx.error_type}:{error_ctx.error_message[:50]}"
-        
+
         await self._db.learning.insert_learning(
             category="error_pattern",
             priority="high",
@@ -188,7 +188,7 @@ class SmartErrorHandler:
             source="error_handler",
             suggested_action=error_ctx.suggested_fix
         )
-        
+
         logger.info("error_handler.learned", pattern=pattern_key)
 
     async def search_similar_errors(self, error: str, top_k: int = 3) -> list:
@@ -292,17 +292,17 @@ class SmartErrorHandler:
 
         return None
 
-    async def get_repair_suggestion_from_agent(self, agent_name: str, 
+    async def get_repair_suggestion_from_agent(self, agent_name: str,
                                              error_ctx: ErrorContext) -> str | None:
         """从专业子代理获取修复建议"""
-        
+
         if not self._dispatcher:
             return None
-            
+
         specialist = self._dispatcher.get_agent(agent_name)
         if not specialist or not specialist.available:
             return None
-            
+
         prompt = f"""请分析以下错误并提供修复建议：
 
 错误类型: {error_ctx.error_type}
@@ -318,7 +318,7 @@ class SmartErrorHandler:
         try:
             return await specialist.chat(prompt)
         except Exception as e:
-            logger.warning("error_handler.agent_consult_failed", 
+            logger.warning("error_handler.agent_consult_failed",
                           agent=agent_name, error=str(e))
             return None
 
@@ -326,7 +326,7 @@ class SmartErrorHandler:
         """获取最近错误的摘要，用于上下文理解"""
         if not self._recent_errors:
             return ""
-            
+
         latest = self._recent_errors[-1]
         return (
             f"[最近的错误]\n"
@@ -343,7 +343,7 @@ _error_handler_instance: SmartErrorHandler | None = None
 def get_error_handler(db: Any | None=None, dispatcher: Any | None=None) -> SmartErrorHandler:
     """获取全局错误处理器实例"""
     global _error_handler_instance
-    
+
     if _error_handler_instance is None:
         _error_handler_instance = SmartErrorHandler(db, dispatcher)
     else:
@@ -351,5 +351,5 @@ def get_error_handler(db: Any | None=None, dispatcher: Any | None=None) -> Smart
             _error_handler_instance._db = db
         if dispatcher:
             _error_handler_instance._dispatcher = dispatcher
-            
+
     return _error_handler_instance

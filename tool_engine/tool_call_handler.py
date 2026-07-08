@@ -375,7 +375,7 @@ class ToolCallHandler:
                                   tool_calls: list, trace: Any,
                                   user_openid: str = "", session_id: str = "") -> str:
         parts = []
-        for tc, result in zip(tool_calls, tool_results):
+        for tc, result in zip(tool_calls, tool_results, strict=False):
             if result.success and result.data:
                 data_str = json.dumps(result.data, ensure_ascii=False) if not isinstance(result.data, str) else result.data
                 # S7: 工具结果标记为 EXTERNAL 级别并清理注入内容 (防 prompt injection)

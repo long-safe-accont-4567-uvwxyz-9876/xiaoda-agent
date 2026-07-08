@@ -171,7 +171,7 @@ async def get_workflow(wf_id: str) -> Any:
     try:
         wf = json.loads(fp.read_text(encoding="utf-8"))
     except Exception as e:
-        raise HTTPException(500, f"工作流文件读取失败: {e}")
+        raise HTTPException(500, f"工作流文件读取失败: {e}") from None
     return Envelope(data=wf)
 
 
@@ -280,6 +280,6 @@ async def preview_workflow(wf_id: str) -> Any:
     try:
         wf = json.loads(fp.read_text(encoding="utf-8"))
     except Exception as e:
-        raise HTTPException(500, f"工作流文件读取失败: {e}")
+        raise HTTPException(500, f"工作流文件读取失败: {e}") from None
     prompt = generate_workflow_prompt(wf)
     return Envelope(data={"prompt": prompt})

@@ -520,7 +520,7 @@ def create_app() -> FastAPI:
 
 class NoCacheMediaStaticFiles(StaticFiles):
     """媒体文件（壁纸/表情包等）禁强缓存。
-    
+
     设置 Cache-Control: no-cache，浏览器每次都会向服务器验证是否有新版本，
     换壁纸后无需清浏览器缓存即可看到新图。
     """

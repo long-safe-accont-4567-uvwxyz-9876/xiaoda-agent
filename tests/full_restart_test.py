@@ -269,7 +269,7 @@ async def phase3_tools(core):
             report_bug("MEDIUM", "guardrails", f"正常调用被阻止: {action}")
 
         # 连续失败
-        for i in range(10):
+        for _i in range(10):
             guardrails.check("fail_tool", {"arg": "val"})
             guardrails.record_call("fail_tool", {"arg": "val"}, False)
         action2, _msg2 = guardrails.check("fail_tool", {"arg": "val"})

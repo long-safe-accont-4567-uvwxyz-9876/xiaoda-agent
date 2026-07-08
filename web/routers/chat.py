@@ -145,7 +145,7 @@ async def export_session(session_id: str, request: Request) -> Any:
         _validate_token(token)
     except Exception as exc:
         logger.debug("chat.validate_token_failed: {}", exc, exc_info=True)
-        raise HTTPException(401, "Invalid or expired token")
+        raise HTTPException(401, "Invalid or expired token") from None
     core = request.app.state.core
     rows = await core.db.fetch_all(
         "SELECT timestamp, user_message, assistant_reply FROM conversation_logs "
@@ -253,4 +253,4 @@ async def speech_to_text(file: UploadFile = File(...)) -> Any:
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(503, f"ASR 不可用：{e!s}")
+        raise HTTPException(503, f"ASR 不可用：{e!s}") from None

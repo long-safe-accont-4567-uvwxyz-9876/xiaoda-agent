@@ -156,7 +156,7 @@ class MarketInstaller:
 
         except Exception as e:
             logger.error("market.plugin_install_failed", id=item.id, error=str(e))
-            raise InstallError(f"插件安装失败: {e}")
+            raise InstallError(f"插件安装失败: {e}") from None
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -252,7 +252,7 @@ class MarketInstaller:
 
         except Exception as e:
             logger.error("market.skill_install_failed", id=item.id, error=str(e))
-            raise InstallError(f"技能安装失败: {e}")
+            raise InstallError(f"技能安装失败: {e}") from None
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -328,7 +328,7 @@ class MarketInstaller:
 
         except Exception as e:
             logger.error("market.mcp_install_failed", id=item.id, error=str(e))
-            raise InstallError(f"MCP 工具安装失败: {e}")
+            raise InstallError(f"MCP 工具安装失败: {e}") from None
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 

@@ -7,16 +7,16 @@
 
 class RetrievalAssessor:
     """检索结果质量评估器
-    
+
     基于 Top-3 结果的平均相关性分数评估置信度：
     - 高置信度 (≥0.6): 检索结果可靠
     - 低置信度 (<0.3): 检索结果可能不相关，需要兜底
     - 空结果: 检索失败
     """
-    
+
     HIGH_THRESHOLD = 0.6
     LOW_THRESHOLD = 0.3
-    
+
     def __init__(self):
         self._stats = {
             "total_assessments": 0,
@@ -24,10 +24,10 @@ class RetrievalAssessor:
             "low_confidence": 0,
             "empty_results": 0,
         }
-    
+
     def assess(self, query: str, results: list[dict]) -> dict:
         """评估检索结果质量
-        
+
         Returns:
             {
                 "confidence": float (0-1),
@@ -37,7 +37,7 @@ class RetrievalAssessor:
             }
         """
         self._stats["total_assessments"] += 1
-        
+
         if not results:
             self._stats["empty_results"] += 1
             return {
@@ -46,7 +46,7 @@ class RetrievalAssessor:
                 "should_retry": False,
                 "should_fallback": True,
             }
-        
+
         # 取 Top-3 结果的相关性分数
         top3 = results[:3]
         scores = []
@@ -74,7 +74,7 @@ class RetrievalAssessor:
             normalized = min(1.0, avg_score * 30)
         else:
             normalized = avg_score
-        
+
         if normalized >= self.HIGH_THRESHOLD:
             self._stats["high_confidence"] += 1
             return {
@@ -97,7 +97,7 @@ class RetrievalAssessor:
             "should_retry": True,
             "should_fallback": False,
         }
-    
+
     @property
     def stats(self) -> dict:
         return self._stats.copy()

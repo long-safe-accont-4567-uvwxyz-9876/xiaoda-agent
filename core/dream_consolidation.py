@@ -300,7 +300,7 @@ class DreamConsolidator:
             groups.setdefault(key, []).append(mid)
 
         to_delete: list[str] = []
-        for key, ids in groups.items():
+        for _key, ids in groups.items():
             if len(ids) < 2:
                 continue
             ids.sort(key=lambda i: memories[i].importance, reverse=True)
@@ -335,7 +335,7 @@ class DreamConsolidator:
             groups.setdefault(key, []).append(mid)
 
         merged = 0
-        for key, ids in groups.items():
+        for _key, ids in groups.items():
             if len(ids) < 2:
                 continue
             # 选 importance 最高的作为主记忆

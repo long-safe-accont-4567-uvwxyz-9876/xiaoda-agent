@@ -427,13 +427,13 @@ async def discover_models() -> Any:
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # 对标注为内置降级的 provider，若 results 中返回异常或空列表，使用 fallback
-    for i, (pid, models_or_exc) in enumerate(zip(provider_ids, results)):
+    for i, (pid, models_or_exc) in enumerate(zip(provider_ids, results, strict=False)):
         if pid in BUILTIN_FALLBACK_MODELS:
             if isinstance(models_or_exc, Exception) or (isinstance(models_or_exc, list) and not models_or_exc):
                 results[i] = BUILTIN_FALLBACK_MODELS[pid]
 
     result = []
-    for pid, models_or_exc in zip(provider_ids, results):
+    for pid, models_or_exc in zip(provider_ids, results, strict=False):
         if isinstance(models_or_exc, Exception):
             logger.warning("discover.provider_failed provider={} error={}", pid, str(models_or_exc))
             continue

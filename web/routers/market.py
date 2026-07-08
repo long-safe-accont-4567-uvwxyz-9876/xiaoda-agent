@@ -177,9 +177,9 @@ async def install_plugin(req: InstallRequest, request: Request) -> Any:
     try:
         result = await asyncio.wait_for(installer.install(item, env=req.env or None), timeout=300)
     except TimeoutError:
-        raise HTTPException(504, "安装超时（300 秒）")
+        raise HTTPException(504, "安装超时（300 秒）") from None
     except InstallError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from None
 
     result["security_check"] = {
         "passed": sec_result.passed,
@@ -208,7 +208,7 @@ async def uninstall_plugin(req: UninstallRequest, request: Request) -> Any:
     try:
         result = await installer.uninstall(req.item_id, "plugin")
     except InstallError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from None
     return Envelope(data=result)
 
 
@@ -273,9 +273,9 @@ async def install_skill(req: InstallRequest, request: Request) -> Any:
     try:
         result = await asyncio.wait_for(installer.install(item), timeout=300)
     except TimeoutError:
-        raise HTTPException(504, "安装超时（300 秒）")
+        raise HTTPException(504, "安装超时（300 秒）") from None
     except InstallError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from None
 
     result["security_check"] = {
         "passed": sec_result.passed,
@@ -293,7 +293,7 @@ async def uninstall_skill(req: UninstallRequest, request: Request) -> Any:
     try:
         result = await installer.uninstall(req.item_id, "skill")
     except InstallError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from None
     return Envelope(data=result)
 
 
@@ -358,9 +358,9 @@ async def install_mcp(req: InstallRequest, request: Request) -> Any:
     try:
         result = await asyncio.wait_for(installer.install(item), timeout=300)
     except TimeoutError:
-        raise HTTPException(504, "安装超时（300 秒）")
+        raise HTTPException(504, "安装超时（300 秒）") from None
     except InstallError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from None
 
     result["security_check"] = {
         "passed": sec_result.passed,
@@ -378,5 +378,5 @@ async def uninstall_mcp(req: UninstallRequest, request: Request) -> Any:
     try:
         result = await installer.uninstall(req.item_id, "mcp")
     except InstallError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from None
     return Envelope(data=result)

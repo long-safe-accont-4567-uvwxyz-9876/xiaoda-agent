@@ -509,7 +509,7 @@ class SubAgentManagerMixin:
 
         适用于可靠性要求高的任务 — 主 agent 不可用或失败时自动降级。
         """
-        for i, agent_name in enumerate(agents):
+        for _i, agent_name in enumerate(agents):
             try:
                 result = await self.delegate_to_agent(agent_name, task, mode="single")
                 if result and len(result) > 20:

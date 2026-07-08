@@ -48,7 +48,7 @@ def _is_private_ip(hostname: str) -> bool:
     """检查 hostname 解析后的 IP 是否为内网/保留地址，防止 SSRF"""
     try:
         resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-        for family, type_, proto, canonname, sockaddr in resolved:
+        for _family, _type_, _proto, _canonname, sockaddr in resolved:
             ip = ipaddress.ip_address(sockaddr[0])
             if isinstance(ip, ipaddress.IPv4Address):
                 for net in _PRIVATE_NETWORKS:

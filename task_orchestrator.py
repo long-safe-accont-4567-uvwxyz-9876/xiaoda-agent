@@ -676,11 +676,11 @@ class ParallelAgentNode:
         except json.JSONDecodeError:
             match = re.search(r'\{[\s\S]*\}', content)
             if not match:
-                raise ValueError("LLM 响应中未找到 JSON")
+                raise ValueError("LLM 响应中未找到 JSON") from None
             try:
                 result = json.loads(match.group(0))
             except json.JSONDecodeError as e:
-                raise ValueError(f"LLM 响应中提取的 JSON 仍无法解析: {e}")
+                raise ValueError(f"LLM 响应中提取的 JSON 仍无法解析: {e}") from None
 
         # 校验：确保每个 target 都有非空任务
         sub_tasks: dict[str, str] = {}

@@ -59,7 +59,7 @@ class SSRFGuardV2:
         try:
             infos = socket.getaddrinfo(hostname, parsed.port or 443)
         except socket.gaierror:
-            raise ValueError(f"DNS解析失败: {hostname}")
+            raise ValueError(f"DNS解析失败: {hostname}") from None
 
         # Step 4: 校验 IP
         if not allow_private:

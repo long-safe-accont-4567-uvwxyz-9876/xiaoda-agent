@@ -201,7 +201,7 @@ def encrypt(plaintext: str) -> str:
     nonce = secrets.token_bytes(_NONCE_LEN)
     pt_bytes = plaintext.encode("utf-8")
     ks = _keystream(key, nonce, len(pt_bytes))
-    ciphertext = bytes(a ^ b for a, b in zip(pt_bytes, ks))
+    ciphertext = bytes(a ^ b for a, b in zip(pt_bytes, ks, strict=False))
     tag = hmac.new(key, nonce + ciphertext, hashlib.sha256).digest()
 
     payload = nonce + ciphertext + tag
@@ -246,7 +246,7 @@ def decrypt(ciphertext: str) -> str:
         raise DecryptionError("HMAC 标签验证失败（机器不匹配或数据损坏）")
 
     ks = _keystream(key, nonce, len(ciphertext_body))
-    pt_bytes = bytes(a ^ b for a, b in zip(ciphertext_body, ks))
+    pt_bytes = bytes(a ^ b for a, b in zip(ciphertext_body, ks, strict=False))
     try:
         return pt_bytes.decode("utf-8")
     except UnicodeDecodeError as e:

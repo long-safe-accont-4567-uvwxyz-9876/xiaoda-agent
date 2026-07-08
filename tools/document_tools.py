@@ -143,7 +143,7 @@ def _read_xlsx(path: str) -> ToolResult:
         for sheet_name in sheet_names:
             ws = wb[sheet_name]
             rows = []
-            for i, row in enumerate(ws.iter_rows(max_row=30, values_only=True)):
+            for _i, row in enumerate(ws.iter_rows(max_row=30, values_only=True)):
                 cells = [str(c) if c is not None else "" for c in row]
                 rows.append(" | ".join(cells))
             if rows:

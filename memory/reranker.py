@@ -7,7 +7,7 @@ from loguru import logger
 
 class Reranker:
     """基于 SiliconFlow BAAI/bge-reranker-v2-m3 的交叉编码器重排序
-    
+
     特点:
     - 硅基流动免费常驻模型，非限时促销，稳定性有保障
     - 与项目现有 bge-m3 嵌入模型同系列，语义空间天然对齐

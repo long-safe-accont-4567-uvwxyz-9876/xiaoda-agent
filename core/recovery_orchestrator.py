@@ -309,7 +309,7 @@ class RecoveryOrchestrator:
                 return await self._invoke_handler(handler, args)
             except Exception:
                 if i == len(delays) - 1:
-                    raise RecoveryError(f"Backoff exhausted after {len(delays)} retries")
+                    raise RecoveryError(f"Backoff exhausted after {len(delays)} retries") from None
         raise RecoveryError("Backoff failed")
 
     def _escalate_to_human(self, ctx: RecoveryContext) -> None:

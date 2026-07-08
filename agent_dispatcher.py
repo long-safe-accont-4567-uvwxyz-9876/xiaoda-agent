@@ -572,7 +572,7 @@ class SubAgent:
             *[self._exec_one_tool_call(tc) for tc in extracted],
             return_exceptions=True,
         )
-        for tc, r in zip(extracted, tool_results):
+        for tc, r in zip(extracted, tool_results, strict=False):
             if isinstance(r, Exception):
                 logger.warning("sub_agent.tool_error", name=self.config.name, tool=tc.name, error=str(r))
                 working.append({"role": "tool", "tool_call_id": tc.id, "content": f"错误: {r}"})

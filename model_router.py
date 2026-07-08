@@ -541,7 +541,7 @@ class ModelRouter:
 
         # 3. 尝试已注册的自定义 provider（SiliconFlow/OpenRouter/ModelScope 等）
         if task_type.startswith("chat") and self._custom_clients:
-            for cp_name, cp_client in list(self._custom_clients.items()):
+            for cp_name, _cp_client in list(self._custom_clients.items()):
                 try:
                     cp_model = self._get_custom_provider_default_model(cp_name)
                     if not cp_model:

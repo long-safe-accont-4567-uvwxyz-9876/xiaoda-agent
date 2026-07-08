@@ -180,7 +180,7 @@ class PluginContext:
 
     def cancel_all_tasks(self) -> None:
         """取消所有后台任务"""
-        for name, task in list(self._background_tasks.items()):
+        for _name, task in list(self._background_tasks.items()):
             if not task.done():
                 task.cancel()
         self._background_tasks.clear()

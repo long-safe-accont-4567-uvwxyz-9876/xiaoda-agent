@@ -329,7 +329,7 @@ class VectorStore:
                 success = 0
                 try:
                     conn.execute("BEGIN TRANSACTION")
-                    for row_id, text, vec in valid_items:
+                    for row_id, _text, vec in valid_items:
                         vec_json = json.dumps(vec)
                         try:
                             conn.execute("DELETE FROM memories_vec WHERE rowid=?", [row_id])
@@ -458,7 +458,7 @@ class VectorStore:
                 return [{"rowid": r, "distance": d} for r, d in tuples]
 
             # 3. 混合：mixed = query_vec * (1-alpha) + hyde_vec * alpha
-            mixed = [(q * (1 - alpha)) + (h * alpha) for q, h in zip(query_vec, hyde_vec)]
+            mixed = [(q * (1 - alpha)) + (h * alpha) for q, h in zip(query_vec, hyde_vec, strict=False)]
 
             # 4. 归一化（除以 L2 范数）
             norm = sum(v * v for v in mixed) ** 0.5

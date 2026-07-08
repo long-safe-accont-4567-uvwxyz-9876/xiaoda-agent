@@ -42,7 +42,7 @@ class TestLazyDeps(unittest.TestCase):
 
     def test_lazy_deps_whitelist_has_required_keys(self):
         """白名单条目包含必要字段"""
-        for name, spec in LAZY_DEPS.items():
+        for _name, spec in LAZY_DEPS.items():
             self.assertIn("packages", spec)
             self.assertIn("description", spec)
             self.assertIsInstance(spec["packages"], list)

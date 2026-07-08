@@ -7,7 +7,7 @@ import sys
 def collect(root_dir):
     skip = ['.git', '__pycache__', '.venv', 'dist', 'build', 'node_modules', 'tests']
     out = []
-    for root, dirs, files in os.walk(root_dir):
+    for root, _dirs, files in os.walk(root_dir):
         if any(x in root for x in skip):
             continue
         for f in files:

@@ -148,7 +148,7 @@ async def test_tool_execution_flow():
 
         # 连续失败测试
         guardrails2 = get_tool_guardrails()
-        for i in range(5):
+        for _i in range(5):
             _action2, _msg2 = guardrails2.check("failing_tool", {"arg": "value"})
             guardrails2.record_call("failing_tool", {"arg": "value"}, False)
         action3, _msg3 = guardrails2.check("failing_tool", {"arg": "value"})

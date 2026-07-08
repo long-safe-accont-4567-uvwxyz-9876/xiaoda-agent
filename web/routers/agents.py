@@ -71,7 +71,7 @@ async def create_agent(body: dict, request: Request, _user: str = Depends(get_cu
     try:
         data = await _registry(request).create(body)
     except (ValueError, KeyError) as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from None
     await _audit(request, "create", data["name"])
     return Envelope(data=data)
 
@@ -82,9 +82,9 @@ async def update_agent(name: str, body: dict, request: Request, _user: str = Dep
     try:
         data = await _registry(request).update(name, body)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, str(e)) from None
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from None
     await _audit(request, "update", name)
     # display_name 变更时清除缓存并重新加载所有人格文件
     if "display_name" in body:
@@ -116,7 +116,7 @@ async def delete_agent(name: str, request: Request, _user: str = Depends(get_cur
     try:
         await _registry(request).delete(name)
     except (ValueError, KeyError) as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from None
     await _audit(request, "delete", name)
     return Envelope(data={"deleted": name})
 
@@ -127,7 +127,7 @@ async def enable_agent(name: str, request: Request, _user: str = Depends(get_cur
     try:
         _registry(request).set_enabled(name, True)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, str(e)) from None
     await _audit(request, "enable", name)
     return Envelope(data={"name": name, "enabled": True})
 
@@ -138,7 +138,7 @@ async def disable_agent(name: str, request: Request, _user: str = Depends(get_cu
     try:
         _registry(request).set_enabled(name, False)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, str(e)) from None
     await _audit(request, "disable", name)
     return Envelope(data={"name": name, "enabled": False})
 
@@ -149,7 +149,7 @@ async def get_permissions(name: str, request: Request, _user: str = Depends(get_
     try:
         return Envelope(data=_registry(request).get_permissions(name))
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, str(e)) from None
 
 
 @router.put("/agents/{name}/permissions", response_model=Envelope[dict])
@@ -158,9 +158,9 @@ async def set_permissions(name: str, body: dict, request: Request, _user: str = 
     try:
         data = _registry(request).set_permissions(name, body)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, str(e)) from None
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from None
     await _audit(request, "permissions",
                  json.dumps({"agent": name,
                              "tools_changed": len(body.get("tools") or {})},
@@ -180,7 +180,7 @@ async def get_personality(name: str, request: Request, _user: str = Depends(get_
     try:
         text = _registry(request).get_personality(name)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, str(e)) from None
     return Envelope(data={"name": name, "personality": text})
 
 
@@ -199,7 +199,7 @@ async def set_personality(name: str, body: dict, request: Request, _user: str = 
     try:
         await _registry(request).set_personality(name, text)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, str(e)) from None
     await _audit(request, "personality", name)
     return Envelope(data={"name": name, "saved": True})
 
@@ -253,7 +253,7 @@ _EXT = {"png": "png", "jpg": "jpg", "jpeg": "jpg", "webp": "webp"}
 async def upload_wallpaper(name: str, body: dict, request: Request, _user: str = Depends(get_current_user)) -> Any:
     _validate_agent_name(name)
     """上传背景板（data URL），保存后写入该 Agent 的 wallpaper 字段。
-    
+
     每次上传生成带时间戳的新文件名，不覆盖旧文件，从根本上解决浏览器缓存问题。
     同时清理该 agent 的旧壁纸文件（仅保留最新一张）。
     """
@@ -267,7 +267,7 @@ async def upload_wallpaper(name: str, body: dict, request: Request, _user: str =
         raw = base64.b64decode(m.group(2), validate=True)
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("agents.base64_decode_failed: {}", exc, exc_info=True)
-        raise HTTPException(400, "base64 解码失败")
+        raise HTTPException(400, "base64 解码失败") from None
     if len(raw) > 8 * 1024 * 1024:
         raise HTTPException(400, "图片不能超过 8MB")
     _WALLPAPER_DIR.mkdir(parents=True, exist_ok=True)
@@ -581,9 +581,9 @@ async def set_agent_model(name: str, body: dict, request: Request, _user: str = 
     try:
         data = await _registry(request).set_agent_model(name, provider, model_id)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, str(e)) from None
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from None
     await _audit(request, "model",
                  json.dumps({"agent": name, "provider": provider, "model_id": model_id},
                             ensure_ascii=False))

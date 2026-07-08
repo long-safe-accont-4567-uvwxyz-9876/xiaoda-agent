@@ -122,7 +122,7 @@ async def create_provider(body: dict, request: Request) -> Any:
         _save_key_and_register(request, pid, fmt, base_url, api_key)
     except Exception as e:
         logger.error("provider.register_failed id={} error={}", pid, str(e))
-        raise HTTPException(500, f"provider 注册失败: {e}")
+        raise HTTPException(500, f"provider 注册失败: {e}") from None
     cfg.set(f"models.providers.{pid}", record)
     await _audit(request, "provider.create", pid)
     invalidate_discovery_cache()

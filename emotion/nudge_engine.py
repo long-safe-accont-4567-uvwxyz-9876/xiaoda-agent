@@ -334,7 +334,7 @@ class NudgeEngine:
                     f"你随口招呼{address_term}一声——像真人一样自然，不必长，不必修辞，不必提昨天或最近的事。"
                     f"不要堆砌比喻。不要像 AI 助手。就一句普通的、带着你性格的话。"
                 )
-                user_msg = f"（顺嘴说一句）"
+                user_msg = "（顺嘴说一句）"
                 messages = [
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": user_msg},
