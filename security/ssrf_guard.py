@@ -18,7 +18,6 @@ import re
 import socket
 import urllib.parse
 from collections import OrderedDict
-from typing import Optional
 
 from loguru import logger
 

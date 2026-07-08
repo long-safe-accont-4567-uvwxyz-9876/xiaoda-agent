@@ -30,7 +30,7 @@ import threading
 from collections import Counter
 from dataclasses import dataclass, field
 from loguru import logger
-from typing import Optional, Any
+from typing import Any
 
 
 @dataclass

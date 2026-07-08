@@ -25,7 +25,7 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 from collections.abc import Callable
 
 from loguru import logger
@@ -91,7 +91,7 @@ class RecoveryOrchestrator:
         self._backoff_delays = backoff_delays or [1, 2, 4, 8, 16]
         self._audit_log: list[dict] = []
         self._stats = {"total": 0, "success": 0, "failed": 0,
-                         "by_level": {l.name: 0 for l in RecoveryLevel}}
+                         "by_level": {line.name: 0 for line in RecoveryLevel}}
 
     def register_fallback(self, operation: str,
                             handler: Callable) -> None:

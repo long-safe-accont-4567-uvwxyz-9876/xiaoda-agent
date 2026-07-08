@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 import asyncio
 import json
 import os
@@ -282,17 +282,17 @@ class SlashCommandHandler:
         lines = []
         if promoted:
             lines.append("📚 已学习的经验:")
-            for i, l in enumerate(promoted[:5], 1):
-                summary = l.get("summary", "")[:60]
-                count = l.get("recurrence_count", 1)
+            for i, item in enumerate(promoted[:5], 1):
+                summary = item.get("summary", "")[:60]
+                count = item.get("recurrence_count", 1)
                 lines.append(f"{i}. {summary} (×{count})")
 
         if all_learnings and len(all_learnings) > len(promoted):
-            pending = [l for l in all_learnings if l.get("status") == "pending"]
+            pending = [item for item in all_learnings if item.get("status") == "pending"]
             if pending:
                 lines.append(f"\n📝 待确认的学习 ({len(pending)} 条):")
-                for i, l in enumerate(pending[:5], 1):
-                    summary = l.get("summary", "")[:60]
+                for i, item in enumerate(pending[:5], 1):
+                    summary = item.get("summary", "")[:60]
                     lines.append(f"{i}. {summary}")
 
         if not lines:
@@ -409,8 +409,8 @@ class SlashCommandHandler:
             try:
                 with open("/proc/meminfo") as f:
                     meminfo = f.read()
-                mem_total = int(next(l for l in meminfo.split('\n') if 'MemTotal' in l).split()[1])
-                mem_avail = int(next(l for l in meminfo.split('\n') if 'MemAvailable' in l).split()[1])
+                mem_total = int(next(line for line in meminfo.split('\n') if 'MemTotal' in line).split()[1])
+                mem_avail = int(next(line for line in meminfo.split('\n') if 'MemAvailable' in line).split()[1])
                 mem_used = mem_total - mem_avail
                 mem_pct = mem_used / mem_total * 100
                 mem_icon = "💾⚠️" if mem_pct > 90 else "💾"

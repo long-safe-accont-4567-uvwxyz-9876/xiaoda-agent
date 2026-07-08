@@ -1,5 +1,5 @@
 """智能上下文压缩引擎"""
-from typing import Any, Optional
+from typing import Any
 import hashlib
 import json
 import time

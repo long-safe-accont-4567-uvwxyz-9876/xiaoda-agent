@@ -105,7 +105,8 @@ def login(base: str, password: str, retries: int = 3) -> str:
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
             last_err = e
             if attempt < retries - 1:
-                import time; time.sleep(1 * (attempt + 1))  # 递增等待
+                import time
+                time.sleep(1 * (attempt + 1))  # 递增等待
     raise ConnectionError(f"登录失败（重试{retries}次）: {last_err}")
 
 

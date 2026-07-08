@@ -38,7 +38,7 @@ import asyncio
 import random
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 from collections.abc import AsyncIterator
 
 from loguru import logger

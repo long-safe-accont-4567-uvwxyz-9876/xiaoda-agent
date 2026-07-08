@@ -38,10 +38,14 @@ class BehavioralMetrics:
     @property
     def health_status(self) -> str:
         bhs = self.behavioral_health_score
-        if bhs >= 0.9: return "Optimal"
-        if bhs >= 0.7: return "Healthy"
-        if bhs >= 0.5: return "Degraded"
-        if bhs >= 0.3: return "Critical"
+        if bhs >= 0.9:
+            return "Optimal"
+        if bhs >= 0.7:
+            return "Healthy"
+        if bhs >= 0.5:
+            return "Degraded"
+        if bhs >= 0.3:
+            return "Critical"
         return "Failed (zombie?)"
 
 

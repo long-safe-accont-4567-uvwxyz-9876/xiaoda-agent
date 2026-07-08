@@ -21,7 +21,6 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 from loguru import logger
 
@@ -294,7 +293,7 @@ class LearningFeedbackLoop:
         """持久化到 JSON 文件 (DATA_DIR/learning_feedback.json)"""
         self._persist_path.parent.mkdir(parents=True, exist_ok=True)
         data = {
-            "lessons": [l.to_dict() for l in self._lessons],
+            "lessons": [line.to_dict() for line in self._lessons],
             "strategies": dict(self._strategies),
             "updated_at": time.time(),
         }
@@ -363,8 +362,8 @@ class LearningFeedbackLoop:
     def get_stats(self) -> dict:
         """统计信息"""
         by_type: dict[str, int] = {}
-        for l in self._lessons:
-            by_type[l.event_type.value] = by_type.get(l.event_type.value, 0) + 1
+        for line in self._lessons:
+            by_type[line.event_type.value] = by_type.get(line.event_type.value, 0) + 1
         return {
             "total_lessons": len(self._lessons),
             "total_strategies": len(self._strategies),

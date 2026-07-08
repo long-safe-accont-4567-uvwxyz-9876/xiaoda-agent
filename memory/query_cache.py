@@ -6,7 +6,6 @@ import asyncio
 import math
 import time
 from collections import OrderedDict
-from typing import Optional
 from collections.abc import Awaitable, Callable
 
 from loguru import logger

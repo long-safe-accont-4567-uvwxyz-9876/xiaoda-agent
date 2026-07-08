@@ -3,7 +3,7 @@
 使用硅基流动免费模型（THUDM/GLM-4-9B-0414）进行蒸馏，不占用主模型配额。
 失败时降级到 ModelRouter.route。
 """
-from typing import Any, Optional
+from typing import Any
 
 import os
 import time

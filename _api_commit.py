@@ -1,5 +1,9 @@
 """用GitHub API提交本地修改，绕过SAFE_RM环境变量问题"""
-import os, json, base64, urllib.request, sys
+import os
+import json
+import base64
+import urllib.request
+import sys
 
 for k in list(os.environ.keys()):
     if k.startswith("SAFE_RM"):

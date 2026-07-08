@@ -31,7 +31,7 @@ import sqlite3
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Tuple
 from collections.abc import Iterable
 
 from loguru import logger

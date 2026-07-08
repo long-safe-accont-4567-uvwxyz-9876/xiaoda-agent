@@ -1,5 +1,5 @@
 # query_transform.py — 查询改写与扩展（使用硅基流动免费模型，不占用主模型配额）
-from typing import Any, ClassVar, Optional
+from typing import Any, ClassVar
 import os
 import asyncio
 import httpx

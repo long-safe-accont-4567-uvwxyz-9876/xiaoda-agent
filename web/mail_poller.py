@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone, UTC
+from datetime import datetime, UTC
 from typing import Any
 
 from loguru import logger
@@ -307,7 +307,8 @@ def _clean_reply_text(reply: str) -> str:
     """
     if not reply:
         return reply
-    import re, json
+    import re
+    import json
     text = reply.strip()
 
     # 1. 如果回复是 JSON，提取其中的文本字段

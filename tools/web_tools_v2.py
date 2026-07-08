@@ -310,7 +310,8 @@ async def get_weather(city: str) -> ToolResult:
 
         def _fetch_weather() -> Any:
             """同步请求 wttr.in 获取天气信息。"""
-            import urllib.request, urllib.parse
+            import urllib.request
+            import urllib.parse
             url = f"https://wttr.in/{urllib.parse.quote(city)}?format=3&lang=zh"
             # SSRF 防护：5步法校验 (city 为用户输入, 防注入内网地址)
             ok, reason = _ssrf_validate_url(url)

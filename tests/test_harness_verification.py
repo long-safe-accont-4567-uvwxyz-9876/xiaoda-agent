@@ -196,12 +196,12 @@ class TestRound3E2ESmoke:
     def test_stream_text_push_default(self):
         """流式文本推送默认开启。"""
         from config import STREAM_TEXT_PUSH
-        assert STREAM_TEXT_PUSH == True
+        assert STREAM_TEXT_PUSH
 
     def test_error_rule_strict_mode_default(self):
         """错误规则严格模式默认开启。"""
         from config import ERROR_RULE_STRICT_MODE
-        assert ERROR_RULE_STRICT_MODE == True
+        assert ERROR_RULE_STRICT_MODE
 
     def test_klee_has_timeout_protection(self):
         """xiaoli_agent.py 含 asyncio.wait_for 超时保护。"""

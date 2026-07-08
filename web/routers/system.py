@@ -169,7 +169,7 @@ async def get_logs(lines: int = Query(default=200, le=1000),
                     content = f.read().decode("utf-8", errors="replace")
                 lines_out = content.splitlines()
                 if level:
-                    lines_out = [l for l in lines_out if f"| {level.upper()}" in l or f"[{level.upper()}]" in l]
+                    lines_out = [line for line in lines_out if f"| {level.upper()}" in line or f"[{level.upper()}]" in line]
                 return lines_out
             return []
         try:
@@ -278,7 +278,9 @@ async def restart_service(request: Request) -> Any:
         await asyncio.sleep(1.0)
         if is_windows:
             # Windows: 创建延迟启动脚本，等旧进程退出后再启动
-            import tempfile, subprocess, shlex
+            import tempfile
+            import subprocess
+            import shlex
             python = sys.executable
             script = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else 'agent.py'
             args = sys.argv[1:] if len(sys.argv) > 1 else ['--web', '--host', '0.0.0.0', '--port', '8082']

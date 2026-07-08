@@ -10,7 +10,7 @@ import os
 import logging
 import contextvars
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("tool_wrapper")
 

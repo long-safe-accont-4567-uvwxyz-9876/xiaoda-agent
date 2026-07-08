@@ -1,4 +1,6 @@
-import subprocess, sys, re
+import subprocess
+import sys
+import re
 from collections import Counter
 
 result = subprocess.run(

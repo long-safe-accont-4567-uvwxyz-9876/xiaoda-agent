@@ -5,7 +5,7 @@ import asyncio
 import json
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 from collections.abc import Awaitable, Callable
 from openai import AsyncOpenAI
 

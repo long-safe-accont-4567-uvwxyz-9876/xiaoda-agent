@@ -16,7 +16,8 @@ async def test_agent_e2e():
         print('    OK: AgentCore 创建成功')
     except Exception as e:
         print(f'    FAIL: {e}')
-        import traceback; traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         return
 
     # 2. 检查所有子系统
@@ -171,7 +172,8 @@ async def test_agent_e2e():
             import json
             with open(json_path) as f:
                 data = json.load(f)
-            if data == {"key": "value"}:
+            if data == {"key":
+                "value"}:
                 print('    OK: 原子 JSON 写入正确')
             else:
                 print(f'    FAIL: JSON 不匹配: {data}')

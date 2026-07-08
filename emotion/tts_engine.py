@@ -118,7 +118,8 @@ def get_agent_voice_dir(agent: str) -> Path:
 
 def _ensure_builtin_voices():
     """将内置参考音频复制到按 agent 分目录的结构中（仅首次）。"""
-    import shutil, sys
+    import shutil
+    import sys
     # 扫描源目录中所有音频文件，按文件名前缀分配到对应 agent 目录
     _src_dirs = []
     # 用户数据目录 — 旧格式直接放在 .ai-agent 根目录

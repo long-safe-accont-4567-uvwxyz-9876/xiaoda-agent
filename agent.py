@@ -23,7 +23,8 @@ try:
     load_dotenv(_env_path, override=True)
 except Exception:
     # dotenv 加载失败时写日志，防止 exe 静默崩溃
-    import traceback, pathlib
+    import traceback
+    import pathlib
     try:
         log_dir = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent"
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -169,7 +170,8 @@ def _run_web(host: str, port: int) -> None:
     try:
         from web.server import app
     except Exception:
-        import traceback, pathlib
+        import traceback
+        import pathlib
         log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent" / "crash.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(f"Failed to import web.server:\n{traceback.format_exc()}", encoding="utf-8")
@@ -257,7 +259,8 @@ def _import_web_server_safe() -> Any:
         from web.server import app
         return app
     except (ImportError, SyntaxError, ModuleNotFoundError):
-        import traceback, pathlib
+        import traceback
+        import pathlib
         log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent" / "crash.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(f"Failed to import web.server:\n{traceback.format_exc()}", encoding="utf-8")
@@ -408,7 +411,8 @@ if __name__ == "__main__":
         main()
     except Exception:
         # 顶层异常兜底：写日志文件，防止 exe 静默崩溃
-        import traceback, pathlib
+        import traceback
+        import pathlib
         try:
             log_dir = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent"
             log_dir.mkdir(parents=True, exist_ok=True)

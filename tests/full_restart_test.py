@@ -691,8 +691,8 @@ async def phase7_concurrent_edge():
              str(PROJECT_ROOT) + "/"],
             capture_output=True, text=True, timeout=10
 , check=False)
-        lines = [l for l in result.stdout.strip().split('\n') if l
-                 and 'test' not in l and '__pycache__' not in l and '.venv' not in l]
+        lines = [line for line in result.stdout.strip().split('\n') if line
+                 and 'test' not in line and '__pycache__' not in line and '.venv' not in line]
         if lines:
             for line in lines[:5]:
                 print(f"    WARN: {line[:80]}")

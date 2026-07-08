@@ -31,7 +31,8 @@ async def test_real_conversation():
             print(f"    SKIP: API 未配置: {err[:80]}")
         else:
             print(f"    FAIL: {err[:200]}")
-            import traceback; traceback.print_exc()
+            import traceback
+            traceback.print_exc()
             bugs.append(f"conversation error: {err[:100]}")
 
     # 测试 2: 多轮对话
@@ -328,7 +329,8 @@ async def test_error_recovery():
             print(f"    INFO: 凭证状态: {cred.state if cred else 'None'}")
     except Exception as e:
         print(f"    FAIL: {e}")
-        import traceback; traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         bugs.append(f"credential recovery error: {e}")
 
     # 测试 ContextCompressor 降级

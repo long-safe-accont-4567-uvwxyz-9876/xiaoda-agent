@@ -180,7 +180,7 @@ def test_boundary_conditions():
         try:
             result = guardrails.check("", {})
             print(f"    空参数: {result}")
-        except:
+        except Exception:
             print("    空参数: 抛出异常（可能正常）")
 
     except Exception as e:

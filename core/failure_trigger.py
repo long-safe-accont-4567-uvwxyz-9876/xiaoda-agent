@@ -1,7 +1,7 @@
 """失败触发器 — 自动反思 + 重试 + 经验归档"""
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

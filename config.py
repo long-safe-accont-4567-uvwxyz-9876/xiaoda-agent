@@ -5,7 +5,7 @@ import json
 import sys
 
 logger = logging.getLogger(__name__)
-from typing import Any, Optional
+from typing import Any
 import shutil
 from pathlib import Path
 from dotenv import load_dotenv

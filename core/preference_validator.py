@@ -33,15 +33,15 @@ class PreferenceReport:
     @property
     def healthy(self) -> bool:
         """所有层有数据且注入 + 管线联动正常"""
-        return (all(l.has_data and l.injected for l in self.layers)
+        return (all(line.has_data and line.injected for line in self.layers)
                 if self.layers else False)
 
     def summary(self) -> str:
         lines = ["[偏好闭环验证报告]"]
-        for l in self.layers:
-            status = "✓" if (l.has_data and l.injected) else "✗"
-            lines.append(f"  {status} {l.layer}: data={l.has_data} "
-                         f"inject={l.injected} {l.detail}")
+        for line in self.layers:
+            status = "✓" if (line.has_data and line.injected) else "✗"
+            lines.append(f"  {status} {line.layer}: data={line.has_data} "
+                         f"inject={line.injected} {line.detail}")
         lines.append(f"  {'✓' if self.pipeline_flow_ok else '✗'} 管线联动 (L1→L3)")
         lines.append(f"  总体: {'健康' if self.healthy else '需关注'}")
         return "\n".join(lines)

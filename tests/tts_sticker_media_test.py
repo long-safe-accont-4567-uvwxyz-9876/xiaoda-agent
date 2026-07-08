@@ -268,7 +268,8 @@ async def test_agnes_image():
             print(f"    WARN: 图片生成失败: {result.data[:100]}")
     except Exception as e:
         report_bug("HIGH", "agnes_tools", f"图片生成崩溃: {e}")
-        import traceback; traceback.print_exc()
+        import traceback
+        traceback.print_exc()
 
     # 3.3 不同尺寸
     print("\n[3.3] 不同尺寸:")
@@ -333,7 +334,8 @@ async def test_agnes_video():
             print(f"    WARN: 视频生成失败: {result.data[:100]}")
     except Exception as e:
         report_bug("HIGH", "agnes_tools", f"视频生成崩溃: {e}")
-        import traceback; traceback.print_exc()
+        import traceback
+        traceback.print_exc()
 
     # 4.3 帧数计算验证
     print("\n[4.3] 帧数计算验证:")

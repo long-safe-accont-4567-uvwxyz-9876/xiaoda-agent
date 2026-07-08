@@ -792,9 +792,9 @@ class MessageProcessorMixin:
                 from core.constraint_injector import search_constraint_lessons
                 lessons = search_constraint_lessons(user_input, top_k=3)
                 if lessons:
-                    return [{"summary": f"[经验] {l}", "timestamp": 0,
+                    return [{"summary": f"[经验] {line}", "timestamp": 0,
                              "source": "constraint_rag"}
-                            for l in lessons]
+                            for line in lessons]
             except Exception as e:
                 logger.debug("constraint.rag_search_failed", error=str(e))
             return []

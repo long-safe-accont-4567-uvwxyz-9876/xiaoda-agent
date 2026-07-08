@@ -2,7 +2,6 @@ import time
 import json
 import uuid
 import aiosqlite
-from typing import Optional
 from loguru import logger
 
 

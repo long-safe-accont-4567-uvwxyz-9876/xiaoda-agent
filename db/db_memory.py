@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 import time
 import aiosqlite
 from loguru import logger
@@ -574,7 +574,7 @@ class MemoryDB:
         if not emotion_labels:
             return []
         # 防注入：标签是有限集合，但仍做白名单校验
-        clean_labels = [str(l).strip() for l in emotion_labels if str(l).strip()]
+        clean_labels = [str(line).strip() for line in emotion_labels if str(line).strip()]
         if not clean_labels:
             return []
         try:

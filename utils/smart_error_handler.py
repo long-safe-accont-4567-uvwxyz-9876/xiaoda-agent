@@ -6,7 +6,7 @@
 import re
 from loguru import logger
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass

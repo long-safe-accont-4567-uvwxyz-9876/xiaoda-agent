@@ -9,7 +9,10 @@
     本文件保留仅为向后兼容, 内部委托给新模块实现。
 """
 from typing import ClassVar
-import ipaddress, socket, re, urllib.parse
+import ipaddress
+import socket
+import re
+import urllib.parse
 import warnings
 from loguru import logger
 

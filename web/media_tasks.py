@@ -104,13 +104,17 @@ class MediaTaskQueue:
                           result_path: str = "", error: str = "") -> None:
         sets, vals = ["status=?"], [status]
         if progress is not None:
-            sets.append("progress=?"); vals.append(progress)
+            sets.append("progress=?")
+            vals.append(progress)
         if result_path:
-            sets.append("result_path=?"); vals.append(result_path)
+            sets.append("result_path=?")
+            vals.append(result_path)
         if error:
-            sets.append("error=?"); vals.append(error)
+            sets.append("error=?")
+            vals.append(error)
         if status in ("done", "failed"):
-            sets.append("finished_at=?"); vals.append(time.time())
+            sets.append("finished_at=?")
+            vals.append(time.time())
         vals.append(task_id)
         await self.core.db.execute(
             f"UPDATE media_tasks SET {', '.join(sets)} WHERE id=?", tuple(vals))

@@ -2,7 +2,7 @@ import json
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 from openai import AsyncOpenAI
 
 from loguru import logger
@@ -686,7 +686,7 @@ class SubAgent:
             last_tool = working[-1] if working else {}
             if isinstance(last_tool, dict) and last_tool.get("role") == "tool":
                 raw_content = last_tool.get("content", "").strip()
-                lines = [l.strip() for l in raw_content.splitlines() if l.strip()]
+                lines = [line.strip() for line in raw_content.splitlines() if line.strip()]
                 if len(lines) > 1:
                     formatted = "\n".join(lines[:15])
                     if len(lines) > 15:

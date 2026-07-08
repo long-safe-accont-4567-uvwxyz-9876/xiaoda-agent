@@ -49,7 +49,7 @@ def test_record_success(tmp_loop):
     )
     added = tmp_loop.record(event)
     assert len(added) >= 1
-    assert any("effective" in l.content.lower() for l in added)
+    assert any("effective" in line.content.lower() for line in added)
     assert len(tmp_loop.get_all_lessons()) >= 1
 
 
@@ -67,9 +67,9 @@ def test_record_failure(tmp_loop):
     )
     added = tmp_loop.record(event)
     assert len(added) >= 1
-    assert any("failed" in l.content.lower() or "avoid" in l.content.lower() for l in added)
+    assert any("failed" in line.content.lower() or "avoid" in line.content.lower() for line in added)
     # 教训类型应为 FAILURE
-    assert any(l.event_type == EventType.FAILURE for l in added)
+    assert any(line.event_type == EventType.FAILURE for line in added)
 
 
 # ============================================================
@@ -347,7 +347,7 @@ class TestIntegrationHelpers:
         )
         lessons = loop.get_all_lessons()
         assert len(lessons) >= 1
-        assert any(l.event_type == EventType.FAILURE for l in lessons)
+        assert any(line.event_type == EventType.FAILURE for line in lessons)
 
     def test_record_reflection_lesson(self, monkeypatch, tmp_path):
         import core.learning_feedback as mod
@@ -363,7 +363,7 @@ class TestIntegrationHelpers:
         lessons = loop.get_all_lessons()
         assert len(lessons) >= 1
         # 教训文本应包含 correction
-        assert any("probe call" in l.content for l in lessons)
+        assert any("probe call" in line.content for line in lessons)
 
 
 # ============================================================
@@ -394,7 +394,7 @@ def test_agent_r_reflector_integration(monkeypatch, tmp_path):
     # 学习闭环应有相应教训
     lessons = loop.get_all_lessons()
     assert len(lessons) >= 1
-    assert any("timeout" in l.content.lower() for l in lessons)
+    assert any("timeout" in line.content.lower() for line in lessons)
 
 
 # ============================================================

@@ -5,7 +5,12 @@
 用法: xiaoda doctor [--json] [--fix]
 """
 from typing import Any
-import json, sys, time, os, shutil, subprocess
+import json
+import sys
+import time
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from loguru import logger
 import contextlib

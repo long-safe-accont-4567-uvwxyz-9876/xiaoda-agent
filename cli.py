@@ -250,7 +250,7 @@ class CLIInterface:
         while ascii_lines and not ascii_lines[0].strip():
             ascii_lines.pop(0)
 
-        max_len = max(len(l) for l in ascii_lines) if ascii_lines else 40
+        max_len = max(len(line) for line in ascii_lines) if ascii_lines else 40
         flower_l = f"{_C.LEAF}✿{_C.RST}"
         flower_r = f"{_C.LEAF}✿{_C.RST}"
         grass_l = f"{_C.DGREEN}🌿{_C.RST}"

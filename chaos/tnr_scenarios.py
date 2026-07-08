@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
 
 from core.behavioral_health import BehavioralHealthScorer
 from core.degradation_strategy import DegradationStrategy, reset_degradation_strategy

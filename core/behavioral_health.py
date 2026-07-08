@@ -32,7 +32,6 @@ import asyncio
 import os
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Optional
 
 from loguru import logger
 

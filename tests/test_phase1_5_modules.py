@@ -1,6 +1,8 @@
 """Phase 1-5 新增模块的单元测试"""
 import pytest
-import os, sys, asyncio
+import os
+import sys
+import asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

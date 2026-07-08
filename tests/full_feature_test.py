@@ -137,7 +137,7 @@ async def main():
         record("effort", config.effort == "high")
         record("permission_mode", config.permission_mode == "dev")
         record("memory_scope", config.memory_scope == "shared")
-        record("background", config.background == True)
+        record("background", config.background)
     except Exception as e:
         record("SubAgentConfig", False, str(e))
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass
@@ -91,7 +91,7 @@ class SLAExporter:
         m = self._metrics.get(metric)
         if not m or m.type != "counter":
             return
-        key = tuple(labels.get(l, "") for l in m.labels)
+        key = tuple(labels.get(line, "") for line in m.labels)
         with self._lock:
             m.values[key] = m.values.get(key, 0) + value
 
@@ -100,7 +100,7 @@ class SLAExporter:
         m = self._metrics.get(metric)
         if not m or m.type != "gauge":
             return
-        key = tuple(labels.get(l, "") for l in m.labels)
+        key = tuple(labels.get(line, "") for line in m.labels)
         with self._lock:
             m.values[key] = value
 
@@ -109,7 +109,7 @@ class SLAExporter:
         m = self._metrics.get(metric)
         if not m or m.type != "histogram":
             return
-        key = tuple(labels.get(l, "") for l in m.labels)
+        key = tuple(labels.get(line, "") for line in m.labels)
         with self._lock:
             for b in m.buckets:
                 if value <= b:
@@ -237,7 +237,7 @@ class SLAExporter:
     def _format_labels(labels: list[str], values: tuple) -> str:
         if not labels or not values:
             return ""
-        pairs = [f'{l}="{v}"' for l, v in zip(labels, values) if l]
+        pairs = [f'{label}="{v}"' for label, v in zip(labels, values) if label]
         return "{" + ",".join(pairs) + "}" if pairs else ""
 
 

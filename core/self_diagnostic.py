@@ -17,7 +17,6 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 from collections.abc import Callable
 
 from loguru import logger

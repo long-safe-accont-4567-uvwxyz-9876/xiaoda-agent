@@ -22,10 +22,14 @@ class ReliabilityResult:
     @property
     def grade(self) -> str:
         s = self.overall_score
-        if s >= 0.9: return "A"
-        if s >= 0.8: return "B"
-        if s >= 0.7: return "C"
-        if s >= 0.6: return "D"
+        if s >= 0.9:
+            return "A"
+        if s >= 0.8:
+            return "B"
+        if s >= 0.7:
+            return "C"
+        if s >= 0.6:
+            return "D"
         return "F"
 
 
