@@ -30,9 +30,11 @@ web/dist/
 botpy.log.*
 docs/juejin-article.md
 market/.cache
-assets/stickers/
-assets/voice_refs/
-web/frontend/public/assets/wallpapers/
+assets/stickers/*
+!assets/stickers/.gitkeep
+assets/voice_refs/*
+!assets/voice_refs/.gitkeep
+web/frontend/public/assets/wallpapers/*
 
 # 调试脚本（不提交到生产）
 .dbg/
