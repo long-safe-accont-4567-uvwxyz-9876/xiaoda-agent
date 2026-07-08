@@ -137,7 +137,7 @@ class PermissionManager:
             old = self._mode
             self._mode = mode
             logger.info(
-                f"permission_manager.mode_changed",
+                "permission_manager.mode_changed",
                 old=old.value, new=mode.value,
             )
 

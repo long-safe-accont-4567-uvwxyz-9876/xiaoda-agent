@@ -3,9 +3,7 @@
 import asyncio
 import sys
 import os
-import time
 import tempfile
-import json
 from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -244,7 +242,7 @@ async def test_agnes_image():
     from tools.agnes_tools import agnes_image_generate
     from config import AGNES_API_KEY, AGNES_BASE_URL, AGNES_IMAGE_MODEL
 
-    print(f"\n[3.1] 配置检查:")
+    print("\n[3.1] 配置检查:")
     print(f"    INFO: AGNES_API_KEY = {'***' + AGNES_API_KEY[-4:] if AGNES_API_KEY else '(未设置)'}")
     print(f"    INFO: AGNES_BASE_URL = {AGNES_BASE_URL}")
     print(f"    INFO: AGNES_IMAGE_MODEL = {AGNES_IMAGE_MODEL}")
@@ -311,7 +309,7 @@ async def test_agnes_video():
     from tools.agnes_tools import agnes_video_generate
     from config import AGNES_API_KEY, AGNES_VIDEO_MODEL
 
-    print(f"\n[4.1] 配置检查:")
+    print("\n[4.1] 配置检查:")
     print(f"    INFO: AGNES_VIDEO_MODEL = {AGNES_VIDEO_MODEL}")
 
     if not AGNES_API_KEY:
@@ -339,7 +337,6 @@ async def test_agnes_video():
 
     # 4.3 帧数计算验证
     print("\n[4.3] 帧数计算验证:")
-    import math
     for seconds, fps in [(3, 8), (5, 24), (10, 30)]:
         raw_frames = int(seconds * fps)
         n = max(1, (raw_frames - 1) // 8)

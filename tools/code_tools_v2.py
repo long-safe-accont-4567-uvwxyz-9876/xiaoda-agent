@@ -295,7 +295,7 @@ def python_executor(code: str) -> ToolResult:
     except MemoryError:
         return ToolResult.fail("代码执行内存超限")
     except Exception as e:
-        return ToolResult.fail(f"执行错误: {str(e)}")
+        return ToolResult.fail(f"执行错误: {e!s}")
 
 
 @register_tool(
@@ -367,7 +367,7 @@ def calculator(expression: str) -> ToolResult:
         result = eval(expression, {"__builtins__": {}}, allowed_names)
         return ToolResult.ok(f"计算结果: {expression} = {result}")
     except Exception as e:
-        return ToolResult.fail(f"计算错误: {str(e)}")
+        return ToolResult.fail(f"计算错误: {e!s}")
 
 
 @register_tool(

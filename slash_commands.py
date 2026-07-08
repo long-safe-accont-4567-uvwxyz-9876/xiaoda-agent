@@ -225,7 +225,7 @@ class SlashCommandHandler:
             return f"已切换到 {model_id}（{provider}）"
         # 无参数：显示当前模型和可用第三方
         else:
-            pref = self._router.get_model_preference()
+            _pref = self._router.get_model_preference()
             label = self._router.get_model_preference_label()
             lines = [f"当前: {label}"]
             lines.append("预设: /model [mimo|mimo-pro|mimo-flash|mimo-mini]")

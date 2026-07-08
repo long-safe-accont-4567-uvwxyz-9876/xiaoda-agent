@@ -253,4 +253,4 @@ async def speech_to_text(file: UploadFile = File(...)) -> Any:
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(503, f"ASR 不可用：{str(e)}")
+        raise HTTPException(503, f"ASR 不可用：{e!s}")

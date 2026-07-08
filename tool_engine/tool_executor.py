@@ -217,7 +217,7 @@ class ToolExecutor:
         timeout = self.TOOL_TIMEOUTS.get(tool_name, self._global_timeout)
 
         try:
-            sig = inspect.signature(func)
+            _sig = inspect.signature(func)
             call_args = dict(arguments)
 
             if asyncio.iscoroutinefunction(func):

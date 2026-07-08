@@ -4,6 +4,11 @@ from plugins.discovery import discover_plugins, DiscoveredPlugin
 from plugins.manager import PluginManager, PluginState, PluginRecord
 
 __all__ = [
-    "PluginManifest", "parse_manifest", "discover_plugins", "DiscoveredPlugin",
-    "PluginManager", "PluginState", "PluginRecord",
+    "DiscoveredPlugin",
+    "PluginManager",
+    "PluginManifest",
+    "PluginRecord",
+    "PluginState",
+    "discover_plugins",
+    "parse_manifest",
 ]

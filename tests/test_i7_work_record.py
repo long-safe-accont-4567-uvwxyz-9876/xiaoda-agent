@@ -6,11 +6,7 @@
 - 持久化 (JSON 文件读写)
 - FIFO 上限 (500 条)
 """
-import json
-import os
 import sys
-import tempfile
-import time
 from pathlib import Path
 
 import pytest

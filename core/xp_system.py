@@ -217,7 +217,7 @@ def _push_levelup_event(user_id: str, old_level: XPLevel,
             f"{int(old_level)}->{int(new_level)} ({new_label}) xp={int(xp)}"
         )
         return
-    loop.create_task(manager.broadcast(event))
+    _xp_event = loop.create_task(manager.broadcast(event))  # noqa: RUF006
     logger.info(
         f"XPSystem.levelup user={user_id} "
         f"{int(old_level)}->{int(new_level)} ({new_label}) xp={int(xp)}"

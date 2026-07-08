@@ -1,4 +1,3 @@
-import os
 import json
 import asyncio
 from dataclasses import dataclass, field
@@ -1055,7 +1054,6 @@ class AgentDispatcher:
         返回去重后的任务类型列表，如 ["frontend", "security"]。
         单领域时返回单个元素的列表。
         """
-        import re
         text_lower = user_input.lower()
         rules = [
             (["前端", "frontend", "vue", "react", "css", "html", "ui 设计"], "frontend"),

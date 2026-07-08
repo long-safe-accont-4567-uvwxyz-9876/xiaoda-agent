@@ -145,11 +145,11 @@ async def system_info() -> Any:
         import psutil
     except ImportError as e:
         logger.error("health.psutil_import_failed error={}", str(e))
-        data["error"] = f"psutil导入失败: {str(e)}"
+        data["error"] = f"psutil导入失败: {e!s}"
         return Envelope(data=data)
     except Exception as e:
         logger.error("health.psutil_init_failed error={}", str(e))
-        data["error"] = f"psutil初始化失败: {str(e)}"
+        data["error"] = f"psutil初始化失败: {e!s}"
         return Envelope(data=data)
 
     data.update(_collect_cpu_mem_metrics(psutil))

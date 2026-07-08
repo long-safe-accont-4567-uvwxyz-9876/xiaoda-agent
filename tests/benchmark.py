@@ -5,7 +5,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import time
 import json
-import os
 
 
 def benchmark_context_compression():
@@ -100,7 +99,7 @@ def benchmark_error_classifier():
 
 def benchmark_credential_pool():
     """测试凭证池性能"""
-    from utils.credential_pool import CredentialPool, Credential, CredentialState
+    from utils.credential_pool import CredentialPool, Credential
 
     pool = CredentialPool()
     # 添加测试凭证
@@ -332,7 +331,7 @@ def run_all_benchmarks():
         history = all_results["上下文压缩"].get("history_compression", {})
         ccr = all_results["上下文压缩"].get("ccr_retrieval", {})
 
-        print(f"\n1. 上下文压缩:")
+        print("\n1. 上下文压缩:")
         print(f"   - 工具输出长文本压缩率: {tool.get('long_savings_pct', 'N/A')}%")
         print(f"   - 对话历史压缩率: {history.get('savings_pct', 'N/A')}%")
         print(f"   - CCR 检索平均延迟: {ccr.get('avg_latency_ms', 'N/A')} ms")
@@ -340,22 +339,22 @@ def run_all_benchmarks():
     # 延迟数据
     if "错误分类器" in all_results and "error" not in all_results["错误分类器"]:
         cls = all_results["错误分类器"].get("classification_latency", {})
-        print(f"\n2. 错误分类器:")
+        print("\n2. 错误分类器:")
         print(f"   - 平均分类延迟: {cls.get('avg_latency_us', 'N/A')} μs")
 
     if "凭证池" in all_results and "error" not in all_results["凭证池"]:
         rot = all_results["凭证池"].get("rotation_latency", {})
-        print(f"\n3. 凭证池:")
+        print("\n3. 凭证池:")
         print(f"   - 轮换平均延迟: {rot.get('avg_latency_us', 'N/A')} μs")
 
     if "工具护栏" in all_results and "error" not in all_results["工具护栏"]:
         chk = all_results["工具护栏"].get("check_latency", {})
-        print(f"\n4. 工具护栏:")
+        print("\n4. 工具护栏:")
         print(f"   - 检查平均延迟: {chk.get('avg_latency_us', 'N/A')} μs")
 
     if "Prompt Caching" in all_results and "error" not in all_results["Prompt Caching"]:
         apply = all_results["Prompt Caching"].get("apply_latency", {})
-        print(f"\n5. Prompt Caching:")
+        print("\n5. Prompt Caching:")
         print(f"   - 缓存标记平均延迟: {apply.get('avg_latency_us', 'N/A')} μs")
 
     # 保存结果

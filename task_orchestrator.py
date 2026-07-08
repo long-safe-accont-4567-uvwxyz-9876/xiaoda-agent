@@ -305,7 +305,7 @@ class RouterNode:
                 seen.add(internal)
         return valid
 
-    def __init__(self, client: AsyncOpenAI, model: str = None, belief_router: BeliefRouter | None = None) -> None:
+    def __init__(self, client: AsyncOpenAI, model: Optional[str] = None, belief_router: BeliefRouter | None = None) -> None:
         self._client = client
         self._model = model or os.getenv("MODEL_NAME", "mimo-v2.5")
         self._belief_router = belief_router
@@ -497,7 +497,7 @@ class RouterNode:
 
 class ParallelAgentNode:
     """并行执行节点，将任务拆分给多个 Agent 并行处理。"""
-    def __init__(self, dispatcher: AgentDispatcher, route_client: AsyncOpenAI, route_model: str = None, belief_router: BeliefRouter | None = None) -> None:
+    def __init__(self, dispatcher: AgentDispatcher, route_client: AsyncOpenAI, route_model: Optional[str] = None, belief_router: BeliefRouter | None = None) -> None:
         self._dispatcher = dispatcher
         self._route_client = route_client
         self._route_model = route_model or os.getenv("MODEL_NAME", "mimo-v2.5")
@@ -748,9 +748,9 @@ class ParallelAgentNode:
         sub_tasks = await self._decompose_task_v2(state.user_input, targets)
 
         for t in targets:
-            display_name = t
+            _display_name = t
             if t in state._agent_configs:
-                display_name = state._agent_configs[t].get("display_name", t)
+                _display_name = state._agent_configs[t].get("display_name", t)
             # await state.push_progress(get_status_msg(t, "thinking", f"{display_name}准备就绪...", None))  # 节流：并行模式下由外层统一汇报
 
         tasks = [
@@ -766,9 +766,9 @@ class ParallelAgentNode:
                 logger.error("parallel_agent.exception", error=str(r))
                 intermediate.append({"agent": "unknown", "display_name": "未知", "reply": f"执行异常: {r}", "error": True})
             elif isinstance(r, dict):
-                display_name = r.get("display_name", r.get("agent", ""))
-                status = "done" if not r.get("error") else "error"
-                emoji = "✅" if not r.get("error") else "❌"
+                _display_name = r.get("display_name", r.get("agent", ""))
+                _status = "done" if not r.get("error") else "error"
+                _emoji = "✅" if not r.get("error") else "❌"
                 # await state.push_progress(f"{emoji} {display_name}已完成 ({status})")  # 节流：并行模式下由外层统一汇报
                 intermediate.append(r)
 
@@ -794,7 +794,7 @@ class AgentNode:
             await state.push_progress(f"⚠️ {target}暂时不可用")
             if self._belief_router:
                 self._belief_router.update_belief(target, False)
-            return {"sub_agent_reply": f"该Agent暂时不可用", "final_output": ""}
+            return {"sub_agent_reply": "该Agent暂时不可用", "final_output": ""}
 
         display_name = agent.config.display_name
         await state.push_progress(get_status_msg(target, "using", f"{display_name}正在处理...", agent.config.personality_file))
@@ -837,7 +837,7 @@ class AgentNode:
 
 class SynthesisNode:
     """综合节点，汇总各 Agent 中间结果生成最终回复。"""
-    def __init__(self, client: AsyncOpenAI, model: str = None, xiaoda_chat_callback: Optional[Any]=None) -> None:
+    def __init__(self, client: AsyncOpenAI, model: Optional[str] = None, xiaoda_chat_callback: Optional[Any]=None) -> None:
         self._client = client
         self._model = model or os.getenv("MODEL_NAME", "mimo-v2.5")
         self._xiaoda_chat = xiaoda_chat_callback
@@ -914,7 +914,7 @@ async def route_condition(state: TaskState) -> str:
 
 
 def build_task_graph(dispatcher: AgentDispatcher, agent_configs: dict,
-                     route_client: AsyncOpenAI, route_model: str = None,
+                     route_client: AsyncOpenAI, route_model: Optional[str] = None,
                      xiaoda_chat_callback: Optional[Any]=None) -> TaskGraph:
     """构建任务图，组装路由/并行/单执行/综合节点并连接条件边。"""
     db_path = str(DATA_DIR / "agent.db")
@@ -964,8 +964,8 @@ def build_task_graph(dispatcher: AgentDispatcher, agent_configs: dict,
 
 async def run_task_graph(graph: TaskGraph, user_input: str, user_id: str,
                          session_id: str = "", status_callback: Optional[Any]=None,
-                         agent_configs: dict = None,
-                         dispatcher: AgentDispatcher = None) -> TaskState:
+                         agent_configs: Optional[dict] = None,
+                         dispatcher: Optional[AgentDispatcher] = None) -> TaskState:
     """运行任务图，驱动从路由到综合的完整执行流。"""
     state = TaskState(
         user_input=user_input,

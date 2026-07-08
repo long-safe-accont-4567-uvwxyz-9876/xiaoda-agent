@@ -108,7 +108,7 @@ async def service_manage(action: str, name: str = "", lines: int = 30) -> ToolRe
     except asyncio.TimeoutError:
         return ToolResult.fail(f"操作超时: {action}")
     except Exception as e:
-        return ToolResult.fail(f"服务管理错误: {str(e)}")
+        return ToolResult.fail(f"服务管理错误: {e!s}")
 
 
 @register_tool(
@@ -195,7 +195,7 @@ async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> 
     except asyncio.TimeoutError:
         return ToolResult.fail(f"操作超时: {action}")
     except Exception as e:
-        return ToolResult.fail(f"网络诊断错误: {str(e)}")
+        return ToolResult.fail(f"网络诊断错误: {e!s}")
 
 
 @register_tool(
@@ -247,7 +247,7 @@ async def dev_assist(action: str, path: str = _DEFAULT_PROJECT_DIR, lines: int =
     except asyncio.TimeoutError:
         return ToolResult.fail(f"操作超时: {action}")
     except Exception as e:
-        return ToolResult.fail(f"开发辅助错误: {str(e)}")
+        return ToolResult.fail(f"开发辅助错误: {e!s}")
 
 
 async def _dev_assist_git_status(path: str) -> ToolResult:
@@ -320,7 +320,7 @@ async def _dev_assist_logs(path: str, lines: int, service: str) -> ToolResult:
             recent = all_lines[-lines:]
             return ToolResult.ok(f"日志文件 {log_files[0]} (最后{len(recent)}行):\n{''.join(recent).strip()}")
         except Exception as e:
-            return ToolResult.fail(f"读取日志文件失败: {str(e)}")
+            return ToolResult.fail(f"读取日志文件失败: {e!s}")
     else:
         rc, log_out, _ = await _run_cmd(["journalctl", "-u", service, "-n", str(lines), "--no-pager"], timeout=30)
         if rc == 0 and log_out.strip() and log_out.strip() != "-- No entries --":

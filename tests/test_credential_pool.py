@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import unittest
 import asyncio
 import time
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from utils.credential_pool import CredentialPool, Credential, CredentialState, EXHAUSTED_COOLDOWN
 from utils.error_classifier import ClassifiedError, FailoverReason, RecoveryAction
 

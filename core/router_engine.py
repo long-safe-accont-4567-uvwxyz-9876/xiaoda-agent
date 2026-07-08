@@ -94,7 +94,7 @@ def _build_agent_names_pattern() -> str:
 
 def _build_negative_patterns() -> list[str]:
     """构建否定模式（含用户自定义 display_name）。"""
-    names_pat = _build_agent_names_pattern()
+    _names_pat = _build_agent_names_pattern()
     # 排除 xiaoda（否定模式只针对子代理）
     from config import get_agent_display_name
     sub_names: set[str] = set()

@@ -396,7 +396,7 @@ class ReliabilityBench:
             return (True, "partial_response")
         return (False, "")
 
-    def _try_degraded_reply(self, reason: str, original_resp: dict = None) -> tuple:
+    def _try_degraded_reply(self, reason: str, original_resp: Optional[dict] = None) -> tuple:
         """尝试通过 agent.degraded_reply 降级
 
         Returns:

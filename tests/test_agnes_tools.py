@@ -4,14 +4,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 class TestAgnesImageTool(unittest.TestCase):
 
     def test_agnes_image_no_api_key(self):
         """无 API Key 时返回失败"""
-        from tool_engine.tool_registry import ToolResult
         with patch.dict('os.environ', {'AGNES_API_KEY': ''}):
             # 需要重新导入以获取新的环境变量值
             import importlib

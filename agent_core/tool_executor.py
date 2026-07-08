@@ -14,7 +14,6 @@ from typing import Any, TYPE_CHECKING
 from loguru import logger
 
 from config import FILE_DIR, get_agent_display_name
-from emotion.emotion_enum import CN_TO_EN
 from utils.text_utils import strip_dsml, strip_reasoning, humanize
 from core.degradation_strategy import get_degradation_strategy
 

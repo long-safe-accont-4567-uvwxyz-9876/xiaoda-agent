@@ -13,9 +13,7 @@ Run:
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
-import time
 import tempfile
 import textwrap
 from pathlib import Path
@@ -110,7 +108,7 @@ async def test_prompt_rule_extraction():
     assert empty_spec.n_conditional_rules == 0
     assert empty_spec.n_invariants == 0
     assert empty_spec.n_state_preds == 0
-    print(f"\n  空提示词: rules=0, invariants=0, preds=0 ✓")
+    print("\n  空提示词: rules=0, invariants=0, preds=0 ✓")
 
     # 测试用例 4: 去重验证
     dup_prompt = "必须保持温柔。必须保持温柔。如果用户问问题，回答。如果用户问问题，回答。"
@@ -221,13 +219,13 @@ async def test_structural_element_counting():
         # 注释行不应增加计数 (只算 comments.py 之前已有的)
         comment_file_hits = [s for s in counts_with_comments.llm_call_sites if "comments.py" in s]
         assert len(comment_file_hits) == 0, "注释行被错误计数"
-        print(f"  注释行跳过 ✓")
+        print("  注释行跳过 ✓")
 
         # 验证空目录
         empty_dir = Path(tempfile.mkdtemp())
         empty_counts = count_structural_elements(empty_dir)
         assert empty_counts.total == 0
-        print(f"  空目录: total=0 ✓")
+        print("  空目录: total=0 ✓")
 
     print("  T2 PASS")
     return {
@@ -252,7 +250,7 @@ async def test_size_independence():
       3. 验证结构广度/LOC 比率不同
     """
     from memory.prompt_complexity import (
-        parse_prompt_spec, score_prompt_complexity, PromptComplexityScore
+        parse_prompt_spec, PromptComplexityScore
     )
 
     print("\n=== T3: 大小独立性验证 ===")
@@ -324,8 +322,8 @@ async def test_size_independence():
     # Hecate 核心论点验证: 决策分支在 prompt 层 (ρ=+0.27) 比在 code 层 (ρ=+0.06) 更有意义
     # 这里通过 n_conditional_rules 的差异体现
     print(f"\n  Hecate 验证: 条件规则数差异 {score_a.n_conditional_rules - score_b.n_conditional_rules}")
-    print(f"  → 相同 LOC 下, 结构广度高的组件复杂度显著更高")
-    print(f"  → 指标计数独立元素, 非体积代理 ✓")
+    print("  → 相同 LOC 下, 结构广度高的组件复杂度显著更高")
+    print("  → 指标计数独立元素, 非体积代理 ✓")
 
     print("  T3 PASS")
     return {
@@ -345,9 +343,7 @@ async def test_hotspot_identification_and_regression():
     3. 回归: 验证现有功能未被破坏
     """
     from memory.prompt_complexity import (
-        analyze_prompt_components, score_prompt_complexity,
-        check_complexity_budget, compute_prompt_hash,
-        parse_prompt_spec, count_structural_elements,
+        analyze_prompt_components, check_complexity_budget, compute_prompt_hash,
     )
 
     print("\n=== T4: 复杂度热点识别 + 回归测试 ===")
@@ -381,7 +377,7 @@ async def test_hotspot_identification_and_regression():
         f"条件规则计数 {report.total_score.n_conditional_rules} 过低, 期望 >=10"
 
     # 4.2 热点识别
-    print(f"\n  复杂度热点 (Top 5):")
+    print("\n  复杂度热点 (Top 5):")
     for i, c in enumerate(report.hotspots[:5], 1):
         print(f"    {i}. {c.name}: score={c.score.complexity_score:.3f}, "
               f"breadth={c.score.structural_breadth}, "
@@ -401,7 +397,7 @@ async def test_hotspot_identification_and_regression():
     [用户画像]
     """)
     budget = check_complexity_budget(test_prompt, max_complexity=5.0)
-    print(f"\n  预算检查:")
+    print("\n  预算检查:")
     print(f"    within_budget: {budget['within_budget']}")
     print(f"    score: {budget['score']}")
     print(f"    hash: {budget['hash'][:16]}...")
@@ -415,7 +411,7 @@ async def test_hotspot_identification_and_regression():
     hash3 = compute_prompt_hash("different prompt")
     assert hash1 == hash2, "相同提示词哈希不一致"
     assert hash1 != hash3, "不同提示词哈希相同"
-    print(f"\n  哈希确定性: ✓")
+    print("\n  哈希确定性: ✓")
 
     # 4.5 报告摘要生成
     summary = report.summary()
@@ -426,9 +422,9 @@ async def test_hotspot_identification_and_regression():
 
     # 4.6 回归: 验证现有模块导入正常
     try:
-        from memory.prompt_complexity import PromptComplexityScore, PromptSpec, StructuralCounts
-        from memory.prompt_complexity import ComplexityReport, ComponentComplexity
-        print(f"  模块导入: ✓")
+        from memory.prompt_complexity import PromptComplexityScore, PromptSpec, StructuralCounts  # noqa: F401
+        from memory.prompt_complexity import ComplexityReport, ComponentComplexity  # noqa: F401
+        print("  模块导入: ✓")
     except ImportError as e:
         pytest.fail(f"模块导入失败: {e}")
 
@@ -437,7 +433,7 @@ async def test_hotspot_identification_and_regression():
     assert "complexity_score" in score_dict
     assert "structural_breadth" in score_dict
     assert "is_high_complexity" in score_dict
-    print(f"  序列化: ✓")
+    print("  序列化: ✓")
 
     # 4.8 回归: 验证现有 benchmark_harness 仍可运行 (导入检查)
     try:
@@ -446,7 +442,7 @@ async def test_hotspot_identification_and_regression():
             # 只验证文件存在且可读, 不实际运行 (避免耗时)
             text = benchmark_path.read_text(encoding="utf-8")
             assert "benchmark" in text.lower()
-            print(f"  benchmark_harness 存在: ✓")
+            print("  benchmark_harness 存在: ✓")
     except Exception as e:
         print(f"  benchmark_harness 检查跳过: {e}")
 
@@ -489,8 +485,6 @@ async def test_scene_complexity_alignment():
         generate_alignment_report,
         SceneComplexityAlignment,
         Inversion,
-        Concentration,
-        Mismatch,
     )
 
     print("\n=== T5: 场景排序 × 复杂度对齐分析 ===")
@@ -501,7 +495,7 @@ async def test_scene_complexity_alignment():
 
     # 5.1 模块复杂度图
     complexity_map = compute_module_complexity_map(project_root)
-    print(f"\n  模块复杂度图:")
+    print("\n  模块复杂度图:")
     for module, score in sorted(complexity_map.items(), key=lambda x: x[1], reverse=True):
         print(f"    {module:<14} {score:.3f}")
 
@@ -546,7 +540,7 @@ async def test_scene_complexity_alignment():
         assert alignment.weighted_complexity >= 0, \
             f"场景 {alignment.scene} 加权复杂度为负"
 
-    print(f"\n  各场景状态:")
+    print("\n  各场景状态:")
     total_inversions = 0
     total_concentrations = 0
     total_mismatches = 0
@@ -658,7 +652,7 @@ async def test_scene_complexity_alignment():
             custom_current[module_name][alignment.scene] = int(priority)
 
     # 关键验证: 对每个倒挂, 高复杂度模块的优先级应被提升 (+1) 或保持上限 10
-    print(f"\n  推荐调整验证 (倒挂修复方向, 自定义矩阵):")
+    print("\n  推荐调整验证 (倒挂修复方向, 自定义矩阵):")
     direction_correct = 0
     direction_total = 0
     for alignment in custom_inversion_alignments:
@@ -744,7 +738,7 @@ async def test_scene_complexity_alignment():
     print(f"\n  报告长度: {len(report)} chars ✓")
 
     # 打印报告关键部分
-    print(f"\n  报告摘要:")
+    print("\n  报告摘要:")
     for line in report.split("\n"):
         if "场景对齐率" in line or "复杂度倒挂" in line or \
            "复杂度集中" in line or "场景不匹配" in line:
@@ -765,7 +759,7 @@ async def test_scene_complexity_alignment():
         assert all(isinstance(s, str) for s in d["concentrations"])
         assert all(isinstance(s, str) for s in d["mismatches"])
 
-    print(f"  序列化: ✓")
+    print("  序列化: ✓")
 
     # 5.9 边界测试: 空 alignments
     empty_recommended = recommend_priority_adjustment([])

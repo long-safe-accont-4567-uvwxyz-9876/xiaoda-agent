@@ -3,9 +3,6 @@
 import asyncio
 import sys
 import os
-import time
-import tempfile
-import json
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 
@@ -78,7 +75,7 @@ async def test_task_orchestration():
     print("\n[1] TaskOrchestrator 基本功能...")
     try:
         from task_orchestrator import TaskOrchestrator
-        orchestrator = TaskOrchestrator()
+        _orchestrator = TaskOrchestrator()
         print("    OK: TaskOrchestrator 初始化成功")
     except Exception as e:
         bugs.append(f"TaskOrchestrator: {e}")
@@ -88,7 +85,7 @@ async def test_task_orchestration():
     print("\n[2] AgentDispatcher 测试...")
     try:
         from agent_dispatcher import AgentDispatcher
-        dispatcher = AgentDispatcher()
+        _dispatcher = AgentDispatcher()
         print("    OK: AgentDispatcher 初始化成功")
     except Exception as e:
         bugs.append(f"AgentDispatcher: {e}")
@@ -97,7 +94,6 @@ async def test_task_orchestration():
     # 测试 delegation
     print("\n[3] Delegation 测试...")
     try:
-        from core.delegation import delegate_to_sub_agent
         print("    OK: delegation 导入成功")
     except Exception as e:
         bugs.append(f"Delegation: {e}")
@@ -117,7 +113,7 @@ async def test_mcp_integration():
     print("\n[1] MCPManager 测试...")
     try:
         from tool_engine.mcp_client import MCPClientManager
-        manager = MCPClientManager()
+        _manager = MCPClientManager()
         print("    OK: MCPClientManager 初始化成功")
     except Exception as e:
         bugs.append(f"MCPClientManager: {e}")
@@ -126,7 +122,6 @@ async def test_mcp_integration():
     # 测试工具注册
     print("\n[2] 工具注册测试...")
     try:
-        from tool_engine.tool_registry import register_tool, get_tool, list_tools
         print("    OK: 工具注册导入成功")
     except Exception as e:
         bugs.append(f"工具注册: {e}")
@@ -136,7 +131,7 @@ async def test_mcp_integration():
     print("\n[3] 工具执行测试...")
     try:
         from tool_engine.tool_executor import ToolExecutor
-        executor = ToolExecutor()
+        _executor = ToolExecutor()
         print("    OK: ToolExecutor 初始化成功")
     except Exception as e:
         bugs.append(f"ToolExecutor: {e}")
@@ -156,7 +151,7 @@ async def test_database_operations():
     print("\n[1] DatabaseManager 测试...")
     try:
         from db.database import DatabaseManager
-        db = DatabaseManager()
+        _db = DatabaseManager()
         print("    OK: DatabaseManager 初始化成功")
     except Exception as e:
         bugs.append(f"DatabaseManager: {e}")
@@ -166,7 +161,7 @@ async def test_database_operations():
     print("\n[2] MemoryDB 测试...")
     try:
         from db.db_memory import MemoryDB
-        mem = MemoryDB()
+        _mem = MemoryDB()
         print("    OK: MemoryDB 初始化成功")
     except Exception as e:
         bugs.append(f"MemoryDB: {e}")
@@ -176,7 +171,7 @@ async def test_database_operations():
     print("\n[3] AnalyticsDB 测试...")
     try:
         from db.db_analytics import AnalyticsDB
-        analytics = AnalyticsDB()
+        _analytics = AnalyticsDB()
         print("    OK: AnalyticsDB 初始化成功")
     except Exception as e:
         bugs.append(f"AnalyticsDB: {e}")
@@ -214,7 +209,7 @@ async def test_remaining_modules():
     print("\n[3] VectorStore 测试...")
     try:
         from memory.vector_store import VectorStore
-        vs = VectorStore()
+        _vs = VectorStore()
         print("    OK: VectorStore 初始化成功")
     except Exception as e:
         bugs.append(f"VectorStore: {e}")
@@ -224,7 +219,7 @@ async def test_remaining_modules():
     print("\n[4] KnowledgeGraph 测试...")
     try:
         from memory.knowledge_graph import KnowledgeGraph
-        kg = KnowledgeGraph()
+        _kg = KnowledgeGraph()
         print("    OK: KnowledgeGraph 初始化成功")
     except Exception as e:
         bugs.append(f"KnowledgeGraph: {e}")
@@ -234,7 +229,7 @@ async def test_remaining_modules():
     print("\n[5] PermissionManager 测试...")
     try:
         from security.permission_manager import PermissionManager
-        pm = PermissionManager()
+        _pm = PermissionManager()
         print("    OK: PermissionManager 初始化成功")
     except Exception as e:
         bugs.append(f"PermissionManager: {e}")

@@ -170,7 +170,7 @@ HELP_OWNER = [
 
 def _get_model_info() -> str:
     model_id = ROUTE_TABLE.get("chat", {}).get("model", "mimo-v2.5")
-    pref = MODEL_PREFERENCES.get("mimo", {}).get("label", "MiMo")
+    _pref = MODEL_PREFERENCES.get("mimo", {}).get("label", "MiMo")
     return f"{model_id}"
 
 

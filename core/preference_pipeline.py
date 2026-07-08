@@ -78,7 +78,7 @@ class PreferencePipeline:
                             task_description="经验晋升",
                             outcome=summary,
                         ))
-                    except Exception as e:
+                    except Exception:
                         logger.debug("preference_pipeline.record_feedback_failed", exc_info=True)
                 # L2: 晋升
                 await learning_manager.learning.promote_learning(learning["learning_id"])

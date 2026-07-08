@@ -62,7 +62,7 @@ async def remember(content: str, tags: str = "", importance: float = 0.5) -> Too
     except Exception as e:
         metrics.inc("memory.remember.failure")
         logger.error("memory_tool.remember_failed", error=str(e))
-        return ToolResult.fail(f"保存记忆失败：{str(e)}")
+        return ToolResult.fail(f"保存记忆失败：{e!s}")
 
 
 @register_tool(
@@ -109,7 +109,7 @@ async def recall(query: str, top_k: int = 5) -> ToolResult:
     except Exception as e:
         metrics.inc("memory.recall.failure")
         logger.error("memory_tool.recall_failed", error=str(e))
-        return ToolResult.fail(f"检索记忆失败：{str(e)}")
+        return ToolResult.fail(f"检索记忆失败：{e!s}")
 
 
 @register_tool(
@@ -147,4 +147,4 @@ async def forget(query: str) -> ToolResult:
     except Exception as e:
         metrics.inc("memory.forget.failure")
         logger.error("memory_tool.forget_failed", error=str(e))
-        return ToolResult.fail(f"删除记忆失败：{str(e)}")
+        return ToolResult.fail(f"删除记忆失败：{e!s}")

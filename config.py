@@ -5,7 +5,7 @@ import json
 import sys
 
 logger = logging.getLogger(__name__)
-from typing import Any
+from typing import Any, Optional
 import shutil
 from pathlib import Path
 from dotenv import load_dotenv
@@ -204,7 +204,7 @@ def _init_agent_json5(bundled_config: Path, user_config_dir: Path) -> None:
     if bundled_agent_json5.exists() and not user_agent_json5.exists():
         try:
             shutil.copy2(bundled_agent_json5, user_agent_json5)
-            print(f"[config] agent.json5 initialized from bundled resource")
+            print("[config] agent.json5 initialized from bundled resource")
         except Exception as e:
             print(f"[config] Warning: failed to copy agent.json5: {e}")
 
@@ -265,7 +265,7 @@ def _init_workspace_templates(bundled_config: Path) -> None:
                 old_content = target.read_text(encoding="utf-8")
                 if "nahida" in old_content.lower() or "纳西妲" in old_content:
                     should_copy = True
-                    print(f"[config] Updating outdated SOUL.md (contains old name)")
+                    print("[config] Updating outdated SOUL.md (contains old name)")
             except (OSError, UnicodeDecodeError):
                 logger.debug("config.soul_md_check_failed", exc_info=True)
         if should_copy:
@@ -415,7 +415,7 @@ _display_name_cache: dict[str, tuple[float, str]] = {}  # {name: (mtime, display
 _display_name_en_cache: dict[str, tuple[float, str]] = {}
 
 
-def clear_display_name_cache(name: str = None):
+def clear_display_name_cache(name: Optional[str] = None):
     """清除显示名缓存。
 
     当 display_name 变更时调用，确保下次读取时获取最新值。
@@ -888,74 +888,74 @@ MCP_SERVERS = {
 }
 
 __all__ = [
-    "get_base_dir",
-    "get_credentials_dir",
-    "get_config_dir",
-    "DEEPSEEK_API_KEY",
-    "DEEPSEEK_BASE_URL",
-    "MODEL_NAME",
-    "AGENT_CONFIG",
-    "DATA_DIR",
-    "LOG_DIR",
-    "WORKSPACE_DIR",
-    "CREDENTIALS_DIR",
-    "STICKER_DIR",
-    "XIAOLI_STICKER_DIR",
-    "AGENT_STICKER_BASE",
-    "FILE_DIR",
-    "MEDIA_DIR",
-    "VOICE_REF_DIR",
-    "MEMORY_STATE_DIR",
-    "PLUGINS_CONFIG_DIR",
     "AGENTS_CONFIG_DIR",
-    "agent_names",
-    "get_agent_display_name",
-    "get_agent_display_name_en",
-    "load_agent_config",
-    "SIMPLE_TASK_KEYWORDS",
-    "PRO_TASK_KEYWORDS",
+    "AGENT_CONFIG",
     "AGENT_ROUTE_KEYWORDS",
-    "MCP_SERVERS",
+    "AGENT_STICKER_BASE",
     "AGNES_API_KEY",
     "AGNES_BASE_URL",
-    "AGNES_TEXT_MODEL",
     "AGNES_IMAGE_MODEL",
+    "AGNES_TEXT_MODEL",
     "AGNES_VIDEO_MODEL",
-    "JINA_API_KEY",
-    "RERANKER_API_KEY",
-    "RERANKER_BASE_URL",
-    "RERANKER_MODEL",
-    "RERANKER_ENABLED",
-    "RERANKER_OVERSAMPLE_RATIO",
-    "QUERY_TRANSFORM_ENABLED",
-    "QUERY_EXPAND_COUNT",
-    "RETRIEVAL_SMART_SKIP",
-    "RETRIEVAL_PARALLEL_TRANSFORM",
-    "RETRIEVAL_PARALLEL_SEARCH",
-    "TTS_ASYNC_MODE",
-    "STREAM_STATUS_PUSH",
-    "SIMPLE_CHAT_FASTPATH",
-    "STREAM_TEXT_PUSH",
-    "STREAM_TOOL_STATUS",
-    "CIRCUIT_BREAKER_COOLDOWN",
-    "CIRCUIT_BREAKER_HALF_OPEN_PROBES",
-    "CIRCUIT_BREAKER_MAX_COOLDOWN",
-    "ERROR_RULE_STRICT_MODE",
-    "PROMPT_CACHING_ENABLED",
-    "RAG_RERANK_WEIGHT",
-    "RAG_KG_WEIGHT",
-    "RAG_IMPORTANCE_WEIGHT",
-    "RAG_RECALL_LIMIT",
-    "RAG_RERANK_LIMIT",
-    "MEMORY_COLD_MAX",
-    "MEMORY_WARM_MAX",
-    "MEMORY_WARM_VEC_WEIGHT",
-    "MAX_EPISODIC_MEMORIES",
-    "MEMORY_DISTILL_BATCH",
-    "MEMORY_DISTILL_ENABLED",
     "ASR_API_KEY",
     "ASR_BASE_URL",
     "ASR_MODEL",
+    "CIRCUIT_BREAKER_COOLDOWN",
+    "CIRCUIT_BREAKER_HALF_OPEN_PROBES",
+    "CIRCUIT_BREAKER_MAX_COOLDOWN",
+    "CREDENTIALS_DIR",
+    "DATA_DIR",
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_BASE_URL",
+    "ERROR_RULE_STRICT_MODE",
+    "FILE_DIR",
+    "JINA_API_KEY",
+    "LOG_DIR",
+    "MAX_EPISODIC_MEMORIES",
+    "MCP_SERVERS",
+    "MEDIA_DIR",
+    "MEMORY_COLD_MAX",
+    "MEMORY_DISTILL_BATCH",
+    "MEMORY_DISTILL_ENABLED",
+    "MEMORY_STATE_DIR",
+    "MEMORY_WARM_MAX",
+    "MEMORY_WARM_VEC_WEIGHT",
+    "MODEL_NAME",
+    "PLUGINS_CONFIG_DIR",
+    "PROMPT_CACHING_ENABLED",
+    "PRO_TASK_KEYWORDS",
+    "QUERY_EXPAND_COUNT",
+    "QUERY_TRANSFORM_ENABLED",
+    "RAG_IMPORTANCE_WEIGHT",
+    "RAG_KG_WEIGHT",
+    "RAG_RECALL_LIMIT",
+    "RAG_RERANK_LIMIT",
+    "RAG_RERANK_WEIGHT",
+    "RERANKER_API_KEY",
+    "RERANKER_BASE_URL",
+    "RERANKER_ENABLED",
+    "RERANKER_MODEL",
+    "RERANKER_OVERSAMPLE_RATIO",
+    "RETRIEVAL_PARALLEL_SEARCH",
+    "RETRIEVAL_PARALLEL_TRANSFORM",
+    "RETRIEVAL_SMART_SKIP",
+    "SIMPLE_CHAT_FASTPATH",
+    "SIMPLE_TASK_KEYWORDS",
+    "STICKER_DIR",
+    "STREAM_STATUS_PUSH",
+    "STREAM_TEXT_PUSH",
+    "STREAM_TOOL_STATUS",
+    "TTS_ASYNC_MODE",
+    "VOICE_REF_DIR",
+    "WORKSPACE_DIR",
+    "XIAOLI_STICKER_DIR",
+    "agent_names",
+    "get_agent_display_name",
+    "get_agent_display_name_en",
+    "get_base_dir",
+    "get_config_dir",
+    "get_credentials_dir",
+    "load_agent_config",
 ]
 
 # ── 向后兼容：从 prompt_builder 重新导出已拆分的函数 ──────────

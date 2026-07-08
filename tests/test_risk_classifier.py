@@ -1,5 +1,4 @@
 """执行纪律层单元测试 — 危险分级 + 证据门禁 + 改完验证"""
-import pytest
 
 from core.risk_classifier import EvidenceGate, PostValidator, RiskClassifier, RiskLevel
 

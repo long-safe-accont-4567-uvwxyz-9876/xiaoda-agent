@@ -56,7 +56,7 @@ async def main() -> None:
     cur = await conn.execute("SELECT COUNT(*) FROM knowledge_relations")
     rel_count = (await cur.fetchone())[0]
     await conn.close()
-    print(f"\n=== 回填完成 ===")
+    print("\n=== 回填完成 ===")
     print(f"成功: {ok}, 失败: {fail}")
     print(f"数据库实体总数: {ent_count}, 关系总数: {rel_count}")
 

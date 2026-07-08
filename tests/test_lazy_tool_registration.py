@@ -61,7 +61,7 @@ def test_cold_start_does_not_import_tools_submodules():
 def test_lazy_tool_resolve_and_cache():
     """首次调用懒注册工具解析 func 并返回结果，二次调用复用缓存。"""
     from tool_engine.tool_registry import (
-        register_lazy_tool, get_tool, unregister_tool, ToolPermission, ToolResult,
+        register_lazy_tool, get_tool, unregister_tool, ToolPermission,
     )
     from tool_engine.tool_executor import ToolExecutor
 
@@ -108,7 +108,7 @@ def test_lazy_tool_resolve_and_cache():
 def test_lazy_resolve_failure_returns_fail():
     """懒解析失败（模块不存在）时 ToolExecutor 返回 fail 而非抛异常。"""
     from tool_engine.tool_registry import (
-        register_lazy_tool, get_tool, unregister_tool, ToolPermission,
+        register_lazy_tool, unregister_tool, ToolPermission,
     )
     from tool_engine.tool_executor import ToolExecutor
 

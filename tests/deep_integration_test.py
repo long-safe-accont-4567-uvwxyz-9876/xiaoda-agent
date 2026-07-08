@@ -2,8 +2,6 @@
 """深度集成测试 - 验证所有模块集成和发现 Bug"""
 import sys
 import os
-import asyncio
-import traceback
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 

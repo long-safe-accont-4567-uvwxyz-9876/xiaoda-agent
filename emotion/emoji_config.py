@@ -25,7 +25,7 @@ def load_agent_emoji(agent_name: str, personality_file: str | None = None) -> di
                 m = re.search(rf'^\s*-\s*{key}:\s*(\S+)', text, re.MULTILINE)
                 if m:
                     config[key] = m.group(1)
-        except Exception as e:
+        except Exception:
             logger.debug("emoji_config.load_agent_emoji_failed", exc_info=True)
     return config
 

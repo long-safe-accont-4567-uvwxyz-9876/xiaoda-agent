@@ -204,7 +204,7 @@ class AgentCoreBootstrapper:
                         try:
                             shutil.copytree(emotion_dir, dest_emotion)
                             logger.info("bootstrap.stickers_copied", voice="xiaoda", emotion=emotion_dir.name)
-                        except Exception as e:
+                        except Exception:
                             logger.warning("bootstrap.stickers_copy_failed", voice="xiaoda", emotion=emotion_dir.name)
 
         # 复制 xiaoli 表情包
@@ -218,7 +218,7 @@ class AgentCoreBootstrapper:
                         try:
                             shutil.copytree(emotion_dir, dest_emotion)
                             logger.info("bootstrap.stickers_copied", voice="xiaoli", emotion=emotion_dir.name)
-                        except Exception as e:
+                        except Exception:
                             logger.warning("bootstrap.stickers_copy_failed", voice="xiaoli", emotion=emotion_dir.name)
 
     # 表情包情绪分类子目录（用户往这些目录放图片即可自动调用）

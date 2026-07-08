@@ -153,7 +153,7 @@ async def test_agnes_tools():
     from config import AGNES_API_KEY, AGNES_BASE_URL, AGNES_IMAGE_MODEL, AGNES_VIDEO_MODEL
 
     # 2.1 API Key 检查
-    print(f"\n[2.1] API Key 检查:")
+    print("\n[2.1] API Key 检查:")
     print(f"  AGNES_API_KEY: {'***' + AGNES_API_KEY[-4:] if AGNES_API_KEY else '(未设置)'}")
     print(f"  AGNES_BASE_URL: {AGNES_BASE_URL}")
     print(f"  AGNES_IMAGE_MODEL: {AGNES_IMAGE_MODEL}")
@@ -161,7 +161,6 @@ async def test_agnes_tools():
 
     # 2.2 图片生成工具 - 无 Key 降级测试
     print("\n[2.2] 图片生成工具 - 无 Key 降级测试:")
-    from tool_engine.tool_registry import ToolResult
     from tools.agnes_tools import agnes_image_generate, agnes_video_generate
 
     # 保存原始 Key
@@ -209,7 +208,6 @@ async def test_agnes_tools():
 
     # 2.5 视频生成 - 帧数计算检查
     print("\n[2.5] 视频生成 - 帧数计算检查:")
-    import math
     test_frames = [
         (5, 24, 113),   # 5秒24fps -> 120帧 -> n=14 -> 113
         (1, 24, 17),    # 1秒24fps -> 24帧 -> n=2 -> 17
@@ -225,8 +223,8 @@ async def test_agnes_tools():
     # 2.6 视频生成 - 轮询超时检查
     print("\n[2.6] 视频生成 - 轮询超时检查:")
     # 24次 * 5秒 = 120秒超时
-    print(f"  轮询次数: 24, 间隔: 5s, 总超时: 120s")
-    print(f"  [OK] 超时时间合理")
+    print("  轮询次数: 24, 间隔: 5s, 总超时: 120s")
+    print("  [OK] 超时时间合理")
 
     # 2.7 Agnes API Key 缺失在 .env.example 中
     print("\n[2.7] .env.example 检查:")

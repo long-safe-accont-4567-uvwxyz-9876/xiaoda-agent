@@ -19,7 +19,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import pytest
 
 
 def _build_test_tools():
@@ -343,7 +342,7 @@ class TestQuantitativeBenchmark:
         assert hybrid_hit, f"Hybrid 应通过向量检索命中 mail_send, 实际 {hybrid_names}"
         # 如果 BM25 漏召回, Hybrid 应补足 → 召回率提升
         if not bm25_hit:
-            print(f"  ✓ 语义召回提升: BM25 漏召回, Hybrid 通过向量补足")
+            print("  ✓ 语义召回提升: BM25 漏召回, Hybrid 通过向量补足")
 
 
 # ── 主入口 ───────────────────────────────────────────────────

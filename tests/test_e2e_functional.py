@@ -5,7 +5,6 @@
 
 import os
 import re
-import sys
 import asyncio
 import tempfile
 from pathlib import Path
@@ -13,7 +12,6 @@ from dataclasses import fields
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
-import pytest_asyncio
 
 
 # ── 1. 核心模块导入和初始化测试 ──────────────────────────────
@@ -141,7 +139,7 @@ class TestToolRegistryCompleteness:
         all_tools = get_all_tools()
         tool_names = {t.name for t in all_tools}
         # 验证之前遗漏的 6 个工具模块已注册
-        expected_modules = {
+        _expected_modules = {
             "agnes_tools", "hardware_tools", "system_tools",
             "vision_tools", "memory_tool", "nudge_tool",
         }
@@ -150,40 +148,34 @@ class TestToolRegistryCompleteness:
         assert len(tool_names) > 0, "工具列表不应为空"
 
     def test_agnes_tools_registered(self):
-        import tools.agnes_tools
         from tool_engine.tool_registry import _tools
-        agnes_names = [name for name in _tools if "agnes" in name.lower() or "search" in name.lower()]
+        _agnes_names = [name for name in _tools if "agnes" in name.lower() or "search" in name.lower()]
         # agnes_tools 模块应注册了至少一个工具
         import tools.agnes_tools as mod
         assert hasattr(mod, "__file__")
 
     def test_hardware_tools_registered(self):
-        import tools.hardware_tools
         from tool_engine.tool_registry import _tools
         hw_names = [name for name in _tools if "hardware" in name.lower() or "gpio" in name.lower() or "i2c" in name.lower()]
         assert len(hw_names) > 0, f"hardware_tools 应注册工具，当前工具列表: {list(_tools.keys())}"
 
     def test_system_tools_registered(self):
-        import tools.system_tools
         from tool_engine.tool_registry import _tools
         sys_names = [name for name in _tools if "service" in name.lower() or "network" in name.lower() or "system" in name.lower()]
         assert len(sys_names) > 0, f"system_tools 应注册工具，当前工具列表: {list(_tools.keys())}"
 
     def test_vision_tools_registered(self):
-        import tools.vision_tools
         from tool_engine.tool_registry import _tools
         vis_names = [name for name in _tools if "vision" in name.lower() or "camera" in name.lower() or "capture" in name.lower()]
         assert len(vis_names) > 0, f"vision_tools 应注册工具，当前工具列表: {list(_tools.keys())}"
 
     def test_memory_tool_registered(self):
-        import tools.memory_tool
         from tool_engine.tool_registry import _tools
         # memory_tool 注册的工具名为 remember/recall/forget
         mem_names = [name for name in _tools if name in ("remember", "recall", "forget")]
         assert len(mem_names) > 0, f"memory_tool 应注册 remember/recall/forget 工具，当前工具列表: {list(_tools.keys())}"
 
     def test_nudge_tool_registered(self):
-        import tools.nudge_tool
         from tool_engine.tool_registry import _tools
         nudge_names = [name for name in _tools if "nudge" in name.lower()]
         assert len(nudge_names) > 0, f"nudge_tool 应注册工具，当前工具列表: {list(_tools.keys())}"
@@ -299,7 +291,6 @@ class TestEmotionMappingConsistency:
     def test_emotion_simple_labels_in_agent_core_map(self):
         """测试 emotion_simple 检测的所有情绪标签在 agent_core 映射表中都有对应"""
         from emotion.emotion_simple import detect_emotion
-        from agent_core import AgentCore
 
         # agent_core 中的情绪映射表
         emotion_map = {"喜悦": "happy", "悲伤": "sad", "焦虑": "fear", "平静": "", "愤怒": "angry", "好奇": "curious"}

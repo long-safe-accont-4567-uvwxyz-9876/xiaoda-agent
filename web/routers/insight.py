@@ -278,7 +278,7 @@ async def list_relations(request: Request, limit: int = Query(default=200, le=50
 @router.put("/insight/knowledge/relations/{relation_id}", response_model=Envelope[dict])
 async def update_relation(relation_id: str, body: dict, request: Request) -> Any:
     core = request.app.state.core
-    kdb = core.db.knowledge
+    _kdb = core.db.knowledge
     rel_type = (body.get("relation") or body.get("relation_type") or "").strip()
     if not rel_type:
         raise HTTPException(400, "relation 不能为空")
@@ -418,7 +418,7 @@ async def create_memory(body: dict, request: Request) -> Any:
 async def update_memory(memory_id: int, body: dict, request: Request) -> Any:
     core = request.app.state.core
     sets, params = [], []
-    if "summary" in body and body["summary"]:
+    if "summary" in body and body["summary"]:  # noqa: RUF019
         sets.append("summary=?")
         params.append(body["summary"])
     if "importance" in body:
@@ -435,7 +435,7 @@ async def update_memory(memory_id: int, body: dict, request: Request) -> Any:
     if not n:
         raise HTTPException(404, f"记忆 {memory_id} 不存在")
     # 同步更新向量索引
-    if "summary" in body and body["summary"]:
+    if "summary" in body and body["summary"]:  # noqa: RUF019
         try:
             if core.memory:
                 await core.memory.vec.upsert(memory_id, body["summary"])

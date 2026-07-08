@@ -10,7 +10,7 @@ import secrets
 from collections import OrderedDict
 from pathlib import Path
 from threading import Lock
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Depends
 from loguru import logger

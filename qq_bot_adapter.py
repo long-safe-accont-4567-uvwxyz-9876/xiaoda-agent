@@ -1012,7 +1012,7 @@ class AIQQBot(botpy.Client):
         stream_start = time.monotonic()
         total_len = len(full_text)
         is_group = isinstance(message, GroupMessage)
-        group_openid = getattr(message, "group_openid", "") if is_group else ""
+        _group_openid = getattr(message, "group_openid", "") if is_group else ""
 
         # 群聊：按字节上限切片（最多 4 片，ACK+4片=5次配额）；C2C 按 300 字符切片
         if is_group:
@@ -1139,7 +1139,7 @@ class AIQQBot(botpy.Client):
             return
 
         # 长回复：前 N-1 片流式发送，最后一片与表情包合并发送
-        group_openid = getattr(message, "group_openid", "") if is_group else ""
+        _group_openid2 = getattr(message, "group_openid", "") if is_group else ""
 
         _group_no_proactive_sticker = ("被动回复", "超过限制", "无权限", "40034105")
 

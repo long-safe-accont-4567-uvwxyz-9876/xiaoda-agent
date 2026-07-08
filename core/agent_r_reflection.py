@@ -173,7 +173,7 @@ class AgentRReflector:
             record_reflection_lesson(
                 lesson_text=lesson, pattern=pattern, correction=correction,
             )
-        except Exception as e:
+        except Exception:
             logger.debug("agent_r_reflection.record_lesson_failed", exc_info=True)
 
         return memory

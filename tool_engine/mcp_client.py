@@ -873,7 +873,7 @@ class MCPManager:
                 permission="read_only",
                 category="sdk_mcp",
             )
-        logger.info(f"mcp_manager.sdk_server_registered", name=server.name,
+        logger.info("mcp_manager.sdk_server_registered", name=server.name,
                     tools=len(server.tools))
 
     def _make_sdk_tool_wrapper(self, server_name: str, tool_name: str) -> Any:
@@ -996,13 +996,13 @@ class SdkMcpServer:
             result = await tool.handler(arguments)
             return result
         except Exception as e:
-            logger.error(f"sdk_mcp_server.call_tool.error", tool=tool_name, error=str(e))
+            logger.error("sdk_mcp_server.call_tool.error", tool=tool_name, error=str(e))
             return {"error": str(e)}
 
     def register_tool(self, tool: SdkMcpTool) -> None:
         """注册工具"""
         self.tools[tool.name] = tool
-        logger.debug(f"sdk_mcp_server.register_tool", name=tool.name, server=self.name)
+        logger.debug("sdk_mcp_server.register_tool", name=tool.name, server=self.name)
 
 
 def create_sdk_mcp_server(name: str, version: str = "1.0.0",

@@ -99,7 +99,7 @@ class PreferenceValidator:
 
             pipeline = get_preference_pipeline()
             loop = get_learning_loop()
-            lf = get_learning_feedback_loop()
+            _lf = get_learning_feedback_loop()
 
             # 记录前快照
             constraints_before = len(loop.get_active_constraints())

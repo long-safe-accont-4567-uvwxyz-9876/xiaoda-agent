@@ -9,7 +9,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from plugins.manifest import PluginManifest
-from plugins.permissions import PermissionChecker, PermissionDenied
+from plugins.permissions import PermissionChecker
 
 
 class PluginContext:

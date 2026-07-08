@@ -2,9 +2,7 @@
 
 验证在双显卡系统（核显 + 独显）上，ncnn Vulkan 设备选择优先使用独显。
 """
-import sys
 import os
-from unittest import mock
 
 
 class FakeGpuInfo:

@@ -1,5 +1,4 @@
 import os
-import json
 import asyncio
 import time
 from collections import OrderedDict
@@ -286,7 +285,7 @@ async def web_search(query: str) -> ToolResult:
 
         return result
     except Exception as e:
-        return ToolResult.fail(f"搜索错误: {str(e)}")
+        return ToolResult.fail(f"搜索错误: {e!s}")
 
 
 @register_tool(
@@ -324,4 +323,4 @@ async def get_weather(city: str) -> ToolResult:
         result = await asyncio.to_thread(_fetch_weather)
         return ToolResult.ok(f"🌤️ {result}")
     except Exception as e:
-        return ToolResult.fail(f"获取天气失败: {str(e)}")
+        return ToolResult.fail(f"获取天气失败: {e!s}")

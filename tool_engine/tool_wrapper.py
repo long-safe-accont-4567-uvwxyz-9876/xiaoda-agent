@@ -10,7 +10,7 @@ import os
 import logging
 import contextvars
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger("tool_wrapper")
 
@@ -154,7 +154,7 @@ class ToolResultV2:
         error_code: str = "",
         error_msg: str = "",
         suggestion: str = "",
-        metadata: dict = None,
+        metadata: Optional[dict] = None,
     ):
         self.ok = ok
         self.data = data

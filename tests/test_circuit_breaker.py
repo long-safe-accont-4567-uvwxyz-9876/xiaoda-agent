@@ -1,5 +1,4 @@
 """熔断器与认知状态追踪单元测试"""
-import time
 from unittest.mock import patch
 
 import pytest

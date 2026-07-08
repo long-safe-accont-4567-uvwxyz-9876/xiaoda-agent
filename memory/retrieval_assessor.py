@@ -3,8 +3,6 @@
 基于 Corrective RAG (arXiv:2401.15884) 的思路，
 用轻量级方法评估检索结果与查询的相关性。
 """
-from typing import Optional
-from loguru import logger
 
 
 class RetrievalAssessor:

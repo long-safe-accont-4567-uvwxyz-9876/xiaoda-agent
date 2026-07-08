@@ -87,6 +87,6 @@ async def main():
     assessor.assess("test", mock)
     t1 = time.perf_counter()
     print(f"  意图分类 + CRAG评估: {(t1-t0)*1000:.2f}ms")
-    print(f"  （缓存命中时跳过全部检索，净延迟 < 0.1ms）")
+    print("  （缓存命中时跳过全部检索，净延迟 < 0.1ms）")
 
 asyncio.run(main())

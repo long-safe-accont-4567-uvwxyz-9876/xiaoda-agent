@@ -12,7 +12,6 @@ import asyncio
 import sys
 from pathlib import Path
 
-import pytest
 
 # 确保项目根目录在 sys.path 中
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -33,7 +32,6 @@ from chaos.tnr_scenarios import (
 from core.behavioral_health import BehavioralHealthScorer, HealthLevel
 from core.degradation_strategy import (
     DegradationLevel,
-    DegradationStrategy,
     reset_degradation_strategy,
 )
 from core.recovery_orchestrator import RecoveryOrchestrator

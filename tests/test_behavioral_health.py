@@ -6,12 +6,10 @@
 """
 import time
 
-import pytest
 
 from core.behavioral_health import (
     BehavioralHealthScorer,
     HealthLevel,
-    HealthScore,
 )
 from core.zombie_detector import ZombieDetector, ZombieProcess
 

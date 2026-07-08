@@ -15,8 +15,6 @@
 - 通过构造函数参数固定场景行为 (probability=1.0 等) 以保证确定性
 - 通过构造已知 ScenarioResult 直接验证评分计算
 """
-import asyncio
-import os
 import sys
 from pathlib import Path
 
@@ -34,9 +32,7 @@ from chaos.reliability_bench import (  # noqa: E402
     ScenarioResult,
 )
 from tests.fault_injection import (  # noqa: E402
-    FaultConfig,
     FaultInjectingLLMClient,
-    FaultType,
 )
 
 

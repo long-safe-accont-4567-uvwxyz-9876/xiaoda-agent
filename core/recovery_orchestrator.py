@@ -121,7 +121,7 @@ class RecoveryOrchestrator:
                 level_str = strategy.get("level", "RETRY")
                 try:
                     return RecoveryLevel[level_str]
-                except KeyError as e:
+                except KeyError:
                     logger.debug("recovery_orchestrator.invalid_recovery_level", exc_info=True)
         # 默认规则
         if "timeout" in err_str or "connection" in err_str:
@@ -332,12 +332,12 @@ class RecoveryOrchestrator:
             for cb in diag._callbacks:
                 try:
                     if asyncio.iscoroutinefunction(cb):
-                        asyncio.create_task(cb(report))
+                        _diag_cb = asyncio.create_task(cb(report))  # noqa: RUF006
                     else:
                         cb(report)
                 except Exception:
                     pass
-        except Exception as e:
+        except Exception:
             logger.debug("recovery_orchestrator.escalate_to_human_failed", exc_info=True)
 
     def stats(self) -> dict:

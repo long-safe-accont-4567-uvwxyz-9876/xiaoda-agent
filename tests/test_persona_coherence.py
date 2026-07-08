@@ -11,10 +11,7 @@
 - 环境变量开关 (零质量回退)
 - SOUL 内容更新
 """
-import json
-from pathlib import Path
 
-import pytest
 
 from core.persona_coherence import (
     PersonaCheck,

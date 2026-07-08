@@ -15,7 +15,6 @@ if str(PROJECT_ROOT) not in sys.path:
 # 测试环境默认启用开发板模式
 os.environ.setdefault("AGENT_DEV_MODE", "1")
 
-import pytest
 
 from security.instruction_hierarchy import (
     Instruction,

@@ -30,7 +30,7 @@ pytestmark = pytest.mark.asyncio
 async def test_l2_golden_dataset():
     """L2: Golden Dataset 完整性验证."""
     from memory.matrix_governance import (
-        get_golden_dataset, get_golden_case, GOLDEN_DATASET, LLM_JUDGE_RUBRIC,
+        get_golden_dataset, get_golden_case, LLM_JUDGE_RUBRIC,
     )
 
     print("\n=== L2: Golden Dataset 完整性 ===")
@@ -54,14 +54,14 @@ async def test_l2_golden_dataset():
     scene_counts = Counter(c.scene for c in dataset)
     for scene, count in scene_counts.items():
         assert count == 3, f"场景 {scene} 应有 3 case, 实际 {count}"
-    print(f"  每场景 3 case ✓")
+    print("  每场景 3 case ✓")
 
     # 4. 难度分布: 每场景 easy/medium/hard 各 1
     for scene in expected_scenes:
         difficulties = [c.difficulty for c in dataset if c.scene == scene]
         assert sorted(difficulties) == ["easy", "hard", "medium"], \
             f"场景 {scene} 难度分布异常: {difficulties}"
-    print(f"  难度分布: 每场景 easy/medium/hard 各 1 ✓")
+    print("  难度分布: 每场景 easy/medium/hard 各 1 ✓")
 
     # 5. 字段完整性
     for c in dataset:
@@ -71,19 +71,19 @@ async def test_l2_golden_dataset():
             "USER.md", "AGENTS.md", "MEMORY.md", "HEARTBEAT.md"
         ), f"case {c.case_id} 期望末尾模块不在 Scene-Aware Middle: {c.expected_priority_tail}"
         assert c.difficulty in ("easy", "medium", "hard"), f"难度值异常: {c.difficulty}"
-    print(f"  字段完整性 ✓")
+    print("  字段完整性 ✓")
 
     # 6. case_id 唯一
     case_ids = [c.case_id for c in dataset]
     assert len(set(case_ids)) == 30, "case_id 有重复"
-    print(f"  case_id 唯一 ✓")
+    print("  case_id 唯一 ✓")
 
     # 7. get_golden_case 按 ID 查询
     case = get_golden_case("greeting_1")
     assert case is not None
     assert case.scene == "greeting"
     assert get_golden_case("nonexistent") is None
-    print(f"  按 ID 查询 ✓")
+    print("  按 ID 查询 ✓")
 
     # 8. LLM-as-Judge rubric 存在且含关键占位符
     assert "{user_input}" in LLM_JUDGE_RUBRIC
@@ -91,7 +91,7 @@ async def test_l2_golden_dataset():
     assert "{response}" in LLM_JUDGE_RUBRIC
     assert "5 分" in LLM_JUDGE_RUBRIC  # GEM 2026: 最高分描述
     assert "1 分" in LLM_JUDGE_RUBRIC  # GEM 2026: 最低分描述
-    print(f"  LLM-as-Judge rubric 完整 ✓")
+    print("  LLM-as-Judge rubric 完整 ✓")
 
     print("  L2 PASS")
     return {"n_cases": len(dataset), "n_scenes": len(scenes)}
@@ -103,7 +103,7 @@ async def test_l3_auto_optimizer():
     import prompt_builder
     from memory.matrix_governance import (
         auto_optimize_matrix, save_snapshot, rollback_snapshot, list_snapshots,
-        compute_matrix_diff, _get_current_matrix,
+        compute_matrix_diff,
     )
 
     print("\n=== L3: 自动优化器 ===")
@@ -123,7 +123,7 @@ async def test_l3_auto_optimizer():
         os.environ.pop("PROMPT_MATRIX_AUTO_APPLY", None)
         forced_dry = auto_optimize_matrix(dry_run=False)
         assert forced_dry["applied"] is False, "未设环境变量不应实际应用"
-        print(f"  环境变量门控 ✓")
+        print("  环境变量门控 ✓")
 
         # 3. 快照机制
         snap_count_before = len(list_snapshots())
@@ -152,12 +152,12 @@ async def test_l3_auto_optimizer():
         # 5. 回滚机制 (回滚到刚保存的快照)
         rolled_back = rollback_snapshot(snap.snapshot_id)
         assert rolled_back is True, "回滚应成功"
-        print(f"  回滚成功 ✓")
+        print("  回滚成功 ✓")
 
         # 6. 回滚不存在的快照
         rolled_back_fake = rollback_snapshot("nonexistent_snap")
         assert rolled_back_fake is False
-        print(f"  回滚不存在快照: 返回 False ✓")
+        print("  回滚不存在快照: 返回 False ✓")
 
         # 7. 列出快照
         snaps = list_snapshots()
@@ -231,13 +231,13 @@ async def test_l4_ab_test():
         assert "mode" in report_dict
         assert "per_case" in report_dict
         assert len(report_dict["per_case"]) == 30
-        print(f"  报告序列化: 30 case 详情 ✓")
+        print("  报告序列化: 30 case 详情 ✓")
 
         # 6. canary 模式 (含 LLM-as-Judge 占位)
         runner_canary = ABTestRunner(mode="canary")
         report_canary = runner_canary.run_canary()
         assert report_canary.mode == "canary"
-        print(f"  canary 模式 ✓")
+        print("  canary 模式 ✓")
 
         # 7. run_full_eval 入口 (自动决定模式)
         runner_full = ABTestRunner(mode="shadow")
@@ -305,7 +305,7 @@ async def test_l5_health_evaluation():
         # 4. 无退化时不回滚
         rolled_back = rollback_if_degraded(baseline)
         assert rolled_back is False, "无退化时不应回滚"
-        print(f"  无退化不回滚 ✓")
+        print("  无退化不回滚 ✓")
 
         # 5. 退化时回滚 (构造退化基线)
         degraded_baseline = {
@@ -318,13 +318,13 @@ async def test_l5_health_evaluation():
         save_snapshot(reason="test_l5_degraded")
         rolled_back_degraded = rollback_if_degraded(degraded_baseline)
         assert rolled_back_degraded is True, "退化时应回滚"
-        print(f"  退化时自动回滚 ✓")
+        print("  退化时自动回滚 ✓")
 
         # 6. 健康报告序列化
         health_dict = health.to_dict()
         assert "should_rollback" in health_dict
         assert "rollback_reasons" in health_dict
-        print(f"  健康报告序列化 ✓")
+        print("  健康报告序列化 ✓")
     finally:
         # 恢复原始矩阵 (避免污染其他测试)
         prompt_builder._MODULE_SCENE_PRIORITY = original_matrix
@@ -362,7 +362,7 @@ async def test_e2e_full_loop():
         os.environ.pop("PROMPT_MATRIX_AUTO_APPLY", None)
         result_no_env = optimize_and_validate(auto_apply=True, full_eval=False)
         assert result_no_env["applied"] is False, "无环境变量不应应用"
-        print(f"  无环境变量: 强制 dry-run ✓")
+        print("  无环境变量: 强制 dry-run ✓")
 
         # 3. auto_apply=True + 环境变量 + full_eval
         os.environ["PROMPT_MATRIX_AUTO_APPLY"] = "1"
@@ -397,7 +397,7 @@ async def test_l6_llm_judge_injection():
     import copy
     import prompt_builder
     from memory.matrix_governance import (
-        ABTestRunner, ABTestReport, LLM_JUDGE_RUBRIC,
+        ABTestRunner, ABTestReport,
     )
 
     print("\n=== L6: LLM-as-Judge 注入 ===")
@@ -422,7 +422,7 @@ async def test_l6_llm_judge_injection():
         assert parse('评分 3') == 3.0
         assert parse('no score here') == 0.0
         assert parse('{"reason": "x"}') == 0.0  # 无 score 字段
-        print(f"  _parse_judge_score 多格式解析 ✓")
+        print("  _parse_judge_score 多格式解析 ✓")
 
         # 3. 注入 mock router
         class MockRouter:
@@ -491,7 +491,7 @@ async def test_l6_llm_judge_injection():
         assert runner._decide_with_judge(shadow_report, {"scores": [3.0], "avg_score": 3.0}) == "inconclusive"
         # 无 scores → 退回 shadow
         assert runner._decide_with_judge(shadow_report, {"scores": []}) == shadow_report.recommendation
-        print(f"  决策矩阵: >=4.0 ship / <=2.0 rollback / (2,4) inconclusive ✓")
+        print("  决策矩阵: >=4.0 ship / <=2.0 rollback / (2,4) inconclusive ✓")
 
         # 5. shadow 显著时直接用 shadow 决策 (忽略 LLM)
         sig_report = ABTestReport(
@@ -499,14 +499,14 @@ async def test_l6_llm_judge_injection():
             is_significant=True, recommendation="rollback",
         )
         assert runner._decide_with_judge(sig_report, {"scores": [4.5], "avg_score": 4.5}) == "rollback"
-        print(f"  shadow 显著时覆盖 LLM 决策 ✓")
+        print("  shadow 显著时覆盖 LLM 决策 ✓")
 
         # 6. report.to_dict 含 LLM 字段
         report_dict = report.to_dict()
         assert "llm_judge_avg_score" in report_dict
         assert "llm_judge_n_cases" in report_dict
         assert "llm_judge_note" in report_dict
-        print(f"  报告序列化含 LLM 字段 ✓")
+        print("  报告序列化含 LLM 字段 ✓")
 
     finally:
         prompt_builder._MODULE_SCENE_PRIORITY = original_matrix

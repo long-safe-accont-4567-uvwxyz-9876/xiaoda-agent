@@ -112,7 +112,7 @@ def _select_discrete_gpu_index(gpu_names: list[str], gpu_count: int) -> int:
             logger.info(f"vulkan non-integrated gpu selected: device={i} name={name}")
             return i
 
-    logger.info(f"vulkan no discrete gpu found, using device 0")
+    logger.info("vulkan no discrete gpu found, using device 0")
     return 0
 
 
@@ -215,7 +215,7 @@ def _select_discrete_gpu_index(gpu_names: list[str], gpu_count: int) -> int:
             logger.info(f"vulkan non-integrated gpu selected: device={i} name={name}")
             return i
 
-    logger.info(f"vulkan no discrete gpu found, using device 0")
+    logger.info("vulkan no discrete gpu found, using device 0")
     return 0
 
 

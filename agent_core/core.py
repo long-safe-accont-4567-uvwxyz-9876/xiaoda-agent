@@ -25,9 +25,8 @@ from agent_core._shared import (
     UserIdentity,
 )
 
-from config import (AGENT_CONFIG, WORKSPACE_DIR, STICKER_DIR, XIAOLI_STICKER_DIR, FILE_DIR,
-                    build_system_prompt, build_safe_system_prompt, SIMPLE_TASK_KEYWORDS,
-                    PRO_TASK_KEYWORDS, TTS_ASYNC_MODE, SIMPLE_CHAT_FASTPATH)
+from config import (STICKER_DIR, XIAOLI_STICKER_DIR, FILE_DIR,
+                    build_system_prompt)
 from model_router import ModelRouter
 from agent_context import AgentContext
 from agent_core.shared_blackboard import SharedBlackboard
@@ -37,17 +36,11 @@ from tool_engine.tool_registry import to_openai_tools
 from tool_engine.tool_executor import ToolExecutor
 from tool_engine.tool_repair import ToolCallRepair
 from memory.memory_manager import MemoryManager
-from emotion.emotion_simple import detect_emotion, build_emotion_hint
-from emotion.emotion_enum import CN_TO_EN, is_unified, ensure_emotion_tag
 from utils.result_wrapper import ResultWrapper
-from utils.text_utils import (strip_dsml, has_dsml_tool_calls, parse_dsml_tool_calls,
-                              humanize, encode_image_to_base64)
 from emotion.portrait_manager import PortraitManager
 from memory.notebook_manager import NotebookManager
 from memory.learning_manager import LearningManager
 from slash_commands import SlashCommandHandler
-from emotion.sticker_manager import StickerManager
-from utils.file_receiver import FileReceiver
 from core.lazy_loader import LazyLoader
 from tool_engine.tool_call_handler import ToolCallHandler
 from xiaoli_agent import XiaoliAgent
@@ -68,7 +61,7 @@ if TYPE_CHECKING:
     from task_orchestrator import TaskGraph
     from instinct_manager import InstinctManager
 
-from core.background_tasks import BackgroundTaskManager, _bg_tasks
+from core.background_tasks import BackgroundTaskManager
 from core.bootstrap import AgentCoreBootstrapper
 from core.router_engine import RouterEngine
 from core.chat_processor import ChatProcessor
@@ -344,7 +337,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
 
     async def set_permission_mode(self, mode: str) -> None:
         """设置权限模式"""
-        from security.permission_manager import get_permission_manager, PermissionMode
+        from security.permission_manager import get_permission_manager
         pm = get_permission_manager()
         pm.set_mode(mode)
 

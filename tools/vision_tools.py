@@ -41,7 +41,7 @@ def camera_capture(device: int = 0, width: int = 640, height: int = 480, save: b
         h, w = frame.shape[:2]
         return ToolResult.ok(f"📸 拍照成功 | 分辨率: {w}x{h} | 保存: {saved_path or '否'}")
     except Exception as e:
-        return ToolResult.fail(f"拍照失败: {str(e)}")
+        return ToolResult.fail(f"拍照失败: {e!s}")
 
 
 @register_tool(
@@ -81,4 +81,4 @@ def vision_analyze(action: str, device: int = 0) -> ToolResult:
         else:
             return ToolResult.fail(f"不支持的分析动作: {action}")
     except Exception as e:
-        return ToolResult.fail(f"分析失败: {str(e)}")
+        return ToolResult.fail(f"分析失败: {e!s}")

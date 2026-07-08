@@ -30,7 +30,6 @@ TNR 三步自愈规约:
 """
 from __future__ import annotations
 
-import asyncio
 import time
 from dataclasses import dataclass, field
 from enum import Enum

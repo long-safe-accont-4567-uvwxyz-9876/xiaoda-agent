@@ -8,11 +8,6 @@ from db.database import DatabaseManager
 from db.db_memory import MemoryDB
 # FTS5 分词工具从 db.fts_utils 导入 (打破 db <-> memory 循环); 这里 re-export
 # 保持向后兼容 (其他模块仍可 `from memory.memory_manager import _tokenize_for_fts`)
-from db.fts_utils import (
-    _tokenize_for_fts,
-    _extract_fts_keywords,
-    _build_fts_query,
-)
 from .vector_store import VectorStore
 from .fluid_memory import FluidMemory
 from .memory_distiller import MemoryDistiller
@@ -336,7 +331,7 @@ class MemoryManager:
             for r in recent:
                 if _normalize_for_dedupe(r.get("summary", "")) == normalized:
                     return True
-        except (OSError, TypeError) as e:
+        except (OSError, TypeError):
             logger.debug("memory_manager.is_duplicate_check_failed", exc_info=True)
         return False
 
@@ -802,7 +797,7 @@ class MemoryManager:
                 if self.kg:
                     try:
                         query_entities = await self.kg.get_query_entities(query)
-                    except Exception as e:
+                    except Exception:
                         logger.debug("memory_manager.query_entities_failed", exc_info=True)
                 await self._compute_final_scores(query, results, config, query_entities)
 

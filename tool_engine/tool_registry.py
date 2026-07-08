@@ -102,13 +102,13 @@ def _validate_schema_v2(name: str, schema: dict, description: str) -> None:
     for cn_section, en_section in _V2_REQUIRED_SECTIONS:
         if f"[{cn_section}]" not in (description or "") and f"[{en_section}]" not in (description or ""):
             if _logger:
-                _logger.warning("tool_registry.schema_v2_missing_section tool={} section={}", name, cn_section)
+                _logger.warning("tool_registry.schema_v2_missing_section tool={} section={}", name, cn_section)  # noqa: PLE1205
     props = schema.get("properties", {})
     for prop_name, prop_def in props.items():
         desc = prop_def.get("description", "")
         if not desc or len(desc) < 10:
             if _logger:
-                _logger.warning("tool_registry.schema_v2_short_prop_desc tool={} prop={} desc={}", name, prop_name, repr(desc))
+                _logger.warning("tool_registry.schema_v2_short_prop_desc tool={} prop={} desc={}", name, prop_name, repr(desc))  # noqa: PLE1205
 
 
 def register_tool(name: str, description: str, schema: dict,

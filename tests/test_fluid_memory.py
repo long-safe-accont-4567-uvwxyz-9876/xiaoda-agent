@@ -1,7 +1,6 @@
 """流体记忆系统单元测试"""
 import math
 import time
-from unittest.mock import patch
 
 import pytest
 

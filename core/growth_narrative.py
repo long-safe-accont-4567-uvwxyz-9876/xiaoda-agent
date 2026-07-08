@@ -90,7 +90,7 @@ class GrowthNarrative:
             # 写入自我模型的成长轨迹
             try:
                 from core.self_model import append_growth_entry
-                today = datetime.datetime.now().strftime("%Y-%m-%d")
+                _today = datetime.datetime.now().strftime("%Y-%m-%d")
                 append_growth_entry(f"今日成长：{narrative[:100]}")
             except Exception as e:
                 logger.debug("growth_narrative.self_model_update_failed", error=str(e))

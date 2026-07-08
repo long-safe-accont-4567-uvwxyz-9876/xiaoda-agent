@@ -290,7 +290,7 @@ class HookEngine:
         final_result = HookResult()
         for hook in self._hooks[HookType.SUBAGENT_STOP]:
             try:
-                result = await asyncio.wait_for(
+                _result = await asyncio.wait_for(
                     hook.execute({
                         "agent_id": agent_id,
                         "agent_type": agent_type,

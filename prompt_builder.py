@@ -16,8 +16,6 @@ from pathlib import Path
 from loguru import logger
 
 from utils.canary_guard import CanaryManager
-from utils.instruction_hierarchy import InstructionBuilder, InstructionLevel as _UtilsLevel
-from security.instruction_hierarchy import InstructionLevel, format_instruction
 
 
 # ── 安全：Canary Token 泄露检测管理器（全局单例） ──────────────
@@ -1469,18 +1467,18 @@ def _strip_owner_references(text: str) -> str:
 
 
 __all__ = [
-    "build_system_prompt",
+    "_build_dynamic_prompt",
+    "_build_stable_prompt",
     "_build_xp_segment",
-    "build_safe_system_prompt",
-    "build_scene_aware_prompt",
-    "load_workspace_file",
-    "load_skills",
-    "_ensure_workspace_template",
+    "_canary_manager",
+    "_classify_scene",
     "_detect_device_info",
+    "_ensure_workspace_template",
     "_get_workspace_mtimes",
     "_strip_owner_references",
-    "_build_stable_prompt",
-    "_build_dynamic_prompt",
-    "_classify_scene",
-    "_canary_manager",
+    "build_safe_system_prompt",
+    "build_scene_aware_prompt",
+    "build_system_prompt",
+    "load_skills",
+    "load_workspace_file",
 ]

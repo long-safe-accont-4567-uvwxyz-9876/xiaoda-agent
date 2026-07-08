@@ -3,7 +3,6 @@
 import asyncio
 import sys
 import os
-import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 
@@ -39,10 +38,10 @@ async def test_real_conversation():
     print("\n[2] 多轮对话...")
     try:
         core.context.clear()
-        r1 = await core.process("我叫小明", user_id="test_user2", source="test")
+        _r1 = await core.process("我叫小明", user_id="test_user2", source="test")
         r2 = await core.process("我叫什么名字？", user_id="test_user2", source="test")
         if r2 and "小明" in r2:
-            print(f"    OK: 多轮对话上下文保持 (回复中包含'小明')")
+            print("    OK: 多轮对话上下文保持 (回复中包含'小明')")
         elif r2:
             print(f"    INFO: 回复中未提及'小明': {r2[:80]}")
         else:
@@ -50,7 +49,7 @@ async def test_real_conversation():
     except Exception as e:
         err = str(e)
         if "api_key" in err.lower():
-            print(f"    SKIP: API 未配置")
+            print("    SKIP: API 未配置")
         else:
             print(f"    FAIL: {err[:200]}")
             bugs.append(f"multi-turn error: {err[:100]}")
@@ -123,7 +122,7 @@ async def test_tool_callback_integration():
     # 测试钩子执行链完整性
     print("\n[3] 钩子执行链完整性...")
     try:
-        from hooks import HookEngine, HookType
+        from hooks import HookType
         engine = core._hook_engine
 
         # 检查每种类型的钩子是否注册
@@ -246,7 +245,7 @@ async def test_tts_sticker_memory():
         from memory.memory_manager import MemoryManager
         mm = MemoryManager(security_filter=None)
         # 测试基本记忆操作
-        print(f"    OK: MemoryManager 初始化成功")
+        print("    OK: MemoryManager 初始化成功")
         # 测试实体提取
         if hasattr(mm, '_extract_entities'):
             entities = mm._extract_entities("小明在北京大学学习计算机科学")
@@ -278,7 +277,7 @@ async def test_error_recovery():
     print("\n[1] ModelRouter 降级链...")
     try:
         from model_router import ModelRouter, FALLBACK_ROUTE
-        router = ModelRouter()
+        _router = ModelRouter()
 
         # 模拟主模型失败 -> 降级
         # 不实际调用 API，只验证降级配置
@@ -296,8 +295,8 @@ async def test_error_recovery():
         from utils.error_classifier import ErrorClassifier, FailoverReason, RecoveryAction
         from utils.credential_pool import CredentialPool, Credential, CredentialState
 
-        ec = ErrorClassifier()
-        pool = CredentialPool()
+        _ec = ErrorClassifier()
+        _pool = CredentialPool()
         pool.add_credential(Credential(provider="test", api_key="sk-test1", base_url="https://api1.test"))
         pool.add_credential(Credential(provider="test", api_key="sk-test2", base_url="https://api2.test"))
 
@@ -387,7 +386,7 @@ async def test_concurrent_operations():
         pool.add_credential(Credential(provider="test", api_key="sk-key1", base_url="https://api1.test"))
 
         async def get_and_report(i):
-            cred = pool.get_credential("test")
+            _cred = pool.get_credential("test")
             await asyncio.sleep(0.001)
             pool.report_success("test")
             return i

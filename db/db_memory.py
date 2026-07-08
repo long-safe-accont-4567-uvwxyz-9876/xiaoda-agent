@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 import time
 import aiosqlite
 from loguru import logger
@@ -430,7 +430,7 @@ class MemoryDB:
         if auto_commit:
             await self._conn.commit()
 
-    async def update_rag_status(self, memory_id: int, rag_status: str, rag_synced_at: float = None) -> None:
+    async def update_rag_status(self, memory_id: int, rag_status: str, rag_synced_at: Optional[float] = None) -> None:
         """更新记忆的 RAG 索引状态"""
         valid_statuses = ('pending', 'indexed', 'failed', 'excluded')
         if rag_status not in valid_statuses:

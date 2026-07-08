@@ -15,7 +15,6 @@
 - test_persona_config_loads_yaml: 亲密度配置从 YAML 加载
 """
 import asyncio
-import os
 import sys
 import time
 from pathlib import Path
@@ -262,7 +261,7 @@ def test_load_corrupted_file(tmp_path):
 
 def test_compute_level_thresholds(tmp_xp):
     """各等级阈值边界计算正确"""
-    from core.xp_system import XPLevel, XP_THRESHOLDS
+    from core.xp_system import XPLevel
 
     assert tmp_xp._compute_level(0) == XPLevel.LV1_STRANGER
     assert tmp_xp._compute_level(99) == XPLevel.LV1_STRANGER

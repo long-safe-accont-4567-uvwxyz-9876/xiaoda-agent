@@ -10,10 +10,7 @@
 - test_update_strategy: 策略更新和获取
 - test_confidence_increases: 重复教训增加 confidence
 """
-import os
 import sys
-import tempfile
-import time
 from pathlib import Path
 
 import pytest
@@ -26,7 +23,6 @@ from core.learning_feedback import (
     EventType,
     LearningEvent,
     LearningFeedbackLoop,
-    Lesson,
     record_reflection_lesson,
     record_tool_outcome,
 )

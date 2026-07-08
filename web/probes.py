@@ -24,8 +24,8 @@ async def probe_llm(core: Any, route: str = "chat") -> dict:
             [{"role": "user", "content": "请只回复四个字：草元素已就绪"}],
             max_tokens=30, timeout=30)
         text = result if isinstance(result, str) else \
-            (getattr(getattr(result, "choices", [None])[0], "message", None) and
-             result.choices[0].message.content or "")
+            ((getattr(getattr(result, "choices", [None])[0], "message", None) and
+              result.choices[0].message.content) or "")
         ok = bool(text and text.strip())
         return {"ok": ok, "latency_ms": int((time.time() - t0) * 1000),
                 "model": ROUTE_TABLE[route].get("model", ""),
@@ -42,10 +42,8 @@ async def probe_provider(core: Any, provider_id: str) -> dict:
     与 probe_llm 不同，此函数绕过 ModelRouter.route()，直接用 provider
     配置 + Key 构建临时客户端，避免依赖路由表注册。
     """
-    import asyncio
     from web.config_service import get_config_service
     from web.routers.models import load_provider_key
-    from web.custom_providers import build_client
 
     # 内置 provider 走标准路由探针
     if provider_id in ("mimo", "agnes"):

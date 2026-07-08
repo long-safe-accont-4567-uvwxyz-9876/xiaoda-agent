@@ -6,7 +6,6 @@
 - /self 斜杠命令
 - 优雅降级: 依赖模块缺失时不崩溃
 """
-import asyncio
 import json
 import time
 from types import SimpleNamespace
@@ -327,10 +326,9 @@ async def test_slash_self_json_output():
 async def test_health_self_endpoint():
     """/health/self 路由应返回 Envelope 包装的 AgentState 字典"""
     from fastapi import FastAPI
-    from httpx import AsyncClient, ASGITransport
 
     # 直接 import app, 但路由依赖 request.app.state.core, 用一个 stub app
-    app = FastAPI()
+    _app = FastAPI()
 
     # 构造一个最小的 core stub
     core_stub = SimpleNamespace(
@@ -340,7 +338,6 @@ async def test_health_self_endpoint():
     )
 
     # 直接注册 /health/self 路由 (复用 health.py 的逻辑)
-    from web.routers.health import router as health_router
     # health_router 有 router 级 Depends(get_current_user), 这里用一个空 app 单独挂
     # 为避免认证依赖, 直接调用 introspector 模块验证
     from core.agent_introspection import AgentIntrospector

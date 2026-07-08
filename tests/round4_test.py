@@ -3,7 +3,6 @@
 import asyncio
 import sys
 import os
-import json
 from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -23,7 +22,7 @@ async def test_real_api():
     router = ModelRouter()
 
     # 检查客户端初始化
-    print(f"\n[1] 客户端状态:")
+    print("\n[1] 客户端状态:")
     print(f"    MiMo client: {'OK' if router._client else 'None (无 MIMO_API_KEY)'}")
     print(f"    Agnes client: {'OK' if router._agnes_client else 'None (无 AGNES_API_KEY)'}")
 
@@ -34,18 +33,18 @@ async def test_real_api():
     bugs = []
 
     # 测试 ErrorClassifier + CredentialPool 集成（通过 route 方法）
-    print(f"\n[2] 测试路由表:")
+    print("\n[2] 测试路由表:")
     from model_router import ROUTE_TABLE, FALLBACK_ROUTE
     for name, config in ROUTE_TABLE.items():
         print(f"    {name}: {config.get('model', '?')} ({config.get('client', '?')})")
 
     # 测试 FALLBACK_ROUTE
-    print(f"\n[3] 故障转移链:")
+    print("\n[3] 故障转移链:")
     for key, val in FALLBACK_ROUTE.items():
         print(f"    {key} -> {val}")
 
     # 检查 _error_classifier 和 _credential_pool 是否正确集成
-    print(f"\n[4] 集成组件:")
+    print("\n[4] 集成组件:")
     print(f"    error_classifier: {type(router._error_classifier).__name__}")
     print(f"    credential_pool: {type(router._credential_pool).__name__}")
 
@@ -54,7 +53,7 @@ async def test_real_api():
         try:
             messages = [{"role": "user", "content": "回复 OK"}]
             result = await router.route("chat", messages, temperature=0, max_tokens=10)
-            print(f"\n[5] MiMo API 调用:")
+            print("\n[5] MiMo API 调用:")
             print(f"    结果类型: {type(result).__name__}")
             if isinstance(result, str):
                 print(f"    回复: {result[:100]}")
@@ -90,7 +89,6 @@ async def test_tool_execution_flow():
     # 测试 _execute_tool_with_hooks 的完整流程
     print("\n[1] 测试安全预检钩子...")
     try:
-        from hooks import HookResult
         result = await core._hook_engine.fire_pre_tool_use(
             tool_name="shell_command",
             arguments={"command": "echo hello"},
@@ -165,8 +163,6 @@ async def test_tool_execution_flow():
     # 测试 PostToolUse 钩子
     print("\n[4] 测试 PostToolUse 钩子...")
     try:
-        from hooks import HookResult
-        from tool_engine.tool_registry import ToolResult
         result = await core._hook_engine.fire_post_tool_use(
             tool_name="read_file",
             arguments={"path": "/tmp/test"},

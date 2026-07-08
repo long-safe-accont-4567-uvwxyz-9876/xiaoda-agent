@@ -1,7 +1,6 @@
 """Bug 修复验证测试"""
 import sys
 import os
-import random
 import asyncio
 from pathlib import Path
 

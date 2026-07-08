@@ -134,7 +134,7 @@ def _register_config_checks(doc: DoctorCheck) -> None:
 
     def _check_db() -> tuple:
         try:
-            import aiosqlite
+            import aiosqlite  # noqa: F401
             return True, "aiosqlite importable"
         except ImportError:
             return False, "aiosqlite not installed"
@@ -274,7 +274,7 @@ def _register_data_dir_checks(doc: DoctorCheck) -> None:
             return False, f"web/dist not found at {dist_dir}"
         index = dist_dir / "index.html"
         if not index.exists():
-            return False, f"index.html missing in web/dist"
+            return False, "index.html missing in web/dist"
         return True, f"web/dist OK ({dist_dir})"
 
     doc.add_check("Frontend Assets", "L7-DataDirs", _check_web_dist)

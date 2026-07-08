@@ -55,7 +55,7 @@ async def main():
 
     # ━━━ 2. 工具注册 ━━━
     print("\n━━━ 2. 工具注册 ━━━")
-    from tool_engine.tool_registry import to_openai_tools, get_tool
+    from tool_engine.tool_registry import to_openai_tools
     tools = to_openai_tools()
     tool_names = [t["function"]["name"] for t in tools]
     record(f"工具数量 {len(tools)}", len(tools) >= 15)

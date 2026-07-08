@@ -7,7 +7,6 @@
 - Enacting：小妲口吻复述 + XP 等级影响口吻
 - 集成入口 recall_and_enact + 环境变量门控 + 持久化往返
 """
-import pytest
 
 from memory.emotional_memory import EmotionalMemory, EmotionalMemoryManager
 

@@ -103,7 +103,7 @@ def fold_session_summary(
             ms = int(datetime.fromisoformat(norm).timestamp() * 1000)
             if "created_at" not in data:
                 data["created_at"] = ms
-        except (ValueError, OSError) as e:
+        except (ValueError, OSError):
             logger.debug("session_store.timestamp_parse_failed", exc_info=True)
 
     # 提取首条提示词（仅用户消息，仅一次）

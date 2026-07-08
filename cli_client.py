@@ -142,7 +142,7 @@ class NahidaCLI:
             f"{self.ws_url}?token={token}", ping_interval=20, max_size=4 * 2**20)
         hello = json.loads(await self.ws.recv())
         self.session_id = hello.get("session_id", "")
-        asyncio.create_task(self._listener())
+        _listener_task = asyncio.create_task(self._listener())  # noqa: RUF006
         # 拉取用户称呼，用于问候语和输入提示符
         try:
             req = urllib.request.Request(

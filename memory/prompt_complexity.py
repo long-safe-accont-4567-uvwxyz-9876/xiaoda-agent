@@ -557,7 +557,7 @@ class ComplexityReport:
             lines.append("【大小独立性验证】")
             lines.append(f"  结构广度/代码LOC:  {breadth_per_loc:.4f}")
             lines.append(f"  复杂度分/代码LOC:  {self.total_score.complexity_score / max(self.total_score.code_loc, 1):.6f}")
-            lines.append(f"  → 指标计数独立元素, 非体积代理 (Hecate: size控制后仍显著)")
+            lines.append("  → 指标计数独立元素, 非体积代理 (Hecate: size控制后仍显著)")
             lines.append("")
 
         lines.append("=" * 60)
@@ -1087,7 +1087,7 @@ def generate_alignment_report(source_dir: Path | str) -> str:
         lines.append(f"    加权复杂度: {alignment.weighted_complexity:.3f}")
 
         # 打印排序
-        lines.append(f"    排序 (远→近):")
+        lines.append("    排序 (远→近):")
         for module_name, priority, complexity in alignment.ordering:
             cmp_marker = "★" if complexity > 2.0 else " "
             lines.append(

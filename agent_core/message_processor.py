@@ -169,7 +169,7 @@ class MessageProcessorMixin:
         # 用户画像学习：记录交互统计 + 周期性 LLM 认知抽取（fire-and-forget）
         try:
             from core.user_profile_learner import get_user_profile_learner
-            from core.xp_system import get_xp_system, XPLevel
+            from core.xp_system import get_xp_system
             _learner = get_user_profile_learner()
             _xp_uid2 = user_openid or user_id
             if _xp_uid2:

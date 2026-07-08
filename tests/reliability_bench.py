@@ -4,7 +4,7 @@ pass@k: 任务完成率
 鲁棒性: 在故障注入下的表现
 容错: 错误恢复能力
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from loguru import logger
 
 

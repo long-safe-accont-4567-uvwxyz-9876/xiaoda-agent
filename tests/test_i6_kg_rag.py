@@ -235,7 +235,6 @@ async def test_get_query_entities_failure_returns_empty():
 
 import pytest
 import asyncio
-import numpy as np
 
 
 class TestQueryCache:
@@ -283,7 +282,6 @@ class TestQueryCache:
     async def test_cache_ttl_expiry(self):
         """TTL 过期"""
         from memory.query_cache import QueryCache
-        import time
 
         async def mock_embed(text):
             return [1.0, 0.0]

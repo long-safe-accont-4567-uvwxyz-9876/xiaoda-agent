@@ -164,7 +164,7 @@ class CredentialPool:
     async def report_success(self, provider: str) -> None:
         """报告成功"""
         async with self._lock:
-            creds = self._pool.get(provider, [])
+            _creds = self._pool.get(provider, [])
             # 找到最近使用的凭证，确认其状态为 ok
             target = self._find_active_credential(provider)
             if target and target.state == CredentialState.EXHAUSTED:

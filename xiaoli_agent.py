@@ -221,7 +221,7 @@ class XiaoliAgent:
             # 墙钟超时检查
             remaining = total_deadline - time.time()
             if remaining < 5:
-                return f"小莉处理超时了，请稍后再试吧～"
+                return "小莉处理超时了，请稍后再试吧～"
             try:
                 response = await asyncio.wait_for(
                     client.chat.completions.create(
@@ -236,7 +236,7 @@ class XiaoliAgent:
                 )
             except asyncio.TimeoutError:
                 logger.warning("xiaoli.api_timeout", round=round_idx, model=model)
-                return f"小莉思考时间太长了，请稍后再试吧～"
+                return "小莉思考时间太长了，请稍后再试吧～"
 
             msg = response.choices[0].message
 

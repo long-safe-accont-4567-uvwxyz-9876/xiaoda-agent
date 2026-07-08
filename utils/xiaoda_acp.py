@@ -91,7 +91,7 @@ class XiaodaAcpServer:
 
     def _handle_session_new(self, msg: Any) -> dict:
         """处理 session/new 请求，创建新会话并返回会话 ID。"""
-        params = msg.get("params", {})
+        _params = msg.get("params", {})
         session_id = f"xiaoda_{uuid.uuid4().hex[:12]}"
         self.sessions[session_id] = {"created": True}
         return {

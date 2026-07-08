@@ -538,7 +538,7 @@ async def save_keys(body: dict) -> Any:
 
     # 核心重初始化放到后台异步执行，不阻塞 API 返回
     import asyncio
-    asyncio.create_task(_background_reinit())
+    _reinit_task = asyncio.create_task(_background_reinit())  # noqa: RUF006
 
     return Envelope(data={"saved": list(updates.keys()), "need_restart": False})
 
@@ -800,7 +800,7 @@ def _auto_register_providers(updates: dict) -> None:
 
         # 注册到运行时 router
         try:
-            from model_router import ModelRouter
+            pass
             # 尝试获取 router 实例 (原 import web.server as srv 已移除, 避免循环导入)
         except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
             logger.debug("setup.model_router_import_failed: {}", exc, exc_info=True)

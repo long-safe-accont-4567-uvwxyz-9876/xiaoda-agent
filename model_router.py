@@ -214,13 +214,13 @@ class ModelRouter:
                 try:
                     import asyncio
                     loop = asyncio.get_running_loop()
-                    loop.create_task(old.close())
+                    _bg_close = loop.create_task(old.close())  # noqa: RUF006
                 except RuntimeError:
                     pass
 
         # 同步更新凭证池：确保 MiMo/Agnes 凭证与当前环境变量一致
         try:
-            from utils.credential_pool import get_credential_pool, Credential
+            from utils.credential_pool import get_credential_pool
             pool = get_credential_pool()
             # 补充/更新 MiMo 凭证
             if new_mimo_key:
@@ -888,14 +888,14 @@ class ModelRouter:
             logger.error("router.call_aborted", task=task_type, model=model,
                          reason=classified.reason.value,
                          error=f"{type(e).__name__}: {e}")
-            raise
+            raise e
 
         if not classified.is_retryable:
             logger.error("router.call_failed", task=task_type, model=model,
                          attempt=attempt + 1, reason=classified.reason.value,
                          action=classified.action.value,
                          error=f"{type(e).__name__}: {e}")
-            raise
+            raise e
 
         if attempt < MAX_RETRIES:
             backoff = classified.backoff_seconds if classified.backoff_seconds > 0 else 1 * (attempt + 1)

@@ -87,7 +87,7 @@ def _validate_path(path: str, mode: str = "read") -> tuple[bool, str, str]:
                 for wa in write_allowed:
                     if resolved == wa or resolved.startswith(wa + os.sep):
                         return True, resolved, ""
-                return False, resolved, f"写入路径不在允许的写入目录中，仅允许项目目录、tts_cache、系统临时目录"
+                return False, resolved, "写入路径不在允许的写入目录中，仅允许项目目录、tts_cache、系统临时目录"
             return True, resolved, ""
 
     return False, resolved, f"路径不在允许的目录范围内: {path}"
@@ -298,11 +298,11 @@ def _subprocess_exec(command: str) -> ToolResult:
     except subprocess.TimeoutExpired:
         return ToolResult.fail("命令执行超时（30秒）")
     except ValueError as e:
-        return ToolResult.fail(f"命令解析错误（可能包含不合法的引号或转义）: {str(e)}")
+        return ToolResult.fail(f"命令解析错误（可能包含不合法的引号或转义）: {e!s}")
     except FileNotFoundError:
         return ToolResult.fail(f"命令未找到: {shlex.split(command, posix=os.name != 'nt')[0] if command else ''}")
     except Exception as e:
-        return ToolResult.fail(f"执行错误: {str(e)}")
+        return ToolResult.fail(f"执行错误: {e!s}")
 
 
 @register_tool(
@@ -351,7 +351,7 @@ def list_files(path: str = "~") -> ToolResult:
 
         return ToolResult.ok(f"目录: {resolved}\n" + "\n".join(items[:50]))
     except Exception as e:
-        return ToolResult.fail(f"错误: {str(e)}")
+        return ToolResult.fail(f"错误: {e!s}")
 
 
 @register_tool(
@@ -390,7 +390,7 @@ def read_file(path: str, offset: int = 0, limit: int = 200) -> ToolResult:
         content = ''.join(selected)
         return ToolResult.ok(f"文件: {resolved}\n{'='*40}\n{content}")
     except Exception as e:
-        return ToolResult.fail(f"读取错误: {str(e)}")
+        return ToolResult.fail(f"读取错误: {e!s}")
 
 
 @register_tool(
@@ -428,7 +428,7 @@ def write_file(input_str: str) -> ToolResult:
 
         return ToolResult.ok(f"文件已写入: {resolved}")
     except Exception as e:
-        return ToolResult.fail(f"写入错误: {str(e)}")
+        return ToolResult.fail(f"写入错误: {e!s}")
 
 
 @register_tool(
@@ -471,4 +471,4 @@ def search_files(pattern: str) -> ToolResult:
             result.append(f"... 还有 {len(matches) - 30} 个文件")
         return ToolResult.ok("\n".join(result))
     except Exception as e:
-        return ToolResult.fail(f"搜索错误: {str(e)}")
+        return ToolResult.fail(f"搜索错误: {e!s}")

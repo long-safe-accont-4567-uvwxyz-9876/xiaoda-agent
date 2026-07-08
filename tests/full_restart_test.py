@@ -28,7 +28,7 @@ async def phase1_init():
     print("Phase 1: 完全重启 Agent 并初始化所有子系统")
     print("=" * 60)
 
-    from agent_core import AgentCore, ProcessResult
+    from agent_core import AgentCore
 
     print("\n[1.1] 创建 AgentCore 实例...")
     start = time.time()
@@ -97,7 +97,7 @@ async def phase1_init():
 
     # 检查 _spawn 追踪
     print("\n[1.6] _spawn 后台任务追踪:")
-    remaining = source.count('asyncio.create_task(self._background_tasks')
+    _remaining = source.count('asyncio.create_task(self._background_tasks')
     # 也检查整个文件
     full_source = inspect.getsource(core.__class__)
     remaining_full = full_source.count('asyncio.create_task(self._background_tasks')
@@ -139,14 +139,14 @@ async def phase2_conversation(core):
     print("\n[2.2] 多轮对话上下文:")
     try:
         core.context.clear()
-        r1 = await core.process("我叫小红", user_id="test_ctx", source="test")
+        _r1 = await core.process("我叫小红", user_id="test_ctx", source="test")
         r2 = await core.process("我叫什么名字？", user_id="test_ctx", source="test")
         if isinstance(r2, ProcessResult) and r2.reply:
             print(f"    OK: 第二轮回复: {r2.reply[:60]}")
     except Exception as e:
         err = str(e)
         if "api_key" in err.lower():
-            print(f"    SKIP: API 不可用")
+            print("    SKIP: API 不可用")
         else:
             report_bug("MEDIUM", "conversation", f"多轮对话崩溃: {str(e)[:80]}")
 
@@ -162,7 +162,7 @@ async def phase2_conversation(core):
     print("\n[2.4] 空输入:")
     try:
         result = await core.process("", user_id="test_empty", source="test")
-        print(f"    OK: 空输入处理完成")
+        print("    OK: 空输入处理完成")
     except Exception as e:
         report_bug("MEDIUM", "conversation", f"空输入崩溃: {e}")
 
@@ -541,7 +541,7 @@ async def phase6_db_memory_belief():
     print("\n[6.2] 记忆管理器:")
     try:
         from memory.memory_manager import MemoryManager
-        mm = MemoryManager(security_filter=None)
+        _mm = MemoryManager(security_filter=None)
         print("    OK: MemoryManager 创建成功")
     except TypeError as e:
         print(f"    INFO: 需要参数: {e}")
@@ -571,11 +571,11 @@ async def phase6_db_memory_belief():
     try:
         from instinct_manager import InstinctManager
         im = InstinctManager(db=None, router=None)
-        prompt = await im.build_instinct_prompt()
+        _prompt = await im.build_instinct_prompt()
         await im.extract_instincts("test", "test", "test")
         await im.curator_run()
-        count = await im.archive_stale()
-        count2 = await im.merge_duplicates()
+        _count = await im.archive_stale()
+        _count2 = await im.merge_duplicates()
         print("    OK: 所有方法在无数据库时安全降级")
     except Exception as e:
         report_bug("HIGH", "instinct_manager", f"无数据库降级崩溃: {e}")
@@ -650,7 +650,7 @@ async def phase7_concurrent_edge():
         pool.add_credential(Credential(provider="test", api_key="sk-key1", base_url="https://api1.test"))
 
         async def get_and_report(i):
-            cred = pool.get_credential("test")
+            _cred = pool.get_credential("test")
             pool.report_success("test")
             return i
 

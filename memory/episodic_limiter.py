@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from typing import Any, Optional
 
 from loguru import logger
@@ -61,7 +60,6 @@ class EpisodicLimiter:
             excess = count - self._max_rows
             # 按综合评分排序, 淘汰评分最低的
             # score = importance * 0.5 + (access_count / 10) * 0.3 + recency * 0.2
-            now = time.time()
             cursor = await self._db._conn.execute(
                 """
                 SELECT id FROM episodic_memories

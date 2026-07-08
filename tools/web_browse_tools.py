@@ -4,7 +4,6 @@ import socket
 import time
 from collections import OrderedDict
 from typing import Any
-from urllib.parse import urlparse
 from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from security.sandbox_config import check_domain_allowed
@@ -173,7 +172,7 @@ async def web_browse(url: str) -> ToolResult:
 
         return result
     except Exception as e:
-        return ToolResult.fail(f"浏览网页失败: {str(e)}")
+        return ToolResult.fail(f"浏览网页失败: {e!s}")
 
 
 def _simple_html_to_text(html: str) -> str:

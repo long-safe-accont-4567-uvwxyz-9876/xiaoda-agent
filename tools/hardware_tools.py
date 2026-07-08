@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 import os
 import shutil
 import asyncio
@@ -67,7 +67,7 @@ def _gpio_read_value(pin: Any) -> Any:
     category="hardware",
     max_frequency=10,
 )
-async def gpio_control(action: str, pin: int, mode: str = None, value: int = None) -> ToolResult:
+async def gpio_control(action: str, pin: int, mode: Optional[str] = None, value: Optional[int] = None) -> ToolResult:
     """控制GPIO引脚：设置模式、写入电平或读取电平。"""
     try:
         if not os.path.isdir(GPIO_BASE):
@@ -105,7 +105,7 @@ async def gpio_control(action: str, pin: int, mode: str = None, value: int = Non
     except PermissionError:
         return ToolResult.fail("GPIO 权限不足。请尝试: sudo chmod -R 777 /sys/class/gpio 或将当前用户加入 gpio 用户组。")
     except Exception as e:
-        return ToolResult.fail(f"GPIO 操作失败: {str(e)}")
+        return ToolResult.fail(f"GPIO 操作失败: {e!s}")
 
 
 # ── PWM 支持 ──────────────────────────────────────────────
@@ -168,7 +168,7 @@ def _pwm_read(chip: int, channel: int, attr: str) -> str:
     max_frequency=10,
 )
 async def pwm_control(action: str, chip: int = 0, channel: int = 0,
-                      frequency: float = None, duty_cycle: float = None) -> ToolResult:
+                      frequency: Optional[float] = None, duty_cycle: Optional[float] = None) -> ToolResult:
     """控制PWM脉冲输出：启用/禁用通道、设置频率和占空比。"""
     try:
         if not os.path.isdir(PWM_BASE):
@@ -217,7 +217,7 @@ async def pwm_control(action: str, chip: int = 0, channel: int = 0,
     except PermissionError:
         return ToolResult.fail("PWM 权限不足。请尝试: sudo chmod -R 777 /sys/class/pwm 或将当前用户加入 pwm 用户组。")
     except Exception as e:
-        return ToolResult.fail(f"PWM 操作失败: {str(e)}")
+        return ToolResult.fail(f"PWM 操作失败: {e!s}")
 
 
 def _i2c_smbus_read(bus: Any, addr: Any, register: Any, length: Any) -> Any:
@@ -330,7 +330,7 @@ async def _i2c_subprocess_write(bus: Any, addr: Any, register: Any, data: Any) -
 def _has_smbus2() -> bool:
     """检查smbus2库是否可用。"""
     try:
-        import smbus2
+        import smbus2  # noqa: F401
         return True
     except ImportError:
         return False
@@ -355,7 +355,7 @@ def _has_smbus2() -> bool:
     category="hardware",
     max_frequency=10,
 )
-async def i2c_comm(action: str, bus: int = 0, addr: int = None, register: int = None, length: int = 1, data: list = None) -> ToolResult:
+async def i2c_comm(action: str, bus: int = 0, addr: Optional[int] = None, register: Optional[int] = None, length: int = 1, data: Optional[list] = None) -> ToolResult:
     """I2C通信：扫描设备、读取或写入寄存器。"""
     try:
         dev_path = f"/dev/i2c-{bus}"
@@ -421,9 +421,9 @@ async def i2c_comm(action: str, bus: int = 0, addr: int = None, register: int = 
     except PermissionError:
         return ToolResult.fail("I2C 权限不足。请尝试: sudo usermod -aG i2c $USER 然后重新登录。")
     except FileNotFoundError as e:
-        return ToolResult.fail(f"I2C 工具未找到: {str(e)}。请安装: sudo apt install i2c-tools python3-smbus2")
+        return ToolResult.fail(f"I2C 工具未找到: {e!s}。请安装: sudo apt install i2c-tools python3-smbus2")
     except Exception as e:
-        return ToolResult.fail(f"I2C 操作失败: {str(e)}")
+        return ToolResult.fail(f"I2C 操作失败: {e!s}")
 
 
 def _read_sysfs(path: Any) -> Any:
@@ -607,4 +607,4 @@ async def hardware_status(target: str = "all") -> ToolResult:
 
         return result
     except Exception as e:
-        return ToolResult.fail(f"硬件状态读取失败: {str(e)}")
+        return ToolResult.fail(f"硬件状态读取失败: {e!s}")

@@ -230,8 +230,8 @@ def reset_canary_detector() -> CanaryDetector:
 
 
 __all__ = [
-    "generate_canary",
     "CanaryDetector",
+    "generate_canary",
     "get_canary_detector",
     "reset_canary_detector",
 ]

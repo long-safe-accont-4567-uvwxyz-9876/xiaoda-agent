@@ -51,7 +51,7 @@ class ZombieDetector:
     def detect(self, metrics: BehavioralMetrics) -> list[str]:
         alerts = []
         if metrics.goal_completion_rate < 0.1:
-            alerts.append(f"Zombie检测: 目标完成率<10%, Agent可能在空转")
+            alerts.append("Zombie检测: 目标完成率<10%, Agent可能在空转")
         if metrics.loop_signal > 0.5:
             alerts.append(f"循环检测: 循环信号={metrics.loop_signal:.2f}, 可能陷入死循环")
         if metrics.role_deviation > 0.3:

@@ -217,7 +217,7 @@ class ToolCallHandler:
                 # 添加失败结果，确保 tool_results 与 tool_calls 一一对应
                 tcid = tool_calls[idx]["id"] if idx < len(tool_calls) else f"err_{idx}"
                 tool_results.append(ToolResult.fail(f"执行异常: {er}"))
-                tool_messages.append({"role": "tool", "tool_call_id": tcid, "content": f"错误: 执行异常"})
+                tool_messages.append({"role": "tool", "tool_call_id": tcid, "content": "错误: 执行异常"})
                 continue
             if not isinstance(er, (tuple, list)) or len(er) != 4:
                 trace.warning("tool.unexpected_result", type=type(er).__name__)

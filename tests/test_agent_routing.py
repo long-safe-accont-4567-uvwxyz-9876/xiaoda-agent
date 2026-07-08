@@ -5,7 +5,6 @@
 """
 from unittest.mock import MagicMock
 
-import pytest
 
 from agent_dispatcher import AgentDispatcher
 

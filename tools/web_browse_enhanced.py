@@ -203,4 +203,4 @@ async def web_browse_enhanced(url: str) -> ToolResult:
         from tools.web_browse_tools import web_browse as _original_browse
         return await _original_browse(url)
     except Exception as e:
-        return ToolResult.fail(f"浏览网页失败: {str(e)}")
+        return ToolResult.fail(f"浏览网页失败: {e!s}")

@@ -8,7 +8,6 @@ Run: python -m pytest tests/test_context_governance.py -v
 Or:  python tests/test_context_governance.py
 """
 import asyncio
-import os
 import sys
 import time
 from pathlib import Path
@@ -195,7 +194,7 @@ async def test_audit_and_hash_chain(tmp_path):
         result = await gov.verify_hash_chain(mid)
         assert result["valid"], f"记忆 {mid} 哈希链断裂: {result['detail']}"
         assert result["versions"] == 1
-    print(f"  T2.1 初始版本哈希链: 3 条记忆全部 valid ✓")
+    print("  T2.1 初始版本哈希链: 3 条记忆全部 valid ✓")
 
     # 3. 更新一条记忆 (v1 → v2), 验证链连续
     new_summary = "用户喜欢吃枣椰蜜糖和蜂蜜"
@@ -203,7 +202,7 @@ async def test_audit_and_hash_chain(tmp_path):
     result = await gov.verify_hash_chain(mem_ids[0])
     assert result["valid"], f"更新后哈希链断裂: {result['detail']}"
     assert result["versions"] == 2, f"应为 v2, 实际 {result['versions']}"
-    print(f"  T2.2 版本更新: v1→v2 链连续 valid ✓")
+    print("  T2.2 版本更新: v1→v2 链连续 valid ✓")
 
     # 4. 篡改检测: 直接改 memory_versions 的 summary_snapshot (模拟篡改)
     await conn.execute(
@@ -275,7 +274,7 @@ async def test_complexity_scorer():
         "",
     ]
 
-    print(f"  T3.1 简单摘要评分 (应全部 should_skip=False):")
+    print("  T3.1 简单摘要评分 (应全部 should_skip=False):")
     simple_scores = []
     for s in simple_cases:
         sc = score_complexity(s)
@@ -283,7 +282,7 @@ async def test_complexity_scorer():
         print(f"    [{sc.total:.3f}] skip={sc.should_skip} | {s[:30]}")
         assert not sc.should_skip, f"简单摘要被误判为复杂: {s}"
 
-    print(f"  T3.2 复杂摘要评分 (应触发跳过或高分):")
+    print("  T3.2 复杂摘要评分 (应触发跳过或高分):")
     complex_scores = []
     for s in complex_cases:
         sc = score_complexity(s)
@@ -306,7 +305,7 @@ async def test_complexity_scorer():
     assert do_extract, "简单摘要应允许提取"
     do_extract_empty, _ = should_extract("")
     assert not do_extract_empty, "空摘要应跳过"
-    print(f"  T3.4 should_extract 决策: 简单=允许, 空=跳过 ✓")
+    print("  T3.4 should_extract 决策: 简单=允许, 空=跳过 ✓")
 
     return {"simple_avg": simple_avg, "complex_avg": complex_avg,
             "empty_skipped": True}
@@ -377,7 +376,7 @@ async def test_deterministic_selector_and_regression(tmp_path):
         assert "audit_retrieval" in dir(MemoryManager)
         assert "_extract_deterministic_selectors" in dir(MemoryManager)
         assert "_get_candidate_ids_by_selectors" in dir(MemoryManager)
-        print(f"    ✓ set_governance / audit_retrieval / _extract_deterministic_selectors 方法存在")
+        print("    ✓ set_governance / audit_retrieval / _extract_deterministic_selectors 方法存在")
     except Exception as e:
         assert False, f"MemoryManager 接口不兼容: {e}"
 
@@ -392,7 +391,7 @@ async def test_deterministic_selector_and_regression(tmp_path):
     # 默认值: 不破坏旧调用
     assert params["candidate_ids"].default is None
     assert params["deterministic"].default is True
-    print(f"    ✓ search(candidate_ids=None, deterministic=True) 向后兼容")
+    print("    ✓ search(candidate_ids=None, deterministic=True) 向后兼容")
 
     # 4.4 ContextGovernance 接口
     print("  T4.4 ContextGovernance 接口:")
@@ -403,7 +402,7 @@ async def test_deterministic_selector_and_regression(tmp_path):
     assert hasattr(ContextGovernance, "verify_hash_chain")
     assert hasattr(ContextGovernance, "reconstruct_context")
     assert hasattr(ContextGovernance, "new_response_id")
-    print(f"    ✓ 6 个方法齐全")
+    print("    ✓ 6 个方法齐全")
 
     return {"selector_pass_rate": selector_pass_rate, "regression_ok": True}
 
@@ -430,7 +429,7 @@ async def run_all_tests():
             metrics["jaccard_mean"] = results["T1"]["jaccard_mean"]
             metrics["jaccard_min"] = results["T1"]["jaccard_min"]
             metrics["candidate_jaccard"] = results["T1"]["candidate_jaccard"]
-        print(f"  结果: PASS")
+        print("  结果: PASS")
     except Exception as e:
         results["T1"] = {"error": str(e)}
         print(f"  结果: FAIL - {e}")
@@ -443,7 +442,7 @@ async def run_all_tests():
         metrics["audit_inserted"] = results["T2"]["audit_inserted"]
         metrics["reconstructed"] = results["T2"]["reconstructed"]
         metrics["tamper_detected"] = 1 if results["T2"]["tamper_detected"] else 0
-        print(f"  结果: PASS")
+        print("  结果: PASS")
     except Exception as e:
         results["T2"] = {"error": str(e)}
         print(f"  结果: FAIL - {e}")
@@ -453,7 +452,7 @@ async def run_all_tests():
         results["T3"] = await test_complexity_scorer()
         metrics["complexity_simple_avg"] = results["T3"]["simple_avg"]
         metrics["complexity_complex_avg"] = results["T3"]["complex_avg"]
-        print(f"  结果: PASS")
+        print("  结果: PASS")
     except Exception as e:
         results["T3"] = {"error": str(e)}
         print(f"  结果: FAIL - {e}")
@@ -463,7 +462,7 @@ async def run_all_tests():
         tmp4 = Path(tempfile.mkdtemp(prefix="ctx_gov_t4_"))
         results["T4"] = await test_deterministic_selector_and_regression(tmp4)
         metrics["selector_pass_rate"] = results["T4"]["selector_pass_rate"]
-        print(f"  结果: PASS")
+        print("  结果: PASS")
     except Exception as e:
         results["T4"] = {"error": str(e)}
         print(f"  结果: FAIL - {e}")

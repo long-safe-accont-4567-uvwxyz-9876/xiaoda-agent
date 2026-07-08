@@ -20,7 +20,7 @@ try:
     else:
         _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     load_dotenv(_env_path, override=True)
-except Exception as e:
+except Exception:
     # dotenv 加载失败时写日志，防止 exe 静默崩溃
     import traceback, pathlib
     try:
@@ -85,7 +85,7 @@ def main() -> None:
             import shutil
             if os.path.exists(ENV_EXAMPLE_PATH):
                 shutil.copy2(ENV_EXAMPLE_PATH, ENV_PATH)
-                print(f"  [i] 已从 .env.example 创建 .env 配置文件")
+                print("  [i] 已从 .env.example 创建 .env 配置文件")
             else:
                 import tempfile
                 tmp_fd, tmp_path = tempfile.mkstemp(
@@ -100,7 +100,7 @@ def main() -> None:
                     except OSError:
                         pass
                     raise
-                print(f"  [i] 已创建空 .env 配置文件")
+                print("  [i] 已创建空 .env 配置文件")
             # 重新加载 .env 使默认值生效
             load_dotenv(ENV_PATH, override=True)
 
@@ -156,7 +156,6 @@ def _get_lan_addresses() -> list:
 
 
 def _run_web(host: str, port: int) -> None:
-    import socket
     import uvicorn
     from utils.logging_config import setup_logging
     setup_logging()
@@ -170,7 +169,7 @@ def _run_web(host: str, port: int) -> None:
     # 直接传 app 对象，避免 uvicorn 动态导入失败（PyInstaller 兼容）
     try:
         from web.server import app
-    except Exception as e:
+    except Exception:
         import traceback, pathlib
         log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent" / "crash.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -255,7 +254,6 @@ def _wait_for_port_available(host: str, port: int) -> None:
 
 def _import_web_server_safe() -> Any:
     """导入 web.server，失败时写入 crash.log 后重新抛出。"""
-    from loguru import logger
     try:
         from web.server import app
         return app
@@ -409,7 +407,7 @@ def _run_desktop(host: str, port: int) -> None:
 if __name__ == "__main__":
     try:
         main()
-    except Exception as e:
+    except Exception:
         # 顶层异常兜底：写日志文件，防止 exe 静默崩溃
         import traceback, pathlib
         try:

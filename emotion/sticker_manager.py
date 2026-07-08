@@ -104,7 +104,7 @@ class StickerManager:
                     # 以目录名为准（目录结构即情绪分类），不再根据文件名描述重分类
                     self._cache[emotion_dir.name] = files
         total = sum(len(v) for v in self._cache.values())
-        logger.info(f"sticker.loaded", categories=len(self._cache), total=total)
+        logger.info("sticker.loaded", categories=len(self._cache), total=total)
 
     def reload(self) -> None:
         """重新扫描表情包目录 (清空缓存)."""
@@ -202,7 +202,7 @@ class StickerManager:
                 emotion = STICKER_FALLBACK.get(resolved, "happy")
         if emotion:
             # 优先从物理目录与情绪匹配的文件中选（目录名=情绪名）
-            if emotion in self._cache and self._cache[emotion]:
+            if self._cache.get(emotion):
                 return random.choice(self._cache[emotion])
             # 指定情绪目录不存在或为空：fallback 到全部随机选
             logger.debug(f"sticker.emotion_dir_empty fallback_to_all emotion={emotion}")

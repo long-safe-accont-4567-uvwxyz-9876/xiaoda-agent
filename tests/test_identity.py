@@ -8,9 +8,8 @@
 - UserIdentity 身份解析
 - humanize 对 Markdown 的处理
 """
-import asyncio
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock
 from security.security import SecurityFilter
 from agent_core import UserIdentity
 

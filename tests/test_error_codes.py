@@ -18,7 +18,7 @@ import pytest
 
 from core.error_codes import ErrorCodeEnum, from_exception
 from core.app_exception import (
-    AppException, AuthError, ToolError, LLMError, MemoryError,
+    AuthError, ToolError, LLMError, MemoryError,
     NetworkError, ConfigError, DatabaseError, RateLimitError, SystemError,
 )
 

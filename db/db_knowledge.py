@@ -2,6 +2,7 @@ import time
 import json
 import uuid
 import aiosqlite
+from typing import Optional
 from loguru import logger
 
 
@@ -161,8 +162,8 @@ class KnowledgeDB:
         if auto_commit:
             await self._conn.commit()
 
-    async def update_knowledge_relation(self, relation_id: str, from_entity: str = None,
-                                         relation_type: str = None, to_entity: str = None,
+    async def update_knowledge_relation(self, relation_id: str, from_entity: Optional[str] = None,
+                                         relation_type: Optional[str] = None, to_entity: Optional[str] = None,
                                          auto_commit: bool = True) -> None:
         """更新知识关系（公开方法）"""
         sets = []

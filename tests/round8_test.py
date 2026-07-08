@@ -3,7 +3,6 @@
 import asyncio
 import sys
 import os
-import time
 import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -23,7 +22,7 @@ async def test_real_conversation():
     try:
         result = await core.process("你好", user_id="test_user", source="test")
         if isinstance(result, ProcessResult):
-            print(f"    OK: 收到 ProcessResult")
+            print("    OK: 收到 ProcessResult")
             print(f"         reply: {result.reply[:80] if result.reply else '(empty)'}")
             print(f"         emotion: {result.emotion}")
             print(f"         tool_results: {len(result.tool_results)}")
@@ -42,18 +41,18 @@ async def test_real_conversation():
     print("\n[2] 多轮对话上下文...")
     try:
         core.context.clear()
-        r1 = await core.process("我叫小明", user_id="test_user2", source="test")
+        _r1 = await core.process("我叫小明", user_id="test_user2", source="test")
         r2 = await core.process("我叫什么名字？", user_id="test_user2", source="test")
         if isinstance(r2, ProcessResult) and r2.reply:
             has_name = "小明" in r2.reply
             if has_name:
-                print(f"    OK: 多轮上下文保持 (回复中包含'小明')")
+                print("    OK: 多轮上下文保持 (回复中包含'小明')")
             else:
                 print(f"    INFO: 回复中未提及'小明': {r2.reply[:60]}")
     except Exception as e:
         err = str(e)
         if "api_key" in err.lower():
-            print(f"    SKIP: API 未配置")
+            print("    SKIP: API 未配置")
         else:
             print(f"    FAIL: {err[:200]}")
             bugs.append(f"multi-turn error: {err[:100]}")
@@ -85,9 +84,9 @@ async def test_real_conversation():
     except Exception as e:
         err = str(e)
         if "api_key" in err.lower():
-            print(f"    SKIP: API 未配置")
+            print("    SKIP: API 未配置")
         elif "token" in err.lower() or "length" in err.lower():
-            print(f"    INFO: 超长输入被 API 拒绝（预期行为）")
+            print("    INFO: 超长输入被 API 拒绝（预期行为）")
         else:
             print(f"    FAIL: {err[:200]}")
             bugs.append(f"long input error: {err[:100]}")
@@ -197,7 +196,7 @@ async def test_transport_layer():
     print("=" * 60)
     bugs = []
 
-    from transports.base import ProviderTransport, TransportResponse
+    from transports.base import TransportResponse
     from transports.mimo_transport import MiMoTransport
     from transports.agnes_transport import AgnesTransport
 
@@ -245,7 +244,7 @@ async def test_transport_layer():
     print("\n[3] TransportResponse...")
     try:
         resp = TransportResponse(content="test", model="test-model", usage={"tokens": 10})
-        print(f"    OK: TransportResponse 创建成功")
+        print("    OK: TransportResponse 创建成功")
         print(f"    INFO: content={resp.content[:20]}, model={resp.model}")
     except Exception as e:
         print(f"    FAIL: {e}")

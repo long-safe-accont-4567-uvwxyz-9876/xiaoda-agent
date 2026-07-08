@@ -93,7 +93,7 @@ class LearningManager:
                 if isinstance(result, ToolResult) and not result.success:
                     await self.log_error(
                         error_text=result.error,
-                        context=f"工具调用失败",
+                        context="工具调用失败",
                         priority="medium",
                     )
         except Exception as e:

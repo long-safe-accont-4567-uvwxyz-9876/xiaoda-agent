@@ -101,7 +101,7 @@ class TestPresencePenaltyConfig:
     def test_frequency_penalty_in_kwargs(self):
         """frequency_penalty 应被加入 kwargs。"""
         from model_router import ModelRouter
-        router = ModelRouter.__new__(ModelRouter)
+        _router = ModelRouter.__new__(ModelRouter)
         # 模拟 _build_route_kwargs 的参数提取逻辑
         config = {"frequency_penalty": 0.3}
         fp = config.get("frequency_penalty", 0.3)

@@ -8,7 +8,6 @@
     5. 429 响应包含 Retry-After header
     6. 不同用户独立计数 (隔离)
 """
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

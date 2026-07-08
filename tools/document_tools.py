@@ -45,7 +45,7 @@ def _read_pdf(path: str) -> ToolResult:
             content += "\n\n--- 表格 ---\n" + "\n\n".join(tables[:1000])
         return ToolResult.ok(content[:5000])
     except Exception as e:
-        return ToolResult.fail(f"PDF读取错误: {str(e)}")
+        return ToolResult.fail(f"PDF读取错误: {e!s}")
 
 
 def _read_docx(path: str) -> ToolResult:
@@ -81,7 +81,7 @@ def _read_docx(path: str) -> ToolResult:
             content += "\n\n--- 表格 ---\n" + "\n".join(tables_text[:50])
         return ToolResult.ok(content[:5000])
     except Exception as e:
-        return ToolResult.fail(f"DOCX读取错误: {str(e)}")
+        return ToolResult.fail(f"DOCX读取错误: {e!s}")
 
 
 def _read_pptx(path: str) -> ToolResult:
@@ -116,7 +116,7 @@ def _read_pptx(path: str) -> ToolResult:
         content += "\n\n".join(slides_text)
         return ToolResult.ok(content[:5000])
     except Exception as e:
-        return ToolResult.fail(f"PPTX读取错误: {str(e)}")
+        return ToolResult.fail(f"PPTX读取错误: {e!s}")
 
 
 def _read_xlsx(path: str) -> ToolResult:
@@ -155,7 +155,7 @@ def _read_xlsx(path: str) -> ToolResult:
         content += "\n\n".join(sheets_text)
         return ToolResult.ok(content[:5000])
     except Exception as e:
-        return ToolResult.fail(f"XLSX读取错误: {str(e)}")
+        return ToolResult.fail(f"XLSX读取错误: {e!s}")
 
 
 @register_tool(

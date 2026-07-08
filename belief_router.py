@@ -158,7 +158,6 @@ class BeliefRouter:
     def _save_to_db(self) -> None:
         """Save beliefs to database (non-blocking via thread pool)."""
         try:
-            import concurrent.futures
             beliefs_snapshot = {name: b.to_dict() for name, b in self._beliefs.items()}
             db_path = self._db_path
 

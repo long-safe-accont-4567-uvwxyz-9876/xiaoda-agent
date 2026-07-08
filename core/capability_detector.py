@@ -197,7 +197,7 @@ def _detect_gpu() -> dict:
                 result["has_gpu"] = True
                 result["name"] = parts[0]
                 result["memory_mb"] = int(float(parts[1])) if len(parts) > 1 else 0
-        except Exception as e:
+        except Exception:
             logger.debug("capability_detector.gpu_detect_failed", exc_info=True)
 
         # CUDA 版本
@@ -222,7 +222,7 @@ def _detect_gpu() -> dict:
                 result["has_gpu"] = True
                 result["name"] = "AMD GPU"
                 result["has_cuda"] = False
-        except Exception as e:
+        except Exception:
             logger.debug("capability_detector.rocm_detect_failed", exc_info=True)
 
     return result

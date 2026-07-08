@@ -268,11 +268,11 @@ def sanitize_external_content(text: str) -> str:
 
 
 __all__ = [
-    "InstructionLevel",
     "Instruction",
+    "InstructionLevel",
     "format_instruction",
     "parse_instructions",
+    "sanitize_external_content",
     "strip_markers",
     "validate_hierarchy",
-    "sanitize_external_content",
 ]

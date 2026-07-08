@@ -279,7 +279,7 @@ def test_agent_r_reflect_generates_memory():
 
 def test_agent_r_apply_revision():
     from core.agent_r_reflection import (AgentRReflector, TrajectoryStep,
-                                            Trajectory, TrajectoryType)
+                                            TrajectoryType)
     r = AgentRReflector()
     r.record_step("a", "ok")
     r.record_step("b", "fail", success=False, error="404")
@@ -399,7 +399,7 @@ async def test_self_diag_run_checks():
     # 不依赖真实 SLO, 直接注入检查
     triggered = []
     diag.add_check(lambda: None)  # no-op check
-    custom_report = None
+    _custom_report = None
 
     async def custom_check():
         from core.self_diagnostic import SelfReport
@@ -422,7 +422,7 @@ async def test_self_diag_run_checks():
 
 @pytest.mark.asyncio
 async def test_recovery_retry_success():
-    from core.recovery_orchestrator import RecoveryOrchestrator, RecoveryResult
+    from core.recovery_orchestrator import RecoveryOrchestrator
     orch = RecoveryOrchestrator()
     call_count = {"n": 0}
 
@@ -634,8 +634,7 @@ async def test_episodic_limiter_enforce():
 # ============================================================
 
 def test_anomaly_detector_baseline():
-    from security.anomaly_detector import (AnomalyDetector, BehaviorEvent,
-                                              Severity)
+    from security.anomaly_detector import (AnomalyDetector, BehaviorEvent)
     det = AnomalyDetector()
     # 训练基线 (10 个正常事件)
     for _ in range(15):
@@ -691,7 +690,7 @@ async def test_approval_wait_and_decide():
         user_id="u1", operation="shell_command",
         risk_level=RiskLevel.HIGH,
     )
-    asyncio.create_task(decide_later(req.id))
+    _decide_task = asyncio.create_task(decide_later(req.id))  # noqa: RUF006
     result = await gate.wait_for_decision(req.id, timeout=2.0)
     assert result.status == ApprovalStatus.APPROVED
     assert result.decided_by == "test_admin"

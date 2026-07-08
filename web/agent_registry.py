@@ -437,10 +437,10 @@ class AgentRegistry:
                 soul_path = WORKSPACE_DIR / "SOUL.md"
                 soul_path.write_text(personality_text, encoding="utf-8-sig")
             # voice_ref 更新
-            if "voice_ref" in data:
+            if "voice_ref" in data:  # noqa: RUF019
                 self._save_xiaoda_field("voice_ref", data["voice_ref"])
             # display_name 更新：持久化 + 旧名加入 deprecated_names + 同步 MAIN_AGENT_META
-            if "display_name" in data and data["display_name"]:
+            if "display_name" in data and data["display_name"]:  # noqa: RUF019
                 old_dn = self._load_xiaoda_cfg().get("display_name", "")
                 new_dn = data["display_name"]
                 if old_dn and old_dn != new_dn:
@@ -453,7 +453,7 @@ class AgentRegistry:
                 self._save_xiaoda_field("display_name", new_dn)
                 MAIN_AGENT_META["display_name"] = new_dn
             # display_name_en 更新：持久化 + 同步 MAIN_AGENT_META
-            if "display_name_en" in data and data["display_name_en"]:
+            if "display_name_en" in data and data["display_name_en"]:  # noqa: RUF019
                 self._save_xiaoda_field("display_name_en", data["display_name_en"])
                 MAIN_AGENT_META["display_name_en"] = data["display_name_en"]
             return self.get("xiaoda")
@@ -463,7 +463,7 @@ class AgentRegistry:
         old_provider = agent.config.provider
         old_model = agent.config.model
         # display_name 更新时，旧名自动加入 deprecated_names
-        if "display_name" in data and data["display_name"]:
+        if "display_name" in data and data["display_name"]:  # noqa: RUF019
             old_dn = agent.config.display_name or ""
             new_dn = data["display_name"]
             if old_dn and old_dn != new_dn:

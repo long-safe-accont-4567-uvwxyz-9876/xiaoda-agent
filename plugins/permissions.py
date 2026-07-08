@@ -80,7 +80,5 @@ class PermissionChecker:
 
     # ── Event ──
     def check_event_emit(self, event_name: str) -> None:
-        allowed = self._permissions.capabilities.emits if hasattr(self._permissions, 'capabilities') else []
-        # If no emits declared, allow all (backward compat)
-        # Actually check the manifest's capabilities.emits
-        pass  # Will be checked at PluginContext level
+        _allowed = self._permissions.capabilities.emits if hasattr(self._permissions, 'capabilities') else []
+        pass

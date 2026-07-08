@@ -53,7 +53,7 @@ def _read_version() -> str:
 
 @router.get("/system/status", response_model=Envelope[SystemStatus])
 async def get_status(request: Request) -> Any:
-    core = request.app.state.core
+    _core = request.app.state.core
     from security.permission_manager import get_permission_manager
     try:
         from web.ws_hub import manager as ws_manager
@@ -298,7 +298,7 @@ async def restart_service(request: Request) -> Any:
             logger.warning("webui.restart.exiting (systemd 将自动拉起)")
         os._exit(0)
 
-    asyncio.create_task(_exit())
+    _exit_task = asyncio.create_task(_exit())  # noqa: RUF006
     return Envelope(data={"restarting": True, "platform": "windows" if is_windows else "linux"})
 
 

@@ -15,9 +15,7 @@ from .index_manager import build_default_index_manager
 from .session_store import (
     SessionInfo,
     SessionSummaryEntry,
-    SessionStoreProtocol,
     fold_session_summary,
-    summary_to_session_info,
 )
 
 

@@ -1,6 +1,6 @@
 """Phase 1-5 新增模块的单元测试"""
 import pytest
-import os, sys, asyncio, time
+import os, sys, asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -56,7 +56,7 @@ class TestCanaryGuard:
     def test_check_leaked_output(self):
         from utils.canary_guard import CanaryManager
         mgr = CanaryManager()
-        prompt = mgr.inject("system prompt")
+        _prompt = mgr.inject("system prompt")
         canary = list(mgr._canaries.keys())[0]
         assert mgr.check(f"leaked: {canary}") is False
 
@@ -422,7 +422,7 @@ class TestFaultInjection:
 
     @pytest.mark.asyncio
     async def test_normal_call_passes_through(self):
-        from tests.fault_injection import FaultInjectingLLMClient, FaultConfig, FaultType
+        from tests.fault_injection import FaultInjectingLLMClient
 
         class MockClient:
             async def complete(self, messages, **kwargs):
