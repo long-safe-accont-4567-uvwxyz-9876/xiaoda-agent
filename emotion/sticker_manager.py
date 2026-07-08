@@ -180,11 +180,13 @@ class StickerManager:
         """Alias for pick() — backward compatible"""
         return self.pick(emotion)
 
-    def pick(self, emotion: str | Emotion = "") -> Path | None:
+    def pick(self, emotion: str | Emotion = "", strict: bool = False) -> Path | None:
         """按情绪随机挑选一张表情包, 无匹配则从全部中随机选.
 
         Args:
             emotion: 目标情绪 (字符串或 Emotion 枚举), 默认空字符串
+            strict: 严格模式 — 指定情绪目录为空时不 fallback 到全部随机，直接返回 None。
+                用于子 Agent @ 对话场景：专属表情包目录没有对应情绪分类就不发送。
 
         Returns:
             表情包文件路径, 无可用时返回 None
@@ -202,7 +204,12 @@ class StickerManager:
             # 优先从物理目录与情绪匹配的文件中选（目录名=情绪名）
             if self._cache.get(emotion):
                 return random.choice(self._cache[emotion])
-            # 指定情绪目录不存在或为空：fallback 到全部随机选
+            # 指定情绪目录不存在或为空
+            if strict:
+                # 严格模式：不 fallback，没有对应情绪的表情就不发送
+                logger.debug(f"sticker.strict_no_match emotion={emotion} (dir empty/missing)")
+                return None
+            # fallback 到全部随机选
             logger.debug(f"sticker.emotion_dir_empty fallback_to_all emotion={emotion}")
         all_stickers = [s for v in self._cache.values() for s in v]
         return random.choice(all_stickers) if all_stickers else None

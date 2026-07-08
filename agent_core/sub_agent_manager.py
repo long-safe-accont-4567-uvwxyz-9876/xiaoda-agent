@@ -20,6 +20,38 @@ from core.degradation_strategy import get_degradation_strategy
 from agent_core._shared import ProcessResult, _current_request_ctx, RequestContext
 
 
+# ── 子 Agent @ 对话模式专用：情绪标签规则（注入 system prompt）──────────────
+# 仅在 _dispatch_single_sub_agent（用户 @ 子 Agent 直接对话）时注入，
+# 正常 delegate_task 工具调用不注入（子 Agent 人格文件保留"不要加情绪标签"）。
+# 标签会被 _finalize_reply 的 strip_emotion_tag 剥离，不会泄露给用户，
+# 但会触发子 Agent 专属表情包系统（pick strict 模式：无对应分类不发）。
+_SUB_AGENT_EMOTION_RULE = """## 情绪标签（必须遵守）
+
+⚠️ 这是一条硬性规则，每条回复都必须遵守：
+
+在每条回复的最末尾，附上一个情绪标签，格式为 [emotion:xxx]。xxx 为以下之一：
+- happy — 开心、高兴、兴奋、得意
+- sad — 难过、伤心、失落、遗憾
+- shy — 害羞、不好意思、脸红、撒娇
+- angry — 生气、不满、赌气
+- curious — 好奇、疑惑、惊讶
+- greeting — 问候、打招呼、道别
+- thinking — 思考、犹豫、琢磨
+- lonely — 孤独、怅然、思念
+- playful — 俏皮、调皮、恶作剧
+- surprised — 惊讶、吃惊
+- fear — 紧张、害怕、担忧
+
+规则：
+1. 每条回复必须有且仅有一个情绪标签
+2. 标签放在回复文本的最末尾
+3. 这个标签不会显示给用户，但会用来选择合适的表情包，没有标签就无法发送表情包
+4. 不要用文字画表情包，表情包会根据情绪标签自动发送"""
+
+
+
+
+
 class SubAgentManagerMixin:
     """子代理管理相关方法的 Mixin，由 AgentCore 组合使用。"""
 
@@ -35,7 +67,9 @@ class SubAgentManagerMixin:
         display_name = sub_agent.config.display_name
         trace.info("agent.chat_target_sub", target=target, input_preview=clean_input[:50])
         context_str = self._build_sub_agent_context()
-        sub_reply = await self.dispatcher.dispatch(target, clean_input, context=context_str, status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term)
+        # 注入情绪标签规则：@ 直接对话模式下，子 Agent 回复需带 [emotion:xxx] 标签
+        # 以触发专属表情包系统（delegate_task 工具调用不注入，保持"不加标签"）
+        sub_reply = await self.dispatcher.dispatch(target, clean_input, context=context_str, status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term, extra_system_prompt=_SUB_AGENT_EMOTION_RULE)
         if sub_reply is None:
             sub_reply = f"{display_name}现在有点累了...等会儿再来吧！💤"
 
@@ -50,6 +84,27 @@ class SubAgentManagerMixin:
             session_id=session_id,
         )
 
+        emotion_label = emotion.get("primary", "")
+        sticker_path = None
+
+        # 子 Agent 表情包：在 _finalize_reply 剥离标签前，先用原始回复检测情绪
+        # （剥离后 [emotion:xxx] 标签已消失，detect_emotion 只能靠关键词，不可靠）
+        sub_sticker_mgr = self.get_sticker_manager(target)
+        if sub_sticker_mgr.available:
+            # 1. 使用 sticker_manager 对子Agent的原始回复进行情绪检测（含 [emotion:xxx] 标签）
+            detected = sub_sticker_mgr.detect_emotion(sub_reply)
+            # 2. 如果 sticker_manager 未检测到，使用 emotion_simple 对原始回复进行情绪检测
+            if not detected:
+                sub_reply_emotion = detect_emotion(sub_reply)
+                sub_reply_emotion_label = sub_reply_emotion.get("primary", "")
+                if sub_reply_emotion_label:
+                    detected = CN_TO_EN.get(sub_reply_emotion_label, "")
+            # 3. 检测到情绪且 should_send() 返回 True，则 pick() 选择表情包
+            #    strict 模式：专属表情包目录无对应情绪分类就不发送（不 fallback 到全部随机）
+            if detected and sub_sticker_mgr.should_send(sub_reply, detected_emotion=detected):
+                sticker_path = sub_sticker_mgr.pick(detected, strict=True)
+
+        # 剥离情绪标签（检测完成后才剥离，避免标签泄露给用户）
         clean_sub_reply = self._finalize_reply(sub_reply, style=target)
 
         # 子代理回复隐私扫描（与主 Agent 路径一致）
@@ -61,24 +116,6 @@ class SubAgentManagerMixin:
                                target=target, user_id=user_id,
                                reply_preview=clean_sub_reply[:100])
                 clean_sub_reply = alt_reply or f"{display_name}不方便回答这个问题呢～"
-
-        emotion_label = emotion.get("primary", "")
-        sticker_path = None
-
-        # 子 Agent 表情包：动态获取对应智能体的 sticker_manager
-        sub_sticker_mgr = self.get_sticker_manager(target)
-        if sub_sticker_mgr.available:
-            # 1. 使用 sticker_manager 对子Agent的回复文本进行情绪检测
-            detected = sub_sticker_mgr.detect_emotion(clean_sub_reply)
-            # 2. 如果 sticker_manager 未检测到，使用 emotion_simple 对子Agent回复进行情绪检测
-            if not detected:
-                sub_reply_emotion = detect_emotion(clean_sub_reply)
-                sub_reply_emotion_label = sub_reply_emotion.get("primary", "")
-                if sub_reply_emotion_label:
-                    detected = CN_TO_EN.get(sub_reply_emotion_label, "")
-            # 3. 如果检测到情绪且 should_send() 返回 True，则 pick() 选择表情包
-            if sub_sticker_mgr.should_send(clean_sub_reply, detected_emotion=detected):
-                sticker_path = sub_sticker_mgr.pick(detected)
 
         sub_audio_path = None
         sub_tts_pending = False

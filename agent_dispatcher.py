@@ -332,7 +332,7 @@ class SubAgent:
         names.add("send_message_to_agent")  # 子代理专属工具：子代理间直接通信
         return names
 
-    async def chat(self, message: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸") -> str:
+    async def chat(self, message: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "") -> str:
         # 降级模式下尝试自动恢复：用最新环境变量中的 Key 重建客户端
         if self._degraded:
             api_key = _read_env_key(self.config.api_key_env)
@@ -367,6 +367,8 @@ class SubAgent:
         system_prompt = self._personality
         if "{address_term}" in system_prompt:
             system_prompt = system_prompt.replace("{address_term}", address_term)
+        if extra_system_prompt:
+            system_prompt += f"\n\n{extra_system_prompt}"
         if context:
             system_prompt += f"\n\n[背景信息]\n{context}"
 
@@ -855,7 +857,7 @@ class AgentDispatcher:
                 except (OSError, RuntimeError):
                     logger.debug("agent_dispatcher.close_sub_agent_error", exc_info=True)
 
-    async def dispatch_single(self, name: str, task: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸") -> str | None:
+    async def dispatch_single(self, name: str, task: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "") -> str | None:
         """单子代理调度（原 dispatch 方法）。
 
         保留为独立方法以与并行调度（SubAgentManagerMixin.parallel_dispatch）区分；
@@ -865,7 +867,7 @@ class AgentDispatcher:
         if not agent:
             logger.warning("dispatcher.agent_not_found", name=name)
             return None
-        return await agent.chat(task, context=context, status_callback=status_callback, address_term=address_term)
+        return await agent.chat(task, context=context, status_callback=status_callback, address_term=address_term, extra_system_prompt=extra_system_prompt)
 
     # 向后兼容别名：保留 dispatch 指向 dispatch_single
     dispatch = dispatch_single
