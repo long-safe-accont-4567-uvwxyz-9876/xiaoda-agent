@@ -219,27 +219,34 @@ class GreetingScheduler:
         from datetime import datetime
         hour = datetime.now().hour
         if hour < 6:
-            time_hint = "深夜/凌晨"
+            time_hint, activity = "深夜", "还没睡"
         elif hour < 9:
-            time_hint = "清晨"
+            time_hint, activity = "清晨", "刚醒"
         elif hour < 12:
-            time_hint = "上午"
+            time_hint, activity = "上午", "在忙"
         elif hour < 14:
-            time_hint = "中午"
+            time_hint, activity = "中午", "要吃饭"
         elif hour < 18:
-            time_hint = "下午"
+            time_hint, activity = "下午", "在干活"
         elif hour < 22:
-            time_hint = "晚上"
+            time_hint, activity = "晚上", "收工了"
         else:
-            time_hint = "深夜"
+            time_hint, activity = "深夜", "准备睡了"
 
+        # 角色扮演式提示：避免"任务化"措辞导致闹钟感
+        # 不让 LLM 强行联系最近对话记忆（这是闹钟感的根源）
+        # 不让 LLM 堆砌比喻修辞（SOUL.md 里世界树意象本应克制使用）
         user_input = (
-            f"[主动问候] 现在是{time_hint}，请主动向{address_term}发一句简短温暖的问候。"
-            f"结合你对{address_term}的了解和最近的对话记忆，让问候有个性化和温度，不要千篇一律。"
-            f"只输出问候语（1-2句话）。"
+            f'（场景：现在{time_hint}，{address_term}大概{activity}了。'
+            f'你忽然想跟{address_term}说一句话——就像随口招呼一声那样自然，'
+            f'可能只是「嗯？」，可能是一句关心的废话，可能是一个小小的撒娇。'
+            f'不要刻意提昨天的事、最近的任务、未完成的工作。'
+            f'不要堆砌比喻、修辞、世界树意象。'
+            f'不要像 AI 助手那样"主动问候"。'
+            f'就只是一句带着你性格的、普通的话。）'
         )
         if hint:
-            user_input += f" 问候主题：{hint}。"
+            user_input += f'\n（如果顺嘴能带一句关于「{hint}」的就带，想不到就不带。）'
 
         try:
             # 使用真实的 user_id 和 session，让记忆系统能加载用户上下文
@@ -258,7 +265,8 @@ class GreetingScheduler:
             logger.debug("greeting.raw_output hint={} raw={}", hint, text[:200])
             text = _strip_thinking(text, context="greeting").strip()
             if text:
-                return text[:100]
+                # 限制长度：真人随口招呼通常很短，过长反而像 AI
+                return text[:80]
         except Exception as e:
             logger.warning("greeting.generate_failed error={}", str(e))
         return f"{address_term}，好呀～"

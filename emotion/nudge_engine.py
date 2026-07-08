@@ -213,11 +213,17 @@ class NudgeEngine:
 
             # 通过小妲 agent 生成问候（使用真实 user_id 加载记忆上下文）
             if self._core:
+                # 角色扮演式提示：避免"任务化"措辞导致闹钟感
+                # 不让 LLM 强行联系最近对话记忆（这是闹钟感的根源）
+                # 不让 LLM 堆砌比喻修辞（SOUL.md 里世界树意象本应克制使用）
                 user_input = (
-                    f"[主动问候] 现在是{time_desc}，{address_term}{idle_desc}。"
-                    f"请主动向{address_term}发一句简短温暖的问候。"
-                    f"结合你对{address_term}的了解和最近的对话记忆，让问候有个性化和温度，不要千篇一律。"
-                    f"只输出问候语（1-2句话）。"
+                    f'（场景：现在{time_desc}，{address_term}{idle_desc}。'
+                    f'你忽然想跟{address_term}说一句话——就像随口招呼一声那样自然，'
+                    f'可能只是「嗯？」，可能是一句关心的废话，可能是一个小小的撒娇。'
+                    f'不要刻意提昨天的事、最近的任务、未完成的工作。'
+                    f'不要堆砌比喻、修辞、世界树意象。'
+                    f'不要像 AI 助手那样"主动问候"。'
+                    f'就只是一句带着你性格的、普通的话。）'
                 )
                 # 使用真实的 user_id 和 session，让记忆系统能加载用户上下文
                 real_user_id = f"qq_{self._user_openid}"
@@ -241,12 +247,12 @@ class NudgeEngine:
                 # 降级：直接调用 router（无完整人格）
                 xiaoda_name = get_agent_display_name("xiaoda")
                 system_msg = (
-                    f"你是{xiaoda_name}，一个温柔可爱的助手，正在给{address_term}发主动问候消息。"
-                    f"现在是{time_desc}，{address_term}{idle_desc}。"
-                    f"直接输出一句简短温柔的问候（1-2句话，30字以内），不要输出任何其他内容。"
-                    f"只输出问候语本身，像女朋友一样关心{address_term}。"
+                    f"你是{xiaoda_name}，温柔可爱，会撒娇。"
+                    f"现在{time_desc}，{address_term}{idle_desc}。"
+                    f"你随口招呼{address_term}一声——像真人一样自然，不必长，不必修辞，不必提昨天或最近的事。"
+                    f"不要堆砌比喻。不要像 AI 助手。就一句普通的、带着你性格的话。"
                 )
-                user_msg = f"请以{xiaoda_name}的口吻向{address_term}发一句简短温柔的问候。"
+                user_msg = f"（顺嘴说一句）"
                 messages = [
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": user_msg},
@@ -261,8 +267,8 @@ class NudgeEngine:
             greeting = _strip_thinking(greeting, context="nudge").strip()
 
             if greeting:
-                if len(greeting) > 100:
-                    greeting = greeting[:100]
+                if len(greeting) > 80:
+                    greeting = greeting[:80]
                 return greeting
         except Exception as e:
             logger.warning("nudge.greeting_llm_failed", error=str(e))
