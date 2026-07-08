@@ -290,9 +290,9 @@ class ModelRouter:
 
     # 已知自定义 provider 的默认模型映射
     _CUSTOM_PROVIDER_DEFAULT_MODELS: ClassVar[dict[str, str]] = {
-        "siliconflow": "Qwen/Qwen2.5-7B-Instruct",
+        "siliconflow": "THUDM/GLM-Z1-9B-0414",
         "openrouter": "meta-llama/llama-3.3-8b-instruct:free",
-        "modelscope": "Qwen/Qwen2.5-7B-Instruct",
+        "modelscope": "THUDM/GLM-Z1-9B-0414",
     }
 
     def _get_custom_provider_default_model(self, provider: str) -> str:

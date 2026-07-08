@@ -23,6 +23,14 @@ class ModelCapabilities:
 
 BUILTIN_CAPABILITIES: dict[str, ModelCapabilities] = {
     # ---- SiliconFlow models ----
+    "THUDM/GLM-Z1-9B-0414": ModelCapabilities(
+        model_id="THUDM/GLM-Z1-9B-0414",
+        tool_calling=True,
+        vision=False,
+        provider="siliconflow",
+        display_name="GLM-Z1-9B-0414",
+        free=True,
+    ),
     "Qwen/Qwen2.5-7B-Instruct": ModelCapabilities(
         model_id="Qwen/Qwen2.5-7B-Instruct",
         tool_calling=True,

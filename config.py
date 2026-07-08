@@ -785,9 +785,9 @@ RERANKER_OVERSAMPLE_RATIO = _safe_int(os.getenv("RERANKER_OVERSAMPLE_RATIO"), 3)
 # Query Transform
 QUERY_TRANSFORM_ENABLED = os.getenv("QUERY_TRANSFORM_ENABLED", "true").lower() in ("1", "true", "yes")
 QUERY_EXPAND_COUNT = _safe_int(os.getenv("QUERY_EXPAND_COUNT"), 2)
-# 意图分类 LLM 调用：默认关闭（规则匹配已足够，LLM 调用增加 200-800ms 延迟）
-# 设置 INTENT_LLM_CLASSIFY=true 启用更精确的 LLM 意图分类
-INTENT_LLM_CLASSIFY = os.getenv("INTENT_LLM_CLASSIFY", "false").lower() in ("1", "true", "yes")
+# 意图分类 LLM 调用：默认开启（GLM-Z1-9B-0414 推理质量高，速度可接受）
+# 设置 INTENT_LLM_CLASSIFY=false 可关闭 LLM 分类，仅用规则匹配（更快）
+INTENT_LLM_CLASSIFY = os.getenv("INTENT_LLM_CLASSIFY", "true").lower() in ("1", "true", "yes")
 
 # Retrieval Optimization (A1/A2/A3)
 RETRIEVAL_SMART_SKIP = os.getenv("RETRIEVAL_SMART_SKIP", "true").lower() in ("1", "true", "yes")

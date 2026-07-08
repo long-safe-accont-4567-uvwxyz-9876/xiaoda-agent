@@ -45,7 +45,7 @@ class InstinctManager:
         self._available = db is not None
         self._free_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         self._free_base_url = "https://api.siliconflow.cn/v1"
-        self._free_model = "Qwen/Qwen2.5-7B-Instruct"
+        self._free_model = "THUDM/GLM-Z1-9B-0414"
 
     def set_free_model_client(self, api_key: str, base_url: str, model: str) -> None:
         """配置硅基流动免费模型客户端"""

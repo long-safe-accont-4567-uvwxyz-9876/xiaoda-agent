@@ -367,7 +367,7 @@ class AgentCoreBootstrapper:
         if not qt_api_key:
             logger.info("query_transformer.disabled_no_api_key")
             return None
-        logger.info("query_transformer.enabled", model="Qwen/Qwen2.5-7B-Instruct (free)")
+        logger.info("query_transformer.enabled", model="THUDM/GLM-Z1-9B-0414 (free)")
         return QueryTransformer(
             api_key=qt_api_key,
             base_url="https://api.siliconflow.cn/v1",
@@ -383,7 +383,7 @@ class AgentCoreBootstrapper:
             core.instinct_manager.set_free_model_client(
                 api_key=sf_key,
                 base_url="https://api.siliconflow.cn/v1",
-                model="Qwen/Qwen2.5-7B-Instruct",
+                model="THUDM/GLM-Z1-9B-0414",
             )
         # 加载 Instinct 提示到上下文
         instinct_prompt = await core.instinct_manager.build_instinct_prompt()
@@ -399,7 +399,7 @@ class AgentCoreBootstrapper:
                 core.error_pipeline.set_free_model_client(
                     api_key=sf_key,
                     base_url="https://api.siliconflow.cn/v1",
-                    model="Qwen/Qwen2.5-7B-Instruct",
+                    model="THUDM/GLM-Z1-9B-0414",
                 )
             # 注入到 ToolCallHandler（延后注入，避免构造期循环依赖）
             if getattr(core, "_tool_call_handler", None) is not None:

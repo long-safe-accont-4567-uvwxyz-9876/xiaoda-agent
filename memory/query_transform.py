@@ -9,15 +9,15 @@ from loguru import logger
 class QueryTransformer:
     """查询变换器：改写/扩展/分解用户原始查询
 
-    使用硅基流动免费模型（如 Qwen3-8B），不占用主模型调用配额。
+    使用硅基流动免费模型（如 GLM-Z1-9B-0414），不占用主模型调用配额。
     无 API Key 时自动降级返回原始查询。
     """
 
     # 硅基流动免费模型列表（0 成本）
     FREE_MODELS: ClassVar[list[str]] = [
+        "THUDM/GLM-Z1-9B-0414",
         "Qwen/Qwen2.5-7B-Instruct",
         "THUDM/glm-4-9b-chat",
-        "internlm/internlm3-8b-instruct",
     ]
 
     # 意图分类关键词（规则匹配快速路径）
@@ -40,7 +40,7 @@ class QueryTransformer:
         self._router = router  # 保留兼容，但不再用于查询变换
         self._api_key = api_key or os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         self._base_url = base_url or "https://api.siliconflow.cn/v1"
-        self._model = model or os.getenv("QUERY_TRANSFORM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
+        self._model = model or os.getenv("QUERY_TRANSFORM_MODEL", "THUDM/GLM-Z1-9B-0414")
         self._available = bool(self._api_key)
 
     @property

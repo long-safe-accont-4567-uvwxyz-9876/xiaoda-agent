@@ -32,7 +32,7 @@ class ResultWrapper:
         self.router = router
         self._free_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         self._free_base_url = "https://api.siliconflow.cn/v1"
-        self._free_model = "Qwen/Qwen2.5-7B-Instruct"
+        self._free_model = "THUDM/GLM-Z1-9B-0414"
 
     async def _call_free_model(self, messages: list, temperature: float = 0.3,
                                 max_tokens: int = 500) -> str | None:
