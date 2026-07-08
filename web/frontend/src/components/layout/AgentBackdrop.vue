@@ -70,6 +70,8 @@ function pushLayer(url: string) {
   z-index: 0;
   overflow: hidden;
   background: var(--forest-deep);
+  filter: brightness(var(--app-brightness, 1.05));
+  transition: filter 0.4s ease;
 }
 
 .backdrop-layer {

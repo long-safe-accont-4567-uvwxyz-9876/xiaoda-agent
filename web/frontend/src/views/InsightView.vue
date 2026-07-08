@@ -1198,7 +1198,7 @@ function fmtTs(ts: number): string {
   font-size: 14px;
   background: rgba(255,255,255,0.04); border: 2px solid rgba(255,255,255,0.08);
   color: var(--moon-dim);
-  transition: all 0.3s;
+  transition: background 0.3s, border-color 0.3s, color 0.3s;
 }
 .xp-level-active .xp-level-dot {
   background: rgba(220, 60, 80, 0.15); border-color: #dc3c50;

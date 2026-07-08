@@ -21,7 +21,25 @@ let trail: Array<{ x: number; y: number; t: number }> = []
 let burstParticles: Array<{ x: number; y: number; vx: number; vy: number; t: number; rot: number }> = []
 
 const DENSITY: Record<string, number> = { off: 0, low: 12, medium: 36, high: 60 }
-const FRAME_MS = 1000 / 30 // 30fps 节流
+const FRAME_MS = 1000 / 30
+
+const GLOW_SIZE = 48
+const GLOW_CORE_R = 8
+let glowDot: HTMLCanvasElement | null = null
+
+function initGlowDot() {
+  glowDot = document.createElement('canvas')
+  glowDot.width = GLOW_SIZE
+  glowDot.height = GLOW_SIZE
+  const g = glowDot.getContext('2d')!
+  const cx = GLOW_SIZE / 2, cy = GLOW_SIZE / 2
+  g.shadowColor = '#7fd650'
+  g.shadowBlur = 6
+  g.fillStyle = '#7fd650'
+  g.beginPath()
+  g.arc(cx, cy, GLOW_CORE_R, 0, Math.PI * 2)
+  g.fill()
+}
 
 function count(): number {
   return DENSITY[ui.particles] ?? 36
@@ -118,15 +136,9 @@ function frame(now: number) {
     if (p.leaf) {
       drawLeaf(ctx, p.x, p.y, p.r * 2, p.drift, breathe)
     } else {
-      // shadowBlur 帮助浏览器将 canvas 提升为合成层，避免每帧重绘全页
       ctx.globalAlpha = breathe
-      ctx.fillStyle = '#7fd650'
-      ctx.shadowColor = '#7fd650'
-      ctx.shadowBlur = 6
-      ctx.beginPath()
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.shadowBlur = 0
+      const s = GLOW_SIZE * p.r / GLOW_CORE_R
+      ctx.drawImage(glowDot!, p.x - s / 2, p.y - s / 2, s, s)
     }
   }
 
@@ -222,6 +234,7 @@ onMounted(() => {
     ui.setParticles('off')
     return
   }
+  initGlowDot()
   resize()
   window.addEventListener('resize', resize)
   window.addEventListener('mousemove', onMouse, { passive: true })
