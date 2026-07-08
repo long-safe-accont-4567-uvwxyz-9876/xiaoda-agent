@@ -55,6 +55,8 @@ const graphDepth = ref<1 | 2>(1)
 const showUniverse = ref(false)
 const activeTab = ref('emotion')
 let knowledgeChart: echarts.ECharts | null = null
+let emotionChart: echarts.ECharts | null = null
+let pieChart: echarts.ECharts | null = null
 const kgEntities = ref<any[]>([])
 const kgRelations = ref<any[]>([])
 const notes = ref<any[]>([])
@@ -237,10 +239,16 @@ onUnmounted(() => {
   ws.off('xp_levelup', onXpLevelUp)
   window.removeEventListener('resize', handleResize)
   if (resizeTimer) clearTimeout(resizeTimer)
+  if (xpLevelUpTimer) clearTimeout(xpLevelUpTimer)
+  if (knowledgeTabTimer) clearTimeout(knowledgeTabTimer)
   knowledgeChart?.dispose()
+  emotionChart?.dispose()
+  pieChart?.dispose()
 })
 
 let resizeTimer: ReturnType<typeof setTimeout> | null = null
+let xpLevelUpTimer: ReturnType<typeof setTimeout> | null = null
+let knowledgeTabTimer: ReturnType<typeof setTimeout> | null = null
 function handleResize() {
   if (resizeTimer) clearTimeout(resizeTimer)
   resizeTimer = setTimeout(() => {
@@ -251,8 +259,8 @@ function handleResize() {
 watch(activeTab, async (tab) => {
   if (tab === 'knowledge') {
     await nextTick()
-    // 延迟等待 tab 动画完成后再初始化
-    setTimeout(async () => {
+    if (knowledgeTabTimer) clearTimeout(knowledgeTabTimer)
+    knowledgeTabTimer = setTimeout(async () => {
       await loadKnowledgeData()
     }, 100)
   }
@@ -281,8 +289,8 @@ function renderEmotionCharts(history: any[]) {
   if (emotionChartEl.value) {
     const hours = [...new Set(history.map(h => h.hour))].sort()
     const emotions = [...new Set(history.map(h => h.emotion_label))]
-    const chart = echarts.init(emotionChartEl.value)
-    chart.setOption({
+    if (!emotionChart) emotionChart = echarts.init(emotionChartEl.value)
+    emotionChart.setOption({
       tooltip: { trigger: 'axis' },
       legend: { textStyle: { color: '#f2f7ee' }, type: 'scroll' },
       grid: { left: 40, right: 16, top: 40, bottom: 40 },
@@ -300,8 +308,8 @@ function renderEmotionCharts(history: any[]) {
     const todayRows = history.filter(h => h.hour.startsWith(today))
     const byEmotion: Record<string, number> = {}
     for (const r of todayRows) byEmotion[r.emotion_label] = (byEmotion[r.emotion_label] || 0) + r.cnt
-    const chart = echarts.init(pieChartEl.value)
-    chart.setOption({
+    if (!pieChart) pieChart = echarts.init(pieChartEl.value)
+    pieChart.setOption({
       tooltip: {},
       series: [{
         type: 'pie', radius: ['38%', '68%'],
@@ -559,7 +567,8 @@ function getSourceIcon(source: string): string {
 function onXpLevelUp(e: any) {
   xpLevelUp.value = { show: true, level: e.level || 0, label: e.level_label || '' }
   loadXpData()
-  setTimeout(() => { xpLevelUp.value.show = false }, 5000)
+  if (xpLevelUpTimer) clearTimeout(xpLevelUpTimer)
+  xpLevelUpTimer = setTimeout(() => { xpLevelUp.value.show = false }, 5000)
 }
 
 const kindIcon: Record<string, string> = {

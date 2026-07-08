@@ -5,6 +5,7 @@ import type { WsEvent } from '../api/ws'
 import { api } from '../api'
 import { useAgentsStore } from './agents'
 import { t, tf } from '../i18n'
+import { clearMarkdownCache } from '../utils/markdown'
 
 export interface ToolCall {
   tool: string
@@ -229,6 +230,7 @@ export const useChatStore = defineStore('chat', () => {
     sessionId.value = data.session_id
     ws.send({ type: 'set_session', session_id: data.session_id })
     messages.value = []
+    clearMarkdownCache()
   }
 
   /** 撤回/删除一条消息（仅从当前界面移除） */
@@ -251,6 +253,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function clearMessages() {
     messages.value = []
+    clearMarkdownCache()
   }
 
   async function loadSession(sid: string) {

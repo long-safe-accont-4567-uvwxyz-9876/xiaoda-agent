@@ -79,7 +79,12 @@ const voiceRefDisplayName = computed(() => {
   return replaceAgentNames(vr)
 })
 
-const createObjectURL = (f: File) => URL.createObjectURL(f)
+let stickerObjectUrl = ''
+const createObjectURL = (f: File) => {
+  if (stickerObjectUrl) URL.revokeObjectURL(stickerObjectUrl)
+  stickerObjectUrl = URL.createObjectURL(f)
+  return stickerObjectUrl
+}
 
 // 自动翻译显示名为英文（当显示名变化时）
 watch(() => editing.value?.display_name, (newName: string) => {
@@ -112,6 +117,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   ws.off('config_changed', onConfigChanged)
+  if (stickerObjectUrl) { URL.revokeObjectURL(stickerObjectUrl); stickerObjectUrl = '' }
 })
 
 async function loadDiscoveredModels() {
@@ -400,6 +406,7 @@ async function uploadSticker() {
   try {
     await api.uploadSticker(editing.value.name, stickerFile.value, stickerDesc.value.trim(), stickerEmotion.value)
     message.success(t('agentsView.stickerAdded'))
+    if (stickerObjectUrl) { URL.revokeObjectURL(stickerObjectUrl); stickerObjectUrl = '' }
     stickerFile.value = null
     stickerDesc.value = ''
     if (stickerInput.value) stickerInput.value.value = ''

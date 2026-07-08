@@ -3,12 +3,14 @@ import { onMounted, ref, provide, onUnmounted } from 'vue'
 import { NConfigProvider, NMessageProvider, NDialogProvider, darkTheme } from 'naive-ui'
 import type { GlobalThemeOverrides } from 'naive-ui'
 import { useAuthStore } from './stores/auth'
+import { useUiStore } from './stores/ui'
 import { useRouter } from 'vue-router'
 import { api } from './api'
 import { t } from './i18n'
 import GrassParticles from './components/fx/GrassParticles.vue'
 
 const auth = useAuthStore()
+const ui = useUiStore()
 const router = useRouter()
 const particlesRef = ref<InstanceType<typeof GrassParticles> | null>(null)
 
@@ -111,6 +113,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopWatermarkGuard()
+  ui.stopAutoCheck()
 })
 
 const themeOverrides: GlobalThemeOverrides = {

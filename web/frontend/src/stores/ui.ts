@@ -43,6 +43,10 @@ export const useUiStore = defineStore('ui', () => {
     }, 10 * 60 * 1000)
   }
 
+  function stopAutoCheck() {
+    if (autoTimer) { clearInterval(autoTimer); autoTimer = null }
+  }
+
   function setAutoBrightness(v: boolean) {
     autoBrightness.value = v
     localStorage.setItem(AUTO_KEY, String(v))
@@ -91,5 +95,6 @@ export const useUiStore = defineStore('ui', () => {
     brightness, autoBrightness, manualBrightness,
     loadRemote, setParticles, setTilt3d, setAutoSpeak,
     setAutoBrightness, setManualBrightness, applyBrightness,
+    stopAutoCheck,
   }
 })
