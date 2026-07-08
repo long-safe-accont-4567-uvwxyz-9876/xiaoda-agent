@@ -22,7 +22,17 @@ class QueryTransformer:
 
     # 意图分类关键词（规则匹配快速路径）
     TEMPORAL_KEYWORDS: ClassVar[set[str]] = {"昨天", "前天", "今天", "上周", "上个月", "刚才", "之前", "那次", "那天", "那次对话"}
-    CHAT_KEYWORDS: ClassVar[set[str]] = {"你好", "嗨", "谢谢", "再见", "哈哈", "早安", "晚安", "在吗", "在不在"}
+    CHAT_KEYWORDS: ClassVar[set[str]] = {
+        # 问候类
+        "你好", "嗨", "谢谢", "再见", "哈哈", "早安", "晚安", "在吗", "在不在",
+        # 情绪/感受类（闲聊高频）
+        "觉得", "感觉", "开心", "难过", "无聊", "累了", "好困", "好饿",
+        "喜欢", "讨厌", "害怕", "担心", "兴奋", "感动",
+        # 日常闲聊类
+        "在干嘛", "干嘛呢", "吃了吗", "早上好", "晚上好", "中午好",
+        "你知道吗", "告诉你", "跟你说", "我说", "好吧", "算了",
+        "好的", "嗯嗯", "嘿嘿", "嘻嘻", "呵呵",
+    }
     MULTIHOP_KEYWORDS: ClassVar[set[str]] = {"和", "与", "比较", "区别", "关系", "之间", "哪个好", "对比"}
 
     def __init__(self, router: Any | None=None, api_key: str = "", base_url: str = "",
@@ -151,12 +161,20 @@ class QueryTransformer:
                 return "multi-hop"
 
         # LLM 可用时，对非明确类型走 LLM 分类
-        if self._available:
+        # 性能优化：LLM 调用会增加 200-800ms 延迟，默认关闭，规则未命中直接返回 factual
+        # 如需更精确的分类，设置 INTENT_LLM_CLASSIFY=true 启用
+        try:
+            import config as _cfg
+            llm_classify = getattr(_cfg, "INTENT_LLM_CLASSIFY", False)
+        except (ImportError, AttributeError):
+            llm_classify = False
+
+        if llm_classify and self._available:
             prompt = f"请分类以下查询的意图类型（temporal/factual/chat/multi-hop），只输出类型名称：\n查询: {query}"
             try:
                 result = await asyncio.wait_for(
                     self._call_free_model(prompt, temperature=0.0, max_tokens=20),
-                    timeout=5.0,
+                    timeout=2.0,
                 )
                 if result:
                     result_clean = result.strip().lower()
