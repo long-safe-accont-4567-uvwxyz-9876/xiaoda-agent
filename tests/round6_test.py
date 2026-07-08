@@ -296,7 +296,7 @@ async def test_error_recovery():
         from utils.credential_pool import CredentialPool, Credential, CredentialState
 
         _ec = ErrorClassifier()
-        _pool = CredentialPool()
+        pool = CredentialPool()
         pool.add_credential(Credential(provider="test", api_key="sk-test1", base_url="https://api1.test"))
         pool.add_credential(Credential(provider="test", api_key="sk-test2", base_url="https://api2.test"))
 
