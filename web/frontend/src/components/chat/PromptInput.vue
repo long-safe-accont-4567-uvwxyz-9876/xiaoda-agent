@@ -463,7 +463,7 @@ watch(() => props.modelValue, () => {
 
 .preview-slide-enter-active,
 .preview-slide-leave-active {
-  transition: all 0.25s var(--ease-smooth);
+  transition: opacity 0.25s var(--ease-smooth), transform 0.25s var(--ease-smooth);
 }
 
 .preview-slide-enter-from,

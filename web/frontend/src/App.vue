@@ -16,18 +16,20 @@ provide('particles', particlesRef)
 
 // 署名水印防删除
 const watermarkRef = ref<HTMLElement | null>(null)
-let watermarkCheckTimer: ReturnType<typeof setInterval> | null = null
+let watermarkObserver: MutationObserver | null = null
 let signatureCheckTimer: number | null = null
 
 function startWatermarkGuard() {
-  // 每 2 秒检查一次水印是否存在，不需要 MutationObserver
-  watermarkCheckTimer = setInterval(() => {
-    const wm = watermarkRef.value
-    if (wm && !document.body.contains(wm)) {
-      // 水印被移除，重新插入
-      document.body.appendChild(wm)
-    }
-  }, 2000)
+  // MutationObserver 监听水印节点被移除，仅在 DOM 变更时触发，零轮询开销
+  const wm = watermarkRef.value
+  if (wm) {
+    watermarkObserver = new MutationObserver(() => {
+      if (wm && !document.body.contains(wm)) {
+        document.body.appendChild(wm)
+      }
+    })
+    watermarkObserver.observe(document.body, { childList: true, subtree: true })
+  }
 
   signatureCheckTimer = window.setInterval(async () => {
     try {
@@ -44,9 +46,9 @@ function startWatermarkGuard() {
 }
 
 function stopWatermarkGuard() {
-  if (watermarkCheckTimer) {
-    clearInterval(watermarkCheckTimer)
-    watermarkCheckTimer = null
+  if (watermarkObserver) {
+    watermarkObserver.disconnect()
+    watermarkObserver = null
   }
   if (signatureCheckTimer) {
     clearInterval(signatureCheckTimer)
@@ -159,11 +161,7 @@ const themeOverrides: GlobalThemeOverrides = {
   box-sizing: border-box;
 }
 
-/* 亮度调节：filter 同时为 #app 创建 GPU 合成层，避免每帧重绘全页 */
-#app {
-  filter: brightness(var(--app-brightness, 1.05));
-  transition: filter 0.4s ease;
-}
+/* 亮度调节已移至 .agent-backdrop，仅对背景层生效，避免整页 GPU 合成 */
 
 html, body, #app {
   height: 100%;

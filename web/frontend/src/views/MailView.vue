@@ -673,7 +673,7 @@ onUnmounted(() => {
 
 /* 过渡动画 */
 .fade-slide-enter-active, .fade-slide-leave-active {
-  transition: all 0.28s var(--ease-smooth);
+  transition: opacity 0.28s var(--ease-smooth), transform 0.28s var(--ease-smooth), max-height 0.28s var(--ease-smooth);
 }
 .fade-slide-enter-from, .fade-slide-leave-to {
   opacity: 0; transform: translateY(-6px); max-height: 0;
