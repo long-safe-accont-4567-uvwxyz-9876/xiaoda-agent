@@ -68,7 +68,7 @@ BUILTIN_EXCLUDED_TOOLS: dict[str, set[str]] = {
     "xiaolian": {"call_xiaoli", "call_xiaoda", "shell_command", "python_executor", "write_file"},
     "xiaoke": {"call_xiaoli", "call_xiaoda", "shell_command", "write_file"},
 }
-# 内置 Agent 默认背景板（打包在前端 dist/assets/wallpapers/ 下）
+# 内置 Agent 默认背景板（统一使用无IP风险的 webui_background.jpg，用户可在 WebUI 自行更换）
 DEFAULT_WALLPAPERS = {
     "xiaoda": "/assets/webui_background.jpg",
     "xiaoli": "/assets/webui_background.jpg",
