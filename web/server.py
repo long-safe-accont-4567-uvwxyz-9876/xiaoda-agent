@@ -179,10 +179,11 @@ async def _start_services(app: Any, core: Any) -> None:
     from web.media_tasks import MediaTaskQueue
     from web.greeting_scheduler import GreetingScheduler
     from web.routers.tools import apply_tool_overrides
-    from web.ws_hub import manager
+    from web.ws_hub import manager, start_media_cleanup
 
     await _apply_model_overrides(core)
     apply_tool_overrides()
+    start_media_cleanup()
     await _start_user_mcp_servers(core)
 
     # Initialize Plugin Manager
