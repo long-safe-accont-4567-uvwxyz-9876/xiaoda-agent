@@ -29,20 +29,22 @@ function translateToEn(zhName: string): string {
 export const useAgentsStore = defineStore('agents', () => {
   const agents = ref<AgentInfo[]>([])
   const loading = ref(false)
+  const mainWallpaper = ref('')
 
   async function load() {
     loading.value = true
     try {
       const data = await get<AgentInfo[]>('/agents')
-      // 自动翻译 display_name_en
       agents.value = data.map(a => ({
         ...a,
         display_name_en: translateToEn(a.display_name)
       }))
+      const main = data.find(a => a.is_main)
+      if (main?.wallpaper) mainWallpaper.value = main.wallpaper
     } finally {
       loading.value = false
     }
   }
 
-  return { agents, loading, load }
+  return { agents, loading, mainWallpaper, load }
 })

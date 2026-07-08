@@ -468,9 +468,9 @@ async function uploadVoiceForAgent() {
       <Tilt3D v-for="a in agentsStore.agents" :key="a.name">
         <div class="agent-card glass-panel glass-panel-hover" @click="openEditor(a)">
           <div class="card-head">
-            <span class="agent-avatar"
-                  :style="a.wallpaper ? { backgroundImage: `url('${a.wallpaper}')` } : undefined">
-              <template v-if="!a.wallpaper">{{ a.display_name.slice(0, 1) }}</template>
+            <span class="agent-avatar">
+              <img v-if="a.wallpaper" :src="a.wallpaper" class="avatar-img" @error="($event: Event) => { ($event.target as HTMLImageElement).style.display = 'none' }" />
+              <span v-if="!a.wallpaper" class="avatar-letter">{{ a.display_name.slice(0, 1) }}</span>
             </span>
             <div class="agent-names">
               <span class="agent-display">{{ a.display_name }}</span>
@@ -730,12 +730,14 @@ async function uploadVoiceForAgent() {
 .agent-avatar {
   width: 40px; height: 40px;
   border-radius: 50%;
-  background: rgba(127, 214, 80, 0.18) center/cover no-repeat;
+  background: rgba(127, 214, 80, 0.18);
   border: 1px solid var(--glass-border);
   display: flex; align-items: center; justify-content: center;
-  font-size: 18px; font-weight: 700; color: var(--dendro);
   flex-shrink: 0;
+  overflow: hidden;
 }
+.avatar-img { width: 100%; height: 100%; object-fit: cover; }
+.avatar-letter { font-size: 18px; font-weight: 700; color: var(--dendro); }
 
 .agent-names { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .agent-display { font-weight: 600; }

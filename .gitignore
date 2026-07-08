@@ -35,6 +35,11 @@ assets/stickers/*
 assets/voice_refs/*
 !assets/voice_refs/.gitkeep
 web/frontend/public/assets/wallpapers/*
+!web/frontend/public/assets/wallpapers/xiaoda.jpg
+!web/frontend/public/assets/wallpapers/xiaoli.jpg
+!web/frontend/public/assets/wallpapers/xiaolang.jpg
+!web/frontend/public/assets/wallpapers/xiaolian.jpg
+!web/frontend/public/assets/wallpapers/xiaoke.jpg
 web/public/images/wallpapers/*
 
 # 调试脚本（不提交到生产）

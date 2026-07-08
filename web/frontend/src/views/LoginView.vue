@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
+import { useAgentsStore } from '../stores/agents'
 import { useRouter } from 'vue-router'
 import { api, get } from '../api'
 import Tilt3D from '../components/fx/Tilt3D.vue'
@@ -10,19 +11,19 @@ import { t } from '../i18n'
 const DEFAULT_BG = '/assets/webui_background.jpg'
 
 const auth = useAuthStore()
+const agentsStore = useAgentsStore()
 const router = useRouter()
 const password = ref('')
 const error = ref('')
 const loading = ref(false)
 const noPassword = ref(false)
-const loginBg = ref(DEFAULT_BG)
+const loginBg = computed(() => agentsStore.mainWallpaper || DEFAULT_BG)
 
 onMounted(async () => {
-  // 加载小妲壁纸，使登录页背景与聊天页一致
   try {
     const data = await get<{ wallpaper?: string }>('/agents/public-wallpaper')
     if (data?.wallpaper) {
-      loginBg.value = data.wallpaper
+      agentsStore.mainWallpaper = data.wallpaper
     }
   } catch {
     // 忽略，使用默认背景

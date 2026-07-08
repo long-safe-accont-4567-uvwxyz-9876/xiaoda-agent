@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import { useChatStore } from '../../stores/chat'
 import { useAgentsStore } from '../../stores/agents'
 
@@ -9,17 +9,22 @@ const chat = useChatStore()
 const agentsStore = useAgentsStore()
 
 const targetUrl = computed(() => {
-  if (!agentsStore.agents.length) return ''
-  const a = agentsStore.agents.find(x => x.name === chat.currentAgent)
-  return a?.wallpaper || DEFAULT_BG
+  if (agentsStore.agents.length) {
+    const a = agentsStore.agents.find(x => x.name === chat.currentAgent)
+    if (a?.wallpaper) return a.wallpaper
+  }
+  return agentsStore.mainWallpaper || DEFAULT_BG
 })
-
-const ready = computed(() => targetUrl.value !== '')
 
 interface Layer { url: string; key: number }
 const layers = ref<Layer[]>([])
 let seq = 0
 let pendingUrl = ''
+
+onMounted(() => {
+  const initial = agentsStore.mainWallpaper || DEFAULT_BG
+  pushLayer(initial)
+})
 
 watch(targetUrl, (url) => {
   if (!url) return
@@ -29,7 +34,7 @@ watch(targetUrl, (url) => {
   img.onload = () => { if (pendingUrl === url) pushLayer(url) }
   img.onerror = () => { if (pendingUrl === url) pushLayer(DEFAULT_BG) }
   img.src = url
-}, { immediate: true })
+})
 
 function topUrl() {
   return layers.value[layers.value.length - 1]?.url
@@ -38,7 +43,6 @@ function topUrl() {
 function pushLayer(url: string) {
   if (topUrl() === url) return
   layers.value.push({ url, key: ++seq })
-  // 交叉淡化结束后丢弃被盖住的旧层
   setTimeout(() => {
     if (layers.value.length > 1) layers.value.splice(0, layers.value.length - 1)
   }, 1400)
@@ -46,7 +50,7 @@ function pushLayer(url: string) {
 </script>
 
 <template>
-  <div class="agent-backdrop" :class="{ 'backdrop-hidden': !ready }" aria-hidden="true">
+  <div class="agent-backdrop" aria-hidden="true">
     <transition-group name="bg-fade">
       <div
         v-for="l in layers"
@@ -66,11 +70,6 @@ function pushLayer(url: string) {
   z-index: 0;
   overflow: hidden;
   background: var(--forest-deep);
-  transition: opacity 0.3s ease;
-}
-
-.backdrop-hidden {
-  opacity: 0;
 }
 
 .backdrop-layer {
@@ -80,7 +79,6 @@ function pushLayer(url: string) {
   background-position: center;
 }
 
-/* 新背景在旧背景之上淡入并缓缓沉降，旧层被盖住后静默移除 */
 .bg-fade-enter-active {
   transition: opacity 1.1s var(--ease-smooth), transform 1.3s var(--ease-smooth);
 }
