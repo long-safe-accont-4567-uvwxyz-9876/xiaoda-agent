@@ -35,6 +35,7 @@ assets/stickers/*
 assets/voice_refs/*
 !assets/voice_refs/.gitkeep
 web/frontend/public/assets/wallpapers/*
+web/public/images/wallpapers/*
 
 # 调试脚本（不提交到生产）
 .dbg/
