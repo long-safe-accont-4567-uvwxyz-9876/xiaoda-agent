@@ -431,7 +431,7 @@ class TTSEngine:
             try:
                 import asyncio
                 loop = asyncio.get_running_loop()
-                _bg_close = loop.create_task(old_client.close())  # noqa: RUF006
+                _bg_close = loop.create_task(old_client.close())
             except RuntimeError:
                 pass
 

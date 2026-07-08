@@ -292,7 +292,7 @@ class InstinctManager:
             await self.db._conn.execute(
                 f"""UPDATE instincts SET last_used_at=?, use_count=use_count+1
                    WHERE id IN ({placeholders})""",
-                [now] + ids,
+                [now, *ids],
             )
             await self.db._conn.commit()
         except Exception:

@@ -242,7 +242,7 @@ def _detect_sbc() -> bool:
                 if any(kw in content for kw in ["raspberry", "orange pi", "orangepi",
                                                   "nanopi", "rockpi", "xunlong"]):
                     return True
-        except Exception:  # noqa: S112
+        except Exception:
             continue
     return False
 

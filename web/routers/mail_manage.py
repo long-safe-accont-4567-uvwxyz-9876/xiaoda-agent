@@ -206,7 +206,7 @@ async def _fetch_agent_email(out_auth: str, cfg: Any) -> tuple[str, str]:
         return cached_email, ""
 
     # 尝试用 message +list 获取，从收件人（to）字段提取 Agent 自己的邮箱
-    rc, out, err = await _run_agently(
+    rc, out, _err = await _run_agently(
         ["message", "+list", "--dir", "inbox", "--limit", "1"],
         timeout=15,
     )
@@ -253,7 +253,7 @@ async def get_mail_auth_status(request: Request) -> Any:
         })
 
     # 用 auth status 检查登录状态（快速，不触发 API 调用）
-    rc_auth, out_auth, err_auth = await _run_agently(
+    rc_auth, out_auth, _err_auth = await _run_agently(
         ["auth", "status"],
         timeout=10,
     )

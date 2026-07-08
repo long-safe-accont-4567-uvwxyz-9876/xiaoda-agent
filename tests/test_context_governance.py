@@ -92,7 +92,9 @@ async def test_determinism_jaccard(tmp_path):
     """
     # 跳过条件: sqlite-vec 不可用
     try:
-        import sqlite_vec  # noqa: F401
+        import importlib.util as _ilu
+        if _ilu.find_spec("sqlite_vec") is None:
+            raise ImportError
     except ImportError:
         print("  [SKIP] sqlite-vec 不可用, 跳过向量确定性测试")
         return {"jaccard_mean": 1.0, "skipped": True}

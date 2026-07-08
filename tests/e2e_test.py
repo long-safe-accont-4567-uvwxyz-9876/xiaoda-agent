@@ -100,7 +100,7 @@ async def test_agent_e2e():
     try:
         from tool_engine.tool_guardrails import get_tool_guardrails
         guardrails = get_tool_guardrails()
-        action, msg = guardrails.check('test_tool', {'arg': 'value'})
+        action, _msg = guardrails.check('test_tool', {'arg': 'value'})
         if action == 'allow':
             print('    OK: 正常调用被允许')
         else:

@@ -22,7 +22,7 @@ _PROJECT_ROOT = _SCRIPT_DIR.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from security.credential_vault import migrate_env_file  # noqa: E402
+from security.credential_vault import migrate_env_file
 
 
 def _default_env_path() -> str:

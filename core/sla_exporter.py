@@ -113,12 +113,12 @@ class SLAExporter:
         with self._lock:
             for b in m.buckets:
                 if value <= b:
-                    b_k = key + (f"le={b}",)
+                    b_k = (*key, f"le={b}")
                     m.values[b_k] = m.values.get(b_k, 0) + 1
-            inf_k = key + ("le=+Inf",)
+            inf_k = (*key, "le=+Inf")
             m.values[inf_k] = m.values.get(inf_k, 0) + 1
-            sum_k = key + ("_sum",)
-            cnt_k = key + ("_count",)
+            sum_k = (*key, "_sum")
+            cnt_k = (*key, "_count")
             m.values[sum_k] = m.values.get(sum_k, 0) + value
             m.values[cnt_k] = m.values.get(cnt_k, 0) + 1
 
@@ -227,7 +227,7 @@ class SLAExporter:
             cumulative = 0
             for tag, v in buckets_raw:
                 cumulative += v
-                label_str = self._format_labels(m.labels + ["le"], base + (tag,))
+                label_str = self._format_labels([*m.labels, "le"], (*base, tag))
                 lines.append(f"{m.name}_bucket{label_str} {cumulative}")
             label_str = self._format_labels(m.labels, base)
             lines.append(f"{m.name}_sum{label_str} {sum_val}")

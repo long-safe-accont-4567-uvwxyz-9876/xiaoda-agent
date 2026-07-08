@@ -409,8 +409,8 @@ class SlashCommandHandler:
             try:
                 with open("/proc/meminfo") as f:
                     meminfo = f.read()
-                mem_total = int([l for l in meminfo.split('\n') if 'MemTotal' in l][0].split()[1])
-                mem_avail = int([l for l in meminfo.split('\n') if 'MemAvailable' in l][0].split()[1])
+                mem_total = int(next(l for l in meminfo.split('\n') if 'MemTotal' in l).split()[1])
+                mem_avail = int(next(l for l in meminfo.split('\n') if 'MemAvailable' in l).split()[1])
                 mem_used = mem_total - mem_avail
                 mem_pct = mem_used / mem_total * 100
                 mem_icon = "💾⚠️" if mem_pct > 90 else "💾"

@@ -225,7 +225,7 @@ class ToolCallHandler:
                 tool_results.append(ToolResult.fail("工具返回格式异常"))
                 tool_messages.append({"role": "tool", "tool_call_id": tcid, "content": "错误: 工具返回格式异常"})
                 continue
-            tcid, res, rtext, dname = er
+            tcid, res, rtext, _dname = er
             tool_results.append(res)
             tool_messages.append({"role": "tool", "tool_call_id": tcid, "content": rtext})
 

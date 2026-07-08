@@ -568,46 +568,46 @@ class TestFilePathSandbox:
         """测试 _validate_path 对敏感路径的拒绝"""
         from tools.file_tools_v2 import _validate_path
         # 测试 /etc/shadow
-        allowed, resolved, reason = _validate_path("/etc/shadow")
+        allowed, _resolved, reason = _validate_path("/etc/shadow")
         assert allowed is False, f"/etc/shadow 应被拒绝: {reason}"
 
         # 测试 /etc/passwd
-        allowed, resolved, reason = _validate_path("/etc/passwd")
+        allowed, _resolved, reason = _validate_path("/etc/passwd")
         assert allowed is False, f"/etc/passwd 应被拒绝: {reason}"
 
         # 测试 .env 文件
-        allowed, resolved, reason = _validate_path(".env")
+        allowed, _resolved, reason = _validate_path(".env")
         assert allowed is False, ".env 文件应被拒绝"
 
     def test_validate_path_rejects_ssh_dir(self):
         """测试 ~/.ssh 目录被拒绝"""
         from tools.file_tools_v2 import _validate_path
         ssh_path = os.path.expanduser("~/.ssh")
-        allowed, resolved, reason = _validate_path(ssh_path)
+        allowed, _resolved, reason = _validate_path(ssh_path)
         assert allowed is False, f"~/.ssh 应被拒绝: {reason}"
 
     def test_validate_path_allows_project_dir(self):
         """测试 _validate_path 对白名单路径的放行"""
         from tools.file_tools_v2 import _validate_path, _PROJECT_DIR
         # 项目目录下的文件应被允许读取
-        allowed, resolved, reason = _validate_path(os.path.join(_PROJECT_DIR, "config.py"))
+        allowed, _resolved, reason = _validate_path(os.path.join(_PROJECT_DIR, "config.py"))
         assert allowed is True, f"项目目录文件应被允许: {reason}"
 
     def test_validate_path_allows_tmp(self):
         """测试 /tmp 目录被允许"""
         from tools.file_tools_v2 import _validate_path
-        allowed, resolved, reason = _validate_path("/tmp/test_file.txt")
+        allowed, _resolved, reason = _validate_path("/tmp/test_file.txt")
         assert allowed is True, f"/tmp 应被允许: {reason}"
 
     def test_validate_path_rejects_random_path(self):
         """测试不在白名单中的路径被拒绝"""
         from tools.file_tools_v2 import _validate_path
-        allowed, resolved, reason = _validate_path("/usr/local/bin/something")
+        allowed, _resolved, reason = _validate_path("/usr/local/bin/something")
         assert allowed is False, f"不在白名单的路径应被拒绝: {reason}"
 
     def test_validate_path_write_mode_restrictions(self):
         """测试写入模式的额外限制"""
         from tools.file_tools_v2 import _validate_path
         # /tmp 应允许写入
-        allowed, resolved, reason = _validate_path("/tmp/test_write.txt", mode="write")
+        allowed, _resolved, reason = _validate_path("/tmp/test_write.txt", mode="write")
         assert allowed is True, f"/tmp 写入应被允许: {reason}"

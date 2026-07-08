@@ -165,7 +165,7 @@ class TestRound2IntegrationSmoke:
         """护栏: 路径遍历被拦截。"""
         from tool_engine.tool_guardrails import ToolGuardrails
         guardrails = ToolGuardrails()
-        ok, reason = guardrails.validate_args(
+        ok, _reason = guardrails.validate_args(
             "document_reader", {"file_path": "../../../etc/passwd"}
         )
         assert ok is False

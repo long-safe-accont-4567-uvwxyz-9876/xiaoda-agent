@@ -231,7 +231,7 @@ class ContextCompressor:
             tokens_saved = max(0, original_tokens - compressed_tokens)
             self._stats["tokens_saved"] += tokens_saved
             return CompressionResult(
-                messages=[compressed_msg] + to_keep,
+                messages=[compressed_msg, *to_keep],
                 summary=summary_text[:500],
                 tokens_saved=tokens_saved,
             )

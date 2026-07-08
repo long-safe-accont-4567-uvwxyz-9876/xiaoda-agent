@@ -216,7 +216,7 @@ class ModelRouter:
                 try:
                     import asyncio
                     loop = asyncio.get_running_loop()
-                    _bg_close = loop.create_task(old.close())  # noqa: RUF006
+                    _bg_close = loop.create_task(old.close())
                 except RuntimeError:
                     pass
 

@@ -46,7 +46,7 @@ class GrowthNarrative:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):  # noqa: S110
+            except (asyncio.CancelledError, Exception):
                 pass
         self._task = None
 

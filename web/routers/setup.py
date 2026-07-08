@@ -539,7 +539,7 @@ async def save_keys(body: dict) -> Any:
 
     # 核心重初始化放到后台异步执行，不阻塞 API 返回
     import asyncio
-    _reinit_task = asyncio.create_task(_background_reinit())  # noqa: RUF006
+    _reinit_task = asyncio.create_task(_background_reinit())
 
     return Envelope(data={"saved": list(updates.keys()), "need_restart": False})
 

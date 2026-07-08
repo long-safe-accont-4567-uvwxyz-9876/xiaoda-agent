@@ -79,7 +79,7 @@ class TokenBucket:
     to_state()/from_state() 方法支持持久化序列化。
     """
 
-    __slots__ = ("capacity", "rate_per_min", "_tokens", "_last", "_lock", "last_access")
+    __slots__ = ("_last", "_lock", "_tokens", "capacity", "last_access", "rate_per_min")
 
     def __init__(self, rate_per_min: float, capacity: Optional[float] = None) -> None:
         self.capacity = float(capacity if capacity is not None else rate_per_min)
@@ -379,7 +379,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     def _too_many_requests(self, retry_after: float, *, scope: str, host: str, path: str) -> JSONResponse:
         """构造 429 响应: Retry-After header + JSON 错误体。"""
-        wait = max(1, int(math.ceil(retry_after)))
+        wait = max(1, math.ceil(retry_after))
         logger.warning(
             "rate_limit.exceeded scope={} host={} path={} retry_after={}s",
             scope, host, path, wait,

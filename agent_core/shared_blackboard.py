@@ -16,7 +16,7 @@ from loguru import logger
 
 
 class _Entry:
-    __slots__ = ("value", "agent_name", "expire_at", "subscribers")
+    __slots__ = ("agent_name", "expire_at", "subscribers", "value")
 
     def __init__(self, value: Any, agent_name: str, ttl: float) -> None:
         self.value = value

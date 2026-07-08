@@ -335,7 +335,7 @@ class BackgroundTaskManager:
                 await self.db.set_cron_last_run("mail_token_refresh")
                 return
             # 调用 message +list --limit 1 触发 token 自动刷新
-            rc, out, err = await _run_agently(
+            rc, _out, err = await _run_agently(
                 ["message", "+list", "--dir", "inbox", "--limit", "1"],
                 timeout=30,
             )

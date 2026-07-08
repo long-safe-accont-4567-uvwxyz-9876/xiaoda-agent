@@ -326,8 +326,8 @@ async def _i2c_subprocess_write(bus: Any, addr: Any, register: Any, data: Any) -
 def _has_smbus2() -> bool:
     """检查smbus2库是否可用。"""
     try:
-        import smbus2  # noqa: F401
-        return True
+        import importlib.util as _ilu
+        return _ilu.find_spec("smbus2") is not None
     except ImportError:
         return False
 

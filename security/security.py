@@ -390,7 +390,7 @@ class SecurityFilter:
         self._maybe_reload_patterns()
         leak_hits = self._match_patterns(text, self._leak_patterns)
         if leak_hits:
-            best_pattern, best_conf = max(leak_hits, key=lambda x: x[1])
+            _best_pattern, best_conf = max(leak_hits, key=lambda x: x[1])
             action = self._decide_action("leak", best_conf)
             if action == "block":
                 return False, f"检测到敏感信息泄露风险 (置信度={best_conf:.2f})"
@@ -413,7 +413,7 @@ class SecurityFilter:
             return True, "", []
 
         matched = [p for p, _ in hits]
-        best_pattern, best_conf = max(hits, key=lambda x: x[1])
+        _best_pattern, best_conf = max(hits, key=lambda x: x[1])
         logger.warning(
             "security.privacy_leak_detected",
             confidence=best_conf,
@@ -514,7 +514,7 @@ class SecurityFilter:
 
         # 输出侧扫描
         if scope in ("output", "all"):
-            content_safe, content_reason = self.check_content(text)
+            content_safe, _content_reason = self.check_content(text)
             if not content_safe:
                 action = self._decide_action("leak", 0.8)
                 return SecurityCheckResult(

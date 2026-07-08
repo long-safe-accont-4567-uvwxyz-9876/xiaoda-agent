@@ -79,8 +79,8 @@ class EncryptedCredential:
     def is_available() -> bool:
         """检查 cryptography 库是否可用"""
         try:
-            from cryptography.fernet import Fernet  # noqa: F401
-            return True
+            import importlib.util as _ilu
+            return _ilu.find_spec("cryptography") is not None
         except ImportError:
             return False
 

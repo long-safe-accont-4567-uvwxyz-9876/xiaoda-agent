@@ -450,7 +450,7 @@ class ReliabilityBench:
 
         for i in range(n):
             try:
-                resp, was_fault, degraded = await self._call_agent(f"single_timeout test {i}")
+                _resp, was_fault, degraded = await self._call_agent(f"single_timeout test {i}")
                 if was_fault:
                     injected += 1
                     recovered += 1
@@ -498,7 +498,7 @@ class ReliabilityBench:
 
         for i in range(n):
             try:
-                resp, was_fault, degraded = await self._call_agent(f"burst test {i}")
+                _resp, was_fault, degraded = await self._call_agent(f"burst test {i}")
                 if was_fault:
                     injected += 1
                     recovered += 1
@@ -553,7 +553,7 @@ class ReliabilityBench:
         t_start = time.time()
         try:
             try:
-                resp, was_fault, degraded = await asyncio.wait_for(
+                _resp, _was_fault, _degraded = await asyncio.wait_for(
                     self._call_agent("slow response test"),
                     timeout=timeout_threshold,
                 )
@@ -568,7 +568,7 @@ class ReliabilityBench:
                 injected = 1
                 # 超时后通过降级恢复
                 try:
-                    resp, was_fault, degraded = self._try_degraded_reply("slow_response_timeout")
+                    _resp, _was_fault, _degraded = self._try_degraded_reply("slow_response_timeout")
                     recovered = 1
                     degradation_triggered = True
                 except Exception:
@@ -607,7 +607,7 @@ class ReliabilityBench:
 
         for i in range(n):
             try:
-                resp, was_fault, degraded = await self._call_agent(f"partial {i}")
+                _resp, was_fault, degraded = await self._call_agent(f"partial {i}")
                 if was_fault:
                     injected += 1
                     recovered += 1
@@ -661,7 +661,7 @@ class ReliabilityBench:
 
         for i in range(n):
             try:
-                resp, was_fault, degraded = await self._call_agent(f"cascade {i}")
+                _resp, was_fault, degraded = await self._call_agent(f"cascade {i}")
                 if was_fault:
                     injected += 1
                     recovered += 1
@@ -713,11 +713,11 @@ class ReliabilityBench:
 
         for i in range(self.recovery_test_fault_count):
             try:
-                resp, was_fault, degraded = await self._call_agent(f"fault phase {i}")
+                _resp, was_fault, _degraded = await self._call_agent(f"fault phase {i}")
                 if was_fault:
                     injected += 1
                     recovered += 1
-                    if degraded:
+                    if _degraded:
                         degradation_triggered = True
             except Exception:
                 injected += 1
@@ -728,7 +728,7 @@ class ReliabilityBench:
         recovery_start = time.time()
         recovery_ok = False
         try:
-            resp, was_fault, degraded = await self._call_agent("recovery phase")
+            _resp, was_fault, _degraded = await self._call_agent("recovery phase")
             recovery_ok = not was_fault
         except Exception:
             recovery_ok = False
@@ -771,7 +771,7 @@ class ReliabilityBench:
 
         for i in range(n):
             try:
-                resp, was_fault, degraded = await self._call_agent(f"load {i}")
+                _resp, was_fault, degraded = await self._call_agent(f"load {i}")
                 if was_fault:
                     injected += 1
                     recovered += 1

@@ -315,7 +315,7 @@ async def list_notes(request: Request,
     rows = await core.db.fetch_all(
         f"SELECT * FROM notebook_entries WHERE {cond} "
         f"ORDER BY importance DESC, updated_at DESC LIMIT ?",
-        tuple(params) + (limit,))
+        (*tuple(params), limit))
     return Envelope(data=rows)
 
 
@@ -350,7 +350,7 @@ async def update_note(note_id: int, body: dict, request: Request) -> Any:
     params.append(time.time())
     n = await core.db.execute(
         f"UPDATE notebook_entries SET {', '.join(sets)} WHERE id=?",
-        tuple(params) + (note_id,))
+        (*tuple(params), note_id))
     if not n:
         raise HTTPException(404, f"笔记 {note_id} 不存在")
     return Envelope(data={"id": note_id, "updated": True})
@@ -418,7 +418,7 @@ async def create_memory(body: dict, request: Request) -> Any:
 async def update_memory(memory_id: int, body: dict, request: Request) -> Any:
     core = request.app.state.core
     sets, params = [], []
-    if "summary" in body and body["summary"]:  # noqa: RUF019
+    if "summary" in body and body["summary"]:
         sets.append("summary=?")
         params.append(body["summary"])
     if "importance" in body:
@@ -431,11 +431,11 @@ async def update_memory(memory_id: int, body: dict, request: Request) -> Any:
         raise HTTPException(400, "无可更新字段")
     n = await core.db.execute(
         f"UPDATE episodic_memories SET {', '.join(sets)} WHERE id=?",
-        tuple(params) + (memory_id,))
+        (*tuple(params), memory_id))
     if not n:
         raise HTTPException(404, f"记忆 {memory_id} 不存在")
     # 同步更新向量索引
-    if "summary" in body and body["summary"]:  # noqa: RUF019
+    if "summary" in body and body["summary"]:
         try:
             if core.memory:
                 await core.memory.vec.upsert(memory_id, body["summary"])
@@ -486,7 +486,7 @@ async def update_learning(learning_id: int, body: dict, request: Request) -> Any
     try:
         n = await core.db.execute(
             f"UPDATE learnings SET {', '.join(sets)} WHERE id=?",
-            tuple(params) + (learning_id,))
+            (*tuple(params), learning_id))
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning("webui.learning.update_failed learning_id={} error={}", learning_id, e)
         raise HTTPException(500, "操作失败")
@@ -559,7 +559,7 @@ async def update_instinct(instinct_id: int, body: dict, request: Request) -> Any
     try:
         n = await core.db.execute(
             f"UPDATE instincts SET {', '.join(sets)} WHERE id=?",
-            tuple(params) + (instinct_id,))
+            (*tuple(params), instinct_id))
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning("webui.instinct.update_failed instinct_id={} error={}", instinct_id, e)
         raise HTTPException(500, "操作失败")

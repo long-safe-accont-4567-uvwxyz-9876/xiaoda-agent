@@ -332,10 +332,10 @@ class RecoveryOrchestrator:
             for cb in diag._callbacks:
                 try:
                     if asyncio.iscoroutinefunction(cb):
-                        _diag_cb = asyncio.create_task(cb(report))  # noqa: RUF006
+                        _diag_cb = asyncio.create_task(cb(report))
                     else:
                         cb(report)
-                except Exception:  # noqa: S110
+                except Exception:
                     pass
         except Exception:
             logger.debug("recovery_orchestrator.escalate_to_human_failed", exc_info=True)

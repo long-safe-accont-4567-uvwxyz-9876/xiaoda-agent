@@ -51,7 +51,7 @@ class MailPoller:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):  # noqa: S110
+            except (asyncio.CancelledError, Exception):
                 pass
             self._task = None
             logger.info("mail.poller.stopped")
@@ -166,7 +166,7 @@ class MailPoller:
         from tools.mail_tools import _run_agently
 
         # 1. 读取邮件全文
-        rc, out, err = await _run_agently(["message", "+read", "--id", msg_id], timeout=30)
+        rc, out, _err = await _run_agently(["message", "+read", "--id", msg_id], timeout=30)
         body = ""
         if rc == 0:
             try:

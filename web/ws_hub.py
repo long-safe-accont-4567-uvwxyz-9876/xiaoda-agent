@@ -182,7 +182,7 @@ async def _resolve_pending_tts(core: Any, agent: str, result: Any, data: dict,
     if conn_id and msg_id:
         # WebSocket：启动后台合成任务，先返回 audio_pending
         data["audio_pending"] = True
-        _tts_bg = asyncio.create_task(_async_tts_task(  # noqa: RUF006
+        _tts_bg = asyncio.create_task(_async_tts_task(
             core, agent, result.tts_text, result.emotion, conn_id, msg_id))
     else:
         # HTTP 端点等无 WS 连接：同步合成回退

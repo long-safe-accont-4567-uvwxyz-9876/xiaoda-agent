@@ -262,7 +262,7 @@ async def main():
         record("不限制域名", len(DEFAULT_SANDBOX.network.allowed_domains) == 0)
         record("不限制端口", len(DEFAULT_SANDBOX.network.allowed_ports) == 0)
         record("不阻止内网", not DEFAULT_SANDBOX.network.block_private_ips)
-        allowed, reason = check_domain_allowed("https://any-domain.com/test")
+        allowed, _reason = check_domain_allowed("https://any-domain.com/test")
         record("域名放行", allowed)
     except Exception as e:
         record("沙箱", False, str(e))

@@ -138,10 +138,10 @@ async def web_browse(url: str) -> ToolResult:
             # 已过期，移除
             _browse_cache.pop(url, None)
 
-        status, html, error = await asyncio.to_thread(_fetch_html, url)
+        _status, html, error = await asyncio.to_thread(_fetch_html, url)
         if error:
             await asyncio.sleep(2)
-            status, html, error = await asyncio.to_thread(_fetch_html, url)
+            _status2, html, error = await asyncio.to_thread(_fetch_html, url)
             if error:
                 return ToolResult.fail(f"浏览网页失败: {error}")
 

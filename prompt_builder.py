@@ -405,7 +405,7 @@ def _get_identity_primary_keywords() -> list[str]:
     from config import get_agent_display_name
     base = _SCENE_KEYWORDS["identity"]["primary"]
     dn = get_agent_display_name("xiaoda")
-    return base + [f"{dn}是谁", f"你是{dn}吗"]
+    return [*base, f"{dn}是谁", f"你是{dn}吗"]
 
 
 # 正则规则引擎: 处理结构化表达 (优先级高于关键词匹配)
@@ -595,7 +595,7 @@ def _compute_scene_signature(weights: dict[str, float], module_names: list[str])
     # 桶身份前缀：避免模块缺失时不同桶签名碰撞
     # 例: emotion_bucket(HEARTBEAT,MEMORY,AGENTS,USER) 和 function_bucket(USER,HEARTBEAT,MEMORY,AGENTS)
     #     在只剩 HEARTBEAT+AGENTS 时都退化为 (HEARTBEAT, AGENTS) → 加桶名前缀区分
-    return (bucket,) + filtered_ordering
+    return (bucket, *filtered_ordering)
 
 
 def _get_stable_section_mtimes() -> dict[str, float]:

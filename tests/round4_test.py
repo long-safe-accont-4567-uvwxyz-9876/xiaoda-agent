@@ -149,9 +149,9 @@ async def test_tool_execution_flow():
         # 连续失败测试
         guardrails2 = get_tool_guardrails()
         for i in range(5):
-            action2, msg2 = guardrails2.check("failing_tool", {"arg": "value"})
+            _action2, _msg2 = guardrails2.check("failing_tool", {"arg": "value"})
             guardrails2.record_call("failing_tool", {"arg": "value"}, False)
-        action3, msg3 = guardrails2.check("failing_tool", {"arg": "value"})
+        action3, _msg3 = guardrails2.check("failing_tool", {"arg": "value"})
         if "warn" in action3 or "halt" in action3:
             print(f"    OK: 连续失败后触发护栏: {action3}")
         else:

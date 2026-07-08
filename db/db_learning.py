@@ -105,7 +105,7 @@ class LearningDB:
             conditions.append("1=1")
         cursor = await self._conn.execute(
             "SELECT * FROM learnings WHERE " + " AND ".join(conditions) + " ORDER BY created_at DESC LIMIT ?",
-            params + [limit],
+            [*params, limit],
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]

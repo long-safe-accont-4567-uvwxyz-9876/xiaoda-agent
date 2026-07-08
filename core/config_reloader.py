@@ -159,7 +159,7 @@ class ConfigReloader:
             try:
                 loop = asyncio.get_running_loop()
                 if asyncio.iscoroutinefunction(acb):
-                    _cb_task = loop.create_task(acb(snap))  # noqa: RUF006
+                    _cb_task = loop.create_task(acb(snap))
                 else:
                     loop.call_soon(acb, snap)
             except RuntimeError:

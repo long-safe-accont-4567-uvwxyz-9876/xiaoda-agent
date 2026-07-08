@@ -95,7 +95,7 @@ class QueryTransformer:
         result = await self._call_free_model(prompt, temperature=0.3, max_tokens=150)
         if result:
             expanded = [line.strip() for line in result.strip().split("\n") if line.strip()]
-            return [query] + expanded[:n]
+            return [query, *expanded[:n]]
         return [query]
 
     async def generate_hyde_document(self, query: str, context: str = "") -> str | None:

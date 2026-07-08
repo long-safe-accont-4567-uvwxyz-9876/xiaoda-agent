@@ -559,4 +559,4 @@ def cached(ttl: Optional[float] = None, key_fn: Optional[Callable] = None) -> An
     return decorator
 
 
-import functools  # noqa: E402  (放最后避免循环引用)
+import functools

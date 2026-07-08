@@ -94,7 +94,7 @@ async def get_audit(request: Request,
         params.append(f"%{event_type}%")
     rows = await core.db.fetch_all(
         f"SELECT * FROM audit_logs WHERE {cond} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-        tuple(params) + (limit, page * limit))
+        (*tuple(params), limit, page * limit))
     return Envelope(data=rows)
 
 
@@ -298,7 +298,7 @@ async def restart_service(request: Request) -> Any:
             logger.warning("webui.restart.exiting (systemd 将自动拉起)")
         os._exit(0)
 
-    _exit_task = asyncio.create_task(_exit())  # noqa: RUF006
+    _exit_task = asyncio.create_task(_exit())
     return Envelope(data={"restarting": True, "platform": "windows" if is_windows else "linux"})
 
 

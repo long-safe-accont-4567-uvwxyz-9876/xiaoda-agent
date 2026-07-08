@@ -416,7 +416,7 @@ async def serve_sticker(name: str, filename: str, request: Request, token: str =
     from web.routers.auth import _validate_token
     auth_ok = False
     auth_header = request.headers.get("authorization", "")
-    if auth_header.startswith("Bearer ") and _validate_token(auth_header[7:]) or token and _validate_token(token):
+    if (auth_header.startswith("Bearer ") and _validate_token(auth_header[7:])) or (token and _validate_token(token)):
         auth_ok = True
     if not auth_ok:
         raise HTTPException(401, "未授权")

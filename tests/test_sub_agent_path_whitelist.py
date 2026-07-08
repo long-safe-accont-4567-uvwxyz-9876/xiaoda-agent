@@ -121,7 +121,7 @@ def test_allowed_path_permitted():
     assert allowed is True
     assert "allowed" in reason
     # 精确匹配
-    allowed2, reason2 = handler._check_path_whitelist("config/agents/xiaoli_personality.md", cfg)
+    allowed2, _reason2 = handler._check_path_whitelist("config/agents/xiaoli_personality.md", cfg)
     assert allowed2 is True
 
 

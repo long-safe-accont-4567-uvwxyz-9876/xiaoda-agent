@@ -25,13 +25,13 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from chaos.reliability_bench import (  # noqa: E402
+from chaos.reliability_bench import (
     BenchReport,
     DEFAULT_SCENARIOS,
     ReliabilityBench,
     ScenarioResult,
 )
-from tests.fault_injection import (  # noqa: E402
+from tests.fault_injection import (
     FaultInjectingLLMClient,
 )
 

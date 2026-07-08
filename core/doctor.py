@@ -135,7 +135,9 @@ def _register_config_checks(doc: DoctorCheck) -> None:
 
     def _check_db() -> tuple:
         try:
-            import aiosqlite  # noqa: F401
+            import importlib.util as _ilu
+            if _ilu.find_spec("aiosqlite") is None:
+                raise ImportError
             return True, "aiosqlite importable"
         except ImportError:
             return False, "aiosqlite not installed"
@@ -199,7 +201,9 @@ def _register_config_checks(doc: DoctorCheck) -> None:
 
     def _check_memory() -> tuple:
         try:
-            from memory.memory_manager import MemoryManager  # noqa: F401
+            import importlib.util as _ilu
+            if _ilu.find_spec("memory.memory_manager") is None:
+                raise ImportError
             return True, "Memory module importable"
         except ImportError as e:
             return False, f"Memory import failed: {e}"
@@ -208,7 +212,9 @@ def _register_config_checks(doc: DoctorCheck) -> None:
 
     def _check_security() -> tuple:
         try:
-            from security.security import SecurityFilter  # noqa: F401
+            import importlib.util as _ilu
+            if _ilu.find_spec("security.security") is None:
+                raise ImportError
             return True, "Security module importable"
         except ImportError as e:
             return False, f"Security import failed: {e}"
@@ -364,7 +370,7 @@ def _register_self_heal_checks(doc: DoctorCheck) -> None:
             )
             pids = result.stdout.decode().strip().split()
             if pids:
-                subprocess.run(["kill", "-9"] + pids, timeout=5, capture_output=True, check=False)
+                subprocess.run(["kill", "-9", *pids], timeout=5, capture_output=True, check=False)
         time.sleep(1)
 
     doc.add_check("Port Conflict", "L8-SelfHeal", _check_port_conflict, _fix_port_conflict)

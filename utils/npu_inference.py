@@ -72,7 +72,7 @@ class _QuantData(ctypes.Union):
 
 class vip_buffer_create_params_t(ctypes.Structure):
     """VIP 缓冲区创建参数结构体。"""
-    _fields_ = [  # noqa: RUF012
+    _fields_ = [
         ("num_of_dims", ctypes.c_uint32),
         ("sizes", ctypes.c_uint32 * 6),
         ("data_format", ctypes.c_int32),
@@ -344,7 +344,7 @@ class VIPLite:
 
 class BufferInfo:
     """存储张量缓冲区的元数据信息。"""
-    __slots__ = ("num_dims", "sizes", "data_format", "quant_format", "scale", "zero_point", "fixed_point_pos")
+    __slots__ = ("data_format", "fixed_point_pos", "num_dims", "quant_format", "scale", "sizes", "zero_point")
 
     def __init__(self) -> None:
         """初始化缓冲区信息，设置默认值。"""

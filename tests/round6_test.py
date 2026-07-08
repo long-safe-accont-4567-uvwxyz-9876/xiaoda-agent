@@ -408,7 +408,7 @@ async def test_concurrent_operations():
         g = ToolGuardrails()
 
         async def check_and_record(i):
-            action, msg = g.check(f"tool_{i % 5}", {"arg": i})
+            action, _msg = g.check(f"tool_{i % 5}", {"arg": i})
             g.record_call(f"tool_{i % 5}", {"arg": i}, True)
             return action
 

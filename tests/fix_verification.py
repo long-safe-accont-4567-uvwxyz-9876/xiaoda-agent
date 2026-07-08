@@ -39,7 +39,7 @@ async def main():
     from emotion.emotion_simple import detect_emotion
     anxious = detect_emotion("我好焦虑啊")
     primary = anxious.get("primary", "")
-    clean, sticker = core.get_sticker_info("回复", user_emotion=primary)
+    _clean, _sticker = core.get_sticker_info("回复", user_emotion=primary)
     # 焦虑应该映射到 lonely，而不是 sad
     # lonely 在 sticker 目录中可能没有对应目录，但映射应该是正确的
     import inspect

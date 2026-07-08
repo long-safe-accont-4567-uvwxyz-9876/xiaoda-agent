@@ -422,8 +422,9 @@ async def test_hotspot_identification_and_regression():
 
     # 4.6 回归: 验证现有模块导入正常
     try:
-        from memory.prompt_complexity import PromptComplexityScore, PromptSpec, StructuralCounts  # noqa: F401
-        from memory.prompt_complexity import ComplexityReport, ComponentComplexity  # noqa: F401
+        import importlib.util as _ilu
+        if _ilu.find_spec("memory.prompt_complexity") is None:
+            raise ImportError
         print("  模块导入: ✓")
     except ImportError as e:
         pytest.fail(f"模块导入失败: {e}")

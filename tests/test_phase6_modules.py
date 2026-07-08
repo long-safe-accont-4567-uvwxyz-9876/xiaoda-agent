@@ -690,7 +690,7 @@ async def test_approval_wait_and_decide():
         user_id="u1", operation="shell_command",
         risk_level=RiskLevel.HIGH,
     )
-    _decide_task = asyncio.create_task(decide_later(req.id))  # noqa: RUF006
+    _decide_task = asyncio.create_task(decide_later(req.id))
     result = await gate.wait_for_decision(req.id, timeout=2.0)
     assert result.status == ApprovalStatus.APPROVED
     assert result.decided_by == "test_admin"

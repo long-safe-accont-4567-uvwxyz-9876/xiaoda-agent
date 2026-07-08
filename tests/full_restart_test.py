@@ -262,7 +262,7 @@ async def phase3_tools(core):
         guardrails = get_tool_guardrails()
 
         # 正常调用
-        action, msg = guardrails.check("read_file", {"path": "/tmp/test"})
+        action, _msg = guardrails.check("read_file", {"path": "/tmp/test"})
         if action == "allow":
             print("    OK: 正常调用被允许")
         else:
@@ -272,7 +272,7 @@ async def phase3_tools(core):
         for i in range(10):
             guardrails.check("fail_tool", {"arg": "val"})
             guardrails.record_call("fail_tool", {"arg": "val"}, False)
-        action2, msg2 = guardrails.check("fail_tool", {"arg": "val"})
+        action2, _msg2 = guardrails.check("fail_tool", {"arg": "val"})
         if "halt" in action2 or "warn" in action2:
             print(f"    OK: 连续失败后触发护栏: {action2}")
         else:

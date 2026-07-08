@@ -187,7 +187,7 @@ class SelfDiagnostic:
         for cb in self._callbacks:
             try:
                 if asyncio.iscoroutinefunction(cb):
-                    _diag_cb = asyncio.create_task(cb(report))  # noqa: RUF006
+                    _diag_cb = asyncio.create_task(cb(report))
                 else:
                     cb(report)
             except Exception as e:

@@ -197,7 +197,7 @@ class MemoryDB:
                 f"""SELECT * FROM episodic_memories
                    WHERE session_id != 'archived' AND ({conditions})
                    ORDER BY importance DESC, timestamp DESC LIMIT ?""",
-                params + [limit],
+                [*params, limit],
             )
             rows = await cursor.fetchall()
             results = []

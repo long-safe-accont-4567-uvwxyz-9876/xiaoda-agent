@@ -46,7 +46,7 @@ def _classify_handlers():
 def test_file_sinks_have_enqueue_true(isolated_logger):
     """两个文件 sink（agent_*.json 与 agent.log）应启用 enqueue=True。"""
     setup_logging()
-    file_enqueues, stderr_enqueues = _classify_handlers()
+    file_enqueues, _stderr_enqueues = _classify_handlers()
 
     assert len(file_enqueues) == 2, (
         f"应有 2 个文件 sink，实际 {len(file_enqueues)}"
@@ -59,7 +59,7 @@ def test_file_sinks_have_enqueue_true(isolated_logger):
 def test_stderr_sink_does_not_enqueue(isolated_logger):
     """stderr sink（_json_sink 或 sys.stderr）不应启用 enqueue。"""
     setup_logging()
-    file_enqueues, stderr_enqueues = _classify_handlers()
+    _file_enqueues, stderr_enqueues = _classify_handlers()
 
     assert len(stderr_enqueues) >= 1, (
         "应有至少 1 个 stderr sink"

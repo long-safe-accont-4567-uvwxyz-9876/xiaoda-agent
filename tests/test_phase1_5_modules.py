@@ -57,14 +57,14 @@ class TestCanaryGuard:
         from utils.canary_guard import CanaryManager
         mgr = CanaryManager()
         _prompt = mgr.inject("system prompt")
-        canary = list(mgr._canaries.keys())[0]
+        canary = next(iter(mgr._canaries.keys()))
         assert mgr.check(f"leaked: {canary}") is False
 
     def test_sanitize_blocks_leak(self):
         from utils.canary_guard import CanaryManager
         mgr = CanaryManager()
         mgr.inject("system prompt")
-        canary = list(mgr._canaries.keys())[0]
+        canary = next(iter(mgr._canaries.keys()))
         result = mgr.sanitize(f"bad output {canary}")
         assert "拦截" in result
 

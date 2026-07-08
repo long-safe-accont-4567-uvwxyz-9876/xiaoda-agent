@@ -128,7 +128,7 @@ async def service_manage(action: str, name: str = "", lines: int = 30) -> ToolRe
 async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> ToolResult:
     try:
         if action == "interfaces":
-            rc, stdout, stderr = await _run_cmd(["ip", "-j", "addr"], timeout=30)
+            rc, stdout, _stderr = await _run_cmd(["ip", "-j", "addr"], timeout=30)
             if rc == 0 and stdout.strip():
                 import json
                 try:
@@ -151,13 +151,13 @@ async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> 
                     return ToolResult.ok("网络接口信息:\n" + "\n".join(lines))
                 except json.JSONDecodeError:
                     pass
-            rc, stdout, stderr = await _run_cmd(["ip", "addr"], timeout=30)
+            rc, stdout, _stderr = await _run_cmd(["ip", "addr"], timeout=30)
             if rc == 0:
                 return ToolResult.ok(f"网络接口信息:\n{stdout.strip()}")
             return ToolResult.fail("获取网络接口信息失败")
 
         if action == "ping":
-            rc, stdout, stderr = await _run_cmd(["ping", "-c", str(count), "-W", "3", target], timeout=30)
+            rc, stdout, _stderr = await _run_cmd(["ping", "-c", str(count), "-W", "3", target], timeout=30)
             if rc == 0:
                 lines = stdout.strip().split("\n")
                 summary = lines[-2] if len(lines) >= 2 else ""
@@ -166,9 +166,9 @@ async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> 
             return ToolResult.fail(f"Ping {target} 失败，目标不可达")
 
         if action == "ports":
-            rc, stdout, stderr = await _run_cmd(["ss", "-tlnp"], timeout=30)
+            rc, stdout, _stderr = await _run_cmd(["ss", "-tlnp"], timeout=30)
             if rc != 0:
-                rc, stdout, stderr = await _run_cmd(["netstat", "-tlnp"], timeout=30)
+                rc, stdout, _stderr = await _run_cmd(["netstat", "-tlnp"], timeout=30)
             if rc == 0:
                 lines = stdout.strip().split("\n")
                 output_lines = [lines[0]] if lines else []
@@ -179,10 +179,10 @@ async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> 
             return ToolResult.fail("获取监听端口信息失败")
 
         if action == "dns":
-            rc, stdout, stderr = await _run_cmd(["nslookup", target], timeout=30)
+            rc, stdout, _stderr = await _run_cmd(["nslookup", target], timeout=30)
             if rc == 0 and stdout.strip():
                 return ToolResult.ok(f"DNS解析 {target}:\n{stdout.strip()}")
-            rc, stdout, stderr = await _run_cmd(["dig", "+short", target], timeout=30)
+            rc, stdout, _stderr = await _run_cmd(["dig", "+short", target], timeout=30)
             if rc == 0 and stdout.strip():
                 return ToolResult.ok(f"DNS解析 {target}:\n{stdout.strip()}")
             return ToolResult.fail(f"DNS解析 {target} 失败")
@@ -226,7 +226,7 @@ async def dev_assist(action: str, path: str = _DEFAULT_PROJECT_DIR, lines: int =
         if action == "project_tree":
             if not os.path.isdir(path):
                 return ToolResult.fail(f"路径不存在: {path}")
-            rc, stdout, stderr = await _run_cmd(
+            rc, stdout, _stderr = await _run_cmd(
                 ["find", path, "-maxdepth", "2",
                  "-not", "-path", "*/__pycache__/*",
                  "-not", "-path", "*/.git/*",

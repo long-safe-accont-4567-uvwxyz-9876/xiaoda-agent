@@ -56,13 +56,9 @@ def measure_latency() -> int:
     start = time.perf_counter()
 
     # Import core modules
-    import config  # noqa: F401
-    import prompt_builder  # noqa: F401
-    from tool_engine.tool_guardrails import ToolGuardrails  # noqa: F401
-    from tool_engine.tool_executor import ToolExecutor  # noqa: F401
-    from core.circuit_breaker import CircuitBreaker, CognitiveState  # noqa: F401
-    from tool_engine.tool_call_handler import ToolCallHandler  # noqa: F401
-    from agent_core.message_processor import MessageProcessorMixin  # noqa: F401
+    from tool_engine.tool_guardrails import ToolGuardrails
+    from tool_engine.tool_executor import ToolExecutor
+    from core.circuit_breaker import CircuitBreaker, CognitiveState
 
     # Instantiate key objects
     ToolGuardrails()

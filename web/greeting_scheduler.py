@@ -48,7 +48,7 @@ class GreetingScheduler:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):  # noqa: S110
+            except (asyncio.CancelledError, Exception):
                 pass
             self._task = None
 
@@ -69,7 +69,7 @@ class GreetingScheduler:
         for p in self.cfg.get("schedule.dnd_periods", []):
             try:
                 s, e = _hm_to_min(p["start"]), _hm_to_min(p["end"])
-            except Exception:  # noqa: S112
+            except Exception:
                 continue
             if s <= e:
                 if s <= now_min < e:

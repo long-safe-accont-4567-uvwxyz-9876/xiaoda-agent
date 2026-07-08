@@ -163,7 +163,7 @@ class XiaodaAcpServer:
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                     )
-                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+                    _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
                     if proc.returncode == 0:
                         logger.info("xiaoda_acp.audio_sent_via_bridge", file=p.name)
                     else:
@@ -334,7 +334,7 @@ class XiaodaAcpServer:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
             if proc.returncode == 0:
                 logger.info("xiaoda_acp.sticker_sent_via_bridge", file=sticker_p.name)
             else:

@@ -88,7 +88,7 @@ class LLMError(AppException):
     DEFAULT_ERROR_CODE = ErrorCodeEnum.E_LLM001
 
 
-class MemoryError(AppException):  # noqa: A001 故意遮蔽内置，业务内存系统异常
+class MemoryError(AppException):
     """记忆系统错误"""
     DEFAULT_ERROR_CODE = ErrorCodeEnum.E_MEM001
 

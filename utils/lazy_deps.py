@@ -81,7 +81,7 @@ def ensure(feature_name: str) -> bool:
     try:
         logger.info("lazy_deps.installing", feature=feature_name, packages=missing)
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--quiet"] + missing,
+            [sys.executable, "-m", "pip", "install", "--quiet", *missing],
             capture_output=True, text=True, timeout=120, check=False,
         )
         if result.returncode != 0:

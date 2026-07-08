@@ -73,7 +73,7 @@ class TestToolGuardrails(unittest.TestCase):
         # 重置
         self.guardrails.reset()
         # 重置后应该允许
-        action, msg = self.loop.run_until_complete(self.guardrails.check("read_file", args))
+        action, _msg = self.loop.run_until_complete(self.guardrails.check("read_file", args))
         self.assertEqual(action, "allow")
         # 统计也应清零
         stats = self.guardrails.get_stats()

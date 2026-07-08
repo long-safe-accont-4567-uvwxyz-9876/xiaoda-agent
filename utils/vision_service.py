@@ -172,7 +172,7 @@ def _get_gpu_names_linux() -> list[str]:
             if "VGA compatible controller" in line or "3D controller" in line or "Display controller" in line:
                 name = line.split(":")[-1].strip() if ":" in line else ""
                 gpu_names.append(name)
-    except Exception:  # noqa: S110
+    except Exception:
         pass
     return gpu_names
 

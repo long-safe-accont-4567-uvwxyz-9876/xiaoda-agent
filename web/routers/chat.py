@@ -103,7 +103,7 @@ async def get_messages(session_id: str, request: Request,
         rows = await core.db.fetch_all(
             f"SELECT id, timestamp, user_message, assistant_reply, emotion_label "
             f"FROM conversation_logs WHERE {cond} ORDER BY timestamp DESC LIMIT ?",
-            params + (limit,))
+            (*params, limit))
         for row in reversed(rows):
             if row["user_message"]:
                 messages.append(MessageItem(
