@@ -56,7 +56,7 @@ class XiaoliAgent:
     """小黎 Agent，集成多 provider 客户端与工具执行能力。"""
     def __init__(self, tool_executor: ToolExecutor | None = None,
                  tool_repair: ToolCallRepair | None = None,
-                 xiaoda_delegate: Optional[Any]=None) -> None:
+                 xiaoda_delegate: Any | None=None) -> None:
         self._clients: list[tuple[str, AsyncOpenAI, list[str]]] = []
         self._personality: str = ""
         self._initialized = False
@@ -117,7 +117,7 @@ class XiaoliAgent:
         return self._preferred_provider
 
     async def chat(self, message: str, context: str = "",
-                   status_callback: Optional[Any]=None) -> str:
+                   status_callback: Any | None=None) -> str:
         if not self.available:
             return TIRED_MSG
 
@@ -232,7 +232,7 @@ class XiaoliAgent:
                     ),
                     timeout=min(api_timeout, remaining),
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("xiaoli.api_timeout", round=round_idx, model=model)
                 return "小莉思考时间太长了，请稍后再试吧～"
 

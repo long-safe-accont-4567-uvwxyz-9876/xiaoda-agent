@@ -50,7 +50,7 @@ class ToolExecutor:
     FAILURE_STREAK_THRESHOLD: int = 5
     FAILURE_STREAK_RESET_SECONDS: int = 300  # 5 分钟后半开恢复
 
-    def __init__(self, db: Optional[Any]=None) -> None:
+    def __init__(self, db: Any | None=None) -> None:
         self.db = db
         self._call_counts: dict[str, list[float]] = {}
         self._global_timeout: float = self.TOOL_TIMEOUTS["default"]
@@ -234,7 +234,7 @@ class ToolExecutor:
             if isinstance(result, ToolResult):
                 return result
             return ToolResult.ok(result)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error("tool_executor.timeout", tool=tool_name, timeout=timeout)
             metrics.inc(f"tool.timeout.{tool_name}")
             return ToolResult.fail("那边有点慢呢……等会儿再试试好不好？ [timeout]")

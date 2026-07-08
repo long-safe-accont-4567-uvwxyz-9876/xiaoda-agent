@@ -70,9 +70,9 @@ class CircuitBreaker:
     }
 
     def __init__(self,
-                 cooldown: Optional[int] = None,
-                 half_open_probes: Optional[int] = None,
-                 max_cooldown: Optional[int] = None) -> None:
+                 cooldown: int | None = None,
+                 half_open_probes: int | None = None,
+                 max_cooldown: int | None = None) -> None:
         # Task 12: 自适应恢复参数
         self._initial_cooldown = int(cooldown) if cooldown is not None else int(CIRCUIT_BREAKER_COOLDOWN)
         self._half_open_probes = int(half_open_probes) if half_open_probes is not None else int(CIRCUIT_BREAKER_HALF_OPEN_PROBES)

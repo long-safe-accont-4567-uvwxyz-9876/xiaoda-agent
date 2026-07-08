@@ -17,7 +17,8 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Optional
+from typing import Optional
+from collections.abc import Callable
 
 from loguru import logger
 
@@ -54,7 +55,7 @@ class SelfDiagnostic:
         self._interval = check_interval
         self._reports: deque = deque(maxlen=200)
         self._callbacks: list[Callable[[SelfReport], None]] = []
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
         self._checks: list[Callable] = []
         self._last_check_at = 0
         self._consecutive_failures = 0
@@ -65,7 +66,7 @@ class SelfDiagnostic:
         self._checks.append(self._check_memory_usage)
         self._checks.append(self._check_active_state)
 
-    def add_check(self, check: Callable[[], Optional[SelfReport]]) -> None:
+    def add_check(self, check: Callable[[], SelfReport | None]) -> None:
         """注册自定义检查"""
         self._checks.append(check)
 
@@ -73,7 +74,7 @@ class SelfDiagnostic:
         """注册报告回调"""
         self._callbacks.append(callback)
 
-    async def _check_error_rate(self) -> Optional[SelfReport]:
+    async def _check_error_rate(self) -> SelfReport | None:
         """检查错误率"""
         try:
             from core.slo_tracker import get_slo_tracker
@@ -98,7 +99,7 @@ class SelfDiagnostic:
             logger.debug(f"SelfDiag.error_rate_check_failed: {e}")
         return None
 
-    async def _check_response_time(self) -> Optional[SelfReport]:
+    async def _check_response_time(self) -> SelfReport | None:
         """检查响应时间"""
         try:
             from core.slo_tracker import get_slo_tracker
@@ -123,7 +124,7 @@ class SelfDiagnostic:
             logger.debug(f"SelfDiag.latency_check_failed: {e}")
         return None
 
-    async def _check_memory_usage(self) -> Optional[SelfReport]:
+    async def _check_memory_usage(self) -> SelfReport | None:
         """检查内存使用"""
         try:
             import psutil
@@ -142,7 +143,7 @@ class SelfDiagnostic:
             logger.debug(f"SelfDiag.memory_check_failed: {e}")
         return None
 
-    async def _check_active_state(self) -> Optional[SelfReport]:
+    async def _check_active_state(self) -> SelfReport | None:
         """检查活跃状态 (是否进入 zombie)"""
         try:
             from doctor.behavioral_health import get_behavioral_health
@@ -193,7 +194,7 @@ class SelfDiagnostic:
             except Exception as e:
                 logger.warning(f"SelfDiag.callback_failed: {e}")
 
-    def start(self) -> Optional[asyncio.Task]:
+    def start(self) -> asyncio.Task | None:
         """启动周期性自检"""
         async def _loop() -> None:
             while True:
@@ -240,7 +241,7 @@ class SelfDiagnostic:
 
 
 # 全局单例
-_diag: Optional[SelfDiagnostic] = None
+_diag: SelfDiagnostic | None = None
 
 
 def get_self_diagnostic() -> SelfDiagnostic:

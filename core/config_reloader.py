@@ -25,7 +25,8 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
+from collections.abc import Callable
 
 from loguru import logger
 
@@ -87,14 +88,14 @@ class ConfigReloader:
     """
 
     def __init__(self, config_path: str | Path,
-                 parse_fn: Optional[Callable[[str], dict]] = None) -> None:
+                 parse_fn: Callable[[str], dict] | None = None) -> None:
         self._path = Path(config_path)
         self._parse_fn = parse_fn or self._default_parse
         self._lock = threading.RLock()
-        self._active: Optional[ConfigSnapshot] = None
+        self._active: ConfigSnapshot | None = None
         self._callbacks: list[Callable[[ConfigSnapshot], None]] = []
         self._async_callbacks: list[Callable] = []
-        self._observer: Optional[Any] = None
+        self._observer: Any | None = None
         self._stopped = False
         # 加载初始配置
         self._load()
@@ -197,7 +198,7 @@ class ConfigReloader:
             return True
 
         class _Handler(FileSystemEventHandler):
-            def __init__(self, reloader: "ConfigReloader") -> None:
+            def __init__(self, reloader: ConfigReloader) -> None:
                 self._reloader = reloader
                 self._last_event = 0
 
@@ -239,7 +240,7 @@ class ConfigReloader:
 # 全局单例
 # ============================================================
 
-_reloader: Optional[ConfigReloader] = None
+_reloader: ConfigReloader | None = None
 
 
 def get_config_reloader() -> ConfigReloader:

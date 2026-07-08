@@ -35,7 +35,7 @@ class SLOMeasurement:
     timestamp: float
     success: bool
     latency_ms: float
-    error_code: Optional[str] = None
+    error_code: str | None = None
 
 
 class SLOTracker:
@@ -193,7 +193,7 @@ class RateLimiter:
 
     def __init__(self) -> None:
         """初始化三级限流器 (无默认限流)."""
-        self._global_bucket: Optional[TokenBucket] = None
+        self._global_bucket: TokenBucket | None = None
         self._user_buckets: dict[str, TokenBucket] = {}
         self._endpoint_buckets: dict[str, TokenBucket] = {}
         self._rejected_count = 0
@@ -258,8 +258,8 @@ class RateLimiter:
 
 
 # 全局单例
-_slo: Optional[SLOTracker] = None
-_rl: Optional[RateLimiter] = None
+_slo: SLOTracker | None = None
+_rl: RateLimiter | None = None
 
 
 def get_slo_tracker() -> SLOTracker:

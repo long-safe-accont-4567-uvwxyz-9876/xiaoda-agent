@@ -30,7 +30,7 @@ class SpontaneousRecall:
     DND_START_HOUR = 0   # 凌晨免打扰
     DND_END_HOUR = 7
 
-    def __init__(self, core: "AgentCore") -> None:
+    def __init__(self, core: AgentCore) -> None:
         self.core = core
         self._task: asyncio.Task | None = None
         self._running = False
@@ -176,7 +176,7 @@ class SpontaneousRecall:
             )
             if isinstance(result, str):
                 return result.strip()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.debug("spontaneous_recall.monologue_timeout")
         except Exception as e:
             logger.debug("spontaneous_recall.monologue_failed", error=str(e))

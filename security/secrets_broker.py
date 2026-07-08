@@ -19,7 +19,7 @@ import secrets
 import time
 import hmac
 from dataclasses import dataclass
-from typing import Callable
+from collections.abc import Callable
 
 from loguru import logger
 

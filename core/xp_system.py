@@ -117,7 +117,7 @@ class XPHistoryEntry:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "XPHistoryEntry":
+    def from_dict(cls, d: dict) -> XPHistoryEntry:
         return cls(
             timestamp=float(d.get("timestamp", 0.0)),
             amount=int(d.get("amount", 0)),
@@ -162,7 +162,7 @@ class XPState:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "XPState":
+    def from_dict(cls, d: dict) -> XPState:
         level_raw = d.get("level", 1)
         try:
             level = XPLevel(int(level_raw))
@@ -254,7 +254,7 @@ class XPSystem:
         if not self._state_path.exists():
             return
         try:
-            with open(self._state_path, "r", encoding="utf-8") as f:
+            with open(self._state_path, encoding="utf-8") as f:
                 data = json.load(f)
             users = data.get("users", {})
             self._states = {
@@ -447,7 +447,7 @@ class XPSystem:
 
 # ── persona_levels.yaml 加载 (惰性 + 缓存) ──────────────────
 
-_PERSONA_CONFIG_CACHE: Optional[dict] = None
+_PERSONA_CONFIG_CACHE: dict | None = None
 
 
 def _persona_config_path() -> Path:
@@ -472,7 +472,7 @@ def _load_persona_config() -> dict:
     try:
         if path.exists():
             import yaml
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
             _PERSONA_CONFIG_CACHE = data
             logger.info(f"XPSystem.load_persona path={path} levels={len(data)}")
@@ -556,7 +556,7 @@ _DEFAULT_PERSONA = {
 
 # ── 单例 (供调用方共享) ─────────────────────────────────────
 
-_singleton: Optional[XPSystem] = None
+_singleton: XPSystem | None = None
 
 
 def get_xp_system() -> XPSystem:

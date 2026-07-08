@@ -4,7 +4,8 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from loguru import logger
 
@@ -95,7 +96,7 @@ class PluginContext:
         if not data_file.exists():
             return default
         try:
-            with open(data_file, "r", encoding="utf-8") as f:
+            with open(data_file, encoding="utf-8") as f:
                 data = json.load(f)
             return data.get(key, default)
         except Exception:
@@ -108,7 +109,7 @@ class PluginContext:
         data = {}
         if data_file.exists():
             try:
-                with open(data_file, "r", encoding="utf-8") as f:
+                with open(data_file, encoding="utf-8") as f:
                     data = json.load(f)
             except Exception:
                 logger.debug("plugin_context.data_load_failed", exc_info=True)
@@ -123,7 +124,7 @@ class PluginContext:
         if not data_file.exists():
             return
         try:
-            with open(data_file, "r", encoding="utf-8") as f:
+            with open(data_file, encoding="utf-8") as f:
                 data = json.load(f)
             data.pop(key, None)
             with open(data_file, "w", encoding="utf-8") as f:

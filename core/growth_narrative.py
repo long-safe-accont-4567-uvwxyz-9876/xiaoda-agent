@@ -28,7 +28,7 @@ class GrowthNarrative:
     TICK_SECONDS = 1800  # 每 30 分钟检查一次
     TRIGGER_HOUR = 23    # 晚上 23:00 触发
 
-    def __init__(self, core: "AgentCore") -> None:
+    def __init__(self, core: AgentCore) -> None:
         self.core = core
         self._task: asyncio.Task | None = None
         self._running = False
@@ -166,7 +166,7 @@ class GrowthNarrative:
             )
             if isinstance(result, str):
                 return result.strip()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.debug("growth_narrative.generate_timeout")
         except Exception as e:
             logger.debug("growth_narrative.generate_failed", error=str(e))

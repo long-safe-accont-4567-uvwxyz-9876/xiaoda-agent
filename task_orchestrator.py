@@ -5,7 +5,8 @@ import asyncio
 import json
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Optional
+from collections.abc import Awaitable, Callable
 from openai import AsyncOpenAI
 
 from loguru import logger
@@ -178,7 +179,7 @@ class TaskGraph:
                 updates = await asyncio.wait_for(handler(state), timeout=node_timeout)
                 if updates:
                     state.update(updates)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("task_graph.node_timeout", node=current, timeout=node_timeout)
                 state.final_output = f"节点 {current} 执行超时（{node_timeout:.0f}s）"
                 break
@@ -305,7 +306,7 @@ class RouterNode:
                 seen.add(internal)
         return valid
 
-    def __init__(self, client: AsyncOpenAI, model: Optional[str] = None, belief_router: BeliefRouter | None = None) -> None:
+    def __init__(self, client: AsyncOpenAI, model: str | None = None, belief_router: BeliefRouter | None = None) -> None:
         self._client = client
         self._model = model or os.getenv("MODEL_NAME", "mimo-v2.5")
         self._belief_router = belief_router
@@ -497,7 +498,7 @@ class RouterNode:
 
 class ParallelAgentNode:
     """并行执行节点，将任务拆分给多个 Agent 并行处理。"""
-    def __init__(self, dispatcher: AgentDispatcher, route_client: AsyncOpenAI, route_model: Optional[str] = None, belief_router: BeliefRouter | None = None) -> None:
+    def __init__(self, dispatcher: AgentDispatcher, route_client: AsyncOpenAI, route_model: str | None = None, belief_router: BeliefRouter | None = None) -> None:
         self._dispatcher = dispatcher
         self._route_client = route_client
         self._route_model = route_model or os.getenv("MODEL_NAME", "mimo-v2.5")
@@ -719,7 +720,7 @@ class ParallelAgentNode:
                 if self._belief_router:
                     self._belief_router.update_belief(target, True)
             return {"agent": target, "display_name": display_name, "reply": reply}
-        except asyncio.TimeoutError:
+        except TimeoutError:
             if self._belief_router:
                 self._belief_router.update_belief(target, False)
             return {"agent": target, "display_name": display_name, "reply": f"{display_name}处理超时", "error": True}
@@ -822,7 +823,7 @@ class AgentNode:
             # 单Agent时直接输出，跳过SynthesisNode
             return {"sub_agent_reply": reply, "intermediate_results": intermediate, "final_output": reply, "skip_synthesis": True}
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("agent_node.timeout", target=target)
             await state.push_progress(f"⏰ {display_name}处理超时")
             if self._belief_router:
@@ -838,7 +839,7 @@ class AgentNode:
 
 class SynthesisNode:
     """综合节点，汇总各 Agent 中间结果生成最终回复。"""
-    def __init__(self, client: AsyncOpenAI, model: Optional[str] = None, xiaoda_chat_callback: Optional[Any]=None) -> None:
+    def __init__(self, client: AsyncOpenAI, model: str | None = None, xiaoda_chat_callback: Any | None=None) -> None:
         self._client = client
         self._model = model or os.getenv("MODEL_NAME", "mimo-v2.5")
         self._xiaoda_chat = xiaoda_chat_callback
@@ -915,8 +916,8 @@ async def route_condition(state: TaskState) -> str:
 
 
 def build_task_graph(dispatcher: AgentDispatcher, agent_configs: dict,
-                     route_client: AsyncOpenAI, route_model: Optional[str] = None,
-                     xiaoda_chat_callback: Optional[Any]=None) -> TaskGraph:
+                     route_client: AsyncOpenAI, route_model: str | None = None,
+                     xiaoda_chat_callback: Any | None=None) -> TaskGraph:
     """构建任务图，组装路由/并行/单执行/综合节点并连接条件边。"""
     db_path = str(DATA_DIR / "agent.db")
     belief_router = BeliefRouter(db_path=db_path)
@@ -964,9 +965,9 @@ def build_task_graph(dispatcher: AgentDispatcher, agent_configs: dict,
 
 
 async def run_task_graph(graph: TaskGraph, user_input: str, user_id: str,
-                         session_id: str = "", status_callback: Optional[Any]=None,
-                         agent_configs: Optional[dict] = None,
-                         dispatcher: Optional[AgentDispatcher] = None) -> TaskState:
+                         session_id: str = "", status_callback: Any | None=None,
+                         agent_configs: dict | None = None,
+                         dispatcher: AgentDispatcher | None = None) -> TaskState:
     """运行任务图，驱动从路由到综合的完整执行流。"""
     state = TaskState(
         user_input=user_input,

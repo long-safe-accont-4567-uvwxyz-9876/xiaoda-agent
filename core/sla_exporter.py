@@ -78,8 +78,8 @@ class SLAExporter:
         )
 
     def _register(self, name: str, help_: str, type_: str,
-                    labels: Optional[list[str]] = None,
-                    buckets: Optional[list[float]] = None) -> None:
+                    labels: list[str] | None = None,
+                    buckets: list[float] | None = None) -> None:
         self._metrics[name] = Metric(
             name=name, help=help_, type=type_,
             labels=labels or [],
@@ -241,7 +241,7 @@ class SLAExporter:
         return "{" + ",".join(pairs) + "}" if pairs else ""
 
 
-_exporter: Optional[SLAExporter] = None
+_exporter: SLAExporter | None = None
 _exporter_lock = threading.Lock()
 
 

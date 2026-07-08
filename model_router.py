@@ -1,4 +1,5 @@
-from typing import Any, AsyncIterator, ClassVar
+from typing import Any, ClassVar
+from collections.abc import AsyncIterator
 import os
 import time
 import asyncio

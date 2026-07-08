@@ -6,7 +6,8 @@ import asyncio
 import math
 import time
 from collections import OrderedDict
-from typing import Awaitable, Callable, Optional
+from typing import Optional
+from collections.abc import Awaitable, Callable
 
 from loguru import logger
 
@@ -31,7 +32,7 @@ class QueryCache:
 
     def __init__(
         self,
-        embed_func: Optional[Callable[[str], Awaitable[list[float]]]] = None,
+        embed_func: Callable[[str], Awaitable[list[float]]] | None = None,
         threshold: float = 0.88,
         max_size: int = 256,
         ttl: int = 300,
@@ -48,14 +49,14 @@ class QueryCache:
         self._max_size = int(max_size)
         self._ttl = int(ttl)
         # 每个条目: {"vec": list[float], "results": list[dict], "ts": float}
-        self._cache: "OrderedDict[str, dict]" = OrderedDict()
+        self._cache: OrderedDict[str, dict] = OrderedDict()
         self._lock = asyncio.Lock()
         # 统计指标
         self.hits: int = 0
         self.misses: int = 0
         self.total_queries: int = 0
 
-    async def _embed(self, text: str) -> Optional[list[float]]:
+    async def _embed(self, text: str) -> list[float] | None:
         """生成文本嵌入向量；不可用或失败返回 None。"""
         if not self._embed_func:
             return None
@@ -93,7 +94,7 @@ class QueryCache:
             return 0.0
         return dot / (na * nb)
 
-    async def get(self, query: str) -> Optional[list[dict]]:
+    async def get(self, query: str) -> list[dict] | None:
         """查询缓存。
 
         对 query 生成嵌入向量，遍历缓存条目计算余弦相似度，
@@ -112,7 +113,7 @@ class QueryCache:
             return None
 
         now = time.time()
-        best_key: Optional[str] = None
+        best_key: str | None = None
         best_score: float = 0.0
         expired_keys: list[str] = []
 

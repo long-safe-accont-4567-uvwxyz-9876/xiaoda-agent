@@ -11,7 +11,8 @@ import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
+from collections.abc import Awaitable, Callable
 
 from loguru import logger
 
@@ -275,7 +276,7 @@ class MCPClient:
                 logger.debug("mcp.close_stdin_error", exc_info=True)
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self._process.kill()
                 await self._process.wait()
 
@@ -349,7 +350,7 @@ class MCPClient:
 
             return ToolResult.ok(data)
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return ToolResult.fail(f"MCP tool '{tool_name}' call timed out")
         except Exception as e:
             logger.error("mcp_client.call_tool_error", server=self.server_name,
@@ -388,7 +389,7 @@ class MCPClient:
 
         try:
             return await asyncio.wait_for(fut, timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._pending.pop(msg_id, None)
             return None
 

@@ -31,7 +31,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any, Callable, Optional
+from typing import Any, Optional
+from collections.abc import Callable
 
 from loguru import logger
 
@@ -108,7 +109,7 @@ class DegradationStrategy:
 
     def __init__(
         self,
-        feature_map: Optional[dict[str, DegradationLevel]] = None,
+        feature_map: dict[str, DegradationLevel] | None = None,
         initial_level: DegradationLevel = DegradationLevel.L0_NORMAL,
     ) -> None:
         # 拷贝默认功能映射, 避免修改全局常量
@@ -265,9 +266,9 @@ class DegradationStrategy:
 
     def evaluate_from_detector(
         self,
-        detector: "object",
-        slo_tracker: Optional["object"] = None,
-    ) -> Optional[LevelChangeEvent]:
+        detector: object,
+        slo_tracker: object | None = None,
+    ) -> LevelChangeEvent | None:
         """根据 DegradationDetector 的最近报告自动触发降级
 
         映射规则:
@@ -319,8 +320,8 @@ class DegradationStrategy:
         return None
 
     def evaluate_from_slo(
-        self, slo_tracker: "object", burn_threshold: float = 2.0
-    ) -> Optional[LevelChangeEvent]:
+        self, slo_tracker: object, burn_threshold: float = 2.0
+    ) -> LevelChangeEvent | None:
         """根据 SLOTracker 燃烧率自动触发降级
 
         映射规则:
@@ -361,7 +362,7 @@ class DegradationStrategy:
 # 全局单例
 # ============================================================
 
-_strategy: Optional[DegradationStrategy] = None
+_strategy: DegradationStrategy | None = None
 
 
 def get_degradation_strategy() -> DegradationStrategy:
@@ -384,8 +385,8 @@ def reset_degradation_strategy() -> DegradationStrategy:
 # ============================================================
 
 def wire_auto_trigger(
-    detector: Optional["object"] = None,
-    slo_tracker: Optional["object"] = None,
+    detector: object | None = None,
+    slo_tracker: object | None = None,
     burn_threshold: float = 2.0,
 ) -> bool:
     """将降级策略接入 DegradationDetector 回调与 SLOTracker (只读取状态)

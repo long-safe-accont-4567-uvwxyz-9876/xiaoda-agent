@@ -58,7 +58,7 @@ class MetacogState:
     quality_score: float = 0.0
     # 阶段 5: Regulate
     action: str = "continue"              # continue / retry / reframe / abort
-    target_step: Optional[int] = None
+    target_step: int | None = None
     # 时间戳
     started_at: float = field(default_factory=time.time)
     history: list[dict] = field(default_factory=list)
@@ -87,8 +87,8 @@ class MetacognitionLite:
         self.state = MetacogState()
 
     # ─── 阶段 1: Anticipate ───
-    def anticipate(self, task: str, known: Optional[list[str]] = None,
-                    unknown: Optional[list[str]] = None) -> MetacogState:
+    def anticipate(self, task: str, known: list[str] | None = None,
+                    unknown: list[str] | None = None) -> MetacogState:
         """识别任务相关信息"""
         # 关键词抽取
         keywords = re.findall(r'\b[a-zA-Z_]{3,}\b', task.lower())
@@ -112,7 +112,7 @@ class MetacognitionLite:
 
     # ─── 阶段 3: Monitor ───
     def monitor(self, step_output: str, confidence: float = 0.5,
-                 step_idx: Optional[int] = None) -> DriftType:
+                 step_idx: int | None = None) -> DriftType:
         """监控单步推理输出, 检测漂移"""
         self.state.confidence = max(0.0, min(1.0, confidence))
 

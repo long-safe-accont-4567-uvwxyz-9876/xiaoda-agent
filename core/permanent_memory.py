@@ -71,7 +71,7 @@ class PermanentMemoryEntry:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "PermanentMemoryEntry":
+    def from_dict(cls, d: dict) -> PermanentMemoryEntry:
         """从字典反序列化 (兼容缺失字段)."""
         return cls(
             id=str(d.get("id", "")),
@@ -141,7 +141,7 @@ class PermanentMemoryManager:
         if not self._memories_path.exists():
             return
         try:
-            with open(self._memories_path, "r", encoding="utf-8") as f:
+            with open(self._memories_path, encoding="utf-8") as f:
                 data = json.load(f)
             self._memories = {
                 uid: {
@@ -244,7 +244,7 @@ class PermanentMemoryManager:
         )
         return entry
 
-    def retrieve(self, user_id: str, key: str) -> Optional[PermanentMemoryEntry]:
+    def retrieve(self, user_id: str, key: str) -> PermanentMemoryEntry | None:
         """获取单条记忆."""
         return self._memories.get(user_id, {}).get(key)
 
@@ -320,7 +320,7 @@ class PermanentMemoryManager:
         return self.store(user_id, "preference", pref_key, pref_value,
                           source="agent")
 
-    def get_preference(self, user_id: str, pref_key: str) -> Optional[str]:
+    def get_preference(self, user_id: str, pref_key: str) -> str | None:
         """获取用户偏好."""
         entry = self.retrieve(user_id, pref_key)
         return entry.value if entry else None
@@ -423,7 +423,7 @@ class PermanentMemoryManager:
 
 # ── 单例 (供调用方共享) ─────────────────────────────────────
 
-_permanent_memory_manager: Optional[PermanentMemoryManager] = None
+_permanent_memory_manager: PermanentMemoryManager | None = None
 
 
 def get_permanent_memory_manager() -> PermanentMemoryManager:

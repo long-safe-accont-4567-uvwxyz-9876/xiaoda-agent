@@ -43,7 +43,7 @@ class ContextCompressor:
     TOOL_OUTPUT_THRESHOLD = 2000  # 超过此长度压缩
     HISTORY_KEEP_RECENT = 5       # 保留最近 5 轮完整内容
 
-    def __init__(self, router: Optional[Any]=None) -> None:
+    def __init__(self, router: Any | None=None) -> None:
         self._router = router
         self._cache_dir = self.CACHE_DIR
         self._cache_dir.mkdir(parents=True, exist_ok=True)
@@ -246,7 +246,7 @@ class ContextCompressor:
 # 全局压缩器实例
 _default_compressor: ContextCompressor | None = None
 
-def get_context_compressor(router: Optional[Any]=None) -> ContextCompressor:
+def get_context_compressor(router: Any | None=None) -> ContextCompressor:
     """获取全局默认的上下文压缩器单例。"""
     global _default_compressor
     if _default_compressor is None:

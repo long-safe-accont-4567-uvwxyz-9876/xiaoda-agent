@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import re
 import secrets
-from typing import Callable
+from collections.abc import Callable
 
 from loguru import logger
 
@@ -46,7 +46,7 @@ def generate_canary(prefix: str = "CANARY") -> str:
     """
     random_part = secrets.token_hex(_TOKEN_RANDOM_BYTES)  # 8 位 hex
     # 校验位 = sha256(prefix + random) 的前 4 位 hex
-    checksum = hashlib.sha256(f"{prefix}|{random_part}".encode("utf-8")).hexdigest()[:_TOKEN_CHECKSUM_LEN]
+    checksum = hashlib.sha256(f"{prefix}|{random_part}".encode()).hexdigest()[:_TOKEN_CHECKSUM_LEN]
     return f"{prefix}-{random_part}-{checksum}"
 
 

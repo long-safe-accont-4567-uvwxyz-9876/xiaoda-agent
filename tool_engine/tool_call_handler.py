@@ -427,7 +427,7 @@ class ToolCallHandler:
             )
             if isinstance(summary, str) and summary.strip():
                 return self._clean_reply(summary)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("tool.summarize_timeout", tool_count=len(tool_results))
         except Exception as e:
             trace.error("tool.summarize_failed", error=str(e))

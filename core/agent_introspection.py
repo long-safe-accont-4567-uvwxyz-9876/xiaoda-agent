@@ -50,7 +50,7 @@ class AgentState:
     degradation_level: int = 0          # 当前降级级别 0-3
     health_score: float = 5.0           # 健康度评分 1-5
     uptime: float = 0.0                 # 运行时间秒
-    last_error: Optional[str] = None    # 最后一次错误
+    last_error: str | None = None    # 最后一次错误
     timestamp: float = field(default_factory=time.time)
 
 
@@ -75,9 +75,9 @@ class AgentIntrospector:
 
     def __init__(
         self,
-        context: Optional[Any] = None,
-        agent: Optional[Any] = None,
-        start_time: Optional[float] = None,
+        context: Any | None = None,
+        agent: Any | None = None,
+        start_time: float | None = None,
     ) -> None:
         self._context = context
         self._agent = agent
@@ -267,7 +267,7 @@ class AgentIntrospector:
 
     # ─── 工具: 在 agent 及其属性中查找带指定方法的对象 (duck typing) ───
 
-    def _find_by_method(self, method_name: str) -> Optional[Any]:
+    def _find_by_method(self, method_name: str) -> Any | None:
         """在 agent 及其常见属性中查找带指定方法的对象
 
         duck typing 方式: 不要求具体类型, 只要有指定方法即可。
@@ -368,7 +368,7 @@ def _progress_bar(value: float, width: int = 10) -> str:
 # 全局单例 (懒加载, 不依赖任何外部资源)
 # ============================================================
 
-_introspector: Optional[AgentIntrospector] = None
+_introspector: AgentIntrospector | None = None
 
 
 def get_introspector() -> AgentIntrospector:

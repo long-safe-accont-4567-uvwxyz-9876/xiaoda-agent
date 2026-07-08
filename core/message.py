@@ -45,7 +45,7 @@ class AgentMessage:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "AgentMessage":
+    def from_dict(cls, data: dict[str, Any]) -> AgentMessage:
         """从字典构造实例。
 
         缺少 context 时使用空 dict；缺少 timestamp 时使用当前时间。

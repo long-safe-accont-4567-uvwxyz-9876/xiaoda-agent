@@ -46,7 +46,7 @@ def _gpio_write_value(pin: Any, value: Any) -> None:
 
 def _gpio_read_value(pin: Any) -> Any:
     """读取GPIO引脚电平值。"""
-    with open(os.path.join(_gpio_path(pin), "value"), "r") as f:
+    with open(os.path.join(_gpio_path(pin), "value")) as f:
         return f.read().strip()
 
 
@@ -67,7 +67,7 @@ def _gpio_read_value(pin: Any) -> Any:
     category="hardware",
     max_frequency=10,
 )
-async def gpio_control(action: str, pin: int, mode: Optional[str] = None, value: Optional[int] = None) -> ToolResult:
+async def gpio_control(action: str, pin: int, mode: str | None = None, value: int | None = None) -> ToolResult:
     """控制GPIO引脚：设置模式、写入电平或读取电平。"""
     try:
         if not os.path.isdir(GPIO_BASE):
@@ -140,7 +140,7 @@ def _pwm_write(chip: int, channel: int, attr: str, value: str) -> None:
 def _pwm_read(chip: int, channel: int, attr: str) -> str:
     """读取PWM通道属性值。"""
     path = os.path.join(_pwm_chip_path(chip), f"pwm{channel}", attr)
-    with open(path, "r") as f:
+    with open(path) as f:
         return f.read().strip()
 
 
@@ -167,7 +167,7 @@ def _pwm_read(chip: int, channel: int, attr: str) -> str:
     max_frequency=10,
 )
 async def pwm_control(action: str, chip: int = 0, channel: int = 0,
-                      frequency: Optional[float] = None, duty_cycle: Optional[float] = None) -> ToolResult:
+                      frequency: float | None = None, duty_cycle: float | None = None) -> ToolResult:
     """控制PWM脉冲输出：启用/禁用通道、设置频率和占空比。"""
     try:
         if not os.path.isdir(PWM_BASE):
@@ -255,7 +255,7 @@ def _i2c_smbus_scan(bus: Any) -> Any:
             try:
                 bus_obj.read_byte(addr)
                 found.append(addr)
-            except (OSError, IOError):
+            except OSError:
                 pass
     finally:
         bus_obj.close()
@@ -351,7 +351,7 @@ def _has_smbus2() -> bool:
     category="hardware",
     max_frequency=10,
 )
-async def i2c_comm(action: str, bus: int = 0, addr: Optional[int] = None, register: Optional[int] = None, length: int = 1, data: Optional[list] = None) -> ToolResult:
+async def i2c_comm(action: str, bus: int = 0, addr: int | None = None, register: int | None = None, length: int = 1, data: list | None = None) -> ToolResult:
     """I2C通信：扫描设备、读取或写入寄存器。"""
     try:
         dev_path = f"/dev/i2c-{bus}"
@@ -423,7 +423,7 @@ async def i2c_comm(action: str, bus: int = 0, addr: Optional[int] = None, regist
 
 def _read_sysfs(path: Any) -> Any:
     """读取sysfs文件内容。"""
-    with open(path, "r") as f:
+    with open(path) as f:
         return f.read().strip()
 
 
@@ -448,7 +448,7 @@ def _read_cpu_freq() -> Any:
 def _read_loadavg() -> tuple:
     """读取系统负载平均值。"""
     try:
-        with open("/proc/loadavg", "r") as f:
+        with open("/proc/loadavg") as f:
             parts = f.read().strip().split()
             return parts[0], parts[1], parts[2]
     except Exception:
@@ -459,7 +459,7 @@ def _read_memory() -> tuple:
     """读取内存使用信息。"""
     try:
         info = {}
-        with open("/proc/meminfo", "r") as f:
+        with open("/proc/meminfo") as f:
             for line in f:
                 parts = line.split()
                 key = parts[0].rstrip(":")
@@ -578,7 +578,7 @@ def _read_all_hardware(target: str) -> list[str]:
 )
 async def hardware_status(target: str = "all") -> ToolResult:
     """查询硬件状态（温度/CPU/内存/磁盘/电压），带 5 秒缓存。"""
-    global _hw_cache, _hw_cache_ts
+    global _hw_cache
     try:
         now = time.monotonic()
         with _hw_cache_lock:

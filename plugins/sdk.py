@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from abc import ABC
-from typing import Any, Callable, ClassVar
+from typing import Any, ClassVar
+from collections.abc import Callable
 
 
 from plugins.context import PluginContext

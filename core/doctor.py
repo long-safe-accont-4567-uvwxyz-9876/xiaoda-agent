@@ -357,14 +357,14 @@ def _register_self_heal_checks(doc: DoctorCheck) -> None:
         if platform == "windows":
             subprocess.run(
                 ["powershell", "-NoProfile", "-Command",
-                 "Get-NetTCPConnection -LocalPort {} -ErrorAction SilentlyContinue | ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}".format(port)],
+                 f"Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue | ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}"],
                 timeout=10, capture_output=True, check=False,
             )
         elif platform == "docker":
             logger.warning("doctor.port_conflict_docker", port=port, hint="Change WEBUI_PORT env var")
         else:
             result = subprocess.run(
-                ["lsof", "-ti:{}".format(port)],
+                ["lsof", f"-ti:{port}"],
                 timeout=10, capture_output=True, check=False,
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             )

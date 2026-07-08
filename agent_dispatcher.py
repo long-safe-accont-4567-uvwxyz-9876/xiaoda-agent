@@ -138,8 +138,8 @@ class SubAgent:
     def __init__(self, config: SubAgentConfig, tts: TTSEngine,
                  tool_executor: ToolExecutor | None = None,
                  tool_repair: ToolCallRepair | None = None,
-                 delegate_callback: Optional[Any]=None,
-                 core: Optional[Any]=None) -> None:
+                 delegate_callback: Any | None=None,
+                 core: Any | None=None) -> None:
         self.config = config
         self._tts = tts
         self._tool_executor = tool_executor
@@ -332,7 +332,7 @@ class SubAgent:
         names.add("send_message_to_agent")  # 子代理专属工具：子代理间直接通信
         return names
 
-    async def chat(self, message: str, context: str = "", status_callback: Optional[Any]=None, address_term: str = "爸爸") -> str:
+    async def chat(self, message: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸") -> str:
         # 降级模式下尝试自动恢复：用最新环境变量中的 Key 重建客户端
         if self._degraded:
             api_key = _read_env_key(self.config.api_key_env)
@@ -379,12 +379,12 @@ class SubAgent:
 
         try:
             return await self._chat_loop(messages, tools)
-        except (OSError, RuntimeError, asyncio.TimeoutError, ValueError) as e:
+        except (TimeoutError, OSError, RuntimeError, ValueError) as e:
             logger.warning("sub_agent.chat_failed name={} error={}", self.config.name, str(e))
             if tools and _is_tool_unsupported_error(str(e)):
                 try:
                     return await self._chat_loop(messages, None)
-                except (OSError, RuntimeError, asyncio.TimeoutError, ValueError) as e2:
+                except (TimeoutError, OSError, RuntimeError, ValueError) as e2:
                     logger.warning("sub_agent.fallback_failed name={} error={}", self.config.name, str(e2))
 
         return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
@@ -560,7 +560,7 @@ class SubAgent:
             elapsed = asyncio.get_running_loop().time() - t0
             logger.info("sub_agent.api_ok", name=self.config.name, round=round_idx, elapsed=f"{elapsed:.1f}s")
             return response
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("sub_agent.api_timeout", name=self.config.name, round=round_idx)
             return f"{self.config.display_name}思考时间太长了，请稍后再试吧～"
 
@@ -681,8 +681,8 @@ class SubAgent:
             )
             reply = response.choices[0].message.content or ""
             rc = getattr(response.choices[0].message, "reasoning_content", None) or ""
-            return strip_reasoning(strip_dsml((reply or rc))).strip()
-        except (asyncio.TimeoutError, Exception):
+            return strip_reasoning(strip_dsml(reply or rc)).strip()
+        except (TimeoutError, Exception):
             last_tool = working[-1] if working else {}
             if isinstance(last_tool, dict) and last_tool.get("role") == "tool":
                 raw_content = last_tool.get("content", "").strip()
@@ -701,8 +701,7 @@ class SubAgent:
             return "已达本次任务记忆提交上限（3次）"
 
         # importance 上限校验：防止子代理提权写入高敏感记忆
-        if importance > 4:
-            importance = 4
+        importance = min(importance, 4)
 
         # 拼接内容
         memory_text = f"[{self.config.display_name}观察] " + "; ".join(key_points)
@@ -757,7 +756,7 @@ class SubAgent:
 
         if target is None:
             agents_dict = getattr(dispatcher, "_agents", {}) or {}
-            for _, agent in agents_dict.items():
+            for agent in agents_dict.values():
                 if getattr(agent.config, "display_name", "") == target_agent:
                     target = agent
                     break
@@ -771,7 +770,7 @@ class SubAgent:
         try:
             reply = await target.chat(message, context=context)
             return reply if reply else f"（{target_agent} 没有回应）"
-        except (OSError, RuntimeError, asyncio.TimeoutError) as e:
+        except (TimeoutError, OSError, RuntimeError) as e:
             logger.warning(
                 "sub_agent.send_message_failed",
                 sender=self.config.name,
@@ -803,8 +802,8 @@ class AgentDispatcher:
     def __init__(self, tts: TTSEngine,
                  tool_executor: ToolExecutor | None = None,
                  tool_repair: ToolCallRepair | None = None,
-                 delegate_callback: Optional[Any]=None,
-                 core: Optional[Any]=None) -> None:
+                 delegate_callback: Any | None=None,
+                 core: Any | None=None) -> None:
         self._tts = tts
         self._tool_executor = tool_executor
         self._tool_repair = tool_repair
@@ -856,7 +855,7 @@ class AgentDispatcher:
                 except (OSError, RuntimeError):
                     logger.debug("agent_dispatcher.close_sub_agent_error", exc_info=True)
 
-    async def dispatch_single(self, name: str, task: str, context: str = "", status_callback: Optional[Any]=None, address_term: str = "爸爸") -> str | None:
+    async def dispatch_single(self, name: str, task: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸") -> str | None:
         """单子代理调度（原 dispatch 方法）。
 
         保留为独立方法以与并行调度（SubAgentManagerMixin.parallel_dispatch）区分；
@@ -969,7 +968,7 @@ class AgentDispatcher:
                 if (self._routing_config_cache
                         and self._routing_config_cache[0] == mtime):
                     return self._routing_config_cache[1]
-                with open(config_path, "r", encoding="utf-8") as f:
+                with open(config_path, encoding="utf-8") as f:
                     result = json.load(f)
                 self._routing_config_cache = (mtime, result)
                 return result
@@ -1112,7 +1111,7 @@ class AgentDispatcher:
         config_path = Path(__file__).parent / "config" / "agent_routing_v2.json"
         if config_path.exists():
             try:
-                with open(config_path, "r", encoding="utf-8") as f:
+                with open(config_path, encoding="utf-8") as f:
                     return json.load(f)
             except (OSError, json.JSONDecodeError, ValueError) as e:
                 logger.warning("agent.routing_v2_config_load_failed", error=str(e))

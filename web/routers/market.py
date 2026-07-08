@@ -176,7 +176,7 @@ async def install_plugin(req: InstallRequest, request: Request) -> Any:
 
     try:
         result = await asyncio.wait_for(installer.install(item, env=req.env or None), timeout=300)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(504, "安装超时（300 秒）")
     except InstallError as e:
         raise HTTPException(400, str(e))
@@ -272,7 +272,7 @@ async def install_skill(req: InstallRequest, request: Request) -> Any:
 
     try:
         result = await asyncio.wait_for(installer.install(item), timeout=300)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(504, "安装超时（300 秒）")
     except InstallError as e:
         raise HTTPException(400, str(e))
@@ -357,7 +357,7 @@ async def install_mcp(req: InstallRequest, request: Request) -> Any:
 
     try:
         result = await asyncio.wait_for(installer.install(item), timeout=300)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(504, "安装超时（300 秒）")
     except InstallError as e:
         raise HTTPException(400, str(e))

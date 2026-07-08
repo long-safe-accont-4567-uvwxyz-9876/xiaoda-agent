@@ -25,7 +25,8 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any, Optional
+from collections.abc import Callable
 
 from loguru import logger
 
@@ -49,7 +50,7 @@ class RecoveryContext:
     """恢复上下文"""
     operation: str
     args: dict = field(default_factory=dict)
-    error: Optional[Exception] = None
+    error: Exception | None = None
     attempt: int = 0
     level: RecoveryLevel = RecoveryLevel.RETRY
     history: list[dict] = field(default_factory=list)
@@ -137,8 +138,8 @@ class RecoveryOrchestrator:
         return RecoveryLevel.RETRY
 
     async def execute(self, operation: str, handler: Callable,
-                       args: Optional[dict] = None,
-                       max_level: Optional[RecoveryLevel] = None
+                       args: dict | None = None,
+                       max_level: RecoveryLevel | None = None
                        ) -> RecoveryResult:
         """执行可恢复操作
 
@@ -176,7 +177,7 @@ class RecoveryOrchestrator:
 
     async def _execute_first_attempt(self, ctx: RecoveryContext, handler: Callable,
                                       args: dict, operation: str, t0: float
-                                      ) -> Optional[RecoveryResult]:
+                                      ) -> RecoveryResult | None:
         """首次执行: 成功返回 RecoveryResult; 失败返回 None 并设置 ctx 的初始恢复级别"""
         try:
             if asyncio.iscoroutinefunction(handler):
@@ -204,7 +205,7 @@ class RecoveryOrchestrator:
 
     async def _run_recovery_levels(self, ctx: RecoveryContext, handler: Callable,
                                     max_lvl: RecoveryLevel, operation: str,
-                                    t0: float) -> Optional[RecoveryResult]:
+                                    t0: float) -> RecoveryResult | None:
         """按级别递进恢复: 成功返回 RecoveryResult, 全部失败返回 None"""
         while ctx.level <= max_lvl:
             ctx.attempt += 1  # 每个级别尝试计为一次执行
@@ -357,7 +358,7 @@ class RecoveryOrchestrator:
 
 
 # 全局单例
-_orch: Optional[RecoveryOrchestrator] = None
+_orch: RecoveryOrchestrator | None = None
 
 
 def get_recovery_orchestrator() -> RecoveryOrchestrator:

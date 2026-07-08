@@ -14,7 +14,7 @@ except ImportError:
         vals = {}
         if not os.path.exists(path):
             return vals
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        with open(path, encoding="utf-8", errors="ignore") as f:
             for line in f:
                 ln = line.strip()
                 if not ln or ln.startswith("#"):
@@ -248,7 +248,7 @@ def _parse_env_lines(filepath: str) -> list:
     lines = []
     if not os.path.exists(filepath):
         return lines
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8") as f:
         for line in f:
             lines.append(line.rstrip("\n"))
     return lines

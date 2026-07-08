@@ -101,6 +101,6 @@ class PluginManifest(BaseModel):
 
 def parse_manifest(yaml_path: str | Path) -> PluginManifest:
     """解析 plugin.yaml 文件"""
-    with open(yaml_path, "r", encoding="utf-8") as f:
+    with open(yaml_path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     return PluginManifest(**data)

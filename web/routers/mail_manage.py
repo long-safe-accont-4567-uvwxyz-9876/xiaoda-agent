@@ -380,7 +380,7 @@ async def trigger_mail_auth_login(request: Request) -> Any:
                 if url_match:
                     auth_url = url_match.group(1).rstrip(")")
                     break
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
         if auth_url:

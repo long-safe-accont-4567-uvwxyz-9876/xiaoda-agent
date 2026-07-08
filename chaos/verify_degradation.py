@@ -22,7 +22,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, AsyncIterator
+import sys
+from typing import Any
+from collections.abc import AsyncIterator
 
 from loguru import logger
 
@@ -108,7 +110,7 @@ async def _verify_timeout_reliability() -> dict:
     for _ in range(3):
         try:
             await client.chat(messages=[{"role": "user", "content": "hi"}])
-        except asyncio.TimeoutError:
+        except TimeoutError:
             timeout_count += 1
             # 每次超时, 记录高 timeout_rate 与低 success_rate (模拟 SLOTracker 拉取)
             detector.record_reliability("timeout_rate", 0.5)
@@ -289,7 +291,7 @@ async def _verify_continuous_strategy() -> dict:
                 else:
                     detector.record_performance("p99_latency", 100.0)
                     detector.record_reliability("success_rate", 0.99)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 detector.record_reliability("timeout_rate", 0.6)
                 detector.record_reliability("success_rate", 0.4)
             except LLMFaultError:
@@ -371,4 +373,4 @@ if __name__ == "__main__":
     import json
     report = verify_degradation_triggers()
     print(json.dumps(report, indent=2, ensure_ascii=False, default=str))
-    exit(0 if report["all_passed"] else 1)
+    sys.exit(0 if report["all_passed"] else 1)

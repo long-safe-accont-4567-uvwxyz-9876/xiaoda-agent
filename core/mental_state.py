@@ -125,7 +125,7 @@ class MentalState:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "MentalState":
+    def from_dict(cls, d: dict) -> MentalState:
         """从字典反序列化 (兼容缺失字段)."""
         if not d or not isinstance(d, dict):
             return cls()
@@ -166,14 +166,14 @@ class MentalState:
                 json.dump(data, f, indent=2, ensure_ascii=False)
 
     @classmethod
-    def load(cls, path: Path) -> "MentalState":
+    def load(cls, path: Path) -> MentalState:
         """从 JSON 文件加载, 文件不存在或损坏时返回空状态."""
         import json
         path = Path(path)
         if not path.exists():
             return cls()
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             return cls.from_dict(data)
         except (OSError, json.JSONDecodeError, ValueError) as e:
@@ -437,7 +437,7 @@ class MentalStateManager:
 # 全局单例
 # ============================================================
 
-_manager: Optional[MentalStateManager] = None
+_manager: MentalStateManager | None = None
 
 
 def get_mental_state_manager(data_dir: Path | None = None) -> MentalStateManager:
@@ -452,7 +452,7 @@ def get_mental_state_manager(data_dir: Path | None = None) -> MentalStateManager
     return _manager
 
 
-def get_mental_state_manager_if_exists() -> Optional[MentalStateManager]:
+def get_mental_state_manager_if_exists() -> MentalStateManager | None:
     """返回已初始化的全局单例, 未初始化时返回 None.
 
     用于 Dream 整合等场景, 避免在未显式初始化时创建副作用 (如测试环境).

@@ -167,7 +167,7 @@ async def _run_agently(args: list[str], timeout: int = 60) -> tuple[int, str, st
         if rc != 0:
             logger.warning("mail.run_agently.failed rc={} out={} err={}", rc, out[:300], err[:200])
         return rc, out, err
-    except asyncio.TimeoutError:
+    except TimeoutError:
         try:
             proc.kill()
             await proc.wait()  # reap 子进程，避免僵尸进程累积

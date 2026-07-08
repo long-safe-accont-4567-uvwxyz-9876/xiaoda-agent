@@ -45,7 +45,7 @@ class TNRSelfHeal:
         logger.info(f"TNR: 选择自愈策略 → {chosen}")
         return chosen
 
-    def recover(self, heal_func: Any, rollback_func: Optional[Any]=None) -> bool:
+    def recover(self, heal_func: Any, rollback_func: Any | None=None) -> bool:
         """Step 3: Recover — 执行自愈"""
         try:
             heal_func()

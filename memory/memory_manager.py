@@ -54,7 +54,7 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
     """
     for pattern, offset_days, span_days in _TEMPORAL_PATTERNS:
         if pattern.search(query):
-            now = _datetime.datetime.now(_datetime.timezone.utc).astimezone()
+            now = _datetime.datetime.now(_datetime.UTC).astimezone()
             start_date = (now - _datetime.timedelta(days=offset_days + span_days - 1)).replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
@@ -210,9 +210,9 @@ class MemoryManager:
 
     def __init__(self, db: DatabaseManager, memory: MemoryDB,
                  vector_store: VectorStore | None = None,
-                 router: Optional[Any]=None, knowledge_graph: Optional[Any]=None, security_filter: Optional[Any]=None,
-                 reranker: Optional[Any]=None, query_transformer: Optional[Any]=None,
-                 governance: Optional[Any]=None) -> None:
+                 router: Any | None=None, knowledge_graph: Any | None=None, security_filter: Any | None=None,
+                 reranker: Any | None=None, query_transformer: Any | None=None,
+                 governance: Any | None=None) -> None:
         self.db = db
         self.memory = memory
         self.vec = vector_store

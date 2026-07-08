@@ -21,7 +21,7 @@ async def _run_cmd(args: list[str], timeout: int = 30, cwd: str | None = None) -
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         return proc.returncode or 0, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         try:
             proc.kill()
         except Exception:
@@ -103,7 +103,7 @@ async def service_manage(action: str, name: str = "", lines: int = 30) -> ToolRe
 
         return ToolResult.fail(f"不支持的操作: {action}")
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return ToolResult.fail(f"操作超时: {action}")
     except Exception as e:
         return ToolResult.fail(f"服务管理错误: {e!s}")
@@ -189,7 +189,7 @@ async def network_diag(action: str, target: str = "8.8.8.8", count: int = 3) -> 
 
         return ToolResult.fail(f"不支持的操作: {action}")
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return ToolResult.fail(f"操作超时: {action}")
     except Exception as e:
         return ToolResult.fail(f"网络诊断错误: {e!s}")
@@ -240,7 +240,7 @@ async def dev_assist(action: str, path: str = _DEFAULT_PROJECT_DIR, lines: int =
 
         return ToolResult.fail(f"不支持的操作: {action}")
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return ToolResult.fail(f"操作超时: {action}")
     except Exception as e:
         return ToolResult.fail(f"开发辅助错误: {e!s}")

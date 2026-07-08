@@ -383,7 +383,7 @@ def read_file(path: str, offset: int = 0, limit: int = 200) -> ToolResult:
         if os.path.isdir(resolved):
             return ToolResult.fail(f"这是一个目录，不是文件: {path}")
 
-        with open(resolved, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(resolved, encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()
         selected = lines[offset:offset + limit]
         content = ''.join(selected)

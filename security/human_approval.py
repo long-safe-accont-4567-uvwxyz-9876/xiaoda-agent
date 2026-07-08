@@ -19,7 +19,8 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any, Optional
+from collections.abc import Callable
 
 from loguru import logger
 
@@ -68,7 +69,7 @@ class ApprovalRequest:
     created_at: float = field(default_factory=time.time)
     expires_at: float = 0            # 0 = 使用默认超时
     status: ApprovalStatus = ApprovalStatus.PENDING
-    decided_by: Optional[str] = None
+    decided_by: str | None = None
     decided_at: float = 0
     decision_reason: str = ""
 
@@ -85,7 +86,7 @@ class ApprovalResult:
     """审批结果"""
     request_id: str
     status: ApprovalStatus
-    decided_by: Optional[str] = None
+    decided_by: str | None = None
     reason: str = ""
 
 
@@ -130,10 +131,10 @@ class HumanApprovalGate:
         return HIGH_RISK_OPERATIONS.get(operation, RiskLevel.LOW)
 
     async def request(self, user_id: str, operation: str,
-                       args: Optional[dict] = None,
-                       risk_level: Optional[RiskLevel] = None,
+                       args: dict | None = None,
+                       risk_level: RiskLevel | None = None,
                        reason: str = "",
-                       timeout: Optional[float] = None) -> ApprovalRequest:
+                       timeout: float | None = None) -> ApprovalRequest:
         """发起审批请求"""
         risk = risk_level or self.get_risk_level(operation)
 
@@ -177,7 +178,7 @@ class HumanApprovalGate:
         return req
 
     async def wait_for_decision(self, request_id: str,
-                                  timeout: Optional[float] = None
+                                  timeout: float | None = None
                                   ) -> ApprovalResult:
         """等待审批决定"""
         req = self._requests.get(request_id)
@@ -200,7 +201,7 @@ class HumanApprovalGate:
         effective_timeout = timeout or (req.expires_at - time.time())
         try:
             return await asyncio.wait_for(future, timeout=max(0.1, effective_timeout))
-        except asyncio.TimeoutError:
+        except TimeoutError:
             req.status = ApprovalStatus.TIMEOUT
             req.decided_at = time.time()
             req.decision_reason = "Approval timed out"
@@ -244,7 +245,7 @@ class HumanApprovalGate:
         """注册请求回调"""
         self._callbacks.append(callback)
 
-    def get_pending_requests(self, user_id: Optional[str] = None) -> list[ApprovalRequest]:
+    def get_pending_requests(self, user_id: str | None = None) -> list[ApprovalRequest]:
         """获取待审批请求"""
         return [r for r in self._requests.values()
                  if r.status == ApprovalStatus.PENDING
@@ -284,7 +285,7 @@ class HumanApprovalGate:
 
 
 # 全局单例
-_gate: Optional[HumanApprovalGate] = None
+_gate: HumanApprovalGate | None = None
 
 
 def get_approval_gate() -> HumanApprovalGate:
@@ -321,7 +322,7 @@ class IMApprovalChannel:
         self._waiters: dict[str, asyncio.Future] = {}
         self._audit_log: list[dict] = []
 
-    def _classify_reply(self, text: str) -> Optional[ApprovalStatus]:
+    def _classify_reply(self, text: str) -> ApprovalStatus | None:
         """将用户回复文本分类为 APPROVED / REJECTED / None。"""
         if not text:
             return None
@@ -385,7 +386,7 @@ class IMApprovalChannel:
             if isinstance(status, ApprovalStatus):
                 return status
             return req.status
-        except asyncio.TimeoutError:
+        except TimeoutError:
             req.status = ApprovalStatus.TIMEOUT
             req.decision_reason = f"User did not reply within {self._timeout}s"
             req.decided_at = time.time()

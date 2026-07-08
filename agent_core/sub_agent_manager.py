@@ -245,7 +245,7 @@ class SubAgentManagerMixin:
                 except Exception as e:
                     logger.debug("blackboard.put_failed key={} error={}", task_key, e)
             return {"agent": t, "display_name": display_name, "reply": reply}
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return {"agent": t, "display_name": display_name,
                     "reply": f"{display_name}处理超时", "error": True}
         except Exception as e:

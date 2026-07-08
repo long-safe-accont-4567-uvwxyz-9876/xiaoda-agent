@@ -107,7 +107,7 @@ class CapabilityProfile:
 
 
 # 模块级缓存：启动时探测一次，后续直接返回
-_profile_cache: Optional[CapabilityProfile] = None
+_profile_cache: CapabilityProfile | None = None
 
 
 def detect_capabilities() -> CapabilityProfile:
@@ -237,7 +237,7 @@ def _detect_sbc() -> bool:
     sbc_indicators = ["/proc/device-tree/model", "/proc/device-tree/compatible"]
     for path in sbc_indicators:
         try:
-            with open(path, "r") as f:
+            with open(path) as f:
                 content = f.read().lower()
                 if any(kw in content for kw in ["raspberry", "orange pi", "orangepi",
                                                   "nanopi", "rockpi", "xunlong"]):

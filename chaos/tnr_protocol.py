@@ -33,7 +33,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any, Optional
+from collections.abc import Callable
 
 from loguru import logger
 
@@ -92,8 +93,8 @@ class TNRReport:
     """
     fault_type: str
     phases: list[PhaseResult] = field(default_factory=list)
-    pre_health: Optional[HealthScore] = None
-    post_health: Optional[HealthScore] = None
+    pre_health: HealthScore | None = None
+    post_health: HealthScore | None = None
     health_restored: bool = False
     duration: float = 0.0
     alert_triggered: bool = False
@@ -120,7 +121,7 @@ class TNRReport:
             "duration": round(self.duration, 4),
         }
 
-    def phase_result(self, phase: TNRPhase) -> Optional[PhaseResult]:
+    def phase_result(self, phase: TNRPhase) -> PhaseResult | None:
         """获取指定阶段的结果"""
         for p in self.phases:
             if p.phase == phase:
@@ -223,13 +224,13 @@ class TNRProtocol:
 
         # 内部故障状态 (默认模拟)
         self._fault_active: bool = False
-        self._current_fault_type: Optional[str] = None
+        self._current_fault_type: str | None = None
 
         # 可注入 hooks (覆盖默认故障注入/移除/指标采集)
-        self._inject_fault_fn: Optional[Callable[[str], bool]] = None
-        self._remove_fault_fn: Optional[Callable[[str], bool]] = None
-        self._collect_metrics_fn: Optional[Callable[[], dict]] = None
-        self._probe_fn: Optional[Callable] = None
+        self._inject_fault_fn: Callable[[str], bool] | None = None
+        self._remove_fault_fn: Callable[[str], bool] | None = None
+        self._collect_metrics_fn: Callable[[], dict] | None = None
+        self._probe_fn: Callable | None = None
 
         # 告警历史
         self._alerts: list[dict] = []
@@ -301,7 +302,7 @@ class TNRProtocol:
         return True
 
     def _detect_anomaly(
-        self, pre: Optional[HealthScore], post: Optional[HealthScore]
+        self, pre: HealthScore | None, post: HealthScore | None
     ) -> bool:
         """检测异常: 健康度下降即异常"""
         if pre is None or post is None:
@@ -514,7 +515,7 @@ class TNRProtocol:
         )
 
     async def _phase_verify(
-        self, fault_type: str, pre_health: Optional[HealthScore]
+        self, fault_type: str, pre_health: HealthScore | None
     ) -> PhaseResult:
         """VERIFY: 验证健康度恢复到故障前水平"""
         t0 = time.time()
@@ -551,8 +552,8 @@ class TNRProtocol:
     def _trigger_alert(
         self,
         fault_type: str,
-        pre_health: Optional[HealthScore],
-        post_health: Optional[HealthScore],
+        pre_health: HealthScore | None,
+        post_health: HealthScore | None,
     ) -> None:
         """触发告警 (健康度未恢复) 并保持降级状态
 

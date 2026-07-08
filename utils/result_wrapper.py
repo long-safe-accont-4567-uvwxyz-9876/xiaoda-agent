@@ -28,7 +28,7 @@ FAILURE_TEMPLATES = {
 class ResultWrapper:
     """结果包装器，将工具输出转写为用户友好的回复。"""
 
-    def __init__(self, router: Optional[Any]=None) -> None:
+    def __init__(self, router: Any | None=None) -> None:
         self.router = router
         self._free_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         self._free_base_url = "https://api.siliconflow.cn/v1"

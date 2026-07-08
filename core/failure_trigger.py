@@ -23,7 +23,7 @@ class FailureTrigger:
     MAX_RETRIES = 3            # 最大重试次数
     PATTERN_THRESHOLD = 3      # 同类失败≥3次→写入规则
 
-    def __init__(self, memory_db: Optional[Any]=None, learning_manager: Optional[Any]=None) -> None:
+    def __init__(self, memory_db: Any | None=None, learning_manager: Any | None=None) -> None:
         """
         Args:
             memory_db: MemoryDB 实例（用于经验检索）

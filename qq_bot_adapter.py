@@ -153,7 +153,7 @@ async def _patched_pool_init(self, token: Any, session_interval: Any) -> Any:
         except KeyboardInterrupt:
             _botpy_log.info("[botpy] 服务强行停止!")
             return None
-        except (OSError, RuntimeError, ConnectionError, asyncio.TimeoutError) as e:
+        except (TimeoutError, OSError, RuntimeError, ConnectionError) as e:
             recon_attempts += 1
             delay = min(5 * (2 ** min(recon_attempts - 1, 4)), max_recon_delay)
             _botpy_log.error(f"[botpy] 会话异常: {e}, {delay}秒后重试 (第{recon_attempts}次)")
@@ -278,7 +278,7 @@ async def run_qq_bot(agent: "AgentCore", *, sandbox: bool = False) -> None:
             except (OSError, RuntimeError) as e:
                 logger.warning(f"qq_bot.close_on_cancel_failed: {e}")
             raise
-        except (OSError, RuntimeError, ConnectionError, asyncio.TimeoutError) as e:
+        except (TimeoutError, OSError, RuntimeError, ConnectionError) as e:
             logger.error("qq_bot.crashed_retrying error={} delay={}", str(e)[:200], delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, 120)
@@ -587,13 +587,13 @@ class AIQQBot(botpy.Client):
                 result, message, user_openid or user_id, is_master)
             if result.reply:
                 await self._send_reply_with_sticker(message, result)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("qq_bot.c2c_timeout user=%s", user_id)
             try:
                 await message.reply(content=f"{get_agent_display_name('xiaoda')}想得太入神了……能再说一次吗？🌱", msg_seq=_next_msg_seq())
             except (OSError, RuntimeError, ConnectionError) as _e:
                 logger.debug("qq_bot.c2c_timeout_reply_failed", error=str(_e))
-        except (RuntimeError, OSError, asyncio.TimeoutError, ValueError) as e:
+        except (TimeoutError, RuntimeError, OSError, ValueError) as e:
             logger.error(f"qq_bot.c2c_error: {e}")
             try:
                 await message.reply(content="嗯……出了点小问题，等会儿再聊好不好？", msg_seq=_next_msg_seq())
@@ -668,13 +668,13 @@ class AIQQBot(botpy.Client):
                 result, message, member_openid or user_id, is_master)
             if result.reply:
                 await self._send_reply_with_sticker(message, result)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("qq_bot.group_timeout user=%s", user_id)
             try:
                 await message.reply(content=f"{get_agent_display_name('xiaoda')}想得太入神了……能再说一次吗？🌱", msg_seq=_next_msg_seq())
             except (OSError, RuntimeError, ConnectionError) as _e:
                 logger.debug("qq_bot.group_timeout_reply_failed", error=str(_e))
-        except (RuntimeError, OSError, asyncio.TimeoutError, ValueError) as e:
+        except (TimeoutError, RuntimeError, OSError, ValueError) as e:
             logger.error(f"qq_bot.group_error: {e}", exc_info=True)
             try:
                 await message.reply(content="嗯……出了点小问题，等会儿再聊好不好？", msg_seq=_next_msg_seq())
@@ -1020,7 +1020,7 @@ class AIQQBot(botpy.Client):
             """发送单个分片。群聊无主动消息权限，被动超限直接失败。"""
             try:
                 await message.reply(content=text, msg_seq=_next_msg_seq())
-            except (OSError, RuntimeError, asyncio.TimeoutError, ValueError) as e:
+            except (TimeoutError, OSError, RuntimeError, ValueError) as e:
                 err_str = str(e)
                 if is_group and any(k in err_str for k in _group_no_proactive):
                     logger.debug("qq_bot.stream_passive_limited_no_proactive",
@@ -1037,7 +1037,7 @@ class AIQQBot(botpy.Client):
                 elapsed = (time.monotonic() - t0) * 1000
                 logger.info("qq_bot.stream_single",
                             total_len=total_len, ms=round(elapsed, 1))
-            except (OSError, RuntimeError, asyncio.TimeoutError) as e:
+            except (TimeoutError, OSError, RuntimeError) as e:
                 logger.error("qq_bot.stream_final_failed", error=str(e))
             return
 
@@ -1063,7 +1063,7 @@ class AIQQBot(botpy.Client):
                 sent_count += 1
                 logger.debug("qq_bot.stream_segment", index=i, size=len(seg),
                              ms=round(seg_ms, 1), sent=sent_count)
-            except (OSError, RuntimeError, asyncio.TimeoutError) as e:
+            except (TimeoutError, OSError, RuntimeError) as e:
                 logger.warning("qq_bot.stream_segment_failed",
                                error=str(e), sent_segments=sent_count)
                 # 异常恢复：合并剩余内容为最终片发送
@@ -1073,7 +1073,7 @@ class AIQQBot(botpy.Client):
                     recovery_ms = (time.monotonic() - stream_start) * 1000
                     logger.info("qq_bot.stream_recovery_done",
                                 sent=sent_count + 1, ms=round(recovery_ms, 1))
-                except (OSError, RuntimeError, asyncio.TimeoutError) as e2:
+                except (TimeoutError, OSError, RuntimeError) as e2:
                     logger.error("qq_bot.stream_final_failed", error=str(e2))
                 return
 
@@ -1139,7 +1139,7 @@ class AIQQBot(botpy.Client):
         async def _send_segment(text: str) -> None:
             try:
                 await message.reply(content=text, msg_seq=_next_msg_seq())
-            except (OSError, RuntimeError, asyncio.TimeoutError, ValueError) as e:
+            except (TimeoutError, OSError, RuntimeError, ValueError) as e:
                 err_str = str(e)
                 if is_group and any(k in err_str for k in _group_no_proactive_sticker):
                     logger.debug("qq_bot.stream_passive_limited_no_proactive",
@@ -1153,13 +1153,13 @@ class AIQQBot(botpy.Client):
                 if i > 0:
                     await asyncio.sleep(random.uniform(0.8, 1.2))
                 await _send_segment(seg)
-            except (OSError, RuntimeError, asyncio.TimeoutError) as e:
+            except (TimeoutError, OSError, RuntimeError) as e:
                 logger.warning("qq_bot.stream_segment_failed", error=str(e))
                 # 异常恢复：合并剩余内容发送
                 remaining = "".join(segments[i:])
                 try:
                     await _send_segment(remaining)
-                except (OSError, RuntimeError, asyncio.TimeoutError) as e2:
+                except (TimeoutError, OSError, RuntimeError) as e2:
                     logger.error("qq_bot.stream_recovery_failed", error=str(e2))
                 return
 
@@ -1453,7 +1453,7 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             logger.info("qq_bot.keyboard_interrupt")
             break
-        except (OSError, RuntimeError, ConnectionError, asyncio.TimeoutError) as e:
+        except (TimeoutError, OSError, RuntimeError, ConnectionError) as e:
             retry_count += 1
             delay = min(BASE_DELAY * (2 ** min(retry_count - 1, 6)), MAX_DELAY)
             logger.error(

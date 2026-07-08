@@ -101,7 +101,7 @@ class Lesson:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Lesson":
+    def from_dict(cls, d: dict) -> Lesson:
         """从字典反序列化为 Lesson 实例.
 
         Args:
@@ -156,7 +156,7 @@ class LearningFeedbackLoop:
         loop.persist()
     """
 
-    def __init__(self, persist_path: Optional[Path] = None,
+    def __init__(self, persist_path: Path | None = None,
                  max_lessons: int = _MAX_LESSONS) -> None:
         self._lessons: list[Lesson] = []
         self._strategies: dict[str, str] = {}
@@ -275,7 +275,7 @@ class LearningFeedbackLoop:
             f"LearningFeedback.update_strategy pattern={task_pattern[:60]}"
         )
 
-    def get_strategy(self, task_pattern: str) -> Optional[str]:
+    def get_strategy(self, task_pattern: str) -> str | None:
         """获取 task_pattern 对应的策略, 支持精确匹配与子串包含"""
         if not task_pattern:
             return None
@@ -313,7 +313,7 @@ class LearningFeedbackLoop:
         if not self._persist_path.exists():
             return
         try:
-            with open(self._persist_path, "r", encoding="utf-8") as f:
+            with open(self._persist_path, encoding="utf-8") as f:
                 data = json.load(f)
             self._lessons = [Lesson.from_dict(d) for d in data.get("lessons", [])]
             self._strategies = dict(data.get("strategies", {}))
@@ -328,7 +328,7 @@ class LearningFeedbackLoop:
 
     # ── 内部: 相似教训合并 ──────────────────────────────────
 
-    def _merge_or_add(self, content: str, event_type: EventType) -> Optional[Lesson]:
+    def _merge_or_add(self, content: str, event_type: EventType) -> Lesson | None:
         """合并相似教训或新增
 
         相似度 > _SIMILARITY_THRESHOLD 时合并:
@@ -385,7 +385,7 @@ def _event_severity(et: EventType) -> int:
 
 # ── 单例 (供 Agent-R 反思器与工具执行器共享) ──────────────
 
-_singleton: Optional[LearningFeedbackLoop] = None
+_singleton: LearningFeedbackLoop | None = None
 
 
 def get_learning_feedback_loop() -> LearningFeedbackLoop:

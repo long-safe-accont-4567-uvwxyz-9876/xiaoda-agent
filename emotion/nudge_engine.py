@@ -23,9 +23,9 @@ class NudgeEngine:
                  greeting_max_per_day: int = 3,
                  dnd_start: int = 23,
                  dnd_end: int = 8,
-                 portrait_manager: Optional[Any]=None,
-                 config_service: Optional[Any]=None,
-                 core: Optional[Any]=None) -> None:
+                 portrait_manager: Any | None=None,
+                 config_service: Any | None=None,
+                 core: Any | None=None) -> None:
         self._db = db
         self._analytics = analytics
         self._router = router

@@ -233,7 +233,7 @@ class PluginManager:
             logger.info("plugin.enabled", id=plugin_id)
             return True
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             record.state = PluginState.ERROR
             record.error_message = "Lifecycle timeout"
             logger.error("plugin.enable_timeout", id=plugin_id)

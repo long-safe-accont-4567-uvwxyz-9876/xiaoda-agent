@@ -86,7 +86,7 @@ async def get_first_run() -> Any:
             first_run = True
         else:
             try:
-                with open(env_path, "r", encoding="utf-8", errors="ignore") as f:
+                with open(env_path, encoding="utf-8", errors="ignore") as f:
                     for line in f:
                         if line.strip().startswith("MIMO_API_KEY="):
                             val = line.strip().split("=", 1)[1].strip().strip("'\"")

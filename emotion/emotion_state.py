@@ -176,7 +176,7 @@ class EmotionState:
 
 
 # 全局单例
-_instance: Optional[EmotionState] = None
+_instance: EmotionState | None = None
 _instance_lock = threading.Lock()
 
 

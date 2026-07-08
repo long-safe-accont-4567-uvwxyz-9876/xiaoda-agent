@@ -130,7 +130,7 @@ class IdempotentMigrator:
     async def add_column_if_not_exists(self, table: str, column: str,
                                          type_: str = "TEXT",
                                          default: str = "",
-                                         version: Optional[str] = None) -> bool:
+                                         version: str | None = None) -> bool:
         """便捷方法: 添加列 (幂等)"""
         if await self._column_exists(table, column):
             return False
@@ -141,7 +141,7 @@ class IdempotentMigrator:
 
     async def create_index_if_not_exists(self, index_name: str, table: str,
                                           columns: str,
-                                          version: Optional[str] = None) -> bool:
+                                          version: str | None = None) -> bool:
         """便捷方法: 创建索引 (幂等)"""
         if await self._index_exists(index_name):
             return False

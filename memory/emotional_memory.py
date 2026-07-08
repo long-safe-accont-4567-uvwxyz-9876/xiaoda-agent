@@ -57,7 +57,7 @@ class EmotionalMemory:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "EmotionalMemory":
+    def from_dict(cls, d: dict) -> EmotionalMemory:
         return cls(
             id=d["id"],
             user_id=d["user_id"],

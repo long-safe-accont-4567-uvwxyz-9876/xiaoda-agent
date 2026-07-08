@@ -320,7 +320,7 @@ def _tool_priority(tool: dict) -> int:
 
 def to_openai_tools() -> list[dict]:
     """生成 OpenAI function-calling 格式的工具列表 (带缓存，受上限限制)."""
-    global _schema_cache, _schema_version
+    global _schema_cache
     with _schema_lock:
         if _schema_cache is not None:
             metrics.inc("tool_registry.schema_cache.hit")

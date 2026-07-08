@@ -1,6 +1,7 @@
 import asyncio
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Optional
+from collections.abc import Callable
 from loguru import logger
 
 
@@ -42,7 +43,7 @@ class AgentContext:
     MAX_PRE_COMPRESSED_BUFFER = 200
 
     def __init__(self, system_prompt: str = "", system_prompt_loader: Callable[..., str] | None = None,
-                 router: Optional[Any]=None, security_filter: Optional[Any]=None) -> None:
+                 router: Any | None=None, security_filter: Any | None=None) -> None:
         self.system_prompt = system_prompt
         self._system_prompt_loader = system_prompt_loader
         self._router = router
@@ -255,7 +256,7 @@ class AgentContext:
             if isinstance(result, str) and result.strip():
                 return result.strip()
             return self._quick_summarize(messages)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.debug("context.summarize_timeout, fallback to quick")
             return self._quick_summarize(messages)
         except Exception as e:

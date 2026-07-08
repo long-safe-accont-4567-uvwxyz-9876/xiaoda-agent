@@ -48,7 +48,7 @@ class TrajectoryStep:
     action: str                  # tool_call / llm_response / observation
     content: str
     success: bool = True
-    error: Optional[str] = None
+    error: str | None = None
     timestamp: float = field(default_factory=time.time)
 
 
@@ -60,14 +60,14 @@ class Trajectory:
     reward: float = 0.0
     reflection: str = ""
 
-    def find_first_error(self) -> Optional[int]:
+    def find_first_error(self) -> int | None:
         """找到第一个错误步骤的索引"""
         for i, s in enumerate(self.steps):
             if not s.success:
                 return i
         return None
 
-    def splice_with(self, correct: "Trajectory", from_step: int) -> "Trajectory":
+    def splice_with(self, correct: Trajectory, from_step: int) -> Trajectory:
         """与正确轨迹拼接, 形成修正轨迹
 
         保留 [0, from_step) + correct.steps[from_step:]
@@ -110,7 +110,7 @@ class AgentRReflector:
 
     def record_step(self, action: str, content: str,
                      success: bool = True,
-                     error: Optional[str] = None) -> None:
+                     error: str | None = None) -> None:
         """记录一步"""
         step = TrajectoryStep(
             step_idx=len(self._current_trajectory.steps),
@@ -128,7 +128,7 @@ class AgentRReflector:
         """是否需要触发反思"""
         return self._current_trajectory.find_first_error() is not None
 
-    def reflect(self) -> Optional[ReflectionMemory]:
+    def reflect(self) -> ReflectionMemory | None:
         """触发反思, 生成记忆"""
         if not self.should_reflect():
             return None

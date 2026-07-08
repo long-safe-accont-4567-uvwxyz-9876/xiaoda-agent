@@ -319,7 +319,7 @@ async def credentials_status() -> Any:
     try:
         cfg = _get_cfg()
         custom_providers = cfg.get("models.providers", {}) or {}
-        for pid, p in custom_providers.items():
+        for pid in custom_providers:
             try:
                 key = load_provider_key(pid)
                 if not key:

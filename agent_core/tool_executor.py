@@ -28,7 +28,7 @@ class ToolExecutorMixin:
 
     async def _execute_tool_with_hooks(self, tool_name: str, arguments: dict,
                                         user_id: str = "", safe_mode: bool = False,
-                                        user_input: str = "") -> 'ToolResult':
+                                        user_input: str = "") -> ToolResult:
         """带钩子的工具执行"""
         from tool_engine.tool_registry import ToolResult
 

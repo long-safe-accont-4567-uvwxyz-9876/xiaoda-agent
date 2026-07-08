@@ -153,7 +153,7 @@ class ToolResultV2:
         error_code: str = "",
         error_msg: str = "",
         suggestion: str = "",
-        metadata: Optional[dict] = None,
+        metadata: dict | None = None,
     ):
         self.ok = ok
         self.data = data

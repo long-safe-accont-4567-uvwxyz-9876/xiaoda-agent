@@ -305,7 +305,7 @@ class ToolSearchEngine:
 
     def __init__(self) -> None:
         self._index = BM25Index()
-        self._vector_index: Optional[VectorIndex] = None  # 懒初始化
+        self._vector_index: VectorIndex | None = None  # 懒初始化
         self._always_loaded: list[ToolDef] = []  # 常驻工具 (不延迟加载)
         self._loaded_tools: dict[str, ToolDef] = {}  # 已加载的工具
         self._search_count = 0

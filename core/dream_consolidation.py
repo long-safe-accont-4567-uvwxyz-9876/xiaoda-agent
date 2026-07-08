@@ -18,7 +18,8 @@ import asyncio
 import math
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Optional
+from collections.abc import Callable
 
 from loguru import logger
 
@@ -53,13 +54,13 @@ class DreamConsolidator:
 
     def __init__(self, threshold_importance: float = 0.2,
                   threshold_strength: float = 0.1,
-                  on_consolidate: Optional["Callable[[], None]"] = None) -> None:
+                  on_consolidate: Callable[[], None] | None = None) -> None:
         self._memories: dict[str, Memory] = {}
         self._importance_threshold = threshold_importance
         self._strength_threshold = threshold_strength
         # 复用 FluidMemory 评分公式, 统一衰减逻辑 (避免两套公式各算各的)
         self._fluid_scorer = FluidMemory()
-        self._scheduler_task: Optional[asyncio.Task] = None
+        self._scheduler_task: asyncio.Task | None = None
         self._last_consolidate_at = 0
         self._stats = {"consolidated": 0, "decayed": 0, "merged": 0, "strengthened": 0}
         # Dream 整合钩子: 默认联动 L/M/S 心理状态清理 7 天前 M 层数据
@@ -73,7 +74,7 @@ class DreamConsolidator:
         """
         self._memories[m.id] = m
 
-    def get_memory(self, mid: str) -> Optional[Memory]:
+    def get_memory(self, mid: str) -> Memory | None:
         """按 ID 获取记忆, 不存在返回 None.
 
         Args:
@@ -351,7 +352,7 @@ class DreamConsolidator:
         self._stats["merged"] += merged
         return merged
 
-    def start_scheduler(self, hour: int = 3) -> Optional[asyncio.Task]:
+    def start_scheduler(self, hour: int = 3) -> asyncio.Task | None:
         """启动定时任务: 每天 hour 点执行"""
         async def _run() -> None:
             while True:
@@ -398,7 +399,7 @@ class DreamConsolidator:
 
 
 # 全局单例
-_dream: Optional[DreamConsolidator] = None
+_dream: DreamConsolidator | None = None
 
 
 def get_dream_consolidator() -> DreamConsolidator:

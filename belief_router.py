@@ -142,7 +142,7 @@ class BeliefRouter:
         try:
             import json
             json_path = self._db_path.rsplit(".", 1)[0] + "_beliefs.json"
-            with open(json_path, "r", encoding="utf-8") as f:
+            with open(json_path, encoding="utf-8") as f:
                 data = json.load(f)
             for name, params in (data or {}).items():
                 if name in self._beliefs and isinstance(params, dict):

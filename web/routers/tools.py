@@ -206,7 +206,7 @@ async def test_tool(name: str, request: Request) -> Any:
             "data": data,
             "error": error,
         })
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return Envelope(data={
             "name": name,
             "status": "timeout",

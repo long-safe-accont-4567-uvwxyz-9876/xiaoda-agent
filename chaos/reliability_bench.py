@@ -190,7 +190,7 @@ class ReliabilityBench:
     # ─── 公共入口 ───
 
     async def run_suite(
-        self, scenarios: Optional[list[str]] = None
+        self, scenarios: list[str] | None = None
     ) -> BenchReport:
         """运行测试套件
 
@@ -393,7 +393,7 @@ class ReliabilityBench:
             return (True, "partial_response")
         return (False, "")
 
-    def _try_degraded_reply(self, reason: str, original_resp: Optional[dict] = None) -> tuple:
+    def _try_degraded_reply(self, reason: str, original_resp: dict | None = None) -> tuple:
         """尝试通过 agent.degraded_reply 降级
 
         Returns:
@@ -564,7 +564,7 @@ class ReliabilityBench:
                     recovered = 1
                 else:
                     recovered = 1
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 injected = 1
                 # 超时后通过降级恢复
                 try:

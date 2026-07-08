@@ -107,7 +107,7 @@ class HookEngine:
                     }),
                     timeout=hook.timeout,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("hooks.pre_tool_use.timeout", hook=hook.name, timeout=hook.timeout)
                 continue
             except Exception as e:
@@ -143,7 +143,7 @@ class HookEngine:
                     }),
                     timeout=hook.timeout,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("hooks.post_tool_use.timeout", hook=hook.name)
                 continue
             except Exception as e:
@@ -194,7 +194,7 @@ class HookEngine:
                 )
                 if result.additional_context:
                     final_result.additional_context = (final_result.additional_context or "") + result.additional_context + "\n"
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("hooks.post_tool_use_failure.timeout", hook=hook.name)
                 continue
             except Exception as e:
@@ -255,7 +255,7 @@ class HookEngine:
                     return result
                 if result.additional_context:
                     final_result.additional_context = (final_result.additional_context or "") + result.additional_context + "\n"
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("hooks.user_prompt_submit.timeout", hook=hook.name)
                 continue
             except Exception as e:
@@ -277,7 +277,7 @@ class HookEngine:
                 )
                 if result.additional_context:
                     final_result.additional_context = (final_result.additional_context or "") + result.additional_context + "\n"
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("hooks.subagent_start.timeout", hook=hook.name)
                 continue
             except Exception as e:
@@ -297,7 +297,7 @@ class HookEngine:
                     }),
                     timeout=hook.timeout,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("hooks.subagent_stop.timeout", hook=hook.name)
                 continue
             except Exception as e:
@@ -319,7 +319,7 @@ class HookEngine:
                 )
                 if result.additional_context:
                     final_result.additional_context = (final_result.additional_context or "") + result.additional_context + "\n"
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("hooks.pre_compact.timeout", hook=hook.name)
                 continue
             except Exception as e:

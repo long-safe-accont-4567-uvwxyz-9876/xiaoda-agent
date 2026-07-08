@@ -349,7 +349,7 @@ class VisionService:
     def _check_memory(self) -> bool:
         """检查系统可用内存是否充足（>500MB）。"""
         try:
-            with open("/proc/meminfo", "r") as f:
+            with open("/proc/meminfo") as f:
                 for line in f:
                     if line.startswith("MemAvailable:"):
                         available_kb = int(line.split()[1])

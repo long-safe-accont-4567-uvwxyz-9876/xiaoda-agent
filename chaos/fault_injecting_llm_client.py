@@ -38,7 +38,8 @@ import asyncio
 import random
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncIterator, Optional
+from typing import Any, Optional
+from collections.abc import AsyncIterator
 
 from loguru import logger
 
@@ -106,7 +107,7 @@ class FaultConfig:
     fault_types: list[str] = field(
         default_factory=lambda: list(VALID_FAULT_TYPES)
     )
-    seed: Optional[int] = None
+    seed: int | None = None
 
     def __post_init__(self) -> None:
         # 校验 fault_rate 范围
@@ -199,7 +200,7 @@ class FaultInjectingLLMClient:
             )
             if fault_type == "timeout":
                 # 永远不返回正常结果 (抛出超时异常)
-                raise asyncio.TimeoutError(
+                raise TimeoutError(
                     "FaultInject: 注入超时故障 (LLM 永远不返回)"
                 )
             if fault_type == "error":
@@ -243,7 +244,7 @@ class FaultInjectingLLMClient:
                 f"call#{self._stats['total_calls']}"
             )
             if fault_type == "timeout":
-                raise asyncio.TimeoutError(
+                raise TimeoutError(
                     "FaultInject: 注入超时故障 (stream 永远不返回)"
                 )
             if fault_type == "error":
@@ -359,7 +360,7 @@ class FaultInjectingLLMClient:
         }
         self._fault_log.clear()
 
-    def reseed(self, seed: Optional[int]) -> None:
+    def reseed(self, seed: int | None) -> None:
         """重置随机种子 (用于重新生成故障序列)
 
         注意: 重置后调用序列会从头开始, 但已记录的统计不重置.

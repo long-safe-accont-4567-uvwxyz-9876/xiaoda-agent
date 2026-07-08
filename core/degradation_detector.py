@@ -32,7 +32,8 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Optional, Union
+from typing import Optional, Union
+from collections.abc import Callable
 
 from loguru import logger
 
@@ -150,8 +151,8 @@ class DegradationDetector:
         z_silent: float = 1.0,                  # 静默偏离阈值: |z| > 1σ
         silent_consecutive: int = 5,            # 静默退化连续次数
         min_baseline_samples: int = 10,         # 基线 ready 阈值
-        slo_tracker: Optional[object] = None,   # 复用 SLOTracker (只读取)
-        sla_exporter: Optional[object] = None,  # 复用 SLAExporter (只读取)
+        slo_tracker: object | None = None,   # 复用 SLOTracker (只读取)
+        sla_exporter: object | None = None,  # 复用 SLAExporter (只读取)
     ) -> None:
         self._alpha = alpha
         self._z_degradation = z_degradation
@@ -177,9 +178,9 @@ class DegradationDetector:
             Axis.RELIABILITY: {},
         }
         self._callbacks: list[Callable[[DegradationReport], None]] = []
-        self._task: Optional[asyncio.Task] = None
-        self._stop_event: Optional[asyncio.Event] = None
-        self._last_report: Optional[DegradationReport] = None
+        self._task: asyncio.Task | None = None
+        self._stop_event: asyncio.Event | None = None
+        self._last_report: DegradationReport | None = None
         self._slo_tracker = slo_tracker
         self._sla_exporter = sla_exporter
 
@@ -210,7 +211,7 @@ class DegradationDetector:
         """记录可靠性指标 (success_rate / retry_rate / timeout_rate)"""
         self._record(Axis.RELIABILITY, metric, value)
 
-    def _record(self, axis: Axis, metric: str, value: Union[int, float]) -> None:
+    def _record(self, axis: Axis, metric: str, value: int | float) -> None:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             logger.warning(
                 f"DegradationDetector 无效值: axis={axis.value} "
@@ -428,7 +429,7 @@ class DegradationDetector:
                     await asyncio.wait_for(
                         self._stop_event.wait(), timeout=interval
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
         except asyncio.CancelledError:
             pass
@@ -505,7 +506,7 @@ class DegradationDetector:
 # 全局单例
 # ============================================================
 
-_detector: Optional[DegradationDetector] = None
+_detector: DegradationDetector | None = None
 
 
 def get_degradation_detector() -> DegradationDetector:

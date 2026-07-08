@@ -22,7 +22,7 @@ class ErrorContext:
 class SmartErrorHandler:
     """智能错误处理器，记录并解析错误上下文。"""
 
-    def __init__(self, db: Optional[Any]=None, dispatcher: Optional[Any]=None) -> None:
+    def __init__(self, db: Any | None=None, dispatcher: Any | None=None) -> None:
         self._db = db
         self._dispatcher = dispatcher
         self._recent_errors: list[ErrorContext] = []
@@ -98,7 +98,7 @@ class SmartErrorHandler:
         }
         
         if class_name == "DatabaseManager":
-            for attr, db_class in db_manager_attrs.items():
+            for attr in db_manager_attrs:
                 if missing_attr in dir(__import__(f'db.db_{attr}', fromlist=[attr])):
                     return f"应该通过 self._db.{attr}.{missing_attr}() 调用，而不是 self._db.{missing_attr}()"
         
@@ -340,7 +340,7 @@ class SmartErrorHandler:
 _error_handler_instance: SmartErrorHandler | None = None
 
 
-def get_error_handler(db: Optional[Any]=None, dispatcher: Optional[Any]=None) -> SmartErrorHandler:
+def get_error_handler(db: Any | None=None, dispatcher: Any | None=None) -> SmartErrorHandler:
     """获取全局错误处理器实例"""
     global _error_handler_instance
     

@@ -415,7 +415,7 @@ _display_name_cache: dict[str, tuple[float, str]] = {}  # {name: (mtime, display
 _display_name_en_cache: dict[str, tuple[float, str]] = {}
 
 
-def clear_display_name_cache(name: Optional[str] = None):
+def clear_display_name_cache(name: str | None = None):
     """清除显示名缓存。
 
     当 display_name 变更时调用，确保下次读取时获取最新值。

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from typing import Any
 
 from loguru import logger
@@ -35,7 +35,7 @@ class MailPoller:
         # 水位线：回溯1小时，避免重启前刚收到的邮件被丢弃
         # 配合 _processed_ids 内存去重避免重复处理
         from datetime import timedelta
-        self._last_poll_time = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self._last_poll_time = (datetime.now(UTC) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         # 日配额
         self._daily_count = 0
         self._daily_reset_date = datetime.now().date()
@@ -138,7 +138,7 @@ class MailPoller:
                 await self._process_one_email(msg_id, from_email, from_name,
                                               msg.get("subject", ""), msg.get("snippet", ""),
                                               reply_channel)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("mail.poller.process_timeout id={}", msg_id)
                 # 超时的邮件不标记为已处理，下次轮询会重试
                 continue
@@ -202,7 +202,7 @@ class MailPoller:
             )
             reply_text = result.reply if result and result.reply else "已收到你的邮件，但暂时无法生成回复。"
             reply_text = _clean_reply_text(reply_text)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("mail.poller.process_timeout id={}", msg_id)
             reply_text = "抱歉，处理你的邮件超时了，请稍后重试。"
         except Exception as e:
@@ -254,7 +254,7 @@ class MailPoller:
 # ── 模块级辅助函数 ──────────────────────────────────────────────
 def _utc_now_iso() -> str:
     """返回当前 UTC 时间的 ISO 8601 字符串（Z 后缀）。"""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _extract_messages(stdout: str) -> list[dict]:

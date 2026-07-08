@@ -93,14 +93,14 @@ class ZombieDetector:
 
     # ── 检测 ──
 
-    def _detect_heartbeat_timeout(self, pid: int, info: dict, now: float) -> Optional[str]:
+    def _detect_heartbeat_timeout(self, pid: int, info: dict, now: float) -> str | None:
         """检测心跳超时"""
         elapsed = now - info["heartbeat"]
         if elapsed > info["timeout"]:
             return f"心跳超时: {elapsed:.1f}s > {info['timeout']:.1f}s"
         return None
 
-    def _detect_repetitive_activity(self, pid: int, info: dict) -> Optional[str]:
+    def _detect_repetitive_activity(self, pid: int, info: dict) -> str | None:
         """检测重复行为 (连续 N 次相同活动)"""
         activities = list(info["activities"])
         if len(activities) < self._repetition_threshold:
@@ -112,7 +112,7 @@ class ZombieDetector:
                     f"[{names[0]}]")
         return None
 
-    def _detect_resource_stall(self, pid: int, info: dict, now: float) -> Optional[str]:
+    def _detect_resource_stall(self, pid: int, info: dict, now: float) -> str | None:
         """检测资源不增长 (CPU/内存长时间无变化)
 
         需要多次采样, 首次调用仅记录基线。
@@ -234,7 +234,7 @@ class ZombieDetector:
 
 
 # 全局单例
-_detector: Optional[ZombieDetector] = None
+_detector: ZombieDetector | None = None
 
 
 def get_zombie_detector() -> ZombieDetector:

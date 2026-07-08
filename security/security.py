@@ -204,7 +204,7 @@ class SecurityFilter:
             return
         try:
             import yaml
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, encoding='utf-8') as f:
                 data = yaml.safe_load(f)
             self._injection_patterns = self._parse_patterns(data, 'injection_patterns', DEFAULT_INJECTION_PATTERNS)
             self._bypass_patterns = self._parse_patterns(data, 'bypass_patterns', DEFAULT_BYPASS_PATTERNS)

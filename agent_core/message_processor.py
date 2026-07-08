@@ -70,7 +70,7 @@ class MessageProcessorMixin:
         user_openid: str,
         session_id: str,
         is_owner: bool,
-        ctx: 'RequestContext',
+        ctx: RequestContext,
         user_input: str,
     ) -> tuple[str, list]:
         """Harness 验收循环：工具执行 → 结果回填 → 模型验收 → 循环。
@@ -1082,7 +1082,7 @@ class MessageProcessorMixin:
                 ),
                 timeout=min(self.LLM_CALL_TIMEOUT, remaining),
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             trace.warning("verification.llm_timeout", turn=turn_idx)
             return None, "", None, None
         except Exception as e:

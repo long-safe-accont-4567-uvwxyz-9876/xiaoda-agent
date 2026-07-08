@@ -1,4 +1,5 @@
-from typing import Any, AsyncIterator
+from typing import Any
+from collections.abc import AsyncIterator
 import asyncio
 import os
 import sys
@@ -341,7 +342,7 @@ def _resolve_env_api_key() -> str:
             logger.warning("webui.env_create_failed error={}", str(_e))
     _mimo = ""
     if _os.path.exists(_env_path):
-        with open(_env_path, "r", encoding="utf-8", errors="ignore") as _f:
+        with open(_env_path, encoding="utf-8", errors="ignore") as _f:
             for _line in _f:
                 _s = _line.strip()
                 if _s.startswith("MIMO_API_KEY="):

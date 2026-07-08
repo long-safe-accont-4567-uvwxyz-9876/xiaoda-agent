@@ -77,7 +77,7 @@ class ReturnAnalyzer(cst.CSTVisitor):
     """收集函数体内 return / yield 语句的类型线索。"""
 
     def __init__(self) -> None:
-        self.returns: list[Optional[cst.BaseExpression]] = []
+        self.returns: list[cst.BaseExpression | None] = []
         self.has_yield = False
         self.has_yield_from = False
         self.has_return_value = False
@@ -117,7 +117,7 @@ class ReturnAnalyzer(cst.CSTVisitor):
         self.has_yield = True
 
 
-def literal_type(expr: cst.BaseExpression) -> Optional[str]:
+def literal_type(expr: cst.BaseExpression) -> str | None:
     """识别简单字面量类型。"""
     if isinstance(expr, cst.Name):
         if expr.value in ('True', 'False'):
@@ -316,7 +316,7 @@ class AnnotationTransformer(cst.CSTTransformer):
             return updated_node
         # 查找现有的 typing 导入
         existing_typing_imports: set[str] = set()
-        typing_import_idx: Optional[int] = None
+        typing_import_idx: int | None = None
         for i, stmt in enumerate(updated_node.body):
             if not isinstance(stmt, cst.SimpleStatementLine):
                 continue

@@ -94,7 +94,7 @@ async def update_agent(name: str, body: dict, request: Request, _user: str = Dep
         try:
             core = request.app.state.core
             if core and hasattr(core, 'dispatcher') and hasattr(core.dispatcher, '_agents'):
-                for agent_name, sub_agent in core.dispatcher._agents.items():
+                for sub_agent in core.dispatcher._agents.values():
                     if hasattr(sub_agent, 'reload_personality'):
                         sub_agent.reload_personality()
         except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:

@@ -55,9 +55,9 @@ DEFAULT_SCENARIOS: list[str] = ["tnr_timeout", "tnr_error", "tnr_cascading"]
 
 def make_scenario(
     name: str,
-    health_scorer: Optional[BehavioralHealthScorer] = None,
-    recovery_orchestrator: Optional[RecoveryOrchestrator] = None,
-    degradation_strategy: Optional[DegradationStrategy] = None,
+    health_scorer: BehavioralHealthScorer | None = None,
+    recovery_orchestrator: RecoveryOrchestrator | None = None,
+    degradation_strategy: DegradationStrategy | None = None,
 ) -> TNRProtocol:
     """构建指定场景的 TNRProtocol 实例
 
@@ -120,7 +120,7 @@ async def run_scenario(name: str) -> TNRReport:
 
 
 async def run_all_scenarios(
-    scenarios: Optional[list[str]] = None,
+    scenarios: list[str] | None = None,
 ) -> dict[str, TNRReport]:
     """运行所有 TNR 场景
 
@@ -143,7 +143,7 @@ def run_scenario_sync(name: str) -> TNRReport:
 
 
 def run_all_scenarios_sync(
-    scenarios: Optional[list[str]] = None,
+    scenarios: list[str] | None = None,
 ) -> dict[str, TNRReport]:
     """运行所有 TNR 场景 (同步包装)"""
     return asyncio.run(run_all_scenarios(scenarios))

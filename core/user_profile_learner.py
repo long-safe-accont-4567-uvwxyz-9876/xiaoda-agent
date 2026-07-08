@@ -78,7 +78,7 @@ class UserProfileLearner:
     def _load(self):
         if self._data_path.exists():
             try:
-                with open(self._data_path, "r", encoding="utf-8") as f:
+                with open(self._data_path, encoding="utf-8") as f:
                     self._stats = json.load(f)
             except (json.JSONDecodeError, OSError):
                 self._stats = {}
@@ -275,7 +275,7 @@ class UserProfileLearner:
 
 # ── 单例 ──────────────────────────────────────────────────
 
-_singleton: Optional[UserProfileLearner] = None
+_singleton: UserProfileLearner | None = None
 
 
 def get_user_profile_learner() -> UserProfileLearner:

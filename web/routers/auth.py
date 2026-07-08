@@ -20,9 +20,9 @@ import contextlib
 
 router = APIRouter(tags=["auth"])
 
-_tokens: "OrderedDict[str, float]" = OrderedDict()
+_tokens: OrderedDict[str, float] = OrderedDict()
 _TOKENS_MAX_SIZE = 1000
-_rate_limit: "OrderedDict[str, tuple[int, float]]" = OrderedDict()
+_rate_limit: OrderedDict[str, tuple[int, float]] = OrderedDict()
 _RATE_LIMIT_MAX_SIZE = 1000
 
 _SECRET: str = ""

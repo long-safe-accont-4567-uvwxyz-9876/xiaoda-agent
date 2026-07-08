@@ -116,7 +116,7 @@ def check_ip(ip: str) -> tuple[bool, str]:
     return True, ""
 
 
-def _is_hostname_blocked(hostname: str) -> Optional[str]:
+def _is_hostname_blocked(hostname: str) -> str | None:
     """Step 2: 检查 hostname 是否在危险主机名黑名单中"""
     if not hostname:
         return "空主机名"
@@ -238,7 +238,7 @@ def validate_url(url: str) -> tuple[bool, str]:
     return True, ""
 
 
-def get_pinned_ip(url: str) -> Optional[str]:
+def get_pinned_ip(url: str) -> str | None:
     """获取 URL 主机名锁定的 IP (DNS Pinning, Step 5)
 
     若 ``validate_url`` 尚未执行过, 会先执行一次校验。

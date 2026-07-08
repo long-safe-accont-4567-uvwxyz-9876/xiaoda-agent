@@ -303,7 +303,7 @@ class NahidaCLI:
                     live.update(Text(text, style=MOON_DIM))
                 try:
                     event = await self.chat(user_input, on_status)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     console.print(Text("  ⏱ 等待超时了……", style="red"))
                     continue
             if event.get("type") == "error":

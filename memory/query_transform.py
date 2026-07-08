@@ -25,7 +25,7 @@ class QueryTransformer:
     CHAT_KEYWORDS: ClassVar[set[str]] = {"你好", "嗨", "谢谢", "再见", "哈哈", "早安", "晚安", "在吗", "在不在"}
     MULTIHOP_KEYWORDS: ClassVar[set[str]] = {"和", "与", "比较", "区别", "关系", "之间", "哪个好", "对比"}
 
-    def __init__(self, router: Optional[Any]=None, api_key: str = "", base_url: str = "",
+    def __init__(self, router: Any | None=None, api_key: str = "", base_url: str = "",
                  model: str = "") -> None:
         self._router = router  # 保留兼容，但不再用于查询变换
         self._api_key = api_key or os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
@@ -121,7 +121,7 @@ class QueryTransformer:
                 self._call_free_model(prompt, temperature=0.3, max_tokens=100),
                 timeout=5.0,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("query_transform.hyde_timeout", query=query[:50])
             return None
         except Exception as e:

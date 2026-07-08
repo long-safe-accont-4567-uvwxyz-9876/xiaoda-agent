@@ -33,13 +33,13 @@ _SCENE_MAP = {
 class ConstraintInjector:
     """单例约束注入器，解析 markdown 分段并按预算截断。"""
 
-    _instance: "ConstraintInjector | None" = None
+    _instance: ConstraintInjector | None = None
     _cache: ClassVar[dict[str, str]] = {}        # section_title -> content
     _mtime: float = 0.0
     _path: Path = _DEFAULT_PATH
 
     @classmethod
-    def get_instance(cls, path: Path | None = None) -> "ConstraintInjector":
+    def get_instance(cls, path: Path | None = None) -> ConstraintInjector:
         if cls._instance is None:
             cls._instance = cls()
         if path:

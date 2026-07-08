@@ -204,7 +204,7 @@ class BehavioralHealthScorer:
 
     # ── 周期性监控 ──
 
-    def start_monitoring(self, interval: int = 60) -> Optional[asyncio.Task]:
+    def start_monitoring(self, interval: int = 60) -> asyncio.Task | None:
         """启动周期性评分 (后台 task)
 
         Args:
@@ -273,7 +273,7 @@ class BehavioralHealthScorer:
 
 
 # 全局单例
-_scorer: Optional[BehavioralHealthScorer] = None
+_scorer: BehavioralHealthScorer | None = None
 
 
 def get_behavioral_health_scorer() -> BehavioralHealthScorer:

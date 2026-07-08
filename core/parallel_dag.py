@@ -19,7 +19,8 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any, Optional
+from collections.abc import Callable
 
 from loguru import logger
 
@@ -45,10 +46,10 @@ class DAGNode:
     consumes: list[str] = field(default_factory=list)
     timeout: float = 60.0
     retries: int = 1
-    fallback: Optional[Callable] = None
+    fallback: Callable | None = None
     state: NodeState = NodeState.PENDING
     result: Any = None
-    error: Optional[Exception] = None
+    error: Exception | None = None
     started_at: float = 0
     finished_at: float = 0
 
@@ -108,12 +109,12 @@ class ToolDAG:
         self._waiters: list[asyncio.Event] = []
 
     def add_node(self, name: str, handler: Callable,
-                  args: Optional[dict] = None,
-                  depends_on: Optional[list[str]] = None,
-                  produces: Optional[list[str]] = None,
-                  consumes: Optional[list[str]] = None,
+                  args: dict | None = None,
+                  depends_on: list[str] | None = None,
+                  produces: list[str] | None = None,
+                  consumes: list[str] | None = None,
                   timeout: float = 60.0, retries: int = 1,
-                  fallback: Optional[Callable] = None) -> "ToolDAG":
+                  fallback: Callable | None = None) -> ToolDAG:
         """添加节点"""
         self._nodes[name] = DAGNode(
             name=name, handler=handler,
@@ -255,7 +256,7 @@ class ToolDAG:
                 self._waiters.append(evt)
                 try:
                     await asyncio.wait_for(evt.wait(), timeout=1.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass
                 finally:
                     if evt in self._waiters:

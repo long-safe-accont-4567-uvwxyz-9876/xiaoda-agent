@@ -31,7 +31,8 @@ import sqlite3
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Iterable, Optional, Tuple
+from typing import Any, Optional
+from collections.abc import Iterable
 
 from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -81,7 +82,7 @@ class TokenBucket:
 
     __slots__ = ("_last", "_lock", "_tokens", "capacity", "last_access", "rate_per_min")
 
-    def __init__(self, rate_per_min: float, capacity: Optional[float] = None) -> None:
+    def __init__(self, rate_per_min: float, capacity: float | None = None) -> None:
         self.capacity = float(capacity if capacity is not None else rate_per_min)
         self.rate_per_min = float(rate_per_min)
         self._tokens = self.capacity
@@ -164,12 +165,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(
         self,
         app: Any,
-        global_limit: Optional[float] = None,
-        user_limit: Optional[float] = None,
-        write_limit: Optional[float] = None,
-        exempt_paths: Optional[Iterable[str]] = None,
-        whitelist: Optional[Iterable[str]] = None,
-        persist_path: Optional[str] = None,
+        global_limit: float | None = None,
+        user_limit: float | None = None,
+        write_limit: float | None = None,
+        exempt_paths: Iterable[str] | None = None,
+        whitelist: Iterable[str] | None = None,
+        persist_path: str | None = None,
     ) -> None:
         super().__init__(app)
         # 显式参数优先, 其次环境变量, 最后默认值
@@ -189,7 +190,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._write_buckets: dict = defaultdict(lambda: TokenBucket(self._write_limit))
 
         # F7: 持久化配置
-        self._persist_path: Optional[Path] = Path(persist_path) if persist_path else None
+        self._persist_path: Path | None = Path(persist_path) if persist_path else None
         self._last_save: float = time.time()
         if self._persist_path is not None:
             self._init_persist_db()

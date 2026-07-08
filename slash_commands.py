@@ -52,9 +52,9 @@ def list_commands() -> list[dict]:
 class SlashCommandHandler:
     """斜杠命令处理器，解析并分发 /xxx 命令到对应处理逻辑。"""
 
-    def __init__(self, db: Optional[Any]=None, router: Optional[Any]=None, context: Optional[Any]=None,
-                 memory: Optional[Any]=None, learning_manager: Optional[Any]=None,
-                 notebook_manager: Optional[Any]=None, security: Optional[Any]=None, agent: Optional[Any]=None) -> None:
+    def __init__(self, db: Any | None=None, router: Any | None=None, context: Any | None=None,
+                 memory: Any | None=None, learning_manager: Any | None=None,
+                 notebook_manager: Any | None=None, security: Any | None=None, agent: Any | None=None) -> None:
         self._db = db
         self._router = router
         self._context = context

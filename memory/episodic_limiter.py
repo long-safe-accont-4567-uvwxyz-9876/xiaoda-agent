@@ -32,12 +32,12 @@ class EpisodicLimiter:
     DEFAULT_MAX_ROWS = 10000
     DEFAULT_BATCH_SIZE = 500
 
-    def __init__(self, db_manager: Any, max_rows: Optional[int] = None,
+    def __init__(self, db_manager: Any, max_rows: int | None = None,
                  batch_size: int = DEFAULT_BATCH_SIZE) -> None:
         self._db = db_manager
         self._max_rows = max_rows or self.DEFAULT_MAX_ROWS
         self._batch_size = batch_size
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
 
     async def count_rows(self) -> int:
         """统计当前行数"""
@@ -91,7 +91,7 @@ class EpisodicLimiter:
             logger.error(f"EpisodicLimiter.enforce_failed: {e}")
             return 0
 
-    def start_scheduler(self, interval: float = 3600.0) -> Optional[asyncio.Task]:
+    def start_scheduler(self, interval: float = 3600.0) -> asyncio.Task | None:
         """启动定期清理任务"""
         async def _loop() -> None:
             while True:
@@ -125,7 +125,7 @@ class EpisodicLimiter:
 
 
 # 全局单例
-_limiter: Optional[EpisodicLimiter] = None
+_limiter: EpisodicLimiter | None = None
 
 
 def get_episodic_limiter(db_manager: Any | None=None) -> EpisodicLimiter:

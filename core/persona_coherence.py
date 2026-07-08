@@ -240,7 +240,7 @@ class PersonaCaseRepository:
         if self._cases_path.exists():
             try:
                 import json
-                with open(self._cases_path, "r", encoding="utf-8") as f:
+                with open(self._cases_path, encoding="utf-8") as f:
                     self._cases = json.load(f)
             except Exception as e:
                 logger.warning("persona.case_repo_load_failed", error=str(e))
@@ -336,7 +336,7 @@ class PersonaDriftSuppressor:
 # 全局单例
 # ============================================================
 
-_persona_critic: Optional[PersonaCritic] = None
+_persona_critic: PersonaCritic | None = None
 
 
 def get_persona_critic() -> PersonaCritic:

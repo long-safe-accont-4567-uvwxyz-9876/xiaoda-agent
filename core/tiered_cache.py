@@ -23,7 +23,8 @@ import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
+from collections.abc import Callable
 
 from loguru import logger
 
@@ -57,7 +58,7 @@ class L1MemoryCache:
         self._hits = 0
         self._misses = 0
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         """按 key 取值, 命中则更新 LRU 顺序.
 
         Args:
@@ -79,7 +80,7 @@ class L1MemoryCache:
             self._hits += 1
             return self._store[key]
 
-    def set(self, key: str, value: Any, ttl: Optional[float] = None) -> None:
+    def set(self, key: str, value: Any, ttl: float | None = None) -> None:
         """写入键值, 超容量时淘汰最旧条目.
 
         Args:
@@ -160,7 +161,7 @@ class L2FileCache:
         sub.mkdir(parents=True, exist_ok=True)
         return sub / f"{key}.json"
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         """按 key 从文件读取值, 过期或损坏返回 None."""
         p = self._path(key)
         if not p.exists():
@@ -179,7 +180,7 @@ class L2FileCache:
             self._misses += 1
             return None
 
-    def set(self, key: str, value: Any, ttl: Optional[float] = None) -> None:
+    def set(self, key: str, value: Any, ttl: float | None = None) -> None:
         """原子写入键值到文件 (含过期时间)."""
         p = self._path(key)
         data = {
@@ -299,7 +300,7 @@ class L3SQLiteCache:
         except Exception as e:
             logger.debug("_init_schema SQLite error: {}", e)
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         """按 key 从 SQLite 读取值, 过期则删除并返回 None."""
         try:
             with self._conn() as c:
@@ -320,7 +321,7 @@ class L3SQLiteCache:
             logger.debug("L3SQLiteCache.get({}) error: {}", key, e)
             return None
 
-    def set(self, key: str, value: Any, ttl: Optional[float] = None) -> None:
+    def set(self, key: str, value: Any, ttl: float | None = None) -> None:
         """写入键值 (覆盖已存在记录)."""
         try:
             with self._conn() as c:
@@ -443,8 +444,8 @@ class TieredCache:
             self._locks[key] = lock
             return lock
 
-    async def get(self, key: str, loader: Optional[Callable] = None,
-                  ttl: Optional[float] = None) -> Any:
+    async def get(self, key: str, loader: Callable | None = None,
+                  ttl: float | None = None) -> Any:
         """查询缓存, 未命中时调用 loader 加载
 
         Args:
@@ -518,7 +519,7 @@ class TieredCache:
 # 全局单例
 # ============================================================
 
-_cache: Optional[TieredCache] = None
+_cache: TieredCache | None = None
 
 
 def get_tiered_cache() -> TieredCache:
@@ -532,7 +533,7 @@ def get_tiered_cache() -> TieredCache:
     return _cache
 
 
-def cached(ttl: Optional[float] = None, key_fn: Optional[Callable] = None) -> Any:
+def cached(ttl: float | None = None, key_fn: Callable | None = None) -> Any:
     """装饰器: 三级缓存函数结果
 
     用法:

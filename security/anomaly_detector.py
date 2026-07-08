@@ -225,7 +225,7 @@ class AnomalyDetector:
 
 
 # 全局单例
-_detector: Optional[AnomalyDetector] = None
+_detector: AnomalyDetector | None = None
 
 
 def get_anomaly_detector() -> AnomalyDetector:

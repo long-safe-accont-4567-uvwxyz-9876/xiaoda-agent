@@ -40,7 +40,7 @@ class CommandState:
     event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
-_pending_cmd: Optional[CommandState] = None
+_pending_cmd: CommandState | None = None
 _pending_lock = threading.Lock()
 
 
@@ -59,7 +59,7 @@ async def execute_on_pty(
 
     session = None
     with _pty_sessions_lock:
-        for _sid, sess in _pty_sessions.items():
+        for sess in _pty_sessions.values():
             if sess.get("alive"):
                 session = sess
                 break
@@ -72,7 +72,7 @@ async def execute_on_pty(
     if pending and not pending.event.is_set():
         try:
             await asyncio.wait_for(pending.event.wait(), timeout=5.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             with _pending_lock:
                 _pending_cmd = None
 
@@ -127,7 +127,7 @@ async def execute_on_pty(
 
     try:
         await asyncio.wait_for(state.event.wait(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         with _pending_lock:
             _pending_cmd = None
         logger.warning("pty_executor.timeout cmd='{}' marker={}", command[:60], marker_id)
