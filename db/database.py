@@ -240,7 +240,7 @@ class DatabaseManager:
             logger.info(f"database.migration_v{version}", desc=description)
         except (OSError, RuntimeError) as e:
             err_msg = str(e)
-            await self._conn.execute("ROLLBACK")
+            # 不需要 ROLLBACK：未使用显式事务，executescript 自行管理原子性
             # 记录错误到 dirty state（独立事务）
             try:
                 await self._conn.execute(

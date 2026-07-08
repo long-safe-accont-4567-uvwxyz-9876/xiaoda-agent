@@ -34,6 +34,7 @@ class Credential:
     use_count: int = 0
     error_count: int = 0
     last_used_at: float = 0.0
+    _use_seq: int = 0          # 单调递增序列号，用于精确标识最近使用（避免 time.time 并发精度不足）
 
 
 EXHAUSTED_COOLDOWN = 60.0  # exhausted 凭证冷却期 60 秒
@@ -51,6 +52,8 @@ class CredentialPool:
         # 异步锁保护并发访问（get_credential/report_error/report_success 共享 _pool 和 _cursor）
         self._lock = asyncio.Lock()
         self._sync_lock = threading.Lock()
+        # 单调递增序列号，用于精确标识最近使用的凭证（避免 time.time() 并发精度不足）
+        self._use_seq: int = 0
         self._load_from_env()
 
     def add_credential(self, cred: Credential) -> None:
@@ -87,6 +90,8 @@ class CredentialPool:
                     self._cursor[provider] = (idx + 1) % n
                     cred.use_count += 1
                     cred.last_used_at = time.time()
+                    self._use_seq += 1
+                    cred._use_seq = self._use_seq
                     return cred
 
             # 所有凭证都不可用，尝试找冷却中的 exhausted 凭证
@@ -103,6 +108,8 @@ class CredentialPool:
                     self._cursor[provider] = (idx + 1) % n
                     cred.use_count += 1
                     cred.last_used_at = time.time()
+                    self._use_seq += 1
+                    cred._use_seq = self._use_seq
                     return cred
 
             logger.error("credential_pool.all_dead", provider=provider)
@@ -149,7 +156,10 @@ class CredentialPool:
                 target.state = CredentialState.EXHAUSTED
                 target.exhausted_at = time.time()
                 # 使用 API 返回的实际退避时间，取较大值
-                backoff = max(EXHAUSTED_COOLDOWN, error.backoff_seconds) if error.backoff_seconds > 0 else EXHAUSTED_COOLDOWN
+                backoff = max(
+                    EXHAUSTED_COOLDOWN,
+                    error.backoff_seconds,
+                ) if error.backoff_seconds > 0 else EXHAUSTED_COOLDOWN
                 # 记录冷却结束的绝对时间戳
                 target.cooldown_until = time.time() + backoff
                 logger.warning("credential_pool.credential_exhausted",
@@ -202,16 +212,20 @@ class CredentialPool:
                                     key_suffix=cred.api_key[-6:] if len(cred.api_key) >= 6 else "***")
 
     def _find_active_credential(self, provider: str) -> Credential | None:
-        """找到最近使用的活跃凭证（ok 或 exhausted 状态）"""
+        """找到最近使用的活跃凭证（ok 或 exhausted 状态）
+
+        使用单调递增序列号 _use_seq 而非 last_used_at 时间戳，
+        避免并发下 time.time() 精度不足导致误标记其他凭证。
+        """
         creds = self._pool.get(provider, [])
         if not creds:
             return None
 
-        # 优先找 last_used_at 最大的非 dead 凭证
+        # 优先找 _use_seq 最大的非 dead 凭证（序列号保证单调递增，无并发精度问题）
         active = [c for c in creds if c.state != CredentialState.DEAD]
         if not active:
             return None
-        return max(active, key=lambda c: c.last_used_at)
+        return max(active, key=lambda c: c._use_seq)
 
     def reset_provider(self, provider: str) -> None:
         """重置指定 provider 的所有凭证状态为 OK（用于 Setup 保存新 Key 后恢复）。"""

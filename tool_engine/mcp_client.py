@@ -11,7 +11,7 @@ import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
@@ -490,6 +490,9 @@ class MCPClient:
             return
 
         if not self._process or self._process.returncode is not None:
+            logger.warning("mcp_client.notify_no_transport",
+                           server=self.server_name,
+                           transport=self._config.transport)
             return
 
         line = json.dumps(msg) + "\n"
@@ -894,8 +897,6 @@ class MCPManager:
 
 
 # ── SDK MCP Server（进程内 MCP）──────────────────────────
-
-from typing import Callable, Awaitable
 
 
 @dataclass
