@@ -48,20 +48,6 @@ onMounted(async () => {
       const result = await resp.json()
       if (result.data?.token) {
         noPassword.value = true
-        await auth.login('')
-        try {
-          const data = await api.getSetupFirstRun()
-          if (data?.first_run) {
-            router.replace('/setup')
-            return
-          }
-          if (!data?.profile_done) {
-            router.replace('/setup/profile')
-            return
-          }
-        } catch { /* 检查失败，走正常流程 */ }
-        router.replace('/')
-        return
       }
     } else {
       noPassword.value = false
