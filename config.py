@@ -803,6 +803,14 @@ CHILD_CHUNK_SEGMENT_MAX_LEN = _safe_int(os.getenv("CHILD_CHUNK_SEGMENT_MAX_LEN")
 CHILD_VEC_TABLE = "memories_child_vec"
 CHILD_CHUNK_TYPES = ["segment", "entity", "decision", "topic"]
 
+# ── 子Agent LLM调用超时配置 ──
+# 单次LLM API调用超时(秒); 网络抖动时会重试一次(用半超时值)
+SUB_AGENT_API_TIMEOUT = _safe_int(os.getenv("SUB_AGENT_API_TIMEOUT"), 60)
+# 整个对话循环(多轮工具调用)总超时(秒)
+SUB_AGENT_TOTAL_TIMEOUT = _safe_int(os.getenv("SUB_AGENT_TOTAL_TIMEOUT"), 150)
+# LLM调用超时后重试次数(0=不重试, 1=重试1次用半超时)
+SUB_AGENT_API_RETRY = _safe_int(os.getenv("SUB_AGENT_API_RETRY"), 1)
+
 # ── 性能优化开关 ──────────────────────────────────────────────
 # Task 6: TTS 异步化（方案 B）—— 开启后 TTS 在后台合成，先返回文字回复
 TTS_ASYNC_MODE = os.getenv("TTS_ASYNC_MODE", "true").lower() in ("1", "true", "yes")
@@ -957,6 +965,9 @@ __all__ = [
     "STREAM_STATUS_PUSH",
     "STREAM_TEXT_PUSH",
     "STREAM_TOOL_STATUS",
+    "SUB_AGENT_API_RETRY",
+    "SUB_AGENT_API_TIMEOUT",
+    "SUB_AGENT_TOTAL_TIMEOUT",
     "TTS_ASYNC_MODE",
     "VOICE_REF_DIR",
     "WORKSPACE_DIR",

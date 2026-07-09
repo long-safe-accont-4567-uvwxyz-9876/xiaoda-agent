@@ -472,8 +472,11 @@ class SubAgent:
         max_rounds = self.config.max_turns if self.config.max_turns is not None else 5
         working = list(messages)
         tool_names = self._filtered_tool_names()
-        api_timeout = 60
-        total_deadline = asyncio.get_running_loop().time() + 150
+        # 超时配置从 config 读取 (支持环境变量覆盖)
+        import config as _cfg
+        api_timeout = getattr(_cfg, 'SUB_AGENT_API_TIMEOUT', 60)
+        total_timeout = getattr(_cfg, 'SUB_AGENT_TOTAL_TIMEOUT', 150)
+        total_deadline = asyncio.get_running_loop().time() + total_timeout
         is_reasoning = self._is_reasoning_model()
 
         # 选择 extractor：推理模型用 DSML，否则用标准
@@ -544,27 +547,53 @@ class SubAgent:
 
     async def _call_llm_one_round(self, working: list[dict], tools: list[dict] | None,
                                   remaining: float, round_idx: int) -> Any:
-        """单轮调用 LLM API; 超时返回用户可见的提示字符串, 成功返回响应对象"""
-        api_timeout = 60
-        try:
-            t0 = asyncio.get_running_loop().time()
-            response = await asyncio.wait_for(
-                self._client.chat.completions.create(
-                    model=self.config.model,
-                    messages=working,
-                    max_tokens=1024 if tools else 800,
-                    temperature=0.9,
-                    tools=tools,
-                    tool_choice="auto" if tools else None,
-                ),
-                timeout=min(api_timeout, remaining),
-            )
-            elapsed = asyncio.get_running_loop().time() - t0
-            logger.info("sub_agent.api_ok", name=self.config.name, round=round_idx, elapsed=f"{elapsed:.1f}s")
-            return response
-        except TimeoutError:
-            logger.warning("sub_agent.api_timeout", name=self.config.name, round=round_idx)
-            return f"{self.config.display_name}思考时间太长了，请稍后再试吧～"
+        """单轮调用 LLM API; 超时返回用户可见的提示字符串, 成功返回响应对象
+
+        超时重试: 网络抖动导致首次超时时, 用半超时值重试一次 (工业标准做法).
+        重试也超时才返回错误提示.
+        """
+        import config as _cfg
+        api_timeout = getattr(_cfg, 'SUB_AGENT_API_TIMEOUT', 60)
+        retry_count = getattr(_cfg, 'SUB_AGENT_API_RETRY', 1)
+        loop = asyncio.get_running_loop()
+
+        for attempt in range(max(retry_count, 0) + 1):
+            # 每次重试使用半超时值 (重试时网络通常已恢复, 用更短超时快速失败)
+            cur_timeout = api_timeout if attempt == 0 else api_timeout / 2
+            cur_timeout = min(cur_timeout, remaining)
+            if remaining < 5:
+                # 总循环剩余时间不足以做有意义的调用
+                return f"{self.config.display_name}思考时间太长了，请稍后再试吧～"
+            try:
+                t0 = loop.time()
+                response = await asyncio.wait_for(
+                    self._client.chat.completions.create(
+                        model=self.config.model,
+                        messages=working,
+                        max_tokens=1024 if tools else 800,
+                        temperature=0.9,
+                        tools=tools,
+                        tool_choice="auto" if tools else None,
+                    ),
+                    timeout=cur_timeout,
+                )
+                elapsed = loop.time() - t0
+                logger.info("sub_agent.api_ok", name=self.config.name,
+                            round=round_idx, attempt=attempt, elapsed=f"{elapsed:.1f}s")
+                return response
+            except TimeoutError:
+                if attempt < retry_count:
+                    logger.warning("sub_agent.api_timeout_retry",
+                                   name=self.config.name, round=round_idx,
+                                   attempt=attempt, next_timeout=f"{cur_timeout/2:.1f}s")
+                    # 更新 remaining (扣除已等待时间)
+                    remaining -= cur_timeout
+                    continue
+                logger.warning("sub_agent.api_timeout", name=self.config.name,
+                               round=round_idx, attempts=attempt + 1)
+                return f"{self.config.display_name}思考时间太长了，请稍后再试吧～"
+        # 防御性兜底: retry_count 为负数时 for 循环不执行, 确保始终有返回值
+        return f"{self.config.display_name}思考时间太长了，请稍后再试吧～"
 
     async def _execute_round_tool_calls(self, extracted: Any, working: list[dict]) -> None:
         """并行执行本轮工具调用, 将结果 (含错误) 追加到 working"""
