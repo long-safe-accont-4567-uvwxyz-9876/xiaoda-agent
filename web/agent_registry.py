@@ -299,13 +299,29 @@ class AgentRegistry:
 
     def list(self) -> list[dict]:
         """列出所有 Agent（主体 + 已注册子代理 + 降级桩）。"""
+        # 先加载 xiaoda 配置（用于后续计算 tool_count 和显示名称）
+        xiaoda_cfg = self._load_xiaoda_cfg()
+
+        # 计算主 agent 的实际可用工具数：全部工具 - webui_overrides 禁用工具 - 子代理禁用工具 - excluded_tools
+        all_tools = self._all_tool_names()
+        blocked = self._blocked()
+        disabled_by_webui: set[str] = set()
+        try:
+            from web.config_service import get_config_service
+            tools_cfg = get_config_service().get("tools", {})
+            disabled_by_webui = {n for n, c in tools_cfg.items() if isinstance(c, dict) and not c.get("enabled", True)}
+        except Exception:
+            logger.debug("registry.webui_tools_error", exc_info=True)
+        excluded = set(xiaoda_cfg.get("excluded_tools") or [])
+        tool_count = len([t for t in all_tools
+                          if t not in blocked and t not in disabled_by_webui and t not in excluded])
+
         main = dict(MAIN_AGENT_META,
                     model=self._main_model(),
                     provider=_config.DEFAULT_PROVIDER,
-                    tool_count=len(self._all_tool_names()),
+                    tool_count=tool_count,
                     mcp_servers=[])
         # 加载小妲持久化的 voice_ref / display_name
-        xiaoda_cfg = self._load_xiaoda_cfg()
         if "voice_ref" in xiaoda_cfg:
             main["voice_ref"] = xiaoda_cfg["voice_ref"]
         if xiaoda_cfg.get("display_name"):
