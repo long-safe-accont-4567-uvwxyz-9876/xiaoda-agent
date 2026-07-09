@@ -146,6 +146,10 @@ async function fetchModels() {
 function onConfigChanged(e: any) {
   if (e.domain === 'models') {
     fetchModels()
+    // 关键修复：路由表变化时也刷新当前模型状态（修复设置页切换模型后主页不同步）
+    if (!chat.currentAgent || chat.currentAgent === 'xiaoda') {
+      fetchCurrentModel()
+    }
   }
 }
 
