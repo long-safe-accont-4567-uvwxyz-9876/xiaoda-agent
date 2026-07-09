@@ -231,6 +231,7 @@ function mountTerminal(session: TermSession, shell: string, retries = 0) {
   // 双重延迟确保容器尺寸稳定（DOM 渲染 + CSS 布局完成）
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
+      if (!session.alive) return
       session.fitAddon.fit()
 
       const dims = session.fitAddon.proposeDimensions()
@@ -304,6 +305,7 @@ watch(panelOpen, (v) => {
       // 等两帧让 DOM 尺寸稳定后再 fit
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
+          if (!s.alive) return
           s.fitAddon.fit()
           s.terminal.focus()
         })
@@ -320,6 +322,7 @@ function onPanelOpened() {
   const s = activeSession.value
   if (s) {
     setTimeout(() => {
+      if (!s.alive) return
       s.fitAddon.fit()
       s.terminal.focus()
     }, 50)

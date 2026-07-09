@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, watch, ref } from 'vue'
+import { computed, watch, ref, onBeforeUnmount } from 'vue'
 import { useChatStore } from '../../stores/chat'
 import { useRouter } from 'vue-router'
 import { t } from '../../i18n'
@@ -23,10 +23,15 @@ const EMOTIONS: Record<string, { color: string; emoji: string }> = {
 const current = computed(() => EMOTIONS[chat.lastEmotion] || EMOTIONS['平静'])
 const pulse = ref(false)
 
+let pulseRAF = 0
+
 watch(() => chat.lastEmotion, () => {
   pulse.value = false
-  requestAnimationFrame(() => { pulse.value = true })
+  cancelAnimationFrame(pulseRAF)
+  pulseRAF = requestAnimationFrame(() => { pulse.value = true })
 })
+
+onBeforeUnmount(() => { cancelAnimationFrame(pulseRAF) })
 </script>
 
 <template>

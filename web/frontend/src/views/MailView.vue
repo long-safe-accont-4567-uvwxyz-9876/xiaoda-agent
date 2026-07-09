@@ -70,6 +70,7 @@ const saving = ref(false)
 
 // 自动保存（debounce）：config 变化后延迟 400ms 自动 PUT
 let saveTimer: ReturnType<typeof setTimeout> | null = null
+let authCheckTimer: ReturnType<typeof setTimeout> | null = null
 let initialized = false  // 防止首次 loadConfig 触发自动保存
 
 // 免打扰小时选项（0-23，起止相同=不启用）
@@ -183,7 +184,7 @@ async function triggerAuthLogin() {
       } else {
         message.info(res.message || t('mailView.authBrowserOpened'))
         // 等待 5 秒后检查授权状态
-        setTimeout(async () => {
+        authCheckTimer = window.setTimeout(async () => {
           try {
             await loadAuthStatus()
             if (authStatus.value?.authorized) {
@@ -292,6 +293,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   if (saveTimer) clearTimeout(saveTimer)
+  if (authCheckTimer) clearTimeout(authCheckTimer)
 })
 </script>
 
