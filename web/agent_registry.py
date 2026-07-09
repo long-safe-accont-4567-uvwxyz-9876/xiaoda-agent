@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -17,7 +18,7 @@ from pathlib import Path
 from loguru import logger
 
 # frozen 模式下使用用户目录（~/.ai-agent/data/config/agents/），避免写入 _MEIPASS 只读目录
-from config import AGENTS_CONFIG_DIR, DEFAULT_PROVIDER, _FALLBACK_BASE, get_agent_display_name
+from config import AGENTS_CONFIG_DIR, DEFAULT_PROVIDER, MEDIA_DIR, _FALLBACK_BASE, get_agent_display_name
 
 
 def _resolve_personality_path(pf: str) -> str | None:
@@ -76,6 +77,65 @@ DEFAULT_WALLPAPERS = {
     "xiaolian": "/media/wallpapers/xiaolian.jpg",
     "xiaoke": "/media/wallpapers/xiaoke.jpg",
 }
+# webui_background.jpg 也放到 media 路径，供 AgentBackdrop.vue DEFAULT_BG 使用
+_DEFAULT_BG_NAME = "webui_background.jpg"
+
+
+def _ensure_default_wallpapers() -> None:
+    """首次启动时，将默认壁纸从源目录复制到 MEDIA_DIR/wallpapers/。
+
+    源目录优先级：
+    1. web/frontend/public/assets/wallpapers/（dev 模式）
+    2. web/dist/assets/wallpapers/（vite build 产物）
+    3. _MEIPASS（PyInstaller 打包）
+    """
+    target_dir = MEDIA_DIR / "wallpapers"
+    # 收集所有需要确保存在的默认壁纸文件名
+    needed: set[str] = set()
+    for url in DEFAULT_WALLPAPERS.values():
+        needed.add(Path(url).name)
+    needed.add(_DEFAULT_BG_NAME)
+
+    # 检查哪些已存在
+    missing = [f for f in needed if not (target_dir / f).exists()]
+    if not missing:
+        return
+
+    # 寻找源目录
+    src_dir: Path | None = None
+    meipass = getattr(sys, "_MEIPASS", None)
+    candidates = [
+        _FALLBACK_BASE / "web" / "frontend" / "public" / "assets" / "wallpapers",
+        _FALLBACK_BASE / "web" / "dist" / "assets" / "wallpapers",
+    ]
+    if meipass:
+        candidates.insert(0, Path(meipass) / "web" / "frontend" / "public" / "assets" / "wallpapers")
+        candidates.insert(1, Path(meipass) / "web" / "dist" / "assets" / "wallpapers")
+    for c in candidates:
+        if c.is_dir() and any((c / f).exists() for f in missing):
+            src_dir = c
+            break
+
+    if not src_dir:
+        logger.debug("agent_registry.wallpaper_init_skip: no source dir found for {}", missing)
+        return
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for fname in missing:
+        src = src_dir / fname
+        if src.exists():
+            try:
+                shutil.copy2(src, target_dir / fname)
+                copied += 1
+            except OSError as e:
+                logger.debug("agent_registry.wallpaper_copy_failed {}: {}", fname, e)
+    if copied:
+        logger.info("agent_registry.wallpaper_init: copied {} defaults to {}", copied, target_dir)
+
+
+_ensure_default_wallpapers()
+
 # 主体小妲不是 SubAgent，但要出现在 Agent 列表里供切换
 MAIN_AGENT_META = {
     "name": "xiaoda",

@@ -277,13 +277,10 @@ async def upload_wallpaper(name: str, body: dict, request: Request, _user: str =
     fp = _WALLPAPER_DIR / f"{name}_{ts}.{ext}"
     fp.write_bytes(raw)
     url = f"/media/wallpapers/{fp.name}"
-    # 清理该 agent 的旧壁纸文件（保留最新一张，清理所有扩展名）
+    # 清理该 agent 的旧上传壁纸文件（保留最新一张，不删除默认壁纸 {name}.ext）
     try:
         for old in _WALLPAPER_DIR.glob(f"{name}_*.*"):
             if old != fp and old.suffix.lstrip(".") in _EXT:
-                old.unlink(missing_ok=True)
-        for old in _WALLPAPER_DIR.glob(f"{name}.*"):
-            if old.suffix.lstrip(".") in _EXT:
                 old.unlink(missing_ok=True)
     except OSError:
         pass

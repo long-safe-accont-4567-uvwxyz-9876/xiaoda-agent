@@ -37,7 +37,12 @@ watch(targetUrl, (url) => {
   if (topUrl() === url) return
   const img = new Image()
   img.onload = () => { if (pendingUrl === url) pushLayer(url) }
-  img.onerror = () => { if (pendingUrl === url) pushLayer(DEFAULT_BG) }
+  img.onerror = () => {
+    if (pendingUrl !== url) return
+    // 如果失败的 URL 本身就是 DEFAULT_BG，不再重试，直接显示 tint 底色
+    if (url === DEFAULT_BG) return
+    pushLayer(DEFAULT_BG)
+  }
   img.src = url
 })
 
