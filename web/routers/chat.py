@@ -28,6 +28,7 @@ except ImportError:
     UPLOAD_DIR = Path(__file__).resolve().parent.parent / "media" / "upload"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
+_ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 
 def _strip_tags(text: str) -> str:
@@ -186,7 +187,9 @@ async def upload_image(file: UploadFile = File(...)) -> Any:
     content = await file.read()
     if len(content) > MAX_IMAGE_SIZE:
         raise HTTPException(400, "图片大小不能超过 10MB")
-    ext = Path(file.filename or "image.png").suffix or ".png"
+    ext = Path(file.filename or "image.png").suffix.lower() or ".png"
+    if ext not in _ALLOWED_IMAGE_EXTS:
+        raise HTTPException(400, f"不支持的图片格式，仅允许 {', '.join(sorted(_ALLOWED_IMAGE_EXTS))}")
     filename = f"{uuid.uuid4().hex[:12]}{ext}"
     dest = UPLOAD_DIR / filename
     dest.write_bytes(content)

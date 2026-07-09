@@ -33,6 +33,11 @@ const showSessions = ref(false)
 const sessions = ref<any[]>([])
 const playingUrl = ref('')
 const lightboxUrl = ref('')
+const lightboxRef = ref<HTMLElement | null>(null)
+
+watch(lightboxUrl, (url) => {
+  if (url) nextTick(() => lightboxRef.value?.focus())
+})
 let audioEl: HTMLAudioElement | null = null
 
 const showPalette = computed(() => inputText.value.startsWith('/') && !inputText.value.includes(' '))
@@ -195,14 +200,21 @@ async function startNew() {
   message.success(t('chatView.newSessionStarted'))
 }
 
-function copyText(text: string) {
-  navigator.clipboard.writeText(text)
-  message.success(t('chatView.copied'))
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    message.success(t('chatView.copied'))
+  } catch {
+    message.error(t('chatView.copyFailed'))
+  }
 }
 
-function resend(msg: { content: string }) {
+function resend(msg: { content: string; imageUrl?: string }) {
   if (chat.isProcessing) return
-  chat.sendMessage(msg.content)
+  let text = msg.content
+  const imageUrl = msg.imageUrl
+  if (imageUrl) text += `\n[Image: ${imageUrl}]`
+  chat.sendMessage(text, imageUrl)
 }
 
 function clearAll() {
@@ -304,7 +316,7 @@ const emotionColors: Record<string, string> = {
 
     <teleport to="body">
       <transition name="lightbox-fade">
-        <div v-if="lightboxUrl" class="lightbox" @click="lightboxUrl = ''"
+        <div v-if="lightboxUrl" ref="lightboxRef" class="lightbox" @click="lightboxUrl = ''"
              @keydown.esc="lightboxUrl = ''" tabindex="-1">
           <img :src="lightboxUrl" :alt="t('chatView.preview')" />
         </div>

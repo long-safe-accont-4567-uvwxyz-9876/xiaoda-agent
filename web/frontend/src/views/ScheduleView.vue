@@ -12,7 +12,8 @@ import Tilt3D from '../components/fx/Tilt3D.vue'
 const message = useMessage()
 
 const config = ref<any>({ enabled: true, greeting_max_per_day: 3 })
-const dndPeriods = ref<Array<{ start: string; end: string }>>([])
+let _dndSeq = 0
+const dndPeriods = ref<Array<{ start: string; end: string; _key: number }>>([])
 const greetings = ref<any[]>([])
 const history = ref<any[]>([])
 
@@ -28,7 +29,7 @@ onMounted(loadAll)
 async function loadAll() {
   try {
     config.value = await get('/schedule/config')
-    dndPeriods.value = config.value.dnd_periods || []
+    dndPeriods.value = (config.value.dnd_periods || []).map((p: any) => ({ ...p, _key: ++_dndSeq }))
     greetings.value = await get<any[]>('/schedule/greetings')
     history.value = await get<any[]>('/schedule/history?days=7')
   } catch (e: any) {
@@ -48,13 +49,15 @@ async function saveConfig() {
 
 async function saveDnd() {
   try {
-    dndPeriods.value = await put('/schedule/dnd', { periods: dndPeriods.value })
+    const cleaned = dndPeriods.value.map(p => ({ start: p.start, end: p.end }))
+    const result = await put('/schedule/dnd', { periods: cleaned })
+    dndPeriods.value = result.map((p: any) => ({ ...p, _key: ++_dndSeq }))
     message.success(t('scheduleView.quietUpdated'))
   } catch (e: any) { message.error(e.message) }
 }
 
 function addDnd() {
-  dndPeriods.value.push({ start: '23:00', end: '08:00' })
+  dndPeriods.value.push({ start: '23:00', end: '08:00', _key: ++_dndSeq })
 }
 
 function removeDnd(i: number) {
@@ -62,10 +65,14 @@ function removeDnd(i: number) {
   saveDnd()
 }
 
+function safeJsonParse(text: string, fallback: any) {
+  try { return JSON.parse(text) } catch { return fallback }
+}
+
 function openForm(g: any | null) {
   isCreate.value = !g
   form.value = g
-    ? { ...g, days: JSON.parse(g.days || '[]'), channels: JSON.parse(g.channels || '["web"]') }
+    ? { ...g, days: safeJsonParse(g.days || '[]', []), channels: safeJsonParse(g.channels || '["web"]', ['web']) }
     : { type: 'fixed', time: '08:30', window_start: '09:00', window_end: '22:00',
         count_per_day: 2, days: [1, 2, 3, 4, 5, 6, 7], channels: ['web'], prompt_hint: '' }
   showForm.value = true
@@ -122,9 +129,14 @@ async function testFire(channels: string[] = ['web']) {
 }
 
 function describeDays(daysJson: string): string {
-  const days: number[] = JSON.parse(daysJson || '[]')
+  let days: number[]
+  try { days = JSON.parse(daysJson || '[]') } catch { days = [] }
   if (days.length === 7) return t('scheduleView.everyday')
-  return t('scheduleView.weekPrefix') + days.map(d => weekLabels.value[d - 1]).join('/')
+  return t('scheduleView.weekPrefix') + days.map(d => weekLabels.value[d - 1] || d).join('/')
+}
+
+function parseChannels(channelsJson: string): string {
+  try { return JSON.parse(channelsJson || '[]').join('+') } catch { return '?' }
 }
 
 const reasonLabel: Record<string, string> = {
@@ -167,7 +179,7 @@ const reasonLabel: Record<string, string> = {
               <template v-else>{{ describeDays(g.days) }} {{ g.window_start }}~{{ g.window_end }} {{ tf('scheduleView.randomTimes', g.count_per_day) }}</template>
             </span>
             <n-tag v-if="g.prompt_hint" size="tiny" :bordered="false">{{ g.prompt_hint }}</n-tag>
-            <n-tag size="tiny" type="info" :bordered="false">{{ JSON.parse(g.channels || '[]').join('+') }}</n-tag>
+            <n-tag size="tiny" type="info" :bordered="false">{{ parseChannels(g.channels) }}</n-tag>
           </div>
           <div class="g-ops">
             <n-switch size="small" :value="!!g.enabled"
@@ -189,7 +201,7 @@ const reasonLabel: Record<string, string> = {
         <n-button size="small" @click="addDnd">{{ t('scheduleView.addSlot') }}</n-button>
       </div>
       <div class="dnd-list">
-        <div v-for="(p, i) in dndPeriods" :key="i" class="dnd-row">
+        <div v-for="(p, i) in dndPeriods" :key="p._key" class="dnd-row">
           <n-time-picker :formatted-value="p.start" format="HH:mm" value-format="HH:mm"
                          @update:formatted-value="(v: string | null) => { if (v) { p.start = v; saveDnd() } }" />
           <span>—</span>

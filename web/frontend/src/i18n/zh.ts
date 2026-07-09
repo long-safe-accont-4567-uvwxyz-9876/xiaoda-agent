@@ -248,6 +248,7 @@ export default {
     ttsFailed: 'TTS 失败',
     newSessionStarted: '已开启新会话',
     copied: '已复制',
+    copyFailed: '复制失败',
     cleared: '对话已清空',
   },
 

@@ -248,6 +248,7 @@ export default {
     ttsFailed: 'TTS failed',
     newSessionStarted: 'New session started',
     copied: 'Copied',
+    copyFailed: 'Copy failed',
     cleared: 'Conversation cleared',
   },
 

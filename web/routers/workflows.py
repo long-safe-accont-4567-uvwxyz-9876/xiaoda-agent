@@ -59,6 +59,9 @@ def _wf_path(wf_id: str) -> Any:
 
 
 def _skill_path(name: str) -> Any:
+    name = (name or "").strip().replace("/", "").replace("\\", "").replace("..", "")
+    if not name:
+        raise HTTPException(400, "工作流 name 不能为空")
     return _skills_dir() / f"wf_{name}.md"
 
 

@@ -253,11 +253,14 @@ export const useChatStore = defineStore('chat', () => {
     const lastUserIdx = [...messages.value].reverse().findIndex(m => m.role === 'user')
     if (lastUserIdx < 0) return
     const idx = messages.value.length - 1 - lastUserIdx
-    const text = messages.value[idx].content
+    const msg = messages.value[idx]
+    let text = msg.content
+    const imageUrl = msg.imageUrl
+    if (imageUrl) text += `\n[Image: ${imageUrl}]`
     // 移除该条用户消息之后的所有消息（旧回复/错误），重新发送
     messages.value.splice(idx)
     clearMarkdownCache()
-    sendMessage(text)
+    sendMessage(text, imageUrl)
   }
 
   function clearMessages() {

@@ -226,7 +226,7 @@ function fpsProbe(now: number) {
 
 watch(() => ui.particles, () => {
   if (count() > 0 && !glowDot) initGlowDot()
-  rebuild()
+  resize()
   if (count() === 0) stop()
   else start()
 })
