@@ -1,7 +1,7 @@
 {
   "name": "xiaoda-webui",
   "private": true,
-  "version": "0.5.02",
+  "version": "0.5.03",
   "type": "module",
   "scripts": {
     "dev": "vite",
