@@ -24,7 +24,7 @@ from emotion.emotion_simple import detect_emotion, build_emotion_hint
 from emotion.emotion_enum import CN_TO_EN, is_unified, ensure_emotion_tag
 from tool_engine.tool_registry import to_openai_tools
 from utils.text_utils import (has_dsml_tool_calls, parse_dsml_tool_calls,
-                              humanize, encode_image_to_base64)
+                              humanize, encode_image_to_base64, strip_reasoning)
 
 # 从 _shared 导入共享常量, 避免重复定义 (该模块极轻量, 无循环导入风险)
 from agent_core._shared import DEGRADED_REPLY
@@ -383,6 +383,8 @@ class MessageProcessorMixin:
                 emotion_label = ensured_emotion.value
 
         clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
+        # 清理模型输出的推理/思考内容（Agnes 等模型会输出 [emotion thinking] 等标签）
+        clean_reply = strip_reasoning(clean_reply)
         clean_reply = humanize(clean_reply, style="xiaoda")
 
         audio_path, tts_pending, tts_text = await self._build_voice_result(
