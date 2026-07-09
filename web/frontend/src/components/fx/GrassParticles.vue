@@ -225,21 +225,22 @@ function fpsProbe(now: number) {
 }
 
 watch(() => ui.particles, () => {
+  if (count() > 0 && !glowDot) initGlowDot()
   rebuild()
   if (count() === 0) stop()
   else start()
 })
 
 onMounted(() => {
+  window.addEventListener('resize', resize)
+  window.addEventListener('mousemove', onMouse, { passive: true })
+  document.addEventListener('visibilitychange', onVisibility)
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
     ui.setParticles('off')
     return
   }
   initGlowDot()
   resize()
-  window.addEventListener('resize', resize)
-  window.addEventListener('mousemove', onMouse, { passive: true })
-  document.addEventListener('visibilitychange', onVisibility)
   start()
   fpsRAF = requestAnimationFrame(fpsProbe)
 })
