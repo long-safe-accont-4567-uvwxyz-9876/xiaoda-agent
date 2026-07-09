@@ -2,10 +2,9 @@
   "name": "xiaoli",
   "display_name": "小莉",
   "display_name_en": "Xiaoli",
-  "deprecated_names": ["可莉", "keli"],
-  "provider": "agnes",
-  "model": "agnes-2.0-flash",
-  "personality_file": "config/agents/xiaoli_personality.md",
+  "provider": "siliconflow",
+  "model": "nex-agi/Nex-N2-Pro",
+  "personality_file": "/home/orangepi/ai-agent/config/agents/xiaoli_personality.md",
   "voice_ref": "xiaoli/xiaoli",
   "excluded_tools": [
     "call_xiaoli",
@@ -61,8 +60,8 @@
     "wolfram_query",
     "write_file"
   ],
-  "base_url": "https://apihub.agnes-ai.com/v1",
-  "api_key_env": "AGNES_API_KEY",
+  "base_url": "https://api.siliconflow.cn/v1",
+  "api_key_env": "SILICONFLOW_API_KEY",
   "capabilities": [
     "chat",
     "play",
@@ -86,5 +85,5 @@
     ".env.*",
     "config/agents/*_personality.md"
   ],
-  "_saved_at": 1783308635.0612404
+  "_saved_at": 1783609947.6382287
 }

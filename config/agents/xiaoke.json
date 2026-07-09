@@ -2,14 +2,13 @@
   "name": "xiaoke",
   "display_name": "小可",
   "display_name_en": "Xiaoke",
-  "deprecated_names": ["尼可", "nike"],
   "provider": "agnes",
   "model": "agnes-2.0-flash",
-  "personality_file": "config/agents/xiaoke_personality.md",
+  "personality_file": "/home/orangepi/ai-agent/config/agents/xiaoke_personality.md",
   "voice_ref": null,
   "excluded_tools": [
-    "call_xiaoli",
     "call_xiaoda",
+    "call_xiaoli",
     "gpio_control",
     "hardware_status",
     "i2c_comm",
@@ -83,5 +82,6 @@
     "*.env",
     "security/*",
     "config/agents/*_personality.md"
-  ]
+  ],
+  "_saved_at": 1783610076.9460287
 }
