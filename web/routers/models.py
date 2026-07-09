@@ -270,6 +270,10 @@ async def update_route(task: str, body: dict, request: Request) -> Any:
         "thinking": bool(entry.get("thinking")),
         "timeout": _router_of(request).TASK_TIMEOUTS.get(task),
     })
+    # 同步更新 models.chat_model，使 GET /models/chat-model 返回最新值
+    if task == "chat":
+        cfg.set("models.chat_model", {"provider": entry.get("client", "mimo"),
+                                       "model_id": entry["model"]})
     await _audit(request, "route.update", json.dumps({task: body}, ensure_ascii=False))
     await _broadcast_changed()
     return Envelope(data={"task": task, "model": entry["model"],
