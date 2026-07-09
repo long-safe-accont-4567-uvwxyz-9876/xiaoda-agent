@@ -439,6 +439,7 @@ class SubAgent:
         return any(kw in model for kw in [
             "v4-flash", "v4-pro", "v3", "reasoner", "r1",
             "nex-n2", "nex-agi", "thinking", "o1", "o3", "o4",
+            "agnes",  # agnes 系列模型默认开启推理模式
         ])
 
     def _build_dsml_tool_prompt(self) -> str:
@@ -517,7 +518,11 @@ class SubAgent:
                 content = strip_dsml(content)
                 content = strip_reasoning(content)
                 logger.info("sub_agent.chat.ok", name=self.config.name, model=self.config.model, rounds=round_idx)
-                return content.strip()
+                result = content.strip()
+                # 兜底：如果过滤后为空（如模型只输出推理泄露），返回提示
+                if not result:
+                    return f"{self.config.display_name}思考了一下，但还没有整理好回答，请稍等或换个问题问我吧～"
+                return result
 
             # 构造 assistant 消息并加入 working
             working.append(self._build_assistant_msg(msg, extracted, is_dsml))
@@ -566,6 +571,14 @@ class SubAgent:
                 return f"{self.config.display_name}思考时间太长了，请稍后再试吧～"
             try:
                 t0 = loop.time()
+                # 为 agnes 模型读取全局 thinking 配置
+                extra_body = None
+                if self.config.provider == "agnes":
+                    # 读取 ROUTE_TABLE 中 chat 任务的 thinking 配置（全局开关）
+                    from model_router import ROUTE_TABLE
+                    chat_config = ROUTE_TABLE.get("chat", {})
+                    thinking_enabled = chat_config.get("thinking") is not None
+                    extra_body = {"chat_template_kwargs": {"enable_thinking": thinking_enabled}}
                 response = await asyncio.wait_for(
                     self._client.chat.completions.create(
                         model=self.config.model,
@@ -574,12 +587,14 @@ class SubAgent:
                         temperature=0.9,
                         tools=tools,
                         tool_choice="auto" if tools else None,
+                        extra_body=extra_body,
                     ),
                     timeout=cur_timeout,
                 )
                 elapsed = loop.time() - t0
                 logger.info("sub_agent.api_ok", name=self.config.name,
-                            round=round_idx, attempt=attempt, elapsed=f"{elapsed:.1f}s")
+                            round=round_idx, attempt=attempt, elapsed=f"{elapsed:.1f}s",
+                            thinking=extra_body.get("chat_template_kwargs", {}).get("enable_thinking") if extra_body else None)
                 return response
             except TimeoutError:
                 if attempt < retry_count:
@@ -701,18 +716,30 @@ class SubAgent:
             })
 
         try:
+            # 为 agnes 模型读取全局 thinking 配置
+            extra_body = None
+            if self.config.provider == "agnes":
+                from model_router import ROUTE_TABLE
+                chat_config = ROUTE_TABLE.get("chat", {})
+                thinking_enabled = chat_config.get("thinking") is not None
+                extra_body = {"chat_template_kwargs": {"enable_thinking": thinking_enabled}}
             response = await asyncio.wait_for(
                 self._client.chat.completions.create(
                     model=self.config.model,
                     messages=working,
                     max_tokens=800,
                     temperature=0.7,
+                    extra_body=extra_body,
                 ),
                 timeout=min(api_timeout, remaining),
             )
             reply = response.choices[0].message.content or ""
             rc = getattr(response.choices[0].message, "reasoning_content", None) or ""
-            return strip_reasoning(strip_dsml(reply or rc)).strip()
+            result = strip_reasoning(strip_dsml(reply or rc)).strip()
+            # 兜底：如果过滤后为空（如模型只输出推理泄露），返回提示
+            if not result:
+                return f"{self.config.display_name}思考了一下，但还没有整理好回答，请稍等或换个问题问我吧～"
+            return result
         except (TimeoutError, Exception):
             last_tool = working[-1] if working else {}
             if isinstance(last_tool, dict) and last_tool.get("role") == "tool":

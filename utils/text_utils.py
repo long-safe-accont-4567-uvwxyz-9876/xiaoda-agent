@@ -207,6 +207,21 @@ _REASONING_OPEN_PATTERN = re.compile(
     r'|\[(?:think|thinking|reasoning|analysis|reflection|thought|scratchpad)\s*/?\]',
     re.IGNORECASE,
 )
+# Agnes 模型推理标签：[emotion thinking]`` 或 [emotion xxx] 格式
+_EMOTION_REASONING_PATTERN = re.compile(
+    r'\[emotion\s+[a-z]+\s*\]\s*``?[^\n]*',
+    re.IGNORECASE,
+)
+# 第三人称引用：They ask / The user asks / User is asking
+_THIRD_PERSON_PATTERN = re.compile(
+    r'(?:They|The\s+user|User)\s+(?:ask|is\s+asking|asked)\s*["\'][^"\']+["\']',
+    re.IGNORECASE,
+)
+# 内部决策：We need respond / We should / We must
+_INTERNAL_DECISION_PATTERN = re.compile(
+    r'We\s+(?:need\s+to|should|must|will)\s+(?:respond|answer|reply|deliver)',
+    re.IGNORECASE,
+)
 # 裸文本推理特征：以 "Need " / "Let me " / "I should " / "I need " 开头的英文推理行
 # 这些是模型将内部推理当作正文输出的典型特征
 _REASONING_PHRASES = [
@@ -225,25 +240,43 @@ _REASONING_BLOCK_PATTERN = re.compile(
     r'(?:^[' + ''.join(re.escape(c) for c in 'Need Let I Mus Sho Fir Nex The Now Als Fin') + r'].*\n){3,}',
     re.MULTILINE,
 )
+# Agnes 风格连续英文推理段：包含多个关键词的整段英文（无换行）
+# 特征：包含 They ask / We need / Must include / Need adhere 等组合
+_AGNES_REASONING_BLOCK = re.compile(
+    r'[^\n]*?(?:They\s+ask|We\s+need|Must\s+include|Need\s+adhere|previous\s+assistant)[^\n]*'
+    r'(?:[^\n]*?(?:Need|Must|Should|We\s+can|final\s+answer)[^\n]*){2,}',
+    re.IGNORECASE,
+)
 
 
 def strip_reasoning(text: str) -> str:
     """剥离模型输出中的推理/思考内容。
 
     处理以下情况：
-    1. <think>...</think> 等标签包裹的推理
+    1. ฀....Predicate 等标签包裹的推理
     2. 裸文本推理行（Need think about... / Let me recall... 等）
     3. 连续多行英文推理块
+    4. Agnes 模型风格的推理标签（[emotion thinking]``）
+    5. 第三人称引用（They ask "..."）
+    6. Agnes 风格连续英文推理段
     """
     if not text:
         return text
     # 1. 标签包裹的推理
     text = _REASONING_TAG_PATTERN.sub('', text)
     text = _REASONING_OPEN_PATTERN.sub('', text)
-    # 2. 裸文本推理行
+    # 2. Agnes 模型推理标签
+    text = _EMOTION_REASONING_PATTERN.sub('', text)
+    # 3. 第三人称引用
+    text = _THIRD_PERSON_PATTERN.sub('', text)
+    # 4. 内部决策
+    text = _INTERNAL_DECISION_PATTERN.sub('', text)
+    # 5. 裸文本推理行
     text = _REASONING_LINE_PATTERN.sub('', text)
-    # 3. 连续多行英文推理块（3行以上）
+    # 6. 连续多行英文推理块（3行以上）
     text = _REASONING_BLOCK_PATTERN.sub('', text)
+    # 7. Agnes 风格连续英文推理段
+    text = _AGNES_REASONING_BLOCK.sub('', text)
     # 清理多余空行
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
