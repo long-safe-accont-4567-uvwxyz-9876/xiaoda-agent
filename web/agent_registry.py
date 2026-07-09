@@ -70,11 +70,11 @@ BUILTIN_EXCLUDED_TOOLS: dict[str, set[str]] = {
 }
 # 内置 Agent 默认背景板（统一使用无IP风险的 webui_background.jpg，用户可在 WebUI 自行更换）
 DEFAULT_WALLPAPERS = {
-    "xiaoda": "/assets/wallpapers/xiaoda.jpg",
-    "xiaoli": "/assets/wallpapers/xiaoli.jpg",
-    "xiaolang": "/assets/wallpapers/xiaolang.jpg",
-    "xiaolian": "/assets/wallpapers/xiaolian.jpg",
-    "xiaoke": "/assets/wallpapers/xiaoke.jpg",
+    "xiaoda": "/media/wallpapers/xiaoda.jpg",
+    "xiaoli": "/media/wallpapers/xiaoli.jpg",
+    "xiaolang": "/media/wallpapers/xiaolang.jpg",
+    "xiaolian": "/media/wallpapers/xiaolian.jpg",
+    "xiaoke": "/media/wallpapers/xiaoke.jpg",
 }
 # 主体小妲不是 SubAgent，但要出现在 Agent 列表里供切换
 MAIN_AGENT_META = {

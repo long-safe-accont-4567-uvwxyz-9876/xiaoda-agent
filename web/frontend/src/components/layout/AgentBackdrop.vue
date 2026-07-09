@@ -3,7 +3,7 @@ import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useChatStore } from '../../stores/chat'
 import { useAgentsStore } from '../../stores/agents'
 
-const DEFAULT_BG = '/assets/webui_background.jpg'
+const DEFAULT_BG = '/media/wallpapers/webui_background.jpg'
 
 const chat = useChatStore()
 const agentsStore = useAgentsStore()
