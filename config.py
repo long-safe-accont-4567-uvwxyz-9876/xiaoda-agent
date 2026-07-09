@@ -794,6 +794,15 @@ RETRIEVAL_SMART_SKIP = os.getenv("RETRIEVAL_SMART_SKIP", "true").lower() in ("1"
 RETRIEVAL_PARALLEL_TRANSFORM = os.getenv("RETRIEVAL_PARALLEL_TRANSFORM", "true").lower() in ("1", "true", "yes")
 RETRIEVAL_PARALLEL_SEARCH = os.getenv("RETRIEVAL_PARALLEL_SEARCH", "true").lower() in ("1", "true", "yes")
 
+# ── 父子Chunk RAG 优化 ──
+PARENT_CHILD_CHUNK_ENABLED = os.getenv("PARENT_CHILD_CHUNK_ENABLED", "true").lower() in ("1", "true", "yes")
+CONTEXTUAL_RETRIEVAL_ENABLED = os.getenv("CONTEXTUAL_RETRIEVAL_ENABLED", "true").lower() in ("1", "true", "yes")
+CHILD_CHUNK_OVERLAP_CHARS = _safe_int(os.getenv("CHILD_CHUNK_OVERLAP_CHARS"), 30)
+CHILD_CHUNK_MAX_PER_PARENT = _safe_int(os.getenv("CHILD_CHUNK_MAX_PER_PARENT"), 10)
+CHILD_CHUNK_SEGMENT_MAX_LEN = _safe_int(os.getenv("CHILD_CHUNK_SEGMENT_MAX_LEN"), 200)
+CHILD_VEC_TABLE = "memories_child_vec"
+CHILD_CHUNK_TYPES = ["segment", "entity", "decision", "topic"]
+
 # ── 性能优化开关 ──────────────────────────────────────────────
 # Task 6: TTS 异步化（方案 B）—— 开启后 TTS 在后台合成，先返回文字回复
 TTS_ASYNC_MODE = os.getenv("TTS_ASYNC_MODE", "true").lower() in ("1", "true", "yes")

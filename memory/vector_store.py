@@ -92,7 +92,7 @@ class VectorStore:
         self._lock = threading.Lock()
         self._embed_client = None
         self._vec_conn = None
-        self._cache = EmbedCache(max_size=256)
+        self._cache = EmbedCache(max_size=512)
 
         # 并发嵌入限制（避免 API 限流），可通过环境变量配置
         _embed_concurrency = int(os.getenv("VECTOR_EMBED_CONCURRENCY", "8"))
@@ -153,6 +153,10 @@ class VectorStore:
                 dims = self._dimensions if self._dimensions > 0 else 1024
                 conn.execute(f"""
                     CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec
+                    USING vec0(embedding float[{dims}])
+                """)
+                conn.execute(f"""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS memories_child_vec
                     USING vec0(embedding float[{dims}])
                 """)
                 conn.commit()
@@ -262,6 +266,71 @@ class VectorStore:
 
         return await asyncio.to_thread(_do_upsert)
 
+    async def upsert_child(self, child_id: int, text: str) -> None:
+        """子chunk向量写入（使用独立表 memories_child_vec）。"""
+        if not self._initialized or not self._vec_conn:
+            return
+        vec = await self.embed(text)
+        if not vec:
+            return
+        vec_json = json.dumps(vec)
+
+        def _do_upsert() -> None:
+            """在后台线程中执行子chunk向量的写入（upsert）操作。"""
+            with self._lock:
+                if self._closed:
+                    return
+                try:
+                    self._vec_conn.execute(
+                        "INSERT OR REPLACE INTO memories_child_vec (rowid, embedding) VALUES (?, vec_f32(?))",
+                        (child_id, vec_json),
+                    )
+                    self._vec_conn.commit()
+                except Exception as e:
+                    logger.warning("vector_store.upsert_child_failed", row_id=child_id, error=str(e))
+
+        await asyncio.to_thread(_do_upsert)
+
+    async def batch_upsert_children(self, items: list[tuple[int, str]]) -> None:
+        """批量子chunk向量写入。items = [(child_id, text), ...]"""
+        if not self._initialized or not self._vec_conn or not items:
+            return
+        # 并发嵌入，受 semaphore 限制
+        async def _embed_one(cid: int, text: str):
+            """对单条文本执行嵌入，受并发信号量限制。"""
+            async with self._embed_semaphore:
+                vec = await self.embed(text)
+                return (cid, vec)
+
+        tasks = [_embed_one(cid, text) for cid, text in items]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        valid: list[tuple[int, list[float]]] = []
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning("vector.batch_embed_child_failed", error=str(result)[:200])
+                continue
+            cid, vec = result
+            if isinstance(vec, list) and vec:
+                valid.append((cid, vec))
+        if not valid:
+            return
+
+        def _do_batch() -> None:
+            """在后台线程中批量子chunk向量写入。"""
+            with self._lock:
+                if self._closed:
+                    return
+                for cid, vec in valid:
+                    vec_json = json.dumps(vec)
+                    self._vec_conn.execute(
+                        "INSERT OR REPLACE INTO memories_child_vec (rowid, embedding) VALUES (?, vec_f32(?))",
+                        (cid, vec_json),
+                    )
+                self._vec_conn.commit()
+
+        await asyncio.to_thread(_do_batch)
+
     async def delete(self, row_id: int) -> bool:
         """删除指定 rowid 的向量记录"""
         if not self._initialized or not self._vec_conn:
@@ -285,6 +354,29 @@ class VectorStore:
         except Exception as e:
             logger.warning("vector_store.delete_failed", row_id=row_id, error=str(e))
             return False
+
+    async def delete_child(self, child_id: int) -> None:
+        """删除子chunk向量。"""
+        if not self._initialized or not self._vec_conn:
+            return
+
+        def _do_delete() -> None:
+            """在后台线程中删除指定 child_id 的子chunk向量记录。"""
+            with self._lock:
+                if self._closed:
+                    return
+                try:
+                    self._vec_conn.execute(
+                        "DELETE FROM memories_child_vec WHERE rowid=?", (child_id,)
+                    )
+                    self._vec_conn.commit()
+                except Exception as e:
+                    logger.warning("vector_store.delete_child_failed", row_id=child_id, error=str(e))
+
+        try:
+            await asyncio.to_thread(_do_delete)
+        except Exception as e:
+            logger.warning("vector_store.delete_child_failed", row_id=child_id, error=str(e))
 
     async def batch_upsert(self, items: list[tuple[int, str]]) -> int:
         """批量写入向量（并发嵌入 + 单事务写入）"""
@@ -420,6 +512,33 @@ class VectorStore:
             return await asyncio.to_thread(_do_search)
         except Exception as e:
             logger.warning("vector_store.search_failed", error=str(e))
+            return []
+
+    async def search_child(self, query_vec: list[float], top_k: int = 20) -> list[dict]:
+        """子chunk向量相似度检索。返回 [{id, distance}, ...]"""
+        if not self._initialized or not self._vec_conn:
+            return []
+        if not query_vec:
+            return []
+        vec_json = json.dumps(query_vec)
+
+        def _do_search() -> list[dict]:
+            """在后台线程中执行子chunk向量相似度搜索。"""
+            with self._lock:
+                if self._closed:
+                    return []
+                rows = self._vec_conn.execute(
+                    "SELECT rowid, distance FROM memories_child_vec "
+                    "WHERE embedding MATCH vec_f32(?) AND k=? "
+                    "ORDER BY distance",
+                    (vec_json, top_k),
+                ).fetchall()
+                return [{"id": r[0], "distance": r[1]} for r in rows]
+
+        try:
+            return await asyncio.to_thread(_do_search)
+        except Exception as e:
+            logger.warning("vector_store.search_child_failed", error=str(e))
             return []
 
     async def search_with_hyde(self, query: str, hyde_doc: str | None = None,

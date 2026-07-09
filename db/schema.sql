@@ -56,6 +56,25 @@ CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5(
     summary_index
 );
 
+-- 子chunk表（父子Chunk RAG优化）
+CREATE TABLE IF NOT EXISTS memory_child_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    embed_content TEXT DEFAULT '',
+    chunk_type TEXT NOT NULL DEFAULT 'segment',
+    importance REAL DEFAULT 0.5,
+    overlap_hash TEXT DEFAULT '',
+    created_at REAL NOT NULL,
+    FOREIGN KEY (parent_id) REFERENCES episodic_memories(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_child_parent ON memory_child_chunks(parent_id);
+CREATE INDEX IF NOT EXISTS idx_child_type ON memory_child_chunks(chunk_type);
+
+-- 子chunk全文索引
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_child_chunks_fts
+    USING fts5(content, tokenize='unicode61');
+
 -- 记忆合并候选（审计）
 CREATE TABLE IF NOT EXISTS consolidation_candidates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

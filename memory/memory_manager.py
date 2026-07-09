@@ -414,32 +414,83 @@ class MemoryManager:
                 logger.debug("memory.kg_recall_failed", error=str(e))
                 return []
 
-        fts_items, vec_items, kg_items = await asyncio.gather(
+        # ── 子chunk召回协程（父子Chunk RAG优化）──
+        async def _child_recall() -> list[dict]:
+            """子chunk FTS+Vec并行检索 → 映射到父chunk记录。"""
+            import config as _child_cfg
+            if not getattr(_child_cfg, 'PARENT_CHILD_CHUNK_ENABLED', True):
+                return []
+            try:
+                # 子chunk FTS + Vec 并行
+                async def _child_vec_recall() -> list[int]:
+                    if not self.vec or not self.vec.enabled:
+                        return []
+                    query_vec = await self.vec.embed(query)
+                    if not query_vec:
+                        return []
+                    results = await self.vec.search_child(query_vec, top_k=recall_limit)
+                    if not results:
+                        return []
+                    child_ids = [r["id"] for r in results]
+                    return await self.memory.get_child_parent_ids(child_ids)
+
+                child_fts_results, child_vec_parent_ids = await asyncio.gather(
+                    self.memory.search_child_fts(query, recall_limit),
+                    _child_vec_recall(),
+                )
+
+                # 合并 parent_ids（去重）
+                parent_ids: set[int] = set()
+                for r in child_fts_results:
+                    parent_ids.add(r["parent_id"])
+                for pid in child_vec_parent_ids:
+                    parent_ids.add(pid)
+
+                if not parent_ids:
+                    return []
+
+                # 获取父chunk完整记录
+                parent_mems = await self.memory.get_memories_by_ids(list(parent_ids))
+                for pm in parent_mems:
+                    pm["child_recall"] = True
+                return parent_mems
+            except Exception as e:
+                logger.debug("memory.child_recall_failed", error=str(e))
+                return []
+
+        fts_items, vec_items, kg_items, child_items = await asyncio.gather(
             self._hybrid_fts_search(query, recall_limit),
             self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids),
             _kg_recall(),
+            _child_recall(),
         )
 
-        # 空通道自动剔除: 三路都空则返回
-        if not fts_items and not vec_items and not kg_items:
+        # 空通道自动剔除: 四路都空则返回
+        if not fts_items and not vec_items and not kg_items and not child_items:
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=0,
                         duration_ms=int((time.time() - _start) * 1000))
             return []
         # 单路有结果: 直接返回
-        if not fts_items and not vec_items:
+        if not fts_items and not vec_items and not kg_items:
+            results = child_items[:k]
+            logger.info("memory.search", event="memory_search",
+                        query=query[:100], tier=tier, results=len(results),
+                        duration_ms=int((time.time() - _start) * 1000))
+            return results
+        if not fts_items and not vec_items and not child_items:
             results = kg_items[:k]
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
-        if not fts_items and not kg_items:
+        if not fts_items and not kg_items and not child_items:
             results = vec_items[:k]
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
-        if not vec_items and not kg_items:
+        if not vec_items and not kg_items and not child_items:
             results = fts_items[:k]
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=len(results),
@@ -461,7 +512,7 @@ class MemoryManager:
         oversample_k = rerank_limit  # RRF 融合后取 Top-N 送 Reranker
         fts_ids = [str(item["id"]) for item in fts_items]
         vec_ids = [str(item["id"]) for item in vec_items]
-        # 构建多路 ID 列表（KG 通道无结果时降级为两路融合）
+        # 构建多路 ID 列表（KG/子chunk 通道无结果时自动降级）
         ranked_lists = [fts_ids, vec_ids]
         weights = [fts_weight, vec_weight]
         if kg_items:
@@ -470,13 +521,17 @@ class MemoryManager:
             kg_ids = [str(item["id"]) for item in kg_items]
             ranked_lists.append(kg_ids)
             weights.append(0.8)  # KG 通道权重
+        if child_items:
+            child_ids = [str(item["id"]) for item in child_items]
+            ranked_lists.append(child_ids)
+            weights.append(0.9)  # 子chunk召回的父chunk权重
         fused = reciprocal_rank_fusion(
             ranked_lists, limit=oversample_k,
             weights=weights,
         )
 
-        # 按 RRF 排序获取完整记录（合并三路候选）
-        all_items = {str(item["id"]): item for item in fts_items + vec_items + kg_items}
+        # 按 RRF 排序获取完整记录（合并所有通道候选）
+        all_items = {str(item["id"]): item for item in fts_items + vec_items + kg_items + child_items}
 
         # Reranker 精排
         if use_reranker and self._reranker and self._reranker.available and len(fused) > k:
@@ -1375,6 +1430,30 @@ class MemoryManager:
                 except Exception as e:
                     logger.debug("memory.initial_vec_upsert_failed", error=str(e))
 
+            # ── 父子Chunk: 生成并写入子chunk ──
+            import config as _cfg
+            if getattr(_cfg, 'PARENT_CHILD_CHUNK_ENABLED', True):
+                try:
+                    children = self._split_into_children(exchanges, mem_id, summary)
+                    if children and self.vec:
+                        child_items = []
+                        for child in children:
+                            child_id = await self.memory.insert_child_chunk(
+                                parent_id=mem_id,
+                                content=child['content'],
+                                embed_content=child['embed_content'],
+                                chunk_type=child['chunk_type'],
+                                importance=importance * child['weight'],
+                                overlap_hash=child['overlap_hash'],
+                            )
+                            child_items.append((child_id, child['embed_content']))
+                        # 批量嵌入子chunk
+                        await self.vec.batch_upsert_children(child_items)
+                        logger.debug("memory.child_chunks_created",
+                                     parent_id=mem_id, count=len(children))
+                except Exception as e:
+                    logger.debug("memory.child_chunk_failed", error=str(e))
+
             self._last_encode_time = time.time()
             self._pending_encode = False
             logger.info("memory.encoded", summary=summary[:80], importance=importance)
@@ -1421,6 +1500,62 @@ class MemoryManager:
 
         summary = "；".join(parts)
         return summary[:500]
+
+    def _split_into_children(self, exchanges: list[dict], parent_id: int,
+                             parent_summary: str) -> list[dict]:
+        """将对话轮次切分为子chunk，带重叠窗口和 Contextual Retrieval 前缀。
+
+        Returns:
+            [{content, embed_content, chunk_type, weight, overlap_hash}, ...]
+        """
+        import hashlib
+        import config as _cfg
+
+        overlap_chars = getattr(_cfg, 'CHILD_CHUNK_OVERLAP_CHARS', 30)
+        max_len = getattr(_cfg, 'CHILD_CHUNK_SEGMENT_MAX_LEN', 200)
+        max_children = getattr(_cfg, 'CHILD_CHUNK_MAX_PER_PARENT', 10)
+        contextual = getattr(_cfg, 'CONTEXTUAL_RETRIEVAL_ENABLED', True)
+
+        children: list[dict] = []
+        prev_tail = ""
+
+        for msg in exchanges[-8:]:  # 扩大到8轮
+            if len(children) >= max_children:
+                break
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if not content:
+                continue
+
+            prefix = "用户说：" if role == "user" else ""
+            text = f"{prefix}{content[:max_len]}"
+
+            # 重叠窗口
+            overlap_hash = ""
+            if prev_tail and overlap_chars > 0:
+                overlap = prev_tail[-overlap_chars:]
+                overlap_hash = hashlib.sha256(overlap.encode()).hexdigest()[:8]
+                text = f"{overlap}…{text}"
+
+            # Contextual Retrieval: 注入父摘要前缀
+            if contextual and parent_summary:
+                embed_content = f"[上下文: {parent_summary[:80]}] {text}"
+            else:
+                embed_content = text
+
+            weight = 1.0 if role == 'user' else 0.8
+
+            children.append({
+                'content': text,
+                'embed_content': embed_content,
+                'chunk_type': 'segment',
+                'weight': weight,
+                'overlap_hash': overlap_hash,
+            })
+
+            prev_tail = text
+
+        return children
 
     async def _enrich_memory_async(self, mem_id: int, exchanges: list[dict]) -> None:
         """后台 LLM 提取：用 GLM-4-9B-0414 从对话中提取结构化信息，更新记忆条目。
@@ -1510,6 +1645,65 @@ class MemoryManager:
 
             logger.info("memory.enriched", mem_id=mem_id, event_type=event_type,
                         entities_count=len(data.get("entities", [])))
+
+            # ── Phase 2: enrichment子chunk化 — 将实体/决策/话题写入子chunk ──
+            import config as _enrich_cfg
+            if getattr(_enrich_cfg, 'PARENT_CHILD_CHUNK_ENABLED', True) and self.vec:
+                try:
+                    enrich_parent_summary = update_summary or new_summary or ""
+                    enrich_children: list[tuple[int, str]] = []
+                    entity_list = data.get("entities", [])
+                    meta = data.get("metadata", {})
+                    decision = meta.get("decision", "").strip()
+                    topic = meta.get("topic", "").strip()
+
+                    # 实体子chunk
+                    for ent in entity_list[:5]:  # 最多5个实体
+                        ent_str = str(ent).strip()
+                        if not ent_str or len(ent_str) < 2:
+                            continue
+                        content = f"实体: {ent_str}"
+                        embed_content = (f"[上下文: {enrich_parent_summary[:80]}] {content}"
+                                         if getattr(_enrich_cfg, 'CONTEXTUAL_RETRIEVAL_ENABLED', True)
+                                         else content)
+                        cid = await self.memory.insert_child_chunk(
+                            parent_id=mem_id, content=content,
+                            embed_content=embed_content, chunk_type='entity',
+                            importance=0.7)
+                        enrich_children.append((cid, embed_content))
+
+                    # 决策子chunk
+                    if decision and len(decision) >= 5:
+                        content = f"决策: {decision}"
+                        embed_content = (f"[上下文: {enrich_parent_summary[:80]}] {content}"
+                                         if getattr(_enrich_cfg, 'CONTEXTUAL_RETRIEVAL_ENABLED', True)
+                                         else content)
+                        cid = await self.memory.insert_child_chunk(
+                            parent_id=mem_id, content=content,
+                            embed_content=embed_content, chunk_type='decision',
+                            importance=0.9)
+                        enrich_children.append((cid, embed_content))
+
+                    # 话题子chunk
+                    if topic and len(topic) >= 2:
+                        content = f"话题: {topic}"
+                        embed_content = (f"[上下文: {enrich_parent_summary[:80]}] {content}"
+                                         if getattr(_enrich_cfg, 'CONTEXTUAL_RETRIEVAL_ENABLED', True)
+                                         else content)
+                        cid = await self.memory.insert_child_chunk(
+                            parent_id=mem_id, content=content,
+                            embed_content=embed_content, chunk_type='topic',
+                            importance=0.6)
+                        enrich_children.append((cid, embed_content))
+
+                    # 批量嵌入
+                    if enrich_children:
+                        await self.vec.batch_upsert_children(enrich_children)
+                        logger.debug("memory.enrich_child_chunks",
+                                     parent_id=mem_id, count=len(enrich_children))
+                except Exception as e:
+                    logger.debug("memory.enrich_child_failed", error=str(e))
+
         except Exception as e:
             logger.debug("memory.enrich_failed", error=str(e))
 
