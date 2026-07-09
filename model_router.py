@@ -674,14 +674,14 @@ class ModelRouter:
         if extra_headers:
             kwargs["extra_headers"] = extra_headers
         # 支持 thinking 参数（通用）
+        # 关键修复：thinking 关闭时也要传递 enable_thinking: false，否则 agnes 模型使用默认行为
         thinking_config = config.get("thinking")
-        if thinking_config:
-            if provider == "agnes":
-                kwargs["extra_body"] = {
-                    "chat_template_kwargs": {"enable_thinking": thinking_config.get("type") == "enabled"}
-                }
-            else:
-                kwargs["extra_body"] = {"thinking": thinking_config}
+        if provider == "agnes":
+            # agnes 模型需要明确传递 enable_thinking 参数
+            enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
+            kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": enabled}}
+        elif thinking_config:
+            kwargs["extra_body"] = {"thinking": thinking_config}
         return kwargs
 
     async def chat_stream(self, messages: list, task_type: str = "chat",
@@ -806,14 +806,14 @@ class ModelRouter:
             kwargs["extra_headers"] = extra_headers
 
         # 支持 thinking 参数（通用）
+        # 关键修复：thinking 关闭时也要传递 enable_thinking: false，否则 agnes 模型使用默认行为
         thinking_config = config.get("thinking")
-        if thinking_config:
-            if provider == "agnes":
-                kwargs["extra_body"] = {
-                    "chat_template_kwargs": {"enable_thinking": thinking_config.get("type") == "enabled"}
-                }
-            else:
-                kwargs["extra_body"] = {"thinking": thinking_config}
+        if provider == "agnes":
+            # agnes 模型需要明确传递 enable_thinking 参数
+            enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
+            kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": enabled}}
+        elif thinking_config:
+            kwargs["extra_body"] = {"thinking": thinking_config}
         return kwargs
 
     async def _handle_route_response(self, response: Any, task_type: str, model: str,
