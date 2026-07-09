@@ -85,9 +85,10 @@ def _ensure_default_wallpapers() -> None:
     """首次启动时，将默认壁纸从源目录复制到 MEDIA_DIR/wallpapers/。
 
     源目录优先级：
-    1. web/frontend/public/assets/wallpapers/（dev 模式）
-    2. web/dist/assets/wallpapers/（vite build 产物）
-    3. _MEIPASS（PyInstaller 打包）
+    1. web/frontend/public/assets/wallpapers/（dev 模式，agent 壁纸）
+    2. web/frontend/public/assets/（dev 模式，webui_background.jpg）
+    3. web/dist/assets/wallpapers/（vite build 产物）
+    4. _MEIPASS（PyInstaller 打包）
     """
     target_dir = MEDIA_DIR / "wallpapers"
     # 收集所有需要确保存在的默认壁纸文件名
@@ -101,35 +102,30 @@ def _ensure_default_wallpapers() -> None:
     if not missing:
         return
 
-    # 寻找源目录
-    src_dir: Path | None = None
+    # 所有可能的源目录（webui_background.jpg 在 assets/ 根目录，其他在 wallpapers/）
     meipass = getattr(sys, "_MEIPASS", None)
-    candidates = [
-        _FALLBACK_BASE / "web" / "frontend" / "public" / "assets" / "wallpapers",
-        _FALLBACK_BASE / "web" / "dist" / "assets" / "wallpapers",
-    ]
-    if meipass:
-        candidates.insert(0, Path(meipass) / "web" / "frontend" / "public" / "assets" / "wallpapers")
-        candidates.insert(1, Path(meipass) / "web" / "dist" / "assets" / "wallpapers")
-    for c in candidates:
-        if c.is_dir() and any((c / f).exists() for f in missing):
-            src_dir = c
-            break
-
-    if not src_dir:
-        logger.debug("agent_registry.wallpaper_init_skip: no source dir found for {}", missing)
-        return
+    search_dirs: list[Path] = []
+    base = Path(meipass) if meipass else _FALLBACK_BASE
+    search_dirs.extend([
+        base / "web" / "frontend" / "public" / "assets" / "wallpapers",
+        base / "web" / "frontend" / "public" / "assets",
+        base / "web" / "dist" / "assets" / "wallpapers",
+        base / "web" / "dist" / "assets",
+    ])
 
     target_dir.mkdir(parents=True, exist_ok=True)
     copied = 0
     for fname in missing:
-        src = src_dir / fname
-        if src.exists():
-            try:
-                shutil.copy2(src, target_dir / fname)
-                copied += 1
-            except OSError as e:
-                logger.debug("agent_registry.wallpaper_copy_failed {}: {}", fname, e)
+        for src_dir in search_dirs:
+            src = src_dir / fname
+            if src.exists():
+                try:
+                    shutil.copy2(src, target_dir / fname)
+                    copied += 1
+                except OSError as e:
+                    logger.debug("agent_registry.wallpaper_copy_failed {}: {}", fname, e)
+                break
+
     if copied:
         logger.info("agent_registry.wallpaper_init: copied {} defaults to {}", copied, target_dir)
 
