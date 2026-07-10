@@ -1,9 +1,8 @@
 """流体记忆系统 — 艾宾浩斯遗忘曲线 + 访问强化"""
 import math
 import time
-import logging
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class FluidMemory:

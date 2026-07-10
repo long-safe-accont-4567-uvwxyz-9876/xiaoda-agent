@@ -180,6 +180,12 @@ class VectorStore:
                     self._vec_conn = None
 
         await asyncio.to_thread(_do_close)
+        # 关闭 AsyncOpenAI 客户端，防止资源泄漏
+        if self._embed_client:
+            try:
+                await self._embed_client.close()
+            except Exception:
+                pass
         if self._cache.stats["size"] > 0:
             logger.info("vector_store.cache_stats", **self._cache.stats)
 
