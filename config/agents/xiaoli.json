@@ -4,7 +4,7 @@
   "display_name_en": "Xiaoli",
   "provider": "siliconflow",
   "model": "nex-agi/Nex-N2-Pro",
-  "personality_file": "/home/orangepi/ai-agent/config/agents/xiaoli_personality.md",
+  "personality_file": "xiaoli_personality.md",
   "voice_ref": "xiaoli/xiaoli",
   "excluded_tools": [
     "call_xiaoli",

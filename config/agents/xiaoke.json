@@ -4,7 +4,7 @@
   "display_name_en": "Xiaoke",
   "provider": "agnes",
   "model": "agnes-2.0-flash",
-  "personality_file": "/home/orangepi/ai-agent/config/agents/xiaoke_personality.md",
+  "personality_file": "xiaoke_personality.md",
   "voice_ref": null,
   "excluded_tools": [
     "call_xiaoda",
