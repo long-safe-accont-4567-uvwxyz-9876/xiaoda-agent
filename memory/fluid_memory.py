@@ -11,13 +11,16 @@ class FluidMemory:
 
     LAMBDA_DECAY = 0.05       # 遗忘速率（艾宾浩斯曲线参数）
     ALPHA_BOOST = 0.2         # 访问强化力度
+    MAX_BOOST = 0.3           # Boost上限：防止高频访问旧记忆分数超过新记忆
     FORGET_THRESHOLD = 0.05   # 动态遗忘阈值（低于此分数不返回）
     DREAM_THRESHOLD = 0.15    # 梦境归档阈值（低于此分数归档）
 
     def score(self, similarity: float, created_at: float, access_count: int = 0) -> float:
         """计算综合记忆分数
 
-        公式: score = similarity × e^(-λ × days) + α × ln(1 + access_count)
+        公式: score = similarity × e^(-λ × days) + min(α × ln(1 + access_count), MAX_BOOST)
+
+        Boost有上限防止高频访问的旧记忆得分超过新记忆满分1.0。
 
         Args:
             similarity: 相似度分数 (0~1)
@@ -29,7 +32,7 @@ class FluidMemory:
         """
         days_passed = (time.time() - created_at) / 86400.0
         decay = math.exp(-self.LAMBDA_DECAY * days_passed)
-        boost = self.ALPHA_BOOST * math.log(1 + access_count)
+        boost = min(self.ALPHA_BOOST * math.log(1 + access_count), self.MAX_BOOST)
         return (similarity * decay) + boost
 
     def should_filter(self, score: float) -> bool:

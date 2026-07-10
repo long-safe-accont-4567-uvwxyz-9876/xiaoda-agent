@@ -68,9 +68,11 @@ EMOTION_ALIASES: dict[str, Emotion] = {
     "surprised": Emotion.SURPRISED, "scared": Emotion.SURPRISED, "afraid": Emotion.SURPRISED,
     # confused（困惑/疑惑）
     "困惑": Emotion.CONFUSED, "疑惑": Emotion.CONFUSED, "不解": Emotion.CONFUSED,
-    "迷茫": Emotion.CONFUSED, "无语": Emotion.CONFUSED, "好奇": Emotion.CONFUSED,
+    "迷茫": Emotion.CONFUSED, "无语": Emotion.CONFUSED,
     "想知道": Emotion.CONFUSED,
-    "confused": Emotion.CONFUSED, "curious": Emotion.CONFUSED, "interested": Emotion.CONFUSED,
+    "confused": Emotion.CONFUSED,
+    # curious（好奇）— 与confused区分，好奇是积极认知状态
+    "好奇": Emotion.CURIOUS, "curious": Emotion.CURIOUS, "interested": Emotion.CURIOUS,
     # thinking（思考/腹黑）
     "思考": Emotion.THINKING, "沉思": Emotion.THINKING, "琢磨": Emotion.THINKING,
     "阴沉": Emotion.THINKING, "腹黑": Emotion.THINKING,

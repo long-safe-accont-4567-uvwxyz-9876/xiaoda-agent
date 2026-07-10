@@ -47,7 +47,12 @@ CREATE TABLE IF NOT EXISTS episodic_memories (
     doc_id TEXT DEFAULT '',                    -- 关联外部向量数据库文档 ID
     source TEXT DEFAULT 'user',
     access_count INTEGER DEFAULT 0,            -- 检索命中次数
-    distilled INTEGER DEFAULT 0                -- 是否已被蒸馏提取
+    distilled INTEGER DEFAULT 0,               -- 是否已被蒸馏提取
+    entities TEXT DEFAULT '',
+    event_type TEXT DEFAULT '',
+    metadata_json TEXT DEFAULT '{}',
+    content_hash TEXT DEFAULT '',
+    version INTEGER DEFAULT 1
 );
 
 -- 情景记忆全文索引（FTS5）
@@ -253,6 +258,7 @@ CREATE TABLE IF NOT EXISTS knowledge_relations (
     from_entity TEXT,
     relation_type TEXT,
     to_entity TEXT,
+    created_at REAL DEFAULT 0,
     updated_at REAL NOT NULL,
     valid_from REAL DEFAULT 0,
     valid_to REAL DEFAULT 0,

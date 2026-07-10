@@ -50,11 +50,27 @@ def test_score_formula_exact():
 
     days_passed = (now - created_at) / 86400.0
     expected_decay = math.exp(-FluidMemory.LAMBDA_DECAY * days_passed)
-    expected_boost = FluidMemory.ALPHA_BOOST * math.log(1 + access_count)
+    expected_boost = min(FluidMemory.ALPHA_BOOST * math.log(1 + access_count), FluidMemory.MAX_BOOST)
     expected_score = similarity * expected_decay + expected_boost
 
     score = fm.score(similarity=similarity, created_at=created_at, access_count=access_count)
     assert score == pytest.approx(expected_score, rel=1e-6)
+
+
+def test_boost_capped():
+    """H-1: Boost有上限，高频访问旧记忆不应超过新记忆满分"""
+    fm = FluidMemory()
+    now = time.time()
+    # 新记忆，无访问
+    new_score = fm.score(similarity=1.0, created_at=now, access_count=0)
+    # 旧记忆，1000次访问
+    old_score = fm.score(similarity=0.3, created_at=now - 365 * 86400, access_count=1000)
+    # 新记忆分数应高于旧记忆（修复前旧记忆boost=1.38会超过新记忆）
+    assert new_score > old_score, f"新记忆{new_score}应高于旧记忆{old_score}"
+
+
+def test_max_boost_value():
+    assert FluidMemory.MAX_BOOST == 0.3
 
 
 # ── should_filter / should_archive ──

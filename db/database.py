@@ -599,7 +599,9 @@ class DatabaseManager:
                 distilled INTEGER DEFAULT 0,
                 entities TEXT DEFAULT '',
                 event_type TEXT DEFAULT '',
-                metadata_json TEXT DEFAULT '{}'
+                metadata_json TEXT DEFAULT '{}',
+                content_hash TEXT DEFAULT '',
+                version INTEGER DEFAULT 1
             );
 
             CREATE TABLE IF NOT EXISTS memory_summaries (
@@ -774,6 +776,7 @@ class DatabaseManager:
                 from_entity TEXT,
                 relation_type TEXT,
                 to_entity TEXT,
+                created_at REAL DEFAULT 0,
                 updated_at REAL NOT NULL
             );
 

@@ -169,13 +169,15 @@ class NudgeEngine:
             if not self._config_service.get("schedule.enabled", True):
                 return
             max_per_day = int(self._config_service.get("schedule.greeting_max_per_day", self.greeting_max_per_day))
+            greeting_threshold = int(self._config_service.get("schedule.greeting_threshold", self.greeting_threshold))
         else:
             if not self.greeting_enabled:
                 return
             max_per_day = self.greeting_max_per_day
+            greeting_threshold = self.greeting_threshold
 
         idle_seconds = now - self._last_user_message_time
-        if idle_seconds < self.greeting_threshold:
+        if idle_seconds < greeting_threshold:
             return
 
         # 共享 greeting_log 表计数

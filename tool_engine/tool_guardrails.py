@@ -297,7 +297,7 @@ class ToolGuardrails:
             return "allow", ""
         except Exception as e:
             logger.error(f"check 异常: {e}", tool_name=tool_name)
-            return "allow", ""  # 异常时默认放行, 避免阻断正常流程
+            return "deny", f"安全检查异常: {e}"  # 异常时默认拒绝, 避免绕过安全检查
 
     def _simple_args_hash(self, arguments: dict) -> str:
         """参数哈希（使用 hashlib.md5 生成更可靠的哈希）"""

@@ -114,7 +114,7 @@ class DreamConsolidator:
         for mid, m in list(self._memories.items()):
             fm_score = self._fluid_scorer.score(
                 similarity=m.importance,
-                created_at=m.last_access,  # 以最后访问时间作为衰减基准
+                created_at=m.created_at,  # 以创建时间作为衰减基准（非last_access）
                 access_count=m.access_count,
             )
             m.strength = fm_score
@@ -212,7 +212,7 @@ class DreamConsolidator:
                 mem = Memory(
                     id=mid,
                     content=row.get("summary", ""),
-                    importance=0.5,
+                    importance=row.get("importance", 0.5),
                     strength=1.0,
                     last_access=row.get("timestamp", time.time()),
                     created_at=row.get("timestamp", time.time()),
@@ -227,7 +227,7 @@ class DreamConsolidator:
             for mid, m in memories.items():
                 fm_score = self._fluid_scorer.score(
                     similarity=m.importance,
-                    created_at=m.last_access,
+                    created_at=m.created_at,
                     access_count=m.access_count,
                 )
                 m.strength = fm_score
@@ -293,8 +293,8 @@ class DreamConsolidator:
         """
         groups: dict[str, list[str]] = {}
         for mid, m in memories.items():
-            # 用前 30 字符作为聚类键
-            key = m.content[:30].lower() if m.content else ""
+            # 用前 15 字符作为聚类键（中文15字已足够区分语义，30字太激进会合并无关内容）
+            key = m.content[:15].lower() if m.content else ""
             if not key:
                 continue
             groups.setdefault(key, []).append(mid)
@@ -330,8 +330,8 @@ class DreamConsolidator:
         """合并相似记忆 (基于内容前缀聚类)"""
         groups: dict[str, list[str]] = {}
         for mid, m in self._memories.items():
-            # 用前 30 字符作为聚类键 (短前缀便于合并相似条目)
-            key = m.content[:30].lower()
+            # 用前 15 字符作为聚类键 (中文15字足够区分语义)
+            key = m.content[:15].lower()
             groups.setdefault(key, []).append(mid)
 
         merged = 0

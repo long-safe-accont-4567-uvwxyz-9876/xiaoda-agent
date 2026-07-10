@@ -109,6 +109,7 @@ class BeliefRouter:
         conn = None
         try:
             conn = sqlite3.connect(self._db_path)
+            conn.execute("PRAGMA journal_mode=WAL")  # 启用WAL模式提升并发读写性能
             conn.execute("""CREATE TABLE IF NOT EXISTS agent_beliefs (
                 agent_name TEXT PRIMARY KEY,
                 alpha REAL NOT NULL DEFAULT 1.0,
@@ -166,6 +167,7 @@ class BeliefRouter:
                 conn = None
                 try:
                     conn = sqlite3.connect(db_path)
+                    conn.execute("PRAGMA journal_mode=WAL")
                     conn.execute("""CREATE TABLE IF NOT EXISTS agent_beliefs (
                         agent_name TEXT PRIMARY KEY,
                         alpha REAL NOT NULL DEFAULT 1.0,

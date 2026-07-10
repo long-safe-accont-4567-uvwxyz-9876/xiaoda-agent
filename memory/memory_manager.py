@@ -197,9 +197,13 @@ def validate_memory_content(content: str) -> str | None:
 
 
 def _normalize_for_dedupe(text: str) -> str:
-    """归一化文本用于去重：合并空白为单空格+小写"""
+    """归一化文本用于去重：合并空白+去除CJK标点+小写"""
     import re as _re
-    return _re.sub(r'\s+', ' ', text).strip().casefold()
+    # 去除CJK标点（中文逗号、句号、感叹号等）
+    text = _re.sub(r'[\u3000-\u303f\uff00-\uffef]', '', text)
+    # 合并空白为单空格
+    text = _re.sub(r'\s+', ' ', text).strip()
+    return text.casefold()
 
 
 class MemoryManager:
@@ -471,26 +475,34 @@ class MemoryManager:
                         query=query[:100], tier=tier, results=0,
                         duration_ms=int((time.time() - _start) * 1000))
             return []
-        # 单路有结果: 直接返回
+        # 单路有结果: 补充 rrf_score 后直接返回（与多路融合保持字段一致）
         if not fts_items and not vec_items and not kg_items:
+            for item in child_items:
+                item.setdefault("rrf_score", item.get("score", 0.0))
             results = child_items[:k]
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
         if not fts_items and not vec_items and not child_items:
+            for item in kg_items:
+                item.setdefault("rrf_score", item.get("score", 0.0))
             results = kg_items[:k]
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
         if not fts_items and not kg_items and not child_items:
+            for item in vec_items:
+                item.setdefault("rrf_score", item.get("similarity", item.get("score", 0.0)))
             results = vec_items[:k]
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
         if not vec_items and not kg_items and not child_items:
+            for item in fts_items:
+                item.setdefault("rrf_score", item.get("score", 0.0))
             results = fts_items[:k]
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=len(results),
