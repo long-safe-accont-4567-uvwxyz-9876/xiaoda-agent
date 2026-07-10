@@ -232,7 +232,15 @@ class NotebookManager:
         return await self.notebook.get_notebook_notes(limit=limit)
 
     def _parse_task_time(self, time_str: str) -> float:
-        now = _get_local_now()
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        import os
+        tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = ZoneInfo("Asia/Shanghai")
+        now = datetime.now(tz)
         original = time_str.strip()
         time_str = original
 
