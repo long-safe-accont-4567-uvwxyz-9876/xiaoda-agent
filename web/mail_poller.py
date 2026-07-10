@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections import OrderedDict
 from datetime import datetime, UTC
 from zoneinfo import ZoneInfo
 from typing import Any
@@ -43,7 +44,7 @@ class MailPoller:
         self.core = core
         self.cfg = config_service
         self._task: asyncio.Task | None = None
-        self._processed_ids: set[str] = set()
+        self._processed_ids: OrderedDict[str, None] = OrderedDict()
         # 水位线：回溯1小时，避免重启前刚收到的邮件被丢弃
         # 配合 _processed_ids 内存去重避免重复处理
         from datetime import timedelta
@@ -142,7 +143,7 @@ class MailPoller:
             # 白名单过滤
             if mode == "allowlist" and from_email not in allowed_senders:
                 logger.debug("mail.poller.skip_not_allowed from={}", from_email)
-                self._processed_ids.add(msg_id)  # 标记已处理避免重复检查
+                self._processed_ids[msg_id] = None
                 continue
 
             # 处理这封邮件
@@ -157,14 +158,13 @@ class MailPoller:
             except Exception as e:
                 logger.warning("mail.poller.process_failed id={} error={}", msg_id, str(e)[:200])
 
-            self._processed_ids.add(msg_id)
+            self._processed_ids[msg_id] = None
             self._daily_count += 1
 
             # 裁剪去重集合：保留最近 2000 条，避免全量清空导致重复处理
             if len(self._processed_ids) > 5000:
-                # 转为列表保留最新的 2000 条
-                recent = list(self._processed_ids)[-2000:]
-                self._processed_ids = set(recent)
+                for _ in range(len(self._processed_ids) - 2000):
+                    self._processed_ids.popitem(last=False)
 
             if self._daily_count >= int(self.cfg.get("mail.max_per_day", 50)):
                 break

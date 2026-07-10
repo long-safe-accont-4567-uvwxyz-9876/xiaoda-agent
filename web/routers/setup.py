@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import asyncio
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
@@ -13,6 +15,11 @@ from loguru import logger
 from web.routers.auth import get_current_user
 from web.schemas import Envelope
 import contextlib
+
+# test-key 速率限制：每 IP 最多 10 次/分钟
+_test_key_timestamps: dict[str, list[float]] = []
+_TEST_KEY_RATE_LIMIT = 10
+_TEST_KEY_RATE_WINDOW = 60.0
 
 
 def _get_local_now():
@@ -24,6 +31,10 @@ def _get_local_now():
     except Exception:
         tz = ZoneInfo("Asia/Shanghai")
     return datetime.now(tz)
+
+
+# 模块级后台任务列表，防止 asyncio.Task 被 GC 回收
+_reinit_tasks: list = []
 
 
 # 免责协议全文（模块级常量，供前端通过 API 获取）
@@ -512,8 +523,17 @@ async def test_single_key(key_name: str, key_value: str, extra: dict | None = No
 
 
 @router.post("/setup/test-key", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
-async def test_key(body: dict) -> Any:
+async def test_key(body: dict, request: Request) -> Any:
     """测试 API Key 是否有效。"""
+    import time
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    recent = [t for t in _test_key_timestamps if now - t < _TEST_KEY_RATE_WINDOW]
+    _test_key_timestamps[:] = recent
+    if len(recent) >= _TEST_KEY_RATE_LIMIT:
+        return Envelope(ok=False, error={"code": "RATE_LIMITED", "message": "测试频率过高，请稍后再试"})
+    _test_key_timestamps.append(now)
+
     key_name = body.get("key_name", "")
     key_value = body.get("key_value", "")
 
@@ -560,7 +580,7 @@ async def save_keys(body: dict) -> Any:
 
         # 核心重初始化放到后台异步执行，不阻塞 API 返回
         import asyncio
-        _reinit_task = asyncio.create_task(_background_reinit())
+        _reinit_tasks.append(asyncio.create_task(_background_reinit()))
 
         return Envelope(data={"saved": list(updates.keys()), "need_restart": False})
     except Exception as e:
@@ -736,6 +756,8 @@ async def _background_reinit() -> None:
     except Exception as e:
         import traceback
         logger.error("setup.core_reinit_failed error={} traceback={}", str(e), traceback.format_exc())
+    finally:
+        _reinit_tasks[:] = [t for t in _reinit_tasks if not t.done()]
 
 
 # 已知 Provider 映射 — 有 API Key 即自动注册

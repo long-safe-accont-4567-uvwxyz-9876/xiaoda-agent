@@ -50,7 +50,14 @@ function topUrl() {
   return layers.value[layers.value.length - 1]?.url
 }
 
+function sanitizeUrl(url: string): string {
+  if (url.startsWith('/media/wallpapers/') || url.startsWith('/media/agents/')) return url
+  if (url.startsWith('data:image/')) return url
+  return DEFAULT_BG
+}
+
 function pushLayer(url: string) {
+  url = sanitizeUrl(url)
   if (topUrl() === url) return
   layers.value.push({ url, key: ++seq })
   if (pruneTimer) clearTimeout(pruneTimer)

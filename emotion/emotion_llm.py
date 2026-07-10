@@ -145,13 +145,21 @@ def _parse_llm_response(raw: str) -> dict:
     # 验证和规范化
     result = {
         "primary": str(data.get("primary", "平静")),
-        "P": _clamp(float(data.get("P", 0)), -1.0, 1.0),
-        "A": _clamp(float(data.get("A", 0)), 0.0, 1.0),
-        "D": _clamp(float(data.get("D", 0.5)), 0.0, 1.0),
+        "P": _clamp(_safe_float(data.get("P", 0), 0), -1.0, 1.0),
+        "A": _clamp(_safe_float(data.get("A", 0), 0), 0.0, 1.0),
+        "D": _clamp(_safe_float(data.get("D", 0.5), 0.5), 0.0, 1.0),
         "needs": [str(n) for n in data.get("needs", []) if n],
         "style": str(data.get("style", "")),
     }
     return result
+
+
+def _safe_float(val: Any, default: float = 0.0) -> float:
+    """安全转换为 float，失败时返回默认值"""
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
 
 
 def _clamp(value: float, min_val: float, max_val: float) -> float:
