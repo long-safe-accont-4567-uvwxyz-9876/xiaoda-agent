@@ -18,17 +18,21 @@ const distWallpapers = join(__dirname, '..', 'dist', 'assets', 'wallpapers')
 const backupDir = join(tmpdir(), '_wallpaper_backup')
 
 // 备份
-if (existsSync(distWallpapers)) {
-  mkdirSync(backupDir, { recursive: true })
-  let count = 0
-  for (const f of readdirSync(distWallpapers)) {
-    const fp = join(distWallpapers, f)
-    if (statSync(fp).isFile()) {
-      writeFileSync(join(backupDir, f), readFileSync(fp))
-      count++
+try {
+  if (existsSync(distWallpapers)) {
+    mkdirSync(backupDir, { recursive: true })
+    let count = 0
+    for (const f of readdirSync(distWallpapers)) {
+      const fp = join(distWallpapers, f)
+      if (statSync(fp).isFile()) {
+        writeFileSync(join(backupDir, f), readFileSync(fp))
+        count++
+      }
     }
+    console.log(`[build] backed up ${count} wallpapers`)
   }
-  console.log(`[build] backed up ${count} wallpapers`)
+} catch (e) {
+  console.warn('[build] wallpaper backup failed:', e.message)
 }
 
 // vite build
@@ -40,17 +44,21 @@ try {
 }
 
 // 恢复（只恢复 build 后不存在的文件）
-if (existsSync(backupDir)) {
-  mkdirSync(distWallpapers, { recursive: true })
-  let restored = 0
-  for (const f of readdirSync(backupDir)) {
-    const target = join(distWallpapers, f)
-    if (!existsSync(target)) {
-      writeFileSync(target, readFileSync(join(backupDir, f)))
-      restored++
+try {
+  if (existsSync(backupDir)) {
+    mkdirSync(distWallpapers, { recursive: true })
+    let restored = 0
+    for (const f of readdirSync(backupDir)) {
+      const target = join(distWallpapers, f)
+      if (!existsSync(target)) {
+        writeFileSync(target, readFileSync(join(backupDir, f)))
+        restored++
+      }
+    }
+    if (restored > 0) {
+      console.log(`[build] restored ${restored} user wallpapers`)
     }
   }
-  if (restored > 0) {
-    console.log(`[build] restored ${restored} user wallpapers`)
-  }
+} catch (e) {
+  console.warn('[build] wallpaper restore failed:', e.message)
 }

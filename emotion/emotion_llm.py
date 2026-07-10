@@ -131,13 +131,14 @@ def _parse_llm_response(raw: str) -> dict:
             lines = lines[:-1]
         cleaned = "\n".join(lines)
 
-    # 尝试提取 JSON
-    json_match = re.search(r'\{[^{}]*\}', cleaned, re.DOTALL)
-    if not json_match:
+    # 尝试提取 JSON（支持嵌套对象）
+    start = cleaned.find('{')
+    end = cleaned.rfind('}')
+    if start == -1 or end == -1 or end <= start:
         return {}
 
     try:
-        data = json.loads(json_match.group())
+        data = json.loads(cleaned[start:end + 1])
     except json.JSONDecodeError:
         return {}
 

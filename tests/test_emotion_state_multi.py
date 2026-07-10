@@ -292,6 +292,23 @@ class TestPersistence:
         assert pad["D"] == pytest.approx(0.7, abs=1e-6)
         es._instance = None
 
+    def test_shift_pad_persists_without_explicit_save(self, tmp_path, monkeypatch):
+        """shift_pad 应自动持久化，无需显式调用 _save()"""
+        persist = tmp_path / "emotion_state_shift_persist.json"
+        monkeypatch.setenv("EMOTION_STATE_PATH", str(persist))
+        es._instance = None
+        state1 = EmotionState()
+        state1.shift_pad({"P": 0.5, "A": 0.4, "D": 0.8}, weight=1.0)
+        # 不调用 _save()
+        es._instance = None
+
+        state2 = EmotionState()
+        pad = state2.get_pad()
+        assert pad["P"] == pytest.approx(0.5, abs=1e-6)
+        assert pad["A"] == pytest.approx(0.4, abs=1e-6)
+        assert pad["D"] == pytest.approx(0.8, abs=1e-6)
+        es._instance = None
+
     def test_load_defaults_when_missing(self, tmp_path, monkeypatch):
         """旧格式文件（无 active_emotions/pad）加载时使用默认值"""
         persist = tmp_path / "emotion_state_old.json"

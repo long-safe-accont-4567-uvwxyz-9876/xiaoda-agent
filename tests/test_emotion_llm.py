@@ -271,3 +271,14 @@ class TestDetectEmotionLlm:
         result = await detect_emotion_llm("好开心", router=StringRouter())
         assert result["primary"] == "喜悦"
         assert result["P"] == pytest.approx(0.7)
+
+    async def test_nested_json_parsed_correctly(self):
+        """LLM 返回嵌套 JSON 时能正确解析外层对象"""
+        class NestedRouter:
+            async def route(self, route_name, messages, temperature):
+                return '{"primary": "悲伤", "P": -0.6, "A": 0.3, "D": 0.2, "needs": ["休息"], "style": "温柔陪伴", "meta": {"confidence": 0.9}}'
+
+        result = await detect_emotion_llm("我好累", router=NestedRouter())
+        assert result["primary"] == "悲伤"
+        assert result["P"] == pytest.approx(-0.6)
+        assert result["style"] == "温柔陪伴"

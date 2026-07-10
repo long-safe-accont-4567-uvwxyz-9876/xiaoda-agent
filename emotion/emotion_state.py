@@ -97,14 +97,14 @@ class EmotionState:
             if len(self._history) > 20:
                 self._history = self._history[-20:]
 
+            logger.debug("emotion_state.updated",
+                         emotion=self._current, intensity=f"{self._intensity:.2f}")
+
         # 异步持久化（不阻塞主流程）
         try:
             self._save()
         except Exception as e:
             logger.debug("emotion_state.save_failed", error=str(e))
-
-        logger.debug("emotion_state.updated",
-                     emotion=self._current, intensity=f"{self._intensity:.2f}")
 
     def get_current(self) -> tuple[str, float]:
         """获取当前情绪和衰减后的强度。
@@ -134,6 +134,10 @@ class EmotionState:
                 "A": max(0.0, min(1.0, self._pad["A"] * (1 - w) + pad.get("A", 0) * w)),
                 "D": max(0.0, min(1.0, self._pad["D"] * (1 - w) + pad.get("D", 0.5) * w)),
             }
+        try:
+            self._save()
+        except Exception as e:
+            logger.debug("emotion_state.save_failed", error=str(e))
 
     def get_description(self) -> str:
         """获取情绪描述文本（用于注入 prompt）。
