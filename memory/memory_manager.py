@@ -1190,9 +1190,10 @@ class MemoryManager:
             return []
 
     async def _apply_fluid_scoring(self, results: list[dict]) -> list[dict]:
-        """流体记忆评分（艾宾浩斯遗忘曲线 + 访问强化），过滤低分记忆。
+        """流体记忆评分（艾宾浩斯遗忘曲线 + 访问历史），过滤低分记忆。
 
-        对保留的记忆递增 access_count 实现检索强化。
+        检索和重排保持只读。访问次数只能在答案明确引用该记忆，或用户明确确认
+        记忆有帮助时由消费确认流程更新，避免曝光自反馈偏置。
         """
         if not results:
             return results
@@ -1209,15 +1210,6 @@ class MemoryManager:
             importance = r.get("importance", 0.5)
             r["effective_score"] = importance * fluid_score
             filtered.append(r)
-        if filtered:
-            # 批量递增访问计数（消除 N+1：原为循环内逐条 UPDATE）
-            await self.memory.batch_increment_access_count(
-                [r["id"] for r in filtered], auto_commit=False
-            )
-            try:
-                await self.memory.commit()
-            except Exception as e:
-                logger.debug("memory.fluid_access_count_commit_failed", error=str(e))
         return filtered
 
     def _compute_recency_boost(self, item: dict) -> float:
