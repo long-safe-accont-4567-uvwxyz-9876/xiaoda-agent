@@ -95,6 +95,7 @@ class ConfigReloader:
         self._active: ConfigSnapshot | None = None
         self._callbacks: list[Callable[[ConfigSnapshot], None]] = []
         self._async_callbacks: list[Callable] = []
+        self._async_cb_tasks: set[asyncio.Task] = set()
         self._observer: Any | None = None
         self._stopped = False
         # 加载初始配置
@@ -160,7 +161,9 @@ class ConfigReloader:
             try:
                 loop = asyncio.get_running_loop()
                 if asyncio.iscoroutinefunction(acb):
-                    _cb_task = loop.create_task(acb(snap))
+                    task = loop.create_task(acb(snap))
+                    self._async_cb_tasks.add(task)
+                    task.add_done_callback(self._on_async_cb_done)
                 else:
                     loop.call_soon(acb, snap)
             except RuntimeError:
@@ -169,6 +172,15 @@ class ConfigReloader:
                     acb(snap)
                 except Exception:
                     logger.debug("config_reloader.async_callback_error: {}", exc_info=True)
+
+    def _on_async_cb_done(self, task: asyncio.Task) -> None:
+        """异步回调任务完成: 移除引用并记录异常。"""
+        self._async_cb_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.warning("config_reloader.async_callback_failed error={}", str(exc))
 
     @property
     def current(self) -> ConfigSnapshot:

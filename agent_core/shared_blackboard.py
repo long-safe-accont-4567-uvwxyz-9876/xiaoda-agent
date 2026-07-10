@@ -54,10 +54,11 @@ class SharedBlackboard:
             entry = _Entry(value, agent_name, effective_ttl)
             old = self._store.get(key)
             self._store[key] = entry
-            # 通知旧条目上的订阅者（一次性 Event）
+            # 通知旧条目上的订阅者（一次性 Event）并清理引用
             if old and old.subscribers:
                 for ev in old.subscribers:
                     ev.set()
+                old.subscribers.clear()  # 释放 Event 引用, 避免内存泄漏
             logger.debug("blackboard.put key={} agent={} ttl={}",
                          key, agent_name, effective_ttl)
 

@@ -307,14 +307,14 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
 
 @router.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
-    # 先 accept 再验证，避免 403
-    await ws.accept()
-
+    # 先验证 token 再 accept，防止无 token 连接耗尽资源
     from web.routers.auth import _validate_token
     if not token or not _validate_token(token):
-        await ws.send_json({"type": "error", "code": "UNAUTHORIZED", "message": "Invalid or missing token"})
-        await ws.close(code=4001, reason="Unauthorized")
+        await ws.close(code=1008, reason="Unauthorized")
         return
+
+    await ws.accept()
+
     try:
         conn_id = manager.register(ws)
     except ValueError:

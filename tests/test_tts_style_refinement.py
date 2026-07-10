@@ -37,7 +37,7 @@ class TestTtsStyleRefinement:
             (Emotion.ANXIOUS, "anxious"),
             (Emotion.SHY, "shy"),
             (Emotion.SURPRISED, "fear"),
-            (Emotion.CONFUSED, "curious"),
+            (Emotion.CONFUSED, "thinking"),  # BUG-2 修复: 困惑用thinking而非curious
             (Emotion.THINKING, "thinking"),
             (Emotion.NEUTRAL, "neutral"),
             (Emotion.FEAR, "fear"),

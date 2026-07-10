@@ -197,9 +197,9 @@ def validate_memory_content(content: str) -> str | None:
 
 
 def _normalize_for_dedupe(text: str) -> str:
-    """归一化文本用于去重：移除所有空白+小写"""
+    """归一化文本用于去重：合并空白为单空格+小写"""
     import re as _re
-    return _re.sub(r'\s+', '', text).casefold()
+    return _re.sub(r'\s+', ' ', text).strip().casefold()
 
 
 class MemoryManager:

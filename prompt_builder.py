@@ -123,10 +123,6 @@ def _dynamic_stickiness_threshold(user_input: str, scene_sig: tuple) -> float:
 
     return max(0.2, min(0.8, threshold))
 
-# 缓存统计 (可观测性)
-_scene_cache_hits: int = 0
-_scene_cache_misses: int = 0
-
 # ── 三级场景分级 (核心成本控制机制) ───────────────────────────
 # S 级: 核心事实场景 → 完整重排 (关键模块立刻拉到注意力前端)
 # A 级: 功能场景 → 桶排序 (功能模块拉到前端)

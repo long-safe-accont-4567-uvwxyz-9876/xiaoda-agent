@@ -49,8 +49,8 @@ class CredentialPool:
         self._pool: dict[str, list[Credential]] = {}
         # {provider: int} 当前轮换索引
         self._cursor: dict[str, int] = {}
-        # 异步锁保护并发访问（get_credential/report_error/report_success 共享 _pool 和 _cursor）
-        self._lock = asyncio.Lock()
+        # 统一使用 threading.Lock 保护并发访问 (修复: 原asyncio.Lock与threading.Lock不同步)
+        # threading.Lock 同时提供线程安全和协程安全, 且操作耗时极短不会阻塞事件循环
         self._sync_lock = threading.Lock()
         # 单调递增序列号，用于精确标识最近使用的凭证（避免 time.time() 并发精度不足）
         self._use_seq: int = 0
@@ -71,7 +71,7 @@ class CredentialPool:
 
     async def get_credential(self, provider: str) -> Credential | None:
         """获取当前可用凭证（轮换逻辑：优先 ok 状态，跳过 exhausted 和 dead）"""
-        async with self._lock:
+        with self._sync_lock:
             self._recover_exhausted(provider)
 
             creds = self._pool.get(provider)
@@ -117,7 +117,7 @@ class CredentialPool:
 
     async def report_error(self, provider: str, error: ClassifiedError) -> None:
         """报告错误，更新凭证状态"""
-        async with self._lock:
+        with self._sync_lock:
             creds = self._pool.get(provider, [])
             if not creds:
                 return
@@ -173,7 +173,7 @@ class CredentialPool:
 
     async def report_success(self, provider: str) -> None:
         """报告成功"""
-        async with self._lock:
+        with self._sync_lock:
             _creds = self._pool.get(provider, [])
             # 找到最近使用的凭证，确认其状态为 ok
             target = self._find_active_credential(provider)

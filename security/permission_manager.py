@@ -191,8 +191,14 @@ class PermissionManager:
                         return False, reason
             return True, ""
 
-        # BYPASS 模式：全部放行（无防傻检查）
+        # BYPASS 模式：全部放行，但对 shell 命令做防傻检查（与 GOAT 一致）
         if self._mode == PermissionMode.BYPASS:
+            if tool_name == "shell_command" and tool_input:
+                cmd = tool_input.get("command", "")
+                if cmd:
+                    is_dangerous, reason = self.check_goat_dangerous_command(cmd)
+                    if is_dangerous:
+                        return False, reason
             return True, ""
 
         # STRICT 模式：敏感工具需要确认

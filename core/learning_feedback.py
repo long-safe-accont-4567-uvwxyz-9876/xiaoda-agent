@@ -129,13 +129,25 @@ def _similarity(a: str, b: str) -> float:
 
 
 def _tokenize(text: str) -> set[str]:
-    """简单分词: 小写化 + 按非字母数字切分, 保留长度 >= 2 的 token"""
+    """简单分词: 小写化 + 按非字母数字切分, 保留长度 >= 2 的 token; 中文按单字保留"""
     tokens = set()
     for raw in text.lower().split():
         # 去除标点
         clean = "".join(c for c in raw if c.isalnum())
-        if len(clean) >= 2:
-            tokens.add(clean)
+        if not clean:
+            continue
+        # 中文 (CJK) 按单字拆分并保留; 非中文段落保留长度 >= 2
+        segment = ""
+        for c in clean:
+            if '\u4e00' <= c <= '\u9fff':
+                if len(segment) >= 2:
+                    tokens.add(segment)
+                segment = ""
+                tokens.add(c)
+            else:
+                segment += c
+        if len(segment) >= 2:
+            tokens.add(segment)
     return tokens
 
 

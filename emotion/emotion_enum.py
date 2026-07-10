@@ -108,7 +108,7 @@ TTS_STYLE_MAP: dict[Emotion, str] = {
     Emotion.ANXIOUS: "anxious",
     Emotion.SHY: "shy",
     Emotion.SURPRISED: "fear",    # 惊讶用 fear 风格
-    Emotion.CONFUSED: "curious",  # 困惑用 curious 风格
+    Emotion.CONFUSED: "thinking",  # 困惑用 thinking 风格（BUG-2 修复: 原为curious语义不匹配）
     Emotion.THINKING: "thinking",
     Emotion.PLAYFUL: "playful",   # 调皮用独立风格
     Emotion.MOVED: "caring",      # 感动用 caring（温柔关切）

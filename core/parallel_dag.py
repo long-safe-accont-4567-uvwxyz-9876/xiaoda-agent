@@ -156,7 +156,7 @@ class ToolDAG:
         return [
             n for n in self._nodes.values()
             if n.state == NodeState.PENDING
-            and all(self._nodes[d].state == NodeState.SUCCESS
+            and all(self._nodes[d].state in (NodeState.SUCCESS, NodeState.SKIPPED)
                      for d in n.depends_on)
         ]
 

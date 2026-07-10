@@ -498,12 +498,13 @@ class RouterNode:
 
 class ParallelAgentNode:
     """并行执行节点，将任务拆分给多个 Agent 并行处理。"""
-    def __init__(self, dispatcher: AgentDispatcher, route_client: AsyncOpenAI, route_model: str | None = None, belief_router: BeliefRouter | None = None) -> None:
+    def __init__(self, dispatcher: AgentDispatcher, route_client: AsyncOpenAI, route_model: str | None = None, belief_router: BeliefRouter | None = None, parallel_timeout: float = 120.0) -> None:
         self._dispatcher = dispatcher
         self._route_client = route_client
         self._route_model = route_model or os.getenv("MODEL_NAME", "mimo-v2.5")
         self._belief_router = belief_router
         self._agent_configs: dict = {}
+        self._parallel_timeout = parallel_timeout
 
     def _build_decompose_prompt(self, user_input: str, targets: list[str], agent_configs: dict) -> str:
         target_descs = []
@@ -756,11 +757,27 @@ class ParallelAgentNode:
             # await state.push_progress(get_status_msg(t, "thinking", f"{display_name}准备就绪...", None))  # 节流：并行模式下由外层统一汇报
 
         tasks = [
-            self.execute_single(t, sub_tasks.get(t, state.user_input), state)
+            asyncio.ensure_future(self.execute_single(t, sub_tasks.get(t, state.user_input), state))
             for t in targets
         ]
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=self._parallel_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("parallel_agent.timeout", timeout=self._parallel_timeout, target_count=len(targets))
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            results = []
+            for t in tasks:
+                if t.done() and not t.cancelled():
+                    try:
+                        results.append(t.result())
+                    except Exception as e:
+                        results.append(e)
 
         intermediate = []
         for r in results:

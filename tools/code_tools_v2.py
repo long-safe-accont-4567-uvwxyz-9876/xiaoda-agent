@@ -296,6 +296,130 @@ def python_executor(code: str) -> ToolResult:
         return ToolResult.fail(f"执行错误: {e!s}")
 
 
+def _safe_eval(expr_tree, allowed_names):
+    """安全 AST 求值器：递归评估白名单节点，拒绝所有属性访问和导入。"""
+    _SAFE_BINOPS = {
+        ast.Add: lambda a, b: a + b,
+        ast.Sub: lambda a, b: a - b,
+        ast.Mult: lambda a, b: a * b,
+        ast.Div: lambda a, b: a / b,
+        ast.Mod: lambda a, b: a % b,
+        ast.Pow: lambda a, b: a ** b,
+        ast.FloorDiv: lambda a, b: a // b,
+        ast.LShift: lambda a, b: a << b,
+        ast.RShift: lambda a, b: a >> b,
+        ast.BitOr: lambda a, b: a | b,
+        ast.BitAnd: lambda a, b: a & b,
+        ast.BitXor: lambda a, b: a ^ b,
+    }
+    _SAFE_UNARYOPS = {
+        ast.USub: lambda a: -a,
+        ast.UAdd: lambda a: +a,
+        ast.Not: lambda a: not a,
+        ast.Invert: lambda a: ~a,
+    }
+    _SAFE_CMPOPS = {
+        ast.Eq: lambda a, b: a == b,
+        ast.NotEq: lambda a, b: a != b,
+        ast.Lt: lambda a, b: a < b,
+        ast.LtE: lambda a, b: a <= b,
+        ast.Gt: lambda a, b: a > b,
+        ast.GtE: lambda a, b: a >= b,
+        ast.Is: lambda a, b: a is b,
+        ast.IsNot: lambda a, b: a is not b,
+        ast.In: lambda a, b: a in b,
+        ast.NotIn: lambda a, b: a not in b,
+    }
+
+    def _eval(node):
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Num):  # pragma: no cover  兼容旧版
+            return node.n
+        if isinstance(node, ast.Str):  # pragma: no cover  兼容旧版
+            return node.s
+        if isinstance(node, ast.NameConstant):  # pragma: no cover  兼容旧版
+            return node.value
+        if isinstance(node, ast.Name):
+            if node.id in allowed_names:
+                return allowed_names[node.id]
+            raise ValueError(f"不允许的名称: {node.id}")
+        if isinstance(node, ast.BinOp):
+            op_type = type(node.op)
+            if op_type not in _SAFE_BINOPS:
+                raise ValueError(f"不允许的运算符: {op_type.__name__}")
+            return _SAFE_BINOPS[op_type](_eval(node.left), _eval(node.right))
+        if isinstance(node, ast.UnaryOp):
+            op_type = type(node.op)
+            if op_type not in _SAFE_UNARYOPS:
+                raise ValueError(f"不允许的一元运算符: {op_type.__name__}")
+            return _SAFE_UNARYOPS[op_type](_eval(node.operand))
+        if isinstance(node, ast.Compare):
+            left = _eval(node.left)
+            for op, comparator in zip(node.ops, node.comparators):
+                op_type = type(op)
+                if op_type not in _SAFE_CMPOPS:
+                    raise ValueError(f"不允许的比较运算符: {op_type.__name__}")
+                right = _eval(comparator)
+                if not _SAFE_CMPOPS[op_type](left, right):
+                    return False
+                left = right
+            return True
+        if isinstance(node, ast.BoolOp):
+            if isinstance(node.op, ast.And):
+                result = True
+                for value in node.values:
+                    result = _eval(value)
+                    if not result:
+                        return result
+                return result
+            if isinstance(node.op, ast.Or):
+                result = False
+                for value in node.values:
+                    result = _eval(value)
+                    if result:
+                        return result
+                return result
+            raise ValueError("不允许的布尔运算")
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name):
+                raise ValueError("不允许的函数调用方式")
+            func_name = node.func.id
+            if func_name not in allowed_names:
+                raise ValueError(f"不允许的函数: {func_name}")
+            func = allowed_names[func_name]
+            args = [_eval(arg) for arg in node.args]
+            kwargs = {kw.arg: _eval(kw.value) for kw in node.keywords if kw.arg is not None}
+            return func(*args, **kwargs)
+        if isinstance(node, ast.List):
+            return [_eval(elt) for elt in node.elts]
+        if isinstance(node, ast.Tuple):
+            return tuple(_eval(elt) for elt in node.elts)
+        if isinstance(node, ast.Dict):
+            return {_eval(k): _eval(v) for k, v in zip(node.keys, node.values)}
+        if isinstance(node, ast.Set):
+            return {_eval(elt) for elt in node.elts}
+        if isinstance(node, ast.Subscript):
+            value = _eval(node.value)
+            if isinstance(node.slice, ast.Slice):
+                lower = _eval(node.slice.lower) if node.slice.lower is not None else None
+                upper = _eval(node.slice.upper) if node.slice.upper is not None else None
+                step = _eval(node.slice.step) if node.slice.step is not None else None
+                return value[lower:upper:step]
+            return value[_eval(node.slice)]
+        if isinstance(node, ast.IfExp):
+            return _eval(node.body) if _eval(node.test) else _eval(node.orelse)
+        if isinstance(node, ast.Attribute):
+            raise ValueError("不允许属性访问")
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            raise ValueError("不允许导入")
+        raise ValueError(f"不允许的表达式类型: {type(node).__name__}")
+
+    return _eval(expr_tree)
+
+
 @register_tool(
     name="calculator",
     description="计算数学表达式。输入数学表达式，如 '2+2' 或 'sqrt(16)'",
@@ -364,7 +488,7 @@ def calculator(expression: str) -> ToolResult:
             'ceil': _math.ceil, 'floor': _math.floor,
             'factorial': _math.factorial, 'gcd': _math.gcd,
         }
-        result = eval(expression, {"__builtins__": {}}, allowed_names)
+        result = _safe_eval(tree, allowed_names)
         return ToolResult.ok(f"计算结果: {expression} = {result}")
     except Exception as e:
         return ToolResult.fail(f"计算错误: {e!s}")

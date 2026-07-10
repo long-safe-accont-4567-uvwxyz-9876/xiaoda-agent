@@ -474,6 +474,38 @@ class DatabaseManager:
         await self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_mv_memory ON memory_versions(memory_id, version)"
         )
+        # 回填已有记忆的哈希链 (Bug 9 fix): 为 v12 之前创建的行计算 content_hash
+        # 并写入 memory_versions v1 记录, 使 Tamper-Evident 校验对历史数据生效
+        from memory.context_governance import compute_content_hash
+        cursor = await self._conn.execute(
+            "SELECT id, summary FROM episodic_memories "
+            "WHERE content_hash = '' OR content_hash IS NULL ORDER BY id"
+        )
+        backfill_rows = await cursor.fetchall()
+        now = time.time()
+        backfilled = 0
+        for row in backfill_rows:
+            mem_id, summary = row[0], row[1]
+            content_hash = compute_content_hash(summary)
+            await self._conn.execute(
+                "UPDATE episodic_memories SET content_hash=?, version=1 WHERE id=?",
+                (content_hash, mem_id),
+            )
+            # 幂等: 仅当 memory_versions 不存在该 memory 的 v1 记录时才插入
+            exists_cur = await self._conn.execute(
+                "SELECT 1 FROM memory_versions WHERE memory_id=? AND version=1",
+                (mem_id,),
+            )
+            if not await exists_cur.fetchone():
+                await self._conn.execute(
+                    "INSERT INTO memory_versions "
+                    "(memory_id, version, content_hash, prev_hash, summary_snapshot, created_at) "
+                    "VALUES (?, 1, ?, '', ?, ?)",
+                    (mem_id, content_hash, summary[:500], now),
+                )
+            backfilled += 1
+        if backfilled:
+            logger.info("database.migration_v12_backfill", rows=backfilled)
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")
 

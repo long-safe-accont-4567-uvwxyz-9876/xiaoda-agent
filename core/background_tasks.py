@@ -32,11 +32,21 @@ if TYPE_CHECKING:
 _bg_tasks: set[asyncio.Task] = set()
 
 
+def _on_bg_task_done(task: asyncio.Task) -> None:
+    """后台任务完成回调: 移除任务引用并记录异常 (防止异常静默丢失)。"""
+    _bg_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning("bg.task_failed error={} task={}", str(exc), task.get_name())
+
+
 def _spawn(coro: Any) -> None:
     """创建 fire-and-forget 后台任务，自动从 _bg_tasks 中移除已完成的任务。"""
     task = asyncio.create_task(coro)
     _bg_tasks.add(task)
-    task.add_done_callback(_bg_tasks.discard)
+    task.add_done_callback(_on_bg_task_done)
 
 
 class BackgroundTaskManager:

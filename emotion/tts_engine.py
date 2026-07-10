@@ -2,6 +2,7 @@ from typing import Any, ClassVar
 import hashlib
 import json
 import os
+import re
 import base64
 import time
 import asyncio
@@ -457,6 +458,11 @@ class TTSEngine:
         Returns:
             合成音频文件路径, 失败返回 None
         """
+        # 防御性清理: 移除可能残留的情绪/表情包标签, 防止TTS朗读标签文本 (BUG-18)
+        text = re.sub(r'\[emotion:[^\]]*\]', '', text)
+        text = re.sub(r'\[sticker:[^\]]*\]', '', text)
+        text = text.strip()
+
         if not self.available:
             logger.warning("tts.not_available")
             return None
