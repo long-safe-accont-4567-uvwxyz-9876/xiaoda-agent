@@ -8,12 +8,14 @@
  *       只恢复 build 后不存在的文件（避免覆盖 vite 生成的默认壁纸）。
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, statSync } from 'fs'
-import { join } from 'path'
+import { join, dirname } from 'path'
+import { tmpdir } from 'os'
 import { execSync } from 'child_process'
+import { fileURLToPath } from 'url'
 
-const __dirname = new URL('.', import.meta.url).pathname
+const __dirname = dirname(fileURLToPath(import.meta.url))
 const distWallpapers = join(__dirname, '..', 'dist', 'assets', 'wallpapers')
-const backupDir = '/tmp/_wallpaper_backup'
+const backupDir = join(tmpdir(), '_wallpaper_backup')
 
 // 备份
 if (existsSync(distWallpapers)) {
