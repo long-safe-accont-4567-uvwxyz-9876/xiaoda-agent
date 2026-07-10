@@ -585,7 +585,9 @@ class DatabaseManager:
                 evidence_json TEXT NOT NULL DEFAULT '{}',
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
-                UNIQUE(source_memory_id, target_memory_id, edge_type)
+                UNIQUE(source_memory_id, target_memory_id, edge_type),
+                FOREIGN KEY (source_memory_id) REFERENCES episodic_memories(id),
+                FOREIGN KEY (target_memory_id) REFERENCES episodic_memories(id)
             );
             CREATE INDEX IF NOT EXISTS idx_memory_facts_current
                 ON memory_facts(subject, predicate, status, valid_to, expired_at);

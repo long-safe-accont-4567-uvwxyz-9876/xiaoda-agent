@@ -1,5 +1,6 @@
 {
   "version": "memory-v0.6-phase1.1",
+  "dataset_kind": "synthetic_algorithm_regression",
   "generator": {
     "count_per_category": 12,
     "categories": [

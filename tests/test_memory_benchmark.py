@@ -46,6 +46,7 @@ def test_versioned_dataset_has_exactly_120_balanced_cases() -> None:
     categories = Counter(case["category"] for case in dataset["cases"])
 
     assert dataset["version"] == "memory-v0.6-phase1.1"
+    assert dataset["dataset_kind"] == "synthetic_algorithm_regression"
     assert len(dataset["cases"]) == 120
     assert set(categories) == {
         "direct_fact",

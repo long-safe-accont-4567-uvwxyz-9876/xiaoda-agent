@@ -41,6 +41,12 @@ async def test_fresh_database_migrates_to_v13_idempotently(tmp_path):
             """INSERT INTO memory_fact_sources (fact_id, memory_id, created_at)
                VALUES (999, 999, 1)"""
         )
+    with pytest.raises(sqlite3.IntegrityError):
+        await manager.execute(
+            """INSERT INTO memory_edges
+               (source_memory_id, target_memory_id, edge_type, created_at, updated_at)
+               VALUES (999, 1000, 'similar', 1, 1)"""
+        )
 
     await manager._migrate_v13()
     await manager.commit()
