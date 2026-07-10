@@ -155,9 +155,9 @@ export const api = {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({ keys, test_required: testRequired }),
-    }).then(r => r.json()).then(b => {
-      if (!b.ok) throw new Error(b.error?.message || 'Save failed')
-      return b.data
+    }).then(r => r.json().then(b => ({ status: r.status, body: b }))).then(({ status, body }) => {
+      if (status >= 400 || !body.ok) throw new Error(body.error?.message || `Save failed (HTTP ${status})`)
+      return body.data
     })
   },
 
@@ -180,9 +180,9 @@ export const api = {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(fields),
-    }).then(r => r.json()).then(b => {
-      if (!b.ok) throw new Error(b.error?.message || 'Save failed')
-      return b.data
+    }).then(r => r.json().then(b => ({ status: r.status, body: b }))).then(({ status, body }) => {
+      if (status >= 400 || !body.ok) throw new Error(body.error?.message || `Save failed (HTTP ${status})`)
+      return body.data
     })
   },
 

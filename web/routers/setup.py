@@ -509,39 +509,44 @@ async def test_key(body: dict) -> Any:
 @router.post("/setup/keys", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
 async def save_keys(body: dict) -> Any:
     """将提供的 Key-Value 写入 .env 文件。"""
-    from setup_wizard import (
-        ENV_PATH, ENV_EXAMPLE_PATH, REQUIRED_KEYS,
-        _parse_env_lines, _write_env, _load_env_values,
-    )
+    try:
+        from setup_wizard import (
+            ENV_PATH, ENV_EXAMPLE_PATH, REQUIRED_KEYS,
+            _parse_env_lines, _write_env, _load_env_values,
+        )
 
-    updates = body.get("keys")
-    if not updates or not isinstance(updates, dict):
-        return Envelope(ok=False, error={"code": "INVALID_BODY", "message": "需要提供 keys 字段（dict）"})
+        updates = body.get("keys")
+        if not updates or not isinstance(updates, dict):
+            return Envelope(ok=False, error={"code": "INVALID_BODY", "message": "需要提供 keys 字段（dict）"})
 
-    # 当 test_required=true 时，对必填 Key 逐一测试
-    test_required = body.get("test_required", False)
-    if test_required:
-        test_error = await _test_required_keys(updates, REQUIRED_KEYS)
-        if test_error is not None:
-            return test_error
+        # 当 test_required=true 时，对必填 Key 逐一测试
+        test_required = body.get("test_required", False)
+        if test_required:
+            test_error = await _test_required_keys(updates, REQUIRED_KEYS)
+            if test_error is not None:
+                return test_error
 
-    # 写入 .env 文件
-    _write_env_file(updates, ENV_PATH, ENV_EXAMPLE_PATH, _parse_env_lines, _load_env_values, _write_env)
-    _auto_register_providers(updates)
-    logger.info("setup.keys_saved count={}", len(updates))
+        # 写入 .env 文件
+        _write_env_file(updates, ENV_PATH, ENV_EXAMPLE_PATH, _parse_env_lines, _load_env_values, _write_env)
+        _auto_register_providers(updates)
+        logger.info("setup.keys_saved count={}", len(updates))
 
-    # 重新加载环境变量 + 清除缓存 + 重置凭证池
-    _reload_env_and_cache(updates, ENV_PATH)
-    _reset_credential_pool(updates)
+        # 重新加载环境变量 + 清除缓存 + 重置凭证池
+        _reload_env_and_cache(updates, ENV_PATH)
+        _reset_credential_pool(updates)
 
-    # 更新 config 模块变量 + 刷新客户端
-    _update_config_and_refresh_clients(updates)
+        # 更新 config 模块变量 + 刷新客户端
+        _update_config_and_refresh_clients(updates)
 
-    # 核心重初始化放到后台异步执行，不阻塞 API 返回
-    import asyncio
-    _reinit_task = asyncio.create_task(_background_reinit())
+        # 核心重初始化放到后台异步执行，不阻塞 API 返回
+        import asyncio
+        _reinit_task = asyncio.create_task(_background_reinit())
 
-    return Envelope(data={"saved": list(updates.keys()), "need_restart": False})
+        return Envelope(data={"saved": list(updates.keys()), "need_restart": False})
+    except Exception as e:
+        import traceback
+        logger.error("setup.keys_save_failed error={} traceback={}", str(e), traceback.format_exc())
+        return Envelope(ok=False, error={"code": "SAVE_FAILED", "message": f"保存失败: {str(e)}"})
 
 
 async def _test_required_keys(updates: Any, REQUIRED_KEYS: Any) -> Envelope | None:

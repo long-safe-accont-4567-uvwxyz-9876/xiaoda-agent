@@ -468,7 +468,7 @@ class MessageProcessorMixin:
         """任务图路由路径。返回 ProcessResult 或 None（None 表示继续主路径）。"""
         if not ("xiaoda" in chat_targets and self._task_graph
                 and not self._is_manual_target(user_input, user_id)
-                and not self._is_simple_task(clean_input)
+                and (not self._is_simple_task(clean_input) or is_master)
                 and not force_voice and not image_data
                 and not ("[图片:" in user_input and "已保存到" in user_input)):
             return None
@@ -539,13 +539,13 @@ class MessageProcessorMixin:
             user_input, is_master, image_data, clean_input, emotion, user_id, source)
 
         # 任务类型解析与熔断器检查
+        is_owner = self.security.is_owner(user_id)
         early_result, task_type, _cb_max_tokens, circuit_state, _model_cfg = \
-            self._resolve_task_and_circuit(user_input, tools, messages, trace)
+            self._resolve_task_and_circuit(user_input, tools, messages, trace, is_owner=is_owner)
         if early_result is not None:
             return early_result
 
         # 主 LLM 调用 + 验收循环
-        is_owner = self.security.is_owner(user_id)
         reply, tool_results = await self._call_main_llm_with_verification(
             messages, tools, task_type, _model_cfg, _cb_max_tokens, circuit_state,
             status_callback, user_openid, session_id, trace, ctx, user_input, is_owner)
@@ -889,8 +889,9 @@ class MessageProcessorMixin:
         if has_image and tools:
             tools = None
 
-        # 简单任务时过滤系统级工具
-        tools = ChatProcessor.filter_tools_for_simple_task(tools, clean_input, self._is_simple_task)
+        # 简单任务时过滤系统级工具（主人不过滤，保留完整工具访问权）
+        if not is_master:
+            tools = ChatProcessor.filter_tools_for_simple_task(tools, clean_input, self._is_simple_task)
         # 表情包意图时仅保留 delegate_task
         if _sticker_intent and tools:
             tools = [t for t in tools if t.get("function", {}).get("name") == "delegate_task"]
@@ -908,11 +909,17 @@ class MessageProcessorMixin:
             logger.info("agent.tools_filtered_for_non_master", user_id=user_id)
         return _pre_picked_sticker, tools
 
-    def _resolve_task_and_circuit(self, user_input: Any, tools: Any, messages: Any, trace: Any) -> tuple:
+    def _resolve_task_and_circuit(self, user_input: Any, tools: Any, messages: Any, trace: Any, is_owner: bool = False) -> tuple:
         """任务类型解析与熔断器检查。返回 (early_result, task_type, _cb_max_tokens, circuit_state, _model_cfg)。
 
         early_result 非 None 时表示熔断器 RED 状态，应直接返回。
         """
+        # 主人请求时重置认知状态，避免非主人的失败影响主人
+        if is_owner and self._cognitive_state.consecutive_fails > 0:
+            logger.info("circuit_breaker.reset_for_owner", fails=self._cognitive_state.consecutive_fails)
+            self._cognitive_state.consecutive_fails = 0
+            self._cognitive_state.confidence = 1.0
+            self._cognitive_state.fatigue = 0.0
         should_escalate, reason = self._should_escalate_to_pro(user_input, tools)
         base_task = "chat_pro" if should_escalate else "chat"
         task_type = self.router.resolve_task_type(base_task)
