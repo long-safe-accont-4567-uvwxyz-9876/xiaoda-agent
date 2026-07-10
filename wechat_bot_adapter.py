@@ -168,8 +168,9 @@ def create_wechat_bot(
     - WECHAT_ILINK_ENABLED: 是否启用微信桥接 (默认 false)
     """
     import os
-    if not os.getenv("WECHAT_ILINK_ENABLED", "false").lower() in ("true", "1", "yes"):
-        logger.info("wechat_bot.disabled — set WECHAT_ILINK_ENABLED=true to enable")
+    enabled = os.getenv("WECHAT_ILINK_ENABLED", "false").lower() in ("true", "1", "yes")
+    if not enabled:
+        logger.info("wechat_bot.skeleton_mode — adapter created, set WECHAT_ILINK_ENABLED=true to enable protocol")
     return WeChatBotAdapter(
         db=db,
         router=router,
