@@ -1,0 +1,18 @@
+{
+  "version": "memory-v0.6-phase1.1",
+  "generator": {
+    "count_per_category": 12,
+    "categories": [
+      "direct_fact",
+      "one_hop",
+      "two_hop",
+      "correction",
+      "temporal",
+      "preference",
+      "alias",
+      "hub_noise",
+      "negative",
+      "provenance"
+    ]
+  }
+}
