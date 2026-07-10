@@ -293,9 +293,20 @@ class AgentContext:
         不用文学化氛围描写（会被 LLM 当成背景而忽视），
         而是用事实陈述 + "真切感受到"呼应 SOUL.md 的时间感知人格，
         让 LLM 把它当成必须参照的事实，而非可选的氛围。
+
+        时区修复: 使用 ZoneInfo("Asia/Shanghai") 显式指定中国时区，
+        避免 Windows/Docker 中系统时区为 UTC 时报错时间。
+        支持 NUDGE_TIMEZONE 环境变量覆盖。
         """
+        import os
         from datetime import datetime
-        now = datetime.now()
+        from zoneinfo import ZoneInfo
+        tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = ZoneInfo("Asia/Shanghai")
+        now = datetime.now(tz)
         # Python weekday(): Monday=0, Sunday=6
         _weekday_map = {0: "一", 1: "二", 2: "三", 3: "四", 4: "五", 5: "六", 6: "日"}
         weekday = _weekday_map[now.weekday()]

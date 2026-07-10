@@ -4,9 +4,21 @@ from typing import Any
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+
+def _get_local_now() -> datetime:
+    """获取本地时间（使用显式时区，修复 Windows/Docker 中系统时区不正确的问题）。"""
+    tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Shanghai")
+    return datetime.now(tz)
 
 
 def _safe_float(val: Any, default: float = 0.5) -> float:
@@ -29,8 +41,8 @@ router = APIRouter(tags=["insight"], dependencies=[Depends(get_current_user)])
 
 
 def _today_start() -> float:
-    now = datetime.now()
-    return datetime(now.year, now.month, now.day).timestamp()
+    now = _get_local_now()
+    return datetime(now.year, now.month, now.day, tzinfo=now.tzinfo).timestamp()
 
 
 async def _broadcast_kg_change(action: str, target: str, name: str) -> None:

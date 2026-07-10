@@ -232,7 +232,7 @@ class NotebookManager:
         return await self.notebook.get_notebook_notes(limit=limit)
 
     def _parse_task_time(self, time_str: str) -> float:
-        now = datetime.datetime.now()
+        now = _get_local_now()
         original = time_str.strip()
         time_str = original
 

@@ -12,11 +12,23 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import datetime
+from zoneinfo import ZoneInfo
 from typing import TYPE_CHECKING
 
 from loguru import logger
+
+
+def _get_local_now() -> datetime.datetime:
+    """获取本地时间（使用显式时区，修复 Windows/Docker 中系统时区不正确的问题）。"""
+    tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Shanghai")
+    return datetime.datetime.now(tz)
 
 if TYPE_CHECKING:
     from agent_core.core import AgentCore
@@ -56,7 +68,7 @@ class GrowthNarrative:
         await asyncio.sleep(300)
         while self._running:
             try:
-                now = datetime.datetime.now()
+                now = _get_local_now()
                 today = now.strftime("%Y-%m-%d")
                 # 每天 23:00-23:30 之间触发，且当天未执行过
                 if (now.hour == self.TRIGGER_HOUR
@@ -90,7 +102,7 @@ class GrowthNarrative:
             # 写入自我模型的成长轨迹
             try:
                 from core.self_model import append_growth_entry
-                _today = datetime.datetime.now().strftime("%Y-%m-%d")
+                _today = _get_local_now().strftime("%Y-%m-%d")
                 append_growth_entry(f"今日成长：{narrative[:100]}")
             except Exception as e:
                 logger.debug("growth_narrative.self_model_update_failed", error=str(e))
@@ -114,7 +126,7 @@ class GrowthNarrative:
             if not db:
                 return []
             # 今天的 0 点时间戳
-            now = datetime.datetime.now()
+            now = _get_local_now()
             midnight = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
             rows = await db.fetch_all(
                 "SELECT * FROM episodic_memories WHERE timestamp >= ? "
@@ -139,7 +151,7 @@ class GrowthNarrative:
             return ""
 
         memories_text = "\n".join(summaries)
-        today = datetime.datetime.now().strftime("%Y年%m月%d日")
+        today = _get_local_now().strftime("%Y年%m月%d日")
 
         prompt = f"""今天是{today}。以下是小妲今天的记忆摘要：
 
@@ -180,7 +192,7 @@ class GrowthNarrative:
                 "user_input": "（系统：每日成长叙事生成）",
                 "assistant_reply": narrative,
                 "timestamp": time.time(),
-                "session_id": f"growth_{datetime.datetime.now().strftime('%Y%m%d')}",
+                "session_id": f"growth_{_get_local_now().strftime('%Y%m%d')}",
                 "source": "growth_narrative",
             }
             await self.core.memory.encode_memory(context)

@@ -18,14 +18,26 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
 if TYPE_CHECKING:
     from agent_core.core import AgentCore
+
+
+def _get_local_now() -> datetime:
+    """获取本地时间（使用显式时区，修复 Windows/Docker 中系统时区不正确的问题）。"""
+    tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Shanghai")
+    return datetime.now(tz)
 
 
 class MemoryRecallScheduler:
@@ -76,7 +88,7 @@ class MemoryRecallScheduler:
 
     def _is_dnd(self) -> bool:
         """凌晨 DND 时段（0:00-7:00）跳过回忆任务。"""
-        hour = datetime.now().hour
+        hour = _get_local_now().hour
         return self.DND_START_HOUR <= hour < self.DND_END_HOUR
 
     async def _should_run(self) -> bool:

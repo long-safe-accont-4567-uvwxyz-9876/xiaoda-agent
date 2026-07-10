@@ -13,6 +13,19 @@ from config import get_agent_display_name, get_temperature
 import contextlib
 
 
+def _get_local_now() -> datetime:
+    """获取本地时间（使用显式时区，修复 Windows/Docker 中系统时区不正确的问题）。
+
+    默认 Asia/Shanghai，支持 NUDGE_TIMEZONE 环境变量覆盖。
+    """
+    tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Shanghai")
+    return datetime.now(tz)
+
+
 class NudgeEngine:
     """驱动主动问候、提醒等轻推（nudge）行为的引擎。"""
 
@@ -40,7 +53,7 @@ class NudgeEngine:
         self._running = False
         self._task = None
         self._proactive_count_today = 0
-        self._today_date = datetime.now().date()
+        self._today_date = _get_local_now().date()
 
         self.greeting_enabled = True
         self.greeting_threshold = greeting_threshold
@@ -100,13 +113,7 @@ class NudgeEngine:
         await self._check_portrait_consolidate()
 
     def _is_dnd(self) -> bool:
-        tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
-        try:
-            tz = ZoneInfo(tz_name)
-        except Exception:
-            logger.debug("nudge.timezone_parse_error", exc_info=True)
-            tz = ZoneInfo("Asia/Shanghai")
-        now = datetime.now(tz)
+        now = _get_local_now()
         now_min = now.hour * 60 + now.minute
 
         # 优先读取 WebUI 配置（与 GreetingScheduler 共享）
@@ -137,12 +144,12 @@ class NudgeEngine:
     async def _sent_today_count(self) -> int:
         """查询 greeting_log 表今日已发数量（与 GreetingScheduler 共享计数）。"""
         # 跨日重置内存计数器
-        today = datetime.now().date()
+        today = _get_local_now().date()
         if today != self._today_date:
             self._proactive_count_today = 0
             self._today_date = today
         try:
-            midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+            midnight = _get_local_now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
             row = await self._db.fetch_one(
                 "SELECT COUNT(*) AS c FROM greeting_log WHERE fired_at >= ?", (midnight,))
             return int(row["c"]) if row else 0
@@ -239,7 +246,7 @@ class NudgeEngine:
             return []
 
     async def _generate_idle_greeting(self, idle_seconds: float) -> str:
-        hour = datetime.now().hour
+        hour = _get_local_now().hour
         if hour < self.dnd_end or (hour >= self.dnd_start):
             return ""
 
@@ -513,7 +520,7 @@ class NudgeEngine:
         return "爸爸"
 
     def get_time_greeting(self) -> str:
-        hour = datetime.now().hour
+        hour = _get_local_now().hour
         if 6 <= hour < 11:
             time_phrase = "早上好"
         elif 11 <= hour < 14:

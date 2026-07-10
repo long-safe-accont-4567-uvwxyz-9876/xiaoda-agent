@@ -4,6 +4,7 @@ import os
 import shutil
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -12,6 +13,17 @@ from loguru import logger
 from web.routers.auth import get_current_user
 from web.schemas import Envelope
 import contextlib
+
+
+def _get_local_now():
+    """获取本地时间（使用显式时区，修复 Windows/Docker 中系统时区不正确的问题）。"""
+    from datetime import datetime
+    tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Shanghai")
+    return datetime.now(tz)
 
 
 # 免责协议全文（模块级常量，供前端通过 API 获取）
@@ -1119,7 +1131,7 @@ def _write_disclaimer_agreement(user_md_path: Path, agreed: bool) -> str:
     """
     from datetime import datetime
 
-    agreed_at = datetime.now().isoformat(timespec="seconds")
+    agreed_at = _get_local_now().isoformat(timespec="seconds")
     new_section = (
         "## 法律与声明\n"
         "\n"

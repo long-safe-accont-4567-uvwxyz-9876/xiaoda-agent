@@ -12,13 +12,29 @@ from typing import Any
 
 import asyncio
 import json
+import os
 import random
 import time
 import threading
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 from utils.llm_cleanup import strip_thinking as _strip_thinking
+
+
+def _get_local_now() -> datetime:
+    """获取本地时间（使用显式时区，修复 Windows/Docker 中系统时区不正确的问题）。
+
+    默认 Asia/Shanghai，支持 NUDGE_TIMEZONE 环境变量覆盖。
+    与 emotion/nudge_engine.py 保持一致的时区处理逻辑。
+    """
+    tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Shanghai")
+    return datetime.now(tz)
 
 
 def _hm_to_min(hm: str) -> int:
@@ -64,7 +80,7 @@ class GreetingScheduler:
 
     def is_dnd(self, now_min: int | None = None) -> bool:
         if now_min is None:
-            now = datetime.now()
+            now = _get_local_now()
             now_min = now.hour * 60 + now.minute
         for p in self.cfg.get("schedule.dnd_periods", []):
             try:
@@ -80,7 +96,7 @@ class GreetingScheduler:
         return False
 
     async def _sent_today_count(self) -> int:
-        midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        midnight = _get_local_now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
         row = await self.core.db.fetch_one(
             "SELECT COUNT(*) AS c FROM greeting_log WHERE fired_at >= ?", (midnight,))
         return int(row["c"]) if row else 0
@@ -89,7 +105,7 @@ class GreetingScheduler:
     async def _tick(self) -> None:
         if not self.cfg.get("schedule.enabled", True):
             return
-        now = datetime.now()
+        now = _get_local_now()
         today = now.strftime("%Y-%m-%d")
         now_min = now.hour * 60 + now.minute
         weekday = now.isoweekday()  # 1..7
@@ -277,8 +293,7 @@ class GreetingScheduler:
         address_term = getattr(self.core.context, "current_address_term", "") or "爸爸"
 
         # 构建带时间上下文的问候指令
-        from datetime import datetime
-        hour = datetime.now().hour
+        hour = _get_local_now().hour
         if hour < 6:
             time_hint, activity = "深夜", "还没睡"
         elif hour < 9:

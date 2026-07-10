@@ -15,10 +15,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from datetime import datetime, UTC
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from loguru import logger
+
+
+def _get_local_now() -> datetime:
+    """获取本地时间（使用显式时区，修复 Windows/Docker 中系统时区不正确的问题）。"""
+    tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Shanghai")
+    return datetime.now(tz)
 
 
 class MailPoller:
@@ -38,7 +50,7 @@ class MailPoller:
         self._last_poll_time = (datetime.now(UTC) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         # 日配额
         self._daily_count = 0
-        self._daily_reset_date = datetime.now().date()
+        self._daily_reset_date = _get_local_now().date()
 
     # ── 生命周期 ──────────────────────────────────────────────
     def start(self) -> None:
@@ -83,7 +95,7 @@ class MailPoller:
             return
 
         # 日配额重置
-        today = datetime.now().date()
+        today = _get_local_now().date()
         if today != self._daily_reset_date:
             self._daily_count = 0
             self._daily_reset_date = today
@@ -233,7 +245,7 @@ class MailPoller:
         end = int(self.cfg.get("mail.dnd_end", 0))
         if start == end:
             return False  # 起止相同 = 不启用 DND
-        hour = datetime.now().hour
+        hour = _get_local_now().hour
         if start < end:
             return start <= hour < end
         # 跨天时段（如 22:00-7:00）
