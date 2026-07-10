@@ -11,6 +11,7 @@ from .db_notebook import NotebookDB
 from .db_learning import LearningDB
 from .db_knowledge import KnowledgeDB
 from .db_analytics import AnalyticsDB
+from .db_temporal_memory import TemporalMemoryDB
 from .index_manager import build_default_index_manager
 from .session_store import (
     SessionInfo,
@@ -21,7 +22,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 13
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -66,6 +67,7 @@ class DatabaseManager:
         self.learning: LearningDB | None = None
         self.knowledge: KnowledgeDB | None = None
         self.analytics: AnalyticsDB | None = None
+        self.temporal: TemporalMemoryDB | None = None
 
     async def init(self) -> None:
         # 幂等性：如果已有活跃连接，先关闭旧连接再创建新连接
@@ -90,6 +92,7 @@ class DatabaseManager:
             logger.info(f"database.fat_fs_detected fs={fs_type} → 使用 DELETE journal_mode, 禁用 FTS5 触发器")
         journal_mode_sql = "PRAGMA journal_mode=DELETE" if self._is_fat_fs else "PRAGMA journal_mode=WAL"
         pragmas = [
+            "PRAGMA foreign_keys=ON",
             journal_mode_sql,
             "PRAGMA synchronous=NORMAL",
             "PRAGMA cache_size=-20000",      # ~20MB
@@ -124,6 +127,7 @@ class DatabaseManager:
         self.learning = LearningDB(self._conn)
         self.knowledge = KnowledgeDB(self._conn)
         self.analytics = AnalyticsDB(self._conn)
+        self.temporal = TemporalMemoryDB(self._conn)
         logger.info("database.ready", path=str(self.db_path))
 
     async def _apply_composite_indexes(self) -> None:
@@ -205,6 +209,7 @@ class DatabaseManager:
             (10, "episodic_memories.entities+event_type+metadata_json", self._migrate_v10),
             (11, "memory_recall_notes", self._migrate_v11),
             (12, "episodic_memories.content_hash+version+memory_versions+context_audit_log", self._migrate_v12),
+            (13, "bitemporal_facts_preferences+provenance+memory_edges", self._migrate_v13),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -506,6 +511,100 @@ class DatabaseManager:
             backfilled += 1
         if backfilled:
             logger.info("database.migration_v12_backfill", rows=backfilled)
+
+    async def _migrate_v13(self) -> None:
+        """v13: 双时态事实、偏好、来源映射和类型化记忆边。"""
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS memory_facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject TEXT NOT NULL,
+                predicate TEXT NOT NULL,
+                object TEXT NOT NULL,
+                object_type TEXT NOT NULL DEFAULT 'text',
+                valid_from REAL,
+                valid_to REAL,
+                learned_at REAL NOT NULL,
+                expired_at REAL,
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK(status IN ('active', 'superseded', 'rejected', 'uncertain', 'pending_review')),
+                confidence REAL NOT NULL DEFAULT 1.0 CHECK(confidence >= 0 AND confidence <= 1),
+                fact_hash TEXT NOT NULL UNIQUE,
+                superseded_by INTEGER,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY (superseded_by) REFERENCES memory_facts(id)
+            );
+            CREATE TABLE IF NOT EXISTS memory_fact_sources (
+                fact_id INTEGER NOT NULL,
+                memory_id INTEGER NOT NULL,
+                evidence_text TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                PRIMARY KEY (fact_id, memory_id),
+                FOREIGN KEY (fact_id) REFERENCES memory_facts(id) ON DELETE CASCADE,
+                FOREIGN KEY (memory_id) REFERENCES episodic_memories(id)
+            );
+            CREATE TABLE IF NOT EXISTS memory_preferences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                preference_key TEXT NOT NULL,
+                preference_value TEXT NOT NULL,
+                preference_type TEXT NOT NULL DEFAULT 'general',
+                polarity REAL NOT NULL DEFAULT 1.0,
+                scope TEXT NOT NULL DEFAULT 'global',
+                valid_from REAL,
+                valid_to REAL,
+                learned_at REAL NOT NULL,
+                expired_at REAL,
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK(status IN ('active', 'superseded', 'rejected', 'uncertain', 'pending_review')),
+                confidence REAL NOT NULL DEFAULT 1.0 CHECK(confidence >= 0 AND confidence <= 1),
+                observed_count INTEGER NOT NULL DEFAULT 1 CHECK(observed_count >= 0),
+                explicitness TEXT NOT NULL DEFAULT 'explicit'
+                    CHECK(explicitness IN ('explicit', 'inferred')),
+                superseded_by INTEGER,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY (superseded_by) REFERENCES memory_preferences(id)
+            );
+            CREATE TABLE IF NOT EXISTS memory_preference_sources (
+                preference_id INTEGER NOT NULL,
+                memory_id INTEGER NOT NULL,
+                evidence_text TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                PRIMARY KEY (preference_id, memory_id),
+                FOREIGN KEY (preference_id) REFERENCES memory_preferences(id) ON DELETE CASCADE,
+                FOREIGN KEY (memory_id) REFERENCES episodic_memories(id)
+            );
+            CREATE TABLE IF NOT EXISTS memory_edges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_memory_id INTEGER NOT NULL,
+                target_memory_id INTEGER NOT NULL,
+                edge_type TEXT NOT NULL
+                    CHECK(edge_type IN ('supersedes', 'supports', 'similar', 'bridge')),
+                weight REAL NOT NULL DEFAULT 1.0,
+                confidence REAL NOT NULL DEFAULT 1.0 CHECK(confidence >= 0 AND confidence <= 1),
+                evidence_json TEXT NOT NULL DEFAULT '{}',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                UNIQUE(source_memory_id, target_memory_id, edge_type)
+            );
+            CREATE INDEX IF NOT EXISTS idx_memory_facts_current
+                ON memory_facts(subject, predicate, status, valid_to, expired_at);
+            CREATE INDEX IF NOT EXISTS idx_memory_facts_as_of
+                ON memory_facts(valid_from, valid_to, learned_at, expired_at);
+            CREATE INDEX IF NOT EXISTS idx_memory_fact_sources_memory
+                ON memory_fact_sources(memory_id);
+            CREATE INDEX IF NOT EXISTS idx_memory_preferences_current
+                ON memory_preferences(preference_key, scope, status, valid_to, expired_at);
+            CREATE INDEX IF NOT EXISTS idx_memory_preferences_as_of
+                ON memory_preferences(valid_from, valid_to, learned_at, expired_at);
+            CREATE INDEX IF NOT EXISTS idx_memory_preference_sources_memory
+                ON memory_preference_sources(memory_id);
+            CREATE INDEX IF NOT EXISTS idx_memory_edges_source
+                ON memory_edges(source_memory_id, edge_type);
+            CREATE INDEX IF NOT EXISTS idx_memory_edges_target
+                ON memory_edges(target_memory_id, edge_type);
+        """)
+
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")
 
