@@ -60,7 +60,7 @@ async def generate_reunion_message(
     if emotional_memories:
         recent = emotional_memories[:2]
         memory_hint = "\n".join(
-            f"- 最近发生的事：{m.event}（当时{m.emotion}）"
+            f"- 最近发生的事：{m.event}（当时{getattr(m, 'emotion', '未知')}）"
             for m in recent if hasattr(m, 'event')
         )
 

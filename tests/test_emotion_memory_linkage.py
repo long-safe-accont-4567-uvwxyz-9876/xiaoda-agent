@@ -193,6 +193,7 @@ class TestCnToEnMap:
             # 英文值应为非空
             assert value, f"{cn} 的英文值为空"
 
-    def test_map_has_exactly_ten_entries(self):
+    def test_map_has_at_least_ten_entries(self):
         from memory.emotional_memory import CN_TO_EN_MAP
-        assert len(CN_TO_EN_MAP) == 10
+        # 扩展后包含标准10类 + 常用变体
+        assert len(CN_TO_EN_MAP) >= 10

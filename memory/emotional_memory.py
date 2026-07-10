@@ -23,10 +23,21 @@ from loguru import logger
 from utils.atomic_write import atomic_json_write
 
 # 中文情绪标签 → 英文（用于 emotion_state 更新）
+# 覆盖标准标签 + 常用变体，确保 anchor 联动时标签匹配
 CN_TO_EN_MAP = {
+    # 标准 10 类
     "喜悦": "happy", "兴奋": "excited", "悲伤": "sad", "愤怒": "angry",
     "焦虑": "anxious", "害羞": "shy", "好奇": "confused", "思考": "thinking",
     "恐惧": "fear", "平静": "neutral",
+    # 常用变体
+    "开心": "happy", "快乐": "happy", "高兴": "happy",
+    "难过": "sad", "伤心": "sad", "孤独": "sad", "失落": "sad",
+    "生气": "angry", "不满": "angry", "烦躁": "angry",
+    "担心": "anxious", "紧张": "anxious", "不安": "anxious",
+    "害怕": "fear", "恐慌": "fear",
+    "感动": "happy", "欣慰": "happy",
+    "调皮": "playful", "撒娇": "pout",
+    "惊讶": "surprised", "困惑": "confused",
 }
 
 
@@ -301,8 +312,19 @@ class EmotionalMemoryManager:
             try:
                 from emotion.emotion_state import get_emotion_state
                 from emotion.pad_model import from_emotion as pad_from_emotion
+                # 反向映射：英文 → 标准中文标签（用于 PAD 查表）
+                _EN_TO_CN_PAD = {
+                    "happy": "喜悦", "excited": "兴奋", "sad": "悲伤",
+                    "angry": "愤怒", "anxious": "焦虑", "shy": "害羞",
+                    "confused": "好奇", "thinking": "思考", "fear": "恐惧",
+                    "neutral": "平静", "playful": "喜悦", "pout": "害羞",
+                    "surprised": "好奇",
+                }
                 for mem in recalled[:2]:  # 最多用前2条记忆微调
-                    pad = pad_from_emotion(mem.emotion, 0.5)
+                    # 标准化标签：变体 → 标准中文 → PAD 查表
+                    en_label = CN_TO_EN_MAP.get(mem.emotion, mem.emotion.lower())
+                    cn_standard = _EN_TO_CN_PAD.get(en_label, mem.emotion)
+                    pad = pad_from_emotion(cn_standard, 0.5)
                     get_emotion_state().shift_pad(pad.to_dict(), weight=0.1)
             except Exception as e:
                 logger.debug(f"emotional_memory.recall_link_failed: {e}")

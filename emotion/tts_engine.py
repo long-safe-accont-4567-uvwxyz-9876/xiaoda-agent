@@ -263,6 +263,7 @@ EMOTION_STYLE_MAP = {
     "lonely": "(怅然地低语，声音空灵飘远，语速极慢，尾音消散)",
     "curious": "(好奇地追问，声音上扬，语速偏快，咬字清晰)",
     "thinking": "(沉思地自语，声音轻柔低沉，语速很慢，句间停顿长)",
+    "coquettish": "(撒娇地轻声说，声音甜糯上扬，语速时快时慢，带着哼哼的尾音)",
 }
 
 _cache: OrderedDict[str, str] = OrderedDict()

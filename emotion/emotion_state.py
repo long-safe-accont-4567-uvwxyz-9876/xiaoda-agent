@@ -35,8 +35,8 @@ class EmotionState:
         self._current = "neutral"
         self._intensity = 0.0
         self._last_update = time.time()
-        # 多情绪共存：{emotion: intensity}，最多保留3个
-        self._active_emotions: dict[str, float] = {}
+        # 多情绪共存：{emotion: (intensity, timestamp)}，最多保留3个
+        self._active_emotions: dict[str, tuple[float, float]] = {}
         # PAD 值（用于 shift_pad 微调）
         self._pad: dict = {"P": 0.0, "A": 0.0, "D": 0.5}
         # 情绪历史：最近 20 条，用于回顾
@@ -84,12 +84,12 @@ class EmotionState:
                     # 保持当前情绪，强度衰减
                     self._intensity = decayed
 
-            # 多情绪共存：将新情绪加入 _active_emotions
+            # 多情绪共存：将新情绪加入 _active_emotions (存储 intensity + timestamp)
             if emotion != "neutral" and emotion:
-                self._active_emotions[emotion] = intensity
+                self._active_emotions[emotion] = (intensity, now)
                 # 保留强度最高的3个
                 if len(self._active_emotions) > 3:
-                    sorted_em = sorted(self._active_emotions.items(), key=lambda x: x[1], reverse=True)
+                    sorted_em = sorted(self._active_emotions.items(), key=lambda x: x[1][0], reverse=True)
                     self._active_emotions = dict(sorted_em[:3])
 
             self._last_update = now
@@ -166,14 +166,18 @@ class EmotionState:
     def get_active_emotions(self) -> list[tuple[str, float]]:
         """获取所有活跃情绪及衰减后强度（按强度降序）
 
+        每个情绪使用各自的更新时间戳独立计算衰减。
+
         Returns:
             [(emotion, intensity), ...] — 最多3个
         """
         with self._lock:
+            now = time.time()
             result = []
-            for emo, raw_intensity in self._active_emotions.items():
-                # 计算各情绪的衰减（使用各自的更新时间近似）
-                decayed = raw_intensity * (self.DECAY_RATE_PER_HOUR ** ((time.time() - self._last_update) / 3600))
+            for emo, (raw_intensity, emo_ts) in self._active_emotions.items():
+                # 使用每个情绪自己的时间戳计算衰减
+                elapsed = now - emo_ts
+                decayed = raw_intensity * (self.DECAY_RATE_PER_HOUR ** (elapsed / 3600))
                 if decayed >= self.NEUTRAL_THRESHOLD:
                     result.append((emo, decayed))
             result.sort(key=lambda x: x[1], reverse=True)
@@ -200,7 +204,7 @@ class EmotionState:
                 "intensity": self._intensity,
                 "last_update": self._last_update,
                 "history": self._history[-10:],  # 只存最近 10 条
-                "active_emotions": self._active_emotions,
+                "active_emotions": {k: list(v) for k, v in self._active_emotions.items()},
                 "pad": self._pad,
             }
         self._persist_path.write_text(
@@ -220,7 +224,15 @@ class EmotionState:
                 self._intensity = data.get("intensity", 0.0)
                 self._last_update = data.get("last_update", time.time())
                 self._history = [(t, e, i) for t, e, i in data.get("history", [])]
-                self._active_emotions = data.get("active_emotions", {})
+                # 兼容旧格式（float）和新格式（[intensity, timestamp]）
+                raw_active = data.get("active_emotions", {})
+                self._active_emotions = {}
+                for k, v in raw_active.items():
+                    if isinstance(v, (list, tuple)) and len(v) == 2:
+                        self._active_emotions[k] = (float(v[0]), float(v[1]))
+                    elif isinstance(v, (int, float)):
+                        # 旧格式：只有 intensity，用 last_update 作为时间戳
+                        self._active_emotions[k] = (float(v), self._last_update)
                 self._pad = data.get("pad", {"P": 0.0, "A": 0.0, "D": 0.5})
             logger.info("emotion_state.loaded",
                         emotion=self._current, intensity=f"{self._intensity:.2f}")
