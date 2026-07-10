@@ -269,6 +269,21 @@ class NudgeEngine:
         try:
             address_term = self._get_address_term()
 
+            # I3: 注入情感记忆，让问候更关心用户近况
+            memory_hint = ""
+            try:
+                from memory.emotional_memory import get_emotional_memory_manager
+                em_mgr = get_emotional_memory_manager()
+                real_user_id = f"qq_{self._user_openid}"
+                recalled = em_mgr.recall(real_user_id, "最近心情", top_k=2)
+                if recalled:
+                    memory_lines = []
+                    for mem in recalled[:2]:
+                        memory_lines.append(f"用户最近因为{mem.event}而{mem.emotion}")
+                    memory_hint = f"\n（情感记忆：{'；'.join(memory_lines)}。可以在问候中自然地关心一下。）"
+            except Exception:
+                logger.debug("nudge.emotional_memory_recall_failed", exc_info=True)
+
             # 随机抽取风格线索 + 形式线索，制造"校准过的不可预测性"
             # 偶发事件（8%）打破常规，制造惊喜
             import random as _rnd
@@ -307,6 +322,7 @@ class NudgeEngine:
                         f'就只是一句带着你性格的、普通的话。）'
                     )
                 user_input += recent_hint
+                user_input += memory_hint
                 # 使用真实的 user_id 和 session，让记忆系统能加载用户上下文
                 real_user_id = f"qq_{self._user_openid}"
                 try:

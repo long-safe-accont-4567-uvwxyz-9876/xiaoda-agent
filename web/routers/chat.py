@@ -15,6 +15,7 @@ from loguru import logger
 
 from web.schemas import Envelope, ChatRequest, SessionInfo, MessageItem, SlashCommand
 from web.routers.auth import get_current_user
+from emotion.emotion_simple import detect_emotion
 
 router = APIRouter(tags=["chat"], dependencies=[Depends(get_current_user)])
 
@@ -33,6 +34,19 @@ _ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 def _strip_tags(text: str) -> str:
     return _EMOTION_TAG.sub("", text or "").strip()
+
+
+def _infer_emotion(text: str) -> dict:
+    """从文本推断情绪，返回含 emotion/intensity 的字典；异常时返回空字典。"""
+    try:
+        result = detect_emotion(text)
+        return {
+            "emotion": result.get("primary", "平静"),
+            "intensity": result.get("intensity", 0.0),
+        }
+    except Exception:
+        logger.debug("chat.emotion_inference_failed", exc_info=True)
+        return {}
 
 
 @router.get("/commands", response_model=Envelope[list[SlashCommand]])
@@ -225,7 +239,7 @@ async def speech_to_text(file: UploadFile = File(...)) -> Any:
                     if tmp_path and os.path.exists(tmp_path):
                         os.unlink(tmp_path)
             text = await asyncio.to_thread(_mimo_asr)
-            return Envelope(data={"text": text})
+            return Envelope(data={"text": text, **_infer_emotion(text)})
 
         # 主路径：SiliconFlow + TeleSpeechASR — sync OpenAI SDK 调用放到线程池
         def _siliconflow_asr() -> str:
@@ -251,7 +265,7 @@ async def speech_to_text(file: UploadFile = File(...)) -> Any:
                 text = _json.loads(text).get("text", text)
             except Exception as exc:
                 logger.debug("chat.json_parse_failed: {}", exc, exc_info=True)
-        return Envelope(data={"text": text})
+        return Envelope(data={"text": text, **_infer_emotion(text)})
 
     except HTTPException:
         raise

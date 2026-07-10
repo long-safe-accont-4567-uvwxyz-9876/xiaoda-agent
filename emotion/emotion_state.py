@@ -35,6 +35,10 @@ class EmotionState:
         self._current = "neutral"
         self._intensity = 0.0
         self._last_update = time.time()
+        # 多情绪共存：{emotion: intensity}，最多保留3个
+        self._active_emotions: dict[str, float] = {}
+        # PAD 值（用于 shift_pad 微调）
+        self._pad: dict = {"P": 0.0, "A": 0.0, "D": 0.5}
         # 情绪历史：最近 20 条，用于回顾
         self._history: list[tuple[float, str, float]] = []
         # 持久化文件
@@ -80,6 +84,14 @@ class EmotionState:
                     # 保持当前情绪，强度衰减
                     self._intensity = decayed
 
+            # 多情绪共存：将新情绪加入 _active_emotions
+            if emotion != "neutral" and emotion:
+                self._active_emotions[emotion] = intensity
+                # 保留强度最高的3个
+                if len(self._active_emotions) > 3:
+                    sorted_em = sorted(self._active_emotions.items(), key=lambda x: x[1], reverse=True)
+                    self._active_emotions = dict(sorted_em[:3])
+
             self._last_update = now
             self._history.append((now, self._current, self._intensity))
             if len(self._history) > 20:
@@ -105,6 +117,23 @@ class EmotionState:
             if decayed < self.NEUTRAL_THRESHOLD:
                 return "neutral", 0.0
             return self._current, decayed
+
+    def shift_pad(self, pad: dict, weight: float = 0.1) -> None:
+        """微调当前 PAD 值（不替换，仅偏移）
+
+        用于情绪记忆召回时微调当前情绪状态。
+
+        Args:
+            pad: {"P": float, "A": float, "D": float} 目标 PAD 值
+            weight: 偏移权重 0-1，默认 0.1（微调10%）
+        """
+        w = max(0.0, min(1.0, weight))
+        with self._lock:
+            self._pad = {
+                "P": max(-1.0, min(1.0, self._pad["P"] * (1 - w) + pad.get("P", 0) * w)),
+                "A": max(0.0, min(1.0, self._pad["A"] * (1 - w) + pad.get("A", 0) * w)),
+                "D": max(0.0, min(1.0, self._pad["D"] * (1 - w) + pad.get("D", 0.5) * w)),
+            }
 
     def get_description(self) -> str:
         """获取情绪描述文本（用于注入 prompt）。
@@ -134,6 +163,27 @@ class EmotionState:
             return f"[当前心情：{cn}（强度 {intensity:.1f}，已持续 {duration_min} 分钟）]"
         return f"[当前心情：{cn}（强度 {intensity:.1f}）]"
 
+    def get_active_emotions(self) -> list[tuple[str, float]]:
+        """获取所有活跃情绪及衰减后强度（按强度降序）
+
+        Returns:
+            [(emotion, intensity), ...] — 最多3个
+        """
+        with self._lock:
+            result = []
+            for emo, raw_intensity in self._active_emotions.items():
+                # 计算各情绪的衰减（使用各自的更新时间近似）
+                decayed = raw_intensity * (self.DECAY_RATE_PER_HOUR ** ((time.time() - self._last_update) / 3600))
+                if decayed >= self.NEUTRAL_THRESHOLD:
+                    result.append((emo, decayed))
+            result.sort(key=lambda x: x[1], reverse=True)
+            return result[:3]
+
+    def get_pad(self) -> dict:
+        """获取当前 PAD 值"""
+        with self._lock:
+            return dict(self._pad)
+
     def _decayed_intensity(self) -> float:
         """计算衰减后的强度。"""
         elapsed = time.time() - self._last_update
@@ -150,6 +200,8 @@ class EmotionState:
                 "intensity": self._intensity,
                 "last_update": self._last_update,
                 "history": self._history[-10:],  # 只存最近 10 条
+                "active_emotions": self._active_emotions,
+                "pad": self._pad,
             }
         self._persist_path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2),
@@ -168,6 +220,8 @@ class EmotionState:
                 self._intensity = data.get("intensity", 0.0)
                 self._last_update = data.get("last_update", time.time())
                 self._history = [(t, e, i) for t, e, i in data.get("history", [])]
+                self._active_emotions = data.get("active_emotions", {})
+                self._pad = data.get("pad", {"P": 0.0, "A": 0.0, "D": 0.5})
             logger.info("emotion_state.loaded",
                         emotion=self._current, intensity=f"{self._intensity:.2f}")
         except Exception as e:

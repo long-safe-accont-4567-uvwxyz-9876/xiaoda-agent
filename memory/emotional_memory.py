@@ -22,6 +22,13 @@ from loguru import logger
 
 from utils.atomic_write import atomic_json_write
 
+# 中文情绪标签 → 英文（用于 emotion_state 更新）
+CN_TO_EN_MAP = {
+    "喜悦": "happy", "兴奋": "excited", "悲伤": "sad", "愤怒": "angry",
+    "焦虑": "anxious", "害羞": "shy", "好奇": "confused", "思考": "thinking",
+    "恐惧": "fear", "平静": "neutral",
+}
+
 
 @dataclass
 class EmotionalMemory:
@@ -153,6 +160,21 @@ class EmotionalMemoryManager:
             self._memories[user_id] = self._memories[user_id][-self.MAX_MEMORIES_PER_USER:]
 
         self._save()
+        # 联动：同步更新 emotion_state
+        try:
+            from emotion.emotion_state import get_emotion_state
+            from emotion.pad_model import from_emotion as pad_from_emotion
+            _intensity_map = {
+                "喜悦": 0.6, "兴奋": 0.8, "悲伤": 0.7, "愤怒": 0.8,
+                "焦虑": 0.6, "害羞": 0.5, "好奇": 0.5, "思考": 0.3,
+                "恐惧": 0.8, "平静": 0.2,
+            }
+            intensity = _intensity_map.get(emotion, 0.5)
+            get_emotion_state().update(
+                CN_TO_EN_MAP.get(emotion, emotion.lower()), intensity
+            )
+        except Exception as e:
+            logger.debug(f"emotional_memory.anchor_link_failed: {e}")
         logger.info(f"emotional_memory.anchored user_id={user_id} "
                     f"emotion={emotion} event={event[:50]}")
         return memory
@@ -275,6 +297,15 @@ class EmotionalMemoryManager:
             return ""
         try:
             recalled = self.recall(user_id, query)
+            # 联动：召回的记忆微调当前情绪（10%权重）
+            try:
+                from emotion.emotion_state import get_emotion_state
+                from emotion.pad_model import from_emotion as pad_from_emotion
+                for mem in recalled[:2]:  # 最多用前2条记忆微调
+                    pad = pad_from_emotion(mem.emotion, 0.5)
+                    get_emotion_state().shift_pad(pad.to_dict(), weight=0.1)
+            except Exception as e:
+                logger.debug(f"emotional_memory.recall_link_failed: {e}")
             bounded = self.bound(user_id, recalled)
             return self.enact(bounded, user_xp_level)
         except Exception as e:

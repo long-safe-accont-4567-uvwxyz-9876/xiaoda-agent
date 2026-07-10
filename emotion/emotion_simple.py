@@ -1,3 +1,4 @@
+from .pad_model import PADEmotion, from_emotion as pad_from_emotion
 
 
 # ── 统一后的 9 类关键词集（合并 emotion_simple + sticker_manager 关键词） ──
@@ -106,7 +107,12 @@ def detect_emotion(text: str) -> dict:
     primary 为 9 种中文标签之一：喜悦/悲伤/愤怒/焦虑/害羞/好奇/思考/恐惧/平静
     """
     if not text or not text.strip():
-        return {"primary": "平静", "valence": "neutral", "intensity": 0.0}
+        return {
+            "primary": "平静",
+            "valence": "neutral",
+            "intensity": 0.0,
+            "pad": PADEmotion.neutral().to_dict(),
+        }
 
     # 计算每类命中数
     scores = {}
@@ -118,7 +124,12 @@ def detect_emotion(text: str) -> dict:
     best_hits = scores[best_label]
 
     if best_hits == 0:
-        return {"primary": "平静", "valence": "neutral", "intensity": 0.0}
+        return {
+            "primary": "平静",
+            "valence": "neutral",
+            "intensity": 0.0,
+            "pad": PADEmotion.neutral().to_dict(),
+        }
 
     # 效价映射
     _positive_labels = {"喜悦", "兴奋"}
@@ -137,6 +148,7 @@ def detect_emotion(text: str) -> dict:
         "primary": best_label,
         "valence": valence,
         "intensity": intensity,
+        "pad": pad_from_emotion(best_label, intensity).to_dict(),
     }
 
 

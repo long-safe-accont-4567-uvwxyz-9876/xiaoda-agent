@@ -110,12 +110,12 @@ TTS_STYLE_MAP: dict[Emotion, str] = {
     Emotion.SURPRISED: "fear",    # 惊讶用 fear 风格
     Emotion.CONFUSED: "curious",  # 困惑用 curious 风格
     Emotion.THINKING: "thinking",
-    Emotion.PLAYFUL: "happy",     # 调皮降级到 happy
-    Emotion.MOVED: "sad",         # 感动用 sad 风格（温柔的）
+    Emotion.PLAYFUL: "playful",   # 调皮用独立风格
+    Emotion.MOVED: "caring",      # 感动用 caring（温柔关切）
     Emotion.NEUTRAL: "neutral",
     Emotion.FEAR: "fear",
     Emotion.CURIOUS: "curious",
-    Emotion.POUT: "shy",          # 撒娇降级到 shy 风格
+    Emotion.POUT: "coquettish",   # 撒娇用 coquettish 风格
 }
 
 # sticker 降级映射：核心枚举 → sticker 类别（部分枚举无对应表情包）

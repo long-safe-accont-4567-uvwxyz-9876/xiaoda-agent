@@ -65,6 +65,53 @@ XP_THRESHOLDS = {
 }
 
 
+# XP 等级 → 行为参数映射（供桌宠和 nudge 消费）
+XP_BEHAVIOR_MAP: dict[XPLevel, dict] = {
+    XPLevel.LV1_STRANGER: {
+        "proximity": "far",
+        "initiate": False,
+        "special": [],
+    },
+    XPLevel.LV2_ACQUAINTANCE: {
+        "proximity": "mid",
+        "initiate": False,
+        "special": [],
+    },
+    XPLevel.LV3_FRIEND: {
+        "proximity": "near",
+        "initiate": True,
+        "special": ["wave"],
+    },
+    XPLevel.LV4_CLOSE_FRIEND: {
+        "proximity": "close",
+        "initiate": True,
+        "special": ["wave", "hug"],
+    },
+    XPLevel.LV5_SOULMATE: {
+        "proximity": "intimate",
+        "initiate": True,
+        "special": ["wave", "hug", "cuddle"],
+    },
+    XPLevel.LV6_ETERNAL: {
+        "proximity": "intimate",
+        "initiate": True,
+        "special": ["wave", "hug", "cuddle", "kiss"],
+    },
+}
+
+
+def get_behavior_config(level: XPLevel) -> dict:
+    """获取 XP 等级对应的行为参数配置
+
+    Args:
+        level: XP 等级
+
+    Returns:
+        {"proximity": str, "initiate": bool, "special": list[str]}
+    """
+    return XP_BEHAVIOR_MAP.get(level, XP_BEHAVIOR_MAP[XPLevel.LV1_STRANGER])
+
+
 # 等级中文标签 (用于 get_level_label)
 _LEVEL_LABELS = {
     XPLevel.LV1_STRANGER: "陌生人",
