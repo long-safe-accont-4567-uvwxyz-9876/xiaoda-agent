@@ -173,7 +173,8 @@ class DreamConsolidator:
                 mem_id = mem.get("id")
                 created_at = mem.get("timestamp", time.time())
                 access_count = mem.get("access_count", 0)
-                s = self._fluid_scorer.score(similarity=0.5, created_at=created_at,
+                importance = mem.get("importance", 0.5)
+                s = self._fluid_scorer.score(similarity=importance, created_at=created_at,
                                               access_count=access_count)
                 if self._fluid_scorer.should_archive(s):
                     to_archive.append(mem_id)
@@ -190,12 +191,19 @@ class DreamConsolidator:
 
         4杆框架：
         1. Decay — Ebbinghaus指数衰减评分
-        2. Merge — 同内容前缀聚类，删除重复记忆（保留importance最高的）
+        2. Merge — 同内容前缀聚类，输出相似关系（不删除原始记忆）
         3. Strengthen — 统计高频访问记忆（DB侧无需写入，访问计数在检索时已递增）
         4. Evict — 低分记忆归档（非删除，可恢复）
         """
         t0 = time.time()
-        stats = {"total": 0, "decayed": 0, "merged": 0, "strengthened": 0, "evicted": 0}
+        stats = {
+            "total": 0,
+            "decayed": 0,
+            "merged": 0,
+            "strengthened": 0,
+            "evicted": 0,
+            "similar_relationships": [],
+        }
 
         try:
             # 1. 从DB加载活跃记忆（排除已归档）
@@ -250,14 +258,11 @@ class DreamConsolidator:
             for mid in evict_ids:
                 memories.pop(mid, None)
 
-            # 4. Merge — 同内容前缀聚类，删除重复记忆
-            merged_ids = self._merge_similar_db(memories)
-            if merged_ids:
-                try:
-                    await memory_db.delete_memories_batch([int(mid) for mid in merged_ids])
-                    stats["merged"] = len(merged_ids)
-                except Exception as e:
-                    logger.debug(f"Dream.merge_delete_batch_failed: {e}")
+            # 4. Merge — 仅报告相似关系。旧 DB 未必有 memory_edges，不能虚构已持久化边，
+            # 也不能因前缀相同而物理删除原始证据。
+            similar_relationships = self._merge_similar_db(memories)
+            stats["similar_relationships"] = similar_relationships
+            stats["merged"] = len(similar_relationships)
 
             # 5. Strengthen — 统计高频访问记忆
             for m in memories.values():
@@ -286,10 +291,11 @@ class DreamConsolidator:
             logger.error(f"Dream.consolidate_from_db_failed: {e}")
             return stats
 
-    def _merge_similar_db(self, memories: dict[str, Memory]) -> list[str]:
-        """合并相似记忆（基于内容前缀聚类），返回需要删除的 memory ID 列表。
+    def _merge_similar_db(self, memories: dict[str, Memory]) -> list[dict[str, str]]:
+        """按内容前缀发现相似记忆，返回非持久化关系建议。
 
-        保留每组中 importance 最高的记忆，删除其余重复条目。
+        每组以 importance 最高的记忆为 source，其余记忆作为 target。调用方可记录或
+        下调相似项排序，但不得把返回值当作物理删除列表。
         """
         groups: dict[str, list[str]] = {}
         for mid, m in memories.items():
@@ -299,14 +305,21 @@ class DreamConsolidator:
                 continue
             groups.setdefault(key, []).append(mid)
 
-        to_delete: list[str] = []
+        relationships: list[dict[str, str]] = []
         for _key, ids in groups.items():
             if len(ids) < 2:
                 continue
             ids.sort(key=lambda i: memories[i].importance, reverse=True)
-            # 保留 importance 最高的，删除其余
-            to_delete.extend(ids[1:])
-        return to_delete
+            source_id = ids[0]
+            relationships.extend(
+                {
+                    "source_memory_id": source_id,
+                    "target_memory_id": target_id,
+                    "edge_type": "similar",
+                }
+                for target_id in ids[1:]
+            )
+        return relationships
 
     def _trigger_mental_state_consolidate(self) -> None:
         """触发 L/M/S 心理状态 Dream 整合 (清理 7 天前 M 层数据).
