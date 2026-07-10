@@ -444,6 +444,18 @@ def agent_names() -> list[str]:
     ]
 
 
+def get_temperature(default: float = 0.7) -> float:
+    """读取全局 temperature：优先 webui_overrides，回退 default。"""
+    try:
+        from web.config_service import get_config_service
+        override = get_config_service().get("models.temperature")
+        if override is not None:
+            return float(override)
+    except Exception:
+        pass
+    return default
+
+
 def get_agent_display_name(name: str) -> str:
     """读取 agent 的 display_name（从 config/agents/{name}.json）。
 

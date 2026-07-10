@@ -579,12 +579,13 @@ class SubAgent:
                     chat_config = ROUTE_TABLE.get("chat", {})
                     thinking_enabled = chat_config.get("thinking") is not None
                     extra_body = {"chat_template_kwargs": {"enable_thinking": thinking_enabled}}
+                from config import get_temperature
                 response = await asyncio.wait_for(
                     self._client.chat.completions.create(
                         model=self.config.model,
                         messages=working,
                         max_tokens=1024 if tools else 800,
-                        temperature=0.9,
+                        temperature=get_temperature(default=0.9),
                         tools=tools,
                         tool_choice="auto" if tools else None,
                         extra_body=extra_body,
@@ -723,12 +724,13 @@ class SubAgent:
                 chat_config = ROUTE_TABLE.get("chat", {})
                 thinking_enabled = chat_config.get("thinking") is not None
                 extra_body = {"chat_template_kwargs": {"enable_thinking": thinking_enabled}}
+            from config import get_temperature
             response = await asyncio.wait_for(
                 self._client.chat.completions.create(
                     model=self.config.model,
                     messages=working,
                     max_tokens=800,
-                    temperature=0.7,
+                    temperature=get_temperature(default=0.7),
                     extra_body=extra_body,
                 ),
                 timeout=min(api_timeout, remaining),

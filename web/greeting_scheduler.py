@@ -315,7 +315,7 @@ class GreetingScheduler:
                 f'你现在的状态：{mood}。'
                 f'今天想玩点不一样的——{rare}。'
                 f'不要刻意提昨天的事、最近的任务、未完成的工作。'
-                f'不要堆砌比喻、修辞、世界树意象。'
+                f'可以用自然的比喻和意象，但不要堆砌。'
                 f'就只是一句带着你性格的、普通的话。）'
             )
         else:
@@ -323,9 +323,9 @@ class GreetingScheduler:
                 f'（场景：现在{time_hint}，{address_term}大概{activity}了。'
                 f'你现在的状态：{mood}。'
                 f'你想说一句——形式是：{form}。'
-                f'就像随口招呼一声那样自然，不必长，不必修辞。'
+                f'就像随口招呼一声那样自然，不必长，不必修辞过度。'
                 f'不要刻意提昨天的事、最近的任务、未完成的工作。'
-                f'不要堆砌比喻、修辞、世界树意象。'
+                f'可以用自然的比喻和意象，但不要堆砌。'
                 f'不要像 AI 助手那样"主动问候"。'
                 f'就只是一句带着你性格的、普通的话。）'
             )
@@ -349,6 +349,15 @@ class GreetingScheduler:
             text = result.reply if hasattr(result, 'reply') else str(result)
             logger.debug("greeting.raw_output hint={} raw={}", hint, text[:200])
             text = _strip_thinking(text, context="greeting").strip()
+            # 替换模型输出中的旧名（如"纳西妲"→"小妲"）
+            from config import apply_agent_name_replacements
+            text = apply_agent_name_replacements(text)
+            # 过滤模型编造的标签前缀（如 [listen_greeting][user:xxx]: ...）
+            import re as _re
+            for _ in range(3):
+                text = _re.sub(r'^\[[^\]]*\]\s*', '', text).strip()
+                text = _re.sub(r'^\w+:\s*', '', text, count=1).strip()
+                text = _re.sub(r'^:\s*', '', text, count=1).strip()
             if text:
                 # 限制长度：真人随口招呼通常很短，过长反而像 AI
                 return text[:80]

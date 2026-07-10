@@ -9,7 +9,7 @@ from loguru import logger
 
 from db.db_analytics import AnalyticsDB
 from utils.llm_cleanup import strip_thinking as _strip_thinking
-from config import get_agent_display_name
+from config import get_agent_display_name, get_temperature
 import contextlib
 
 
@@ -307,7 +307,7 @@ class NudgeEngine:
                         f'你现在的状态：{mood}。'
                         f'今天想玩点不一样的——{rare}。'
                         f'不要刻意提昨天的事、最近的任务、未完成的工作。'
-                        f'不要堆砌比喻、修辞、世界树意象。'
+                        f'可以用自然的比喻和意象，但不要堆砌。'
                         f'就只是一句带着你性格的、普通的话。）'
                     )
                 else:
@@ -315,9 +315,9 @@ class NudgeEngine:
                         f'（场景：现在{time_desc}，{address_term}{idle_desc}。'
                         f'你现在的状态：{mood}。'
                         f'你想说一句——形式是：{form}。'
-                        f'就像随口招呼一声那样自然，不必长，不必修辞。'
+                        f'就像随口招呼一声那样自然，不必长，不必修辞过度。'
                         f'不要刻意提昨天的事、最近的任务、未完成的工作。'
-                        f'不要堆砌比喻、修辞、世界树意象。'
+                        f'可以用自然的比喻和意象，但不要堆砌。'
                         f'不要像 AI 助手那样"主动问候"。'
                         f'就只是一句带着你性格的、普通的话。）'
                     )
@@ -356,13 +356,22 @@ class NudgeEngine:
                     {"role": "user", "content": user_msg},
                 ]
                 result = await asyncio.wait_for(
-                    self._router.route("chat_flash", messages, temperature=0.9),
+                    self._router.route("chat_flash", messages, temperature=get_temperature(default=0.9)),
                     timeout=30,
                 )
                 greeting = result if isinstance(result, str) else result.choices[0].message.content or ""
 
             logger.debug("nudge.raw_llm_output raw={}", greeting[:200])
             greeting = _strip_thinking(greeting, context="nudge").strip()
+            # 替换模型输出中的旧名（如"纳西妲"→"小妲"）
+            from config import apply_agent_name_replacements
+            greeting = apply_agent_name_replacements(greeting)
+            # 过滤模型编造的标签前缀（如 [listen_greeting][user:xxx]: ...）
+            # 反复剥离行首的 [xxx] 标签和冒号引用，只保留实际内容
+            for _ in range(3):
+                greeting = re.sub(r'^\[[^\]]*\]\s*', '', greeting).strip()
+                greeting = re.sub(r'^\w+:\s*', '', greeting, count=1).strip()
+                greeting = re.sub(r'^:\s*', '', greeting, count=1).strip()
 
             if greeting:
                 if len(greeting) > 80:

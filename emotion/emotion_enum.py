@@ -157,6 +157,8 @@ CN_TO_EN: dict[str, str] = {
     "撒娇": "pout",
     "焦虑": "anxious",
     "平静": "neutral",
+    "好奇": "curious",
+    "恐惧": "fear",
 }
 
 

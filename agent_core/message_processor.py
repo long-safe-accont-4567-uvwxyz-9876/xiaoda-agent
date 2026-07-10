@@ -32,16 +32,9 @@ from agent_core._shared import DEGRADED_REPLY
 
 def _get_temperature(model_cfg: dict | None = None) -> float:
     """读取 temperature：优先 webui_overrides，回退 agent.json5 默认值。"""
-    try:
-        from web.config_service import get_config_service
-        override = get_config_service().get("models.temperature")
-        if override is not None:
-            return float(override)
-    except Exception as e:
-        logger.debug("temperature.override_read_failed", error=str(e))
-    if model_cfg:
-        return float(model_cfg.get("temperature", 0.7))
-    return 0.7
+    from config import get_temperature
+    default = float(model_cfg.get("temperature", 0.7)) if model_cfg else 0.7
+    return get_temperature(default=default)
 
 if TYPE_CHECKING:
     from agent_core._shared import ProcessResult, RequestContext

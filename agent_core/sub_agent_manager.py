@@ -239,7 +239,8 @@ class SubAgentManagerMixin:
             [f"【{r['display_name']}】\n{r['reply']}" for r in intermediate]
         )
         return await self._finalize_parallel_reply(
-            all_replies, clean_input, user_id, source, session_id, force_voice, _ctx
+            all_replies, clean_input, user_id, source, session_id, force_voice, _ctx,
+            intermediate=intermediate,
         )
 
     async def _parallel_run_one(self, t: str, sub_tasks: dict[str, str], sub_context: str,
@@ -300,10 +301,12 @@ class SubAgentManagerMixin:
 
     async def _finalize_parallel_reply(self, all_replies: str, clean_input: str,
                                         user_id: str, source: str, session_id: str,
-                                        force_voice: bool, _ctx: Any) -> ProcessResult:
+                                        force_voice: bool, _ctx: Any,
+                                        intermediate: list[dict] | None = None) -> ProcessResult:
         """并行子代理结果收尾：情绪检测、表情包选择、TTS 语音合成。
 
         并行结果直接使用，跳过小妲重新总结（SynthesisNode 已负责综合）。
+        表情包优先使用子代理专属表情包管理器，降级到小妲的。
         """
         emotion = detect_emotion(clean_input)
         if _ctx:
@@ -314,10 +317,37 @@ class SubAgentManagerMixin:
         )
 
         emotion_label = emotion.get("primary", "")
-        clean_reply, sticker_path = self.get_sticker_info(
-            all_replies, _ctx.last_user_emotion if _ctx else ""
-        )
-        # get_sticker_info 已做 strip_emotion_tag，这里补 humanize（与主小妲路径一致）
+
+        # 表情包选择：优先使用子代理专属表情包管理器
+        sticker_path = None
+        clean_reply = all_replies
+        if intermediate:
+            for item in intermediate:
+                agent_name = item.get("agent", "")
+                reply_text = item.get("reply", "")
+                sub_sticker_mgr = self.get_sticker_manager(agent_name)
+                if sub_sticker_mgr.available:
+                    detected = sub_sticker_mgr.detect_emotion(reply_text)
+                    if not detected:
+                        sub_reply_emotion = detect_emotion(reply_text)
+                        sub_reply_emotion_label = sub_reply_emotion.get("primary", "")
+                        if sub_reply_emotion_label:
+                            detected = CN_TO_EN.get(sub_reply_emotion_label, "")
+                    if detected and sub_sticker_mgr.should_send(reply_text, detected_emotion=detected):
+                        sticker_path = sub_sticker_mgr.pick(detected, strict=True)
+                        if sticker_path:
+                            break
+
+        # 降级：子代理无表情包时使用小妲的
+        if not sticker_path:
+            clean_reply, sticker_path = self.get_sticker_info(
+                all_replies, _ctx.last_user_emotion if _ctx else ""
+            )
+        else:
+            # 剥离情绪标签
+            clean_reply = self.sticker_manager.strip_emotion_tag(all_replies)
+
+        # humanize（与主小妲路径一致）
         clean_reply = humanize(clean_reply, style="xiaoda")
 
         audio_path = None
