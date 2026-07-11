@@ -316,18 +316,26 @@ class ToolExecutorMixin:
         return text
 
     def _finalize_reply(self, reply: str, strip_emotion: bool = True, style: str = "xiaoda") -> str:
-        """统一的回复文本处理：strip_reasoning + strip_emotion_tag + humanize。
+        """统一的回复文本处理：strip_dsml + strip_reasoning + strip_emotion_tag + humanize + 名称替换。
 
         所有回复路径（主小妲、单子 Agent、并行子 Agent、TaskGraph）统一调用此方法，
         确保回复清洗流程一致。
         """
         text = reply.strip() if reply else ""
+        text = strip_dsml(text)
         text = strip_reasoning(text)
         if strip_emotion:
             # 根据 style（agent 名）动态获取正确的 sticker_manager
             sticker_mgr = self.get_sticker_manager(style)
             text = sticker_mgr.strip_emotion_tag(text)
-        return humanize(text, style=style)
+        text = humanize(text, style=style)
+        # 名称替换：确保 LLM 输出中的旧名（如"纳西妲"）被替换为显示名（如"小妲"）
+        try:
+            from config import apply_agent_name_replacements
+            text = apply_agent_name_replacements(text)
+        except Exception:
+            pass
+        return text
 
     def get_sticker_info(self, reply: str, user_emotion: str = "", force_sticker: bool = False) -> tuple[str, Path | None]:
         """从回复中提取情绪并匹配套餐表情包路径.

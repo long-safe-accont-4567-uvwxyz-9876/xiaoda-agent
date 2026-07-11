@@ -24,7 +24,8 @@ from emotion.emotion_simple import detect_emotion, build_emotion_hint
 from emotion.emotion_enum import CN_TO_EN, is_unified, ensure_emotion_tag
 from tool_engine.tool_registry import to_openai_tools
 from utils.text_utils import (has_dsml_tool_calls, parse_dsml_tool_calls,
-                              humanize, encode_image_to_base64, strip_reasoning)
+                              humanize, encode_image_to_base64, strip_reasoning,
+                              strip_dsml)
 
 # 从 _shared 导入共享常量, 避免重复定义 (该模块极轻量, 无循环导入风险)
 from agent_core._shared import DEGRADED_REPLY
@@ -377,8 +378,15 @@ class MessageProcessorMixin:
 
         clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
         # 清理模型输出的推理/思考内容（Agnes 等模型会输出 [emotion thinking] 等标签）
+        clean_reply = strip_dsml(clean_reply)
         clean_reply = strip_reasoning(clean_reply)
         clean_reply = humanize(clean_reply, style="xiaoda")
+        # 名称替换：确保 LLM 输出中的旧名被替换为显示名
+        try:
+            from config import apply_agent_name_replacements
+            clean_reply = apply_agent_name_replacements(clean_reply)
+        except Exception:
+            pass
 
         audio_path, tts_pending, tts_text = await self._build_voice_result(
             clean_reply, emotion_label, force_voice)
@@ -659,7 +667,14 @@ class MessageProcessorMixin:
             sticker_path = _pre_picked_sticker
         else:
             clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
+            clean_reply = strip_dsml(clean_reply)
             clean_reply = humanize(clean_reply, style="xiaoda")
+            # 名称替换：确保 LLM 输出中的旧名被替换为显示名
+            try:
+                from config import apply_agent_name_replacements
+                clean_reply = apply_agent_name_replacements(clean_reply)
+            except Exception:
+                pass
 
         audio_path, tts_pending, tts_text = await self._build_voice_result(
             clean_reply, emotion_label, force_voice)
