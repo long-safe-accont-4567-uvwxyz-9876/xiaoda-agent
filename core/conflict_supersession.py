@@ -114,13 +114,20 @@ class ConflictSupersession:
     async def apply_supersession(self, conflicts: list[ConflictPair]) -> int:
         """应用超驱 (标记old为SUPERSEDED)
 
+        v0.6 桩实现：CognitiveMemory 当前为纯内存对象（无 DB 持久化），因此本方法
+        仅做检测计数与日志记录，**不**实际修改记忆状态。真正的超驱动作将在 v0.7
+        持久化阶段接入 DB 后实现，届时将完成以下三步：
+          1. 标记 old_memory 的 status='SUPERSEDED'（episodic_memories.status 列）
+          2. 向 memory_revisions 表写入一行修订记录（old→new + conflict_type）
+          3. 在连接图中加入 type='supersedes' 的有向边
+
         Returns:
-            标记的数量
+            检测到的冲突对数量（v0.6 不修改任何记忆状态）
         """
         count = 0
         for conflict in conflicts:
-            # 实际应用中这里会更新DB: status='superseded'
-            # 并写入memory_revisions表
+            # TODO(v0.7): wire to DB — mark old_memory status=SUPERSEDED,
+            #   write memory_revisions row, add type=supersedes edge
             logger.debug(f"Supersede: old={conflict.old_memory_id} → new={conflict.new_memory_id} "
                          f"sim={conflict.similarity:.3f} diff_tokens={conflict.old_numeric_tokens ^ conflict.new_numeric_tokens}")
             count += 1

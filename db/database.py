@@ -21,7 +21,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 13
+CURRENT_SCHEMA_VERSION = 14
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -206,6 +206,7 @@ class DatabaseManager:
             (11, "memory_recall_notes", self._migrate_v11),
             (12, "episodic_memories.content_hash+version+memory_versions+context_audit_log", self._migrate_v12),
             (13, "mem0_spec:user_id+agent_id+is_raw+memory_entities+entity_memory_links", self._migrate_v13),
+            (14, "v06_cognitive_tables", self._migrate_v14),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -604,6 +605,106 @@ class DatabaseManager:
         )
 
         logger.info("database.migration_v13_mem0_spec_done")
+
+    async def _migrate_v14(self) -> None:
+        """v14: v0.6 认知架构 — 5 张认知表 + episodic_memories 3 列 + 9 索引。
+
+        - semantic_memories: 语义记忆（consolidation 后的长期记忆）
+        - memory_connections: 记忆连接图
+        - bridge_memories: 桥接记忆
+        - memory_revisions: 冲突修订链
+        - preference_patterns: 偏好模式
+        - episodic_memories: salience/last_accessed/status（ALTER TABLE 加列，幂等守卫）
+        - 9 个索引（CREATE INDEX IF NOT EXISTS，天然幂等）
+
+        对应 db/migrations/v06_cognitive.sql，将其纳入生产迁移流程。
+        """
+        # 1. episodic_memories 新增 3 列（幂等：先检查列是否存在，镜像 v13 模式）
+        cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
+        if "salience" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN salience REAL DEFAULT 0.5"
+            )
+        if "last_accessed" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN last_accessed REAL DEFAULT 0"
+            )
+        if "status" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN status TEXT DEFAULT 'active'"
+            )
+
+        # 2. 新建 5 张认知表（CREATE TABLE IF NOT EXISTS，天然幂等）
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS semantic_memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_memory_id INTEGER,
+                content TEXT NOT NULL,
+                embedding_id INTEGER DEFAULT -1,
+                cluster_id INTEGER DEFAULT -1,
+                salience REAL DEFAULT 0.5,
+                access_count INTEGER DEFAULT 0,
+                last_accessed REAL DEFAULT 0,
+                created_at REAL NOT NULL,
+                emotion_label TEXT DEFAULT '',
+                metadata_json TEXT DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS idx_semantic_cluster ON semantic_memories(cluster_id);
+            CREATE INDEX IF NOT EXISTS idx_semantic_salience ON semantic_memories(salience);
+
+            CREATE TABLE IF NOT EXISTS memory_connections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_id INTEGER NOT NULL,
+                target_id INTEGER NOT NULL,
+                weight REAL DEFAULT 0.5,
+                edge_type TEXT NOT NULL DEFAULT 'similar',
+                activation_count INTEGER DEFAULT 0,
+                created_at REAL NOT NULL,
+                last_activated REAL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_conn_source ON memory_connections(source_id);
+            CREATE INDEX IF NOT EXISTS idx_conn_target ON memory_connections(target_id);
+            CREATE INDEX IF NOT EXISTS idx_conn_type ON memory_connections(edge_type);
+
+            CREATE TABLE IF NOT EXISTS bridge_memories (
+                id TEXT PRIMARY KEY,
+                source_memory_id INTEGER NOT NULL,
+                target_memory_id INTEGER NOT NULL,
+                weight REAL NOT NULL,
+                bridge_type TEXT DEFAULT 'semantic',
+                source_session_id TEXT DEFAULT '',
+                target_session_id TEXT DEFAULT '',
+                cross_session INTEGER DEFAULT 0,
+                discovered_at REAL NOT NULL,
+                discovery_reason TEXT DEFAULT 'rem_bridge'
+            );
+            CREATE INDEX IF NOT EXISTS idx_bridge_source ON bridge_memories(source_memory_id);
+            CREATE INDEX IF NOT EXISTS idx_bridge_target ON bridge_memories(target_memory_id);
+
+            CREATE TABLE IF NOT EXISTS memory_revisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                old_memory_id INTEGER NOT NULL,
+                new_memory_id INTEGER NOT NULL,
+                conflict_type TEXT DEFAULT 'numeric_token',
+                revision_chain TEXT DEFAULT '[]',
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_revisions_old ON memory_revisions(old_memory_id);
+
+            CREATE TABLE IF NOT EXISTS preference_patterns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pattern_text TEXT NOT NULL,
+                confidence REAL DEFAULT 0.5,
+                source_sessions TEXT DEFAULT '[]',
+                salience REAL DEFAULT 2.0,
+                created_at REAL NOT NULL,
+                last_matched REAL DEFAULT 0,
+                match_count INTEGER DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_preference_salience ON preference_patterns(salience);
+        """)
+
+        logger.info("database.migration_v14_cognitive_tables_done")
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")
 

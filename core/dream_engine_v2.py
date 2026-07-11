@@ -66,7 +66,10 @@ class DreamEngineV2:
         self._conflict = conflict_supersession or ConflictSupersession()
 
         self._cycle_count = 0
-        self._connections: dict[int, dict[int, float]] = {}
+        # 共享 CognitiveMemory 的连接图（引用，非拷贝），使 NREM Hebbian 强化能
+        # 看到 consolidate() 中 self_attention_sweep 发现的连接。两者指向同一 dict，
+        # 故 SUPERSEDES/REM 阶段写入的新边也对 CognitiveMemory 可见。
+        self._connections = self._cognitive._connections
         self._last_dae_cycle = 0
 
     async def run_cycle(self) -> dict:
