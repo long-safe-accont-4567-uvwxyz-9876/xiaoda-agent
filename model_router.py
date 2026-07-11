@@ -78,11 +78,18 @@ MODEL_PREFERENCES = {
 }
 
 RETRYABLE_ERRORS = {'timeout', 'rate_limit', 'connection_error'}
-MAX_RETRIES = 2
+MAX_RETRIES = 1
 FALLBACK_ROUTE = {
     "chat_pro": "chat_flash",
     "chat_flash": "chat_mini",
     "chat_mini": "chat_agnes",
+}
+
+# 跨 provider 映射：主 provider 故障时，flash/mini 切换到不同 provider
+_CROSS_PROVIDER_MAP: dict[str, tuple[str, str]] = {
+    # main_provider → (fallback_provider, fallback_model)
+    "agnes": ("mimo", MIMO_MODEL),
+    "mimo": ("agnes", AGNES_TEXT_MODEL),
 }
 
 # 请求级隔离的 reasoning_content，避免并发请求间共享状态
@@ -105,9 +112,9 @@ class ModelRouter:
     _DEFAULT_TIMEOUTS: ClassVar[dict[str, int]] = {
         "emotion_analysis": 10,
         "emotion": 10,
-        "chat_flash": 60,
-        "chat": 90,
-        "chat_pro": 90,
+        "chat_flash": 30,
+        "chat": 60,
+        "chat_pro": 60,
         "tool_call": 60,
         "image_gen": 90,
     }
@@ -270,6 +277,21 @@ class ModelRouter:
                 self._lazy_register_provider(provider)
             if provider not in self._custom_clients:
                 raise LLMError(f"自定义 provider {provider} 未注册，请先注册客户端")
+
+        # 跨 provider 同步：flash/mini 切换到与主 provider 不同的 provider
+        # 这样 fallback 链才能真正跨 provider 降级，避免同一 API 的无效重试
+        cross = _CROSS_PROVIDER_MAP.get(provider)
+        if cross:
+            fb_provider, fb_model = cross
+            if self._is_client_configured(fb_provider):
+                ROUTE_TABLE["chat_flash"]["model"] = fb_model
+                ROUTE_TABLE["chat_flash"]["client"] = fb_provider
+                ROUTE_TABLE["chat_mini"]["model"] = fb_model
+                ROUTE_TABLE["chat_mini"]["client"] = fb_provider
+                logger.info("router.cross_provider_sync",
+                            main=provider, fallback_provider=fb_provider,
+                            fallback_model=fb_model)
+
         self._current_chat_model = {"provider": provider, "model_id": model_id}
         # 持久化到 config_service，以便重启后恢复上次聊天模型
         try:

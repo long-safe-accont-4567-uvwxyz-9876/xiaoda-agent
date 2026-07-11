@@ -43,8 +43,24 @@ def _on_bg_task_done(task: asyncio.Task) -> None:
 
 
 def _spawn(coro: Any) -> None:
-    """创建 fire-and-forget 后台任务，自动从 _bg_tasks 中移除已完成的任务。"""
-    task = asyncio.create_task(coro)
+    """创建 fire-and-forget 后台任务，自动从 _bg_tasks 中移除已完成的任务。
+
+    包含耗时监控：任务完成时记录执行时长，超过 30s 发出告警日志。
+    """
+    task_name = getattr(coro, '__name__', coro.__class__.__name__)
+    start_time = time.time()
+
+    async def _wrapped():
+        try:
+            await coro
+        finally:
+            elapsed = time.time() - start_time
+            if elapsed > 30:
+                logger.warning("bg.task_slow name={} elapsed={:.1f}s", task_name, elapsed)
+            else:
+                logger.debug("bg.task_done name={} elapsed={:.1f}s", task_name, elapsed)
+
+    task = asyncio.create_task(_wrapped())
     _bg_tasks.add(task)
     task.add_done_callback(_on_bg_task_done)
 

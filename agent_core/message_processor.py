@@ -369,7 +369,7 @@ class MessageProcessorMixin:
         try:
             _spawn(self.router.flush_costs())
         except Exception as e:
-            logger.error(f"费用统计刷新失败: {e}")
+            logger.error("费用统计刷新失败: {}", str(e))
 
         # 情绪标签
         if is_unified():
@@ -653,7 +653,7 @@ class MessageProcessorMixin:
         try:
             _spawn(self.router.flush_costs())
         except Exception as e:
-            logger.error(f"费用统计刷新失败，可能丢失费用数据: {e}")
+            logger.error("费用统计刷新失败，可能丢失费用数据: {}", str(e))
 
         trace.info("agent.process.done", reply_preview=reply[:100])
 
@@ -1322,7 +1322,7 @@ class MessageProcessorMixin:
             if response:
                 learner.save_insight(user_id, str(response), xp_level)
         except Exception as e:
-            logger.warning(f"profile_learner.insight_failed: {e}")
+            logger.warning("profile_learner.insight_failed: {}", str(e))
 
     async def _describe_images(self, image_data: list[dict]) -> str:
         """使用 MiMo Vision API 识别图片内容"""

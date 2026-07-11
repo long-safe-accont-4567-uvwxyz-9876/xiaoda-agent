@@ -613,10 +613,22 @@ class SubAgent:
 
     async def _execute_round_tool_calls(self, extracted: Any, working: list[dict]) -> None:
         """并行执行本轮工具调用, 将结果 (含错误) 追加到 working"""
-        tool_results = await asyncio.gather(
-            *[self._exec_one_tool_call(tc) for tc in extracted],
-            return_exceptions=True,
-        )
+        try:
+            tool_results = await asyncio.wait_for(
+                asyncio.gather(
+                    *[self._exec_one_tool_call(tc) for tc in extracted],
+                    return_exceptions=True,
+                ),
+                timeout=120,
+            )
+        except TimeoutError:
+            logger.warning("sub_agent.tool_gather_timeout name={} count={}",
+                           self.config.name, len(extracted))
+            for tc in extracted:
+                working.append({"role": "tool", "tool_call_id": tc.id,
+                                "content": "错误: 工具执行超时"})
+            return
+
         for tc, r in zip(extracted, tool_results, strict=False):
             if isinstance(r, Exception):
                 logger.warning("sub_agent.tool_error", name=self.config.name, tool=tc.name, error=str(r))

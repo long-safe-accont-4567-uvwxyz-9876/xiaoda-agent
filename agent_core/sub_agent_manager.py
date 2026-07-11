@@ -209,7 +209,7 @@ class SubAgentManagerMixin:
             try:
                 await _ctx.status_callback(f"⚡ 并行调度中，同时启动 {len(targets)} 个Agent...")
             except Exception as e:
-                logger.warning(f"并行调度状态回调失败: {e}")
+                logger.warning("并行调度状态回调失败: {}", str(e))
 
         # 构建子代理任务上下文与子任务列表
         agent_configs = self._agent_route_configs
@@ -711,7 +711,7 @@ class SubAgentManagerMixin:
             try:
                 await _ctx.status_callback(message)
             except Exception as e:
-                logger.warning(f"状态回调通知失败: {e}")
+                logger.warning("状态回调通知失败: {}", str(e))
 
     def _is_manual_target(self, user_input: str, user_id: str) -> bool:
         return any(tag in user_input for tag in ["@小莉", "@小狼", "@小涟", "@小可", "@小妲"])

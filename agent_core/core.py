@@ -196,7 +196,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             from core.jieba_prewarm import prewarm_jieba
             self._prewarm_task = asyncio.create_task(prewarm_jieba())
         except Exception as e:
-            logger.warning(f"jieba.prewarm_schedule_failed error={e}")
+            logger.warning("jieba.prewarm_schedule_failed error={}", str(e))
 
     def _get_xiaoda_personality_file(self) -> str:
         """获取 xiaoda 人格文件路径（frozen 模式下使用用户目录）"""
