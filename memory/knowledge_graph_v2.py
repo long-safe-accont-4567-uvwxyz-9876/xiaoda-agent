@@ -73,6 +73,7 @@ class KnowledgeGraphV2(KnowledgeGraph):
         super().__init__(db=None, knowledge_db=None, router=router)
         self._db_v2 = db_v2
         self._vector_store = vector_store
+        self._conn = db_v2._conn if db_v2 else None
 
     async def extract_from_summary(self, summary: str) -> dict:
         """使用 V2 prompt 提取实体和关系（含 fact 字段）。"""
@@ -320,3 +321,121 @@ class KnowledgeGraphV2(KnowledgeGraph):
             return True
 
         return False
+
+    # ── 社区发现 ──────────────────────────────────────────────
+
+    async def detect_communities(self) -> list[list[str]]:
+        """社区发现: 加载图投影 → 标签传播 → 生成社区摘要。"""
+        cursor = await self._conn.execute("""
+            SELECT from_entity, to_entity, COUNT(*) as edge_count
+            FROM kg_relations_v2
+            WHERE is_current = 1
+            GROUP BY from_entity, to_entity
+        """)
+        rows = await cursor.fetchall()
+
+        adjacency: dict[str, list[tuple[str, int]]] = {}
+        for row in rows:
+            f, t, cnt = row[0], row[1], row[2]
+            adjacency.setdefault(f, []).append((t, cnt))
+            adjacency.setdefault(t, []).append((f, cnt))
+
+        if not adjacency:
+            return []
+
+        clusters = self._label_propagation(adjacency, max_iter=10)
+
+        for cluster in clusters:
+            if len(cluster) > 1:
+                await self._build_community_summary(cluster)
+
+        return clusters
+
+    def _label_propagation(
+        self,
+        adjacency: dict[str, list[tuple[str, int]]],
+        max_iter: int = 10,
+    ) -> list[list[str]]:
+        """标签传播算法: 纯 Python 内存计算。"""
+        if not adjacency:
+            return []
+        labels = {node: i for i, node in enumerate(adjacency)}
+
+        for _ in range(max_iter):
+            no_change = True
+            for node in adjacency:
+                neighbor_labels: dict[int, int] = {}
+                for neighbor, edge_count in adjacency[node]:
+                    lbl = labels[neighbor]
+                    neighbor_labels[lbl] = neighbor_labels.get(lbl, 0) + edge_count
+
+                if not neighbor_labels:
+                    continue
+
+                best_label = max(neighbor_labels, key=neighbor_labels.get)
+                if neighbor_labels[best_label] >= 1 and labels[node] != best_label:
+                    labels[node] = best_label
+                    no_change = False
+
+            if no_change:
+                break
+
+        communities: dict[int, list[str]] = {}
+        for node, lbl in labels.items():
+            communities.setdefault(lbl, []).append(node)
+        return list(communities.values())
+
+    async def _build_community_summary(self, member_names: list[str]) -> None:
+        """为社区生成摘要并写入 kg_communities 表。"""
+        placeholders = ",".join("?" * len(member_names))
+        cursor = await self._conn.execute(
+            f"SELECT name, summary FROM kg_entities_v2 WHERE name IN ({placeholders}) AND summary != ''",
+            member_names,
+        )
+        rows = await cursor.fetchall()
+
+        if not rows:
+            return
+
+        summaries = [r[1] for r in rows]
+        if len(summaries) <= 4:
+            combined = "; ".join(summaries)
+        else:
+            # 简单截断, 避免过多 LLM 调用
+            combined = "; ".join(summaries[:4])
+
+        community_id = f"COM-{uuid.uuid4().hex[:12]}"
+        name = await self._generate_community_name(combined)
+        await self._db_v2.insert_community(community_id, name, combined, member_names)
+
+    async def _generate_community_name(self, combined_summary: str) -> str:
+        """LLM 生成社区名称。"""
+        prompt = f"根据以下信息生成一个简短的社区名称（不超过10个字）:\n{combined_summary[:200]}\n\n直接输出名称:"
+        messages = [{"role": "user", "content": prompt}]
+        result = await self._call_free_model(messages, temperature=0.3, max_tokens=50)
+        if result and isinstance(result, str):
+            return result.strip()[:20]
+        return "未命名社区"
+
+    async def update_community_for_entity(self, entity_name: str) -> None:
+        """增量更新: 新增实体后, 查邻居社区归属, 取众数归入。"""
+        cursor = await self._conn.execute(
+            """SELECT r.from_entity, r.to_entity FROM kg_relations_v2 r
+               WHERE r.is_current = 1 AND (r.from_entity = ? OR r.to_entity = ?)""",
+            [entity_name, entity_name],
+        )
+        rows = await cursor.fetchall()
+
+        neighbor_names = set()
+        for row in rows:
+            neighbor_names.add(row[0] if row[1] == entity_name else row[1])
+
+        community_votes: dict[str, int] = {}
+        for neighbor in neighbor_names:
+            comm = await self._db_v2.get_entity_community(neighbor)
+            if comm:
+                community_votes[comm] = community_votes.get(comm, 0) + 1
+
+        if community_votes:
+            best = max(community_votes, key=community_votes.get)
+            await self._db_v2.add_entity_to_community(entity_name, best)
