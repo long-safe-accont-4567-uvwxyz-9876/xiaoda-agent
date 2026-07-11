@@ -28,20 +28,18 @@ def test_sample_three_slice(dream):
     assert len(sampled) <= 10
     assert len(sampled) > 0
 
-def test_run_cycle_empty(dream):
+async def test_run_cycle_empty(dream):
     """测试空记忆的梦境周期"""
-    stats = asyncio.get_event_loop().run_until_complete(dream.run_cycle())
+    stats = await dream.run_cycle()
     assert "duration_ms" in stats
     assert stats["nrem_sampled"] == 0
 
-def test_run_cycle_with_memories(dream):
+async def test_run_cycle_with_memories(dream):
     """测试有记忆的梦境周期"""
     now = time.time()
     for i in range(10):
         emb = np.random.randn(64).astype(np.float32)
         emb /= np.linalg.norm(emb)
-        asyncio.get_event_loop().run_until_complete(
-            dream._cognitive.remember(f"content_{i}", emb, emotion_label="happy")
-        )
-    stats = asyncio.get_event_loop().run_until_complete(dream.run_cycle())
+        await dream._cognitive.remember(f"content_{i}", emb, emotion_label="happy")
+    stats = await dream.run_cycle()
     assert stats["nrem_sampled"] > 0
