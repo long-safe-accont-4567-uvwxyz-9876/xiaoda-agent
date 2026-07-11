@@ -64,47 +64,47 @@ class KGSearchEngine:
         try:
             entity_hits = await self._vector_store.search_kg_entities(query, top_k=k)
             relation_hits = await self._vector_store.search_kg_relations(query, top_k=k)
+
+            results = []
+            # 实体命中
+            for rowid, distance in entity_hits:
+                cursor = await self._conn.execute(
+                    "SELECT id, name, kind, summary FROM kg_entities_v2 WHERE rowid=?", (rowid,)
+                )
+                row = await cursor.fetchone()
+                if row:
+                    results.append({
+                        "type": "entity",
+                        "id": row["id"],
+                        "name": row["name"],
+                        "kind": row["kind"],
+                        "summary": row["summary"],
+                        "distance": distance,
+                    })
+            # 关系命中
+            for rowid, distance in relation_hits:
+                cursor = await self._conn.execute(
+                    "SELECT id, from_entity, relation_type, to_entity, fact, valid_at, invalid_at, is_current "
+                    "FROM kg_relations_v2 WHERE rowid=?", (rowid,)
+                )
+                row = await cursor.fetchone()
+                if row:
+                    results.append({
+                        "type": "relation",
+                        "id": row["id"],
+                        "from_entity": row["from_entity"],
+                        "relation_type": row["relation_type"],
+                        "to_entity": row["to_entity"],
+                        "fact": row["fact"],
+                        "valid_at": row["valid_at"],
+                        "invalid_at": row["invalid_at"],
+                        "is_current": row["is_current"],
+                        "distance": distance,
+                    })
+            return results
         except Exception as e:
             logger.debug("kg_search.semantic_failed", error=str(e))
             return []
-
-        results = []
-        # 实体命中
-        for rowid, distance in entity_hits:
-            cursor = await self._conn.execute(
-                "SELECT id, name, kind, summary FROM kg_entities_v2 WHERE rowid=?", (rowid,)
-            )
-            row = await cursor.fetchone()
-            if row:
-                results.append({
-                    "type": "entity",
-                    "id": row["id"],
-                    "name": row["name"],
-                    "kind": row["kind"],
-                    "summary": row["summary"],
-                    "distance": distance,
-                })
-        # 关系命中
-        for rowid, distance in relation_hits:
-            cursor = await self._conn.execute(
-                "SELECT id, from_entity, relation_type, to_entity, fact, valid_at, invalid_at, is_current "
-                "FROM kg_relations_v2 WHERE rowid=?", (rowid,)
-            )
-            row = await cursor.fetchone()
-            if row:
-                results.append({
-                    "type": "relation",
-                    "id": row["id"],
-                    "from_entity": row["from_entity"],
-                    "relation_type": row["relation_type"],
-                    "to_entity": row["to_entity"],
-                    "fact": row["fact"],
-                    "valid_at": row["valid_at"],
-                    "invalid_at": row["invalid_at"],
-                    "is_current": row["is_current"],
-                    "distance": distance,
-                })
-        return results
 
     async def _fulltext_search(self, query: str, k: int) -> list[dict]:
         """FTS5 BM25 全文搜索 + CJK LIKE 降级。
@@ -168,12 +168,13 @@ class KGSearchEngine:
 
         # CJK LIKE 降级: 补充 fact 子串搜索
         try:
-            like_pattern = f"%{query}%"
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            like_pattern = f"%{escaped}%"
             cursor = await self._conn.execute(
                 """SELECT id, from_entity, relation_type, to_entity, fact,
                           valid_at, invalid_at, is_current
                    FROM kg_relations_v2
-                   WHERE fact LIKE ? LIMIT ?""",
+                   WHERE fact LIKE ? ESCAPE '\\' LIMIT ?""",
                 (like_pattern, k),
             )
             for row in await cursor.fetchall():
