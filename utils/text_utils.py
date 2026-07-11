@@ -265,6 +265,8 @@ _AGNES_REASONING_BLOCK = re.compile(
 )
 # 中文内部独白/推理特征短语（模型将思维链当作正文输出）
 # 这些短语是模型在"思考如何回复"而非"实际回复"，应被清理
+# 注意：仅保留明确是"内部独白"的模式，移除过宽的"我来分析"等
+# 正常回复中也会使用的短语，防止过度截断
 _CHINESE_REASONING_PHRASES = [
     r"现在开始(?:回复|组织回复|返回|生成)",
     r"根据SOUL\.md",
@@ -276,7 +278,6 @@ _CHINESE_REASONING_PHRASES = [
     r"(?:沙|汐)问.*?(?:几点|时间|现在)",
     r"(?:沙|汐)在.*?时间点",
     r"现在时间是",
-    r"我来分析",
     r"让我(?:想想|回忆|思考)",
     r"我直接(?:回答|告诉)",
 ]
@@ -290,15 +291,17 @@ def strip_reasoning(text: str) -> str:
     """剥离模型输出中的推理/思考内容。
 
     处理以下情况：
-    1. ฀....Predicate 等标签包裹的推理
+    1.  ....Predicate 等标签包裹的推理
     2. 裸文本推理行（Need think about... / Let me recall... 等）
     3. 连续多行英文推理块
     4. Agnes 模型风格的推理标签（[emotion thinking]``）
     5. 第三人称引用（They ask "..."）
     6. Agnes 风格连续英文推理段
+    7. 中文内部独白/推理行
     """
     if not text:
         return text
+    original_len = len(text)
     # 1. 标签包裹的推理
     text = _REASONING_TAG_PATTERN.sub('', text)
     text = _REASONING_OPEN_PATTERN.sub('', text)
@@ -318,7 +321,18 @@ def strip_reasoning(text: str) -> str:
     text = _CHINESE_REASONING_LINE_PATTERN.sub('', text)
     # 清理多余空行
     text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
+    text = text.strip()
+    # 过度截断保护：如果清理后内容不到原始内容的 30%，说明可能误删了正常回复
+    # 此时记录警告，保留清理后内容（因为推理内容确实不该出现）
+    # 但额外记录日志便于诊断
+    cleaned_len = len(text)
+    if original_len > 100 and cleaned_len < original_len * 0.3:
+        from loguru import logger
+        logger.warning(
+            "text_utils.strip_reasoning_overstrip original_len={} cleaned_len={} ratio={:.1%}",
+            original_len, cleaned_len, cleaned_len / original_len if original_len else 0,
+        )
+    return text
 
 
 # 裸 <tool_call>...</tool_call> XML 块（含 </think> 错配容错）
