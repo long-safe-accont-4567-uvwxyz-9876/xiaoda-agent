@@ -1540,6 +1540,13 @@ class MemoryManager:
                 except Exception as e:
                     logger.debug("memory.initial_vec_upsert_failed", error=str(e))
 
+            # 双写：同时写入 concept_nodes
+            if self.concept_graph and mem_id:
+                try:
+                    await self.concept_graph.remember(summary, source_mem_id=mem_id)
+                except Exception as e:
+                    logger.debug("memory.concept_dual_write_failed", error=str(e))
+
             # ── 父子Chunk: 生成并写入子chunk ──
             import config as _cfg
             if getattr(_cfg, 'PARENT_CHILD_CHUNK_ENABLED', True):
@@ -1579,22 +1586,6 @@ class MemoryManager:
                     _entity_task.add_done_callback(_log_entity_exception)
                 except Exception as e:
                     logger.debug("memory.entity_spawn_failed", error=str(e))
-
-            # ── mem0 SPEC: 异步触发蒸馏（Task 7 实现）──
-            if hasattr(self, '_distill_to_knowledge'):
-                try:
-                    _distill_task = asyncio.create_task(
-                        self._distill_to_knowledge(mem_id, summary, scope, importance, emotion)
-                    )
-                    def _log_distill_exception(t: asyncio.Task) -> None:
-                        if t.cancelled():
-                            return
-                        exc = t.exception()
-                        if exc:
-                            logger.warning("memory.distill_async_failed", error=str(exc))
-                    _distill_task.add_done_callback(_log_distill_exception)
-                except Exception as e:
-                    logger.debug("memory.distill_spawn_failed", error=str(e))
 
             self._last_encode_time = time.time()
             self._pending_encode = False
