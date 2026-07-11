@@ -157,6 +157,18 @@ class KnowledgeDBV2:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
+    async def get_active_relations_by_subject_and_type(
+        self, from_entity: str, relation_type: str
+    ) -> list[dict]:
+        """获取同一主体 + 关系类型的当前有效关系（to_entity 可能不同，用于超驰检测）。"""
+        cursor = await self._conn.execute(
+            """SELECT * FROM kg_relations_v2
+               WHERE from_entity=? AND relation_type=? AND is_current=1""",
+            (from_entity, relation_type),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
     async def invalidate_relation(
         self,
         rel_id: str,

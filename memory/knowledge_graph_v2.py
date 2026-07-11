@@ -74,10 +74,6 @@ class KnowledgeGraphV2(KnowledgeGraph):
         self._db_v2 = db_v2
         self._vector_store = vector_store
 
-    @property
-    def _conn(self) -> Any:
-        return self._db_v2._conn
-
     async def extract_from_summary(self, summary: str) -> dict:
         """使用 V2 prompt 提取实体和关系（含 fact 字段）。"""
         if not summary:
@@ -236,12 +232,9 @@ class KnowledgeGraphV2(KnowledgeGraph):
 
         # 搜索潜在冲突：同一 from_entity + relation_type 的当前有效关系
         # （to_entity 可能不同，如"用户喜欢篮球" vs "用户喜欢网球"）
-        cursor = await self._conn.execute(
-            "SELECT * FROM kg_relations_v2 WHERE from_entity=? AND relation_type=? AND is_current=1",
-            (from_entity, relation_type),
+        conflict_candidates = await self._db_v2.get_active_relations_by_subject_and_type(
+            from_entity, relation_type
         )
-        rows = await cursor.fetchall()
-        conflict_candidates = [dict(r) for r in rows]
 
         invalidated: list[dict] = []
         is_duplicate = False
