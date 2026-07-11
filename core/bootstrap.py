@@ -315,6 +315,28 @@ class AgentCoreBootstrapper:
                 model="THUDM/GLM-4-9B-0414",
             )
         core.memory.set_knowledge_graph(core.knowledge_graph)
+
+        # KG v2 注入（功能开关开启时启用 v2 路径，失败降级到 v1）
+        if getattr(config, 'KG_V2_ENABLED', False):
+            try:
+                from memory.knowledge_graph_v2 import KnowledgeGraphV2
+                from memory.kg_search import KGSearchEngine
+                kg_v2 = KnowledgeGraphV2(
+                    db_v2=core.db.kg_v2,
+                    vector_store=core._vec_store,
+                    router=core.router,
+                )
+                core.knowledge_graph.set_kg_v2(kg_v2)
+                kg_search_engine = KGSearchEngine(
+                    db=core.db.kg_v2,
+                    vector_store=core._vec_store,
+                    conn=core.db._conn,
+                )
+                core.memory.set_kg_v2_engine(kg_search_engine)
+                logger.info("kg_v2.enabled")
+            except Exception as e:
+                logger.warning("kg_v2.init_failed_fallback_to_v1", error=str(e))
+
         if core._failure_trigger._memory_db is None:
             core._failure_trigger._memory_db = core.memory.memory
         # 注入 MemoryManager 到 memory_tool，修复记忆工具不可用问题
