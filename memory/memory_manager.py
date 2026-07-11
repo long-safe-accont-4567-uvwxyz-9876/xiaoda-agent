@@ -259,6 +259,7 @@ class MemoryManager:
             from db.db_concept import ConceptDB
             if hasattr(self, 'db') and self.db and hasattr(self.db, '_conn') and self.db._conn is not None:
                 concept_db = ConceptDB(self.db._conn)
+                self._concept_db = concept_db
                 self._key_extractor = KeyExtractor()
                 self.concept_graph = ConceptGraph(concept_db, self._key_extractor)
                 self.spreading_engine = SpreadingActivationEngine(
@@ -267,6 +268,19 @@ class MemoryManager:
         except Exception as e:
             logger.warning("memory.spreading_activation_init_failed",
                           error=str(e))
+
+        # Confirm/Correct 机制
+        self.confirm_correct = None
+        if self.concept_graph and self.spreading_engine:
+            try:
+                from memory.confirm_correct import ConfirmCorrect
+                self.confirm_correct = ConfirmCorrect(
+                    self._concept_db, self.spreading_engine, self.memory,
+                    self._key_extractor)
+                logger.info("memory.confirm_correct_enabled")
+            except Exception as e:
+                logger.warning("memory.confirm_correct_init_failed",
+                              error=str(e))
 
     def _get_query_embedding_func(self):
         """返回查询嵌入函数（复用 VectorStore.embed），不可用时返回 None。
@@ -1643,6 +1657,124 @@ class MemoryManager:
                          memory_id=memory_id, count=linked)
         except Exception as e:
             logger.debug("memory.extract_link_entities_failed", error=str(e))
+
+    async def _distill_to_knowledge(self, raw_id: int, summary: str,
+                                     scope: Any, importance: float = 0.5,
+                                     emotion: str = "") -> None:
+        """将原始记忆蒸馏为提炼知识（允许 UPDATE/DELETE）。
+
+        mem0 SPEC 优化 ADD-only 架构：
+        1. 调用 MemoryDistiller 蒸馏
+        2. 检查是否已有相似的提炼知识（is_raw=0, 同 scope）
+        3a. 有相似 → UPDATE（合并/增强）
+        3b. 无相似 → 新建提炼知识（is_raw=0）
+
+        Args:
+            raw_id: 原始记忆 ID
+            summary: 原始记忆摘要
+            scope: Scope 对象
+            importance: 重要性
+            emotion: 情感标签
+        """
+        if not self.distiller:
+            return
+        try:
+            # 1. 蒸馏（调用已有 MemoryDistiller，传入单条记忆）
+            distilled = await self.distiller.distill([{"summary": summary, "timestamp": time.time()}])
+            if not distilled or not distilled.strip():
+                return
+
+            # 2. 检查是否已有相似的提炼知识
+            similar = await self._find_similar_knowledge(distilled, scope=scope)
+
+            if similar:
+                # 3a. 有相似知识 → UPDATE（合并）
+                await self._update_knowledge(similar["id"], distilled, raw_id, scope)
+            else:
+                # 3b. 无相似知识 → 新建提炼知识（is_raw=0）
+                knowledge_id = await self.memory.insert_episodic_memory(
+                    summary=distilled,
+                    importance=importance,
+                    emotion_label=emotion,
+                    scope=scope,
+                    is_raw=0,
+                )
+                if self.vec and knowledge_id:
+                    try:
+                        await self.vec.upsert(knowledge_id, distilled)
+                    except Exception as e:
+                        logger.debug("memory.distill_vec_upsert_failed", error=str(e))
+                logger.info("memory.distilled_new",
+                           raw_id=raw_id, knowledge_id=knowledge_id)
+        except Exception as e:
+            logger.warning("memory.distill_to_knowledge_failed", error=str(e))
+
+    async def _find_similar_knowledge(self, summary: str,
+                                       scope: Any) -> dict | None:
+        """查找相似的提炼知识（is_raw=0, 同 scope）。
+
+        Args:
+            summary: 待查重的摘要
+            scope: Scope 对象
+        Returns:
+            相似的记忆 dict，或 None
+        """
+        try:
+            # FTS 搜索 is_raw=0 的提炼知识
+            candidates = await self.memory.search_memories_fts_scoped(
+                summary, scope=scope, limit=5, is_raw=0
+            )
+            if candidates:
+                return candidates[0]
+            return None
+        except Exception as e:
+            logger.debug("memory.find_similar_knowledge_failed", error=str(e))
+            return None
+
+    async def _update_knowledge(self, knowledge_id: int, new_content: str,
+                                 raw_id: int, scope: Any) -> None:
+        """更新已有提炼知识（合并新信息）。
+
+        Args:
+            knowledge_id: 提炼知识 ID
+            new_content: 新蒸馏的内容
+            raw_id: 原始记忆 ID（用于溯源）
+            scope: Scope 对象
+        """
+        try:
+            # 1. 获取已有知识
+            existing = await self.memory.get_memory_by_id(knowledge_id)
+            if not existing:
+                return
+
+            # 2. LLM 合并新旧知识
+            merged = await self.distiller.merge_knowledge(
+                existing=existing.get("summary", ""),
+                new_content=new_content,
+            )
+
+            # 3. 更新记录（version+1）
+            import json
+            await self.memory.update_memory_enrichment(
+                memory_id=knowledge_id,
+                summary=merged,
+                metadata_json=json.dumps({
+                    "source_raw_ids": [raw_id],
+                    "merged_at": time.time(),
+                }),
+            )
+
+            # 4. 向量更新
+            if self.vec:
+                try:
+                    await self.vec.upsert(knowledge_id, merged)
+                except Exception as e:
+                    logger.debug("memory.update_knowledge_vec_failed", error=str(e))
+
+            logger.info("memory.knowledge_updated",
+                       knowledge_id=knowledge_id, raw_id=raw_id)
+        except Exception as e:
+            logger.warning("memory.update_knowledge_failed", error=str(e))
 
     def _generate_summary(self, exchanges: list[dict]) -> str:
         parts = []

@@ -218,3 +218,59 @@ class MemoryDistiller:
             import re
             note = re.sub(r"<think>.*?</think>", "", note, flags=re.DOTALL).strip()
         return note
+
+    async def merge_knowledge(self, existing: str, new_content: str) -> str:
+        """合并已有提炼知识和新蒸馏内容（LLM 合并，避免信息丢失）。
+
+        用于 ADD-only 架构的 UPDATE 场景：当发现相似的提炼知识时，
+        用 LLM 合并新旧内容，而不是直接覆盖。
+
+        Args:
+            existing: 已有提炼知识文本
+            new_content: 新蒸馏的内容
+        Returns:
+            合并后的文本。LLM 失败时返回 new_content（降级：不合并，用新内容）。
+        """
+        if not existing or not existing.strip():
+            return new_content
+        if not new_content or not new_content.strip():
+            return existing
+
+        merge_prompt = f"""你是知识合并助手。将以下两段知识合并为一段简洁摘要，保留所有关键信息：
+
+已有知识：
+{existing[:300]}
+
+新知识：
+{new_content[:300]}
+
+输出合并后的摘要（200字以内，不要重复信息）："""
+
+        messages = [{"role": "user", "content": merge_prompt}]
+
+        # 优先使用免费模型
+        result = await self._call_free_model(
+            messages, temperature=0.4, max_tokens=400,
+        )
+        if result is None and self.router:
+            try:
+                result = await self.router.route(
+                    task_type="memory_encoding",
+                    messages=messages,
+                    temperature=0.4,
+                    max_tokens=400,
+                )
+            except Exception as e:
+                logger.warning("memory_distiller.merge_router_fallback_failed", error=str(e))
+                return new_content
+
+        if not result or not isinstance(result, str):
+            # LLM 失败时降级：直接用新内容（不合并）
+            return new_content
+
+        merged = result.strip()
+        # 去除可能的 <think> 标签内容
+        if "<think>" in merged:
+            import re
+            merged = re.sub(r"<think>.*?</think>", "", merged, flags=re.DOTALL).strip()
+        return merged
