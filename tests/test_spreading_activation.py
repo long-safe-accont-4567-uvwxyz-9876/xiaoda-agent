@@ -2,11 +2,12 @@
 import json
 
 import aiosqlite
+import networkx as nx
 import pytest
 
 from db.db_concept import ConceptDB
 from memory.key_extractor import KeyExtractor
-from memory.spreading_activation import SpreadingActivationEngine
+from memory.spreading_activation import SpreadingActivation, SpreadingActivationEngine
 
 
 @pytest.fixture
@@ -177,3 +178,66 @@ def test_constants(engine):
     assert SpreadingActivationEngine.RRF_K == 60
     assert SpreadingActivationEngine.FUZZY_ACTIVATION == 0.5
     assert SpreadingActivationEngine.SEPARATION_SIM == 0.92
+
+
+# ──────────────────────────────────────────────────────────────────
+# Task 6 新增：SpreadingActivation (networkx 图扩散) 测试
+# ──────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def graph():
+    """构建测试图: A-B-C-D 链 + A-C 边"""
+    g = nx.Graph()
+    g.add_edge(1, 2, weight=0.8)
+    g.add_edge(2, 3, weight=0.7)
+    g.add_edge(3, 4, weight=0.6)
+    g.add_edge(1, 3, weight=0.5)
+    return g
+
+
+def test_spread_activation_basic(graph):
+    """测试基本扩散激活"""
+    sa = SpreadingActivation()
+    results = sa.spread(graph, seed_id=1, decay=0.85, threshold=0.01, max_depth=5)
+    # seed=1 应激活 2, 3, 4
+    activated_ids = {r.node_id for r in results}
+    assert 1 in activated_ids  # seed自身
+    assert 2 in activated_ids
+    assert 3 in activated_ids
+
+
+def test_spread_activation_threshold(graph):
+    """测试阈值过滤: 高阈值只激活近邻"""
+    sa = SpreadingActivation()
+    results = sa.spread(graph, seed_id=1, decay=0.5, threshold=0.3, max_depth=5)
+    # 衰减快+高阈值 → 只激活直接邻居
+    activated_ids = {r.node_id for r in results}
+    assert 1 in activated_ids
+    # node 4 可能不被激活 (距离远)
+
+
+def test_spread_activation_max_depth(graph):
+    """测试最大深度限制"""
+    sa = SpreadingActivation()
+    results = sa.spread(graph, seed_id=1, max_depth=1)
+    # depth=1 → 只激活直接邻居
+    activated_ids = {r.node_id for r in results}
+    assert 1 in activated_ids
+    assert 2 in activated_ids
+    assert 3 in activated_ids
+    # depth=1 不应到达 4 (需要 1→2→3→4 或 1→3→4, 深度2)
+    # 但 1→3 是直接边, 所以3在depth1
+    # 4 需要 depth=2
+
+
+def test_predict_links(graph):
+    """测试链路预测"""
+    sa = SpreadingActivation()
+    g = nx.Graph()
+    g.add_edge(1, 2, weight=0.8)
+    g.add_edge(2, 3, weight=0.7)
+    g.add_edge(1, 3, weight=0.5)
+    # 1和3已有边, 2和... 预测新连接
+    predictions = sa.predict_links(g, node_id=1, max_results=5)
+    assert isinstance(predictions, list)

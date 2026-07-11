@@ -2,12 +2,19 @@
 
 直接命中 (IDF + key重叠 + weight_bias) + 扩散激活 (沿边传播, 3跳)
 + RRF融合 + 模式补全 + 语义重排 + 模式分离
+
+v0.6.0 新增: SpreadingActivation — 知识图谱扩散激活 (优先队列 + 链路预测)
 """
+from __future__ import annotations
+
+import heapq
 import json
 import math
 from collections import defaultdict
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
+import networkx as nx
 from loguru import logger
 
 
@@ -259,3 +266,147 @@ class SpreadingActivationEngine:
                 selected.append(item)
 
         return selected
+
+
+# ──────────────────────────────────────────────────────────────────
+# v0.6.0: SpreadingActivation — 知识图谱扩散激活
+# 源自 mazemaker graph.h KnowledgeGraph::spread_activation
+# 算法: 优先队列扩散, activation[seed]=1.0, propagated = act × edge.weight × decay
+# ──────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class TraversalResult:
+    """遍历结果"""
+    node_id: int
+    activation: float
+    depth: int
+    path: list[int] = field(default_factory=list)
+
+
+@dataclass
+class ConnectionPrediction:
+    """连接预测"""
+    source_id: int
+    target_id: int
+    confidence: float
+    method: str = "common_neighbors"
+
+
+class SpreadingActivation:
+    """扩散激活
+
+    从种子节点出发, 沿边传播激活值:
+    - activation[seed] = 1.0
+    - propagated = act × edge.weight × decay
+    - 低于threshold的停止传播
+    - 超过max_depth的停止传播
+    """
+
+    DECAY = 0.85
+    THRESHOLD = 0.01
+    MAX_DEPTH = 5
+
+    def spread(self, graph: nx.Graph, seed_id: int,
+               decay: float = 0.85, threshold: float = 0.01,
+               max_depth: int = 5) -> list[TraversalResult]:
+        """从种子节点扩散激活
+
+        Args:
+            graph: NetworkX图 (边需有weight属性)
+            seed_id: 种子节点ID
+            decay: 衰减因子 (0~1)
+            threshold: 激活阈值
+            max_depth: 最大传播深度
+
+        Returns:
+            激活的节点列表 (按激活值降序)
+        """
+        if seed_id not in graph:
+            return []
+
+        activation: dict[int, float] = {seed_id: 1.0}
+        depth: dict[int, int] = {seed_id: 0}
+        # 优先队列: (-activation, node_id)  负号因为heapq是最小堆
+        queue: list[tuple[float, int]] = [(-1.0, seed_id)]
+        visited: set[int] = set()
+
+        results: list[TraversalResult] = []
+
+        while queue:
+            neg_act, current = heapq.heappop(queue)
+            act = -neg_act
+
+            if current in visited:
+                continue
+            visited.add(current)
+
+            if act < threshold:
+                continue
+
+            results.append(TraversalResult(
+                node_id=current,
+                activation=act,
+                depth=depth.get(current, 0),
+            ))
+
+            # 达到最大深度则不再继续传播
+            if depth.get(current, 0) >= max_depth:
+                continue
+
+            # 扩散到邻居
+            for neighbor in graph.neighbors(current):
+                if neighbor in visited:
+                    continue
+                edge_data = graph.get_edge_data(current, neighbor)
+                edge_weight = edge_data.get('weight', 0.5) if edge_data else 0.5
+                propagated = act * edge_weight * decay
+
+                if propagated > activation.get(neighbor, 0):
+                    activation[neighbor] = propagated
+                    depth[neighbor] = depth.get(current, 0) + 1
+                    heapq.heappush(queue, (-propagated, neighbor))
+
+        results.sort(key=lambda r: r.activation, reverse=True)
+        return results
+
+    def predict_links(self, graph: nx.Graph, node_id: int,
+                      max_results: int = 10) -> list[ConnectionPrediction]:
+        """链路预测
+
+        融合三种方法:
+        score = 0.3 × common_neighbors + 0.4 × adamic_adar + 0.3 × (1.0 固定, 无embedding时)
+        """
+        if node_id not in graph:
+            return []
+
+        predictions: list[ConnectionPrediction] = []
+        neighbors = set(graph.neighbors(node_id))
+
+        for candidate in graph.nodes():
+            if candidate == node_id or candidate in neighbors:
+                continue
+
+            # Common neighbors
+            cn_score = len(neighbors & set(graph.neighbors(candidate)))
+
+            # Adamic-Adar
+            aa_score = 0.0
+            for common in neighbors & set(graph.neighbors(candidate)):
+                degree = graph.degree(common)
+                if degree > 1:
+                    aa_score += 1.0 / math.log(degree)
+
+            # 组合分数 (无embedding时用固定0.5)
+            combined = 0.3 * cn_score + 0.4 * aa_score + 0.3 * 0.5
+
+            if combined > 0:
+                predictions.append(ConnectionPrediction(
+                    source_id=node_id,
+                    target_id=candidate,
+                    confidence=combined,
+                    method="common_neighbors+adamic_adar",
+                ))
+
+        predictions.sort(key=lambda p: p.confidence, reverse=True)
+        return predictions[:max_results]
