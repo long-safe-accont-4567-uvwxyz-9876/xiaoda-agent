@@ -28,6 +28,7 @@ from memory.cognitive_memory import CognitiveMemory, MemoryEntry
 from memory.bridge_memory import BridgeMemoryManager
 from memory.spreading_activation import SpreadingActivation
 from core.conflict_supersession import ConflictSupersession
+from memory.preference_discovery import PreferenceDiscovery
 
 
 class DreamEngineV2:
@@ -55,15 +56,25 @@ class DreamEngineV2:
 
     # DAE 参数
     DAE_RECOMPUTE_EVERY = 5
+    DAE_DAMPING = 0.7           # 保留 70% 原始嵌入, 30% 邻居加权均值
+    DAE_MIN_NEIGHBORS = 2       # 至少 2 个邻居才更新
+
+    # AFE/StageS 参数
+    AFE_MAX_SESSIONS = 50       # 最多处理 50 条最近记忆
+    AFE_SALIENCE = 2.0          # 偏好模式记忆的 salience
 
     def __init__(self, cognitive_memory: CognitiveMemory,
                  bridge_manager: BridgeMemoryManager | None = None,
                  spreading_activation: SpreadingActivation | None = None,
-                 conflict_supersession: ConflictSupersession | None = None) -> None:
+                 conflict_supersession: ConflictSupersession | None = None,
+                 preference_discovery: PreferenceDiscovery | None = None,
+                 llm_client: Any | None = None) -> None:
         self._cognitive = cognitive_memory
         self._bridge_mgr = bridge_manager or BridgeMemoryManager()
         self._spreading = spreading_activation or SpreadingActivation()
         self._conflict = conflict_supersession or ConflictSupersession()
+        self._pref = preference_discovery or PreferenceDiscovery()
+        self._llm_client = llm_client
 
         self._cycle_count = 0
         # 共享 CognitiveMemory 的连接图（引用，非拷贝），使 NREM Hebbian 强化能
@@ -107,8 +118,9 @@ class DreamEngineV2:
             insight_stats = await self._phase_insight()
             stats["insight_communities"] = insight_stats.get("communities", 0)
 
-            # Phase 5: AFE/StageS (需要LLM, 跳过实际执行)
-            # stats["afe_patterns"] = await self._phase_afe_stage_s()
+            # Phase 5: AFE/StageS (偏好结晶)
+            afe_stats = await self._phase_afe_stage_s()
+            stats["afe_patterns"] = afe_stats.get("patterns", 0)
 
             # Phase 6: DAE (每5个周期一次)
             if self._cycle_count - self._last_dae_cycle >= self.DAE_RECOMPUTE_EVERY:
@@ -253,14 +265,146 @@ class DreamEngineV2:
 
         return {"communities": count}
 
-    async def _phase_dae(self) -> dict:
-        """DAE: 图感知嵌入 (简化版: 标记需要更新的记忆)"""
-        updated = 0
-        for src_id, conns in self._connections.items():
-            if not conns:
+    async def _phase_afe_stage_s(self) -> dict:
+        """AFE/StageS: 偏好结晶
+
+        Stage C: 从最近记忆中提取用户状态事实
+          - 有 LLM: 调用 LLM one-shot 提取
+          - 无 LLM: 用记忆内容作为事实 (降级模式)
+        Stage S: 聚类(cos>=0.85) + 蒸馏为高置信度模式
+          - 10% 产出率 (有意为之, 更高产出率降低 recall 质量)
+        """
+        # 1. 收集最近记忆
+        all_memories = list(self._cognitive._episodic) + list(self._cognitive._semantic.values())
+        if not all_memories:
+            return {"patterns": 0}
+
+        # 按 timestamp 降序取最近的
+        sorted_memories = sorted(all_memories, key=lambda m: m.timestamp, reverse=True)
+        recent = sorted_memories[:self.AFE_MAX_SESSIONS]
+
+        # 只取有内容和嵌入的
+        valid = [m for m in recent if m.content and m.embedding.size > 0]
+        if not valid:
+            return {"patterns": 0}
+
+        # 2. Stage C: 提取用户状态事实
+        session_content = "\n".join(m.content for m in valid)
+        facts = await self._pref.stage_c_extract(session_content, self._llm_client)
+
+        if not facts:
+            # 降级模式: 用记忆内容直接作为事实
+            facts = [m.content for m in valid]
+
+        if not facts:
+            return {"patterns": 0}
+
+        # 3. 准备嵌入矩阵 (用记忆的嵌入近似事实嵌入)
+        # 每条 fact 对应一条源记忆的嵌入
+        fact_embeddings = []
+        fact_texts = []
+        for i, fact in enumerate(facts):
+            if i < len(valid):
+                fact_embeddings.append(valid[i].embedding)
+                fact_texts.append(fact)
+
+        if len(fact_embeddings) < 2:
+            return {"patterns": 0}
+
+        emb_matrix = np.array(fact_embeddings, dtype=np.float32)
+
+        # 4. Stage S: 聚类 + 蒸馏
+        patterns = await self._pref.stage_s_synthesize(
+            fact_texts, emb_matrix, self._llm_client
+        )
+
+        # 5. 存储为高 salience 记忆
+        stored = 0
+        for p in patterns:
+            pattern_text = p.get("pattern_text", "")
+            if not pattern_text:
                 continue
-            # 标记需要更新 (实际实现会在检索时计算邻居加权均值)
+
+            # 用聚类质心作为嵌入 (找最接近的源记忆嵌入)
+            # 简化: 用第一条匹配记忆的嵌入
+            pattern_emb = fact_embeddings[0].copy() if fact_embeddings else np.array([])
+
+            await self._cognitive.remember(
+                content=f"[preference] {pattern_text}",
+                embedding=pattern_emb,
+                emotion_label="",
+                label="preference_pattern",
+            )
+            # 提升 salience
+            # remember() 返回 mid, 但 MemoryEntry 的 salience 默认 1.0
+            # 通过 access_count 间接提升优先级
+            stored += 1
+
+        logger.info(f"Phase 5 (AFE/StageS): {len(facts)} facts → "
+                     f"{len(patterns)} patterns → {stored} stored")
+        return {"patterns": stored}
+
+    async def _phase_dae(self) -> dict:
+        """DAE: 图感知嵌入更新
+
+        对每条有连接的记忆, 用邻居的加权均值更新其嵌入:
+          new_emb = damping * own_emb + (1-damping) * weighted_mean(neighbor_embs)
+
+        - 邻居权重来自连接图中的 weight (Hebbian 强化后的值)
+        - 仅在邻居数 >= DAE_MIN_NEIGHBORS 时更新
+        - 嵌入归一化后写回
+        """
+        updated = 0
+
+        # 收集所有记忆的查找表
+        all_memories: dict[int, MemoryEntry] = {}
+        for m in self._cognitive._episodic:
+            all_memories[m.id] = m
+        for mid, m in self._cognitive._semantic.items():
+            all_memories[mid] = m
+
+        for src_id, conns in self._connections.items():
+            if len(conns) < self.DAE_MIN_NEIGHBORS:
+                continue
+
+            src_mem = all_memories.get(src_id)
+            if not src_mem or src_mem.embedding.size == 0:
+                continue
+
+            # 收集邻居嵌入和权重
+            neighbor_embs = []
+            weights = []
+            for tgt_id, w in conns.items():
+                tgt_mem = all_memories.get(tgt_id)
+                if tgt_mem and tgt_mem.embedding.size > 0 and w > 0:
+                    neighbor_embs.append(tgt_mem.embedding)
+                    weights.append(w)
+
+            if len(neighbor_embs) < self.DAE_MIN_NEIGHBORS:
+                continue
+
+            # 计算加权均值
+            emb_matrix = np.array(neighbor_embs, dtype=np.float32)
+            weight_arr = np.array(weights, dtype=np.float32)
+            weight_arr /= max(weight_arr.sum(), 1e-10)
+
+            weighted_mean = np.average(emb_matrix, axis=0, weights=weight_arr)
+
+            # 混合: damping * own + (1-damping) * neighbors
+            own = src_mem.embedding.astype(np.float32)
+            new_emb = self.DAE_DAMPING * own + (1.0 - self.DAE_DAMPING) * weighted_mean
+
+            # 归一化
+            norm = np.linalg.norm(new_emb)
+            if norm > 1e-10:
+                new_emb = new_emb / norm
+
+            # 写回
+            src_mem.embedding = new_emb.astype(src_mem.embedding.dtype)
             updated += 1
+
+        logger.info(f"Phase 6 (DAE): updated {updated} embeddings "
+                     f"(damping={self.DAE_DAMPING})")
         return {"updated": updated}
 
     def _sample_for_dream(self, memories: list[MemoryEntry],

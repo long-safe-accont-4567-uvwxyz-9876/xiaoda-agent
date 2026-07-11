@@ -34,6 +34,15 @@ async def add_only_db(tmp_path):
     mgr._last_message_time = time.time()
     mgr.entity_extractor = None
     mgr.entity_store = None
+    mgr.concept_graph = None
+    mgr.spreading_engine = None
+    mgr.distiller = None
+    mgr._memory_count_cache = None
+    mgr._memory_count_ts = 0
+    mgr._query_cache = None
+    mgr._assessor = None
+    mgr.router = None
+    mgr._query_transformer = None
 
     yield db, mgr
     await db.close()
