@@ -16,7 +16,7 @@ _REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "version",
     ),
 }
-_REQUIRED_TABLES = ("memory_versions", "context_audit_log")
+_REQUIRED_TABLES = ("memory_versions", "context_audit_log", "kg_entities_v2", "kg_relations_v2", "kg_episodes", "memory_facts", "memory_preferences")
 
 
 @dataclass(frozen=True)

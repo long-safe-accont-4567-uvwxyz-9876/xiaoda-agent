@@ -228,7 +228,6 @@ class VectorStore:
                     continue
                 logger.warning("vector_store.embed_failed", error=str(e), attempts=max_retries + 1)
                 return []
-        return None
 
     async def warm_cache(self, texts: list[str]) -> None:
         """预热嵌入缓存：对未缓存文本调用 embed 填充缓存，单条失败不影响整体。"""

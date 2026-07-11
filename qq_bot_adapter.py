@@ -569,9 +569,15 @@ class AIQQBot(botpy.Client):
                                   image_data: list) -> None:
         """发送 ACK、调用 agent 处理消息并回复，处理超时与异常。"""
         try:
-            await message.reply(content=f"{get_agent_display_name('xiaoda')}收到啦，正在想～🌿", msg_seq=_next_msg_seq())
+            await message.reply(content=f"{get_agent_display_name('xiaoda')}收到啦，正在想～", msg_seq=_next_msg_seq())
 
-            async def status_notify(msg: str) -> None:
+            async def status_notify(msg) -> None:
+                # tool_call_handler._notify_tool_status 传入 dict 类型（工具状态），
+                # 不应直接发送到 QQ（会导致 content 类型错误），静默处理
+                if isinstance(msg, dict):
+                    return
+                if not isinstance(msg, str) or not msg:
+                    return
                 await message.reply(content=msg, msg_seq=_next_msg_seq())
 
             result = await asyncio.wait_for(
@@ -651,7 +657,7 @@ class AIQQBot(botpy.Client):
 
             # 立即发送 ACK
             try:
-                await message.reply(content=f"{get_agent_display_name('xiaoda')}收到啦，正在想～🌿", msg_seq=_next_msg_seq())
+                await message.reply(content=f"{get_agent_display_name('xiaoda')}收到啦，正在想～", msg_seq=_next_msg_seq())
             except (OSError, RuntimeError, ConnectionError) as e:
                 logger.debug("qq_bot.ack_send_failed", error=str(e))
 

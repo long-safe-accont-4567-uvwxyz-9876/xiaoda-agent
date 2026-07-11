@@ -55,7 +55,8 @@ class TestH1BoostCapped:
 
     def test_max_boost_constant_exists(self):
         from memory.fluid_memory import FluidMemory
-        assert hasattr(FluidMemory, "MAX_BOOST"), "FluidMemory应有MAX_BOOST常量"
+        # FluidMemory v0.6 使用稳定性模型替代 boost 上限
+        assert hasattr(FluidMemory, "STABILITY_BASE_DAYS"), "FluidMemory应有STABILITY_BASE_DAYS常量"
 
     def test_high_access_doesnt_exceed_new_memory(self):
         from memory.fluid_memory import FluidMemory

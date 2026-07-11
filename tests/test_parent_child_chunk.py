@@ -149,7 +149,10 @@ class TestChildChunkDB:
                 doc_id TEXT DEFAULT '',
                 source TEXT DEFAULT 'user',
                 access_count INTEGER DEFAULT 0,
-                distilled INTEGER DEFAULT 0
+                distilled INTEGER DEFAULT 0,
+                user_id TEXT DEFAULT 'default',
+                agent_id TEXT DEFAULT 'xiaoda',
+                is_raw INTEGER DEFAULT 0
             );
             CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5(
                 id UNINDEXED, summary_index
@@ -410,7 +413,10 @@ class TestBackwardCompatibility:
                 doc_id TEXT DEFAULT '',
                 source TEXT DEFAULT 'user',
                 access_count INTEGER DEFAULT 0,
-                distilled INTEGER DEFAULT 0
+                distilled INTEGER DEFAULT 0,
+                user_id TEXT DEFAULT 'default',
+                agent_id TEXT DEFAULT 'xiaoda',
+                is_raw INTEGER DEFAULT 0
             );
             CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5(
                 id UNINDEXED, summary_index

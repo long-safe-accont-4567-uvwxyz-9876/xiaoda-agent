@@ -334,7 +334,7 @@ class ToolExecutorMixin:
             from config import apply_agent_name_replacements
             text = apply_agent_name_replacements(text)
         except Exception:
-            pass
+            logger.debug("apply_agent_name_replacements failed", exc_info=True)
         return text
 
     def get_sticker_info(self, reply: str, user_emotion: str = "", force_sticker: bool = False) -> tuple[str, Path | None]:

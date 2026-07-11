@@ -297,6 +297,8 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         )
         ctx.identity = identity
         _ctx_token = _current_request_ctx.set(ctx)
+        # 清空证据门禁（请求间隔离，避免跨请求状态泄漏）
+        self._hook_engine.reset_evidence_gate()
         try:
             return await self._process_impl(ctx, user_input, user_id, source, user_openid, session_id, status_callback, image_data, is_master)
         finally:

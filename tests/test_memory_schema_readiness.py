@@ -23,6 +23,9 @@ def _make_db(path, version: int, *, complete: bool = False) -> None:
         conn.execute("INSERT INTO migration_state VALUES (1, 0, ?, '')", (version,))
         conn.execute("CREATE TABLE memory_versions (id INTEGER PRIMARY KEY, memory_id INTEGER)")
         conn.execute("CREATE TABLE context_audit_log (id INTEGER PRIMARY KEY, memory_id INTEGER)")
+        # v14 新增表
+        for table in ("kg_entities_v2", "kg_relations_v2", "kg_episodes", "memory_facts", "memory_preferences"):
+            conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY)")
     conn.commit()
     conn.close()
 

@@ -94,6 +94,13 @@ class BridgeMemoryManager:
         if not all_embeddings:
             return bridges
 
+        # 过滤维度不一致的嵌入（模型切换后旧数据维度可能不同）
+        ref_dim = all_embeddings[0].shape[0]
+        dim_filtered = [(eid, emb) for eid, emb in zip(all_ids, all_embeddings) if emb.shape[0] == ref_dim]
+        if not dim_filtered:
+            return bridges
+        all_ids = [eid for eid, _ in dim_filtered]
+        all_embeddings = [emb for _, emb in dim_filtered]
         emb_matrix = np.stack(all_embeddings)
 
         for orphan in isolated_memories:

@@ -56,6 +56,7 @@ class PreferenceDiscovery:
             # 实际实现中调用LLM
             # response = await llm_client.chat(...)
             # return parse_json(response)["facts"]
+            logger.warning("PreferenceDiscovery.stage_c_extract is a stub, returning []")
             return []
         except Exception as e:
             logger.error(f"PreferenceDiscovery.stage_c failed: {e}")

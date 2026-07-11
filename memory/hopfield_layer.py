@@ -68,9 +68,8 @@ class HopfieldLayer:
               source: str = "episodic") -> int:
         """存储模式, 满时驱逐最低salience"""
         if pattern.shape != (self.dimensions,):
-            pattern = pattern.astype(np.float32)
-            if pattern.shape != (self.dimensions,):
-                raise ValueError(f"Pattern dimension mismatch: expected {self.dimensions}, got {pattern.shape}")
+            raise ValueError(f"Pattern dimension mismatch: expected {self.dimensions}, got {pattern.shape}")
+        pattern = pattern.astype(np.float32)
 
         # 满时驱逐
         while len(self._patterns) >= self.capacity:
@@ -151,7 +150,7 @@ class HopfieldLayer:
             age_seconds = now - p.timestamp
             recency_boost = float(np.exp(-age_seconds / 3600.0))
             freq_boost = float(np.log1p(p.access_count) * 0.1)
-            p.salience = max(p.salience, recency_boost + freq_boost)
+            p.salience = min(1.0, max(p.salience, recency_boost + freq_boost))
 
     def pattern_count(self) -> int:
         return len(self._patterns)

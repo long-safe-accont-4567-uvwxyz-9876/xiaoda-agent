@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import time
 from typing import Any, TYPE_CHECKING
@@ -386,7 +387,7 @@ class MessageProcessorMixin:
             from config import apply_agent_name_replacements
             clean_reply = apply_agent_name_replacements(clean_reply)
         except Exception:
-            pass
+            logger.debug("apply_agent_name_replacements failed", exc_info=True)
 
         audio_path, tts_pending, tts_text = await self._build_voice_result(
             clean_reply, emotion_label, force_voice)
@@ -548,7 +549,7 @@ class MessageProcessorMixin:
 
         # 任务类型解析与熔断器检查
         early_result, task_type, _cb_max_tokens, circuit_state, _model_cfg = \
-            self._resolve_task_and_circuit(user_input, tools, messages, trace)
+            self._resolve_task_and_circuit(user_input, tools, messages, trace, source=source)
         if early_result is not None:
             return early_result
 
@@ -674,7 +675,7 @@ class MessageProcessorMixin:
                 from config import apply_agent_name_replacements
                 clean_reply = apply_agent_name_replacements(clean_reply)
             except Exception:
-                pass
+                logger.debug("apply_agent_name_replacements failed", exc_info=True)
 
         audio_path, tts_pending, tts_text = await self._build_voice_result(
             clean_reply, emotion_label, force_voice)
@@ -923,10 +924,13 @@ class MessageProcessorMixin:
             logger.info("agent.tools_filtered_for_non_master", user_id=user_id)
         return _pre_picked_sticker, tools
 
-    def _resolve_task_and_circuit(self, user_input: Any, tools: Any, messages: Any, trace: Any) -> tuple:
+    def _resolve_task_and_circuit(self, user_input: Any, tools: Any, messages: Any, trace: Any,
+                                    source: str = "qq") -> tuple:
         """任务类型解析与熔断器检查。返回 (early_result, task_type, _cb_max_tokens, circuit_state, _model_cfg)。
 
         early_result 非 None 时表示熔断器 RED 状态，应直接返回。
+        Web UI (source="web") 使用更高的 max_tokens 以支持近似 Hermes 的长回复流式输出；
+        QQ 通道保持 ROUTE_TABLE 默认值（平台消息长度有限制）。
         """
         should_escalate, reason = self._should_escalate_to_pro(user_input, tools)
         base_task = "chat_pro" if should_escalate else "chat"
@@ -944,12 +948,18 @@ class MessageProcessorMixin:
             logger.info("agent.circuit_breaker_half_open_probe")
 
         _cb_max_tokens = None
+        # Web UI 近似 Hermes 无限流式输出：使用 8192 tokens 上限（可配置）
+        # QQ 通道保持 None → 走 ROUTE_TABLE 默认值（1500），避免超长回复被 QQ 平台截断
+        _web_max_tokens = int(os.getenv("WEB_UI_MAX_TOKENS", "8192"))
+        if source == "web":
+            _cb_max_tokens = _web_max_tokens
         if circuit_state == CircuitState.YELLOW:
             messages.append({
                 "role": "system",
                 "content": "[系统警告] 当前认知状态不佳，请简化回复。"
             })
-            _cb_max_tokens = int(_model_cfg.get("max_tokens", 1500) * 0.8)
+            _base_mt = _cb_max_tokens if _cb_max_tokens else _model_cfg.get("max_tokens", 1500)
+            _cb_max_tokens = int(_base_mt * 0.8)
         return None, task_type, _cb_max_tokens, circuit_state, _model_cfg
 
     async def _call_main_llm_with_verification(self, messages: Any, tools: Any, task_type: Any, _model_cfg: Any,

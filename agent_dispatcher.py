@@ -584,7 +584,7 @@ class SubAgent:
                     self._client.chat.completions.create(
                         model=self.config.model,
                         messages=working,
-                        max_tokens=1024 if tools else 800,
+                        max_tokens=4096 if tools else 2048,
                         temperature=get_temperature(default=0.9),
                         tools=tools,
                         tool_choice="auto" if tools else None,
@@ -729,7 +729,7 @@ class SubAgent:
                 self._client.chat.completions.create(
                     model=self.config.model,
                     messages=working,
-                    max_tokens=800,
+                    max_tokens=2048,
                     temperature=get_temperature(default=0.7),
                     extra_body=extra_body,
                 ),

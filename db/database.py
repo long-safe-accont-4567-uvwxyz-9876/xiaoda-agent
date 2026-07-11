@@ -221,9 +221,11 @@ class DatabaseManager:
         await self._conn.commit()
 
     async def _apply_migration(self, version: int, description: str, migrate_fn: Any) -> None:
-        """执行单个迁移：标记 dirty → BEGIN TRANSACTION → migrate_fn → INSERT schema_version → commit → 清除 dirty。
+        """执行单个迁移：标记 dirty → migrate_fn → INSERT schema_version → commit → 清除 dirty。
 
-        失败时 ROLLBACK 并 fail-fast（sys.exit(1)），dirty state 持久化阻止下次启动。
+        失败时 fail-fast（sys.exit(1)），dirty state 持久化阻止下次启动。
+        注意：不使用显式 BEGIN TRANSACTION，因为迁移函数内部的 executescript()
+        会隐式提交当前事务，在 vfat 上会导致死锁/挂起。
         """
         # 标记 dirty（独立事务，确保迁移失败后 dirty 状态持久化）
         await self._conn.execute(
@@ -233,7 +235,8 @@ class DatabaseManager:
         await self._conn.commit()
 
         try:
-            await self._conn.execute("BEGIN TRANSACTION")
+            # 不使用 BEGIN TRANSACTION：executescript() 会隐式提交，
+            # 在 vfat (DELETE journal_mode) 上显式事务 + 隐式提交会导致挂起
             await migrate_fn()
             await self._conn.execute(
                 "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
@@ -1107,7 +1110,30 @@ class DatabaseManager:
                 message_type TEXT NOT NULL,
                 content TEXT NOT NULL,
                 sent_at REAL NOT NULL
-            );        """)
+            );
+
+            CREATE TABLE IF NOT EXISTS memory_child_chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                parent_id INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                embed_content TEXT DEFAULT '',
+                chunk_type TEXT NOT NULL DEFAULT 'segment',
+                importance REAL DEFAULT 0.5,
+                overlap_hash TEXT DEFAULT '',
+                created_at REAL NOT NULL,
+                FOREIGN KEY (parent_id) REFERENCES episodic_memories(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_child_parent ON memory_child_chunks(parent_id);
+            CREATE INDEX IF NOT EXISTS idx_child_type ON memory_child_chunks(chunk_type);
+        """)
+        # FTS5 虚拟表单独执行（不能与 executescript 中的普通 DDL 混合在 vfat 上）
+        try:
+            await self._conn.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS memory_child_chunks_fts "
+                "USING fts5(content, tokenize='unicode61')"
+            )
+        except Exception as e:
+            logger.warning(f"创建 memory_child_chunks_fts 失败: {e}")
 
     async def _ddl_schedule_api_tables(self) -> None:
         """建表：调度/API/会话相关表。"""

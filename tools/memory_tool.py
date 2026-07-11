@@ -43,10 +43,13 @@ async def remember(content: str, tags: str = "", importance: float = 0.5) -> Too
     try:
         mm = _get_memory_manager()
         # 使用 MemoryManager.memory.insert_episodic_memory 写入
+        from memory.scope import Scope
         mem_id = await mm.memory.insert_episodic_memory(
             summary=content,
             importance=importance,
             emotion_label=tags.split(",")[0].strip() if tags else "",
+            scope=Scope(),
+            is_raw=1,
         )
 
         # 同步写入向量索引

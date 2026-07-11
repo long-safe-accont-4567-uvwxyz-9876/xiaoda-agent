@@ -90,6 +90,17 @@ class HookEngine:
         self._hooks[hook.hook_type].append(hook)
         logger.debug("hooks.registered", name=hook.name, type=hook.hook_type.value)
 
+    def reset_evidence_gate(self) -> None:
+        """清空证据门禁的读取记录（请求间隔离）。
+
+        EvidenceGate 是全局单例，_read_targets 会在请求间累积。
+        必须在每个请求开始时调用此方法清空，避免跨请求状态泄漏。
+        """
+        for hook in self._hooks[HookType.PRE_TOOL_USE]:
+            if isinstance(hook, GateGuardHook):
+                hook._evidence_gate.clear()
+                break
+
     async def fire_pre_tool_use(self, tool_name: str, arguments: dict,
                                  user_input: str = "", safe_mode: bool = False) -> HookResult:
         """触发 PreToolUse 钩子链，任何钩子返回 allowed=False 则阻止执行"""
@@ -439,8 +450,11 @@ class GateGuardHook(BaseHook):
 
         # 证据门禁：检查是否已读取目标
         has_read = self._evidence_gate.has_read(file_path) if file_path else False
+        # create_file: 检查目标文件是否已存在（创建新文件时豁免证据门禁）
+        import os as _os
+        file_exists = bool(file_path) and _os.path.exists(file_path)
         check_result = self._risk_classifier.pre_check(
-            tool_name, arguments, has_read_target=has_read
+            tool_name, arguments, has_read_target=has_read, file_exists=file_exists
         )
 
         if not check_result["allow"]:

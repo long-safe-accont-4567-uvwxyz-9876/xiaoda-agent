@@ -163,7 +163,7 @@ class CognitiveMemory:
 
         # 3. 转移高salience记忆
         transferred = 0
-        episodic_ids_to_remove = []
+        episodic_ids_to_remove: set[int] = set()
 
         for entry in candidates:
             entry.salience = self._salience_scorer.compute(entry, now)
@@ -188,7 +188,7 @@ class CognitiveMemory:
                 # 存入Hopfield
                 self._hopfield.store(entry.embedding, label=entry.label, source="consolidated")
 
-                episodic_ids_to_remove.append(entry.id)
+                episodic_ids_to_remove.add(entry.id)
                 transferred += 1
 
         # 4. 更新连接图
@@ -271,8 +271,8 @@ class CognitiveMemory:
         k = min(self.semantic_max_clusters, max(1, n // 4))
 
         # 初始化聚类中心 (随机选k个)
-        np.random.seed(42)
-        indices = np.random.choice(n, min(k, n), replace=False)
+        rng = np.random.default_rng(42)
+        indices = rng.choice(n, min(k, n), replace=False)
         centroids = [entries[i].embedding.copy() for i in indices]
 
         # 迭代K-means (最多10次)
@@ -288,7 +288,13 @@ class CognitiveMemory:
             for i, cluster_ids in enumerate(clusters):
                 if cluster_ids:
                     cluster_entries = [self._semantic[mid] for mid in cluster_ids]
-                    new_centroid = np.mean([e.embedding for e in cluster_entries], axis=0)
+                    embeddings_list = [e.embedding for e in cluster_entries if e.embedding is not None and e.embedding.size > 0]
+                    if embeddings_list:
+                        ref_dim = embeddings_list[0].shape[0]
+                        embeddings_list = [e for e in embeddings_list if e.shape[0] == ref_dim]
+                        new_centroid = np.mean(embeddings_list, axis=0) if embeddings_list else centroids[i]
+                    else:
+                        new_centroid = centroids[i]
                     new_centroids.append(new_centroid)
                 else:
                     new_centroids.append(centroids[i])

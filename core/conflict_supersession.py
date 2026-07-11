@@ -124,6 +124,7 @@ class ConflictSupersession:
         Returns:
             检测到的冲突对数量（v0.6 不修改任何记忆状态）
         """
+        logger.warning("ConflictSupersession.apply_supersession is a v0.6 stub — no memory state is modified")
         count = 0
         for conflict in conflicts:
             # TODO(v0.7): wire to DB — mark old_memory status=SUPERSEDED,

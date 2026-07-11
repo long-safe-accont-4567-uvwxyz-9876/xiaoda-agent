@@ -78,8 +78,14 @@ class RiskClassifier:
         # 默认中风险
         return RiskLevel.MEDIUM
 
-    def pre_check(self, tool_name: str, params: dict, has_read_target: bool = False) -> dict:
-        """执行前检查"""
+    def pre_check(self, tool_name: str, params: dict, has_read_target: bool = False,
+                  file_exists: bool = True) -> dict:
+        """执行前检查
+
+        Args:
+            file_exists: 目标文件是否已存在（仅对 create_file 有意义：
+                         创建新文件时 file_exists=False，豁免证据门禁）
+        """
         risk = self.classify(tool_name, params)
 
         # L4: 直接拒绝
@@ -92,8 +98,12 @@ class RiskClassifier:
             return {"allow": False, "reason": "高风险操作，需要用户确认", "risk": risk, "need_confirm": True}
 
         # L2: 证据门禁（先读再写）
+        # create_file 创建新文件（目标不存在）时豁免证据门禁
         if risk >= RiskLevel.MEDIUM and not has_read_target:
-            return {"allow": False, "reason": "证据门禁：请先读取目标文件再修改", "risk": risk, "need_confirm": False}
+            if tool_name == "create_file" and not file_exists:
+                pass  # 创建新文件，无需先读取
+            else:
+                return {"allow": False, "reason": "证据门禁：请先读取目标文件再修改", "risk": risk, "need_confirm": False}
 
         return {"allow": True, "risk": risk, "need_confirm": False}
 
