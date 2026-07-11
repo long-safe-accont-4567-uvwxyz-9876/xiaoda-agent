@@ -247,6 +247,27 @@ _AGNES_REASONING_BLOCK = re.compile(
     r'(?:[^\n]*?(?:Need|Must|Should|We\s+can|final\s+answer)[^\n]*){2,}',
     re.IGNORECASE,
 )
+# 中文内部独白/推理特征短语（模型将思维链当作正文输出）
+# 这些短语是模型在"思考如何回复"而非"实际回复"，应被清理
+_CHINESE_REASONING_PHRASES = [
+    r"现在开始(?:回复|组织回复|返回|生成)",
+    r"根据SOUL\.md",
+    r"根据记忆碎片",
+    r"我需要用.*?语气",
+    r"我需要确保",
+    r"我应该.*?(?:回应|回答|回复|告诉|给出)",
+    r"我可以温柔(?:提醒|提示)",
+    r"(?:沙|汐)问.*?(?:几点|时间|现在)",
+    r"(?:沙|汐)在.*?时间点",
+    r"现在时间是",
+    r"我来分析",
+    r"让我(?:想想|回忆|思考)",
+    r"我直接(?:回答|告诉)",
+]
+_CHINESE_REASONING_LINE_PATTERN = re.compile(
+    r'^(?:' + '|'.join(_CHINESE_REASONING_PHRASES) + r')[^\n]*$',
+    re.MULTILINE,
+)
 
 
 def strip_reasoning(text: str) -> str:
@@ -277,6 +298,8 @@ def strip_reasoning(text: str) -> str:
     text = _REASONING_BLOCK_PATTERN.sub('', text)
     # 7. Agnes 风格连续英文推理段
     text = _AGNES_REASONING_BLOCK.sub('', text)
+    # 8. 中文内部独白/推理行
+    text = _CHINESE_REASONING_LINE_PATTERN.sub('', text)
     # 清理多余空行
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()

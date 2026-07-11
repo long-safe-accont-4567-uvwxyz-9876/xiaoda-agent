@@ -111,3 +111,56 @@ async def test_fast_path_finalize_calls_strip_reasoning():
     # 验证：推理内容应被清理
     assert "[emotion thinking]" not in result.reply
     assert "推理内容" not in result.reply or "推理" not in result.reply
+
+
+def test_strip_reasoning_chinese_monologue():
+    """测试中文内部独白/推理泄露的清理
+
+    回归测试：模型将中文思维链当作正文输出，包含"现在开始回复"、
+    "根据SOUL.md"、"根据记忆碎片"等内部独白短语，应被 strip_reasoning 清理。
+    """
+    from utils.text_utils import strip_reasoning
+
+    # 模型输出的中文内部独白（实际泄露样本的精简版）
+    leaked_output = """根据SOUL.md中的时间感知规则，沙在中午时间点发消息时，我可以温柔提醒吃饭。
+汐问现在几点了，我需要用真实时间回应。
+根据记忆碎片，之前汐曾指出时间错误，我需要确保准确回应。
+现在时间是中午12:17，星期六。
+我应该给出准确时间，并可以温柔提醒吃饭。
+我需要用小妲的温柔语气回应。
+现在开始组织回复。
+沙问"妲妲~现在几点了"，我应该用温柔语气回应，告诉沙现在是中午12:17，星期六，并温柔提醒沙该吃午饭了。
+现在开始回复。"""
+
+    result = strip_reasoning(leaked_output)
+
+    # 内部独白短语应被清理
+    assert "根据SOUL.md" not in result
+    assert "根据记忆碎片" not in result
+    assert "现在开始回复" not in result
+    assert "现在开始组织回复" not in result
+    assert "我需要用小妲" not in result
+    assert "我应该给出准确时间" not in result
+    # 第三人称引用（沙问/汐问）应被清理
+    assert "沙问" not in result
+    assert "汐问" not in result
+
+
+def test_strip_reasoning_chinese_monologue_preserves_reply():
+    """测试中文推理清理后保留正常回复内容"""
+    from utils.text_utils import strip_reasoning
+
+    # 推理 + 实际回复
+    mixed_output = """根据SOUL.md，我应该温柔回应。
+现在开始回复。
+妲妲~现在是中午12:17哦，星期六。该吃午饭了呢，别忘了好好吃饭呀～"""
+
+    result = strip_reasoning(mixed_output)
+
+    # 推理内容应被清理
+    assert "根据SOUL.md" not in result
+    assert "现在开始回复" not in result
+    # 实际回复应保留
+    assert "妲妲" in result
+    assert "12:17" in result
+    assert "吃午饭" in result

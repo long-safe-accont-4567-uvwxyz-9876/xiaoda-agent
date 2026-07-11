@@ -445,7 +445,7 @@ function onVoiceFilePick(e: Event) {
 async function uploadVoiceForAgent() {
   if (!voiceFile.value || !editing.value?.name) return
   const agentName = editing.value.name
-  const voiceName = `${agentName}_${Date.now().toString(36)}`
+  const voiceName = `voice_${Date.now().toString(36)}`
   voiceUploading.value = true
   try {
     const formData = new FormData()
