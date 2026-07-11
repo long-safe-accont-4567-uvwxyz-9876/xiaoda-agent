@@ -234,8 +234,8 @@ class KnowledgeDBV2:
         # 更新成员实体的社区归属
         for entity_name in member_entities:
             await self._conn.execute(
-                "UPDATE kg_entities_v2 SET name_embedding=? WHERE name=?",
-                (community_id, entity_name),
+                "UPDATE kg_entities_v2 SET community_id=?, updated_at=? WHERE name=?",
+                (community_id, now, entity_name),
             )
         if auto_commit:
             await self._conn.commit()
@@ -243,19 +243,19 @@ class KnowledgeDBV2:
     async def get_entity_community(self, entity_name: str) -> str | None:
         """查询实体所属社区 ID。"""
         cursor = await self._conn.execute(
-            "SELECT name_embedding FROM kg_entities_v2 WHERE name=?", (entity_name,)
+            "SELECT community_id FROM kg_entities_v2 WHERE name=?", (entity_name,)
         )
         row = await cursor.fetchone()
-        if row and row["name_embedding"]:
-            return row["name_embedding"]
+        if row and row["community_id"]:
+            return row["community_id"]
         return None
 
     async def add_entity_to_community(
         self, entity_name: str, community_id: str, auto_commit: bool = True
     ) -> None:
-        """将实体加入社区（设置 name_embedding 为 community_id）。"""
+        """将实体加入社区（设置 community_id 专用列）。"""
         await self._conn.execute(
-            "UPDATE kg_entities_v2 SET name_embedding=?, updated_at=? WHERE name=?",
+            "UPDATE kg_entities_v2 SET community_id=?, updated_at=? WHERE name=?",
             (community_id, time.time(), entity_name),
         )
         # 同步更新社区的 member_entities 列表

@@ -841,10 +841,12 @@ class DatabaseManager:
                 summary TEXT DEFAULT '',
                 summary_version INTEGER DEFAULT 0,
                 name_embedding TEXT DEFAULT NULL,
+                community_id TEXT DEFAULT NULL,
                 updated_at REAL NOT NULL,
                 created_at REAL NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_kg_entity_v2_name ON kg_entities_v2(name);
+            CREATE INDEX IF NOT EXISTS idx_kg_entity_v2_community ON kg_entities_v2(community_id);
 
             CREATE TABLE IF NOT EXISTS kg_relations_v2 (
                 id TEXT PRIMARY KEY,
@@ -894,6 +896,27 @@ class DatabaseManager:
                 fact
             );
         """)
+
+        # 1b. 幂等添加 community_id 列（修复 name_embedding 语义劫持）
+        kg_cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(kg_entities_v2)")]
+        if "community_id" not in kg_cols:
+            await self._conn.execute(
+                "ALTER TABLE kg_entities_v2 ADD COLUMN community_id TEXT DEFAULT NULL"
+            )
+            await self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_kg_entity_v2_community ON kg_entities_v2(community_id)"
+            )
+            # 迁移旧的 name_embedding 中的 community_id 到专用列
+            await self._conn.execute(
+                """UPDATE kg_entities_v2 SET community_id = name_embedding
+                   WHERE name_embedding IS NOT NULL
+                     AND name_embedding LIKE 'COM-%'"""
+            )
+            # 清理被劫持的 name_embedding（恢复为 NULL，后续由向量表使用）
+            await self._conn.execute(
+                """UPDATE kg_entities_v2 SET name_embedding = NULL
+                   WHERE name_embedding LIKE 'COM-%'"""
+            )
 
         # 2. 迁移 entities: knowledge_entities → kg_entities_v2
         await self._conn.execute("""

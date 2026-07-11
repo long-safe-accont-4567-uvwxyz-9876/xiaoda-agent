@@ -326,6 +326,13 @@ class AgentCoreBootstrapper:
                     vector_store=core._vec_store,
                     router=core.router,
                 )
+                # 复用 v1 的免费模型配置，确保 KG v2 提取也走免费模型
+                if sf_key:
+                    kg_v2.set_free_model_client(
+                        api_key=sf_key,
+                        base_url="https://api.siliconflow.cn/v1",
+                        model="THUDM/GLM-4-9B-0414",
+                    )
                 core.knowledge_graph.set_kg_v2(kg_v2)
                 kg_search_engine = KGSearchEngine(
                     db=core.db.kg_v2,

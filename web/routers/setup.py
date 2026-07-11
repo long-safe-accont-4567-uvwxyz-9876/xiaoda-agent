@@ -426,10 +426,18 @@ async def _test_github(key_value: str) -> tuple[bool, str]:
 async def _test_ollama(base_url: str) -> tuple[bool, str]:
     """测试 Ollama 服务连通性。"""
     # SSRF 防护：校验 URL 不指向内网/元数据服务
+    # Ollama 是本地部署服务，允许 localhost/127.0.0.1
     from security.ssrf_guard import validate_url
-    allowed, reason = validate_url(base_url)
-    if not allowed:
-        return False, f"URL 安全检查失败: {reason}"
+    import urllib.parse as _urlparse
+    _parsed = _urlparse.urlparse(base_url)
+    _hostname = (_parsed.hostname or "").lower().rstrip(".")
+    _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "ip6-localhost"}
+    if _hostname in _LOCAL_HOSTS:
+        pass  # 本地 Ollama 服务，跳过 SSRF 检查
+    else:
+        allowed, reason = validate_url(base_url)
+        if not allowed:
+            return False, f"URL 安全检查失败: {reason}"
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.get(f"{base_url.rstrip('/')}/models")

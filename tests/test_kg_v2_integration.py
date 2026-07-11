@@ -12,14 +12,26 @@ from memory.knowledge_graph_v2 import KnowledgeGraphV2
 
 
 @pytest.mark.asyncio
-async def test_kg_v2_enabled_flag_defaults_true():
-    """KG_V2_ENABLED 默认为 True。"""
+async def test_kg_v2_enabled_flag_defaults_false():
+    """KG_V2_ENABLED 默认为 False（保守策略，需显式开启）。"""
     # Remove env var to test default
     os.environ.pop("KG_V2_ENABLED", None)
     import importlib
     import config
     importlib.reload(config)
+    assert config.KG_V2_ENABLED is False
+
+
+@pytest.mark.asyncio
+async def test_kg_v2_flag_can_be_enabled():
+    """KG_V2_ENABLED=true 显式开启 v2。"""
+    os.environ["KG_V2_ENABLED"] = "true"
+    import importlib
+    import config
+    importlib.reload(config)
     assert config.KG_V2_ENABLED is True
+    os.environ.pop("KG_V2_ENABLED", None)
+    importlib.reload(config)
 
 
 @pytest.mark.asyncio
