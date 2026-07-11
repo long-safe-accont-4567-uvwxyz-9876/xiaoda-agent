@@ -1,6 +1,5 @@
 # tests/test_cognitive_memory.py
 """3层认知记忆管理器测试"""
-import asyncio
 import time
 import numpy as np
 import pytest
@@ -10,25 +9,19 @@ from memory.cognitive_memory import CognitiveMemory, MemoryEntry
 def cog_mem():
     return CognitiveMemory(dimensions=64, episodic_capacity=100, semantic_max_clusters=10)
 
-def test_remember_episodic(cog_mem):
+async def test_remember_episodic(cog_mem):
     """测试存储到Episodic层"""
     emb = np.random.randn(64).astype(np.float32)
     emb /= np.linalg.norm(emb)
-    mid = asyncio.get_event_loop().run_until_complete(
-        cog_mem.remember("test content", emb, emotion_label="happy")
-    )
+    mid = await cog_mem.remember("test content", emb, emotion_label="happy")
     assert mid > 0
 
-def test_recall_episodic(cog_mem):
+async def test_recall_episodic(cog_mem):
     """测试Episodic层检索"""
     emb = np.random.randn(64).astype(np.float32)
     emb /= np.linalg.norm(emb)
-    asyncio.get_event_loop().run_until_complete(
-        cog_mem.remember("hello world", emb)
-    )
-    results = asyncio.get_event_loop().run_until_complete(
-        cog_mem.recall(emb, k=5)
-    )
+    await cog_mem.remember("hello world", emb)
+    results = await cog_mem.recall(emb, k=5)
     assert len(results) > 0
     assert results[0][0] > 0  # memory_id
 
@@ -44,21 +37,17 @@ def test_connection_strength(cog_mem):
     # strength = 1.0*0.5 + 1.0*0.3 + 0 = 0.8
     assert strength > 0.7
 
-def test_consolidate(cog_mem):
+async def test_consolidate(cog_mem):
     """测试认知整合: episodic → semantic + hopfield"""
     # 存储多条记忆, 设置高access_count
     for i in range(5):
         emb = np.random.randn(64).astype(np.float32)
         emb /= np.linalg.norm(emb)
-        mid = asyncio.get_event_loop().run_until_complete(
-            cog_mem.remember(f"content_{i}", emb)
-        )
+        mid = await cog_mem.remember(f"content_{i}", emb)
         # 模拟多次访问
         cog_mem._touch(mid, count=5)
 
-    transferred = asyncio.get_event_loop().run_until_complete(
-        cog_mem.consolidate(batch_size=10)
-    )
+    transferred = await cog_mem.consolidate(batch_size=10)
     assert transferred > 0
 
 def test_self_attention_sweep(cog_mem):

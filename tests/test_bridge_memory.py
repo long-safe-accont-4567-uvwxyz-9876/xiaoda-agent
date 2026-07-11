@@ -1,6 +1,5 @@
 # tests/test_bridge_memory.py
 """桥接记忆测试"""
-import asyncio
 import time
 import numpy as np
 import pytest
@@ -11,8 +10,9 @@ from memory.cognitive_memory import MemoryEntry
 def manager():
     return BridgeMemoryManager()
 
-def test_bridge_discovery(manager):
+async def test_bridge_discovery(manager):
     """测试REM桥接发现"""
+    np.random.seed(42)
     now = time.time()
     # 创建孤立记忆
     emb1 = np.random.randn(64).astype(np.float32)
@@ -29,9 +29,7 @@ def test_bridge_discovery(manager):
         MemoryEntry(id=3, embedding=emb2, timestamp=now-200, session_id="s3"),
     ]
 
-    bridges = asyncio.get_event_loop().run_until_complete(
-        manager.discover_bridges([orphan], all_memories + [orphan])
-    )
+    bridges = await manager.discover_bridges([orphan], all_memories + [orphan])
     # emb1 和 emb3 相似 → 应该有桥接
     assert len(bridges) > 0
     bridge = bridges[0]
@@ -39,8 +37,9 @@ def test_bridge_discovery(manager):
     assert bridge.target_memory_id == 2
     assert bridge.cross_session == True
 
-def test_bridge_weight_factor(manager):
+async def test_bridge_weight_factor(manager):
     """测试桥接权重 = sim × 0.3"""
+    np.random.seed(99)
     now = time.time()
     emb = np.random.randn(64).astype(np.float32)
     emb /= np.linalg.norm(emb)
@@ -50,14 +49,13 @@ def test_bridge_weight_factor(manager):
     orphan = MemoryEntry(id=1, embedding=emb, timestamp=now)
     target = MemoryEntry(id=2, embedding=emb_sim, timestamp=now)
 
-    bridges = asyncio.get_event_loop().run_until_complete(
-        manager.discover_bridges([orphan], [orphan, target])
-    )
+    bridges = await manager.discover_bridges([orphan], [orphan, target])
     if bridges:
         assert bridges[0].weight <= 0.3 * 0.95  # weight = sim × 0.3, sim < 0.95
 
-def test_no_bridge_for_identical(manager):
+async def test_no_bridge_for_identical(manager):
     """测试完全相同的记忆不建立桥接 (sim >= 0.95)"""
+    np.random.seed(7)
     now = time.time()
     emb = np.random.randn(64).astype(np.float32)
     emb /= np.linalg.norm(emb)
@@ -65,8 +63,6 @@ def test_no_bridge_for_identical(manager):
     orphan = MemoryEntry(id=1, embedding=emb, timestamp=now)
     target = MemoryEntry(id=2, embedding=emb.copy(), timestamp=now)
 
-    bridges = asyncio.get_event_loop().run_until_complete(
-        manager.discover_bridges([orphan], [orphan, target])
-    )
+    bridges = await manager.discover_bridges([orphan], [orphan, target])
     # sim = 1.0 >= 0.95 → 不建立桥接
     assert len(bridges) == 0
