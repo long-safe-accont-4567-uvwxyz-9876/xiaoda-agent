@@ -407,8 +407,16 @@ class MemoryManager:
 
     async def retrieve_memories_hybrid(self, query: str, k: int = 5,
                                         use_reranker: bool = True,
-                                        use_kg: bool = True) -> list[dict]:
-        """FTS + 向量 RRF 混合检索 + Reranker 精排
+                                        use_kg: bool = True,
+                                        scope: Any | None = None,
+                                        include_raw: bool = False) -> list[dict]:
+        """FTS + 向量 + KG + 子chunk + 扩散 + 实体 六路 RRF 混合检索 + Reranker 精排
+
+        mem0 SPEC 优化：
+        - 新增第6路：EntityStore.recall_by_entities
+        - 新增 Entity Boost：精排阶段加分
+        - 新增 scope 过滤：user_id + agent_id 隔离
+        - 新增 include_raw：是否包含 is_raw=1 的原始记忆
 
         冷启动三段路由 (工业标准, 对标 Dify/Coze):
         - cold (0条):  纯 FTS, 向量检索完全关闭 → 零 Embedding 开销
@@ -416,13 +424,21 @@ class MemoryManager:
         - hot  (>10条):  FTS + 向量均衡融合 (原有行为)
 
         Args:
+            scope: Scope 对象。None 时使用默认 Scope()。
+            include_raw: False=只查提炼知识（is_raw=0），True=查所有记忆
             use_reranker: 是否在本方法内调用 Reranker 精排。A3 并行检索场景下会置为
                 False，由调用方对合并后的候选池做一次性批量 Reranker。闲聊型查询
                 也会置为 False 以节省 Reranker 调用成本。
             use_kg: 是否启用 KG 第三路召回。闲聊型查询置为 False 避免不必要的
                 KG 检索开销。
         """
+        # scope 默认值
+        if scope is None:
+            from memory.scope import Scope
+            scope = Scope()
+
         _start = time.time()
+        is_raw_filter = None if include_raw else 0
 
         # 候选集大小参数化（可通过 config 配置）
         import config as _cfg
@@ -434,10 +450,12 @@ class MemoryManager:
         is_cold = tier == "cold"
         is_warm = tier == "warm"
 
-        # 冷用户: 仅 FTS, 完全跳过向量检索 (零 Embedding 开销)
+        # 冷用户: 仅 FTS (scope 过滤), 完全跳过向量检索 (零 Embedding 开销)
         # 但 FTS 无结果时仍尝试向量检索作为兜底（避免 cold_max > 0 时丢失向量召回）
         if is_cold:
-            fts_items = await self._hybrid_fts_search(query, recall_limit)
+            fts_items = await self._hybrid_fts_search_scoped(
+                query, recall_limit, scope, is_raw_filter
+            )
             if fts_items:
                 results = fts_items[:k]
                 logger.info("memory.search", event="memory_search",
@@ -536,22 +554,23 @@ class MemoryManager:
                 logger.debug("memory.child_recall_failed", error=str(e))
                 return []
 
-        fts_items, vec_items, kg_items, child_items, spread_items = await asyncio.gather(
-            self._hybrid_fts_search(query, recall_limit),
+        fts_items, vec_items, kg_items, child_items, spread_items, entity_items = await asyncio.gather(
+            self._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter),
             self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids),
             _kg_recall(),
             _child_recall(),
             self._spreading_recall(query, recall_limit),
+            self._entity_recall(query, scope, recall_limit),
         )
 
-        # 空通道自动剔除: 五路都空则返回
-        if not fts_items and not vec_items and not kg_items and not child_items and not spread_items:
+        # 空通道自动剔除: 六路都空则返回
+        if not fts_items and not vec_items and not kg_items and not child_items and not spread_items and not entity_items:
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=0,
                         duration_ms=int((time.time() - _start) * 1000))
             return []
         # 单路有结果: 补充 rrf_score 后直接返回（与多路融合保持字段一致）
-        if not fts_items and not vec_items and not kg_items and not spread_items:
+        if not fts_items and not vec_items and not kg_items and not spread_items and not entity_items:
             for item in child_items:
                 item.setdefault("rrf_score", item.get("score", 0.0))
             results = child_items[:k]
@@ -559,7 +578,7 @@ class MemoryManager:
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
-        if not fts_items and not vec_items and not child_items and not spread_items:
+        if not fts_items and not vec_items and not child_items and not spread_items and not entity_items:
             for item in kg_items:
                 item.setdefault("rrf_score", item.get("score", 0.0))
             results = kg_items[:k]
@@ -567,7 +586,7 @@ class MemoryManager:
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
-        if not fts_items and not kg_items and not child_items and not spread_items:
+        if not fts_items and not kg_items and not child_items and not spread_items and not entity_items:
             for item in vec_items:
                 item.setdefault("rrf_score", item.get("similarity", item.get("score", 0.0)))
             results = vec_items[:k]
@@ -575,7 +594,7 @@ class MemoryManager:
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
-        if not vec_items and not kg_items and not child_items and not spread_items:
+        if not vec_items and not kg_items and not child_items and not spread_items and not entity_items:
             for item in fts_items:
                 item.setdefault("rrf_score", item.get("score", 0.0))
             results = fts_items[:k]
@@ -583,7 +602,7 @@ class MemoryManager:
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
-        if not fts_items and not vec_items and not kg_items and not child_items:
+        if not fts_items and not vec_items and not kg_items and not child_items and not entity_items:
             for item in spread_items:
                 item.setdefault("rrf_score", item.get("spreading_score", item.get("score", 0.0)))
             results = spread_items[:k]
@@ -591,8 +610,16 @@ class MemoryManager:
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
+        if not fts_items and not vec_items and not kg_items and not child_items and not spread_items:
+            for item in entity_items:
+                item.setdefault("rrf_score", item.get("score", 0.0))
+            results = entity_items[:k]
+            logger.info("memory.search", event="memory_search",
+                        query=query[:100], tier=tier, results=len(results),
+                        duration_ms=int((time.time() - _start) * 1000))
+            return results
 
-        # ── 加权 RRF 融合（支持三路，空通道自动剔除） ──
+        # ── 加权 RRF 融合（六路，空通道自动剔除） ──
         try:
             import config as _cfg
             warm_vec_weight = getattr(_cfg, "MEMORY_WARM_VEC_WEIGHT", 0.2)
@@ -607,7 +634,7 @@ class MemoryManager:
         oversample_k = rerank_limit  # RRF 融合后取 Top-N 送 Reranker
         fts_ids = [str(item["id"]) for item in fts_items]
         vec_ids = [str(item["id"]) for item in vec_items]
-        # 构建多路 ID 列表（KG/子chunk 通道无结果时自动降级）
+        # 构建多路 ID 列表（KG/子chunk/扩散/实体 通道无结果时自动降级）
         ranked_lists = [fts_ids, vec_ids]
         weights = [fts_weight, vec_weight]
         if kg_items:
@@ -624,33 +651,41 @@ class MemoryManager:
             spread_ids = [str(item["id"]) for item in spread_items]
             ranked_lists.append(spread_ids)
             weights.append(0.85)  # 扩散激活权重略低于直接匹配
+        if entity_items:
+            entity_ids = [str(item["id"]) for item in entity_items]
+            ranked_lists.append(entity_ids)
+            weights.append(0.7)  # 实体召回权重
         fused = reciprocal_rank_fusion(
             ranked_lists, limit=oversample_k,
             weights=weights,
         )
 
         # 按 RRF 排序获取完整记录（合并所有通道候选）
-        all_items = {str(item["id"]): item for item in fts_items + vec_items + kg_items + child_items + spread_items}
+        all_items = {str(item["id"]): item for item in
+                     fts_items + vec_items + kg_items + child_items + spread_items + entity_items}
+
+        # ── mem0 SPEC: Entity Boost 精排加分 ──
+        candidates = []
+        for item_id, rrf_score in fused:
+            if item_id in all_items:
+                item = all_items[item_id]
+                item["rrf_score"] = rrf_score
+                candidates.append(item)
+        candidates = await self._apply_entity_boost(query, candidates, scope)
 
         # Reranker 精排
-        if use_reranker and self._reranker and self._reranker.available and len(fused) > k:
+        if use_reranker and self._reranker and self._reranker.available and len(candidates) > k:
             reranked = await self._hybrid_rerank(query, fused, all_items, k)
             if reranked:
+                # 对 reranked 也应用 entity boost
+                reranked = await self._apply_entity_boost(query, reranked, scope)
                 results = reranked[:k]
                 logger.info("memory.search", event="memory_search",
                             query=query[:100], tier=tier, results=len(results),
                             duration_ms=int((time.time() - _start) * 1000))
                 return results
 
-        # 降级：无 Reranker 或 Reranker 失败时走 RRF 逻辑
-        results = []
-        for item_id, rrf_score in fused:
-            if item_id in all_items:
-                item = all_items[item_id]
-                item["rrf_score"] = rrf_score
-                results.append(item)
-
-        final = results[:k]
+        final = candidates[:k]
         logger.info("memory.search", event="memory_search",
                     query=query[:100], tier=tier, results=len(final),
                     duration_ms=int((time.time() - _start) * 1000))
@@ -1699,6 +1734,93 @@ class MemoryManager:
                          memory_id=memory_id, count=linked)
         except Exception as e:
             logger.debug("memory.extract_link_entities_failed", error=str(e))
+
+    async def _entity_recall(self, query: str, scope: Any,
+                              recall_limit: int = 50) -> list[dict]:
+        """第6路召回：通过实体名反查记忆（mem0 SPEC 优化）。
+
+        流程：
+        1. EntityExtractor 规则快抽查询中的实体名（<10ms，不触发 LLM）
+        2. EntityStore.recall_by_entities 反查关联记忆
+
+        Args:
+            query: 用户查询
+            scope: Scope 对象
+            recall_limit: 召回上限
+        Returns:
+            记忆 dict 列表。失败返回空列表（降级）。
+        """
+        if not self.entity_store or not self.entity_extractor:
+            return []
+        try:
+            entities = self.entity_extractor._rule_based_extract(query)
+            if not entities:
+                return []
+            entity_names = [e.name for e in entities]
+            results = await self.entity_store.recall_by_entities(
+                entity_names, scope=scope, limit=recall_limit
+            )
+            for r in results:
+                r["entity_recall"] = True
+            return results
+        except Exception as e:
+            logger.debug("memory.entity_recall_failed", error=str(e))
+            return []
+
+    async def _apply_entity_boost(self, query: str, candidates: list[dict],
+                                   scope: Any) -> list[dict]:
+        """精排阶段计算 Entity Boost 并加分（mem0 SPEC 优化）。
+
+        对每个候选记忆，计算其关联实体与查询实体的 boost 值，
+        加到 rrf_score 上。
+
+        Args:
+            query: 用户查询
+            candidates: 候选记忆列表（含 rrf_score）
+            scope: Scope 对象
+        Returns:
+            加分后的候选列表（按 rrf_score 降序）
+        """
+        if not self.entity_extractor or not self.entity_store:
+            return candidates
+        if not candidates:
+            return candidates
+        try:
+            query_entities_list = await self.entity_extractor.extract(query, importance=0.3)
+            query_entity_names = {e.name for e in query_entities_list}
+            if not query_entity_names:
+                return candidates
+
+            now = time.time()
+            for candidate in candidates:
+                mem_id = candidate.get("id")
+                if mem_id is None:
+                    continue
+                boost = await self.entity_store.get_query_entities_boost(
+                    mem_id, query_entity_names, now=now
+                )
+                if boost > 0:
+                    candidate["rrf_score"] = candidate.get("rrf_score", 0.0) + boost
+                    candidate["entity_boost"] = boost
+
+            candidates.sort(key=lambda x: x.get("rrf_score", 0.0), reverse=True)
+            return candidates
+        except Exception as e:
+            logger.debug("memory.apply_entity_boost_failed", error=str(e))
+            return candidates
+
+    async def _hybrid_fts_search_scoped(self, query: str, k: int,
+                                         scope: Any, is_raw: int | None) -> list[dict]:
+        """FTS 检索 + scope 过滤（mem0 SPEC 优化）"""
+        if not self.memory:
+            return []
+        try:
+            return await self.memory.search_memories_fts_scoped(
+                query, scope=scope, limit=k * 2, is_raw=is_raw
+            )
+        except Exception as e:
+            logger.warning("memory.fts_scoped_search_failed", error=str(e))
+            return []
 
     async def _distill_to_knowledge(self, raw_id: int, summary: str,
                                      scope: Any, importance: float = 0.5,
