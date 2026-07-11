@@ -646,7 +646,7 @@ def _reload_env_and_cache(updates: Any, ENV_PATH: Any) -> None:
             os.environ[k] = vs
     # 清除模型发现缓存
     try:
-        from web.routers.model_discovery import invalidate_discovery_cache
+        from web._discovery_cache import invalidate_discovery_cache
         invalidate_discovery_cache()
         logger.info("setup.discovery_cache_invalidated")
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
