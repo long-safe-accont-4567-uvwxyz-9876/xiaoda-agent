@@ -226,6 +226,7 @@ class MemoryManager:
         self._reranker = reranker
         self._query_transformer = query_transformer
         self._governance = governance
+        self._kg_v2_engine: Any = None
         self._last_message_time: float = 0
         self._last_encode_time: float = 0
         self._pending_encode = False
@@ -257,6 +258,10 @@ class MemoryManager:
 
     def set_knowledge_graph(self, kg: Any) -> None:
         self.kg = kg
+
+    def set_kg_v2_engine(self, engine: Any) -> None:
+        """注入 KGSearchEngine 实例 (KG v2 混合检索)。"""
+        self._kg_v2_engine = engine
 
     def set_governance(self, governance: Any) -> None:
         """注入 ContextGovernance 实例 (ContextNest 哈希链 + 审计追踪)。"""
@@ -418,6 +423,37 @@ class MemoryManager:
                 logger.debug("memory.kg_recall_failed", error=str(e))
                 return []
 
+        # KG v2 混合检索协程
+        async def _kg_v2_recall() -> list[dict]:
+            """KG v2: 直接返回 KG 事实/实体作为上下文候选。"""
+            import config as _cfg
+            if not getattr(_cfg, 'KG_V2_ENABLED', False) or not self._kg_v2_engine:
+                return []
+            try:
+                results = await self._kg_v2_engine.search(query, top_k=recall_limit)
+                if not results:
+                    return []
+                # 将 KG 事实格式化为 dict 供上下文使用
+                formatted = []
+                for r in results:
+                    if r.get("type") == "relation":
+                        formatted.append({
+                            "summary": r.get("fact", ""),
+                            "source": "kg_v2",
+                            "rrf_score": r.get("rrf_score", 0),
+                        })
+                    elif r.get("type") == "entity":
+                        summary_text = f"{r.get('name', '')}({r.get('kind', '')}): {r.get('summary', '')}"
+                        formatted.append({
+                            "summary": summary_text,
+                            "source": "kg_v2",
+                            "rrf_score": r.get("rrf_score", 0),
+                        })
+                return formatted
+            except Exception as e:
+                logger.debug("memory.kg_v2_recall_failed", error=str(e))
+                return []
+
         # ── 子chunk召回协程（父子Chunk RAG优化）──
         async def _child_recall() -> list[dict]:
             """子chunk FTS+Vec并行检索 → 映射到父chunk记录。"""
@@ -545,10 +581,16 @@ class MemoryManager:
         # 按 RRF 排序获取完整记录（合并所有通道候选）
         all_items = {str(item["id"]): item for item in fts_items + vec_items + kg_items + child_items}
 
+        # 将 v2 recall 结果加入候选池 (kg_v2 事实格式与记忆不同, 单独追加不参与 ID-based RRF)
+        kg_v2_items = await _kg_v2_recall()
+
         # Reranker 精排
         if use_reranker and self._reranker and self._reranker.available and len(fused) > k:
             reranked = await self._hybrid_rerank(query, fused, all_items, k)
             if reranked:
+                # KG v2 事实作为补充候选追加 (已带 rrf_score, 不参与 Reranker ID-based 排序)
+                if kg_v2_items:
+                    reranked.extend(kg_v2_items)
                 results = reranked[:k]
                 logger.info("memory.search", event="memory_search",
                             query=query[:100], tier=tier, results=len(results),
@@ -562,6 +604,10 @@ class MemoryManager:
                 item = all_items[item_id]
                 item["rrf_score"] = rrf_score
                 results.append(item)
+
+        # KG v2 事实作为补充候选追加 (已带 rrf_score, 不参与 ID-based 去重)
+        if kg_v2_items:
+            results.extend(kg_v2_items)
 
         final = results[:k]
         logger.info("memory.search", event="memory_search",

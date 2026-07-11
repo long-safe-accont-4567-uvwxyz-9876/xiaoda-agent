@@ -10,6 +10,7 @@ from .db_memory import MemoryDB
 from .db_notebook import NotebookDB
 from .db_learning import LearningDB
 from .db_knowledge import KnowledgeDB
+from .db_kg_v2 import KnowledgeDBV2
 from .db_analytics import AnalyticsDB
 from .db_temporal_memory import TemporalMemoryDB
 from .index_manager import build_default_index_manager
@@ -68,6 +69,7 @@ class DatabaseManager:
         self.knowledge: KnowledgeDB | None = None
         self.analytics: AnalyticsDB | None = None
         self.temporal: TemporalMemoryDB | None = None
+        self.kg_v2: KnowledgeDBV2 | None = None
 
     async def init(self) -> None:
         # 幂等性：如果已有活跃连接，先关闭旧连接再创建新连接
@@ -128,6 +130,7 @@ class DatabaseManager:
         self.knowledge = KnowledgeDB(self._conn)
         self.analytics = AnalyticsDB(self._conn)
         self.temporal = TemporalMemoryDB(self._conn)
+        self.kg_v2 = KnowledgeDBV2(self._conn)
         logger.info("database.ready", path=str(self.db_path))
 
     async def _apply_composite_indexes(self) -> None:
