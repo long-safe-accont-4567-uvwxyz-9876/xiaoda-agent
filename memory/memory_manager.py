@@ -216,7 +216,9 @@ class MemoryManager:
                  vector_store: VectorStore | None = None,
                  router: Any | None=None, knowledge_graph: Any | None=None, security_filter: Any | None=None,
                  reranker: Any | None=None, query_transformer: Any | None=None,
-                 governance: Any | None=None) -> None:
+                 governance: Any | None=None,
+                 entity_extractor: Any | None=None,
+                 entity_store: Any | None=None) -> None:
         self.db = db
         self.memory = memory
         self.vec = vector_store
@@ -226,6 +228,8 @@ class MemoryManager:
         self._reranker = reranker
         self._query_transformer = query_transformer
         self._governance = governance
+        self.entity_extractor = entity_extractor
+        self.entity_store = entity_store
         self._last_message_time: float = 0
         self._last_encode_time: float = 0
         self._pending_encode = False
@@ -338,21 +342,34 @@ class MemoryManager:
             logger.debug("memory.audit_retrieval_failed", error=str(e))
             return 0
 
-    async def _has_duplicate(self, summary: str) -> bool:
-        """检查是否存在归一化后内容相同的已有记忆"""
+    async def _has_duplicate(self, summary: str, scope: Any | None = None) -> bool:
+        """检查是否存在归一化后内容相同的已有记忆（只对 is_raw=0 的提炼知识生效）。
+
+        mem0 SPEC 优化：原始记忆（is_raw=1）不去重，保证 append-only 可追溯。
+
+        Args:
+            scope: Scope 对象。传入时只在同 scope 内查重。
+        """
         normalized = _normalize_for_dedupe(summary)
         if len(normalized) < 10:
             return False
         try:
             # 用 FTS 搜索相关记忆，然后精确匹配
-            candidates = await self.memory.search_memories_fts(summary, limit=5)
+            if scope is not None:
+                # scope 过滤：只查 is_raw=0 的提炼知识
+                candidates = await self.memory.search_memories_fts_scoped(
+                    summary, scope=scope, limit=5, is_raw=0
+                )
+            else:
+                candidates = await self.memory.search_memories_fts(summary, limit=5)
             for c in candidates:
-                if _normalize_for_dedupe(c.get("summary", "")) == normalized:
+                # 只对 is_raw=0 的记忆判断重复
+                if c.get("is_raw", 0) == 0 and _normalize_for_dedupe(c.get("summary", "")) == normalized:
                     return True
             # FTS 无结果时也检查最近记忆
             recent = await self.memory.get_episodic_recent(limit=10)
             for r in recent:
-                if _normalize_for_dedupe(r.get("summary", "")) == normalized:
+                if r.get("is_raw", 0) == 0 and _normalize_for_dedupe(r.get("summary", "")) == normalized:
                     return True
         except (OSError, TypeError):
             logger.debug("memory_manager.is_duplicate_check_failed", exc_info=True)
@@ -496,7 +513,7 @@ class MemoryManager:
                         duration_ms=int((time.time() - _start) * 1000))
             return []
         # 单路有结果: 补充 rrf_score 后直接返回（与多路融合保持字段一致）
-        if not fts_items and not vec_items and not kg_items:
+        if not fts_items and not vec_items and not kg_items and not spread_items:
             for item in child_items:
                 item.setdefault("rrf_score", item.get("score", 0.0))
             results = child_items[:k]
@@ -504,7 +521,7 @@ class MemoryManager:
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
-        if not fts_items and not vec_items and not child_items:
+        if not fts_items and not vec_items and not child_items and not spread_items:
             for item in kg_items:
                 item.setdefault("rrf_score", item.get("score", 0.0))
             results = kg_items[:k]
@@ -512,7 +529,7 @@ class MemoryManager:
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
-        if not fts_items and not kg_items and not child_items:
+        if not fts_items and not kg_items and not child_items and not spread_items:
             for item in vec_items:
                 item.setdefault("rrf_score", item.get("similarity", item.get("score", 0.0)))
             results = vec_items[:k]
@@ -520,10 +537,18 @@ class MemoryManager:
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
             return results
-        if not vec_items and not kg_items and not child_items:
+        if not vec_items and not kg_items and not child_items and not spread_items:
             for item in fts_items:
                 item.setdefault("rrf_score", item.get("score", 0.0))
             results = fts_items[:k]
+            logger.info("memory.search", event="memory_search",
+                        query=query[:100], tier=tier, results=len(results),
+                        duration_ms=int((time.time() - _start) * 1000))
+            return results
+        if not fts_items and not vec_items and not kg_items and not child_items:
+            for item in spread_items:
+                item.setdefault("rrf_score", item.get("spreading_score", item.get("score", 0.0)))
+            results = spread_items[:k]
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
@@ -1423,7 +1448,23 @@ class MemoryManager:
                         results[0]["kg_context"] = kg_context
         except Exception as e:
             logger.debug("memory.kg_expand_failed", error=str(e))
-    async def encode_memory(self, context: dict) -> None:
+    async def encode_memory(self, context: dict, scope: Any | None = None) -> None:
+        """编码记忆（ADD-only 架构）。
+
+        mem0 SPEC 优化：
+        1. 写入 is_raw=1 的原始记忆（append-only，不去重，不覆盖）
+        2. 异步触发实体提取+链接
+        3. 异步触发蒸馏（生成 is_raw=0 的提炼知识，Task 7 实现）
+
+        Args:
+            context: 包含 exchanges 列表的上下文
+            scope: Scope 对象。None 时使用默认 Scope()。
+        """
+        # scope 默认值
+        if scope is None:
+            from memory.scope import Scope
+            scope = Scope()
+
         exchanges = context.get("exchanges", [])
         if not exchanges or len(exchanges) < 2:
             return
@@ -1436,10 +1477,8 @@ class MemoryManager:
             logger.warning("memory.safety_blocked", reason=validation)
             return
 
-        # 去重检查
-        if await self._has_duplicate(summary):
-            logger.debug("memory.duplicate_skipped", summary=summary[:80])
-            return
+        # ADD-only: 原始记忆不去重，直接写入
+        # （_has_duplicate 只在蒸馏时对 is_raw=0 生效，这里不调用）
 
         # 原有安全扫描（保留兼容）
         from security.security import SecurityFilter
@@ -1476,10 +1515,13 @@ class MemoryManager:
                 importance=importance,
             )
 
+            # ADD-only: 写入 is_raw=1 的原始记忆（不去重，不覆盖）
             mem_id = await self.memory.insert_episodic_memory(
                 summary=summary,
                 importance=importance,
                 emotion_label=emotion,
+                scope=scope,
+                is_raw=1,
             )
 
             # 标记候选已应用
@@ -1497,13 +1539,6 @@ class MemoryManager:
                     await self.vec.upsert(mem_id, summary)
                 except Exception as e:
                     logger.debug("memory.initial_vec_upsert_failed", error=str(e))
-
-            # 双写：同时写入 concept_nodes
-            if self.concept_graph and mem_id:
-                try:
-                    await self.concept_graph.remember(summary, source_mem_id=mem_id)
-                except Exception as e:
-                    logger.debug("memory.concept_dual_write_failed", error=str(e))
 
             # ── 父子Chunk: 生成并写入子chunk ──
             import config as _cfg
@@ -1529,9 +1564,41 @@ class MemoryManager:
                 except Exception as e:
                     logger.debug("memory.child_chunk_failed", error=str(e))
 
+            # ── mem0 SPEC: 异步触发实体提取+链接 ──
+            if self.entity_extractor and self.entity_store:
+                try:
+                    _entity_task = asyncio.create_task(
+                        self._extract_and_link_entities(mem_id, summary, scope)
+                    )
+                    def _log_entity_exception(t: asyncio.Task) -> None:
+                        if t.cancelled():
+                            return
+                        exc = t.exception()
+                        if exc:
+                            logger.warning("memory.entity_async_failed", error=str(exc))
+                    _entity_task.add_done_callback(_log_entity_exception)
+                except Exception as e:
+                    logger.debug("memory.entity_spawn_failed", error=str(e))
+
+            # ── mem0 SPEC: 异步触发蒸馏（Task 7 实现）──
+            if hasattr(self, '_distill_to_knowledge'):
+                try:
+                    _distill_task = asyncio.create_task(
+                        self._distill_to_knowledge(mem_id, summary, scope, importance, emotion)
+                    )
+                    def _log_distill_exception(t: asyncio.Task) -> None:
+                        if t.cancelled():
+                            return
+                        exc = t.exception()
+                        if exc:
+                            logger.warning("memory.distill_async_failed", error=str(exc))
+                    _distill_task.add_done_callback(_log_distill_exception)
+                except Exception as e:
+                    logger.debug("memory.distill_spawn_failed", error=str(e))
+
             self._last_encode_time = time.time()
             self._pending_encode = False
-            logger.info("memory.encoded", summary=summary[:80], importance=importance)
+            logger.info("memory.encoded", summary=summary[:80], importance=importance, is_raw=1)
 
             # 冷启动路由: 新记忆写入后失效计数缓存, 下次检索立即感知档位变化
             self.invalidate_memory_count_cache()
@@ -1562,6 +1629,29 @@ class MemoryManager:
                 await self.kg.auto_extract_and_merge(summary)
             except Exception as e:
                 logger.debug("memory.kg_extract_failed", error=str(e))
+
+    async def _extract_and_link_entities(self, memory_id: int, summary: str,
+                                          scope: Any) -> None:
+        """异步提取实体并建立反向链接（mem0 SPEC 优化）。
+
+        Args:
+            memory_id: 原始记忆 ID
+            summary: 记忆摘要文本
+            scope: Scope 对象
+        """
+        if not self.entity_extractor or not self.entity_store:
+            return
+        try:
+            # 提取实体
+            entities = await self.entity_extractor.extract(summary, importance=0.5)
+            if not entities:
+                return
+            # 链接到记忆
+            linked = await self.entity_store.link_entities(memory_id, entities, scope=scope)
+            logger.debug("memory.entities_linked",
+                         memory_id=memory_id, count=linked)
+        except Exception as e:
+            logger.debug("memory.extract_link_entities_failed", error=str(e))
 
     def _generate_summary(self, exchanges: list[dict]) -> str:
         parts = []
