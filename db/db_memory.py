@@ -28,12 +28,30 @@ class MemoryDB:
     async def insert_episodic_memory(self, summary: str, importance: float = 0.5,
                                       emotion_label: str = "", session_id: str = "user",
                                       embedding_id: int = -1, auto_commit: bool = True,
-                                      source: str = "user") -> Any:
+                                      source: str = "user",
+                                      scope: Any | None = None,
+                                      is_raw: int = 0) -> Any:
+        """插入情景记忆。
+
+        Args:
+            scope: Scope 对象（mem0 SPEC 优化）。传入时使用 scope 的 user_id/session_id/agent_id。
+            is_raw: 0=提炼知识（允许 UPDATE/DELETE），1=原始记录（append-only）。
+        """
+        # scope 优先级高于单独的 session_id 参数
+        if scope is not None:
+            user_id = scope.user_id
+            agent_id = scope.agent_id
+            session_id = scope.session_id
+        else:
+            user_id = "default"
+            agent_id = "xiaoda"
         cursor = await self._conn.execute(
             """INSERT INTO episodic_memories
-               (timestamp, summary, importance, emotion_label, session_id, embedding_id, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (time.time(), summary, importance, emotion_label, session_id, embedding_id, source),
+               (timestamp, summary, importance, emotion_label, session_id,
+                embedding_id, source, user_id, agent_id, is_raw)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (time.time(), summary, importance, emotion_label, session_id,
+             embedding_id, source, user_id, agent_id, is_raw),
         )
         mem_id = cursor.lastrowid
         if auto_commit:
@@ -180,6 +198,129 @@ class MemoryDB:
             from loguru import logger
             logger.warning("db_memory.fts_search_failed", error=str(e))
             return []
+
+    async def search_memories_fts_scoped(self, query: str, scope: Any,
+                                          limit: int = 10,
+                                          is_raw: int | None = None) -> list[dict]:
+        """FTS5 全文检索 + scope 过滤（mem0 SPEC 优化）。
+
+        Args:
+            scope: Scope 对象
+            limit: 返回条数上限
+            is_raw: None=不限, 0=只查提炼知识, 1=只查原始记录
+        """
+        from db.fts_utils import _build_fts_query
+        fts_query = _build_fts_query(query)
+        if not fts_query:
+            return []
+        try:
+            where_extra = ""
+            params: list = [fts_query, scope.user_id, scope.agent_id]
+            if is_raw is not None:
+                where_extra = " AND em.is_raw = ?"
+                params.append(is_raw)
+            params.append(limit)
+            cursor = await self._conn.execute(
+                f"""SELECT em.*, bm25(episodic_memory_fts) AS score
+                   FROM episodic_memory_fts
+                   JOIN episodic_memories em ON em.id = episodic_memory_fts.id
+                   WHERE episodic_memory_fts MATCH ?
+                     AND em.user_id = ? AND em.agent_id = ?{where_extra}
+                   ORDER BY score ASC, em.importance DESC, em.timestamp DESC
+                   LIMIT ?""",
+                params,
+            )
+            rows = await cursor.fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                d["score"] = -d.get("score", 0)
+                results.append(d)
+            return results
+        except Exception as e:
+            logger.warning("db_memory.fts_scoped_search_failed", error=str(e))
+            return []
+
+    async def search_memories_by_time_scoped(self, start_ts: float, end_ts: float,
+                                              scope: Any, limit: int = 20,
+                                              is_raw: int | None = None) -> list[dict]:
+        """按时间范围检索记忆 + scope 过滤（mem0 SPEC 优化）。
+
+        Args:
+            scope: Scope 对象
+            is_raw: None=不限, 0=只查提炼知识, 1=只查原始记录
+        """
+        try:
+            where_extra = ""
+            params: list = [start_ts, end_ts, scope.user_id, scope.agent_id]
+            if is_raw is not None:
+                where_extra = " AND is_raw = ?"
+                params.append(is_raw)
+            params.append(limit)
+            cursor = await self._conn.execute(
+                f"""SELECT * FROM episodic_memories
+                   WHERE timestamp >= ? AND timestamp < ?
+                     AND user_id = ? AND agent_id = ?{where_extra}
+                   ORDER BY timestamp DESC LIMIT ?""",
+                params,
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning("db_memory.time_scoped_search_failed", error=str(e))
+            return []
+
+    async def search_memories_vec_scoped(self, memory_ids: list[int], scope: Any,
+                                          limit: int = 50,
+                                          is_raw: int | None = None) -> list[dict]:
+        """向量检索结果 + scope 过滤（从 memory_ids 中筛选符合 scope 的记录）。
+
+        Args:
+            memory_ids: 向量检索返回的 memory_id 列表
+            scope: Scope 对象
+            is_raw: None=不限, 0=只查提炼知识, 1=只查原始记录
+        """
+        if not memory_ids:
+            return []
+        try:
+            placeholders = ",".join("?" * len(memory_ids))
+            where_extra = ""
+            params: list = list(memory_ids) + [scope.user_id, scope.agent_id]
+            if is_raw is not None:
+                where_extra = " AND is_raw = ?"
+                params.append(is_raw)
+            params.append(limit)
+            cursor = await self._conn.execute(
+                f"""SELECT * FROM episodic_memories
+                   WHERE id IN ({placeholders})
+                     AND user_id = ? AND agent_id = ?{where_extra}
+                   LIMIT ?""",
+                params,
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning("db_memory.vec_scoped_search_failed", error=str(e))
+            return []
+
+    async def get_episodic_count_scoped(self, scope: Any, is_raw: int | None = None) -> int:
+        """获取 scope 内的记忆总数（用于冷启动档位判断）"""
+        try:
+            where_extra = ""
+            params: list = [scope.user_id, scope.agent_id]
+            if is_raw is not None:
+                where_extra = " AND is_raw = ?"
+                params.append(is_raw)
+            cursor = await self._conn.execute(
+                f"SELECT COUNT(*) as cnt FROM episodic_memories "
+                f"WHERE user_id = ? AND agent_id = ?{where_extra}",
+                params,
+            )
+            row = await cursor.fetchone()
+            return row["cnt"] if row else 0
+        except Exception as e:
+            logger.warning("db_memory.count_scoped_failed", error=str(e))
+            return 0
 
     async def search_memories_by_entities(self, entity_names: list[str],
                                             limit: int = 5) -> list[dict]:
