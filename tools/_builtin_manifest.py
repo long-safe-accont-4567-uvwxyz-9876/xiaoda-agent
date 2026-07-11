@@ -523,6 +523,45 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
         "module_path": "tools.memory_tool",
         "func_name": "forget",
     },
+    {
+        "name": "confirm_memory",
+        "description": "确认记忆正确，强化记忆权重。当用户确认某条记忆正确时使用（如用户说\"对/没错/就是这样\"）。"
+                        "每次确认：节点权重 +0.15，关联边权重 +0.25，access_count +1",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "node_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "要确认的概念节点 ID 列表",
+                },
+            },
+            "required": ["node_ids"],
+        },
+        "permission": ToolPermission.READ_WRITE,
+        "category": "memory",
+        "max_frequency": 10,
+        "module_path": "tools.memory_tool",
+        "func_name": "confirm_memory",
+    },
+    {
+        "name": "correct_memory",
+        "description": "纠正错误记忆，创建新版本并保留溯源链。当用户纠正某条记忆时使用（如用户说\"不对/应该是/搞错了\"）。"
+                        "旧记忆被关闭但保留，新记忆继承权重，confidence×0.7",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "old_hint": {"type": "string", "description": "用于找到旧记忆的查询提示"},
+                "new_text": {"type": "string", "description": "纠正后的新内容"},
+            },
+            "required": ["old_hint", "new_text"],
+        },
+        "permission": ToolPermission.READ_WRITE,
+        "category": "memory",
+        "max_frequency": 5,
+        "module_path": "tools.memory_tool",
+        "func_name": "correct_memory",
+    },
     # ── tools.nudge_tool ─────────────────────────────────────────────
     {
         "name": "nudge_greeting",

@@ -148,3 +148,69 @@ async def forget(query: str) -> ToolResult:
         metrics.inc("memory.forget.failure")
         logger.error("memory_tool.forget_failed", error=str(e))
         return ToolResult.fail(f"删除记忆失败：{e!s}")
+
+
+@register_tool(
+    name="confirm_memory",
+    description="确认记忆正确，强化记忆权重。当用户确认某条记忆正确时使用（如用户说\"对/没错/就是这样\"）。"
+                "每次确认：节点权重 +0.15，关联边权重 +0.25，access_count +1",
+    schema={
+        "type": "object",
+        "properties": {
+            "node_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "要确认的概念节点 ID 列表",
+            },
+        },
+        "required": ["node_ids"],
+    },
+    permission=ToolPermission.READ_WRITE,
+    category="memory",
+    max_frequency=10,
+)
+async def confirm_memory(node_ids: list[str]) -> ToolResult:
+    try:
+        mm = _get_memory_manager()
+        if not mm.confirm_correct:
+            return ToolResult.fail("confirm/correct 未初始化")
+        result = await mm.confirm_correct.confirm(node_ids)
+        metrics.inc("memory.confirm.success")
+        return ToolResult.ok(result)
+    except Exception as e:
+        metrics.inc("memory.confirm.failure")
+        logger.error("memory_tool.confirm_failed", error=str(e))
+        return ToolResult.fail(f"确认记忆失败：{e!s}")
+
+
+@register_tool(
+    name="correct_memory",
+    description="纠正错误记忆，创建新版本并保留溯源链。当用户纠正某条记忆时使用（如用户说\"不对/应该是/搞错了\"）。"
+                "旧记忆被关闭但保留，新记忆继承权重，confidence×0.7",
+    schema={
+        "type": "object",
+        "properties": {
+            "old_hint": {"type": "string", "description": "用于找到旧记忆的查询提示"},
+            "new_text": {"type": "string", "description": "纠正后的新内容"},
+        },
+        "required": ["old_hint", "new_text"],
+    },
+    permission=ToolPermission.READ_WRITE,
+    category="memory",
+    max_frequency=5,
+)
+async def correct_memory(old_hint: str, new_text: str) -> ToolResult:
+    try:
+        mm = _get_memory_manager()
+        if not mm.confirm_correct:
+            return ToolResult.fail("confirm/correct 未初始化")
+        result = await mm.confirm_correct.correct(old_hint, new_text)
+        if "error" in result:
+            metrics.inc("memory.correct.no_match")
+            return ToolResult.fail(result["error"])
+        metrics.inc("memory.correct.success")
+        return ToolResult.ok(result)
+    except Exception as e:
+        metrics.inc("memory.correct.failure")
+        logger.error("memory_tool.correct_failed", error=str(e))
+        return ToolResult.fail(f"纠正记忆失败：{e!s}")
