@@ -455,7 +455,7 @@ class MemoryManager:
         async def _kg_v2_recall() -> list[dict]:
             """KG v2: 直接返回 KG 事实/实体作为上下文候选。"""
             import config as _v2_cfg
-            if not getattr(_v2_cfg, 'KG_V2_ENABLED', False) or not self._kg_v2_engine:
+            if not getattr(_v2_cfg, 'KG_V2_ENABLED', False) or not getattr(self, '_kg_v2_engine', None):
                 return []
             try:
                 results = await self._kg_v2_engine.search(query, top_k=recall_limit)
