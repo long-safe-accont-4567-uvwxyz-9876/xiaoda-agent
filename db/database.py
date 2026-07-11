@@ -22,7 +22,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 13
+CURRENT_SCHEMA_VERSION = 14
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -210,6 +210,7 @@ class DatabaseManager:
             (11, "memory_recall_notes", self._migrate_v11),
             (12, "episodic_memories.content_hash+version+memory_versions+context_audit_log", self._migrate_v12),
             (13, "bitemporal_facts_preferences+provenance+memory_edges", self._migrate_v13),
+            (14, "kg_v2_tables", self._migrate_v14),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -607,6 +608,123 @@ class DatabaseManager:
                 ON memory_edges(target_memory_id, edge_type);
         """)
 
+    async def _migrate_v14(self) -> None:
+        """v14: 知识图谱 v2 — 时序事实、实体演化、Episode溯源、社区发现。"""
+        # 1. 创建 v2 表
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS kg_episodes (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                source_type TEXT DEFAULT 'summary',
+                source_description TEXT DEFAULT '',
+                valid_at REAL NOT NULL,
+                created_at REAL NOT NULL,
+                group_id TEXT DEFAULT 'default'
+            );
+            CREATE INDEX IF NOT EXISTS idx_kg_episode_valid_at ON kg_episodes(valid_at);
+
+            CREATE TABLE IF NOT EXISTS kg_entities_v2 (
+                id TEXT PRIMARY KEY,
+                name TEXT UNIQUE,
+                kind TEXT DEFAULT '',
+                observations TEXT DEFAULT '[]',
+                summary TEXT DEFAULT '',
+                summary_version INTEGER DEFAULT 0,
+                name_embedding TEXT DEFAULT NULL,
+                updated_at REAL NOT NULL,
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_kg_entity_v2_name ON kg_entities_v2(name);
+
+            CREATE TABLE IF NOT EXISTS kg_relations_v2 (
+                id TEXT PRIMARY KEY,
+                from_entity TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                to_entity TEXT NOT NULL,
+                fact TEXT DEFAULT '',
+                fact_embedding TEXT DEFAULT NULL,
+                episode_ids TEXT DEFAULT '[]',
+                valid_at REAL DEFAULT NULL,
+                invalid_at REAL DEFAULT NULL,
+                expired_at REAL DEFAULT NULL,
+                is_current INTEGER DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_from ON kg_relations_v2(from_entity);
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_to ON kg_relations_v2(to_entity);
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_current ON kg_relations_v2(is_current);
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_valid_at ON kg_relations_v2(valid_at);
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_invalid_at ON kg_relations_v2(invalid_at);
+
+            CREATE TABLE IF NOT EXISTS kg_communities (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                summary TEXT DEFAULT '',
+                member_entities TEXT DEFAULT '[]',
+                name_embedding TEXT DEFAULT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS kg_edge_episode_refs (
+                edge_id TEXT NOT NULL,
+                episode_id TEXT NOT NULL,
+                PRIMARY KEY (edge_id, episode_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_kg_eer_episode ON kg_edge_episode_refs(episode_id);
+            CREATE INDEX IF NOT EXISTS idx_kg_eer_edge ON kg_edge_episode_refs(edge_id);
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS kg_entities_v2_fts USING fts5(
+                id UNINDEXED,
+                name_summary
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS kg_relations_v2_fts USING fts5(
+                id UNINDEXED,
+                fact
+            );
+        """)
+
+        # 2. 迁移 entities: knowledge_entities → kg_entities_v2
+        await self._conn.execute("""
+            INSERT OR IGNORE INTO kg_entities_v2 (id, name, kind, observations, summary, summary_version, updated_at, created_at)
+            SELECT id, name, kind, observations,
+                   observations AS summary,
+                   0,
+                   updated_at,
+                   updated_at
+            FROM knowledge_entities
+            WHERE name NOT IN (SELECT name FROM kg_entities_v2)
+        """)
+
+        # 3. 迁移 relations: knowledge_relations → kg_relations_v2
+        await self._conn.execute("""
+            INSERT OR IGNORE INTO kg_relations_v2 (id, from_entity, relation_type, to_entity, fact, episode_ids, valid_at, invalid_at, expired_at, is_current, created_at, updated_at)
+            SELECT id, from_entity, relation_type, to_entity,
+                   from_entity || ' ' || relation_type || ' ' || to_entity AS fact,
+                   '[]',
+                   created_at AS valid_at,
+                   NULL,
+                   NULL,
+                   1,
+                   created_at,
+                   updated_at
+            FROM knowledge_relations
+            WHERE id NOT IN (SELECT id FROM kg_relations_v2)
+        """)
+
+        # 4. 回填 FTS5 索引 (triggers 尚未创建, 手动插入)
+        await self._conn.execute("""
+            INSERT OR IGNORE INTO kg_entities_v2_fts (id, name_summary)
+            SELECT id, name || ' ' || summary FROM kg_entities_v2
+            WHERE id NOT IN (SELECT id FROM kg_entities_v2_fts)
+        """)
+        await self._conn.execute("""
+            INSERT OR IGNORE INTO kg_relations_v2_fts (id, fact)
+            SELECT id, fact FROM kg_relations_v2
+            WHERE id NOT IN (SELECT id FROM kg_relations_v2_fts)
+        """)
+
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")
 
@@ -872,6 +990,11 @@ class DatabaseManager:
                 updated_at REAL NOT NULL
             );
 
+            CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_entities_fts USING fts5(
+                id UNINDEXED,
+                name_index
+            );
+
             CREATE TABLE IF NOT EXISTS knowledge_relations (
                 id TEXT PRIMARY KEY,
                 from_entity TEXT,
@@ -1033,7 +1156,9 @@ class DatabaseManager:
         """Phase 5: FTS5 触发器管理。vfat/exfat 上禁用（delete 命令不工作）。"""
         if getattr(self, "_is_fat_fs", False):
             # 删除可能存在的触发器（防止之前版本创建的触发器残留）
-            for trig in ["knowledge_entities_fts_ai", "knowledge_entities_fts_ad", "knowledge_entities_fts_au"]:
+            for trig in ["knowledge_entities_fts_ai", "knowledge_entities_fts_ad", "knowledge_entities_fts_au",
+                         "kg_entities_v2_fts_ai", "kg_entities_v2_fts_ad", "kg_entities_v2_fts_au",
+                         "kg_relations_v2_fts_ai", "kg_relations_v2_fts_ad", "kg_relations_v2_fts_au"]:
                 try:
                     await self._conn.execute(f"DROP TRIGGER IF EXISTS {trig}")
                 except (OSError, RuntimeError):
@@ -1054,6 +1179,32 @@ class DatabaseManager:
                     INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index)
                     VALUES ('delete', old.id, old.name);
                     INSERT INTO knowledge_entities_fts(id, name_index) VALUES (new.id, new.name);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS kg_entities_v2_fts_ai AFTER INSERT ON kg_entities_v2 BEGIN
+                    INSERT INTO kg_entities_v2_fts(id, name_summary) VALUES (new.id, new.name || ' ' || new.summary);
+                END;
+                CREATE TRIGGER IF NOT EXISTS kg_entities_v2_fts_ad AFTER DELETE ON kg_entities_v2 BEGIN
+                    INSERT INTO kg_entities_v2_fts(kg_entities_v2_fts, id, name_summary)
+                    VALUES ('delete', old.id, old.name || ' ' || old.summary);
+                END;
+                CREATE TRIGGER IF NOT EXISTS kg_entities_v2_fts_au AFTER UPDATE ON kg_entities_v2 BEGIN
+                    INSERT INTO kg_entities_v2_fts(kg_entities_v2_fts, id, name_summary)
+                    VALUES ('delete', old.id, old.name || ' ' || old.summary);
+                    INSERT INTO kg_entities_v2_fts(id, name_summary) VALUES (new.id, new.name || ' ' || new.summary);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS kg_relations_v2_fts_ai AFTER INSERT ON kg_relations_v2 BEGIN
+                    INSERT INTO kg_relations_v2_fts(id, fact) VALUES (new.id, new.fact);
+                END;
+                CREATE TRIGGER IF NOT EXISTS kg_relations_v2_fts_ad AFTER DELETE ON kg_relations_v2 BEGIN
+                    INSERT INTO kg_relations_v2_fts(kg_relations_v2_fts, id, fact)
+                    VALUES ('delete', old.id, old.fact);
+                END;
+                CREATE TRIGGER IF NOT EXISTS kg_relations_v2_fts_au AFTER UPDATE ON kg_relations_v2 BEGIN
+                    INSERT INTO kg_relations_v2_fts(kg_relations_v2_fts, id, fact)
+                    VALUES ('delete', old.id, old.fact);
+                    INSERT INTO kg_relations_v2_fts(id, fact) VALUES (new.id, new.fact);
                 END;
             """)
         except (OSError, RuntimeError) as e:
