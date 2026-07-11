@@ -382,7 +382,7 @@ CREATE INDEX IF NOT EXISTS idx_media_status ON media_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_episodic_timestamp_importance
     ON episodic_memories(timestamp DESC, importance DESC);
 CREATE INDEX IF NOT EXISTS idx_episodic_session_created
-    ON episodic_memories(session_id, created_at DESC);
+    ON episodic_memories(session_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_conversation_session
     ON conversation_logs(session_id);
 CREATE INDEX IF NOT EXISTS idx_api_usage_created
