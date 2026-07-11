@@ -559,6 +559,7 @@ class DatabaseManager:
         await self._ddl_schedule_api_tables()
         await self._ddl_knowledge_tables()
         await self._ddl_learning_error_tables()
+        await self._ddl_concept_tables()
 
     async def _ddl_memory_tables(self) -> None:
         """建表：对话/记忆/笔记相关表。"""
@@ -872,6 +873,51 @@ class DatabaseManager:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 hit_count INTEGER DEFAULT 0
             );        """)
+
+    async def _ddl_concept_tables(self) -> None:
+        """建表：概念图（扩散激活记忆系统）。"""
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS concept_nodes (
+                id            TEXT PRIMARY KEY,
+                text          TEXT NOT NULL,
+                weight        REAL NOT NULL DEFAULT 1.0,
+                peak_weight   REAL NOT NULL DEFAULT 1.0,
+                confidence    REAL NOT NULL DEFAULT 1.0,
+                access_count  INTEGER NOT NULL DEFAULT 0,
+                keys          TEXT NOT NULL DEFAULT '[]',
+                layer         TEXT NOT NULL DEFAULT 'hippocampus',
+                created       TEXT NOT NULL,
+                last_accessed TEXT NOT NULL,
+                valid_from    TEXT NOT NULL,
+                valid_to      TEXT,
+                superseded_by TEXT,
+                history       TEXT NOT NULL DEFAULT '[]',
+                origin        TEXT NOT NULL DEFAULT '{}',
+                source_mem_id INTEGER,
+                embedding     BLOB
+            );
+
+            CREATE TABLE IF NOT EXISTS concept_edges (
+                source_id  TEXT NOT NULL,
+                target_id  TEXT NOT NULL,
+                relation   TEXT NOT NULL DEFAULT 'related',
+                weight     REAL NOT NULL DEFAULT 1.0,
+                created    TEXT NOT NULL,
+                PRIMARY KEY (source_id, target_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS concept_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_concept_node_keys ON concept_nodes(keys);
+            CREATE INDEX IF NOT EXISTS idx_concept_node_layer ON concept_nodes(layer);
+            CREATE INDEX IF NOT EXISTS idx_concept_node_weight ON concept_nodes(weight);
+            CREATE INDEX IF NOT EXISTS idx_concept_node_valid ON concept_nodes(valid_to);
+            CREATE INDEX IF NOT EXISTS idx_concept_edge_source ON concept_edges(source_id);
+            CREATE INDEX IF NOT EXISTS idx_concept_edge_target ON concept_edges(target_id);
+        """)
 
     async def _create_indexes(self) -> None:
         """Phase 3: 创建所有索引（含依赖迁移列的索引）。"""

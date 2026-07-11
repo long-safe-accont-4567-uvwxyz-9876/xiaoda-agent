@@ -401,3 +401,48 @@ CREATE INDEX IF NOT EXISTS idx_sessions_status_started
 INSERT INTO cleanup_config (table_name, retention_days, date_column) VALUES ('audit_logs', 90, 'timestamp');
 INSERT INTO cleanup_config (table_name, retention_days, date_column) VALUES ('api_usage', 30, 'created_at');
 INSERT INTO cleanup_config (table_name, retention_days, date_column) VALUES ('sessions', 180, 'ended_at');
+
+-- ============================================================
+-- 概念图表 (扩散激活记忆系统)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS concept_nodes (
+    id            TEXT PRIMARY KEY,
+    text          TEXT NOT NULL,
+    weight        REAL NOT NULL DEFAULT 1.0,
+    peak_weight   REAL NOT NULL DEFAULT 1.0,
+    confidence    REAL NOT NULL DEFAULT 1.0,
+    access_count  INTEGER NOT NULL DEFAULT 0,
+    keys          TEXT NOT NULL DEFAULT '[]',
+    layer         TEXT NOT NULL DEFAULT 'hippocampus',
+    created       TEXT NOT NULL,
+    last_accessed TEXT NOT NULL,
+    valid_from    TEXT NOT NULL,
+    valid_to      TEXT,
+    superseded_by TEXT,
+    history       TEXT NOT NULL DEFAULT '[]',
+    origin        TEXT NOT NULL DEFAULT '{}',
+    source_mem_id INTEGER,
+    embedding     BLOB
+);
+
+CREATE TABLE IF NOT EXISTS concept_edges (
+    source_id  TEXT NOT NULL,
+    target_id  TEXT NOT NULL,
+    relation   TEXT NOT NULL DEFAULT 'related',
+    weight     REAL NOT NULL DEFAULT 1.0,
+    created    TEXT NOT NULL,
+    PRIMARY KEY (source_id, target_id)
+);
+
+CREATE TABLE IF NOT EXISTS concept_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_concept_node_keys ON concept_nodes(keys);
+CREATE INDEX IF NOT EXISTS idx_concept_node_layer ON concept_nodes(layer);
+CREATE INDEX IF NOT EXISTS idx_concept_node_weight ON concept_nodes(weight);
+CREATE INDEX IF NOT EXISTS idx_concept_node_valid ON concept_nodes(valid_to);
+CREATE INDEX IF NOT EXISTS idx_concept_edge_source ON concept_edges(source_id);
+CREATE INDEX IF NOT EXISTS idx_concept_edge_target ON concept_edges(target_id);
