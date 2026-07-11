@@ -1131,29 +1131,49 @@ class MemoryManager:
             await self._query_cache.put(query, results)
         return results
 
-    async def _try_temporal_search(self, query: str, k: int) -> list[dict] | None:
+    async def _try_temporal_search(self, query: str, k: int,
+                                    scope: Any | None = None,
+                                    include_raw: bool = False) -> list[dict] | None:
         """时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索。
+
+        mem0 SPEC 优化：加入 scope 过滤 + is_raw 过滤。
 
         无时间词返回 None（调用方继续走常规检索）；命中则返回结果列表。
         Q1-2: 时间+内容混合查询应用 reranker 精排，避免返回时间范围内不相关的记忆。
+
+        Args:
+            scope: Scope 对象。None 时使用默认 Scope()。
+            include_raw: False=只查 is_raw=0，True=查所有
         """
+        if scope is None:
+            from memory.scope import Scope
+            scope = Scope()
+
         _time_range = _parse_temporal_query(query)
         if not _time_range:
             return None
         start_ts, end_ts = _time_range
+        is_raw_filter = None if include_raw else 0
         try:
             # 优先尝试 FTS + 时间过滤（多检索一些，给 reranker 精排空间）
             _fts_results = await self.memory.search_memories_fts_with_time(
                 query, start_ts, end_ts, limit=k * 2
             )
             if _fts_results:
-                _fts_results = await self._apply_reranker_to_results(query, _fts_results, k)
-                logger.debug("memory.temporal_fts_hit",
-                             query=query[:50], count=len(_fts_results))
-                return _fts_results
-            # FTS 无结果，退回纯时间检索
-            _time_results = await self.memory.search_memories_by_time(
-                start_ts, end_ts, limit=k * 2
+                # scope + is_raw 后过滤（FTS+time 方法无 scope 参数）
+                if is_raw_filter is not None:
+                    _fts_results = [r for r in _fts_results if r.get("is_raw") == is_raw_filter]
+                _fts_results = [r for r in _fts_results
+                                if r.get("user_id") == scope.user_id
+                                and r.get("agent_id") == scope.agent_id]
+                if _fts_results:
+                    _fts_results = await self._apply_reranker_to_results(query, _fts_results, k)
+                    logger.debug("memory.temporal_fts_hit",
+                                 query=query[:50], count=len(_fts_results))
+                    return _fts_results
+            # FTS 无结果，退回纯时间检索（scope 过滤）
+            _time_results = await self.memory.search_memories_by_time_scoped(
+                start_ts, end_ts, scope=scope, limit=k * 2, is_raw=is_raw_filter
             )
             if _time_results:
                 _time_results = await self._apply_reranker_to_results(query, _time_results, k)
