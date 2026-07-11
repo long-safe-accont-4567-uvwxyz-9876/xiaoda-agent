@@ -225,7 +225,8 @@ class MemoryDB:
                    FROM episodic_memory_fts
                    JOIN episodic_memories em ON em.id = episodic_memory_fts.id
                    WHERE episodic_memory_fts MATCH ?
-                     AND em.user_id = ? AND em.agent_id = ?{where_extra}
+                     AND em.user_id = ? AND em.agent_id = ?
+                     AND em.session_id != 'archived'{where_extra}
                    ORDER BY score ASC, em.importance DESC, em.timestamp DESC
                    LIMIT ?""",
                 params,
@@ -260,7 +261,8 @@ class MemoryDB:
             cursor = await self._conn.execute(
                 f"""SELECT * FROM episodic_memories
                    WHERE timestamp >= ? AND timestamp < ?
-                     AND user_id = ? AND agent_id = ?{where_extra}
+                     AND user_id = ? AND agent_id = ?
+                     AND session_id != 'archived'{where_extra}
                    ORDER BY timestamp DESC LIMIT ?""",
                 params,
             )
@@ -293,7 +295,8 @@ class MemoryDB:
             cursor = await self._conn.execute(
                 f"""SELECT * FROM episodic_memories
                    WHERE id IN ({placeholders})
-                     AND user_id = ? AND agent_id = ?{where_extra}
+                     AND user_id = ? AND agent_id = ?
+                     AND session_id != 'archived'{where_extra}
                    LIMIT ?""",
                 params,
             )
@@ -313,7 +316,8 @@ class MemoryDB:
                 params.append(is_raw)
             cursor = await self._conn.execute(
                 f"SELECT COUNT(*) as cnt FROM episodic_memories "
-                f"WHERE user_id = ? AND agent_id = ?{where_extra}",
+                f"WHERE user_id = ? AND agent_id = ? "
+                f"AND session_id != 'archived'{where_extra}",
                 params,
             )
             row = await cursor.fetchone()

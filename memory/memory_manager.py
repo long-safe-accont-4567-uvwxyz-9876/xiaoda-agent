@@ -1954,13 +1954,23 @@ class MemoryManager:
                 new_content=new_content,
             )
 
-            # 3. 更新记录（version+1）
+            # 3. 更新记录（version+1，追加 source_raw_ids 溯源链）
             import json
+            existing_meta = {}
+            try:
+                raw_meta = existing.get("metadata_json") or "{}"
+                if isinstance(raw_meta, str):
+                    existing_meta = json.loads(raw_meta)
+            except (json.JSONDecodeError, TypeError):
+                existing_meta = {}
+            source_raw_ids: list = existing_meta.get("source_raw_ids", [])
+            if raw_id not in source_raw_ids:
+                source_raw_ids.append(raw_id)
             await self.memory.update_memory_enrichment(
                 memory_id=knowledge_id,
                 summary=merged,
                 metadata_json=json.dumps({
-                    "source_raw_ids": [raw_id],
+                    "source_raw_ids": source_raw_ids,
                     "merged_at": time.time(),
                 }),
             )
