@@ -10,7 +10,9 @@ from .db_memory import MemoryDB
 from .db_notebook import NotebookDB
 from .db_learning import LearningDB
 from .db_knowledge import KnowledgeDB
+from .db_kg_v2 import KnowledgeDBV2
 from .db_analytics import AnalyticsDB
+from .db_temporal_memory import TemporalMemoryDB
 from .index_manager import build_default_index_manager
 from .session_store import (
     SessionInfo,
@@ -66,6 +68,8 @@ class DatabaseManager:
         self.learning: LearningDB | None = None
         self.knowledge: KnowledgeDB | None = None
         self.analytics: AnalyticsDB | None = None
+        self.temporal: TemporalMemoryDB | None = None
+        self.kg_v2: KnowledgeDBV2 | None = None
 
     async def init(self) -> None:
         # 幂等性：如果已有活跃连接，先关闭旧连接再创建新连接
@@ -90,6 +94,7 @@ class DatabaseManager:
             logger.info(f"database.fat_fs_detected fs={fs_type} → 使用 DELETE journal_mode, 禁用 FTS5 触发器")
         journal_mode_sql = "PRAGMA journal_mode=DELETE" if self._is_fat_fs else "PRAGMA journal_mode=WAL"
         pragmas = [
+            "PRAGMA foreign_keys=ON",
             journal_mode_sql,
             "PRAGMA synchronous=NORMAL",
             "PRAGMA cache_size=-20000",      # ~20MB
@@ -124,6 +129,8 @@ class DatabaseManager:
         self.learning = LearningDB(self._conn)
         self.knowledge = KnowledgeDB(self._conn)
         self.analytics = AnalyticsDB(self._conn)
+        self.temporal = TemporalMemoryDB(self._conn)
+        self.kg_v2 = KnowledgeDBV2(self._conn)
         logger.info("database.ready", path=str(self.db_path))
 
     async def _apply_composite_indexes(self) -> None:
@@ -205,8 +212,8 @@ class DatabaseManager:
             (10, "episodic_memories.entities+event_type+metadata_json", self._migrate_v10),
             (11, "memory_recall_notes", self._migrate_v11),
             (12, "episodic_memories.content_hash+version+memory_versions+context_audit_log", self._migrate_v12),
-            (13, "mem0_spec:user_id+agent_id+is_raw+memory_entities+entity_memory_links", self._migrate_v13),
-            (14, "v06_cognitive_tables", self._migrate_v14),
+            (13, "mem0_spec+bitemporal_facts_preferences+provenance+memory_edges", self._migrate_v13),
+            (14, "v06_cognitive_tables+kg_v2_tables", self._migrate_v14),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -510,14 +517,22 @@ class DatabaseManager:
             logger.info("database.migration_v12_backfill", rows=backfilled)
 
     async def _migrate_v13(self) -> None:
-        """v13: mem0 SPEC 优化 — episodic_memories 新增 user_id/agent_id/is_raw + 实体链接三表。
+        """v13: mem0 SPEC 优化 + 双时态事实/偏好/来源映射/类型化记忆边。
 
+        Part 1 (mem0 SPEC):
         - episodic_memories: user_id/agent_id/is_raw（ALTER TABLE 加列，SQLite 不锁表）
         - memory_entities: 实体存储（与 KG 的 knowledge_entities 职责分离）
         - memory_entities_fts: 实体名称全文索引 + 3 触发器
         - entity_memory_links: 实体↔记忆反向链接
         - idx_episodic_scope: scope 复合索引
         - 回填现有记忆的 user_id/agent_id/is_raw 默认值
+
+        Part 2 (bitemporal):
+        - memory_facts: 双时态事实（valid_from/valid_to + learned_at/expired_at）
+        - memory_fact_sources: 事实来源映射
+        - memory_preferences: 偏好模式（含极性/显式度）
+        - memory_preference_sources: 偏好来源映射
+        - memory_edges: 类型化记忆边（supersedes/supports/similar/bridge）
         """
         # 1. episodic_memories 新增 3 列（幂等：先检查列是否存在）
         cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
@@ -606,9 +621,104 @@ class DatabaseManager:
 
         logger.info("database.migration_v13_mem0_spec_done")
 
-    async def _migrate_v14(self) -> None:
-        """v14: v0.6 认知架构 — 5 张认知表 + episodic_memories 3 列 + 9 索引。
+        # ── Part 2: bitemporal facts/preferences/provenance/edges ──
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS memory_facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject TEXT NOT NULL,
+                predicate TEXT NOT NULL,
+                object TEXT NOT NULL,
+                object_type TEXT NOT NULL DEFAULT 'text',
+                valid_from REAL,
+                valid_to REAL,
+                learned_at REAL NOT NULL,
+                expired_at REAL,
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK(status IN ('active', 'superseded', 'rejected', 'uncertain', 'pending_review')),
+                confidence REAL NOT NULL DEFAULT 1.0 CHECK(confidence >= 0 AND confidence <= 1),
+                fact_hash TEXT NOT NULL UNIQUE,
+                superseded_by INTEGER,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY (superseded_by) REFERENCES memory_facts(id)
+            );
+            CREATE TABLE IF NOT EXISTS memory_fact_sources (
+                fact_id INTEGER NOT NULL,
+                memory_id INTEGER NOT NULL,
+                evidence_text TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                PRIMARY KEY (fact_id, memory_id),
+                FOREIGN KEY (fact_id) REFERENCES memory_facts(id) ON DELETE CASCADE,
+                FOREIGN KEY (memory_id) REFERENCES episodic_memories(id)
+            );
+            CREATE TABLE IF NOT EXISTS memory_preferences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                preference_key TEXT NOT NULL,
+                preference_value TEXT NOT NULL,
+                preference_type TEXT NOT NULL DEFAULT 'general',
+                polarity REAL NOT NULL DEFAULT 1.0,
+                scope TEXT NOT NULL DEFAULT 'global',
+                valid_from REAL,
+                valid_to REAL,
+                learned_at REAL NOT NULL,
+                expired_at REAL,
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK(status IN ('active', 'superseded', 'rejected', 'uncertain', 'pending_review')),
+                confidence REAL NOT NULL DEFAULT 1.0 CHECK(confidence >= 0 AND confidence <= 1),
+                observed_count INTEGER NOT NULL DEFAULT 1 CHECK(observed_count >= 0),
+                explicitness TEXT NOT NULL DEFAULT 'explicit'
+                    CHECK(explicitness IN ('explicit', 'inferred')),
+                superseded_by INTEGER,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY (superseded_by) REFERENCES memory_preferences(id)
+            );
+            CREATE TABLE IF NOT EXISTS memory_preference_sources (
+                preference_id INTEGER NOT NULL,
+                memory_id INTEGER NOT NULL,
+                evidence_text TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                PRIMARY KEY (preference_id, memory_id),
+                FOREIGN KEY (preference_id) REFERENCES memory_preferences(id) ON DELETE CASCADE,
+                FOREIGN KEY (memory_id) REFERENCES episodic_memories(id)
+            );
+            CREATE TABLE IF NOT EXISTS memory_edges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_memory_id INTEGER NOT NULL,
+                target_memory_id INTEGER NOT NULL,
+                edge_type TEXT NOT NULL
+                    CHECK(edge_type IN ('supersedes', 'supports', 'similar', 'bridge')),
+                weight REAL NOT NULL DEFAULT 1.0,
+                confidence REAL NOT NULL DEFAULT 1.0 CHECK(confidence >= 0 AND confidence <= 1),
+                evidence_json TEXT NOT NULL DEFAULT '{}',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                UNIQUE(source_memory_id, target_memory_id, edge_type),
+                FOREIGN KEY (source_memory_id) REFERENCES episodic_memories(id),
+                FOREIGN KEY (target_memory_id) REFERENCES episodic_memories(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_memory_facts_current
+                ON memory_facts(subject, predicate, status, valid_to, expired_at);
+            CREATE INDEX IF NOT EXISTS idx_memory_facts_as_of
+                ON memory_facts(valid_from, valid_to, learned_at, expired_at);
+            CREATE INDEX IF NOT EXISTS idx_memory_fact_sources_memory
+                ON memory_fact_sources(memory_id);
+            CREATE INDEX IF NOT EXISTS idx_memory_preferences_current
+                ON memory_preferences(preference_key, scope, status, valid_to, expired_at);
+            CREATE INDEX IF NOT EXISTS idx_memory_preferences_as_of
+                ON memory_preferences(valid_from, valid_to, learned_at, expired_at);
+            CREATE INDEX IF NOT EXISTS idx_memory_preference_sources_memory
+                ON memory_preference_sources(memory_id);
+            CREATE INDEX IF NOT EXISTS idx_memory_edges_source
+                ON memory_edges(source_memory_id, edge_type);
+            CREATE INDEX IF NOT EXISTS idx_memory_edges_target
+                ON memory_edges(target_memory_id, edge_type);
+        """)
 
+    async def _migrate_v14(self) -> None:
+        """v14: v0.6 认知架构 + 知识图谱 v2 — 5 张认知表 + episodic_memories 3 列 + 9 索引 + KG v2 表。
+
+        Part 1 (cognitive):
         - semantic_memories: 语义记忆（consolidation 后的长期记忆）
         - memory_connections: 记忆连接图
         - bridge_memories: 桥接记忆
@@ -617,7 +727,10 @@ class DatabaseManager:
         - episodic_memories: salience/last_accessed/status（ALTER TABLE 加列，幂等守卫）
         - 9 个索引（CREATE INDEX IF NOT EXISTS，天然幂等）
 
-        对应 db/migrations/v06_cognitive.sql，将其纳入生产迁移流程。
+        Part 2 (kg_v2):
+        - kg_episodes/kg_entities_v2/kg_relations_v2/kg_communities
+        - 数据迁移: knowledge_entities → kg_entities_v2, knowledge_relations → kg_relations_v2
+        - FTS5 索引回填
         """
         # 1. episodic_memories 新增 3 列（幂等：先检查列是否存在，镜像 v13 模式）
         cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
@@ -705,6 +818,123 @@ class DatabaseManager:
         """)
 
         logger.info("database.migration_v14_cognitive_tables_done")
+
+        # ── Part 2: kg_v2 tables — 时序事实、实体演化、Episode溯源、社区发现 ──
+        # 1. 创建 v2 表
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS kg_episodes (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                source_type TEXT DEFAULT 'summary',
+                source_description TEXT DEFAULT '',
+                valid_at REAL NOT NULL,
+                created_at REAL NOT NULL,
+                group_id TEXT DEFAULT 'default'
+            );
+            CREATE INDEX IF NOT EXISTS idx_kg_episode_valid_at ON kg_episodes(valid_at);
+
+            CREATE TABLE IF NOT EXISTS kg_entities_v2 (
+                id TEXT PRIMARY KEY,
+                name TEXT UNIQUE,
+                kind TEXT DEFAULT '',
+                observations TEXT DEFAULT '[]',
+                summary TEXT DEFAULT '',
+                summary_version INTEGER DEFAULT 0,
+                name_embedding TEXT DEFAULT NULL,
+                updated_at REAL NOT NULL,
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_kg_entity_v2_name ON kg_entities_v2(name);
+
+            CREATE TABLE IF NOT EXISTS kg_relations_v2 (
+                id TEXT PRIMARY KEY,
+                from_entity TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                to_entity TEXT NOT NULL,
+                fact TEXT DEFAULT '',
+                fact_embedding TEXT DEFAULT NULL,
+                episode_ids TEXT DEFAULT '[]',
+                valid_at REAL DEFAULT NULL,
+                invalid_at REAL DEFAULT NULL,
+                expired_at REAL DEFAULT NULL,
+                is_current INTEGER DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_from ON kg_relations_v2(from_entity);
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_to ON kg_relations_v2(to_entity);
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_current ON kg_relations_v2(is_current);
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_valid_at ON kg_relations_v2(valid_at);
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_invalid_at ON kg_relations_v2(invalid_at);
+
+            CREATE TABLE IF NOT EXISTS kg_communities (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                summary TEXT DEFAULT '',
+                member_entities TEXT DEFAULT '[]',
+                name_embedding TEXT DEFAULT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS kg_edge_episode_refs (
+                edge_id TEXT NOT NULL,
+                episode_id TEXT NOT NULL,
+                PRIMARY KEY (edge_id, episode_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_kg_eer_episode ON kg_edge_episode_refs(episode_id);
+            CREATE INDEX IF NOT EXISTS idx_kg_eer_edge ON kg_edge_episode_refs(edge_id);
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS kg_entities_v2_fts USING fts5(
+                id UNINDEXED,
+                name_summary
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS kg_relations_v2_fts USING fts5(
+                id UNINDEXED,
+                fact
+            );
+        """)
+
+        # 2. 迁移 entities: knowledge_entities → kg_entities_v2
+        await self._conn.execute("""
+            INSERT OR IGNORE INTO kg_entities_v2 (id, name, kind, observations, summary, summary_version, updated_at, created_at)
+            SELECT id, name, kind, observations,
+                   observations AS summary,
+                   0,
+                   updated_at,
+                   updated_at
+            FROM knowledge_entities
+            WHERE name NOT IN (SELECT name FROM kg_entities_v2)
+        """)
+
+        # 3. 迁移 relations: knowledge_relations → kg_relations_v2
+        await self._conn.execute("""
+            INSERT OR IGNORE INTO kg_relations_v2 (id, from_entity, relation_type, to_entity, fact, episode_ids, valid_at, invalid_at, expired_at, is_current, created_at, updated_at)
+            SELECT id, from_entity, relation_type, to_entity,
+                   from_entity || ' ' || relation_type || ' ' || to_entity AS fact,
+                   '[]',
+                   created_at AS valid_at,
+                   NULL,
+                   NULL,
+                   1,
+                   created_at,
+                   updated_at
+            FROM knowledge_relations
+            WHERE id NOT IN (SELECT id FROM kg_relations_v2)
+        """)
+
+        # 4. 回填 FTS5 索引 (triggers 尚未创建, 手动插入)
+        await self._conn.execute("""
+            INSERT OR IGNORE INTO kg_entities_v2_fts (id, name_summary)
+            SELECT id, name || ' ' || summary FROM kg_entities_v2
+            WHERE id NOT IN (SELECT id FROM kg_entities_v2_fts)
+        """)
+        await self._conn.execute("""
+            INSERT OR IGNORE INTO kg_relations_v2_fts (id, fact)
+            SELECT id, fact FROM kg_relations_v2
+            WHERE id NOT IN (SELECT id FROM kg_relations_v2_fts)
+        """)
+
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")
 
@@ -974,6 +1204,11 @@ class DatabaseManager:
                 updated_at REAL NOT NULL
             );
 
+            CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_entities_fts USING fts5(
+                id UNINDEXED,
+                name_index
+            );
+
             CREATE TABLE IF NOT EXISTS knowledge_relations (
                 id TEXT PRIMARY KEY,
                 from_entity TEXT,
@@ -1186,7 +1421,9 @@ class DatabaseManager:
         """Phase 5: FTS5 触发器管理。vfat/exfat 上禁用（delete 命令不工作）。"""
         if getattr(self, "_is_fat_fs", False):
             # 删除可能存在的触发器（防止之前版本创建的触发器残留）
-            for trig in ["knowledge_entities_fts_ai", "knowledge_entities_fts_ad", "knowledge_entities_fts_au"]:
+            for trig in ["knowledge_entities_fts_ai", "knowledge_entities_fts_ad", "knowledge_entities_fts_au",
+                         "kg_entities_v2_fts_ai", "kg_entities_v2_fts_ad", "kg_entities_v2_fts_au",
+                         "kg_relations_v2_fts_ai", "kg_relations_v2_fts_ad", "kg_relations_v2_fts_au"]:
                 try:
                     await self._conn.execute(f"DROP TRIGGER IF EXISTS {trig}")
                 except (OSError, RuntimeError):
@@ -1207,6 +1444,36 @@ class DatabaseManager:
                     INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index)
                     VALUES ('delete', old.id, old.name);
                     INSERT INTO knowledge_entities_fts(id, name_index) VALUES (new.id, new.name);
+                END;
+
+                -- v2 triggers: DROP first to replace any prior broken versions on upgrade
+                DROP TRIGGER IF EXISTS kg_entities_v2_fts_ai;
+                DROP TRIGGER IF EXISTS kg_entities_v2_fts_ad;
+                DROP TRIGGER IF EXISTS kg_entities_v2_fts_au;
+                DROP TRIGGER IF EXISTS kg_relations_v2_fts_ai;
+                DROP TRIGGER IF EXISTS kg_relations_v2_fts_ad;
+                DROP TRIGGER IF EXISTS kg_relations_v2_fts_au;
+
+                CREATE TRIGGER kg_entities_v2_fts_ai AFTER INSERT ON kg_entities_v2 BEGIN
+                    INSERT INTO kg_entities_v2_fts(id, name_summary) VALUES (new.id, new.name || ' ' || new.summary);
+                END;
+                CREATE TRIGGER kg_entities_v2_fts_ad AFTER DELETE ON kg_entities_v2 BEGIN
+                    DELETE FROM kg_entities_v2_fts WHERE id = old.id;
+                END;
+                CREATE TRIGGER kg_entities_v2_fts_au AFTER UPDATE ON kg_entities_v2 BEGIN
+                    DELETE FROM kg_entities_v2_fts WHERE id = old.id;
+                    INSERT INTO kg_entities_v2_fts(id, name_summary) VALUES (new.id, new.name || ' ' || new.summary);
+                END;
+
+                CREATE TRIGGER kg_relations_v2_fts_ai AFTER INSERT ON kg_relations_v2 BEGIN
+                    INSERT INTO kg_relations_v2_fts(id, fact) VALUES (new.id, new.fact);
+                END;
+                CREATE TRIGGER kg_relations_v2_fts_ad AFTER DELETE ON kg_relations_v2 BEGIN
+                    DELETE FROM kg_relations_v2_fts WHERE id = old.id;
+                END;
+                CREATE TRIGGER kg_relations_v2_fts_au AFTER UPDATE ON kg_relations_v2 BEGIN
+                    DELETE FROM kg_relations_v2_fts WHERE id = old.id;
+                    INSERT INTO kg_relations_v2_fts(id, fact) VALUES (new.id, new.fact);
                 END;
             """)
         except (OSError, RuntimeError) as e:

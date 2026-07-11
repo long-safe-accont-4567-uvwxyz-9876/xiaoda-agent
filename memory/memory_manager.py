@@ -242,9 +242,11 @@ class MemoryManager:
         self._governance = governance
         self.entity_extractor = entity_extractor
         self.entity_store = entity_store
+        self._kg_v2_engine: Any = None
         self._last_message_time: float = 0
         self._last_encode_time: float = 0
         self._pending_encode = False
+        self._last_lazy_migrate_ts: float = 0
         # P3 记忆蒸馏器（使用硅基流动免费模型，失败降级到 router）
         self.distiller = MemoryDistiller(router=router)
         # 冷启动路由: 记忆计数缓存 (TTL 60s, 避免每次检索都 COUNT 全表)
@@ -306,6 +308,10 @@ class MemoryManager:
 
     def set_knowledge_graph(self, kg: Any) -> None:
         self.kg = kg
+
+    def set_kg_v2_engine(self, engine: Any) -> None:
+        """注入 KGSearchEngine 实例 (KG v2 混合检索)。"""
+        self._kg_v2_engine = engine
 
     def set_governance(self, governance: Any) -> None:
         """注入 ContextGovernance 实例 (ContextNest 哈希链 + 审计追踪)。"""
@@ -445,6 +451,37 @@ class MemoryManager:
         recall_limit = getattr(_cfg, 'RAG_RECALL_LIMIT', 50)  # 每路召回 Top-N
         rerank_limit = getattr(_cfg, 'RAG_RERANK_LIMIT', 50)   # RRF 融合后送 Reranker 的数量
 
+        # KG v2 混合检索协程 (定义于早期返回之前, 确保 cold/warm/hot 所有路径均能召回 KG v2 事实)
+        async def _kg_v2_recall() -> list[dict]:
+            """KG v2: 直接返回 KG 事实/实体作为上下文候选。"""
+            import config as _v2_cfg
+            if not getattr(_v2_cfg, 'KG_V2_ENABLED', False) or not self._kg_v2_engine:
+                return []
+            try:
+                results = await self._kg_v2_engine.search(query, top_k=recall_limit)
+                if not results:
+                    return []
+                # 将 KG 事实格式化为 dict 供上下文使用
+                formatted = []
+                for r in results:
+                    if r.get("type") == "relation":
+                        formatted.append({
+                            "summary": r.get("fact", ""),
+                            "source": "kg_v2",
+                            "rrf_score": r.get("rrf_score", 0),
+                        })
+                    elif r.get("type") == "entity":
+                        summary_text = f"{r.get('name', '')}({r.get('kind', '')}): {r.get('summary', '')}"
+                        formatted.append({
+                            "summary": summary_text,
+                            "source": "kg_v2",
+                            "rrf_score": r.get("rrf_score", 0),
+                        })
+                return formatted
+            except Exception as e:
+                logger.debug("memory.kg_v2_recall_failed", error=str(e))
+                return []
+
         # ── 冷启动路由: 判断用户记忆档位 ──
         tier = await self.get_memory_tier()
         is_cold = tier == "cold"
@@ -453,22 +490,37 @@ class MemoryManager:
         # 冷用户: 仅 FTS (scope 过滤), 完全跳过向量检索 (零 Embedding 开销)
         # 但 FTS 无结果时仍尝试向量检索作为兜底（避免 cold_max > 0 时丢失向量召回）
         if is_cold:
-            fts_items = await self._hybrid_fts_search_scoped(
-                query, recall_limit, scope, is_raw_filter
+            fts_items, kg_v2_items = await asyncio.gather(
+                self._hybrid_fts_search_scoped(
+                    query, recall_limit, scope, is_raw_filter),
+                _kg_v2_recall(),
             )
             if fts_items:
                 results = fts_items[:k]
+                # KG v2 事实作为补充候选追加 (已带 rrf_score, 不参与 ID-based 去重)
+                if kg_v2_items and len(results) < k:
+                    results.extend(kg_v2_items[:k - len(results)])
                 logger.info("memory.search", event="memory_search",
                             query=query[:100], tier="cold", results=len(results),
                             duration_ms=int((time.time() - _start) * 1000))
                 return results
-            # FTS 无结果，尝试向量兜底
+            # FTS 无结果，尝试向量兜底 + KG v2
             vec_items = await self._hybrid_vec_search(query, recall_limit)
             if vec_items:
+                results = vec_items[:k]
+                if kg_v2_items and len(results) < k:
+                    results.extend(kg_v2_items[:k - len(results)])
                 logger.info("memory.search", event="memory_search",
-                            query=query[:100], tier="cold+vec_fallback", results=len(vec_items),
+                            query=query[:100], tier="cold+vec_fallback", results=len(results),
                             duration_ms=int((time.time() - _start) * 1000))
-                return vec_items[:k]
+                return results
+            # FTS + 向量均无结果, 仅返回 KG v2 事实 (若存在)
+            if kg_v2_items:
+                results = kg_v2_items[:k]
+                logger.info("memory.search", event="memory_search",
+                            query=query[:100], tier="cold+kg_v2_only", results=len(results),
+                            duration_ms=int((time.time() - _start) * 1000))
+                return results
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier="cold", results=0,
                         duration_ms=int((time.time() - _start) * 1000))
@@ -556,26 +608,37 @@ class MemoryManager:
                 logger.debug("memory.child_recall_failed", error=str(e))
                 return []
 
-        fts_items, vec_items, kg_items, child_items, spread_items, entity_items = await asyncio.gather(
+        fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items = await asyncio.gather(
             self._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter),
             self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids),
             _kg_recall(),
             _child_recall(),
             self._spreading_recall(query, recall_limit),
             self._entity_recall(query, scope, recall_limit),
+            _kg_v2_recall(),
         )
 
-        # 空通道自动剔除: 六路都空则返回
-        if not fts_items and not vec_items and not kg_items and not child_items and not spread_items and not entity_items:
+        # 空通道自动剔除: 七路都空则返回
+        if not fts_items and not vec_items and not kg_items and not child_items and not spread_items and not entity_items and not kg_v2_items:
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=0,
                         duration_ms=int((time.time() - _start) * 1000))
             return []
+        # 仅 KG v2 有结果: 直接返回 (KG v2 事实已带 rrf_score, 无需补全)
+        if not fts_items and not vec_items and not kg_items and not child_items and kg_v2_items:
+            results = kg_v2_items[:k]
+            logger.info("memory.search", event="memory_search",
+                        query=query[:100], tier=tier, results=len(results),
+                        duration_ms=int((time.time() - _start) * 1000))
+            return results
         # 单路有结果: 补充 rrf_score 后直接返回（与多路融合保持字段一致）
+        # 注意: KG v2 事实作为补充候选追加 (已带 rrf_score, 不参与 ID-based 去重)
         if not fts_items and not vec_items and not kg_items and not spread_items and not entity_items:
             for item in child_items:
                 item.setdefault("rrf_score", item.get("score", 0.0))
             results = child_items[:k]
+            if kg_v2_items and len(results) < k:
+                results.extend(kg_v2_items[:k - len(results)])
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
@@ -584,6 +647,8 @@ class MemoryManager:
             for item in kg_items:
                 item.setdefault("rrf_score", item.get("score", 0.0))
             results = kg_items[:k]
+            if kg_v2_items and len(results) < k:
+                results.extend(kg_v2_items[:k - len(results)])
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
@@ -592,6 +657,8 @@ class MemoryManager:
             for item in vec_items:
                 item.setdefault("rrf_score", item.get("similarity", item.get("score", 0.0)))
             results = vec_items[:k]
+            if kg_v2_items and len(results) < k:
+                results.extend(kg_v2_items[:k - len(results)])
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
@@ -600,6 +667,8 @@ class MemoryManager:
             for item in fts_items:
                 item.setdefault("rrf_score", item.get("score", 0.0))
             results = fts_items[:k]
+            if kg_v2_items and len(results) < k:
+                results.extend(kg_v2_items[:k - len(results)])
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=len(results),
                         duration_ms=int((time.time() - _start) * 1000))
@@ -681,13 +750,22 @@ class MemoryManager:
             if reranked:
                 # 对 reranked 也应用 entity boost
                 reranked = await self._apply_entity_boost(query, reranked, scope)
+                # KG v2 事实作为补充候选追加 (已带 rrf_score, 不参与 Reranker ID-based 排序)
+                # 先切片再追加, 避免 reranker 返回 k 条时 [:k] 丢弃全部 kg_v2_items
                 results = reranked[:k]
+                if kg_v2_items and len(results) < k:
+                    results.extend(kg_v2_items[:k - len(results)])
                 logger.info("memory.search", event="memory_search",
                             query=query[:100], tier=tier, results=len(results),
                             duration_ms=int((time.time() - _start) * 1000))
                 return results
 
+        # 降级：无 Reranker 或 Reranker 失败时走 candidates (已含 entity boost)
         final = candidates[:k]
+        # KG v2 事实作为补充候选追加 (已带 rrf_score, 不参与 ID-based 去重)
+        # 先切片再追加, 确保至少有部分 kg_v2 命中能露出
+        if kg_v2_items and len(final) < k:
+            final.extend(kg_v2_items[:k - len(final)])
         logger.info("memory.search", event="memory_search",
                     query=query[:100], tier=tier, results=len(final),
                     duration_ms=int((time.time() - _start) * 1000))
@@ -1366,9 +1444,10 @@ class MemoryManager:
             return []
 
     async def _apply_fluid_scoring(self, results: list[dict]) -> list[dict]:
-        """流体记忆评分（艾宾浩斯遗忘曲线 + 访问强化），过滤低分记忆。
+        """流体记忆评分（艾宾浩斯遗忘曲线 + 访问历史），过滤低分记忆。
 
-        对保留的记忆递增 access_count 实现检索强化。
+        检索和重排保持只读。访问次数只能在答案明确引用该记忆，或用户明确确认
+        记忆有帮助时由消费确认流程更新，避免曝光自反馈偏置。
         """
         if not results:
             return results
@@ -1385,15 +1464,6 @@ class MemoryManager:
             importance = r.get("importance", 0.5)
             r["effective_score"] = importance * fluid_score
             filtered.append(r)
-        if filtered:
-            # 批量递增访问计数（消除 N+1：原为循环内逐条 UPDATE）
-            await self.memory.batch_increment_access_count(
-                [r["id"] for r in filtered], auto_commit=False
-            )
-            try:
-                await self.memory.commit()
-            except Exception as e:
-                logger.debug("memory.fluid_access_count_commit_failed", error=str(e))
         return filtered
 
     def _compute_recency_boost(self, item: dict) -> float:

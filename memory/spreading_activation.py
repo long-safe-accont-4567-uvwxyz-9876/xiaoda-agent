@@ -4,13 +4,18 @@
 + RRF融合 + 模式补全 + 语义重排 + 模式分离
 
 v0.6.0 新增: SpreadingActivation — 知识图谱扩散激活 (优先队列 + 链路预测)
+
+Also provides: spread_activation — deterministic bounded spreading activation
+for memory candidates (degree-penalized propagation over weighted edges).
 """
 from __future__ import annotations
 
 import heapq
 import json
 import math
+from math import sqrt
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
@@ -410,3 +415,46 @@ class SpreadingActivation:
 
         predictions.sort(key=lambda p: p.confidence, reverse=True)
         return predictions[:max_results]
+
+
+# ──────────────────────────────────────────────────────────────────
+# Deterministic bounded spreading activation for memory candidates.
+# Used by evaluation/memory_benchmark.py and KG v2 search pipeline.
+# ──────────────────────────────────────────────────────────────────
+
+
+def spread_activation(
+    seed_scores: Mapping[str, float],
+    adjacency: Mapping[str, Mapping[str, float]],
+    max_hops: int = 1,
+    decay: float = 0.5,
+    threshold: float = 0.05,
+    candidate_budget: int = 50,
+) -> dict[str, float]:
+    """Return seed scores plus activation propagated over weighted edges."""
+    scores = {node: float(score) for node, score in seed_scores.items()}
+    frontier = dict(scores)
+
+    for hop in range(1, max(0, max_hops) + 1):
+        next_frontier: dict[str, float] = {}
+        for source, activation in sorted(frontier.items()):
+            neighbors = adjacency.get(source, {})
+            degree_penalty = 1.0 / sqrt(max(1, len(neighbors)))
+            for target, weight in sorted(neighbors.items()):
+                propagated = (
+                    float(activation)
+                    * float(weight)
+                    * decay
+                    * degree_penalty
+                    / hop
+                )
+                if propagated >= threshold:
+                    next_frontier[target] = next_frontier.get(target, 0.0) + propagated
+        for target, activation in next_frontier.items():
+            scores[target] = scores.get(target, 0.0) + activation
+        frontier = next_frontier
+        if not frontier:
+            break
+
+    ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    return dict(ranked[: max(0, candidate_budget)])

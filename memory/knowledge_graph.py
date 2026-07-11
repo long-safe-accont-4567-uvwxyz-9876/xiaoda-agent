@@ -1,6 +1,7 @@
 from typing import Any
 import json
 import re
+import time
 from loguru import logger
 
 from db.db_knowledge import KnowledgeDB
@@ -376,10 +377,27 @@ class KnowledgeGraph:
             logger.debug("kg.get_entity_count_failed: {}", exc_info=True)
             return 0
 
+    def set_kg_v2(self, kg_v2: Any) -> None:
+        """注入 KnowledgeGraphV2 实例。"""
+        self._kg_v2 = kg_v2
+
     async def auto_extract_and_merge(self, summary: str) -> None:
         if not summary:
             return
 
+        # KG v2 分支: 功能开关开启时走 v2 路径
+        try:
+            import config as _cfg
+            if getattr(_cfg, 'KG_V2_ENABLED', False) and getattr(self, '_kg_v2', None):
+                try:
+                    await self._kg_v2.add_facts_from_episode(summary, time.time())
+                    return
+                except Exception as e:
+                    logger.warning("kg.v2_extract_failed_fallback_to_v1", error=str(e))
+        except Exception:
+            pass
+
+        # v1 逻辑 (原有代码)
         entity_count = await self.get_entity_count()
         if entity_count > self.MAX_ENTITIES:
             await self.cleanup_stale()

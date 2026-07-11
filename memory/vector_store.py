@@ -159,6 +159,14 @@ class VectorStore:
                     CREATE VIRTUAL TABLE IF NOT EXISTS memories_child_vec
                     USING vec0(embedding float[{dims}])
                 """)
+                conn.execute(f"""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS kg_entities_vec
+                    USING vec0(embedding float[{dims}])
+                """)
+                conn.execute(f"""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS kg_relations_vec
+                    USING vec0(embedding float[{dims}])
+                """)
                 conn.commit()
                 return conn, is_fat
 
@@ -625,3 +633,137 @@ class VectorStore:
             logger.warning("vector_store.search_with_hyde_failed", error=str(e))
             tuples = await self.search(query, top_k=k, candidate_ids=cand_int)
             return [{"rowid": r, "distance": d} for r, d in tuples]
+
+    async def upsert_kg_entity(self, row_id: int, text: str) -> bool:
+        """写入或更新 KG 实体向量（先删后插）。"""
+        if not self._initialized or not self._vec_conn:
+            return False
+        vec = await self.embed(text)
+        if not vec:
+            return False
+        vec_json = json.dumps(vec)
+
+        def _do_upsert() -> bool:
+            with self._lock:
+                if self._closed:
+                    return False
+                try:
+                    self._vec_conn.execute("BEGIN TRANSACTION")
+                    try:
+                        self._vec_conn.execute(
+                            "DELETE FROM kg_entities_vec WHERE rowid=?", [row_id]
+                        )
+                    except Exception:
+                        pass
+                    self._vec_conn.execute(
+                        "INSERT INTO kg_entities_vec(rowid, embedding) VALUES (?, vec_f32(?))",
+                        [row_id, vec_json],
+                    )
+                    self._vec_conn.commit()
+                    return True
+                except Exception as e:
+                    try:
+                        self._vec_conn.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                    logger.warning("vector_store.upsert_kg_entity_failed", row_id=row_id, error=str(e))
+                    return False
+
+        return await asyncio.to_thread(_do_upsert)
+
+    async def upsert_kg_relation(self, row_id: int, text: str) -> bool:
+        """写入或更新 KG 关系向量（先删后插）。"""
+        if not self._initialized or not self._vec_conn:
+            return False
+        vec = await self.embed(text)
+        if not vec:
+            return False
+        vec_json = json.dumps(vec)
+
+        def _do_upsert() -> bool:
+            with self._lock:
+                if self._closed:
+                    return False
+                try:
+                    self._vec_conn.execute("BEGIN TRANSACTION")
+                    try:
+                        self._vec_conn.execute(
+                            "DELETE FROM kg_relations_vec WHERE rowid=?", [row_id]
+                        )
+                    except Exception:
+                        pass
+                    self._vec_conn.execute(
+                        "INSERT INTO kg_relations_vec(rowid, embedding) VALUES (?, vec_f32(?))",
+                        [row_id, vec_json],
+                    )
+                    self._vec_conn.commit()
+                    return True
+                except Exception as e:
+                    try:
+                        self._vec_conn.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                    logger.warning("vector_store.upsert_kg_relation_failed", row_id=row_id, error=str(e))
+                    return False
+
+        return await asyncio.to_thread(_do_upsert)
+
+    async def search_kg_entities(self, query_text: str, top_k: int = 5) -> list[tuple[int, float]]:
+        """搜索 KG 实体向量，返回 [(rowid, distance), ...]。"""
+        if not self._initialized or not self._vec_conn:
+            return []
+        vec = await self.embed(query_text)
+        if not vec:
+            return []
+        vec_json = json.dumps(vec)
+        fetch_k = top_k * 2
+
+        def _do_search() -> list[tuple[int, float]]:
+            with self._lock:
+                if self._closed:
+                    return []
+                rows = self._vec_conn.execute(
+                    "SELECT rowid, distance FROM kg_entities_vec "
+                    "WHERE embedding MATCH vec_f32(?) AND k=? "
+                    "ORDER BY distance",
+                    [vec_json, fetch_k],
+                ).fetchall()
+                results = [(row[0], row[1]) for row in rows]
+                results.sort(key=lambda r: (r[1], r[0]))
+                return results[:top_k]
+
+        try:
+            return await asyncio.to_thread(_do_search)
+        except Exception as e:
+            logger.warning("vector_store.search_kg_entities_failed", error=str(e))
+            return []
+
+    async def search_kg_relations(self, query_text: str, top_k: int = 5) -> list[tuple[int, float]]:
+        """搜索 KG 关系向量，返回 [(rowid, distance), ...]。"""
+        if not self._initialized or not self._vec_conn:
+            return []
+        vec = await self.embed(query_text)
+        if not vec:
+            return []
+        vec_json = json.dumps(vec)
+        fetch_k = top_k * 2
+
+        def _do_search() -> list[tuple[int, float]]:
+            with self._lock:
+                if self._closed:
+                    return []
+                rows = self._vec_conn.execute(
+                    "SELECT rowid, distance FROM kg_relations_vec "
+                    "WHERE embedding MATCH vec_f32(?) AND k=? "
+                    "ORDER BY distance",
+                    [vec_json, fetch_k],
+                ).fetchall()
+                results = [(row[0], row[1]) for row in rows]
+                results.sort(key=lambda r: (r[1], r[0]))
+                return results[:top_k]
+
+        try:
+            return await asyncio.to_thread(_do_search)
+        except Exception as e:
+            logger.warning("vector_store.search_kg_relations_failed", error=str(e))
+            return []
