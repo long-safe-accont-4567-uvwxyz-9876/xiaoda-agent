@@ -322,6 +322,253 @@ class MemoryDB:
             logger.warning("db_memory.count_scoped_failed", error=str(e))
             return 0
 
+    # ── mem0 SPEC: memory_entities 表 CRUD ──
+
+    async def insert_memory_entity(self, name: str, entity_type: str = "TOPIC",
+                                    kind: str = "", observations: str = "[]",
+                                    metadata_json: str = "{}",
+                                    auto_commit: bool = True) -> int | None:
+        """插入实体记录。重复 (name, entity_type) 返回 None。
+
+        Args:
+            name: 实体名称
+            entity_type: PROPER/QUOTED/TOPIC/IDENTIFIER
+            kind: 人物/地点/组织/概念/技术
+            observations: JSON 数组字符串
+        Returns:
+            新建实体 ID，重复时返回 None
+        """
+        now = time.time()
+        try:
+            # 一次性降级：v13 迁移创建的 FTS5 触发器使用 'delete' 命令时
+            # 把实体 id 当作 rowid，但 INSERT 触发器未设置 rowid，
+            # 导致 memory_entities 上的 UPDATE/DELETE 全部失败。
+            # 这里幂等地删除触发器，改为手动管理 FTS（与 episodic_memory_fts 模式一致）。
+            for trig in ("memory_entities_fts_ai", "memory_entities_fts_ad", "memory_entities_fts_au"):
+                await self._conn.execute(f"DROP TRIGGER IF EXISTS {trig}")
+            cursor = await self._conn.execute(
+                """INSERT OR IGNORE INTO memory_entities
+                   (name, entity_type, kind, observations, memory_count,
+                    first_seen, last_seen, metadata_json)
+                   VALUES (?, ?, ?, ?, 0, ?, ?, ?)""",
+                (name, entity_type, kind, observations, now, now, metadata_json),
+            )
+            if cursor.rowcount == 0:
+                if auto_commit:
+                    await self._conn.commit()
+                return None  # 重复插入
+            entity_id = cursor.lastrowid
+            # 手动写入 FTS 索引（预分词，与 episodic_memory_fts 一致）
+            try:
+                from db.fts_utils import _tokenize_for_fts
+                tokenized = _tokenize_for_fts(name)
+                if tokenized.strip():
+                    await self._conn.execute(
+                        "INSERT INTO memory_entities_fts(id, name_index) VALUES(?, ?)",
+                        (entity_id, tokenized),
+                    )
+            except Exception as e:
+                logger.debug("db_memory.entity_fts_insert_failed", error=str(e))
+            if auto_commit:
+                await self._conn.commit()
+            return entity_id
+        except Exception as e:
+            logger.debug("db_memory.insert_entity_failed", error=str(e))
+            return None
+
+    async def find_memory_entity_by_name(self, name: str,
+                                          entity_type: str = "TOPIC") -> dict | None:
+        """按名称+类型查找实体"""
+        try:
+            cursor = await self._conn.execute(
+                "SELECT * FROM memory_entities WHERE name=? AND entity_type=?",
+                (name, entity_type),
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+        except Exception as e:
+            logger.debug("db_memory.find_entity_failed", error=str(e))
+            return None
+
+    async def find_memory_entity_by_id(self, entity_id: int) -> dict | None:
+        """按 ID 查找实体"""
+        try:
+            cursor = await self._conn.execute(
+                "SELECT * FROM memory_entities WHERE id=?", (entity_id,)
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+        except Exception as e:
+            logger.debug("db_memory.find_entity_by_id_failed", error=str(e))
+            return None
+
+    async def search_entities_by_fts(self, query: str, limit: int = 10) -> list[dict]:
+        """通过 FTS5 模糊搜索实体名称"""
+        from db.fts_utils import _build_fts_query
+        fts_query = _build_fts_query(query)
+        if not fts_query:
+            return []
+        try:
+            cursor = await self._conn.execute(
+                """SELECT DISTINCT me.* FROM memory_entities_fts
+                   JOIN memory_entities me ON me.id = memory_entities_fts.id
+                   WHERE memory_entities_fts MATCH ?
+                   LIMIT ?""",
+                (fts_query, limit),
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.debug("db_memory.search_entities_fts_failed", error=str(e))
+            return []
+
+    async def increment_entity_memory_count(self, entity_id: int,
+                                             auto_commit: bool = True) -> None:
+        """递增实体链接的记忆数"""
+        try:
+            await self._conn.execute(
+                "UPDATE memory_entities SET memory_count = memory_count + 1 WHERE id=?",
+                (entity_id,),
+            )
+            if auto_commit:
+                await self._conn.commit()
+        except Exception as e:
+            logger.debug("db_memory.increment_entity_count_failed", error=str(e))
+
+    async def update_entity_last_seen(self, entity_id: int, ts: float | None = None,
+                                       auto_commit: bool = True) -> None:
+        """更新实体最后出现时间"""
+        if ts is None:
+            ts = time.time()
+        try:
+            await self._conn.execute(
+                "UPDATE memory_entities SET last_seen=? WHERE id=?",
+                (ts, entity_id),
+            )
+            if auto_commit:
+                await self._conn.commit()
+        except Exception as e:
+            logger.debug("db_memory.update_entity_last_seen_failed", error=str(e))
+
+    async def update_memory_entity(self, entity_id: int, kind: str = "",
+                                    observations: str = "",
+                                    metadata_json: str = "",
+                                    auto_commit: bool = True) -> bool:
+        """更新实体字段"""
+        try:
+            sets = []
+            params = []
+            if kind:
+                sets.append("kind = ?")
+                params.append(kind)
+            if observations:
+                sets.append("observations = ?")
+                params.append(observations)
+            if metadata_json:
+                sets.append("metadata_json = ?")
+                params.append(metadata_json)
+            if not sets:
+                return False
+            params.append(entity_id)
+            await self._conn.execute(
+                f"UPDATE memory_entities SET {', '.join(sets)} WHERE id=?",
+                params,
+            )
+            if auto_commit:
+                await self._conn.commit()
+            return True
+        except Exception as e:
+            logger.debug("db_memory.update_entity_failed", error=str(e))
+            return False
+
+    # ── mem0 SPEC: entity_memory_links 表 CRUD ──
+
+    async def insert_entity_memory_link(self, entity_id: int, memory_id: int,
+                                         confidence: float = 1.0,
+                                         auto_commit: bool = True) -> int | None:
+        """插入实体↔记忆反向链接。重复 (entity_id, memory_id) 返回 None。"""
+        try:
+            cursor = await self._conn.execute(
+                """INSERT OR IGNORE INTO entity_memory_links
+                   (entity_id, memory_id, confidence, created_at)
+                   VALUES (?, ?, ?, ?)""",
+                (entity_id, memory_id, confidence, time.time()),
+            )
+            if cursor.rowcount == 0:
+                return None
+            link_id = cursor.lastrowid
+            if auto_commit:
+                await self._conn.commit()
+            return link_id
+        except Exception as e:
+            logger.debug("db_memory.insert_link_failed", error=str(e))
+            return None
+
+    async def get_entity_memory_links(self, entity_id: int) -> list[dict]:
+        """按实体 ID 查询反向链接的记忆 ID 列表"""
+        try:
+            cursor = await self._conn.execute(
+                "SELECT * FROM entity_memory_links WHERE entity_id=? ORDER BY created_at DESC",
+                (entity_id,),
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.debug("db_memory.get_links_failed", error=str(e))
+            return []
+
+    async def get_memories_by_entity_names_scoped(self, entity_names: list[str],
+                                                   scope: Any,
+                                                   limit: int = 10,
+                                                   is_raw: int | None = 0) -> list[dict]:
+        """按实体名列表 + scope 反查记忆（第5路召回核心查询）。
+
+        Args:
+            entity_names: 实体名列表
+            scope: Scope 对象
+            limit: 返回条数上限
+            is_raw: None=不限, 0=只查提炼知识（默认）, 1=只查原始记录
+        """
+        if not entity_names:
+            return []
+        try:
+            placeholders = ",".join("?" * len(entity_names))
+            where_raw = ""
+            params: list = list(entity_names) + [scope.user_id, scope.agent_id]
+            if is_raw is not None:
+                where_raw = " AND em.is_raw = ?"
+                params.append(is_raw)
+            params.append(limit)
+            cursor = await self._conn.execute(
+                f"""SELECT DISTINCT em.* FROM entity_memory_links eml
+                   JOIN memory_entities me ON me.id = eml.entity_id
+                   JOIN episodic_memories em ON em.id = eml.memory_id
+                   WHERE me.name IN ({placeholders})
+                     AND em.user_id = ? AND em.agent_id = ?{where_raw}
+                   ORDER BY em.importance DESC, em.timestamp DESC LIMIT ?""",
+                params,
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning("db_memory.entity_names_scoped_search_failed", error=str(e))
+            return []
+
+    async def get_entities_by_memory_id(self, memory_id: int) -> list[dict]:
+        """按记忆 ID 查询关联的实体列表"""
+        try:
+            cursor = await self._conn.execute(
+                """SELECT me.* FROM entity_memory_links eml
+                   JOIN memory_entities me ON me.id = eml.entity_id
+                   WHERE eml.memory_id=?""",
+                (memory_id,),
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.debug("db_memory.get_entities_by_memory_failed", error=str(e))
+            return []
+
     async def search_memories_by_entities(self, entity_names: list[str],
                                             limit: int = 5) -> list[dict]:
         """按实体反查情景记忆（entities 字段为 JSON 数组字符串）。
