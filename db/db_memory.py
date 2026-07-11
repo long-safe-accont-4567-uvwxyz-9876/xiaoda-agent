@@ -673,6 +673,18 @@ class MemoryDB:
         row = await cursor.fetchone()
         return row["cnt"] if row else 0
 
+    async def get_unmigrated_memories(self, limit: int = 50) -> list[dict]:
+        """获取未迁移到 concept_nodes 的记忆"""
+        async with self._conn.execute(
+            """SELECT em.id, em.summary FROM episodic_memories em
+               WHERE em.id NOT IN (SELECT source_mem_id FROM concept_nodes
+                                   WHERE source_mem_id IS NOT NULL)
+               ORDER BY em.timestamp ASC LIMIT ?""",
+            (limit,),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [{"id": r["id"], "summary": r["summary"]} for r in rows]
+
     async def search_memories_by_time(self, start_ts: float, end_ts: float, limit: int = 20) -> list[dict]:
         """按时间范围检索记忆（用于"昨天/上周发生了什么"这类查询）。
 
