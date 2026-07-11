@@ -193,6 +193,40 @@ class TestEncodeMemoryAddOnly:
         # 验证 entity_store.link_entities 被调用
         mgr.entity_store.link_entities.assert_awaited_once()
 
+    async def test_encode_triggers_distill(self, add_only_db):
+        """encode_memory 异步触发蒸馏（_distill_to_knowledge）"""
+        db, mgr = add_only_db
+        scope = Scope()
+
+        mgr._generate_summary = MagicMock(return_value="用户说: 我喜欢Python")
+        mgr._estimate_importance = MagicMock(return_value=0.7)
+        mgr._save_state_json = MagicMock()
+        mgr.invalidate_memory_count_cache = MagicMock()
+
+        # mock distiller — encode_memory 应异步调用 _distill_to_knowledge
+        mgr.distiller = MagicMock()
+        mgr._distill_to_knowledge = AsyncMock(return_value=None)
+
+        context = {
+            "exchanges": [
+                {"role": "user", "content": "我喜欢Python"},
+                {"role": "assistant", "content": "好的，记下了"},
+            ],
+            "emotion": {"primary": "开心"},
+        }
+
+        await mgr.encode_memory(context, scope=scope)
+
+        # 等待异步任务完成
+        await asyncio.sleep(0.1)
+
+        # 验证 _distill_to_knowledge 被调用
+        mgr._distill_to_knowledge.assert_awaited_once()
+        call_args = mgr._distill_to_knowledge.call_args
+        # 验证传入参数包含 scope、importance、emotion
+        assert call_args.kwargs.get("scope") == scope or call_args.args[2] == scope
+        assert call_args.kwargs.get("importance") == 0.7 or call_args.args[3] == 0.7
+
     async def test_encode_without_scope_uses_default(self, add_only_db):
         """encode_memory 不传 scope 时使用默认 Scope()"""
         db, mgr = add_only_db

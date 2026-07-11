@@ -196,3 +196,60 @@ class TestFindSimilarKnowledge:
 
         similar = await mgr._find_similar_knowledge("原始记录Python", scope=scope)
         assert similar is None  # is_raw=1 不参与
+
+    async def test_find_similar_rejects_loose_match(self, distill_db):
+        """Jaccard 阈值过滤：共同 token 多但核心内容不同时不匹配"""
+        db, mgr = distill_db
+        scope = Scope()
+
+        # 已有知识 "用户喜欢Java"
+        await db.memory.insert_episodic_memory(
+            summary="用户喜欢Java", scope=scope, is_raw=0
+        )
+
+        # 查询 "用户喜欢Python" — FTS 会因 "用户"、"喜欢" 命中，
+        # 但 Jaccard < 0.4 应被过滤
+        similar = await mgr._find_similar_knowledge("用户喜欢Python", scope=scope)
+        assert similar is None
+
+
+class TestUpdateKnowledge:
+    """_update_knowledge: 独立单元测试"""
+
+    async def test_update_merges_content(self, distill_db):
+        """_update_knowledge 调用 LLM 合并并更新记录"""
+        db, mgr = distill_db
+        scope = Scope()
+
+        # 插入已有提炼知识
+        existing_id = await db.memory.insert_episodic_memory(
+            summary="用户喜欢Python", scope=scope, is_raw=0
+        )
+
+        # mock distiller.merge_knowledge 返回合并结果
+        mgr.distiller.merge_knowledge = AsyncMock(
+            return_value="用户喜欢Python和React"
+        )
+        mgr.vec = None  # 无向量
+
+        raw_id = 999
+        await mgr._update_knowledge(existing_id, "用户也喜欢React", raw_id, scope)
+
+        # 验证记录被更新为合并后的内容
+        updated = await db.memory.get_memory_by_id(existing_id)
+        assert updated["summary"] == "用户喜欢Python和React"
+        mgr.distiller.merge_knowledge.assert_awaited_once()
+
+    async def test_update_nonexistent_knowledge_noop(self, distill_db):
+        """_update_knowledge 对不存在的 ID 安全跳过"""
+        db, mgr = distill_db
+        scope = Scope()
+
+        mgr.distiller.merge_knowledge = AsyncMock(return_value="合并")
+        mgr.vec = None
+
+        # 不存在的 knowledge_id
+        await mgr._update_knowledge(99999, "新内容", 1, scope)
+
+        # merge_knowledge 不应被调用（因为 existing 为 None 提前返回）
+        mgr.distiller.merge_knowledge.assert_not_awaited()

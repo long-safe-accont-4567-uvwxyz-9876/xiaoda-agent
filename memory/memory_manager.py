@@ -206,6 +206,18 @@ def _normalize_for_dedupe(text: str) -> str:
     return text.casefold()
 
 
+def _char_bigrams(text: str) -> set[str]:
+    """提取字符 bigram 集合（用于相似度计算）。
+
+    先归一化（去标点+小写），再取相邻2字符组成集合。
+    用于 _find_similar_knowledge 的 Jaccard 相似度过滤。
+    """
+    text = _normalize_for_dedupe(text)
+    if len(text) < 2:
+        return set()
+    return {text[i:i + 2] for i in range(len(text) - 1)}
+
+
 class MemoryManager:
     """管理情景记忆的编码、检索、去重与遗忘等核心流程。"""
 
@@ -1601,6 +1613,24 @@ class MemoryManager:
                 except Exception as e:
                     logger.debug("memory.entity_spawn_failed", error=str(e))
 
+            # ── mem0 SPEC: 异步触发蒸馏（原始记忆 → is_raw=0 提炼知识）──
+            if self.distiller:
+                try:
+                    _distill_task = asyncio.create_task(
+                        self._distill_to_knowledge(
+                            mem_id, summary, scope, importance, emotion
+                        )
+                    )
+                    def _log_distill_exception(t: asyncio.Task) -> None:
+                        if t.cancelled():
+                            return
+                        exc = t.exception()
+                        if exc:
+                            logger.warning("memory.distill_async_failed", error=str(exc))
+                    _distill_task.add_done_callback(_log_distill_exception)
+                except Exception as e:
+                    logger.debug("memory.distill_spawn_failed", error=str(e))
+
             self._last_encode_time = time.time()
             self._pending_encode = False
             logger.info("memory.encoded", summary=summary[:80], importance=importance, is_raw=1)
@@ -1713,6 +1743,10 @@ class MemoryManager:
                                        scope: Any) -> dict | None:
         """查找相似的提炼知识（is_raw=0, 同 scope）。
 
+        使用 FTS 召回候选 + 字符 bigram Jaccard 相似度阈值过滤，
+        避免 FTS 的宽松 token 匹配导致不相关知识被误合并
+        （如 "用户喜欢Python" 误匹配 "用户喜欢Java"）。
+
         Args:
             summary: 待查重的摘要
             scope: Scope 对象
@@ -1720,12 +1754,23 @@ class MemoryManager:
             相似的记忆 dict，或 None
         """
         try:
-            # FTS 搜索 is_raw=0 的提炼知识
             candidates = await self.memory.search_memories_fts_scoped(
                 summary, scope=scope, limit=5, is_raw=0
             )
-            if candidates:
-                return candidates[0]
+            if not candidates:
+                return None
+            query_bigrams = _char_bigrams(summary)
+            if not query_bigrams:
+                return None
+            for c in candidates:
+                candidate_bigrams = _char_bigrams(c.get("summary", ""))
+                if not candidate_bigrams:
+                    continue
+                intersection = query_bigrams & candidate_bigrams
+                union = query_bigrams | candidate_bigrams
+                jaccard = len(intersection) / len(union)
+                if jaccard >= 0.4:
+                    return c
             return None
         except Exception as e:
             logger.debug("memory.find_similar_knowledge_failed", error=str(e))
