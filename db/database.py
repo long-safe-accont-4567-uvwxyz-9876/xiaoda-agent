@@ -1181,29 +1181,33 @@ class DatabaseManager:
                     INSERT INTO knowledge_entities_fts(id, name_index) VALUES (new.id, new.name);
                 END;
 
-                CREATE TRIGGER IF NOT EXISTS kg_entities_v2_fts_ai AFTER INSERT ON kg_entities_v2 BEGIN
+                -- v2 triggers: DROP first to replace any prior broken versions on upgrade
+                DROP TRIGGER IF EXISTS kg_entities_v2_fts_ai;
+                DROP TRIGGER IF EXISTS kg_entities_v2_fts_ad;
+                DROP TRIGGER IF EXISTS kg_entities_v2_fts_au;
+                DROP TRIGGER IF EXISTS kg_relations_v2_fts_ai;
+                DROP TRIGGER IF EXISTS kg_relations_v2_fts_ad;
+                DROP TRIGGER IF EXISTS kg_relations_v2_fts_au;
+
+                CREATE TRIGGER kg_entities_v2_fts_ai AFTER INSERT ON kg_entities_v2 BEGIN
                     INSERT INTO kg_entities_v2_fts(id, name_summary) VALUES (new.id, new.name || ' ' || new.summary);
                 END;
-                CREATE TRIGGER IF NOT EXISTS kg_entities_v2_fts_ad AFTER DELETE ON kg_entities_v2 BEGIN
-                    INSERT INTO kg_entities_v2_fts(kg_entities_v2_fts, id, name_summary)
-                    VALUES ('delete', old.id, old.name || ' ' || old.summary);
+                CREATE TRIGGER kg_entities_v2_fts_ad AFTER DELETE ON kg_entities_v2 BEGIN
+                    DELETE FROM kg_entities_v2_fts WHERE id = old.id;
                 END;
-                CREATE TRIGGER IF NOT EXISTS kg_entities_v2_fts_au AFTER UPDATE ON kg_entities_v2 BEGIN
-                    INSERT INTO kg_entities_v2_fts(kg_entities_v2_fts, id, name_summary)
-                    VALUES ('delete', old.id, old.name || ' ' || old.summary);
+                CREATE TRIGGER kg_entities_v2_fts_au AFTER UPDATE ON kg_entities_v2 BEGIN
+                    DELETE FROM kg_entities_v2_fts WHERE id = old.id;
                     INSERT INTO kg_entities_v2_fts(id, name_summary) VALUES (new.id, new.name || ' ' || new.summary);
                 END;
 
-                CREATE TRIGGER IF NOT EXISTS kg_relations_v2_fts_ai AFTER INSERT ON kg_relations_v2 BEGIN
+                CREATE TRIGGER kg_relations_v2_fts_ai AFTER INSERT ON kg_relations_v2 BEGIN
                     INSERT INTO kg_relations_v2_fts(id, fact) VALUES (new.id, new.fact);
                 END;
-                CREATE TRIGGER IF NOT EXISTS kg_relations_v2_fts_ad AFTER DELETE ON kg_relations_v2 BEGIN
-                    INSERT INTO kg_relations_v2_fts(kg_relations_v2_fts, id, fact)
-                    VALUES ('delete', old.id, old.fact);
+                CREATE TRIGGER kg_relations_v2_fts_ad AFTER DELETE ON kg_relations_v2 BEGIN
+                    DELETE FROM kg_relations_v2_fts WHERE id = old.id;
                 END;
-                CREATE TRIGGER IF NOT EXISTS kg_relations_v2_fts_au AFTER UPDATE ON kg_relations_v2 BEGIN
-                    INSERT INTO kg_relations_v2_fts(kg_relations_v2_fts, id, fact)
-                    VALUES ('delete', old.id, old.fact);
+                CREATE TRIGGER kg_relations_v2_fts_au AFTER UPDATE ON kg_relations_v2 BEGIN
+                    DELETE FROM kg_relations_v2_fts WHERE id = old.id;
                     INSERT INTO kg_relations_v2_fts(id, fact) VALUES (new.id, new.fact);
                 END;
             """)
