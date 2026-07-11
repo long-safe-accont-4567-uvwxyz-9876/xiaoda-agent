@@ -315,6 +315,8 @@ class TestEncodeMemoryChildChunks:
         mgr._last_encode_time = 0
         mgr._pending_encode = False
         mgr.distiller = MagicMock()
+        mgr.entity_extractor = None
+        mgr.entity_store = None
 
         return mgr
 
