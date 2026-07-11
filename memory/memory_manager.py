@@ -245,6 +245,25 @@ class MemoryManager:
         # CRAG 检索评估器：评估检索结果质量，低置信度时触发兜底策略
         self._assessor = RetrievalAssessor()
 
+        # 扩散激活引擎（第五路 RRF 通道）
+        self.concept_graph = None
+        self.spreading_engine = None
+        try:
+            from memory.concept_graph import ConceptGraph
+            from memory.spreading_activation import SpreadingActivationEngine
+            from memory.key_extractor import KeyExtractor
+            from db.db_concept import ConceptDB
+            if hasattr(self, 'db') and self.db and hasattr(self.db, '_conn') and self.db._conn is not None:
+                concept_db = ConceptDB(self.db._conn)
+                self._key_extractor = KeyExtractor()
+                self.concept_graph = ConceptGraph(concept_db, self._key_extractor)
+                self.spreading_engine = SpreadingActivationEngine(
+                    concept_db, self.vec, self._key_extractor)
+                logger.info("memory.spreading_activation_enabled")
+        except Exception as e:
+            logger.warning("memory.spreading_activation_init_failed",
+                          error=str(e))
+
     def _get_query_embedding_func(self):
         """返回查询嵌入函数（复用 VectorStore.embed），不可用时返回 None。
 
@@ -462,15 +481,16 @@ class MemoryManager:
                 logger.debug("memory.child_recall_failed", error=str(e))
                 return []
 
-        fts_items, vec_items, kg_items, child_items = await asyncio.gather(
+        fts_items, vec_items, kg_items, child_items, spread_items = await asyncio.gather(
             self._hybrid_fts_search(query, recall_limit),
             self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids),
             _kg_recall(),
             _child_recall(),
+            self._spreading_recall(query, recall_limit),
         )
 
-        # 空通道自动剔除: 四路都空则返回
-        if not fts_items and not vec_items and not kg_items and not child_items:
+        # 空通道自动剔除: 五路都空则返回
+        if not fts_items and not vec_items and not kg_items and not child_items and not spread_items:
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=0,
                         duration_ms=int((time.time() - _start) * 1000))
@@ -537,13 +557,17 @@ class MemoryManager:
             child_ids = [str(item["id"]) for item in child_items]
             ranked_lists.append(child_ids)
             weights.append(0.9)  # 子chunk召回的父chunk权重
+        if spread_items:
+            spread_ids = [str(item["id"]) for item in spread_items]
+            ranked_lists.append(spread_ids)
+            weights.append(0.85)  # 扩散激活权重略低于直接匹配
         fused = reciprocal_rank_fusion(
             ranked_lists, limit=oversample_k,
             weights=weights,
         )
 
         # 按 RRF 排序获取完整记录（合并所有通道候选）
-        all_items = {str(item["id"]): item for item in fts_items + vec_items + kg_items + child_items}
+        all_items = {str(item["id"]): item for item in fts_items + vec_items + kg_items + child_items + spread_items}
 
         # Reranker 精排
         if use_reranker and self._reranker and self._reranker.available and len(fused) > k:
@@ -617,6 +641,38 @@ class MemoryManager:
             return items
         except Exception as e:
             logger.warning("memory.vec_search_failed", error=str(e))
+            return []
+
+    async def _spreading_recall(self, query: str, limit: int) -> list[dict]:
+        """扩散激活第五路检索通道
+
+        通过 SpreadingActivationEngine 检索 concept_nodes，
+        将结果映射回 episodic_memories（通过 source_mem_id）。
+        """
+        if not self.spreading_engine:
+            return []
+        try:
+            results = await self.spreading_engine.recall(query, top_k=limit)
+            if not results:
+                return []
+            # 映射回 episodic_memories
+            mem_ids = []
+            for r in results:
+                node = await self.spreading_engine.db.get_node(r["id"])
+                if node and node.get("source_mem_id"):
+                    mem_ids.append((node["source_mem_id"], r["score"]))
+            if not mem_ids:
+                return []
+            # 批量获取记忆
+            ids = [m[0] for m in mem_ids]
+            score_map = {m[0]: m[1] for m in mem_ids}
+            memories = await self.memory.get_memories_by_ids(ids)
+            for mem in memories:
+                mem["spreading_score"] = score_map.get(mem["id"], 0.0)
+                mem["spreading_recall"] = True
+            return memories
+        except Exception as e:
+            logger.debug("memory.spreading_recall_failed", error=str(e))
             return []
 
     def _extract_deterministic_selectors(self, query: str) -> dict:
@@ -1441,6 +1497,13 @@ class MemoryManager:
                     await self.vec.upsert(mem_id, summary)
                 except Exception as e:
                     logger.debug("memory.initial_vec_upsert_failed", error=str(e))
+
+            # 双写：同时写入 concept_nodes
+            if self.concept_graph and mem_id:
+                try:
+                    await self.concept_graph.remember(summary, source_mem_id=mem_id)
+                except Exception as e:
+                    logger.debug("memory.concept_dual_write_failed", error=str(e))
 
             # ── 父子Chunk: 生成并写入子chunk ──
             import config as _cfg
