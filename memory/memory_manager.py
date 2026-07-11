@@ -474,17 +474,19 @@ class MemoryManager:
                         duration_ms=int((time.time() - _start) * 1000))
             return []
 
-        # 懒迁移：concept_nodes 数 < episodic_memories 数时触发
+        # 懒迁移：concept_nodes 数 < episodic_memories 数时触发（5分钟节流）
         if self.concept_graph and not is_cold:
-            try:
-                ep_count = await self.memory.get_episodic_count()
-                node_count = await self.spreading_engine.db.get_node_count()
-                if node_count < ep_count:
-                    unmigrated = await self.memory.get_unmigrated_memories(limit=50)
-                    if unmigrated:
-                        await self.concept_graph.lazy_migrate(unmigrated, limit=50)
-            except Exception as e:
-                logger.debug("memory.lazy_migrate_failed", error=str(e))
+            if time.time() - self._last_lazy_migrate_ts > 300:  # 5分钟
+                try:
+                    self._last_lazy_migrate_ts = time.time()
+                    ep_count = await self.memory.get_episodic_count()
+                    node_count = await self.spreading_engine.db.get_node_count()
+                    if node_count < ep_count:
+                        unmigrated = await self.memory.get_unmigrated_memories(limit=50)
+                        if unmigrated:
+                            await self.concept_graph.lazy_migrate(unmigrated, limit=50)
+                except Exception as e:
+                    logger.debug("memory.lazy_migrate_failed", error=str(e))
 
         # ── 温/热用户: 并行执行 FTS、向量、KG 三路检索 ──
         # ContextNest A1: 提取确定性 selector → 候选集, 向量检索在候选集内排序

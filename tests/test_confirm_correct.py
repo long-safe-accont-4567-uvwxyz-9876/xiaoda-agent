@@ -108,7 +108,7 @@ async def test_correct_creates_new_node(cc):
         id="oldnode", text="Python 是编译型语言",  # 错误
         keys=json.dumps(["python", "编译", "语言"]),
         created=now, last_accessed=now, valid_from=now,
-        weight=0.8, peak_weight=0.9, confidence=1.0,
+        weight=0.8, peak_weight=0.9, confidence=0.5,
     )
 
     result = await cc.correct("Python 编译型语言", "Python 是解释型语言")
@@ -126,7 +126,7 @@ async def test_correct_creates_new_node(cc):
     assert new is not None
     assert new["valid_to"] is None
     assert "解释" in new["text"]
-    assert new["confidence"] == 0.7  # 1.0 × 0.7
+    assert new["confidence"] == 0.35  # 0.5 × 0.7
 
 
 @pytest.mark.asyncio

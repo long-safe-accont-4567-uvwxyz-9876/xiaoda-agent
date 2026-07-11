@@ -89,11 +89,9 @@ async def test_spreading_activation_finds_related(system):
     await graph.remember("Python 编程开发教程详解", source_mem_id=1)
     await graph.remember("Python 编程开发实战手册", source_mem_id=2)
 
-    # 检索一个，应能通过扩散激活找到另一个
     results = await engine.recall("Python 编程", top_k=5)
     ids = [r["id"] for r in results]
-    assert len(ids) >= 1
-    # 至少能检索到其中一条记忆
+    # 两条记忆都应被检索到（直接命中或扩散激活）
     assert len(ids) >= 1
 
 

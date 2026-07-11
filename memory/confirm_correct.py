@@ -101,7 +101,9 @@ class ConfirmCorrect:
             return {"error": "no match"}
 
         old_id = results[0]["id"]
-        old_node = results[0]
+        old_node = await self.db.get_node(old_id)
+        if not old_node:
+            return {"error": "node not found"}
         old_text = old_node["text"]
 
         # 2. 验证匹配质量
