@@ -155,6 +155,16 @@ FAKE_XML_TOOL_PATTERN = re.compile(
 TOOL_CALL_PATTERN = re.compile(
     r'\[TOOL_CALL\][\s\S]*?\[/TOOL_CALL\]',
 )
+# 裸 <tool_call>...</tool_call> 标签（含错配闭合标签 </think> 的容错）
+TOOL_CALL_BARE_TAG_PATTERN = re.compile(
+    r'<tool_call\b[^>]*>[\s\S]*?(?:</tool_call>|</think>)',
+    re.IGNORECASE,
+)
+# 独立未闭合的 <tool_call> 开头（容错）
+TOOL_CALL_OPEN_ONLY_PATTERN = re.compile(
+    r'<tool_call\b[^>]*>[\s\S]*',
+    re.IGNORECASE,
+)
 
 
 def strip_dsml(text: str) -> str:
@@ -171,6 +181,12 @@ def strip_dsml(text: str) -> str:
     text = DSML_LEFTOVER.sub('', text)
     text = FAKE_XML_TOOL_PATTERN.sub('', text)
     text = TOOL_CALL_PATTERN.sub('', text)
+    # 清理裸 <tool_call>...</tool_call>（含 </think> 错配）
+    text = TOOL_CALL_BARE_TAG_PATTERN.sub('', text)
+    # 清理未闭合的 <tool_call> 开头到末尾
+    text = TOOL_CALL_OPEN_ONLY_PATTERN.sub('', text)
+    # 清理孤立的 </think> 闭合标签（tool_call错配后残留）
+    text = re.sub(r'</think>', '', text, flags=re.IGNORECASE)
     # 清理其他常见的工具调用泄露格式
     # 1. 代码块中的 function_call JSON
     text = re.sub(r'```(?:json)?\s*\{[^}]*?function_call[^}]*?\}\s*```', '', text, flags=re.DOTALL)
@@ -305,9 +321,18 @@ def strip_reasoning(text: str) -> str:
     return text.strip()
 
 
+# 裸 <tool_call>...</tool_call> XML 块（含 </think> 错配容错）
+TOOL_CALL_XML_PATTERN = re.compile(
+    r'<tool_call\b[^>]*>([\s\S]*?)(?:</tool_call>|</think>)',
+    re.IGNORECASE,
+)
+
+
 def has_dsml_tool_calls(text: str) -> bool:
     """判断文本中是否包含 DSML/工具调用标签."""
-    return bool(DSML_INVOKE_PATTERN.search(text)) or bool(TOOL_CALL_PATTERN.search(text))
+    return (bool(DSML_INVOKE_PATTERN.search(text))
+            or bool(TOOL_CALL_PATTERN.search(text))
+            or bool(TOOL_CALL_XML_PATTERN.search(text)))
 
 
 def parse_dsml_tool_calls(text: str, allowed_tools: set | None = None) -> list[dict]:
@@ -322,6 +347,8 @@ def parse_dsml_tool_calls(text: str, allowed_tools: set | None = None) -> list[d
     """
     import json
     results = []
+
+    # ── 1. DSML <｜｜DSML｜｜invoke name="xxx">...</｜｜DSML｜｜invoke> ──
     invoke_blocks = list(DSML_INVOKE_PATTERN.finditer(text))
     for _i, invoke_match in enumerate(invoke_blocks):
         tool_name = invoke_match.group(1)
@@ -348,6 +375,47 @@ def parse_dsml_tool_calls(text: str, allowed_tools: set | None = None) -> list[d
                 "arguments": json.dumps(args, ensure_ascii=False),
             }
         })
+
+    # ── 2. 裸 <tool_call>JSON</tool_call> 格式（含 </think> 错配容错）──
+    for xml_match in TOOL_CALL_XML_PATTERN.finditer(text):
+        inner = xml_match.group(1).strip()
+        # 去掉可能的 ```json ... ``` 包裹
+        inner = re.sub(r'^```(?:json)?\s*|\s*```$', '', inner, flags=re.DOTALL).strip()
+        try:
+            parsed = json.loads(inner)
+        except json.JSONDecodeError:
+            # 可能是多个工具调用的数组
+            try:
+                # 容错：非标准 JSON 修复后再试
+                fixed = re.sub(r',\s*([}\]])', r'\1', inner)
+                parsed = json.loads(fixed)
+            except json.JSONDecodeError:
+                continue
+
+        calls = parsed if isinstance(parsed, list) else [parsed]
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            # 兼容 {"name": "xxx", "arguments": {...}} 和 {"tool_name": "xxx", "parameters": {...}}
+            tool_name = call.get("name") or call.get("tool_name") or call.get("function", {}).get("name")
+            if not tool_name:
+                continue
+            if allowed_tools and tool_name not in allowed_tools:
+                continue
+            args = call.get("arguments") or call.get("parameters") or call.get("function", {}).get("arguments", {})
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = {}
+            results.append({
+                "id": f"xml_{len(results)}",
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "arguments": json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args),
+                }
+            })
 
     return results
 
