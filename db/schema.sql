@@ -52,7 +52,10 @@ CREATE TABLE IF NOT EXISTS episodic_memories (
     event_type TEXT DEFAULT '',
     metadata_json TEXT DEFAULT '{}',
     content_hash TEXT DEFAULT '',
-    version INTEGER DEFAULT 1
+    version INTEGER DEFAULT 1,
+    user_id TEXT DEFAULT 'default',
+    agent_id TEXT DEFAULT 'xiaoda',
+    is_raw INTEGER DEFAULT 0
 );
 
 -- 情景记忆全文索引（FTS5）
@@ -446,3 +449,59 @@ CREATE INDEX IF NOT EXISTS idx_concept_node_weight ON concept_nodes(weight);
 CREATE INDEX IF NOT EXISTS idx_concept_node_valid ON concept_nodes(valid_to);
 CREATE INDEX IF NOT EXISTS idx_concept_edge_source ON concept_edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_concept_edge_target ON concept_edges(target_id);
+
+-- ============================================================
+-- mem0 SPEC 优化 (v13): 实体链接 + Scope 隔离
+-- ============================================================
+
+-- 实体存储表（与 KG 的 knowledge_entities 分离，职责不同）
+CREATE TABLE IF NOT EXISTS memory_entities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    entity_type TEXT DEFAULT 'TOPIC',
+    kind TEXT DEFAULT '',
+    observations TEXT DEFAULT '[]',
+    memory_count INTEGER DEFAULT 0,
+    first_seen REAL NOT NULL,
+    last_seen REAL NOT NULL,
+    metadata_json TEXT DEFAULT '{}',
+    UNIQUE(name, entity_type)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_entities_name ON memory_entities(name);
+CREATE INDEX IF NOT EXISTS idx_memory_entities_type ON memory_entities(entity_type);
+
+-- 实体名称全文索引（用于快速名称匹配）
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_entities_fts USING fts5(
+    id UNINDEXED, name_index
+);
+
+CREATE TRIGGER IF NOT EXISTS memory_entities_fts_ai AFTER INSERT ON memory_entities BEGIN
+    INSERT INTO memory_entities_fts(id, name_index) VALUES (new.id, new.name);
+END;
+CREATE TRIGGER IF NOT EXISTS memory_entities_fts_ad AFTER DELETE ON memory_entities BEGIN
+    INSERT INTO memory_entities_fts(memory_entities_fts, id, name_index)
+    VALUES ('delete', old.id, old.name);
+END;
+CREATE TRIGGER IF NOT EXISTS memory_entities_fts_au AFTER UPDATE ON memory_entities BEGIN
+    INSERT INTO memory_entities_fts(memory_entities_fts, id, name_index)
+    VALUES ('delete', old.id, old.name);
+    INSERT INTO memory_entities_fts(id, name_index) VALUES (new.id, new.name);
+END;
+
+-- 实体↔记忆反向链接表
+CREATE TABLE IF NOT EXISTS entity_memory_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_id INTEGER NOT NULL,
+    memory_id INTEGER NOT NULL,
+    confidence REAL DEFAULT 1.0,
+    created_at REAL NOT NULL,
+    FOREIGN KEY (entity_id) REFERENCES memory_entities(id) ON DELETE CASCADE,
+    FOREIGN KEY (memory_id) REFERENCES episodic_memories(id) ON DELETE CASCADE,
+    UNIQUE(entity_id, memory_id)
+);
+CREATE INDEX IF NOT EXISTS idx_eml_entity ON entity_memory_links(entity_id);
+CREATE INDEX IF NOT EXISTS idx_eml_memory ON entity_memory_links(memory_id);
+
+-- episodic_memories scope 复合索引
+CREATE INDEX IF NOT EXISTS idx_episodic_scope
+    ON episodic_memories(user_id, agent_id, is_raw, timestamp DESC);

@@ -21,7 +21,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 13
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -205,6 +205,7 @@ class DatabaseManager:
             (10, "episodic_memories.entities+event_type+metadata_json", self._migrate_v10),
             (11, "memory_recall_notes", self._migrate_v11),
             (12, "episodic_memories.content_hash+version+memory_versions+context_audit_log", self._migrate_v12),
+            (13, "mem0_spec:user_id+agent_id+is_raw+memory_entities+entity_memory_links", self._migrate_v13),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -506,6 +507,103 @@ class DatabaseManager:
             backfilled += 1
         if backfilled:
             logger.info("database.migration_v12_backfill", rows=backfilled)
+
+    async def _migrate_v13(self) -> None:
+        """v13: mem0 SPEC 优化 — episodic_memories 新增 user_id/agent_id/is_raw + 实体链接三表。
+
+        - episodic_memories: user_id/agent_id/is_raw（ALTER TABLE 加列，SQLite 不锁表）
+        - memory_entities: 实体存储（与 KG 的 knowledge_entities 职责分离）
+        - memory_entities_fts: 实体名称全文索引 + 3 触发器
+        - entity_memory_links: 实体↔记忆反向链接
+        - idx_episodic_scope: scope 复合索引
+        - 回填现有记忆的 user_id/agent_id/is_raw 默认值
+        """
+        # 1. episodic_memories 新增 3 列（幂等：先检查列是否存在）
+        cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
+        if "user_id" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN user_id TEXT DEFAULT 'default'"
+            )
+        if "agent_id" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN agent_id TEXT DEFAULT 'xiaoda'"
+            )
+        if "is_raw" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN is_raw INTEGER DEFAULT 0"
+            )
+
+        # 2. 回填现有记忆的默认值（确保旧数据有 scope 字段）
+        await self._conn.execute(
+            "UPDATE episodic_memories SET user_id='default' WHERE user_id IS NULL OR user_id=''"
+        )
+        await self._conn.execute(
+            "UPDATE episodic_memories SET agent_id='xiaoda' WHERE agent_id IS NULL OR agent_id=''"
+        )
+        await self._conn.execute(
+            "UPDATE episodic_memories SET is_raw=0 WHERE is_raw IS NULL"
+        )
+
+        # 3. 新建 memory_entities 表
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS memory_entities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                entity_type TEXT DEFAULT 'TOPIC',
+                kind TEXT DEFAULT '',
+                observations TEXT DEFAULT '[]',
+                memory_count INTEGER DEFAULT 0,
+                first_seen REAL NOT NULL,
+                last_seen REAL NOT NULL,
+                metadata_json TEXT DEFAULT '{}',
+                UNIQUE(name, entity_type)
+            );
+            CREATE INDEX IF NOT EXISTS idx_memory_entities_name ON memory_entities(name);
+            CREATE INDEX IF NOT EXISTS idx_memory_entities_type ON memory_entities(entity_type);
+        """)
+
+        # 4. 新建 memory_entities_fts 虚拟表 + 触发器
+        await self._conn.executescript("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS memory_entities_fts USING fts5(
+                id UNINDEXED, name_index
+            );
+            CREATE TRIGGER IF NOT EXISTS memory_entities_fts_ai AFTER INSERT ON memory_entities BEGIN
+                INSERT INTO memory_entities_fts(id, name_index) VALUES (new.id, new.name);
+            END;
+            CREATE TRIGGER IF NOT EXISTS memory_entities_fts_ad AFTER DELETE ON memory_entities BEGIN
+                INSERT INTO memory_entities_fts(memory_entities_fts, id, name_index)
+                VALUES ('delete', old.id, old.name);
+            END;
+            CREATE TRIGGER IF NOT EXISTS memory_entities_fts_au AFTER UPDATE ON memory_entities BEGIN
+                INSERT INTO memory_entities_fts(memory_entities_fts, id, name_index)
+                VALUES ('delete', old.id, old.name);
+                INSERT INTO memory_entities_fts(id, name_index) VALUES (new.id, new.name);
+            END;
+        """)
+
+        # 5. 新建 entity_memory_links 表
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS entity_memory_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_id INTEGER NOT NULL,
+                memory_id INTEGER NOT NULL,
+                confidence REAL DEFAULT 1.0,
+                created_at REAL NOT NULL,
+                FOREIGN KEY (entity_id) REFERENCES memory_entities(id) ON DELETE CASCADE,
+                FOREIGN KEY (memory_id) REFERENCES episodic_memories(id) ON DELETE CASCADE,
+                UNIQUE(entity_id, memory_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_eml_entity ON entity_memory_links(entity_id);
+            CREATE INDEX IF NOT EXISTS idx_eml_memory ON entity_memory_links(memory_id);
+        """)
+
+        # 6. scope 复合索引
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_episodic_scope "
+            "ON episodic_memories(user_id, agent_id, is_raw, timestamp DESC)"
+        )
+
+        logger.info("database.migration_v13_mem0_spec_done")
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")
 
@@ -602,7 +700,10 @@ class DatabaseManager:
                 event_type TEXT DEFAULT '',
                 metadata_json TEXT DEFAULT '{}',
                 content_hash TEXT DEFAULT '',
-                version INTEGER DEFAULT 1
+                version INTEGER DEFAULT 1,
+                user_id TEXT DEFAULT 'default',
+                agent_id TEXT DEFAULT 'xiaoda',
+                is_raw INTEGER DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS memory_summaries (
@@ -955,6 +1056,12 @@ class DatabaseManager:
             CREATE INDEX IF NOT EXISTS idx_session_entries_sid ON session_entries(session_id);
             CREATE INDEX IF NOT EXISTS idx_session_entries_created ON session_entries(created_at);
             CREATE INDEX IF NOT EXISTS idx_tool_error_rules_tool ON tool_error_rules(tool_name);
+            CREATE INDEX IF NOT EXISTS idx_episodic_scope
+                ON episodic_memories(user_id, agent_id, is_raw, timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_memory_entities_name ON memory_entities(name);
+            CREATE INDEX IF NOT EXISTS idx_memory_entities_type ON memory_entities(entity_type);
+            CREATE INDEX IF NOT EXISTS idx_eml_entity ON entity_memory_links(entity_id);
+            CREATE INDEX IF NOT EXISTS idx_eml_memory ON entity_memory_links(memory_id);
         """)
 
     async def _seed_cleanup_config(self) -> None:
