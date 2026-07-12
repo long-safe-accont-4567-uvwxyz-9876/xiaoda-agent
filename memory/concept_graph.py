@@ -8,6 +8,7 @@ from loguru import logger
 
 from db.db_concept import ConceptDB
 from memory.key_extractor import KeyExtractor
+from memory.fsrs_model import estimate_initial_difficulty
 
 _SH_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -34,7 +35,8 @@ class ConceptGraph:
         return hashlib.md5(cleaned.encode("utf-8")).hexdigest()[:12]
 
     async def remember(self, text: str,
-                        source_mem_id: int | None = None) -> str:
+                        source_mem_id: int | None = None,
+                        emotion_label: str = "") -> str:
         """新记忆写入概念图
 
         1. 清理文本，生成 node_id
@@ -58,6 +60,8 @@ class ConceptGraph:
         keys = self.ke.extract(cleaned, is_query=False)
         now = datetime.now(_SH_TZ).isoformat()
 
+        difficulty = estimate_initial_difficulty(cleaned, emotion_label)
+
         await self.db.insert_node(
             id=node_id, text=cleaned,
             keys=json.dumps(keys, ensure_ascii=False),
@@ -66,6 +70,7 @@ class ConceptGraph:
             created=now, last_accessed=now,
             valid_from=now, valid_to=None,
             source_mem_id=source_mem_id,
+            difficulty=difficulty,
         )
 
         # auto_link
