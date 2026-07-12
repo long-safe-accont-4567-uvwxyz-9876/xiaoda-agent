@@ -41,6 +41,12 @@ DENDRO = "#7fd650"
 WISDOM = "#e8d5a3"
 MOON_DIM = "grey62"
 
+STAGE_TEXT = {
+    "thinking": "🌿 小妲正在想……",
+    "tool": "🛠 正在使用工具……",
+    "replying": "✍️ 正在回复……",
+}
+
 # IP-safe: 动态从 config/agents/*.json 读取 display_name，颜色/emoji 保留默认
 _AGENT_STYLE_DEFAULTS = {
     "xiaoda": (DENDRO, "🌿"), "xiaoli": ("#ff6b6b", "💥"),
@@ -48,10 +54,13 @@ _AGENT_STYLE_DEFAULTS = {
 }
 try:
     from config import get_agent_display_name, agent_names
+    from emotion.emoji_config import get_ack_message
     AGENT_LABELS = {}
     for _name in agent_names():
         _color, _emoji = _AGENT_STYLE_DEFAULTS.get(_name, (DENDRO, "🤖"))
         AGENT_LABELS[_name] = (get_agent_display_name(_name), _color, _emoji)
+    # ACK 消息使用自定义配置（随心即言）
+    STAGE_TEXT["thinking"] = get_ack_message("xiaoda")
 except ImportError:
     AGENT_LABELS = {
         "xiaoda": ("小妲", DENDRO, "🌿"),
@@ -81,12 +90,6 @@ BANNER = r"""
   / /|  / ___ |/ __  // // /_/ / ___ |
  /_/ |_/_/  |_/_/ /_/___/_____/_/  |_|
 """
-
-STAGE_TEXT = {
-    "thinking": "🌿 小妲正在想……",
-    "tool": "🛠 正在使用工具……",
-    "replying": "✍️ 正在回复……",
-}
 
 console = Console()
 
@@ -131,9 +134,7 @@ class NahidaCLI:
         return labels.get(name, (name, DENDRO, "🌿"))[0]
 
     def _stage_text(self, stage: str) -> str:
-        """返回阶段提示文案，thinking 阶段使用动态 agent 名。"""
-        if stage == "thinking":
-            return f"🌿 {self._agent_display_name('xiaoda')}正在想……"
+        """返回阶段提示文案，thinking 阶段使用自定义 ACK 配置。"""
         return STAGE_TEXT.get(stage, "🌿 处理中……")
 
     # ── 连接 ──────────────────────────────────────────

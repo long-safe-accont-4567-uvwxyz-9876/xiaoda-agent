@@ -6,12 +6,14 @@ Usage: python tests/benchmark_harness.py
 
 Also provides a pytest-compatible TestBenchmark class for CI integration.
 """
+import os
 import re
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+os.environ.setdefault("TEST_MODE", "true")  # B1: 避免测试日志污染生产日志
 
 # ── Project root and file lists ──────────────────────────────
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent

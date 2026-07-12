@@ -311,10 +311,12 @@ class ModelRouter:
         return {"provider": _CFG_DEFAULT_PROVIDER, "model_id": ROUTE_TABLE.get("chat", {}).get("model", _CFG_MODEL_NAME)}
 
     # 已知自定义 provider 的默认模型映射
+    # 注意：这些是 fallback 值，当 provider 的 default_model 为空时使用
+    # 建议通过 /models/health-check 端点定期验证这些模型ID是否仍然可用
     _CUSTOM_PROVIDER_DEFAULT_MODELS: ClassVar[dict[str, str]] = {
-        "siliconflow": "THUDM/GLM-Z1-9B-0414",
-        "openrouter": "meta-llama/llama-3.3-8b-instruct:free",
-        "modelscope": "THUDM/GLM-Z1-9B-0414",
+        "siliconflow": "THUDM/GLM-4-9B-0414",
+        "openrouter": "openrouter/free",
+        "modelscope": "Qwen/Qwen3-8B",
     }
 
     def _get_custom_provider_default_model(self, provider: str) -> str:
@@ -875,7 +877,7 @@ class ModelRouter:
             if finish_reason == "length":
                 logger.warning("llm.truncated_by_max_tokens",
                                model=model, task=task_type,
-                               content_len=content_len, max_tokens=mt,
+                               content_len=content_len,
                                finish_reason=finish_reason)
             elif finish_reason == "content_filter":
                 logger.warning("llm.content_filtered",
