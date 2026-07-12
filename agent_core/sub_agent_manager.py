@@ -78,11 +78,16 @@ class SubAgentManagerMixin:
         context_str = self._build_sub_agent_context()
         # 注入情绪标签规则：@ 直接对话模式下，子 Agent 回复需带 [emotion:xxx] 标签
         # 以触发专属表情包系统（delegate_task 工具调用不注入，保持"不加标签"）
+        # CancelToken 仅用于主动取消（timeout=None 不创建后台 timer task），
+        # 真正超时保护交给 asyncio.wait_for —— 避免 dispatch 卡住时超时假象。
+        token = CancelToken(timeout=None)
         try:
-            token = CancelToken(timeout=180.0)
-            token.check()
-            sub_reply = await self.dispatcher.dispatch(target, clean_input, context=context_str, status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term, extra_system_prompt=_SUB_AGENT_EMOTION_RULE)
-            token.check()
+            token.check()  # 检查是否已被主动取消
+            sub_reply = await asyncio.wait_for(
+                self.dispatcher.dispatch(target, clean_input, context=context_str, status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term, extra_system_prompt=_SUB_AGENT_EMOTION_RULE),
+                timeout=180.0,
+            )
+            token.check()  # 检查是否在 dispatch 期间被主动取消
             await event_bus.emit(AgentEvent(
                 type=AgentEventType.SUB_COMPLETED,
                 agent=target,
@@ -97,6 +102,7 @@ class SubAgentManagerMixin:
                 except Exception as e:
                     logger.debug("belief_router.update_failed agent={} error={}", target, str(e)[:100])
         except CancellationError:
+            # 主动取消
             await event_bus.emit(AgentEvent(
                 type=AgentEventType.SUB_CANCELLED,
                 agent=target,
@@ -104,6 +110,16 @@ class SubAgentManagerMixin:
                 data={"reason": "cancelled"},
             ))
             sub_reply = f"{display_name}被取消了"
+        except TimeoutError:
+            # asyncio.wait_for 超时——真正中断 dispatch
+            token.cancel("timeout")
+            await event_bus.emit(AgentEvent(
+                type=AgentEventType.SUB_CANCELLED,
+                agent=target,
+                task_id=task_id,
+                data={"reason": "timeout"},
+            ))
+            sub_reply = f"{display_name}处理超时了...等会儿再来吧！💤"
         except Exception as dispatch_err:
             await event_bus.emit(AgentEvent(
                 type=AgentEventType.SUB_FAILED,
@@ -119,6 +135,8 @@ class SubAgentManagerMixin:
                 except Exception as e:
                     logger.debug("belief_router.update_failed agent={} error={}", target, str(e)[:100])
             sub_reply = None
+        finally:
+            token.cleanup()
         if sub_reply is None:
             sub_reply = f"{display_name}现在有点累了...等会儿再来吧！💤"
 
@@ -336,6 +354,13 @@ class SubAgentManagerMixin:
                     task_id=task_id,
                     data={"reply_preview": ""},
                 ))
+                # BeliefRouter 反馈回路：None 视为失败
+                _br = getattr(self.context, "belief_router", None)
+                if _br:
+                    try:
+                        _br.update_belief(t, False)
+                    except Exception as e:
+                        logger.debug("belief_router.update_failed agent={} error={}", t, str(e)[:100])
                 return {"agent": t, "display_name": display_name,
                         "reply": f"{display_name}现在有点累了...等会儿再来吧！💤"}
             # 20.2: 子代理完成后将结果写入共享黑板，供父代理汇总或其他流程复用
