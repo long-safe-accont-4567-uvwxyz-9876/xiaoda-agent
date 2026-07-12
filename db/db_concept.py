@@ -31,18 +31,26 @@ class ConceptDB:
                           history: str = "[]",
                           origin: str = "{}",
                           source_mem_id: int | None = None,
-                          embedding=None) -> None:
+                          embedding=None,
+                          difficulty: float = 5.0,
+                          stability: float = 3.0,
+                          phase: str = "buffer",
+                          last_review: float = 0.0,
+                          reinforcement_count: int = 0) -> None:
         """插入概念节点。keys 为 JSON 字符串。"""
         now = created or _now_iso()
         await self._conn.execute(
             """INSERT OR REPLACE INTO concept_nodes
                (id, text, weight, peak_weight, confidence, access_count, keys,
                 layer, created, last_accessed, valid_from, valid_to,
-                superseded_by, history, origin, source_mem_id, embedding)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                superseded_by, history, origin, source_mem_id, embedding,
+                difficulty, stability, phase, last_review, reinforcement_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?, ?)""",
             (id, text, weight, peak_weight, confidence, access_count, keys,
              layer, now, last_accessed or now, valid_from or now, valid_to,
-             superseded_by, history, origin, source_mem_id, embedding),
+             superseded_by, history, origin, source_mem_id, embedding,
+             difficulty, stability, phase, last_review, reinforcement_count),
         )
         await self._conn.commit()
 

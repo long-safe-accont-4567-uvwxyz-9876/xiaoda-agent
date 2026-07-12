@@ -23,7 +23,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 14
+CURRENT_SCHEMA_VERSION = 15
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -214,6 +214,7 @@ class DatabaseManager:
             (12, "episodic_memories.content_hash+version+memory_versions+context_audit_log", self._migrate_v12),
             (13, "mem0_spec+bitemporal_facts_preferences+provenance+memory_edges", self._migrate_v13),
             (14, "v06_cognitive_tables+kg_v2_tables", self._migrate_v14),
+            (15, "fsrs_dsr_columns", self._migrate_v15),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -960,6 +961,91 @@ class DatabaseManager:
             SELECT id, fact FROM kg_relations_v2
             WHERE id NOT IN (SELECT id FROM kg_relations_v2_fts)
         """)
+
+    async def _migrate_v15(self) -> None:
+        """v15: FSRS-DSR 记忆模型 — 为 episodic_memories 和 concept_nodes 添加 FSRS 列。
+
+        episodic_memories 新增列:
+        - difficulty REAL DEFAULT 5.0   (FSRS 难度 D, 1-10)
+        - stability REAL DEFAULT 3.0   (FSRS 稳定性 S, 天)
+        - phase TEXT DEFAULT 'buffer'  (记忆阶段: buffer/reinforced/decayed/permanent/archived)
+        - last_review REAL DEFAULT 0   (上次复习时间戳)
+        - reinforcement_count INTEGER DEFAULT 0  (强化次数)
+
+        concept_nodes 新增列:
+        - difficulty REAL DEFAULT 5.0
+        - stability REAL DEFAULT 3.0
+        - phase TEXT DEFAULT 'buffer'
+        - last_review REAL DEFAULT 0
+        - reinforcement_count INTEGER DEFAULT 0
+
+        迁移策略:
+        - 旧数据统一 S=3.0, phase='buffer'
+        - access_count >= 5 的旧数据直接标记为 phase='permanent'
+        """
+        epi_cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
+        if "difficulty" not in epi_cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN difficulty REAL DEFAULT 5.0"
+            )
+        if "stability" not in epi_cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN stability REAL DEFAULT 3.0"
+            )
+        if "phase" not in epi_cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN phase TEXT DEFAULT 'buffer'"
+            )
+        if "last_review" not in epi_cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN last_review REAL DEFAULT 0"
+            )
+        if "reinforcement_count" not in epi_cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN reinforcement_count INTEGER DEFAULT 0"
+            )
+
+        concept_cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(concept_nodes)")]
+        if "difficulty" not in concept_cols:
+            await self._conn.execute(
+                "ALTER TABLE concept_nodes ADD COLUMN difficulty REAL DEFAULT 5.0"
+            )
+        if "stability" not in concept_cols:
+            await self._conn.execute(
+                "ALTER TABLE concept_nodes ADD COLUMN stability REAL DEFAULT 3.0"
+            )
+        if "phase" not in concept_cols:
+            await self._conn.execute(
+                "ALTER TABLE concept_nodes ADD COLUMN phase TEXT DEFAULT 'buffer'"
+            )
+        if "last_review" not in concept_cols:
+            await self._conn.execute(
+                "ALTER TABLE concept_nodes ADD COLUMN last_review REAL DEFAULT 0"
+            )
+        if "reinforcement_count" not in concept_cols:
+            await self._conn.execute(
+                "ALTER TABLE concept_nodes ADD COLUMN reinforcement_count INTEGER DEFAULT 0"
+            )
+
+        # 旧数据迁移：access_count >= 5 → permanent
+        await self._conn.execute(
+            """UPDATE episodic_memories SET phase = 'permanent'
+               WHERE access_count >= 5 AND phase = 'buffer'"""
+        )
+        await self._conn.execute(
+            """UPDATE concept_nodes SET phase = 'permanent'
+               WHERE access_count >= 5 AND phase = 'buffer'"""
+        )
+
+        # 索引
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_epi_phase ON episodic_memories(phase)"
+        )
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_concept_phase ON concept_nodes(phase)"
+        )
+
+        logger.info("database.migration_v15_fsrs_dsr_done")
 
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")

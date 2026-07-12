@@ -1164,3 +1164,29 @@ class MemoryDB:
             )
             await self._conn.commit()
         return len(child_ids)
+
+    async def update_fsrs_state(self, memory_id: int, difficulty: float,
+                                 stability: float, phase: str,
+                                 last_review: float,
+                                 reinforcement_count: int,
+                                 auto_commit: bool = True) -> None:
+        await self._conn.execute(
+            """UPDATE episodic_memories
+               SET difficulty=?, stability=?, phase=?, last_review=?,
+                   reinforcement_count=?
+               WHERE id=?""",
+            (difficulty, stability, phase, last_review, reinforcement_count, memory_id),
+        )
+        if auto_commit:
+            await self._conn.commit()
+
+    async def get_memories_since(self, since_ts: float,
+                                  limit: int = 200) -> list[dict]:
+        cursor = await self._conn.execute(
+            """SELECT * FROM episodic_memories
+               WHERE timestamp >= ? AND session_id != 'archived'
+               ORDER BY timestamp DESC LIMIT ?""",
+            (since_ts, limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
