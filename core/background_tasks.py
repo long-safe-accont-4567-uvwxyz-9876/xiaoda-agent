@@ -46,6 +46,7 @@ def _spawn(coro: Any) -> None:
     """创建 fire-and-forget 后台任务，自动从 _bg_tasks 中移除已完成的任务。
 
     包含耗时监控：任务完成时记录执行时长，超过 30s 发出告警日志。
+    包含 loop 保护：同步上下文调用时降级日志而非崩溃。
     """
     task_name = getattr(coro, '__name__', coro.__class__.__name__)
     start_time = time.time()
@@ -60,7 +61,14 @@ def _spawn(coro: Any) -> None:
             else:
                 logger.debug("bg.task_done name={} elapsed={:.1f}s", task_name, elapsed)
 
-    task = asyncio.create_task(_wrapped())
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.error("bg.spawn_no_loop: cannot create task without running event loop, "
+                     "task={} will be dropped", task_name)
+        coro.close()
+        return
+    task = loop.create_task(_wrapped())
     _bg_tasks.add(task)
     task.add_done_callback(_on_bg_task_done)
 
