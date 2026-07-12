@@ -26,6 +26,17 @@ from typing import Any
 
 from loguru import logger
 
+# J-Space Hook: 行为信号流采集 (非阻塞, 失败不影响主流程)
+try:
+    from config import ENABLE_J_SPACE_HOOKS
+    if ENABLE_J_SPACE_HOOKS:
+        from core.behavioral_signal import BehavioralSignalStream
+        _signal_stream: "BehavioralSignalStream | None" = None
+    else:
+        _signal_stream = None
+except ImportError:
+    _signal_stream = None
+
 
 # ============================================================
 # 状态数据结构
@@ -125,6 +136,20 @@ class AgentIntrospector:
 
         # 最后一次错误 (来自 agent._error_handler 或 self_diagnostic)
         self._collect_last_error(state)
+
+        # J-Space Hook: emit cognitive_load signal (non-blocking)
+        if _signal_stream is not None:
+            try:
+                import asyncio
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+                if loop is not None:
+                    loop.create_task(_signal_stream.emit(
+                        "cognitive_load", state.cognitive_load, "introspection"))
+            except Exception:
+                pass
 
         return state
 
