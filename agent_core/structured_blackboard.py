@@ -9,7 +9,6 @@
 """
 from dataclasses import dataclass, field
 from typing import Any
-from loguru import logger
 
 from agent_core.shared_blackboard import SharedBlackboard
 

@@ -111,6 +111,7 @@ class EmotionState:
                 emotion_offset = context.get("emotion_offset", 0.0) if context else 0.0
                 if emotion_offset != 0.0:
                     # 调整情绪状态
+                    # TODO(phase-2): apply emotion_offset direction to emotion state
                     pass
         except Exception:
             pass

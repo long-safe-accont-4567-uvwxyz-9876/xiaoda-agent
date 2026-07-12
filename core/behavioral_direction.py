@@ -34,7 +34,7 @@ class DirectionVector:
             dimensions={k: v * scalar for k, v in self.dimensions.items()},
             source=self.source,
             magnitude=self.magnitude * scalar,
-            meta=self.meta,
+            meta=dict(self.meta),
         )
 
     def __add__(self, other: "DirectionVector") -> "DirectionVector":

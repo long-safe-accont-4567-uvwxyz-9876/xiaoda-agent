@@ -15,7 +15,6 @@ SAE 将 d_model 维残差流编码为 d_sae 维稀疏特征:
 - SAELens/sae_lens/training/activations_store.py: ActivationsStore
 """
 from dataclasses import dataclass, field
-from typing import Any
 from loguru import logger
 
 

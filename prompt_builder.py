@@ -1298,6 +1298,7 @@ def build_system_prompt(extra_context: str = "", address_term: str = "爸爸",
             prompt_modifier = context.get("prompt_modifier", 0.0) if context else 0.0
             if prompt_modifier > 0:
                 # 根据 prompt_modifier 调整 prompt
+                # TODO(phase-2): apply prompt_modifier to system prompt
                 pass
     except Exception:
         pass

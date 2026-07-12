@@ -12,7 +12,6 @@
                  + alpha * direction_bias(task_type, agent)
                  + beta * signal_adjustment(agent, recent_signals)
 """
-from typing import Any
 from loguru import logger
 
 from core.behavioral_signal import BehavioralSignalStream

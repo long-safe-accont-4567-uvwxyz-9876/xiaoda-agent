@@ -162,3 +162,54 @@ async def test_hook_non_blocking_on_emit_failure():
         score = scorer.calculate({"p99_latency_ms": 800})
         assert score is not None
         await asyncio.sleep(0.05)
+
+
+# ============================================================
+# C1 regression: bootstrap wiring
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_bootstrap_wires_hooks():
+    """C1 regression: init_j_space() must wire components to all Hook modules."""
+    from core.j_space_bootstrap import init_j_space, get_signal_stream, get_intervention_loop
+    import core.agent_introspection as _ai
+    import core.behavioral_health as _bh
+    import agent_dispatcher as _ad
+    import core.degradation_strategy as _ds
+    import memory.cognitive_memory as _cm
+    import belief_router as _br
+
+    # Save original state
+    orig = {
+        "ai": _ai._signal_stream,
+        "bh": _bh._signal_stream,
+        "ad_s": _ad._signal_stream,
+        "ad_i": _ad._intervention_loop,
+        "ds": _ds._signal_stream,
+        "cm": _cm._structured_blackboard,
+        "br": _br._enhanced_router,
+    }
+    try:
+        init_j_space()
+
+        # Bootstrap components created
+        assert get_signal_stream() is not None
+        assert get_intervention_loop() is not None
+
+        # Hook modules wired
+        assert _ai._signal_stream is not None
+        assert _bh._signal_stream is not None
+        assert _ad._signal_stream is not None
+        assert _ad._intervention_loop is not None
+        assert _ds._signal_stream is not None
+        assert _cm._structured_blackboard is not None
+        assert _br._enhanced_router is not None
+    finally:
+        # Restore original state to avoid polluting other tests
+        _ai._signal_stream = orig["ai"]
+        _bh._signal_stream = orig["bh"]
+        _ad._signal_stream = orig["ad_s"]
+        _ad._intervention_loop = orig["ad_i"]
+        _ds._signal_stream = orig["ds"]
+        _cm._structured_blackboard = orig["cm"]
+        _br._enhanced_router = orig["br"]

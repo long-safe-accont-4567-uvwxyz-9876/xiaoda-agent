@@ -298,6 +298,7 @@ class DegradationStrategy:
                 health_score = _signal_stream.aggregate("health", "mean_of_means")
                 if health_score < 0.3:
                     # 触发额外降级
+                    # TODO(phase-2): trigger signal-driven degradation
                     pass
         except Exception:
             pass

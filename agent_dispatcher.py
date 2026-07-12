@@ -400,6 +400,7 @@ class SubAgent:
                 interventions = await _intervention_loop.evaluate({})
                 for intervention in interventions:
                     # 应用干预到上下文
+                    # TODO(phase-2): apply intervention to context
                     pass  # 实际应用取决于上下文结构
             except Exception:
                 pass
