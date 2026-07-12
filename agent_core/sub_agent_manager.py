@@ -16,6 +16,8 @@ from emotion.emotion_simple import detect_emotion
 from emotion.emotion_enum import CN_TO_EN
 from utils.text_utils import humanize
 from core.degradation_strategy import get_degradation_strategy
+from core.event_bus import event_bus, AgentEvent, AgentEventType, gen_task_id
+from core.cancel_token import CancelToken, CancellationError
 
 from agent_core._shared import ProcessResult, _current_request_ctx, RequestContext
 
@@ -65,11 +67,58 @@ class SubAgentManagerMixin:
             return ProcessResult(reply=f"{sub_agent.config.display_name if sub_agent else target}现在有点累了...等会儿再来吧！💤")
 
         display_name = sub_agent.config.display_name
+        task_id = gen_task_id(target)
+        await event_bus.emit(AgentEvent(
+            type=AgentEventType.SUB_STARTED,
+            agent=target,
+            task_id=task_id,
+            data={"display_name": display_name, "input_preview": clean_input[:50]},
+        ))
         trace.info("agent.chat_target_sub", target=target, input_preview=clean_input[:50])
         context_str = self._build_sub_agent_context()
         # 注入情绪标签规则：@ 直接对话模式下，子 Agent 回复需带 [emotion:xxx] 标签
         # 以触发专属表情包系统（delegate_task 工具调用不注入，保持"不加标签"）
-        sub_reply = await self.dispatcher.dispatch(target, clean_input, context=context_str, status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term, extra_system_prompt=_SUB_AGENT_EMOTION_RULE)
+        try:
+            token = CancelToken(timeout=180.0)
+            token.check()
+            sub_reply = await self.dispatcher.dispatch(target, clean_input, context=context_str, status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term, extra_system_prompt=_SUB_AGENT_EMOTION_RULE)
+            token.check()
+            await event_bus.emit(AgentEvent(
+                type=AgentEventType.SUB_COMPLETED,
+                agent=target,
+                task_id=task_id,
+                data={"reply_preview": (sub_reply or "")[:100]},
+            ))
+            # BeliefRouter 反馈回路
+            _br = getattr(self.context, "belief_router", None)
+            if _br:
+                try:
+                    _br.update_belief(target, bool(sub_reply and sub_reply.strip()))
+                except Exception:
+                    pass
+        except CancellationError:
+            await event_bus.emit(AgentEvent(
+                type=AgentEventType.SUB_CANCELLED,
+                agent=target,
+                task_id=task_id,
+                data={"reason": "cancelled"},
+            ))
+            sub_reply = f"{display_name}被取消了"
+        except Exception as dispatch_err:
+            await event_bus.emit(AgentEvent(
+                type=AgentEventType.SUB_FAILED,
+                agent=target,
+                task_id=task_id,
+                data={"error": str(dispatch_err)[:200]},
+            ))
+            # BeliefRouter 反馈回路
+            _br = getattr(self.context, "belief_router", None)
+            if _br:
+                try:
+                    _br.update_belief(target, False)
+                except Exception:
+                    pass
+            sub_reply = None
         if sub_reply is None:
             sub_reply = f"{display_name}现在有点累了...等会儿再来吧！💤"
 
@@ -266,6 +315,13 @@ class SubAgentManagerMixin:
                     return {"agent": t, "display_name": display_name, "reply": cached}
             except Exception as e:
                 logger.debug("blackboard.get_failed key={} error={}", task_key, e)
+        task_id = gen_task_id(t)
+        await event_bus.emit(AgentEvent(
+            type=AgentEventType.SUB_STARTED,
+            agent=t,
+            task_id=task_id,
+            data={"display_name": display_name, "input_preview": sub_task[:50]},
+        ))
         try:
             reply = await asyncio.wait_for(
                 self.dispatcher.dispatch(t, sub_task, context=sub_context, status_callback=None, address_term=self.context.current_address_term),
@@ -274,6 +330,12 @@ class SubAgentManagerMixin:
             if reply is None:
                 # 降级回复不缓存（与 delegate_to_agent / delegate_to_xiaoli 行为一致），
                 # 避免后续 10 分钟内对同一任务持续返回降级文案
+                await event_bus.emit(AgentEvent(
+                    type=AgentEventType.SUB_COMPLETED,
+                    agent=t,
+                    task_id=task_id,
+                    data={"reply_preview": ""},
+                ))
                 return {"agent": t, "display_name": display_name,
                         "reply": f"{display_name}现在有点累了...等会儿再来吧！💤"}
             # 20.2: 子代理完成后将结果写入共享黑板，供父代理汇总或其他流程复用
@@ -282,8 +344,34 @@ class SubAgentManagerMixin:
                     await bb.put(task_key, reply, agent_name=t)
                 except Exception as e:
                     logger.debug("blackboard.put_failed key={} error={}", task_key, e)
+            await event_bus.emit(AgentEvent(
+                type=AgentEventType.SUB_COMPLETED,
+                agent=t,
+                task_id=task_id,
+                data={"reply_preview": reply[:100]},
+            ))
+            # BeliefRouter 反馈回路
+            _br = getattr(self.context, "belief_router", None)
+            if _br:
+                try:
+                    _br.update_belief(t, bool(reply and reply.strip()))
+                except Exception:
+                    pass
             return {"agent": t, "display_name": display_name, "reply": reply}
         except TimeoutError:
+            await event_bus.emit(AgentEvent(
+                type=AgentEventType.SUB_FAILED,
+                agent=t,
+                task_id=task_id,
+                data={"error": "timeout"},
+            ))
+            # BeliefRouter 反馈回路
+            _br = getattr(self.context, "belief_router", None)
+            if _br:
+                try:
+                    _br.update_belief(t, False)
+                except Exception:
+                    pass
             return {"agent": t, "display_name": display_name,
                     "reply": f"{display_name}处理超时", "error": True}
         except Exception as e:
@@ -296,6 +384,19 @@ class SubAgentManagerMixin:
                            retryable=classified.is_retryable,
                            backoff=f"{classified.backoff_seconds:.1f}s",
                            error=str(e))
+            await event_bus.emit(AgentEvent(
+                type=AgentEventType.SUB_FAILED,
+                agent=t,
+                task_id=task_id,
+                data={"error": str(e)[:200]},
+            ))
+            # BeliefRouter 反馈回路
+            _br = getattr(self.context, "belief_router", None)
+            if _br:
+                try:
+                    _br.update_belief(t, False)
+                except Exception:
+                    pass
             return {"agent": t, "display_name": display_name,
                     "reply": f"处理出错: {e}", "error": True}
 
@@ -429,10 +530,47 @@ class SubAgentManagerMixin:
         context = self._build_sub_agent_context(task_hint=task)
         import time as _time_mod
         _t0 = _time_mod.time()
-        result = await asyncio.wait_for(self.dispatcher.dispatch(
-            name, task, context=context,
-            status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term), timeout=180)
-        _duration = _time_mod.time() - _t0
+        task_id = gen_task_id(name)
+        await event_bus.emit(AgentEvent(
+            type=AgentEventType.SUB_STARTED,
+            agent=name,
+            task_id=task_id,
+            data={"display_name": agent.config.display_name, "input_preview": task[:50]},
+        ))
+        try:
+            result = await asyncio.wait_for(self.dispatcher.dispatch(
+                name, task, context=context,
+                status_callback=_ctx.status_callback if _ctx else None, address_term=self.context.current_address_term), timeout=180)
+            _duration = _time_mod.time() - _t0
+            await event_bus.emit(AgentEvent(
+                type=AgentEventType.SUB_COMPLETED,
+                agent=name,
+                task_id=task_id,
+                data={"reply_preview": (result or "")[:100]},
+            ))
+            # BeliefRouter 反馈回路
+            _br = getattr(self.context, "belief_router", None)
+            if _br:
+                try:
+                    _br.update_belief(name, bool(result and result.strip()))
+                except Exception:
+                    pass
+        except Exception as dispatch_err:
+            _duration = _time_mod.time() - _t0
+            await event_bus.emit(AgentEvent(
+                type=AgentEventType.SUB_FAILED,
+                agent=name,
+                task_id=task_id,
+                data={"error": str(dispatch_err)[:200]},
+            ))
+            # BeliefRouter 反馈回路
+            _br = getattr(self.context, "belief_router", None)
+            if _br:
+                try:
+                    _br.update_belief(name, False)
+                except Exception:
+                    pass
+            raise
         # I7: 记录子 Agent 工作履历 (供路由器智能调度)
         try:
             from core.agent_work_record import get_work_recorder
