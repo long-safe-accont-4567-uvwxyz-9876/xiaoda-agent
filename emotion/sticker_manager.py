@@ -186,9 +186,8 @@ class StickerManager:
         """
         if not self._cache:
             return False
-        # 有明确情绪时高概率发送，neutral/无情绪时也保持 80% 概率
-        # （日常对话大多为 neutral，50% 会导致整体发送率仅约 60%，低于 80% 目标）
-        prob = 0.85 if detected_emotion and detected_emotion != "neutral" else 0.8
+        # 统一 90% 概率发送表情包
+        prob = 0.9
         return random.random() < prob
 
     def get_sticker(self, emotion: str = "") -> Path | None:

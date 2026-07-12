@@ -575,13 +575,9 @@ class AIQQBot(botpy.Client):
             await message.reply(content=get_ack_message('xiaoda'), msg_seq=_next_msg_seq())
 
             async def status_notify(msg) -> None:
-                # tool_call_handler._notify_tool_status 传入 dict 类型（工具状态），
-                # 不应直接发送到 QQ（会导致 content 类型错误），静默处理
-                if isinstance(msg, dict):
-                    return
-                if not isinstance(msg, str) or not msg:
-                    return
-                await message.reply(content=msg, msg_seq=_next_msg_seq())
+                # 所有中间状态消息（工具状态、进度提示等）不发送到 QQ
+                # 实际回复通过 _send_reply_with_sticker / _send_streaming_reply 发送
+                return
 
             # 绑定 QQUser 到 EventBus
             async def _qq_reply(content: str, msg_seq: int = 0) -> None:
