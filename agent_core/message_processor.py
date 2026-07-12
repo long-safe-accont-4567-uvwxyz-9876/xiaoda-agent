@@ -284,11 +284,19 @@ class MessageProcessorMixin:
         # LLM 调用
         reply = await self._call_fast_path_llm(messages, user_openid, session_id)
 
+        # 截断检测：回复过短且未以句末标点结尾时，记录告警
+        if reply and len(reply) < 50:
+            _end = reply[-5:] if len(reply) >= 5 else reply
+            if not any(reply.endswith(c) for c in "。！？～…）」】\n"):
+                logger.warning("chat.fast_path_truncated",
+                               reply_len=len(reply), reply_tail=_end)
+
         # 后处理
         result = await self._finalize_fast_path_reply(
             reply, user_input, is_master, user_id, source, emotion,
             emotion_label, ctx, user_openid, session_id, force_voice)
-        trace.info("agent.fast_path.done", reply_preview=result.reply[:100])
+        trace.info("agent.fast_path.done", reply_preview=result.reply[:100],
+                   reply_len=len(result.reply))
         return result
 
     async def _build_fast_path_messages(self, user_input: Any, is_master: Any,
@@ -655,7 +663,8 @@ class MessageProcessorMixin:
         except Exception as e:
             logger.error("费用统计刷新失败，可能丢失费用数据: {}", str(e))
 
-        trace.info("agent.process.done", reply_preview=reply[:100])
+        trace.info("agent.process.done", reply_preview=reply[:100],
+                   reply_len=len(reply))
 
         # 情绪标签
         if is_unified():
@@ -1322,7 +1331,9 @@ class MessageProcessorMixin:
             if response:
                 learner.save_insight(user_id, str(response), xp_level)
         except Exception as e:
-            logger.warning("profile_learner.insight_failed: {}", str(e))
+            # A5 修复：使用结构化日志添加 error_type，便于排查空错误消息
+            logger.warning("profile_learner.insight_failed",
+                           error=str(e), error_type=type(e).__name__)
 
     async def _describe_images(self, image_data: list[dict]) -> str:
         """使用 MiMo Vision API 识别图片内容"""

@@ -198,3 +198,36 @@ class TestToolExecutionGatherTimeout:
                 asyncio.gather(slow_tool()),
                 timeout=0.1
             )
+
+
+class TestTruncationDetection:
+    """测试回复截断检测"""
+
+    def test_chat_max_tokens_increased(self):
+        """chat 路由的 max_tokens 应从 1500 提升到 2048"""
+        from model_router import ROUTE_TABLE
+        assert ROUTE_TABLE["chat"]["max_tokens"] >= 2048, \
+            f"chat max_tokens 应 >= 2048，当前为 {ROUTE_TABLE['chat']['max_tokens']}"
+
+    def test_chat_flash_max_tokens_increased(self):
+        """chat_flash 路由的 max_tokens 应从 1000 提升到 1200"""
+        from model_router import ROUTE_TABLE
+        assert ROUTE_TABLE["chat_flash"]["max_tokens"] >= 1200, \
+            f"chat_flash max_tokens 应 >= 1200，当前为 {ROUTE_TABLE['chat_flash']['max_tokens']}"
+
+    def test_fast_path_logs_reply_len(self):
+        """fast_path.done 日志应包含 reply_len 字段"""
+        import inspect
+        import agent_core.message_processor as mp_mod
+        source = inspect.getsource(mp_mod)
+        assert "reply_len" in source, "fast_path 日志应包含 reply_len 字段"
+
+    def test_model_router_checks_finish_reason(self):
+        """model_router 应检查 finish_reason 并记录截断告警"""
+        import inspect
+        from model_router import ModelRouter
+        source = inspect.getsource(ModelRouter._handle_route_response)
+        assert "finish_reason" in source, \
+            "_handle_route_response 应检查 finish_reason"
+        assert "truncated_by_max_tokens" in source, \
+            "应有 truncated_by_max_tokens 告警日志"
