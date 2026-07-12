@@ -9,6 +9,17 @@ from dataclasses import dataclass
 from loguru import logger
 from utils.atomic_write import atomic_json_write
 
+# J-Space Hook: 增强型路由 (非阻塞, 失败不影响主流程)
+try:
+    from config import ENABLE_J_SPACE_HOOKS
+    if ENABLE_J_SPACE_HOOKS:
+        from core.enhanced_router import EnhancedBeliefRouter
+        _enhanced_router: "EnhancedBeliefRouter | None" = None
+    else:
+        _enhanced_router = None
+except ImportError:
+    _enhanced_router = None
+
 
 @dataclass
 class AgentBelief:
@@ -79,6 +90,15 @@ class BeliefRouter:
         Returns:
             The name of the selected agent.
         """
+        # J-Space Hook: 增强型路由（可选）
+        try:
+            from config import ENABLE_J_SPACE_HOOKS
+            if ENABLE_J_SPACE_HOOKS and _enhanced_router is not None:
+                return _enhanced_router.select_agent(exclude=exclude)
+        except Exception:
+            pass
+        # 原始 Thompson Sampling 逻辑继续
+
         candidates = [a for a in self.VALID_AGENTS if a not in (exclude or set())]
         if not candidates:
             return "xiaoda"

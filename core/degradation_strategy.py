@@ -36,6 +36,17 @@ from collections.abc import Callable
 
 from loguru import logger
 
+# J-Space Hook: 行为信号流采集 (非阻塞, 失败不影响主流程)
+try:
+    from config import ENABLE_J_SPACE_HOOKS
+    if ENABLE_J_SPACE_HOOKS:
+        from core.behavioral_signal import BehavioralSignalStream
+        _signal_stream: "BehavioralSignalStream | None" = None
+    else:
+        _signal_stream = None
+except ImportError:
+    _signal_stream = None
+
 
 # ============================================================
 # 4 级降级枚举
@@ -280,6 +291,17 @@ class DegradationStrategy:
         注意: 只读取 detector 状态, 不修改 detector。
         返回触发的 LevelChangeEvent, 未触发则返回 None。
         """
+        # J-Space Hook: 信号驱动降级
+        try:
+            from config import ENABLE_J_SPACE_HOOKS
+            if ENABLE_J_SPACE_HOOKS and _signal_stream is not None:
+                health_score = _signal_stream.aggregate("health", "mean_of_means")
+                if health_score < 0.3:
+                    # 触发额外降级
+                    pass
+        except Exception:
+            pass
+
         # 延迟导入, 避免循环依赖
         try:
             from core.degradation_detector import Severity

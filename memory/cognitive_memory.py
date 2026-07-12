@@ -21,6 +21,17 @@ from loguru import logger
 from memory.hopfield_layer import HopfieldLayer
 from memory.salience import SalienceScorer
 
+# J-Space Hook: 结构化共享黑板 (非阻塞, 失败不影响主流程)
+try:
+    from config import ENABLE_J_SPACE_HOOKS
+    if ENABLE_J_SPACE_HOOKS:
+        from agent_core.structured_blackboard import StructuredBlackboard
+        _structured_blackboard: "StructuredBlackboard | None" = None
+    else:
+        _structured_blackboard = None
+except ImportError:
+    _structured_blackboard = None
+
 
 @dataclass
 class MemoryEntry:
@@ -108,6 +119,16 @@ class CognitiveMemory:
         self._episodic.append(entry)
         self._episodic_index[entry.id] = entry
         self._next_episodic_id += 1
+
+        # J-Space Hook: 结构化存储
+        try:
+            from config import ENABLE_J_SPACE_HOOKS
+            if ENABLE_J_SPACE_HOOKS and _structured_blackboard is not None:
+                await _structured_blackboard.put_structured(
+                    str(entry.id), content, agent_name=session_id,
+                    tags=["memory"], direction="memory")
+        except Exception:
+            pass
 
         # 自动整合检查
         if self.episodic_occupancy() > self.AUTO_CONSOLIDATE_THRESHOLD:
