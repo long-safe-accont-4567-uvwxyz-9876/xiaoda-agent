@@ -156,8 +156,23 @@ class StickerManager:
         return ""
 
     def strip_emotion_tag(self, text: str) -> str:
-        """移除文本中的 [emotion:xxx] 标签."""
-        return re.sub(r'\[emotion:[^\]]*\]', '', text).rstrip()
+        """移除文本中的情绪/表情包标签.
+
+        支持以下格式：
+        - [emotion:xxx] — 标准情绪标签
+        - [playful/stickers:xxx] — LLM 幻觉的 sticker 路径标签
+        - [happy], [sad], [playful] 等 — 纯情绪词标签
+        - [playful/sti — 未闭合的截断标签
+        """
+        # 标准格式 [emotion:xxx]
+        text = re.sub(r'\[emotion:[^\]]*\]', '', text)
+        # LLM 幻觉格式 [playful/stickers:xxx /emotions/xxx.png]
+        text = re.sub(r'\[\w+/stickers:[^\]]*\]', '', text)
+        # 纯情绪词标签 [happy] [sad] [playful] 等（仅匹配已知情绪词）
+        text = re.sub(r'\[(?:happy|excited|sad|angry|shy|surprised|fear|neutral|greeting|caring|playful|lonely|thinking)\]', '', text)
+        # 未闭合的截断标签 [playful/sti 或 [emotion:ha 等
+        text = re.sub(r'\[(?:emotion:|playful/|excited/|happy/|sad/)\S*$', '', text)
+        return text.rstrip()
 
     def should_send(self, text: str, detected_emotion: str = "") -> bool:
         """按概率决定是否发送表情包 (有明确情绪时概率更高).
