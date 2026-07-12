@@ -1031,3 +1031,10 @@ def __getattr__(name: str) -> Any:
         globals()[name] = value  # 缓存, 下次直接访问
         return value
     raise AttributeError(f"module 'config' has no attribute {name!r}")
+
+
+# ── J-Space 架构优化配置 ──────────────────────────────────────
+ENABLE_J_SPACE_HOOKS = os.getenv("ENABLE_J_SPACE_HOOKS", "true").lower() == "true"
+DIRECTION_REGISTRY_PATH = os.getenv("DIRECTION_REGISTRY_PATH", str(DATA_DIR / "direction_registry.json"))
+SIGNAL_STREAM_MAX_HISTORY = int(os.getenv("SIGNAL_STREAM_MAX_HISTORY", "1000"))
+INTERVENTION_DEFAULT_COOLDOWN = float(os.getenv("INTERVENTION_DEFAULT_COOLDOWN", "30.0"))
