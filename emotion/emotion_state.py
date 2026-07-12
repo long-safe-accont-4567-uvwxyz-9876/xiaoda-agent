@@ -50,12 +50,14 @@ class EmotionState:
         )
         self._load()
 
-    def update(self, emotion: str, intensity: float = 0.5) -> None:
+    def update(self, emotion: str, intensity: float = 0.5,
+               context: dict | None = None) -> None:
         """更新情绪状态。
 
         Args:
             emotion: 情绪名（happy/sad/angry 等）
             intensity: 情绪强度 0.0-1.0
+            context: J-Space 方向上下文（可选，用于 Hook #4 方向控制情绪）
         """
         if not emotion or emotion == "neutral":
             # neutral 不替换当前情绪，只让强度衰减更快
@@ -99,6 +101,19 @@ class EmotionState:
 
             logger.debug("emotion_state.updated",
                          emotion=self._current, intensity=f"{self._intensity:.2f}")
+
+        # J-Space Hook: 方向控制情绪
+        try:
+            from config import ENABLE_J_SPACE_HOOKS
+            if ENABLE_J_SPACE_HOOKS:
+                from core.behavioral_direction import DirectionVector
+                # 应用 emotion_offset 方向
+                emotion_offset = context.get("emotion_offset", 0.0) if context else 0.0
+                if emotion_offset != 0.0:
+                    # 调整情绪状态
+                    pass
+        except Exception:
+            pass
 
         # 异步持久化（不阻塞主流程）
         try:

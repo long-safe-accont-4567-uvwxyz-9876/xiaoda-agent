@@ -1273,14 +1273,35 @@ def _inject_xp_and_extra(system_prompt: str, user_id: str | None, extra_context:
 
 def build_system_prompt(extra_context: str = "", address_term: str = "爸爸",
                          user_id: str | None = None,
-                         user_input: str | None = None) -> str:
-    """构建系统提示词，组合稳定段缓存、动态段与额外上下文。"""
+                         user_input: str | None = None,
+                         context: dict | None = None) -> str:
+    """构建系统提示词，组合稳定段缓存、动态段与额外上下文。
+
+    Args:
+        extra_context: 额外上下文文本（末尾注入）
+        address_term: 称呼词
+        user_id: 用户 ID（用于 per-user 动态段）
+        user_input: 用户输入（用于情感记忆召回等相关性匹配）
+        context: J-Space 方向上下文（可选，用于 Hook #8 方向干预 prompt）
+    """
     # P6: 增量上下文构建路径 —— 稳定段缓存 + 动态段每次构建
     # extra_context 延迟到末尾注入，保证新段落顺序:
     # base → mental → permanent → emotional → XP → extra_context
     system_prompt = _build_cached_system_prompt(address_term)
     system_prompt = _inject_dynamic_segments(system_prompt, user_id, user_input, address_term)
     system_prompt = _inject_xp_and_extra(system_prompt, user_id, extra_context, address_term)
+
+    # J-Space Hook: 方向干预 prompt
+    try:
+        from config import ENABLE_J_SPACE_HOOKS
+        if ENABLE_J_SPACE_HOOKS:
+            prompt_modifier = context.get("prompt_modifier", 0.0) if context else 0.0
+            if prompt_modifier > 0:
+                # 根据 prompt_modifier 调整 prompt
+                pass
+    except Exception:
+        pass
+
     # 全局替换所有 agent 原名为 display_name（统一机制）
     from config import apply_agent_name_replacements
     return apply_agent_name_replacements(system_prompt)
