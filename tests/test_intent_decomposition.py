@@ -74,7 +74,7 @@ async def test_sparsity():
 @pytest.mark.asyncio
 async def test_residual():
     decomposer = IntentDecomposer()
-    output = "hello world"  # 无匹配意图
+    output = "qwerty asdf zxcv"  # 无匹配意图
     result = await decomposer.encode(output)
     assert result.residual == 1.0
 
