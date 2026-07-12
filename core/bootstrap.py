@@ -71,6 +71,13 @@ class AgentCoreBootstrapper:
             _ensure_workspace_template()
             await self._init_cognitive()
 
+        # J-Space 架构优化初始化（非阻塞，失败不影响主流程）
+        try:
+            from core.j_space_bootstrap import init_j_space
+            init_j_space()
+        except Exception as e:
+            logger.warning(f"j_space.bootstrap_failed (non-blocking): {e}")
+
         # 共享黑板后台清理任务（避免过期条目堆积，惰性清理之外的周期兜底）
         try:
             if self.core._shared_blackboard is not None:
