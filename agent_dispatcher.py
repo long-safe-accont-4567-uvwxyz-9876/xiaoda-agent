@@ -765,12 +765,7 @@ class SubAgent:
         if isinstance(last_tool, dict) and last_tool.get("role") == "tool":
             working.append({
                 "role": "system",
-                "content": f"你已经调用了工具并拿到了结果。现在请基于工具返回的数据，用{self.config.display_name}的风格做总结回复。\n\n"
-                f"回复结构要求：\n"
-                f"1. 首先明确说明执行了什么操作（如「搜索了XX」「查看了XX」），不要用「数据加载完毕」这种模糊表述\n"
-                f"2. 然后用自然语言描述关键结果，数据要清楚明确\n"
-                f"3. 最后可以加一句个性化评论\n\n"
-                f"不要只复制原始数据，要用自然语言解释关键信息。如果数据有异常要指出。",
+                "content": f"你已经调用了工具并拿到了结果。现在请基于工具返回的数据，用{self.config.display_name}的风格做一个完整、详细的总结回复。不要只复制原始数据，要用自然语言解释关键信息。如果数据有异常要指出。",
             })
 
         try:
