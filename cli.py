@@ -22,6 +22,8 @@ logger.add(
 )
 
 from agent_core import AgentCore
+from agent_core.user_cli import CLIUser
+from core.event_bus import event_bus
 from model_router import ROUTE_TABLE, MODEL_PREFERENCES
 import contextlib
 
@@ -132,7 +134,10 @@ STATUS_MAP = {
 # IP-safe: 动态从 config/agents/*.json 读取 display_name，避免硬编码原名
 try:
     from config import get_agent_display_name, agent_names
+    from emotion.emoji_config import get_ack_message
     AGENT_NAMES = {name: get_agent_display_name(name) for name in agent_names()}
+    # ACK 消息使用自定义配置（随心即言）
+    STATUS_MAP["thinking"] = get_ack_message("xiaoda")
 except ImportError:
     AGENT_NAMES = {"xiaoda": "小妲", "xiaoli": "小莉", "xiaolian": "小涟", "xiaolang": "小狼", "xiaoke": "小可"}
 
@@ -346,10 +351,14 @@ class CLIInterface:
                     translated = _status_translate(msg)
                     print(f"  {_C.DIM}{_C.LYELLOW}{translated}{_C.RST}")
 
-                result = self._loop.run_until_complete(
-                    self.bot.process(user_input, user_id="cli_owner", source="cli",
-                                     status_callback=status_notify)
-                )
+                event_bus.bind_user(CLIUser())
+                try:
+                    result = self._loop.run_until_complete(
+                        self.bot.process(user_input, user_id="cli_owner", source="cli",
+                                         status_callback=status_notify)
+                    )
+                finally:
+                    event_bus.unbind_user()
 
                 print()
                 label = f"  {_C.LGREEN}{_C.BOLD}🌿 小妲:{_C.RST} "
