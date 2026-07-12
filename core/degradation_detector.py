@@ -357,7 +357,7 @@ class DegradationDetector:
             try:
                 cb(report)
             except Exception as e:
-                logger.error(f"DegradationDetector 回调异常: {e!r}")
+                logger.error("DegradationDetector 回调异常: {!r}", e)
         log_fn = (
             logger.warning if severity == Severity.WARNING
             else logger.error if severity == Severity.CRITICAL
@@ -461,7 +461,7 @@ class DegradationDetector:
                     "throughput", float(self._slo_tracker.throughput())
                 )
             except Exception as e:
-                logger.debug(f"SLOTracker 拉取失败: {e!r}")
+                logger.debug("SLOTracker 拉取失败: {!r}", e)
         # SLAExporter 暴露的是 Prometheus 风格的累加指标, 无聚合接口, 此处不强行拉取
 
     # ─── 回调注册 ───

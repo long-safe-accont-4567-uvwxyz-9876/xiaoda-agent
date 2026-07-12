@@ -220,6 +220,18 @@ class ToolExecutor:
             _sig = inspect.signature(func)
             call_args = dict(arguments)
 
+            # 必填参数校验：LLM 可能漏传必填参数
+            missing = []
+            for pname, param in _sig.parameters.items():
+                if param.default is inspect.Parameter.empty and pname not in call_args:
+                    missing.append(pname)
+            if missing:
+                logger.warning("tool_executor.missing_params",
+                               tool=tool_name, missing=missing)
+                return ToolResult.fail(
+                    f"调用「{tool_name}」时缺少必填参数: {', '.join(missing)}"
+                )
+
             if asyncio.iscoroutinefunction(func):
                 result = await asyncio.wait_for(
                     func(**call_args) if call_args else func(),
