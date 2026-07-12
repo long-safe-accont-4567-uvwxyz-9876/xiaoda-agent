@@ -9,7 +9,7 @@ from db.db_memory import MemoryDB
 # FTS5 分词工具从 db.fts_utils 导入 (打破 db <-> memory 循环); 这里 re-export
 # 保持向后兼容 (其他模块仍可 `from memory.memory_manager import _tokenize_for_fts`)
 from .vector_store import VectorStore
-from .fluid_memory import FluidMemory
+from .fsrs_model import FSRSModel, MemoryState, MemoryPhase
 from .memory_distiller import MemoryDistiller
 from .query_cache import QueryCache
 from .retrieval_assessor import RetrievalAssessor
@@ -1116,7 +1116,7 @@ class MemoryManager:
                 query, k=k, use_reranker=use_reranker, use_kg=use_kg)
             if results:
                 # 简单路径使用与复杂路径一致的评分逻辑，保证评分尺度统一
-                results = await self._apply_fluid_scoring(results)
+                results = await self._apply_fsrs_scoring(results)
                 query_entities: set[str] = set()
                 if self.kg:
                     try:
@@ -1137,7 +1137,7 @@ class MemoryManager:
                         retry_results = await self.retrieve_memories_hybrid(
                             query, k=retry_k, use_reranker=True, use_kg=True)
                         if retry_results:
-                            retry_results = await self._apply_fluid_scoring(retry_results)
+                            retry_results = await self._apply_fsrs_scoring(retry_results)
                             await self._compute_final_scores(query, retry_results, config, query_entities)
                             retry_results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
                             results = retry_results[:k]
@@ -1181,7 +1181,7 @@ class MemoryManager:
             results = await self._importance_fallback_search(k)
 
         # 流体记忆评分（艾宾浩斯遗忘曲线 + 访问强化）
-        results = await self._apply_fluid_scoring(results)
+        results = await self._apply_fsrs_scoring(results)
 
         # 保留实体提取用于评分增强，但不再后置追加候选
         # （KG 召回已前移到 retrieve_memories_hybrid 的并行召回阶段，统一走 RRF + Reranker）
@@ -1206,7 +1206,7 @@ class MemoryManager:
                 retry_results = await self.retrieve_memories_hybrid(
                     query, k=retry_k, use_reranker=True, use_kg=True)
                 if retry_results:
-                    retry_results = await self._apply_fluid_scoring(retry_results)
+                    retry_results = await self._apply_fsrs_scoring(retry_results)
                     await self._compute_final_scores(query, retry_results, config, query_entities)
                     retry_results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
                     results = retry_results[:k]
@@ -1469,26 +1469,35 @@ class MemoryManager:
             logger.warning("memory.fallback_search_failed", error=str(e))
             return []
 
-    async def _apply_fluid_scoring(self, results: list[dict]) -> list[dict]:
-        """流体记忆评分（艾宾浩斯遗忘曲线 + 访问历史），过滤低分记忆。
+    async def _apply_fsrs_scoring(self, results: list[dict]) -> list[dict]:
+        """FSRS-DSR 记忆评分（遗忘曲线 R + 状态过滤），过滤低分记忆。
 
         检索和重排保持只读。访问次数只能在答案明确引用该记忆，或用户明确确认
         记忆有帮助时由消费确认流程更新，避免曝光自反馈偏置。
         """
         if not results:
             return results
-        _fluid = FluidMemory()
+        _fsrs = FSRSModel()
+        now = time.time()
         filtered: list[dict] = []
         for r in results:
-            created_at = r.get("timestamp", time.time())
-            access_count = r.get("access_count", 0)
             similarity = r.get("score", 0.5)
-            fluid_score = _fluid.score(similarity, created_at, access_count)
-            if _fluid.should_filter(fluid_score):
+            state = MemoryState(
+                difficulty=r.get("difficulty", 5.0),
+                stability=r.get("stability", 3.0),
+                phase=MemoryPhase(r.get("phase", "buffer")),
+                last_review=r.get("last_review", 0.0) or r.get("timestamp", 0.0),
+                created_at=r.get("timestamp", 0.0),
+                reinforcement_count=r.get("reinforcement_count", 0),
+            )
+            R = state.retrievability(now)
+            fsrs_score = _fsrs.score(similarity, state, now)
+            if _fsrs.should_filter(R):
                 continue
-            r["fluid_score"] = fluid_score
+            r["fluid_score"] = R
+            r["fsrs_score"] = fsrs_score
             importance = r.get("importance", 0.5)
-            r["effective_score"] = importance * fluid_score
+            r["effective_score"] = importance * fsrs_score
             filtered.append(r)
         return filtered
 
@@ -1524,9 +1533,9 @@ class MemoryManager:
     async def _compute_final_scores(self, query: str, results: list[dict],
                                       config: Any,
                                       query_entities: set[str] | None = None) -> None:
-        """统一评分公式: final = 0.5×rerank + 0.3×fluid + 0.1×kg + 0.1×recency。
+        """统一评分公式: final = 0.5×rerank + 0.3×R + 0.1×kg + 0.1×importance。
 
-        将流体记忆评分、KG 增强评分、时间新鲜度统一到一个公式中。
+        R 为 FSRS-DSR Retrievability（记忆可提取性），替代旧 fluid_score。
         I6: 复用已存储的 entities 字段 + 预提取的 query_entities，
         避免 N+1 次 LLM 调用（原 get_relevance_boost 性能黑洞）。
         """
@@ -1559,27 +1568,27 @@ class MemoryManager:
             # rerank_score: 从 rerank_score 或 rrf_score 字段获取，归一化到 0-1
             rerank_raw = r.get("rerank_score", r.get("rrf_score", 0.0))
             rerank_score = _normalize_score(rerank_raw, default=0.0)
-            # fluid_score: 从 fluid_score 字段获取（_apply_fluid_scoring 已计算）
-            fluid_score = _normalize_score(r.get("fluid_score"), default=0.5)
+            # R: FSRS-DSR Retrievability（_apply_fsrs_scoring 已计算）
+            R = _normalize_score(r.get("fluid_score"), default=0.5)
             # kg_boost: KG 召回标记或实体匹配加成（0.5-1.0），否则 0
             kg_boost_val = kg_boosts[i] if i < len(kg_boosts) else 0.0
             if r.get("kg_recall"):
                 # KG 召回候选保底 0.5
                 kg_boost_val = max(kg_boost_val, 0.5)
             kg_boost = _normalize_score(kg_boost_val, default=0.0)
-            # recency_boost: 时间新鲜度
-            recency_boost = self._compute_recency_boost(r)
+            # importance: 记忆重要性
+            importance = _normalize_score(r.get("importance"), default=0.5)
             # 写入中间分数字段（用于调试和可观测性）
             r["rerank_score"] = rerank_score
-            r["fluid_score"] = fluid_score
+            r["fluid_score"] = R
             r["kg_boost"] = kg_boost
-            r["recency_boost"] = recency_boost
+            r["importance_score"] = importance
             # 统一评分公式
             r["final_score"] = (
                 rerank_score * 0.5      # Reranker 精排分数
-                + fluid_score * 0.3      # 流体记忆评分
-                + kg_boost * 0.1         # KG 增强分数
-                + recency_boost * 0.1    # 时间新鲜度
+                + R * 0.3               # FSRS-DSR Retrievability
+                + kg_boost * 0.1        # KG 增强分数
+                + importance * 0.1       # 记忆重要性
             )
 
     async def _apply_topic_trigger(self, query: str, results: list[dict],
