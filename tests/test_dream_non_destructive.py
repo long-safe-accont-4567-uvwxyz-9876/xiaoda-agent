@@ -5,6 +5,7 @@ import time
 import pytest
 
 from core.dream_consolidation import DreamConsolidator
+from memory.fsrs_model import MemoryPhase
 
 
 class FakeMemoryDB:
@@ -23,32 +24,39 @@ class FakeMemoryDB:
         self.deleted_batches.append(memory_ids)
 
 
-class RecordingScorer:
-    def __init__(self):
-        self.similarities = []
-
-    def score(self, similarity, created_at, access_count=0):
-        self.similarities.append(similarity)
-        return 1.0
-
-    def should_archive(self, score):
-        return False
-
-
 @pytest.mark.asyncio
-async def test_consolidate_db_scores_each_memory_with_its_real_importance():
+async def test_consolidate_db_uses_fsrs_retrievability_for_archive():
+    now = time.time()
     db = FakeMemoryDB([
-        {"id": 1, "importance": 0.9, "timestamp": time.time(), "access_count": 0},
-        {"id": 2, "importance": 0.1, "timestamp": time.time(), "access_count": 0},
+        {"id": 1, "importance": 0.9, "timestamp": now, "access_count": 0,
+         "difficulty": 5.0, "stability": 3.0, "phase": "reinforced",
+         "last_review": now, "reinforcement_count": 0},
+        {"id": 2, "importance": 0.1, "timestamp": now, "access_count": 0,
+         "difficulty": 5.0, "stability": 3.0, "phase": "reinforced",
+         "last_review": now, "reinforcement_count": 0},
     ])
     consolidator = DreamConsolidator()
-    scorer = RecordingScorer()
-    consolidator._fluid_scorer = scorer
 
     archived = await consolidator.consolidate_db(db)
 
     assert archived == 0
-    assert scorer.similarities == [0.9, 0.1]
+    assert db.archived_batches == []
+
+
+@pytest.mark.asyncio
+async def test_consolidate_db_archives_low_R_memories():
+    old_time = time.time() - 365 * 86400
+    db = FakeMemoryDB([
+        {"id": 7, "importance": 0.01, "timestamp": old_time, "access_count": 0,
+         "difficulty": 5.0, "stability": 0.1, "phase": "decayed",
+         "last_review": old_time, "reinforcement_count": 0},
+    ])
+    consolidator = DreamConsolidator()
+
+    archived = await consolidator.consolidate_db(db)
+
+    assert archived == 1
+    assert db.archived_batches == [[7]]
 
 
 @pytest.mark.asyncio
