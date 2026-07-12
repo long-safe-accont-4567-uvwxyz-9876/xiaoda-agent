@@ -328,14 +328,18 @@ class TestEncodeMemoryChildChunks:
         """测试encode_memory生成子chunk"""
         mgr = self._make_mock_manager()
 
-        # 设置 security_filter mock 避免内部 import SecurityFilter
         mock_security = MagicMock()
         mock_security.scan_threats.return_value.is_safe = True
         mgr._security_filter = mock_security
+        mgr.concept_graph = None
+        mgr.kg = None
+        mgr._governance = None
+        mgr._fsrs = MagicMock()
 
-        with patch("memory.memory_manager.validate_memory_content", return_value=""):
-            # Mock _has_duplicate
-            mgr._has_duplicate = AsyncMock(return_value=False)
+        with patch("memory.memory_manager.validate_memory_content", return_value=""), \
+             patch("security.security.SecurityFilter", return_value=mock_security), \
+             patch("memory.memory_manager.estimate_initial_difficulty", return_value=5.0):
+            mgr.memory.update_fsrs_state = AsyncMock(return_value=None)
             mgr._estimate_importance = MagicMock(return_value=0.7)
             mgr._save_state_json = MagicMock()
             mgr.invalidate_memory_count_cache = MagicMock()
@@ -345,15 +349,12 @@ class TestEncodeMemoryChildChunks:
                 {"role": "assistant", "content": "好的，我来帮你规划"},
             ]
 
-            # 执行 encode_memory
             await mgr.encode_memory({"exchanges": exchanges})
 
-            # 验证子chunk被创建
             assert mgr.memory.insert_child_chunk.called
             call_count = mgr.memory.insert_child_chunk.call_count
-            assert call_count >= 2  # 至少2个子chunk
+            assert call_count >= 2
 
-            # 验证批量嵌入被调用
             assert mgr.vec.batch_upsert_children.called
 
     @pytest.mark.asyncio
@@ -361,14 +362,19 @@ class TestEncodeMemoryChildChunks:
         """测试PARENT_CHILD_CHUNK_ENABLED=false时跳过子chunk"""
         mgr = self._make_mock_manager()
 
-        # 设置 security_filter mock
         mock_security = MagicMock()
         mock_security.scan_threats.return_value.is_safe = True
         mgr._security_filter = mock_security
+        mgr.concept_graph = None
+        mgr.kg = None
+        mgr._governance = None
+        mgr._fsrs = MagicMock()
 
         with patch("memory.memory_manager.validate_memory_content", return_value=""), \
+             patch("security.security.SecurityFilter", return_value=mock_security), \
+             patch("memory.memory_manager.estimate_initial_difficulty", return_value=5.0), \
              patch("config.PARENT_CHILD_CHUNK_ENABLED", False):
-            mgr._has_duplicate = AsyncMock(return_value=False)
+            mgr.memory.update_fsrs_state = AsyncMock(return_value=None)
             mgr._estimate_importance = MagicMock(return_value=0.7)
             mgr._save_state_json = MagicMock()
             mgr.invalidate_memory_count_cache = MagicMock()
@@ -380,7 +386,6 @@ class TestEncodeMemoryChildChunks:
 
             await mgr.encode_memory({"exchanges": exchanges})
 
-            # 子chunk不应被创建
             assert not mgr.memory.insert_child_chunk.called
 
 

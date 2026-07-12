@@ -175,7 +175,7 @@ class DreamConsolidator:
                 state = MemoryState(
                     difficulty=mem.get("difficulty", 5.0),
                     stability=mem.get("stability", 3.0),
-                    phase=MemoryPhase(mem.get("phase", "buffer")),
+                    phase=MemoryPhase.safe(mem.get("phase", "buffer")),
                     last_review=mem.get("last_review", 0.0) or mem.get("timestamp", 0.0),
                     created_at=mem.get("timestamp", 0.0),
                     reinforcement_count=mem.get("reinforcement_count", 0),

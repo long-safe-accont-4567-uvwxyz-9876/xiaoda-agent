@@ -5,6 +5,7 @@ import time
 import pytest
 
 from memory.memory_manager import MemoryManager
+from memory.fsrs_model import FSRSModel
 from core.spontaneous_recall import SpontaneousRecall
 
 
@@ -16,8 +17,9 @@ async def test_fluid_scoring_is_read_only_for_retrieved_candidates():
     )
     manager = object.__new__(MemoryManager)
     manager.memory = memory_db
+    manager._fsrs = FSRSModel()
 
-    results = await manager._apply_fluid_scoring([
+    results = await manager._apply_fsrs_scoring([
         {
             "id": 7,
             "timestamp": time.time(),

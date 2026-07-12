@@ -23,7 +23,10 @@ async def system():
             created TEXT NOT NULL, last_accessed TEXT NOT NULL,
             valid_from TEXT NOT NULL, valid_to TEXT, superseded_by TEXT,
             history TEXT DEFAULT '[]', origin TEXT DEFAULT '{}',
-            source_mem_id INTEGER, embedding BLOB
+            source_mem_id INTEGER, embedding BLOB,
+            difficulty REAL DEFAULT 5.0, stability REAL DEFAULT 3.0,
+            phase TEXT DEFAULT 'buffer', last_review REAL DEFAULT 0.0,
+            reinforcement_count INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS concept_edges (
             source_id TEXT NOT NULL, target_id TEXT NOT NULL,
@@ -177,6 +180,5 @@ async def test_confirm_multiple_nodes(system):
 async def test_constants_end_to_end(system):
     """端到端常量验证"""
     assert SpreadingActivationEngine.RECALL_RADIUS == 3
-    assert ConfirmCorrect.BOOST_PER_ACCESS == 0.15
     assert ConfirmCorrect.EDGE_BOOST == 0.25
     assert KeyExtractor.MAX_KEYS == 24

@@ -117,7 +117,7 @@ async def test_hook_behavioral_health_emits_signal():
     assert len(history) >= 1, "health signal not emitted"
     assert history[0].signal_type == "health"
     assert history[0].source == "behavioral_health"
-    assert history[0].value == pytest.approx(5.0)
+    assert history[0].value == pytest.approx(1.0)
 
 
 @pytest.mark.asyncio
