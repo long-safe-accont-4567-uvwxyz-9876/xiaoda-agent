@@ -109,3 +109,13 @@ def test_registry_load_corrupted_falls_back():
         registry = DirectionRegistry(storage_path=path)
         # 损坏文件不应崩溃，返回空注册表
         assert registry.list_directions() == []
+
+
+def test_registry_load_valid_json_wrong_type_falls_back():
+    """Valid JSON of wrong type (null/list/int) must not crash the registry."""
+    for content in ("null", "[]", "42", "\"string\"", "true"):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "registry.json")
+            Path(path).write_text(content)
+            registry = DirectionRegistry(storage_path=path)
+            assert registry.list_directions() == [], f"failed for content: {content}"

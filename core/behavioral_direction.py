@@ -139,6 +139,6 @@ class DirectionRegistry:
                     magnitude=data.get("magnitude", 1.0),
                     meta=data.get("meta", {}),
                 )
-        except (json.JSONDecodeError, KeyError) as e:
+        except Exception as e:
             logger.error(f"direction_registry.load_failed_corrupted: {e}")
             # 损坏时返回空注册表，不崩溃
