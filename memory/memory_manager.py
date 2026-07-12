@@ -618,8 +618,30 @@ class MemoryManager:
             _kg_v2_recall(),
         )
 
-        # 空通道自动剔除: 七路都空则返回
+        # 空通道自动剔除: 七路都空则 fallback 查原始记忆（蒸馏失败时兜底）
         if not fts_items and not vec_items and not kg_items and not child_items and not spread_items and not entity_items and not kg_v2_items:
+            # Fallback: 用相同 FTS+Vec 检索，但 include_raw（is_raw=0 和 is_raw=1 都返回）
+            raw_fts, raw_vec = await asyncio.gather(
+                self._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter=None),
+                self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids),
+            )
+            raw_results = (raw_fts or []) + (raw_vec or [])
+            if raw_results:
+                # 去重 + 按 score 排序
+                seen_ids: set = set()
+                deduped: list = []
+                for r in raw_results:
+                    rid = r.get("id")
+                    if rid and rid not in seen_ids:
+                        seen_ids.add(rid)
+                        deduped.append(r)
+                deduped.sort(key=lambda x: x.get("score", x.get("rrf_score", 0)), reverse=True)
+                results = deduped[:k]
+                logger.info("memory.search", event="memory_search",
+                            query=query[:100], tier=f"{tier}+raw_fallback",
+                            results=len(results),
+                            duration_ms=int((time.time() - _start) * 1000))
+                return results
             logger.info("memory.search", event="memory_search",
                         query=query[:100], tier=tier, results=0,
                         duration_ms=int((time.time() - _start) * 1000))
@@ -1061,11 +1083,12 @@ class MemoryManager:
                 return cached
 
         # 意图路由：按查询意图调整 k 与检索通道（闲聊型跳过 KG/Reranker）
+        # A4 根本修复：移除外层 asyncio.wait_for，因为 query_transform.py 内部已有超时控制
+        # 双重超时（外层5s + 内层5s）会导致不必要的失败
         intent = "factual"
         if self._query_transformer and self._query_transformer.available:
             try:
-                intent = await asyncio.wait_for(
-                    self._query_transformer.classify_intent(query), timeout=5)
+                intent = await self._query_transformer.classify_intent(query)
             except Exception:
                 intent = "factual"
 
@@ -1102,31 +1125,33 @@ class MemoryManager:
                         logger.debug("memory_manager.query_entities_failed", exc_info=True)
                 await self._compute_final_scores(query, results, config, query_entities)
 
-                # CRAG 检索评估
-                assessment = self._assessor.assess(query, results)
-                if assessment["should_retry"] and not _retry_attempted:
-                    logger.info("memory.crag_low_confidence",
-                                query=query[:100], confidence=assessment["confidence"])
-                    # 扩大候选集重试一次
-                    retry_k = k * 2
-                    retry_results = await self.retrieve_memories_hybrid(
-                        query, k=retry_k, use_reranker=True, use_kg=True)
-                    if retry_results:
-                        retry_results = await self._apply_fluid_scoring(retry_results)
-                        await self._compute_final_scores(query, retry_results, config, query_entities)
-                        retry_results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
-                        results = retry_results[:k]
-                        # 重新评估
-                        reassessment = self._assessor.assess(query, results)
-                        logger.info("memory.crag_retry_done",
-                                    confidence=reassessment["confidence"],
-                                    level=reassessment["level"])
+                # CRAG 检索评估（A4 根本修复：闲聊型查询跳过 CRAG 评估）
+                # 闲聊型查询不需要精确检索，CRAG 评估会产生不必要的低置信度告警
+                if intent != "chat":
+                    assessment = self._assessor.assess(query, results)
+                    if assessment["should_retry"] and not _retry_attempted:
+                        logger.info("memory.crag_low_confidence",
+                                    query=query[:100], confidence=assessment["confidence"])
+                        # 扩大候选集重试一次
+                        retry_k = k * 2
+                        retry_results = await self.retrieve_memories_hybrid(
+                            query, k=retry_k, use_reranker=True, use_kg=True)
+                        if retry_results:
+                            retry_results = await self._apply_fluid_scoring(retry_results)
+                            await self._compute_final_scores(query, retry_results, config, query_entities)
+                            retry_results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
+                            results = retry_results[:k]
+                            # 重新评估
+                            reassessment = self._assessor.assess(query, results)
+                            logger.info("memory.crag_retry_done",
+                                        confidence=reassessment["confidence"],
+                                        level=reassessment["level"])
 
                 results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
                 results = results[:k]
 
-            # CRAG 兜底：空结果走 importance fallback
-            if not results:
+            # CRAG 兜底：空结果走 importance fallback（闲聊型跳过）
+            if not results and intent != "chat":
                 assessment = self._assessor.assess(query, results)
                 if assessment["should_fallback"]:
                     logger.info("memory.crag_fallback", query=query[:100])
@@ -1170,29 +1195,30 @@ class MemoryManager:
         # KG 增强评分 + 综合评分 (复用已提取的 query_entities, 避免 N+1 LLM)
         await self._compute_final_scores(query, results, config, query_entities)
 
-        # CRAG 检索评估
-        assessment = self._assessor.assess(query, results)
-        if assessment["should_retry"] and not _retry_attempted:
-            logger.info("memory.crag_low_confidence",
-                        query=query[:100], confidence=assessment["confidence"])
-            # 扩大候选集重试一次
-            retry_k = k * 2
-            retry_results = await self.retrieve_memories_hybrid(
-                query, k=retry_k, use_reranker=True, use_kg=True)
-            if retry_results:
-                retry_results = await self._apply_fluid_scoring(retry_results)
-                await self._compute_final_scores(query, retry_results, config, query_entities)
-                retry_results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
-                results = retry_results[:k]
-                # 重新评估
-                reassessment = self._assessor.assess(query, results)
-                logger.info("memory.crag_retry_done",
-                            confidence=reassessment["confidence"],
-                            level=reassessment["level"])
+        # CRAG 检索评估（A4 根本修复：闲聊型查询跳过 CRAG 评估）
+        if intent != "chat":
+            assessment = self._assessor.assess(query, results)
+            if assessment["should_retry"] and not _retry_attempted:
+                logger.info("memory.crag_low_confidence",
+                            query=query[:100], confidence=assessment["confidence"])
+                # 扩大候选集重试一次
+                retry_k = k * 2
+                retry_results = await self.retrieve_memories_hybrid(
+                    query, k=retry_k, use_reranker=True, use_kg=True)
+                if retry_results:
+                    retry_results = await self._apply_fluid_scoring(retry_results)
+                    await self._compute_final_scores(query, retry_results, config, query_entities)
+                    retry_results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
+                    results = retry_results[:k]
+                    # 重新评估
+                    reassessment = self._assessor.assess(query, results)
+                    logger.info("memory.crag_retry_done",
+                                confidence=reassessment["confidence"],
+                                level=reassessment["level"])
 
-        if assessment["should_fallback"] and not results:
-            logger.info("memory.crag_fallback", query=query[:100])
-            results = await self._importance_fallback_search(k)
+            if assessment["should_fallback"] and not results:
+                logger.info("memory.crag_fallback", query=query[:100])
+                results = await self._importance_fallback_search(k)
 
         results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
         results = results[:k]
@@ -1916,7 +1942,7 @@ class MemoryManager:
 
     async def _distill_to_knowledge(self, raw_id: int, summary: str,
                                      scope: Any, importance: float = 0.5,
-                                     emotion: str = "") -> None:
+                                     emotion: str = "", _retry: int = 0) -> None:
         """将原始记忆蒸馏为提炼知识（允许 UPDATE/DELETE）。
 
         mem0 SPEC 优化 ADD-only 架构：
@@ -1925,12 +1951,15 @@ class MemoryManager:
         3a. 有相似 → UPDATE（合并/增强）
         3b. 无相似 → 新建提炼知识（is_raw=0）
 
+        蒸馏失败时异步重试最多 2 次（间隔 30s/60s），避免免费模型超时导致记忆丢失。
+
         Args:
             raw_id: 原始记忆 ID
             summary: 原始记忆摘要
             scope: Scope 对象
             importance: 重要性
             emotion: 情感标签
+            _retry: 当前重试次数（内部使用）
         """
         if not self.distiller:
             return
@@ -1938,6 +1967,20 @@ class MemoryManager:
             # 1. 蒸馏（调用已有 MemoryDistiller，传入单条记忆）
             distilled = await self.distiller.distill([{"summary": summary, "timestamp": time.time()}])
             if not distilled or not distilled.strip():
+                # 蒸馏返回空 → 可能是模型超时，安排重试
+                if _retry < 2:
+                    delay = 30 * (_retry + 1)  # 30s, 60s
+                    logger.info("memory.distill_empty_retry", raw_id=raw_id,
+                               retry=_retry + 1, delay_s=delay)
+                    asyncio.get_event_loop().call_later(
+                        delay,
+                        lambda: asyncio.ensure_future(
+                            self._distill_to_knowledge(raw_id, summary, scope,
+                                                       importance, emotion, _retry + 1)
+                        ),
+                    )
+                else:
+                    logger.warning("memory.distill_exhausted_retries", raw_id=raw_id)
                 return
 
             # 2. 检查是否已有相似的提炼知识
@@ -1963,7 +2006,18 @@ class MemoryManager:
                 logger.info("memory.distilled_new",
                            raw_id=raw_id, knowledge_id=knowledge_id)
         except Exception as e:
-            logger.warning("memory.distill_to_knowledge_failed", error=str(e))
+            logger.warning("memory.distill_to_knowledge_failed",
+                          raw_id=raw_id, retry=_retry, error=str(e))
+            # 异常也安排重试
+            if _retry < 2:
+                delay = 30 * (_retry + 1)
+                asyncio.get_event_loop().call_later(
+                    delay,
+                    lambda: asyncio.ensure_future(
+                        self._distill_to_knowledge(raw_id, summary, scope,
+                                                   importance, emotion, _retry + 1)
+                    ),
+                )
 
     async def _find_similar_knowledge(self, summary: str,
                                        scope: Any) -> dict | None:
@@ -2271,10 +2325,12 @@ class MemoryManager:
                         logger.debug("memory.enrich_child_chunks",
                                      parent_id=mem_id, count=len(enrich_children))
                 except Exception as e:
-                    logger.debug("memory.enrich_child_failed", error=str(e))
+                    logger.debug("memory.enrich_child_failed",
+                                 error=str(e), error_type=type(e).__name__)
 
         except Exception as e:
-            logger.debug("memory.enrich_failed", error=str(e))
+            logger.debug("memory.enrich_failed",
+                         error=str(e), error_type=type(e).__name__)
 
     def _estimate_importance(self, exchanges: list[dict], context: dict) -> float:
         importance = 0.3
