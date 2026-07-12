@@ -81,6 +81,34 @@ class StructuredBlackboard(SharedBlackboard):
                 results.append({"key": key, **entry})
         return results
 
+    async def cleanup_expired(self) -> int:
+        """清理过期条目并同步清理 tag/direction 索引。"""
+        cleaned = await super().cleanup_expired()
+        if cleaned == 0:
+            return 0
+
+        alive_keys = set(await self.keys())
+
+        stale_tags = []
+        for tag, keys in self._tag_index.items():
+            before = len(keys)
+            keys.intersection_update(alive_keys)
+            if before > 0 and len(keys) == 0:
+                stale_tags.append(tag)
+        for tag in stale_tags:
+            del self._tag_index[tag]
+
+        stale_dirs = []
+        for direction, keys in self._direction_index.items():
+            before = len(keys)
+            keys.intersection_update(alive_keys)
+            if before > 0 and len(keys) == 0:
+                stale_dirs.append(direction)
+        for direction in stale_dirs:
+            del self._direction_index[direction]
+
+        return cleaned
+
     async def merge_from(self, other: "StructuredBlackboard") -> int:
         """
         合并另一个黑板的条目 — 对齐 jlens/lens.py: JacobianLens.merge()。
