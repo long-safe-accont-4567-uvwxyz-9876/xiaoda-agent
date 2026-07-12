@@ -351,14 +351,14 @@ class CLIInterface:
                     translated = _status_translate(msg)
                     print(f"  {_C.DIM}{_C.LYELLOW}{translated}{_C.RST}")
 
-                event_bus.bind_user(CLIUser())
+                token = event_bus.bind_user(CLIUser())
                 try:
                     result = self._loop.run_until_complete(
                         self.bot.process(user_input, user_id="cli_owner", source="cli",
                                          status_callback=status_notify)
                     )
                 finally:
-                    event_bus.unbind_user()
+                    event_bus.unbind_user(token)
 
                 print()
                 label = f"  {_C.LGREEN}{_C.BOLD}🌿 小妲:{_C.RST} "

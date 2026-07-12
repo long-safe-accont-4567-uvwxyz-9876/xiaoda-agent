@@ -43,7 +43,7 @@ def _make_mock_mgr(belief_router=None, dispatch_return="这是小狼的回复", 
 async def test_dispatch_single_emits_started_and_completed():
     """_dispatch_single_sub_agent 发射 SUB_STARTED + SUB_COMPLETED"""
     user = FakeUser()
-    event_bus.bind_user(user)
+    token = event_bus.bind_user(user)
     try:
         mgr = _make_mock_mgr()
         await mgr._dispatch_single_sub_agent(
@@ -54,14 +54,14 @@ async def test_dispatch_single_emits_started_and_completed():
         assert AgentEventType.SUB_STARTED in types
         assert AgentEventType.SUB_COMPLETED in types
     finally:
-        event_bus.unbind_user()
+        event_bus.unbind_user(token)
 
 
 @pytest.mark.asyncio
 async def test_dispatch_single_emits_failed_on_exception():
     """dispatch 异常时发射 SUB_FAILED"""
     user = FakeUser()
-    event_bus.bind_user(user)
+    token = event_bus.bind_user(user)
     try:
         mgr = _make_mock_mgr(dispatch_error=RuntimeError("timeout"))
         await mgr._dispatch_single_sub_agent(
@@ -72,7 +72,7 @@ async def test_dispatch_single_emits_failed_on_exception():
         assert AgentEventType.SUB_STARTED in types
         assert AgentEventType.SUB_FAILED in types
     finally:
-        event_bus.unbind_user()
+        event_bus.unbind_user(token)
 
 
 @pytest.mark.asyncio

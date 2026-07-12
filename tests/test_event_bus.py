@@ -28,7 +28,7 @@ async def test_emit_without_user_silently_ignores():
 async def test_emit_delivers_to_bound_user():
     """emit 后事件投递给绑定的 User。"""
     user = FakeUser()
-    event_bus.bind_user(user)
+    token = event_bus.bind_user(user)
     try:
         await event_bus.emit(AgentEvent(
             type=AgentEventType.SUB_STARTED,
@@ -41,15 +41,15 @@ async def test_emit_delivers_to_bound_user():
         assert user.events[0].agent == "xiaolang"
         assert user.events[0].data["display_name"] == "小狼"
     finally:
-        event_bus.unbind_user()
+        event_bus.unbind_user(token)
 
 
 @pytest.mark.asyncio
 async def test_unbind_stops_delivery():
     """unbind_user 后不再投递。"""
     user = FakeUser()
-    event_bus.bind_user(user)
-    event_bus.unbind_user()
+    token = event_bus.bind_user(user)
+    event_bus.unbind_user(token)
     await event_bus.emit(AgentEvent(
         type=AgentEventType.SUB_COMPLETED,
         agent="xiaoli",
@@ -65,7 +65,7 @@ async def test_emit_user_deliver_error_does_not_raise():
         async def deliver(self, event):
             raise RuntimeError("broken")
 
-    event_bus.bind_user(BrokenUser())
+    token = event_bus.bind_user(BrokenUser())
     try:
         await event_bus.emit(AgentEvent(
             type=AgentEventType.SUB_STARTED,
@@ -74,7 +74,7 @@ async def test_emit_user_deliver_error_does_not_raise():
         ))
         # 无异常即通过
     finally:
-        event_bus.unbind_user()
+        event_bus.unbind_user(token)
 
 
 def test_gen_task_id_format():

@@ -511,7 +511,7 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
         async def _ws_send(event: dict) -> None:
             await manager.send_to(conn_id, event)
         web_user = WebUser(send_fn=_ws_send)
-        event_bus.bind_user(web_user)
+        _eb_token = event_bus.bind_user(web_user)
         try:
             data = await process_and_serialize(
                 core, text, session_id=session_id, agent=agent,
@@ -519,7 +519,7 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
                 conn_id=conn_id, msg_id=msg_id,
                 image_data=image_data)
         finally:
-            event_bus.unbind_user()
+            event_bus.unbind_user(_eb_token)
         # ── S2: VERIFY 阶段 ──
         _verify_response(data, msg_id, agent)
         data.update({"type": "final", "msg_id": msg_id})

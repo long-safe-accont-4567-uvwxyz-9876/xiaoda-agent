@@ -18,7 +18,7 @@ async def test_notify_tool_status_started_emits_event():
     from tool_engine.tool_call_handler import ToolCallHandler
 
     user = FakeUser()
-    event_bus.bind_user(user)
+    token = event_bus.bind_user(user)
     try:
         handler = ToolCallHandler.__new__(ToolCallHandler)
         handler._status_callback = None
@@ -31,7 +31,7 @@ async def test_notify_tool_status_started_emits_event():
         assert len(tool_events) == 1
         assert tool_events[0].data["tool_name"] == "web_search"
     finally:
-        event_bus.unbind_user()
+        event_bus.unbind_user(token)
 
 
 @pytest.mark.asyncio
@@ -40,7 +40,7 @@ async def test_notify_tool_status_completed_emits_event():
     from tool_engine.tool_call_handler import ToolCallHandler
 
     user = FakeUser()
-    event_bus.bind_user(user)
+    token = event_bus.bind_user(user)
     try:
         handler = ToolCallHandler.__new__(ToolCallHandler)
         handler._status_callback = None
@@ -52,7 +52,7 @@ async def test_notify_tool_status_completed_emits_event():
         assert len(tool_events) == 1
         assert tool_events[0].data["tool_name"] == "web_search"
     finally:
-        event_bus.unbind_user()
+        event_bus.unbind_user(token)
 
 
 @pytest.mark.asyncio
@@ -61,7 +61,7 @@ async def test_notify_tool_status_failed_emits_event():
     from tool_engine.tool_call_handler import ToolCallHandler
 
     user = FakeUser()
-    event_bus.bind_user(user)
+    token = event_bus.bind_user(user)
     try:
         handler = ToolCallHandler.__new__(ToolCallHandler)
         handler._status_callback = None
@@ -72,4 +72,4 @@ async def test_notify_tool_status_failed_emits_event():
         tool_events = [e for e in user.events if e.type == AgentEventType.TOOL_FAILED]
         assert len(tool_events) == 1
     finally:
-        event_bus.unbind_user()
+        event_bus.unbind_user(token)

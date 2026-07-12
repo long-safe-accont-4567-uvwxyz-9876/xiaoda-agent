@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 import uuid
+import contextvars
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
@@ -65,22 +66,28 @@ class AgentEventBus:
         bus = AgentEventBus()
 
         # session 开始时绑定 User
-        bus.bind_user(user)
+        token = bus.bind_user(user)
 
         # 发射事件 → 自动投递给绑定的 User
         await bus.emit(AgentEvent(type=AgentEventType.SUB_STARTED, ...))
 
         # session 结束时解绑
-        bus.unbind_user()
+        bus.unbind_user(token)
     """
 
-    def bind_user(self, user: "UserBase") -> None:
-        """绑定当前 session 的 User。"""
-        _current_user.set(user)
+    def bind_user(self, user: "UserBase") -> contextvars.Token:
+        """绑定当前 session 的 User。返回 Token，调用方必须在 finally 中调用 unbind_user(token)。"""
+        return _current_user.set(user)
 
-    def unbind_user(self) -> None:
-        """解绑 User（session 结束时调用）。"""
-        _current_user.set(None)
+    def unbind_user(self, token: contextvars.Token | None = None) -> None:
+        """解绑 User（session 结束时调用）。传入 bind_user 返回的 Token 以安全恢复上下文。"""
+        if token is not None:
+            try:
+                _current_user.reset(token)
+            except (ValueError, LookupError):
+                logger.debug("event_bus.unbind_noop: token already consumed or context mismatch")
+        else:
+            _current_user.set(None)
 
     @property
     def bound_user(self) -> "UserBase | None":

@@ -583,7 +583,7 @@ class AIQQBot(botpy.Client):
             async def _qq_reply(content: str, msg_seq: int = 0) -> None:
                 await message.reply(content=content, msg_seq=msg_seq)
             qq_user = QQUser(reply_fn=_qq_reply, msg_seq_fn=_next_msg_seq)
-            event_bus.bind_user(qq_user)
+            token = event_bus.bind_user(qq_user)
             try:
                 result = await asyncio.wait_for(
                     self.agent.process(user_input, user_id=user_id, source="qq_c2c",
@@ -594,7 +594,7 @@ class AIQQBot(botpy.Client):
                     timeout=180,  # 复杂任务（多轮工具调用+重试）需要更长时间，180s 兜底
                 )
             finally:
-                event_bus.unbind_user()
+                event_bus.unbind_user(token)
             # HITL: 高危操作两段式确认（检测 __HIGH_RISK_OP__ 标记）
             result = await self._check_high_risk_approval(
                 result, message, user_openid or user_id, is_master)
