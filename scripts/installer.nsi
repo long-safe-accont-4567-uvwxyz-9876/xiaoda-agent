@@ -1,9 +1,17 @@
 !define PRODUCT_NAME "Xiaoda Agent"
+; VERSION 通过 makensis /DVERSION=x.y.z 命令行参数注入
+!ifndef VERSION
+  !define VERSION "0.0.0-dev"
+!endif
 !define PRODUCT_VERSION "${VERSION}"
 !define PRODUCT_PUBLISHER "Xiaoda Agent Team"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
-OutFile "xiaoda-agent-windows-x64-v${PRODUCT_VERSION}-setup.exe"
+; OUTFILE 通过 makensis -DOUTFILE=path 注入，默认值用于本地测试
+!ifndef OUTFILE
+  !define OUTFILE "xiaoda-agent-windows-x64-v${VERSION}-setup.exe"
+!endif
+OutFile "${OUTFILE}"
 InstallDir "$PROGRAMFILES64\${PRODUCT_NAME}"
 InstallDirRegKey HKLM "Software\${PRODUCT_NAME}" "InstallDir"
 RequestExecutionLevel admin

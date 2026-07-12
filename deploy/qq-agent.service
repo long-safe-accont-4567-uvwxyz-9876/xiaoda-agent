@@ -13,7 +13,7 @@ WorkingDirectory=REPLACE_WITH_PROJECT_PATH
 # 可选：检查数据目录是否就绪
 # ExecStartPre=/bin/bash -c "test -d /data/db || exit 1"
 
-ExecStart=REPLACE_WITH_PROJECT_PATH/.venv/bin/python agent.py --web --host 0.0.0.0 --port 8080
+ExecStart=REPLACE_WITH_PROJECT_PATH/.venv/bin/python agent.py --web --host 0.0.0.0 --port 8082
 Restart=always
 RestartSec=10
 StartLimitBurst=20

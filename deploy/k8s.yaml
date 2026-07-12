@@ -16,13 +16,17 @@ spec:
     spec:
       containers:
         - name: xiaoda-agent
-          image: xiaoda-agent:latest
+          image: ghcr.io/long-safe-accont-4567-uvwxyz-9876/xiaoda-agent:latest
           ports:
             - containerPort: 8082
               name: http
           env:
             - name: WEBUI_PORT
               value: "8082"
+            - name: KIOXIA_DATA_DIR
+              value: "/data"
+            - name: AGENTLY_CLI_HOME
+              value: "/data/agently-cli"
             - name: LOG_FORMAT
               value: "json"
           envFrom:

@@ -15,6 +15,9 @@ Thumbs.db
 node_modules/
 web/media/
 credentials/
+*.key
+*.secret
+.superpowers-skills
 state/
 .trae/
 config/webui_overrides.json

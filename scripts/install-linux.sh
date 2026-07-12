@@ -124,13 +124,23 @@ main() {
 
     check_deps
 
-    # 查找 tar.gz
+    # 查找 tar.gz — 支持 .run 自解压和直接指定两种方式
     local tarball=""
     if [ -n "${1:-}" ] && [ -f "${1:-}" ]; then
         tarball="$1"
     else
-        # 在当前目录查找
-        tarball=$(ls xiaoda-agent-linux-x86_64-*.tar.gz 2>/dev/null | head -1)
+        # 检查是否为 .run 自解压（内嵌 __ARCHIVE__ 标记）
+        if grep -q '__ARCHIVE__' "$0" 2>/dev/null; then
+            local archive_line
+            archive_line=$(grep -n '__ARCHIVE__' "$0" | head -1 | cut -d: -f1)
+            local tmp_tarball=$(mktemp /tmp/xiaoda-agent-XXXXXX.tar.gz)
+            tail -n +$((archive_line + 1)) "$0" > "$tmp_tarball"
+            tarball="$tmp_tarball"
+            info "检测到自解压安装包"
+        else
+            # 在当前目录查找
+            tarball=$(ls xiaoda-agent-linux-x86_64-*.tar.gz 2>/dev/null | head -1)
+        fi
     fi
 
     if [ -z "$tarball" ] || [ ! -f "$tarball" ]; then

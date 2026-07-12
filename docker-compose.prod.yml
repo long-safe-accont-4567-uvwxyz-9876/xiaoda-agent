@@ -9,6 +9,8 @@ services:
     volumes:
       # 数据独立持久化，更新镜像不丢配置
       - agent-data:/data
+      # .env 文件挂载（python-dotenv 需要读取 /app/.env）
+      - ./.env:/app/.env:ro
     environment:
       - KIOXIA_DATA_DIR=/data
       - WEBUI_HOST=0.0.0.0
