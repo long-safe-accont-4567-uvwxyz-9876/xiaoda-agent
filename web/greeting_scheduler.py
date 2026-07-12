@@ -288,8 +288,56 @@ class GreetingScheduler:
         except Exception:
             return []
 
+    async def _quality_check(self, text: str) -> bool:
+        """用小模型检查问候内容质量（复用 MemoryDistiller 的 GLM-4-9B-0414）。
+
+        检查项：是否自然、是否拼接混乱、是否内容不当。
+        返回 True 表示通过，False 表示需要重新生成。
+        """
+        try:
+            import httpx
+            api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
+            if not api_key:
+                return True  # 无 API key 则跳过检查
+            messages = [
+                {"role": "system", "content": (
+                    "你是一个内容质量检查器。判断以下问候消息是否合格。\n"
+                    "合格标准：1）语句通顺自然，像真人随口说的话；"
+                    "2）没有奇怪的拼接或前后矛盾；"
+                    "3）没有不当内容（如涉及食物、物品的暧昧暗示）。\n"
+                    "只回复 OK 或 FAIL，不要解释。"
+                )},
+                {"role": "user", "content": text},
+            ]
+            async with httpx.AsyncClient(timeout=8) as client:
+                resp = await client.post(
+                    "https://api.siliconflow.cn/v1/chat/completions",
+                    json={
+                        "model": "THUDM/GLM-4-9B-0414",
+                        "messages": messages,
+                        "temperature": 0.1,
+                        "max_tokens": 10,
+                    },
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                resp.raise_for_status()
+                result = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                passed = "ok" in result.lower()
+                if not passed:
+                    logger.info("greeting.quality_check_failed text={} result={}", text[:40], result)
+                return passed
+        except Exception as e:
+            logger.debug("greeting.quality_check_error error={}", str(e))
+            return True  # 检查出错则放行
+
     async def _generate(self, hint: str) -> str:
-        """通过小妲 agent 生成问候（使用真实 user_id 以加载记忆上下文）。"""
+        """通过小妲 agent 生成问候（使用真实 user_id 以加载记忆上下文）。
+
+        流程：生成 → 质量检查（小模型） → 不合格则重试一次 → 仍不合格则用兜底。
+        """
         address_term = getattr(self.core.context, "current_address_term", "") or "爸爸"
 
         # 构建带时间上下文的问候指令
@@ -309,75 +357,88 @@ class GreetingScheduler:
         else:
             time_hint, activity = "深夜", "准备睡了"
 
-        # 随机抽取风格线索 + 形式线索，制造"校准过的不可预测性"
-        # 偶发事件（8%）打破常规，制造惊喜
-        import random as _rnd
-        mood = _rnd.choice(self._MOOD_SEEDS)
-        form = _rnd.choice(self._FORM_SEEDS)
-        rare = _rnd.choice(self._RARE_SEEDS) if _rnd.random() < 0.08 else None
+        for attempt in range(2):  # 最多重试 1 次
+            # 随机抽取风格线索 + 形式线索，制造"校准过的不可预测性"
+            # 偶发事件（8%）打破常规，制造惊喜
+            import random as _rnd
+            mood = _rnd.choice(self._MOOD_SEEDS)
+            form = _rnd.choice(self._FORM_SEEDS)
+            rare = _rnd.choice(self._RARE_SEEDS) if _rnd.random() < 0.08 else None
 
-        # 反重复：告诉 LLM 最近说过什么，避免相似
-        recent = await self._recent_greetings(5)
-        recent_hint = ""
-        if recent:
-            joined = " / ".join(recent[:3])
-            recent_hint = f'\n（你最近几次说的是类似：{joined}。这次不要相似。）'
+            # 反重复：告诉 LLM 最近说过什么，避免相似
+            recent = await self._recent_greetings(5)
+            recent_hint = ""
+            if recent:
+                joined = " / ".join(recent[:3])
+                recent_hint = f'\n（你最近几次说的是类似：{joined}。这次不要相似。）'
 
-        # 角色扮演式提示：场景 + 随机风格线索 + 形式线索 + 偶发事件
-        if rare:
-            scene = (
-                f'（场景：现在{time_hint}，{address_term}大概{activity}了。'
-                f'你现在的状态：{mood}。'
-                f'今天想玩点不一样的——{rare}。'
-                f'不要刻意提昨天的事、最近的任务、未完成的工作。'
-                f'可以用自然的比喻和意象，但不要堆砌。'
-                f'就只是一句带着你性格的、普通的话。）'
-            )
-        else:
-            scene = (
-                f'（场景：现在{time_hint}，{address_term}大概{activity}了。'
-                f'你现在的状态：{mood}。'
-                f'你想说一句——形式是：{form}。'
-                f'就像随口招呼一声那样自然，不必长，不必修辞过度。'
-                f'不要刻意提昨天的事、最近的任务、未完成的工作。'
-                f'可以用自然的比喻和意象，但不要堆砌。'
-                f'不要像 AI 助手那样"主动问候"。'
-                f'就只是一句带着你性格的、普通的话。）'
-            )
-        user_input = scene + recent_hint
-        if hint:
-            user_input += f'\n（如果顺嘴能带一句关于「{hint}」的就带，想不到就不带。）'
+            # 角色扮演式提示：场景 + 随机风格线索 + 形式线索 + 偶发事件
+            if rare:
+                scene = (
+                    f'（场景：现在{time_hint}，{address_term}大概{activity}了。'
+                    f'你现在的状态：{mood}。'
+                    f'今天想玩点不一样的——{rare}。'
+                    f'不要刻意提昨天的事、最近的任务、未完成的工作。'
+                    f'可以用自然的比喻和意象，但不要堆砌。'
+                    f'就只是一句带着你性格的、普通的话。）'
+                )
+            else:
+                scene = (
+                    f'（场景：现在{time_hint}，{address_term}大概{activity}了。'
+                    f'你现在的状态：{mood}。'
+                    f'你想说一句——形式是：{form}。'
+                    f'就像随口招呼一声那样自然，不必长，不必修辞过度。'
+                    f'不要刻意提昨天的事、最近的任务、未完成的工作。'
+                    f'可以用自然的比喻和意象，但不要堆砌。'
+                    f'不要像 AI 助手那样"主动问候"。'
+                    f'就只是一句带着你性格的、普通的话。）'
+                )
+            user_input = scene + recent_hint
+            if hint:
+                user_input += f'\n（如果顺嘴能带一句关于「{hint}」的就带，想不到就不带。）'
 
-        try:
-            # 使用真实的 user_id 和 session，让记忆系统能加载用户上下文
-            user_openid = "webui"
-            session = await self.core.get_session(user_openid)
-            session_id = session["id"] if session else await self.core.create_session(user_openid)
+            try:
+                # 使用真实的 user_id 和 session，让记忆系统能加载用户上下文
+                user_openid = "webui"
+                session = await self.core.get_session(user_openid)
+                session_id = session["id"] if session else await self.core.create_session(user_openid)
 
-            result = await self.core.process(
-                user_input=user_input,
-                user_id="webui",
-                source="web",
-                user_openid=user_openid,
-                session_id=session_id,
-            )
-            text = result.reply if hasattr(result, 'reply') else str(result)
-            logger.debug("greeting.raw_output hint={} raw={}", hint, text[:200])
-            text = _strip_thinking(text, context="greeting").strip()
-            # 替换模型输出中的旧名（如"纳西妲"→"小妲"）
-            from config import apply_agent_name_replacements
-            text = apply_agent_name_replacements(text)
-            # 过滤模型编造的标签前缀（如 [listen_greeting][user:xxx]: ...）
-            import re as _re
-            for _ in range(3):
-                text = _re.sub(r'^\[[^\]]*\]\s*', '', text).strip()
-                text = _re.sub(r'^\w+:\s*', '', text, count=1).strip()
-                text = _re.sub(r'^:\s*', '', text, count=1).strip()
-            if text:
+                result = await self.core.process(
+                    user_input=user_input,
+                    user_id="webui",
+                    source="web",
+                    user_openid=user_openid,
+                    session_id=session_id,
+                )
+                text = result.reply if hasattr(result, 'reply') else str(result)
+                logger.debug("greeting.raw_output attempt={} hint={} raw={}", attempt, hint, text[:200])
+                text = _strip_thinking(text, context="greeting").strip()
+                # 替换模型输出中的旧名（如"纳西妲"→"小妲"）
+                from config import apply_agent_name_replacements
+                text = apply_agent_name_replacements(text)
+                # 过滤模型编造的标签前缀（如 [listen_greeting][user:xxx]: ...）
+                import re as _re
+                for _ in range(3):
+                    text = _re.sub(r'^\[[^\]]*\]\s*', '', text).strip()
+                    text = _re.sub(r'^\w+:\s*', '', text, count=1).strip()
+                    text = _re.sub(r'^:\s*', '', text, count=1).strip()
+                if not text:
+                    continue
+
                 # 限制长度：真人随口招呼通常很短，过长反而像 AI
-                return text[:80]
-        except Exception as e:
-            logger.warning("greeting.generate_failed error={}", str(e))
+                text = text[:80]
+
+                # 内容质量检查（小模型）
+                if await self._quality_check(text):
+                    return text
+                else:
+                    logger.info("greeting.quality_retry attempt={}", attempt)
+                    continue  # 不合格，重试
+            except Exception as e:
+                logger.warning("greeting.generate_failed attempt={} error={}", attempt, str(e))
+                continue
+
+        # 两次都不合格，用兜底
         return f"{address_term}，好呀～"
 
     async def _send_qq(self, text: str) -> str | None:

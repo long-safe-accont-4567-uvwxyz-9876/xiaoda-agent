@@ -51,8 +51,8 @@ def test_score_formula_exact():
     fm = FluidMemory()
     now = time.time()
     similarity = 0.9
-    created_at = now - 10 * 86400  # 10 天前
-    access_count = 5
+    created_at = now - 30 * 86400  # 30 天前（超出 21 天缓冲期）
+    access_count = 2  # 低于永久记忆阈值 5
     peak_weight = 0.8
 
     days_passed = (now - created_at) / 86400.0
@@ -90,11 +90,11 @@ def test_no_max_boost_cap():
     """新模型无 MAX_BOOST 硬上限：高确认记忆分数随确认次数增长"""
     fm = FluidMemory()
     now = time.time()
-    created_at = now - 5 * 86400  # 5 天前
-    score_5 = fm.score(similarity=0.5, created_at=created_at, access_count=5)
-    score_50 = fm.score(similarity=0.5, created_at=created_at, access_count=50)
-    # 50次确认的稳定性远高于5次，分数更高
-    assert score_50 > score_5
+    created_at = now - 30 * 86400  # 30 天前（超出 21 天缓冲期）
+    score_1 = fm.score(similarity=0.5, created_at=created_at, access_count=1)
+    score_3 = fm.score(similarity=0.5, created_at=created_at, access_count=3)
+    # 3次确认的稳定性高于1次，分数更高（均未达永久阈值 5）
+    assert score_3 > score_1
 
 
 # ── should_filter / should_archive ──
@@ -144,7 +144,7 @@ def test_boost_per_access_value():
 
 
 def test_grace_days_value():
-    assert FluidMemory.GRACE_DAYS == 45
+    assert FluidMemory.GRACE_DAYS == 21
 
 
 def test_weight_threshold_value():
@@ -162,3 +162,51 @@ def test_no_alpha_boost_attribute():
 
 def test_no_max_boost_attribute():
     assert not hasattr(FluidMemory, "MAX_BOOST")
+
+
+# ── 永久记忆 + 缓冲期 ──
+
+
+def test_permanent_memory_no_decay():
+    """access_count ≥ 阈值的记忆永不衰减"""
+    fm = FluidMemory()
+    now = time.time()
+    created_at = now - 365 * 86400  # 1 年前
+    score = fm.score(similarity=0.8, created_at=created_at,
+                     access_count=FluidMemory.PERMANENT_ACCESS_THRESHOLD, peak_weight=1.0)
+    # 永久记忆 retention=1.0，score = 0.8 × 1.0 × 1.0 = 0.8
+    assert score == pytest.approx(0.8, abs=0.01)
+
+
+def test_grace_period_no_decay():
+    """缓冲期内的记忆不衰减"""
+    fm = FluidMemory()
+    now = time.time()
+    created_at = now - 14 * 86400  # 14 天前（< 21 天缓冲期）
+    score = fm.score(similarity=0.7, created_at=created_at,
+                     access_count=0, peak_weight=1.0)
+    # 缓冲期内 retention=1.0
+    assert score == pytest.approx(0.7, abs=0.01)
+
+
+def test_grace_period_expired_decays():
+    """缓冲期过后的记忆正常衰减"""
+    fm = FluidMemory()
+    now = time.time()
+    created_at = now - 25 * 86400  # 25 天前（> 21 天缓冲期）
+    score = fm.score(similarity=0.8, created_at=created_at,
+                     access_count=0, peak_weight=1.0)
+    # 25 天，stability=3，retention=e^(-25/3) ≈ 0.0002
+    assert score < 0.1
+
+
+def test_is_permanent():
+    fm = FluidMemory()
+    assert fm.is_permanent(5) is True
+    assert fm.is_permanent(10) is True
+    assert fm.is_permanent(4) is False
+    assert fm.is_permanent(0) is False
+
+
+def test_permanent_access_threshold_value():
+    assert FluidMemory.PERMANENT_ACCESS_THRESHOLD == 5

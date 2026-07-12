@@ -15,6 +15,7 @@ from loguru import logger
 
 from config import FILE_DIR, get_agent_display_name
 from utils.text_utils import strip_dsml, strip_reasoning, humanize
+from utils.llm_cleanup import deduplicate_multi_reply
 from core.degradation_strategy import get_degradation_strategy
 
 from agent_core._shared import _current_request_ctx, RequestContext
@@ -316,7 +317,7 @@ class ToolExecutorMixin:
         return text
 
     def _finalize_reply(self, reply: str, strip_emotion: bool = True, style: str = "xiaoda") -> str:
-        """统一的回复文本处理：strip_dsml + strip_reasoning + strip_emotion_tag + humanize + 名称替换。
+        """统一的回复文本处理：strip_dsml + strip_reasoning + strip_emotion_tag + humanize + deduplicate + 名称替换。
 
         所有回复路径（主小妲、单子 Agent、并行子 Agent、TaskGraph）统一调用此方法，
         确保回复清洗流程一致。
@@ -329,6 +330,7 @@ class ToolExecutorMixin:
             sticker_mgr = self.get_sticker_manager(style)
             text = sticker_mgr.strip_emotion_tag(text)
         text = humanize(text, style=style)
+        text = deduplicate_multi_reply(text, context="finalize_reply")
         # 名称替换：确保 LLM 输出中的旧名（如"纳西妲"）被替换为显示名（如"小妲"）
         try:
             from config import apply_agent_name_replacements

@@ -27,6 +27,7 @@ from tool_engine.tool_registry import to_openai_tools
 from utils.text_utils import (has_dsml_tool_calls, parse_dsml_tool_calls,
                               humanize, encode_image_to_base64, strip_reasoning,
                               strip_dsml)
+from utils.llm_cleanup import deduplicate_multi_reply
 
 # 从 _shared 导入共享常量, 避免重复定义 (该模块极轻量, 无循环导入风险)
 from agent_core._shared import DEGRADED_REPLY
@@ -334,23 +335,124 @@ class MessageProcessorMixin:
 
     async def _call_fast_path_llm(self, messages: list, user_openid: Any,
                                     session_id: Any) -> str:
-        """快速路径 LLM 调用，返回回复文本（失败时返回降级回复）。"""
+        """快速路径 LLM 调用，返回回复文本（失败时返回降级回复）。
+
+        支持 tool call：如果模型决定使用工具，解析并执行，返回执行结果。
+        """
         _model_cfg = AGENT_CONFIG.get("model", {})
         reply = ""
         try:
+            # 获取可用工具列表
+            _tools_list = to_openai_tools()
+            tools = _tools_list if _tools_list else None
+
             result = await self.router.route(
                 "chat", messages,
                 temperature=_get_temperature(_model_cfg),
                 user_openid=user_openid, session_id=session_id,
+                tools=tools,
             )
+
+            # 检测并处理 tool call
             if isinstance(result, str):
-                reply = self._clean_reply(result)
+                # DSML 格式 tool call 检测
+                if has_dsml_tool_calls(result) and tools:
+                    dsml_calls = parse_dsml_tool_calls(result, self.tool_repair._allowed_tools)
+                    if dsml_calls:
+                        # 执行工具调用
+                        tool_results = await self._execute_fast_path_tools(dsml_calls)
+                        if tool_results:
+                            # 将工具结果追加到消息列表，再次调用 LLM
+                            messages.append({"role": "assistant", "content": result})
+                            messages.append({"role": "user", "content": f"工具执行结果：\n{tool_results}\n\n请根据工具结果回复用户。"})
+                            # 递归调用，但不再传递 tools（避免无限循环）
+                            result2 = await self.router.route(
+                                "chat", messages,
+                                temperature=_get_temperature(_model_cfg),
+                                user_openid=user_openid, session_id=session_id,
+                            )
+                            if isinstance(result2, str):
+                                reply = self._clean_reply(result2)
+                            else:
+                                reply = self._clean_reply(result2.choices[0].message.content or "")
+                        else:
+                            reply = self._clean_reply(result)
+                    else:
+                        reply = self._clean_reply(result)
+                else:
+                    reply = self._clean_reply(result)
             else:
-                reply = self._clean_reply(result.choices[0].message.content or "")
+                # OpenAI 格式 tool call 检测
+                msg = result.choices[0].message
+                if msg.tool_calls and tools:
+                    tool_calls = [
+                        {"id": str(tc.id), "type": "function",
+                         "function": {"name": tc.function.name,
+                                      "arguments": str(tc.function.arguments) if tc.function.arguments else "{}"}}
+                        for tc in msg.tool_calls
+                    ]
+                    # 执行工具调用
+                    tool_results = await self._execute_fast_path_tools(tool_calls)
+                    if tool_results:
+                        # 将工具结果追加到消息列表，再次调用 LLM
+                        messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": msg.tool_calls})
+                        messages.append({"role": "user", "content": f"工具执行结果：\n{tool_results}\n\n请根据工具结果回复用户。"})
+                        # 递归调用，但不再传递 tools（避免无限循环）
+                        result2 = await self.router.route(
+                            "chat", messages,
+                            temperature=_get_temperature(_model_cfg),
+                            user_openid=user_openid, session_id=session_id,
+                        )
+                        if isinstance(result2, str):
+                            reply = self._clean_reply(result2)
+                        else:
+                            reply = self._clean_reply(result2.choices[0].message.content or "")
+                    else:
+                        reply = self._clean_reply(msg.content or "")
+                else:
+                    reply = self._clean_reply(msg.content or "")
         except Exception as e:
             logger.warning("agent.fast_path_failed", error=str(e))
             reply = DEGRADED_REPLY
         return reply
+
+    async def _execute_fast_path_tools(self, tool_calls: list[dict]) -> str:
+        """执行 fast path 中的工具调用，返回执行结果摘要。"""
+        if not tool_calls or not self._tool_call_handler:
+            return ""
+
+        results = []
+        for tc in tool_calls:
+            try:
+                func_name = tc.get("function", {}).get("name", "")
+                func_args = tc.get("function", {}).get("arguments", "{}")
+
+                # 解析参数
+                if isinstance(func_args, str):
+                    try:
+                        args_dict = json.loads(func_args)
+                    except json.JSONDecodeError:
+                        args_dict = {}
+                else:
+                    args_dict = func_args
+
+                # 执行工具
+                result = await self._tool_call_handler._tool_executor.execute(
+                    func_name, args_dict, user_openid="", session_id=""
+                )
+
+                # 格式化结果
+                if isinstance(result, dict):
+                    result_str = json.dumps(result, ensure_ascii=False)
+                else:
+                    result_str = str(result)
+
+                results.append(f"{func_name}: {result_str[:500]}")
+            except Exception as e:
+                logger.warning("fast_path.tool_execute_failed", tool=tc.get("function", {}).get("name"), error=str(e))
+                results.append(f"{tc.get('function', {}).get('name', 'unknown')}: 执行失败 - {str(e)}")
+
+        return "\n".join(results) if results else ""
 
     async def _finalize_fast_path_reply(self, reply: str, user_input: Any, is_master: Any,
                                           user_id: Any, source: Any, emotion: Any,
@@ -390,6 +492,7 @@ class MessageProcessorMixin:
         clean_reply = strip_dsml(clean_reply)
         clean_reply = strip_reasoning(clean_reply)
         clean_reply = humanize(clean_reply, style="xiaoda")
+        clean_reply = deduplicate_multi_reply(clean_reply, context="fast_path")
         # 名称替换：确保 LLM 输出中的旧名被替换为显示名
         try:
             from config import apply_agent_name_replacements
@@ -678,7 +781,9 @@ class MessageProcessorMixin:
         else:
             clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
             clean_reply = strip_dsml(clean_reply)
+            clean_reply = strip_reasoning(clean_reply)
             clean_reply = humanize(clean_reply, style="xiaoda")
+            clean_reply = deduplicate_multi_reply(clean_reply, context="main_path")
             # 名称替换：确保 LLM 输出中的旧名被替换为显示名
             try:
                 from config import apply_agent_name_replacements

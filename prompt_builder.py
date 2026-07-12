@@ -626,6 +626,29 @@ def _replace_placeholders(content: str, address_term: str, agent_name: str = "")
     return content
 
 
+def _annotate_user_profile(content: str, address_term: str) -> str:
+    """为 USER.md 中的称呼/姓名字段添加语义标注，帮助 LLM 区分角色。
+
+    称呼 = 对外表达时使用的唯一称谓（active）
+    姓名 = 仅供了解的背景信息，不要用来称呼（passive）
+    """
+    # 标注称呼行：强调这是唯一的对话称谓
+    content = _re.sub(
+        r'^(-\s*称呼[：:]\s*.+)$',
+        rf'\1（对话中对用户的唯一称呼，所有场景都用这个）',
+        content,
+        flags=_re.MULTILINE,
+    )
+    # 标注姓名行：明确这是背景知识，不用于称呼
+    content = _re.sub(
+        r'^(-\s*姓名[：:]\s*.+)$',
+        rf'\1（背景信息，不要用来称呼用户）',
+        content,
+        flags=_re.MULTILINE,
+    )
+    return content
+
+
 def _build_stable_prompt(address_term: str) -> str:
     """构建系统提示「稳定段」：SOUL.md/AGENTS.md/IDENTITY.md/TOOLS.md/skills/硬件信息。
 
@@ -726,6 +749,8 @@ def _load_cached_modules(address_term: str) -> dict[str, str]:
                  "USER.md", "MEMORY.md", "HEARTBEAT.md"):
         content = _load(name)
         if content:
+            if name == "USER.md":
+                content = _annotate_user_profile(content, address_term)
             modules[name] = content
 
     skills = load_skills()
@@ -908,7 +933,7 @@ def reset_scene_cache() -> None:
         _scene_cache_misses = 0
 
 
-def _build_dynamic_prompt(extra_context: str = "") -> str:
+def _build_dynamic_prompt(extra_context: str = "", address_term: str = "爸爸") -> str:
     """构建系统提示「动态段」：USER.md/MEMORY.md/HEARTBEAT.md/extra_context。
 
     每次请求可能变化，不缓存。
@@ -917,6 +942,7 @@ def _build_dynamic_prompt(extra_context: str = "") -> str:
 
     user = load_workspace_file("USER.md")
     if user:
+        user = _annotate_user_profile(user, address_term)
         sections.append(user)
 
     memory = load_workspace_file("MEMORY.md")
@@ -1142,7 +1168,7 @@ def _build_cached_system_prompt(address_term: str) -> str:
         try:
             stable = _build_stable_prompt(address_term)
             # extra_context 延迟到末尾注入（保证新段落顺序）
-            dynamic = _build_dynamic_prompt("")
+            dynamic = _build_dynamic_prompt("", address_term)
             system_prompt = stable + "\n\n---\n\n" + dynamic if dynamic else stable
         except Exception as e:
             # 失败安全：降级到原始构建
@@ -1335,6 +1361,7 @@ def _build_workspace_sections(address_term: str) -> list[str]:
 
     user = load_workspace_file("USER.md")
     if user:
+        user = _annotate_user_profile(user, address_term)
         sections.append(user)
 
     tools_rules = load_workspace_file("TOOLS.md")

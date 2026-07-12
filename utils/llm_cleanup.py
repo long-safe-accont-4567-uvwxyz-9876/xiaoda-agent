@@ -38,6 +38,37 @@ _REASONING_INDICATORS = re.compile(
 )
 
 
+def deduplicate_multi_reply(text: str, *, context: str = "") -> str:
+    """检测并去重多回复：当 LLM 输出了多个候选回复（如多行问候）时只保留第一个。
+
+    可独立于 strip_thinking 使用，用于主回复链路的去重。
+    """
+    if not text:
+        return ""
+
+    greeting_patterns = [
+        r'早安', r'早上好', r'中午好', r'下午好', r'晚上好', r'晚安',
+        r'好呀', r'好啊', r'在呀', r'在啊', r'在哒'
+    ]
+
+    lines = text.split('\n')
+    if len(lines) > 1:
+        greeting_lines = []
+        for line in lines:
+            line = line.strip()
+            if line and any(pattern in line for pattern in greeting_patterns):
+                greeting_lines.append(line)
+
+        if len(greeting_lines) > 1:
+            logger.info("llm_cleanup.multiple_greetings_detected",
+                       context=context, total_lines=len(lines),
+                       greeting_count=len(greeting_lines),
+                       first_greeting=greeting_lines[0][:50])
+            return greeting_lines[0]
+
+    return text
+
+
 def strip_thinking(text: str, *, context: str = "") -> str:
     """移除推理模型的思维链输出，仅保留最终回复。
 
@@ -71,4 +102,6 @@ def strip_thinking(text: str, *, context: str = "") -> str:
                        context=context, raw_len=len(raw),
                        raw_preview=raw[:120])
         return ""
-    return text
+
+    # 4. 处理多个回复的情况（模型可能输出了多个回复，如"早安"、"中午好"、"晚上好"）
+    return deduplicate_multi_reply(text, context=context)

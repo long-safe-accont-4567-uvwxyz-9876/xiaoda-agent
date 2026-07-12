@@ -365,9 +365,11 @@ def test_sla_exporter_counter_increment():
 async def test_dream_consolidate_decay():
     from core.dream_consolidation import DreamConsolidator, Memory
     d = DreamConsolidator()
-    # 添加一个旧记忆 (模拟 10 天前)
+    # 添加一个旧记忆 (模拟 30 天前创建, 10 天前最后访问)
+    now = time.time()
     old = Memory(id="m1", content="old", importance=0.5, strength=0.5,
-                  last_access=time.time() - 86400 * 10, decay_rate=0.5)
+                  last_access=now - 86400 * 10, created_at=now - 86400 * 30,
+                  decay_rate=0.5)
     d.add_memory(old)
     await d.consolidate()
     stats = d.stats()
