@@ -28,12 +28,15 @@ from botpy.message import C2CMessage, GroupMessage
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agent_core import AgentCore, ProcessResult
+from agent_core.user_qq import QQUser
+from core.event_bus import event_bus
 from config import AGENT_CONFIG, get_agent_display_name
 from security.human_approval import (
     IMApprovalChannel, ApprovalRequest, ApprovalStatus,
     RiskLevel, HIGH_RISK_OPERATIONS,
 )
 from emotion.nudge_engine import NudgeEngine
+from emotion.emoji_config import get_ack_message
 from utils.text_utils import encode_image_to_base64
 
 _original_is_system_event = BotWebSocket._is_system_event
@@ -569,7 +572,7 @@ class AIQQBot(botpy.Client):
                                   image_data: list) -> None:
         """发送 ACK、调用 agent 处理消息并回复，处理超时与异常。"""
         try:
-            await message.reply(content=f"{get_agent_display_name('xiaoda')}收到啦，正在想～🌿", msg_seq=_next_msg_seq())
+            await message.reply(content=get_ack_message('xiaoda'), msg_seq=_next_msg_seq())
 
             async def status_notify(msg) -> None:
                 # tool_call_handler._notify_tool_status 传入 dict 类型（工具状态），
@@ -580,14 +583,22 @@ class AIQQBot(botpy.Client):
                     return
                 await message.reply(content=msg, msg_seq=_next_msg_seq())
 
-            result = await asyncio.wait_for(
-                self.agent.process(user_input, user_id=user_id, source="qq_c2c",
-                                  user_openid=user_openid, session_id=session_id,
-                                  status_callback=status_notify,
-                                  image_data=image_data if image_data else None,
-                                  is_master=is_master),
-                timeout=180,  # 复杂任务（多轮工具调用+重试）需要更长时间，180s 兜底
-            )
+            # 绑定 QQUser 到 EventBus
+            async def _qq_reply(content: str, msg_seq: int = 0) -> None:
+                await message.reply(content=content, msg_seq=msg_seq)
+            qq_user = QQUser(reply_fn=_qq_reply, msg_seq_fn=_next_msg_seq)
+            event_bus.bind_user(qq_user)
+            try:
+                result = await asyncio.wait_for(
+                    self.agent.process(user_input, user_id=user_id, source="qq_c2c",
+                                      user_openid=user_openid, session_id=session_id,
+                                      status_callback=status_notify,
+                                      image_data=image_data if image_data else None,
+                                      is_master=is_master),
+                    timeout=180,  # 复杂任务（多轮工具调用+重试）需要更长时间，180s 兜底
+                )
+            finally:
+                event_bus.unbind_user()
             # HITL: 高危操作两段式确认（检测 __HIGH_RISK_OP__ 标记）
             result = await self._check_high_risk_approval(
                 result, message, user_openid or user_id, is_master)
@@ -595,6 +606,9 @@ class AIQQBot(botpy.Client):
                 await self._send_reply_with_sticker(message, result)
         except TimeoutError:
             logger.warning("qq_bot.c2c_timeout user=%s", user_id)
+            # 记录失败状态，供下次消息恢复上下文
+            if hasattr(self.agent, 'context') and self.agent.context:
+                self.agent.context.record_failure("处理超时", user_input)
             try:
                 await message.reply(content=f"{get_agent_display_name('xiaoda')}想得太入神了……能再说一次吗？🌱", msg_seq=_next_msg_seq())
             except (OSError, RuntimeError, ConnectionError) as _e:
@@ -657,7 +671,7 @@ class AIQQBot(botpy.Client):
 
             # 立即发送 ACK
             try:
-                await message.reply(content=f"{get_agent_display_name('xiaoda')}收到啦，正在想～🌿", msg_seq=_next_msg_seq())
+                await message.reply(content=get_ack_message('xiaoda'), msg_seq=_next_msg_seq())
             except (OSError, RuntimeError, ConnectionError) as e:
                 logger.debug("qq_bot.ack_send_failed", error=str(e))
 
@@ -676,6 +690,9 @@ class AIQQBot(botpy.Client):
                 await self._send_reply_with_sticker(message, result)
         except TimeoutError:
             logger.warning("qq_bot.group_timeout user=%s", user_id)
+            # 记录失败状态，供下次消息恢复上下文
+            if hasattr(self.agent, 'context') and self.agent.context:
+                self.agent.context.record_failure("处理超时", user_input)
             try:
                 await message.reply(content=f"{get_agent_display_name('xiaoda')}想得太入神了……能再说一次吗？🌱", msg_seq=_next_msg_seq())
             except (OSError, RuntimeError, ConnectionError) as _e:

@@ -30,6 +30,8 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect  # noqa: E402
 from loguru import logger  # noqa: E402
 
 from config import STREAM_STATUS_PUSH, STREAM_TEXT_PUSH, STREAM_TOOL_STATUS  # noqa: E402
+from core.event_bus import event_bus  # noqa: E402
+from agent_core.user_web import WebUser  # noqa: E402
 
 router = APIRouter()
 
@@ -505,11 +507,19 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
             await manager.send_to(conn_id, {"type": "status", "msg_id": msg_id, "stage": "thinking"})
         # ── S2: EXECUTE 阶段 ──
         logger.info("ws.chat.phase", phase="execute", agent=agent, msg_id=msg_id)
-        data = await process_and_serialize(
-            core, text, session_id=session_id, agent=agent,
-            status_callback=on_status, app=app,
-            conn_id=conn_id, msg_id=msg_id,
-            image_data=image_data)
+        # 绑定 WebUser 到 EventBus
+        async def _ws_send(event: dict) -> None:
+            await manager.send_to(conn_id, event)
+        web_user = WebUser(send_fn=_ws_send)
+        event_bus.bind_user(web_user)
+        try:
+            data = await process_and_serialize(
+                core, text, session_id=session_id, agent=agent,
+                status_callback=on_status, app=app,
+                conn_id=conn_id, msg_id=msg_id,
+                image_data=image_data)
+        finally:
+            event_bus.unbind_user()
         # ── S2: VERIFY 阶段 ──
         _verify_response(data, msg_id, agent)
         data.update({"type": "final", "msg_id": msg_id})
