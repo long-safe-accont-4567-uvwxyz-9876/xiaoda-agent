@@ -94,8 +94,8 @@ class SubAgentManagerMixin:
             if _br:
                 try:
                     _br.update_belief(target, bool(sub_reply and sub_reply.strip()))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("belief_router.update_failed agent={} error={}", target, str(e)[:100])
         except CancellationError:
             await event_bus.emit(AgentEvent(
                 type=AgentEventType.SUB_CANCELLED,
@@ -116,8 +116,8 @@ class SubAgentManagerMixin:
             if _br:
                 try:
                     _br.update_belief(target, False)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("belief_router.update_failed agent={} error={}", target, str(e)[:100])
             sub_reply = None
         if sub_reply is None:
             sub_reply = f"{display_name}现在有点累了...等会儿再来吧！💤"
@@ -355,8 +355,8 @@ class SubAgentManagerMixin:
             if _br:
                 try:
                     _br.update_belief(t, bool(reply and reply.strip()))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("belief_router.update_failed agent={} error={}", t, str(e)[:100])
             return {"agent": t, "display_name": display_name, "reply": reply}
         except TimeoutError:
             await event_bus.emit(AgentEvent(
@@ -370,8 +370,8 @@ class SubAgentManagerMixin:
             if _br:
                 try:
                     _br.update_belief(t, False)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("belief_router.update_failed agent={} error={}", t, str(e)[:100])
             return {"agent": t, "display_name": display_name,
                     "reply": f"{display_name}处理超时", "error": True}
         except Exception as e:
@@ -395,8 +395,8 @@ class SubAgentManagerMixin:
             if _br:
                 try:
                     _br.update_belief(t, False)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("belief_router.update_failed agent={} error={}", t, str(e)[:100])
             return {"agent": t, "display_name": display_name,
                     "reply": f"处理出错: {e}", "error": True}
 
@@ -553,8 +553,8 @@ class SubAgentManagerMixin:
             if _br:
                 try:
                     _br.update_belief(name, bool(result and result.strip()))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("belief_router.update_failed agent={} error={}", name, str(e)[:100])
         except Exception as dispatch_err:
             _duration = _time_mod.time() - _t0
             await event_bus.emit(AgentEvent(
@@ -568,8 +568,8 @@ class SubAgentManagerMixin:
             if _br:
                 try:
                     _br.update_belief(name, False)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("belief_router.update_failed agent={} error={}", name, str(e)[:100])
             raise
         # I7: 记录子 Agent 工作履历 (供路由器智能调度)
         try:
