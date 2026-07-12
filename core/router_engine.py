@@ -198,7 +198,7 @@ class RouterEngine:
         # 5a. 尝试 BeliefRouter（灰度）
         if self._use_belief:
             try:
-                belief_target = self._belief_router.decide(user_input, user_id)
+                belief_target = self._belief_router.select_agent()
                 if belief_target and belief_target != "xiaoda":
                     return RoutingDecision(
                         agent_names=[belief_target],
