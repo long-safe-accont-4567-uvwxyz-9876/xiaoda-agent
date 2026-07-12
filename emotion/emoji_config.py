@@ -41,3 +41,8 @@ def get_status_msg(agent_name: str, action: str, display_name: str, personality_
     if action == "done":
         return f"{display_name}完成啦～{e}"
     return f"{display_name}{e}"
+
+
+def get_ack_message(agent_name: str, personality_file: str | None = None) -> str:
+    """返回 agent 的 ACK 状态消息（thinking 阶段提示）。"""
+    return get_status_msg(agent_name, "thinking", "", personality_file)
