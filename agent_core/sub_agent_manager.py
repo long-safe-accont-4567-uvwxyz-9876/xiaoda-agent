@@ -64,6 +64,12 @@ class SubAgentManagerMixin:
         _ctx = ctx or _current_request_ctx.get()
         sub_agent = self.dispatcher.get_agent(target)
         if not sub_agent or not sub_agent.available:
+            await event_bus.emit(AgentEvent(
+                type=AgentEventType.SUB_FAILED,
+                agent=target,
+                task_id=gen_task_id(target),
+                data={"error": f"agent unavailable: {target}"},
+            ))
             return ProcessResult(reply=f"{sub_agent.config.display_name if sub_agent else target}现在有点累了...等会儿再来吧！💤")
 
         display_name = sub_agent.config.display_name
@@ -385,10 +391,10 @@ class SubAgentManagerMixin:
             return {"agent": t, "display_name": display_name, "reply": reply}
         except TimeoutError:
             await event_bus.emit(AgentEvent(
-                type=AgentEventType.SUB_FAILED,
+                type=AgentEventType.SUB_CANCELLED,
                 agent=t,
                 task_id=task_id,
-                data={"error": "timeout"},
+                data={"reason": "timeout"},
             ))
             # BeliefRouter 反馈回路
             _br = getattr(self.context, "belief_router", None)
@@ -535,7 +541,7 @@ class SubAgentManagerMixin:
                 if mode == "debate":
                     return await self._debate_agents(agents, verifier, task)
 
-        if name in ("xiaoli", "xiaoli"):
+        if name == "xiaoli":
             return await self.delegate_to_xiaoli(task)
         _ctx = _current_request_ctx.get()
         agent = self.dispatcher.get_agent(name)
@@ -839,8 +845,8 @@ class SubAgentManagerMixin:
         if partner_lines:
             parts.append("[可用的伙伴]\n" + "\n".join(partner_lines) + "\n需要时可以通过 delegate_task 工具向她们求助")
 
-        if self.context._compressed_summary:
-            parts.append(f"[早期对话摘要]\n{self.context._compressed_summary[:300]}")
+        if self.context.compressed_summary:
+            parts.append(f"[早期对话摘要]\n{self.context.compressed_summary[:300]}")
 
         portrait = self.context.user_portrait
         if portrait:

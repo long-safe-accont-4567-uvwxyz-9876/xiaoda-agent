@@ -459,6 +459,9 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
                 local_path = MEDIA_ROOT / "upload" / _Path(url).name
                 if local_path.exists():
                     mime, img_b64 = encode_image_to_base64(str(local_path))
+                    if not img_b64 or not img_b64.strip() or len(img_b64) < 100:
+                        logger.warning("ws_hub_image_skip: url={}, reason=invalid_base64 len={}", url, len(img_b64) if img_b64 else 0)
+                        continue
                     image_data.append({"mimeType": mime, "data": img_b64})
                     logger.info("ws.image_loaded url={} size={}KB", url, len(img_b64) // 1024)
                 else:

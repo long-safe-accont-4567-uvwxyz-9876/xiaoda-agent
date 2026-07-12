@@ -28,14 +28,61 @@ class UserBase(ABC):
         ...
 
 
-# 子代理显示名映射（所有渠道共用）
-AGENT_DISPLAY: dict[str, str] = {
-    "xiaoli": "小莉",
-    "xiaolang": "小狼",
-    "xiaolian": "小涟",
-    "xiaoke": "小可",
-    "xiaoda": "小妲",
-}
+# 子代理显示名映射（所有渠道共用）— 从 config 动态构建
+_AGENT_DISPLAY_CACHE: dict[str, str] | None = None
+
+
+class _LazyAgentDisplay(dict):
+    """懒加载字典：首次访问时从 config 构建显示名映射。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._loaded = False
+
+    def _ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        from config import get_agent_display_name, agent_names
+        self.update({
+            name: get_agent_display_name(name)
+            for name in agent_names()
+        })
+        self._loaded = True
+
+    def __getitem__(self, key: str) -> str:
+        self._ensure_loaded()
+        return super().__getitem__(key)
+
+    def __contains__(self, key: object) -> bool:
+        self._ensure_loaded()
+        return super().__contains__(key)
+
+    def get(self, key: str, default: str | None = None) -> str | None:
+        self._ensure_loaded()
+        return super().get(key, default)
+
+    def keys(self):
+        self._ensure_loaded()
+        return super().keys()
+
+    def values(self):
+        self._ensure_loaded()
+        return super().values()
+
+    def items(self):
+        self._ensure_loaded()
+        return super().items()
+
+    def __len__(self) -> int:
+        self._ensure_loaded()
+        return super().__len__()
+
+    def __iter__(self):
+        self._ensure_loaded()
+        return super().__iter__()
+
+
+AGENT_DISPLAY = _LazyAgentDisplay()
 
 # 紧凑图标映射（QQ 聚合模式用）
 STATUS_ICON: dict[str, str] = {

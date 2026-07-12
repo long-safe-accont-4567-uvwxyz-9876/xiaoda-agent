@@ -143,6 +143,18 @@ class RouterEngine:
         """
         self._belief_router = belief_router
         self._use_belief = os.getenv("ROUTER_ENGINE", "legacy") == "new" and belief_router is not None
+        self._negative_patterns: list[str] | None = None
+        self._keyword_patterns: list[tuple[str, str]] | None = None
+        self._mention_map: dict[str, str] | None = None
+
+    def _ensure_patterns_cached(self) -> None:
+        """延迟构建并缓存正则模式。config 不热更新，缓存安全。"""
+        if self._negative_patterns is None:
+            self._negative_patterns = _build_negative_patterns()
+        if self._keyword_patterns is None:
+            self._keyword_patterns = _build_keyword_patterns()
+        if self._mention_map is None:
+            self._mention_map = _build_mention_map()
 
     def decide(self, user_input: str, user_id: str = "",
                current_target: str | None = None) -> RoutingDecision:
@@ -157,6 +169,7 @@ class RouterEngine:
             RoutingDecision 路由决策
         """
         # 1. 显式 @mention
+        self._ensure_patterns_cached()
         targets = self._match_mentions(user_input)
         if targets:
             return RoutingDecision(
@@ -168,7 +181,7 @@ class RouterEngine:
         q = user_input.lower()
 
         # 2. 否定模式 → xiaoda
-        for pat in _build_negative_patterns():
+        for pat in self._negative_patterns:
             if re.search(pat, q):
                 return RoutingDecision(
                     agent_names=["xiaoda"],
@@ -209,7 +222,7 @@ class RouterEngine:
                 logger.debug("router.belief_fallback", error=str(e))
 
         # 5b. 硬编码关键词匹配
-        for pattern, target in _build_keyword_patterns():
+        for pattern, target in self._keyword_patterns:
             if re.search(pattern, q):
                 return RoutingDecision(
                     agent_names=[target],
@@ -224,14 +237,13 @@ class RouterEngine:
             reasoning="default → xiaoda",
         )
 
-    @staticmethod
-    def _match_mentions(user_input: str) -> list[str]:
-        """提取 @mention 目标列表。"""
+    def _match_mentions(self, user_input: str) -> list[str]:
+        """提取 @mention 目标列表（保序去重）。"""
         targets = []
-        for mention, agent in _build_mention_map().items():
+        for mention, agent in (self._mention_map or _build_mention_map()).items():
             if mention in user_input:
                 targets.append(agent)
-        return targets
+        return list(dict.fromkeys(targets))
 
 
 # ── 公共导出（保持向后兼容）────────────────────────────────────────

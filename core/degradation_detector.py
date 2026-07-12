@@ -245,10 +245,7 @@ class DegradationDetector:
         不修改对应的 _latest, 后续 record_* 仍会正常更新基线。
         """
         baseline = self._baseline(axis, metric)
-        baseline._ewma_mean = float(mean)
-        baseline._ewma_var = float(std) ** 2
-        # 直接将 _n 拉到 ready 阈值 (BehaviorBaseline.ready 要求 n >= 10)
-        baseline._n = max(self._min_baseline_samples, 10)
+        baseline.seed(mean, std, max(self._min_baseline_samples, 10))
         self._latest[axis][metric] = float(mean)
         self._silent_counters[axis][metric] = 0
 

@@ -57,6 +57,11 @@ class InterventionLoop:
         for rule in self._rules:
             score = self._stream.aggregate(rule.signal_type, "mean_of_means")
 
+            # 空 buffer 保护：aggregate 对空 buffer 返回 0.0，
+            # 不应作为有效信号触发干预
+            if score == 0.0:
+                continue
+
             if rule.trigger_above and score <= rule.threshold:
                 continue
             if not rule.trigger_above and score >= rule.threshold:

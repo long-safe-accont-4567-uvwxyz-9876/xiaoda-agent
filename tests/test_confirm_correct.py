@@ -23,7 +23,10 @@ async def cc():
             created TEXT NOT NULL, last_accessed TEXT NOT NULL,
             valid_from TEXT NOT NULL, valid_to TEXT, superseded_by TEXT,
             history TEXT DEFAULT '[]', origin TEXT DEFAULT '{}',
-            source_mem_id INTEGER, embedding BLOB
+            source_mem_id INTEGER, embedding BLOB,
+            difficulty REAL DEFAULT 5.0, stability REAL DEFAULT 3.0,
+            phase TEXT DEFAULT 'buffer', last_review REAL DEFAULT 0.0,
+            reinforcement_count INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS concept_edges (
             source_id TEXT NOT NULL, target_id TEXT NOT NULL,
@@ -48,18 +51,23 @@ async def cc():
 @pytest.mark.asyncio
 async def test_confirm_increases_weight(cc):
     now = "2026-07-10T12:00:00+08:00"
+    import time as _time
+    now_ts = _time.time()
     await cc.db.insert_node(
         id="node1", text="Redis 是数据库",
         keys=json.dumps(["redis", "数据库"]),
         created=now, last_accessed=now, valid_from=now,
-        weight=0.5, peak_weight=0.5,  # 低于上限以观察 +0.15 增量
+        weight=0.5, peak_weight=0.5,
+        difficulty=5.0, stability=3.0, phase="buffer",
+        last_review=now_ts, reinforcement_count=0,
     )
     result = await cc.confirm(["node1"])
     assert result["reinforced"] == 1
     node = await cc.db.get_node("node1")
     assert node["access_count"] == 1
-    assert node["weight"] == 0.65  # 0.5 + 0.15
-    assert node["peak_weight"] == 0.65
+    # FSRS reinforce 后 R 接近 1.0，weight 由 R 驱动
+    assert node["weight"] > 0.5
+    assert node["peak_weight"] >= node["weight"]
 
 
 @pytest.mark.asyncio
@@ -197,5 +205,4 @@ async def test_correct_supersedes_edge(cc):
 
 
 def test_constants(cc):
-    assert ConfirmCorrect.BOOST_PER_ACCESS == 0.15
     assert ConfirmCorrect.EDGE_BOOST == 0.25

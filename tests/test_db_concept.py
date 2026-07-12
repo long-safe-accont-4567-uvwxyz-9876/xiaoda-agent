@@ -36,7 +36,12 @@ async def concept_db():
             history       TEXT NOT NULL DEFAULT '[]',
             origin        TEXT NOT NULL DEFAULT '{}',
             source_mem_id INTEGER,
-            embedding     BLOB
+            embedding     BLOB,
+            difficulty    REAL NOT NULL DEFAULT 5.0,
+            stability     REAL NOT NULL DEFAULT 3.0,
+            phase         TEXT NOT NULL DEFAULT 'buffer',
+            last_review   REAL NOT NULL DEFAULT 0.0,
+            reinforcement_count INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS concept_edges (
             source_id  TEXT NOT NULL,

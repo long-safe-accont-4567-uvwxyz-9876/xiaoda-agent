@@ -39,9 +39,25 @@ class FluidMemory:
         self._fsrs = FSRSModel()
 
     def score(self, similarity: float, created_at: float,
-              access_count: int = 0, peak_weight: float = 1.0) -> float:
+              access_count: int = 0, peak_weight: float = 1.0,
+              fsrs_state: MemoryState | None = None) -> float:
         """计算综合记忆分数（兼容接口，委托 FSRS-DSR）"""
         now = time.time()
+        if fsrs_state is not None:
+            R = fsrs_state.retrievability(now)
+            if peak_weight != 1.0:
+                warnings.warn(
+                    "peak_weight is ignored when FSRS state is available; "
+                    "FSRS R(t) already incorporates decay. "
+                    "peak_weight will be removed in a future version.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+            return similarity * R
+
+        # ⚠️ 旧路径：无 FSRS 状态时使用线性公式估算 stability。
+        # 此公式与 FSRS reinforce 后的 stability 有差异，仅作为 fallback。
+        # 新代码应始终传入 fsrs_state 参数。
         stability = S_INIT + access_count * self.STABILITY_PER_ACCESS
         state = MemoryState(
             stability=min(stability, 300.0),
@@ -69,7 +85,12 @@ class FluidMemory:
         R = state.retrievability(now)
         return similarity * peak_weight * R
 
-    def is_permanent(self, access_count: int) -> bool:
+    def is_permanent(self, access_count: int,
+                     fsrs_state: MemoryState | None = None) -> bool:
+        """判断记忆是否已达永久状态。优先使用 FSRS transition 判定。"""
+        if fsrs_state is not None:
+            new_phase = fsrs_state.transition(time.time())
+            return new_phase == MemoryPhase.PERMANENT
         return access_count >= self.PERMANENT_ACCESS_THRESHOLD
 
     def should_filter(self, score: float) -> bool:

@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import time
 import uuid
 import contextvars
@@ -111,7 +112,10 @@ class AgentEventBus:
 
 
 def gen_task_id(agent: str, input_hint: str = "") -> str:
-    """生成任务唯一标识。"""
+    """生成任务唯一标识。若提供 input_hint，拼接其前4位MD5使ID具备输入可溯性。"""
+    if input_hint:
+        hint_hash = hashlib.md5(input_hint.encode()).hexdigest()[:4]
+        return f"{agent}_{hint_hash}_{uuid.uuid4().hex[:6]}"
     return f"{agent}_{uuid.uuid4().hex[:8]}"
 
 

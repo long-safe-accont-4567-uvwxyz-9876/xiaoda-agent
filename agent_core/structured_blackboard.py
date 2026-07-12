@@ -112,7 +112,7 @@ class StructuredBlackboard(SharedBlackboard):
     async def merge_from(self, other: "StructuredBlackboard") -> int:
         """
         合并另一个黑板的条目 — 对齐 jlens/lens.py: JacobianLens.merge()。
-        不存在的 key 直接导入，已存在的保留原值。
+        不存在的 key 直接导入，已存在的保留原值。同时合并标签和方向索引。
         """
         merged_count = 0
         other_keys = await other.keys()
@@ -123,4 +123,13 @@ class StructuredBlackboard(SharedBlackboard):
                 if existing is None:
                     await self.put(key, val)
                     merged_count += 1
+        if isinstance(other, StructuredBlackboard):
+            for tag, keys in other._tag_index.items():
+                if tag not in self._tag_index:
+                    self._tag_index[tag] = set()
+                self._tag_index[tag].update(keys)
+            for direction, keys in other._direction_index.items():
+                if direction not in self._direction_index:
+                    self._direction_index[direction] = set()
+                self._direction_index[direction].update(keys)
         return merged_count

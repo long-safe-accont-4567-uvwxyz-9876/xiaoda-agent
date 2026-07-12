@@ -185,6 +185,8 @@ APP_SECRET = os.getenv("QQBOT_APP_SECRET", "")
 
 _qq_cfg = AGENT_CONFIG.get("qq_bot", {})
 MAX_REPLY_LEN = _qq_cfg.get("max_reply_length", 8000)
+QQ_C2C_MAX_SEGMENTS = 4
+QQ_GROUP_MAX_SEGMENTS = 4
 
 # HITL: Agent 输出中嵌入的高危操作标记，QQ 适配器拦截后触发两段式确认
 _HIGH_RISK_OP_MARKER = "__HIGH_RISK_OP__:"
@@ -671,14 +673,22 @@ class AIQQBot(botpy.Client):
             except (OSError, RuntimeError, ConnectionError) as e:
                 logger.debug("qq_bot.ack_send_failed", error=str(e))
 
-            result = await asyncio.wait_for(
-                self.agent.process(user_input, user_id=user_id, source="qq_group",
-                                  user_openid=member_openid,
-                                  status_callback=status_notify,
-                                  image_data=image_data if image_data else None,
-                                  is_master=is_master),
-                timeout=180,  # 复杂任务（多轮工具调用+重试）需要更长时间，180s 兜底
-            )
+            # 绑定 QQUser 到 EventBus（群聊也需要子代理事件投递）
+            async def _group_reply(content: str, msg_seq: int = 0) -> None:
+                await message.reply(content=content, msg_seq=msg_seq)
+            qq_user = QQUser(reply_fn=_group_reply, msg_seq_fn=_next_msg_seq)
+            token = event_bus.bind_user(qq_user)
+            try:
+                result = await asyncio.wait_for(
+                    self.agent.process(user_input, user_id=user_id, source="qq_group",
+                                      user_openid=member_openid,
+                                      status_callback=status_notify,
+                                      image_data=image_data if image_data else None,
+                                      is_master=is_master),
+                    timeout=180,  # 复杂任务（多轮工具调用+重试）需要更长时间，180s 兜底
+                )
+            finally:
+                event_bus.unbind_user(token)
             # HITL: 高危操作两段式确认（检测 __HIGH_RISK_OP__ 标记）
             result = await self._check_high_risk_approval(
                 result, message, member_openid or user_id, is_master)
@@ -1033,6 +1043,14 @@ class AIQQBot(botpy.Client):
         else:
             segments = self._split_text_for_streaming(full_text, chunk_size=300)
 
+        # P0-10: C2C 被动回复最多 4 次，超出部分合并到最后一片
+        max_segs = QQ_GROUP_MAX_SEGMENTS if is_group else QQ_C2C_MAX_SEGMENTS
+        if len(segments) > max_segs:
+            merged_tail = "".join(segments[max_segs - 1:])
+            segments = segments[:max_segs - 1] + [merged_tail]
+            logger.info("qq_bot.stream_capped original={} capped={}",
+                        len(segments) + 1 if len(segments) > max_segs else len(segments), max_segs)
+
         _group_no_proactive = ("被动回复", "超过限制", "无权限", "40034105")
 
         async def _send_segment(text: str) -> None:
@@ -1140,6 +1158,12 @@ class AIQQBot(botpy.Client):
             segments = split_for_group_passive(clean_reply)
         else:
             segments = self._split_text_for_streaming(clean_reply, chunk_size=300)
+
+        # P0-10: C2C 被动回复最多 4 次，超出部分合并到最后一片
+        max_segs = QQ_GROUP_MAX_SEGMENTS if is_group else QQ_C2C_MAX_SEGMENTS
+        if len(segments) > max_segs:
+            merged_tail = "".join(segments[max_segs - 1:])
+            segments = segments[:max_segs - 1] + [merged_tail]
 
         if len(segments) <= 1:
             # 短回复：文字+表情包合并为一条消息发送

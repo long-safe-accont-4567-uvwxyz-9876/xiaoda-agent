@@ -49,12 +49,15 @@ def get_env_path() -> Path:
     if getattr(sys, 'frozen', False):
         user_env = Path.home() / ".ai-agent" / ".env"
         user_env.parent.mkdir(parents=True, exist_ok=True)
+        migration_marker = user_env.parent / ".env.migrated"
         # 迁移：如果用户目录没有 .env 但 exe 目录有（旧版以管理员运行过），自动迁移
-        if not user_env.exists():
+        # 使用标记文件避免 Docker 重启时重复迁移
+        if not user_env.exists() and not migration_marker.exists():
             old_env = Path(sys.executable).parent / ".env"
             if old_env.exists():
                 try:
                     shutil.copy2(old_env, user_env)
+                    migration_marker.touch()
                     print(f"[config] .env migrated from {old_env} to {user_env}")
                 except (OSError, shutil.Error) as e:
                     logger.debug("config.env_migrate_failed: %s", e)
@@ -765,6 +768,14 @@ AGENT_ROUTE_KEYWORDS = {
     ],
 }
 
+# ── 子代理任务类型映射（EnhancedBeliefRouter 使用） ──
+AGENT_TASK_MAP = {
+    "xiaolang": "security",
+    "xiaoke": "debug",
+    "xiaolian": "info_search",
+    "xiaoda": "general",
+}
+
 # ── RAG 优化配置（SiliconFlow 免费常驻） ──
 RERANKER_API_KEY = get_secret("RERANKER_API_KEY", "")
 RERANKER_BASE_URL = os.getenv("RERANKER_BASE_URL", "https://api.siliconflow.cn/v1")
@@ -925,6 +936,7 @@ __all__ = [
     "AGENT_CONFIG",
     "AGENT_ROUTE_KEYWORDS",
     "AGENT_STICKER_BASE",
+    "AGENT_TASK_MAP",
     "AGNES_API_KEY",
     "AGNES_BASE_URL",
     "AGNES_IMAGE_MODEL",

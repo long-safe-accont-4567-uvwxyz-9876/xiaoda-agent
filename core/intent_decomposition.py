@@ -35,6 +35,7 @@ class DecomposedOutput:
     raw_output: str
     factors: list[IntentFactor]
     residual: float = 0.0
+    total_dimensions: int = 0
 
     @property
     def dominant_intent(self) -> IntentFactor | None:
@@ -48,9 +49,9 @@ class DecomposedOutput:
         """稀疏度 — 对齐 SAE 的 l0 稀疏度量"""
         if not self.factors:
             return 0.0
-        total = len(IntentDecomposer.INTENT_DIMENSIONS)
+        total = self.total_dimensions or len(IntentDecomposer.INTENT_DIMENSIONS)
         active = sum(1 for f in self.factors if f.activation > 0.1)
-        return 1.0 - active / total
+        return 1.0 - active / max(total, 1)
 
 
 class IntentDecomposer:
@@ -108,7 +109,8 @@ class IntentDecomposer:
         explained = sum(min(1.0, f.activation) for f in factors)
         residual = max(0.0, 1.0 - min(1.0, explained / len(self.INTENT_DIMENSIONS)))
 
-        return DecomposedOutput(raw_output=output, factors=factors, residual=residual)
+        return DecomposedOutput(raw_output=output, factors=factors, residual=residual,
+                                total_dimensions=len(self.INTENT_DIMENSIONS))
 
     def _score_keywords(self, text: str, keywords: list[str]) -> float:
         """简单的关键词匹配评分"""
@@ -118,5 +120,6 @@ class IntentDecomposer:
         return min(1.0, hits * 0.3)
 
     async def _llm_encode(self, output: str, context: dict | None = None) -> DecomposedOutput:
-        """LLM 基分解 — Phase 2 实现（未实现）"""
-        raise NotImplementedError("Phase 2: LLM-based decomposition")
+        """LLM 基分解 — Phase 2 实现（未实现），fallback 到规则编码。"""
+        logger.warning("intent_decomposition.llm_encode_fallback: LLM decomposition not implemented, using rules")
+        return self._rule_encode(output, context)

@@ -89,6 +89,11 @@ class AgentContext:
         self._user_buffers: dict[str, list[dict]] = {}  # 每用户独立的压缩暂存区
         self._current_user_id: str = ""
 
+    @property
+    def compressed_summary(self) -> str:
+        """返回压缩后的上下文摘要（公共接口，替代直接访问 _compressed_summary）。"""
+        return self._compressed_summary
+
     async def switch_user_context(self, user_id: str) -> None:
         """切换当前活跃用户的上下文（群聊多用户隔离）。
 

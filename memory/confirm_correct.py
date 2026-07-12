@@ -162,6 +162,7 @@ class ConfirmCorrect:
 
         new_keys = self.ke.extract(new_text, is_query=False)
 
+        now_ts = time.time()
         await self.db.insert_node(
             id=new_id, text=self._clean_text(new_text),
             weight=old_node.get("weight", 1.0),
@@ -173,6 +174,12 @@ class ConfirmCorrect:
             valid_from=now, valid_to=None,
             superseded_by=None, history=json.dumps(history, ensure_ascii=False),
             origin=json.dumps({"via": "correct"}),
+            source_mem_id=old_node.get("source_mem_id"),
+            difficulty=old_node.get("difficulty", 5.0),
+            stability=old_node.get("stability", 3.0),
+            phase="reinforced",
+            last_review=now_ts,
+            reinforcement_count=0,
         )
 
         # 4. 迁移旧节点的知识边（不迁移 supersedes 边）

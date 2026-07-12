@@ -118,7 +118,7 @@ class DreamConsolidator:
                 reinforcement_count=m.access_count,
             )
             R = state.retrievability(now)
-            m.strength = R
+            m.strength = max(m.strength * 0.95, R)
             elapsed_days = (now - m.last_access) / 86400
             m.importance *= math.exp(-elapsed_days * 0.01)
             if (self._fsrs.should_archive(R)
@@ -257,7 +257,7 @@ class DreamConsolidator:
                     reinforcement_count=m.access_count,
                 )
                 R = state.retrievability(now)
-                m.strength = R
+                m.strength = max(m.strength * 0.95, R)
                 elapsed_days = (now - m.last_access) / 86400
                 m.importance *= math.exp(-elapsed_days * 0.01)
                 if (self._fsrs.should_archive(R)
@@ -301,6 +301,11 @@ class DreamConsolidator:
             self._stats["merged"] += stats["merged"]
             self._stats["strengthened"] += stats["strengthened"]
             self._last_consolidate_at = now
+
+            # 同步更新内部状态，确保 stats() 统计准确
+            self._memories.update(memories)
+            for mid in evict_ids:
+                self._memories.pop(mid, None)
 
             # 联动 L/M/S 心理状态: 清理 7 天前 M 层数据
             self._trigger_mental_state_consolidate()

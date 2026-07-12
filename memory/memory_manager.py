@@ -262,6 +262,8 @@ class MemoryManager:
         )
         # CRAG 检索评估器：评估检索结果质量，低置信度时触发兜底策略
         self._assessor = RetrievalAssessor()
+        # FSRS-DSR 模型实例（无状态纯计算，复用避免热路径重复创建）
+        self._fsrs = FSRSModel()
 
         # 扩散激活引擎（第五路 RRF 通道）
         self.concept_graph = None
@@ -1477,8 +1479,6 @@ class MemoryManager:
         """
         if not results:
             return results
-        if not hasattr(self, '_fsrs'):
-            self._fsrs = FSRSModel()
         now = time.time()
         filtered: list[dict] = []
         for r in results:
@@ -1487,8 +1487,10 @@ class MemoryManager:
             created_at = r.get("created_at", 0.0) or r.get("timestamp", 0.0)
             if last_review == 0.0:
                 last_review = r.get("timestamp", 0.0)
+                logger.debug("fsrs.last_review_fallback id={} using timestamp={}",
+                             r.get("id"), last_review)
             try:
-                phase = MemoryPhase(r.get("phase", "buffer"))
+                phase = MemoryPhase.safe(r.get("phase", "buffer"))
             except ValueError:
                 logger.warning("fsrs_invalid_phase id={} phase={}", r.get("id"), r.get("phase"))
                 phase = MemoryPhase.BUFFER

@@ -296,10 +296,15 @@ class DegradationStrategy:
             from config import ENABLE_J_SPACE_HOOKS
             if ENABLE_J_SPACE_HOOKS and _signal_stream is not None:
                 health_score = _signal_stream.aggregate("health", "mean_of_means")
-                if health_score < 0.3:
-                    # 触发额外降级
-                    # TODO(phase-2): trigger signal-driven degradation
-                    pass
+                if health_score == 0.0:
+                    pass  # 空 buffer，跳过
+                elif health_score < 0.3:
+                    if self._level < DegradationLevel.L1_DEGRADED:
+                        self.trigger(
+                            DegradationLevel.L1_DEGRADED,
+                            reason=f"health_score={health_score:.2f} < 0.3 (CRITICAL)",
+                            source="signal_stream",
+                        )
         except Exception:
             pass
 
@@ -453,4 +458,3 @@ def wire_auto_trigger(
         logger.info("DegradationStrategy.wire_auto_trigger 已接入 detector 回调")
         return True
     return False
-

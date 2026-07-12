@@ -17,6 +17,14 @@ class MemoryPhase(Enum):
     PERMANENT = "permanent"
     ARCHIVED = "archived"
 
+    @classmethod
+    def safe(cls, value: str) -> "MemoryPhase":
+        """从字符串安全构造枚举，非法值 fallback 到 BUFFER。"""
+        try:
+            return cls(value)
+        except ValueError:
+            return cls.BUFFER
+
 
 class ReinforcementSignal(Enum):
     STRONG_CONFIRM = "strong_confirm"

@@ -5,14 +5,14 @@ import aiosqlite
 import pytest
 from pathlib import Path
 
-MIGRATION_SQL = Path("db/migrations/v06_cognitive.sql").read_text()
+MIGRATION_SQL = Path("db/migrations/v06_cognitive.sql").read_text(encoding="utf-8")
 
 @pytest.fixture
 async def migrated_db(tmp_path):
     db_path = tmp_path / "test.db"
     async with aiosqlite.connect(db_path) as db:
         # 创建基础表
-        schema = Path("db/schema.sql").read_text()
+        schema = Path("db/schema.sql").read_text(encoding="utf-8")
         await db.executescript(schema)
         # 执行迁移
         await db.executescript(MIGRATION_SQL)

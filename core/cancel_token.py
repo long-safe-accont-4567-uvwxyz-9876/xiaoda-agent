@@ -45,6 +45,15 @@ class CancelToken:
         self._created_at = time.monotonic()
         self._timer_task: asyncio.Task | None = None
         if timeout is not None and timeout > 0:
+            try:
+                loop = asyncio.get_running_loop()
+                self._timer_task = loop.create_task(self._timeout_watch())
+            except RuntimeError:
+                self._timer_task = None
+
+    async def ensure_started(self) -> None:
+        """确保超时守卫已启动。在 async 上下文中调用一次即可。"""
+        if self._timeout and self._timer_task is None and not self._cancelled:
             self._timer_task = asyncio.create_task(self._timeout_watch())
 
     async def _timeout_watch(self) -> None:
@@ -59,10 +68,7 @@ class CancelToken:
 
     @property
     def is_cancelled(self) -> bool:
-        if self._timeout is not None and self._timeout > 0:
-            if not self._cancelled and time.monotonic() - self._created_at > self._timeout:
-                self._cancelled = True
-                self._reason = f"timeout({self._timeout}s)"
+        """纯读取，无副作用。调试器/日志可安全访问。"""
         return self._cancelled
 
     @property
@@ -76,7 +82,12 @@ class CancelToken:
             logger.info("cancel_token.cancelled reason={}", reason)
 
     def check(self) -> None:
-        if self.is_cancelled:
+        """主动检查是否已取消。含 fallback timeout 检测，有副作用——仅应在调度点调用。"""
+        if self._timeout is not None and self._timeout > 0:
+            if not self._cancelled and time.monotonic() - self._created_at > self._timeout:
+                self._cancelled = True
+                self._reason = f"timeout({self._timeout}s)"
+        if self._cancelled:
             raise CancellationError(self._reason)
 
     def cleanup(self) -> None:

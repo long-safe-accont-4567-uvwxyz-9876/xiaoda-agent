@@ -1,6 +1,16 @@
 # memory/cognitive_memory.py
 """3层认知记忆管理器
 
+⚠️ DEPRECATED: 本模块使用独立的衰减逻辑，与 FSRS-DSR 不兼容。
+新代码应使用 memory.fsrs_model.FSRSModel 和 memory.confirm_correct 模块。
+
+迁移路径:
+  - CognitiveMemory.salience  → FSRSModel.retrievability()
+  - CognitiveMemory.decay_factor → MemoryState.stability
+  - CognitiveMemory.consolidate() → DreamConsolidator.consolidate_from_db()
+
+预计移除版本: v0.5.0
+
 Layer 1: EpisodicMemory — FIFO热缓冲 (内存)
 Layer 2: SemanticMemory — 聚类长期存储 (内存, 后续持久化到SQLite)
 Layer 3: HopfieldLayer — 联想记忆 (内存)
@@ -11,8 +21,15 @@ from __future__ import annotations
 
 import math
 import time
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
+
+warnings.warn(
+    "CognitiveMemory is deprecated. Use FSRSModel + DreamConsolidator instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 from collections import deque
 
 import numpy as np

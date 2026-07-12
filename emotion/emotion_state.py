@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import time
 import threading
 
@@ -216,21 +217,25 @@ class EmotionState:
         return max(0.0, decayed)
 
     def _save(self) -> None:
-        """持久化到 JSON 文件。"""
+        """持久化到 JSON 文件（异步 fire-and-forget，避免阻塞事件循环）。"""
         import json
         with self._lock:
             data = {
                 "current": self._current,
                 "intensity": self._intensity,
                 "last_update": self._last_update,
-                "history": self._history[-10:],  # 只存最近 10 条
+                "history": self._history[-10:],
                 "active_emotions": {k: list(v) for k, v in self._active_emotions.items()},
                 "pad": self._pad,
             }
-        self._persist_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
+        payload = json.dumps(data, ensure_ascii=False, indent=2)
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(asyncio.to_thread(
+                self._persist_path.write_text, payload, encoding="utf-8"
+            ))
+        except RuntimeError:
+            self._persist_path.write_text(payload, encoding="utf-8")
 
     def _load(self) -> None:
         """从 JSON 文件加载。"""

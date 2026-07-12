@@ -1278,7 +1278,10 @@ class MessageProcessorMixin:
                             logger.debug("agent.stream_callback_failed: {}", str(cb_err)[:100])
         except Exception as e:
             logger.warning("message_processor.stream_llm_failed: {}", str(e)[:200])
-            # 降级到同步调用（丢弃已积累的部分流式内容）
+            accumulated = "".join(full_response)
+            if accumulated:
+                logger.info("message_processor.stream_partial_return len={}", len(accumulated))
+                return accumulated + "\n\n[⚠️ 内容生成中断，以上为已生成的部分]"
             return await self.router.route(task_type, messages, **kwargs)
         return "".join(full_response)
 

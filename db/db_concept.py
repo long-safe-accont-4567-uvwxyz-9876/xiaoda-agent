@@ -36,23 +36,64 @@ class ConceptDB:
                           stability: float = 3.0,
                           phase: str = "buffer",
                           last_review: float = 0.0,
-                          reinforcement_count: int = 0) -> None:
-        """插入概念节点。keys 为 JSON 字符串。"""
+                          reinforcement_count: int = 0,
+                          auto_commit: bool = True) -> None:
+        """插入概念节点。keys 为 JSON 字符串。使用 UPSERT 避免覆盖已有 FSRS 状态。"""
         now = created or _now_iso()
         await self._conn.execute(
-            """INSERT OR REPLACE INTO concept_nodes
+            """INSERT INTO concept_nodes
                (id, text, weight, peak_weight, confidence, access_count, keys,
                 layer, created, last_accessed, valid_from, valid_to,
                 superseded_by, history, origin, source_mem_id, embedding,
                 difficulty, stability, phase, last_review, reinforcement_count)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   text = excluded.text,
+                   weight = excluded.weight,
+                   peak_weight = excluded.peak_weight,
+                   confidence = excluded.confidence,
+                   access_count = excluded.access_count,
+                   keys = excluded.keys,
+                   layer = excluded.layer,
+                   last_accessed = excluded.last_accessed,
+                   valid_from = excluded.valid_from,
+                   valid_to = excluded.valid_to,
+                   superseded_by = excluded.superseded_by,
+                   history = excluded.history,
+                   origin = excluded.origin,
+                   embedding = excluded.embedding,
+                   source_mem_id = CASE
+                       WHEN excluded.source_mem_id IS NOT NULL THEN excluded.source_mem_id
+                       ELSE concept_nodes.source_mem_id
+                   END,
+                   difficulty = CASE
+                       WHEN excluded.difficulty != 5.0 OR concept_nodes.difficulty IS NULL THEN excluded.difficulty
+                       ELSE concept_nodes.difficulty
+                   END,
+                   stability = CASE
+                       WHEN excluded.stability != 3.0 OR concept_nodes.stability IS NULL THEN excluded.stability
+                       ELSE concept_nodes.stability
+                   END,
+                   phase = CASE
+                       WHEN excluded.phase != 'buffer' OR concept_nodes.phase IS NULL THEN excluded.phase
+                       ELSE concept_nodes.phase
+                   END,
+                   last_review = CASE
+                       WHEN excluded.last_review > 0 THEN excluded.last_review
+                       ELSE concept_nodes.last_review
+                   END,
+                   reinforcement_count = CASE
+                       WHEN excluded.reinforcement_count > 0 THEN excluded.reinforcement_count
+                       ELSE concept_nodes.reinforcement_count
+                   END""",
             (id, text, weight, peak_weight, confidence, access_count, keys,
              layer, now, last_accessed or now, valid_from or now, valid_to,
              superseded_by, history, origin, source_mem_id, embedding,
              difficulty, stability, phase, last_review, reinforcement_count),
         )
-        await self._conn.commit()
+        if auto_commit:
+            await self._conn.commit()
 
     async def get_node(self, node_id: str) -> dict | None:
         async with self._conn.execute(
@@ -68,7 +109,7 @@ class ConceptDB:
             row = await cur.fetchone()
             return dict(row) if row else None
 
-    async def update_node(self, node_id: str, **fields) -> None:
+    async def update_node(self, node_id: str, auto_commit: bool = True, **fields) -> None:
         if not fields:
             return
         cols = ", ".join(f"{k} = ?" for k in fields)
@@ -76,15 +117,23 @@ class ConceptDB:
         await self._conn.execute(
             f"UPDATE concept_nodes SET {cols} WHERE id = ?", vals
         )
-        await self._conn.commit()
+        if auto_commit:
+            await self._conn.commit()
 
-    async def get_alive_nodes(self) -> dict[str, dict]:
-        """返回所有有效节点（valid_to IS NULL）"""
-        async with self._conn.execute(
-            "SELECT * FROM concept_nodes WHERE valid_to IS NULL"
-        ) as cur:
-            rows = await cur.fetchall()
-            return {row["id"]: dict(row) for row in rows}
+    async def get_alive_nodes(self, limit: int = 0, offset: int = 0) -> dict[str, dict]:
+        """返回有效节点（valid_to IS NULL），支持分页。limit=0 表示不分页。"""
+        if limit > 0:
+            async with self._conn.execute(
+                "SELECT * FROM concept_nodes WHERE valid_to IS NULL LIMIT ? OFFSET ?",
+                (limit, offset)
+            ) as cur:
+                rows = await cur.fetchall()
+        else:
+            async with self._conn.execute(
+                "SELECT * FROM concept_nodes WHERE valid_to IS NULL"
+            ) as cur:
+                rows = await cur.fetchall()
+        return {row["id"]: dict(row) for row in rows}
 
     async def get_node_count(self) -> int:
         async with self._conn.execute(
@@ -95,7 +144,8 @@ class ConceptDB:
 
     async def create_edge(self, source_id: str, target_id: str,
                            relation: str = "related", weight: float = 1.0,
-                           created: str | None = None) -> None:
+                           created: str | None = None,
+                           auto_commit: bool = True) -> None:
         now = created or _now_iso()
         await self._conn.execute(
             """INSERT OR REPLACE INTO concept_edges
@@ -103,7 +153,8 @@ class ConceptDB:
                VALUES (?, ?, ?, ?, ?)""",
             (source_id, target_id, relation, weight, now),
         )
-        await self._conn.commit()
+        if auto_commit:
+            await self._conn.commit()
 
     async def get_edges(self, node_id: str) -> dict[str, dict]:
         async with self._conn.execute(
@@ -114,7 +165,8 @@ class ConceptDB:
 
     async def update_edge(self, source_id: str, target_id: str,
                            weight: float | None = None,
-                           relation: str | None = None) -> None:
+                           relation: str | None = None,
+                           auto_commit: bool = True) -> None:
         fields = {}
         if weight is not None:
             fields["weight"] = weight
@@ -128,7 +180,8 @@ class ConceptDB:
             f"UPDATE concept_edges SET {cols} WHERE source_id = ? AND target_id = ?",
             vals,
         )
-        await self._conn.commit()
+        if auto_commit:
+            await self._conn.commit()
 
     async def auto_link(self, node_id: str, keys: list[str],
                          min_shared: int = 3) -> int:
@@ -148,10 +201,11 @@ class ConceptDB:
                 continue
             shared = key_set & node_keys
             if len(shared) >= min_shared:
-                # 双向建边
-                await self.create_edge(node_id, nid, "co-occurrence", 1.0, now)
-                await self.create_edge(nid, node_id, "co-occurrence", 1.0, now)
+                await self.create_edge(node_id, nid, "co-occurrence", 1.0, now, auto_commit=False)
+                await self.create_edge(nid, node_id, "co-occurrence", 1.0, now, auto_commit=False)
                 count += 1
+        if count > 0:
+            await self._conn.commit()
         return count
 
     async def get_meta(self, key: str) -> str | None:

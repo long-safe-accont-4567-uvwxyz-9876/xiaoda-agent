@@ -93,6 +93,12 @@ class BehaviorBaseline:
         """返回基线是否已就绪 (样本数 >= 10)."""
         return self._n >= 10
 
+    def seed(self, mean: float, std: float, n: int) -> None:
+        """用历史统计量初始化基线（公共接口）。"""
+        self._ewma_mean = float(mean)
+        self._ewma_var = float(std) ** 2
+        self._n = max(n, 1)
+
 
 class AnomalyDetector:
     """异常行为检测器

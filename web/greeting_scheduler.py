@@ -15,7 +15,6 @@ import json
 import os
 import random
 import time
-import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -52,7 +51,7 @@ class GreetingScheduler:
         self._task: asyncio.Task | None = None
         self._fired_today: dict[str, set[int]] = {}  # date -> schedule ids fired
         self._deferred: list[dict] = []  # DND 拦截待补发
-        self._deferred_lock = threading.Lock()
+        self._deferred_lock = asyncio.Lock()
 
     def start(self) -> None:
         if not self._task:
@@ -119,15 +118,22 @@ class GreetingScheduler:
             "SELECT * FROM greeting_schedules WHERE enabled=1")
         max_per_day = int(self.cfg.get("schedule.greeting_max_per_day", 3))
 
-        # 先处理 DND 补发
-        with self._deferred_lock:
-            has_deferred = bool(self._deferred)
-        if has_deferred and not self.is_dnd(now_min):
-            with self._deferred_lock:
-                pending, self._deferred = self._deferred, []
+        # 先处理 DND 补发（先执行后确认，失败时保留 deferred 不丢失）
+        if self._deferred and not self.is_dnd(now_min):
+            async with self._deferred_lock:
+                pending = list(self._deferred)
+            still_deferred: list[dict] = []
             for d in pending:
                 if await self._sent_today_count() < max_per_day:
-                    await self.fire(d["schedule"], reason=d["reason"] + "_deferred")
+                    try:
+                        await self.fire(d["schedule"], reason=d["reason"] + "_deferred")
+                    except Exception as e:
+                        logger.warning("greeting.deferred_fire_failed error={}", str(e))
+                        still_deferred.append(d)
+                else:
+                    still_deferred.append(d)
+            async with self._deferred_lock:
+                self._deferred = still_deferred + self._deferred
 
         for row in rows:
             sid = row["id"]
@@ -173,7 +179,7 @@ class GreetingScheduler:
                 logger.info("greeting.skipped_quota schedule_id={}", sid)
                 continue
             if self.is_dnd(now_min):
-                with self._deferred_lock:
+                async with self._deferred_lock:
                     self._deferred.append({"schedule": dict(row), "reason": row["type"]})
                 logger.info("greeting.deferred_dnd schedule_id={}", sid)
                 continue

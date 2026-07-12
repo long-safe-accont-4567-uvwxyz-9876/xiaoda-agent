@@ -16,14 +16,7 @@ from loguru import logger
 
 from core.behavioral_signal import BehavioralSignalStream
 from core.behavioral_direction import DirectionRegistry
-
-
-AGENT_TASK_MAP = {
-    "xiaolang": "security",
-    "xiaoke": "debug",
-    "xiaolian": "info_search",
-    "xiaoda": "general",
-}
+from config import AGENT_TASK_MAP
 
 
 class EnhancedBeliefRouter:

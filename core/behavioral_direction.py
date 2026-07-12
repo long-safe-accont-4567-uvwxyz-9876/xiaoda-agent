@@ -12,6 +12,7 @@
 """
 from dataclasses import dataclass, field
 import json
+import math
 from pathlib import Path
 from loguru import logger
 
@@ -42,10 +43,11 @@ class DirectionVector:
         merged = dict(self.dimensions)
         for k, v in other.dimensions.items():
             merged[k] = merged.get(k, 0.0) + v
+        magnitude = math.sqrt(sum(v ** 2 for v in merged.values()))
         return DirectionVector(
             name=f"{self.name}+{other.name}",
             dimensions=merged,
-            magnitude=1.0,
+            magnitude=max(magnitude, 0.001),
             meta={**self.meta, **other.meta},
         )
 
@@ -59,6 +61,7 @@ class DirectionVector:
 
         在 API-only 下，"hidden" 是 context dict 而非激活张量。
         """
+        known_dims = {"prompt", "tool", "emotion", "route"}
         result = dict(context)
         for dim, weight in self.dimensions.items():
             if dim == "prompt":
@@ -70,6 +73,11 @@ class DirectionVector:
                 result["emotion_offset"] = current + weight
             elif dim == "route":
                 result["route_bias"] = result.get("route_bias", 0.0) + weight
+            else:
+                logger.debug(f"direction_unapplied_dim: dim={dim}, value={weight}")
+        unapplied = set(self.dimensions.keys()) - known_dims
+        if unapplied:
+            result.setdefault("unapplied_dims", []).extend(unapplied)
         return result
 
     def save(self, path: str) -> None:

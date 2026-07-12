@@ -201,8 +201,12 @@ class ToolCallHandler:
                      user_openid: str = "", session_id: str = "",
                      safe_mode: bool = False,
                      current_user_input: str = "",
-                     user_id: str = "",
-                     skip_summarize: bool = False) -> tuple[str, list]:
+                     user_id: str = "", skip_summarize: bool = False) -> tuple[str, list]:
+        from core.event_bus import gen_task_id
+        self._task_id = gen_task_id(
+            agent=self._agent_name,
+            input_hint=current_user_input[:50] if current_user_input else "",
+        )
         if not tool_calls:
             return self._clean_reply(assistant_content), []
 

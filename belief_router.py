@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from loguru import logger
 from utils.atomic_write import atomic_json_write
 
+_background_saves: set[asyncio.Task] = set()
+
 # J-Space Hook: 增强型路由 (非阻塞, 失败不影响主流程)
 try:
     from config import ENABLE_J_SPACE_HOOKS
@@ -213,10 +215,21 @@ class BeliefRouter:
                     if conn:
                         conn.close()
 
-            # 使用线程池避免阻塞事件循环
+            # 使用线程池避免阻塞事件循环，持有引用防止 GC 回收
             try:
                 loop = asyncio.get_running_loop()
-                loop.run_in_executor(None, _do_save)
+                future = loop.run_in_executor(None, _do_save)
+                task = asyncio.ensure_future(future)
+
+                def _on_save_done(t: asyncio.Task) -> None:
+                    _background_saves.discard(t)
+                    if t.cancelled():
+                        return
+                    if exc := t.exception():
+                        logger.error("belief_save_failed: {}", exc)
+
+                task.add_done_callback(_on_save_done)
+                _background_saves.add(task)
             except RuntimeError:
                 # 没有运行中的事件循环，直接执行
                 _do_save()

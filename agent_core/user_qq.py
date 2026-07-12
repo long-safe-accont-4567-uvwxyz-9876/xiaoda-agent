@@ -36,6 +36,6 @@ class QQUser(UserBase):
         display = event.data.get("display_name") or AGENT_DISPLAY.get(event.agent, event.agent)
         content = f"🔄 {display}正在思考..."
         try:
-            await self._reply_fn(content=content, msg_seq=self._msg_seq_fn())
+            await self._reply_fn(content, self._msg_seq_fn())
         except Exception as e:
             logger.debug("qq_user.reply_failed agent={} error={}", event.agent, str(e)[:100])

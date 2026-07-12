@@ -35,6 +35,16 @@ from enum import IntEnum
 
 from loguru import logger
 
+_pending_tasks: set[asyncio.Task] = set()
+
+
+def _fire_and_forget(coro) -> asyncio.Task:
+    """安全创建后台 Task，持有引用防止 GC 回收。"""
+    task = asyncio.create_task(coro)
+    _pending_tasks.add(task)
+    task.add_done_callback(_pending_tasks.discard)
+    return task
+
 # J-Space Hook: 行为信号流采集 (非阻塞, 失败不影响主流程)
 try:
     from config import ENABLE_J_SPACE_HOOKS
@@ -70,6 +80,9 @@ class BehavioralHealthScorer:
 
     通过多维度指标计算综合健康度, 并给出可执行建议。
     """
+
+    def __init__(self) -> None:
+        self._monitor_task: asyncio.Task | None = None
 
     # ── 维度评分阈值表 ──
 
@@ -178,12 +191,12 @@ class BehavioralHealthScorer:
         if _signal_stream is not None:
             try:
                 try:
-                    loop = asyncio.get_running_loop()
+                    asyncio.get_running_loop()
                 except RuntimeError:
-                    loop = None
-                if loop is not None:
-                    loop.create_task(_signal_stream.emit(
-                        "health", float(score_val), "behavioral_health"))
+                    pass
+                else:
+                    _fire_and_forget(_signal_stream.emit(
+                        "health", float(score_val) / 5.0, "behavioral_health"))
             except Exception:
                 pass
 
@@ -226,6 +239,10 @@ class BehavioralHealthScorer:
                 recs.append(f"维度 [{name}] 评分较低 ({s}/5), 当前值={v}")
         return recs
 
+    def calculate_from_runtime(self) -> HealthScore:
+        """从运行时指标自动计算健康评分（公共接口，封装采集+计算两步）。"""
+        return self.calculate(self._collect_runtime_metrics())
+
     # ── 周期性监控 ──
 
     def start_monitoring(self, interval: int = 60) -> asyncio.Task | None:
@@ -237,6 +254,9 @@ class BehavioralHealthScorer:
         Returns:
             asyncio.Task, 调用方可 cancel()。若当前没有 event loop, 返回 None。
         """
+        if self._monitor_task and not self._monitor_task.done():
+            return self._monitor_task
+
         async def _loop() -> None:
             while True:
                 try:
@@ -257,9 +277,15 @@ class BehavioralHealthScorer:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return None
-        task = loop.create_task(_loop())
+        self._monitor_task = loop.create_task(_loop())
         logger.info(f"BHS.monitoring_started interval={interval}s")
-        return task
+        return self._monitor_task
+
+    def stop_monitoring(self) -> None:
+        """停止健康监控循环。"""
+        if self._monitor_task and not self._monitor_task.done():
+            self._monitor_task.cancel()
+        self._monitor_task = None
 
     def _collect_runtime_metrics(self) -> dict:
         """采集当前运行时指标 (从 SLO tracker / psutil)

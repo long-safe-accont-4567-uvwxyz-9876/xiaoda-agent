@@ -44,7 +44,13 @@ _enhanced_router: EnhancedBeliefRouter | None = None
 
 
 def _wire_hooks() -> None:
-    """将 J-Space 组件注入到各 Hook 模块的全局变量。"""
+    """将 J-Space 组件注入到各 Hook 模块的全局变量。
+
+    WARNING: 此函数通过 module.attr = value 注入全局变量。
+    下游模块必须使用 module.attr 访问（如 core.agent_introspection._signal_stream），
+    禁止使用 from-import（如 from core.agent_introspection import _signal_stream），
+    因为 from-import 在 import 时已绑定局部名称，后续修改模块属性不会更新。
+    """
     try:
         import core.agent_introspection as _ai
         _ai._signal_stream = _signal_stream
@@ -93,9 +99,10 @@ def init_j_space() -> None:
 
         # 如果注册表为空，初始化预注册方向
         if not _direction_registry.list_directions():
-            for direction in _create_default_directions():
+            default_dirs = _create_default_directions()
+            for direction in default_dirs:
                 _direction_registry.register(direction)
-            logger.info(f"j_space.directions_registered count={len(_create_default_directions())}")
+            logger.info(f"j_space.directions_registered count={len(default_dirs)}")
         else:
             logger.info(f"j_space.directions_loaded count={len(_direction_registry.list_directions())}")
 

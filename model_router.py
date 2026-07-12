@@ -219,14 +219,25 @@ class ModelRouter:
             self._agnes_client = None
 
         # 关闭旧客户端释放连接
+        _old_clients: list = []
         for old in (old_mimo, old_agnes):
             if old is not None and old not in (self._client, self._agnes_client):
-                try:
-                    import asyncio
-                    loop = asyncio.get_running_loop()
-                    _bg_close = loop.create_task(old.close())
-                except RuntimeError:
-                    pass
+                _old_clients.append(old)
+        if _old_clients:
+            try:
+                import asyncio
+                loop = asyncio.get_running_loop()
+
+                async def _close_old() -> None:
+                    await asyncio.gather(
+                        *[c.close() for c in _old_clients],
+                        return_exceptions=True,
+                    )
+
+                task = loop.create_task(_close_old())
+                task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+            except RuntimeError:
+                pass
 
         # 同步更新凭证池：确保 MiMo/Agnes 凭证与当前环境变量一致
         try:

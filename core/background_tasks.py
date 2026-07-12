@@ -301,15 +301,27 @@ class BackgroundTaskManager:
         except (OSError, ValueError, RuntimeError) as e:
             logger.warning("portrait.cold_start_failed", error=str(e))
 
+    _consecutive_failures: dict[str, int] = {}
+
     async def _should_run(self, task_name: str, interval_hours: float) -> bool:
         """检查周期任务是否应运行（基于 cron_last_run 表）"""
         try:
             last_run = await self.db.get_cron_last_run(task_name)
             if last_run is None:
                 return True
-            return (time.time() - last_run) >= interval_hours * 3600
+            result = (time.time() - last_run) >= interval_hours * 3600
+            if result:
+                self._consecutive_failures.pop(task_name, None)
+            return result
         except (OSError, RuntimeError):
-            logger.warning("bg.should_run_cron_check_failed: {}", exc_info=True)
+            count = self._consecutive_failures.get(task_name, 0) + 1
+            self._consecutive_failures[task_name] = count
+            if count >= 5:
+                logger.error(f"periodic_task_possibly_dead: task={task_name}, consecutive_failures={count}")
+            elif count >= 3:
+                logger.warning(f"periodic_task_degraded: task={task_name}, consecutive_failures={count}")
+            else:
+                logger.warning(f"periodic_task_db_error: task={task_name}")
             return False
 
     async def _dream_archive_task(self) -> None:
@@ -396,5 +408,8 @@ class BackgroundTaskManager:
 
     @staticmethod
     def clear_bg_tasks() -> None:
-        """清空后台任务集合。"""
+        """清空后台任务集合，取消所有未完成的 Task。"""
+        for task in list(_bg_tasks):
+            if not task.done():
+                task.cancel()
         _bg_tasks.clear()
