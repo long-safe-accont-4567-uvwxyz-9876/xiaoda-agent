@@ -12,6 +12,7 @@ from emotion.emoji_config import get_status_msg
 from config import ERROR_RULE_STRICT_MODE
 from core.background_tasks import _spawn
 from core.error_codes import ErrorCodeEnum
+from core.event_bus import event_bus, AgentEvent, AgentEventType
 from security.instruction_hierarchy import (
     InstructionLevel,
     format_instruction,
@@ -118,7 +119,7 @@ class ToolCallHandler:
                 logger.warning(f"工具调用状态回调通知失败: {e}")
 
     async def _notify_tool_status(self, tool_name: str, stage: str, detail: str = "") -> None:
-        """推送工具调用的中间状态（P0）。
+        """推送工具调用的中间状态 — 通过 EventBus 发射 TOOL_* 事件。
 
         Args:
             tool_name: 工具名称，如 "web_search"、"memory_search"
@@ -126,7 +127,26 @@ class ToolCallHandler:
             detail: 详细信息
         """
         from config import STREAM_TOOL_STATUS
-        if not STREAM_TOOL_STATUS or not self._status_callback:
+        if not STREAM_TOOL_STATUS:
+            return
+
+        # EventBus 事件发射（统一事件通道）
+        stage_to_type = {
+            "started": AgentEventType.TOOL_STARTED,
+            "completed": AgentEventType.TOOL_COMPLETED,
+            "failed": AgentEventType.TOOL_FAILED,
+        }
+        event_type = stage_to_type.get(stage)
+        if event_type:
+            await event_bus.emit(AgentEvent(
+                type=event_type,
+                agent=getattr(self, "_agent_name", ""),
+                task_id=getattr(self, "_task_id", ""),
+                data={"tool_name": tool_name, "detail": detail[:100] if detail else ""},
+            ))
+
+        # 保留 status_callback 兜底（向后兼容）
+        if not self._status_callback:
             return
         stage_labels = {"started": "正在调用", "completed": "完成", "failed": "失败"}
         label = stage_labels.get(stage, stage)
