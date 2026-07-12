@@ -23,6 +23,7 @@ class InterventionRule:
     direction_name: str
     alpha: float = 0.5
     mode: str = "projected"
+    trigger_above: bool = True  # True=超过阈值触发, False=低于阈值触发
     cooldown: float = 30.0
     last_triggered: float = 0.0
 
@@ -55,7 +56,9 @@ class InterventionLoop:
         for rule in self._rules:
             score = self._stream.aggregate(rule.signal_type, "mean_of_means")
 
-            if score <= rule.threshold:
+            if rule.trigger_above and score <= rule.threshold:
+                continue
+            if not rule.trigger_above and score >= rule.threshold:
                 continue
 
             # cooldown 检查

@@ -32,7 +32,7 @@ def _create_default_rules() -> list[InterventionRule]:
         InterventionRule("cognitive_load", threshold=0.8, direction_name="calm",
                          alpha=0.4, mode="projected", cooldown=30.0),
         InterventionRule("health", threshold=0.3, direction_name="focused",
-                         alpha=0.5, mode="uniform", cooldown=60.0),
+                         alpha=0.5, mode="uniform", trigger_above=False, cooldown=60.0),
     ]
 
 

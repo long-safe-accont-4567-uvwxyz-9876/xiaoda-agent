@@ -81,10 +81,11 @@ class BeliefRouter:
         if db_path:
             self._load_from_db()
 
-    def select_agent(self, exclude: set[str] | None = None) -> str:
+    def select_agent(self, task_type: str = "", exclude: set[str] | None = None) -> str:
         """Select the best agent using Thompson Sampling.
 
         Args:
+            task_type: Type of task for direction-aware routing.
             exclude: Set of agent names to exclude from selection.
 
         Returns:
@@ -94,7 +95,7 @@ class BeliefRouter:
         try:
             from config import ENABLE_J_SPACE_HOOKS
             if ENABLE_J_SPACE_HOOKS and _enhanced_router is not None:
-                return _enhanced_router.select_agent(exclude=exclude)
+                return _enhanced_router.select_agent(task_type=task_type, exclude=exclude)
         except Exception:
             pass
         # 原始 Thompson Sampling 逻辑继续

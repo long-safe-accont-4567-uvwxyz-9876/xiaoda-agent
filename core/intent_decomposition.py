@@ -102,15 +102,11 @@ class IntentDecomposer:
             if score > 0:
                 factors.append(IntentFactor(intent_name, score))
 
-        # 归一化
-        if factors:
-            total = sum(f.activation for f in factors)
-            if total > 1.0:
-                for f in factors:
-                    f.activation /= total
-
-        explained = sum(f.activation for f in factors)
-        residual = max(0.0, 1.0 - explained)
+        # 不归一化 — 保留原始激活值
+        # residual = 未被任何意图解释的比例 (对齐 SAE 的 reconstruction error)
+        # 每个意图的 activation 上限为 1.0，总解释力 = sum(min(1, act))
+        explained = sum(min(1.0, f.activation) for f in factors)
+        residual = max(0.0, 1.0 - min(1.0, explained / len(self.INTENT_DIMENSIONS)))
 
         return DecomposedOutput(raw_output=output, factors=factors, residual=residual)
 
