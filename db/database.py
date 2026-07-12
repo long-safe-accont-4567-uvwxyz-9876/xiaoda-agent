@@ -23,7 +23,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 15
+CURRENT_SCHEMA_VERSION = 16
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -215,6 +215,7 @@ class DatabaseManager:
             (13, "mem0_spec+bitemporal_facts_preferences+provenance+memory_edges", self._migrate_v13),
             (14, "v06_cognitive_tables+kg_v2_tables", self._migrate_v14),
             (15, "fsrs_dsr_columns", self._migrate_v15),
+            (16, "created_at_columns", self._migrate_v16),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -1046,6 +1047,42 @@ class DatabaseManager:
         )
 
         logger.info("database.migration_v15_fsrs_dsr_done")
+
+    async def _migrate_v16(self) -> None:
+        """v16: Add created_at REAL column + backfill last_review=0 rows."""
+        concept_cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(concept_nodes)")]
+        if "created_at" not in concept_cols:
+            await self._conn.execute(
+                "ALTER TABLE concept_nodes ADD COLUMN created_at REAL DEFAULT 0"
+            )
+
+        epi_cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
+        if "created_at" not in epi_cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN created_at REAL DEFAULT 0"
+            )
+
+        await self._conn.execute("""
+            UPDATE concept_nodes
+            SET created_at = CAST(
+                (julianday(substr(created, 1, 19)) - julianday('1970-01-01')) * 86400 AS REAL)
+            WHERE created_at = 0 AND created IS NOT NULL AND created != ''
+        """)
+
+        await self._conn.execute("""
+            UPDATE episodic_memories
+            SET created_at = timestamp
+            WHERE created_at = 0 AND timestamp > 0
+        """)
+
+        await self._conn.execute("""
+            UPDATE episodic_memories
+            SET last_review = timestamp
+            WHERE last_review = 0 AND timestamp > 0
+        """)
+
+        await self._conn.commit()
+        logger.info("database.migration_v16_created_at_done")
 
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")

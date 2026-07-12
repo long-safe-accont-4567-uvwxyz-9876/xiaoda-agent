@@ -62,12 +62,22 @@ class ConfirmCorrect:
             new_access = node["access_count"] + 1
 
             # FSRS-DSR reinforce
+            _created_at = node.get("created_at", 0.0)
+            if _created_at == 0.0:
+                _created_iso = node.get("created", "")
+                if _created_iso:
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(_created_iso)
+                        _created_at = dt.timestamp()
+                    except (ValueError, TypeError):
+                        _created_at = 0.0
             state = MemoryState(
                 difficulty=node.get("difficulty", 5.0),
                 stability=node.get("stability", 3.0),
                 phase=MemoryPhase(node.get("phase", "buffer")),
-                last_review=node.get("last_review", 0.0),
-                created_at=node.get("last_review", 0.0) or now_ts,
+                last_review=node.get("last_review", 0.0) or now_ts,
+                created_at=_created_at if _created_at > 0.0 else now_ts,
                 reinforcement_count=node.get("reinforcement_count", 0),
             )
             new_state = self._fsrs.reinforce(

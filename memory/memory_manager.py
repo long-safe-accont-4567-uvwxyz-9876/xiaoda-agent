@@ -9,7 +9,7 @@ from db.db_memory import MemoryDB
 # FTS5 分词工具从 db.fts_utils 导入 (打破 db <-> memory 循环); 这里 re-export
 # 保持向后兼容 (其他模块仍可 `from memory.memory_manager import _tokenize_for_fts`)
 from .vector_store import VectorStore
-from .fsrs_model import FSRSModel, MemoryState, MemoryPhase
+from .fsrs_model import FSRSModel, MemoryState, MemoryPhase, estimate_initial_difficulty, S_INIT
 from .memory_distiller import MemoryDistiller
 from .query_cache import QueryCache
 from .retrieval_assessor import RetrievalAssessor
@@ -1477,22 +1477,32 @@ class MemoryManager:
         """
         if not results:
             return results
-        _fsrs = FSRSModel()
+        if not hasattr(self, '_fsrs'):
+            self._fsrs = FSRSModel()
         now = time.time()
         filtered: list[dict] = []
         for r in results:
             similarity = r.get("score", 0.5)
+            last_review = r.get("last_review", 0.0)
+            created_at = r.get("created_at", 0.0) or r.get("timestamp", 0.0)
+            if last_review == 0.0:
+                last_review = r.get("timestamp", 0.0)
+            try:
+                phase = MemoryPhase(r.get("phase", "buffer"))
+            except ValueError:
+                logger.warning("fsrs_invalid_phase id={} phase={}", r.get("id"), r.get("phase"))
+                phase = MemoryPhase.BUFFER
             state = MemoryState(
                 difficulty=r.get("difficulty", 5.0),
                 stability=r.get("stability", 3.0),
-                phase=MemoryPhase(r.get("phase", "buffer")),
-                last_review=r.get("last_review", 0.0) or r.get("timestamp", 0.0),
-                created_at=r.get("timestamp", 0.0),
+                phase=phase,
+                last_review=last_review,
+                created_at=created_at,
                 reinforcement_count=r.get("reinforcement_count", 0),
             )
             R = state.retrievability(now)
-            fsrs_score = _fsrs.score(similarity, state, now)
-            if _fsrs.should_filter(R):
+            fsrs_score = self._fsrs.score(similarity, state, now)
+            if self._fsrs.should_filter(R):
                 continue
             r["fluid_score"] = R
             r["fsrs_score"] = fsrs_score
@@ -1722,6 +1732,18 @@ class MemoryManager:
                 emotion_label=emotion,
                 scope=scope,
                 is_raw=1,
+            )
+
+            # Initialize FSRS state for new memory
+            now_ts = time.time()
+            initial_difficulty = estimate_initial_difficulty(summary, emotion)
+            await self.memory.update_fsrs_state(
+                mem_id,
+                difficulty=initial_difficulty,
+                stability=S_INIT,
+                phase="buffer",
+                last_review=now_ts,
+                reinforcement_count=0,
             )
 
             # 标记候选已应用
