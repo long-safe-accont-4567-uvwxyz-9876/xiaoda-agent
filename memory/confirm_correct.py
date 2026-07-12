@@ -1,14 +1,16 @@
 """Confirm/Correct 机制 — 记忆强化与纠正
 
-confirm: 确认强化（access_count+1, weight+0.15, edges+0.25）
+confirm: 确认强化（FSRS-DSR reinforce + access_count+1, edges+0.25）
 correct: 纠正超驰（创建新节点，关闭旧节点，迁移边，建立 supersedes 链）
 """
 import hashlib
 import json
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from loguru import logger
+from memory.fsrs_model import FSRSModel, MemoryState, MemoryPhase, ReinforcementSignal
 
 _SH_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -16,15 +18,15 @@ _SH_TZ = ZoneInfo("Asia/Shanghai")
 class ConfirmCorrect:
     """confirm: 确认强化 / correct: 纠正超驰"""
 
-    BOOST_PER_ACCESS = 0.15    # 每次确认的节点权重增量
-    EDGE_BOOST = 0.25          # 确认时边权重增量
+    EDGE_BOOST = 0.25
 
     def __init__(self, concept_db, spreading_engine, memory_db,
                  key_extractor):
         self.db = concept_db
         self.engine = spreading_engine
-        self.memory = memory_db  # Database 实例（用于同步 episodic_memories）
+        self.memory = memory_db
         self.ke = key_extractor
+        self._fsrs = FSRSModel()
 
     def _now_iso(self) -> str:
         return datetime.now(_SH_TZ).isoformat()
@@ -39,14 +41,15 @@ class ConfirmCorrect:
     async def confirm(self, node_ids: list[str]) -> dict:
         """确认强化
 
-        1. access_count += 1
-        2. weight = min(1.0, weight + 0.15)
+        1. FSRS-DSR reinforce (STRONG_CONFIRM → S增长, D降低)
+        2. access_count += 1
         3. peak_weight = max(peak_weight, weight)
         4. last_accessed = now
         5. 所有关联边 weight += 0.25 (双向同步)
-        6. 同步 episodic_memories.access_count
+        6. 同步 episodic_memories FSRS 状态
         """
-        now = self._now_iso()
+        now_iso = self._now_iso()
+        now_ts = time.time()
         reinforced = 0
         unknown = 0
 
@@ -57,12 +60,32 @@ class ConfirmCorrect:
                 continue
 
             new_access = node["access_count"] + 1
-            new_weight = min(1.0, node["weight"] + self.BOOST_PER_ACCESS)
-            new_peak = max(node["peak_weight"], new_weight)
+
+            # FSRS-DSR reinforce
+            state = MemoryState(
+                difficulty=node.get("difficulty", 5.0),
+                stability=node.get("stability", 3.0),
+                phase=MemoryPhase(node.get("phase", "buffer")),
+                last_review=node.get("last_review", 0.0),
+                created_at=node.get("last_review", 0.0) or now_ts,
+                reinforcement_count=node.get("reinforcement_count", 0),
+            )
+            new_state = self._fsrs.reinforce(
+                state, ReinforcementSignal.STRONG_CONFIRM, now=now_ts)
+
+            # weight 由 FSRS R 驱动：R=1 → weight=1, R→0 → weight→0
+            R = new_state.retrievability(now_ts)
+            new_weight = min(1.0, R)
+            new_peak = max(node.get("peak_weight", 1.0), new_weight)
 
             await self.db.update_node(
                 nid, access_count=new_access, weight=new_weight,
-                peak_weight=new_peak, last_accessed=now)
+                peak_weight=new_peak, last_accessed=now_iso,
+                difficulty=new_state.difficulty,
+                stability=new_state.stability,
+                phase=new_state.phase.value,
+                last_review=now_ts,
+                reinforcement_count=new_state.reinforcement_count)
 
             # 强化所有关联边（双向同步）
             edges = await self.db.get_edges(nid)
@@ -71,11 +94,16 @@ class ConfirmCorrect:
                 await self.db.update_edge(nid, target_id, weight=new_edge_w)
                 await self.db.update_edge(target_id, nid, weight=new_edge_w)
 
-            # 同步 episodic_memories
+            # 同步 episodic_memories FSRS 状态
             if node.get("source_mem_id"):
                 try:
-                    await self.memory.increment_access_count(
-                        node["source_mem_id"])
+                    await self.memory.update_fsrs_state(
+                        node["source_mem_id"],
+                        difficulty=new_state.difficulty,
+                        stability=new_state.stability,
+                        phase=new_state.phase.value,
+                        last_review=now_ts,
+                        reinforcement_count=new_state.reinforcement_count)
                 except Exception as e:
                     logger.debug("confirm.sync_episodic_failed",
                                  error=str(e))
