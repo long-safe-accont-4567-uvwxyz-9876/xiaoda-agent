@@ -227,10 +227,13 @@ class DreamConsolidator:
                     content=row.get("summary", ""),
                     importance=row.get("importance", 0.5),
                     strength=1.0,
-                    last_access=row.get("timestamp", time.time()),
-                    created_at=row.get("timestamp", time.time()),
+                    last_access=row.get("last_review", 0.0) or row.get("timestamp", time.time()),
+                    created_at=row.get("created_at", 0.0) or row.get("timestamp", time.time()),
                     access_count=row.get("access_count", 0),
                 )
+                mem._db_difficulty = row.get("difficulty", 5.0)
+                mem._db_stability = row.get("stability", 3.0)
+                mem._db_phase = row.get("phase", "reinforced")
                 memories[mid] = mem
 
             now = time.time()
@@ -238,10 +241,17 @@ class DreamConsolidator:
             # 2. Decay — FSRS-DSR Retrievability 衰减评分
             evict_ids: list[str] = []
             for mid, m in memories.items():
+                db_difficulty = getattr(m, '_db_difficulty', None) or m.importance * 10.0
+                db_stability = getattr(m, '_db_stability', None) or (m.strength * 10.0 if m.strength > 0 else 3.0)
+                db_phase_str = getattr(m, '_db_phase', 'reinforced')
+                try:
+                    db_phase = MemoryPhase(db_phase_str)
+                except ValueError:
+                    db_phase = MemoryPhase.REINFORCED
                 state = MemoryState(
-                    difficulty=1.0,
-                    stability=m.strength * 10.0 if m.strength > 0 else 3.0,
-                    phase=MemoryPhase.REINFORCED,
+                    difficulty=db_difficulty,
+                    stability=db_stability,
+                    phase=db_phase,
                     last_review=m.last_access,
                     created_at=m.created_at,
                     reinforcement_count=m.access_count,
