@@ -186,8 +186,8 @@ class StickerManager:
         """
         if not self._cache:
             return False
-        # 统一 90% 概率发送表情包
-        prob = 0.9
+        # 有明确情绪时 100% 发送，neutral/无情绪时 90%
+        prob = 1.0 if detected_emotion and detected_emotion != "neutral" else 0.9
         return random.random() < prob
 
     def get_sticker(self, emotion: str = "") -> Path | None:
