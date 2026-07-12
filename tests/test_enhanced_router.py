@@ -16,6 +16,9 @@ def mock_base_router():
         "xiaoke": MagicMock(sample=MagicMock(return_value=0.6)),
         "xiaolian": MagicMock(sample=MagicMock(return_value=0.3)),
     }
+    # sample_agent 是公共接口，返回 float
+    _sample_map = {"xiaoda": 0.5, "xiaolang": 0.4, "xiaoke": 0.6, "xiaolian": 0.3}
+    router.sample_agent = MagicMock(side_effect=lambda name: _sample_map.get(name, 0.5))
     router.update_belief = MagicMock()
     return router
 

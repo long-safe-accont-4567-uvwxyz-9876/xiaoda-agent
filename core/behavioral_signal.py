@@ -43,7 +43,6 @@ class BehavioralSignalStream:
             if signal_type in self._subscribers:
                 for ev in self._subscribers[signal_type]:
                     ev.set()
-                self._subscribers[signal_type].clear()
         except Exception as e:
             logger.warning(f"behavioral_signal.emit_failed: {e}")
 

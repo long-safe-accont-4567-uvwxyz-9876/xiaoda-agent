@@ -9,6 +9,7 @@
 """
 from dataclasses import dataclass
 import time
+from collections import deque
 from loguru import logger
 
 from core.behavioral_signal import BehavioralSignalStream
@@ -38,7 +39,7 @@ class InterventionLoop:
         self._stream = signal_stream
         self._registry = direction_registry
         self._rules: list[InterventionRule] = []
-        self._intervention_history: list[dict] = []
+        self._intervention_history: deque[dict] = deque(maxlen=500)
 
     def register_rule(self, rule: InterventionRule) -> None:
         """注册干预规则"""
@@ -108,7 +109,7 @@ class InterventionLoop:
         if len(self._intervention_history) < 2:
             return {"converging": True, "intervention_count": len(self._intervention_history)}
 
-        recent = self._intervention_history[-5:]
+        recent = list(self._intervention_history)[-5:]
         scores = [h["score"] for h in recent]
         trend = scores[-1] - scores[0] if len(scores) >= 2 else 0
         return {

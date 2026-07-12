@@ -55,11 +55,7 @@ class EnhancedBeliefRouter:
             return "xiaoda"
 
         # 1. Thompson Sampling 基础分
-        try:
-            thompson_scores = {a: self._base._beliefs[a].sample() for a in candidates}
-        except (AttributeError, KeyError):
-            # 防御: _beliefs 可能不存在或键不匹配
-            thompson_scores = {a: 0.5 for a in candidates}
+        thompson_scores = {a: self._base.sample_agent(a) for a in candidates}
 
         # 2. 方向偏置
         direction_scores = {a: 0.0 for a in candidates}

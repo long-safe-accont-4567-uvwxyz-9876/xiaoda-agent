@@ -112,6 +112,12 @@ class BeliefRouter:
                      selected=selected)
         return selected
 
+    def sample_agent(self, agent_name: str) -> float:
+        """获取指定 agent 的 Thompson Sampling 采样值。"""
+        if agent_name not in self._beliefs:
+            return 0.5
+        return self._beliefs[agent_name].sample()
+
     def update_belief(self, agent_name: str, success: bool) -> None:
         """Update belief for an agent based on task result."""
         if agent_name in self._beliefs:
