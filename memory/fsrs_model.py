@@ -122,42 +122,44 @@ class FSRSModel:
             return self._apply_forget(state, now)
         return self._apply_recall(state, signal, now)
 
+    def _compute_phase(self, D: float, S: float, state: MemoryState,
+                       now: float) -> MemoryPhase:
+        age_days = (now - state.created_at) / 86400.0
+        if S >= S_PERMANENT and state.reinforcement_count > 0 and age_days > BUFFER_DAYS:
+            return MemoryPhase.PERMANENT
+        elif state.reinforcement_count > 0 and age_days > BUFFER_DAYS:
+            return MemoryPhase.REINFORCED
+        elif age_days > BUFFER_DAYS:
+            return MemoryPhase.DECAY
+        else:
+            return MemoryPhase.BUFFER
+
     def _apply_recall(self, state: MemoryState, signal: ReinforcementSignal,
                       now: float) -> MemoryState:
         R = state.retrievability(now)
         D = state.difficulty
         S = state.stability
-        difficulty_factor = (10.0 - D) / 9.0
+        difficulty_factor = max(0.0, (10.0 - D) / 9.0)
         retrievability_bonus = 1.0 + 2.0 * (1.0 - R)
         growth = signal.growth_factor * difficulty_factor * retrievability_bonus
         S_new = min(S * (1.0 + growth), S * 10.0)
         D_new = self._update_difficulty(D, signal)
-        new_phase = MemoryState(
-            difficulty=D_new, stability=S_new,
-            phase=state.phase, last_review=now,
-            created_at=state.created_at,
-            reinforcement_count=state.reinforcement_count + 1,
-        ).transition(now)
+        rc = state.reinforcement_count + 1
+        new_phase = self._compute_phase(D_new, S_new, state, now)
         return MemoryState(
             difficulty=D_new, stability=S_new,
             phase=new_phase, last_review=now,
             created_at=state.created_at,
-            reinforcement_count=state.reinforcement_count + 1,
+            reinforcement_count=rc,
         )
 
     def _apply_forget(self, state: MemoryState, now: float) -> MemoryState:
-        R = state.retrievability(now)
         D = state.difficulty
         S = state.stability
-        S_new = S * 0.5 * (D ** (-0.3)) * (((S + 1.0) ** 0.2) - 1.0)
-        S_new = max(1.0, S_new)
+        S_new = S_INIT * (D ** (-0.3)) * (((S + 1.0) ** 0.2) - 1.0)
+        S_new = max(1.0, min(S_new, S))
         D_new = self._update_difficulty(D, ReinforcementSignal.CORRECT)
-        new_phase = MemoryState(
-            difficulty=D_new, stability=S_new,
-            phase=state.phase, last_review=now,
-            created_at=state.created_at,
-            reinforcement_count=state.reinforcement_count,
-        ).transition(now)
+        new_phase = self._compute_phase(D_new, S_new, state, now)
         return MemoryState(
             difficulty=D_new, stability=S_new,
             phase=new_phase, last_review=now,
