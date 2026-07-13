@@ -140,7 +140,7 @@ function parseChannels(channelsJson: string): string {
 }
 
 const reasonLabel: Record<string, string> = {
-  fixed: t('scheduleView.fixedLabel'), random: t('scheduleView.randomLabel'), idle: t('scheduleView.idleLabel'), manual_test: t('scheduleView.testLabel'),
+  fixed: t('scheduleView.fixedLabel'), random: t('scheduleView.randomLabel'), reminder: '🔔 提醒', idle: t('scheduleView.idleLabel'), manual_test: t('scheduleView.testLabel'),
 }
 </script>
 
@@ -173,12 +173,13 @@ const reasonLabel: Record<string, string> = {
       <div class="greeting-list">
         <Tilt3D v-for="g in greetings" :key="g.id"><div class="greeting-card">
           <div class="g-main">
-            <span class="g-icon">{{ g.type === 'fixed' ? '⏰' : '🎲' }}</span>
+            <span class="g-icon">{{ g.type === 'fixed' ? '⏰' : g.type === 'reminder' ? '🔔' : '🎲' }}</span>
             <span class="g-desc">
-              <template v-if="g.type === 'fixed'">{{ describeDays(g.days) }} {{ g.time }}</template>
+              <template v-if="g.type === 'reminder'">{{ describeDays(g.days) }} {{ g.time }} 🔔</template>
+              <template v-else-if="g.type === 'fixed'">{{ describeDays(g.days) }} {{ g.time }}</template>
               <template v-else>{{ describeDays(g.days) }} {{ g.window_start }}~{{ g.window_end }} {{ tf('scheduleView.randomTimes', g.count_per_day) }}</template>
             </span>
-            <n-tag v-if="g.prompt_hint" size="tiny" :bordered="false">{{ g.prompt_hint }}</n-tag>
+            <n-tag v-if="g.prompt_hint" size="tiny" :bordered="false" :type="g.type === 'reminder' ? 'warning' : 'default'">{{ g.type === 'reminder' ? '📌 ' : '' }}{{ g.prompt_hint }}</n-tag>
             <n-tag size="tiny" type="info" :bordered="false">{{ parseChannels(g.channels) }}</n-tag>
           </div>
           <div class="g-ops">
@@ -234,9 +235,10 @@ const reasonLabel: Record<string, string> = {
           <n-radio-group v-model:value="form.type">
             <n-radio value="fixed">{{ t('scheduleView.fixed') }}</n-radio>
             <n-radio value="random">{{ t('scheduleView.random') }}</n-radio>
+            <n-radio value="reminder">🔔 提醒</n-radio>
           </n-radio-group>
         </n-form-item>
-        <n-form-item v-if="form.type === 'fixed'" :label="t('scheduleView.time')">
+        <n-form-item v-if="form.type === 'fixed' || form.type === 'reminder'" :label="t('scheduleView.time')">
           <n-time-picker v-model:formatted-value="form.time" format="HH:mm" value-format="HH:mm" />
         </n-form-item>
         <template v-else>
@@ -254,8 +256,8 @@ const reasonLabel: Record<string, string> = {
             <n-checkbox v-for="(label, i) in weekLabels" :key="i" :value="i + 1" :label="label" />
           </n-checkbox-group>
         </n-form-item>
-        <n-form-item :label="t('scheduleView.topic')">
-          <n-input v-model:value="form.prompt_hint" :placeholder="t('scheduleView.topicPh')" />
+        <n-form-item :label="form.type === 'reminder' ? '📌 提醒内容' : t('scheduleView.topic')">
+          <n-input v-model:value="form.prompt_hint" :placeholder="form.type === 'reminder' ? '要提醒什么？' : t('scheduleView.topicPh')" />
         </n-form-item>
         <n-form-item :label="t('scheduleView.channel')">
           <n-checkbox-group v-model:value="form.channels">
