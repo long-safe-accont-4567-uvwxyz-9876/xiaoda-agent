@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xiaoda-agent"
-version = "0.5.1"
+version = "0.5.11"
 description = "多智能体 AI 助手 — 40+ 工具赋能，三通道交互"
 readme = "README.md"
 license = {text = "MIT"}
