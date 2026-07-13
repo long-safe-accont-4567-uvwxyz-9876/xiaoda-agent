@@ -223,6 +223,23 @@ class ToolExecutorMixin:
 
     def _clean_reply(self, text: str) -> str:
         text = text.strip()
+        # JSON 格式回复提取：LLM（如 agnes-2.0-flash）有时返回 JSON 而非纯文本
+        if text.startswith(('{', '[')):
+            try:
+                obj = json.loads(text)
+                if isinstance(obj, dict):
+                    for key in ('reply', 'text', 'content', 'message', 'body', 'response'):
+                        if key in obj and isinstance(obj[key], str):
+                            text = obj[key].strip()
+                            logger.debug("agent.json_reply_extracted key={} len={}", key, len(text))
+                            break
+                    else:
+                        logger.warning("agent.json_reply_no_text_field keys={}", list(obj.keys())[:5])
+                        text = "（回复格式异常，请稍后重试）"
+                else:
+                    text = "（回复格式异常，请稍后重试）"
+            except json.JSONDecodeError:
+                pass  # 不是合法 JSON，继续后续清洗
         prefixes = [f"{get_agent_display_name(n)}：" for n in ('xiaoda', 'xiaoli', 'xiaolang', 'xiaolian', 'xiaoke')] + ["助手：", "AI："]
         for p in prefixes:
             if text.startswith(p):
@@ -317,12 +334,29 @@ class ToolExecutorMixin:
         return text
 
     def _finalize_reply(self, reply: str, strip_emotion: bool = True, style: str = "xiaoda") -> str:
-        """统一的回复文本处理：strip_dsml + strip_reasoning + strip_emotion_tag + humanize + deduplicate + 名称替换。
+        """统一的回复文本处理：JSON提取 + strip_dsml + strip_reasoning + strip_emotion_tag + humanize + deduplicate + 名称替换。
 
         所有回复路径（主小妲、单子 Agent、并行子 Agent、TaskGraph）统一调用此方法，
         确保回复清洗流程一致。
         """
         text = reply.strip() if reply else ""
+        # JSON 格式回复提取：LLM 有时返回 JSON 而非纯文本
+        if text.startswith(('{', '[')):
+            try:
+                obj = json.loads(text)
+                if isinstance(obj, dict):
+                    for key in ('reply', 'text', 'content', 'message', 'body', 'response'):
+                        if key in obj and isinstance(obj[key], str):
+                            text = obj[key].strip()
+                            logger.debug("finalize.json_reply_extracted key={} len={}", key, len(text))
+                            break
+                    else:
+                        logger.warning("finalize.json_reply_no_text_field keys={}", list(obj.keys())[:5])
+                        text = "（回复格式异常，请稍后重试）"
+                else:
+                    text = "（回复格式异常，请稍后重试）"
+            except json.JSONDecodeError:
+                pass  # 不是合法 JSON，继续后续清洗
         text = strip_dsml(text)
         # 清理指令层级标签（LLM 可能原样输出上下文中的 <instruction> 标记）
         text = re.sub(r'<instruction\s+level="[A-Z]+"\s+priority="\d+"[^>]*>', '', text)
