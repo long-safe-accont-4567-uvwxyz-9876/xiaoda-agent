@@ -324,6 +324,9 @@ class ToolExecutorMixin:
         """
         text = reply.strip() if reply else ""
         text = strip_dsml(text)
+        # 清理指令层级标签（LLM 可能原样输出上下文中的 <instruction> 标记）
+        text = re.sub(r'<instruction\s+level="[A-Z]+"\s+priority="\d+"[^>]*>', '', text)
+        text = re.sub(r'</instruction>', '', text)
         text = strip_reasoning(text)
         if strip_emotion:
             # 根据 style（agent 名）动态获取正确的 sticker_manager
