@@ -51,6 +51,11 @@ PROVIDER_PRICING = {
         "cache_hit_per_m": 0.015,
         "output_per_m": 0.30,
     },
+    "ollama": {
+        "input_per_m": 0.0,
+        "cache_hit_per_m": 0.0,
+        "output_per_m": 0.0,
+    },
     "default": {
         "input_per_m": 0.20,
         "cache_hit_per_m": 0.02,
@@ -90,6 +95,7 @@ _CROSS_PROVIDER_MAP: dict[str, tuple[str, str]] = {
     # main_provider → (fallback_provider, fallback_model)
     "agnes": ("mimo", MIMO_MODEL),
     "mimo": ("agnes", AGNES_TEXT_MODEL),
+    "ollama": ("mimo", MIMO_MODEL),
 }
 
 # 请求级隔离的 reasoning_content，避免并发请求间共享状态
@@ -141,6 +147,7 @@ class ModelRouter:
         self._credential_locks: dict[str, asyncio.Lock] = {}
 
         self._custom_clients: dict[str, AsyncOpenAI] = {}
+        self._register_credential_pool_providers()
         self._current_chat_model: dict | None = None
         self._cache_stats = {
             "total_calls": 0,
@@ -166,6 +173,38 @@ class ModelRouter:
         不同 provider 之间不再互相阻塞，相同 provider 仍然串行化以保护凭证轮换。
         """
         return self._credential_locks.setdefault(provider, asyncio.Lock())
+
+    def _register_credential_pool_providers(self) -> None:
+        """从凭证池主动注册非 mimo/agnes 的 Provider 到 _custom_clients。
+
+        确保本地 Provider（如 Ollama）和免费平台（如 SiliconFlow）在路由器
+        初始化时即被注册，不依赖 Web 服务的 _register_env_providers 流程。
+        """
+        try:
+            from web.custom_providers import register_into_router
+        except ImportError:
+            logger.debug("router.credential_pool_register_skip web module unavailable")
+            return
+        _BUILTIN_PROVIDERS = {"mimo", "agnes"}
+        _PROVIDER_FORMAT = {
+            "ollama": "openai",
+            "siliconflow": "openai",
+            "openrouter": "openai",
+            "modelscope": "openai",
+        }
+        pool = self._credential_pool
+        for provider, creds in pool._pool.items():
+            if provider in _BUILTIN_PROVIDERS:
+                continue
+            if provider in self._custom_clients:
+                continue
+            if not creds:
+                continue
+            cred = creds[0]
+            fmt = _PROVIDER_FORMAT.get(provider, "openai")
+            if cred.base_url and cred.api_key:
+                register_into_router(self, provider, fmt, cred.base_url, cred.api_key)
+                logger.info("router.credential_pool_registered provider={} format={}", provider, fmt)
 
     def _lazy_register_provider(self, provider: str) -> None:
         """懒注册：从 config_service 恢复未注册的自定义 provider。"""
@@ -325,6 +364,7 @@ class ModelRouter:
     # 注意：这些是 fallback 值，当 provider 的 default_model 为空时使用
     # 建议通过 /models/health-check 端点定期验证这些模型ID是否仍然可用
     _CUSTOM_PROVIDER_DEFAULT_MODELS: ClassVar[dict[str, str]] = {
+        "ollama": "qwen2.5",
         "siliconflow": "THUDM/GLM-4-9B-0414",
         "openrouter": "openrouter/free",
         "modelscope": "Qwen/Qwen3-8B",
