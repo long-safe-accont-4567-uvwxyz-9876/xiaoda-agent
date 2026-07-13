@@ -173,27 +173,40 @@ class DatabaseManager:
             VALUES (1, 0, 0, '');
         """)
 
-        # Dirty state 检测：上次迁移未完成则阻止启动
+        # Dirty state 检测：上次迁移未完成
         state_row = await self._conn.execute_fetchall(
             "SELECT dirty, last_version, last_error FROM migration_state WHERE id = 1"
         )
         if state_row and state_row[0][0] == 1:
             last_ver = state_row[0][1]
             last_err = state_row[0][2]
-            logger.critical(
-                f"⚠️ 数据库处于 dirty 状态！上次迁移 v{last_ver} 未完成：{last_err}\n"
-                f"应用无法启动以避免读到不匹配的 schema。\n"
-                f"修复方案：\n"
-                f"  1. 检查错误原因并修复数据库\n"
-                f"  2. 如已手动修复: python -m db.repair_migration --mark-clean\n"
-                f"  3. 如需回滚: python -m db.repair_migration --rollback {last_ver}\n"
+            logger.warning(
+                f"⚠️ 数据库处于 dirty 状态！上次迁移 v{last_ver} 未完成：{last_err}"
             )
-            # 关闭连接后退出，避免连接泄漏
+            # 自动修复：尝试重跑失败迁移（所有迁移均有幂等守卫，重跑安全）
+            logger.info("database.dirty_auto_retry", version=last_ver)
             try:
-                await self._conn.close()
-            except (OSError, RuntimeError):
-                logger.warning("database.migration_dirty_close_error: {}", exc_info=True)
-            sys.exit(1)
+                # 清除 dirty 标记，让后续正常迁移流程接管
+                await self._conn.execute(
+                    "UPDATE migration_state SET dirty = 0, last_version = 0, last_error = '' WHERE id = 1"
+                )
+                await self._conn.commit()
+                logger.info(
+                    "database.dirty_cleared_auto",
+                    msg=f"已自动清除 v{last_ver} 的 dirty 标记，将重新执行迁移"
+                )
+            except (OSError, RuntimeError) as e:
+                logger.error("database.dirty_auto_retry_failed", error=str(e))
+                logger.critical(
+                    f"⚠️ 自动修复失败！请手动修复：\n"
+                    f"  1. python -m db.repair_migration --mark-clean\n"
+                    f"  2. 或删除 agent.db 重新初始化（会丢失历史数据）\n"
+                )
+                try:
+                    await self._conn.close()
+                except (OSError, RuntimeError):
+                    pass
+                sys.exit(1)
 
         row = await self._conn.execute_fetchall("SELECT MAX(version) FROM schema_version")
         current = row[0][0] if row and row[0][0] is not None else 0
@@ -265,19 +278,14 @@ class DatabaseManager:
                 await self._conn.commit()
             except (OSError, RuntimeError):
                 logger.warning("database.migration_dirty_record_error: {}", exc_info=True)
-            logger.critical(
+            # 非致命：记录错误但不杀进程，下次启动会自动重试
+            logger.error(
                 f"❌ 数据库迁移 v{version} 失败: {err_msg}\n"
-                f"数据库处于 dirty 状态，应用无法启动。\n"
-                f"修复方案：\n"
-                f"  1. 检查错误原因\n"
-                f"  2. 如需回滚: python -m db.repair_migration --rollback {version}\n"
-                f"  3. 如已手动修复: python -m db.repair_migration --mark-clean\n"
+                f"已标记 dirty 状态，下次启动将自动重试。\n"
+                f"如持续失败可手动修复：\n"
+                f"  1. python -m db.repair_migration --mark-clean\n"
+                f"  2. python -m db.repair_migration --rollback {version}\n"
             )
-            try:
-                await self._conn.close()
-            except (OSError, RuntimeError):
-                logger.warning("database.migration_failure_close_error: {}", exc_info=True)
-            sys.exit(1)
 
     async def _migrate_v1(self) -> None:
         """v1: knowledge_relations 新增时间字段（valid_from/valid_to/confidence）。"""
