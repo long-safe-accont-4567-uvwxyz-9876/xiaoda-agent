@@ -3,7 +3,9 @@ stderr sink 保持同步（不启用 enqueue）。
 
 对应 v3 spec P1-4：避免异步上下文里同步文件 I/O 阻塞事件循环。
 """
+import os
 import pytest
+from unittest import mock
 from loguru import logger
 
 from utils.logging_config import setup_logging
@@ -45,7 +47,10 @@ def _classify_handlers():
 
 def test_file_sinks_have_enqueue_true(isolated_logger):
     """两个文件 sink（agent_*.json 与 agent.log）应启用 enqueue=True。"""
-    setup_logging()
+    # conftest.py 全局设了 TEST_MODE=true，需临时清除以测试正常模式
+    with mock.patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("TEST_MODE", None)
+        setup_logging()
     file_enqueues, _stderr_enqueues = _classify_handlers()
 
     assert len(file_enqueues) == 2, (
@@ -58,7 +63,10 @@ def test_file_sinks_have_enqueue_true(isolated_logger):
 
 def test_stderr_sink_does_not_enqueue(isolated_logger):
     """stderr sink（_json_sink 或 sys.stderr）不应启用 enqueue。"""
-    setup_logging()
+    # conftest.py 全局设了 TEST_MODE=true，需临时清除以测试正常模式
+    with mock.patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("TEST_MODE", None)
+        setup_logging()
     _file_enqueues, stderr_enqueues = _classify_handlers()
 
     assert len(stderr_enqueues) >= 1, (
