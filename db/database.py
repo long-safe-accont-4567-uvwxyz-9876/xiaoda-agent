@@ -239,7 +239,8 @@ class DatabaseManager:
     async def _apply_migration(self, version: int, description: str, migrate_fn: Any) -> None:
         """执行单个迁移：标记 dirty → migrate_fn → INSERT schema_version → commit → 清除 dirty。
 
-        失败时 fail-fast（sys.exit(1)），dirty state 持久化阻止下次启动。
+        失败时不杀进程，下次启动自动重试（dirty自动修复机制）。
+        含 SQLITE_BUSY 重试（Windows杀软锁文件常见）。
         注意：不使用显式 BEGIN TRANSACTION，因为迁移函数内部的 executescript()
         会隐式提交当前事务，在 vfat 上会导致死锁/挂起。
         """
@@ -250,42 +251,58 @@ class DatabaseManager:
         )
         await self._conn.commit()
 
-        try:
-            # 不使用 BEGIN TRANSACTION：executescript() 会隐式提交，
-            # 在 vfat (DELETE journal_mode) 上显式事务 + 隐式提交会导致挂起
-            await migrate_fn()
-            await self._conn.execute(
-                "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
-                (version, time.time()),
-            )
-            await self._conn.commit()
-            # 迁移成功：清除 dirty
-            await self._conn.execute(
-                "UPDATE migration_state SET dirty = 0, last_version = ?, last_error = '' WHERE id = 1",
-                (version,),
-            )
-            await self._conn.commit()
-            logger.info(f"database.migration_v{version}", desc=description)
-        except (OSError, RuntimeError) as e:
-            err_msg = str(e)
-            # 不需要 ROLLBACK：未使用显式事务，executescript 自行管理原子性
-            # 记录错误到 dirty state（独立事务）
+        _max_retries = 3
+        for attempt in range(1, _max_retries + 1):
             try:
+                # 不使用 BEGIN TRANSACTION：executescript() 会隐式提交，
+                # 在 vfat (DELETE journal_mode) 上显式事务 + 隐式提交会导致挂起
+                await migrate_fn()
                 await self._conn.execute(
-                    "UPDATE migration_state SET dirty = 1, last_version = ?, last_error = ? WHERE id = 1",
-                    (version, err_msg[:500]),
+                    "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+                    (version, time.time()),
                 )
                 await self._conn.commit()
-            except (OSError, RuntimeError):
-                logger.warning("database.migration_dirty_record_error: {}", exc_info=True)
-            # 非致命：记录错误但不杀进程，下次启动会自动重试
-            logger.error(
-                f"❌ 数据库迁移 v{version} 失败: {err_msg}\n"
-                f"已标记 dirty 状态，下次启动将自动重试。\n"
-                f"如持续失败可手动修复：\n"
-                f"  1. python -m db.repair_migration --mark-clean\n"
-                f"  2. python -m db.repair_migration --rollback {version}\n"
-            )
+                # 迁移成功：清除 dirty
+                await self._conn.execute(
+                    "UPDATE migration_state SET dirty = 0, last_version = ?, last_error = '' WHERE id = 1",
+                    (version,),
+                )
+                await self._conn.commit()
+                logger.info(f"database.migration_v{version}", desc=description)
+                return  # 成功，退出重试循环
+            except (OSError, RuntimeError) as e:
+                err_msg = str(e)
+                is_busy = "locked" in err_msg.lower() or "busy" in err_msg.lower()
+                if is_busy and attempt < _max_retries:
+                    # SQLITE_BUSY: Windows杀软/Defender锁文件，等一会重试
+                    import asyncio
+                    wait = attempt * 2
+                    logger.warning(
+                        f"database.migration_v{version}_busy_retry",
+                        attempt=attempt, wait_sec=wait, error=err_msg[:100]
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                # 非BUSY或重试耗尽
+                # 不需要 ROLLBACK：未使用显式事务，executescript 自行管理原子性
+                # 记录错误到 dirty state（独立事务）
+                try:
+                    await self._conn.execute(
+                        "UPDATE migration_state SET dirty = 1, last_version = ?, last_error = ? WHERE id = 1",
+                        (version, err_msg[:500]),
+                    )
+                    await self._conn.commit()
+                except (OSError, RuntimeError):
+                    logger.warning("database.migration_dirty_record_error: {}", exc_info=True)
+                # 非致命：记录错误但不杀进程，下次启动会自动重试
+                logger.error(
+                    f"❌ 数据库迁移 v{version} 失败: {err_msg}\n"
+                    f"已标记 dirty 状态，下次启动将自动重试。\n"
+                    f"如持续失败可手动修复：\n"
+                    f"  1. python -m db.repair_migration --mark-clean\n"
+                    f"  2. python -m db.repair_migration --rollback {version}\n"
+                )
+                return  # 退出重试循环
 
     async def _migrate_v1(self) -> None:
         """v1: knowledge_relations 新增时间字段（valid_from/valid_to/confidence）。"""
@@ -744,8 +761,19 @@ class DatabaseManager:
         Part 2 (kg_v2):
         - kg_episodes/kg_entities_v2/kg_relations_v2/kg_communities
         - 数据迁移: knowledge_entities → kg_entities_v2, knowledge_relations → kg_relations_v2
-        - FTS5 索引回填
+        - FTS5 索引回填（含 FTS5 可用性检测，降级为空表）
         """
+        # 0. 检测 FTS5 可用性（Windows 用户可能缺少 FTS5 扩展）
+        _fts5_available = True
+        try:
+            await self._conn.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS _fts5_check USING fts5(x UNINDEXED, y)"
+            )
+            await self._conn.execute("DROP TABLE IF EXISTS _fts5_check")
+        except Exception:
+            _fts5_available = False
+            logger.warning("database.fts5_not_available - FTS5虚拟表将跳过创建")
+
         # 1. episodic_memories 新增 3 列（幂等：先检查列是否存在，镜像 v13 模式）
         cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")]
         if "salience" not in cols:
@@ -900,16 +928,24 @@ class DatabaseManager:
             );
             CREATE INDEX IF NOT EXISTS idx_kg_eer_episode ON kg_edge_episode_refs(episode_id);
             CREATE INDEX IF NOT EXISTS idx_kg_eer_edge ON kg_edge_episode_refs(edge_id);
-
-            CREATE VIRTUAL TABLE IF NOT EXISTS kg_entities_v2_fts USING fts5(
-                id UNINDEXED,
-                name_summary
-            );
-            CREATE VIRTUAL TABLE IF NOT EXISTS kg_relations_v2_fts USING fts5(
-                id UNINDEXED,
-                fact
-            );
         """)
+
+        # FTS5 虚拟表单独创建（条件守卫：FTS5不可用时降级跳过）
+        if _fts5_available:
+            try:
+                await self._conn.executescript("""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS kg_entities_v2_fts USING fts5(
+                        id UNINDEXED,
+                        name_summary
+                    );
+                    CREATE VIRTUAL TABLE IF NOT EXISTS kg_relations_v2_fts USING fts5(
+                        id UNINDEXED,
+                        fact
+                    );
+                """)
+            except Exception as e:
+                logger.warning("database.fts5_create_failed", error=str(e))
+                _fts5_available = False
 
         # 1b. 幂等添加 community_id 列（修复 name_embedding 语义劫持）
         kg_cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(kg_entities_v2)")]
@@ -960,17 +996,22 @@ class DatabaseManager:
             WHERE id NOT IN (SELECT id FROM kg_relations_v2)
         """)
 
-        # 4. 回填 FTS5 索引 (triggers 尚未创建, 手动插入)
-        await self._conn.execute("""
-            INSERT OR IGNORE INTO kg_entities_v2_fts (id, name_summary)
-            SELECT id, name || ' ' || summary FROM kg_entities_v2
-            WHERE id NOT IN (SELECT id FROM kg_entities_v2_fts)
-        """)
-        await self._conn.execute("""
-            INSERT OR IGNORE INTO kg_relations_v2_fts (id, fact)
-            SELECT id, fact FROM kg_relations_v2
-            WHERE id NOT IN (SELECT id FROM kg_relations_v2_fts)
-        """)
+        # 4. 回填 FTS5 索引 (条件守卫: FTS5不可用时跳过，数据完整性不受影响)
+        if _fts5_available:
+            try:
+                await self._conn.execute("""
+                    INSERT OR IGNORE INTO kg_entities_v2_fts (id, name_summary)
+                    SELECT id, name || ' ' || summary FROM kg_entities_v2
+                    WHERE id NOT IN (SELECT id FROM kg_entities_v2_fts)
+                """)
+                await self._conn.execute("""
+                    INSERT OR IGNORE INTO kg_relations_v2_fts (id, fact)
+                    SELECT id, fact FROM kg_relations_v2
+                    WHERE id NOT IN (SELECT id FROM kg_relations_v2_fts)
+                """)
+            except Exception as e:
+                logger.warning("database.fts5_backfill_failed", error=str(e))
+                # FTS5回填失败非致命，KG搜索降级为LIKE查询
 
     async def _migrate_v15(self) -> None:
         """v15: FSRS-DSR 记忆模型 — 为 episodic_memories 和 concept_nodes 添加 FSRS 列。
