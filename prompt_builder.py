@@ -1294,6 +1294,18 @@ def _inject_xp_and_extra(system_prompt: str, user_id: str | None, extra_context:
     # 5. extra_context（末尾注入，保证顺序: base → mental → permanent → emotional → XP → extra_context）
     if extra_context:
         system_prompt += "\n\n---\n\n" + extra_context
+
+    # 6. 系统能力声明 — 让 Agent 了解自己能操控什么
+    _cap = (
+        f"\n\n---\n\n## 系统能力\n\n"
+        f"你可以操控以下系统功能：\n"
+        f"- **定时提醒**：当{address_term}要求提醒或设定时任务时，系统会自动在定时调度页面创建提醒条目，"
+        f"{address_term}可在 Web UI「定时问候」页面查看、编辑或删除。支持每天/按周几/一次性触发。\n"
+        f"- **笔记/洞察**：你对{address_term}的新发现（性格、习惯、偏好）会自动记录为笔记。\n"
+        f"- **斜杠命令**：/note 查看笔记，/status 查看系统状态，/help 查看所有命令。\n"
+        f"- **定时问候**：系统每天会按计划发送问候消息，{address_term}可在定时问候页面管理。\n"
+    )
+    system_prompt += _cap
     return system_prompt
 
 

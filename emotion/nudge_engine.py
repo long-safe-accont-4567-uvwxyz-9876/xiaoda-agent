@@ -105,8 +105,8 @@ class NudgeEngine:
             await self._check_portrait_consolidate()
             return
 
-        await self._check_reminders()
-        # Only check greeting if no reminder was just sent
+        # 提醒职责已转移给 GreetingScheduler (type='reminder')，
+        # NudgeEngine 不再处理 notebook task 提醒，避免两套系统重复触发
         if time.time() - self._last_proactive_time >= self.MIN_PROACTIVE_INTERVAL and self.greeting_enabled:
             await self._check_greeting()
 

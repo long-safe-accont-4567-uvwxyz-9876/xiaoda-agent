@@ -92,8 +92,8 @@ async def put_dnd(body: dict, request: Request) -> Any:
 
 def _validate_schedule(body: dict) -> dict:
     stype = body.get("type")
-    if stype not in ("fixed", "random"):
-        raise HTTPException(400, "type 必须是 fixed 或 random")
+    if stype not in ("fixed", "random", "reminder"):
+        raise HTTPException(400, "type 必须是 fixed、random 或 reminder")
     days = body.get("days") or [1, 2, 3, 4, 5, 6, 7]
     if not isinstance(days, list) or not all(isinstance(d, int) and 1 <= d <= 7 for d in days):
         raise HTTPException(400, "days 必须是 1~7 的整数数组")
@@ -111,6 +111,12 @@ def _validate_schedule(body: dict) -> dict:
     if stype == "fixed":
         _check_hm(body.get("time", ""), "time")
         rec["time"] = body["time"]
+    elif stype == "reminder":
+        # reminder：需要 time + prompt_hint，无需 window
+        _check_hm(body.get("time", ""), "time")
+        rec["time"] = body["time"]
+        if not body.get("prompt_hint"):
+            raise HTTPException(400, "reminder 类型必须提供 prompt_hint（提醒内容）")
     else:
         _check_hm(body.get("window_start", ""), "window_start")
         _check_hm(body.get("window_end", ""), "window_end")

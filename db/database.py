@@ -23,7 +23,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 16
+CURRENT_SCHEMA_VERSION = 17
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -216,6 +216,7 @@ class DatabaseManager:
             (14, "v06_cognitive_tables+kg_v2_tables", self._migrate_v14),
             (15, "fsrs_dsr_columns", self._migrate_v15),
             (16, "created_at_columns", self._migrate_v16),
+            (17, "greeting_schedules_reminder_type", self._migrate_v17),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -1084,6 +1085,47 @@ class DatabaseManager:
         await self._conn.commit()
         logger.info("database.migration_v16_created_at_done")
 
+    async def _migrate_v17(self) -> None:
+        """v17: greeting_schedules 扩展 type 约束以支持 'reminder' 类型。
+
+        SQLite 不支持 ALTER CHECK，需重建表。
+        """
+        # 检查是否已有 reminder 类型的数据（说明已迁移过）
+        try:
+            existing = await self.fetch_all(
+                "SELECT DISTINCT type FROM greeting_schedules")
+            types = {r["type"] for r in existing}
+            if "reminder" in types:
+                logger.info("database.migration_v17_skipped_already_has_reminder")
+                return
+        except Exception:
+            pass
+
+        # 重建表以更新 CHECK 约束
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS greeting_schedules_v17 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL CHECK(type IN ('fixed','random','reminder')),
+                time TEXT DEFAULT '',
+                window_start TEXT DEFAULT '',
+                window_end TEXT DEFAULT '',
+                count_per_day INTEGER DEFAULT 1,
+                days TEXT NOT NULL DEFAULT '[1,2,3,4,5,6,7]',
+                prompt_hint TEXT DEFAULT '',
+                channels TEXT NOT NULL DEFAULT '["web"]',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                next_fire_times TEXT DEFAULT '[]',
+                drawn_date TEXT DEFAULT '',
+                created_at REAL NOT NULL
+            );
+            INSERT OR IGNORE INTO greeting_schedules_v17
+                SELECT * FROM greeting_schedules;
+            DROP TABLE IF EXISTS greeting_schedules;
+            ALTER TABLE greeting_schedules_v17 RENAME TO greeting_schedules;
+        """)
+        await self._conn.commit()
+        logger.info("database.migration_v17_reminder_type_done")
+
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")
 
@@ -1275,7 +1317,7 @@ class DatabaseManager:
 
             CREATE TABLE IF NOT EXISTS greeting_schedules (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type TEXT NOT NULL CHECK(type IN ('fixed','random')),
+                type TEXT NOT NULL CHECK(type IN ('fixed','random','reminder')),
                 time TEXT DEFAULT '',
                 window_start TEXT DEFAULT '',
                 window_end TEXT DEFAULT '',

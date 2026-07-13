@@ -146,7 +146,7 @@ class GreetingScheduler:
 
             hit = False
             fire_key = sid
-            if row["type"] == "fixed" and row["time"]:
+            if row["type"] in ("fixed", "reminder") and row["time"]:
                 if sid in fired:
                     continue
                 target = _hm_to_min(row["time"])
@@ -210,9 +210,20 @@ class GreetingScheduler:
 
     async def fire_with_report(self, schedule: dict,
                                reason: str = "manual_test") -> tuple[str, dict]:
-        """触发问候并返回 (text, 各通道投递结果)。"""
+        """触发问候/提醒并返回 (text, 各通道投递结果)。
+
+        reminder 类型：直接投递 prompt_hint 固定文本，不调用 LLM。
+        fixed/random 类型：调用 LLM 生成创意问候。
+        """
+        stype = schedule.get("type", "fixed")
         hint = schedule.get("prompt_hint") or ""
-        text = await self._generate(hint)
+
+        if stype == "reminder":
+            # reminder：直接发送提醒文本，不消耗 LLM token
+            address_term = getattr(self.core.context, "current_address_term", "") or "爸爸"
+            text = f"{address_term}～提醒你一下，{hint}，别忘了哦～"
+        else:
+            text = await self._generate(hint)
         try:
             channels = json.loads(schedule.get("channels") or '["web"]')
         except Exception:
