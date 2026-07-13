@@ -618,11 +618,34 @@ def _get_stable_section_mtimes() -> dict[str, float]:
 
 
 def _replace_placeholders(content: str, address_term: str, agent_name: str = "") -> str:
-    """替换 workspace 文件中的 {address_term} 和 {agent_name} 占位符。"""
+    """替换 workspace 文件中的 {address_term}、{agent_name}、{name} 占位符。
+
+    {address_term} - 对话中使用的称呼（如"爸爸"）
+    {agent_name} - Agent 的显示名称（如"小妲"）
+    {name} - 用户的昵称/姓名（如"飞"），从 USER.md 读取
+    """
     if "{address_term}" in content:
         content = content.replace("{address_term}", address_term)
     if agent_name and "{agent_name}" in content:
         content = content.replace("{agent_name}", agent_name)
+
+    # 支持用户昵称/姓名占位符 {name}
+    if "{name}" in content:
+        try:
+            from config import WORKSPACE_DIR
+            import re as _re_inner
+            user_md = WORKSPACE_DIR / "USER.md"
+            if user_md.exists():
+                user_content = user_md.read_text(encoding="utf-8-sig")
+                m = _re_inner.search(r'-\s*姓名[：:]\s*(.+)', user_content)
+                if m:
+                    user_name = m.group(1).strip()
+                    # 过滤占位符
+                    if user_name and not user_name.startswith("（"):
+                        content = content.replace("{name}", user_name)
+        except Exception:
+            pass
+
     return content
 
 

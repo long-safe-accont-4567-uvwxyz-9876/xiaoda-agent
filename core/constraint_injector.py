@@ -24,7 +24,7 @@ _DEFAULT_PATH = Path.home() / ".ai-agent" / "project_constraints.md"
 # source → Scene 段标题映射
 _SCENE_MAP = {
     "qq_group": "Scene: qq_group",
-    "qq_c2c": "Scene: qq_group",   # QQ 私聊共用群聊约束
+    "qq_c2c": "Scene: qq_c2c",   # QQ 私聊独立约束
     "web": "Scene: web",
     "cli": "Scene: cli",
 }

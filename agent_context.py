@@ -30,6 +30,25 @@ def _smart_truncate_summary(text: str, max_len: int = 100) -> str:
     return truncated
 
 
+# 场景标识兜底表：当 project_constraints.md 未配置 Scene 段时使用
+# 让 LLM 感知私聊/群聊等场景，仅一行简短描述，不占用过多 token
+_SCENE_HINTS = {
+    "qq_c2c": "[当前场景] QQ 私聊（一对一对话，可以更亲昵自然）",
+    "qq_group": "[当前场景] QQ 群聊（多人群组，注意 @ 消息是发给当前用户的，回复应面向群组成员）",
+    "web": "[当前场景] Web 界面",
+    "cli": "[当前场景] 命令行",
+}
+
+
+def _build_scene_hint(source: str) -> str:
+    """兜底场景标识：当外部约束文件未配置时，注入最小化场景描述。
+
+    让 LLM 感知当前是私聊还是群聊，避免场景识别失败。
+    """
+    return _SCENE_HINTS.get(source, "")
+
+
+
 class AgentContext:
     """管理对话上下文，维护历史、系统提示、动态缓存与压缩等状态。"""
 
@@ -483,13 +502,22 @@ class AgentContext:
 
         # Volatile 层追加场景约束（按 source 动态注入，~250 token）
         if source:
+            scene_injected = False
             try:
                 from core.constraint_injector import get_scene_constraints
                 scene_constraints = get_scene_constraints(source)
                 if scene_constraints:
                     volatile_parts.append(scene_constraints)
+                    scene_injected = True
             except Exception as e:
                 logger.debug("agent_context.scene_constraints_inject_failed", error=str(e))
+
+            # 兜底：外部约束文件未配置时，注入最小化场景标识
+            # 让 LLM 感知私聊/群聊场景，避免场景识别失败
+            if not scene_injected:
+                scene_hint = _build_scene_hint(source)
+                if scene_hint:
+                    volatile_parts.append(scene_hint)
 
         return "\n".join(volatile_parts) if volatile_parts else ""
 

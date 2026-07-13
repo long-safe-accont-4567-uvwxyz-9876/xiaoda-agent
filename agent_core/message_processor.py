@@ -281,7 +281,7 @@ class MessageProcessorMixin:
         self._update_mental_state_emotion(emotion)
 
         # 构建最小上下文
-        messages = await self._build_fast_path_messages(user_input, is_master, emotion, emotion_hint)
+        messages = await self._build_fast_path_messages(user_input, is_master, emotion, emotion_hint, source)
 
         # LLM 调用
         reply = await self._call_fast_path_llm(messages, user_openid, session_id)
@@ -302,7 +302,8 @@ class MessageProcessorMixin:
         return result
 
     async def _build_fast_path_messages(self, user_input: Any, is_master: Any,
-                                          emotion: Any, emotion_hint: str) -> list:
+                                          emotion: Any, emotion_hint: str,
+                                          source: str = "") -> list:
         """构建快速路径的最小上下文消息列表：系统提示 + 动态提示 + Volatile 层 + 记忆 + 历史。"""
         # 构建最小上下文：系统提示 + 动态提示 + Volatile 层
         if is_master:
@@ -320,6 +321,16 @@ class MessageProcessorMixin:
         if emotion_hint:
             _addr = self.context.current_address_term if is_master else "你"
             _volatile += f"\n[感知到{_addr}的情绪：{emotion_hint}]"
+
+        # 场景标识注入（让 LLM 感知私聊/群聊场景）
+        if source:
+            try:
+                from agent_context import _build_scene_hint
+                scene_hint = _build_scene_hint(source)
+                if scene_hint:
+                    _volatile += f"\n{scene_hint}"
+            except Exception:
+                pass
 
         # 轻量 FTS + 安抚记忆检索
         messages = await self._fast_path_inject_memories(

@@ -1114,6 +1114,7 @@ async def save_user_profile(body: dict) -> Any:
     # 清除 system prompt 缓存，使修改立即生效
     try:
         import prompt_builder
+        prompt_builder.clear_module_cache()
         prompt_builder._SYSTEM_PROMPT_CACHE = ""
         prompt_builder._SYSTEM_PROMPT_CACHE_TS = 0.0
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
