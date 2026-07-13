@@ -243,9 +243,16 @@ _INTERNAL_DECISION_PATTERN = re.compile(
 _REASONING_PHRASES = [
     r"Need\s+(?:think|no\s+tool|to\s+answer|to\s+recall|to\s+check|to\s+consider|to\s+mention|to\s+include|to\s+decide)",
     r"Let\s+me\s+(?:think|recall|check|consider|analyze|review|craft|construct|formulate|ensure|make\s+sure)",
-    r"I\s+(?:should|need to|must|have to|will)\s+(?:think|recall|check|consider|analyze|review|craft|construct|formulate|ensure|include|mention|decide|answer|respond)",
+    r"I\s+(?:should|need to|must|have to|will)\s+(?:think|recall|check|consider|analyze|review|craft|construct|formulate|ensure|include|mention|decide|answer|respond|be\s+(?:honest|careful|clear|safe|respectful|mindful))",
     r"(?:Must|Should)\s+(?:exactly|also|not|be|include|end|avoid|use|ensure)",
     r"(?:First|Next|Then|Now|Also|Finally),\s+(?:I|let me|need to)",
+    r"Looking\s+(?:at|back|into|for)",
+    r"I['\u2019]ve\s+already\s+(?:clearly\s+)?(?:stated|said|told|mentioned|established|set)",
+    r"The\s+request\s+has\s+escalated",
+    r"I\s+can\s+(?:not|and\s+cannot)\s+go",
+    r"This\s+feels\s+(?:safe|unsafe|right|wrong|appropriate|beyond)",
+    r"I\s+need\s+to\s+be\s+(?:honest|careful|clear|safe|respectful|mindful)",
+    r"I\s+must\s+be\s+(?:honest|careful|clear|safe|respectful|mindful)",
 ]
 _REASONING_LINE_PATTERN = re.compile(
     r'^(?:' + '|'.join(_REASONING_PHRASES) + r')[^\n]*$',
@@ -261,6 +268,15 @@ _REASONING_BLOCK_PATTERN = re.compile(
 _AGNES_REASONING_BLOCK = re.compile(
     r'[^\n]*?(?:They\s+ask|We\s+need|Must\s+include|Need\s+adhere|previous\s+assistant)[^\n]*'
     r'(?:[^\n]*?(?:Need|Must|Should|We\s+can|final\s+answer)[^\n]*){2,}',
+    re.IGNORECASE,
+)
+# 扩展英文推理段：包含 I need / I must / I should / I've already / Looking at
+# 等第一人称元推理关键词的连续英文段落（含中文人名插花）
+_EXTENDED_REASONING_BLOCK = re.compile(
+    r'(?:[A-Z][a-z]*(?:\s+[\w\u4e00-\u9fff]+)*[.?!]\s*){2,}'  # 2+ 英文句子
+    r'(?:[^\n]*?(?:I\s+(?:need|must|should|have\s+to|can(?:not)?)\s+|'
+    r"I['\u2019]ve\s+already|Looking\s+at|This\s+feels|The\s+request|"
+    r'my\s+boundary|be\s+honest|safe\s+for\s+me|as\s+a\s+character)[^\n]*)+',
     re.IGNORECASE,
 )
 # 中文内部独白/推理特征短语（模型将思维链当作正文输出）
@@ -317,7 +333,9 @@ def strip_reasoning(text: str) -> str:
     text = _REASONING_BLOCK_PATTERN.sub('', text)
     # 7. Agnes 风格连续英文推理段
     text = _AGNES_REASONING_BLOCK.sub('', text)
-    # 8. 中文内部独白/推理行
+    # 8. 扩展英文推理段（I need to be honest / Looking at / I've already 等模式）
+    text = _EXTENDED_REASONING_BLOCK.sub('', text)
+    # 9. 中文内部独白/推理行
     text = _CHINESE_REASONING_LINE_PATTERN.sub('', text)
     # 清理多余空行
     text = re.sub(r'\n{3,}', '\n\n', text)
