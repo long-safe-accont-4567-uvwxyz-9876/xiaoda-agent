@@ -1,0 +1,15 @@
+{
+  "users": {
+    "test": {
+      "user_id": "test",
+      "xp": 0,
+      "level": 1,
+      "history": [],
+      "last_chat_at": 0.0,
+      "first_seen_at": 1783868587.1534886,
+      "milestones": [],
+      "last_daily_login_date": ""
+    }
+  },
+  "updated_at": 1783868587.1536105
+}

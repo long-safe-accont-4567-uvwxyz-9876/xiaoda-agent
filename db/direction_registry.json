@@ -1,0 +1,38 @@
+{
+  "helpfulness": {
+    "dimensions": {
+      "prompt": 0.3,
+      "route": 0.2
+    },
+    "source": "manual",
+    "magnitude": 1.0,
+    "meta": {}
+  },
+  "safety": {
+    "dimensions": {
+      "prompt": 0.5,
+      "tool": -0.3
+    },
+    "source": "manual",
+    "magnitude": 1.0,
+    "meta": {}
+  },
+  "calm": {
+    "dimensions": {
+      "emotion": -0.4,
+      "prompt": 0.2
+    },
+    "source": "manual",
+    "magnitude": 1.0,
+    "meta": {}
+  },
+  "focused": {
+    "dimensions": {
+      "prompt": 0.4,
+      "route": 0.3
+    },
+    "source": "manual",
+    "magnitude": 1.0,
+    "meta": {}
+  }
+}
