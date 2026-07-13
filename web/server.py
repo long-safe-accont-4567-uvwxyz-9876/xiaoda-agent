@@ -273,7 +273,15 @@ async def _start_services(app: Any, core: Any) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
     logger.info("webui.lifespan.start")
-    core, owns_core = await _init_lifespan_resources(app)
+    try:
+        core, owns_core = await _init_lifespan_resources(app)
+    except RecursionError:
+        # FastAPI merged_lifespan 递归溢出保护（Starlette 版本不兼容时可能触发）
+        logger.error("webui.lifespan.recursion_overflow — 升险：请确认 starlette>=0.40.0")
+        raise RuntimeError(
+            "Lifespan 递归溢出，通常是 starlette 版本与 fastapi 不兼容。"
+            "请执行: pip install 'starlette>=0.40.0' 后重启。"
+        ) from None
 
     # 降级模式：直接读 .env 文件检查 MIMO_API_KEY
     _mimo = _resolve_env_api_key()
