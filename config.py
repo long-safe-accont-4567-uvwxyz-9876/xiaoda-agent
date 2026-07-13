@@ -810,12 +810,16 @@ QUERY_TRANSFORM_ENABLED = os.getenv("QUERY_TRANSFORM_ENABLED", "true").lower() i
 QUERY_EXPAND_COUNT = _safe_int(os.getenv("QUERY_EXPAND_COUNT"), 2)
 # 意图分类 LLM 调用：默认开启（GLM-Z1-9B-0414 推理质量高，速度可接受）
 # 设置 INTENT_LLM_CLASSIFY=false 可关闭 LLM 分类，仅用规则匹配（更快）
-INTENT_LLM_CLASSIFY = os.getenv("INTENT_LLM_CLASSIFY", "true").lower() in ("1", "true", "yes")
+INTENT_LLM_CLASSIFY = os.getenv("INTENT_LLM_CLASSIFY", "false").lower() in ("1", "true", "yes")
+# 意图分类 LLM 调用超时（秒），默认 5.0s（从 2.0s 提升，避免误超时）
+INTENT_CLASSIFY_TIMEOUT = _safe_float(os.getenv("INTENT_CLASSIFY_TIMEOUT"), 15.0)
 
 # Retrieval Optimization (A1/A2/A3)
 RETRIEVAL_SMART_SKIP = os.getenv("RETRIEVAL_SMART_SKIP", "true").lower() in ("1", "true", "yes")
 RETRIEVAL_PARALLEL_TRANSFORM = os.getenv("RETRIEVAL_PARALLEL_TRANSFORM", "true").lower() in ("1", "true", "yes")
 RETRIEVAL_PARALLEL_SEARCH = os.getenv("RETRIEVAL_PARALLEL_SEARCH", "true").lower() in ("1", "true", "yes")
+# 查询语义缓存开关：命中缓存时跳过完整检索流水线
+QUERY_CACHE_ENABLED = os.getenv("QUERY_CACHE_ENABLED", "true").lower() in ("1", "true", "yes")
 
 # ── 父子Chunk RAG 优化 ──
 PARENT_CHILD_CHUNK_ENABLED = os.getenv("PARENT_CHILD_CHUNK_ENABLED", "true").lower() in ("1", "true", "yes")
@@ -972,6 +976,7 @@ __all__ = [
     "QUERY_EXPAND_COUNT",
     "QUERY_TRANSFORM_ENABLED",
     "INTENT_LLM_CLASSIFY",
+    "INTENT_CLASSIFY_TIMEOUT",
     "RAG_IMPORTANCE_WEIGHT",
     "RAG_KG_WEIGHT",
     "RAG_RECALL_LIMIT",
@@ -985,6 +990,7 @@ __all__ = [
     "RETRIEVAL_PARALLEL_SEARCH",
     "RETRIEVAL_PARALLEL_TRANSFORM",
     "RETRIEVAL_SMART_SKIP",
+    "QUERY_CACHE_ENABLED",
     "SIMPLE_CHAT_FASTPATH",
     "SIMPLE_TASK_KEYWORDS",
     "STICKER_DIR",

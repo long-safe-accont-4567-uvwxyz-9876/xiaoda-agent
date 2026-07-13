@@ -7,6 +7,7 @@ import ast
 import os
 import math
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from loguru import logger
 from config import get_agent_display_name
@@ -183,11 +184,15 @@ def _timeout_handler(signum: Any, frame: Any) -> None:
     category="system",
 )
 def get_current_time() -> ToolResult:
-    """获取当前北京时间（含星期）。"""
-    cst = timezone(timedelta(hours=8))
-    now = datetime.now(cst)
+    """获取当前时间（含星期），默认 Asia/Shanghai，支持 NUDGE_TIMEZONE 覆盖。"""
+    tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Shanghai")
+    now = datetime.now(tz)
     weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
-    return ToolResult.ok(f"当前北京时间: {now.strftime('%Y年%m月%d日 %H:%M:%S')} {weekdays[now.weekday()]}")
+    return ToolResult.ok(f"当前时间: {now.strftime('%Y年%m月%d日 %H:%M:%S')} {weekdays[now.weekday()]}")
 
 
 @register_tool(

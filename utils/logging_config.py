@@ -117,33 +117,37 @@ def setup_logging() -> None:
             colorize=_colorize,
         )
 
-    # 确保日志目录存在
-    log_dir = LOG_DIR
-    log_dir.mkdir(exist_ok=True)
+    # 测试模式下跳过文件 sink，防止测试日志污染生产日志
+    _is_test_mode = os.environ.get("TEST_MODE", "").lower() in ("1", "true", "yes")
 
-    # 保留原有结构化文件日志（loguru serialize 模式，不破坏现有输出）
-    log_path = log_dir / "agent_{time:YYYY-MM-DD}.json"
-    logger.add(
-        str(log_path),
-        format="{time} {level} {extra[trace_id]} {message}",
-        serialize=True,
-        rotation="00:00",
-        retention="30 days",
-        level="INFO",
-        encoding="utf-8",
-        enqueue=True,  # 异步队列写入，避免事件循环阻塞
-    )
+    if not _is_test_mode:
+        # 确保日志目录存在
+        log_dir = LOG_DIR
+        log_dir.mkdir(exist_ok=True)
 
-    # 新增文本格式文件日志 logs/agent.log，便于直接查看
-    text_log_path = log_dir / "agent.log"
-    logger.add(
-        str(text_log_path),
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[trace_id]} | {message}",
-        rotation="10 MB",
-        retention="30 days",
-        level="INFO",
-        encoding="utf-8",
-        enqueue=True,  # 异步队列写入，避免事件循环阻塞
-    )
+        # 保留原有结构化文件日志（loguru serialize 模式，不破坏现有输出）
+        log_path = log_dir / "agent_{time:YYYY-MM-DD}.json"
+        logger.add(
+            str(log_path),
+            format="{time} {level} {extra[trace_id]} {message}",
+            serialize=True,
+            rotation="00:00",
+            retention="30 days",
+            level="INFO",
+            encoding="utf-8",
+            enqueue=True,  # 异步队列写入，避免事件循环阻塞
+        )
+
+        # 新增文本格式文件日志 logs/agent.log，便于直接查看
+        text_log_path = log_dir / "agent.log"
+        logger.add(
+            str(text_log_path),
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[trace_id]} | {message}",
+            rotation="10 MB",
+            retention="30 days",
+            level="INFO",
+            encoding="utf-8",
+            enqueue=True,  # 异步队列写入，避免事件循环阻塞
+        )
 
     logger.info("日志系统就绪")

@@ -13,6 +13,9 @@ if str(PROJECT_ROOT) not in sys.path:
 # 测试环境默认启用开发板模式（安全威胁 warn 不 block）
 os.environ.setdefault("AGENT_DEV_MODE", "1")
 
+# 测试模式下跳过文件 sink，防止测试日志污染生产日志
+os.environ.setdefault("TEST_MODE", "true")
+
 
 @pytest.fixture
 def project_root() -> Path:

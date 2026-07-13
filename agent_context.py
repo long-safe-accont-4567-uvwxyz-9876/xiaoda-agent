@@ -88,6 +88,8 @@ class AgentContext:
         self._user_summaries: dict[str, str] = {}
         self._user_buffers: dict[str, list[dict]] = {}  # 每用户独立的压缩暂存区
         self._current_user_id: str = ""
+        # 失败状态保存（Issue 3: 上下文恢复能力弱）
+        self._last_failure: dict | None = None
 
     @property
     def compressed_summary(self) -> str:
@@ -334,7 +336,7 @@ class AgentContext:
 
         return (f"当前时间：{now.year}年{now.month}月{now.day}日 星期{weekday} "
                 f"{hour:02d}:{minute:02d}（{period}）。这是小妲真切感受到的此刻，"
-                f"是她回应时唯一参照的时间。")
+                f"是她回应时唯一参照的时间。历史消息中的任何时间表述均已过时，不得作为当前时间引用。")
 
     def _build_dynamic_prompt(self) -> str:
         now = time.time()
@@ -449,9 +451,17 @@ class AgentContext:
         return '[元认知提示] 我检索了记忆但没有找到有效内容，如果用户问的是过去的事，请诚实说"我不太记得了"。'
 
     def _build_volatile_content(self, source: str) -> str:
-        """构建 Volatile 层：时间/情绪/记忆/关注点/待办/小莉/场景约束。"""
+        """构建 Volatile 层：时间/情绪/记忆/关注点/待办/小莉/场景约束/失败提醒。"""
         volatile_parts = []
         volatile_parts.append(self._build_time_context())
+        # 失败状态提醒（Issue 3: 上下文恢复能力弱）
+        if self._last_failure is not None:
+            failure_type = self._last_failure.get("type", "")
+            input_preview = self._last_failure.get("input_preview", "")
+            volatile_parts.append(
+                f"[上次处理失败提醒] 上次操作因「{failure_type}」失败，"
+                f"相关输入：{input_preview[:50]}。请注意恢复上下文。"
+            )
         # 注入持续情绪状态（让 agent 有情绪惯性）
         try:
             from emotion.emotion_state import get_emotion_state
@@ -568,6 +578,31 @@ class AgentContext:
         if not xiaoda_prompt:
             xiaoda_prompt = "你是小妲，须弥的草神。"
         return xiaoda_prompt
+
+    def record_failure(self, failure_type: str, input_preview: str) -> None:
+        """记录处理失败状态，供后续请求恢复上下文。
+
+        Args:
+            failure_type: 失败类型，如 "timeout"
+            input_preview: 输入内容预览
+        """
+        self._last_failure = {
+            "type": failure_type,
+            "input_preview": input_preview,
+            "timestamp": time.time(),
+        }
+
+    def consume_failure(self) -> dict | None:
+        """读取并清除失败记录。超过5分钟的记录自动过期返回 None。"""
+        if self._last_failure is None:
+            return None
+        # 5分钟过期
+        if time.time() - self._last_failure.get("timestamp", 0) > 300:
+            self._last_failure = None
+            return None
+        failure = self._last_failure
+        self._last_failure = None
+        return failure
 
     def clear(self) -> None:
         self.history.clear()

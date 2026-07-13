@@ -75,7 +75,7 @@ class QueryTransformer:
                 content = choices[0].get("message", {}).get("content", "")
                 return content.strip() if content else None
         except Exception as e:
-            logger.warning("query_transform.free_model_failed", model=self._model, error=str(e))
+            logger.warning("query_transform.free_model_failed", model=self._model, error=str(e), error_type=type(e).__name__)
             return None
 
     async def rewrite_query(self, original_query: str, context: str = "") -> str:
@@ -172,9 +172,10 @@ class QueryTransformer:
         if llm_classify and self._available:
             prompt = f"请分类以下查询的意图类型（temporal/factual/chat/multi-hop），只输出类型名称：\n查询: {query}"
             try:
+                _cfg_timeout = getattr(_cfg, "INTENT_CLASSIFY_TIMEOUT", 5.0)
                 result = await asyncio.wait_for(
                     self._call_free_model(prompt, temperature=0.0, max_tokens=20),
-                    timeout=2.0,
+                    timeout=_cfg_timeout,
                 )
                 if result:
                     result_clean = result.strip().lower()
@@ -182,7 +183,7 @@ class QueryTransformer:
                         if intent in result_clean:
                             return intent
             except Exception as e:
-                logger.warning("query_transform.classify_intent_failed", error=str(e))
+                logger.warning("query_transform.classify_intent_failed", error=str(e), error_type=type(e).__name__)
 
         # 默认 factual
         return "factual"
