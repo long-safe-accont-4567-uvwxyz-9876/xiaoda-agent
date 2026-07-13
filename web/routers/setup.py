@@ -436,15 +436,20 @@ async def _test_github(key_value: str) -> tuple[bool, str]:
 
 async def _test_ollama(base_url: str) -> tuple[bool, str]:
     """测试 Ollama 服务连通性。"""
-    # SSRF 防护：校验 URL 不指向内网/元数据服务
-    # Ollama 是本地部署服务，允许 localhost/127.0.0.1
-    from security.ssrf_guard import validate_url
+    # URL 规范化：Ollama OpenAI 兼容端点需以 /v1 结尾
     import urllib.parse as _urlparse
     _parsed = _urlparse.urlparse(base_url)
+    _path = _parsed.path.rstrip("/")
+    if not _path.endswith("/v1"):
+        base_url = f"{base_url.rstrip('/')}/v1"
+    # SSRF 防护：校验 URL 不指向内网/元数据服务
+    # Ollama 是本地/容器内部署，允许 localhost / 127.0.0.1 / host.docker.internal
+    from security.ssrf_guard import validate_url
     _hostname = (_parsed.hostname or "").lower().rstrip(".")
-    _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "ip6-localhost"}
+    _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "ip6-localhost",
+                    "host.docker.internal", "host.minikube.internal"}
     if _hostname in _LOCAL_HOSTS:
-        pass  # 本地 Ollama 服务，跳过 SSRF 检查
+        pass  # 本地/容器内 Ollama 服务，跳过 SSRF 检查
     else:
         allowed, reason = validate_url(base_url)
         if not allowed:
@@ -456,7 +461,7 @@ async def _test_ollama(base_url: str) -> tuple[bool, str]:
                 data = resp.json()
                 models = data.get("data", [])
                 return True, f"Ollama 可用，发现 {len(models)} 个模型"
-            return False, f"Ollama 返回 HTTP {resp.status_code}"
+            return False, f"Ollama 返回 HTTP {resp.status_code}，请确认 Ollama 已启动且 URL 正确（需 /v1 后缀）"
     except httpx.ConnectError:
         return False, f"无法连接到 Ollama 服务（{base_url}），请确认 Ollama 已启动"
     except httpx.TimeoutException:

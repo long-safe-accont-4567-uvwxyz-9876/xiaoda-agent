@@ -318,7 +318,7 @@ class CredentialPool:
                 ))
 
         # Ollama 本地部署，无需真实 API Key，使用占位 Key
-        ollama_url = os.getenv("OLLAMA_BASE_URL", "")
+        ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
         if ollama_url:
             self.add_credential(Credential(
                 api_key="ollama",  # 占位 Key
