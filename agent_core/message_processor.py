@@ -31,7 +31,7 @@ from utils.text_utils import (has_dsml_tool_calls, parse_dsml_tool_calls,
 from utils.llm_cleanup import deduplicate_multi_reply
 
 # 从 _shared 导入共享常量, 避免重复定义 (该模块极轻量, 无循环导入风险)
-from agent_core._shared import DEGRADED_REPLY
+from agent_core._shared import DEGRADED_REPLY, is_degraded_reply
 
 
 def _get_temperature(model_cfg: dict | None = None) -> float:
@@ -485,9 +485,13 @@ class MessageProcessorMixin:
         _should_remember = is_master or source != "qq_group"
         if _should_remember:
             await self.context.add_message("user", user_input)
-            await self.context.add_message("assistant", reply)
-            self._bg_task_manager.run_background_tasks(
-                user_input, reply, user_id, source, emotion, [], session_id=session_id)
+            # 降级/错误回复不写入对话历史和记忆库，避免污染后续检索
+            if is_degraded_reply(reply):
+                logger.info("agent.skip_memory_degraded_reply", source=source, reply_preview=reply[:60])
+            else:
+                await self.context.add_message("assistant", reply)
+                self._bg_task_manager.run_background_tasks(
+                    user_input, reply, user_id, source, emotion, [], session_id=session_id)
         try:
             _spawn(self.router.flush_costs())
         except Exception as e:
@@ -624,11 +628,16 @@ class MessageProcessorMixin:
                 if _should_remember:
                     # 关键：写入对话历史，否则下一轮上下文丢失
                     await self.context.add_message("user", clean_input)
-                    await self.context.add_message("assistant", graph_result.final_output)
-                    self._bg_task_manager.run_background_tasks(
-                        clean_input, graph_result.final_output, user_id, source, emotion, [],
-                        session_id=session_id,
-                    )
+                    # 降级/错误回复不写入对话历史和记忆库，避免污染后续检索
+                    if is_degraded_reply(graph_result.final_output):
+                        logger.info("agent.skip_memory_degraded_reply",
+                                    source=source, reply_preview=graph_result.final_output[:60])
+                    else:
+                        await self.context.add_message("assistant", graph_result.final_output)
+                        self._bg_task_manager.run_background_tasks(
+                            clean_input, graph_result.final_output, user_id, source, emotion, [],
+                            session_id=session_id,
+                        )
                 emotion_label = emotion.get("primary", "")
                 clean_reply = self._finalize_reply(graph_result.final_output, style="xiaoda")
                 sticker_path = None
@@ -761,11 +770,14 @@ class MessageProcessorMixin:
         if _should_remember:
             if not ctx.handled_by_tool_call:
                 await self.context.add_message("user", user_input)
-                rc = self.router.pop_reasoning_content()
-                await self.context.add_message("assistant", reply, reasoning_content=rc)
-
-            self._bg_task_manager.run_background_tasks(
-                user_input, reply, user_id, source, emotion, tool_results, session_id=session_id)
+                # 降级/错误回复不写入对话历史和记忆库，避免污染后续检索
+                if is_degraded_reply(reply):
+                    logger.info("agent.skip_memory_degraded_reply", source=source, reply_preview=reply[:60])
+                else:
+                    rc = self.router.pop_reasoning_content()
+                    await self.context.add_message("assistant", reply, reasoning_content=rc)
+                    self._bg_task_manager.run_background_tasks(
+                        user_input, reply, user_id, source, emotion, tool_results, session_id=session_id)
         # 偏好管线: 用户纠正 → L1(约束) + L3(教训) 联动 (异步, 不阻塞回复)
         try:
             from core.preference_pipeline import get_preference_pipeline
