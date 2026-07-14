@@ -92,6 +92,20 @@ class MemoryDB:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
+    async def update_emotion_label(self, mem_id: int, label: str) -> None:
+        await self._conn.execute(
+            "UPDATE episodic_memories SET emotion_label = ? WHERE id = ?",
+            (label, mem_id),
+        )
+        await self._conn.commit()
+
+    async def update_memory_summary(self, mem_id: int, new_summary: str) -> None:
+        await self._conn.execute(
+            "UPDATE episodic_memories SET summary = ? WHERE id = ?",
+            (new_summary, mem_id),
+        )
+        await self._conn.commit()
+
     async def increment_access_count(self, memory_id: int, auto_commit: bool = True) -> None:
         """递增记忆访问计数（检索强化）"""
         await self._conn.execute(

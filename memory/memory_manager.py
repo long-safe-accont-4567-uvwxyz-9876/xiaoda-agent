@@ -34,24 +34,44 @@ import datetime as _datetime
 # 注意: "大前天" 必须排在 "前天" 之前，因 "大前天" 包含 "前天" 子串，
 # _parse_temporal_query 在首个命中即返回，顺序错误会导致 "大前天" 被误判为 "前天"。
 _TEMPORAL_PATTERNS = [
-    (re.compile(r"大前天"), 3, 1),             # 大前天那一天（3天前）
-    (re.compile(r"前天"), 2, 1),               # 前天那一天（2天前）
-    (re.compile(r"昨天|昨日"), 1, 1),          # 昨天那一天
-    (re.compile(r"今天|今日"), 0, 1),          # 今天
-    (re.compile(r"上周"), 7, 7),               # 上周（7-14天前那一周）
-    (re.compile(r"上个月|上月"), 30, 30),      # 上个月
-    (re.compile(r"前几天|前些天|最近"), 1, 7), # 最近一周
+    (re.compile(r"刚才|刚刚"), 0, 0),
+    (re.compile(r"大前天"), 3, 1),
+    (re.compile(r"前天"), 2, 1),
+    (re.compile(r"昨天|昨日"), 1, 1),
+    (re.compile(r"今天|今日"), 0, 1),
+    (re.compile(r"上周"), 7, 7),
+    (re.compile(r"上个月|上月"), 30, 30),
+    (re.compile(r"前几天|前些天|最近"), 1, 7),
 ]
 
 
 def _parse_temporal_query(query: str) -> tuple[float, float] | None:
     """从用户查询中解析时间词，返回 [start_ts, end_ts] 时间戳区间（秒）。
 
-    支持的词：昨天/前天/大前天/今天/上周/上个月/前几天/最近
+    支持的词：刚才/刚刚/N小时前/N分钟前/昨天/前天/大前天/今天/上周/上个月/前几天/最近
     无时间词返回 None。
 
     注意：这是一个轻量规则解析器，不调 LLM，毫秒级。
     """
+    m = re.search(r"(\d+)\s*小时前", query)
+    if m:
+        hours = int(m.group(1))
+        now = _datetime.datetime.now(_datetime.UTC).astimezone()
+        start = now - _datetime.timedelta(hours=hours)
+        return start.timestamp(), now.timestamp()
+
+    m = re.search(r"(\d+)\s*分钟前", query)
+    if m:
+        minutes = int(m.group(1))
+        now = _datetime.datetime.now(_datetime.UTC).astimezone()
+        start = now - _datetime.timedelta(minutes=minutes)
+        return start.timestamp(), now.timestamp()
+
+    if re.search(r"刚才|刚刚", query):
+        now = _datetime.datetime.now(_datetime.UTC).astimezone()
+        start = now - _datetime.timedelta(hours=1)
+        return start.timestamp(), now.timestamp()
+
     for pattern, offset_days, span_days in _TEMPORAL_PATTERNS:
         if pattern.search(query):
             now = _datetime.datetime.now(_datetime.UTC).astimezone()
@@ -417,7 +437,7 @@ class MemoryManager:
                                         use_reranker: bool = True,
                                         use_kg: bool = True,
                                         scope: Any | None = None,
-                                        include_raw: bool = False) -> list[dict]:
+                                        include_raw: bool = True) -> list[dict]:
         """FTS + 向量 + KG + 子chunk + 扩散 + 实体 六路 RRF 混合检索 + Reranker 精排
 
         mem0 SPEC 优化：
@@ -507,7 +527,7 @@ class MemoryManager:
                             duration_ms=int((time.time() - _start) * 1000))
                 return results
             # FTS 无结果，尝试向量兜底 + KG v2
-            vec_items = await self._hybrid_vec_search(query, recall_limit)
+            vec_items = await self._hybrid_vec_search(query, recall_limit, is_raw=is_raw_filter)
             if vec_items:
                 results = vec_items[:k]
                 if kg_v2_items and len(results) < k:
@@ -612,7 +632,7 @@ class MemoryManager:
 
         fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items = await asyncio.gather(
             self._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter),
-            self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids),
+            self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=is_raw_filter),
             _kg_recall(),
             _child_recall(),
             self._spreading_recall(query, recall_limit),
@@ -625,7 +645,7 @@ class MemoryManager:
             # Fallback: 用相同 FTS+Vec 检索，但 include_raw（is_raw=0 和 is_raw=1 都返回）
             raw_fts, raw_vec = await asyncio.gather(
                 self._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter=None),
-                self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids),
+                self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=is_raw_filter),
             )
             raw_results = (raw_fts or []) + (raw_vec or [])
             if raw_results:
@@ -806,11 +826,13 @@ class MemoryManager:
             return []
 
     async def _hybrid_vec_search(self, query: str, k: int,
-                                 candidate_ids: list[int] | None = None) -> list[dict]:
+                                 candidate_ids: list[int] | None = None,
+                                 is_raw: int | None = None) -> list[dict]:
         """向量检索 + 批量 JOIN：一次查询获取所有向量命中的记忆记录
 
         ContextNest A1: candidate_ids 提供时, 向量检索只在确定性候选集内排序,
         候选集本身由 metadata selector (时间/重要性) 产生, Jaccard 1.0。
+        is_raw: None=不过滤, 0=只查蒸馏知识, 1=只查原始记忆
         """
         if not self.vec:
             return []
@@ -822,6 +844,8 @@ class MemoryManager:
                 return []
             vec_ids = [row_id for row_id, _ in vec_results]
             vec_mems = await self.memory.get_memories_by_ids(vec_ids)
+            if is_raw is not None:
+                vec_mems = [m for m in vec_mems if m.get("is_raw") == is_raw]
             # 构建 id -> memory 映射，按 distance 排序组装结果
             vec_mem_map = {m["id"]: m for m in vec_mems}
             items = []
@@ -1234,6 +1258,8 @@ class MemoryManager:
         # KG 上下文增强（保留原有逻辑）
         await self._apply_kg_context_enhance(results)
 
+        results = self._dedup_by_content_similarity(results)
+
         # 写入缓存
         if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
             await self._query_cache.put(query, results)
@@ -1241,7 +1267,7 @@ class MemoryManager:
 
     async def _try_temporal_search(self, query: str, k: int,
                                     scope: Any | None = None,
-                                    include_raw: bool = False) -> list[dict] | None:
+                                    include_raw: bool = True) -> list[dict] | None:
         """时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索。
 
         mem0 SPEC 优化：加入 scope 过滤 + is_raw 过滤。
@@ -1513,14 +1539,39 @@ class MemoryManager:
             filtered.append(r)
         return filtered
 
+    def _dedup_by_content_similarity(self, results: list[dict], threshold: float = 0.7) -> list[dict]:
+        if len(results) <= 1:
+            return results
+        kept = []
+        for r in results:
+            summary = r.get("summary", "")
+            words = set(summary)
+            is_dup = False
+            for k in kept:
+                k_words = set(k.get("summary", ""))
+                if not words or not k_words:
+                    continue
+                jaccard = len(words & k_words) / len(words | k_words)
+                if jaccard > threshold:
+                    if r.get("final_score", 0) <= k.get("final_score", 0):
+                        is_dup = True
+                        break
+                    else:
+                        kept.remove(k)
+                        break
+            if not is_dup:
+                kept.append(r)
+        return kept
+
     def _compute_recency_boost(self, item: dict) -> float:
         """计算时间新鲜度加成 (0-1)。
 
-        1.0 = 今天，0.0 = 一年前。无时间信息给中等偏低值 0.3。
+        1.0 = 1小时内，0.0 = 很久以前。无时间信息给中等偏低值 0.3。
+        小时级粒度，避免同一天内的记忆无法区分新鲜度。
         """
         ts = item.get("timestamp") or item.get("created_at") or item.get("updated_at")
         if not ts:
-            return 0.3  # 无时间信息，给中等偏低值
+            return 0.3
         try:
             if isinstance(ts, str):
                 dt = _datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
@@ -1529,16 +1580,28 @@ class MemoryManager:
             else:
                 return 0.3
 
-            days_ago = (_datetime.datetime.now(dt.tzinfo) - dt).days
-            if days_ago <= 0:
+            now = _datetime.datetime.now(dt.tzinfo)
+            delta = now - dt
+            hours_ago = delta.total_seconds() / 3600
+            days_ago = delta.days
+
+            if hours_ago <= 1:
                 return 1.0
+            if hours_ago <= 4:
+                return 0.95
+            if hours_ago <= 12:
+                return 0.90
+            if days_ago <= 0:
+                return 0.85
+            if days_ago <= 1:
+                return 0.70
             if days_ago <= 7:
-                return 0.8
+                return 0.50
             if days_ago <= 30:
-                return 0.5
+                return 0.30
             if days_ago <= 90:
-                return 0.3
-            return 0.1
+                return 0.20
+            return 0.10
         except Exception:
             return 0.3
 
@@ -1812,11 +1875,22 @@ class MemoryManager:
                     logger.debug("memory.entity_spawn_failed", error=str(e))
 
             # ── mem0 SPEC: 异步触发蒸馏（原始记忆 → is_raw=0 提炼知识）──
+            full_text_parts = []
+            for msg in exchanges[-6:]:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                if role == "user" and content:
+                    full_text_parts.append(f"用户说: {content}")
+                elif role == "assistant" and content:
+                    full_text_parts.append(f"小妲: {content}")
+            full_text = "；".join(full_text_parts)[:2000]
+
             if self.distiller:
                 try:
                     _distill_task = asyncio.create_task(
                         self._distill_to_knowledge(
-                            mem_id, summary, scope, importance, emotion
+                            mem_id, summary, scope, importance, emotion,
+                            full_text=full_text
                         )
                     )
                     def _log_distill_exception(t: asyncio.Task) -> None:
@@ -1835,6 +1909,9 @@ class MemoryManager:
 
             # 冷启动路由: 新记忆写入后失效计数缓存, 下次检索立即感知档位变化
             self.invalidate_memory_count_cache()
+
+            if self._query_cache:
+                self._query_cache.invalidate()
 
             self._save_state_json(summary, importance, emotion)
 
@@ -1975,7 +2052,8 @@ class MemoryManager:
 
     async def _distill_to_knowledge(self, raw_id: int, summary: str,
                                      scope: Any, importance: float = 0.5,
-                                     emotion: str = "", _retry: int = 0) -> None:
+                                     emotion: str = "", _retry: int = 0,
+                                     full_text: str = "") -> None:
         """将原始记忆蒸馏为提炼知识（允许 UPDATE/DELETE）。
 
         mem0 SPEC 优化 ADD-only 架构：
@@ -1993,10 +2071,18 @@ class MemoryManager:
             importance: 重要性
             emotion: 情感标签
             _retry: 当前重试次数（内部使用）
+            full_text: 完整对话原文（蒸馏失败时回填用）
         """
         if not self.distiller:
             return
         try:
+            try:
+                existing = await self.memory.get_memory_by_id(raw_id)
+                if existing and existing.get("emotion_label", "").endswith("distill_failed"):
+                    logger.debug("memory.distill_skip_failed", raw_id=raw_id)
+                    return
+            except Exception:
+                pass
             # 1. 蒸馏（调用已有 MemoryDistiller，传入单条记忆）
             distilled = await self.distiller.distill([{"summary": summary, "timestamp": time.time()}])
             if not distilled or not distilled.strip():
@@ -2009,11 +2095,13 @@ class MemoryManager:
                         delay,
                         lambda: asyncio.ensure_future(
                             self._distill_to_knowledge(raw_id, summary, scope,
-                                                       importance, emotion, _retry + 1)
+                                                       importance, emotion, _retry + 1,
+                                                       full_text=full_text)
                         ),
                     )
                 else:
                     logger.warning("memory.distill_exhausted_retries", raw_id=raw_id)
+                    await self._save_fallback_raw(raw_id, summary, full_text)
                 return
 
             # 2. 检查是否已有相似的提炼知识
@@ -2041,16 +2129,35 @@ class MemoryManager:
         except Exception as e:
             logger.warning("memory.distill_to_knowledge_failed",
                           raw_id=raw_id, retry=_retry, error=str(e))
-            # 异常也安排重试
             if _retry < 2:
                 delay = 30 * (_retry + 1)
                 asyncio.get_event_loop().call_later(
                     delay,
                     lambda: asyncio.ensure_future(
                         self._distill_to_knowledge(raw_id, summary, scope,
-                                                   importance, emotion, _retry + 1)
+                                                   importance, emotion, _retry + 1,
+                                                   full_text=full_text)
                     ),
                 )
+            else:
+                await self._save_fallback_raw(raw_id, summary, full_text)
+
+    async def _save_fallback_raw(self, raw_id: int, truncated_summary: str,
+                                  full_text: str) -> None:
+        try:
+            if full_text and len(full_text) > len(truncated_summary):
+                await self.memory.update_memory_summary(raw_id, full_text)
+                logger.info("memory.fallback_raw_updated", raw_id=raw_id,
+                           old_len=len(truncated_summary), new_len=len(full_text))
+                if self.vec:
+                    try:
+                        await self.vec.upsert(raw_id, full_text)
+                    except Exception as e:
+                        logger.debug("memory.fallback_vec_upsert_failed", error=str(e))
+
+            await self.memory.update_emotion_label(raw_id, "distill_failed")
+        except Exception as e:
+            logger.warning("memory.fallback_save_failed", raw_id=raw_id, error=str(e))
 
     async def _find_similar_knowledge(self, summary: str,
                                        scope: Any) -> dict | None:
@@ -2150,12 +2257,12 @@ class MemoryManager:
             role = msg.get("role", "")
             content = msg.get("content", "")
             if role == "user" and content:
-                parts.append(f"用户说: {content[:150]}")
+                parts.append(f"用户说: {content[:250]}")
             elif role == "assistant" and content:
-                parts.append(content[:150])
+                parts.append(content[:250])
 
         summary = "；".join(parts)
-        return summary[:500]
+        return summary[:700]
 
     def _split_into_children(self, exchanges: list[dict], parent_id: int,
                              parent_summary: str) -> list[dict]:

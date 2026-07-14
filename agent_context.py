@@ -353,9 +353,26 @@ class AgentContext:
         else:
             period = "深夜"
 
+        gap_text = ""
+        if self._last_message_time > 0:
+            gap_seconds = time.time() - self._last_message_time
+            if gap_seconds < 60:
+                gap_desc = "刚刚"
+            elif gap_seconds < 3600:
+                gap_desc = f"{int(gap_seconds / 60)}分钟前"
+            elif gap_seconds < 86400:
+                gap_desc = f"{int(gap_seconds / 3600)}小时前"
+            elif gap_seconds < 2592000:
+                gap_desc = f"{int(gap_seconds / 86400)}天前"
+            else:
+                gap_desc = ""
+            if gap_desc:
+                gap_text = f"距上次对话：{gap_desc}。如果间隔较长，不要用「刚才」「刚刚」等词指代上次对话内容。"
+
         return (f"当前时间：{now.year}年{now.month}月{now.day}日 星期{weekday} "
                 f"{hour:02d}:{minute:02d}（{period}）。这是小妲真切感受到的此刻，"
-                f"是她回应时唯一参照的时间。历史消息中的任何时间表述均已过时，不得作为当前时间引用。")
+                f"是她回应时唯一参照的时间。历史消息中的任何时间表述均已过时，不得作为当前时间引用。"
+                f"{gap_text}")
 
     def _build_dynamic_prompt(self) -> str:
         now = time.time()
@@ -444,7 +461,10 @@ class AgentContext:
         """
         if not self.memory_retrieval:
             # 元认知：未检索到任何记忆时，提示 agent
-            return '[元认知提示] 我没有找到相关记忆。如果用户问的是过去的事，请诚实说"我不记得了"；如果是不确定的信息，请说"我不太确定"。不要假装记得或编造。'
+            return ('[重要·元认知] 检索确认：没有找到与用户问题相关的记忆。'
+                    '绝对不要编造、推测或暗示记得过去发生的事。'
+                    '如实回答"我不记得了"或"我没有关于这件事的记忆"。'
+                    '如果用户提供了具体细节，可以基于这些细节继续对话，但不要虚构未提供的细节。')
 
         mem_texts = []
         for m in self.memory_retrieval[:5]:
@@ -580,7 +600,15 @@ class AgentContext:
                     continue
                 user_preview = user_msg[:60].replace("\n", " ") if user_msg else ""
                 asst_preview = asst_msg[:60].replace("\n", " ") if asst_msg else ""
-                summaries.append(f"· {term}: {user_preview} → 小妲: {asst_preview}")
+                ts = row.get("timestamp", 0)
+                if ts:
+                    try:
+                        time_str = time.strftime("%m-%d %H:%M", time.localtime(float(ts)))
+                        summaries.append(f"· [{time_str}] {term}: {user_preview} → 小妲: {asst_preview}")
+                    except (ValueError, TypeError, OSError):
+                        summaries.append(f"· {term}: {user_preview} → 小妲: {asst_preview}")
+                else:
+                    summaries.append(f"· {term}: {user_preview} → 小妲: {asst_preview}")
 
             if summaries:
                 self._restored_summary = "\n".join(summaries[-10:])

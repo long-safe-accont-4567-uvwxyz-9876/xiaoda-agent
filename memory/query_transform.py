@@ -21,7 +21,7 @@ class QueryTransformer:
     ]
 
     # 意图分类关键词（规则匹配快速路径）
-    TEMPORAL_KEYWORDS: ClassVar[set[str]] = {"昨天", "前天", "今天", "上周", "上个月", "刚才", "之前", "那次", "那天", "那次对话"}
+    TEMPORAL_KEYWORDS: ClassVar[set[str]] = {"昨天", "前天", "今天", "上周", "上个月", "刚才", "之前", "那次", "那天", "那次对话", "刚刚", "小时前", "分钟前"}
     CHAT_KEYWORDS: ClassVar[set[str]] = {
         # 问候类
         "你好", "嗨", "谢谢", "再见", "哈哈", "早安", "晚安", "在吗", "在不在",
