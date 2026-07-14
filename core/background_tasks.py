@@ -131,7 +131,12 @@ class BackgroundTaskManager:
         tool_results: list,
         session_id: str = "",
     ) -> None:
-        await self._run_persistence_tasks(user_input, reply, user_id, source, emotion, session_id)
+        # 持久化任务独立 fire-and-forget，避免 DB 长事务阻塞其他后台任务启动
+        _spawn(
+            self._run_persistence_tasks(
+                user_input, reply, user_id, source, emotion, session_id
+            )
+        )
         await self._run_manager_tasks(user_input, reply, tool_results, session_id)
         await self._run_scheduled_tasks()
 
