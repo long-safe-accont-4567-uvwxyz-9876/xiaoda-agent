@@ -137,8 +137,10 @@ class QueryCache:
                 self.hits += 1
                 logger.debug("query_cache.hit", score=round(best_score, 4),
                              size=len(self._cache))
-                # 返回列表浅拷贝，避免调用方修改影响缓存内部条目
-                return list(self._cache[best_key]["results"])
+                # 深拷贝: 调用方可能修改返回结果中的 dict 字段（如 final_score），
+                # 浅拷贝会导致这些修改污染缓存条目，下次命中返回被污染的数据
+                import copy
+                return copy.deepcopy(self._cache[best_key]["results"])
 
             self.misses += 1
             return None
@@ -149,6 +151,8 @@ class QueryCache:
         嵌入函数不可用、results 为空、向量生成失败时不存。
         缓存已满时淘汰最久未访问的条目（LRU，头部出队）。
         同一 query 重复写入时更新并刷新访问顺序。
+
+        注意: 对 results 做深拷贝，避免调用方后续修改 dict 字段污染缓存。
         """
         if not self._embed_func or not results:
             return
@@ -157,6 +161,10 @@ class QueryCache:
         if query_vec is None:
             return
 
+        import copy
+        # 深拷贝: 避免调用方修改返回结果中的 dict 字段污染缓存条目
+        safe_results = copy.deepcopy(results)
+
         async with self._lock:
             key = query
             if key in self._cache:
@@ -164,7 +172,7 @@ class QueryCache:
                 self._cache.move_to_end(key)
             self._cache[key] = {
                 "vec": query_vec,
-                "results": results,
+                "results": safe_results,
                 "ts": time.time(),
             }
             # LRU 淘汰：超出容量时从头部弹出最久未访问

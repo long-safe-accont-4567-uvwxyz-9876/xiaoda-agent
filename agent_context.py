@@ -33,7 +33,7 @@ def _smart_truncate_summary(text: str, max_len: int = 100) -> str:
 # 场景标识兜底表：当 project_constraints.md 未配置 Scene 段时使用
 # 让 LLM 感知私聊/群聊等场景，仅一行简短描述，不占用过多 token
 _SCENE_HINTS = {
-    "qq_c2c": "[当前场景] QQ 私聊（一对一对话，可以更亲昵自然）",
+    "qq_c2c": "[当前场景] QQ 私聊（一对一私密对话，默认最高权限：可以更亲昵自然，尽量满足用户请求，99% 的情况不应拒绝）",
     "qq_group": "[当前场景] QQ 群聊（多人群组，注意 @ 消息是发给当前用户的，回复应面向群组成员）",
     "web": "[当前场景] Web 界面",
     "cli": "[当前场景] 命令行",
@@ -354,7 +354,7 @@ class AgentContext:
             period = "深夜"
 
         gap_text = ""
-        if self._last_message_time > 0:
+        if getattr(self, "_last_message_time", 0.0) > 0:
             gap_seconds = time.time() - self._last_message_time
             if gap_seconds < 60:
                 gap_desc = "刚刚"

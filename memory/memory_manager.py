@@ -41,7 +41,8 @@ _TEMPORAL_PATTERNS = [
     (re.compile(r"今天|今日"), 0, 1),
     (re.compile(r"上周"), 7, 7),
     (re.compile(r"上个月|上月"), 30, 30),
-    (re.compile(r"前几天|前些天|最近"), 1, 7),
+    (re.compile(r"前几天|前些天"), 1, 7),
+    (re.compile(r"最近"), 0, 7),
 ]
 
 
@@ -52,6 +53,7 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
     无时间词返回 None。
 
     注意：这是一个轻量规则解析器，不调 LLM，毫秒级。
+    "最近"语义含今天，end=now；"前几天"语义不含今天，end=今天0点。
     """
     m = re.search(r"(\d+)\s*小时前", query)
     if m:
@@ -69,7 +71,7 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
 
     if re.search(r"刚才|刚刚", query):
         now = _datetime.datetime.now(_datetime.UTC).astimezone()
-        start = now - _datetime.timedelta(hours=1)
+        start = now - _datetime.timedelta(minutes=30)
         return start.timestamp(), now.timestamp()
 
     for pattern, offset_days, span_days in _TEMPORAL_PATTERNS:
@@ -527,7 +529,7 @@ class MemoryManager:
                             duration_ms=int((time.time() - _start) * 1000))
                 return results
             # FTS 无结果，尝试向量兜底 + KG v2
-            vec_items = await self._hybrid_vec_search(query, recall_limit, is_raw=is_raw_filter)
+            vec_items = await self._hybrid_vec_search(query, recall_limit, is_raw=is_raw_filter, scope=scope)
             if vec_items:
                 results = vec_items[:k]
                 if kg_v2_items and len(results) < k:
@@ -566,7 +568,7 @@ class MemoryManager:
         # ContextNest A1: 提取确定性 selector → 候选集, 向量检索在候选集内排序
         selectors = self._extract_deterministic_selectors(query)
         candidate_ids = await self._get_candidate_ids_by_selectors(
-            selectors, limit=recall_limit * 6)
+            selectors, limit=recall_limit * 6, scope=scope)
         if candidate_ids is not None:
             logger.debug("memory.deterministic_selector",
                          selector_keys=[sk for sk in selectors if sk != "has_selectors"],
@@ -580,8 +582,8 @@ class MemoryManager:
                 related_names = await self.kg.recall_by_query(query, limit=recall_limit)
                 if not related_names:
                     return []
-                return await self.memory.search_memories_by_entities(
-                    related_names, limit=recall_limit)
+                return await self.memory.search_memories_by_entities_scoped(
+                    related_names, limit=recall_limit, scope=scope)
             except Exception as e:
                 logger.debug("memory.kg_recall_failed", error=str(e))
                 return []
@@ -623,6 +625,10 @@ class MemoryManager:
 
                 # 获取父chunk完整记录
                 parent_mems = await self.memory.get_memories_by_ids(list(parent_ids))
+                # scope 后过滤：子chunk向量检索是全局的，需确保父记忆不跨用户泄露
+                parent_mems = [pm for pm in parent_mems
+                               if pm.get("user_id") == scope.user_id
+                               and pm.get("agent_id") == scope.agent_id]
                 for pm in parent_mems:
                     pm["child_recall"] = True
                 return parent_mems
@@ -632,10 +638,10 @@ class MemoryManager:
 
         fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items = await asyncio.gather(
             self._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter),
-            self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=is_raw_filter),
+            self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=is_raw_filter, scope=scope),
             _kg_recall(),
             _child_recall(),
-            self._spreading_recall(query, recall_limit),
+            self._spreading_recall(query, recall_limit, scope=scope),
             self._entity_recall(query, scope, recall_limit),
             _kg_v2_recall(),
         )
@@ -645,7 +651,7 @@ class MemoryManager:
             # Fallback: 用相同 FTS+Vec 检索，但 include_raw（is_raw=0 和 is_raw=1 都返回）
             raw_fts, raw_vec = await asyncio.gather(
                 self._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter=None),
-                self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=is_raw_filter),
+                self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=None, scope=scope),
             )
             raw_results = (raw_fts or []) + (raw_vec or [])
             if raw_results:
@@ -776,8 +782,21 @@ class MemoryManager:
         )
 
         # 按 RRF 排序获取完整记录（合并所有通道候选）
-        all_items = {str(item["id"]): item for item in
-                     fts_items + vec_items + kg_items + child_items + spread_items + entity_items}
+        # 注意: 同一 id 在多通道出现时需合并标记（如 kg_recall），避免后通道覆盖前通道标记
+        all_items: dict[str, dict] = {}
+        for item in fts_items + vec_items + kg_items + child_items + spread_items + entity_items:
+            key = str(item["id"])
+            if key in all_items:
+                existing = all_items[key]
+                # 合并布尔标记，任一通道命中即为 True
+                for mark_key in ("kg_recall", "child_recall"):
+                    if item.get(mark_key):
+                        existing[mark_key] = True
+                # 保留较高的 score（各通道归一化方式不同，取最大值更安全）
+                if item.get("score", 0) > existing.get("score", 0):
+                    existing["score"] = item["score"]
+            else:
+                all_items[key] = item
 
         # ── mem0 SPEC: Entity Boost 精排加分 ──
         candidates = []
@@ -827,12 +846,14 @@ class MemoryManager:
 
     async def _hybrid_vec_search(self, query: str, k: int,
                                  candidate_ids: list[int] | None = None,
-                                 is_raw: int | None = None) -> list[dict]:
+                                 is_raw: int | None = None,
+                                 scope: Any | None = None) -> list[dict]:
         """向量检索 + 批量 JOIN：一次查询获取所有向量命中的记忆记录
 
         ContextNest A1: candidate_ids 提供时, 向量检索只在确定性候选集内排序,
         候选集本身由 metadata selector (时间/重要性) 产生, Jaccard 1.0。
         is_raw: None=不过滤, 0=只查蒸馏知识, 1=只查原始记忆
+        scope: 非空时后过滤 user_id/agent_id，防止跨用户记忆泄露。
         """
         if not self.vec:
             return []
@@ -846,16 +867,25 @@ class MemoryManager:
             vec_mems = await self.memory.get_memories_by_ids(vec_ids)
             if is_raw is not None:
                 vec_mems = [m for m in vec_mems if m.get("is_raw") == is_raw]
+            if scope is not None:
+                vec_mems = [m for m in vec_mems
+                            if m.get("user_id") == scope.user_id
+                            and m.get("agent_id") == scope.agent_id]
             # 构建 id -> memory 映射，按 distance 排序组装结果
             vec_mem_map = {m["id"]: m for m in vec_mems}
+            # 只用过滤后的距离计算 max_dist，避免被过滤记忆的距离污染归一化
+            filtered_dists = [d for rid, d in vec_results if rid in vec_mem_map]
             items = []
-            if vec_results:
-                if len(vec_results) == 1:
-                    # 单条结果：min-max归一化退化(除以自身=0分)，直接用原始距离
+            if filtered_dists:
+                if len(filtered_dists) == 1:
                     _use_normalize = False
+                    max_dist = 0.0
                 else:
-                    max_dist = max(d for _, d in vec_results)
+                    max_dist = max(filtered_dists)
                     _use_normalize = max_dist > 0
+            else:
+                _use_normalize = False
+                max_dist = 0.0
             for row_id, distance in vec_results:
                 mem = vec_mem_map.get(row_id)
                 if mem:
@@ -869,11 +899,13 @@ class MemoryManager:
             logger.warning("memory.vec_search_failed", error=str(e))
             return []
 
-    async def _spreading_recall(self, query: str, limit: int) -> list[dict]:
+    async def _spreading_recall(self, query: str, limit: int,
+                                scope: Any | None = None) -> list[dict]:
         """扩散激活第五路检索通道
 
         通过 SpreadingActivationEngine 检索 concept_nodes，
         将结果映射回 episodic_memories（通过 source_mem_id）。
+        scope 非空时后过滤 user_id/agent_id，防止跨用户记忆泄露。
         """
         if not self.spreading_engine:
             return []
@@ -881,7 +913,7 @@ class MemoryManager:
             results = await self.spreading_engine.recall(query, top_k=limit)
             if not results:
                 return []
-            # 映射回 episodic_memories
+            # 映射回 episodic_memories，多 node 指向同一 memory 时取最高分
             mem_ids = []
             for r in results:
                 node = await self.spreading_engine.db.get_node(r["id"])
@@ -891,8 +923,16 @@ class MemoryManager:
                 return []
             # 批量获取记忆
             ids = [m[0] for m in mem_ids]
-            score_map = {m[0]: m[1] for m in mem_ids}
+            # 多 node 指向同一 memory 时保留最高分（取 max 而非覆盖）
+            score_map: dict[int, float] = {}
+            for mid, score in mem_ids:
+                if mid not in score_map or score > score_map[mid]:
+                    score_map[mid] = score
             memories = await self.memory.get_memories_by_ids(ids)
+            if scope is not None:
+                memories = [m for m in memories
+                            if m.get("user_id") == scope.user_id
+                            and m.get("agent_id") == scope.agent_id]
             for mem in memories:
                 mem["spreading_score"] = score_map.get(mem["id"], 0.0)
                 mem["spreading_recall"] = True
@@ -924,15 +964,21 @@ class MemoryManager:
         return selectors
 
     async def _get_candidate_ids_by_selectors(self, selectors: dict,
-                                                limit: int = 200) -> list[int] | None:
+                                                limit: int = 200,
+                                                scope: Any | None = None) -> list[int] | None:
         """根据确定性 selector 查询候选 rowid 集合。
 
         无 selector 返回 None (调用方走原 KNN 全量检索)。
+        scope 非空时追加 user_id/agent_id 过滤，防止跨用户候选泄露。
         """
         if not selectors.get("has_selectors"):
             return None
         clauses: list[str] = []
         params: list = []
+        if scope is not None:
+            clauses.append("user_id = ?")
+            clauses.append("agent_id = ?")
+            params.extend([scope.user_id, scope.agent_id])
         if "time_range" in selectors:
             s, e = selectors["time_range"]
             clauses.append("timestamp BETWEEN ? AND ?")
@@ -1099,8 +1145,12 @@ class MemoryManager:
         return default_k
 
     async def retrieve_memories(self, query: str, k: int = 5, context: str = "",
-                                 _retry_attempted: bool = False) -> list[dict]:
+                                 _retry_attempted: bool = False,
+                                 scope: Any | None = None) -> list[dict]:
         import config
+        if scope is None:
+            from memory.scope import Scope
+            scope = Scope()
         # 查询语义缓存：命中则直接返回，跳过完整检索流水线
         if getattr(config, 'QUERY_CACHE_ENABLED', True):
             cached = await self._query_cache.get(query)
@@ -1129,7 +1179,7 @@ class MemoryManager:
 
         # 时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索
         # 这让小妲能回答"昨天发生了什么"这类纯时间查询
-        temporal_results = await self._try_temporal_search(query, k)
+        temporal_results = await self._try_temporal_search(query, k, scope=scope)
         if temporal_results is not None:
             return temporal_results
 
@@ -1139,7 +1189,7 @@ class MemoryManager:
             use_reranker = intent != "chat"
             use_kg = intent != "chat"
             results = await self.retrieve_memories_hybrid(
-                query, k=k, use_reranker=use_reranker, use_kg=use_kg)
+                query, k=k, use_reranker=use_reranker, use_kg=use_kg, scope=scope)
             if results:
                 # 简单路径使用与复杂路径一致的评分逻辑，保证评分尺度统一
                 results = await self._apply_fsrs_scoring(results)
@@ -1161,7 +1211,7 @@ class MemoryManager:
                         # 扩大候选集重试一次
                         retry_k = k * 2
                         retry_results = await self.retrieve_memories_hybrid(
-                            query, k=retry_k, use_reranker=True, use_kg=True)
+                            query, k=retry_k, use_reranker=True, use_kg=True, scope=scope)
                         if retry_results:
                             retry_results = await self._apply_fsrs_scoring(retry_results)
                             await self._compute_final_scores(query, retry_results, config, query_entities)
@@ -1181,7 +1231,11 @@ class MemoryManager:
                 assessment = self._assessor.assess(query, results)
                 if assessment["should_fallback"]:
                     logger.info("memory.crag_fallback", query=query[:100])
-                    results = await self._importance_fallback_search(k)
+                    results = await self._importance_fallback_search(k, scope=scope)
+
+            # 内容相似度去重（与复杂路径保持一致，避免多通道 RRF 融合后返回近似重复）
+            if results:
+                results = self._dedup_by_content_similarity(results)
 
             # 写入缓存
             if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
@@ -1193,18 +1247,18 @@ class MemoryManager:
 
         # 多查询检索
         if getattr(config, "RETRIEVAL_PARALLEL_SEARCH", True) and len(queries) > 1:
-            all_results = await self._multi_query_parallel_search(queries, query, k)
+            all_results = await self._multi_query_parallel_search(queries, query, k, scope=scope)
         else:
-            all_results = await self._multi_query_serial_search(queries, k)
+            all_results = await self._multi_query_serial_search(queries, k, scope=scope)
         results = all_results
 
         # 降级：纯向量检索
         if not results:
-            results = await self._vector_fallback_search(query, k)
+            results = await self._vector_fallback_search(query, k, scope=scope)
 
         # 最终兜底：重要性排序
         if not results:
-            results = await self._importance_fallback_search(k)
+            results = await self._importance_fallback_search(k, scope=scope)
 
         # 流体记忆评分（艾宾浩斯遗忘曲线 + 访问强化）
         results = await self._apply_fsrs_scoring(results)
@@ -1230,7 +1284,7 @@ class MemoryManager:
                 # 扩大候选集重试一次
                 retry_k = k * 2
                 retry_results = await self.retrieve_memories_hybrid(
-                    query, k=retry_k, use_reranker=True, use_kg=True)
+                    query, k=retry_k, use_reranker=True, use_kg=True, scope=scope)
                 if retry_results:
                     retry_results = await self._apply_fsrs_scoring(retry_results)
                     await self._compute_final_scores(query, retry_results, config, query_entities)
@@ -1244,7 +1298,7 @@ class MemoryManager:
 
             if assessment["should_fallback"] and not results:
                 logger.info("memory.crag_fallback", query=query[:100])
-                results = await self._importance_fallback_search(k)
+                results = await self._importance_fallback_search(k, scope=scope)
 
         results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
         results = results[:k]
@@ -1253,7 +1307,7 @@ class MemoryManager:
         # 从 query 抽取 top-N 话题关键词，对每个词做轻量 FTS 检索，
         # 把"主题相关但未被主路命中"的记忆补充进来，扩大主动联想。
         # 这样即使主路 RRF 没召回，话题相关的旧记忆也能浮上来。
-        results = await self._apply_topic_trigger(query, results, k)
+        results = await self._apply_topic_trigger(query, results, k, scope=scope)
 
         # KG 上下文增强（保留原有逻辑）
         await self._apply_kg_context_enhance(results)
@@ -1267,7 +1321,7 @@ class MemoryManager:
 
     async def _try_temporal_search(self, query: str, k: int,
                                     scope: Any | None = None,
-                                    include_raw: bool = True) -> list[dict] | None:
+                                    include_raw: bool = False) -> list[dict] | None:
         """时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索。
 
         mem0 SPEC 优化：加入 scope 过滤 + is_raw 过滤。
@@ -1313,7 +1367,20 @@ class MemoryManager:
                 _time_results = await self._apply_reranker_to_results(query, _time_results, k)
                 logger.debug("memory.temporal_time_hit",
                              query=query[:50], count=len(_time_results))
-            return _time_results
+                return _time_results
+            # 两级 fallback：蒸馏知识无结果时，回退查所有（含蒸馏失败的原始记忆）
+            # 避免蒸馏失败(is_raw=1)的记忆永远无法被时间检索找到
+            if is_raw_filter is not None:
+                _fallback_results = await self.memory.search_memories_by_time_scoped(
+                    start_ts, end_ts, scope=scope, limit=k * 2, is_raw=None
+                )
+                if _fallback_results:
+                    _fallback_results = await self._apply_reranker_to_results(
+                        query, _fallback_results, k)
+                    logger.debug("memory.temporal_fallback_raw_hit",
+                                 query=query[:50], count=len(_fallback_results))
+                    return _fallback_results
+            return []
         except Exception as e:
             logger.warning("memory.temporal_search_failed", error=str(e))
             return None
@@ -1404,7 +1471,8 @@ class MemoryManager:
         return queries
 
     async def _multi_query_parallel_search(self, queries: list[str], query: str,
-                                             k: int) -> list[dict]:
+                                             k: int,
+                                             scope: Any | None = None) -> list[dict]:
         """A3: 并行多查询检索 + 批量 Reranker。
 
         各子查询检索时关闭内部 Reranker，统一在合并池上做一次批量精排。
@@ -1412,7 +1480,7 @@ class MemoryManager:
         all_results: list[dict] = []
         seen_ids: set[str] = set()
         hybrid_tasks = [
-            self.retrieve_memories_hybrid(q, k=k * 2, use_reranker=False)
+            self.retrieve_memories_hybrid(q, k=k * 2, use_reranker=False, scope=scope)
             for q in queries
         ]
         hybrid_results = await asyncio.gather(*hybrid_tasks, return_exceptions=True)
@@ -1448,13 +1516,14 @@ class MemoryManager:
                 logger.warning("memory.batch_rerank_failed", error=str(e))
         return all_results
 
-    async def _multi_query_serial_search(self, queries: list[str], k: int) -> list[dict]:
+    async def _multi_query_serial_search(self, queries: list[str], k: int,
+                                           scope: Any | None = None) -> list[dict]:
         """串行降级（原有逻辑）。"""
         all_results: list[dict] = []
         seen_ids: set[str] = set()
         for q in queries:
             try:
-                hybrid_results = await self.retrieve_memories_hybrid(q, k=k)
+                hybrid_results = await self.retrieve_memories_hybrid(q, k=k, scope=scope)
                 for r in hybrid_results:
                     rid = str(r.get("id", ""))
                     if rid and rid not in seen_ids:
@@ -1464,8 +1533,12 @@ class MemoryManager:
                 logger.warning("memory.hybrid_search_failed", query=q[:50], error=str(e))
         return all_results
 
-    async def _vector_fallback_search(self, query: str, k: int) -> list[dict]:
-        """降级：纯向量检索 + 批量 JOIN。"""
+    async def _vector_fallback_search(self, query: str, k: int,
+                                       scope: Any | None = None) -> list[dict]:
+        """降级：纯向量检索 + 批量 JOIN。
+
+        scope 非空时后过滤 user_id/agent_id，防止跨用户记忆泄露。
+        """
         if not self.vec:
             return []
         results: list[dict] = []
@@ -1474,6 +1547,11 @@ class MemoryManager:
             if vec_results:
                 vec_ids = [row_id for row_id, _ in vec_results]
                 vec_mems = await self.memory.get_memories_by_ids(vec_ids)
+                # scope 后过滤：向量索引是全局的，需确保不跨用户泄露
+                if scope is not None:
+                    vec_mems = [m for m in vec_mems
+                                if m.get("user_id") == scope.user_id
+                                and m.get("agent_id") == scope.agent_id]
                 # 构建 id -> memory 映射，按 distance 排序组装结果
                 vec_mem_map = {m["id"]: m for m in vec_mems}
                 for row_id, distance in vec_results:
@@ -1485,13 +1563,17 @@ class MemoryManager:
             logger.warning("memory.vec_search_failed", error=str(e))
         return results
 
-    async def _importance_fallback_search(self, k: int) -> list[dict]:
-        """最终兜底：按重要性排序检索。"""
+    async def _importance_fallback_search(self, k: int,
+                                           scope: Any | None = None) -> list[dict]:
+        """最终兜底：按重要性排序检索。
+
+        scope 非空时按 user_id/agent_id 过滤，防止跨用户记忆泄露。
+        """
         if not self.memory:
             return []
         try:
-            return await self.memory.search_memories_by_importance(
-                min_importance=0.4, limit=k
+            return await self.memory.search_memories_by_importance_scoped(
+                min_importance=0.4, limit=k, scope=scope
             )
         except Exception as e:
             logger.warning("memory.fallback_search_failed", error=str(e))
@@ -1544,16 +1626,23 @@ class MemoryManager:
             return results
         kept = []
         for r in results:
-            summary = r.get("summary", "")
-            words = set(summary)
+            r_bigrams = _char_bigrams(r.get("summary", ""))
             is_dup = False
             for k in kept:
-                k_words = set(k.get("summary", ""))
-                if not words or not k_words:
+                k_bigrams = _char_bigrams(k.get("summary", ""))
+                if not r_bigrams or not k_bigrams:
                     continue
-                jaccard = len(words & k_words) / len(words | k_words)
+                jaccard = len(r_bigrams & k_bigrams) / len(r_bigrams | k_bigrams)
                 if jaccard > threshold:
-                    if r.get("final_score", 0) <= k.get("final_score", 0):
+                    r_is_distilled = r.get("is_raw", 1) == 0
+                    k_is_distilled = k.get("is_raw", 1) == 0
+                    if r_is_distilled and not k_is_distilled:
+                        kept.remove(k)
+                        break
+                    elif k_is_distilled and not r_is_distilled:
+                        is_dup = True
+                        break
+                    elif r.get("final_score", 0) <= k.get("final_score", 0):
                         is_dup = True
                         break
                     else:
@@ -1591,7 +1680,7 @@ class MemoryManager:
                 return 0.95
             if hours_ago <= 12:
                 return 0.90
-            if days_ago <= 0:
+            if hours_ago <= 24:
                 return 0.85
             if days_ago <= 1:
                 return 0.70
@@ -1653,26 +1742,33 @@ class MemoryManager:
             kg_boost = _normalize_score(kg_boost_val, default=0.0)
             # importance: 记忆重要性
             importance = _normalize_score(r.get("importance"), default=0.5)
+            # recency: 时间新鲜度加成（近期记忆优先）
+            recency = _normalize_score(self._compute_recency_boost(r), default=0.3)
             # 写入中间分数字段（用于调试和可观测性）
             r["rerank_score"] = rerank_score
             r["fluid_score"] = R
             r["kg_boost"] = kg_boost
             r["importance_score"] = importance
-            # 统一评分公式
+            r["recency_boost"] = recency
+            # 统一评分公式: rerank 0.4 + R 0.25 + recency 0.15 + kg 0.1 + importance 0.1
             r["final_score"] = (
-                rerank_score * 0.5      # Reranker 精排分数
-                + R * 0.3               # FSRS-DSR Retrievability
+                rerank_score * 0.4      # Reranker 精排分数
+                + R * 0.25              # FSRS-DSR Retrievability
+                + recency * 0.15        # 时间新鲜度加成
                 + kg_boost * 0.1        # KG 增强分数
                 + importance * 0.1       # 记忆重要性
             )
 
     async def _apply_topic_trigger(self, query: str, results: list[dict],
-                                     k: int) -> list[dict]:
+                                     k: int,
+                                     scope: Any | None = None) -> list[dict]:
         """主动检索 A：话题触发器。
 
         从 query 抽取 top-N 话题关键词，对每个词做轻量 FTS 检索，
         把"主题相关但未被主路命中"的记忆补充进来，扩大主动联想。
         即使主路 RRF 没召回，话题相关的旧记忆也能浮上来。
+
+        scope 非空时使用 scoped FTS 检索，防止跨用户记忆泄露。
         """
         try:
             _topic_keywords = _extract_topic_keywords(query, top_n=2)
@@ -1683,7 +1779,11 @@ class MemoryManager:
                 # 跳过和原 query 完全相同的关键词（已被主路检索过）
                 if _kw == query or _kw in query:
                     continue
-                _topic_hits = await self.memory.search_memories_fts(_kw, limit=1)
+                if scope is not None:
+                    _topic_hits = await self.memory.search_memories_fts_scoped(
+                        _kw, scope=scope, limit=1)
+                else:
+                    _topic_hits = await self.memory.search_memories_fts(_kw, limit=1)
                 for _r in _topic_hits:
                     _rid = str(_r.get("id", ""))
                     if _rid and _rid not in _existing_ids:
@@ -2086,19 +2186,25 @@ class MemoryManager:
             # 1. 蒸馏（调用已有 MemoryDistiller，传入单条记忆）
             distilled = await self.distiller.distill([{"summary": summary, "timestamp": time.time()}])
             if not distilled or not distilled.strip():
-                # 蒸馏返回空 → 可能是模型超时，安排重试
                 if _retry < 2:
-                    delay = 30 * (_retry + 1)  # 30s, 60s
+                    delay = 30 * (_retry + 1)
                     logger.info("memory.distill_empty_retry", raw_id=raw_id,
                                retry=_retry + 1, delay_s=delay)
-                    asyncio.get_event_loop().call_later(
-                        delay,
-                        lambda: asyncio.ensure_future(
-                            self._distill_to_knowledge(raw_id, summary, scope,
-                                                       importance, emotion, _retry + 1,
-                                                       full_text=full_text)
-                        ),
-                    )
+                    _captured_scope = scope
+                    _captured_full_text = full_text
+
+                    async def _retry_distill() -> None:
+                        await asyncio.sleep(delay)
+                        await self._distill_to_knowledge(
+                            raw_id, summary, _captured_scope,
+                            importance, emotion, _retry + 1,
+                            full_text=_captured_full_text,
+                        )
+
+                    try:
+                        asyncio.create_task(_retry_distill())
+                    except RuntimeError:
+                        logger.warning("memory.distill_retry_no_loop", raw_id=raw_id)
                 else:
                     logger.warning("memory.distill_exhausted_retries", raw_id=raw_id)
                     await self._save_fallback_raw(raw_id, summary, full_text)
@@ -2126,19 +2232,29 @@ class MemoryManager:
                         logger.debug("memory.distill_vec_upsert_failed", error=str(e))
                 logger.info("memory.distilled_new",
                            raw_id=raw_id, knowledge_id=knowledge_id)
+            # 蒸馏完成后失效查询缓存：新提炼知识需被后续检索感知
+            if self._query_cache:
+                self._query_cache.invalidate()
         except Exception as e:
             logger.warning("memory.distill_to_knowledge_failed",
                           raw_id=raw_id, retry=_retry, error=str(e))
             if _retry < 2:
                 delay = 30 * (_retry + 1)
-                asyncio.get_event_loop().call_later(
-                    delay,
-                    lambda: asyncio.ensure_future(
-                        self._distill_to_knowledge(raw_id, summary, scope,
-                                                   importance, emotion, _retry + 1,
-                                                   full_text=full_text)
-                    ),
-                )
+                _captured_scope = scope
+                _captured_full_text = full_text
+
+                async def _retry_distill_exc() -> None:
+                    await asyncio.sleep(delay)
+                    await self._distill_to_knowledge(
+                        raw_id, summary, _captured_scope,
+                        importance, emotion, _retry + 1,
+                        full_text=_captured_full_text,
+                    )
+
+                try:
+                    asyncio.create_task(_retry_distill_exc())
+                except RuntimeError:
+                    logger.warning("memory.distill_retry_no_loop", raw_id=raw_id)
             else:
                 await self._save_fallback_raw(raw_id, summary, full_text)
 
@@ -2146,7 +2262,7 @@ class MemoryManager:
                                   full_text: str) -> None:
         try:
             if full_text and len(full_text) > len(truncated_summary):
-                await self.memory.update_memory_summary(raw_id, full_text)
+                await self.memory.update_fallback_raw(raw_id, full_text, "distill_failed")
                 logger.info("memory.fallback_raw_updated", raw_id=raw_id,
                            old_len=len(truncated_summary), new_len=len(full_text))
                 if self.vec:
@@ -2154,8 +2270,11 @@ class MemoryManager:
                         await self.vec.upsert(raw_id, full_text)
                     except Exception as e:
                         logger.debug("memory.fallback_vec_upsert_failed", error=str(e))
-
-            await self.memory.update_emotion_label(raw_id, "distill_failed")
+            else:
+                await self.memory.update_emotion_label(raw_id, "distill_failed")
+            # summary 更新后失效查询缓存，避免返回旧内容
+            if self._query_cache:
+                self._query_cache.invalidate()
         except Exception as e:
             logger.warning("memory.fallback_save_failed", raw_id=raw_id, error=str(e))
 
@@ -2261,8 +2380,23 @@ class MemoryManager:
             elif role == "assistant" and content:
                 parts.append(content[:250])
 
-        summary = "；".join(parts)
-        return summary[:700]
+        total_budget = 700
+        joined = "；".join(parts)
+        if len(joined) <= total_budget:
+            return joined
+        kept = []
+        remaining = total_budget
+        for part in reversed(parts):
+            if remaining <= 0:
+                break
+            if len(part) <= remaining:
+                kept.append(part)
+                remaining -= len(part) + 1
+            else:
+                kept.append(part[:remaining])
+                remaining = 0
+        kept.reverse()
+        return "；".join(kept)
 
     def _split_into_children(self, exchanges: list[dict], parent_id: int,
                              parent_summary: str) -> list[dict]:
@@ -2468,6 +2602,10 @@ class MemoryManager:
                     logger.debug("memory.enrich_child_failed",
                                  error=str(e), error_type=type(e).__name__)
 
+            # enrichment 更新了 summary/entities/子chunk，失效查询缓存
+            if self._query_cache:
+                self._query_cache.invalidate()
+
         except Exception as e:
             logger.debug("memory.enrich_failed",
                          error=str(e), error_type=type(e).__name__)
@@ -2650,7 +2788,8 @@ class MemoryManager:
             logger.warning("memory.run_scheduled_recall_failed", error=str(e))
             return 0
 
-    async def retrieve_comfort_memories(self, limit: int = 2) -> list[dict]:
+    async def retrieve_comfort_memories(self, limit: int = 2,
+                                          scope: Any | None = None) -> list[dict]:
         """主动检索 C：情绪触发 — 检索"安抚性记忆"。
 
         当检测到用户情绪低落（valence=negative）时，主动检索带正面情绪标签
@@ -2662,16 +2801,20 @@ class MemoryManager:
 
         Args:
             limit: 返回条数上限（默认 2，避免上下文膨胀）
+            scope: Scope 对象。None 时使用默认 Scope()。
 
         Returns:
             安抚性记忆列表，每条带 emotion_trigger="comfort" 标记
         """
+        if scope is None:
+            from memory.scope import Scope
+            scope = Scope()
         try:
             # 正面情绪标签：中文 + 英文双查
             # 喜悦 = happy；害羞有时也带正面色彩（用户被逗笑），但保守起见只取喜悦
             comfort_labels = ["喜悦", "happy"]
-            results = await self.memory.search_memories_by_emotion(
-                comfort_labels, limit=limit
+            results = await self.memory.search_memories_by_emotion_scoped(
+                comfort_labels, limit=limit, scope=scope
             )
             for r in results:
                 # 标记来源，便于 prompt 层区分和调试

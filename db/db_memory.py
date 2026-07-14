@@ -104,6 +104,43 @@ class MemoryDB:
             "UPDATE episodic_memories SET summary = ? WHERE id = ?",
             (new_summary, mem_id),
         )
+        try:
+            from db.fts_utils import _tokenize_for_fts
+            tokenized = _tokenize_for_fts(new_summary)
+            if tokenized.strip():
+                await self._conn.execute(
+                    "DELETE FROM episodic_memory_fts WHERE id = ?",
+                    (mem_id,),
+                )
+                await self._conn.execute(
+                    "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
+                    (mem_id, tokenized),
+                )
+        except Exception as e:
+            from loguru import logger
+            logger.debug("db_memory.fts_sync_on_summary_update_failed", error=str(e))
+        await self._conn.commit()
+
+    async def update_fallback_raw(self, mem_id: int, new_summary: str, label: str) -> None:
+        await self._conn.execute(
+            "UPDATE episodic_memories SET summary = ?, emotion_label = ? WHERE id = ?",
+            (new_summary, label, mem_id),
+        )
+        try:
+            from db.fts_utils import _tokenize_for_fts
+            tokenized = _tokenize_for_fts(new_summary)
+            if tokenized.strip():
+                await self._conn.execute(
+                    "DELETE FROM episodic_memory_fts WHERE id = ?",
+                    (mem_id,),
+                )
+                await self._conn.execute(
+                    "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
+                    (mem_id, tokenized),
+                )
+        except Exception as e:
+            from loguru import logger
+            logger.debug("db_memory.fts_sync_on_fallback_failed", error=str(e))
         await self._conn.commit()
 
     async def increment_access_count(self, memory_id: int, auto_commit: bool = True) -> None:
@@ -180,6 +217,27 @@ class MemoryDB:
                WHERE importance >= ?
                ORDER BY timestamp DESC LIMIT ?""",
             (min_importance, limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def search_memories_by_importance_scoped(self, min_importance: float = 0.3,
+                                                     limit: int = 10,
+                                                     scope: Any | None = None) -> list[dict]:
+        """按重要性排序检索 + scope 过滤（mem0 SPEC 优化）。
+
+        Args:
+            scope: Scope 对象。None 时退回无 scope 版本。
+        """
+        if scope is None:
+            return await self.search_memories_by_importance(min_importance, limit)
+        cursor = await self._conn.execute(
+            """SELECT * FROM episodic_memories
+               WHERE importance >= ?
+                 AND user_id = ? AND agent_id = ?
+                 AND session_id != 'archived'
+               ORDER BY timestamp DESC LIMIT ?""",
+            (min_importance, scope.user_id, scope.agent_id, limit),
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
@@ -622,6 +680,50 @@ class MemoryDB:
             return results
         except Exception as e:
             logger.warning("db_memory.entity_search_failed", error=str(e))
+
+    async def search_memories_by_entities_scoped(self, entity_names: list[str],
+                                                   limit: int = 5,
+                                                   scope: Any | None = None) -> list[dict]:
+        """按实体反查情景记忆 + scope 过滤（mem0 SPEC 优化）。
+
+        Args:
+            entity_names: 实体名列表
+            limit: 返回条数上限
+            scope: Scope 对象。None 时退回无 scope 版本。
+        """
+        if scope is None:
+            return await self.search_memories_by_entities(entity_names, limit)
+        if not entity_names:
+            return []
+        try:
+            import json
+            conditions = " OR ".join(["entities LIKE ?" for _ in entity_names])
+            params = [f'%"{e}"%' for e in entity_names]
+            params.extend([scope.user_id, scope.agent_id])
+            cursor = await self._conn.execute(
+                f"""SELECT * FROM episodic_memories
+                   WHERE session_id != 'archived'
+                     AND ({conditions})
+                     AND user_id = ? AND agent_id = ?
+                   ORDER BY importance DESC, timestamp DESC LIMIT ?""",
+                [*params, limit],
+            )
+            rows = await cursor.fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                raw = d.get("entities", "")
+                if isinstance(raw, str) and raw:
+                    try:
+                        d["entity_list"] = json.loads(raw)
+                    except (json.JSONDecodeError, TypeError):
+                        d["entity_list"] = []
+                else:
+                    d["entity_list"] = raw if isinstance(raw, list) else []
+                results.append(d)
+            return results
+        except Exception as e:
+            logger.warning("db_memory.entity_search_scoped_failed", error=str(e))
             return []
 
     async def get_all_memories(self, limit: int = 100) -> Any:
@@ -791,12 +893,17 @@ class MemoryDB:
                 try:
                     from db.fts_utils import _tokenize_for_fts
                     tokens = _tokenize_for_fts(summary)
-                    await self._conn.execute(
-                        "UPDATE episodic_memory_fts SET summary_index = ? WHERE id = ?",
-                        (tokens, memory_id),
-                    )
-                    if auto_commit:
-                        await self._conn.commit()
+                    if tokens.strip():
+                        await self._conn.execute(
+                            "DELETE FROM episodic_memory_fts WHERE id = ?",
+                            (memory_id,),
+                        )
+                        await self._conn.execute(
+                            "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
+                            (memory_id, tokens),
+                        )
+                        if auto_commit:
+                            await self._conn.commit()
                 except Exception as e:
                     from loguru import logger
                     logger.debug("db_memory.fts_update_failed", error=str(e))
@@ -1008,6 +1115,39 @@ class MemoryDB:
             return [dict(r) for r in rows]
         except Exception as e:
             logger.warning("db_memory.search_by_emotion_failed", error=str(e))
+            return []
+
+    async def search_memories_by_emotion_scoped(self, emotion_labels: list[str],
+                                                  limit: int = 5,
+                                                  scope: Any | None = None) -> list[dict]:
+        """按情绪标签检索记忆 + scope 过滤（mem0 SPEC 优化）。
+
+        Args:
+            emotion_labels: 目标情绪标签列表
+            limit: 返回条数上限
+            scope: Scope 对象。None 时退回无 scope 版本。
+        """
+        if scope is None:
+            return await self.search_memories_by_emotion(emotion_labels, limit)
+        if not emotion_labels:
+            return []
+        clean_labels = [str(line).strip() for line in emotion_labels if str(line).strip()]
+        if not clean_labels:
+            return []
+        try:
+            placeholders = ",".join("?" * len(clean_labels))
+            cursor = await self._conn.execute(
+                f"""SELECT * FROM episodic_memories
+                    WHERE emotion_label IN ({placeholders})
+                      AND session_id != 'archived'
+                      AND user_id = ? AND agent_id = ?
+                    ORDER BY importance DESC, timestamp DESC LIMIT ?""",
+                (*clean_labels, scope.user_id, scope.agent_id, limit),
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning("db_memory.search_by_emotion_scoped_failed", error=str(e))
             return []
 
     async def get_high_importance_since(self, start_ts: float,
