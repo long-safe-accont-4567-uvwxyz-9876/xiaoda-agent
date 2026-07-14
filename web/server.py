@@ -65,6 +65,7 @@ def _register_env_providers(cfg: Any, env_values: Any, os: Any) -> None:
                 continue
         else:
             api_key = env_values.get(env_key, "").strip()
+            base_url = _default_url
             if not api_key:
                 continue
         existing = cfg.get("models.providers", {}) or {}
