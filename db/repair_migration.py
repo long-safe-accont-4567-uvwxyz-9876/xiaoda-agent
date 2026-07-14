@@ -21,12 +21,21 @@ from config import DATA_DIR
 DB_PATH = DATA_DIR / "agent.db"
 
 
+def _connect() -> aiosqlite.Connection:
+    """返回 aiosqlite 连接对象（未启动线程），供 async with 使用。
+
+    调用方进入上下文后应先执行 PRAGMA busy_timeout 以避免锁冲突。
+    """
+    return aiosqlite.connect(str(DB_PATH))
+
+
 async def show_status() -> int:
     """显示当前迁移状态。"""
     if not DB_PATH.exists():
         print(f"数据库不存在: {DB_PATH}")
         return 1
-    async with aiosqlite.connect(str(DB_PATH)) as conn:
+    async with _connect() as conn:
+        await conn.execute("PRAGMA busy_timeout=10000")
         # 检查 migration_state 表是否存在
         cursor = await conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='migration_state'"
@@ -69,7 +78,8 @@ async def mark_clean() -> int:
     if not DB_PATH.exists():
         print(f"数据库不存在: {DB_PATH}")
         return 1
-    async with aiosqlite.connect(str(DB_PATH)) as conn:
+    async with _connect() as conn:
+        await conn.execute("PRAGMA busy_timeout=10000")
         cursor = await conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='migration_state'"
         )
@@ -89,7 +99,8 @@ async def rollback(version: int) -> int:
     if not DB_PATH.exists():
         print(f"数据库不存在: {DB_PATH}")
         return 1
-    async with aiosqlite.connect(str(DB_PATH)) as conn:
+    async with _connect() as conn:
+        await conn.execute("PRAGMA busy_timeout=10000")
         # 删除该版本及更高版本的 schema_version 记录
         await conn.execute(
             "DELETE FROM schema_version WHERE version >= ?", (version,)

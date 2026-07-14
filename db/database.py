@@ -980,6 +980,16 @@ class DatabaseManager:
             WHERE name NOT IN (SELECT name FROM kg_entities_v2)
         """)
 
+        # 2b. 幂等补齐 knowledge_relations.created_at 列
+        # 旧版数据库的 knowledge_relations 表可能缺少 created_at 列（DDL 用 CREATE TABLE IF NOT EXISTS
+        # 不会为已存在的表补列，v1 迁移也只加了 valid_from/valid_to/confidence）。
+        # v14 数据迁移引用 created_at，缺失会导致 OperationalError。
+        kr_cols = [r["name"] for r in await self.fetch_all("PRAGMA table_info(knowledge_relations)")]
+        if "created_at" not in kr_cols:
+            await self._conn.execute(
+                "ALTER TABLE knowledge_relations ADD COLUMN created_at REAL DEFAULT 0"
+            )
+
         # 3. 迁移 relations: knowledge_relations → kg_relations_v2
         await self._conn.execute("""
             INSERT OR IGNORE INTO kg_relations_v2 (id, from_entity, relation_type, to_entity, fact, episode_ids, valid_at, invalid_at, expired_at, is_current, created_at, updated_at)
