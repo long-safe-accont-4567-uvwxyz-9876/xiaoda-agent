@@ -18,6 +18,41 @@ from typing import Any
 # ── 模块级常量 ─────────────────────────────────────────────────
 DEGRADED_REPLY = "嗯……人家现在有点不太舒服，等会儿再聊好不好？"
 
+# 降级/错误/拦截回复集合 — 这些回复不应写入记忆库，避免污染后续检索
+# 包含：degraded reply、熔断回复、空回复、content_filter 后的截断回复
+_DEGRADED_REPLIES: frozenset[str] = frozenset({
+    DEGRADED_REPLY,
+    "系统需要休息一下，请稍后再试吧～",
+    "",
+})
+
+# 降级回复前缀（用于模糊匹配，避免完全匹配遗漏变体）
+_DEGRADED_PREFIXES: tuple[str, ...] = (
+    "嗯……人家现在有点不太舒服",
+    "系统需要休息一下",
+    "嗯……出了点小问题",
+)
+
+
+def is_degraded_reply(reply: str) -> bool:
+    """检查回复是否是降级/错误/拦截回复。
+
+    这些回复不应写入对话历史和记忆库，否则会污染 agent 后续的检索和回复质量。
+    包含：DEGRADED_REPLY、熔断回复、空回复、超时降级回复等。
+
+    Args:
+        reply: 待检查的回复文本
+
+    Returns:
+        True 表示是降级回复，应跳过记忆写入
+    """
+    if not reply or not reply.strip():
+        return True
+    stripped = reply.strip()
+    if stripped in _DEGRADED_REPLIES:
+        return True
+    return any(stripped.startswith(p) for p in _DEGRADED_PREFIXES)
+
 
 # ── 请求级 ContextVar (跨协程传递当前请求上下文) ──────────────
 _current_request_ctx: ContextVar[RequestContext | None] = ContextVar(
