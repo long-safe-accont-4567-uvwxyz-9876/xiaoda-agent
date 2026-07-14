@@ -849,14 +849,7 @@ def _auto_register_providers(updates: dict) -> None:
             cfg.set(f"models.providers.{pid}", record)
             logger.info("setup.auto_provider_registered id={} order={}", pid, known_keys.index(env_key))
 
-        # 注册到运行时 router
-        try:
-            pass
-            # 尝试获取 router 实例 (原 import web.server as srv 已移除, 避免循环导入)
-        except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
-            logger.debug("setup.model_router_import_failed: {}", exc, exc_info=True)
-
-        # 通过 app.state 注册（如果 app 已启动）
+        # 注册到运行时 router（通过 app.state）
         try:
             from web.app_ref import get_app
             app = get_app()
