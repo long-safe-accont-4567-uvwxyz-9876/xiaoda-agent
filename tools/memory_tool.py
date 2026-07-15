@@ -94,7 +94,8 @@ async def recall(query: str, top_k: int = 5) -> ToolResult:
             metrics.observe("memory.recall.latency_ms", (time.time() - _start) * 1000)
             return ToolResult.ok("没有找到相关记忆")
 
-        # 格式化输出
+        # 格式化输出：返回 summary + 补充元数据（entities/event_type/metadata）
+        # 帮助 LLM 获得更完整的上下文，避免只看到压缩后的 summary 而丢失细节
         formatted = []
         for r in results:
             summary = r.get("summary", "")
@@ -103,7 +104,42 @@ async def recall(query: str, top_k: int = 5) -> ToolResult:
             mem_id = r.get("id", "?")
             ts = r.get("timestamp", 0)
             time_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "未知时间"
-            formatted.append(f"[{time_str}] (ID:{mem_id} 重要度:{importance:.1f} 相关度:{score:.2f}) {summary}")
+            is_raw = r.get("is_raw", 0)
+            mem_type = "原始" if is_raw == 1 else "提炼"
+            line = f"[{time_str}] (ID:{mem_id} 类型:{mem_type} 重要度:{importance:.1f} 相关度:{score:.2f}) {summary}"
+            # 补充实体检索到的实体信息（帮助 LLM 关联上下文）
+            entities_raw = r.get("entities", "")
+            if entities_raw:
+                try:
+                    import json as _json
+                    ents = _json.loads(entities_raw) if isinstance(entities_raw, str) else entities_raw
+                    if isinstance(ents, list) and ents:
+                        line += f" | 实体: {', '.join(str(e) for e in ents[:5])}"
+                except (ValueError, TypeError):
+                    pass
+            # 补充事件类型和决策元数据
+            event_type = r.get("event_type", "")
+            if event_type:
+                line += f" | 事件: {event_type}"
+            metadata_raw = r.get("metadata_json", "")
+            if metadata_raw:
+                try:
+                    import json as _json
+                    meta = _json.loads(metadata_raw) if isinstance(metadata_raw, str) else metadata_raw
+                    if isinstance(meta, dict):
+                        decision = meta.get("decision", "")
+                        topic = meta.get("topic", "")
+                        if decision:
+                            line += f" | 决策: {decision}"
+                        if topic:
+                            line += f" | 话题: {topic}"
+                except (ValueError, TypeError):
+                    pass
+            # KG 上下文增强（如果检索阶段附加了相关知识）
+            kg_context = r.get("kg_context", "")
+            if kg_context:
+                line += f" | 知识: {kg_context[:100]}"
+            formatted.append(line)
 
         output = "\n".join(formatted)
         metrics.inc("memory.recall.hit")

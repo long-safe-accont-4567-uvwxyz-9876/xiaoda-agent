@@ -156,6 +156,15 @@ class QueryTransformer:
             if kw in query:
                 return "temporal"
 
+        # 绝对日期模式匹配：N月N号/N月N日/今天早上/昨天晚上 等
+        # TEMPORAL_KEYWORDS 只含相对时间词，需补充绝对日期模式
+        # 否则"7月15号早上7点到8点"会被误分类为 factual，导致 k 被限制为 3
+        import re as _re
+        if _re.search(r"\d{1,2}\s*月\s*\d{1,2}\s*[号日]", query):
+            return "temporal"
+        if _re.search(r"\d{1,2}\s*[点时:：]\s*(\d{1,2})?\s*分?\s*(到|~|-|—)", query):
+            return "temporal"
+
         for kw in self.MULTIHOP_KEYWORDS:
             if kw in query:
                 return "multi-hop"

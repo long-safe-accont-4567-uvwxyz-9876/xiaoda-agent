@@ -51,7 +51,7 @@ RECOVERY_MAP: dict[FailoverReason, RecoveryAction] = {
     FailoverReason.RATE_LIMIT: RecoveryAction.BACKOFF_RETRY,
     FailoverReason.TIMEOUT: RecoveryAction.RETRY,
     FailoverReason.CONTEXT_OVERFLOW: RecoveryAction.COMPRESS_CONTEXT,
-    FailoverReason.CONTENT_POLICY: RecoveryAction.ABORT,
+    FailoverReason.CONTENT_POLICY: RecoveryAction.FALLBACK_PROVIDER,
     FailoverReason.CONNECTION_ERROR: RecoveryAction.RETRY,
     FailoverReason.MODEL_NOT_FOUND: RecoveryAction.FALLBACK_PROVIDER,
     FailoverReason.SERVER_ERROR: RecoveryAction.BACKOFF_RETRY,
@@ -233,10 +233,9 @@ class ErrorClassifier:
     def _match_content_policy_by_message(self, ctx: dict) -> FailoverReason | None:
         """内容策略"""
         exc_msg = ctx["exc_msg"]
-        if "content_policy" in exc_msg or "content policy" in exc_msg or "safety" in exc_msg:
+        if "content_policy" in exc_msg or "content policy" in exc_msg or "safety" in exc_msg or "content_filter" in exc_msg or "内容审查" in exc_msg:
             return FailoverReason.CONTENT_POLICY
         return None
-
     def _match_connection_error_by_message(self, ctx: dict) -> FailoverReason | None:
         """连接错误"""
         exc_name = ctx["exc_name"]

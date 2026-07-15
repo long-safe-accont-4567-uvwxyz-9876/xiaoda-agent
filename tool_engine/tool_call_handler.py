@@ -2,6 +2,7 @@ from typing import Any
 import asyncio
 import fnmatch
 import json
+import re
 from pathlib import Path
 
 from loguru import logger
@@ -18,12 +19,29 @@ from security.instruction_hierarchy import (
     format_instruction,
     sanitize_external_content,
 )
+from agent_core._shared import is_degraded_reply
 
 
 # 写操作工具集合：这些工具会修改文件系统/配置，需进行路径白名单校验
 _WRITE_TOOLS: set[str] = {
     "write_file", "delete_file", "modify_config", "install_package",
 }
+
+
+def _strip_tool_metadata(text: str) -> str:
+    """移除 raw tool output 中的内部元数据，避免直接展示给用户。
+
+    处理 recall/memory 等工具输出中的:
+    - (ID:123 重要度:0.3 相关度:2.27)
+    - 摘要（297字）：
+    """
+    # (ID:xxx 重要度:x.xx 相关度:x.xx)
+    text = re.sub(r'\(ID:\d+\s+重要度:[\d.]+\s+相关度:[\d.]+\)', '', text)
+    # 摘要（xxx字）：
+    text = re.sub(r'摘要（\d+字）[：:]?\s*', '', text)
+    # 清理多余空行
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
 
 def _extract_path_from_args(tool_name: str, args: dict) -> str:
@@ -44,17 +62,29 @@ def _extract_path_from_args(tool_name: str, args: dict) -> str:
     return ""
 
 
-def _sanitize_tool_result(text: str) -> str:
+def _sanitize_tool_result(text: str, tool_name: str = "") -> str:
     """清理工具结果并标记为 EXTERNAL 级别 (防 prompt injection)。
 
     工具返回的内容 (特别是 web_browse/file_read 等外部数据) 经过
     sanitize_external_content 清理注入模式后, 用 format_instruction
     标记为 EXTERNAL 级别 (最低优先级), 防止外部内容覆盖系统指令。
+
+    记忆工具 (recall/remember/forget/confirm_memory/correct_memory) 返回的是
+    用户自己的记忆数据，属于可信内容，不标记为"不可信外部数据"。
     """
     if not text:
         return text or ""
+    # 记忆工具返回的是用户自己的记忆，属于可信内容
+    if tool_name in _TRUSTED_MEMORY_TOOLS:
+        return text
     sanitized = sanitize_external_content(text)
     return format_instruction(sanitized, InstructionLevel.EXTERNAL)
+
+
+# 记忆工具白名单：返回的是用户自己的记忆数据，属于可信内容
+_TRUSTED_MEMORY_TOOLS: frozenset[str] = frozenset({
+    "recall", "remember", "forget", "confirm_memory", "correct_memory",
+})
 
 
 DEGRADED_REPLY = "嗯……人家现在有点不太舒服，等会儿再聊好不好？"
@@ -270,8 +300,11 @@ class ToolCallHandler:
             final_reply = await self._summarize_results(current_user_input, tool_results, tool_calls, trace, user_openid=user_openid, session_id=session_id)
         rc = assistant_msg.get("reasoning_content", "")
         await self._context.add_message("user", current_user_input)
-        await self._context.add_message("assistant", final_reply,
-                                 reasoning_content=rc if rc else None)
+        if is_degraded_reply(final_reply):
+            logger.info("tool_handler.skip_memory_degraded_reply", reply_preview=final_reply[:60])
+        else:
+            await self._context.add_message("assistant", final_reply,
+                                     reasoning_content=rc if rc else None)
         return final_reply, tool_results
 
     async def _execute_single_tool(self, tc: Any, trace: Any, *, user_id: str = "",
@@ -349,7 +382,7 @@ class ToolCallHandler:
                         trace.warning("error_rule.spawn_failed", error=str(e))
 
             # S7: 工具结果标记为 EXTERNAL 级别并清理注入内容 (防 prompt injection)
-            result_text = _sanitize_tool_result(result_text)
+            result_text = _sanitize_tool_result(result_text, t_name)
             return tc["id"], result, result_text, display_name
 
     async def _check_error_rules(self, t_name: Any, t_args: Any, tc: Any, trace: Any, display_name: Any) -> Any:
@@ -403,7 +436,8 @@ class ToolCallHandler:
             if result.success and result.data:
                 data_str = json.dumps(result.data, ensure_ascii=False) if not isinstance(result.data, str) else result.data
                 # S7: 工具结果标记为 EXTERNAL 级别并清理注入内容 (防 prompt injection)
-                parts.append(_sanitize_tool_result(data_str))
+                t_name = tc["function"]["name"]
+                parts.append(_sanitize_tool_result(data_str, t_name))
             elif not result.success:
                 name = TOOL_DISPLAY_NAMES.get(tc["function"]["name"], tc["function"]["name"])
                 parts.append(f"⚠️ {name}执行失败: {result.error}")
@@ -435,10 +469,10 @@ class ToolCallHandler:
                 f"工具返回的结果：\n{combined}"
             )
 
-            # 独立超时保护：summarize 最多 10s，不占用核心预算
+            # 独立超时保护：summarize 最多 10s，用 chat_flash (fast model) 避免 agnes 超时
             summary = await asyncio.wait_for(
                 self._router.route(
-                    "chat",
+                    "chat_flash",
                     [
                         {"role": "system", "content": xiaoda_prompt},
                         {"role": "user", "content": user_input},
@@ -457,4 +491,4 @@ class ToolCallHandler:
         except Exception as e:
             trace.error("tool.summarize_failed", error=str(e))
 
-        return smart_truncate(combined, 2000)
+        return _strip_tool_metadata(smart_truncate(combined, 2000))

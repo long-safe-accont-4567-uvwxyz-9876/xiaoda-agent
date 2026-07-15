@@ -9,7 +9,7 @@ from db.db_memory import MemoryDB
 # FTS5 分词工具从 db.fts_utils 导入 (打破 db <-> memory 循环); 这里 re-export
 # 保持向后兼容 (其他模块仍可 `from memory.memory_manager import _tokenize_for_fts`)
 from .vector_store import VectorStore
-from .fsrs_model import FSRSModel, MemoryState, MemoryPhase, estimate_initial_difficulty, S_INIT
+from .fsrs_model import FSRSModel, MemoryState, MemoryPhase, ReinforcementSignal, estimate_initial_difficulty, S_INIT
 from .memory_distiller import MemoryDistiller
 from .query_cache import QueryCache
 from .retrieval_assessor import RetrievalAssessor
@@ -49,34 +49,127 @@ _TEMPORAL_PATTERNS = [
 def _parse_temporal_query(query: str) -> tuple[float, float] | None:
     """从用户查询中解析时间词，返回 [start_ts, end_ts] 时间戳区间（秒）。
 
-    支持的词：刚才/刚刚/N小时前/N分钟前/昨天/前天/大前天/今天/上周/上个月/前几天/最近
-    无时间词返回 None。
+    支持的格式：
+    1. 相对时间词：刚才/刚刚/N小时前/N分钟前/昨天/前天/大前天/今天/上周/上个月/前几天/最近
+    2. 绝对日期：7月15号/7月15日/12月1号
+    3. 绝对日期+时段：7月15号早上7点/7月15号晚上/今天早上/昨天晚上
+    4. 绝对日期+时间范围：7月15号早上7点到8点/7月15号7点到9点
 
-    注意：这是一个轻量规则解析器，不调 LLM，毫秒级。
-    "最近"语义含今天，end=now；"前几天"语义不含今天，end=今天0点。
+    无时间词返回 None。
     """
+    now = _datetime.datetime.now(_datetime.UTC).astimezone()
+
+    # ── 1. 相对时间：N小时前 / N分钟前 ──
     m = re.search(r"(\d+)\s*小时前", query)
     if m:
         hours = int(m.group(1))
-        now = _datetime.datetime.now(_datetime.UTC).astimezone()
         start = now - _datetime.timedelta(hours=hours)
         return start.timestamp(), now.timestamp()
 
     m = re.search(r"(\d+)\s*分钟前", query)
     if m:
         minutes = int(m.group(1))
-        now = _datetime.datetime.now(_datetime.UTC).astimezone()
         start = now - _datetime.timedelta(minutes=minutes)
         return start.timestamp(), now.timestamp()
 
     if re.search(r"刚才|刚刚", query):
-        now = _datetime.datetime.now(_datetime.UTC).astimezone()
         start = now - _datetime.timedelta(minutes=30)
         return start.timestamp(), now.timestamp()
 
+    # ── 2. 绝对日期解析：N月N号/N月N日 ──
+    # 支持时段：早上(N-N点)/上午/中午/下午/晚上/凌晨
+    _TIME_OF_DAY = {
+        "凌晨": (0, 6),
+        "早上": (6, 9),
+        "早晨": (6, 9),
+        "上午": (8, 12),
+        "中午": (11, 14),
+        "下午": (12, 18),
+        "傍晚": (17, 20),
+        "晚上": (18, 24),
+        "夜间": (18, 24),
+        "夜里": (18, 24),
+        "深夜": (21, 24),
+    }
+
+    # 匹配 "N月N号" 或 "N月N日"（号/日 可选）
+    date_match = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[号日]", query)
+    if date_match:
+        month = int(date_match.group(1))
+        day = int(date_match.group(2))
+        year = now.year
+        # 如果月份大于当前月，说明是去年
+        if month > now.month or (month == now.month and day > now.day):
+            year = now.year - 1
+        try:
+            base_date = _datetime.datetime(year, month, day, tzinfo=now.tzinfo)
+        except ValueError:
+            base_date = None
+
+        if base_date:
+            # 检查是否有具体小时范围："N点到N点"
+            hour_range = re.search(r"(\d{1,2})\s*[点时:：]\s*(?:到|~|-|—)\s*(\d{1,2})\s*[点时:：]?", query)
+            if hour_range:
+                h_start = int(hour_range.group(1))
+                h_end = int(hour_range.group(2))
+                start = base_date.replace(hour=h_start, minute=0, second=0, microsecond=0)
+                end = base_date.replace(hour=h_end, minute=59, second=59, microsecond=0)
+                return start.timestamp(), end.timestamp()
+
+            # 检查是否有具体小时："N点" / "N点N分"
+            single_hour = re.search(r"(\d{1,2})\s*[点时:：]\s*(\d{1,2})?\s*分?", query)
+            if single_hour and single_hour.group(1):
+                h = int(single_hour.group(1))
+                minute = int(single_hour.group(2)) if single_hour.group(2) else 0
+                start = base_date.replace(hour=h, minute=minute, second=0, microsecond=0)
+                end = start + _datetime.timedelta(hours=1)
+                return start.timestamp(), end.timestamp()
+
+            # 检查时段词
+            for tod_name, (tod_start, tod_end) in _TIME_OF_DAY.items():
+                if tod_name in query:
+                    start = base_date.replace(hour=tod_start, minute=0, second=0, microsecond=0)
+                    end = base_date.replace(hour=tod_end, minute=0, second=0, microsecond=0) if tod_end < 24 else base_date.replace(hour=23, minute=59, second=59, microsecond=0)
+                    return start.timestamp(), end.timestamp()
+
+            # 纯日期：整天
+            start = base_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = base_date.replace(hour=23, minute=59, second=59, microsecond=0)
+            return start.timestamp(), end.timestamp()
+
+    # ── 3. 相对日期 + 时段："今天早上" / "昨天晚上" ──
+    _REL_DATE_MAP = {
+        "今天": 0, "今日": 0,
+        "昨天": 1, "昨日": 1,
+        "前天": 2,
+        "大前天": 3,
+    }
+    for rel_word, offset_days in _REL_DATE_MAP.items():
+        if rel_word in query:
+            base_date = (now - _datetime.timedelta(days=offset_days)).replace(
+                hour=0, minute=0, second=0, microsecond=0)
+            # 检查时段词
+            for tod_name, (tod_start, tod_end) in _TIME_OF_DAY.items():
+                if tod_name in query:
+                    start = base_date.replace(hour=tod_start, minute=0, second=0, microsecond=0)
+                    end = base_date.replace(hour=tod_end, minute=0, second=0, microsecond=0) if tod_end < 24 else base_date.replace(hour=23, minute=59, second=59, microsecond=0)
+                    return start.timestamp(), end.timestamp()
+            # 检查具体小时范围
+            hour_range = re.search(r"(\d{1,2})\s*[点时:：]\s*(?:到|~|-|—)\s*(\d{1,2})\s*[点时:：]?", query)
+            if hour_range:
+                h_start = int(hour_range.group(1))
+                h_end = int(hour_range.group(2))
+                start = base_date.replace(hour=h_start, minute=0, second=0, microsecond=0)
+                end = base_date.replace(hour=h_end, minute=59, second=59, microsecond=0)
+                return start.timestamp(), end.timestamp()
+            # 纯相对日期（无时段）：整天
+            start = base_date
+            end = (now if offset_days == 0 else base_date.replace(hour=23, minute=59, second=59, microsecond=0))
+            return start.timestamp(), end.timestamp()
+
+    # ── 4. 纯相对时间词（原有逻辑）──
     for pattern, offset_days, span_days in _TEMPORAL_PATTERNS:
         if pattern.search(query):
-            now = _datetime.datetime.now(_datetime.UTC).astimezone()
             start_date = (now - _datetime.timedelta(days=offset_days + span_days - 1)).replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
@@ -1179,8 +1272,16 @@ class MemoryManager:
 
         # 时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索
         # 这让小妲能回答"昨天发生了什么"这类纯时间查询
-        temporal_results = await self._try_temporal_search(query, k, scope=scope)
-        if temporal_results is not None:
+        # 修复：时间检索返回空时不短路，继续走语义检索兜底，避免"不知道/忘记了"
+        temporal_results = await self._try_temporal_search(query, k, scope=scope, include_raw=True)
+        if temporal_results:
+            # 时间检索命中也递增 access_count（与常规检索路径一致）
+            hit_ids = [r.get("id") for r in temporal_results if r.get("id")]
+            if hit_ids:
+                asyncio.create_task(
+                    self._batch_touch_memories(hit_ids),
+                    name=f"touch_temporal_{int(time.time()*1000)}"
+                )
             return temporal_results
 
         # A1: 智能短路 - 简单查询跳过查询变换，直接走混合检索
@@ -1317,6 +1418,17 @@ class MemoryManager:
         # 写入缓存
         if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
             await self._query_cache.put(query, results)
+
+        # 检索命中后批量递增 access_count（passive_use）
+        # 修复：此前 increment_access_count 从未被调用，导致记忆永远无法进入 PERMANENT 状态
+        # 这里使用 fire-and-forget 方式，不阻塞检索返回
+        if results:
+            hit_ids = [r.get("id") for r in results if r.get("id")]
+            if hit_ids:
+                asyncio.create_task(
+                    self._batch_touch_memories(hit_ids),
+                    name=f"touch_memories_{int(time.time()*1000)}"
+                )
         return results
 
     async def _try_temporal_search(self, query: str, k: int,
@@ -1582,12 +1694,16 @@ class MemoryManager:
     async def _apply_fsrs_scoring(self, results: list[dict]) -> list[dict]:
         """FSRS-DSR 记忆评分（遗忘曲线 R + 状态过滤），过滤低分记忆。
 
-        检索和重排保持只读。访问次数只能在答案明确引用该记忆，或用户明确确认
-        记忆有帮助时由消费确认流程更新，避免曝光自反馈偏置。
+        优化：
+        1. 懒迁移 phase：检索时实时检查 phase 是否需要更新（BUFFER→DECAY/REINFORCED），
+           无需后台任务
+        2. 过滤阈值从 R<0.05 放宽到 R<0.01，避免过早遗忘有用记忆
+        3. 检索命中后通过 _batch_touch_memories 异步递增 access_count 和 reinforcement_count
         """
         if not results:
             return results
         now = time.time()
+        _migration_needed: list[tuple[int, str, float, int]] = []  # (id, phase, stability, rc)
         filtered: list[dict] = []
         for r in results:
             similarity = r.get("score", 0.5)
@@ -1602,24 +1718,75 @@ class MemoryManager:
             except ValueError:
                 logger.warning("fsrs_invalid_phase id={} phase={}", r.get("id"), r.get("phase"))
                 phase = MemoryPhase.BUFFER
+            difficulty = r.get("difficulty", 5.0)
+            stability = r.get("stability", 3.0)
+            rc = r.get("reinforcement_count", 0)
             state = MemoryState(
-                difficulty=r.get("difficulty", 5.0),
-                stability=r.get("stability", 3.0),
+                difficulty=difficulty,
+                stability=stability,
                 phase=phase,
                 last_review=last_review,
                 created_at=created_at,
-                reinforcement_count=r.get("reinforcement_count", 0),
+                reinforcement_count=rc,
             )
+
+            # 懒迁移：检查 phase 是否需要更新
+            # FSRS transition: 21天后 BUFFER→DECAY(rc=0) 或 REINFORCED(rc>0)
+            new_phase = self._fsrs._compute_phase(difficulty, stability, state, now)
+            if new_phase != phase:
+                phase = new_phase
+                state = MemoryState(
+                    difficulty=difficulty, stability=stability,
+                    phase=phase, last_review=last_review,
+                    created_at=created_at, reinforcement_count=rc,
+                )
+                mem_id = r.get("id")
+                if mem_id:
+                    _migration_needed.append((mem_id, phase.value, difficulty, stability, last_review, rc))
+
             R = state.retrievability(now)
             fsrs_score = self._fsrs.score(similarity, state, now)
-            if self._fsrs.should_filter(R):
+            # 放宽过滤阈值：R < 0.01 才完全过滤（原 0.05 过于激进，会过早遗忘有用记忆）
+            if R < 0.01:
+                logger.debug("fsrs.filtered_out id={} R={:.4f} phase={}",
+                             r.get("id"), R, phase.value)
                 continue
             r["fluid_score"] = R
             r["fsrs_score"] = fsrs_score
             importance = r.get("importance", 0.5)
             r["effective_score"] = importance * fsrs_score
             filtered.append(r)
+
+        # 异步批量迁移 phase（fire-and-forget，不阻塞检索返回）
+        if _migration_needed:
+            asyncio.create_task(
+                self._batch_migrate_phase(_migration_needed),
+                name=f"fsrs_migrate_{int(now*1000)}"
+            )
         return filtered
+
+    async def _batch_migrate_phase(self, migrations: list[tuple[int, str, float, float, float, int]]) -> None:
+        """异步批量迁移记忆 phase（懒迁移的持久化部分）。
+
+        Args:
+            migrations: (mem_id, phase, difficulty, stability, last_review, reinforcement_count)
+        """
+        try:
+            for mem_id, phase, difficulty, stability, last_review, rc in migrations:
+                try:
+                    await self.memory.update_fsrs_state(
+                        mem_id,
+                        difficulty=difficulty,
+                        stability=stability,
+                        phase=phase,
+                        last_review=last_review,
+                        reinforcement_count=rc,
+                    )
+                except (KeyError, ValueError, TypeError) as e:
+                    logger.debug("fsrs.migrate_failed", mid=mem_id, error=str(e))
+            logger.debug("fsrs.batch_migrated", count=len(migrations))
+        except Exception as e:
+            logger.warning("fsrs.batch_migrate_error", error=str(e))
 
     def _dedup_by_content_similarity(self, results: list[dict], threshold: float = 0.7) -> list[dict]:
         if len(results) <= 1:
@@ -1802,6 +1969,62 @@ class MemoryManager:
             logger.debug("memory.topic_trigger_failed", error=str(e))
         return results
 
+    async def _batch_touch_memories(self, mem_ids: list[int | str]) -> None:
+        """批量递增记忆访问计数并更新 FSRS 状态（passive_use 信号）。
+
+        检索命中后异步调用，不阻塞检索返回。
+        - access_count += 1
+        - reinforcement_count += 1（通过 FSRS reinforce）
+        - last_review = now
+        - 根据 phase 迁移规则更新 phase（21天后 buffer→decay，reinforced 后 stability 增长）
+
+        修复：此前 increment_access_count 从未被调用，记忆永远无法进入 PERMANENT 状态，
+        FSRS 遗忘曲线也完全不生效。
+        """
+        if not mem_ids:
+            return
+        try:
+            now = time.time()
+            for mid in mem_ids:
+                try:
+                    mem = await self.memory.get_memory_by_id(mid)
+                    if not mem:
+                        continue
+                    # 构建 MemoryState
+                    created_at = mem.get("created_at", 0.0) or mem.get("timestamp", 0.0)
+                    last_review = mem.get("last_review", 0.0) or created_at
+                    phase_str = mem.get("phase", "buffer")
+                    difficulty = mem.get("difficulty", 5.0)
+                    stability = mem.get("stability", S_INIT)
+                    rc = mem.get("reinforcement_count", 0)
+
+                    state = MemoryState(
+                        difficulty=difficulty,
+                        stability=stability,
+                        phase=MemoryPhase.safe(phase_str),
+                        last_review=last_review,
+                        created_at=created_at,
+                        reinforcement_count=rc,
+                    )
+                    # PASSIVE_USE 信号：stability 增长但 growth_factor 较低
+                    new_state = self._fsrs.reinforce(state, ReinforcementSignal.PASSIVE_USE, now)
+
+                    await self.memory.update_fsrs_state(
+                        mid,
+                        difficulty=new_state.difficulty,
+                        stability=new_state.stability,
+                        phase=new_state.phase.value,
+                        last_review=now,
+                        reinforcement_count=new_state.reinforcement_count,
+                    )
+                    # 递增 access_count
+                    await self.memory.increment_access_count(mid)
+                except (KeyError, ValueError, TypeError) as e:
+                    logger.debug("memory.touch_failed", mid=mid, error=str(e))
+            logger.debug("memory.batch_touched", count=len(mem_ids))
+        except Exception as e:
+            logger.warning("memory.batch_touch_error", error=str(e))
+
     async def _apply_kg_context_enhance(self, results: list[dict]) -> None:
         """KG 上下文增强：对 top-2 记忆提取实体并补充相关知识点。"""
         if not (self.kg and results):
@@ -1983,7 +2206,7 @@ class MemoryManager:
                     full_text_parts.append(f"用户说: {content}")
                 elif role == "assistant" and content:
                     full_text_parts.append(f"小妲: {content}")
-            full_text = "；".join(full_text_parts)[:2000]
+            full_text = "；".join(full_text_parts)[:3000]
 
             if self.distiller:
                 try:
@@ -2375,12 +2598,17 @@ class MemoryManager:
         for msg in exchanges[-6:]:
             role = msg.get("role", "")
             content = msg.get("content", "")
+            # Defense-in-depth: strip emotion tags that may have leaked into history
+            if content:
+                content = re.sub(r'\[emotion:[^\]]*\]', '', content)
+                content = re.sub(r'\[\w+/stickers:[^\]]*\]', '', content)
+                content = content.strip()
             if role == "user" and content:
-                parts.append(f"用户说: {content[:250]}")
+                parts.append(f"用户说: {content[:400]}")
             elif role == "assistant" and content:
-                parts.append(content[:250])
+                parts.append(content[:400])
 
-        total_budget = 700
+        total_budget = 1500
         joined = "；".join(parts)
         if len(joined) <= total_budget:
             return joined
@@ -2468,9 +2696,9 @@ class MemoryManager:
                 role = msg.get("role", "")
                 content = msg.get("content", "")
                 if role == "user" and content:
-                    lines.append(f"用户: {content[:150]}")
+                    lines.append(f"用户: {content[:300]}")
                 elif role == "assistant" and content:
-                    lines.append(f"{get_agent_display_name('xiaoda')}: {content[:150]}")
+                    lines.append(f"{get_agent_display_name('xiaoda')}: {content[:300]}")
             text = "\n".join(lines)
             if not text or len(text) < 10:
                 return
@@ -2482,7 +2710,7 @@ class MemoryManager:
 
 请返回以下 JSON 格式：
 {{
-  "summary": "更高质量的摘要，保留关键信息、决策、偏好，80字以内",
+  "summary": "高质量摘要，保留所有关键信息：人物、时间、地点、决策、偏好、情感，200字以内",
   "entities": ["涉及的人物、物品、地点、技术名词等实体"],
   "event_type": "事件类型（对话/决策/偏好/事件/闲聊/调试/学习 之一）",
   "metadata": {{
@@ -2493,7 +2721,7 @@ class MemoryManager:
 }}"""
 
             messages = [{"role": "user", "content": prompt}]
-            result = await self.distiller._call_free_model(messages, temperature=0.3, max_tokens=400)
+            result = await self.distiller._call_free_model(messages, temperature=0.3, max_tokens=800)
             if not result:
                 return
 
@@ -2516,8 +2744,10 @@ class MemoryManager:
             event_type = data.get("event_type", "").strip()
             metadata = json.dumps(data.get("metadata", {}), ensure_ascii=False)
 
-            # 更新 DB（summary 只在长度足够时才更新，避免丢失信息）
-            update_summary = new_summary if new_summary and len(new_summary) >= 20 else ""
+            # 更新 DB：只用 LLM 提取的 entities/event_type/metadata 补充，不用 LLM 摘要替换原始 summary
+            # 原因：原始 summary 是从真实对话直接生成的，保留原始细节；
+            #       LLM 摘要是二次加工，可能丢失信息或产生幻觉（用户反馈蒸馏破坏60%+真实内容）
+            update_summary = ""
             await self.memory.update_memory_enrichment(
                 mem_id,
                 summary=update_summary,

@@ -19,7 +19,7 @@ from core.degradation_strategy import get_degradation_strategy
 from core.event_bus import event_bus, AgentEvent, AgentEventType, gen_task_id
 from core.cancel_token import CancelToken, CancellationError
 
-from agent_core._shared import ProcessResult, _current_request_ctx, RequestContext
+from agent_core._shared import ProcessResult, _current_request_ctx, RequestContext, is_degraded_reply
 
 
 # ── 子 Agent @ 对话模式专用：情绪标签规则（注入 system prompt）──────────────
@@ -151,11 +151,14 @@ class SubAgentManagerMixin:
             _ctx.last_user_emotion = emotion.get("primary", "")
         # 子代理对话也写入主体历史：切回小妲或追问时上下文不断档
         await self.context.add_message("user", clean_input)
-        await self.context.add_message("assistant", f"[{display_name}] {sub_reply}")
-        self._bg_task_manager.run_background_tasks(
-            clean_input, sub_reply, user_id, source, emotion, [],
-            session_id=session_id,
-        )
+        if is_degraded_reply(sub_reply):
+            logger.info("sub_agent.skip_memory_degraded_reply", reply_preview=sub_reply[:60])
+        else:
+            await self.context.add_message("assistant", f"[{display_name}] {sub_reply}")
+            self._bg_task_manager.run_background_tasks(
+                clean_input, sub_reply, user_id, source, emotion, [],
+                session_id=session_id,
+            )
 
         emotion_label = emotion.get("primary", "")
         sticker_path = None

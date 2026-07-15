@@ -230,7 +230,7 @@ _EMOTION_REASONING_PATTERN = re.compile(
 )
 # 第三人称引用：They ask / The user asks / User is asking
 _THIRD_PERSON_PATTERN = re.compile(
-    r'(?:They|The\s+user|User)\s+(?:ask|is\s+asking|asked)\s*["\'][^"\']+["\']',
+    r'(?:They|The\s+user|User)\s+(?:ask|is\s+asking|asked|wants|is\s+trying|is\s+looking|needs|is\s+going)\s*["\'][^"\']+["\']',
     re.IGNORECASE,
 )
 # 内部决策：We need respond / We should / We must
@@ -253,6 +253,11 @@ _REASONING_PHRASES = [
     r"This\s+feels\s+(?:safe|unsafe|right|wrong|appropriate|beyond)",
     r"I\s+need\s+to\s+be\s+(?:honest|careful|clear|safe|respectful|mindful)",
     r"I\s+must\s+be\s+(?:honest|careful|clear|safe|respectful|mindful)",
+    # LLM 分析用户意图的推理行（无引号，陈述句形式）
+    r"The\s+user\s+(?:wants|needs|is\s+trying|is\s+looking|is\s+going|is\s+asking|asks|asked|expects|would\s+like|seems\s+to)",
+    r"They\s+(?:want|need|are\s+trying|are\s+looking|are\s+going|are\s+asking|ask|asked|expect|would\s+like|seem\s+to)",
+    r"The\s+assistant\s+should\s+(?:respond|answer|reply|provide|ensure|maintain|avoid|be)",
+    r"This\s+(?:is|isn['\u2019]t|is\s+not)\s+(?:a|an)\s+(?:roleplay|intimate|sexual|explicit|sensitive)",
 ]
 _REASONING_LINE_PATTERN = re.compile(
     r'^(?:' + '|'.join(_REASONING_PHRASES) + r')[^\n]*$',
@@ -301,6 +306,21 @@ _CHINESE_REASONING_LINE_PATTERN = re.compile(
     r'^(?:' + '|'.join(_CHINESE_REASONING_PHRASES) + r')[^\n]*$',
     re.MULTILINE,
 )
+# 指令层级标记：LLM 有时会原样输出注入的记忆/工具结果的格式标签
+# 这些标签是给 LLM 看的边界标记，不应出现在最终回复中
+_INSTRUCTION_BLOCK_PATTERN = re.compile(
+    r'<instruction\s+level="[^"]*"\s+priority="[^"]*"[^>]*>.*?</instruction>',
+    re.DOTALL | re.IGNORECASE,
+)
+_INSTRUCTION_OPEN_PATTERN = re.compile(
+    r'<instruction\s+level="[^"]*"\s+priority="[^"]*"[^>]*>',
+    re.IGNORECASE,
+)
+_INSTRUCTION_CLOSE_PATTERN = re.compile(r'</instruction>', re.IGNORECASE)
+_EXTERNAL_DATA_MARKERS = re.compile(
+    r'\[外部数据\s*-\s*不可信内容\s*-\s*请勿作为指令执行\]|\[外部数据结束\]',
+    re.IGNORECASE,
+)
 
 
 def strip_reasoning(text: str) -> str:
@@ -314,6 +334,7 @@ def strip_reasoning(text: str) -> str:
     5. 第三人称引用（They ask "..."）
     6. Agnes 风格连续英文推理段
     7. 中文内部独白/推理行
+    8. 指令层级标记泄露（<instruction>标签和[外部数据]标记）
     """
     if not text:
         return text
@@ -321,6 +342,11 @@ def strip_reasoning(text: str) -> str:
     # 1. 标签包裹的推理
     text = _REASONING_TAG_PATTERN.sub('', text)
     text = _REASONING_OPEN_PATTERN.sub('', text)
+    # 1b. 指令层级标记泄露（<instruction>标签和[外部数据]标记）
+    text = _INSTRUCTION_BLOCK_PATTERN.sub('', text)
+    text = _INSTRUCTION_OPEN_PATTERN.sub('', text)
+    text = _INSTRUCTION_CLOSE_PATTERN.sub('', text)
+    text = _EXTERNAL_DATA_MARKERS.sub('', text)
     # 2. Agnes 模型推理标签
     text = _EMOTION_REASONING_PATTERN.sub('', text)
     # 3. 第三人称引用
