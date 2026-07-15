@@ -33,6 +33,12 @@ _DEGRADED_PREFIXES: tuple[str, ...] = (
     "嗯……出了点小问题",
 )
 
+# 降级回复中的特征短语（用 in 匹配，适配 agent 名称前缀等变体）
+_DEGRADED_PHRASES: tuple[str, ...] = (
+    "想得太入神了",
+    "出了点小问题",
+)
+
 
 def is_degraded_reply(reply: str) -> bool:
     """检查回复是否是降级/错误/拦截回复。
@@ -51,7 +57,8 @@ def is_degraded_reply(reply: str) -> bool:
     stripped = reply.strip()
     if stripped in _DEGRADED_REPLIES:
         return True
-    return any(stripped.startswith(p) for p in _DEGRADED_PREFIXES)
+    return (any(stripped.startswith(p) for p in _DEGRADED_PREFIXES)
+            or any(p in stripped for p in _DEGRADED_PHRASES))
 
 
 # ── 请求级 ContextVar (跨协程传递当前请求上下文) ──────────────

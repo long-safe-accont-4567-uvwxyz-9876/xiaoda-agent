@@ -99,6 +99,14 @@ class MemoryDB:
         )
         await self._conn.commit()
 
+    async def update_distill_status(self, mem_id: int, status: str) -> None:
+        """更新蒸馏状态字段（不污染 emotion_label）。"""
+        await self._conn.execute(
+            "UPDATE episodic_memories SET distill_status = ? WHERE id = ?",
+            (status, mem_id),
+        )
+        await self._conn.commit()
+
     async def update_memory_summary(self, mem_id: int, new_summary: str) -> None:
         await self._conn.execute(
             "UPDATE episodic_memories SET summary = ? WHERE id = ?",
@@ -121,11 +129,18 @@ class MemoryDB:
             logger.debug("db_memory.fts_sync_on_summary_update_failed", error=str(e))
         await self._conn.commit()
 
-    async def update_fallback_raw(self, mem_id: int, new_summary: str, label: str) -> None:
-        await self._conn.execute(
-            "UPDATE episodic_memories SET summary = ?, emotion_label = ? WHERE id = ?",
-            (new_summary, label, mem_id),
-        )
+    async def update_fallback_raw(self, mem_id: int, new_summary: str, label: str,
+                                    distill_status: str = "") -> None:
+        if distill_status:
+            await self._conn.execute(
+                "UPDATE episodic_memories SET summary = ?, emotion_label = ?, distill_status = ? WHERE id = ?",
+                (new_summary, label, distill_status, mem_id),
+            )
+        else:
+            await self._conn.execute(
+                "UPDATE episodic_memories SET summary = ?, emotion_label = ? WHERE id = ?",
+                (new_summary, label, mem_id),
+            )
         try:
             from db.fts_utils import _tokenize_for_fts
             tokenized = _tokenize_for_fts(new_summary)

@@ -1197,15 +1197,8 @@ class MemoryManager:
             else:
                 effective_len += 1
 
-        # 极短查询：问候、确认、单字回复
-        if effective_len <= 8:
-            return 1
-
-        # 短查询：简单闲聊
-        if effective_len <= 15:
-            return 2
-
         # 情感/回忆/个人话题 → 多检索，让回复更有温度和连贯性
+        # 注意：必须在长度检查之前，否则短查询会被提前截断
         emotional_indicators = (
             "记得", "想起", "回忆", "以前", "之前", "那时候", "那次",
             "喜欢", "讨厌", "开心", "难过", "伤心", "生气", "害怕",
@@ -1230,6 +1223,14 @@ class MemoryManager:
         for indicator in event_indicators:
             if indicator in query_lower:
                 return min(4, default_k + 1)
+
+        # 极短查询：问候、确认、单字回复
+        if effective_len <= 8:
+            return 2
+
+        # 短查询：简单闲聊
+        if effective_len <= 15:
+            return 2
 
         # 长查询：可能涉及多话题
         if effective_len > 60:
@@ -2401,9 +2402,12 @@ class MemoryManager:
         try:
             try:
                 existing = await self.memory.get_memory_by_id(raw_id)
-                if existing and existing.get("emotion_label", "").endswith("distill_failed"):
-                    logger.debug("memory.distill_skip_failed", raw_id=raw_id)
-                    return
+                if existing:
+                    ds = existing.get("distill_status", "")
+                    if ds == "failed":
+                        # 允许重试：清除 failed 状态，重新蒸馏
+                        logger.info("memory.distill_retry", raw_id=raw_id)
+                        await self.memory.update_distill_status(raw_id, "")
             except Exception:
                 pass
             # 1. 蒸馏（调用已有 MemoryDistiller，传入单条记忆）
@@ -2485,7 +2489,7 @@ class MemoryManager:
                                   full_text: str) -> None:
         try:
             if full_text and len(full_text) > len(truncated_summary):
-                await self.memory.update_fallback_raw(raw_id, full_text, "distill_failed")
+                await self.memory.update_fallback_raw(raw_id, full_text, "", distill_status="failed")
                 logger.info("memory.fallback_raw_updated", raw_id=raw_id,
                            old_len=len(truncated_summary), new_len=len(full_text))
                 if self.vec:
@@ -2494,7 +2498,7 @@ class MemoryManager:
                     except Exception as e:
                         logger.debug("memory.fallback_vec_upsert_failed", error=str(e))
             else:
-                await self.memory.update_emotion_label(raw_id, "distill_failed")
+                await self.memory.update_distill_status(raw_id, "distill_failed")
             # summary 更新后失效查询缓存，避免返回旧内容
             if self._query_cache:
                 self._query_cache.invalidate()
@@ -2857,13 +2861,14 @@ class MemoryManager:
 
     async def try_idle_encode(self, context: dict, force: bool = False) -> None:
         now = time.time()
-        if not self._pending_encode:
+        if not force and not self._pending_encode:
             return
         if not force and now - self._last_message_time < self.IDLE_THRESHOLD:
             return
         if now - self._last_encode_time < self.ENCODE_COOLDOWN:
             return
 
+        self._pending_encode = False
         await self.encode_memory(context)
 
     def _save_state_json(self, summary: str, importance: float, emotion: str) -> None:

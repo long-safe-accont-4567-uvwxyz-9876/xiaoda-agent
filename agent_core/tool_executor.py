@@ -368,6 +368,19 @@ class ToolExecutorMixin:
             text = sticker_mgr.strip_emotion_tag(text)
         text = humanize(text, style=style)
         text = deduplicate_multi_reply(text, context="finalize_reply")
+        # 清除模型生成退化泄露的工具定义 JSON（与 _clean_reply 一致）
+        text = self._strip_injected_tool_defs(text)
+        # S6: Canary Token 泄露检测（与 _clean_reply 一致）
+        try:
+            from security.canary import get_canary_detector
+            leaked, cleaned = get_canary_detector().scan_output_blocking(text)
+            if leaked:
+                logger.warning("finalize.canary_leak_blocked reply_preview=%s", text[:100])
+                text = "检测到潜在的系统信息泄露, 已屏蔽相关内容"
+            else:
+                text = cleaned
+        except ImportError:
+            pass
         # 名称替换：确保 LLM 输出中的旧名（如"纳西妲"）被替换为显示名（如"小妲"）
         try:
             from config import apply_agent_name_replacements

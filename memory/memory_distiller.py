@@ -274,11 +274,11 @@ class MemoryDistiller:
                 )
             except Exception as e:
                 logger.warning("memory_distiller.merge_router_fallback_failed", error=str(e))
-                return new_content
+                return existing + "\n" + new_content
 
         if not result or not isinstance(result, str):
-            # LLM 失败时降级：直接用新内容（不合并）
-            return new_content
+            # LLM 失败时降级：拼接新旧内容（不丢失旧知识）
+            return existing + "\n" + new_content
 
         merged = result.strip()
         # 去除可能的 <think> 标签内容

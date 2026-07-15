@@ -54,6 +54,15 @@ class MessageProcessorMixin:
     MAX_CONSECUTIVE_TOOL_FAILURES = 3   # 连续工具失败上限
     LLM_CALL_TIMEOUT = 30               # 单次 LLM 调用超时
 
+    # ── 非主人工具白名单（信息查询 + 基础交互） ─────────────────
+    ALLOWED_NON_MASTER_TOOLS: frozenset[str] = frozenset({
+        # 搜索 / 信息
+        "web_search", "get_weather", "search_cn", "wolfram_query",
+        # 基础交互
+        "get_current_time", "calculator", "nudge_greeting",
+        "call_xiaoda", "delegate_task",
+    })
+
     async def _run_verification_loop(
         self,
         first_result: Any,
@@ -284,7 +293,7 @@ class MessageProcessorMixin:
         messages = await self._build_fast_path_messages(user_input, is_master, emotion, emotion_hint, source)
 
         # LLM 调用
-        reply = await self._call_fast_path_llm(messages, user_openid, session_id)
+        reply = await self._call_fast_path_llm(messages, user_openid, session_id, is_master=is_master)
 
         # 截断检测：回复过短且未以句末标点结尾时，记录告警
         if reply and len(reply) < 50:
@@ -332,21 +341,22 @@ class MessageProcessorMixin:
             except Exception:
                 pass
 
-        # 轻量 FTS + 安抚记忆检索
-        messages = await self._fast_path_inject_memories(
-            messages, user_input, is_master, emotion)
-
         # 历史对话（非主人不加载，防止看到主人聊天内容）
         if is_master:
             for msg in self.context.get_last_n(6):
                 m = {"role": msg["role"], "content": str(msg.get("content", "")) if msg.get("content") is not None else ""}
                 messages.append(m)
+
+        # 轻量 FTS + 安抚记忆检索（放在历史之后，靠近用户消息，提高关注度）
+        messages = await self._fast_path_inject_memories(
+            messages, user_input, is_master, emotion)
+
         messages.append({"role": "system", "content": _volatile})
         messages.append({"role": "user", "content": user_input})
         return messages
 
     async def _call_fast_path_llm(self, messages: list, user_openid: Any,
-                                    session_id: Any) -> str:
+                                    session_id: Any, is_master: bool = True) -> str:
         """快速路径 LLM 调用，返回回复文本（失败时返回降级回复）。
 
         支持 tool call：如果模型决定使用工具，解析并执行，返回执行结果。
@@ -357,6 +367,11 @@ class MessageProcessorMixin:
             # 获取可用工具列表
             _tools_list = to_openai_tools()
             tools = _tools_list if _tools_list else None
+            # 非主人：白名单过滤
+            if not is_master and tools:
+                tools = [t for t in tools if t.get("function", {}).get("name") in self.ALLOWED_NON_MASTER_TOOLS]
+                if not tools:
+                    tools = None
 
             result = await self.router.route(
                 "chat", messages,
@@ -485,13 +500,17 @@ class MessageProcessorMixin:
         _should_remember = is_master or source != "qq_group"
         if _should_remember:
             await self.context.add_message("user", user_input)
-            # 降级/错误回复不写入对话历史和记忆库，避免污染后续检索
+            # 降级/错误回复跳过记忆写入，但保留 history 一致性（避免 user 消息无 assistant 回复）
             if is_degraded_reply(reply):
                 logger.info("agent.skip_memory_degraded_reply", source=source, reply_preview=reply[:60])
+                # 仍写入 history 保持对话连续性
+                await self.context.add_message("assistant", reply[:200])
             else:
-                await self.context.add_message("assistant", reply)
+                # strip emotion tags before storing to memory
+                _clean_for_memory = self.sticker_manager.strip_emotion_tag(reply)
+                await self.context.add_message("assistant", _clean_for_memory)
                 self._bg_task_manager.run_background_tasks(
-                    user_input, reply, user_id, source, emotion, [], session_id=session_id)
+                    user_input, _clean_for_memory, user_id, source, emotion, [], session_id=session_id)
         try:
             _spawn(self.router.flush_costs())
         except Exception as e:
@@ -547,11 +566,12 @@ class MessageProcessorMixin:
             return messages
         _is_greeting = bool(re.match(
             r'^(早[上安]?|中午|下午|晚上|晚安|你好|哈喽|hi|hello|hey)[好呀～~！!。.\s]*$',
-            user_input.strip(), re.IGNORECASE))
+            user_input.strip(), re.IGNORECASE)) and not any(
+            kw in user_input for kw in ("记得", "上次", "以前", "说过", "告诉", "回忆"))
 
         if is_master and not _is_greeting and self.memory and getattr(self.memory, 'memory', None):
             try:
-                _fts_mems = await self.memory.memory.search_memories_fts(user_input, limit=2)
+                _fts_mems = await self.memory.memory.search_memories_fts(user_input, limit=3)
                 if _fts_mems:
                     _mem_lines = []
                     for m in _fts_mems:
@@ -743,7 +763,8 @@ class MessageProcessorMixin:
 
         # 表情包意图与工具准备
         _pre_picked_sticker, tools = self._prepare_sticker_and_tools(
-            messages, clean_input, emotion, is_master, user_id, user_input, image_data)
+            messages, clean_input, emotion, is_master, user_id, user_input, image_data,
+            source=source or "")
 
         return messages, _pre_picked_sticker, tools
 
@@ -770,14 +791,17 @@ class MessageProcessorMixin:
         if _should_remember:
             if not ctx.handled_by_tool_call:
                 await self.context.add_message("user", user_input)
-                # 降级/错误回复不写入对话历史和记忆库，避免污染后续检索
+                # 降级/错误回复跳过记忆写入，但保留 history 一致性
                 if is_degraded_reply(reply):
                     logger.info("agent.skip_memory_degraded_reply", source=source, reply_preview=reply[:60])
+                    await self.context.add_message("assistant", reply[:200])
                 else:
                     rc = self.router.pop_reasoning_content()
-                    await self.context.add_message("assistant", reply, reasoning_content=rc)
+                    # strip emotion tags before storing to memory
+                    _clean_for_memory = self.sticker_manager.strip_emotion_tag(reply)
+                    await self.context.add_message("assistant", _clean_for_memory, reasoning_content=rc)
                     self._bg_task_manager.run_background_tasks(
-                        user_input, reply, user_id, source, emotion, tool_results, session_id=session_id)
+                        user_input, _clean_for_memory, user_id, source, emotion, tool_results, session_id=session_id)
         # 偏好管线: 用户纠正 → L1(约束) + L3(教训) 联动 (异步, 不阻塞回复)
         try:
             from core.preference_pipeline import get_preference_pipeline
@@ -1018,7 +1042,8 @@ class MessageProcessorMixin:
         return messages
 
     def _prepare_sticker_and_tools(self, messages: Any, clean_input: Any, emotion: Any, is_master: Any,
-                                    user_id: Any, user_input: Any, image_data: Any) -> tuple:
+                                    user_id: Any, user_input: Any, image_data: Any,
+                                    source: str = "") -> tuple:
         """准备表情包提示（注入 messages）与工具列表。返回 (_pre_picked_sticker, tools)。"""
         _sticker_keywords = ["表情包", "表情", "贴纸", "sticker", "贴图"]
         _sticker_intent = any(kw in clean_input for kw in _sticker_keywords)
@@ -1050,16 +1075,14 @@ class MessageProcessorMixin:
             tools = [t for t in tools if t.get("function", {}).get("name") == "delegate_task"]
             if not tools:
                 tools = None
-        # 非主人消息：过滤危险工具，保留安全工具（delegate_task、搜索、天气等）
+        # 非主人消息：白名单制，只保留允许的工具
         if not is_master and tools:
-            _dangerous = {"shell_command", "write_file", "edit_file",
-                          "service_manage", "hardware_status", "gpio_control",
-                          "i2c_comm", "network_diag", "dev_assist",
-                          "run_background", "move_file", "delete_file"}
-            tools = [t for t in tools if t.get("function", {}).get("name") not in _dangerous]
+            tools = [t for t in tools if t.get("function", {}).get("name") in self.ALLOWED_NON_MASTER_TOOLS]
             if not tools:
                 tools = None
-            logger.info("agent.tools_filtered_for_non_master", user_id=user_id)
+            logger.info("agent.tools_filtered_for_non_master",
+                        user_id=user_id, source=source,
+                        allowed=list(self.ALLOWED_NON_MASTER_TOOLS))
         return _pre_picked_sticker, tools
 
     def _resolve_task_and_circuit(self, user_input: Any, tools: Any, messages: Any, trace: Any,

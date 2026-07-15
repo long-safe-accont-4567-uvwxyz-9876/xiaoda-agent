@@ -79,6 +79,8 @@ async def test_fast_path_finalize_calls_strip_reasoning():
     processor._bg_task_manager.run_background_tasks = MagicMock()
     processor._hook_engine = MagicMock()
     processor._hook_engine.fire_post_response = MagicMock()
+    processor.sticker_manager = MagicMock()
+    processor.sticker_manager.strip_emotion_tag = MagicMock(side_effect=lambda x: x)
 
     # Mock get_sticker_info 返回带有推理标签的回复
     reply_with_reasoning = "[emotion thinking]`` Need think\n实际回复内容"

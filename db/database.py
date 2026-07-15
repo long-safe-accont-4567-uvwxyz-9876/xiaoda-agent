@@ -23,7 +23,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 17
+CURRENT_SCHEMA_VERSION = 18
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -230,6 +230,7 @@ class DatabaseManager:
             (15, "fsrs_dsr_columns", self._migrate_v15),
             (16, "created_at_columns", self._migrate_v16),
             (17, "greeting_schedules_reminder_type", self._migrate_v17),
+            (18, "distill_status_column", self._migrate_v18),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -1184,6 +1185,20 @@ class DatabaseManager:
         """)
         await self._conn.commit()
         logger.info("database.migration_v17_reminder_type_done")
+
+    async def _migrate_v18(self) -> None:
+        """v18: 添加 distill_status 列，用于跟踪蒸馏状态（替代 emotion_label 滥用）。"""
+        cols = {r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")}
+        if "distill_status" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN distill_status TEXT DEFAULT ''"
+            )
+        # 回填：把旧的 emotion_label='distill_failed' 记录标记为 distill_status='failed'
+        await self._conn.execute(
+            "UPDATE episodic_memories SET distill_status = 'failed' "
+            "WHERE emotion_label = 'distill_failed'"
+        )
+        logger.info("database.migration_v18_distill_status_done")
 
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")

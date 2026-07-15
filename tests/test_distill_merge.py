@@ -57,15 +57,16 @@ class TestMergeKnowledge:
         assert result == "合并后的知识：用户喜欢Python和React"
         distiller._call_free_model.assert_awaited_once()
 
-    async def test_merge_failure_returns_new(self):
-        """LLM 合并失败时返回 new_content（不合并，直接用新内容）"""
+    async def test_merge_failure_returns_concat(self):
+        """LLM 合并失败时返回 existing + new_content（保留旧知识）"""
         distiller = self._make_distiller()
         distiller._call_free_model = AsyncMock(return_value=None)
         result = await distiller.merge_knowledge(
             existing="旧知识",
             new_content="新知识",
         )
-        assert result == "新知识"
+        assert "旧知识" in result
+        assert "新知识" in result
 
     async def test_merge_empty_existing(self):
         """existing 为空时直接返回 new_content"""

@@ -14,7 +14,7 @@ from loguru import logger
 from config import TTS_ASYNC_MODE, build_system_prompt, get_agent_display_name
 from emotion.emotion_simple import detect_emotion
 from emotion.emotion_enum import CN_TO_EN
-from utils.text_utils import humanize
+from utils.text_utils import humanize, strip_dsml, strip_reasoning
 from core.degradation_strategy import get_degradation_strategy
 from core.event_bus import event_bus, AgentEvent, AgentEventType, gen_task_id
 from core.cancel_token import CancelToken, CancellationError
@@ -482,6 +482,9 @@ class SubAgentManagerMixin:
             # 剥离情绪标签
             clean_reply = self.sticker_manager.strip_emotion_tag(all_replies)
 
+        # 清理推理内容和 DSML 标签（防止泄露给用户）
+        clean_reply = strip_dsml(clean_reply)
+        clean_reply = strip_reasoning(clean_reply)
         # humanize（与主小妲路径一致）
         clean_reply = humanize(clean_reply, style="xiaoda")
 

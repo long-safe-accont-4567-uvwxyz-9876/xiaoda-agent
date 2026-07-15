@@ -13,7 +13,7 @@ def estimate_tokens(text: str) -> int:
     return int(cn * 1.5 + en * 0.25)
 
 
-def _smart_truncate_summary(text: str, max_len: int = 100) -> str:
+def _smart_truncate_summary(text: str, max_len: int = 250) -> str:
     """Q1-1: 按语义边界截断摘要，避免硬切断关键信息。
 
     在 max_len 附近寻找最后一个句子边界（。！？；\n，），找不到则硬截断。
@@ -382,10 +382,10 @@ class AgentContext:
         parts = []
 
         if self._compressed_summary:
-            parts.append(f"[已压缩的早期对话摘要（仅供参考，不需要回应。当前用户身份：{self.current_address_term}。根据当前用户意图独立判断是否需要调用工具）]\n{self._compressed_summary}")
+            parts.append(f"[已压缩的早期对话摘要（仅供参考，请在需要时引用。当前用户身份：{self.current_address_term}。根据当前用户意图独立判断是否需要调用工具）]\n{self._compressed_summary}")
 
         if self._restored_summary:
-            parts.append(f"[近期对话摘要（仅供参考，不需要回应。当前用户身份：{self.current_address_term}。根据当前用户意图独立判断是否需要调用工具）]\n{self._restored_summary}")
+            parts.append(f"[近期对话摘要（仅供参考，请在需要时引用。当前用户身份：{self.current_address_term}。根据当前用户意图独立判断是否需要调用工具）]\n{self._restored_summary}")
 
         portrait = self.user_portrait or ""
         if portrait:
@@ -485,7 +485,7 @@ class AgentContext:
             if kg_ctx:
                 mem_texts.append(kg_ctx[:200])
         if mem_texts:
-            return "[相关记忆]\n" + "\n".join(mem_texts)
+            return "[相关记忆]\n" + "\n".join(mem_texts) + "\n（请自然地参考以上记忆回答，不要逐条复述）"
         # 元认知：检索到记忆但无有效内容时，提示 agent
         return '[元认知提示] 我检索了记忆但没有找到有效内容，如果用户问的是过去的事，请诚实说"我不太记得了"。'
 
