@@ -153,6 +153,8 @@ class SubAgentManagerMixin:
         await self.context.add_message("user", clean_input)
         if is_degraded_reply(sub_reply):
             logger.info("sub_agent.skip_memory_degraded_reply", reply_preview=sub_reply[:60])
+            # 降级仍写入 assistant history 保持对话连续性
+            await self.context.add_message("assistant", f"[{display_name}] {sub_reply[:200]}")
         else:
             await self.context.add_message("assistant", f"[{display_name}] {sub_reply}")
             self._bg_task_manager.run_background_tasks(

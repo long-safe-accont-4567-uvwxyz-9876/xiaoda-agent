@@ -60,7 +60,7 @@ class MessageProcessorMixin:
         "web_search", "get_weather", "search_cn", "wolfram_query",
         # 基础交互
         "get_current_time", "calculator", "nudge_greeting",
-        "call_xiaoda", "delegate_task",
+        "call_xiaoda",
     })
 
     async def _run_verification_loop(
