@@ -137,10 +137,11 @@ def _apply_route_overrides(cfg: Any, core: Any, ROUTE_TABLE: Any) -> None:
             entry["client"] = o["client"]
         if o.get("max_tokens"):
             entry["max_tokens"] = o["max_tokens"]
-        if o.get("thinking"):
-            entry.setdefault("thinking", {"type": "enabled", "budget_tokens": 2048})
-        elif "thinking" in o:
-            entry.pop("thinking", None)
+        if "thinking" in o:
+            if o["thinking"]:
+                entry["thinking"] = {"type": "enabled", "budget_tokens": 2048}
+            else:
+                entry["thinking"] = {"type": "disabled"}
         if o.get("timeout"):
             core.router.TASK_TIMEOUTS[task] = o["timeout"]
 

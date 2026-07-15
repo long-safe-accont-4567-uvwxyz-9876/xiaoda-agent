@@ -66,16 +66,16 @@ PROVIDER_PRICING = {
 ROUTE_TABLE = {
     # chat 主路由：fast_path 与 main_path 共用，mimo-v2.5 等推理模型会消耗 reasoning_content token，
     # 3072 给 content 输出留足空间，避免小妲风格（含 emoji/修辞）回复被 max_tokens 截断
-    "chat": {"model": _CFG_MODEL_NAME, "max_tokens": 3072, "client": _CFG_DEFAULT_PROVIDER},
+    "chat": {"model": _CFG_MODEL_NAME, "max_tokens": 3072, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "chat_pro": {"model": _CFG_PRO_MODEL or _CFG_MODEL_NAME, "max_tokens": 4096, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "enabled", "budget_tokens": 2048}},
     # chat_flash：sub_agent 调用（如 xiaoli 转述），推理模型需要更多空间避免 content_len=154 截断
-    "chat_flash": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 3200, "client": _CFG_DEFAULT_PROVIDER},
-    "chat_mini": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1500, "client": _CFG_DEFAULT_PROVIDER},
-    "chat_mimo": {"model": MIMO_MODEL, "max_tokens": 3072, "client": "mimo"},
-    "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 300, "client": _CFG_DEFAULT_PROVIDER},
-    "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 300, "client": _CFG_DEFAULT_PROVIDER},
-    "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1500, "client": _CFG_DEFAULT_PROVIDER},
-    "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": 3072, "client": "agnes"},
+    "chat_flash": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 3200, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "chat_mini": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1500, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "chat_mimo": {"model": MIMO_MODEL, "max_tokens": 3072, "client": "mimo", "thinking": {"type": "disabled"}},
+    "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 300, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 300, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1500, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": 3072, "client": "agnes", "thinking": {"type": "disabled"}},
 }
 
 MODEL_PREFERENCES = {
@@ -754,6 +754,7 @@ class ModelRouter:
         # 支持 thinking 参数（通用）
         # 关键修复：thinking 关闭时也要传递 enable_thinking: false，否则 agnes 模型使用默认行为
         thinking_config = config.get("thinking")
+        logger.info("router.thinking_debug", provider=provider, thinking=thinking_config)
         if provider == "agnes":
             # agnes 模型需要明确传递 enable_thinking 参数
             enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
@@ -886,6 +887,7 @@ class ModelRouter:
         # 支持 thinking 参数（通用）
         # 关键修复：thinking 关闭时也要传递 enable_thinking: false，否则 agnes 模型使用默认行为
         thinking_config = config.get("thinking")
+        logger.info("router.thinking_debug", provider=provider, thinking=thinking_config)
         if provider == "agnes":
             # agnes 模型需要明确传递 enable_thinking 参数
             enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
