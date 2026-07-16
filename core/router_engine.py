@@ -115,9 +115,9 @@ def _build_keyword_patterns() -> list[tuple[str, str]]:
     agent_keywords: dict[str, list[str]] = {
         "xiaolang": ["小狼", "xiaolang"],
         "xiaoli": ["小莉", "xiaoli", "小炸弹"],
-        "xiaolian": ["小涟", "xiaolian", "记忆"],
+        "xiaolian": ["小涟", "xiaolian"],
         "xiaoke": ["小可", "xiaoke", "nike"],
-        "xiaoda": ["小妲", "xiaoda"],
+        "xiaoda": ["小妲", "xiaoda", "记忆", "回忆", "记得"],
     }
     for name, keywords in agent_keywords.items():
         dn = get_agent_display_name(name)

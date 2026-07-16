@@ -186,24 +186,23 @@ class BackgroundTaskManager:
             except (OSError, RuntimeError) as e:
                 logger.warning("bg.batch_commit_failed", error=str(e))
 
-        # 3. 记忆编码（独立，不纳入批量提交）
+        # 3. 记忆编码（独立，不纳入批量提交，改为 _spawn 避免阻塞持久化任务）
+        # 根因：try_idle_encode 涉及 LLM 调用，可能需要几十秒，await 会阻塞整个 _run_persistence_tasks
+        # 修复：改为 _spawn（fire-and-forget），与其他后台任务（notebook/instinct）一致
         if self.memory and len(self.context.history) >= 4:
-            try:
-                # 合并压缩暂存区的消息和当前历史，确保被压缩丢弃的消息也能被记忆编码
-                pre_compressed = self.context.flush_pre_compressed_buffer()
-                exchanges = self.context.get_last_n(6)
-                if pre_compressed:
-                    # 将压缩前的消息转为 exchanges 格式并前置
-                    for msg in pre_compressed[-12:]:  # 最多取最近 12 条
-                        if msg.get("role") in ("user", "assistant") and msg.get("content"):
-                            exchanges.insert(0, {"role": msg["role"], "content": msg["content"][:500]})
-                ctx = {
-                    "exchanges": exchanges,
-                    "emotion": emotion,
-                }
-                await self.memory.try_idle_encode(ctx, force=True)
-            except (OSError, ValueError, RuntimeError) as e:
-                logger.warning("bg.memory_encode_failed", error=str(e))
+            async def _encode_task():
+                try:
+                    pre_compressed = self.context.flush_pre_compressed_buffer()
+                    exchanges = self.context.get_last_n(6)
+                    if pre_compressed:
+                        for msg in pre_compressed[-12:]:
+                            if msg.get("role") in ("user", "assistant") and msg.get("content"):
+                                exchanges.insert(0, {"role": msg["role"], "content": msg["content"][:500]})
+                    ctx = {"exchanges": exchanges, "emotion": emotion}
+                    await self.memory.try_idle_encode(ctx, force=True)
+                except Exception as e:
+                    logger.warning("bg.memory_encode_failed", error=str(e))
+            _spawn(_encode_task())
 
     async def _run_manager_tasks(
         self,

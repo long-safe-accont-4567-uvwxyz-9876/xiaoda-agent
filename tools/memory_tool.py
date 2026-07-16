@@ -75,7 +75,7 @@ async def remember(content: str, tags: str = "", importance: float = 0.5) -> Too
         "type": "object",
         "properties": {
             "query": {"type": "string", "description": "检索关键词"},
-            "top_k": {"type": "integer", "description": "返回数量", "default": 5},
+            "top_k": {"type": "integer", "description": "返回数量", "default": 8},
         },
         "required": ["query"],
     },
@@ -83,7 +83,7 @@ async def remember(content: str, tags: str = "", importance: float = 0.5) -> Too
     category="memory",
     max_frequency=10,
 )
-async def recall(query: str, top_k: int = 5) -> ToolResult:
+async def recall(query: str, top_k: int = 8) -> ToolResult:
     _start = time.time()
     try:
         mm = _get_memory_manager()

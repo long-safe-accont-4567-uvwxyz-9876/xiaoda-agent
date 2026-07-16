@@ -21,7 +21,7 @@ class Reranker:
             "price": "免费",
         },
         "netease-youdao/bce-reranker-base_v1": {
-            "max_length": 512,
+            "max_length": 5120,
             "provider": "siliconflow",
             "price": "免费",
         },
@@ -29,7 +29,7 @@ class Reranker:
 
     def __init__(self, api_key: str = "", base_url: str = "",
                  model: str = "BAAI/bge-reranker-v2-m3",
-                 max_length: int = 512, batch_size: int = 8) -> None:
+                 max_length: int = 8192, batch_size: int = 8) -> None:
         self._api_key = api_key
         self._base_url = base_url or "https://api.siliconflow.cn/v1"
         self._model = model

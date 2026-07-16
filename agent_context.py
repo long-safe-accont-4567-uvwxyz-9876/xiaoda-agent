@@ -384,7 +384,9 @@ class AgentContext:
         if self._compressed_summary:
             parts.append(f"[已压缩的早期对话摘要（仅供参考，请在需要时引用。当前用户身份：{self.current_address_term}。根据当前用户意图独立判断是否需要调用工具）]\n{self._compressed_summary}")
 
-        if self._restored_summary:
+        # 当 memory_retrieval 有记忆时，不注入 _restored_summary，避免信息冲突
+        # memory_retrieval 在 volatile 层已注入更精确的记忆，_restored_summary 会引入矛盾信息
+        if self._restored_summary and not self.memory_retrieval:
             parts.append(f"[近期对话摘要（仅供参考，请在需要时引用。当前用户身份：{self.current_address_term}。根据当前用户意图独立判断是否需要调用工具）]\n{self._restored_summary}")
 
         portrait = self.user_portrait or ""
@@ -459,41 +461,62 @@ class AgentContext:
         return stable_content
 
     def _format_memory_retrieval(self) -> str:
-        """格式化 memory_retrieval 为 volatile 层片段。
+        """格式化 memory_retrieval 为独立 system 消息。
 
         始终返回非空字符串：有记忆则拼接，无记忆或无有效内容则返回元认知提示。
+        作为独立 system 消息注入在历史消息之后、用户输入之前，确保模型注意力集中。
+
+        conversation_logs 类型的记忆包含原始对话，不做截断，直接展示。
         """
         if not self.memory_retrieval:
-            # 元认知：未检索到任何记忆时，提示 agent
-            return ('[重要·元认知] 检索确认：没有找到与用户问题相关的记忆。'
-                    '绝对不要编造、推测或暗示记得过去发生的事。'
-                    '如实回答"我不记得了"或"我没有关于这件事的记忆"。'
-                    '如果用户提供了具体细节，可以基于这些细节继续对话，但不要虚构未提供的细节。')
+            return ('[记忆检索] 没有找到相关记忆。'
+                    '不要编造任何过去的事，如实说"我不记得了"。')
 
-        mem_texts = []
-        for m in self.memory_retrieval[:5]:
-            summary = m.get("summary", "")
-            if summary:
-                # 注入时间戳，让 LLM 知道每条记忆发生的时间（解决"没有时间戳"问题）
-                # Q1-1: 按语义边界截断，避免硬切断关键信息
-                ts = m.get("timestamp", 0)
-                if ts:
-                    try:
-                        _date_str = time.strftime("%m-%d %H:%M", time.localtime(float(ts)))
-                        mem_texts.append(f"· [{_date_str}] {_smart_truncate_summary(summary)}")
-                    except (ValueError, TypeError, OSError):
-                        mem_texts.append(f"· {_smart_truncate_summary(summary)}")
-                else:
-                    mem_texts.append(f"· {_smart_truncate_summary(summary)}")
-            kg_ctx = m.get("kg_context", "")
-            if kg_ctx:
-                mem_texts.append(kg_ctx[:200])
-        if mem_texts:
-            return "[相关记忆]\n" + "\n".join(mem_texts) + "\n（请自然地参考以上记忆回答，不要逐条复述）"
-        # 元认知：检索到记忆但无有效内容时，提示 agent
-        return '[元认知提示] 我检索了记忆但没有找到有效内容，如果用户问的是过去的事，请诚实说"我不太记得了"。'
+        # 区分原始对话记录和蒸馏记忆
+        conv_logs = [m for m in self.memory_retrieval if m.get("type") == "conversation_log"]
+        mem_others = [m for m in self.memory_retrieval if m.get("type") != "conversation_log"]
 
-    def _build_volatile_content(self, source: str) -> str:
+        parts = []
+
+        # 原始对话记录：直接展示，不截断
+        if conv_logs:
+            conv_lines = []
+            for m in conv_logs[:30]:
+                summary = m.get("summary", "")
+                if summary:
+                    conv_lines.append(summary)
+            if conv_lines:
+                parts.append("[以下是该时间段的原始对话记录]\n" + "\n---\n".join(conv_lines))
+
+        # 蒸馏记忆：正常格式化
+        if mem_others:
+            mem_texts = []
+            for m in mem_others[:15]:
+                summary = m.get("summary", "")
+                if summary:
+                    ts = m.get("timestamp", 0)
+                    if ts:
+                        try:
+                            _date_str = time.strftime("%m-%d %H:%M", time.localtime(float(ts)))
+                            mem_texts.append(f"· [{_date_str}] {_smart_truncate_summary(summary, 500)}")
+                        except (ValueError, TypeError, OSError):
+                            mem_texts.append(f"· {_smart_truncate_summary(summary, 500)}")
+                    else:
+                        mem_texts.append(f"· {_smart_truncate_summary(summary, 500)}")
+                kg_ctx = m.get("kg_context", "")
+                if kg_ctx:
+                    mem_texts.append(kg_ctx[:200])
+            if mem_texts:
+                parts.append("[相关记忆]\n" + "\n".join(mem_texts))
+
+        if parts:
+            return "\n\n".join(parts) + (
+                "\n\n规则：基于以上记忆和对话记录回答。"
+                "如果以上内容与用户问题无关或不够详细，如实说「我只记得这些」，"
+                "绝对不要补充记忆中没有的内容。")
+        return '[记忆检索] 记忆内容为空。不要编造任何过去的事。'
+
+    def _build_volatile_content(self, source: str, exclude_memory: bool = False) -> str:
         """构建 Volatile 层：时间/情绪/记忆/关注点/待办/小莉/场景约束/失败提醒。"""
         volatile_parts = []
         volatile_parts.append(self._build_time_context())
@@ -515,7 +538,9 @@ class AgentContext:
             logger.debug("agent_context.emotion_state_inject_failed", error=str(e))
         if self.emotion_hint:
             volatile_parts.append(f"[感知到{self.current_address_term}的情绪：{self.emotion_hint}]")
-        volatile_parts.append(self._format_memory_retrieval())
+        # 记忆部分由 build_messages 单独注入到更靠前的位置，此处按需跳过
+        if not exclude_memory:
+            volatile_parts.append(self._format_memory_retrieval())
         if self.notebook_focus:
             volatile_parts.append(f"[当前关注点] {self.notebook_focus}")
         if self.pending_tasks:
@@ -556,9 +581,10 @@ class AgentContext:
         context_content = context_parts[0] if context_parts else ""
 
         # === Volatile 层（每次重建，频繁变化）===
-        volatile_content = self._build_volatile_content(source)
+        # 构建 volatile 时排除记忆部分，记忆单独注入到更靠前的位置
+        volatile_content = self._build_volatile_content(source, exclude_memory=True)
 
-        # 拼接三层
+        # 拼接三层（不含记忆）
         system_content = stable_content
         if context_content:
             system_content += "\n\n---\n\n" + context_content
@@ -574,6 +600,11 @@ class AgentContext:
             # 注意：reasoning_content 不发送到 API（OpenAI API 不支持此字段）
             # 它仅保存在 history 中供内部使用
             messages.append(m)
+
+        # 记忆单独注入：放在历史消息之后、用户输入之前，确保模型注意力集中
+        memory_content = self._format_memory_retrieval()
+        if memory_content:
+            messages.append({"role": "system", "content": memory_content})
 
         messages.append({"role": "user", "content": user_input})
         return messages
@@ -602,8 +633,8 @@ class AgentContext:
                 asst_msg = row.get("assistant_reply", "")
                 if not user_msg and not asst_msg:
                     continue
-                user_preview = user_msg[:60].replace("\n", " ") if user_msg else ""
-                asst_preview = asst_msg[:60].replace("\n", " ") if asst_msg else ""
+                user_preview = user_msg[:200].replace("\n", " ") if user_msg else ""
+                asst_preview = asst_msg[:200].replace("\n", " ") if asst_msg else ""
                 ts = row.get("timestamp", 0)
                 if ts:
                     try:

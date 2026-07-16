@@ -92,8 +92,10 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
         "深夜": (21, 24),
     }
 
-    # 匹配 "N月N号" 或 "N月N日"（号/日 可选）
+    # 匹配 "N月N号"/"N月N日" 或 "N.N日"/"N.N号"（如 7.16日、7.16号）
     date_match = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[号日]", query)
+    if not date_match:
+        date_match = re.search(r"(\d{1,2})\.(\d{1,2})\s*[号日]", query)
     if date_match:
         month = int(date_match.group(1))
         day = int(date_match.group(2))
@@ -148,13 +150,7 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
         if rel_word in query:
             base_date = (now - _datetime.timedelta(days=offset_days)).replace(
                 hour=0, minute=0, second=0, microsecond=0)
-            # 检查时段词
-            for tod_name, (tod_start, tod_end) in _TIME_OF_DAY.items():
-                if tod_name in query:
-                    start = base_date.replace(hour=tod_start, minute=0, second=0, microsecond=0)
-                    end = base_date.replace(hour=tod_end, minute=0, second=0, microsecond=0) if tod_end < 24 else base_date.replace(hour=23, minute=59, second=59, microsecond=0)
-                    return start.timestamp(), end.timestamp()
-            # 检查具体小时范围
+            # 优先检查具体小时范围（"7点到8点"比"早上"更精确）
             hour_range = re.search(r"(\d{1,2})\s*[点时:：]\s*(?:到|~|-|—)\s*(\d{1,2})\s*[点时:：]?", query)
             if hour_range:
                 h_start = int(hour_range.group(1))
@@ -162,6 +158,12 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
                 start = base_date.replace(hour=h_start, minute=0, second=0, microsecond=0)
                 end = base_date.replace(hour=h_end, minute=59, second=59, microsecond=0)
                 return start.timestamp(), end.timestamp()
+            # 其次检查时段词（"早上"→6-9点）
+            for tod_name, (tod_start, tod_end) in _TIME_OF_DAY.items():
+                if tod_name in query:
+                    start = base_date.replace(hour=tod_start, minute=0, second=0, microsecond=0)
+                    end = base_date.replace(hour=tod_end, minute=0, second=0, microsecond=0) if tod_end < 24 else base_date.replace(hour=23, minute=59, second=59, microsecond=0)
+                    return start.timestamp(), end.timestamp()
             # 纯相对日期（无时段）：整天
             start = base_date
             end = (now if offset_days == 0 else base_date.replace(hour=23, minute=59, second=59, microsecond=0))
@@ -1177,14 +1179,14 @@ class MemoryManager:
         # 规则 5
         return False
 
-    def _suggest_k(self, query: str, default_k: int = 3) -> int:
+    def _suggest_k(self, query: str, default_k: int = 8) -> int:
         """根据查询内容智能建议检索条数 k（情感陪伴型 bot）。
 
         策略：
-        - 极短闲聊（问候/确认）：k=1，避免注入无关记忆
-        - 日常闲聊：k=2~3
-        - 情感/回忆/个人话题：k=4~5，多检索相关情感记忆
-        - 涉及具体事件/人物/经历：k=4，召回更多上下文
+        - 极短闲聊（问候/确认）：k=2，避免注入无关记忆
+        - 日常闲聊：k=5~8
+        - 情感/回忆/个人话题：k=10，多检索相关情感记忆
+        - 涉及具体事件/人物/经历：k=10，召回更多上下文
         """
         if not query:
             return 1
@@ -1212,7 +1214,7 @@ class MemoryManager:
         query_lower = query.lower()
         for indicator in emotional_indicators:
             if indicator in query_lower:
-                return min(5, default_k + 2)
+                return min(10, default_k + 2)
 
         # 涉及具体事件/人物/经历
         event_indicators = (
@@ -1222,7 +1224,7 @@ class MemoryManager:
         )
         for indicator in event_indicators:
             if indicator in query_lower:
-                return min(4, default_k + 1)
+                return min(10, default_k + 1)
 
         # 极短查询：问候、确认、单字回复
         if effective_len <= 8:
@@ -1230,11 +1232,11 @@ class MemoryManager:
 
         # 短查询：简单闲聊
         if effective_len <= 15:
-            return 2
+            return 5
 
         # 长查询：可能涉及多话题
         if effective_len > 60:
-            return min(5, default_k + 2)
+            return min(10, default_k + 2)
 
         return default_k
 
@@ -1262,14 +1264,10 @@ class MemoryManager:
             except Exception:
                 intent = "factual"
 
-        # 按意图调整 k
-        if intent == "chat":
-            k = min(k, 2)
-        elif intent == "factual":
-            k = min(k, 3)
-        elif intent == "multi-hop":
+        # 按意图调整 k（宽松策略：不主动缩小k，避免丢失结果）
+        if intent == "multi-hop":
             k = max(k, 8)
-        # temporal 保持原 k
+        # chat/factual/temporal 保持原 k
 
         # 时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索
         # 这让小妲能回答"昨天发生了什么"这类纯时间查询
@@ -1435,16 +1433,13 @@ class MemoryManager:
     async def _try_temporal_search(self, query: str, k: int,
                                     scope: Any | None = None,
                                     include_raw: bool = False) -> list[dict] | None:
-        """时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索。
+        """时间型查询：直接查 conversation_logs 原始对话。
 
-        mem0 SPEC 优化：加入 scope 过滤 + is_raw 过滤。
+        根本修复：时间查询最需要的是完整的原始对话记录，不是经过 FTS/reranker/CRAG
+        多层管线过滤后的蒸馏摘要。conversation_logs 是最可靠、最完整的数据源。
 
-        无时间词返回 None（调用方继续走常规检索）；命中则返回结果列表。
-        Q1-2: 时间+内容混合查询应用 reranker 精排，避免返回时间范围内不相关的记忆。
-
-        Args:
-            scope: Scope 对象。None 时使用默认 Scope()。
-            include_raw: False=只查 is_raw=0，True=查所有
+        查找顺序：conversation_logs → episodic_memories（兜底）
+        无时间词返回 None（调用方继续走常规语义检索）。
         """
         if scope is None:
             from memory.scope import Scope
@@ -1454,42 +1449,32 @@ class MemoryManager:
         if not _time_range:
             return None
         start_ts, end_ts = _time_range
-        is_raw_filter = None if include_raw else 0
         try:
-            # 优先尝试 FTS + 时间过滤（多检索一些，给 reranker 精排空间）
-            _fts_results = await self.memory.search_memories_fts_with_time(
-                query, start_ts, end_ts, limit=k * 2
-            )
-            if _fts_results:
-                # scope + is_raw 后过滤（FTS+time 方法无 scope 参数）
-                if is_raw_filter is not None:
-                    _fts_results = [r for r in _fts_results if r.get("is_raw") == is_raw_filter]
-                _fts_results = [r for r in _fts_results
-                                if r.get("user_id") == scope.user_id
-                                and r.get("agent_id") == scope.agent_id]
-                if _fts_results:
-                    _fts_results = await self._apply_reranker_to_results(query, _fts_results, k)
-                    logger.debug("memory.temporal_fts_hit",
-                                 query=query[:50], count=len(_fts_results))
-                    return _fts_results
-            # FTS 无结果，退回纯时间检索（scope 过滤）
+            # 第一优先：直接查 conversation_logs 原始对话（最可靠）
+            # 时间查询用户要的是"发生了什么"，原始对话比蒸馏摘要更准确
+            _conv_results = await self._search_conversation_logs(
+                start_ts, end_ts, scope, k * 4)
+            if _conv_results:
+                logger.debug("memory.temporal_convlogs_hit",
+                             query=query[:50], count=len(_conv_results))
+                return _conv_results
+
+            # 兜底：conversation_logs 无结果时查 episodic_memories
+            # （可能对话还没来得及记录，但蒸馏记忆已生成）
+            is_raw_filter = None if include_raw else 0
             _time_results = await self.memory.search_memories_by_time_scoped(
                 start_ts, end_ts, scope=scope, limit=k * 2, is_raw=is_raw_filter
             )
             if _time_results:
-                _time_results = await self._apply_reranker_to_results(query, _time_results, k)
-                logger.debug("memory.temporal_time_hit",
+                logger.debug("memory.temporal_episodic_hit",
                              query=query[:50], count=len(_time_results))
                 return _time_results
-            # 两级 fallback：蒸馏知识无结果时，回退查所有（含蒸馏失败的原始记忆）
-            # 避免蒸馏失败(is_raw=1)的记忆永远无法被时间检索找到
+            # 两级 fallback：含 is_raw=1 的原始记录
             if is_raw_filter is not None:
                 _fallback_results = await self.memory.search_memories_by_time_scoped(
                     start_ts, end_ts, scope=scope, limit=k * 2, is_raw=None
                 )
                 if _fallback_results:
-                    _fallback_results = await self._apply_reranker_to_results(
-                        query, _fallback_results, k)
                     logger.debug("memory.temporal_fallback_raw_hit",
                                  query=query[:50], count=len(_fallback_results))
                     return _fallback_results
@@ -1497,6 +1482,46 @@ class MemoryManager:
         except Exception as e:
             logger.warning("memory.temporal_search_failed", error=str(e))
             return None
+
+    async def _search_conversation_logs(self, start_ts: float, end_ts: float,
+                                         scope: Any | None, k: int) -> list[dict]:
+        """查 conversation_logs 原始对话，格式化为记忆格式返回。
+
+        不做 user_id 过滤（conversation_logs 的 user_id 是 QQ/微信等外部 ID，
+        与 scope.user_id='default' 不匹配），直接按时间范围查全部对话。
+        """
+        import time as _time
+        try:
+            # 不传 user_id，查时间范围内的所有对话
+            raw = await self.memory.get_conversations_by_time_range(
+                start_ts, end_ts, user_id="", limit=k
+            )
+            if not raw:
+                return []
+            results = []
+            for row in raw:
+                ts = row.get("timestamp", 0)
+                user_msg = (row.get("user_message") or "")
+                asst_msg = (row.get("assistant_reply") or "")
+                if not user_msg and not asst_msg:
+                    continue
+                time_str = _time.strftime("%H:%M", _time.localtime(float(ts))) if ts else "??:??"
+                summary = f"[{time_str}] 用户: {user_msg}"
+                if asst_msg:
+                    summary += f"\n  助手: {asst_msg}"
+                results.append({
+                    "summary": summary,
+                    "timestamp": ts,
+                    "importance": 0.5,
+                    "type": "conversation_log",
+                    "is_raw": 1,
+                    "user_id": scope.user_id if scope else "",
+                    "agent_id": scope.agent_id if scope else "",
+                })
+            return results[:k]
+        except Exception as e:
+            logger.warning("memory.convlogs_search_failed", error=str(e))
+            return []
 
     async def _apply_reranker_to_results(self, query: str, results: list[dict],
                                           k: int) -> list[dict]:
@@ -2610,7 +2635,8 @@ class MemoryManager:
             if role == "user" and content:
                 parts.append(f"用户说: {content[:400]}")
             elif role == "assistant" and content:
-                parts.append(content[:400])
+                # 标记为回复内容，避免被误认为事实性记忆
+                parts.append(f"小妲回复: {content[:400]}")
 
         total_budget = 1500
         joined = "；".join(parts)

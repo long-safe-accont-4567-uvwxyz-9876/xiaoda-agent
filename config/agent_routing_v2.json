@@ -1,38 +1,39 @@
 {
   "single_domain": {
-    "frontend": {"target": "xiaoke", "mode": "single"},
-    "backend": {"target": "xiaoke", "mode": "single"},
-    "debug": {"target": "xiaoke", "mode": "single"},
+    "frontend": {"target": "xiaolang", "mode": "single"},
+    "backend": {"target": "xiaolang", "mode": "single"},
+    "debug": {"target": "xiaolang", "mode": "single"},
     "security": {"target": "xiaolang", "mode": "single"},
-    "test": {"target": "xiaoke", "mode": "single"},
+    "test": {"target": "xiaolang", "mode": "single"},
     "info_search": {"target": "xiaolian", "mode": "single"},
     "hardware": {"target": "xiaolang", "mode": "single"},
     "emotional": {"target": "xiaoli", "mode": "single"},
+    "memory": {"target": "xiaoda", "mode": "single"},
     "general": {"target": "xiaoli", "mode": "single"}
   },
   "multi_domain": {
     "frontend+security": {
-      "targets": ["xiaoke", "xiaolang"],
-      "mode": "parallel_fanout",
-      "synthesizer": "xiaoda"
+      "targets": ["xiaolang"],
+      "mode": "single",
+      "synthesizer": ""
     },
     "backend+security": {
-      "targets": ["xiaoke", "xiaolang"],
-      "mode": "parallel_fanout",
-      "synthesizer": "xiaoda"
+      "targets": ["xiaolang"],
+      "mode": "single",
+      "synthesizer": ""
     },
     "debug+security": {
-      "targets": ["xiaoke", "xiaolang"],
-      "mode": "parallel_fanout",
-      "synthesizer": "xiaoda"
+      "targets": ["xiaolang"],
+      "mode": "single",
+      "synthesizer": ""
     },
     "info_search+frontend": {
-      "targets": ["xiaolian", "xiaoke"],
+      "targets": ["xiaolian", "xiaolang"],
       "mode": "pipe",
       "synthesizer": ""
     },
     "info_search+backend": {
-      "targets": ["xiaolian", "xiaoke"],
+      "targets": ["xiaolian", "xiaolang"],
       "mode": "pipe",
       "synthesizer": ""
     },
@@ -55,9 +56,9 @@
   "operation_patterns": {
     "code_review": {
       "mode": "generate_verify",
-      "generator": "xiaoke",
-      "verifier": "xiaolang",
-      "description": "小可生成代码，小浪审查安全"
+      "generator": "xiaolang",
+      "verifier": "xiaoke",
+      "description": "小浪生成代码，小可审查逻辑"
     },
     "deep_analysis": {
       "mode": "pipe",
@@ -68,7 +69,7 @@
       "mode": "generate_verify",
       "generator": "xiaolang",
       "verifier": "xiaoke",
-      "description": "小浪执行安全审计，小可验证代码影响"
+      "description": "小浪执行安全审计，小可验证逻辑"
     }
   }
 }

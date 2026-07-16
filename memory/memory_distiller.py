@@ -119,7 +119,7 @@ class MemoryDistiller:
             else:
                 time_str = ""
             prefix = f"[{i}]{time_str} " if time_str else f"[{i}] "
-            lines.append(f"{prefix}{summary[:500]}")
+            lines.append(f"{prefix}{summary[:800]}")
 
         if not lines:
             return ""
@@ -190,7 +190,7 @@ class MemoryDistiller:
                 except (TypeError, ValueError, OSError):
                     time_str = ""
             prefix = f"[{i}]{time_str} " if time_str else f"[{i}] "
-            lines.append(f"{prefix}{summary[:500]}")
+            lines.append(f"{prefix}{summary[:800]}")
 
         if not lines:
             return ""

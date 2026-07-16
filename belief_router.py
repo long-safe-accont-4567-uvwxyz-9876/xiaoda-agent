@@ -75,7 +75,7 @@ class AgentBelief:
 class BeliefRouter:
     """Thompson Sampling router that selects agents based on historical performance."""
 
-    VALID_AGENTS: ClassVar[list[str]] = ["xiaolian", "xiaolang", "xiaoke", "xiaoda"]
+    VALID_AGENTS: ClassVar[list[str]] = ["xiaoli", "xiaolian", "xiaolang", "xiaoke", "xiaoda"]
 
     def __init__(self, db_path: str = "") -> None:
         self._beliefs: dict[str, AgentBelief] = {name: AgentBelief() for name in self.VALID_AGENTS}

@@ -1149,6 +1149,7 @@ class AgentDispatcher:
             (["安全", "security", "漏洞", "加密", "权限", "认证"], "security"),
             (["测试", "test", "pytest", "单测", "覆盖率"], "test"),
             (["搜索", "查询", "查找", "search", "browse", "网页"], "info_search"),
+            (["回忆", "记得", "记忆", "recall", "remember", "记得吗", "上次", "昨天", "前几天", "上周", "上周"], "memory"),
             (["硬件", "gpio", "i2c", "传感器", "摄像头", "hardware"], "hardware"),
             (["难过", "开心", "生气", "焦虑", "陪伴", "聊天", "求安慰"], "emotional"),
         ]
@@ -1174,6 +1175,7 @@ class AgentDispatcher:
             (["安全", "security", "漏洞", "加密", "权限", "认证"], "security"),
             (["测试", "test", "pytest", "单测", "覆盖率"], "test"),
             (["搜索", "查询", "查找", "search", "browse", "网页"], "info_search"),
+            (["回忆", "记得", "记忆", "recall", "remember", "记得吗", "上次", "昨天", "前几天", "上周"], "memory"),
             (["硬件", "gpio", "i2c", "传感器", "摄像头", "hardware"], "hardware"),
             (["难过", "开心", "生气", "焦虑", "陪伴", "聊天", "求安慰"], "emotional"),
         ]

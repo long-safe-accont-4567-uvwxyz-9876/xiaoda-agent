@@ -97,7 +97,7 @@ DEFAULT_FEATURE_MAP: dict[str, DegradationLevel] = {
     "tts": DegradationLevel.L0_NORMAL,
     "emotion": DegradationLevel.L0_NORMAL,           # 表情包
     "web_browse": DegradationLevel.L1_DEGRADED,
-    "memory_search": DegradationLevel.L1_DEGRADED,
+    "memory_search": DegradationLevel.L2_MINIMAL,
     "text_chat": DegradationLevel.L2_MINIMAL,
     "basic_response": DegradationLevel.L3_EMERGENCY,
 }

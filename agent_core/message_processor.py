@@ -100,6 +100,11 @@ class MessageProcessorMixin:
             else:
                 reply = self._clean_reply(first_result.choices[0].message.content or "")
 
+            # 空回复保护：如果首轮就返回空内容，抛异常让上层 fallback 机制接管
+            if not reply or not reply.strip():
+                trace.warning("verification.empty_first_reply")
+                raise RuntimeError("empty_reply: LLM 返回空内容，触发 fallback")
+
             # 完整性检测：回复过短且不以句末标点结尾 → 不完整，追加"请继续"重试一次
             # 根因：agnes-2.0-flash 对复杂问题可能返回不完整回复（如"嗯……让我查一下记忆里 7 月16号 7:00-8:"，26字以冒号结尾）
             # verification loop 直接采纳不完整回复，用户收到半句话
@@ -341,12 +346,30 @@ class MessageProcessorMixin:
                                reply_preview=reply[:80])
                 return None  # 走主路径
 
-        # 截断告警：30-50 字且未以句末标点结尾时，记录但继续
+        # 截断检测与重试：回复过短且不以句末标点结尾 → 追加"请继续"重试一次
+        # 根因：agnes-2.0-flash 对复杂问题可能返回截断回复
         if reply and len(reply) < 50:
             _end = reply[-5:] if len(reply) >= 5 else reply
             if not any(reply.endswith(c) for c in "。！？～…）」】\n"):
                 logger.warning("chat.fast_path_truncated",
                                reply_len=len(reply), reply_tail=_end)
+                # 重试一次：追加"请继续完成回复"提示
+                try:
+                    retry_messages = messages.copy()
+                    retry_messages.append({"role": "assistant", "content": reply})
+                    retry_messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
+                    retry_result = await asyncio.wait_for(self.router.route(
+                        task_type, retry_messages, temperature=temperature, max_tokens=max_tokens,
+                        user_openid=user_openid, session_id=session_id,
+                    ), timeout=30)
+                    retry_reply = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
+                    retry_reply = self._clean_reply(retry_reply)
+                    if retry_reply and len(retry_reply) > 5:
+                        reply = reply + retry_reply
+                        logger.info("chat.fast_path_truncated_retry_success",
+                                    final_len=len(reply))
+                except Exception as e:
+                    logger.warning("chat.fast_path_truncated_retry_failed", error=str(e))
 
         # 后处理
         result = await self._finalize_fast_path_reply(
@@ -433,8 +456,8 @@ class MessageProcessorMixin:
                     dsml_calls = parse_dsml_tool_calls(result, self.tool_repair._allowed_tools)
                     if dsml_calls:
                         # 执行工具调用
-                        tool_results = await self._execute_fast_path_tools(dsml_calls)
-                        if tool_results:
+                        tool_results, all_failed = await self._execute_fast_path_tools(dsml_calls)
+                        if tool_results and not all_failed:
                             # 将工具结果追加到消息列表，再次调用 LLM
                             messages.append({"role": "assistant", "content": result})
                             messages.append({"role": "user", "content": f"工具执行结果：\n{tool_results}\n\n请根据工具结果回复用户。"})
@@ -448,6 +471,10 @@ class MessageProcessorMixin:
                                 reply = self._clean_reply(result2)
                             else:
                                 reply = self._clean_reply(result2.choices[0].message.content or "")
+                        elif all_failed:
+                            # 工具全部失败，返回错误提示
+                            reply = "抱歉，工具调用失败了，请稍后再试。"
+                            logger.warning("fast_path.all_tools_failed", tool_results=tool_results)
                         else:
                             reply = self._clean_reply(result)
                     else:
@@ -465,8 +492,8 @@ class MessageProcessorMixin:
                         for tc in msg.tool_calls
                     ]
                     # 执行工具调用
-                    tool_results = await self._execute_fast_path_tools(tool_calls)
-                    if tool_results:
+                    tool_results, all_failed = await self._execute_fast_path_tools(tool_calls)
+                    if tool_results and not all_failed:
                         # 将工具结果追加到消息列表，再次调用 LLM
                         messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": msg.tool_calls})
                         messages.append({"role": "user", "content": f"工具执行结果：\n{tool_results}\n\n请根据工具结果回复用户。"})
@@ -480,6 +507,10 @@ class MessageProcessorMixin:
                             reply = self._clean_reply(result2)
                         else:
                             reply = self._clean_reply(result2.choices[0].message.content or "")
+                    elif all_failed:
+                        # 工具全部失败，返回错误提示
+                        reply = "抱歉，工具调用失败了，请稍后再试。"
+                        logger.warning("fast_path.all_tools_failed", tool_results=tool_results)
                     else:
                         reply = self._clean_reply(msg.content or "")
                 else:
@@ -489,12 +520,17 @@ class MessageProcessorMixin:
             reply = DEGRADED_REPLY
         return reply
 
-    async def _execute_fast_path_tools(self, tool_calls: list[dict]) -> str:
-        """执行 fast path 中的工具调用，返回执行结果摘要。"""
+    async def _execute_fast_path_tools(self, tool_calls: list[dict]) -> tuple[str, bool]:
+        """执行 fast path 中的工具调用。
+
+        Returns:
+            (result_str, all_failed): 结果摘要字符串 + 是否全部失败
+        """
         if not tool_calls or not self._tool_call_handler:
-            return ""
+            return "", False
 
         results = []
+        failed_count = 0
         for tc in tool_calls:
             try:
                 func_name = tc.get("function", {}).get("name", "")
@@ -522,10 +558,12 @@ class MessageProcessorMixin:
 
                 results.append(f"{func_name}: {result_str[:500]}")
             except Exception as e:
-                logger.warning("fast_path.tool_execute_failed", tool=tc.get("function", {}).get("name"), error=str(e))
+                logger.warning(f"fast_path.tool_execute_failed tool={tc.get('function', {}).get('name')} error={str(e)}")
                 results.append(f"{tc.get('function', {}).get('name', 'unknown')}: 执行失败 - {str(e)}")
+                failed_count += 1
 
-        return "\n".join(results) if results else ""
+        all_failed = failed_count == len(tool_calls)
+        return "\n".join(results) if results else "", all_failed
 
     async def _finalize_fast_path_reply(self, reply: str, user_input: Any, is_master: Any,
                                           user_id: Any, source: Any, emotion: Any,
@@ -617,7 +655,7 @@ class MessageProcessorMixin:
 
         if is_master and not _is_greeting and self.memory and getattr(self.memory, 'memory', None):
             try:
-                _fts_mems = await self.memory.memory.search_memories_fts(user_input, limit=3)
+                _fts_mems = await self.memory.memory.search_memories_fts(user_input, limit=10)
                 if _fts_mems:
                     _mem_lines = []
                     for m in _fts_mems:
@@ -630,11 +668,11 @@ class MessageProcessorMixin:
                         if _ts:
                             try:
                                 _d = time.strftime("%m-%d %H:%M", time.localtime(float(_ts)))
-                                _mem_lines.append(f"[{_d}] {_s[:120]}")
+                                _mem_lines.append(f"[{_d}] {_s[:300]}")
                             except (ValueError, TypeError, OSError):
-                                _mem_lines.append(_s[:120])
+                                _mem_lines.append(_s[:300])
                         else:
-                            _mem_lines.append(_s[:120])
+                            _mem_lines.append(_s[:300])
                     if _mem_lines:
                         messages.append({
                             "role": "system",
@@ -653,7 +691,7 @@ class MessageProcessorMixin:
                     for m in _comfort:
                         _s = m.get("summary", "")
                         if _s:
-                            _c_lines.append(_s[:120])
+                            _c_lines.append(_s[:300])
                     if _c_lines:
                         _addr = self.context.current_address_term or "你"
                         messages.append({
@@ -962,7 +1000,7 @@ class MessageProcessorMixin:
             if self.memory and is_master:
                 self.memory.signal_new_message()
                 try:
-                    _k = self.memory._suggest_k(user_input, default_k=3)
+                    _k = self.memory._suggest_k(user_input, default_k=8)
                     results = await self.memory.retrieve_memories(user_input, k=_k)
                 except Exception as e:
                     logger.warning("memory.retrieve_failed", error=str(e))
@@ -1204,6 +1242,10 @@ class MessageProcessorMixin:
             )
             if tool_results:
                 ctx.handled_by_tool_call = True
+            # 最终防线：如果 verification loop 返回空回复，触发 fallback
+            if not reply or not reply.strip():
+                logger.warning("agent.empty_reply_guard", tool_count=len(tool_results))
+                raise RuntimeError("empty_reply_guard: verification loop 返回空回复")
             logger.info("agent.got_reply", length=len(reply), preview=reply[:80],
                         tool_count=len(tool_results))
             if circuit_state == CircuitState.HALF_OPEN:
@@ -1325,6 +1367,34 @@ class MessageProcessorMixin:
                 early_reply = self._clean_reply(current_result)
             else:
                 early_reply = self._clean_reply(current_result.choices[0].message.content or "")
+            # 关键修复：空回复不应被视为验收通过
+            # 根因：LLM 在工具调用后可能返回空 content（finish_reason=stop + content=""），
+            # clean_reply 后为空字符串。"" is not None 导致 verification loop 直接返回空回复给用户。
+            if not early_reply or not early_reply.strip():
+                trace.warning("verification.empty_reply_after_tools", turn=turn_idx)
+                return None, "", None, None  # signal failure → 走 _finalize_verification_reply
+            # 完整性检测：如果回复过短且只是开场白，追加提示让模型继续
+            # 根因：模型在 verification loop 中可能只返回"让我查一下"等开场白就结束
+            if len(early_reply) < 80 and any(kw in early_reply for kw in ["让我", "查一下", "看看", "查查", "找找"]):
+                trace.warning("verification.incomplete_reply_after_tools",
+                              reply_len=len(early_reply), reply_preview=early_reply[:50])
+                try:
+                    messages.append({"role": "assistant", "content": early_reply})
+                    messages.append({"role": "user", "content": "请继续给出具体内容，不要只说开场白。"})
+                    retry_result = await asyncio.wait_for(
+                        self.router.route(
+                            task_type, messages, temperature=temperature, max_tokens=max_tokens,
+                            user_openid=user_openid, session_id=session_id,
+                        ),
+                        timeout=self.LLM_CALL_TIMEOUT,
+                    )
+                    retry_reply = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
+                    retry_reply = self._clean_reply(retry_reply)
+                    if retry_reply and len(retry_reply) > 10:
+                        early_reply = early_reply + retry_reply
+                        trace.info("verification.incomplete_retry_success_after_tools", final_len=len(early_reply))
+                except Exception as e:
+                    trace.warning("verification.incomplete_retry_failed_after_tools", error=str(e))
             return None, "", None, early_reply
 
         return current_tool_calls, current_assistant_content, current_reasoning, None
@@ -1338,6 +1408,10 @@ class MessageProcessorMixin:
                 user_input, all_tool_results, last_tool_calls,
                 trace, user_openid=user_openid, session_id=session_id,
             )
+            # 关键修复：_summarize_results 可能返回空（LLM 再次返回空内容），兜底 DEGRADED_REPLY
+            if not final_reply or not final_reply.strip():
+                trace.warning("verification.summarize_empty_fallback")
+                final_reply = DEGRADED_REPLY
         elif current_assistant_content.strip():
             final_reply = self._clean_reply(current_assistant_content)
         else:

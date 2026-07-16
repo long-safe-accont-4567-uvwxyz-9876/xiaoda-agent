@@ -761,6 +761,7 @@ AGENT_ROUTE_KEYWORDS = {
         "技能", "能力", "功能", "你会什么", "你能做什么", "你有什么", "列出技能", "列出功能",
         "画", "生成图", "生成图片", "画一张", "画个", "画一个", "图片生成", "做视频", "生成视频",
         "表情包", "贴纸",
+        "回忆", "记得", "记忆", "recall", "remember", "记得吗", "上次", "昨天", "前几天", "上周",
     ],
     "parallel_trigger": [
         "全面", "整体", "综合", "各个方面", "多方面", "同时",
@@ -772,10 +773,10 @@ AGENT_ROUTE_KEYWORDS = {
 
 # ── 子代理任务类型映射（EnhancedBeliefRouter 使用） ──
 AGENT_TASK_MAP = {
-    "xiaolang": "security",
-    "xiaoke": "debug",
+    "xiaolang": "debug",
+    "xiaoke": "research",
     "xiaolian": "info_search",
-    "xiaoda": "general",
+    "xiaoda": "memory",
 }
 
 # ── RAG 优化配置（SiliconFlow 免费常驻） ──

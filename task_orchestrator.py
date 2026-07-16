@@ -352,7 +352,22 @@ class RouterNode:
         # 在并行检测之前计算建议目标；仅在用户未明确指定子代理时使用
         suggested_target = None
         dispatcher = getattr(state, "_dispatcher", None)
-        if dispatcher is not None:
+
+        # 记忆检索意图检测：时间查询 → xiaoda（主Agent有完整工具集）
+        import re
+        memory_patterns = [
+            r'\d{1,2}\s*[月\.]\s*\d{1,2}\s*[号日]',  # "7月16日" "7.16日"
+            r'(?:昨天|前天|上周|上周[一二三四五六七]|前几天)',
+            r'(?:回忆|记得|记忆|recall|remember)',
+            r'\d{1,2}\s*[点时]\s*(?:到|~|-|—)?\s*\d{1,2}\s*[点时]?',  # "7点到8点"
+        ]
+        for pattern in memory_patterns:
+            if re.search(pattern, user_input):
+                suggested_target = "xiaoda"
+                logger.info("route.memory_recall_detected", pattern=pattern)
+                break
+
+        if not suggested_target and dispatcher is not None:
             try:
                 task_type = dispatcher.classify_task(user_input)
                 suggested_target = dispatcher.route_task(task_type, user_input)

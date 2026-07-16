@@ -226,6 +226,23 @@ class MemoryDB:
         rows = await cursor.fetchall()
         return [dict(r) for r in reversed(rows)]
 
+    async def get_conversations_by_time_range(self, start_ts: float, end_ts: float,
+                                               user_id: str = "", limit: int = 50) -> list[dict]:
+        """按时间范围查询 conversation_logs 原始对话。用于时间型回忆查询。"""
+        params: list = [start_ts, end_ts]
+        where = "WHERE timestamp >= ? AND timestamp <= ?"
+        if user_id:
+            where += " AND user_id = ?"
+            params.append(user_id)
+        params.append(limit)
+        cursor = await self._conn.execute(
+            f"""SELECT timestamp, user_message, assistant_reply FROM conversation_logs
+                {where} ORDER BY timestamp ASC LIMIT ?""",
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
     async def search_memories_by_importance(self, min_importance: float = 0.3, limit: int = 10) -> Any:
         cursor = await self._conn.execute(
             """SELECT * FROM episodic_memories
@@ -257,7 +274,7 @@ class MemoryDB:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
-    async def search_memories_fts(self, query: str, limit: int = 10) -> list[dict]:
+    async def search_memories_fts(self, query: str, limit: int = 20) -> list[dict]:
         """FTS5 BM25 全文检索"""
         from db.fts_utils import _build_fts_query
         fts_query = _build_fts_query(query)
@@ -287,7 +304,7 @@ class MemoryDB:
             return []
 
     async def search_memories_fts_scoped(self, query: str, scope: Any,
-                                          limit: int = 10,
+                                          limit: int = 20,
                                           is_raw: int | None = None) -> list[dict]:
         """FTS5 全文检索 + scope 过滤（mem0 SPEC 优化）。
 

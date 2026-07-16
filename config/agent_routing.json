@@ -1,11 +1,12 @@
 {
-  "frontend": "xiaoke",
-  "backend": "xiaoke",
-  "debug": "xiaoke",
+  "frontend": "xiaolang",
+  "backend": "xiaolang",
+  "debug": "xiaolang",
   "security": "xiaolang",
-  "test": "xiaoke",
+  "test": "xiaolang",
   "info_search": "xiaolian",
   "hardware": "xiaolang",
   "emotional": "xiaoli",
+  "memory": "xiaoda",
   "general": "xiaoli"
 }
