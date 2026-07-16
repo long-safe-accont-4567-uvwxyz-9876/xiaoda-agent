@@ -275,7 +275,7 @@ class AgentContext:
                         {"role": "user", "content": text},
                     ],
                     temperature=0.3,
-                    max_tokens=200,
+                    max_tokens=512,
                 ),
                 timeout=5.0,
             )

@@ -126,6 +126,12 @@ def _build_keyword_patterns() -> list[tuple[str, str]]:
         kw_pat = "|".join(re.escape(k) for k in keywords)
         patterns.append((rf"(?:让|叫|请|麻烦|找|切换到)\s*(?:{kw_pat})", name))
         if name == "xiaoda":
+            # xiaoda 的记忆/回忆等关键词单独匹配（无需前缀动词）
+            # "回忆xxx"/"记得xxx"/"记忆xxx" 直接路由到 xiaoda
+            _memory_kws = [k for k in keywords if k in ("记忆", "回忆", "记得", "recall", "remember")]
+            if _memory_kws:
+                _mem_pat = "|".join(re.escape(k) for k in _memory_kws)
+                patterns.append((rf"(?:{_mem_pat})", name))
             continue
         # "X帮/来/去..." 模式
         patterns.append((rf"(?:{kw_pat})(?:帮|来|去|看一下|看看|检查|巡检|执行|处理|搜|查|找|搜索|研究|分析|计算|炸|boom)", name))
@@ -208,7 +214,16 @@ class RouterEngine:
                 )
 
         # 5. 关键词意图
-        # 5a. 尝试 BeliefRouter（灰度）
+        # 5a. 硬编码关键词匹配（优先于 BeliefRouter，确保记忆等关键查询不被随机路由）
+        for pattern, target in self._keyword_patterns:
+            if re.search(pattern, q):
+                return RoutingDecision(
+                    agent_names=[target],
+                    mode="single",
+                    reasoning=f"keyword_pattern → {target}",
+                )
+
+        # 5b. 尝试 BeliefRouter（灰度，仅当关键词无匹配时使用）
         if self._use_belief:
             try:
                 belief_target = self._belief_router.select_agent()
@@ -220,15 +235,6 @@ class RouterEngine:
                     )
             except Exception as e:
                 logger.debug("router.belief_fallback", error=str(e))
-
-        # 5b. 硬编码关键词匹配
-        for pattern, target in self._keyword_patterns:
-            if re.search(pattern, q):
-                return RoutingDecision(
-                    agent_names=[target],
-                    mode="single",
-                    reasoning=f"keyword_pattern → {target}",
-                )
 
         # 6. 默认 → xiaoda
         return RoutingDecision(

@@ -66,7 +66,7 @@ class MemoryDistiller:
         self._free_model = model
 
     async def _call_free_model(self, messages: list, temperature: float = 0.6,
-                                max_tokens: int = 800) -> str | None:
+                                max_tokens: int = 1500) -> str | None:
         """调用硅基流动免费模型"""
         if not self._free_api_key:
             return None
@@ -130,7 +130,7 @@ class MemoryDistiller:
 
         # 优先使用免费模型，失败降级到 router
         result = await self._call_free_model(
-            messages, temperature=0.3, max_tokens=1500,
+            messages, temperature=0.3, max_tokens=2048,
         )
         if result is None and self.router:
             try:
@@ -138,7 +138,7 @@ class MemoryDistiller:
                     task_type="memory_encoding",
                     messages=messages,
                     temperature=0.3,
-                    max_tokens=1500,
+                    max_tokens=2048,
                 )
             except Exception as e:
                 logger.warning("memory_distiller.router_fallback_failed", error=str(e))
@@ -205,7 +205,7 @@ class MemoryDistiller:
 
         # 优先使用免费模型，失败降级到 router
         result = await self._call_free_model(
-            messages, temperature=0.4, max_tokens=1500,
+            messages, temperature=0.4, max_tokens=2048,
         )
         if result is None and self.router:
             try:
@@ -213,7 +213,7 @@ class MemoryDistiller:
                     task_type="memory_encoding",
                     messages=messages,
                     temperature=0.4,
-                    max_tokens=1500,
+                    max_tokens=2048,
                 )
             except Exception as e:
                 logger.warning("memory_distiller.recall_router_fallback_failed", error=str(e))
@@ -262,7 +262,7 @@ class MemoryDistiller:
 
         # 优先使用免费模型
         result = await self._call_free_model(
-            messages, temperature=0.3, max_tokens=1000,
+            messages, temperature=0.3, max_tokens=1500,
         )
         if result is None and self.router:
             try:
@@ -270,7 +270,7 @@ class MemoryDistiller:
                     task_type="memory_encoding",
                     messages=messages,
                     temperature=0.3,
-                    max_tokens=1000,
+                    max_tokens=1500,
                 )
             except Exception as e:
                 logger.warning("memory_distiller.merge_router_fallback_failed", error=str(e))

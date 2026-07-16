@@ -351,11 +351,9 @@ class DatabaseManager:
 
     async def _migrate_v1(self) -> None:
         """v1: knowledge_relations 新增时间字段（valid_from/valid_to/confidence）。"""
-        await self._conn.executescript("""
-            ALTER TABLE knowledge_relations ADD COLUMN valid_from REAL DEFAULT 0;
-            ALTER TABLE knowledge_relations ADD COLUMN valid_to REAL DEFAULT 0;
-            ALTER TABLE knowledge_relations ADD COLUMN confidence REAL DEFAULT 1.0;
-        """)
+        await self._conn.execute("""ALTER TABLE knowledge_relations ADD COLUMN valid_from REAL DEFAULT 0""")
+        await self._conn.execute("""ALTER TABLE knowledge_relations ADD COLUMN valid_to REAL DEFAULT 0""")
+        await self._conn.execute("""ALTER TABLE knowledge_relations ADD COLUMN confidence REAL DEFAULT 1.0""")
 
     async def _migrate_v2(self) -> None:
         """v2: conversation_logs 新增 session_id 列。"""
@@ -365,12 +363,7 @@ class DatabaseManager:
     async def _migrate_v3(self) -> None:
         """v3: 创建 FTS5 虚拟表 + 回填已有记忆到 FTS 索引 + 创建审计表。"""
         # 创建 FTS5 虚拟表
-        await self._conn.executescript("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5(
-                id UNINDEXED,
-                summary_index
-            );
-        """)
+        await self._conn.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5( id UNINDEXED, summary_index )""")
         # 回填已有记忆数据到 FTS 索引
         rows = await self._conn.execute_fetchall("SELECT id, summary FROM episodic_memories")
         for row in rows:
@@ -382,21 +375,7 @@ class DatabaseManager:
                     (row[0], tokenized),
                 )
         # 创建审计表
-        await self._conn.executescript("""
-            CREATE TABLE IF NOT EXISTS consolidation_candidates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp REAL NOT NULL,
-                source TEXT NOT NULL DEFAULT 'rule',
-                kind TEXT NOT NULL DEFAULT 'fact',
-                summary TEXT NOT NULL,
-                confidence REAL DEFAULT 0.5,
-                importance REAL DEFAULT 0.5,
-                status TEXT NOT NULL DEFAULT 'pending',
-                target_memory_id INTEGER DEFAULT -1,
-                metadata_json TEXT DEFAULT '{}',
-                created_at REAL NOT NULL
-            );
-        """)
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS consolidation_candidates ( id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL NOT NULL, source TEXT NOT NULL DEFAULT 'rule', kind TEXT NOT NULL DEFAULT 'fact', summary TEXT NOT NULL, confidence REAL DEFAULT 0.5, importance REAL DEFAULT 0.5, status TEXT NOT NULL DEFAULT 'pending', target_memory_id INTEGER DEFAULT -1, metadata_json TEXT DEFAULT '{}', created_at REAL NOT NULL )""")
         logger.info("database.migration_v3_backfill", rows=len(rows))
 
     async def _migrate_v4(self) -> None:
@@ -637,57 +616,24 @@ class DatabaseManager:
         )
 
         # 3. 新建 memory_entities 表
-        await self._conn.executescript("""
-            CREATE TABLE IF NOT EXISTS memory_entities (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                entity_type TEXT DEFAULT 'TOPIC',
-                kind TEXT DEFAULT '',
-                observations TEXT DEFAULT '[]',
-                memory_count INTEGER DEFAULT 0,
-                first_seen REAL NOT NULL,
-                last_seen REAL NOT NULL,
-                metadata_json TEXT DEFAULT '{}',
-                UNIQUE(name, entity_type)
-            );
-            CREATE INDEX IF NOT EXISTS idx_memory_entities_name ON memory_entities(name);
-            CREATE INDEX IF NOT EXISTS idx_memory_entities_type ON memory_entities(entity_type);
-        """)
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS memory_entities ( id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, entity_type TEXT DEFAULT 'TOPIC', kind TEXT DEFAULT '', observations TEXT DEFAULT '[]', memory_count INTEGER DEFAULT 0, first_seen REAL NOT NULL, last_seen REAL NOT NULL, metadata_json TEXT DEFAULT '{}', UNIQUE(name, entity_type) )""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_entities_name ON memory_entities(name)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_entities_type ON memory_entities(entity_type)""")
 
         # 4. 新建 memory_entities_fts 虚拟表 + 触发器
-        await self._conn.executescript("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS memory_entities_fts USING fts5(
-                id UNINDEXED, name_index
-            );
-            CREATE TRIGGER IF NOT EXISTS memory_entities_fts_ai AFTER INSERT ON memory_entities BEGIN
-                INSERT INTO memory_entities_fts(id, name_index) VALUES (new.id, new.name);
-            END;
-            CREATE TRIGGER IF NOT EXISTS memory_entities_fts_ad AFTER DELETE ON memory_entities BEGIN
-                INSERT INTO memory_entities_fts(memory_entities_fts, id, name_index)
-                VALUES ('delete', old.id, old.name);
-            END;
-            CREATE TRIGGER IF NOT EXISTS memory_entities_fts_au AFTER UPDATE ON memory_entities BEGIN
-                INSERT INTO memory_entities_fts(memory_entities_fts, id, name_index)
-                VALUES ('delete', old.id, old.name);
-                INSERT INTO memory_entities_fts(id, name_index) VALUES (new.id, new.name);
-            END;
-        """)
+        await self._conn.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS memory_entities_fts USING fts5( id UNINDEXED, name_index )""")
+        await self._conn.execute("""CREATE TRIGGER IF NOT EXISTS memory_entities_fts_ai AFTER INSERT ON memory_entities BEGIN INSERT INTO memory_entities_fts(id, name_index) VALUES (new.id, new.name)""")
+        await self._conn.execute("""END""")
+        await self._conn.execute("""CREATE TRIGGER IF NOT EXISTS memory_entities_fts_ad AFTER DELETE ON memory_entities BEGIN INSERT INTO memory_entities_fts(memory_entities_fts, id, name_index) VALUES ('delete', old.id, old.name)""")
+        await self._conn.execute("""END""")
+        await self._conn.execute("""CREATE TRIGGER IF NOT EXISTS memory_entities_fts_au AFTER UPDATE ON memory_entities BEGIN INSERT INTO memory_entities_fts(memory_entities_fts, id, name_index) VALUES ('delete', old.id, old.name)""")
+        await self._conn.execute("""INSERT INTO memory_entities_fts(id, name_index) VALUES (new.id, new.name)""")
+        await self._conn.execute("""END""")
 
         # 5. 新建 entity_memory_links 表
-        await self._conn.executescript("""
-            CREATE TABLE IF NOT EXISTS entity_memory_links (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                entity_id INTEGER NOT NULL,
-                memory_id INTEGER NOT NULL,
-                confidence REAL DEFAULT 1.0,
-                created_at REAL NOT NULL,
-                FOREIGN KEY (entity_id) REFERENCES memory_entities(id) ON DELETE CASCADE,
-                FOREIGN KEY (memory_id) REFERENCES episodic_memories(id) ON DELETE CASCADE,
-                UNIQUE(entity_id, memory_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_eml_entity ON entity_memory_links(entity_id);
-            CREATE INDEX IF NOT EXISTS idx_eml_memory ON entity_memory_links(memory_id);
-        """)
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS entity_memory_links ( id INTEGER PRIMARY KEY AUTOINCREMENT, entity_id INTEGER NOT NULL, memory_id INTEGER NOT NULL, confidence REAL DEFAULT 1.0, created_at REAL NOT NULL, FOREIGN KEY (entity_id) REFERENCES memory_entities(id) ON DELETE CASCADE, FOREIGN KEY (memory_id) REFERENCES episodic_memories(id) ON DELETE CASCADE, UNIQUE(entity_id, memory_id) )""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_eml_entity ON entity_memory_links(entity_id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_eml_memory ON entity_memory_links(memory_id)""")
 
         # 6. scope 复合索引
         await self._conn.execute(
@@ -698,98 +644,19 @@ class DatabaseManager:
         logger.info("database.migration_v13_mem0_spec_done")
 
         # ── Part 2: bitemporal facts/preferences/provenance/edges ──
-        await self._conn.executescript("""
-            CREATE TABLE IF NOT EXISTS memory_facts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                subject TEXT NOT NULL,
-                predicate TEXT NOT NULL,
-                object TEXT NOT NULL,
-                object_type TEXT NOT NULL DEFAULT 'text',
-                valid_from REAL,
-                valid_to REAL,
-                learned_at REAL NOT NULL,
-                expired_at REAL,
-                status TEXT NOT NULL DEFAULT 'active'
-                    CHECK(status IN ('active', 'superseded', 'rejected', 'uncertain', 'pending_review')),
-                confidence REAL NOT NULL DEFAULT 1.0 CHECK(confidence >= 0 AND confidence <= 1),
-                fact_hash TEXT NOT NULL UNIQUE,
-                superseded_by INTEGER,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL,
-                FOREIGN KEY (superseded_by) REFERENCES memory_facts(id)
-            );
-            CREATE TABLE IF NOT EXISTS memory_fact_sources (
-                fact_id INTEGER NOT NULL,
-                memory_id INTEGER NOT NULL,
-                evidence_text TEXT NOT NULL DEFAULT '',
-                created_at REAL NOT NULL,
-                PRIMARY KEY (fact_id, memory_id),
-                FOREIGN KEY (fact_id) REFERENCES memory_facts(id) ON DELETE CASCADE,
-                FOREIGN KEY (memory_id) REFERENCES episodic_memories(id)
-            );
-            CREATE TABLE IF NOT EXISTS memory_preferences (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                preference_key TEXT NOT NULL,
-                preference_value TEXT NOT NULL,
-                preference_type TEXT NOT NULL DEFAULT 'general',
-                polarity REAL NOT NULL DEFAULT 1.0,
-                scope TEXT NOT NULL DEFAULT 'global',
-                valid_from REAL,
-                valid_to REAL,
-                learned_at REAL NOT NULL,
-                expired_at REAL,
-                status TEXT NOT NULL DEFAULT 'active'
-                    CHECK(status IN ('active', 'superseded', 'rejected', 'uncertain', 'pending_review')),
-                confidence REAL NOT NULL DEFAULT 1.0 CHECK(confidence >= 0 AND confidence <= 1),
-                observed_count INTEGER NOT NULL DEFAULT 1 CHECK(observed_count >= 0),
-                explicitness TEXT NOT NULL DEFAULT 'explicit'
-                    CHECK(explicitness IN ('explicit', 'inferred')),
-                superseded_by INTEGER,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL,
-                FOREIGN KEY (superseded_by) REFERENCES memory_preferences(id)
-            );
-            CREATE TABLE IF NOT EXISTS memory_preference_sources (
-                preference_id INTEGER NOT NULL,
-                memory_id INTEGER NOT NULL,
-                evidence_text TEXT NOT NULL DEFAULT '',
-                created_at REAL NOT NULL,
-                PRIMARY KEY (preference_id, memory_id),
-                FOREIGN KEY (preference_id) REFERENCES memory_preferences(id) ON DELETE CASCADE,
-                FOREIGN KEY (memory_id) REFERENCES episodic_memories(id)
-            );
-            CREATE TABLE IF NOT EXISTS memory_edges (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_memory_id INTEGER NOT NULL,
-                target_memory_id INTEGER NOT NULL,
-                edge_type TEXT NOT NULL
-                    CHECK(edge_type IN ('supersedes', 'supports', 'similar', 'bridge')),
-                weight REAL NOT NULL DEFAULT 1.0,
-                confidence REAL NOT NULL DEFAULT 1.0 CHECK(confidence >= 0 AND confidence <= 1),
-                evidence_json TEXT NOT NULL DEFAULT '{}',
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL,
-                UNIQUE(source_memory_id, target_memory_id, edge_type),
-                FOREIGN KEY (source_memory_id) REFERENCES episodic_memories(id),
-                FOREIGN KEY (target_memory_id) REFERENCES episodic_memories(id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_memory_facts_current
-                ON memory_facts(subject, predicate, status, valid_to, expired_at);
-            CREATE INDEX IF NOT EXISTS idx_memory_facts_as_of
-                ON memory_facts(valid_from, valid_to, learned_at, expired_at);
-            CREATE INDEX IF NOT EXISTS idx_memory_fact_sources_memory
-                ON memory_fact_sources(memory_id);
-            CREATE INDEX IF NOT EXISTS idx_memory_preferences_current
-                ON memory_preferences(preference_key, scope, status, valid_to, expired_at);
-            CREATE INDEX IF NOT EXISTS idx_memory_preferences_as_of
-                ON memory_preferences(valid_from, valid_to, learned_at, expired_at);
-            CREATE INDEX IF NOT EXISTS idx_memory_preference_sources_memory
-                ON memory_preference_sources(memory_id);
-            CREATE INDEX IF NOT EXISTS idx_memory_edges_source
-                ON memory_edges(source_memory_id, edge_type);
-            CREATE INDEX IF NOT EXISTS idx_memory_edges_target
-                ON memory_edges(target_memory_id, edge_type);
-        """)
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS memory_facts ( id INTEGER PRIMARY KEY AUTOINCREMENT, subject TEXT NOT NULL, predicate TEXT NOT NULL, object TEXT NOT NULL, object_type TEXT NOT NULL DEFAULT 'text', valid_from REAL, valid_to REAL, learned_at REAL NOT NULL, expired_at REAL, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'superseded', 'rejected', 'uncertain', 'pending_review')), confidence REAL NOT NULL DEFAULT 1.0 CHECK(confidence >= 0 AND confidence <= 1), fact_hash TEXT NOT NULL UNIQUE, superseded_by INTEGER, created_at REAL NOT NULL, updated_at REAL NOT NULL, FOREIGN KEY (superseded_by) REFERENCES memory_facts(id) )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS memory_fact_sources ( fact_id INTEGER NOT NULL, memory_id INTEGER NOT NULL, evidence_text TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, PRIMARY KEY (fact_id, memory_id), FOREIGN KEY (fact_id) REFERENCES memory_facts(id) ON DELETE CASCADE, FOREIGN KEY (memory_id) REFERENCES episodic_memories(id) )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS memory_preferences ( id INTEGER PRIMARY KEY AUTOINCREMENT, preference_key TEXT NOT NULL, preference_value TEXT NOT NULL, preference_type TEXT NOT NULL DEFAULT 'general', polarity REAL NOT NULL DEFAULT 1.0, scope TEXT NOT NULL DEFAULT 'global', valid_from REAL, valid_to REAL, learned_at REAL NOT NULL, expired_at REAL, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'superseded', 'rejected', 'uncertain', 'pending_review')), confidence REAL NOT NULL DEFAULT 1.0 CHECK(confidence >= 0 AND confidence <= 1), observed_count INTEGER NOT NULL DEFAULT 1 CHECK(observed_count >= 0), explicitness TEXT NOT NULL DEFAULT 'explicit' CHECK(explicitness IN ('explicit', 'inferred')), superseded_by INTEGER, created_at REAL NOT NULL, updated_at REAL NOT NULL, FOREIGN KEY (superseded_by) REFERENCES memory_preferences(id) )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS memory_preference_sources ( preference_id INTEGER NOT NULL, memory_id INTEGER NOT NULL, evidence_text TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, PRIMARY KEY (preference_id, memory_id), FOREIGN KEY (preference_id) REFERENCES memory_preferences(id) ON DELETE CASCADE, FOREIGN KEY (memory_id) REFERENCES episodic_memories(id) )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS memory_edges ( id INTEGER PRIMARY KEY AUTOINCREMENT, source_memory_id INTEGER NOT NULL, target_memory_id INTEGER NOT NULL, edge_type TEXT NOT NULL CHECK(edge_type IN ('supersedes', 'supports', 'similar', 'bridge')), weight REAL NOT NULL DEFAULT 1.0, confidence REAL NOT NULL DEFAULT 1.0 CHECK(confidence >= 0 AND confidence <= 1), evidence_json TEXT NOT NULL DEFAULT '{}', created_at REAL NOT NULL, updated_at REAL NOT NULL, UNIQUE(source_memory_id, target_memory_id, edge_type), FOREIGN KEY (source_memory_id) REFERENCES episodic_memories(id), FOREIGN KEY (target_memory_id) REFERENCES episodic_memories(id) )""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_facts_current ON memory_facts(subject, predicate, status, valid_to, expired_at)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_facts_as_of ON memory_facts(valid_from, valid_to, learned_at, expired_at)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_fact_sources_memory ON memory_fact_sources(memory_id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_preferences_current ON memory_preferences(preference_key, scope, status, valid_to, expired_at)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_preferences_as_of ON memory_preferences(valid_from, valid_to, learned_at, expired_at)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_preference_sources_memory ON memory_preference_sources(memory_id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_edges_source ON memory_edges(source_memory_id, edge_type)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_edges_target ON memory_edges(target_memory_id, edge_type)""")
 
     async def _migrate_v14(self) -> None:
         """v14: v0.6 认知架构 + 知识图谱 v2 — 5 张认知表 + episodic_memories 3 列 + 9 索引 + KG v2 表。
@@ -835,159 +702,46 @@ class DatabaseManager:
             )
 
         # 2. 新建 5 张认知表（CREATE TABLE IF NOT EXISTS，天然幂等）
-        await self._conn.executescript("""
-            CREATE TABLE IF NOT EXISTS semantic_memories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_memory_id INTEGER,
-                content TEXT NOT NULL,
-                embedding_id INTEGER DEFAULT -1,
-                cluster_id INTEGER DEFAULT -1,
-                salience REAL DEFAULT 0.5,
-                access_count INTEGER DEFAULT 0,
-                last_accessed REAL DEFAULT 0,
-                created_at REAL NOT NULL,
-                emotion_label TEXT DEFAULT '',
-                metadata_json TEXT DEFAULT '{}'
-            );
-            CREATE INDEX IF NOT EXISTS idx_semantic_cluster ON semantic_memories(cluster_id);
-            CREATE INDEX IF NOT EXISTS idx_semantic_salience ON semantic_memories(salience);
-
-            CREATE TABLE IF NOT EXISTS memory_connections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_id INTEGER NOT NULL,
-                target_id INTEGER NOT NULL,
-                weight REAL DEFAULT 0.5,
-                edge_type TEXT NOT NULL DEFAULT 'similar',
-                activation_count INTEGER DEFAULT 0,
-                created_at REAL NOT NULL,
-                last_activated REAL DEFAULT 0
-            );
-            CREATE INDEX IF NOT EXISTS idx_conn_source ON memory_connections(source_id);
-            CREATE INDEX IF NOT EXISTS idx_conn_target ON memory_connections(target_id);
-            CREATE INDEX IF NOT EXISTS idx_conn_type ON memory_connections(edge_type);
-
-            CREATE TABLE IF NOT EXISTS bridge_memories (
-                id TEXT PRIMARY KEY,
-                source_memory_id INTEGER NOT NULL,
-                target_memory_id INTEGER NOT NULL,
-                weight REAL NOT NULL,
-                bridge_type TEXT DEFAULT 'semantic',
-                source_session_id TEXT DEFAULT '',
-                target_session_id TEXT DEFAULT '',
-                cross_session INTEGER DEFAULT 0,
-                discovered_at REAL NOT NULL,
-                discovery_reason TEXT DEFAULT 'rem_bridge'
-            );
-            CREATE INDEX IF NOT EXISTS idx_bridge_source ON bridge_memories(source_memory_id);
-            CREATE INDEX IF NOT EXISTS idx_bridge_target ON bridge_memories(target_memory_id);
-
-            CREATE TABLE IF NOT EXISTS memory_revisions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                old_memory_id INTEGER NOT NULL,
-                new_memory_id INTEGER NOT NULL,
-                conflict_type TEXT DEFAULT 'numeric_token',
-                revision_chain TEXT DEFAULT '[]',
-                created_at REAL NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_revisions_old ON memory_revisions(old_memory_id);
-
-            CREATE TABLE IF NOT EXISTS preference_patterns (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                pattern_text TEXT NOT NULL,
-                confidence REAL DEFAULT 0.5,
-                source_sessions TEXT DEFAULT '[]',
-                salience REAL DEFAULT 2.0,
-                created_at REAL NOT NULL,
-                last_matched REAL DEFAULT 0,
-                match_count INTEGER DEFAULT 0
-            );
-            CREATE INDEX IF NOT EXISTS idx_preference_salience ON preference_patterns(salience);
-        """)
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS semantic_memories ( id INTEGER PRIMARY KEY AUTOINCREMENT, source_memory_id INTEGER, content TEXT NOT NULL, embedding_id INTEGER DEFAULT -1, cluster_id INTEGER DEFAULT -1, salience REAL DEFAULT 0.5, access_count INTEGER DEFAULT 0, last_accessed REAL DEFAULT 0, created_at REAL NOT NULL, emotion_label TEXT DEFAULT '', metadata_json TEXT DEFAULT '{}' )""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_semantic_cluster ON semantic_memories(cluster_id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_semantic_salience ON semantic_memories(salience)""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS memory_connections ( id INTEGER PRIMARY KEY AUTOINCREMENT, source_id INTEGER NOT NULL, target_id INTEGER NOT NULL, weight REAL DEFAULT 0.5, edge_type TEXT NOT NULL DEFAULT 'similar', activation_count INTEGER DEFAULT 0, created_at REAL NOT NULL, last_activated REAL DEFAULT 0 )""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_conn_source ON memory_connections(source_id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_conn_target ON memory_connections(target_id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_conn_type ON memory_connections(edge_type)""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS bridge_memories ( id TEXT PRIMARY KEY, source_memory_id INTEGER NOT NULL, target_memory_id INTEGER NOT NULL, weight REAL NOT NULL, bridge_type TEXT DEFAULT 'semantic', source_session_id TEXT DEFAULT '', target_session_id TEXT DEFAULT '', cross_session INTEGER DEFAULT 0, discovered_at REAL NOT NULL, discovery_reason TEXT DEFAULT 'rem_bridge' )""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_bridge_source ON bridge_memories(source_memory_id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_bridge_target ON bridge_memories(target_memory_id)""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS memory_revisions ( id INTEGER PRIMARY KEY AUTOINCREMENT, old_memory_id INTEGER NOT NULL, new_memory_id INTEGER NOT NULL, conflict_type TEXT DEFAULT 'numeric_token', revision_chain TEXT DEFAULT '[]', created_at REAL NOT NULL )""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_revisions_old ON memory_revisions(old_memory_id)""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS preference_patterns ( id INTEGER PRIMARY KEY AUTOINCREMENT, pattern_text TEXT NOT NULL, confidence REAL DEFAULT 0.5, source_sessions TEXT DEFAULT '[]', salience REAL DEFAULT 2.0, created_at REAL NOT NULL, last_matched REAL DEFAULT 0, match_count INTEGER DEFAULT 0 )""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_preference_salience ON preference_patterns(salience)""")
 
         logger.info("database.migration_v14_cognitive_tables_done")
 
         # ── Part 2: kg_v2 tables — 时序事实、实体演化、Episode溯源、社区发现 ──
         # 1. 创建 v2 表
-        await self._conn.executescript("""
-            CREATE TABLE IF NOT EXISTS kg_episodes (
-                id TEXT PRIMARY KEY,
-                content TEXT NOT NULL,
-                source_type TEXT DEFAULT 'summary',
-                source_description TEXT DEFAULT '',
-                valid_at REAL NOT NULL,
-                created_at REAL NOT NULL,
-                group_id TEXT DEFAULT 'default'
-            );
-            CREATE INDEX IF NOT EXISTS idx_kg_episode_valid_at ON kg_episodes(valid_at);
-
-            CREATE TABLE IF NOT EXISTS kg_entities_v2 (
-                id TEXT PRIMARY KEY,
-                name TEXT UNIQUE,
-                kind TEXT DEFAULT '',
-                observations TEXT DEFAULT '[]',
-                summary TEXT DEFAULT '',
-                summary_version INTEGER DEFAULT 0,
-                name_embedding TEXT DEFAULT NULL,
-                community_id TEXT DEFAULT NULL,
-                updated_at REAL NOT NULL,
-                created_at REAL NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_kg_entity_v2_name ON kg_entities_v2(name);
-            CREATE INDEX IF NOT EXISTS idx_kg_entity_v2_community ON kg_entities_v2(community_id);
-
-            CREATE TABLE IF NOT EXISTS kg_relations_v2 (
-                id TEXT PRIMARY KEY,
-                from_entity TEXT NOT NULL,
-                relation_type TEXT NOT NULL,
-                to_entity TEXT NOT NULL,
-                fact TEXT DEFAULT '',
-                fact_embedding TEXT DEFAULT NULL,
-                episode_ids TEXT DEFAULT '[]',
-                valid_at REAL DEFAULT NULL,
-                invalid_at REAL DEFAULT NULL,
-                expired_at REAL DEFAULT NULL,
-                is_current INTEGER DEFAULT 1,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_from ON kg_relations_v2(from_entity);
-            CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_to ON kg_relations_v2(to_entity);
-            CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_current ON kg_relations_v2(is_current);
-            CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_valid_at ON kg_relations_v2(valid_at);
-            CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_invalid_at ON kg_relations_v2(invalid_at);
-
-            CREATE TABLE IF NOT EXISTS kg_communities (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                summary TEXT DEFAULT '',
-                member_entities TEXT DEFAULT '[]',
-                name_embedding TEXT DEFAULT NULL,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS kg_edge_episode_refs (
-                edge_id TEXT NOT NULL,
-                episode_id TEXT NOT NULL,
-                PRIMARY KEY (edge_id, episode_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_kg_eer_episode ON kg_edge_episode_refs(episode_id);
-            CREATE INDEX IF NOT EXISTS idx_kg_eer_edge ON kg_edge_episode_refs(edge_id);
-        """)
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS kg_episodes ( id TEXT PRIMARY KEY, content TEXT NOT NULL, source_type TEXT DEFAULT 'summary', source_description TEXT DEFAULT '', valid_at REAL NOT NULL, created_at REAL NOT NULL, group_id TEXT DEFAULT 'default' )""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_kg_episode_valid_at ON kg_episodes(valid_at)""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS kg_entities_v2 ( id TEXT PRIMARY KEY, name TEXT UNIQUE, kind TEXT DEFAULT '', observations TEXT DEFAULT '[]', summary TEXT DEFAULT '', summary_version INTEGER DEFAULT 0, name_embedding TEXT DEFAULT NULL, community_id TEXT DEFAULT NULL, updated_at REAL NOT NULL, created_at REAL NOT NULL )""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_kg_entity_v2_name ON kg_entities_v2(name)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_kg_entity_v2_community ON kg_entities_v2(community_id)""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS kg_relations_v2 ( id TEXT PRIMARY KEY, from_entity TEXT NOT NULL, relation_type TEXT NOT NULL, to_entity TEXT NOT NULL, fact TEXT DEFAULT '', fact_embedding TEXT DEFAULT NULL, episode_ids TEXT DEFAULT '[]', valid_at REAL DEFAULT NULL, invalid_at REAL DEFAULT NULL, expired_at REAL DEFAULT NULL, is_current INTEGER DEFAULT 1, created_at REAL NOT NULL, updated_at REAL NOT NULL )""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_from ON kg_relations_v2(from_entity)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_to ON kg_relations_v2(to_entity)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_current ON kg_relations_v2(is_current)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_valid_at ON kg_relations_v2(valid_at)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_kg_rel_v2_invalid_at ON kg_relations_v2(invalid_at)""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS kg_communities ( id TEXT PRIMARY KEY, name TEXT NOT NULL, summary TEXT DEFAULT '', member_entities TEXT DEFAULT '[]', name_embedding TEXT DEFAULT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS kg_edge_episode_refs ( edge_id TEXT NOT NULL, episode_id TEXT NOT NULL, PRIMARY KEY (edge_id, episode_id) )""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_kg_eer_episode ON kg_edge_episode_refs(episode_id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_kg_eer_edge ON kg_edge_episode_refs(edge_id)""")
 
         # FTS5 虚拟表单独创建（条件守卫：FTS5不可用时降级跳过）
         if _fts5_available:
             try:
-                await self._conn.executescript("""
-                    CREATE VIRTUAL TABLE IF NOT EXISTS kg_entities_v2_fts USING fts5(
-                        id UNINDEXED,
-                        name_summary
-                    );
-                    CREATE VIRTUAL TABLE IF NOT EXISTS kg_relations_v2_fts USING fts5(
-                        id UNINDEXED,
-                        fact
-                    );
-                """)
+                await self._conn.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS kg_entities_v2_fts USING fts5( id UNINDEXED, name_summary )""")
+                await self._conn.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS kg_relations_v2_fts USING fts5( id UNINDEXED, fact )""")
             except Exception as e:
                 logger.warning("database.fts5_create_failed", error=str(e))
                 _fts5_available = False
@@ -1206,27 +960,10 @@ class DatabaseManager:
             pass
 
         # 重建表以更新 CHECK 约束
-        await self._conn.executescript("""
-            CREATE TABLE IF NOT EXISTS greeting_schedules_v17 (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type TEXT NOT NULL CHECK(type IN ('fixed','random','reminder')),
-                time TEXT DEFAULT '',
-                window_start TEXT DEFAULT '',
-                window_end TEXT DEFAULT '',
-                count_per_day INTEGER DEFAULT 1,
-                days TEXT NOT NULL DEFAULT '[1,2,3,4,5,6,7]',
-                prompt_hint TEXT DEFAULT '',
-                channels TEXT NOT NULL DEFAULT '["web"]',
-                enabled INTEGER NOT NULL DEFAULT 1,
-                next_fire_times TEXT DEFAULT '[]',
-                drawn_date TEXT DEFAULT '',
-                created_at REAL NOT NULL
-            );
-            INSERT OR IGNORE INTO greeting_schedules_v17
-                SELECT * FROM greeting_schedules;
-            DROP TABLE IF EXISTS greeting_schedules;
-            ALTER TABLE greeting_schedules_v17 RENAME TO greeting_schedules;
-        """)
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS greeting_schedules_v17 ( id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL CHECK(type IN ('fixed','random','reminder')), time TEXT DEFAULT '', window_start TEXT DEFAULT '', window_end TEXT DEFAULT '', count_per_day INTEGER DEFAULT 1, days TEXT NOT NULL DEFAULT '[1,2,3,4,5,6,7]', prompt_hint TEXT DEFAULT '', channels TEXT NOT NULL DEFAULT '["web"]', enabled INTEGER NOT NULL DEFAULT 1, next_fire_times TEXT DEFAULT '[]', drawn_date TEXT DEFAULT '', created_at REAL NOT NULL )""")
+        await self._conn.execute("""INSERT OR IGNORE INTO greeting_schedules_v17 SELECT * FROM greeting_schedules""")
+        await self._conn.execute("""DROP TABLE IF EXISTS greeting_schedules""")
+        await self._conn.execute("""ALTER TABLE greeting_schedules_v17 RENAME TO greeting_schedules""")
         await self._conn.commit()
         logger.info("database.migration_v17_reminder_type_done")
 
@@ -1300,9 +1037,12 @@ class DatabaseManager:
         await self._ddl_concept_tables()
 
     async def _ddl_memory_tables(self) -> None:
-        """建表：对话/记忆/笔记相关表。"""
-        await self._conn.executescript("""
+        """建表：对话/记忆/笔记相关表。
 
+        注意：逐条执行 DDL，避免 executescript() 在 vfat 上触发隐式 commit 导致 database is locked。
+        """
+        # conversation_logs
+        await self._conn.execute("""
             CREATE TABLE IF NOT EXISTS conversation_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL NOT NULL,
@@ -1312,16 +1052,22 @@ class DatabaseManager:
                 assistant_reply TEXT DEFAULT '',
                 emotion_label TEXT DEFAULT '',
                 model_used TEXT DEFAULT ''
-            );
+            )
+        """)
 
+        # audit_logs
+        await self._conn.execute("""
             CREATE TABLE IF NOT EXISTS audit_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL NOT NULL,
                 event_type TEXT NOT NULL,
                 user_id TEXT DEFAULT '',
                 detail TEXT DEFAULT ''
-            );
+            )
+        """)
 
+        # episodic_memories
+        await self._conn.execute("""
             CREATE TABLE IF NOT EXISTS episodic_memories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL NOT NULL,
@@ -1344,15 +1090,21 @@ class DatabaseManager:
                 user_id TEXT DEFAULT 'default',
                 agent_id TEXT DEFAULT 'xiaoda',
                 is_raw INTEGER DEFAULT 0
-            );
+            )
+        """)
 
+        # memory_summaries
+        await self._conn.execute("""
             CREATE TABLE IF NOT EXISTS memory_summaries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 summary_text TEXT NOT NULL,
                 created_at REAL NOT NULL,
                 memory_count INTEGER DEFAULT 0
-            );
+            )
+        """)
 
+        # memory_recall_notes
+        await self._conn.execute("""
             CREATE TABLE IF NOT EXISTS memory_recall_notes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at REAL NOT NULL,
@@ -1364,8 +1116,11 @@ class DatabaseManager:
                 title TEXT DEFAULT '',
                 summary TEXT NOT NULL,
                 tags TEXT DEFAULT ''
-            );
+            )
+        """)
 
+        # user_portrait
+        await self._conn.execute("""
             CREATE TABLE IF NOT EXISTS user_portrait (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 content TEXT NOT NULL,
@@ -1373,8 +1128,11 @@ class DatabaseManager:
                 source_ids TEXT DEFAULT '',
                 change_log TEXT DEFAULT '',
                 created_at REAL NOT NULL
-            );
+            )
+        """)
 
+        # notebook_entries
+        await self._conn.execute("""
             CREATE TABLE IF NOT EXISTS notebook_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 kind TEXT NOT NULL DEFAULT 'note',
@@ -1385,16 +1143,22 @@ class DatabaseManager:
                 status TEXT DEFAULT 'active',
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
-            );
+            )
+        """)
 
+        # proactive_messages
+        await self._conn.execute("""
             CREATE TABLE IF NOT EXISTS proactive_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT NOT NULL,
                 message_type TEXT NOT NULL,
                 content TEXT NOT NULL,
                 sent_at REAL NOT NULL
-            );
+            )
+        """)
 
+        # memory_child_chunks
+        await self._conn.execute("""
             CREATE TABLE IF NOT EXISTS memory_child_chunks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 parent_id INTEGER NOT NULL,
@@ -1405,10 +1169,10 @@ class DatabaseManager:
                 overlap_hash TEXT DEFAULT '',
                 created_at REAL NOT NULL,
                 FOREIGN KEY (parent_id) REFERENCES episodic_memories(id) ON DELETE CASCADE
-            );
-            CREATE INDEX IF NOT EXISTS idx_child_parent ON memory_child_chunks(parent_id);
-            CREATE INDEX IF NOT EXISTS idx_child_type ON memory_child_chunks(chunk_type);
+            )
         """)
+        await self._conn.execute("CREATE INDEX IF NOT EXISTS idx_child_parent ON memory_child_chunks(parent_id)")
+        await self._conn.execute("CREATE INDEX IF NOT EXISTS idx_child_type ON memory_child_chunks(chunk_type)")
         # FTS5 虚拟表单独执行（不能与 executescript 中的普通 DDL 混合在 vfat 上）
         try:
             await self._conn.execute(
@@ -1426,316 +1190,90 @@ class DatabaseManager:
 
     async def _ddl_schedule_greeting_tables(self) -> None:
         """建表：调度与问候相关表（cron_last_run / greeting_schedules / greeting_log）。"""
-        await self._conn.executescript("""
-
-            CREATE TABLE IF NOT EXISTS cron_last_run (
-                task_name TEXT PRIMARY KEY,
-                last_run REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS greeting_schedules (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type TEXT NOT NULL CHECK(type IN ('fixed','random','reminder')),
-                time TEXT DEFAULT '',
-                window_start TEXT DEFAULT '',
-                window_end TEXT DEFAULT '',
-                count_per_day INTEGER DEFAULT 1,
-                days TEXT NOT NULL DEFAULT '[1,2,3,4,5,6,7]',
-                prompt_hint TEXT DEFAULT '',
-                channels TEXT NOT NULL DEFAULT '["web"]',
-                enabled INTEGER NOT NULL DEFAULT 1,
-                next_fire_times TEXT DEFAULT '[]',
-                drawn_date TEXT DEFAULT '',
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS greeting_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                schedule_id INTEGER DEFAULT 0,
-                fired_at REAL NOT NULL,
-                content TEXT DEFAULT '',
-                channel TEXT DEFAULT 'web',
-                reason TEXT DEFAULT ''
-            );        """)
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS cron_last_run ( task_name TEXT PRIMARY KEY, last_run REAL NOT NULL )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS greeting_schedules ( id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL CHECK(type IN ('fixed','random','reminder')), time TEXT DEFAULT '', window_start TEXT DEFAULT '', window_end TEXT DEFAULT '', count_per_day INTEGER DEFAULT 1, days TEXT NOT NULL DEFAULT '[1,2,3,4,5,6,7]', prompt_hint TEXT DEFAULT '', channels TEXT NOT NULL DEFAULT '["web"]', enabled INTEGER NOT NULL DEFAULT 1, next_fire_times TEXT DEFAULT '[]', drawn_date TEXT DEFAULT '', created_at REAL NOT NULL )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS greeting_log ( id INTEGER PRIMARY KEY AUTOINCREMENT, schedule_id INTEGER DEFAULT 0, fired_at REAL NOT NULL, content TEXT DEFAULT '', channel TEXT DEFAULT 'web', reason TEXT DEFAULT '' )""")
 
     async def _ddl_api_media_tables(self) -> None:
         """建表：API 用量/媒体任务/健康报告相关表。"""
-        await self._conn.executescript("""
-
-            CREATE TABLE IF NOT EXISTS api_usage (
-                id TEXT PRIMARY KEY,
-                user_openid TEXT DEFAULT '',
-                session_id TEXT DEFAULT '',
-                model TEXT DEFAULT '',
-                task_type TEXT DEFAULT '',
-                prompt_tokens INTEGER DEFAULT 0,
-                completion_tokens INTEGER DEFAULT 0,
-                cache_hit_tokens INTEGER DEFAULT 0,
-                cache_miss_tokens INTEGER DEFAULT 0,
-                cost_usd REAL DEFAULT 0,
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS media_tasks (
-                id TEXT PRIMARY KEY,
-                kind TEXT NOT NULL,
-                prompt TEXT DEFAULT '',
-                params TEXT DEFAULT '{}',
-                status TEXT NOT NULL DEFAULT 'queued',
-                progress REAL DEFAULT 0,
-                result_path TEXT DEFAULT '',
-                error TEXT DEFAULT '',
-                created_at REAL NOT NULL,
-                finished_at REAL
-            );
-
-            CREATE TABLE IF NOT EXISTS health_reports (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_at REAL NOT NULL,
-                passed INTEGER DEFAULT 0,
-                total INTEGER DEFAULT 0,
-                detail TEXT NOT NULL DEFAULT '[]'
-            );        """)
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS api_usage ( id TEXT PRIMARY KEY, user_openid TEXT DEFAULT '', session_id TEXT DEFAULT '', model TEXT DEFAULT '', task_type TEXT DEFAULT '', prompt_tokens INTEGER DEFAULT 0, completion_tokens INTEGER DEFAULT 0, cache_hit_tokens INTEGER DEFAULT 0, cache_miss_tokens INTEGER DEFAULT 0, cost_usd REAL DEFAULT 0, created_at REAL NOT NULL )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS media_tasks ( id TEXT PRIMARY KEY, kind TEXT NOT NULL, prompt TEXT DEFAULT '', params TEXT DEFAULT '{}', status TEXT NOT NULL DEFAULT 'queued', progress REAL DEFAULT 0, result_path TEXT DEFAULT '', error TEXT DEFAULT '', created_at REAL NOT NULL, finished_at REAL )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS health_reports ( id INTEGER PRIMARY KEY AUTOINCREMENT, run_at REAL NOT NULL, passed INTEGER DEFAULT 0, total INTEGER DEFAULT 0, detail TEXT NOT NULL DEFAULT '[]' )""")
 
     async def _ddl_session_agent_tables(self) -> None:
         """建表：会话与事件相关表（sessions / agent_events）。"""
-        await self._conn.executescript("""
-
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                user_openid TEXT DEFAULT '',
-                summary TEXT DEFAULT '',
-                turn_count INTEGER DEFAULT 0,
-                total_cost_usd REAL DEFAULT 0,
-                cache_hit_tokens INTEGER DEFAULT 0,
-                cache_miss_tokens INTEGER DEFAULT 0,
-                started_at REAL NOT NULL,
-                ended_at REAL DEFAULT 0,
-                status TEXT DEFAULT 'active'
-            );
-
-            CREATE TABLE IF NOT EXISTS agent_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_type TEXT NOT NULL,
-                user_openid TEXT DEFAULT '',
-                session_id TEXT DEFAULT '',
-                detail TEXT DEFAULT '',
-                created_at REAL NOT NULL
-            );        """)
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS sessions ( id TEXT PRIMARY KEY, user_openid TEXT DEFAULT '', summary TEXT DEFAULT '', turn_count INTEGER DEFAULT 0, total_cost_usd REAL DEFAULT 0, cache_hit_tokens INTEGER DEFAULT 0, cache_miss_tokens INTEGER DEFAULT 0, started_at REAL NOT NULL, ended_at REAL DEFAULT 0, status TEXT DEFAULT 'active' )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS agent_events ( id INTEGER PRIMARY KEY AUTOINCREMENT, event_type TEXT NOT NULL, user_openid TEXT DEFAULT '', session_id TEXT DEFAULT '', detail TEXT DEFAULT '', created_at REAL NOT NULL )""")
 
     async def _ddl_knowledge_tables(self) -> None:
         """建表：知识图谱/FTS5 相关表。"""
-        await self._conn.executescript("""
-
-
-            CREATE TABLE IF NOT EXISTS knowledge_entities (
-                id TEXT PRIMARY KEY,
-                name TEXT UNIQUE,
-                kind TEXT DEFAULT '',
-                observations TEXT DEFAULT '[]',
-                updated_at REAL NOT NULL
-            );
-
-            CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_entities_fts USING fts5(
-                id UNINDEXED,
-                name_index
-            );
-
-            CREATE TABLE IF NOT EXISTS knowledge_relations (
-                id TEXT PRIMARY KEY,
-                from_entity TEXT,
-                relation_type TEXT,
-                to_entity TEXT,
-                created_at REAL DEFAULT 0,
-                updated_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS consolidation_candidates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp REAL NOT NULL,
-                source TEXT NOT NULL DEFAULT 'rule',
-                kind TEXT NOT NULL DEFAULT 'fact',
-                summary TEXT NOT NULL,
-                confidence REAL DEFAULT 0.5,
-                importance REAL DEFAULT 0.5,
-                status TEXT NOT NULL DEFAULT 'pending',
-                target_memory_id INTEGER DEFAULT -1,
-                metadata_json TEXT DEFAULT '{}',
-                created_at REAL NOT NULL
-            );        """)
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS knowledge_entities ( id TEXT PRIMARY KEY, name TEXT UNIQUE, kind TEXT DEFAULT '', observations TEXT DEFAULT '[]', updated_at REAL NOT NULL )""")
+        await self._conn.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_entities_fts USING fts5( id UNINDEXED, name_index )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS knowledge_relations ( id TEXT PRIMARY KEY, from_entity TEXT, relation_type TEXT, to_entity TEXT, created_at REAL DEFAULT 0, updated_at REAL NOT NULL )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS consolidation_candidates ( id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL NOT NULL, source TEXT NOT NULL DEFAULT 'rule', kind TEXT NOT NULL DEFAULT 'fact', summary TEXT NOT NULL, confidence REAL DEFAULT 0.5, importance REAL DEFAULT 0.5, status TEXT NOT NULL DEFAULT 'pending', target_memory_id INTEGER DEFAULT -1, metadata_json TEXT DEFAULT '{}', created_at REAL NOT NULL )""")
 
     async def _ddl_learning_error_tables(self) -> None:
         """建表：学习/错误/清理相关表。"""
-        await self._conn.executescript("""
-
-
-            CREATE TABLE IF NOT EXISTS learnings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                learning_id TEXT NOT NULL UNIQUE,
-                category TEXT NOT NULL DEFAULT 'insight',
-                priority TEXT NOT NULL DEFAULT 'low',
-                status TEXT NOT NULL DEFAULT 'pending',
-                area TEXT DEFAULT 'backend',
-                summary TEXT NOT NULL,
-                details TEXT DEFAULT '',
-                suggested_action TEXT DEFAULT '',
-                source TEXT DEFAULT 'conversation',
-                pattern_key TEXT DEFAULT '',
-                recurrence_count INTEGER DEFAULT 1,
-                first_seen REAL NOT NULL,
-                last_seen REAL NOT NULL,
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS errors (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                error_id TEXT NOT NULL UNIQUE,
-                priority TEXT NOT NULL DEFAULT 'high',
-                status TEXT NOT NULL DEFAULT 'pending',
-                area TEXT DEFAULT 'backend',
-                summary TEXT NOT NULL,
-                error_text TEXT DEFAULT '',
-                context TEXT DEFAULT '',
-                suggested_fix TEXT DEFAULT '',
-                reproducible TEXT DEFAULT 'unknown',
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS feature_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                request_id TEXT NOT NULL UNIQUE,
-                priority TEXT NOT NULL DEFAULT 'medium',
-                status TEXT NOT NULL DEFAULT 'pending',
-                area TEXT DEFAULT 'backend',
-                capability TEXT NOT NULL,
-                user_context TEXT DEFAULT '',
-                complexity TEXT DEFAULT 'medium',
-                suggested_impl TEXT DEFAULT '',
-                frequency TEXT DEFAULT 'first_time',
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS session_entries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                entry_json TEXT NOT NULL,
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS session_summaries (
-                session_id TEXT PRIMARY KEY,
-                mtime INTEGER NOT NULL DEFAULT 0,
-                summary_data TEXT NOT NULL DEFAULT '{}'
-            );
-
-            CREATE TABLE IF NOT EXISTS cleanup_config (
-                table_name TEXT PRIMARY KEY,
-                retention_days INTEGER NOT NULL,
-                date_column TEXT NOT NULL DEFAULT 'timestamp',
-                enabled INTEGER DEFAULT 1
-            );
-            CREATE TABLE IF NOT EXISTS tool_error_rules (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tool_name TEXT NOT NULL,
-                pattern TEXT NOT NULL,
-                rule_text TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                hit_count INTEGER DEFAULT 0
-            );        """)
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS learnings ( id INTEGER PRIMARY KEY AUTOINCREMENT, learning_id TEXT NOT NULL UNIQUE, category TEXT NOT NULL DEFAULT 'insight', priority TEXT NOT NULL DEFAULT 'low', status TEXT NOT NULL DEFAULT 'pending', area TEXT DEFAULT 'backend', summary TEXT NOT NULL, details TEXT DEFAULT '', suggested_action TEXT DEFAULT '', source TEXT DEFAULT 'conversation', pattern_key TEXT DEFAULT '', recurrence_count INTEGER DEFAULT 1, first_seen REAL NOT NULL, last_seen REAL NOT NULL, created_at REAL NOT NULL )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS errors ( id INTEGER PRIMARY KEY AUTOINCREMENT, error_id TEXT NOT NULL UNIQUE, priority TEXT NOT NULL DEFAULT 'high', status TEXT NOT NULL DEFAULT 'pending', area TEXT DEFAULT 'backend', summary TEXT NOT NULL, error_text TEXT DEFAULT '', context TEXT DEFAULT '', suggested_fix TEXT DEFAULT '', reproducible TEXT DEFAULT 'unknown', created_at REAL NOT NULL )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS feature_requests ( id INTEGER PRIMARY KEY AUTOINCREMENT, request_id TEXT NOT NULL UNIQUE, priority TEXT NOT NULL DEFAULT 'medium', status TEXT NOT NULL DEFAULT 'pending', area TEXT DEFAULT 'backend', capability TEXT NOT NULL, user_context TEXT DEFAULT '', complexity TEXT DEFAULT 'medium', suggested_impl TEXT DEFAULT '', frequency TEXT DEFAULT 'first_time', created_at REAL NOT NULL )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS session_entries ( id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, entry_json TEXT NOT NULL, created_at REAL NOT NULL )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS session_summaries ( session_id TEXT PRIMARY KEY, mtime INTEGER NOT NULL DEFAULT 0, summary_data TEXT NOT NULL DEFAULT '{}' )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS cleanup_config ( table_name TEXT PRIMARY KEY, retention_days INTEGER NOT NULL, date_column TEXT NOT NULL DEFAULT 'timestamp', enabled INTEGER DEFAULT 1 )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS tool_error_rules ( id INTEGER PRIMARY KEY AUTOINCREMENT, tool_name TEXT NOT NULL, pattern TEXT NOT NULL, rule_text TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, hit_count INTEGER DEFAULT 0 )""")
 
     async def _ddl_concept_tables(self) -> None:
         """建表：概念图（扩散激活记忆系统）。"""
-        await self._conn.executescript("""
-            CREATE TABLE IF NOT EXISTS concept_nodes (
-                id            TEXT PRIMARY KEY,
-                text          TEXT NOT NULL,
-                weight        REAL NOT NULL DEFAULT 1.0,
-                peak_weight   REAL NOT NULL DEFAULT 1.0,
-                confidence    REAL NOT NULL DEFAULT 1.0,
-                access_count  INTEGER NOT NULL DEFAULT 0,
-                keys          TEXT NOT NULL DEFAULT '[]',
-                layer         TEXT NOT NULL DEFAULT 'hippocampus',
-                created       TEXT NOT NULL,
-                last_accessed TEXT NOT NULL,
-                valid_from    TEXT NOT NULL,
-                valid_to      TEXT,
-                superseded_by TEXT,
-                history       TEXT NOT NULL DEFAULT '[]',
-                origin        TEXT NOT NULL DEFAULT '{}',
-                source_mem_id INTEGER,
-                embedding     BLOB,
-                difficulty      REAL NOT NULL DEFAULT 5.0,
-                stability      REAL NOT NULL DEFAULT 3.0,
-                phase          TEXT NOT NULL DEFAULT 'buffer',
-                last_review    REAL NOT NULL DEFAULT 0,
-                reinforcement_count INTEGER NOT NULL DEFAULT 0
-            );
-
-            CREATE TABLE IF NOT EXISTS concept_edges (
-                source_id  TEXT NOT NULL,
-                target_id  TEXT NOT NULL,
-                relation   TEXT NOT NULL DEFAULT 'related',
-                weight     REAL NOT NULL DEFAULT 1.0,
-                created    TEXT NOT NULL,
-                PRIMARY KEY (source_id, target_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS concept_meta (
-                key   TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_concept_node_keys ON concept_nodes(keys);
-            CREATE INDEX IF NOT EXISTS idx_concept_node_layer ON concept_nodes(layer);
-            CREATE INDEX IF NOT EXISTS idx_concept_node_weight ON concept_nodes(weight);
-            CREATE INDEX IF NOT EXISTS idx_concept_node_valid ON concept_nodes(valid_to);
-            CREATE INDEX IF NOT EXISTS idx_concept_edge_source ON concept_edges(source_id);
-            CREATE INDEX IF NOT EXISTS idx_concept_edge_target ON concept_edges(target_id);
-        """)
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS concept_nodes ( id TEXT PRIMARY KEY, text TEXT NOT NULL, weight REAL NOT NULL DEFAULT 1.0, peak_weight REAL NOT NULL DEFAULT 1.0, confidence REAL NOT NULL DEFAULT 1.0, access_count INTEGER NOT NULL DEFAULT 0, keys TEXT NOT NULL DEFAULT '[]', layer TEXT NOT NULL DEFAULT 'hippocampus', created TEXT NOT NULL, last_accessed TEXT NOT NULL, valid_from TEXT NOT NULL, valid_to TEXT, superseded_by TEXT, history TEXT NOT NULL DEFAULT '[]', origin TEXT NOT NULL DEFAULT '{}', source_mem_id INTEGER, embedding BLOB, difficulty REAL NOT NULL DEFAULT 5.0, stability REAL NOT NULL DEFAULT 3.0, phase TEXT NOT NULL DEFAULT 'buffer', last_review REAL NOT NULL DEFAULT 0, reinforcement_count INTEGER NOT NULL DEFAULT 0 )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS concept_edges ( source_id TEXT NOT NULL, target_id TEXT NOT NULL, relation TEXT NOT NULL DEFAULT 'related', weight REAL NOT NULL DEFAULT 1.0, created TEXT NOT NULL, PRIMARY KEY (source_id, target_id) )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS concept_meta ( key TEXT PRIMARY KEY, value TEXT NOT NULL )""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_concept_node_keys ON concept_nodes(keys)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_concept_node_layer ON concept_nodes(layer)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_concept_node_weight ON concept_nodes(weight)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_concept_node_valid ON concept_nodes(valid_to)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_concept_edge_source ON concept_edges(source_id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_concept_edge_target ON concept_edges(target_id)""")
 
     async def _create_indexes(self) -> None:
         """Phase 3: 创建所有索引（含依赖迁移列的索引）。"""
-        await self._conn.executescript("""
-            CREATE INDEX IF NOT EXISTS idx_conv_ts ON conversation_logs(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_mem_ts ON episodic_memories(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_mem_importance ON episodic_memories(importance);
-            CREATE INDEX IF NOT EXISTS idx_portrait_created ON user_portrait(created_at);
-            CREATE INDEX IF NOT EXISTS idx_notebook_kind ON notebook_entries(kind);
-            CREATE INDEX IF NOT EXISTS idx_notebook_status ON notebook_entries(status);
-            CREATE INDEX IF NOT EXISTS idx_notebook_due ON notebook_entries(due_date);
-            CREATE INDEX IF NOT EXISTS idx_proactive_user ON proactive_messages(user_id);
-            CREATE INDEX IF NOT EXISTS idx_api_usage_ts ON api_usage(created_at);
-            CREATE INDEX IF NOT EXISTS idx_api_usage_user ON api_usage(user_openid);
-            CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_openid);
-            CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
-            CREATE INDEX IF NOT EXISTS idx_events_type ON agent_events(event_type);
-            CREATE INDEX IF NOT EXISTS idx_events_ts ON agent_events(created_at);
-            CREATE INDEX IF NOT EXISTS idx_kg_entity_name ON knowledge_entities(name);
-            CREATE INDEX IF NOT EXISTS idx_kg_entity_updated ON knowledge_entities(updated_at);
-            CREATE INDEX IF NOT EXISTS idx_kg_rel_from ON knowledge_relations(from_entity);
-            CREATE INDEX IF NOT EXISTS idx_kg_rel_to ON knowledge_relations(to_entity);
-            CREATE INDEX IF NOT EXISTS idx_conv_user ON conversation_logs(user_id);
-            CREATE INDEX IF NOT EXISTS idx_conv_source ON conversation_logs(source);
-            CREATE INDEX IF NOT EXISTS idx_episodic_session ON episodic_memories(session_id);
-            CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_logs(event_type);
-            CREATE INDEX IF NOT EXISTS idx_conv_session ON conversation_logs(session_id);
-            CREATE INDEX IF NOT EXISTS idx_kg_rel_type ON knowledge_relations(relation_type);
-            CREATE INDEX IF NOT EXISTS idx_media_status ON media_tasks(status);
-            CREATE INDEX IF NOT EXISTS idx_learnings_cat ON learnings(category);
-            CREATE INDEX IF NOT EXISTS idx_learnings_status ON learnings(status);
-            CREATE INDEX IF NOT EXISTS idx_learnings_pattern ON learnings(pattern_key);
-            CREATE INDEX IF NOT EXISTS idx_errors_status ON errors(status);
-            CREATE INDEX IF NOT EXISTS idx_featreq_status ON feature_requests(status);
-            CREATE INDEX IF NOT EXISTS idx_session_entries_sid ON session_entries(session_id);
-            CREATE INDEX IF NOT EXISTS idx_session_entries_created ON session_entries(created_at);
-            CREATE INDEX IF NOT EXISTS idx_tool_error_rules_tool ON tool_error_rules(tool_name);
-            CREATE INDEX IF NOT EXISTS idx_episodic_scope
-                ON episodic_memories(user_id, agent_id, is_raw, timestamp DESC);
-            CREATE INDEX IF NOT EXISTS idx_memory_entities_name ON memory_entities(name);
-            CREATE INDEX IF NOT EXISTS idx_memory_entities_type ON memory_entities(entity_type);
-            CREATE INDEX IF NOT EXISTS idx_eml_entity ON entity_memory_links(entity_id);
-            CREATE INDEX IF NOT EXISTS idx_eml_memory ON entity_memory_links(memory_id);
-        """)
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_conv_ts ON conversation_logs(timestamp)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_mem_ts ON episodic_memories(timestamp)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_mem_importance ON episodic_memories(importance)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_portrait_created ON user_portrait(created_at)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_notebook_kind ON notebook_entries(kind)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_notebook_status ON notebook_entries(status)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_notebook_due ON notebook_entries(due_date)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_proactive_user ON proactive_messages(user_id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_api_usage_ts ON api_usage(created_at)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_api_usage_user ON api_usage(user_openid)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_openid)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_events_type ON agent_events(event_type)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_events_ts ON agent_events(created_at)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_kg_entity_name ON knowledge_entities(name)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_kg_entity_updated ON knowledge_entities(updated_at)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_kg_rel_from ON knowledge_relations(from_entity)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_kg_rel_to ON knowledge_relations(to_entity)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_conv_user ON conversation_logs(user_id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_conv_source ON conversation_logs(source)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_episodic_session ON episodic_memories(session_id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_logs(event_type)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_conv_session ON conversation_logs(session_id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_kg_rel_type ON knowledge_relations(relation_type)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_media_status ON media_tasks(status)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_learnings_cat ON learnings(category)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_learnings_status ON learnings(status)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_learnings_pattern ON learnings(pattern_key)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_errors_status ON errors(status)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_featreq_status ON feature_requests(status)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_session_entries_sid ON session_entries(session_id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_session_entries_created ON session_entries(created_at)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_tool_error_rules_tool ON tool_error_rules(tool_name)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_episodic_scope ON episodic_memories(user_id, agent_id, is_raw, timestamp DESC)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_entities_name ON memory_entities(name)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_memory_entities_type ON memory_entities(entity_type)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_eml_entity ON entity_memory_links(entity_id)""")
+        await self._conn.execute("""CREATE INDEX IF NOT EXISTS idx_eml_memory ON entity_memory_links(memory_id)""")
 
     async def _seed_cleanup_config(self) -> None:
         """Phase 4: 插入默认清理策略（仅当 cleanup_config 表为空时）。"""
@@ -1768,51 +1306,24 @@ class DatabaseManager:
             logger.info("database.fts5_triggers_disabled (vfat)")
             return
         # 非 fat 文件系统：创建 FTS5 触发器
+        # 注意：每个触发器必须是一个完整的 SQL 语句，包含 BEGIN...END
         try:
-            await self._conn.executescript("""
-                CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ai AFTER INSERT ON knowledge_entities BEGIN
-                    INSERT INTO knowledge_entities_fts(id, name_index) VALUES (new.id, new.name);
-                END;
-                CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ad AFTER DELETE ON knowledge_entities BEGIN
-                    INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index)
-                    VALUES ('delete', old.id, old.name);
-                END;
-                CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_au AFTER UPDATE ON knowledge_entities BEGIN
-                    INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index)
-                    VALUES ('delete', old.id, old.name);
-                    INSERT INTO knowledge_entities_fts(id, name_index) VALUES (new.id, new.name);
-                END;
-
-                -- v2 triggers: DROP first to replace any prior broken versions on upgrade
-                DROP TRIGGER IF EXISTS kg_entities_v2_fts_ai;
-                DROP TRIGGER IF EXISTS kg_entities_v2_fts_ad;
-                DROP TRIGGER IF EXISTS kg_entities_v2_fts_au;
-                DROP TRIGGER IF EXISTS kg_relations_v2_fts_ai;
-                DROP TRIGGER IF EXISTS kg_relations_v2_fts_ad;
-                DROP TRIGGER IF EXISTS kg_relations_v2_fts_au;
-
-                CREATE TRIGGER kg_entities_v2_fts_ai AFTER INSERT ON kg_entities_v2 BEGIN
-                    INSERT INTO kg_entities_v2_fts(id, name_summary) VALUES (new.id, new.name || ' ' || new.summary);
-                END;
-                CREATE TRIGGER kg_entities_v2_fts_ad AFTER DELETE ON kg_entities_v2 BEGIN
-                    DELETE FROM kg_entities_v2_fts WHERE id = old.id;
-                END;
-                CREATE TRIGGER kg_entities_v2_fts_au AFTER UPDATE ON kg_entities_v2 BEGIN
-                    DELETE FROM kg_entities_v2_fts WHERE id = old.id;
-                    INSERT INTO kg_entities_v2_fts(id, name_summary) VALUES (new.id, new.name || ' ' || new.summary);
-                END;
-
-                CREATE TRIGGER kg_relations_v2_fts_ai AFTER INSERT ON kg_relations_v2 BEGIN
-                    INSERT INTO kg_relations_v2_fts(id, fact) VALUES (new.id, new.fact);
-                END;
-                CREATE TRIGGER kg_relations_v2_fts_ad AFTER DELETE ON kg_relations_v2 BEGIN
-                    DELETE FROM kg_relations_v2_fts WHERE id = old.id;
-                END;
-                CREATE TRIGGER kg_relations_v2_fts_au AFTER UPDATE ON kg_relations_v2 BEGIN
-                    DELETE FROM kg_relations_v2_fts WHERE id = old.id;
-                    INSERT INTO kg_relations_v2_fts(id, fact) VALUES (new.id, new.fact);
-                END;
-            """)
+            # v1 triggers (knowledge_entities)
+            await self._conn.execute("""CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ai AFTER INSERT ON knowledge_entities BEGIN INSERT INTO knowledge_entities_fts(id, name_index) VALUES (new.id, new.name); END""")
+            await self._conn.execute("""CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ad AFTER DELETE ON knowledge_entities BEGIN INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index) VALUES ('delete', old.id, old.name); END""")
+            await self._conn.execute("""CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_au AFTER UPDATE ON knowledge_entities BEGIN INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index) VALUES ('delete', old.id, old.name); INSERT INTO knowledge_entities_fts(id, name_index) VALUES (new.id, new.name); END""")
+            # v2 triggers: DROP first to replace any prior broken versions on upgrade
+            for trig in ["kg_entities_v2_fts_ai", "kg_entities_v2_fts_ad", "kg_entities_v2_fts_au",
+                         "kg_relations_v2_fts_ai", "kg_relations_v2_fts_ad", "kg_relations_v2_fts_au"]:
+                await self._conn.execute(f"DROP TRIGGER IF EXISTS {trig}")
+            # kg_entities_v2 triggers
+            await self._conn.execute("""CREATE TRIGGER kg_entities_v2_fts_ai AFTER INSERT ON kg_entities_v2 BEGIN INSERT INTO kg_entities_v2_fts(id, name_summary) VALUES (new.id, new.name || ' ' || new.summary); END""")
+            await self._conn.execute("""CREATE TRIGGER kg_entities_v2_fts_ad AFTER DELETE ON kg_entities_v2 BEGIN DELETE FROM kg_entities_v2_fts WHERE id = old.id; END""")
+            await self._conn.execute("""CREATE TRIGGER kg_entities_v2_fts_au AFTER UPDATE ON kg_entities_v2 BEGIN DELETE FROM kg_entities_v2_fts WHERE id = old.id; INSERT INTO kg_entities_v2_fts(id, name_summary) VALUES (new.id, new.name || ' ' || new.summary); END""")
+            # kg_relations_v2 triggers
+            await self._conn.execute("""CREATE TRIGGER kg_relations_v2_fts_ai AFTER INSERT ON kg_relations_v2 BEGIN INSERT INTO kg_relations_v2_fts(id, fact) VALUES (new.id, new.fact); END""")
+            await self._conn.execute("""CREATE TRIGGER kg_relations_v2_fts_ad AFTER DELETE ON kg_relations_v2 BEGIN DELETE FROM kg_relations_v2_fts WHERE id = old.id; END""")
+            await self._conn.execute("""CREATE TRIGGER kg_relations_v2_fts_au AFTER UPDATE ON kg_relations_v2 BEGIN DELETE FROM kg_relations_v2_fts WHERE id = old.id; INSERT INTO kg_relations_v2_fts(id, fact) VALUES (new.id, new.fact); END""")
         except (OSError, RuntimeError) as e:
             logger.warning(f"database.fts5_trigger_failed: {e} — FTS搜索将降级为LIKE查询")
     async def insert_conversation_log(self, user_id: str, source: str,

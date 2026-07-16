@@ -143,18 +143,16 @@ class PersonaCritic:
         - 不应使用: 生硬的 "我是 AI"/"作为助手"/"很抱歉"等
         """
         score = 1.0
-        # 检测非小妲口吻
+        # 检测非小妲口吻（仅检测明显的 AI 自我暴露，避免误判正常回复）
         bad_patterns = [
-            r"作为\s*(AI|人工智能|助手)",
+            r"作为\s*(AI|人工智能)",
             r"我是\s*(AI|人工智能|大语言模型)",
-            r"很抱歉.{0,5}无法",
-            r"我无法.{0,5}提供",
-            r"As an AI",
-            r"I cannot help with",
+            r"As an AI\b",
+            r"I am an? AI\b",
         ]
         for pat in bad_patterns:
             if re.search(pat, output, re.IGNORECASE):
-                score -= 0.3
+                score -= 0.2
 
         # 检测小妲口吻
         good_patterns = [r"[呀呢哦啦]", r"~", r"\^_\^", r"🌿", r"🌱"]

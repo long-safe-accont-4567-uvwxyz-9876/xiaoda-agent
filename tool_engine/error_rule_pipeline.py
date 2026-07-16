@@ -194,12 +194,12 @@ class ErrorRulePipeline:
         self._last_extract_time[tool_name] = now
 
         # 优先硅基流动免费模型，失败降级到 router
-        result = await self._call_free_model(messages, temperature=0.3, max_tokens=200)
+        result = await self._call_free_model(messages, temperature=0.3, max_tokens=512)
         if result is None and self.router is not None:
             try:
                 result = await self.router.route(
                     task_type="chat_mini", messages=messages,
-                    temperature=0.3, max_tokens=200,
+                    temperature=0.3, max_tokens=512,
                 )
             except Exception as e:
                 logger.warning("error_rule.extract_llm_failed", error=str(e))

@@ -625,7 +625,7 @@ class SubAgent:
                     self._client.chat.completions.create(
                         model=self.config.model,
                         messages=working,
-                        max_tokens=4096 if tools else 2048,
+                        max_tokens=6144 if tools else 3072,
                         temperature=get_temperature(default=0.9),
                         tools=tools,
                         tool_choice="auto" if tools else None,
@@ -787,7 +787,7 @@ class SubAgent:
                 self._client.chat.completions.create(
                     model=self.config.model,
                     messages=working,
-                    max_tokens=2048,
+                    max_tokens=3072,
                     temperature=get_temperature(default=0.7),
                     extra_body=extra_body,
                 ),
@@ -908,10 +908,11 @@ class SubAgent:
 # RouterEngine agent name → task_type 反向映射
 # 用于 classify_task 委托 RouterEngine 后保持返回格式一致（task_type 字符串）
 _AGENT_TO_TASK_TYPE = {
-    "xiaolang": "security",
-    "xiaoke": "debug",
-    "xiaolian": "info_search",
-    "xiaoli": "emotional",
+    "xiaolang": "debug",       # 编程/调试/系统
+    "xiaoke": "research",      # 学术研究
+    "xiaolian": "info_search", # 信息搜索
+    "xiaoli": "emotional",     # 情感陪伴
+    "xiaoda": "memory",        # 记忆检索/主Agent
 }
 
 
@@ -1027,14 +1028,16 @@ class AgentDispatcher:
         参考 Trae SOLO 模式：任务→代理 1:1 绑定
 
         :param task_type: 任务类型
-            - "frontend" → 妮可（xiaoke，编程助手）
-            - "backend" → 妮可（xiaoke）
-            - "debug" → 妮可（xiaoke）
+            - "frontend" → 小狼（xiaolang，编程/系统）
+            - "backend" → 小狼（xiaolang）
+            - "debug" → 小狼（xiaolang）
             - "security" → 小狼（xiaolang，系统管理）
-            - "test" → 妮可（xiaoke）
-            - "info_search" → 希里安（xiaolian，信息助手）
+            - "test" → 小狼（xiaolang）
+            - "info_search" → 小涟（xiaolian，信息助手）
+            - "memory" → 小妲（xiaoda，记忆检索）
             - "hardware" → 小狼（xiaolang）
             - "emotional" → 小莉（xiaoli，萌系陪伴）
+            - "research" → 小可（xiaoke，学术研究）
             - "general" → 默认（xiaoli）
         :param input_text: 用户输入文本
         :returns: 子代理名称（target）

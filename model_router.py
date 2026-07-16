@@ -68,12 +68,12 @@ ROUTE_TABLE = {
     "chat": {"model": _CFG_MODEL_NAME, "max_tokens": 8192, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "chat_pro": {"model": _CFG_PRO_MODEL or _CFG_MODEL_NAME, "max_tokens": 8192, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "enabled", "budget_tokens": 4096}},
     # chat_flash：sub_agent 调用（如 xiaoli 转述），需要足够空间避免截断
-    "chat_flash": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 4096, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_mini": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 3072, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "chat_flash": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 6144, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "chat_mini": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 4096, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "chat_mimo": {"model": MIMO_MODEL, "max_tokens": 8192, "client": "mimo", "thinking": {"type": "disabled"}},
-    "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 300, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 512, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 2048, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1024, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 2048, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 4096, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": 8192, "client": "agnes", "thinking": {"type": "disabled"}},
 }
 
@@ -135,10 +135,6 @@ class ModelRouter:
         _mimo_url = base_url or os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
         _ssrf_check(_mimo_url)  # SSRF 防护：校验 base_url
         self._client = AsyncOpenAI(api_key=_mimo_key, base_url=_mimo_url) if _mimo_key else None
-        _agnes_key = os.getenv("AGNES_API_KEY", "")
-        _agnes_url = os.getenv("AGNES_BASE_URL", AGNES_BASE_URL)
-        _ssrf_check(_agnes_url)  # SSRF 防护：校验 base_url
-        self._agnes_client = AsyncOpenAI(api_key=_agnes_key, base_url=_agnes_url) if _agnes_key else None
         self._db = db
         self._model_preference = "mimo"
         self._cost_buffer: list[dict] = []
@@ -147,6 +143,25 @@ class ModelRouter:
         self._error_classifier = ErrorClassifier()
         self._credential_pool = get_credential_pool()
         self._credential_locks: dict[str, asyncio.Lock] = {}
+        # agnes 密钥优先级：环境变量 → 加密文件 → credential_pool
+        # 根因：用户通过 Web UI 添加 agnes 时，密钥保存在加密文件，但 __init__ 只从环境变量读取
+        _agnes_key = os.getenv("AGNES_API_KEY", "")
+        if not _agnes_key:
+            try:
+                from web._provider_keys import load_provider_key
+                _agnes_key = load_provider_key("agnes") or ""
+            except Exception:
+                logger.debug("router.agnes_key_file_load_failed", exc_info=True)
+        if not _agnes_key:
+            try:
+                cred = self._credential_pool.get("agnes")
+                if cred:
+                    _agnes_key = cred.api_key
+            except Exception:
+                logger.debug("router.agnes_key_pool_load_failed", exc_info=True)
+        _agnes_url = os.getenv("AGNES_BASE_URL", AGNES_BASE_URL)
+        _ssrf_check(_agnes_url)  # SSRF 防护：校验 base_url
+        self._agnes_client = AsyncOpenAI(api_key=_agnes_key, base_url=_agnes_url) if _agnes_key else None
 
         self._custom_clients: dict[str, AsyncOpenAI] = {}
         self._register_credential_pool_providers()
@@ -942,6 +957,24 @@ class ModelRouter:
                                model=model, task=task_type,
                                content_len=content_len,
                                finish_reason=finish_reason)
+                # 截断重试：如果截断且有内容，追加"请继续"提示重试一次
+                if content and len(content) > 10:
+                    try:
+                        retry_messages = messages.copy()
+                        retry_messages.append({"role": "assistant", "content": content})
+                        retry_messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
+                        retry_result = await self.route(
+                            task_type, retry_messages, temperature=temperature,
+                            max_tokens=max_tokens * 2 if max_tokens else None,  # 加倍 max_tokens
+                            user_openid=user_openid, session_id=session_id,
+                        )
+                        retry_content = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
+                        if retry_content and len(retry_content) > 5:
+                            content = content + retry_content
+                            logger.info("llm.truncated_retry_success",
+                                        final_len=len(content), model=model)
+                    except Exception as e:
+                        logger.warning("llm.truncated_retry_failed", error=str(e), model=model)
             elif finish_reason == "content_filter":
                 logger.warning("llm.content_filtered",
                                model=model, task=task_type,

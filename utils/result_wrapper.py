@@ -111,14 +111,14 @@ class ResultWrapper:
             # 优先使用免费模型，降级到主路由
             compacted = await self._call_free_model(
                 [{"role": "user", "content": prompt}],
-                temperature=0.3, max_tokens=500,
+                temperature=0.3, max_tokens=1024,
             )
             if compacted is None and self.router:
                 compacted = await self.router.route(
                     "tool_result_wrap",
                     [{"role": "user", "content": prompt}],
                     temperature=0.3,
-                    max_tokens=500,
+                    max_tokens=1024,
                 )
 
             if compacted and len(compacted) > 20:

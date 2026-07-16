@@ -874,7 +874,7 @@ class SubAgentManagerMixin:
                 "chat_flash",
                 [{"role": "user", "content": prompt}],
                 temperature=0.7,
-                max_tokens=1024,
+                max_tokens=1536,
             )
             if isinstance(reply, str):
                 return reply.strip()
@@ -905,7 +905,7 @@ class SubAgentManagerMixin:
                 [{"role": "system", "content": build_system_prompt()},
                  {"role": "user", "content": question}],
                 temperature=0.7,
-                max_tokens=300,
+                max_tokens=512,
             )
             if isinstance(reply, str):
                 return reply.strip()

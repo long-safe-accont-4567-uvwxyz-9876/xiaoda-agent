@@ -85,7 +85,7 @@ class KnowledgeGraphV2(KnowledgeGraph):
                 {"role": "system", "content": "你是一个知识提取助手，只输出纯JSON，不要输出任何其他内容，不要用markdown代码块包裹。"},
                 {"role": "user", "content": prompt},
             ]
-            result = await self._call_free_model(messages, temperature=0.1, max_tokens=800)
+            result = await self._call_free_model(messages, temperature=0.1, max_tokens=1024)
             if result is None and self._router:
                 result = await self._router.route(
                     "memory_encoding", messages, temperature=0.1,
@@ -203,7 +203,7 @@ class KnowledgeGraphV2(KnowledgeGraph):
             entity_name=entity_name,
         )
         messages = [{"role": "user", "content": prompt}]
-        result = await self._call_free_model(messages, temperature=0.3, max_tokens=300)
+        result = await self._call_free_model(messages, temperature=0.3, max_tokens=512)
         if result and isinstance(result, str):
             return result.strip()
         return f"{old_summary}; {'; '.join(new_observations)}"

@@ -2751,7 +2751,7 @@ class MemoryManager:
 }}"""
 
             messages = [{"role": "user", "content": prompt}]
-            result = await self.distiller._call_free_model(messages, temperature=0.3, max_tokens=800)
+            result = await self.distiller._call_free_model(messages, temperature=0.3, max_tokens=1024)
             if not result:
                 return
 

@@ -524,17 +524,31 @@ class PostValidateHook(BaseHook):
 
 
 class OutputCompressionHook(BaseHook):
-    """输出压缩：对超长工具输出截断并添加省略标记"""
+    """输出压缩：对超长工具输出截断并添加省略标记
+
+    记忆相关工具（recall/remember）不截断，避免丢失关键上下文。
+    """
 
     name = "output_compression"
     hook_type = HookType.POST_TOOL_USE
     tool_filter = None  # 所有工具
 
-    MAX_LENGTH = 2000
+    MAX_LENGTH = 8000
+    # 记忆相关工具不做截断，其输出对模型回复至关重要
+    _EXEMPT_TOOLS = frozenset({
+        "recall", "remember", "memory_search", "memory_recall",
+        "recall_memory", "search_memory", "vector_search",
+    })
 
     async def execute(self, context: dict) -> HookResult:
         output = context.get("output", "")
         if not output or len(output) <= self.MAX_LENGTH:
+            return HookResult()
+
+        tool_name = context.get("tool_name", "")
+        if tool_name in self._EXEMPT_TOOLS:
+            logger.debug("hooks.output_compression.skipped_exempt_tool",
+                         tool=tool_name, output_len=len(output))
             return HookResult()
 
         truncated = output[:self.MAX_LENGTH]

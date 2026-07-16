@@ -181,14 +181,14 @@ class NotebookManager:
             # 优先使用免费模型，降级到主路由
             result = await self._call_free_model(
                 [{"role": "user", "content": prompt}],
-                temperature=0.6, max_tokens=800,
+                temperature=0.6, max_tokens=1024,
             )
             if result is None and self._router:
                 result = await self._router.route(
                     "memory_encoding",
                     [{"role": "user", "content": prompt}],
                     temperature=0.6,
-                    max_tokens=800,
+                    max_tokens=1024,
                 )
             result = (result or "").strip()
 

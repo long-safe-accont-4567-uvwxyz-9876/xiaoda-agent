@@ -125,14 +125,14 @@ class InstinctManager:
         messages = [{"role": "user", "content": prompt}]
 
         # 优先调用硅基流动免费模型，失败则降级到 router
-        result = await self._call_free_model(messages, temperature=0.3, max_tokens=400)
+        result = await self._call_free_model(messages, temperature=0.3, max_tokens=800)
         if result is None:
             try:
                 result = await self.router.route(
                     task_type="chat_mini",
                     messages=messages,
                     temperature=0.3,
-                    max_tokens=400,
+                    max_tokens=800,
                 )
             except Exception as e:
                 logger.warning("instinct.extract_llm_failed", error=str(e))

@@ -225,7 +225,7 @@ class XiaoliAgent:
                     client.chat.completions.create(
                         model=model,
                         messages=working,
-                        max_tokens=1024 if tools else 300,
+                        max_tokens=1536 if tools else 512,
                         temperature=0.9,
                         tools=tools,
                         tool_choice="auto" if tools else None,
@@ -367,7 +367,7 @@ class XiaoliAgent:
             response = await client.chat.completions.create(
                 model=model,
                 messages=working,
-                max_tokens=300,
+                max_tokens=512,
                 temperature=0.9,
             )
             reply = response.choices[0].message.content or ""

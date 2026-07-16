@@ -134,7 +134,7 @@ class PortraitManager:
                 "memory_encoding",
                 [{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=1200,
+                max_tokens=1536,
             )
         except Exception as e:
             logger.error("portrait.llm_failed", error=str(e))

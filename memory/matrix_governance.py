@@ -917,7 +917,7 @@ class ABTestRunner:
                             {"role": "user", "content": case.input},
                         ],
                         temperature=0.7,
-                        max_tokens=500,
+                        max_tokens=1024,
                         timeout=30,
                     ))
                     response = str(response) if response else ""
@@ -932,7 +932,7 @@ class ABTestRunner:
                         task_type=self.judge_task_type,
                         messages=[{"role": "user", "content": judge_prompt}],
                         temperature=0.0,  # GEM 2026: 评分用 greedy (这里用 0 模拟)
-                        max_tokens=100,
+                        max_tokens=256,
                         timeout=20,
                     ))
                     score = self._parse_judge_score(str(judge_response))

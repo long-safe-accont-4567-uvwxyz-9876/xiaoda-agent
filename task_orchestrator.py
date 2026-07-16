@@ -925,7 +925,7 @@ class SynthesisNode:
             response = await self._client.chat.completions.create(
                 model=self._model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=1024,
+                max_tokens=1536,
                 temperature=0.5,
             )
             final = response.choices[0].message.content.strip()

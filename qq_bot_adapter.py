@@ -64,12 +64,17 @@ async def _patched_send_heart(self, interval: Any) -> None:
             _log.debug("[botpy] ws连接已关闭, 心跳检测停止")
             return
 
-        # 先发送心跳
+        # 先发送心跳（捕获连接关闭异常，避免心跳任务失败导致 QQ Bot 断连）
         payload = {
             "op": self.WS_HEARTBEAT,
             "d": self._session["last_seq"],
         }
-        await self.send_msg(__import__("json").dumps(payload))
+        try:
+            await self.send_msg(__import__("json").dumps(payload))
+        except Exception as e:
+            # WebSocket 已关闭或网络异常，心跳任务退出（QQ Bot SDK 会自动重连）
+            _log.warning(f"[botpy] 心跳发送失败，连接可能已关闭: {e}")
+            return
         await asyncio.sleep(interval)
 
         # 再检查 ACK 是否超时

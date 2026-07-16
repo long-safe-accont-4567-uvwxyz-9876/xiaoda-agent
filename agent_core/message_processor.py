@@ -1604,7 +1604,7 @@ class MessageProcessorMixin:
                 task_type="chat_flash",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=200,
+                max_tokens=512,
                 timeout=15,
             )
             if response:
@@ -1643,7 +1643,7 @@ class MessageProcessorMixin:
             response = await self.router._client.chat.completions.create(
                 model=MIMO_MODEL,
                 messages=[{"role": "user", "content": vision_parts}],
-                max_tokens=800,
+                max_tokens=1024,
             )
             description = response.choices[0].message.content.strip()
             logger.info("agent.image_described", length=len(description))
@@ -1668,7 +1668,7 @@ class MessageProcessorMixin:
 6. 格式：先一句话总结，然后分点列出具体信息"""},
                     {"role": "user", "content": prompt},
                 ],
-                max_tokens=2048,
+                max_tokens=3072,
                 temperature=0.5,
             )
             if isinstance(result, str):

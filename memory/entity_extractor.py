@@ -218,7 +218,7 @@ class EntityExtractor:
                 task_type="entity_extraction",
                 messages=messages,
                 temperature=0.3,
-                max_tokens=300,
+                max_tokens=512,
             )
             if isinstance(result, str):
                 return result
