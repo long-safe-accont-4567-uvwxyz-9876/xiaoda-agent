@@ -12,6 +12,11 @@ _LLM_THINKING_KEYWORDS = {
     "首先", "好的", "格式要求", "用户要求", "任务是", "我需要", "让我分析",
     "根据对话", "从对话中可以看出", "分析给定的对话", "提取可复用",
     "模式描述", "置信度", "每行一个", "现在请",
+    # 心理学/操控类描述（LLM 过度解读用户行为）
+    "操控", "诱导", "情感依赖", "合理化", "矛盾心理", "利用", "暗示",
+    "承认并", "正当化", "控制欲", "心理", "依赖", "妥协",
+    # 思考链泄漏标记
+    "0uits", "0udge", "思维链", "reasoning", "思考过程",
 }
 
 # prompt 示例内容 — 防止 LLM 直接复制示例
@@ -19,6 +24,15 @@ _PROMPT_EXAMPLE_FRAGMENTS = {
     "用户喜欢用中文交流", "用户是开发者", "经常需要代码调试",
     "用户偏好浓香入味的菜品", "用户倾向于直接处理问题",
 }
+
+# 无效本能模式（正则）— 拒绝过短、模板化、或非用户偏好类内容
+import re as _re
+_INVALID_INSTINCT_PATTERNS = [
+    _re.compile(r"^用户行为模式"),     # 模板化标题
+    _re.compile(r"^用户提问"),          # 单次行为非偏好
+    _re.compile(r"^\d+\..*uts"),        # 思考链碎片
+    _re.compile(r"模型退化|训练数据|上下文过载"),  # 模型自我描述
+]
 
 EXTRACT_PROMPT = """从以下对话中提取可复用的用户偏好或行为模式。只输出结果，不要解释。
 
@@ -45,7 +59,7 @@ class InstinctManager:
         self._available = db is not None
         self._free_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         self._free_base_url = "https://api.siliconflow.cn/v1"
-        self._free_model = "THUDM/GLM-Z1-9B-0414"
+        self._free_model = "THUDM/GLM-4-9B-0414"  # 非思考模型，避免 Z1 思考碎片污染本能提取
 
     def set_free_model_client(self, api_key: str, base_url: str, model: str) -> None:
         """配置硅基流动免费模型客户端"""
@@ -84,7 +98,8 @@ class InstinctManager:
         """创建 instincts 表"""
         if not self._available:
             return
-        await self.db._conn.executescript("""
+        # 逐条执行 DDL，避免 executescript() 在 vfat 上触发隐式 commit 导致 database is locked
+        await self.db._conn.execute("""
             CREATE TABLE IF NOT EXISTS instincts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 content TEXT NOT NULL,
@@ -94,11 +109,11 @@ class InstinctManager:
                 created_at REAL NOT NULL,
                 last_used_at REAL NOT NULL,
                 use_count INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE INDEX IF NOT EXISTS idx_instincts_status ON instincts(status);
-            CREATE INDEX IF NOT EXISTS idx_instincts_confidence ON instincts(confidence);
-            CREATE INDEX IF NOT EXISTS idx_instincts_last_used ON instincts(last_used_at);
+            )
         """)
+        await self.db._conn.execute("CREATE INDEX IF NOT EXISTS idx_instincts_status ON instincts(status)")
+        await self.db._conn.execute("CREATE INDEX IF NOT EXISTS idx_instincts_confidence ON instincts(confidence)")
+        await self.db._conn.execute("CREATE INDEX IF NOT EXISTS idx_instincts_last_used ON instincts(last_used_at)")
         await self.db._conn.commit()
         logger.info("instinct.table_ready")
 
@@ -153,6 +168,9 @@ class InstinctManager:
                 continue
             # 过滤 prompt 示例被复制
             if any(frag in content for frag in _PROMPT_EXAMPLE_FRAGMENTS):
+                continue
+            # 过滤模板化/非偏好类内容（正则匹配）
+            if any(p.search(content) for p in _INVALID_INSTINCT_PATTERNS):
                 continue
 
             rows_to_insert.append((content, confidence, session_id, now, now))

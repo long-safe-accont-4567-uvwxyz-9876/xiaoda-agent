@@ -371,9 +371,9 @@ class XiaoliAgent:
                 temperature=0.9,
             )
             reply = response.choices[0].message.content or ""
-            rc = getattr(response.choices[0].message, "reasoning_content", None) or ""
+            # 不使用 reasoning_content 代替 content（防止推理泄漏）
             logger.info("xiaoli.chat.max_rounds", provider=provider_name, model=model)
-            return (reply or rc).strip()
+            return reply.strip() or TIRED_MSG
         except (AttributeError, ValueError, OSError) as e:
             logger.warning("xiaoli.chat.failed", error=str(e)[:100])
             return TIRED_MSG

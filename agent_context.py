@@ -52,13 +52,13 @@ def _build_scene_hint(source: str) -> str:
 class AgentContext:
     """管理对话上下文，维护历史、系统提示、动态缓存与压缩等状态。"""
 
-    MAX_HISTORY_TOKENS = 6000
+    MAX_HISTORY_TOKENS = 200000
     SYSTEM_PROMPT_TOKENS_BUDGET = 2000
     DYNAMIC_CACHE_TTL = 600
     PORTRAIT_CACHE_TTL = 1800
     COMPRESS_TARGET_RATIO = 0.6   # 压缩目标：60% 的 MAX_HISTORY_TOKENS
     MAX_COMPRESS_ROUNDS = 5        # 最大压缩轮数
-    MAX_COMPRESSED_SUMMARY_LEN = 3000
+    MAX_COMPRESSED_SUMMARY_LEN = 6000
     MAX_PRE_COMPRESSED_BUFFER = 200
 
     def __init__(self, system_prompt: str = "", system_prompt_loader: Callable[..., str] | None = None,
@@ -428,8 +428,12 @@ class AgentContext:
         # 根据用户输入自动调整 MD 模块顺序，让最相关的靠近用户输入
         from prompt_builder import build_scene_aware_prompt
         stable_content = build_scene_aware_prompt(user_input, self.current_address_term)
-        if self.instinct_prompt:
-            stable_content = stable_content + "\n\n---\n\n" + self.instinct_prompt if stable_content else self.instinct_prompt
+        # 禁用 instinct 注入：LLM 容易把 instinct 列表项当成要复述的内容，
+        # 导致"答非所问"（如回复开头是 "· 起床的温柔 -..."）。
+        # instinct 提取质量不可靠（LLM 过度解读用户行为），即使过滤后仍可能误导。
+        # 暂时禁用注入，instinct 数据仍保留供未来更可靠的注入方式使用。
+        # if self.instinct_prompt:
+        #     stable_content = stable_content + "\n\n---\n\n" + self.instinct_prompt if stable_content else self.instinct_prompt
 
         # Stable 层追加项目硬约束（Always，~150 token，每次必注入）
         try:

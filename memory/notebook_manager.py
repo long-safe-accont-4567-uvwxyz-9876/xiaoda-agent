@@ -60,7 +60,7 @@ class NotebookManager:
         self._router = router
         self._free_api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         self._free_base_url = os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
-        self._free_model = "THUDM/GLM-Z1-9B-0414"
+        self._free_model = "THUDM/GLM-4-9B-0414"  # 非思考模型，避免 Z1 思考碎片污染洞察
         logger.info("notebook.ready")
 
     async def _call_free_model(self, messages: list, temperature: float = 0.6,
@@ -196,6 +196,19 @@ class NotebookManager:
 
             if last_line.startswith("INSIGHT:"):
                 content = last_line[8:].strip()
+                # 过滤心理学分析/操控类描述（LLM 过度解读用户行为）
+                _BAD_INSIGHT_KEYWORDS = (
+                    "操控", "诱导", "依赖", "心理", "矛盾", "利用", "暗示",
+                    "承认", "正当化", "控制欲", "妥协", "情感", "动机",
+                    "合理化", "防御", "投射", "转移",
+                )
+                if any(kw in content for kw in _BAD_INSIGHT_KEYWORDS):
+                    logger.info("notebook.insight_rejected", content=content[:40], reason="psychology_analysis")
+                    return
+                # 拒绝过长的分析性描述（正常偏好应 <30 字）
+                if len(content) > 40:
+                    logger.info("notebook.insight_rejected", content=content[:40], reason="too_long")
+                    return
                 if content and '<' not in content and len(content) > 1:
                     similar_id = await self._find_similar(content)
                     if similar_id:

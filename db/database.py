@@ -158,20 +158,26 @@ class DatabaseManager:
 
     async def _run_migrations(self) -> None:
         """按 version 顺序执行所有数据库迁移。每个迁移独立事务，失败时 fail-fast 阻止启动。"""
-        await self._conn.executescript("""
+        # 逐条执行 DDL，避免 executescript() 在 vfat 上的隐式 commit 问题
+        await self._conn.execute("""
             CREATE TABLE IF NOT EXISTS schema_version (
                 version INTEGER PRIMARY KEY,
                 applied_at REAL NOT NULL
-            );
+            )
+        """)
+        await self._conn.execute("""
             CREATE TABLE IF NOT EXISTS migration_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 dirty INTEGER NOT NULL DEFAULT 0,
                 last_version INTEGER NOT NULL DEFAULT 0,
                 last_error TEXT NOT NULL DEFAULT ''
-            );
-            INSERT OR IGNORE INTO migration_state (id, dirty, last_version, last_error)
-            VALUES (1, 0, 0, '');
+            )
         """)
+        await self._conn.execute("""
+            INSERT OR IGNORE INTO migration_state (id, dirty, last_version, last_error)
+            VALUES (1, 0, 0, '')
+        """)
+        await self._conn.commit()
 
         # Dirty state 检测：上次迁移未完成
         state_row = await self._conn.execute_fetchall(
@@ -211,6 +217,26 @@ class DatabaseManager:
         row = await self._conn.execute_fetchall("SELECT MAX(version) FROM schema_version")
         current = row[0][0] if row and row[0][0] is not None else 0
 
+        # 防御性校验：检查关键列是否真正存在（防止 schema_version 被标记但列未实际添加）
+        if current >= 10:
+            epi_cols = {r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")}
+            # v15 关键列缺失 → 回退 schema_version 到 v9，触发重新迁移
+            critical_v15_cols = {"phase", "difficulty", "stability"}
+            if current >= 15 and not critical_v15_cols.issubset(epi_cols):
+                logger.warning("database.migration_integrity_check_failed",
+                               msg=f"schema_version={current} 但缺失关键列 {critical_v15_cols - epi_cols}，回退到 v9 重新迁移")
+                # 删除 v10+ 的 schema_version 记录
+                await self._conn.execute("DELETE FROM schema_version WHERE version >= 10")
+                await self._conn.commit()
+                current = 9
+            # v18 关键列缺失
+            elif current >= 18 and "distill_status" not in epi_cols:
+                logger.warning("database.migration_integrity_check_failed",
+                               msg="schema_version>=18 但缺失 distill_status 列，回退到 v17 重新迁移")
+                await self._conn.execute("DELETE FROM schema_version WHERE version >= 18")
+                await self._conn.commit()
+                current = 17
+
         # (version, description, migrate_fn) 三元组列表
         migrations = [
             (1, "temporal_knowledge_graph", self._migrate_v1),
@@ -245,6 +271,24 @@ class DatabaseManager:
         注意：不使用显式 BEGIN TRANSACTION，因为迁移函数内部的 executescript()
         会隐式提交当前事务，在 vfat 上会导致死锁/挂起。
         """
+        # 确保 migration_state 表存在（防御 vfat 上 executescript 静默失败）
+        try:
+            await self._conn.execute("SELECT 1 FROM migration_state LIMIT 1")
+        except Exception:
+            await self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS migration_state (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    dirty INTEGER NOT NULL DEFAULT 0,
+                    last_version INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT ''
+                )
+            """)
+            await self._conn.execute("""
+                INSERT OR IGNORE INTO migration_state (id, dirty, last_version, last_error)
+                VALUES (1, 0, 0, '')
+            """)
+            await self._conn.commit()
+
         # 标记 dirty（独立事务，确保迁移失败后 dirty 状态持久化）
         await self._conn.execute(
             "UPDATE migration_state SET dirty = 1, last_version = ?, last_error = '' WHERE id = 1",

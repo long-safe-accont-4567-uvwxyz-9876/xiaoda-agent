@@ -64,18 +64,17 @@ PROVIDER_PRICING = {
 }
 
 ROUTE_TABLE = {
-    # chat 主路由：fast_path 与 main_path 共用，mimo-v2.5 等推理模型会消耗 reasoning_content token，
-    # 3072 给 content 输出留足空间，避免小妲风格（含 emoji/修辞）回复被 max_tokens 截断
-    "chat": {"model": _CFG_MODEL_NAME, "max_tokens": 3072, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_pro": {"model": _CFG_PRO_MODEL or _CFG_MODEL_NAME, "max_tokens": 4096, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "enabled", "budget_tokens": 2048}},
-    # chat_flash：sub_agent 调用（如 xiaoli 转述），推理模型需要更多空间避免 content_len=154 截断
-    "chat_flash": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 3200, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_mini": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1500, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_mimo": {"model": MIMO_MODEL, "max_tokens": 3072, "client": "mimo", "thinking": {"type": "disabled"}},
+    # chat 主路由：充分利用模型输出能力，避免回复被 max_tokens 截断
+    "chat": {"model": _CFG_MODEL_NAME, "max_tokens": 8192, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "chat_pro": {"model": _CFG_PRO_MODEL or _CFG_MODEL_NAME, "max_tokens": 8192, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "enabled", "budget_tokens": 4096}},
+    # chat_flash：sub_agent 调用（如 xiaoli 转述），需要足够空间避免截断
+    "chat_flash": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 4096, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "chat_mini": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 3072, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "chat_mimo": {"model": MIMO_MODEL, "max_tokens": 8192, "client": "mimo", "thinking": {"type": "disabled"}},
     "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 300, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 300, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1500, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": 3072, "client": "agnes", "thinking": {"type": "disabled"}},
+    "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 512, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 2048, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": 8192, "client": "agnes", "thinking": {"type": "disabled"}},
 }
 
 MODEL_PREFERENCES = {
@@ -923,8 +922,16 @@ class ModelRouter:
         content = response.choices[0].message.content or ""
         rc = getattr(response.choices[0].message, "reasoning_content", None) or ""
         _reasoning_content_var.set(rc)
+        # 关键修复：禁止用 reasoning_content 代替 content
+        # 根因：agnes-2.0-flash 即使 enable_thinking=False，在 max_tokens 不足或某些边界条件下
+        # 仍可能返回 reasoning_content。用思考链代替回复会导致"推理严重泄漏"——
+        # LLM 的内部思考过程被当成最终回复发给用户。
+        # 正确做法：content 为空时返回降级提示，触发上层 fallback 机制。
         if not content and rc:
-            content = rc
+            logger.warning("router.reasoning_leak_blocked",
+                           model=model, task=task_type,
+                           rc_len=len(rc), finish_reason=getattr(response.choices[0], "finish_reason", None))
+            content = ""  # 留空，让上层降级/fallback 机制接管
 
         # 检查 finish_reason：检测截断
         finish_reason = getattr(response.choices[0], "finish_reason", None)
@@ -950,6 +957,17 @@ class ModelRouter:
                             model=model, task=task_type,
                             finish_reason=finish_reason,
                             content_len=content_len)
+
+        # 关键修复：空 content 一律抛异常触发 fallback
+        # 根因：agnes-2.0-flash 多种异常行为：
+        #   1. finish_reason=tool_calls + 空 content（工具调用已在前面的分支处理，到这里 content 为空=异常）
+        #   2. finish_reason=stop + 空 content（模型认为不需要回复，但用户会收到空回复）
+        # 两种情况都应触发 fallback 重试其他 provider，而不是返回空字符串给用户。
+        if not content.strip():
+            raise RuntimeError(
+                f"empty_content by {provider}/{model}: finish_reason={finish_reason}, "
+                f"content 为空（模型未生成有效回复）"
+            )
 
         return content
 

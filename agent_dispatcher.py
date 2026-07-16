@@ -794,8 +794,8 @@ class SubAgent:
                 timeout=min(api_timeout, remaining),
             )
             reply = response.choices[0].message.content or ""
-            rc = getattr(response.choices[0].message, "reasoning_content", None) or ""
-            result = strip_reasoning(strip_dsml(reply or rc)).strip()
+            # 不使用 reasoning_content 代替 content（防止推理泄漏）
+            result = strip_reasoning(strip_dsml(reply)).strip()
             # 兜底：如果过滤后为空（如模型只输出推理泄露），返回提示
             if not result:
                 return f"{self.config.display_name}思考了一下，但还没有整理好回答，请稍等或换个问题问我吧～"

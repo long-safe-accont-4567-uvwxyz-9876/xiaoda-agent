@@ -46,13 +46,13 @@ class TestQueryTransformDefaultModel:
     """测试查询变换默认模型"""
 
     def test_default_model_is_fast(self):
-        """查询变换默认模型应为 THUDM/GLM-Z1-9B-0414（硅基流动免费，推理质量高）"""
+        """查询变换默认模型应为 THUDM/GLM-4-9B-0414（非思考模型，避免 Z1 思考碎片污染查询）"""
         from memory.query_transform import QueryTransformer
         # 不传 model 参数时，应使用 QUERY_TRANSFORM_MODEL 环境变量或默认值
         with patch.dict("os.environ", {"SILICONFLOW_API_KEY": "test_key"}, clear=False):
             qt = QueryTransformer()
-            assert qt._model == "THUDM/GLM-Z1-9B-0414", (
-                f"默认模型应为 THUDM/GLM-Z1-9B-0414（硅基流动免费，推理质量高），"
+            assert qt._model == "THUDM/GLM-4-9B-0414", (
+                f"默认模型应为 THUDM/GLM-4-9B-0414（非思考模型，避免 Z1 思考碎片污染查询），"
                 f"实际为 {qt._model}。"
             )
 

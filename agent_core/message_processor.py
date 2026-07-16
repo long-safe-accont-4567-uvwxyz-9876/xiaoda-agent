@@ -93,11 +93,36 @@ class MessageProcessorMixin:
         current_tool_calls, current_assistant_content, current_reasoning = \
             self._parse_verification_result(first_result, tools)
 
-        # 如果首轮没有 tool_calls，直接返回文本
+        # 如果首轮没有 tool_calls，检测回复完整性后返回
         if not current_tool_calls:
             if isinstance(first_result, str):
-                return self._clean_reply(first_result), []
-            return self._clean_reply(first_result.choices[0].message.content or ""), []
+                reply = self._clean_reply(first_result)
+            else:
+                reply = self._clean_reply(first_result.choices[0].message.content or "")
+
+            # 完整性检测：回复过短且不以句末标点结尾 → 不完整，追加"请继续"重试一次
+            # 根因：agnes-2.0-flash 对复杂问题可能返回不完整回复（如"嗯……让我查一下记忆里 7 月16号 7:00-8:"，26字以冒号结尾）
+            # verification loop 直接采纳不完整回复，用户收到半句话
+            if reply and len(reply) < 60 and not any(reply.endswith(c) for c in "。！？～…）」】\n"):
+                logger.warning("verification.incomplete_reply",
+                               reply_len=len(reply), reply_tail=reply[-15:])
+                try:
+                    messages.append({"role": "assistant", "content": reply})
+                    messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
+                    result2 = await asyncio.wait_for(self.router.route(
+                        task_type, messages, temperature=temperature, max_tokens=max_tokens,
+                        user_openid=user_openid, session_id=session_id,
+                    ), timeout=60)
+                    reply2 = result2 if isinstance(result2, str) else (result2.choices[0].message.content or "")
+                    reply2 = self._clean_reply(reply2)
+                    if reply2 and len(reply2) > 5:
+                        reply = reply + reply2
+                        logger.info("verification.incomplete_retry_success",
+                                    final_len=len(reply))
+                except Exception as e:
+                    logger.warning("verification.incomplete_retry_failed", error=str(e))
+
+            return reply, []
 
         # ── 验收循环 ─────────────────────────────────────────
         last_tool_calls = current_tool_calls  # 追踪最近一次 tool_calls，供 summarize 使用
@@ -295,7 +320,28 @@ class MessageProcessorMixin:
         # LLM 调用
         reply = await self._call_fast_path_llm(messages, user_openid, session_id, is_master=is_master)
 
-        # 截断检测：回复过短且未以句末标点结尾时，记录告警
+        # 空回复检测：返回 None 走主路径
+        # 根因：agnes-2.0-flash 返回空 content 时，_call_fast_path_llm 可能返回空字符串
+        # （route() 的空 content fallback 未覆盖 finish_reason=stop 的情况）
+        # 修复：空 reply 一律走主路径，避免用户收到空回复
+        if not reply or not reply.strip():
+            logger.warning("chat.fast_path_empty_reply",
+                           provider="agnes", reply_len=len(reply or ""))
+            return None
+
+        # 碎片检测：回复过短且未以句末标点结尾时，认为是 LLM 思考碎片泄漏
+        # 根因：agnes-2.0-flash 对简短输入（如"？"）可能返回思考过程碎片
+        # 如"我有点担心的是——你问「？"，这不是有效回复
+        # 修复：返回 None 让上层走主路径（有 verification 循环，更可靠）
+        if reply and len(reply) < 30:
+            _end = reply[-5:] if len(reply) >= 5 else reply
+            if not any(reply.endswith(c) for c in "。！？～…）」】\n"):
+                logger.warning("chat.fast_path_fragment_detected",
+                               reply_len=len(reply), reply_tail=_end,
+                               reply_preview=reply[:80])
+                return None  # 走主路径
+
+        # 截断告警：30-50 字且未以句末标点结尾时，记录但继续
         if reply and len(reply) < 50:
             _end = reply[-5:] if len(reply) >= 5 else reply
             if not any(reply.endswith(c) for c in "。！？～…）」】\n"):
@@ -343,7 +389,7 @@ class MessageProcessorMixin:
 
         # 历史对话（非主人不加载，防止看到主人聊天内容）
         if is_master:
-            for msg in self.context.get_last_n(6):
+            for msg in self.context.get_last_n(10):
                 m = {"role": msg["role"], "content": str(msg.get("content", "")) if msg.get("content") is not None else ""}
                 messages.append(m)
 
@@ -1381,6 +1427,10 @@ class MessageProcessorMixin:
         # 复杂任务关键词优先排除
         complex_keywords = SIMPLE_TASK_KEYWORDS["complex"]
         if any(kw in query for kw in complex_keywords):
+            return False
+        # 时间/日期查询排除：包含日期或时间表述的查询通常需要记忆检索
+        import re
+        if re.search(r'\d+[号日月年]|周[一二三四五六日末]|今[天日早晚]|昨[天日]|前天|上周|上个月', query):
             return False
         # 闲聊关键词命中
         chat_keywords = SIMPLE_TASK_KEYWORDS["chat"]

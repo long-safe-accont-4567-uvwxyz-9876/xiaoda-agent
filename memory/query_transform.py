@@ -9,13 +9,14 @@ from loguru import logger
 class QueryTransformer:
     """查询变换器：改写/扩展/分解用户原始查询
 
-    使用硅基流动免费模型（如 GLM-Z1-9B-0414），不占用主模型调用配额。
+    使用硅基流动免费模型，不占用主模型调用配额。
     无 API Key 时自动降级返回原始查询。
     """
 
     # 硅基流动免费模型列表（0 成本）
+    # 注意：避免使用 GLM-Z1 等思考模型，因为 max_tokens 较小时会返回思考碎片污染查询
     FREE_MODELS: ClassVar[list[str]] = [
-        "THUDM/GLM-Z1-9B-0414",
+        "THUDM/GLM-4-9B-0414",
         "Qwen/Qwen2.5-7B-Instruct",
         "THUDM/glm-4-9b-chat",
     ]
@@ -40,7 +41,7 @@ class QueryTransformer:
         self._router = router  # 保留兼容，但不再用于查询变换
         self._api_key = api_key or os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
         self._base_url = base_url or "https://api.siliconflow.cn/v1"
-        self._model = model or os.getenv("QUERY_TRANSFORM_MODEL", "THUDM/GLM-Z1-9B-0414")
+        self._model = model or os.getenv("QUERY_TRANSFORM_MODEL", "THUDM/GLM-4-9B-0414")
         self._available = bool(self._api_key)
 
     @property
@@ -73,7 +74,20 @@ class QueryTransformer:
                 if not choices:
                     return None
                 content = choices[0].get("message", {}).get("content", "")
-                return content.strip() if content else None
+                if not content:
+                    return None
+                content = content.strip()
+                # 防御思考碎片泄漏：GLM-Z1 等思考模型可能返回思考过程碎片
+                # 这些碎片不是有效的查询改写，会导致记忆检索错误→答非所问
+                _THINKING_PREFIXES = (
+                    "首先", "让我", "分析", "我需要", "根据", "好的", "嗯",
+                    "用户", "任务是", "思考", "我来", "接下来",
+                )
+                if any(content.startswith(p) for p in _THINKING_PREFIXES):
+                    logger.warning("query_transform.thinking_fragment_detected",
+                                   model=self._model, content_preview=content[:60])
+                    return None
+                return content
         except Exception as e:
             logger.warning("query_transform.free_model_failed", model=self._model, error=str(e), error_type=type(e).__name__)
             return None
