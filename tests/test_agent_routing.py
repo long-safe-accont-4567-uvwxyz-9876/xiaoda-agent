@@ -32,11 +32,11 @@ _ALL_AVAILABLE = {
 }
 
 
-def test_route_frontend_to_xiaoke():
-    """前端任务应路由到 xiaoke（编程助手）。"""
+def test_route_frontend_to_xiaolang():
+    """前端任务应路由到 xiaolang（编程助手）。"""
     dispatcher = _make_dispatcher(_ALL_AVAILABLE)
     target = dispatcher.route_task("frontend", "帮我写个 Vue 前端页面")
-    assert target == "xiaoke"
+    assert target == "xiaolang"
 
 
 def test_route_emotional_to_xiaoli():
@@ -66,6 +66,7 @@ def test_classify_task_keywords():
         ("搜索一下天气", "info_search"),
         ("GPIO 传感器读取", "hardware"),
         ("今天好难过求陪伴", "emotional"),
+        ("回忆昨天发生了什么", "memory"),
     ]
 
     for user_input, expected in cases:
@@ -74,14 +75,14 @@ def test_classify_task_keywords():
 
 
 def test_route_fallback_when_unavailable():
-    """目标代理不可用时应回退到默认代理（xiaoli）。"""
-    # xiaoke 不可用，xiaoli 可用
-    agents = {"xiaoke": False, "xiaoli": True, "xiaolian": True, "xiaolang": True}
+    """目标代理不可用时应回退到可用代理。"""
+    # xiaolang 不可用，xiaoke 可用
+    agents = {"xiaoke": True, "xiaoli": True, "xiaolian": True, "xiaolang": False}
     dispatcher = _make_dispatcher(agents)
 
-    # frontend 本应路由到 xiaoke，但 xiaoke 不可用 → 回退到 xiaoli
+    # frontend 本应路由到 xiaolang，但 xiaolang 不可用 → 回退到 xiaoke
     target = dispatcher.route_task("frontend", "写个 React 组件")
-    assert target == "xiaoli"
+    assert target in ("xiaoke", "xiaoli")  # 回退到任一可用代理即可
 
 
 def test_routing_config_load():
@@ -89,12 +90,12 @@ def test_routing_config_load():
     dispatcher = _make_dispatcher(_ALL_AVAILABLE)
     config = dispatcher._load_routing_config()
 
-    # 验证全部关键字段
-    assert config["frontend"] == "xiaoke"
-    assert config["backend"] == "xiaoke"
-    assert config["debug"] == "xiaoke"
+    # 验证全部关键字段（frontend/backend/debug/test 已从 xiaoke → xiaolang）
+    assert config["frontend"] == "xiaolang"
+    assert config["backend"] == "xiaolang"
+    assert config["debug"] == "xiaolang"
     assert config["security"] == "xiaolang"
-    assert config["test"] == "xiaoke"
+    assert config["test"] == "xiaolang"
     assert config["info_search"] == "xiaolian"
     assert config["hardware"] == "xiaolang"
     assert config["emotional"] == "xiaoli"

@@ -1131,10 +1131,14 @@ class AgentDispatcher:
         :returns: 任务类型（frontend/backend/debug/security/test/info_search/hardware/emotional/general）
         """
         # 委托给 RouterEngine（权威路由源）：明确子代理路由时反推 task_type
+        # 注意：xiaoda 作为默认兜底路由时不应反推为 memory，仅当 RouterEngine
+        # 通过关键词/mention 等明确路由到 xiaoda 时才视为 memory
         try:
             engine = self._get_router_engine()
             decision = engine.decide(user_input)
             for agent in decision.agent_names:
+                if agent == "xiaoda" and decision.reasoning.startswith("default"):
+                    continue  # 默认兜底路由，不反推 task_type，继续走本地分类
                 task_type = _AGENT_TO_TASK_TYPE.get(agent)
                 if task_type:
                     return task_type
