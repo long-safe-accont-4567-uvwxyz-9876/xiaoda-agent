@@ -277,7 +277,7 @@ setTimeout(() => {
 // ==================== reflow 自驱（替代 Python 端 UI 线程轮询） ====================
 // 兜底 WebView2 渲染静默：每秒触发一次 reflow，直到 onServerReady 接管
 var _reflowKicker = setInterval(function() {
-    try { void document.body.offsetHeight; } catch(e) {}
+    try { void document.body.offsetHeight; } catch(e) { /* reflow trigger failure is non-critical */ }
 }, 1000);
 
 var _serverReadyCalled = false;

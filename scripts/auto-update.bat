@@ -70,7 +70,7 @@ powershell -NoProfile -Command ^
     "  $extractDir = [System.IO.Path]::GetTempPath() + '\xiaoda-agent-update'; " ^
     "  if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }; " ^
     "  New-Item -ItemType Directory -Path $extractDir | Out-Null; " ^
-    "  tar xzf $tmp -C $extractDir; " ^
+    "  if (Get-Command tar -ErrorAction SilentlyContinue) { tar xzf $tmp -C $extractDir } else { Write-Host '  Error: tar command not available. Windows 10 1803+ required for auto-update.'; exit 1 }; " ^
     "  Write-Host '  Backing up configuration...'; " ^
     "  $backupDir = [System.IO.Path]::GetTempPath() + 'xiaoda-agent-backup-v' + $curVer; " ^
     "  if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir | Out-Null }; " ^

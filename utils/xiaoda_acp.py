@@ -44,9 +44,10 @@ class XiaodaAcpServer:
         await self.agent.init()
         logger.info("xiaoda_acp.agent_initialized")
 
-    def _read_message(self) -> Any:
-        """从标准输入读取一行并解析为 JSON。"""
-        line = sys.stdin.readline()
+    async def _read_message(self) -> Any:
+        """从标准输入读取一行并解析为 JSON（非阻塞）。"""
+        loop = asyncio.get_running_loop()
+        line = await loop.run_in_executor(None, sys.stdin.readline)
         if not line:
             return None
         line = line.strip()

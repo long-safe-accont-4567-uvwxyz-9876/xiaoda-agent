@@ -197,8 +197,8 @@ class BehavioralHealthScorer:
                 else:
                     _fire_and_forget(_signal_stream.emit(
                         "health", float(score_val) / 5.0, "behavioral_health"))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("behavioral_health.signal_emit_failed", error=str(e))
 
         return HealthScore(
             score=score_val,

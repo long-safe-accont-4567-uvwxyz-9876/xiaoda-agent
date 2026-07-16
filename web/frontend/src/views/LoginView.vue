@@ -39,18 +39,9 @@ onMounted(async () => {
   }
   // 检测是否设置了密码
   try {
-    const resp = await fetch('/api/v1/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: '' }),
-    })
-    if (resp.ok) {
-      const result = await resp.json()
-      if (result.data?.token) {
-        noPassword.value = true
-      }
-    } else {
-      noPassword.value = false
+    const result = await api.login('')
+    if (result.token) {
+      noPassword.value = true
     }
   } catch {
     noPassword.value = false

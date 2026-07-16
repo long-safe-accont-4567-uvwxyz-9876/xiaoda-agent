@@ -149,6 +149,14 @@ class CircuitBreaker:
     def check(self, state: CognitiveState) -> CircuitState:
         """检查熔断状态"""
         with self._lock:
+            # Take a snapshot to avoid mutation during check
+            snap = CognitiveState(
+                confidence=state.confidence,
+                fatigue=state.fatigue,
+                deviation=state.deviation,
+                consecutive_fails=state.consecutive_fails,
+                tool_fail_rate=state.tool_fail_rate,
+            )
             # 如果当前是 RED，检查是否可以进入 half-open
             if self._red_since > 0:
                 elapsed = time.time() - self._red_since
@@ -176,7 +184,7 @@ class CircuitBreaker:
                     return CircuitState.RED
                 return CircuitState.RED
 
-            red_signals, yellow_signals = self._count_signals(state)
+            red_signals, yellow_signals = self._count_signals(snap)
 
             if red_signals >= 1:
                 self._red_since = time.time()

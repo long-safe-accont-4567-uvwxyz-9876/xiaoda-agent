@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from collections import OrderedDict
 from datetime import datetime, UTC
 from zoneinfo import ZoneInfo
@@ -366,8 +367,12 @@ async def _send_reply(to_email: str, subject: str, body: str) -> bool:
     """
     from tools.mail_tools import _run_agently
 
+    # Sanitize subject to remove control characters
+    safe_subject = re.sub(r'[\x00-\x1f\x7f]', '', subject)
+    safe_body = body  # body may contain newlines which are valid
+
     # 阶段 1：调用 send（无 token），获取 confirmation_token
-    args1 = ["message", "+send", "--to", to_email, "--subject", subject, "--body", body]
+    args1 = ["message", "+send", "--to", to_email, "--subject", safe_subject, "--body", safe_body]
     rc1, out1, err1 = await _run_agently(args1, timeout=60)
 
     # 先尝试提取 confirmation_token（无论 rc 是 0 还是 8，data 里都可能带 token）
@@ -375,8 +380,8 @@ async def _send_reply(to_email: str, subject: str, body: str) -> bool:
 
     if ctk:
         # 阶段 2：带 token 真正发送
-        args2 = ["message", "+send", "--to", to_email, "--subject", subject,
-                 "--body", body, "--confirmation-token", ctk]
+        args2 = ["message", "+send", "--to", to_email, "--subject", safe_subject,
+                 "--body", safe_body, "--confirmation-token", ctk]
         rc2, out2, err2 = await _run_agently(args2, timeout=60)
         if rc2 == 0:
             try:

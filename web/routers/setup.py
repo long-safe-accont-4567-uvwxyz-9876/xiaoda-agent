@@ -17,9 +17,10 @@ from web.schemas import Envelope
 import contextlib
 
 # test-key 速率限制：每 IP 最多 10 次/分钟
-_test_key_timestamps: dict[str, list[float]] = []
+_test_key_timestamps: list[float] = []
 _TEST_KEY_RATE_LIMIT = 10
 _TEST_KEY_RATE_WINDOW = 60.0
+_test_key_lock = asyncio.Lock()
 
 
 def _get_local_now():
@@ -285,6 +286,8 @@ async def _test_siliconflow(key_value: str) -> tuple[bool, str]:
             )
             if resp.status_code == 200:
                 return True, "SiliconFlow API Key 验证成功"
+            if resp.status_code == 401:
+                return False, "SiliconFlow API Key 无效或已过期"
             return False, f"SiliconFlow API 返回 HTTP {resp.status_code}"
     except httpx.TimeoutException:
         return False, "SiliconFlow API 请求超时"
@@ -302,6 +305,8 @@ async def _test_openrouter(key_value: str) -> tuple[bool, str]:
             )
             if resp.status_code == 200:
                 return True, "OpenRouter API Key 验证成功"
+            if resp.status_code == 401:
+                return False, "OpenRouter API Key 无效或已过期"
             return False, f"OpenRouter API 返回 HTTP {resp.status_code}"
     except httpx.TimeoutException:
         return False, "OpenRouter API 请求超时"
@@ -319,6 +324,8 @@ async def _test_deepseek(key_value: str) -> tuple[bool, str]:
             )
             if resp.status_code == 200:
                 return True, "DeepSeek API Key 验证成功"
+            if resp.status_code == 401:
+                return False, "DeepSeek API Key 无效或已过期"
             return False, f"DeepSeek API 返回 HTTP {resp.status_code}"
     except httpx.TimeoutException:
         return False, "DeepSeek API 请求超时"
@@ -328,14 +335,17 @@ async def _test_deepseek(key_value: str) -> tuple[bool, str]:
 
 async def _test_agnes(key_value: str) -> tuple[bool, str]:
     """测试 Agnes AI API Key。"""
+    _agnes_url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.get(
-                "https://apihub.agnes-ai.com/v1/models",
+                f"{_agnes_url.rstrip('/')}/models",
                 headers={"Authorization": f"Bearer {key_value}"},
             )
             if resp.status_code == 200:
                 return True, "Agnes AI API Key 验证成功"
+            if resp.status_code == 401:
+                return False, "Agnes AI API Key 无效或已过期"
             return False, f"Agnes AI API 返回 HTTP {resp.status_code}"
     except httpx.TimeoutException:
         return False, "Agnes AI API 请求超时"
@@ -375,15 +385,17 @@ async def _test_wolframalpha(key_value: str) -> tuple[bool, str]:
 
 
 async def _test_modelscope(key_value: str) -> tuple[bool, str]:
-    """测试 ModelScope Access Token。"""
+    """测试 ModelScope Access Token（推理 API）。"""
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.get(
-                "https://modelscope.cn/api/v1/models",
+                "https://api-inference.modelscope.cn/v1/models",
                 headers={"Authorization": f"Bearer {key_value}"},
             )
             if resp.status_code == 200:
                 return True, "ModelScope Access Token 验证成功"
+            if resp.status_code == 401:
+                return False, "ModelScope Access Token 无效或已过期"
             return False, f"ModelScope API 返回 HTTP {resp.status_code}"
     except httpx.TimeoutException:
         return False, "ModelScope API 请求超时"
@@ -533,11 +545,12 @@ async def test_key(body: dict, request: Request) -> Any:
     import time
     client_ip = request.client.host if request.client else "unknown"
     now = time.monotonic()
-    recent = [t for t in _test_key_timestamps if now - t < _TEST_KEY_RATE_WINDOW]
-    _test_key_timestamps[:] = recent
-    if len(recent) >= _TEST_KEY_RATE_LIMIT:
-        return Envelope(ok=False, error={"code": "RATE_LIMITED", "message": "测试频率过高，请稍后再试"})
-    _test_key_timestamps.append(now)
+    async with _test_key_lock:
+        recent = [t for t in _test_key_timestamps if now - t < _TEST_KEY_RATE_WINDOW]
+        _test_key_timestamps[:] = recent
+        if len(recent) >= _TEST_KEY_RATE_LIMIT:
+            return Envelope(ok=False, error={"code": "RATE_LIMITED", "message": "测试频率过高，请稍后再试"})
+        _test_key_timestamps.append(now)
 
     key_name = body.get("key_name", "")
     key_value = body.get("key_value", "")
@@ -577,7 +590,7 @@ async def save_keys(body: dict) -> Any:
         logger.info("setup.keys_saved count={}", len(updates))
 
         # 重新加载环境变量 + 清除缓存 + 重置凭证池
-        _reload_env_and_cache(updates, ENV_PATH)
+        await _reload_env_and_cache(updates, ENV_PATH)
         _reset_credential_pool(updates)
 
         # 更新 config 模块变量 + 刷新客户端
@@ -659,7 +672,7 @@ def _write_env_file(updates: Any, ENV_PATH: Any, ENV_EXAMPLE_PATH: Any, _parse_e
     _write_env(existing_lines, merged)
 
 
-def _reload_env_and_cache(updates: Any, ENV_PATH: Any) -> None:
+async def _reload_env_and_cache(updates: Any, ENV_PATH: Any) -> None:
     """重新加载环境变量、清除模型发现缓存。"""
     import os
     from dotenv import load_dotenv
@@ -672,7 +685,7 @@ def _reload_env_and_cache(updates: Any, ENV_PATH: Any) -> None:
     # 清除模型发现缓存
     try:
         from web._discovery_cache import invalidate_discovery_cache
-        invalidate_discovery_cache()
+        await invalidate_discovery_cache()
         logger.info("setup.discovery_cache_invalidated")
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning("setup.discovery_cache_invalidate_failed error={}", str(e))

@@ -157,7 +157,10 @@ async def export_session(session_id: str, request: Request) -> Any:
     # 验证 token
     try:
         from web.routers.auth import _validate_token
-        _validate_token(token)
+        if not _validate_token(token):
+            raise HTTPException(401, "Invalid or expired token")
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.debug("chat.validate_token_failed: {}", exc, exc_info=True)
         raise HTTPException(401, "Invalid or expired token") from None

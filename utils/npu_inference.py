@@ -525,24 +525,37 @@ class NPUModel:
 
         return results
 
-    def __del__(self) -> None:
-        """析构时释放所有缓冲区和网络资源。"""
+    def close(self) -> None:
+        """显式释放所有缓冲区和网络资源。
+
+        推荐调用 close() 而非依赖 __del__，因为 __del__ 的调用时机不可控。
+        """
+        if not self._loaded:
+            return
+        self._loaded = False
         for buf in self._output_buffers:
             try:
                 self._vip.destroy_buffer(buf)
             except Exception:
                 logger.debug("npu.destroy_output_buffer_failed", exc_info=True)
+        self._output_buffers.clear()
         for buf in self._input_buffers:
             try:
                 self._vip.destroy_buffer(buf)
             except Exception:
                 logger.debug("npu.destroy_input_buffer_failed", exc_info=True)
+        self._input_buffers.clear()
         if self._network:
             try:
                 self._vip.finish_network(self._network)
                 self._vip.destroy_network(self._network)
             except Exception:
                 logger.debug("npu.destroy_network_failed", exc_info=True)
+            self._network = None
+
+    def __del__(self) -> None:
+        """析构时释放资源 (推荐使用 close() 显式释放)。"""
+        self.close()
 
 
 def _sigmoid(x: Any) -> Any:

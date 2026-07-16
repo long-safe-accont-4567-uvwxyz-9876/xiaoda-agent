@@ -411,7 +411,8 @@ class DegradationDetector:
         self._task = loop.create_task(self._run(interval))
 
     async def _run(self, interval: int) -> None:
-        assert self._stop_event is not None
+        if self._stop_event is None:
+            raise RuntimeError("_run called without _stop_event")
         try:
             while not self._stop_event.is_set():
                 self._pull_from_sources()

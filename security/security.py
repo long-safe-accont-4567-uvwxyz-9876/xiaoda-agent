@@ -503,7 +503,8 @@ class SecurityFilter:
         if _skip_base_check:
             return SecurityCheckResult(is_safe=True, action="allow")
 
-        # 输入侧扫描
+        # 输入侧扫描（只调用一次，缓存结果避免重复调用导致不一致）
+        input_result = None
         if scope in ("input", "all"):
             input_result = self.check_user_input(text)
             if input_result.action == "block":
@@ -524,10 +525,8 @@ class SecurityFilter:
                     action=action,
                 )
 
-        # 如果输入侧有 warn，返回 warn 结果
-        if scope in ("input", "all"):
-            input_result = self.check_user_input(text)
-            if input_result.action == "warn":
-                return input_result
+        # 如果输入侧有 warn，返回 warn 结果（复用已缓存的 input_result）
+        if input_result is not None and input_result.action == "warn":
+            return input_result
 
         return SecurityCheckResult(is_safe=True, action="allow")

@@ -280,9 +280,10 @@ class TNRProtocol:
         """注入故障 (默认: 设置内部故障状态)"""
         if self._inject_fault_fn:
             result = self._inject_fault_fn(fault_type)
-            # 同步内部状态
-            self._fault_active = True
-            self._current_fault_type = fault_type
+            # 仅当 hook 成功时才同步内部状态
+            if result:
+                self._fault_active = True
+                self._current_fault_type = fault_type
             return result
         self._fault_active = True
         self._current_fault_type = fault_type
@@ -293,8 +294,10 @@ class TNRProtocol:
         """移除故障 (默认: 清除内部故障状态)"""
         if self._remove_fault_fn:
             result = self._remove_fault_fn(fault_type)
-            self._fault_active = False
-            self._current_fault_type = None
+            # 仅当 hook 成功时才同步内部状态
+            if result:
+                self._fault_active = False
+                self._current_fault_type = None
             return result
         self._fault_active = False
         self._current_fault_type = None

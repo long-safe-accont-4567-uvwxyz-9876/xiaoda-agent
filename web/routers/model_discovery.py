@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 import asyncio
+
 import os
 import time
-import threading
 
 from fastapi import APIRouter, Depends, Request
 from loguru import logger
@@ -105,7 +105,7 @@ async def _fetch_openai_compatible_models(
                 continue
 
             # 判断免费/付费
-            free = _determine_free(provider_id, model_id, item_dict)
+            free = await _determine_free(provider_id, model_id, item_dict)
 
             caps = get_capabilities(model_id, openrouter_data=item_dict if provider_id == "openrouter" else None)
             models.append({
@@ -124,7 +124,7 @@ async def _fetch_openai_compatible_models(
         return []
 
 
-def _determine_free(provider_id: str, model_id: str, item: dict) -> bool:
+async def _determine_free(provider_id: str, model_id: str, item: dict) -> bool:
     """判断模型是否免费。
 
     基于真实定价数据判断，无法确认的一律标记为付费。
@@ -147,7 +147,7 @@ def _determine_free(provider_id: str, model_id: str, item: dict) -> bool:
 
     # SiliconFlow: 从官网定价页面获取真实价格
     if provider_id == "siliconflow":
-        sf_pricing = _get_siliconflow_pricing()
+        sf_pricing = await _get_siliconflow_pricing()
         if sf_pricing:
             prices = sf_pricing.get(model_id, {})
             return prices.get("input", 1) == 0 and prices.get("output", 1) == 0
@@ -175,20 +175,21 @@ def _determine_free(provider_id: str, model_id: str, item: dict) -> bool:
 _sf_pricing_cache: dict[str, dict] | None = None
 _sf_pricing_ts: float = 0
 _SF_PRICING_TTL = 6 * 3600
-_sf_pricing_lock = threading.Lock()
+_sf_pricing_lock = asyncio.Lock()
 
 
-def _get_siliconflow_pricing() -> dict[str, dict] | None:
+async def _get_siliconflow_pricing() -> dict[str, dict] | None:
     global _sf_pricing_cache, _sf_pricing_ts
-    with _sf_pricing_lock:
+    async with _sf_pricing_lock:
         if _sf_pricing_cache and time.time() - _sf_pricing_ts < _SF_PRICING_TTL:
             return _sf_pricing_cache
 
     try:
         import re as _re
         import httpx
-        resp = httpx.get("https://siliconflow.cn/models",
-                         headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        async with httpx.AsyncClient() as client:
+            resp = await client.get("https://siliconflow.cn/models",
+                             headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
         html = resp.text
 
         pricing_map: dict[str, dict] = {}
@@ -210,7 +211,7 @@ def _get_siliconflow_pricing() -> dict[str, dict] | None:
             break
 
         if pricing_map:
-            with _sf_pricing_lock:
+            async with _sf_pricing_lock:
                 _sf_pricing_cache = pricing_map
                 _sf_pricing_ts = time.time()
             free_count = sum(1 for v in pricing_map.values() if v["input"] == 0 and v["output"] == 0)
@@ -254,7 +255,7 @@ async def _fetch_openrouter_models(api_key: str) -> list[dict]:
             if any(kw in lower for kw in _NON_CHAT_KEYWORDS):
                 continue
 
-            free = _determine_free("openrouter", model_id, item)
+            free = await _determine_free("openrouter", model_id, item)
             caps = get_capabilities(model_id, openrouter_data=item)
             models.append({
                 "id": model_id,
@@ -286,7 +287,7 @@ async def _fetch_siliconflow_models(api_key: str) -> list[dict]:
             body = resp.json()
 
         # 获取定价数据用于判断免费/付费
-        sf_pricing = _get_siliconflow_pricing()
+        sf_pricing = await _get_siliconflow_pricing()
 
         models = []
         for item in body.get("data", []):
@@ -393,7 +394,7 @@ async def discover_models() -> Any:
     每个模型标注 free（免费/付费）。
     """
     now = time.time()
-    with _cache_lock:
+    async with _cache_lock:
         if _cache["data"] is not None and (now - _cache["ts"]) < _CACHE_TTL:
             return Envelope(data=_cache["data"])
 
@@ -457,7 +458,7 @@ async def discover_models() -> Any:
                 "models": models_or_exc,
             })
 
-    with _cache_lock:
+    async with _cache_lock:
         _cache["data"] = result
         _cache["ts"] = now
     return Envelope(data=result)

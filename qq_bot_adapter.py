@@ -13,6 +13,20 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
+
+def _safe_int(val, default):
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_float(val, default):
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
 # 安全加固：不再全局 monkey patch ssl.create_default_context
 # botpy 内部已使用 SSLContext() 处理 WebSocket SSL，无需全局禁用证书验证
 
@@ -312,7 +326,7 @@ class AIQQBot(botpy.Client):
         self.hitl_enabled = os.getenv("QQ_HITL_ENABLED", "true").lower() in ("1", "true", "yes", "on")
         self.im_approval = IMApprovalChannel(
             send_callback=self._send_approval_message,
-            timeout=float(os.getenv("QQ_HITL_TIMEOUT", "60")),
+            timeout=_safe_float(os.getenv("QQ_HITL_TIMEOUT", "60"), 60),
         )
         self._approval_message_ctx: Any = None  # 当前审批消息上下文（per-request 设置）
         global _ACTIVE_BOT
@@ -364,9 +378,9 @@ class AIQQBot(botpy.Client):
                         router=self.agent.router,
                         api=self.api,
                         user_openid=user_openid,
-                        greeting_threshold=int(os.getenv("NUDGE_GREETING_THRESHOLD", "3600")),
-                        dnd_start=int(os.getenv("NUDGE_DND_START", "23")),
-                        dnd_end=int(os.getenv("NUDGE_DND_END", "8")),
+                        greeting_threshold=_safe_int(os.getenv("NUDGE_GREETING_THRESHOLD", "3600"), 3600),
+                        dnd_start=_safe_int(os.getenv("NUDGE_DND_START", "23"), 23),
+                        dnd_end=_safe_int(os.getenv("NUDGE_DND_END", "8"), 8),
                         portrait_manager=self.agent.portrait_manager,
                         config_service=self._get_config_service(),
                         core=self.agent,

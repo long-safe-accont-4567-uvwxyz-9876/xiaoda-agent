@@ -38,7 +38,7 @@ from loguru import logger
 # 从 chaos 内部导入，断开对 tests/ 的生产依赖
 from chaos._fault_types import (
     FaultConfig,
-    FaultInjectingLLMClient,
+    SimpleFaultInjectingLLMClient,
     FaultType,
 )
 
@@ -148,7 +148,7 @@ class ReliabilityBench:
     def __init__(
         self,
         agent: Any,
-        fault_client: FaultInjectingLLMClient,
+        fault_client: SimpleFaultInjectingLLMClient,
         # 场景参数 (测试中可覆盖以加速/确定性)
         single_timeout_prob: float = 0.3,
         single_timeout_requests: int = 10,

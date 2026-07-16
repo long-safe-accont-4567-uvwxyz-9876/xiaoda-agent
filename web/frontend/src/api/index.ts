@@ -267,8 +267,33 @@ export async function getSetupVersion(): Promise<{ version: string }> {
 }
 
 export function exportSessionUrl(sessionId: string): string {
-  const token = localStorage.getItem('token') || ''
-  return `${BASE}/sessions/${sessionId}/export?token=${encodeURIComponent(token)}`
+  // Token 不再通过 URL 查询参数暴露，改为 POST 下载
+  // 此函数保留兼容性但返回空字符串，实际下载由 exportSessionDownload 完成
+  return ''
+}
+
+/** 通过 POST + Authorization header 安全下载会话导出 */
+export async function exportSessionDownload(sessionId: string): Promise<void> {
+  const token = localStorage.getItem('token')
+  const res = await fetch(`${BASE}/sessions/${sessionId}/export`, {
+    method: 'POST',
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body?.error?.message || `导出失败 (HTTP ${res.status})`)
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `session-${sessionId}.json`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }
 
 // ── 记忆管理 ──

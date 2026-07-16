@@ -90,11 +90,24 @@ class BehavioralHealthMonitor:
         successes = sum(1 for _, s, _ in recent if s)
         self._metrics.goal_completion_rate = successes / len(recent)
 
+        # 计算重复失败率: 失败调用中同一工具连续失败的比例
+        failures = [(t, s) for t, s, _ in recent if not s]
+        if failures:
+            repeat_failures = sum(1 for i in range(1, len(failures))
+                                  if failures[i][0] == failures[i - 1][0])
+            self._metrics.failure_repeat_rate = repeat_failures / len(failures)
+        else:
+            self._metrics.failure_repeat_rate = 0.0
+
         # 检测循环: A→B→A→B 模式
         if len(recent) >= 4:
             tools = [t for t, _, _ in recent]
             loop_count = sum(1 for i in range(len(tools) - 2) if tools[i] == tools[i + 2])
             self._metrics.loop_signal = loop_count / max(1, len(tools) - 2)
+
+    def record_role_deviation(self, deviation: float) -> None:
+        """记录角色偏离度 (由外部检测模块调用, 如 prompt injection 检测器)"""
+        self._metrics.role_deviation = max(0.0, min(1.0, deviation))
 
     def get_health_report(self) -> dict:
         """获取健康报告"""
@@ -104,6 +117,7 @@ class BehavioralHealthMonitor:
             "health_status": self._metrics.health_status,
             "metrics": {
                 "goal_completion_rate": round(self._metrics.goal_completion_rate, 3),
+                "failure_repeat_rate": round(self._metrics.failure_repeat_rate, 3),
                 "loop_signal": round(self._metrics.loop_signal, 3),
                 "role_deviation": round(self._metrics.role_deviation, 3),
                 "low_quality_rate": round(self._metrics.low_quality_rate, 3),

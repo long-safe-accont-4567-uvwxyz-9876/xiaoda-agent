@@ -53,6 +53,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -237,6 +238,7 @@ class MatrixSnapshot:
 # 快照存储 (内存 + 可选持久化)
 _snapshots: list[MatrixSnapshot] = []
 _MAX_SNAPSHOTS = 10
+_snapshots_lock = threading.Lock()
 
 
 def _get_current_matrix() -> dict[str, dict[str, int]]:
@@ -264,10 +266,11 @@ def save_snapshot(reason: str = "manual") -> MatrixSnapshot:
         matrix=_get_current_matrix(),
         reason=reason,
     )
-    _snapshots.append(snapshot)
-    # 保留最近 N 个快照
-    while len(_snapshots) > _MAX_SNAPSHOTS:
-        _snapshots.pop(0)
+    with _snapshots_lock:
+        _snapshots.append(snapshot)
+        # 保留最近 N 个快照
+        while len(_snapshots) > _MAX_SNAPSHOTS:
+            _snapshots.pop(0)
     logger.info("matrix_governance.snapshot_saved",
                 snapshot_id=snapshot.snapshot_id,
                 reason=reason)
@@ -276,25 +279,26 @@ def save_snapshot(reason: str = "manual") -> MatrixSnapshot:
 
 def rollback_snapshot(snapshot_id: str | None = None) -> bool:
     """回滚到指定快照 (不指定则回滚到最近一个)."""
-    if not _snapshots:
-        logger.warning("matrix_governance.no_snapshot_to_rollback")
-        return False
+    with _snapshots_lock:
+        if not _snapshots:
+            logger.warning("matrix_governance.no_snapshot_to_rollback")
+            return False
 
-    target = None
-    if snapshot_id:
-        for s in _snapshots:
-            if s.snapshot_id == snapshot_id:
-                target = s
-                break
-    else:
-        target = _snapshots[-1]
+        target = None
+        if snapshot_id:
+            for s in _snapshots:
+                if s.snapshot_id == snapshot_id:
+                    target = s
+                    break
+        else:
+            target = _snapshots[-1]
 
-    if target is None:
-        logger.warning("matrix_governance.snapshot_not_found",
-                       snapshot_id=snapshot_id)
-        return False
+        if target is None:
+            logger.warning("matrix_governance.snapshot_not_found",
+                           snapshot_id=snapshot_id)
+            return False
 
-    _set_matrix(target.matrix)
+        _set_matrix(target.matrix)
     logger.info("matrix_governance.rolled_back",
                 snapshot_id=target.snapshot_id,
                 reason=target.reason)
@@ -303,15 +307,16 @@ def rollback_snapshot(snapshot_id: str | None = None) -> bool:
 
 def list_snapshots() -> list[dict]:
     """列出所有快照 (最新的在最后)."""
-    return [
-        {
-            "snapshot_id": s.snapshot_id,
-            "timestamp": s.timestamp,
-            "reason": s.reason,
-            "modules": len(s.matrix),
-        }
-        for s in _snapshots
-    ]
+    with _snapshots_lock:
+        return [
+            {
+                "snapshot_id": s.snapshot_id,
+                "timestamp": s.timestamp,
+                "reason": s.reason,
+                "modules": len(s.matrix),
+            }
+            for s in _snapshots
+        ]
 
 
 def compute_matrix_diff(

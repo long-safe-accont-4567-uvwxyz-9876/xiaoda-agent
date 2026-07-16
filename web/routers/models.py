@@ -125,7 +125,7 @@ async def create_provider(body: dict, request: Request) -> Any:
         raise HTTPException(500, f"provider 注册失败: {e}") from None
     cfg.set(f"models.providers.{pid}", record)
     await _audit(request, "provider.create", pid)
-    invalidate_discovery_cache()
+    await invalidate_discovery_cache()
     await _broadcast_changed()
     return Envelope(data=dict(record, id=pid, key_masked=_mask(api_key), builtin=False))
 
@@ -145,7 +145,7 @@ async def update_provider(pid: str, body: dict, request: Request) -> Any:
     if key:
         _save_key_and_register(request, pid, record["format"], record["base_url"], key)
     await _audit(request, "provider.update", pid)
-    invalidate_discovery_cache()
+    await invalidate_discovery_cache()
     await _broadcast_changed()
     return Envelope(data=dict(record, id=pid, key_masked=_mask(key), builtin=False))
 
@@ -167,7 +167,7 @@ async def delete_provider(pid: str, request: Request) -> Any:
     from web.custom_providers import unregister_from_router
     unregister_from_router(_router_of(request), pid)
     await _audit(request, "provider.delete", pid)
-    invalidate_discovery_cache()
+    await invalidate_discovery_cache()
     await _broadcast_changed()
     return Envelope(data={"deleted": pid})
 
@@ -215,7 +215,7 @@ async def reorder_providers(body: dict, request: Request) -> Any:
             record["order"] = idx
             cfg.set(f"models.providers.{pid}", record)
     await _audit(request, "provider.reorder", json.dumps(filtered, ensure_ascii=False))
-    invalidate_discovery_cache()
+    await invalidate_discovery_cache()
     await _broadcast_changed()
     logger.info("providers.reordered count={}", len(filtered))
     return Envelope(data={"ok": True})

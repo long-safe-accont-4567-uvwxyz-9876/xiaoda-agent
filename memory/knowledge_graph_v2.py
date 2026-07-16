@@ -121,6 +121,9 @@ class KnowledgeGraphV2(KnowledgeGraph):
         source_type: str = "summary",
     ) -> dict:
         """从 Episode 提取并合并事实。"""
+        if self._db_v2 is None:
+            logger.warning("kg_v2.add_facts_no_db")
+            return {"episode_id": "", "new_facts": 0, "invalidated": 0}
         episode_id = f"EP-{uuid.uuid4().hex[:12]}"
         now = time.time()
         await self._db_v2.insert_episode(
@@ -153,6 +156,9 @@ class KnowledgeGraphV2(KnowledgeGraph):
         episode_time: float,
     ) -> None:
         """实体演化: summary 替换式重写, version 递增。"""
+        if self._db_v2 is None:
+            logger.warning("kg_v2.merge_entities_no_db")
+            return
         for ent in entities[:5]:
             try:
                 name = ent.get("name", "")
@@ -210,6 +216,8 @@ class KnowledgeGraphV2(KnowledgeGraph):
 
     async def _ensure_episode_exists(self, episode_id: str, episode_time: float) -> None:
         """确保 episode 在 kg_episodes 中存在（ref JOIN 需要）。"""
+        if self._db_v2 is None:
+            return
         existing = await self._db_v2.get_episode(episode_id)
         if not existing:
             await self._db_v2.insert_episode(
@@ -223,6 +231,9 @@ class KnowledgeGraphV2(KnowledgeGraph):
         episode_time: float,
     ) -> tuple[bool, list[dict]]:
         """合并新关系，自动处理超驰。Returns: (is_new, invalidated_relations)。"""
+        if self._db_v2 is None:
+            logger.warning("kg_v2.merge_relation_no_db")
+            return False, []
         from_entity = relation.get("from_entity", "")
         relation_type = relation.get("relation_type", "")
         to_entity = relation.get("to_entity", "")
@@ -326,6 +337,9 @@ class KnowledgeGraphV2(KnowledgeGraph):
 
     async def detect_communities(self) -> list[list[str]]:
         """社区发现: 加载图投影 → 标签传播 → 生成社区摘要。"""
+        if self._conn is None:
+            logger.warning("kg_v2.detect_communities_no_conn")
+            return []
         cursor = await self._conn.execute("""
             SELECT from_entity, to_entity, COUNT(*) as edge_count
             FROM kg_relations_v2
@@ -387,6 +401,9 @@ class KnowledgeGraphV2(KnowledgeGraph):
 
     async def _build_community_summary(self, member_names: list[str]) -> None:
         """为社区生成摘要并写入 kg_communities 表。"""
+        if self._conn is None or self._db_v2 is None:
+            logger.warning("kg_v2.build_community_summary_no_conn")
+            return
         placeholders = ",".join("?" * len(member_names))
         cursor = await self._conn.execute(
             f"SELECT name, summary FROM kg_entities_v2 WHERE name IN ({placeholders}) AND summary != ''",
@@ -419,6 +436,9 @@ class KnowledgeGraphV2(KnowledgeGraph):
 
     async def update_community_for_entity(self, entity_name: str) -> None:
         """增量更新: 新增实体后, 查邻居社区归属, 取众数归入。"""
+        if self._conn is None or self._db_v2 is None:
+            logger.warning("kg_v2.update_community_no_conn")
+            return
         cursor = await self._conn.execute(
             """SELECT r.from_entity, r.to_entity FROM kg_relations_v2 r
                WHERE r.is_current = 1 AND (r.from_entity = ? OR r.to_entity = ?)""",

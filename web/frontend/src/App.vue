@@ -13,6 +13,7 @@ const auth = useAuthStore()
 const ui = useUiStore()
 const router = useRouter()
 const particlesRef = ref<InstanceType<typeof GrassParticles> | null>(null)
+const booting = ref(true)
 
 provide('particles', particlesRef)
 
@@ -83,6 +84,7 @@ onMounted(async () => {
     const data = await api.getSetupFirstRun()
     if (data?.first_run) {
       router.replace('/setup')
+      booting.value = false
       return
     }
     // API Key 已配置，检查用户资料是否完成（localStorage 缓存优先）
@@ -93,6 +95,7 @@ onMounted(async () => {
       } else {
         router.replace('/setup/profile')
       }
+      booting.value = false
       return
     }
   } catch {
@@ -111,6 +114,8 @@ onMounted(async () => {
   if (detectLowGpu()) {
     document.body.classList.add('low-gpu')
   }
+
+  booting.value = false
 })
 
 onBeforeUnmount(() => {
@@ -146,7 +151,8 @@ const themeOverrides: GlobalThemeOverrides = {
     <n-dialog-provider>
       <n-message-provider placement="top-right">
         <GrassParticles ref="particlesRef" />
-        <router-view v-slot="{ Component }">
+        <div v-if="booting" class="boot-loading">🌿</div>
+        <router-view v-else v-slot="{ Component }">
           <transition name="leaf-page" mode="out-in">
             <component :is="Component" />
           </transition>
@@ -224,5 +230,18 @@ body {
 }
 .brand-watermark span {
   display: inline-block;
+}
+
+.boot-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  font-size: 48px;
+  animation: boot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes boot-pulse {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.1); }
 }
 </style>

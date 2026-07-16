@@ -234,11 +234,12 @@ class AgentContext:
                 self._pre_compressed_buffer.append(removed)
             logger.debug("context.force_trimmed", role=removed["role"], preview=removed["content"][:40])
 
-    def flush_pre_compressed_buffer(self) -> list[dict]:
+    async def flush_pre_compressed_buffer(self) -> list[dict]:
         """取出并清空压缩暂存区的消息（供后台记忆编码任务消费）。"""
-        buf = self._pre_compressed_buffer
-        self._pre_compressed_buffer = []
-        return buf
+        async with self._lock:
+            buf = self._pre_compressed_buffer
+            self._pre_compressed_buffer = []
+            return buf
 
     async def _summarize_messages(self, messages: list[dict]) -> str:
         """用 LLM 压缩对话历史为摘要。

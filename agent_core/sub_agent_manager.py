@@ -300,10 +300,24 @@ class SubAgentManagerMixin:
         bb = getattr(self.context, "shared_blackboard", None)
 
         # 并行执行所有子代理任务（return_exceptions 避免单个失败影响整体）
-        raw_results = await asyncio.gather(
-            *[self._parallel_run_one(t, sub_tasks, sub_context, bb, clean_input) for t in targets],
-            return_exceptions=True,
-        )
+        # 墙钟超时保护：整体并行调度不超过 200 秒（单任务 180s + 余量）
+        _PARALLEL_WALL_TIMEOUT = 200.0
+        try:
+            raw_results = await asyncio.wait_for(
+                asyncio.gather(
+                    *[self._parallel_run_one(t, sub_tasks, sub_context, bb, clean_input) for t in targets],
+                    return_exceptions=True,
+                ),
+                timeout=_PARALLEL_WALL_TIMEOUT,
+            )
+        except TimeoutError:
+            logger.error("agent.parallel_dispatch_wall_timeout",
+                         targets=targets, timeout=_PARALLEL_WALL_TIMEOUT)
+            # 超时时返回已完成的子代理结果 + 超时提示
+            raw_results = [
+                {"agent": t, "display_name": t, "reply": f"{t}处理超时", "error": True}
+                for t in targets
+            ]
         # 聚合结果：异常归一化为 dict，便于统一展示
         intermediate: list[dict] = []
         for r in raw_results:
@@ -878,6 +892,8 @@ class SubAgentManagerMixin:
             )
             if isinstance(reply, str):
                 return reply.strip()
+            if not reply.choices:
+                return xiaoli_result
             return reply.choices[0].message.content.strip() if reply.choices[0].message.content else xiaoli_result
         except Exception:
             return xiaoli_result

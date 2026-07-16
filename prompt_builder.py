@@ -643,9 +643,8 @@ def _replace_placeholders(content: str, address_term: str, agent_name: str = "")
                     # 过滤占位符
                     if user_name and not user_name.startswith("（"):
                         content = content.replace("{name}", user_name)
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug("prompt_builder.user_name_substitution_failed", error=str(e))
     return content
 
 
@@ -1361,10 +1360,8 @@ def build_system_prompt(extra_context: str = "", address_term: str = "爸爸",
                 # 根据 prompt_modifier 调整 prompt
                 # TODO(phase-2): apply prompt_modifier to system prompt
                 pass
-    except Exception:
-        pass
-
-    # 全局替换所有 agent 原名为 display_name（统一机制）
+    except Exception as e:
+        logger.debug("prompt_builder.j_space_direction_hook_failed", error=str(e))
     from config import apply_agent_name_replacements
     return apply_agent_name_replacements(system_prompt)
 

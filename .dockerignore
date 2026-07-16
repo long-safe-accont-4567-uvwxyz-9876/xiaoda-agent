@@ -64,5 +64,4 @@ scripts/install-windows.ps1
 scripts/start-windows.bat
 .github/
 *.md
-pyproject.toml
 pytest.ini

@@ -3,6 +3,14 @@ import pytest
 from core.event_bus import event_bus, AgentEvent, AgentEventType, gen_task_id
 
 
+@pytest.fixture(autouse=True)
+def _reset_event_bus():
+    from core.event_bus import event_bus
+    event_bus.unbind_user()
+    yield
+    event_bus.unbind_user()
+
+
 class FakeUser:
     """测试用 FakeUser，记录收到的所有事件。"""
     def __init__(self):

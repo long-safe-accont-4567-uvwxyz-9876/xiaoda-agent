@@ -5,7 +5,7 @@ import { NDrawer, NDrawerContent, NButton, NPopconfirm, useMessage } from 'naive
 import { useChatStore } from '../stores/chat'
 import { useAuthStore } from '../stores/auth'
 import { useUiStore } from '../stores/ui'
-import { api, exportSessionUrl } from '../api'
+import { api, exportSessionDownload } from '../api'
 import { renderMarkdown } from '../utils/markdown'
 import { replaceAgentNames } from '../utils/agentNames'
 import ToolCallCard from '../components/chat/ToolCallCard.vue'
@@ -42,7 +42,14 @@ let audioEl: HTMLAudioElement | null = null
 
 const showPalette = computed(() => inputText.value.startsWith('/') && !inputText.value.includes(' '))
 
+function onGlobalKeydown(e: KeyboardEvent) {
+  if (lightboxUrl.value && e.key === 'Escape') {
+    lightboxUrl.value = ''
+  }
+}
+
 onMounted(async () => {
+  document.addEventListener('keydown', onGlobalKeydown)
   try {
     // 后端命令名自带 "/" 前缀，统一去掉，避免拼接成 "//cmd"
     const raw = await api.getCommands()
@@ -51,6 +58,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onGlobalKeydown)
   if (audioEl) { audioEl.pause(); audioEl.onended = null; audioEl.onerror = null; audioEl.src = ''; audioEl = null }
   playingUrl.value = ''
 })
@@ -91,7 +99,7 @@ watch(finalAssistantCount, async () => {
   try {
     const r = await api.tts(last.content.slice(0, 300))
     play(r.audio_url)
-  } catch { /* TTS 不可用时静默 */ }
+  } catch { message.warning(t('chatView.ttsUnavailable')) }
 })
 
 /** 从尾部遍历查找最后一条已完成的助手消息，避免整体 reverse 拷贝 */
@@ -247,8 +255,8 @@ const emotionColors: Record<string, string> = {
       <n-button size="tiny" quaternary @click="clearAll">
         <template #icon><SumeruIcon name="trash" :size="15" /></template>{{ t('chatView.clear') }}
       </n-button>
-      <a v-if="chat.sessionId" class="export-link"
-         :href="exportSessionUrl(chat.sessionId)" target="_blank">⬇ {{ t('chatView.export') }}</a>
+      <button v-if="chat.sessionId" class="export-link"
+         @click="exportSessionDownload(chat.sessionId).catch(e => message.error(e.message))">⬇ {{ t('chatView.export') }}</button>
       <ModelSelector style="margin-left: auto" @change="onModelChange" />
       <span class="session-label">{{ chat.sessionId }}</span>
     </div>
@@ -317,7 +325,7 @@ const emotionColors: Record<string, string> = {
     <teleport to="body">
       <transition name="lightbox-fade">
         <div v-if="lightboxUrl" ref="lightboxRef" class="lightbox" @click="lightboxUrl = ''"
-             @keydown.esc="lightboxUrl = ''" tabindex="-1">
+             tabindex="-1">
           <img :src="lightboxUrl" :alt="t('chatView.preview')" />
         </div>
       </transition>

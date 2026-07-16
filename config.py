@@ -407,15 +407,7 @@ _DEFAULT_DISPLAY_NAMES: dict[str, str] = {
     "xiaolian": "小涟",
     "xiaoke": "小可",
 }
-_DEFAULT_DISPLAY_NAMES_EN: dict[str, str] = {
-    "xiaoda": "Xiaoda",
-    "xiaoli": "Xiaoli",
-    "xiaolang": "Xiaolang",
-    "xiaolian": "Xiaolian",
-    "xiaoke": "Xiaoke",
-}
 _display_name_cache: dict[str, tuple[float, str]] = {}  # {name: (mtime, display_name)}
-_display_name_en_cache: dict[str, tuple[float, str]] = {}
 
 
 def clear_display_name_cache(name: str | None = None):
@@ -427,10 +419,8 @@ def clear_display_name_cache(name: str | None = None):
     """
     if name:
         _display_name_cache.pop(name, None)
-        _display_name_en_cache.pop(name, None)
     else:
         _display_name_cache.clear()
-        _display_name_en_cache.clear()
     # 同时清除 prompt_builder 的模块缓存
     try:
         from prompt_builder import clear_module_cache
@@ -483,32 +473,6 @@ def get_agent_display_name(name: str) -> str:
     except Exception:
         dn = default
     _display_name_cache[name] = (mtime, dn)
-    return dn
-
-
-def get_agent_display_name_en(name: str) -> str:
-    """读取 agent 的英文 display_name（从 config/agents/{name}.json）。
-
-    逻辑与 get_agent_display_name 一致，读取 display_name_en 字段。
-    """
-    if not name:
-        return ""
-    fp = AGENTS_CONFIG_DIR / f"{name}.json"
-    default = _DEFAULT_DISPLAY_NAMES_EN.get(name, name)
-    try:
-        mtime = fp.stat().st_mtime
-    except OSError:
-        return default
-    cached = _display_name_en_cache.get(name)
-    if cached and cached[0] == mtime:
-        return cached[1]
-    try:
-        import json
-        data = json.loads(fp.read_text(encoding="utf-8"))
-        dn = data.get("display_name_en") or default
-    except Exception:
-        dn = default
-    _display_name_en_cache[name] = (mtime, dn)
     return dn
 
 
@@ -1009,7 +973,6 @@ __all__ = [
     "XIAOLI_STICKER_DIR",
     "agent_names",
     "get_agent_display_name",
-    "get_agent_display_name_en",
     "get_base_dir",
     "get_config_dir",
     "get_credentials_dir",
@@ -1057,5 +1020,5 @@ def __getattr__(name: str) -> Any:
 # ── J-Space 架构优化配置 ──────────────────────────────────────
 ENABLE_J_SPACE_HOOKS = os.getenv("ENABLE_J_SPACE_HOOKS", "true").lower() == "true"
 DIRECTION_REGISTRY_PATH = os.getenv("DIRECTION_REGISTRY_PATH", str(DATA_DIR / "direction_registry.json"))
-SIGNAL_STREAM_MAX_HISTORY = int(os.getenv("SIGNAL_STREAM_MAX_HISTORY", "1000"))
-INTERVENTION_DEFAULT_COOLDOWN = float(os.getenv("INTERVENTION_DEFAULT_COOLDOWN", "30.0"))
+SIGNAL_STREAM_MAX_HISTORY = _safe_int(os.getenv("SIGNAL_STREAM_MAX_HISTORY"), 1000)
+INTERVENTION_DEFAULT_COOLDOWN = _safe_float(os.getenv("INTERVENTION_DEFAULT_COOLDOWN"), 30.0)

@@ -158,8 +158,8 @@ class AgentIntrospector:
                 else:
                     _fire_and_forget(_signal_stream.emit(
                         "cognitive_load", state.cognitive_load, "introspection"))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("introspection.cognitive_load_signal_failed", error=str(e))
 
         return state
 

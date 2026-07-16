@@ -69,8 +69,8 @@ def get_ack_message(agent_name: str, personality_file: str | None = None) -> str
                 if agent_name in msg:
                     msg = msg.replace(agent_name, display_name)
                 return msg
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("emoji_config.ack_message_build_failed", error=str(e))
     # 默认格式
     display_name = get_agent_display_name(agent_name)
     emoji_cfg = load_agent_emoji(agent_name, personality_file)

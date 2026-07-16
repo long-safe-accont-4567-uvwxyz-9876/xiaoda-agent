@@ -14,6 +14,13 @@ import time
 import uuid
 from pathlib import Path
 
+
+def _safe_int(val, default):
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
+
 _IS_WINDOWS = platform.system() == "Windows"
 
 if _IS_WINDOWS:
@@ -125,8 +132,8 @@ def _publish_file(src: Path | None, kind: str, link: bool = False) -> str | None
 # ── 媒体文件定期清理（仅清理动态生成的目录，不碰 stickers/背景图/参考音频）──
 
 _CLEANABLE_KINDS = frozenset({"tts", "image", "video", "upload"})
-_MEDIA_MAX_AGE_SECONDS = int(os.getenv("MEDIA_MAX_AGE_HOURS", "24")) * 3600
-_MEDIA_CLEANUP_INTERVAL_SECONDS = int(os.getenv("MEDIA_CLEANUP_INTERVAL_MINUTES", "60")) * 60
+_MEDIA_MAX_AGE_SECONDS = _safe_int(os.getenv("MEDIA_MAX_AGE_HOURS", "24"), 24) * 3600
+_MEDIA_CLEANUP_INTERVAL_SECONDS = _safe_int(os.getenv("MEDIA_CLEANUP_INTERVAL_MINUTES", "60"), 60) * 60
 _MEDIA_CLEANUP_TASK: asyncio.Task | None = None
 
 
@@ -265,17 +272,29 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
         if registry and not registry.is_enabled(agent):
             raise ValueError(f"Agent {agent} 已被禁用")
         if not core.dispatcher.get_agent(agent):
-            # 降级模式：子 Agent 未注册时回退到主 Agent
+            # 降级模式：子 Agent 未注册时回退到主 Agent，并通知用户
             from loguru import logger as _logger
             _logger.warning("ws.agent_fallback agent={} msg='not registered, falling back to xiaoda'", agent)
+            _original_agent = agent
             agent = "xiaoda"
+            # 在返回结果中附带降级通知（由 _handle_chat 拼入 data）
+            # 此处通过 status_callback 告知前端
+            if status_callback:
+                try:
+                    await status_callback(f"⚠️ {_original_agent} 暂不可用，已切换到小妲回复")
+                except Exception:
+                    pass
         else:
             # 走与 QQ 通道相同的完整子代理流程：表情包/情绪/TTS/落库都不缺
             from loguru import logger as _logger
             from agent_core import RequestContext
             from utils.trace_context import new_trace_id
+            # 身份解析：与 core.process() 主路径一致，确保 is_master/user_openid 语义正确
+            _identity = core._resolve_identity("webui", user_openid="", source="web")
             ctx = RequestContext(session_id=session_id, user_id="webui",
-                                 user_input=text, status_callback=status_callback)
+                                 user_input=text, status_callback=status_callback,
+                                 is_master=_identity.is_owner)
+            ctx.identity = _identity
             _tid = new_trace_id()
             trace = _logger.bind(trace_id=_tid)
             result = await core._dispatch_single_sub_agent(

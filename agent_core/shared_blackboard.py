@@ -70,8 +70,25 @@ class SharedBlackboard:
                 return None
             if entry.expire_at and time.monotonic() > entry.expire_at:
                 del self._store[key]
+                logger.debug("blackboard.expired key={} agent={}", key, entry.agent_name)
                 return None
             return entry.value
+
+    async def get_with_status(self, key: str) -> dict:
+        """读取 key 的值及状态，区分不存在 / 已过期 / 有效。
+
+        Returns:
+            {"value": ..., "status": "ok"|"expired"|"not_found", "agent_name": ...}
+        """
+        async with self._lock:
+            entry = self._store.get(key)
+            if entry is None:
+                return {"value": None, "status": "not_found", "agent_name": ""}
+            if entry.expire_at and time.monotonic() > entry.expire_at:
+                del self._store[key]
+                logger.debug("blackboard.expired key={} agent={}", key, entry.agent_name)
+                return {"value": None, "status": "expired", "agent_name": entry.agent_name}
+            return {"value": entry.value, "status": "ok", "agent_name": entry.agent_name}
 
     async def get_with_meta(self, key: str) -> dict | None:
         """读取 key 的值及元信息（agent_name），过期返回 None。

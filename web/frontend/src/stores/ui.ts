@@ -51,6 +51,8 @@ export const useUiStore = defineStore('ui', () => {
     autoBrightness.value = v
     localStorage.setItem(AUTO_KEY, String(v))
     applyBrightness()
+    if (v) startAutoCheck()
+    else stopAutoCheck()
   }
 
   function setManualBrightness(v: number) {

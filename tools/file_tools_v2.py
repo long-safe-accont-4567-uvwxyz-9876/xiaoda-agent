@@ -24,7 +24,7 @@ ALLOWED_BASE_DIRS = [
     "/var/tmp",
     tempfile.gettempdir(),                                                 # 系统临时目录（Windows: C:\Users\...\AppData\Local\Temp）
     os.path.join(_PROJECT_DIR, "tts_cache"),                               # tts_cache 目录
-    os.environ.get("NAHIDA_DATA_DIR", os.path.expanduser("~/.ai-agent/data")),  # 数据目录
+    os.environ.get("KIOXIA_DATA_DIR", os.path.expanduser("~/.ai-agent/data")),  # 数据目录
 ]
 
 # 敏感路径黑名单（即使白名单通过也不允许访问）
@@ -37,8 +37,9 @@ SENSITIVE_PATHS = [
 ]
 
 # 规范化白名单和黑名单（realpath）
-ALLOWED_BASE_DIRS = [os.path.realpath(d) for d in ALLOWED_BASE_DIRS if os.path.exists(d) or True]
-SENSITIVE_PATHS = [os.path.realpath(d) for d in SENSITIVE_PATHS]
+# 注意：仅保留实际存在的目录，不存在则跳过（否则 realpath 可能解析为意外的符号链接目标）
+ALLOWED_BASE_DIRS = [os.path.realpath(d) for d in ALLOWED_BASE_DIRS if os.path.exists(d)]
+SENSITIVE_PATHS = [os.path.realpath(d) for d in SENSITIVE_PATHS if os.path.exists(d)]
 
 
 def _validate_path(path: str, mode: str = "read") -> tuple[bool, str, str]:
@@ -80,10 +81,26 @@ def _validate_path(path: str, mode: str = "read") -> tuple[bool, str, str]:
     # 检查白名单
     for allowed in ALLOWED_BASE_DIRS:
         if resolved == allowed or resolved.startswith(allowed + os.sep):
+            # TOCTOU 防护：对已存在路径再次 realpath 确认无符号链接替换
+            if os.path.exists(resolved):
+                re_resolved = os.path.realpath(resolved)
+                if re_resolved != resolved:
+                    # 符号链接解析后路径不同，需要重新验证
+                    for s in SENSITIVE_PATHS:
+                        if re_resolved == s or re_resolved.startswith(s + os.sep):
+                            return False, re_resolved, f"符号链接目标在敏感目录中: {s}"
+                    in_allowed = False
+                    for a in ALLOWED_BASE_DIRS:
+                        if re_resolved == a or re_resolved.startswith(a + os.sep):
+                            in_allowed = True
+                            break
+                    if not in_allowed:
+                        return False, re_resolved, f"符号链接目标不在允许的目录范围内"
+                    resolved = re_resolved
             # 写入模式额外限制：只允许项目目录和 tts_cache
             if mode == "write":
                 write_allowed = [_PROJECT_DIR, os.path.join(_PROJECT_DIR, "tts_cache"), "/tmp", "/var/tmp", tempfile.gettempdir(), os.path.expanduser("~")]
-                write_allowed = [os.path.realpath(d) for d in write_allowed]
+                write_allowed = [os.path.realpath(d) for d in write_allowed if os.path.exists(d)]
                 for wa in write_allowed:
                     if resolved == wa or resolved.startswith(wa + os.sep):
                         return True, resolved, ""
@@ -91,6 +108,45 @@ def _validate_path(path: str, mode: str = "read") -> tuple[bool, str, str]:
             return True, resolved, ""
 
     return False, resolved, f"路径不在允许的目录范围内: {path}"
+
+
+def _open_validated(resolved: str, mode: str = "r", encoding: str | None = "utf-8"):
+    """原子性打开已验证的路径，防止 TOCTOU 符号链接替换攻击。
+
+    先打开文件获取 fd，再通过 /proc/self/fd 读取 fd 的真实路径，
+    确保打开的文件与验证时路径一致。如果不一致则关闭并拒绝。
+    """
+    try:
+        fd = os.open(resolved, os.O_RDONLY if "r" in mode else os.O_RDWR)
+    except FileNotFoundError:
+        raise
+    except OSError as e:
+        raise e
+
+    # 通过 fd 重新解析真实路径，确保没有被符号链接替换
+    try:
+        fd_real_path = os.readlink(f"/proc/self/fd/{fd}")
+    except OSError:
+        # /proc 不可用（如某些容器环境），跳过二次验证
+        pass
+    else:
+        # 验证 fd 指向的真实路径是否仍在允许范围内
+        for sensitive in SENSITIVE_PATHS:
+            if fd_real_path == sensitive or fd_real_path.startswith(sensitive + os.sep):
+                os.close(fd)
+                raise PermissionError(f"文件描述符指向敏感目录: {sensitive}")
+        in_allowed = False
+        for allowed in ALLOWED_BASE_DIRS:
+            if fd_real_path == allowed or fd_real_path.startswith(allowed + os.sep):
+                in_allowed = True
+                break
+        if not in_allowed:
+            os.close(fd)
+            raise PermissionError(f"文件描述符指向不允许的目录: {fd_real_path}")
+
+    if encoding:
+        return os.fdopen(fd, mode, encoding=encoding, errors="ignore")
+    return os.fdopen(fd, mode)
 
 
 # 安全加固：拦截危险操作（开发板模式，保留基本 shell 执行能力）
@@ -383,11 +439,13 @@ def read_file(path: str, offset: int = 0, limit: int = 200) -> ToolResult:
         if os.path.isdir(resolved):
             return ToolResult.fail(f"这是一个目录，不是文件: {path}")
 
-        with open(resolved, encoding='utf-8', errors='ignore') as f:
+        with _open_validated(resolved, mode="r", encoding="utf-8") as f:
             lines = f.readlines()
         selected = lines[offset:offset + limit]
         content = ''.join(selected)
         return ToolResult.ok(f"文件: {resolved}\n{'='*40}\n{content}")
+    except PermissionError as e:
+        return ToolResult.fail(f"路径访问被拒绝: {e!s}")
     except Exception as e:
         return ToolResult.fail(f"读取错误: {e!s}")
 
@@ -422,10 +480,12 @@ def write_file(input_str: str) -> ToolResult:
 
         os.makedirs(os.path.dirname(resolved), exist_ok=True)
 
-        with open(resolved, 'w', encoding='utf-8') as f:
+        with _open_validated(resolved, mode="w", encoding="utf-8") as f:
             f.write(content)
 
         return ToolResult.ok(f"文件已写入: {resolved}")
+    except PermissionError as e:
+        return ToolResult.fail(f"路径访问被拒绝: {e!s}")
     except Exception as e:
         return ToolResult.fail(f"写入错误: {e!s}")
 

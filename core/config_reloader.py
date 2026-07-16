@@ -167,9 +167,16 @@ class ConfigReloader:
                 else:
                     loop.call_soon(acb, snap)
             except RuntimeError:
-                # 没有事件循环, 同步调用
+                # 没有事件循环 (Timer 线程等), 尝试调度到主循环
                 try:
-                    acb(snap)
+                    if asyncio.iscoroutinefunction(acb):
+                        loop = asyncio.get_running_loop()
+                        if loop.is_running():
+                            loop.call_soon_threadsafe(
+                                lambda: asyncio.ensure_future(acb(snap))
+                            )
+                    else:
+                        acb(snap)
                 except Exception:
                     logger.debug("config_reloader.async_callback_error: {}", exc_info=True)
 

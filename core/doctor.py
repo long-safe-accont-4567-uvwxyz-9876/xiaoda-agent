@@ -13,6 +13,13 @@ import shutil
 import subprocess
 from pathlib import Path
 from loguru import logger
+
+
+def _safe_int(val, default):
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
 import contextlib
 
 
@@ -341,7 +348,7 @@ def _register_self_heal_checks(doc: DoctorCheck) -> None:
 
     def _check_port_conflict() -> tuple:
         import socket
-        port = int(os.getenv("WEBUI_PORT", "8082"))
+        port = _safe_int(os.getenv("WEBUI_PORT", "8082"), 8082)
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(1)
         try:

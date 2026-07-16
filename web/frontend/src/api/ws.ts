@@ -11,6 +11,8 @@ export class WsClient {
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private _unauthorized = false
+  private _intentionalDisconnect = false
+  private _reconnecting = false
   public connected = false
 
   constructor(private url: string) {}
@@ -23,7 +25,9 @@ export class WsClient {
       return
     }
     this._unauthorized = false
-    this.reconnectAttempts = 0  // 重置重连计数器，避免 disconnect() 设置的 999 残留
+    this._intentionalDisconnect = false
+    this._reconnecting = false
+    this.reconnectAttempts = 0
     this.disconnect()
     const wsUrl = `${this.url}?token=${token}`
     this.ws = new WebSocket(wsUrl)
@@ -31,6 +35,7 @@ export class WsClient {
     this.ws.onopen = () => {
       this.connected = true
       this.reconnectAttempts = 0
+      this._reconnecting = false
       this.startHeartbeat()
       this.emit({ type: 'ws_connected' })
     }
@@ -60,11 +65,16 @@ export class WsClient {
       this.stopHeartbeat()
       this.emit({ type: 'ws_disconnected' })
       // 4001 = token 失效，不重连
-      if (event.code === 4001 || this._unauthorized) return
-      this.scheduleReconnect(token)
+      if (event.code === 4001 || this._unauthorized || this._intentionalDisconnect) return
+      // 防止 onerror 已触发重连时 onclose 再触发一次
+      if (!this._reconnecting) {
+        this._reconnecting = true
+        this.scheduleReconnect()
+      }
     }
 
     this.ws.onerror = () => {
+      // onerror 后会自动触发 onclose，重连逻辑统一在 onclose 中处理
       this.ws?.close()
     }
   }
@@ -72,7 +82,8 @@ export class WsClient {
   disconnect() {
     this.stopHeartbeat()
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
-    this.reconnectAttempts = 999 // prevent reconnect
+    this._intentionalDisconnect = true
+    this._reconnecting = false
     this.ws?.close()
     this.ws = null
     this.connected = false
@@ -121,11 +132,19 @@ export class WsClient {
     }
   }
 
-  private scheduleReconnect(token: string) {
+  private scheduleReconnect() {
     if (this.reconnectAttempts >= 20) return
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), this.maxReconnectDelay)
     this.reconnectAttempts++
-    this.reconnectTimer = setTimeout(() => this.connect(token), delay)
+    this.reconnectTimer = setTimeout(() => {
+      // 从 localStorage 读取最新 token，避免使用过期闭包 token
+      const freshToken = localStorage.getItem('token')
+      if (freshToken) {
+        this._reconnecting = false
+        this.connect(freshToken)
+      }
+      // token 不存在时不重连，用户需重新登录
+    }, delay)
   }
 }
 

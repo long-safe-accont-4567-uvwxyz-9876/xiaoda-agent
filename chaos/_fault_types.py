@@ -28,7 +28,7 @@ class FaultConfig:
     delay_ms: int = 0
 
 
-class FaultInjectingLLMClient:
+class SimpleFaultInjectingLLMClient:
     """故障注入 LLM 客户端 — 包装真实 LLM 客户端"""
 
     def __init__(self, real_client, faults: list[FaultConfig] | None = None):

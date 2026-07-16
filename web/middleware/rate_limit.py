@@ -136,6 +136,8 @@ class TokenBucket:
     def from_state(cls, state: dict) -> "TokenBucket":
         """从持久化状态恢复桶 (令牌数取 min(state.tokens, capacity))。"""
         rate = float(state.get("rate_per_min", 0))
+        if rate <= 0:
+            rate = 1.0  # Fallback to minimum safe rate
         cap = float(state.get("capacity", rate))
         bucket = cls(rate_per_min=rate, capacity=cap)
         # 恢复令牌数 (不超过容量)
@@ -208,7 +210,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     def _init_persist_db(self) -> None:
         """初始化 SQLite 持久化表结构。"""
-        assert self._persist_path is not None
+        if self._persist_path is None:
+            raise RuntimeError("_init_persist_db called without persist_path")
         self._persist_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(str(self._persist_path)) as c:
             c.execute("""
@@ -258,13 +261,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return
         try:
             now = time.time()
+            # 快照字典内容，避免并发修改触发 RuntimeError
+            user_items = list(self._user_buckets.items())
+            write_items = list(self._write_buckets.items())
             with sqlite3.connect(str(self._persist_path), timeout=5) as c:
                 c.execute("PRAGMA journal_mode=WAL")
                 c.execute("DELETE FROM buckets")
                 rows = []
-                for key, bucket in self._user_buckets.items():
+                for key, bucket in user_items:
                     rows.append(("user", key, json.dumps(bucket.to_state()), now))
-                for key, bucket in self._write_buckets.items():
+                for key, bucket in write_items:
                     rows.append(("write", key, json.dumps(bucket.to_state()), now))
                 c.executemany(
                     "INSERT OR REPLACE INTO buckets(scope, bucket_key, state, updated_at) "
@@ -294,14 +300,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # 数量上限保护 (即使活跃也限制最大桶数)
         if len(self._user_buckets) > _MAX_BUCKETS:
             sorted_keys = sorted(
-                self._user_buckets.items(), key=lambda kv: kv[1].last_access
+                list(self._user_buckets.items()), key=lambda kv: kv[1].last_access
             )
             for k, _ in sorted_keys[:len(self._user_buckets) - _MAX_BUCKETS]:
                 self._user_buckets.pop(k, None)
                 evicted += 1
         if len(self._write_buckets) > _MAX_BUCKETS:
             sorted_keys = sorted(
-                self._write_buckets.items(), key=lambda kv: kv[1].last_access
+                list(self._write_buckets.items()), key=lambda kv: kv[1].last_access
             )
             for k, _ in sorted_keys[:len(self._write_buckets) - _MAX_BUCKETS]:
                 self._write_buckets.pop(k, None)

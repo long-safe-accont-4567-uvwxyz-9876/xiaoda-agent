@@ -40,13 +40,15 @@ dependencies = [
     "pilk>=0.2.4",
     "python-dotenv>=1.2.2",
     "loguru>=0.7.3",
+    "structlog>=24.0.0",
     "openai>=2.41.0",
     "aiosqlite>=0.20.0",
     "pydantic>=2.13.4",
     "jieba>=0.42.1",
     "pyyaml>=6.0",
+    "cryptography>=43.0.0",
+    "certifi>=2024.7.0",
     "qq-botpy>=1.2.1",
-    "duckduckgo-search>=8.1.1",
     "pdfplumber>=0.11.9",
     "python-docx>=1.2.0",
     "python-pptx>=1.0.2",
@@ -55,11 +57,15 @@ dependencies = [
     "pywebview>=5.0",
     "psutil>=6.0.0",
     "networkx>=3.2",
+    "requests>=2.31.0",
+    "primp>=0.7.0",
+    "tavily-python>=0.5.0",
 ]
 
 [project.optional-dependencies]
 streamlit = ["streamlit>=1.28.0"]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "ruff>=0.1.0"]
+search = []
 
 [project.scripts]
 xiaoda-agent = "agent:main"
@@ -103,3 +109,10 @@ include = [
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["agent_core", "agent_context", "config", "core", "web", "security", "memory", "tools", "tool_engine", "emotion"]

@@ -10,7 +10,15 @@ import json
 import os
 import re
 import time
+import tempfile
 from typing import Any, TYPE_CHECKING
+
+
+def _safe_int(val, default):
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
 
 from loguru import logger
 
@@ -41,7 +49,7 @@ def _get_temperature(model_cfg: dict | None = None) -> float:
     return get_temperature(default=default)
 
 if TYPE_CHECKING:
-    from agent_core._shared import ProcessResult, RequestContext
+    from agent_core._shared import RequestContext
 from agent_core._shared import ProcessResult
 
 
@@ -284,8 +292,10 @@ class MessageProcessorMixin:
         allowed, reason = self.security.is_allowed(user_id)
 
         # 群聊 session 按用户隔离：不同用户使用不同 session_id
+        # 保留原始 session_id 作为后缀，避免上层传入的值完全丢失
         if source == "qq_group" and user_openid:
-            session_id = f"qq_group:{user_openid}"
+            _orig_suffix = session_id.rsplit(":", 1)[-1] if session_id else ""
+            session_id = f"qq_group:{user_openid}:{_orig_suffix}" if _orig_suffix else f"qq_group:{user_openid}"
 
         # 按当前用户恢复历史摘要（群聊多用户上下文隔离）
         _restore_id = user_openid or user_id
@@ -359,7 +369,7 @@ class MessageProcessorMixin:
                     retry_messages.append({"role": "assistant", "content": reply})
                     retry_messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
                     retry_result = await asyncio.wait_for(self.router.route(
-                        task_type, retry_messages, temperature=temperature, max_tokens=max_tokens,
+                        "chat", retry_messages, temperature=0.7, max_tokens=4096,
                         user_openid=user_openid, session_id=session_id,
                     ), timeout=30)
                     retry_reply = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
@@ -407,8 +417,8 @@ class MessageProcessorMixin:
                 scene_hint = _build_scene_hint(source)
                 if scene_hint:
                     _volatile += f"\n{scene_hint}"
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("message_processor.scene_hint_failed", error=str(e))
 
         # 历史对话（非主人不加载，防止看到主人聊天内容）
         if is_master:
@@ -456,7 +466,7 @@ class MessageProcessorMixin:
                     dsml_calls = parse_dsml_tool_calls(result, self.tool_repair._allowed_tools)
                     if dsml_calls:
                         # 执行工具调用
-                        tool_results, all_failed = await self._execute_fast_path_tools(dsml_calls)
+                        tool_results, all_failed = await self._execute_fast_path_tools(dsml_calls, user_openid=user_openid, session_id=session_id)
                         if tool_results and not all_failed:
                             # 将工具结果追加到消息列表，再次调用 LLM
                             messages.append({"role": "assistant", "content": result})
@@ -492,7 +502,7 @@ class MessageProcessorMixin:
                         for tc in msg.tool_calls
                     ]
                     # 执行工具调用
-                    tool_results, all_failed = await self._execute_fast_path_tools(tool_calls)
+                    tool_results, all_failed = await self._execute_fast_path_tools(tool_calls, user_openid=user_openid, session_id=session_id)
                     if tool_results and not all_failed:
                         # 将工具结果追加到消息列表，再次调用 LLM
                         messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": msg.tool_calls})
@@ -520,7 +530,8 @@ class MessageProcessorMixin:
             reply = DEGRADED_REPLY
         return reply
 
-    async def _execute_fast_path_tools(self, tool_calls: list[dict]) -> tuple[str, bool]:
+    async def _execute_fast_path_tools(self, tool_calls: list[dict],
+                                        user_openid: str = "", session_id: str = "") -> tuple[str, bool]:
         """执行 fast path 中的工具调用。
 
         Returns:
@@ -545,9 +556,9 @@ class MessageProcessorMixin:
                 else:
                     args_dict = func_args
 
-                # 执行工具
+                # 执行工具（透传 user_openid / session_id，保证审计日志完整性）
                 result = await self._tool_call_handler._tool_executor.execute(
-                    func_name, args_dict, user_openid="", session_id=""
+                    func_name, args_dict, user_openid=user_openid, session_id=session_id
                 )
 
                 # 格式化结果
@@ -767,8 +778,16 @@ class MessageProcessorMixin:
                                      sticker_path=sticker_path, audio_path=audio_path,
                                      tts_pending=tts_pending, tts_text=tts_text)
         except Exception as e:
-            logger.warning("agent.task_graph_failed", error=str(e))
-            return ProcessResult(reply=DEGRADED_REPLY)
+            logger.warning("agent.task_graph_failed",
+                           error_type=type(e).__name__, error=str(e))
+            # 区分根因：超时/模型错误/工具错误 等，给用户更有意义的提示
+            if isinstance(e, (TimeoutError, asyncio.TimeoutError)):
+                _hint = "任务处理超时了，请稍后再试～"
+            elif "content_filter" in str(e):
+                _hint = "这个问题暂时无法回答，换个方式试试？"
+            else:
+                _hint = DEGRADED_REPLY
+            return ProcessResult(reply=_hint)
         return None
 
     async def _run_main_process_path(self, ctx: Any, user_input: Any, clean_input: Any, user_id: Any, source: Any,
@@ -1099,30 +1118,45 @@ class MessageProcessorMixin:
             img_path_match = re.search(r'已保存到\s+([^\s，。]+)', user_input)
             if img_path_match:
                 img_path = img_path_match.group(1)
-                try:
-                    mime, img_b64 = encode_image_to_base64(img_path)
-                    image_description = await self._describe_images([{"mimeType": mime, "data": img_b64}])
-                    if image_description:
-                        messages.append({
-                            "role": "system",
-                            "content": f"用户发送了一张图片，图片内容识别结果如下：\n{image_description}\n\n请用你自己的语气和人格风格，自然地向用户描述你看到了什么，不要直接复述识别结果，不要提及视觉模型或识别工具。"
-                        })
-                    else:
-                        messages.append({
-                            "role": "system",
-                            "content": "用户发送了一张图片，但视觉识别未能成功识别图片内容。请诚实地告诉用户你暂时看不清这张图片，不要编造图片内容，可以请用户描述一下图片里是什么。"
-                        })
-                except (FileNotFoundError, ValueError):
+                # 路径安全检查：仅允许项目目录和临时目录
+                _allowed_prefixes = (
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    os.path.expanduser("~"),
+                    "/tmp",
+                    tempfile.gettempdir(),
+                )
+                _resolved = os.path.realpath(os.path.abspath(img_path))
+                if not any(_resolved.startswith(p) for p in _allowed_prefixes):
+                    logger.warning("chat.image_path_traversal_blocked", path=img_path)
                     messages.append({
                         "role": "system",
-                        "content": "[系统提示] 用户发送了一张图片，但图片文件无法读取。请告诉用户你暂时无法查看这张图片。"
+                        "content": "[系统提示] 用户发送了一张图片，但图片路径不合法。请告诉用户你暂时无法查看这张图片。"
                     })
-                except Exception as e:
-                    logger.warning("agent.image_load_failed", error=str(e))
-                    messages.append({
-                        "role": "system",
-                        "content": "[系统提示] 用户发送了一张图片，但图片加载失败。请告诉用户你暂时无法查看这张图片。"
-                    })
+                else:
+                    try:
+                        mime, img_b64 = encode_image_to_base64(img_path)
+                        image_description = await self._describe_images([{"mimeType": mime, "data": img_b64}])
+                        if image_description:
+                            messages.append({
+                                "role": "system",
+                                "content": f"用户发送了一张图片，图片内容识别结果如下：\n{image_description}\n\n请用你自己的语气和人格风格，自然地向用户描述你看到了什么，不要直接复述识别结果，不要提及视觉模型或识别工具。"
+                            })
+                        else:
+                            messages.append({
+                                "role": "system",
+                                "content": "用户发送了一张图片，但视觉识别未能成功识别图片内容。请诚实地告诉用户你暂时看不清这张图片，不要编造图片内容，可以请用户描述一下图片里是什么。"
+                            })
+                    except (FileNotFoundError, ValueError):
+                        messages.append({
+                            "role": "system",
+                            "content": "[系统提示] 用户发送了一张图片，但图片文件无法读取。请告诉用户你暂时无法查看这张图片。"
+                        })
+                    except Exception as e:
+                        logger.warning("agent.image_load_failed", error=str(e))
+                        messages.append({
+                            "role": "system",
+                            "content": "[系统提示] 用户发送了一张图片，但图片加载失败。请告诉用户你暂时无法查看这张图片。"
+                        })
         return messages
 
     def _prepare_sticker_and_tools(self, messages: Any, clean_input: Any, emotion: Any, is_master: Any,
@@ -1195,7 +1229,7 @@ class MessageProcessorMixin:
         _cb_max_tokens = None
         # Web UI 近似 Hermes 无限流式输出：使用 8192 tokens 上限（可配置）
         # QQ 通道保持 None → 走 ROUTE_TABLE 默认值（1500），避免超长回复被 QQ 平台截断
-        _web_max_tokens = int(os.getenv("WEB_UI_MAX_TOKENS", "8192"))
+        _web_max_tokens = _safe_int(os.getenv("WEB_UI_MAX_TOKENS", "8192"), 8192)
         if source == "web":
             _cb_max_tokens = _web_max_tokens
         if circuit_state == CircuitState.YELLOW:

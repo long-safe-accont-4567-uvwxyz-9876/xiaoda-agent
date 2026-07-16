@@ -9,24 +9,29 @@ RUN cd web/frontend && npm run build
 # 安装 agently-cli（邮箱 OAuth 需要）
 RUN npm install -g @tencent-qqmail/agently-cli
 
-# ── Stage 2: Python 运行时 ──
+# ── Stage 2a: Build Python dependencies ──
+FROM python:3.11-slim-bookworm AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# ── Stage 2b: Python runtime ──
 FROM python:3.11-slim-bookworm
 
-# 系统依赖
+# System runtime dependencies only (no build tools)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libgl1-mesa-glx \
     libglib2.0-0 \
-    gcc \
-    g++ \
-    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Python 依赖（利用 Docker 层缓存）
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Python dependencies (from builder stage)
+COPY --from=builder /install /usr/local
 
 # 项目代码
 COPY . .
@@ -65,7 +70,7 @@ ENV WEBUI_PORT=8082
 EXPOSE 8082
 
 # 健康检查：先尝试 HTTP 探针，失败则运行 doctor --fix 自动修复后重试
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=30s --retries=3 \
     CMD python -c "\
 import os, urllib.request, urllib.error, subprocess, sys; \
 port = os.environ.get('WEBUI_PORT', '8082'); \

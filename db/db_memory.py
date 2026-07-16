@@ -712,6 +712,7 @@ class MemoryDB:
             return results
         except Exception as e:
             logger.warning("db_memory.entity_search_failed", error=str(e))
+            return []
 
     async def search_memories_by_entities_scoped(self, entity_names: list[str],
                                                    limit: int = 5,

@@ -97,7 +97,7 @@ class SharedBlackboardDB:
                     if conn:
                         conn.close()
 
-            await asyncio.get_event_loop().run_in_executor(None, _do)
+            await asyncio.get_running_loop().run_in_executor(None, _do)
             logger.debug("blackboard_db.put key={} agent={} ttl={}", key, agent_name, effective_ttl)
 
     async def get(self, key: str) -> Any | None:
@@ -126,7 +126,7 @@ class SharedBlackboardDB:
                     if conn:
                         conn.close()
 
-            return await asyncio.get_event_loop().run_in_executor(None, _do)
+            return await asyncio.get_running_loop().run_in_executor(None, _do)
 
     async def get_with_meta(self, key: str) -> dict | None:
         """读取 key 的值及元信息（含 created_at）。"""
@@ -154,7 +154,7 @@ class SharedBlackboardDB:
                     if conn:
                         conn.close()
 
-            return await asyncio.get_event_loop().run_in_executor(None, _do)
+            return await asyncio.get_running_loop().run_in_executor(None, _do)
 
     async def keys(self, prefix: str = "") -> list[str]:
         """返回所有未过期的 key（可按前缀过滤）。"""
@@ -182,7 +182,7 @@ class SharedBlackboardDB:
                     if conn:
                         conn.close()
 
-            return await asyncio.get_event_loop().run_in_executor(None, _do)
+            return await asyncio.get_running_loop().run_in_executor(None, _do)
 
     async def cleanup_expired(self) -> int:
         """清理所有过期条目。"""
@@ -205,7 +205,7 @@ class SharedBlackboardDB:
                     if conn:
                         conn.close()
 
-            cleaned = await asyncio.get_event_loop().run_in_executor(None, _do)
+            cleaned = await asyncio.get_running_loop().run_in_executor(None, _do)
             if cleaned:
                 logger.debug("blackboard_db.cleanup count={}", cleaned)
             return cleaned

@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -170,7 +170,8 @@ def _clamp(value: float, min_val: float, max_val: float) -> float:
 def _get_global_router() -> Any:
     """尝试获取全局模型路由器"""
     try:
-        from core.model_router import get_model_router
+        from model_router import get_model_router
         return get_model_router()
-    except Exception:
+    except Exception as e:
+        logger.debug("emotion_llm.get_global_router_failed", error=str(e))
         return None

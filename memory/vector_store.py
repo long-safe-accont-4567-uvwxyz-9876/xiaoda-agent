@@ -8,6 +8,13 @@ from collections import OrderedDict
 from pathlib import Path
 from loguru import logger
 
+
+def _safe_int(val, default):
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
+
 try:
     import sqlite_vec
     HAS_SQLITE_VEC = True
@@ -95,7 +102,7 @@ class VectorStore:
         self._cache = EmbedCache(max_size=512)
 
         # 并发嵌入限制（避免 API 限流），可通过环境变量配置
-        _embed_concurrency = int(os.getenv("VECTOR_EMBED_CONCURRENCY", "8"))
+        _embed_concurrency = _safe_int(os.getenv("VECTOR_EMBED_CONCURRENCY", "8"), 8)
         self._embed_semaphore = asyncio.Semaphore(_embed_concurrency)
 
         if HAS_OPENAI and embed_api_key:
@@ -127,7 +134,7 @@ class VectorStore:
 
         import sqlite3
 
-        def _init_db() -> tuple:
+        def _init_db() -> tuple[Any, bool]:
             """在后台线程中初始化 SQLite 数据库，加载 sqlite_vec 扩展并创建向量虚拟表。"""
             with self._lock:
                 conn = sqlite3.connect(self._db_path, check_same_thread=False)
@@ -192,8 +199,8 @@ class VectorStore:
         if self._embed_client:
             try:
                 await self._embed_client.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("vector_store.embed_client_close_failed", error=str(e))
         if self._cache.stats["size"] > 0:
             logger.info("vector_store.cache_stats", **self._cache.stats)
 
@@ -272,8 +279,8 @@ class VectorStore:
                 except Exception as e:
                     try:
                         self._vec_conn.execute("ROLLBACK")
-                    except Exception:
-                        logger.debug("vector_store.upsert_rollback_error: {}", exc_info=True)
+                    except Exception as re:
+                        logger.debug("vector_store.upsert_rollback_error", error=str(re))
                     logger.warning("vector_store.upsert_failed", row_id=row_id, error=str(e))
                     return False
 
@@ -334,13 +341,21 @@ class VectorStore:
             with self._lock:
                 if self._closed:
                     return
-                for cid, vec in valid:
-                    vec_json = json.dumps(vec)
-                    self._vec_conn.execute(
-                        "INSERT OR REPLACE INTO memories_child_vec (rowid, embedding) VALUES (?, vec_f32(?))",
-                        (cid, vec_json),
-                    )
-                self._vec_conn.commit()
+                try:
+                    self._vec_conn.execute("BEGIN TRANSACTION")
+                    for cid, vec in valid:
+                        vec_json = json.dumps(vec)
+                        self._vec_conn.execute(
+                            "INSERT OR REPLACE INTO memories_child_vec (rowid, embedding) VALUES (?, vec_f32(?))",
+                            (cid, vec_json),
+                        )
+                    self._vec_conn.commit()
+                except Exception as e:
+                    try:
+                        self._vec_conn.execute("ROLLBACK")
+                    except Exception as re:
+                        logger.debug("vector_store.batch_upsert_children_rollback_error", error=str(re))
+                    logger.warning("vector_store.batch_upsert_children_failed", error=str(e))
 
         await asyncio.to_thread(_do_batch)
 
@@ -425,7 +440,7 @@ class VectorStore:
             return 0
 
         # 单事务批量写入（保持原有逻辑）
-        def _do_batch() -> Any:
+        def _do_batch() -> int:
             """在后台线程中以单事务批量写入向量记录。"""
             with self._lock:
                 if self._closed:
@@ -456,8 +471,8 @@ class VectorStore:
                 except Exception as e:
                     try:
                         conn.rollback()
-                    except Exception:
-                        logger.debug("vector_store.batch_upsert_rollback_error: {}", exc_info=True)
+                    except Exception as re:
+                        logger.debug("vector_store.batch_upsert_rollback_error", error=str(re))
                     logger.error("vector.batch_upsert_failed", error=str(e)[:200])
                     return 0
 
@@ -491,7 +506,7 @@ class VectorStore:
         # oversample 2x 给 tie-breaking 留余量, 再稳定 trim 到 top_k
         fetch_k = top_k * 2 if deterministic else top_k
 
-        def _do_search() -> Any:
+        def _do_search() -> list[tuple[int, float]]:
             """在后台线程中执行向量相似度搜索。"""
             with self._lock:
                 if self._closed:
@@ -590,7 +605,7 @@ class VectorStore:
                 return [{"rowid": r, "distance": d} for r, d in tuples]
 
             # 3. 混合：mixed = query_vec * (1-alpha) + hyde_vec * alpha
-            mixed = [(q * (1 - alpha)) + (h * alpha) for q, h in zip(query_vec, hyde_vec, strict=False)]
+            mixed = [(q * (1 - alpha)) + (h * alpha) for q, h in zip(query_vec, hyde_vec)]
 
             # 4. 归一化（除以 L2 范数）
             norm = sum(v * v for v in mixed) ** 0.5
@@ -652,8 +667,8 @@ class VectorStore:
                         self._vec_conn.execute(
                             "DELETE FROM kg_entities_vec WHERE rowid=?", [row_id]
                         )
-                    except Exception:
-                        pass
+                    except Exception as de:
+                        logger.debug("vector_store.upsert_kg_entity_delete_old_failed", row_id=row_id, error=str(de))
                     self._vec_conn.execute(
                         "INSERT INTO kg_entities_vec(rowid, embedding) VALUES (?, vec_f32(?))",
                         [row_id, vec_json],
@@ -663,8 +678,8 @@ class VectorStore:
                 except Exception as e:
                     try:
                         self._vec_conn.execute("ROLLBACK")
-                    except Exception:
-                        pass
+                    except Exception as re:
+                        logger.debug("vector_store.upsert_kg_entity_rollback_error", error=str(re))
                     logger.warning("vector_store.upsert_kg_entity_failed", row_id=row_id, error=str(e))
                     return False
 
@@ -689,8 +704,8 @@ class VectorStore:
                         self._vec_conn.execute(
                             "DELETE FROM kg_relations_vec WHERE rowid=?", [row_id]
                         )
-                    except Exception:
-                        pass
+                    except Exception as de:
+                        logger.debug("vector_store.upsert_kg_relation_delete_old_failed", row_id=row_id, error=str(de))
                     self._vec_conn.execute(
                         "INSERT INTO kg_relations_vec(rowid, embedding) VALUES (?, vec_f32(?))",
                         [row_id, vec_json],
@@ -700,8 +715,8 @@ class VectorStore:
                 except Exception as e:
                     try:
                         self._vec_conn.execute("ROLLBACK")
-                    except Exception:
-                        pass
+                    except Exception as re:
+                        logger.debug("vector_store.upsert_kg_relation_rollback_error", error=str(re))
                     logger.warning("vector_store.upsert_kg_relation_failed", row_id=row_id, error=str(e))
                     return False
 

@@ -24,7 +24,7 @@ fi
 # 获取当前版本
 CURRENT_VERSION=""
 if [ -f "$VERSION_FILE" ]; then
-    CURRENT_VERSION="$(cat "$VERSION_FILE" | tr -d '[:space:]')"
+    CURRENT_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
 fi
 
 # 获取最新 Release 版本
@@ -85,9 +85,9 @@ fi
 TMP_DIR=$(mktemp -d)
 FILENAME="$(basename "$DOWNLOAD_URL")"
 echo "  下载中: ${FILENAME} ..."
-curl -L --progress-bar --connect-timeout 10 --max-time 300 -o "${TMP_DIR}/${FILENAME}" "$DOWNLOAD_URL"
+curl -Lf --progress-bar --connect-timeout 10 --max-time 300 -o "${TMP_DIR}/${FILENAME}" "$DOWNLOAD_URL"
 
-if [ ! -f "${TMP_DIR}/${FILENAME}" ]; then
+if [ ! -f "${TMP_DIR}/${FILENAME}" ] || [ ! -s "${TMP_DIR}/${FILENAME}" ]; then
     echo "  $(red "下载失败")"
     rm -rf "$TMP_DIR"
     exit 1
@@ -134,7 +134,12 @@ done
 if [ "$EXT" = "tar.gz" ]; then
     mkdir -p "${TMP_DIR}/extract"
     tar xzf "${TMP_DIR}/${FILENAME}" -C "${TMP_DIR}/extract"
-    cp -rf "${TMP_DIR}/extract/xiaoda-agent/"* "${INSTALL_DIR}/"
+    # 检查 xiaoda-agent 子目录是否存在，不存在则使用 extract 根目录
+    if [ -d "${TMP_DIR}/extract/xiaoda-agent" ]; then
+        cp -rf "${TMP_DIR}/extract/xiaoda-agent/." "${INSTALL_DIR}/"
+    else
+        cp -rf "${TMP_DIR}/extract/." "${INSTALL_DIR}/"
+    fi
 fi
 
 # 恢复用户配置

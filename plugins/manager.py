@@ -314,9 +314,11 @@ class PluginManager:
         if yaml_path.exists():
             from plugins.manifest import parse_manifest
             record.manifest = parse_manifest(yaml_path)
-        if await self.load(plugin_id) and was_enabled:
+        if not await self.load(plugin_id):
+            return False
+        if was_enabled:
             return await self.enable(plugin_id)
-        return await self.load(plugin_id)
+        return True
 
     # ── Shutdown ──
     async def shutdown_all(self) -> None:

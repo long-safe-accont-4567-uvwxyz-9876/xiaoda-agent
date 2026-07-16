@@ -162,13 +162,13 @@ async function handlePaste() {
 onMounted(() => {
   ws.on('terminal_output', onTerminalOutput)
   ws.on('terminal_exit', onTerminalExit)
-  document.addEventListener('keydown', _onDocKeyDown, true)
+  document.addEventListener('keydown', _onDocKeyDown)
 })
 
 onBeforeUnmount(() => {
   ws.off('terminal_output', onTerminalOutput)
   ws.off('terminal_exit', onTerminalExit)
-  document.removeEventListener('keydown', _onDocKeyDown, true)
+  document.removeEventListener('keydown', _onDocKeyDown)
   for (const s of sessions.value) {
     s.resizeObserver?.disconnect()
     s.terminal.dispose()

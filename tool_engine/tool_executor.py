@@ -75,8 +75,8 @@ class ToolExecutor:
 
         # S3: 循环检测 — 连续失败次数过多则短路（5 分钟后半开恢复）
         if self._failure_streaks.get(tool_name, 0) >= self.FAILURE_STREAK_THRESHOLD:
-            first_time = self._failure_first_time.get(tool_name, 0)
-            if first_time and time.time() - first_time > self.FAILURE_STREAK_RESET_SECONDS:
+            first_time = self._failure_first_time.get(tool_name)
+            if first_time is not None and time.time() - first_time > self.FAILURE_STREAK_RESET_SECONDS:
                 # 半开恢复：重置计数，允许重试
                 self._failure_streaks[tool_name] = 0
                 self._failure_first_time.pop(tool_name, None)

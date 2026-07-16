@@ -21,7 +21,7 @@ class TestAgnesImageTool(unittest.TestCase):
             tool = get_tool("agnes_image_generate")
             if tool and "handler" in tool:
                 import asyncio
-                result = asyncio.get_event_loop().run_until_complete(
+                result = asyncio.run(
                     tool["handler"](prompt="a cat")
                 )
                 self.assertFalse(result.success)

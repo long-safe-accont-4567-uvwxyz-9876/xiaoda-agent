@@ -13,6 +13,13 @@ from typing import Any
 import argparse
 import asyncio
 import json
+
+
+def _safe_int(val, default):
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
 import os
 import random
 import sys
@@ -325,7 +332,7 @@ class NahidaCLI:
 def main() -> None:
     parser = argparse.ArgumentParser(description="AI Agent CLI（连接 WebUI 网关）")
     parser.add_argument("--host", default=os.getenv("WEBUI_HOST_CLI", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("WEBUI_PORT", "8082")))
+    parser.add_argument("--port", type=int, default=_safe_int(os.getenv("WEBUI_PORT", "8082"), 8082))
     parser.add_argument("--password", default=os.getenv("WEBUI_PASSWORD", ""))
     args = parser.parse_args()
     with contextlib.suppress(KeyboardInterrupt):

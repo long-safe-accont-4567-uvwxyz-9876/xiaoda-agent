@@ -64,17 +64,20 @@ PROVIDER_PRICING = {
 }
 
 ROUTE_TABLE = {
-    # chat 主路由：充分利用模型输出能力，避免回复被 max_tokens 截断
-    "chat": {"model": _CFG_MODEL_NAME, "max_tokens": 8192, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_pro": {"model": _CFG_PRO_MODEL or _CFG_MODEL_NAME, "max_tokens": 8192, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "enabled", "budget_tokens": 4096}},
+    # chat 主路由：128K 上限，支撑长时间连贯对话，搭配滑动窗口+摘要压缩避免退化
+    # 不再锁死 8192，避免长会话频繁截断历史导致记忆断裂
+    "chat": {"model": _CFG_MODEL_NAME, "max_tokens": 131072, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
+    "chat_pro": {"model": _CFG_PRO_MODEL or _CFG_MODEL_NAME, "max_tokens": 131072, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "enabled", "budget_tokens": 4096}},
     # chat_flash：sub_agent 调用（如 xiaoli 转述），需要足够空间避免截断
     "chat_flash": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 6144, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "chat_mini": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 4096, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_mimo": {"model": MIMO_MODEL, "max_tokens": 8192, "client": "mimo", "thinking": {"type": "disabled"}},
+    "chat_mimo": {"model": MIMO_MODEL, "max_tokens": 131072, "client": "mimo", "thinking": {"type": "disabled"}},
+    # chat_ultra：1M 超大窗口，仅子代理临时调用（完整 Spec/源码/长文档分析），用完销毁
+    "chat_ultra": {"model": _CFG_MODEL_NAME, "max_tokens": 1048576, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1024, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 2048, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 4096, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": 8192, "client": "agnes", "thinking": {"type": "disabled"}},
+    "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": 131072, "client": "agnes", "thinking": {"type": "disabled"}},
 }
 
 MODEL_PREFERENCES = {
@@ -912,7 +915,10 @@ class ModelRouter:
 
     async def _handle_route_response(self, response: Any, task_type: str, model: str,
                                      stream: bool, user_openid: str, session_id: str,
-                                     provider: str, tools: list[dict] | None) -> str | object:
+                                     provider: str, tools: list[dict] | None,
+                                     messages: list[dict] | None = None,
+                                     temperature: float | None = None,
+                                     max_tokens: int | None = None) -> str | object:
         """处理路由成功响应：记录费用、缓存、凭证成功，返回 content 或 response。"""
         if stream:
             # 流式调用：在返回前尝试记录费用（部分 provider 在流结束时提供 usage）
@@ -957,24 +963,36 @@ class ModelRouter:
                                model=model, task=task_type,
                                content_len=content_len,
                                finish_reason=finish_reason)
-                # 截断重试：如果截断且有内容，追加"请继续"提示重试一次
+                # 截断重试：追加"请继续"提示重试，最多 2 轮，token 上限 4096 防止死循环
                 if content and len(content) > 10:
-                    try:
-                        retry_messages = messages.copy()
-                        retry_messages.append({"role": "assistant", "content": content})
-                        retry_messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
-                        retry_result = await self.route(
-                            task_type, retry_messages, temperature=temperature,
-                            max_tokens=max_tokens * 2 if max_tokens else None,  # 加倍 max_tokens
-                            user_openid=user_openid, session_id=session_id,
-                        )
-                        retry_content = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
-                        if retry_content and len(retry_content) > 5:
-                            content = content + retry_content
-                            logger.info("llm.truncated_retry_success",
-                                        final_len=len(content), model=model)
-                    except Exception as e:
-                        logger.warning("llm.truncated_retry_failed", error=str(e), model=model)
+                    _retry_max_tokens = min(max_tokens, 4096) if max_tokens else 4096
+                    for _retry_round in range(2):  # 最多 2 轮重试
+                        try:
+                            retry_messages = messages.copy()
+                            retry_messages.append({"role": "assistant", "content": content})
+                            retry_messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
+                            retry_result = await self.route(
+                                task_type, retry_messages, temperature=temperature,
+                                max_tokens=_retry_max_tokens,
+                                user_openid=user_openid, session_id=session_id,
+                            )
+                            retry_content = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
+                            if retry_content and len(retry_content) > 5:
+                                content = content + retry_content
+                                logger.info("llm.truncated_retry_success",
+                                            final_len=len(content), model=model,
+                                            retry_round=_retry_round + 1)
+                                # 检查是否仍然截断
+                                _retry_finish = getattr(retry_result, "choices", [{}])
+                                _retry_finish = getattr(_retry_finish[0], "finish_reason", None) if _retry_finish else None
+                                if _retry_finish != "length":
+                                    break  # 不再截断，退出重试
+                            else:
+                                break  # 无内容，退出
+                        except Exception as e:
+                            logger.warning("llm.truncated_retry_failed", error=str(e), model=model,
+                                           retry_round=_retry_round + 1)
+                            break
             elif finish_reason == "content_filter":
                 logger.warning("llm.content_filtered",
                                model=model, task=task_type,
@@ -1099,6 +1117,7 @@ class ModelRouter:
                 return await self._handle_route_response(
                     response, task_type, model, stream,
                     user_openid, session_id, provider, tools,
+                    messages=messages, temperature=temperature, max_tokens=max_tokens,
                 )
 
             except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError) as e:

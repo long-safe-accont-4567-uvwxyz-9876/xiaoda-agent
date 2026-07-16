@@ -192,7 +192,7 @@ class BackgroundTaskManager:
         if self.memory and len(self.context.history) >= 4:
             async def _encode_task():
                 try:
-                    pre_compressed = self.context.flush_pre_compressed_buffer()
+                    pre_compressed = await self.context.flush_pre_compressed_buffer()
                     exchanges = self.context.get_last_n(6)
                     if pre_compressed:
                         for msg in pre_compressed[-12:]:

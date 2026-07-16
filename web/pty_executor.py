@@ -66,6 +66,10 @@ async def execute_on_pty(
     if not session:
         return False, ""
 
+    # Validate command does not contain marker sequences (prevents marker injection)
+    if "_A_" in command or "_Z_" in command:
+        return False, "命令包含非法序列"
+
     with _pending_lock:
         pending = _pending_cmd
     if pending and not pending.event.is_set():

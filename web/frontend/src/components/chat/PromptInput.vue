@@ -200,12 +200,7 @@ async function startRecording() {
         }
       } catch (e) {
         // 识别失败显示提示，不再静默吞错
-        const win = window as any
-        if (win.$message) {
-          win.$message.error(t('promptInput.voiceFailed'))
-        } else {
-          message.error(t('promptInput.voiceFailed'))
-        }
+        message.error(t('promptInput.voiceFailed'))
       } finally {
         isTranscribing.value = false
         isRecording.value = false
@@ -247,6 +242,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('paste', onPaste as any)
   if (recordingTimer) clearInterval(recordingTimer)
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop()
+  }
   if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
 })
 

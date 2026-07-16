@@ -136,11 +136,12 @@ async def invoke_tool(name: str, body: dict, request: Request) -> Any:
 async def tool_stats(name: str, request: Request, days: int = Query(default=7, ge=1, le=90)) -> Any:
     core = request.app.state.core
     since = time.time() - days * 86400
+    escaped_name = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     row = await core.db.fetch_one(
         "SELECT COUNT(*) AS calls, "
         "SUM(CASE WHEN detail LIKE '%\"success\": true%' OR detail LIKE '%success=True%' THEN 1 ELSE 0 END) AS ok "
-        "FROM audit_logs WHERE event_type LIKE 'tool%' AND detail LIKE ? AND timestamp > ?",
-        (f"%{name}%", since))
+        "FROM audit_logs WHERE event_type LIKE 'tool%' AND detail LIKE ? ESCAPE '\\' AND timestamp > ?",
+        (f"%{escaped_name}%", since))
     from utils.metrics import metrics
     snap = metrics.get_snapshot()
     counters = snap.get("counters", {}) if isinstance(snap, dict) else {}

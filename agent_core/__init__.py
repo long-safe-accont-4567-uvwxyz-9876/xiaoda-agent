@@ -22,9 +22,17 @@ else:
     _env_path = str(Path(_PROJECT_ROOT) / ".env")
 load_dotenv(_env_path, override=True)
 
-# 日志初始化
-from utils.logging_config import setup_logging
-setup_logging()
+# 日志初始化（延迟到首次使用时触发，避免导入副作用）
+_logging_initialized = False
+
+
+def _ensure_logging() -> None:
+    """确保日志已初始化（幂等，仅首次调用时执行）。"""
+    global _logging_initialized
+    if not _logging_initialized:
+        _logging_initialized = True
+        from utils.logging_config import setup_logging
+        setup_logging()
 
 # 延迟导入映射表 — 只有实际访问时才触发导入
 # 共享类型 (ProcessResult / RequestContext / UserIdentity / DEGRADED_REPLY / _current_request_ctx)
@@ -52,14 +60,15 @@ _LAZY_IMPORTS = {
     "to_openai_tools": "agent_core.core",
     "get_credential_pool": "agent_core.core",
     "ErrorClassifier": "agent_core.core",
-    "get_hook_engine": "agent_core.core",
-    "HookEngine": "agent_core.core",
+    "get_hook_engine": "hooks",
+    "HookEngine": "hooks",
 }
 
 
 def __getattr__(name: str) -> Any:
     """模块级 __getattr__ — 延迟导入"""
     if name in _LAZY_IMPORTS:
+        _ensure_logging()
         import importlib
         module = importlib.import_module(_LAZY_IMPORTS[name])
         value = getattr(module, name)

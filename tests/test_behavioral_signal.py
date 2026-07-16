@@ -1,7 +1,6 @@
 # tests/test_behavioral_signal.py
 import pytest
 import asyncio
-import time
 from core.behavioral_signal import SignalEntry, BehavioralSignalStream
 
 

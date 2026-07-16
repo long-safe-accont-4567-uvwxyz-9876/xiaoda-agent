@@ -167,7 +167,8 @@ class TemporalMemoryDB:
     ) -> None:
         if old_id == new_id:
             raise ValueError("a record cannot supersede itself")
-        assert table in ("memory_facts", "memory_preferences"), f"Invalid table name: {table}"
+        if table not in ("memory_facts", "memory_preferences"):
+            raise ValueError(f"Invalid table name: {table}")
         try:
             cursor = await self._conn.execute(
                 f"SELECT id, status FROM {table} WHERE id IN (?, ?)", (old_id, new_id)

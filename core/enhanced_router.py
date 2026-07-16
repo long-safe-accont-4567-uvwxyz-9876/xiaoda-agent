@@ -65,7 +65,7 @@ class EnhancedBeliefRouter:
         signal_scores = {}
         for agent in candidates:
             recent = self._stream.aggregate(f"agent_{agent}_success", "mean_of_means")
-            signal_scores[agent] = recent
+            signal_scores[agent] = recent if recent is not None else 0.0
 
         # 4. 综合评分
         final_scores = {}

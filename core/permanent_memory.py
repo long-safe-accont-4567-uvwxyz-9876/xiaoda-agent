@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from typing import ClassVar
+import asyncio
 import json
 import os
 import time
@@ -166,24 +167,33 @@ class PermanentMemoryManager:
             self._memories = {}
 
     def _save(self) -> None:
-        """原子化保存到 JSON 文件 (.tmp + os.replace)."""
+        """原子化保存到 JSON 文件 (.tmp + os.replace), offloaded to thread."""
         self._memories_path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             uid: {key: entry.to_dict() for key, entry in entries.items()}
             for uid, entries in self._memories.items()
         }
-        tmp = self._memories_path.with_suffix(".json.tmp")
-        try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, self._memories_path)
-        except Exception as e:  # pragma: no cover - 写入失败不影响内存状态
-            logger.warning(f"PermanentMemory.save_failed: {e}")
+
+        def _write() -> None:
+            tmp = self._memories_path.with_suffix(".json.tmp")
             try:
-                if tmp.exists():
-                    tmp.unlink()
-            except OSError:
-                pass
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                os.replace(tmp, self._memories_path)
+            except Exception as e:
+                logger.warning(f"PermanentMemory.save_failed: {e}")
+                try:
+                    if tmp.exists():
+                        tmp.unlink()
+                except OSError:
+                    pass
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(None, _write)
+        except RuntimeError:
+            # No event loop, run synchronously
+            _write()
 
     # ── 基础 CRUD ──────────────────────────────────────────
 

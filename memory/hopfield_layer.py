@@ -9,6 +9,7 @@ beta=20 使注意力分布极尖锐 (近似one-hot)
 """
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -62,6 +63,7 @@ class HopfieldLayer:
         self.decay_rate = decay_rate
 
         self._patterns: list[Pattern] = []
+        self._patterns_lock = threading.Lock()
         self._next_id = 1
 
     def store(self, pattern: np.ndarray, label: str = "",
@@ -71,70 +73,72 @@ class HopfieldLayer:
             raise ValueError(f"Pattern dimension mismatch: expected {self.dimensions}, got {pattern.shape}")
         pattern = pattern.astype(np.float32)
 
-        # 满时驱逐
-        while len(self._patterns) >= self.capacity:
-            self._evict_internal()
+        with self._patterns_lock:
+            # 满时驱逐
+            while len(self._patterns) >= self.capacity:
+                self._evict_internal()
 
-        p = Pattern(
-            data=pattern.astype(np.float32).copy(),
-            id=self._next_id,
-            timestamp=time.time(),
-            salience=1.0,
-            label=label,
-            source=source,
-        )
-        self._patterns.append(p)
-        self._next_id += 1
-        return p.id
+            p = Pattern(
+                data=pattern.astype(np.float32).copy(),
+                id=self._next_id,
+                timestamp=time.time(),
+                salience=1.0,
+                label=label,
+                source=source,
+            )
+            self._patterns.append(p)
+            self._next_id += 1
+            return p.id
 
     def retrieve(self, cue: np.ndarray) -> RetrievalResult:
         """迭代注意力检索"""
         cue = cue.astype(np.float32)
         result = RetrievalResult()
 
-        if not self._patterns:
-            result.pattern = cue.copy()
-            return result
+        with self._patterns_lock:
+            if not self._patterns:
+                result.pattern = cue.copy()
+                return result
 
-        current = cue.copy()
-        if current.shape != (self.dimensions,):
-            raise ValueError(f"Cue dimension mismatch: expected {self.dimensions}, got {current.shape}")
+            current = cue.copy()
+            if current.shape != (self.dimensions,):
+                raise ValueError(f"Cue dimension mismatch: expected {self.dimensions}, got {current.shape}")
 
-        for iteration in range(self.max_iterations):
-            nxt = self._attention_sum(current)
-            diff = float(np.linalg.norm(nxt - current))
-            current = nxt
-            result.iterations = iteration + 1
+            for iteration in range(self.max_iterations):
+                nxt = self._attention_sum(current)
+                diff = float(np.linalg.norm(nxt - current))
+                current = nxt
+                result.iterations = iteration + 1
 
-            if diff < self.convergence_eps:
-                result.converged = True
-                break
+                if diff < self.convergence_eps:
+                    result.converged = True
+                    break
 
-        result.pattern = current
+            result.pattern = current
 
-        # 找最近存储模式计算 confidence
-        best_sim = -1.0
-        best_id = 0
-        for p in self._patterns:
-            sim = self._cosine_sim(current, p.data)
-            if sim > best_sim:
-                best_sim = sim
-                best_id = p.id
-        result.confidence = max(0.0, best_sim)
-        result.pattern_id = best_id
+            # 找最近存储模式计算 confidence
+            best_sim = -1.0
+            best_id = 0
+            for p in self._patterns:
+                sim = self._cosine_sim(current, p.data)
+                if sim > best_sim:
+                    best_sim = sim
+                    best_id = p.id
+            result.confidence = max(0.0, best_sim)
+            result.pattern_id = best_id
 
-        # 计算注意力分布的熵
-        weights = self._attention_weights(current)
-        if weights is not None:
-            mask = weights > 1e-10
-            if mask.any():
-                result.entropy = float(-np.sum(weights[mask] * np.log(weights[mask])))
+            # 计算注意力分布的熵
+            weights = self._attention_weights(current)
+            if weights is not None:
+                mask = weights > 1e-10
+                if mask.any():
+                    result.entropy = float(-np.sum(weights[mask] * np.log(weights[mask])))
 
-        # 更新访问计数
-        for p in self._patterns:
-            if p.id == best_id:
-                p.access_count += 1
-                break
+            # 更新访问计数
+            for p in self._patterns:
+                if p.id == best_id:
+                    p.access_count += 1
+                    break
 
         return result
 
@@ -145,23 +149,27 @@ class HopfieldLayer:
     def update_salience(self) -> None:
         """salience衰减 + recency/freq boost"""
         now = time.time()
-        for p in self._patterns:
-            p.salience *= self.decay_rate
-            age_seconds = now - p.timestamp
-            recency_boost = float(np.exp(-age_seconds / 3600.0))
-            freq_boost = float(np.log1p(p.access_count) * 0.1)
-            p.salience = min(1.0, max(p.salience, recency_boost + freq_boost))
+        with self._patterns_lock:
+            for p in self._patterns:
+                p.salience *= self.decay_rate
+                age_seconds = now - p.timestamp
+                recency_boost = float(np.exp(-age_seconds / 3600.0))
+                freq_boost = float(np.log1p(p.access_count) * 0.1)
+                p.salience = min(1.0, max(p.salience, recency_boost + freq_boost))
 
     def pattern_count(self) -> int:
-        return len(self._patterns)
+        with self._patterns_lock:
+            return len(self._patterns)
 
     def pattern_ids(self) -> list[int]:
-        return [p.id for p in self._patterns]
+        with self._patterns_lock:
+            return [p.id for p in self._patterns]
 
     def top_k(self, query: np.ndarray, k: int = 10) -> list[tuple[int, float]]:
         """找K个最相似模式"""
         query = query.astype(np.float32)
-        scored = [(p.id, self._cosine_sim(query, p.data)) for p in self._patterns]
+        with self._patterns_lock:
+            scored = [(p.id, self._cosine_sim(query, p.data)) for p in self._patterns]
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:k]
 

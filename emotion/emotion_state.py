@@ -114,8 +114,8 @@ class EmotionState:
                     # 调整情绪状态
                     # TODO(phase-2): apply emotion_offset direction to emotion state
                     pass
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("emotion_state.j_space_hook_failed", error=str(e))
 
         # 异步持久化（不阻塞主流程）
         try:

@@ -121,7 +121,7 @@ def _get_salt() -> bytes:
             if len(data) == 32:
                 return _SALT_BASE + data
         except OSError:
-            logger.debug("credential_vault.salt_read_failed", exc_info=True)
+            logger.warning("credential_vault.salt_read_failed", exc_info=True)
     # 首次：生成随机盐并持久化
     random_salt = os.urandom(32)
     try:
@@ -216,7 +216,7 @@ def decrypt(ciphertext: str) -> str:
     - 解密失败（机器不匹配 / 标签验证失败 / 数据损坏）抛出 DecryptionError
     """
     if not ciphertext:
-        return ciphertext or ""
+        return ""
     if not is_encrypted(ciphertext):
         # 明文直接返回（向后兼容）
         return ciphertext

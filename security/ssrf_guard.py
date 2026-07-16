@@ -211,7 +211,7 @@ def validate_url(url: str) -> tuple[bool, str]:
     port = parsed.port or (443 if scheme == "https" else 80)
     try:
         ips = _resolve_all_ips(hostname, port)
-    except socket.gaierror as e:
+    except (socket.gaierror, OSError) as e:
         return False, f"DNS 解析失败: {hostname} ({e})"
 
     if not ips:

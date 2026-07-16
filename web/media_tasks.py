@@ -193,6 +193,22 @@ class MediaTaskQueue:
 
     async def _download(self, url: str, kind: str) -> str:
         import httpx
+        import ipaddress
+        from urllib.parse import urlparse
+
+        # SSRF protection: block private/internal IPs
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if hostname:
+            try:
+                ip = ipaddress.ip_address(hostname)
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                    raise RuntimeError(f"SSRF: 不允许下载内网地址 {hostname}")
+            except ValueError:
+                pass  # Not an IP address (e.g., domain name), allow
+        if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+            raise RuntimeError(f"SSRF: 不允许下载本地地址 {hostname}")
+
         ext = ".mp4" if kind == "video" else ".png"
         dest = MEDIA_ROOT / kind / f"{kind}_{int(time.time())}{ext}"
         async with httpx.AsyncClient(timeout=120) as client:

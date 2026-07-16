@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """三轴退化模型 + 静默退化检测 — 2026关键洞察
 
 三轴: Availability(二值) + Performance(连续) + Quality(最阴险)
@@ -62,7 +64,7 @@ class SilentDegradationDetector:
 
     def __init__(self, baseline: TripleAxisState) -> None:
         self._baseline = baseline
-        self._history: deque = deque(maxlen=100)
+        self._history: deque[TripleAxisState] = deque(maxlen=100)
 
     def check(self, current: TripleAxisState) -> list[str]:
         """检查是否有静默退化, 返回告警列表"""

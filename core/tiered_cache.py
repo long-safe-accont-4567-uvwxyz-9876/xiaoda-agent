@@ -274,20 +274,18 @@ class L3SQLiteCache:
         self._db.parent.mkdir(parents=True, exist_ok=True)
         self._default_ttl = default_ttl
         self._max_entries = max_entries
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(str(self._db), timeout=5.0)
+        self._conn.row_factory = sqlite3.Row
         self._init_schema()
         self._hits = 0
         self._misses = 0
         self._set_count = 0
 
-    def _conn(self) -> Any:
-        conn = sqlite3.connect(str(self._db), timeout=5.0)
-        conn.row_factory = sqlite3.Row
-        return conn
-
     def _init_schema(self) -> None:
         try:
-            with self._conn() as c:
-                c.execute("""
+            with self._lock:
+                self._conn.execute("""
                     CREATE TABLE IF NOT EXISTS cache (
                         key TEXT PRIMARY KEY,
                         value TEXT NOT NULL,
@@ -295,24 +293,24 @@ class L3SQLiteCache:
                         created_at REAL NOT NULL
                     )
                 """)
-                c.execute("CREATE INDEX IF NOT EXISTS idx_expires ON cache(expires_at)")
-                c.commit()
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_expires ON cache(expires_at)")
+                self._conn.commit()
         except Exception as e:
             logger.debug("_init_schema SQLite error: {}", e)
 
     def get(self, key: str) -> Any | None:
         """按 key 从 SQLite 读取值, 过期则删除并返回 None."""
         try:
-            with self._conn() as c:
-                row = c.execute(
+            with self._lock:
+                row = self._conn.execute(
                     "SELECT value, expires_at FROM cache WHERE key=?", (key,)
                 ).fetchone()
                 if not row:
                     self._misses += 1
                     return None
                 if row["expires_at"] < time.time():
-                    c.execute("DELETE FROM cache WHERE key=?", (key,))
-                    c.commit()
+                    self._conn.execute("DELETE FROM cache WHERE key=?", (key,))
+                    self._conn.commit()
                     self._misses += 1
                     return None
                 self._hits += 1
@@ -324,13 +322,13 @@ class L3SQLiteCache:
     def set(self, key: str, value: Any, ttl: float | None = None) -> None:
         """写入键值 (覆盖已存在记录)."""
         try:
-            with self._conn() as c:
-                c.execute(
+            with self._lock:
+                self._conn.execute(
                     "INSERT OR REPLACE INTO cache(key, value, expires_at, created_at) VALUES (?,?,?,?)",
                     (key, json.dumps(value, ensure_ascii=False),
                      time.time() + (ttl or self._default_ttl), time.time())
                 )
-                c.commit()
+                self._conn.commit()
         except Exception as e:
             logger.debug("L3SQLiteCache.set({}) error: {}", key, e)
         # F6: 定期淘汰过期和超限条目（每 100 次写入检查一次）
@@ -341,20 +339,20 @@ class L3SQLiteCache:
     def _evict_expired_and_oldest(self) -> None:
         """F6: 淘汰过期条目，如仍超限则按 created_at 淘汰最旧的"""
         try:
-            with self._conn() as c:
+            with self._lock:
                 # 1. 先淘汰过期的
-                c.execute("DELETE FROM cache WHERE expires_at < ?", (time.time(),))
+                self._conn.execute("DELETE FROM cache WHERE expires_at < ?", (time.time(),))
                 # 2. 如仍超限，按 created_at 淘汰最旧的
-                row = c.execute("SELECT COUNT(*) as cnt FROM cache").fetchone()
+                row = self._conn.execute("SELECT COUNT(*) as cnt FROM cache").fetchone()
                 count = row["cnt"] if row else 0
                 if count > self._max_entries:
                     evict_count = count - self._max_entries
-                    c.execute(
+                    self._conn.execute(
                         "DELETE FROM cache WHERE key IN ("
                         "SELECT key FROM cache ORDER BY created_at ASC LIMIT ?)",
                         (evict_count,)
                     )
-                c.commit()
+                self._conn.commit()
         except Exception:
             logger.debug("tiered_cache.L3_evict_failed: {}", exc_info=True)
 
@@ -367,29 +365,30 @@ class L3SQLiteCache:
         Returns:
             删除的行数
         """
-        with self._conn() as c:
+        with self._lock:
             if prefix:
-                cur = c.execute(
-                    "DELETE FROM cache WHERE key LIKE ?", (f"{prefix}%",)
+                escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                cur = self._conn.execute(
+                    "DELETE FROM cache WHERE key LIKE ? ESCAPE '\\'", (f"{escaped}%",)
                 )
             else:
-                cur = c.execute("DELETE FROM cache")
-            c.commit()
+                cur = self._conn.execute("DELETE FROM cache")
+            self._conn.commit()
             return cur.rowcount
 
     def cleanup_expired(self) -> int:
         """清理所有过期条目, 返回删除行数."""
-        with self._conn() as c:
-            cur = c.execute(
+        with self._lock:
+            cur = self._conn.execute(
                 "DELETE FROM cache WHERE expires_at < ?", (time.time(),)
             )
-            c.commit()
+            self._conn.commit()
             return cur.rowcount
 
     def stats(self) -> dict:
         """返回 L3 缓存统计 (数据库路径/大小/命中/未命中)."""
-        with self._conn() as c:
-            row = c.execute("SELECT COUNT(*) AS n FROM cache").fetchone()
+        with self._lock:
+            row = self._conn.execute("SELECT COUNT(*) AS n FROM cache").fetchone()
         return {
             "layer": "L3",
             "db": str(self._db),
@@ -435,11 +434,13 @@ class TieredCache:
         async with self._locks_guard:
             if key in self._locks:
                 return self._locks[key]
-            # 高水位淘汰: 仅移除未被持有的锁, 保留正在 await 的锁
+            # 高水位淘汰: 移除未被持有的锁, 淘汰到 128
             if len(self._locks) > 256:
                 evictable = [k for k, v in self._locks.items() if not v.locked()]
-                for k in evictable[: len(evictable) // 2 or 1]:
+                for k in evictable:
                     del self._locks[k]
+                    if len(self._locks) <= 128:
+                        break
             lock = asyncio.Lock()
             self._locks[key] = lock
             return lock

@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import os
 import re
 import threading
 from enum import Enum
@@ -80,6 +81,8 @@ class BaseHook:
 class HookEngine:
     """钩子引擎，负责注册并触发各类钩子链。"""
 
+    _MAX_PENDING_ACTIONS = 1000  # 防止无界增长
+
     def __init__(self) -> None:
         self._hooks: dict[HookType, list[BaseHook]] = {t: [] for t in HookType}
         self._pending_post_actions: list[str] = []
@@ -95,11 +98,11 @@ class HookEngine:
 
         EvidenceGate 是全局单例，_read_targets 会在请求间累积。
         必须在每个请求开始时调用此方法清空，避免跨请求状态泄漏。
+        清空所有 GateGuardHook 实例，而非仅第一个。
         """
         for hook in self._hooks[HookType.PRE_TOOL_USE]:
             if isinstance(hook, GateGuardHook):
                 hook._evidence_gate.clear()
-                break
 
     async def fire_pre_tool_use(self, tool_name: str, arguments: dict,
                                  user_input: str = "", safe_mode: bool = False) -> HookResult:
@@ -118,7 +121,7 @@ class HookEngine:
                     }),
                     timeout=hook.timeout,
                 )
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):
                 logger.warning("hooks.pre_tool_use.timeout", hook=hook.name, timeout=hook.timeout)
                 continue
             except Exception as e:
@@ -154,7 +157,7 @@ class HookEngine:
                     }),
                     timeout=hook.timeout,
                 )
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):
                 logger.warning("hooks.post_tool_use.timeout", hook=hook.name)
                 continue
             except Exception as e:
@@ -166,25 +169,33 @@ class HookEngine:
                 current_output = result.modified_output
                 final_result.modified_output = current_output
 
-            # 累积后处理动作
+            # 累积后处理动作（带上限保护）
             if result.post_action is not None:
-                self._pending_post_actions.append(result.post_action)
+                if len(self._pending_post_actions) < self._MAX_PENDING_ACTIONS:
+                    self._pending_post_actions.append(result.post_action)
+                else:
+                    logger.warning("hooks.pending_actions.overflow, dropping action")
 
         return final_result
 
     async def fire_post_response(self) -> None:
-        """触发 PostResponse 钩子，执行所有累积的后处理动作"""
+        """触发 PostResponse 钩子，执行所有累积的后处理动作
+
+        快照后清空：先取当前 pending_actions 快照，再 clear，
+        避免 hook.execute 期间新追加的 action 被误清。
+        """
+        snapshot = list(self._pending_post_actions)
+        self._pending_post_actions.clear()
         for hook in self._hooks[HookType.POST_RESPONSE]:
             try:
                 await hook.execute({
-                    "pending_actions": list(self._pending_post_actions),
+                    "pending_actions": snapshot,
                 })
             except Exception as e:
                 logger.error("hooks.post_response.error", hook=hook.name, error=str(e))
 
-        if self._pending_post_actions:
-            logger.debug("hooks.post_response.flushed", count=len(self._pending_post_actions))
-            self._pending_post_actions.clear()
+        if snapshot:
+            logger.debug("hooks.post_response.flushed", count=len(snapshot))
 
     async def fire_post_tool_use_failure(self, tool_name: str, arguments: dict,
                                           error: str, user_input: str = "") -> HookResult:
@@ -205,7 +216,7 @@ class HookEngine:
                 )
                 if result.additional_context:
                     final_result.additional_context = (final_result.additional_context or "") + result.additional_context + "\n"
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):
                 logger.warning("hooks.post_tool_use_failure.timeout", hook=hook.name)
                 continue
             except Exception as e:
@@ -266,7 +277,7 @@ class HookEngine:
                     return result
                 if result.additional_context:
                     final_result.additional_context = (final_result.additional_context or "") + result.additional_context + "\n"
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):
                 logger.warning("hooks.user_prompt_submit.timeout", hook=hook.name)
                 continue
             except Exception as e:
@@ -288,7 +299,7 @@ class HookEngine:
                 )
                 if result.additional_context:
                     final_result.additional_context = (final_result.additional_context or "") + result.additional_context + "\n"
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):
                 logger.warning("hooks.subagent_start.timeout", hook=hook.name)
                 continue
             except Exception as e:
@@ -308,7 +319,7 @@ class HookEngine:
                     }),
                     timeout=hook.timeout,
                 )
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):
                 logger.warning("hooks.subagent_stop.timeout", hook=hook.name)
                 continue
             except Exception as e:
@@ -330,7 +341,7 @@ class HookEngine:
                 )
                 if result.additional_context:
                     final_result.additional_context = (final_result.additional_context or "") + result.additional_context + "\n"
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):
                 logger.warning("hooks.pre_compact.timeout", hook=hook.name)
                 continue
             except Exception as e:
@@ -451,8 +462,7 @@ class GateGuardHook(BaseHook):
         # 证据门禁：检查是否已读取目标
         has_read = self._evidence_gate.has_read(file_path) if file_path else False
         # create_file: 检查目标文件是否已存在（创建新文件时豁免证据门禁）
-        import os as _os
-        file_exists = bool(file_path) and _os.path.exists(file_path)
+        file_exists = bool(file_path) and os.path.exists(file_path)
         check_result = self._risk_classifier.pre_check(
             tool_name, arguments, has_read_target=has_read, file_exists=file_exists
         )

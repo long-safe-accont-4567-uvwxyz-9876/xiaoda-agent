@@ -34,6 +34,16 @@ const md = new MarkdownIt({
   },
 })
 
+// 仅允许 http/https 协议的链接，过滤 javascript: 等危险协议
+md.renderer.rules.link_open = (tokens: any, idx: number, options: any, _env: any, self: any) => {
+  const href = tokens[idx].attrGet('href') || ''
+  if (!/^https?:\/\//i.test(href)) {
+    tokens[idx].attrSet('href', '#')
+    tokens[idx].attrSet('title', 'Blocked: unsafe protocol')
+  }
+  return self.renderToken(tokens, idx, options)
+}
+
 // --- LRU 缓存层 ---
 // 每个 token 都会 mutate msg.content 触发 v-html 重渲染，无缓存时 markdown-it
 // 从零解析整段 + highlight.js 高亮，复杂度 O(n²)。按 text 内容缓存渲染结果。

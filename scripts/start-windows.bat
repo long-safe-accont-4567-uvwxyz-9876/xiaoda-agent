@@ -61,6 +61,9 @@ cd /d "%~dp0"
 :: Force UTF-8 output encoding (prevents UnicodeEncodeError with GBK on Chinese Windows)
 set PYTHONIOENCODING=utf-8
 
+:: Use WEBUI_PORT environment variable with fallback to 8082
+if not defined WEBUI_PORT set "WEBUI_PORT=8082"
+
 :: Start in Web mode by default (first-run will auto-trigger setup wizard)
 echo   Starting Xiaoda Agent...
 echo.
@@ -68,12 +71,12 @@ echo.
 :: Launch browser once server is ready (only in --web mode; --desktop uses pywebview native window)
 if /i "%LAUNCH_MODE%"=="--web" (
     if exist "%~dp0open-browser.ps1" (
-        start "" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0open-browser.ps1" -Port 8082
+        start "" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0open-browser.ps1" -Port %WEBUI_PORT%
     )
 )
 
 :: Run the main executable
-"%EXE_PATH%" %LAUNCH_MODE% --port 8082
+"%EXE_PATH%" %LAUNCH_MODE% --port %WEBUI_PORT%
 
 :: Check exit code
 if %errorlevel% neq 0 (

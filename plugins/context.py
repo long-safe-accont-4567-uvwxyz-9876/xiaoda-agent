@@ -28,7 +28,7 @@ class PluginContext:
         self._mcp = mcp_manager
         self._agent_core = agent_core
         self._plugin_id = manifest.id
-        self._registered_tools: list[str] = []
+        self._registered_tools: set[str] = set()
         self._registered_hooks: list[tuple[str, Callable]] = []
         self._background_tasks: dict[str, asyncio.Task] = {}
         self._data_dir = Path(f"config/plugins/{manifest.id}")
@@ -62,7 +62,7 @@ class PluginContext:
             plugin_id=self._plugin_id,
             version=self._manifest.version,
         )
-        self._registered_tools.append(full_name)
+        self._registered_tools.add(full_name)
         logger.info("plugin.tool_registered", plugin=self._plugin_id, tool=full_name)
 
     def unregister_tool(self, name: str) -> None:

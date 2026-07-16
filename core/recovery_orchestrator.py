@@ -337,7 +337,7 @@ class RecoveryOrchestrator:
                     else:
                         cb(report)
                 except Exception:
-                    pass
+                    logger.debug("recovery_orchestrator.escalate_callback_failed", exc_info=True)
         except Exception:
             logger.debug("recovery_orchestrator.escalate_to_human_failed", exc_info=True)
 

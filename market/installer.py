@@ -235,9 +235,12 @@ class MarketInstaller:
             # 添加版本元数据
             version_meta = f"<!-- version: {item.version} -->\n"
             if content.startswith("<!--"):
-                # 已有元数据，替换 version
+                # 已有元数据，替换整个旧元数据块
                 end = content.find("-->")
-                content = version_meta[:end + 3] + content[end + 3:] if end > 0 else version_meta + content
+                if end > 0:
+                    content = version_meta + content[end + 3:].lstrip('\n')
+                else:
+                    content = version_meta + content
             else:
                 content = version_meta + content
 
@@ -467,10 +470,13 @@ class MarketInstaller:
     def _is_archive(path: Path) -> bool:
         """判断是否为压缩包"""
         suffixes = path.suffixes
-        return any(
-            s in (".zip", ".tar", ".gz", ".tgz", ".tar.gz", ".bz2")
-            for s in suffixes
-        ) or zipfile.is_zipfile(path) or tarfile.is_tarfile(path)
+        combined = ''.join(suffixes)
+        return (
+            any(s in (".zip", ".tar", ".gz", ".tgz", ".bz2") for s in suffixes)
+            or combined in (".tar.gz", ".tar.bz2")
+            or zipfile.is_zipfile(path)
+            or tarfile.is_tarfile(path)
+        )
 
     # ── 安装后验证 ──────────────────────────────────────────────
 

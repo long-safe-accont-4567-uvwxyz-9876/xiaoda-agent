@@ -67,27 +67,30 @@ class BM25Index:
         self._df: Counter = Counter()
         self._avg_len: float = 0
         self._tool_defs: list[ToolDef] = []
+        self._lock = threading.Lock()
 
     def add_tool(self, tool: ToolDef) -> None:
         """添加工具到索引"""
         doc = self._tokenize(tool.searchable_text())
-        self._docs.append(doc)
-        self._tool_defs.append(tool)
-        for term in set(doc):
-            self._df[term] += 1
-        self._avg_len = sum(len(d) for d in self._docs) / max(1, len(self._docs))
+        with self._lock:
+            self._docs.append(doc)
+            self._tool_defs.append(tool)
+            for term in set(doc):
+                self._df[term] += 1
+            self._avg_len = sum(len(d) for d in self._docs) / max(1, len(self._docs))
 
     def search(self, query: str, top_k: int = 5) -> list[tuple[ToolDef, float]]:
         """BM25 搜索, 返回 (tool, score) 列表 (按分数降序)"""
-        if not self._docs:
-            return []
-        q_terms = self._tokenize(query)
-        scores = []
-        for i, doc in enumerate(self._docs):
-            score = self._bm25_score(q_terms, doc, i)
-            scores.append((score, i))
-        scores.sort(reverse=True)
-        return [(self._tool_defs[idx], score) for score, idx in scores[:top_k]]
+        with self._lock:
+            if not self._docs:
+                return []
+            q_terms = self._tokenize(query)
+            scores = []
+            for i, doc in enumerate(self._docs):
+                score = self._bm25_score(q_terms, doc, i)
+                scores.append((score, i))
+            scores.sort(reverse=True)
+            return [(self._tool_defs[idx], score) for score, idx in scores[:top_k]]
 
     def ranked_names(self, query: str, top_k: int = 10) -> list[str]:
         """返回按 BM25 分数排序的工具名列表 (供 RRF 融合用)"""
@@ -142,6 +145,7 @@ class VectorIndex:
         self._vectors: list[list[float]] = []
         self._query_cache: dict[str, list[float]] = {}  # query → vector (LRU)
         self._cache_order: list[str] = []  # LRU 顺序: 最近使用在末尾
+        self._lock = threading.Lock()
         try:
             self._max_cache = int(os.environ.get("TOOL_SEARCH_CACHE_SIZE", "128"))
         except (TypeError, ValueError):
@@ -150,32 +154,37 @@ class VectorIndex:
 
     def add_tool(self, tool: ToolDef) -> None:
         """添加工具 (向量懒生成, 首次 search 时批量 embed)"""
-        self._tool_defs.append(tool)
-        self._vectors.append([])  # 占位, search 时填充
+        with self._lock:
+            self._tool_defs.append(tool)
+            self._vectors.append([])  # 占位, search 时填充
 
     def _ensure_vectors_sync(self) -> None:
         """同步批量生成所有工具的向量 (懒初始化)"""
-        if not self._enabled or not self._tool_defs:
-            return
-        # 找出未生成向量的工具
-        pending = [(i, t) for i, t in enumerate(self._tool_defs) if not self._vectors[i]]
-        if not pending:
-            return
+        with self._lock:
+            if not self._enabled or not self._tool_defs:
+                return
+            # 找出未生成向量的工具
+            pending = [(i, t) for i, t in enumerate(self._tool_defs) if not self._vectors[i]]
+            if not pending:
+                return
         try:
             for i, tool in pending:
                 vec = self._embed_sync(tool.searchable_text())
-                if vec and self._vectors and (not self._vectors[0] or len(vec) == len(self._vectors[0])):
-                    self._vectors[i] = vec
-                else:
-                    self._vectors[i] = vec  # 第一条作为维度基准
-            logger.info(
-                "tool_search.vector_index_ready",
-                n_tools=len(self._tool_defs),
-                n_vectors=sum(1 for v in self._vectors if v),
-            )
+                with self._lock:
+                    if vec and self._vectors and (not self._vectors[0] or len(vec) == len(self._vectors[0])):
+                        self._vectors[i] = vec
+                    else:
+                        self._vectors[i] = vec  # 第一条作为维度基准
+            with self._lock:
+                logger.info(
+                    "tool_search.vector_index_ready",
+                    n_tools=len(self._tool_defs),
+                    n_vectors=sum(1 for v in self._vectors if v),
+                )
         except Exception as e:
-            logger.warning("tool_search.vector_init_failed", error=str(e))
-            self._enabled = False  # 失败后禁用, 后续走 BM25
+            with self._lock:
+                logger.warning("tool_search.vector_init_failed", error=str(e))
+                self._enabled = False  # 失败后禁用, 后续走 BM25
 
     def _embed_sync(self, text: str) -> list[float]:
         """同步生成 embedding (用线程隔离 loop 兼容嵌套场景)"""
@@ -226,34 +235,35 @@ class VectorIndex:
         if not self._enabled or not self._tool_defs:
             return []
         self._ensure_vectors_sync()
-        if not any(self._vectors):
-            return []
-        # 查询向量 (带 LRU 缓存)
-        if query in self._query_cache:
-            q_vec = self._query_cache[query]
-            # 真 LRU: 命中时移到末尾
-            self._cache_order.remove(query)
-            self._cache_order.append(query)
-        else:
-            q_vec = self._embed_sync(query)
-            if not q_vec:
+        with self._lock:
+            if not any(self._vectors):
                 return []
-            # LRU 缓存: 满时淘汰最久未用
-            if len(self._query_cache) >= self._max_cache:
-                oldest = self._cache_order.pop(0)
-                self._query_cache.pop(oldest, None)
-            self._query_cache[query] = q_vec
-            self._cache_order.append(query)
+            # 查询向量 (带 LRU 缓存)
+            if query in self._query_cache:
+                q_vec = self._query_cache[query]
+                # 真 LRU: 命中时移到末尾
+                self._cache_order.remove(query)
+                self._cache_order.append(query)
+            else:
+                q_vec = self._embed_sync(query)
+                if not q_vec:
+                    return []
+                # LRU 缓存: 满时淘汰最久未用
+                if len(self._query_cache) >= self._max_cache:
+                    oldest = self._cache_order.pop(0)
+                    self._query_cache.pop(oldest, None)
+                self._query_cache[query] = q_vec
+                self._cache_order.append(query)
 
-        # 余弦相似度
-        scores = []
-        for i, tool_vec in enumerate(self._vectors):
-            if not tool_vec or len(tool_vec) != len(q_vec):
-                continue
-            sim = self._cosine(q_vec, tool_vec)
-            scores.append((sim, i))
-        scores.sort(reverse=True)
-        return [(self._tool_defs[idx], score) for score, idx in scores[:top_k]]
+            # 余弦相似度
+            scores = []
+            for i, tool_vec in enumerate(self._vectors):
+                if not tool_vec or len(tool_vec) != len(q_vec):
+                    continue
+                sim = self._cosine(q_vec, tool_vec)
+                scores.append((sim, i))
+            scores.sort(reverse=True)
+            return [(self._tool_defs[idx], score) for score, idx in scores[:top_k]]
 
     def ranked_names(self, query: str, top_k: int = 10) -> list[str]:
         """返回按向量相似度排序的工具名列表 (供 RRF 融合用)"""

@@ -122,6 +122,7 @@ class GreetingScheduler:
         if self._deferred and not self.is_dnd(now_min):
             async with self._deferred_lock:
                 pending = list(self._deferred)
+                self._deferred.clear()
             still_deferred: list[dict] = []
             for d in pending:
                 if await self._sent_today_count() < max_per_day:
@@ -132,8 +133,9 @@ class GreetingScheduler:
                         still_deferred.append(d)
                 else:
                     still_deferred.append(d)
-            async with self._deferred_lock:
-                self._deferred = still_deferred + self._deferred
+            if still_deferred:
+                async with self._deferred_lock:
+                    self._deferred.extend(still_deferred)
 
         for row in rows:
             sid = row["id"]

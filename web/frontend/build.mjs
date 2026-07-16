@@ -32,7 +32,8 @@ try {
     console.log(`[build] backed up ${count} wallpapers`)
   }
 } catch (e) {
-  console.warn('[build] wallpaper backup failed:', e.message)
+  console.error('[build] wallpaper backup failed, aborting build to prevent data loss:', e.message)
+  process.exit(1)
 }
 
 // vite build

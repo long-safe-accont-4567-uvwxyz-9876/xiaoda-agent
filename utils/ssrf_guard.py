@@ -58,7 +58,7 @@ class SSRFGuardV2:
         # Step 3: DNS 解析
         try:
             infos = socket.getaddrinfo(hostname, parsed.port or 443)
-        except socket.gaierror:
+        except (socket.gaierror, OSError):
             raise ValueError(f"DNS解析失败: {hostname}") from None
 
         # Step 4: 校验 IP

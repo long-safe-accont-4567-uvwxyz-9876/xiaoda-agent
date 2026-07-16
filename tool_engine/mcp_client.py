@@ -588,20 +588,16 @@ class MCPClient:
         self._tool_names.add(original_name)
         self._registered_names.add(prefixed_name)
 
-        # Capture for closure
+        # Capture for closure — 直接绑定 self 引用，避免模块级 _mcp_client_ref 竞态
         server_name = self.server_name
         tool_name = original_name
+        owner = self  # 闭包捕获当前实例，不受后续 _mcp_client_ref 覆盖影响
 
         async def _mcp_tool_wrapper(**kwargs: Any) -> ToolResult:
-            # We need a reference to the client; use the captured variable
-            # which refers to self at registration time
-            client = _mcp_client_ref
+            client = owner
             if client is None or not client.available:
                 return ToolResult.fail(f"MCP server '{server_name}' is not available")
             return await client.call_tool(tool_name, kwargs)
-
-        # Store self reference for the wrapper
-        _mcp_client_ref = self
 
         # Register via the decorator pattern: register_tool returns a decorator
         _tool_registry_mod.register_tool(

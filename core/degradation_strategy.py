@@ -305,8 +305,8 @@ class DegradationStrategy:
                             reason=f"health_score={health_score:.2f} < 0.3 (CRITICAL)",
                             source="signal_stream",
                         )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("degradation_strategy.health_signal_failed", error=str(e))
 
         # 延迟导入, 避免循环依赖
         try:

@@ -25,7 +25,7 @@ if _PROJECT_ROOT not in sys.path:
 
 from chaos.reliability_bench import BenchReport, ReliabilityBench
 from chaos._fault_types import (
-    FaultInjectingLLMClient,
+    SimpleFaultInjectingLLMClient,
 )
 
 
@@ -150,7 +150,7 @@ async def _run(args: Any) -> int:
     """运行基准测试"""
     agent = _DemoAgent()
     real_client = _DemoLLMClient()
-    fault_client = FaultInjectingLLMClient(real_client)
+    fault_client = SimpleFaultInjectingLLMClient(real_client)
     bench = ReliabilityBench(agent=agent, fault_client=fault_client)
 
     scenarios = [args.scenario] if args.scenario else None

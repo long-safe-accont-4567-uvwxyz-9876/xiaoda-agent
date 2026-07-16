@@ -17,6 +17,15 @@ from utils.atomic_write import atomic_json_write
 from config import get_agent_display_name
 
 
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Log unhandled exceptions from fire-and-forget tasks."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        logger.warning("memory.bg_task_failed", error=str(exc), error_type=type(exc).__name__)
+
+
 def _extract_entities(text: str) -> list[str]:
     try:
         import jieba
@@ -1036,7 +1045,7 @@ class MemoryManager:
             logger.debug("memory.spreading_recall_failed", error=str(e))
             return []
 
-    def _extract_deterministic_selectors(self, query: str) -> dict:
+    def _extract_deterministic_selectors(self, query: str) -> dict[str, Any]:
         """ContextNest A1: 从查询中提取确定性 selector (metadata-based, Jaccard 1.0)。
 
         与向量检索 (概率性, 论文实测 mean Jaccard 0.611) 互补:
@@ -1261,7 +1270,8 @@ class MemoryManager:
         if self._query_transformer and self._query_transformer.available:
             try:
                 intent = await self._query_transformer.classify_intent(query)
-            except Exception:
+            except Exception as e:
+                logger.debug("memory_manager.classify_intent_failed", error=str(e))
                 intent = "factual"
 
         # 按意图调整 k（宽松策略：不主动缩小k，避免丢失结果）
@@ -1277,10 +1287,11 @@ class MemoryManager:
             # 时间检索命中也递增 access_count（与常规检索路径一致）
             hit_ids = [r.get("id") for r in temporal_results if r.get("id")]
             if hit_ids:
-                asyncio.create_task(
+                _bg = asyncio.create_task(
                     self._batch_touch_memories(hit_ids),
                     name=f"touch_temporal_{int(time.time()*1000)}"
                 )
+                _bg.add_done_callback(_log_task_exception)
             return temporal_results
 
         # A1: 智能短路 - 简单查询跳过查询变换，直接走混合检索
@@ -1424,10 +1435,11 @@ class MemoryManager:
         if results:
             hit_ids = [r.get("id") for r in results if r.get("id")]
             if hit_ids:
-                asyncio.create_task(
+                _bg = asyncio.create_task(
                     self._batch_touch_memories(hit_ids),
                     name=f"touch_memories_{int(time.time()*1000)}"
                 )
+                _bg.add_done_callback(_log_task_exception)
         return results
 
     async def _try_temporal_search(self, query: str, k: int,
@@ -1785,10 +1797,11 @@ class MemoryManager:
 
         # 异步批量迁移 phase（fire-and-forget，不阻塞检索返回）
         if _migration_needed:
-            asyncio.create_task(
+            _bg = asyncio.create_task(
                 self._batch_migrate_phase(_migration_needed),
                 name=f"fsrs_migrate_{int(now*1000)}"
             )
+            _bg.add_done_callback(_log_task_exception)
         return filtered
 
     async def _batch_migrate_phase(self, migrations: list[tuple[int, str, float, float, float, int]]) -> None:
@@ -1884,7 +1897,8 @@ class MemoryManager:
             if days_ago <= 90:
                 return 0.20
             return 0.10
-        except Exception:
+        except Exception as e:
+            logger.debug("memory_manager.time_decay_failed", error=str(e))
             return 0.3
 
     async def _compute_final_scores(self, query: str, results: list[dict],
@@ -2433,8 +2447,8 @@ class MemoryManager:
                         # 允许重试：清除 failed 状态，重新蒸馏
                         logger.info("memory.distill_retry", raw_id=raw_id)
                         await self.memory.update_distill_status(raw_id, "")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("memory_manager.distill_status_check_failed", error=str(e))
             # 1. 蒸馏（调用已有 MemoryDistiller，传入单条记忆）
             distilled = await self.distiller.distill([{"summary": summary, "timestamp": time.time()}])
             if not distilled or not distilled.strip():
@@ -2454,7 +2468,8 @@ class MemoryManager:
                         )
 
                     try:
-                        asyncio.create_task(_retry_distill())
+                        _bg = asyncio.create_task(_retry_distill())
+                        _bg.add_done_callback(_log_task_exception)
                     except RuntimeError:
                         logger.warning("memory.distill_retry_no_loop", raw_id=raw_id)
                 else:
@@ -2504,7 +2519,8 @@ class MemoryManager:
                     )
 
                 try:
-                    asyncio.create_task(_retry_distill_exc())
+                    _bg = asyncio.create_task(_retry_distill_exc())
+                    _bg.add_done_callback(_log_task_exception)
                 except RuntimeError:
                     logger.warning("memory.distill_retry_no_loop", raw_id=raw_id)
             else:

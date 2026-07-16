@@ -98,8 +98,8 @@ class BeliefRouter:
             from config import ENABLE_J_SPACE_HOOKS
             if ENABLE_J_SPACE_HOOKS and _enhanced_router is not None:
                 return _enhanced_router.select_agent(task_type=task_type, exclude=exclude)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("belief_router.j_space_hook_failed", error=str(e))
         # 原始 Thompson Sampling 逻辑继续
 
         candidates = [a for a in self.VALID_AGENTS if a not in (exclude or set())]

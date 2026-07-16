@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, type Ref } from 'vue'
 import { getWsClient } from '../api/ws'
 import type { WsEvent } from '../api/ws'
 import { api } from '../api'
@@ -32,6 +32,15 @@ export interface Message {
   imageUrl?: string  // 用户上传的图片 URL（用于气泡内显示预览）
 }
 
+const MAX_MESSAGES = 1000
+
+function pushMessage(messages: Ref<Message[]>, msg: Message) {
+  messages.value.push(msg)
+  if (messages.value.length > MAX_MESSAGES) {
+    messages.value = messages.value.slice(-MAX_MESSAGES)
+  }
+}
+
 export const useChatStore = defineStore('chat', () => {
   const messages = ref<Message[]>([])
   const currentAgent = ref('xiaoda')
@@ -44,6 +53,8 @@ export const useChatStore = defineStore('chat', () => {
   const pendingMsgId = ref('')
   const greetingPing = ref(0)  // 问候到达脉冲（GrassParticles 蒲公英雨）
 
+  const pendingTimers: ReturnType<typeof setTimeout>[] = []
+
   const ws = getWsClient()
 
   // 初始化时主动同步 WS 状态（避免竞态：WS 在 chat store 初始化前已连接，ws_connected 事件被错过）
@@ -51,7 +62,7 @@ export const useChatStore = defineStore('chat', () => {
     wsConnected.value = true
   }
 
-  ws.on('connected', (e: WsEvent) => {
+  const onConnected = (e: WsEvent) => {
     wsConnected.value = true
     // 重连后恢复会话与 agent（不丢状态）
     if (sessionId.value) {
@@ -62,9 +73,9 @@ export const useChatStore = defineStore('chat', () => {
     if (currentAgent.value !== 'xiaoda') {
       ws.send({ type: 'set_agent', agent: currentAgent.value })
     }
-  })
-  ws.on('ws_connected', () => { wsConnected.value = true })
-  ws.on('ws_disconnected', () => {
+  }
+  const onWsConnected = () => { wsConnected.value = true }
+  const onWsDisconnected = () => {
     wsConnected.value = false
     if (isProcessing.value) {
       isProcessing.value = false
@@ -72,15 +83,15 @@ export const useChatStore = defineStore('chat', () => {
       statusText.value = ''
       pendingMsgId.value = ''
     }
-  })
+  }
 
-  ws.on('status', (e: WsEvent) => {
+  const onStatus = (e: WsEvent) => {
     currentStage.value = e.stage as string
     statusText.value = (e.text as string) || ''
-  })
+  }
 
   // P0: 流式文本推送 —— 逐 token 拼接，实时渲染（在消息列表中显示"正在输入"的临时消息）
-  ws.on('stream_text', (e: WsEvent) => {
+  const onStreamText = (e: WsEvent) => {
     const msgId = e.msg_id as string
     if (!msgId) return
     let msg = messages.value.find(m => m.id === `a-${msgId}`)
@@ -89,19 +100,19 @@ export const useChatStore = defineStore('chat', () => {
         id: `a-${msgId}`, role: 'assistant', content: '',
         streaming: true, timestamp: Date.now(),
       }
-      messages.value.push(msg)
+      pushMessage(messages, msg)
     }
     msg.content = (e.accumulated as string) || ''
     msg.streaming = true
-  })
+  }
 
   // P0: 工具调用中间状态 —— 显示"正在调用 web_search..."
-  ws.on('tool_status', (e: WsEvent) => {
+  const onToolStatus = (e: WsEvent) => {
     currentStage.value = 'tool'
     statusText.value = (e.label as string) || ''
-  })
+  }
 
-  ws.on('tool_event', (e: WsEvent) => {
+  const onToolEvent = (e: WsEvent) => {
     const msgId = (e.msg_id as string) || pendingMsgId.value
     if (!msgId) return
     let msg = messages.value.find(m => m.id === `a-${msgId}`)
@@ -110,7 +121,7 @@ export const useChatStore = defineStore('chat', () => {
         id: `a-${msgId}`, role: 'assistant', content: '',
         streaming: true, toolCalls: [], timestamp: Date.now(),
       }
-      messages.value.push(msg)
+      pushMessage(messages, msg)
     }
     if (!msg.toolCalls) msg.toolCalls = []
     if (e.phase === 'start') {
@@ -127,14 +138,14 @@ export const useChatStore = defineStore('chat', () => {
         tc.elapsedMs = e.elapsed_ms as number
       }
     }
-  })
+  }
 
-  ws.on('final', (e: WsEvent) => {
+  const onFinal = (e: WsEvent) => {
     const msgId = e.msg_id as string
     let msg = messages.value.find(m => m.id === `a-${msgId}`)
     if (!msg) {
       msg = { id: `a-${msgId}`, role: 'assistant', content: '', timestamp: Date.now() }
-      messages.value.push(msg)
+      pushMessage(messages, msg)
     }
     msg.content = e.reply as string
     msg.emotion = (e.emotion as string) || undefined
@@ -150,36 +161,36 @@ export const useChatStore = defineStore('chat', () => {
     currentStage.value = ''
     statusText.value = ''
     pendingMsgId.value = ''
-  })
+  }
 
   // Task 6: 异步 TTS 合成完成 —— 更新对应消息的 audioUrl
-  ws.on('audio_ready', (e: WsEvent) => {
+  const onAudioReady = (e: WsEvent) => {
     const msgId = e.msg_id as string
     const msg = messages.value.find(m => m.id === `a-${msgId}`)
     if (msg) {
       msg.audioUrl = (e.audio_url as string) || undefined
       msg.audioPending = false
     }
-  })
+  }
 
-  ws.on('error', (e: WsEvent) => {
+  const onError = (e: WsEvent) => {
     isProcessing.value = false
     currentStage.value = ''
     pendingMsgId.value = ''
-    messages.value.push({
+    pushMessage(messages, {
       id: `err-${Date.now()}`,
       role: 'system',
       content: e.code === 'ABORTED' ? t('chat.aborted') : t('chat.errorOccurred') + e.message,
       timestamp: Date.now(),
     })
-  })
+  }
 
-  ws.on('agent_changed', (e: WsEvent) => {
+  const onAgentChanged = (e: WsEvent) => {
     currentAgent.value = e.agent as string
-  })
+  }
 
-  ws.on('greeting', (e: WsEvent) => {
-    messages.value.push({
+  const onGreeting = (e: WsEvent) => {
+    pushMessage(messages, {
       id: `greet-${Date.now()}`,
       role: 'assistant',
       content: e.text as string,
@@ -189,14 +200,37 @@ export const useChatStore = defineStore('chat', () => {
     })
     lastEmotion.value = '喜悦'
     greetingPing.value++
-  })
+  }
+
+  // 注册所有 WS 事件处理器
+  const wsHandlers: [string, (e: WsEvent) => void][] = [
+    ['connected', onConnected],
+    ['ws_connected', onWsConnected],
+    ['ws_disconnected', onWsDisconnected],
+    ['status', onStatus],
+    ['stream_text', onStreamText],
+    ['tool_status', onToolStatus],
+    ['tool_event', onToolEvent],
+    ['final', onFinal],
+    ['audio_ready', onAudioReady],
+    ['error', onError],
+    ['agent_changed', onAgentChanged],
+    ['greeting', onGreeting],
+  ]
+  wsHandlers.forEach(([type, handler]) => ws.on(type, handler))
+
+  function cleanup() {
+    wsHandlers.forEach(([type, handler]) => ws.off(type, handler))
+    pendingTimers.forEach(id => clearTimeout(id))
+    pendingTimers.length = 0
+  }
 
   function sendMessage(text: string, imageUrl?: string) {
     if (!text.trim() || isProcessing.value) return
     const msgId = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
     // 用户消息文本中去掉 [Image: ...] 标记，图片通过 imageUrl 字段单独展示
     const displayText = text.replace(/\n?\[Image: [^\]]+\]\s*/g, '').trim() || '📷 图片'
-    messages.value.push({
+    pushMessage(messages, {
       id: `u-${msgId}`, role: 'user', content: displayText, timestamp: Date.now(),
       imageUrl,
     })
@@ -224,13 +258,14 @@ export const useChatStore = defineStore('chat', () => {
     const display = useAgentsStore().agents
       .find(a => a.name === agent)?.display_name || agent
     const id = `sys-${Date.now()}`
-    messages.value.push({
+    pushMessage(messages, {
       id, role: 'system',
       content: tf('chat.agentTakeover', display),
       timestamp: Date.now(),
     })
     // 切换提示 3 秒后自动消失，不挡聊天
-    setTimeout(() => deleteMessage(id), 3000)
+    const timerId = setTimeout(() => deleteMessage(id), 3000)
+    pendingTimers.push(timerId)
   }
 
   async function newSession() {
@@ -286,6 +321,6 @@ export const useChatStore = defineStore('chat', () => {
     messages, currentAgent, sessionId, isProcessing, currentStage, statusText,
     wsConnected, lastEmotion, greetingPing,
     sendMessage, abort, setAgent, newSession, loadSession,
-    deleteMessage, retryLast, clearMessages,
+    deleteMessage, retryLast, clearMessages, cleanup,
   }
 })

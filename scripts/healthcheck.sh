@@ -31,8 +31,12 @@ echo "[4] Agent 服务状态"
 STATUS=$(systemctl is-active qq-agent.service 2>/dev/null)
 if [ "$STATUS" = "active" ]; then
     PID=$(pgrep -f qq_bot_adapter | head -1)
-    MEM=$(ps -o rss= -p $PID 2>/dev/null | awk '{printf "%.0fMB", $1/1024}')
-    echo "  ✅ 运行中 (PID: $PID, 内存: $MEM)"
+    if [ -n "$PID" ]; then
+        MEM=$(ps -o rss= -p $PID 2>/dev/null | awk '{printf "%.0fMB", $1/1024}')
+        echo "  ✅ 运行中 (PID: $PID, 内存: $MEM)"
+    else
+        echo "  ⚠️  运行中但无法获取 PID"
+    fi
 else
     echo "  ❌ 未运行 (状态: $STATUS)"
 fi

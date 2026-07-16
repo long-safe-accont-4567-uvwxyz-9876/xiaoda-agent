@@ -32,6 +32,7 @@ warnings.warn(
 )
 from collections import deque
 
+import asyncio
 import numpy as np
 from loguru import logger
 
@@ -115,75 +116,83 @@ class CognitiveMemory:
         self._next_episodic_id = 1
         self._next_semantic_id = 1000000
         self._next_cluster_id = 1
+        self._remember_lock = asyncio.Lock()
 
     async def remember(self, content: str, embedding: np.ndarray,
                        emotion_label: str = "", label: str = "",
                        session_id: str = "") -> int:
         """存储新记忆到Episodic层"""
-        entry = MemoryEntry(
-            id=self._next_episodic_id,
-            embedding=embedding.astype(np.float32).copy(),
-            content=content,
-            label=label,
-            source="perception",
-            timestamp=time.time(),
-            last_accessed=time.time(),
-            emotion_label=emotion_label,
-            session_id=session_id,
-        )
-        entry.salience = self._salience_scorer.compute(entry)
+        async with self._remember_lock:
+            entry = MemoryEntry(
+                id=self._next_episodic_id,
+                embedding=embedding.astype(np.float32).copy(),
+                content=content,
+                label=label,
+                source="perception",
+                timestamp=time.time(),
+                last_accessed=time.time(),
+                emotion_label=emotion_label,
+                session_id=session_id,
+            )
+            entry.salience = self._salience_scorer.compute(entry)
 
-        self._episodic.append(entry)
-        self._episodic_index[entry.id] = entry
-        self._next_episodic_id += 1
+            self._episodic.append(entry)
+            self._episodic_index[entry.id] = entry
+            self._next_episodic_id += 1
 
-        # J-Space Hook: 结构化存储
-        try:
-            from config import ENABLE_J_SPACE_HOOKS
-            if ENABLE_J_SPACE_HOOKS and _structured_blackboard is not None:
-                await _structured_blackboard.put_structured(
-                    str(entry.id), content, agent_name=session_id,
-                    tags=["memory"], direction="memory")
-        except Exception:
-            pass
+            # J-Space Hook: 结构化存储
+            try:
+                from config import ENABLE_J_SPACE_HOOKS
+                if ENABLE_J_SPACE_HOOKS and _structured_blackboard is not None:
+                    await _structured_blackboard.put_structured(
+                        str(entry.id), content, agent_name=session_id,
+                        tags=["memory"], direction="memory")
+            except Exception as e:
+                logger.debug("cognitive_memory.structured_store_failed", error=str(e))
 
-        # 自动整合检查
-        if self.episodic_occupancy() > self.AUTO_CONSOLIDATE_THRESHOLD:
-            await self.consolidate()
+            # 自动整合检查（直接调用内部方法，因为外层已持有 _remember_lock）
+            if self.episodic_occupancy() > self.AUTO_CONSOLIDATE_THRESHOLD:
+                await self._consolidate_inner()
 
-        return entry.id
+            return entry.id
 
     async def recall(self, query_embedding: np.ndarray, k: int = 10) -> list[tuple[int, float]]:
         """混合检索: Episodic + Semantic + Hopfield"""
-        query_embedding = query_embedding.astype(np.float32)
-        results: dict[int, float] = {}
+        async with self._remember_lock:
+            query_embedding = query_embedding.astype(np.float32)
+            results: dict[int, float] = {}
 
-        # 1. Episodic 检索
-        for entry in self._episodic:
-            sim = self._cosine_sim(query_embedding, entry.embedding)
-            results[entry.id] = sim
+            # 1. Episodic 检索
+            for entry in self._episodic:
+                sim = self._cosine_sim(query_embedding, entry.embedding)
+                results[entry.id] = sim
 
-        # 2. Semantic 检索
-        for sid, entry in self._semantic.items():
-            sim = self._cosine_sim(query_embedding, entry.embedding)
-            if sim > results.get(sid, 0):
-                results[sid] = sim
+            # 2. Semantic 检索
+            for sid, entry in self._semantic.items():
+                sim = self._cosine_sim(query_embedding, entry.embedding)
+                if sim > results.get(sid, 0):
+                    results[sid] = sim
 
-        # 3. Hopfield 联想
-        hop_result = self._hopfield.retrieve(query_embedding)
-        if hop_result.confidence > 0.5:
-            # 用Hopfield结果做二次检索
-            for entry in list(self._episodic) + list(self._semantic.values()):
-                sim = self._cosine_sim(hop_result.pattern, entry.embedding)
-                if sim > results.get(entry.id, 0):
-                    results[entry.id] = sim * hop_result.confidence
+            # 3. Hopfield 联想
+            hop_result = self._hopfield.retrieve(query_embedding)
+            if hop_result.confidence > 0.5:
+                # 用Hopfield结果做二次检索
+                for entry in list(self._episodic) + list(self._semantic.values()):
+                    sim = self._cosine_sim(hop_result.pattern, entry.embedding)
+                    if sim > results.get(entry.id, 0):
+                        results[entry.id] = sim * hop_result.confidence
 
-        # 排序取top-k
-        sorted_results = sorted(results.items(), key=lambda x: x[1], reverse=True)
-        return sorted_results[:k]
+            # 排序取top-k
+            sorted_results = sorted(results.items(), key=lambda x: x[1], reverse=True)
+            return sorted_results[:k]
 
     async def consolidate(self, batch_size: int = 64) -> int:
         """认知整合: Episodic → Semantic + Hopfield"""
+        async with self._remember_lock:
+            return await self._consolidate_inner(batch_size)
+
+    async def _consolidate_inner(self, batch_size: int = 64) -> int:
+        """consolidate 内部实现，调用方需持有 _remember_lock"""
         now = time.time()
 
         # 1. 获取固化候选 (按access_count + age排序)

@@ -315,7 +315,7 @@ class DatabaseManager:
                 await self._conn.commit()
                 logger.info(f"database.migration_v{version}", desc=description)
                 return  # 成功，退出重试循环
-            except (OSError, RuntimeError) as e:
+            except Exception as e:
                 err_msg = str(e)
                 is_busy = "locked" in err_msg.lower() or "busy" in err_msg.lower()
                 if is_busy and attempt < _max_retries:
@@ -622,13 +622,9 @@ class DatabaseManager:
 
         # 4. 新建 memory_entities_fts 虚拟表 + 触发器
         await self._conn.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS memory_entities_fts USING fts5( id UNINDEXED, name_index )""")
-        await self._conn.execute("""CREATE TRIGGER IF NOT EXISTS memory_entities_fts_ai AFTER INSERT ON memory_entities BEGIN INSERT INTO memory_entities_fts(id, name_index) VALUES (new.id, new.name)""")
-        await self._conn.execute("""END""")
-        await self._conn.execute("""CREATE TRIGGER IF NOT EXISTS memory_entities_fts_ad AFTER DELETE ON memory_entities BEGIN INSERT INTO memory_entities_fts(memory_entities_fts, id, name_index) VALUES ('delete', old.id, old.name)""")
-        await self._conn.execute("""END""")
-        await self._conn.execute("""CREATE TRIGGER IF NOT EXISTS memory_entities_fts_au AFTER UPDATE ON memory_entities BEGIN INSERT INTO memory_entities_fts(memory_entities_fts, id, name_index) VALUES ('delete', old.id, old.name)""")
-        await self._conn.execute("""INSERT INTO memory_entities_fts(id, name_index) VALUES (new.id, new.name)""")
-        await self._conn.execute("""END""")
+        await self._conn.execute("""CREATE TRIGGER IF NOT EXISTS memory_entities_fts_ai AFTER INSERT ON memory_entities BEGIN INSERT INTO memory_entities_fts(id, name_index) VALUES (new.id, new.name); END""")
+        await self._conn.execute("""CREATE TRIGGER IF NOT EXISTS memory_entities_fts_ad AFTER DELETE ON memory_entities BEGIN INSERT INTO memory_entities_fts(memory_entities_fts, id, name_index) VALUES ('delete', old.id, old.name); END""")
+        await self._conn.execute("""CREATE TRIGGER IF NOT EXISTS memory_entities_fts_au AFTER UPDATE ON memory_entities BEGIN INSERT INTO memory_entities_fts(memory_entities_fts, id, name_index) VALUES ('delete', old.id, old.name); INSERT INTO memory_entities_fts(id, name_index) VALUES (new.id, new.name); END""")
 
         # 5. 新建 entity_memory_links 表
         await self._conn.execute("""CREATE TABLE IF NOT EXISTS entity_memory_links ( id INTEGER PRIMARY KEY AUTOINCREMENT, entity_id INTEGER NOT NULL, memory_id INTEGER NOT NULL, confidence REAL DEFAULT 1.0, created_at REAL NOT NULL, FOREIGN KEY (entity_id) REFERENCES memory_entities(id) ON DELETE CASCADE, FOREIGN KEY (memory_id) REFERENCES episodic_memories(id) ON DELETE CASCADE, UNIQUE(entity_id, memory_id) )""")
@@ -956,8 +952,8 @@ class DatabaseManager:
             if "reminder" in types:
                 logger.info("database.migration_v17_skipped_already_has_reminder")
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("database.migration_v17_check_failed", error=str(e))
 
         # 重建表以更新 CHECK 约束
         await self._conn.execute("""CREATE TABLE IF NOT EXISTS greeting_schedules_v17 ( id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL CHECK(type IN ('fixed','random','reminder')), time TEXT DEFAULT '', window_start TEXT DEFAULT '', window_end TEXT DEFAULT '', count_per_day INTEGER DEFAULT 1, days TEXT NOT NULL DEFAULT '[1,2,3,4,5,6,7]', prompt_hint TEXT DEFAULT '', channels TEXT NOT NULL DEFAULT '["web"]', enabled INTEGER NOT NULL DEFAULT 1, next_fire_times TEXT DEFAULT '[]', drawn_date TEXT DEFAULT '', created_at REAL NOT NULL )""")
@@ -1471,6 +1467,7 @@ class DatabaseManager:
             user_id=user_id, source=source,
             user_message=user_message, assistant_reply=assistant_reply,
             emotion_label=emotion_label, model_used=model_used,
+            session_id=session_id,
             auto_commit=False,
         )
         if session_id:

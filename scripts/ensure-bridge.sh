@@ -2,16 +2,16 @@
 # ensure-bridge.sh — 确保 coze-bridge 在 agent 启动前连接成功
 # 用法: ensure-bridge.sh [max_retries] [retry_delay_sec]
 
-BRIDGE_BIN="/home/orangepi/.coze/bridge/bin/coze-bridge"
+BRIDGE_BIN="${COZE_BRIDGE_BIN:-$HOME/.coze/bridge/bin/coze-bridge}"
 MAX_RETRIES=${1:-3}
 RETRY_DELAY=${2:-8}
 
 # systemd 环境缺少用户级变量，需要手动设置
-export HOME="/home/orangepi"
-export USER="orangepi"
-export PATH="/home/orangepi/.trae-cn-server/binaries/node/versions/22.22.3/bin:/home/orangepi/.local/bin:/usr/local/bin:/usr/bin:/bin"
-export XDG_RUNTIME_DIR="/run/user/1000"
-export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/bus"
+export HOME="${HOME:-/home/orangepi}"
+export USER="${USER:-orangepi}"
+export PATH="${COZE_NODE_PATH:-$HOME/.trae-cn-server/binaries/node/versions/22.22.3/bin}:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
 
 # 如果 bridge 已在运行，直接退出
 STATUS=$("$BRIDGE_BIN" status 2>/dev/null)

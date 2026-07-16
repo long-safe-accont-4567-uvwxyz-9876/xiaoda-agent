@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -60,7 +61,7 @@ class MetacogState:
     target_step: int | None = None
     # 时间戳
     started_at: float = field(default_factory=time.time)
-    history: list[dict] = field(default_factory=list)
+    history: deque = field(default_factory=lambda: deque(maxlen=100))
 
 
 class MetacognitionLite:

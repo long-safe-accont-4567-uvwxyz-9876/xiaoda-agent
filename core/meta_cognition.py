@@ -53,6 +53,7 @@ class MetaCognition:
     def record_success(self, latency_ms: float, confidence: float = 1.0) -> None:
         """记录成功调用"""
         self._latency_history.append(latency_ms)
+        self._error_history.append(1)  # 1 = 成功
         self._state.total_turns += 1
         self._state.avg_response_ms = sum(self._latency_history) / len(self._latency_history)
         self._state.confidence = confidence
@@ -61,12 +62,10 @@ class MetaCognition:
 
     def record_failure(self, latency_ms: float) -> None:
         """记录失败调用"""
-        self._error_history.append(0)
+        self._error_history.append(0)  # 0 = 失败
         self._latency_history.append(latency_ms)
         self._state.total_turns += 1
-        total = max(1, len(self._error_history))
-        errors = total - sum(self._error_history)
-        self._state.error_rate = errors / total
+        self._state.error_rate = 1 - (sum(self._error_history) / max(1, len(self._error_history)))
         self._state.confidence = max(0, self._state.confidence - 0.1)
 
     def set_memory_pressure(self, used: float, total: float) -> None:

@@ -226,8 +226,13 @@ class ManifestFetcher:
                         break
 
                     for srv in servers:
-                        tag_str = srv.get("tag", "")
-                        tags = [t.strip() for t in tag_str.split(",") if t.strip()] if tag_str else []
+                        tag_raw = srv.get("tag", [])
+                        if isinstance(tag_raw, list):
+                            tags = [str(t).strip() for t in tag_raw if str(t).strip()]
+                        elif isinstance(tag_raw, str) and tag_raw:
+                            tags = [t.strip() for t in tag_raw.split(",") if t.strip()]
+                        else:
+                            tags = []
 
                         qualified = srv.get("qualified_name", "")
                         detail_url = f"https://www.mcp-cn.com/server/{srv.get('server_id', '')}"

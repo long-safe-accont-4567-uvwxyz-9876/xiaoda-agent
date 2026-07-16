@@ -51,11 +51,9 @@ from utils.credential_pool import get_credential_pool
 from utils.error_classifier import ErrorClassifier
 from hooks import get_hook_engine
 
-# 内置工具改为懒注册：仅登记元数据（name/description/schema/permission/category），
-# 不 import tools.* 子模块，避免冷启动把 httpx/selenium/PIL/primp 等重依赖拉进进程。
-# 首次工具调用时由 tool_engine.tool_executor 经 resolve_tool_func 按需 import 实现。
-from tool_engine.tool_registry import register_builtin_tools_lazy
-register_builtin_tools_lazy()
+# 内置工具懒注册：由 tool_engine/__init__.py 在包导入时完成，
+# 此处不再重复调用 register_builtin_tools_lazy()（函数本身幂等，但避免冗余调用）
+from tool_engine.tool_registry import register_builtin_tools_lazy  # noqa: F401 — 保持向后兼容
 
 if TYPE_CHECKING:
     from task_orchestrator import TaskGraph
@@ -283,6 +281,10 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         # 运行时身份解析：基于稳定标识决定称谓，不依赖消息内容
         identity = self._resolve_identity(user_id, user_openid, source=source)
         # 用身份解析结果覆盖 is_master（更准确，兼容旧调用方仍传 is_master）
+        if is_master != identity.is_owner:
+            logger.debug("agent.is_master_overridden",
+                         original=is_master, resolved=identity.is_owner,
+                         source=source, user_id=user_id)
         is_master = identity.is_owner
         # 设置上下文的动态称谓
         self.context.current_address_term = identity.address_term

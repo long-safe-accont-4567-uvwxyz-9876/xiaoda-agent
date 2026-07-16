@@ -259,7 +259,13 @@ class HumanApprovalGate:
             if r.is_expired and r.status == ApprovalStatus.PENDING:
                 r.status = ApprovalStatus.TIMEOUT
                 r.decision_reason = "Auto-expired"
+                r.decided_at = time.time()
                 n += 1
+                self._audit_log.append({
+                    "request_id": r.id, "user_id": r.user_id,
+                    "operation": r.operation, "status": "timeout",
+                    "decided_by": "system", "ts": time.time(),
+                })
                 future = self._waiters.pop(r.id, None)
                 if future and not future.done():
                     future.set_result(ApprovalResult(

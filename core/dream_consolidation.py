@@ -37,6 +37,10 @@ class Memory:
     created_at: float = field(default_factory=time.time)
     access_count: int = 0
     decay_rate: float = 0.1      # 越大衰减越快
+    # DB 衍生字段 (仅 consolidate_from_db 使用)
+    _db_difficulty: float | None = None
+    _db_stability: float | None = None
+    _db_phase: str | None = None
 
 
 class DreamConsolidator:
@@ -241,9 +245,9 @@ class DreamConsolidator:
             # 2. Decay — FSRS-DSR Retrievability 衰减评分
             evict_ids: list[str] = []
             for mid, m in memories.items():
-                db_difficulty = getattr(m, '_db_difficulty', None) or m.importance * 10.0
-                db_stability = getattr(m, '_db_stability', None) or (m.strength * 10.0 if m.strength > 0 else 3.0)
-                db_phase_str = getattr(m, '_db_phase', 'reinforced')
+                db_difficulty = m._db_difficulty if m._db_difficulty is not None else m.importance * 10.0
+                db_stability = m._db_stability if m._db_stability is not None else (m.strength * 10.0 if m.strength > 0 else 3.0)
+                db_phase_str = m._db_phase if m._db_phase is not None else 'reinforced'
                 try:
                     db_phase = MemoryPhase(db_phase_str)
                 except ValueError:
