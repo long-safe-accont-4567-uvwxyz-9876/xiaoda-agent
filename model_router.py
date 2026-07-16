@@ -963,9 +963,9 @@ class ModelRouter:
                                model=model, task=task_type,
                                content_len=content_len,
                                finish_reason=finish_reason)
-                # 截断重试：追加"请继续"提示重试，最多 2 轮，token 上限 4096 防止死循环
+                # 截断重试：追加"请继续"提示重试，最多 2 轮，max_tokens 加倍
                 if content and len(content) > 10:
-                    _retry_max_tokens = min(max_tokens, 4096) if max_tokens else 4096
+                    _retry_max_tokens = max_tokens * 2 if max_tokens else None
                     for _retry_round in range(2):  # 最多 2 轮重试
                         try:
                             retry_messages = messages.copy()
