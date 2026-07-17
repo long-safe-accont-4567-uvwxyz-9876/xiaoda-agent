@@ -370,30 +370,20 @@ class RouterNode:
             logger.debug("route.cache_hit", input=user_input[:50], targets=cached)
             return self._build_route_dict(cached)
 
-        # 2. RouterEngine 路由（使用 LLM 分类，不再使用硬编码的 classify_task）
+        # 2. RouterEngine 路由（@mention + 关键词匹配，不调用外部 LLM API）
         try:
-            # 使用缓存的 RouterEngine 实例，避免每次重新创建
+            # 使用缓存的 RouterEngine 实例
             if self._router_engine is None:
                 from core.router_engine import RouterEngine
                 self._router_engine = RouterEngine()
 
-            # 超时保护：最多等待 10s，超时则 fallback 到关键词匹配
-            try:
-                decision = await asyncio.wait_for(
-                    self._router_engine.decide_with_llm(user_input, state.user_id),
-                    timeout=10.0
-                )
-            except asyncio.TimeoutError:
-                logger.warning("route.router_engine_timeout_fallback")
-                # 超时后使用关键词兜底
-                targets = self._rule_route(user_input)
-                return self._build_route_dict(targets)
-
+            # 使用 decide() 而非 decide_with_llm()，避免调用外部 API
+            decision = self._router_engine.decide(user_input, state.user_id)
             targets = [t for t in decision.agent_names if t in agent_configs or t == "xiaoda"]
             if targets:
-                logger.info("route.router_engine_llm", targets=targets, reasoning=decision.reasoning)
+                logger.info("route.router_engine", targets=targets, reasoning=decision.reasoning)
                 await self._route_cache.put(user_input, targets)
-                await self._notify_route_progress(state, targets, agent_configs, f"LLM路由: {decision.reasoning}")
+                await self._notify_route_progress(state, targets, agent_configs, f"路由: {decision.reasoning}")
                 return self._build_route_dict(targets)
         except Exception as e:
             logger.warning("route.router_engine_failed_fallback_to_default", error=str(e)[:200])
