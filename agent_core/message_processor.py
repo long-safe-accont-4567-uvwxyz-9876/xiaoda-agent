@@ -358,9 +358,10 @@ class MessageProcessorMixin:
 
         # 截断检测与重试：回复过短且不以句末标点结尾 → 追加"请继续"重试一次
         # 根因：agnes-2.0-flash 对复杂问题可能返回截断回复
-        if reply and len(reply) < 50:
+        # 阈值从50提高到100，避免对简短但完整的回复误判
+        if reply and len(reply) < 100:
             _end = reply[-5:] if len(reply) >= 5 else reply
-            if not any(reply.endswith(c) for c in "。！？～…）」】\n"):
+            if not any(reply.endswith(c) for c in "。！？～…）」】\n\"'"):
                 logger.warning("chat.fast_path_truncated",
                                reply_len=len(reply), reply_tail=_end)
                 # 重试一次：追加"请继续完成回复"提示
