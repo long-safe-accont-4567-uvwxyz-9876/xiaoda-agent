@@ -80,6 +80,10 @@ def strip_thinking(text: str, *, context: str = "") -> str:
         return ""
     raw = text
 
+    # 0. 剥离 agnes 模型回显的系统指令标记（如 executable-memo: true）
+    # 注意：用 [a-zA-Z]+ 而非 \w+，因为 Python3 的 \w 匹配中文，会误吞正文
+    text = re.sub(r'^executable-memo:\s*[a-zA-Z]+\s*', '', text).strip()
+
     # 1. 完整 <think>...</think> 标签
     text = _THINK_TAG_RE.sub("", text)
     # 2. 未闭合的 <think> 或 CoT 前缀段落

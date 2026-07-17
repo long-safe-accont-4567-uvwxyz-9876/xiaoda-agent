@@ -437,9 +437,12 @@ class GreetingScheduler:
                 text = apply_agent_name_replacements(text)
                 # 过滤模型编造的标签前缀（如 [listen_greeting][user:xxx]: ...）
                 import re as _re
+                # 先剥离 executable-memo 等系统指令标记（含连字符，\w+ 无法匹配）
+                # 注意：值部分用 [a-zA-Z]+ 而非 \w+，因为 Python3 的 \w 匹配中文，会误吞正文
+                text = _re.sub(r'^[\w-]+:\s*[a-zA-Z]+\s*', '', text).strip()
                 for _ in range(3):
                     text = _re.sub(r'^\[[^\]]*\]\s*', '', text).strip()
-                    text = _re.sub(r'^\w+:\s*', '', text, count=1).strip()
+                    text = _re.sub(r'^[\w-]+:\s*', '', text, count=1).strip()
                     text = _re.sub(r'^:\s*', '', text, count=1).strip()
                 if not text:
                     continue

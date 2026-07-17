@@ -556,9 +556,9 @@ class MessageProcessorMixin:
                 else:
                     args_dict = func_args
 
-                # 执行工具（透传 user_openid / session_id，保证审计日志完整性）
+                # 执行工具（user_id 用于工具内部用户隔离，session_id 仅供审计日志）
                 result = await self._tool_call_handler._tool_executor.execute(
-                    func_name, args_dict, user_openid=user_openid, session_id=session_id
+                    func_name, args_dict, user_id=user_openid
                 )
 
                 # 格式化结果
@@ -1713,7 +1713,15 @@ class MessageProcessorMixin:
             return prompt
 
     async def _parse_chat_target(self, user_input: str, user_id: str) -> list[str]:
-        decision = self._router_engine.decide(user_input, user_id)
+        # INTENT_LLM_CLASSIFY=true 时用 LLM 路由，否则用关键词匹配
+        try:
+            import config as _cfg
+            if getattr(_cfg, "INTENT_LLM_CLASSIFY", False):
+                decision = await self._router_engine.decide_with_llm(user_input, user_id)
+            else:
+                decision = self._router_engine.decide(user_input, user_id)
+        except Exception:
+            decision = self._router_engine.decide(user_input, user_id)
         if decision.agent_names:
             async with self._chat_target_lock:
                 self._user_chat_target[user_id] = decision.agent_names[-1]

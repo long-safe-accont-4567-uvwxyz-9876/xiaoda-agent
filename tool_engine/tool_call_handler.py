@@ -248,7 +248,18 @@ class ToolCallHandler:
         tool_results = []
         tool_messages = []
         assistant_msg = {"role": "assistant", "content": assistant_content, "tool_calls": tool_calls}
-        if reasoning_content:
+
+        # 关键修复：检查thinking配置，如果被禁用则不保存reasoning_content到历史
+        should_save_reasoning = True
+        if reasoning_content and self._router:
+            from model_router import ROUTE_TABLE
+            # 检查chat路由的thinking配置（工具调用后的summarize使用chat路由）
+            chat_config = ROUTE_TABLE.get("chat", {})
+            thinking_config = chat_config.get("thinking", {})
+            if thinking_config.get("type") == "disabled":
+                should_save_reasoning = False
+
+        if reasoning_content and should_save_reasoning:
             assistant_msg["reasoning_content"] = reasoning_content
 
         messages.append(assistant_msg)
@@ -303,8 +314,17 @@ class ToolCallHandler:
         if is_degraded_reply(final_reply):
             logger.info("tool_handler.skip_memory_degraded_reply", reply_preview=final_reply[:60])
         else:
+            # 关键修复：检查thinking配置，如果被禁用则不保存reasoning_content到记忆
+            should_save_rc = bool(rc)
+            if should_save_rc and self._router:
+                from model_router import ROUTE_TABLE
+                chat_config = ROUTE_TABLE.get("chat", {})
+                thinking_config = chat_config.get("thinking", {})
+                if thinking_config.get("type") == "disabled":
+                    should_save_rc = False
+
             await self._context.add_message("assistant", final_reply,
-                                     reasoning_content=rc if rc else None)
+                                     reasoning_content=rc if should_save_rc else None)
         return final_reply, tool_results
 
     async def _execute_single_tool(self, tc: Any, trace: Any, *, user_id: str = "",
@@ -470,10 +490,11 @@ class ToolCallHandler:
                 f"工具返回的结果：\n{combined}"
             )
 
-            # 独立超时保护：summarize 最多 10s，用 chat_flash (fast model) 避免 agnes 超时
+            # 独立超时保护：summarize 最多 10s，使用当前主模型（chat）保持一致性
+            # 不再强制使用 chat_flash，避免模型切换导致的 fallback 问题
             summary = await asyncio.wait_for(
                 self._router.route(
-                    "chat_flash",
+                    "chat",
                     [
                         {"role": "system", "content": xiaoda_prompt},
                         {"role": "user", "content": user_input},

@@ -251,6 +251,168 @@ class RouterEngine:
                 targets.append(agent)
         return list(dict.fromkeys(targets))
 
+    # ── LLM 路由 ──────────────────────────────────────────────────
+
+    async def decide_with_llm(self, user_input: str, user_id: str = "",
+                              current_target: str | None = None) -> RoutingDecision:
+        """LLM 驱动的子代理路由。
+
+        流程：显式信号（@mention/否定/自指/语音）→ LLM 分类 → 关键词兜底 → 默认 xiaoda
+        LLM 不可用或超时时自动降级到关键词匹配。
+        """
+        # 1-4. 显式信号检查（与 decide() 相同，这些是可靠信号，不需要 LLM）
+        self._ensure_patterns_cached()
+
+        targets = self._match_mentions(user_input)
+        if targets:
+            return RoutingDecision(
+                agent_names=targets,
+                mode="single" if len(targets) == 1 else "parallel",
+                reasoning=f"@mention: {targets}",
+            )
+
+        q = user_input.lower()
+
+        for pat in self._negative_patterns:
+            if re.search(pat, q):
+                return RoutingDecision(
+                    agent_names=["xiaoda"], mode="single",
+                    reasoning="negative_pattern → xiaoda",
+                )
+
+        for pattern, target in SELF_TARGET_PATTERNS:
+            if re.search(pattern, q):
+                return RoutingDecision(
+                    agent_names=[target], mode="single",
+                    reasoning=f"self_target_pattern → {target}",
+                )
+
+        for pattern in VOICE_PATTERNS:
+            if re.search(pattern, q):
+                return RoutingDecision(
+                    agent_names=["xiaoda"], mode="single",
+                    reasoning="voice_pattern → xiaoda",
+                )
+
+        # 5. LLM 意图分类（核心改进：让 LLM 判断子代理，而非关键词匹配）
+        try:
+            import config as _cfg
+            llm_classify = getattr(_cfg, "INTENT_LLM_CLASSIFY", False)
+            timeout = getattr(_cfg, "INTENT_CLASSIFY_TIMEOUT", 15.0)
+        except (ImportError, AttributeError):
+            llm_classify = False
+            timeout = 15.0
+
+        if llm_classify:
+            agent = await self._classify_sub_agent_with_llm(user_input, timeout)
+            if agent:
+                return RoutingDecision(
+                    agent_names=[agent], mode="single",
+                    reasoning=f"llm_classify → {agent}",
+                )
+            # LLM 失败，降级到关键词匹配
+            logger.debug("router.llm_classify_failed_fallback_to_keywords")
+
+        # 5b. 关键词兜底（LLM 不可用或失败时）
+        for pattern, target in self._keyword_patterns:
+            if re.search(pattern, q):
+                return RoutingDecision(
+                    agent_names=[target], mode="single",
+                    reasoning=f"keyword_pattern → {target}",
+                )
+
+        # 5c. BeliefRouter
+        if self._use_belief:
+            try:
+                belief_target = self._belief_router.select_agent()
+                if belief_target and belief_target != "xiaoda":
+                    return RoutingDecision(
+                        agent_names=[belief_target], mode="single",
+                        reasoning=f"belief_router → {belief_target}",
+                    )
+            except Exception as e:
+                logger.debug("router.belief_fallback", error=str(e))
+
+        # 6. 默认 → xiaoda
+        return RoutingDecision(
+            agent_names=["xiaoda"], mode="single",
+            reasoning="default → xiaoda",
+        )
+
+    async def _classify_sub_agent_with_llm(self, user_input: str,
+                                            timeout: float = 15.0) -> str | None:
+        """调用 LLM 判断子代理路由。返回 agent 名称或 None（失败时）。"""
+        import asyncio
+        import os
+        try:
+            import httpx
+        except ImportError:
+            return None
+
+        api_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
+        if not api_key:
+            return None
+
+        base_url = os.getenv("QUERY_TRANSFORM_BASE_URL", "https://api.siliconflow.cn/v1")
+        model = os.getenv("QUERY_TRANSFORM_MODEL", "THUDM/GLM-4-9B-0414")
+
+        # 子代理描述（与 _AGENT_TO_TASK_TYPE 对应）
+        from config import get_agent_display_name
+        agents_info = [
+            ("xiaoda", get_agent_display_name("xiaoda") or "小妲", "记忆检索、回忆、个人历史、时间相关查询、通用闲聊（默认）"),
+            ("xiaolang", get_agent_display_name("xiaolang") or "小狼", "编程、调试、代码、技术问题"),
+            ("xiaoke", get_agent_display_name("xiaoke") or "小可", "学术研究、论文、调研"),
+            ("xiaolian", get_agent_display_name("xiaolian") or "小涟", "信息搜索、查找资料"),
+            ("xiaoli", get_agent_display_name("xiaoli") or "小莉", "情感陪伴、聊天、安慰"),
+        ]
+        agents_block = "\n".join(
+            f"- {key}（{display}）: {desc}" for key, display, desc in agents_info
+        )
+
+        prompt = (
+            f"你是一个路由分类器。根据用户消息判断应该由哪个子代理处理。\n\n"
+            f"可用子代理：\n{agents_block}\n\n"
+            f"用户消息: \"{user_input[:500]}\"\n\n"
+            f"只回复子代理名称（如 xiaoda），不要其他内容："
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    f"{base_url}/chat/completions",
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.0,
+                        "max_tokens": 20,
+                    },
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+                choices = data.get("choices", [])
+                if not choices:
+                    return None
+                content = choices[0].get("message", {}).get("content", "").strip().lower()
+                if not content:
+                    return None
+                # 匹配返回的 agent 名称
+                valid_agents = {"xiaoda", "xiaolang", "xiaoke", "xiaolian", "xiaoli"}
+                for agent in valid_agents:
+                    if agent in content:
+                        logger.info("router.llm_classified",
+                                    agent=agent, input_preview=user_input[:50])
+                        return agent
+                logger.warning("router.llm_classify_unrecognized", content=content[:50])
+                return None
+        except Exception as e:
+            logger.warning("router.llm_classify_error",
+                           error=str(e), error_type=type(e).__name__)
+            return None
+
 
 # ── 公共导出（保持向后兼容）────────────────────────────────────────
 try:

@@ -22,6 +22,7 @@ async def _apply_model_overrides(core: Any) -> None:
     from web.routers.models import load_provider_key
     from model_router import ROUTE_TABLE
 
+    logger.info("webui._apply_model_overrides_start")
     cfg = get_config_service()
 
     # 从 .env 文件读取，而非 os.environ，防止构建环境变量泄露到用户安装包
@@ -34,7 +35,9 @@ async def _apply_model_overrides(core: Any) -> None:
 
     _register_env_providers(cfg, env_values, os)
     _register_all_providers(cfg, core, load_provider_key, register_into_router)
+    logger.info("webui.before_apply_route_overrides")
     _apply_route_overrides(cfg, core, ROUTE_TABLE)
+    logger.info("webui.after_apply_route_overrides")
     _restore_chat_model(cfg, core)
 
 
@@ -127,9 +130,12 @@ def _register_all_providers(cfg: Any, core: Any, load_provider_key: Any, registe
 
 def _apply_route_overrides(cfg: Any, core: Any, ROUTE_TABLE: Any) -> None:
     """应用路由表覆盖（model/client/max_tokens/thinking/timeout）。"""
-    for task, o in (cfg.get("models.routes", {}) or {}).items():
+    routes_config = cfg.get("models.routes", {}) or {}
+    logger.info("webui.route_overrides_start total_tasks={}", len(routes_config))
+    for task, o in routes_config.items():
         entry = ROUTE_TABLE.get(task)
         if not entry or not isinstance(o, dict):
+            logger.warning("webui.route_override_skip task={} reason=no_entry_or_invalid", task)
             continue
         if o.get("model"):
             entry["model"] = o["model"]
@@ -138,10 +144,13 @@ def _apply_route_overrides(cfg: Any, core: Any, ROUTE_TABLE: Any) -> None:
         if o.get("max_tokens"):
             entry["max_tokens"] = o["max_tokens"]
         if "thinking" in o:
+            original_thinking = entry.get("thinking")
             if o["thinking"]:
                 entry["thinking"] = {"type": "enabled", "budget_tokens": 2048}
             else:
                 entry["thinking"] = {"type": "disabled"}
+            logger.info("webui.thinking_loaded task={} original={} new={}",
+                        task, original_thinking, entry.get("thinking"))
         if o.get("timeout"):
             core.router.TASK_TIMEOUTS[task] = o["timeout"]
 
@@ -150,9 +159,16 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
     """恢复上次聊天模型（从 config_service 的 models.chat_model 读取）。"""
     chat_model = cfg.get("models.chat_model")
     if not (isinstance(chat_model, dict) and chat_model.get("provider") and chat_model.get("model_id")):
+        logger.info("webui.chat_model_no_saved_preference, using default")
         return
     provider = chat_model["provider"]
     model_id = chat_model["model_id"]
+    # 检查 ROUTE_TABLE["chat"] 当前值（可能已被 _apply_route_overrides 修改）
+    from model_router import ROUTE_TABLE
+    current_client = ROUTE_TABLE.get("chat", {}).get("client", "")
+    current_model = ROUTE_TABLE.get("chat", {}).get("model", "")
+    logger.info("webui.chat_model_restore_attempt saved={}/{} current_route={}/{}",
+                provider, model_id, current_client, current_model)
     try:
         core.router.set_chat_model(provider, model_id)
         logger.info("webui.chat_model_restored provider={} model={}", provider, model_id)

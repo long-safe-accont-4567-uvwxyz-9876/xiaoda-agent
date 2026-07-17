@@ -771,7 +771,7 @@ class ModelRouter:
         # 支持 thinking 参数（通用）
         # 关键修复：thinking 关闭时也要传递 enable_thinking: false，否则 agnes 模型使用默认行为
         thinking_config = config.get("thinking")
-        logger.info("router.thinking_debug", provider=provider, thinking=thinking_config)
+        logger.info("router.thinking_debug provider={} thinking={}", provider, thinking_config)
         if provider == "agnes":
             # agnes 模型需要明确传递 enable_thinking 参数
             enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
@@ -805,6 +805,10 @@ class ModelRouter:
         stream = None
         last_error = None
 
+        # 关键修复：流式响应中也要检查thinking配置并清理reasoning
+        thinking_config = config.get("thinking", {})
+        thinking_disabled = thinking_config.get("type") == "disabled"
+
         for attempt in range(MAX_RETRIES + 1):
             try:
                 client = await self._select_client_for_provider(provider)
@@ -822,7 +826,14 @@ class ModelRouter:
                     except (AttributeError, IndexError):
                         delta = None
                     if delta:
-                        yield delta
+                        # 关键：如果thinking被禁用，清理每个delta中的reasoning标记
+                        if thinking_disabled:
+                            from utils.text_utils import strip_reasoning
+                            delta = strip_reasoning(delta)
+                        if delta:  # 清理后可能为空
+                            yield delta
+                # 流式响应结束后，清空reasoning_content_var防止泄露
+                _reasoning_content_var.set("")
                 metrics.inc(f"model_route.{task_type}.success")
                 metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
                 metrics.maybe_report()
@@ -904,7 +915,7 @@ class ModelRouter:
         # 支持 thinking 参数（通用）
         # 关键修复：thinking 关闭时也要传递 enable_thinking: false，否则 agnes 模型使用默认行为
         thinking_config = config.get("thinking")
-        logger.info("router.thinking_debug", provider=provider, thinking=thinking_config)
+        logger.info("router.thinking_debug provider={} thinking={}", provider, thinking_config)
         if provider == "agnes":
             # agnes 模型需要明确传递 enable_thinking 参数
             enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
@@ -918,7 +929,8 @@ class ModelRouter:
                                      provider: str, tools: list[dict] | None,
                                      messages: list[dict] | None = None,
                                      temperature: float | None = None,
-                                     max_tokens: int | None = None) -> str | object:
+                                     max_tokens: int | None = None,
+                                     config: dict | None = None) -> str | object:
         """处理路由成功响应：记录费用、缓存、凭证成功，返回 content 或 response。"""
         if stream:
             # 流式调用：在返回前尝试记录费用（部分 provider 在流结束时提供 usage）
@@ -1020,6 +1032,18 @@ class ModelRouter:
                 f"content 为空（模型未生成有效回复）"
             )
 
+        # 关键：WebUI 设置必须生效，不许泄露思考
+        thinking_config = (config or {}).get("thinking", {})
+        thinking_disabled = thinking_config.get("type") == "disabled"
+
+        # 1. 清空 reasoning_content（不管 thinking 是否禁用，都不泄露给用户）
+        _reasoning_content_var.set("")
+
+        # 2. thinking 禁用时，清理 content 中可能嵌入的推理标记
+        if thinking_disabled:
+            from utils.text_utils import strip_reasoning
+            content = strip_reasoning(content)
+
         return content
 
     async def _rotate_credential_on_error(self, provider: str, classified: Any) -> None:
@@ -1118,6 +1142,7 @@ class ModelRouter:
                     response, task_type, model, stream,
                     user_openid, session_id, provider, tools,
                     messages=messages, temperature=temperature, max_tokens=max_tokens,
+                    config=config,
                 )
 
             except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError) as e:

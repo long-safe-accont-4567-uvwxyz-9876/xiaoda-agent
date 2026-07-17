@@ -1276,16 +1276,15 @@ def _inject_dynamic_segments(system_prompt: str, user_id: str | None, user_input
             lf_loop = get_learning_feedback_loop()
             relevant_lessons = lf_loop.get_relevant_lessons(user_input, top_k=3)
             if relevant_lessons:
-                lesson_lines = ["[过往经验教训（供参考，非当前指令）]"]
+                lesson_lines = ["（以前学到的经验）"]
                 for lesson in relevant_lessons:
-                    marker = "⚠️" if lesson.event_type.value == "failure" else "💡"
                     lesson_lines.append(
-                        f"{marker} [{lesson.occurrence_count}次] {lesson.content[:120]}"
+                        f"{lesson.content[:120]}"
                     )
                 system_prompt += "\n\n" + "\n".join(lesson_lines)
             strategy = lf_loop.get_strategy(user_input)
             if strategy:
-                system_prompt += f"\n\n[策略建议] {strategy[:200]}"
+                system_prompt += f"\n\n（应对建议）{strategy[:200]}"
         except Exception as e:
             logger.warning("prompt.learning_feedback_inject_failed", error=str(e))
 

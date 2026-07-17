@@ -3133,30 +3133,30 @@ class MemoryManager:
             return ""
 
         parts = []
-        # 定时回忆笔记放在最前（最高密度上下文，像"刚才发生了什么"的快照）
+        # 定时回忆笔记放在最前——用自然叙述式而非列表
         if recall_notes:
-            parts.append("[最近回忆笔记]")
+            parts.append("（最近想到的事）")
             for rn in recall_notes:
                 text = (rn.get("summary") or "").strip()
                 if text:
-                    parts.append(f"· {text}")
+                    parts.append(text)
 
         if summaries:
-            parts.append("[历史记忆摘要]")
+            parts.append("（以前发生过的事）")
             for s in summaries:
                 text = (s.get("summary_text") or "").strip()
                 if text:
-                    parts.append(f"· {text}")
+                    parts.append(text)
 
         if recent:
             if parts:
-                parts.append("[近期记忆]")
+                parts.append("（最近经历的事）")
             else:
-                parts.append("[记忆]")
+                parts.append("（记得的事）")
             for r in reversed(recent):  # 按时间升序展示
                 text = (r.get("summary") or "").strip()
                 if text:
-                    parts.append(f"· {text}")
+                    parts.append(text)
 
         return "\n".join(parts)
 

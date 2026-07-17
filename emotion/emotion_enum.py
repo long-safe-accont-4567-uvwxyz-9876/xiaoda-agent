@@ -179,10 +179,11 @@ def resolve_emotion(label: str) -> Emotion:
     try:
         return Emotion(label)
     except ValueError:
-        logger.debug("emotion_enum.resolve: label={!r} not in Emotion enum", label, exc_info=True)
+        pass
     # 查别名表
     if label in EMOTION_ALIASES:
         return EMOTION_ALIASES[label]
+    logger.debug("emotion_enum.resolve: label={!r} not in enum or aliases, fallback to NEUTRAL", label)
     return Emotion.NEUTRAL
 
 
