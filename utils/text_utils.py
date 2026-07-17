@@ -394,25 +394,20 @@ def strip_reasoning(text: str) -> str:
     # 清理多余空行
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = text.strip()
-    # 过度截断保护：如果清理后内容不到原始内容的 30%，说明可能误删了正常回复
-    # 此时回退到仅清理标签包裹的推理（最安全的子集），保留更多正常内容
     cleaned_len = len(text)
-    if original_len > 100 and cleaned_len < original_len * 0.3:
+
+    # 检查清理后是否有有效内容（完整的句子，而非碎片）
+    # 如果清理后内容过短（<20字）或明显不完整（没有句号/问号/感叹号结尾），记录日志
+    if cleaned_len < 20 or (cleaned_len > 0 and text[-1] not in '。！？.!?)）」』"\''):
         from loguru import logger
         logger.warning(
-            "text_utils.strip_reasoning_overstrip original_len={} cleaned_len={} ratio={:.1%}, falling back to tag-only cleanup",
-            original_len, cleaned_len, cleaned_len / original_len if original_len else 0,
+            "text_utils.strip_reasoning_result original_len={} cleaned_len={} preview={}",
+            original_len, cleaned_len, text[:100] if text else "(empty)",
         )
-        # 回退策略：仅清理标签包裹的推理（最安全的子集），保留原始文本中的裸文本
-        text = _REASONING_TAG_PATTERN.sub('', raw_text)
-        text = _REASONING_OPEN_PATTERN.sub('', text)
-        text = _EMOTION_REASONING_PATTERN.sub('', text)
-        text = _INSTRUCTION_BLOCK_PATTERN.sub('', text)
-        text = _INSTRUCTION_OPEN_PATTERN.sub('', text)
-        text = _INSTRUCTION_CLOSE_PATTERN.sub('', text)
-        text = _EXTERNAL_DATA_MARKERS.sub('', text)
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        text = text.strip()
+        # 如果清理后为空或明显不完整，返回空让调用方使用降级回复
+        if cleaned_len < 20:
+            return ""
+
     return text
 
 
