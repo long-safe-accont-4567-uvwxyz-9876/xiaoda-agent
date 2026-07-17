@@ -344,10 +344,11 @@ class RouterNode:
 请只返回Agent名称（多个用逗号分隔）:"""
 
     async def route(self, state: TaskState) -> dict:
-        """路由入口：缓存 → RouterEngine（LLM 分类） → 默认，返回路由结果 dict。
+        """路由入口：只处理明确的信号，其他都默认路由到 xiaoda。
 
-        废弃旧的 classify_task() → route_task() 硬编码映射，
-        统一使用 RouterEngine.decide_with_llm() 进行子代理路由。
+        路由策略：
+        1. @mention → 直接路由（最高优先级，用户明确指定）
+        2. 其他 → 都路由到 xiaoda（主 agent），由主 agent 决定是否需要子代理
         """
         user_input = state.user_input
         agent_configs = state._agent_configs
@@ -355,40 +356,32 @@ class RouterNode:
         if not agent_configs:
             return {"route_targets": ["xiaoda"], "route_target": "xiaoda", "route_plan": ["xiaoda"]}
 
-        # 0. 检测无依赖多子代理任务（如"分别问小莉和小狼..."）→ 直达并行路径
+        # 1. 检测无依赖多子代理任务（如"分别问小莉和小狼..."）→ 直达并行路径
         parallel_targets = self._detect_parallel_targets(user_input)
         if parallel_targets and len(parallel_targets) >= 2:
             valid_targets = self._normalize_parallel_targets(parallel_targets, agent_configs)
             if len(valid_targets) >= 2:
+                logger.info("route.parallel_detected", targets=valid_targets)
                 await self._route_cache.put(user_input, valid_targets)
-                await self._notify_route_progress(state, valid_targets, agent_configs, "并行路由")
+                await self._notify_route_progress(state, valid_targets, agent_configs, "并行路由（显式提及多个Agent）")
                 return self._build_route_dict(valid_targets)
 
-        # 1. 缓存命中
-        cached = await self._route_cache.get(user_input)
-        if cached is not None:
-            logger.debug("route.cache_hit", input=user_input[:50], targets=cached)
-            return self._build_route_dict(cached)
-
-        # 2. RouterEngine 路由（@mention + 关键词匹配，不调用外部 LLM API）
-        try:
+        # 2. @mention 检测（最高优先级，用户明确指定）
+        if self._has_mention(user_input):
             # 使用缓存的 RouterEngine 实例
             if self._router_engine is None:
                 from core.router_engine import RouterEngine
                 self._router_engine = RouterEngine()
-
-            # 使用 decide() 而非 decide_with_llm()，避免调用外部 API
             decision = self._router_engine.decide(user_input, state.user_id)
             targets = [t for t in decision.agent_names if t in agent_configs or t == "xiaoda"]
             if targets:
-                logger.info("route.router_engine", targets=targets, reasoning=decision.reasoning)
+                logger.info("route.mention_detected", targets=targets, reasoning=decision.reasoning)
                 await self._route_cache.put(user_input, targets)
-                await self._notify_route_progress(state, targets, agent_configs, f"路由: {decision.reasoning}")
+                await self._notify_route_progress(state, targets, agent_configs, f"@mention路由: {decision.reasoning}")
                 return self._build_route_dict(targets)
-        except Exception as e:
-            logger.warning("route.router_engine_failed_fallback_to_default", error=str(e)[:200])
 
         # 3. 默认 → xiaoda（主 agent）
+        # 不做关键词匹配，让主 agent 自己决定是否需要子代理
         return {"route_targets": ["xiaoda"], "route_target": "xiaoda", "route_plan": ["xiaoda"]}
 
     @staticmethod
