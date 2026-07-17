@@ -1,5 +1,6 @@
 from typing import Any
 import time
+import re
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from loguru import logger
 from utils.metrics import metrics
@@ -70,11 +71,11 @@ async def remember(content: str, tags: str = "", importance: float = 0.5) -> Too
 
 @register_tool(
     name="recall",
-    description="检索相关记忆。当用户问到之前聊过的内容、自身配置（如模型版本、系统设置）、用户偏好等不确定的信息时，必须先用此工具查询，不要凭印象编造",
+    description="检索相关记忆。当用户问到之前聊过的内容、自身配置（如模型版本、系统设置）、用户偏好等不确定的信息时，必须先用此工具查询，不要凭印象编造。重要：query必须原样保留用户指定的日期时间（如'7月17日'），绝不能篡改为其他日期",
     schema={
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "检索关键词"},
+            "query": {"type": "string", "description": "检索关键词。必须原样保留用户提到的具体日期（如'7月17日'、'昨天'），不得改写或替换为其他日期。示例：用户说'7月17日早上'→query必须包含'7月17日早上'，不能改成'7月16日'"},
             "top_k": {"type": "integer", "description": "返回数量", "default": 8},
         },
         "required": ["query"],
@@ -86,6 +87,36 @@ async def remember(content: str, tags: str = "", importance: float = 0.5) -> Too
 async def recall(query: str, top_k: int = 8) -> ToolResult:
     _start = time.time()
     try:
+        # 日期守卫：检测并修复query中被LLM篡改的日期
+        # 根因：LLM生成tool call时可能将用户指定的"今天"日期改成"昨天"
+        # 例如用户说"7月17日早上"，LLM生成query="7月16日早上"
+        _DATE_PATTERN = re.compile(r'(\d{1,2})月(\d{1,2})日')
+        query_dates = _DATE_PATTERN.findall(query)
+        if query_dates:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            import os
+            tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
+            try:
+                tz = ZoneInfo(tz_name)
+            except Exception:
+                tz = ZoneInfo("Asia/Shanghai")
+            now = datetime.now(tz)
+            corrected = False
+            for month, day in query_dates:
+                q_month, q_day = int(month), int(day)
+                # 如果query中的日期恰好是昨天，很可能是LLM篡改
+                if q_month == now.month and q_day == now.day - 1:
+                    old_date = f"{q_month}月{q_day}日"
+                    new_date = f"{now.month}月{now.day}日"
+                    query = query.replace(old_date, new_date, 1)
+                    corrected = True
+                    logger.warning("memory_tool.recall_date_auto_corrected",
+                                   old_date=old_date, new_date=new_date,
+                                   hint="LLM将用户指定的今天日期篡改为昨天，已自动修复")
+            if corrected:
+                logger.info("memory_tool.recall_query_after_correction", query=query[:80])
+
         mm = _get_memory_manager()
         results = await mm.retrieve_memories(query, k=top_k)
 
