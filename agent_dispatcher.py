@@ -782,7 +782,9 @@ class SubAgent:
             if self.config.provider == "agnes":
                 from model_router import ROUTE_TABLE
                 chat_config = ROUTE_TABLE.get("chat", {})
-                thinking_enabled = chat_config.get("thinking") is not None
+                thinking_config = chat_config.get("thinking")
+                # 关键修复：thinking.type 必须是 "enabled" 才启用，默认禁用
+                thinking_enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
                 extra_body = {"chat_template_kwargs": {"enable_thinking": thinking_enabled}}
             from config import get_temperature
             response = await asyncio.wait_for(
