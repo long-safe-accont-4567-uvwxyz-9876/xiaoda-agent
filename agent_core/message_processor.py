@@ -356,31 +356,8 @@ class MessageProcessorMixin:
                                reply_preview=reply[:80])
                 return None  # 走主路径
 
-        # 截断检测与重试：回复过短且不以句末标点结尾 → 追加"请继续"重试一次
-        # 根因：agnes-2.0-flash 对复杂问题可能返回截断回复
-        # 阈值从50提高到100，避免对简短但完整的回复误判
-        if reply and len(reply) < 100:
-            _end = reply[-5:] if len(reply) >= 5 else reply
-            if not any(reply.endswith(c) for c in "。！？～…）」】\n\"'"):
-                logger.warning("chat.fast_path_truncated",
-                               reply_len=len(reply), reply_tail=_end)
-                # 重试一次：追加"请继续完成回复"提示
-                try:
-                    retry_messages = messages.copy()
-                    retry_messages.append({"role": "assistant", "content": reply})
-                    retry_messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
-                    retry_result = await asyncio.wait_for(self.router.route(
-                        "chat", retry_messages, temperature=0.7, max_tokens=4096,
-                        user_openid=user_openid, session_id=session_id,
-                    ), timeout=30)
-                    retry_reply = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
-                    retry_reply = self._clean_reply(retry_reply)
-                    if retry_reply and len(retry_reply) > 5:
-                        reply = reply + retry_reply
-                        logger.info("chat.fast_path_truncated_retry_success",
-                                    final_len=len(reply))
-                except Exception as e:
-                    logger.warning("chat.fast_path_truncated_retry_failed", error=str(e))
+        # 截断检测已移除：误判率高，弊大于利
+        # 如果用户需要更长的回复，可以通过 max_tokens 配置调整
 
         # 后处理
         result = await self._finalize_fast_path_reply(
@@ -1238,7 +1215,7 @@ class MessageProcessorMixin:
                 "role": "system",
                 "content": "[系统警告] 当前认知状态不佳，请简化回复。"
             })
-            _base_mt = _cb_max_tokens if _cb_max_tokens else _model_cfg.get("max_tokens", 1500)
+            _base_mt = _cb_max_tokens if _cb_max_tokens else _model_cfg.get("max_tokens", 4096)
             _cb_max_tokens = int(_base_mt * 0.8)
         return None, task_type, _cb_max_tokens, circuit_state, _model_cfg
 

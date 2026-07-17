@@ -25,7 +25,7 @@ class AgnesTransport(ProviderTransport):
         return self._client is not None
 
     async def chat(self, model: str, messages: list[dict],
-                   temperature: float = 0.7, max_tokens: int = 1500,
+                   temperature: float = 0.7, max_tokens: int = 4096,
                    tools: list[dict] | None = None,
                    tool_choice: str | None = None,
                    stream: bool = False,

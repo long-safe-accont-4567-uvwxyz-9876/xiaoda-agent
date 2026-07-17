@@ -668,7 +668,7 @@ class ModelRouter:
                     extra_headers: dict | None = None) -> str | object:
         """路由入口：主路由 → 多级 fallback 链。"""
         config = ROUTE_TABLE.get(task_type, ROUTE_TABLE["chat"])
-        mt = max_tokens or config.get("max_tokens", 1500)
+        mt = max_tokens or config.get("max_tokens", 4096)
         if timeout is None:
             timeout = self.TASK_TIMEOUTS.get(task_type, 30)
 
@@ -793,7 +793,7 @@ class ModelRouter:
         """
         config = ROUTE_TABLE.get(task_type, ROUTE_TABLE["chat"])
         model = config["model"]
-        mt = max_tokens or config.get("max_tokens", 1500)
+        mt = max_tokens or config.get("max_tokens", 4096)
         provider = config.get("client", _CFG_DEFAULT_PROVIDER)
         timeout = self.TASK_TIMEOUTS.get(task_type, 30)
 
