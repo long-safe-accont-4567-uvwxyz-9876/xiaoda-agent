@@ -339,6 +339,7 @@ def strip_reasoning(text: str) -> str:
     if not text:
         return text
     original_len = len(text)
+    raw_text = text  # 保存原始文本，供过度截断时回退
     # 1. 标签包裹的推理
     text = _REASONING_TAG_PATTERN.sub('', text)
     text = _REASONING_OPEN_PATTERN.sub('', text)
@@ -367,15 +368,24 @@ def strip_reasoning(text: str) -> str:
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = text.strip()
     # 过度截断保护：如果清理后内容不到原始内容的 30%，说明可能误删了正常回复
-    # 此时记录警告，保留清理后内容（因为推理内容确实不该出现）
-    # 但额外记录日志便于诊断
+    # 此时回退到仅清理标签包裹的推理（最安全的子集），保留更多正常内容
     cleaned_len = len(text)
     if original_len > 100 and cleaned_len < original_len * 0.3:
         from loguru import logger
         logger.warning(
-            "text_utils.strip_reasoning_overstrip original_len={} cleaned_len={} ratio={:.1%}",
+            "text_utils.strip_reasoning_overstrip original_len={} cleaned_len={} ratio={:.1%}, falling back to tag-only cleanup",
             original_len, cleaned_len, cleaned_len / original_len if original_len else 0,
         )
+        # 回退策略：仅清理标签包裹的推理（最安全的子集），保留原始文本中的裸文本
+        text = _REASONING_TAG_PATTERN.sub('', raw_text)
+        text = _REASONING_OPEN_PATTERN.sub('', text)
+        text = _EMOTION_REASONING_PATTERN.sub('', text)
+        text = _INSTRUCTION_BLOCK_PATTERN.sub('', text)
+        text = _INSTRUCTION_OPEN_PATTERN.sub('', text)
+        text = _INSTRUCTION_CLOSE_PATTERN.sub('', text)
+        text = _EXTERNAL_DATA_MARKERS.sub('', text)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        text = text.strip()
     return text
 
 

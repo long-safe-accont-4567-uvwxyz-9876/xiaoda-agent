@@ -1242,12 +1242,16 @@ class ModelRouter:
         if not tools:
             return tools
 
-        # agnes 系列模型可能不支持工具调用，记录警告
+        # agnes 系列模型可能不支持工具调用，仅首次记录警告（避免每次调用都告警刷屏）
         agnes_models = {AGENT_CONFIG.get("model") for AGENT_CONFIG in [ROUTE_TABLE.get("chat_agnes")] if AGENT_CONFIG}
         if model in agnes_models:
-            tool_names = [t.get("function", {}).get("name", "?") for t in tools]
-            logger.warning("router.tools_may_not_be_supported",
-                           model=model, tool_count=len(tools), tools=tool_names)
+            if not getattr(self, "_agnes_tools_warned", False):
+                self._agnes_tools_warned = True
+                tool_names = [t.get("function", {}).get("name", "?") for t in tools]
+                logger.warning("router.tools_may_not_be_supported",
+                               model=model, tool_count=len(tools), tools=tool_names)
+            else:
+                logger.debug("router.tools_may_not_be_supported model={} tool_count={}", model, len(tools))
 
         # 小模型不发送工具定义，防止输出退化
         if self._is_small_model(model):

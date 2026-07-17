@@ -574,27 +574,28 @@ class AIQQBot(botpy.Client):
         try:
             session = await asyncio.wait_for(
                 self.agent.get_session(user_openid),
-                timeout=5.0,
+                timeout=10.0,
             )
             if session:
                 return session["id"]
             return await asyncio.wait_for(
                 self.agent.create_session(user_openid),
-                timeout=5.0,
+                timeout=10.0,
             )
         except TimeoutError:
             logger.warning("qq_bot.c2c_session_timeout openid={}, retrying", user_openid)
-            # 超时后重试一次（DB 锁通常是短暂的）
+            # 超时后重试，使用更长超时并加入短暂等待让DB锁释放
             try:
+                await asyncio.sleep(0.5)
                 session = await asyncio.wait_for(
                     self.agent.get_session(user_openid),
-                    timeout=10.0,
+                    timeout=15.0,
                 )
                 if session:
                     return session["id"]
                 return await asyncio.wait_for(
                     self.agent.create_session(user_openid),
-                    timeout=10.0,
+                    timeout=15.0,
                 )
             except TimeoutError:
                 logger.error("qq_bot.c2c_session_timeout_retry openid={}", user_openid)
