@@ -25,13 +25,13 @@ if str(PROJECT_ROOT) not in sys.path:
 class TestIntentClassifyDefault:
     """测试意图分类默认配置"""
 
-    def test_intent_llm_classify_default_false(self):
-        """INTENT_LLM_CLASSIFY 默认应为 False，避免 3-8s LLM 延迟"""
+    def test_intent_llm_classify_default_true(self):
+        """INTENT_LLM_CLASSIFY 默认应为 True，提高子代理路由准确性"""
         import config
-        # 不设置环境变量时，默认应为 False
-        assert config.INTENT_LLM_CLASSIFY is False, (
-            "INTENT_LLM_CLASSIFY 默认应为 False，避免每次意图分类都调用 LLM（3-8s 延迟）。"
-            "规则匹配已经足够处理大部分情况。"
+        # 不设置环境变量时，默认应为 True（项目约束）
+        assert config.INTENT_LLM_CLASSIFY is True, (
+            "INTENT_LLM_CLASSIFY 默认应为 True，以提高子代理路由准确性。"
+            "项目约束：必须启用 LLM 分类。"
         )
 
     def test_intent_classify_timeout_at_least_10s(self):
