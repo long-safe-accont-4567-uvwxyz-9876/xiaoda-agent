@@ -335,11 +335,38 @@ def strip_reasoning(text: str) -> str:
     6. Agnes 风格连续英文推理段
     7. 中文内部独白/推理行
     8. 指令层级标记泄露（<instruction>标签和[外部数据]标记）
+    9. 全英文推理泄露（agnes模型将推理输出到content字段，整个回复都是英文分析）
     """
     if not text:
         return text
     original_len = len(text)
     raw_text = text  # 保存原始文本，供过度截断时回退
+
+    # 9. 全英文推理泄露检测（最优先，因为整个回复都是泄露内容）
+    # 根因：agnes模型在某些情况下将推理过程输出到content字段而非reasoning_content字段
+    # 特征：整个回复以英文推理特征开头，且中文占比极低（可能含中文引用）
+    # 例如："The user just sent...", "User is proposing...", "The user is pointing out..."
+    _FULL_EN_REASONING_STARTS = (
+        "The user just ", "The user is ", "User is ", "The user wants ",
+        "The user asked", "User asked", "The user seems ", "User seems ",
+        "This is a ", "This involves:", "This request",
+        "Based on the ", "Looking at the ", "I need to ",
+        "I should ", "I must ", "Let me ", "As an AI",
+        "The conversation", "In this ", "However, the user",
+    )
+    _starts_with_reasoning = any(text.lstrip().startswith(s) for s in _FULL_EN_REASONING_STARTS)
+    if _starts_with_reasoning:
+        # 计算中文字符占比——如果中文占比低于30%，整个回复都是推理泄露
+        _chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+        _total_chars = len(text.strip())
+        _chinese_ratio = _chinese_chars / _total_chars if _total_chars > 0 else 0
+        if _chinese_ratio < 0.3:
+            from loguru import logger
+            logger.warning(
+                "text_utils.full_english_reasoning_leak original_len={} chinese_ratio={:.1%} preview={}",
+                original_len, _chinese_ratio, text[:100],
+            )
+            return ""  # 整个回复都是推理泄露，返回空
     # 1. 标签包裹的推理
     text = _REASONING_TAG_PATTERN.sub('', text)
     text = _REASONING_OPEN_PATTERN.sub('', text)
