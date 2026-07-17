@@ -24,7 +24,7 @@ def _get_memory_manager() -> Any:
 
 @register_tool(
     name="remember",
-    description="保存一条重要记忆。当用户明确要求你记住某件事、纠正你的错误认知、告知个人偏好或重要信息时使用",
+    description="【必须调用】保存记忆。当用户提到：记住、记一下、帮我记、别忘了、不要忘记、记得告诉我。必须调用此工具保存记忆。",
     schema={
         "type": "object",
         "properties": {
@@ -70,7 +70,7 @@ async def remember(content: str, tags: str = "", importance: float = 0.5) -> Too
 
 @register_tool(
     name="recall",
-    description="检索相关记忆。当用户问到之前聊过的内容、自身配置（如模型版本、系统设置）、用户偏好等不确定的信息时，必须先用此工具查询，不要凭印象编造",
+    description="【必须调用】检索记忆。当用户提到：之前、以前、上次、记得、回忆、聊过、说过、发生过、我们之间、我们的故事、你还记得吗、你记得吗、回忆一下、帮我回忆。必须调用此工具，绝对不要凭印象回答。",
     schema={
         "type": "object",
         "properties": {
