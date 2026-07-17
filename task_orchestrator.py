@@ -398,31 +398,37 @@ class RouterNode:
             logger.debug("route.cache_hit", input=user_input[:50], targets=cached)
             return self._build_route_dict(cached)
 
-        # 2. 规则路由
+        # 2. @mention 路由（最高优先级，直接使用）
+        if self._has_mention(user_input):
+            rule_result = self._rule_route(user_input)
+            if rule_result:
+                targets = [t for t in rule_result if t in agent_configs or t == "xiaoda"]
+                if not targets:
+                    targets = ["xiaoda"]
+                await self._route_cache.put(user_input, targets)
+                await self._notify_route_progress(state, targets, agent_configs, "@mention路由")
+                return self._build_route_dict(targets)
+
+        # 3. LLM 路由（优先于关键词匹配）
+        try:
+            llm_targets = await self._llm_route_targets(user_input, agent_configs)
+            if llm_targets and llm_targets != ["xiaoda"]:
+                llm_valid = [t for t in llm_targets if t in agent_configs or t == "xiaoda"]
+                if llm_valid:
+                    await self._route_cache.put(user_input, llm_valid)
+                    await self._notify_route_progress(state, llm_valid, agent_configs, "LLM路由")
+                    return self._build_route_dict(llm_valid)
+        except Exception as e:
+            logger.warning("route.llm_failed", error=str(e)[:200])
+
+        # 4. 关键词匹配（仅作为最后的fallback）
         rule_result = self._rule_route(user_input)
         if rule_result:
             targets = [t for t in rule_result if t in agent_configs or t == "xiaoda"]
             if not targets:
                 targets = ["xiaoda"]
-
-            # 置信度评估：@mention 匹配高置信度（0.9），关键词正则匹配低置信度（0.5）
-            _rule_confidence = 0.9 if self._has_mention(user_input) else 0.5
-
-            # 低置信度触发 LLM 路由升级（LLM 准确率更高，优先于低置信度规则结果）
-            if _rule_confidence < 0.6:
-                try:
-                    llm_targets = await self._llm_route_targets(user_input, agent_configs)
-                    if llm_targets:
-                        llm_valid = [t for t in llm_targets if t in agent_configs or t == "xiaoda"]
-                        if llm_valid:
-                            await self._route_cache.put(user_input, llm_valid)
-                            await self._notify_route_progress(state, llm_valid, agent_configs, "LLM路由升级")
-                            return self._build_route_dict(llm_valid)
-                except Exception as e:
-                    logger.warning("route.llm_upgrade_failed", error=str(e)[:200])
-
             await self._route_cache.put(user_input, targets)
-            await self._notify_route_progress(state, targets, agent_configs, "路由分析")
+            await self._notify_route_progress(state, targets, agent_configs, "关键词路由")
             return self._build_route_dict(targets)
 
         # 3. 信念路由（Thompson Sampling，主 fallback）/ LLM 路由
