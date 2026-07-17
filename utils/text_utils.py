@@ -293,6 +293,7 @@ _CHINESE_REASONING_PHRASES = [
     r"根据SOUL\.md",
     r"根据记忆碎片",
     r"根据工具提供的\[相关记忆\]",
+    r"根据.*?提供的\[相关记忆\]",
     r"我需要用.*?语气",
     r"我需要确保",
     r"我应该.*?(?:回应|回答|回复|告诉|给出)",
@@ -306,6 +307,15 @@ _CHINESE_REASONING_PHRASES = [
     r"我可以看到",
     r"查看.*?\.md.*?内容",
     r"当前时间是",
+    r"根据.*?上下文",
+    r"根据.*?记录",
+    r"从.*?中可以看到",
+    r"检查.*?内容",
+    r"分析.*?信息",
+    r"检索到.*?记忆",
+    r"找到.*?相关.*?记忆",
+    r"根据记忆.*?显示",
+    r"记忆.*?提到",
 ]
 _CHINESE_REASONING_LINE_PATTERN = re.compile(
     r'^(?:' + '|'.join(_CHINESE_REASONING_PHRASES) + r')[^\n]*$',
