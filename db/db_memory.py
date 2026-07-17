@@ -107,6 +107,14 @@ class MemoryDB:
         )
         await self._conn.commit()
 
+    async def mark_permanent(self, mem_id: int) -> None:
+        """将记忆标记为永久牢记。"""
+        await self._conn.execute(
+            "UPDATE episodic_memories SET is_permanent = 1 WHERE id = ?",
+            (mem_id,),
+        )
+        await self._conn.commit()
+
     async def update_memory_summary(self, mem_id: int, new_summary: str) -> None:
         await self._conn.execute(
             "UPDATE episodic_memories SET summary = ? WHERE id = ?",

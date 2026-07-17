@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS episodic_memories (
     version INTEGER DEFAULT 1,
     user_id TEXT DEFAULT 'default',
     agent_id TEXT DEFAULT 'xiaoda',
-    is_raw INTEGER DEFAULT 0
+    is_raw INTEGER DEFAULT 0,
+    is_permanent INTEGER DEFAULT 0             -- 是否永久牢记（不会被时间冲淡）
 );
 
 -- 情景记忆全文索引（FTS5）

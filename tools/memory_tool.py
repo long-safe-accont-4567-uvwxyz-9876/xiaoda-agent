@@ -136,8 +136,10 @@ async def recall(query: str, top_k: int = 8) -> ToolResult:
             ts = r.get("timestamp", 0)
             time_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "未知时间"
             is_raw = r.get("is_raw", 0)
+            is_permanent = r.get("is_permanent", 0)
             mem_type = "原始" if is_raw == 1 else "提炼"
-            line = f"[{time_str}] (ID:{mem_id} 类型:{mem_type} 重要度:{importance:.1f} 相关度:{score:.2f}) {summary}"
+            permanent_mark = " [牢记]" if is_permanent == 1 else ""
+            line = f"[{time_str}] (ID:{mem_id} 类型:{mem_type} 重要度:{importance:.1f} 相关度:{score:.2f}){permanent_mark} {summary}"
             # 补充实体检索到的实体信息（帮助 LLM 关联上下文）
             entities_raw = r.get("entities", "")
             if entities_raw:
@@ -284,3 +286,40 @@ async def correct_memory(old_hint: str, new_text: str) -> ToolResult:
         metrics.inc("memory.correct.failure")
         logger.error("memory_tool.correct_failed", error=str(e))
         return ToolResult.fail(f"纠正记忆失败：{e!s}")
+
+
+@register_tool(
+    name="keep_in_mind",
+    description="将一条记忆标记为永久牢记。当用户明确要求你牢记某件事、强调某个重要信息不会被遗忘时使用",
+    schema={
+        "type": "object",
+        "properties": {
+            "memory_id": {"type": "integer", "description": "要标记的记忆ID"},
+        },
+        "required": ["memory_id"],
+    },
+    permission=ToolPermission.READ_WRITE,
+    category="memory",
+    max_frequency=5,
+)
+async def keep_in_mind(memory_id: int) -> ToolResult:
+    _start = time.time()
+    try:
+        mm = _get_memory_manager()
+        # 检查记忆是否存在
+        mem = await mm.memory.get_memory_by_id(memory_id)
+        if not mem:
+            metrics.inc("memory.keep_in_mind.failure")
+            return ToolResult.fail(f"记忆不存在（ID: {memory_id}）")
+
+        # 标记为永久牢记
+        await mm.memory.mark_permanent(memory_id)
+
+        summary = mem.get("summary", "")[:50]
+        metrics.inc("memory.keep_in_mind.success")
+        metrics.observe("memory.keep_in_mind.latency_ms", (time.time() - _start) * 1000)
+        return ToolResult.ok(f"已牢牢记住（ID: {memory_id}）：{summary}")
+    except Exception as e:
+        metrics.inc("memory.keep_in_mind.failure")
+        logger.error("memory_tool.keep_in_mind_failed", error=str(e))
+        return ToolResult.fail(f"标记永久记忆失败：{e!s}")
