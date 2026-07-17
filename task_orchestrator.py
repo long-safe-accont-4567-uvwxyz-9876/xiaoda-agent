@@ -210,6 +210,9 @@ class RouterNode:
     """路由节点，按规则或模型将用户输入路由到目标 Agent。"""
     _route_cache = RouteCache()  # class-level shared cache
 
+    def __init__(self) -> None:
+        self._router_engine: Any | None = None
+
     @staticmethod
     def _rule_route(user_input: str) -> list[str]:
         q = user_input.lower()
@@ -369,9 +372,11 @@ class RouterNode:
 
         # 2. RouterEngine 路由（使用 LLM 分类，不再使用硬编码的 classify_task）
         try:
-            from core.router_engine import RouterEngine
-            router = RouterEngine()
-            decision = await router.decide_with_llm(user_input, state.user_id)
+            # 使用缓存的 RouterEngine 实例，避免每次重新创建
+            if self._router_engine is None:
+                from core.router_engine import RouterEngine
+                self._router_engine = RouterEngine()
+            decision = await self._router_engine.decide_with_llm(user_input, state.user_id)
             targets = [t for t in decision.agent_names if t in agent_configs or t == "xiaoda"]
             if targets:
                 logger.info("route.router_engine_llm", targets=targets, reasoning=decision.reasoning)
