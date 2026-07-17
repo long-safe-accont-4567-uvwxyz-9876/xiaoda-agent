@@ -326,89 +326,30 @@ _EXTERNAL_DATA_MARKERS = re.compile(
 def strip_reasoning(text: str) -> str:
     """剥离模型输出中的推理/思考内容。
 
-    处理以下情况：
-    1.  ....Predicate 等标签包裹的推理
-    2. 裸文本推理行（Need think about... / Let me recall... 等）
-    3. 连续多行英文推理块
-    4. Agnes 模型风格的推理标签（[emotion thinking]``）
-    5. 第三人称引用（They ask "..."）
-    6. Agnes 风格连续英文推理段
-    7. 中文内部独白/推理行
-    8. 指令层级标记泄露（<instruction>标签和[外部数据]标记）
-    9. 全英文推理泄露（agnes模型将推理输出到content字段，整个回复都是英文分析）
+    只处理明确的标签格式，不猜测裸文本推理。
+    根因修复：thinking配置正确后，模型不应再输出推理。
+
+    处理：
+    1. <reasoning>...</reasoning> 等标签包裹的推理
+    2. <instruction> 等指令层级标记泄露
+    3. [外部数据] 等系统标记
     """
     if not text:
         return text
-    original_len = len(text)
-    raw_text = text  # 保存原始文本，供过度截断时回退
 
-    # 9. 全英文推理泄露检测（最优先，因为整个回复都是泄露内容）
-    # 根因：agnes模型在某些情况下将推理过程输出到content字段而非reasoning_content字段
-    # 特征：整个回复以英文推理特征开头，且中文占比极低（可能含中文引用）
-    # 例如："The user just sent...", "User is proposing...", "The user is pointing out..."
-    _FULL_EN_REASONING_STARTS = (
-        "The user just ", "The user is ", "User is ", "The user wants ",
-        "The user asked", "User asked", "The user seems ", "User seems ",
-        "This is a ", "This involves:", "This request",
-        "Based on the ", "Looking at the ", "I need to ",
-        "I should ", "I must ", "Let me ", "As an AI",
-        "The conversation", "In this ", "However, the user",
-    )
-    _starts_with_reasoning = any(text.lstrip().startswith(s) for s in _FULL_EN_REASONING_STARTS)
-    if _starts_with_reasoning:
-        # 计算中文字符占比——如果中文占比低于30%，整个回复都是推理泄露
-        _chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
-        _total_chars = len(text.strip())
-        _chinese_ratio = _chinese_chars / _total_chars if _total_chars > 0 else 0
-        if _chinese_ratio < 0.3:
-            from loguru import logger
-            logger.warning(
-                "text_utils.full_english_reasoning_leak original_len={} chinese_ratio={:.1%} preview={}",
-                original_len, _chinese_ratio, text[:100],
-            )
-            return ""  # 整个回复都是推理泄露，返回空
-    # 1. 标签包裹的推理
+    # 1. 标签包裹的推理（明确格式）
     text = _REASONING_TAG_PATTERN.sub('', text)
     text = _REASONING_OPEN_PATTERN.sub('', text)
-    # 1b. 指令层级标记泄露（<instruction>标签和[外部数据]标记）
+
+    # 2. 指令层级标记泄露
     text = _INSTRUCTION_BLOCK_PATTERN.sub('', text)
     text = _INSTRUCTION_OPEN_PATTERN.sub('', text)
     text = _INSTRUCTION_CLOSE_PATTERN.sub('', text)
     text = _EXTERNAL_DATA_MARKERS.sub('', text)
-    # 2. Agnes 模型推理标签
-    text = _EMOTION_REASONING_PATTERN.sub('', text)
-    # 3. 第三人称引用
-    text = _THIRD_PERSON_PATTERN.sub('', text)
-    # 4. 内部决策
-    text = _INTERNAL_DECISION_PATTERN.sub('', text)
-    # 5. 裸文本推理行
-    text = _REASONING_LINE_PATTERN.sub('', text)
-    # 6. 连续多行英文推理块（3行以上）
-    text = _REASONING_BLOCK_PATTERN.sub('', text)
-    # 7. Agnes 风格连续英文推理段
-    text = _AGNES_REASONING_BLOCK.sub('', text)
-    # 8. 扩展英文推理段（I need to be honest / Looking at / I've already 等模式）
-    text = _EXTENDED_REASONING_BLOCK.sub('', text)
-    # 9. 中文内部独白/推理行
-    text = _CHINESE_REASONING_LINE_PATTERN.sub('', text)
+
     # 清理多余空行
     text = re.sub(r'\n{3,}', '\n\n', text)
-    text = text.strip()
-    cleaned_len = len(text)
-
-    # 检查清理后是否有有效内容（完整的句子，而非碎片）
-    # 如果清理后内容过短（<20字）或明显不完整（没有句号/问号/感叹号结尾），记录日志
-    if cleaned_len < 20 or (cleaned_len > 0 and text[-1] not in '。！？.!?)）」』"\''):
-        from loguru import logger
-        logger.warning(
-            "text_utils.strip_reasoning_result original_len={} cleaned_len={} preview={}",
-            original_len, cleaned_len, text[:100] if text else "(empty)",
-        )
-        # 如果清理后为空或明显不完整，返回空让调用方使用降级回复
-        if cleaned_len < 20:
-            return ""
-
-    return text
+    return text.strip()
 
 
 # 裸 <tool_call>...</tool_call> XML 块（含 </think> 错配容错）
