@@ -776,6 +776,23 @@ class ModelRouter:
             # agnes 模型需要明确传递 enable_thinking 参数
             enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
             kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": enabled}}
+            # 双重保险：thinking disabled时，在messages中添加明确指令
+            if not enabled:
+                # 查找或创建系统消息位置
+                system_msg = {"role": "system", "content": "【重要】请直接回复用户，不要输出任何思考过程、推理分析或内心独白。不要使用<thinking>、<reasoning>等标签。"}
+                # 插入到最后一条系统消息之后（如果存在）
+                has_system = any(m.get("role") == "system" for m in messages)
+                if has_system:
+                    # 在最后一条系统消息后插入
+                    insert_idx = len(messages)
+                    for i in range(len(messages) - 1, -1, -1):
+                        if messages[i].get("role") == "system":
+                            insert_idx = i + 1
+                            break
+                    messages.insert(insert_idx, system_msg)
+                else:
+                    # 在开头插入
+                    messages.insert(0, system_msg)
         elif thinking_config:
             kwargs["extra_body"] = {"thinking": thinking_config}
         return kwargs
@@ -920,6 +937,23 @@ class ModelRouter:
             # agnes 模型需要明确传递 enable_thinking 参数
             enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
             kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": enabled}}
+            # 双重保险：thinking disabled时，在messages中添加明确指令
+            if not enabled:
+                # 查找或创建系统消息位置
+                system_msg = {"role": "system", "content": "【重要】请直接回复用户，不要输出任何思考过程、推理分析或内心独白。不要使用<thinking>、<reasoning>等标签。"}
+                # 插入到最后一条系统消息之后（如果存在）
+                has_system = any(m.get("role") == "system" for m in messages)
+                if has_system:
+                    # 在最后一条系统消息后插入
+                    insert_idx = len(messages)
+                    for i in range(len(messages) - 1, -1, -1):
+                        if messages[i].get("role") == "system":
+                            insert_idx = i + 1
+                            break
+                    messages.insert(insert_idx, system_msg)
+                else:
+                    # 在开头插入
+                    messages.insert(0, system_msg)
         elif thinking_config:
             kwargs["extra_body"] = {"thinking": thinking_config}
         return kwargs
