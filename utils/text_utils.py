@@ -292,6 +292,7 @@ _CHINESE_REASONING_PHRASES = [
     r"现在开始(?:回复|组织回复|返回|生成)",
     r"根据SOUL\.md",
     r"根据记忆碎片",
+    r"根据工具提供的\[相关记忆\]",
     r"我需要用.*?语气",
     r"我需要确保",
     r"我应该.*?(?:回应|回答|回复|告诉|给出)",
@@ -301,6 +302,10 @@ _CHINESE_REASONING_PHRASES = [
     r"现在时间是",
     r"让我(?:想想|回忆|思考)",
     r"我直接(?:回答|告诉)",
+    r"用户让我.*?(?:回忆|查询|检查)",
+    r"我可以看到",
+    r"查看.*?\.md.*?内容",
+    r"当前时间是",
 ]
 _CHINESE_REASONING_LINE_PATTERN = re.compile(
     r'^(?:' + '|'.join(_CHINESE_REASONING_PHRASES) + r')[^\n]*$',
@@ -326,13 +331,11 @@ _EXTERNAL_DATA_MARKERS = re.compile(
 def strip_reasoning(text: str) -> str:
     """剥离模型输出中的推理/思考内容。
 
-    只处理明确的标签格式，不猜测裸文本推理。
-    根因修复：thinking配置正确后，模型不应再输出推理。
-
     处理：
     1. <reasoning>...</reasoning> 等标签包裹的推理
     2. <instruction> 等指令层级标记泄露
     3. [外部数据] 等系统标记
+    4. 中文裸文本推理（模型将思维链当作正文输出）
     """
     if not text:
         return text
@@ -346,6 +349,17 @@ def strip_reasoning(text: str) -> str:
     text = _INSTRUCTION_OPEN_PATTERN.sub('', text)
     text = _INSTRUCTION_CLOSE_PATTERN.sub('', text)
     text = _EXTERNAL_DATA_MARKERS.sub('', text)
+
+    # 3. 中文裸文本推理（模型将思维链当作正文输出）
+    # 匹配以推理短语开头的行，逐行清理
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        # 如果行以推理短语开头，跳过
+        if _CHINESE_REASONING_LINE_PATTERN.match(line.strip()):
+            continue
+        cleaned_lines.append(line)
+    text = '\n'.join(cleaned_lines)
 
     # 清理多余空行
     text = re.sub(r'\n{3,}', '\n\n', text)
