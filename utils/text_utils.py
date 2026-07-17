@@ -281,7 +281,9 @@ _EXTENDED_REASONING_BLOCK = re.compile(
     r'(?:[A-Z][a-z]*(?:\s+[\w\u4e00-\u9fff]+)*[.?!]\s*){2,}'  # 2+ 英文句子
     r'(?:[^\n]*?(?:I\s+(?:need|must|should|have\s+to|can(?:not)?)\s+|'
     r"I['\u2019]ve\s+already|Looking\s+at|This\s+feels|The\s+request|"
-    r'my\s+boundary|be\s+honest|safe\s+for\s+me|as\s+a\s+character)[^\n]*)+',
+    r'my\s+boundary|be\s+honest|safe\s+for\s+me|as\s+a\s+character|'
+    r'Let\s+me|Wait|From\s+the|The\s+user\s+is|Even\s+if|'
+    r'I\s+should|I\s+need\s+to|Let\s+me\s+focus)[^\n]*)+',
     re.IGNORECASE,
 )
 # 中文内部独白/推理特征短语（模型将思维链当作正文输出）
@@ -346,6 +348,7 @@ def strip_reasoning(text: str) -> str:
     2. <instruction> 等指令层级标记泄露
     3. [外部数据] 等系统标记
     4. 中文裸文本推理（模型将思维链当作正文输出）
+    5. 英文推理段（连续英文推理过程）
     """
     if not text:
         return text
@@ -360,7 +363,11 @@ def strip_reasoning(text: str) -> str:
     text = _INSTRUCTION_CLOSE_PATTERN.sub('', text)
     text = _EXTERNAL_DATA_MARKERS.sub('', text)
 
-    # 3. 中文裸文本推理（模型将思维链当作正文输出）
+    # 3. 英文推理段（连续英文推理过程）
+    text = _AGNES_REASONING_BLOCK.sub('', text)
+    text = _EXTENDED_REASONING_BLOCK.sub('', text)
+
+    # 4. 中文裸文本推理（模型将思维链当作正文输出）
     # 匹配以推理短语开头的行，逐行清理
     lines = text.split('\n')
     cleaned_lines = []
