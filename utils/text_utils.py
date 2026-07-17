@@ -333,48 +333,68 @@ def strip_reasoning(text: str) -> str:
     """剥离模型输出中的推理/思考内容。
 
     处理以下情况：
-    1.  ....Predicate 等标签包裹的推理
-    2. 裸文本推理行（Need think about... / Let me recall... 等）
+    1. 标签包裹的推理
+    2. 裸文本推理行
     3. 连续多行英文推理块
-    4. Agnes 模型风格的推理标签（[emotion thinking]``）
-    5. 第三人称引用（They ask "..."）
-    6. Agnes 风格连续英文推理段
-    7. 中文内部独白/推理行
-    8. 指令层级标记泄露（<instruction>标签和[外部数据]标记）
+    4. 中文内部独白/推理行
+    5. 整段推理内容（如果整段都是推理，返回空字符串）
     """
     if not text:
         return text
     original_len = len(text)
+    
     # 1. 标签包裹的推理
     text = _REASONING_TAG_PATTERN.sub('', text)
     text = _REASONING_OPEN_PATTERN.sub('', text)
-    # 1b. 指令层级标记泄露（<instruction>标签和[外部数据]标记）
     text = _INSTRUCTION_BLOCK_PATTERN.sub('', text)
     text = _INSTRUCTION_OPEN_PATTERN.sub('', text)
     text = _INSTRUCTION_CLOSE_PATTERN.sub('', text)
     text = _EXTERNAL_DATA_MARKERS.sub('', text)
+    
     # 2. Agnes 模型推理标签
     text = _EMOTION_REASONING_PATTERN.sub('', text)
+    
     # 3. 第三人称引用
     text = _THIRD_PERSON_PATTERN.sub('', text)
+    
     # 4. 内部决策
     text = _INTERNAL_DECISION_PATTERN.sub('', text)
+    
     # 5. 裸文本推理行
     text = _REASONING_LINE_PATTERN.sub('', text)
-    # 6. 连续多行英文推理块（3行以上）
+    
+    # 6. 连续多行英文推理块
     text = _REASONING_BLOCK_PATTERN.sub('', text)
-    # 7. Agnes 风格连续英文推理段
     text = _AGNES_REASONING_BLOCK.sub('', text)
-    # 8. 扩展英文推理段（I need to be honest / Looking at / I've already 等模式）
     text = _EXTENDED_REASONING_BLOCK.sub('', text)
-    # 9. 中文内部独白/推理行
+    
+    # 7. 中文内部独白/推理行
     text = _CHINESE_REASONING_LINE_PATTERN.sub('', text)
+    
+    # 8. 整段推理检测：如果整段文本都是推理内容，返回空字符串
+    # 检测特征：以推理短语开头，且不包含正常回复内容
+    _FULL_REASONING_PATTERNS = [
+        r'^让我.*?(?:查一下|回忆|确认|核实|看看|想想).{0,50}$',
+        r'^我(?:先|需要先).{0,30}(?:查一下|看看|确认|核实).{0,50}$',
+        r'^我来.{0,30}(?:查查|核实|确认|检查一下|看看).{0,50}$',
+        r'^你先让我.{0,50}$',
+        r'^好的[，,].*?(?:让我|我来).{0,50}$',
+        r'^根据.*?(?:记忆|工具|提供的).{0,100}$',
+        r'^用户.{0,20}(?:让我|说|问).{0,100}$',
+        r'^我需要.{0,50}(?:语气|确保|确认).{0,50}$',
+    ]
+    
+    for pattern in _FULL_REASONING_PATTERNS:
+        if re.match(pattern, text.strip(), re.DOTALL):
+            from loguru import logger
+            logger.warning("text_utils.full_reasoning_detected pattern={} text={}", pattern[:30], text[:50])
+            return ""
+    
     # 清理多余空行
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = text.strip()
-    # 过度截断保护：如果清理后内容不到原始内容的 30%，说明可能误删了正常回复
-    # 此时记录警告，保留清理后内容（因为推理内容确实不该出现）
-    # 但额外记录日志便于诊断
+    
+    # 过度截断保护
     cleaned_len = len(text)
     if original_len > 100 and cleaned_len < original_len * 0.3:
         from loguru import logger
