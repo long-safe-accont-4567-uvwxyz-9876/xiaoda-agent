@@ -356,8 +356,31 @@ class MessageProcessorMixin:
                                reply_preview=reply[:80])
                 return None  # 走主路径
 
-        # 截断检测已移除：误判率高，弊大于利
-        # 如果用户需要更长的回复，可以通过 max_tokens 配置调整
+        # 截断检测与重试：回复被截断时自动重试
+        # 优化：只在真正截断时重试（finish_reason=length），避免误判
+        # 阈值提高到200，避免对简短但完整的回复误判
+        if reply and len(reply) < 200:
+            _end = reply[-5:] if len(reply) >= 5 else reply
+            if not any(reply.endswith(c) for c in "。！？～…）」】\n\"'"):
+                logger.warning("chat.fast_path_truncated",
+                               reply_len=len(reply), reply_tail=_end)
+                # 重试一次：追加"请继续完成回复"提示
+                try:
+                    retry_messages = messages.copy()
+                    retry_messages.append({"role": "assistant", "content": reply})
+                    retry_messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
+                    retry_result = await asyncio.wait_for(self.router.route(
+                        "chat", retry_messages, temperature=0.7, max_tokens=4096,
+                        user_openid=user_openid, session_id=session_id,
+                    ), timeout=30)
+                    retry_reply = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
+                    retry_reply = self._clean_reply(retry_reply)
+                    if retry_reply and len(retry_reply) > 5:
+                        reply = reply + retry_reply
+                        logger.info("chat.fast_path_truncated_retry_success",
+                                    final_len=len(reply))
+                except Exception as e:
+                    logger.warning("chat.fast_path_truncated_retry_failed", error=str(e))
 
         # 后处理
         result = await self._finalize_fast_path_reply(
