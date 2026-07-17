@@ -448,7 +448,6 @@ class AgentCoreBootstrapper:
     # ── 子代理注册 ────────────────────────────────────────
 
     async def _register_sub_agents(self) -> None:
-        import json
         from agent_dispatcher import SubAgentConfig
         from config import XIAOLI_STICKER_DIR
         # frozen 模式下使用用户目录中的 agents 配置（_init_user_resources 已复制模板）
@@ -461,94 +460,60 @@ class AgentCoreBootstrapper:
         _prov_cfg = _get_provider_config(_DEFAULT_PROVIDER)
         _agent_model = _PRO_MODEL or _MODEL_NAME
 
-        # 辅助函数：优先从配置文件读取 agent 配置，不存在则使用默认值
-        def _load_agent_json(name: str) -> dict:
-            """从配置文件读取 agent 配置，返回 provider/model/base_url/api_key_env"""
-            json_path = _agents_dir / f"{name}.json"
-            if json_path.exists():
-                try:
-                    data = json.loads(json_path.read_text(encoding="utf-8"))
-                    return {
-                        "provider": data.get("provider", _DEFAULT_PROVIDER),
-                        "model": data.get("model", _agent_model),
-                        "base_url": data.get("base_url", _prov_cfg["base_url"]),
-                        "api_key_env": data.get("api_key_env", _prov_cfg["api_key_env"]),
-                    }
-                except (json.JSONDecodeError, KeyError):
-                    pass
-            # 配置文件不存在或读取失败，使用默认值
-            return {
-                "provider": _DEFAULT_PROVIDER,
-                "model": _agent_model,
-                "base_url": _prov_cfg["base_url"],
-                "api_key_env": _prov_cfg["api_key_env"],
-            }
-
-        # 小莉：优先读取 xiaoli.json
-        xiaoli_cfg = _load_agent_json("xiaoli")
         xiaoli_config = SubAgentConfig(
             name="xiaoli",
             display_name=get_agent_display_name("xiaoli"),
-            provider=xiaoli_cfg["provider"],
-            model=xiaoli_cfg["model"],
+            provider=_DEFAULT_PROVIDER,
+            model=_agent_model,
             personality_file=str(_agents_dir / "xiaoli_personality.md"),
             voice_ref="xiaoli",
             excluded_tools={"call_xiaoli", "shell_command", "python_executor", "write_file", "search_files", "read_file", "list_files", "web_browse", "document_reader", "multi_search", "wolfram_query"},
-            base_url=xiaoli_cfg["base_url"],
-            api_key_env=xiaoli_cfg["api_key_env"],
+            base_url=_prov_cfg["base_url"],
+            api_key_env=_prov_cfg["api_key_env"],
             capabilities=["chat", "play", "fun"],
             route_description="日常聊天、玩耍、轻松有趣的对话",
             sticker_dir=str(XIAOLI_STICKER_DIR),
         )
         await core.dispatcher.register(xiaoli_config)
-
-        # 小朗：优先读取 xiaolang.json
-        xiaolang_cfg = _load_agent_json("xiaolang")
         xiaolang_config = SubAgentConfig(
             name="xiaolang",
             display_name=get_agent_display_name("xiaolang"),
-            provider=xiaolang_cfg["provider"],
-            model=xiaolang_cfg["model"],
+            provider=_DEFAULT_PROVIDER,
+            model=_agent_model,
             personality_file=str(_agents_dir / "xiaolang_personality.md"),
             voice_ref=None,
             excluded_tools={"call_xiaoli", "call_xiaoda"},
-            base_url=xiaolang_cfg["base_url"],
-            api_key_env=xiaolang_cfg["api_key_env"],
+            base_url=_prov_cfg["base_url"],
+            api_key_env=_prov_cfg["api_key_env"],
             capabilities=["coding", "debug", "script", "programming", "hardware", "system", "devops"],
             route_description="编程、代码编写、调试、技术问题、硬件控制、系统运维、开发辅助",
             mcp_servers=["git", "github"],
         )
         await core.dispatcher.register(xiaolang_config)
-
-        # 小莲：优先读取 xiaolian.json
-        xiaolian_cfg = _load_agent_json("xiaolian")
         xiaolian_config = SubAgentConfig(
             name="xiaolian",
             display_name=get_agent_display_name("xiaolian"),
-            provider=xiaolian_cfg["provider"],
-            model=xiaolian_cfg["model"],
+            provider=_DEFAULT_PROVIDER,
+            model=_agent_model,
             personality_file=str(_agents_dir / "xiaolian_personality.md"),
             voice_ref=None,
             excluded_tools={"call_xiaoli", "call_xiaoda", "shell_command", "python_executor", "write_file"},
-            base_url=xiaolian_cfg["base_url"],
-            api_key_env=xiaolian_cfg["api_key_env"],
+            base_url=_prov_cfg["base_url"],
+            api_key_env=_prov_cfg["api_key_env"],
             capabilities=["search", "lookup", "query", "explore", "discover"],
             route_description="搜索信息、查询资料、探索发现",
         )
         await core.dispatcher.register(xiaolian_config)
-
-        # 小可：优先读取 xiaoke.json
-        xiaoke_cfg = _load_agent_json("xiaoke")
         xiaoke_config = SubAgentConfig(
             name="xiaoke",
             display_name=get_agent_display_name("xiaoke"),
-            provider=xiaoke_cfg["provider"],
-            model=xiaoke_cfg["model"],
+            provider=_DEFAULT_PROVIDER,
+            model=_agent_model,
             personality_file=str(_agents_dir / "xiaoke_personality.md"),
             voice_ref=None,
             excluded_tools={"call_xiaoli", "call_xiaoda", "shell_command", "write_file"},
-            base_url=xiaoke_cfg["base_url"],
-            api_key_env=xiaoke_cfg["api_key_env"],
+            base_url=_prov_cfg["base_url"],
+            api_key_env=_prov_cfg["api_key_env"],
             capabilities=["research", "analysis", "study", "academic"],
             route_description="研究分析、学术思考、深度解读",
         )

@@ -248,18 +248,7 @@ class ToolCallHandler:
         tool_results = []
         tool_messages = []
         assistant_msg = {"role": "assistant", "content": assistant_content, "tool_calls": tool_calls}
-
-        # 关键修复：检查thinking配置，如果被禁用则不保存reasoning_content到历史
-        should_save_reasoning = True
-        if reasoning_content and self._router:
-            from model_router import ROUTE_TABLE
-            # 检查chat路由的thinking配置（工具调用后的summarize使用chat路由）
-            chat_config = ROUTE_TABLE.get("chat", {})
-            thinking_config = chat_config.get("thinking", {})
-            if thinking_config.get("type") == "disabled":
-                should_save_reasoning = False
-
-        if reasoning_content and should_save_reasoning:
+        if reasoning_content:
             assistant_msg["reasoning_content"] = reasoning_content
 
         messages.append(assistant_msg)
@@ -314,17 +303,8 @@ class ToolCallHandler:
         if is_degraded_reply(final_reply):
             logger.info("tool_handler.skip_memory_degraded_reply", reply_preview=final_reply[:60])
         else:
-            # 关键修复：检查thinking配置，如果被禁用则不保存reasoning_content到记忆
-            should_save_rc = bool(rc)
-            if should_save_rc and self._router:
-                from model_router import ROUTE_TABLE
-                chat_config = ROUTE_TABLE.get("chat", {})
-                thinking_config = chat_config.get("thinking", {})
-                if thinking_config.get("type") == "disabled":
-                    should_save_rc = False
-
             await self._context.add_message("assistant", final_reply,
-                                     reasoning_content=rc if should_save_rc else None)
+                                     reasoning_content=rc if rc else None)
         return final_reply, tool_results
 
     async def _execute_single_tool(self, tc: Any, trace: Any, *, user_id: str = "",

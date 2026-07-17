@@ -210,9 +210,6 @@ class RouterNode:
     """路由节点，按规则或模型将用户输入路由到目标 Agent。"""
     _route_cache = RouteCache()  # class-level shared cache
 
-    def __init__(self) -> None:
-        self._router_engine: Any | None = None
-
     @staticmethod
     def _rule_route(user_input: str) -> list[str]:
         q = user_input.lower()
@@ -344,45 +341,103 @@ class RouterNode:
 请只返回Agent名称（多个用逗号分隔）:"""
 
     async def route(self, state: TaskState) -> dict:
-        """路由入口：只处理明确的信号，其他都默认路由到 xiaoda。
-
-        路由策略：
-        1. @mention → 直接路由（最高优先级，用户明确指定）
-        2. 其他 → 都路由到 xiaoda（主 agent），由主 agent 决定是否需要子代理
-        """
+        """路由入口：缓存 → 规则 → 信念/LLM 路由，返回路由结果 dict。"""
         user_input = state.user_input
         agent_configs = state._agent_configs
 
         if not agent_configs:
             return {"route_targets": ["xiaoda"], "route_target": "xiaoda", "route_plan": ["xiaoda"]}
 
-        # 1. 检测无依赖多子代理任务（如"分别问小莉和小狼..."）→ 直达并行路径
+        # SOLO 模式：任务→代理 1:1 绑定（参考 Trae SOLO 模式）
+        # 在并行检测之前计算建议目标；仅在用户未明确指定子代理时使用
+        suggested_target = None
+        dispatcher = getattr(state, "_dispatcher", None)
+
+        # 记忆检索意图检测：时间查询 → xiaoda（主Agent有完整工具集）
+        import re
+        memory_patterns = [
+            r'\d{1,2}\s*[月\.]\s*\d{1,2}\s*[号日]',  # "7月16日" "7.16日"
+            r'(?:昨天|前天|上周|上周[一二三四五六七]|前几天)',
+            r'(?:回忆|记得|记忆|recall|remember)',
+            r'\d{1,2}\s*[点时]\s*(?:到|~|-|—)?\s*\d{1,2}\s*[点时]?',  # "7点到8点"
+        ]
+        for pattern in memory_patterns:
+            if re.search(pattern, user_input):
+                suggested_target = "xiaoda"
+                logger.info("route.memory_recall_detected", pattern=pattern)
+                break
+
+        if not suggested_target and dispatcher is not None:
+            try:
+                task_type = dispatcher.classify_task(user_input)
+                suggested_target = dispatcher.route_task(task_type, user_input)
+            except Exception as e:
+                logger.warning("route.solo_routing_failed", error=str(e)[:200])
+
+        # 0. 检测无依赖多子代理任务（如"分别问小莉和小狼..."）→ 直达并行路径
         parallel_targets = self._detect_parallel_targets(user_input)
         if parallel_targets and len(parallel_targets) >= 2:
             valid_targets = self._normalize_parallel_targets(parallel_targets, agent_configs)
             if len(valid_targets) >= 2:
-                logger.info("route.parallel_detected", targets=valid_targets)
                 await self._route_cache.put(user_input, valid_targets)
-                await self._notify_route_progress(state, valid_targets, agent_configs, "并行路由（显式提及多个Agent）")
+                await self._notify_route_progress(state, valid_targets, agent_configs, "并行路由")
                 return self._build_route_dict(valid_targets)
 
-        # 2. @mention 检测（最高优先级，用户明确指定）
-        if self._has_mention(user_input):
-            # 使用缓存的 RouterEngine 实例
-            if self._router_engine is None:
-                from core.router_engine import RouterEngine
-                self._router_engine = RouterEngine()
-            decision = self._router_engine.decide(user_input, state.user_id)
-            targets = [t for t in decision.agent_names if t in agent_configs or t == "xiaoda"]
-            if targets:
-                logger.info("route.mention_detected", targets=targets, reasoning=decision.reasoning)
-                await self._route_cache.put(user_input, targets)
-                await self._notify_route_progress(state, targets, agent_configs, f"@mention路由: {decision.reasoning}")
-                return self._build_route_dict(targets)
+        # 若用户未明确指定子代理，使用 SOLO 建议的目标（仅当建议为具体子代理时）
+        if (suggested_target
+                and suggested_target != "xiaoli"
+                and suggested_target in agent_configs):
+            targets = [suggested_target]
+            await self._route_cache.put(user_input, targets)
+            await self._notify_route_progress(state, targets, agent_configs, "SOLO路由")
+            return self._build_route_dict(targets)
 
-        # 3. 默认 → xiaoda（主 agent）
-        # 不做关键词匹配，让主 agent 自己决定是否需要子代理
-        return {"route_targets": ["xiaoda"], "route_target": "xiaoda", "route_plan": ["xiaoda"]}
+        # 1. 缓存命中
+        cached = await self._route_cache.get(user_input)
+        if cached is not None:
+            logger.debug("route.cache_hit", input=user_input[:50], targets=cached)
+            return self._build_route_dict(cached)
+
+        # 2. 规则路由
+        rule_result = self._rule_route(user_input)
+        if rule_result:
+            targets = [t for t in rule_result if t in agent_configs or t == "xiaoda"]
+            if not targets:
+                targets = ["xiaoda"]
+
+            # 置信度评估：@mention 匹配高置信度（0.9），关键词正则匹配低置信度（0.5）
+            _rule_confidence = 0.9 if self._has_mention(user_input) else 0.5
+
+            # 低置信度触发 LLM 路由升级（LLM 准确率更高，优先于低置信度规则结果）
+            if _rule_confidence < 0.6:
+                try:
+                    llm_targets = await self._llm_route_targets(user_input, agent_configs)
+                    if llm_targets:
+                        llm_valid = [t for t in llm_targets if t in agent_configs or t == "xiaoda"]
+                        if llm_valid:
+                            await self._route_cache.put(user_input, llm_valid)
+                            await self._notify_route_progress(state, llm_valid, agent_configs, "LLM路由升级")
+                            return self._build_route_dict(llm_valid)
+                except Exception as e:
+                    logger.warning("route.llm_upgrade_failed", error=str(e)[:200])
+
+            await self._route_cache.put(user_input, targets)
+            await self._notify_route_progress(state, targets, agent_configs, "路由分析")
+            return self._build_route_dict(targets)
+
+        # 3. 信念路由（Thompson Sampling，主 fallback）/ LLM 路由
+        if self._belief_router:
+            targets = [self._belief_router.select_agent(exclude={"xiaoda"})]
+        else:
+            targets = await self._llm_route_targets(user_input, agent_configs)
+
+        # 4. 校验 + 返回
+        valid_targets = [t for t in targets if t in agent_configs or t == "xiaoda"]
+        if not valid_targets:
+            valid_targets = ["xiaoda"]
+        route_method = "信念路由" if self._belief_router else "LLM路由"
+        await self._notify_route_progress(state, valid_targets, agent_configs, route_method)
+        return self._build_route_dict(valid_targets)
 
     @staticmethod
     def _build_route_dict(targets: list[str]) -> dict:

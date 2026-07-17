@@ -10,8 +10,16 @@ import re
 from loguru import logger
 
 
-# 推理模型（DeepSeek-R1/MiMo Pro 等）会输出 <think>...</think> 思维链
-_THINK_TAG_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
+# 推理模型（DeepSeek-R1/MiMo Pro 等）会输出各种思维链标签
+# 扩展匹配：<think>/reasoning/analysis/reflection/thought 和 [think/thinking/reasoning/analysis]
+_THINK_TAG_RE = re.compile(
+    r"<(?:think|reasoning|analysis|reflection|thought)\b[^>]*>.*?</(?:think|reasoning|analysis|reflection|thought)>",
+    re.DOTALL | re.IGNORECASE
+)
+_THINK_TAG_RE_BRACKET = re.compile(
+    r"\[(?:think|thinking|reasoning|analysis)\b[^\]]*\].*?\[(?:/think|/thinking|/reasoning|/analysis)\]",
+    re.DOTALL | re.IGNORECASE
+)
 
 # 未闭合的 <think> 或 CoT 前缀段落 —— 遇到则跳过该段
 _THINK_PREFIX_PATTERNS = [
@@ -84,8 +92,9 @@ def strip_thinking(text: str, *, context: str = "") -> str:
     # 注意：用 [a-zA-Z]+ 而非 \w+，因为 Python3 的 \w 匹配中文，会误吞正文
     text = re.sub(r'^executable-memo:\s*[a-zA-Z]+\s*', '', text).strip()
 
-    # 1. 完整 <think>...</think> 标签
+    # 1. 完整 <think>...</think> 等标签（尖括号和方括号格式）
     text = _THINK_TAG_RE.sub("", text)
+    text = _THINK_TAG_RE_BRACKET.sub("", text)
     # 2. 未闭合的 <think> 或 CoT 前缀段落
     for pat in _THINK_PREFIX_PATTERNS:
         m = pat.match(text)

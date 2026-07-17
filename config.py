@@ -775,9 +775,8 @@ RERANKER_OVERSAMPLE_RATIO = _safe_int(os.getenv("RERANKER_OVERSAMPLE_RATIO"), 3)
 # Query Transform
 QUERY_TRANSFORM_ENABLED = os.getenv("QUERY_TRANSFORM_ENABLED", "true").lower() in ("1", "true", "yes")
 QUERY_EXPAND_COUNT = _safe_int(os.getenv("QUERY_EXPAND_COUNT"), 2)
-# 意图分类 LLM 调用：默认关闭（避免路由阶段调用外部 API 导致超时）
-# 设置 INTENT_LLM_CLASSIFY=true 可开启 LLM 分类（更智能但更慢）
-# 路由策略：@mention（最高优先级）→ 关键词匹配 → 默认 xiaoda
+# 意图分类 LLM 调用：默认开启（GLM-Z1-9B-0414 推理质量高，速度可接受）
+# 设置 INTENT_LLM_CLASSIFY=false 可关闭 LLM 分类，仅用规则匹配（更快）
 INTENT_LLM_CLASSIFY = os.getenv("INTENT_LLM_CLASSIFY", "false").lower() in ("1", "true", "yes")
 # 意图分类 LLM 调用超时（秒），默认 5.0s（从 2.0s 提升，避免误超时）
 INTENT_CLASSIFY_TIMEOUT = _safe_float(os.getenv("INTENT_CLASSIFY_TIMEOUT"), 15.0)

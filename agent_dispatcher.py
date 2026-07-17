@@ -9,7 +9,8 @@ from loguru import logger
 from tool_engine.tool_registry import to_openai_tools
 from tool_engine.tool_executor import ToolExecutor, ToolResult
 from tool_engine.tool_repair import ToolCallRepair
-from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_dsml, strip_reasoning
+from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_dsml, strip_reasoning, humanize
+from utils.llm_cleanup import deduplicate_multi_reply
 from emotion.tts_engine import TTSEngine
 from emotion.emoji_config import get_status_msg
 from tool_engine.tool_guardrails import get_tool_guardrails
@@ -558,6 +559,8 @@ class SubAgent:
                         content = rc
                 content = strip_dsml(content)
                 content = strip_reasoning(content)
+                content = deduplicate_multi_reply(content)
+                content = humanize(content, style="xiaoda")
                 logger.info("sub_agent.chat.ok", name=self.config.name, model=self.config.model, rounds=round_idx)
                 result = content.strip()
                 # 兜底：如果过滤后为空（如模型只输出推理泄露），返回提示
@@ -618,9 +621,7 @@ class SubAgent:
                     # 读取 ROUTE_TABLE 中 chat 任务的 thinking 配置（全局开关）
                     from model_router import ROUTE_TABLE
                     chat_config = ROUTE_TABLE.get("chat", {})
-                    thinking_config = chat_config.get("thinking")
-                    # 关键修复：thinking.type 必须是 "enabled" 才启用，默认禁用
-                    thinking_enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
+                    thinking_enabled = chat_config.get("thinking") is not None
                     extra_body = {"chat_template_kwargs": {"enable_thinking": thinking_enabled}}
                 from config import get_temperature
                 response = await asyncio.wait_for(
@@ -782,9 +783,7 @@ class SubAgent:
             if self.config.provider == "agnes":
                 from model_router import ROUTE_TABLE
                 chat_config = ROUTE_TABLE.get("chat", {})
-                thinking_config = chat_config.get("thinking")
-                # 关键修复：thinking.type 必须是 "enabled" 才启用，默认禁用
-                thinking_enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
+                thinking_enabled = chat_config.get("thinking") is not None
                 extra_body = {"chat_template_kwargs": {"enable_thinking": thinking_enabled}}
             from config import get_temperature
             response = await asyncio.wait_for(

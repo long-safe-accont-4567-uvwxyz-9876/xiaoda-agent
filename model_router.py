@@ -772,32 +772,12 @@ class ModelRouter:
         # 关键修复：thinking 关闭时也要传递 enable_thinking: false，否则 agnes 模型使用默认行为
         thinking_config = config.get("thinking")
         logger.info("router.thinking_debug provider={} thinking={}", provider, thinking_config)
-
-        # 判断thinking是否启用
-        enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
-
         if provider == "agnes":
             # agnes 模型需要明确传递 enable_thinking 参数
+            enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
             kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": enabled}}
         elif thinking_config:
             kwargs["extra_body"] = {"thinking": thinking_config}
-
-        # 双重保险：所有provider在thinking disabled时，都添加明确指令
-        if not enabled:
-            system_msg = {"role": "system", "content": "【重要】请直接回复用户，不要输出任何思考过程、推理分析或内心独白。不要使用<thinking>、<reasoning>等标签。"}
-            # 插入到最后一条系统消息之后（如果存在）
-            has_system = any(m.get("role") == "system" for m in messages)
-            if has_system:
-                # 在最后一条系统消息后插入
-                insert_idx = len(messages)
-                for i in range(len(messages) - 1, -1, -1):
-                    if messages[i].get("role") == "system":
-                        insert_idx = i + 1
-                        break
-                messages.insert(insert_idx, system_msg)
-            else:
-                # 在开头插入
-                messages.insert(0, system_msg)
         return kwargs
 
     async def chat_stream(self, messages: list, task_type: str = "chat",
@@ -825,10 +805,6 @@ class ModelRouter:
         stream = None
         last_error = None
 
-        # 关键修复：流式响应中也要检查thinking配置并清理reasoning
-        thinking_config = config.get("thinking", {})
-        thinking_disabled = thinking_config.get("type") == "disabled"
-
         for attempt in range(MAX_RETRIES + 1):
             try:
                 client = await self._select_client_for_provider(provider)
@@ -846,14 +822,7 @@ class ModelRouter:
                     except (AttributeError, IndexError):
                         delta = None
                     if delta:
-                        # 关键：如果thinking被禁用，清理每个delta中的reasoning标记
-                        if thinking_disabled:
-                            from utils.text_utils import strip_reasoning
-                            delta = strip_reasoning(delta)
-                        if delta:  # 清理后可能为空
-                            yield delta
-                # 流式响应结束后，清空reasoning_content_var防止泄露
-                _reasoning_content_var.set("")
+                        yield delta
                 metrics.inc(f"model_route.{task_type}.success")
                 metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
                 metrics.maybe_report()
@@ -936,32 +905,12 @@ class ModelRouter:
         # 关键修复：thinking 关闭时也要传递 enable_thinking: false，否则 agnes 模型使用默认行为
         thinking_config = config.get("thinking")
         logger.info("router.thinking_debug provider={} thinking={}", provider, thinking_config)
-
-        # 判断thinking是否启用
-        enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
-
         if provider == "agnes":
             # agnes 模型需要明确传递 enable_thinking 参数
+            enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
             kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": enabled}}
         elif thinking_config:
             kwargs["extra_body"] = {"thinking": thinking_config}
-
-        # 双重保险：所有provider在thinking disabled时，都添加明确指令
-        if not enabled:
-            system_msg = {"role": "system", "content": "【重要】请直接回复用户，不要输出任何思考过程、推理分析或内心独白。不要使用<thinking>、<reasoning>等标签。"}
-            # 插入到最后一条系统消息之后（如果存在）
-            has_system = any(m.get("role") == "system" for m in messages)
-            if has_system:
-                # 在最后一条系统消息后插入
-                insert_idx = len(messages)
-                for i in range(len(messages) - 1, -1, -1):
-                    if messages[i].get("role") == "system":
-                        insert_idx = i + 1
-                        break
-                messages.insert(insert_idx, system_msg)
-            else:
-                # 在开头插入
-                messages.insert(0, system_msg)
         return kwargs
 
     async def _handle_route_response(self, response: Any, task_type: str, model: str,
@@ -1282,16 +1231,12 @@ class ModelRouter:
         if not tools:
             return tools
 
-        # agnes 系列模型可能不支持工具调用，仅首次记录警告（避免每次调用都告警刷屏）
+        # agnes 系列模型可能不支持工具调用，记录警告
         agnes_models = {AGENT_CONFIG.get("model") for AGENT_CONFIG in [ROUTE_TABLE.get("chat_agnes")] if AGENT_CONFIG}
         if model in agnes_models:
-            if not getattr(self, "_agnes_tools_warned", False):
-                self._agnes_tools_warned = True
-                tool_names = [t.get("function", {}).get("name", "?") for t in tools]
-                logger.warning("router.tools_may_not_be_supported",
-                               model=model, tool_count=len(tools), tools=tool_names)
-            else:
-                logger.debug("router.tools_may_not_be_supported model={} tool_count={}", model, len(tools))
+            tool_names = [t.get("function", {}).get("name", "?") for t in tools]
+            logger.warning("router.tools_may_not_be_supported",
+                           model=model, tool_count=len(tools), tools=tool_names)
 
         # 小模型不发送工具定义，防止输出退化
         if self._is_small_model(model):

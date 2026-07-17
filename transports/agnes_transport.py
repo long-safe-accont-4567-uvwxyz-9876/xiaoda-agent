@@ -47,12 +47,11 @@ class AgnesTransport(ProviderTransport):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        # 关键修复：必须明确传递 enable_thinking 参数，否则 agnes 使用默认行为（可能启用推理）
-        # thinking.type 必须是 "enabled" 才启用，默认禁用
-        thinking_enabled = bool(thinking and thinking.get("type") == "enabled")
-        kwargs["extra_body"] = {
-            "chat_template_kwargs": {"enable_thinking": thinking_enabled}
-        }
+        # 支持 thinking 参数（Agnes Thinking 模式）
+        if thinking:
+            kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": True}
+            }
 
         response = await asyncio.wait_for(
             self._client.chat.completions.create(**kwargs),

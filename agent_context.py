@@ -508,14 +508,14 @@ class AgentContext:
                 if kg_ctx:
                     mem_texts.append(kg_ctx[:200])
             if mem_texts:
-                parts.append("[我记得这些事]\n" + "\n".join(mem_texts))
+                parts.append("[相关记忆]\n" + "\n".join(mem_texts))
 
         if parts:
             return "\n\n".join(parts) + (
                 "\n\n规则：基于以上记忆和对话记录回答。"
                 "如果以上内容与用户问题无关或不够详细，如实说「我只记得这些」，"
                 "绝对不要补充记忆中没有的内容。")
-        return '我没想起来什么特别的事。不要编造任何过去的事。'
+        return '[记忆检索] 记忆内容为空。不要编造任何过去的事。'
 
     def _build_volatile_content(self, source: str, exclude_memory: bool = False) -> str:
         """构建 Volatile 层：时间/情绪/记忆/关注点/待办/小莉/场景约束/失败提醒。"""

@@ -1326,7 +1326,7 @@ class MemoryManager:
                         if retry_results:
                             retry_results = await self._apply_fsrs_scoring(retry_results)
                             await self._compute_final_scores(query, retry_results, config, query_entities)
-                            retry_results.sort(key=lambda x: (x.get("is_permanent", 0), x.get("final_score", 0)), reverse=True)
+                            retry_results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
                             results = retry_results[:k]
                             # 重新评估
                             reassessment = self._assessor.assess(query, results)
@@ -1334,7 +1334,7 @@ class MemoryManager:
                                         confidence=reassessment["confidence"],
                                         level=reassessment["level"])
 
-                results.sort(key=lambda x: (x.get("is_permanent", 0), x.get("final_score", 0)), reverse=True)
+                results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
                 results = results[:k]
 
             # CRAG 兜底：空结果走 importance fallback（闲聊型跳过）
@@ -1411,7 +1411,7 @@ class MemoryManager:
                 logger.info("memory.crag_fallback", query=query[:100])
                 results = await self._importance_fallback_search(k, scope=scope)
 
-        results.sort(key=lambda x: (x.get("is_permanent", 0), x.get("final_score", 0)), reverse=True)
+        results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
         results = results[:k]
 
         # 主动检索 A：话题触发器

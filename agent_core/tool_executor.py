@@ -249,6 +249,9 @@ class ToolExecutorMixin:
         # 清除模型生成退化泄露的工具定义 JSON（根因：模型训练数据中包含
         # Claude/其他 AI 的工具定义，生成时发生 repetition degeneration 泄露）
         text = self._strip_injected_tool_defs(text)
+        # 去重：与 _finalize_reply 保持一致的清洗流水线
+        from utils.llm_cleanup import deduplicate_multi_reply
+        text = deduplicate_multi_reply(text)
         # S6: Canary Token 泄露检测 —— 在输出返回给用户之前扫描
         # 检测到泄露时立即阻断, 替换为安全消息
         try:

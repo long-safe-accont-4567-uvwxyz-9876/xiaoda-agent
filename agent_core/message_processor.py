@@ -621,11 +621,6 @@ class MessageProcessorMixin:
         # 清理模型输出的推理/思考内容（Agnes 等模型会输出 [emotion thinking] 等标签）
         clean_reply = strip_dsml(clean_reply)
         clean_reply = strip_reasoning(clean_reply)
-        # 推理泄露保护：如果整个回复被strip_reasoning清空，说明是全英文推理泄露
-        # 此时返回空会让用户收到空白消息，需要用降级回复替代
-        if not clean_reply or not clean_reply.strip():
-            logger.warning("agent.reasoning_leak_full_reply_blocked", reply_preview=reply[:100])
-            clean_reply = "……嗯，人家刚才在认真想你说的话呢，但是想太多了一下子不知道怎么回答了～你能再说一遍吗？🥺"
         clean_reply = humanize(clean_reply, style="xiaoda")
         clean_reply = deduplicate_multi_reply(clean_reply, context="fast_path")
         # 名称替换：确保 LLM 输出中的旧名被替换为显示名
@@ -938,10 +933,6 @@ class MessageProcessorMixin:
             clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
             clean_reply = strip_dsml(clean_reply)
             clean_reply = strip_reasoning(clean_reply)
-            # 推理泄露保护：如果整个回复被strip_reasoning清空，用降级回复替代
-            if not clean_reply or not clean_reply.strip():
-                logger.warning("agent.reasoning_leak_full_reply_blocked", reply_preview=reply[:100])
-                clean_reply = "……嗯，人家刚才在认真想你说的话呢，但是想太多了一下子不知道怎么回答了～你能再说一遍吗？🥺"
             clean_reply = humanize(clean_reply, style="xiaoda")
             clean_reply = deduplicate_multi_reply(clean_reply, context="main_path")
             # 名称替换：确保 LLM 输出中的旧名被替换为显示名

@@ -977,15 +977,6 @@ class DatabaseManager:
         )
         logger.info("database.migration_v18_distill_status_done")
 
-    async def _migrate_v19(self) -> None:
-        """v19: 添加 is_permanent 列，用于标记永久牢记的记忆。"""
-        cols = {r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")}
-        if "is_permanent" not in cols:
-            await self._conn.execute(
-                "ALTER TABLE episodic_memories ADD COLUMN is_permanent INTEGER DEFAULT 0"
-            )
-        logger.info("database.migration_v19_permanent_memory_done")
-
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")
 

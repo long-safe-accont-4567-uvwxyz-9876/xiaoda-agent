@@ -281,9 +281,7 @@ _EXTENDED_REASONING_BLOCK = re.compile(
     r'(?:[A-Z][a-z]*(?:\s+[\w\u4e00-\u9fff]+)*[.?!]\s*){2,}'  # 2+ 英文句子
     r'(?:[^\n]*?(?:I\s+(?:need|must|should|have\s+to|can(?:not)?)\s+|'
     r"I['\u2019]ve\s+already|Looking\s+at|This\s+feels|The\s+request|"
-    r'my\s+boundary|be\s+honest|safe\s+for\s+me|as\s+a\s+character|'
-    r'Let\s+me|Wait|From\s+the|The\s+user\s+is|Even\s+if|'
-    r'I\s+should|I\s+need\s+to|Let\s+me\s+focus)[^\n]*)+',
+    r'my\s+boundary|be\s+honest|safe\s+for\s+me|as\s+a\s+character)[^\n]*)+',
     re.IGNORECASE,
 )
 # 中文内部独白/推理特征短语（模型将思维链当作正文输出）
@@ -294,8 +292,6 @@ _CHINESE_REASONING_PHRASES = [
     r"现在开始(?:回复|组织回复|返回|生成)",
     r"根据SOUL\.md",
     r"根据记忆碎片",
-    r"根据工具提供的\[相关记忆\]",
-    r"根据.*?提供的\[相关记忆\]",
     r"我需要用.*?语气",
     r"我需要确保",
     r"我应该.*?(?:回应|回答|回复|告诉|给出)",
@@ -305,19 +301,11 @@ _CHINESE_REASONING_PHRASES = [
     r"现在时间是",
     r"让我(?:想想|回忆|思考)",
     r"我直接(?:回答|告诉)",
-    r"用户让我.*?(?:回忆|查询|检查)",
-    r"我可以看到",
-    r"查看.*?\.md.*?内容",
-    r"当前时间是",
-    r"根据.*?上下文",
-    r"根据.*?记录",
-    r"从.*?中可以看到",
-    r"检查.*?内容",
-    r"分析.*?信息",
-    r"检索到.*?记忆",
-    r"找到.*?相关.*?记忆",
-    r"根据记忆.*?显示",
-    r"记忆.*?提到",
+    r"让我.*?(?:确认一下|核实一下|检查一下|梳理一下)",
+    r"我(?:先|需要先)(?:查一下|看看|确认|核实)",
+    r"我来(?:查查|核实|确认|检查一下|看看)",
+    r"你先让我|等一下.*?让我",
+    r"好的[，,].*?(?:让我|我来)",
 ]
 _CHINESE_REASONING_LINE_PATTERN = re.compile(
     r'^(?:' + '|'.join(_CHINESE_REASONING_PHRASES) + r')[^\n]*$',
@@ -343,44 +331,57 @@ _EXTERNAL_DATA_MARKERS = re.compile(
 def strip_reasoning(text: str) -> str:
     """剥离模型输出中的推理/思考内容。
 
-    处理：
-    1. <reasoning>...</reasoning> 等标签包裹的推理
-    2. <instruction> 等指令层级标记泄露
-    3. [外部数据] 等系统标记
-    4. 中文裸文本推理（模型将思维链当作正文输出）
-    5. 英文推理段（连续英文推理过程）
+    处理以下情况：
+    1.  ....Predicate 等标签包裹的推理
+    2. 裸文本推理行（Need think about... / Let me recall... 等）
+    3. 连续多行英文推理块
+    4. Agnes 模型风格的推理标签（[emotion thinking]``）
+    5. 第三人称引用（They ask "..."）
+    6. Agnes 风格连续英文推理段
+    7. 中文内部独白/推理行
+    8. 指令层级标记泄露（<instruction>标签和[外部数据]标记）
     """
     if not text:
         return text
-
-    # 1. 标签包裹的推理（明确格式）
+    original_len = len(text)
+    # 1. 标签包裹的推理
     text = _REASONING_TAG_PATTERN.sub('', text)
     text = _REASONING_OPEN_PATTERN.sub('', text)
-
-    # 2. 指令层级标记泄露
+    # 1b. 指令层级标记泄露（<instruction>标签和[外部数据]标记）
     text = _INSTRUCTION_BLOCK_PATTERN.sub('', text)
     text = _INSTRUCTION_OPEN_PATTERN.sub('', text)
     text = _INSTRUCTION_CLOSE_PATTERN.sub('', text)
     text = _EXTERNAL_DATA_MARKERS.sub('', text)
-
-    # 3. 英文推理段（连续英文推理过程）
+    # 2. Agnes 模型推理标签
+    text = _EMOTION_REASONING_PATTERN.sub('', text)
+    # 3. 第三人称引用
+    text = _THIRD_PERSON_PATTERN.sub('', text)
+    # 4. 内部决策
+    text = _INTERNAL_DECISION_PATTERN.sub('', text)
+    # 5. 裸文本推理行
+    text = _REASONING_LINE_PATTERN.sub('', text)
+    # 6. 连续多行英文推理块（3行以上）
+    text = _REASONING_BLOCK_PATTERN.sub('', text)
+    # 7. Agnes 风格连续英文推理段
     text = _AGNES_REASONING_BLOCK.sub('', text)
+    # 8. 扩展英文推理段（I need to be honest / Looking at / I've already 等模式）
     text = _EXTENDED_REASONING_BLOCK.sub('', text)
-
-    # 4. 中文裸文本推理（模型将思维链当作正文输出）
-    # 匹配以推理短语开头的行，逐行清理
-    lines = text.split('\n')
-    cleaned_lines = []
-    for line in lines:
-        # 如果行以推理短语开头，跳过
-        if _CHINESE_REASONING_LINE_PATTERN.match(line.strip()):
-            continue
-        cleaned_lines.append(line)
-    text = '\n'.join(cleaned_lines)
-
+    # 9. 中文内部独白/推理行
+    text = _CHINESE_REASONING_LINE_PATTERN.sub('', text)
     # 清理多余空行
     text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
+    text = text.strip()
+    # 过度截断保护：如果清理后内容不到原始内容的 30%，说明可能误删了正常回复
+    # 此时记录警告，保留清理后内容（因为推理内容确实不该出现）
+    # 但额外记录日志便于诊断
+    cleaned_len = len(text)
+    if original_len > 100 and cleaned_len < original_len * 0.3:
+        from loguru import logger
+        logger.warning(
+            "text_utils.strip_reasoning_overstrip original_len={} cleaned_len={} ratio={:.1%}",
+            original_len, cleaned_len, cleaned_len / original_len if original_len else 0,
+        )
+    return text
 
 
 # 裸 <tool_call>...</tool_call> XML 块（含 </think> 错配容错）
