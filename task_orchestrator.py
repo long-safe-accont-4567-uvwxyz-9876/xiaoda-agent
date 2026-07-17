@@ -376,7 +376,19 @@ class RouterNode:
             if self._router_engine is None:
                 from core.router_engine import RouterEngine
                 self._router_engine = RouterEngine()
-            decision = await self._router_engine.decide_with_llm(user_input, state.user_id)
+
+            # 超时保护：最多等待 10s，超时则 fallback 到关键词匹配
+            try:
+                decision = await asyncio.wait_for(
+                    self._router_engine.decide_with_llm(user_input, state.user_id),
+                    timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning("route.router_engine_timeout_fallback")
+                # 超时后使用关键词兜底
+                targets = self._rule_route(user_input)
+                return self._build_route_dict(targets)
+
             targets = [t for t in decision.agent_names if t in agent_configs or t == "xiaoda"]
             if targets:
                 logger.info("route.router_engine_llm", targets=targets, reasoning=decision.reasoning)
