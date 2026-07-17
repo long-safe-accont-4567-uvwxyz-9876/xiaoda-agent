@@ -772,29 +772,32 @@ class ModelRouter:
         # 关键修复：thinking 关闭时也要传递 enable_thinking: false，否则 agnes 模型使用默认行为
         thinking_config = config.get("thinking")
         logger.info("router.thinking_debug provider={} thinking={}", provider, thinking_config)
+
+        # 判断thinking是否启用
+        enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
+
         if provider == "agnes":
             # agnes 模型需要明确传递 enable_thinking 参数
-            enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
             kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": enabled}}
-            # 双重保险：thinking disabled时，在messages中添加明确指令
-            if not enabled:
-                # 查找或创建系统消息位置
-                system_msg = {"role": "system", "content": "【重要】请直接回复用户，不要输出任何思考过程、推理分析或内心独白。不要使用<thinking>、<reasoning>等标签。"}
-                # 插入到最后一条系统消息之后（如果存在）
-                has_system = any(m.get("role") == "system" for m in messages)
-                if has_system:
-                    # 在最后一条系统消息后插入
-                    insert_idx = len(messages)
-                    for i in range(len(messages) - 1, -1, -1):
-                        if messages[i].get("role") == "system":
-                            insert_idx = i + 1
-                            break
-                    messages.insert(insert_idx, system_msg)
-                else:
-                    # 在开头插入
-                    messages.insert(0, system_msg)
         elif thinking_config:
             kwargs["extra_body"] = {"thinking": thinking_config}
+
+        # 双重保险：所有provider在thinking disabled时，都添加明确指令
+        if not enabled:
+            system_msg = {"role": "system", "content": "【重要】请直接回复用户，不要输出任何思考过程、推理分析或内心独白。不要使用<thinking>、<reasoning>等标签。"}
+            # 插入到最后一条系统消息之后（如果存在）
+            has_system = any(m.get("role") == "system" for m in messages)
+            if has_system:
+                # 在最后一条系统消息后插入
+                insert_idx = len(messages)
+                for i in range(len(messages) - 1, -1, -1):
+                    if messages[i].get("role") == "system":
+                        insert_idx = i + 1
+                        break
+                messages.insert(insert_idx, system_msg)
+            else:
+                # 在开头插入
+                messages.insert(0, system_msg)
         return kwargs
 
     async def chat_stream(self, messages: list, task_type: str = "chat",
@@ -933,29 +936,32 @@ class ModelRouter:
         # 关键修复：thinking 关闭时也要传递 enable_thinking: false，否则 agnes 模型使用默认行为
         thinking_config = config.get("thinking")
         logger.info("router.thinking_debug provider={} thinking={}", provider, thinking_config)
+
+        # 判断thinking是否启用
+        enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
+
         if provider == "agnes":
             # agnes 模型需要明确传递 enable_thinking 参数
-            enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
             kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": enabled}}
-            # 双重保险：thinking disabled时，在messages中添加明确指令
-            if not enabled:
-                # 查找或创建系统消息位置
-                system_msg = {"role": "system", "content": "【重要】请直接回复用户，不要输出任何思考过程、推理分析或内心独白。不要使用<thinking>、<reasoning>等标签。"}
-                # 插入到最后一条系统消息之后（如果存在）
-                has_system = any(m.get("role") == "system" for m in messages)
-                if has_system:
-                    # 在最后一条系统消息后插入
-                    insert_idx = len(messages)
-                    for i in range(len(messages) - 1, -1, -1):
-                        if messages[i].get("role") == "system":
-                            insert_idx = i + 1
-                            break
-                    messages.insert(insert_idx, system_msg)
-                else:
-                    # 在开头插入
-                    messages.insert(0, system_msg)
         elif thinking_config:
             kwargs["extra_body"] = {"thinking": thinking_config}
+
+        # 双重保险：所有provider在thinking disabled时，都添加明确指令
+        if not enabled:
+            system_msg = {"role": "system", "content": "【重要】请直接回复用户，不要输出任何思考过程、推理分析或内心独白。不要使用<thinking>、<reasoning>等标签。"}
+            # 插入到最后一条系统消息之后（如果存在）
+            has_system = any(m.get("role") == "system" for m in messages)
+            if has_system:
+                # 在最后一条系统消息后插入
+                insert_idx = len(messages)
+                for i in range(len(messages) - 1, -1, -1):
+                    if messages[i].get("role") == "system":
+                        insert_idx = i + 1
+                        break
+                messages.insert(insert_idx, system_msg)
+            else:
+                # 在开头插入
+                messages.insert(0, system_msg)
         return kwargs
 
     async def _handle_route_response(self, response: Any, task_type: str, model: str,
