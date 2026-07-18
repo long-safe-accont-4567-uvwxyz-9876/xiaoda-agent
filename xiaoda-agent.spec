@@ -50,8 +50,8 @@ datas = []
 datas += _tree_datas(os.path.join(SPECPATH, 'config'), 'config')
 
 # web/dist/ directory (pre-built Vue frontend)
-# 使用相对路径让 PyInstaller 自行解析，避免 Windows 路径分隔符问题
-datas.append(('web/dist', 'web/dist'))
+# 使用 _tree_datas 确保所有前端文件被正确打包
+datas += _tree_datas(os.path.join(SPECPATH, 'web', 'dist'), os.path.join('web', 'dist'))
 
 # web/splash/ directory (desktop mode splash screen)
 datas += _tree_datas(os.path.join(SPECPATH, 'web', 'splash'), os.path.join('web', 'splash'))
@@ -140,8 +140,6 @@ hiddenimports = [
 
     # SQLite extensions
     'sqlite_vec',
-    # v0.5.18 新增依赖
-    'structlog',
     'webview',
     'webview.guilib',
     'webview.platforms.edgechromium',
@@ -453,17 +451,6 @@ try:
     from PyInstaller.utils.hooks import collect_dynamic_libs
     binaries += collect_dynamic_libs('pilk')
     binaries += collect_dynamic_libs('sqlite_vec')
-except Exception:
-    pass
-
-# cryptography 使用 Rust 编译的 _rust.pyd，collect_dynamic_libs 可能漏掉
-# 用 collect_all 确保完整打包（包括 _rust.abi3.so/.pyd）
-try:
-    from PyInstaller.utils.hooks import collect_all
-    _cry_datas, _cry_binaries, _cry_hiddenimports = collect_all('cryptography')
-    datas += _cry_datas
-    binaries += _cry_binaries
-    hiddenimports += _cry_hiddenimports
 except Exception:
     pass
 

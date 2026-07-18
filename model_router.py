@@ -349,8 +349,21 @@ class ModelRouter:
             if provider not in self._custom_clients:
                 raise LLMError(f"自定义 provider {provider} 未注册，请先注册客户端")
 
-        # 各路由独立，不跟随 chat 主路由同步
-        logger.info("router.chat_model_set", provider=provider, model=model_id)
+        # 全量同步：所有聊天类 + 轻量任务 task_type 都跟随主 provider
+        # 用户切换 provider 时，确保所有场景都用目标 provider，不再残留旧 provider
+        _sync_tasks = ("chat_pro", "chat_flash", "chat_mini", "chat_mimo",
+                       "chat_ultra", "emotion_analysis", "tool_result_wrap",
+                       "memory_encoding")
+        for _task in _sync_tasks:
+            if _task in ROUTE_TABLE:
+                ROUTE_TABLE[_task]["model"] = model_id
+                ROUTE_TABLE[_task]["client"] = provider
+                # agnes 不支持 thinking，切换到 agnes 时禁用 thinking
+                if provider == "agnes" and "thinking" in ROUTE_TABLE[_task]:
+                    ROUTE_TABLE[_task]["thinking"] = {"type": "disabled"}
+        logger.info("router.all_tasks_synced",
+                    provider=provider, model=model_id,
+                    synced_tasks=list(_sync_tasks))
 
         self._current_chat_model = {"provider": provider, "model_id": model_id}
         # 持久化到 config_service，以便重启后恢复上次聊天模型

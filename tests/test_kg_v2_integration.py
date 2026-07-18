@@ -14,12 +14,12 @@ from memory.knowledge_graph_v2 import KnowledgeGraphV2
 @pytest.mark.asyncio
 async def test_kg_v2_enabled_flag_defaults_false():
     """KG_V2_ENABLED 默认为 False（保守策略，需显式开启）。"""
-    # 验证解析逻辑：当环境变量为 "false" 时结果为 False
-    os.environ["KG_V2_ENABLED"] = "false"
-    assert (os.getenv("KG_V2_ENABLED", "false").lower() in ("1", "true", "yes")) is False
-    del os.environ["KG_V2_ENABLED"]
-    # 验证默认值（无环境变量时）
-    assert (os.getenv("KG_V2_ENABLED", "false").lower() in ("1", "true", "yes")) is False
+    # Remove env var to test default
+    os.environ.pop("KG_V2_ENABLED", None)
+    import importlib
+    import config
+    importlib.reload(config)
+    assert config.KG_V2_ENABLED is False
 
 
 @pytest.mark.asyncio
@@ -37,8 +37,13 @@ async def test_kg_v2_flag_can_be_enabled():
 @pytest.mark.asyncio
 async def test_kg_v2_flag_can_be_disabled():
     """KG_V2_ENABLED=false 关闭 v2。"""
-    # load_dotenv(override=True) 会读 .env 覆盖，直接验证解析逻辑
-    assert ("false" not in ("1", "true", "yes"))
+    os.environ["KG_V2_ENABLED"] = "false"
+    import importlib
+    import config
+    importlib.reload(config)
+    assert config.KG_V2_ENABLED is False
+    os.environ.pop("KG_V2_ENABLED", None)
+    importlib.reload(config)
 
 
 @pytest.mark.asyncio

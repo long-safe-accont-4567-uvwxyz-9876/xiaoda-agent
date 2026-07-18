@@ -7,7 +7,7 @@ export const useAuthStore = defineStore('auth', () => {
   const token = ref(localStorage.getItem('token') || '')
   const expiresAt = ref(Number(localStorage.getItem('expires_at')) || 0)
 
-  const isLoggedIn = computed(() => !!token.value && token.value.split('.').length >= 2 && Date.now() / 1000 < expiresAt.value)
+  const isLoggedIn = computed(() => !!token.value && Date.now() / 1000 < expiresAt.value)
 
   async function login(password: string) {
     const data = await api.login(password)

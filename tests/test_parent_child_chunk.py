@@ -47,9 +47,8 @@ class TestSplitIntoChildren:
         exchanges = [{"role": "user", "content": "测试内容"}]
         parent_summary = "这是一段父摘要"
 
-        with patch("config.CONTEXTUAL_RETRIEVAL_ENABLED", True):
-            children = mgr._split_into_children(exchanges, parent_id=1,
-                                                 parent_summary=parent_summary)
+        children = mgr._split_into_children(exchanges, parent_id=1,
+                                             parent_summary=parent_summary)
         assert len(children) == 1
         # embed_content 应包含上下文前缀
         assert "[上下文:" in children[0]["embed_content"]

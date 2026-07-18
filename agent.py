@@ -1,22 +1,3 @@
-# ── 最早诊断：在任何 import 之前写文件，定位 PyInstaller 冻结模式崩溃点 ──
-import os as _os, sys as _sys, datetime as _dt
-
-_BOOT_LOG = _os.path.join(_os.environ.get("APPDATA", _os.path.expanduser("~")), "xiaoda-agent", "boot.log")
-try:
-    _os.makedirs(_os.path.dirname(_BOOT_LOG), exist_ok=True)
-    with open(_BOOT_LOG, "w", encoding="utf-8") as _f:
-        _f.write(f"[{_dt.datetime.now():%H:%M:%S}] 0.agent.py_top_level frozen={getattr(_sys, 'frozen', False)}\n")
-except Exception:
-    _BOOT_LOG = None
-
-def _boot_trace(msg: str) -> None:
-    if _BOOT_LOG:
-        try:
-            with open(_BOOT_LOG, "a", encoding="utf-8") as _f:
-                _f.write(f"[{_dt.datetime.now():%H:%M:%S}] {msg}\n")
-        except Exception:
-            pass
-
 from typing import Any
 import os
 import sys
@@ -46,7 +27,6 @@ try:
     else:
         _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     load_dotenv(_env_path, override=True)
-    _boot_trace("1.dotenv_loaded")
 except Exception:
     # dotenv 加载失败时写日志，防止 exe 静默崩溃
     import traceback
@@ -70,15 +50,11 @@ def _setup_windows_event_loop() -> None:
     非 Windows 平台不做任何改动，沿用平台默认行为。
     必须在任何 asyncio 事件循环创建之前调用（早于 uvicorn / aiosqlite）。
     """
-    # v0.5.27: SelectorEventLoop 在 PyInstaller 桌面模式下与 uvicorn+pywebview
-    # 多线程组合存在兼容性问题，端口 LISTENING 但连接被拒绝。
-    # 恢复默认 ProactorEventLoop，牺牲一点 aiosqlite 性能换取稳定性。
-    pass
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 def main() -> None:
-    _boot_trace(f"2.main_entered argv={sys.argv}")
-
     # Windows: 使用 SelectorEventLoop 加速 aiosqlite 线程切换（ProactorEventLoop 慢 3-5 倍）
     # 必须早于任何 asyncio/uvicorn 调用，确保 _run_web/_run_desktop/_run_cli 三路径均生效
     _setup_windows_event_loop()
@@ -146,7 +122,6 @@ def main() -> None:
             load_dotenv(ENV_PATH, override=True)
 
     if args.desktop:
-        _boot_trace("3.calling_run_desktop")
         _run_desktop(args.host, args.port)
     elif args.web or os.getenv("WEB_UI_ENABLED", "").lower() in ("true", "1", "yes"):
         _run_web(args.host, args.port)
@@ -334,17 +309,13 @@ def _wait_for_server_ready(window: Any, port: int) -> None:
     import urllib.request
     from loguru import logger
 
-    for attempt in range(120):
+    for _ in range(120):
         try:
             urllib.request.urlopen(f"http://localhost:{port}/", timeout=2)
-            logger.info("agent.server_ready after_attempts={}", attempt + 1)
             break
-        except (urllib.error.URLError, OSError, ConnectionError) as e:
-            if attempt < 3 or attempt % 10 == 0:
-                logger.debug("agent.server_probe attempt={} error={}", attempt + 1, e)
+        except (urllib.error.URLError, OSError, ConnectionError):
             time.sleep(1)
     else:
-        logger.error("agent.server_timeout after 120s")
         window.evaluate_js("if(typeof onServerTimeout==='function')onServerTimeout();")
         return
 
@@ -366,85 +337,32 @@ def _wait_for_server_ready(window: Any, port: int) -> None:
 
 def _run_desktop(host: str, port: int) -> None:
     """桌面模式：pywebview 包装 WebUI，带启动动画"""
-    # 启动追踪文件：逐步写入，定位 PyInstaller 冻结模式下的失败点
-    import pathlib as _pl
-    _trace = _pl.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent" / "startup.log"
-    _trace.parent.mkdir(parents=True, exist_ok=True)
-
-    def _t(msg: str) -> None:
-        try:
-            with open(_trace, "a", encoding="utf-8") as _f:
-                import datetime
-                _f.write(f"[{datetime.datetime.now():%H:%M:%S}] {msg}\n")
-                _f.flush()
-        except OSError:
-            pass
-
-    _t("1.enter_run_desktop")
     # 控制台已在文件顶部隐藏，此处无需重复
     import threading
-    _t("2.import_threading_ok")
-    try:
-        from utils.logging_config import setup_logging
-        setup_logging()
-        _t("3.setup_logging_ok")
-    except Exception as e:
-        _t(f"3.setup_logging_failed: {e}")
-        raise
+    from utils.logging_config import setup_logging
+    setup_logging()
 
     from loguru import logger
     logger.info("agent.desktop.start", port=port)
-    _t("4.logger_ready")
 
     # 1. 端口冲突检测
     _wait_for_port_available(host, port)
-    _t("5.port_available")
 
     # 2. 导入 web.server
-    _t("6.import_web_server_start")
-    try:
-        app = _import_web_server_safe()
-        _t("7.import_web_server_ok")
-    except Exception as e:
-        _t(f"7.import_web_server_failed: {e}")
-        raise
+    app = _import_web_server_safe()
 
     # 3. 后台线程启动 uvicorn
-    _t("8.uvicorn_setup_start")
     import uvicorn
     server_config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
     server = uvicorn.Server(server_config)
-
-    def _uvicorn_thread_target() -> None:
-        _t("9.uvicorn_thread_started")
-        try:
-            server.run()
-            _t("10.uvicorn_thread_exited_normally")
-        except Exception:
-            import traceback as _tb
-            _t(f"10.uvicorn_thread_crashed: {_tb.format_exc()}")
-            import pathlib
-            try:
-                log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent" / "crash.log"
-                log_path.parent.mkdir(parents=True, exist_ok=True)
-                log_path.write_text(
-                    f"Uvicorn server thread crashed:\n{_tb.format_exc()}",
-                    encoding="utf-8",
-                )
-            except OSError:
-                pass
-            logger.error("agent.uvicorn_thread_crashed", exc_info=True)
-
-    server_thread = threading.Thread(target=_uvicorn_thread_target, daemon=True)
+    server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
-    _t("11.server_thread_started")
 
     # 4. 启动 splash 独立 HTTP 服务器
     splash_url = _start_splash_server(port)
     webui_url = f"http://localhost:{port}"
     logger.info(f"Desktop splash: {splash_url}")
     logger.info(f"Desktop WebUI: {webui_url}")
-    _t("12.splash_ready")
 
     # 5. 创建 pywebview 窗口
     import webview
@@ -468,9 +386,10 @@ def _run_desktop(host: str, port: int) -> None:
     _reflow_js = (
         "(function(){"
         "  var b=document.body;"
-        "  void b.offsetHeight;"
+        "  void b.offsetHeight;"  # 触发一次同步 reflow
         "  b.style.opacity='0.999';"
         "  requestAnimationFrame(function(){b.style.opacity='1';});"
+        "  // 持续推进 rAF，防止合成器再次休眠（直到 onServerReady 接管）"
         "  var t0=performance.now();"
         "  (function kick(){if(performance.now()-t0<30000)requestAnimationFrame(kick);})();"
         "  return 'ok';"

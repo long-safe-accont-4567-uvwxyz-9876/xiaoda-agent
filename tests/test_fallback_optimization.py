@@ -20,10 +20,11 @@ if str(PROJECT_ROOT) not in __import__("sys").path:
 class TestFallbackChainSync:
     """测试 set_chat_model 时 flash/mini 路由的跨 provider 同步"""
 
-    def test_set_chat_model_agnes_only_changes_chat(self):
-        """切换到 agnes 时，只改 chat 路由，其他路由独立不动"""
+    def test_set_chat_model_agnes_syncs_flash_to_mimo(self):
+        """切换到 agnes 时，chat_flash 应同步到 mimo provider"""
         from model_router import ROUTE_TABLE, ModelRouter
 
+        # 模拟初始状态：mimo 为默认
         original_flash = ROUTE_TABLE["chat_flash"].copy()
         original_mini = ROUTE_TABLE["chat_mini"].copy()
         try:
@@ -32,19 +33,22 @@ class TestFallbackChainSync:
             router._current_chat_model = None
             router._lazy_register_provider = MagicMock()
 
+            # 调用 set_chat_model 切换到 agnes
             ModelRouter.set_chat_model(router, "agnes", "agnes-2.0-flash")
 
+            # chat 路由应更新为 agnes
             assert ROUTE_TABLE["chat"]["model"] == "agnes-2.0-flash"
             assert ROUTE_TABLE["chat"]["client"] == "agnes"
-            # 其他路由保持原值，不跟随
-            assert ROUTE_TABLE["chat_flash"] == original_flash
-            assert ROUTE_TABLE["chat_mini"] == original_mini
+
+            # chat_flash 应同步到不同 provider（mimo）实现跨 provider 降级
+            assert ROUTE_TABLE["chat_flash"]["client"] != "agnes", \
+                "chat_flash 不应与 chat 使用相同 provider，否则 fallback 无效"
         finally:
             ROUTE_TABLE["chat_flash"] = original_flash
             ROUTE_TABLE["chat_mini"] = original_mini
 
-    def test_set_chat_model_mimo_only_changes_chat(self):
-        """切换到 mimo 时，只改 chat 路由，其他路由独立不动"""
+    def test_set_chat_model_mimo_syncs_flash_to_agnes(self):
+        """切换到 mimo 时，chat_flash 应同步到 agnes provider"""
         from model_router import ROUTE_TABLE, ModelRouter
 
         original_flash = ROUTE_TABLE["chat_flash"].copy()
@@ -58,9 +62,9 @@ class TestFallbackChainSync:
             ModelRouter.set_chat_model(router, "mimo", "mimo-v2.5")
 
             assert ROUTE_TABLE["chat"]["client"] == "mimo"
-            # 其他路由保持原值，不跟随
-            assert ROUTE_TABLE["chat_flash"] == original_flash
-            assert ROUTE_TABLE["chat_mini"] == original_mini
+            # flash 应使用不同于 mimo 的 provider
+            assert ROUTE_TABLE["chat_flash"]["client"] != "mimo", \
+                "chat_flash 不应与 chat 使用相同 provider"
         finally:
             ROUTE_TABLE["chat_flash"] = original_flash
             ROUTE_TABLE["chat_mini"] = original_mini
