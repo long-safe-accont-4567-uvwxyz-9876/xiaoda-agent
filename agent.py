@@ -341,36 +341,69 @@ def _wait_for_server_ready(window: Any, port: int) -> None:
 
 def _run_desktop(host: str, port: int) -> None:
     """桌面模式：pywebview 包装 WebUI，带启动动画"""
+    # 启动追踪文件：逐步写入，定位 PyInstaller 冻结模式下的失败点
+    import pathlib as _pl
+    _trace = _pl.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent" / "startup.log"
+    _trace.parent.mkdir(parents=True, exist_ok=True)
+
+    def _t(msg: str) -> None:
+        try:
+            with open(_trace, "a", encoding="utf-8") as _f:
+                import datetime
+                _f.write(f"[{datetime.datetime.now():%H:%M:%S}] {msg}\n")
+                _f.flush()
+        except OSError:
+            pass
+
+    _t("1.enter_run_desktop")
     # 控制台已在文件顶部隐藏，此处无需重复
     import threading
-    from utils.logging_config import setup_logging
-    setup_logging()
+    _t("2.import_threading_ok")
+    try:
+        from utils.logging_config import setup_logging
+        setup_logging()
+        _t("3.setup_logging_ok")
+    except Exception as e:
+        _t(f"3.setup_logging_failed: {e}")
+        raise
 
     from loguru import logger
     logger.info("agent.desktop.start", port=port)
+    _t("4.logger_ready")
 
     # 1. 端口冲突检测
     _wait_for_port_available(host, port)
+    _t("5.port_available")
 
     # 2. 导入 web.server
-    app = _import_web_server_safe()
+    _t("6.import_web_server_start")
+    try:
+        app = _import_web_server_safe()
+        _t("7.import_web_server_ok")
+    except Exception as e:
+        _t(f"7.import_web_server_failed: {e}")
+        raise
 
     # 3. 后台线程启动 uvicorn
+    _t("8.uvicorn_setup_start")
     import uvicorn
     server_config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
     server = uvicorn.Server(server_config)
 
     def _uvicorn_thread_target() -> None:
+        _t("9.uvicorn_thread_started")
         try:
             server.run()
+            _t("10.uvicorn_thread_exited_normally")
         except Exception:
-            import traceback
+            import traceback as _tb
+            _t(f"10.uvicorn_thread_crashed: {_tb.format_exc()}")
             import pathlib
             try:
                 log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent" / "crash.log"
                 log_path.parent.mkdir(parents=True, exist_ok=True)
                 log_path.write_text(
-                    f"Uvicorn server thread crashed:\n{traceback.format_exc()}",
+                    f"Uvicorn server thread crashed:\n{_tb.format_exc()}",
                     encoding="utf-8",
                 )
             except OSError:
@@ -379,12 +412,14 @@ def _run_desktop(host: str, port: int) -> None:
 
     server_thread = threading.Thread(target=_uvicorn_thread_target, daemon=True)
     server_thread.start()
+    _t("11.server_thread_started")
 
     # 4. 启动 splash 独立 HTTP 服务器
     splash_url = _start_splash_server(port)
     webui_url = f"http://localhost:{port}"
     logger.info(f"Desktop splash: {splash_url}")
     logger.info(f"Desktop WebUI: {webui_url}")
+    _t("12.splash_ready")
 
     # 5. 创建 pywebview 窗口
     import webview
