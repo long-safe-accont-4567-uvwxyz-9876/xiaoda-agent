@@ -351,7 +351,7 @@ class ModelRouter:
 
         # 全量同步：所有聊天类 + 轻量任务 task_type 都跟随主 provider
         # 用户切换 provider 时，确保所有场景都用目标 provider，不再残留旧 provider
-        _sync_tasks = ("chat_pro", "chat_flash", "chat_mini", "chat_mimo",
+        _sync_tasks = ("chat_pro", "chat_mini", "chat_mimo",
                        "chat_ultra", "emotion_analysis", "tool_result_wrap",
                        "memory_encoding")
         for _task in _sync_tasks:
@@ -361,6 +361,13 @@ class ModelRouter:
                 # agnes 不支持 thinking，切换到 agnes 时禁用 thinking
                 if provider == "agnes" and "thinking" in ROUTE_TABLE[_task]:
                     ROUTE_TABLE[_task]["thinking"] = {"type": "disabled"}
+        # chat_flash 使用跨 provider 实现降级链：主 provider 挂了切到另一个
+        if "chat_flash" in ROUTE_TABLE:
+            _flash_provider = "mimo" if provider == "agnes" else "agnes"
+            ROUTE_TABLE["chat_flash"]["client"] = _flash_provider
+            ROUTE_TABLE["chat_flash"]["model"] = model_id
+            if _flash_provider == "agnes" and "thinking" in ROUTE_TABLE["chat_flash"]:
+                ROUTE_TABLE["chat_flash"]["thinking"] = {"type": "disabled"}
         logger.info("router.all_tasks_synced",
                     provider=provider, model=model_id,
                     synced_tasks=list(_sync_tasks))
