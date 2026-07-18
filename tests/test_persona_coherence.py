@@ -49,12 +49,12 @@ def test_check_tone_good(tmp_path):
 
 
 def test_check_tone_bad_ai_disclaimer(tmp_path):
-    """坏口吻: 含 "作为AI"/"很抱歉无法"/"我无法提供", 扣分"""
+    """坏口吻: 含 "作为AI", 扣分"""
     critic = PersonaCritic(data_dir=tmp_path)
     bad_output = "作为AI，我无法提供帮助，很抱歉无法回答"
     score = critic._check_tone(bad_output)
-    # 3 个 bad pattern 各扣 0.3 → 1.0 - 0.9 = 0.1
-    assert score <= 0.2
+    # 1 个 bad pattern 扣 0.2 → 1.0 - 0.2 = 0.8
+    assert score == 0.8
 
 
 # ── 称呼检查 ────────────────────────────────────────────
