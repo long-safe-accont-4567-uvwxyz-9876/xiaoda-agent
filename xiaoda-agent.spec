@@ -50,8 +50,8 @@ datas = []
 datas += _tree_datas(os.path.join(SPECPATH, 'config'), 'config')
 
 # web/dist/ directory (pre-built Vue frontend)
-# 使用相对路径让 PyInstaller 自行解析，避免 Windows 路径分隔符问题
-datas.append(('web/dist', 'web/dist'))
+# 使用 _tree_datas 确保所有前端文件被正确打包
+datas += _tree_datas(os.path.join(SPECPATH, 'web', 'dist'), os.path.join('web', 'dist'))
 
 # web/splash/ directory (desktop mode splash screen)
 datas += _tree_datas(os.path.join(SPECPATH, 'web', 'splash'), os.path.join('web', 'splash'))
