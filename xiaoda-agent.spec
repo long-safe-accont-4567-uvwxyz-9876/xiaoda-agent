@@ -456,6 +456,17 @@ try:
 except Exception:
     pass
 
+# cryptography 使用 Rust 编译的 _rust.pyd，collect_dynamic_libs 可能漏掉
+# 用 collect_all 确保完整打包（包括 _rust.abi3.so/.pyd）
+try:
+    from PyInstaller.utils.hooks import collect_all
+    _cry_datas, _cry_binaries, _cry_hiddenimports = collect_all('cryptography')
+    datas += _cry_datas
+    binaries += _cry_binaries
+    hiddenimports += _cry_hiddenimports
+except Exception:
+    pass
+
 # ---------------------------------------------------------------------------
 # Excludes – trim the bundle by removing unused heavy modules
 # ---------------------------------------------------------------------------
@@ -483,9 +494,6 @@ excludes = [
     'win32com',
     'pythoncom',
     'pywin',
-    # cryptography 有 Rust C 扩展，PyInstaller 冻结模式下 DLL 加载失败导致 bootloader 崩溃
-    # encrypted_credential.py 已有优雅降级，会自动回退到明文存储
-    'cryptography',
 ]
 
 # ---------------------------------------------------------------------------
