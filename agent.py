@@ -70,8 +70,10 @@ def _setup_windows_event_loop() -> None:
     非 Windows 平台不做任何改动，沿用平台默认行为。
     必须在任何 asyncio 事件循环创建之前调用（早于 uvicorn / aiosqlite）。
     """
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    # v0.5.27: SelectorEventLoop 在 PyInstaller 桌面模式下与 uvicorn+pywebview
+    # 多线程组合存在兼容性问题，端口 LISTENING 但连接被拒绝。
+    # 恢复默认 ProactorEventLoop，牺牲一点 aiosqlite 性能换取稳定性。
+    pass
 
 
 def main() -> None:
