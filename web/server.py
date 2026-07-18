@@ -288,38 +288,73 @@ async def _start_services(app: Any, core: Any) -> None:
         logger.warning("webui.mail_poller_init_failed error={}", str(e))
 
 
+def _write_crash_log(context: str, exc: Exception) -> None:
+    """将致命异常写入 crash.log，确保即使日志系统未初始化也能排查。"""
+    import traceback
+    import pathlib
+    try:
+        log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent" / "crash.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(
+            f"Context: {context}\n"
+            f"Error: {exc}\n\n"
+            f"{traceback.format_exc()}",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
     logger.info("webui.lifespan.start")
+    core = None
+    owns_core = False
     try:
         core, owns_core = await _init_lifespan_resources(app)
     except RecursionError:
-        # FastAPI merged_lifespan 递归溢出保护（Starlette 版本不兼容时可能触发）
         logger.error("webui.lifespan.recursion_overflow — 升险：请确认 starlette>=0.40.0")
         raise RuntimeError(
             "Lifespan 递归溢出，通常是 starlette 版本与 fastapi 不兼容。"
             "请执行: pip install 'starlette>=0.40.0' 后重启。"
         ) from None
+    except Exception as exc:
+        # 核心初始化失败时降级启动，不阻塞 WebUI 端口监听
+        logger.error("webui.lifespan.init_failed error={}", str(exc), exc_info=True)
+        _write_crash_log("lifespan._init_lifespan_resources", exc)
+        core = None
+        owns_core = False
 
-    # 降级模式：直接读 .env 文件检查 MIMO_API_KEY
     _mimo = _resolve_env_api_key()
-    if not _mimo:
-        logger.info("webui.degraded_mode")
-        # 初始化空的 plugin/media/scheduler 避免后续 AttributeError
+    if core is not None and _mimo:
+        try:
+            await _start_services(app, core)
+            logger.info("webui.lifespan.ready")
+        except Exception as exc:
+             logger.error("webui.lifespan.start_services_failed error={}", str(exc), exc_info=True)
+             _write_crash_log("lifespan._start_services", exc)
+             app.state.plugin_manager = None
+             app.state.media_queue = None
+             app.state.greeting_scheduler = None
+             app.state.qq_task = None
+             app.state.last_emotion = None
+    else:
+        if core is None:
+            logger.info("webui.lifespan.degraded_no_core")
+        else:
+            logger.info("webui.lifespan.degraded_no_api_key")
         app.state.plugin_manager = None
         app.state.media_queue = None
         app.state.greeting_scheduler = None
         app.state.qq_task = None
         app.state.last_emotion = None
         logger.info("webui.lifespan.ready_degraded")
-    else:
-        await _start_services(app, core)
-        logger.info("webui.lifespan.ready")
 
     yield
 
     logger.info("webui.lifespan.shutdown")
-    await _shutdown_lifespan(app, core, owns_core)
+    if core is not None:
+        await _shutdown_lifespan(app, core, owns_core)
 
 
 async def _init_lifespan_resources(app: FastAPI) -> tuple[Any, bool]:

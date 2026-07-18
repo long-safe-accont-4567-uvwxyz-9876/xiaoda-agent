@@ -309,13 +309,17 @@ def _wait_for_server_ready(window: Any, port: int) -> None:
     import urllib.request
     from loguru import logger
 
-    for _ in range(120):
+    for attempt in range(120):
         try:
             urllib.request.urlopen(f"http://localhost:{port}/", timeout=2)
+            logger.info("agent.server_ready after_attempts={}", attempt + 1)
             break
-        except (urllib.error.URLError, OSError, ConnectionError):
+        except (urllib.error.URLError, OSError, ConnectionError) as e:
+            if attempt < 3 or attempt % 10 == 0:
+                logger.debug("agent.server_probe attempt={} error={}", attempt + 1, e)
             time.sleep(1)
     else:
+        logger.error("agent.server_timeout after 120s")
         window.evaluate_js("if(typeof onServerTimeout==='function')onServerTimeout();")
         return
 
@@ -355,7 +359,25 @@ def _run_desktop(host: str, port: int) -> None:
     import uvicorn
     server_config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
     server = uvicorn.Server(server_config)
-    server_thread = threading.Thread(target=server.run, daemon=True)
+
+    def _uvicorn_thread_target() -> None:
+        try:
+            server.run()
+        except Exception:
+            import traceback
+            import pathlib
+            try:
+                log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent" / "crash.log"
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                log_path.write_text(
+                    f"Uvicorn server thread crashed:\n{traceback.format_exc()}",
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+            logger.error("agent.uvicorn_thread_crashed", exc_info=True)
+
+    server_thread = threading.Thread(target=_uvicorn_thread_target, daemon=True)
     server_thread.start()
 
     # 4. 启动 splash 独立 HTTP 服务器
