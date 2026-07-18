@@ -483,6 +483,9 @@ excludes = [
     'win32com',
     'pythoncom',
     'pywin',
+    # cryptography 有 Rust C 扩展，PyInstaller 冻结模式下 DLL 加载失败导致 bootloader 崩溃
+    # encrypted_credential.py 已有优雅降级，会自动回退到明文存储
+    'cryptography',
 ]
 
 # ---------------------------------------------------------------------------
