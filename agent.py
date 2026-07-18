@@ -1,3 +1,16 @@
+# ── 最早诊断：在任何 import 之前写文件，定位 PyInstaller 冻结模式崩溃点 ──
+import os as _os, sys as _sys
+if getattr(_sys, 'frozen', False):
+    try:
+        _dbg = _os.path.join(_os.environ.get("APPDATA", _os.path.expanduser("~")), "xiaoda-agent", "boot.log")
+        _os.makedirs(_os.path.dirname(_dbg), exist_ok=True)
+        with open(_dbg, "w", encoding="utf-8") as _f:
+            import datetime as _dt
+            _f.write(f"[{_dt.datetime.now():%H:%M:%S}] 0.agent.py_top_level\n")
+            _f.flush()
+    except Exception:
+        pass
+
 from typing import Any
 import os
 import sys
@@ -27,6 +40,10 @@ try:
     else:
         _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     load_dotenv(_env_path, override=True)
+    if getattr(sys, 'frozen', False):
+        with open(_dbg, "a", encoding="utf-8") as _f:
+            import datetime as _dt
+            _f.write(f"[{_dt.datetime.now():%H:%M:%S}] 1.dotenv_loaded\n"); _f.flush()
 except Exception:
     # dotenv 加载失败时写日志，防止 exe 静默崩溃
     import traceback
@@ -55,6 +72,15 @@ def _setup_windows_event_loop() -> None:
 
 
 def main() -> None:
+    # 诊断追踪：确认 main() 被调用
+    if getattr(sys, 'frozen', False):
+        try:
+            with open(_dbg, "a", encoding="utf-8") as _f:
+                import datetime as _dt
+                _f.write(f"[{_dt.datetime.now():%H:%M:%S}] 2.main_entered argv={sys.argv}\n"); _f.flush()
+        except Exception:
+            pass
+
     # Windows: 使用 SelectorEventLoop 加速 aiosqlite 线程切换（ProactorEventLoop 慢 3-5 倍）
     # 必须早于任何 asyncio/uvicorn 调用，确保 _run_web/_run_desktop/_run_cli 三路径均生效
     _setup_windows_event_loop()
@@ -122,6 +148,13 @@ def main() -> None:
             load_dotenv(ENV_PATH, override=True)
 
     if args.desktop:
+        if getattr(sys, 'frozen', False):
+            try:
+                with open(_dbg, "a", encoding="utf-8") as _f:
+                    import datetime as _dt
+                    _f.write(f"[{_dt.datetime.now():%H:%M:%S}] 3.calling_run_desktop\n"); _f.flush()
+            except Exception:
+                pass
         _run_desktop(args.host, args.port)
     elif args.web or os.getenv("WEB_UI_ENABLED", "").lower() in ("true", "1", "yes"):
         _run_web(args.host, args.port)
