@@ -87,7 +87,7 @@ for _script in ('start-windows.bat', 'auto-update.bat', 'open-browser.ps1', 'doc
 # ---------------------------------------------------------------------------
 # Collect data files from packages that ship non-Python assets
 # ---------------------------------------------------------------------------
-for pkg in ('jieba', 'psutil', 'certifi', 'openai', 'PIL', 'sqlite_vec', 'webview', 'cryptography'):
+for pkg in ('jieba', 'psutil', 'certifi', 'openai', 'PIL', 'sqlite_vec', 'webview'):
     try:
         datas += collect_data_files(pkg)
     except Exception:
@@ -140,8 +140,7 @@ hiddenimports = [
 
     # SQLite extensions
     'sqlite_vec',
-    # v0.5.18 新增的 C 扩展依赖（PyInstaller 静态分析可能遗漏）
-    'cryptography',
+    # v0.5.18 新增依赖
     'structlog',
     'webview',
     'webview.guilib',
@@ -454,7 +453,6 @@ try:
     from PyInstaller.utils.hooks import collect_dynamic_libs
     binaries += collect_dynamic_libs('pilk')
     binaries += collect_dynamic_libs('sqlite_vec')
-    binaries += collect_dynamic_libs('cryptography')
 except Exception:
     pass
 
