@@ -50,8 +50,8 @@ datas = []
 datas += _tree_datas(os.path.join(SPECPATH, 'config'), 'config')
 
 # web/dist/ directory (pre-built Vue frontend)
-# 使用 _tree_datas 确保所有前端文件被正确打包
-datas += _tree_datas(os.path.join(SPECPATH, 'web', 'dist'), os.path.join('web', 'dist'))
+# 使用相对路径让 PyInstaller 自行解析，避免 Windows 路径分隔符问题
+datas.append(('web/dist', 'web/dist'))
 
 # web/splash/ directory (desktop mode splash screen)
 datas += _tree_datas(os.path.join(SPECPATH, 'web', 'splash'), os.path.join('web', 'splash'))
@@ -87,7 +87,7 @@ for _script in ('start-windows.bat', 'auto-update.bat', 'open-browser.ps1', 'doc
 # ---------------------------------------------------------------------------
 # Collect data files from packages that ship non-Python assets
 # ---------------------------------------------------------------------------
-for pkg in ('jieba', 'psutil', 'certifi', 'openai', 'PIL', 'sqlite_vec', 'webview'):
+for pkg in ('jieba', 'psutil', 'certifi', 'openai', 'PIL', 'sqlite_vec', 'webview', 'cryptography'):
     try:
         datas += collect_data_files(pkg)
     except Exception:
@@ -140,6 +140,9 @@ hiddenimports = [
 
     # SQLite extensions
     'sqlite_vec',
+    # v0.5.18 新增的 C 扩展依赖（PyInstaller 静态分析可能遗漏）
+    'cryptography',
+    'structlog',
     'webview',
     'webview.guilib',
     'webview.platforms.edgechromium',
@@ -451,6 +454,7 @@ try:
     from PyInstaller.utils.hooks import collect_dynamic_libs
     binaries += collect_dynamic_libs('pilk')
     binaries += collect_dynamic_libs('sqlite_vec')
+    binaries += collect_dynamic_libs('cryptography')
 except Exception:
     pass
 
