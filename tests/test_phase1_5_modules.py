@@ -256,30 +256,34 @@ class TestDegradationManager:
     """Q4: 降级策略"""
 
     def test_initial_full(self):
-        from core.degradation import DegradationManager, DegradationLevel
+        from core.degradation import DegradationManager
+        from core.degradation_strategy import DegradationLevel
         mgr = DegradationManager()
-        assert mgr.level == DegradationLevel.FULL
+        assert mgr.level == DegradationLevel.L0_NORMAL
         assert mgr.is_feature_available("tools")
 
     def test_escalate(self):
-        from core.degradation import DegradationManager, DegradationLevel
+        from core.degradation import DegradationManager
+        from core.degradation_strategy import DegradationLevel
         mgr = DegradationManager()
         mgr.escalate("LLM down")
-        assert mgr.level == DegradationLevel.DEGRADED
+        assert mgr.level == DegradationLevel.L1_DEGRADED
         assert not mgr.is_feature_available("image")
 
     def test_recover(self):
-        from core.degradation import DegradationManager, DegradationLevel
+        from core.degradation import DegradationManager
+        from core.degradation_strategy import DegradationLevel
         mgr = DegradationManager()
         mgr.escalate("test")
         mgr.escalate("test2")
         mgr.recover()
-        assert mgr.level == DegradationLevel.DEGRADED
+        assert mgr.level == DegradationLevel.L2_MINIMAL
 
     def test_emergency_disables_all(self):
-        from core.degradation import DegradationManager, DegradationLevel
+        from core.degradation import DegradationManager
+        from core.degradation_strategy import DegradationLevel
         mgr = DegradationManager()
-        mgr.set_level(DegradationLevel.EMERGENCY, "critical")
+        mgr.set_level(DegradationLevel.L3_EMERGENCY, "critical")
         assert not mgr.is_feature_available("tools")
         assert not mgr.is_feature_available("memory")
 

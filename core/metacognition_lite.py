@@ -117,7 +117,7 @@ class MetacognitionLite:
         self.state.confidence = max(0.0, min(1.0, confidence))
 
         # 检测重复
-        last_entries = [h.get("output", "") for h in self.state.history[-3:]]
+        last_entries = [h.get("output", "") for h in list(self.state.history)[-3:]]
         if step_output in last_entries:
             self.state.repetition_count += 1
         else:

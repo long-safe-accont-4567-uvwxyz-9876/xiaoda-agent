@@ -18,13 +18,13 @@ from core.degradation_strategy import (
 )
 
 
-# ── 兼容枚举：值与旧版一致 (0/1/2/3)，名称保持旧版 ──
-class DegradationLevel(_NewLevel):
-    """降级级别枚举（兼容旧版名称）。值与 degradation_strategy.DegradationLevel 一致。"""
-    FULL = _NewLevel.L0_NORMAL       # 0
-    DEGRADED = _NewLevel.L1_DEGRADED  # 1
-    MINIMAL = _NewLevel.L2_MINIMAL    # 2
-    EMERGENCY = _NewLevel.L3_EMERGENCY  # 3
+# ── 兼容枚举：直接复用新版 DegradationLevel，添加旧名别名 ──
+# Python 3.11 不允许继承已有成员的 Enum，改为模块级常量别名
+DegradationLevel = _NewLevel
+FULL = _NewLevel.L0_NORMAL       # 0
+DEGRADED = _NewLevel.L1_DEGRADED  # 1
+MINIMAL = _NewLevel.L2_MINIMAL    # 2
+EMERGENCY = _NewLevel.L3_EMERGENCY  # 3
 
 
 # 旧版特性映射 → 新版 feature_name 转换

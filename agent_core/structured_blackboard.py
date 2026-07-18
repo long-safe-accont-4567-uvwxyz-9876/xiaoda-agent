@@ -120,7 +120,10 @@ class StructuredBlackboard(SharedBlackboard):
             return 0
 
         async with self._lock:
-            alive_keys = set(await self.keys())
+            # 直接读取 _store 避免调用 self.keys() 再次获取锁导致死锁
+            now = __import__('time').monotonic()
+            alive_keys = {k for k, e in self._store.items()
+                          if not (e.expire_at and now > e.expire_at)}
 
             # 清理过期 key 的元数据
             stale_keys = [k for k in self._entry_meta if k not in alive_keys]

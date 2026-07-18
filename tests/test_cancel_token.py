@@ -17,7 +17,10 @@ def cancel_token():
 
     yield _Factory()
     for t in tokens:
-        t.cleanup()
+        try:
+            t.cleanup()
+        except RuntimeError:
+            pass  # event loop already closed
 
 
 @pytest.mark.asyncio
