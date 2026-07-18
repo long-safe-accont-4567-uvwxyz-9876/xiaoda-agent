@@ -240,12 +240,44 @@ class ToolExecutorMixin:
                     text = "（回复格式异常，请稍后重试）"
             except json.JSONDecodeError:
                 pass  # 不是合法 JSON，继续后续清洗
-        prefixes = [f"{get_agent_display_name(n)}：" for n in ('xiaoda', 'xiaoli', 'xiaolang', 'xiaolian', 'xiaoke')] + ["助手：", "AI："]
+        # 清除 agent 前缀：支持多种格式（"小可："、"[小可] "、"【小可】"、"小可 "等）
+        # 根因：LLM 模仿历史消息中的 agent 前缀格式，输出 "[小可] 父亲..." 等
+        _agent_names = [get_agent_display_name(n) for n in ('xiaoda', 'xiaoli', 'xiaolang', 'xiaolian', 'xiaoke')]
+        _agent_names = [n for n in _agent_names if n]  # 过滤空值
+        prefixes = []
+        for name in _agent_names:
+            prefixes.extend([
+                f"{name}：", f"{name}:", f"{name} ", f"{name}\n",
+                f"[{name}]", f"[{name}] ", f"[{name}]：", f"[{name}]:",
+                f"【{name}】", f"【{name}】 ", f"【{name}】：",
+                f"（{name}）", f"({name})",
+            ])
+        prefixes.extend(["助手：", "助手:", "AI：", "AI:"])
         for p in prefixes:
             if text.startswith(p):
                 text = text[len(p):].strip()
         text = strip_dsml(text)
         text = strip_reasoning(text)
+        # 二次前缀清洗：strip_reasoning 清除推理后，原本在第二行的 agent 前缀
+        # （如 "[小狼] 雇主..."）可能暴露到开头，需要再清洗一次
+        for p in prefixes:
+            if text.startswith(p):
+                text = text[len(p):].strip()
+        # 清除 XML 标签泄露：LLM 模仿工具返回的 XML 标签输出到回复里
+        # 如 <file_content>、<file>、<code>、<artifact> 等
+        import re as _re_xml
+        _xml_tag_re = _re_xml.compile(
+            r'</?(?:file_content|file|code|artifact|antArtifact|system-reminder|reminder|tool_result|tool_call)[^>]*>',
+            _re_xml.IGNORECASE
+        )
+        _xml_leaked = bool(_xml_tag_re.search(text))
+        text = _xml_tag_re.sub('', text).strip()
+        if _xml_leaked:
+            logger.warning("agent.xml_tag_leak_cleaned", preview=text[:80])
+        # 清除日志时间戳泄露：LLM 从 conversation_logs 照搬 [HH:MM] / [HH:MM]~[HH:MM] 标记
+        # 根因：记忆摘要带时间戳格式，LLM 模仿输出到回复里
+        from utils.llm_cleanup import strip_log_timestamps
+        text = strip_log_timestamps(text, context="clean_reply")
         # 清除模型生成退化泄露的工具定义 JSON（根因：模型训练数据中包含
         # Claude/其他 AI 的工具定义，生成时发生 repetition degeneration 泄露）
         text = self._strip_injected_tool_defs(text)

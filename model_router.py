@@ -77,7 +77,8 @@ ROUTE_TABLE = {
     "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1024, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 2048, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 4096, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": 131072, "client": "agnes", "thinking": {"type": "disabled"}},
+    "chat_agnes": {"model": AGNES_TEXT_MODEL, "max_tokens": 131072, "client": "agnes", "thinking": {"type": "disabled"},
+                   "presence_penalty": 0.3, "frequency_penalty": 0.0},
 }
 
 MODEL_PREFERENCES = {
@@ -348,19 +349,21 @@ class ModelRouter:
             if provider not in self._custom_clients:
                 raise LLMError(f"自定义 provider {provider} 未注册，请先注册客户端")
 
-        # 跨 provider 同步：flash/mini 切换到与主 provider 不同的 provider
-        # 这样 fallback 链才能真正跨 provider 降级，避免同一 API 的无效重试
-        cross = _CROSS_PROVIDER_MAP.get(provider)
-        if cross:
-            fb_provider, fb_model = cross
-            if self._is_client_configured(fb_provider):
-                ROUTE_TABLE["chat_flash"]["model"] = fb_model
-                ROUTE_TABLE["chat_flash"]["client"] = fb_provider
-                ROUTE_TABLE["chat_mini"]["model"] = fb_model
-                ROUTE_TABLE["chat_mini"]["client"] = fb_provider
-                logger.info("router.cross_provider_sync",
-                            main=provider, fallback_provider=fb_provider,
-                            fallback_model=fb_model)
+        # 全量同步：所有聊天类 + 轻量任务 task_type 都跟随主 provider
+        # 用户切换 provider 时，确保所有场景都用目标 provider，不再残留旧 provider
+        _sync_tasks = ("chat_pro", "chat_flash", "chat_mini", "chat_mimo",
+                       "chat_ultra", "emotion_analysis", "tool_result_wrap",
+                       "memory_encoding")
+        for _task in _sync_tasks:
+            if _task in ROUTE_TABLE:
+                ROUTE_TABLE[_task]["model"] = model_id
+                ROUTE_TABLE[_task]["client"] = provider
+                # agnes 不支持 thinking，切换到 agnes 时禁用 thinking
+                if provider == "agnes" and "thinking" in ROUTE_TABLE[_task]:
+                    ROUTE_TABLE[_task]["thinking"] = {"type": "disabled"}
+        logger.info("router.all_tasks_synced",
+                    provider=provider, model=model_id,
+                    synced_tasks=list(_sync_tasks))
 
         self._current_chat_model = {"provider": provider, "model_id": model_id}
         # 持久化到 config_service，以便重启后恢复上次聊天模型
@@ -955,11 +958,28 @@ class ModelRouter:
                            rc_len=len(rc), finish_reason=getattr(response.choices[0], "finish_reason", None))
             content = ""  # 留空，让上层降级/fallback 机制接管
 
-        # 检查 finish_reason：检测截断
+        # usage 诊断日志：记录实际生成 token 数，帮助定位截断根因
+        _usage = getattr(response, "usage", None)
+        if _usage:
+            logger.debug("router.usage", model=model, task=task_type,
+                         prompt_tokens=getattr(_usage, "prompt_tokens", 0),
+                         completion_tokens=getattr(_usage, "completion_tokens", 0),
+                         finish_reason=getattr(response.choices[0], "finish_reason", None),
+                         content_len=len(content))
+
+        # 检查 finish_reason 和回复完整性：检测截断
+        # 治本：在 route 底层统一检测截断，所有调用 route 的地方自动获得截断保护
+        # 即使 finish_reason="stop"，LLM 也可能自我截断（如列表中途停止 "...3"）
         finish_reason = getattr(response.choices[0], "finish_reason", None)
-        if finish_reason and finish_reason != "stop":
+        _content_rstripped = content.rstrip() if content else ""
+        _content_last_line = _content_rstripped.split('\n')[-1] if _content_rstripped else ""
+        _is_reply_incomplete = bool(content) and (
+            not any(_content_rstripped.endswith(c) for c in "。！？～…）」】\n")
+            and len(_content_last_line) < 10
+        )
+        if (finish_reason and finish_reason != "stop") or _is_reply_incomplete:
             content_len = len(content)
-            if finish_reason == "length":
+            if finish_reason == "length" or _is_reply_incomplete:
                 logger.warning("llm.truncated_by_max_tokens",
                                model=model, task=task_type,
                                content_len=content_len,

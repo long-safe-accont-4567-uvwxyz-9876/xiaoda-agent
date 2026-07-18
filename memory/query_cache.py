@@ -56,11 +56,18 @@ class QueryCache:
         self.total_queries: int = 0
 
     async def _embed(self, text: str) -> list[float] | None:
-        """生成文本嵌入向量；不可用或失败返回 None。"""
+        """生成文本嵌入向量；不可用或失败返回 None。
+
+        设 8s 超时：embedding API 卡住时跳过缓存查询（不跳过记忆检索，
+        只跳过缓存环节，后续检索环节继续执行）。
+        """
         if not self._embed_func:
             return None
         try:
-            vec = await self._embed_func(text)
+            vec = await asyncio.wait_for(self._embed_func(text), timeout=8.0)
+        except asyncio.TimeoutError:
+            logger.warning("query_cache.embed_timeout", text_preview=text[:50])
+            return None
         except Exception as e:
             logger.debug("query_cache.embed_failed", error=str(e))
             return None

@@ -40,9 +40,18 @@ def _resolve_voice_ref(filename: str) -> Path:
     """查找参考音频：先查用户数据目录（新结构 voice_refs/agent/ 和旧结构），再查安装包内置路径"""
     stem = filename.rsplit(".", 1)[0].lower()
     agent_name = None
-    for prefix in ("xiaoda", "xiaoli", "xiaoke", "xiaolian", "xiaolang"):
+    # 改名遗留兼容：nahida → xiaoda（纳西妲→小妲改名前的旧文件名）
+    _prefix_to_agent = {
+        "xiaoda": "xiaoda",
+        "nahida": "xiaoda",  # 兼容旧文件名 nahida.wav / nahida_hq.wav
+        "xiaoli": "xiaoli",
+        "xiaoke": "xiaoke",
+        "xiaolian": "xiaolian",
+        "xiaolang": "xiaolang",
+    }
+    for prefix, agent in _prefix_to_agent.items():
         if stem.startswith(prefix):
-            agent_name = prefix
+            agent_name = agent
             break
     # 获取与 config.py 一致的参考音频目录
     try:
@@ -85,8 +94,22 @@ def _resolve_voice_ref(filename: str) -> Path:
     return user_path
 
 
+def _resolve_xiaoda_voice() -> Path:
+    """智能查找 xiaoda 参考音频：优先 xiaoda_hq.wav，回退 nahida_hq.wav / xiaoda.wav / nahida.wav。"""
+    _candidates = [
+        "xiaoda_hq.wav", "nahida_hq.wav",  # HQ 版本优先
+        "xiaoda.wav", "nahida.wav",         # 标准版本回退
+    ]
+    for _name in _candidates:
+        _p = _resolve_voice_ref(_name)
+        if _p.exists():
+            return _p
+    # 全部缺失时返回 xiaoda_hq.wav 路径（用于错误提示）
+    return _resolve_voice_ref("xiaoda_hq.wav")
+
+
 VOICE_REFERENCES = {
-    "xiaoda": _resolve_voice_ref("xiaoda_hq.wav") if _resolve_voice_ref("xiaoda_hq.wav").exists() else _resolve_voice_ref("xiaoda.wav"),
+    "xiaoda": _resolve_xiaoda_voice(),
     "xiaoli": _resolve_voice_ref("xiaoli.mp3"),
 }
 
@@ -149,11 +172,20 @@ def _ensure_builtin_voices():
             if not f.is_file() or f.suffix.lower() not in _AUDIO_EXTS:
                 continue
             # 按文件名前缀匹配 agent（xiaoda_hq.wav → xiaoda, xiaoli.mp3 → xiaoli）
+            # 改名遗留兼容：nahida 前缀也映射到 xiaoda（纳西妲→小妲改名前的旧文件名）
             stem = f.stem.lower()
             matched_agent = None
-            for agent_name in ("xiaoda", "xiaoli", "xiaoke", "xiaolian", "xiaolang"):
-                if stem.startswith(agent_name):
-                    matched_agent = agent_name
+            _prefix_to_agent = {
+                "xiaoda": "xiaoda",
+                "nahida": "xiaoda",  # 兼容旧文件名 nahida.wav / nahida_hq.wav
+                "xiaoli": "xiaoli",
+                "xiaoke": "xiaoke",
+                "xiaolian": "xiaolian",
+                "xiaolang": "xiaolang",
+            }
+            for prefix, agent in _prefix_to_agent.items():
+                if stem.startswith(prefix):
+                    matched_agent = agent
                     break
             if not matched_agent:
                 continue

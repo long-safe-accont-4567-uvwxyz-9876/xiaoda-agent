@@ -234,6 +234,12 @@ class AgentRegistry:
                 if name in deprecated_names:
                     logger.info("agent_registry.deprecated_skip name={} file={}", name, fp.name)
                     continue
+                # 跳过主 agent（xiaoda）：主 agent 不作为 sub-agent 注册到 dispatcher，
+                # 否则因 base_url 为空会触发 sub_agent.degraded_no_client 警告，且每次 reinit 都重复。
+                # 主 agent 的配置（personality/voice_ref 等）由 AgentCore 自身管理。
+                if data.get("is_main") or name == "xiaoda":
+                    logger.debug("agent_registry.main_agent_skip name={} file={}", name, fp.name)
+                    continue
                 if name in BUILTIN_AGENTS:
                     agent = self.core.dispatcher.get_agent(name)
                     if agent:

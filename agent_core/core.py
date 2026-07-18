@@ -301,8 +301,27 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         _ctx_token = _current_request_ctx.set(ctx)
         # 清空证据门禁（请求间隔离，避免跨请求状态泄漏）
         self._hook_engine.reset_evidence_gate()
+        # 全局截止时间保护：保证每个请求必返回回复，不允许超时。
+        # 上游 QQ C2C 有 180s 超时，这里用 170s 兜底，预留 10s 给网络/序列化。
+        # 即使内部任何阶段挂起（记忆检索/LLM/工具/验收循环），到点强制返回降级回复。
+        _GLOBAL_DEADLINE_SECONDS = 170
         try:
-            return await self._process_impl(ctx, user_input, user_id, source, user_openid, session_id, status_callback, image_data, is_master)
+            try:
+                return await asyncio.wait_for(
+                    self._process_impl(ctx, user_input, user_id, source, user_openid, session_id,
+                                       status_callback, image_data, is_master),
+                    timeout=_GLOBAL_DEADLINE_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.error("agent.global_deadline_exceeded",
+                             user_id=user_id, source=source,
+                             deadline=_GLOBAL_DEADLINE_SECONDS,
+                             msg_preview=user_input[:80])
+                # 兜底：返回有意义的降级回复，而非空字符串或异常
+                return ProcessResult(
+                    reply="抱歉爸爸，这次回复花了太长时间，刚刚那个请求卡住了。再发一次试试，或者换个说法呀～",
+                    emotion="apologetic",
+                )
         finally:
             _current_request_ctx.reset(_ctx_token)
 

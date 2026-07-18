@@ -15,7 +15,11 @@ class RetrievalAssessor:
     """
 
     HIGH_THRESHOLD = 0.6
-    LOW_THRESHOLD = 0.3
+    # 修复：从 0.3 降到 0.1
+    # 根因：bge-reranker-v2-m3 对情感/亲密对话返回的相关性分数本就在 0.0-0.3 区间（模型特性，不是 bug），
+    # 0.3 阈值导致 13 次重试全部无效（重试扩大 k 再跑相同 reranker，分数几乎不变），每次浪费 5-15 秒。
+    # 降到 0.1 让大多数结果不再触发无效重试，显著降低延迟。
+    LOW_THRESHOLD = 0.1
 
     def __init__(self):
         self._stats = {

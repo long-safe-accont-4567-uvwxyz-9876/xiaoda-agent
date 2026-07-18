@@ -6,6 +6,7 @@
 - 实体演化 (替换式 summary 重写)
 - 社区发现 (Task 6 扩展)
 """
+import asyncio
 import json
 import time
 import uuid
@@ -87,10 +88,18 @@ class KnowledgeGraphV2(KnowledgeGraph):
             ]
             result = await self._call_free_model(messages, temperature=0.1, max_tokens=1024)
             if result is None and self._router:
-                result = await self._router.route(
-                    "memory_encoding", messages, temperature=0.1,
-                    user_openid="system", session_id="kg_v2_extract",
-                )
+                # 修复 P0-2（同 knowledge_graph.py）：降级路由加 8s 超时保护
+                try:
+                    result = await asyncio.wait_for(
+                        self._router.route(
+                            "memory_encoding", messages, temperature=0.1,
+                            user_openid="system", session_id="kg_v2_extract",
+                        ),
+                        timeout=8.0,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("kg_v2.extract_router_timeout, fallback to empty entities")
+                    return {"entities": [], "relations": []}
             if isinstance(result, str):
                 cleaned = _clean_json_response(result)
                 try:

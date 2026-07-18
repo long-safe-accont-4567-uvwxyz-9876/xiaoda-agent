@@ -11,14 +11,21 @@ from loguru import logger
 
 
 # 推理模型（DeepSeek-R1/MiMo Pro 等）会输出各种思维链标签
-# 扩展匹配：<think>/reasoning/analysis/reflection/thought 和 [think/thinking/reasoning/analysis]
+# 扩展匹配：<think>/<thinking>/reasoning/analysis/reflection/thought 和 [think/thinking/reasoning/analysis]
+# 注意：thinking 必须在 think 之前，避免 <think> 先匹配 <think 部分后 \b 边界失败
 _THINK_TAG_RE = re.compile(
-    r"<(?:think|reasoning|analysis|reflection|thought)\b[^>]*>.*?</(?:think|reasoning|analysis|reflection|thought)>",
+    r"<(?:thinking|think|reasoning|analysis|reflection|thought)\b[^>]*>.*?</(?:thinking|think|reasoning|analysis|reflection|thought)>",
     re.DOTALL | re.IGNORECASE
 )
 _THINK_TAG_RE_BRACKET = re.compile(
     r"\[(?:think|thinking|reasoning|analysis)\b[^\]]*\].*?\[(?:/think|/thinking|/reasoning|/analysis)\]",
     re.DOTALL | re.IGNORECASE
+)
+# 孤立闭合思维标签：agnes 常见 "推理文本</thinking>正式回复"，无开标签
+# </thinking> 之前全是推理，整段丢弃，只保留之后的内容
+_THINK_ORPHAN_CLOSE_RE = re.compile(
+    r"^[\s\S]*?</(?:thinking|think|reasoning|analysis|reflection|thought)\s*>",
+    re.IGNORECASE,
 )
 
 # 未闭合的 <think> 或 CoT 前缀段落 —— 遇到则跳过该段
@@ -44,6 +51,41 @@ _REASONING_INDICATORS = re.compile(
     r"我必须|我来分析|让我想想|现在是我主动|"
     r"数一下字数|检查字数|字数[：:]|输出[：:]|输出内容[：:]"
 )
+
+# 日志时间戳泄露清洗：剥离 LLM 从 conversation_logs 照搬出来的时间戳标记
+# 形如 [13:54] [13:59]~[14:05] [14:06-14:27] [HH:MM] 等方括号时间戳
+# 根因：即便 memory_manager 已改用自然中文时间，仍有蒸馏记忆/历史数据带 [HH:MM] 格式，
+# LLM 会模仿输出到回复里，加一层兜底清洗确保此类标记永不泄露给用户
+# 两种格式都要匹配：
+#   1) [HH:MM]~[HH:MM] 两括号范围（LLM 常见输出）
+#   2) [HH:MM] 单个 或 [HH:MM~HH:MM] 单括号范围
+_LOG_TS_RE = re.compile(
+    r'\[\s*(?:[01]?\d|2[0-3])\s*[:：]\s*[0-5]\d\s*\]'
+    r'\s*[~\-–至到]\s*'
+    r'\[\s*(?:[01]?\d|2[0-3])\s*[:：]\s*[0-5]\d\s*\]'
+    r'|'
+    r'\[\s*(?:[01]?\d|2[0-3])\s*[:：]\s*[0-5]\d\s*'
+    r'(?:\s*[~\-–至到]\s*(?:[01]?\d|2[0-3])\s*[:：]\s*[0-5]\d\s*)?'
+    r'\]'
+)
+
+
+def strip_log_timestamps(text: str, *, context: str = "") -> str:
+    """剥离 LLM 从记忆照搬出来的 [HH:MM] / [HH:MM]~[HH:MM] 时间戳标记。
+
+    只剥离方括号时间戳本身，保留周围文本。剥离后清理残留的多余空格。
+    """
+    if not text:
+        return ""
+    cleaned = _LOG_TS_RE.sub('', text)
+    if cleaned != text:
+        logger.info("llm_cleanup.log_timestamp_stripped",
+                    context=context, preview=text[:80])
+        # 清理剥离后残留的多余空格（行首空格、连续空格）
+        cleaned = re.sub(r' {2,}', ' ', cleaned)
+        cleaned = re.sub(r'\n +', '\n', cleaned)
+        cleaned = cleaned.strip()
+    return cleaned
 
 
 def deduplicate_multi_reply(text: str, *, context: str = "") -> str:
@@ -95,6 +137,8 @@ def strip_thinking(text: str, *, context: str = "") -> str:
     # 1. 完整 <think>...</think> 等标签（尖括号和方括号格式）
     text = _THINK_TAG_RE.sub("", text)
     text = _THINK_TAG_RE_BRACKET.sub("", text)
+    # 1b. 孤立闭合标签：agnes 输出 "推理</thinking>回复"，无开标签，之前全是推理
+    text = _THINK_ORPHAN_CLOSE_RE.sub("", text)
     # 2. 未闭合的 <think> 或 CoT 前缀段落
     for pat in _THINK_PREFIX_PATTERNS:
         m = pat.match(text)
@@ -103,18 +147,32 @@ def strip_thinking(text: str, *, context: str = "") -> str:
             break
     text = text.strip()
 
-    # 3. 清洗后仍含推理痕迹 → 尝试取最后一句短句，否则丢弃
+    # 3. 清洗后仍含推理痕迹 → 按句删除含推理指示词的句子，保留正常句子
+    # 中文推理一个不留，但只删推理句，不动正常回复句
+    # （旧逻辑"取最后一句短句否则整段丢弃"会误删推理行后面的正常回复）
     if _REASONING_INDICATORS.search(text):
-        sentences = re.split(r'[。！？\n]', text)
-        for s in reversed(sentences):
-            s_c = s.strip()
-            if s_c and len(s_c) <= 50 and not _REASONING_INDICATORS.search(s_c):
-                return s_c
-        # 整段都是推理文本，记录并丢弃
-        logger.warning("llm_cleanup.all_reasoning_discarded",
-                       context=context, raw_len=len(raw),
-                       raw_preview=raw[:120])
-        return ""
+        # 按句末标点/换行拆分，保留分隔符，逐句判断
+        sentences = re.split(r'(?<=[。！？\n])', text)
+        kept = []
+        removed_count = 0
+        for s in sentences:
+            if s.strip() and _REASONING_INDICATORS.search(s):
+                removed_count += 1
+                continue
+            kept.append(s)
+        if removed_count > 0:
+            new_text = ''.join(kept).strip()
+            if new_text:
+                logger.info("llm_cleanup.reasoning_sentences_removed",
+                            context=context, removed=removed_count,
+                            kept_preview=new_text[:60])
+                text = new_text
+            else:
+                # 整段都是推理句，全部删除
+                logger.warning("llm_cleanup.all_reasoning_discarded",
+                               context=context, raw_len=len(raw),
+                               raw_preview=raw[:120])
+                return ""
 
     # 4. 处理多个回复的情况（模型可能输出了多个回复，如"早安"、"中午好"、"晚上好"）
     return deduplicate_multi_reply(text, context=context)

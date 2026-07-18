@@ -171,6 +171,11 @@ class UserProfileLearner:
         """构建用于 LLM 认知抽取的提示词。
 
         由调用方使用此提示词调用 LLM，再将结果传入 save_insight()。
+
+        注意：使用 str.replace 而非 str.format，因为 conversation_summary
+        来自用户消息内容，可能包含 {} / {0} 等字符，会导致 .format() 抛出
+        IndexError/KeyError（如日志中的 "Replacement index 0 out of range
+        for positional args tuple"）。
         """
         summary_lines = []
         for msg in recent_messages[-20:]:
@@ -180,9 +185,11 @@ class UserProfileLearner:
         conversation_summary = "\n".join(summary_lines)
 
         focus = _LEVEL_FOCUS.get(xp_level, _LEVEL_FOCUS[1])
-        return _INSIGHT_PROMPT_TEMPLATE.format(
-            focus_areas=focus,
-            conversation_summary=conversation_summary,
+        # 用 replace 避免 .format() 把用户内容里的 {} 当作占位符
+        return (
+            _INSIGHT_PROMPT_TEMPLATE
+            .replace("{focus_areas}", focus)
+            .replace("{conversation_summary}", conversation_summary)
         )
 
     # ── USER.md 读写 ────────────────────────────────────────

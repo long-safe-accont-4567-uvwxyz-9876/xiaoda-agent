@@ -1,0 +1,206 @@
+01:29:02 | INFO     |  | 日志系统就绪
+01:29:02 | INFO     |  | agent.web.start
+01:29:03 | INFO     |  | web.error_handlers.registered
+01:29:04 | INFO     |  | Web UI: http://localhost:8080
+INFO:     Started server process [361064]
+INFO:     Waiting for application startup.
+01:29:04 | INFO     |  | rate_limit.states_loaded user=0 write=0
+01:29:04 | INFO     |  | rate_limit.persistence_enabled path=/media/orangepi/KIOXIA/nahida-data/db/rate_limit_buckets.sqlite
+01:29:04 | INFO     |  | rate_limit.middleware_init global=600.0/min user=60.0/min write=30.0/min
+01:29:04 | INFO     |  | webui.lifespan.start
+01:29:04 | INFO     |  | 日志系统就绪
+01:29:06 | DEBUG    |  | ssrf.passed host=api.xiaomimimo.com pinned_ip=202.69.4.23 ips=['202.69.4.23', '202.69.4.22', '220.181.104.192', '220.181.104.191']
+01:29:06 | INFO     |  | credential_pool.added
+01:29:06 | INFO     |  | credential_pool.added
+01:29:06 | INFO     |  | credential_pool.added
+01:29:06 | INFO     |  | credential_pool.added
+01:29:06 | INFO     |  | credential_pool.added
+01:29:06 | INFO     |  | credential_pool.added
+01:29:06 | INFO     |  | credential_pool.loaded_from_env
+01:29:06 | DEBUG    |  | ssrf.passed host=apihub.agnes-ai.com pinned_ip=104.18.19.62 ips=['104.18.19.62']
+01:29:06 | INFO     |  | custom_provider.registered id=siliconflow format=openai
+01:29:06 | INFO     |  | router.credential_pool_registered provider=siliconflow format=openai
+01:29:06 | INFO     |  | custom_provider.registered id=openrouter format=openai
+01:29:06 | INFO     |  | router.credential_pool_registered provider=openrouter format=openai
+01:29:06 | INFO     |  | custom_provider.registered id=modelscope format=openai
+01:29:06 | INFO     |  | router.credential_pool_registered provider=modelscope format=openai
+01:29:06 | INFO     |  | custom_provider.registered id=ollama format=openai
+01:29:06 | INFO     |  | router.credential_pool_registered provider=ollama format=openai
+01:29:06 | INFO     |  | router.transports
+01:29:06 | INFO     |  | security.patterns_loaded path=/media/orangepi/KIOXIA/nahida-data/config/security_patterns.yaml
+01:29:06 | DEBUG    |  | hooks.registered
+01:29:06 | DEBUG    |  | hooks.registered
+01:29:06 | DEBUG    |  | hooks.registered
+01:29:06 | DEBUG    |  | hooks.registered
+01:29:06 | DEBUG    |  | hooks.registered
+01:29:06 | INFO     |  | database.journal_mode=wal
+01:29:06 | INFO     |  | IndexManager.applied created_or_existing=9 total=9
+01:29:06 | INFO     |  | database.composite_indexes applied=9
+01:29:06 | INFO     |  | database.ready
+01:29:06 | INFO     |  | vector_store.ready
+01:29:06 | INFO     |  | vector_store.enabled
+01:29:06 | INFO     |  | reranker.enabled
+01:29:06 | INFO     |  | query_transformer.disabled_by_config
+01:29:06 | INFO     |  | memory_distiller.ready
+01:29:07 | INFO     |  | memory.spreading_activation_enabled
+01:29:07 | INFO     |  | memory.confirm_correct_enabled
+01:29:07 | INFO     |  | kg_v2.enabled
+01:29:07 | INFO     |  | memory_tool.bound
+01:29:07 | INFO     |  | notebook.ready
+01:29:07 | INFO     |  | instinct.table_ready
+01:29:07 | INFO     |  | instinct_manager.initialized
+01:29:07 | INFO     |  | error_rule_pipeline.initialized
+01:29:07 | INFO     |  | j_space.directions_loaded count=4
+01:29:07 | INFO     |  | j_space.rules_registered count=2
+01:29:07 | INFO     |  | j_space.initialized
+01:29:07 | INFO     |  | blackboard.cleanup_task_started
+01:29:07 | INFO     |  | xiaoli.provider_ready
+01:29:07 | INFO     |  | xiaoli.initialized
+01:29:07 | WARNING  |  | tts.voice_file_missing
+01:29:07 | INFO     |  | tts.voice_cached
+01:29:07 | INFO     |  | tts.voice_ready
+01:29:07 | INFO     |  | tts.engine_initialized
+01:29:07 | WARNING  |  | tts.voice_file_missing
+01:29:07 | INFO     |  | tts.voice_ready
+01:29:07 | INFO     |  | tts.engine_initialized
+01:29:07 | INFO     |  | sub_agent.initialized
+01:29:07 | INFO     |  | dispatcher.registered
+01:29:07 | INFO     |  | sub_agent.initialized
+01:29:07 | INFO     |  | dispatcher.registered
+01:29:07 | INFO     |  | sub_agent.initialized
+01:29:07 | INFO     |  | dispatcher.registered
+01:29:07 | INFO     |  | sub_agent.initialized
+01:29:07 | INFO     |  | dispatcher.registered
+01:29:07 | INFO     |  | belief_router.loaded
+01:29:07 | INFO     |  | portrait.loaded
+01:29:07 | INFO     |  | context.restored
+01:29:09 | INFO     |  | mcp_client.initialized
+01:29:09 | DEBUG    |  | mcp_client.tool_registered
+01:29:09 | DEBUG    |  | mcp_client.tool_registered
+01:29:09 | DEBUG    |  | mcp_client.tool_registered
+01:29:09 | DEBUG    |  | mcp_client.tool_registered
+01:29:09 | DEBUG    |  | mcp_client.tool_registered
+01:29:09 | DEBUG    |  | mcp_client.tool_registered
+01:29:09 | DEBUG    |  | mcp_client.tool_registered
+01:29:09 | DEBUG    |  | mcp_client.tool_registered
+01:29:09 | DEBUG    |  | mcp_client.tool_registered
+01:29:09 | DEBUG    |  | mcp_client.tool_registered
+01:29:09 | DEBUG    |  | mcp_client.tool_registered
+01:29:09 | DEBUG    |  | mcp_client.tool_registered
+01:29:09 | INFO     |  | mcp_client.started
+01:29:09 | INFO     |  | mcp_manager.server_started
+01:29:13 | INFO     |  | mcp_client.initialized
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | DEBUG    |  | mcp_client.tool_registered
+01:29:13 | INFO     |  | mcp_client.started
+01:29:13 | INFO     |  | mcp_manager.server_started
+01:29:13 | INFO     |  | mcp.servers_started
+01:29:13 | INFO     |  | agent_core.initialized
+01:29:13 | WARNING  |  | sub_agent.degraded_no_client
+01:29:13 | WARNING  |  | dispatcher.registered_degraded
+01:29:13 | INFO     |  | agent_registry.custom_loaded name=xiaoda
+01:29:13 | INFO     |  | sub_agent.model_reloaded
+01:29:13 | INFO     |  | agent_registry.builtin_override name=xiaoke
+01:29:13 | INFO     |  | sub_agent.model_reloaded
+01:29:13 | INFO     |  | agent_registry.builtin_override name=xiaolang
+01:29:13 | INFO     |  | sub_agent.model_reloaded
+01:29:13 | INFO     |  | agent_registry.builtin_override name=xiaoli
+01:29:13 | INFO     |  | sub_agent.model_reloaded
+01:29:13 | INFO     |  | agent_registry.builtin_override name=xiaolian
+01:29:13 | INFO     |  | webui._apply_model_overrides_start
+01:29:14 | INFO     |  | custom_provider.registered id=mimo format=openai
+01:29:14 | INFO     |  | custom_provider.registered id=deepseek format=openai
+01:29:14 | INFO     |  | credential_pool.added
+01:29:14 | INFO     |  | custom_provider.registered id=siliconflow format=openai
+01:29:14 | INFO     |  | custom_provider.registered id=openrouter format=openai
+01:29:15 | INFO     |  | custom_provider.registered id=modelscope format=openai
+01:29:15 | INFO     |  | custom_provider.registered id=agnes format=openai
+01:29:15 | INFO     |  | custom_provider.registered id=ollama format=openai
+01:29:15 | INFO     |  | webui.before_apply_route_overrides
+01:29:15 | INFO     |  | webui.route_overrides_start total_tasks=9
+01:29:15 | INFO     |  | webui.thinking_loaded task=chat original={'type': 'disabled'} new={'type': 'disabled'}
+01:29:15 | INFO     |  | webui.thinking_loaded task=chat_pro original={'type': 'enabled', 'budget_tokens': 4096} new={'type': 'disabled'}
+01:29:15 | INFO     |  | webui.thinking_loaded task=chat_flash original={'type': 'disabled'} new={'type': 'disabled'}
+01:29:15 | INFO     |  | webui.thinking_loaded task=chat_mimo original={'type': 'disabled'} new={'type': 'disabled'}
+01:29:15 | INFO     |  | webui.thinking_loaded task=chat_mini original={'type': 'disabled'} new={'type': 'disabled'}
+01:29:15 | INFO     |  | webui.thinking_loaded task=tool_result_wrap original={'type': 'disabled'} new={'type': 'disabled'}
+01:29:15 | INFO     |  | webui.thinking_loaded task=memory_encoding original={'type': 'disabled'} new={'type': 'disabled'}
+01:29:15 | INFO     |  | webui.thinking_loaded task=chat_agnes original={'type': 'disabled'} new={'type': 'disabled'}
+01:29:15 | INFO     |  | webui.thinking_loaded task=emotion_analysis original={'type': 'disabled'} new={'type': 'disabled'}
+01:29:15 | INFO     |  | webui.after_apply_route_overrides
+01:29:15 | INFO     |  | webui.chat_model_restore_attempt saved=agnes/agnes-2.0-flash current_route=agnes/agnes-2.0-flash
+01:29:15 | INFO     |  | router.cross_provider_sync
+01:29:19 | DEBUG    |  | 原子写入完成: /media/orangepi/KIOXIA/nahida-data/config/webui_overrides.json
+01:29:19 | INFO     |  | router.chat_model_changed
+01:29:19 | INFO     |  | webui.chat_model_restored provider=agnes model=agnes-2.0-flash
+01:29:19 | INFO     |  | ws.media_cleanup_started
+01:29:19 | INFO     |  | plugin.discovered
+01:29:19 | INFO     |  | plugin.found
+01:29:19 | INFO     |  | media_queue.started
+01:29:19 | INFO     |  | greeting_scheduler.started
+01:29:19 | INFO     |  | memory_recall_scheduler.started
+01:29:19 | INFO     |  | spontaneous_recall.started
+01:29:19 | INFO     |  | growth_narrative.started
+01:29:19 | INFO     |  | 日志系统就绪
+01:29:20 | INFO     |  | webui.qq_bot_task_started
+01:29:20 | INFO     |  | mail.poller.started
+01:29:20 | INFO     |  | webui.lifespan.ready
+Building prefix dict from the default dictionary ...
+[1;33m[DEBUG]	(__init__.py:113)initialize	[0mBuilding prefix dict from the default dictionary ...
+Loading model from cache /tmp/jieba.cache
+[1;33m[DEBUG]	(__init__.py:132)initialize	[0mLoading model from cache /tmp/jieba.cache
+[1;33m[INFO]	(client.py:162)_bot_login	[0m[botpy] 登录机器人账号中...
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+[1;33m[INFO]	(robot.py:65)update_access_token	[0m[botpy] access_token expires_in 276
+Loading model cost 1.259 seconds.
+[1;33m[DEBUG]	(__init__.py:164)initialize	[0mLoading model cost 1.259 seconds.
+Prefix dict has been built successfully.
+[1;33m[DEBUG]	(__init__.py:166)initialize	[0mPrefix dict has been built successfully.
+01:29:21 | INFO     |  | jieba.prewarm_done
+[1;33m[INFO]	(client.py:181)_bot_init	[0m[botpy] 程序启动...
+[1;33m[INFO]	(connection.py:60)multi_run	[0m[botpy] 最大并发连接数: 1, 启动会话数: 1
+[1;33m[INFO]	(client.py:242)bot_connect	[0m[botpy] 会话启动中...
+[1;33m[INFO]	(gateway.py:115)ws_connect	[0m[botpy] 启动中...
+[1;33m[INFO]	(gateway.py:142)ws_identify	[0m[botpy] 鉴权中...
+[1;33m[INFO]	(gateway.py:85)on_message	[0m[botpy] 机器人「纳西妲（AI  Agent）」启动成功！
+[1;33m[INFO]	(qq_bot_adapter.py:70)_patched_send_heart	[0m[botpy] 心跳维持启动（带超时检测）...
+01:29:21 | INFO     |  | qq_bot.connected
+01:29:21 | INFO     |  | qq_bot.reconnected_agent_reused
+01:29:21 | INFO     |  | nudge.started
+01:29:50 | INFO     |  | mail.agently_cli.resolved source=path path=/home/orangepi/.local/bin/agently-cli
+01:29:50 | DEBUG    |  | mail.run_agently cli=/home/orangepi/.local/bin/agently-cli home=/home/orangepi args=message +list --dir
+01:30:51 | DEBUG    |  | mail.run_agently cli=/home/orangepi/.local/bin/agently-cli home=/home/orangepi args=message +list --dir
+01:31:01 | INFO     |  | qq_bot.c2c_message
+01:31:01 | INFO     | 461449 | agent.process.start
+01:31:01 | INFO     |  | XPSystem.load path=/media/orangepi/KIOXIA/nahida-data/db/xp_state.json users=15
+01:31:04 | INFO     |  | router.llm_classified
+01:31:04 | DEBUG    |  | router.decision
+01:31:04 | INFO     |  | task_graph.executing
+01:31:04 | DEBUG    |  | MentalState.init_empty
+01:31:04 | DEBUG    |  | 原子写入完成: data/mental_state.json
+01:31:05 | DEBUG    |  | constraint.loaded

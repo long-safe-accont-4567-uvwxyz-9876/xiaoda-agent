@@ -150,13 +150,15 @@ class SubAgentManagerMixin:
         if _ctx:
             _ctx.last_user_emotion = emotion.get("primary", "")
         # 子代理对话也写入主体历史：切回小妲或追问时上下文不断档
+        # 根本修复：不带 [display_name] 文本前缀，用 agent 元数据标记身份
+        # 旧的 [小可] 前缀会被 LLM 模仿，导致 @小妲 时回复 "[小可] ..." 身份混淆
         await self.context.add_message("user", clean_input)
         if is_degraded_reply(sub_reply):
             logger.info("sub_agent.skip_memory_degraded_reply", reply_preview=sub_reply[:60])
             # 降级仍写入 assistant history 保持对话连续性
-            await self.context.add_message("assistant", f"[{display_name}] {sub_reply[:200]}")
+            await self.context.add_message("assistant", sub_reply[:200], agent=target)
         else:
-            await self.context.add_message("assistant", f"[{display_name}] {sub_reply}")
+            await self.context.add_message("assistant", sub_reply, agent=target)
             self._bg_task_manager.run_background_tasks(
                 clean_input, sub_reply, user_id, source, emotion, [],
                 session_id=session_id,

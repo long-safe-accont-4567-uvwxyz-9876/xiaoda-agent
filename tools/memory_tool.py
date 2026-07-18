@@ -24,7 +24,7 @@ def _get_memory_manager() -> Any:
 
 @register_tool(
     name="remember",
-    description="【必须调用】保存记忆。当用户提到：记住、记一下、帮我记、别忘了、不要忘记、记得告诉我。必须调用此工具保存记忆。",
+    description="保存一条重要记忆。当用户明确要求你记住某件事、纠正你的错误认知、告知个人偏好或重要信息时使用",
     schema={
         "type": "object",
         "properties": {
@@ -70,11 +70,18 @@ async def remember(content: str, tags: str = "", importance: float = 0.5) -> Too
 
 @register_tool(
     name="recall",
-    description="【必须调用】检索记忆。当用户提到：之前、以前、上次、记得、回忆、聊过、说过、发生过、我们之间、我们的故事、你还记得吗、你记得吗、回忆一下、帮我回忆。必须调用此工具，绝对不要凭印象回答。",
+    description=(
+        "检索相关记忆。触发场景（命中任一即必须先调用本工具，禁止凭印象编造或直接回答'不记得'）："
+        "1) 用户要求回忆/想起/记得某事，如'回忆一下'、'你还记得吗'、'上次我们'、'昨天/上周/之前'发生的事；"
+        "2) 用户询问某个时间范围/时段发生的事，如'7点到8点之间'、'今天早上'、'上周五'、'7月17日'；"
+        "3) 用户问之前聊过的内容、自身配置（模型版本/系统设置）、用户偏好等不确定信息；"
+        "4) 用户发'？'或短句追问上一次未答全的话题（视为追问上一轮的回忆请求）。"
+        "query 参数必须保留用户原始时间表述（如'7月17日 7点到8点'），禁止改写成'早上'等模糊词。"
+    ),
     schema={
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "检索关键词"},
+            "query": {"type": "string", "description": "检索关键词，须保留用户原始时间表述（如'7月17日 7点到8点'），不要自行改写为模糊词"},
             "top_k": {"type": "integer", "description": "返回数量", "default": 8},
         },
         "required": ["query"],

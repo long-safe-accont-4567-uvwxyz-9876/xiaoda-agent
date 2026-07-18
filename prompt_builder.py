@@ -1325,8 +1325,6 @@ def _inject_xp_and_extra(system_prompt: str, user_id: str | None, extra_context:
         f"- **笔记/洞察**：你对{address_term}的新发现（性格、习惯、偏好）会自动记录为笔记。\n"
         f"- **斜杠命令**：/note 查看笔记，/status 查看系统状态，/help 查看所有命令。\n"
         f"- **定时问候**：系统每天会按计划发送问候消息，{address_term}可在定时问候页面管理。\n"
-        f"- **记忆检索**：当{address_term}问到之前聊过的内容、回忆、记得的事情时，**必须调用 recall 工具**检索记忆，不要凭印象回答。\n"
-        f"- **记忆保存**：当{address_term}要求记住某事时，**必须调用 remember 工具**保存记忆。\n"
     )
     system_prompt += _cap
     return system_prompt

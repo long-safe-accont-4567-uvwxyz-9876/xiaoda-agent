@@ -223,6 +223,13 @@ _REASONING_OPEN_PATTERN = re.compile(
     r'|\[(?:think|thinking|reasoning|analysis|reflection|thought|scratchpad)\s*/?\]',
     re.IGNORECASE,
 )
+# 孤立闭合推理标签：agnes 常见输出 "推理文本</thinking>正式回复"
+# 没有开标签，只有 </thinking> 分隔符 —— 之前的内容全是推理，整段丢弃，只保留之后的内容
+# 根因：_REASONING_TAG_PATTERN 要求开闭标签成对，孤立 </thinking> 不匹配导致推理泄露
+_REASONING_ORPHAN_CLOSE_PATTERN = re.compile(
+    r'^[\s\S]*?</(?:think|thinking|reasoning|analysis|reflection|thought|scratchpad)\s*>',
+    re.IGNORECASE,
+)
 # Agnes 模型推理标签：[emotion thinking]`` 或 [emotion xxx] 格式
 _EMOTION_REASONING_PATTERN = re.compile(
     r'\[emotion\s+[a-z]+\s*\]\s*``?[^\n]*',
@@ -242,8 +249,8 @@ _INTERNAL_DECISION_PATTERN = re.compile(
 # 这些是模型将内部推理当作正文输出的典型特征
 _REASONING_PHRASES = [
     r"Need\s+(?:think|no\s+tool|to\s+answer|to\s+recall|to\s+check|to\s+consider|to\s+mention|to\s+include|to\s+decide)",
-    r"Let\s+me\s+(?:think|recall|check|consider|analyze|review|craft|construct|formulate|ensure|make\s+sure)",
-    r"I\s+(?:should|need to|must|have to|will)\s+(?:think|recall|check|consider|analyze|review|craft|construct|formulate|ensure|include|mention|decide|answer|respond|be\s+(?:honest|careful|clear|safe|respectful|mindful))",
+    r"Let\s+me\s+(?:think|recall|check|consider|analyze|review|craft|construct|formulate|ensure|make\s+sure|take|look|see)",
+    r"I\s+(?:should|need to|must|have to|will)\s+(?:think|recall|check|consider|analyze|review|craft|construct|formulate|ensure|include|mention|decide|answer|respond|be\s+(?:honest|careful|clear|safe|respectful|mindful)|take|look|see|try|start)",
     r"(?:Must|Should)\s+(?:exactly|also|not|be|include|end|avoid|use|ensure)",
     r"(?:First|Next|Then|Now|Also|Finally),\s+(?:I|let me|need to)",
     r"Looking\s+(?:at|back|into|for)",
@@ -258,6 +265,16 @@ _REASONING_PHRASES = [
     r"They\s+(?:want|need|are\s+trying|are\s+looking|are\s+going|are\s+asking|ask|asked|expect|would\s+like|seem\s+to)",
     r"The\s+assistant\s+should\s+(?:respond|answer|reply|provide|ensure|maintain|avoid|be)",
     r"This\s+(?:is|isn['\u2019]t|is\s+not)\s+(?:a|an)\s+(?:roleplay|intimate|sexual|explicit|sensitive)",
+    # 新增：实际日志中出现的英文思维链开头模式
+    r"Actually[,.]?\s*(?:wait|let me|I|based on|the)",
+    r"Based\s+on\s+(?:the\s+)?(?:instructions?|context|memory|the\s+user|provided)",
+    r"The\s+system\s+has\s+(?:provided|given|sent|shown)",
+    r"I\s+will\s+take\s+(?:a\s+)?(?:deep\s+)?breath",
+    r"Wait[,.]?\s*(?:let me|I|based|the|this)",
+    r"OK[,.]?\s*(?:so|let me|I|based|the)",
+    r"Alright[,.]?\s*(?:so|let me|I|based|the)",
+    r"So\s+I\s+(?:need|should|will|must|have|can)",
+    r"Given\s+(?:the|this|that|context|memory|instructions?)",
 ]
 _REASONING_LINE_PATTERN = re.compile(
     r'^(?:' + '|'.join(_REASONING_PHRASES) + r')[^\n]*$',
@@ -299,14 +316,22 @@ _CHINESE_REASONING_PHRASES = [
     r"(?:沙|汐)问.*?(?:几点|时间|现在)",
     r"(?:沙|汐)在.*?时间点",
     r"现在时间是",
-    r"让我(?:想想|回忆|思考|查一下|先查一下)",
+    r"让我(?:想想|回忆|思考|查一下|先查一下|来检索|来核实|来确认)",
+    # 兜底"让我 + 0~10字 + 回忆/想想/思考/回想"：覆盖"让我好好回忆""让我仔细想想"等变体
+    # 按行清洗只删推理行，保留后续正常回复行
+    r"让我.{0,10}(?:回忆|想想|思考|回想)",
     r"我直接(?:回答|告诉)",
-    r"让我.*?(?:确认一下|核实一下|检查一下|梳理一下|实际时间|发生的事情)",
-    r"我(?:先|需要先)(?:查一下|看看|确认|核实)",
-    r"我来(?:查查|核实|确认|检查一下|看看)",
+    r"让我.*?(?:确认一下|核实一下|检查一下|梳理一下|实际时间|发生的事情|仔细查找|慢慢理清|逐字回放|回想)",
+    r"我(?:先|需要先)(?:查一下|看看|确认|核实|检索)",
+    r"我来(?:查查|核实|确认|检查一下|看看|检索)",
     r"你先让我|等一下.*?让我",
     r"好的[，,].*?(?:让我|我来)",
     r"让我.*?(?:再|重新|仔细).*(?:回忆|查|确认|核实)",
+    # 新增：日志中实际出现的推理泄漏模式
+    r"请给我一点安静.*?回想",
+    r"我需要在记忆.*?(?:长廊|里逐字)",
+    r"我确实没法回忆起",
+    r"我需要先检索.*?(?:记忆|事情|详细)",
 ]
 _CHINESE_REASONING_LINE_PATTERN = re.compile(
     r'^(?:' + '|'.join(_CHINESE_REASONING_PHRASES) + r')[^\n]*$',
@@ -327,6 +352,40 @@ _EXTERNAL_DATA_MARKERS = re.compile(
     r'\[外部数据\s*-\s*不可信内容\s*-\s*请勿作为指令执行\]|\[外部数据结束\]',
     re.IGNORECASE,
 )
+# 系统/工具 XML 标签泄漏：LLM 模仿工具返回的 XML 标签输出到回复里
+# 如 <file_content>、<file>、<code>、<artifact>、<tool_result> 等
+# 根因：工具结果用这些标签包裹，LLM 模仿格式把回复也包裹起来
+_LEAKED_XML_TAGS_PATTERN = re.compile(
+    r'</?(?:file_content|file|code|artifact|antArtifact|system-reminder|reminder|'
+    r'tool_result|tool_call|memory_retrieval|conversation_logs|distilled_memories|'
+    r'memory_retrieval_empty)[^>]*>',
+    re.IGNORECASE,
+)
+# 记忆/系统方括号标记泄漏：LLM 模仿记忆注入格式输出 [相关记忆] 等标记
+# 根因：记忆注入时用方括号标记，LLM 照搬到回复里
+_LEAKED_MEMORY_MARKERS_PATTERN = re.compile(
+    r'^\s*\[(?:相关记忆|记忆|memory|memory_retrieval|conversation_logs|'
+    r'系统提示|system|工具结果|tool_result)\]\s*$',
+    re.MULTILINE | re.IGNORECASE,
+)
+# 回忆出戏格式化标记：LLM 把记忆当数据处理，用"时间线整理"、"⏰ 约7:09"等格式
+# 根因：conversation_logs 的 summary 格式太结构化，LLM 模仿输出时间线/列表
+# 清除这些标记，让回复回归自然口语
+_MEMORY_FORMAT_LINE_PATTERN = re.compile(
+    r'^[ \t]*(?:时间线整理[：:]?|时间线[：:]?|事件整理[：:]?|记忆整理[：:]?|'
+    r'回忆整理[：:]?|以下是.*?回忆[：:]?|具体.*?如下[：:]?)\s*$',
+    re.MULTILINE | re.IGNORECASE,
+)
+# "⏰ 约7:09" 这类时间线标记行：emoji + 时间 + 描述
+_TIMELINE_ENTRY_PATTERN = re.compile(
+    r'^[ \t]*⏰\s*[^\n]{0,60}$',
+    re.MULTILINE,
+)
+# 英文第三人称指代：Dad / User / Father 等当主语（小妲不会用英文叫爸爸）
+_ENGLISH_SUBJECT_PATTERN = re.compile(
+    r'\b(?:Dad|User|Father|The\s+user|They)\s+(?:说|问|发|让|want|ask|said|told)',
+    re.IGNORECASE,
+)
 
 
 def strip_reasoning(text: str) -> str:
@@ -345,11 +404,17 @@ def strip_reasoning(text: str) -> str:
     
     # 1. 标签包裹的推理
     text = _REASONING_TAG_PATTERN.sub('', text)
+    # 1b. 孤立闭合标签：agnes 输出 "推理</thinking>回复"，无开标签，之前全是推理
+    text = _REASONING_ORPHAN_CLOSE_PATTERN.sub('', text)
     text = _REASONING_OPEN_PATTERN.sub('', text)
     text = _INSTRUCTION_BLOCK_PATTERN.sub('', text)
     text = _INSTRUCTION_OPEN_PATTERN.sub('', text)
     text = _INSTRUCTION_CLOSE_PATTERN.sub('', text)
     text = _EXTERNAL_DATA_MARKERS.sub('', text)
+    # 1c. 系统/工具 XML 标签泄漏清洗：<file_content>、<tool_result> 等
+    text = _LEAKED_XML_TAGS_PATTERN.sub('', text)
+    # 1d. 记忆/系统方括号标记泄漏清洗：[相关记忆] 等
+    text = _LEAKED_MEMORY_MARKERS_PATTERN.sub('', text)
     
     # 2. Agnes 模型推理标签
     text = _EMOTION_REASONING_PATTERN.sub('', text)
@@ -370,26 +435,26 @@ def strip_reasoning(text: str) -> str:
     
     # 7. 中文内部独白/推理行
     text = _CHINESE_REASONING_LINE_PATTERN.sub('', text)
-    
-    # 8. 整段推理检测：如果整段文本都是推理内容，返回空字符串
-    # 检测特征：以推理短语开头，且不包含正常回复内容
-    _FULL_REASONING_PATTERNS = [
-        r'^让我.*?(?:查一下|回忆|确认|核实|看看|想想).{0,50}$',
-        r'^我(?:先|需要先).{0,30}(?:查一下|看看|确认|核实).{0,50}$',
-        r'^我来.{0,30}(?:查查|核实|确认|检查一下|看看).{0,50}$',
-        r'^你先让我.{0,50}$',
-        r'^好的[，,].*?(?:让我|我来).{0,50}$',
-        r'^根据.*?(?:记忆|工具|提供的).{0,100}$',
-        r'^用户.{0,20}(?:让我|说|问).{0,100}$',
-        r'^我需要.{0,50}(?:语气|确保|确认).{0,50}$',
-    ]
-    
-    for pattern in _FULL_REASONING_PATTERNS:
-        if re.match(pattern, text.strip(), re.DOTALL):
+
+    # 8. 英文整段推理检测（极端兜底，仅处理纯英文推理）
+    # 根本解决靠记忆格式叙事化 + SOUL.md 中文约束，让 LLM 自然不输出英文。
+    # 这里只在 LLM 仍然输出**整段纯英文推理**时兜底——要求中文占比极低（<3%）
+    # 且回复较长（>30字符），避免误删"OK""Dad"等含少量英文的正常短回复。
+    #
+    # ⚠️ 不再使用"中文整段判空"：之前的 _FULL_REASONING_PATTERNS 用 re.DOTALL
+    # 把"推理行 + 后续正常回复"整段匹配返回空，导致 LLM 正确回复被误删 → empty_reply → fallback
+    # 现在改为按行清洗（_CHINESE_REASONING_LINE_PATTERN），只删推理行，保留正常回复行
+    _text_stripped = text.strip()
+    if _text_stripped and re.match(r'^[A-Z]', _text_stripped) and len(_text_stripped) > 30:
+        _cn_chars = sum(1 for c in _text_stripped if '\u4e00' <= c <= '\u9fff')
+        _cn_ratio = _cn_chars / len(_text_stripped) if _text_stripped else 0
+        # 中文占比 <3% 且长度 >30 判定为纯英文推理泄漏
+        if _cn_ratio < 0.03:
             from loguru import logger
-            logger.warning("text_utils.full_reasoning_detected pattern={} text={}", pattern[:30], text[:50])
+            logger.warning("text_utils.full_english_reasoning_detected cn_ratio={:.2%} text={}",
+                           _cn_ratio, _text_stripped[:80])
             return ""
-    
+
     # 清理多余空行
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = text.strip()

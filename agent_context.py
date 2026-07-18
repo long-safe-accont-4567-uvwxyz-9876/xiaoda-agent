@@ -148,6 +148,10 @@ class AgentContext:
             msg["reasoning_content"] = kwargs["reasoning_content"]
         if kwargs.get("tool_calls"):
             msg["tool_calls"] = kwargs["tool_calls"]
+        # agent 元数据：标记这条消息是哪个子代理说的（子代理回复写入主体历史时使用）
+        # 根本修复：替代旧的 [小可] 文本前缀，避免 LLM 模仿前缀导致身份混淆
+        if kwargs.get("agent"):
+            msg["agent"] = kwargs["agent"]
         async with self._lock:
             self.history.append(msg)
             self._last_message_time = time.time()
@@ -470,8 +474,9 @@ class AgentContext:
         conversation_logs 类型的记忆包含原始对话，不做截断，直接展示。
         """
         if not self.memory_retrieval:
-            return ('[记忆检索] 没有找到相关记忆。'
-                    '不要编造任何过去的事，如实说"我不记得了"。')
+            return ('<memory_retrieval empty="true">\n'
+                    '没有找到相关记忆。请如实告知用户你不记得了，不要编造任何过去的事。\n'
+                    '</memory_retrieval>')
 
         # 区分原始对话记录和蒸馏记忆
         conv_logs = [m for m in self.memory_retrieval if m.get("type") == "conversation_log"]
@@ -487,7 +492,22 @@ class AgentContext:
                 if summary:
                     conv_lines.append(summary)
             if conv_lines:
-                parts.append("[以下是该时间段的原始对话记录]\n" + "\n---\n".join(conv_lines))
+                # 第二重时间锚点：从记忆时间戳推断时间范围，标注在标签属性上
+                # 根因：即使每条 summary 带完整日期，LLM 仍可能被记忆内容里的
+                # 日期字样（如用户当时在回忆"7月16日"）干扰。外层标签明确告诉
+                # LLM "以下都是某段时间的记忆"，提供不可忽略的时间锚点。
+                _ts_list = [float(m.get("timestamp", 0)) for m in conv_logs[:30] if m.get("timestamp")]
+                _range_attr = ""
+                if _ts_list:
+                    try:
+                        from datetime import datetime as _dt_cls
+                        _t_min, _t_max = min(_ts_list), max(_ts_list)
+                        _d_min = _dt_cls.fromtimestamp(_t_min).strftime("%Y年%m月%d日 %H:%M")
+                        _d_max = _dt_cls.fromtimestamp(_t_max).strftime("%Y年%m月%d日 %H:%M")
+                        _range_attr = f' time_range="{_d_min} ~ {_d_max}"'
+                    except (ValueError, OSError):
+                        pass
+                parts.append(f"<conversation_logs{_range_attr}>\n" + "\n---\n".join(conv_lines) + "\n</conversation_logs>")
 
         # 蒸馏记忆：正常格式化
         if mem_others:
@@ -508,15 +528,22 @@ class AgentContext:
                 if kg_ctx:
                     mem_texts.append(kg_ctx[:200])
             if mem_texts:
-                parts.append("我记得这些事：\n" + "\n".join(mem_texts))
+                parts.append("<distilled_memories>\n" + "\n".join(mem_texts) + "\n</distilled_memories>")
 
         if parts:
-            return "\n\n".join(parts) + (
-                "\n\n规则：基于以上记忆和对话记录回答。"
-                "如果以上内容与用户问题无关或不够详细，如实说「我只记得这些」，"
-                "绝对不要补充记忆中没有的内容。"
-                "绝对不要输出「让我查一下」「让我回忆」等推理过程，直接回答。")
-        return '我没想起来什么特别的事。不要编造任何过去的事。'
+            # 只呈现记忆本身，不附带 <instructions> 使用说明。
+            # 根因：包裹 <instructions> 会把"记忆"变成"系统检索的数据+任务"，
+            # LLM 就从"回忆者"变成"数据处理员"，开始套模版、反问、出戏。
+            # 真实的人回忆时，脑子里浮现的是画面本身，没有使用说明。
+            # 格式/语言/称谓等规则放在 SOUL.md（小妲永远的性格），不在这里重复。
+            return (
+                "<memory_retrieval>\n"
+                + "\n\n".join(parts) + "\n"
+                + "</memory_retrieval>"
+            )
+        return ('<memory_retrieval empty="true">\n'
+                '没有找到相关记忆。请如实告知用户你不记得了，不要编造任何过去的事。\n'
+                '</memory_retrieval>')
 
     def _build_volatile_content(self, source: str, exclude_memory: bool = False) -> str:
         """构建 Volatile 层：时间/情绪/记忆/关注点/待办/小莉/场景约束/失败提醒。"""
@@ -596,7 +623,17 @@ class AgentContext:
         messages = [{"role": "system", "content": system_content}]
 
         for msg in self.history:
-            m = {"role": msg["role"], "content": str(msg.get("content", "")) if msg.get("content") is not None else ""}
+            _content = str(msg.get("content", "")) if msg.get("content") is not None else ""
+            _msg_agent = msg.get("agent")
+            # 子代理回复用 XML 标签包裹，LLM 不会模仿这种格式（替代旧的 [小可] 文本前缀）
+            if _msg_agent and _msg_agent != "xiaoda":
+                try:
+                    from config import get_agent_display_name as _gdn
+                    _display = _gdn(_msg_agent)
+                except Exception:
+                    _display = _msg_agent
+                _content = f"<previous_agent_reply agent=\"{_msg_agent}\" name=\"{_display}\">{_content}</previous_agent_reply>"
+            m = {"role": msg["role"], "content": _content}
             if msg.get("tool_calls"):
                 m["tool_calls"] = msg["tool_calls"]
             # 注意：reasoning_content 不发送到 API（OpenAI API 不支持此字段）
@@ -607,6 +644,12 @@ class AgentContext:
         memory_content = self._format_memory_retrieval()
         if memory_content:
             messages.append({"role": "system", "content": memory_content})
+            # 诊断日志：确认记忆被注入，及内容概要
+            logger.debug("agent_context.memory_injected",
+                         msg_count=len(messages),
+                         memory_len=len(memory_content),
+                         memory_preview=memory_content[:200].replace('\n', ' '),
+                         has_conv_log="<conversation_logs>" in memory_content)
 
         messages.append({"role": "user", "content": user_input})
         return messages

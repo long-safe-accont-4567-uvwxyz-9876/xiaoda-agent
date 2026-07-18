@@ -787,6 +787,13 @@ RETRIEVAL_PARALLEL_TRANSFORM = os.getenv("RETRIEVAL_PARALLEL_TRANSFORM", "true")
 RETRIEVAL_PARALLEL_SEARCH = os.getenv("RETRIEVAL_PARALLEL_SEARCH", "true").lower() in ("1", "true", "yes")
 # 查询语义缓存开关：命中缓存时跳过完整检索流水线
 QUERY_CACHE_ENABLED = os.getenv("QUERY_CACHE_ENABLED", "true").lower() in ("1", "true", "yes")
+# P3-9: 查询缓存参数配置化（之前硬编码在 QueryCache 默认参数中，无法运行时调节）
+# threshold: 余弦相似度阈值，>= 此值视为命中（0.88 严格匹配，避免误命中返回无关记忆）
+# max_size: LRU 最大条目数（256 足够覆盖活跃话题，过大占用内存）
+# ttl: 缓存过期时间秒（300s = 5 分钟，与 kg query_entity_cache 对齐）
+QUERY_CACHE_THRESHOLD = float(os.getenv("QUERY_CACHE_THRESHOLD", "0.88"))
+QUERY_CACHE_MAX_SIZE = _safe_int(os.getenv("QUERY_CACHE_MAX_SIZE"), 256)
+QUERY_CACHE_TTL = _safe_int(os.getenv("QUERY_CACHE_TTL"), 300)
 
 # ── 父子Chunk RAG 优化 ──
 PARENT_CHILD_CHUNK_ENABLED = os.getenv("PARENT_CHILD_CHUNK_ENABLED", "true").lower() in ("1", "true", "yes")
@@ -958,6 +965,9 @@ __all__ = [
     "RETRIEVAL_PARALLEL_TRANSFORM",
     "RETRIEVAL_SMART_SKIP",
     "QUERY_CACHE_ENABLED",
+    "QUERY_CACHE_THRESHOLD",
+    "QUERY_CACHE_MAX_SIZE",
+    "QUERY_CACHE_TTL",
     "SIMPLE_CHAT_FASTPATH",
     "SIMPLE_TASK_KEYWORDS",
     "STICKER_DIR",

@@ -216,9 +216,16 @@ class VectorStore:
         max_retries = 2
         for attempt in range(max_retries + 1):
             try:
-                response = await self._embed_client.embeddings.create(
-                    model=self._embed_model,
-                    input=text,
+                # 修复 _encode_task 慢任务（59-80s）根因：embeddings.create 无超时保护
+                # 根因：远程嵌入 API 卡住时，原代码会无限等待；3 次重试 × 20s = 60s+，
+                # 导致 bg.task_slow name=_encode_task elapsed=59-80s 告警。
+                # 10s 超时：嵌入 API 正常 0.5-2s，10s 足够；超时则重试或放弃，不让单条记忆编码阻塞后台任务。
+                response = await asyncio.wait_for(
+                    self._embed_client.embeddings.create(
+                        model=self._embed_model,
+                        input=text,
+                    ),
+                    timeout=10.0,
                 )
                 vec = response.data[0].embedding
                 # Auto-detect dimensions from first API response
@@ -229,6 +236,13 @@ class VectorStore:
                     logger.warning("vector_store.dimension_mismatch", expected=self._dimensions, actual=len(vec))
                 self._cache.put(text, vec)
                 return vec
+            except asyncio.TimeoutError:
+                if attempt < max_retries:
+                    logger.warning("vector_store.embed_timeout_retry", attempt=attempt + 1)
+                    await asyncio.sleep(1)
+                    continue
+                logger.warning("vector_store.embed_timeout_final", attempts=max_retries + 1)
+                return []
             except Exception as e:
                 if attempt < max_retries:
                     await asyncio.sleep(1)

@@ -10,6 +10,7 @@
 - TOPIC: 主题关键词（jieba.extract_tags）
 - IDENTIFIER: 技术标识符（英文/代码符号）
 """
+import asyncio
 import re
 import json
 from dataclasses import dataclass
@@ -214,14 +215,21 @@ class EntityExtractor:
         if not self.router:
             return None
         try:
-            result = await self.router.route(
-                task_type="entity_extraction",
-                messages=messages,
-                temperature=0.3,
-                max_tokens=512,
+            # 修复 P0-2：加 8s 超时保护，防止 router 卡住阻塞实体提取链路
+            result = await asyncio.wait_for(
+                self.router.route(
+                    task_type="entity_extraction",
+                    messages=messages,
+                    temperature=0.3,
+                    max_tokens=512,
+                ),
+                timeout=8.0,
             )
             if isinstance(result, str):
                 return result
+            return None
+        except asyncio.TimeoutError:
+            logger.warning("entity_extractor.llm_call_timeout, fallback to jieba-only")
             return None
         except Exception as e:
             logger.debug("entity_extractor.llm_call_failed", error=str(e))

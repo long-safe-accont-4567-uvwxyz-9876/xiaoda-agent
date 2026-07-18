@@ -106,19 +106,33 @@ class MessageProcessorMixin:
             if isinstance(first_result, str):
                 reply = self._clean_reply(first_result)
             else:
-                reply = self._clean_reply(first_result.choices[0].message.content or "")
+                _raw_content = first_result.choices[0].message.content or ""
+                reply = self._clean_reply(_raw_content)
+                # 诊断：捕获清洗前原始内容，定位 empty_reply 根因
+                if not reply or not reply.strip():
+                    logger.warning("debug.empty_reply_raw_capture",
+                                   raw_len=len(_raw_content),
+                                   raw_head=_raw_content[:300],
+                                   finish_reason=getattr(first_result.choices[0], "finish_reason", None),
+                                   has_tool_calls=bool(getattr(first_result.choices[0].message, "tool_calls", None)))
 
             # 空回复保护：如果首轮就返回空内容，抛异常让上层 fallback 机制接管
             if not reply or not reply.strip():
                 trace.warning("verification.empty_first_reply")
                 raise RuntimeError("empty_reply: LLM 返回空内容，触发 fallback")
 
-            # 完整性检测：回复过短且不以句末标点结尾 → 不完整，追加"请继续"重试一次
-            # 根因：agnes-2.0-flash 对复杂问题可能返回不完整回复（如"嗯……让我查一下记忆里 7 月16号 7:00-8:"，26字以冒号结尾）
-            # verification loop 直接采纳不完整回复，用户收到半句话
-            if reply and len(reply) < 60 and not any(reply.endswith(c) for c in "。！？～…）」】\n"):
+            # 截断兜底：循环重试直到回复完整或达到最大重试次数，确保用户永不看到截断
+            # 检测两种情况：
+            # 1. 短回复不以句末标点结尾（如"嗯……让我查一下记忆里 7 月16号 7:00-8:"，26字以冒号结尾）
+            # 2. 长回复最后一行很短且不以句末标点结尾（如列表截断"...3"，max_tokens 截断）
+            for _retry_idx in range(3):
+                _reply_rstripped = reply.rstrip()
+                _last_line = _reply_rstripped.split('\n')[-1] if _reply_rstripped else ""
+                _ends_with_punct = any(_reply_rstripped.endswith(c) for c in "。！？～…）」】\n")
+                if _ends_with_punct or (len(reply) >= 60 and len(_last_line) >= 10):
+                    break  # 回复完整
                 logger.warning("verification.incomplete_reply",
-                               reply_len=len(reply), reply_tail=reply[-15:])
+                               reply_len=len(reply), reply_tail=reply[-15:], retry=_retry_idx)
                 try:
                     messages.append({"role": "assistant", "content": reply})
                     messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
@@ -129,11 +143,35 @@ class MessageProcessorMixin:
                     reply2 = result2 if isinstance(result2, str) else (result2.choices[0].message.content or "")
                     reply2 = self._clean_reply(reply2)
                     if reply2 and len(reply2) > 5:
-                        reply = reply + reply2
-                        logger.info("verification.incomplete_retry_success",
-                                    final_len=len(reply))
+                        _reply_lower = reply.lower()
+                        _reply2_lower = reply2.lower()
+                        if _reply2_lower in _reply_lower:
+                            logger.warning("verification.retry_duplicate",
+                                           retry_len=len(reply2))
+                            break  # 重试重复，不再继续
+                        else:
+                            _overlap = 0
+                            _check_len = min(len(reply), len(reply2), 80)
+                            for i in range(_check_len, 10, -1):
+                                if reply[-i:].lower() == reply2[:i].lower():
+                                    _overlap = i
+                                    break
+                            if _overlap > 10:
+                                reply = reply + reply2[_overlap:]
+                            else:
+                                reply = reply + reply2
+                            logger.info("verification.incomplete_retry_success",
+                                        final_len=len(reply), retry=_retry_idx)
+                    else:
+                        break  # 重试返回空或太短
                 except Exception as e:
                     logger.warning("verification.incomplete_retry_failed", error=str(e))
+                    break
+            # 最终兜底：达到最大重试次数仍不完整，用句末标点强制闭合，确保永不截断
+            _final_rstripped = reply.rstrip()
+            if not any(_final_rstripped.endswith(c) for c in "。！？～…）」】\n"):
+                reply = _final_rstripped + "。"
+                logger.warning("verification.incomplete_force_closed", final_len=len(reply))
 
             return reply, []
 
@@ -358,9 +396,17 @@ class MessageProcessorMixin:
 
         # 截断检测与重试：回复被截断时自动重试
         # 优化：只在真正截断时重试（finish_reason=length），避免误判
-        # 阈值提高到200，避免对简短但完整的回复误判
-        if reply and len(reply) < 200:
+        # 阈值提高到500，覆盖大多数正常长回复；英文思维链泄露已由 strip_reasoning 清空
+        if reply and len(reply) < 500:
             _end = reply[-5:] if len(reply) >= 5 else reply
+            # 英文碎片检测：reply 末尾是连续 4+ 英文字母（如 "ious]"）说明是 LLM 推理泄漏
+            # 此时重试只会重复内容，应直接走主路径（有 verification 循环，更可靠）
+            _tail_english_leak = bool(re.search(r'[A-Za-z]{4,}[\]\)\}\}]?$', reply[-12:]))
+            if _tail_english_leak:
+                logger.warning("chat.fast_path_english_leak",
+                               reply_len=len(reply), reply_tail=_end,
+                               reply_preview=reply[:80])
+                return None  # 走主路径
             if not any(reply.endswith(c) for c in "。！？～…）」】\n\"'"):
                 logger.warning("chat.fast_path_truncated",
                                reply_len=len(reply), reply_tail=_end)
@@ -376,9 +422,40 @@ class MessageProcessorMixin:
                     retry_reply = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
                     retry_reply = self._clean_reply(retry_reply)
                     if retry_reply and len(retry_reply) > 5:
-                        reply = reply + retry_reply
-                        logger.info("chat.fast_path_truncated_retry_success",
-                                    final_len=len(reply))
+                        # 去重检测：如果 retry_reply 与 reply 高度重叠（>60%），说明模型重复了内容
+                        # 此时只追加非重叠部分，避免文本重复两遍
+                        _reply_lower = reply.lower()
+                        _retry_lower = retry_reply.lower()
+                        # 检测完全重复：retry 完全包含在 reply 中（retry 是 reply 的子串）
+                        # 修复：原 _retry_lower.endswith(_retry_lower[-50:]) 是 bug（自比较恒为 True）
+                        _retry_in_reply = _retry_lower in _reply_lower
+                        # reply 是 retry 的子串 → retry 是 reply 的扩展，应使用 retry 替换 reply
+                        _reply_in_retry = _reply_lower in _retry_lower
+                        if _retry_in_reply:
+                            # retry 完全重复 reply 内容，丢弃 retry
+                            logger.warning("chat.fast_path_retry_duplicate",
+                                           retry_len=len(retry_reply))
+                            # 不拼接，保留原 reply
+                        elif _reply_in_retry:
+                            # retry 是 reply 的扩展（reply 是 retry 的前缀），用 retry 替换 reply
+                            reply = retry_reply
+                            logger.info("chat.fast_path_retry_extended",
+                                        final_len=len(reply))
+                        else:
+                            # 检测前缀重叠：retry_reply 开头部分是否与 reply 结尾部分相同
+                            _overlap = 0
+                            _check_len = min(len(reply), len(retry_reply), 100)
+                            for i in range(_check_len, 10, -1):
+                                if reply[-i:].lower() == retry_reply[:i].lower():
+                                    _overlap = i
+                                    break
+                            if _overlap > 10:
+                                # 去除重叠部分后拼接
+                                reply = reply + retry_reply[_overlap:]
+                            else:
+                                reply = reply + retry_reply
+                            logger.info("chat.fast_path_truncated_retry_success",
+                                        final_len=len(reply))
                 except Exception as e:
                     logger.warning("chat.fast_path_truncated_retry_failed", error=str(e))
 
@@ -423,8 +500,25 @@ class MessageProcessorMixin:
 
         # 历史对话（非主人不加载，防止看到主人聊天内容）
         if is_master:
+            # 历史中可能混有子代理回复（通过 agent 元数据标记）
+            # 用 XML 标签包裹子代理回复，让 LLM 知道这是其他 agent 说的，但不会模仿前缀
+            # 根本修复：替代旧的 [小可] 文本前缀（LLM 会模仿），改用结构化标记
+            _agent_display_cache = {}
+            try:
+                from config import get_agent_display_name as _gdn
+                for _n in ('xiaoda', 'xiaoli', 'xiaolang', 'xiaolian', 'xiaoke'):
+                    _agent_display_cache[_n] = _gdn(_n)
+            except Exception:
+                _agent_display_cache = {'xiaoda': '小妲', 'xiaoli': '小莉', 'xiaolang': '小狼',
+                                        'xiaolian': '小涟', 'xiaoke': '小可'}
             for msg in self.context.get_last_n(10):
-                m = {"role": msg["role"], "content": str(msg.get("content", "")) if msg.get("content") is not None else ""}
+                _content = str(msg.get("content", "")) if msg.get("content") is not None else ""
+                _msg_agent = msg.get("agent")
+                # 子代理回复用 XML 标签包裹，LLM 不会模仿这种格式
+                if _msg_agent and _msg_agent != "xiaoda":
+                    _display = _agent_display_cache.get(_msg_agent, _msg_agent)
+                    _content = f"<previous_agent_reply agent=\"{_msg_agent}\" name=\"{_display}\">{_content}</previous_agent_reply>"
+                m = {"role": msg["role"], "content": _content}
                 messages.append(m)
 
         # 轻量 FTS + 安抚记忆检索（放在历史之后，靠近用户消息，提高关注度）
@@ -453,12 +547,12 @@ class MessageProcessorMixin:
                 if not tools:
                     tools = None
 
-            result = await self.router.route(
+            result = await asyncio.wait_for(self.router.route(
                 "chat", messages,
                 temperature=_get_temperature(_model_cfg),
                 user_openid=user_openid, session_id=session_id,
                 tools=tools,
-            )
+            ), timeout=30)
 
             # 检测并处理 tool call
             if isinstance(result, str):
@@ -473,11 +567,11 @@ class MessageProcessorMixin:
                             messages.append({"role": "assistant", "content": result})
                             messages.append({"role": "user", "content": f"工具执行结果：\n{tool_results}\n\n请根据工具结果回复用户。"})
                             # 递归调用，但不再传递 tools（避免无限循环）
-                            result2 = await self.router.route(
+                            result2 = await asyncio.wait_for(self.router.route(
                                 "chat", messages,
                                 temperature=_get_temperature(_model_cfg),
                                 user_openid=user_openid, session_id=session_id,
-                            )
+                            ), timeout=30)
                             if isinstance(result2, str):
                                 reply = self._clean_reply(result2)
                             else:
@@ -529,6 +623,46 @@ class MessageProcessorMixin:
         except Exception as e:
             logger.warning("agent.fast_path_failed", error=str(e))
             reply = DEGRADED_REPLY
+
+        # 截断兜底：循环重试直到回复完整或达到最大重试次数，确保用户永不看到截断
+        if reply and reply.strip():
+            for _fp_retry in range(3):
+                _fp_rstripped = reply.rstrip()
+                _fp_last_line = _fp_rstripped.split('\n')[-1] if _fp_rstripped else ""
+                _fp_ends_punct = any(_fp_rstripped.endswith(c) for c in "。！？～…）」】\n")
+                if _fp_ends_punct or (len(reply) >= 60 and len(_fp_last_line) >= 10):
+                    break  # 回复完整
+                logger.warning("fast_path.incomplete_reply",
+                               reply_len=len(reply), reply_tail=reply[-15:], retry=_fp_retry)
+                try:
+                    messages.append({"role": "assistant", "content": reply})
+                    messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
+                    _fp_result2 = await asyncio.wait_for(self.router.route(
+                        "chat", messages,
+                        temperature=_get_temperature(_model_cfg),
+                        user_openid=user_openid, session_id=session_id,
+                    ), timeout=30)
+                    _fp_reply2 = _fp_result2 if isinstance(_fp_result2, str) else (_fp_result2.choices[0].message.content or "")
+                    _fp_reply2 = self._clean_reply(_fp_reply2)
+                    if _fp_reply2 and len(_fp_reply2) > 5:
+                        _fp_lower1 = reply.lower()
+                        _fp_lower2 = _fp_reply2.lower()
+                        if _fp_lower2 not in _fp_lower1:
+                            reply = reply + _fp_reply2
+                            logger.info("fast_path.incomplete_retry_success",
+                                        final_len=len(reply), retry=_fp_retry)
+                        else:
+                            break  # 重试重复，不再继续
+                    else:
+                        break  # 重试返回空或太短
+                except Exception as _fp_e:
+                    logger.warning("fast_path.incomplete_retry_failed", error=str(_fp_e))
+                    break
+            # 最终兜底：达到最大重试次数仍不完整，用句末标点强制闭合，确保永不截断
+            _fp_final = reply.rstrip()
+            if not any(_fp_final.endswith(c) for c in "。！？～…）」】\n"):
+                reply = _fp_final + "。"
+                logger.warning("fast_path.incomplete_force_closed", final_len=len(reply))
         return reply
 
     async def _execute_fast_path_tools(self, tool_calls: list[dict],
@@ -622,6 +756,9 @@ class MessageProcessorMixin:
         # 清理模型输出的推理/思考内容（Agnes 等模型会输出 [emotion thinking] 等标签）
         clean_reply = strip_dsml(clean_reply)
         clean_reply = strip_reasoning(clean_reply)
+        # 清除日志时间戳泄露：LLM 从 conversation_logs 照搬 [HH:MM] 标记到回复里
+        from utils.llm_cleanup import strip_log_timestamps
+        clean_reply = strip_log_timestamps(clean_reply, context="fast_path")
         clean_reply = humanize(clean_reply, style="xiaoda")
         clean_reply = deduplicate_multi_reply(clean_reply, context="fast_path")
         # 名称替换：确保 LLM 输出中的旧名被替换为显示名
@@ -1036,23 +1173,10 @@ class MessageProcessorMixin:
                     _emo_threshold = self._dynamic_emotion_threshold(
                         user_input, emotion, _base_threshold
                     )
-                    if (emotion.get("valence") == "negative"
-                            and float(emotion.get("intensity", 0.0)) >= _emo_threshold):
-                        try:
-                            comfort = await self.memory.retrieve_comfort_memories(limit=2)
-                            if comfort:
-                                _existing_ids = {str(r.get("id", "")) for r in results}
-                                for _r in comfort:
-                                    _rid = str(_r.get("id", ""))
-                                    if _rid and _rid not in _existing_ids:
-                                        _existing_ids.add(_rid)
-                                        results.append(_r)
-                                logger.debug("memory.emotion_trigger_activated",
-                                             valence=emotion.get("valence"),
-                                             intensity=emotion.get("intensity"),
-                                             comfort_added=len(comfort))
-                        except Exception as e:
-                            logger.debug("memory.emotion_trigger_failed", error=str(e))
+                    # 注：comfort_memories 不再追加到 results
+                    # 根因：retrieve_comfort_memories 只按情绪标签+重要性+时间排序，
+                    # 与当前 query 零语义相关，会污染记忆检索结果，导致"回忆不准"。
+                    # 情绪安抚应由模型基于真实相关记忆自行组织语言，而非注入无关"开心记忆"。
                     return results
                 return None
             return None
@@ -1076,14 +1200,24 @@ class MessageProcessorMixin:
                 logger.debug("constraint.rag_search_failed", error=str(e))
             return []
 
-        memories, _, lessons = await asyncio.gather(
-            _retrieve_memories(), _load_notebook(), _retrieve_constraint_lessons())
+        # 记忆检索 + notebook + 约束经验并行加载
+        # 不允许跳过记忆检索 —— 各环节内部已有独立超时与 fallback
+        # 但整体加 20s 兜底超时：任一环节挂起不允许阻塞整个请求（保证无超时）
+        try:
+            memories, _, _lessons = await asyncio.wait_for(
+                asyncio.gather(
+                    _retrieve_memories(), _load_notebook(), _retrieve_constraint_lessons()),
+                timeout=20.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("memory.retrieve_global_timeout",
+                           hint="记忆检索整体超时，跳过记忆继续生成回复（保证请求成功）")
+            memories = None
 
-        # 经验教训追加到 memories，作为 [相关记忆] 的一部分注入
-        if lessons:
-            if memories is None:
-                memories = []
-            memories.extend(lessons)
+        # 注：constraint_lessons 不再追加到 memories
+        # 根因：jieba 子串匹配粗糙，单关键词命中即入选，极易注入无关经验，
+        # 且以 "[经验] xxx" 格式混入 memory_retrieval，污染记忆检索结果。
+        # 经验教训应通过独立通道（如 volatile 层）注入，不混入"相关记忆"。
 
         # ContextNest A2: 审计本次响应消费了哪些记忆版本 (point-in-time 重建支持)
         if memories and hasattr(self.memory, "audit_retrieval"):
@@ -1408,11 +1542,29 @@ class MessageProcessorMixin:
             if not early_reply or not early_reply.strip():
                 trace.warning("verification.empty_reply_after_tools", turn=turn_idx)
                 return None, "", None, None  # signal failure → 走 _finalize_verification_reply
-            # 完整性检测：如果回复过短且只是开场白，追加提示让模型继续
-            # 根因：模型在 verification loop 中可能只返回"让我查一下"等开场白就结束
-            if len(early_reply) < 80 and any(kw in early_reply for kw in ["让我", "查一下", "看看", "查查", "找找"]):
+            # 截断兜底：循环重试直到回复完整或达到最大重试次数，确保用户永不看到截断
+            # 检测两种情况：
+            # 1. 短回复且只是开场白（如"让我查一下"）
+            # 2. 长回复最后一行很短且不以句末标点结尾（如列表截断"...3"，max_tokens 截断）
+            for _early_retry in range(3):
+                _early_rstripped = early_reply.rstrip()
+                _early_last_line = _early_rstripped.split('\n')[-1] if _early_rstripped else ""
+                _early_ends_punct = any(_early_rstripped.endswith(c) for c in "。！？～…）」】\n")
+                _early_has_opening = any(kw in early_reply for kw in ["让我", "查一下", "看看", "查查", "找找"])
+                _early_complete = _early_ends_punct or (
+                    len(early_reply) >= 80 and len(_early_last_line) >= 10
+                )
+                if _early_complete:
+                    break  # 回复完整
+                # 只有短回复开场白 或 最后一行很短时才重试
+                _need_retry = (
+                    (len(early_reply) < 80 and _early_has_opening)
+                    or len(_early_last_line) < 10
+                )
+                if not _need_retry:
+                    break  # 不符合重试条件
                 trace.warning("verification.incomplete_reply_after_tools",
-                              reply_len=len(early_reply), reply_preview=early_reply[:50])
+                              reply_len=len(early_reply), reply_preview=early_reply[:50], retry=_early_retry)
                 try:
                     messages.append({"role": "assistant", "content": early_reply})
                     messages.append({"role": "user", "content": "请继续给出具体内容，不要只说开场白。"})
@@ -1426,10 +1578,32 @@ class MessageProcessorMixin:
                     retry_reply = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
                     retry_reply = self._clean_reply(retry_reply)
                     if retry_reply and len(retry_reply) > 10:
-                        early_reply = early_reply + retry_reply
-                        trace.info("verification.incomplete_retry_success_after_tools", final_len=len(early_reply))
+                        _early_lower1 = early_reply.lower()
+                        _early_lower2 = retry_reply.lower()
+                        if _early_lower2 in _early_lower1:
+                            break  # 重试重复
+                        _early_overlap = 0
+                        _early_check = min(len(early_reply), len(retry_reply), 80)
+                        for i in range(_early_check, 10, -1):
+                            if early_reply[-i:].lower() == retry_reply[:i].lower():
+                                _early_overlap = i
+                                break
+                        if _early_overlap > 10:
+                            early_reply = early_reply + retry_reply[_early_overlap:]
+                        else:
+                            early_reply = early_reply + retry_reply
+                        trace.info("verification.incomplete_retry_success_after_tools",
+                                   final_len=len(early_reply), retry=_early_retry)
+                    else:
+                        break  # 重试返回空或太短
                 except Exception as e:
                     trace.warning("verification.incomplete_retry_failed_after_tools", error=str(e))
+                    break
+            # 最终兜底：达到最大重试次数仍不完整，用句末标点强制闭合
+            _early_final = early_reply.rstrip()
+            if not any(_early_final.endswith(c) for c in "。！？～…）」】\n"):
+                early_reply = _early_final + "。"
+                trace.warning("verification.incomplete_force_closed_after_tools", final_len=len(early_reply))
             return None, "", None, early_reply
 
         return current_tool_calls, current_assistant_content, current_reasoning, None
@@ -1548,7 +1722,53 @@ class MessageProcessorMixin:
         # 有效长度 ≤ 10 视为简单闲聊
         cn_chars = sum(1 for c in query if '\u4e00' <= c <= '\u9fff')
         effective_len = cn_chars * 2 + len(query) - cn_chars
-        return effective_len <= 10
+        if effective_len > 10:
+            return False
+
+        # 短追问场景保护：当前输入很短（如"？""然后呢""继续"），
+        # 若上一轮用户消息是记忆/回忆/复杂查询，则不走 fast_path，
+        # 否则会跳过记忆检索导致用户追问时无法触发 recall。
+        if self._is_followup_after_memory_intent(query):
+            return False
+        return True
+
+    def _is_followup_after_memory_intent(self, query: str) -> bool:
+        """判断当前短输入是否是对上一轮记忆/复杂查询的追问。
+
+        场景：用户问"回忆一下7月17日..."，模型回复不理想，用户发"？"追问。
+        此时 fast_path 会把"？"当闲聊处理，跳过 recall，导致追问永远无法触发记忆检索。
+        """
+        # 短追问标记词：纯标点或极短追问
+        import re
+        _followup_markers = (
+            "？", "?", "！", "!",
+            "然后呢", "接着", "继续", "说下去", "然后",
+            "呢", "嗯", "啊", "哦", "噢", "啥",
+        )
+        stripped = query.strip()
+        # 仅当输入本身就是短追问标记时才检查上下文
+        if stripped not in _followup_markers and not re.fullmatch(r'[？?！!\s]{1,3}', stripped):
+            return False
+
+        # 检查上下文中最近的用户消息是否含记忆/回忆/时间意图
+        try:
+            recent = self.context.get_last_n(6) or []
+        except Exception:
+            return False
+        _memory_intent_keywords = (
+            "回忆", "记得", "记忆", "recall", "上次", "昨天", "上周",
+            "之前", "前天", "几点", "哪个时间", "那天",
+        )
+        # 倒序查找最近一条 user 消息（排除当前这条）
+        for msg in reversed(recent):
+            if msg.get("role") != "user":
+                continue
+            content = str(msg.get("content", ""))
+            if any(kw in content for kw in _memory_intent_keywords):
+                return True
+            # 找到最近一条 user 消息即可，不含记忆意图就不再往前找
+            return False
+        return False
 
     def _detect_voice_intent(self, user_input: str) -> bool:
         voice_keywords = [

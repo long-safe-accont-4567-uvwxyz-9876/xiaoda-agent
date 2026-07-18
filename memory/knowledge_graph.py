@@ -1,4 +1,5 @@
 from typing import Any
+import asyncio
 import json
 import re
 import time
@@ -73,11 +74,21 @@ class KnowledgeGraph:
 
     MAX_ENTITIES = 500
     CLEANUP_AGE_DAYS = 30
+    # 修复 P0-2：query 实体提取结果缓存（LRU + TTL）
+    # 根因：同一 query 在主检索路径中可能被调用 3 次（fast path L1310、complex path L1379、
+    # KG 召回通道 L686 via recall_by_query），每次都触发一次 LLM 调用，最坏 30s × 3 = 90s 阻塞。
+    # LRU 缓存让同一 query 只调一次 LLM，后续命中缓存 <1ms。
+    QUERY_ENTITY_CACHE_TTL = 300  # 5 分钟，与 query_cache 对齐
+    QUERY_ENTITY_CACHE_MAX = 256  # 上限 256 条，避免内存膨胀
 
     def __init__(self, db: Any=None, knowledge_db: KnowledgeDB | None = None, router: Any=None) -> None:
         self._db = db
         self.knowledge_db = knowledge_db
         self._router = router
+        # P0-2: query → (entities_set, expire_timestamp)
+        self._query_entity_cache: dict[str, tuple[set[str], float]] = {}
+        # P0-2: 简单的 LRU 顺序记录（按访问时间），用于淘汰
+        self._query_entity_lru: list[str] = []
 
     def set_db(self, db: Any) -> None:
         self._db = db
@@ -101,7 +112,10 @@ class KnowledgeGraph:
             return None
         import httpx
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            # 修复 P0-2：timeout 从 30s → 10s
+            # 根因：实体提取是检索路径的阻塞点，30s 超时会让单次检索最坏阻塞 30s。
+            # 10s 足够 GLM-4-9B-0414 完成实体提取（正常 1-3s），超时则降级到 router 或返回空。
+            async with httpx.AsyncClient(timeout=10) as client:
                 response = await client.post(
                     f"{self._free_base_url}/chat/completions",
                     json={
@@ -135,13 +149,24 @@ class KnowledgeGraph:
             # 优先使用免费模型，降级到主路由
             result = await self._call_free_model(messages, temperature=0.1, max_tokens=1024)
             if result is None and self._router:
-                result = await self._router.route(
-                    "memory_encoding",
-                    messages,
-                    temperature=0.1,
-                    user_openid="system",
-                    session_id="kg_extract",
-                )
+                # 修复 P0-2：降级路由加 8s 超时保护
+                # 根因：原代码 router.route 无超时，主模型卡住会让实体提取无限阻塞，
+                # 进而阻塞整个记忆检索流程（kg.get_query_entities 在主检索路径中被同步等待）。
+                # 8s 超时：与 _call_free_model(10s) 互补，总最长 18s 后强制降级返回空实体。
+                try:
+                    result = await asyncio.wait_for(
+                        self._router.route(
+                            "memory_encoding",
+                            messages,
+                            temperature=0.1,
+                            user_openid="system",
+                            session_id="kg_extract",
+                        ),
+                        timeout=8.0,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("kg.extract_router_timeout, fallback to empty entities")
+                    return {"entities": [], "relations": []}
             if isinstance(result, str):
                 cleaned = _clean_json_response(result)
                 try:
@@ -265,14 +290,46 @@ class KnowledgeGraph:
         """提取 query 实体（单次 LLM 调用）。
 
         I6: 供召回通道和快速评分共用，避免 N+1 次 LLM 调用。
+        修复 P0-2: 加 LRU + TTL 缓存，同一 query 5 分钟内只调一次 LLM。
         """
+        # P0-2: 缓存命中检查
+        now = time.time()
+        cached = self._query_entity_cache.get(query)
+        if cached is not None:
+            entities_set, expire_ts = cached
+            if now < expire_ts:
+                # 命中缓存，更新 LRU 顺序
+                try:
+                    self._query_entity_lru.remove(query)
+                    self._query_entity_lru.append(query)
+                except ValueError:
+                    pass
+                logger.debug("kg.query_entities_cache_hit", query=query[:50])
+                return entities_set
+            else:
+                # 过期，清除
+                self._query_entity_cache.pop(query, None)
+                try:
+                    self._query_entity_lru.remove(query)
+                except ValueError:
+                    pass
+
         try:
             entities = await self.extract_from_summary(query)
-            return {ent.get("name", "") for ent in entities.get("entities", [])
-                    if ent.get("name")}
+            result_set = {ent.get("name", "") for ent in entities.get("entities", [])
+                          if ent.get("name")}
         except Exception as e:
             logger.debug("kg.query_entities_failed", error=str(e))
-            return set()
+            result_set = set()
+
+        # P0-2: 写入缓存（即使是空集也缓存，避免重复调用 LLM 浪费）
+        self._query_entity_cache[query] = (result_set, now + self.QUERY_ENTITY_CACHE_TTL)
+        self._query_entity_lru.append(query)
+        # LRU 淘汰
+        while len(self._query_entity_lru) > self.QUERY_ENTITY_CACHE_MAX:
+            oldest = self._query_entity_lru.pop(0)
+            self._query_entity_cache.pop(oldest, None)
+        return result_set
 
     async def get_relevance_boost_fast(self, query_entities: set[str],
                                          memory_entities_list: list[list[str]]) -> list[float]:

@@ -1,5 +1,6 @@
 import os
 import time
+import asyncio
 import difflib
 import httpx
 from loguru import logger
@@ -128,12 +129,22 @@ class InstinctManager:
         result = await self._call_free_model(messages, temperature=0.3, max_tokens=800)
         if result is None:
             try:
-                result = await self.router.route(
-                    task_type="chat_mini",
-                    messages=messages,
-                    temperature=0.3,
-                    max_tokens=800,
+                # 修复 P0-2 同类 bug：降级路由加 10s 超时保护
+                # 根因：原代码 router.route 无超时，主模型卡住会让 extract_instincts
+                # 阻塞 30-53s（日志 bg.task_slow name=extract_instincts elapsed=30-53s）。
+                # instinct 提取是后台任务，不应阻塞这么久；超时则放弃本次提取。
+                result = await asyncio.wait_for(
+                    self.router.route(
+                        task_type="chat_mini",
+                        messages=messages,
+                        temperature=0.3,
+                        max_tokens=800,
+                    ),
+                    timeout=10.0,
                 )
+            except asyncio.TimeoutError:
+                logger.warning("instinct.extract_router_timeout, skip this round")
+                return
             except Exception as e:
                 logger.warning("instinct.extract_llm_failed", error=str(e))
                 return

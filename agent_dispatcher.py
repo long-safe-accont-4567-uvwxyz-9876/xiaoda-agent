@@ -553,10 +553,10 @@ class SubAgent:
             # 无工具调用 → 直接返回清理后的内容
             if extracted is None:
                 content = msg.content or ""
-                if not content:
-                    rc = getattr(msg, "reasoning_content", None) or ""
-                    if rc:
-                        content = rc
+                # 修复：不使用 reasoning_content 代替 content（防止推理泄漏）
+                # 根因：reasoning_content 是模型内部思考链，regex 无法可靠清理整段中文/英文思考链，
+                # 用它代替 content 会导致推理过程被当成最终回复发给用户。
+                # content 为空时让上层 fallback（返回提示语），更安全。
                 content = strip_dsml(content)
                 content = strip_reasoning(content)
                 content = deduplicate_multi_reply(content)
@@ -621,7 +621,10 @@ class SubAgent:
                     # 读取 ROUTE_TABLE 中 chat 任务的 thinking 配置（全局开关）
                     from model_router import ROUTE_TABLE
                     chat_config = ROUTE_TABLE.get("chat", {})
-                    thinking_enabled = chat_config.get("thinking") is not None
+                    # 修复：必须检查 type == "enabled"，而非 "is not None"
+                    # 否则 thinking={"type":"disabled"} 时 is not None 返回 True，反而开启 thinking
+                    _thinking_cfg = chat_config.get("thinking") or {}
+                    thinking_enabled = _thinking_cfg.get("type") == "enabled"
                     extra_body = {"chat_template_kwargs": {"enable_thinking": thinking_enabled}}
                 from config import get_temperature
                 response = await asyncio.wait_for(
@@ -783,7 +786,9 @@ class SubAgent:
             if self.config.provider == "agnes":
                 from model_router import ROUTE_TABLE
                 chat_config = ROUTE_TABLE.get("chat", {})
-                thinking_enabled = chat_config.get("thinking") is not None
+                # 修复：必须检查 type == "enabled"，而非 "is not None"
+                _thinking_cfg = chat_config.get("thinking") or {}
+                thinking_enabled = _thinking_cfg.get("type") == "enabled"
                 extra_body = {"chat_template_kwargs": {"enable_thinking": thinking_enabled}}
             from config import get_temperature
             response = await asyncio.wait_for(

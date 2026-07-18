@@ -344,6 +344,40 @@ def _char_bigrams(text: str) -> set[str]:
     return {text[i:i + 2] for i in range(len(text) - 1)}
 
 
+def _natural_time_desc(ts: float) -> str:
+    """把时间戳转成自然中文时段描述，供 conversation_log 摘要使用。
+
+    根因：原来用 `[HH:MM]` 日志格式，LLM 看到后会照搬到回复里
+    （例如输出 `[13:59] 刚才小妲还在想……`）。改用自然中文时段+时间，
+    LLM 没有方括号日志格式可模仿，回复会更口语化。
+    """
+    import time as _t
+    lt = _t.localtime(ts)
+    hour, minute = lt.tm_hour, lt.tm_min
+    if 5 <= hour < 8:
+        period = "清晨"
+    elif 8 <= hour < 11:
+        period = "上午"
+    elif 11 <= hour < 13:
+        period = "中午"
+    elif 13 <= hour < 17:
+        period = "下午"
+    elif 17 <= hour < 19:
+        period = "傍晚"
+    elif 19 <= hour < 23:
+        period = "晚上"
+    else:
+        period = "深夜"
+    h12 = hour if hour <= 12 else hour - 12
+    if minute == 0:
+        return f"{period}{h12}点"
+    if minute == 30:
+        return f"{period}{h12}点半"
+    if minute < 10:
+        return f"{period}{h12}点过{minute}分"
+    return f"{period}{h12}点{minute}分"
+
+
 class MemoryManager:
     """管理情景记忆的编码、检索、去重与遗忘等核心流程。"""
 
@@ -1258,6 +1292,7 @@ class MemoryManager:
             scope = Scope()
         # 查询语义缓存：命中则直接返回，跳过完整检索流水线
         if getattr(config, 'QUERY_CACHE_ENABLED', True):
+            logger.debug("memory.retrieve_stage", stage="query_cache_get", query=query[:50])
             cached = await self._query_cache.get(query)
             if cached is not None:
                 logger.info("memory.cache_hit", query=query[:100])
@@ -1266,6 +1301,7 @@ class MemoryManager:
         # 意图路由：按查询意图调整 k 与检索通道（闲聊型跳过 KG/Reranker）
         # A4 根本修复：移除外层 asyncio.wait_for，因为 query_transform.py 内部已有超时控制
         # 双重超时（外层5s + 内层5s）会导致不必要的失败
+        logger.debug("memory.retrieve_stage", stage="classify_intent", query=query[:50])
         intent = "factual"
         if self._query_transformer and self._query_transformer.available:
             try:
@@ -1282,6 +1318,7 @@ class MemoryManager:
         # 时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索
         # 这让小妲能回答"昨天发生了什么"这类纯时间查询
         # 修复：时间检索返回空时不短路，继续走语义检索兜底，避免"不知道/忘记了"
+        logger.debug("memory.retrieve_stage", stage="temporal_search", query=query[:50])
         temporal_results = await self._try_temporal_search(query, k, scope=scope, include_raw=True)
         if temporal_results:
             # 时间检索命中也递增 access_count（与常规检索路径一致）
@@ -1337,12 +1374,10 @@ class MemoryManager:
                 results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
                 results = results[:k]
 
-            # CRAG 兜底：空结果走 importance fallback（闲聊型跳过）
-            if not results and intent != "chat":
-                assessment = self._assessor.assess(query, results)
-                if assessment["should_fallback"]:
-                    logger.info("memory.crag_fallback", query=query[:100])
-                    results = await self._importance_fallback_search(k, scope=scope)
+            # 注：移除 importance fallback
+            # 根因：空结果时按重要性排序返回 k 条，完全不做语义匹配，
+            # 会注入"重要但无关"的记忆（如用户问天气却返回上次生日记忆）。
+            # 空结果应如实返回空，由模型调 recall 工具或如实说"不记得"。
 
             # 内容相似度去重（与复杂路径保持一致，避免多通道 RRF 融合后返回近似重复）
             if results:
@@ -1367,9 +1402,8 @@ class MemoryManager:
         if not results:
             results = await self._vector_fallback_search(query, k, scope=scope)
 
-        # 最终兜底：重要性排序
-        if not results:
-            results = await self._importance_fallback_search(k, scope=scope)
+        # 注：移除 importance fallback（同上，会注入"重要但无关"的记忆）
+        # 空结果如实返回空，由模型调 recall 工具或如实说"不记得"
 
         # 流体记忆评分（艾宾浩斯遗忘曲线 + 访问强化）
         results = await self._apply_fsrs_scoring(results)
@@ -1407,9 +1441,7 @@ class MemoryManager:
                                 confidence=reassessment["confidence"],
                                 level=reassessment["level"])
 
-            if assessment["should_fallback"] and not results:
-                logger.info("memory.crag_fallback", query=query[:100])
-                results = await self._importance_fallback_search(k, scope=scope)
+            # 注：移除 importance fallback（同上，会注入"重要但无关"的记忆）
 
         results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
         results = results[:k]
@@ -1418,12 +1450,22 @@ class MemoryManager:
         # 从 query 抽取 top-N 话题关键词，对每个词做轻量 FTS 检索，
         # 把"主题相关但未被主路命中"的记忆补充进来，扩大主动联想。
         # 这样即使主路 RRF 没召回，话题相关的旧记忆也能浮上来。
+        # 修复 P1-3：本函数不再内部截断，topic_hits 会以 final_score=0.25 保留在末尾，
+        # 由下面的统一截断处理。
         results = await self._apply_topic_trigger(query, results, k, scope=scope)
 
         # KG 上下文增强（保留原有逻辑）
         await self._apply_kg_context_enhance(results)
 
         results = self._dedup_by_content_similarity(results)
+
+        # 修复 P1-3：话题触发器修复后的统一截断
+        # 允许最多 k+2 条结果（k 条主路 + 最多 2 条话题触发补充），让话题触发记忆可见。
+        # 如果没有 topic_hits，截断到 k；有则保留 k+2 上限。
+        _has_topic = any(r.get("topic_trigger") for r in results)
+        _final_k = k + 2 if _has_topic else k
+        if len(results) > _final_k:
+            results = results[:_final_k]
 
         # 写入缓存
         if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
@@ -1517,10 +1559,30 @@ class MemoryManager:
                 asst_msg = (row.get("assistant_reply") or "")
                 if not user_msg and not asst_msg:
                     continue
-                time_str = _time.strftime("%H:%M", _time.localtime(float(ts))) if ts else "??:??"
-                summary = f"[{time_str}] 用户: {user_msg}"
+                # 场景指令检测：用户有时发送"（场景：...格式：...）"这类
+                # 元指令来控制 agent 行为，不是真正的对话内容。LLM 在回忆时
+                # 会原样复述这些指令（系统 prompt 泄漏），所以需要标记为
+                # "场景指令"，让 LLM 知道这不是需要复述给用户听的内容。
+                if user_msg.startswith("（场景：") or user_msg.startswith("(场景："):
+                    user_msg = "（场景指令，非对话内容，回忆时不要复述）"
+                # 带完整日期的时间锚点 + 叙事化格式：根因修复
+                # 之前格式"时间：...\n爸爸：...\n小妲：..."像数据记录，LLM 模仿输出
+                # "时间线整理：⏰ 约7:09"等出戏格式。改为叙事性格式——像回忆的画面
+                # 浮现，而不是日志条目。LLM 看到叙事性内容，回忆时也会用叙事性语言。
+                # 同时带完整年月日，防止 LLM 被记忆内容里的日期干扰（如用户当时
+                # 在回忆"7月16日"，LLM 会采用内容里的日期作为锚点）。
+                if ts:
+                    from datetime import datetime as _dt_cls
+                    _dt = _dt_cls.fromtimestamp(float(ts))
+                    _period = _natural_time_desc(float(ts))
+                    time_str = f"{_dt.year}年{_dt.month}月{_dt.day}日{_period}"
+                else:
+                    time_str = "某时"
+                # 叙事化：用"——"连接时间和对话，用"爸爸说""你回答"代替"爸爸：""小妲："
+                # 这种格式让 LLM 觉得这是回忆片段，不是数据记录
+                summary = f"{time_str}——\n爸爸说：{user_msg}"
                 if asst_msg:
-                    summary += f"\n  助手: {asst_msg}"
+                    summary += f"\n你当时回答：{asst_msg}"
                 results.append({
                     "summary": summary,
                     "timestamp": ts,
@@ -1998,10 +2060,16 @@ class MemoryManager:
                         # 标记话题触发来源，便于调试和上层 prompt 区分
                         _r["topic_trigger"] = _kw
                         # 话题触发的记忆没有 final_score，用基础分填充避免排序异常
-                        _r.setdefault("final_score", _r.get("score", 0.3) * 0.5)
+                        # 分数设为 0.25：低于主路 reranker 命中（0.4+），但高于去重阈值，
+                        # 让话题触发记忆作为"补充联想"出现在结果末尾，扩大主动联想。
+                        _r.setdefault("final_score", 0.25)
                         results.append(_r)
-            if len(results) > k:
-                results = results[:k]
+            # 修复：移除函数内部的 [:k] 截断
+            # 根因：调用方在调用本函数前已 results = results[:k] 截断（见 retrieve_memories_hybrid L1410），
+            # 本函数把 topic_hits append 到末尾后，若再 [:k] 截断，刚 append 的 topic_hits 会全部被丢弃，
+            # 导致话题触发器形同虚设（死代码）。
+            # 修复后：让 topic_hits 超出 k 的部分保留，由调用方的 _dedup_by_content_similarity 处理后
+            # 再统一截断到 k+2（见 retrieve_memories_hybrid L1416 后的截断）。
             logger.debug("memory.topic_trigger",
                          keywords=_topic_keywords,
                          added=sum(1 for r in results if r.get("topic_trigger")))
