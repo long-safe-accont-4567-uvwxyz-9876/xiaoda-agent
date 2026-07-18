@@ -386,10 +386,9 @@ def _run_desktop(host: str, port: int) -> None:
     _reflow_js = (
         "(function(){"
         "  var b=document.body;"
-        "  void b.offsetHeight;"  # 触发一次同步 reflow
+        "  void b.offsetHeight;"
         "  b.style.opacity='0.999';"
         "  requestAnimationFrame(function(){b.style.opacity='1';});"
-        "  // 持续推进 rAF，防止合成器再次休眠（直到 onServerReady 接管）"
         "  var t0=performance.now();"
         "  (function kick(){if(performance.now()-t0<30000)requestAnimationFrame(kick);})();"
         "  return 'ok';"
