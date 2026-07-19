@@ -52,11 +52,16 @@ def _build_scene_hint(source: str) -> str:
 class AgentContext:
     """管理对话上下文，维护历史、系统提示、动态缓存与压缩等状态。"""
 
-    MAX_HISTORY_TOKENS = 200000
+    # 历史压缩阈值：按模型动态计算（见 _get_dynamic_max_tokens），不再硬编码
+    FALLBACK_MAX_HISTORY_TOKENS = 60000  # router 不可用时兜底
+    SYSTEM_PROMPT_RESERVE_RATIO = 0.30   # 预留 30% 给 system prompt + tools + 输出
+    LARGE_CONTEXT_THRESHOLD = 524288     # ≥512K 视为大上下文，保留更多轮
+    LARGE_CONTEXT_KEEP_RECENT = 10        # 大上下文保留 10 轮
+    NORMAL_CONTEXT_KEEP_RECENT = 5        # 普通上下文保留 5 轮
     SYSTEM_PROMPT_TOKENS_BUDGET = 2000
     DYNAMIC_CACHE_TTL = 600
     PORTRAIT_CACHE_TTL = 1800
-    COMPRESS_TARGET_RATIO = 0.6   # 压缩目标：60% 的 MAX_HISTORY_TOKENS
+    COMPRESS_TARGET_RATIO = 0.6   # 压缩目标：60% 的动态阈值
     MAX_COMPRESS_ROUNDS = 5        # 最大压缩轮数
     MAX_COMPRESSED_SUMMARY_LEN = 6000
     MAX_PRE_COMPRESSED_BUFFER = 200
@@ -161,10 +166,11 @@ class AgentContext:
         if len(self._compressed_summary) > self.MAX_COMPRESSED_SUMMARY_LEN:
             self._compressed_summary = self._compressed_summary[-self.MAX_COMPRESSED_SUMMARY_LEN:]
 
-        if not self.history or self._history_tokens() <= self.MAX_HISTORY_TOKENS:
+        max_history_tokens = self._get_dynamic_max_tokens()
+        if not self.history or self._history_tokens() <= max_history_tokens:
             return
 
-        target_tokens = int(self.MAX_HISTORY_TOKENS * self.COMPRESS_TARGET_RATIO)
+        target_tokens = int(max_history_tokens * self.COMPRESS_TARGET_RATIO)
 
         # 尝试使用 ContextCompressor 进行更好的压缩
         if self._compressor is None and self._router:
@@ -180,7 +186,9 @@ class AgentContext:
             if self._history_tokens() <= target_tokens:
                 return
 
-            preserve_count = min(10, len(self.history))
+            # 大上下文模型保留更多轮，避免"忽然不记得之前在说什么"
+            keep_recent = self._get_keep_recent()
+            preserve_count = min(keep_recent * 2, len(self.history))
             compressible = self.history[:len(self.history) - preserve_count]
 
             if not compressible:
@@ -191,7 +199,7 @@ class AgentContext:
 
             if self._compressor:
                 try:
-                    result = self._compressor.compress_history(self.history, keep_recent=preserve_count // 2)
+                    result = self._compressor.compress_history(self.history, keep_recent=keep_recent)
                     compressed_msgs = result.messages
                     if len(compressed_msgs) < len(self.history):
                         # 提取压缩后的摘要
@@ -205,7 +213,9 @@ class AgentContext:
                         if len(self._compressed_summary) > self.MAX_COMPRESSED_SUMMARY_LEN:
                             self._compressed_summary = self._compressed_summary[-self.MAX_COMPRESSED_SUMMARY_LEN:]
                         self._compress_count += 1
-                        logger.info("context.compressed_with_ccr", round=_round + 1, tokens=self._history_tokens(), target=target_tokens)
+                        logger.info("context.compressed_with_ccr", round=_round + 1,
+                                    tokens=self._history_tokens(), target=target_tokens,
+                                    max_tokens=max_history_tokens, keep_recent=keep_recent)
                         continue
                 except Exception as e:
                     logger.debug("context.ccr_compress_failed", error=str(e))
@@ -225,18 +235,113 @@ class AgentContext:
                     self._compressed_summary = self._compressed_summary[-self.MAX_COMPRESSED_SUMMARY_LEN:]
                 self._compress_count += 1
                 self.history = remaining_compressible + preserved
-                logger.info("context.compressed", round=_round + 1, compressed=compress_count, tokens=self._history_tokens(), target=target_tokens)
+                logger.info("context.compressed", round=_round + 1, compressed=compress_count,
+                            tokens=self._history_tokens(), target=target_tokens,
+                            max_tokens=max_history_tokens, keep_recent=keep_recent)
             else:
                 # 摘要失败，强制移除最旧的消息
                 removed = self.history.pop(0)
                 logger.debug("context.trimmed", role=removed["role"], preview=removed["content"][:40])
 
         # 最终强制裁剪：如果 5 轮后仍超限，强制移除最旧的消息
-        while self.history and self._history_tokens() > self.MAX_HISTORY_TOKENS:
+        while self.history and self._history_tokens() > max_history_tokens:
             removed = self.history.pop(0)
             if len(self._pre_compressed_buffer) < self.MAX_PRE_COMPRESSED_BUFFER:
                 self._pre_compressed_buffer.append(removed)
             logger.debug("context.force_trimmed", role=removed["role"], preview=removed["content"][:40])
+
+    def _get_dynamic_max_tokens(self) -> int:
+        """动态计算 history 的最大允许 token 数。
+
+        根据 router 当前激活模型偏好的 max_tokens（上下文窗口大小），
+        预留 SYSTEM_PROMPT_RESERVE_RATIO（30%）给 system prompt + tools + 输出，
+        剩余 70% 用于 history。
+
+        - mimo chat (128K): 阈值约 90K
+        - mimo chat_pro (128K): 阈值约 90K
+        - chat_ultra (1M): 阈值约 730K
+        - chat_flash (6K): 阈值约 4K（很激进，但匹配模型实际能力）
+        - router 不可用: 回退 FALLBACK_MAX_HISTORY_TOKENS (60000)
+        """
+        if not self._router or not hasattr(self._router, "get_active_max_tokens"):
+            return self.FALLBACK_MAX_HISTORY_TOKENS
+        try:
+            model_max = self._router.get_active_max_tokens()
+            if model_max <= 0:
+                return self.FALLBACK_MAX_HISTORY_TOKENS
+            history_budget = int(model_max * (1 - self.SYSTEM_PROMPT_RESERVE_RATIO))
+            # 不低于兜底值，避免极端小窗口导致过度压缩
+            return max(history_budget, self.FALLBACK_MAX_HISTORY_TOKENS)
+        except Exception as e:
+            logger.debug("agent_context.dynamic_max_tokens_failed", error=str(e))
+            return self.FALLBACK_MAX_HISTORY_TOKENS
+
+    def _get_keep_recent(self) -> int:
+        """根据当前上下文窗口大小动态决定保留多少轮完整对话。
+
+        大上下文模型（≥512K）保留 10 轮，普通模型保留 5 轮。
+        避免大上下文模型被压缩后丢失过多上下文。
+
+        注意：判断基于 router 原始 max_tokens（模型实际上下文窗口大小），
+        而非 _get_dynamic_max_tokens() 返回的 history_budget（已预留 30%
+        给 system prompt + tools + 输出）。否则会出现 512K 模型因 70%
+        缩水后被误判为普通上下文的逻辑错误。
+        """
+        if not self._router or not hasattr(self._router, "get_active_max_tokens"):
+            return self.NORMAL_CONTEXT_KEEP_RECENT
+        try:
+            model_max = self._router.get_active_max_tokens()
+            if model_max >= self.LARGE_CONTEXT_THRESHOLD:
+                return self.LARGE_CONTEXT_KEEP_RECENT
+            return self.NORMAL_CONTEXT_KEEP_RECENT
+        except Exception as e:
+            logger.debug("agent_context.keep_recent_failed", error=str(e))
+            return self.NORMAL_CONTEXT_KEEP_RECENT
+
+    async def compress_now(self) -> dict:
+        """手动触发上下文压缩（供 /compress 斜杠命令调用）。
+
+        立即对当前 history 执行压缩，返回压缩前后 token 数与节省量。
+        若 history 不足或未超阈值，仍执行一次压缩以便用户感知，但 saved_tokens 可能为 0。
+        """
+        before_tokens = self._history_tokens()
+        before_count = len(self.history)
+        max_tokens = self._get_dynamic_max_tokens()
+
+        # 即使未超阈值也强制压缩一次（用户主动请求）
+        if before_tokens <= max_tokens and before_count <= self.NORMAL_CONTEXT_KEEP_RECENT * 2:
+            return {
+                "before_tokens": before_tokens,
+                "after_tokens": before_tokens,
+                "saved_tokens": 0,
+                "before_messages": before_count,
+                "after_messages": before_count,
+                "rounds": 0,
+                "max_tokens": max_tokens,
+                "message": f"当前上下文 {before_tokens} tokens，未超阈值 {max_tokens}，无需压缩",
+            }
+
+        rounds_before = self._compress_count
+        await self._trim_history()
+        rounds = self._compress_count - rounds_before
+
+        after_tokens = self._history_tokens()
+        after_count = len(self.history)
+        saved = before_tokens - after_tokens
+
+        logger.info("context.manual_compress_done",
+                    before=before_tokens, after=after_tokens, saved=saved, rounds=rounds)
+        return {
+            "before_tokens": before_tokens,
+            "after_tokens": after_tokens,
+            "saved_tokens": saved,
+            "before_messages": before_count,
+            "after_messages": after_count,
+            "rounds": rounds,
+            "max_tokens": max_tokens,
+            "message": f"压缩完成：{before_tokens} → {after_tokens} tokens（节省 {saved}）",
+        }
+
 
     async def flush_pre_compressed_buffer(self) -> list[dict]:
         """取出并清空压缩暂存区的消息（供后台记忆编码任务消费）。"""

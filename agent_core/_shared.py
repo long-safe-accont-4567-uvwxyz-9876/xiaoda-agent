@@ -18,11 +18,41 @@ from typing import Any
 # ── 模块级常量 ─────────────────────────────────────────────────
 DEGRADED_REPLY = "嗯……人家现在有点不太舒服，等会儿再聊好不好？"
 
+# 按 finish_reason 分类的兜底文案（替代统一 DEGRADED_REPLY，让用户看到更明确的提示）
+# 当 LLM 返回空内容时，根据 finish_reason 选择对应兜底文案
+EMPTY_REPLY_REASON_MESSAGES: dict[str, str] = {
+    # max_tokens 截断：返回的兜底文案，外层应触发"请继续"重试，这里是重试失败后的兜底
+    "length": "嗯……刚才想得太长被截断了，请稍等一下再让人家回答好不好？",
+    # content_filter：内容被安全过滤，明确提示用户
+    "content_filter": "抱歉，刚才的回复可能涉及敏感内容被过滤了，能换个说法再问一次吗？",
+    # tool_calls：LLM 想调用工具但没生成文本，由验收循环处理，这里只在最终兜底时使用
+    "tool_calls": "嗯……人家正在查资料，请稍等一下再看回复好不好？",
+}
+
+# 默认兜底文案（finish_reason 未知或 None 时使用，保留原 DEGRADED_REPLY 语义）
+EMPTY_REPLY_DEFAULT = DEGRADED_REPLY
+
+
+def get_empty_reply_for_finish_reason(finish_reason: str | None) -> str:
+    """根据 LLM finish_reason 返回对应的空回复兜底文案。
+
+    Args:
+        finish_reason: LLM 返回的 finish_reason 字段（length/content_filter/tool_calls/stop/None）
+
+    Returns:
+        对应的兜底文案字符串
+    """
+    if not finish_reason:
+        return EMPTY_REPLY_DEFAULT
+    return EMPTY_REPLY_REASON_MESSAGES.get(finish_reason, EMPTY_REPLY_DEFAULT)
+
 # 降级/错误/拦截回复集合 — 这些回复不应写入记忆库，避免污染后续检索
-# 包含：degraded reply、熔断回复、空回复、content_filter 后的截断回复
+# 包含：degraded reply、熔断回复、空回复、content_filter 后的截断回复、
+# 按 finish_reason 分类的空回复兜底文案（length/content_filter/tool_calls）
 _DEGRADED_REPLIES: frozenset[str] = frozenset({
     DEGRADED_REPLY,
     "系统需要休息一下，请稍后再试吧～",
+    *EMPTY_REPLY_REASON_MESSAGES.values(),
 })
 
 # 降级回复前缀（用于模糊匹配，避免完全匹配遗漏变体）
@@ -30,12 +60,20 @@ _DEGRADED_PREFIXES: tuple[str, ...] = (
     "嗯……人家现在有点不太舒服",
     "系统需要休息一下",
     "嗯……出了点小问题",
+    # 新增：按 finish_reason 分类的兜底文案前缀
+    "嗯……刚才想得太长被截断",
+    "抱歉，刚才的回复可能涉及敏感内容",
+    "嗯……人家正在查资料",
 )
 
 # 降级回复中的特征短语（用 in 匹配，适配 agent 名称前缀等变体）
 _DEGRADED_PHRASES: tuple[str, ...] = (
     "想得太入神了",
     "出了点小问题",
+    # 新增：finish_reason 分类兜底文案的特征短语
+    "想得太长被截断",
+    "敏感内容被过滤",
+    "正在查资料",
 )
 
 

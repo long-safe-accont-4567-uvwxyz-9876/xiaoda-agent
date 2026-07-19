@@ -35,7 +35,10 @@ from utils.text_utils import (has_dsml_tool_calls, parse_dsml_tool_calls,
 from utils.llm_cleanup import deduplicate_multi_reply
 
 # 从 _shared 导入共享常量, 避免重复定义 (该模块极轻量, 无循环导入风险)
-from agent_core._shared import DEGRADED_REPLY, is_degraded_reply
+from agent_core._shared import (
+    DEGRADED_REPLY, is_degraded_reply,
+    get_empty_reply_for_finish_reason,
+)
 
 
 def _get_temperature(model_cfg: dict | None = None) -> float:
@@ -101,21 +104,60 @@ class MessageProcessorMixin:
         if not current_tool_calls:
             if isinstance(first_result, str):
                 reply = self._clean_reply(first_result)
+                _finish_reason = None  # 字符串路径无 finish_reason
             else:
                 _raw_content = first_result.choices[0].message.content or ""
                 reply = self._clean_reply(_raw_content)
+                _finish_reason = getattr(first_result.choices[0], "finish_reason", None)
                 # 诊断：捕获清洗前原始内容，定位 empty_reply 根因
                 if not reply or not reply.strip():
                     logger.warning("debug.empty_reply_raw_capture",
                                    raw_len=len(_raw_content),
                                    raw_head=_raw_content[:300],
-                                   finish_reason=getattr(first_result.choices[0], "finish_reason", None),
+                                   finish_reason=_finish_reason,
                                    has_tool_calls=bool(getattr(first_result.choices[0].message, "tool_calls", None)))
 
-            # 空回复保护：如果首轮就返回空内容，抛异常让上层 fallback 机制接管
+            # 空回复保护：根据 finish_reason 分类处理
             if not reply or not reply.strip():
-                trace.warning("verification.empty_first_reply")
-                raise RuntimeError("empty_reply: LLM 返回空内容，触发 fallback")
+                # length: max_tokens 截断，触发"请继续"重试（最多2次）
+                if _finish_reason == "length":
+                    for _cont_idx in range(2):
+                        try:
+                            messages.append({"role": "assistant", "content": reply or ""})
+                            messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
+                            _cont_result = await asyncio.wait_for(self.router.route(
+                                task_type, messages, temperature=temperature, max_tokens=max_tokens,
+                                user_openid=user_openid, session_id=session_id,
+                            ), timeout=60)
+                            _cont_reply = _cont_result if isinstance(_cont_result, str) else (_cont_result.choices[0].message.content or "")
+                            _cont_reply = self._clean_reply(_cont_reply)
+                            if _cont_reply and _cont_reply.strip():
+                                trace.info("verification.length_retry_success", retry=_cont_idx)
+                                reply = _cont_reply
+                                break
+                        except Exception as _cont_err:
+                            logger.warning("verification.length_retry_failed",
+                                           retry=_cont_idx, error=str(_cont_err))
+                            break
+                    if reply and reply.strip():
+                        pass  # 重试成功，继续走完整性检测
+                    else:
+                        # 重试失败，用 length 专用兜底
+                        trace.warning("verification.empty_first_reply_length_exhausted")
+                        return get_empty_reply_for_finish_reason("length"), []
+                elif _finish_reason == "content_filter":
+                    # content_filter：内容被安全过滤，直接返回专用提示
+                    trace.warning("verification.empty_first_reply_content_filter")
+                    return get_empty_reply_for_finish_reason("content_filter"), []
+                elif _finish_reason == "tool_calls":
+                    # tool_calls：LLM 想调用工具但没生成文本，给个友好提示
+                    trace.warning("verification.empty_first_reply_tool_calls_only")
+                    return get_empty_reply_for_finish_reason("tool_calls"), []
+                else:
+                    # 未知 finish_reason（包括 None/stop 等），保留原 DEGRADED_REPLY 行为
+                    trace.warning("verification.empty_first_reply",
+                                  finish_reason=_finish_reason)
+                    raise RuntimeError(f"empty_reply: LLM 返回空内容（finish_reason={_finish_reason}），触发 fallback")
 
             # 截断兜底：循环重试直到回复完整或达到最大重试次数，确保用户永不看到截断
             # 检测两种情况：

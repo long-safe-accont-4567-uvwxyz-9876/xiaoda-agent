@@ -389,6 +389,24 @@ class ModelRouter:
             return self._current_chat_model
         return {"provider": _CFG_DEFAULT_PROVIDER, "model_id": ROUTE_TABLE.get("chat", {}).get("model", _CFG_MODEL_NAME)}
 
+    def get_max_tokens_for_task(self, task_type: str = "chat") -> int:
+        """获取指定 task_type 的 max_tokens（上下文窗口大小）。
+
+        用于 AgentContext 动态计算压缩阈值，避免硬编码不分模型的问题。
+        若 task_type 不存在或字段缺失，返回保守兜底值 60000。
+        """
+        cfg = ROUTE_TABLE.get(task_type) or ROUTE_TABLE.get("chat", {})
+        return int(cfg.get("max_tokens", 60000))
+
+    def get_active_max_tokens(self) -> int:
+        """获取当前激活模型偏好的实际上下文窗口大小。
+
+        根据 _model_preference（mimo/mimo-pro/mimo-flash/mimo-mini/custom）解析对应 task_type，
+        再从 ROUTE_TABLE 取 max_tokens。供 AgentContext 动态压缩阈值使用。
+        """
+        task_type = self.resolve_task_type("chat")
+        return self.get_max_tokens_for_task(task_type)
+
     # 已知自定义 provider 的默认模型映射
     # 注意：这些是 fallback 值，当 provider 的 default_model 为空时使用
     # 建议通过 /models/health-check 端点定期验证这些模型ID是否仍然可用

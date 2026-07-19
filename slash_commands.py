@@ -15,6 +15,7 @@ OWNER_ONLY_COMMANDS: set[str] = {
     "/voice",   # 语音模式开关
     "/agent",   # 切换对话目标 Agent
     "/cam",     # 摄像头控制（隐私敏感）
+    "/compress", # 手动压缩上下文（影响运行时状态）
 }
 
 COMMAND_DESCRIPTIONS = {
@@ -38,6 +39,7 @@ COMMAND_DESCRIPTIONS = {
     "/doctor": "自检 (零 API 调用, <2s)",
     "/self": "查看 Agent 内心状态 (元认知自省)",
     "/wf": "执行工作流（后跟工作流名称）",
+    "/compress": "手动压缩上下文",
 }
 
 
@@ -106,6 +108,7 @@ class SlashCommandHandler:
             "/doctor": self._cmd_doctor,
             "/self": self._cmd_self,
             "/wf": self._cmd_wf,
+            "/compress": self._cmd_compress,
         }
 
         handler = handlers.get(command)
@@ -271,6 +274,48 @@ class SlashCommandHandler:
         self._context.invalidate_dynamic_cache()
 
         return "对话上下文已重置！人家会从头开始认识你的～"
+
+    async def _cmd_compress(self, args: str, user_id: str) -> str:
+        """手动触发上下文压缩。
+
+        调用 AgentContext.compress_now() 执行压缩，返回压缩前后 token 数与节省量。
+        即使未超阈值也允许压缩（用户主动请求）。
+        """
+        if not self._context:
+            return "上下文还没准备好呢～"
+
+        # 检查 compress_now 方法是否存在（向后兼容旧版 AgentContext）
+        if not hasattr(self._context, "compress_now"):
+            return "当前版本不支持手动压缩哦，请升级后再试～"
+
+        try:
+            result = await self._context.compress_now()
+        except Exception as e:
+            logger.warning("slash.compress_failed", error=str(e))
+            return f"压缩时出了点问题：{str(e)[:80]}"
+
+        # 格式化输出
+        before = result.get("before_tokens", 0)
+        after = result.get("after_tokens", 0)
+        saved = result.get("saved_tokens", 0)
+        before_msgs = result.get("before_messages", 0)
+        after_msgs = result.get("after_messages", 0)
+        rounds = result.get("rounds", 0)
+        max_tokens = result.get("max_tokens", 0)
+        message = result.get("message", "")
+
+        lines = [
+            "📦 上下文压缩报告",
+            f"  阈值：{max_tokens:,} tokens（基于当前模型动态计算）",
+            f"  消息数：{before_msgs} → {after_msgs}",
+            f"  Token：{before:,} → {after:,}",
+            f"  节省：{saved:,} tokens",
+            f"  压缩轮数：{rounds}",
+            "",
+            message,
+        ]
+        return "\n".join(lines)
+
 
     async def _cmd_learn(self, args: str, user_id: str) -> str:
         if not self._db:
@@ -731,6 +776,7 @@ class SlashCommandHandler:
         owner_cmds = [
             ("/model [mimo|mimo-pro|mimo-flash|mimo-mini]", "切换模型模式"),
             ("/reset", "重置对话上下文"),
+            ("/compress", "手动压缩上下文"),
             ("/voice [on|off]", "切换语音模式"),
             ("/agent [名称]", "切换对话目标Agent"),
             ("/debug", "查看内部调试状态"),

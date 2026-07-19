@@ -1097,27 +1097,37 @@ class AIQQBot(botpy.Client):
 
         _group_no_proactive = ("被动回复", "超过限制", "无权限", "40034105")
 
-        async def _send_segment(text: str) -> None:
-            """发送单个分片。群聊无主动消息权限，被动超限直接失败。"""
+        async def _send_segment(text: str) -> bool:
+            """发送单个分片。返回 True 表示真发送成功，False 表示配额耗尽被静默拒绝。
+
+            群聊无主动消息权限，被动超限时不再抛异常而是返回 False，
+            让外层循环能合并剩余内容为单条最终消息发送，避免后续段全部丢失。
+            """
             try:
                 await message.reply(content=text, msg_seq=_next_msg_seq())
+                return True
             except (TimeoutError, OSError, RuntimeError, ValueError) as e:
                 err_str = str(e)
                 if is_group and any(k in err_str for k in _group_no_proactive):
-                    logger.debug("qq_bot.stream_passive_limited_no_proactive",
-                                 error=err_str)
-                else:
-                    raise
+                    # 群聊被动回复配额超限——静默记录，返回 False 让外层合并剩余
+                    logger.info("qq_bot.stream_passive_limited_no_proactive",
+                                error=err_str, remaining_to_merge=True)
+                    return False
+                raise  # 其他异常仍然抛出，由外层异常恢复逻辑处理
 
         # 短回复：直接发送单片
         if len(segments) <= 1:
             try:
                 single = segments[0] if segments else full_text
                 t0 = time.monotonic()
-                await _send_segment(single)
+                ok = await _send_segment(single)
                 elapsed = (time.monotonic() - t0) * 1000
-                logger.info("qq_bot.stream_single",
-                            total_len=total_len, ms=round(elapsed, 1))
+                if ok:
+                    logger.info("qq_bot.stream_single",
+                                total_len=total_len, ms=round(elapsed, 1))
+                else:
+                    logger.warning("qq_bot.stream_single_quota_exhausted",
+                                   total_len=total_len, ms=round(elapsed, 1))
             except (TimeoutError, OSError, RuntimeError) as e:
                 logger.error("qq_bot.stream_final_failed", error=str(e))
             return
@@ -1139,11 +1149,32 @@ class AIQQBot(botpy.Client):
                 if i > 0:
                     await asyncio.sleep(random.uniform(0.8, 1.2))
                 t0 = time.monotonic()
-                await _send_segment(seg)
+                ok = await _send_segment(seg)
                 seg_ms = (time.monotonic() - t0) * 1000
-                sent_count += 1
-                logger.debug("qq_bot.stream_segment", index=i, size=len(seg),
-                             ms=round(seg_ms, 1), sent=sent_count)
+                if ok:
+                    sent_count += 1
+                    logger.debug("qq_bot.stream_segment", index=i, size=len(seg),
+                                 ms=round(seg_ms, 1), sent=sent_count)
+                else:
+                    # 配额耗尽：合并本段 + 剩余所有段为单条最终片发送
+                    logger.warning("qq_bot.stream_segment_quota_exhausted",
+                                   at_segment=i, sent_segments=sent_count,
+                                   total_segments=num_segments)
+                    remaining = "".join(segments[i:])
+                    try:
+                        ok2 = await _send_segment(remaining)
+                        if ok2:
+                            sent_count += 1
+                            logger.info("qq_bot.stream_quota_recovered_with_merge",
+                                        merged_from=num_segments - i, sent=sent_count,
+                                        ms=round(seg_ms, 1))
+                        else:
+                            logger.error("qq_bot.stream_quota_merge_failed_too",
+                                         remaining_len=len(remaining))
+                    except (TimeoutError, OSError, RuntimeError) as e2:
+                        logger.error("qq_bot.stream_quota_merge_exception",
+                                     error=str(e2), remaining_len=len(remaining))
+                    return
             except (TimeoutError, OSError, RuntimeError) as e:
                 logger.warning("qq_bot.stream_segment_failed",
                                error=str(e), sent_segments=sent_count)
