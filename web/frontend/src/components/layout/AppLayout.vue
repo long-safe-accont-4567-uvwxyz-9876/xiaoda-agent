@@ -82,22 +82,58 @@ if (!auth.isLoggedIn) {
 </style>
 
 <style>
-/* 页面间 3D 叶片翻转转场（须全局：transition 类挂在子组件根元素上） */
-.leaf-flip-enter-active,
-.leaf-flip-leave-active {
-  transition: transform 0.32s var(--ease-smooth), opacity 0.32s var(--ease-smooth);
+/* 页面间 3D 叶片翻转转场 · v2（须全局：transition 类挂在子组件根元素上） */
+.leaf-flip-enter-active {
+  transition:
+    transform 0.42s var(--ease-spring, cubic-bezier(0.22, 1.4, 0.36, 1)),
+    opacity 0.28s var(--ease-smooth),
+    filter 0.36s var(--ease-smooth);
   transform-style: preserve-3d;
+  will-change: transform, opacity, filter;
+}
+.leaf-flip-leave-active {
+  transition:
+    transform 0.2s cubic-bezier(0.5, 0, 0.75, 0),
+    opacity 0.18s var(--ease-smooth),
+    filter 0.18s var(--ease-smooth);
+  transform-style: preserve-3d;
+  will-change: transform, opacity, filter;
 }
 .leaf-flip-enter-from {
   opacity: 0;
-  transform: perspective(1200px) rotateY(10deg) translateX(36px) scale(0.985);
+  transform: perspective(1200px) rotateY(8deg) translateX(30px) scale(0.982);
+  filter: blur(6px);
 }
 .leaf-flip-leave-to {
   opacity: 0;
-  transform: perspective(1200px) rotateY(-10deg) translateX(-36px) scale(0.985);
+  transform: perspective(1200px) rotateY(-6deg) translateX(-24px) scale(0.99);
+  filter: blur(3px);
+}
+
+/* 级联入场：新页面的直接子元素依次浮现（新叶抽枝） */
+.leaf-flip-enter-active > * {
+  animation: leaf-item-in 0.5s var(--ease-spring, cubic-bezier(0.22, 1.4, 0.36, 1)) backwards;
+}
+.leaf-flip-enter-active > *:nth-child(1) { animation-delay: 0.04s; }
+.leaf-flip-enter-active > *:nth-child(2) { animation-delay: 0.1s; }
+.leaf-flip-enter-active > *:nth-child(3) { animation-delay: 0.16s; }
+.leaf-flip-enter-active > *:nth-child(4) { animation-delay: 0.22s; }
+.leaf-flip-enter-active > *:nth-child(5) { animation-delay: 0.28s; }
+.leaf-flip-enter-active > *:nth-child(n+6) { animation-delay: 0.34s; }
+@keyframes leaf-item-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.99); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* 内容区滚动丝滑 */
+@media (prefers-reduced-motion: no-preference) {
+  .content { scroll-behavior: smooth; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .leaf-flip-enter-from, .leaf-flip-leave-to { transform: none; }
+  .leaf-flip-enter-from, .leaf-flip-leave-to { transform: none; filter: none; }
+  .leaf-flip-enter-active > * { animation: none; }
 }
+body.low-gpu .leaf-flip-enter-from,
+body.low-gpu .leaf-flip-leave-to { filter: none; }
 </style>

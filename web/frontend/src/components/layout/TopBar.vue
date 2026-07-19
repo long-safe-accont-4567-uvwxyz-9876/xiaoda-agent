@@ -106,13 +106,18 @@ const stageText: Record<string, string> = {
   color: var(--moon-dim);
   cursor: pointer;
   white-space: nowrap;
-  transition: transform 0.2s var(--ease-out), border-color 0.2s, box-shadow 0.2s;
+  transition: transform 0.25s var(--ease-spring, var(--ease-out)), border-color 0.25s, box-shadow 0.25s, background-color 0.25s, color 0.25s;
   transform-style: preserve-3d;
 }
 
 .agent-chip:hover {
   transform: perspective(400px) translateZ(6px) rotateX(-4deg);
   border-color: rgba(127, 214, 80, 0.4);
+}
+
+.agent-chip:active {
+  transform: perspective(400px) translateZ(2px) scale(0.95);
+  transition-duration: 0.08s;
 }
 
 .agent-chip.active {

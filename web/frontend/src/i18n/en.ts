@@ -87,6 +87,8 @@ export default {
     autoSpeak: 'Auto Speak Replies',
     soundFx: 'Dendro Sound FX',
     soundFxHint: 'Leaf whoosh (send), wind chime (reply), dew drop (click), morning bells (greeting) — fully synthesized, no audio files.',
+    dendroCursor: 'Dendro Cursor',
+    dendroCursorHint: 'A little leaf cursor with a dew trail that blooms over clickable elements; auto-disabled on touch devices.',
     brightness: 'Brightness',
     autoBrightness: 'Auto',
     manualBrightness: 'Manual',

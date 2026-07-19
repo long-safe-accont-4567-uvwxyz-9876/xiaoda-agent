@@ -152,6 +152,11 @@ const permDesc = computed<Record<string, string>>(() => ({
         </div>
       </div>
       <p class="brightness-hint">{{ t('settings.soundFxHint') }}</p>
+      <div class="setting-row">
+        <span class="s-label">{{ t('settings.dendroCursor') }}</span>
+        <n-switch :value="ui.dendroCursor" @update:value="(v: boolean) => { ui.setDendroCursor(v); sound.play('toggle') }" />
+      </div>
+      <p class="brightness-hint">{{ t('settings.dendroCursorHint') }}</p>
       <div class="setting-row brightness-row">
         <div class="brightness-label">
           <span class="s-label">{{ t('settings.brightness') }}</span>
