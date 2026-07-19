@@ -6,6 +6,7 @@ import { api } from '../api'
 import { useAgentsStore } from './agents'
 import { t, tf } from '../i18n'
 import { clearMarkdownCache } from '../utils/markdown'
+import { sound } from '../utils/sound'
 
 export interface ToolCall {
   tool: string
@@ -161,6 +162,7 @@ export const useChatStore = defineStore('chat', () => {
     currentStage.value = ''
     statusText.value = ''
     pendingMsgId.value = ''
+    sound.play('receive') // 风铃轻响：回复抵达
   }
 
   // Task 6: 异步 TTS 合成完成 —— 更新对应消息的 audioUrl
@@ -200,6 +202,7 @@ export const useChatStore = defineStore('chat', () => {
     })
     lastEmotion.value = '喜悦'
     greetingPing.value++
+    sound.play('notify') // 晨铃三音：问候抵达
   }
 
   // 注册所有 WS 事件处理器

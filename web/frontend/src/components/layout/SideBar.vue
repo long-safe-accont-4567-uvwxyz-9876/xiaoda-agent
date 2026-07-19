@@ -106,11 +106,15 @@ const navItems = [
 
 .logo-icon { font-size: 24px; flex-shrink: 0; }
 .logo-text {
-  color: var(--dendro);
   font-size: 18px;
   font-weight: 700;
   white-space: nowrap;
   font-family: 'Noto Serif SC', serif;
+  background: var(--gradient-dendro, linear-gradient(135deg, #b8ff85, #8fe560 45%, #4fd6a5));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
 }
 
 .nav-items {
@@ -129,7 +133,7 @@ const navItems = [
   border-radius: 10px;
   color: var(--moon-dim);
   text-decoration: none;
-  transition: background 0.2s, color 0.2s, transform 0.2s var(--ease-out);
+  transition: background 0.25s, color 0.25s, transform 0.25s var(--ease-spring, var(--ease-out)), box-shadow 0.25s;
   white-space: nowrap;
   position: relative;
 }
@@ -137,12 +141,26 @@ const navItems = [
 .nav-item:hover {
   background: rgba(127, 214, 80, 0.1);
   color: var(--moon);
-  transform: translateX(2px);
+  transform: translateX(3px);
+}
+
+.nav-item:active {
+  transform: translateX(3px) scale(0.97);
+  transition-duration: 0.08s;
+}
+
+.nav-item:hover .nav-icon {
+  transform: rotate(-8deg) scale(1.12);
+}
+
+.nav-icon {
+  transition: transform 0.25s var(--ease-spring, var(--ease-out));
 }
 
 .nav-item.router-link-exact-active {
   background: linear-gradient(90deg, rgba(127, 214, 80, 0.22), rgba(127, 214, 80, 0.06));
   color: var(--dendro);
+  box-shadow: inset 0 0 16px rgba(127, 214, 80, 0.06), 0 0 12px rgba(127, 214, 80, 0.08);
 }
 
 .nav-item.router-link-exact-active .nav-glow {
@@ -150,8 +168,8 @@ const navItems = [
   left: 0; top: 20%; bottom: 20%;
   width: 3px;
   border-radius: 2px;
-  background: var(--dendro);
-  box-shadow: 0 0 8px var(--dendro);
+  background: linear-gradient(180deg, var(--dendro-bright, #b8ff85), var(--jade, #4fd6a5));
+  box-shadow: 0 0 10px var(--dendro);
 }
 
 .nav-icon {

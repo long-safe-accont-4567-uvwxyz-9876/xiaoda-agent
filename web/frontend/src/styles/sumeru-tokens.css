@@ -29,9 +29,32 @@
   /* Transitions */
   --ease-out: cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.22, 1.4, 0.36, 1);
 
   /* Spacing */
   --sidebar-width: 64px;
   --sidebar-expanded: 280px;
   --topbar-height: 56px;
+}
+
+/* ===== 草元素美学 v2 · 层次色板与渐变 ===== */
+:root {
+  /* 多层次绿：嫩芽 → 草光 → 翡翠 → 薄荷 */
+  --dendro-bright: #b8ff85;
+  --dendro-deep: #5cb830;
+  --jade: #4fd6a5;
+  --mint: #a8f0c8;
+  --sprout: #d4ffb0;
+  --dew: #c8f7e8;
+
+  /* 渐变系统 */
+  --gradient-dendro: linear-gradient(135deg, var(--dendro-bright), var(--dendro) 45%, var(--jade));
+  --gradient-aurora: linear-gradient(120deg, rgba(143, 229, 96, 0.14), rgba(79, 214, 165, 0.10) 50%, rgba(232, 213, 163, 0.12));
+  --gradient-glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0) 32%);
+
+  /* 玻璃精修 */
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --glass-inner-glow: inset 0 0 32px rgba(143, 229, 96, 0.04);
+  --shadow-glow-md: 0 0 28px rgba(143, 229, 96, 0.22);
+  --shadow-glow-jade: 0 0 22px rgba(79, 214, 165, 0.18);
 }
