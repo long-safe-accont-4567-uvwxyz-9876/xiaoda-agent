@@ -1254,31 +1254,73 @@ class AIQQBot(botpy.Client):
 
         _group_no_proactive_sticker = ("被动回复", "超过限制", "无权限", "40034105")
 
-        async def _send_segment(text: str) -> None:
+        async def _send_segment(text: str) -> bool:
+            """发送单个分片。返回 True 表示真发送成功，False 表示配额耗尽被静默拒绝。
+
+            与 _send_streaming_reply._send_segment 同构（修复同类 bug）：
+            群聊无主动消息权限，被动超限时不再静默吞异常，而是返回 False
+            让外层循环能合并剩余内容（含最后一片与 sticker 的合并片），
+            避免后续段全部丢失。
+            """
             try:
                 await message.reply(content=text, msg_seq=_next_msg_seq())
+                return True
             except (TimeoutError, OSError, RuntimeError, ValueError) as e:
                 err_str = str(e)
                 if is_group and any(k in err_str for k in _group_no_proactive_sticker):
-                    logger.debug("qq_bot.stream_passive_limited_no_proactive",
-                                 error=err_str)
-                else:
-                    raise
+                    logger.info("qq_bot.stream_sticker_passive_limited_no_proactive",
+                                error=err_str, remaining_to_merge=True)
+                    return False
+                raise  # 其他异常仍然抛出，由外层异常恢复逻辑处理
 
         # 发送前 N-1 片
         for i, seg in enumerate(segments[:-1]):
             try:
                 if i > 0:
                     await asyncio.sleep(random.uniform(0.8, 1.2))
-                await _send_segment(seg)
+                t0 = time.monotonic()
+                ok = await _send_segment(seg)
+                seg_ms = (time.monotonic() - t0) * 1000
+                if ok:
+                    logger.debug("qq_bot.stream_sticker_segment",
+                                 index=i, size=len(seg), ms=round(seg_ms, 1))
+                else:
+                    # 配额耗尽：合并剩余所有段（含最后一片）为单条最终片，
+                    # 与 sticker 合并发送（msg_type=7 支持图文混排）
+                    logger.warning("qq_bot.stream_sticker_segment_quota_exhausted",
+                                   at_segment=i, total_segments=len(segments))
+                    remaining = "".join(segments[i:])
+                    try:
+                        await self._send_reply_with_media(
+                            message, remaining, image_path=result.sticker_path)
+                        logger.info("qq_bot.stream_sticker_quota_recovered_with_merge",
+                                    merged_from=len(segments) - i, ms=round(seg_ms, 1))
+                    except (OSError, RuntimeError, ConnectionError) as e2:
+                        logger.error("qq_bot.stream_sticker_quota_merge_failed",
+                                     error=str(e2), remaining_len=len(remaining))
+                        # 最终兜底：放弃 sticker，仅发送文本
+                        try:
+                            await message.reply(content=remaining, msg_seq=_next_msg_seq())
+                        except (TimeoutError, OSError, RuntimeError) as e3:
+                            logger.error("qq_bot.stream_sticker_fallback_failed",
+                                         error=str(e3))
+                    return
             except (TimeoutError, OSError, RuntimeError) as e:
-                logger.warning("qq_bot.stream_segment_failed", error=str(e))
-                # 异常恢复：合并剩余内容发送
+                logger.warning("qq_bot.stream_sticker_segment_failed", error=str(e))
+                # 异常恢复：合并剩余内容（含最后一片）与 sticker 一起发送
                 remaining = "".join(segments[i:])
                 try:
-                    await _send_segment(remaining)
-                except (TimeoutError, OSError, RuntimeError) as e2:
-                    logger.error("qq_bot.stream_recovery_failed", error=str(e2))
+                    await self._send_reply_with_media(
+                        message, remaining, image_path=result.sticker_path)
+                    logger.info("qq_bot.stream_sticker_recovery_done_with_merge")
+                except (OSError, RuntimeError, ConnectionError) as e2:
+                    logger.error("qq_bot.stream_sticker_recovery_failed", error=str(e2))
+                    # 兜底：放弃 sticker，仅发送合并文本
+                    try:
+                        await _send_segment(remaining)
+                    except (TimeoutError, OSError, RuntimeError) as e3:
+                        logger.error("qq_bot.stream_sticker_recovery_final_failed",
+                                     error=str(e3))
                 return
 
         # 最后一片与表情包合并发送（msg_type=7 支持图文混排）
@@ -1288,7 +1330,10 @@ class AIQQBot(botpy.Client):
         except (OSError, RuntimeError, ConnectionError) as e:
             logger.warning("qq_bot.sticker_with_last_segment_failed", error=str(e))
             try:
-                await _send_segment(last_seg)
+                # 兜底：放弃 sticker，仅发送最后一片文本
+                ok = await _send_segment(last_seg)
+                if not ok:
+                    logger.error("qq_bot.sticker_last_segment_quota_exhausted_no_recovery")
             except (OSError, RuntimeError) as e2:
                 logger.debug("qq_bot.fallback_segment_also_failed", error=str(e2))
 
