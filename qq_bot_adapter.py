@@ -1365,25 +1365,54 @@ class AIQQBot(botpy.Client):
             if len(parts) == 1:
                 final_text = parts[0]
             else:
-                failed = False
-                for part in parts[:-1]:
+                # 与 _send_streaming_reply._send_segment 同构的修复：
+                # 某段发送失败时（含配额超限），合并剩余所有段（含最后一段）为单条发送，
+                # 而非 break+加错误提示（旧版本会导致中间所有段无声丢失，用户只看到最后一段+错误提示）。
+                # 合并成功后 final_text="" 表示已全部发完，仅发送 sticker；
+                # 合并也失败时退化为原行为（发最后一段+错误提示）。
+                final_text = parts[-1]
+                merge_done = False
+                for i, part in enumerate(parts[:-1]):
                     try:
                         await message.reply(content=part, msg_seq=_next_msg_seq())
                     except (OSError, RuntimeError, ConnectionError) as e:
-                        logger.warning(f"qq_bot.long_reply_part_failed: {e}")
-                        failed = True
-                        break
-                final_text = parts[-1] + "\n（内容过长部分发送失败）" if failed else parts[-1]
+                        logger.warning("qq_bot.long_reply_part_failed_merging",
+                                       part_index=i, total_parts=len(parts), error=str(e))
+                        # 合并剩余所有段（含当前失败的段 + 之后所有段 + 最后一段）
+                        remaining = "".join(parts[i:])
+                        try:
+                            await message.reply(content=remaining, msg_seq=_next_msg_seq())
+                            logger.info("qq_bot.long_reply_merge_recovered",
+                                        merged_from=len(parts) - i)
+                            merge_done = True
+                            final_text = ""  # 已全部发完，仅保留 sticker
+                        except (OSError, RuntimeError, ConnectionError) as e2:
+                            logger.error("qq_bot.long_reply_merge_failed",
+                                         error=str(e2), remaining_len=len(remaining))
+                            # 最终兜底：在最后一片加错误提示
+                            final_text = parts[-1] + "\n（内容过长部分发送失败）"
+                        break  # 无论合并成功或失败，都退出循环
+                if not merge_done and final_text == parts[-1]:
+                    # 循环正常结束（未触发 break），所有前段发送成功，发最后一段
+                    final_text = parts[-1]
 
         # 1. 文字+表情包立刻发送（用户最快看到回复）
+        # 合并成功时 final_text="" 表示文字已全部发完，跳过本步骤（避免发空消息）
         if result.sticker_path:
             try:
                 await self._send_reply_with_media(message, final_text, image_path=result.sticker_path)
             except (OSError, RuntimeError, ConnectionError) as e:
                 logger.warning("qq_bot.sticker_send_failed", error=str(e))
+                try:
+                    await message.reply(content=final_text, msg_seq=_next_msg_seq())
+                except (OSError, RuntimeError, ConnectionError) as e2:
+                    logger.error("qq_bot.sticker_fallback_reply_failed", error=str(e2))
+        elif final_text:
+            # 仅当还有内容未发送时才发（避免合并成功后发空消息）
+            try:
                 await message.reply(content=final_text, msg_seq=_next_msg_seq())
-        else:
-            await message.reply(content=final_text, msg_seq=_next_msg_seq())
+            except (OSError, RuntimeError, ConnectionError) as e:
+                logger.error("qq_bot.final_text_reply_failed", error=str(e))
 
     def _gather_media_send_tasks(self, message: Any, result: ProcessResult) -> list:
         """构建媒体发送任务列表（TTS 语音/视频/图片），用于并行发送。"""
