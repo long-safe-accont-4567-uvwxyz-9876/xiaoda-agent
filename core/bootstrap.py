@@ -356,6 +356,9 @@ class AgentCoreBootstrapper:
         # 注入 MemoryManager 到 memory_tool，修复记忆工具不可用问题
         from tools import memory_tool
         memory_tool.bind(core.memory)
+        # 注入 core 到 schedule_tool，让 Agent 能查询/修改/删除提醒
+        from tools import schedule_tool
+        schedule_tool.bind(core)
         core.notebook_manager = NotebookManager(db=core.db, notebook=core.db.notebook, router=core.router)
         core.learning_manager = LearningManager(db=core.db, learning=core.db.learning, router=core.router)
         core.portrait_manager = PortraitManager(db=core.db, memory=core.db.memory, router=core.router, notebook=core.db.notebook)

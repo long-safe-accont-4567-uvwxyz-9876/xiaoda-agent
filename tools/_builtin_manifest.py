@@ -580,6 +580,94 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
         "module_path": "tools.nudge_tool",
         "func_name": "nudge_greeting",
     },
+    # ── tools.schedule_tool ──────────────────────────────────────────
+    {
+        "name": "list_reminders",
+        "description": (
+            "查询所有提醒（reminder 类型）。当用户问'晚上有什么任务'、'今天有什么提醒'、"
+            "'我有几个提醒'、'提醒列表'等查询类问题时使用。"
+            "返回的字段中 time 是 HH:MM 格式（如 19:30 表示晚上7点半），days 是星期几数组（1=周一...7=周日）。"
+            "用户说的'晚上/早上/下午'等模糊时间词由你根据 time 字段判断，不要凭印象编造。"
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "include_disabled": {
+                    "type": "boolean",
+                    "description": "是否包含已禁用的提醒，默认 false（仅启用的）",
+                    "default": False,
+                },
+            },
+            "required": [],
+        },
+        "permission": ToolPermission.READ_ONLY,
+        "category": "schedule",
+        "max_frequency": 20,
+        "module_path": "tools.schedule_tool",
+        "func_name": "list_reminders",
+    },
+    {
+        "name": "update_reminder",
+        "description": (
+            "修改指定提醒的标题/时间/星期/启用状态。当用户说'帮我改一下'、'把晚上的提醒改成'、"
+            "'关掉这个提醒'（禁用）、'改成每周三'等修改类指令时使用。"
+            "只更新传入的字段，未传的字段保持不变。修改后立即生效。"
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "要修改的提醒 ID（来自 list_reminders 返回的 ID）",
+                },
+                "time": {
+                    "type": "string",
+                    "description": "新的触发时间，HH:MM 格式（如 19:30、08:00）。不修改则不传。",
+                },
+                "prompt_hint": {
+                    "type": "string",
+                    "description": "新的提醒内容/标题（≤200字符）。不修改则不传。",
+                },
+                "days": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "新的星期列表（1=周一...7=周日，如 [1,3,5] 表示每周一三五）。不修改则不传。",
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "description": "true=启用，false=禁用。不修改则不传。",
+                },
+            },
+            "required": ["id"],
+        },
+        "permission": ToolPermission.READ_WRITE,
+        "category": "schedule",
+        "max_frequency": 10,
+        "module_path": "tools.schedule_tool",
+        "func_name": "update_reminder",
+    },
+    {
+        "name": "delete_reminder",
+        "description": (
+            "删除指定提醒。当用户说'删掉这个提醒'、'取消晚上的提醒'、'不要这个了'等删除类指令时使用。"
+            "删除后无法恢复，请先调用 list_reminders 确认 ID 后再调用本工具。"
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "要删除的提醒 ID（来自 list_reminders 返回的 ID）",
+                },
+            },
+            "required": ["id"],
+        },
+        "permission": ToolPermission.READ_WRITE,
+        "category": "schedule",
+        "max_frequency": 5,
+        "module_path": "tools.schedule_tool",
+        "func_name": "delete_reminder",
+    },
     # ── tools.domestic_search_tools ──────────────────────────────────
     {
         "name": "search_cn",
