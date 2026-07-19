@@ -85,6 +85,8 @@ export default {
     particlesHigh: '高',
     tilt3d: '3D 卡片交互',
     autoSpeak: '自动朗读回复',
+    soundFx: '草元素音效',
+    soundFxHint: '叶拂（发送）、风铃（回复）、露珠（点击）、晨铃（问候），全程序化合成，不含音频文件。',
     brightness: '界面亮度',
     autoBrightness: '自适应',
     manualBrightness: '手动',

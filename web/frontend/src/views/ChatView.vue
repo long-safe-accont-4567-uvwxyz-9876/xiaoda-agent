@@ -14,6 +14,7 @@ import SlashPalette from '../components/chat/SlashPalette.vue'
 import PromptInput from '../components/chat/PromptInput.vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import ModelSelector from '../components/chat/ModelSelector.vue'
+import { sound } from '../utils/sound'
 import { t } from '../i18n'
 
 defineOptions({ name: 'ChatView' })
@@ -136,9 +137,10 @@ function handleSend() {
   if (!text || chat.isProcessing) return
   chat.sendMessage(text)
   inputText.value = ''
-  // 发送特效：从输入框爆叶子
+  // 发送特效：从输入框爆叶子 + 叶拂音效
   const rect = inputEl.value?.getBoundingClientRect()
   if (rect) particles?.value?.burst?.(rect.left + rect.width / 2, rect.top, 10)
+  sound.play('send')
   autoGrow()
 }
 
@@ -152,9 +154,10 @@ function handlePromptSend(text: string, options: { search?: boolean; think?: boo
   }
   chat.sendMessage(finalText, options.imageUrl)
   inputText.value = ''
-  // 发送特效
+  // 发送特效 + 叶拂音效
   const rect = inputEl.value?.getBoundingClientRect()
   if (rect) particles?.value?.burst?.(rect.left + rect.width / 2, rect.top, 10)
+  sound.play('send')
 }
 
 function handleKeydown(e: KeyboardEvent) {

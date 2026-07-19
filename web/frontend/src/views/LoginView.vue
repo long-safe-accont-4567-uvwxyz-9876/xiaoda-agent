@@ -80,13 +80,13 @@ async function handleLogin() {
 <template>
   <div class="login-page app-bg" :style="{ backgroundImage: `var(--backdrop-tint), url('${loginBg}')` }">
     <Tilt3D :max-x="5" :max-y="7">
-      <div class="login-card glass-panel">
+      <div class="login-card glass-panel shimmer-band">
         <span class="vine corner-tl"></span>
         <span class="vine corner-br"></span>
 
         <div class="login-header">
-          <DendroEmblem :size="84" spin />
-          <h1>{{ t('login.title') }}</h1>
+          <DendroEmblem :size="84" spin class="animate-float" />
+          <h1 class="login-title">{{ t('login.title') }}</h1>
           <p class="subtitle">{{ t('login.subtitle') }}</p>
         </div>
 
@@ -141,14 +141,18 @@ async function handleLogin() {
 .corner-tl { top: 0; left: 0; }
 .corner-br { bottom: 0; right: 0; transform: rotate(180deg); }
 
-.login-header h1 {
-  color: var(--dendro);
+.login-title {
   font-size: 24px;
   margin: 18px 0 6px;
   font-weight: 700;
   letter-spacing: 3px;
   font-family: 'Noto Serif SC', serif;
-  text-shadow: 0 0 18px rgba(127, 214, 80, 0.35);
+  background: var(--gradient-dendro, linear-gradient(135deg, #b8ff85, #8fe560 45%, #4fd6a5));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  filter: drop-shadow(0 0 14px rgba(143, 229, 96, 0.35));
 }
 
 .subtitle {

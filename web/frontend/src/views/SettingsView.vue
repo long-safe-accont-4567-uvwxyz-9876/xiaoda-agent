@@ -11,6 +11,7 @@ import { useRouter } from 'vue-router'
 import { t, tf, setLang, state as i18nState } from '../i18n'
 import type { Lang } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import { sound } from '../utils/sound'
 
 const message = useMessage()
 const ui = useUiStore()
@@ -134,6 +135,23 @@ const permDesc = computed<Record<string, string>>(() => ({
         <span class="s-label">{{ t('settings.autoSpeak') }}</span>
         <n-switch :value="ui.autoSpeak" @update:value="(v: boolean) => ui.setAutoSpeak(v).then(() => message.success(t('success'))).catch((e: any) => message.error(e.message))" />
       </div>
+      <div class="setting-row">
+        <span class="s-label">{{ t('settings.soundFx') }}</span>
+        <div class="soundfx-controls">
+          <n-switch :value="ui.soundFx" @update:value="(v: boolean) => { ui.setSoundFx(v); sound.play('toggle') }" />
+          <n-slider
+            :value="ui.soundVolume"
+            :min="0"
+            :max="1"
+            :step="0.05"
+            :disabled="!ui.soundFx"
+            style="width: 160px; margin-left: 12px"
+            @update:value="ui.setSoundVolume"
+            @dragend="() => sound.play('receive')"
+          />
+        </div>
+      </div>
+      <p class="brightness-hint">{{ t('settings.soundFxHint') }}</p>
       <div class="setting-row brightness-row">
         <div class="brightness-label">
           <span class="s-label">{{ t('settings.brightness') }}</span>
@@ -302,6 +320,7 @@ const permDesc = computed<Record<string, string>>(() => ({
   padding: 8px 0; gap: 16px; flex-wrap: wrap;
 }
 .s-label { font-size: 13.5px; }
+.soundfx-controls { display: flex; align-items: center; }
 .url-link {
   font-size: 13.5px;
   color: var(--dendro);

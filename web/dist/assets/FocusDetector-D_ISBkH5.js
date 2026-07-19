@@ -1,1 +1,0 @@
-import{d as o,R as r}from"./index-ndYglh2w.js";function s(e,n){let{target:t}=e;for(;t;){if(t.dataset&&t.dataset[n]!==void 0)return!0;t=t.parentElement}return!1}const a=o({props:{onFocus:Function,onBlur:Function},setup(e){return()=>r("div",{style:"width: 0; height: 0",tabindex:0,onFocus:e.onFocus,onBlur:e.onBlur})}});export{a as F,s as h};

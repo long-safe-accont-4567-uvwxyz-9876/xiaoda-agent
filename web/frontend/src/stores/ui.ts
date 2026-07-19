@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { get, put } from '../api'
+import { sound } from '../utils/sound'
 
 export type ParticleDensity = 'off' | 'low' | 'medium' | 'high'
 
@@ -21,6 +22,9 @@ export const useUiStore = defineStore('ui', () => {
   const tilt3d = ref(localStorage.getItem('ui.tilt3d') !== 'false')
   const autoSpeak = ref(false)
   const loaded = ref(false)
+  // 草元素音效：开关与音量（引擎内部已持久化到 localStorage）
+  const soundFx = ref(sound.isEnabled())
+  const soundVolume = ref(sound.getVolume())
 
   // 亮度控制：0.5 (暗) ~ 1.5 (亮)，默认 1.05（比原来稍亮）
   const autoBrightness = ref(localStorage.getItem(AUTO_KEY) !== 'false') // 默认开启自动
@@ -68,6 +72,8 @@ export const useUiStore = defineStore('ui', () => {
       if (cfg?.ui?.particles) particles.value = cfg.ui.particles
       if (cfg?.ui?.tilt3d !== undefined) tilt3d.value = !!cfg.ui.tilt3d
       if (cfg?.tts?.auto_speak !== undefined) autoSpeak.value = !!cfg.tts.auto_speak
+      if (cfg?.ui?.sound_fx !== undefined) { soundFx.value = !!cfg.ui.sound_fx; sound.setEnabled(soundFx.value) }
+      if (cfg?.ui?.sound_volume !== undefined) { soundVolume.value = Number(cfg.ui.sound_volume); sound.setVolume(soundVolume.value) }
       loaded.value = true
     } catch { /* 未登录时静默 */ }
     // 应用亮度
@@ -92,10 +98,24 @@ export const useUiStore = defineStore('ui', () => {
     await put('/media/tts/config', { auto_speak: v })
   }
 
+  function setSoundFx(v: boolean) {
+    soundFx.value = v
+    sound.setEnabled(v)
+    put('/system/config', { path: 'ui.sound_fx', value: v }).catch(() => {})
+  }
+
+  function setSoundVolume(v: number) {
+    soundVolume.value = v
+    sound.setVolume(v)
+    put('/system/config', { path: 'ui.sound_volume', value: v }).catch(() => {})
+  }
+
   return {
     particles, tilt3d, autoSpeak, loaded,
+    soundFx, soundVolume,
     brightness, autoBrightness, manualBrightness,
     loadRemote, setParticles, setTilt3d, setAutoSpeak,
+    setSoundFx, setSoundVolume,
     setAutoBrightness, setManualBrightness, applyBrightness,
     stopAutoCheck,
   }

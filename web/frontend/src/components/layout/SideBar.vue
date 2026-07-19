@@ -106,11 +106,15 @@ const navItems = [
 
 .logo-icon { font-size: 24px; flex-shrink: 0; }
 .logo-text {
-  color: var(--dendro);
   font-size: 18px;
   font-weight: 700;
   white-space: nowrap;
   font-family: 'Noto Serif SC', serif;
+  background: var(--gradient-dendro, linear-gradient(135deg, #b8ff85, #8fe560 45%, #4fd6a5));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
 }
 
 .nav-items {
@@ -150,8 +154,8 @@ const navItems = [
   left: 0; top: 20%; bottom: 20%;
   width: 3px;
   border-radius: 2px;
-  background: var(--dendro);
-  box-shadow: 0 0 8px var(--dendro);
+  background: linear-gradient(180deg, var(--dendro-bright, #b8ff85), var(--jade, #4fd6a5));
+  box-shadow: 0 0 10px var(--dendro);
 }
 
 .nav-icon {

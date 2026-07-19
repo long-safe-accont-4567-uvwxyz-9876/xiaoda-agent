@@ -85,6 +85,8 @@ export default {
     particlesHigh: 'High',
     tilt3d: '3D Card Tilt',
     autoSpeak: 'Auto Speak Replies',
+    soundFx: 'Dendro Sound FX',
+    soundFxHint: 'Leaf whoosh (send), wind chime (reply), dew drop (click), morning bells (greeting) — fully synthesized, no audio files.',
     brightness: 'Brightness',
     autoBrightness: 'Auto',
     manualBrightness: 'Manual',

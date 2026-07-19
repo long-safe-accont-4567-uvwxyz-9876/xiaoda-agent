@@ -7,6 +7,7 @@ import { useUiStore } from './stores/ui'
 import { useRouter } from 'vue-router'
 import { api } from './api'
 import { t } from './i18n'
+import { sound } from './utils/sound'
 import GrassParticles from './components/fx/GrassParticles.vue'
 
 const auth = useAuthStore()
@@ -115,12 +116,31 @@ onMounted(async () => {
     document.body.classList.add('low-gpu')
   }
 
+  // 草元素音效：首次手势解锁 AudioContext（浏览器自动播放策略）
+  const unlock = () => {
+    sound.unlock()
+    window.removeEventListener('pointerdown', unlock)
+    window.removeEventListener('keydown', unlock)
+  }
+  window.addEventListener('pointerdown', unlock, { passive: true })
+  window.addEventListener('keydown', unlock)
+
+  // 全局露珠点击音：草元素按钮与侧边导航
+  window.addEventListener('pointerdown', onGlobalTap, { passive: true })
+
   booting.value = false
 })
+
+/** 命中 .dendro-btn / .nav-item / .sponsor-entry 时播放露珠音 */
+function onGlobalTap(e: PointerEvent) {
+  const el = (e.target as HTMLElement | null)?.closest?.('.dendro-btn, .nav-item, .sponsor-entry')
+  if (el) sound.play('click')
+}
 
 onBeforeUnmount(() => {
   stopWatermarkGuard()
   ui.stopAutoCheck()
+  window.removeEventListener('pointerdown', onGlobalTap)
 })
 
 const themeOverrides: GlobalThemeOverrides = {
