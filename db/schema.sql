@@ -55,8 +55,21 @@ CREATE TABLE IF NOT EXISTS episodic_memories (
     version INTEGER DEFAULT 1,
     user_id TEXT DEFAULT 'default',
     agent_id TEXT DEFAULT 'xiaoda',
-    is_raw INTEGER DEFAULT 0
+    is_raw INTEGER DEFAULT 0,
+    updated_at REAL DEFAULT 0          -- 最后一次内容更新时间（summary变更时由触发器维护）
 );
+
+-- 触发器：summary 变更时自动维护 updated_at
+-- SQLite 默认 recursive_triggers=OFF，AFTER UPDATE 内再 UPDATE 同表非触发列不会递归
+-- 只在 summary 列被 UPDATE 时触发，其他列（emotion_label、access_count 等）变更不影响 updated_at
+CREATE TRIGGER IF NOT EXISTS trg_episodic_memories_touch_updated_at
+AFTER UPDATE OF summary ON episodic_memories
+FOR EACH ROW
+BEGIN
+    UPDATE episodic_memories
+    SET updated_at = CAST(strftime('%s','now') AS REAL)
+    WHERE id = OLD.id;
+END;
 
 -- 情景记忆全文索引（FTS5）
 CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts USING fts5(

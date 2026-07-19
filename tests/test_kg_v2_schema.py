@@ -30,8 +30,8 @@ async def test_fresh_database_migrates_to_latest(tmp_path):
     db_path = tmp_path / "fresh_kg.db"
     manager = DatabaseManager(db_path)
     await manager.init()
-    assert CURRENT_SCHEMA_VERSION == 18
-    assert await _schema_version(manager) == 18
+    assert CURRENT_SCHEMA_VERSION == 19
+    assert await _schema_version(manager) == CURRENT_SCHEMA_VERSION
     assert V2_TABLES <= await _table_names(manager)
     await manager.close()
 
@@ -77,7 +77,7 @@ async def test_v14_migrates_existing_v1_data(tmp_path):
 
     upgraded = DatabaseManager(db_path)
     await upgraded.init()
-    assert await _schema_version(upgraded) == 18
+    assert await _schema_version(upgraded) == CURRENT_SCHEMA_VERSION
 
     entity = await upgraded.fetch_one("SELECT * FROM kg_entities_v2 WHERE name = ?", ("篮球",))
     assert entity is not None

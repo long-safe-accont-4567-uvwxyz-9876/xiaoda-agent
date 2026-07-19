@@ -31,8 +31,8 @@ async def test_fresh_database_migrates_to_v13_idempotently(tmp_path):
     manager = DatabaseManager(db_path)
 
     await manager.init()
-    assert CURRENT_SCHEMA_VERSION == 18
-    assert await _schema_version(manager) == 18
+    assert CURRENT_SCHEMA_VERSION == 19
+    assert await _schema_version(manager) == CURRENT_SCHEMA_VERSION
     assert TEMPORAL_TABLES <= await _table_names(manager)
     assert isinstance(manager.temporal, TemporalMemoryDB)
     assert await manager.fetch_one("PRAGMA foreign_keys") == {"foreign_keys": 1}
@@ -55,7 +55,7 @@ async def test_fresh_database_migrates_to_v13_idempotently(tmp_path):
     versions = await manager.fetch_all(
         "SELECT version, COUNT(*) AS count FROM schema_version GROUP BY version"
     )
-    assert versions[-1] == {"version": 18, "count": 1}
+    assert versions[-1] == {"version": CURRENT_SCHEMA_VERSION, "count": 1}
     await manager.close()
 
 
@@ -78,7 +78,7 @@ async def test_v12_database_upgrades_without_losing_existing_data(tmp_path):
 
     upgraded = DatabaseManager(db_path)
     await upgraded.init()
-    assert await _schema_version(upgraded) == 18
+    assert await _schema_version(upgraded) == CURRENT_SCHEMA_VERSION
     assert await upgraded.fetch_one(
         "SELECT summary FROM episodic_memories WHERE timestamp = ?", (123.0,)
     ) == {"summary": "preserve me"}

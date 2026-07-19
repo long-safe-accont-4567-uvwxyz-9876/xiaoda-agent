@@ -23,7 +23,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 18
+CURRENT_SCHEMA_VERSION = 19
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -275,6 +275,7 @@ class DatabaseManager:
             (16, "created_at_columns", self._migrate_v16),
             (17, "greeting_schedules_reminder_type", self._migrate_v17),
             (18, "distill_status_column", self._migrate_v18),
+            (19, "episodic_memories.updated_at+touch_trigger", self._migrate_v19),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -995,6 +996,42 @@ class DatabaseManager:
         )
         logger.info("database.migration_v18_distill_status_done")
 
+    async def _migrate_v19(self) -> None:
+        """v19: 添加 episodic_memories.updated_at 列 + summary 变更触发器。
+
+        updated_at 字段记录 summary 最后一次内容更新时间，由触发器
+        trg_episodic_memories_touch_updated_at 在 summary 被 UPDATE 时自动维护。
+        仅在 summary 列变更时更新，其他列（emotion_label、access_count 等）变更不触发。
+
+        SQLite 默认 recursive_triggers=OFF，AFTER UPDATE 内对同表非触发列的
+        UPDATE 不会递归触发自身，所以触发器是安全的。
+        """
+        cols = {r["name"] for r in await self.fetch_all("PRAGMA table_info(episodic_memories)")}
+        if "updated_at" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN updated_at REAL DEFAULT 0"
+            )
+
+        # 回填：已有记录的 updated_at 初始化为 timestamp（创建时间）
+        # 后续 summary 变更时由触发器自动更新
+        await self._conn.execute(
+            "UPDATE episodic_memories SET updated_at = timestamp "
+            "WHERE updated_at = 0 AND timestamp > 0"
+        )
+
+        # 创建触发器（CREATE TRIGGER IF NOT EXISTS 幂等）
+        await self._conn.execute(
+            """CREATE TRIGGER IF NOT EXISTS trg_episodic_memories_touch_updated_at
+               AFTER UPDATE OF summary ON episodic_memories
+               FOR EACH ROW
+               BEGIN
+                   UPDATE episodic_memories
+                   SET updated_at = CAST(strftime('%s','now') AS REAL)
+                   WHERE id = OLD.id;
+               END"""
+        )
+        logger.info("database.migration_v19_updated_at_trigger_done")
+
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")
 
@@ -1103,8 +1140,23 @@ class DatabaseManager:
                 version INTEGER DEFAULT 1,
                 user_id TEXT DEFAULT 'default',
                 agent_id TEXT DEFAULT 'xiaoda',
-                is_raw INTEGER DEFAULT 0
+                is_raw INTEGER DEFAULT 0,
+                updated_at REAL DEFAULT 0
             )
+        """)
+
+        # 触发器：summary 变更时自动维护 updated_at
+        # SQLite 默认 recursive_triggers=OFF，AFTER UPDATE 内对同表非触发列的
+        # UPDATE 不会递归触发自身，安全。
+        await self._conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS trg_episodic_memories_touch_updated_at
+            AFTER UPDATE OF summary ON episodic_memories
+            FOR EACH ROW
+            BEGIN
+                UPDATE episodic_memories
+                SET updated_at = CAST(strftime('%s','now') AS REAL)
+                WHERE id = OLD.id;
+            END
         """)
 
         # memory_summaries
