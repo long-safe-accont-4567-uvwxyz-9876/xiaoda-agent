@@ -92,7 +92,7 @@ class StickerManager:
         if desc_file.exists():
             try:
                 self._descriptions = json.loads(desc_file.read_text(encoding="utf-8"))
-            except Exception:
+            except (json.JSONDecodeError, OSError):
                 logger.debug("sticker.description_parse_error", exc_info=True)
                 self._descriptions = {}
         for emotion_dir in self._dir.iterdir():

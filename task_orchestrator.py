@@ -656,7 +656,7 @@ class ParallelAgentNode:
         if not agent or not agent.available:
             await RouterNode._route_cache.invalidate_agent(target)
             if self._belief_router:
-                self._belief_router.update_belief(target, False)
+                await self._belief_router.update_belief(target, False)
             return {"agent": target, "display_name": target, "reply": f"{target}暂时不可用", "error": True}
 
         display_name = agent.config.display_name
@@ -670,18 +670,18 @@ class ParallelAgentNode:
             if reply is None:
                 reply = f"{display_name}现在有点累了...等会儿再来吧！💤"
                 if self._belief_router:
-                    self._belief_router.update_belief(target, False)
+                    await self._belief_router.update_belief(target, False)
             else:
                 if self._belief_router:
-                    self._belief_router.update_belief(target, True)
+                    await self._belief_router.update_belief(target, True)
             return {"agent": target, "display_name": display_name, "reply": reply}
         except TimeoutError:
             if self._belief_router:
-                self._belief_router.update_belief(target, False)
+                await self._belief_router.update_belief(target, False)
             return {"agent": target, "display_name": display_name, "reply": f"{display_name}处理超时", "error": True}
         except Exception as e:
             if self._belief_router:
-                self._belief_router.update_belief(target, False)
+                await self._belief_router.update_belief(target, False)
             return {"agent": target, "display_name": display_name, "reply": f"{display_name}处理出错: {e}", "error": True}
 
     async def execute(self, state: TaskState) -> dict:
@@ -766,7 +766,7 @@ class AgentNode:
         if not agent or not agent.available:
             await state.push_progress(f"⚠️ {target}暂时不可用")
             if self._belief_router:
-                self._belief_router.update_belief(target, False)
+                await self._belief_router.update_belief(target, False)
             return {"sub_agent_reply": "该Agent暂时不可用", "final_output": ""}
 
         display_name = agent.config.display_name
@@ -780,10 +780,10 @@ class AgentNode:
             if reply is None:
                 reply = f"{display_name}现在有点累了...等会儿再来吧！💤"
                 if self._belief_router:
-                    self._belief_router.update_belief(target, False)
+                    await self._belief_router.update_belief(target, False)
             else:
                 if self._belief_router:
-                    self._belief_router.update_belief(target, True)
+                    await self._belief_router.update_belief(target, True)
 
             await state.push_progress(get_status_msg(target, "done", f"{display_name}已完成！", agent.config.personality_file))
 
@@ -798,13 +798,13 @@ class AgentNode:
             logger.warning("agent_node.timeout", target=target)
             await state.push_progress(f"⏰ {display_name}处理超时")
             if self._belief_router:
-                self._belief_router.update_belief(target, False)
+                await self._belief_router.update_belief(target, False)
             return {"sub_agent_reply": f"{display_name}处理超时，请稍后再试"}
         except Exception as e:
             logger.error("agent_node.execute_failed", target=target, error=str(e))
             await state.push_progress(f"❌ {display_name}处理失败")
             if self._belief_router:
-                self._belief_router.update_belief(target, False)
+                await self._belief_router.update_belief(target, False)
             return {"sub_agent_reply": f"处理出错: {e}"}
 
 

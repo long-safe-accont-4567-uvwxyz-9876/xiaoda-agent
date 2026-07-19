@@ -15,6 +15,10 @@ services:
       - WEBUI_PORT=${WEBUI_PORT:-8082}
       - AGENTLY_CLI_HOME=/data/agently-cli
     restart: unless-stopped
+    # 安全加固：丢弃所有非必要 Linux capabilities
+    # 以非特权用户 appuser 运行时，仅需 NET_BIND_SERVICE 绑定低端口（当前使用 8082 无需额外 cap_add）
+    cap_drop:
+      - ALL
     # 硬件直通（可选，ARM 设备如 Orange Pi）
     # devices:
     #   - /dev/i2c-0:/dev/i2c-0

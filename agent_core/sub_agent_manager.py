@@ -104,7 +104,7 @@ class SubAgentManagerMixin:
             _br = getattr(self.context, "belief_router", None)
             if _br:
                 try:
-                    _br.update_belief(target, bool(sub_reply and sub_reply.strip()))
+                    await _br.update_belief(target, bool(sub_reply and sub_reply.strip()))
                 except Exception as e:
                     logger.debug("belief_router.update_failed agent={} error={}", target, str(e)[:100])
         except CancellationError:
@@ -113,20 +113,21 @@ class SubAgentManagerMixin:
                 type=AgentEventType.SUB_CANCELLED,
                 agent=target,
                 task_id=task_id,
-                data={"reason": "cancelled"},
+                data={"error": "cancelled"},
             ))
             sub_reply = f"{display_name}被取消了"
         except TimeoutError:
             # asyncio.wait_for 超时——真正中断 dispatch
             token.cancel("timeout")
             await event_bus.emit(AgentEvent(
-                type=AgentEventType.SUB_CANCELLED,
+                type=AgentEventType.SUB_FAILED,
                 agent=target,
                 task_id=task_id,
-                data={"reason": "timeout"},
+                data={"error": "timeout"},
             ))
             sub_reply = f"{display_name}处理超时了...等会儿再来吧！💤"
         except Exception as dispatch_err:
+            # 其他 dispatch 异常——发射 SUB_FAILED 并降级
             await event_bus.emit(AgentEvent(
                 type=AgentEventType.SUB_FAILED,
                 agent=target,
@@ -137,7 +138,7 @@ class SubAgentManagerMixin:
             _br = getattr(self.context, "belief_router", None)
             if _br:
                 try:
-                    _br.update_belief(target, False)
+                    await _br.update_belief(target, False)
                 except Exception as e:
                     logger.debug("belief_router.update_failed agent={} error={}", target, str(e)[:100])
             sub_reply = None
@@ -385,7 +386,7 @@ class SubAgentManagerMixin:
                 _br = getattr(self.context, "belief_router", None)
                 if _br:
                     try:
-                        _br.update_belief(t, False)
+                        await _br.update_belief(t, False)
                     except Exception as e:
                         logger.debug("belief_router.update_failed agent={} error={}", t, str(e)[:100])
                 return {"agent": t, "display_name": display_name,
@@ -406,22 +407,22 @@ class SubAgentManagerMixin:
             _br = getattr(self.context, "belief_router", None)
             if _br:
                 try:
-                    _br.update_belief(t, bool(reply and reply.strip()))
+                    await _br.update_belief(t, bool(reply and reply.strip()))
                 except Exception as e:
                     logger.debug("belief_router.update_failed agent={} error={}", t, str(e)[:100])
             return {"agent": t, "display_name": display_name, "reply": reply}
         except TimeoutError:
             await event_bus.emit(AgentEvent(
-                type=AgentEventType.SUB_CANCELLED,
+                type=AgentEventType.SUB_FAILED,
                 agent=t,
                 task_id=task_id,
-                data={"reason": "timeout"},
+                data={"error": "timeout"},
             ))
             # BeliefRouter 反馈回路
             _br = getattr(self.context, "belief_router", None)
             if _br:
                 try:
-                    _br.update_belief(t, False)
+                    await _br.update_belief(t, False)
                 except Exception as e:
                     logger.debug("belief_router.update_failed agent={} error={}", t, str(e)[:100])
             return {"agent": t, "display_name": display_name,
@@ -446,7 +447,7 @@ class SubAgentManagerMixin:
             _br = getattr(self.context, "belief_router", None)
             if _br:
                 try:
-                    _br.update_belief(t, False)
+                    await _br.update_belief(t, False)
                 except Exception as e:
                     logger.debug("belief_router.update_failed agent={} error={}", t, str(e)[:100])
             return {"agent": t, "display_name": display_name,
@@ -607,7 +608,7 @@ class SubAgentManagerMixin:
             _br = getattr(self.context, "belief_router", None)
             if _br:
                 try:
-                    _br.update_belief(name, bool(result and result.strip()))
+                    await _br.update_belief(name, bool(result and result.strip()))
                 except Exception as e:
                     logger.debug("belief_router.update_failed agent={} error={}", name, str(e)[:100])
         except Exception as dispatch_err:
@@ -622,7 +623,7 @@ class SubAgentManagerMixin:
             _br = getattr(self.context, "belief_router", None)
             if _br:
                 try:
-                    _br.update_belief(name, False)
+                    await _br.update_belief(name, False)
                 except Exception as e:
                     logger.debug("belief_router.update_failed agent={} error={}", name, str(e)[:100])
             raise

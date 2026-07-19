@@ -104,7 +104,7 @@ class AgentWorkRecord:
             if self._path.exists():
                 data = json.loads(self._path.read_text(encoding="utf-8"))
                 self._records = data.get("records", [])[-_MAX_RECORDS:]
-        except Exception as e:
+        except (json.JSONDecodeError, OSError) as e:
             logger.warning("work_record.load_failed", error=str(e))
             self._records = []
 

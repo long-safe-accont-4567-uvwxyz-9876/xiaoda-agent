@@ -8,11 +8,8 @@ from pathlib import Path
 from loguru import logger
 import contextlib
 
-def _safe_int(val, default):
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return default
+from utils.common import safe_int as _safe_int
+
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -172,16 +169,8 @@ def _run_web(host: str, port: int) -> None:
     # 端口冲突检测（异步版，避免主线程 time.sleep 阻塞）
     asyncio.run(_wait_for_port_available_async(host, port))
 
-    # 直接传 app 对象，避免 uvicorn 动态导入失败（PyInstaller 兼容）
-    try:
-        from web.server import app
-    except Exception:
-        import traceback
-        import pathlib
-        log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent" / "crash.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(f"Failed to import web.server:\n{traceback.format_exc()}", encoding="utf-8")
-        raise
+    # 导入 web.server（失败时写入 crash.log）
+    app = _import_web_server_safe()
 
     # 显示友好的访问地址（0.0.0.0 对用户不友好）
     display_host = "localhost" if host == "0.0.0.0" else host
@@ -316,7 +305,10 @@ def _wait_for_server_ready(window: Any, port: int) -> None:
         except (urllib.error.URLError, OSError, ConnectionError):
             time.sleep(1)
     else:
-        window.evaluate_js("if(typeof onServerTimeout==='function')onServerTimeout();")
+        try:
+            window.evaluate_js("if(typeof onServerTimeout==='function')onServerTimeout();")
+        except Exception:
+            logger.warning("splash.onServerTimeout() failed")
         return
 
     # WebUI 就绪，等待 splash 页面加载完成后调用 onServerReady

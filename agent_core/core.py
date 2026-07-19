@@ -205,7 +205,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             return str(Path(__file__).parent.parent / "config" / "agents" / "xiaoda_personality.md")
 
     @staticmethod
-    def _read_address_term_from_user_md() -> str | None:
+    def read_address_term_from_user_md() -> str | None:
         """从 USER.md 读取用户自定义称呼。
 
         匹配 "- 称呼：xxx" 或 "- 称呼: xxx"，过滤占位符文本。
@@ -230,7 +230,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
 
     def _build_owner_identity(self) -> UserIdentity:
         """构建主人身份，address_term 从 USER.md 读取，兜底"爸爸"。"""
-        addr = self._read_address_term_from_user_md() or "爸爸"
+        addr = self.read_address_term_from_user_md() or "爸爸"
         return UserIdentity(is_owner=True, display_name="爸爸", address_term=addr)
 
     def _resolve_identity(self, user_id: str, user_openid: str = "",

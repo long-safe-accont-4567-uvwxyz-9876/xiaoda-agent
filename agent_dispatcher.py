@@ -404,7 +404,7 @@ class SubAgent:
                     # TODO(phase-2): apply intervention to context
                     pass  # 实际应用取决于上下文结构
             except Exception:
-                pass
+                logger.debug("JSpace.intervention_evaluate_failed")
 
         response: str | None = None
         success = False
@@ -427,7 +427,7 @@ class SubAgent:
                 await _signal_stream.emit(
                     f"agent_{self.config.name}_success", success_score, "agent_dispatcher")
             except Exception:
-                pass
+                logger.debug("agent_dispatcher.signal_emit_failed")
 
         if response is not None:
             return response

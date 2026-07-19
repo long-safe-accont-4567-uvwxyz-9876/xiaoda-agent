@@ -14,11 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _safe_int(val, default):
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return default
+from utils.common import safe_int as _safe_int
 
 
 def _safe_float(val, default):

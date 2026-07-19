@@ -361,6 +361,12 @@ class ModelRouter:
                 # agnes 不支持 thinking，切换到 agnes 时禁用 thinking
                 if provider == "agnes" and "thinking" in ROUTE_TABLE[_task]:
                     ROUTE_TABLE[_task]["thinking"] = {"type": "disabled"}
+        # chat_flash 跨 provider 降级：使用不同 provider 实现 fallback 链多样化
+        if provider in _CROSS_PROVIDER_MAP:
+            fb_provider, fb_model = _CROSS_PROVIDER_MAP[provider]
+            if "chat_flash" in ROUTE_TABLE:
+                ROUTE_TABLE["chat_flash"]["client"] = fb_provider
+                ROUTE_TABLE["chat_flash"]["model"] = fb_model
         logger.info("router.all_tasks_synced",
                     provider=provider, model=model_id,
                     synced_tasks=list(_sync_tasks))

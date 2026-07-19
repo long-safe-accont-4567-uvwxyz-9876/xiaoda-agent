@@ -41,7 +41,7 @@ async def _apply_model_overrides(core: Any) -> None:
     _restore_chat_model(cfg, core)
 
 
-def _register_env_providers(cfg: Any, env_values: Any, os: Any) -> None:
+def _register_env_providers(cfg: Any, env_values: Any, os_module: Any) -> None:
     """从 .env 注册已知免费模型平台 provider。"""
     _KNOWN_ENV_PROVIDERS = {
         "SILICONFLOW_API_KEY": ("siliconflow", "openai", "https://api.siliconflow.cn/v1", "SiliconFlow 硅基流动"),
@@ -78,10 +78,10 @@ def _register_env_providers(cfg: Any, env_values: Any, os: Any) -> None:
                 "default_model": "", "enabled": True,
                 "order": known_env_keys.index(env_key),
             })
-        _ensure_provider_key_file(pid, api_key, os)
+        _ensure_provider_key_file(pid, api_key, os_module)
 
 
-def _ensure_provider_key_file(pid: Any, api_key: Any, os: Any) -> None:
+def _ensure_provider_key_file(pid: Any, api_key: Any, os_module: Any) -> None:
     """确保证书文件存在且内容正确（base64 编码存储，非明文）。"""
     from config import get_credentials_dir
     from web._provider_keys import _encode_key, _decode_key

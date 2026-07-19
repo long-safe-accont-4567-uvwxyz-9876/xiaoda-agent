@@ -452,7 +452,7 @@ class KnowledgeGraph:
                 except Exception as e:
                     logger.warning("kg.v2_extract_failed_fallback_to_v1", error=str(e))
         except Exception:
-            pass
+            logger.debug("kg.v2_extract_fatal_fallback_to_v1")
 
         # v1 逻辑 (原有代码)
         entity_count = await self.get_entity_count()

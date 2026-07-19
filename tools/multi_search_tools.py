@@ -104,6 +104,7 @@ def _wolfram_api_query(query: str) -> ToolResult | None:
 
         return ToolResult.ok(f"WolframAlpha: {query}\n" + "\n".join(lines))
     except Exception:
+        logger.debug("wolfram_search_failed")
         return None
 
 

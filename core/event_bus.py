@@ -86,7 +86,7 @@ class AgentEventBus:
             try:
                 _current_user.reset(token)
             except (ValueError, LookupError):
-                logger.debug("event_bus.unbind_noop: token already consumed or context mismatch")
+                logger.warning("event_bus.unbind_noop: token already consumed or context mismatch")
         else:
             _current_user.set(None)
 
@@ -107,6 +107,7 @@ class AgentEventBus:
         try:
             await user.deliver(event)
         except Exception as e:
+            # emit() 承诺绝不向调用方抛异常 —— 任何 deliver 失败都不应中断调用方流程
             logger.debug("event_bus.deliver_error type={} error={}",
                          event.type, str(e)[:100])
 

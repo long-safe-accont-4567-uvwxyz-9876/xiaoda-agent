@@ -155,6 +155,17 @@ def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
     try:
         if kioxia_path.exists() or kioxia_path.parent.exists():
             kioxia_path.mkdir(parents=True, exist_ok=True)
+            # 运行时只读检测：尝试写入临时文件验证文件系统是否可写
+            # 修复：FAT 文件系统错误导致 remount 只读时，os.access(W_OK) 仍返回 True
+            # 因此需要实际写入测试文件
+            _probe = kioxia_path / ".write_probe"
+            try:
+                _probe.write_text("probe", encoding="utf-8")
+                _probe.unlink(missing_ok=True)
+                logger.debug("config.data_path_writable path=%s", kioxia_path)
+            except (OSError, PermissionError):
+                logger.warning("config.data_path_readonly path=%s", kioxia_path)
+                raise OSError(f"Filesystem is read-only: {kioxia_path}")
             return kioxia_path
     except (OSError, PermissionError):
         logger.debug("config.data_path_resolve_failed", exc_info=True)
@@ -175,6 +186,22 @@ DATA_DIR = _resolve_data_path(_KIOXIA_BASE / "db", _FALLBACK_BASE / "db")
 LOG_DIR = _resolve_data_path(_KIOXIA_BASE / "logs", _FALLBACK_BASE / "logs")
 WORKSPACE_DIR = _resolve_data_path(_KIOXIA_BASE / "config" / "workspace", _FALLBACK_BASE / "config" / "workspace")
 CREDENTIALS_DIR = get_credentials_dir()
+
+
+def is_data_dir_writable() -> bool:
+    """运行时检测数据目录是否可写（用于外置盘只读故障检测）。
+
+    Returns:
+        True 表示可写，False 表示文件系统已变为只读。
+    此函数适用于运行时周期检测，不会阻塞主流程。
+    """
+    try:
+        _probe = DATA_DIR / ".write_probe_runtime"
+        _probe.write_text("probe", encoding="utf-8")
+        _probe.unlink(missing_ok=True)
+        return True
+    except (OSError, PermissionError):
+        return False
 
 
 def _init_user_resources() -> None:
@@ -295,7 +322,44 @@ def _init_workspace_templates(bundled_config: Path) -> None:
                     logger.debug("config.workspace_sub_copy_failed %s: %s", item.name, e)
 
 
-_init_user_resources()
+_workspace_initialized = False
+
+
+def _ensure_workspace() -> None:
+    """惰性初始化：frozen 模式下复制打包资源、迁移旧数据。
+
+    仅在首次显式调用时执行一次，避免模块导入时产生 IO 副作用。
+    """
+    global _workspace_initialized, _KIOXIA_AVAILABLE
+    if _workspace_initialized:
+        return
+    _workspace_initialized = True
+
+    _init_user_resources()
+
+    # ── 数据迁移：frozen 模式下从 exe 目录迁移到用户目录 ──
+    # 解决更新安装包导致数据丢失（"刷机"）的问题
+    if getattr(sys, 'frozen', False):
+        _exe_base = Path(sys.executable).parent
+        _migrate_old_data(_exe_base / "data", DATA_DIR, "database")
+        _migrate_old_data(_exe_base / "logs", LOG_DIR, "logs")
+        _migrate_old_data(Path(os.path.expanduser("~/.ai-agent/workspace")), WORKSPACE_DIR, "workspace")
+        _migrate_old_data(_exe_base / "stickers", STICKER_DIR, "stickers")
+        _migrate_old_data(_exe_base / "xiaoli-stickers", XIAOLI_STICKER_DIR, "xiaoli-stickers")
+        _migrate_old_data(_exe_base / "agent-stickers", AGENT_STICKER_BASE, "agent-stickers")
+        _migrate_old_data(_exe_base / "files", FILE_DIR, "files")
+        _migrate_old_data(_exe_base / "media", MEDIA_DIR, "media")
+        _migrate_old_data(_exe_base / "voice_refs", VOICE_REF_DIR, "voice_refs")
+        _migrate_old_data(_exe_base / "memory_state", MEMORY_STATE_DIR, "memory_state")
+        _migrate_old_data(_exe_base / "plugins", PLUGINS_CONFIG_DIR, "plugins")
+
+    _KIOXIA_AVAILABLE = (_KIOXIA_BASE / "db").exists()
+
+
+# 在路径解析前执行初始化，确保 frozen 模式下的资源复制和数据迁移正常进行
+# 原始代码在模块顶层直接调用 _init_user_resources()，此处保持相同行为
+_ensure_workspace()
+
 
 AGENT_CONFIG_PATH = (_KIOXIA_BASE / "config" / "agent.json5") if (_KIOXIA_BASE / "config").exists() else _FALLBACK_BASE / "agent.json5"
 STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "stickers", _FALLBACK_BASE / "stickers")
@@ -316,35 +380,6 @@ AGENTS_CONFIG_DIR = _KIOXIA_BASE / "config" / "agents"
 if not AGENTS_CONFIG_DIR.exists():
     AGENTS_CONFIG_DIR = _FALLBACK_BASE / "config" / "agents"
 AGENTS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-
-# ── 数据迁移：frozen 模式下从 exe 目录迁移到用户目录 ──
-# 解决更新安装包导致数据丢失（"刷机"）的问题
-if getattr(sys, 'frozen', False):
-    _exe_base = Path(sys.executable).parent
-    # 迁移记忆数据库
-    _migrate_old_data(_exe_base / "data", DATA_DIR, "database")
-    # 迁移日志
-    _migrate_old_data(_exe_base / "logs", LOG_DIR, "logs")
-    # 迁移工作区（知识笔记、SOUL.md 等）
-    _migrate_old_data(Path(os.path.expanduser("~/.ai-agent/workspace")), WORKSPACE_DIR, "workspace")
-    # 迁移贴纸
-    _migrate_old_data(_exe_base / "stickers", STICKER_DIR, "stickers")
-    # 迁移小理贴纸
-    _migrate_old_data(_exe_base / "xiaoli-stickers", XIAOLI_STICKER_DIR, "xiaoli-stickers")
-    # 迁移通用智能体贴纸
-    _migrate_old_data(_exe_base / "agent-stickers", AGENT_STICKER_BASE, "agent-stickers")
-    # 迁移文件存储
-    _migrate_old_data(_exe_base / "files", FILE_DIR, "files")
-    # 迁移媒体文件（壁纸、TTS 缓存等）
-    _migrate_old_data(_exe_base / "media", MEDIA_DIR, "media")
-    # 迁移参考音频
-    _migrate_old_data(_exe_base / "voice_refs", VOICE_REF_DIR, "voice_refs")
-    # 迁移记忆状态
-    _migrate_old_data(_exe_base / "memory_state", MEMORY_STATE_DIR, "memory_state")
-    # 迁移插件配置
-    _migrate_old_data(_exe_base / "plugins", PLUGINS_CONFIG_DIR, "plugins")
-
-_KIOXIA_AVAILABLE = (_KIOXIA_BASE / "db").exists()
 
 DEEPSEEK_API_KEY = get_secret("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
@@ -384,6 +419,13 @@ else:
 PRO_MODEL_NAME = os.getenv("PRO_MODEL_NAME", "")
 FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "")
 
+
+# Agnes AI 配置（在 get_provider_config 之前定义，避免前向引用）
+AGNES_API_KEY = get_secret("AGNES_API_KEY", "")
+AGNES_BASE_URL = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
+AGNES_TEXT_MODEL = os.getenv("AGNES_TEXT_MODEL", "agnes-2.0-flash")
+AGNES_IMAGE_MODEL = os.getenv("AGNES_IMAGE_MODEL", "agnes-image-2.1-flash")
+AGNES_VIDEO_MODEL = os.getenv("AGNES_VIDEO_MODEL", "agnes-video-v2.0")
 
 # ── Provider 配置映射（base_url / api_key_env）──
 # 子代理注册时根据 provider 自动选择正确的连接参数
@@ -445,7 +487,7 @@ def get_temperature(default: float = 0.7) -> float:
         if override is not None:
             return float(override)
     except Exception:
-        pass
+        logger.debug("get_global_temperature.webui_read_failed")
     return default
 
 
@@ -582,13 +624,6 @@ def reverse_agent_name_replacements(content: str) -> str:
 ASR_API_KEY = get_secret("ASR_API_KEY", "") or get_secret("SILICONFLOW_API_KEY", "")
 ASR_BASE_URL = os.getenv("ASR_BASE_URL", "https://api.siliconflow.cn/v1")
 ASR_MODEL = os.getenv("ASR_MODEL", "FunAudioLLM/SenseVoiceSmall")
-
-# Agnes AI 配置
-AGNES_API_KEY = get_secret("AGNES_API_KEY", "")
-AGNES_BASE_URL = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
-AGNES_TEXT_MODEL = os.getenv("AGNES_TEXT_MODEL", "agnes-2.0-flash")
-AGNES_IMAGE_MODEL = os.getenv("AGNES_IMAGE_MODEL", "agnes-image-2.1-flash")
-AGNES_VIDEO_MODEL = os.getenv("AGNES_VIDEO_MODEL", "agnes-video-v2.0")
 
 # Jina Reader API key（可选）：有则 500 RPM，无则免费 20 RPM
 JINA_API_KEY = get_secret("JINA_API_KEY", "")
@@ -750,14 +785,7 @@ RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "true").lower() in ("1", "true", "yes")
 
 
-def _safe_int(env_val: str | None, default: int) -> int:
-    """安全解析整数环境变量, 非法值回退到 default."""
-    if env_val is None:
-        return default
-    try:
-        return int(env_val)
-    except (ValueError, TypeError):
-        return default
+from utils.common import safe_int as _safe_int
 
 
 def _safe_float(env_val: str | None, default: float) -> float:

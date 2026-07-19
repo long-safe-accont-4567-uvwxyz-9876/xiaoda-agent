@@ -79,6 +79,21 @@ class DatabaseManager:
             except (OSError, RuntimeError):
                 logger.debug("database.init_close_old_connection_error: {}", exc_info=True)
             self._conn = None
+
+        # 只读文件系统检测：提前检测，避免在只读文件系统上打开连接导致静默失败
+        # SQLite 在只读文件系统上打开连接不会报错，但后续写入会失败
+        try:
+            _db_dir = self.db_path.parent
+            _probe_file = _db_dir / ".db_write_probe"
+            _probe_file.write_text("probe", encoding="utf-8")
+            _probe_file.unlink(missing_ok=True)
+        except (OSError, PermissionError) as e:
+            logger.critical(f"database.readonly_fs db_path={self.db_path} error={e}")
+            raise OSError(
+                f"数据库目录不可写: {self.db_path.parent}. "
+                f"请检查文件系统权限或卸载/重新挂载外置存储。"
+            ) from e
+
         self._conn = await aiosqlite.connect(str(self.db_path))
         self._conn.row_factory = aiosqlite.Row
         # busy_timeout 必须最先设置，防止后续 PRAGMA 因锁竞争失败
@@ -149,7 +164,10 @@ class DatabaseManager:
 
     async def commit(self) -> None:
         if self._conn:
-            await self._conn.commit()
+            try:
+                await self._conn.commit()
+            except (OSError, RuntimeError) as e:
+                logger.warning(f"database.commit_failed: {e}")
 
     async def close(self) -> None:
         if self._conn:

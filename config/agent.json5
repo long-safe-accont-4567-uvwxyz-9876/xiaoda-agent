@@ -23,6 +23,32 @@
     "tts_model_name": "mimo-v2.5-tts-voiceclone"
   },
 
+  // ===== 默认模型（无特定配置时使用的兜底模型） =====
+  "default_model": "deepseek-v4-pro",
+  // ===== 最大工具调用轮数（LLM 单次对话中允许调用的工具次数上限） =====
+  "max_tool_rounds": 15,
+
+  // ===== 工具注册配置 =====
+  "tools": {
+    // 内置工具白名单（留空表示全部允许）
+    "whitelist": [],
+    // 内置工具黑名单（匹配名称的前缀或全名）
+    "blacklist": [],
+    // 每个分类最大注册数（0=不限制）
+    "max_per_category": {
+      "system": 20,
+      "file": 20,
+      "code": 10,
+      "web": 20,
+      "memory": 15,
+      "hardware": 10,
+      "vision": 5,
+      "document": 5,
+      "social": 5,
+      "security": 10
+    }
+  },
+
   // ===== Nudge 引擎配置 =====
   "nudge": {
     "enabled": true,

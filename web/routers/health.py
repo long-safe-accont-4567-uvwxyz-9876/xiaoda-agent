@@ -131,7 +131,7 @@ async def last_report(request: Request) -> Any:
         return Envelope(data={})
     try:
         row["detail"] = json.loads(row["detail"])
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         logger.debug("health.detail_parse_failed", exc_info=True)
     return Envelope(data=row)
 

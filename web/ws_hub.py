@@ -15,11 +15,7 @@ import uuid
 from pathlib import Path
 
 
-def _safe_int(val, default):
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return default
+from utils.common import safe_int as _safe_int
 
 _IS_WINDOWS = platform.system() == "Windows"
 

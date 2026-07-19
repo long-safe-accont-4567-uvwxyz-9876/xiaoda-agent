@@ -327,6 +327,7 @@ class IMApprovalChannel:
         self._pending: dict[str, ApprovalRequest] = {}
         self._waiters: dict[str, asyncio.Future] = {}
         self._audit_log: list[dict] = []
+        self._lock: asyncio.Lock = asyncio.Lock()
 
     def _classify_reply(self, text: str) -> ApprovalStatus | None:
         """将用户回复文本分类为 APPROVED / REJECTED / None。"""
@@ -403,30 +404,42 @@ class IMApprovalChannel:
             self._pending.pop(req.id, None)
             self._waiters.pop(req.id, None)
 
-    async def handle_user_reply(self, user_id: str, text: str) -> bool:
+    async def handle_user_reply(self, user_id: str, text: str,
+                                  request_id: str | None = None) -> bool:
         """处理用户回复（"确认"/"取消"），返回是否匹配待审批请求
 
-        _pending 以 request_id 为 key, 此处遍历查找该用户最新的待审批请求。
+        并发安全：通过 _lock 保护 _pending/_waiters 共享状态。
+        同一用户有多个待审批请求时，建议传入 request_id 精确定位；
+        若不传，则自动匹配该用户最新的待审批请求（向前兼容）。
         """
-        # 查找该用户最新的待审批请求 (created_at 最大者)
-        req = None
-        for r in self._pending.values():
-            if r.user_id == user_id and (req is None or r.created_at > req.created_at):
-                req = r
-        if req is None:
-            return False
-        decision = self._classify_reply(text)
-        if decision is None:
-            return False
-        reason = ("User confirmed" if decision == ApprovalStatus.APPROVED
-                  else "User rejected")
-        req.status = decision
-        req.decided_by = user_id
-        req.decided_at = time.time()
-        req.decision_reason = reason
-        future = self._waiters.pop(req.id, None)
-        if future is not None and not future.done():
-            future.set_result(decision)
-        self._audit(req, decision, user_id, reason)
-        self._pending.pop(req.id, None)
-        return True
+        async with self._lock:
+            if request_id is not None:
+                # 精确匹配指定请求
+                req = self._pending.get(request_id)
+                if req is None or req.user_id != user_id:
+                    return False
+            else:
+                # 查找该用户最新的待审批请求 (created_at 最大者)
+                req = None
+                for r in self._pending.values():
+                    if r.user_id == user_id and (req is None or r.created_at > req.created_at):
+                        req = r
+                if req is None:
+                    return False
+
+            decision = self._classify_reply(text)
+            if decision is None:
+                return False
+
+            reason = ("User confirmed" if decision == ApprovalStatus.APPROVED
+                      else "User rejected")
+            req.status = decision
+            req.decided_by = user_id
+            req.decided_at = time.time()
+            req.decision_reason = reason
+            future = self._waiters.pop(req.id, None)
+            if future is not None and not future.done():
+                future.set_result(decision)
+            self._audit(req, decision, user_id, reason)
+            self._pending.pop(req.id, None)
+            return True

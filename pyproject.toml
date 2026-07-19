@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xiaoda-agent"
-version = "0.5.3"
+version = "0.5.28"
 description = "多智能体 AI 助手 — 40+ 工具赋能，三通道交互"
 readme = "README.md"
 license = {text = "MIT"}
@@ -60,6 +60,7 @@ dependencies = [
     "requests>=2.31.0",
     "primp>=0.7.0",
     "tavily-python>=0.5.0",
+    "json5>=0.9.0",
 ]
 
 [project.optional-dependencies]

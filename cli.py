@@ -239,7 +239,7 @@ class CLIInterface:
 
     def _address_term(self) -> str:
         """获取当前用户称呼，优先从 USER.md 读取，兜底"爸爸"。"""
-        term = self.bot._read_address_term_from_user_md()
+        term = self.bot.read_address_term_from_user_md()
         return term or self.bot.context.current_address_term or "爸爸"
 
     async def _init(self) -> None:

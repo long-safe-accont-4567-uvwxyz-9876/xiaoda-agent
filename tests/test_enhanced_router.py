@@ -1,6 +1,6 @@
 # tests/test_enhanced_router.py
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from core.behavioral_signal import BehavioralSignalStream
 from core.behavioral_direction import DirectionVector, DirectionRegistry
 from core.enhanced_router import EnhancedBeliefRouter
@@ -19,7 +19,7 @@ def mock_base_router():
     # sample_agent 是公共接口，返回 float
     _sample_map = {"xiaoda": 0.5, "xiaolang": 0.4, "xiaoke": 0.6, "xiaolian": 0.3}
     router.sample_agent = MagicMock(side_effect=lambda name: _sample_map.get(name, 0.5))
-    router.update_belief = MagicMock()
+    router.update_belief = AsyncMock()
     return router
 
 
@@ -79,5 +79,5 @@ async def test_update_belief_delegates(mock_base_router):
     stream = BehavioralSignalStream()
     registry = DirectionRegistry()
     enhanced = EnhancedBeliefRouter(mock_base_router, registry, stream)
-    enhanced.update_belief("xiaoda", True)
+    await enhanced.update_belief("xiaoda", True)
     mock_base_router.update_belief.assert_called_once_with("xiaoda", True)

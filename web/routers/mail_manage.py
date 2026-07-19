@@ -154,7 +154,7 @@ def _extract_first_json_object(text: str, log_tag: str = "") -> dict:
         return {}
     try:
         return json.loads(text[:end_pos])
-    except Exception as exc:
+    except json.JSONDecodeError as exc:
         if log_tag:
             logger.debug("mail.{}_parse_failed: {}", log_tag, exc, exc_info=True)
         return {}

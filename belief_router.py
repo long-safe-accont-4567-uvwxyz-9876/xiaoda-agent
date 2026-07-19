@@ -1,15 +1,13 @@
 """Thompson Sampling belief-based agent routing."""
-from typing import ClassVar
 import asyncio
 import math
 import random
 import time
 import sqlite3
+import threading
 from dataclasses import dataclass
 from loguru import logger
 from utils.atomic_write import atomic_json_write
-
-_background_saves: set[asyncio.Task] = set()
 
 # J-Space Hook: 增强型路由 (非阻塞, 失败不影响主流程)
 try:
@@ -75,10 +73,11 @@ class AgentBelief:
 class BeliefRouter:
     """Thompson Sampling router that selects agents based on historical performance."""
 
-    VALID_AGENTS: ClassVar[list[str]] = ["xiaoli", "xiaolian", "xiaolang", "xiaoke", "xiaoda"]
+    VALID_AGENTS: list[str] = ["xiaoli", "xiaolian", "xiaolang", "xiaoke", "xiaoda"]
 
     def __init__(self, db_path: str = "") -> None:
         self._beliefs: dict[str, AgentBelief] = {name: AgentBelief() for name in self.VALID_AGENTS}
+        self._lock: threading.Lock = threading.Lock()
         self._db_path = db_path
         if db_path:
             self._load_from_db()
@@ -106,7 +105,8 @@ class BeliefRouter:
         if not candidates:
             return "xiaoda"
 
-        samples = {a: self._beliefs[a].sample() for a in candidates}
+        with self._lock:
+            samples = {a: self._beliefs[a].sample() for a in candidates}
         selected = max(samples, key=samples.get)
 
         logger.debug("belief_router.sampled",
@@ -116,22 +116,25 @@ class BeliefRouter:
 
     def sample_agent(self, agent_name: str) -> float:
         """获取指定 agent 的 Thompson Sampling 采样值。"""
-        if agent_name not in self._beliefs:
-            return 0.5
-        return self._beliefs[agent_name].sample()
+        with self._lock:
+            if agent_name not in self._beliefs:
+                return 0.5
+            return self._beliefs[agent_name].sample()
 
-    def update_belief(self, agent_name: str, success: bool) -> None:
+    async def update_belief(self, agent_name: str, success: bool) -> None:
         """Update belief for an agent based on task result."""
-        if agent_name in self._beliefs:
-            self._beliefs[agent_name].update(success)
-            if self._db_path:
-                self._save_to_db()
-            logger.debug("belief_router.updated", agent=agent_name, success=success,
-                         alpha=self._beliefs[agent_name].alpha, beta=self._beliefs[agent_name].beta)
+        with self._lock:
+            if agent_name in self._beliefs:
+                self._beliefs[agent_name].update(success)
+        if agent_name in self._beliefs and self._db_path:
+            await self._save_to_db()
+        logger.debug("belief_router.updated", agent=agent_name, success=success,
+                     alpha=self._beliefs[agent_name].alpha, beta=self._beliefs[agent_name].beta)
 
     def get_beliefs(self) -> dict[str, dict]:
         """Get current belief parameters for all agents."""
-        return {name: belief.to_dict() for name, belief in self._beliefs.items()}
+        with self._lock:
+            return {name: belief.to_dict() for name, belief in self._beliefs.items()}
 
     def _load_from_db(self) -> None:
         """Load beliefs from database."""
@@ -186,10 +189,11 @@ class BeliefRouter:
         except Exception as e:
             logger.warning("belief_router.json_load_failed", error=str(e))
 
-    def _save_to_db(self) -> None:
+    async def _save_to_db(self) -> None:
         """Save beliefs to database (non-blocking via thread pool)."""
         try:
-            beliefs_snapshot = {name: b.to_dict() for name, b in self._beliefs.items()}
+            with self._lock:
+                beliefs_snapshot = {name: b.to_dict() for name, b in self._beliefs.items()}
             db_path = self._db_path
 
             def _do_save() -> None:
@@ -215,37 +219,26 @@ class BeliefRouter:
                     if conn:
                         conn.close()
 
-            # 使用线程池避免阻塞事件循环，持有引用防止 GC 回收
+            # 使用线程池避免阻塞事件循环，await完成确保持久化
             try:
                 loop = asyncio.get_running_loop()
-                future = loop.run_in_executor(None, _do_save)
-                task = asyncio.ensure_future(future)
-
-                def _on_save_done(t: asyncio.Task) -> None:
-                    _background_saves.discard(t)
-                    if t.cancelled():
-                        return
-                    if exc := t.exception():
-                        logger.error("belief_save_failed: {}", exc)
-
-                task.add_done_callback(_on_save_done)
-                _background_saves.add(task)
+                await loop.run_in_executor(None, _do_save)
             except RuntimeError:
                 # 没有运行中的事件循环，直接执行
                 _do_save()
         except Exception as e:
             logger.warning("belief_router.save_failed", error=str(e))
 
-        # 原子写入 JSON 状态文件
-        self._save_to_json()
+        # 原子写入 JSON 状态文件 (复用同一快照，避免竞态)
+        self._save_to_json(beliefs_snapshot)
 
-    def _save_to_json(self) -> None:
+    def _save_to_json(self, beliefs_snapshot: dict | None = None) -> None:
         """原子写入信念状态到 JSON 文件"""
         if not self._db_path:
             return
         try:
             json_path = self._db_path.rsplit(".", 1)[0] + "_beliefs.json"
-            data = {
+            data = beliefs_snapshot or {
                 name: belief.to_dict()
                 for name, belief in self._beliefs.items()
             }

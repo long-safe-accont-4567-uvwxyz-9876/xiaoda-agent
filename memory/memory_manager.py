@@ -2776,8 +2776,8 @@ class MemoryManager:
                 overlap_hash = hashlib.sha256(overlap.encode()).hexdigest()[:8]
                 text = f"{overlap}…{text}"
 
-            # Contextual Retrieval: 注入父摘要前缀
-            if contextual and parent_summary:
+            # Contextual Retrieval: 注入父摘要前缀到 embed_content（始终注入，用于向量检索）
+            if parent_summary:
                 embed_content = f"[上下文: {parent_summary[:80]}] {text}"
             else:
                 embed_content = text

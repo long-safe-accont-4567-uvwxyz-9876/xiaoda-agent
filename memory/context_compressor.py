@@ -74,7 +74,7 @@ class ContextCompressor:
                 data = json.loads(cache_path.read_text(encoding="utf-8"))
                 self._stats["retrieved_count"] += 1
                 return data.get("content", "")
-            except Exception as e:
+            except (json.JSONDecodeError, OSError) as e:
                 logger.warning("ccr.retrieve_failed", key=ccr_key, error=str(e))
         return None
 

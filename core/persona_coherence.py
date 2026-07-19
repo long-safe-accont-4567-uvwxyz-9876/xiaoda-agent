@@ -149,10 +149,12 @@ class PersonaCritic:
             r"我是\s*(AI|人工智能|大语言模型)",
             r"As an AI\b",
             r"I am an? AI\b",
+            r"很抱歉无法",
+            r"我无法提供",
         ]
         for pat in bad_patterns:
             if re.search(pat, output, re.IGNORECASE):
-                score -= 0.2
+                score -= 0.3
 
         # 检测小妲口吻
         good_patterns = [r"[呀呢哦啦]", r"~", r"\^_\^", r"🌿", r"🌱"]

@@ -81,6 +81,6 @@ class EnhancedBeliefRouter:
                      selected=selected)
         return selected
 
-    def update_belief(self, agent_name: str, success: bool) -> None:
+    async def update_belief(self, agent_name: str, success: bool) -> None:
         """更新信念 — 委托给基础路由器"""
-        self._base.update_belief(agent_name, success)
+        await self._base.update_belief(agent_name, success)

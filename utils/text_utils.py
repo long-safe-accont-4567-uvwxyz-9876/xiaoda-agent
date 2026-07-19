@@ -178,6 +178,10 @@ def strip_dsml(text: str) -> str:
     """
     text = DSML_PATTERN.sub('', text)
     text = DSML_INVOKE_PATTERN.sub('', text)
+    # 8. 泄露的 <｜｜DSML｜｜function_calls> 变体（必须在 DSML_LEFTOVER 之前，否则开标签被提前消费）
+    text = re.sub(r'<｜｜DSML｜｜function_calls>[\s\S]*?</｜｜DSML｜｜function_calls>', '', text)
+    # 9. 泄露的 <｜｜DSML｜｜function_call> 变体
+    text = re.sub(r'<｜｜DSML｜｜function_call>[\s\S]*?</｜｜DSML｜｜function_call>', '', text)
     text = DSML_LEFTOVER.sub('', text)
     text = FAKE_XML_TOOL_PATTERN.sub('', text)
     text = TOOL_CALL_PATTERN.sub('', text)
@@ -203,6 +207,9 @@ def strip_dsml(text: str) -> str:
     text = re.sub(r'(?<!```)\n?\s*\[\s*\{[\s\S]*?\}\s*\]\s*(?!```)', '', text)
     # 6b. JSON 对象格式（含工具参数特征字段）：{"city": "...", ...}
     text = re.sub(r'(?<!```)\n?\s*\{\s*"(?:city|query_type|search_query|query|url|keyword|prompt|text|input)"\s*:[\s\S]*?\}\s*(?!```)', '', text)
+    # 7. 泄露的 function=xxx 格式（如 function=delegate_task>、function=call_xiaoda(...)）
+    # 匹配 function= 后跟函数名，消费所有非中文内容直到遇到中文字符
+    text = re.sub(r'function=\w+(?:\([^)]*\))?\s*(?:>[^\u4e00-\u9fff]*)?', '', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
@@ -445,11 +452,11 @@ def strip_reasoning(text: str) -> str:
     # 把"推理行 + 后续正常回复"整段匹配返回空，导致 LLM 正确回复被误删 → empty_reply → fallback
     # 现在改为按行清洗（_CHINESE_REASONING_LINE_PATTERN），只删推理行，保留正常回复行
     _text_stripped = text.strip()
-    if _text_stripped and re.match(r'^[A-Z]', _text_stripped) and len(_text_stripped) > 30:
+    if _text_stripped and re.match(r'^[A-Z]', _text_stripped) and len(_text_stripped) > 200:
         _cn_chars = sum(1 for c in _text_stripped if '\u4e00' <= c <= '\u9fff')
         _cn_ratio = _cn_chars / len(_text_stripped) if _text_stripped else 0
-        # 中文占比 <3% 且长度 >30 判定为纯英文推理泄漏
-        if _cn_ratio < 0.03:
+        # 中文占比 <1% 且长度 >200 判定为纯英文推理泄漏（放宽阈值避免误删正常英文回复）
+        if _cn_ratio < 0.01:
             from loguru import logger
             logger.warning("text_utils.full_english_reasoning_detected cn_ratio={:.2%} text={}",
                            _cn_ratio, _text_stripped[:80])

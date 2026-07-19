@@ -261,7 +261,7 @@ class EmotionState:
                 self._pad = data.get("pad", {"P": 0.0, "A": 0.0, "D": 0.5})
             logger.info("emotion_state.loaded",
                         emotion=self._current, intensity=f"{self._intensity:.2f}")
-        except Exception as e:
+        except (json.JSONDecodeError, OSError) as e:
             logger.debug("emotion_state.load_failed", error=str(e))
 
 

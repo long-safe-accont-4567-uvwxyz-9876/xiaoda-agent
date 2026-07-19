@@ -141,7 +141,7 @@ class GreetingScheduler:
             sid = row["id"]
             try:
                 days = json.loads(row["days"] or "[]")
-            except Exception:
+            except json.JSONDecodeError:
                 days = list(range(1, 8))
             if weekday not in days:
                 continue
@@ -165,7 +165,7 @@ class GreetingScheduler:
                     row["next_fire_times"] = json.dumps(times)
                 try:
                     fire_times = json.loads(row.get("next_fire_times", "[]") or "[]")
-                except Exception:
+                except json.JSONDecodeError:
                     fire_times = []
                 for t in fire_times:
                     key = (sid, t)
@@ -228,7 +228,7 @@ class GreetingScheduler:
             text = await self._generate(hint)
         try:
             channels = json.loads(schedule.get("channels") or '["web"]')
-        except Exception:
+        except json.JSONDecodeError:
             channels = ["web"]
         report: dict[str, dict] = {}
         for ch in channels:

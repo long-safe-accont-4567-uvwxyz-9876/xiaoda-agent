@@ -353,7 +353,7 @@ class MarketInstaller:
                 parsed = json.loads(connections)
                 if isinstance(parsed, dict):
                     result = parsed
-            except Exception:
+            except json.JSONDecodeError:
                 logger.debug("installer.connections_parse_error", exc_info=True)
                 # 尝试解析 "npx -y @xxx/server" 格式的命令行
                 parts = connections.strip().split()
