@@ -20,7 +20,15 @@ Branch: main
 - [x] Task 10b: G12 KG 图谱批量查询接口 — DONE (commit 0e471ff, review APPROVED, 79 测试通过)
 - [x] Task 10c: G13 扩散激活 LRU 缓存 — DONE (commits a7410a3 + 0822e31 fix, review APPROVED after fix, 61+60 测试通过)
 - [x] Task 11: 全量 pytest 回归 — DONE (2149 passed, 1 skipped, 5 warnings, 146.84s)
-- [ ] Task 12: 冒烟测试
+- [x] Task 12: 冒烟测试 — DONE (服务运行 1天2小时+无崩溃, G1-G13 功能测试全通过)
+- [x] Final Review + Fix — DONE (commit 3fedf90, 修复 G5 前端 pong + G1 时区)
+
+## Completion Log
+
+- 2026-07-20 Task 10: 审计报告 docs/performance_audit_2026-07-20.md，发现 6 项新瓶颈（G11-G13 Important, G14-G16 Minor）
+- 2026-07-21 Task 11: 全量 pytest 2149 passed + 1 skipped + 5 warnings in 146.84s
+- 2026-07-21 Task 12: 服务运行 1天2小时+状态正常，G1-G13 关键功能测试全通过
+- 2026-07-21 Final Review: 发现 G5 前端 pong 缺失 (Critical) + G1 时区 (Important)，已在 commit 3fedf90 修复
 
 ## Minor 待办（推迟到下个版本）
 
