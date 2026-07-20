@@ -168,14 +168,20 @@ class KnowledgeGraphV2(KnowledgeGraph):
         if self._db_v2 is None:
             logger.warning("kg_v2.merge_entities_no_db")
             return
-        for ent in entities[:5]:
+        top_entities = entities[:5]
+        valid_names = [e.get("name", "") for e in top_entities if e.get("name")]
+        existing_map = (
+            await self._db_v2.get_entities_v2_batch(valid_names)
+            if valid_names else {}
+        )
+        for ent in top_entities:
             try:
                 name = ent.get("name", "")
                 if not name:
                     continue
                 kind = ent.get("kind", "")
                 new_obs = ent.get("observations", [])
-                existing = await self._db_v2.get_entity_v2(name)
+                existing = existing_map.get(name)
 
                 if existing:
                     old_summary = existing.get("summary", "")
@@ -501,10 +507,11 @@ class KnowledgeGraphV2(KnowledgeGraph):
             neighbor_names.add(row[0] if row[1] == entity_name else row[1])
 
         community_votes: dict[str, int] = {}
-        for neighbor in neighbor_names:
-            comm = await self._db_v2.get_entity_community(neighbor)
-            if comm:
-                community_votes[comm] = community_votes.get(comm, 0) + 1
+        if neighbor_names:
+            comm_map = await self._db_v2.get_entity_communities_batch(list(neighbor_names))
+            for comm in comm_map.values():
+                if comm:
+                    community_votes[comm] = community_votes.get(comm, 0) + 1
 
         if community_votes:
             best = max(community_votes, key=community_votes.get)

@@ -83,6 +83,21 @@ class KnowledgeDBV2:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
+    async def get_entities_v2_batch(self, names: list[str]) -> dict[str, dict]:
+        """批量查询实体，返回 {name: entity_dict} 字典。未命中的 name 不出现在返回值中。
+
+        用 WHERE name IN (?, ?, ...) 一次性查询，避免 N+1。
+        """
+        if not names:
+            return {}
+        placeholders = ",".join("?" * len(names))
+        cursor = await self._conn.execute(
+            f"SELECT * FROM kg_entities_v2 WHERE name IN ({placeholders})",
+            names,
+        )
+        rows = await cursor.fetchall()
+        return {row["name"]: dict(row) for row in rows}
+
     async def update_entity_summary_v2(
         self,
         name: str,
@@ -250,6 +265,27 @@ class KnowledgeDBV2:
         if row and row["community_id"]:
             return row["community_id"]
         return None
+
+    async def get_entity_communities_batch(
+        self, entity_names: list[str]
+    ) -> dict[str, str | None]:
+        """批量查询实体所属社区，返回 {entity_name: community_id_or_None}。
+
+        用 WHERE name IN (?, ?, ...) 一次性查询，避免 N+1。
+        输入列表中的每个 entity_name 都会出现在返回字典中（未命中则值为 None）。
+        """
+        if not entity_names:
+            return {}
+        placeholders = ",".join("?" * len(entity_names))
+        cursor = await self._conn.execute(
+            f"SELECT name, community_id FROM kg_entities_v2 WHERE name IN ({placeholders})",
+            entity_names,
+        )
+        rows = await cursor.fetchall()
+        result: dict[str, str | None] = {name: None for name in entity_names}
+        for row in rows:
+            result[row["name"]] = row["community_id"] if row["community_id"] else None
+        return result
 
     async def add_entity_to_community(
         self, entity_name: str, community_id: str, auto_commit: bool = True
