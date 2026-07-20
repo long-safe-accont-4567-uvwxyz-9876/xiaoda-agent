@@ -598,7 +598,7 @@ docker-compose -f docker-compose.prod.yml up -d
 
 ## 最新更新（v0.4.83）
 
-> **当前版本**：v0.5.30（详见 `pyproject.toml`；后续版本变更见 `git log`，未在此手动维护）
+> **当前版本**：v0.5.31（详见 `pyproject.toml`；后续版本变更见 `git log`，未在此手动维护）
 
 | 特性 | 说明 |
 |------|------|
