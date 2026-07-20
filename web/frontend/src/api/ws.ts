@@ -56,6 +56,11 @@ export class WsClient {
           }
           return
         }
+        // G5: 处理服务端心跳 ping，立即回 pong（在 emit 之前处理，避免给 listeners 传 ping 事件）
+        if (data.type === 'ping') {
+          this.send({ type: 'pong' })
+          return
+        }
         this.emit(data)
       } catch { /* ignore */ }
     }

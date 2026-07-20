@@ -14,6 +14,7 @@ import time
 import tempfile
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 
 from utils.common import safe_int as _safe_int
@@ -63,6 +64,9 @@ _GREETING_PATTERN = re.compile(
 )
 
 _THANK_REPLIES = ["不客气～", "不用谢啦～", "举手之劳～"]
+
+# G1: 项目硬约束 —— 所有时间函数使用 Asia/Shanghai 时区
+_SH_TZ = ZoneInfo("Asia/Shanghai")
 
 # 时段问候：(start_hour, end_hour, reply) — end_hour 可超过 24 以覆盖跨夜时段
 _TIME_GREETINGS = [
@@ -445,7 +449,8 @@ class MessageProcessorMixin:
             return None
         keyword = match.group(1).lower()
         # 时段问候（5-12 早上好 / 12-18 下午好 / 18-22 晚上好 / 22-5 夜深）
-        now_hour = datetime.now().hour
+        # G1: 使用 Asia/Shanghai 时区，避免受系统时区影响
+        now_hour = datetime.now(_SH_TZ).hour
         reply = None
         for start_h, end_h, msg in _TIME_GREETINGS:
             if start_h <= now_hour < end_h:
