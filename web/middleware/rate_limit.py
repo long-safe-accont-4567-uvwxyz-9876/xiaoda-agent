@@ -389,10 +389,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _user_id(request: Request) -> str:
-        """可选 user_id: 优先 X-User-ID header, 其次 request.state.user_id。"""
-        uid = request.headers.get("X-User-ID")
-        if uid:
-            return uid.strip()
+        """提取已认证的用户 ID（仅使用服务端设置的状态，不信任客户端 header）。
+
+        修复：移除对 X-User-ID header 的信任。该 header 由客户端控制，
+        攻击者可伪造不同值绕过用户级和写端点级限流。仅使用服务端
+        在认证中间件中设置的 request.state.user_id。
+        """
         return getattr(request.state, "user_id", "") or ""
 
     @staticmethod

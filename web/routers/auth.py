@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from loguru import logger
 
 from web.schemas import Envelope, LoginRequest, LoginResponse
+from utils.atomic_write import atomic_json_write
 import contextlib
 
 router = APIRouter(tags=["auth"])
@@ -120,7 +121,7 @@ def _revoke_token(token: str) -> None:
         data["revoked"] = [t for t in data["revoked"] if _extract_expiry(t) > now]
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            atomic_json_write(path, data, mode=0o600)
         except Exception as e:
             logger.warning("auth.revoke_save_failed error={}", str(e))
 
