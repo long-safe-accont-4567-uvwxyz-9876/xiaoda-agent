@@ -1,105 +1,85 @@
-# Task 1 Brief: 创建 fsrs_model.py 核心算法模块
+### Task 1: G6 recovery_orchestrator audit_log 上限
 
-You are implementing the core FSRS-DSR memory model for a Python agent system. This is a new file with no dependencies on existing code.
+**Files:**
+- Modify: `core/recovery_orchestrator.py:92`
+- Test: `tests/test_recovery_audit_log_maxlen.py`
 
-## Files to Create/Modify
+**Interfaces:**
+- Produces: `self._audit_log: deque[dict]` (maxlen=500)，与原 `list` 接口兼容（append/len/[-n:]切片均支持）
 
-- **Create:** `memory/fsrs_model.py`
-- **Create:** `tests/test_fsrs_model.py`
+- [ ] **Step 1: 写失败测试**
 
-## Requirements
+```python
+# tests/test_recovery_audit_log_maxlen.py
+"""G6: recovery_orchestrator audit_log 上限测试."""
+import asyncio
+from collections import deque
+from core.recovery_orchestrator import RecoveryOrchestrator
 
-### memory/fsrs_model.py
 
-Create the FSRS-DSR (Difficulty/Stability/Retrievability) memory model with these exact components:
+def test_audit_log_has_maxlen_500():
+    """audit_log 应为 deque(maxlen=500)，防止内存泄漏."""
+    orch = RecoveryOrchestrator()
+    assert isinstance(orch._audit_log, deque)
+    assert orch._audit_log.maxlen == 500
 
-1. **`MemoryPhase` enum** with values: BUFFER, REINFORCED, DECAY, PERMANENT, ARCHIVED
 
-2. **`ReinforcementSignal` enum** with values: STRONG_CONFIRM, PASSIVE_USE, WEAK_HIT, CORRECT
-   - Each must have a `growth_factor` property returning: 2.0, 1.5, 1.0, 0.0 respectively
+def test_audit_log_evicts_old_after_600_events():
+    """触发 600 次事件后，audit_log 仅保留最近 500 条."""
+    orch = RecoveryOrchestrator()
+    for i in range(600):
+        orch._audit_log.append({"i": i, "event": "test"})
+    assert len(orch._audit_log) == 500
+    # 最近 500 条保留（i=100..599）
+    assert orch._audit_log[0]["i"] == 100
+    assert orch._audit_log[-1]["i"] == 599
 
-3. **Constants** (module-level):
-   - S_PERMANENT = 30.0
-   - R_ARCHIVE = 0.05
-   - R_FORGET = 0.02
-   - BUFFER_DAYS = 21
-   - LOOKBACK_DAYS = 7
-   - SIMILARITY_THRESHOLD = 0.6
-   - S_INIT = 3.0
-   - D_INIT = 5.0
-   - D_MEAN = 5.0
-   - MEAN_REVERT = 0.3
-   - FORGET_THRESHOLD = 0.05
-   - DREAM_THRESHOLD = 0.15
 
-4. **`MemoryState` dataclass** with fields:
-   - difficulty: float = D_INIT
-   - stability: float = S_INIT
-   - phase: MemoryPhase = MemoryPhase.BUFFER
-   - last_review: float = 0.0
-   - created_at: float = 0.0
-   - reinforcement_count: int = 0
+def test_get_audit_log_still_works_with_deque():
+    """get_audit_log(limit) 切片语法与 deque 兼容."""
+    orch = RecoveryOrchestrator()
+    for i in range(10):
+        orch._audit_log.append({"i": i})
+    result = orch.get_audit_log(limit=3)
+    assert len(result) == 3
+    assert result[-1]["i"] == 9
+```
 
-   Methods:
-   - `retrievability(now=None)`: Returns float. BUFFER→1.0, PERMANENT→1.0, ARCHIVED→0.0, else e^(-elapsed_days/stability). `now` defaults to time.time().
-   - `transition(now=None)`: Returns MemoryPhase. State machine logic:
-     - BUFFER: if age > BUFFER_DAYS → DECAY (if reinforcement_count==0), PERMANENT (if stability>=S_PERMANENT), REINFORCED (otherwise). Else stay BUFFER.
-     - REINFORCED/DECAY: if R < R_ARCHIVE → ARCHIVED. if stability >= S_PERMANENT → PERMANENT. Else stay.
-     - PERMANENT: stay PERMANENT.
+- [ ] **Step 2: 跑测试确认失败**
 
-5. **`estimate_initial_difficulty(content, emotion_label="")` function**:
-   - Start at D=5.0
-   - length < 20: D -= 1.0; length > 200: D += 1.5
-   - emotion_label not empty/neutral: D += 1.0
-   - fact keywords (生日/电话/地址/名字/日期/号码): D -= 2.0
-   - preference keywords (喜欢/讨厌/偏好/习惯/总是): D -= 1.0
-   - abstract keywords (因为/所以/意味着/本质上/原理): D += 2.0
-   - Clamp to [1.0, 10.0]
-   - Note: use elif chain for keyword categories (fact > preference > abstract)
+Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_recovery_audit_log_maxlen.py -v`
+Expected: FAIL with "AssertionError: list is not deque" 或类似
 
-6. **`FSRSModel` class**:
-   - `reinforce(state, signal, now=None)`: If signal is CORRECT, call _apply_forget. Otherwise call _apply_recall.
-   - `_apply_recall(state, signal, now)`: 
-     - R = state.retrievability(now)
-     - difficulty_factor = (10-D)/9
-     - retrievability_bonus = 1 + 2*(1-R)
-     - growth = signal.growth_factor * difficulty_factor * retrievability_bonus
-     - S_new = min(S*(1+growth), S*10)
-     - Update difficulty via _update_difficulty
-     - Update last_review = now, reinforcement_count += 1
-     - Check transition, update phase if changed
-   - `_apply_forget(state, now)`:
-     - R = state.retrievability(now)
-     - S_new = S * 0.5 * D^(-0.3) * ((S+1)^0.2 - 1)
-     - S_new = max(1.0, S_new)
-     - Update difficulty via _update_difficulty with CORRECT signal
-     - Update last_review = now
-     - Check transition, update phase if changed
-   - `_update_difficulty(D, signal)` static method:
-     - delta_map: STRONG_CONFIRM→-0.5, PASSIVE_USE→-0.2, WEAK_HIT→0.0, CORRECT→1.0
-     - D_new = MEAN_REVERT * D_MEAN + (1-MEAN_REVERT) * (D + delta)
-     - Clamp to [1.0, 10.0]
-   - `should_filter(R)`: R < FORGET_THRESHOLD
-   - `should_archive(R)`: R < DREAM_THRESHOLD
-   - `score(similarity, state, now=None)`: similarity * retrievability
+- [ ] **Step 3: 修改实现**
 
-### tests/test_fsrs_model.py
+```python
+# core/recovery_orchestrator.py
+# 第 92 行原：
+#     self._audit_log: list[dict] = []
+# 改为：
+from collections import deque
+self._audit_log: deque[dict] = deque(maxlen=500)
+```
 
-Create comprehensive tests covering:
-- TestRetrievability: buffer R=1, permanent R=1, archived R=0, decay formula, higher stability = slower decay
-- TestTransition: all 6 transition paths (buffer stays, buffer→decay, buffer→reinforced, buffer→permanent, decay→archived, reinforced→permanent)
-- TestReinforce: S increases on confirm, S decreases on correct, last_review updates, reinforcement_count increments, low R gives bigger S boost, difficulty decreases on confirm, difficulty increases on correct
-- TestEstimateInitialDifficulty: default=5, emotion increases, fact decreases, abstract increases, clamped to [1,10]
-- TestFSRSModelScore: score = similarity * R, old memory decays
-- TestThresholds: should_filter, should_archive, all constant values
+注意：文件顶部若未 import deque，需添加 `from collections import deque`
 
-## Testing
+- [ ] **Step 4: 跑测试确认通过**
 
-Run: `cd f:\naxida\xiaoda-agent && python -m pytest tests/test_fsrs_model.py -v`
+Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_recovery_audit_log_maxlen.py -v`
+Expected: PASS (3 tests)
 
-## Commit
+- [ ] **Step 5: 跑回归测试**
+
+Run: `cd /home/orangepi/ai-agent && python -m pytest tests/test_recovery_orchestrator.py tests/test_recovery_audit_log_maxlen.py -v --timeout=60`
+Expected: PASS
+
+- [ ] **Step 6: 提交**
 
 ```bash
-git add memory/fsrs_model.py tests/test_fsrs_model.py
-git commit -m "feat: add FSRS-DSR memory model (Task 1)"
+cd /home/orangepi/ai-agent
+git add core/recovery_orchestrator.py tests/test_recovery_audit_log_maxlen.py
+git commit -m "fix(G6): recovery_orchestrator audit_log 改用 deque(maxlen=500) 防内存泄漏"
 ```
+
+---
+

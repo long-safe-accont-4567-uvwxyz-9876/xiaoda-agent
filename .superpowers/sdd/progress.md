@@ -1,14 +1,33 @@
-# SDD Progress Ledger
+# SDD Progress Ledger — 性能优化统一修改 (2026-07-20)
 
-- [x] Task 1: Fix 0 - retrieve_memories_hybrid default include_raw=True
-- [x] Task 2: Fix 1 - hourly temporal patterns + temporal search include_raw=True
-- [x] Task 3: Fix 9 - distill failure fallback (save full_text + mark)
-- [x] Task 4: Fix 2 - restore_from_db timestamp injection
-- [x] Task 5: Fix 3 - conversation gap hint in time context
-- [x] Task 6: Fix 4 - invalidate query cache after memory write
-- [x] Task 7: Fix 8 - content similarity dedup after RRF
-- [x] Task 8: Fix 5 - hourly granularity for recency boost
-- [x] Task 9: Fix 6 - strengthen hallucination guard
-- [x] Task 10: Fix 7 - relax summary truncation
-- [x] Task 11: Fix 10 - is_raw filter in _hybrid_vec_search
-- [x] Task 12: cleanup + final verification
+Plan: docs/superpowers/plans/2026-07-20-performance-optimization.md
+Base commit: 7e4045e (HEAD)
+Branch: main
+
+## Tasks
+
+- [x] Task 1: G6 recovery_orchestrator audit_log deque(maxlen=500) — DONE (commits 7e4045e..e60c59b, review clean)
+- [x] Task 2: G7 dream_consolidation scheduler 修 bug — DONE (commits e60c59b..624a93f, review clean)
+- [x] Task 3: G1 问候短路 <100ms — DONE (commits 624a93f..f79d75b, review clean)
+- [x] Task 4: G3 mental_state debounce 300ms — DONE (commits f79d75b..a624494, review clean)
+- [x] Task 5: G8 context_compressor retrieve_async — DONE (commits a624494..aea5aa7, review clean)
+- [x] Task 6: G9 tts_engine read_bytes async — DONE (commits aea5aa7..bfe9999, review clean)
+- [x] Task 7: G2 WS broadcast 背压 — DONE (commits bfe9999..a1f8d34, review clean)
+- [x] Task 8: G5 WS 心跳 — DONE (commits a1f8d34..4b0350b, review clean)
+- [x] Task 9: G4 HTTP 连接池复用 — DONE (commits 4b0350b..697b00f..a1b422a, review clean after fix)
+- [x] Task 10: 6 大领域性能审计 — DONE (报告 docs/performance_audit_2026-07-20.md, 发现 G11-G16)
+- [ ] Task 10a: G11 restore_from_db 分页加载（Important）
+- [ ] Task 10b: G12 KG 图谱批量查询接口（Important）
+- [ ] Task 10c: G13 扩散激活 LRU 缓存（Important）
+- [ ] Task 11: 全量 pytest 回归
+- [ ] Task 12: 冒烟测试
+
+## Minor 待办（推迟到下个版本）
+
+- G14: Reranker LRU 缓存 (Minor)
+- G15: query_transform LRU 缓存 (Minor)
+- G16: server 启动 asyncio.gather 并行 (Minor)
+
+## Completion Log
+
+- 2026-07-20 Task 10: 审计报告 docs/performance_audit_2026-07-20.md，发现 6 项新瓶颈（G11-G13 Important, G14-G16 Minor）
