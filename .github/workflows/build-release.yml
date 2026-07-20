@@ -43,6 +43,10 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Version sync check
+        shell: bash
+        run: python scripts/check_version_sync.py --ci
+
       - name: Ensure assets are present
         shell: bash
         run: |

@@ -13,6 +13,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      # 允许 coverage-comment-action 发布 PR 评论
+      pull-requests: write
+      # 允许更新 python-coverage-comment-action-data 分支与编辑已发布评论
+      contents: write
 
     steps:
       - name: Checkout code
@@ -42,6 +47,9 @@ jobs:
           # 复制配置文件
           cp -r config/workspace ~/.ai-agent/workspace/
           cp -r config/agents/*.json ~/.ai-agent/config/agents/ 2>/dev/null || true
+
+      - name: Version sync check
+        run: python scripts/check_version_sync.py --ci
 
       - name: Run tests
         run: |
@@ -85,6 +93,38 @@ jobs:
           else
             echo "No coverage data found."
           fi
+
+      - name: Coverage comment
+        id: coverage_comment
+        if: always() && github.event_name == 'pull_request' && hashFiles('.coverage') != ''
+        uses: py-cov-action/python-coverage-comment-action@v3
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
+          # 低于 50% 为红色徽章，50-100% 为橙色（PR 评论会显示覆盖率 evolution）
+          MINIMUM_ORANGE: 50
+          # 标注缺失覆盖的行（warning 级别，不阻塞 PR）
+          ANNOTATE_MISSING_LINES: true
+          ANNOTATION_TYPE: warning
+        continue-on-error: true
+
+      - name: Coverage drop warning
+        if: always() && github.event_name == 'pull_request' && steps.coverage_comment.outputs.reference_percent_covered != ''
+        shell: bash
+        env:
+          REF_COV: ${{ steps.coverage_comment.outputs.reference_percent_covered }}
+          NEW_COV: ${{ steps.coverage_comment.outputs.new_percent_covered }}
+        # 调用独立脚本, 避免 python -c "..." 多行代码在 YAML literal block 中
+        # 因缩进为 0 而破坏 literal block scalar 的解析问题.
+        run: python scripts/check_coverage_drop.py "$REF_COV" "$NEW_COV"
+        continue-on-error: true
+
+      - name: Store Pull Request comment artifact
+        if: always() && steps.coverage_comment.outputs.comment_file_written == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage-comment-action
+          path: python-coverage-comment-action.txt
+        continue-on-error: true
 
       - name: Test summary
         if: always()
