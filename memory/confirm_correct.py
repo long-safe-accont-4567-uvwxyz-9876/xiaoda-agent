@@ -132,6 +132,10 @@ class ConfirmCorrect:
 
             reinforced += 1
 
+        # G13: 失效扩散激活 recall 缓存（节点权重/边已变更）
+        if getattr(self, 'engine', None) and self.engine:
+            self.engine.clear_cache()
+
         return {"reinforced": reinforced, "unknown": unknown}
 
     async def correct(self, old_hint: str, new_text: str) -> dict:
@@ -213,6 +217,10 @@ class ConfirmCorrect:
         # 6. 关闭旧节点
         await self.db.update_node(old_id, valid_to=now,
                                    superseded_by=new_id)
+
+        # G13: 失效扩散激活 recall 缓存（节点新增/关闭/边迁移）
+        if getattr(self, 'engine', None) and self.engine:
+            self.engine.clear_cache()
 
         logger.info("correct.applied", old_id=old_id, new_id=new_id)
         return {

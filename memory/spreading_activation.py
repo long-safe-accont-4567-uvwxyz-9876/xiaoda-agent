@@ -13,8 +13,9 @@ from __future__ import annotations
 import heapq
 import json
 import math
+import time
 from math import sqrt
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
@@ -34,17 +35,39 @@ class SpreadingActivationEngine:
     FUZZY_ACTIVATION = 0.5     # 模糊匹配系数
     SEPARATION_SIM = 0.92      # 去重相似度阈值
 
+    # G13: recall 结果 LRU+TTL 缓存参数
+    RECALL_CACHE_MAXSIZE = 256  # 最大缓存条目
+    RECALL_CACHE_TTL = 300      # 5 分钟
+
     def __init__(self, concept_db, vector_store, key_extractor):
         self.db = concept_db
         self.vec = vector_store     # 现有 VectorStore（可为 None）
         self.key_extractor = key_extractor
+        # G13: recall 结果 LRU+TTL 缓存
+        # OrderedDict[cache_key=(query, top_k)] -> (expiry_monotonic, list[dict])
+        self._recall_cache: "OrderedDict[tuple, tuple[float, list[dict]]]" = OrderedDict()
 
     async def recall(self, query: str, top_k: int = 5) -> list[dict]:
         """扩散激活检索主入口
 
         Returns:
             [{id, text, score, weight, keys}, ...] 按 score 降序
+
+        G13: 按 (query, top_k) 缓存结果，TTL 5 分钟，maxsize 256。
         """
+        # G13: 缓存命中检查
+        cache_key = (query, top_k)
+        now = time.monotonic()
+        cached_entry = self._recall_cache.get(cache_key)
+        if cached_entry is not None:
+            expiry, cached = cached_entry
+            if now < expiry:
+                # 命中：移到末尾（LRU 优先级最高），返回深拷贝避免污染缓存
+                self._recall_cache.move_to_end(cache_key)
+                return [dict(item) for item in cached]
+            # 过期：清除条目
+            del self._recall_cache[cache_key]
+
         # Step 1: Key 提取
         query_keys = set(self.key_extractor.extract(query, is_query=True))
         if not query_keys:
@@ -90,7 +113,21 @@ class SpreadingActivationEngine:
                 "weight": node.get("weight", 1.0),
                 "keys": node.get("keys", "[]"),
             })
+
+        # G13: 写入缓存（存深拷贝避免外部修改污染）
+        self._recall_cache[cache_key] = (
+            now + self.RECALL_CACHE_TTL,
+            [dict(item) for item in out],
+        )
+        # LRU 淘汰：超过 maxsize 时弹出最旧条目
+        while len(self._recall_cache) > self.RECALL_CACHE_MAXSIZE:
+            self._recall_cache.popitem(last=False)
+
         return out
+
+    def clear_cache(self) -> None:
+        """G13: 清空 recall 缓存（记忆写入后调用）。"""
+        self._recall_cache.clear()
 
     def _compute_idf(self, keys: set, alive_nodes: dict) -> dict:
         """计算每个 key 的 IDF 值

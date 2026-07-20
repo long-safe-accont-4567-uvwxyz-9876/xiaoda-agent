@@ -2344,6 +2344,10 @@ class MemoryManager:
             if self._query_cache:
                 await self._query_cache.invalidate()
 
+            # G13: 失效扩散激活 recall 缓存（concept_nodes 已写入，避免返回旧结果）
+            if getattr(self, 'spreading_engine', None) and self.spreading_engine:
+                self.spreading_engine.clear_cache()
+
             self._save_state_json(summary, importance, emotion)
 
             # fire-and-forget 后台 LLM 结构化提取（不阻塞主流程）
@@ -2570,6 +2574,9 @@ class MemoryManager:
             # 蒸馏完成后失效查询缓存：新提炼知识需被后续检索感知
             if self._query_cache:
                 await self._query_cache.invalidate()
+            # G13: 失效扩散激活 recall 缓存
+            if getattr(self, 'spreading_engine', None) and self.spreading_engine:
+                self.spreading_engine.clear_cache()
         except Exception as e:
             logger.warning("memory.distill_to_knowledge_failed",
                           raw_id=raw_id, retry=_retry, error=str(e))
@@ -2611,6 +2618,9 @@ class MemoryManager:
             # summary 更新后失效查询缓存，避免返回旧内容
             if self._query_cache:
                 await self._query_cache.invalidate()
+            # G13: 失效扩散激活 recall 缓存
+            if getattr(self, 'spreading_engine', None) and self.spreading_engine:
+                self.spreading_engine.clear_cache()
         except Exception as e:
             logger.warning("memory.fallback_save_failed", raw_id=raw_id, error=str(e))
 
@@ -3043,6 +3053,9 @@ class MemoryManager:
                         count=len(candidates),
                         undistilled_before=count,
                         summary_len=len(summary))
+            # G13: 失效扩散激活 recall 缓存
+            if getattr(self, 'spreading_engine', None) and self.spreading_engine:
+                self.spreading_engine.clear_cache()
             return len(candidates)
         except Exception as e:
             logger.warning("memory.distill_failed", error=str(e))
