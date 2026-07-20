@@ -66,7 +66,6 @@ def _spawn(coro: Any) -> None:
     except RuntimeError:
         logger.error("bg.spawn_no_loop: cannot create task without running event loop, "
                      "task={} will be dropped", task_name)
-        coro.close()
         return
     task = loop.create_task(_wrapped())
     _bg_tasks.add(task)

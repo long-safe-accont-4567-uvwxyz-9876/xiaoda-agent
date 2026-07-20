@@ -45,32 +45,35 @@ class MemoryDB:
         else:
             user_id = "default"
             agent_id = "xiaoda"
-        cursor = await self._conn.execute(
-            """INSERT INTO episodic_memories
-               (timestamp, summary, importance, emotion_label, session_id,
-                embedding_id, source, user_id, agent_id, is_raw)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (time.time(), summary, importance, emotion_label, session_id,
-             embedding_id, source, user_id, agent_id, is_raw),
-        )
-        mem_id = cursor.lastrowid
-        if auto_commit:
-            await self._conn.commit()
-        # 同步写入 FTS 索引
         try:
-            from db.fts_utils import _tokenize_for_fts
-            tokenized = _tokenize_for_fts(summary)
-            if tokenized.strip():
-                await self._conn.execute(
-                    "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
-                    (mem_id, tokenized),
-                )
-                if auto_commit:
-                    await self._conn.commit()
-        except Exception as e:
-            from loguru import logger
-            logger.debug("db_memory.fts_insert_failed", error=str(e))
-        return mem_id
+            cursor = await self._conn.execute(
+                """INSERT INTO episodic_memories
+                   (timestamp, summary, importance, emotion_label, session_id,
+                    embedding_id, source, user_id, agent_id, is_raw)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (time.time(), summary, importance, emotion_label, session_id,
+                 embedding_id, source, user_id, agent_id, is_raw),
+            )
+            mem_id = cursor.lastrowid
+            # 同步写入 FTS 索引（与主表在同一事务中，保证一致性）
+            try:
+                from db.fts_utils import _tokenize_for_fts
+                tokenized = _tokenize_for_fts(summary)
+                if tokenized.strip():
+                    await self._conn.execute(
+                        "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
+                        (mem_id, tokenized),
+                    )
+            except Exception as e:
+                from loguru import logger
+                logger.debug("db_memory.fts_insert_failed", error=str(e))
+            if auto_commit:
+                await self._conn.commit()
+            return mem_id
+        except Exception:
+            if auto_commit:
+                await self._conn.rollback()
+            raise
 
     async def get_memory_by_id(self, memory_id: int) -> dict | None:
         cursor = await self._conn.execute(

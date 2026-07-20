@@ -48,7 +48,10 @@ def _setup_windows_event_loop() -> None:
     必须在任何 asyncio 事件循环创建之前调用（早于 uvicorn / aiosqlite）。
     """
     if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        try:
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        except AttributeError:
+            logger.debug("WindowsSelectorEventLoopPolicy not available, using default event loop policy")
 
 
 def main() -> None:
