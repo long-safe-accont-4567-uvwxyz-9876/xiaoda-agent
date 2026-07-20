@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
 from unittest.mock import AsyncMock, patch
-from memory.query_transform import QueryTransformer
+from memory.query_transform import QueryTransformer, _CACHE_MISS
 
 
 class TestQueryTransformCache(unittest.TestCase):
@@ -159,6 +159,53 @@ class TestQueryTransformCache(unittest.TestCase):
             # 缓存内的结果不应被污染
             self.assertNotIn("EXTERNAL_MODIFICATION", r2,
                              "返回的 list 应为副本，外部修改不应污染缓存")
+
+    # ----- G15 修复：None 缓存语义 -----
+
+    def test_hyde_cache_stores_none(self):
+        """G15 修复: LLM 返回 None 时应缓存 None，第二次不再调 LLM
+
+        场景：LLM 返回空内容（None），_cache_put 应将 None 存入缓存。
+        下次调用应命中缓存（_cache_get 返回 None 但表示"命中"），
+        不再调 LLM。
+        根因：原 _cache_get 在未命中时也返回 None，调用方用
+        `if cached is not None` 判断命中，无法区分"未命中"和"命中 None"。
+        """
+        mock_call = AsyncMock(return_value=None)
+        with patch.object(self.transformer, '_call_free_model', mock_call):
+            r1 = asyncio.run(self.transformer.generate_hyde_document("你好", context="上下文"))
+            r2 = asyncio.run(self.transformer.generate_hyde_document("你好", context="上下文"))
+
+            # 两次都应返回 None（LLM 返回 None）
+            self.assertIsNone(r1)
+            self.assertIsNone(r2)
+            # 缓存命中后不应再调 LLM——只调一次
+            self.assertEqual(mock_call.await_count, 1,
+                             f"None 应被缓存，第二次应命中不再调 LLM，实际调 {mock_call.await_count} 次")
+
+    def test_rewrite_cache_returns_miss_sentinel_correctly(self):
+        """G15 修复: _cache_get 在未命中时应返回 _CACHE_MISS sentinel
+
+        场景：缓存未命中时，调用方需用 `is not _CACHE_MISS` 区分"未命中"
+        与"命中 None"。sentinel 必须是模块级 object()，不能是 None。
+        """
+        # _CACHE_MISS 必须是一个独立的对象，不是 None
+        self.assertIsNotNone(_CACHE_MISS,
+                             "_CACHE_MISS sentinel 不应是 None")
+
+        # 空缓存时 _cache_get 应返回 _CACHE_MISS
+        cache = self.transformer._rewrite_cache.__class__()  # 空 OrderedDict
+        result = self.transformer._cache_get(cache, "nonexistent_key")
+        self.assertIs(result, _CACHE_MISS,
+                      f"未命中应返回 _CACHE_MISS sentinel，实际返回 {result!r}")
+
+        # 写入 None 后再取，应返回 None（而非 _CACHE_MISS）
+        self.transformer._cache_put(cache, "key_with_none", None)
+        result = self.transformer._cache_get(cache, "key_with_none")
+        self.assertIsNone(result,
+                          "命中 None 时应返回 None，而非 _CACHE_MISS")
+        self.assertIsNot(result, _CACHE_MISS,
+                         "命中 None 不应返回 _CACHE_MISS sentinel")
 
 
 if __name__ == '__main__':

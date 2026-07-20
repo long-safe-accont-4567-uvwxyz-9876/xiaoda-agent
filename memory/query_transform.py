@@ -11,6 +11,11 @@ from loguru import logger
 from utils.http_pool import get_shared_client
 
 
+# G15: sentinel 用于区分"缓存未命中"和"命中 None"
+# 不能用 None 作为 sentinel，因为 None 是合法的缓存值（LLM 可能返回 None）
+_CACHE_MISS = object()
+
+
 class QueryTransformer:
     """查询变换器：改写/扩展/分解用户原始查询
 
@@ -59,14 +64,18 @@ class QueryTransformer:
         self._expand_cache: OrderedDict[str, tuple[list[str], float]] = OrderedDict()
         self._hyde_cache: OrderedDict[str, tuple[str | None, float]] = OrderedDict()
 
-    def _cache_get(self, cache: OrderedDict, key: str) -> Any | None:
-        """G15: 从缓存取值，TTL 过期返回 None 并删除条目。"""
+    def _cache_get(self, cache: OrderedDict, key: str) -> Any:
+        """G15: 从缓存取值，TTL 过期或未命中返回 _CACHE_MISS sentinel。
+
+        使用 sentinel 而非 None，以便调用方区分"未命中"和"命中 None"——
+        LLM 可能合法地返回 None（如思考碎片被过滤），此时也需要缓存。
+        """
         if key not in cache:
-            return None
+            return _CACHE_MISS
         result, expire_at = cache[key]
         if time.monotonic() > expire_at:
             cache.pop(key, None)
-            return None
+            return _CACHE_MISS
         cache.move_to_end(key)
         return result
 
@@ -144,7 +153,7 @@ class QueryTransformer:
         # G15: 缓存命中检查
         cache_key = hashlib.md5(f"{original_query}|{context[-200:]}".encode("utf-8")).hexdigest()
         cached = self._cache_get(self._rewrite_cache, cache_key)
-        if cached is not None:
+        if cached is not _CACHE_MISS:
             return cached
 
         prompt = f"""将以下用户查询改写为更适合文档检索的关键词查询。
@@ -173,7 +182,7 @@ class QueryTransformer:
         # G15: 缓存命中检查
         cache_key = hashlib.md5(f"{query}|{n}".encode("utf-8")).hexdigest()
         cached = self._cache_get(self._expand_cache, cache_key)
-        if cached is not None:
+        if cached is not _CACHE_MISS:
             return list(cached)  # 返回副本，避免外部修改污染缓存
 
         prompt = f"""为以下查询生成 {n} 个不同视角的搜索查询，用于提高检索召回率。
@@ -203,7 +212,7 @@ class QueryTransformer:
         # G15: 缓存命中检查
         cache_key = hashlib.md5(f"{query}|{context[-200:]}".encode("utf-8")).hexdigest()
         cached = self._cache_get(self._hyde_cache, cache_key)
-        if cached is not None:
+        if cached is not _CACHE_MISS:
             return cached
 
         prompt = f"""请根据以下问题，写一段简短的假设性答案（50-100字）。
