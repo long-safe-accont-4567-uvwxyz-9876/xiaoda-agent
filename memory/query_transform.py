@@ -2,6 +2,9 @@
 from typing import Any, ClassVar
 import os
 import asyncio
+import hashlib
+import time
+from collections import OrderedDict
 import httpx
 from loguru import logger
 
@@ -38,6 +41,10 @@ class QueryTransformer:
     }
     MULTIHOP_KEYWORDS: ClassVar[set[str]] = {"和", "与", "比较", "区别", "关系", "之间", "哪个好", "对比"}
 
+    # G15: LRU + TTL 缓存配置
+    TRANSFORM_CACHE_MAXSIZE = 100
+    TRANSFORM_CACHE_TTL = 600  # 10 分钟（秒）
+
     def __init__(self, router: Any | None=None, api_key: str = "", base_url: str = "",
                  model: str = "") -> None:
         self._router = router  # 保留兼容，但不再用于查询变换
@@ -45,6 +52,36 @@ class QueryTransformer:
         self._base_url = base_url or "https://api.siliconflow.cn/v1"
         self._model = model or os.getenv("QUERY_TRANSFORM_MODEL", "THUDM/GLM-4-9B-0414")
         self._available = bool(self._api_key)
+
+        # G15: LRU + TTL 缓存，避免重复调 LLM
+        # key -> (result, expire_at_monotonic)
+        self._rewrite_cache: OrderedDict[str, tuple[str, float]] = OrderedDict()
+        self._expand_cache: OrderedDict[str, tuple[list[str], float]] = OrderedDict()
+        self._hyde_cache: OrderedDict[str, tuple[str | None, float]] = OrderedDict()
+
+    def _cache_get(self, cache: OrderedDict, key: str) -> Any | None:
+        """G15: 从缓存取值，TTL 过期返回 None 并删除条目。"""
+        if key not in cache:
+            return None
+        result, expire_at = cache[key]
+        if time.monotonic() > expire_at:
+            cache.pop(key, None)
+            return None
+        cache.move_to_end(key)
+        return result
+
+    def _cache_put(self, cache: OrderedDict, key: str, value: Any) -> None:
+        """G15: 写入缓存，维护 maxsize。"""
+        cache[key] = (value, time.monotonic() + self.TRANSFORM_CACHE_TTL)
+        cache.move_to_end(key)
+        if len(cache) > self.TRANSFORM_CACHE_MAXSIZE:
+            cache.popitem(last=False)
+
+    def clear_cache(self) -> None:
+        """G15: 清空所有查询变换缓存。"""
+        self._rewrite_cache.clear()
+        self._expand_cache.clear()
+        self._hyde_cache.clear()
 
     @property
     def available(self) -> bool:
@@ -97,9 +134,18 @@ class QueryTransformer:
             return None
 
     async def rewrite_query(self, original_query: str, context: str = "") -> str:
-        """将口语化查询改写为更适合检索的形式"""
+        """将口语化查询改写为更适合检索的形式
+
+        G15: 按 query+context_hash 缓存，TTL 10 分钟。
+        """
         if not self._available:
             return original_query
+
+        # G15: 缓存命中检查
+        cache_key = hashlib.md5(f"{original_query}|{context[-200:]}".encode("utf-8")).hexdigest()
+        cached = self._cache_get(self._rewrite_cache, cache_key)
+        if cached is not None:
+            return cached
 
         prompt = f"""将以下用户查询改写为更适合文档检索的关键词查询。
 保持语义不变，去除口语化表达，补充必要的上下文信息。
@@ -111,12 +157,24 @@ class QueryTransformer:
 改写后的查询:"""
 
         result = await self._call_free_model(prompt, temperature=0.1, max_tokens=100)
-        return result if result else original_query
+        final = result if result else original_query
+        # G15: 写入缓存（即使降级为原查询也缓存，避免重复调 LLM）
+        self._cache_put(self._rewrite_cache, cache_key, final)
+        return final
 
     async def expand_query(self, query: str, n: int = 3) -> list[str]:
-        """生成 n 个不同视角的查询扩展"""
+        """生成 n 个不同视角的查询扩展
+
+        G15: 按 query+n 缓存，TTL 10 分钟。
+        """
         if not self._available:
             return [query]
+
+        # G15: 缓存命中检查
+        cache_key = hashlib.md5(f"{query}|{n}".encode("utf-8")).hexdigest()
+        cached = self._cache_get(self._expand_cache, cache_key)
+        if cached is not None:
+            return list(cached)  # 返回副本，避免外部修改污染缓存
 
         prompt = f"""为以下查询生成 {n} 个不同视角的搜索查询，用于提高检索召回率。
 每行一个查询，不要编号，不要解释。
@@ -126,17 +184,27 @@ class QueryTransformer:
         result = await self._call_free_model(prompt, temperature=0.3, max_tokens=150)
         if result:
             expanded = [line.strip() for line in result.strip().split("\n") if line.strip()]
-            return [query, *expanded[:n]]
-        return [query]
+            final = [query, *expanded[:n]]
+        else:
+            final = [query]
+        # G15: 写入缓存
+        self._cache_put(self._expand_cache, cache_key, final)
+        return list(final)  # 返回副本
 
     async def generate_hyde_document(self, query: str, context: str = "") -> str | None:
         """生成假设答案文档用于 HyDE 向量混合
 
-        LLM 生成一个简短的假设性答案，用于其嵌入向量增强检索。
+        G15: 按 query+context_hash 缓存，TTL 10 分钟。
         超时 5s 降级返回 None。
         """
         if not self._available:
             return None
+
+        # G15: 缓存命中检查
+        cache_key = hashlib.md5(f"{query}|{context[-200:]}".encode("utf-8")).hexdigest()
+        cached = self._cache_get(self._hyde_cache, cache_key)
+        if cached is not None:
+            return cached
 
         prompt = f"""请根据以下问题，写一段简短的假设性答案（50-100字）。
 不需要完全正确，只需要语义上与答案文档接近。
@@ -145,12 +213,16 @@ class QueryTransformer:
 问题: {query}
 """
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self._call_free_model(prompt, temperature=0.3, max_tokens=100),
                 timeout=5.0,
             )
+            # G15: 写入缓存（包括 None 结果，避免重复调 LLM）
+            self._cache_put(self._hyde_cache, cache_key, result)
+            return result
         except TimeoutError:
             logger.warning("query_transform.hyde_timeout", query=query[:50])
+            # G15: timeout 不缓存（瞬时网络问题，下次重试可能成功）
             return None
         except Exception as e:
             logger.warning("query_transform.hyde_failed", error=str(e))
