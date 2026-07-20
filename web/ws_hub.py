@@ -41,6 +41,10 @@ router = APIRouter()
 # G2: broadcast 超时阈值（秒）—— 超过即取消任务并清理慢连接，避免慢连接阻塞快连接
 BROADCAST_TIMEOUT = 5.0
 
+# G5: 心跳配置 —— 30s 发 ping，10s 内未收 pong 则关闭死连接
+HEARTBEAT_INTERVAL = 30  # 秒
+HEARTBEAT_TIMEOUT = 10   # 等待 pong 超时
+
 # 媒体目录使用用户数据目录，避免写入 _MEIPASS 只读目录
 try:
     from config import MEDIA_DIR
@@ -60,6 +64,9 @@ class ConnectionManager:
         self._agent_map: dict[str, str] = {}      # conn_id -> 当前受话 agent
         self._session_map: dict[str, str] = {}    # conn_id -> session_id
         self._tasks: dict[str, asyncio.Task] = {}  # msg_id -> 处理任务（abort 用）
+        # G5: 心跳状态 —— pong 事件 + 每连接心跳协程
+        self._pong_events: dict[str, asyncio.Event] = {}
+        self._heartbeat_tasks: dict[str, asyncio.Task] = {}
 
     def register(self, ws: WebSocket) -> str:
         """注册一个新连接, 返回生成的连接 ID."""
@@ -69,6 +76,10 @@ class ConnectionManager:
         self._connections[conn_id] = ws
         self._agent_map[conn_id] = "xiaoda"
         self._session_map[conn_id] = f"web_{uuid.uuid4().hex[:12]}"
+        # G5: 初始化 pong 事件 + 启动心跳协程
+        self._pong_events[conn_id] = asyncio.Event()
+        self._heartbeat_tasks[conn_id] = asyncio.create_task(
+            self._heartbeat_loop(conn_id))
         return conn_id
 
     def unregister(self, conn_id: str) -> None:
@@ -76,6 +87,45 @@ class ConnectionManager:
         self._connections.pop(conn_id, None)
         self._agent_map.pop(conn_id, None)
         self._session_map.pop(conn_id, None)
+        # G5: 取消心跳任务 + 清理 pong event
+        task = self._heartbeat_tasks.pop(conn_id, None)
+        if task and not task.done():
+            task.cancel()
+        self._pong_events.pop(conn_id, None)
+
+    async def _heartbeat_loop(self, conn_id: str) -> None:
+        """G5: 每个连接的心跳协程 - 30s ping + 10s pong 超时.
+
+        - 每 HEARTBEAT_INTERVAL 秒发送 ping
+        - HEARTBEAT_TIMEOUT 秒内未收到 pong → unregister（死连接）
+        - send 失败 → unregister（连接已断）
+        - CancelledError 优雅退出（unregister 时取消）
+        """
+        while True:
+            try:
+                await asyncio.sleep(HEARTBEAT_INTERVAL)
+                ws = self._connections.get(conn_id)
+                if ws is None:
+                    return
+                await ws.send_json({"type": "ping"})
+                # pong 处理在 websocket_endpoint 中 set event
+                evt = self._pong_events.get(conn_id)
+                if evt is None:
+                    evt = asyncio.Event()
+                    self._pong_events[conn_id] = evt
+                evt.clear()
+                await asyncio.wait_for(evt.wait(), timeout=HEARTBEAT_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning("ws.heartbeat_timeout conn_id={}", conn_id)
+                self.unregister(conn_id)
+                return
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.warning("ws.heartbeat_error conn_id={} error={}",
+                               conn_id, str(e))
+                self.unregister(conn_id)
+                return
 
     async def send_to(self, conn_id: str, event: dict) -> None:
         """向指定连接发送事件, 失败则注销该连接."""
@@ -391,6 +441,12 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
 
             if mtype == "ping":
                 await manager.send_to(conn_id, {"type": "pong"})
+
+            elif mtype == "pong":
+                # G5: 客户端响应心跳 pong —— 唤醒心跳协程的 wait_for
+                evt = manager._pong_events.get(conn_id)
+                if evt:
+                    evt.set()
 
             elif mtype == "set_agent":
                 agent = str(msg.get("agent") or "xiaoda")
