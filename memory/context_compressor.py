@@ -1,4 +1,5 @@
 """智能上下文压缩引擎"""
+import asyncio
 from typing import Any
 import hashlib
 import json
@@ -43,9 +44,9 @@ class ContextCompressor:
     TOOL_OUTPUT_THRESHOLD = 2000  # 超过此长度压缩
     HISTORY_KEEP_RECENT = 5       # 保留最近 5 轮完整内容
 
-    def __init__(self, router: Any | None=None) -> None:
+    def __init__(self, router: Any | None=None, cache_dir: Path | None=None) -> None:
         self._router = router
-        self._cache_dir = self.CACHE_DIR
+        self._cache_dir = cache_dir if cache_dir is not None else self.CACHE_DIR
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._stats = {
             "compressed_count": 0,
@@ -77,6 +78,10 @@ class ContextCompressor:
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("ccr.retrieve_failed", key=ccr_key, error=str(e))
         return None
+
+    async def retrieve_async(self, ccr_key: str) -> str | None:
+        """G8: 异步读取缓存，避免阻塞事件循环."""
+        return await asyncio.to_thread(self.retrieve, ccr_key)
 
     def _strip_historical_prefix(self, text: str) -> str:
         """剥离旧版 SUMMARY_PREFIX，防止旧指令嵌入摘要体"""
@@ -273,7 +278,7 @@ from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 async def retrieve_context(key: str) -> ToolResult:
     """检索压缩的原始数据"""
     compressor = get_context_compressor()
-    content = compressor.retrieve(key)
+    content = await compressor.retrieve_async(key)
     if content:
         return ToolResult.ok(content)
     return ToolResult.fail(f"未找到 key={key} 对应的缓存数据")
