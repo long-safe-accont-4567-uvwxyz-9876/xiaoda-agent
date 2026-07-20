@@ -1,15 +1,35 @@
 # memory/cognitive_memory.py
 """3层认知记忆管理器
 
-⚠️ DEPRECATED: 本模块使用独立的衰减逻辑，与 FSRS-DSR 不兼容。
-新代码应使用 memory.fsrs_model.FSRSModel 和 memory.confirm_correct 模块。
+ACTIVE — 待 dream engine v3 重构时迁移
 
-迁移路径:
+状态说明:
+  本模块先前被标记为 DEPRECATED (预计 v0.5.0 移除)，但截至 v0.5.28 仍被
+  生产代码 core/dream_engine_v2.py、core/j_space_bootstrap.py 与 6 个测试文件
+  使用。直接删除会破坏 dream engine 6 阶段整合流程。已取消 DEPRECATED 标记，
+  保留为 ACTIVE，待 dream engine v3 重构时与 FSRS-DSR + DreamConsolidator
+  一并迁移。
+
+为何不能立即迁移到 FSRSModel + DreamConsolidator:
+  - CognitiveMemory 是 3 层认知记忆（Episodic/Semantic/Hopfield + Hebbian
+    连接图 + K-means 聚类 + 嵌入存储），dream_engine_v2 直接访问其内部属性
+    (_episodic / _semantic / _episodic_index / _connections)。
+  - DreamConsolidator 当前是单层 dict 存储（无嵌入、无连接图、无 Hopfield、
+    无聚类），仅做 Ebbinghaus 衰减 + 合并 + 归档。
+  - 迁移需要为 DreamConsolidator 补齐 3 层架构、Hebbian 图、嵌入存储、
+    K-means 聚类、Hopfield 集成、recall/self_attention_sweep/connection_strength
+    等方法，并重写 dream_engine_v2 全部 6 个阶段。预估改动 ~710 行，属架构性
+    大改，应作为 dream engine v3 重构任务统一处理，不在本批次修复范围内。
+
+长期迁移路径（v0.7+ dream engine v3）:
+  - CognitiveMemory._episodic/_semantic + MemoryEntry.embedding
+      → 在 DreamConsolidator 中增加 3 层存储 + 嵌入字段
   - CognitiveMemory.salience  → FSRSModel.retrievability()
   - CognitiveMemory.decay_factor → MemoryState.stability
   - CognitiveMemory.consolidate() → DreamConsolidator.consolidate_from_db()
-
-预计移除版本: v0.5.0
+  - CognitiveMemory._connections (Hebbian) → DreamConsolidator 增加连接图
+  - CognitiveMemory.self_attention_sweep() → DreamConsolidator 增加该方法
+  - 详见 docs/DEPRECATED_MODULES.md
 
 Layer 1: EpisodicMemory — FIFO热缓冲 (内存)
 Layer 2: SemanticMemory — 聚类长期存储 (内存, 后续持久化到SQLite)
@@ -21,15 +41,9 @@ from __future__ import annotations
 
 import math
 import time
-import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
-warnings.warn(
-    "CognitiveMemory is deprecated. Use FSRSModel + DreamConsolidator instead.",
-    DeprecationWarning,
-    stacklevel=2,
-)
 from collections import deque
 
 import asyncio
@@ -246,6 +260,10 @@ class CognitiveMemory:
         # 5. 从Episodic移除已转移记忆
         for mid in episodic_ids_to_remove:
             self._episodic_index.pop(mid, None)
+            # 修复 P0 内存泄漏：清理已转移 episodic 的连接图条目
+            # 原代码 consolidate 后 _connections[episodic_id] 永不清理，
+            # 长时间运行内存单调增长。
+            self._connections.pop(mid, None)
         self._episodic = deque(
             (e for e in self._episodic if e.id not in episodic_ids_to_remove),
             maxlen=self.episodic_capacity
