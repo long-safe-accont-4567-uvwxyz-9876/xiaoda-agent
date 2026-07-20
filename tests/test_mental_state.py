@@ -121,6 +121,8 @@ def test_l_layer_load_from_files(tmp_path):
     # 核心特质从第一个列表项提取
     assert mgr.state.L.core_traits == ["温柔", "聪慧", "耐心", "认真"]
     assert mgr.state.L.last_updated > 0
+    # G3: _save 为 debounce，需 flush 立即写盘
+    mgr.flush()
     # 持久化文件已生成
     assert (tmp_path / "mental_state.json").exists()
 
@@ -156,6 +158,8 @@ def test_s_layer_update_realtime(tmp_path):
     mgr.update_short_term(emotion="好奇", user_emotion="好奇")
     assert mgr.state.S.current_emotion == "好奇"
     assert len(mgr.state.S.emotion_history) == 2
+    # G3: _save 为 debounce，需 flush 立即写盘
+    mgr.flush()
     # 持久化
     reloaded = MentalState.load(tmp_path / "mental_state.json")
     assert reloaded.S.current_emotion == "好奇"

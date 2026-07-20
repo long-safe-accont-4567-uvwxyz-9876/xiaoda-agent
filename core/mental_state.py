@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -199,6 +200,10 @@ class MentalStateManager:
         self._data_dir = Path(data_dir) if data_dir else Path("data")
         self._state_path = self._data_dir / "mental_state.json"
         self._state = self._load_or_init()
+        # G3: debounce 写盘
+        self._save_lock = threading.Lock()
+        self._save_timer: threading.Timer | None = None
+        self._save_pending = False
 
     def _load_or_init(self) -> MentalState:
         """启动时加载, 若文件不存在则初始化空状态."""
@@ -218,11 +223,36 @@ class MentalStateManager:
         return _is_enabled()
 
     def _save(self) -> None:
-        """持久化当前状态."""
+        """G3: debounce 300ms 写盘，多次调用合并为 1 次."""
+        with self._save_lock:
+            self._save_pending = True
+            if self._save_timer is None or not self._save_timer.is_alive():
+                self._save_timer = threading.Timer(0.3, self._do_save)
+                self._save_timer.daemon = True
+                self._save_timer.start()
+
+    def _do_save(self) -> None:
+        """实际写盘（在后台线程执行）."""
+        with self._save_lock:
+            if not self._save_pending:
+                return
+            self._save_pending = False
         try:
             self._state.save(self._state_path)
         except Exception as e:
             logger.warning(f"MentalState.save_failed error={e}")
+
+    def flush(self) -> None:
+        """G3: 立即写盘（退出时调用）."""
+        with self._save_lock:
+            if self._save_timer is not None and self._save_timer.is_alive():
+                self._save_timer.cancel()
+                self._save_timer = None
+            self._save_pending = False
+        try:
+            self._state.save(self._state_path)
+        except Exception as e:
+            logger.warning(f"MentalState.flush_failed error={e}")
 
     # ── L 层: 长期身份 ──────────────────────────────────
 

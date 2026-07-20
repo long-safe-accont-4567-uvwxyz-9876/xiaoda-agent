@@ -406,6 +406,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         await self._shutdown_close_component('_vec_store', 'vec_store_close')
         await self._shutdown_close_component('tts', 'tts_close')
         await self._shutdown_close_component('db', 'db_close')
+        await self._shutdown_flush_mental_state()
         logger.info("agent_core.shutdown_complete")
 
     async def _shutdown_cancel_prewarm_task(self) -> None:
@@ -473,3 +474,13 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             await close_agnes_clients()
         except Exception as e:
             logger.warning("shutdown.agnes_close_failed", error=str(e))
+
+    async def _shutdown_flush_mental_state(self) -> None:
+        """G3: 退出时立即写盘 mental_state（取消 debounce timer）."""
+        try:
+            from core.mental_state import get_mental_state_manager_if_exists
+            mgr = get_mental_state_manager_if_exists()
+            if mgr is not None:
+                mgr.flush()
+        except Exception as e:
+            logger.warning("shutdown.mental_state_flush_failed", error=str(e))
