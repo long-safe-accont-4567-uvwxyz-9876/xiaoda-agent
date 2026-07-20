@@ -225,13 +225,16 @@ class CognitiveMemory:
         # 3. 转移高salience记忆
         transferred = 0
         episodic_ids_to_remove: set[int] = set()
+        # episodic_id -> semantic_id 的迁移映射，用于在 _connections 中替换 key/neighbor
+        transfer_map: dict[int, int] = {}
 
         for entry in candidates:
             entry.salience = self._salience_scorer.compute(entry, now)
             if entry.salience > self.SALIENCE_TRANSFER_THRESHOLD or entry.access_count >= self.ACCESS_TRANSFER_THRESHOLD:
                 # 转移到Semantic
+                new_semantic_id = self._next_semantic_id
                 semantic_entry = MemoryEntry(
-                    id=self._next_semantic_id,
+                    id=new_semantic_id,
                     embedding=entry.embedding.copy(),
                     content=entry.content,
                     label=entry.label,
@@ -243,7 +246,8 @@ class CognitiveMemory:
                     emotion_label=entry.emotion_label,
                     session_id=entry.session_id,
                 )
-                self._semantic[self._next_semantic_id] = semantic_entry
+                self._semantic[new_semantic_id] = semantic_entry
+                transfer_map[entry.id] = new_semantic_id
                 self._next_semantic_id += 1
 
                 # 存入Hopfield
@@ -257,19 +261,48 @@ class CognitiveMemory:
             self._connections.setdefault(id_a, {})[id_b] = strength
             self._connections.setdefault(id_b, {})[id_a] = strength
 
-        # 5. 从Episodic移除已转移记忆
+        # 5. 迁移连接图：把已转移 episodic_id 替换为对应 semantic_id
+        #    - 作为 _connections 的 top-level key
+        #    - 作为其他节点 neighbor 字典中的引用
+        #    这样 DreamEngineV2 通过 `cog._connections` 引用拿到的永远是新鲜的
+        #    semantic_id，且不会有 stale episodic_id 泄漏。
+        if transfer_map:
+            old_ids = set(transfer_map.keys())
+
+            # 5a. 迁移 top-level key
+            items_to_migrate = [
+                (node_id, neighbors)
+                for node_id, neighbors in list(self._connections.items())
+                if node_id in old_ids
+            ]
+            for old_id, _old_neighbors in items_to_migrate:
+                new_id = transfer_map[old_id]
+                old_neighbors = self._connections.pop(old_id, {})
+                target = self._connections.setdefault(new_id, {})
+                for neighbor_id, weight in old_neighbors.items():
+                    actual_neighbor = transfer_map.get(neighbor_id, neighbor_id)
+                    # 取 max 防止已有连接被弱覆盖
+                    target[actual_neighbor] = max(target.get(actual_neighbor, 0.0), weight)
+
+            # 5b. 修复其他节点 neighbor 字典中对 old_id 的引用
+            for node_id, neighbors in self._connections.items():
+                # node_id 此处已不可能是 old_id（上面 5a 已迁移）
+                to_rename = [
+                    (old, transfer_map[old]) for old in old_ids if old in neighbors
+                ]
+                for old_id, new_id in to_rename:
+                    weight = neighbors.pop(old_id)
+                    neighbors[new_id] = max(neighbors.get(new_id, 0.0), weight)
+
+        # 6. 从Episodic移除已转移记忆
         for mid in episodic_ids_to_remove:
             self._episodic_index.pop(mid, None)
-            # 修复 P0 内存泄漏：清理已转移 episodic 的连接图条目
-            # 原代码 consolidate 后 _connections[episodic_id] 永不清理，
-            # 长时间运行内存单调增长。
-            self._connections.pop(mid, None)
         self._episodic = deque(
             (e for e in self._episodic if e.id not in episodic_ids_to_remove),
             maxlen=self.episodic_capacity
         )
 
-        # 6. 重建Semantic聚类
+        # 7. 重建Semantic聚类
         if transferred > 0:
             self._rebuild_clusters()
 

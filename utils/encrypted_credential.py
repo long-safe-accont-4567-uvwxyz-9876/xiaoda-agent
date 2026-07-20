@@ -40,8 +40,16 @@ class EncryptedCredential:
         return f.decrypt(base64.urlsafe_b64decode(self._encrypted)).decode()
 
     def __str__(self) -> str:
-        """返回遮蔽密文尾部的字符串表示，避免泄露。"""
-        return f"EncryptedCredential(***{self._encrypted[-6:]})"
+        """返回基于密文哈希的字符串表示，避免泄露任何密文片段。
+
+        历史缺陷：`***{self._encrypted[-6:]}` 暴露 Fernet 密文末 6 字符。
+        虽然密文不可逆推明文，但 (1) 调试日志可能多次打印累积侧信道信息
+        (2) 与全行业"日志中不出现任何敏感片段"实践不一致。
+        修复：用 sha256(密文)[:8] 作为稳定标识符，调试可辨识但不暴露密文。
+        """
+        import hashlib
+        digest = hashlib.sha256(self._encrypted.encode("utf-8")).hexdigest()[:8]
+        return f"EncryptedCredential(hash={digest})"
 
     def __repr__(self) -> str:
         """返回与 __str__ 一致的可打印表示。"""

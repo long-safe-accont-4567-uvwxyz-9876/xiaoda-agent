@@ -13,6 +13,15 @@ from utils.encrypted_credential import reveal_credential
 class SecretsBroker:
     """凭证代理 — LLM 只发出"我要调用X"的意图, Broker 代查凭证"""
 
+    # SSRF 防护: service/method 由 LLM 控制, 必须白名单校验, 防止拼接 evil.com/v1/x
+    # service 走严格白名单 (避免 api.{service}.com 拼接到恶意域名)
+    _ALLOWED_SERVICES = frozenset({
+        "openai", "anthropic", "deepseek", "siliconflow",
+        "mimo", "agnes", "openrouter", "moonshot",
+    })
+    # method 只允许 [a-zA-Z0-9_/] 字符 (防 path injection, 例如 method="evil.com/v1/x")
+    _METHOD_PATTERN = re.compile(r"^[a-zA-Z0-9_/]+$")
+
     def __init__(self, credential_store: dict | None = None) -> None:
         # credential_store: key_id → EncryptedCredential 或 str
         self._store: dict = credential_store or {}
@@ -30,6 +39,11 @@ class SecretsBroker:
 
     async def execute_api_call(self, service: str, method: str, params: dict) -> dict:
         """代理执行 API 调用 — LLM 只传 service+method+params, 不传凭证"""
+        # SSRF 防护: 校验白名单, 防止 service/method 拼接出内网或恶意 URL
+        if service not in self._ALLOWED_SERVICES:
+            raise ValueError(f"unknown service: {service}")
+        if not isinstance(method, str) or not self._METHOD_PATTERN.match(method):
+            raise ValueError(f"invalid method: {method!r}")
         api_key = self.get_credential(service)
 
         import httpx
@@ -45,20 +59,41 @@ class SecretsBroker:
 
     @staticmethod
     def _sanitize_response(data: dict | str) -> dict | str:
-        """脱敏: 移除响应中可能包含的凭证信息"""
-        sanitized = str(data)
-        # 移除类 API Key 模式
-        sanitized = re.sub(r'(sk-|key-|token-)[a-zA-Z0-9]{20,}', '[REDACTED_KEY]', sanitized)
-        # 移除 Bearer token
-        sanitized = re.sub(r'Bearer\s+[a-zA-Z0-9._-]{20,}', '[REDACTED_TOKEN]', sanitized)
+        """脱敏: 移除响应中可能包含的凭证信息
+
+        修复: 原代码对 dict 用 ``str(data)`` 得到 Python repr (单引号),
+        json.loads 必抛 JSONDecodeError, 永远走 except 分支返回 ``{"_sanitized": ...}``,
+        丢失原 dict 结构. 改用 json.dumps 得到合法 JSON 字符串再做正则脱敏,
+        或者直接对 dict 做字段级递归脱敏 (更安全, 不依赖正则覆盖面).
+        """
+        import json
+
+        def _redact_text(text: str) -> str:
+            # 移除类 API Key 模式
+            text = re.sub(r'(sk-|key-|token-)[a-zA-Z0-9]{20,}', '[REDACTED_KEY]', text)
+            # 移除 Bearer token
+            text = re.sub(r'Bearer\s+[a-zA-Z0-9._-]{20,}', '[REDACTED_TOKEN]', text)
+            return text
+
         if isinstance(data, dict):
-            # 尝试安全解析回 dict
-            import json
-            try:
-                return json.loads(sanitized)
-            except (json.JSONDecodeError, ValueError):
-                return {"_sanitized": sanitized}
-        return sanitized
+            # 直接对 dict 做字段级递归脱敏, 结构保留
+            def _sanitize_obj(obj):
+                if isinstance(obj, dict):
+                    return {k: _sanitize_obj(v) for k, v in obj.items()}
+                if isinstance(obj, list):
+                    return [_sanitize_obj(v) for v in obj]
+                if isinstance(obj, str):
+                    return _redact_text(obj)
+                return obj
+            return _sanitize_obj(data)
+        if isinstance(data, str):
+            return _redact_text(data)
+        # 其他类型 (int/None 等): 走字符串脱敏路径
+        try:
+            text = json.dumps(data, ensure_ascii=False)
+        except (TypeError, ValueError):
+            text = str(data)
+        return _redact_text(text)
 
 
 # 全局单例

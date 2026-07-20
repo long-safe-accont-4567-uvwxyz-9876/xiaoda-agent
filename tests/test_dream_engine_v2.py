@@ -68,6 +68,44 @@ async def test_connection_graph_shared_with_cognitive_memory():
     assert dream._connections is cog._connections
 
 
+async def test_consolidate_migrates_connections_to_semantic_id():
+    """P0 回归：consolidate transfer 时把 _connections 的 key/neighbor 迁移到 semantic_id。
+
+    历史缺陷：episodic → semantic 转移后，_connections 残留旧 episodic_id 作为 key，
+    导致 (1) 内存泄漏 (2) DreamEngineV2 拿到 stale 引用。
+
+    修复策略：建立 transfer_map，迁移 top-level key 与 neighbor 引用。
+    """
+    cog = CognitiveMemory(dimensions=64, episodic_capacity=100, semantic_max_clusters=10)
+    emb = np.random.randn(64).astype(np.float32)
+    emb /= np.linalg.norm(emb)
+    await cog.remember("mem_a", emb, emotion_label="happy")
+    await cog.remember("mem_b", emb, emotion_label="happy")
+    # 强制触发 transfer：access_count >= ACCESS_TRANSFER_THRESHOLD(=3)
+    for entry in cog._episodic:
+        entry.access_count = 5
+
+    transferred = await cog.consolidate()
+    assert transferred == 2, "两个记忆应都被转移到 semantic"
+
+    semantic_ids = set(cog._semantic.keys())
+    assert semantic_ids, "semantic 应非空"
+    # 迁移后 _connections 的 key 必须全部是 semantic_id（>= 1000000）
+    for k in cog._connections.keys():
+        assert k in semantic_ids, f"_connections 残留非 semantic_id 的 key: {k}"
+    # neighbor 引用也必须是 semantic_id
+    for node_id, neighbors in cog._connections.items():
+        for neighbor_id in neighbors.keys():
+            assert neighbor_id in semantic_ids, \
+                f"_connections[{node_id}] 残留非 semantic_id 的 neighbor: {neighbor_id}"
+    # 连接关系应保留（mem_a <-> mem_b 的 strength > 0）
+    assert cog._connections, "_connections 不应为空"
+    if len(semantic_ids) >= 2:
+        sid_a, sid_b = sorted(semantic_ids)[:2]
+        assert sid_b in cog._connections.get(sid_a, {}), \
+            "迁移后 mem_a 与 mem_b 的连接关系应保留"
+
+
 async def test_phase_afe_stage_s():
     """Phase 5: 偏好结晶 — 从相似记忆中提取模式"""
     np.random.seed(123)

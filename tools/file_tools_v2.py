@@ -1,6 +1,5 @@
 from typing import Any
 import asyncio
-import subprocess
 import os
 import re
 import shlex
@@ -326,37 +325,51 @@ async def shell_command(command: str) -> ToolResult:
         logger.debug("file_tools.pty_exec_error", exc_info=True)
 
     # Fallback: subprocess（无终端会话时）
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _subprocess_exec, command)
-
-
-def _subprocess_exec(command: str) -> ToolResult:
-    """使用 subprocess 执行命令（原始方式）。"""
+    # 使用 asyncio.create_subprocess_shell 便于取消时 kill 子进程
+    # （原 loop.run_in_executor + subprocess.run 无法被 asyncio.wait_for 取消，
+    #  线程池中的子进程会继续运行直到自身超时，导致资源泄漏）
     try:
-        args = shlex.split(command, posix=os.name != "nt")
-        if not args:
-            return ToolResult.fail("空命令")
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=os.path.expanduser("~"),
+        )
+    except Exception as e:
+        return ToolResult.fail(f"启动子进程失败: {e!s}")
 
-        result = subprocess.run(
-            args,
-            shell=False,
-            capture_output=True, text=True,
-            timeout=30, cwd=os.path.expanduser("~")
-, check=False)
-        output = result.stdout if result.stdout else result.stderr
-        if output:
-            output = _sanitize_output(output)
-            data = output[:3000]
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        out_text = (stdout.decode(errors="replace") if stdout else "") or (stderr.decode(errors="replace") if stderr else "")
+        if out_text:
+            out_text = _sanitize_output(out_text)
+            data = out_text[:3000]
         else:
             data = "命令执行成功（无输出）"
         return ToolResult.ok(data)
-    except subprocess.TimeoutExpired:
+    except asyncio.TimeoutError:
+        # 超时后强制 kill 子进程，避免僵尸进程或后台泄漏
+        # ProcessLookupError 表示子进程已自行退出，无需重复 kill
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        except Exception:
+            logger.debug("file_tools.subprocess_kill_error", exc_info=True)
+        try:
+            await proc.wait()
+        except Exception:
+            logger.debug("file_tools.subprocess_wait_error", exc_info=True)
+        # 不在错误信息中包含 command，避免命令内容泄漏到日志/返回结果
         return ToolResult.fail("命令执行超时（30秒）")
-    except ValueError as e:
-        return ToolResult.fail(f"命令解析错误（可能包含不合法的引号或转义）: {e!s}")
-    except FileNotFoundError:
-        return ToolResult.fail(f"命令未找到: {shlex.split(command, posix=os.name != 'nt')[0] if command else ''}")
     except Exception as e:
+        # 兜底清理：子进程可能仍在运行
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        except Exception:
+            logger.debug("file_tools.subprocess_kill_error", exc_info=True)
         return ToolResult.fail(f"执行错误: {e!s}")
 
 

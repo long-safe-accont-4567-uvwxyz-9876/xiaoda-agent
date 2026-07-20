@@ -40,10 +40,16 @@ class TestIsOwner:
         # is_owner 只看 user_id，不看消息内容
         assert sec.is_owner("xyz789") is False
 
-    def test_empty_owner_ids_defaults_true(self):
-        """未配置 OWNER_IDS 时默认所有人都是主人（向后兼容）"""
+    def test_empty_owner_ids_defaults_false(self):
+        """未配置 OWNER_IDS 时 fail-closed（修复 P0 安全缺陷）
+
+        原行为：未配置 OWNER_IDS 时默认所有人都是主人（公开部署时任意 QQ/Web
+        用户即获主人权限，可触发高危工具、改写配置、读取密钥）。
+        新行为：fail-closed 返回 False，引导用户显式配置 OWNER_IDS 或
+        MASTER_QQ_OPENID（启动时合并到 owner_ids）。
+        """
         sec = SecurityFilter(owner_ids=[])
-        assert sec.is_owner("anyone") is True
+        assert sec.is_owner("anyone") is False
 
     def test_empty_user_id_returns_false(self):
         """空 user_id 返回 False"""

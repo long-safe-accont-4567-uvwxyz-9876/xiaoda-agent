@@ -239,7 +239,12 @@ class KnowledgeGraphV2(KnowledgeGraph):
         episode_id: str,
         episode_time: float,
     ) -> tuple[bool, list[dict]]:
-        """合并新关系，自动处理超驰。Returns: (is_new, invalidated_relations)。"""
+        """合并新关系，自动处理超驰。Returns: (is_new, invalidated_relations)。
+
+        事务边界：BEGIN IMMEDIATE ... COMMIT 包住「查冲突→LLM 检测→invalidate→insert」
+        全流程，防止并发产生重复关系。所有内部 DB 写入使用 auto_commit=False，
+        统一由外层 COMMIT 提交。失败时 ROLLBACK 保持原状。
+        """
         if self._db_v2 is None:
             logger.warning("kg_v2.merge_relation_no_db")
             return False, []
@@ -251,53 +256,79 @@ class KnowledgeGraphV2(KnowledgeGraph):
         if not from_entity or not relation_type or not to_entity:
             return False, []
 
-        # 搜索潜在冲突：同一 from_entity + relation_type 的当前有效关系
-        # （to_entity 可能不同，如"用户喜欢篮球" vs "用户喜欢网球"）
-        conflict_candidates = await self._db_v2.get_active_relations_by_subject_and_type(
-            from_entity, relation_type
-        )
+        conn = self._conn
+        # 立即获取写锁：BEGIN IMMEDIATE 在事务开始时即获取 RESERVED→EXCLUSIVE 锁，
+        # 阻止其他写入者并发执行 merge，避免重复关系。
+        try:
+            await conn.execute("BEGIN IMMEDIATE")
+        except Exception as e:
+            # aiosqlite 在已处于事务中时再 BEGIN 会报错；这里降级为隐式事务
+            logger.debug("kg_v2.merge_begin_failed_using_implicit", error=str(e))
 
-        invalidated: list[dict] = []
-        is_duplicate = False
-
-        if conflict_candidates:
-            # 精确匹配检查（去重）
-            for candidate in conflict_candidates:
-                if candidate.get("fact", "") == fact:
-                    is_duplicate = True
-                    await self._ensure_episode_exists(episode_id, episode_time)
-                    await self._db_v2.append_episode_ref(candidate["id"], episode_id)
-                    break
-
-            # LLM 矛盾检测
-            if not is_duplicate:
-                contradictions = await self._detect_contradictions(
-                    new_fact=fact,
-                    existing_facts=[r.get("fact", "") for r in conflict_candidates],
-                )
-                for idx in contradictions:
-                    if idx < len(conflict_candidates):
-                        candidate = conflict_candidates[idx]
-                        if self._resolve_contradiction(candidate, episode_time):
-                            await self._db_v2.invalidate_relation(
-                                candidate["id"],
-                                invalid_at=candidate["invalid_at"],
-                                expired_at=candidate.get("expired_at", time.time()),
-                            )
-                            invalidated.append(candidate)
-
-        # 插入新关系
-        if not is_duplicate:
-            rel_id = f"REL-{uuid.uuid4().hex[:12]}"
-            rowid = await self._db_v2.insert_relation_v2(
-                rel_id, from_entity, relation_type, to_entity, fact,
-                episode_id, episode_time,
+        try:
+            # 搜索潜在冲突：同一 from_entity + relation_type 的当前有效关系
+            # （to_entity 可能不同，如"用户喜欢篮球" vs "用户喜欢网球"）
+            conflict_candidates = await self._db_v2.get_active_relations_by_subject_and_type(
+                from_entity, relation_type
             )
-            # 同步事实向量
-            if self._vector_store and rowid:
-                await self._vector_store.upsert_kg_relation(rowid, fact)
 
-        return not is_duplicate, invalidated
+            invalidated: list[dict] = []
+            is_duplicate = False
+
+            if conflict_candidates:
+                # 精确匹配检查（去重）
+                for candidate in conflict_candidates:
+                    if candidate.get("fact", "") == fact:
+                        is_duplicate = True
+                        await self._ensure_episode_exists(episode_id, episode_time)
+                        await self._db_v2.append_episode_ref(
+                            candidate["id"], episode_id, auto_commit=False,
+                        )
+                        break
+
+                # LLM 矛盾检测
+                if not is_duplicate:
+                    contradictions = await self._detect_contradictions(
+                        new_fact=fact,
+                        existing_facts=[r.get("fact", "") for r in conflict_candidates],
+                    )
+                    for idx in contradictions:
+                        if idx < len(conflict_candidates):
+                            candidate = conflict_candidates[idx]
+                            if self._resolve_contradiction(candidate, episode_time):
+                                await self._db_v2.invalidate_relation(
+                                    candidate["id"],
+                                    invalid_at=candidate["invalid_at"],
+                                    expired_at=candidate.get("expired_at", time.time()),
+                                    auto_commit=False,
+                                )
+                                invalidated.append(candidate)
+
+            # 插入新关系
+            if not is_duplicate:
+                rel_id = f"REL-{uuid.uuid4().hex[:12]}"
+                rowid = await self._db_v2.insert_relation_v2(
+                    rel_id, from_entity, relation_type, to_entity, fact,
+                    episode_id, episode_time, auto_commit=False,
+                )
+                # 同步事实向量（向量库独立于 SQLite 事务，无法回滚；
+                # 即使后续 commit 失败也只多一条孤儿向量，可由后台对账修复）
+                if self._vector_store and rowid:
+                    try:
+                        await self._vector_store.upsert_kg_relation(rowid, fact)
+                    except Exception as e:
+                        logger.warning("kg_v2.vec_upsert_failed_during_txn",
+                                       rowid=rowid, error=str(e))
+
+            await conn.commit()
+            return not is_duplicate, invalidated
+        except Exception as e:
+            try:
+                await conn.rollback()
+            except Exception as rb_err:
+                logger.debug("kg_v2.merge_rollback_failed", error=str(rb_err))
+            logger.warning("kg_v2.merge_relation_failed_rolled_back", error=str(e))
+            raise
 
     async def _detect_contradictions(
         self, new_fact: str, existing_facts: list[str]
@@ -319,7 +350,17 @@ class KnowledgeGraphV2(KnowledgeGraph):
                 parsed = json.loads(cleaned)
                 indices = parsed.get("contradicted_indices", [])
                 if isinstance(indices, list):
-                    return [int(i) for i in indices if 0 <= i < len(existing_facts)]
+                    # int(i) 对非数字字符串会抛 ValueError；逐个 try/except 跳过非法值
+                    # （LLM 偶尔返回字符串索引如 "0" 或 null，不应让整次检测崩溃）
+                    valid: list[int] = []
+                    for i in indices:
+                        try:
+                            idx = int(i)
+                        except (ValueError, TypeError):
+                            continue
+                        if 0 <= idx < len(existing_facts):
+                            valid.append(idx)
+                    return valid
         except Exception as e:
             logger.debug("kg_v2.detect_contradictions_failed", error=str(e))
         return []

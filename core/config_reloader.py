@@ -98,6 +98,15 @@ class ConfigReloader:
         self._async_cb_tasks: set[asyncio.Task] = set()
         self._observer: Any | None = None
         self._stopped = False
+        # 主线程事件循环引用 - 在 start() 中捕获, 用于 Timer 线程跨线程调度.
+        # call_soon_threadsafe 本身线程安全, 仅需保存 loop 引用即可.
+        self._loop: asyncio.AbstractEventLoop | None = None
+        # 修复 P1：保存主线程事件循环，供 Timer 线程跨线程调度异步回调
+        # 原代码在 Timer 线程内调用 get_running_loop() 会失败，导致异步回调静默丢失
+        try:
+            self._main_loop = asyncio.get_event_loop()
+        except RuntimeError:
+            self._main_loop = None
         # 加载初始配置
         self._load()
 
@@ -157,28 +166,42 @@ class ConfigReloader:
             except Exception as e:
                 logger.warning(f"ConfigReloader: callback failed {e}")
         # 异步回调 (在事件循环中)
+        # 修复 P1：原代码在 Timer 线程内调用 asyncio.get_running_loop()，
+        # Timer 线程无 running loop，外层抛 RuntimeError 后 except 内再次调用
+        # 同样抛 RuntimeError，导致 call_soon_threadsafe 路径永不可达，
+        # 所有异步回调在配置热重载时静默丢失。
+        # 修复：优先用初始化时保存的主线程 loop；不可用时再尝试 get_event_loop。
+        loop = self._main_loop or self._loop
+        if loop is None or not loop.is_running():
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = None
         for acb in self._async_callbacks:
             try:
-                loop = asyncio.get_running_loop()
-                if asyncio.iscoroutinefunction(acb):
-                    task = loop.create_task(acb(snap))
-                    self._async_cb_tasks.add(task)
-                    task.add_done_callback(self._on_async_cb_done)
-                else:
-                    loop.call_soon(acb, snap)
-            except RuntimeError:
-                # 没有事件循环 (Timer 线程等), 尝试调度到主循环
-                try:
-                    if asyncio.iscoroutinefunction(acb):
-                        loop = asyncio.get_running_loop()
-                        if loop.is_running():
-                            loop.call_soon_threadsafe(
-                                lambda: asyncio.ensure_future(acb(snap))
-                            )
-                    else:
+                if loop is None or not loop.is_running():
+                    # 无可用事件循环：直接执行（同步路径）或放弃
+                    if not asyncio.iscoroutinefunction(acb):
                         acb(snap)
-                except Exception:
-                    logger.debug("config_reloader.async_callback_error: {}", exc_info=True)
+                    else:
+                        logger.warning("config_reloader.no_running_loop_drop_async_cb")
+                    continue
+                if asyncio.iscoroutinefunction(acb):
+                    # 使用 call_soon_threadsafe 跨线程调度，保证线程安全。
+                    # 同时把 task 加入 _async_cb_tasks 集合并挂上 done_callback，
+                    # 否则异常不会触发 _on_async_cb_done 的 warning 日志，且 task
+                    # 可能被 GC 回收（修复回归测试 test_config_reloader_*）。
+                    def _schedule(_acb=acb, _snap=snap, _loop=loop) -> None:
+                        def _create_and_track() -> None:
+                            task = _loop.create_task(_acb(_snap))
+                            self._async_cb_tasks.add(task)
+                            task.add_done_callback(self._on_async_cb_done)
+                        _loop.call_soon_threadsafe(_create_and_track)
+                    _schedule()
+                else:
+                    loop.call_soon_threadsafe(acb, snap)
+            except Exception:
+                logger.debug("config_reloader.async_callback_error: {}", exc_info=True)
 
     def _on_async_cb_done(self, task: asyncio.Task) -> None:
         """异步回调任务完成: 移除引用并记录异常。"""
@@ -210,6 +233,21 @@ class ConfigReloader:
 
     def start(self) -> bool:
         """启动文件监听"""
+        # 捕获主线程事件循环引用 (start() 通常在事件循环已启动后调用,
+        # 比 __init__ 时机更可靠). 用于 Timer 线程跨线程调度异步回调.
+        # 即使 watchdog 未安装也需要捕获 (reload() 仍可被外部调用触发回调).
+        if self._loop is None:
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                try:
+                    self._loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    self._loop = None
+                    logger.warning("ConfigReloader: no event loop available, async callbacks may be dropped")
+        if self._main_loop is None and self._loop is not None:
+            self._main_loop = self._loop
+
         if not _HAS_WATCHDOG:
             logger.warning("ConfigReloader: watchdog not installed, hot reload disabled")
             return False

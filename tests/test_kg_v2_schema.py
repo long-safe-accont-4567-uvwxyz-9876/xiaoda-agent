@@ -30,7 +30,7 @@ async def test_fresh_database_migrates_to_latest(tmp_path):
     db_path = tmp_path / "fresh_kg.db"
     manager = DatabaseManager(db_path)
     await manager.init()
-    assert CURRENT_SCHEMA_VERSION == 19
+    assert CURRENT_SCHEMA_VERSION == 20
     assert await _schema_version(manager) == CURRENT_SCHEMA_VERSION
     assert V2_TABLES <= await _table_names(manager)
     await manager.close()

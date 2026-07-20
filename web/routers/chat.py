@@ -144,9 +144,10 @@ async def delete_session(session_id: str, request: Request) -> Any:
     return Envelope(data={"deleted": session_id})
 
 
-@router.get("/sessions/{session_id}/export")
+@router.post("/sessions/{session_id}/export")
 async def export_session(session_id: str, request: Request) -> Any:
-    # 支持 query token（用于 <a href> 直接下载）或 header token
+    # POST + Authorization header 安全下载（token 不再通过 URL 暴露）
+    # 兼容历史 <a href> 调用：仍允许 query token
     token = request.query_params.get("token") or ""
     if not token:
         auth = request.headers.get("Authorization", "")

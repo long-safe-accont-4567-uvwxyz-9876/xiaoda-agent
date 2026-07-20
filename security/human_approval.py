@@ -324,8 +324,12 @@ class IMApprovalChannel:
         """
         self._send_callback = send_callback
         self._timeout = timeout
+        # 以 request_id 为 key（支持同用户并发请求，避免互相覆盖）
         self._pending: dict[str, ApprovalRequest] = {}
         self._waiters: dict[str, asyncio.Future] = {}
+        # user_id -> [request_id, ...] 倒排索引：handle_user_reply 快速定位
+        # 该用户当前所有 pending 请求，避免遍历整个 _pending
+        self._pending_by_user: dict[str, list[str]] = {}
         self._audit_log: list[dict] = []
         self._lock: asyncio.Lock = asyncio.Lock()
 
@@ -386,6 +390,8 @@ class IMApprovalChannel:
         future: asyncio.Future = loop.create_future()
         self._pending[req.id] = req
         self._waiters[req.id] = future
+        # 维护 user_id 倒排索引
+        self._pending_by_user.setdefault(req.user_id, []).append(req.id)
 
         try:
             status = await asyncio.wait_for(future, timeout=self._timeout)
@@ -403,6 +409,15 @@ class IMApprovalChannel:
         finally:
             self._pending.pop(req.id, None)
             self._waiters.pop(req.id, None)
+            # 从 user 倒排索引中移除（list.remove 找不到会抛 ValueError，先判存在）
+            user_reqs = self._pending_by_user.get(req.user_id)
+            if user_reqs:
+                try:
+                    user_reqs.remove(req.id)
+                except ValueError:
+                    pass
+                if not user_reqs:
+                    self._pending_by_user.pop(req.user_id, None)
 
     async def handle_user_reply(self, user_id: str, text: str,
                                   request_id: str | None = None) -> bool:
@@ -419,10 +434,12 @@ class IMApprovalChannel:
                 if req is None or req.user_id != user_id:
                     return False
             else:
-                # 查找该用户最新的待审批请求 (created_at 最大者)
+                # 通过 user_id 倒排索引快速定位该用户最新的待审批请求 (created_at 最大者)
                 req = None
-                for r in self._pending.values():
-                    if r.user_id == user_id and (req is None or r.created_at > req.created_at):
+                user_req_ids = self._pending_by_user.get(user_id, [])
+                for rid in user_req_ids:
+                    r = self._pending.get(rid)
+                    if r is not None and (req is None or r.created_at > req.created_at):
                         req = r
                 if req is None:
                     return False
@@ -442,4 +459,13 @@ class IMApprovalChannel:
                 future.set_result(decision)
             self._audit(req, decision, user_id, reason)
             self._pending.pop(req.id, None)
+            # 同步从 user 倒排索引移除
+            user_reqs = self._pending_by_user.get(user_id)
+            if user_reqs:
+                try:
+                    user_reqs.remove(req.id)
+                except ValueError:
+                    pass
+                if not user_reqs:
+                    self._pending_by_user.pop(user_id, None)
             return True

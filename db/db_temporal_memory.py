@@ -169,31 +169,53 @@ class TemporalMemoryDB:
             raise ValueError("a record cannot supersede itself")
         if table not in ("memory_facts", "memory_preferences"):
             raise ValueError(f"Invalid table name: {table}")
+        # BEGIN IMMEDIATE 立即获取写锁，串行化并发 supersede，避免双写。
+        # 配合 UPDATE ... WHERE status='active' + rowcount 校验，构成乐观+悲观双保险：
+        # 即使锁级别不足也通过 rowcount==0 检测到并发已 supersede。
+        try:
+            await self._conn.execute("BEGIN IMMEDIATE")
+        except Exception:
+            # 已在事务中时降级为隐式事务（aiosqlite 默认开启隐式事务）
+            pass
         try:
             cursor = await self._conn.execute(
                 f"SELECT id, status FROM {table} WHERE id IN (?, ?)", (old_id, new_id)
             )
             rows = {row["id"]: row for row in await cursor.fetchall()}
             if old_id not in rows or new_id not in rows:
+                await self._conn.rollback()
                 raise ValueError("both old and new records must exist")
             if rows[old_id]["status"] != "active":
+                await self._conn.rollback()
                 raise ValueError("only an active record can be superseded")
             if rows[new_id]["status"] != "active":
+                await self._conn.rollback()
                 raise ValueError("the superseding record must be active")
+            # 关键修复：UPDATE 的 WHERE 加上 status='active' 条件，
+            # 配合 cursor.rowcount==1 校验。若并发 supersede 已先把 old_id 标记为
+            # superseded，本 UPDATE 影响 0 行，rowcount==0 时跳过提交，避免双写。
             if effective_at is None:
-                await self._conn.execute(
+                cur = await self._conn.execute(
                     f"""UPDATE {table}
                         SET status='superseded', expired_at=?, superseded_by=?, updated_at=?
-                        WHERE id=?""",
+                        WHERE id=? AND status='active'""",
                     (known_at, new_id, known_at, old_id),
                 )
             else:
-                await self._conn.execute(
+                cur = await self._conn.execute(
                     f"""UPDATE {table}
                         SET status='superseded', valid_to=?, expired_at=?, superseded_by=?, updated_at=?
-                        WHERE id=?""",
+                        WHERE id=? AND status='active'""",
                     (effective_at, known_at, new_id, known_at, old_id),
                 )
+            if cur.rowcount != 1:
+                # 并发已 supersede 该记录，本操作幂等跳过（不视为错误）
+                await self._conn.rollback()
+                return
             await self._conn.commit()
         except Exception:
+            try:
+                await self._conn.rollback()
+            except Exception:
+                pass
             raise

@@ -186,11 +186,20 @@ class QueryCache:
             while len(self._cache) > self._max_size:
                 self._cache.popitem(last=False)
 
-    def invalidate(self) -> None:
-        """全量失效：清空所有缓存条目。"""
-        self._cache.clear()
+    async def invalidate(self) -> None:
+        """全量失效：清空所有缓存条目。
 
-    def invalidate_by_entity(self, entity: str) -> None:
+        async + 加锁：与持锁的 async get/put 串行，避免在 get 遍历缓存时
+        同步 invalidate 触发 RuntimeError（dict changed size during iteration）。
+        """
+        async with self._lock:
+            self._cache.clear()
+            # 计数器一并归零，保持统计一致性（避免清空后 hits/misses 仍累加旧值）
+            self.hits = 0
+            self.misses = 0
+            self.total_queries = 0
+
+    async def invalidate_by_entity(self, entity: str) -> None:
         """按实体失效。
 
         简单实现：缓存条目未按实体索引，无法精确按实体定位，
@@ -198,7 +207,8 @@ class QueryCache:
         """
         # entity 参数保留以兼容接口契约；精确按实体失效需建立倒排索引，
         # 当前规模下全量失效成本可接受。
-        self._cache.clear()
+        async with self._lock:
+            self._cache.clear()
 
     @property
     def stats(self) -> dict:

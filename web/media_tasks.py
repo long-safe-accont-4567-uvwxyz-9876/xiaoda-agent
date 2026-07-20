@@ -196,18 +196,50 @@ class MediaTaskQueue:
         import ipaddress
         from urllib.parse import urlparse
 
-        # SSRF protection: block private/internal IPs
+        # SSRF protection: block private/internal IPs (含域名 DNS rebinding 防护)
+        # 1) hostname 是 IP 字符串时直接校验
+        # 2) hostname 是域名时用 getaddrinfo 解析所有 A/AAAA 记录后逐一校验
+        import socket
         parsed = urlparse(url)
         hostname = parsed.hostname
-        if hostname:
+        if not hostname:
+            raise RuntimeError("SSRF: URL 缺少 hostname")
+
+        def _check_ip(ip_str: str) -> None:
+            """单 IP 校验: 命中任一危险属性即 raise RuntimeError('blocked: internal ip')"""
             try:
-                ip = ipaddress.ip_address(hostname)
-                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                    raise RuntimeError(f"SSRF: 不允许下载内网地址 {hostname}")
-            except ValueError:
-                pass  # Not an IP address (e.g., domain name), allow
+                ip = ipaddress.ip_address(ip_str)
+            except ValueError as e:
+                raise RuntimeError(f"blocked: internal ip (无效 IP {ip_str})") from e
+            if (ip.is_private or ip.is_loopback or ip.is_link_local
+                    or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+                raise RuntimeError(f"blocked: internal ip ({ip_str})")
+
         if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
-            raise RuntimeError(f"SSRF: 不允许下载本地地址 {hostname}")
+            raise RuntimeError(f"blocked: internal ip ({hostname})")
+
+        # 先按 IP 字符串校验 (hostname 本身就是 IP)
+        try:
+            ipaddress.ip_address(hostname)
+            _check_ip(hostname)
+        except ValueError:
+            # 不是 IP 字符串 → 域名: 解析所有 A/AAAA 记录后逐一校验
+            try:
+                infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            except socket.gaierror as e:
+                raise RuntimeError(f"blocked: internal ip (DNS 解析失败 {hostname}: {e})") from e
+            resolved_ips: list[str] = []
+            for info in infos:
+                ip_str = info[4][0]
+                # IPv6 去掉 zone_id (如 fe80::1%eth0)
+                if "%" in ip_str:
+                    ip_str = ip_str.split("%", 1)[0]
+                if ip_str not in resolved_ips:
+                    resolved_ips.append(ip_str)
+            if not resolved_ips:
+                raise RuntimeError(f"blocked: internal ip (DNS 无记录 {hostname})")
+            for ip_str in resolved_ips:
+                _check_ip(ip_str)
 
         ext = ".mp4" if kind == "video" else ".png"
         dest = MEDIA_ROOT / kind / f"{kind}_{int(time.time())}{ext}"

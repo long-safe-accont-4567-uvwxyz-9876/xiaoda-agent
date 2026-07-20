@@ -556,7 +556,16 @@ def cached(ttl: float | None = None, key_fn: Callable | None = None) -> Any:
             """实际执行的异步包装, 命中缓存则直接返回."""
             cache = get_tiered_cache()
             k = key_fn(*args, **kwargs) if key_fn else _cache_key(*args, **kwargs)
-            return await cache.get(k, loader=lambda: func(*args, **kwargs), ttl=ttl)
+            # 修复：若 func 是协程函数，loader 必须返回协程对象本身（而非调用结果），
+            # 否则 TieredCache.get 内部 iscoroutinefunction(loader) 为 False，
+            # 会走 asyncio.to_thread(loader) 把协程对象塞进线程池返回错误结果。
+            if asyncio.iscoroutinefunction(func):
+                async def _async_loader() -> Any:
+                    return await func(*args, **kwargs)
+                loader: Any = _async_loader
+            else:
+                loader = lambda: func(*args, **kwargs)  # noqa: E731
+            return await cache.get(k, loader=loader, ttl=ttl)
         return wrapper
     return decorator
 

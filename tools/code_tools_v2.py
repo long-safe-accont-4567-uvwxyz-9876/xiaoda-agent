@@ -1,11 +1,10 @@
 from typing import Any
-import io
 import signal
-import contextlib
-import threading
 import ast
 import os
+import sys
 import math
+import subprocess
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
@@ -163,13 +162,58 @@ def _audit_code(code: str) -> str | None:
     return _audit_code_ast(code)
 
 
-class _ExecutionTimeout(Exception):
-    """代码执行超时异常。"""
+# 子进程执行用户代码的 wrapper 脚本：
+# - 在子进程中重建 _SAFE_BUILTINS 沙箱（与父进程保持同步）
+# - 从 stdin 读取用户代码（避免命令行长度限制和 shell 转义问题）
+# - 通过单独 fd（_PYEXEC_RESULT_FD 环境变量传入）回传 _result，避免与 stdout/stderr 混淆
+# 注意：safe_builtins 字典需与 _SAFE_BUILTINS 保持同步
+_PYEXEC_WRAPPER_SOURCE = '''
+import sys, io, contextlib, math, os
 
+# Safe builtins: 仅保留无害的内建函数（与 _SAFE_BUILTINS 保持同步）
+safe_builtins = {
+    'print': print, 'len': len, 'range': range,
+    'int': int, 'float': float, 'str': str, 'bool': bool,
+    'list': list, 'dict': dict, 'tuple': tuple, 'set': set, 'frozenset': frozenset,
+    'abs': abs, 'max': max, 'min': min, 'sum': sum,
+    'sorted': sorted, 'reversed': reversed, 'enumerate': enumerate,
+    'zip': zip, 'map': map, 'filter': filter, 'round': round,
+    'isinstance': isinstance, 'issubclass': issubclass,
+    'any': any, 'all': all, 'chr': chr, 'ord': ord,
+    'hex': hex, 'oct': oct, 'bin': bin,
+    'format': format,
+    'slice': slice,
+    'ValueError': ValueError, 'TypeError': TypeError,
+    'KeyError': KeyError, 'IndexError': IndexError,
+    'AttributeError': AttributeError, 'RuntimeError': RuntimeError,
+    'StopIteration': StopIteration, 'ZeroDivisionError': ZeroDivisionError,
+    'NotImplementedError': NotImplementedError,
+    'Exception': Exception,
+    'True': True, 'False': False, 'None': None,
+}
 
-def _timeout_handler(signum: Any, frame: Any) -> None:
-    """SIGALRM 信号处理函数，抛出执行超时异常。"""
-    raise _ExecutionTimeout("代码执行超时")
+exec_globals = {'__builtins__': safe_builtins, 'math': math}
+local_vars = {}
+_user_code = sys.stdin.read()
+_stdout = io.StringIO()
+_stderr = io.StringIO()
+try:
+    with contextlib.redirect_stdout(_stdout), contextlib.redirect_stderr(_stderr):
+        exec(_user_code, exec_globals, local_vars)
+except BaseException as e:
+    _stderr.write("{}: {}".format(type(e).__name__, e))
+sys.__stdout__.write(_stdout.getvalue())
+sys.__stderr__.write(_stderr.getvalue())
+# _result 通过单独 fd 回传（fd 号由环境变量 _PYEXEC_RESULT_FD 指定），
+# 避免与用户 stdout 混淆；fd 号不固定，由父进程 os.pipe() 实际分配后传入
+if "_result" in local_vars:
+    try:
+        _fd = int(os.environ.get("_PYEXEC_RESULT_FD", "0"))
+        if _fd > 0:
+            os.write(_fd, repr(local_vars["_result"]).encode("utf-8"))
+    except (OSError, ValueError):
+        pass
+'''
 
 
 @register_tool(
@@ -210,95 +254,125 @@ def get_current_time() -> ToolResult:
     max_frequency=5,
 )
 def python_executor(code: str) -> ToolResult:
-    """执行 Python 代码并返回标准输出/错误（含安全审查和资源限制）。"""
+    """执行 Python 代码并返回标准输出/错误（含安全审查和资源限制）。
+
+    架构：用户代码在独立子进程中执行，父进程通过 stdin 传入代码，
+    通过 stdout/stderr 收集输出，通过单独的 pipe 收集 _result。
+    超时后通过 os.killpg(SIGKILL) 杀掉整个进程组（包括用户代码 spawn 的子进程）。
+
+    安全：
+    - 代码先经 _audit_code AST/正则 审查；
+    - 子进程的 __builtins__ 被替换为 _SAFE_BUILTINS（无 __import__/open/eval 等）；
+    - 子进程在独立进程组中运行，超时可强制 kill。
+    """
     # 代码内容审查
     audit_result = _audit_code(code)
     if audit_result:
         logger.warning("pyexec.audit_blocked", reason=audit_result, code_preview=code[:200])
         return ToolResult.fail(f"代码安全审查未通过: {audit_result}")
 
-    # 注意：RLIMIT_AS/RLIMIT_CPU 是进程级限制，在主进程中设置会限制整个 agent 进程
-    # 50MB 内存上限会导致 agent 本身崩溃。真正的资源隔离应在子进程中执行用户代码。
-    # 当前依赖 SIGALRM 超时（30s）+ AST 审查兜底，不设置进程级资源限制。
+    # 创建管道用于单独回传 _result（fd 号运行时由 os.pipe() 分配）
+    result_r, result_w = os.pipe()
 
     try:
-        stdout_buf = io.StringIO()
-        stderr_buf = io.StringIO()
-
-        local_vars = {}
-        exec_globals = {
-            '__builtins__': _SAFE_BUILTINS,
-            'math': math,
-        }
-
-        # 使用 contextlib.redirect_stdout/stderr 替代全局 sys.stdout 重定向，确保线程安全
-        # 跨平台执行超时：UNIX 用 signal.alarm，Windows（无 SIGALRM）用守护线程 + join 超时
-        _exec_state = {}
-
-        def _run_code() -> None:
-            """在受限全局环境中执行用户代码，捕获异常到 _exec_state。"""
-            try:
-                with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-                    exec(code, exec_globals, local_vars)
-            except BaseException as e:  # 捕获后交由主线程重新抛出
-                _exec_state['error'] = e
-
-        _use_sigalrm = (hasattr(signal, 'SIGALRM')
-                         and threading.current_thread() is threading.main_thread())
-        if _use_sigalrm:
-            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-            signal.alarm(_EXEC_TIMEOUT)
-            try:
-                _run_code()
-            except _ExecutionTimeout:
-                return ToolResult.fail(f"代码执行超时（{_EXEC_TIMEOUT}秒）")
-            finally:
-                signal.alarm(0)
-                signal.signal(signal.SIGALRM, old_handler)
+        # Unix: os.setsid 创建新进程组，便于 killpg 杀掉整个进程树
+        # Windows: CREATE_NEW_PROCESS_GROUP（无 killpg，但 proc.kill() 可杀主进程）
+        if os.name == "posix":
+            preexec_fn = os.setsid
+            creationflags = 0
         else:
-            # Windows 或子线程：改用守护线程执行 + join 超时
-            # 使用 Event 通知线程终止，虽 Python 无法强制 kill 线程，
-            # 但 Event 让线程在循环中可主动退出，避免无意义占用
-            _stop_event = threading.Event()
-            _original_run = _run_code
+            preexec_fn = None
+            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
-            def _run_code_with_stop() -> None:
-                """在 exec 环境中注入 _stop 标志，让用户代码可检查退出信号。"""
-                local_vars["_stop"] = _stop_event.is_set
-                _original_run()
+        # 通过环境变量把 result_w 的 fd 号传给子进程（pass_fds 保持原 fd 号不变）
+        child_env = os.environ.copy()
+        child_env["_PYEXEC_RESULT_FD"] = str(result_w)
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, "-c", _PYEXEC_WRAPPER_SOURCE],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                pass_fds=(result_w,),
+                env=child_env,
+                cwd=os.path.expanduser("~"),
+                preexec_fn=preexec_fn,
+                creationflags=creationflags,
+            )
+        except FileNotFoundError:
+            return ToolResult.fail(f"Python 解释器未找到: {sys.executable}")
+        except OSError as e:
+            return ToolResult.fail(f"启动子进程失败: {e!s}")
+    finally:
+        # 父进程关闭写端，子进程退出后读端可读到 EOF
+        os.close(result_w)
 
-            _exec_thread = threading.Thread(target=_run_code_with_stop, daemon=True)
-            _exec_thread.start()
-            _exec_thread.join(_EXEC_TIMEOUT)
-            if _exec_thread.is_alive():
-                _stop_event.set()  # 通知线程应停止（无法强制 kill）
-                return ToolResult.fail(f"代码执行超时（{_EXEC_TIMEOUT}秒），Windows 下线程可能仍在运行")
+    try:
+        try:
+            stdout_bytes, stderr_bytes = proc.communicate(
+                input=code.encode("utf-8"), timeout=_EXEC_TIMEOUT
+            )
+        except subprocess.TimeoutExpired:
+            # 超时后强制 kill 整个进程组（包括用户代码 spawn 的子进程）
+            _kill_process_group(proc)
+            return ToolResult.fail(f"代码执行超时（{_EXEC_TIMEOUT}秒）")
 
-        # 重新抛出 exec 内部异常（如 MemoryError），交由外层 except 统一处理
-        if 'error' in _exec_state:
-            err = _exec_state['error']
-            if isinstance(err, KeyboardInterrupt):
-                return ToolResult.fail("代码执行被用户中断（Ctrl+C）")
-            raise err
+        # 读取 _result（子进程退出后 pipe 写端已关闭，读到 EOF）
+        try:
+            result_data = os.read(result_r, 1024 * 1024).decode("utf-8", errors="replace")
+        except OSError:
+            result_data = ""
+        finally:
+            try:
+                os.close(result_r)
+            except OSError:
+                pass
 
-        output = stdout_buf.getvalue()
-        error = stderr_buf.getvalue()
+        stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
+        stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
 
         result = []
-        if output:
-            result.append(f"输出:\n{output}")
-        if error:
-            result.append(f"错误:\n{error}")
-        if '_result' in local_vars:
-            result.append(f"结果: {local_vars['_result']}")
+        if stdout:
+            result.append(f"输出:\n{stdout}")
+        if stderr:
+            result.append(f"错误:\n{stderr}")
+        if result_data:
+            result.append(f"结果: {result_data}")
 
         return ToolResult.ok("\n".join(result) if result else "代码执行成功（无输出）")
-    except _ExecutionTimeout:
-        return ToolResult.fail(f"代码执行超时（{_EXEC_TIMEOUT}秒）")
-    except MemoryError:
-        return ToolResult.fail("代码执行内存超限")
     except Exception as e:
         return ToolResult.fail(f"执行错误: {e!s}")
+
+
+def _kill_process_group(proc: subprocess.Popen) -> None:
+    """杀掉子进程及其整个进程组（包括用户代码 spawn 的子进程）。
+
+    Unix: 通过 os.killpg(SIGKILL) 杀掉进程组；
+    Windows/兜底: proc.kill() 仅杀主进程，子进程可能泄漏（Windows 限制）。
+    """
+    if os.name == "posix" and proc.pid:
+        try:
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGKILL)
+            proc.wait(timeout=5)
+            return
+        except ProcessLookupError:
+            # 子进程已退出，无需 kill
+            return
+        except Exception:
+            logger.debug("pyexec.killpg_error", exc_info=True)
+
+    # Windows 或 killpg 失败的兜底
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
+    except Exception:
+        logger.debug("pyexec.kill_error", exc_info=True)
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def _safe_eval(expr_tree, allowed_names):

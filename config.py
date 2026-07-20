@@ -389,6 +389,12 @@ MIMO_API_KEY = protect_credential(get_secret("MIMO_API_KEY", ""))
 MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
 MIMO_MODEL = os.getenv("MIMO_MODEL_NAME", "mimo-v2.5")
 
+# ── 反代客户端 IP 解析 ──
+# 默认 False：使用 TCP 对端 request.client.host（最安全）。
+# 设为 True 时从 X-Forwarded-For 末尾取真实 IP，仅在你确信部署在可信反代
+# （如 nginx/Caddy）后才启用，否则攻击者可伪造 XFF 绕过登录限流/白名单。
+TRUST_FORWARDED_FOR = os.getenv("TRUST_FORWARDED_FOR", "").strip().lower() in ("1", "true", "yes", "on")
+
 # ── 默认 Provider ──
 # 初始值：环境变量 DEFAULT_PROVIDER > mimo（MiMo 是默认兜底）
 # 运行时可通过 set_default_provider() 动态更新（Web UI 切换模型时调用）

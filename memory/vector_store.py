@@ -47,13 +47,17 @@ class EmbedCache:
             return key in self._cache
 
     def get(self, text: str) -> list[float] | None:
-        """根据文本查询缓存的嵌入向量，命中时更新 LRU 顺序。"""
+        """根据文本查询缓存的嵌入向量，命中时更新 LRU 顺序。
+
+        返回 list 的浅拷贝以避免调用方修改污染缓存（修复 P0 引用泄漏缺陷）。
+        """
         key = self._key(text)
         with self._lock:
             if key in self._cache:
                 self._cache.move_to_end(key)
                 self._hits += 1
-                return self._cache[key]
+                # 返回浅拷贝防止外部 append/extend 污染缓存
+                return list(self._cache[key])
             self._misses += 1
             return None
 
@@ -134,44 +138,77 @@ class VectorStore:
             """在后台线程中初始化 SQLite 数据库，加载 sqlite_vec 扩展并创建向量虚拟表。"""
             with self._lock:
                 conn = sqlite3.connect(self._db_path, check_same_thread=False)
-                conn.enable_load_extension(True)
-                sqlite_vec.load(conn)
-                conn.enable_load_extension(False)
+                try:
+                    conn.enable_load_extension(True)
+                    sqlite_vec.load(conn)
+                    conn.enable_load_extension(False)
 
-                # 检测文件系统类型，vfat/exfat 不支持 WAL
-                from pathlib import Path
-                from db.database import _detect_fs_type
-                fs_type = _detect_fs_type(Path(self._db_path))
-                is_fat = fs_type in ("vfat", "fat", "msdos", "exfat", "fat32")
-                if is_fat:
-                    conn.execute("PRAGMA journal_mode=DELETE")
-                else:
-                    conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute("PRAGMA synchronous=NORMAL")
-                conn.execute("PRAGMA cache_size=-20000")
-                if not is_fat:
-                    conn.execute("PRAGMA mmap_size=67108864")
+                    # 检测文件系统类型，vfat/exfat 不支持 WAL
+                    from pathlib import Path
+                    from db.database import _detect_fs_type
+                    fs_type = _detect_fs_type(Path(self._db_path))
+                    is_fat = fs_type in ("vfat", "fat", "msdos", "exfat", "fat32")
+                    if is_fat:
+                        conn.execute("PRAGMA journal_mode=DELETE")
+                    else:
+                        conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                    conn.execute("PRAGMA cache_size=-20000")
+                    if not is_fat:
+                        conn.execute("PRAGMA mmap_size=67108864")
 
-                # Use configured dimensions, or default 1024 until auto-detected
-                dims = self._dimensions if self._dimensions > 0 else 1024
-                conn.execute(f"""
-                    CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec
-                    USING vec0(embedding float[{dims}])
-                """)
-                conn.execute(f"""
-                    CREATE VIRTUAL TABLE IF NOT EXISTS memories_child_vec
-                    USING vec0(embedding float[{dims}])
-                """)
-                conn.execute(f"""
-                    CREATE VIRTUAL TABLE IF NOT EXISTS kg_entities_vec
-                    USING vec0(embedding float[{dims}])
-                """)
-                conn.execute(f"""
-                    CREATE VIRTUAL TABLE IF NOT EXISTS kg_relations_vec
-                    USING vec0(embedding float[{dims}])
-                """)
-                conn.commit()
-                return conn, is_fat
+                    # 维度策略：
+                    # - 显式配置（dimensions > 0）时直接使用
+                    # - 未配置时查表已有维度；表不存在则用 1024 兜底
+                    # 修复 P0：原代码硬编码 1024 且首次 INSERT 时 _dimensions 竞态写入，
+                    # 维度不匹配时 INSERT 永久失败。
+                    if self._dimensions > 0:
+                        dims = self._dimensions
+                    else:
+                        try:
+                            row = conn.execute(
+                                "SELECT embedding FROM memories_vec LIMIT 1"
+                            ).fetchone()
+                            if row is not None and row[0] is not None:
+                                import struct
+                                raw = row[0]
+                                if isinstance(raw, (bytes, bytearray)):
+                                    dims = len(raw) // 4
+                                else:
+                                    dims = 1024
+                            else:
+                                dims = 1024
+                        except sqlite3.OperationalError:
+                            # 表不存在（首次初始化），用 1024 兜底
+                            dims = 1024
+                        # 固化检测到的维度，避免并发首 INSERT 竞态
+                        self._dimensions = dims
+
+                    conn.execute(f"""
+                        CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec
+                        USING vec0(embedding float[{dims}])
+                    """)
+                    conn.execute(f"""
+                        CREATE VIRTUAL TABLE IF NOT EXISTS memories_child_vec
+                        USING vec0(embedding float[{dims}])
+                    """)
+                    conn.execute(f"""
+                        CREATE VIRTUAL TABLE IF NOT EXISTS kg_entities_vec
+                        USING vec0(embedding float[{dims}])
+                    """)
+                    conn.execute(f"""
+                        CREATE VIRTUAL TABLE IF NOT EXISTS kg_relations_vec
+                        USING vec0(embedding float[{dims}])
+                    """)
+                    conn.commit()
+                    return conn, is_fat
+                except Exception:
+                    # 修复资源泄漏：sqlite_vec.load 失败时必须 close 连接
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    raise
 
         self._vec_conn, is_fat = await asyncio.to_thread(_init_db)
 

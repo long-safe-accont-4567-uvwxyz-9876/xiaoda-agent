@@ -1,5 +1,6 @@
 from typing import Any, ClassVar
 from collections.abc import AsyncIterator
+import hashlib
 import os
 import time
 import asyncio
@@ -22,6 +23,18 @@ from security.ssrf_guard import validate_url as _ssrf_validate_url
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
 import contextlib
+
+
+def _mask_api_key(key: str) -> str:
+    """返回 API key 的 SHA-256 哈希前 8 字符，用于日志标识而不泄漏 key 片段。
+
+    与 key_prefix/key_suffix 不同，hash 无法逆推出原始 key 内容；
+    同一 key 的 hash 稳定，可用于日志中追踪凭证轮换。
+    """
+    if not key or len(key) < 8:
+        # 短 key 通常是测试或无效值，直接返回占位符
+        return "***"
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
 
 
 MIMO_MODEL = os.getenv("MIMO_MODEL_NAME", "mimo-v2.5")
@@ -264,7 +277,8 @@ class ModelRouter:
             _ssrf_check(new_mimo_url)  # SSRF 防护：校验 base_url
             self._client = AsyncOpenAI(api_key=new_mimo_key, base_url=new_mimo_url)
             logger.info("router.mimo_client_refreshed",
-                        key_suffix=new_mimo_key[-6:] if len(new_mimo_key) >= 6 else "***")
+                        key_len=len(new_mimo_key),
+                        key_hash=_mask_api_key(new_mimo_key))
         else:
             self._client = None
 
@@ -274,7 +288,8 @@ class ModelRouter:
             _ssrf_check(new_agnes_url)  # SSRF 防护：校验 base_url
             self._agnes_client = AsyncOpenAI(api_key=new_agnes_key, base_url=new_agnes_url)
             logger.info("router.agnes_client_refreshed",
-                        key_suffix=new_agnes_key[-6:] if len(new_agnes_key) >= 6 else "***")
+                        key_len=len(new_agnes_key),
+                        key_hash=_mask_api_key(new_agnes_key))
         else:
             self._agnes_client = None
 
@@ -317,8 +332,7 @@ class ModelRouter:
         """确保凭证池中有该 provider 的最新凭证。"""
         from utils.credential_pool import Credential
         existing = pool._pool.get(provider, [])
-        key_suffix = api_key[-6:] if len(api_key) >= 6 else api_key
-        already_exists = any(c.api_key.endswith(key_suffix) for c in existing)
+        already_exists = any(c.api_key == api_key for c in existing)
         if not already_exists:
             pool.add_credential(Credential(
                 api_key=api_key,
@@ -1092,7 +1106,8 @@ class ModelRouter:
             if new_cred and new_cred.api_key != current_key:
                 logger.info("router.credential_rotated",
                             provider=provider,
-                            key_suffix=new_cred.api_key[-6:])
+                            key_len=len(new_cred.api_key),
+                            key_hash=_mask_api_key(new_cred.api_key))
                 # 更新客户端使用新凭证
                 new_client = AsyncOpenAI(
                     api_key=new_cred.api_key,

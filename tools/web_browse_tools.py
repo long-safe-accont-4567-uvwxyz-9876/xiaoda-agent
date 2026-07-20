@@ -65,7 +65,55 @@ def _is_private_ip(hostname: str) -> bool:
     return False
 
 
+def _verify_dns_pin(url: str) -> str | None:
+    """DNS Pin 一致性校验: 调用 validate_url 后实际请求前, 再次解析 hostname,
+    确认解析 IP 与 ssrf_guard 缓存的 pinned_ip 一致, 防 TOCTOU/DNS rebinding.
+
+    Returns:
+        None  — 校验通过 (或 pinned_ip 不可用, 跳过)
+        str   — 失败原因
+    """
+    try:
+        from security.ssrf_guard import get_pinned_ip
+    except ImportError:
+        return None  # ssrf_guard 不可用, 跳过
+    try:
+        pinned_ip = get_pinned_ip(url)
+    except Exception:
+        return None  # 校验异常, 跳过 (不阻塞, 已在入口处校验)
+    if not pinned_ip:
+        return None  # 无 pinned IP (例如白名单主机), 跳过
+    try:
+        from urllib.parse import urlparse
+        hostname = urlparse(url).hostname
+        if not hostname:
+            return None
+        infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        return f"DNS 解析失败: {e}"
+    current_ips: list[str] = []
+    for info in infos:
+        ip_str = info[4][0]
+        if "%" in ip_str:
+            ip_str = ip_str.split("%", 1)[0]
+        if ip_str not in current_ips:
+            current_ips.append(ip_str)
+    if pinned_ip not in current_ips:
+        logger.warning(
+            "ssrf.dns_pin_mismatch host={} pinned={} current={}",
+            hostname, pinned_ip, current_ips,
+        )
+        return f"DNS Pin 不一致 (pinned={pinned_ip}, current={current_ips})"
+    return None
+
+
 def _fetch_html(url: str, timeout: int = 15) -> tuple[int, str, str]:
+    # DNS Pin 一致性校验 (TOCTOU 防护): 实际请求前再次解析 hostname,
+    # 确认解析 IP 仍为 validate_url 锁定的 pinned_ip, 不一致则拒绝
+    pin_err = _verify_dns_pin(url)
+    if pin_err:
+        return 0, "", f"SSRF DNS Pin 校验失败: {pin_err}"
+
     try:
         client = _get_primp_client()
         resp = client.get(url, headers={

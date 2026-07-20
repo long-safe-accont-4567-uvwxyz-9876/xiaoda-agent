@@ -189,27 +189,28 @@ class KnowledgeDBV2:
     async def append_episode_ref(
         self, edge_id: str, episode_id: str, auto_commit: bool = True
     ) -> None:
-        """追加 episode 引用（去重）。同时更新关系的 episode_ids JSON。"""
+        """追加 episode 引用（去重）。同时更新关系的 episode_ids JSON。
+
+        原子化: 用 SQLite JSON1 的 json_insert + json_each 去重，
+        避免 read-modify-write 竞态导致丢失更新。
+        """
         await self._conn.execute(
             "INSERT OR IGNORE INTO kg_edge_episode_refs (edge_id, episode_id) VALUES (?, ?)",
             (edge_id, episode_id),
         )
-        # 同步更新 episode_ids JSON 列
-        cursor = await self._conn.execute(
-            "SELECT episode_ids FROM kg_relations_v2 WHERE id=?", (edge_id,)
+        # 原子追加 episode_id 到 episode_ids JSON 数组（已存在则不修改）
+        # json_insert(j, '$[#]', v) 在数组末尾追加；NOT EXISTS json_each 去重
+        # COALESCE 兜底 NULL（旧数据可能为 NULL，原实现 if row["episode_ids"] else []）
+        await self._conn.execute(
+            """UPDATE kg_relations_v2
+               SET episode_ids = json_insert(COALESCE(episode_ids, '[]'), '$[#]', ?),
+                   updated_at = ?
+               WHERE id=?
+                 AND NOT EXISTS (
+                     SELECT 1 FROM json_each(COALESCE(episode_ids, '[]')) WHERE value = ?
+                 )""",
+            (episode_id, time.time(), edge_id, episode_id),
         )
-        row = await cursor.fetchone()
-        if row:
-            try:
-                ids = json.loads(row["episode_ids"]) if row["episode_ids"] else []
-            except (json.JSONDecodeError, TypeError):
-                ids = []
-            if episode_id not in ids:
-                ids.append(episode_id)
-                await self._conn.execute(
-                    "UPDATE kg_relations_v2 SET episode_ids=?, updated_at=? WHERE id=?",
-                    (json.dumps(ids, ensure_ascii=False), time.time(), edge_id),
-                )
         if auto_commit:
             await self._conn.commit()
 
@@ -253,27 +254,29 @@ class KnowledgeDBV2:
     async def add_entity_to_community(
         self, entity_name: str, community_id: str, auto_commit: bool = True
     ) -> None:
-        """将实体加入社区（设置 community_id 专用列）。"""
+        """将实体加入社区（设置 community_id 专用列）。
+
+        原子化: 用 SQLite JSON1 的 json_insert + json_each 去重，
+        避免 member_entities 列 read-modify-write 竞态导致丢失更新。
+        """
+        now = time.time()
+        # 原子更新实体的 community_id 专用列
         await self._conn.execute(
             "UPDATE kg_entities_v2 SET community_id=?, updated_at=? WHERE name=?",
-            (community_id, time.time(), entity_name),
+            (community_id, now, entity_name),
         )
-        # 同步更新社区的 member_entities 列表
-        cursor = await self._conn.execute(
-            "SELECT member_entities FROM kg_communities WHERE id=?", (community_id,)
+        # 原子追加 entity_name 到社区的 member_entities JSON 数组（已存在则不修改）
+        # COALESCE 兜底 NULL（与原实现 if row["member_entities"] else [] 等价）
+        await self._conn.execute(
+            """UPDATE kg_communities
+               SET member_entities = json_insert(COALESCE(member_entities, '[]'), '$[#]', ?),
+                   updated_at = ?
+               WHERE id=?
+                 AND NOT EXISTS (
+                     SELECT 1 FROM json_each(COALESCE(member_entities, '[]')) WHERE value = ?
+                 )""",
+            (entity_name, now, community_id, entity_name),
         )
-        row = await cursor.fetchone()
-        if row:
-            try:
-                members = json.loads(row["member_entities"]) if row["member_entities"] else []
-            except (json.JSONDecodeError, TypeError):
-                members = []
-            if entity_name not in members:
-                members.append(entity_name)
-                await self._conn.execute(
-                    "UPDATE kg_communities SET member_entities=?, updated_at=? WHERE id=?",
-                    (json.dumps(members, ensure_ascii=False), time.time(), community_id),
-                )
         if auto_commit:
             await self._conn.commit()
 

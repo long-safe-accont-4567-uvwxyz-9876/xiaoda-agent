@@ -138,14 +138,29 @@ async def list_greetings(request: Request) -> Any:
 async def create_greeting(body: dict, request: Request) -> Any:
     core = request.app.state.core
     rec = _validate_schedule(body)
-    await core.db.execute(
-        "INSERT INTO greeting_schedules"
-        "(type, time, window_start, window_end, count_per_day, days, "
-        " prompt_hint, channels, enabled, next_fire_times, created_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,'[]',?)",
-        (rec["type"], rec["time"], rec["window_start"], rec["window_end"],
-         rec["count_per_day"], rec["days"], rec["prompt_hint"],
-         rec["channels"], rec["enabled"], time.time()))
+    # 修复 P1: 设置 user_id 实现按用户隔离 (web UI 用户统一为 'webui').
+    # 兼容旧库: 若 greeting_schedules 表无 user_id 列 (尚未迁移 v20),
+    # INSERT 会报错, 此时降级为不传 user_id (由 column DEFAULT 处理).
+    try:
+        await core.db.execute(
+            "INSERT INTO greeting_schedules"
+            "(type, time, window_start, window_end, count_per_day, days, "
+            " prompt_hint, channels, enabled, next_fire_times, created_at, user_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,'[]',?,?)",
+            (rec["type"], rec["time"], rec["window_start"], rec["window_end"],
+             rec["count_per_day"], rec["days"], rec["prompt_hint"],
+             rec["channels"], rec["enabled"], time.time(), "webui"))
+    except Exception as _e:
+        # 旧库无 user_id 列, 降级为原 INSERT
+        logger.debug("schedule.create_greeting_fallback_no_user_id error={}", str(_e))
+        await core.db.execute(
+            "INSERT INTO greeting_schedules"
+            "(type, time, window_start, window_end, count_per_day, days, "
+            " prompt_hint, channels, enabled, next_fire_times, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,'[]',?)",
+            (rec["type"], rec["time"], rec["window_start"], rec["window_end"],
+             rec["count_per_day"], rec["days"], rec["prompt_hint"],
+             rec["channels"], rec["enabled"], time.time()))
     row = await core.db.fetch_one(
         "SELECT * FROM greeting_schedules ORDER BY id DESC LIMIT 1")
     await _audit(request, "greeting.create", json.dumps(body, ensure_ascii=False))

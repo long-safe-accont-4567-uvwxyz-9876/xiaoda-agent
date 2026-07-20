@@ -779,13 +779,26 @@ class MemoryDB:
         if auto_commit:
             await self._conn.commit()
 
-    async def delete_memories_batch(self, memory_ids: list[int], auto_commit: bool = True) -> None:
-        """批量删除记忆，同步批量删除 FTS 索引（消除 N+1 查询）。
+    async def delete_memories_batch(self, memory_ids: list[int],
+                                     vector_store: Any = None,
+                                     auto_commit: bool = True) -> None:
+        """批量删除记忆，同步批量删除 FTS 索引与向量（消除 N+1 查询）。
 
         保留 delete_memory 的 FTS 副作用：批量删除主表后批量删除 FTS 记录。
+        若传入 vector_store，则先逐条删除向量（memories_vec），避免孤儿向量。
         """
         if not memory_ids:
             return
+        # 先清理向量（与 delete_memory_with_vector 保持一致：先向量后主表）
+        if vector_store is not None:
+            for mid in memory_ids:
+                try:
+                    await vector_store.delete(mid)
+                except Exception as e:
+                    logger.error("db_memory.vec_delete_batch_failed",
+                                 memory_id=mid, error=str(e))
+                    # 单条向量删除失败不阻塞主表清理，但向上抛出由调用方决策
+                    raise
         placeholders = ",".join("?" * len(memory_ids))
         await self._conn.execute(
             f"DELETE FROM episodic_memories WHERE id IN ({placeholders})",

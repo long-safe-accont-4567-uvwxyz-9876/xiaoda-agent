@@ -2342,7 +2342,7 @@ class MemoryManager:
             self.invalidate_memory_count_cache()
 
             if self._query_cache:
-                self._query_cache.invalidate()
+                await self._query_cache.invalidate()
 
             self._save_state_json(summary, importance, emotion)
 
@@ -2569,7 +2569,7 @@ class MemoryManager:
                            raw_id=raw_id, knowledge_id=knowledge_id)
             # 蒸馏完成后失效查询缓存：新提炼知识需被后续检索感知
             if self._query_cache:
-                self._query_cache.invalidate()
+                await self._query_cache.invalidate()
         except Exception as e:
             logger.warning("memory.distill_to_knowledge_failed",
                           raw_id=raw_id, retry=_retry, error=str(e))
@@ -2610,7 +2610,7 @@ class MemoryManager:
                 await self.memory.update_distill_status(raw_id, "distill_failed")
             # summary 更新后失效查询缓存，避免返回旧内容
             if self._query_cache:
-                self._query_cache.invalidate()
+                await self._query_cache.invalidate()
         except Exception as e:
             logger.warning("memory.fallback_save_failed", raw_id=raw_id, error=str(e))
 
@@ -2948,7 +2948,7 @@ class MemoryManager:
 
             # enrichment 更新了 summary/entities/子chunk，失效查询缓存
             if self._query_cache:
-                self._query_cache.invalidate()
+                await self._query_cache.invalidate()
 
         except Exception as e:
             logger.debug("memory.enrich_failed",

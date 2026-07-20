@@ -25,8 +25,13 @@ class TestEncryptedCredential:
             pytest.skip("cryptography not installed")
         cred = EncryptedCredential.from_plaintext("sk-secret-key")
         s = str(cred)
+        # 明文绝不能出现在字符串表示中
         assert "sk-secret-key" not in s
-        assert "***" in s
+        # 修复后改用 sha256(密文)[:8] 作为标识符，不暴露任何密文片段
+        # （历史版本是 `***{ciphertext[-6:]}` 会暴露末 6 字符）
+        assert s.startswith("EncryptedCredential(hash=")
+        # 同一凭证的字符串表示应稳定（用于日志比对）
+        assert str(cred) == s
 
     def test_protect_credential_fallback(self):
         from utils.encrypted_credential import protect_credential, reveal_credential

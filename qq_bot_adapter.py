@@ -554,15 +554,24 @@ class AIQQBot(botpy.Client):
         return content, image_data, user_input, user_openid, user_id
 
     def _identify_c2c_master(self, user_openid: str) -> bool:
-        """识别发送者是否为主人；首次私聊时自动将发送者绑定为主人。"""
+        """识别发送者是否为主人。
+
+        安全策略：不再"首个私聊者自动绑主"。若 MASTER_QQ_OPENID 未配置，
+        所有私聊用户均视为非主人（fail-closed），并通过 /whoami 引导用户
+        在 Setup Wizard 中显式录入主人 openid。这避免公开部署时任意第一个
+        私聊者窃取主人权限。
+        """
         master_raw = os.getenv("MASTER_QQ_OPENID", "").strip()
         master_ids = [x.strip() for x in master_raw.split(",") if x.strip()]
         is_master = bool(master_ids) and user_openid in master_ids
-        # 私聊自动绑定：首次私聊自动将发送者绑定为主人
         if not is_master and user_openid and not master_ids:
-            _save_master_openid(user_openid)
-            is_master = True
-            logger.info("qq_bot.c2c_auto_bind", openid=user_openid)
+            # 仅记录一次警告，引导用户去 Setup Wizard 配置主人 openid
+            if not getattr(self, "_warned_no_master", False):
+                logger.warning(
+                    "qq_bot.master_not_configured url=setup_wizard "
+                    "hint=run /whoami to read openid, then set MASTER_QQ_OPENID"
+                )
+                self._warned_no_master = True
         return is_master
 
     async def _get_or_create_c2c_session(self, user_openid: str) -> str:

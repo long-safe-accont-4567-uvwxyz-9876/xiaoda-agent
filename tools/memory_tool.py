@@ -171,6 +171,7 @@ async def recall(query: str, top_k: int = 8) -> ToolResult:
     permission=ToolPermission.READ_WRITE,
     category="memory",
     max_frequency=3,
+    requires_confirmation=True,
 )
 async def forget(query: str) -> ToolResult:
     try:

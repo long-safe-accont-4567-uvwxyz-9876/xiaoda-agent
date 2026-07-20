@@ -16,6 +16,9 @@ OWNER_ONLY_COMMANDS: set[str] = {
     "/agent",   # 切换对话目标 Agent
     "/cam",     # 摄像头控制（隐私敏感）
     "/compress", # 手动压缩上下文（影响运行时状态）
+    "/forget",  # 删除记忆（数据破坏性操作）
+    "/learn",   # 学习管理（影响长期记忆与行为）
+    "/note",    # 笔记管理（涉及持久化数据）
 }
 
 COMMAND_DESCRIPTIONS = {

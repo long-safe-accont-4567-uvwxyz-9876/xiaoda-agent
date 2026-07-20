@@ -23,7 +23,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 19
+CURRENT_SCHEMA_VERSION = 20
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -276,6 +276,7 @@ class DatabaseManager:
             (17, "greeting_schedules_reminder_type", self._migrate_v17),
             (18, "distill_status_column", self._migrate_v18),
             (19, "episodic_memories.updated_at+touch_trigger", self._migrate_v19),
+            (20, "greeting_schedules.user_id_column", self._migrate_v20),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -974,8 +975,8 @@ class DatabaseManager:
         except Exception as e:
             logger.warning("database.migration_v17_check_failed", error=str(e))
 
-        # 重建表以更新 CHECK 约束
-        await self._conn.execute("""CREATE TABLE IF NOT EXISTS greeting_schedules_v17 ( id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL CHECK(type IN ('fixed','random','reminder')), time TEXT DEFAULT '', window_start TEXT DEFAULT '', window_end TEXT DEFAULT '', count_per_day INTEGER DEFAULT 1, days TEXT NOT NULL DEFAULT '[1,2,3,4,5,6,7]', prompt_hint TEXT DEFAULT '', channels TEXT NOT NULL DEFAULT '["web"]', enabled INTEGER NOT NULL DEFAULT 1, next_fire_times TEXT DEFAULT '[]', drawn_date TEXT DEFAULT '', created_at REAL NOT NULL )""")
+        # 重建表以更新 CHECK 约束 (含 user_id 列以匹配 v20 schema, 避免列数不匹配)
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS greeting_schedules_v17 ( id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL CHECK(type IN ('fixed','random','reminder')), time TEXT DEFAULT '', window_start TEXT DEFAULT '', window_end TEXT DEFAULT '', count_per_day INTEGER DEFAULT 1, days TEXT NOT NULL DEFAULT '[1,2,3,4,5,6,7]', prompt_hint TEXT DEFAULT '', channels TEXT NOT NULL DEFAULT '["web"]', enabled INTEGER NOT NULL DEFAULT 1, next_fire_times TEXT DEFAULT '[]', drawn_date TEXT DEFAULT '', created_at REAL NOT NULL, user_id TEXT NOT NULL DEFAULT 'default' )""")
         await self._conn.execute("""INSERT OR IGNORE INTO greeting_schedules_v17 SELECT * FROM greeting_schedules""")
         await self._conn.execute("""DROP TABLE IF EXISTS greeting_schedules""")
         await self._conn.execute("""ALTER TABLE greeting_schedules_v17 RENAME TO greeting_schedules""")
@@ -1031,6 +1032,22 @@ class DatabaseManager:
                END"""
         )
         logger.info("database.migration_v19_updated_at_trigger_done")
+
+    async def _migrate_v20(self) -> None:
+        """v20: greeting_schedules 添加 user_id 列, 用于 reminder 用户隔离.
+
+        历史数据回填为 'default' (任何已登录用户均可访问, 兼容旧逻辑);
+        新建 reminder 由调用方传入 user_id, 实现按用户隔离 update/delete.
+        """
+        cols = {r["name"] for r in await self.fetch_all(
+            "PRAGMA table_info(greeting_schedules)")}
+        if "user_id" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE greeting_schedules ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'"
+            )
+            logger.info("database.migration_v20_user_id_added")
+        else:
+            logger.info("database.migration_v20_skipped_column_exists")
 
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")
@@ -1257,7 +1274,7 @@ class DatabaseManager:
     async def _ddl_schedule_greeting_tables(self) -> None:
         """建表：调度与问候相关表（cron_last_run / greeting_schedules / greeting_log）。"""
         await self._conn.execute("""CREATE TABLE IF NOT EXISTS cron_last_run ( task_name TEXT PRIMARY KEY, last_run REAL NOT NULL )""")
-        await self._conn.execute("""CREATE TABLE IF NOT EXISTS greeting_schedules ( id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL CHECK(type IN ('fixed','random','reminder')), time TEXT DEFAULT '', window_start TEXT DEFAULT '', window_end TEXT DEFAULT '', count_per_day INTEGER DEFAULT 1, days TEXT NOT NULL DEFAULT '[1,2,3,4,5,6,7]', prompt_hint TEXT DEFAULT '', channels TEXT NOT NULL DEFAULT '["web"]', enabled INTEGER NOT NULL DEFAULT 1, next_fire_times TEXT DEFAULT '[]', drawn_date TEXT DEFAULT '', created_at REAL NOT NULL )""")
+        await self._conn.execute("""CREATE TABLE IF NOT EXISTS greeting_schedules ( id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL CHECK(type IN ('fixed','random','reminder')), time TEXT DEFAULT '', window_start TEXT DEFAULT '', window_end TEXT DEFAULT '', count_per_day INTEGER DEFAULT 1, days TEXT NOT NULL DEFAULT '[1,2,3,4,5,6,7]', prompt_hint TEXT DEFAULT '', channels TEXT NOT NULL DEFAULT '["web"]', enabled INTEGER NOT NULL DEFAULT 1, next_fire_times TEXT DEFAULT '[]', drawn_date TEXT DEFAULT '', created_at REAL NOT NULL, user_id TEXT NOT NULL DEFAULT 'default' )""")
         await self._conn.execute("""CREATE TABLE IF NOT EXISTS greeting_log ( id INTEGER PRIMARY KEY AUTOINCREMENT, schedule_id INTEGER DEFAULT 0, fired_at REAL NOT NULL, content TEXT DEFAULT '', channel TEXT DEFAULT 'web', reason TEXT DEFAULT '' )""")
 
     async def _ddl_api_media_tables(self) -> None:

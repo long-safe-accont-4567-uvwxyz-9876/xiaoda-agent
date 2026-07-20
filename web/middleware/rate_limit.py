@@ -58,13 +58,52 @@ _SAVE_INTERVAL = 60.0        # 持久化保存间隔 (秒)
 _EVICT_INACTIVE_AFTER = 3600.0  # 桶超过此时间未访问将被淘汰 (秒)
 
 
+def _trust_forwarded_for() -> bool:
+    """是否信任 X-Forwarded-For 头 (反代场景).
+
+    默认不信任 (兼容现状). 通过环境变量 ``TRUST_FORWARDED_FOR=1`` 或
+    config 字段 ``TRUST_FORWARDED_FOR`` 显式开启.
+    """
+    env_val = os.getenv("TRUST_FORWARDED_FOR", "").strip().lower()
+    if env_val in ("1", "true", "yes", "on"):
+        return True
+    try:
+        from config import TRUST_FORWARDED_FOR as _cfg_val  # type: ignore
+        if _cfg_val:
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _is_private_ip(host: str) -> bool:
-    """判断 host 是否为回环/内网/链路本地 IP (白名单放行)。"""
+    """判断 host 是否为回环/内网/链路本地/保留 IP (白名单放行)。
+
+    覆盖:
+    - RFC1918 私有地址 (10/8、172.16/12、192.168/16)
+    - 回环 (127/8、::1)
+    - 链路本地 (169.254/16、fe80::/10)
+    - CGNAT (100.64/10, Python < 3.13 的 is_private 不覆盖, 显式判断)
+    - 保留地址、多播地址
+    - IPv6 ULA (fc00::/7)
+    """
     if not host or host in _LOCALHOST_HOSTS:
         return True
     try:
         ip = ipaddress.ip_address(host)
-        return ip.is_loopback or ip.is_private or ip.is_link_local
+        if (
+            ip.is_loopback
+            or ip.is_private
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+        ):
+            return True
+        # CGNAT 100.64.0.0/10: Python < 3.13 的 is_private 不覆盖, 显式判断
+        if isinstance(ip, ipaddress.IPv4Address):
+            if 0x64400000 <= int(ip) <= 0x647FFFFF:  # 100.64.0.0 - 100.127.255.255
+                return True
+        return False
     except ValueError:
         # 非合法 IP (如 "testclient"), 不视为内网
         return False
@@ -320,6 +359,31 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _client_host(request: Request) -> str:
+        """提取客户端真实 IP。
+
+        修复 P1：原代码用 request.client.host，反代后所有请求对端均为 127.0.0.1，
+        导致限流白名单对所有人失效。
+        默认不信任 X-Forwarded-For (兼容现状); 显式设置环境变量
+        ``TRUST_FORWARDED_FOR=1`` 或 config 字段后启用, 启用时取 XFF 中
+        最右侧非可信代理 IP (覆盖多层反代场景)。
+        """
+        trust_xff = _trust_forwarded_for()
+        if trust_xff:
+            xff = request.headers.get("X-Forwarded-For", "") or request.headers.get("x-forwarded-for", "")
+            if xff:
+                # X-Forwarded-For: client, proxy1, proxy2
+                # 取最右侧非内网/非可信代理的 IP, 避免攻击者伪造 XFF 前缀
+                candidates = [ip.strip() for ip in xff.split(",") if ip.strip()]
+                for ip in reversed(candidates):
+                    try:
+                        addr = ipaddress.ip_address(ip)
+                        if not (addr.is_private or addr.is_loopback):
+                            return ip
+                    except ValueError:
+                        continue
+                # 全部都是内网 (如纯内网部署), 取最左侧 (原始客户端)
+                if candidates:
+                    return candidates[0]
         client = request.client
         return client.host if client else "unknown"
 

@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import hashlib
 import os
 import time
 import threading
@@ -12,6 +13,16 @@ from dataclasses import dataclass
 from loguru import logger
 
 from .error_classifier import ClassifiedError, FailoverReason
+
+
+def _mask_api_key(key: str) -> str:
+    """将 api_key 转为 8 字符 sha256 前缀，避免日志泄漏真实 key 片段。
+
+    同一 key 哈希稳定，不同 key 哈希不同，无法逆推原始 key。
+    """
+    if not key:
+        return "***"
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
 
 
 class CredentialState(Enum):
@@ -66,7 +77,7 @@ class CredentialPool:
             self._pool[provider].append(cred)
             logger.info("credential_pool.added",
                         provider=provider,
-                        key_suffix=cred.api_key[-6:] if len(cred.api_key) >= 6 else "***",
+                        key_hash=_mask_api_key(cred.api_key),
                         total=len(self._pool[provider]))
 
     async def get_credential(self, provider: str) -> Credential | None:
@@ -103,7 +114,7 @@ class CredentialPool:
                     remaining = EXHAUSTED_COOLDOWN - elapsed
                     logger.warning("credential_pool.all_exhausted_using_cooling",
                                    provider=provider,
-                                   key_suffix=cred.api_key[-6:] if len(cred.api_key) >= 6 else "***",
+                                   key_hash=_mask_api_key(cred.api_key),
                                    remaining=f"{remaining:.0f}s")
                     self._cursor[provider] = (idx + 1) % n
                     cred.use_count += 1
@@ -138,7 +149,7 @@ class CredentialPool:
                     target.state = CredentialState.DEAD
                     logger.error("credential_pool.credential_dead",
                                  provider=provider,
-                                 key_suffix=target.api_key[-6:] if len(target.api_key) >= 6 else "***",
+                                 key_hash=_mask_api_key(target.api_key),
                                  reason=error.reason.value,
                                  consecutive_auth_errors=target.error_count)
                 else:
@@ -148,7 +159,7 @@ class CredentialPool:
                     target.cooldown_until = time.time() + EXHAUSTED_COOLDOWN
                     logger.warning("credential_pool.credential_auth_exhausted",
                                    provider=provider,
-                                   key_suffix=target.api_key[-6:] if len(target.api_key) >= 6 else "***",
+                                   key_hash=_mask_api_key(target.api_key),
                                    error_count=target.error_count,
                                    threshold=AUTH_ERROR_DEAD_THRESHOLD)
             elif error.reason == FailoverReason.RATE_LIMIT:
@@ -164,7 +175,7 @@ class CredentialPool:
                 target.cooldown_until = time.time() + backoff
                 logger.warning("credential_pool.credential_exhausted",
                                provider=provider,
-                               key_suffix=target.api_key[-6:] if len(target.api_key) >= 6 else "***",
+                               key_hash=_mask_api_key(target.api_key),
                                cooldown=f"{backoff:.0f}s")
             else:
                 logger.debug("credential_pool.error_no_state_change",
@@ -184,7 +195,7 @@ class CredentialPool:
                 target.error_count = 0  # 成功后重置错误计数
                 logger.info("credential_pool.recovered_on_success",
                             provider=provider,
-                            key_suffix=target.api_key[-6:] if len(target.api_key) >= 6 else "***")
+                            key_hash=_mask_api_key(target.api_key))
             elif target and target.state == CredentialState.OK:
                 target.error_count = 0  # 成功后重置错误计数，避免非连续 AUTH_ERROR 累积
 
@@ -201,7 +212,7 @@ class CredentialPool:
                     cred.cooldown_until = 0.0
                     logger.info("credential_pool.exhausted_recovered",
                                 provider=provider,
-                                key_suffix=cred.api_key[-6:] if len(cred.api_key) >= 6 else "***")
+                                key_hash=_mask_api_key(cred.api_key))
                 elif cred.cooldown_until <= 0:
                     # 兼容旧数据：没有 cooldown_until 时用默认冷却期
                     if now - cred.exhausted_at >= EXHAUSTED_COOLDOWN:
@@ -209,7 +220,7 @@ class CredentialPool:
                         cred.exhausted_at = 0.0
                         logger.info("credential_pool.exhausted_recovered",
                                     provider=provider,
-                                    key_suffix=cred.api_key[-6:] if len(cred.api_key) >= 6 else "***")
+                                    key_hash=_mask_api_key(cred.api_key))
 
     def _find_active_credential(self, provider: str) -> Credential | None:
         """找到最近使用的活跃凭证（ok 或 exhausted 状态）
@@ -237,7 +248,7 @@ class CredentialPool:
                 cred.last_error = ""
                 logger.info("credential_pool.dead_reset",
                             provider=provider,
-                            key_suffix=cred.api_key[-6:] if len(cred.api_key) >= 6 else "***")
+                            key_hash=_mask_api_key(cred.api_key))
 
     def replace_provider(self, provider: str, new_credential: "Credential") -> None:
         """替换指定 provider 的所有凭证为单个新凭证（Setup 保存新 Key 后调用）。
@@ -249,7 +260,7 @@ class CredentialPool:
         logger.info("credential_pool.provider_replaced",
                     provider=provider,
                     old_count=old_count,
-                    key_suffix=new_credential.api_key[-6:] if len(new_credential.api_key) >= 6 else "***")
+                    key_hash=_mask_api_key(new_credential.api_key))
 
     def get_stats(self) -> dict:
         """获取凭证池状态统计"""

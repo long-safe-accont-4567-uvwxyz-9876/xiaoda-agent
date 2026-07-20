@@ -301,7 +301,7 @@ class TestQueryCache:
 
         cache = QueryCache(embed_func=mock_embed, threshold=0.5)
         await cache.put("q1", [{"id": 1}])
-        cache.invalidate()
+        await cache.invalidate()
         assert cache.stats["size"] == 0
 
 

@@ -151,7 +151,9 @@ async def _run_agently(args: list[str], timeout: int = 60) -> tuple[int, str, st
     # 确保 node 在 PATH 中（symlink → run.js 需要 node 解释器）
     _ensure_node_in_path(env)
 
-    logger.debug("mail.run_agently cli={} home={} args={}", cli, env.get("HOME", ""), " ".join(args[:3]))
+    # 仅记录子命令名（如 "+send"），不记录任何参数值，避免泄漏收件人邮箱等敏感信息
+    subcommand = args[1] if len(args) > 1 else "(unknown)"
+    logger.debug("mail.run_agently cli={} home={} subcommand={}", cli, env.get("HOME", ""), subcommand)
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -411,6 +413,7 @@ async def mail_search(q: str, search_in: str = "SEARCH_IN_ALL",
     permission=ToolPermission.EXECUTE,
     category="web",
     max_frequency=5,
+    requires_confirmation=True,
 )
 async def mail_send(to: list[str], subject: str, body: str = "",
                     cc: list[str] | None = None, bcc: list[str] | None = None,
@@ -457,6 +460,7 @@ async def mail_send(to: list[str], subject: str, body: str = "",
     permission=ToolPermission.EXECUTE,
     category="web",
     max_frequency=5,
+    requires_confirmation=True,
 )
 async def mail_reply(id: str, body: str = "", reply_all: bool = False,
                      cc: list[str] | None = None, bcc: list[str] | None = None,
@@ -503,6 +507,7 @@ async def mail_reply(id: str, body: str = "", reply_all: bool = False,
     permission=ToolPermission.EXECUTE,
     category="web",
     max_frequency=5,
+    requires_confirmation=True,
 )
 async def mail_forward(id: str, to: list[str], body: str = "",
                        cc: list[str] | None = None, bcc: list[str] | None = None,
@@ -544,6 +549,7 @@ async def mail_forward(id: str, to: list[str], body: str = "",
     permission=ToolPermission.EXECUTE,
     category="web",
     max_frequency=5,
+    requires_confirmation=True,
 )
 async def mail_trash(id: str, confirmation_token: str = "") -> ToolResult:
     if not id:
@@ -578,8 +584,14 @@ async def mail_download_attachment(msg: str, att: str, output: str = "./download
     if not msg or not att:
         return ToolResult.fail("请提供邮件 ID msg（msg_xxx）和附件 ID att（att_xxx）")
 
+    # 路径沙箱校验：防止 LLM 被诱导写入 /etc/cron.d/evil 等危险路径
+    from tools.file_tools_v2 import _validate_path
+    allowed, resolved_output, reason = _validate_path(output, mode="write")
+    if not allowed:
+        return ToolResult.fail(f"unsafe output path: {output}")
+
     args = ["attachment", "+download", "--msg", msg, "--att", att]
-    _add_val(args, "--output", output)
+    _add_val(args, "--output", resolved_output)
 
     rc, out, err = await _run_agently(args, timeout=60)
     return _parse_output(rc, out, err)

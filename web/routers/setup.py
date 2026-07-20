@@ -68,14 +68,22 @@ def _mask_key_value(val: str) -> str:
 
 async def _is_first_run_or_authenticated(request: Request) -> str:
     """认证依赖：首次运行（.env 不存在或 MIMO_API_KEY 为空）时允许无认证访问；
-    非首次运行时必须携带有效 Bearer Token。返回用户标识。"""
+    非首次运行时必须携带有效 Bearer Token。返回用户标识。
+
+    安全策略：fail-closed。若 is_first_run() 因文件锁、导入错误、.env 解析
+    异常等任何原因抛错，一律要求认证，避免攻击者通过制造异常绕过认证调用
+    /setup/keys 等敏感端点覆写 .env。
+    """
     try:
         from setup_wizard import is_first_run
         first_run = is_first_run()
     except Exception as e:
-        # 降级：无法判断时允许访问，避免把首次安装流程锁死
-        logger.warning("setup.first_run_check_failed error={} -> allow", str(e))
-        first_run = True
+        # fail-closed：无法判断时拒绝访问，要求管理员手动介入
+        logger.error("setup.first_run_check_failed error={} -> deny", str(e))
+        raise HTTPException(
+            status_code=503,
+            detail="Setup availability check failed. Configure .env manually or contact admin."
+        )
     if first_run:
         return "setup"
     return await get_current_user(request)

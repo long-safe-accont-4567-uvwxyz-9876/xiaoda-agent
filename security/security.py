@@ -477,11 +477,22 @@ class SecurityFilter:
         self._emergency_stop = False
 
     def is_owner(self, user_id: str) -> bool:
-        """判断 user_id 是否为主人，兼容 qq_{openid} 和裸 openid 两种格式。"""
+        """判断 user_id 是否为主人，兼容 qq_{openid} 和裸 openid 两种格式。
+
+        安全策略：未配置 OWNER_IDS 时 fail-closed（返回 False），避免公开
+        部署场景下任何用户都被误判为主人。本地 cli / web 入口由调用方自行
+        放行（这些通道天然受主机隔离保护）。
+        """
         if not user_id:
             return False
         if not self.owner_ids:
-            return True  # 未配置 OWNER_IDS 时默认所有人都是主人（方便首次使用）
+            # 仅记录一次警告，引导用户配置 OWNER_IDS
+            if not getattr(self, "_warned_no_owner", False):
+                logger.warning(
+                    "security.owner_ids_not_configured hint=set OWNER_IDS to enable owner checks"
+                )
+                self._warned_no_owner = True
+            return False
         # 直接匹配
         if user_id in self.owner_ids:
             return True

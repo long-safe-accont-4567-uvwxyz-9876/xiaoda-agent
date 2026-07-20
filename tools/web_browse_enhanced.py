@@ -40,7 +40,7 @@ async def _extract_via_jina(url: str) -> tuple[str, str]:
     headers = {"Accept": "text/markdown", "X-Return-Format": "markdown"}
     if JINA_API_KEY:
         headers["Authorization"] = f"Bearer {JINA_API_KEY}"
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True, max_redirects=3, event_hooks={"request": [_ssrf_request_hook]}) as client:
         resp = await client.get(jina_url, headers=headers)
     if resp.status_code == 200:
         content = resp.text
@@ -72,7 +72,7 @@ async def _extract_zhihu(url: str) -> tuple[str, str]:
         # 专栏文章等其他页面，保留原 URL
         mobile_url = url
     headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X)", "Accept-Language": "zh-CN,zh;q=0.9"}
-    async with httpx.AsyncClient(timeout=10, follow_redirects=True, headers=headers) as client:
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True, max_redirects=3, headers=headers, event_hooks={"request": [_ssrf_request_hook]}) as client:
         resp = await client.get(mobile_url)
     if resp.status_code != 200:
         raise RuntimeError(f"知乎提取失败: HTTP {resp.status_code}")
@@ -89,7 +89,7 @@ async def _extract_zhihu(url: str) -> tuple[str, str]:
 
 async def _extract_bilibili(url: str) -> tuple[str, str]:
     headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "zh-CN,zh;q=0.9"}
-    async with httpx.AsyncClient(timeout=10, follow_redirects=True, headers=headers) as client:
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True, max_redirects=3, headers=headers, event_hooks={"request": [_ssrf_request_hook]}) as client:
         resp = await client.get(url)
     if resp.status_code != 200:
         raise RuntimeError(f"B站提取失败: HTTP {resp.status_code}")
@@ -137,6 +137,22 @@ async def _is_private_ip_async(hostname: str) -> bool:
 async def _ssrf_check_async(url: str) -> tuple[bool, str]:
     """SSRF v2 5步法校验 (在线程中执行, 避免阻塞事件循环)"""
     return await asyncio.to_thread(_ssrf_validate_url, url)
+
+
+async def _ssrf_request_hook(request: httpx.Request) -> None:
+    """httpx event hook: 每个请求(含重定向目标)前重新校验 SSRF.
+
+    用于 follow_redirects=True 场景: 重定向目标可能在沙箱外或内网,
+    通过 request event hook 对每次发请求(包括重定向)前再跑一次 5 步法校验,
+    不通过则抛 httpx.HTTPError 中止请求。
+    """
+    url = str(request.url)
+    try:
+        ok, reason = await _ssrf_check_async(url)
+    except Exception as e:
+        raise httpx.HTTPError(f"SSRF 校验异常: {e}", request=request) from e
+    if not ok:
+        raise httpx.HTTPError(f"SSRF blocked: {reason}", request=request)
 
 
 @register_tool(

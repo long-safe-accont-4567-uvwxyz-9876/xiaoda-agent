@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 import time
 import json
@@ -19,6 +20,24 @@ from web.schemas import Envelope, LoginRequest, LoginResponse
 import contextlib
 
 router = APIRouter(tags=["auth"])
+
+
+def _trust_forwarded_for() -> bool:
+    """是否信任 X-Forwarded-For 头 (反代场景).
+
+    默认不信任 (兼容现状). 通过环境变量 ``TRUST_FORWARDED_FOR=1`` 或
+    config 字段 ``TRUST_FORWARDED_FOR`` 显式开启.
+    """
+    env_val = os.getenv("TRUST_FORWARDED_FOR", "").strip().lower()
+    if env_val in ("1", "true", "yes", "on"):
+        return True
+    try:
+        from config import TRUST_FORWARDED_FOR as _cfg_val  # type: ignore
+        if _cfg_val:
+            return True
+    except Exception:
+        pass
+    return False
 
 _tokens: OrderedDict[str, float] = OrderedDict()
 _TOKENS_MAX_SIZE = 1000
@@ -176,22 +195,66 @@ def _validate_token(token: str) -> bool:
 
 
 def _is_private_ip(ip: str) -> bool:
-    """Check RFC1918 private IP or loopback."""
-    if ip in ("127.0.0.1", "::1", "localhost"):
+    """判断 IP 是否为回环/内网/链路本地/保留地址。
+
+    使用 ipaddress 标准库替代手写判断，覆盖：
+    - RFC1918 私有地址（10/8、172.16/12、192.168/16）
+    - 回环（127/8、::1）
+    - 链路本地（169.254/16、fe80::/10）
+    - CGNAT（100.64/10，Python < 3.13 的 is_private 不覆盖, 显式判断）
+    - 多播、保留地址
+    - IPv6 ULA（fc00::/7）
+    修复 P1：原手写判断遗漏 CGNAT、169.254、IPv6 ULA 等。
+    """
+    if not ip or ip in ("127.0.0.1", "::1", "localhost"):
         return True
-    parts = ip.split(".")
-    if len(parts) != 4:
-        return False
     try:
-        first = int(parts[0])
-        second = int(parts[1])
-    except (ValueError, IndexError):
+        addr = ipaddress.ip_address(ip)
+        if (
+            addr.is_loopback
+            or addr.is_private
+            or addr.is_link_local
+            or addr.is_reserved
+            or addr.is_multicast
+        ):
+            return True
+        # CGNAT 100.64.0.0/10: Python < 3.13 的 is_private 不覆盖, 显式判断
+        if isinstance(addr, ipaddress.IPv4Address):
+            if 0x64400000 <= int(addr) <= 0x647FFFFF:  # 100.64.0.0 - 100.127.255.255
+                return True
         return False
-    if first == 10:
-        return True
-    if first == 172 and 16 <= second <= 31:
-        return True
-    return bool(first == 192 and second == 168)
+    except ValueError:
+        return False
+
+
+def _get_client_ip(request: Request) -> str:
+    """提取客户端真实 IP。
+
+    默认使用 TCP 对端 ``request.client.host``。若部署在可信反代后且
+    ``TRUST_FORWARDED_FOR`` 启用，则解析 ``X-Forwarded-For`` 头:
+    取最右侧非可信代理 IP (覆盖多层反代场景, 跳过末尾的内网代理 IP).
+    修复 P1：原代码用 request.client.host，反代后所有请求对端均为 127.0.0.1，
+    导致无密码模式对公网开放、限流白名单失效。
+    """
+    if _trust_forwarded_for():
+        xff = request.headers.get("X-Forwarded-For", "") or request.headers.get("x-forwarded-for", "")
+        if xff:
+            # X-Forwarded-For: client, proxy1, proxy2
+            # 取最右侧非内网/非可信代理的 IP, 避免攻击者伪造 XFF 前缀
+            candidates = [ip.strip() for ip in xff.split(",") if ip.strip()]
+            for ip in reversed(candidates):
+                try:
+                    addr = ipaddress.ip_address(ip)
+                    if not (addr.is_private or addr.is_loopback):
+                        return ip
+                except ValueError:
+                    continue
+            # 全部都是内网 (如纯内网部署), 取最左侧 (原始客户端)
+            if candidates:
+                return candidates[0]
+    if request.client:
+        return request.client.host
+    return "unknown"
 
 
 async def get_current_user(request: Request) -> str:
@@ -235,7 +298,7 @@ def _cleanup_expired_rate_limits() -> None:
 @router.post("/auth/login", response_model=Envelope[LoginResponse])
 async def login(req: LoginRequest, request: Request) -> Any:
     password = os.getenv("WEBUI_PASSWORD", "")
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _get_client_ip(request)
 
     # Rate limit check
     with _rate_limit_lock:

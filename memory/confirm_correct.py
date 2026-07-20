@@ -12,6 +12,11 @@ from zoneinfo import ZoneInfo
 from loguru import logger
 from memory.fsrs_model import FSRSModel, MemoryState, MemoryPhase, ReinforcementSignal
 
+# 命名空间前缀避免跨模块 hash 冲突；使用 SHA-256 前 16 字符（64 位空间）
+# 修复 P0：MD5[:12] 仅 48 位空间，约 16M 条目内必然碰撞，导致 UPSERT 覆盖原节点。
+_NODE_ID_PREFIX = "cc"
+_NODE_HASH_SALT = b"xiaoda-confirm-correct-v2"
+
 _SH_TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -35,8 +40,14 @@ class ConfirmCorrect:
         return text.strip()
 
     def _make_node_id(self, text: str) -> str:
+        """生成节点 ID。
+
+        使用 SHA-256 + 模块级 salt，取前 16 字符（64 位空间）。
+        相比原 MD5[:12]（48 位），碰撞概率从 ~16M 降到 ~10^19。
+        """
         cleaned = self._clean_text(text)
-        return hashlib.md5(cleaned.encode("utf-8")).hexdigest()[:12]
+        h = hashlib.sha256(_NODE_HASH_SALT + cleaned.encode("utf-8")).hexdigest()[:16]
+        return f"{_NODE_ID_PREFIX}_{h}"
 
     async def confirm(self, node_ids: list[str]) -> dict:
         """确认强化
@@ -75,7 +86,8 @@ class ConfirmCorrect:
             state = MemoryState(
                 difficulty=node.get("difficulty", 5.0),
                 stability=node.get("stability", 3.0),
-                phase=MemoryPhase(node.get("phase", "buffer")),
+                # 使用 safe() 防止非法 phase 值导致 ValueError 中断整个循环
+                phase=MemoryPhase.safe(node.get("phase", "buffer")),
                 last_review=node.get("last_review", 0.0) or now_ts,
                 created_at=_created_at if _created_at > 0.0 else now_ts,
                 reinforcement_count=node.get("reinforcement_count", 0),

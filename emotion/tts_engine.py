@@ -456,8 +456,8 @@ class TTSEngine:
         if api_key:
             self._client = AsyncOpenAI(api_key=api_key, base_url=MIMO_BASE_URL)
             self._available = True
-            logger.info("tts.client_refreshed key_suffix={}",
-                        api_key[-6:] if len(api_key) >= 6 else "***")
+            logger.info("tts.client_refreshed key_hash={}",
+                        hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:8] if api_key else "***")
         else:
             self._client = None
             self._available = False
