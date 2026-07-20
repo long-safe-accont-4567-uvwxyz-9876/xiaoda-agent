@@ -58,7 +58,8 @@ class DreamConsolidator:
 
     def __init__(self, threshold_importance: float = 0.2,
                   threshold_strength: float = 0.1,
-                  on_consolidate: Callable[[], None] | None = None) -> None:
+                  on_consolidate: Callable[[], None] | None = None,
+                  memory_db: Any = None) -> None:
         self._memories: dict[str, Memory] = {}
         self._importance_threshold = threshold_importance
         self._strength_threshold = threshold_strength
@@ -68,6 +69,8 @@ class DreamConsolidator:
         self._stats = {"consolidated": 0, "decayed": 0, "merged": 0, "strengthened": 0}
         # Dream 整合钩子: 默认联动 L/M/S 心理状态清理 7 天前 M 层数据
         self._on_consolidate = on_consolidate
+        # G7: scheduler 用此调 consolidate_from_db 操作真实 DB 记忆
+        self._memory_db = memory_db
 
     def add_memory(self, m: Memory) -> None:
         """添加一条记忆到整合器.
@@ -409,7 +412,16 @@ class DreamConsolidator:
                 logger.info(f"Dream.scheduler next_run_in={wait:.0f}s")
                 await asyncio.sleep(wait)
                 try:
-                    await self.consolidate()
+                    # G7: 优先用 consolidate_from_db 操作真实 DB 记忆
+                    if self._memory_db is not None:
+                        result = await self.consolidate_from_db(self._memory_db)
+                        logger.info(
+                            f"Dream.scheduler.from_db done "
+                            f"archived={result.get('archived', 0) if isinstance(result, dict) else 0}"
+                        )
+                    else:
+                        await self.consolidate()
+                        logger.warning("Dream.scheduler.fallback_to_consolidate (no memory_db)")
                 except Exception as e:
                     logger.error(f"Dream.scheduler.failed: {e}")
 
@@ -419,6 +431,19 @@ class DreamConsolidator:
             return self._scheduler_task
         except RuntimeError:
             return None
+
+    async def _run_scheduled_test(self) -> None:
+        """测试用: 单次执行 scheduler 整合逻辑 (不循环, 不计算定时).
+
+        G7: 仅供测试调用以验证 scheduler 分支选择正确, 生产环境请用 start_scheduler.
+        """
+        try:
+            if self._memory_db is not None:
+                await self.consolidate_from_db(self._memory_db)
+            else:
+                await self.consolidate()
+        except Exception as e:
+            logger.error(f"Dream.scheduler_test.failed: {e}")
 
     def stop_scheduler(self) -> None:
         """取消定时整合任务, 释放后台协程."""
@@ -443,9 +468,18 @@ class DreamConsolidator:
 _dream: DreamConsolidator | None = None
 
 
-def get_dream_consolidator() -> DreamConsolidator:
-    """获取全局 DreamConsolidator 单例, 不存在时创建."""
+def get_dream_consolidator(memory_db: Any = None) -> DreamConsolidator:
+    """获取全局 DreamConsolidator 单例, 不存在时创建.
+
+    Args:
+        memory_db: MemoryDB 实例, 用于 scheduler 调用 consolidate_from_db.
+            首次创建时若提供则注入; 后续调用若已存在单例且原实例未注入 db,
+            则后注入 (支持启动早期未初始化 DB 的场景).
+    """
     global _dream
     if _dream is None:
-        _dream = DreamConsolidator()
+        _dream = DreamConsolidator(memory_db=memory_db)
+    elif memory_db is not None and _dream._memory_db is None:
+        # 后注入 (首次创建时未提供)
+        _dream._memory_db = memory_db
     return _dream

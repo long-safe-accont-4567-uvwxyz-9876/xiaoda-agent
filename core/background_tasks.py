@@ -335,7 +335,10 @@ class BackgroundTaskManager:
             if self.memory:
                 # ★ F5 修复：调用 consolidate_from_db 执行完整4杆框架
                 # （从DB加载记忆，替代操作空字典的 consolidate_db）
-                stats = await get_dream_consolidator().consolidate_from_db(self.memory.memory)
+                # ★ G7 修复：同时注入 memory_db 给工厂, 让 scheduler 也能调 consolidate_from_db
+                stats = await get_dream_consolidator(
+                    memory_db=self.memory.memory
+                ).consolidate_from_db(self.memory.memory)
                 if stats.get("total", 0) > 0:
                     logger.info("dream.consolidate_completed",
                                 total=stats.get("total", 0),
