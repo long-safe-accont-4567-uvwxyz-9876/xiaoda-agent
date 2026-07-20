@@ -377,37 +377,40 @@ class RouterEngine:
         )
 
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(
-                    f"{base_url}/chat/completions",
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": 0.0,
-                        "max_tokens": 20,
-                    },
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
-                choices = data.get("choices", [])
-                if not choices:
-                    return None
-                content = choices[0].get("message", {}).get("content", "").strip().lower()
-                if not content:
-                    return None
-                # 匹配返回的 agent 名称
-                valid_agents = {"xiaoda", "xiaolang", "xiaoke", "xiaolian", "xiaoli"}
-                for agent in valid_agents:
-                    if agent in content:
-                        logger.info("router.llm_classified",
-                                    agent=agent, input_preview=user_input[:50])
-                        return agent
-                logger.warning("router.llm_classify_unrecognized", content=content[:50])
+            # G4: 共享 httpx.AsyncClient（连接池复用 + HTTP/2），单次请求级别覆盖 timeout
+            from utils.http_pool import get_shared_client
+            client = get_shared_client()
+            response = await client.post(
+                f"{base_url}/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.0,
+                    "max_tokens": 20,
+                },
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=httpx.Timeout(timeout),
+            )
+            response.raise_for_status()
+            data = response.json()
+            choices = data.get("choices", [])
+            if not choices:
                 return None
+            content = choices[0].get("message", {}).get("content", "").strip().lower()
+            if not content:
+                return None
+            # 匹配返回的 agent 名称
+            valid_agents = {"xiaoda", "xiaolang", "xiaoke", "xiaolian", "xiaoli"}
+            for agent in valid_agents:
+                if agent in content:
+                    logger.info("router.llm_classified",
+                                agent=agent, input_preview=user_input[:50])
+                    return agent
+            logger.warning("router.llm_classify_unrecognized", content=content[:50])
+            return None
         except Exception as e:
             logger.warning("router.llm_classify_error",
                            error=str(e), error_type=type(e).__name__)

@@ -407,7 +407,19 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         await self._shutdown_close_component('tts', 'tts_close')
         await self._shutdown_close_component('db', 'db_close')
         await self._shutdown_flush_mental_state()
+        await self._shutdown_close_shared_http_client()
         logger.info("agent_core.shutdown_complete")
+
+    async def _shutdown_close_shared_http_client(self) -> None:
+        """G4: 关闭全局共享 httpx.AsyncClient（连接池复用单例）.
+
+        在所有组件关闭后、最后退出前调用，避免遗漏 in-flight 请求。
+        """
+        try:
+            from utils.http_pool import close_shared_client
+            await close_shared_client()
+        except Exception as e:
+            logger.warning("shutdown.shared_http_client_close_failed", error=str(e))
 
     async def _shutdown_cancel_prewarm_task(self) -> None:
         """取消 jieba 预热后台任务。"""

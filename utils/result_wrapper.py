@@ -6,6 +6,7 @@ import httpx
 from loguru import logger
 
 from agent_context import estimate_tokens
+from utils.http_pool import get_shared_client
 
 
 def _strip_markdown(text: str) -> str:
@@ -40,23 +41,25 @@ class ResultWrapper:
         if not self._free_api_key:
             return None
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.post(
-                    f"{self._free_base_url}/chat/completions",
-                    json={
-                        "model": self._free_model,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                    },
-                    headers={
-                        "Authorization": f"Bearer {self._free_api_key}",
-                        "Content-Type": "application/json",
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            # G4: 共享 httpx.AsyncClient（连接池复用 + HTTP/2），单次请求级别覆盖 timeout
+            client = get_shared_client()
+            response = await client.post(
+                f"{self._free_base_url}/chat/completions",
+                json={
+                    "model": self._free_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                },
+                headers={
+                    "Authorization": f"Bearer {self._free_api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=httpx.Timeout(15.0),
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "")
         except Exception as e:
             logger.warning("result_wrapper.free_model_failed", error=str(e))
             return None

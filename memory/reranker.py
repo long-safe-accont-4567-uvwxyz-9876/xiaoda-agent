@@ -4,6 +4,8 @@ import time
 import httpx
 from loguru import logger
 
+from utils.http_pool import get_shared_client
+
 
 class Reranker:
     """基于 SiliconFlow BAAI/bge-reranker-v2-m3 的交叉编码器重排序
@@ -82,17 +84,19 @@ class Reranker:
                 "max_chunks_per_doc": 1,
             }
 
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.post(
-                    f"{self._base_url}/rerank",
-                    json=payload,
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "Content-Type": "application/json",
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
+            # G4: 共享 httpx.AsyncClient（连接池复用 + HTTP/2），单次请求级别覆盖 timeout
+            client = get_shared_client()
+            response = await client.post(
+                f"{self._base_url}/rerank",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=httpx.Timeout(30.0),
+            )
+            response.raise_for_status()
+            data = response.json()
 
             results = []
             for item in data.get("results", []):

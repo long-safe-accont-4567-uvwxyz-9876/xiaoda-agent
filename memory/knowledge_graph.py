@@ -111,27 +111,30 @@ class KnowledgeGraph:
         if not getattr(self, '_free_api_key', ''):
             return None
         import httpx
+        from utils.http_pool import get_shared_client
         try:
             # 修复 P0-2：timeout 从 30s → 10s
             # 根因：实体提取是检索路径的阻塞点，30s 超时会让单次检索最坏阻塞 30s。
             # 10s 足够 GLM-4-9B-0414 完成实体提取（正常 1-3s），超时则降级到 router 或返回空。
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.post(
-                    f"{self._free_base_url}/chat/completions",
-                    json={
-                        "model": self._free_model,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                    },
-                    headers={
-                        "Authorization": f"Bearer {self._free_api_key}",
-                        "Content-Type": "application/json",
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            # G4: 共享 httpx.AsyncClient（连接池复用 + HTTP/2），单次请求级别覆盖 timeout
+            client = get_shared_client()
+            response = await client.post(
+                f"{self._free_base_url}/chat/completions",
+                json={
+                    "model": self._free_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                },
+                headers={
+                    "Authorization": f"Bearer {self._free_api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=httpx.Timeout(10.0),
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "")
         except Exception as e:
             logger.warning("kg.free_model_failed", error=str(e))
             return None

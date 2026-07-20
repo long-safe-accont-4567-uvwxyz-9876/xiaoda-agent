@@ -19,6 +19,8 @@ import time
 import httpx
 from loguru import logger
 
+from utils.http_pool import get_shared_client
+
 
 # 提取 prompt — 让 LLM 从一次失败中提取一条最关键的预防规则
 EXTRACT_PROMPT = """你是错误分析助手。分析以下工具调用失败，提取一条可复用的预防规则。
@@ -91,23 +93,25 @@ class ErrorRulePipeline:
         if not self._free_api_key:
             return None
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.post(
-                    f"{self._free_base_url}/chat/completions",
-                    json={
-                        "model": self._free_model,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                    },
-                    headers={
-                        "Authorization": f"Bearer {self._free_api_key}",
-                        "Content-Type": "application/json",
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            # G4: 共享 httpx.AsyncClient（连接池复用 + HTTP/2），单次请求级别覆盖 timeout
+            client = get_shared_client()
+            response = await client.post(
+                f"{self._free_base_url}/chat/completions",
+                json={
+                    "model": self._free_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                },
+                headers={
+                    "Authorization": f"Bearer {self._free_api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=httpx.Timeout(15.0),
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "")
         except Exception as e:
             logger.warning("error_rule.free_model_failed", error=str(e))
             return None

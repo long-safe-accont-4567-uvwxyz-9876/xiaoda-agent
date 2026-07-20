@@ -85,12 +85,15 @@ async def http_get_json(url: str, timeout: float = 10.0,
     """非阻塞 HTTP GET，返回 JSON
 
     优先使用 httpx（已安装），否则回退到线程池中的 requests。
+    G4: 使用共享 httpx.AsyncClient（连接池复用 + HTTP/2），单次请求级别覆盖 timeout。
     """
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.get(url, headers=headers)
-            return r.json()
+        from utils.http_pool import get_shared_client
+        client = get_shared_client()
+        r = await client.get(url, headers=headers,
+                             timeout=httpx.Timeout(timeout))
+        return r.json()
     except ImportError:
         import requests
         return await run_sync(
@@ -101,12 +104,17 @@ async def http_get_json(url: str, timeout: float = 10.0,
 async def http_post_json(url: str, json: dict | None = None,
                           timeout: float = 10.0,
                           headers: dict | None = None) -> dict:
-    """非阻塞 HTTP POST，返回 JSON"""
+    """非阻塞 HTTP POST，返回 JSON
+
+    G4: 使用共享 httpx.AsyncClient（连接池复用 + HTTP/2），单次请求级别覆盖 timeout。
+    """
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.post(url, json=json, headers=headers)
-            return r.json()
+        from utils.http_pool import get_shared_client
+        client = get_shared_client()
+        r = await client.post(url, json=json, headers=headers,
+                              timeout=httpx.Timeout(timeout))
+        return r.json()
     except ImportError:
         import requests
         return await run_sync(

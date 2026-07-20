@@ -9,6 +9,7 @@ from loguru import logger
 
 from db.db_notebook import NotebookDB
 from config import get_agent_display_name
+from utils.http_pool import get_shared_client
 
 
 AUTO_NOTE_PROMPT_TEMPLATE = """你是{agent_name}。刚刚和{address_term}进行了一轮对话。
@@ -69,23 +70,25 @@ class NotebookManager:
         if not self._free_api_key:
             return None
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.post(
-                    f"{self._free_base_url}/chat/completions",
-                    json={
-                        "model": self._free_model,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                    },
-                    headers={
-                        "Authorization": f"Bearer {self._free_api_key}",
-                        "Content-Type": "application/json",
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            # G4: 共享 httpx.AsyncClient（连接池复用 + HTTP/2），单次请求级别覆盖 timeout
+            client = get_shared_client()
+            response = await client.post(
+                f"{self._free_base_url}/chat/completions",
+                json={
+                    "model": self._free_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                },
+                headers={
+                    "Authorization": f"Bearer {self._free_api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=httpx.Timeout(15.0),
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "")
         except Exception as e:
             logger.warning("notebook.free_model_failed", error=str(e))
             return None

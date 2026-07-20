@@ -5,6 +5,8 @@ import asyncio
 import httpx
 from loguru import logger
 
+from utils.http_pool import get_shared_client
+
 
 class QueryTransformer:
     """查询变换器：改写/扩展/分解用户原始查询
@@ -54,40 +56,42 @@ class QueryTransformer:
         if not self._available:
             return None
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.post(
-                    f"{self._base_url}/chat/completions",
-                    json={
-                        "model": self._model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                    },
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "Content-Type": "application/json",
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
-                choices = data.get("choices", [])
-                if not choices:
-                    return None
-                content = choices[0].get("message", {}).get("content", "")
-                if not content:
-                    return None
-                content = content.strip()
-                # 防御思考碎片泄漏：GLM-Z1 等思考模型可能返回思考过程碎片
-                # 这些碎片不是有效的查询改写，会导致记忆检索错误→答非所问
-                _THINKING_PREFIXES = (
-                    "首先", "让我", "分析", "我需要", "根据", "好的", "嗯",
-                    "用户", "任务是", "思考", "我来", "接下来",
-                )
-                if any(content.startswith(p) for p in _THINKING_PREFIXES):
-                    logger.warning("query_transform.thinking_fragment_detected",
-                                   model=self._model, content_preview=content[:60])
-                    return None
-                return content
+            # G4: 共享 httpx.AsyncClient（连接池复用 + HTTP/2），单次请求级别覆盖 timeout
+            client = get_shared_client()
+            response = await client.post(
+                f"{self._base_url}/chat/completions",
+                json={
+                    "model": self._model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                },
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=httpx.Timeout(15.0),
+            )
+            response.raise_for_status()
+            data = response.json()
+            choices = data.get("choices", [])
+            if not choices:
+                return None
+            content = choices[0].get("message", {}).get("content", "")
+            if not content:
+                return None
+            content = content.strip()
+            # 防御思考碎片泄漏：GLM-Z1 等思考模型可能返回思考过程碎片
+            # 这些碎片不是有效的查询改写，会导致记忆检索错误→答非所问
+            _THINKING_PREFIXES = (
+                "首先", "让我", "分析", "我需要", "根据", "好的", "嗯",
+                "用户", "任务是", "思考", "我来", "接下来",
+            )
+            if any(content.startswith(p) for p in _THINKING_PREFIXES):
+                logger.warning("query_transform.thinking_fragment_detected",
+                               model=self._model, content_preview=content[:60])
+                return None
+            return content
         except Exception as e:
             logger.warning("query_transform.free_model_failed", model=self._model, error=str(e), error_type=type(e).__name__)
             return None
