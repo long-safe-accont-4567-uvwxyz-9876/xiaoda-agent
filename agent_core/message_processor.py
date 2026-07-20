@@ -8,9 +8,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import random
 import re
 import time
 import tempfile
+from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
 
@@ -50,6 +52,30 @@ def _get_temperature(model_cfg: dict | None = None) -> float:
 if TYPE_CHECKING:
     from agent_core._shared import RequestContext
 from agent_core._shared import ProcessResult
+
+
+# ── G1: 问候短路（模块级编译正则，一次编译多次使用） ───────────
+_GREETING_PATTERN = re.compile(
+    r'^(你好|您好|hi|hello|hey|嗨|在吗|在不在|在么|'
+    r'早安|早上好|早|午安|下午好|晚上好|晚安|'
+    r'谢谢|感谢|thanks|thx|多谢)\s*[!！。.～~？?]*$',
+    re.IGNORECASE
+)
+
+_THANK_REPLIES = ["不客气～", "不用谢啦～", "举手之劳～"]
+
+# 时段问候：(start_hour, end_hour, reply) — end_hour 可超过 24 以覆盖跨夜时段
+_TIME_GREETINGS = [
+    (5, 12, "早上好～新的一天开始啦，今天也要加油哦！"),
+    (12, 18, "下午好～今天过得怎么样呀？"),
+    (18, 22, "晚上好～今天辛苦啦，有什么想聊的吗？"),
+    (22, 30, "夜深啦～记得早点休息哦，有什么事明天再说？"),
+]
+
+
+def _is_greeting_enabled() -> bool:
+    """读取 ENABLE_GREETING_SHORTCUT 开关（默认 true）."""
+    return os.environ.get("ENABLE_GREETING_SHORTCUT", "true").lower() in ("true", "1", "yes")
 
 
 class MessageProcessorMixin:
@@ -308,6 +334,12 @@ class MessageProcessorMixin:
             slash_reply = await self.slash_handler.handle(user_input, user_id)
             return ProcessResult(reply=slash_reply)
 
+        # G1: 问候短路（在 chat_targets 之前，跳过 LLM，<100ms 返回）
+        greeting_result = self._try_greeting_shortcut(user_input, user_id, source or "")
+        if greeting_result is not None:
+            trace.info("agent.greeting_shortcut_hit", keyword=user_input[:20])
+            return greeting_result
+
         chat_targets = await self._parse_chat_target(user_input, user_id)
         clean_input = ChatProcessor.clean_mention_from_input(user_input)
 
@@ -388,6 +420,43 @@ class MessageProcessorMixin:
                 logger.warning("agent.restore_failed", error=str(e))
 
         return trace, session_id, allowed, reason
+
+    def _try_greeting_shortcut(self, user_input: str, user_id: str, source: str) -> ProcessResult | None:
+        """G1: 纯问候短路 - 跳过 LLM 直接返回 <100ms.
+
+        - 默认开启（ENABLE_GREETING_SHORTCUT=true）
+        - 群聊跳过（避免刷屏）
+        - 问候不超过 20 字符才命中（避免"你好帮我写代码"误命中）
+        - 感谢类返回随机感谢回复，其他返回时段问候
+
+        Returns:
+            ProcessResult | None: 命中返回 ProcessResult(emotion="greeting")，否则 None
+        """
+        if not _is_greeting_enabled():
+            return None
+        # 群聊跳过（避免刷屏）
+        if source and "group" in source.lower():
+            return None
+        text = (user_input or "").strip()
+        if not text or len(text) > 20:  # 问候不超过 20 字符
+            return None
+        match = _GREETING_PATTERN.match(text)
+        if not match:
+            return None
+        keyword = match.group(1).lower()
+        # 时段问候（5-12 早上好 / 12-18 下午好 / 18-22 晚上好 / 22-5 夜深）
+        now_hour = datetime.now().hour
+        reply = None
+        for start_h, end_h, msg in _TIME_GREETINGS:
+            if start_h <= now_hour < end_h:
+                reply = msg
+                break
+        if reply is None:
+            reply = msg  # fallback 到最后一个（覆盖 0-5 点）
+        # 感谢类覆盖时段问候
+        if keyword in ("谢谢", "感谢", "thanks", "thx", "多谢"):
+            reply = random.choice(_THANK_REPLIES)
+        return ProcessResult(reply=reply, emotion="greeting")
 
     async def _try_simple_chat_fast_path(self, ctx: Any, user_input: Any, clean_input: Any, is_master: Any,
                                           image_data: Any, force_voice: Any, session_id: Any, user_openid: Any,
