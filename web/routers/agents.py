@@ -46,9 +46,9 @@ async def get_public_wallpaper(request: Request) -> Any:
 async def _audit(request: Request, action: str, detail: str) -> None:
     core = request.app.state.core
     try:
-        async with core.db.transaction():
-            await core.db.insert_audit_log(f"webui.agents.{action}", "webui", detail)
-    except (OSError, KeyError, ValueError, RuntimeError) as exc:
+        await core.db.insert_audit_log(f"webui.agents.{action}", "webui", detail)
+        await core.db.commit()
+    except Exception as exc:
         logger.debug("agents.audit_failed: {}", exc, exc_info=True)
 
 

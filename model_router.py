@@ -387,12 +387,27 @@ class ModelRouter:
 
         self._current_chat_model = {"provider": provider, "model_id": model_id}
         # 持久化到 config_service，以便重启后恢复上次聊天模型
+        # 必须同步写入 models.chat_model 与 models.routes.chat，避免两套数据不同步
+        # 否则 _apply_route_overrides 与 _restore_chat_model 启动顺序会造成覆盖
         try:
             from web.config_service import get_config_service
-            get_config_service().set(
+            cfg = get_config_service()
+            cfg.set(
                 "models.chat_model",
                 {"provider": provider, "model_id": model_id},
             )
+            chat_entry = ROUTE_TABLE.get("chat", {})
+            cfg.set("models.routes.chat", {
+                "model": model_id,
+                "client": provider,
+                "max_tokens": chat_entry.get("max_tokens"),
+                "thinking": bool(
+                    chat_entry.get("thinking")
+                    and isinstance(chat_entry.get("thinking"), dict)
+                    and chat_entry["thinking"].get("type") == "enabled"
+                ),
+                "timeout": self.TASK_TIMEOUTS.get("chat"),
+            })
         except (OSError, KeyError, ValueError, TypeError) as e:
             logger.warning("router.chat_model_persist_failed error={}", str(e))
         logger.info("router.chat_model_changed", provider=provider, model=model_id)

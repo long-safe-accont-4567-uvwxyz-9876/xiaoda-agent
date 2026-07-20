@@ -156,7 +156,11 @@ def _apply_route_overrides(cfg: Any, core: Any, ROUTE_TABLE: Any) -> None:
 
 
 def _restore_chat_model(cfg: Any, core: Any) -> None:
-    """恢复上次聊天模型（从 config_service 的 models.chat_model 读取）。"""
+    """恢复上次聊天模型（从 config_service 的 models.chat_model 读取）。
+
+    注意：此函数只做"恢复"，不做"持久化"。fallback 时禁止调用 set_chat_model，
+    否则会把 mimo 重新写入 config，覆盖用户原选择，形成 sticky fallback。
+    """
     chat_model = cfg.get("models.chat_model")
     if not (isinstance(chat_model, dict) and chat_model.get("provider") and chat_model.get("model_id")):
         logger.info("webui.chat_model_no_saved_preference, using default")
@@ -172,15 +176,24 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
     try:
         core.router.set_chat_model(provider, model_id)
         logger.info("webui.chat_model_restored provider={} model={}", provider, model_id)
-    except (KeyError, ValueError, AttributeError, OSError) as e:
+    except Exception as e:
+        # 必须捕获 Exception：LLMError 继承 AppException 不在原 (KeyError, ValueError,
+        # AttributeError, OSError) 范围内，自定义 provider 注册失败时会导致启动崩溃
         logger.warning(
             "webui.chat_model_restore_failed provider={} model={} "
-            "error={} fallback_to_mimo", provider, model_id, str(e)
+            "error={} fallback_to_mimo_in_memory_only", provider, model_id, str(e)
         )
+        # 仅修改内存中的 ROUTE_TABLE，不调用 set_chat_model 避免重新持久化 mimo
+        # 这样用户下次切换模型时，config 中仍是原选择，不会被 sticky mimo 覆盖
         try:
             from model_router import MIMO_MODEL
-            core.router.set_chat_model("mimo", MIMO_MODEL)
-        except (ImportError, KeyError, ValueError):
+            chat_entry = ROUTE_TABLE.get("chat")
+            if chat_entry is not None:
+                chat_entry["model"] = MIMO_MODEL
+                chat_entry["client"] = "mimo"
+            core.router._current_chat_model = {"provider": "mimo", "model_id": MIMO_MODEL}
+            logger.info("webui.chat_model_fallback_in_memory provider=mimo model={}", MIMO_MODEL)
+        except (ImportError, KeyError, AttributeError):
             logger.debug("server.set_chat_model_fallback_error", exc_info=True)
 
 

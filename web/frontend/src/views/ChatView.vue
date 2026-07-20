@@ -14,7 +14,6 @@ import SlashPalette from '../components/chat/SlashPalette.vue'
 import PromptInput from '../components/chat/PromptInput.vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import ModelSelector from '../components/chat/ModelSelector.vue'
-import { sound } from '../utils/sound'
 import { t } from '../i18n'
 
 defineOptions({ name: 'ChatView' })
@@ -137,10 +136,9 @@ function handleSend() {
   if (!text || chat.isProcessing) return
   chat.sendMessage(text)
   inputText.value = ''
-  // 发送特效：从输入框爆叶子 + 叶拂音效
+  // 发送特效：从输入框爆叶子
   const rect = inputEl.value?.getBoundingClientRect()
   if (rect) particles?.value?.burst?.(rect.left + rect.width / 2, rect.top, 10)
-  sound.play('send')
   autoGrow()
 }
 
@@ -154,10 +152,9 @@ function handlePromptSend(text: string, options: { search?: boolean; think?: boo
   }
   chat.sendMessage(finalText, options.imageUrl)
   inputText.value = ''
-  // 发送特效 + 叶拂音效
+  // 发送特效
   const rect = inputEl.value?.getBoundingClientRect()
   if (rect) particles?.value?.burst?.(rect.left + rect.width / 2, rect.top, 10)
-  sound.play('send')
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -258,8 +255,10 @@ const emotionColors: Record<string, string> = {
       <n-button size="tiny" quaternary @click="clearAll">
         <template #icon><SumeruIcon name="trash" :size="15" /></template>{{ t('chatView.clear') }}
       </n-button>
-      <button v-if="chat.sessionId" class="export-link"
-         @click="exportSessionDownload(chat.sessionId).catch(e => message.error(e.message))">⬇ {{ t('chatView.export') }}</button>
+      <n-button v-if="chat.sessionId" size="tiny" quaternary
+         @click="exportSessionDownload(chat.sessionId).catch(e => message.error(e.message))">
+        <template #icon><SumeruIcon name="download" :size="15" /></template>{{ t('chatView.export') }}
+      </n-button>
       <ModelSelector style="margin-left: auto" @change="onModelChange" />
       <span class="session-label">{{ chat.sessionId }}</span>
     </div>
@@ -395,13 +394,6 @@ const emotionColors: Record<string, string> = {
   flex-shrink: 0;
 }
 
-.export-link {
-  font-size: 12px;
-  color: var(--moon-dim);
-  text-decoration: none;
-}
-.export-link:hover { color: var(--dendro); }
-
 .session-label {
   font-size: 11px;
   color: rgba(242, 247, 238, 0.3);
@@ -433,11 +425,7 @@ const emotionColors: Record<string, string> = {
 .message-row {
   display: flex;
   max-width: 85%;
-  animation: msg-row-in 0.42s var(--ease-spring, var(--ease-smooth));
-}
-@keyframes msg-row-in {
-  from { opacity: 0; transform: translateY(14px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+  animation: slideUp 0.3s var(--ease-smooth);
 }
 .message-row.user { align-self: flex-end; justify-content: flex-end; }
 .message-row.assistant { align-self: flex-start; }
@@ -450,17 +438,12 @@ const emotionColors: Record<string, string> = {
   font-size: 14px;
   word-break: break-word;
   min-width: 60px;
-  transition: box-shadow 0.3s var(--ease-smooth), border-color 0.3s;
 }
 
 .message-bubble.user {
-  background: linear-gradient(135deg, rgba(143, 229, 96, 0.16), rgba(79, 214, 165, 0.09));
+  background: rgba(127, 214, 80, 0.12);
   border-color: rgba(127, 214, 80, 0.25);
   border-radius: 16px 16px 4px 16px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 10px rgba(0, 0, 0, 0.18);
-}
-.message-bubble.user:hover {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 14px rgba(143, 229, 96, 0.14);
 }
 .message-bubble.assistant { border-radius: 16px 16px 16px 4px; }
 .message-bubble.system {
@@ -472,12 +455,12 @@ const emotionColors: Record<string, string> = {
 }
 .message-bubble.streaming { border-color: rgba(127, 214, 80, 0.35); }
 
-/* 消息进出场 · v2 弹簧浮现 */
-.msg-fade-enter-active { transition: opacity 0.28s var(--ease-smooth), transform 0.38s var(--ease-spring, var(--ease-smooth)); }
-.msg-fade-enter-from { opacity: 0; transform: translateY(12px) scale(0.985); }
-.msg-fade-leave-active { transition: opacity 0.4s var(--ease-smooth), transform 0.4s var(--ease-smooth); }
+/* 消息进出场（切换提示 3 秒自动淡出） */
+.msg-fade-enter-active { transition: opacity 0.3s var(--ease-smooth), transform 0.3s var(--ease-smooth); }
+.msg-fade-enter-from { opacity: 0; transform: translateY(10px); }
+.msg-fade-leave-active { transition: opacity 0.45s var(--ease-smooth), transform 0.45s var(--ease-smooth); }
 .msg-fade-leave-to { opacity: 0; transform: translateY(-8px) scale(0.97); }
-.msg-fade-move { transition: transform 0.45s var(--ease-spring, var(--ease-smooth)); }
+.msg-fade-move { transition: transform 0.45s var(--ease-smooth); }
 
 .emotion-dot {
   position: absolute;

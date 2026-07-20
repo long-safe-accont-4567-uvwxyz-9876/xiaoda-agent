@@ -6,9 +6,8 @@ const ui = useUiStore()
 const canvasEl = ref<HTMLCanvasElement | null>(null)
 
 interface P {
-  x: number; y: number; r: number; leaf: boolean; firefly: boolean
+  x: number; y: number; r: number; leaf: boolean
   vx: number; vy: number; phase: number; period: number; drift: number
-  palette: number // 0=草绿 1=翡翠 2=曦金
 }
 
 let particles: P[] = []
@@ -19,32 +18,27 @@ let cachedCtx: CanvasRenderingContext2D | null = null
 let mouseX = -9999
 let mouseY = -9999
 let trail: Array<{ x: number; y: number; t: number }> = []
-let burstParticles: Array<{ x: number; y: number; vx: number; vy: number; t: number; rot: number; gold: boolean }> = []
+let burstParticles: Array<{ x: number; y: number; vx: number; vy: number; t: number; rot: number }> = []
 
 const DENSITY: Record<string, number> = { off: 0, low: 12, medium: 36, high: 60 }
 const FRAME_MS = 1000 / 30
 
-// 三色萤光：草绿 #7fd650 / 翡翠 #4fd6a5 / 曦金 #e8d5a3
-const PALETTE = ['#7fd650', '#4fd6a5', '#e8d5a3']
 const GLOW_SIZE = 48
 const GLOW_CORE_R = 8
-let glowDots: HTMLCanvasElement[] = []
+let glowDot: HTMLCanvasElement | null = null
 
-function initGlowDots() {
-  glowDots = PALETTE.map(color => {
-    const c = document.createElement('canvas')
-    c.width = GLOW_SIZE
-    c.height = GLOW_SIZE
-    const g = c.getContext('2d')!
-    const cx = GLOW_SIZE / 2, cy = GLOW_SIZE / 2
-    g.shadowColor = color
-    g.shadowBlur = 6
-    g.fillStyle = color
-    g.beginPath()
-    g.arc(cx, cy, GLOW_CORE_R, 0, Math.PI * 2)
-    g.fill()
-    return c
-  })
+function initGlowDot() {
+  glowDot = document.createElement('canvas')
+  glowDot.width = GLOW_SIZE
+  glowDot.height = GLOW_SIZE
+  const g = glowDot.getContext('2d')!
+  const cx = GLOW_SIZE / 2, cy = GLOW_SIZE / 2
+  g.shadowColor = '#7fd650'
+  g.shadowBlur = 6
+  g.fillStyle = '#7fd650'
+  g.beginPath()
+  g.arc(cx, cy, GLOW_CORE_R, 0, Math.PI * 2)
+  g.fill()
 }
 
 function count(): number {
@@ -52,19 +46,16 @@ function count(): number {
 }
 
 function spawn(w: number, h: number): P {
-  const roll = Math.random()
   return {
     x: Math.random() * w,
     y: Math.random() * h,
     r: 2 + Math.random() * 3,
-    leaf: Math.random() < 0.32,
-    firefly: roll < 0.22, // 约两成萤光粒子带萤火虫呼吸
+    leaf: Math.random() < 0.35,
     vx: 0.1 + Math.random() * 0.25,
     vy: -0.05 - Math.random() * 0.15,
     phase: Math.random() * Math.PI * 2,
     period: 3000 + Math.random() * 3000,
     drift: Math.random() * Math.PI * 2,
-    palette: roll < 0.62 ? 0 : roll < 0.87 ? 1 : 2,
   }
 }
 
@@ -84,25 +75,17 @@ function rebuild() {
   particles = Array.from({ length: n }, () => spawn(c.width, c.height))
 }
 
-function drawLeaf(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, rot: number, alpha: number, gold = false) {
+function drawLeaf(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, rot: number, alpha: number) {
   ctx.save()
   ctx.translate(x, y)
   ctx.rotate(rot)
   ctx.globalAlpha = alpha
-  ctx.fillStyle = gold ? '#e8d5a3' : '#7fd650'
+  ctx.fillStyle = '#7fd650'
   ctx.beginPath()
   ctx.moveTo(0, -size)
   ctx.bezierCurveTo(size * 0.8, -size * 0.3, size * 0.8, size * 0.5, 0, size)
   ctx.bezierCurveTo(-size * 0.8, size * 0.5, -size * 0.8, -size * 0.3, 0, -size)
   ctx.fill()
-  // 叶脉：一道浅色中线，叶子立刻有了灵气
-  ctx.globalAlpha = alpha * 0.55
-  ctx.strokeStyle = gold ? '#f4ecd4' : '#c9f5a8'
-  ctx.lineWidth = Math.max(0.6, size * 0.09)
-  ctx.beginPath()
-  ctx.moveTo(0, -size * 0.72)
-  ctx.quadraticCurveTo(size * 0.12, 0, 0, size * 0.72)
-  ctx.stroke()
   ctx.restore()
 }
 
@@ -132,7 +115,7 @@ function frame(now: number) {
     }
   }
 
-  // 常驻粒子（sin 漂移 + 风场 + 鼠标斥力）
+  // 常驻粒子（柏林噪声近似：sin 漂移 + 风场）
   for (const p of particles) {
     p.drift += 0.004
     p.x += p.vx + Math.sin(p.drift) * 0.3
@@ -149,22 +132,13 @@ function frame(now: number) {
     if (p.x < -20) p.x = w + 10
     if (p.y < -20) p.y = h + 10
     if (p.y > h + 20) p.y = -10
-
-    let breathe: number
-    if (p.firefly && !p.leaf) {
-      // 萤火虫：sin² 深呼吸，明暗对比更梦幻
-      const s = Math.sin(now / p.period * Math.PI * 2 + p.phase)
-      breathe = 0.12 + 0.65 * s * s
-    } else {
-      breathe = 0.35 + 0.25 * Math.sin(now / p.period * Math.PI * 2 + p.phase)
-    }
-
+    const breathe = 0.35 + 0.25 * Math.sin(now / p.period * Math.PI * 2 + p.phase)
     if (p.leaf) {
-      drawLeaf(ctx, p.x, p.y, p.r * 2, p.drift, breathe, p.palette === 2)
+      drawLeaf(ctx, p.x, p.y, p.r * 2, p.drift, breathe)
     } else {
       ctx.globalAlpha = breathe
       const s = GLOW_SIZE * p.r / GLOW_CORE_R
-      ctx.drawImage(glowDots[p.palette]!, p.x - s / 2, p.y - s / 2, s, s)
+      ctx.drawImage(glowDot!, p.x - s / 2, p.y - s / 2, s, s)
     }
   }
 
@@ -177,14 +151,7 @@ function frame(now: number) {
     b.y += b.vy
     b.vy += 0.04
     b.rot += 0.08
-    if (b.gold) {
-      // 曦金微芒：小光点代替叶片，更轻盈
-      ctx.globalAlpha = (1 - age) * 0.85
-      const s = 14 * (1 - age * 0.5)
-      ctx.drawImage(glowDots[2]!, b.x - s / 2, b.y - s / 2, s, s)
-    } else {
-      drawLeaf(ctx, b.x, b.y, 5, b.rot, (1 - age) * 0.8)
-    }
+    drawLeaf(ctx, b.x, b.y, 5, b.rot, (1 - age) * 0.8)
   }
   ctx.globalAlpha = 1
 }
@@ -214,7 +181,7 @@ function stop() {
   cancelAnimationFrame(raf)
 }
 
-/** 对外：从某坐标爆发叶子（发送消息特效）——掺入三成曦金微芒 */
+/** 对外：从某坐标爆发叶子（发送消息特效） */
 function burst(x: number, y: number, n = 10) {
   for (let i = 0; i < n; i++) {
     const ang = Math.random() * Math.PI * 2
@@ -222,7 +189,6 @@ function burst(x: number, y: number, n = 10) {
     burstParticles.push({
       x, y, vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed - 2,
       t: performance.now(), rot: Math.random() * Math.PI,
-      gold: Math.random() < 0.3,
     })
   }
 }
@@ -235,7 +201,6 @@ function dandelionRain() {
       x: w - Math.random() * w * 0.4, y: -10 - Math.random() * 60,
       vx: -0.5 - Math.random(), vy: 0.8 + Math.random() * 1.2,
       t: performance.now() + Math.random() * 800, rot: Math.random() * Math.PI,
-      gold: Math.random() < 0.35,
     })
   }
 }
@@ -260,7 +225,7 @@ function fpsProbe(now: number) {
 }
 
 watch(() => ui.particles, () => {
-  if (count() > 0 && glowDots.length === 0) initGlowDots()
+  if (count() > 0 && !glowDot) initGlowDot()
   rebuild()
   if (count() === 0) stop()
   else start()
@@ -274,7 +239,7 @@ onMounted(() => {
     ui.setParticles('off')
     return
   }
-  initGlowDots()
+  initGlowDot()
   resize()
   start()
   fpsRAF = requestAnimationFrame(fpsProbe)

@@ -32,6 +32,8 @@ class TestFallbackChainSync:
             router._custom_clients = {}
             router._current_chat_model = None
             router._lazy_register_provider = MagicMock()
+            # set_chat_model 持久化时会读取 TASK_TIMEOUTS，需显式提供
+            router.TASK_TIMEOUTS = {"chat": 60}
 
             # 调用 set_chat_model 切换到 agnes
             ModelRouter.set_chat_model(router, "agnes", "agnes-2.0-flash")
@@ -58,6 +60,8 @@ class TestFallbackChainSync:
             router._custom_clients = {}
             router._current_chat_model = None
             router._lazy_register_provider = MagicMock()
+            # set_chat_model 持久化时会读取 TASK_TIMEOUTS，需显式提供
+            router.TASK_TIMEOUTS = {"chat": 60}
 
             ModelRouter.set_chat_model(router, "mimo", "mimo-v2.5")
 

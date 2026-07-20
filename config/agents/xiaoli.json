@@ -3,8 +3,8 @@
   "display_name": "小莉",
   "display_name_en": "Xiaoli",
   "provider": "siliconflow",
-  "model": "nex-agi/Nex-N2-Pro",
-  "personality_file": "xiaoli_personality.md",
+  "model": "deepseek-ai/DeepSeek-V4-Pro",
+  "personality_file": "/home/orangepi/ai-agent/config/agents/xiaoli_personality.md",
   "voice_ref": "xiaoli/xiaoli",
   "excluded_tools": [
     "call_xiaoli",
@@ -85,5 +85,5 @@
     ".env.*",
     "config/agents/*_personality.md"
   ],
-  "_saved_at": 1783609947.6382287
+  "_saved_at": 1784524746.91543
 }
