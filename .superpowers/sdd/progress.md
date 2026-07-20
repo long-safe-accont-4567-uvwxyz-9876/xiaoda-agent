@@ -16,10 +16,10 @@ Branch: main
 - [x] Task 8: G5 WS 心跳 — DONE (commits a1f8d34..4b0350b, review clean)
 - [x] Task 9: G4 HTTP 连接池复用 — DONE (commits 4b0350b..697b00f..a1b422a, review clean after fix)
 - [x] Task 10: 6 大领域性能审计 — DONE (报告 docs/performance_audit_2026-07-20.md, 发现 G11-G16)
-- [ ] Task 10a: G11 restore_from_db 分页加载（Important）
-- [ ] Task 10b: G12 KG 图谱批量查询接口（Important）
-- [ ] Task 10c: G13 扩散激活 LRU 缓存（Important）
-- [ ] Task 11: 全量 pytest 回归
+- [x] Task 10a: G11 restore_from_db 分页加载 — SKIPPED (用户决定暂不实施)
+- [x] Task 10b: G12 KG 图谱批量查询接口 — DONE (commit 0e471ff, review APPROVED, 79 测试通过)
+- [x] Task 10c: G13 扩散激活 LRU 缓存 — DONE (commits a7410a3 + 0822e31 fix, review APPROVED after fix, 61+60 测试通过)
+- [x] Task 11: 全量 pytest 回归 — DONE (2149 passed, 1 skipped, 5 warnings, 146.84s)
 - [ ] Task 12: 冒烟测试
 
 ## Minor 待办（推迟到下个版本）
