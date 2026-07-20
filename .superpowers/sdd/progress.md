@@ -30,11 +30,11 @@ Branch: main
 - 2026-07-21 Task 12: 服务运行 1天2小时+状态正常，G1-G13 关键功能测试全通过
 - 2026-07-21 Final Review: 发现 G5 前端 pong 缺失 (Critical) + G1 时区 (Important)，已在 commit 3fedf90 修复
 
-## Minor 待办（推迟到下个版本）
+## Minor 项已全部实施
 
-- G14: Reranker LRU 缓存 (Minor)
-- G15: query_transform LRU 缓存 (Minor)
-- G16: server 启动 asyncio.gather 并行 (Minor)
+- [x] G14: Reranker LRU 缓存 — DONE (commit e9a03e4, review APPROVED, 8+49 测试通过)
+- [x] G15: query_transform LRU+TTL 缓存 — DONE (commits 3572069 + c208651 fix, review APPROVED after fix, 42 测试通过)
+- [x] G16: server 启动并行化 — DONE (commit 2bd4f25, review APPROVED, 5+30 测试通过)
 
 ## Completion Log
 
