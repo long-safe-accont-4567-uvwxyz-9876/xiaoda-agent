@@ -303,7 +303,7 @@ _cache: OrderedDict[str, str] = OrderedDict()
 _CACHE_MAX_SIZE = 50
 
 
-def _encode_voice_file(path: Path) -> str:
+async def _encode_voice_file(path: Path) -> str:
     key = str(path)
     if key in _cache:
         _cache.move_to_end(key)
@@ -318,7 +318,7 @@ def _encode_voice_file(path: Path) -> str:
     if not mime_type:
         raise ValueError(f"不支持的音频格式: {suffix}")
 
-    data = path.read_bytes()
+    data = await asyncio.to_thread(path.read_bytes)
     if len(data) > 10 * 1024 * 1024:
         raise ValueError(f"音频文件过大: {len(data)} bytes (最大10MB)")
 
@@ -425,7 +425,7 @@ class TTSEngine:
         for name, path in VOICE_REFERENCES.items():
             if path.exists():
                 try:
-                    _encode_voice_file(path)
+                    await _encode_voice_file(path)
                     any_voice_available = True
                     logger.info("tts.voice_ready", voice=name)
                 except Exception as e:
@@ -519,7 +519,7 @@ class TTSEngine:
         logger.info("tts.cache_miss", key=cache_key)
 
         try:
-            voice_data_url = _encode_voice_file(voice_path)
+            voice_data_url = await _encode_voice_file(voice_path)
         except Exception as e:
             logger.error("tts.voice_encode_failed error={}", str(e))
             return None
