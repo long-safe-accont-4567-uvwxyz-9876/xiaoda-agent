@@ -15,7 +15,11 @@ async function request<T>(path: string, options?: RequestInit, confirm = false):
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(confirm ? { 'X-Confirm': 'yes' } : {}),
   }
-  const res = await fetch(`${BASE}${path}`, { ...options, headers })
+  const res = await fetch(`${BASE}${path}`, { ...options, headers }).catch(e => {
+    // 路由切换时浏览器中止 fetch 产生 AbortError，重新抛出以便调用方静默处理
+    if (e?.name === 'AbortError') throw e
+    throw new Error(e?.message || 'Network error')
+  })
   if (res.status === 401) {
     localStorage.removeItem('token')
     if (!location.hash.includes('login')) location.hash = '#/login'

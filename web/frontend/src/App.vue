@@ -31,7 +31,10 @@ async function checkSignature() {
         el.textContent = expected
       }
     })
-  } catch { /* 静默失败 */ }
+  } catch (e: any) {
+    // ERR_ABORTED / AbortError 是路由切换时浏览器主动取消请求，静默忽略
+    if (e?.name === 'AbortError') return
+  }
 }
 
 function onVisibilityChange() {

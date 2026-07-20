@@ -242,8 +242,15 @@ class TestEndToEndMemoryFlow:
             ],
         }, scope=scope)
 
-        # 等待异步蒸馏完成
-        await asyncio.sleep(0.3)
+        # 等待异步蒸馏完成（轮询，最多 5 秒）
+        for _ in range(50):
+            await asyncio.sleep(0.1)
+            cursor = await db._conn.execute(
+                "SELECT COUNT(*) as cnt FROM episodic_memories WHERE is_raw=0 AND user_id='default'"
+            )
+            row = await cursor.fetchone()
+            if row["cnt"] >= 1:
+                break
 
         # 验证有 is_raw=0 的提炼知识
         cursor = await db._conn.execute(
