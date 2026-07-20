@@ -131,3 +131,61 @@ async def test_recall_cache_returns_copy(engine):
     assert r2[0]["text"] == orig_text
     assert r2[0]["score"] == orig_score
     assert len(r2) == orig_len
+
+
+@pytest.mark.asyncio
+async def test_lazy_migrate_clears_recall_cache():
+    """G13 fix: lazy_migrate 写入 concept_nodes 后应清空 recall 缓存。
+
+    复现路径：retrieve_memories_hybrid 内的 lazy_migrate 块。
+    断言：concept_graph.lazy_migrate 被调用后，spreading_engine.clear_cache 也被调用。
+    """
+    from unittest.mock import MagicMock, AsyncMock, patch
+
+    with patch("memory.memory_manager.MemoryDistiller"), \
+         patch("memory.memory_manager.QueryCache") as MockQC, \
+         patch("memory.memory_manager.RetrievalAssessor"), \
+         patch("memory.memory_manager.FSRSModel"), \
+         patch("memory.memory_manager.get_agent_display_name", return_value="小妲"):
+        MockQC.return_value = MagicMock()
+
+        from memory.memory_manager import MemoryManager
+
+        mm = MemoryManager(db=MagicMock(), memory=MagicMock())
+
+        # 配置 concept_graph / spreading_engine mock
+        mm.concept_graph = MagicMock()
+        mm.concept_graph.lazy_migrate = AsyncMock(return_value=1)
+        mm.spreading_engine = MagicMock()
+        mm.spreading_engine.clear_cache = MagicMock()
+        mm.spreading_engine.db = MagicMock()
+        mm.spreading_engine.db.get_node_count = AsyncMock(return_value=0)
+
+        # 触发 lazy_migrate 的条件：episodic_count > node_count 且有 unmigrated
+        mm.memory.get_episodic_count = AsyncMock(return_value=5)
+        mm.memory.get_unmigrated_memories = AsyncMock(
+            return_value=[{"id": 1, "summary": "测试记忆"}]
+        )
+
+        # 重置节流时间戳，确保本次进入 lazy_migrate 块
+        mm._last_lazy_migrate_ts = 0
+
+        # 跳过冷启动路径，直接走 hot tier（避开 is_cold 早返回）
+        mm.get_memory_tier = AsyncMock(return_value="hot")
+
+        # 所有检索通道返回空，触发 "all empty" fallback 早返回
+        mm._hybrid_fts_search_scoped = AsyncMock(return_value=[])
+        mm._hybrid_vec_search = AsyncMock(return_value=[])
+        mm._spreading_recall = AsyncMock(return_value=[])
+        mm._entity_recall = AsyncMock(return_value=[])
+        mm._extract_deterministic_selectors = MagicMock(return_value={})
+        mm._get_candidate_ids_by_selectors = AsyncMock(return_value=None)
+
+        await mm.retrieve_memories_hybrid("测试查询", k=5)
+
+        # 断言 lazy_migrate 确实被调用（前提条件）
+        mm.concept_graph.lazy_migrate.assert_awaited_once(), \
+            "lazy_migrate 应被调用（测试前置条件不满足）"
+        # 核心断言：lazy_migrate 后必须清空 recall 缓存
+        assert mm.spreading_engine.clear_cache.called, \
+            "lazy_migrate 写入新 concept_nodes 后必须调用 spreading_engine.clear_cache()"
