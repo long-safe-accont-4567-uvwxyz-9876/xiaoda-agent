@@ -38,6 +38,9 @@ from agent_core.user_web import WebUser  # noqa: E402
 
 router = APIRouter()
 
+# G2: broadcast 超时阈值（秒）—— 超过即取消任务并清理慢连接，避免慢连接阻塞快连接
+BROADCAST_TIMEOUT = 5.0
+
 # 媒体目录使用用户数据目录，避免写入 _MEIPASS 只读目录
 try:
     from config import MEDIA_DIR
@@ -85,9 +88,41 @@ class ConnectionManager:
                 self.unregister(conn_id)
 
     async def broadcast(self, event: dict) -> None:
-        """向所有活跃连接广播事件."""
-        for conn_id in list(self._connections):
-            await self.send_to(conn_id, event)
+        """G2: 向所有活跃连接广播事件（fire-and-forget 扇出 + 5s 超时背压）.
+
+        慢连接不再阻塞快连接：所有连接并发发送，5s 超时后取消并清理慢连接。
+        失败连接由 _safe_send 清理。
+        """
+        if not self._connections:
+            return
+        # task -> conn_id 映射，便于超时后查找慢连接
+        tasks = {
+            asyncio.create_task(self._safe_send(cid, event)): cid
+            for cid in list(self._connections)
+        }
+        if not tasks:
+            return
+        done, pending = await asyncio.wait(tasks, timeout=BROADCAST_TIMEOUT)
+        # 清理超时的慢连接：取消任务 + unregister
+        for t in pending:
+            cid = tasks[t]
+            t.cancel()
+            logger.warning("ws.broadcast_timeout conn_id={}", cid)
+            self.unregister(cid)
+
+    async def _safe_send(self, conn_id: str, event: dict) -> None:
+        """G2: 安全发送，失败时清理连接（内部方法）.
+
+        包裹 send_to 语义：发送失败则 unregister，避免失败连接残留。
+        """
+        ws = self._connections.get(conn_id)
+        if ws is None:
+            return
+        try:
+            await ws.send_json(event)
+        except Exception as e:
+            logger.warning("ws.send_failed conn_id={} error={}", conn_id, str(e))
+            self.unregister(conn_id)
 
     @property
     def active_count(self) -> int:
