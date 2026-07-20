@@ -29,6 +29,7 @@ Branch: main
 - 2026-07-21 Task 11: 全量 pytest 2149 passed + 1 skipped + 5 warnings in 146.84s
 - 2026-07-21 Task 12: 服务运行 1天2小时+状态正常，G1-G13 关键功能测试全通过
 - 2026-07-21 Final Review: 发现 G5 前端 pong 缺失 (Critical) + G1 时区 (Important)，已在 commit 3fedf90 修复
+- 2026-07-21 G14-G16 Minor 项全部实施 + review 通过 + 全量回归 2171 passed + 1 skipped + 5 warnings in 116.24s（test_fallback_optimization.py 因系统资源问题单独跳过，与 G14-G16 无关）
 
 ## Minor 项已全部实施
 
