@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   agent:
     image: ghcr.io/${GITHUB_OWNER:-long-safe-accont-4567-uvwxyz-9876}/xiaoda-agent:latest
@@ -20,6 +18,14 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    # 安全加固（dev 模式部分启用）
+    # cap_drop: 丢弃所有非必要 Linux capabilities
+    # security_opt: 阻止子进程通过 setuid/setgid 提权
+    # 注意：dev 模式因代码挂载 ./:/app 需要可写，**不启用** read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:

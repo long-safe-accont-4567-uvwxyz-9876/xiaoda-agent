@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   agent:
     image: ghcr.io/${GITHUB_OWNER:-long-safe-accont-4567-uvwxyz-9876}/xiaoda-agent:latest
@@ -19,6 +17,20 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    # 安全加固（生产模式全启用）
+    # cap_drop: 丢弃所有非必要 Linux capabilities
+    # security_opt: 阻止子进程通过 setuid/setgid 提权
+    # read_only: 容器根文件系统只读；所有写入必须落到 volume 或 tmpfs
+    # tmpfs: /tmp 供 Python tempfile 使用
+    # SQLite 数据库与 WAL 文件均位于 /data volume 下（KIOXIA_DATA_DIR=/data），
+    # 因此 read_only: true 不影响 SQLite WAL 模式读写
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
     deploy:
       resources:
         limits:

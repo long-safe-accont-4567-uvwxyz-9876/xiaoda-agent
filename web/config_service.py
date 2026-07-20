@@ -30,6 +30,9 @@ _DEFAULTS: dict[str, Any] = {
     "mcp": {},        # {server_name: {command, args, env, agents, enabled}} 用户新增的
     "models": {"providers": {}, "routes": {}},
     "dashboard": {"system_monitor_enabled": False},
+    # 可观测性: Prometheus /metrics 端点开关 (默认开启)
+    # 同时受环境变量 METRICS_ENABLED 控制 (env 优先级高于 webui_overrides.json)
+    "observability": {"metrics_enabled": True},
     "mail": {
         "enabled": False,
         "mode": "off",  # off / allowlist / all

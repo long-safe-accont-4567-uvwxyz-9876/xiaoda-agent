@@ -1,5 +1,5 @@
 # requirements.lock — 固化依赖精确版本
-# 生成日期: 2026-07-17
+# 生成日期: 2026-07-19（同步 prometheus-client）
 # 用法: pip install -r requirements.lock
 # 环境: Python 3.11
 
@@ -29,6 +29,9 @@ pilk==0.2.4
 
 # ── 系统监控 ──
 psutil==6.1.0
+
+# ── 可观测性: Prometheus 指标导出 (/metrics 端点) ──
+prometheus-client==0.25.0
 
 # ── 核心 ──
 python-dotenv==1.1.0

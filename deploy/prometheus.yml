@@ -1,0 +1,65 @@
+# Prometheus 抓取配置示例 (P1-4)
+#
+# 用法:
+#   1. 复制到 Prometheus 配置目录: cp deploy/prometheus.yml /etc/prometheus/prometheus.yml
+#   2. 重启 Prometheus: systemctl restart prometheus
+#   3. 在 Prometheus UI (http://localhost:9090/targets) 确认 xiaoda-agent job 状态为 UP
+#
+# 前置条件:
+#   - xiaoda-agent WebUI 已启动 (默认监听 0.0.0.0:8082)
+#   - .env 中 METRICS_ENABLED=true (默认开启)
+#   - 验证: curl http://localhost:8082/metrics 应返回 Prometheus 文本格式
+#
+# 安全提示:
+#   - 生产环境建议将 WebUI 部署在内网, 通过反向代理 (nginx/caddy) 暴露
+#   - /metrics 端点暴露进程级资源信息, 不建议直接公网暴露
+#   - 如需禁用: 在 .env 中设置 METRICS_ENABLED=false
+
+global:
+  scrape_interval: 15s       # 抓取间隔 (默认 15s, 可按需调整)
+  evaluation_interval: 15s   # 规则评估间隔
+  external_labels:
+    monitor: 'xiaoda-agent-monitor'
+
+# 告警规则文件 (可选)
+# rule_files:
+#   - 'alerts.yml'
+
+# 抓取目标
+scrape_configs:
+  # ── xiaoda-agent 自身指标 ──
+  - job_name: 'xiaoda-agent'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['localhost:8082']
+        labels:
+          service: 'xiaoda-agent'
+          env: 'production'
+
+  # ── Prometheus 自身指标 (可选, 用于监控 Prometheus 健康) ──
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+# ── 常用核心指标速查 ──
+#   tool_exec_success_total              成功工具调用总数 (Counter)
+#   model_router_latency_seconds         模型路由调用延迟 (Histogram, 含 _bucket/_sum/_count)
+#   memory_count                         当前记忆条数 (Gauge)
+#   process_cpu_seconds_total            进程 CPU 累计使用秒数
+#   process_resident_memory_bytes        进程常驻内存字节数
+#   python_info                          Python 版本信息
+#   xiaoda_<name>_total                  桥接自 utils/metrics.py 的 counter
+#   xiaoda_<name>_seconds                桥接自 utils/metrics.py 的 timer (histogram)
+#
+# ── 常用 PromQL 示例 ──
+#   # 工具调用成功率 (近 5 分钟)
+#   sum(rate(tool_exec_success_total[5m])) by (service)
+#
+#   # 模型路由 P99 延迟
+#   histogram_quantile(0.99, sum(rate(model_router_latency_seconds_bucket[5m])) by (le))
+#
+#   # 当前记忆条数
+#   memory_count
+#
+#   # 进程内存使用 (MB)
+#   process_resident_memory_bytes / 1024 / 1024

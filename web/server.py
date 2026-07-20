@@ -514,16 +514,40 @@ def create_app() -> FastAPI:
     _sla = get_sla_exporter()
     app.state.sla_exporter = _sla
 
-    @app.get("/metrics", include_in_schema=False)
-    async def prometheus_metrics(request: Any) -> Any:
-        # 限制为 localhost 访问，避免局域网暴露请求统计
-        client_host = getattr(getattr(request, "client", None), "host", "")
-        if client_host not in ("127.0.0.1", "::1", "localhost"):
-            from fastapi.responses import JSONResponse
-            return JSONResponse(status_code=403, content={"error": "Forbidden"})
-        from fastapi.responses import PlainTextResponse
-        _exporter = getattr(request.app.state, "sla_exporter", _sla)
-        return PlainTextResponse(_exporter.export(), media_type="text/plain; version=0.0.4; charset=utf-8")
+    # Prometheus /metrics 端点 (P1-4): 三层优先级控制注册
+    # 优先级 (高 -> 低):
+    #   1. 环境变量 METRICS_ENABLED (CI / 容器编排场景, 强制覆盖)
+    #   2. config_service.observability.metrics_enabled (用户在 webui_overrides.json 修改)
+    #   3. 默认 True (开箱即用)
+    # - 任一层级关闭时不注册路由 -> /metrics 返回 404
+    # - 由 web/routers/metrics.py 提供, 桥接 utils/metrics.py + 进程级默认指标
+    metrics_enabled_env = os.getenv("METRICS_ENABLED")
+    if metrics_enabled_env is not None:
+        # 环境变量优先级最高 (CI / 部署场景强制覆盖)
+        metrics_enabled = metrics_enabled_env.lower() in ("true", "1", "yes")
+        logger.info(
+            "webui.metrics_endpoint_env_override enabled={}", metrics_enabled
+        )
+    else:
+        # 未设环境变量时, 读 config_service 的 observability.metrics_enabled
+        # 让用户通过 WebUI 开关即时控制 (无需手动保存, config_service 原子写盘 + 热生效)
+        try:
+            from web.config_service import get_config_service
+            cfg = get_config_service()
+            metrics_enabled = bool(
+                cfg.get("observability.metrics_enabled", True)
+            )
+        except Exception as e:
+            # config_service 异常时 fail-open (保留默认开启), 不阻塞 server 启动
+            logger.warning("webui.metrics_endpoint_config_read_failed err={}", e)
+            metrics_enabled = True
+        logger.info("webui.metrics_endpoint_config enabled={}", metrics_enabled)
+    if metrics_enabled:
+        from web.routers.metrics import router as metrics_router
+        app.include_router(metrics_router)
+        logger.info("webui.metrics_endpoint_enabled")
+    else:
+        logger.info("webui.metrics_endpoint_disabled")
 
     # 媒体目录使用用户数据目录，避免写入 _MEIPASS 只读目录
     try:
