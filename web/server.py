@@ -217,6 +217,70 @@ async def _start_user_mcp_servers(core: Any) -> None:
             logger.warning("webui.mcp_restore_failed name={} error={}", name, str(e))
 
 
+async def _init_recall_scheduler(core: Any) -> tuple[str, Any]:
+    """G16: 初始化 MemoryRecallScheduler（可并行）。
+
+    主动检索 B：定时回忆任务调度器（独立后台循环，每 3h 整理回忆笔记）。
+    失败时返回 (attr_name, None)，不影响其他并行初始化的调度器。
+    """
+    try:
+        from memory.recall_scheduler import MemoryRecallScheduler
+        recall_scheduler = MemoryRecallScheduler(core)
+        recall_scheduler.start()
+        return ("recall_scheduler", recall_scheduler)
+    except (ImportError, AttributeError, OSError) as e:
+        logger.warning("webui.recall_scheduler_init_failed", error=str(e))
+        return ("recall_scheduler", None)
+
+
+async def _init_spontaneous_recall(core: Any) -> tuple[str, Any]:
+    """G16: 初始化 SpontaneousRecall（可并行）。
+
+    自发回忆：每小时随机想 1 条记忆，生成内心独白（让 agent 有"内心生活"）。
+    失败时返回 (attr_name, None)。
+    """
+    try:
+        from core.spontaneous_recall import SpontaneousRecall
+        spontaneous = SpontaneousRecall(core)
+        spontaneous.start()
+        return ("spontaneous_recall", spontaneous)
+    except (ImportError, AttributeError, OSError) as e:
+        logger.warning("webui.spontaneous_recall_init_failed", error=str(e))
+        return ("spontaneous_recall", None)
+
+
+async def _init_growth_narrative(core: Any) -> tuple[str, Any]:
+    """G16: 初始化 GrowthNarrative（可并行）。
+
+    成长叙事：每天 23:00 生成成长总结，写入自我模型和长期记忆。
+    失败时返回 (attr_name, None)。
+    """
+    try:
+        from core.growth_narrative import GrowthNarrative
+        growth = GrowthNarrative(core)
+        growth.start()
+        return ("growth_narrative", growth)
+    except (ImportError, AttributeError, OSError) as e:
+        logger.warning("webui.growth_narrative_init_failed", error=str(e))
+        return ("growth_narrative", None)
+
+
+async def _init_mail_poller(core: Any, config_service: Any) -> tuple[str, Any]:
+    """G16: 初始化 MailPoller（可并行）。
+
+    邮件机器人轮询器（后台循环，检测新邮件→注入 Agent→邮件回复）。
+    失败时返回 (attr_name, None)。
+    """
+    try:
+        from web.mail_poller import MailPoller
+        mail_poller = MailPoller(core, config_service)
+        mail_poller.start()
+        return ("mail_poller", mail_poller)
+    except (ImportError, AttributeError, OSError) as e:
+        logger.warning("webui.mail_poller_init_failed error={}", str(e))
+        return ("mail_poller", None)
+
+
 async def _start_services(app: Any, core: Any) -> None:
     """启动正常模式下的所有服务组件（PluginManager、MediaTaskQueue、GreetingScheduler、QQ Bot）。"""
     from web.config_service import get_config_service
@@ -253,32 +317,20 @@ async def _start_services(app: Any, core: Any) -> None:
     scheduler.start()
     app.state.greeting_scheduler = scheduler
 
-    # 主动检索 B：定时回忆任务调度器（独立后台循环，每 3h 整理回忆笔记）
-    try:
-        from memory.recall_scheduler import MemoryRecallScheduler
-        recall_scheduler = MemoryRecallScheduler(core)
-        recall_scheduler.start()
-        app.state.recall_scheduler = recall_scheduler
-    except (ImportError, AttributeError, OSError) as e:
-        logger.warning("webui.recall_scheduler_init_failed", error=str(e))
-
-    # 自发回忆：每小时随机想 1 条记忆，生成内心独白（让 agent 有"内心生活"）
-    try:
-        from core.spontaneous_recall import SpontaneousRecall
-        spontaneous = SpontaneousRecall(core)
-        spontaneous.start()
-        app.state.spontaneous_recall = spontaneous
-    except (ImportError, AttributeError, OSError) as e:
-        logger.warning("webui.spontaneous_recall_init_failed", error=str(e))
-
-    # 成长叙事：每天 23:00 生成成长总结，写入自我模型和长期记忆
-    try:
-        from core.growth_narrative import GrowthNarrative
-        growth = GrowthNarrative(core)
-        growth.start()
-        app.state.growth_narrative = growth
-    except (ImportError, AttributeError, OSError) as e:
-        logger.warning("webui.growth_narrative_init_failed", error=str(e))
+    # G16: 独立调度器并行初始化（recall/spontaneous/growth/mail）
+    # 这 4 个调度器相互独立、各自 try/except 包裹（单点失败不影响其他），
+    # 用 asyncio.gather 并行启动以缩短启动时间（参考 docs/performance_audit_2026-07-20.md）。
+    config_service = get_config_service()
+    init_results = await asyncio.gather(
+        _init_recall_scheduler(core),
+        _init_spontaneous_recall(core),
+        _init_growth_narrative(core),
+        _init_mail_poller(core, config_service),
+        return_exceptions=False,  # 每个函数内部已 try/except，不会抛异常
+    )
+    for attr_name, instance in init_results:
+        if instance is not None:
+            setattr(app.state, attr_name, instance)
 
     # QQ Bot
     qq_task = None
@@ -290,15 +342,6 @@ async def _start_services(app: Any, core: Any) -> None:
         logger.info("webui.qq_bot_task_started")
     app.state.qq_task = qq_task
     app.state.last_emotion = None
-
-    # 邮件机器人轮询器（后台循环，检测新邮件→注入 Agent→邮件回复）
-    try:
-        from web.mail_poller import MailPoller
-        mail_poller = MailPoller(core, get_config_service())
-        mail_poller.start()
-        app.state.mail_poller = mail_poller
-    except (ImportError, AttributeError, OSError) as e:
-        logger.warning("webui.mail_poller_init_failed error={}", str(e))
 
 
 @asynccontextmanager
