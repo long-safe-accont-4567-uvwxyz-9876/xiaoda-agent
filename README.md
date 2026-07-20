@@ -10,6 +10,19 @@
 
 ***
 
+## 📚 文档导航
+
+完整文档索引请见 [docs/INDEX.md](docs/INDEX.md)，按角色分类（快速开始 / 开发者 / 部署运维 / 审计与质量 / 测试 / 设计规格）导航所有文档。
+
+| 常用入口 | 说明 |
+| ---- | ---- |
+| [安装部署](SETUP.md) | Docker / 手动 / systemd 三种部署方式 |
+| [使用指南](USAGE.md) | CLI 命令、QQ Bot、Web UI 使用说明 |
+| [架构设计](docs/ARCHITECTURE.md) | 系统架构、模块划分、调用链 |
+| [API 文档](docs/API.md) | Web API 接口规范 |
+
+***
+
 ## 免责声明
 
 > 本 Agent 由作者飞个人学习用途二创开发，禁止用户生成任何违禁内容，禁止用于任何商业用途，否则一切后果与开发者无关，由用户一人承担。
@@ -35,7 +48,7 @@
 | 记忆   | 无状态 / 简单上下文窗口 | 情景记忆 + 向量检索 + Reranker 精排 + 知识图谱 + 用户画像          |
 | 检索   | 单路向量召回        | FTS5 BM25 + bge-m3 向量 → RRF 融合 → 交叉编码器精排 + KG 增强 |
 | 学习   | 不会从对话中学习      | 自动提取规则、发现模式、自我改进                                 |
-| 情绪   | 无             | 9 类情绪检测 → 贴纸 + 语音风格联动                            |
+| 情绪   | 无             | 16 种情绪检测 → 贴纸 + 语音风格联动                           | <!-- auto-updated by scripts/count_project_stats.py -->
 | 工具   | 少量 API 调用     | 40+ 内置工具 + MCP 协议扩展 + 插件系统                       |
 | 多智能体 | 单一模型          | 5 角色人格 + 图编排 + 委托机制                              |
 | 部署   | 云端依赖          | 边缘设备运行，Docker / 安装包一键部署                          |
@@ -200,7 +213,11 @@ plugins/
   剥离标签    统一枚举映射
 ```
 
-- **9 类核心情绪**：HAPPY / SAD / ANGRY / ANXIOUS / SHY / CURIOUS / THINKING / FEAR / NEUTRAL
+- **16 种核心情绪**：HAPPY / EXCITED / LOVE / SHY / SAD / ANGRY / SURPRISED / CONFUSED / THINKING / PLAYFUL / MOVED / NEUTRAL / ANXIOUS / FEAR / CURIOUS / POUT <!-- auto-updated by scripts/count_project_stats.py -->
+- **三层映射机制**（定义于 `emotion/emotion_enum.py`，确保"输入宽容、输出细分、消费端降级"）：
+  - **`EMOTION_ALIASES`**：中文词/英文变体 → 核心枚举（约 100 个别名，如"开心"→HAPPY、"greeting"→HAPPY、"lonely"→SAD），通过 `resolve_emotion()` 统一归并
+  - **`TTS_STYLE_MAP`**：核心枚举 → TTS 细分风格（部分降级，如 EXCITED→happy、SURPRISED→fear、MOVED→caring、POUT→coquettish）
+  - **`STICKER_FALLBACK`**：核心枚举 → 贴纸类别（部分降级，如 CURIOUS→confused）
 - **情绪→贴纸映射**：统一枚举 `Emotion` → `STICKER_FALLBACK` 字典
 - **情绪→语音映射**：统一枚举 `Emotion` → `TTS_STYLE_MAP` 字典
 - **TTS 缓存持久化**：合成结果缓存到磁盘，重复文本零延迟
@@ -435,7 +452,7 @@ xiaoda-agent/
 │   ├── config_service.py     #   WebUI 热生效配置层
 │   ├── greeting_scheduler.py #   问候调度器（Web+QQ 通道）
 │   ├── media_tasks.py        #   媒体任务管理
-│   ├── routers/              #   13 个 API 路由模块
+│   ├── routers/              #   18 个 API 路由模块 <!-- auto-updated by scripts/count_project_stats.py -->
 │   │   ├── setup.py          #     Setup 向导（10+ Key 在线验证）
 │   │   ├── schedule.py       #     问候调度配置
 │   │   ├── plugins.py        #     插件管理
@@ -477,7 +494,7 @@ xiaoda-agent/
 │   └── nudge_tool.py         #   主动消息工具
 ├── db/                       # 数据库
 │   ├── database.py           #   数据库管理（自动迁移）
-│   ├── schema.sql            #   Schema（21 表 + 22 索引）
+│   ├── schema.sql            #   Schema（30 表 + 4 FTS5 虚拟表 + 52 索引） <!-- auto-updated by scripts/count_project_stats.py -->
 │   ├── db_analytics.py       #   分析数据
 │   ├── db_memory.py          #   记忆数据
 │   ├── db_knowledge.py       #   知识数据
@@ -581,6 +598,8 @@ docker-compose -f docker-compose.prod.yml up -d
 
 ## 最新更新（v0.4.83）
 
+> **当前版本**：v0.5.28（详见 `pyproject.toml`；后续版本变更见 `git log`，未在此手动维护）
+
 | 特性 | 说明 |
 |------|------|
 | **情感系统修复** | 兴奋情绪独立识别；害怕/恐惧→FEAR 映射修正 |
@@ -612,14 +631,14 @@ docker-compose -f docker-compose.prod.yml up -d
 
 | 指标         | 数值           |
 | ---------- | ------------ |
-| Python 模块  | 80+          |
-| 生产代码       | \~20,000 行   |
-| 测试代码       | \~6,000 行    |
+| Python 模块  | 517          | <!-- auto-updated by scripts/count_project_stats.py -->
+| 生产代码       | \~135,511 行 | <!-- auto-updated by scripts/count_project_stats.py -->
+| 测试代码       | \~41,000 行   |
 | 内置工具       | 40+          |
 | 角色人格       | 5 个          |
-| 数据库表       | 21 张 + 22 索引 |
-| Web API 路由 | 15 模块 + 139 端点 |
-| Web UI 视图  | 15 个         |
+| 数据库表       | 30 张 + 4 FTS5 虚拟表 + 52 索引 | <!-- auto-updated by scripts/count_project_stats.py -->
+| Web API 路由 | 18 模块 + 187 端点 | <!-- auto-updated by scripts/count_project_stats.py -->
+| Web UI 视图  | 19 个         |
 | RAG 优化阶段   | 3 阶段（P0-P2）  |
 | MCP 传输协议   | 3 种          |
 | 矩阵治理层级   | 5 层（L1-L5）   |
@@ -637,7 +656,7 @@ docker-compose -f docker-compose.prod.yml up -d
 | 向量检索     | sqlite-vec           | 小规模数据无需 ANN，与 SQLite 统一存储  |
 | 全文检索     | FTS5 BM25            | SQLite 原生，关键词精确匹配          |
 | 工具搜索     | BM25 + Vector + RRF  | 混合检索，按需加载，节省 85% token    |
-| 情感系统     | 统一枚举 Emotion         | 9 类情绪 → 贴纸/语音/显示 三路映射      |
+| 情感系统     | 统一枚举 Emotion         | 16 种情绪 → 贴纸/语音/显示 三路映射     | <!-- auto-updated by scripts/count_project_stats.py -->
 | 工具调用     | ToolCallExtractor    | 标准 tool\_calls + DSML 统一提取 |
 | 工具扩展     | MCP 协议 + 插件系统        | 外部工具无限扩展，声明式权限管理           |
 | 代码沙箱     | AST 审查               | 比正则更难绕过，禁止模块/内建白名单         |

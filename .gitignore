@@ -31,7 +31,6 @@ build/
 dist/
 web/dist/
 botpy.log.*
-docs/juejin-article.md
 market/.cache
 assets/stickers/*
 !assets/stickers/.gitkeep

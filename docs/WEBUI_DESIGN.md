@@ -87,11 +87,11 @@
 | Skills（工具） | `tool_registry.py` `register_tool()` / `to_openai_tools()`、`tool_executor.py`、`permission_manager.py`（DEFAULT/DEV/STRICT/BYPASS）、`agent_dispatcher.py` `excluded_tools` + `DELEGATE_BLOCKED_TOOLS` | per-agent 开关矩阵的持久化与热生效 |
 | MCP | `mcp_client.py` `MCPClient`（stdio）/ `MCPManager`，自动注册到 tool_registry | MCP 服务器的 UI 级 CRUD、启停、per-agent 授权 |
 | 斜杠命令 | `slash_commands.py` `SlashCommandHandler.handle()`，17 条命令（/cost /status /model /agent /memory /emotion /knowledge /voice /note /learn …），`OWNER_ONLY_COMMANDS` 权限 | 命令列表查询 API（供前端自动补全） |
-| 情绪 | `emotion_simple.py` `detect_emotion()`、`emotion_enum.py` 9 类情绪 | 历史情绪曲线查询 API（数据在 conversation_logs.emotion_label） |
+| 情绪 | `emotion_simple.py` `detect_emotion()`、`emotion_enum.py` 16 类情绪 | 历史情绪曲线查询 API（数据在 conversation_logs.emotion_label） |
 | 用户画像（认知） | `portrait_manager.py` `consolidate_portrait()`、`user_portrait` 表（content/version/change_log） | 读取/手动触发整合的 API |
 | 当天事件 | `episodic_memories` 表、`agent_events` 表、`notebooks` 表（INSIGHT/TASK） | 按日聚合查询 API |
 | 定时问候/免打扰 | `nudge_engine.py` `NudgeEngine`（greeting_threshold、greeting_max_per_day、dnd_start/dnd_end、`_is_dnd()`、`poke()`、`_tick()` 60s 主循环） | **固定时间点问候、随机时间问候**（现仅"闲置触发"）、配置热更新、Web 通道推送 |
-| TTS | `tts_engine.py` `TTSEngine.synthesize(text, voice, style)`，音色 xiaoda/xiaoli，13 种情绪风格 | HTTP 音频文件服务、试听 API |
+| TTS | `tts_engine.py` `TTSEngine.synthesize(text, voice, style)`，音色 xiaoda/xiaoli，16 种情绪风格 | HTTP 音频文件服务、试听 API |
 | 视频/图片生成 | `tools/agnes_tools.py` `agnes_image_generate` / `agnes_video_generate` | 独立生成页 + 任务队列（视频生成耗时长，需异步任务） |
 | 健康测试 | `healthcheck.sh`、`smart_error_handler.py`、`metrics.py`、`error_classifier.py` | LLM/TTS/视频 在线探活 API |
 | 会话 | `session_store.py` `SessionInfo` + `fold_session_summary()`、`conversation_logs` 表 | 会话列表/历史分页 API |
@@ -254,7 +254,7 @@ MCP 工具进入 registry 后自动出现在 §4.5 工具列表（source=`mcp:<s
 | 方法 | 路径 | 说明 | 对接后端 |
 |------|------|------|---------|
 | POST | `/media/tts` | `{text, voice:"xiaoda"\|"xiaoli", style}` → `{audio_url, duration}` | `TTSEngine.synthesize()`，产物拷入 `web/media/tts/`，由 `/media/*` 静态托管 |
-| GET | `/media/tts/voices` | 音色列表 + 13 种情绪风格枚举 | `tts_engine` 的 VOICE/EMOTION_STYLE_MAP 常量反射 |
+| GET | `/media/tts/voices` | 音色列表 + 16 种情绪风格枚举 | `tts_engine` 的 VOICE/EMOTION_STYLE_MAP 常量反射 |
 | PUT | `/media/tts/config` | 全局 TTS 开关、默认音色、自动朗读回复开关 | ConfigService |
 | POST | `/media/image` | 文生图，异步任务 → `{task_id}` | `agnes_image_generate` 工具，经 MediaTaskQueue（§5.5） |
 | POST | `/media/video` | 文生视频，异步任务 → `{task_id}` | `agnes_video_generate` |
@@ -454,9 +454,9 @@ cp /home/orangepi/Desktop/webui_background.jpg web/frontend/public/assets/webui_
 
 ### 7.4 纳西妲情绪立绘（`chat/EmotionAvatar.vue`，R24）
 
-聊天区右上角固定一个 96px 圆形头像容器，根据最近回复的 `emotion`（9 类：喜悦/悲伤/愤怒/焦虑/害羞/好奇/思考/恐惧/中性）切换：
+聊天区右上角固定一个 96px 圆形头像容器，根据最近回复的 `emotion`（16 类：喜悦/兴奋/喜爱/害羞/悲伤/愤怒/惊讶/困惑/思考/调皮/感动/中性/焦虑/恐惧/好奇/撒娇）切换：
 
-- 资产：`public/assets/emotions/{joy,sad,angry,anxious,shy,curious,thinking,fear,neutral}.png`（若立绘资产暂缺，先用同一头像 + 不同颜色光环 + emoji 角标占位，**但切换逻辑必须真实接 emotion 字段**，资产后补不算假功能）。
+- 资产：`public/assets/emotions/{happy,excited,love,shy,sad,angry,surprised,confused,thinking,playful,moved,neutral,anxious,fear,curious,pout}.png`（若立绘资产暂缺，先用同一头像 + 不同颜色光环 + emoji 角标占位，**但切换逻辑必须真实接 emotion 字段**，资产后补不算假功能）。
 - 切换动画：旧图缩小淡出、新图带草环波纹弹入（200ms）。
 - 头像 hover 显示 tooltip：`当前情绪：喜悦 (valence 0.8)`，点击跳转 Insight 页情绪曲线。
 - 后端若返回 `sticker_path`，气泡尾部追加贴纸图。
@@ -535,7 +535,7 @@ cp /home/orangepi/Desktop/webui_background.jpg web/frontend/public/assets/webui_
 
 四个 tab：
 
-1. **情绪**：当前情绪大卡（立绘 + primary + valence/intensity 仪表盘）+ 7 天情绪折线/河流图（ECharts，9 类情绪堆叠）+ 今日情绪分布饼图。
+1. **情绪**：当前情绪大卡（立绘 + primary + valence/intensity 仪表盘）+ 7 天情绪折线/河流图（ECharts，16 类情绪堆叠）+ 今日情绪分布饼图。
 2. **认知（用户画像）**：画像全文卡（Markdown 渲染）、version 与更新时间、change_log 时间线（每版变了什么）、「🔄 立即整合画像」按钮（POST consolidate，按钮转圈直至 WS 通知完成并刷新）。
 3. **今日事件**：垂直时间线（TodayTimeline），混排今日 episodic_memories（🌱）、agent_events（⚙）、新笔记（📝）、学习晋升（🎓）、已发送问候（💌），每项带时刻与摘要；顶部统计条「今天对话 N 轮 · 调用工具 M 次 · 新增记忆 K 条」。
 4. **记忆与知识**：
@@ -554,7 +554,7 @@ cp /home/orangepi/Desktop/webui_background.jpg web/frontend/public/assets/webui_
 
 ### 8.8 媒体工坊（R11，见 §12）/ 测试中心（R12，见 §13）/ 仪表盘 / 系统设置
 
-- **TtsPanel**：文本框、voice 下拉（含每音色的描述）、style 下拉（13 种情绪风格，中文标签）、合成按钮 → 波形播放器 + 下载；右侧「自动朗读回复」全局开关与默认音色设置（PUT tts/config，**该开关直接影响 ChatView 收到回复后是否自动调 TTS**）。
+- **TtsPanel**：文本框、voice 下拉（含每音色的描述）、style 下拉（16 种情绪风格，中文标签）、合成按钮 → 波形播放器 + 下载；右侧「自动朗读回复」全局开关与默认音色设置（PUT tts/config，**该开关直接影响 ChatView 收到回复后是否自动调 TTS**）。
 - **ImageGenPanel / VideoGenPanel**：prompt 文本框 + 提交 → TaskQueue 组件实时进度（WS）→ 完成后产物卡入 Gallery。视频面板顶部提示预计耗时与「队列中 N 个任务」。
 - **Gallery**：瀑布流，type 筛选，点击放大预览，删除。
 - **TestCenter**：见 §13.3。
@@ -640,7 +640,7 @@ cp /home/orangepi/Desktop/webui_background.jpg web/frontend/public/assets/webui_
 
 - 合成入口统一走 `TTSEngine.synthesize(text, voice, style)`（现有，MiMo voiceclone 后端）。网关侧：限制 text ≤ 500 字；产物 wav 移动到 `web/media/tts/{sha1(text+voice+style)}.wav` 实现**内容寻址缓存**（同文重复请求直接命中）；返回 `/media/tts/xx.wav`。
 - 「自动朗读回复」开关（ui 配置）：开启时 `final` 事件后前端自动请求 TTS 并播放；voice 自动跟随当前 Agent 的 `voice_ref`（可莉说话用可莉嗓音——这是 per-agent voice_ref 字段的真实用途）。
-- style 自动映射：`final.emotion`（9 类）→ `EMOTION_STYLE_MAP`（13 风格）做一张固定映射表放 `tts_engine.py`，手动合成时下拉可覆盖。
+- style 自动映射：`final.emotion`（16 类）→ `EMOTION_STYLE_MAP`（16 风格）做一张固定映射表放 `tts_engine.py`，手动合成时下拉可覆盖。
 
 ### 12.2 图片 / 视频生成
 
