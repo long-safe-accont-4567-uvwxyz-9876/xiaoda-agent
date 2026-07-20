@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -89,7 +90,7 @@ class RecoveryOrchestrator:
         self._anti_patterns: dict[str, dict] = {}  # 反模式注册
         self._max_level = max_level
         self._backoff_delays = backoff_delays or [1, 2, 4, 8, 16]
-        self._audit_log: list[dict] = []
+        self._audit_log: deque[dict] = deque(maxlen=500)
         self._stats = {"total": 0, "success": 0, "failed": 0,
                          "by_level": {line.name: 0 for line in RecoveryLevel}}
 
@@ -354,7 +355,7 @@ class RecoveryOrchestrator:
         Returns:
             审计日志列表 (按时间升序)
         """
-        return self._audit_log[-limit:]
+        return list(self._audit_log)[-limit:]
 
 
 # 全局单例
