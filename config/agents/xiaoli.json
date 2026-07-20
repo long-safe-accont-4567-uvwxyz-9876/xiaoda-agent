@@ -4,7 +4,7 @@
   "display_name_en": "Xiaoli",
   "provider": "siliconflow",
   "model": "deepseek-ai/DeepSeek-V4-Pro",
-  "personality_file": "/home/orangepi/ai-agent/config/agents/xiaoli_personality.md",
+  "personality_file": "config/agents/xiaoli_personality.md",
   "voice_ref": "xiaoli/xiaoli",
   "excluded_tools": [
     "call_xiaoli",
