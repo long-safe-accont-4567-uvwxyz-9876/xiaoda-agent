@@ -329,7 +329,17 @@ def _wait_for_server_ready(window: Any, port: int) -> None:
 
 def _run_desktop(host: str, port: int) -> None:
     """桌面模式：pywebview 包装 WebUI，带启动动画"""
-    # 控制台已在文件顶部隐藏，此处无需重复
+    # Windows: 隐藏控制台窗口（双击快捷方式时不弹黑窗）
+    # 保留 stdout/stderr 句柄，crash.log 仍可写入
+    if sys.platform == "win32":
+        import ctypes
+        try:
+            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
+        except (OSError, AttributeError):
+            pass
+
     import threading
     from utils.logging_config import setup_logging
     setup_logging()

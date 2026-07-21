@@ -12,12 +12,21 @@ Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
   !define OUTFILE "xiaoda-agent-windows-x64-v${VERSION}-setup.exe"
 !endif
 OutFile "${OUTFILE}"
-InstallDir "$PROGRAMFILES64\${PRODUCT_NAME}"
-InstallDirRegKey HKLM "Software\${PRODUCT_NAME}" "InstallDir"
-RequestExecutionLevel admin
+; ── 绿化核心改动：per-user 安装到 LOCALAPPDATA，无需 UAC 管理员权限 ──
+;   1. InstallDir 改为 $LOCALAPPDATA（用户可写，无需 admin）
+;   2. RequestExecutionLevel user（不弹 UAC）
+;   3. InstallDirRegKey 改为 HKCU（当前用户注册表）
+;   4. SetShellVarContext current（快捷方式放当前用户目录）
+;   这样双击安装包不再弹 UAC，且卸载无需管理员权限。
+;   如果用户需要全机器安装，仍可通过右键"以管理员身份运行"升级到 per-machine。
+InstallDir "$LOCALAPPDATA\${PRODUCT_NAME}"
+InstallDirRegKey HKCU "Software\${PRODUCT_NAME}" "InstallDir"
+RequestExecutionLevel user
+SetShellVarContext current
 SetCompressor /SOLID lzma
 
 !include "MUI2.nsh"
+!include "LogicLib.nsh"
 !define MUI_ICON "dist\xiaoda-agent\xiaoda-icon.ico"
 !define MUI_UNICON "dist\xiaoda-agent\xiaoda-icon.ico"
 
@@ -35,6 +44,18 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_LANGUAGE "English"
 
 Section "MainSection" SEC01
+; ── 旧版 per-machine 安装迁移（CodeRabbit 审查发现）──
+;   检测 HKLM 下的旧版（ProgramFiles 安装），调用其 uninstaller 卸载，
+;   避免新旧版本并存于不同目录。旧版 uninstaller 需要 admin 权限，
+;   这里用 ExecWait 同步等待卸载完成；若用户未以 admin 运行，跳过迁移。
+ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "UninstallString"
+${If} $0 != ""
+  ; 检测到旧版 per-machine 安装，提示并调用其 uninstaller
+  MessageBox MB_YESNO|MB_ICONQUESTION "检测到旧版（per-machine）安装于 $0。$\n$\n是否先卸载旧版再继续安装新版（per-user）？$\n（卸载旧版需要管理员权限，若取消请右键本安装包"以管理员身份运行"）" IDYES +2 IDNO skip_legacy_uninstall
+  ExecWait '"$0" /S' ; /S 静默卸载（NSIS 默认 uninstaller 支持）
+skip_legacy_uninstall:
+${EndIf}
+
 SetOutPath "$INSTDIR"
 SetOverwrite on
 ; 关闭正在运行的实例，避免文件被锁定导致安装失败
@@ -80,11 +101,14 @@ SectionEnd
 
 Section -Post
 WriteUninstaller "$INSTDIR\uninstall.exe"
-WriteRegStr HKLM "Software\${PRODUCT_NAME}" "InstallDir" "$INSTDIR"
-WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "DisplayName" "${PRODUCT_NAME}"
-WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "UninstallString" "$INSTDIR\uninstall.exe"
-WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "DisplayVersion" "${PRODUCT_VERSION}"
-WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "Publisher" "${PRODUCT_PUBLISHER}"
+; per-user 安装：注册表写 HKCU 而非 HKLM（无需管理员权限）
+WriteRegStr HKCU "Software\${PRODUCT_NAME}" "InstallDir" "$INSTDIR"
+WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "DisplayName" "${PRODUCT_NAME}"
+WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "UninstallString" "$INSTDIR\uninstall.exe"
+WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "DisplayVersion" "${PRODUCT_VERSION}"
+WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "Publisher" "${PRODUCT_PUBLISHER}"
+; per-user 安装的卸载入口也放当前用户（SetShellVarContext current 已设置）
+WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "InstallLocation" "$INSTDIR"
 SectionEnd
 
 Section Uninstall
@@ -108,6 +132,7 @@ Delete "$INSTDIR\uninstall.exe"
 RMDir "$INSTDIR"
 Delete "$DESKTOP\小妲Agent.lnk"
 RMDir /r "$SMPROGRAMS\${PRODUCT_NAME}"
-DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
-DeleteRegKey HKLM "Software\${PRODUCT_NAME}"
+; per-user 卸载：清理 HKCU 注册表（与安装段对应）
+DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
+DeleteRegKey HKCU "Software\${PRODUCT_NAME}"
 SectionEnd

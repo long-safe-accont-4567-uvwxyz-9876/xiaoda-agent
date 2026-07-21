@@ -6,13 +6,15 @@ setlocal
 :: ============================================
 
 :: Handle Ctrl+C gracefully
-set "LAUNCH_MODE=--desktop"
+:: 默认 --web 模式（用系统浏览器，更轻量，避免 WebView2 子进程吃 GPU）
+:: --desktop 模式会拉起 msedgewebview2.exe 子进程，在高刷新率屏幕上可能卡顿
+set "LAUNCH_MODE=--web"
 if "%~1"=="" goto :main
-if /i "%~1"=="--web" (
-    set "LAUNCH_MODE=--web"
+if /i "%~1"=="--web" goto :main
+if /i "%~1"=="--desktop" (
+    set "LAUNCH_MODE=--desktop"
     goto :main
 )
-if /i "%~1"=="--desktop" goto :main
 goto :usage
 
 :usage
@@ -20,8 +22,8 @@ echo.
 echo   Usage: start-windows.bat [--web ^| --desktop]
 echo.
 echo   Options:
-echo     --web       Start in Web UI mode (opens browser)
-echo     --desktop   Start in Desktop mode (default, pywebview window)
+echo     --web       Start in Web UI mode (default, opens system browser)
+echo     --desktop   Start in Desktop mode (pywebview native window)
 echo.
 goto :eof
 

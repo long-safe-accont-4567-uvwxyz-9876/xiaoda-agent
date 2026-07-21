@@ -42,6 +42,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          # 可复现构建：用 requirements.lock 做缓存键
+          cache: 'pip'
+          cache-dependency-path: 'requirements.lock'
 
       - name: Version sync check
         shell: bash
@@ -67,6 +70,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          # npm ci 需要 package-lock.json，缓存加速重复构建
+          cache: 'npm'
+          cache-dependency-path: 'web/frontend/package-lock.json'
 
       - name: Clean old frontend dist
         shell: bash
@@ -82,7 +88,8 @@ jobs:
 
       - name: Install frontend deps
         working-directory: web/frontend
-        run: npm install
+        # npm ci 严格按 package-lock.json 安装，保证可复现构建
+        run: npm ci
 
       - name: Build frontend (vite)
         working-directory: web/frontend
@@ -128,8 +135,9 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install pyinstaller
-          pip install -r requirements.txt
-          pip install fastapi uvicorn[standard] websockets python-multipart sse-starlette httpx Pillow numpy rich python-dotenv loguru openai aiosqlite pydantic jieba pyyaml pilk pywebview
+          # 用 requirements.lock 精确版本做可复现构建（与 ci-tests.yml 一致）
+          # requirements.lock 已包含所有运行时依赖，无需重复安装宽松版本
+          pip install -r requirements.lock
 
       - name: Verify pilk installed (SILK codec for voice messages)
         shell: python
@@ -375,6 +383,7 @@ jobs:
           Copy-Item "scripts/doctor.bat" "dist/xiaoda-agent/"
           Copy-Item "assets/xiaoda-icon.ico" "dist/xiaoda-agent/xiaoda-icon.ico"
 
+          # NSIS 安装（GitHub-hosted Windows runner 通常已缓存 choco 包，约 30s）
           choco install nsis -y --no-progress
           $nsisPath = "C:\Program Files (x86)\NSIS\makensis.exe"
           if (-not (Test-Path $nsisPath)) {
@@ -440,6 +449,8 @@ jobs:
           if-no-files-found: warn
 
   docker:
+    # 测试失败时不应推送镜像（与 release job 一致的发布门禁）
+    needs: [test]
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -486,7 +497,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    continue-on-error: true
+    # 移除 continue-on-error: true —— 测试失败必须阻塞发布
     steps:
       - uses: actions/checkout@v4
       - name: Install system dependencies
@@ -494,12 +505,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install -r requirements.txt
+          cache: 'pip'
+          cache-dependency-path: 'requirements.lock'
+      # 用 requirements.lock 精确版本（与 ci-tests.yml 和 build job 一致）
+      - run: pip install -r requirements.lock
       - run: pip install pytest pytest-asyncio pytest-timeout numpy
       - run: python -m pytest tests/ -x -q --timeout=60 --durations=30 -k "not e2e_real_scenario"
 
   release:
-    needs: [build]
+    needs: [build, test]
     # Only create release on tag push or manual dispatch, NOT on main branch push
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest

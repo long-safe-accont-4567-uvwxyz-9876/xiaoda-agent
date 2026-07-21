@@ -484,6 +484,53 @@ excludes = [
 ]
 
 # ---------------------------------------------------------------------------
+# 产物身份元数据 — BUILD_INFO.json 注入构建时可追溯信息
+#   必须在 Analysis() 之前生成并 append 到 datas，否则 a.datas 不会包含它，
+#   COLLECT(a.datas) 会漏掉这个文件（CodeRabbit 审查发现）。
+#   build_date 用 git commit 时间戳（SOURCE_DATE_EPOCH 优先）而非 datetime.now，
+#   保证同一 commit 可复现构建产生相同 BUILD_INFO.json（CodeRabbit 审查发现）。
+# ---------------------------------------------------------------------------
+import subprocess as _sp
+import datetime as _dt
+
+def _git(cmd):
+    try:
+        return _sp.check_output(cmd, cwd=SPECPATH, stderr=_sp.DEVNULL,
+                                timeout=5).decode().strip()
+    except Exception:
+        return 'unknown'
+
+# 可复现构建：优先 SOURCE_DATE_EPOCH，其次 git commit 时间戳，最后 fallback now
+def _deterministic_build_date():
+    sde = os.environ.get('SOURCE_DATE_EPOCH')
+    if sde:
+        try:
+            return _dt.datetime.fromtimestamp(int(sde), tz=_dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        except (ValueError, OSError):
+            pass
+    commit_ts = _git(['git', 'log', '-1', '--format=%ct'])
+    if commit_ts and commit_ts.isdigit():
+        return _dt.datetime.fromtimestamp(int(commit_ts), tz=_dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    # fallback：非 git 环境（极少见）才用当前时间
+    return _dt.datetime.now(_dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+_build_info = {
+    'version': _git(['git', 'describe', '--tags', '--always']),
+    'commit': _git(['git', 'rev-parse', '--short', 'HEAD']),
+    'commit_hash': _git(['git', 'rev-parse', 'HEAD']),
+    'branch': _git(['git', 'rev-parse', '--abbrev-ref', 'HEAD']),
+    'build_date': _deterministic_build_date(),
+    'python': '%d.%d.%d' % sys.version_info[:3],
+    'platform': sys.platform,
+}
+_bi_path = os.path.join(SPECPATH, 'BUILD_INFO.json')
+with open(_bi_path, 'w', encoding='utf-8') as _f:
+    import json as _json
+    _json.dump(_build_info, _f, indent=2, ensure_ascii=False)
+datas.append((_bi_path, '.'))
+print(f'[spec] BUILD_INFO.json: {_build_info}')
+
+# ---------------------------------------------------------------------------
 # Analysis
 # ---------------------------------------------------------------------------
 a = Analysis(
@@ -497,7 +544,9 @@ a = Analysis(
     runtime_hooks=[],
     excludes=excludes,
     noarchive=False,
-    optimize=0,
+    # optimize=1: 移除 assert 语句（启动加速 ~5-10%），保留 docstring
+    # 不用 optimize=2 是因为 FastAPI/Pydantic 的 OpenAPI 文档依赖 docstring
+    optimize=1,
 )
 
 # ---------------------------------------------------------------------------
@@ -507,6 +556,11 @@ pyz = PYZ(a.pure)
 
 # ---------------------------------------------------------------------------
 # EXE – the main executable
+#   - upx=False: UPX 压缩会触发 Windows Defender 误报（PyInstaller 官方已知问题），
+#     且现代磁盘空间充裕，不值得为 ~30% 体积节省牺牲杀软兼容性
+#   - console=True: 保留控制台以支持 --web (uvicorn 日志)、doctor (stdout)、
+#     CLI 模式。--desktop 桌面模式在 agent.py::_run_desktop 中用 Windows API
+#     隐藏控制台窗口，避免双击快捷方式时弹出黑窗。
 # ---------------------------------------------------------------------------
 exe = EXE(
     pyz,
@@ -517,7 +571,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -529,13 +583,14 @@ exe = EXE(
 
 # ---------------------------------------------------------------------------
 # COLLECT – onedir bundle (all files in one folder for data file compatibility)
+#   upx=False: 同上，避免杀软误报
 # ---------------------------------------------------------------------------
 coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='xiaoda-agent',
 )
