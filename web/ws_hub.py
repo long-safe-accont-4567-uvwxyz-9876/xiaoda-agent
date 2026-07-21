@@ -372,16 +372,24 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
             from utils.trace_context import new_trace_id
             # 身份解析：与 core.process() 主路径一致，确保 is_master/user_openid 语义正确
             _identity = core._resolve_identity("webui", user_openid="", source="web")
-            ctx = RequestContext(session_id=session_id, user_id="webui",
+            ctx = RequestContext(session_id=session_id, user_id=os.getenv("MASTER_QQ_OPENID", "webui"),
                                  user_input=text, status_callback=status_callback,
                                  is_master=_identity.is_owner)
             ctx.identity = _identity
             _tid = new_trace_id()
             trace = _logger.bind(trace_id=_tid)
             result = await core._dispatch_single_sub_agent(
-                agent, text, user_id="webui", source="web",
+                agent, text, user_id=os.getenv("MASTER_QQ_OPENID", "webui"), source="web",
                 session_id=session_id, trace=trace, ctx=ctx)
             data = serialize_result(result)
+            # XP 自动加成：子 agent 路径也需触发 XP（与主路径一致）
+            try:
+                from core.xp_system import get_xp_system
+                _xp_uid = os.getenv("MASTER_QQ_OPENID", "webui")  # 统一 XP ID
+                get_xp_system().add_chat_xp(_xp_uid, len(text))
+            except Exception as _e:
+                from loguru import logger as _logger
+                _logger.warning("xp.auto_add_failed", error=str(_e))
             data["agent"] = agent
             data["elapsed_ms"] = int((time.time() - t0) * 1000)
             if app is not None and data.get("emotion"):
@@ -391,7 +399,7 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
             return data
     else:
         result = await core.process(
-            user_input=text, user_id="webui", source="web",
+            user_input=text, user_id=os.getenv("MASTER_QQ_OPENID", "webui"), source="web",
             session_id=session_id, status_callback=status_callback,
             image_data=image_data)
         data = serialize_result(result)
