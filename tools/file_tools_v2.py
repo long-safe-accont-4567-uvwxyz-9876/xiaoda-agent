@@ -36,9 +36,12 @@ SENSITIVE_PATHS = [
 ]
 
 # 规范化白名单和黑名单（realpath）
-# 注意：仅保留实际存在的目录，不存在则跳过（否则 realpath 可能解析为意外的符号链接目标）
+# 白名单：仅保留实际存在的目录（不存在的目录无意义，且 realpath 可能解析到意外位置）
 ALLOWED_BASE_DIRS = [os.path.realpath(d) for d in ALLOWED_BASE_DIRS if os.path.exists(d)]
-SENSITIVE_PATHS = [os.path.realpath(d) for d in SENSITIVE_PATHS if os.path.exists(d)]
+# 黑名单：无条件保留（即使目录不存在也要拦截）。
+# 之前用 os.path.exists 过滤导致 runner/容器等无 ~/.ssh 的环境黑名单被清空，
+# 攻击者创建 ~/.ssh 符号链接指向敏感文件即可绕过。realpath 对不存在路径只规范化不解析符号链接，安全。
+SENSITIVE_PATHS = [os.path.realpath(d) for d in SENSITIVE_PATHS]
 
 
 def _validate_path(path: str, mode: str = "read") -> tuple[bool, str, str]:

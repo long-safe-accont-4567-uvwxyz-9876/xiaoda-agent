@@ -472,7 +472,9 @@ excludes = [
     'tests',
     'setuptools',
     'pip',
-    'wheel',
+    # 注意：不要 exclude 'wheel'。PyInstaller 的 setuptools hook 会给
+    # setuptools._vendor.wheel 建别名到 wheel，若 wheel 被 exclude 会抛
+    # ValueError: Target module "wheel" already imported as "ExcludedModule('wheel',)"
     'distutils',
     'lib2to3',
     'xmlrpc',
