@@ -61,13 +61,15 @@ async def test_create_reminder_empty_channels_uses_default():
 
 @pytest.mark.asyncio
 async def test_create_reminder_uses_lastrowid_not_order_by_desc():
-    """INSERT 后应用 lastrowid 精确查询，不用 ORDER BY id DESC（防竞态）。"""
+    """INSERT 后应用 lastrowid 精确查询，不用 ORDER BY id DESC（防竞态）。
+
+    TRAE-code-review 修正：DatabaseManager.execute 返回 int（lastrowid 值），
+    不是 cursor 对象。测试必须匹配真实返回类型，否则会假绿。
+    """
     from tools import schedule_tool
     core = _make_core()
-    # 模拟 execute 返回有 lastrowid 的 cursor
-    mock_cursor = MagicMock()
-    mock_cursor.lastrowid = 42
-    core.db.execute = AsyncMock(return_value=mock_cursor)
+    # 真实 DatabaseManager.execute 对 INSERT 返回 lastrowid (int)，不是 cursor
+    core.db.execute = AsyncMock(return_value=42)  # lastrowid=42
     core.db.fetch_one = AsyncMock(return_value={"id": 42, "time": "09:00", "prompt_hint": "测试", "days": "[1]", "enabled": 1})
 
     with patch.object(schedule_tool, "_get_core", return_value=core):
@@ -83,6 +85,11 @@ async def test_create_reminder_uses_lastrowid_not_order_by_desc():
         f"应用 lastrowid 精确查询，不用 ORDER BY id DESC。SQL: {sql}"
     assert "WHERE id" in sql or "id = " in sql or "id=?" in sql.lower() or "id = ?" in sql, \
         f"应用 WHERE id = ? 精确查询。SQL: {sql}"
+    # 验证 fetch_one 第二参数是 lastrowid 值 (42) 作为 params 元组
+    if select_call.args and len(select_call.args) > 1:
+        params = select_call.args[1]
+        assert params == (42,) or params == 42, \
+            f"fetch_one 应传入 lastrowid=42 作为参数。实际: {params}"
 
 
 def test_create_reminder_docstring_updated():

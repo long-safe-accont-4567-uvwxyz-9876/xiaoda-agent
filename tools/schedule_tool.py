@@ -202,21 +202,21 @@ async def create_reminder(time: str, prompt_hint: str, days: list[int] | None = 
         channels_json = json.dumps(channels_list)
         created_at = _time.time()
 
-        cursor = await core.db.execute(
+        # P2-1: DatabaseManager.execute 对 INSERT 返回 lastrowid (int)，直接用于精确查询
+        # 避免 ORDER BY id DESC 的竞态条件（并发插入时可能取到别人的记录）
+        new_id = await core.db.execute(
             "INSERT INTO greeting_schedules"
             "(type, time, days, prompt_hint, channels, enabled, next_fire_times, created_at) "
             "VALUES ('reminder', ?, ?, ?, ?, 1, '[]', ?)",
             (time, days_json, hint, channels_json, created_at))
 
-        # P2-1: 用 lastrowid 精确查询新记录，避免 ORDER BY id DESC 的竞态条件
-        # （并发插入时可能取到别人的记录）
-        new_id = getattr(cursor, "lastrowid", None) if cursor else None
-        if new_id is not None:
+        # new_id 是 lastrowid (int > 0 表示插入成功)
+        if new_id:
             row = await core.db.fetch_one(
                 "SELECT id, time, prompt_hint, days, enabled FROM greeting_schedules "
                 "WHERE id = ?", (new_id,))
         else:
-            # 兼容不支持 lastrowid 的 cursor：降级到 ORDER BY（保持原有兜底）
+            # 极端兜底：execute 返回 0/None 时降级到 ORDER BY（保持原有兜底）
             row = await core.db.fetch_one(
                 "SELECT id, time, prompt_hint, days, enabled FROM greeting_schedules "
                 "WHERE type='reminder' ORDER BY id DESC LIMIT 1")
