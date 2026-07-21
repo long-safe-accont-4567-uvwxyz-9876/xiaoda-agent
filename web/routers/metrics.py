@@ -21,6 +21,8 @@
 """
 from __future__ import annotations
 
+import ipaddress
+
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -40,6 +42,7 @@ from prometheus_client.core import (
 
 # utils.metrics 是项目内全局单例, 桥接时直接读取其内部状态
 from utils.metrics import metrics as _utils_metrics
+from web.routers.auth import _get_client_ip
 
 
 router = APIRouter(tags=["metrics"])
@@ -51,11 +54,31 @@ router = APIRouter(tags=["metrics"])
 # /metrics 暴露进程/请求统计, 不应开放给局域网或外网.
 # 仅允许本机回环地址访问; 其他来源返回 403.
 # 与原 web/server.py 中 prometheus_metrics 端点的限制保持一致.
-_ALLOWED_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+# 注意: 必须使用真实客户端 IP (尊重 TRUST_FORWARDED_FOR), 否则在反向代理后
+# request.client.host 始终为 127.0.0.1, 访问控制会被完全绕过.
+
+
+def _is_loopback_ip(ip_str: str) -> bool:
+    """判断 IP 字符串是否为回环地址 (IPv4 127.0.0.0/8 或 IPv6 ::1).
+
+    空字符串或无效格式返回 False (fail-closed, 拒绝访问).
+    """
+    if not ip_str:
+        return False
+    if ip_str == "localhost":
+        return True
+    try:
+        addr = ipaddress.ip_address(ip_str)
+        return addr.is_loopback
+    except ValueError:
+        return False
 
 
 def _is_local_request(request: Request) -> bool:
     """判断请求来源是否为本机回环地址.
+
+    使用 _get_client_ip 获取真实客户端 IP (尊重 TRUST_FORWARDED_FOR 环境变量),
+    避免反向代理后 request.client.host 始终为 127.0.0.1 导致访问控制绕过.
 
     Args:
         request: FastAPI Request 对象
@@ -63,9 +86,8 @@ def _is_local_request(request: Request) -> bool:
     Returns:
         True 表示来自 localhost, 允许访问 /metrics
     """
-    client = getattr(request, "client", None)
-    client_host = getattr(client, "host", "") or ""
-    return client_host in _ALLOWED_HOSTS
+    client_ip = _get_client_ip(request)
+    return _is_loopback_ip(client_ip)
 
 
 # ============================================================
@@ -240,7 +262,7 @@ async def metrics(request: Request) -> Response:
     if not _is_local_request(request):
         logger.warning(
             "metrics.access_denied_non_localhost",
-            client_host=getattr(getattr(request, "client", None), "host", ""),
+            client_ip=_get_client_ip(request),
         )
         return JSONResponse(
             status_code=403,

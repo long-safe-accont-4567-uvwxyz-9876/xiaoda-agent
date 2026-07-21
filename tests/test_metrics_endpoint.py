@@ -273,38 +273,100 @@ class TestMetricsAccessControl:
         assert "python_info" not in body
         assert "tool_exec_success_total" not in body
 
-    def test_is_local_request_helper(self):
-        """_is_local_request 辅助函数直接单元测试."""
+    def test_is_loopback_ip_helper(self):
+        """_is_loopback_ip 辅助函数直接单元测试."""
+        from web.routers.metrics import _is_loopback_ip
+
+        # 回环地址
+        assert _is_loopback_ip("127.0.0.1") is True
+        assert _is_loopback_ip("127.0.0.53") is True
+        assert _is_loopback_ip("::1") is True
+        assert _is_loopback_ip("localhost") is True
+
+        # 非回环地址
+        assert _is_loopback_ip("192.168.1.100") is False
+        assert _is_loopback_ip("8.8.8.8") is False
+        assert _is_loopback_ip("10.0.0.1") is False
+        assert _is_loopback_ip("172.16.0.1") is False
+
+    def test_is_local_request_via_test_client(self):
+        """通过 TestClient 验证 _is_local_request 行为 (使用真实 Request 对象)."""
         from web.routers.metrics import _is_local_request
+        from fastapi import FastAPI, Request
+        from fastapi.testclient import TestClient
 
-        class _FakeRequest:
-            """最小化的 Request mock, 仅含 client 属性."""
-            class _Client:
-                def __init__(self, host: str):
-                    self.host = host
+        app = FastAPI()
+        results: list[bool] = []
 
-            def __init__(self, host: str):
-                self.client = self._Client(host)
+        @app.get("/_test")
+        async def _test_endpoint(request: Request):
+            results.append(_is_local_request(request))
+            return {"ok": True}
 
-        # localhost 系列
-        assert _is_local_request(_FakeRequest("127.0.0.1")) is True
-        assert _is_local_request(_FakeRequest("::1")) is True
-        assert _is_local_request(_FakeRequest("localhost")) is True
+        # localhost 客户端
+        client_local = TestClient(app, client=("127.0.0.1", 50000))
+        r = client_local.get("/_test")
+        assert r.status_code == 200
+        assert results[-1] is True
 
-        # 非 localhost
-        assert _is_local_request(_FakeRequest("192.168.1.100")) is False
-        assert _is_local_request(_FakeRequest("8.8.8.8")) is False
-        assert _is_local_request(_FakeRequest("10.0.0.1")) is False
+        # LAN 客户端
+        client_lan = TestClient(app, client=("192.168.1.100", 50000))
+        r = client_lan.get("/_test")
+        assert r.status_code == 200
+        assert results[-1] is False
 
-    def test_is_local_request_handles_missing_client(self):
-        """client 为 None 时 (异常情况) 应拒绝访问 (fail-closed)."""
-        from web.routers.metrics import _is_local_request
+    def test_reverse_proxy_xff_trust_enabled(self, monkeypatch):
+        """反向代理场景: TRUST_FORWARDED_FOR 启用时使用 X-Forwarded-For 真实 IP 做访问控制.
 
-        class _FakeRequest:
-            client = None
+        这是核心安全修复测试: 代理后 request.client.host 始终为 127.0.0.1,
+        但真实客户端是公网 IP 时, 访问控制应拦截 (返回 403).
+        """
+        monkeypatch.setenv("TRUST_FORWARDED_FOR", "1")
+        app = _make_app_with_metrics_router()
 
-        # client 为 None 时 host 为空, 不在 _ALLOWED_HOSTS 中, 返回 False
-        assert _is_local_request(_FakeRequest()) is False
+        # 代理连接来自 127.0.0.1, 但真实客户端是公网 IP -> 应 403
+        client = TestClient(app, client=("127.0.0.1", 50000))
+        r = client.get(
+            "/metrics",
+            headers={"X-Forwarded-For": "203.0.113.42"},
+        )
+        assert r.status_code == 403, (
+            f"反向代理后真实公网 IP 应被拦截, got {r.status_code}"
+        )
+        assert r.json() == {"error": "Forbidden"}
+
+    def test_reverse_proxy_xff_localhost_trust_enabled(self, monkeypatch):
+        """反向代理场景: 真实客户端也是 localhost 时应允许访问."""
+        monkeypatch.setenv("TRUST_FORWARDED_FOR", "1")
+        app = _make_app_with_metrics_router()
+
+        client = TestClient(app, client=("127.0.0.1", 50000))
+        r = client.get(
+            "/metrics",
+            headers={"X-Forwarded-For": "127.0.0.1"},
+        )
+        assert r.status_code == 200, (
+            f"反向代理后真实 localhost 应允许, got {r.status_code}"
+        )
+        assert "# TYPE" in r.text
+
+    def test_reverse_proxy_xff_trust_disabled(self, monkeypatch):
+        """反向代理场景: TRUST_FORWARDED_FOR 未启用时忽略 X-Forwarded-For.
+
+        默认 (不信任代理) 时使用 request.client.host, 与原行为一致.
+        """
+        monkeypatch.delenv("TRUST_FORWARDED_FOR", raising=False)
+        app = _make_app_with_metrics_router()
+
+        # 代理 IP 是 127.0.0.1, 即使 XFF 是公网 IP 也会被当作 localhost (不信任 XFF)
+        # 这是默认行为, 与修复前一致
+        client = TestClient(app, client=("127.0.0.1", 50000))
+        r = client.get(
+            "/metrics",
+            headers={"X-Forwarded-For": "203.0.113.42"},
+        )
+        # 默认不信任 XFF, 用 client.host = 127.0.0.1, 所以返回 200
+        assert r.status_code == 200
 
 
 if __name__ == "__main__":
