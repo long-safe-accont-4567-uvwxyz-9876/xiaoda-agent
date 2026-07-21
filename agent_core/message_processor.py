@@ -461,6 +461,14 @@ class MessageProcessorMixin:
         # 感谢类覆盖时段问候
         if keyword in ("谢谢", "感谢", "thanks", "thx", "多谢"):
             reply = random.choice(_THANK_REPLIES)
+        # P1-6: 语音模式下问候也要走 TTS 路径，与其他 fast path 行为一致
+        # 使用 tts_pending 异步模式（与 _build_voice_result 中 TTS_ASYNC_MODE 一致），
+        # 保持 _try_greeting_shortcut 同步且 <100ms
+        if self._voice_mode:
+            return ProcessResult(
+                reply=reply, emotion="greeting",
+                tts_pending=True, tts_text=reply,
+            )
         return ProcessResult(reply=reply, emotion="greeting")
 
     async def _try_simple_chat_fast_path(self, ctx: Any, user_input: Any, clean_input: Any, is_master: Any,

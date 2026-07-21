@@ -4,16 +4,29 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-os.environ["ENABLE_GREETING_SHORTCUT"] = "true"
+import pytest
+
+# P2-5: 改用 fixture 而非模块级 env var 设置，避免污染其他测试
+# 原代码: os.environ["ENABLE_GREETING_SHORTCUT"] = "true" (模块级，永不恢复)
 
 from agent_core.message_processor import MessageProcessorMixin
 from agent_core import message_processor as mp_module
+
+
+@pytest.fixture(autouse=True)
+def _enable_greeting_shortcut(monkeypatch):
+    """每个测试前自动设置 ENABLE_GREETING_SHORTCUT=true，测试后自动恢复。"""
+    monkeypatch.setenv("ENABLE_GREETING_SHORTCUT", "true")
+    yield
+    # monkeypatch 自动恢复原值或删除
 
 
 def _make_processor():
     """构造无依赖的 MessageProcessorMixin 实例."""
     mp = MessageProcessorMixin.__new__(MessageProcessorMixin)
     mp.slash_handler = None
+    # P1-6: _try_greeting_shortcut 现在会读 _voice_mode（默认 False 保持原行为）
+    mp._voice_mode = False
     return mp
 
 
@@ -45,13 +58,26 @@ def test_thank_you_returns_shortcut():
 
 
 def test_greeting_shortcut_latency_under_100ms():
-    """问候短路延迟 < 100ms."""
+    """问候短路延迟 < 100ms.
+
+    P2-5: 除平均值外，验证每次调用都不超过 100ms（避免偶发慢调用被平均掩盖）。
+    """
     mp = _make_processor()
-    start = time.monotonic()
+    durations_ms = []
     for _ in range(100):
+        start = time.monotonic()
         mp._try_greeting_shortcut("你好", "user1", "qq")
-    elapsed = (time.monotonic() - start) * 1000 / 100  # 平均 ms
-    assert elapsed < 100, f"平均延迟 {elapsed:.1f}ms 应 <100ms"
+        durations_ms.append((time.monotonic() - start) * 1000)
+
+    avg = sum(durations_ms) / len(durations_ms)
+    max_single = max(durations_ms)
+    # 95 分位
+    sorted_d = sorted(durations_ms)
+    p95 = sorted_d[int(len(sorted_d) * 0.95)]
+
+    assert avg < 100, f"平均延迟 {avg:.1f}ms 应 <100ms"
+    assert max_single < 200, f"单次最大延迟 {max_single:.1f}ms 应 <200ms（允许偶发波动）"
+    assert p95 < 100, f"P95 延迟 {p95:.1f}ms 应 <100ms"
 
 
 def test_group_chat_skips_shortcut():
@@ -61,19 +87,13 @@ def test_group_chat_skips_shortcut():
     assert result is None
 
 
-def test_disabled_via_env():
+def test_disabled_via_env(monkeypatch):
     """ENABLE_GREETING_SHORTCUT=false 时关闭短路."""
+    # fixture 已设 true，这里改 false 验证
+    monkeypatch.setenv("ENABLE_GREETING_SHORTCUT", "false")
     mp = _make_processor()
-    original = os.environ.get("ENABLE_GREETING_SHORTCUT")
-    try:
-        os.environ["ENABLE_GREETING_SHORTCUT"] = "false"
-        result = mp._try_greeting_shortcut("你好", "user1", "qq")
-        assert result is None
-    finally:
-        if original is None:
-            os.environ.pop("ENABLE_GREETING_SHORTCUT", None)
-        else:
-            os.environ["ENABLE_GREETING_SHORTCUT"] = original
+    result = mp._try_greeting_shortcut("你好", "user1", "qq")
+    assert result is None
 
 
 def test_greeting_uses_shanghai_timezone(monkeypatch):

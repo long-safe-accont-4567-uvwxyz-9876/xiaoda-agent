@@ -327,13 +327,43 @@ def _wait_for_server_ready(window: Any, port: int) -> None:
     logger.warning("splash.onServerReady() failed after retries")
 
 
+def _should_hide_console() -> bool:
+    """P1-5: 判断是否应隐藏 Windows 控制台窗口。
+
+    返回 False 的情况（不应隐藏）：
+    - 非 win32 平台
+    - 无控制台（pythonw.exe 启动）
+    - 控制台与父进程共享（cmd.exe / 批处理脚本启动），避免误杀父终端
+
+    返回 True 的情况（可安全隐藏）：
+    - win32 平台 + 有控制台 + 控制台只附加了本进程（双击快捷方式启动）
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        # 1. 是否有控制台
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if not hwnd:
+            return False
+        # 2. 控制台附加进程数（GetConsoleProcessList 填充 buf 并返回数量）
+        #    - 1: 只有本进程附加（双击快捷方式启动）→ 安全隐藏
+        #    - >1: 与父进程（cmd.exe 等）共享 → 不应隐藏（会误杀父终端）
+        buf = (ctypes.c_uint32 * 64)()
+        count = ctypes.windll.kernel32.GetConsoleProcessList(buf, 64)
+        return count <= 1
+    except (OSError, AttributeError):
+        return False
+
+
 def _run_desktop(host: str, port: int) -> None:
     """桌面模式：pywebview 包装 WebUI，带启动动画"""
     # Windows: 隐藏控制台窗口（双击快捷方式时不弹黑窗）
     # 保留 stdout/stderr 句柄，crash.log 仍可写入
-    if sys.platform == "win32":
-        import ctypes
+    # P1-5: 仅当控制台为本进程独占时才隐藏，避免误杀父进程（cmd.exe/批处理）的终端
+    if _should_hide_console():
         try:
+            import ctypes
             hwnd = ctypes.windll.kernel32.GetConsoleWindow()
             if hwnd:
                 ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE

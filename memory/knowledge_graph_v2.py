@@ -20,14 +20,14 @@ from memory.knowledge_graph import KnowledgeGraph, _clean_json_response, _repair
 ENTITY_EXTRACT_PROMPT_V2 = """从以下对话摘要中提取关键实体和关系，只提取最显著的3-5个。
 
 严格输出JSON，不要添加任何其他文字。格式如下：
-{{"entities": [{{"name": "实体名", "kind": "人物/游戏/地点/概念/物品", "observations": ["观察1"]}}], "relations": [{{"from_entity": "实体A", "relation_type": "关系类型", "to_entity": "实体B", "fact": "自然语言事实陈述"}}]}}
+{"entities": [{"name": "实体名", "kind": "人物/游戏/地点/概念/物品", "observations": ["观察1"]}], "relations": [{"from_entity": "实体A", "relation_type": "关系类型", "to_entity": "实体B", "fact": "自然语言事实陈述"}]}
 
 规则：
 1. 只提取明确提及的实体，不要推测
 2. observations 是关于实体的具体描述
 3. relation_type 使用简洁的动词短语，如"喜欢"、"属于"、"住在"
 4. fact 是对关系的自然语言完整陈述，如"用户喜欢打篮球"
-5. 如果没有明确的实体和关系，返回 {{"entities": [], "relations": []}}
+5. 如果没有明确的实体和关系，返回 {"entities": [], "relations": []}
 
 对话摘要：
 {summary}"""
@@ -41,7 +41,7 @@ CONTRADICTION_PROMPT = """判断新事实是否与已有事实矛盾。
 规则:
 1. 如果新事实与已有事实表达相同含义，不算矛盾
 2. 如果新事实使已有事实不再成立，算矛盾
-3. 输出JSON: {{"contradicted_indices": [索引列表]}}
+3. 输出JSON: {"contradicted_indices": [索引列表]}
 
 输出JSON:"""
 

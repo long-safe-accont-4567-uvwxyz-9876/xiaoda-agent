@@ -118,8 +118,18 @@ async def test_merge_entities_v2_uses_batch(tmp_path):
 
     await kg.merge_entities_v2(entities, "对话摘要", 1000.0)
 
-    # batch 接口应被调用一次
+    # P2-6: 验证 batch 接口被调用且参数正确
     db.get_entities_v2_batch.assert_called_once()
+    # 应传入完整的实体名集合 {"篮球", "足球"}
+    batch_call_args = db.get_entities_v2_batch.call_args
+    expected_names = {"篮球", "足球"}
+    if batch_call_args.args:
+        actual_names = set(batch_call_args.args[0])
+    else:
+        actual_names = set(batch_call_args.kwargs.get("names", []))
+    assert actual_names == expected_names, (
+        f"batch 应接收实体名集合 {expected_names}, 实际: {actual_names}"
+    )
     # 单条接口不应被调用
     db.get_entity_v2.assert_not_called()
     await manager.close()

@@ -409,8 +409,10 @@ class BackgroundTaskManager:
                     timeout=45.0,
                 )
             except asyncio.TimeoutError:
-                logger.warning("mail.token_refresh_timeout", hint="刷新超时 45s，跳过本次")
-                await self.db.set_cron_last_run("mail_token_refresh")
+                # P1-3: 不调用 set_cron_last_run —— 超时不是"成功完成"，
+                # 保留 stale 的 cron_last_run 让 _should_run() 下次 cron 检查时仍判定需要重试，
+                # 避免瞬态网络故障导致 OAuth token 失效长达 2 小时。
+                logger.warning("mail.token_refresh_timeout", hint="刷新超时 45s，跳过本次，下次 cron 重试")
                 return
             if rc == 0:
                 logger.info("mail.token_refresh_ok")

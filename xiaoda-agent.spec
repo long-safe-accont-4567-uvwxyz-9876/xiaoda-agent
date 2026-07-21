@@ -502,7 +502,8 @@ def _git(cmd):
     except Exception:
         return 'unknown'
 
-# 可复现构建：优先 SOURCE_DATE_EPOCH，其次 git commit 时间戳，最后 fallback now
+# 可复现构建：优先 SOURCE_DATE_EPOCH，其次 git commit 时间戳
+# P2-7: 移除 now() fallback —— 非可重现字段不应混入 BUILD_INFO.json
 def _deterministic_build_date():
     sde = os.environ.get('SOURCE_DATE_EPOCH')
     if sde:
@@ -513,17 +514,17 @@ def _deterministic_build_date():
     commit_ts = _git(['git', 'log', '-1', '--format=%ct'])
     if commit_ts and commit_ts.isdigit():
         return _dt.datetime.fromtimestamp(int(commit_ts), tz=_dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-    # fallback：非 git 环境（极少见）才用当前时间
-    return _dt.datetime.now(_dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    # P2-7: 不再 fallback 到 now() —— 同一 commit 应产生相同 BUILD_INFO.json
+    # 非 git 环境返回 'unknown' 而非当前时间，标记为不可复现
+    return 'unknown'
 
 _build_info = {
-    'version': _git(['git', 'describe', '--tags', '--always']),
+    # P2-7: 仅保留 commit 链可重现字段
+    # 移除 branch/python/platform（环境相关，影响可复现性）
+    # 移除 git describe 的 version（依赖本地 tag，不同机器可能不同）
     'commit': _git(['git', 'rev-parse', '--short', 'HEAD']),
     'commit_hash': _git(['git', 'rev-parse', 'HEAD']),
-    'branch': _git(['git', 'rev-parse', '--abbrev-ref', 'HEAD']),
     'build_date': _deterministic_build_date(),
-    'python': '%d.%d.%d' % sys.version_info[:3],
-    'platform': sys.platform,
 }
 _bi_path = os.path.join(SPECPATH, 'BUILD_INFO.json')
 with open(_bi_path, 'w', encoding='utf-8') as _f:

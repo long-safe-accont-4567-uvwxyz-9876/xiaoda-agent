@@ -52,7 +52,12 @@ ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUC
 ${If} $0 != ""
   ; 检测到旧版 per-machine 安装，提示并调用其 uninstaller
   MessageBox MB_YESNO|MB_ICONQUESTION "检测到旧版（per-machine）安装于 $0。$\n$\n是否先卸载旧版再继续安装新版（per-user）？$\n（卸载旧版需要管理员权限，若取消请右键本安装包"以管理员身份运行"）" IDYES +2 IDNO skip_legacy_uninstall
+  ; P1-7: ExecWait 后检查错误标志，避免 UAC 取消或卸载失败仍继续安装
+  ClearErrors
   ExecWait '"$0" /S' ; /S 静默卸载（NSIS 默认 uninstaller 支持）
+  IfErrors 0 skip_legacy_uninstall
+    MessageBox MB_OK|MB_ICONSTOP "旧版卸载失败（UAC 取消或卸载器异常）。$\n请以管理员身份重试，或先手动卸载旧版再运行本安装包。"
+    Abort
 skip_legacy_uninstall:
 ${EndIf}
 

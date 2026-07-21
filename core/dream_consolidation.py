@@ -415,9 +415,10 @@ class DreamConsolidator:
                     # G7: 优先用 consolidate_from_db 操作真实 DB 记忆
                     if self._memory_db is not None:
                         result = await self.consolidate_from_db(self._memory_db)
+                        # P2-2: 修正日志 key —— consolidate_from_db 返回 'evicted' 而非 'archived'
                         logger.info(
                             f"Dream.scheduler.from_db done "
-                            f"archived={result.get('archived', 0) if isinstance(result, dict) else 0}"
+                            f"evicted={result.get('evicted', 0) if isinstance(result, dict) else 0}"
                         )
                     else:
                         await self.consolidate()

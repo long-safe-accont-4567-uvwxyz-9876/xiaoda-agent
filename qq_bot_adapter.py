@@ -322,9 +322,12 @@ class AIQQBot(botpy.Client):
         # 根因：单连接 SQLite + WAL 模式下，并发写操作会阻塞读，
         #       导致 get_active_session 超时 5 秒触发 c2c_session_timeout。
         # 修复：首次成功后缓存 session_id，避免每条消息都查 DB；session 失效时降级到查 DB。
+        # 加固: TTL 过期清理 + FIFO 上限避免长期运行内存无限增长；process 异常时主动失效。
         self._c2c_session_cache: dict[str, str] = {}
         self._c2c_session_cache_ttl = 3600  # 缓存有效期 1 小时
         self._c2c_session_cache_ts: dict[str, float] = {}
+        # P1-1: 缓存上限，超过时按 FIFO 淘汰最旧条目（防多用户长期运行内存泄漏）
+        self._C2C_SESSION_CACHE_MAX_SIZE = 1000
         # HITL: 高危操作两段式确认（默认开启，QQ_HITL_ENABLED=false 关闭）
         self.hitl_enabled = os.getenv("QQ_HITL_ENABLED", "true").lower() in ("1", "true", "yes", "on")
         self.im_approval = IMApprovalChannel(
@@ -346,6 +349,39 @@ class AIQQBot(botpy.Client):
             return True
         self._processed_msg_ids[msg_id] = now
         return False
+
+    def _prune_c2c_session_cache(self) -> None:
+        """P1-1: 清理 C2C session 缓存中的过期与超限条目。
+
+        1. 删除超过 TTL 的过期条目（避免永久驻留）
+        2. 超过 MAX_SIZE 时按 FIFO（最早 ts）淘汰最旧条目（防多用户长期运行内存泄漏）
+        """
+        now = time.time()
+        # 1. 清理过期条目
+        expired = [
+            k for k, ts in self._c2c_session_cache_ts.items()
+            if now - ts > self._c2c_session_cache_ttl
+        ]
+        for k in expired:
+            self._c2c_session_cache.pop(k, None)
+            self._c2c_session_cache_ts.pop(k, None)
+        # 2. FIFO 淘汰超限条目
+        overflow = len(self._c2c_session_cache) - self._C2C_SESSION_CACHE_MAX_SIZE
+        if overflow > 0:
+            # 按 ts 升序排序，删除最早的 overflow 个
+            sorted_keys = sorted(self._c2c_session_cache_ts.items(), key=lambda kv: kv[1])
+            for k, _ in sorted_keys[:overflow]:
+                self._c2c_session_cache.pop(k, None)
+                self._c2c_session_cache_ts.pop(k, None)
+
+    def _invalidate_c2c_session(self, user_openid: str) -> None:
+        """P1-2: 主动失效指定用户的 session_id 缓存。
+
+        场景: agent.process 抛错（session 失效、被删除等）时调用，
+        保证下次消息重新查 DB 获取最新 session_id。
+        """
+        self._c2c_session_cache.pop(user_openid, None)
+        self._c2c_session_cache_ts.pop(user_openid, None)
 
     @staticmethod
     def _get_config_service() -> Any:
@@ -590,6 +626,8 @@ class AIQQBot(botpy.Client):
         修复：首次成功后缓存 session_id 1 小时，避免重复查询；
               仅在缓存失效或会话不存在时才查 DB。
         """
+        # P1-1: 入口先清理过期与超限条目，避免长期运行内存泄漏
+        self._prune_c2c_session_cache()
         # 1. 先查内存缓存
         cached_sid = self._c2c_session_cache.get(user_openid)
         cached_ts = self._c2c_session_cache_ts.get(user_openid, 0)
@@ -704,6 +742,9 @@ class AIQQBot(botpy.Client):
                 logger.debug("qq_bot.c2c_timeout_reply_failed", error=str(_e))
         except (TimeoutError, RuntimeError, OSError, ValueError) as e:
             logger.error(f"qq_bot.c2c_error: {e}")
+            # P1-2: 失效 session_id 缓存，下次重新查 DB（session 可能已被删除/失效）
+            if user_openid:
+                self._invalidate_c2c_session(user_openid)
             try:
                 await message.reply(content="嗯……出了点小问题，等会儿再聊好不好？", msg_seq=_next_msg_seq())
             except (OSError, RuntimeError, ConnectionError) as e:

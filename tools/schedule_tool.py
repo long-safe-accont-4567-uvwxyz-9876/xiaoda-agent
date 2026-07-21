@@ -168,13 +168,13 @@ async def create_reminder(time: str, prompt_hint: str, days: list[int] | None = 
                          user_id: str = "") -> ToolResult:
     """创建新 reminder 记录。
 
-    修复 P1: 增加 user_id 隔离, reminder 属于创建用户。
+    reminder 不按用户隔离，全局可见（与 list/update/delete 一致）。
+    user_id 参数保留用于审计/日志，不影响数据归属。
     """
     import time as _time
 
     try:
         core = _get_core()
-        uid = _resolve_user_id(user_id)
 
         # 1. 校验字段格式
         _validate_hm(time, "time")
@@ -182,13 +182,15 @@ async def create_reminder(time: str, prompt_hint: str, days: list[int] | None = 
             return ToolResult.fail("prompt_hint 不能为空")
         hint = prompt_hint[:200]
 
-        if days is None:
+        # P2-1: 用 not days / not channels 而非 is None，处理空数组也走默认值
+        # 避免 [] 通过 all() 检查导致 reminder 无活跃日/无渠道
+        if not days:
             days_list = [1, 2, 3, 4, 5, 6, 7]
         else:
             _validate_days(days)
             days_list = sorted(set(days))
 
-        if channels is None:
+        if not channels:
             channels_list = ["web"]
         else:
             if not all(c in ("web", "qq") for c in channels):
@@ -200,16 +202,24 @@ async def create_reminder(time: str, prompt_hint: str, days: list[int] | None = 
         channels_json = json.dumps(channels_list)
         created_at = _time.time()
 
-        await core.db.execute(
+        cursor = await core.db.execute(
             "INSERT INTO greeting_schedules"
             "(type, time, days, prompt_hint, channels, enabled, next_fire_times, created_at) "
             "VALUES ('reminder', ?, ?, ?, ?, 1, '[]', ?)",
             (time, days_json, hint, channels_json, created_at))
 
-        # 3. 查询新创建的记录
-        row = await core.db.fetch_one(
-            "SELECT id, time, prompt_hint, days, enabled FROM greeting_schedules "
-            "WHERE type='reminder' ORDER BY id DESC LIMIT 1")
+        # P2-1: 用 lastrowid 精确查询新记录，避免 ORDER BY id DESC 的竞态条件
+        # （并发插入时可能取到别人的记录）
+        new_id = getattr(cursor, "lastrowid", None) if cursor else None
+        if new_id is not None:
+            row = await core.db.fetch_one(
+                "SELECT id, time, prompt_hint, days, enabled FROM greeting_schedules "
+                "WHERE id = ?", (new_id,))
+        else:
+            # 兼容不支持 lastrowid 的 cursor：降级到 ORDER BY（保持原有兜底）
+            row = await core.db.fetch_one(
+                "SELECT id, time, prompt_hint, days, enabled FROM greeting_schedules "
+                "WHERE type='reminder' ORDER BY id DESC LIMIT 1")
 
         formatted = _format_row(row) if row else f"已创建（时间：{time}）"
         return ToolResult.ok(f"已创建提醒：{formatted}")

@@ -85,10 +85,17 @@ class ConnectionManager:
     async def unregister(self, conn_id: str) -> None:
         """按连接 ID 注销连接及其会话映射.
 
-        关闭底层 WebSocket（避免 socket 泄漏），取消心跳任务，清理映射。
-        幂等：重复调用安全。
+        P1-4: 改为 async 方法，先 await ws.close() 释放底层 TCP 资源，
+        再清理内部状态。close 失败不应阻塞清理（defensive）。幂等：重复调用安全。
         """
-        ws = self._connections.pop(conn_id, None)
+        ws = self._connections.get(conn_id)
+        if ws is not None:
+            try:
+                await ws.close()
+            except Exception as e:
+                # 防御性: 连接可能已被对端关闭，close 抛错不应阻塞清理
+                logger.debug("ws.close_failed conn_id={} error={}", conn_id, str(e))
+        self._connections.pop(conn_id, None)
         self._agent_map.pop(conn_id, None)
         self._session_map.pop(conn_id, None)
         # G5: 取消心跳任务 + 清理 pong event
@@ -96,13 +103,6 @@ class ConnectionManager:
         if task and not task.done():
             task.cancel()
         self._pong_events.pop(conn_id, None)
-        # 关闭底层 WebSocket，避免 socket + endpoint 协程双重泄漏
-        if ws is not None:
-            try:
-                # 应用层已处于异常路径时 close 可能抛 RuntimeError，忽略
-                await ws.close()
-            except (RuntimeError, OSError, Exception):
-                pass
 
     async def _heartbeat_loop(self, conn_id: str) -> None:
         """G5: 每个连接的心跳协程 - 30s ping + 10s pong 超时.

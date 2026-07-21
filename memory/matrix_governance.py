@@ -201,7 +201,7 @@ LLM_JUDGE_RUBRIC = """
 参考答案: {reference_answer}
 待评估回复: {response}
 
-请只返回一个 JSON: {{"score": <1-5>, "reason": "<一句话理由>"}}
+请只返回一个 JSON: {"score": <1-5>, "reason": "<一句话理由>"}
 """
 
 
