@@ -4,6 +4,18 @@ import asyncio
 from openai import AsyncOpenAI
 from transports.base import ProviderTransport, TransportResponse
 
+# agnes API max_tokens 上限 65536，超出返回 500 invalid_request
+# 直接调用 transport.chat() 的路径（绕过 model_router._build_route_kwargs）
+# 必须在此处 clamp，否则会触发 agnes 服务端 500 错误并进入 fallback 链
+AGNES_MAX_TOKENS_LIMIT = 65535  # 留 1 token 余量
+
+
+def _clamp_agnes_max_tokens(max_tokens: int) -> int:
+    """将 max_tokens 限制在 agnes API 上限内。"""
+    if max_tokens > AGNES_MAX_TOKENS_LIMIT:
+        return AGNES_MAX_TOKENS_LIMIT
+    return max_tokens
+
 
 class AgnesTransport(ProviderTransport):
     """Agnes AI API 的传输适配器。"""
@@ -34,6 +46,10 @@ class AgnesTransport(ProviderTransport):
         """调用 Agnes 对话接口，返回统一格式的 TransportResponse。"""
         if not self._client:
             raise RuntimeError("Agnes client not initialized")
+
+        # 防御性 clamp：即便上层（如 agent_dispatcher/task_orchestrator）
+        # 直接以 ROUTE_TABLE 默认值 131072 调用，也不会触发 agnes 500 错误
+        max_tokens = _clamp_agnes_max_tokens(max_tokens)
 
         kwargs = {
             "model": model,

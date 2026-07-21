@@ -132,7 +132,8 @@ class MemoryDistiller:
             data = response.json()
             return data.get("choices", [{}])[0].get("message", {}).get("content", "")
         except Exception as e:
-            logger.warning("memory_distiller.free_model_failed", error=str(e))
+            # 修复 P2 Bug 8: 已有降级到 router 兜底，降级为 debug
+            logger.debug("memory_distiller.free_model_failed", error=str(e)[:200], error_type=type(e).__name__)
             return None
 
     async def distill(self, memories: list[dict]) -> str:
@@ -168,7 +169,8 @@ class MemoryDistiller:
             return ""
 
         memories_text = "\n".join(lines)
-        prompt = DISTILL_PROMPT.format(memories_text=memories_text)
+        # 防御性加固：memories_text 含用户/LLM 内容，可能含 {} 字符
+        prompt = DISTILL_PROMPT.replace("{memories_text}", memories_text)
         messages = [{"role": "user", "content": prompt}]
 
         # 优先使用免费模型，失败降级到 router
@@ -245,9 +247,11 @@ class MemoryDistiller:
 
         memories_text = "\n".join(lines)
         from config import get_agent_display_name
-        prompt = RECALL_PROMPT_TEMPLATE.format(
-            n=get_agent_display_name("xiaoda"),
-            memories_text=memories_text,
+        # 防御性加固：memories_text 含用户/LLM 内容，可能含 {} 字符
+        prompt = (
+            RECALL_PROMPT_TEMPLATE
+            .replace("{n}", get_agent_display_name("xiaoda"))
+            .replace("{memories_text}", memories_text)
         )
         messages = [{"role": "user", "content": prompt}]
 

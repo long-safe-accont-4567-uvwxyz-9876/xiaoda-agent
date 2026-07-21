@@ -37,25 +37,12 @@ def _get_core() -> Any:
 
 
 def _resolve_user_id(explicit: str = "") -> str:
-    """解析当前请求的 user_id, 用于 reminder 用户隔离.
+    """解析当前请求的 user_id（已废弃，保留兼容）。
 
-    优先级:
-    1. 调用方显式传入的 explicit (测试或工具执行器注入)
-    2. _current_request_ctx ContextVar 中的 user_id (正常请求路径)
-    3. 'default' 兜底 (兼容无请求上下文的场景, 如系统调度)
-
-    修复 P1: 原 update/delete_reminder SQL 无 user_id 隔离, 任何用户可修改任意 reminder.
+    修复 P2: reminder 不再按用户隔离，所有 reminder 全局可见。
+    WebUI 和 agent 对话共享同一套提醒列表。
     """
-    if explicit:
-        return explicit
-    try:
-        from agent_core._shared import _current_request_ctx
-        ctx = _current_request_ctx.get()
-        if ctx is not None and getattr(ctx, "user_id", ""):
-            return ctx.user_id
-    except Exception:
-        pass
-    return "default"
+    return "shared"  # 统一为 shared，不再隔离
 
 
 def _validate_hm(value: str, field: str) -> None:
@@ -111,23 +98,22 @@ def _format_row(row: dict) -> str:
 )
 async def list_reminders(include_disabled: bool = False,
                          user_id: str = "") -> ToolResult:
-    """列出当前用户的 reminder 提醒，按时间排序。
+    """列出所有 reminder 提醒，按时间排序。
 
-    修复 P1: 增加 user_id 隔离, 用户只能看到自己的 reminder.
+    修复 P2: 移除 user_id 隔离，所有 reminder 全局可见。
     """
     try:
         core = _get_core()
-        uid = _resolve_user_id(user_id)
         if include_disabled:
             sql = ("SELECT id, time, prompt_hint, days, enabled, channels "
-                   "FROM greeting_schedules WHERE type='reminder' AND user_id=? "
+                   "FROM greeting_schedules WHERE type='reminder' "
                    "ORDER BY time")
-            rows = await core.db.fetch_all(sql, (uid,))
+            rows = await core.db.fetch_all(sql)
         else:
             sql = ("SELECT id, time, prompt_hint, days, enabled, channels "
                    "FROM greeting_schedules WHERE type='reminder' AND enabled=1 "
-                   "AND user_id=? ORDER BY time")
-            rows = await core.db.fetch_all(sql, (uid,))
+                   "ORDER BY time")
+            rows = await core.db.fetch_all(sql)
 
         if not rows:
             return ToolResult.ok("当前没有任何提醒")
@@ -139,6 +125,99 @@ async def list_reminders(include_disabled: bool = False,
     except Exception as e:
         logger.error("schedule_tool.list_failed", error=str(e))
         return ToolResult.fail(f"查询提醒失败：{e!s}")
+
+
+@register_tool(
+    name="create_reminder",
+    description=(
+        "创建新的提醒。当用户说'帮我设置一个提醒'、'提醒我晚上10点'、"
+        "'每周三提醒我'等创建类指令时使用。"
+        "创建后立即生效，返回新提醒的 ID 和详情。"
+    ),
+    schema={
+        "type": "object",
+        "properties": {
+            "time": {
+                "type": "string",
+                "description": "提醒时间，HH:MM 格式（如 19:30、08:00）。必填。",
+            },
+            "prompt_hint": {
+                "type": "string",
+                "description": "提醒内容/标题（≤200字符）。必填。",
+            },
+            "days": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "星期列表（1=周一...7=周日，如 [1,3,5] 表示每周一三五）。默认每天 [1,2,3,4,5,6,7]。",
+            },
+            "channels": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "推送渠道，默认 ['web']。可选 'web' 或 'qq'。",
+            },
+        },
+        "required": ["time", "prompt_hint"],
+    },
+    permission=ToolPermission.READ_WRITE,
+    category="schedule",
+    max_frequency=10,
+    requires_confirmation=True,
+)
+async def create_reminder(time: str, prompt_hint: str, days: list[int] | None = None,
+                         channels: list[str] | None = None,
+                         user_id: str = "") -> ToolResult:
+    """创建新 reminder 记录。
+
+    修复 P1: 增加 user_id 隔离, reminder 属于创建用户。
+    """
+    import time as _time
+
+    try:
+        core = _get_core()
+        uid = _resolve_user_id(user_id)
+
+        # 1. 校验字段格式
+        _validate_hm(time, "time")
+        if not prompt_hint or not prompt_hint.strip():
+            return ToolResult.fail("prompt_hint 不能为空")
+        hint = prompt_hint[:200]
+
+        if days is None:
+            days_list = [1, 2, 3, 4, 5, 6, 7]
+        else:
+            _validate_days(days)
+            days_list = sorted(set(days))
+
+        if channels is None:
+            channels_list = ["web"]
+        else:
+            if not all(c in ("web", "qq") for c in channels):
+                return ToolResult.fail("channels 仅支持 web/qq")
+            channels_list = channels
+
+        # 2. 插入数据库（不设置 user_id，全局可见）
+        days_json = json.dumps(days_list)
+        channels_json = json.dumps(channels_list)
+        created_at = _time.time()
+
+        await core.db.execute(
+            "INSERT INTO greeting_schedules"
+            "(type, time, days, prompt_hint, channels, enabled, next_fire_times, created_at) "
+            "VALUES ('reminder', ?, ?, ?, ?, 1, '[]', ?)",
+            (time, days_json, hint, channels_json, created_at))
+
+        # 3. 查询新创建的记录
+        row = await core.db.fetch_one(
+            "SELECT id, time, prompt_hint, days, enabled FROM greeting_schedules "
+            "WHERE type='reminder' ORDER BY id DESC LIMIT 1")
+
+        formatted = _format_row(row) if row else f"已创建（时间：{time}）"
+        return ToolResult.ok(f"已创建提醒：{formatted}")
+    except ValueError as e:
+        return ToolResult.fail(f"参数格式错误：{e!s}")
+    except Exception as e:
+        logger.error("schedule_tool.create_failed", error=str(e))
+        return ToolResult.fail(f"创建提醒失败：{e!s}")
 
 
 @register_tool(
@@ -187,17 +266,16 @@ async def update_reminder(id: int, time: str = "", prompt_hint: str = "",
                          user_id: str = "") -> ToolResult:
     """更新指定 reminder 的字段。仅更新传入的字段，未传字段保持不变。
 
-    修复 P1: 增加 user_id 隔离, 用户只能修改自己的 reminder.
+    修复 P2: 移除 user_id 隔离，所有 reminder 全局可修改。
     """
     try:
         core = _get_core()
-        uid = _resolve_user_id(user_id)
 
-        # 1. 校验存在性 + 归属
+        # 1. 校验存在性
         existing = await core.db.fetch_one(
             "SELECT id, time, prompt_hint, days, enabled FROM greeting_schedules "
-            "WHERE id=? AND type='reminder' AND user_id=?",
-            (id, uid))
+            "WHERE id=? AND type='reminder'",
+            (id,))
         if not existing:
             return ToolResult.fail(f"提醒 ID {id} 不存在（或不是 reminder 类型）")
 
@@ -228,8 +306,7 @@ async def update_reminder(id: int, time: str = "", prompt_hint: str = "",
         params.append(id)
 
         sql = (f"UPDATE greeting_schedules SET {', '.join(set_clauses)} "
-               f"WHERE id=? AND type='reminder' AND user_id=?")
-        params.append(uid)
+               f"WHERE id=? AND type='reminder'")
         n = await core.db.execute(sql, tuple(params))
         if not n:
             return ToolResult.fail(f"更新失败：提醒 ID {id} 不存在或已被删除")
@@ -237,8 +314,8 @@ async def update_reminder(id: int, time: str = "", prompt_hint: str = "",
         # 4. 查询返回更新后的记录
         row = await core.db.fetch_one(
             "SELECT id, time, prompt_hint, days, enabled FROM greeting_schedules "
-            "WHERE id=? AND user_id=?",
-            (id, uid))
+            "WHERE id=?",
+            (id,))
         formatted = _format_row(row) if row else f"ID:{id} (已更新)"
         return ToolResult.ok(f"已更新：{formatted}")
     except ValueError as e:
@@ -272,24 +349,23 @@ async def update_reminder(id: int, time: str = "", prompt_hint: str = "",
 async def delete_reminder(id: int, user_id: str = "") -> ToolResult:
     """删除指定 reminder 记录。
 
-    修复 P1: 增加 user_id 隔离, 用户只能删除自己的 reminder.
+    修复 P2: 移除 user_id 隔离，所有 reminder 全局可删除。
     """
     try:
         core = _get_core()
-        uid = _resolve_user_id(user_id)
 
-        # 1. 校验存在性 + 类型 + 归属
+        # 1. 校验存在性 + 类型
         existing = await core.db.fetch_one(
             "SELECT id, time, prompt_hint FROM greeting_schedules "
-            "WHERE id=? AND type='reminder' AND user_id=?",
-            (id, uid))
+            "WHERE id=? AND type='reminder'",
+            (id,))
         if not existing:
             return ToolResult.fail(f"提醒 ID {id} 不存在（或不是 reminder 类型）")
 
         # 2. 删除
         n = await core.db.execute(
-            "DELETE FROM greeting_schedules WHERE id=? AND type='reminder' AND user_id=?",
-            (id, uid))
+            "DELETE FROM greeting_schedules WHERE id=? AND type='reminder'",
+            (id,))
         if not n:
             return ToolResult.fail(f"删除失败：提醒 ID {id} 不存在或已被删除")
 

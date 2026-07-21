@@ -1270,7 +1270,16 @@ class MessageProcessorMixin:
                 self.memory.signal_new_message()
                 try:
                     _k = self.memory._suggest_k(user_input, default_k=8)
-                    results = await self.memory.retrieve_memories(user_input, k=_k)
+                    # 单环节 8s 超时保护：避免 retrieve_memories 卡死导致
+                    # 整体 20s 兜底超时被触发（曾导致 memory.retrieve_global_timeout）
+                    results = await asyncio.wait_for(
+                        self.memory.retrieve_memories(user_input, k=_k),
+                        timeout=8.0,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("memory.retrieve_timeout_single",
+                                   hint="单次记忆检索超时 8s，跳过本次记忆")
+                    results = None
                 except Exception as e:
                     logger.warning("memory.retrieve_failed", error=str(e))
                     results = None

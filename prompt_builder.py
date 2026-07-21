@@ -618,11 +618,14 @@ def _get_stable_section_mtimes() -> dict[str, float]:
 
 
 def _replace_placeholders(content: str, address_term: str, agent_name: str = "") -> str:
-    """替换 workspace 文件中的 {address_term}、{agent_name}、{name} 占位符。
+    """替换 workspace 文件中的 {address_term}、{agent_name}、{name}、{chat_model} 等占位符。
 
     {address_term} - 对话中使用的称呼（如"爸爸"）
     {agent_name} - Agent 的显示名称（如"小妲"）
     {name} - 用户的昵称/姓名（如"飞"），从 USER.md 读取
+    {chat_model} / {chat_pro_model} / {chat_flash_model} / {chat_mini_model} -
+        从 ROUTE_TABLE 动态读取当前实际模型，避免 IDENTITY.md 写死模型名
+        导致 LLM 自称与路由配置不符（如切到 agnes 后仍自称 mimo-v2.5）
     """
     if "{address_term}" in content:
         content = content.replace("{address_term}", address_term)
@@ -645,6 +648,26 @@ def _replace_placeholders(content: str, address_term: str, agent_name: str = "")
                         content = content.replace("{name}", user_name)
         except Exception as e:
             logger.debug("prompt_builder.user_name_substitution_failed", error=str(e))
+
+    # 动态模型占位符：从 ROUTE_TABLE 读取当前实际模型，避免写死模型名
+    # 切换 provider 后 LLM 能看到新模型名，不会仍自称旧模型
+    _model_placeholders = {
+        "{chat_model}": "chat",
+        "{chat_pro_model}": "chat_pro",
+        "{chat_flash_model}": "chat_flash",
+        "{chat_mini_model}": "chat_mini",
+    }
+    if any(ph in content for ph in _model_placeholders):
+        try:
+            from model_router import ROUTE_TABLE
+            for placeholder, task in _model_placeholders.items():
+                if placeholder in content:
+                    entry = ROUTE_TABLE.get(task, {})
+                    model_id = entry.get("model", "")
+                    if model_id:
+                        content = content.replace(placeholder, model_id)
+        except Exception as e:
+            logger.debug("prompt_builder.model_placeholder_substitution_failed", error=str(e))
     return content
 
 

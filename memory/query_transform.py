@@ -139,7 +139,8 @@ class QueryTransformer:
                 return None
             return content
         except Exception as e:
-            logger.warning("query_transform.free_model_failed", model=self._model, error=str(e), error_type=type(e).__name__)
+            # 修复 P2 Bug 8: 已有降级到 router 兜底，降级为 debug
+            logger.debug("query_transform.free_model_failed", model=self._model, error=str(e)[:200], error_type=type(e).__name__)
             return None
 
     async def rewrite_query(self, original_query: str, context: str = "") -> str:

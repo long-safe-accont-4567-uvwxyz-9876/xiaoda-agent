@@ -459,6 +459,27 @@ class GateGuardHook(BaseHook):
             or arguments.get("filename", "")
         )
 
+        # 非文件操作工具（如 list_stickers/call_xiaoda/search_web 等）跳过证据门禁
+        # 根因：原代码对 file_path 为空的工具仍走 pre_check，导致 L2 MEDIUM 默认风险
+        # 触发"证据门禁：请先读取目标文件再修改"误拦截（曾拦截 list_stickers/call_xiaoda）
+        # FORBIDDEN/HIGH 风险工具（如 execute_command）由 SecurityPreCheck 独立检查
+        if not file_path:
+            # 只检查 FORBIDDEN/HIGH 风险，跳过 L2 证据门禁
+            risk = self._risk_classifier.classify(tool_name, arguments)
+            if risk >= RiskLevel.FORBIDDEN:
+                return HookResult(allowed=False, reason="危险操作，已拒绝")
+            if risk >= RiskLevel.HIGH:
+                from security.permission_manager import get_permission_manager
+                pm = get_permission_manager()
+                if pm.is_bypass_mode():
+                    logger.warning(f"GateGuardHook.bypass: tool={tool_name}, risk=HIGH, mode={pm.mode.value}")
+                else:
+                    return HookResult(
+                        allowed=False, reason="高风险操作，需要用户确认",
+                        additional_context="需要用户确认后才能执行此高风险操作",
+                    )
+            return HookResult(allowed=True)
+
         # 证据门禁：检查是否已读取目标
         has_read = self._evidence_gate.has_read(file_path) if file_path else False
         # create_file: 检查目标文件是否已存在（创建新文件时豁免证据门禁）

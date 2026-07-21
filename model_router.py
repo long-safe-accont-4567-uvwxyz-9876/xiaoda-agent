@@ -375,12 +375,13 @@ class ModelRouter:
                 # agnes 不支持 thinking，切换到 agnes 时禁用 thinking
                 if provider == "agnes" and "thinking" in ROUTE_TABLE[_task]:
                     ROUTE_TABLE[_task]["thinking"] = {"type": "disabled"}
-        # chat_flash 跨 provider 降级：使用不同 provider 实现 fallback 链多样化
-        if provider in _CROSS_PROVIDER_MAP:
-            fb_provider, fb_model = _CROSS_PROVIDER_MAP[provider]
-            if "chat_flash" in ROUTE_TABLE:
-                ROUTE_TABLE["chat_flash"]["client"] = fb_provider
-                ROUTE_TABLE["chat_flash"]["model"] = fb_model
+        # 关键修复：不再把 chat_flash 重置成跨 provider（_CROSS_PROVIDER_MAP）。
+        # 旧逻辑"主 provider 故障时 flash 切到不同 provider 实现 fallback 链多样化"
+        # 会导致用户明确选择 agnes 后，agnes 主路由失败时 fallback 链跳到 mimo，
+        # 返回 mimo-v2.5 回复，与用户配置不符。
+        # 正确行为：chat_flash 跟随主 provider，agnes 故障时优先 fallback 到
+        # 同 provider 的其他模型（chat_agnes），跨 provider 降级作为最后手段
+        # 由 _try_fallback_chain 的 step 2/3 处理。
         logger.info("router.all_tasks_synced",
                     provider=provider, model=model_id,
                     synced_tasks=list(_sync_tasks))
@@ -389,6 +390,10 @@ class ModelRouter:
         # 持久化到 config_service，以便重启后恢复上次聊天模型
         # 必须同步写入 models.chat_model 与 models.routes.chat，避免两套数据不同步
         # 否则 _apply_route_overrides 与 _restore_chat_model 启动顺序会造成覆盖
+        # 关键修复：捕获 Exception 而非 (OSError, KeyError, ValueError, TypeError)。
+        # 旧逻辑下若 config_service 抛 LLMError/AppException 或其他非上述类型的异常，
+        # 会向上传播到 _restore_chat_model 的 try/except，触发 fallback 分支，
+        # 进而修改 ROUTE_TABLE["chat"]["client"]="mimo" 形成 sticky fallback。
         try:
             from web.config_service import get_config_service
             cfg = get_config_service()
@@ -408,8 +413,9 @@ class ModelRouter:
                 ),
                 "timeout": self.TASK_TIMEOUTS.get("chat"),
             })
-        except (OSError, KeyError, ValueError, TypeError) as e:
-            logger.warning("router.chat_model_persist_failed error={}", str(e))
+        except Exception as e:
+            logger.warning("router.chat_model_persist_failed error={} type={}",
+                           str(e), type(e).__name__)
         logger.info("router.chat_model_changed", provider=provider, model=model_id)
         return {"provider": provider, "model_id": model_id}
 
@@ -629,12 +635,22 @@ class ModelRouter:
 
         D12: 降级链在调用前用此方法判断目标客户端是否可用，避免向未初始化
         的客户端发起无意义调用导致兜底失效。
+
+        关键修复：agnes provider 应同时检查 _agnes_client（启动时初始化）
+        和 _custom_clients["agnes"]（用户通过 WebUI 添加后注册的客户端），
+        否则降级链中 agnes fallback 会被错误地跳过。
         """
         if provider == "mimo":
             return self._client is not None
         if provider == "agnes":
-            return self._agnes_client is not None
-        return provider in getattr(self, "_custom_clients", {})
+            # 内置 _agnes_client 或用户通过 WebUI 注册的 _custom_clients["agnes"] 任一存在即可
+            # 注意：仅检查 key 存在不够，必须确认 value 不是 None
+            # （历史 bug：_custom_clients["agnes"]=None 时 _is_client_configured 误报 True，
+            #  导致 _select_client_for_provider 抛 E_LLM006 但 fallback 链已跳过该目标）
+            agnes_custom = getattr(self, "_custom_clients", {}).get("agnes")
+            return self._agnes_client is not None or agnes_custom is not None
+        custom = getattr(self, "_custom_clients", {}).get(provider)
+        return custom is not None
 
     async def _try_fallback_chain(self, e: Exception, task_type: str,
                                   messages: list[dict], temperature: float,
@@ -711,6 +727,30 @@ class ModelRouter:
                     logger.error("router.custom_provider_fallback_failed",
                                  provider=cp_name, error=str(cp_err))
                     continue
+
+        # 4. 跨 provider 降级到 mimo（作为最后手段）
+        # 关键修复：保留"跨 provider 降级"的能力（原 _CROSS_PROVIDER_MAP 的意图），
+        # 但作为最后手段，不会在主路由失败时静默跳到 mimo。
+        # 只在主 provider 不是 mimo 时执行，避免重复；仅在所有同 provider fallback
+        # 都失败后触发，确保用户明确选择 agnes 时优先用 agnes 全链路 fallback。
+        main_provider = ROUTE_TABLE.get("chat", {}).get("client", _CFG_DEFAULT_PROVIDER)
+        if (main_provider != "mimo"
+                and task_type.startswith("chat")
+                and self._is_client_configured("mimo")):
+            try:
+                mimo_config = ROUTE_TABLE.get("chat_mimo")
+                if mimo_config:
+                    logger.warning("router.mimo_fallback",
+                                   original_task=task_type, main_provider=main_provider)
+                    mimo_tools = self._filter_tools_for_model(tools, mimo_config.get("model", ""))
+                    return await self._route_with_retry(
+                        "chat_mimo", mimo_config, messages, temperature,
+                        mimo_config.get("max_tokens", 1000), stream,
+                        mimo_tools, tool_choice, timeout, user_openid, session_id,
+                        extra_headers=extra_headers,
+                    )
+            except (RuntimeError, OSError, KeyError, ValueError) as mimo_err:
+                logger.error("router.mimo_fallback_failed", error=str(mimo_err))
         return None
 
     async def route(self, task_type: str, messages: list[dict],
@@ -785,13 +825,23 @@ class ModelRouter:
         return messages
 
     async def _select_client_for_provider(self, provider: str) -> Any:
-        """选择指定 provider 的客户端（含懒注册和凭证锁）。无可用客户端时 raise LLMError。"""
+        """选择指定 provider 的客户端（含懒注册和凭证锁）。无可用客户端时 raise LLMError。
+
+        关键修复：agnes provider 在 _agnes_client 为 None 时（启动时未初始化），
+        必须回退到 _custom_clients["agnes"]（用户通过 WebUI 添加 agnes 后注册的客户端），
+        而不是静默使用 mimo 客户端——否则用户切换到 agnes 后实际仍走 mimo，
+        LLM 回复会自称 mimo-v2.5，与用户配置不符。
+        """
         lock = self._get_credential_lock(provider)
         async with lock:
-            client = self._client
-            if provider == "agnes" and self._agnes_client:
-                client = self._agnes_client
-            elif provider not in ("mimo", "agnes"):
+            client: Any = None
+            if provider == "mimo":
+                client = self._client
+            elif provider == "agnes":
+                # 优先用内置 _agnes_client（启动时从环境变量初始化），
+                # 回退到 _custom_clients["agnes"]（用户通过 WebUI 添加后注册的客户端）
+                client = self._agnes_client or getattr(self, "_custom_clients", {}).get("agnes")
+            else:
                 custom = getattr(self, "_custom_clients", {}).get(provider)
                 if custom is None:
                     # 懒注册：从 config_service 恢复未注册的自定义 provider
@@ -805,7 +855,7 @@ class ModelRouter:
                 client = custom
         if not client:
             raise LLMError(
-                "MiMo client not initialized, check MIMO_API_KEY",
+                f"Provider {provider} client not initialized, check API key",
                 error_code=ErrorCodeEnum.E_LLM006,
             )
         return client
@@ -815,6 +865,10 @@ class ModelRouter:
                              mt: int, extra_headers: dict | None,
                              config: dict, provider: str) -> dict:
         """构造流式调用 kwargs。"""
+        # agnes API max_tokens 上限 65536，超出返回 500 invalid_request
+        # 即使 ROUTE_TABLE 配置 131072，对 agnes provider 自动夹紧到 65535 留 1 token 余量
+        if provider == "agnes" and mt > 65535:
+            mt = 65535
         kwargs = {
             "model": model,
             "messages": messages,
@@ -923,6 +977,10 @@ class ModelRouter:
                              extra_headers: dict | None,
                              config: dict, provider: str) -> dict:
         """构造非流式/流式路由调用的 kwargs。"""
+        # agnes API max_tokens 上限 65536，超出返回 500 invalid_request
+        # 即使 ROUTE_TABLE 配置 131072，对 agnes provider 自动夹紧到 65535 留 1 token 余量
+        if provider == "agnes" and max_tokens > 65535:
+            max_tokens = 65535
         kwargs = {
             "model": model,
             "messages": messages,
@@ -1023,10 +1081,14 @@ class ModelRouter:
         # 检查 finish_reason 和回复完整性：检测截断
         # 治本：在 route 底层统一检测截断，所有调用 route 的地方自动获得截断保护
         # 即使 finish_reason="stop"，LLM 也可能自我截断（如列表中途停止 "...3"）
+        # 注意：短回复（如 "好的"、"嗯"）是 LLM 合理选择，不视为截断
+        # 修复 P2 Bug 9: 原 _is_reply_incomplete 判断逻辑对 content_len=4 的短回复
+        # 误判为截断，触发 truncated_by_max_tokens 告警和无意义重试。
+        # 增加最小长度阈值 30，短回复不参与截断检测。
         finish_reason = getattr(response.choices[0], "finish_reason", None)
         _content_rstripped = content.rstrip() if content else ""
         _content_last_line = _content_rstripped.split('\n')[-1] if _content_rstripped else ""
-        _is_reply_incomplete = bool(content) and (
+        _is_reply_incomplete = bool(content) and len(content) >= 30 and (
             not any(_content_rstripped.endswith(c) for c in "。！？～…）」】\n")
             and len(_content_last_line) < 10
         )
@@ -1305,12 +1367,13 @@ class ModelRouter:
         if not tools:
             return tools
 
-        # agnes 系列模型可能不支持工具调用，记录警告
+        # agnes 系列模型工具支持情况由实际 API 错误反馈决定（is_tool_unsupported_error）
+        # 这里只是预判，不应每次调用都 warning 污染日志（曾导致 139 次/小时告警风暴）
+        # 降级为 debug，需要诊断时再开启
         agnes_models = {AGENT_CONFIG.get("model") for AGENT_CONFIG in [ROUTE_TABLE.get("chat_agnes")] if AGENT_CONFIG}
         if model in agnes_models:
-            tool_names = [t.get("function", {}).get("name", "?") for t in tools]
-            logger.warning("router.tools_may_not_be_supported",
-                           model=model, tool_count=len(tools), tools=tool_names)
+            logger.debug("router.tools_may_not_be_supported",
+                         model=model, tool_count=len(tools))
 
         # 小模型不发送工具定义，防止输出退化
         if self._is_small_model(model):

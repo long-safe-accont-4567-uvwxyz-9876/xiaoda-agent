@@ -53,7 +53,7 @@ class EntityExtractor:
         self.router = router
         self._llm_prompt_template = (
             "提取以下文本中的实体，返回JSON数组。\n"
-            "每项格式：{{\"name\":\"实体名\",\"type\":\"PROPER|QUOTED|TOPIC|IDENTIFIER\",\"kind\":\"人物|地点|组织|概念|技术\"}}\n"
+            "每项格式：{\"name\":\"实体名\",\"type\":\"PROPER|QUOTED|TOPIC|IDENTIFIER\",\"kind\":\"人物|地点|组织|概念|技术\"}\n"
             "文本：{text}"
         )
         logger.info("entity_extractor.ready")
@@ -182,7 +182,8 @@ class EntityExtractor:
         if not self.router:
             return []
 
-        prompt = self._llm_prompt_template.format(text=text[:500])
+        # 防御性加固：text 可能含 {} 字符
+        prompt = self._llm_prompt_template.replace("{text}", text[:500])
         messages = [{"role": "user", "content": prompt}]
 
         result = await self._call_llm(messages)

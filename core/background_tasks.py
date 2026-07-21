@@ -199,7 +199,16 @@ class BackgroundTaskManager:
                             if msg.get("role") in ("user", "assistant") and msg.get("content"):
                                 exchanges.insert(0, {"role": msg["role"], "content": msg["content"][:500]})
                     ctx = {"exchanges": exchanges, "emotion": emotion}
-                    await self.memory.try_idle_encode(ctx, force=True)
+                    # 修复 P2 Bug 11: _encode_task 慢任务（曾 134s）
+                    # 根因：try_idle_encode 涉及多次 LLM + embed 调用，无整体超时保护
+                    # 60s 超时：编码单次对话 5-15s，60s 足够；超时则放弃本次编码
+                    # （记忆编码是后台任务，不影响主响应）
+                    await asyncio.wait_for(
+                        self.memory.try_idle_encode(ctx, force=True),
+                        timeout=60.0,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("bg.memory_encode_timeout", hint="记忆编码超时 60s，跳过本次")
                 except Exception as e:
                     logger.warning("bg.memory_encode_failed", error=str(e))
             _spawn(_encode_task())
@@ -387,11 +396,22 @@ class BackgroundTaskManager:
             if not _resolve_agently_cli():
                 await self.db.set_cron_last_run("mail_token_refresh")
                 return
-            # 调用 message +list --limit 1 触发 token 自动刷新
-            rc, _out, err = await _run_agently(
-                ["message", "+list", "--dir", "inbox", "--limit", "1"],
-                timeout=30,
-            )
+            # 修复 P2 Bug 11: _refresh_mail_token_task 慢任务（曾 58s）
+            # 根因：agently-cli 启动 + 网络请求可能卡住，原 timeout=30 只覆盖 _run_agently 内部
+            # 加外层 45s 超时：超过则放弃本次刷新（下次 cron 会重试）
+            try:
+                # 调用 message +list --limit 1 触发 token 自动刷新
+                rc, _out, err = await asyncio.wait_for(
+                    _run_agently(
+                        ["message", "+list", "--dir", "inbox", "--limit", "1"],
+                        timeout=30,
+                    ),
+                    timeout=45.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("mail.token_refresh_timeout", hint="刷新超时 45s，跳过本次")
+                await self.db.set_cron_last_run("mail_token_refresh")
+                return
             if rc == 0:
                 logger.info("mail.token_refresh_ok")
             elif rc == 3:

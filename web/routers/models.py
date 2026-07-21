@@ -273,8 +273,13 @@ async def update_route(task: str, body: dict, request: Request) -> Any:
         "timeout": _router_of(request).TASK_TIMEOUTS.get(task),
     })
     # 同步更新 models.chat_model，使 GET /models/chat-model 返回最新值
+    # 关键修复：用 body.provider（用户明确传入）而非 entry.get("client", "mimo")。
+    # 旧逻辑下若 _restore_chat_model fallback 已把 entry["client"] 改成 "mimo"，
+    # 即使 body.provider=agnes，也会持久化 chat_model=mimo，形成 sticky fallback。
+    # 现在以 body.provider 为权威源，未传则保留 entry["client"]（不再默认 mimo）。
     if task == "chat":
-        cfg.set("models.chat_model", {"provider": entry.get("client", "mimo"),
+        sync_provider = provider or entry.get("client", "mimo")
+        cfg.set("models.chat_model", {"provider": sync_provider,
                                        "model_id": entry["model"]})
     await _audit(request, "route.update", json.dumps({task: body}, ensure_ascii=False))
     await _broadcast_changed()

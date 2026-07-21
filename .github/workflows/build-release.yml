@@ -169,6 +169,22 @@ jobs:
           done
           echo "Sanitized developer PII from config/workspace/"
 
+      - name: Remove IP-risk and remote resources from bundle
+        shell: bash
+        run: |
+          echo "=== Removing IP-risk and remote resources ==="
+          # 1. 删除壁纸文件（本地开发仍可用，但不在安装包中打包）
+          #    仅保留 webui_background.jpg 作为默认壁纸
+          rm -rf web/frontend/public/assets/wallpapers/
+          echo "Removed wallpapers directory (keeping webui_background.jpg as default)"
+          # 2. 删除原神角色 IP 风险表情包（本地开发仍可用，但不在安装包中打包）
+          rm -rf assets/stickers/nahida assets/stickers/nahida_backup assets/stickers/klee
+          echo "Removed IP-risk stickers (nahida, klee)"
+          # 3. 删除原神角色 IP 风险参考音频（本地开发仍可用，但不在安装包中打包）
+          rm -f assets/voice_refs/nahida.wav assets/voice_refs/nahida_hq.wav
+          echo "Removed IP-risk voice refs (nahida)"
+          echo "IP-risk and remote resources removed from bundle"
+
       - name: Build with PyInstaller
         run: pyinstaller xiaoda-agent.spec --clean --noconfirm
         env:

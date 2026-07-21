@@ -191,7 +191,13 @@ class ErrorRulePipeline:
     async def _call_extract_llm(self, tool_name: str, args: dict, error: str, now: float) -> Any:
         """调用 LLM 提取规则文本。返回结果字符串或 None。"""
         args_str = json.dumps(args, ensure_ascii=False)[:500]
-        prompt = EXTRACT_PROMPT.format(tool_name=tool_name, args=args_str, error=error[:500])
+        # 防御性加固：tool_name/args/error 可能含 {} 字符（如工具参数为 Python 代码）
+        prompt = (
+            EXTRACT_PROMPT
+            .replace("{tool_name}", tool_name)
+            .replace("{args}", args_str)
+            .replace("{error}", error[:500])
+        )
         messages = [{"role": "user", "content": prompt}]
 
         # 即将调用 LLM，记录节流时间点（即使后续失败也节流，防止重试风暴）

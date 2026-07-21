@@ -928,10 +928,12 @@ class ABTestRunner:
                     response = str(response) if response else ""
 
                     # Step 2: 用 LLM_JUDGE_RUBRIC 评分
-                    judge_prompt = LLM_JUDGE_RUBRIC.format(
-                        user_input=case.input,
-                        reference_answer=case.reference_answer or "(无参考答案)",
-                        response=response,
+                    # 防御性加固：user_input/reference_answer/response 都可能含 {} 字符
+                    judge_prompt = (
+                        LLM_JUDGE_RUBRIC
+                        .replace("{user_input}", case.input)
+                        .replace("{reference_answer}", case.reference_answer or "(无参考答案)")
+                        .replace("{response}", response)
                     )
                     judge_response = _run_coro_sync(self.router.route(
                         task_type=self.judge_task_type,

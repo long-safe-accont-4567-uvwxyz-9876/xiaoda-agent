@@ -318,6 +318,13 @@ class AIQQBot(botpy.Client):
         self._agent_initialized = agent is not None and getattr(agent, "_initialized", False)
         # 最近一个私聊用户 openid，主动消息（问候同步）发给该用户
         self._last_c2c_openid: str = os.getenv("NUDGE_USER_OPENID", "")
+        # C2C session_id 内存缓存：user_openid → session_id
+        # 根因：单连接 SQLite + WAL 模式下，并发写操作会阻塞读，
+        #       导致 get_active_session 超时 5 秒触发 c2c_session_timeout。
+        # 修复：首次成功后缓存 session_id，避免每条消息都查 DB；session 失效时降级到查 DB。
+        self._c2c_session_cache: dict[str, str] = {}
+        self._c2c_session_cache_ttl = 3600  # 缓存有效期 1 小时
+        self._c2c_session_cache_ts: dict[str, float] = {}
         # HITL: 高危操作两段式确认（默认开启，QQ_HITL_ENABLED=false 关闭）
         self.hitl_enabled = os.getenv("QQ_HITL_ENABLED", "true").lower() in ("1", "true", "yes", "on")
         self.im_approval = IMApprovalChannel(
@@ -575,18 +582,39 @@ class AIQQBot(botpy.Client):
         return is_master
 
     async def _get_or_create_c2c_session(self, user_openid: str) -> str:
-        """获取或创建会话，失败时返回空字符串。添加超时保护防止 DB 锁长期阻塞消息处理。"""
+        """获取或创建会话，失败时返回空字符串。添加超时保护防止 DB 锁长期阻塞消息处理。
+
+        优化：使用内存缓存避免每条消息都查 DB。
+        根因：单连接 SQLite + WAL 模式下，并发写操作会阻塞读，
+              导致 get_active_session 超时 5 秒触发 c2c_session_timeout（212 次错误）。
+        修复：首次成功后缓存 session_id 1 小时，避免重复查询；
+              仅在缓存失效或会话不存在时才查 DB。
+        """
+        # 1. 先查内存缓存
+        cached_sid = self._c2c_session_cache.get(user_openid)
+        cached_ts = self._c2c_session_cache_ts.get(user_openid, 0)
+        if cached_sid and (time.time() - cached_ts < self._c2c_session_cache_ttl):
+            return cached_sid
+
+        # 2. 缓存未命中，查 DB
         try:
             session = await asyncio.wait_for(
                 self.agent.get_session(user_openid),
                 timeout=5.0,
             )
             if session:
-                return session["id"]
-            return await asyncio.wait_for(
+                sid = session["id"]
+                self._c2c_session_cache[user_openid] = sid
+                self._c2c_session_cache_ts[user_openid] = time.time()
+                return sid
+            # 没有活跃会话，创建新会话
+            sid = await asyncio.wait_for(
                 self.agent.create_session(user_openid),
                 timeout=5.0,
             )
+            self._c2c_session_cache[user_openid] = sid
+            self._c2c_session_cache_ts[user_openid] = time.time()
+            return sid
         except TimeoutError:
             logger.warning("qq_bot.c2c_session_timeout openid={}, retrying", user_openid)
             # 超时后重试一次（DB 锁通常是短暂的）
@@ -596,17 +624,27 @@ class AIQQBot(botpy.Client):
                     timeout=10.0,
                 )
                 if session:
-                    return session["id"]
-                return await asyncio.wait_for(
+                    sid = session["id"]
+                    self._c2c_session_cache[user_openid] = sid
+                    self._c2c_session_cache_ts[user_openid] = time.time()
+                    return sid
+                sid = await asyncio.wait_for(
                     self.agent.create_session(user_openid),
                     timeout=10.0,
                 )
+                self._c2c_session_cache[user_openid] = sid
+                self._c2c_session_cache_ts[user_openid] = time.time()
+                return sid
             except TimeoutError:
                 logger.error("qq_bot.c2c_session_timeout_retry openid={}", user_openid)
-                return ""
+                # 关键修复：DB 超时时返回临时 session_id，保证消息不丢失
+                # 后续 agent.process 仍能执行，仅持久化能力受影响
+                fallback_sid = f"qq_tmp_{user_openid[:16]}"
+                return fallback_sid
         except (KeyError, OSError, RuntimeError) as e:
             logger.error(f"qq_bot.c2c_session_failed: {e}")
-            return ""
+            # 同样返回临时 session_id，避免消息丢失
+            return f"qq_tmp_{user_openid[:16]}"
 
     async def _handle_c2c_quick_commands(self, content: str, message: C2CMessage,
                                           user_openid: str, user_id: str) -> bool:

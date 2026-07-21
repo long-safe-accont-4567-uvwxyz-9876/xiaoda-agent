@@ -206,12 +206,29 @@ class KnowledgeDB:
             for obs in new_obs:
                 if obs not in merged:
                     merged.append(obs)
-            await self._conn.execute(
-                "UPDATE knowledge_entities SET kind=?, observations=?, updated_at=? WHERE name=?",
-                (kind or existing.get("kind", ""), json.dumps(merged, ensure_ascii=False), time.time(), name),
-            )
-            if auto_commit:
-                await self._conn.commit()
+            try:
+                await self._conn.execute(
+                    "UPDATE knowledge_entities SET kind=?, observations=?, updated_at=? WHERE name=?",
+                    (kind or existing.get("kind", ""), json.dumps(merged, ensure_ascii=False), time.time(), name),
+                )
+                if auto_commit:
+                    await self._conn.commit()
+            except Exception as update_err:
+                # FTS5 触发器或并发写锁可能引发 "SQL logic error"
+                # 降级 1：只更新 updated_at，跳过 observations（避免触发 FTS5 触发器）
+                logger.warning("kg.merge_entity_update_failed name={} error={} → 降级为轻量更新",
+                              name, str(update_err))
+                try:
+                    await self._conn.execute(
+                        "UPDATE knowledge_entities SET updated_at=? WHERE name=?",
+                        (time.time(), name),
+                    )
+                    if auto_commit:
+                        await self._conn.commit()
+                except Exception as lite_err:
+                    # 降级 2：连轻量更新也失败，记录但不抛出（merge_entities 已包 try/except）
+                    logger.error("kg.merge_entity_lite_update_failed name={} error={}",
+                                 name, str(lite_err))
         else:
             entity_id = entity.get("id", f"ENT-{uuid.uuid4().hex[:12]}")
             await self.insert_knowledge_entity(entity_id, name, kind, new_obs,

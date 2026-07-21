@@ -56,11 +56,22 @@ async def _fetch_openai_compatible_models(
     try:
         import httpx
         url = base_url.rstrip("/") + "/models"
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                url,
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
+        # 修复 P2 Bug 12: ollama 等本地服务连接失败导致 discover.fetch_failed 告警风暴
+        # 根因：本地服务未启动时，httpx 仍等待 15s 超时，且每次刷新模型列表都告警
+        # 策略：本地 provider（127.0.0.1/localhost）用 3s 短超时；连接拒绝降级 debug
+        is_local = "127.0.0.1" in base_url or "localhost" in base_url
+        connect_timeout = 3.0 if is_local else 15.0
+        async with httpx.AsyncClient(timeout=connect_timeout) as client:
+            try:
+                resp = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+            except (httpx.ConnectError, ConnectionRefusedError) as e:
+                # 本地服务未启动：降级 debug，避免告警风暴
+                logger.debug("discover.connect_failed provider={} error={} (local={})",
+                             provider_id, str(e)[:100], is_local)
+                return []
             resp.raise_for_status()
             body = resp.json()
 

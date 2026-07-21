@@ -136,7 +136,8 @@ class KnowledgeGraph:
             data = response.json()
             return data.get("choices", [{}])[0].get("message", {}).get("content", "")
         except Exception as e:
-            logger.warning("kg.free_model_failed", error=str(e))
+            # 修复 P2 Bug 8: 已有降级到 router 兜底，降级为 debug
+            logger.debug("kg.free_model_failed", error=str(e)[:200], error_type=type(e).__name__)
             return None
 
     async def extract_from_summary(self, summary: str) -> dict:
@@ -144,7 +145,8 @@ class KnowledgeGraph:
             return {"entities": [], "relations": []}
 
         try:
-            prompt = ENTITY_EXTRACT_PROMPT.format(summary=summary[:500])
+            # 防御性加固：summary 来自 LLM 输出可能含 {} 字符
+            prompt = ENTITY_EXTRACT_PROMPT.replace("{summary}", summary[:500])
             messages = [
                 {"role": "system", "content": "你是一个知识提取助手，只输出纯JSON，不要输出任何其他内容，不要用markdown代码块包裹。"},
                 {"role": "user", "content": prompt},

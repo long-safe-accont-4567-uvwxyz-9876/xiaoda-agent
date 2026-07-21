@@ -160,6 +160,13 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
 
     注意：此函数只做"恢复"，不做"持久化"。fallback 时禁止调用 set_chat_model，
     否则会把 mimo 重新写入 config，覆盖用户原选择，形成 sticky fallback。
+
+    关键修复：fallback 分支不再修改 ROUTE_TABLE["chat"]["client"]。
+    旧逻辑会把 client 改成 "mimo"，后续 PUT /models/routes/chat 会读取这个内存值
+    并持久化 chat_model=mimo，导致用户明明设置 agnes 却被覆盖成 mimo（sticky fallback）。
+    正确行为：fallback 只更新 _current_chat_model（影响 GET /models/chat-model 返回值），
+    保留 ROUTE_TABLE 中的用户原选择。请求路由时会通过 _select_client_for_provider
+    检测到 agnes 客户端不可用，自然走 fallback 链到 mimo，无需污染 ROUTE_TABLE。
     """
     chat_model = cfg.get("models.chat_model")
     if not (isinstance(chat_model, dict) and chat_model.get("provider") and chat_model.get("model_id")):
@@ -181,18 +188,17 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
         # AttributeError, OSError) 范围内，自定义 provider 注册失败时会导致启动崩溃
         logger.warning(
             "webui.chat_model_restore_failed provider={} model={} "
-            "error={} fallback_to_mimo_in_memory_only", provider, model_id, str(e)
+            "error={} keep_route_table_unchanged", provider, model_id, str(e)
         )
-        # 仅修改内存中的 ROUTE_TABLE，不调用 set_chat_model 避免重新持久化 mimo
-        # 这样用户下次切换模型时，config 中仍是原选择，不会被 sticky mimo 覆盖
+        # 关键修复：只更新 _current_chat_model（GET /models/chat-model 用），
+        # 不修改 ROUTE_TABLE["chat"]["client"]，避免污染用户原选择。
+        # 请求路由时 _select_client_for_provider 会检测客户端不可用并抛 LLMError，
+        # 触发 _try_fallback_chain 走 mimo 降级，无需在此预先污染 ROUTE_TABLE。
         try:
             from model_router import MIMO_MODEL
-            chat_entry = ROUTE_TABLE.get("chat")
-            if chat_entry is not None:
-                chat_entry["model"] = MIMO_MODEL
-                chat_entry["client"] = "mimo"
             core.router._current_chat_model = {"provider": "mimo", "model_id": MIMO_MODEL}
-            logger.info("webui.chat_model_fallback_in_memory provider=mimo model={}", MIMO_MODEL)
+            logger.info("webui.chat_model_fallback_current_only provider=mimo model={} "
+                        "route_table_preserved={}/{}", MIMO_MODEL, current_client, current_model)
         except (ImportError, KeyError, AttributeError):
             logger.debug("server.set_chat_model_fallback_error", exc_info=True)
 

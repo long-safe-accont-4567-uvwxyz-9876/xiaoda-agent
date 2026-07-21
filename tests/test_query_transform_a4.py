@@ -52,7 +52,9 @@ class TestQueryTransformErrorLogging(unittest.TestCase):
                                      f"error_type 应为 'TimeoutError'，实际 '{error_type}'")
 
     def test_free_model_failed_error_logged_with_type(self):
-        """A4 修复：_call_free_model 的错误日志应包含异常类型名"""
+        """A4 修复：_call_free_model 的错误日志应包含异常类型名
+        修复 P2 Bug 8: 日志级别从 warning 降为 debug（已有降级兜底）
+        """
         import httpx
 
         # 模拟 httpx 请求抛出 ConnectError
@@ -64,12 +66,13 @@ class TestQueryTransformErrorLogging(unittest.TestCase):
                 # 应返回 None
                 self.assertIsNone(result)
 
-                # 验证日志
-                warning_calls = [c for c in mock_logger.warning.call_args_list
-                                 if 'free_model_failed' in str(c)]
-                self.assertTrue(len(warning_calls) > 0)
+                # 验证日志（P2 Bug 8 修复后使用 debug 级别）
+                debug_calls = [c for c in mock_logger.debug.call_args_list
+                               if 'free_model_failed' in str(c)]
+                self.assertTrue(len(debug_calls) > 0,
+                                "应有 debug 级别的 free_model_failed 日志")
 
-                logged_kwargs = warning_calls[0].kwargs
+                logged_kwargs = debug_calls[0].kwargs
                 error_type = logged_kwargs.get('error_type', '')
                 self.assertTrue(error_type, "error_type 不应为空")
                 self.assertEqual(error_type, 'ConnectError')

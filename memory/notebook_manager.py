@@ -90,7 +90,8 @@ class NotebookManager:
             data = response.json()
             return data.get("choices", [{}])[0].get("message", {}).get("content", "")
         except Exception as e:
-            logger.warning("notebook.free_model_failed", error=str(e))
+            # 修复 P2 Bug 8: 已有降级到 router 兜底，降级为 debug
+            logger.debug("notebook.free_model_failed", error=str(e)[:200], error_type=type(e).__name__)
             return None
 
     async def add_note(self, content: str, tags: list[str] | None = None) -> int:
@@ -174,12 +175,15 @@ class NotebookManager:
             else:
                 existing_str = "（还没有笔记）"
 
-            prompt = AUTO_NOTE_PROMPT_TEMPLATE.format(
-                user_message=user_msg[:300],
-                assistant_reply=reply[:300],
-                existing_notes=existing_str,
-                address_term=address_term,
-                agent_name=get_agent_display_name("xiaoda"),
+            # 防御性加固：user_message/assistant_reply/existing_notes 可能含 {} 字符
+            # （与 profile_learner.insight_failed 同类 bug 的根因）
+            prompt = (
+                AUTO_NOTE_PROMPT_TEMPLATE
+                .replace("{user_message}", user_msg[:300])
+                .replace("{assistant_reply}", reply[:300])
+                .replace("{existing_notes}", existing_str)
+                .replace("{address_term}", address_term)
+                .replace("{agent_name}", get_agent_display_name("xiaoda"))
             )
             # 优先使用免费模型，降级到主路由
             result = await self._call_free_model(

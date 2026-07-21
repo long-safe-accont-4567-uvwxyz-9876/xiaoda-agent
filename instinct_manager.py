@@ -95,7 +95,9 @@ class InstinctManager:
             data = response.json()
             return data.get("choices", [{}])[0].get("message", {}).get("content", "")
         except Exception as e:
-            logger.warning("instinct.free_model_failed", error=str(e))
+            # 修复 P2 Bug 8: free_model_failed 频繁告警（免费模型限流/网络抖动是常态）
+            # 已有降级到 router 的兜底，降级为 debug 避免告警风暴
+            logger.debug("instinct.free_model_failed", error=str(e)[:200], error_type=type(e).__name__)
             return None
 
     async def init(self) -> None:
@@ -125,7 +127,15 @@ class InstinctManager:
         """对话结束后异步提取 Instinct，使用 LLM 分析对话提取可复用模式"""
         if not self._available:
             return
-        prompt = EXTRACT_PROMPT.format(user_input=user_input, reply=reply)
+        # 防御性加固：用 str.replace 替代 str.format
+        # 根因：user_input/reply 可能含 {} / {0} 等字符（JSON/Python 代码/正则），
+        # .format() 会抛 IndexError/KeyError 导致 extract_instincts 失败（与
+        # profile_learner.insight_failed 同类 bug）。
+        prompt = (
+            EXTRACT_PROMPT
+            .replace("{user_input}", user_input)
+            .replace("{reply}", reply)
+        )
         messages = [{"role": "user", "content": prompt}]
 
         # 优先调用硅基流动免费模型，失败则降级到 router

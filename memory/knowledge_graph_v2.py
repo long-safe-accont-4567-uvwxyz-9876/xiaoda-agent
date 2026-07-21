@@ -81,7 +81,8 @@ class KnowledgeGraphV2(KnowledgeGraph):
         if not summary:
             return {"entities": [], "relations": []}
         try:
-            prompt = ENTITY_EXTRACT_PROMPT_V2.format(summary=summary[:500])
+            # 防御性加固：summary 来自 LLM 输出可能含 {} 字符
+            prompt = ENTITY_EXTRACT_PROMPT_V2.replace("{summary}", summary[:500])
             messages = [
                 {"role": "system", "content": "你是一个知识提取助手，只输出纯JSON，不要输出任何其他内容，不要用markdown代码块包裹。"},
                 {"role": "user", "content": prompt},
@@ -218,10 +219,12 @@ class KnowledgeGraphV2(KnowledgeGraph):
         self, old_summary: str, new_observations: list, entity_name: str
     ) -> str:
         """LLM 重写 summary。"""
-        prompt = SUMMARY_REWRITE_PROMPT.format(
-            old_summary=old_summary,
-            new_observations=", ".join(new_observations),
-            entity_name=entity_name,
+        # 防御性加固：参数可能含 {} 字符
+        prompt = (
+            SUMMARY_REWRITE_PROMPT
+            .replace("{old_summary}", old_summary)
+            .replace("{new_observations}", ", ".join(new_observations))
+            .replace("{entity_name}", entity_name)
         )
         messages = [{"role": "user", "content": prompt}]
         result = await self._call_free_model(messages, temperature=0.3, max_tokens=512)
@@ -346,8 +349,11 @@ class KnowledgeGraphV2(KnowledgeGraph):
             facts_list = "\n".join(
                 f"{i}. {f}" for i, f in enumerate(existing_facts)
             )
-            prompt = CONTRADICTION_PROMPT.format(
-                new_fact=new_fact, existing_facts_list=facts_list
+            # 防御性加固：new_fact/existing_facts_list 可能含 {} 字符
+            prompt = (
+                CONTRADICTION_PROMPT
+                .replace("{new_fact}", new_fact)
+                .replace("{existing_facts_list}", facts_list)
             )
             messages = [{"role": "user", "content": prompt}]
             result = await self._call_free_model(messages, temperature=0.0, max_tokens=200)

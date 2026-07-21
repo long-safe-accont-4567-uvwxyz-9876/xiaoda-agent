@@ -52,7 +52,8 @@ class PreferenceDiscovery:
             return []
 
         try:
-            prompt = self.STAGE_C_PROMPT.format(session_content=session_content)
+            # 防御性加固：session_content 可能含 {} 字符
+            prompt = self.STAGE_C_PROMPT.replace("{session_content}", session_content)
             # 实际实现中调用LLM
             # response = await llm_client.chat(...)
             # return parse_json(response)["facts"]
