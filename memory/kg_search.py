@@ -36,11 +36,20 @@ class KGSearchEngine:
             top_k: 返回条数
             as_of: None=只返回当前有效; 时间戳=历史快照
         """
-        results = await asyncio.gather(
+        # return_exceptions=True：单路检索异常不应阻断整体搜索
+        raw = await asyncio.gather(
             self._semantic_search(query, top_k * 2),
             self._fulltext_search(query, top_k * 2),
             self._graph_search(query, top_k * 2),
+            return_exceptions=True,
         )
+        results: list[list[dict]] = []
+        for idx, r in enumerate(raw):
+            if isinstance(r, Exception):
+                logger.warning("kg_search.sub_search_failed", idx=idx, error=str(r))
+                results.append([])
+            else:
+                results.append(r)
         fused = self._rrf_fuse(results, k=60)
 
         # 时序过滤

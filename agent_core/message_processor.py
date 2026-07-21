@@ -1444,9 +1444,10 @@ class MessageProcessorMixin:
 
         # 简单任务时过滤系统级工具
         tools = ChatProcessor.filter_tools_for_simple_task(tools, clean_input, self._is_simple_task)
-        # 表情包意图时仅保留 delegate_task
+        # 表情包意图时硬移除 delegate_task（CLAUDE.md 规范）
+        # 表情包由主体流程自动附带，委托出去会丢失预选表情包和 system message
         if _sticker_intent and tools:
-            tools = [t for t in tools if t.get("function", {}).get("name") == "delegate_task"]
+            tools = [t for t in tools if t.get("function", {}).get("name") != "delegate_task"]
             if not tools:
                 tools = None
         # 非主人消息：白名单制，只保留允许的工具

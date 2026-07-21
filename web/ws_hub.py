@@ -82,9 +82,13 @@ class ConnectionManager:
             self._heartbeat_loop(conn_id))
         return conn_id
 
-    def unregister(self, conn_id: str) -> None:
-        """按连接 ID 注销连接及其会话映射."""
-        self._connections.pop(conn_id, None)
+    async def unregister(self, conn_id: str) -> None:
+        """按连接 ID 注销连接及其会话映射.
+
+        关闭底层 WebSocket（避免 socket 泄漏），取消心跳任务，清理映射。
+        幂等：重复调用安全。
+        """
+        ws = self._connections.pop(conn_id, None)
         self._agent_map.pop(conn_id, None)
         self._session_map.pop(conn_id, None)
         # G5: 取消心跳任务 + 清理 pong event
@@ -92,6 +96,13 @@ class ConnectionManager:
         if task and not task.done():
             task.cancel()
         self._pong_events.pop(conn_id, None)
+        # 关闭底层 WebSocket，避免 socket + endpoint 协程双重泄漏
+        if ws is not None:
+            try:
+                # 应用层已处于异常路径时 close 可能抛 RuntimeError，忽略
+                await ws.close()
+            except (RuntimeError, OSError, Exception):
+                pass
 
     async def _heartbeat_loop(self, conn_id: str) -> None:
         """G5: 每个连接的心跳协程 - 30s ping + 10s pong 超时.
@@ -117,14 +128,14 @@ class ConnectionManager:
                 await asyncio.wait_for(evt.wait(), timeout=HEARTBEAT_TIMEOUT)
             except asyncio.TimeoutError:
                 logger.warning("ws.heartbeat_timeout conn_id={}", conn_id)
-                self.unregister(conn_id)
+                await self.unregister(conn_id)
                 return
             except asyncio.CancelledError:
                 return
             except Exception as e:
                 logger.warning("ws.heartbeat_error conn_id={} error={}",
                                conn_id, str(e))
-                self.unregister(conn_id)
+                await self.unregister(conn_id)
                 return
 
     async def send_to(self, conn_id: str, event: dict) -> None:
@@ -135,7 +146,7 @@ class ConnectionManager:
                 await ws.send_json(event)
             except (RuntimeError, OSError):
                 logger.debug("ws.send_error conn_id={}", conn_id, exc_info=True)
-                self.unregister(conn_id)
+                await self.unregister(conn_id)
 
     async def broadcast(self, event: dict) -> None:
         """G2: 向所有活跃连接广播事件（fire-and-forget 扇出 + 5s 超时背压）.
@@ -158,7 +169,7 @@ class ConnectionManager:
             cid = tasks[t]
             t.cancel()
             logger.warning("ws.broadcast_timeout conn_id={}", cid)
-            self.unregister(cid)
+            await self.unregister(cid)
 
     async def _safe_send(self, conn_id: str, event: dict) -> None:
         """G2: 安全发送，失败时清理连接（内部方法）.
@@ -172,7 +183,7 @@ class ConnectionManager:
             await ws.send_json(event)
         except Exception as e:
             logger.warning("ws.send_failed conn_id={} error={}", conn_id, str(e))
-            self.unregister(conn_id)
+            await self.unregister(conn_id)
 
     @property
     def active_count(self) -> int:
@@ -513,7 +524,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
                 sid_session = _pty_sessions.get(sid)
             if sid_session and sid_session.get("conn_id") == conn_id:
                 _cleanup_pty(sid)
-        manager.unregister(conn_id)
+        await manager.unregister(conn_id)
 
 
 def _verify_response(data: dict, msg_id: str, agent: str) -> None:

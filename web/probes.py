@@ -324,7 +324,11 @@ async def run_all(core: Any, on_progress: Any | None=None) -> dict:
     async def _run_one(item: dict) -> None:
         nonlocal passed
         async with semaphore:
-            res = await run_probe(core, item["id"])
+            # 单探针异常不应阻断整批：捕获后转为失败结果
+            try:
+                res = await run_probe(core, item["id"])
+            except Exception as e:
+                res = {"ok": False, "error": f"探针异常: {e}", "latency_ms": 0}
             res["id"] = item["id"]
             res["label"] = item["label"]
             async with lock:

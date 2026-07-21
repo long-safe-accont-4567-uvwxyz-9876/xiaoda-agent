@@ -1,6 +1,7 @@
 """市场安装器 — 下载、验证、安装/卸载插件与技能"""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import shutil
@@ -429,7 +430,8 @@ class MarketInstaller:
                 resp.raise_for_status()
                 with open(dest_path, "wb") as f:
                     async for chunk in resp.aiter_bytes(chunk_size=8192):
-                        f.write(chunk)
+                        # 卸载到线程池，避免同步写阻塞事件循环
+                        await asyncio.to_thread(f.write, chunk)
 
         logger.debug("market.downloaded", url=url, size=dest_path.stat().st_size)
         return dest_path

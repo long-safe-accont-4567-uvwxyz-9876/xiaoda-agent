@@ -177,8 +177,11 @@ def _register_config_checks(doc: DoctorCheck) -> None:
         backup_path = db_path.with_suffix(".db.bak")
         shutil.copy2(db_path, backup_path)
         conn = sqlite3.connect(str(db_path))
-        conn.execute("VACUUM")
-        conn.close()
+        # VACUUM 失败时也要保证连接关闭，避免句柄泄漏
+        try:
+            conn.execute("VACUUM")
+        finally:
+            conn.close()
         logger.info("doctor.db_integrity_fixed", backup=str(backup_path))
 
     doc.add_check("Database Integrity", "L3-Database", _check_db_integrity, _fix_db_integrity)
