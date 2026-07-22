@@ -158,13 +158,15 @@ BARE_PARAM_PATTERN = re.compile(
     re.DOTALL,
 )
 # N1 修复: 裸 <answer>...</answer> 标签（工具调用结果包装，LLM 泄漏给用户）
+# CR-2: 保留标签内容，只删除标签本身（避免误删正常回复）
 BARE_ANSWER_PATTERN = re.compile(
-    r'<answer>[\s\S]*?</answer>',
-    re.DOTALL,
+    r'<answer>([\s\S]*?)</answer>',
+    re.DOTALL | re.IGNORECASE,
 )
-# 未闭合的 <answer> 开标签到文本末尾
+# 未闭合的 <answer> 开标签到文本末尾（整个块是泄漏内容，删除）
 BARE_ANSWER_OPEN_ONLY_PATTERN = re.compile(
     r'<answer>[\s\S]*$',
+    re.IGNORECASE,
 )
 FAKE_XML_TOOL_PATTERN = re.compile(
     r'<function=\w+>.*?</function>|'
@@ -225,7 +227,9 @@ def strip_dsml(text: str) -> str:
     text = BARE_INVOKE_PATTERN.sub('', text)
     text = BARE_PARAM_PATTERN.sub('', text)
     # N1 修复: 裸 <answer> 标签（工具结果包装泄漏）
-    text = BARE_ANSWER_PATTERN.sub('', text)
+    # CR-2: 保留标签内容，只删除标签本身
+    text = BARE_ANSWER_PATTERN.sub(r'\1', text)
+    # 未闭合的 <answer> 开标签到末尾：整个块是泄漏内容，删除
     text = BARE_ANSWER_OPEN_ONLY_PATTERN.sub('', text)
     text = FAKE_XML_TOOL_PATTERN.sub('', text)
     text = TOOL_CALL_PATTERN.sub('', text)

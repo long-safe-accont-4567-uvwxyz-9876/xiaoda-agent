@@ -248,7 +248,9 @@ def strip_system_leak(text: str, *, context: str = "") -> str:
 
     # N3: 系统提示词结构化块
     text = _SYSTEM_PROMPT_BLOCK_RE.sub('', text)
-    text = _SYSTEM_PROMPT_ITEM_RE.sub('', text)
+    # CR-1: 删除独立 _SYSTEM_PROMPT_ITEM_RE 调用，避免误删合法内容
+    # 正常回复中不应出现 "Identity:/Persona:" 列表项，除非在系统提示词块内
+    # _SYSTEM_PROMPT_BLOCK_RE 已匹配整个块，独立 item RE 是多余的
 
     # N4: 系统指示措辞引用
     text = _SYSTEM_INSTRUCTION_BRACKET_RE.sub('', text)

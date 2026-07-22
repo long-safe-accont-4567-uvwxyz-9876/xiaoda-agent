@@ -21,13 +21,15 @@ from utils.llm_cleanup import strip_system_leak
 # ── N1: <answer> 裸标签 ──────────────────────────────────────
 
 def test_n1_answer_tag_cleaned():
-    """strip_dsml 清洗 <answer>...</answer> 裸标签"""
+    """strip_dsml 清洗 <answer>...</answer> 裸标签，CR-2: 保留内容只删标签"""
     text = "让我先检索记忆看看。\n<answer>\n这是工具返回的内容\n</answer>\n后续回复"
     result = strip_dsml(text)
     assert "<answer>" not in result
     assert "</answer>" not in result
     assert "后续回复" in result
-    assert "这是工具返回的内容" not in result
+    # CR-2: 标签内容被保留（标签本身已删除）
+    assert "这是工具返回的内容" in result
+    assert "让我先检索记忆看看" in result
 
 
 def test_n1_answer_tag_with_operation_recall():
@@ -46,6 +48,9 @@ def test_n1_answer_tag_with_operation_recall():
     assert "<param" not in result
     assert "<answer>" not in result
     assert "正常的后续回复内容" in result
+    # CR-4: 验证嵌套和未闭合的 <answer> payload 也被正确处理
+    # 标签内容被保留（CR-2 修复后），但工具查询参数需通过其他模式清除
+    assert "排卵期 排卵" not in result  # <param> 内容已删除
 
 
 def test_n1_answer_open_only_to_end():
@@ -54,6 +59,8 @@ def test_n1_answer_open_only_to_end():
     result = strip_dsml(text)
     assert "<answer>" not in result
     assert "正常内容" in result
+    # CR-4: 未闭合的 <answer> 开标签到末尾，整个块是泄漏内容，应删除
+    assert "未闭合的内容到末尾" not in result
 
 
 # ── N2: 技术错误详情标记 ──────────────────────────────────────
@@ -101,20 +108,30 @@ def test_n3_constraints_guidelines_block_cleaned():
     assert "Persona: Gentle" not in result
     assert "Safety/Boundary Check" not in result
     assert "Sapiens AI" not in result
+    # CR-3: 验证内容值也被删除
+    assert "explicit content" not in result
+    assert "an AI assistant" not in result
+    assert "Gentle and supportive" not in result
     assert "呜...爸爸好过份啦" in result
 
 
 def test_n3_identity_persona_lines_cleaned():
-    """独立的 · Identity / · Persona 行清洗"""
+    """独立的 · Identity / · Persona 行清洗
+
+    CR-1: 只有在系统提示词块内才删除，独立行不在块内会被保留。
+    正常回复中不应该出现这种格式，但如果出现，不属于系统提示词泄漏。
+    """
     text = (
         "· Identity: I am Agnes, an AI assistant.\n"
         "· Persona: Gentle and supportive.\n"
         "正常回复内容"
     )
     result = strip_system_leak(text)
-    assert "Identity: I am Agnes" not in result
-    assert "Persona: Gentle" not in result
+    # CR-1: 独立行不在系统提示词块内，不会被删除（避免误删）
+    # 但这种情况在正常回复中不应该出现
     assert "正常回复内容" in result
+    # 注意：如果测试期望这些行被删除，说明之前的实现过于激进
+    # 正确做法是只删除在 Constraints & Guidelines 块内的这些行
 
 
 # ── N4: 系统指示措辞 ──────────────────────────────────────────

@@ -400,6 +400,9 @@ class ToolExecutorMixin:
         text = re.sub(r'<instruction\s+level="[A-Z]+"\s+priority="\d+"[^>]*>', '', text)
         text = re.sub(r'</instruction>', '', text)
         text = strip_reasoning(text)
+        # CR-5: 清洗系统提示词/错误详情泄漏（与 _clean_reply 一致）
+        from utils.llm_cleanup import strip_system_leak
+        text = strip_system_leak(text, context="finalize_reply")
         if strip_emotion:
             # 根据 style（agent 名）动态获取正确的 sticker_manager
             sticker_mgr = self.get_sticker_manager(style)
