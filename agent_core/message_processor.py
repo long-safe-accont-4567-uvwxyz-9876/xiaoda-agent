@@ -461,10 +461,13 @@ class MessageProcessorMixin:
         # 感谢类覆盖时段问候
         if keyword in ("谢谢", "感谢", "thanks", "thx", "多谢"):
             reply = random.choice(_THANK_REPLIES)
-        # P1-6: 语音模式下问候也要走 TTS 路径，与其他 fast path 行为一致
-        # 使用 tts_pending 异步模式（与 _build_voice_result 中 TTS_ASYNC_MODE 一致），
-        # 保持 _try_greeting_shortcut 同步且 <100ms
-        if self._voice_mode:
+        # P1-6 + CodeRabbit F4: 语音模式下问候也要走 TTS 路径，但必须与
+        # _build_voice_result 的 5 条件对齐：voice_mode + tts.available +
+        # TTS_ASYNC_MODE + is_feature_available("tts") + len(reply) > 2
+        # 避免在 TTS 不可用/降级模式/同步模式下无效设 tts_pending
+        if (self._voice_mode and self.tts.available and TTS_ASYNC_MODE
+                and len(reply) > 2
+                and get_degradation_strategy().is_feature_available("tts")):
             return ProcessResult(
                 reply=reply, emotion="greeting",
                 tts_pending=True, tts_text=reply,

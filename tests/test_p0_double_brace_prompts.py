@@ -64,11 +64,19 @@ def test_contradiction_prompt_no_double_braces():
 
 
 def test_contradiction_prompt_has_valid_json_instruction():
-    """CONTRADICTION_PROMPT 应输出合法的 JSON 指令。"""
+    """CONTRADICTION_PROMPT 应输出合法的 JSON 指令（CodeRabbit F2: 用 json.loads 验证）。"""
+    import json
     from memory.knowledge_graph_v2 import CONTRADICTION_PROMPT
 
     # 应包含 {"contradicted_indices": ...} 而不是 {{...}}
     assert '{"contradicted_indices"' in CONTRADICTION_PROMPT
+    # CodeRabbit F2: 提取示例并用 json.loads 验证是合法 JSON
+    example = '{"contradicted_indices": [0, 2]}'
+    assert example in CONTRADICTION_PROMPT, \
+        f"CONTRADICTION_PROMPT 应包含具体索引示例 {example}"
+    parsed = json.loads(example)
+    assert parsed == {"contradicted_indices": [0, 2]}, \
+        f"示例 JSON 解析结果不符预期: {parsed}"
 
 
 def test_contradiction_prompt_replace_works():

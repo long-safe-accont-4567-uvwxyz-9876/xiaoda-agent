@@ -190,5 +190,57 @@ async def test_stale_session_invalidates_on_process_error():
     assert bot._c2c_session_cache.get("user_a") == "fresh_sid"
 
 
+# ---------- CodeRabbit F8: _set_c2c_session_cache helper ----------
+
+
+def test_set_c2c_session_cache_method_exists():
+    """CodeRabbit F8: 应有 _set_c2c_session_cache helper 统一写入+cap。"""
+    bot = _make_bot()
+    assert hasattr(bot, "_set_c2c_session_cache"), "缺少 _set_c2c_session_cache 方法"
+
+
+def test_set_c2c_session_cache_writes_cache_and_timestamp():
+    """_set_c2c_session_cache 应同时写 cache 和 ts。"""
+    bot = _make_bot()
+    bot._set_c2c_session_cache("user_new", "sid_new")
+
+    assert bot._c2c_session_cache["user_new"] == "sid_new"
+    assert "user_new" in bot._c2c_session_cache_ts
+    assert bot._c2c_session_cache_ts["user_new"] > 0
+
+
+def test_set_c2c_session_cache_enforces_cap_immediately():
+    """CodeRabbit F8: 写入后应立即执行 size cap，不依赖下次调用的 pre-lookup prune。
+
+    场景: 缓存已达 MAX_SIZE，再写入一条应立即淘汰最旧条目，而非等到下次 _get_or_create。
+    """
+    bot = _make_bot()
+    bot._C2C_SESSION_CACHE_MAX_SIZE = 3  # 小上限便于测试
+    base_ts = time.time() - 100  # 100s 前，未过期
+    # 填满 3 条
+    for i in range(3):
+        bot._c2c_session_cache[f"user_{i}"] = f"sid_{i}"
+        bot._c2c_session_cache_ts[f"user_{i}"] = base_ts + i  # user_0 最旧
+
+    # 再写入一条，应立即淘汰 user_0（最旧）
+    bot._set_c2c_session_cache("user_new", "sid_new")
+
+    assert len(bot._c2c_session_cache) <= 3, "写入后不应超过 MAX_SIZE"
+    assert "user_0" not in bot._c2c_session_cache, "应淘汰最旧条目 user_0"
+    assert "user_new" in bot._c2c_session_cache, "新条目应存在"
+
+
+def test_set_c2c_session_cache_overwrites_existing():
+    """已存在的 key 应更新值和 ts，不新增条目。"""
+    bot = _make_bot()
+    bot._set_c2c_session_cache("user_a", "sid_old")
+    old_ts = bot._c2c_session_cache_ts["user_a"]
+    time.sleep(0.01)
+    bot._set_c2c_session_cache("user_a", "sid_new")
+
+    assert bot._c2c_session_cache["user_a"] == "sid_new"
+    assert bot._c2c_session_cache_ts["user_a"] > old_ts
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

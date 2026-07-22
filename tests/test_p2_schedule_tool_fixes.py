@@ -65,6 +65,7 @@ async def test_create_reminder_uses_lastrowid_not_order_by_desc():
 
     TRAE-code-review 修正：DatabaseManager.execute 返回 int（lastrowid 值），
     不是 cursor 对象。测试必须匹配真实返回类型，否则会假绿。
+    CodeRabbit 二次扫描：移除 ORDER BY 兜底，falsy new_id 应返回错误而非取别人的记录。
     """
     from tools import schedule_tool
     core = _make_core()
@@ -90,6 +91,36 @@ async def test_create_reminder_uses_lastrowid_not_order_by_desc():
         params = select_call.args[1]
         assert params == (42,) or params == 42, \
             f"fetch_one 应传入 lastrowid=42 作为参数。实际: {params}"
+
+
+@pytest.mark.asyncio
+async def test_create_reminder_falsy_lastrowid_returns_error_not_fallback():
+    """CodeRabbit F3: new_id 为 falsy 时应返回错误，而非走 ORDER BY id DESC 取别人的记录。
+
+    场景：AUTOINCREMENT 表成功 INSERT 后 lastrowid 必 >0，但若异常返回 0/None，
+    不应用 ORDER BY id DESC LIMIT 1（可能取到另一进程刚插入的记录），
+    应直接返回失败让用户重试。
+    """
+    from tools import schedule_tool
+    from tool_engine.tool_registry import ToolResult
+    core = _make_core()
+    # 模拟 execute 异常返回 0（falsy）
+    core.db.execute = AsyncMock(return_value=0)
+    core.db.fetch_one = AsyncMock()
+
+    with patch.object(schedule_tool, "_get_core", return_value=core):
+        result = await schedule_tool.create_reminder(
+            time="09:00", prompt_hint="测试", days=[1], channels=["web"],
+            user_id="test_user",
+        )
+
+    # 应返回失败，而非调用 fetch_one 走 ORDER BY 兜底
+    assert not result.success, "falsy lastrowid 应返回失败，不应继续查询"
+    assert "失败" in result.error or "错误" in result.error, \
+        f"应返回错误信息。实际: {result.error}"
+    # fetch_one 不应被调用（不应走 ORDER BY 兜底）
+    core.db.fetch_one.assert_not_called(), \
+        "falsy lastrowid 不应调用 fetch_one（消除 ORDER BY 竞态）"
 
 
 def test_create_reminder_docstring_updated():

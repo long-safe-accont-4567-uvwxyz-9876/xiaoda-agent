@@ -216,10 +216,11 @@ async def create_reminder(time: str, prompt_hint: str, days: list[int] | None = 
                 "SELECT id, time, prompt_hint, days, enabled FROM greeting_schedules "
                 "WHERE id = ?", (new_id,))
         else:
-            # 极端兜底：execute 返回 0/None 时降级到 ORDER BY（保持原有兜底）
-            row = await core.db.fetch_one(
-                "SELECT id, time, prompt_hint, days, enabled FROM greeting_schedules "
-                "WHERE type='reminder' ORDER BY id DESC LIMIT 1")
+            # CodeRabbit F3: 移除 ORDER BY id DESC 兜底 —— 并发场景下可能取到另一进程
+            # 刚插入的记录，向用户谎报创建结果。AUTOINCREMENT 表成功 INSERT 后
+            # lastrowid 必 >0；若为 falsy 说明异常，应返回失败让用户重试。
+            logger.error("schedule_tool.create_reminder_no_lastrowid", time=time)
+            return ToolResult.fail("创建提醒失败：未获取到新记录 ID，请重试")
 
         formatted = _format_row(row) if row else f"已创建（时间：{time}）"
         return ToolResult.ok(f"已创建提醒：{formatted}")

@@ -383,6 +383,17 @@ class AIQQBot(botpy.Client):
         self._c2c_session_cache.pop(user_openid, None)
         self._c2c_session_cache_ts.pop(user_openid, None)
 
+    def _set_c2c_session_cache(self, user_openid: str, sid: str) -> None:
+        """CodeRabbit F8: 统一缓存写入 + 立即执行 size cap。
+
+        替代分散的 `cache[k]=v; ts[k]=time.time()` 模式，确保写入后
+        立即淘汰 overflow，不依赖下次 _get_or_create 的 pre-lookup prune。
+        """
+        self._c2c_session_cache[user_openid] = sid
+        self._c2c_session_cache_ts[user_openid] = time.time()
+        # 写入后立即 cap，保证不变量 len(cache) <= MAX_SIZE 始终成立
+        self._prune_c2c_session_cache()
+
     @staticmethod
     def _get_config_service() -> Any:
         try:
@@ -642,16 +653,14 @@ class AIQQBot(botpy.Client):
             )
             if session:
                 sid = session["id"]
-                self._c2c_session_cache[user_openid] = sid
-                self._c2c_session_cache_ts[user_openid] = time.time()
+                self._set_c2c_session_cache(user_openid, sid)
                 return sid
             # 没有活跃会话，创建新会话
             sid = await asyncio.wait_for(
                 self.agent.create_session(user_openid),
                 timeout=5.0,
             )
-            self._c2c_session_cache[user_openid] = sid
-            self._c2c_session_cache_ts[user_openid] = time.time()
+            self._set_c2c_session_cache(user_openid, sid)
             return sid
         except TimeoutError:
             logger.warning("qq_bot.c2c_session_timeout openid={}, retrying", user_openid)
@@ -663,15 +672,13 @@ class AIQQBot(botpy.Client):
                 )
                 if session:
                     sid = session["id"]
-                    self._c2c_session_cache[user_openid] = sid
-                    self._c2c_session_cache_ts[user_openid] = time.time()
+                    self._set_c2c_session_cache(user_openid, sid)
                     return sid
                 sid = await asyncio.wait_for(
                     self.agent.create_session(user_openid),
                     timeout=10.0,
                 )
-                self._c2c_session_cache[user_openid] = sid
-                self._c2c_session_cache_ts[user_openid] = time.time()
+                self._set_c2c_session_cache(user_openid, sid)
                 return sid
             except TimeoutError:
                 logger.error("qq_bot.c2c_session_timeout_retry openid={}", user_openid)

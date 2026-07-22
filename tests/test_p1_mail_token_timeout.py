@@ -28,10 +28,17 @@ async def test_timeout_does_not_mark_cron_complete():
     async def _slow_agently(*args, **kwargs):
         await asyncio.sleep(100)  # 不会被真的等到，wait_for 会先超时
 
+    # CodeRabbit F5: 关闭传入的协程再抛 TimeoutError，避免 "coroutine never awaited" 警告
+    def _close_and_timeout(awaitable, *args, **kwargs):
+        close = getattr(awaitable, "close", None)
+        if close:
+            close()
+        raise asyncio.TimeoutError
+
     with patch("tools.mail_tools._resolve_agently_cli", return_value="/fake/agently"), \
          patch("tools.mail_tools._run_agently", side_effect=_slow_agently):
         # 用很短的 timeout 加速测试
-        with patch("core.background_tasks.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+        with patch("core.background_tasks.asyncio.wait_for", side_effect=_close_and_timeout):
             await mgr._refresh_mail_token_task()
 
     # 关键断言: 超时分支不应调用 set_cron_last_run

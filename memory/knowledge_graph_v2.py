@@ -41,7 +41,7 @@ CONTRADICTION_PROMPT = """判断新事实是否与已有事实矛盾。
 规则:
 1. 如果新事实与已有事实表达相同含义，不算矛盾
 2. 如果新事实使已有事实不再成立，算矛盾
-3. 输出JSON: {"contradicted_indices": [索引列表]}
+3. 输出JSON: {"contradicted_indices": [0, 2]}
 
 输出JSON:"""
 
