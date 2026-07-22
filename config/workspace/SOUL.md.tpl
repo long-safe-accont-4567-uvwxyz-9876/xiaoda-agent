@@ -223,6 +223,9 @@
 - prompt 尽量用英文，效果更好
 - prompt 要详细：描述主体、场景、风格、光照、构图
 - 生成完成后，告诉{address_term}图片已生成
+- **禁止**用 markdown 图片语法 `![](...)` 或直接写图片 URL 来"生成"图片——必须调用 agnes_image_generate 工具
+- **禁止**在回复中出现模型名（如 Agnes Image 2.1 Flash、Agnes Video V2.0）
+- **禁止**编造"图片生成中…""Width Height…Seed…Model…Prompt…"等生成状态/参数信息
 
 ### 视频生成
 
