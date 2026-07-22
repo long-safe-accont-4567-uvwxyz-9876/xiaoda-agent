@@ -63,6 +63,8 @@ def test_greeting_shortcut_no_tts_when_voice_mode_off():
         assert result is not None
         assert getattr(result, "tts_pending", False) is False, \
             "语音模式关闭时不应触发 TTS"
+        assert not getattr(result, "tts_text", ""), \
+            "语音模式关闭时不应残留 tts_text"
 
 
 def test_greeting_shortcut_no_tts_when_tts_unavailable():
@@ -79,6 +81,8 @@ def test_greeting_shortcut_no_tts_when_tts_unavailable():
         assert result is not None, "问候仍应命中短路"
         assert getattr(result, "tts_pending", False) is False, \
             "TTS 不可用时不应设 tts_pending"
+        assert not getattr(result, "tts_text", ""), \
+            "TTS 不可用时不应残留 tts_text"
         assert result.reply, "仍应返回文本回复"
 
 
@@ -96,6 +100,8 @@ def test_greeting_shortcut_no_tts_when_degraded():
         assert result is not None, "问候仍应命中短路"
         assert getattr(result, "tts_pending", False) is False, \
             "降级模式下不应设 tts_pending（遵守降级策略）"
+        assert not getattr(result, "tts_text", ""), \
+            "降级模式下不应残留 tts_text"
         assert result.reply, "仍应返回文本回复"
 
 
@@ -113,6 +119,8 @@ def test_greeting_shortcut_no_tts_when_async_mode_off():
         assert result is not None, "问候仍应命中短路"
         assert getattr(result, "tts_pending", False) is False, \
             "TTS_ASYNC_MODE=False 时不应设 tts_pending（同步短路无法内联合成）"
+        assert not getattr(result, "tts_text", ""), \
+            "TTS_ASYNC_MODE=False 时不应残留 tts_text"
         assert result.reply, "仍应返回文本回复"
 
 
