@@ -157,6 +157,15 @@ BARE_PARAM_PATTERN = re.compile(
     r'<param\s+name="[^"]*">.*?</param>',
     re.DOTALL,
 )
+# N1 修复: 裸 <answer>...</answer> 标签（工具调用结果包装，LLM 泄漏给用户）
+BARE_ANSWER_PATTERN = re.compile(
+    r'<answer>[\s\S]*?</answer>',
+    re.DOTALL,
+)
+# 未闭合的 <answer> 开标签到文本末尾
+BARE_ANSWER_OPEN_ONLY_PATTERN = re.compile(
+    r'<answer>[\s\S]*$',
+)
 FAKE_XML_TOOL_PATTERN = re.compile(
     r'<function=\w+>.*?</function>|'
     r'<parameter=\w+>.*?</parameter>|'
@@ -215,6 +224,9 @@ def strip_dsml(text: str) -> str:
     text = BARE_FUNCTION_CALLS_PATTERN.sub('', text)
     text = BARE_INVOKE_PATTERN.sub('', text)
     text = BARE_PARAM_PATTERN.sub('', text)
+    # N1 修复: 裸 <answer> 标签（工具结果包装泄漏）
+    text = BARE_ANSWER_PATTERN.sub('', text)
+    text = BARE_ANSWER_OPEN_ONLY_PATTERN.sub('', text)
     text = FAKE_XML_TOOL_PATTERN.sub('', text)
     text = TOOL_CALL_PATTERN.sub('', text)
     # 清理裸 <tool_call>...</tool_call>（含 </think> 错配）
@@ -224,7 +236,7 @@ def strip_dsml(text: str) -> str:
     # 清理孤立的 </think> 闭合标签（tool_call错配后残留）
     text = re.sub(r'</think>', '', text, flags=re.IGNORECASE)
     # L1 修复: 孤立闭合标签（开标签已被 DSML_LEFTOVER 清除，闭标签残留）
-    text = re.sub(r'</(?:function_calls|function_call|invoke|param|operation)>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'</(?:function_calls|function_call|invoke|param|operation|answer)>', '', text, flags=re.IGNORECASE)
     # 清理其他常见的工具调用泄露格式
     # 1. 代码块中的 function_call JSON
     text = re.sub(r'```(?:json)?\s*\{[^}]*?function_call[^}]*?\}\s*```', '', text, flags=re.DOTALL)

@@ -258,6 +258,9 @@ class ToolExecutorMixin:
                 text = text[len(p):].strip()
         text = strip_dsml(text)
         text = strip_reasoning(text)
+        # N2/N3/N4: 清洗系统提示词/错误详情/对齐指令泄漏
+        from utils.llm_cleanup import strip_system_leak
+        text = strip_system_leak(text, context="clean_reply")
         # 二次前缀清洗：strip_reasoning 清除推理后，原本在第二行的 agent 前缀
         # （如 "[小狼] 雇主..."）可能暴露到开头，需要再清洗一次
         for p in prefixes:

@@ -176,3 +176,85 @@ def strip_thinking(text: str, *, context: str = "") -> str:
 
     # 4. 处理多个回复的情况（模型可能输出了多个回复，如"早安"、"中午好"、"晚上好"）
     return deduplicate_multi_reply(text, context=context)
+
+
+# ── N2/N3/N4: 系统提示词/错误详情/对齐指令泄漏清洗 ──────────────
+
+# N2: 技术错误详情标记（旧版 smart_error_handler 格式，源头已修但需防御性清洗残留）
+# ⚠️ 执行时遇到了点小问题：RuntimeError
+# 📝 错误详情：empty_reply: LLM 返回空内容，触发 fallback
+_ERROR_DETAIL_BLOCK_RE = re.compile(
+    r'⚠️\s*执行时遇到了点小问题[：:]\s*[^\n]+\n'
+    r'📝\s*错误详情[：:]\s*[^\n]+',
+    re.DOTALL,
+)
+# 单独的 ⚠️ 或 📝 行（无配套行时）
+_ERROR_DETAIL_LINE_RE = re.compile(
+    r'^[ \t]*⚠️\s*执行时遇到了点小问题[：:][^\n]*\n?',
+    re.MULTILINE,
+)
+_ERROR_MEMO_LINE_RE = re.compile(
+    r'^[ \t]*📝\s*错误详情[：:][^\n]*\n?',
+    re.MULTILINE,
+)
+
+# N3: 系统提示词结构化块（LLM 把内部约束/身份/人格设定输出到回复）
+# 匹配 "Constraints & Guidelines:" 标题 + 后续 · 列表项（直到空行或非列表行）
+_SYSTEM_PROMPT_BLOCK_RE = re.compile(
+    r'^(?:Constraints\s*&\s*Guidelines|Guidelines|Instructions?|Rules?)\s*[:：][^\n]*'
+    r'(?:\n[·\-\*]\s+.*)*',
+    re.MULTILINE | re.IGNORECASE,
+)
+# 独立的系统提示词列表项行（· Identity: / · Persona: / · Safety/Boundary Check: 等）
+_SYSTEM_PROMPT_ITEM_RE = re.compile(
+    r'^[·\-\*]?\s*(?:Identity|Persona|Safety(?:/Boundary)?\s*Check|Role\s*Description|'
+    r'角色设定)\s*[:：][^\n]*',
+    re.MULTILINE | re.IGNORECASE,
+)
+
+# N4: 系统指示/对齐原则措辞引用（LLM 安全拒绝时泄漏内部对齐原则）
+# 方括号包围的安全拒绝块，其中引用了系统指示/最高原则等内部措辞
+_SYSTEM_INSTRUCTION_BRACKET_RE = re.compile(
+    r'\[[^\[\]]*?(?:系统指示|最高原则|需要遵守角色设定)[^\[\]]*?\]',
+    re.DOTALL,
+)
+# 独立的系统指示措辞行（"系统指示" 不匹配 "系统提示词"，二者字符不同）
+_SYSTEM_INSTRUCTION_LINE_RE = re.compile(
+    r'^[ \t]*[^\n]*(?:根据系统指示|系统指示中的|最高原则[：:]|需要遵守角色设定)[^\n]*$\n?',
+    re.MULTILINE,
+)
+
+
+def strip_system_leak(text: str, *, context: str = "") -> str:
+    """清洗 LLM 泄漏的系统提示词/错误详情/对齐指令等内部内容。
+
+    LLM（尤其是 agnes 系列模型）有时会把内部指令、约束、错误详情
+    直接输出到用户可见的回复里。本函数剥离这些泄漏，保留正常人格回复。
+
+    覆盖：
+    - N2: ⚠️执行时遇到小问题 / 📝错误详情 技术错误标记（15 条生产泄漏）
+    - N3: Constraints & Guidelines / Identity / Persona 系统提示词结构化块（3 条）
+    - N4: 根据系统指示中的"最高原则" 系统指示措辞引用（1 条，最新 07-22）
+
+    注意：正常讨论"系统提示词"概念的对话不误删（"系统指示" ≠ "系统提示词"）。
+    """
+    if not text:
+        return ""
+
+    # N2: 技术错误详情标记
+    text = _ERROR_DETAIL_BLOCK_RE.sub('', text)
+    text = _ERROR_DETAIL_LINE_RE.sub('', text)
+    text = _ERROR_MEMO_LINE_RE.sub('', text)
+
+    # N3: 系统提示词结构化块
+    text = _SYSTEM_PROMPT_BLOCK_RE.sub('', text)
+    text = _SYSTEM_PROMPT_ITEM_RE.sub('', text)
+
+    # N4: 系统指示措辞引用
+    text = _SYSTEM_INSTRUCTION_BRACKET_RE.sub('', text)
+    text = _SYSTEM_INSTRUCTION_LINE_RE.sub('', text)
+
+    # 清理残留空行
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
