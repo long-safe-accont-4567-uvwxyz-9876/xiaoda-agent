@@ -839,6 +839,9 @@ class MessageProcessorMixin:
                                           emotion_label: str, ctx: Any, user_openid: Any,
                                           session_id: Any, force_voice: Any) -> ProcessResult:
         """快速路径后处理：隐私扫描、人格校验、上下文记录、情绪标签、语音构建。返回 ProcessResult。"""
+        # 兜底：提取 LLM 伪造的图片 URL（fast-path 通常无工具调用，但 LLM 仍可能伪造图）
+        fab_image_paths, reply = await self._extract_fabricated_images_from_reply(reply)
+
         # 非主人输出侧隐私扫描
         if not is_master and reply:
             safe, alt_reply, _ = self.security.check_output_privacy(reply)
@@ -879,20 +882,8 @@ class MessageProcessorMixin:
                 emotion_label = ensured_emotion.value
 
         clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
-        # 清理模型输出的推理/思考内容（Agnes 等模型会输出 [emotion thinking] 等标签）
-        clean_reply = strip_dsml(clean_reply)
-        clean_reply = strip_reasoning(clean_reply)
-        # 清除日志时间戳泄露：LLM 从 conversation_logs 照搬 [HH:MM] 标记到回复里
-        from utils.llm_cleanup import strip_log_timestamps
-        clean_reply = strip_log_timestamps(clean_reply, context="fast_path")
-        clean_reply = humanize(clean_reply, style="xiaoda")
-        clean_reply = deduplicate_multi_reply(clean_reply, context="fast_path")
-        # 名称替换：确保 LLM 输出中的旧名被替换为显示名
-        try:
-            from config import apply_agent_name_replacements
-            clean_reply = apply_agent_name_replacements(clean_reply)
-        except Exception:
-            logger.debug("apply_agent_name_replacements failed", exc_info=True)
+        # 统一清洗出口（get_sticker_info 已剥 emotion tag，故 strip_emotion=False）
+        clean_reply = self._clean_reply_full(clean_reply, style="xiaoda", strip_emotion=False)
 
         audio_path, tts_pending, tts_text = await self._build_voice_result(
             clean_reply, emotion_label, force_voice)
@@ -916,7 +907,8 @@ class MessageProcessorMixin:
             logger.debug("emotion_state.update_failed", error=str(e))
 
         return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path,
-                             audio_path=audio_path, tts_pending=tts_pending, tts_text=tts_text)
+                             audio_path=audio_path, tts_pending=tts_pending, tts_text=tts_text,
+                             image_paths=fab_image_paths)
 
     async def _fast_path_inject_memories(self, messages: Any, user_input: Any, is_master: Any, emotion: Any) -> Any:
         """快速路径：注入 FTS 记忆和安抚记忆到 messages。"""
@@ -1144,6 +1136,9 @@ class MessageProcessorMixin:
         # 媒体提取与隐私扫描
         media_image_paths, media_video_path, reply = await self._extract_media_from_tool_results(
             tool_results, reply)
+        # 兜底：提取 LLM 伪造的图片 URL（未调 agnes_image_generate 而在回复里写 markdown 图/裸 URL）
+        fab_image_paths, reply = await self._extract_fabricated_images_from_reply(reply)
+        media_image_paths.extend(fab_image_paths)
         if not is_master and reply:
             safe, alt_reply, _ = self.security.check_output_privacy(reply)
             if not safe:
@@ -1198,16 +1193,8 @@ class MessageProcessorMixin:
             sticker_path = _pre_picked_sticker
         else:
             clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
-            clean_reply = strip_dsml(clean_reply)
-            clean_reply = strip_reasoning(clean_reply)
-            clean_reply = humanize(clean_reply, style="xiaoda")
-            clean_reply = deduplicate_multi_reply(clean_reply, context="main_path")
-            # 名称替换：确保 LLM 输出中的旧名被替换为显示名
-            try:
-                from config import apply_agent_name_replacements
-                clean_reply = apply_agent_name_replacements(clean_reply)
-            except Exception:
-                logger.debug("apply_agent_name_replacements failed", exc_info=True)
+            # 统一清洗出口（get_sticker_info 已剥 emotion tag，故 strip_emotion=False）
+            clean_reply = self._clean_reply_full(clean_reply, style="xiaoda", strip_emotion=False)
 
         audio_path, tts_pending, tts_text = await self._build_voice_result(
             clean_reply, emotion_label, force_voice)
