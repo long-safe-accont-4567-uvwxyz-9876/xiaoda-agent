@@ -15,7 +15,12 @@ from loguru import logger
 
 from config import FILE_DIR, get_agent_display_name
 from utils.text_utils import strip_dsml, strip_reasoning, humanize
-from utils.llm_cleanup import deduplicate_multi_reply
+from utils.llm_cleanup import (
+    deduplicate_multi_reply,
+    strip_system_leak,
+    strip_log_timestamps,
+    strip_image_gen_leak,
+)
 from core.degradation_strategy import get_degradation_strategy
 
 from agent_core._shared import _current_request_ctx, RequestContext
@@ -438,11 +443,44 @@ class ToolExecutorMixin:
 
         return text
 
+    def _clean_reply_full(self, text: str, *, style: str = "xiaoda",
+                          strip_emotion: bool = True) -> str:
+        """统一回复清洗出口：strip_dsml → strip_reasoning → strip_system_leak
+        → strip_image_gen_leak → strip_log_timestamps → strip_emotion_tag
+        → humanize → deduplicate → 名称替换。
+
+        fast-path / 主路径 else / _finalize_reply 三处统一调用，消除清洗序列漂移。
+        新增清洗规则只需改本函数即全路径生效。单个子步骤异常不阻断回复（best-effort）。
+
+        Args:
+            text: 待清洗文本
+            style: 人格名（决定 sticker_manager）
+            strip_emotion: 是否剥离 emotion tag；调用前若 get_sticker_info 已剥过则传 False
+        """
+        text = (text or "").strip()
+        try:
+            text = strip_dsml(text)
+            text = strip_reasoning(text)
+            text = strip_system_leak(text, context="clean_reply_full")
+            text = strip_image_gen_leak(text, context="clean_reply_full")
+            text = strip_log_timestamps(text, context="clean_reply_full")
+            if strip_emotion:
+                text = self.get_sticker_manager(style).strip_emotion_tag(text)
+            text = humanize(text, style=style)
+            text = deduplicate_multi_reply(text, context="clean_reply_full")
+            from config import apply_agent_name_replacements
+            text = apply_agent_name_replacements(text)
+        except Exception:
+            logger.debug("clean_reply_full.failed best_effort", exc_info=True)
+        return text
+
     def _finalize_reply(self, reply: str, strip_emotion: bool = True, style: str = "xiaoda") -> str:
-        """统一的回复文本处理：JSON提取 + strip_dsml + strip_reasoning + strip_emotion_tag + humanize + deduplicate + 名称替换。
+        """统一的回复文本处理：JSON提取 + 指令标签清理 + _clean_reply_full + 工具定义清理 + Canary。
 
         所有回复路径（主小妲、单子 Agent、并行子 Agent、TaskGraph）统一调用此方法，
-        确保回复清洗流程一致。
+        确保回复清洗流程一致。_clean_reply_full 接管 dsml/reasoning/system_leak/
+        image_gen_leak/log_ts/emotion/humanize/dedup/名称替换；本方法额外处理
+        JSON 提取、<instruction> 标签、注入工具定义清理、Canary 检测。
         """
         text = reply.strip() if reply else ""
         # JSON 格式回复提取：LLM 有时返回 JSON 而非纯文本
@@ -462,23 +500,14 @@ class ToolExecutorMixin:
                     text = "（回复格式异常，请稍后重试）"
             except json.JSONDecodeError:
                 pass  # 不是合法 JSON，继续后续清洗
-        text = strip_dsml(text)
         # 清理指令层级标签（LLM 可能原样输出上下文中的 <instruction> 标记）
         text = re.sub(r'<instruction\s+level="[A-Z]+"\s+priority="\d+"[^>]*>', '', text)
         text = re.sub(r'</instruction>', '', text)
-        text = strip_reasoning(text)
-        # CR-5: 清洗系统提示词/错误详情泄漏（与 _clean_reply 一致）
-        from utils.llm_cleanup import strip_system_leak
-        text = strip_system_leak(text, context="finalize_reply")
-        if strip_emotion:
-            # 根据 style（agent 名）动态获取正确的 sticker_manager
-            sticker_mgr = self.get_sticker_manager(style)
-            text = sticker_mgr.strip_emotion_tag(text)
-        text = humanize(text, style=style)
-        text = deduplicate_multi_reply(text, context="finalize_reply")
-        # 清除模型生成退化泄露的工具定义 JSON（与 _clean_reply 一致）
+        # 统一清洗出口（含 dsml/reasoning/system_leak/image_gen_leak/log_ts/emotion/humanize/dedup/名称替换）
+        text = self._clean_reply_full(text, style=style, strip_emotion=strip_emotion)
+        # 清除模型生成退化泄露的工具定义 JSON
         text = self._strip_injected_tool_defs(text)
-        # S6: Canary Token 泄露检测（与 _clean_reply 一致）
+        # S6: Canary Token 泄露检测
         try:
             from security.canary import get_canary_detector
             leaked, cleaned = get_canary_detector().scan_output_blocking(text)
@@ -489,12 +518,6 @@ class ToolExecutorMixin:
                 text = cleaned
         except ImportError:
             pass
-        # 名称替换：确保 LLM 输出中的旧名（如"纳西妲"）被替换为显示名（如"小妲"）
-        try:
-            from config import apply_agent_name_replacements
-            text = apply_agent_name_replacements(text)
-        except Exception:
-            logger.debug("apply_agent_name_replacements failed", exc_info=True)
         return text
 
     def get_sticker_info(self, reply: str, user_emotion: str = "", force_sticker: bool = False) -> tuple[str, Path | None]:
