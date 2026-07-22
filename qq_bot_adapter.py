@@ -749,8 +749,10 @@ class AIQQBot(botpy.Client):
                 logger.debug("qq_bot.c2c_timeout_reply_failed", error=str(_e))
         except (TimeoutError, RuntimeError, OSError, ValueError) as e:
             logger.error(f"qq_bot.c2c_error: {e}")
-            # P1-2: 失效 session_id 缓存，下次重新查 DB（session 可能已被删除/失效）
-            if user_openid:
+            # P1-2: 仅在 agent 处理失败（非 QQ 网络短暂错误）时失效 session 缓存
+            # RuntimeError/OSError 可能是 QQ 网络短暂错误（ACK/回复发送失败），不应清除健康缓存
+            # ValueError 通常表示数据格式问题（如 session 无效），需要重新查 DB
+            if user_openid and isinstance(e, ValueError):
                 self._invalidate_c2c_session(user_openid)
             try:
                 await message.reply(content="嗯……出了点小问题，等会儿再聊好不好？", msg_seq=_next_msg_seq())

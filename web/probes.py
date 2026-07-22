@@ -325,10 +325,15 @@ async def run_all(core: Any, on_progress: Any | None=None) -> dict:
         nonlocal passed
         async with semaphore:
             # 单探针异常不应阻断整批：捕获后转为失败结果
+            # CR-FIX: 捕获实际耗时 + 清理异常文本（防敏感信息泄漏）
+            _probe_t0 = time.time()
             try:
                 res = await run_probe(core, item["id"])
             except Exception as e:
-                res = {"ok": False, "error": f"探针异常: {e}", "latency_ms": 0}
+                _elapsed = int((time.time() - _probe_t0) * 1000)
+                # 截断异常文本，防止大响应体/路径/密钥泄漏到 health_reports
+                _err_text = str(e)[:300]
+                res = {"ok": False, "error": f"探针异常: {_err_text}", "latency_ms": _elapsed}
             res["id"] = item["id"]
             res["label"] = item["label"]
             async with lock:

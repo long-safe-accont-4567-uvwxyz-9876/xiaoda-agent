@@ -111,7 +111,7 @@ def test_n3_constraints_guidelines_block_cleaned():
     # CR-3: 验证内容值也被删除
     assert "explicit content" not in result
     assert "an AI assistant" not in result
-    assert "Gentle and supportive" not in result
+    assert "Gentle, clever, supportive" not in result
     assert "呜...爸爸好过份啦" in result
 
 
@@ -130,6 +130,11 @@ def test_n3_identity_persona_lines_cleaned():
     # CR-1: 独立行不在系统提示词块内，不会被删除（避免误删）
     # 但这种情况在正常回复中不应该出现
     assert "正常回复内容" in result
+    # CR-FIX: 验证文档声明的"非删除行为"——独立 Identity/Persona 行应保留
+    assert "· Identity: I am Agnes, an AI assistant." in result, \
+        f"独立 Identity 行不应被删除: {result[:200]}"
+    assert "· Persona: Gentle and supportive." in result, \
+        f"独立 Persona 行不应被删除: {result[:200]}"
     # 注意：如果测试期望这些行被删除，说明之前的实现过于激进
     # 正确做法是只删除在 Constraints & Guidelines 块内的这些行
 

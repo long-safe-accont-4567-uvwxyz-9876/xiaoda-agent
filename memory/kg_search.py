@@ -45,7 +45,11 @@ class KGSearchEngine:
         )
         results: list[list[dict]] = []
         for idx, r in enumerate(raw):
-            if isinstance(r, Exception):
+            # CancelledError 是 BaseException，需要单独处理
+            if isinstance(r, asyncio.CancelledError):
+                logger.debug("kg_search.sub_search_cancelled", idx=idx)
+                results.append([])
+            elif isinstance(r, Exception):
                 logger.warning("kg_search.sub_search_failed", idx=idx, error=str(r))
                 results.append([])
             else:
