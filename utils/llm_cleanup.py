@@ -272,3 +272,55 @@ def strip_system_leak(text: str, *, context: str = "") -> str:
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
+
+# N6: 生图类泄漏 —— LLM 伪造图片生成时复述的模型名 / 状态行 / 生图参数元数据
+# 生产样本 conversation_logs id 1965/1966：
+#   "Agnes Image 2.1 Flash 刚才跟我撒娇..."
+#   "【图片生成中 —— Agnes Image 2.1 Flash ⚡】"
+#   'Width Height: 560x792 | Seed: 93847 | Model: Default | Quality.default| Prompt: "..."'
+# 模型名用精确串删除（不误伤正常讨论）；状态行/元数据行要求完整特征序列才删。
+_IMAGE_GEN_MODEL_NAMES = (
+    "Agnes Image 2.1 Flash",
+    "Agnes Video V2.0",
+    "agnes-image-2.1-flash",
+    "agnes-video-v2.0",
+)
+# 伪造状态行：【图片生成中 ...】/【视频生成中 ...】（不锚定行首，容忍内联出现）
+_IMAGE_GEN_STATUS_LINE_RE = re.compile(r'【(?:图片|视频)生成中[^】]*】')
+# 伪造生图元数据片段：要求 Width/Size + Seed + Model + Prompt 完整序列才删
+# （避免误删普通含 Model/Prompt 的文本）。生产样本中元数据常内联在 markdown 图后。
+# Prompt 分隔符容忍 : / . / ：，值用双引号包裹（生产样本均如此）。
+_IMAGE_GEN_META_LINE_RE = re.compile(
+    r'\.?\s*(?:Width\s*Height|Size|尺寸)[:：]?\s*\d+\s*[x×]\s*\d+.*?'
+    r'(?:Seed|种子).*?(?:Model|模型).*?'
+    r'(?:Prompt|提示词)\s*[.：:]?\s*"[^"]*"',
+    re.IGNORECASE,
+)
+
+
+def strip_image_gen_leak(text: str, *, context: str = "") -> str:
+    """清洗 LLM 伪造图片生成时泄漏的模型名/状态行/生图参数元数据。
+
+    覆盖（生产样本 id 1965/1966）：
+    - 模型名：Agnes Image 2.1 Flash / Agnes Video V2.0 及其 model_id 形式
+    - 伪造状态行：【图片生成中 —— ...】/【视频生成中 ...】
+    - 伪造生图元数据行：Width Height: WxH | Seed: .. | Model: .. | Prompt: ..
+
+    注意：markdown 图语法 ![](url) 的剥离由 _extract_fabricated_images_from_reply
+    负责（它会下载 URL 发真图），本函数只管文本类泄漏，避免双重处理。
+    正常人格回复不含上述精确串/完整元数据序列，无过删风险。
+    """
+    if not text:
+        return ""
+    # 1. 先删伪造状态行 / 元数据行（整行），避免模型名删除留下碎片
+    text = _IMAGE_GEN_STATUS_LINE_RE.sub('', text)
+    text = _IMAGE_GEN_META_LINE_RE.sub('', text)
+    # 2. 模型名精确删除：连同紧跟的单个空格一起删，避免行首空格残留
+    for _name in _IMAGE_GEN_MODEL_NAMES:
+        text = text.replace(_name + " ", "")
+        text = text.replace(_name, "")
+    # 3. 收拢多余空格与空行
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
