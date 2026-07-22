@@ -218,6 +218,36 @@ def test_n5_normal_discussion_about_safety_not_deleted():
     assert "超出了范围" in result or "超出了" in result, f"正常讨论被误删: {result}"
 
 
+def test_n5_normal_bracket_out_of_range_not_deleted():
+    """N5: 正常方括号内的"超出了...范围"不应被误删
+
+    回归测试：修复前 _SAFETY_REASONING_BRACKET_RE 的第二个分支
+    '超出了[^\[\]]*?范围' 过于宽泛，会误删任何包含"超出了...范围"
+    的方括号内容。修复后要求必须同时有"该内容/该请求"等安全拒绝
+    上下文才匹配。
+    """
+    # 各种正常场景下的方括号"超出范围"表达
+    test_cases = [
+        ("[温度超出了正常范围]", "技术描述场景"),
+        ("[数值超出了范围，请重新输入]", "表单验证提示"),
+        ("[话题超出了本次讨论范围]", "讨论范围提示"),
+        ("[这超出了我的知识范围哦]", "日常对话旁白"),
+        ("[注意：结果超出了正常范围，请谨慎参考]", "文档警告标记"),
+    ]
+    for text, desc in test_cases:
+        result = strip_system_leak(text)
+        assert text == result, f"N5 误删正常方括号内容 [{desc}]: 原文={text}, 结果={result}"
+
+
+def test_n5_bracket_with_safety_context_still_cleaned():
+    """N5: 含安全拒绝上下文的"超出了...范围"方括号仍应被清除"""
+    # 有"该内容/该请求"等安全拒绝前缀的，仍是安全推理泄漏，应清除
+    text = "[该内容超出了小妲可协助的范围哦] 爸爸~这个不行啦 😣"
+    result = strip_system_leak(text)
+    assert "该内容超出了小妲可协助的范围" not in result, f"安全推理未清除: {result[:100]}"
+    assert "爸爸~这个不行啦" in result, f"正常内容被误删: {result[:100]}"
+
+
 # ── 综合测试 ──────────────────────────────────────────────────
 
 def test_combined_all_leaks_cleaned():
