@@ -5,18 +5,17 @@
 2. config_reloader._notify_callbacks: 协程任务未存储, 可能被GC回收
 """
 import asyncio
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-from pathlib import Path
 
+import pytest
 
 # ── BUG: background_tasks._spawn 异常静默丢失 ──────────────
 
 @pytest.mark.asyncio
 async def test_spawn_logs_exception_on_task_failure(caplog):
     """_spawn 创建的任务失败时应记录异常, 不应静默吞没。"""
-    from core.background_tasks import _spawn, _bg_tasks
     from loguru import logger
+
+    from core.background_tasks import _spawn
 
     warnings_seen = []
 
@@ -42,7 +41,7 @@ async def test_spawn_logs_exception_on_task_failure(caplog):
 @pytest.mark.asyncio
 async def test_spawn_task_not_garbage_collected():
     """_spawn 创建的任务应被强引用, 不被GC回收。"""
-    from core.background_tasks import _spawn, _bg_tasks
+    from core.background_tasks import _bg_tasks, _spawn
 
     started = asyncio.Event()
 
@@ -73,7 +72,6 @@ def _make_reloader(tmp_path):
 @pytest.mark.asyncio
 async def test_config_reloader_async_callback_exception_logged(tmp_path):
     """config_reloader 异步回调失败时应记录异常, 不应静默丢失。"""
-    from core.config_reloader import ConfigReloader
     from loguru import logger
 
     reloader = _make_reloader(tmp_path)
@@ -104,7 +102,6 @@ async def test_config_reloader_async_callback_exception_logged(tmp_path):
 @pytest.mark.asyncio
 async def test_config_reloader_async_task_stored_not_gc(tmp_path):
     """config_reloader 创建的异步任务应被存储, 不被GC回收。"""
-    from core.config_reloader import ConfigReloader
 
     reloader = _make_reloader(tmp_path)
     completed = asyncio.Event()

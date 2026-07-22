@@ -5,10 +5,12 @@
 """
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from core.background_tasks import BackgroundTaskManager
 
@@ -130,7 +132,7 @@ async def test_memory_encode_not_affected_by_batch_commit():
     """场景五：history 足够长时 try_idle_encode 仍被调用，且独立于批量 commit。
 
     验证 try_idle_encode 不纳入批量提交（不传 auto_commit，commit 次数仍为 1）。
-    
+
     注意：由于 try_idle_encode 使用 _spawn (fire-and-forget)，测试无法直接检测其调用。
     此测试主要验证 commit 次数不受记忆编码影响。
     """

@@ -19,7 +19,7 @@ _custom_clients["agnes"]（用户通过 WebUI 注册的 agnes 客户端），
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -215,7 +215,7 @@ def test_set_chat_model_agnes_should_not_reset_chat_flash_to_mimo(monkeypatch):
 
     修复：chat_flash 应跟随主 provider，跨 provider 降级作为最后手段。
     """
-    from model_router import ModelRouter, ROUTE_TABLE
+    from model_router import ROUTE_TABLE, ModelRouter
 
     # 备份 ROUTE_TABLE 以便测试后恢复
     _backup = {k: dict(v) for k, v in ROUTE_TABLE.items()}
@@ -257,7 +257,7 @@ def test_set_chat_model_mimo_should_not_reset_chat_flash_to_agnes(monkeypatch):
 
     避免 _CROSS_PROVIDER_MAP 把 chat_flash 重置成 agnes。
     """
-    from model_router import ModelRouter, ROUTE_TABLE
+    from model_router import ROUTE_TABLE, ModelRouter
 
     _backup = {k: dict(v) for k, v in ROUTE_TABLE.items()}
     try:

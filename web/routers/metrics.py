@@ -26,10 +26,10 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
+    REGISTRY,
     Counter,
     Gauge,
     Histogram,
-    REGISTRY,
     generate_latest,
 )
 from prometheus_client.core import (
@@ -40,7 +40,6 @@ from prometheus_client.core import (
 
 # utils.metrics 是项目内全局单例, 桥接时直接读取其内部状态
 from utils.metrics import metrics as _utils_metrics
-
 
 router = APIRouter(tags=["metrics"])
 

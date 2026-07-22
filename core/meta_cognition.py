@@ -2,8 +2,8 @@
 
 Agent 自我状态感知 — confidence, fatigue, error_rate, memory_pressure
 """
-from dataclasses import dataclass
 from collections import deque
+from dataclasses import dataclass
 
 
 @dataclass

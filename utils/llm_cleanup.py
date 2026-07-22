@@ -9,7 +9,6 @@ import re
 
 from loguru import logger
 
-
 # 推理模型（DeepSeek-R1/MiMo Pro 等）会输出各种思维链标签
 # 扩展匹配：<think>/<thinking>/reasoning/analysis/reflection/thought 和 [think/thinking/reasoning/analysis]
 # 注意：thinking 必须在 think 之前，避免 <think> 先匹配 <think 部分后 \b 边界失败

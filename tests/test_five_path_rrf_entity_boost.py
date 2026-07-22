@@ -1,15 +1,14 @@
 """六路 RRF + Entity Boost 测试：第6路召回 + 精排加分 + scope 过滤"""
-import asyncio
-import time
-import pytest
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from memory.scope import Scope
 from memory.entity_extractor import Entity
+from memory.scope import Scope
 
 
 @pytest.fixture

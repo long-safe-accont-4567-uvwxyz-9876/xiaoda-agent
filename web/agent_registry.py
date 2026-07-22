@@ -7,18 +7,18 @@
   因为 SubAgent._filtered_tools() 每次对话时实时计算）
 """
 from __future__ import annotations
-from typing import Any, ClassVar
 
 import json
 import shutil
 import sys
 import time
 from pathlib import Path
+from typing import Any, ClassVar
 
 from loguru import logger
 
 # frozen 模式下使用用户目录（~/.ai-agent/data/config/agents/），避免写入 _MEIPASS 只读目录
-from config import AGENTS_CONFIG_DIR, DEFAULT_PROVIDER, MEDIA_DIR, _FALLBACK_BASE, get_agent_display_name
+from config import _FALLBACK_BASE, AGENTS_CONFIG_DIR, DEFAULT_PROVIDER, MEDIA_DIR, get_agent_display_name
 
 
 def _resolve_personality_path(pf: str) -> str | None:
@@ -56,6 +56,7 @@ def _resolve_personality_path(pf: str) -> str | None:
             return str(c)
     return None
 import config as _config
+
 AGENTS_DIR = AGENTS_CONFIG_DIR
 BUILTIN_AGENTS = {"xiaoli", "xiaolang", "xiaolian", "xiaoke"}
 
@@ -510,7 +511,7 @@ class AgentRegistry:
                 get_config_service().set("ui.main_wallpaper", data["wallpaper"])
             personality_text = data.pop("personality_text", None)
             if personality_text is not None:
-                from config import reverse_agent_name_replacements, WORKSPACE_DIR
+                from config import WORKSPACE_DIR, reverse_agent_name_replacements
                 personality_text = reverse_agent_name_replacements(personality_text)
                 soul_path = WORKSPACE_DIR / "SOUL.md"
                 soul_path.write_text(personality_text, encoding="utf-8-sig")

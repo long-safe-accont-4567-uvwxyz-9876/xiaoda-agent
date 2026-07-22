@@ -3,13 +3,13 @@
 借鉴 Hermes Agent 的凭证池机制，替代 ModelRouter 中简单的重试/降级逻辑
 """
 
-import asyncio
 import hashlib
 import os
-import time
 import threading
-from enum import Enum
+import time
 from dataclasses import dataclass
+from enum import Enum
+
 from loguru import logger
 
 from .error_classifier import ClassifiedError, FailoverReason

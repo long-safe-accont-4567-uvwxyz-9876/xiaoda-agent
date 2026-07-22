@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
 import shutil
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
-
-import asyncio
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -14,7 +14,6 @@ from loguru import logger
 
 from web.routers.auth import get_current_user
 from web.schemas import Envelope
-import contextlib
 
 # test-key 速率限制：每 IP 最多 10 次/分钟
 _test_key_timestamps: list[float] = []
@@ -163,7 +162,7 @@ async def get_keys() -> Any:
     import sys
     logger.info("setup.keys.called frozen={} exe={}", getattr(sys, 'frozen', False), getattr(sys, 'executable', 'N/A'))
     try:
-        from setup_wizard import REQUIRED_KEYS, OPTIONAL_KEYS, _load_env_values
+        from setup_wizard import OPTIONAL_KEYS, REQUIRED_KEYS, _load_env_values
         logger.info("setup.keys.import_ok")
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.error("setup.keys.import_failed error={}", str(e))
@@ -551,7 +550,7 @@ async def test_single_key(key_name: str, key_value: str, extra: dict | None = No
 async def test_key(body: dict, request: Request) -> Any:
     """测试 API Key 是否有效。"""
     import time
-    client_ip = request.client.host if request.client else "unknown"
+    _client_ip = request.client.host if request.client else "unknown"
     now = time.monotonic()
     async with _test_key_lock:
         recent = [t for t in _test_key_timestamps if now - t < _TEST_KEY_RATE_WINDOW]
@@ -577,8 +576,12 @@ async def save_keys(body: dict) -> Any:
     """将提供的 Key-Value 写入 .env 文件。"""
     try:
         from setup_wizard import (
-            ENV_PATH, ENV_EXAMPLE_PATH, REQUIRED_KEYS,
-            _parse_env_lines, _write_env, _load_env_values,
+            ENV_EXAMPLE_PATH,
+            ENV_PATH,
+            REQUIRED_KEYS,
+            _load_env_values,
+            _parse_env_lines,
+            _write_env,
         )
 
         updates = body.get("keys")
@@ -683,6 +686,7 @@ def _write_env_file(updates: Any, ENV_PATH: Any, ENV_EXAMPLE_PATH: Any, _parse_e
 async def _reload_env_and_cache(updates: Any, ENV_PATH: Any) -> None:
     """重新加载环境变量、清除模型发现缓存。"""
     import os
+
     from dotenv import load_dotenv
     load_dotenv(ENV_PATH, override=True)
     # 兜底：直接写入 os.environ
@@ -702,7 +706,7 @@ async def _reload_env_and_cache(updates: Any, ENV_PATH: Any) -> None:
 def _reset_credential_pool(updates: Any) -> None:
     """重置凭证池中所有 DEAD 凭证，并替换为新 Key。"""
     try:
-        from utils.credential_pool import get_credential_pool, Credential
+        from utils.credential_pool import Credential, get_credential_pool
         pool = get_credential_pool()
         _PROVIDER_KEY_MAP = {
             "SILICONFLOW_API_KEY": ("siliconflow", "https://api.siliconflow.cn/v1"),
@@ -728,6 +732,7 @@ def _reset_credential_pool(updates: Any) -> None:
 def _update_config_and_refresh_clients(updates: Any) -> None:
     """更新 config 模块变量并刷新 router/TTS/子 Agent 客户端。"""
     import os
+
     import config
     from utils.encrypted_credential import protect_credential
     config.MIMO_API_KEY = protect_credential(updates.get("MIMO_API_KEY", os.getenv("MIMO_API_KEY", "")))
@@ -822,6 +827,7 @@ _KNOWN_PROVIDERS = {
 def _auto_register_providers(updates: dict) -> None:
     """当用户配置了免费模型平台的 Key，自动注册为自定义 Provider。"""
     import os
+
     from web.config_service import get_config_service
     from web.custom_providers import register_into_router
 
@@ -889,10 +895,10 @@ def _auto_register_providers(updates: dict) -> None:
 
 # ── USER.md 个人资料配置 ────────────────────────────────────
 
-import re as _re
-import time as _time
 import platform as _platform
+import re as _re
 import socket as _socket
+import time as _time
 
 
 def _detect_device_info_for_profile() -> dict:
@@ -1179,7 +1185,6 @@ def _write_disclaimer_agreement(user_md_path: Path, agreed: bool) -> str:
 
     若已存在该区块则替换；否则追加到文件末尾。
     """
-    from datetime import datetime
 
     agreed_at = _get_local_now().isoformat(timespec="seconds")
     new_section = (

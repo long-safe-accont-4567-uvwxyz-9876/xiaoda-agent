@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from tool_engine.tool_registry import ToolPermission
 from config import get_agent_display_name
+from tool_engine.tool_registry import ToolPermission
 
 _NAHIDA_DN = get_agent_display_name('xiaoda')
 _KELI_DN = get_agent_display_name('xiaoli')

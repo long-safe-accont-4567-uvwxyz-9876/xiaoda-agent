@@ -3,13 +3,14 @@ stderr sink 保持同步（不启用 enqueue）。
 
 对应 v3 spec P1-4：避免异步上下文里同步文件 I/O 阻塞事件循环。
 """
+import contextlib
 import os
-import pytest
 from unittest import mock
+
+import pytest
 from loguru import logger
 
 from utils.logging_config import setup_logging
-import contextlib
 
 
 @pytest.fixture

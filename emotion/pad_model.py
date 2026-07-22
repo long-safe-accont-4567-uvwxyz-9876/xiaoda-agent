@@ -2,12 +2,13 @@
 
 将硬分类(9类关键词)升级为PAD连续空间，提供更细腻的情绪表示。
 P: Pleasure -1(不悦) ~ +1(愉悦)
-A: Arousal 0(平静) ~ 1(激动)  
+A: Arousal 0(平静) ~ 1(激动)
 D: Dominance 0(受控) ~ 1(掌控)
 """
 from __future__ import annotations
-from dataclasses import dataclass, asdict
-from typing import Optional
+
+from dataclasses import dataclass
+
 
 @dataclass
 class PADEmotion:
@@ -62,11 +63,11 @@ EMOTION_PAD_REFERENCE: dict[str, PADEmotion] = {
 
 def from_emotion(label: str, intensity: float = 1.0) -> PADEmotion:
     """根据情绪标签和强度生成 PAD 值
-    
+
     Args:
         label: 中文情绪标签（喜悦/悲伤/愤怒等）
         intensity: 强度 0.0-1.0，调制各维度
-    
+
     Returns:
         PADEmotion: 缩放后的 PAD 值，未知标签返回 neutral
     """
@@ -76,12 +77,12 @@ def from_emotion(label: str, intensity: float = 1.0) -> PADEmotion:
 
 def blend(pad1: PADEmotion, pad2: PADEmotion, weight: float = 0.5) -> PADEmotion:
     """混合两个 PAD 值
-    
+
     Args:
         pad1: 第一个 PAD 值
-        pad2: 第二个 PAD 值  
+        pad2: 第二个 PAD 值
         weight: pad2 的权重 0-1
-    
+
     Returns:
         混合后的 PADEmotion
     """

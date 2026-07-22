@@ -15,7 +15,6 @@ import pytest
 
 from core.behavioral_signal import BehavioralSignalStream
 
-
 # ============================================================
 # 辅助 fixtures (复用 test_agent_introspection.py 的 fake 模式)
 # ============================================================
@@ -171,13 +170,13 @@ async def test_hook_non_blocking_on_emit_failure():
 @pytest.mark.asyncio
 async def test_bootstrap_wires_hooks():
     """C1 regression: init_j_space() must wire components to all Hook modules."""
-    from core.j_space_bootstrap import init_j_space, get_signal_stream, get_intervention_loop
+    import agent_dispatcher as _ad
+    import belief_router as _br
     import core.agent_introspection as _ai
     import core.behavioral_health as _bh
-    import agent_dispatcher as _ad
     import core.degradation_strategy as _ds
     import memory.cognitive_memory as _cm
-    import belief_router as _br
+    from core.j_space_bootstrap import get_intervention_loop, get_signal_stream, init_j_space
 
     # Save original state
     orig = {

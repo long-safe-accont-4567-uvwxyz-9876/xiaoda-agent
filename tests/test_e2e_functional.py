@@ -3,16 +3,15 @@
 验证项目各功能模块的端到端可用性，使用 mock 避免 API 调用。
 """
 
+import asyncio
 import os
 import re
-import asyncio
 import tempfile
-from pathlib import Path
 from dataclasses import fields
-from unittest.mock import patch, MagicMock, AsyncMock
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # ── 1. 核心模块导入和初始化测试 ──────────────────────────────
 
@@ -26,12 +25,12 @@ class TestCoreModuleImport:
         assert ProcessResult is not None
 
     def test_import_security(self):
-        from security.security import SecurityFilter, SecurityCheckResult
+        from security.security import SecurityCheckResult, SecurityFilter
         assert SecurityFilter is not None
         assert SecurityCheckResult is not None
 
     def test_import_emotion_simple(self):
-        from emotion.emotion_simple import detect_emotion, build_emotion_hint
+        from emotion.emotion_simple import build_emotion_hint, detect_emotion
         assert detect_emotion is not None
         assert build_emotion_hint is not None
 
@@ -40,7 +39,7 @@ class TestCoreModuleImport:
         assert StickerManager is not None
 
     def test_import_tool_registry(self):
-        from tool_engine.tool_registry import to_openai_tools, get_tool, clear_tools
+        from tool_engine.tool_registry import clear_tools, get_tool, to_openai_tools
         assert to_openai_tools is not None
         assert get_tool is not None
         assert clear_tools is not None
@@ -236,8 +235,8 @@ class TestSecurityFilterE2E:
 
     def test_dev_mode_downgrades_block_to_warn(self):
         """测试开发板模式下安全威胁的处理"""
+        from security.permission_manager import PermissionMode, get_permission_manager
         from security.security import SecurityFilter
-        from security.permission_manager import get_permission_manager, PermissionMode
         sf = SecurityFilter()
         pm = get_permission_manager()
         original_mode = pm.mode
@@ -251,8 +250,8 @@ class TestSecurityFilterE2E:
 
     def test_dev_mode_disabled_blocks(self):
         """测试 AGENT_DEV_MODE 未设置时高置信度威胁被 block"""
+        from security.permission_manager import PermissionMode, get_permission_manager
         from security.security import SecurityFilter
-        from security.permission_manager import get_permission_manager, PermissionMode
         sf = SecurityFilter()
         # 临时切换到 DEFAULT 模式
         pm = get_permission_manager()
@@ -588,7 +587,7 @@ class TestFilePathSandbox:
 
     def test_validate_path_allows_project_dir(self):
         """测试 _validate_path 对白名单路径的放行"""
-        from tools.file_tools_v2 import _validate_path, _PROJECT_DIR
+        from tools.file_tools_v2 import _PROJECT_DIR, _validate_path
         # 项目目录下的文件应被允许读取
         allowed, _resolved, reason = _validate_path(os.path.join(_PROJECT_DIR, "config.py"))
         assert allowed is True, f"项目目录文件应被允许: {reason}"

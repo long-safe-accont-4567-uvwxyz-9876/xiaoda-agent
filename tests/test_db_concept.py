@@ -1,9 +1,5 @@
 """概念图数据库 CRUD 单元测试"""
-import asyncio
 import json
-import os
-import tempfile
-import time
 
 import aiosqlite
 import pytest

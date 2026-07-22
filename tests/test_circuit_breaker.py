@@ -5,7 +5,6 @@ import pytest
 
 from core.circuit_breaker import CircuitBreaker, CircuitState, CognitiveState
 
-
 # ── CognitiveState 默认值 ──
 
 

@@ -1,11 +1,13 @@
 """A4 修复：测试 query_transform 错误日志改进和超时优化"""
-import sys
 import asyncio
+import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
+
 from memory.query_transform import QueryTransformer
 
 
@@ -83,7 +85,6 @@ class TestQueryTransformTimeoutConfig(unittest.TestCase):
 
     def test_intent_classify_timeout_is_configurable(self):
         """A4 修复：意图分类超时应从环境变量读取，默认 5.0s（从 2.0s 提升）"""
-        import importlib
         import config
 
         # 检查配置项存在

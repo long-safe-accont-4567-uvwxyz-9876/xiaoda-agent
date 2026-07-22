@@ -1,6 +1,8 @@
 """测试 WebUI 子 agent 路径的 XP 增加（修复 ws_hub.py:385）"""
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from web.ws_hub import process_and_serialize
 
 
@@ -13,22 +15,22 @@ async def test_sub_agent_path_adds_xp():
     mock_core._dispatch_single_sub_agent = AsyncMock(
         return_value=MagicMock(reply="test reply", emotion=None, sticker_path=None, audio_path=None, tts_pending=False)
     )
-    
+
     # Mock agent registry
     mock_registry = MagicMock()
     mock_registry.is_enabled.return_value = True
     mock_core.dispatcher.get_agent.return_value = MagicMock()  # 子 agent 存在
-    
+
     # Mock XP 系统
     with patch('web.ws_hub.get_xp_system') as mock_xp_sys:
         mock_xp_instance = MagicMock()
         mock_xp_instance.add_chat_xp = MagicMock()
         mock_xp_sys.return_value = mock_xp_instance
-        
+
         # Mock app.state
         mock_app = MagicMock()
         mock_app.state.agent_registry = mock_registry
-        
+
         # 调用 process_and_serialize（子 agent 路径）
         result = await process_and_serialize(
             core=mock_core,
@@ -37,10 +39,10 @@ async def test_sub_agent_path_adds_xp():
             agent="kimi",  # 子 agent（!= "xiaoda"）
             app=mock_app,
         )
-        
+
         # 验证 XP 增加被调用
         mock_xp_instance.add_chat_xp.assert_called_once_with("webui", len("你好"))
-        
+
         # 验证返回结果
         assert result is not None
         assert "reply" in result or "data" in result
@@ -53,7 +55,7 @@ async def test_main_path_xp_unchanged():
     mock_core = MagicMock()
     mock_process_result = MagicMock(reply="test reply", emotion=None)
     mock_core.process = AsyncMock(return_value=mock_process_result)
-    
+
     # 调用 process_and_serialize（主 agent 路径）
     with patch('web.ws_hub.serialize_result', return_value={"reply": "test reply"}):
         result = await process_and_serialize(
@@ -62,10 +64,10 @@ async def test_main_path_xp_unchanged():
             session_id="test_session",
             agent="xiaoda",  # 主 agent
         )
-        
+
         # 验证 core.process 被调用（主路径）
         mock_core.process.assert_called_once()
-        
+
         # XP 增加在 message_processor 中，不在 ws_hub，所以不在这里验证
         assert result is not None
 

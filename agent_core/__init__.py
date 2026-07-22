@@ -3,10 +3,10 @@
 冷启动优化: 使用 __getattr__ 延迟导入, 避免包导入时触发全部子模块。
 只有实际访问 agent_core.AgentCore 等名称时才触发导入。
 """
-from typing import Any
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 # 将项目根目录加入 sys.path
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -15,7 +15,9 @@ if _PROJECT_ROOT not in sys.path:
 
 # 加载 .env
 import sys as _sys
+
 from dotenv import load_dotenv
+
 if getattr(_sys, 'frozen', False):
     _env_path = str(Path.home() / ".ai-agent" / ".env")
 else:

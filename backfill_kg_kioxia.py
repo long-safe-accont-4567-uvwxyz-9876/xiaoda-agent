@@ -4,9 +4,11 @@ import os
 import time
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 import aiosqlite
+
 from db.db_knowledge import KnowledgeDB
 from memory.knowledge_graph import KnowledgeGraph
 

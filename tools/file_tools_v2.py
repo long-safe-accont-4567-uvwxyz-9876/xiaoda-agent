@@ -1,13 +1,13 @@
-from typing import Any
 import asyncio
 import os
 import re
-import shlex
 import tempfile
 import urllib.parse
-from loguru import logger
-from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+from typing import Any
 
+from loguru import logger
+
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
 
 # ==================== 文件路径沙箱 ====================
 
@@ -97,7 +97,7 @@ def _validate_path(path: str, mode: str = "read") -> tuple[bool, str, str]:
                             in_allowed = True
                             break
                     if not in_allowed:
-                        return False, re_resolved, f"符号链接目标不在允许的目录范围内"
+                        return False, re_resolved, "符号链接目标不在允许的目录范围内"
                     resolved = re_resolved
             # 写入模式额外限制：只允许项目目录和 tts_cache
             if mode == "write":

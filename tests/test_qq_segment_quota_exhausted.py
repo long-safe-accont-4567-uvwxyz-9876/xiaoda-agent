@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -56,7 +55,7 @@ async def test_quota_exhausted_merges_remaining():
     """
     # 这个测试用 _send_segment 闭包的实际行为验证较复杂，
     # 改为单元测试 mock 整个流式发送流程
-    from qq_bot_adapter import AIQQBot, QQ_GROUP_MAX_SEGMENTS
+    from qq_bot_adapter import AIQQBot
 
     # 构造超长文本（5 段，需要切分）
     long_text = "段1内容" * 200 + "段2内容" * 200 + "段3内容" * 200 + "段4内容" * 200 + "段5内容" * 200
@@ -90,7 +89,7 @@ async def test_quota_exhausted_merges_remaining():
     bot.agent = MagicMock()
 
     # mock _split_text_for_streaming 和 split_for_group_passive
-    with patch("qq_bot_adapter.split_for_group_passive" if False else "utils.text_utils.split_for_group_passive") as mock_split, \
+    with patch("qq_bot_adapter.split_for_group_passive" if False else "utils.text_utils.split_for_group_passive") as _mock_split, \
          patch.object(AIQQBot, "_send_reply_with_sticker"):
         # 简化测试：只验证 _send_segment 返回 bool 类型
         # 直接测试 _send_streaming_reply_with_sticker

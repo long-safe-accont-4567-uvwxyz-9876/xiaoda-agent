@@ -4,12 +4,13 @@
 重试也超时才返回错误提示; 重试次数可配置。
 """
 import asyncio
+
+# 确保项目路径
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# 确保项目路径
-from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(PROJECT_ROOT))

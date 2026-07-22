@@ -4,9 +4,10 @@
 tests/ 中的代码仍直接引用 tests.fault_injection。
 """
 import random
-from loguru import logger
 from dataclasses import dataclass
 from enum import Enum
+
+from loguru import logger
 
 
 class FaultType(Enum):

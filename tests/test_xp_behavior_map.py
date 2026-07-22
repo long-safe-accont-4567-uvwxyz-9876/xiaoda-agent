@@ -12,8 +12,6 @@
 import sys
 from pathlib import Path
 
-import pytest
-
 # 确保项目根在 path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
@@ -75,7 +73,7 @@ def test_lv6_eternal_config():
 
 def test_get_behavior_config_lv3():
     """get_behavior_config(LV3_FRIEND) 返回正确的 dict"""
-    from core.xp_system import get_behavior_config, XPLevel
+    from core.xp_system import XPLevel, get_behavior_config
     cfg = get_behavior_config(XPLevel.LV3_FRIEND)
     assert cfg["proximity"] == "near"
     assert cfg["initiate"] is True
@@ -88,7 +86,7 @@ def test_get_behavior_config_lv3():
 
 def test_get_behavior_config_fallback():
     """get_behavior_config 未知等级回退到 LV1_STRANGER 配置"""
-    from core.xp_system import get_behavior_config, XPLevel, XP_BEHAVIOR_MAP
+    from core.xp_system import XP_BEHAVIOR_MAP, XPLevel, get_behavior_config
     # 传入不在映射中的值, 应回退到 LV1 配置
     unknown = object()
     cfg = get_behavior_config(unknown)  # type: ignore[arg-type]

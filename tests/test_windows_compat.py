@@ -1,6 +1,6 @@
 """Windows 兼容性静态检查 —— 确保 Harness 优化代码跨平台兼容。"""
-import sys
 import re
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))

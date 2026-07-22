@@ -8,9 +8,6 @@
 - BUG-3: 问候语不再触发正面情绪
 """
 import re
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-
 
 # ── SEC-3: BYPASS 模式 shell 命令防傻检查 ──────────────────
 
@@ -51,6 +48,7 @@ def test_bypass_mode_allows_non_shell_tools():
 def test_tts_strips_emotion_tags():
     """TTS synthesize 应清理 [emotion:xxx] 标签 — 验证源码包含清理逻辑."""
     import inspect
+
     from emotion.tts_engine import TTSEngine
     source = inspect.getsource(TTSEngine.synthesize)
     assert re.search(r'\[emotion:', source), "synthesize 方法应包含 [emotion:xxx] 标签清理逻辑"
@@ -60,6 +58,7 @@ def test_tts_strips_emotion_tags():
 def test_tts_strips_sticker_tags():
     """TTS synthesize 应清理 [sticker:xxx] 标签 — 验证源码包含清理逻辑."""
     import inspect
+
     from emotion.tts_engine import TTSEngine
     source = inspect.getsource(TTSEngine.synthesize)
     assert re.search(r'\[sticker:', source), "synthesize 方法应包含 [sticker:xxx] 标签清理逻辑"
@@ -69,7 +68,7 @@ def test_tts_strips_sticker_tags():
 
 def test_confused_maps_to_thinking_not_curious():
     """CONFUSED 情绪应映射到 thinking 风格, 不是 curious."""
-    from emotion.emotion_enum import Emotion, TTS_STYLE_MAP
+    from emotion.emotion_enum import TTS_STYLE_MAP, Emotion
     assert TTS_STYLE_MAP[Emotion.CONFUSED] == "thinking", \
         f"困惑应映射到thinking, 实际: {TTS_STYLE_MAP[Emotion.CONFUSED]}"
 

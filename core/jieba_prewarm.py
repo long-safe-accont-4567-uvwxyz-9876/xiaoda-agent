@@ -7,6 +7,7 @@ db/fts_utils.py 与 memory/memory_manager.py 在函数内 lazy import jieba，
 from __future__ import annotations
 
 import asyncio
+
 from loguru import logger
 
 _prewarm_started: bool = False

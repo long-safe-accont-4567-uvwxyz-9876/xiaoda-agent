@@ -1,7 +1,9 @@
 """MiMo Transport - 适配小米 MiMo API"""
-import os
 import asyncio
+import os
+
 from openai import AsyncOpenAI
+
 from transports.base import ProviderTransport, TransportResponse
 
 

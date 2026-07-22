@@ -1,9 +1,11 @@
 """测试 error_classifier.py 的 ErrorClassifier"""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
+
 from utils.error_classifier import ErrorClassifier, FailoverReason, RecoveryAction
 
 

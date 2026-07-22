@@ -3,11 +3,12 @@
 验证 _finalize_parallel_reply 不再始终使用 xiaoda 的 sticker_manager，
 而是优先使用子代理的专属表情包管理器。
 """
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-from agent_core._shared import ProcessResult, RequestContext
+import pytest
+
+from agent_core._shared import RequestContext
 from agent_core.sub_agent_manager import SubAgentManagerMixin
 
 
@@ -138,7 +139,7 @@ async def test_parallel_fallback_to_xiaoda_when_sub_unavailable(ctx):
     with patch('agent_core.sub_agent_manager.detect_emotion') as mock_detect:
         mock_detect.return_value = {"primary": "happy"}
 
-        result = await mgr._finalize_parallel_reply(
+        _result = await mgr._finalize_parallel_reply(
             all_replies, "你好", "u1", "qq", "s1", False, ctx, intermediate=intermediate
         )
 

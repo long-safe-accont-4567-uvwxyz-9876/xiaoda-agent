@@ -9,16 +9,15 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from agent_core._shared import RequestContext, _current_request_ctx
 from config import FILE_DIR, get_agent_display_name
-from utils.text_utils import strip_dsml, strip_reasoning, humanize
-from utils.llm_cleanup import deduplicate_multi_reply
 from core.degradation_strategy import get_degradation_strategy
-
-from agent_core._shared import _current_request_ctx, RequestContext
+from utils.llm_cleanup import deduplicate_multi_reply
+from utils.text_utils import humanize, strip_dsml, strip_reasoning
 
 if TYPE_CHECKING:
     from tool_engine.tool_registry import ToolResult
@@ -465,7 +464,7 @@ class ToolExecutorMixin:
         _emotion_match = _re.search(r'\[emotion:([^\]]+)\]', reply)
         detected = ""
         if _emotion_match:
-            from emotion.emotion_enum import resolve_emotion, STICKER_FALLBACK
+            from emotion.emotion_enum import STICKER_FALLBACK, resolve_emotion
             emotion = resolve_emotion(_emotion_match.group(1))
             detected = STICKER_FALLBACK.get(emotion, "happy")
 

@@ -1,8 +1,10 @@
 import asyncio
 import os
 import pathlib
+
 from loguru import logger
-from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
 
 _DEFAULT_PROJECT_DIR = os.path.expanduser("~/ai-agent")
 

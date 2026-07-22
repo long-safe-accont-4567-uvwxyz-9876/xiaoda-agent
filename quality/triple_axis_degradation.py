@@ -5,8 +5,9 @@ from __future__ import annotations
 三轴: Availability(二值) + Performance(连续) + Quality(最阴险)
 检测 provider 偷偷切到弱模型的静默退化。
 """
-from dataclasses import dataclass, field
 from collections import deque
+from dataclasses import dataclass, field
+
 from loguru import logger
 
 

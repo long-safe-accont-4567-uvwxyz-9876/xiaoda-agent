@@ -1,4 +1,7 @@
-import urllib.request, json, ssl
+import json
+import ssl
+import urllib.request
+
 ctx = ssl.create_default_context()
 
 # Get the v0.5.15 workflow runs that are still in progress

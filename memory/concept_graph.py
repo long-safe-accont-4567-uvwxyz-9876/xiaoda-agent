@@ -7,8 +7,8 @@ from zoneinfo import ZoneInfo
 from loguru import logger
 
 from db.db_concept import ConceptDB
-from memory.key_extractor import KeyExtractor
 from memory.fsrs_model import estimate_initial_difficulty
+from memory.key_extractor import KeyExtractor
 
 _SH_TZ = ZoneInfo("Asia/Shanghai")
 

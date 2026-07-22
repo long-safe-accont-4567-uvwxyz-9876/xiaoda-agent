@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, patch
 
 from web.ws_hub import ConnectionManager
 
-
 # 真实 asyncio.sleep 引用 —— 在 patch 前捕获，patch 期间用其让出事件循环
 _real_sleep = asyncio.sleep
 

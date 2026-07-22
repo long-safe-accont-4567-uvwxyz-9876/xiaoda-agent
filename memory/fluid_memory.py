@@ -6,16 +6,14 @@
 import time
 import warnings
 
-from loguru import logger
-
 from memory.fsrs_model import (
-    FSRSModel,
-    MemoryState,
-    MemoryPhase,
-    FORGET_THRESHOLD,
-    DREAM_THRESHOLD,
     BUFFER_DAYS,
+    DREAM_THRESHOLD,
+    FORGET_THRESHOLD,
     S_INIT,
+    FSRSModel,
+    MemoryPhase,
+    MemoryState,
 )
 
 

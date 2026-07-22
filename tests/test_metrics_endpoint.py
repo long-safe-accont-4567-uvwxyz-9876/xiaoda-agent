@@ -24,7 +24,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-
 # 模拟本机回环客户端 (host, port) — 与原 web/server.py 安全约束一致
 # httpx ASGITransport 接受 client 参数指定请求来源
 _LOCALHOST_CLIENT = ("127.0.0.1", 50000)

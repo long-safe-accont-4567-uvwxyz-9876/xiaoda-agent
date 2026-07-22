@@ -1,12 +1,12 @@
 """插件测试工具 — MockPluginContext"""
 from __future__ import annotations
 
-from typing import Any
 from collections.abc import Callable
+from typing import Any
 
+from plugins.context import PluginContext
 from plugins.manifest import MemoryPermission, PluginDataPermission, PluginManifest, PluginPermissions
 from plugins.permissions import PermissionChecker
-from plugins.context import PluginContext
 
 
 class MockPluginContext(PluginContext):

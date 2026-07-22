@@ -9,7 +9,6 @@ Bug: unregister 是同步方法，仅清理内部 dict，不调用 ws.close()，
 3. 所有调用点（heartbeat_loop、send_to、broadcast、_safe_send、websocket_endpoint finally）
    都 await 它
 """
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -34,6 +33,7 @@ def _make_manager():
 async def test_unregister_is_async():
     """unregister 应是 async 方法（可 await）。"""
     import inspect
+
     from web.ws_hub import ConnectionManager
     assert inspect.iscoroutinefunction(ConnectionManager.unregister), \
         "unregister 应为 async 方法"

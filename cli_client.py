@@ -8,20 +8,19 @@ AgentCore：会话、记忆、表情包、子代理全部同步。
     .venv/bin/python cli_client.py --host 172.26.130.154
 """
 from __future__ import annotations
-from typing import Any
 
 import argparse
 import asyncio
 import json
-
-
-from utils.common import safe_int as _safe_int
 import os
 import random
 import sys
 import uuid
+from typing import Any
 
 from loguru import logger
+
+from utils.common import safe_int as _safe_int
 
 try:
     import websockets
@@ -35,10 +34,11 @@ except ImportError as e:
     sys.exit(1)
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
-import urllib.request
 import contextlib
+import urllib.request
 
 DENDRO = "#7fd650"
 WISDOM = "#e8d5a3"
@@ -56,7 +56,7 @@ _AGENT_STYLE_DEFAULTS = {
     "xiaolang": ("#6ea8fe", "🎮"), "xiaolian": ("#d8b4fe", "🌸"), "xiaoke": (WISDOM, "🔮"),
 }
 try:
-    from config import get_agent_display_name, agent_names
+    from config import agent_names, get_agent_display_name
     from emotion.emoji_config import get_ack_message
     AGENT_LABELS = {}
     for _name in agent_names():

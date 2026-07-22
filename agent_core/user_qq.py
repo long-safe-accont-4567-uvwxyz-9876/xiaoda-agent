@@ -9,8 +9,8 @@ from typing import Awaitable, Callable
 
 from loguru import logger
 
+from agent_core.user_base import AGENT_DISPLAY, UserBase
 from core.event_bus import AgentEvent, AgentEventType
-from agent_core.user_base import UserBase, AGENT_DISPLAY
 
 
 class QQUser(UserBase):

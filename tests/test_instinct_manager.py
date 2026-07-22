@@ -1,11 +1,13 @@
 """测试 instinct_manager.py 的 InstinctManager"""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import unittest
 import asyncio
+import unittest
 from unittest.mock import AsyncMock, MagicMock
+
 from instinct_manager import InstinctManager
 
 

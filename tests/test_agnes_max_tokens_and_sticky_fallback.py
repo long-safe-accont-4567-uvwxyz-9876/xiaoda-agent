@@ -11,8 +11,6 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -101,7 +99,7 @@ def test_restore_chat_model_fallback_preserves_route_table(monkeypatch):
     """
     # 在导入 server 前注入 fake model_router 模块
     import model_router as _mr_module
-    original_route_table = _mr_module.ROUTE_TABLE
+    _original_route_table = _mr_module.ROUTE_TABLE
 
     # 临时修改 ROUTE_TABLE 模拟用户选择 agnes
     test_route = {
@@ -132,6 +130,7 @@ def test_restore_chat_model_fallback_preserves_route_table(monkeypatch):
 
     # 重新导入 server（确保使用 monkeypatched ROUTE_TABLE）
     import importlib
+
     import web.server as server_mod
     importlib.reload(server_mod)
 
@@ -188,6 +187,7 @@ def test_restore_chat_model_fallback_does_not_persist_mimo(monkeypatch):
     fake_core = SimpleNamespace(router=_FakeRouter())
 
     import importlib
+
     import web.server as server_mod
     importlib.reload(server_mod)
 

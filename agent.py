@@ -1,15 +1,14 @@
-from typing import Any
+import argparse
+import asyncio
+import contextlib
 import os
 import sys
-import asyncio
-import argparse
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
-import contextlib
 
 from utils.common import safe_int as _safe_int
-
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -26,8 +25,8 @@ try:
     load_dotenv(_env_path, override=True)
 except Exception:
     # dotenv 加载失败时写日志，防止 exe 静默崩溃
-    import traceback
     import pathlib
+    import traceback
     try:
         log_dir = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent"
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -83,7 +82,7 @@ def main() -> None:
         wizard_main()
         return
 
-    from setup_wizard import is_first_run, ENV_PATH, ENV_EXAMPLE_PATH
+    from setup_wizard import ENV_EXAMPLE_PATH, ENV_PATH, is_first_run
     if is_first_run():
         # 确保 .env 文件存在（从 .env.example 复制），这样 WebUI Setup 页面能读取默认值
         if not os.path.exists(ENV_PATH):
@@ -160,6 +159,7 @@ def _get_lan_addresses() -> list:
 
 def _run_web(host: str, port: int) -> None:
     import uvicorn
+
     from utils.logging_config import setup_logging
     setup_logging()
 
@@ -204,6 +204,7 @@ async def _wait_for_port_available_async(host: str, port: int) -> None:
     用 asyncio.sleep 替代 time.sleep，避免阻塞事件循环。
     """
     import socket
+
     from loguru import logger
     for attempt in range(30):
         try:
@@ -230,6 +231,7 @@ def _wait_for_port_available(host: str, port: int) -> None:
     """
     import socket
     import time
+
     from loguru import logger
     for attempt in range(120):  # 120 * 0.5s = 60s
         try:
@@ -254,8 +256,8 @@ def _import_web_server_safe() -> Any:
         from web.server import app
         return app
     except (ImportError, SyntaxError, ModuleNotFoundError):
-        import traceback
         import pathlib
+        import traceback
         log_path = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent" / "crash.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(f"Failed to import web.server:\n{traceback.format_exc()}", encoding="utf-8")
@@ -267,9 +269,10 @@ def _start_splash_server(port: int) -> str:
 
     端口被占用时回退到 file:// 协议。
     """
-    import threading
-    import http.server
     import functools
+    import http.server
+    import threading
+
     from loguru import logger
 
     def _splash_dir() -> Any:
@@ -296,6 +299,7 @@ def _wait_for_server_ready(window: Any, port: int) -> None:
     """后台线程：等待 WebUI 就绪后调用 splash.js 的 onServerReady。"""
     import time
     import urllib.request
+
     from loguru import logger
 
     for _ in range(120):
@@ -371,6 +375,7 @@ def _run_desktop(host: str, port: int) -> None:
             pass
 
     import threading
+
     from utils.logging_config import setup_logging
     setup_logging()
 
@@ -426,8 +431,8 @@ if __name__ == "__main__":
         main()
     except Exception:
         # 顶层异常兜底：写日志文件，防止 exe 静默崩溃
-        import traceback
         import pathlib
+        import traceback
         try:
             log_dir = pathlib.Path(os.environ.get("APPDATA", ".")) / "xiaoda-agent"
             log_dir.mkdir(parents=True, exist_ok=True)

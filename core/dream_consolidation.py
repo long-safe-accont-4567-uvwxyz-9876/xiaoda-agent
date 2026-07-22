@@ -17,13 +17,13 @@ from __future__ import annotations
 import asyncio
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
-from collections.abc import Callable
 
 from loguru import logger
 
-from memory.fsrs_model import FSRSModel, MemoryState, MemoryPhase
+from memory.fsrs_model import FSRSModel, MemoryPhase, MemoryState
 
 
 @dataclass

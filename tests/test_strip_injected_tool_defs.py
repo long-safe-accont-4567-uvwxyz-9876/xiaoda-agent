@@ -3,6 +3,7 @@
 参考: 论文 arXiv:2512.04419 的发现 + 实际 QQ Bot 日志中观察到的退化模式。
 """
 import pytest
+
 from agent_core.tool_executor import ToolExecutorMixin
 
 

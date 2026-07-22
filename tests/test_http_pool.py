@@ -4,11 +4,9 @@
 P2-4 加固: 所有测试在 finally 中调用 close_shared_client，避免断言失败时 singleton 泄漏
 影响后续测试（pytest-asyncio 模式下全局 singleton 会跨测试用例残留）。
 """
-import asyncio
-import httpx
 import pytest
 
-from utils.http_pool import get_shared_client, close_shared_client
+from utils.http_pool import close_shared_client, get_shared_client
 
 
 @pytest.fixture(autouse=True)

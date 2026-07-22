@@ -1,11 +1,13 @@
-from typing import Any
+import asyncio
 import os
 import shutil
-import asyncio
 import threading
 import time
+from typing import Any
+
 from loguru import logger
-from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
 
 BLOCKED_PINS = {1, 2, 4, 6, 9, 14, 17, 20, 25, 30, 34, 39}
 

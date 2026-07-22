@@ -1,5 +1,4 @@
 from __future__ import annotations
-from typing import Any
 
 import asyncio
 import os
@@ -8,14 +7,15 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import PlainTextResponse
 from loguru import logger
 
-from web.schemas import Envelope, ChatRequest, SessionInfo, MessageItem, SlashCommand
-from web.routers.auth import get_current_user
 from emotion.emotion_simple import detect_emotion
+from web.routers.auth import get_current_user
+from web.schemas import ChatRequest, Envelope, MessageItem, SessionInfo, SlashCommand
 
 router = APIRouter(tags=["chat"], dependencies=[Depends(get_current_user)])
 

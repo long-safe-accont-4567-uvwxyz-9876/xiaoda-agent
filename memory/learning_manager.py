@@ -1,8 +1,8 @@
 from typing import Any
+
 from loguru import logger
 
 from db.db_learning import LearningDB
-
 
 CORRECTION_SIGNALS = ["不对", "错了", "不是这样的", "应该是", "你说错了",
                       "不是", "搞错了", "弄错了", "不对吧", "才不是",

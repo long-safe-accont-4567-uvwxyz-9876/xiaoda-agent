@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+
 import pytest
 
-from core.background_tasks import _spawn, _bg_tasks
+from core.background_tasks import _bg_tasks, _spawn
 
 
 def test_spawn_no_running_loop():

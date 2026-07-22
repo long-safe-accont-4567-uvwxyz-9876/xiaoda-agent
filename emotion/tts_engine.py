@@ -1,17 +1,20 @@
-from typing import Any, ClassVar
+import asyncio
+import base64
 import hashlib
 import json
 import os
 import re
-import base64
 import time
-import asyncio
 from collections import OrderedDict
 from pathlib import Path
-from openai import AsyncOpenAI
+from typing import Any, ClassVar
+
 from loguru import logger
-from .emotion_enum import resolve_emotion, TTS_STYLE_MAP, is_unified
+from openai import AsyncOpenAI
+
 from config import get_agent_display_name
+
+from .emotion_enum import TTS_STYLE_MAP, is_unified, resolve_emotion
 
 MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
 MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")

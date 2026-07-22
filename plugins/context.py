@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
 from loguru import logger
 
@@ -50,7 +50,7 @@ class PluginContext:
             logger.warning("plugin.tool_registry_unavailable", plugin=self._plugin_id)
             return
         full_name = f"{self._plugin_id}__{name}" if "__" not in name else name
-        from tool_engine.tool_registry import register_tool_direct, ToolPermission
+        from tool_engine.tool_registry import ToolPermission, register_tool_direct
         register_tool_direct(
             name=full_name,
             description=description,

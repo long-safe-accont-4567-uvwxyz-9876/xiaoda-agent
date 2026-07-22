@@ -1,6 +1,5 @@
 """WebSocket 主通道（§9 协议）：流式状态、工具事件、最终回复、问候/任务/配置广播。"""
 from __future__ import annotations
-from typing import Any
 
 import asyncio
 import json
@@ -13,7 +12,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-
+from typing import Any
 
 from utils.common import safe_int as _safe_int
 
@@ -32,9 +31,9 @@ else:
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect  # noqa: E402
 from loguru import logger  # noqa: E402
 
+from agent_core.user_web import WebUser  # noqa: E402
 from config import STREAM_STATUS_PUSH, STREAM_TEXT_PUSH, STREAM_TOOL_STATUS  # noqa: E402
 from core.event_bus import event_bus  # noqa: E402
-from agent_core.user_web import WebUser  # noqa: E402
 
 router = APIRouter()
 
@@ -379,6 +378,7 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
         else:
             # 走与 QQ 通道相同的完整子代理流程：表情包/情绪/TTS/落库都不缺
             from loguru import logger as _logger
+
             from agent_core import RequestContext
             from utils.trace_context import new_trace_id
             # 身份解析：与 core.process() 主路径一致，确保 is_master/user_openid 语义正确
@@ -576,6 +576,7 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
     _image_urls = _re.findall(r'\[Image:\s*([^\]]+)\]', text)
     if _image_urls:
         from pathlib import Path as _Path
+
         from utils.text_utils import encode_image_to_base64
         image_data = []
         for url in _image_urls:

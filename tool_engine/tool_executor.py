@@ -1,12 +1,14 @@
-from typing import Any, ClassVar
 import asyncio
+import inspect
 import json
 import time
-import inspect
+from typing import Any, ClassVar
+
 from loguru import logger
 
-from .tool_registry import get_tool, ToolResult, resolve_tool_func
 from utils.metrics import metrics
+
+from .tool_registry import ToolResult, get_tool, resolve_tool_func
 
 # 敏感参数关键词，匹配到的参数值会被屏蔽
 _SENSITIVE_KEYS = {'key', 'token', 'password', 'secret', 'api_key', 'credential'}

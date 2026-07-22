@@ -24,10 +24,10 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
-from collections.abc import Callable
 
 from loguru import logger
 
@@ -316,7 +316,7 @@ class RecoveryOrchestrator:
     def _escalate_to_human(self, ctx: RecoveryContext) -> None:
         """上报人工介入 (通过 self_diagnostic 回调机制)"""
         try:
-            from core.self_diagnostic import get_self_diagnostic, ReportLevel, SelfReport
+            from core.self_diagnostic import ReportLevel, SelfReport, get_self_diagnostic
             diag = get_self_diagnostic()
             # 通过回调机制上报
             report = SelfReport(

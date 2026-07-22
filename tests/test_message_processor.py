@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import time
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock
 
-from agent_core._shared import DEGRADED_REPLY, ProcessResult, RequestContext
+import pytest
+
+from agent_core._shared import DEGRADED_REPLY, RequestContext
 
 
 # ── 辅助：构造最小化 mixin 宿主对象 ──
@@ -44,18 +45,17 @@ class TestRunVerificationLoopNoToolCalls:
     @pytest.mark.asyncio
     async def test_no_tool_calls_returns_clean_reply(self):
         """首轮无 tool_calls → 直接清洗回复并返回。"""
-        from agent_core.message_processor import MessageProcessorMixin
 
         proc = _make_processor()
-        trace = MagicMock()
-        ctx = RequestContext()
+        _trace = MagicMock()
+        _ctx = RequestContext()
 
         # 模拟 _parse_verification_result 返回无 tool_calls
         proc._parse_verification_result = MagicMock(return_value=(None, "", None))
 
         first_result = "这是LLM的回复内容。"
-        messages = [{"role": "user", "content": "你好"}]
-        tools = None
+        _messages = [{"role": "user", "content": "你好"}]
+        _tools = None
 
         # 直接调用方法（通过 Mixin 绑定到 mock 对象）
         # 首轮无 tool_calls 路径：clean_reply → 完整性检测 → return
@@ -80,7 +80,7 @@ class TestRunVerificationLoopNoToolCalls:
     @pytest.mark.asyncio
     async def test_incomplete_short_reply_triggers_retry(self):
         """短回复不以句末标点结尾 → 视为不完整，应追加"请继续"重试。"""
-        proc = _make_processor()
+        _proc = _make_processor()
         short_reply = "嗯……让我查一下记忆里"  # 12字，以"里"结尾，不以句末标点结尾
 
         # 不完整检测逻辑（来自 _run_verification_loop 行 119）
@@ -288,9 +288,8 @@ class TestDynamicEmotionThreshold:
 
     def test_high_intensity_lowers_threshold(self):
         """高强度情绪应降低阈值。"""
-        from agent_core.message_processor import MessageProcessorMixin
 
-        proc = _make_processor()
+        _proc = _make_processor()
         # 直接测试阈值逻辑
         base = 0.5
         emotion = {"intensity": 0.8}

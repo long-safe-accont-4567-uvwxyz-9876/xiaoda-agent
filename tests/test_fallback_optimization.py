@@ -8,9 +8,10 @@
 5. 后台任务 _spawn 添加耗时监控日志
 """
 import asyncio
-import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
 from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
 
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in __import__("sys").path:
@@ -85,7 +86,7 @@ class TestFallbackChainSync:
 
     def test_fallback_chain_uses_different_providers(self):
         """验证 fallback 链中每级使用不同 provider"""
-        from model_router import ROUTE_TABLE, FALLBACK_ROUTE
+        from model_router import ROUTE_TABLE
 
         # 模拟 agnes 作为主 provider 的场景
         original = {k: v.copy() for k, v in ROUTE_TABLE.items()}
@@ -131,8 +132,8 @@ class TestProfileLearnerFormatBug:
 
     def test_loguru_with_brace_in_message_does_not_crash(self):
         """当异常消息包含 {} 时，loguru 不应报 Replacement index 错误"""
+
         from loguru import logger
-        import io
 
         # 模拟一个包含 {} 的异常消息
         error_msg = "Replacement index 0 out of range for positional args tuple {}"
@@ -166,7 +167,7 @@ class TestBackgroundTaskTiming:
     @pytest.mark.asyncio
     async def test_spawn_logs_duration_on_completion(self):
         """_spawn 完成时应记录耗时"""
-        from core.background_tasks import _spawn, _bg_tasks
+        from core.background_tasks import _bg_tasks, _spawn
 
         _bg_tasks.clear()
         log_records = []
@@ -232,6 +233,7 @@ class TestTruncationDetection:
     def test_fast_path_logs_reply_len(self):
         """fast_path.done 日志应包含 reply_len 字段"""
         import inspect
+
         import agent_core.message_processor as mp_mod
         source = inspect.getsource(mp_mod)
         assert "reply_len" in source, "fast_path 日志应包含 reply_len 字段"
@@ -239,6 +241,7 @@ class TestTruncationDetection:
     def test_model_router_checks_finish_reason(self):
         """model_router 应检查 finish_reason 并记录截断告警"""
         import inspect
+
         from model_router import ModelRouter
         source = inspect.getsource(ModelRouter._handle_route_response)
         assert "finish_reason" in source, \

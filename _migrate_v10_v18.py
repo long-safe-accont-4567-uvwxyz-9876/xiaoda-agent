@@ -1,5 +1,6 @@
 """手动执行 v10-v18 数据库迁移（幂等）。"""
-import sqlite3, time
+import sqlite3
+import time
 
 DB = "/home/orangepi/ai-agent/data/agent.db"
 conn = sqlite3.connect(DB)
@@ -77,7 +78,7 @@ conn.commit()
 # Verify
 epi2 = cols("episodic_memories")
 sv = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
-print(f"\n=== Result ===")
+print("\n=== Result ===")
 print(f"Schema version: {sv}")
 print(f"Has phase: {'phase' in epi2}")
 print(f"Has distill_status: {'distill_status' in epi2}")

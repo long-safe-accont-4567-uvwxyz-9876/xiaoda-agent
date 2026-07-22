@@ -1,16 +1,16 @@
-from typing import Any
+import datetime
+import json
 import os
 import re
-import json
-import datetime
 import time as _time
+from typing import Any
+
 import httpx
 from loguru import logger
 
-from db.db_notebook import NotebookDB
 from config import get_agent_display_name
+from db.db_notebook import NotebookDB
 from utils.http_pool import get_shared_client
-
 
 AUTO_NOTE_PROMPT_TEMPLATE = """你是{agent_name}。刚刚和{address_term}进行了一轮对话。
 
@@ -255,9 +255,9 @@ class NotebookManager:
         return await self.notebook.get_notebook_notes(limit=limit)
 
     def _parse_task_time(self, time_str: str) -> float:
+        import os
         from datetime import datetime
         from zoneinfo import ZoneInfo
-        import os
         tz_name = os.getenv("NUDGE_TIMEZONE", "Asia/Shanghai")
         try:
             tz = ZoneInfo(tz_name)

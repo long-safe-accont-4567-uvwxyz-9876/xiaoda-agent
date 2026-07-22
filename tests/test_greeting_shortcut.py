@@ -1,16 +1,15 @@
 """G1: 问候短路测试 - 纯问候 <100ms 返回，不调 LLM."""
-import os
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from agent_core import message_processor as mp_module
+
 # P2-5: 改用 fixture 而非模块级 env var 设置，避免污染其他测试
 # 原代码: os.environ["ENABLE_GREETING_SHORTCUT"] = "true" (模块级，永不恢复)
-
 from agent_core.message_processor import MessageProcessorMixin
-from agent_core import message_processor as mp_module
 
 
 @pytest.fixture(autouse=True)

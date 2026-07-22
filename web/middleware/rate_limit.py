@@ -30,15 +30,14 @@ import os
 import sqlite3
 import time
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Tuple
-from collections.abc import Iterable
 
 from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-
 
 # ── 写操作 HTTP 方法 (应用更严的写端点限制) ──
 _WRITE_METHODS = frozenset({"POST", "PUT", "DELETE", "PATCH"})

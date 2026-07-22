@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-import ipaddress
-import os
-import time
-import json
+import base64
+import contextlib
 import hashlib
 import hmac
-import base64
+import ipaddress
+import json
+import os
 import secrets
+import time
 from collections import OrderedDict
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
 from web.schemas import Envelope, LoginRequest, LoginResponse
-import contextlib
 
 router = APIRouter(tags=["auth"])
 

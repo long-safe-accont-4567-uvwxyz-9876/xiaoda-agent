@@ -10,7 +10,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from loguru import logger
-from memory.fsrs_model import FSRSModel, MemoryState, MemoryPhase, ReinforcementSignal
+
+from memory.fsrs_model import FSRSModel, MemoryPhase, MemoryState, ReinforcementSignal
 
 # 命名空间前缀避免跨模块 hash 冲突；使用 SHA-256 前 16 字符（64 位空间）
 # 修复 P0：MD5[:12] 仅 48 位空间，约 16M 条目内必然碰撞，导致 UPSERT 覆盖原节点。

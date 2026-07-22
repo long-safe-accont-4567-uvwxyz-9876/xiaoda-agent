@@ -4,8 +4,9 @@
 流程: Agent请求操作 → Broker查凭证 → Broker发起请求 → 返回脱敏结果
 """
 import re
-from loguru import logger
 from typing import Any
+
+from loguru import logger
 
 from utils.encrypted_credential import reveal_credential
 

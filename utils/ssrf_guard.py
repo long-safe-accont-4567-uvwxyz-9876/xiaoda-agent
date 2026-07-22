@@ -8,12 +8,13 @@
 
     本文件保留仅为向后兼容, 内部委托给新模块实现。
 """
-from typing import ClassVar
 import ipaddress
-import socket
 import re
+import socket
 import urllib.parse
 import warnings
+from typing import ClassVar
+
 from loguru import logger
 
 # 模块级废弃标记 (不在此处发 warning, 避免污染导入链;

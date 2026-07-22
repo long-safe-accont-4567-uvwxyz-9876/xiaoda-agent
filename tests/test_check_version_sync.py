@@ -7,10 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import sys
 from pathlib import Path
-
-import pytest
 
 # scripts/ 目录无 __init__.py，直接通过文件路径加载模块
 _SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "check_version_sync.py"

@@ -1,17 +1,14 @@
 # tests/test_v06_integration.py
 """v0.6.0 认知架构集成测试"""
-import asyncio
 import time
+
 import numpy as np
 import pytest
-from memory.cognitive_memory import CognitiveMemory, MemoryEntry
-from memory.hopfield_layer import HopfieldLayer
-from memory.salience import SalienceScorer
-from memory.bridge_memory import BridgeMemoryManager
-from memory.spreading_activation import SpreadingActivation
-from core.conflict_supersession import ConflictSupersession
+
 from core.dream_engine_v2 import DreamEngineV2
-from memory.preference_discovery import PreferenceDiscovery
+from memory.cognitive_memory import CognitiveMemory, MemoryEntry
+from memory.salience import SalienceScorer
+
 
 @pytest.fixture
 def system():
@@ -70,7 +67,7 @@ async def test_hopfield_integration(system):
 
 async def test_salience_with_emotion(system):
     """测试情绪加权Salience"""
-    cog = system["cog"]
+    _cog = system["cog"]
     scorer = SalienceScorer()
 
     now = time.time()

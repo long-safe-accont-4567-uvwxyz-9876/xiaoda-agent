@@ -31,17 +31,16 @@ TNR 三步自愈规约:
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
-from collections.abc import Callable
 
 from loguru import logger
 
 from core.behavioral_health import BehavioralHealthScorer, HealthScore
 from core.degradation_strategy import DegradationLevel, DegradationStrategy
 from core.recovery_orchestrator import RecoveryLevel, RecoveryOrchestrator
-
 
 # ============================================================
 # 枚举

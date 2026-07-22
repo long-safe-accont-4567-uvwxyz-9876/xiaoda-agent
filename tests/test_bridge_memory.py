@@ -1,10 +1,13 @@
 # tests/test_bridge_memory.py
 """桥接记忆测试"""
 import time
+
 import numpy as np
 import pytest
-from memory.bridge_memory import BridgeMemory, BridgeMemoryManager
+
+from memory.bridge_memory import BridgeMemoryManager
 from memory.cognitive_memory import MemoryEntry
+
 
 @pytest.fixture
 def manager():
@@ -35,7 +38,7 @@ async def test_bridge_discovery(manager):
     bridge = bridges[0]
     assert bridge.source_memory_id == 1
     assert bridge.target_memory_id == 2
-    assert bridge.cross_session == True
+    assert bridge.cross_session is True
 
 async def test_bridge_weight_factor(manager):
     """测试桥接权重 = sim × 0.3"""

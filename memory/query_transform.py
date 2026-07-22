@@ -1,15 +1,15 @@
 # query_transform.py — 查询改写与扩展（使用硅基流动免费模型，不占用主模型配额）
-from typing import Any, ClassVar
-import os
 import asyncio
 import hashlib
+import os
 import time
 from collections import OrderedDict
+from typing import Any, ClassVar
+
 import httpx
 from loguru import logger
 
 from utils.http_pool import get_shared_client
-
 
 # G15: sentinel 用于区分"缓存未命中"和"命中 None"
 # 不能用 None 作为 sentinel，因为 None 是合法的缓存值（LLM 可能返回 None）

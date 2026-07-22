@@ -1,10 +1,10 @@
-from typing import Any
-from collections.abc import AsyncIterator
 import asyncio
 import os
 import sys
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -17,10 +17,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 async def _apply_model_overrides(core: Any) -> None:
     """重启后恢复：自定义 provider 注册 + 路由表覆盖。"""
     import os
+
+    from model_router import ROUTE_TABLE
     from web.config_service import get_config_service
     from web.custom_providers import register_into_router
     from web.routers.models import load_provider_key
-    from model_router import ROUTE_TABLE
 
     logger.info("webui._apply_model_overrides_start")
     cfg = get_config_service()
@@ -84,7 +85,7 @@ def _register_env_providers(cfg: Any, env_values: Any, os_module: Any) -> None:
 def _ensure_provider_key_file(pid: Any, api_key: Any, os_module: Any) -> None:
     """确保证书文件存在且内容正确（base64 编码存储，非明文）。"""
     from config import get_credentials_dir
-    from web._provider_keys import _encode_key, _decode_key
+    from web._provider_keys import _decode_key, _encode_key
     cred_dir = get_credentials_dir()
     cred_dir.mkdir(parents=True, exist_ok=True)
     fp = cred_dir / f"provider_{pid}.key"
@@ -118,7 +119,7 @@ def _register_all_providers(cfg: Any, core: Any, load_provider_key: Any, registe
             try:
                 register_into_router(core.router, pid, p.get("format", "openai"),
                                      p.get("base_url", ""), key)
-                from utils.credential_pool import get_credential_pool, Credential
+                from utils.credential_pool import Credential, get_credential_pool
                 pool = get_credential_pool()
                 if pid not in pool._pool:
                     pool.add_credential(Credential(
@@ -205,8 +206,8 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
 
 async def _start_user_mcp_servers(core: Any) -> None:
     """启动 WebUI 管理的 MCP server。"""
-    from web.config_service import get_config_service
     from tool_engine.mcp_client import MCPClient
+    from web.config_service import get_config_service
     cfg = get_config_service()
     for name, rec in (cfg.get("mcp", {}) or {}).items():
         if not isinstance(rec, dict) or not rec.get("enabled", True):
@@ -290,8 +291,8 @@ async def _init_mail_poller(core: Any, config_service: Any) -> tuple[str, Any]:
 async def _start_services(app: Any, core: Any) -> None:
     """启动正常模式下的所有服务组件（PluginManager、MediaTaskQueue、GreetingScheduler、QQ Bot）。"""
     from web.config_service import get_config_service
-    from web.media_tasks import MediaTaskQueue
     from web.greeting_scheduler import GreetingScheduler
+    from web.media_tasks import MediaTaskQueue
     from web.routers.tools import apply_tool_overrides
     from web.ws_hub import manager, start_media_cleanup
 
@@ -341,8 +342,8 @@ async def _start_services(app: Any, core: Any) -> None:
     # QQ Bot
     qq_task = None
     if os.getenv("QQBOT_APP_ID", "") and os.getenv("ENABLE_QQ_BOT", "true").lower() in ("true", "1", "yes"):
-        from qq_bot_adapter import run_qq_bot
         from config import AGENT_CONFIG
+        from qq_bot_adapter import run_qq_bot
         qq_task = asyncio.create_task(
             run_qq_bot(core, sandbox=AGENT_CONFIG.get("qq_bot", {}).get("is_sandbox", False)))
         logger.info("webui.qq_bot_task_started")
@@ -512,6 +513,7 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def _allow_frame_embed(request: Any, call_next: Any) -> Any:
         import time as _time
+
         from utils.trace_context import new_trace_id
         _trace_id = new_trace_id()
         _start = _time.monotonic()
@@ -544,22 +546,23 @@ def create_app() -> FastAPI:
     from web.error_handler import register_error_handlers
     register_error_handlers(app)
 
+    from web.routers.agents import router as agents_router
     from web.routers.auth import router as auth_router
     from web.routers.chat import router as chat_router
-    from web.routers.system import router as system_router, public_router as system_public_router
-    from web.routers.agents import router as agents_router
-    from web.routers.models import router as models_router
-    from web.routers.tools import router as tools_router
-    from web.routers.mcp import router as mcp_router
-    from web.routers.insight import router as insight_router
-    from web.routers.schedule import router as schedule_router
-    from web.routers.media import router as media_router
     from web.routers.health import router as health_router
-    from web.routers.plugins import router as plugins_router
-    from web.routers.setup import router as setup_router
-    from web.routers.model_discovery import router as model_discovery_router
-    from web.routers.market import router as market_router
+    from web.routers.insight import router as insight_router
     from web.routers.mail_manage import router as mail_manage_router
+    from web.routers.market import router as market_router
+    from web.routers.mcp import router as mcp_router
+    from web.routers.media import router as media_router
+    from web.routers.model_discovery import router as model_discovery_router
+    from web.routers.models import router as models_router
+    from web.routers.plugins import router as plugins_router
+    from web.routers.schedule import router as schedule_router
+    from web.routers.setup import router as setup_router
+    from web.routers.system import public_router as system_public_router
+    from web.routers.system import router as system_router
+    from web.routers.tools import router as tools_router
     from web.routers.workflows import router as workflows_router
 
     for r in (auth_router, chat_router, system_router, agents_router,

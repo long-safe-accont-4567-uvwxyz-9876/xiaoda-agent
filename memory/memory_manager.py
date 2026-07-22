@@ -1,20 +1,23 @@
-from typing import Any, ClassVar
 import asyncio
 import re
 import time
+from typing import Any, ClassVar
+
 from loguru import logger
 
+from config import get_agent_display_name
 from db.database import DatabaseManager
 from db.db_memory import MemoryDB
-# FTS5 分词工具从 db.fts_utils 导入 (打破 db <-> memory 循环); 这里 re-export
-# 保持向后兼容 (其他模块仍可 `from memory.memory_manager import _tokenize_for_fts`)
-from .vector_store import VectorStore
-from .fsrs_model import FSRSModel, MemoryState, MemoryPhase, ReinforcementSignal, estimate_initial_difficulty, S_INIT
+from utils.atomic_write import atomic_json_write
+
+from .fsrs_model import S_INIT, FSRSModel, MemoryPhase, MemoryState, ReinforcementSignal, estimate_initial_difficulty
 from .memory_distiller import MemoryDistiller
 from .query_cache import QueryCache
 from .retrieval_assessor import RetrievalAssessor
-from utils.atomic_write import atomic_json_write
-from config import get_agent_display_name
+
+# FTS5 分词工具从 db.fts_utils 导入 (打破 db <-> memory 循环); 这里 re-export
+# 保持向后兼容 (其他模块仍可 `from memory.memory_manager import _tokenize_for_fts`)
+from .vector_store import VectorStore
 
 
 def _log_task_exception(task: asyncio.Task) -> None:
@@ -429,10 +432,10 @@ class MemoryManager:
         self.concept_graph = None
         self.spreading_engine = None
         try:
-            from memory.concept_graph import ConceptGraph
-            from memory.spreading_activation import SpreadingActivationEngine
-            from memory.key_extractor import KeyExtractor
             from db.db_concept import ConceptDB
+            from memory.concept_graph import ConceptGraph
+            from memory.key_extractor import KeyExtractor
+            from memory.spreading_activation import SpreadingActivationEngine
             if hasattr(self, 'db') and self.db and hasattr(self.db, '_conn') and self.db._conn is not None:
                 concept_db = ConceptDB(self.db._conn)
                 self._concept_db = concept_db
@@ -1549,7 +1552,6 @@ class MemoryManager:
         不做 user_id 过滤（conversation_logs 的 user_id 是 QQ/微信等外部 ID，
         与 scope.user_id='default' 不匹配），直接按时间范围查全部对话。
         """
-        import time as _time
         try:
             # 不传 user_id，查时间范围内的所有对话
             raw = await self.memory.get_conversations_by_time_range(
@@ -2763,12 +2765,13 @@ class MemoryManager:
             [{content, embed_content, chunk_type, weight, overlap_hash}, ...]
         """
         import hashlib
+
         import config as _cfg
 
         overlap_chars = getattr(_cfg, 'CHILD_CHUNK_OVERLAP_CHARS', 30)
         max_len = getattr(_cfg, 'CHILD_CHUNK_SEGMENT_MAX_LEN', 200)
         max_children = getattr(_cfg, 'CHILD_CHUNK_MAX_PER_PARENT', 10)
-        contextual = getattr(_cfg, 'CONTEXTUAL_RETRIEVAL_ENABLED', True)
+        # contextual: 保留配置读取供未来上下文检索功能使用
 
         children: list[dict] = []
         prev_tail = ""

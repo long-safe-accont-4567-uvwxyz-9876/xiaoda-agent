@@ -1,11 +1,13 @@
 """Transport 抽象层测试"""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
+
+from transports import AgnesTransport, MiMoTransport
 from transports.base import ProviderTransport, TransportResponse
-from transports import MiMoTransport, AgnesTransport
 
 
 class TestTransportResponse(unittest.TestCase):

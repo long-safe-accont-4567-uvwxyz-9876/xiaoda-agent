@@ -18,7 +18,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ─────────────────────────────────────────────────────────────
 # Bug #1: agents.py _audit 不应使用不存在的 db.transaction()
 # ─────────────────────────────────────────────────────────────
@@ -107,7 +106,7 @@ def test_set_chat_model_persists_both_chat_model_and_routes_chat():
     然后 _restore_chat_model 读取 models.chat_model 覆盖 ROUTE_TABLE，
     造成用户切换的 provider 被旧 models.routes.chat 反向覆盖。
     """
-    from model_router import ModelRouter, ROUTE_TABLE
+    from model_router import ROUTE_TABLE, ModelRouter
 
     router = ModelRouter.__new__(ModelRouter)
     router._custom_clients = set()
@@ -163,7 +162,7 @@ def test_set_chat_model_routes_chat_thinking_field_is_bool():
     与 web/routers/models.py update_route 的持久化格式保持一致，
     否则 _apply_route_overrides 读取时会类型不匹配。
     """
-    from model_router import ModelRouter, ROUTE_TABLE
+    from model_router import ROUTE_TABLE, ModelRouter
 
     router = ModelRouter.__new__(ModelRouter)
     router._custom_clients = {"agnes"}
@@ -202,8 +201,8 @@ def test_restore_chat_model_catches_llm_error():
     不捕获 LLMError。自定义 provider 注册失败时 set_chat_model 抛 LLMError，
     导致启动崩溃或异常向上传播。
     """
-    from web.server import _restore_chat_model
     from core.app_exception import LLMError
+    from web.server import _restore_chat_model
 
     cfg = MagicMock()
     cfg.get.return_value = {"provider": "custom-unknown", "model_id": "custom-model"}
@@ -228,8 +227,8 @@ def test_restore_chat_model_fallback_does_not_persist_mimo():
     形成 sticky fallback —— 用户原选择永远无法恢复。
     修复后 fallback 只修改内存中的 ROUTE_TABLE，不触发持久化。
     """
-    from web.server import _restore_chat_model
     from core.app_exception import LLMError
+    from web.server import _restore_chat_model
 
     cfg = MagicMock()
     cfg.get.return_value = {"provider": "custom-unknown", "model_id": "custom-model"}
@@ -260,7 +259,6 @@ def test_restore_chat_model_fallback_does_not_persist_mimo():
     )
 
     # 应该直接修改内存中的 ROUTE_TABLE["chat"]
-    from model_router import ROUTE_TABLE
     # 通过 _current_chat_model 验证 fallback 生效
     assert core.router._current_chat_model == {"provider": "mimo", "model_id": "mimo-v2.5"}
 

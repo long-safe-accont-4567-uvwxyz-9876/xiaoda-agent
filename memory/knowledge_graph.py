@@ -1,12 +1,12 @@
-from typing import Any
 import asyncio
 import json
 import re
 import time
+from typing import Any
+
 from loguru import logger
 
 from db.db_knowledge import KnowledgeDB
-
 
 ENTITY_EXTRACT_PROMPT = """从以下对话摘要中提取关键实体和关系，只提取最显著的3-5个。
 
@@ -111,6 +111,7 @@ class KnowledgeGraph:
         if not getattr(self, '_free_api_key', ''):
             return None
         import httpx
+
         from utils.http_pool import get_shared_client
         try:
             # 修复 P0-2：timeout 从 30s → 10s
@@ -467,8 +468,8 @@ class KnowledgeGraph:
         # OntoLearner B1: 复杂度评分, 跳过高复杂度摘要的 KG 提取
         # 论文实证: 失败模式与本体复杂度正相关 (非模型大小)
         try:
-            from memory.ontology_complexity import should_extract
             import config as _cfg
+            from memory.ontology_complexity import should_extract
             _threshold = float(getattr(_cfg, "ONTOLOGY_SKIP_THRESHOLD", 0.75))
             _do_extract, _score = should_extract(summary, skip_threshold=_threshold)
             if not _do_extract:

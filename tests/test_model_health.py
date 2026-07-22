@@ -6,8 +6,6 @@ Issue: deepseek-ai/DeepSeek-V3-0324 过时模型ID问题是模型自动获取脚
 脚本应该能自动检测和告警过时模型ID，而不是靠手动修改 config.py。
 """
 import os
-import sys
-from unittest import mock
 
 import pytest
 
@@ -15,9 +13,9 @@ import pytest
 os.environ.setdefault("TEST_MODE", "true")
 
 from web.model_health import (
-    collect_configured_models,
-    check_model_staleness,
     StaleModelResult,
+    check_model_staleness,
+    collect_configured_models,
 )
 
 

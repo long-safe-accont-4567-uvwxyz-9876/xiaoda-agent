@@ -102,7 +102,6 @@ async def test_create_reminder_falsy_lastrowid_returns_error_not_fallback():
     应直接返回失败让用户重试。
     """
     from tools import schedule_tool
-    from tool_engine.tool_registry import ToolResult
     core = _make_core()
     # 模拟 execute 异常返回 0（falsy）
     core.db.execute = AsyncMock(return_value=0)
@@ -134,7 +133,6 @@ def test_create_reminder_docstring_updated():
 
 # Helper: patch
 from unittest.mock import patch
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

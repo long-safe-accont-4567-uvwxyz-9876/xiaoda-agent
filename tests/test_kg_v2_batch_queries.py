@@ -13,7 +13,6 @@ from db.database import DatabaseManager
 from db.db_kg_v2 import KnowledgeDBV2
 from memory.knowledge_graph_v2 import KnowledgeGraphV2
 
-
 # ── get_entities_v2_batch ──────────────────────────────────────────
 
 

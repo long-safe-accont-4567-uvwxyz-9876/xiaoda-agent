@@ -3,11 +3,11 @@
 借鉴 Hermes Agent 的错误分类机制，替代 ModelRouter 中简单的重试/降级逻辑
 """
 
-from enum import Enum
 from dataclasses import dataclass
-from loguru import logger
+from enum import Enum
 
 import openai
+from loguru import logger
 
 
 class FailoverReason(Enum):

@@ -1,16 +1,15 @@
 """模型与凭证路由（R4/R13）：provider CRUD、路由表热改、凭证池状态、用量统计。"""
 from __future__ import annotations
-from typing import Any
 
+import contextlib
 import json
 import os
 import time
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
-from web.schemas import Envelope
-from web.routers.auth import get_current_user
 # 缓存与凭证读写抽到独立模块, 避免与 web.routers.model_discovery / model_router 互相导入
 from web._discovery_cache import invalidate_discovery_cache
 from web._provider_keys import (
@@ -19,7 +18,8 @@ from web._provider_keys import (
     _mask,
     load_provider_key,
 )
-import contextlib
+from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["models"], dependencies=[Depends(get_current_user)])
 
@@ -226,7 +226,7 @@ async def reorder_providers(body: dict, request: Request) -> Any:
 
 @router.get("/models/routes", response_model=Envelope[dict])
 async def list_routes(request: Request) -> Any:
-    from model_router import ROUTE_TABLE, FALLBACK_ROUTE
+    from model_router import FALLBACK_ROUTE, ROUTE_TABLE
     routes = {}
     for task, c in ROUTE_TABLE.items():
         routes[task] = {

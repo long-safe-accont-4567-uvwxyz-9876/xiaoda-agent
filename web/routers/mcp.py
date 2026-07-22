@@ -1,17 +1,17 @@
 """MCP 服务路由（R6）：server CRUD、生命周期控制、工具发现。"""
 from __future__ import annotations
-from typing import Any
 
 import os
 import shutil
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 from pydantic import BaseModel
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["mcp"], dependencies=[Depends(get_current_user)])
 

@@ -1,9 +1,9 @@
 """一次性脚本：用GitHub API完成git操作"""
-import os
-import json
-import urllib.request
 import base64
+import json
+import os
 import subprocess
+import urllib.request
 
 for key in list(os.environ.keys()):
     if key.startswith("SAFE_RM"):

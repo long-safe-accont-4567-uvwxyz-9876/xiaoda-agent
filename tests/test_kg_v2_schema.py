@@ -1,5 +1,6 @@
 """KG v2 Schema 迁移测试 — 表创建、数据迁移、幂等性。"""
 import sqlite3
+
 import pytest
 
 from db.database import CURRENT_SCHEMA_VERSION, DatabaseManager

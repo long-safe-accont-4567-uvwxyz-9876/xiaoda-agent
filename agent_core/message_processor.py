@@ -10,37 +10,48 @@ import json
 import os
 import random
 import re
-import time
 import tempfile
+import time
 from datetime import datetime
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
-
-
-from utils.common import safe_int as _safe_int
 
 from loguru import logger
 
-from config import (MIMO_MODEL, AGENT_CONFIG, build_safe_system_prompt,
-                    SIMPLE_TASK_KEYWORDS, PRO_TASK_KEYWORDS, TTS_ASYNC_MODE,
-                    SIMPLE_CHAT_FASTPATH, STREAM_TEXT_PUSH, get_agent_display_name)
-from prompt_builder import build_scene_aware_prompt
-from core.chat_processor import ChatProcessor
-from core.circuit_breaker import CircuitState
-from core.background_tasks import _spawn
-from core.degradation_strategy import get_degradation_strategy
-from emotion.emotion_simple import detect_emotion, build_emotion_hint
-from emotion.emotion_enum import CN_TO_EN, is_unified, ensure_emotion_tag
-from tool_engine.tool_registry import to_openai_tools
-from utils.text_utils import (has_dsml_tool_calls, parse_dsml_tool_calls,
-                              humanize, encode_image_to_base64, strip_reasoning,
-                              strip_dsml)
-from utils.llm_cleanup import deduplicate_multi_reply
-
 # 从 _shared 导入共享常量, 避免重复定义 (该模块极轻量, 无循环导入风险)
 from agent_core._shared import (
-    DEGRADED_REPLY, is_degraded_reply,
+    DEGRADED_REPLY,
     get_empty_reply_for_finish_reason,
+    is_degraded_reply,
+)
+from config import (
+    AGENT_CONFIG,
+    MIMO_MODEL,
+    PRO_TASK_KEYWORDS,
+    SIMPLE_CHAT_FASTPATH,
+    SIMPLE_TASK_KEYWORDS,
+    STREAM_TEXT_PUSH,
+    TTS_ASYNC_MODE,
+    build_safe_system_prompt,
+    get_agent_display_name,
+)
+from core.background_tasks import _spawn
+from core.chat_processor import ChatProcessor
+from core.circuit_breaker import CircuitState
+from core.degradation_strategy import get_degradation_strategy
+from emotion.emotion_enum import CN_TO_EN, ensure_emotion_tag, is_unified
+from emotion.emotion_simple import build_emotion_hint, detect_emotion
+from prompt_builder import build_scene_aware_prompt
+from tool_engine.tool_registry import to_openai_tools
+from utils.common import safe_int as _safe_int
+from utils.llm_cleanup import deduplicate_multi_reply
+from utils.text_utils import (
+    encode_image_to_base64,
+    has_dsml_tool_calls,
+    humanize,
+    parse_dsml_tool_calls,
+    strip_dsml,
+    strip_reasoning,
 )
 
 
@@ -53,7 +64,6 @@ def _get_temperature(model_cfg: dict | None = None) -> float:
 if TYPE_CHECKING:
     from agent_core._shared import RequestContext
 from agent_core._shared import ProcessResult
-
 
 # ── G1: 问候短路（模块级编译正则，一次编译多次使用） ───────────
 _GREETING_PATTERN = re.compile(

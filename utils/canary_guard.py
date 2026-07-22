@@ -3,8 +3,9 @@
 在 system prompt 中注入随机 canary 标记,
 每次 LLM 输出后扫描, 泄露则阻断响应 + 告警。
 """
-import secrets
 import re
+import secrets
+
 from loguru import logger
 
 

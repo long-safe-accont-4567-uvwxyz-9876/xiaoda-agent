@@ -1,17 +1,19 @@
 """Agnes AI 图像/视频生成工具"""
-from typing import TYPE_CHECKING, Any
-import os
 import asyncio
 import base64
+import os
 import time
 from collections import defaultdict
+from typing import TYPE_CHECKING, Any
+
 from loguru import logger
-from tool_engine.tool_registry import register_tool, ToolResult, ToolPermission
+
 from config import AGNES_IMAGE_MODEL, AGNES_VIDEO_MODEL, FILE_DIR
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
 
 if TYPE_CHECKING:
-    from openai import AsyncOpenAI
     import httpx
+    from openai import AsyncOpenAI
 
 # 速率限制：滑动窗口
 _RATE_LIMITS = {

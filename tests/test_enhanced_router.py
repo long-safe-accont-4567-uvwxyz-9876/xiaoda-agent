@@ -1,8 +1,10 @@
 # tests/test_enhanced_router.py
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+
+from core.behavioral_direction import DirectionRegistry, DirectionVector
 from core.behavioral_signal import BehavioralSignalStream
-from core.behavioral_direction import DirectionVector, DirectionRegistry
 from core.enhanced_router import EnhancedBeliefRouter
 
 

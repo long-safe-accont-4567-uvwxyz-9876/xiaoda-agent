@@ -1,5 +1,5 @@
-from .pad_model import PADEmotion, from_emotion as pad_from_emotion
-
+from .pad_model import PADEmotion
+from .pad_model import from_emotion as pad_from_emotion
 
 # ── 统一后的 9 类关键词集（合并 emotion_simple + sticker_manager 关键词） ──
 

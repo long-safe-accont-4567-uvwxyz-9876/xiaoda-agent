@@ -1,8 +1,8 @@
+import base64
+import contextlib
 import random
 import re
-import base64
 from pathlib import Path
-import contextlib
 
 AI_PATTERNS = [
     (r'此外[，,]?\s*', ''),
@@ -458,7 +458,7 @@ def strip_reasoning(text: str) -> str:
     if not text:
         return text
     original_len = len(text)
-    
+
     # 1. 标签包裹的推理
     text = _REASONING_TAG_PATTERN.sub('', text)
     # 1b. 孤立闭合标签：agnes 输出 "推理</thinking>回复"，无开标签，之前全是推理
@@ -472,24 +472,24 @@ def strip_reasoning(text: str) -> str:
     text = _LEAKED_XML_TAGS_PATTERN.sub('', text)
     # 1d. 记忆/系统方括号标记泄漏清洗：[相关记忆] 等
     text = _LEAKED_MEMORY_MARKERS_PATTERN.sub('', text)
-    
+
     # 2. Agnes 模型推理标签
     text = _EMOTION_REASONING_PATTERN.sub('', text)
-    
+
     # 3. 第三人称引用
     text = _THIRD_PERSON_PATTERN.sub('', text)
-    
+
     # 4. 内部决策
     text = _INTERNAL_DECISION_PATTERN.sub('', text)
-    
+
     # 5. 裸文本推理行
     text = _REASONING_LINE_PATTERN.sub('', text)
-    
+
     # 6. 连续多行英文推理块
     text = _REASONING_BLOCK_PATTERN.sub('', text)
     text = _AGNES_REASONING_BLOCK.sub('', text)
     text = _EXTENDED_REASONING_BLOCK.sub('', text)
-    
+
     # 7. 中文内部独白/推理行
     text = _CHINESE_REASONING_LINE_PATTERN.sub('', text)
 
@@ -533,7 +533,7 @@ def strip_reasoning(text: str) -> str:
     text = '\n'.join(_filtered)
 
     text = text.strip()
-    
+
     # 过度截断保护
     cleaned_len = len(text)
     if original_len > 100 and cleaned_len < original_len * 0.3:

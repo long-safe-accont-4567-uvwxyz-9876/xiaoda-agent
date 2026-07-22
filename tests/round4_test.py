@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """第四轮深度测试 - 真实 API 调用 + 工具执行流程 + 剩余 Bug 检测"""
 import asyncio
-import sys
 import os
+import sys
 from pathlib import Path
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 # 项目根目录 (基于当前文件位置计算，避免硬编码绝对路径)
@@ -34,7 +35,7 @@ async def test_real_api():
 
     # 测试 ErrorClassifier + CredentialPool 集成（通过 route 方法）
     print("\n[2] 测试路由表:")
-    from model_router import ROUTE_TABLE, FALLBACK_ROUTE
+    from model_router import FALLBACK_ROUTE, ROUTE_TABLE
     for name, config in ROUTE_TABLE.items():
         print(f"    {name}: {config.get('model', '?')} ({config.get('client', '?')})")
 

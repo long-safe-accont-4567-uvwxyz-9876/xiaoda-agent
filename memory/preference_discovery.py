@@ -10,7 +10,6 @@
 """
 from __future__ import annotations
 
-import time
 from typing import Any
 
 import numpy as np
@@ -53,7 +52,7 @@ class PreferenceDiscovery:
 
         try:
             # 防御性加固：session_content 可能含 {} 字符
-            prompt = self.STAGE_C_PROMPT.replace("{session_content}", session_content)
+            _prompt = self.STAGE_C_PROMPT.replace("{session_content}", session_content)
             # 实际实现中调用LLM
             # response = await llm_client.chat(...)
             # return parse_json(response)["facts"]

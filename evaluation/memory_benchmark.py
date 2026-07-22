@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import json
+from collections.abc import Sequence
 from math import ceil, log2
 from pathlib import Path
 from time import perf_counter
@@ -128,13 +128,13 @@ def run_benchmark(
         irrelevant_rates.append(irrelevant_spread_rate(ranked, relevant, seeds))
 
     count = len(cases)
-    mean = lambda values: sum(values) / count if count else 0.0
+    def _mean(values): return sum(values) / count if count else 0.0
     return {
         "case_count": count,
-        "recall_at_k": mean(recalls),
-        "mrr": mean(reciprocal_ranks),
-        "ndcg_at_k": mean(ndcgs),
-        "irrelevant_spread_rate": mean(irrelevant_rates),
+        "recall_at_k": _mean(recalls),
+        "mrr": _mean(reciprocal_ranks),
+        "ndcg_at_k": _mean(ndcgs),
+        "irrelevant_spread_rate": _mean(irrelevant_rates),
         "latency_ms": latency_percentiles(latencies),
         "rankings": rankings,
     }

@@ -1,13 +1,11 @@
 """EntityExtractor 混合实体提取测试：jieba+规则快抽 → LLM 精抽"""
-import asyncio
-import pytest
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from memory.entity_extractor import EntityExtractor, Entity
+from memory.entity_extractor import Entity, EntityExtractor
 
 
 class TestEntityDataclass:
@@ -40,7 +38,7 @@ class TestRuleBasedExtract:
         """提取专有名词（人名）"""
         extractor = self._make_extractor()
         entities = extractor._rule_based_extract("张三今天去了北京")
-        names = [e.name for e in entities]
+        _names = [e.name for e in entities]
         # jieba 应能识别 "张三" 或 "北京"
         assert len(entities) > 0
 
@@ -152,7 +150,7 @@ class TestExtractIntegration:
             Entity(name="编程", entity_type="TOPIC", confidence=0.8),
         ])
         extractor._llm_extract = AsyncMock(return_value=[])
-        entities = await extractor.extract("重要记忆", importance=0.85)
+        _entities = await extractor.extract("重要记忆", importance=0.85)
         extractor._llm_extract.assert_awaited_once()
 
     def test_merge_entities_dedup(self):

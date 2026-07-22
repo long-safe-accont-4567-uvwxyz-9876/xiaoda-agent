@@ -66,6 +66,7 @@ def test_contradiction_prompt_no_double_braces():
 def test_contradiction_prompt_has_valid_json_instruction():
     """CONTRADICTION_PROMPT 应输出合法的 JSON 指令（CodeRabbit F2: 用 json.loads 验证）。"""
     import json
+
     from memory.knowledge_graph_v2 import CONTRADICTION_PROMPT
 
     # 应包含 {"contradicted_indices": ...} 而不是 {{...}}

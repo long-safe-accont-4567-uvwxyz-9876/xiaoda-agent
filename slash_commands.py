@@ -1,11 +1,11 @@
-from typing import Any
 import asyncio
 import json
 import os
 import shutil
 import time
-from loguru import logger
+from typing import Any
 
+from loguru import logger
 
 OWNER_ONLY_COMMANDS: set[str] = {
     "/reset",   # 系统重置（清空对话上下文，影响运行时状态）
@@ -666,6 +666,7 @@ class SlashCommandHandler:
             /doctor fix       自动修复可修复的问题
         """
         import asyncio
+
         from core.doctor import _create_default_doctor
 
         doc = _create_default_doctor()
@@ -733,6 +734,7 @@ class SlashCommandHandler:
             return "工作流 ID 格式不正确（只能含字母/数字/下划线/中文/连字符）"
 
         import json
+
         from config import WORKSPACE_DIR
 
         wf_path = WORKSPACE_DIR / "workflows" / f"{args}.json"

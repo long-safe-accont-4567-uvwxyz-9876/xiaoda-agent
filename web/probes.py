@@ -1,11 +1,11 @@
 """健康探针（R12）— LLM / TTS / 视频 / MCP / DB / 向量库 在线探活。"""
 from __future__ import annotations
-from typing import Any
 
+import asyncio
 import json
 import time
-import asyncio
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -69,6 +69,7 @@ async def probe_provider(core: Any, provider_id: str) -> dict:
 async def _resolve_provider_model(record: dict, provider_id: str, key: str) -> str:
     """解析 provider 的默认模型，依次从 record/ROUTE_TABLE/API 列表获取"""
     import asyncio
+
     from web.custom_providers import build_client
 
     model = record.get("default_model") or ""
@@ -110,6 +111,7 @@ def _pick_model_from_list(model_list: list) -> str:
 async def _perform_provider_probe(record: dict, key: str, model: str, t0: float) -> dict:
     """构建临时客户端并发起探活请求"""
     import asyncio
+
     from web.custom_providers import build_client
 
     try:
@@ -152,6 +154,7 @@ async def probe_tts(core: Any) -> dict:
         audio_url = None
         if ok:
             import shutil
+
             from web.media_tasks import MEDIA_ROOT
             dest = MEDIA_ROOT / "tts" / Path(path).name
             if Path(path).resolve() != dest.resolve():

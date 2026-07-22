@@ -61,8 +61,8 @@ def test_xp_segment_lv1(tmp_xp):
 
 def test_xp_segment_lv3(tmp_xp):
     """LV3 段落正确：可使用昵称、深度情感陪伴"""
-    from prompt_builder import _build_xp_segment
     from core.xp_system import XPLevel
+    from prompt_builder import _build_xp_segment
     # 加 500 XP → LV3 朋友
     tmp_xp.add_xp("u_lv3", 500, "test", "")
     assert tmp_xp.get_state("u_lv3").level == XPLevel.LV3_FRIEND

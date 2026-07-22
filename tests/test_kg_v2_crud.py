@@ -1,5 +1,4 @@
 """KnowledgeDBV2 CRUD 单元测试。"""
-import json
 import time
 
 import pytest

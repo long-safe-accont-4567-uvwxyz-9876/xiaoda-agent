@@ -1,28 +1,31 @@
-from typing import Any, ClassVar
-from collections.abc import AsyncIterator
+import asyncio
+import contextlib
+import contextvars
 import hashlib
 import os
 import time
-import asyncio
-import contextvars
-from openai import AsyncOpenAI
+from collections.abc import AsyncIterator
+from typing import Any, ClassVar
+
 import openai as _openai_mod  # 用于 openai.APIError 异常捕获
 from loguru import logger
+from openai import AsyncOpenAI
 
-from db.db_analytics import AnalyticsDB
-from utils.metrics import metrics
 from config import AGNES_BASE_URL, AGNES_TEXT_MODEL, PROMPT_CACHING_ENABLED
-from config import MODEL_NAME as _CFG_MODEL_NAME, PRO_MODEL_NAME as _CFG_PRO_MODEL
-from config import FLASH_MODEL_NAME as _CFG_FLASH_MODEL, DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
+from config import DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
+from config import FLASH_MODEL_NAME as _CFG_FLASH_MODEL
+from config import MODEL_NAME as _CFG_MODEL_NAME
+from config import PRO_MODEL_NAME as _CFG_PRO_MODEL
 from config import set_default_provider as _set_default_provider
-from transports import ProviderTransport, MiMoTransport, AgnesTransport
-from utils.prompt_caching import apply_cache_control
-from utils.error_classifier import ErrorClassifier, RecoveryAction
-from utils.credential_pool import get_credential_pool
-from security.ssrf_guard import validate_url as _ssrf_validate_url
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
-import contextlib
+from db.db_analytics import AnalyticsDB
+from security.ssrf_guard import validate_url as _ssrf_validate_url
+from transports import AgnesTransport, MiMoTransport, ProviderTransport
+from utils.credential_pool import get_credential_pool
+from utils.error_classifier import ErrorClassifier, RecoveryAction
+from utils.metrics import metrics
+from utils.prompt_caching import apply_cache_control
 
 
 def _mask_api_key(key: str) -> str:
@@ -243,8 +246,8 @@ class ModelRouter:
     def _lazy_register_provider(self, provider: str) -> None:
         """懒注册：从 config_service 恢复未注册的自定义 provider。"""
         try:
-            from web.config_service import get_config_service
             from web._provider_keys import load_provider_key
+            from web.config_service import get_config_service
             from web.custom_providers import register_into_router
             cfg = get_config_service()
             record = cfg.get(f"models.providers.{provider}")

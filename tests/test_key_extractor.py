@@ -1,5 +1,4 @@
 """Key 提取器单元测试"""
-import pytest
 
 from memory.key_extractor import KeyExtractor
 

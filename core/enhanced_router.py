@@ -14,9 +14,9 @@
 """
 from loguru import logger
 
-from core.behavioral_signal import BehavioralSignalStream
-from core.behavioral_direction import DirectionRegistry
 from config import AGENT_TASK_MAP
+from core.behavioral_direction import DirectionRegistry
+from core.behavioral_signal import BehavioralSignalStream
 
 
 class EnhancedBeliefRouter:

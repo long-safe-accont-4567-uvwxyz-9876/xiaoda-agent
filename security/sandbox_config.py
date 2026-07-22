@@ -9,6 +9,7 @@ import os
 import socket
 from dataclasses import dataclass, field
 from pathlib import Path
+
 from loguru import logger
 
 
@@ -35,12 +36,13 @@ class SandboxSettings:
 
 # ── 项目根目录（用于默认沙箱配置）──
 import tempfile
+
 _PROJECT_ROOT = str(Path(__file__).parent)
 # 跨平台临时目录
 _TEMP_DIR = tempfile.gettempdir()
 # 用户数据目录（frozen 模式下为 ~/.ai-agent，开发模式下为项目根）
 try:
-    from config import DATA_DIR, WORKSPACE_DIR, FILE_DIR, MEDIA_DIR, VOICE_REF_DIR
+    from config import DATA_DIR, FILE_DIR, MEDIA_DIR, VOICE_REF_DIR, WORKSPACE_DIR
     _USER_DATA_DIRS = [str(DATA_DIR), str(WORKSPACE_DIR), str(FILE_DIR), str(MEDIA_DIR), str(VOICE_REF_DIR)]
 except ImportError:
     _USER_DATA_DIRS = []
