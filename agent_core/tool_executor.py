@@ -545,7 +545,26 @@ class ToolExecutorMixin:
             clean_reply = self.sticker_manager.strip_emotion_tag(clean_reply)
             if (self.sticker_manager.available
                     and get_degradation_strategy().is_feature_available("emotion")):
+                # 三级 fallback: 精确文件名 → 情绪名 → resolve_emotion 映射 → 文本检测
+                # LLM 常输出 [sticker:情绪名]（如 crying/shy）而非 [sticker:文件名]
                 path = self.sticker_manager.pick_by_name(filename)
+                if path:
+                    return clean_reply, path
+                # 2. 按情绪名查找（filename 当情绪名用，如 "shy" → pick("shy")）
+                path = self.sticker_manager.pick(filename)
+                if path:
+                    return clean_reply, path
+                # 3. resolve_emotion 映射（如 "crying" → SAD → "sad" 目录）
+                from emotion.emotion_enum import resolve_emotion, STICKER_FALLBACK
+                resolved = resolve_emotion(filename)
+                mapped = STICKER_FALLBACK.get(resolved, "")
+                if mapped:
+                    path = self.sticker_manager.pick(mapped)
+                    if path:
+                        return clean_reply, path
+                # 4. 最终 fallback: 文本情绪检测 → neutral
+                detected = self.sticker_manager.detect_emotion(clean_reply) or "neutral"
+                path = self.sticker_manager.pick(detected)
                 if path:
                     return clean_reply, path
                 logger.warning(f"sticker.not_found name={filename}")

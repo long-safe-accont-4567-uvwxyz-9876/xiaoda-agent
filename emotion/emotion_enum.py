@@ -52,6 +52,7 @@ EMOTION_ALIASES: dict[str, Emotion] = {
     "可惜": Emotion.SAD, "遗憾": Emotion.SAD, "失落": Emotion.SAD,
     "委屈": Emotion.SAD, "晕眩": Emotion.SAD, "难受": Emotion.SAD,
     "lonely": Emotion.SAD, "depressed": Emotion.SAD,
+    "crying": Emotion.SAD,  # LLM 常用 crying 表达悲伤（sticker 标签 fallback）
     # angry（愤怒）
     "愤怒": Emotion.ANGRY, "生气": Emotion.ANGRY, "恼怒": Emotion.ANGRY,
     "不满": Emotion.ANGRY, "烦躁": Emotion.ANGRY,
