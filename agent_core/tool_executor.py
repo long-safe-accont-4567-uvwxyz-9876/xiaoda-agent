@@ -253,19 +253,19 @@ class ToolExecutorMixin:
         # 裸 pollinations URL（贪婪到首个空白，URL 不含空格）
         pollinations_re = re.compile(r'https?://image\.pollinations\.ai/\S+')
 
-        # 收集 pollinations URL（markdown 图内 + 裸 URL），去重保序
-        raw_urls: list[str] = list(md_img_re.findall(reply))
-        raw_urls.extend(pollinations_re.findall(reply))
+        # 仅通过 pollinations_re 收集 URL（贪婪 \S+ 捕获完整 URL token）。
+        # 不从 md_img_re 收集：LLM 伪造的 markdown 常含异常嵌套括号（如 "url)?width=...true)"），
+        # md_img_re 会在中途的 ')' 处提前截断，与 pollinations_re 捕获不一致导致去重失败、重复下载。
+        # md_img_re 仅用于文本剥离。下载仅限 pollinations 域，避免下载任意 URL 的安全风险。
         seen: set[str] = set()
         clean_urls: list[str] = []
-        for u in raw_urls:
+        for u in pollinations_re.findall(reply):
             cu = u.rstrip(').,;:!?')
             if cu and cu not in seen:
                 seen.add(cu)
                 clean_urls.append(cu)
 
-        # 仅下载 pollinations URL（避免下载任意 URL 的安全风险）
-        download_urls = [u for u in clean_urls if 'image.pollinations.ai' in u]
+        download_urls = clean_urls  # 均为 pollinations URL
         if download_urls:
             img_dir = FILE_DIR if FILE_DIR.exists() else Path("tts_cache")
             img_dir.mkdir(parents=True, exist_ok=True)

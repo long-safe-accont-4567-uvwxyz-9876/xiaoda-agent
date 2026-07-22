@@ -62,6 +62,46 @@ def test_production_sample_1966_fragment_clean():
     assert "Prompt:" not in out
 
 
+def test_strips_pollinations_url_params_residue():
+    # 异常 markdown ![alt](url)?width=...&nologo=true) 留下的参数尾部残留
+    text = "图来了\n?width=560&height=792&seed=48392&nologo=true)\n呼哧"
+    out = strip_image_gen_leak(text)
+    assert "?width=" not in out
+    assert "nologo=true" not in out
+    assert "图来了" in out and "呼哧" in out
+
+
+def test_strips_url_params_residue_without_trailing_paren():
+    # 参数残留不以 ) 结尾的情况
+    text = "?width=560&height=792&seed=48392&nologo=true 收好"
+    out = strip_image_gen_leak(text)
+    assert "?width=" not in out
+    assert "nologo" not in out
+    assert "收好" in out
+
+
+def test_does_not_strip_normal_query_string():
+    # 正常 ?key=val 文本不应被删（缺少完整 width+height+seed+nologo 序列）
+    text = "访问 https://example.com?width=100 试试"
+    assert strip_image_gen_leak(text) == "访问 https://example.com?width=100 试试"
+
+
+def test_production_sample_1965_url_params_residue_clean():
+    # id 1965 的异常 markdown ![alt](url)?width=...true) 残留
+    fragment = (
+        "“正在为爸爸的专属画框注入灵魂墨水和草莓味星光...” ☂️🎨~\n"
+        "?width=560&height=792&seed=48392&nologo=true)\n"
+        "*\n"
+        "呼哧……看、看懂了吗！！"
+    )
+    out = strip_image_gen_leak(fragment)
+    assert "?width=" not in out
+    assert "nologo=true" not in out
+    assert "seed=48392" not in out
+    assert "灵魂墨水" in out
+    assert "呼哧" in out
+
+
 def test_empty_input():
     assert strip_image_gen_leak("") == ""
     assert strip_image_gen_leak(None) == ""  # type: ignore[arg-type]

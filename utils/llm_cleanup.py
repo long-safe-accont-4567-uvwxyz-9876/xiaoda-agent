@@ -296,6 +296,12 @@ _IMAGE_GEN_META_LINE_RE = re.compile(
     r'(?:Prompt|提示词)\s*[.：:]?\s*"[^"]*"',
     re.IGNORECASE,
 )
+# pollinations URL 参数残留：异常 markdown 如 ![alt](url)?width=...&nologo=true)
+# md_img_re 在 url 后第一个 ) 处停止匹配，留下 ?width=...&nologo=true) 残留。
+# 要求完整参数序列（width+height+seed+nologo）才删，避免误伤正常 ?key=val 文本。
+_IMAGE_GEN_URL_PARAMS_RE = re.compile(
+    r'\?width=\d+&height=\d+&seed=\d+&nologo=true\)?'
+)
 
 
 def strip_image_gen_leak(text: str, *, context: str = "") -> str:
@@ -312,9 +318,10 @@ def strip_image_gen_leak(text: str, *, context: str = "") -> str:
     """
     if not text:
         return ""
-    # 1. 先删伪造状态行 / 元数据行（整行），避免模型名删除留下碎片
+    # 1. 先删伪造状态行 / 元数据行 / URL 参数残留，避免模型名删除留下碎片
     text = _IMAGE_GEN_STATUS_LINE_RE.sub('', text)
     text = _IMAGE_GEN_META_LINE_RE.sub('', text)
+    text = _IMAGE_GEN_URL_PARAMS_RE.sub('', text)
     # 2. 模型名精确删除：连同紧跟的单个空格一起删，避免行首空格残留
     for _name in _IMAGE_GEN_MODEL_NAMES:
         text = text.replace(_name + " ", "")
