@@ -10,7 +10,7 @@ from tool_engine.tool_registry import to_openai_tools
 from tool_engine.tool_executor import ToolExecutor, ToolResult
 from tool_engine.tool_repair import ToolCallRepair
 from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_dsml, strip_reasoning, humanize
-from utils.llm_cleanup import deduplicate_multi_reply
+from utils.llm_cleanup import deduplicate_multi_reply, strip_system_leak
 from emotion.tts_engine import TTSEngine
 from emotion.emoji_config import get_status_msg
 from tool_engine.tool_guardrails import get_tool_guardrails
@@ -559,6 +559,7 @@ class SubAgent:
                 # content 为空时让上层 fallback（返回提示语），更安全。
                 content = strip_dsml(content)
                 content = strip_reasoning(content)
+                content = strip_system_leak(content, context="sub_agent.chat")
                 content = deduplicate_multi_reply(content)
                 content = humanize(content, style="xiaoda")
                 logger.info("sub_agent.chat.ok", name=self.config.name, model=self.config.model, rounds=round_idx)
@@ -803,7 +804,7 @@ class SubAgent:
             )
             reply = response.choices[0].message.content or ""
             # 不使用 reasoning_content 代替 content（防止推理泄漏）
-            result = strip_reasoning(strip_dsml(reply)).strip()
+            result = strip_system_leak(strip_reasoning(strip_dsml(reply)), context="agent_dispatcher.direct_call").strip()
             # 兜底：如果过滤后为空（如模型只输出推理泄露），返回提示
             if not result:
                 return f"{self.config.display_name}思考了一下，但还没有整理好回答，请稍等或换个问题问我吧～"

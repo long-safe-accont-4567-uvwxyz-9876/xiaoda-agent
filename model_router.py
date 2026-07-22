@@ -1168,6 +1168,10 @@ class ModelRouter:
             from utils.text_utils import strip_reasoning
             content = strip_reasoning(content)
 
+        # 3. 清理系统提示词/错误详情/安全推理泄漏（无论 thinking 是否禁用，都必须执行）
+        from utils.llm_cleanup import strip_system_leak
+        content = strip_system_leak(content, context="model_router.route")
+
         return content
 
     async def _rotate_credential_on_error(self, provider: str, classified: Any) -> None:
