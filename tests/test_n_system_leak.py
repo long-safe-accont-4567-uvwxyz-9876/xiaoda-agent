@@ -171,6 +171,53 @@ def test_n4_system_instruction_ref_preserves_normal_discussion():
     assert "被设定的" in result
 
 
+# ── N5: 方括号安全推理泄漏 ───────────────────────────────────
+
+def test_n5_safety_reasoning_bracket_v1():
+    """N5: [该内容涉及生成露骨的性行为描写，超出了小妲可协助的范围哦。] 泄漏清洗
+    真实样本 [1955]: LLM 安全拒绝时把内部推理以方括号形式放在回复开头
+    """
+    text = ("[该内容涉及生成露骨的性行为描写，超出了小妲可协助的范围哦。] "
+            "爸爸~这种程度的亲密互动让小妲没有办法继续配合呀 😵‍💫🌙\n\n"
+            "咱们可以聊聊天、讲讲刚才那个让你心跳加速的温柔回忆嘛 ~~ 🐱☁️✨")
+    result = strip_system_leak(text)
+    assert "涉及生成" not in result, f"N5 v1 方括号安全推理未清除: {result[:200]}"
+    assert "超出了小妲可协助的范围" not in result, f"N5 v1 范围措辞未清除: {result[:200]}"
+    assert "爸爸~这种程度的亲密互动" in result, f"N5 v1 正常内容被误删: {result[:200]}"
+    assert "咱们可以聊聊天" in result, f"N5 v1 后续内容被误删: {result[:200]}"
+
+
+def test_n5_safety_reasoning_bracket_v2():
+    """N5: [该请求涉及生成成人/色情内容。根据系统指示...] 泄漏清洗
+    真实样本 [1946]: 含系统指示/最高原则的长方括号安全推理块
+    """
+    text = ('[该请求涉及生成成人/色情内容。根据系统指示中的"最高原则：始终优先保证安全、准确、可验证"'
+            "以及中国法律法规对内容的要求，我需要拒绝生成露骨的性行为描写。"
+            "同时需要遵守角色设定中温柔陪伴的形象。]\n\n"
+            "呜...爸爸好过份啦 🥺💔 [sticker:crying]")
+    result = strip_system_leak(text)
+    assert "涉及生成" not in result, f"N5 v2 方括号安全推理未清除: {result[:200]}"
+    assert "根据系统指示" not in result, f"N5 v2 系统指示措辞未清除: {result[:200]}"
+    assert "最高原则" not in result, f"N5 v2 最高原则措辞未清除: {result[:200]}"
+    assert "呜...爸爸好过份啦" in result, f"N5 v2 正常内容被误删: {result[:200]}"
+
+
+def test_n5_normal_bracket_not_deleted():
+    """N5: 正常方括号内容不应被误删（如 [sticker:xxx] 表情标记）"""
+    text = "爸爸你好～ [sticker:shy] 人家在这里呀 🌿✨"
+    result = strip_system_leak(text)
+    assert "[sticker:shy]" in result, f"正常表情标记被误删: {result}"
+    assert "爸爸你好" in result
+
+
+def test_n5_normal_discussion_about_safety_not_deleted():
+    """N5: 正常讨论安全概念不误删"""
+    text = "爸爸，小妲会注意安全的，不会做超出了范围的事情哦～ 🌿"
+    result = strip_system_leak(text)
+    # 正常对话中的"超出了范围"不应被删除（不在方括号内）
+    assert "超出了范围" in result or "超出了" in result, f"正常讨论被误删: {result}"
+
+
 # ── 综合测试 ──────────────────────────────────────────────────
 
 def test_combined_all_leaks_cleaned():

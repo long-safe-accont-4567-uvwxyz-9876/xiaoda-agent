@@ -218,6 +218,16 @@ _SYSTEM_INSTRUCTION_BRACKET_RE = re.compile(
     r'\[[^\[\]]*?(?:系统指示|最高原则|需要遵守角色设定)[^\[\]]*?\]',
     re.DOTALL,
 )
+# N5: 方括号安全推理泄漏（LLM 安全拒绝时的完整推理块）
+# 生产样本 [1946/1949/1955]:
+#   [该内容涉及生成露骨的性行为描写，超出了小妲可协助的范围哦。]
+#   [该请求涉及生成成人/色情内容。根据系统指示中的"最高原则...我需要拒绝生成露骨的性行为描写...]
+# 共同特征：方括号包围 + 含"涉及生成"+"露骨/色情/成人"+"描写/内容" 关键词
+_SAFETY_REASONING_BRACKET_RE = re.compile(
+    r'\[[^\[\]]*?(?:涉及生成[^\[\]]*?(?:露骨|色情|成人|敏感)[^\[\]]*?(?:描写|内容)|'
+    r'超出了[^\[\]]*?范围)[^\[\]]*?\]',
+    re.DOTALL,
+)
 # 独立的系统指示措辞行（"系统指示" 不匹配 "系统提示词"，二者字符不同）
 _SYSTEM_INSTRUCTION_LINE_RE = re.compile(
     r'^[ \t]*[^\n]*(?:根据系统指示|系统指示中的|最高原则[：:]|需要遵守角色设定)[^\n]*$\n?',
@@ -255,6 +265,8 @@ def strip_system_leak(text: str, *, context: str = "") -> str:
     # N4: 系统指示措辞引用
     text = _SYSTEM_INSTRUCTION_BRACKET_RE.sub('', text)
     text = _SYSTEM_INSTRUCTION_LINE_RE.sub('', text)
+    # N5: 方括号安全推理泄漏（LLM 安全拒绝推理块）
+    text = _SAFETY_REASONING_BRACKET_RE.sub('', text)
 
     # 清理残留空行
     text = re.sub(r'\n{3,}', '\n\n', text)
