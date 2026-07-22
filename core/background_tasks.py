@@ -112,12 +112,17 @@ class BackgroundTaskManager:
         emotion: dict,
         tool_results: list,
         session_id: str = "",
+        model_used: str = "",
     ) -> None:
-        """启动所有后台任务（fire-and-forget）。"""
+        """启动所有后台任务（fire-and-forget）。
+
+        model_used: 本次回复实际使用的 LLM 模型名，透传到 insert_conversation_log，
+        便于后续追溯每条对话使用的模型（排查模型输出质量问题/降级链路分析）。
+        """
         _spawn(
             self._background_tasks(
                 user_input, reply, user_id, source, emotion, tool_results,
-                session_id=session_id,
+                session_id=session_id, model_used=model_used,
             )
         )
 
@@ -130,11 +135,13 @@ class BackgroundTaskManager:
         emotion: dict,
         tool_results: list,
         session_id: str = "",
+        model_used: str = "",
     ) -> None:
         # 持久化任务独立 fire-and-forget，避免 DB 长事务阻塞其他后台任务启动
         _spawn(
             self._run_persistence_tasks(
-                user_input, reply, user_id, source, emotion, session_id
+                user_input, reply, user_id, source, emotion, session_id,
+                model_used=model_used,
             )
         )
         await self._run_manager_tasks(user_input, reply, tool_results, session_id)
@@ -148,6 +155,7 @@ class BackgroundTaskManager:
         source: str,
         emotion: dict,
         session_id: str,
+        model_used: str = "",
     ) -> None:
         """对话日志、会话更新、记忆编码等持久化任务。
 
@@ -164,6 +172,7 @@ class BackgroundTaskManager:
                 user_message=user_input,
                 assistant_reply=reply,
                 emotion_label=emotion.get("primary", ""),
+                model_used=model_used,
                 session_id=session_id,
                 auto_commit=False,
             )

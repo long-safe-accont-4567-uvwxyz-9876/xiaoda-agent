@@ -111,11 +111,16 @@ class SmartErrorHandler:
 
         error_ctx = self.record_error(error, context)
 
-        # 生成用户友好的错误回复
-        reply_parts = [
-            f"⚠️ 执行时遇到了点小问题：{error_ctx.error_type}",
-            f"📝 错误详情：{error_ctx.error_message[:200]}"
-        ]
+        # L2+L7 修复: 技术错误详情只记录到日志，不发给用户
+        # 之前直接把 "RuntimeError" / "empty_reply" / "finish_reason" 发给用户，
+        # 用户看到技术术语完全无法理解。改为返回用户友好的中文提示。
+        logger.warning("error_handler.user_facing_reply",
+                       type=error_ctx.error_type,
+                       msg=error_ctx.error_message[:200],
+                       context=context)
+
+        # 用户友好的默认回复
+        reply_parts = ["抱歉，小妲刚才走神了，能再说一遍吗～ 🌿"]
 
         if error_ctx.suggested_fix:
             reply_parts.append(f"\n💡 修复建议：{error_ctx.suggested_fix}")

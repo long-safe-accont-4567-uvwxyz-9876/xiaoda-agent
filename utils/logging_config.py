@@ -121,33 +121,40 @@ def setup_logging() -> None:
     _is_test_mode = os.environ.get("TEST_MODE", "").lower() in ("1", "true", "yes")
 
     if not _is_test_mode:
-        # 确保日志目录存在
-        log_dir = LOG_DIR
-        log_dir.mkdir(exist_ok=True)
+        # L6 修复: 文件 sink 创建加 try/except，防止 USB 盘只读时全应用崩溃
+        # crash 证据: OSError: [Errno 30] Read-only file system (2026-07-17)
+        try:
+            # 确保日志目录存在
+            log_dir = LOG_DIR
+            log_dir.mkdir(exist_ok=True)
 
-        # 保留原有结构化文件日志（loguru serialize 模式，不破坏现有输出）
-        log_path = log_dir / "agent_{time:YYYY-MM-DD}.json"
-        logger.add(
-            str(log_path),
-            format="{time} {level} {extra[trace_id]} {message}",
-            serialize=True,
-            rotation="00:00",
-            retention="30 days",
-            level="INFO",
-            encoding="utf-8",
-            enqueue=True,  # 异步队列写入，避免事件循环阻塞
-        )
+            # 保留原有结构化文件日志（loguru serialize 模式，不破坏现有输出）
+            log_path = log_dir / "agent_{time:YYYY-MM-DD}.json"
+            logger.add(
+                str(log_path),
+                format="{time} {level} {extra[trace_id]} {message}",
+                serialize=True,
+                rotation="00:00",
+                retention="30 days",
+                level="INFO",
+                encoding="utf-8",
+                enqueue=True,  # 异步队列写入，避免事件循环阻塞
+            )
 
-        # 新增文本格式文件日志 logs/agent.log，便于直接查看
-        text_log_path = log_dir / "agent.log"
-        logger.add(
-            str(text_log_path),
-            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[trace_id]} | {message}",
-            rotation="10 MB",
-            retention="30 days",
-            level="INFO",
-            encoding="utf-8",
-            enqueue=True,  # 异步队列写入，避免事件循环阻塞
-        )
+            # 新增文本格式文件日志 logs/agent.log，便于直接查看
+            text_log_path = log_dir / "agent.log"
+            logger.add(
+                str(text_log_path),
+                format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[trace_id]} | {message}",
+                rotation="10 MB",
+                retention="30 days",
+                level="INFO",
+                encoding="utf-8",
+                enqueue=True,  # 异步队列写入，避免事件循环阻塞
+            )
+        except (OSError, PermissionError) as e:
+            # 日志目录不可写（USB 盘只读/权限不足），降级到 stderr-only
+            # 不崩溃应用——stderr sink 已在上面添加，日志仍可输出到控制台
+            print(f"[logging] WARNING: 文件日志不可用（{e}），降级到 stderr-only", file=sys.stderr)
 
     logger.info("日志系统就绪")

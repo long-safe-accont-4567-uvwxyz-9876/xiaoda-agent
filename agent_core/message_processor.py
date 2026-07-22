@@ -862,8 +862,11 @@ class MessageProcessorMixin:
                 # strip emotion tags before storing to memory
                 _clean_for_memory = self.sticker_manager.strip_emotion_tag(reply)
                 await self.context.add_message("assistant", _clean_for_memory)
+                # L5 修复: 捕获本次回复使用的模型名，透传到 conversation_logs.model_used
+                _model_used = self.router.get_current_chat_model().get("model_id", "")
                 self._bg_task_manager.run_background_tasks(
-                    user_input, _clean_for_memory, user_id, source, emotion, [], session_id=session_id)
+                    user_input, _clean_for_memory, user_id, source, emotion, [],
+                    session_id=session_id, model_used=_model_used)
         try:
             _spawn(self.router.flush_costs())
         except Exception as e:
@@ -1164,8 +1167,11 @@ class MessageProcessorMixin:
                     # strip emotion tags before storing to memory
                     _clean_for_memory = self.sticker_manager.strip_emotion_tag(reply)
                     await self.context.add_message("assistant", _clean_for_memory, reasoning_content=rc)
+                    # L5 修复: 捕获本次回复使用的模型名，透传到 conversation_logs.model_used
+                    _model_used = self.router.get_current_chat_model().get("model_id", "")
                     self._bg_task_manager.run_background_tasks(
-                        user_input, _clean_for_memory, user_id, source, emotion, tool_results, session_id=session_id)
+                        user_input, _clean_for_memory, user_id, source, emotion, tool_results,
+                        session_id=session_id, model_used=_model_used)
         # 偏好管线: 用户纠正 → L1(约束) + L3(教训) 联动 (异步, 不阻塞回复)
         try:
             from core.preference_pipeline import get_preference_pipeline

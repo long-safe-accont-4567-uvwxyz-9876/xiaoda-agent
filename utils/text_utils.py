@@ -116,20 +116,45 @@ TRUNCATION_MARKERS = [
     "\n——人家说到一半啦，等下次再继续吧～",
 ]
 
+# L1 修复: ｜{1,2} 同时匹配双竖线 <｜｜DSML｜｜> 和单竖线 <｜DSML｜> 变体
+# 同时覆盖 tool_calls 和 function_calls 两种标签名
 DSML_PATTERN = re.compile(
-    r'<｜｜DSML｜｜tool_calls>.*?</｜｜DSML｜｜tool_calls>',
+    r'<｜{1,2}DSML｜{1,2}(?:tool_calls|function_calls)>.*?</｜{1,2}DSML｜{1,2}(?:tool_calls|function_calls)>',
     re.DOTALL,
 )
 DSML_INVOKE_PATTERN = re.compile(
-    r'<｜｜DSML｜｜invoke\s+name="(\w+)">.*?</｜｜DSML｜｜invoke>',
+    r'<｜{1,2}DSML｜{1,2}invoke\s+name="(\w+)">.*?</｜{1,2}DSML｜{1,2}invoke>',
     re.DOTALL,
 )
 DSML_PARAM_PATTERN = re.compile(
-    r'<｜｜DSML｜｜parameter\s+name="(\w+)"[^>]*>(.*?)</｜｜DSML｜｜parameter>',
+    r'<｜{1,2}DSML｜{1,2}parameter\s+name="(\w+)"[^>]*>(.*?)</｜{1,2}DSML｜{1,2}parameter>',
     re.DOTALL,
 )
 DSML_LEFTOVER = re.compile(
-    r'<｜｜DSML｜｜[^>]*>',
+    r'<｜{1,2}DSML｜{1,2}[^>]*>',
+    re.DOTALL,
+)
+# L1 修复: 未闭合的 DSML 开标签到文本末尾（LLM 输出格式错误时无闭合标签）
+DSML_OPEN_ONLY_PATTERN = re.compile(
+    r'<｜{1,2}DSML｜{1,2}[^>]*>[\s\S]*$',
+)
+# L4 修复: <operation>recall</operation> 等裸 XML 工具标签泄漏
+OPERATION_TAG_PATTERN = re.compile(
+    r'<operation>\s*\w+\s*</operation>',
+    re.DOTALL,
+)
+# 裸 <function_calls>/<invoke>/<parameter> 无 DSML 前缀
+BARE_FUNCTION_CALLS_PATTERN = re.compile(
+    r'<function_calls>.*?</function_calls>',
+    re.DOTALL,
+)
+BARE_INVOKE_PATTERN = re.compile(
+    r'<invoke\s+name="(\w+)">.*?</invoke>',
+    re.DOTALL,
+)
+# 裸 <param name="...">...</param>（<operation> 泄漏常见搭配）
+BARE_PARAM_PATTERN = re.compile(
+    r'<param\s+name="[^"]*">.*?</param>',
     re.DOTALL,
 )
 FAKE_XML_TOOL_PATTERN = re.compile(
@@ -178,11 +203,18 @@ def strip_dsml(text: str) -> str:
     """
     text = DSML_PATTERN.sub('', text)
     text = DSML_INVOKE_PATTERN.sub('', text)
-    # 8. 泄露的 <｜｜DSML｜｜function_calls> 变体（必须在 DSML_LEFTOVER 之前，否则开标签被提前消费）
-    text = re.sub(r'<｜｜DSML｜｜function_calls>[\s\S]*?</｜｜DSML｜｜function_calls>', '', text)
-    # 9. 泄露的 <｜｜DSML｜｜function_call> 变体
-    text = re.sub(r'<｜｜DSML｜｜function_call>[\s\S]*?</｜｜DSML｜｜function_call>', '', text)
+    # 8. 泄漏的 function_calls/function_call 变体（单/双竖线均覆盖，必须在 DSML_LEFTOVER 之前）
+    text = re.sub(r'<｜{1,2}DSML｜{1,2}function_calls>[\s\S]*?</｜{1,2}DSML｜{1,2}function_calls>', '', text)
+    text = re.sub(r'<｜{1,2}DSML｜{1,2}function_call>[\s\S]*?</｜{1,2}DSML｜{1,2}function_call>', '', text)
     text = DSML_LEFTOVER.sub('', text)
+    # L1 修复: 未闭合的 DSML 标签到末尾（LLM 输出格式错误时无闭合标签）
+    text = DSML_OPEN_ONLY_PATTERN.sub('', text)
+    # L4 修复: <operation>recall</operation> 裸 XML 工具标签
+    text = OPERATION_TAG_PATTERN.sub('', text)
+    # 裸 function_calls/invoke/param（无 DSML 前缀）
+    text = BARE_FUNCTION_CALLS_PATTERN.sub('', text)
+    text = BARE_INVOKE_PATTERN.sub('', text)
+    text = BARE_PARAM_PATTERN.sub('', text)
     text = FAKE_XML_TOOL_PATTERN.sub('', text)
     text = TOOL_CALL_PATTERN.sub('', text)
     # 清理裸 <tool_call>...</tool_call>（含 </think> 错配）
@@ -191,6 +223,8 @@ def strip_dsml(text: str) -> str:
     text = TOOL_CALL_OPEN_ONLY_PATTERN.sub('', text)
     # 清理孤立的 </think> 闭合标签（tool_call错配后残留）
     text = re.sub(r'</think>', '', text, flags=re.IGNORECASE)
+    # L1 修复: 孤立闭合标签（开标签已被 DSML_LEFTOVER 清除，闭标签残留）
+    text = re.sub(r'</(?:function_calls|function_call|invoke|param|operation)>', '', text, flags=re.IGNORECASE)
     # 清理其他常见的工具调用泄露格式
     # 1. 代码块中的 function_call JSON
     text = re.sub(r'```(?:json)?\s*\{[^}]*?function_call[^}]*?\}\s*```', '', text, flags=re.DOTALL)
@@ -464,6 +498,24 @@ def strip_reasoning(text: str) -> str:
 
     # 清理多余空行
     text = re.sub(r'\n{3,}', '\n\n', text)
+
+    # L3 修复: 混合内容中的英文推理行清洗
+    # 当中文回复后跟着英文推理块时（如 "I need to write..."、"I am Agnes..."），
+    # 按行检测并删除英文占比 >70% 且长度 >30 的行（推理行），保留中文回复行
+    _lines = text.split('\n')
+    _filtered = []
+    for _line in _lines:
+        _s = _line.strip()
+        if not _s or len(_s) <= 30:
+            _filtered.append(_line)
+            continue
+        _ascii_letters = sum(1 for c in _s if c.isascii() and c.isalpha())
+        if _ascii_letters / len(_s) > 0.7:
+            # 英文占比 >70% 且长度 >30 → 推理行，跳过
+            continue
+        _filtered.append(_line)
+    text = '\n'.join(_filtered)
+
     text = text.strip()
     
     # 过度截断保护
@@ -488,7 +540,12 @@ def has_dsml_tool_calls(text: str) -> bool:
     """判断文本中是否包含 DSML/工具调用标签."""
     return (bool(DSML_INVOKE_PATTERN.search(text))
             or bool(TOOL_CALL_PATTERN.search(text))
-            or bool(TOOL_CALL_XML_PATTERN.search(text)))
+            or bool(TOOL_CALL_XML_PATTERN.search(text))
+            # L1 修复: 单竖线 DSML + 未闭合变体
+            or bool(DSML_OPEN_ONLY_PATTERN.search(text))
+            # L4 修复: <operation> 标签 + 裸 function_calls
+            or bool(OPERATION_TAG_PATTERN.search(text))
+            or bool(BARE_FUNCTION_CALLS_PATTERN.search(text)))
 
 
 def parse_dsml_tool_calls(text: str, allowed_tools: set | None = None) -> list[dict]:
