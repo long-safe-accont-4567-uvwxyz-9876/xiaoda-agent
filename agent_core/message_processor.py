@@ -348,7 +348,13 @@ class MessageProcessorMixin:
         clean_input = ChatProcessor.clean_mention_from_input(user_input)
 
         voice_intent = self._detect_voice_intent(clean_input)
-        force_voice = voice_intent and not self._voice_mode
+        if voice_intent == "off":
+            self.set_voice_mode(False)
+            force_voice = False
+        elif voice_intent == "on":
+            force_voice = not self._voice_mode
+        else:
+            force_voice = False
 
         if not clean_input:
             target_name = get_agent_display_name(chat_targets[0]) if chat_targets else get_agent_display_name('xiaoda')
@@ -1896,15 +1902,35 @@ class MessageProcessorMixin:
             return False
         return False
 
-    def _detect_voice_intent(self, user_input: str) -> bool:
+    def _detect_voice_intent(self, user_input: str) -> str:
+        """检测语音意图：三态返回 'none' / 'on' / 'off'。
+
+        - 'off': 含否定词 + 语音关键词（如"不要发语音了"→关语音）
+        - 'on':  含语音关键词但不含否定词（如"发语音"→开语音）
+        - 'none': 无语音关键词
+
+        回归: 生产样本 id=1993 用户说"不要发语音了"但旧逻辑匹配"发语音"→True→TTS 照生成。
+        """
         voice_keywords = [
             "语音", "声音", "说话", "朗读", "念给我", "读给我",
             "用声音", "听你", "听听你", "发语音", "生成语音",
             "语音回复", "语音消息", "说给我听", "念出来",
             "tts", "voice",
         ]
+        negation_prefixes = ["不要", "不用", "别", "关掉", "关闭", "停止", "取消"]
         q = user_input.lower()
-        return any(kw in q for kw in voice_keywords)
+        # 先找语音关键词，无则 none
+        matched_kw = False
+        for kw in voice_keywords:
+            idx = q.find(kw)
+            if idx == -1:
+                continue
+            matched_kw = True
+            # 检测否定：否定词在语音词前 4 字符范围内
+            prefix = q[max(0, idx - 4):idx]
+            if any(neg in prefix for neg in negation_prefixes):
+                return "off"
+        return "on" if matched_kw else "none"
 
     def _update_mental_state_emotion(self, emotion: dict) -> None:
         """将检测到的用户情绪更新到 L/M/S 心理状态模型的 S 层.
