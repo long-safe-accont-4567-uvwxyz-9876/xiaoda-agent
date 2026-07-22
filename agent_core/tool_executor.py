@@ -221,6 +221,73 @@ class ToolExecutorMixin:
 
         return image_paths, video_path, clean_reply
 
+    async def _extract_fabricated_images_from_reply(
+        self, reply: str
+    ) -> tuple[list[Path], str]:
+        """兜底：从回复文本中提取 LLM 伪造的图片 URL，下载为本地文件供 QQ 富媒体发送。
+
+        背景：LLM 有时不调用 agnes_image_generate，而在回复里直接写
+        markdown 图 ![](url) 或裸 pollinations URL（伪造"已生成图片"）。
+        _extract_media_from_tool_results 只认真实工具结果，捕获不到这种伪造。
+        本函数扫描回复文本，下载伪造 URL → image_paths，并从文本剥离相关内容。
+
+        pollinations.ai 的 URL 本身是按 prompt 现出图的真实端点，下载能拿到真图，
+        因此伪造也能救成真图发给用户。
+
+        Returns:
+            (image_paths, cleaned_reply)
+        """
+        image_paths: list[Path] = []
+        if not reply:
+            return image_paths, reply
+
+        # markdown 图：![alt](url)，url 允许一层嵌套括号（如 pollinations 的 (duck)）
+        md_img_re = re.compile(
+            r'!\[[^\]]*\]\((https?://(?:[^()\s]|\([^()\s]*\))*)\)'
+        )
+        # 裸 pollinations URL（贪婪到首个空白，URL 不含空格）
+        pollinations_re = re.compile(r'https?://image\.pollinations\.ai/\S+')
+
+        # 收集 pollinations URL（markdown 图内 + 裸 URL），去重保序
+        raw_urls: list[str] = list(md_img_re.findall(reply))
+        raw_urls.extend(pollinations_re.findall(reply))
+        seen: set[str] = set()
+        clean_urls: list[str] = []
+        for u in raw_urls:
+            cu = u.rstrip(').,;:!?')
+            if cu and cu not in seen:
+                seen.add(cu)
+                clean_urls.append(cu)
+
+        # 仅下载 pollinations URL（避免下载任意 URL 的安全风险）
+        download_urls = [u for u in clean_urls if 'image.pollinations.ai' in u]
+        if download_urls:
+            img_dir = FILE_DIR if FILE_DIR.exists() else Path("tts_cache")
+            img_dir.mkdir(parents=True, exist_ok=True)
+            import httpx
+            for idx, url in enumerate(download_urls):
+                try:
+                    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as dl:
+                        resp = await dl.get(url)
+                        resp.raise_for_status()
+                        local_path = img_dir / f"fabricated_{int(time.time())}_{idx}.png"
+                        local_path.write_bytes(resp.content)
+                        image_paths.append(local_path)
+                        host = url.split('/')[2] if url.count('/') >= 3 else url
+                        logger.warning("image.fabricated_url_rescued host=%s local=%s",
+                                       host, str(local_path))
+                except Exception as dl_err:
+                    logger.debug("image.fabricated_download_failed url=%s error=%s",
+                                 url, str(dl_err))
+
+        # 从文本剥离：所有 markdown 图（任意 URL）+ 裸 pollinations URL + 伪造状态/元数据/模型名
+        cleaned = md_img_re.sub('', reply)
+        cleaned = pollinations_re.sub('', cleaned)
+        from utils.llm_cleanup import strip_image_gen_leak
+        cleaned = strip_image_gen_leak(cleaned, context="fabricated_extract")
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+        return image_paths, cleaned.strip()
+
     def _clean_reply(self, text: str) -> str:
         text = text.strip()
         # JSON 格式回复提取：LLM（如 agnes-2.0-flash）有时返回 JSON 而非纯文本
