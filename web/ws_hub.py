@@ -118,13 +118,14 @@ class ConnectionManager:
                 ws = self._connections.get(conn_id)
                 if ws is None:
                     return
-                await ws.send_json({"type": "ping"})
-                # pong 处理在 websocket_endpoint 中 set event
+                # 先准备并 clear event，再发送 ping，防止客户端极速 pong
+                # 在 send_json 和 clear 之间到达（竞态导致漏掉 pong）
                 evt = self._pong_events.get(conn_id)
                 if evt is None:
                     evt = asyncio.Event()
                     self._pong_events[conn_id] = evt
                 evt.clear()
+                await ws.send_json({"type": "ping"})
                 await asyncio.wait_for(evt.wait(), timeout=HEARTBEAT_TIMEOUT)
             except asyncio.TimeoutError:
                 logger.warning("ws.heartbeat_timeout conn_id={}", conn_id)
@@ -879,11 +880,12 @@ def _cleanup_pty(term_sid: str) -> None:
             logger.debug("ws.close_fd_error", exc_info=True)
 
     try:
-        loop.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(
-                manager.send_to(conn_id, {
-                    "type": "terminal_exit", "term_sid": term_sid, "returncode": rc
-                }), loop=loop))
+        asyncio.run_coroutine_threadsafe(
+            manager.send_to(conn_id, {
+                "type": "terminal_exit", "term_sid": term_sid, "returncode": rc
+            }),
+            loop,
+        )
     except RuntimeError:
         logger.debug("ws.terminal_exit_send_failed term_sid={}", term_sid)
     logger.info("ws.terminal.exit term_sid={} rc={}", term_sid, rc)

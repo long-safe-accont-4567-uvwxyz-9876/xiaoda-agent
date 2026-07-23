@@ -359,8 +359,11 @@ async def shell_command(command: str) -> ToolResult:
             pass
         except Exception:
             logger.debug("file_tools.subprocess_kill_error", exc_info=True)
+        # 修复：wait() 增加 5s 超时保护，防止子进程不退出时无限挂起
         try:
-            await proc.wait()
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("file_tools.subprocess_wait_timeout", hint="子进程 kill 后未在 5s 内退出，可能存在孤儿进程")
         except Exception:
             logger.debug("file_tools.subprocess_wait_error", exc_info=True)
         # 不在错误信息中包含 command，避免命令内容泄漏到日志/返回结果
@@ -373,6 +376,13 @@ async def shell_command(command: str) -> ToolResult:
             pass
         except Exception:
             logger.debug("file_tools.subprocess_kill_error", exc_info=True)
+        # 修复：兜底清理同样增加 wait 超时保护
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("file_tools.subprocess_wait_timeout", hint="子进程 kill 后未在 5s 内退出，可能存在孤儿进程")
+        except Exception:
+            logger.debug("file_tools.subprocess_wait_error", exc_info=True)
         return ToolResult.fail(f"执行错误: {e!s}")
 
 
