@@ -96,6 +96,57 @@ def test_positive_words_still_trigger_positive_emotion():
         f"正面词应触发喜悦, 实际: {result['primary']}"
 
 
+# ── 17 类统一回归: unified 模式必须处理中文否定 ─────────────
+
+def test_negation_blocks_love_sticker():
+    """回归: unified 模式下「不喜欢」不应触发 love 情绪.
+
+    触发链路: 用户说"我不喜欢你" → sticker_manager.detect_emotion
+    (unified) → emotion_simple.detect_emotion → 之前错误返回 "喜爱"
+    → pick() 选中 love/ 目录下的表情包，与用户语义直接矛盾。
+    """
+    from emotion.emotion_simple import detect_emotion
+    assert detect_emotion("我不喜欢你")["primary"] != "喜爱", \
+        "「我不喜欢你」不应被识别为喜爱"
+    assert detect_emotion("我不爱你")["primary"] != "喜爱", \
+        "「我不爱你」不应被识别为喜爱"
+    assert detect_emotion("不喜欢")["primary"] != "喜爱", \
+        "「不喜欢」不应被识别为喜爱"
+
+
+def test_negation_blocks_happy_sticker():
+    """回归: 「不开心」不应触发喜悦情绪."""
+    from emotion.emotion_simple import detect_emotion
+    assert detect_emotion("不开心")["primary"] != "喜悦", \
+        "「不开心」不应被识别为喜悦"
+
+
+def test_negation_blocks_fear_sticker():
+    """回归: 「不怕/不害怕」不应触发恐惧情绪."""
+    from emotion.emotion_simple import detect_emotion
+    assert detect_emotion("不怕")["primary"] != "恐惧", \
+        "「不怕」不应被识别为恐惧"
+    assert detect_emotion("不害怕")["primary"] != "恐惧", \
+        "「不害怕」不应被识别为恐惧"
+
+
+def test_negation_blocks_greeting_sticker():
+    """回归: 「不嗨」不应触发问候情绪 (问候是社交礼仪不应被否定触发)."""
+    from emotion.emotion_simple import detect_emotion
+    assert detect_emotion("不嗨")["primary"] != "问候", \
+        "「不嗨」不应被识别为问候"
+
+
+def test_positive_phrases_still_work_after_negation_fix():
+    """回归: 否定处理不应破坏正面情绪检测."""
+    from emotion.emotion_simple import detect_emotion
+    assert detect_emotion("我喜欢你")["primary"] == "喜爱"
+    assert detect_emotion("我爱你")["primary"] == "喜爱"
+    assert detect_emotion("好开心")["primary"] == "喜悦"
+    assert detect_emotion("好怕")["primary"] == "恐惧"
+    assert detect_emotion("你好")["primary"] == "问候"
+
+
 # ── credential_pool: 统一锁 ────────────────────────────────
 
 def test_credential_pool_uses_single_lock():

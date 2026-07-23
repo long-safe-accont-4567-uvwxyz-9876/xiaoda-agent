@@ -123,6 +123,30 @@ _GREETING_KEYWORDS = {
     "好久不见", "回来啦", "我回来啦", "下午好", "晚上好",
 }
 
+# 中文否定/反向标记（关键词前缀 2 字符内出现即视为否定）
+# 与 sticker_manager.EMOTION_EXCLUSIONS 的语义保持一致，
+# 修复 unified 模式下「不喜欢 → love」类的误判
+_NEGATION_CHARS = ("不", "没", "别", "无", "非", "未", "莫", "勿")
+
+
+def _count_effective_hits(keywords: set[str], text: str) -> int:
+    """统计关键词命中数，自动跳过被否定词前缀修饰的命中。
+
+    与 sticker_manager 中 EMOTION_EXCLUSIONS 的逻辑保持一致：
+    关键词前面的 2 个字符内出现任一否定字符，则该次命中不计入。
+    同样的关键词在同一文本中出现多次也只计一次（防止重复加权）。
+    """
+    count = 0
+    for kw in keywords:
+        idx = text.find(kw)
+        if idx < 0:
+            continue
+        prefix = text[max(0, idx - 2):idx]
+        if any(ex in prefix for ex in _NEGATION_CHARS):
+            continue
+        count += 1
+    return count
+
 _NEUTRAL_KEYWORDS = {
     "平静", "淡然", "冷静", "无聊", "困倦", "发呆",
     "嗯", "哦", "好吧", "行吧", "就这样", "随便",
@@ -164,10 +188,10 @@ def detect_emotion(text: str) -> dict:
             "pad": PADEmotion.neutral().to_dict(),
         }
 
-    # 计算每类命中数
+    # 计算每类命中数（自动忽略否定前缀修饰的命中）
     scores = {}
     for label, keywords in _EMOTION_CATEGORIES:
-        scores[label] = sum(1 for kw in keywords if kw in text)
+        scores[label] = _count_effective_hits(keywords, text)
 
     # 找到命中数最多的类别
     best_label = max(scores, key=scores.get)
