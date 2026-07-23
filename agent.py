@@ -67,6 +67,7 @@ def main() -> None:
     wd_parser.add_argument("--check-interval", type=int, default=15)
     wd_parser.add_argument("--freeze-threshold", type=int, default=60)
     wd_parser.add_argument("--max-restarts", type=int, default=20)
+    wd_parser.add_argument("--ping-retries", type=int, default=3, help="探活重试次数")
     wd_parser.add_argument("--log-file", type=str, default="")
 
     # doctor 子命令: xiaoda-agent doctor [--json] [--fix]
@@ -92,6 +93,7 @@ def main() -> None:
             "--check-interval", str(args.check_interval),
             "--freeze-threshold", str(args.freeze_threshold),
             "--max-restarts", str(args.max_restarts),
+            "--ping-retries", str(args.ping_retries),
             "--log-file", args.log_file,
         ]
         sys.exit(run_watchdog_cli(wd_argv))

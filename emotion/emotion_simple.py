@@ -1,7 +1,7 @@
 from .pad_model import PADEmotion, from_emotion as pad_from_emotion
 
 
-# ── 统一后的 9 类关键词集（合并 emotion_simple + sticker_manager 关键词） ──
+# ── 统一后的 17 类关键词集（与物理目录完全对齐） ──
 
 _POSITIVE_KEYWORDS = {
     # 原有
@@ -84,7 +84,7 @@ _FEAR_KEYWORDS = {
     "惊恐", "惊吓", "颤抖",
 }
 
-# ── 补齐 5 类缺失情绪（BUG 修复: 原仅 9 类，love/playful/moved/pout/surprised 无法检测）──
+# ── 补齐缺失情绪（原仅 9 类，逐步扩展至 17 类，与物理目录对齐）──
 
 _LOVE_KEYWORDS = {
     "喜欢", "爱", "心动", "喜爱", "爱慕", "示爱",
@@ -111,7 +111,24 @@ _SURPRISED_KEYWORDS = {
     "吓一跳", "没想到", "想不到", "万万没想到",
 }
 
-# 14 类中文标签（与 Emotion 枚举 + sticker 目录对齐）
+_CONFUSED_KEYWORDS = {
+    "困惑", "疑惑", "不解", "迷茫", "无语",
+    "想不明白", "搞不懂", "不明白", "什么意思",
+    "听不懂", "看不懂", "不懂",
+}
+
+_GREETING_KEYWORDS = {
+    "你好", "早上好", "晚安", "嗨", "早上好呀", "晚安呀", "嗨～",
+    "你好呀", "早安", "午安", "你好～", "嗨！", "欢迎",
+    "好久不见", "回来啦", "我回来啦", "下午好", "晚上好",
+}
+
+_NEUTRAL_KEYWORDS = {
+    "平静", "淡然", "冷静", "无聊", "困倦", "发呆",
+    "嗯", "哦", "好吧", "行吧", "就这样", "随便",
+}
+
+# 17 类中文标签（与 Emotion 枚举 + sticker 物理目录完全对齐）
 _EMOTION_CATEGORIES = [
     # 特定情绪优先于通用喜悦，避免 "喜欢" 被误判为喜悦
     ("喜爱", _LOVE_KEYWORDS),
@@ -119,6 +136,9 @@ _EMOTION_CATEGORIES = [
     ("调皮", _PLAYFUL_KEYWORDS),
     ("感动", _MOVED_KEYWORDS),
     ("惊讶", _SURPRISED_KEYWORDS),
+    ("问候", _GREETING_KEYWORDS),
+    ("困惑", _CONFUSED_KEYWORDS),
+    ("平静", _NEUTRAL_KEYWORDS),
     ("兴奋", _EXCITED_KEYWORDS),
     ("喜悦", _POSITIVE_KEYWORDS),
     ("悲伤", _NEGATIVE_KEYWORDS),
@@ -134,7 +154,7 @@ _EMOTION_CATEGORIES = [
 def detect_emotion(text: str) -> dict:
     """检测文本情绪，返回包含 primary/valence/intensity 的字典
 
-    primary 为 9 种中文标签之一：喜悦/悲伤/愤怒/焦虑/害羞/好奇/思考/恐惧/平静
+    primary 为 17 种中文标签之一（与 Emotion 枚举 + sticker 物理目录对齐）
     """
     if not text or not text.strip():
         return {
@@ -162,8 +182,8 @@ def detect_emotion(text: str) -> dict:
         }
 
     # 效价映射
-    _positive_labels = {"喜悦", "兴奋", "喜爱", "感动", "撒娇", "调皮"}
-    _negative_labels = {"悲伤", "愤怒", "焦虑", "恐惧"}
+    _positive_labels = {"喜悦", "兴奋", "喜爱", "感动", "撒娇", "调皮", "问候"}
+    _negative_labels = {"悲伤", "愤怒", "焦虑", "恐惧", "困惑"}
     if best_label in _positive_labels:
         valence = "positive"
     elif best_label in _negative_labels:

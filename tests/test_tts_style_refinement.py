@@ -1,7 +1,7 @@
 """TTS 风格映射细化测试
 
 验证 TTS_STYLE_MAP 中 PLAYFUL/MOVED/POUT 三种情绪使用独立细腻风格，
-其他映射保持不变，且覆盖全部 16 种 Emotion 枚举值。
+其他映射保持不变，且覆盖全部 17 种 Emotion 枚举值。
 """
 import pytest
 
@@ -49,7 +49,7 @@ class TestTtsStyleRefinement:
         assert TTS_STYLE_MAP[emotion] == expected_style
 
     def test_tts_style_map_covers_all_emotions(self):
-        """TTS_STYLE_MAP 覆盖所有 16 种 Emotion 枚举值"""
+        """TTS_STYLE_MAP 覆盖所有 17 种 Emotion 枚举值"""
         all_emotions = set(Emotion)
         mapped_emotions = set(TTS_STYLE_MAP.keys())
         # 无遗漏
@@ -59,4 +59,4 @@ class TestTtsStyleRefinement:
         extra = mapped_emotions - all_emotions
         assert not extra, f"多余的映射键: {extra}"
         # 数量一致
-        assert len(TTS_STYLE_MAP) == len(Emotion) == 16
+        assert len(TTS_STYLE_MAP) == len(Emotion) == 17

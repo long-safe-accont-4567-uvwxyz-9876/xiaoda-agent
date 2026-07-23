@@ -292,8 +292,9 @@ class TestEmotionMappingConsistency:
         """测试 emotion_simple 检测的所有情绪标签在 agent_core 映射表中都有对应"""
         from emotion.emotion_simple import detect_emotion
 
-        # agent_core 中的情绪映射表
-        emotion_map = {"喜悦": "happy", "悲伤": "sad", "焦虑": "fear", "平静": "", "愤怒": "angry", "好奇": "curious"}
+        # agent_core 中的情绪映射表（17 类统一后焦虑独立为 anxious）
+        emotion_map = {"喜悦": "happy", "悲伤": "sad", "焦虑": "anxious", "平静": "neutral",
+                       "愤怒": "angry", "好奇": "curious", "恐惧": "fear"}
 
         # 测试各情绪标签
         test_cases = {
@@ -308,19 +309,23 @@ class TestEmotionMappingConsistency:
             assert primary == expected_primary, f"文本 '{text}' 期望情绪 '{expected_primary}'，实际 '{primary}'"
             assert primary in emotion_map, f"情绪标签 '{primary}' 不在 agent_core 映射表中"
 
-    def test_anxiety_maps_to_fear_not_sad(self):
-        """特别验证"焦虑"映射到"fear"而非"sad" """
-        emotion_map = {"喜悦": "happy", "悲伤": "sad", "焦虑": "fear", "平静": "", "愤怒": "angry", "好奇": "curious"}
-        assert emotion_map["焦虑"] == "fear", "焦虑应映射到 fear 而非 sad"
+    def test_anxiety_maps_to_anxious_not_sad(self):
+        """特别验证"焦虑"映射到"anxious"而非"sad"（17类统一后焦虑独立）"""
+        emotion_map = {"喜悦": "happy", "悲伤": "sad", "焦虑": "anxious", "平静": "neutral", "愤怒": "angry", "好奇": "curious"}
+        assert emotion_map["焦虑"] == "anxious", "焦虑应映射到 anxious 而非 sad/fear"
         assert emotion_map["焦虑"] != "sad"
+        assert emotion_map["焦虑"] != "fear"
 
-    def test_sticker_manager_has_fear_category(self):
-        """测试 sticker_manager 的 EMOTION_MAP 包含 fear 类别"""
+    def test_sticker_manager_has_fear_and_anxious_categories(self):
+        """测试 sticker_manager 的 EMOTION_MAP 包含 fear 和 anxious 类别（17类统一后分开）"""
         from emotion.sticker_manager import StickerManager
         assert "fear" in StickerManager.EMOTION_MAP, "StickerManager.EMOTION_MAP 应包含 fear 类别"
+        assert "anxious" in StickerManager.EMOTION_MAP, "StickerManager.EMOTION_MAP 应包含 anxious 类别"
         fear_keywords = StickerManager.EMOTION_MAP["fear"]
-        assert "焦虑" in fear_keywords, "fear 类别应包含 '焦虑' 关键词"
+        anxious_keywords = StickerManager.EMOTION_MAP["anxious"]
         assert "害怕" in fear_keywords, "fear 类别应包含 '害怕' 关键词"
+        assert "焦虑" in anxious_keywords, "anxious 类别应包含 '焦虑' 关键词"
+        assert "焦虑" not in fear_keywords, "焦虑不应在 fear 类别中（已移至 anxious）"
 
 
 # ── 5. 子Agent表情包测试 ──────────────────────────────────

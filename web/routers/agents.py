@@ -347,6 +347,7 @@ _EMOTION_CATEGORIES = [
     "sad", "angry", "surprised", "confused",
     "thinking", "playful", "moved", "neutral",
     "pout", "fear", "anxious",
+    "curious", "greeting",
 ]
 _IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
