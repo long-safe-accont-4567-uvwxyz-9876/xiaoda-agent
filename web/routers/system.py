@@ -21,6 +21,12 @@ public_router = APIRouter(tags=["system"])
 _start_time = time.time()
 
 
+@public_router.get("/ping")
+async def liveness() -> Any:
+    """看门狗专用存活探针，无需鉴权，返回 {"ok": true}。"""
+    return {"ok": True}
+
+
 @public_router.get("/system/os", response_model=Envelope[dict])
 async def get_server_os() -> Any:
     """返回服务器操作系统信息，供前端选择正确的 shell 类型。"""

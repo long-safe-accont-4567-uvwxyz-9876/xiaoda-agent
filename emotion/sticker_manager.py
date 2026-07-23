@@ -207,6 +207,11 @@ class StickerManager:
         """
         if not self._cache:
             return None
+        # 优先直接匹配物理目录名（避免 greeting→happy, curious→confused 等错误降级）
+        # 当 LLM 输出 [sticker:greeting] 或 detect_emotion 返回 "greeting" 时，
+        # 应直接使用 greeting/ 目录，而非经 STICKER_FALLBACK 降级到 happy
+        if emotion and isinstance(emotion, str) and emotion in self._cache:
+            return random.choice(self._cache[emotion])
         # 统一模式：Emotion 枚举 → STICKER_FALLBACK 映射
         if emotion and is_unified():
             if isinstance(emotion, Emotion):

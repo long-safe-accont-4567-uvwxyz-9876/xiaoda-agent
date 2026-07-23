@@ -59,6 +59,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Nahida AI Agent")
     subparsers = parser.add_subparsers(dest="command")
 
+    # watchdog 子命令: xiaoda-agent watchdog [--port] [--mode] ...
+    wd_parser = subparsers.add_parser("watchdog", help="以看门狗模式启动（自动重启卡死/崩溃的主进程）")
+    wd_parser.add_argument("--port", type=int, default=_safe_int(os.getenv("WEBUI_PORT", "8082"), 8082))
+    wd_parser.add_argument("--host", type=str, default=os.getenv("WEBUI_HOST", "127.0.0.1"))
+    wd_parser.add_argument("--mode", choices=["web", "desktop"], default="web")
+    wd_parser.add_argument("--check-interval", type=int, default=15)
+    wd_parser.add_argument("--freeze-threshold", type=int, default=60)
+    wd_parser.add_argument("--max-restarts", type=int, default=20)
+    wd_parser.add_argument("--log-file", type=str, default="")
+
     # doctor 子命令: xiaoda-agent doctor [--json] [--fix]
     doctor_parser = subparsers.add_parser("doctor", help="运行自检 (零 API 调用, <2s)")
     doctor_parser.add_argument("--json", action="store_true", help="JSON 格式输出")
@@ -71,6 +81,20 @@ def main() -> None:
     parser.add_argument("--host", type=str, default=os.getenv("WEBUI_HOST", "127.0.0.1"), help="Web UI 监听地址")
     parser.add_argument("--setup", action="store_true", help="运行配置向导")
     args = parser.parse_args()
+
+    # watchdog 子命令: 以看门狗模式守护主进程
+    if args.command == "watchdog":
+        from utils.watchdog_runner import run_watchdog_cli
+        wd_argv = [
+            "--port", str(args.port),
+            "--host", args.host,
+            "--mode", args.mode,
+            "--check-interval", str(args.check_interval),
+            "--freeze-threshold", str(args.freeze_threshold),
+            "--max-restarts", str(args.max_restarts),
+            "--log-file", args.log_file,
+        ]
+        sys.exit(run_watchdog_cli(wd_argv))
 
     # doctor 子命令: 零 API 调用自检, <2s 完成
     if args.command == "doctor":

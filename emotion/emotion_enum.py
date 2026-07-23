@@ -137,7 +137,7 @@ STICKER_FALLBACK: dict[Emotion, str] = {
     Emotion.MOVED: "moved",
     Emotion.NEUTRAL: "neutral",
     Emotion.FEAR: "fear",          # 恐惧 → fear
-    Emotion.CURIOUS: "confused",   # 旧 curious → 新 confused
+    Emotion.CURIOUS: "curious",    # curious 目录物理存在，直接映射（原错误降级到 confused）
     Emotion.POUT: "pout",          # 撒娇 → pout
 }
 

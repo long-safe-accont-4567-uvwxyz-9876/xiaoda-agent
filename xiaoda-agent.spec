@@ -427,6 +427,7 @@ hiddenimports = [
     'utils.env_reader',
     'utils.instruction_hierarchy',
     'utils.llm_cleanup',
+    'utils.watchdog_runner',
     'utils.ssrf_guard',
 
     # web sub-modules

@@ -77,8 +77,9 @@ if /i "%LAUNCH_MODE%"=="--web" (
     )
 )
 
-:: Run the main executable
-"%EXE_PATH%" %LAUNCH_MODE% --port %WEBUI_PORT%
+:: Run via watchdog (auto-restart on freeze/crash)
+:: 看门狗模式：卡死超过 60s 或进程崩溃自动重启；20次/10分钟超限后停止自动恢复
+"%EXE_PATH%" watchdog --mode %LAUNCH_MODE:--=% --port %WEBUI_PORT% --log-file "%~dp0logs\watchdog.log"
 
 :: Check exit code
 if %errorlevel% neq 0 (
