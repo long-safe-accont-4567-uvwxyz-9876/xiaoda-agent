@@ -26,7 +26,6 @@ const particles = inject<Ref<any>>('particles')
 
 const inputText = ref('')
 const messagesEl = ref<HTMLElement | null>(null)
-const inputEl = ref<HTMLTextAreaElement | null>(null)
 const paletteRef = ref<InstanceType<typeof SlashPalette> | null>(null)
 const promptInputRef = ref<InstanceType<typeof PromptInput> | null>(null)
 const commands = ref<Array<{ name: string; description: string; owner_only: boolean }>>([])
@@ -144,7 +143,7 @@ function handleSend() {
   chat.sendMessage(text)
   inputText.value = ''
   // 发送特效：从输入框爆叶子
-  const rect = inputEl.value?.getBoundingClientRect()
+  const rect = promptInputRef.value?.textareaRef?.getBoundingClientRect()
   if (rect) particles?.value?.burst?.(rect.left + rect.width / 2, rect.top, 10)
   autoGrow()
 }
@@ -160,7 +159,7 @@ function handlePromptSend(text: string, options: { search?: boolean; think?: boo
   chat.sendMessage(finalText, options.imageUrl)
   inputText.value = ''
   // 发送特效
-  const rect = inputEl.value?.getBoundingClientRect()
+  const rect = promptInputRef.value?.textareaRef?.getBoundingClientRect()
   if (rect) particles?.value?.burst?.(rect.left + rect.width / 2, rect.top, 10)
 }
 
@@ -183,7 +182,7 @@ function selectCommand(name: string) {
 }
 
 function autoGrow() {
-  const el = inputEl.value
+  const el = promptInputRef.value?.textareaRef
   if (!el) return
   el.style.height = 'auto'
   el.style.height = Math.min(el.scrollHeight, 120) + 'px'
@@ -213,6 +212,7 @@ async function removeSession(sid: string) {
 }
 
 async function startNew() {
+  if (loadingSessionId.value) return  // 加载进行中禁止新建，避免与 loadSession 竞态覆盖新会话
   await chat.newSession()
   showSessions.value = false
   message.success(t('chatView.newSessionStarted'))
@@ -236,6 +236,7 @@ function resend(msg: { content: string; imageUrl?: string }) {
 }
 
 function clearAll() {
+  if (loadingSessionId.value) return  // 加载进行中禁止清空，避免与 loadSession 竞态
   chat.clearMessages()
   message.success(t('chatView.cleared'))
 }
