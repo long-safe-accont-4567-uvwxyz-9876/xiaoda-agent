@@ -1,9 +1,10 @@
 # tests/test_preference_discovery.py
 """偏好发现测试"""
-import asyncio
 import numpy as np
 import pytest
+
 from memory.preference_discovery import PreferenceDiscovery
+
 
 @pytest.fixture
 def pd():

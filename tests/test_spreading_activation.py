@@ -123,7 +123,7 @@ async def test_compute_idf(engine):
 
 def test_direct_channel_weight_bias(engine):
     """weight_bias = 0.35 + 0.65 * weight，floor 0.35"""
-    now = "2026-07-10T12:00:00+08:00"
+    _now = "2026-07-10T12:00:00+08:00"
     # 这个测试不依赖 DB，直接测试公式
     # 模拟 alive_nodes
     alive = {

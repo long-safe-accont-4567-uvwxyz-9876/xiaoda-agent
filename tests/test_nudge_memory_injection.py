@@ -8,8 +8,6 @@
 """
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from emotion.nudge_engine import NudgeEngine
 from memory.emotional_memory import EmotionalMemory
 

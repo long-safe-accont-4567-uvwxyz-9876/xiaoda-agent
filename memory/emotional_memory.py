@@ -174,7 +174,6 @@ class EmotionalMemoryManager:
         # 联动：同步更新 emotion_state
         try:
             from emotion.emotion_state import get_emotion_state
-            from emotion.pad_model import from_emotion as pad_from_emotion
             _intensity_map = {
                 "喜悦": 0.6, "兴奋": 0.8, "悲伤": 0.7, "愤怒": 0.8,
                 "焦虑": 0.6, "害羞": 0.5, "好奇": 0.5, "思考": 0.3,

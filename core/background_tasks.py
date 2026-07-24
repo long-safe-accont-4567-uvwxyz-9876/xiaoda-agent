@@ -15,18 +15,18 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 if TYPE_CHECKING:
+    from agent_context import AgentContext
     from db.database import DatabaseManager
+    from emotion.portrait_manager import PortraitManager
+    from instinct_manager import InstinctManager
+    from memory.learning_manager import LearningManager
     from memory.memory_manager import MemoryManager
     from memory.notebook_manager import NotebookManager
-    from emotion.portrait_manager import PortraitManager
-    from memory.learning_manager import LearningManager
-    from instinct_manager import InstinctManager
-    from agent_context import AgentContext
 
 # 全局后台任务集合，用于跟踪和清理
 _bg_tasks: set[asyncio.Task] = set()

@@ -140,7 +140,7 @@ async def test_lazy_migrate_clears_recall_cache():
     复现路径：retrieve_memories_hybrid 内的 lazy_migrate 块。
     断言：concept_graph.lazy_migrate 被调用后，spreading_engine.clear_cache 也被调用。
     """
-    from unittest.mock import MagicMock, AsyncMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     with patch("memory.memory_manager.MemoryDistiller"), \
          patch("memory.memory_manager.QueryCache") as MockQC, \

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """第六轮深度测试 - 真实对话流程 + 工具回调集成 + TTS/表情/记忆"""
 import asyncio
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 
@@ -277,7 +278,7 @@ async def test_error_recovery():
     # 测试 ModelRouter 降级链
     print("\n[1] ModelRouter 降级链...")
     try:
-        from model_router import ModelRouter, FALLBACK_ROUTE
+        from model_router import FALLBACK_ROUTE, ModelRouter
         _router = ModelRouter()
 
         # 模拟主模型失败 -> 降级
@@ -293,8 +294,8 @@ async def test_error_recovery():
     # 测试 ErrorClassifier + CredentialPool 恢复
     print("\n[2] ErrorClassifier + CredentialPool 恢复...")
     try:
+        from utils.credential_pool import Credential, CredentialPool, CredentialState
         from utils.error_classifier import ErrorClassifier, FailoverReason, RecoveryAction
-        from utils.credential_pool import CredentialPool, Credential, CredentialState
 
         _ec = ErrorClassifier()
         pool = CredentialPool()
@@ -383,7 +384,7 @@ async def test_concurrent_operations():
     # 并发凭证池操作
     print("\n[1] 并发凭证池操作...")
     try:
-        from utils.credential_pool import CredentialPool, Credential
+        from utils.credential_pool import Credential, CredentialPool
         pool = CredentialPool()
         pool.add_credential(Credential(provider="test", api_key="sk-key1", base_url="https://api1.test"))
 
@@ -425,6 +426,7 @@ async def test_concurrent_operations():
     print("\n[3] 并发原子写入...")
     try:
         import tempfile
+
         from utils.atomic_write import atomic_write
 
         with tempfile.TemporaryDirectory() as td:

@@ -7,8 +7,8 @@
 将 app 与 _start_services 的引用存到本模块, 由 web.server 在 create_app() 后 set,
 web.routers.setup 通过 get_app() / get_start_services() 获取, 不再直接导入 web.server.
 """
-from typing import Any
 from collections.abc import Callable
+from typing import Any
 
 _app: Any = None
 _start_services_fn: Callable | None = None

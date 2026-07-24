@@ -41,7 +41,7 @@ onBeforeUnmount(() => { cancelAnimationFrame(pulseRAF) })
        @click="router.push('/insight')">
     <span class="face">🌱</span>
     <span class="badge">{{ current.emoji }}</span>
-    <span class="ring"></span>
+    <span class="ring" @animationend="pulse = false"></span>
   </div>
 </template>
 
@@ -82,6 +82,9 @@ onBeforeUnmount(() => { cancelAnimationFrame(pulseRAF) })
 
 .pulse .ring {
   animation: grass-ring 0.8s ease-out;
+  /* 仅在动画期间提示合成器提升为 GPU 层；animationend 后 pulse 复位为 false，
+     .pulse 类移除，will-change 随之失效，避免常驻占层（Chrome 推荐用法） */
+  will-change: transform;
 }
 
 @keyframes grass-ring {

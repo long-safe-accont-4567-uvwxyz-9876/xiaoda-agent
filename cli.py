@@ -1,18 +1,21 @@
-from typing import Any
+import asyncio
 import os
+import random
+import subprocess
 import sys
 import time
-import random
-import asyncio
-import subprocess
+from typing import Any
+
 from loguru import logger
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from utils.logging_config import setup_logging
+
 setup_logging()
 logger.remove()
 logger.add(
@@ -21,11 +24,12 @@ logger.add(
     level="WARNING",
 )
 
+import contextlib
+
 from agent_core import AgentCore
 from agent_core.user_cli import CLIUser
 from core.event_bus import event_bus
-from model_router import ROUTE_TABLE, MODEL_PREFERENCES
-import contextlib
+from model_router import MODEL_PREFERENCES, ROUTE_TABLE
 
 # ── readline 支持 ──────────────────────────────────────────
 try:
@@ -133,7 +137,7 @@ STATUS_MAP = {
 
 # IP-safe: 动态从 config/agents/*.json 读取 display_name，避免硬编码原名
 try:
-    from config import get_agent_display_name, agent_names
+    from config import agent_names, get_agent_display_name
     from emotion.emoji_config import get_ack_message
     AGENT_NAMES = {name: get_agent_display_name(name) for name in agent_names()}
     # ACK 消息使用自定义配置（随心即言）

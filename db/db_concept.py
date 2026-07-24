@@ -3,8 +3,6 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from loguru import logger
-
 _SH_TZ = ZoneInfo("Asia/Shanghai")
 
 

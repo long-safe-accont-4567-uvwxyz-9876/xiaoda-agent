@@ -12,9 +12,7 @@
 """
 import asyncio
 
-import pytest
-
-from emotion.reunion_reflection import generate_reunion_message, _format_idle
+from emotion.reunion_reflection import _format_idle, generate_reunion_message
 from memory.emotional_memory import EmotionalMemory
 
 

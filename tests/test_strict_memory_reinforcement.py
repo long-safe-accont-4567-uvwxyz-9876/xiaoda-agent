@@ -1,12 +1,12 @@
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-import time
 
 import pytest
 
-from memory.memory_manager import MemoryManager
-from memory.fsrs_model import FSRSModel
 from core.spontaneous_recall import SpontaneousRecall
+from memory.fsrs_model import FSRSModel
+from memory.memory_manager import MemoryManager
 
 
 @pytest.mark.asyncio

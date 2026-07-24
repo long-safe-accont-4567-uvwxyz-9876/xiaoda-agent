@@ -49,17 +49,23 @@ md.renderer.rules.link_open = (tokens: any, idx: number, options: any, _env: any
 // 从零解析整段 + highlight.js 高亮，复杂度 O(n²)。按 text 内容缓存渲染结果。
 const MAX_CACHE_ENTRIES = 100
 const MAX_ENTRY_BYTES = 50 * 1024 // 50KB：超出不缓存，避免单条占用过大
-const renderCache = new Map<string, string>()
+const CACHE_TTL_MS = 10 * 60 * 1000 // 10 分钟：长会话中淘汰过期条目，控制内存占用
+const renderCache = new Map<string, { html: string; ts: number }>()
 const encoder = new TextEncoder()
 
 export function renderMarkdown(text: string): string {
   const input = text || ''
+  const now = Date.now()
   const cached = renderCache.get(input)
   if (cached !== undefined) {
-    // 命中：移到末尾（最近使用），Map 按插入序迭代实现 LRU
+    if (now - cached.ts < CACHE_TTL_MS) {
+      // 命中且未过期：移到末尾（最近使用），Map 按插入序迭代实现 LRU
+      renderCache.delete(input)
+      renderCache.set(input, cached)
+      return cached.html
+    }
+    // 过期：淘汰后重新渲染
     renderCache.delete(input)
-    renderCache.set(input, cached)
-    return cached
   }
   const result = md.render(input)
   // 仅缓存 50KB 以内的输入，防止内存膨胀
@@ -68,7 +74,7 @@ export function renderMarkdown(text: string): string {
       const oldest = renderCache.keys().next().value
       if (oldest !== undefined) renderCache.delete(oldest)
     }
-    renderCache.set(input, result)
+    renderCache.set(input, { html: result, ts: now })
   }
   return result
 }

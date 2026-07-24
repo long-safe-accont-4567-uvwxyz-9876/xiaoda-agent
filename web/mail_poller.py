@@ -18,9 +18,9 @@ import json
 import os
 import re
 from collections import OrderedDict
-from datetime import datetime, UTC
-from zoneinfo import ZoneInfo
+from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 
@@ -320,8 +320,8 @@ def _clean_reply_text(reply: str) -> str:
     """
     if not reply:
         return reply
-    import re
     import json
+    import re
     text = reply.strip()
 
     # 1. 如果回复是 JSON，提取其中的文本字段

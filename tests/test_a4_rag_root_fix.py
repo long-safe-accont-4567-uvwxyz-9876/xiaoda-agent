@@ -6,11 +6,10 @@
 3. memory_manager 不应有双重超时
 4. 闲聊型查询应跳过 CRAG 评估
 """
-import asyncio
 import os
 import sys
-from unittest.mock import patch, MagicMock, AsyncMock
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -116,7 +115,6 @@ class TestCRAGSkipsChatIntent:
         mgr._try_temporal_search = AsyncMock(return_value=None)
         mgr.kg = None
 
-        import config
         with patch("config.QUERY_CACHE_ENABLED", True), \
              patch("config.RETRIEVAL_SMART_SKIP", True):
             await mgr.retrieve_memories("你好啊")
@@ -137,6 +135,7 @@ class TestNoDoubleTimeout:
     def test_retrieve_memories_no_outer_timeout(self):
         """retrieve_memories 中不应有外层 asyncio.wait_for 包裹 classify_intent"""
         import inspect
+
         from memory.memory_manager import MemoryManager
         source = inspect.getsource(MemoryManager.retrieve_memories)
         # 不应存在 asyncio.wait_for 包裹 classify_intent 的代码

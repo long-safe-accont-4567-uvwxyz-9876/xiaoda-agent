@@ -1,13 +1,13 @@
-from typing import Any
-import json
-import os
 import asyncio
 import hashlib
+import json
+import os
 import threading
 from collections import OrderedDict
 from pathlib import Path
-from loguru import logger
+from typing import Any
 
+from loguru import logger
 
 from utils.common import safe_int as _safe_int
 
@@ -145,6 +145,7 @@ class VectorStore:
 
                     # 检测文件系统类型，vfat/exfat 不支持 WAL
                     from pathlib import Path
+
                     from db.database import _detect_fs_type
                     fs_type = _detect_fs_type(Path(self._db_path))
                     is_fat = fs_type in ("vfat", "fat", "msdos", "exfat", "fat32")
@@ -170,7 +171,6 @@ class VectorStore:
                                 "SELECT embedding FROM memories_vec LIMIT 1"
                             ).fetchone()
                             if row is not None and row[0] is not None:
-                                import struct
                                 raw = row[0]
                                 if isinstance(raw, (bytes, bytearray)):
                                     dims = len(raw) // 4

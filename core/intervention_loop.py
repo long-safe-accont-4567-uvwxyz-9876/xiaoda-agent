@@ -7,13 +7,14 @@
 - reprobe/steerer.py: Steerer._apply_projection() 干预应用
 - jlens/fitting.py: fit() 的 mean_rel_change 收敛追踪
 """
-from dataclasses import dataclass
 import time
 from collections import deque
+from dataclasses import dataclass
+
 from loguru import logger
 
+from core.behavioral_direction import DirectionRegistry, DirectionVector
 from core.behavioral_signal import BehavioralSignalStream
-from core.behavioral_direction import DirectionVector, DirectionRegistry
 
 
 @dataclass

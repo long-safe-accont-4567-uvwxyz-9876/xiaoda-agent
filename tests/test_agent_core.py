@@ -1,8 +1,9 @@
 """AgentCore 核心模块单元测试 —— 聚焦初始化、bootstrap、错误处理与懒加载。"""
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 
 
 def _make_mock_core(**overrides):
@@ -128,7 +129,7 @@ class TestAgentCoreInitBootstrap:
     async def test_init_jieba_prewarm_failure_does_not_crash(self):
         """jieba 预热失败不应导致 init() 崩溃。"""
         with patch("agent_core.core.AgentCoreBootstrapper") as MockBS, \
-             patch("agent_core.core.asyncio") as MockAsyncIO:
+             patch("agent_core.core.asyncio") as _MockAsyncIO:
             bs_instance = AsyncMock()
             MockBS.return_value = bs_instance
 

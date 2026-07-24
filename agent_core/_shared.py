@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-
 # ── 模块级常量 ─────────────────────────────────────────────────
 DEGRADED_REPLY = "嗯……人家现在有点不太舒服，等会儿再聊好不好？"
 

@@ -1,8 +1,8 @@
 """CLI User — 每个事件实时打印，无消息条数限制。"""
 from __future__ import annotations
 
+from agent_core.user_base import AGENT_DISPLAY, UserBase
 from core.event_bus import AgentEvent, AgentEventType
-from agent_core.user_base import UserBase, AGENT_DISPLAY
 
 
 class CLIUser(UserBase):

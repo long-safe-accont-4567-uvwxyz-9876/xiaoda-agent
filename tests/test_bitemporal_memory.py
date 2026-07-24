@@ -5,7 +5,6 @@ import pytest
 from db.database import CURRENT_SCHEMA_VERSION, DatabaseManager
 from db.db_temporal_memory import TemporalMemoryDB
 
-
 TEMPORAL_TABLES = {
     "memory_facts",
     "memory_fact_sources",

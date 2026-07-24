@@ -1,15 +1,14 @@
 """EntityStore 测试：实体存储 + 反向链接 + recall_by_entities + Entity Boost"""
-import asyncio
-import time
-import pytest
 import sys
+import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from memory.entity_store import EntityStore, ENTITY_BOOST_WEIGHT, compute_entity_boost
 from memory.entity_extractor import Entity
+from memory.entity_store import ENTITY_BOOST_WEIGHT, EntityStore, compute_entity_boost
 from memory.scope import Scope
 
 
@@ -51,7 +50,7 @@ class TestLinkEntities:
         """已有实体：只建立反向链接，不重复创建"""
         db, store = store_db
         # 先创建实体
-        entity_id = await db.memory.insert_memory_entity(
+        _entity_id = await db.memory.insert_memory_entity(
             name="React", entity_type="IDENTIFIER", kind="技术"
         )
         # 链接到第一条记忆

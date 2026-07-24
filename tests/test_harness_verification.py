@@ -4,9 +4,9 @@ Round 1: 单元层 — 模块导入与常量验证
 Round 2: 集成层 — 组件交互验证
 Round 3: 端到层 — 全链路验证
 """
+import inspect
 import sys
 import time
-import inspect
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -34,8 +34,10 @@ class TestRound1UnitSmoke:
     def test_import_prompt_builder(self):
         """验证 prompt_builder 关键符号可正常导入。"""
         from prompt_builder import (
-            _MODULE_SCENE_PRIORITY, _SCENE_KEYWORDS,
-            _classify_scene, build_scene_aware_prompt,
+            _MODULE_SCENE_PRIORITY,
+            _SCENE_KEYWORDS,
+            _classify_scene,
+            build_scene_aware_prompt,
         )
         assert _MODULE_SCENE_PRIORITY is not None
         assert _SCENE_KEYWORDS is not None
@@ -244,7 +246,7 @@ class TestSceneAwareV2:
 
     def test_scene_cache_hit(self):
         """相同场景的第二次调用应命中缓存"""
-        from prompt_builder import reset_scene_cache, build_scene_aware_prompt, get_scene_cache_stats
+        from prompt_builder import build_scene_aware_prompt, get_scene_cache_stats, reset_scene_cache
         reset_scene_cache()
         build_scene_aware_prompt("帮我写脚本", "爸爸")
         stats1 = get_scene_cache_stats()
@@ -260,8 +262,8 @@ class TestSceneAwareV2:
         - S 级 (核心事实): 立刻重排 (杜绝时间认知错乱)
         - B 级 (闲聊): 保持当前排序 (节省算力)
         """
-        from prompt_builder import reset_scene_cache, build_scene_aware_prompt
         import prompt_builder
+        from prompt_builder import build_scene_aware_prompt, reset_scene_cache
         reset_scene_cache()
         # 首次: A 级场景 task (功能桶排序)
         build_scene_aware_prompt("帮我写个脚本", "爸爸")
@@ -280,7 +282,7 @@ class TestSceneAwareV2:
 
     def test_cache_stats_function(self):
         """缓存统计函数应返回正确结构"""
-        from prompt_builder import reset_scene_cache, get_scene_cache_stats
+        from prompt_builder import get_scene_cache_stats, reset_scene_cache
         reset_scene_cache()
         stats = get_scene_cache_stats()
         assert "hits" in stats
@@ -290,7 +292,7 @@ class TestSceneAwareV2:
 
     def test_reset_scene_cache(self):
         """重置后缓存应为空"""
-        from prompt_builder import reset_scene_cache, build_scene_aware_prompt, get_scene_cache_stats
+        from prompt_builder import build_scene_aware_prompt, get_scene_cache_stats, reset_scene_cache
         build_scene_aware_prompt("测试", "爸爸")
         reset_scene_cache()
         stats = get_scene_cache_stats()

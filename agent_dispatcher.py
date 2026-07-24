@@ -1,22 +1,23 @@
-import json
 import asyncio
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
-from openai import AsyncOpenAI
 
 from loguru import logger
-from tool_engine.tool_registry import to_openai_tools
-from tool_engine.tool_executor import ToolExecutor, ToolResult
-from tool_engine.tool_repair import ToolCallRepair
-from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_dsml, strip_reasoning, humanize
-from utils.llm_cleanup import deduplicate_multi_reply
-from emotion.tts_engine import TTSEngine
-from emotion.emoji_config import get_status_msg
-from tool_engine.tool_guardrails import get_tool_guardrails
-from utils.credential_pool import CredentialPool
-from core.message import AgentMessage
+from openai import AsyncOpenAI
+
 from config import get_agent_display_name
+from core.message import AgentMessage
+from emotion.emoji_config import get_status_msg
+from emotion.tts_engine import TTSEngine
+from tool_engine.tool_executor import ToolExecutor, ToolResult
+from tool_engine.tool_guardrails import get_tool_guardrails
+from tool_engine.tool_registry import to_openai_tools
+from tool_engine.tool_repair import ToolCallRepair
+from utils.credential_pool import CredentialPool
+from utils.llm_cleanup import deduplicate_multi_reply
+from utils.text_utils import has_dsml_tool_calls, humanize, parse_dsml_tool_calls, strip_dsml, strip_reasoning
 
 # J-Space Hook: 干预闭环
 try:

@@ -1,6 +1,6 @@
 """G8: context_compressor retrieve_async 测试."""
 import asyncio
-import time
+
 from memory.context_compressor import ContextCompressor
 
 

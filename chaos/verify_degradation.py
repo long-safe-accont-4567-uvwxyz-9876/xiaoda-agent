@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from typing import Any
 from collections.abc import AsyncIterator
+from typing import Any
 
 from loguru import logger
 
@@ -42,7 +42,6 @@ from core.degradation_strategy import (
     DegradationLevel,
     DegradationStrategy,
 )
-
 
 # ============================================================
 # 辅助: 桩 LLM 客户端 (提供正常响应, 不依赖真实 API)

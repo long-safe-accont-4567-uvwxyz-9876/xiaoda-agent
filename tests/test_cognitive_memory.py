@@ -1,9 +1,12 @@
 # tests/test_cognitive_memory.py
 """3层认知记忆管理器测试"""
 import time
+
 import numpy as np
 import pytest
+
 from memory.cognitive_memory import CognitiveMemory, MemoryEntry
+
 
 @pytest.fixture
 def cog_mem():

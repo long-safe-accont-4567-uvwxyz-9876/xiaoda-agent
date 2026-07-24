@@ -1,7 +1,8 @@
 import asyncio
 import time
-from typing import Any
 from collections.abc import Callable
+from typing import Any
+
 from loguru import logger
 
 

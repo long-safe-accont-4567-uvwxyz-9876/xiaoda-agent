@@ -6,8 +6,6 @@ import inspect
 import os
 import time
 
-import pytest
-
 
 class TestC1EpisodicMemoriesDDL:
     """C-1: episodic_memories DDL 应包含 content_hash 和 version 列"""

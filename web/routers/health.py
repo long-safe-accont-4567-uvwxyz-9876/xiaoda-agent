@@ -1,17 +1,17 @@
 """健康测试中心路由（R12）：LLM/TTS/视频/MCP/DB/向量 探针、系统信息、报告。"""
 from __future__ import annotations
-from typing import Any
 
 import asyncio
 import json
 import os
 import time
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["health"], dependencies=[Depends(get_current_user)])
 

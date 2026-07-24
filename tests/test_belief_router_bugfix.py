@@ -1,7 +1,7 @@
 """BeliefRouter bug 修复测试 — decide() 应调用 select_agent()。"""
 import os
-import pytest
 from unittest.mock import MagicMock, patch
+
 from core.router_engine import RouterEngine
 
 

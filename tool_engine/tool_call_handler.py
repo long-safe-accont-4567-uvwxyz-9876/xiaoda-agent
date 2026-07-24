@@ -1,26 +1,27 @@
-from typing import Any
 import asyncio
 import fnmatch
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
-from .tool_executor import ToolExecutor, ToolResult
-from .tool_repair import ToolCallRepair
-from utils.text_utils import smart_truncate
-from emotion.emoji_config import get_status_msg
+
+from agent_core._shared import is_degraded_reply
 from config import ERROR_RULE_STRICT_MODE
 from core.background_tasks import _spawn
 from core.error_codes import ErrorCodeEnum
-from core.event_bus import event_bus, AgentEvent, AgentEventType
+from core.event_bus import AgentEvent, AgentEventType, event_bus
+from emotion.emoji_config import get_status_msg
 from security.instruction_hierarchy import (
     InstructionLevel,
     format_instruction,
     sanitize_external_content,
 )
-from agent_core._shared import is_degraded_reply
+from utils.text_utils import smart_truncate
 
+from .tool_executor import ToolExecutor, ToolResult
+from .tool_repair import ToolCallRepair
 
 # 写操作工具集合：这些工具会修改文件系统/配置，需进行路径白名单校验
 _WRITE_TOOLS: set[str] = {

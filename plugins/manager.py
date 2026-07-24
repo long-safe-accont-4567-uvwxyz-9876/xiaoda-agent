@@ -13,10 +13,10 @@ from typing import Any
 
 from loguru import logger
 
-from plugins.manifest import PluginManifest
-from plugins.discovery import discover_plugins
-from plugins.permissions import PermissionChecker
 from plugins.context import PluginContext
+from plugins.discovery import discover_plugins
+from plugins.manifest import PluginManifest
+from plugins.permissions import PermissionChecker
 from plugins.sdk import Plugin
 
 

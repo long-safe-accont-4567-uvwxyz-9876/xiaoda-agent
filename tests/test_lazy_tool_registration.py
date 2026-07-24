@@ -5,9 +5,9 @@
    但 to_openai_tools() 仍返回完整工具列表（含 web_browse 等已知工具）。
 2. 首次调用懒注册工具时按需解析 func 并返回正确结果，二次调用复用缓存（_lazy 置 False）。
 """
-import sys
 import asyncio
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -60,10 +60,13 @@ def test_cold_start_does_not_import_tools_submodules():
 
 def test_lazy_tool_resolve_and_cache():
     """首次调用懒注册工具解析 func 并返回结果，二次调用复用缓存。"""
-    from tool_engine.tool_registry import (
-        register_lazy_tool, get_tool, unregister_tool, ToolPermission,
-    )
     from tool_engine.tool_executor import ToolExecutor
+    from tool_engine.tool_registry import (
+        ToolPermission,
+        get_tool,
+        register_lazy_tool,
+        unregister_tool,
+    )
 
     tool_name = "_test_lazy_dummy_42"
     register_lazy_tool(
@@ -107,10 +110,12 @@ def test_lazy_tool_resolve_and_cache():
 
 def test_lazy_resolve_failure_returns_fail():
     """懒解析失败（模块不存在）时 ToolExecutor 返回 fail 而非抛异常。"""
-    from tool_engine.tool_registry import (
-        register_lazy_tool, unregister_tool, ToolPermission,
-    )
     from tool_engine.tool_executor import ToolExecutor
+    from tool_engine.tool_registry import (
+        ToolPermission,
+        register_lazy_tool,
+        unregister_tool,
+    )
 
     tool_name = "_test_lazy_missing_module"
     register_lazy_tool(

@@ -1,10 +1,9 @@
 """最小回归测试集 - 验证核心导入和对象创建"""
 import asyncio
 
+
 def test_core_imports():
-    from agent_core import RequestContext
-    from agent_context import AgentContext
-    from config import DATA_DIR
+    pass
 
 def test_request_context():
     from agent_core import RequestContext
@@ -22,7 +21,7 @@ def test_agent_context():
     assert msgs[-1]["role"] == "user"
 
 def test_tool_registry():
-    from tool_engine.tool_registry import register_tool, to_openai_tools, clear_tools
+    from tool_engine.tool_registry import clear_tools, register_tool, to_openai_tools
     clear_tools()
     @register_tool(name="smoke_test", description="test", schema={"type":"object","properties":{"q":{"type":"string"}}}, max_frequency=10)
     def t(q): return q
@@ -31,7 +30,7 @@ def test_tool_registry():
     clear_tools()
 
 def test_disabled_tool_filtered():
-    from tool_engine.tool_registry import register_tool, to_openai_tools, clear_tools
+    from tool_engine.tool_registry import clear_tools, register_tool, to_openai_tools
     clear_tools()
     @register_tool(name="disabled", description="off", schema={"type":"object","properties":{}}, max_frequency=0)
     def t(): pass

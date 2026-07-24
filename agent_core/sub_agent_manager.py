@@ -11,16 +11,14 @@ from typing import Any
 
 from loguru import logger
 
+from agent_core._shared import ProcessResult, RequestContext, _current_request_ctx, is_degraded_reply
 from config import TTS_ASYNC_MODE, build_system_prompt, get_agent_display_name
-from emotion.emotion_simple import detect_emotion
-from emotion.emotion_enum import CN_TO_EN
-from utils.text_utils import humanize, strip_dsml, strip_reasoning
+from core.cancel_token import CancellationError, CancelToken
 from core.degradation_strategy import get_degradation_strategy
-from core.event_bus import event_bus, AgentEvent, AgentEventType, gen_task_id
-from core.cancel_token import CancelToken, CancellationError
-
-from agent_core._shared import ProcessResult, _current_request_ctx, RequestContext, is_degraded_reply
-
+from core.event_bus import AgentEvent, AgentEventType, event_bus, gen_task_id
+from emotion.emotion_enum import CN_TO_EN
+from emotion.emotion_simple import detect_emotion
+from utils.text_utils import humanize, strip_dsml, strip_reasoning
 
 # ── 子 Agent @ 对话模式专用：情绪标签规则（注入 system prompt）──────────────
 # 仅在 _dispatch_single_sub_agent（用户 @ 子 Agent 直接对话）时注入，

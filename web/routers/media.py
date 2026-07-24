@@ -1,17 +1,17 @@
 """媒体工坊路由（R11）：TTS 同步合成（内容寻址缓存）、图/视频异步任务、画廊。"""
 from __future__ import annotations
-from typing import Any
 
 import hashlib
 import shutil
 import time
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["media"], dependencies=[Depends(get_current_user)])
 
@@ -76,7 +76,7 @@ async def synthesize_tts(body: dict, request: Request) -> Any:
 
 @router.get("/media/tts/voices", response_model=Envelope[dict])
 async def tts_voices() -> Any:
-    from emotion.tts_engine import list_all_voices, EMOTION_STYLE_MAP
+    from emotion.tts_engine import EMOTION_STYLE_MAP, list_all_voices
     all_voices = list_all_voices()
     # 转为按 agent 分组: {agent: [{name, voice_ref}]}
     groups = {}
@@ -91,8 +91,9 @@ async def tts_voices() -> Any:
 @router.post("/media/tts/voices/{agent}", response_model=Envelope[dict])
 async def upload_voice_ref(agent: str, request: Request) -> Any:
     """上传指定 agent 的参考音频。FormData: name=音色名, file=音频文件(.mp3/.wav, <10MB)。"""
-    from emotion.tts_engine import get_agent_voice_dir
     import re
+
+    from emotion.tts_engine import get_agent_voice_dir
     if ".." in agent or "/" in agent or "\\" in agent:
         raise HTTPException(400, "非法 agent 名称")
     form = await request.form()
@@ -121,8 +122,9 @@ async def upload_voice_ref(agent: str, request: Request) -> Any:
 @router.delete("/media/tts/voices/{agent}/{name}", response_model=Envelope[dict])
 async def delete_voice_ref(agent: str, name: str) -> Any:
     """删除指定 agent 的参考音频。"""
-    from emotion.tts_engine import get_agent_voice_dir
     import re
+
+    from emotion.tts_engine import get_agent_voice_dir
     if ".." in agent or "/" in agent or "\\" in agent:
         raise HTTPException(400, "非法 agent 名称")
     if not re.match(r'^[a-zA-Z0-9_-]+$', name):

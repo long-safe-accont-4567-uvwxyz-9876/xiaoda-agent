@@ -1,12 +1,13 @@
 """插件管理 REST API"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
 from typing import Any
 
-from web.schemas import Envelope
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
+
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(prefix="/plugins", tags=["plugins"],
                    dependencies=[Depends(get_current_user)])

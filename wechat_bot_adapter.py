@@ -8,7 +8,6 @@ iLink 协议：微信官方 Bot API（2026.3.22 开放），域名 elinkai.weixi
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Any, Optional
 
 from loguru import logger

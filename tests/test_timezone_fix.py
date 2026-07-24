@@ -51,6 +51,7 @@ def test_time_context_respects_env_timezone():
 def test_greeting_scheduler_uses_explicit_timezone():
     """greeting_scheduler 应使用显式时区, 不依赖系统本地时区."""
     import inspect
+
     import web.greeting_scheduler as gs_mod
     source = inspect.getsource(gs_mod)
     assert "Asia/Shanghai" in source or "ZoneInfo" in source or "NUDGE_TIMEZONE" in source, \

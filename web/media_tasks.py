@@ -4,7 +4,6 @@
 每次变化通过 broadcast 推送 media_task_update 事件并落库 media_tasks 表。
 """
 from __future__ import annotations
-from typing import Any
 
 import asyncio
 import json
@@ -13,6 +12,7 @@ import shutil
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -192,14 +192,15 @@ class MediaTaskQueue:
         return f"/media/{kind}/{dest.name}"
 
     async def _download(self, url: str, kind: str) -> str:
-        import httpx
         import ipaddress
-        from urllib.parse import urlparse
 
         # SSRF protection: block private/internal IPs (含域名 DNS rebinding 防护)
         # 1) hostname 是 IP 字符串时直接校验
         # 2) hostname 是域名时用 getaddrinfo 解析所有 A/AAAA 记录后逐一校验
         import socket
+        from urllib.parse import urlparse
+
+        import httpx
         parsed = urlparse(url)
         hostname = parsed.hostname
         if not hostname:

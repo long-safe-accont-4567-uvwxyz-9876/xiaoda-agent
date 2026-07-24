@@ -36,13 +36,12 @@ from __future__ import annotations
 
 import asyncio
 import random
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
-from collections.abc import AsyncIterator
 
 from loguru import logger
-
 
 # ============================================================
 # 常量与枚举

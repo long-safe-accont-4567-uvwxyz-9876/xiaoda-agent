@@ -1,6 +1,7 @@
 import random
-from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+
 from config import get_agent_display_name
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
 
 
 @register_tool(

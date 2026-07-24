@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import time
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 
 
 # ── 辅助：安全构造 MemoryManager（隔离重量级依赖） ──

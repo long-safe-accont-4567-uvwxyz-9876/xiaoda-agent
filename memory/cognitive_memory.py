@@ -39,14 +39,12 @@ Layer 3: HopfieldLayer — 联想记忆 (内存)
 """
 from __future__ import annotations
 
+import asyncio
 import math
 import time
-from dataclasses import dataclass, field
-from typing import Any
-
 from collections import deque
+from dataclasses import dataclass, field
 
-import asyncio
 import numpy as np
 from loguru import logger
 

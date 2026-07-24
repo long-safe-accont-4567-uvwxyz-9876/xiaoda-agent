@@ -6,9 +6,9 @@
   这样 ModelRouter 的调用点零改动即可使用。
 """
 from __future__ import annotations
-from typing import Any
 
 from types import SimpleNamespace
+from typing import Any
 
 from loguru import logger
 

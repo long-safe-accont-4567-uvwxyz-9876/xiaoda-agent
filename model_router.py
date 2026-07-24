@@ -1,28 +1,31 @@
-from typing import Any, ClassVar
-from collections.abc import AsyncIterator
+import asyncio
+import contextlib
+import contextvars
 import hashlib
 import os
 import time
-import asyncio
-import contextvars
-from openai import AsyncOpenAI
+from collections.abc import AsyncIterator
+from typing import Any, ClassVar
+
 import openai as _openai_mod  # 用于 openai.APIError 异常捕获
 from loguru import logger
+from openai import AsyncOpenAI
 
-from db.db_analytics import AnalyticsDB
-from utils.metrics import metrics
 from config import AGNES_BASE_URL, AGNES_TEXT_MODEL, PROMPT_CACHING_ENABLED
-from config import MODEL_NAME as _CFG_MODEL_NAME, PRO_MODEL_NAME as _CFG_PRO_MODEL
-from config import FLASH_MODEL_NAME as _CFG_FLASH_MODEL, DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
+from config import DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
+from config import FLASH_MODEL_NAME as _CFG_FLASH_MODEL
+from config import MODEL_NAME as _CFG_MODEL_NAME
+from config import PRO_MODEL_NAME as _CFG_PRO_MODEL
 from config import set_default_provider as _set_default_provider
-from transports import ProviderTransport, MiMoTransport, AgnesTransport
-from utils.prompt_caching import apply_cache_control
-from utils.error_classifier import ErrorClassifier, RecoveryAction
-from utils.credential_pool import get_credential_pool
-from security.ssrf_guard import validate_url as _ssrf_validate_url
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
-import contextlib
+from db.db_analytics import AnalyticsDB
+from security.ssrf_guard import validate_url as _ssrf_validate_url
+from transports import AgnesTransport, MiMoTransport, ProviderTransport
+from utils.credential_pool import get_credential_pool
+from utils.error_classifier import ErrorClassifier, RecoveryAction
+from utils.metrics import metrics
+from utils.prompt_caching import apply_cache_control
 
 
 def _mask_api_key(key: str) -> str:
@@ -243,8 +246,8 @@ class ModelRouter:
     def _lazy_register_provider(self, provider: str) -> None:
         """懒注册：从 config_service 恢复未注册的自定义 provider。"""
         try:
-            from web.config_service import get_config_service
             from web._provider_keys import load_provider_key
+            from web.config_service import get_config_service
             from web.custom_providers import register_into_router
             cfg = get_config_service()
             record = cfg.get(f"models.providers.{provider}")
@@ -353,6 +356,10 @@ class ModelRouter:
         return self._transports.get(provider)
 
     def set_chat_model(self, provider: str, model_id: str) -> dict:
+        # 智能同步：在修改 chat 路由之前捕获旧主 provider，
+        # 后续只同步仍在跟随旧主 provider 的路由（默认状态），
+        # 保留用户已通过 WebUI 自定义到其他 provider 的路由（如 chat_mini=deepseek）。
+        old_provider = ROUTE_TABLE.get("chat", {}).get("client", "")
         ROUTE_TABLE["chat"]["model"] = model_id
         ROUTE_TABLE["chat"]["client"] = provider
         # 同步更新全局 DEFAULT_PROVIDER，使子代理、成本统计等全部跟随
@@ -363,33 +370,39 @@ class ModelRouter:
             if provider not in self._custom_clients:
                 raise LLMError(f"自定义 provider {provider} 未注册，请先注册客户端")
 
-        # 全量同步：所有聊天类 + 轻量任务 task_type 都跟随主 provider
-        # 用户切换 provider 时，确保所有场景都用目标 provider，不再残留旧 provider
-        _sync_tasks = ("chat_pro", "chat_flash", "chat_mini", "chat_mimo",
+        # 智能同步候选任务列表（chat_mimo 排除：MiMo 兜底专用路由，始终保持 mimo client）
+        _sync_tasks = ("chat_pro", "chat_flash", "chat_mini",
                        "chat_ultra", "emotion_analysis", "tool_result_wrap",
                        "memory_encoding")
+        # 只同步仍在跟随旧主 provider 的路由（默认跟随状态）。
+        # 用户已通过 update_route 自定义到其他 provider 的路由保留不动，
+        # 确保 WebUI 的每项修改都能持久化，不被主模型切换覆盖。
+        synced_tasks: list[str] = []
         for _task in _sync_tasks:
             if _task in ROUTE_TABLE:
-                ROUTE_TABLE[_task]["model"] = model_id
-                ROUTE_TABLE[_task]["client"] = provider
-                # agnes 不支持 thinking，切换到 agnes 时禁用 thinking
-                if provider == "agnes" and "thinking" in ROUTE_TABLE[_task]:
-                    ROUTE_TABLE[_task]["thinking"] = {"type": "disabled"}
-        # 关键修复：不再把 chat_flash 重置成跨 provider（_CROSS_PROVIDER_MAP）。
-        # 旧逻辑"主 provider 故障时 flash 切到不同 provider 实现 fallback 链多样化"
-        # 会导致用户明确选择 agnes 后，agnes 主路由失败时 fallback 链跳到 mimo，
-        # 返回 mimo-v2.5 回复，与用户配置不符。
-        # 正确行为：chat_flash 跟随主 provider，agnes 故障时优先 fallback 到
-        # 同 provider 的其他模型（chat_agnes），跨 provider 降级作为最后手段
-        # 由 _try_fallback_chain 的 step 2/3 处理。
-        logger.info("router.all_tasks_synced",
+                _task_client = ROUTE_TABLE[_task].get("client", old_provider)
+                # client 与旧主 provider 一致 = 默认跟随状态 → 同步
+                # old_provider 为空 = 首次初始化 → 全部同步
+                # client 与旧主 provider 不同 = 用户自定义 → 保留
+                if _task_client == old_provider or not old_provider:
+                    ROUTE_TABLE[_task]["model"] = model_id
+                    ROUTE_TABLE[_task]["client"] = provider
+                    # agnes 不支持 thinking，切换到 agnes 时禁用 thinking
+                    if provider == "agnes" and "thinking" in ROUTE_TABLE[_task]:
+                        ROUTE_TABLE[_task]["thinking"] = {"type": "disabled"}
+                    synced_tasks.append(_task)
+        logger.info("router.smart_sync",
                     provider=provider, model=model_id,
-                    synced_tasks=list(_sync_tasks))
+                    old_provider=old_provider,
+                    synced_tasks=synced_tasks,
+                    preserved_tasks=[t for t in _sync_tasks if t not in synced_tasks])
 
         self._current_chat_model = {"provider": provider, "model_id": model_id}
         # 持久化到 config_service，以便重启后恢复上次聊天模型
-        # 必须同步写入 models.chat_model 与 models.routes.chat，避免两套数据不同步
-        # 否则 _apply_route_overrides 与 _restore_chat_model 启动顺序会造成覆盖
+        # 必须同步写入 models.chat_model 与实际被同步的路由，避免两套数据不同步
+        # 否则 _apply_route_overrides 在重启时用旧的持久化值覆盖内存中的同步结果。
+        # 关键：只持久化被同步的路由，不触碰用户自定义路由的持久化数据
+        # （用户自定义路由由 update_route 维护持久化，此处覆盖会导致用户设置丢失）。
         # 关键修复：捕获 Exception 而非 (OSError, KeyError, ValueError, TypeError)。
         # 旧逻辑下若 config_service 抛 LLMError/AppException 或其他非上述类型的异常，
         # 会向上传播到 _restore_chat_model 的 try/except，触发 fallback 分支，
@@ -397,12 +410,14 @@ class ModelRouter:
         try:
             from web.config_service import get_config_service
             cfg = get_config_service()
-            cfg.set(
-                "models.chat_model",
-                {"provider": provider, "model_id": model_id},
-            )
+            # 批量构建所有需要持久化的路由更新，一次性写盘+通知
+            # 避免 N 次 cfg.set() 触发 N 次原子写盘和 watcher 回调
+            _updates: dict[str, dict] = {
+                "models.chat_model": {"provider": provider, "model_id": model_id},
+            }
+            # chat 主路由
             chat_entry = ROUTE_TABLE.get("chat", {})
-            cfg.set("models.routes.chat", {
+            _updates["models.routes.chat"] = {
                 "model": model_id,
                 "client": provider,
                 "max_tokens": chat_entry.get("max_tokens"),
@@ -412,7 +427,24 @@ class ModelRouter:
                     and chat_entry["thinking"].get("type") == "enabled"
                 ),
                 "timeout": self.TASK_TIMEOUTS.get("chat"),
-            })
+            }
+            # 只持久化实际被同步的路由，确保重启后 _apply_route_overrides 能正确恢复
+            # 用户自定义路由的持久化数据由 update_route 维护，不触碰
+            for _task in synced_tasks:
+                if _task in ROUTE_TABLE:
+                    _entry = ROUTE_TABLE[_task]
+                    _updates[f"models.routes.{_task}"] = {
+                        "model": _entry["model"],
+                        "client": _entry.get("client", provider),
+                        "max_tokens": _entry.get("max_tokens"),
+                        "thinking": bool(
+                            _entry.get("thinking")
+                            and isinstance(_entry.get("thinking"), dict)
+                            and _entry["thinking"].get("type") == "enabled"
+                        ),
+                        "timeout": self.TASK_TIMEOUTS.get(_task),
+                    }
+            cfg.set_many(_updates)
         except Exception as e:
             logger.warning("router.chat_model_persist_failed error={} type={}",
                            str(e), type(e).__name__)

@@ -10,24 +10,23 @@
     1 : overall_score < 60 或运行异常
 """
 from __future__ import annotations
-from typing import Any
 
 import argparse
 import asyncio
 import json
 import os
 import sys
+from typing import Any
 
 # 确保项目根目录在 sys.path 中
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from chaos.reliability_bench import BenchReport, ReliabilityBench
 from chaos._fault_types import (
     SimpleFaultInjectingLLMClient,
 )
-
+from chaos.reliability_bench import BenchReport, ReliabilityBench
 
 # ============================================================
 # ANSI 彩色输出

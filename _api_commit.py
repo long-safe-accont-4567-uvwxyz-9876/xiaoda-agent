@@ -1,9 +1,9 @@
 """用GitHub API提交本地修改，绕过SAFE_RM环境变量问题"""
-import os
-import json
 import base64
-import urllib.request
+import json
+import os
 import sys
+import urllib.request
 
 for k in list(os.environ.keys()):
     if k.startswith("SAFE_RM"):
@@ -105,6 +105,7 @@ if isinstance(wf_dir, list):
 # 9. 生成requirements.lock
 print("\n8. 生成requirements.lock...")
 import subprocess
+
 r = subprocess.run(["pip", "freeze"], capture_output=True, text=True, check=False)
 lock_path = os.path.join(ROOT, "requirements.lock")
 with open(lock_path, "w") as fh:

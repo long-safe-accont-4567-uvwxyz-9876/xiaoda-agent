@@ -1,5 +1,6 @@
-from typing import Any
 import time
+from typing import Any
+
 import aiosqlite
 from loguru import logger
 

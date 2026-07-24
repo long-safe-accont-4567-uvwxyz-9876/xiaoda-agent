@@ -6,13 +6,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
 from loguru import logger
+from pydantic import BaseModel, Field
 
-from market.manifest import MarketItem, get_plugins_fetcher, get_skills_fetcher, get_mcp_fetcher
-from market.installer import MarketInstaller, InstallError
-from web.schemas import Envelope
+from market.installer import InstallError, MarketInstaller
+from market.manifest import MarketItem, get_mcp_fetcher, get_plugins_fetcher, get_skills_fetcher
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(prefix="/market", tags=["market"],
                    dependencies=[Depends(get_current_user)])
@@ -35,6 +35,7 @@ class UninstallRequest(BaseModel):
 def _get_installer(request: Request) -> MarketInstaller:
     """获取 MarketInstaller 实例"""
     from pathlib import Path
+
     from config import WORKSPACE_DIR
 
     plugins_dir = Path(__file__).resolve().parent.parent.parent / "plugins"

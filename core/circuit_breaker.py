@@ -4,11 +4,11 @@
     探测成功 → GREEN（冷却时间重置为初始值）
     探测失败 → RED（冷却时间指数退避，上限 MAX_COOLDOWN）
 """
-from typing import Any, ClassVar
-import time
 import threading
-from enum import Enum
+import time
 from dataclasses import dataclass
+from enum import Enum
+from typing import Any, ClassVar
 
 from loguru import logger
 

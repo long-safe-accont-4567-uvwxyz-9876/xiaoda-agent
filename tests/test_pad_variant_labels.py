@@ -8,8 +8,10 @@ recall_and_enact 中的 PAD 微调使用 pad_from_emotion(mem.emotion, 0.5)，
 本测试验证变体标签经过 CN_TO_EN_MAP 归一化后能正确映射到 PAD 值。
 """
 import pytest
+
+from emotion.pad_model import EMOTION_PAD_REFERENCE, PADEmotion
+from emotion.pad_model import from_emotion as pad_from_emotion
 from memory.emotional_memory import CN_TO_EN_MAP
-from emotion.pad_model import from_emotion as pad_from_emotion, EMOTION_PAD_REFERENCE, PADEmotion
 
 
 class TestPADVariantLabels:

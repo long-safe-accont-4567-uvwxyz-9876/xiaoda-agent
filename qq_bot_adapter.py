@@ -1,20 +1,22 @@
-from typing import Any
-import os
-import sys
 import asyncio
 import base64
-import threading
-import time
+import os
 import random
 import re
+import sys
+import threading
+import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 
 from utils.common import safe_int as _safe_int
+from utils.llm_cleanup import strip_qq_face_tags
 
 
 def _safe_float(val, default):
@@ -27,26 +29,29 @@ def _safe_float(val, default):
 # botpy 内部已使用 SSLContext() 处理 WebSocket SSL，无需全局禁用证书验证
 
 from utils.logging_config import setup_logging
-setup_logging()
 
-from loguru import logger
+setup_logging()
 
 import botpy
 from botpy.gateway import BotWebSocket
 from botpy.message import C2CMessage, GroupMessage
+from loguru import logger
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agent_core import AgentCore, ProcessResult
 from agent_core.user_qq import QQUser
-from core.event_bus import event_bus
 from config import AGENT_CONFIG, get_agent_display_name
-from security.human_approval import (
-    IMApprovalChannel, ApprovalRequest, ApprovalStatus,
-    RiskLevel, HIGH_RISK_OPERATIONS,
-)
-from emotion.nudge_engine import NudgeEngine
+from core.event_bus import event_bus
 from emotion.emoji_config import get_ack_message
+from emotion.nudge_engine import NudgeEngine
+from security.human_approval import (
+    HIGH_RISK_OPERATIONS,
+    ApprovalRequest,
+    ApprovalStatus,
+    IMApprovalChannel,
+    RiskLevel,
+)
 from utils.text_utils import encode_image_to_base64
 
 _original_is_system_event = BotWebSocket._is_system_event
@@ -595,6 +600,7 @@ class AIQQBot(botpy.Client):
         若消息为空（无文本且无附件）返回 None。
         """
         content = (getattr(message, 'content', None) or "").strip()
+        content = strip_qq_face_tags(content)  # 剥离 QQ 表情标签，防止污染 LLM 上下文被模仿
         image_data, attachment_info = await self._process_message_attachments(message)
         if not content and not attachment_info:
             return None
@@ -762,6 +768,7 @@ class AIQQBot(botpy.Client):
     async def on_group_at_message_create(self, message: GroupMessage) -> None:
         try:
             content = (getattr(message, 'content', None) or "").strip()
+            content = strip_qq_face_tags(content)  # 剥离 QQ 表情标签，防止污染 LLM 上下文被模仿
 
             image_data, attachment_info = await self._process_message_attachments(message)
 
@@ -1007,8 +1014,9 @@ class AIQQBot(botpy.Client):
         所有中间临时文件会在方法内部清理，只保留最终成功的文件。
         调用者负责在不再需要时删除返回的临时文件。
         """
-        from PIL import Image
         import tempfile
+
+        from PIL import Image
 
         tmp_path: Path | None = None
 
@@ -1442,7 +1450,7 @@ class AIQQBot(botpy.Client):
         取第 1 片（无标记截断，自动闭合代码块）。
         C2C 场景：保持原分片逻辑。
         """
-        from utils.text_utils import split_long_reply, split_for_group_passive
+        from utils.text_utils import split_for_group_passive, split_long_reply
 
         is_group = isinstance(message, GroupMessage)
 
@@ -1661,8 +1669,9 @@ class AIQQBot(botpy.Client):
     async def _convert_to_silk(self, audio_path: Path) -> Path | None:
         pcm_path = None
         try:
-            import pilk
             import subprocess
+
+            import pilk
 
             pcm_path = audio_path.with_suffix('.pcm')
             silk_path = audio_path.with_suffix('.silk')

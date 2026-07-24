@@ -9,7 +9,6 @@ import re
 
 from loguru import logger
 
-
 # 推理模型（DeepSeek-R1/MiMo Pro 等）会输出各种思维链标签
 # 扩展匹配：<think>/<thinking>/reasoning/analysis/reflection/thought 和 [think/thinking/reasoning/analysis]
 # 注意：thinking 必须在 think 之前，避免 <think> 先匹配 <think 部分后 \b 边界失败
@@ -330,4 +329,27 @@ def strip_image_gen_leak(text: str, *, context: str = "") -> str:
     text = re.sub(r'[ \t]{2,}', ' ', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
+
+
+# QQ 表情标签泄漏：<faceType=1,faceId="N",ext="base64"/> 由 botpy 将用户发表情
+# 序列化进 message.content，经对话历史被 LLM 模仿输出。输入侧（qq_bot_adapter）
+# 与输出侧（_clean_reply_full）均需剥离，防止原始标签泄漏到 QQ 回复。
+# 样本：'你凶我<faceType=1,faceId="5",ext="eyJ0ZXh0Ijoi5rWB5rOqIn0=">'
+_QQ_FACE_TAG_RE = re.compile(
+    r'<faceType=\d+,\s*faceId=["\']?\d+["\']?,\s*ext=["\'][^"\']*["\']\s*/?>'
+)
+
+
+def strip_qq_face_tags(text: str, *, context: str = "") -> str:
+    """剥离 QQ 表情标签 <faceType=1,faceId="N",ext="..."/>。
+
+    botpy 把用户发表情序列化成该字面标签塞进 message.content，会污染 LLM 上下文
+    并被模仿输出。输入侧调用以阻止污染，输出侧调用作防御兜底。
+    """
+    if not text or "<faceType" not in text:
+        return text
+    cleaned = _QQ_FACE_TAG_RE.sub('', text)
+    # 标签剥离后清理粘连的多余空白
+    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned)
+    return cleaned
 

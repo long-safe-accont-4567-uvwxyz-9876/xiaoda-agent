@@ -10,7 +10,7 @@ Bug: _run_desktop 在 win32 下无条件调用 GetConsoleWindow + ShowWindow(SW_
 3. 若附加进程 > 1，说明与父进程共享，不隐藏
 """
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 

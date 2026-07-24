@@ -9,13 +9,11 @@
 修复方案：在 setup_logging() 中检测 TEST_MODE 环境变量，测试模式下跳过文件 sink。
 """
 import os
-import sys
 from pathlib import Path
 from unittest import mock
 
 import pytest
 from loguru import logger
-
 
 # ── 辅助函数 ──────────────────────────────────────────────
 
@@ -109,13 +107,13 @@ class TestSetupLoggingTestMode:
 
     def test_test_mode_does_not_create_log_files(self, tmp_path):
         """TEST_MODE=true 时不应在生产日志目录创建/追加日志文件。"""
-        from utils.logging_config import setup_logging
         from config import LOG_DIR
+        from utils.logging_config import setup_logging
 
         # 记录测试前的日志文件状态
         log_dir = Path(LOG_DIR)
         json_logs_before = set(log_dir.glob("agent_*.json")) if log_dir.exists() else set()
-        text_log_before = log_dir / "agent.log"
+        _text_log_before = log_dir / "agent.log"
 
         with mock.patch.dict(os.environ, {"TEST_MODE": "true"}, clear=False):
             setup_logging()
@@ -134,7 +132,7 @@ class TestSetupLoggingTestMode:
         # 注意：由于 enqueue=True 和异步写入，我们主要检查没有新文件被创建
         # 更严格的检查：验证日志文件内容不包含测试消息
         json_logs_after = set(log_dir.glob("agent_*.json")) if log_dir.exists() else set()
-        new_json_logs = json_logs_after - json_logs_before
+        _new_json_logs = json_logs_after - json_logs_before
 
         # 允许已有文件被其他进程追加（生产服务），但不应有新文件因测试创建
         # 这个断言比较宽松，因为生产服务可能同时在写

@@ -5,10 +5,10 @@ import asyncio
 import hashlib
 import json
 import shutil
+import tarfile
 import tempfile
 import time
 import zipfile
-import tarfile
 from pathlib import Path
 from typing import Any
 

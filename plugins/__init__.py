@@ -1,7 +1,7 @@
 """插件系统"""
+from plugins.discovery import DiscoveredPlugin, discover_plugins
+from plugins.manager import PluginManager, PluginRecord, PluginState
 from plugins.manifest import PluginManifest, parse_manifest
-from plugins.discovery import discover_plugins, DiscoveredPlugin
-from plugins.manager import PluginManager, PluginState, PluginRecord
 
 __all__ = [
     "DiscoveredPlugin",

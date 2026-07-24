@@ -14,14 +14,13 @@
 
 
 from core.persona_coherence import (
+    PersonaCaseRepository,
     PersonaCheck,
     PersonaCritic,
-    PersonaCaseRepository,
     PersonaDriftSuppressor,
     get_persona_critic,
     reset_persona_critic,
 )
-
 
 # ── 初始化 ──────────────────────────────────────────────
 

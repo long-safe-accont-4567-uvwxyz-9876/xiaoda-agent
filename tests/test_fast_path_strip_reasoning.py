@@ -2,11 +2,12 @@
 
 验证：agnes-2.0-flash 等模型输出的推理标签在 fast_path 中被正确清理
 """
-import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
-
 # 确保项目路径
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(PROJECT_ROOT))

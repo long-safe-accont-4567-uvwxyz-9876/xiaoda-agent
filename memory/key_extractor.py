@@ -6,8 +6,6 @@ import re
 
 import jieba
 
-from loguru import logger
-
 # 停用词表（与项目现有 _TOPIC_STOPWORDS 保持一致 + 扩展）
 _STOPWORDS = {
     # 中文停用词

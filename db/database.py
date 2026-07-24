@@ -1,17 +1,20 @@
 import json
 import sys
 import time
-from typing import Any
-import aiosqlite
 from pathlib import Path
+from typing import Any
+
+import aiosqlite
 from loguru import logger
+
 from config import DATA_DIR
+
+from .db_analytics import AnalyticsDB
+from .db_kg_v2 import KnowledgeDBV2
+from .db_knowledge import KnowledgeDB
+from .db_learning import LearningDB
 from .db_memory import MemoryDB
 from .db_notebook import NotebookDB
-from .db_learning import LearningDB
-from .db_knowledge import KnowledgeDB
-from .db_kg_v2 import KnowledgeDBV2
-from .db_analytics import AnalyticsDB
 from .db_temporal_memory import TemporalMemoryDB
 from .index_manager import build_default_index_manager
 from .session_store import (
@@ -19,7 +22,6 @@ from .session_store import (
     SessionSummaryEntry,
     fold_session_summary,
 )
-
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
@@ -222,9 +224,9 @@ class DatabaseManager:
             except (OSError, RuntimeError) as e:
                 logger.error("database.dirty_auto_retry_failed", error=str(e))
                 logger.critical(
-                    f"⚠️ 自动修复失败！请手动修复：\n"
-                    f"  1. python -m db.repair_migration --mark-clean\n"
-                    f"  2. 或删除 agent.db 重新初始化（会丢失历史数据）\n"
+                    "⚠️ 自动修复失败！请手动修复：\n"
+                    "  1. python -m db.repair_migration --mark-clean\n"
+                    "  2. 或删除 agent.db 重新初始化（会丢失历史数据）\n"
                 )
                 try:
                     await self._conn.close()

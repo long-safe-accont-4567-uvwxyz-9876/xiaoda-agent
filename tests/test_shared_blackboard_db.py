@@ -1,8 +1,8 @@
 """SharedBlackboardDB 测试 — SQLite 背板跨进程共享。"""
 import asyncio
-import tempfile
-import os
+
 import pytest
+
 from agent_core.shared_blackboard_db import SharedBlackboardDB
 
 

@@ -9,18 +9,17 @@ ERROR_RULE_STRICT_MODE 拒绝或仅警告。
 """
 
 from __future__ import annotations
-from typing import Any, ClassVar
 
 import json
 import os
 import re
 import time
+from typing import Any, ClassVar
 
 import httpx
 from loguru import logger
 
 from utils.http_pool import get_shared_client
-
 
 # 提取 prompt — 让 LLM 从一次失败中提取一条最关键的预防规则
 EXTRACT_PROMPT = """你是错误分析助手。分析以下工具调用失败，提取一条可复用的预防规则。

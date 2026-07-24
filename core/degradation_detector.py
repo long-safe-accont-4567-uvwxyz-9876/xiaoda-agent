@@ -30,15 +30,14 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from collections.abc import Callable
 
 from loguru import logger
 
 # 复用 anomaly_detector.BehaviorBaseline (EWMA, alpha=0.1)
 from security.anomaly_detector import BehaviorBaseline
-
 
 # ============================================================
 # 枚举与数据结构

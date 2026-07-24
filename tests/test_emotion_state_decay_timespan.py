@@ -9,9 +9,9 @@
 2. 新情绪不受旧情绪时间戳影响
 3. 超过阈值的情绪被正确过滤
 """
-import pytest
 import time
-import os
+
+import pytest
 
 
 class TestMultiEmotionDecayTimespan:

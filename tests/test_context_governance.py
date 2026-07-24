@@ -99,8 +99,9 @@ async def test_determinism_jaccard(tmp_path):
         print("  [SKIP] sqlite-vec 不可用, 跳过向量确定性测试")
         return {"jaccard_mean": 1.0, "skipped": True}
 
-    from memory.vector_store import VectorStore
     import json
+
+    from memory.vector_store import VectorStore
 
     db_path = str(tmp_path / "test_vec.db")
     # dimensions=4 匹配下面的 dummy 4维向量, 避免默认 1024 维表报错
@@ -317,7 +318,7 @@ async def test_complexity_scorer():
 
 async def test_deterministic_selector_and_regression(tmp_path):
     """T4: 验证确定性 selector 候选集 + 现有功能不退化。"""
-    from memory.memory_manager import _parse_temporal_query, MemoryManager
+    from memory.memory_manager import MemoryManager, _parse_temporal_query
 
     # 4.1 时间 selector 解析 (确定性, 不依赖 LLM/向量)
     # _parse_temporal_query 返回 [start_ts, end_ts]:
@@ -385,6 +386,7 @@ async def test_deterministic_selector_and_regression(tmp_path):
     # 4.3 VectorStore.search 签名兼容 (新增参数有默认值)
     print("  T4.3 VectorStore.search 签名兼容性:")
     import inspect
+
     from memory.vector_store import VectorStore
     sig = inspect.signature(VectorStore.search)
     params = sig.parameters

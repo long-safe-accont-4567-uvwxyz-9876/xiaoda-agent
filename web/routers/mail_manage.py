@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import threading
 from typing import Any
@@ -15,7 +16,6 @@ from pydantic import BaseModel
 
 from web.routers.auth import get_current_user
 from web.schemas import Envelope
-import contextlib
 
 router = APIRouter(tags=["mail"], dependencies=[Depends(get_current_user)])
 
@@ -327,8 +327,9 @@ async def trigger_mail_auth_login(request: Request) -> Any:
       - message: 提示信息
       - cli_path: agently-cli 路径
     """
-    from tools.mail_tools import _resolve_agently_cli
     import asyncio
+
+    from tools.mail_tools import _resolve_agently_cli
 
     cli_path = _resolve_agently_cli()
     if not cli_path:

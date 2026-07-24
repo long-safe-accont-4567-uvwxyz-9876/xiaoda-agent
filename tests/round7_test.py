@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """第七轮深度测试 - Agent 完整启动 + 任务编排 + MCP + 数据库 + 剩余模块"""
 import asyncio
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 

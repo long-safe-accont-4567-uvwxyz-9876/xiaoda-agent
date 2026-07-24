@@ -9,13 +9,13 @@ import asyncio
 import os
 import re
 import threading
-from enum import Enum
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
+
 from loguru import logger
 
-from core.risk_classifier import RiskClassifier, EvidenceGate, PostValidator, RiskLevel
-
+from core.risk_classifier import EvidenceGate, PostValidator, RiskClassifier, RiskLevel
 
 # ── 钩子类型 ──────────────────────────────────────────────
 

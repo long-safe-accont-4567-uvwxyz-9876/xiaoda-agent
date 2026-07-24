@@ -26,15 +26,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from chaos.reliability_bench import (
-    BenchReport,
     DEFAULT_SCENARIOS,
+    BenchReport,
     ReliabilityBench,
     ScenarioResult,
 )
 from tests.fault_injection import (
     FaultInjectingLLMClient,
 )
-
 
 # ============================================================
 # Mock fixtures

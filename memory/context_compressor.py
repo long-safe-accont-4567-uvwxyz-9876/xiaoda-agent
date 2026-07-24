@@ -1,12 +1,14 @@
 """智能上下文压缩引擎"""
 import asyncio
-from typing import Any
 import hashlib
 import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+
 from loguru import logger
+
 from config import DATA_DIR, get_agent_display_name
 from utils.atomic_write import atomic_write
 
@@ -260,7 +262,8 @@ def get_context_compressor(router: Any | None=None) -> ContextCompressor:
 
 
 # 注册为工具
-from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
+
 
 @register_tool(
     name="retrieve_context",

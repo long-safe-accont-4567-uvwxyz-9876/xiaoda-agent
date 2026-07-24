@@ -5,7 +5,6 @@ import time
 import pytest
 
 from core.dream_consolidation import DreamConsolidator
-from memory.fsrs_model import MemoryPhase
 
 
 class FakeMemoryDB:

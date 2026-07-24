@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """完全重启 Agent 全面功能测试 - 从零初始化，逐个功能测试"""
 import asyncio
-import sys
-import os
-import time
-import tempfile
 import json
+import os
+import sys
+import tempfile
+import time
 import traceback
 from pathlib import Path
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 # 项目根目录 (基于当前文件位置计算，避免硬编码绝对路径)
@@ -296,7 +297,14 @@ async def phase3_tools(core):
     # 3.5 工具注册表
     print("\n[3.5] 工具注册表:")
     try:
-        from tool_engine.tool_registry import list_tools, to_openai_tools, unregister_tool, register_tool, ToolPermission, ToolResult
+        from tool_engine.tool_registry import (
+            ToolPermission,
+            ToolResult,
+            list_tools,
+            register_tool,
+            to_openai_tools,
+            unregister_tool,
+        )
         tools = list_tools()
         print(f"    OK: 注册了 {len(tools)} 个工具")
 
@@ -375,8 +383,9 @@ async def phase4_tts_sticker_emotion():
     # 4.3 表情包管理器
     print("\n[4.3] 表情包管理器:")
     try:
-        from emotion.sticker_manager import StickerManager
         import inspect
+
+        from emotion.sticker_manager import StickerManager
         sig = inspect.signature(StickerManager.__init__)
         print(f"    INFO: 构造函数签名: {sig}")
         # 尝试创建实例
@@ -425,7 +434,7 @@ async def phase5_credential_error_fallback():
     # 5.2 凭证池
     print("\n[5.2] 凭证池:")
     try:
-        from utils.credential_pool import CredentialPool, Credential, CredentialState
+        from utils.credential_pool import Credential, CredentialPool, CredentialState
         from utils.error_classifier import ClassifiedError, FailoverReason, RecoveryAction
 
         pool = CredentialPool()
@@ -583,7 +592,7 @@ async def phase6_db_memory_belief():
     # 6.5 原子写入
     print("\n[6.5] 原子写入:")
     try:
-        from utils.atomic_write import atomic_write, atomic_json_write
+        from utils.atomic_write import atomic_json_write, atomic_write
         with tempfile.TemporaryDirectory() as td:
             atomic_write(os.path.join(td, "test.txt"), "hello world")
             atomic_json_write(os.path.join(td, "test.json"), {"key": "value"})
@@ -645,7 +654,7 @@ async def phase7_concurrent_edge():
     # 7.1 并发凭证池
     print("\n[7.1] 并发凭证池:")
     try:
-        from utils.credential_pool import CredentialPool, Credential
+        from utils.credential_pool import Credential, CredentialPool
         pool = CredentialPool()
         pool.add_credential(Credential(provider="test", api_key="sk-key1", base_url="https://api1.test"))
 

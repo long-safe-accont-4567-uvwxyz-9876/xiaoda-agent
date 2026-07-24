@@ -10,9 +10,10 @@ source 取值：qq_group / qq_c2c / web / cli
 
 from __future__ import annotations
 
-from typing import ClassVar
 import re
 from pathlib import Path
+from typing import ClassVar
+
 from loguru import logger
 
 # Token 预算（按字符数估算，中文约 1 字符 = 0.5 token）

@@ -1,15 +1,15 @@
 """Skills/工具路由（R6）：列表、全局开关、调试执行、统计。"""
 from __future__ import annotations
-from typing import Any
 
 import json
 import time
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["tools"], dependencies=[Depends(get_current_user)])
 
@@ -32,7 +32,7 @@ def _tool_source(name: str) -> str:
 
 
 def list_tools_meta() -> list[dict]:
-    from tool_engine.tool_registry import to_openai_tools, list_tools
+    from tool_engine.tool_registry import list_tools, to_openai_tools
     to_openai_tools()  # 确保所有工具模块已导入注册
     out = []
     for t in list_tools():
@@ -166,8 +166,9 @@ async def tool_limits() -> Any:
 async def test_tool(name: str, request: Request) -> Any:
     """测试单个工具是否可用（真实执行，安全参数）"""
     import asyncio
-    from tool_engine.tool_registry import get_tool
+
     from tool_engine.tool_executor import ToolExecutor
+    from tool_engine.tool_registry import get_tool
 
     tool = get_tool(name)
     if not tool:

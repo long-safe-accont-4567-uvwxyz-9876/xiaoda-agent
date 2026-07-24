@@ -1,7 +1,9 @@
-from typing import Any
 import time
-from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
+from typing import Any
+
 from loguru import logger
+
+from tool_engine.tool_registry import ToolPermission, ToolResult, register_tool
 from utils.metrics import metrics
 
 # 模块级 MemoryManager 单例（由 agent_core.init() 注入）

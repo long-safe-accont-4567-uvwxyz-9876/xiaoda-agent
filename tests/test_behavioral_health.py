@@ -6,13 +6,11 @@
 """
 import time
 
-
 from core.behavioral_health import (
     BehavioralHealthScorer,
     HealthLevel,
 )
 from core.zombie_detector import ZombieDetector, ZombieProcess
-
 
 # ── BehavioralHealthScorer ──
 

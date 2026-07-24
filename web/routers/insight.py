@@ -1,6 +1,5 @@
 """内在世界路由（R9）：情绪/画像/今日事件/记忆/知识图谱/笔记/学习/本能。"""
 from __future__ import annotations
-from typing import Any
 
 import asyncio
 import json
@@ -8,6 +7,7 @@ import os
 import time
 import uuid
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 
@@ -33,8 +33,8 @@ def _safe_float(val: Any, default: float = 0.5) -> float:
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
-from web.schemas import Envelope
 from web.routers.auth import get_current_user
+from web.schemas import Envelope
 from web.ws_hub import manager
 
 router = APIRouter(tags=["insight"], dependencies=[Depends(get_current_user)])
@@ -726,7 +726,7 @@ def _build_guidance(config: dict) -> str:
 
 @router.get("/insight/xp", response_model=Envelope[dict])
 async def get_xp(request: Request, user_id: str = Depends(get_current_user)) -> Any:
-    from core.xp_system import get_xp_system, XPLevel, XP_THRESHOLDS, _LEVEL_LABELS
+    from core.xp_system import _LEVEL_LABELS, XP_THRESHOLDS, XPLevel, get_xp_system
 
     try:
         xp_sys = get_xp_system()
@@ -772,7 +772,7 @@ async def get_xp(request: Request, user_id: str = Depends(get_current_user)) -> 
 
 @router.get("/insight/xp/levels", response_model=Envelope[dict])
 async def get_xp_levels(request: Request) -> Any:
-    from core.xp_system import XPLevel, XP_THRESHOLDS, _LEVEL_LABELS
+    from core.xp_system import _LEVEL_LABELS, XP_THRESHOLDS, XPLevel
 
     try:
         from core.xp_system import get_xp_system

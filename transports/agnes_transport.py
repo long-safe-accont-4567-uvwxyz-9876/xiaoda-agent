@@ -1,7 +1,9 @@
 """Agnes Transport - 适配 Agnes AI API"""
-import os
 import asyncio
+import os
+
 from openai import AsyncOpenAI
+
 from transports.base import ProviderTransport, TransportResponse
 
 # agnes API max_tokens 上限 65536，超出返回 500 invalid_request
