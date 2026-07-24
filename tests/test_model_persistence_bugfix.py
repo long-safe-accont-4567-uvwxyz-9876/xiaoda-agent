@@ -127,6 +127,10 @@ def test_set_chat_model_persists_both_chat_model_and_routes_chat():
             def set(self, path, value):
                 captured[path] = value
 
+            def set_many(self, updates):
+                for path, value in updates.items():
+                    captured[path] = value
+
             def get(self, path, default=None):
                 return captured.get(path, default)
 
@@ -178,6 +182,10 @@ def test_set_chat_model_routes_chat_thinking_field_is_bool():
         class FakeCfg:
             def set(self, path, value):
                 captured[path] = value
+
+            def set_many(self, updates):
+                for path, value in updates.items():
+                    captured[path] = value
 
         with patch("web.config_service.get_config_service", return_value=FakeCfg()):
             router.set_chat_model("agnes", "agnes-2.0-flash")
