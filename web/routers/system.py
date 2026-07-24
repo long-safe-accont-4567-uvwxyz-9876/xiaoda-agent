@@ -1,17 +1,17 @@
 from __future__ import annotations
+from typing import Any
 
 import asyncio
 import json
 import os
 import time
 from pathlib import Path
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
-from web.routers.auth import get_current_user
 from web.schemas import Envelope, SystemStatus
+from web.routers.auth import get_current_user
 
 router = APIRouter(tags=["system"], dependencies=[Depends(get_current_user)])
 # 公开路由（无需认证）：OS 信息不敏感，终端需在 token 未就绪/失效时也能正确探测服务端 OS，
@@ -19,6 +19,12 @@ router = APIRouter(tags=["system"], dependencies=[Depends(get_current_user)])
 public_router = APIRouter(tags=["system"])
 
 _start_time = time.time()
+
+
+@public_router.get("/ping")
+async def liveness() -> Any:
+    """看门狗专用存活探针，无需鉴权，返回 {"ok": true}。"""
+    return {"ok": True}
 
 
 @public_router.get("/system/os", response_model=Envelope[dict])
@@ -32,8 +38,8 @@ async def get_server_os() -> Any:
 def _read_version() -> str:
     """读取安装包版本号，从 .version 文件获取"""
     version = "dev"
-    import sys
     from pathlib import Path
+    import sys
 
     # PyInstaller onedir 模式：.version 在可执行文件同目录
     if getattr(sys, 'frozen', False):
@@ -116,8 +122,8 @@ async def get_logs(lines: int = Query(default=200, le=1000),
 
     # 优先读取 loguru 的 agent_YYYY-MM-DD.json 日志（同步 I/O 放到线程池）
     def _read_agent_logs() -> list[str]:
-        import datetime as _dt
         import json as _json
+        import datetime as _dt
         result: list[str] = []
         today = _dt.date.today().isoformat()
         agent_log = LOG_DIR / f"agent_{today}.json"
@@ -236,7 +242,7 @@ async def put_config(body: dict, request: Request) -> Any:
 
 @router.get("/system/permission-mode", response_model=Envelope[dict])
 async def get_permission_mode() -> Any:
-    from security.permission_manager import PermissionMode, get_permission_manager
+    from security.permission_manager import get_permission_manager, PermissionMode
     return Envelope(data={
         "mode": get_permission_manager().mode.value,
         "options": [m.value for m in PermissionMode],
@@ -247,7 +253,7 @@ async def get_permission_mode() -> Any:
 async def set_permission_mode(body: dict, request: Request) -> Any:
     mode = (body.get("mode") or "").lower()
     confirm = body.get("confirm", "").lower()
-    from security.permission_manager import PermissionMode, get_permission_manager
+    from security.permission_manager import get_permission_manager, PermissionMode
     valid = {m.value for m in PermissionMode}
     if mode not in valid:
         raise HTTPException(400, f"未知模式 {mode}")
@@ -269,8 +275,8 @@ async def restart_service(request: Request) -> Any:
     await core.db.insert_audit_log("webui.system.restart", "webui", "user requested")
     await core.db.commit()
     import asyncio
-    import os
     import sys
+    import os
 
     is_windows = sys.platform == 'win32'
 
@@ -278,9 +284,9 @@ async def restart_service(request: Request) -> Any:
         await asyncio.sleep(1.0)
         if is_windows:
             # Windows: 创建延迟启动脚本，等旧进程退出后再启动
-            import shlex
-            import subprocess
             import tempfile
+            import subprocess
+            import shlex
             python = sys.executable
             script = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else 'agent.py'
             args = sys.argv[1:] if len(sys.argv) > 1 else ['--web', '--host', '0.0.0.0', '--port', '8082']

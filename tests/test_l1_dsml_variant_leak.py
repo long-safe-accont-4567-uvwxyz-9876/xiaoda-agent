@@ -70,6 +70,11 @@ def test_strip_dsml_double_pipe_tool_calls():
     from utils.text_utils import strip_dsml
     result = strip_dsml(DOUBLE_PIPE_DSML)
     assert "DSML" not in result, f"双竖线 DSML 未被清除: {result[:200]}"
+    # CR-FIX: 验证工具调用 payload 也被完全清除，不能只删开标签
+    assert "/root/.ai-agent/agent.json5" not in result, f"文件路径泄漏: {result[:200]}"
+    assert "</invoke>" not in result.lower(), f"闭合标签泄漏: {result[:200]}"
+    assert "</tool_calls>" not in result.lower(), f"闭合标签泄漏: {result[:200]}"
+    assert "read_file" not in result, f"工具名泄漏: {result[:200]}"
     # 正常文本应保留
     assert "让纳西妲看看配置" in result
 

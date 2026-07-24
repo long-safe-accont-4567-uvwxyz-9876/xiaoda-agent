@@ -83,6 +83,14 @@ async def test_fast_path_finalize_calls_strip_reasoning():
     processor.sticker_manager = MagicMock()
     processor.sticker_manager.strip_emotion_tag = MagicMock(side_effect=lambda x: x)
 
+    # fast-path 现调用 _extract_fabricated_images_from_reply（ToolExecutorMixin 方法）
+    # 与 _clean_reply_full（统一清洗出口，内部调 strip_reasoning）。此处分别 mock：
+    # 兜底提图透传（无伪造图），_clean_reply_full 走真实 strip_reasoning 以验证推理清理。
+    from utils.text_utils import strip_reasoning
+    processor._extract_fabricated_images_from_reply = AsyncMock(
+        return_value=([], "[emotion thinking]`` 推理内容\n实际回复"))
+    processor._clean_reply_full = lambda text, **kw: strip_reasoning(text)
+
     # Mock get_sticker_info 返回带有推理标签的回复
     reply_with_reasoning = "[emotion thinking]`` Need think\n实际回复内容"
     processor.get_sticker_info = MagicMock(return_value=(reply_with_reasoning, None))

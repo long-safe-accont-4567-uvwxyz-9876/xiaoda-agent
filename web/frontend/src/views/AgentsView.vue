@@ -668,7 +668,7 @@ async function uploadVoiceForAgent() {
                 <n-input v-model:value="stickerDesc" size="small" :placeholder="t('agentsView.stickerDescPh')"
                          style="flex: 1; min-width: 120px;" />
                 <n-select v-model:value="stickerEmotion" size="small" style="width: 120px"
-                          :options="(stickerEmotions.length ? stickerEmotions : ['happy','sad','angry','curious','shy','thinking','neutral','greeting','fear']).map(e => ({ label: e, value: e }))" />
+                          :options="(stickerEmotions.length ? stickerEmotions : ['happy','excited','love','shy','sad','angry','surprised','confused','thinking','playful','moved','neutral','pout','fear','anxious','curious','greeting']).map(e => ({ label: e, value: e }))" />
                 <n-button type="primary" size="small" :loading="stickerUploading" :disabled="!stickerFile || !stickerDesc.trim()"
                           @click="uploadSticker">
                   {{ t('agentsView.upload') }}

@@ -390,21 +390,43 @@ class MarketInstaller:
     # ── 通用工具 ──────────────────────────────────────────────
 
     def _security_scan(self, content: bytes, item_id: str) -> None:
-        """对下载内容进行基础安全扫描"""
+        """对下载内容进行安全扫描，发现高危模式时阻断安装。
+
+        P2 修复：原代码只 log warning 不 block，且字符串匹配可被拼接绕过。
+        现在改为：高危模式直接 raise InstallError 阻断；同时检测常见混淆手法
+        (字符串拼接、getattr 动态调用)。
+        """
         suspicious = []
         try:
             text = content.decode("utf-8", errors="ignore")
 
-            patterns = [
-                ("eval(", "eval()"),
-                ("exec(", "exec()"),
-                ("__import__(", "__import__()"),
-                ("subprocess", "subprocess"),
-                ("os.system", "os.system"),
-                ("os.popen", "os.popen"),
+            # ── 高危模式：直接阻断 ──────────────────────────────
+            high_risk_patterns = [
+                ("eval(", "eval() 任意代码执行"),
+                ("exec(", "exec() 任意代码执行"),
+                ("__import__(", "__import__() 动态导入"),
+                ("os.system", "os.system 命令执行"),
+                ("os.popen", "os.popen 命令执行"),
+                ("subprocess.Popen", "subprocess.Popen 命令执行"),
+                ("subprocess.call", "subprocess.call 命令执行"),
+                ("subprocess.run", "subprocess.run 命令执行"),
+                ("subprocess.check_output", "subprocess.check_output 命令执行"),
             ]
-            for pattern, label in patterns:
+            for pattern, label in high_risk_patterns:
                 if pattern in text:
+                    suspicious.append(label)
+
+            # ── 混淆检测：字符串拼接绕过 ────────────────────────
+            # 检测 "ev"+"al" 或 'ev'+'al' 等拼接手法
+            import re as _re
+            concat_patterns = [
+                (r'''["']ev["']\s*\+\s*["']al["']''', "eval 拼接混淆"),
+                (r'''["']ex["']\s*\+\s*["']ec["']''', "exec 拼接混淆"),
+                (r'''getattr\s*\([^,]+,\s*["']ev["']\s*\+\s*["']al["']''', "getattr+eval 混淆"),
+                (r'''getattr\s*\([^,]+,\s*["']__import__["']''', "getattr+__import__ 混淆"),
+            ]
+            for pattern, label in concat_patterns:
+                if _re.search(pattern, text):
                     suspicious.append(label)
 
             # 敏感路径
@@ -418,6 +440,10 @@ class MarketInstaller:
         if suspicious:
             logger.warning("market.security_scan_warnings", id=item_id,
                            warnings=suspicious)
+            # P2 修复：高危模式直接阻断安装，而非仅 log
+            raise InstallError(
+                f"插件 '{item_id}' 安全扫描未通过，检测到高危模式: {'; '.join(suspicious)}"
+            )
 
     async def _download(self, url: str, dest_dir: Path) -> Path:
         """下载文件到目标目录"""

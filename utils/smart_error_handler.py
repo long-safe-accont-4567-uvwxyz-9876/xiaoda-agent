@@ -124,13 +124,17 @@ class SmartErrorHandler:
         reply_parts = ["抱歉，小妲刚才走神了，能再说一遍吗～ 🌿"]
 
         if error_ctx.suggested_fix:
-            reply_parts.append(f"\n💡 修复建议：{error_ctx.suggested_fix}")
+            # CR-FIX: 内部修复建议不放入用户可见回复，仅记日志
+            logger.info("error_handler.suggested_fix",
+                       fix=error_ctx.suggested_fix[:200],
+                       error_type=error_ctx.error_type)
 
             # 尝试自动修复简单错误
             if error_ctx.error_type == "AttributeError" and "DatabaseManager" in error_ctx.error_message:
                 auto_fix_result = await self._attempt_auto_fix(error_ctx)
                 if auto_fix_result:
-                    reply_parts.append(f"\n✅ 自动修复结果：{auto_fix_result}")
+                    logger.info("error_handler.auto_fixed",
+                               result=auto_fix_result[:200])
 
         # 如果有最近的错误历史，且用户在询问解决方案
         if self._is_asking_for_solution(user_query):

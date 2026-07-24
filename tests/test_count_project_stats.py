@@ -444,7 +444,7 @@ class TestCheckReadme:
             "Python 模块 | 507\n"
             "数据库表 | 30 张 + 52 索引\n"
             "Web API 路由 | 17 模块 + 186 端点\n"
-            "16 类情绪 → ok\n"
+            "17 类情绪 → ok\n"
             "~131,984 行\n"
         )
         actual = {
@@ -454,7 +454,7 @@ class TestCheckReadme:
             "db_indexes": 52,
             "router_modules": 17,
             "api_endpoints": 186,
-            "emotion_enum": 16,
+            "emotion_enum": 17,
         }
         mismatches = cps.check_readme(readme, actual)
         assert mismatches == []
@@ -499,15 +499,15 @@ class TestCheckReadme:
     def test_reports_outdated_emotion_count(self, cps, tmp_path):
         readme = tmp_path / "README.md"
         readme.write_text("9 类核心情绪\n")
-        actual = {"emotion_enum": 16}
+        actual = {"emotion_enum": 17}
         mismatches = cps.check_readme(readme, actual)
         text = "\n".join(mismatches)
-        assert "16" in text
+        assert "17" in text
 
     def test_reports_outdated_emotion_count_zhong_pattern(self, cps, tmp_path):
         """'X 种情绪' 模式也应识别。"""
         readme = tmp_path / "README.md"
-        readme.write_text("16 种情绪\n")
+        readme.write_text("17 种情绪\n")
         actual = {"emotion_enum": 9}
         mismatches = cps.check_readme(readme, actual)
         text = "\n".join(mismatches)
@@ -584,7 +584,7 @@ class TestFormat:
             "db_tables": 30,
             "db_virtual_tables": 4,
             "db_indexes": 52,
-            "emotion_enum": 16,
+            "emotion_enum": 17,
             "builtin_tools": 40,
             "test_files": 200,
             "subsystems": {"core": 30, "memory": 20, "tool_engine": 10, "emotion": 5, "security": 8, "plugins": 3},
@@ -599,7 +599,7 @@ class TestFormat:
         assert parsed["db_tables"] == 30
         assert parsed["db_virtual_tables"] == 4
         assert parsed["db_indexes"] == 52
-        assert parsed["emotion_enum"] == 16
+        assert parsed["emotion_enum"] == 17
         assert parsed["builtin_tools"] == 40
         assert parsed["test_files"] == 200
         assert "subsystems" in parsed
@@ -612,7 +612,7 @@ class TestFormat:
         assert "186" in out
         assert "30" in out
         assert "52" in out
-        assert "16" in out
+        assert "17" in out
 
     def test_format_markdown_has_header(self, cps):
         out = cps.format_markdown(self._sample_stats())

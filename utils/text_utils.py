@@ -217,9 +217,16 @@ def strip_dsml(text: str) -> str:
     # 8. 泄漏的 function_calls/function_call 变体（单/双竖线均覆盖，必须在 DSML_LEFTOVER 之前）
     text = re.sub(r'<｜{1,2}DSML｜{1,2}function_calls>[\s\S]*?</｜{1,2}DSML｜{1,2}function_calls>', '', text)
     text = re.sub(r'<｜{1,2}DSML｜{1,2}function_call>[\s\S]*?</｜{1,2}DSML｜{1,2}function_call>', '', text)
-    text = DSML_LEFTOVER.sub('', text)
+    # CR-FIX: DSML 开标签 + 裸闭标签（无 DSML 前缀的错配闭合）
+    # 必须在 DSML_OPEN_ONLY 之前处理，否则 DSML_OPEN_ONLY 贪婪匹配到末尾会误删后续正常文本
+    text = re.sub(r'<｜{1,2}DSML｜{1,2}function_calls>[\s\S]*?</function_calls>', '', text)
+    text = re.sub(r'<｜{1,2}DSML｜{1,2}function_call>[\s\S]*?</function_call>', '', text)
+    text = re.sub(r'<｜{1,2}DSML｜{1,2}invoke[^>]*>[\s\S]*?</invoke>', '', text)
+    text = re.sub(r'<｜{1,2}DSML｜{1,2}parameter[^>]*>[\s\S]*?</parameter>', '', text)
     # L1 修复: 未闭合的 DSML 标签到末尾（LLM 输出格式错误时无闭合标签）
+    # 必须先处理未闭合标签，再清理残留开标签，否则开标签被清除后未闭合内容会泄漏
     text = DSML_OPEN_ONLY_PATTERN.sub('', text)
+    text = DSML_LEFTOVER.sub('', text)
     # L4 修复: <operation>recall</operation> 裸 XML 工具标签
     text = OPERATION_TAG_PATTERN.sub('', text)
     # 裸 function_calls/invoke/param（无 DSML 前缀）

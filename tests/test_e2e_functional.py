@@ -3,15 +3,16 @@
 验证项目各功能模块的端到端可用性，使用 mock 避免 API 调用。
 """
 
-import asyncio
 import os
 import re
+import asyncio
 import tempfile
-from dataclasses import fields
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from dataclasses import fields
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
+
 
 # ── 1. 核心模块导入和初始化测试 ──────────────────────────────
 
@@ -25,12 +26,12 @@ class TestCoreModuleImport:
         assert ProcessResult is not None
 
     def test_import_security(self):
-        from security.security import SecurityCheckResult, SecurityFilter
+        from security.security import SecurityFilter, SecurityCheckResult
         assert SecurityFilter is not None
         assert SecurityCheckResult is not None
 
     def test_import_emotion_simple(self):
-        from emotion.emotion_simple import build_emotion_hint, detect_emotion
+        from emotion.emotion_simple import detect_emotion, build_emotion_hint
         assert detect_emotion is not None
         assert build_emotion_hint is not None
 
@@ -39,7 +40,7 @@ class TestCoreModuleImport:
         assert StickerManager is not None
 
     def test_import_tool_registry(self):
-        from tool_engine.tool_registry import clear_tools, get_tool, to_openai_tools
+        from tool_engine.tool_registry import to_openai_tools, get_tool, clear_tools
         assert to_openai_tools is not None
         assert get_tool is not None
         assert clear_tools is not None
@@ -235,8 +236,8 @@ class TestSecurityFilterE2E:
 
     def test_dev_mode_downgrades_block_to_warn(self):
         """测试开发板模式下安全威胁的处理"""
-        from security.permission_manager import PermissionMode, get_permission_manager
         from security.security import SecurityFilter
+        from security.permission_manager import get_permission_manager, PermissionMode
         sf = SecurityFilter()
         pm = get_permission_manager()
         original_mode = pm.mode
@@ -250,8 +251,8 @@ class TestSecurityFilterE2E:
 
     def test_dev_mode_disabled_blocks(self):
         """测试 AGENT_DEV_MODE 未设置时高置信度威胁被 block"""
-        from security.permission_manager import PermissionMode, get_permission_manager
         from security.security import SecurityFilter
+        from security.permission_manager import get_permission_manager, PermissionMode
         sf = SecurityFilter()
         # 临时切换到 DEFAULT 模式
         pm = get_permission_manager()
@@ -291,8 +292,9 @@ class TestEmotionMappingConsistency:
         """测试 emotion_simple 检测的所有情绪标签在 agent_core 映射表中都有对应"""
         from emotion.emotion_simple import detect_emotion
 
-        # agent_core 中的情绪映射表
-        emotion_map = {"喜悦": "happy", "悲伤": "sad", "焦虑": "fear", "平静": "", "愤怒": "angry", "好奇": "curious"}
+        # agent_core 中的情绪映射表（17 类统一后焦虑独立为 anxious）
+        emotion_map = {"喜悦": "happy", "悲伤": "sad", "焦虑": "anxious", "平静": "neutral",
+                       "愤怒": "angry", "好奇": "curious", "恐惧": "fear"}
 
         # 测试各情绪标签
         test_cases = {
@@ -307,19 +309,23 @@ class TestEmotionMappingConsistency:
             assert primary == expected_primary, f"文本 '{text}' 期望情绪 '{expected_primary}'，实际 '{primary}'"
             assert primary in emotion_map, f"情绪标签 '{primary}' 不在 agent_core 映射表中"
 
-    def test_anxiety_maps_to_fear_not_sad(self):
-        """特别验证"焦虑"映射到"fear"而非"sad" """
-        emotion_map = {"喜悦": "happy", "悲伤": "sad", "焦虑": "fear", "平静": "", "愤怒": "angry", "好奇": "curious"}
-        assert emotion_map["焦虑"] == "fear", "焦虑应映射到 fear 而非 sad"
+    def test_anxiety_maps_to_anxious_not_sad(self):
+        """特别验证"焦虑"映射到"anxious"而非"sad"（17类统一后焦虑独立）"""
+        emotion_map = {"喜悦": "happy", "悲伤": "sad", "焦虑": "anxious", "平静": "neutral", "愤怒": "angry", "好奇": "curious"}
+        assert emotion_map["焦虑"] == "anxious", "焦虑应映射到 anxious 而非 sad/fear"
         assert emotion_map["焦虑"] != "sad"
+        assert emotion_map["焦虑"] != "fear"
 
-    def test_sticker_manager_has_fear_category(self):
-        """测试 sticker_manager 的 EMOTION_MAP 包含 fear 类别"""
+    def test_sticker_manager_has_fear_and_anxious_categories(self):
+        """测试 sticker_manager 的 EMOTION_MAP 包含 fear 和 anxious 类别（17类统一后分开）"""
         from emotion.sticker_manager import StickerManager
         assert "fear" in StickerManager.EMOTION_MAP, "StickerManager.EMOTION_MAP 应包含 fear 类别"
+        assert "anxious" in StickerManager.EMOTION_MAP, "StickerManager.EMOTION_MAP 应包含 anxious 类别"
         fear_keywords = StickerManager.EMOTION_MAP["fear"]
-        assert "焦虑" in fear_keywords, "fear 类别应包含 '焦虑' 关键词"
+        anxious_keywords = StickerManager.EMOTION_MAP["anxious"]
         assert "害怕" in fear_keywords, "fear 类别应包含 '害怕' 关键词"
+        assert "焦虑" in anxious_keywords, "anxious 类别应包含 '焦虑' 关键词"
+        assert "焦虑" not in fear_keywords, "焦虑不应在 fear 类别中（已移至 anxious）"
 
 
 # ── 5. 子Agent表情包测试 ──────────────────────────────────
@@ -587,7 +593,7 @@ class TestFilePathSandbox:
 
     def test_validate_path_allows_project_dir(self):
         """测试 _validate_path 对白名单路径的放行"""
-        from tools.file_tools_v2 import _PROJECT_DIR, _validate_path
+        from tools.file_tools_v2 import _validate_path, _PROJECT_DIR
         # 项目目录下的文件应被允许读取
         allowed, _resolved, reason = _validate_path(os.path.join(_PROJECT_DIR, "config.py"))
         assert allowed is True, f"项目目录文件应被允许: {reason}"

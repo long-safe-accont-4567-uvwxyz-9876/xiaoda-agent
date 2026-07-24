@@ -1,6 +1,6 @@
 """情感系统统一 — 单一枚举源
 
-16 种核心情绪 + TTS 风格层映射 + 中文/变体别名表
+17 种核心情绪 + TTS 风格层映射 + 中文/变体别名表
 
 当 EMOTION_UNIFIED=off 时，本模块不参与流程；
 当 EMOTION_UNIFIED=on（默认），所有情绪相关模块统一使用本枚举。
@@ -13,7 +13,7 @@ from loguru import logger
 
 
 class Emotion(str, Enum):
-    """核心情绪枚举（16 种，覆盖更细腻的表情包分类）"""
+    """核心情绪枚举（17 种，与 sticker 物理目录完全对齐）"""
     HAPPY = "happy"
     EXCITED = "excited"
     LOVE = "love"
@@ -30,6 +30,7 @@ class Emotion(str, Enum):
     FEAR = "fear"
     CURIOUS = "curious"  # 兼容旧值，降级到 confused
     POUT = "pout"  # 撒娇/娇嗔
+    GREETING = "greeting"  # 问候（社交行为，独立分类）
 
 
 # 中文/变体 → 核心枚举映射表
@@ -38,7 +39,8 @@ EMOTION_ALIASES: dict[str, Emotion] = {
     "喜悦": Emotion.HAPPY, "开心": Emotion.HAPPY, "快乐": Emotion.HAPPY,
     "高兴": Emotion.HAPPY, "愉快": Emotion.HAPPY, "欣喜": Emotion.HAPPY,
     "感激": Emotion.HAPPY, "期待": Emotion.HAPPY,
-    "joy": Emotion.HAPPY, "glad": Emotion.HAPPY, "greeting": Emotion.HAPPY,
+    "joy": Emotion.HAPPY, "glad": Emotion.HAPPY,
+    "问候": Emotion.GREETING, "greeting": Emotion.GREETING, "你好": Emotion.GREETING,
     # excited（兴奋/高能量开心）
     "兴奋": Emotion.EXCITED, "激动": Emotion.EXCITED, "惊喜": Emotion.EXCITED,
     "大笑": Emotion.EXCITED, "欢呼": Emotion.EXCITED,
@@ -53,6 +55,7 @@ EMOTION_ALIASES: dict[str, Emotion] = {
     "可惜": Emotion.SAD, "遗憾": Emotion.SAD, "失落": Emotion.SAD,
     "委屈": Emotion.SAD, "晕眩": Emotion.SAD, "难受": Emotion.SAD,
     "lonely": Emotion.SAD, "depressed": Emotion.SAD,
+    "crying": Emotion.SAD,  # LLM 常用 crying 表达悲伤（sticker 标签 fallback）
     # angry（愤怒）
     "愤怒": Emotion.ANGRY, "生气": Emotion.ANGRY, "恼怒": Emotion.ANGRY,
     "不满": Emotion.ANGRY, "烦躁": Emotion.ANGRY,
@@ -119,6 +122,7 @@ TTS_STYLE_MAP: dict[Emotion, str] = {
     Emotion.FEAR: "fear",
     Emotion.CURIOUS: "curious",
     Emotion.POUT: "coquettish",   # 撒娇用 coquettish 风格
+    Emotion.GREETING: "happy",   # 问候用 happy 风格（温暖友好）
 }
 
 # sticker 降级映射：核心枚举 → sticker 类别（部分枚举无对应表情包）
@@ -137,8 +141,9 @@ STICKER_FALLBACK: dict[Emotion, str] = {
     Emotion.MOVED: "moved",
     Emotion.NEUTRAL: "neutral",
     Emotion.FEAR: "fear",          # 恐惧 → fear
-    Emotion.CURIOUS: "confused",   # 旧 curious → 新 confused
+    Emotion.CURIOUS: "curious",    # curious 目录物理存在，直接映射（原错误降级到 confused）
     Emotion.POUT: "pout",          # 撒娇 → pout
+    Emotion.GREETING: "greeting",   # 问候 → greeting
 }
 
 # 合法标签值集合（用于 _ensure_emotion_tag 校验）
@@ -162,6 +167,7 @@ CN_TO_EN: dict[str, str] = {
     "平静": "neutral",
     "好奇": "curious",
     "恐惧": "fear",
+    "问候": "greeting",
 }
 
 

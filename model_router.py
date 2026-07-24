@@ -368,7 +368,10 @@ class ModelRouter:
 
         # 全量同步：所有聊天类 + 轻量任务 task_type 都跟随主 provider
         # 用户切换 provider 时，确保所有场景都用目标 provider，不再残留旧 provider
-        _sync_tasks = ("chat_pro", "chat_flash", "chat_mini", "chat_mimo",
+        # 关键：chat_mimo 排除在外，它是 MiMo 兜底专用路由，始终保持 mimo client，
+        # 确保主 provider 故障时 _try_fallback_chain 仍可降级到 mimo。
+        # 同步 chat_mimo 会导致用户切到 agnes 后丢失 MiMo 兜底能力。
+        _sync_tasks = ("chat_pro", "chat_flash", "chat_mini",
                        "chat_ultra", "emotion_analysis", "tool_result_wrap",
                        "memory_encoding")
         for _task in _sync_tasks:
@@ -391,8 +394,8 @@ class ModelRouter:
 
         self._current_chat_model = {"provider": provider, "model_id": model_id}
         # 持久化到 config_service，以便重启后恢复上次聊天模型
-        # 必须同步写入 models.chat_model 与 models.routes.chat，避免两套数据不同步
-        # 否则 _apply_route_overrides 与 _restore_chat_model 启动顺序会造成覆盖
+        # 必须同步写入 models.chat_model 与所有已同步路由，避免两套数据不同步
+        # 否则 _apply_route_overrides 在重启时用旧的持久化值覆盖内存中的同步结果。
         # 关键修复：捕获 Exception 而非 (OSError, KeyError, ValueError, TypeError)。
         # 旧逻辑下若 config_service 抛 LLMError/AppException 或其他非上述类型的异常，
         # 会向上传播到 _restore_chat_model 的 try/except，触发 fallback 分支，
@@ -404,6 +407,7 @@ class ModelRouter:
                 "models.chat_model",
                 {"provider": provider, "model_id": model_id},
             )
+            # 持久化 chat 主路由
             chat_entry = ROUTE_TABLE.get("chat", {})
             cfg.set("models.routes.chat", {
                 "model": model_id,
@@ -416,6 +420,22 @@ class ModelRouter:
                 ),
                 "timeout": self.TASK_TIMEOUTS.get("chat"),
             })
+            # 持久化所有已同步路由，确保重启后 _apply_route_overrides 能正确恢复
+            # 不同步则旧持久化值会在重启时覆盖 set_chat_model 的同步结果
+            for _task in _sync_tasks:
+                if _task in ROUTE_TABLE:
+                    _entry = ROUTE_TABLE[_task]
+                    cfg.set(f"models.routes.{_task}", {
+                        "model": _entry["model"],
+                        "client": _entry.get("client", provider),
+                        "max_tokens": _entry.get("max_tokens"),
+                        "thinking": bool(
+                            _entry.get("thinking")
+                            and isinstance(_entry.get("thinking"), dict)
+                            and _entry["thinking"].get("type") == "enabled"
+                        ),
+                        "timeout": self.TASK_TIMEOUTS.get(_task),
+                    })
         except Exception as e:
             logger.warning("router.chat_model_persist_failed error={} type={}",
                            str(e), type(e).__name__)

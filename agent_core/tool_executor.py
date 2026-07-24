@@ -9,15 +9,22 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any, TYPE_CHECKING
 
 from loguru import logger
 
-from agent_core._shared import RequestContext, _current_request_ctx
 from config import FILE_DIR, get_agent_display_name
+from utils.text_utils import strip_dsml, strip_reasoning, humanize
+from utils.llm_cleanup import (
+    deduplicate_multi_reply,
+    strip_system_leak,
+    strip_log_timestamps,
+    strip_image_gen_leak,
+    strip_qq_face_tags,
+)
 from core.degradation_strategy import get_degradation_strategy
-from utils.llm_cleanup import deduplicate_multi_reply
-from utils.text_utils import humanize, strip_dsml, strip_reasoning
+
+from agent_core._shared import _current_request_ctx, RequestContext
 
 if TYPE_CHECKING:
     from tool_engine.tool_registry import ToolResult
@@ -220,6 +227,73 @@ class ToolExecutorMixin:
 
         return image_paths, video_path, clean_reply
 
+    async def _extract_fabricated_images_from_reply(
+        self, reply: str
+    ) -> tuple[list[Path], str]:
+        """兜底：从回复文本中提取 LLM 伪造的图片 URL，下载为本地文件供 QQ 富媒体发送。
+
+        背景：LLM 有时不调用 agnes_image_generate，而在回复里直接写
+        markdown 图 ![](url) 或裸 pollinations URL（伪造"已生成图片"）。
+        _extract_media_from_tool_results 只认真实工具结果，捕获不到这种伪造。
+        本函数扫描回复文本，下载伪造 URL → image_paths，并从文本剥离相关内容。
+
+        pollinations.ai 的 URL 本身是按 prompt 现出图的真实端点，下载能拿到真图，
+        因此伪造也能救成真图发给用户。
+
+        Returns:
+            (image_paths, cleaned_reply)
+        """
+        image_paths: list[Path] = []
+        if not reply:
+            return image_paths, reply
+
+        # markdown 图：![alt](url)，url 允许一层嵌套括号（如 pollinations 的 (duck)）
+        md_img_re = re.compile(
+            r'!\[[^\]]*\]\((https?://(?:[^()\s]|\([^()\s]*\))*)\)'
+        )
+        # 裸 pollinations URL（贪婪到首个空白，URL 不含空格）
+        pollinations_re = re.compile(r'https?://image\.pollinations\.ai/\S+')
+
+        # 仅通过 pollinations_re 收集 URL（贪婪 \S+ 捕获完整 URL token）。
+        # 不从 md_img_re 收集：LLM 伪造的 markdown 常含异常嵌套括号（如 "url)?width=...true)"），
+        # md_img_re 会在中途的 ')' 处提前截断，与 pollinations_re 捕获不一致导致去重失败、重复下载。
+        # md_img_re 仅用于文本剥离。下载仅限 pollinations 域，避免下载任意 URL 的安全风险。
+        seen: set[str] = set()
+        clean_urls: list[str] = []
+        for u in pollinations_re.findall(reply):
+            cu = u.rstrip(').,;:!?')
+            if cu and cu not in seen:
+                seen.add(cu)
+                clean_urls.append(cu)
+
+        download_urls = clean_urls  # 均为 pollinations URL
+        if download_urls:
+            img_dir = FILE_DIR if FILE_DIR.exists() else Path("tts_cache")
+            img_dir.mkdir(parents=True, exist_ok=True)
+            import httpx
+            for idx, url in enumerate(download_urls):
+                try:
+                    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as dl:
+                        resp = await dl.get(url)
+                        resp.raise_for_status()
+                        local_path = img_dir / f"fabricated_{int(time.time())}_{idx}.png"
+                        local_path.write_bytes(resp.content)
+                        image_paths.append(local_path)
+                        host = url.split('/')[2] if url.count('/') >= 3 else url
+                        logger.warning("image.fabricated_url_rescued host=%s local=%s",
+                                       host, str(local_path))
+                except Exception as dl_err:
+                    logger.debug("image.fabricated_download_failed url=%s error=%s",
+                                 url, str(dl_err))
+
+        # 从文本剥离：所有 markdown 图（任意 URL）+ 裸 pollinations URL + 伪造状态/元数据/模型名
+        cleaned = md_img_re.sub('', reply)
+        cleaned = pollinations_re.sub('', cleaned)
+        from utils.llm_cleanup import strip_image_gen_leak
+        cleaned = strip_image_gen_leak(cleaned, context="fabricated_extract")
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+        return image_paths, cleaned.strip()
+
     def _clean_reply(self, text: str) -> str:
         text = text.strip()
         # JSON 格式回复提取：LLM（如 agnes-2.0-flash）有时返回 JSON 而非纯文本
@@ -370,11 +444,45 @@ class ToolExecutorMixin:
 
         return text
 
+    def _clean_reply_full(self, text: str, *, style: str = "xiaoda",
+                          strip_emotion: bool = True) -> str:
+        """统一回复清洗出口：strip_dsml → strip_reasoning → strip_system_leak
+        → strip_image_gen_leak → strip_log_timestamps → strip_emotion_tag
+        → humanize → deduplicate → 名称替换。
+
+        fast-path / 主路径 else / _finalize_reply 三处统一调用，消除清洗序列漂移。
+        新增清洗规则只需改本函数即全路径生效。单个子步骤异常不阻断回复（best-effort）。
+
+        Args:
+            text: 待清洗文本
+            style: 人格名（决定 sticker_manager）
+            strip_emotion: 是否剥离 emotion tag；调用前若 get_sticker_info 已剥过则传 False
+        """
+        text = (text or "").strip()
+        try:
+            text = strip_dsml(text)
+            text = strip_reasoning(text)
+            text = strip_system_leak(text, context="clean_reply_full")
+            text = strip_image_gen_leak(text, context="clean_reply_full")
+            text = strip_qq_face_tags(text, context="clean_reply_full")
+            text = strip_log_timestamps(text, context="clean_reply_full")
+            if strip_emotion:
+                text = self.get_sticker_manager(style).strip_emotion_tag(text)
+            text = humanize(text, style=style)
+            text = deduplicate_multi_reply(text, context="clean_reply_full")
+            from config import apply_agent_name_replacements
+            text = apply_agent_name_replacements(text)
+        except Exception:
+            logger.debug("clean_reply_full.failed best_effort", exc_info=True)
+        return text
+
     def _finalize_reply(self, reply: str, strip_emotion: bool = True, style: str = "xiaoda") -> str:
-        """统一的回复文本处理：JSON提取 + strip_dsml + strip_reasoning + strip_emotion_tag + humanize + deduplicate + 名称替换。
+        """统一的回复文本处理：JSON提取 + 指令标签清理 + _clean_reply_full + 工具定义清理 + Canary。
 
         所有回复路径（主小妲、单子 Agent、并行子 Agent、TaskGraph）统一调用此方法，
-        确保回复清洗流程一致。
+        确保回复清洗流程一致。_clean_reply_full 接管 dsml/reasoning/system_leak/
+        image_gen_leak/log_ts/emotion/humanize/dedup/名称替换；本方法额外处理
+        JSON 提取、<instruction> 标签、注入工具定义清理、Canary 检测。
         """
         text = reply.strip() if reply else ""
         # JSON 格式回复提取：LLM 有时返回 JSON 而非纯文本
@@ -394,23 +502,14 @@ class ToolExecutorMixin:
                     text = "（回复格式异常，请稍后重试）"
             except json.JSONDecodeError:
                 pass  # 不是合法 JSON，继续后续清洗
-        text = strip_dsml(text)
         # 清理指令层级标签（LLM 可能原样输出上下文中的 <instruction> 标记）
         text = re.sub(r'<instruction\s+level="[A-Z]+"\s+priority="\d+"[^>]*>', '', text)
         text = re.sub(r'</instruction>', '', text)
-        text = strip_reasoning(text)
-        # CR-5: 清洗系统提示词/错误详情泄漏（与 _clean_reply 一致）
-        from utils.llm_cleanup import strip_system_leak
-        text = strip_system_leak(text, context="finalize_reply")
-        if strip_emotion:
-            # 根据 style（agent 名）动态获取正确的 sticker_manager
-            sticker_mgr = self.get_sticker_manager(style)
-            text = sticker_mgr.strip_emotion_tag(text)
-        text = humanize(text, style=style)
-        text = deduplicate_multi_reply(text, context="finalize_reply")
-        # 清除模型生成退化泄露的工具定义 JSON（与 _clean_reply 一致）
+        # 统一清洗出口（含 dsml/reasoning/system_leak/image_gen_leak/log_ts/emotion/humanize/dedup/名称替换）
+        text = self._clean_reply_full(text, style=style, strip_emotion=strip_emotion)
+        # 清除模型生成退化泄露的工具定义 JSON
         text = self._strip_injected_tool_defs(text)
-        # S6: Canary Token 泄露检测（与 _clean_reply 一致）
+        # S6: Canary Token 泄露检测
         try:
             from security.canary import get_canary_detector
             leaked, cleaned = get_canary_detector().scan_output_blocking(text)
@@ -421,12 +520,6 @@ class ToolExecutorMixin:
                 text = cleaned
         except ImportError:
             pass
-        # 名称替换：确保 LLM 输出中的旧名（如"纳西妲"）被替换为显示名（如"小妲"）
-        try:
-            from config import apply_agent_name_replacements
-            text = apply_agent_name_replacements(text)
-        except Exception:
-            logger.debug("apply_agent_name_replacements failed", exc_info=True)
         return text
 
     def get_sticker_info(self, reply: str, user_emotion: str = "", force_sticker: bool = False) -> tuple[str, Path | None]:
@@ -454,7 +547,26 @@ class ToolExecutorMixin:
             clean_reply = self.sticker_manager.strip_emotion_tag(clean_reply)
             if (self.sticker_manager.available
                     and get_degradation_strategy().is_feature_available("emotion")):
+                # 三级 fallback: 精确文件名 → 情绪名 → resolve_emotion 映射 → 文本检测
+                # LLM 常输出 [sticker:情绪名]（如 crying/shy）而非 [sticker:文件名]
                 path = self.sticker_manager.pick_by_name(filename)
+                if path:
+                    return clean_reply, path
+                # 2. 按情绪名查找（filename 当情绪名用，如 "shy" → pick("shy")）
+                path = self.sticker_manager.pick(filename)
+                if path:
+                    return clean_reply, path
+                # 3. resolve_emotion 映射（如 "crying" → SAD → "sad" 目录）
+                from emotion.emotion_enum import resolve_emotion, STICKER_FALLBACK
+                resolved = resolve_emotion(filename)
+                mapped = STICKER_FALLBACK.get(resolved, "")
+                if mapped:
+                    path = self.sticker_manager.pick(mapped)
+                    if path:
+                        return clean_reply, path
+                # 4. 最终 fallback: 文本情绪检测 → neutral
+                detected = self.sticker_manager.detect_emotion(clean_reply) or "neutral"
+                path = self.sticker_manager.pick(detected)
                 if path:
                     return clean_reply, path
                 logger.warning(f"sticker.not_found name={filename}")
@@ -464,7 +576,7 @@ class ToolExecutorMixin:
         _emotion_match = _re.search(r'\[emotion:([^\]]+)\]', reply)
         detected = ""
         if _emotion_match:
-            from emotion.emotion_enum import STICKER_FALLBACK, resolve_emotion
+            from emotion.emotion_enum import resolve_emotion, STICKER_FALLBACK
             emotion = resolve_emotion(_emotion_match.group(1))
             detected = STICKER_FALLBACK.get(emotion, "happy")
 

@@ -55,9 +55,12 @@ async def test_error_reply_user_friendly():
         error=error, user_query="你好", context="测试"
     )
 
-    # 不应以 ⚠️ 开头的技术错误格式
-    assert "执行时遇到了点小问题" not in reply or " Runtime" not in reply, \
+    # CR-FIX: 拆分为独立断言，避免 tautological 逻辑
+    # 原 `A not in reply or B not in reply` 只在两者同时存在时才失败
+    assert "执行时遇到了点小问题" not in reply, \
         f"不应包含技术错误格式: {reply}"
+    assert "RuntimeError" not in reply, \
+        f"不应泄漏 RuntimeError: {reply}"
 
 
 @pytest.mark.asyncio

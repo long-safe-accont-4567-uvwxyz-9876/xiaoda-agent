@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, onMounted, onBeforeUnmount, onDeactivated, computed, inject } from 'vue'
+import { ref, nextTick, watch, onMounted, onBeforeUnmount, onDeactivated, computed, inject, reactive } from 'vue'
 import type { Ref } from 'vue'
 import { NDrawer, NDrawerContent, NButton, NPopconfirm, useMessage } from 'naive-ui'
 import { useChatStore } from '../stores/chat'
@@ -26,11 +26,12 @@ const particles = inject<Ref<any>>('particles')
 
 const inputText = ref('')
 const messagesEl = ref<HTMLElement | null>(null)
-const inputEl = ref<HTMLTextAreaElement | null>(null)
 const paletteRef = ref<InstanceType<typeof SlashPalette> | null>(null)
+const promptInputRef = ref<InstanceType<typeof PromptInput> | null>(null)
 const commands = ref<Array<{ name: string; description: string; owner_only: boolean }>>([])
 const showSessions = ref(false)
 const sessions = ref<any[]>([])
+const loadingSessionId = ref('')  // 正在切换加载的会话 id（用于显示加载态、防重复点击）
 const playingUrl = ref('')
 const lightboxUrl = ref('')
 const lightboxRef = ref<HTMLElement | null>(null)
@@ -39,6 +40,12 @@ watch(lightboxUrl, (url) => {
   if (url) nextTick(() => lightboxRef.value?.focus())
 })
 let audioEl: HTMLAudioElement | null = null
+
+// 图片加载态：记录已加载完成（或加载失败）的图片 url，用于淡入显示
+const imgSettled = reactive(new Set<string>())
+function onImgSettled(url: string) { imgSettled.add(url) }
+// 切换会话时清理：避免旧消息的图片 url 残留导致内存占用与状态错乱
+watch(() => chat.sessionId, () => { imgSettled.clear() })
 
 const showPalette = computed(() => inputText.value.startsWith('/') && !inputText.value.includes(' '))
 
@@ -68,8 +75,7 @@ onDeactivated(() => {
   playingUrl.value = ''
 })
 
-watch(() => chat.messages.length, async () => {
-  await nextTick()
+watch(() => chat.messages.length, () => {
   const el = messagesEl.value
   if (!el) return
   // 仅在用户位于底部附近时自动滚动，避免打断上翻阅读
@@ -78,7 +84,7 @@ watch(() => chat.messages.length, async () => {
   // 流式期间用 auto（即时跟随），非流式时用 smooth
   const isStreaming = chat.messages.some(m => m.streaming)
   el.scrollTo({ top: el.scrollHeight, behavior: isStreaming ? 'auto' : 'smooth' })
-})
+}, { flush: 'post' })  // post：等 DOM 更新后再读取 scrollHeight 并滚动
 
 // 问候到达 → 蒲公英雨
 watch(() => chat.greetingPing, () => {
@@ -112,7 +118,7 @@ function findLastFinalAssistant() {
 }
 
 function play(url: string) {
-  if (audioEl) { audioEl.pause(); audioEl.onended = null; audioEl.onerror = null; audioEl = null }
+  if (audioEl) { audioEl.pause(); audioEl.onended = null; audioEl.onerror = null; audioEl.src = ''; audioEl = null }
   if (playingUrl.value === url) { playingUrl.value = ''; return }
   audioEl = new Audio(url)
   playingUrl.value = url
@@ -137,7 +143,7 @@ function handleSend() {
   chat.sendMessage(text)
   inputText.value = ''
   // 发送特效：从输入框爆叶子
-  const rect = inputEl.value?.getBoundingClientRect()
+  const rect = promptInputRef.value?.textareaRef?.getBoundingClientRect()
   if (rect) particles?.value?.burst?.(rect.left + rect.width / 2, rect.top, 10)
   autoGrow()
 }
@@ -153,7 +159,7 @@ function handlePromptSend(text: string, options: { search?: boolean; think?: boo
   chat.sendMessage(finalText, options.imageUrl)
   inputText.value = ''
   // 发送特效
-  const rect = inputEl.value?.getBoundingClientRect()
+  const rect = promptInputRef.value?.textareaRef?.getBoundingClientRect()
   if (rect) particles?.value?.burst?.(rect.left + rect.width / 2, rect.top, 10)
 }
 
@@ -172,11 +178,11 @@ function handleKeydown(e: KeyboardEvent) {
 
 function selectCommand(name: string) {
   inputText.value = `/${name.replace(/^\/+/, '')} `
-  inputEl.value?.focus()
+  nextTick(() => promptInputRef.value?.focus())
 }
 
 function autoGrow() {
-  const el = inputEl.value
+  const el = promptInputRef.value?.textareaRef
   if (!el) return
   el.style.height = 'auto'
   el.style.height = Math.min(el.scrollHeight, 120) + 'px'
@@ -188,10 +194,13 @@ async function openSessions() {
 }
 
 async function switchSession(sid: string) {
+  if (loadingSessionId.value) return  // 防止重复点击
+  loadingSessionId.value = sid
   try {
     await chat.loadSession(sid)
     showSessions.value = false
   } catch (e: any) { message.error(e.message) }
+  finally { loadingSessionId.value = '' }
 }
 
 async function removeSession(sid: string) {
@@ -203,6 +212,7 @@ async function removeSession(sid: string) {
 }
 
 async function startNew() {
+  if (loadingSessionId.value) return  // 加载进行中禁止新建，避免与 loadSession 竞态覆盖新会话
   await chat.newSession()
   showSessions.value = false
   message.success(t('chatView.newSessionStarted'))
@@ -226,6 +236,7 @@ function resend(msg: { content: string; imageUrl?: string }) {
 }
 
 function clearAll() {
+  if (loadingSessionId.value) return  // 加载进行中禁止清空，避免与 loadSession 竞态
   chat.clearMessages()
   message.success(t('chatView.cleared'))
 }
@@ -286,7 +297,10 @@ const emotionColors: Record<string, string> = {
           <div v-else class="message-content plain">
             {{ msg.content }}
             <img v-if="msg.imageUrl" :src="msg.imageUrl" class="user-upload-img"
-                 loading="lazy" :title="t('chatView.zoom')" @click="lightboxUrl = msg.imageUrl!" />
+                 :class="{ loaded: imgSettled.has(msg.imageUrl) }"
+                 loading="lazy" :title="t('chatView.zoom')"
+                 @load="onImgSettled(msg.imageUrl!)" @error="onImgSettled(msg.imageUrl!)"
+                 @click="lightboxUrl = msg.imageUrl!" />
           </div>
           <span v-if="msg.streaming && !msg.content" class="cursor-blink">▌</span>
 
@@ -295,7 +309,10 @@ const emotionColors: Record<string, string> = {
             <span class="artifact-label">🎨 {{ t('chatView.artifacts') }}</span>
             <div v-if="msg.imageUrls?.length" class="media-grid">
               <img v-for="url in msg.imageUrls" :key="url" :src="url" class="media-image"
-                   loading="lazy" :title="t('chatView.zoom')" @click="lightboxUrl = url" />
+                   :class="{ loaded: imgSettled.has(url) }"
+                   loading="lazy" :title="t('chatView.zoom')"
+                   @load="onImgSettled(url)" @error="onImgSettled(url)"
+                   @click="lightboxUrl = url" />
             </div>
             <video v-if="msg.videoUrl" :src="msg.videoUrl" controls class="media-video"></video>
             <audio v-if="msg.audioUrl" :src="msg.audioUrl" controls class="media-audio"></audio>
@@ -337,6 +354,7 @@ const emotionColors: Record<string, string> = {
       <SlashPalette ref="paletteRef" :commands="commands" :filter="inputText"
                     :visible="showPalette" @select="selectCommand" />
       <PromptInput
+        ref="promptInputRef"
         v-model="inputText"
         :is-loading="chat.isProcessing"
         :placeholder="t('chatView.inputPlaceholder')"
@@ -347,9 +365,10 @@ const emotionColors: Record<string, string> = {
 
     <n-drawer v-model:show="showSessions" :width="340" placement="left">
       <n-drawer-content :title="'📂 ' + t('chatView.history')" closable>
-        <div class="session-list">
+        <div class="session-list" :class="{ 'is-loading': !!loadingSessionId }">
           <div v-for="s in sessions" :key="s.session_id" class="session-item"
-               :class="{ active: s.session_id === chat.sessionId }"
+               :class="{ active: s.session_id === chat.sessionId, loading: loadingSessionId === s.session_id }"
+               :aria-busy="loadingSessionId === s.session_id"
                @click="switchSession(s.session_id)">
             <div class="session-title">
               <span class="session-source" :class="s.source">{{
@@ -483,7 +502,10 @@ const emotionColors: Record<string, string> = {
 .user-upload-img {
   max-width: 240px; max-height: 240px; border-radius: 10px;
   object-fit: cover; cursor: zoom-in; margin-top: 6px; display: block;
+  opacity: 0; transition: opacity 0.3s var(--ease-smooth);
+  background: rgba(127, 214, 80, 0.06);
 }
+.user-upload-img.loaded { opacity: 1; }
 
 .tool-calls { margin-bottom: 6px; }
 
@@ -501,7 +523,12 @@ const emotionColors: Record<string, string> = {
   margin-bottom: 6px;
 }
 .media-grid { display: flex; flex-wrap: wrap; gap: 8px; }
-.media-image { max-width: 220px; max-height: 220px; border-radius: 8px; object-fit: cover; cursor: zoom-in; }
+.media-image {
+  max-width: 220px; max-height: 220px; border-radius: 8px; object-fit: cover; cursor: zoom-in;
+  opacity: 0; transition: opacity 0.3s var(--ease-smooth);
+  background: rgba(127, 214, 80, 0.06);
+}
+.media-image.loaded { opacity: 1; }
 .media-video { max-width: 100%; border-radius: 8px; }
 .media-audio { width: 100%; height: 36px; }
 .sticker-img {
@@ -575,6 +602,23 @@ const emotionColors: Record<string, string> = {
 }
 .session-item:hover { background: rgba(127, 214, 80, 0.06); }
 .session-item.active { border-color: var(--dendro); }
+/* 加载期间：列表显示等待光标作视觉反馈；仅当前加载项禁用交互。
+   其余项的删除等操作仍可用——removeSession 与 loadSession 作用于不同会话，无状态冲突，
+   全量禁用会在慢网络下冻结整个抽屉的删除能力（回归），故不采用。 */
+.session-list.is-loading { cursor: wait; }
+.session-item.loading { pointer-events: none; opacity: 0.55; }
+.session-item.loading .session-title::after {
+  content: '';
+  display: inline-block;
+  width: 10px; height: 10px;
+  margin-left: 6px;
+  border: 2px solid var(--dendro);
+  border-top-color: transparent;
+  border-radius: 50%;
+  vertical-align: middle;
+  animation: session-spin 0.7s linear infinite;
+}
+@keyframes session-spin { to { transform: rotate(360deg); } }
 
 .session-source {
   font-size: 10px; padding: 1px 6px; border-radius: 8px; margin-right: 4px;

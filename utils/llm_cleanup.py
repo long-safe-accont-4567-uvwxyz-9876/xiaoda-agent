@@ -217,6 +217,16 @@ _SYSTEM_INSTRUCTION_BRACKET_RE = re.compile(
     r'\[[^\[\]]*?(?:系统指示|最高原则|需要遵守角色设定)[^\[\]]*?\]',
     re.DOTALL,
 )
+# N5: 方括号安全推理泄漏（LLM 安全拒绝时的完整推理块）
+# 生产样本 [1946/1949/1955]:
+#   [该内容涉及生成露骨的性行为描写，超出了小妲可协助的范围哦。]
+#   [该请求涉及生成成人/色情内容。根据系统指示中的"最高原则...我需要拒绝生成露骨的性行为描写...]
+# 共同特征：方括号包围 + 含"涉及生成"+"露骨/色情/成人"+"描写/内容" 关键词
+_SAFETY_REASONING_BRACKET_RE = re.compile(
+    r'\[[^\[\]]*?(?:涉及生成[^\[\]]*?(?:露骨|色情|成人|敏感)[^\[\]]*?(?:描写|内容)|'
+    r'超出了[^\[\]]*?范围)[^\[\]]*?\]',
+    re.DOTALL,
+)
 # 独立的系统指示措辞行（"系统指示" 不匹配 "系统提示词"，二者字符不同）
 _SYSTEM_INSTRUCTION_LINE_RE = re.compile(
     r'^[ \t]*[^\n]*(?:根据系统指示|系统指示中的|最高原则[：:]|需要遵守角色设定)[^\n]*$\n?',
@@ -254,8 +264,92 @@ def strip_system_leak(text: str, *, context: str = "") -> str:
     # N4: 系统指示措辞引用
     text = _SYSTEM_INSTRUCTION_BRACKET_RE.sub('', text)
     text = _SYSTEM_INSTRUCTION_LINE_RE.sub('', text)
+    # N5: 方括号安全推理泄漏（LLM 安全拒绝推理块）
+    text = _SAFETY_REASONING_BRACKET_RE.sub('', text)
 
     # 清理残留空行
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
+
+
+# N6: 生图类泄漏 —— LLM 伪造图片生成时复述的模型名 / 状态行 / 生图参数元数据
+# 生产样本 conversation_logs id 1965/1966：
+#   "Agnes Image 2.1 Flash 刚才跟我撒娇..."
+#   "【图片生成中 —— Agnes Image 2.1 Flash ⚡】"
+#   'Width Height: 560x792 | Seed: 93847 | Model: Default | Quality.default| Prompt: "..."'
+# 模型名用精确串删除（不误伤正常讨论）；状态行/元数据行要求完整特征序列才删。
+_IMAGE_GEN_MODEL_NAMES = (
+    "Agnes Image 2.1 Flash",
+    "Agnes Video V2.0",
+    "agnes-image-2.1-flash",
+    "agnes-video-v2.0",
+)
+# 伪造状态行：【图片生成中 ...】/【视频生成中 ...】（不锚定行首，容忍内联出现）
+_IMAGE_GEN_STATUS_LINE_RE = re.compile(r'【(?:图片|视频)生成中[^】]*】')
+# 伪造生图元数据片段：要求 Width/Size + Seed + Model + Prompt 完整序列才删
+# （避免误删普通含 Model/Prompt 的文本）。生产样本中元数据常内联在 markdown 图后。
+# Prompt 分隔符容忍 : / . / ：，值用双引号包裹（生产样本均如此）。
+_IMAGE_GEN_META_LINE_RE = re.compile(
+    r'\.?\s*(?:Width\s*Height|Size|尺寸)[:：]?\s*\d+\s*[x×]\s*\d+.*?'
+    r'(?:Seed|种子).*?(?:Model|模型).*?'
+    r'(?:Prompt|提示词)\s*[.：:]?\s*"[^"]*"',
+    re.IGNORECASE,
+)
+# pollinations URL 参数残留：异常 markdown 如 ![alt](url)?width=...&nologo=true)
+# md_img_re 在 url 后第一个 ) 处停止匹配，留下 ?width=...&nologo=true) 残留。
+# 要求完整参数序列（width+height+seed+nologo）才删，避免误伤正常 ?key=val 文本。
+_IMAGE_GEN_URL_PARAMS_RE = re.compile(
+    r'\?width=\d+&height=\d+&seed=\d+&nologo=true\)?'
+)
+
+
+def strip_image_gen_leak(text: str, *, context: str = "") -> str:
+    """清洗 LLM 伪造图片生成时泄漏的模型名/状态行/生图参数元数据。
+
+    覆盖（生产样本 id 1965/1966）：
+    - 模型名：Agnes Image 2.1 Flash / Agnes Video V2.0 及其 model_id 形式
+    - 伪造状态行：【图片生成中 —— ...】/【视频生成中 ...】
+    - 伪造生图元数据行：Width Height: WxH | Seed: .. | Model: .. | Prompt: ..
+
+    注意：markdown 图语法 ![](url) 的剥离由 _extract_fabricated_images_from_reply
+    负责（它会下载 URL 发真图），本函数只管文本类泄漏，避免双重处理。
+    正常人格回复不含上述精确串/完整元数据序列，无过删风险。
+    """
+    if not text:
+        return ""
+    # 1. 先删伪造状态行 / 元数据行 / URL 参数残留，避免模型名删除留下碎片
+    text = _IMAGE_GEN_STATUS_LINE_RE.sub('', text)
+    text = _IMAGE_GEN_META_LINE_RE.sub('', text)
+    text = _IMAGE_GEN_URL_PARAMS_RE.sub('', text)
+    # 2. 模型名精确删除：连同紧跟的单个空格一起删，避免行首空格残留
+    for _name in _IMAGE_GEN_MODEL_NAMES:
+        text = text.replace(_name + " ", "")
+        text = text.replace(_name, "")
+    # 3. 收拢多余空格与空行
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
+# QQ 表情标签泄漏：<faceType=1,faceId="N",ext="base64"/> 由 botpy 将用户发表情
+# 序列化进 message.content，经对话历史被 LLM 模仿输出。输入侧（qq_bot_adapter）
+# 与输出侧（_clean_reply_full）均需剥离，防止原始标签泄漏到 QQ 回复。
+# 样本：'你凶我<faceType=1,faceId="5",ext="eyJ0ZXh0Ijoi5rWB5rOqIn0=">'
+_QQ_FACE_TAG_RE = re.compile(
+    r'<faceType=\d+,\s*faceId=["\']?\d+["\']?,\s*ext=["\'][^"\']*["\']\s*/?>'
+)
+
+
+def strip_qq_face_tags(text: str, *, context: str = "") -> str:
+    """剥离 QQ 表情标签 <faceType=1,faceId="N",ext="..."/>。
+
+    botpy 把用户发表情序列化成该字面标签塞进 message.content，会污染 LLM 上下文
+    并被模仿输出。输入侧调用以阻止污染，输出侧调用作防御兜底。
+    """
+    if not text or "<faceType" not in text:
+        return text
+    cleaned = _QQ_FACE_TAG_RE.sub('', text)
+    # 标签剥离后清理粘连的多余空白
+    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned)
+    return cleaned
 

@@ -1,17 +1,19 @@
 from .pad_model import PADEmotion
 from .pad_model import from_emotion as pad_from_emotion
 
-# ── 统一后的 9 类关键词集（合并 emotion_simple + sticker_manager 关键词） ──
+# ── 统一后的 17 类关键词集（与物理目录完全对齐） ──
 
 _POSITIVE_KEYWORDS = {
     # 原有
-    "开心", "高兴", "好耶", "哈哈", "太棒了", "喜欢", "爱", "谢谢",
+    "开心", "高兴", "好耶", "哈哈", "太棒了", "谢谢",
     "幸福", "快乐", "真好", "不错", "厉害", "好开心", "嘿嘿", "嘻",
     # 从 sticker_manager happy 合并
     "嘻嘻", "太好了", "耶", "棒", "好高兴", "真棒", "好喜欢",
     "开心～", "嘻嘻～", "嘿嘿～", "好耶！", "太好了！",
     "太开心", "好幸福", "满足", "好满足", "满足～",
     "好快乐", "乐", "超棒", "超好", "超喜欢",
+    # love 相关词移至 _LOVE_KEYWORDS，避免喜爱情绪被误判为喜悦
+    # "喜欢"/"爱"/"好喜欢"/"超喜欢" 已移至 _LOVE_KEYWORDS
     # 注意: 问候语关键词不再归入喜悦 — 问候是社交礼仪而非情绪表达 (BUG-3 修复)
 }
 
@@ -82,8 +84,61 @@ _FEAR_KEYWORDS = {
     "惊恐", "惊吓", "颤抖",
 }
 
-# 9 类中文标签（与 Emotion 枚举对齐）
+# ── 补齐缺失情绪（原仅 9 类，逐步扩展至 17 类，与物理目录对齐）──
+
+_LOVE_KEYWORDS = {
+    "喜欢", "爱", "心动", "喜爱", "爱慕", "示爱",
+    "好喜欢", "超喜欢", "好心动", "好喜欢你",
+}
+
+_PLAYFUL_KEYWORDS = {
+    "调皮", "搞怪", "俏皮", "得意", "傲娇", "卖萌",
+    "嘿嘿嘿", "咯咯", "嘻嘻嘻", "略略",
+}
+
+_MOVED_KEYWORDS = {
+    "感动", "欣慰", "暖心", "破涕为笑",
+    "好感动", "太感动", "暖到了",
+}
+
+_POUT_KEYWORDS = {
+    "撒娇", "娇嗔", "嘟嘴", "撅嘴", "耍赖",
+    "哼～", "才不要嘛", "人家要", "不理你啦",
+}
+
+_SURPRISED_KEYWORDS = {
+    "惊讶", "吃惊", "震惊", "什么！？",
+    "吓一跳", "没想到", "想不到", "万万没想到",
+}
+
+_CONFUSED_KEYWORDS = {
+    "困惑", "疑惑", "不解", "迷茫", "无语",
+    "想不明白", "搞不懂", "不明白", "什么意思",
+    "听不懂", "看不懂", "不懂",
+}
+
+_GREETING_KEYWORDS = {
+    "你好", "早上好", "晚安", "嗨", "早上好呀", "晚安呀", "嗨～",
+    "你好呀", "早安", "午安", "你好～", "嗨！", "欢迎",
+    "好久不见", "回来啦", "我回来啦", "下午好", "晚上好",
+}
+
+_NEUTRAL_KEYWORDS = {
+    "平静", "淡然", "冷静", "无聊", "困倦", "发呆",
+    "嗯", "哦", "好吧", "行吧", "就这样", "随便",
+}
+
+# 17 类中文标签（与 Emotion 枚举 + sticker 物理目录完全对齐）
 _EMOTION_CATEGORIES = [
+    # 特定情绪优先于通用喜悦，避免 "喜欢" 被误判为喜悦
+    ("喜爱", _LOVE_KEYWORDS),
+    ("撒娇", _POUT_KEYWORDS),
+    ("调皮", _PLAYFUL_KEYWORDS),
+    ("感动", _MOVED_KEYWORDS),
+    ("惊讶", _SURPRISED_KEYWORDS),
+    ("问候", _GREETING_KEYWORDS),
+    ("困惑", _CONFUSED_KEYWORDS),
+    ("平静", _NEUTRAL_KEYWORDS),
     ("兴奋", _EXCITED_KEYWORDS),
     ("喜悦", _POSITIVE_KEYWORDS),
     ("悲伤", _NEGATIVE_KEYWORDS),
@@ -99,7 +154,7 @@ _EMOTION_CATEGORIES = [
 def detect_emotion(text: str) -> dict:
     """检测文本情绪，返回包含 primary/valence/intensity 的字典
 
-    primary 为 9 种中文标签之一：喜悦/悲伤/愤怒/焦虑/害羞/好奇/思考/恐惧/平静
+    primary 为 17 种中文标签之一（与 Emotion 枚举 + sticker 物理目录对齐）
     """
     if not text or not text.strip():
         return {
@@ -127,8 +182,8 @@ def detect_emotion(text: str) -> dict:
         }
 
     # 效价映射
-    _positive_labels = {"喜悦", "兴奋"}
-    _negative_labels = {"悲伤", "愤怒", "焦虑", "恐惧"}
+    _positive_labels = {"喜悦", "兴奋", "喜爱", "感动", "撒娇", "调皮", "问候"}
+    _negative_labels = {"悲伤", "愤怒", "焦虑", "恐惧", "困惑"}
     if best_label in _positive_labels:
         valence = "positive"
     elif best_label in _negative_labels:

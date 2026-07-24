@@ -358,7 +358,13 @@ class MessageProcessorMixin:
         clean_input = ChatProcessor.clean_mention_from_input(user_input)
 
         voice_intent = self._detect_voice_intent(clean_input)
-        force_voice = voice_intent and not self._voice_mode
+        if voice_intent == "off":
+            self.set_voice_mode(False)
+            force_voice = False
+        elif voice_intent == "on":
+            force_voice = not self._voice_mode
+        else:
+            force_voice = False
 
         if not clean_input:
             target_name = get_agent_display_name(chat_targets[0]) if chat_targets else get_agent_display_name('xiaoda')
@@ -849,6 +855,9 @@ class MessageProcessorMixin:
                                           emotion_label: str, ctx: Any, user_openid: Any,
                                           session_id: Any, force_voice: Any) -> ProcessResult:
         """快速路径后处理：隐私扫描、人格校验、上下文记录、情绪标签、语音构建。返回 ProcessResult。"""
+        # 兜底：提取 LLM 伪造的图片 URL（fast-path 通常无工具调用，但 LLM 仍可能伪造图）
+        fab_image_paths, reply = await self._extract_fabricated_images_from_reply(reply)
+
         # 非主人输出侧隐私扫描
         if not is_master and reply:
             safe, alt_reply, _ = self.security.check_output_privacy(reply)
@@ -889,20 +898,8 @@ class MessageProcessorMixin:
                 emotion_label = ensured_emotion.value
 
         clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
-        # 清理模型输出的推理/思考内容（Agnes 等模型会输出 [emotion thinking] 等标签）
-        clean_reply = strip_dsml(clean_reply)
-        clean_reply = strip_reasoning(clean_reply)
-        # 清除日志时间戳泄露：LLM 从 conversation_logs 照搬 [HH:MM] 标记到回复里
-        from utils.llm_cleanup import strip_log_timestamps
-        clean_reply = strip_log_timestamps(clean_reply, context="fast_path")
-        clean_reply = humanize(clean_reply, style="xiaoda")
-        clean_reply = deduplicate_multi_reply(clean_reply, context="fast_path")
-        # 名称替换：确保 LLM 输出中的旧名被替换为显示名
-        try:
-            from config import apply_agent_name_replacements
-            clean_reply = apply_agent_name_replacements(clean_reply)
-        except Exception:
-            logger.debug("apply_agent_name_replacements failed", exc_info=True)
+        # 统一清洗出口（get_sticker_info 已剥 emotion tag，故 strip_emotion=False）
+        clean_reply = self._clean_reply_full(clean_reply, style="xiaoda", strip_emotion=False)
 
         audio_path, tts_pending, tts_text = await self._build_voice_result(
             clean_reply, emotion_label, force_voice)
@@ -926,7 +923,8 @@ class MessageProcessorMixin:
             logger.debug("emotion_state.update_failed", error=str(e))
 
         return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path,
-                             audio_path=audio_path, tts_pending=tts_pending, tts_text=tts_text)
+                             audio_path=audio_path, tts_pending=tts_pending, tts_text=tts_text,
+                             image_paths=fab_image_paths)
 
     async def _fast_path_inject_memories(self, messages: Any, user_input: Any, is_master: Any, emotion: Any) -> Any:
         """快速路径：注入 FTS 记忆和安抚记忆到 messages。"""
@@ -1154,6 +1152,9 @@ class MessageProcessorMixin:
         # 媒体提取与隐私扫描
         media_image_paths, media_video_path, reply = await self._extract_media_from_tool_results(
             tool_results, reply)
+        # 兜底：提取 LLM 伪造的图片 URL（未调 agnes_image_generate 而在回复里写 markdown 图/裸 URL）
+        fab_image_paths, reply = await self._extract_fabricated_images_from_reply(reply)
+        media_image_paths.extend(fab_image_paths)
         if not is_master and reply:
             safe, alt_reply, _ = self.security.check_output_privacy(reply)
             if not safe:
@@ -1208,16 +1209,8 @@ class MessageProcessorMixin:
             sticker_path = _pre_picked_sticker
         else:
             clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
-            clean_reply = strip_dsml(clean_reply)
-            clean_reply = strip_reasoning(clean_reply)
-            clean_reply = humanize(clean_reply, style="xiaoda")
-            clean_reply = deduplicate_multi_reply(clean_reply, context="main_path")
-            # 名称替换：确保 LLM 输出中的旧名被替换为显示名
-            try:
-                from config import apply_agent_name_replacements
-                clean_reply = apply_agent_name_replacements(clean_reply)
-            except Exception:
-                logger.debug("apply_agent_name_replacements failed", exc_info=True)
+            # 统一清洗出口（get_sticker_info 已剥 emotion tag，故 strip_emotion=False）
+            clean_reply = self._clean_reply_full(clean_reply, style="xiaoda", strip_emotion=False)
 
         audio_path, tts_pending, tts_text = await self._build_voice_result(
             clean_reply, emotion_label, force_voice)
@@ -1919,15 +1912,35 @@ class MessageProcessorMixin:
             return False
         return False
 
-    def _detect_voice_intent(self, user_input: str) -> bool:
+    def _detect_voice_intent(self, user_input: str) -> str:
+        """检测语音意图：三态返回 'none' / 'on' / 'off'。
+
+        - 'off': 含否定词 + 语音关键词（如"不要发语音了"→关语音）
+        - 'on':  含语音关键词但不含否定词（如"发语音"→开语音）
+        - 'none': 无语音关键词
+
+        回归: 生产样本 id=1993 用户说"不要发语音了"但旧逻辑匹配"发语音"→True→TTS 照生成。
+        """
         voice_keywords = [
             "语音", "声音", "说话", "朗读", "念给我", "读给我",
             "用声音", "听你", "听听你", "发语音", "生成语音",
             "语音回复", "语音消息", "说给我听", "念出来",
             "tts", "voice",
         ]
+        negation_prefixes = ["不要", "不用", "别", "关掉", "关闭", "停止", "取消"]
         q = user_input.lower()
-        return any(kw in q for kw in voice_keywords)
+        # 先找语音关键词，无则 none
+        matched_kw = False
+        for kw in voice_keywords:
+            idx = q.find(kw)
+            if idx == -1:
+                continue
+            matched_kw = True
+            # 检测否定：否定词在语音词前 4 字符范围内
+            prefix = q[max(0, idx - 4):idx]
+            if any(neg in prefix for neg in negation_prefixes):
+                return "off"
+        return "on" if matched_kw else "none"
 
     def _update_mental_state_emotion(self, emotion: dict) -> None:
         """将检测到的用户情绪更新到 L/M/S 心理状态模型的 S 层.
