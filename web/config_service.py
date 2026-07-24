@@ -247,6 +247,41 @@ class ConfigService:
                         path, str(value)[:100])
         self._notify(path, value)
 
+    def set_many(self, updates: dict[str, Any]) -> None:
+        """批量设置多个配置项, 仅触发一次落盘和一次合并通知.
+
+        比 set() 循环调用避免 N 次原子写盘和 N 次 watcher 回调.
+
+        Args:
+            updates: {点分路径: 值} 字典
+        """
+        with self._lock:
+            for path, value in updates.items():
+                parts = path.split(".")
+                node = self._data
+                for part in parts[:-1]:
+                    if part not in node or not isinstance(node[part], dict):
+                        child_path = f"{getattr(node, '_track_path', '')}.{part}"
+                        node[part] = _TrackedDict(_track_path=child_path)
+                    node = node[part]
+                node[parts[-1]] = value
+            self._save()
+        # 合并通知：取所有路径的最长公共前缀，避免重复回调
+        if updates:
+            paths = list(updates.keys())
+            common_prefix = paths[0]
+            for p in paths[1:]:
+                while not p.startswith(common_prefix):
+                    common_prefix = common_prefix.rsplit(".", 1)[0]
+                if not common_prefix:
+                    break
+            notify_path = common_prefix or paths[0]
+            # 对 models. 路径记录审计日志
+            if notify_path.startswith("models."):
+                logger.info("config_service.models_batch_write paths={}",
+                            ",".join(paths))
+            self._notify(notify_path, None)
+
     def delete(self, path: str) -> None:
         """按点分路径删除配置项, 落盘并通知 watcher."""
         with self._lock:
