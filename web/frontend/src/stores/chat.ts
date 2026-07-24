@@ -131,11 +131,18 @@ export const useChatStore = defineStore('chat', () => {
         ok: null, elapsedMs: null, running: true,
       })
     } else {
-      const tc = [...msg.toolCalls].reverse().find(t => t.tool === e.tool && t.running)
-      if (tc) {
-        tc.running = false
-        tc.ok = e.ok as boolean
-        tc.elapsedMs = e.elapsed_ms as number
+      // 反向查找最后一个匹配的运行中工具调用（避免 [...arr].reverse() 拷贝）
+      const calls = msg.toolCalls
+      if (calls) {
+        for (let i = calls.length - 1; i >= 0; i--) {
+          const c = calls[i]
+          if (c.tool === e.tool && c.running) {
+            c.running = false
+            c.ok = e.ok as boolean
+            c.elapsedMs = e.elapsed_ms as number
+            break
+          }
+        }
       }
     }
   }
@@ -285,9 +292,12 @@ export const useChatStore = defineStore('chat', () => {
   /** 重试：移除最后一条助手回复，重发最后一条用户消息 */
   function retryLast() {
     if (isProcessing.value) return
-    const lastUserIdx = [...messages.value].reverse().findIndex(m => m.role === 'user')
-    if (lastUserIdx < 0) return
-    const idx = messages.value.length - 1 - lastUserIdx
+    // 反向查找最后一条用户消息的原始下标（避免 [...arr].reverse() 拷贝）
+    let idx = -1
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      if (messages.value[i].role === 'user') { idx = i; break }
+    }
+    if (idx < 0) return
     const msg = messages.value[idx]
     let text = msg.content
     const imageUrl = msg.imageUrl

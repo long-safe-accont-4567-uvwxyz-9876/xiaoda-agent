@@ -7,6 +7,7 @@ import { useUiStore } from './stores/ui'
 import { useRouter } from 'vue-router'
 import { api } from './api'
 import { t } from './i18n'
+import { sound } from './utils/sound'
 import GrassParticles from './components/fx/GrassParticles.vue'
 
 const auth = useAuthStore()

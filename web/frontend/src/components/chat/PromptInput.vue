@@ -60,6 +60,13 @@ function autoGrow() {
   el.style.height = Math.min(el.scrollHeight, 240) + 'px'
 }
 
+/** 聚焦输入框（供父组件通过 ref 调用，替代脆弱的 querySelector） */
+function focus() {
+  textareaRef.value?.focus()
+}
+
+defineExpose({ focus })
+
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
@@ -193,9 +200,7 @@ async function startRecording() {
           emit('update:modelValue', props.modelValue + result.text)
           nextTick(() => {
             autoGrow()
-            // 自动聚焦输入框
-            const textarea = document.querySelector('.prompt-input textarea') as HTMLTextAreaElement
-            if (textarea) textarea.focus()
+            focus()
           })
         }
       } catch (e) {

@@ -138,7 +138,11 @@ export class WsClient {
   }
 
   private scheduleReconnect() {
-    if (this.reconnectAttempts >= 20) return
+    if (this.reconnectAttempts >= 20) {
+      // 放弃重连：复位标志，避免 _reconnecting 永久为 true 阻塞后续手动 connect
+      this._reconnecting = false
+      return
+    }
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), this.maxReconnectDelay)
     this.reconnectAttempts++
     this.reconnectTimer = setTimeout(() => {
