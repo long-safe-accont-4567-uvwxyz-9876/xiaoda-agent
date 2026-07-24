@@ -20,6 +20,7 @@ from utils.llm_cleanup import (
     strip_system_leak,
     strip_log_timestamps,
     strip_image_gen_leak,
+    strip_qq_face_tags,
 )
 from core.degradation_strategy import get_degradation_strategy
 
@@ -463,6 +464,7 @@ class ToolExecutorMixin:
             text = strip_reasoning(text)
             text = strip_system_leak(text, context="clean_reply_full")
             text = strip_image_gen_leak(text, context="clean_reply_full")
+            text = strip_qq_face_tags(text, context="clean_reply_full")
             text = strip_log_timestamps(text, context="clean_reply_full")
             if strip_emotion:
                 text = self.get_sticker_manager(style).strip_emotion_tag(text)

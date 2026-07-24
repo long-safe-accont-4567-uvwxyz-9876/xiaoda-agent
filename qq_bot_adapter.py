@@ -15,6 +15,7 @@ load_dotenv()
 
 
 from utils.common import safe_int as _safe_int
+from utils.llm_cleanup import strip_qq_face_tags
 
 
 def _safe_float(val, default):
@@ -595,6 +596,7 @@ class AIQQBot(botpy.Client):
         若消息为空（无文本且无附件）返回 None。
         """
         content = (getattr(message, 'content', None) or "").strip()
+        content = strip_qq_face_tags(content)  # 剥离 QQ 表情标签，防止污染 LLM 上下文被模仿
         image_data, attachment_info = await self._process_message_attachments(message)
         if not content and not attachment_info:
             return None
@@ -762,6 +764,7 @@ class AIQQBot(botpy.Client):
     async def on_group_at_message_create(self, message: GroupMessage) -> None:
         try:
             content = (getattr(message, 'content', None) or "").strip()
+            content = strip_qq_face_tags(content)  # 剥离 QQ 表情标签，防止污染 LLM 上下文被模仿
 
             image_data, attachment_info = await self._process_message_attachments(message)
 
