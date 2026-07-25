@@ -179,6 +179,9 @@ class Reranker:
         }
 
         # G4: 共享 httpx.AsyncClient（连接池复用 + HTTP/2），单次请求级别覆盖 timeout
+        # 修复：30s→5s。根因：检索整体只有 8s 超时，reranker 30s 超时远超整体预算，
+        # SiliconFlow 慢时 reranker 卡住 → 8s 超时杀掉整个检索 → 零记忆 → "想不起来"
+        # 5s：足够 SiliconFlow 正常响应（通常 1-3s），慢时快速失败用未排序结果兜底
         client = get_shared_client()
         response = await client.post(
             f"{self._base_url}/rerank",
@@ -187,7 +190,7 @@ class Reranker:
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
             },
-            timeout=httpx.Timeout(30.0),
+            timeout=httpx.Timeout(5.0),
         )
         response.raise_for_status()
         data = response.json()

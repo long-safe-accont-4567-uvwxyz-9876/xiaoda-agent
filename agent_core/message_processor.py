@@ -41,6 +41,7 @@ from utils.llm_cleanup import deduplicate_multi_reply
 from agent_core._shared import (
     DEGRADED_REPLY, is_degraded_reply,
     get_empty_reply_for_finish_reason,
+    _pending_tts_audio,
 )
 
 
@@ -49,6 +50,34 @@ def _get_temperature(model_cfg: dict | None = None) -> float:
     from config import get_temperature
     default = float(model_cfg.get("temperature", 0.7)) if model_cfg else 0.7
     return get_temperature(default=default)
+
+
+# TTS 自动触发冷却：防止 voice_mode 开启时每条回复都生成 TTS 导致"失控"
+# 仅对 _voice_mode 自动触发生效，force_voice（用户显式要求"发语音"）和工具调用不受限
+_TTS_AUTO_COOLDOWN = 8.0  # 自动触发 TTS 最小间隔（秒）
+_last_auto_tts_ts: float = 0.0
+
+
+def _should_auto_tts(reply: str) -> bool:
+    """检查回复内容是否适合自动生成 TTS。
+
+    防止 TTS 失控：跳过不适合语音朗读的内容（代码块/URL/标签/极短文本）。
+    force_voice（用户显式要求"发语音"）不受此守卫限制。
+    """
+    if not reply or len(reply.strip()) < 5:
+        return False
+    cleaned = reply.strip()
+    # 跳过含代码块的内容
+    if '```' in cleaned:
+        return False
+    # 跳过 URL 占比过高的内容
+    url_count = cleaned.count('http://') + cleaned.count('https://')
+    if url_count >= 2:
+        return False
+    # 跳过纯标签内容（如 [emotion:xxx] [sticker:xxx]）
+    if cleaned.startswith('[') and cleaned.endswith(']') and ':' in cleaned:
+        return False
+    return True
 
 if TYPE_CHECKING:
     from agent_core._shared import RequestContext
@@ -134,7 +163,9 @@ class MessageProcessorMixin:
         if not current_tool_calls:
             if isinstance(first_result, str):
                 reply = self._clean_reply(first_result)
-                _finish_reason = None  # 字符串路径无 finish_reason
+                # 流式路径：从 router 读取最后一次流式调用的 finish_reason
+                # 用于检测 max_tokens 截断（finish_reason="length"）
+                _finish_reason = getattr(self.router, '_last_stream_finish_reason', None)
             else:
                 _raw_content = first_result.choices[0].message.content or ""
                 reply = self._clean_reply(_raw_content)
@@ -190,17 +221,40 @@ class MessageProcessorMixin:
                     raise RuntimeError(f"empty_reply: LLM 返回空内容（finish_reason={_finish_reason}），触发 fallback")
 
             # 截断兜底：循环重试直到回复完整或达到最大重试次数，确保用户永不看到截断
-            # 检测两种情况：
+            # 检测三种情况：
             # 1. 短回复不以句末标点结尾（如"嗯……让我查一下记忆里 7 月16号 7:00-8:"，26字以冒号结尾）
             # 2. 长回复最后一行很短且不以句末标点结尾（如列表截断"...3"，max_tokens 截断）
+            # 3. N7: 英文推理泄漏（agnes-2.0-flash 截断时泄漏 "Anyway continuing now" 等英文计划/总结）
+            #    last_line 可能很长（≥10 字符）导致原规则漏判，需额外检测
+            from utils.llm_cleanup import has_english_reasoning_leak as _has_eng_leak_fn
+            from utils.llm_cleanup import strip_english_reasoning_leak as _strip_eng_leak_fn
+            # 跟踪 for 循环是否判定回复完整，避免 force_close 与 for 循环判定矛盾
+            _reply_considered_complete = False
             for _retry_idx in range(3):
                 _reply_rstripped = reply.rstrip()
-                _last_line = _reply_rstripped.split('\n')[-1] if _reply_rstripped else ""
-                _ends_with_punct = any(_reply_rstripped.endswith(c) for c in "。！？～…）」】\n")
-                if _ends_with_punct or (len(reply) >= 60 and len(_last_line) >= 10):
+                _ends_with_punct = any(_reply_rstripped.endswith(c) for c in "。！？～…）」】.!?")
+                _eng_leak = _has_eng_leak_fn(reply)
+                _just_cleaned_leak = False
+                if _eng_leak:
+                    # N7: 英文推理泄漏 → 清洗后视为不完整，触发重试获取剩余内容
+                    reply = _strip_eng_leak_fn(reply, context="verification_loop")
+                    _reply_rstripped = reply.rstrip()
+                    _ends_with_punct = any(_reply_rstripped.endswith(c) for c in "。！？～…）」】.!?")
+                    _just_cleaned_leak = True
+                # 完整性判定（根因修复）：
+                # - 短回复(<30字符)视为完整，不强制标点（"好的"/"嗯"等）
+                # - 长回复(>=30字符)必须以句末标点结尾，否则视为截断触发重试
+                # - 移除原 len(last_line)>=10 启发式：该规则导致末行较长的截断回复被误判完整
+                # - 清洗后即使有标点也视为不完整（内容被截断，需重试获取剩余部分）
+                # - finish_reason="length" 表示 max_tokens 截断，即使有标点也需重试
+                #   （仅首轮检查，重试后的 finish_reason 由 route() 内部处理）
+                _length_truncated = (_retry_idx == 0 and _finish_reason == "length")
+                if not _just_cleaned_leak and not _length_truncated and (len(reply) < 30 or _ends_with_punct):
+                    _reply_considered_complete = True
                     break  # 回复完整
                 logger.warning("verification.incomplete_reply",
-                               reply_len=len(reply), reply_tail=reply[-15:], retry=_retry_idx)
+                               reply_len=len(reply), reply_tail=reply[-15:],
+                               retry=_retry_idx, has_eng_leak=_eng_leak)
                 try:
                     messages.append({"role": "assistant", "content": reply})
                     messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
@@ -216,6 +270,9 @@ class MessageProcessorMixin:
                         if _reply2_lower in _reply_lower:
                             logger.warning("verification.retry_duplicate",
                                            retry_len=len(reply2))
+                            # 重试重复 = LLM 认为回复已完成（如以 emoji 结尾无标点）
+                            # 视为完整，不再 force_close 添加多余"。"
+                            _reply_considered_complete = True
                             break  # 重试重复，不再继续
                         else:
                             _overlap = 0
@@ -235,11 +292,14 @@ class MessageProcessorMixin:
                 except Exception as e:
                     logger.warning("verification.incomplete_retry_failed", error=str(e))
                     break
-            # 最终兜底：达到最大重试次数仍不完整，用句末标点强制闭合，确保永不截断
-            _final_rstripped = reply.rstrip()
-            if not any(_final_rstripped.endswith(c) for c in "。！？～…）」】\n"):
-                reply = _final_rstripped + "。"
-                logger.warning("verification.incomplete_force_closed", final_len=len(reply))
+            # 最终兜底：仅当 for 循环未判定完整时才用句末标点强制闭合
+            # 根因修复：原逻辑与 for 循环的"完整"判定矛盾——for 循环用 len(last_line)>=10
+            # 误判完整后 break，但此处只查标点又触发 force_close，导致截断回复+"。"
+            if not _reply_considered_complete:
+                _final_rstripped = reply.rstrip()
+                if not any(_final_rstripped.endswith(c) for c in "。！？～…）」】.!?"):
+                    reply = _final_rstripped + "。"
+                    logger.warning("verification.incomplete_force_closed", final_len=len(reply))
 
             return reply, []
 
@@ -471,9 +531,16 @@ class MessageProcessorMixin:
         # _build_voice_result 的 5 条件对齐：voice_mode + tts.available +
         # TTS_ASYNC_MODE + is_feature_available("tts") + len(reply) > 2
         # 避免在 TTS 不可用/降级模式/同步模式下无效设 tts_pending
+        # TTS 失控防护：内容守卫 + 冷却守卫
         if (self._voice_mode and self.tts.available and TTS_ASYNC_MODE
                 and len(reply) > 2
+                and _should_auto_tts(reply)
                 and get_degradation_strategy().is_feature_available("tts")):
+            global _last_auto_tts_ts
+            if time.time() - _last_auto_tts_ts < _TTS_AUTO_COOLDOWN:
+                logger.debug("tts.greeting_cooldown_skip")
+                return ProcessResult(reply=reply, emotion="greeting")
+            _last_auto_tts_ts = time.time()
             return ProcessResult(
                 reply=reply, emotion="greeting",
                 tts_pending=True, tts_text=reply,
@@ -754,15 +821,30 @@ class MessageProcessorMixin:
             reply = DEGRADED_REPLY
 
         # 截断兜底：循环重试直到回复完整或达到最大重试次数，确保用户永不看到截断
+        # N7: 增加 has_english_reasoning_leak 检测，覆盖 agnes-2.0-flash 英文推理泄漏场景
         if reply and reply.strip():
+            from utils.llm_cleanup import has_english_reasoning_leak as _fp_has_eng_leak
+            from utils.llm_cleanup import strip_english_reasoning_leak as _fp_strip_eng_leak
+            _fp_considered_complete = False
             for _fp_retry in range(3):
                 _fp_rstripped = reply.rstrip()
-                _fp_last_line = _fp_rstripped.split('\n')[-1] if _fp_rstripped else ""
-                _fp_ends_punct = any(_fp_rstripped.endswith(c) for c in "。！？～…）」】\n")
-                if _fp_ends_punct or (len(reply) >= 60 and len(_fp_last_line) >= 10):
+                _fp_ends_punct = any(_fp_rstripped.endswith(c) for c in "。！？～…）」】.!?")
+                _fp_eng_leak = _fp_has_eng_leak(reply)
+                _fp_just_cleaned = False
+                if _fp_eng_leak:
+                    # N7: 英文推理泄漏 → 清洗后视为不完整，触发重试
+                    reply = _fp_strip_eng_leak(reply, context="fast_path")
+                    _fp_rstripped = reply.rstrip()
+                    _fp_ends_punct = any(_fp_rstripped.endswith(c) for c in "。！？～…）」】.!?")
+                    _fp_just_cleaned = True
+                # 完整性判定（根因修复）：移除 len(last_line)>=10 启发式
+                # 短回复(<30字符)视为完整；长回复必须以句末标点结尾
+                if not _fp_just_cleaned and (len(reply) < 30 or _fp_ends_punct):
+                    _fp_considered_complete = True
                     break  # 回复完整
                 logger.warning("fast_path.incomplete_reply",
-                               reply_len=len(reply), reply_tail=reply[-15:], retry=_fp_retry)
+                               reply_len=len(reply), reply_tail=reply[-15:],
+                               retry=_fp_retry, has_eng_leak=_fp_eng_leak)
                 try:
                     messages.append({"role": "assistant", "content": reply})
                     messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
@@ -781,17 +863,20 @@ class MessageProcessorMixin:
                             logger.info("fast_path.incomplete_retry_success",
                                         final_len=len(reply), retry=_fp_retry)
                         else:
+                            # 重试重复 = LLM 认为回复已完成，视为完整不再 force_close
+                            _fp_considered_complete = True
                             break  # 重试重复，不再继续
                     else:
                         break  # 重试返回空或太短
                 except Exception as _fp_e:
                     logger.warning("fast_path.incomplete_retry_failed", error=str(_fp_e))
                     break
-            # 最终兜底：达到最大重试次数仍不完整，用句末标点强制闭合，确保永不截断
-            _fp_final = reply.rstrip()
-            if not any(_fp_final.endswith(c) for c in "。！？～…）」】\n"):
-                reply = _fp_final + "。"
-                logger.warning("fast_path.incomplete_force_closed", final_len=len(reply))
+            # 最终兜底：仅当 for 循环未判定完整时才强制闭合（根因修复：避免与 for 循环判定矛盾）
+            if not _fp_considered_complete:
+                _fp_final = reply.rstrip()
+                if not any(_fp_final.endswith(c) for c in "。！？～…）」】.!?"):
+                    reply = _fp_final + "。"
+                    logger.warning("fast_path.incomplete_force_closed", final_len=len(reply))
         return reply
 
     async def _execute_fast_path_tools(self, tool_calls: list[dict],
@@ -1021,19 +1106,32 @@ class MessageProcessorMixin:
                 audio_path = None
                 tts_pending = False
                 tts_text = ""
-                should_generate_voice = self._voice_mode or force_voice
-                if should_generate_voice and len(clean_reply) > 2:
-                    if TTS_ASYNC_MODE:
-                        tts_pending = True
-                        tts_text = self._clean_reply(clean_reply)
-                    else:
-                        try:
-                            target_agent = self.dispatcher.get_agent(graph_result.route_target)
-                            if target_agent:
-                                audio_path = await target_agent.synthesize(
-                                    self._clean_reply(clean_reply), emotion=emotion_label)
-                        except Exception as e:
-                            logger.warning("agent.routed_tts_failed", error=str(e))
+                # 优先检查工具生成的 TTS（LLM 主动调用 synthesize_voice）
+                tool_audio = _pending_tts_audio.get()
+                if tool_audio is not None:
+                    _pending_tts_audio.set(None)
+                    audio_path = tool_audio
+                elif (self._voice_mode or force_voice) and len(clean_reply) > 2:
+                    # TTS 失控防护：内容守卫 + 冷却守卫（force_voice 不受限）
+                    skip_tts = (not force_voice and not _should_auto_tts(clean_reply))
+                    if not skip_tts and self._voice_mode and not force_voice:
+                        global _last_auto_tts_ts
+                        if time.time() - _last_auto_tts_ts < _TTS_AUTO_COOLDOWN:
+                            skip_tts = True
+                        else:
+                            _last_auto_tts_ts = time.time()
+                    if not skip_tts:
+                        if TTS_ASYNC_MODE:
+                            tts_pending = True
+                            tts_text = self._clean_reply(clean_reply)
+                        else:
+                            try:
+                                target_agent = self.dispatcher.get_agent(graph_result.route_target)
+                                if target_agent:
+                                    audio_path = await target_agent.synthesize(
+                                        self._clean_reply(clean_reply), emotion=emotion_label)
+                            except Exception as e:
+                                logger.warning("agent.routed_tts_failed", error=str(e))
                 if audio_path:
                     clean_reply = clean_reply + "\n\n🎙️ 语音消息已发送～"
                 return ProcessResult(reply=clean_reply, emotion=emotion_label,
@@ -1272,23 +1370,35 @@ class MessageProcessorMixin:
 
     async def _retrieve_main_memories(self, user_input: Any, is_master: Any, emotion: Any) -> Any:
         """主路径记忆检索（含情绪触发的安抚记忆）与 notebook 加载并行。"""
+        _retrieve_start = time.time()
+
         async def _retrieve_memories() -> Any:
             # 降级检查: L2+ 关闭记忆检索, 跳过以减少负载
             if not get_degradation_strategy().is_feature_available("memory_search"):
                 return None
             if self.memory and is_master:
                 self.memory.signal_new_message()
+                _t0 = time.time()
                 try:
                     _k = self.memory._suggest_k(user_input, default_k=8)
                     # 单环节 8s 超时保护：避免 retrieve_memories 卡死导致
                     # 整体 20s 兜底超时被触发（曾导致 memory.retrieve_global_timeout）
+                    # 诊断日志：记录超时触发延迟（实际触发时间 - 设定超时），
+                    # 若延迟 >5s 说明事件循环被同步操作阻塞
                     results = await asyncio.wait_for(
                         self.memory.retrieve_memories(user_input, k=_k),
                         timeout=8.0,
                     )
+                    logger.info("memory.retrieve_stage",
+                                stage="retrieve_done",
+                                elapsed_ms=int((time.time() - _t0) * 1000),
+                                result_count=len(results) if results else 0)
                 except asyncio.TimeoutError:
+                    _delay = (time.time() - _t0) - 8.0
                     logger.warning("memory.retrieve_timeout_single",
-                                   hint="单次记忆检索超时 8s，跳过本次记忆")
+                                   hint="单次记忆检索超时 8s，跳过本次记忆",
+                                   cancel_delay_ms=int(_delay * 1000),
+                                   query_preview=user_input[:50])
                     results = None
                 except Exception as e:
                     logger.warning("memory.retrieve_failed", error=str(e))
@@ -1313,16 +1423,27 @@ class MessageProcessorMixin:
             return None
 
         async def _load_notebook() -> None:
+            _t0 = time.time()
             try:
                 await self._load_notebook_context()
+                _elapsed = int((time.time() - _t0) * 1000)
+                if _elapsed > 500:
+                    logger.warning("memory.notebook_load_slow",
+                                   elapsed_ms=_elapsed)
             except Exception as e:
                 logger.warning("notebook.load_failed", error=str(e))
 
         async def _retrieve_constraint_lessons() -> list[dict]:
             """检索 RAG 层经验教训（FTS 关键词匹配，零成本）。"""
+            _t0 = time.time()
             try:
                 from core.constraint_injector import search_constraint_lessons
                 lessons = search_constraint_lessons(user_input, top_k=3)
+                _elapsed = int((time.time() - _t0) * 1000)
+                if _elapsed > 500:
+                    logger.warning("memory.constraint_lessons_slow",
+                                   elapsed_ms=_elapsed,
+                                   query_preview=user_input[:50])
                 if lessons:
                     return [{"summary": f"[经验] {line}", "timestamp": 0,
                              "source": "constraint_rag"}
@@ -1334,15 +1455,24 @@ class MessageProcessorMixin:
         # 记忆检索 + notebook + 约束经验并行加载
         # 不允许跳过记忆检索 —— 各环节内部已有独立超时与 fallback
         # 但整体加 20s 兜底超时：任一环节挂起不允许阻塞整个请求（保证无超时）
+        # 诊断日志：记录超时触发延迟（cancel_delay），若 >5s 说明事件循环被同步操作阻塞
+        _gather_start = time.time()
         try:
             memories, _, _lessons = await asyncio.wait_for(
                 asyncio.gather(
                     _retrieve_memories(), _load_notebook(), _retrieve_constraint_lessons()),
                 timeout=20.0,
             )
+            logger.info("memory.retrieve_stage",
+                        stage="gather_done",
+                        elapsed_ms=int((time.time() - _gather_start) * 1000),
+                        has_memories=bool(memories))
         except asyncio.TimeoutError:
+            _cancel_delay = (time.time() - _gather_start) - 20.0
             logger.warning("memory.retrieve_global_timeout",
-                           hint="记忆检索整体超时，跳过记忆继续生成回复（保证请求成功）")
+                           hint="记忆检索整体超时，跳过记忆继续生成回复（保证请求成功）",
+                           cancel_delay_ms=int(_cancel_delay * 1000),
+                           query_preview=user_input[:50])
             memories = None
 
         # 注：constraint_lessons 不再追加到 memories
@@ -1581,13 +1711,38 @@ class MessageProcessorMixin:
         return reply, tool_results
 
     async def _build_voice_result(self, clean_reply: Any, emotion_label: Any, force_voice: Any) -> tuple:
-        """构建语音合成结果。返回 (audio_path, tts_pending, tts_text)。"""
+        """构建语音合成结果。返回 (audio_path, tts_pending, tts_text)。
+
+        优先级：synthesize_voice 工具生成的音频 > force_voice（一次性）> _voice_mode（自动触发，有守卫）
+        """
+        # 1. 优先检查 LLM 主动调用 synthesize_voice 工具生成的音频
+        tool_audio = _pending_tts_audio.get()
+        if tool_audio is not None:
+            _pending_tts_audio.set(None)  # 消费后清除，避免泄漏到下一轮
+            logger.info("tts.tool_audio_used", audio_path=str(tool_audio))
+            return tool_audio, False, ""
+
         audio_path = None
         tts_pending = False
         tts_text = ""
         should_generate_voice = self._voice_mode or force_voice
         if (should_generate_voice and self.tts.available and len(clean_reply) > 2
                 and get_degradation_strategy().is_feature_available("tts")):
+            # 内容守卫：跳过不适合语音的内容（代码/URL/标签/极短文本）
+            # force_voice（用户显式"发语音"）不受此守卫限制
+            if not force_voice and not _should_auto_tts(clean_reply):
+                logger.debug("tts.auto_skip_content_guard", reply_len=len(clean_reply))
+                return None, False, ""
+            # 冷却守卫：仅对 _voice_mode 自动触发生效，防止连续消息都生成 TTS 失控
+            # force_voice（用户显式"发语音"）不受冷却限制
+            global _last_auto_tts_ts
+            if self._voice_mode and not force_voice:
+                if time.time() - _last_auto_tts_ts < _TTS_AUTO_COOLDOWN:
+                    logger.debug("tts.auto_cooldown_skip",
+                                 elapsed=time.time() - _last_auto_tts_ts)
+                    return None, False, ""
+                _last_auto_tts_ts = time.time()
+
             if TTS_ASYNC_MODE:
                 tts_pending = True
                 tts_text = self._clean_reply(clean_reply)
@@ -1675,28 +1830,46 @@ class MessageProcessorMixin:
                 trace.warning("verification.empty_reply_after_tools", turn=turn_idx)
                 return None, "", None, None  # signal failure → 走 _finalize_verification_reply
             # 截断兜底：循环重试直到回复完整或达到最大重试次数，确保用户永不看到截断
-            # 检测两种情况：
+            # 检测三种情况：
             # 1. 短回复且只是开场白（如"让我查一下"）
             # 2. 长回复最后一行很短且不以句末标点结尾（如列表截断"...3"，max_tokens 截断）
+            # 3. N7: 英文推理泄漏（agnes-2.0-flash 截断时泄漏英文计划/总结，last_line 可能很长）
+            from utils.llm_cleanup import has_english_reasoning_leak as _early_has_eng_leak
+            from utils.llm_cleanup import strip_english_reasoning_leak as _early_strip_eng_leak
+            _early_considered_complete = False
             for _early_retry in range(3):
                 _early_rstripped = early_reply.rstrip()
-                _early_last_line = _early_rstripped.split('\n')[-1] if _early_rstripped else ""
-                _early_ends_punct = any(_early_rstripped.endswith(c) for c in "。！？～…）」】\n")
+                _early_ends_punct = any(_early_rstripped.endswith(c) for c in "。！？～…）」】.!?")
                 _early_has_opening = any(kw in early_reply for kw in ["让我", "查一下", "看看", "查查", "找找"])
-                _early_complete = _early_ends_punct or (
-                    len(early_reply) >= 80 and len(_early_last_line) >= 10
+                _early_eng_leak = _early_has_eng_leak(early_reply)
+                _early_just_cleaned = False
+                if _early_eng_leak:
+                    # N7: 英文推理泄漏 → 清洗后视为不完整，触发重试
+                    early_reply = _early_strip_eng_leak(early_reply, context="after_tools")
+                    _early_rstripped = early_reply.rstrip()
+                    _early_ends_punct = any(_early_rstripped.endswith(c) for c in "。！？～…）」】.!?")
+                    _early_just_cleaned = True
+                # 完整性判定（根因修复）：移除 len(last_line)>=10 启发式
+                # 短回复(<30字符)视为完整；长回复必须以句末标点结尾
+                # 清洗后即使有标点也视为不完整（内容被截断，需重试获取剩余部分）
+                _early_complete = not _early_just_cleaned and (
+                    len(early_reply) < 30 or _early_ends_punct
                 )
                 if _early_complete:
+                    _early_considered_complete = True
                     break  # 回复完整
-                # 只有短回复开场白 或 最后一行很短时才重试
+                # 只有短回复开场白 或 无标点长回复 或 英文泄漏时才重试
                 _need_retry = (
                     (len(early_reply) < 80 and _early_has_opening)
-                    or len(_early_last_line) < 10
+                    or not _early_ends_punct
+                    or _early_eng_leak
+                    or _early_just_cleaned
                 )
                 if not _need_retry:
                     break  # 不符合重试条件
                 trace.warning("verification.incomplete_reply_after_tools",
-                              reply_len=len(early_reply), reply_preview=early_reply[:50], retry=_early_retry)
+                              reply_len=len(early_reply), reply_preview=early_reply[:50],
+                              retry=_early_retry, has_eng_leak=_early_eng_leak)
                 try:
                     messages.append({"role": "assistant", "content": early_reply})
                     messages.append({"role": "user", "content": "请继续给出具体内容，不要只说开场白。"})
@@ -1713,6 +1886,8 @@ class MessageProcessorMixin:
                         _early_lower1 = early_reply.lower()
                         _early_lower2 = retry_reply.lower()
                         if _early_lower2 in _early_lower1:
+                            # 重试重复 = LLM 认为回复已完成，视为完整不再 force_close
+                            _early_considered_complete = True
                             break  # 重试重复
                         _early_overlap = 0
                         _early_check = min(len(early_reply), len(retry_reply), 80)
@@ -1731,11 +1906,12 @@ class MessageProcessorMixin:
                 except Exception as e:
                     trace.warning("verification.incomplete_retry_failed_after_tools", error=str(e))
                     break
-            # 最终兜底：达到最大重试次数仍不完整，用句末标点强制闭合
-            _early_final = early_reply.rstrip()
-            if not any(_early_final.endswith(c) for c in "。！？～…）」】\n"):
-                early_reply = _early_final + "。"
-                trace.warning("verification.incomplete_force_closed_after_tools", final_len=len(early_reply))
+            # 最终兜底：仅当 for 循环未判定完整时才强制闭合（根因修复：避免与 for 循环判定矛盾）
+            if not _early_considered_complete:
+                _early_final = early_reply.rstrip()
+                if not any(_early_final.endswith(c) for c in "。！？～…）」】.!?"):
+                    early_reply = _early_final + "。"
+                    trace.warning("verification.incomplete_force_closed_after_tools", final_len=len(early_reply))
             return None, "", None, early_reply
 
         return current_tool_calls, current_assistant_content, current_reasoning, None
@@ -1769,6 +1945,8 @@ class MessageProcessorMixin:
         if not STREAM_TEXT_PUSH:
             return await self.router.route(task_type, messages, **kwargs)
 
+        # 重置流式 finish_reason，避免上次调用的残留值干扰截断检测
+        self.router._last_stream_finish_reason = None
         full_response = []
         try:
             async for delta in self.router.chat_stream(messages, task_type=task_type, **kwargs):

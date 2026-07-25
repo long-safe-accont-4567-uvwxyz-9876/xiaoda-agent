@@ -141,6 +141,7 @@ def setup_logging() -> None:
                 level="INFO",
                 encoding="utf-8",
                 enqueue=True,  # 异步队列写入，避免事件循环阻塞
+                catch=True,  # 防御：sink 写入异常时不崩溃 logger，避免 Handler 运行时错误导致全应用挂死
             )
             _added_sink_ids.append(_sid)
 
@@ -154,6 +155,7 @@ def setup_logging() -> None:
                 level="INFO",
                 encoding="utf-8",
                 enqueue=True,  # 异步队列写入，避免事件循环阻塞
+                catch=True,  # 防御：sink 写入异常时不崩溃 logger（USB 盘掉线/只读等场景）
             )
             _added_sink_ids.append(_sid)
         except (OSError, PermissionError) as e:

@@ -354,3 +354,76 @@ def strip_qq_face_tags(text: str, *, context: str = "") -> str:
     cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned)
     return cleaned
 
+
+# N7: 英文推理/计划泄漏 —— LLM（尤其是 agnes-2.0-flash）在生成长结构化回复时
+# 会突然切换到英文"计划/总结"模式，泄漏内部推理过程。
+# 生产样本 conversation_logs id 2107（2026-07-25 记忆回忆任务）：
+#   "Anyway continuing now ~~~~\n\n(深吸一口气)\n好吧接下来继续讲完 ——>\n\n(Summary complete) -> Final Output Below."
+# 共同特征：LLM 在中文回复中途插入英文过渡句/元指令，标志着实际内容已截断，
+# 后续全是推理碎片而非用户可见回复。
+# 检测到此类泄漏时：(1) 截断检测应判定为不完整 → 触发重试获取剩余内容；
+# (2) 清洗时从首个泄漏标记处截断，保留之前的正常内容。
+_ENGLISH_REASONING_LEAK_PATTERNS = [
+    re.compile(r'Anyway\s+continuing\s+now', re.IGNORECASE),
+    re.compile(r'Summary\s+complete', re.IGNORECASE),
+    re.compile(r'Final\s+Output\s+Below', re.IGNORECASE),
+    re.compile(r'Output\s+Below\s*\.?', re.IGNORECASE),
+    re.compile(r'继续讲完\s*——?>'),
+    re.compile(r'好吧接下来继续'),
+]
+# 合并为单一正则用于快速检测（任意一个模式命中即视为泄漏）
+_ENGLISH_REASONING_LEAK_RE = re.compile(
+    r'(?:Anyway\s+continuing\s+now|Summary\s+complete|Final\s+Output\s+Below|'
+    r'Output\s+Below\s*\.?|继续讲完\s*——?>|好吧接下来继续)',
+    re.IGNORECASE,
+)
+
+
+def has_english_reasoning_leak(text: str) -> bool:
+    """检测回复中是否包含英文推理/计划泄漏。
+
+    用于截断检测：当 LLM 在中文回复中途插入英文过渡句/元指令时，
+    标志着实际内容已截断，应触发重试获取剩余内容。
+
+    Returns:
+        True 如果检测到英文推理泄漏模式
+    """
+    if not text:
+        return False
+    return bool(_ENGLISH_REASONING_LEAK_RE.search(text))
+
+
+def strip_english_reasoning_leak(text: str, *, context: str = "") -> str:
+    """剥离英文推理/计划泄漏：从首个泄漏标记处截断，保留之前的正常内容。
+
+    生产样本 id 2107 的泄漏尾部：
+        "Anyway continuing now ~~~~\\n\\n(深吸一口气)\\n好吧接下来继续讲完 ——>\\n\\n(Summary complete) -> Final Output Below."
+    清洗后只保留 "...大事件发生耶～" 之前的正常中文回复。
+
+    注意：本函数只做截断（保留泄漏前的内容），不尝试修复截断——
+    修复由上层截断重试机制（model_router / verification loop）负责，
+    通过 "请继续完成你的回复" 提示获取剩余内容后拼接。
+    """
+    if not text:
+        return ""
+    # 找到首个泄漏标记的位置
+    earliest_pos = -1
+    for pat in _ENGLISH_REASONING_LEAK_PATTERNS:
+        m = pat.search(text)
+        if m and (earliest_pos == -1 or m.start() < earliest_pos):
+            earliest_pos = m.start()
+    if earliest_pos == -1:
+        return text  # 无泄漏，原样返回
+    # 从泄漏标记处截断，保留之前的内容
+    cleaned = text[:earliest_pos].rstrip()
+    # 清理尾部残留的空行和空白
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+    if cleaned != text:
+        logger.warning("llm_cleanup.english_reasoning_leak_stripped",
+                       context=context,
+                       original_len=len(text),
+                       cleaned_len=len(cleaned),
+                       removed_len=len(text) - len(cleaned),
+                       leak_preview=text[earliest_pos:earliest_pos + 80])
+    return cleaned
+

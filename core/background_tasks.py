@@ -42,18 +42,28 @@ def _on_bg_task_done(task: asyncio.Task) -> None:
         logger.warning("bg.task_failed error={} task={}", str(exc), task.get_name())
 
 
-def _spawn(coro: Any) -> None:
+def _spawn(coro: Any, timeout: float = 45.0) -> None:
     """创建 fire-and-forget 后台任务，自动从 _bg_tasks 中移除已完成的任务。
 
     包含耗时监控：任务完成时记录执行时长，超过 30s 发出告警日志。
     包含 loop 保护：同步上下文调用时降级日志而非崩溃。
+    包含超时保护：默认 45s 超时，防止任务卡死阻塞事件循环。
+        根因：auto_note_after_message 曾卡 152s，_encode_task 60s 超时但实际 86.9s
+        （内部同步操作不响应 CancelledError）。外层超时至少能限制卡死时间，
+        避免单个后台任务无限占用事件循环。
+        注意：timeout 只能取消协程的 await 点，同步阻塞需通过 to_thread 规避。
     """
     task_name = getattr(coro, '__name__', coro.__class__.__name__)
     start_time = time.time()
 
     async def _wrapped():
         try:
-            await coro
+            await asyncio.wait_for(coro, timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning("bg.task_timeout name={} timeout={:.0f}s",
+                           task_name, timeout)
+        except Exception as e:
+            logger.warning("bg.task_failed name={} error={}", task_name, str(e)[:200])
         finally:
             elapsed = time.time() - start_time
             if elapsed > 30:
@@ -198,7 +208,8 @@ class BackgroundTaskManager:
         # 3. 记忆编码（独立，不纳入批量提交，改为 _spawn 避免阻塞持久化任务）
         # 根因：try_idle_encode 涉及 LLM 调用，可能需要几十秒，await 会阻塞整个 _run_persistence_tasks
         # 修复：改为 _spawn（fire-and-forget），与其他后台任务（notebook/instinct）一致
-        if self.memory and len(self.context.history) >= 4:
+        _hist_len = len(self.context.history) if self.context else 0
+        if self.memory and _hist_len >= 4:
             async def _encode_task():
                 try:
                     pre_compressed = await self.context.flush_pre_compressed_buffer()
@@ -208,19 +219,26 @@ class BackgroundTaskManager:
                             if msg.get("role") in ("user", "assistant") and msg.get("content"):
                                 exchanges.insert(0, {"role": msg["role"], "content": msg["content"][:500]})
                     ctx = {"exchanges": exchanges, "emotion": emotion}
+                    logger.info("bg.memory_encode_start", history_len=_hist_len,
+                                exchanges=len(exchanges))
                     # 修复 P2 Bug 11: _encode_task 慢任务（曾 134s）
                     # 根因：try_idle_encode 涉及多次 LLM + embed 调用，无整体超时保护
-                    # 60s 超时：编码单次对话 5-15s，60s 足够；超时则放弃本次编码
+                    # 90s 超时：embed API 慢时各步骤（vec_upsert 15s + concept 15s + children 20s）
+                    # 总和可达 50s+，加上 summary/security/cleanup 需要更多余量。
+                    # 各步骤已有独立超时保护，90s 整体超时是最后兜底。
                     # （记忆编码是后台任务，不影响主响应）
                     await asyncio.wait_for(
                         self.memory.try_idle_encode(ctx, force=True),
-                        timeout=60.0,
+                        timeout=90.0,
                     )
                 except asyncio.TimeoutError:
-                    logger.warning("bg.memory_encode_timeout", hint="记忆编码超时 60s，跳过本次")
+                    logger.warning("bg.memory_encode_timeout", hint="记忆编码超时 90s，跳过本次")
                 except Exception as e:
                     logger.warning("bg.memory_encode_failed", error=str(e))
-            _spawn(_encode_task())
+            _spawn(_encode_task(), timeout=120.0)  # 内部已有 90s 超时，外层 120s 兜底
+        else:
+            logger.debug("bg.memory_encode_skipped", reason="history_too_short",
+                         history_len=_hist_len, need=4)
 
     async def _run_manager_tasks(
         self,
@@ -304,6 +322,13 @@ class BackgroundTaskManager:
                 _spawn(self._refresh_mail_token_task())
         except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.mail_token_refresh_schedule_failed", error=str(e))
+
+        # 14. 概念图边补建（每 30 分钟，auto_link 跳过的边由这里补建）
+        try:
+            if await self._should_run("concept_link_curator", interval_hours=0.5):
+                _spawn(self._concept_link_curator_task())
+        except (ImportError, OSError, RuntimeError) as e:
+            logger.warning("bg.concept_link_curator_schedule_failed", error=str(e))
 
     async def _auto_archive_sessions(self) -> None:
         try:
@@ -396,6 +421,29 @@ class BackgroundTaskManager:
             await self.db.set_cron_last_run("memory_distill")
         except (OSError, RuntimeError) as e:
             logger.warning("bg.memory_distill_task_failed", error=str(e))
+
+    async def _concept_link_curator_task(self) -> None:
+        """概念图边补建 curator — 为 auto_link 跳过的节点批量补建 co-occurrence 边。
+
+        当存活概念节点 >200 时，实时 auto_link 会被跳过以避免阻塞事件循环。
+        本任务每 30 分钟运行一次，在后台为无边节点补建边关系。
+        """
+        try:
+            if not self.memory or not getattr(self.memory, "concept_graph", None):
+                await self.db.set_cron_last_run("concept_link_curator")
+                return
+            try:
+                linked = await asyncio.wait_for(
+                    self.memory.concept_graph.db.batch_link_recent(batch_size=30),
+                    timeout=60.0,
+                )
+                if linked > 0:
+                    logger.info("concept_graph.curator_linked", edges=linked)
+            except asyncio.TimeoutError:
+                logger.warning("concept_graph.curator_timeout", hint="batch_link 60s 超时，下次重试")
+            await self.db.set_cron_last_run("concept_link_curator")
+        except (OSError, RuntimeError) as e:
+            logger.warning("bg.concept_link_curator_failed", error=str(e))
 
     async def _refresh_mail_token_task(self) -> None:
         """定期刷新邮箱 OAuth token — 每 2 小时调用一次 message +list 触发 auto_refresh，

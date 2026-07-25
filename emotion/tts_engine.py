@@ -18,6 +18,21 @@ MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
 MIMO_TTS_MODEL = os.getenv("MIMO_TTS_MODEL", "mimo-v2.5-tts-voiceclone")
 
 
+# 全局 TTS 引擎单例（由 bootstrap 初始化时设置，供工具层访问）
+_global_tts_engine: "TTSEngine | None" = None
+
+
+def set_global_tts_engine(engine: "TTSEngine | None") -> None:
+    """设置全局 TTS 引擎单例（bootstrap 初始化后调用）。"""
+    global _global_tts_engine
+    _global_tts_engine = engine
+
+
+def get_tts_engine() -> "TTSEngine | None":
+    """返回全局 TTS 引擎单例（未初始化时返回 None）。"""
+    return _global_tts_engine
+
+
 def _get_mimo_api_key() -> str:
     """动态读取 MIMO_API_KEY，确保 setup 保存后能生效"""
     key = os.getenv("MIMO_API_KEY", "") or MIMO_API_KEY

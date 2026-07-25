@@ -183,6 +183,8 @@ class ModelRouter:
         self._custom_clients: dict[str, AsyncOpenAI] = {}
         self._register_credential_pool_providers()
         self._current_chat_model: dict | None = None
+        # 流式调用最后一次的 finish_reason，供 _stream_llm_response 读取用于截断检测
+        self._last_stream_finish_reason: str | None = None
         self._cache_stats = {
             "total_calls": 0,
             "hit_tokens": 0,
@@ -955,19 +957,28 @@ class ModelRouter:
                     client.chat.completions.create(**kwargs),
                     timeout=timeout,
                 )
+                _stream_finish_reason = None
                 async for chunk in stream:
                     try:
-                        delta = chunk.choices[0].delta.content
+                        choice = chunk.choices[0]
                     except (AttributeError, IndexError):
-                        delta = None
+                        continue
+                    # 捕获最后一个 chunk 的 finish_reason，用于流式截断检测
+                    _fr = getattr(choice, "finish_reason", None)
+                    if _fr:
+                        _stream_finish_reason = _fr
+                    delta = getattr(choice.delta, "content", None)
                     if delta:
                         yield delta
+                # 存储到实例属性，供 _stream_llm_response 读取
+                self._last_stream_finish_reason = _stream_finish_reason
                 metrics.inc(f"model_route.{task_type}.success")
                 metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
                 metrics.maybe_report()
                 logger.info("llm.call", event="llm_call", model=model,
                             task=task_type, duration_ms=int((time.time() - _start) * 1000),
-                            user_id=user_openid, session_id=session_id, stream=True)
+                            user_id=user_openid, session_id=session_id, stream=True,
+                            finish_reason=_stream_finish_reason)
                 return
             except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError) as e:
                 last_error = e
@@ -1062,8 +1073,13 @@ class ModelRouter:
                                      messages: list[dict] | None = None,
                                      temperature: float | None = None,
                                      max_tokens: int | None = None,
-                                     config: dict | None = None) -> str | object:
-        """处理路由成功响应：记录费用、缓存、凭证成功，返回 content 或 response。"""
+                                     config: dict | None = None,
+                                     _skip_truncate_retry: bool = False) -> str | object:
+        """处理路由成功响应：记录费用、缓存、凭证成功，返回 content 或 response。
+
+        _skip_truncate_retry=True 时跳过截断重试，防止 route()→_route_with_retry()→
+        _handle_route_response()→route() 无限递归导致 RecursionError。
+        """
         if stream:
             # 流式调用：在返回前尝试记录费用（部分 provider 在流结束时提供 usage）
             try:
@@ -1114,12 +1130,25 @@ class ModelRouter:
         # 修复 P2 Bug 9: 原 _is_reply_incomplete 判断逻辑对 content_len=4 的短回复
         # 误判为截断，触发 truncated_by_max_tokens 告警和无意义重试。
         # 增加最小长度阈值 30，短回复不参与截断检测。
+        # N7 修复: agnes-2.0-flash 长回复截断时会泄漏英文推理（"Anyway continuing now"、
+        # "Summary complete" 等），末尾 last_line 可能很长（≥10 字符）导致原规则漏判。
+        # 新增 has_english_reasoning_leak 检测，命中即视为截断触发重试。
         finish_reason = getattr(response.choices[0], "finish_reason", None)
         _content_rstripped = content.rstrip() if content else ""
         _content_last_line = _content_rstripped.split('\n')[-1] if _content_rstripped else ""
+        _has_eng_leak = False
+        try:
+            from utils.llm_cleanup import has_english_reasoning_leak
+            _has_eng_leak = has_english_reasoning_leak(content)
+        except ImportError:
+            pass
+        # 截断检测：长回复(>=30字符)不以句末标点结尾即视为截断
+        # 根因修复：原 len(last_line) < 10 启发式导致末行较长的截断回复漏判
+        # （如"让我查一下记忆里7月16号7:00-8:00那段时间"末行>10字符但实际截断）
+        # 英文推理泄漏(eng_leak)始终视为截断——需清洗+重试获取剩余内容
+        _no_sentence_end = not any(_content_rstripped.endswith(c) for c in "。！？～…）」】.!?\n")
         _is_reply_incomplete = bool(content) and len(content) >= 30 and (
-            not any(_content_rstripped.endswith(c) for c in "。！？～…）」】\n")
-            and len(_content_last_line) < 10
+            _no_sentence_end or _has_eng_leak
         )
         if (finish_reason and finish_reason != "stop") or _is_reply_incomplete:
             content_len = len(content)
@@ -1127,19 +1156,35 @@ class ModelRouter:
                 logger.warning("llm.truncated_by_max_tokens",
                                model=model, task=task_type,
                                content_len=content_len,
-                               finish_reason=finish_reason)
+                               finish_reason=finish_reason,
+                               has_eng_leak=_has_eng_leak)
+                # N7: 重试前先清洗英文推理泄漏，避免泄漏内容被拼入重试上下文
+                if _has_eng_leak:
+                    try:
+                        from utils.llm_cleanup import strip_english_reasoning_leak
+                        content = strip_english_reasoning_leak(content, context="router_truncate_retry")
+                    except ImportError:
+                        pass
                 # 截断重试：追加"请继续"提示重试，最多 2 轮，max_tokens 加倍
-                if content and len(content) > 10:
+                # 关键修复：_skip_truncate_retry=True 时跳过，避免 route()→_route_with_retry()→
+                # _handle_route_response()→route() 无限递归导致 RecursionError
+                if not _skip_truncate_retry and content and len(content) > 10:
                     _retry_max_tokens = max_tokens * 2 if max_tokens else None
+                    _retry_timeout = self.TASK_TIMEOUTS.get(task_type, 30)
                     for _retry_round in range(2):  # 最多 2 轮重试
                         try:
                             retry_messages = messages.copy()
                             retry_messages.append({"role": "assistant", "content": content})
                             retry_messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
-                            retry_result = await self.route(
-                                task_type, retry_messages, temperature=temperature,
-                                max_tokens=_retry_max_tokens,
-                                user_openid=user_openid, session_id=session_id,
+                            # 关键修复：直接调用 _route_with_retry 而非 route()，并传入
+                            # _skip_truncate_retry=True 防止递归。截断重试不需要 fallback 链。
+                            retry_result = await self._route_with_retry(
+                                task_type, config, retry_messages, temperature,
+                                _retry_max_tokens or config.get("max_tokens", 4096),
+                                False, None, None, _retry_timeout,
+                                user_openid, session_id,
+                                extra_headers=None,
+                                _skip_truncate_retry=True,
                             )
                             retry_content = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
                             if retry_content and len(retry_content) > 5:
@@ -1270,7 +1315,8 @@ class ModelRouter:
                                 max_tokens: int, stream: bool,
                                 tools: list[dict] | None, tool_choice: str | None,
                                 timeout: int, user_openid: str, session_id: str,
-                                extra_headers: dict | None = None) -> str | object:
+                                extra_headers: dict | None = None,
+                                _skip_truncate_retry: bool = False) -> str | object:
         """带重试的路由调用：客户端选择 → 构建 kwargs → 调用 API → 处理响应/异常。"""
         model = config["model"]
         last_error = None
@@ -1297,6 +1343,7 @@ class ModelRouter:
                     user_openid, session_id, provider, tools,
                     messages=messages, temperature=temperature, max_tokens=max_tokens,
                     config=config,
+                    _skip_truncate_retry=_skip_truncate_retry,
                 )
 
             except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError) as e:

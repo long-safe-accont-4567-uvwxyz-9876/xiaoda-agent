@@ -55,12 +55,49 @@ _TEMPORAL_PATTERNS = [
 ]
 
 
+# 中文数字 → 阿拉伯数字映射（用于日期解析）
+_CN_DIGIT = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+             "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def _cn_num_to_int(text: str) -> int | None:
+    """将中文数字（1-31，支持月和日）转为 int。无法解析返回 None。
+
+    支持：一/二/.../九/十/十一/.../十九/二十/.../二十九/三十/三十一
+    """
+    text = text.strip()
+    if not text:
+        return None
+    # 纯阿拉伯数字
+    if text.isdigit():
+        return int(text)
+    # 单字：一~十
+    if text in _CN_DIGIT:
+        return _CN_DIGIT[text]
+    # "十X"：十一=11, 十二=12, ... 十九=19
+    if len(text) == 2 and text[0] == "十" and text[1] in _CN_DIGIT:
+        return 10 + _CN_DIGIT[text[1]]
+    # "X十"：二十=20, 三十=30
+    if len(text) == 2 and text[1] == "十" and text[0] in _CN_DIGIT:
+        return _CN_DIGIT[text[0]] * 10
+    # "X十Y"：二十一=21, 三十一=31
+    if len(text) == 3 and text[1] == "十" and text[0] in _CN_DIGIT and text[2] in _CN_DIGIT:
+        return _CN_DIGIT[text[0]] * 10 + _CN_DIGIT[text[2]]
+    return None
+
+
+# 匹配中文/阿拉伯数字的月日：七月十八号 / 7月18号 / 十二月三十一日
+_CN_DATE_PATTERN = re.compile(
+    r"([一二三四五六七八九十两\d]{1,3})\s*月\s*([一二三四五六七八九十两\d]{1,3})\s*[号日]"
+)
+
+
 def _parse_temporal_query(query: str) -> tuple[float, float] | None:
     """从用户查询中解析时间词，返回 [start_ts, end_ts] 时间戳区间（秒）。
 
     支持的格式：
     1. 相对时间词：刚才/刚刚/N小时前/N分钟前/昨天/前天/大前天/今天/上周/上个月/前几天/最近
-    2. 绝对日期：7月15号/7月15日/12月1号
+    2. 绝对日期：7月15号/7月15日/12月1号/七月十八号/十二月三十一号
     3. 绝对日期+时段：7月15号早上7点/7月15号晚上/今天早上/昨天晚上
     4. 绝对日期+时间范围：7月15号早上7点到8点/7月15号7点到9点
 
@@ -101,23 +138,68 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
         "深夜": (21, 24),
     }
 
-    # 匹配 "N月N号"/"N月N日" 或 "N.N日"/"N.N号"（如 7.16日、7.16号）
-    date_match = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[号日]", query)
-    if not date_match:
-        date_match = re.search(r"(\d{1,2})\.(\d{1,2})\s*[号日]", query)
-    if date_match:
-        month = int(date_match.group(1))
-        day = int(date_match.group(2))
-        year = now.year
-        # 如果月份大于当前月，说明是去年
-        if month > now.month or (month == now.month and day > now.day):
-            year = now.year - 1
-        try:
-            base_date = _datetime.datetime(year, month, day, tzinfo=now.tzinfo)
-        except ValueError:
-            base_date = None
+    # 匹配 "N月N号"/"N月N日"（支持中文数字和阿拉伯数字）/ "N.N日"/"N.N号"
+    # 修复多日期解析 bug：原 re.search 只匹配第一个日期，
+    # 导致"7月18号、19号、20号、21号、22号"只查7月18号一天 → 小妲"想不起来"
+    # 修复中文数字 bug：原正则只匹配阿拉伯数字，"七月十八号"完全匹配不到 → 不走时间检索
+    # 修复省略月份 bug：中文表达"七月十八号、十九号、二十号"后续日期省略月份，需补全
+    # 现在用 finditer 收集所有日期，多日期时返回最早到最晚的合并范围
+    all_date_matches = list(_CN_DATE_PATTERN.finditer(query))
+    # 兼容 "7.16号" 格式
+    _DATE_PATTERN_DOT = re.compile(r"(\d{1,2})\.(\d{1,2})\s*[号日]")
+    all_date_matches += list(_DATE_PATTERN_DOT.finditer(query))
 
-        if base_date:
+    # 解析完整日期（X月Y号），并记录最后一个月份用于补全省略月份的日期
+    parsed_dates: list[_datetime.datetime] = []
+    last_month: int | None = None  # 跟踪最后出现的月份，用于"十九号、二十号"省略月份的情况
+    last_match_end: int = 0  # 上一个日期匹配的结束位置
+
+    for dm in all_date_matches:
+        m = _cn_num_to_int(dm.group(1))
+        d = _cn_num_to_int(dm.group(2))
+        if m is None or d is None:
+            continue
+        if not (1 <= m <= 12 and 1 <= d <= 31):
+            continue
+        y = now.year
+        if m > now.month or (m == now.month and d > now.day):
+            y = now.year - 1
+        try:
+            parsed_dates.append(_datetime.datetime(y, m, d, tzinfo=now.tzinfo))
+        except ValueError:
+            continue
+        last_month = m
+        last_match_end = dm.end()
+
+    # 扫描省略月份的纯日："十九号" / "20号" / "二十一号"
+    # 仅当已出现过完整日期（last_month 不为 None）时才扫描
+    # 用分隔符 [、,，到~—-] 分隔，取每个分段中的 "X号/X日"
+    if last_month is not None:
+        # 匹配纯日号：十九号 / 20号 / 二十一号（不带"月"前缀）
+        _DAY_ONLY_PATTERN = re.compile(
+            r"(?<!月)([一二三四五六七八九十两\d]{1,3})\s*[号日]"
+        )
+        # 从第一个完整日期匹配位置之后扫描
+        search_text = query[last_match_end:] if last_match_end else query
+        for dm in _DAY_ONLY_PATTERN.finditer(search_text):
+            d = _cn_num_to_int(dm.group(1))
+            if d is None or not (1 <= d <= 31):
+                continue
+            y = now.year
+            if last_month > now.month or (last_month == now.month and d > now.day):
+                y = now.year - 1
+            try:
+                candidate = _datetime.datetime(y, last_month, d, tzinfo=now.tzinfo)
+                # 避免重复（与已解析日期相同）
+                if candidate not in parsed_dates:
+                    parsed_dates.append(candidate)
+            except ValueError:
+                continue
+
+    if parsed_dates:
+        # 单日期：保持原有精确逻辑（小时范围/时段/整天）
+        if len(parsed_dates) == 1:
+            base_date = parsed_dates[0]
             # 检查是否有具体小时范围："N点到N点"
             hour_range = re.search(r"(\d{1,2})\s*[点时:：]\s*(?:到|~|-|—)\s*(\d{1,2})\s*[点时:：]?", query)
             if hour_range:
@@ -147,6 +229,19 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
             start = base_date.replace(hour=0, minute=0, second=0, microsecond=0)
             end = base_date.replace(hour=23, minute=59, second=59, microsecond=0)
             return start.timestamp(), end.timestamp()
+
+        # 多日期：返回最早日期 0:00 到最晚日期 23:59 的合并范围
+        # 这样能覆盖用户提到的所有日期（如"7月18号到22号"或"7月18号、19号、20号"）
+        parsed_dates.sort()
+        start = parsed_dates[0].replace(hour=0, minute=0, second=0, microsecond=0)
+        end = parsed_dates[-1].replace(hour=23, minute=59, second=59, microsecond=0)
+        logger.info("memory.temporal_multi_date",
+                    count=len(parsed_dates),
+                    start=start.strftime("%Y-%m-%d"),
+                    end=end.strftime("%Y-%m-%d"))
+        return start.timestamp(), end.timestamp()
+
+    # 没有匹配到绝对日期，继续走相对日期逻辑（昨天/今天/上周等）
 
     # ── 3. 相对日期 + 时段："今天早上" / "昨天晚上" ──
     _REL_DATE_MAP = {
@@ -742,7 +837,14 @@ class MemoryManager:
                 async def _child_vec_recall() -> list[int]:
                     if not self.vec or not self.vec.enabled:
                         return []
-                    query_vec = await self.vec.embed(query)
+                    # embed 超时保护：慢则跳过子chunk向量召回，FTS 仍可用
+                    try:
+                        query_vec = await asyncio.wait_for(
+                            self.vec.embed(query), timeout=3.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("memory.child_vec_embed_timeout",
+                                       hint="子chunk embed 超时 3s，跳过")
+                        return []
                     if not query_vec:
                         return []
                     results = await self.vec.search_child(query_vec, top_k=recall_limit)
@@ -952,7 +1054,16 @@ class MemoryManager:
 
         # Reranker 精排
         if use_reranker and self._reranker and self._reranker.available and len(candidates) > k:
-            reranked = await self._hybrid_rerank(query, fused, all_items, k)
+            # 阶段性超时保护：reranker 是优化手段，不应阻塞整体检索
+            # 5s 超时：SiliconFlow 正常 1-3s，慢时快速降级到未排序结果
+            try:
+                reranked = await asyncio.wait_for(
+                    self._hybrid_rerank(query, fused, all_items, k),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("memory.rerank_timeout", hint="reranker 5s 超时，降级到未排序结果")
+                reranked = None
             if reranked:
                 # 对 reranked 也应用 entity boost
                 reranked = await self._apply_entity_boost(query, reranked, scope)
@@ -1001,9 +1112,21 @@ class MemoryManager:
         if not self.vec:
             return []
         try:
-            vec_results = await self.vec.search(
-                query, top_k=k * 2, candidate_ids=candidate_ids, deterministic=True,
-            )
+            # 向量检索 embed 超时保护：SiliconFlow 免费 embed 正常 0.5-2s，
+            # 限流时 6.9s+。3.5s 超时：慢则跳过向量通道，FTS/KG/时间检索仍可用。
+            # 根因：embed 6.9s 直接击穿 retrieve_memories 的 8s 超时，导致小妲"想不起来"。
+            try:
+                vec_results = await asyncio.wait_for(
+                    self.vec.search(
+                        query, top_k=k * 2, candidate_ids=candidate_ids, deterministic=True,
+                    ),
+                    timeout=3.5,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("memory.vec_search_timeout",
+                               hint="向量 embed 超时 3.5s，跳过向量通道",
+                               query=query[:50])
+                return []
             if not vec_results:
                 return []
             vec_ids = [row_id for row_id, _ in vec_results]
@@ -1323,9 +1446,17 @@ class MemoryManager:
         # 时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索
         # 这让小妲能回答"昨天发生了什么"这类纯时间查询
         # 修复：时间检索返回空时不短路，继续走语义检索兜底，避免"不知道/忘记了"
-        logger.debug("memory.retrieve_stage", stage="temporal_search", query=query[:50])
+        _t_temporal = time.time()
         temporal_results = await self._try_temporal_search(query, k, scope=scope, include_raw=True)
+        _temporal_ms = int((time.time() - _t_temporal) * 1000)
+        if _temporal_ms > 2000:
+            logger.warning("memory.temporal_search_slow",
+                           elapsed_ms=_temporal_ms, query=query[:50])
         if temporal_results:
+            logger.info("memory.temporal_search_hit",
+                        count=len(temporal_results),
+                        elapsed_ms=_temporal_ms,
+                        query=query[:50])
             # 时间检索命中也递增 access_count（与常规检索路径一致）
             hit_ids = [r.get("id") for r in temporal_results if r.get("id")]
             if hit_ids:
@@ -1715,10 +1846,14 @@ class MemoryManager:
         if self._reranker and self._reranker.available and len(all_results) > k:
             try:
                 docs = [r.get("summary", "") for r in all_results]
-                reranked = await self._reranker.rerank(
-                    query=query,
-                    documents=docs,
-                    top_n=k,
+                # 阶段性超时保护：reranker 5s 超时，慢时降级到未排序结果
+                reranked = await asyncio.wait_for(
+                    self._reranker.rerank(
+                        query=query,
+                        documents=docs,
+                        top_n=k,
+                    ),
+                    timeout=5.0,
                 )
                 reranked_results = []
                 for item in reranked:
@@ -2045,7 +2180,8 @@ class MemoryManager:
         scope 非空时使用 scoped FTS 检索，防止跨用户记忆泄露。
         """
         try:
-            _topic_keywords = _extract_topic_keywords(query, top_n=2)
+            # jieba.analyse.extract_tags 是同步 CPU 操作，包到线程池避免阻塞事件循环
+            _topic_keywords = await asyncio.to_thread(_extract_topic_keywords, query, top_n=2)
             if not _topic_keywords:
                 return results
             _existing_ids = {str(r.get("id", "")) for r in results}
@@ -2146,7 +2282,7 @@ class MemoryManager:
             entity_names: list[str] = []
             for r in results[:2]:
                 summary = r.get("summary", "")
-                candidates = _extract_entities(summary)
+                candidates = await asyncio.to_thread(_extract_entities, summary)
                 for word in candidates:
                     if word not in ("用户", "助手", "人家"):
                         entity_names.append(word)
@@ -2180,10 +2316,19 @@ class MemoryManager:
         if not exchanges or len(exchanges) < 2:
             return
 
-        summary = self._generate_summary(exchanges)
+        # 同步操作移到线程池：防止事件循环被阻塞导致所有后台任务卡死
+        # 根因：encode_memory 中 _generate_summary/scan_threats/RuleBasedMemoryExtractor
+        # 等同步操作会阻塞事件循环，导致 asyncio.wait_for 定时器无法及时触发，
+        # 其他后台任务（flush_costs/auto_note/extract_instincts 等）同时卡 60+s
+        _t0 = time.time()
+        summary = await asyncio.to_thread(self._generate_summary, exchanges)
+        _t1 = time.time()
+        if _t1 - _t0 > 2:
+            logger.warning("memory.encode_slow_step", step="generate_summary",
+                           elapsed_ms=int((_t1 - _t0) * 1000))
 
         # 安全过滤
-        validation = validate_memory_content(summary)
+        validation = await asyncio.to_thread(validate_memory_content, summary)
         if validation:
             logger.warning("memory.safety_blocked", reason=validation)
             return
@@ -2192,14 +2337,23 @@ class MemoryManager:
         # （_has_duplicate 只在蒸馏时对 is_raw=0 生效，这里不调用）
 
         # 原有安全扫描（保留兼容）
-        from security.security import SecurityFilter
-        security = self._security_filter or SecurityFilter()
-        threat_result = security.scan_threats(summary, scope="strict")
+        # SecurityFilter() 创建涉及从 USB 盘加载 YAML（_load_patterns），
+        # scan_threats 涉及正则匹配，均为同步阻塞操作，移到线程池
+        _t2 = time.time()
+        def _security_scan():
+            from security.security import SecurityFilter
+            security = self._security_filter or SecurityFilter()
+            return security.scan_threats(summary, scope="strict")
+        threat_result = await asyncio.to_thread(_security_scan)
+        _t3 = time.time()
+        if _t3 - _t2 > 2:
+            logger.warning("memory.encode_slow_step", step="security_scan",
+                           elapsed_ms=int((_t3 - _t2) * 1000))
         if not threat_result.is_safe and threat_result.action == "block":
             logger.warning("memory.security_blocked", threat=threat_result.threat_type)
             return
 
-        importance = self._estimate_importance(exchanges, context)
+        importance = await asyncio.to_thread(self._estimate_importance, exchanges, context)
         emotion = context.get("emotion", {}).get("primary", "")
 
         # 规则提取增强重要性
@@ -2211,11 +2365,15 @@ class MemoryManager:
             elif msg.get("role") == "assistant":
                 assistant_msg += msg.get("content", "") + " "
         rule_extractor = RuleBasedMemoryExtractor()
-        rule_matches = rule_extractor.extract(user_msg, assistant_msg)
+        rule_matches = await asyncio.to_thread(rule_extractor.extract, user_msg, assistant_msg)
         if rule_matches:
             best_rule = max(rule_matches, key=lambda r: r["importance"])
             importance = max(importance, best_rule["importance"])
 
+        _t4 = time.time()
+        logger.info("memory.encode_pre_done",
+                    prep_ms=int((_t4 - _t0) * 1000),
+                    security_ms=int((_t3 - _t2) * 1000))
         try:
             # 写入候选审计表
             candidate_id = await self.memory.insert_consolidation_candidate(
@@ -2225,6 +2383,9 @@ class MemoryManager:
                 confidence=rule_matches[0]["confidence"] if rule_matches else 0.5,
                 importance=importance,
             )
+            _t5 = time.time()
+            logger.info("memory.encode_candidate_done",
+                        candidate_ms=int((_t5 - _t4) * 1000))
 
             # ADD-only: 写入 is_raw=1 的原始记忆（不去重，不覆盖）
             mem_id = await self.memory.insert_episodic_memory(
@@ -2234,6 +2395,9 @@ class MemoryManager:
                 scope=scope,
                 is_raw=1,
             )
+            _t6 = time.time()
+            logger.info("memory.encode_episodic_done",
+                        episodic_ms=int((_t6 - _t5) * 1000), mem_id=mem_id)
 
             # Initialize FSRS state for new memory
             now_ts = time.time()
@@ -2257,42 +2421,89 @@ class MemoryManager:
                 except Exception as e:
                     logger.debug("memory.governance_init_failed", error=str(e))
 
-            if self.vec and summary:
-                try:
-                    await self.vec.upsert(mem_id, summary)
-                except Exception as e:
-                    logger.debug("memory.initial_vec_upsert_failed", error=str(e))
+            # ── 索引层（vec + concept_graph + children）改为 fire-and-forget ──
+            # 根因：这些操作涉及 embed API（6.9s）+ auto_link 遍历全部节点 + insert_child_chunk 循环，
+            # 长时间占用共享 aiosqlite 连接，导致其他后台任务（flush_costs/auto_note/extract_instincts）
+            # 的 DB 操作排队等待 45s+ 超时。episodic memory 已写入，索引层是优化层，可异步补建。
+            # 改为 create_task 后，编码主流程立即继续到 entity/distill/save_state 并快速返回，释放 DB 连接。
+            async def _indexing_task() -> None:
+                _it0 = time.time()
+                # 1. vec_upsert（15s 超时）
+                if self.vec and summary:
+                    try:
+                        await asyncio.wait_for(self.vec.upsert(mem_id, summary), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("memory.encode_vec_upsert_timeout",
+                                       hint="vec_upsert 15s 超时，跳过向量索引（episodic 已保存）")
+                    except Exception as e:
+                        logger.debug("memory.initial_vec_upsert_failed", error=str(e))
+                _it1 = time.time()
+                if _it1 - _it0 > 3:
+                    logger.warning("memory.encode_slow_step", step="vec_upsert",
+                                   elapsed_ms=int((_it1 - _it0) * 1000))
 
-            # 双写：同时写入 concept_nodes
-            if self.concept_graph and mem_id:
-                try:
-                    await self.concept_graph.remember(summary, source_mem_id=mem_id)
-                except Exception as e:
-                    logger.debug("memory.concept_dual_write_failed", error=str(e))
+                # 2. concept_graph 双写（15s 超时）
+                if self.concept_graph and mem_id:
+                    try:
+                        await asyncio.wait_for(
+                            self.concept_graph.remember(summary, source_mem_id=mem_id),
+                            timeout=15.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("memory.encode_concept_timeout",
+                                       hint="concept_graph 15s 超时，跳过（lazy_migrate 可补）")
+                    except Exception as e:
+                        logger.debug("memory.concept_dual_write_failed", error=str(e))
+                _it2 = time.time()
+                if _it2 - _it1 > 3:
+                    logger.warning("memory.encode_slow_step", step="concept_graph",
+                                   elapsed_ms=int((_it2 - _it1) * 1000))
 
-            # ── 父子Chunk: 生成并写入子chunk ──
-            import config as _cfg
-            if getattr(_cfg, 'PARENT_CHILD_CHUNK_ENABLED', True):
-                try:
-                    children = self._split_into_children(exchanges, mem_id, summary)
-                    if children and self.vec:
-                        child_items = []
-                        for child in children:
-                            child_id = await self.memory.insert_child_chunk(
-                                parent_id=mem_id,
-                                content=child['content'],
-                                embed_content=child['embed_content'],
-                                chunk_type=child['chunk_type'],
-                                importance=importance * child['weight'],
-                                overlap_hash=child['overlap_hash'],
-                            )
-                            child_items.append((child_id, child['embed_content']))
-                        # 批量嵌入子chunk
-                        await self.vec.batch_upsert_children(child_items)
-                        logger.debug("memory.child_chunks_created",
-                                     parent_id=mem_id, count=len(children))
-                except Exception as e:
-                    logger.debug("memory.child_chunk_failed", error=str(e))
+                # 3. 父子Chunk: 生成并写入子chunk（整体 25s 超时保护）
+                import config as _cfg
+                if getattr(_cfg, 'PARENT_CHILD_CHUNK_ENABLED', True):
+                    try:
+                        async def _do_children():
+                            children = await asyncio.to_thread(
+                                self._split_into_children, exchanges, mem_id, summary)
+                            if not children or not self.vec:
+                                return
+                            # 批量写入：auto_commit=False 避免每条 commit 占用共享连接
+                            child_items = []
+                            for child in children:
+                                child_id = await self.memory.insert_child_chunk(
+                                    parent_id=mem_id,
+                                    content=child['content'],
+                                    embed_content=child['embed_content'],
+                                    chunk_type=child['chunk_type'],
+                                    importance=importance * child['weight'],
+                                    overlap_hash=child['overlap_hash'],
+                                    auto_commit=False,
+                                )
+                                child_items.append((child_id, child['embed_content']))
+                            # 统一提交一次
+                            await self.memory._conn.commit()
+                            # 向量索引（内层 20s 超时）
+                            try:
+                                await asyncio.wait_for(
+                                    self.vec.batch_upsert_children(child_items),
+                                    timeout=20.0)
+                            except asyncio.TimeoutError:
+                                logger.warning("memory.encode_children_timeout",
+                                               hint="batch_upsert_children 20s 超时，跳过子chunk索引")
+                            logger.debug("memory.child_chunks_created",
+                                         parent_id=mem_id, count=len(children))
+                        await asyncio.wait_for(_do_children(), timeout=25.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("memory.encode_children_section_timeout",
+                                       hint="子chunk生成+写入 25s 整体超时，跳过（episodic 已保存）")
+                    except Exception as e:
+                        logger.debug("memory.child_chunk_failed", error=str(e))
+                _it3 = time.time()
+                logger.info("memory.indexing_done",
+                            total_ms=int((_it3 - _it0) * 1000), mem_id=mem_id)
+
+            _idx_task = asyncio.create_task(_indexing_task())
+            _idx_task.add_done_callback(_log_task_exception)
 
             # ── mem0 SPEC: 异步触发实体提取+链接 ──
             if self.entity_extractor and self.entity_store:
@@ -2353,7 +2564,8 @@ class MemoryManager:
             if getattr(self, 'spreading_engine', None) and self.spreading_engine:
                 self.spreading_engine.clear_cache()
 
-            self._save_state_json(summary, importance, emotion)
+            # 同步文件写入移到线程池（USB 盘 I/O 可能慢）
+            await asyncio.to_thread(self._save_state_json, summary, importance, emotion)
 
             # fire-and-forget 后台 LLM 结构化提取（不阻塞主流程）
             # 用 GLM-4-9B-0414 提取实体/事件/决策/偏好，完成后更新记忆条目
@@ -2375,10 +2587,14 @@ class MemoryManager:
             logger.warning("memory.encode_failed", error=str(e))
 
         if self.kg and summary:
+            # KG 提取改为 fire-and-forget：auto_extract_and_merge 内部调用 LLM（10s+8s 超时）
+            # + DB merge 操作，直接 await 会阻塞主编码流程 10-20s。
+            # 知识图谱是增强层，可异步补建，不应阻塞记忆编码主流程。
             try:
-                await self.kg.auto_extract_and_merge(summary)
+                _kg_task = asyncio.create_task(self.kg.auto_extract_and_merge(summary))
+                _kg_task.add_done_callback(_log_task_exception)
             except Exception as e:
-                logger.debug("memory.kg_extract_failed", error=str(e))
+                logger.debug("memory.kg_spawn_failed", error=str(e))
 
     async def _extract_and_link_entities(self, memory_id: int, summary: str,
                                           scope: Any) -> None:

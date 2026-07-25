@@ -471,6 +471,38 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
         "module_path": "tools.agnes_tools",
         "func_name": "agnes_video_generate",
     },
+    # ── tools.tts_tools ──────────────────────────────────────────────
+    {
+        "name": "synthesize_voice",
+        "description": (
+            "将文字合成为语音消息并发送给用户。"
+            "适用场景：用户明确要求听语音（如'读给我听''发语音'）、"
+            "情感丰富的回复（如安慰、撒娇、讲故事）、用户开启了语音模式。"
+            "不适用场景：纯代码/命令输出、极短回复（如'嗯''好的'）、"
+            "包含大量 URL 或技术参数的内容。"
+            "调用时传入要朗读的文本，可选传入情绪以调整语音风格。"
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "要合成为语音的文本内容（应为自然语言，不含代码/URL/标签）",
+                },
+                "emotion": {
+                    "type": "string",
+                    "description": "情绪风格（可选）：happy/excited/sad/angry/anxious/shy/surprised/"
+                                   "neutral/greeting/caring/playful/lonely/curious/thinking/coquettish",
+                },
+            },
+            "required": ["text"],
+        },
+        "permission": ToolPermission.READ_ONLY,
+        "category": "media",
+        "max_frequency": 10,
+        "module_path": "tools.tts_tools",
+        "func_name": "synthesize_voice",
+    },
     # ── tools.memory_tool ────────────────────────────────────────────
     {
         "name": "remember",

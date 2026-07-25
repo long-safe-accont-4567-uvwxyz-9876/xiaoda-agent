@@ -18,31 +18,43 @@ if str(PROJECT_ROOT) not in __import__("sys").path:
 
 
 class TestFallbackChainSync:
-    """测试 set_chat_model 时 flash/mini 路由的同步行为。
+    """测试 set_chat_model 时 flash/mini 路由的智能同步行为。
 
-    关键变更（agnes provider 路由 bug 修复）：
-    旧逻辑会把 chat_flash 重置成跨 provider（agnes→mimo, mimo→agnes），
-    导致用户明确选择 agnes 后，agnes 主路由失败时 fallback 链跳到 mimo，
-    返回 mimo-v2.5 回复，与用户配置不符。
+    智能同步机制（保留用户自定义路由）：
+    set_chat_model 切换主 provider 时，只同步仍在跟随旧主 provider 的路由
+    （默认跟随状态），保留用户已通过 WebUI 自定义到其他 provider 的路由
+    （如 chat_mini=deepseek）。这确保 WebUI 的每项修改都能持久化，不被主
+    模型切换覆盖。
 
-    新行为：chat_flash 跟随主 provider，跨 provider 降级作为最后手段
-    由 _try_fallback_chain 的 step 4（mimo fallback）处理。
+    跨 provider 降级作为最后手段由 _try_fallback_chain 的 step 4（mimo fallback）处理。
     """
 
+    # 所有 _sync_tasks 的完整 TASK_TIMEOUTS，避免持久化时 KeyError
+    _FULL_TIMEOUTS = {"chat": 60, "chat_pro": 60, "chat_flash": 30,
+                      "chat_mini": 30, "chat_ultra": 60,
+                      "emotion_analysis": 10, "tool_result_wrap": 30,
+                      "memory_encoding": 30}
+
     def test_set_chat_model_agnes_keeps_flash_with_agnes(self):
-        """切换到 agnes 时，chat_flash 应跟随 agnes（不再跨 provider 重置）"""
+        """切换到 agnes 时，默认跟随的 chat_flash 应跟随 agnes（不再跨 provider 重置）"""
         from model_router import ROUTE_TABLE, ModelRouter
 
-        # 模拟初始状态：mimo 为默认
-        original_flash = ROUTE_TABLE["chat_flash"].copy()
-        original_mini = ROUTE_TABLE["chat_mini"].copy()
+        # 捕获所有可能被同步的路由的原始状态，确保测试隔离
+        _tasks_to_save = ("chat", "chat_pro", "chat_flash", "chat_mini",
+                          "chat_ultra", "emotion_analysis", "tool_result_wrap",
+                          "memory_encoding")
+        originals = {t: ROUTE_TABLE[t].copy() for t in _tasks_to_save if t in ROUTE_TABLE}
         try:
+            # 显式设置初始状态：chat 和 chat_flash 都在 mimo（默认跟随状态）
+            ROUTE_TABLE["chat"]["client"] = "mimo"
+            ROUTE_TABLE["chat"]["model"] = "mimo-v2.5"
+            ROUTE_TABLE["chat_flash"]["client"] = "mimo"
+
             router = MagicMock(spec=ModelRouter)
             router._custom_clients = {}
             router._current_chat_model = None
             router._lazy_register_provider = MagicMock()
-            # set_chat_model 持久化时会读取 TASK_TIMEOUTS，需显式提供
-            router.TASK_TIMEOUTS = {"chat": 60}
+            router.TASK_TIMEOUTS = dict(self._FULL_TIMEOUTS)
 
             # 调用 set_chat_model 切换到 agnes
             ModelRouter.set_chat_model(router, "agnes", "agnes-2.0-flash")
@@ -56,22 +68,28 @@ class TestFallbackChainSync:
                 "chat_flash 应跟随主 provider (agnes)，跨 provider 降级由 _try_fallback_chain 处理"
             assert ROUTE_TABLE["chat_flash"]["model"] == "agnes-2.0-flash"
         finally:
-            ROUTE_TABLE["chat_flash"] = original_flash
-            ROUTE_TABLE["chat_mini"] = original_mini
+            for t, orig in originals.items():
+                ROUTE_TABLE[t] = orig
 
     def test_set_chat_model_mimo_keeps_flash_with_mimo(self):
-        """切换到 mimo 时，chat_flash 应跟随 mimo（不再跨 provider 重置）"""
+        """切换到 mimo 时，默认跟随的 chat_flash 应跟随 mimo（不再跨 provider 重置）"""
         from model_router import ROUTE_TABLE, ModelRouter
 
-        original_flash = ROUTE_TABLE["chat_flash"].copy()
-        original_mini = ROUTE_TABLE["chat_mini"].copy()
+        _tasks_to_save = ("chat", "chat_pro", "chat_flash", "chat_mini",
+                          "chat_ultra", "emotion_analysis", "tool_result_wrap",
+                          "memory_encoding")
+        originals = {t: ROUTE_TABLE[t].copy() for t in _tasks_to_save if t in ROUTE_TABLE}
         try:
+            # 显式设置初始状态：chat 和 chat_flash 都在 agnes（默认跟随状态）
+            ROUTE_TABLE["chat"]["client"] = "agnes"
+            ROUTE_TABLE["chat"]["model"] = "agnes-2.0-flash"
+            ROUTE_TABLE["chat_flash"]["client"] = "agnes"
+
             router = MagicMock(spec=ModelRouter)
             router._custom_clients = {}
             router._current_chat_model = None
             router._lazy_register_provider = MagicMock()
-            # set_chat_model 持久化时会读取 TASK_TIMEOUTS，需显式提供
-            router.TASK_TIMEOUTS = {"chat": 60}
+            router.TASK_TIMEOUTS = dict(self._FULL_TIMEOUTS)
 
             ModelRouter.set_chat_model(router, "mimo", "mimo-v2.5")
 
@@ -80,8 +98,55 @@ class TestFallbackChainSync:
             assert ROUTE_TABLE["chat_flash"]["client"] == "mimo", \
                 "chat_flash 应跟随主 provider (mimo)，跨 provider 降级由 _try_fallback_chain 处理"
         finally:
-            ROUTE_TABLE["chat_flash"] = original_flash
-            ROUTE_TABLE["chat_mini"] = original_mini
+            for t, orig in originals.items():
+                ROUTE_TABLE[t] = orig
+
+    def test_set_chat_model_preserves_customized_route(self):
+        """用户自定义 chat_mini 到 deepseek 后，切换主模型不应覆盖 chat_mini。
+
+        智能同步核心场景：用户通过 WebUI（PUT /models/routes/chat_mini）把
+        chat_mini 改成 deepseek，之后切换主聊天模型（POST /models/chat-model）
+        到 agnes。set_chat_model 应保留 chat_mini=deepseek，只同步默认跟随的路由。
+        """
+        from model_router import ROUTE_TABLE, ModelRouter
+
+        _tasks_to_save = ("chat", "chat_pro", "chat_flash", "chat_mini",
+                          "chat_ultra", "emotion_analysis", "tool_result_wrap",
+                          "memory_encoding")
+        originals = {t: ROUTE_TABLE[t].copy() for t in _tasks_to_save if t in ROUTE_TABLE}
+        try:
+            # 初始状态：主模型 mimo，chat_mini 被用户自定义到 deepseek
+            ROUTE_TABLE["chat"]["client"] = "mimo"
+            ROUTE_TABLE["chat"]["model"] = "mimo-v2.5"
+            ROUTE_TABLE["chat_mini"]["client"] = "deepseek"
+            ROUTE_TABLE["chat_mini"]["model"] = "deepseek-chat"
+            # chat_flash 仍在默认跟随状态（mimo）
+            ROUTE_TABLE["chat_flash"]["client"] = "mimo"
+
+            router = MagicMock(spec=ModelRouter)
+            router._custom_clients = {}
+            router._current_chat_model = None
+            router._lazy_register_provider = MagicMock()
+            router.TASK_TIMEOUTS = dict(self._FULL_TIMEOUTS)
+
+            # 切换主模型到 agnes
+            ModelRouter.set_chat_model(router, "agnes", "agnes-2.0-flash")
+
+            # chat 主路由应更新为 agnes
+            assert ROUTE_TABLE["chat"]["client"] == "agnes"
+            assert ROUTE_TABLE["chat"]["model"] == "agnes-2.0-flash"
+
+            # chat_mini 应保留 deepseek（用户自定义不被覆盖）
+            assert ROUTE_TABLE["chat_mini"]["client"] == "deepseek", \
+                "用户自定义的 chat_mini=deepseek 不应被 set_chat_model 覆盖"
+            assert ROUTE_TABLE["chat_mini"]["model"] == "deepseek-chat"
+
+            # chat_flash 仍在默认跟随状态，应同步到 agnes
+            assert ROUTE_TABLE["chat_flash"]["client"] == "agnes", \
+                "默认跟随的 chat_flash 应同步到 agnes"
+        finally:
+            for t, orig in originals.items():
+                ROUTE_TABLE[t] = orig
 
     def test_fallback_chain_uses_different_providers(self):
         """验证 fallback 链中每级使用不同 provider"""

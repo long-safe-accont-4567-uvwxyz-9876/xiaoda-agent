@@ -1,4 +1,5 @@
 """概念图管理器 — Hippocampus 层节点/边管理 + auto_link + 懒迁移"""
+import asyncio
 import hashlib
 import json
 from datetime import datetime
@@ -57,7 +58,8 @@ class ConceptGraph:
         if existing:
             return node_id
 
-        keys = self.ke.extract(cleaned, is_query=False)
+        # jieba 分词是同步 CPU 操作，包到线程池避免阻塞事件循环
+        keys = await asyncio.to_thread(self.ke.extract, cleaned, is_query=False)
         now = datetime.now(_SH_TZ).isoformat()
 
         difficulty = estimate_initial_difficulty(cleaned, emotion_label)

@@ -103,6 +103,12 @@ _current_request_ctx: ContextVar[RequestContext | None] = ContextVar(
     "_current_request_ctx", default=None
 )
 
+# 工具生成的 TTS 音频路径（synthesize_voice 工具设置，message_processor 读取后清除）
+# 用于让 LLM 主动调用 TTS 工具后，将音频路径回传到 ProcessResult.audio_path
+_pending_tts_audio: ContextVar[Path | None] = ContextVar(
+    "_pending_tts_audio", default=None
+)
+
 
 # ── 数据类型 ──────────────────────────────────────────────────
 @dataclass

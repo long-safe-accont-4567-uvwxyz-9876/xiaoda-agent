@@ -103,6 +103,9 @@ class QueryTransformer:
             return None
         try:
             # G4: 共享 httpx.AsyncClient（连接池复用 + HTTP/2），单次请求级别覆盖 timeout
+            # 修复：15s→4s。根因：检索整体只有 8s 超时，free model 15s 超时远超预算，
+            # 硅基流动慢时 rewrite/expand 卡住 → 8s 超时杀掉整个检索 → 零记忆
+            # 4s：足够免费模型响应（通常 1-2s），慢时快速失败用原始查询兜底
             client = get_shared_client()
             response = await client.post(
                 f"{self._base_url}/chat/completions",
@@ -116,7 +119,7 @@ class QueryTransformer:
                     "Authorization": f"Bearer {self._api_key}",
                     "Content-Type": "application/json",
                 },
-                timeout=httpx.Timeout(15.0),
+                timeout=httpx.Timeout(4.0),
             )
             response.raise_for_status()
             data = response.json()

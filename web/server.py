@@ -486,7 +486,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
         await _start_services(app, core)
         logger.info("webui.lifespan.ready")
 
+    # 事件循环延迟监控：每 1s 检测一次，若实际间隔 >2s 说明事件循环被同步操作阻塞
+    # 用于定位记忆编码路径中残留的同步阻塞点
+    async def _loop_lag_monitor() -> None:
+        import time as _time
+        while True:
+            _t0 = _time.monotonic()
+            await asyncio.sleep(1.0)
+            _lag = _time.monotonic() - _t0 - 1.0
+            if _lag > 2.0:
+                logger.warning("event_loop.blocked",
+                               lag_seconds=round(_lag, 1),
+                               hint="事件循环被同步操作阻塞，排查 jieba/sqlite/LLM 同步调用")
+
+    _loop_lag_task = asyncio.create_task(_loop_lag_monitor())
+
     yield
+
+    _loop_lag_task.cancel()
 
     logger.info("webui.lifespan.shutdown")
     await _shutdown_lifespan(app, core, owns_core)
