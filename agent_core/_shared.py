@@ -109,6 +109,13 @@ _pending_tts_audio: ContextVar[Path | None] = ContextVar(
     "_pending_tts_audio", default=None
 )
 
+# 流式调用最后一次的 finish_reason（chat_stream 设置，message_processor 读取用于截断检测）
+# CodeRabbit 复审修复：原 self._last_stream_finish_reason 是实例属性，并发流式调用会互相覆盖
+# 改为 ContextVar 实现请求级隔离，每个 asyncio.Task 有独立的 context copy
+_stream_finish_reason_var: ContextVar[str | None] = ContextVar(
+    "_stream_finish_reason", default=None
+)
+
 
 # ── 数据类型 ──────────────────────────────────────────────────
 @dataclass

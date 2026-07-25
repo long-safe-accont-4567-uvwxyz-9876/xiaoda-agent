@@ -42,6 +42,8 @@ from agent_core._shared import (
     DEGRADED_REPLY, is_degraded_reply,
     get_empty_reply_for_finish_reason,
     _pending_tts_audio,
+    _current_request_ctx,
+    _stream_finish_reason_var,
 )
 
 
@@ -55,7 +57,47 @@ def _get_temperature(model_cfg: dict | None = None) -> float:
 # TTS 自动触发冷却：防止 voice_mode 开启时每条回复都生成 TTS 导致"失控"
 # 仅对 _voice_mode 自动触发生效，force_voice（用户显式要求"发语音"）和工具调用不受限
 _TTS_AUTO_COOLDOWN = 8.0  # 自动触发 TTS 最小间隔（秒）
-_last_auto_tts_ts: float = 0.0
+# CodeRabbit 复审修复：原模块全局 _last_auto_tts_ts: float 会导致跨用户冷却干扰
+# （用户A触发TTS后，用户B的自动TTS被阻塞8秒）。改为按用户隔离的 dict。
+_last_auto_tts_ts: dict[str, float] = {}
+_TTS_COOLDOWN_MAX_USERS = 1000  # FIFO 上限，防止长期运行内存泄漏
+
+
+def _get_tts_cooldown_key() -> str:
+    """从请求上下文获取 TTS 冷却键（按用户隔离）。
+
+    优先使用 user_openid（QQ场景稳定标识），其次 user_id，最后 session_id。
+    无任何标识符时回退到 "_global"（保留原全局行为作为兜底）。
+    """
+    try:
+        _ctx = _current_request_ctx.get()
+        if _ctx:
+            return _ctx.user_openid or _ctx.user_id or _ctx.session_id or "_global"
+    except (LookupError, AttributeError) as _e:
+        logger.debug("tts.cooldown_key_fallback", error=str(_e))
+    return "_global"
+
+
+def _check_tts_cooldown(force_voice: bool) -> bool:
+    """检查 TTS 自动触发冷却（按用户隔离）。
+
+    Args:
+        force_voice: 用户显式要求"发语音"，不受冷却限制
+    Returns:
+        True 表示在冷却期内应跳过，False 表示可以触发（并已更新时间戳）
+    """
+    if force_voice:
+        return False
+    _key = _get_tts_cooldown_key()
+    _now = time.time()
+    _last = _last_auto_tts_ts.get(_key, 0.0)
+    if _now - _last < _TTS_AUTO_COOLDOWN:
+        return True  # 在冷却期内，跳过
+    # FIFO 上限保护：超限时淘汰最旧的条目
+    if len(_last_auto_tts_ts) >= _TTS_COOLDOWN_MAX_USERS:
+        _last_auto_tts_ts.pop(next(iter(_last_auto_tts_ts)), None)
+    _last_auto_tts_ts[_key] = _now
+    return False
 
 
 def _should_auto_tts(reply: str) -> bool:
@@ -163,9 +205,10 @@ class MessageProcessorMixin:
         if not current_tool_calls:
             if isinstance(first_result, str):
                 reply = self._clean_reply(first_result)
-                # 流式路径：从 router 读取最后一次流式调用的 finish_reason
+                # 流式路径：从 ContextVar 读取最后一次流式调用的 finish_reason
                 # 用于检测 max_tokens 截断（finish_reason="length"）
-                _finish_reason = getattr(self.router, '_last_stream_finish_reason', None)
+                # CodeRabbit 复审修复 #6：改为 ContextVar 读取，避免并发流式调用互相覆盖
+                _finish_reason = _stream_finish_reason_var.get()
             else:
                 _raw_content = first_result.choices[0].message.content or ""
                 reply = self._clean_reply(_raw_content)
@@ -536,11 +579,10 @@ class MessageProcessorMixin:
                 and len(reply) > 2
                 and _should_auto_tts(reply)
                 and get_degradation_strategy().is_feature_available("tts")):
-            global _last_auto_tts_ts
-            if time.time() - _last_auto_tts_ts < _TTS_AUTO_COOLDOWN:
+            # CodeRabbit 复审修复：改为按用户隔离的冷却检查（原模块全局会导致跨用户干扰）
+            if _check_tts_cooldown(force_voice=False):
                 logger.debug("tts.greeting_cooldown_skip")
                 return ProcessResult(reply=reply, emotion="greeting")
-            _last_auto_tts_ts = time.time()
             return ProcessResult(
                 reply=reply, emotion="greeting",
                 tts_pending=True, tts_text=reply,
@@ -1111,15 +1153,17 @@ class MessageProcessorMixin:
                 if tool_audio is not None:
                     _pending_tts_audio.set(None)
                     audio_path = tool_audio
-                elif (self._voice_mode or force_voice) and len(clean_reply) > 2:
+                elif ((self._voice_mode or force_voice) and self.tts.available
+                        and len(clean_reply) > 2
+                        and get_degradation_strategy().is_feature_available("tts")):
+                    # CodeRabbit 复审修复 #4：补充 tts.available + is_feature_available("tts") 门禁
+                    # 与 _build_voice_result 的 5 条件对齐，避免 TTS 不可用时无效设 tts_pending
                     # TTS 失控防护：内容守卫 + 冷却守卫（force_voice 不受限）
                     skip_tts = (not force_voice and not _should_auto_tts(clean_reply))
                     if not skip_tts and self._voice_mode and not force_voice:
-                        global _last_auto_tts_ts
-                        if time.time() - _last_auto_tts_ts < _TTS_AUTO_COOLDOWN:
+                        # CodeRabbit 复审修复 #1：改为按用户隔离的冷却检查
+                        if _check_tts_cooldown(force_voice=False):
                             skip_tts = True
-                        else:
-                            _last_auto_tts_ts = time.time()
                     if not skip_tts:
                         if TTS_ASYNC_MODE:
                             tts_pending = True
@@ -1735,13 +1779,11 @@ class MessageProcessorMixin:
                 return None, False, ""
             # 冷却守卫：仅对 _voice_mode 自动触发生效，防止连续消息都生成 TTS 失控
             # force_voice（用户显式"发语音"）不受冷却限制
-            global _last_auto_tts_ts
+            # CodeRabbit 复审修复 #1：改为按用户隔离的冷却检查（原模块全局会导致跨用户干扰）
             if self._voice_mode and not force_voice:
-                if time.time() - _last_auto_tts_ts < _TTS_AUTO_COOLDOWN:
-                    logger.debug("tts.auto_cooldown_skip",
-                                 elapsed=time.time() - _last_auto_tts_ts)
+                if _check_tts_cooldown(force_voice=False):
+                    logger.debug("tts.auto_cooldown_skip")
                     return None, False, ""
-                _last_auto_tts_ts = time.time()
 
             if TTS_ASYNC_MODE:
                 tts_pending = True
@@ -1946,7 +1988,8 @@ class MessageProcessorMixin:
             return await self.router.route(task_type, messages, **kwargs)
 
         # 重置流式 finish_reason，避免上次调用的残留值干扰截断检测
-        self.router._last_stream_finish_reason = None
+        # CodeRabbit 复审修复 #6：改为 ContextVar 重置（每个 Task 有独立 context）
+        _stream_finish_reason_var.set(None)
         full_response = []
         try:
             async for delta in self.router.chat_stream(messages, task_type=task_type, **kwargs):

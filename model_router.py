@@ -22,6 +22,7 @@ from utils.credential_pool import get_credential_pool
 from security.ssrf_guard import validate_url as _ssrf_validate_url
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
+from agent_core._shared import _stream_finish_reason_var
 import contextlib
 
 
@@ -183,7 +184,9 @@ class ModelRouter:
         self._custom_clients: dict[str, AsyncOpenAI] = {}
         self._register_credential_pool_providers()
         self._current_chat_model: dict | None = None
-        # 流式调用最后一次的 finish_reason，供 _stream_llm_response 读取用于截断检测
+        # CodeRabbit 复审修复：原 self._last_stream_finish_reason 是实例属性，
+        # 并发流式调用会互相覆盖。改为 ContextVar (_stream_finish_reason_var)
+        # 实现请求级隔离。保留实例属性仅用于向后兼容（如外部直接读取）。
         self._last_stream_finish_reason: str | None = None
         self._cache_stats = {
             "total_calls": 0,
@@ -970,7 +973,10 @@ class ModelRouter:
                     delta = getattr(choice.delta, "content", None)
                     if delta:
                         yield delta
-                # 存储到实例属性，供 _stream_llm_response 读取
+                # 存储到 ContextVar（请求级隔离，防并发覆盖）和实例属性（向后兼容）
+                # CodeRabbit 复审修复：并发流式调用会互相覆盖实例属性，
+                # ContextVar 确保每个 asyncio.Task 读取自己的 finish_reason
+                _stream_finish_reason_var.set(_stream_finish_reason)
                 self._last_stream_finish_reason = _stream_finish_reason
                 metrics.inc(f"model_route.{task_type}.success")
                 metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
