@@ -37,6 +37,10 @@ class ToolExecutor:
         "python_executor": 30,      # 代码执行可能较慢
         "shell_command": 20,        # Shell 命令执行
         "delegate_task": 60,        # 子代理委托
+        # N9 修复：recall 短超时 15s 兜底（recall 函数内部已有 10s 自身超时）。
+        # 原 60s 兜底在生产中卡死事件循环 60s 才触发，用户体验灾难。
+        # 15s 留 5s buffer 给格式化阶段，作为 recall 内部 10s 超时失效时的最后防线。
+        "recall": 15,
         "default": 60.0,
     }
 
@@ -95,6 +99,21 @@ class ToolExecutor:
         if sandbox_err:
             logger.warning("tool_executor.sandbox_blocked", tool=tool_name, reason=sandbox_err)
             return ToolResult.fail(f"安全沙箱阻止了此操作：{sandbox_err}")
+
+        # 工作目录边界检查（叠加层）：文件工具检查路径 ∈ cwd，shell 工具检查命令 ∈ 白名单
+        # 独立于 PermissionMode，用户通过 webui 显式授权后才允许访问工作目录
+        ws_err = self._enforce_workspace_boundary(tool_name, arguments)
+        if ws_err:
+            if ws_err.startswith("__NEEDS_CONFIRMATION__:"):
+                cmd = ws_err[len("__NEEDS_CONFIRMATION__:"):]
+                # 生成 request_id 供前端弹窗匹配
+                import uuid as _uuid
+                req_id = _uuid.uuid4().hex[:16]
+                logger.info("tool_executor.needs_confirmation",
+                            tool=tool_name, command=cmd[:200], request_id=req_id)
+                return ToolResult.fail(f"__NEEDS_CONFIRMATION__:{req_id}:{cmd}")
+            logger.warning("tool_executor.workspace_blocked", tool=tool_name, reason=ws_err)
+            return ToolResult.fail(ws_err)
 
         _start = time.time()
         # S3: 重试机制 — 瞬时错误自动重试 + 指数退避
@@ -174,6 +193,15 @@ class ToolExecutor:
     # 允许的无害子进程命令前缀（即使沙箱 strict 也放行）
     _SAFE_SHELL_PREFIXES: ClassVar[tuple[str, ...]] = ("python3 -c", "python -c", "echo", "date", "whoami", "pwd", "ls", "cat")
 
+    # ── 工作目录边界检查（叠加层，独立于 _enforce_sandbox） ──────
+    # 受 workspace 授权约束的文件工具（路径必须 ∈ cwd）
+    _WORKSPACE_FILE_TOOLS: ClassVar[set[str]] = {
+        "read_file", "write_file", "edit_file", "create_file",
+        "list_files", "search_files", "delete_file", "document_reader",
+    }
+    # 受 workspace 授权约束的 shell 工具（命令必须在白名单/不在黑名单）
+    _WORKSPACE_SHELL_TOOLS: ClassVar[set[str]] = {"shell_command", "python_executor"}
+
     def _enforce_sandbox(self, tool_name: str, arguments: dict) -> str | None:
         """工具执行前沙箱检查。返回 None 表示放行，返回字符串为拒绝原因。"""
         from security.sandbox_config import check_domain_allowed, check_path_allowed, get_default_sandbox
@@ -207,6 +235,42 @@ class ToolExecutor:
                     if _re.search(d, cmd):
                         return f"命令包含危险操作：{d}"
 
+        return None
+
+    def _enforce_workspace_boundary(self, tool_name: str, arguments: dict) -> str | None:
+        """工作目录边界检查（叠加层，独立于 PermissionMode）。
+
+        在 _enforce_sandbox 之后执行，对文件工具检查路径 ∈ cwd，
+        对 shell 工具检查命令 ∈ 白名单/不在黑名单。
+
+        返回 None 表示放行；返回字符串为拒绝原因；
+        返回 "__NEEDS_CONFIRMATION__:<command>" 表示需用户确认（由 execute 转换）。
+        """
+        from security.permission_manager import get_permission_manager
+        pm = get_permission_manager()
+
+        # 文件工具：路径必须在 cwd 内
+        if tool_name in self._WORKSPACE_FILE_TOOLS:
+            path = arguments.get("path") or arguments.get("file_path") or arguments.get("dir") or ""
+            allowed, reason = pm.is_path_allowed(path)
+            if not allowed:
+                return reason
+            return None
+
+        # shell 工具：命令必须在白名单（黑名单始终生效）
+        if tool_name in self._WORKSPACE_SHELL_TOOLS:
+            if not pm.is_cwd_authorized():
+                return "未授权工作目录，请先在聊天框上方选择并授权工作目录"
+            cmd = arguments.get("command") or arguments.get("code") or ""
+            allowed, reason, needs_conf = pm.is_command_allowed(cmd)
+            if allowed:
+                return None
+            if needs_conf:
+                # 返回特殊标记，由 execute 转换为 ToolResult
+                return f"__NEEDS_CONFIRMATION__:{cmd}"
+            return reason
+
+        # 非文件/shell 工具不受 workspace 约束
         return None
 
     async def _execute_with_timeout(self, tool: dict, arguments: dict) -> ToolResult:
@@ -249,7 +313,18 @@ class ToolExecutor:
         except TimeoutError:
             logger.error("tool_executor.timeout", tool=tool_name, timeout=timeout)
             metrics.inc(f"tool.timeout.{tool_name}")
-            return ToolResult.fail("那边有点慢呢……等会儿再试试好不好？ [timeout]")
+            # N9 修复（2026-07-25 17:48-17:51 生产事故根因）：
+            # 原错误字符串含 "[timeout]" 字样，被 _is_retryable_error 中的
+            # "timeout" 关键词匹配，触发自动重试（MAX_RETRIES=2），导致单次
+            # 工具调用最坏阻塞 60s × 3 = 180s。
+            # 工具执行超时通常意味着底层资源耗尽（事件循环阻塞、SQLite WAL 锁
+            # 竞争、KG auto_link 同步计算等），重试只会加剧问题、浪费用户
+            # 时间。改为中文表述避免匹配英文 "timeout" 关键词，让超时不重试。
+            # 网络瞬时超时（httpx.ConnectTimeout 等）的错误字符串不同（含
+            # "ConnectTimeout" / "connection"），仍可被识别为可重试。
+            return ToolResult.fail(
+                f"工具「{tool_name}」执行超时（{timeout}s），请稍后再试"
+            )
         except Exception as e:
             logger.error("tool_executor.error", tool=tool_name, error=str(e))
             error_type = type(e).__name__
