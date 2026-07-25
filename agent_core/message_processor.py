@@ -339,10 +339,15 @@ class MessageProcessorMixin:
             # 根因修复：原逻辑与 for 循环的"完整"判定矛盾——for 循环用 len(last_line)>=10
             # 误判完整后 break，但此处只查标点又触发 force_close，导致截断回复+"。"
             if not _reply_considered_complete:
-                _final_rstripped = reply.rstrip()
-                if not any(_final_rstripped.endswith(c) for c in "。！？～…）」】.!?"):
-                    reply = _final_rstripped + "。"
-                    logger.warning("verification.incomplete_force_closed", final_len=len(reply))
+                # CodeRabbit 复审修复：泄漏清洗后回复可能为空，用降级回复而非"。"
+                if not reply.strip():
+                    reply = DEGRADED_REPLY
+                    logger.warning("verification.empty_after_leak_strip_degraded")
+                else:
+                    _final_rstripped = reply.rstrip()
+                    if not any(_final_rstripped.endswith(c) for c in "。！？～…）」】.!?"):
+                        reply = _final_rstripped + "。"
+                        logger.warning("verification.incomplete_force_closed", final_len=len(reply))
 
             return reply, []
 
@@ -915,10 +920,15 @@ class MessageProcessorMixin:
                     break
             # 最终兜底：仅当 for 循环未判定完整时才强制闭合（根因修复：避免与 for 循环判定矛盾）
             if not _fp_considered_complete:
-                _fp_final = reply.rstrip()
-                if not any(_fp_final.endswith(c) for c in "。！？～…）」】.!?"):
-                    reply = _fp_final + "。"
-                    logger.warning("fast_path.incomplete_force_closed", final_len=len(reply))
+                # CodeRabbit 复审修复：泄漏清洗后回复可能为空，用降级回复而非"。"
+                if not reply.strip():
+                    reply = DEGRADED_REPLY
+                    logger.warning("fast_path.empty_after_leak_strip_degraded")
+                else:
+                    _fp_final = reply.rstrip()
+                    if not any(_fp_final.endswith(c) for c in "。！？～…）」】.!?"):
+                        reply = _fp_final + "。"
+                        logger.warning("fast_path.incomplete_force_closed", final_len=len(reply))
         return reply
 
     async def _execute_fast_path_tools(self, tool_calls: list[dict],
@@ -1894,8 +1904,10 @@ class MessageProcessorMixin:
                 # 完整性判定（根因修复）：移除 len(last_line)>=10 启发式
                 # 短回复(<30字符)视为完整；长回复必须以句末标点结尾
                 # 清洗后即使有标点也视为不完整（内容被截断，需重试获取剩余部分）
+                # CodeRabbit 复审修复：开场白回复（"让我查一下。"等）即使 <30 字符也不能
+                # 标记为完整——工具结果可能还未展示，需继续走 _need_retry 路径
                 _early_complete = not _early_just_cleaned and (
-                    len(early_reply) < 30 or _early_ends_punct
+                    (len(early_reply) < 30 and not _early_has_opening) or _early_ends_punct
                 )
                 if _early_complete:
                     _early_considered_complete = True
@@ -1950,10 +1962,15 @@ class MessageProcessorMixin:
                     break
             # 最终兜底：仅当 for 循环未判定完整时才强制闭合（根因修复：避免与 for 循环判定矛盾）
             if not _early_considered_complete:
-                _early_final = early_reply.rstrip()
-                if not any(_early_final.endswith(c) for c in "。！？～…）」】.!?"):
-                    early_reply = _early_final + "。"
-                    trace.warning("verification.incomplete_force_closed_after_tools", final_len=len(early_reply))
+                # CodeRabbit 复审修复：泄漏清洗后回复可能为空，用降级回复而非"。"
+                if not early_reply.strip():
+                    early_reply = DEGRADED_REPLY
+                    trace.warning("verification.empty_after_leak_strip_degraded_after_tools")
+                else:
+                    _early_final = early_reply.rstrip()
+                    if not any(_early_final.endswith(c) for c in "。！？～…）」】.!?"):
+                        early_reply = _early_final + "。"
+                        trace.warning("verification.incomplete_force_closed_after_tools", final_len=len(early_reply))
             return None, "", None, early_reply
 
         return current_tool_calls, current_assistant_content, current_reasoning, None
