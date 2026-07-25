@@ -1172,8 +1172,15 @@ class MemoryManager:
         通过 SpreadingActivationEngine 检索 concept_nodes，
         将结果映射回 episodic_memories（通过 source_mem_id）。
         scope 非空时后过滤 user_id/agent_id，防止跨用户记忆泄露。
+
+        MEMORY_RETRIEVAL_DIFFUSION=False 时跳过扩散（精准检索），
+        避免通过概念图找回应被艾宾浩斯遗忘曲线衰减归档的低 importance 记忆。
         """
         if not self.spreading_engine:
+            return []
+        # 精准检索开关：False 时跳过概念图扩散
+        import config
+        if not getattr(config, "MEMORY_RETRIEVAL_DIFFUSION", False):
             return []
         try:
             results = await self.spreading_engine.recall(query, top_k=limit)
@@ -1761,54 +1768,73 @@ class MemoryManager:
             return results[:k]
 
     async def _transform_queries(self, query: str, context: str) -> list[str]:
-        """查询变换：rewrite + expand。A2 并行执行，失败降级到 [query]。"""
+        """查询变换：rewrite + expand。A2 并行执行，失败降级到 [query]。
+
+        MEMORY_RETRIEVAL_DIFFUSION=False 时跳过 expand_query（精准检索，搜什么就是什么），
+        只保留 rewrite_query（查询改写优化表述，不是扩散）。
+        """
         import config
         queries = [query]
         if not (self._query_transformer and getattr(config, "QUERY_TRANSFORM_ENABLED", True)):
             return queries
         parallel_transform = getattr(config, "RETRIEVAL_PARALLEL_TRANSFORM", True)
+        # 精准检索开关：False 时跳过 expand_query，只保留 rewrite_query
+        _diffusion_enabled = getattr(config, "MEMORY_RETRIEVAL_DIFFUSION", False)
         try:
             if parallel_transform:
                 # A2: 并行执行 rewrite + expand（各自独立的 LLM 调用）
-                expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2)
+                expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2) if _diffusion_enabled else 0
                 rewrite_task = asyncio.create_task(
                     self._query_transformer.rewrite_query(query, context)
                 )
-                expand_task = asyncio.create_task(
-                    self._query_transformer.expand_query(query, n=expand_count)
-                )
-                rewritten, expanded = await asyncio.gather(
-                    rewrite_task, expand_task, return_exceptions=True
-                )
-                # 异常降级：rewrite 失败用原查询，expand 失败用 [query]
-                if isinstance(rewritten, Exception):
-                    logger.warning("memory.rewrite_failed", error=str(rewritten))
-                    rewritten = query
-                if isinstance(expanded, Exception):
-                    logger.warning("memory.expand_failed", error=str(expanded))
-                    expanded = [query]
-                if not rewritten:
-                    rewritten = query
-                if not expanded:
-                    expanded = [query]
-                if rewritten != query:
-                    logger.debug("memory.query_rewritten",
-                                 original=query[:50], rewritten=rewritten[:50])
-                # 合并：[rewritten] + [q for q in expanded if q != rewritten]
-                merged = [rewritten]
-                for q in expanded:
-                    if q != rewritten:
-                        merged.append(q)
-                queries = merged
-                if len(queries) > 1:
-                    logger.debug("memory.query_expanded", count=len(queries))
+                if expand_count > 0:
+                    expand_task = asyncio.create_task(
+                        self._query_transformer.expand_query(query, n=expand_count)
+                    )
+                    rewritten, expanded = await asyncio.gather(
+                        rewrite_task, expand_task, return_exceptions=True
+                    )
+                    # 异常降级：rewrite 失败用原查询，expand 失败用 [query]
+                    if isinstance(rewritten, Exception):
+                        logger.warning("memory.rewrite_failed", error=str(rewritten))
+                        rewritten = query
+                    if isinstance(expanded, Exception):
+                        logger.warning("memory.expand_failed", error=str(expanded))
+                        expanded = [query]
+                    if not rewritten:
+                        rewritten = query
+                    if not expanded:
+                        expanded = [query]
+                    if rewritten != query:
+                        logger.debug("memory.query_rewritten",
+                                     original=query[:50], rewritten=rewritten[:50])
+                    # 合并：[rewritten] + [q for q in expanded if q != rewritten]
+                    merged = [rewritten]
+                    for q in expanded:
+                        if q != rewritten:
+                            merged.append(q)
+                    queries = merged
+                    if len(queries) > 1:
+                        logger.debug("memory.query_expanded", count=len(queries))
+                else:
+                    # 精准检索：只执行 rewrite，不扩散
+                    rewritten = await rewrite_task
+                    if isinstance(rewritten, Exception):
+                        logger.warning("memory.rewrite_failed", error=str(rewritten))
+                        rewritten = query
+                    if not rewritten:
+                        rewritten = query
+                    if rewritten != query:
+                        logger.debug("memory.query_rewritten",
+                                     original=query[:50], rewritten=rewritten[:50])
+                    queries = [rewritten]
             else:
                 # 串行降级（原有逻辑）
                 rewritten = await self._query_transformer.rewrite_query(query, context)
                 if rewritten and rewritten != query:
                     queries = [rewritten]
                     logger.debug("memory.query_rewritten", original=query[:50], rewritten=rewritten[:50])
-                expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2)
+                expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2) if _diffusion_enabled else 0
                 if expand_count > 0:
                     expanded = await self._query_transformer.expand_query(rewritten, n=expand_count)
                     if expanded and len(expanded) > 1:

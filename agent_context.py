@@ -772,8 +772,17 @@ class AgentContext:
         # 使用传入的称谓，未传则用当前上下文的称谓，再不行默认"爸爸"
         term = address_term or self.current_address_term or "爸爸"
         try:
-            # 按 user_id 过滤，limit 从 20 缩减到 10（实际只用了 10 条）
-            rows = await db.memory.get_recent_conversations(limit=10, user_id=user_id) if user_id else await db.memory.get_recent_conversations(limit=10)
+            # 持续加载近 24 小时对话内容，避免"一上来就把之前发生的事情忘得干干净净"
+            # 复用 get_conversations_by_time_range 方法，limit=50 防止极端情况上下文过长
+            # 每条取前 200 字符 + 最终 summaries[-10:] 截断，实际注入约 2000 字符
+            _now = time.time()
+            try:
+                rows = await db.memory.get_conversations_by_time_range(
+                    start_ts=_now - 86400, end_ts=_now, user_id=user_id, limit=50
+                )
+            except Exception:
+                # 降级：时间范围查询失败时回退到最近 10 条
+                rows = await db.memory.get_recent_conversations(limit=10, user_id=user_id) if user_id else await db.memory.get_recent_conversations(limit=10)
             if not rows:
                 return
 

@@ -809,6 +809,10 @@ RERANKER_OVERSAMPLE_RATIO = _safe_int(os.getenv("RERANKER_OVERSAMPLE_RATIO"), 3)
 # Query Transform
 QUERY_TRANSFORM_ENABLED = os.getenv("QUERY_TRANSFORM_ENABLED", "true").lower() in ("1", "true", "yes")
 QUERY_EXPAND_COUNT = _safe_int(os.getenv("QUERY_EXPAND_COUNT"), 2)
+# 检索扩散开关：False=精准检索（搜什么就是什么，跳过 expand_query 和 _spreading_recall）
+# True=扩散检索（向后兼容，生成额外查询目标 + 概念图扩散）
+# 默认 False：与艾宾浩斯遗忘曲线协调，避免找回应被衰减归档的低 importance 记忆
+MEMORY_RETRIEVAL_DIFFUSION = os.getenv("MEMORY_RETRIEVAL_DIFFUSION", "false").lower() in ("1", "true", "yes")
 # 意图分类 LLM 调用：默认开启（GLM-Z1-9B-0414 推理质量高，速度可接受）
 # 设置 INTENT_LLM_CLASSIFY=false 可关闭 LLM 分类，仅用规则匹配（更快）
 INTENT_LLM_CLASSIFY = os.getenv("INTENT_LLM_CLASSIFY", "false").lower() in ("1", "true", "yes")
@@ -974,6 +978,7 @@ __all__ = [
     "MEMORY_COLD_MAX",
     "MEMORY_DISTILL_BATCH",
     "MEMORY_DISTILL_ENABLED",
+    "MEMORY_RETRIEVAL_DIFFUSION",
     "MEMORY_STATE_DIR",
     "MEMORY_WARM_MAX",
     "MEMORY_WARM_VEC_WEIGHT",
