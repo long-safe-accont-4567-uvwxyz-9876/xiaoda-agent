@@ -1,4 +1,8 @@
-"""workspace API 路由集成测试"""
+"""workspace API 路由集成测试
+
+响应格式为 Envelope: {"ok": true, "data": {...}}
+测试中用 D(r) 辅助函数解包 data 字段。
+"""
 import os
 import sys
 
@@ -9,6 +13,11 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from security.permission_manager import get_permission_manager
 from web.routers.workspace import router as workspace_router
+
+
+def D(r):
+    """解包 Envelope 响应的 data 字段"""
+    return r.json()["data"]
 
 
 @pytest.fixture
@@ -37,14 +46,14 @@ class TestWorkspaceEndpoints:
         pm.clear_cwd()
         r = client.get("/api/v1/workspace")
         assert r.status_code == 200
-        data = r.json()
+        data = D(r)
         assert data["authorized"] is False
         assert data["path"] == ""
 
     def test_confirm_authorization(self, client, pm, tmp_path):
         r = client.post("/api/v1/workspace/confirm", json={"path": str(tmp_path)})
         assert r.status_code == 200
-        data = r.json()
+        data = D(r)
         assert data["authorized"] is True
         assert data["path"] == str(tmp_path)
         assert "authorized_at" in data
@@ -58,7 +67,7 @@ class TestWorkspaceEndpoints:
         client.post("/api/v1/workspace/confirm", json={"path": str(tmp_path)})
         r = client.delete("/api/v1/workspace")
         assert r.status_code == 200
-        assert r.json()["authorized"] is False
+        assert D(r)["authorized"] is False
         assert pm.is_cwd_authorized() is False
 
     def test_browse_directory(self, client, tmp_path):
@@ -67,7 +76,7 @@ class TestWorkspaceEndpoints:
         (tmp_path / "file.txt").write_text("hi")
         r = client.get("/api/v1/workspace/browse", params={"path": str(tmp_path)})
         assert r.status_code == 200
-        data = r.json()
+        data = D(r)
         assert "subdir1" in data["dirs"]
         assert "subdir2" in data["dirs"]
         assert "file.txt" not in data["dirs"]
@@ -81,32 +90,32 @@ class TestWorkspaceEndpoints:
         sub.mkdir()
         r = client.get("/api/v1/workspace/browse", params={"path": str(sub)})
         assert r.status_code == 200
-        assert r.json()["parent"] is not None
+        assert D(r)["parent"] is not None
 
 
 class TestWhitelistEndpoints:
     def test_add_to_whitelist(self, client, pm):
         r = client.post("/api/v1/workspace/whitelist", json={"command": "npm"})
         assert r.status_code == 200
-        assert "npm" in r.json()["whitelist"]
+        assert "npm" in D(r)["whitelist"]
 
     def test_get_whitelist(self, client, pm):
         pm.add_to_whitelist("git")
         r = client.get("/api/v1/workspace/whitelist")
         assert r.status_code == 200
-        assert "git" in r.json()["whitelist"]
+        assert "git" in D(r)["whitelist"]
 
     def test_remove_from_whitelist(self, client, pm):
         pm.add_to_whitelist("npm")
         r = client.delete("/api/v1/workspace/whitelist/npm")
         assert r.status_code == 200
-        assert "npm" not in r.json()["whitelist"]
+        assert "npm" not in D(r)["whitelist"]
 
     def test_add_extracts_cmd_name(self, client, pm):
         """传入完整命令行，应只提取命令名"""
         r = client.post("/api/v1/workspace/whitelist", json={"command": "npm install axios"})
         assert r.status_code == 200
-        wl = r.json()["whitelist"]
+        wl = D(r)["whitelist"]
         assert "npm" in wl
         assert "install" not in wl
         assert "axios" not in wl
@@ -119,7 +128,7 @@ class TestConfirmCmdEndpoint:
             "decision": "deny",
         })
         assert r.status_code == 200
-        assert r.json()["decision"] == "deny"
+        assert D(r)["decision"] == "deny"
 
     def test_allow_once(self, client, pm):
         r = client.post("/api/v1/workspace/confirm_cmd", json={
@@ -154,7 +163,7 @@ class TestAuditEndpoint:
     def test_get_audit_empty(self, client, pm):
         r = client.get("/api/v1/workspace/audit", params={"limit": 10})
         assert r.status_code == 200
-        assert "entries" in r.json()
+        assert "entries" in D(r)
 
     def test_get_audit_with_entries(self, client, pm):
         from security.permission_manager import AuditEntry
@@ -164,6 +173,6 @@ class TestAuditEndpoint:
         ))
         r = client.get("/api/v1/workspace/audit", params={"limit": 10})
         assert r.status_code == 200
-        entries = r.json()["entries"]
+        entries = D(r)["entries"]
         assert len(entries) == 1
         assert entries[0]["action"] == "read"

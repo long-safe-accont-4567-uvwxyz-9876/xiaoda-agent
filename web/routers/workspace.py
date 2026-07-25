@@ -16,6 +16,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from security.permission_manager import get_permission_manager, AuditEntry
+from web.schemas import Envelope
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 
@@ -70,11 +71,11 @@ def _persist_whitelist(whitelist: list[str]) -> None:
 async def get_workspace():
     """获取当前工作目录授权状态"""
     pm = get_permission_manager()
-    return {
+    return Envelope(data={
         "authorized": pm.is_cwd_authorized(),
         "path": pm.cwd,
         "permissions": ["read", "write", "exec_restricted"] if pm.is_cwd_authorized() else [],
-    }
+    })
 
 
 @router.post("/confirm")
@@ -91,11 +92,11 @@ async def confirm_workspace(body: ConfirmBody):
     authorized_at = datetime.now().isoformat()
     _persist_workspace(body.path, authorized_at)
     logger.info("workspace.authorized", path=body.path)
-    return {
+    return Envelope(data={
         "authorized": True,
         "path": body.path,
         "authorized_at": authorized_at,
-    }
+    })
 
 
 @router.delete("")
@@ -105,7 +106,7 @@ async def revoke_workspace():
     pm.clear_cwd()
     _persist_workspace("", "")
     logger.info("workspace.revoked")
-    return {"authorized": False}
+    return Envelope(data={"authorized": False})
 
 
 @router.get("/browse")
@@ -120,11 +121,11 @@ async def browse_directory(path: str = ""):
         raise HTTPException(status_code=403, detail=f"无权限访问：{target}")
     dirs = sorted([e for e in entries if os.path.isdir(os.path.join(target, e))])
     parent = os.path.dirname(target)
-    return {
+    return Envelope(data={
         "current": target,
         "parent": parent if parent and parent != target else None,
         "dirs": dirs,
-    }
+    })
 
 
 # ── 命令白名单管理端点 ─────────────────────────────────────
@@ -132,7 +133,7 @@ async def browse_directory(path: str = ""):
 async def get_whitelist():
     """获取命令白名单"""
     pm = get_permission_manager()
-    return {"whitelist": pm.get_whitelist()}
+    return Envelope(data={"whitelist": pm.get_whitelist()})
 
 
 @router.post("/whitelist")
@@ -141,7 +142,7 @@ async def add_to_whitelist(body: WhitelistBody):
     pm = get_permission_manager()
     pm.add_to_whitelist(body.command)
     _persist_whitelist(pm.get_whitelist())
-    return {"whitelist": pm.get_whitelist()}
+    return Envelope(data={"whitelist": pm.get_whitelist()})
 
 
 @router.delete("/whitelist/{command}")
@@ -150,7 +151,7 @@ async def remove_from_whitelist(command: str):
     pm = get_permission_manager()
     pm.remove_from_whitelist(command)
     _persist_whitelist(pm.get_whitelist())
-    return {"whitelist": pm.get_whitelist()}
+    return Envelope(data={"whitelist": pm.get_whitelist()})
 
 
 # ── 命令动态确认端点 ───────────────────────────────────────
@@ -169,7 +170,7 @@ async def confirm_cmd(body: ConfirmCmdBody):
     logger.info("workspace.cmd_confirmed",
                 request_id=body.request_id, decision=body.decision,
                 add_to_whitelist=body.add_to_whitelist)
-    return {"status": "ok", "decision": body.decision}
+    return Envelope(data={"status": "ok", "decision": body.decision})
 
 
 def get_pending_cmd_decision(request_id: str) -> str | None:
@@ -182,4 +183,4 @@ def get_pending_cmd_decision(request_id: str) -> str | None:
 async def get_audit(limit: int = 100):
     """获取工作目录操作审计日志"""
     pm = get_permission_manager()
-    return {"entries": pm.get_audit_log(limit=limit)}
+    return Envelope(data={"entries": pm.get_audit_log(limit=limit)})

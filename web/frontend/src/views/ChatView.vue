@@ -14,6 +14,7 @@ import SlashPalette from '../components/chat/SlashPalette.vue'
 import PromptInput from '../components/chat/PromptInput.vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import ModelSelector from '../components/chat/ModelSelector.vue'
+import WorkingDirSelector from '../components/workspace/WorkingDirSelector.vue'
 import { t } from '../i18n'
 
 defineOptions({ name: 'ChatView' })
@@ -273,6 +274,8 @@ const emotionColors: Record<string, string> = {
       <ModelSelector style="margin-left: auto" @change="onModelChange" />
       <span class="session-label">{{ chat.sessionId }}</span>
     </div>
+
+    <WorkingDirSelector />
 
     <div class="messages-area" ref="messagesEl">
       <div v-if="chat.messages.length === 0" class="empty-state">
