@@ -84,6 +84,7 @@ class SecretsBroker:
         self._revoked: set[str] = set()
         self._audit: list[AuditEntry] = []
         self._entry_lock = threading.Lock()
+        self._lock = threading.Lock()
 
     # ── 内部工具 ──
     def _ensure_entry(self, name: str) -> dict:
@@ -136,57 +137,57 @@ class SecretsBroker:
         caller: str = "system",
     ) -> TemporaryCredential:
         """获取临时凭证 — 返回临时 token，绝不返回原始 API Key"""
-        # Periodic cleanup of expired tokens
-        if len(self._tokens) > 100 or len(self._revoked) > 100:
-            self._cleanup_expired()
+        with self._lock:
+            if len(self._tokens) > 100 or len(self._revoked) > 100:
+                self._cleanup_expired()
 
-        if name not in self._source:
-            raise PermissionError(f"凭证 '{name}' 未注册")
+            if name not in self._source:
+                raise PermissionError(f"凭证 '{name}' 未注册")
 
-        entry = self._ensure_entry(name)
+            entry = self._ensure_entry(name)
 
-        # 撤销该凭证的旧 token，确保同一凭证同时只有一个有效 token
-        old_token = entry.get("current_token")
-        if old_token and old_token in self._tokens:
-            self._tokens.pop(old_token, None)
-            self._revoked.add(old_token)
+            old_token = entry.get("current_token")
+            if old_token and old_token in self._tokens:
+                self._tokens.pop(old_token, None)
+                self._revoked.add(old_token)
 
-        # 生成随机临时 token（不基于原始 key 派生，避免泄漏）
-        token = secrets.token_urlsafe(32)
-        expires_at = self._clock() + self._ttl_seconds
+            token = secrets.token_urlsafe(32)
+            expires_at = self._clock() + self._ttl_seconds
 
-        self._tokens[token] = {"name": name, "expires_at": expires_at, "scope": scope}
-        entry["current_token"] = token
-        entry["use_count"] += 1
+            self._tokens[token] = {"name": name, "expires_at": expires_at, "scope": scope}
+            entry["current_token"] = token
+            entry["use_count"] += 1
 
-        self._audit_log(caller, "get", name, f"scope={scope}")
-        logger.debug(f"SecretsBroker.get: name={name} scope={scope} caller={caller}")
-        return TemporaryCredential(access_token=token, expires_at=expires_at, scope=scope)
+            self._audit_log(caller, "get", name, f"scope={scope}")
+            logger.debug(f"SecretsBroker.get: name={name} scope={scope} caller={caller}")
+            return TemporaryCredential(access_token=token, expires_at=expires_at, scope=scope)
 
     def is_valid(self, credential: TemporaryCredential) -> bool:
         """校验临时凭证是否仍然有效（已签发、未撤销、未过期）"""
-        token = credential.access_token
-        info = self._tokens.get(token)
-        if info is None:
-            return False
-        if token in self._revoked:
-            return False
-        return not self._clock() >= info["expires_at"]
+        with self._lock:
+            token = credential.access_token
+            info = self._tokens.get(token)
+            if info is None:
+                return False
+            if token in self._revoked:
+                return False
+            return not self._clock() >= info["expires_at"]
 
     def revoke(self, credential: TemporaryCredential, caller: str = "system") -> bool:
         """提前撤销某个临时凭证"""
-        token = credential.access_token
-        info = self._tokens.pop(token, None)
-        if info is None:
-            self._audit_log(caller, "revoke", "", "token not found")
-            return False
-        self._revoked.add(token)
-        name = info["name"]
-        if hmac.compare_digest(self._creds.get(name, {}).get("current_token", ""), token):
-            self._creds[name]["current_token"] = None
-        self._audit_log(caller, "revoke", name)
-        logger.debug(f"SecretsBroker.revoke: name={name} caller={caller}")
-        return True
+        with self._lock:
+            token = credential.access_token
+            info = self._tokens.pop(token, None)
+            if info is None:
+                self._audit_log(caller, "revoke", "", "token not found")
+                return False
+            self._revoked.add(token)
+            name = info["name"]
+            if hmac.compare_digest(self._creds.get(name, {}).get("current_token", ""), token):
+                self._creds[name]["current_token"] = None
+            self._audit_log(caller, "revoke", name)
+            logger.debug(f"SecretsBroker.revoke: name={name} caller={caller}")
+            return True
 
     def rotate(self, name: str, caller: str = "system") -> bool:
         """轮换凭证 — 生成新 key 版本，旧 token 全部作废
@@ -195,36 +196,38 @@ class SecretsBroker:
         立即作废该凭证所有已签发的活跃 token，并提升 key_version，
         后续 get_credential 将签发全新 token。
         """
-        if name not in self._source:
-            raise PermissionError(f"凭证 '{name}' 未注册")
+        with self._lock:
+            if name not in self._source:
+                raise PermissionError(f"凭证 '{name}' 未注册")
 
-        invalidated = 0
-        for token in [t for t, info in self._tokens.items() if info["name"] == name]:
-            self._tokens.pop(token)
-            self._revoked.add(token)
-            invalidated += 1
+            invalidated = 0
+            for token in [t for t, info in self._tokens.items() if info["name"] == name]:
+                self._tokens.pop(token)
+                self._revoked.add(token)
+                invalidated += 1
 
-        entry = self._creds.get(name)
-        if entry is not None:
-            entry["current_token"] = None
-            entry["key_version"] += 1  # 生成新 key 版本，旧的作废
+            entry = self._creds.get(name)
+            if entry is not None:
+                entry["current_token"] = None
+                entry["key_version"] += 1
 
-        self._audit_log(caller, "rotate", name, f"invalidated={invalidated}")
-        logger.debug(
-            f"SecretsBroker.rotate: name={name} invalidated={invalidated} caller={caller}"
-        )
-        return True
+            self._audit_log(caller, "rotate", name, f"invalidated={invalidated}")
+            logger.debug(
+                f"SecretsBroker.rotate: name={name} invalidated={invalidated} caller={caller}"
+            )
+            return True
 
     def list_active(self) -> list[str]:
         """列出活跃凭证名（有有效 token 的），不返回任何凭证值"""
-        now = self._clock()
-        names: set[str] = set()
-        for token, info in self._tokens.items():
-            if token in self._revoked:
-                continue
-            if now < info["expires_at"]:
-                names.add(info["name"])
-        return sorted(names)
+        with self._lock:
+            now = self._clock()
+            names: set[str] = set()
+            for token, info in self._tokens.items():
+                if token in self._revoked:
+                    continue
+                if now < info["expires_at"]:
+                    names.add(info["name"])
+            return sorted(names)
 
     def list_available(self) -> list[str]:
         """列出所有已注册的凭证名（不返回值）— 供工具枚举可用凭证"""

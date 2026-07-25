@@ -146,10 +146,11 @@ def _is_revoked(token: str) -> bool:
 
 def _cleanup_expired_tokens() -> None:
     """清理已过期的 token，防止 _tokens 无限增长。"""
-    now = time.time()
-    expired = [t for t, exp in _tokens.items() if exp < now]
-    for t in expired:
-        _tokens.pop(t, None)
+    with _tokens_lock:
+        now = time.time()
+        expired = [t for t, exp in _tokens.items() if exp < now]
+        for t in expired:
+            _tokens.pop(t, None)
 
 
 def _issue_token() -> tuple[str, float]:

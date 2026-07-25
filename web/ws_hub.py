@@ -67,20 +67,22 @@ class ConnectionManager:
         # G5: 心跳状态 —— pong 事件 + 每连接心跳协程
         self._pong_events: dict[str, asyncio.Event] = {}
         self._heartbeat_tasks: dict[str, asyncio.Task] = {}
+        self._lock = asyncio.Lock()
 
-    def register(self, ws: WebSocket) -> str:
+    async def register(self, ws: WebSocket) -> str:
         """注册一个新连接, 返回生成的连接 ID."""
-        if len(self._connections) >= self.MAX_CONNECTIONS:
-            raise ValueError(f"连接数已达上限 {self.MAX_CONNECTIONS}，拒绝新连接")
-        conn_id = uuid.uuid4().hex[:8]
-        self._connections[conn_id] = ws
-        self._agent_map[conn_id] = "xiaoda"
-        self._session_map[conn_id] = f"web_{uuid.uuid4().hex[:12]}"
-        # G5: 初始化 pong 事件 + 启动心跳协程
-        self._pong_events[conn_id] = asyncio.Event()
-        self._heartbeat_tasks[conn_id] = asyncio.create_task(
-            self._heartbeat_loop(conn_id))
-        return conn_id
+        async with self._lock:
+            if len(self._connections) >= self.MAX_CONNECTIONS:
+                raise ValueError(f"连接数已达上限 {self.MAX_CONNECTIONS}，拒绝新连接")
+            conn_id = uuid.uuid4().hex[:8]
+            self._connections[conn_id] = ws
+            self._agent_map[conn_id] = "xiaoda"
+            self._session_map[conn_id] = f"web_{uuid.uuid4().hex[:12]}"
+            # G5: 初始化 pong 事件 + 启动心跳协程
+            self._pong_events[conn_id] = asyncio.Event()
+            self._heartbeat_tasks[conn_id] = asyncio.create_task(
+                self._heartbeat_loop(conn_id))
+            return conn_id
 
     async def unregister(self, conn_id: str) -> None:
         """按连接 ID 注销连接及其会话映射.
@@ -88,21 +90,21 @@ class ConnectionManager:
         P1-4: 改为 async 方法，先 await ws.close() 释放底层 TCP 资源，
         再清理内部状态。close 失败不应阻塞清理（defensive）。幂等：重复调用安全。
         """
-        ws = self._connections.get(conn_id)
+        ws = None
+        async with self._lock:
+            ws = self._connections.get(conn_id)
+            self._connections.pop(conn_id, None)
+            self._agent_map.pop(conn_id, None)
+            self._session_map.pop(conn_id, None)
+            task = self._heartbeat_tasks.pop(conn_id, None)
+            if task and not task.done():
+                task.cancel()
+            self._pong_events.pop(conn_id, None)
         if ws is not None:
             try:
                 await ws.close()
             except Exception as e:
-                # 防御性: 连接可能已被对端关闭，close 抛错不应阻塞清理
                 logger.debug("ws.close_failed conn_id={} error={}", conn_id, str(e))
-        self._connections.pop(conn_id, None)
-        self._agent_map.pop(conn_id, None)
-        self._session_map.pop(conn_id, None)
-        # G5: 取消心跳任务 + 清理 pong event
-        task = self._heartbeat_tasks.pop(conn_id, None)
-        if task and not task.done():
-            task.cancel()
-        self._pong_events.pop(conn_id, None)
 
     async def _heartbeat_loop(self, conn_id: str) -> None:
         """G5: 每个连接的心跳协程 - 30s ping + 10s pong 超时.
@@ -140,7 +142,8 @@ class ConnectionManager:
 
     async def send_to(self, conn_id: str, event: dict) -> None:
         """向指定连接发送事件, 失败则注销该连接."""
-        ws = self._connections.get(conn_id)
+        async with self._lock:
+            ws = self._connections.get(conn_id)
         if ws:
             try:
                 await ws.send_json(event)
@@ -154,12 +157,14 @@ class ConnectionManager:
         慢连接不再阻塞快连接：所有连接并发发送，5s 超时后取消并清理慢连接。
         失败连接由 _safe_send 清理。
         """
-        if not self._connections:
-            return
+        async with self._lock:
+            if not self._connections:
+                return
+            conn_ids = list(self._connections.keys())
         # task -> conn_id 映射，便于超时后查找慢连接
         tasks = {
             asyncio.create_task(self._safe_send(cid, event)): cid
-            for cid in list(self._connections)
+            for cid in conn_ids
         }
         if not tasks:
             return
@@ -176,7 +181,8 @@ class ConnectionManager:
 
         包裹 send_to 语义：发送失败则 unregister，避免失败连接残留。
         """
-        ws = self._connections.get(conn_id)
+        async with self._lock:
+            ws = self._connections.get(conn_id)
         if ws is None:
             return
         try:
@@ -185,10 +191,16 @@ class ConnectionManager:
             logger.warning("ws.send_failed conn_id={} error={}", conn_id, str(e))
             await self.unregister(conn_id)
 
-    @property
     def active_count(self) -> int:
         """返回当前活跃连接数."""
-        return len(self._connections)
+        async def _get_count():
+            async with self._lock:
+                return len(self._connections)
+        try:
+            loop = asyncio.get_running_loop()
+            return loop.run_until_complete(_get_count())
+        except RuntimeError:
+            return len(self._connections)
 
 
 manager = ConnectionManager()
@@ -437,7 +449,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
     await ws.accept()
 
     try:
-        conn_id = manager.register(ws)
+        conn_id = await manager.register(ws)
     except ValueError:
         await ws.send_json({"type": "error", "code": "MAX_CONNECTIONS",
                             "message": f"连接数已达上限 {manager.MAX_CONNECTIONS}，请稍后重试"})
