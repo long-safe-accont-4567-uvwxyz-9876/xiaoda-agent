@@ -363,18 +363,25 @@ def strip_qq_face_tags(text: str, *, context: str = "") -> str:
 # 后续全是推理碎片而非用户可见回复。
 # 检测到此类泄漏时：(1) 截断检测应判定为不完整 → 触发重试获取剩余内容；
 # (2) 清洗时从首个泄漏标记处截断，保留之前的正常内容。
-_ENGLISH_REASONING_LEAK_PATTERNS = [
+#
+# CodeRabbit 复审修复：弱标记（"好吧接下来继续"、"Output Below"）单独出现时
+# 可能是正常 prose，需要附近有强标记（——>、(Summary 等）才视为泄漏。
+_STRONG_LEAK_PATTERNS = [
     re.compile(r'Anyway\s+continuing\s+now', re.IGNORECASE),
     re.compile(r'Summary\s+complete', re.IGNORECASE),
     re.compile(r'Final\s+Output\s+Below', re.IGNORECASE),
     re.compile(r'Output\s+Below\s*\.?', re.IGNORECASE),
     re.compile(r'继续讲完\s*——?>'),
+]
+# 弱标记：需要附近（前后100字符）有强标记才视为泄漏
+# "好吧接下来继续"是中文，可能出现在正常prose中，需强标记上下文确认
+_WEAK_LEAK_PATTERNS = [
     re.compile(r'好吧接下来继续'),
 ]
-# 合并为单一正则用于快速检测（任意一个模式命中即视为泄漏）
+# 合并强标记为单一正则用于快速检测
 _ENGLISH_REASONING_LEAK_RE = re.compile(
     r'(?:Anyway\s+continuing\s+now|Summary\s+complete|Final\s+Output\s+Below|'
-    r'Output\s+Below\s*\.?|继续讲完\s*——?>|好吧接下来继续)',
+    r'Output\s+Below\s*\.?|继续讲完\s*——?>)',
     re.IGNORECASE,
 )
 
@@ -385,12 +392,29 @@ def has_english_reasoning_leak(text: str) -> bool:
     用于截断检测：当 LLM 在中文回复中途插入英文过渡句/元指令时，
     标志着实际内容已截断，应触发重试获取剩余内容。
 
+    判定规则：
+    - 强标记（Anyway continuing now / Summary complete / Final Output Below / 继续讲完 ——>）单独命中即视为泄漏
+    - 弱标记（Output Below / 好吧接下来继续）只有在附近100字符内有强标记时才视为泄漏
+
     Returns:
         True 如果检测到英文推理泄漏模式
     """
     if not text:
         return False
-    return bool(_ENGLISH_REASONING_LEAK_RE.search(text))
+    # 强标记：单独命中即视为泄漏
+    for pat in _STRONG_LEAK_PATTERNS:
+        if pat.search(text):
+            return True
+    # 弱标记：检查附近100字符内是否有强标记
+    for pat in _WEAK_LEAK_PATTERNS:
+        for m in pat.finditer(text):
+            # 检查弱标记前后100字符范围内是否有强标记
+            ctx_start = max(0, m.start() - 100)
+            ctx_end = min(len(text), m.end() + 100)
+            context_window = text[ctx_start:ctx_end]
+            if any(sp.search(context_window) for sp in _STRONG_LEAK_PATTERNS):
+                return True
+    return False
 
 
 def strip_english_reasoning_leak(text: str, *, context: str = "") -> str:
@@ -403,21 +427,37 @@ def strip_english_reasoning_leak(text: str, *, context: str = "") -> str:
     注意：本函数只做截断（保留泄漏前的内容），不尝试修复截断——
     修复由上层截断重试机制（model_router / verification loop）负责，
     通过 "请继续完成你的回复" 提示获取剩余内容后拼接。
+
+    CodeRabbit 复审修复：清洗后如果结果为空，返回原输入，避免空回复传入重试/force-close路径。
     """
     if not text:
         return ""
-    # 找到首个泄漏标记的位置
+    # 找到首个强泄漏标记的位置
     earliest_pos = -1
-    for pat in _ENGLISH_REASONING_LEAK_PATTERNS:
+    for pat in _STRONG_LEAK_PATTERNS:
         m = pat.search(text)
         if m and (earliest_pos == -1 or m.start() < earliest_pos):
             earliest_pos = m.start()
     if earliest_pos == -1:
-        return text  # 无泄漏，原样返回
+        return text  # 无强泄漏标记，原样返回
+    # 检查弱标记是否在强标记之前100字符内（如"好吧接下来继续"在"继续讲完 ——>"之前）
+    # 如果是，从弱标记位置截断（弱标记是强标记的前缀）
+    for pat in _WEAK_LEAK_PATTERNS:
+        for m in pat.finditer(text):
+            if m.start() <= earliest_pos and (earliest_pos - m.start()) <= 100:
+                # 弱标记在强标记之前且相邻，从弱标记位置截断
+                earliest_pos = m.start()
+                break
     # 从泄漏标记处截断，保留之前的内容
     cleaned = text[:earliest_pos].rstrip()
     # 清理尾部残留的空行和空白
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+    # CodeRabbit 复审：清洗后如果结果为空（泄漏在开头），记录日志
+    # 调用者负责处理空回复（触发重试获取完整回复）
+    if not cleaned:
+        logger.warning("llm_cleanup.english_reasoning_leak_empty_after_strip",
+                       context=context, original_len=len(text))
+        return ""
     if cleaned != text:
         logger.warning("llm_cleanup.english_reasoning_leak_stripped",
                        context=context,

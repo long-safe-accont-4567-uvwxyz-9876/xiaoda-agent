@@ -1133,9 +1133,10 @@ class ModelRouter:
         # N7 修复: agnes-2.0-flash 长回复截断时会泄漏英文推理（"Anyway continuing now"、
         # "Summary complete" 等），末尾 last_line 可能很长（≥10 字符）导致原规则漏判。
         # 新增 has_english_reasoning_leak 检测，命中即视为截断触发重试。
+        # CodeRabbit 复审修复：移除未使用的 _content_last_line；扩展句末标点白名单
+        # （弯引号/直引号/括号/方括号/顿号等）；移除 \n（rstrip 已消除尾部换行）
         finish_reason = getattr(response.choices[0], "finish_reason", None)
         _content_rstripped = content.rstrip() if content else ""
-        _content_last_line = _content_rstripped.split('\n')[-1] if _content_rstripped else ""
         _has_eng_leak = False
         try:
             from utils.llm_cleanup import has_english_reasoning_leak
@@ -1146,7 +1147,9 @@ class ModelRouter:
         # 根因修复：原 len(last_line) < 10 启发式导致末行较长的截断回复漏判
         # （如"让我查一下记忆里7月16号7:00-8:00那段时间"末行>10字符但实际截断）
         # 英文推理泄漏(eng_leak)始终视为截断——需清洗+重试获取剩余内容
-        _no_sentence_end = not any(_content_rstripped.endswith(c) for c in "。！？～…）」】.!?\n")
+        # CodeRabbit: 扩展标点白名单，覆盖中英文常见句末标点
+        _SENTENCE_END_CHARS = "。！？～…）」』】”’\"')]、.!?」』"
+        _no_sentence_end = not _content_rstripped.endswith(tuple(_SENTENCE_END_CHARS))
         _is_reply_incomplete = bool(content) and len(content) >= 30 and (
             _no_sentence_end or _has_eng_leak
         )

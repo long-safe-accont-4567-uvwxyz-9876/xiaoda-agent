@@ -154,7 +154,7 @@
 - 当语音模式开启时（{address_term}说"发语音""听你说""朗读"后开启），小妲的回复会**自动**生成语音消息
 - 自动触发有内容守卫：含代码块/大量 URL/纯标签/过短的回复会跳过语音，避免"失控"
 - 自动触发有冷却：连续消息间隔过短时跳过，防止每条都生成语音
-- 支持14种情绪风格：happy/excited/sad/angry/anxious/shy/surprised/neutral/greeting/caring/playful/lonely/curious/thinking/coquettish
+- 支持15种情绪风格：happy/excited/sad/angry/anxious/shy/surprised/neutral/greeting/caring/playful/lonely/curious/thinking/coquettish
 - 支持小妲音色和小莉音色
 
 #### 选择建议
