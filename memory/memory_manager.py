@@ -15,6 +15,9 @@ from .query_cache import QueryCache
 from .retrieval_assessor import RetrievalAssessor
 from utils.atomic_write import atomic_json_write
 from config import get_agent_display_name
+# CodeRabbit 复审修复：fire-and-forget 任务必须保持强引用，否则 event loop 仅持有弱引用
+# 可能被 GC 回收导致任务中途消失。_bg_tasks 是 core.background_tasks 维护的全局任务集合。
+from core.background_tasks import _bg_tasks
 
 
 def _log_task_exception(task: asyncio.Task) -> None:
@@ -2538,6 +2541,8 @@ class MemoryManager:
                             total_ms=int((_it3 - _it0) * 1000), mem_id=mem_id)
 
             _idx_task = asyncio.create_task(_indexing_task())
+            _bg_tasks.add(_idx_task)
+            _idx_task.add_done_callback(_bg_tasks.discard)
             _idx_task.add_done_callback(_log_task_exception)
 
             # ── mem0 SPEC: 异步触发实体提取+链接 ──
@@ -2546,6 +2551,8 @@ class MemoryManager:
                     _entity_task = asyncio.create_task(
                         self._extract_and_link_entities(mem_id, summary, scope)
                     )
+                    _bg_tasks.add(_entity_task)
+                    _entity_task.add_done_callback(_bg_tasks.discard)
                     def _log_entity_exception(t: asyncio.Task) -> None:
                         if t.cancelled():
                             return
@@ -2575,6 +2582,8 @@ class MemoryManager:
                             full_text=full_text
                         )
                     )
+                    _bg_tasks.add(_distill_task)
+                    _distill_task.add_done_callback(_bg_tasks.discard)
                     def _log_distill_exception(t: asyncio.Task) -> None:
                         if t.cancelled():
                             return
@@ -2608,6 +2617,8 @@ class MemoryManager:
                 _enrich_task = asyncio.create_task(
                     self._enrich_memory_async(mem_id, exchanges)
                 )
+                _bg_tasks.add(_enrich_task)
+                _enrich_task.add_done_callback(_bg_tasks.discard)
                 def _log_enrich_exception(t: asyncio.Task) -> None:
                     if t.cancelled():
                         return
