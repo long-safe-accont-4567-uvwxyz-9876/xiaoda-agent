@@ -149,8 +149,13 @@ _TIME_GREETINGS = [
 
 
 def _is_greeting_enabled() -> bool:
-    """读取 ENABLE_GREETING_SHORTCUT 开关（默认 true）."""
-    return os.environ.get("ENABLE_GREETING_SHORTCUT", "true").lower() in ("true", "1", "yes")
+    """读取 ENABLE_GREETING_SHORTCUT 开关（默认 false）。
+
+    用户反馈：模板回复（"早上好～新的一天开始啦"）缺乏上下文感知，
+    不如让 LLM 生成自然、有人格温度的问候。默认关闭，让"你好"走 LLM。
+    如需恢复模板短路，设置 ENABLE_GREETING_SHORTCUT=true。
+    """
+    return os.environ.get("ENABLE_GREETING_SHORTCUT", "false").lower() in ("true", "1", "yes")
 
 
 class MessageProcessorMixin:
@@ -767,6 +772,16 @@ class MessageProcessorMixin:
         # 轻量 FTS + 安抚记忆检索（放在历史之后，靠近用户消息，提高关注度）
         messages = await self._fast_path_inject_memories(
             messages, user_input, is_master, emotion)
+
+        # 注入 24h 对话摘要（与 main path 的 build_messages 共享上下文）
+        # 防止 fast path "记忆缺失"——用户刚在 main path 聊过的话题，fast path 也应感知
+        # 与 _build_volatile_content 的逻辑一致：有精确记忆检索时不注入摘要，避免信息冲突
+        if is_master and self.context._restored_summary and not self.context.memory_retrieval:
+            _addr_fp = self.context.current_address_term
+            messages.append({"role": "system", "content": (
+                f"[近期对话摘要（仅供参考，请在需要时引用。当前用户身份：{_addr_fp}。"
+                f"根据当前用户意图独立判断是否需要调用工具）]\n{self.context._restored_summary}"
+            )})
 
         messages.append({"role": "system", "content": _volatile})
         messages.append({"role": "user", "content": user_input})
