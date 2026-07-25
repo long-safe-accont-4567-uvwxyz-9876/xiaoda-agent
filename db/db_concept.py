@@ -238,11 +238,15 @@ class ConceptDB:
         return matches
 
     async def batch_link_recent(self, batch_size: int = 50,
-                                 min_shared: int = 3) -> int:
+                                 min_shared: int = 3,
+                                 max_per_node: int = 20) -> int:
         """后台 curator：为最近创建的、尚无边的节点批量补建边。
 
         auto_link 在存活节点 >200 时会跳过实时建边，由本方法在后台补建。
         每次最多处理 batch_size 个无边节点，避免长时间占用 DB 连接。
+
+        Args:
+            max_per_node: 每个节点最多补建的边数（防止热点节点连接过多）
 
         Returns:
             补建的边数
@@ -272,7 +276,8 @@ class ConceptDB:
         target_list = [(r["id"], r["keys"]) for r in rows]
         all_keys_map = {r["id"]: r["keys"] for r in all_rows}
         edge_pairs = await asyncio.to_thread(
-            self._compute_batch_links, target_list, all_keys_map, min_shared)
+            self._compute_batch_links, target_list, all_keys_map, min_shared,
+            max_per_node)
 
         if not edge_pairs:
             return 0
@@ -286,9 +291,15 @@ class ConceptDB:
 
     @staticmethod
     def _compute_batch_links(target_list: list, all_keys_map: dict,
-                             min_shared: int) -> list:
-        """纯 CPU：为每个目标节点找出共享 ≥ min_shared keys 的节点对。"""
+                             min_shared: int, max_per_node: int = 20) -> list:
+        """纯 CPU：为每个目标节点找出共享 ≥ min_shared keys 的节点对。
+
+        CodeRabbit 复审修复：
+        - emit 双向边 (nid, other_nid) 和 (other_nid, nid)，匹配 auto_link 的双向行为
+        - 添加 max_per_node 参数，每个节点最多 max_per_node 条边，防止热点节点
+        """
         pairs = []
+        node_edge_count: dict = {}  # 跟踪每个节点的边数
         # 预解析所有 keys
         parsed = {}
         for nid, keys_str in all_keys_map.items():
@@ -307,8 +318,17 @@ class ConceptDB:
             for other_nid, other_keys in parsed.items():
                 if other_nid == nid:
                     continue
+                # 检查两个节点是否都未达到 max_per_node 上限
+                if node_edge_count.get(nid, 0) >= max_per_node:
+                    break  # nid 已达上限，停止为其找更多边
+                if node_edge_count.get(other_nid, 0) >= max_per_node:
+                    continue  # other_nid 已达上限，跳过
                 if len(key_set & other_keys) >= min_shared:
+                    # CodeRabbit: emit 双向边，匹配 auto_link 的双向行为
                     pairs.append((nid, other_nid))
+                    pairs.append((other_nid, nid))
+                    node_edge_count[nid] = node_edge_count.get(nid, 0) + 1
+                    node_edge_count[other_nid] = node_edge_count.get(other_nid, 0) + 1
         return pairs
 
     async def get_meta(self, key: str) -> str | None:

@@ -2444,6 +2444,9 @@ class MemoryManager:
             if self._governance:
                 try:
                     await self._governance.record_initial_version(mem_id, summary, auto_commit=False)
+                    # CodeRabbit 复审修复：治理版本行必须在调度 _indexing_task 之前提交，
+                    # 否则异步任务失败时治理版本行可能永远不会被提交
+                    await self.memory.commit()
                 except Exception as e:
                     logger.debug("memory.governance_init_failed", error=str(e))
 
