@@ -148,6 +148,9 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
     # 兼容 "7.16号" 格式
     _DATE_PATTERN_DOT = re.compile(r"(\d{1,2})\.(\d{1,2})\s*[号日]")
     all_date_matches += list(_DATE_PATTERN_DOT.finditer(query))
+    # CodeRabbit 复审修复：按源位置排序，确保 last_month/last_match_end 代表最后的文本日期
+    # 避免混合格式（如"7.16号、7月18号"）时 last_match_end 指向中间位置导致纯日扫描重复
+    all_date_matches.sort(key=lambda _m: _m.start())
 
     # 解析完整日期（X月Y号），并记录最后一个月份用于补全省略月份的日期
     parsed_dates: list[_datetime.datetime] = []
@@ -175,11 +178,14 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
     # 仅当已出现过完整日期（last_month 不为 None）时才扫描
     # 用分隔符 [、,，到~—-] 分隔，取每个分段中的 "X号/X日"
     if last_month is not None:
-        # 匹配纯日号：十九号 / 20号 / 二十一号（不带"月"前缀）
+        # 匹配纯日号：十九号 / 20号 / 二十一号（不带"月"或"."前缀）
+        # CodeRabbit 复审修复：加强 _DAY_ONLY_PATTERN，拒绝完整月日表达式中的纯日匹配
+        # (?<!月) 拒绝"7月18号"中的"18号"（前一个字符是"月"）
+        # (?<!\.) 拒绝"7.16号"中的"16号"（前一个字符是"."）
         _DAY_ONLY_PATTERN = re.compile(
-            r"(?<!月)([一二三四五六七八九十两\d]{1,3})\s*[号日]"
+            r"(?<!月)(?<!\.)([一二三四五六七八九十两\d]{1,3})\s*[号日]"
         )
-        # 从第一个完整日期匹配位置之后扫描
+        # 从最后一个完整日期匹配位置之后扫描
         search_text = query[last_match_end:] if last_match_end else query
         for dm in _DAY_ONLY_PATTERN.finditer(search_text):
             d = _cn_num_to_int(dm.group(1))
