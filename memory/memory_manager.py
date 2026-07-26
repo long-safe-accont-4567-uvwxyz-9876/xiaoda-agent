@@ -152,8 +152,8 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
     _REL_DATE_MAP = {
         "今天": 0, "今日": 0,
         "昨天": 1, "昨日": 1,
+        "大前天": 3,  # 必须排在 "前天" 之前，因 "大前天" 包含 "前天" 子串
         "前天": 2,
-        "大前天": 3,
     }
     for rel_word, offset_days in _REL_DATE_MAP.items():
         if rel_word in query:

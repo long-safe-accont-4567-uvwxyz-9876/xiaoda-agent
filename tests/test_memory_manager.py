@@ -263,3 +263,24 @@ class TestTemporalParsing:
         assert result is not None
         start_ts, end_ts = result
         assert start_ts < end_ts
+
+    def test_parse_day_before_yesterday_distinct_from_two_days_ago(self):
+        """'大前天' 与 '前天' 应返回不同的时间区间（offset 分别为 3 和 2）。"""
+        import datetime as _datetime
+        from memory.memory_manager import _parse_temporal_query
+
+        r1 = _parse_temporal_query("大前天发生了什么")
+        r2 = _parse_temporal_query("前天发生了什么")
+        assert r1 is not None
+        assert r2 is not None
+        s1, e1 = r1
+        s2, e2 = r2
+        # 大前天比前天早一天
+        assert s1 < s2, (
+            "大前天的起始时间应早于前天，若相同则可能是 offset 重复定义"
+        )
+        # 验证大前天距离今天约 3 天
+        now = _datetime.datetime.now(_datetime.UTC).astimezone()
+        delta_days = (now.replace(hour=0, minute=0, second=0, microsecond=0) -
+                      _datetime.datetime.fromtimestamp(s1, tz=now.tzinfo)).days
+        assert delta_days == 3, f"大前天应距今天 3 天，实际 {delta_days} 天"

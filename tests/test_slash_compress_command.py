@@ -53,6 +53,21 @@ def test_compress_in_owner_only_commands():
     assert "/compress" in OWNER_ONLY_COMMANDS
 
 
+def test_high_risk_commands_restricted_to_owner():
+    """关键高危命令必须在 OWNER_ONLY_COMMANDS 中，防止普通用户触发。"""
+    required_owner_commands = {
+        "/reset",   # 系统重置（清空对话上下文，影响运行时状态）
+        "/sys",     # 系统运行状态（含错误日志、服务状态等敏感信息）
+        "/debug",   # 内部调试状态（指标、路由、上下文等内部信息）
+        "/model",   # 切换模型（影响 Agent 行为）
+        "/voice",   # 语音模式开关
+    }
+    assert required_owner_commands.issubset(OWNER_ONLY_COMMANDS), (
+        f"以下高危命令未纳入 OWNER_ONLY_COMMANDS: "
+        f"{required_owner_commands - OWNER_ONLY_COMMANDS}"
+    )
+
+
 def test_cmd_compress_method_exists():
     """SlashCommandHandler 应有 _cmd_compress 方法。"""
     assert hasattr(SlashCommandHandler, "_cmd_compress")
