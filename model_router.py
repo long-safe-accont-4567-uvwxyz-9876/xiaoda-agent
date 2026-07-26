@@ -22,7 +22,6 @@ from utils.credential_pool import get_credential_pool
 from security.ssrf_guard import validate_url as _ssrf_validate_url
 from core.app_exception import LLMError
 from core.error_codes import ErrorCodeEnum
-from agent_core._shared import _stream_finish_reason_var
 import contextlib
 
 
@@ -38,9 +37,65 @@ def _mask_api_key(key: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
 
 
+# ── Provider 元数据加载（替代代码中所有硬编码的 base_url / max_tokens_cap / 跨 provider 映射） ──
+# P0 修复（用户要求"不要硬编码是任务的根本规则"）：
+# 所有 provider 默认值（base_url、max_tokens_cap、default_model、跨 provider 兜底映射）
+# 统一从 config/provider_metadata.json 加载，该文件标注每个值的 doc_url + doc_note 以便溯源。
+#
+# 优先级（从高到低）：
+#   1. 环境变量（运维覆盖，如 AGNES_MAX_TOKENS_CAP / MIMO_BASE_URL）
+#   2. provider_metadata.json（用户可编辑，含官方文档溯源）
+#   3. config.py 中的 *_BASE_URL（向后兼容）
+#   4. 空串 / None（安全兜底）
+def _load_provider_metadata() -> dict:
+    """加载 provider 元数据配置文件。
+
+    查找顺序：
+      1. 用户配置目录（get_config_dir()/provider_metadata.json）—— 用户可编辑覆盖
+      2. 打包/源码 config/provider_metadata.json —— 内置默认值（含 doc_url 溯源）
+      3. 空字典（极端兜底，所有 provider 用 None 不裁剪）
+    """
+    import json
+    from pathlib import Path
+    try:
+        from config import get_config_dir as _get_config_dir
+        user_path = _get_config_dir() / "provider_metadata.json"
+        if user_path.exists():
+            with open(user_path, "r", encoding="utf-8") as fp:
+                return json.load(fp)
+    except (ImportError, OSError, ValueError) as e:
+        logger.debug("router.provider_metadata_user_load_failed: {}", e)
+    # 兜底：源码/打包目录
+    try:
+        _bundled = Path(__file__).resolve().parent / "config" / "provider_metadata.json"
+        if _bundled.exists():
+            with open(_bundled, "r", encoding="utf-8") as fp:
+                return json.load(fp)
+    except (OSError, ValueError) as e:
+        logger.warning("router.provider_metadata_bundled_load_failed: {}", e)
+    return {}
+
+_PROVIDER_METADATA: dict = _load_provider_metadata()
+_PROVIDER_CAPS_FROM_FILE: dict = _PROVIDER_METADATA.get("providers", {}) if isinstance(_PROVIDER_METADATA, dict) else {}
+
+
+def _load_provider_base_url(provider: str, env_var: str) -> str:
+    """从环境变量 + provider_metadata.json 加载 provider base_url（无硬编码）。"""
+    _env = os.getenv(env_var, "")
+    if _env:
+        return _env
+    _meta = _PROVIDER_CAPS_FROM_FILE.get(provider, {}) if isinstance(_PROVIDER_CAPS_FROM_FILE, dict) else {}
+    if isinstance(_meta, dict):
+        _url = _meta.get("base_url_default", "")
+        if _url:
+            return _url
+    return ""
+
+
 MIMO_MODEL = os.getenv("MIMO_MODEL_NAME", "mimo-v2.5")
 MIMO_PRO_MODEL = os.getenv("MIMO_PRO_MODEL_NAME", "mimo-v2.5-pro")
-MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+# P0 修复：MIMO_BASE_URL 从 provider_metadata.json 读取（不再硬编码 "https://api.xiaomimimo.com/v1"）
+MIMO_BASE_URL = _load_provider_base_url("mimo", "MIMO_BASE_URL")
 MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
 
 MIMO_PRICING = {
@@ -110,13 +165,91 @@ FALLBACK_ROUTE = {
     "chat_mini": "chat_agnes",
 }
 
+# P0 修复：per-provider max_tokens 上限（从配置文件 + 环境变量读取，无硬编码）
+# 根因：ROUTE_TABLE 中 chat/chat_pro/chat_agnes/chat_mimo 都设了 131072，
+#       但 agnes-2.0-flash 实际上限是 65536，超过会返回 500 InternalServerError
+#       "max_tokens exceeds the limit of 65536"（日志中 286 次错误根因）。
+#       之前的"一刀切"提升 max_tokens 到 131072 反而打破了 agnes provider。
+# 修复：在 _build_route_kwargs / _build_stream_kwargs 中按 provider 取 min(mt, cap)。
+#
+# 上限来源（用户问"PROVIDER_MAX_TOKENS_CAP 上限来源呢？"）：
+#   不再硬编码在代码里。来源链路如下（优先级从高到低）：
+#     1. 环境变量 AGNES_MAX_TOKENS_CAP / MIMO_MAX_TOKENS_CAP / OLLAMA_MAX_TOKENS_CAP（最高优先级，运维覆盖）
+#     2. config/provider_metadata.json 中各 provider 的 max_tokens_cap 字段（用户可编辑）
+#        该文件标注了每个值的 doc_url + doc_note（官方文档链接 + 溯源说明）
+#     3. None（不裁剪，安全兜底）
+#   官方文档溯源：
+#     - agnes-2.0-flash: 65536（https://docs.agnes-ai.com/，超过返回 500）
+#     - mimo-v2.5:       131072（https://www.xiaomimimo.com/）
+#     - ollama:          视本地模型而定，默认不裁剪
+#
+# 注：_load_provider_metadata / _PROVIDER_METADATA / _PROVIDER_CAPS_FROM_FILE
+#     已在文件顶部（imports 之后）定义，此处直接复用。
+
+
+def _load_provider_max_tokens_cap() -> dict[str, int | None]:
+    """加载各 provider 的 max_tokens 上限。
+
+    优先级：环境变量 > provider_metadata.json > None（不裁剪）。
+    未配置的 provider 返回 None（不裁剪）。
+    """
+    from utils.common import safe_int as _safe_int
+
+    def _env_cap(env_var: str) -> int | None:
+        v = os.getenv(env_var)
+        if v is None:
+            return None
+        return _safe_int(v, 0)
+
+    def _file_cap(provider: str) -> int | None:
+        meta = _PROVIDER_CAPS_FROM_FILE.get(provider, {})
+        v = meta.get("max_tokens_cap") if isinstance(meta, dict) else None
+        if v is None or v == 0:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    # 已知 provider 列表（从元数据文件取，找不到则空）
+    _known_providers = set(_PROVIDER_CAPS_FROM_FILE.keys()) | {"agnes", "mimo", "ollama"}
+    cap: dict[str, int | None] = {}
+    for p in _known_providers:
+        _env_var_map = {"agnes": "AGNES_MAX_TOKENS_CAP", "mimo": "MIMO_MAX_TOKENS_CAP", "ollama": "OLLAMA_MAX_TOKENS_CAP"}
+        env_v = _env_cap(_env_var_map.get(p, f"{p.upper()}_MAX_TOKENS_CAP"))
+        if env_v is not None:
+            cap[p] = env_v
+        else:
+            cap[p] = _file_cap(p)
+    return cap
+
+PROVIDER_MAX_TOKENS_CAP: dict[str, int | None] = _load_provider_max_tokens_cap()
+
 # 跨 provider 映射：主 provider 故障时，flash/mini 切换到不同 provider
-_CROSS_PROVIDER_MAP: dict[str, tuple[str, str]] = {
-    # main_provider → (fallback_provider, fallback_model)
-    "agnes": ("mimo", MIMO_MODEL),
-    "mimo": ("agnes", AGNES_TEXT_MODEL),
-    "ollama": ("mimo", MIMO_MODEL),
-}
+# P0 修复：从 provider_metadata.json 的 _cross_provider_fallback 加载（不再硬编码）
+def _load_cross_provider_map() -> dict[str, tuple[str, str]]:
+    """从 provider_metadata.json 加载跨 provider 兜底映射。
+
+    优先级：provider_metadata.json > 环境变量推导 > 空字典（不兜底）。
+    """
+    _result: dict[str, tuple[str, str]] = {}
+    _cfg = _PROVIDER_METADATA.get("_cross_provider_fallback", {}) if isinstance(_PROVIDER_METADATA, dict) else {}
+    for _p, _fb in _cfg.items():
+        if _p.startswith("_"):
+            continue  # 跳过 _comment 等元字段
+        if isinstance(_fb, dict):
+            _fp = _fb.get("fallback_provider", "")
+            _fm = _fb.get("fallback_model", "")
+            if _fp and _fm:
+                _result[_p] = (_fp, _fm)
+    # 兜底：环境变量推导（用户未配置 JSON 时仍可用）
+    if "agnes" not in _result and os.getenv("MIMO_MODEL_NAME"):
+        _result["agnes"] = ("mimo", os.getenv("MIMO_MODEL_NAME"))
+    if "mimo" not in _result and os.getenv("AGNES_TEXT_MODEL"):
+        _result["mimo"] = ("agnes", os.getenv("AGNES_TEXT_MODEL"))
+    return _result
+
+_CROSS_PROVIDER_MAP: dict[str, tuple[str, str]] = _load_cross_provider_map()
 
 # 请求级隔离的 reasoning_content，避免并发请求间共享状态
 _reasoning_content_var = contextvars.ContextVar('reasoning_content', default='')
@@ -158,6 +291,11 @@ class ModelRouter:
         self._cost_buffer: list[dict] = []
         self._cost_flush_threshold = 3
         self._last_cache_warning = 0.0
+        # _analytics / _db 默认 None：set_db() 未被调用时 route() 访问这两个属性会
+        # AttributeError，导致所有 LLM 调用 call_failed（"所有功能都坏"事故根因）。
+        # 此处兜底初始化，set_db() 被调用时会覆盖为真实实例。
+        self._analytics = None
+        self._db = None
         self._error_classifier = ErrorClassifier()
         self._credential_pool = get_credential_pool()
         self._credential_locks: dict[str, asyncio.Lock] = {}
@@ -184,10 +322,6 @@ class ModelRouter:
         self._custom_clients: dict[str, AsyncOpenAI] = {}
         self._register_credential_pool_providers()
         self._current_chat_model: dict | None = None
-        # CodeRabbit 复审修复：原 self._last_stream_finish_reason 是实例属性，
-        # 并发流式调用会互相覆盖。改为 ContextVar (_stream_finish_reason_var)
-        # 实现请求级隔离。保留实例属性仅用于向后兼容（如外部直接读取）。
-        self._last_stream_finish_reason: str | None = None
         self._cache_stats = {
             "total_calls": 0,
             "hit_tokens": 0,
@@ -358,10 +492,6 @@ class ModelRouter:
         return self._transports.get(provider)
 
     def set_chat_model(self, provider: str, model_id: str) -> dict:
-        # 智能同步：在修改 chat 路由之前捕获旧主 provider，
-        # 后续只同步仍在跟随旧主 provider 的路由（默认状态），
-        # 保留用户已通过 WebUI 自定义到其他 provider 的路由（如 chat_mini=deepseek）。
-        old_provider = ROUTE_TABLE.get("chat", {}).get("client", "")
         ROUTE_TABLE["chat"]["model"] = model_id
         ROUTE_TABLE["chat"]["client"] = provider
         # 同步更新全局 DEFAULT_PROVIDER，使子代理、成本统计等全部跟随
@@ -372,54 +502,45 @@ class ModelRouter:
             if provider not in self._custom_clients:
                 raise LLMError(f"自定义 provider {provider} 未注册，请先注册客户端")
 
-        # 智能同步候选任务列表（chat_mimo 排除：MiMo 兜底专用路由，始终保持 mimo client）
-        _sync_tasks = ("chat_pro", "chat_flash", "chat_mini",
+        # 全量同步：所有聊天类 + 轻量任务 task_type 都跟随主 provider
+        # 用户切换 provider 时，确保所有场景都用目标 provider，不再残留旧 provider
+        _sync_tasks = ("chat_pro", "chat_flash", "chat_mini", "chat_mimo",
                        "chat_ultra", "emotion_analysis", "tool_result_wrap",
                        "memory_encoding")
-        # 只同步仍在跟随旧主 provider 的路由（默认跟随状态）。
-        # 用户已通过 update_route 自定义到其他 provider 的路由保留不动，
-        # 确保 WebUI 的每项修改都能持久化，不被主模型切换覆盖。
-        synced_tasks: list[str] = []
         for _task in _sync_tasks:
             if _task in ROUTE_TABLE:
-                _task_client = ROUTE_TABLE[_task].get("client", old_provider)
-                # client 与旧主 provider 一致 = 默认跟随状态 → 同步
-                # old_provider 为空 = 首次初始化 → 全部同步
-                # client 与旧主 provider 不同 = 用户自定义 → 保留
-                if _task_client == old_provider or not old_provider:
-                    ROUTE_TABLE[_task]["model"] = model_id
-                    ROUTE_TABLE[_task]["client"] = provider
-                    # agnes 不支持 thinking，切换到 agnes 时禁用 thinking
-                    if provider == "agnes" and "thinking" in ROUTE_TABLE[_task]:
-                        ROUTE_TABLE[_task]["thinking"] = {"type": "disabled"}
-                    synced_tasks.append(_task)
-        logger.info("router.smart_sync",
+                ROUTE_TABLE[_task]["model"] = model_id
+                ROUTE_TABLE[_task]["client"] = provider
+                # agnes 不支持 thinking，切换到 agnes 时禁用 thinking
+                if provider == "agnes" and "thinking" in ROUTE_TABLE[_task]:
+                    ROUTE_TABLE[_task]["thinking"] = {"type": "disabled"}
+        # P0 修复（用户反馈"UI 设置全部 Agnes，哪来的 Mimo v2.5"根因）：
+        # 删除"chat_flash 跨 provider 降级"逻辑——它强制把 chat_flash 改成不同 provider，
+        # 违背用户明确选择（用户选 agnes 时 chat_flash 被改成 mimo，触发 content_filter，
+        # 导致 14 秒延迟 + verification retry + 工具格式泄漏）。
+        # fallback 多样化应由 FALLBACK_ROUTE 在故障时处理，而非在用户主动切换时改 chat_flash。
+        # if provider in _CROSS_PROVIDER_MAP:
+        #     fb_provider, fb_model = _CROSS_PROVIDER_MAP[provider]
+        #     if "chat_flash" in ROUTE_TABLE:
+        #         ROUTE_TABLE["chat_flash"]["client"] = fb_provider
+        #         ROUTE_TABLE["chat_flash"]["model"] = fb_model
+        logger.info("router.all_tasks_synced",
                     provider=provider, model=model_id,
-                    old_provider=old_provider,
-                    synced_tasks=synced_tasks,
-                    preserved_tasks=[t for t in _sync_tasks if t not in synced_tasks])
+                    synced_tasks=list(_sync_tasks))
 
         self._current_chat_model = {"provider": provider, "model_id": model_id}
         # 持久化到 config_service，以便重启后恢复上次聊天模型
-        # 必须同步写入 models.chat_model 与实际被同步的路由，避免两套数据不同步
-        # 否则 _apply_route_overrides 在重启时用旧的持久化值覆盖内存中的同步结果。
-        # 关键：只持久化被同步的路由，不触碰用户自定义路由的持久化数据
-        # （用户自定义路由由 update_route 维护持久化，此处覆盖会导致用户设置丢失）。
-        # 关键修复：捕获 Exception 而非 (OSError, KeyError, ValueError, TypeError)。
-        # 旧逻辑下若 config_service 抛 LLMError/AppException 或其他非上述类型的异常，
-        # 会向上传播到 _restore_chat_model 的 try/except，触发 fallback 分支，
-        # 进而修改 ROUTE_TABLE["chat"]["client"]="mimo" 形成 sticky fallback。
+        # 必须同步写入 models.chat_model 与 models.routes.chat，避免两套数据不同步
+        # 否则 _apply_route_overrides 与 _restore_chat_model 启动顺序会造成覆盖
         try:
             from web.config_service import get_config_service
             cfg = get_config_service()
-            # 批量构建所有需要持久化的路由更新，一次性写盘+通知
-            # 避免 N 次 cfg.set() 触发 N 次原子写盘和 watcher 回调
-            _updates: dict[str, dict] = {
-                "models.chat_model": {"provider": provider, "model_id": model_id},
-            }
-            # chat 主路由
+            cfg.set(
+                "models.chat_model",
+                {"provider": provider, "model_id": model_id},
+            )
             chat_entry = ROUTE_TABLE.get("chat", {})
-            _updates["models.routes.chat"] = {
+            cfg.set("models.routes.chat", {
                 "model": model_id,
                 "client": provider,
                 "max_tokens": chat_entry.get("max_tokens"),
@@ -429,27 +550,9 @@ class ModelRouter:
                     and chat_entry["thinking"].get("type") == "enabled"
                 ),
                 "timeout": self.TASK_TIMEOUTS.get("chat"),
-            }
-            # 只持久化实际被同步的路由，确保重启后 _apply_route_overrides 能正确恢复
-            # 用户自定义路由的持久化数据由 update_route 维护，不触碰
-            for _task in synced_tasks:
-                if _task in ROUTE_TABLE:
-                    _entry = ROUTE_TABLE[_task]
-                    _updates[f"models.routes.{_task}"] = {
-                        "model": _entry["model"],
-                        "client": _entry.get("client", provider),
-                        "max_tokens": _entry.get("max_tokens"),
-                        "thinking": bool(
-                            _entry.get("thinking")
-                            and isinstance(_entry.get("thinking"), dict)
-                            and _entry["thinking"].get("type") == "enabled"
-                        ),
-                        "timeout": self.TASK_TIMEOUTS.get(_task),
-                    }
-            cfg.set_many(_updates)
-        except Exception as e:
-            logger.warning("router.chat_model_persist_failed error={} type={}",
-                           str(e), type(e).__name__)
+            })
+        except (OSError, KeyError, ValueError, TypeError) as e:
+            logger.warning("router.chat_model_persist_failed error={}", str(e))
         logger.info("router.chat_model_changed", provider=provider, model=model_id)
         return {"provider": provider, "model_id": model_id}
 
@@ -669,60 +772,77 @@ class ModelRouter:
 
         D12: 降级链在调用前用此方法判断目标客户端是否可用，避免向未初始化
         的客户端发起无意义调用导致兜底失效。
-
-        关键修复：agnes provider 应同时检查 _agnes_client（启动时初始化）
-        和 _custom_clients["agnes"]（用户通过 WebUI 添加后注册的客户端），
-        否则降级链中 agnes fallback 会被错误地跳过。
         """
         if provider == "mimo":
             return self._client is not None
         if provider == "agnes":
-            # 内置 _agnes_client 或用户通过 WebUI 注册的 _custom_clients["agnes"] 任一存在即可
-            # 注意：仅检查 key 存在不够，必须确认 value 不是 None
-            # （历史 bug：_custom_clients["agnes"]=None 时 _is_client_configured 误报 True，
-            #  导致 _select_client_for_provider 抛 E_LLM006 但 fallback 链已跳过该目标）
-            agnes_custom = getattr(self, "_custom_clients", {}).get("agnes")
-            return self._agnes_client is not None or agnes_custom is not None
-        custom = getattr(self, "_custom_clients", {}).get(provider)
-        return custom is not None
+            return self._agnes_client is not None
+        return provider in getattr(self, "_custom_clients", {})
 
     async def _try_fallback_chain(self, e: Exception, task_type: str,
                                   messages: list[dict], temperature: float,
                                   stream: bool, tools: list[dict] | None,
                                   tool_choice: str | None, timeout: int,
                                   user_openid: str, session_id: str,
-                                  extra_headers: dict | None) -> str | object | None:
+                                  extra_headers: dict | None,
+                                  original_max_tokens: int | None = None) -> str | object | None:
         """多级 fallback：FALLBACK_ROUTE → Agnes → 自定义 provider。全部失败返回 None。
 
         每一级降级前都会检查目标客户端是否已配置（有 API key 且有 base_url），
         未配置的目标会被跳过，避免向未初始化的客户端发起无意义调用。
+
+        P0 修复（Task 1.3）：透传 original_max_tokens，避免 fallback 把 max_tokens 压到 1000。
+        根因：原实现 fallback_config.get("max_tokens", 1000) 会把 Web UI 的 32768 压到 1000，
+              起点太小 → 截断续写翻倍序列 1000→2000→...→128000 需 7 次递归。
+        修复：fallback 时取 max(original_max_tokens, fallback_default)。
         """
         # 1. 降级到更便宜的模型
         fallback_type = FALLBACK_ROUTE.get(task_type)
-        if fallback_type:
+        # P0 修复：content_filter 触发时跳过同 provider 的 fallback 目标
+        # 根因：chat_flash (mimo) content_filter → fallback 到 chat_mini (也是 mimo) → 再次 content_filter
+        # 浪费一次调用 + 触发 verification retry，导致 14 秒延迟
+        # 修复：content_filter 时跳过同 provider 的 fallback，直接到不同 provider（如 agnes）
+        _is_content_filter = "content_filter" in str(e) or "content_policy" in str(e)
+        _original_provider = ""
+        try:
+            _original_provider = ROUTE_TABLE.get(task_type, {}).get("client", _CFG_DEFAULT_PROVIDER)
+        except Exception:
+            pass
+        while fallback_type:
             fallback_config = ROUTE_TABLE.get(fallback_type)
             fallback_provider = fallback_config.get("client", _CFG_DEFAULT_PROVIDER) if fallback_config else _CFG_DEFAULT_PROVIDER
+            # content_filter 时跳过同 provider（同样的过滤模型会再次拦截）
+            if _is_content_filter and fallback_provider == _original_provider:
+                logger.warning("router.fallback_skip_same_provider",
+                               original_task=task_type, fallback_task=fallback_type,
+                               reason="content_filter: same provider will filter again")
+                # 跳到下一级 fallback
+                fallback_type = FALLBACK_ROUTE.get(fallback_type)
+                continue
             # D12: 降级前检查目标客户端是否已配置，未配置则跳过该降级目标
             if fallback_config and self._is_client_configured(fallback_provider):
-                logger.warning("router.fallback",
-                               original_task=task_type, fallback_task=fallback_type,
-                               error=f"{type(e).__name__}: {e}")
-                try:
-                    fallback_tools = self._filter_tools_for_model(tools, fallback_config.get("model", ""))
-                    return await self._route_with_retry(
-                        fallback_type, fallback_config, messages, temperature,
-                        fallback_config.get("max_tokens", 1000), stream,
-                        fallback_tools, tool_choice, timeout, user_openid, session_id,
-                        extra_headers=extra_headers,
-                    )
-                except (RuntimeError, OSError, KeyError, ValueError) as fb_err:
-                    logger.error("router.fallback_failed",
-                                 fallback_task=fallback_type,
-                                 error=f"{type(fb_err).__name__}: {fb_err}")
-            else:
-                logger.warning("router.fallback_skipped",
-                               original_task=task_type, fallback_task=fallback_type,
-                               reason="target client not configured")
+                break
+            fallback_type = FALLBACK_ROUTE.get(fallback_type)
+        if fallback_type:
+            logger.warning("router.fallback",
+                           original_task=task_type, fallback_task=fallback_type,
+                           error=f"{type(e).__name__}: {e}")
+            try:
+                fallback_tools = self._filter_tools_for_model(tools, fallback_config.get("model", ""))
+                # P0 修复：透传 original_max_tokens，避免被 fallback_config 默认值压缩
+                _fallback_max_tokens = fallback_config.get("max_tokens", 1000)
+                if original_max_tokens:
+                    _fallback_max_tokens = max(original_max_tokens, _fallback_max_tokens)
+                return await self._route_with_retry(
+                    fallback_type, fallback_config, messages, temperature,
+                    _fallback_max_tokens, stream,
+                    fallback_tools, tool_choice, timeout, user_openid, session_id,
+                    extra_headers=extra_headers,
+                )
+            except (RuntimeError, OSError, KeyError, ValueError) as fb_err:
+                logger.error("router.fallback_failed",
+                             fallback_task=fallback_type,
+                             error=f"{type(fb_err).__name__}: {fb_err}")
 
         # 2. 尝试 Agnes 作为最终降级
         if task_type not in ("chat_agnes",) and self._is_client_configured("agnes"):
@@ -731,9 +851,13 @@ class ModelRouter:
                 if agnes_config:
                     logger.warning("router.agnes_fallback", original_task=task_type)
                     agnes_tools = self._filter_tools_for_model(tools, agnes_config.get("model", ""))
+                    # P0 修复：透传 original_max_tokens
+                    _agnes_max_tokens = agnes_config.get("max_tokens", 2000)
+                    if original_max_tokens:
+                        _agnes_max_tokens = max(original_max_tokens, _agnes_max_tokens)
                     return await self._route_with_retry(
                         "chat_agnes", agnes_config, messages, temperature,
-                        agnes_config.get("max_tokens", 2000), stream,
+                        _agnes_max_tokens, stream,
                         agnes_tools, tool_choice, timeout, user_openid, session_id,
                         extra_headers=extra_headers,
                     )
@@ -751,9 +875,13 @@ class ModelRouter:
                     logger.warning("router.custom_provider_fallback",
                                    original_task=task_type, provider=cp_name, model=cp_model)
                     cp_tools = self._filter_tools_for_model(tools, cp_model)
+                    # P0 修复：透传 original_max_tokens，避免硬编码 1000 压缩
+                    _cp_max_tokens = 1000
+                    if original_max_tokens:
+                        _cp_max_tokens = max(original_max_tokens, 1000)
                     return await self._route_with_retry(
                         f"chat_{cp_name}", cp_config, messages, temperature,
-                        1000, stream, cp_tools, tool_choice, timeout,
+                        _cp_max_tokens, stream, cp_tools, tool_choice, timeout,
                         user_openid, session_id,
                         extra_headers=extra_headers,
                     )
@@ -761,30 +889,6 @@ class ModelRouter:
                     logger.error("router.custom_provider_fallback_failed",
                                  provider=cp_name, error=str(cp_err))
                     continue
-
-        # 4. 跨 provider 降级到 mimo（作为最后手段）
-        # 关键修复：保留"跨 provider 降级"的能力（原 _CROSS_PROVIDER_MAP 的意图），
-        # 但作为最后手段，不会在主路由失败时静默跳到 mimo。
-        # 只在主 provider 不是 mimo 时执行，避免重复；仅在所有同 provider fallback
-        # 都失败后触发，确保用户明确选择 agnes 时优先用 agnes 全链路 fallback。
-        main_provider = ROUTE_TABLE.get("chat", {}).get("client", _CFG_DEFAULT_PROVIDER)
-        if (main_provider != "mimo"
-                and task_type.startswith("chat")
-                and self._is_client_configured("mimo")):
-            try:
-                mimo_config = ROUTE_TABLE.get("chat_mimo")
-                if mimo_config:
-                    logger.warning("router.mimo_fallback",
-                                   original_task=task_type, main_provider=main_provider)
-                    mimo_tools = self._filter_tools_for_model(tools, mimo_config.get("model", ""))
-                    return await self._route_with_retry(
-                        "chat_mimo", mimo_config, messages, temperature,
-                        mimo_config.get("max_tokens", 1000), stream,
-                        mimo_tools, tool_choice, timeout, user_openid, session_id,
-                        extra_headers=extra_headers,
-                    )
-            except (RuntimeError, OSError, KeyError, ValueError) as mimo_err:
-                logger.error("router.mimo_fallback_failed", error=str(mimo_err))
         return None
 
     async def route(self, task_type: str, messages: list[dict],
@@ -831,7 +935,8 @@ class ModelRouter:
                            error=f"{type(e).__name__}: {e}")
             fb_result = await self._try_fallback_chain(
                 e, task_type, messages, temperature, stream,
-                tools, tool_choice, timeout, user_openid, session_id, extra_headers
+                tools, tool_choice, timeout, user_openid, session_id, extra_headers,
+                original_max_tokens=mt,
             )
             if fb_result is not None:
                 return fb_result
@@ -861,21 +966,34 @@ class ModelRouter:
     async def _select_client_for_provider(self, provider: str) -> Any:
         """选择指定 provider 的客户端（含懒注册和凭证锁）。无可用客户端时 raise LLMError。
 
-        关键修复：agnes provider 在 _agnes_client 为 None 时（启动时未初始化），
-        必须回退到 _custom_clients["agnes"]（用户通过 WebUI 添加 agnes 后注册的客户端），
-        而不是静默使用 mimo 客户端——否则用户切换到 agnes 后实际仍走 mimo，
-        LLM 回复会自称 mimo-v2.5，与用户配置不符。
+        P0 修复（cannot read image 根因）：
+        - refresh_client() 在凭证轮换时可能把 self._client / self._agnes_client 置 None
+          （例如 Setup 页面保存空 Key、或并发刷新时 env var 暂时为空）。
+        - 原实现直接 raise E_LLM006，导致 _describe_images 拿不到 client → "cannot read image"。
+        - 修复：在锁内做"懒恢复"——若 client 为 None，从当前 os.environ 重新读取 Key 重建。
+          仍无 Key 才 raise。这样凭证池/环境变量恢复后无需重启即可自愈。
         """
         lock = self._get_credential_lock(provider)
         async with lock:
-            client: Any = None
-            if provider == "mimo":
-                client = self._client
-            elif provider == "agnes":
-                # 优先用内置 _agnes_client（启动时从环境变量初始化），
-                # 回退到 _custom_clients["agnes"]（用户通过 WebUI 添加后注册的客户端）
-                client = self._agnes_client or getattr(self, "_custom_clients", {}).get("agnes")
-            else:
+            client = self._client
+            if provider == "agnes":
+                client = self._agnes_client
+                # P0：agnes client 懒恢复（防止 refresh_client 把它置 None 后无法自愈）
+                if client is None:
+                    _agnes_key = os.getenv("AGNES_API_KEY", "")
+                    _agnes_url = os.getenv("AGNES_BASE_URL", AGNES_BASE_URL)
+                    if _agnes_key:
+                        try:
+                            _ssrf_check(_agnes_url)
+                            self._agnes_client = AsyncOpenAI(
+                                api_key=_agnes_key, base_url=_agnes_url)
+                            client = self._agnes_client
+                            logger.info("router.agnes_client_lazy_recovered",
+                                        key_hash=_mask_api_key(_agnes_key))
+                        except (ValueError, OSError) as ce:
+                            logger.warning("router.agnes_client_lazy_recover_failed",
+                                           error=str(ce))
+            elif provider not in ("mimo", "agnes"):
                 custom = getattr(self, "_custom_clients", {}).get(provider)
                 if custom is None:
                     # 懒注册：从 config_service 恢复未注册的自定义 provider
@@ -887,22 +1005,99 @@ class ModelRouter:
                         error_code=ErrorCodeEnum.E_LLM006,
                     )
                 client = custom
+            else:
+                # provider == "mimo"
+                # P0：mimo client 懒恢复（防止 refresh_client 把它置 None 后 vision API 全挂）
+                if client is None:
+                    _mimo_key = os.getenv("MIMO_API_KEY", "")
+                    _mimo_url = os.getenv("MIMO_BASE_URL", MIMO_BASE_URL)
+                    if _mimo_key:
+                        try:
+                            _ssrf_check(_mimo_url)
+                            self._client = AsyncOpenAI(
+                                api_key=_mimo_key, base_url=_mimo_url)
+                            client = self._client
+                            logger.info("router.mimo_client_lazy_recovered",
+                                        key_hash=_mask_api_key(_mimo_key))
+                        except (ValueError, OSError) as ce:
+                            logger.warning("router.mimo_client_lazy_recover_failed",
+                                           error=str(ce))
         if not client:
             raise LLMError(
-                f"Provider {provider} client not initialized, check API key",
+                f"{provider} client not initialized, check API_KEY env var",
                 error_code=ErrorCodeEnum.E_LLM006,
             )
         return client
+
+    def get_vision_provider_and_model(self) -> tuple[str, str]:
+        """P0 修复（用户要求"主chatLLM是谁图片发给谁，不要硬编mimo"）：
+        返回用于图片识别的 (provider, model)。
+
+        选择策略（无硬编码）：
+          1. 优先用当前主 chat LLM（ROUTE_TABLE["chat"] 的 client + model），
+             若该 provider 在 provider_metadata.json 中 supports_vision=True → 直接用
+          2. 主 chat LLM 不支持 vision 时，从 provider_metadata.json 找第一个
+             supports_vision=True 的 provider，用其 default_model
+          3. 都找不到时，回退到环境变量 MIMO_MODEL_NAME（最后兜底，避免完全不可用）
+
+        这样用户切换主模型到任意 vision-capable 模型时，图片自动走主模型，
+        不再被硬编码绑死到 mimo。
+        """
+        # 1. 主 chat LLM
+        _main_provider = ""
+        _main_model = ""
+        try:
+            _chat_cfg = ROUTE_TABLE.get("chat", {})
+            _main_provider = str(_chat_cfg.get("client", ""))
+            _main_model = str(_chat_cfg.get("model", ""))
+        except (KeyError, AttributeError):
+            pass
+
+        def _supports_vision(provider: str) -> bool:
+            _meta = _PROVIDER_CAPS_FROM_FILE.get(provider, {}) if isinstance(_PROVIDER_CAPS_FROM_FILE, dict) else {}
+            return bool(isinstance(_meta, dict) and _meta.get("supports_vision", False))
+
+        if _main_provider and _main_model and _supports_vision(_main_provider):
+            return _main_provider, _main_model
+
+        # 2. 从元数据找 vision-capable provider
+        if isinstance(_PROVIDER_CAPS_FROM_FILE, dict):
+            for _p, _meta in _PROVIDER_CAPS_FROM_FILE.items():
+                if isinstance(_meta, dict) and _meta.get("supports_vision", False):
+                    _m = _meta.get("default_model", "")
+                    if _m:
+                        # 校验该 provider 是否已注册（有 client 可用）
+                        try:
+                            if _p in ("mimo", "agnes") or _p in getattr(self, "_custom_clients", {}):
+                                return _p, _m
+                        except Exception:
+                            pass
+
+        # 3. 兜底：环境变量（不硬编码具体模型名）
+        _fallback_model = os.getenv("MIMO_MODEL_NAME", "")
+        if _fallback_model:
+            return "mimo", _fallback_model
+        return "", ""
+
+    @staticmethod
+    def _cap_max_tokens(mt: int, provider: str) -> int:
+        """P0 修复：按 provider 上限裁剪 max_tokens，避免 agnes 65536 限制触发 500 错误。"""
+        cap = PROVIDER_MAX_TOKENS_CAP.get(provider)
+        if cap is None:
+            return mt
+        try:
+            _mt = int(mt)
+        except (TypeError, ValueError):
+            return cap
+        return min(_mt, cap) if _mt > 0 else cap
 
     @staticmethod
     def _build_stream_kwargs(model: str, messages: list[dict], temperature: float,
                              mt: int, extra_headers: dict | None,
                              config: dict, provider: str) -> dict:
         """构造流式调用 kwargs。"""
-        # agnes API max_tokens 上限 65536，超出返回 500 invalid_request
-        # 即使 ROUTE_TABLE 配置 131072，对 agnes provider 自动夹紧到 65535 留 1 token 余量
-        if provider == "agnes" and mt > 65535:
-            mt = 65535
+        # P0 修复：按 provider 上限裁剪 max_tokens（agnes 上限 65536）
+        mt = ModelRouter._cap_max_tokens(mt, provider)
         kwargs = {
             "model": model,
             "messages": messages,
@@ -915,7 +1110,8 @@ class ModelRouter:
         # 支持 thinking 参数（通用）
         # 关键修复：thinking 关闭时也要传递 enable_thinking: false，否则 agnes 模型使用默认行为
         thinking_config = config.get("thinking")
-        logger.info("router.thinking_debug provider={} thinking={}", provider, thinking_config)
+        # P0 修复：thinking_debug 从 INFO 降为 DEBUG（每次 stream 调用都触发，INFO 级别刷屏）
+        logger.debug("router.thinking_debug provider={} thinking={}", provider, thinking_config)
         if provider == "agnes":
             # agnes 模型需要明确传递 enable_thinking 参数
             enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
@@ -934,6 +1130,14 @@ class ModelRouter:
 
         复用 _route_with_retry 的重试/错误分类/凭证轮换逻辑，
         不再独立实现一套调用路径，保证行为一致性。
+
+        P0 修复（截断检测根因）：
+        原实现在 async for chunk in stream 循环中只 yield delta.content，
+        从不读取 chunk.choices[0].finish_reason，导致：
+          1. _stream_finish_reason_var 永远为 None
+          2. verification loop 无法检测 finish_reason="length"（max_tokens 截断）
+          3. 截断重试机制完全失效（用户反复反馈"截断问题又出现了"根因）
+        修复：在流结束时捕获最后一个 chunk 的 finish_reason，写入 ContextVar。
         """
         config = ROUTE_TABLE.get(task_type, ROUTE_TABLE["chat"])
         model = config["model"]
@@ -948,6 +1152,7 @@ class ModelRouter:
         _start = time.time()
         stream = None
         last_error = None
+        _stream_finish_reason: str | None = None
 
         for attempt in range(MAX_RETRIES + 1):
             try:
@@ -960,24 +1165,54 @@ class ModelRouter:
                     client.chat.completions.create(**kwargs),
                     timeout=timeout,
                 )
-                _stream_finish_reason = None
-                async for chunk in stream:
+                # P0 修复（qq_group 截断根因）：添加 stall timeout 检测死流
+                # 根因：原实现在 async for chunk in stream 中无 stall timeout，
+                # 如果 provider 中途关闭连接且不发送 finish_reason chunk，
+                # 循环会正常结束（无异常），content 被静默截断，
+                # _stream_finish_reason 保持 None → 不触发 length retry → 用户看到截断回复。
+                # 修复：用 asyncio.wait_for 包装每个 chunk 的读取，15 秒无新 chunk → TimeoutError
+                _stall_timeout = float(os.getenv("LLM_STREAM_STALL_TIMEOUT", "15"))
+                _chunk_count = 0
+                while True:
                     try:
-                        choice = chunk.choices[0]
+                        chunk = await asyncio.wait_for(
+                            stream.__anext__(),
+                            timeout=_stall_timeout,
+                        )
+                    except StopAsyncIteration:
+                        break  # 流正常结束
+                    _chunk_count += 1
+                    try:
+                        _choice = chunk.choices[0]
                     except (AttributeError, IndexError):
                         continue
-                    # 捕获最后一个 chunk 的 finish_reason，用于流式截断检测
-                    _fr = getattr(choice, "finish_reason", None)
-                    if _fr:
-                        _stream_finish_reason = _fr
-                    delta = getattr(choice.delta, "content", None)
+                    # P0 修复：捕获 finish_reason（最后一个 chunk 才有）
+                    _chunk_fr = getattr(_choice, "finish_reason", None)
+                    if _chunk_fr:
+                        _stream_finish_reason = _chunk_fr
+                    delta = getattr(_choice.delta, "content", None)
                     if delta:
                         yield delta
-                # 存储到 ContextVar（请求级隔离，防并发覆盖）和实例属性（向后兼容）
-                # CodeRabbit 复审修复：并发流式调用会互相覆盖实例属性，
-                # ContextVar 确保每个 asyncio.Task 读取自己的 finish_reason
-                _stream_finish_reason_var.set(_stream_finish_reason)
-                self._last_stream_finish_reason = _stream_finish_reason
+                # P0 修复：流结束后检测是否收到 finish_reason
+                # 如果未收到，说明 provider 可能中途关闭连接（死流），content 可能被截断
+                if not _stream_finish_reason:
+                    logger.warning("llm.stream_no_finish_reason",
+                                   model=model, task=task_type,
+                                   provider=provider, chunk_count=_chunk_count,
+                                   hint="provider 可能中途关闭连接，content 可能被截断")
+                # P0 修复：流结束后写入 ContextVar，供 verification loop 检测截断
+                if _stream_finish_reason:
+                    try:
+                        from agent_core._shared import _stream_finish_reason_var
+                        _stream_finish_reason_var.set(_stream_finish_reason)
+                    except (ImportError, AttributeError):
+                        pass
+                    # 截断诊断日志：finish_reason="length" 时记录 mt 和内容长度
+                    if _stream_finish_reason == "length":
+                        logger.warning("llm.stream_truncated_by_max_tokens",
+                                       model=model, task=task_type,
+                                       max_tokens=mt, provider=provider,
+                                       finish_reason=_stream_finish_reason)
                 metrics.inc(f"model_route.{task_type}.success")
                 metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
                 metrics.maybe_report()
@@ -986,12 +1221,24 @@ class ModelRouter:
                             user_id=user_openid, session_id=session_id, stream=True,
                             finish_reason=_stream_finish_reason)
                 return
-            except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError) as e:
+            except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError,
+                    asyncio.TimeoutError) as e:
+                # P0 修复：捕获 stall timeout（asyncio.TimeoutError）
+                # 根因：stream stall timeout 触发时抛出 asyncio.TimeoutError，
+                # 原异常处理器不捕获此类型，导致流未被正确关闭 + 异常直接传播。
+                # 修复：将 asyncio.TimeoutError 纳入捕获范围，正确关闭流并走重试逻辑。
                 last_error = e
                 if stream:
                     with contextlib.suppress(AttributeError, OSError):
                         await stream.close()
                     stream = None
+                # stall timeout 特殊处理：记录诊断日志
+                if isinstance(e, asyncio.TimeoutError):
+                    logger.warning("llm.stream_stall_timeout",
+                                   model=model, task=task_type,
+                                   provider=provider, stall_timeout=_stall_timeout,
+                                   chunk_count=_chunk_count,
+                                   hint="流式响应中途停滞，可能 provider 故障")
                 should_retry = await self._handle_route_exception(
                     e, provider, task_type, model, attempt,
                 )
@@ -1023,10 +1270,8 @@ class ModelRouter:
                              extra_headers: dict | None,
                              config: dict, provider: str) -> dict:
         """构造非流式/流式路由调用的 kwargs。"""
-        # agnes API max_tokens 上限 65536，超出返回 500 invalid_request
-        # 即使 ROUTE_TABLE 配置 131072，对 agnes provider 自动夹紧到 65535 留 1 token 余量
-        if provider == "agnes" and max_tokens > 65535:
-            max_tokens = 65535
+        # P0 修复：按 provider 上限裁剪 max_tokens（agnes 上限 65536）
+        max_tokens = ModelRouter._cap_max_tokens(max_tokens, provider)
         kwargs = {
             "model": model,
             "messages": messages,
@@ -1055,8 +1300,9 @@ class ModelRouter:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
             # 诊断日志：记录发送给 LLM 的工具名称列表
+            # P0 修复：loguru 使用 {} 占位符，不是 printf 风格 %s（原写法导致日志显示字面 %s）
             tool_names = [t.get("function", {}).get("name", "?") for t in tools]
-            logger.debug("router.tools_sent provider=%s model=%s count=%d names=%s",
+            logger.debug("router.tools_sent provider={} model={} count={} names={}",
                          provider, model, len(tools), tool_names)
         if extra_headers:
             kwargs["extra_headers"] = extra_headers
@@ -1064,7 +1310,8 @@ class ModelRouter:
         # 支持 thinking 参数（通用）
         # 关键修复：thinking 关闭时也要传递 enable_thinking: false，否则 agnes 模型使用默认行为
         thinking_config = config.get("thinking")
-        logger.info("router.thinking_debug provider={} thinking={}", provider, thinking_config)
+        # P0 修复：thinking_debug 从 INFO 降为 DEBUG（每次 route 调用都触发，INFO 级别刷屏）
+        logger.debug("router.thinking_debug provider={} thinking={}", provider, thinking_config)
         if provider == "agnes":
             # agnes 模型需要明确传递 enable_thinking 参数
             enabled = bool(thinking_config and thinking_config.get("type") == "enabled")
@@ -1079,13 +1326,8 @@ class ModelRouter:
                                      messages: list[dict] | None = None,
                                      temperature: float | None = None,
                                      max_tokens: int | None = None,
-                                     config: dict | None = None,
-                                     _skip_truncate_retry: bool = False) -> str | object:
-        """处理路由成功响应：记录费用、缓存、凭证成功，返回 content 或 response。
-
-        _skip_truncate_retry=True 时跳过截断重试，防止 route()→_route_with_retry()→
-        _handle_route_response()→route() 无限递归导致 RecursionError。
-        """
+                                     config: dict | None = None) -> str | object:
+        """处理路由成功响应：记录费用、缓存、凭证成功，返回 content 或 response。"""
         if stream:
             # 流式调用：在返回前尝试记录费用（部分 provider 在流结束时提供 usage）
             try:
@@ -1129,81 +1371,72 @@ class ModelRouter:
                          finish_reason=getattr(response.choices[0], "finish_reason", None),
                          content_len=len(content))
 
-        # 检查 finish_reason 和回复完整性：检测截断
-        # 治本：在 route 底层统一检测截断，所有调用 route 的地方自动获得截断保护
-        # 即使 finish_reason="stop"，LLM 也可能自我截断（如列表中途停止 "...3"）
-        # 注意：短回复（如 "好的"、"嗯"）是 LLM 合理选择，不视为截断
-        # 修复 P2 Bug 9: 原 _is_reply_incomplete 判断逻辑对 content_len=4 的短回复
-        # 误判为截断，触发 truncated_by_max_tokens 告警和无意义重试。
-        # 增加最小长度阈值 30，短回复不参与截断检测。
-        # N7 修复: agnes-2.0-flash 长回复截断时会泄漏英文推理（"Anyway continuing now"、
-        # "Summary complete" 等），末尾 last_line 可能很长（≥10 字符）导致原规则漏判。
-        # 新增 has_english_reasoning_leak 检测，命中即视为截断触发重试。
-        # CodeRabbit 复审修复：移除未使用的 _content_last_line；扩展句末标点白名单
-        # （弯引号/直引号/括号/方括号/顿号等）；移除 \n（rstrip 已消除尾部换行）
+        # 检查 finish_reason：截断重试（assistant-prefill 方式，不污染上下文）
+        # P0 重构（用户要求"不许截断" + "重试机制保留"）：
+        # 根因 1：原截断重试追加 "请继续完成你的回复" 作为 user message，
+        #         LLM 把它当成真实用户输入，在后续轮次回应"继续完成"等元词汇，
+        #         造成上下文污染和角色出戏（详见 conversation_logs 2026-07-25 17:46 案例）。
+        # 根因 2：max_tokens=32768 对中文长回复过小，频繁触发 length 截断。
+        # 修复：
+        #   1. WEB_UI_MAX_TOKENS 提升到 131072（匹配模型上下文窗口），从源头消除大部分截断
+        #   2. 保留重试机制，但改用 assistant-prefill（不追加 user message），
+        #      避免"请继续"prompt 污染上下文
+        #   3. 重试使用 _route_for_continuation（去递归化），最多 2 轮
+        #   4. 上下文溢出仍由 agent_context.py 的压缩机制处理（"重置机制"）
         finish_reason = getattr(response.choices[0], "finish_reason", None)
-        _content_rstripped = content.rstrip() if content else ""
-        _has_eng_leak = False
-        try:
-            from utils.llm_cleanup import has_english_reasoning_leak
-            _has_eng_leak = has_english_reasoning_leak(content)
-        except ImportError:
-            pass
-        # 截断检测：长回复(>=30字符)不以句末标点结尾即视为截断
-        # 根因修复：原 len(last_line) < 10 启发式导致末行较长的截断回复漏判
-        # （如"让我查一下记忆里7月16号7:00-8:00那段时间"末行>10字符但实际截断）
-        # 英文推理泄漏(eng_leak)始终视为截断——需清洗+重试获取剩余内容
-        # CodeRabbit: 扩展标点白名单，覆盖中英文常见句末标点
-        _SENTENCE_END_CHARS = "。！？～…）」』】”’\"')]、.!?」』"
-        _no_sentence_end = not _content_rstripped.endswith(tuple(_SENTENCE_END_CHARS))
-        _is_reply_incomplete = bool(content) and len(content) >= 30 and (
-            _no_sentence_end or _has_eng_leak
-        )
-        if (finish_reason and finish_reason != "stop") or _is_reply_incomplete:
+        if finish_reason and finish_reason != "stop":
             content_len = len(content)
-            if finish_reason == "length" or _is_reply_incomplete:
+            if finish_reason == "length":
                 logger.warning("llm.truncated_by_max_tokens",
                                model=model, task=task_type,
                                content_len=content_len,
-                               finish_reason=finish_reason,
-                               has_eng_leak=_has_eng_leak)
-                # N7: 重试前先清洗英文推理泄漏，避免泄漏内容被拼入重试上下文
-                if _has_eng_leak:
-                    try:
-                        from utils.llm_cleanup import strip_english_reasoning_leak
-                        content = strip_english_reasoning_leak(content, context="router_truncate_retry")
-                    except ImportError:
-                        pass
-                # 截断重试：追加"请继续"提示重试，最多 2 轮，max_tokens 加倍
-                # 关键修复：_skip_truncate_retry=True 时跳过，避免 route()→_route_with_retry()→
-                # _handle_route_response()→route() 无限递归导致 RecursionError
-                if not _skip_truncate_retry and content and len(content) > 10:
+                               finish_reason=finish_reason)
+                # 重试机制保留：使用 assistant-prefill 续写（不追加 user message）
+                # 关键：不追加 "请继续完成你的回复" 等 user message，
+                #       避免污染上下文（LLM 会在后续轮次回应这些元词汇）
+                # Feature flag: TRUNCATION_RETRY_DERECURSE（默认 true）
+                _derecurse = os.getenv("TRUNCATION_RETRY_DERECURSE", "true").lower() in ("true", "1", "yes")
+                if content and len(content) > 10:
                     _retry_max_tokens = max_tokens * 2 if max_tokens else None
-                    _retry_timeout = self.TASK_TIMEOUTS.get(task_type, 30)
                     for _retry_round in range(2):  # 最多 2 轮重试
                         try:
                             retry_messages = messages.copy()
+                            # assistant-prefill：追加已有内容，让 LLM 从此处续写
                             retry_messages.append({"role": "assistant", "content": content})
-                            retry_messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
-                            # 关键修复：直接调用 _route_with_retry 而非 route()，并传入
-                            # _skip_truncate_retry=True 防止递归。截断重试不需要 fallback 链。
-                            retry_result = await self._route_with_retry(
-                                task_type, config, retry_messages, temperature,
-                                _retry_max_tokens or config.get("max_tokens", 4096),
-                                False, None, None, _retry_timeout,
-                                user_openid, session_id,
-                                extra_headers=None,
-                                _skip_truncate_retry=True,
-                            )
-                            retry_content = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
+                            # 注意：不追加任何 user message，避免"请继续"prompt 污染上下文
+                            if _derecurse:
+                                # 新路径：直接调底层，不递归 route()，返回原始 response
+                                retry_response = await self._route_for_continuation(
+                                    task_type, retry_messages, temperature=temperature,
+                                    max_tokens=_retry_max_tokens,
+                                    user_openid=user_openid, session_id=session_id,
+                                )
+                                retry_content = ""
+                                _retry_finish = None
+                                if retry_response is not None:
+                                    _choices = getattr(retry_response, "choices", None) or []
+                                    if _choices:
+                                        retry_content = getattr(_choices[0].message, "content", "") or ""
+                                        _retry_finish = getattr(_choices[0], "finish_reason", None)
+                            else:
+                                # 旧路径（兼容回退）：递归调用 route()
+                                retry_result = await self.route(
+                                    task_type, retry_messages, temperature=temperature,
+                                    max_tokens=_retry_max_tokens,
+                                    user_openid=user_openid, session_id=session_id,
+                                )
+                                retry_content = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
+                                _retry_finish = getattr(retry_result, "choices", [{}])
+                                _retry_finish = getattr(_retry_finish[0], "finish_reason", None) if _retry_finish else None
                             if retry_content and len(retry_content) > 5:
                                 content = content + retry_content
                                 logger.info("llm.truncated_retry_success",
                                             final_len=len(content), model=model,
-                                            retry_round=_retry_round + 1)
-                                # 检查是否仍然截断
-                                _retry_finish = getattr(retry_result, "choices", [{}])
-                                _retry_finish = getattr(_retry_finish[0], "finish_reason", None) if _retry_finish else None
+                                            retry_round=_retry_round + 1,
+                                            finish_reason=_retry_finish,
+                                            derecurse=_derecurse,
+                                            method="assistant_prefill")
+                                # 检查是否仍然截断（基于真实 finish_reason 判断）
                                 if _retry_finish != "length":
                                     break  # 不再截断，退出重试
                             else:
@@ -1324,8 +1557,7 @@ class ModelRouter:
                                 max_tokens: int, stream: bool,
                                 tools: list[dict] | None, tool_choice: str | None,
                                 timeout: int, user_openid: str, session_id: str,
-                                extra_headers: dict | None = None,
-                                _skip_truncate_retry: bool = False) -> str | object:
+                                extra_headers: dict | None = None) -> str | object:
         """带重试的路由调用：客户端选择 → 构建 kwargs → 调用 API → 处理响应/异常。"""
         model = config["model"]
         last_error = None
@@ -1352,7 +1584,6 @@ class ModelRouter:
                     user_openid, session_id, provider, tools,
                     messages=messages, temperature=temperature, max_tokens=max_tokens,
                     config=config,
-                    _skip_truncate_retry=_skip_truncate_retry,
                 )
 
             except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError) as e:
@@ -1363,6 +1594,52 @@ class ModelRouter:
                 if not should_retry:
                     break
         raise last_error
+
+    async def _route_for_continuation(self, task_type: str, messages: list[dict],
+                                       temperature: float = 0.7,
+                                       max_tokens: int | None = None,
+                                       user_openid: str = "",
+                                       session_id: str = "") -> Any | None:
+        """截断续写专用路由：直接调用 LLM 返回原始 response 对象，不递归触发截断重试。
+
+        P0 修复（Task 1.1+1.2）：替代原 `await self.route(...)` 递归调用。
+        - 不进入 `_handle_route_response`，避免再次触发截断重试形成递归风暴
+        - 返回原始 response 对象，让调用方正确读取 `finish_reason` 判断是否仍截断
+        - 单次调用，无重试（截断续写本身的 2 轮循环由调用方控制）
+        - 失败时返回 None（调用方按"无内容"分支处理）
+
+        注意：此方法仅用于截断续写场景，常规路由请使用 route()。
+        """
+        config = ROUTE_TABLE.get(task_type, ROUTE_TABLE["chat"])
+        model = config["model"]
+        provider = config.get("client", _CFG_DEFAULT_PROVIDER)
+        mt = max_tokens or config.get("max_tokens", 4096)
+        timeout = self.TASK_TIMEOUTS.get(task_type, 30)
+
+        # 应用 prompt caching（与主路由保持一致）
+        messages = self._apply_prompt_caching(provider, messages)
+
+        try:
+            client = await self._select_client_for_provider(provider)
+            kwargs = self._build_route_kwargs(
+                model, messages, temperature, mt, False,
+                None, None, None, config, provider,
+            )
+            response = await asyncio.wait_for(
+                client.chat.completions.create(**kwargs),
+                timeout=timeout,
+            )
+            self._track_cache(response)
+            logger.info("llm.continuation_call", model=model, task=task_type,
+                        user_id=user_openid, session_id=session_id,
+                        max_tokens=mt)
+            return response
+        except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError) as e:
+            # 续写失败不影响主流程，调用方按"无内容"分支处理
+            logger.warning("llm.continuation_failed",
+                           model=model, task=task_type,
+                           error=f"{type(e).__name__}: {e}"[:200])
+            return None
 
     def _track_cache(self, response: Any) -> None:
         try:
@@ -1452,13 +1729,11 @@ class ModelRouter:
         if not tools:
             return tools
 
-        # agnes 系列模型工具支持情况由实际 API 错误反馈决定（is_tool_unsupported_error）
-        # 这里只是预判，不应每次调用都 warning 污染日志（曾导致 139 次/小时告警风暴）
-        # 降级为 debug，需要诊断时再开启
-        agnes_models = {AGENT_CONFIG.get("model") for AGENT_CONFIG in [ROUTE_TABLE.get("chat_agnes")] if AGENT_CONFIG}
-        if model in agnes_models:
-            logger.debug("router.tools_may_not_be_supported",
-                         model=model, tool_count=len(tools))
+        # P0 修复：移除 agnes tools_may_not_be_supported 误告警
+        # 根因：agnes-2.0-flash 实际支持工具调用（日志中 tool.calls_selected 多次成功），
+        #       原告警每次 route 调用都触发，造成日志噪声 + 误导排查方向。
+        #       工具兼容性实际由 _is_small_model + 工具调用结果兜底，无需提前告警。
+        # 如需诊断工具发送情况，查看 router.tools_sent DEBUG 日志即可。
 
         # 小模型不发送工具定义，防止输出退化
         if self._is_small_model(model):

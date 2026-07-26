@@ -181,6 +181,10 @@ class UserProfileLearner:
         for msg in recent_messages[-20:]:
             role = "用户" if msg.get("role") == "user" else "助手"
             content = str(msg.get("content", ""))[:200]
+            # P0 修复：escape 用户消息中的 { 和 }，避免下游 .format() 触发
+            # "Replacement index 0 out of range for positional args tuple" IndexError
+            # 用户消息可能包含 {0} {1} {} 等字符（如代码、数学表达式），原样保留会破坏 .format()
+            content = content.replace("{", "{{").replace("}", "}}")
             summary_lines.append(f"{role}: {content}")
         conversation_summary = "\n".join(summary_lines)
 

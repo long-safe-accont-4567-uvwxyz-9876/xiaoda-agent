@@ -247,7 +247,7 @@ def strip_dsml(text: str) -> str:
     # 清理孤立的 </think> 闭合标签（tool_call错配后残留）
     text = re.sub(r'</think>', '', text, flags=re.IGNORECASE)
     # L1 修复: 孤立闭合标签（开标签已被 DSML_LEFTOVER 清除，闭标签残留）
-    text = re.sub(r'</(?:function_calls|function_call|invoke|param|operation|answer)>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'</(?:function_calls|function_call|function|invoke|param|parameter|operation|answer|tool|tool_call)>', '', text, flags=re.IGNORECASE)
     # 清理其他常见的工具调用泄露格式
     # 1. 代码块中的 function_call JSON
     text = re.sub(r'```(?:json)?\s*\{[^}]*?function_call[^}]*?\}\s*```', '', text, flags=re.DOTALL)
@@ -425,11 +425,18 @@ _LEAKED_XML_TAGS_PATTERN = re.compile(
     r'memory_retrieval_empty)[^>]*>',
     re.IGNORECASE,
 )
+# LLM 工具调用方括号标记泄漏：[recall] [operation] [action] 等（独立行）
+# 根因：LLM 把工具调用当正文输出，模仿内部 [recall] 等标记格式
+_LEAKED_TOOL_BRACKET_PATTERN = re.compile(
+    r'^\s*\[(?:recall|operation|action|tool_call|function_call|invoke|tool|action_call|search|memory_search)\]\s*$',
+    re.MULTILINE | re.IGNORECASE,
+)
 # 记忆/系统方括号标记泄漏：LLM 模仿记忆注入格式输出 [相关记忆] 等标记
 # 根因：记忆注入时用方括号标记，LLM 照搬到回复里
 _LEAKED_MEMORY_MARKERS_PATTERN = re.compile(
     r'^\s*\[(?:相关记忆|记忆|memory|memory_retrieval|conversation_logs|'
-    r'系统提示|system|工具结果|tool_result)\]\s*$',
+    r'系统提示|system|工具结果|tool_result|recall|operation|action|tool_call|'
+    r'function_call|invoke|tool|action_call)\]\s*$',
     re.MULTILINE | re.IGNORECASE,
 )
 # 回忆出戏格式化标记：LLM 把记忆当数据处理，用"时间线整理"、"⏰ 约7:09"等格式
@@ -481,6 +488,7 @@ def strip_reasoning(text: str) -> str:
     text = _LEAKED_XML_TAGS_PATTERN.sub('', text)
     # 1d. 记忆/系统方括号标记泄漏清洗：[相关记忆] 等
     text = _LEAKED_MEMORY_MARKERS_PATTERN.sub('', text)
+    text = _LEAKED_TOOL_BRACKET_PATTERN.sub('', text)
     
     # 2. Agnes 模型推理标签
     text = _EMOTION_REASONING_PATTERN.sub('', text)
