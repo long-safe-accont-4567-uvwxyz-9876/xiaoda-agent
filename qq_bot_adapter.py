@@ -11,7 +11,17 @@ import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
-load_dotenv()
+# P0 修复（Windows 安装包 QQ 离线 bug 根因）：
+# load_dotenv() 无参数时只读取 CWD/.env，Windows 安装包从 C:\Program Files\ 启动时
+# CWD 不是用户目录，而 config.py 已把 .env 放到 ~/.ai-agent/.env（frozen 模式），
+# 导致 APP_ID/APP_SECRET 永远为空 → run_qq_bot 早期返回 disabled_no_appid → QQ 离线。
+# 修复：显式使用 config.ENV_PATH，与 config.py 保持一致。
+try:
+    from config import ENV_PATH as _ENV_PATH
+    load_dotenv(_ENV_PATH, override=True)
+except ImportError:
+    # config 模块不可用时兜底（如独立运行模式），退化为无参数 load_dotenv
+    load_dotenv()
 
 
 from utils.common import safe_int as _safe_int
@@ -282,7 +292,13 @@ async def run_qq_bot(agent: "AgentCore", *, sandbox: bool = False) -> None:
 
     内部带指数退避重连；任务被取消时干净退出。
     """
-    if not APP_ID or APP_ID == "your_app_id_here":
+    # P0 修复：实时从 env 读取 APP_ID/APP_SECRET，而非依赖模块级变量。
+    # 根因：模块级 APP_ID 在 import 时一次性读取，若 load_dotenv 未读到 .env（如
+    # Windows 安装包 CWD 不对），APP_ID 永远为空。即使后续 restart_qq_bot_task
+    # 更新了模块级变量，首次启动仍会失败。实时读取 env 确保始终拿到最新值。
+    _app_id = os.getenv("QQBOT_APP_ID", "").strip() or APP_ID
+    _app_secret = os.getenv("QQBOT_APP_SECRET", "").strip() or APP_SECRET
+    if not _app_id or _app_id == "your_app_id_here":
         logger.warning("qq_bot.disabled_no_appid")
         return
     intents = botpy.Intents(public_messages=True)
@@ -290,7 +306,10 @@ async def run_qq_bot(agent: "AgentCore", *, sandbox: bool = False) -> None:
     while True:
         client = AIQQBot(intents=intents, is_sandbox=sandbox, timeout=30, agent=agent)
         try:
-            await client.start(appid=APP_ID, secret=APP_SECRET)
+            # 每次重连都用最新的 env 值（防止凭证更新后仍用旧值）
+            _app_id = os.getenv("QQBOT_APP_ID", "").strip() or APP_ID
+            _app_secret = os.getenv("QQBOT_APP_SECRET", "").strip() or APP_SECRET
+            await client.start(appid=_app_id, secret=_app_secret)
             logger.warning("qq_bot.exited_reconnecting")
             delay = 5
         except asyncio.CancelledError:
@@ -1711,7 +1730,10 @@ class AIQQBot(botpy.Client):
 
 
 if __name__ == "__main__":
-    if not APP_ID or APP_ID == "your_app_id_here":
+    # P0 修复：实时从 env 读取（与 run_qq_bot 保持一致，防止模块级变量未更新）
+    _main_app_id = os.getenv("QQBOT_APP_ID", "").strip() or APP_ID
+    _main_app_secret = os.getenv("QQBOT_APP_SECRET", "").strip() or APP_SECRET
+    if not _main_app_id or _main_app_id == "your_app_id_here":
         print("=" * 55)
         print("  请先配置 QQ Bot AppID 和 AppSecret")
         print("")
@@ -1742,7 +1764,10 @@ if __name__ == "__main__":
     while retry_count < MAX_RETRIES:
         try:
             client = AIQQBot(intents=intents, is_sandbox=is_sandbox, timeout=30)
-            client.run(appid=APP_ID, secret=APP_SECRET)
+            # 每次重连都用最新的 env 值（与 run_qq_bot 保持一致）
+            _main_app_id = os.getenv("QQBOT_APP_ID", "").strip() or APP_ID
+            _main_app_secret = os.getenv("QQBOT_APP_SECRET", "").strip() or APP_SECRET
+            client.run(appid=_main_app_id, secret=_main_app_secret)
             retry_count = 0
             logger.warning("qq_bot.exited_normally_restarting")
         except KeyboardInterrupt:

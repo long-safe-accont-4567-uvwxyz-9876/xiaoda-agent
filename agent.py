@@ -373,11 +373,13 @@ def _should_hide_console() -> bool:
         if not hwnd:
             return False
         # 2. 控制台附加进程数（GetConsoleProcessList 填充 buf 并返回数量）
+        #    - 0: 调用失败（无控制台附加）→ 不隐藏
         #    - 1: 只有本进程附加（双击快捷方式启动）→ 安全隐藏
         #    - >1: 与父进程（cmd.exe 等）共享 → 不应隐藏（会误杀父终端）
         buf = (ctypes.c_uint32 * 64)()
         count = ctypes.windll.kernel32.GetConsoleProcessList(buf, 64)
-        return count <= 1
+        # count == 0 表示调用失败（API 文档：返回值为 0 表示无附加进程，不应隐藏）
+        return count == 1
     except (OSError, AttributeError):
         return False
 
