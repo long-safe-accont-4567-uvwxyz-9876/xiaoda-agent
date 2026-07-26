@@ -9,6 +9,7 @@ import { api } from './api'
 import { t } from './i18n'
 import { sound } from './utils/sound'
 import GrassParticles from './components/fx/GrassParticles.vue'
+import DendroCursor from './components/fx/DendroCursor.vue'
 
 const auth = useAuthStore()
 const ui = useUiStore()
@@ -32,10 +33,7 @@ async function checkSignature() {
         el.textContent = expected
       }
     })
-  } catch (e: any) {
-    // ERR_ABORTED / AbortError 是路由切换时浏览器主动取消请求，静默忽略
-    if (e?.name === 'AbortError') return
-  }
+  } catch { /* 静默失败 */ }
 }
 
 function onVisibilityChange() {
@@ -119,7 +117,7 @@ onMounted(async () => {
     document.body.classList.add('low-gpu')
   }
 
-  // 草元素音效：首次手势解锁 AudioContext
+  // 草元素音效：首次手势解锁 AudioContext（浏览器自动播放策略）
   const unlock = () => {
     sound.unlock()
     window.removeEventListener('pointerdown', unlock)
@@ -128,13 +126,13 @@ onMounted(async () => {
   window.addEventListener('pointerdown', unlock, { passive: true })
   window.addEventListener('keydown', unlock)
 
-  // 全局露珠点击音
+  // 全局露珠点击音：草元素按钮与侧边导航
   window.addEventListener('pointerdown', onGlobalTap, { passive: true })
 
   booting.value = false
 })
 
-/** 命中交互元素时播放露珠音 */
+/** 命中 .dendro-btn / .nav-item / .sponsor-entry 时播放露珠音 */
 function onGlobalTap(e: PointerEvent) {
   const el = (e.target as HTMLElement | null)?.closest?.(
     '.dendro-btn, .nav-item, .sponsor-entry, .agent-chip, .n-button, .n-tabs-tab, .n-radio-button, .n-switch'
@@ -145,6 +143,7 @@ function onGlobalTap(e: PointerEvent) {
 onBeforeUnmount(() => {
   stopWatermarkGuard()
   ui.stopAutoCheck()
+  window.removeEventListener('pointerdown', onGlobalTap)
 })
 
 const themeOverrides: GlobalThemeOverrides = {
@@ -175,6 +174,7 @@ const themeOverrides: GlobalThemeOverrides = {
     <n-dialog-provider>
       <n-message-provider placement="top-right">
         <GrassParticles ref="particlesRef" />
+        <DendroCursor />
         <div v-if="booting" class="boot-loading">🌿</div>
         <router-view v-else v-slot="{ Component }">
           <transition name="leaf-page" mode="out-in">
@@ -189,6 +189,7 @@ const themeOverrides: GlobalThemeOverrides = {
 <style>
 @import './styles/theme.css';
 @import './styles/sumeru-tokens.css';
+@import './styles/components.css';
 
 * {
   margin: 0;
@@ -210,25 +211,43 @@ body {
   background: var(--forest-deep);
 }
 
-/* 叶片翻页转场 */
-.leaf-page-enter-active,
-.leaf-page-leave-active {
-  transition: transform 0.35s var(--ease-smooth), opacity 0.35s var(--ease-smooth);
+/* 叶片翻页转场 · v2 弹簧+柔焦 */
+.leaf-page-enter-active {
+  transition:
+    transform 0.46s var(--ease-spring, cubic-bezier(0.22, 1.4, 0.36, 1)),
+    opacity 0.3s var(--ease-smooth),
+    filter 0.4s var(--ease-smooth);
   transform-style: preserve-3d;
+  will-change: transform, opacity, filter;
+}
+.leaf-page-leave-active {
+  transition:
+    transform 0.24s cubic-bezier(0.5, 0, 0.75, 0),
+    opacity 0.22s var(--ease-smooth),
+    filter 0.22s var(--ease-smooth);
+  transform-style: preserve-3d;
+  will-change: transform, opacity, filter;
 }
 .leaf-page-enter-from {
   opacity: 0;
-  transform: perspective(1200px) rotateY(12deg) translateX(40px);
+  transform: perspective(1200px) rotateY(9deg) translateX(34px) scale(0.985);
+  filter: blur(8px);
 }
 .leaf-page-leave-to {
   opacity: 0;
-  transform: perspective(1200px) rotateY(-12deg) translateX(-40px);
+  transform: perspective(1200px) rotateY(-7deg) translateX(-28px) scale(0.99);
+  filter: blur(4px);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .leaf-page-enter-from, .leaf-page-leave-to {
     transform: none;
+    filter: none;
   }
+}
+body.low-gpu .leaf-page-enter-from,
+body.low-gpu .leaf-page-leave-to {
+  filter: none;
 }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }

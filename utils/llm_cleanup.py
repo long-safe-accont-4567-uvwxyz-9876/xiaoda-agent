@@ -9,6 +9,8 @@ import re
 
 from loguru import logger
 
+from utils.metrics import metrics
+
 
 # 推理模型（DeepSeek-R1/MiMo Pro 等）会输出各种思维链标签
 # 扩展匹配：<think>/<thinking>/reasoning/analysis/reflection/thought 和 [think/thinking/reasoning/analysis]
@@ -426,7 +428,9 @@ def strip_english_reasoning_leak(text: str, *, context: str = "") -> str:
 
     注意：本函数只做截断（保留泄漏前的内容），不尝试修复截断——
     修复由上层截断重试机制（model_router / verification loop）负责，
-    通过 "请继续完成你的回复" 提示获取剩余内容后拼接。
+    N8 后改用 assistant-prefill 续写（追加 assistant 消息让模型从末尾自然续写），
+    merge_continuation(assume_tail=True) 兜底去重合并，避免原 user 消息
+    "请继续"被 LLM 当成新提问回应导致续写指令泄漏与人格切换。
 
     CodeRabbit 复审修复：清洗后如果结果为空，返回原输入，避免空回复传入重试/force-close路径。
     """
@@ -466,4 +470,218 @@ def strip_english_reasoning_leak(text: str, *, context: str = "") -> str:
                        removed_len=len(text) - len(cleaned),
                        leak_preview=text[earliest_pos:earliest_pos + 80])
     return cleaned
+
+
+# ── 截断重试合并：把续写内容安全合并进原回复 ──────────────────────
+# 生产事故根因修复（conversation_logs id 2110/2112，2026-07-25）：
+# 截断重试时若 LLM 重生成完整回复而非续写尾巴，盲拼接 `reply + retry_reply`
+# 会产生 3-4 倍重复内容；多轮重试叠加后雪崩成 4 段人格切换的混乱回复。
+# 本函数复用 message_processor._try_simple_chat_fast_path 的三态去重模式
+# （生产验证的最佳实现），在所有重试拼接点统一调用，杜绝重复。
+# 严格大于判定：overlap > _MERGE_OVERLAP_MIN 才视为有效续写重叠（即 overlap>=11），
+# 避免"嗯。"等短尾部与下文偶然字符相同被误判为 spliced 而去重。
+_MERGE_OVERLAP_MIN = 10
+
+
+# 合法句末标点：用于判断 original 是否被截断（不以这些结尾 = 可能被截断）
+_SENTENCE_END_CHARS = set("。！？～…）」】.!?,;:、:")
+
+
+def _looks_truncated(text: str) -> bool:
+    """判断文本是否像被截断（不以合法句末标记结尾）。
+
+    用于 merge_continuation 的 assume_tail 分支：原回复被截断时必须拼接续写，
+    否则截断无法修复（用户反馈"截断问题非常严重"根因）。
+
+    判定规则（与 text_utils.ends_with_valid_ending 对齐，但本模块避免循环导入）：
+      - 空文本 → 截断
+      - 以标准句末标点结尾 → 完整
+      - 以 emoji 结尾 → 完整
+      - 以 ]/） 结尾（表情包/情绪标签）→ 完整
+      - 其他 → 截断
+    """
+    if not text:
+        return True
+    rstripped = text.rstrip()
+    if not rstripped:
+        return True
+    last = rstripped[-1]
+    # 标准句末标点
+    if last in _SENTENCE_END_CHARS:
+        return False
+    # emoji 范围（粗略覆盖常见 emoji 区段）
+    cp = ord(last)
+    if (0x1F000 <= cp <= 0x1FAFF  # Emoji 1.0-15.0
+        or 0x2600 <= cp <= 0x27BF   # Misc symbols & dingbats
+        or 0xFE00 <= cp <= 0xFE0F   # Variation selectors
+        or cp == 0x200D):           # ZWJ（emoji 组合）
+        return False
+    # 标签结尾（[sticker:xxx] / [emotion:xxx]）
+    if last in "]）":
+        return False
+    return True
+
+
+def merge_continuation(
+    original: str,
+    continuation: str,
+    *,
+    context: str = "",
+    assume_tail: bool = False,
+) -> tuple[str, str]:
+    """把续写内容合并进原回复。返回 (合并结果, 动作)。
+
+    用于截断重试场景：LLM 首轮回复被 max_tokens 截断，重试获取后续内容后合并。
+    assistant-prefill 正常工作时 continuation 是纯尾巴，直接拼接；若 provider
+    不支持 prefill 导致 LLM 重生成完整回复，本函数的三态去重也能避免重复。
+
+    Args:
+        original: 首轮（被截断的）回复内容
+        continuation: 重试返回的续写内容
+        context: 调用场景标识（用于日志追踪）
+        assume_tail: 调用方是否采用 assistant-prefill 续写。
+                    True 时，无边界重叠视为 prefill 成功的纯尾巴直接拼接（'appended'）。
+                    CodeRabbit 复审 I1 评估：长度/字符特征无法可靠区分 prefill 尾巴
+                    vs 人格切换重生成，强行硬判会误伤合法 prefill 尾巴。最终方案：
+                    保持 appended 行为，长度比例 >= 0.7 时记录 warning 便于线上观测。
+                    真正的根因（人格切换）由 N9（recall 超时不降级）+ N10（curator
+                    I/O 减压）避免降级场景产生，而非在合并层硬判。
+                    False 时，无重叠判定为 LLM 重生成完整回复，保留较长者。
+                    子串检测（分支 2/3）始终优先于 assume_tail，能拦截 LLM 重生成
+                    含 original 的扩展场景（事故 ID 2110 根因）。
+
+    动作取值：
+    - 'discarded'：丢弃 continuation（重复或较短的重生成），保留 original
+    - 'replaced'：用 continuation 替换 original（continuation 是扩展或较长的重生成）
+    - 'spliced'：去边界重叠后拼接（真正的续写，overlap>10 字符）
+    - 'appended'：无重叠但 assume_tail=True，直接拼接（信任 prefill 尾巴）
+
+    分支：
+    1. continuation 空/过短(<=5字符) → 'discarded'
+    2. continuation 是 original 子串 → LLM 重复，'discarded'
+    3. original 是 continuation 子串 → continuation 是扩展，'replaced'
+    4. 边界重叠(original 末尾 == continuation 开头，>10字符) → 'spliced'
+    5. 无重叠 + assume_tail=False → 判定为重生成，保留较长者（'replaced'/'discarded'）
+    6. 无重叠 + assume_tail=True → 视为 prefill 尾巴，'appended'（直接拼接）
+    """
+    if not continuation or len(continuation) <= 5:
+        metrics.inc("llm.merge_continuation.discarded")
+        return original, "discarded"
+    if not original:
+        metrics.inc("llm.merge_continuation.replaced")
+        return continuation, "replaced"
+
+    o_lower = original.lower()
+    c_lower = continuation.lower()
+
+    # 1/2. continuation 是 original 的子串 → LLM 重复了，丢弃
+    # CodeRabbit #6：原条件 `c_lower in o_lower` 会让短续写（如"好的"）偶然命中
+    # 正文中的重复措辞而被误杀。改为：仅当 continuation 较长（>=2*_MERGE_OVERLAP_MIN，
+    # 子串匹配更可靠）或出现在 original 尾部区域（真正的重复续写才会出现在尾巴）时
+    # 才判为重复。保留对 genuinely repeated trailing content 的丢弃语义。
+    if c_lower in o_lower and (
+        len(continuation) >= 2 * _MERGE_OVERLAP_MIN
+        or c_lower in o_lower[-(len(continuation) + 100):]
+    ):
+        logger.info("llm_cleanup.merge_continuation.duplicate_discarded",
+                    context=context, original_len=len(original),
+                    continuation_len=len(continuation))
+        metrics.inc("llm.merge_continuation.discarded")
+        return original, "discarded"
+
+    # 3. original 是 continuation 的子串 → continuation 是 original 的扩展，替换
+    if o_lower in c_lower:
+        logger.info("llm_cleanup.merge_continuation.extended_replaced",
+                    context=context, original_len=len(original),
+                    continuation_len=len(continuation))
+        metrics.inc("llm.merge_continuation.replaced")
+        return continuation, "replaced"
+
+    # 4. 边界重叠检测：original 末尾与 continuation 开头是否相同
+    overlap = 0
+    check_len = min(len(original), len(continuation), 100)
+    for i in range(check_len, _MERGE_OVERLAP_MIN, -1):
+        if original[-i:].lower() == continuation[:i].lower():
+            overlap = i
+            break
+
+    if overlap > _MERGE_OVERLAP_MIN:
+        merged = original + continuation[overlap:]
+        logger.info("llm_cleanup.merge_continuation.spliced",
+                    context=context, original_len=len(original),
+                    continuation_len=len(continuation), overlap=overlap,
+                    merged_len=len(merged))
+        metrics.inc("llm.merge_continuation.spliced")
+        return merged, "spliced"
+
+    # 5/6. 无重叠的两种处理路径
+    if assume_tail:
+        # 调用方采用 assistant-prefill 续写。无重叠的 continuation 有两种可能：
+        # (a) prefill 成功的纯尾巴（如 original 末尾"...散步"，continuation
+        #     "回来后我们一起吃了晚饭"——无边界重叠但语义上是续写）；
+        # (b) prefill 失效后 LLM 重生成完全不同的回复（如事故 ID 2112 的人格
+        #     切换：original 是小狼段、continuation 是小妲段）。
+        #
+        # CodeRabbit 复审 I1 修复方案评估：
+        # - 长度比例无法区分两种场景：合法 prefill 尾巴可能与 original 长度
+        #   接近（如 original 是前半段、continuation 是后半段），人格切换的
+        #   重生成也可能长度相近。
+        # - 字符重叠率也无法可靠区分：合法续写可能用词完全不同（如"散步"→
+        #   "回来后吃饭"），人格切换可能恰好共享"我们"等常用词。
+        # 强行用启发式判定会误伤合法 prefill 尾巴，导致内容缺失。
+        #
+        # 最终方案：保持 appended 行为（信任 prefill），但记录 warning 日志
+        # 便于线上观测实际触发频率。真正的根因（人格切换）由 N9/N10 修复
+        # 避免降级场景产生，而非在合并层硬判。
+        #
+        # I1 观测增强：在日志之外增加 metrics 计数。dashboard 上若
+        # `llm.merge_continuation.appended_long` 在短时间内多次触发，
+        # 说明 N9/N10 防线可能失效（prefill 频繁失效导致重生成），值班可
+        # 通过 metrics 仪表盘快速感知，无需翻日志。
+        # 治本修复（"一个问题重复两遍"事故根因）：
+        # 走到这里说明 continuation 与 original 无边界重叠（上方分支 4 spliced 未命中）。
+        # 无重叠 = assistant-prefill 失效（provider 不支持 prefill，LLM 重生成完整回复
+        # 而非续写真正的尾巴）。此时若 appended 直接拼接，最终回复会包含两遍相似内容
+        # （改写/语序调整的重复漏过分支 2 的精确子串检测）。
+        #
+        # P0 修复（用户反馈"截断问题非常严重"根因）：
+        # 原"无重叠一律丢弃"策略导致截断无法修复——agnes 流式常不发 finish_reason，
+        # 触发 stream_no_finish_retry 重试，但 merge_continuation 把续写丢弃了，
+        # 回复停留在截断位置（如"...大概是【6"被原样返回）。
+        # 修复：区分"原回复被截断"vs"原回复可能完整"两种场景：
+        #   - 原回复不以合法句末标记结尾（被截断）→ 必须拼接续写，否则截断无法修复
+        #   - 原回复以合法句末标记结尾（可能完整）→ 丢弃无重叠续写（避免重复）
+        # 代价：截断场景可能引入少量重复，但比截断更可接受——用户明确反馈截断比重复严重。
+        if _looks_truncated(original):
+            merged = original + continuation
+            logger.warning("llm_cleanup.merge_continuation.truncated_appended",
+                           context=context, original_len=len(original),
+                           continuation_len=len(continuation),
+                           note="original_truncated_append_to_recover")
+            metrics.inc("llm.merge_continuation.truncated_appended")
+            return merged, "appended"
+        # 原回复可能完整，丢弃无重叠续写（避免重复）
+        logger.warning("llm_cleanup.merge_continuation.assume_tail_no_overlap_discarded",
+                       context=context, original_len=len(original),
+                       continuation_len=len(continuation),
+                       note="original_complete_discard_no_overlap_continuation")
+        metrics.inc("llm.merge_continuation.assume_tail_no_overlap_discarded")
+        return original, "discarded"
+
+    # assume_tail=False：判定为重生成（assistant-prefill 失效，LLM 重新生成完整回复）
+    # 保留较长者，避免两份完整回复拼接产生重复（生产事故根因）
+    if len(continuation) > len(original):
+        logger.warning("llm_cleanup.merge_continuation.regeneration_replaced",
+                       context=context, original_len=len(original),
+                       continuation_len=len(continuation),
+                       note="no_overlap_kept_longer")
+        metrics.inc("llm.merge_continuation.replaced")
+        return continuation, "replaced"
+
+    logger.info("llm_cleanup.merge_continuation.regeneration_discarded",
+                context=context, original_len=len(original),
+                continuation_len=len(continuation),
+                note="no_overlap_kept_original")
+    metrics.inc("llm.merge_continuation.discarded")
+    return original, "discarded"
 

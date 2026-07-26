@@ -25,10 +25,8 @@ export const useUiStore = defineStore('ui', () => {
   // 草元素音效：开关与音量（引擎内部已持久化到 localStorage）
   const soundFx = ref(sound.isEnabled())
   const soundVolume = ref(sound.getVolume())
-  // 草元素光标：小叶片光标，默认关闭（Windows 安装包卡顿反馈）
-  // 用户反馈：默认开启导致 Windows 卡顿，改为默认关闭，需要时在设置页开启
-  // 触屏设备自动不启用（DendroCursor 组件内 prefers-reduced-motion / pointer: coarse 降级）
-  const dendroCursor = ref(localStorage.getItem('ui.dendroCursor') === 'true')
+  // 草元素光标：小叶片光标，默认开启（触屏设备自动不启用）
+  const dendroCursor = ref(localStorage.getItem('ui.dendroCursor') !== 'false')
 
   // 亮度控制：0.5 (暗) ~ 1.5 (亮)，默认 1.05（比原来稍亮）
   const autoBrightness = ref(localStorage.getItem(AUTO_KEY) !== 'false') // 默认开启自动

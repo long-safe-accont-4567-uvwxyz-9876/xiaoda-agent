@@ -1320,12 +1320,15 @@ class MemoryManager:
     def _is_retrieval_simple(self, query: str) -> bool:
         """A1: 判断查询是否足够简单，可跳过查询变换直接走混合检索
 
+        P0 修复（用户要求"取消对话通道分类机制"）：
+        移除对 SIMPLE_TASK_KEYWORDS 的依赖（已从 config.py 删除）。
+        仅保留基于有效长度的启发式判断——这是检索层的查询变换优化，
+        不影响对话主路径（所有消息仍统一走主路径，由 LLM 自行决定）。
+
         判定规则（按顺序短路）:
         1. 计算有效长度（中文字符 ×2 + 其他字符 ×1），<=15 直接判定为简单
-        2. 命中 SIMPLE_TASK_KEYWORDS["chat"] → 简单
-        3. 命中 SIMPLE_TASK_KEYWORDS["complex"] → 非简单
-        4. 有效长度 <=20 且无复杂关键词 → 简单
-        5. 否则 → 非简单
+        2. 有效长度 <=20 → 简单（中等长度，无需查询变换）
+        3. 否则 → 非简单（长查询需要查询变换提升检索质量）
         """
         if not query:
             return True
@@ -1342,28 +1345,11 @@ class MemoryManager:
         if effective_len <= 15:
             return True
 
-        # 规则 2 & 3：关键词匹配
-        try:
-            from config import SIMPLE_TASK_KEYWORDS
-            chat_keywords = SIMPLE_TASK_KEYWORDS.get("chat", [])
-            complex_keywords = SIMPLE_TASK_KEYWORDS.get("complex", [])
-        except (ImportError, AttributeError):
-            chat_keywords = []
-            complex_keywords = []
-
-        for kw in chat_keywords:
-            if kw in query:
-                return True
-
-        for kw in complex_keywords:
-            if kw in query:
-                return False
-
-        # 规则 4：中等长度且无复杂关键词
+        # 规则 2：中等长度无需查询变换
         if effective_len <= 20:
             return True
 
-        # 规则 5
+        # 规则 3：长查询需要查询变换
         return False
 
     def _suggest_k(self, query: str, default_k: int = 8) -> int:
@@ -1429,17 +1415,29 @@ class MemoryManager:
 
     async def retrieve_memories(self, query: str, k: int = 5, context: str = "",
                                  _retry_attempted: bool = False,
-                                 scope: Any | None = None) -> list[dict]:
+                                 scope: Any | None = None,
+                                 conv_user_id: str = "") -> list[dict]:
+        """检索记忆。
+
+        P0 修复（上下文污染根因）：新增 conv_user_id 参数。
+        根因：_search_conversation_logs 查 conversation_logs 时不过滤 user_id，
+              导致其他用户/会话的原始对话被注入当前上下文（用户反馈
+              "那是之前的数据库里面的原文直接蹦出来了"）。
+        修复：conv_user_id 非空时，_search_conversation_logs 按 user_id 过滤，
+              仅返回当前用户的对话记录。query_cache 也按 user_id 隔离。
+        """
         import config
         if scope is None:
             from memory.scope import Scope
             scope = Scope()
         # 查询语义缓存：命中则直接返回，跳过完整检索流水线
+        # P0 修复：cache key 包含 conv_user_id，防止跨用户缓存污染
         if getattr(config, 'QUERY_CACHE_ENABLED', True):
+            _cache_key = f"{conv_user_id}::{query}" if conv_user_id else query
             logger.debug("memory.retrieve_stage", stage="query_cache_get", query=query[:50])
-            cached = await self._query_cache.get(query)
+            cached = await self._query_cache.get(_cache_key)
             if cached is not None:
-                logger.info("memory.cache_hit", query=query[:100])
+                logger.info("memory.cache_hit", query=query[:100], conv_user_id=conv_user_id)
                 return cached
 
         # 意图路由：按查询意图调整 k 与检索通道（闲聊型跳过 KG/Reranker）
@@ -1463,7 +1461,8 @@ class MemoryManager:
         # 这让小妲能回答"昨天发生了什么"这类纯时间查询
         # 修复：时间检索返回空时不短路，继续走语义检索兜底，避免"不知道/忘记了"
         _t_temporal = time.time()
-        temporal_results = await self._try_temporal_search(query, k, scope=scope, include_raw=True)
+        temporal_results = await self._try_temporal_search(
+            query, k, scope=scope, include_raw=True, conv_user_id=conv_user_id)
         _temporal_ms = int((time.time() - _t_temporal) * 1000)
         if _temporal_ms > 2000:
             logger.warning("memory.temporal_search_slow",
@@ -1535,9 +1534,9 @@ class MemoryManager:
             if results:
                 results = self._dedup_by_content_similarity(results)
 
-            # 写入缓存
+            # 写入缓存（P0: 使用 user_id 隔离的 cache key）
             if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
-                await self._query_cache.put(query, results)
+                await self._query_cache.put(_cache_key, results)
             return results
 
         # 查询变换：改写 + 扩展
@@ -1619,9 +1618,9 @@ class MemoryManager:
         if len(results) > _final_k:
             results = results[:_final_k]
 
-        # 写入缓存
+        # 写入缓存（P0: 使用 user_id 隔离的 cache key）
         if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
-            await self._query_cache.put(query, results)
+            await self._query_cache.put(_cache_key, results)
 
         # 检索命中后批量递增 access_count（passive_use）
         # 修复：此前 increment_access_count 从未被调用，导致记忆永远无法进入 PERMANENT 状态
@@ -1638,7 +1637,8 @@ class MemoryManager:
 
     async def _try_temporal_search(self, query: str, k: int,
                                     scope: Any | None = None,
-                                    include_raw: bool = False) -> list[dict] | None:
+                                    include_raw: bool = False,
+                                    conv_user_id: str = "") -> list[dict] | None:
         """时间型查询：直接查 conversation_logs 原始对话。
 
         根本修复：时间查询最需要的是完整的原始对话记录，不是经过 FTS/reranker/CRAG
@@ -1646,6 +1646,8 @@ class MemoryManager:
 
         查找顺序：conversation_logs → episodic_memories（兜底）
         无时间词返回 None（调用方继续走常规语义检索）。
+
+        P0 修复：conv_user_id 非空时按 user_id 过滤，防止跨用户对话泄露。
         """
         if scope is None:
             from memory.scope import Scope
@@ -1659,7 +1661,7 @@ class MemoryManager:
             # 第一优先：直接查 conversation_logs 原始对话（最可靠）
             # 时间查询用户要的是"发生了什么"，原始对话比蒸馏摘要更准确
             _conv_results = await self._search_conversation_logs(
-                start_ts, end_ts, scope, k * 4)
+                start_ts, end_ts, scope, k * 4, conv_user_id=conv_user_id)
             if _conv_results:
                 logger.debug("memory.temporal_convlogs_hit",
                              query=query[:50], count=len(_conv_results))
@@ -1690,17 +1692,22 @@ class MemoryManager:
             return None
 
     async def _search_conversation_logs(self, start_ts: float, end_ts: float,
-                                         scope: Any | None, k: int) -> list[dict]:
+                                         scope: Any | None, k: int,
+                                         conv_user_id: str = "") -> list[dict]:
         """查 conversation_logs 原始对话，格式化为记忆格式返回。
 
-        不做 user_id 过滤（conversation_logs 的 user_id 是 QQ/微信等外部 ID，
-        与 scope.user_id='default' 不匹配），直接按时间范围查全部对话。
+        P0 修复（上下文污染根因）：按 conv_user_id 过滤。
+        根因：原实现不过滤 user_id，导致其他用户/会话的原始对话被注入当前上下文。
+              用户反馈"那是之前的数据库里面的原文直接蹦出来了"——AI 看到了不属于
+              当前用户的对话记录，导致上下文混乱、重复回复、角色出戏。
+        修复：conv_user_id 非空时按 user_id 过滤，仅返回当前用户的对话。
+              conv_user_id 为空时保留原行为（向后兼容，但不应在新代码中使用）。
         """
         import time as _time
         try:
-            # 不传 user_id，查时间范围内的所有对话
+            # P0 修复：按 conv_user_id 过滤，防止跨用户对话泄露
             raw = await self.memory.get_conversations_by_time_range(
-                start_ts, end_ts, user_id="", limit=k
+                start_ts, end_ts, user_id=conv_user_id, limit=k
             )
             if not raw:
                 return []
@@ -2569,9 +2576,9 @@ class MemoryManager:
                 role = msg.get("role", "")
                 content = msg.get("content", "")
                 if role == "user" and content:
-                    full_text_parts.append(f"用户说: {content}")
+                    full_text_parts.append(f"你说了：{content}")
                 elif role == "assistant" and content:
-                    full_text_parts.append(f"小妲: {content}")
+                    full_text_parts.append(f"我回应：{content}")
             full_text = "；".join(full_text_parts)[:3000]
 
             if self.distiller:
@@ -2994,10 +3001,14 @@ class MemoryManager:
                 content = re.sub(r'\[\w+/stickers:[^\]]*\]', '', content)
                 content = content.strip()
             if role == "user" and content:
-                parts.append(f"用户说: {content[:400]}")
+                # P0 修复（数据库原文蹦出 + 旁观者视角根因）：
+                # 原格式 "用户说: xxx" 是数据库字段名格式，LLM 回复时会模仿。
+                # 改为第一人称叙事格式 "你说了：xxx"（用户=你），避免 LLM 直接引用 "用户说:"。
+                parts.append(f"你说了：{content[:400]}")
             elif role == "assistant" and content:
                 # 标记为回复内容，避免被误认为事实性记忆
-                parts.append(f"小妲回复: {content[:400]}")
+                # 第一人称（小妲=我）让 LLM 把记忆当成自己的经历，而非旁观者复述
+                parts.append(f"我回应：{content[:400]}")
 
         total_budget = 1500
         joined = "；".join(parts)

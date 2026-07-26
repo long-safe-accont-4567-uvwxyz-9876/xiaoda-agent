@@ -35,73 +35,10 @@ async def _apply_model_overrides(core: Any) -> None:
 
     _register_env_providers(cfg, env_values, os)
     _register_all_providers(cfg, core, load_provider_key, register_into_router)
-    # 启动顺序：先恢复 chat 主路由偏好，再用逐路由覆盖修正所有任务。
-    # 关键：_restore_chat_model 不再调用 set_chat_model（会全局同步覆盖其他路由），
-    # 因此顺序不会导致覆盖冲突。_apply_route_overrides 是最终权威源。
-    logger.info("webui.before_restore_chat_model")
-    _restore_chat_model(cfg, core)
-    logger.info("webui.after_restore_chat_model")
     logger.info("webui.before_apply_route_overrides")
     _apply_route_overrides(cfg, core, ROUTE_TABLE)
     logger.info("webui.after_apply_route_overrides")
-    # 一致性检查：确保 _current_chat_model 与 ROUTE_TABLE["chat"] 同步。
-    # _apply_route_overrides 是最终权威源，可能覆盖了 _restore_chat_model 设置的 chat 路由。
-    # 必须同步 _current_chat_model，否则 GET /models/chat-model 返回值与实际路由不一致。
-    _sync_current_chat_model(core, ROUTE_TABLE)
-
-
-def _sync_current_chat_model(core: Any, ROUTE_TABLE: Any) -> None:
-    """启动后一致性检查：同步 _current_chat_model 与 ROUTE_TABLE["chat"]。
-
-    解决两套持久化字段（models.chat_model 与 models.routes.chat）不一致的问题。
-    以 ROUTE_TABLE["chat"] 为权威源（由 _apply_route_overrides 从 models.routes 恢复），
-    确保 GET /models/chat-model 返回值与实际请求路由一致。
-
-    同时修复持久化不一致：若 models.chat_model 与 models.routes.chat 不同步，以路由表为准回写。
-    """
-    chat_route = ROUTE_TABLE.get("chat", {})
-    rt_provider = chat_route.get("client", "")
-    rt_model = chat_route.get("model", "")
-    if not rt_provider or not rt_model:
-        return
-
-    # 同步内存状态
-    core.router._current_chat_model = {"provider": rt_provider, "model_id": rt_model}
-
-    # 同步 DEFAULT_PROVIDER
-    try:
-        from config import set_default_provider as _set_default_provider
-        _set_default_provider(rt_provider)
-    except Exception:
-        logger.debug("server.sync_default_provider_failed", exc_info=True)
-
-    # 修复持久化不一致：若 models.chat_model 与 ROUTE_TABLE["chat"] 不同步，回写修复
-    try:
-        from web.config_service import get_config_service
-        cfg = get_config_service()
-        saved = cfg.get("models.chat_model")
-        if not (isinstance(saved, dict) and saved.get("provider") == rt_provider
-                and saved.get("model_id") == rt_model):
-            logger.warning(
-                "webui.chat_model_consistency_repair "
-                "saved={}/{} route_table={}/{} — syncing to route_table",
-                (saved or {}).get("provider", ""), (saved or {}).get("model_id", ""),
-                rt_provider, rt_model,
-            )
-            cfg.set("models.chat_model", {"provider": rt_provider, "model_id": rt_model})
-    except Exception as e:
-        logger.warning("webui.chat_model_consistency_repair_failed error={}", str(e))
-
-    logger.info("webui.chat_model_synced provider={} model={}", rt_provider, rt_model)
-
-    # 标记启动完成，启用 config_service._save() 一致性验证
-    # 此后任何 _save() 都会验证 _data["models"] 与 ROUTE_TABLE 一致，
-    # 防止 _data 被引用变异污染后持久化到磁盘
-    try:
-        from web.config_service import get_config_service
-        get_config_service().mark_startup_complete()
-    except Exception:
-        logger.debug("server.mark_startup_complete_failed", exc_info=True)
+    _restore_chat_model(cfg, core)
 
 
 def _register_env_providers(cfg: Any, env_values: Any, os_module: Any) -> None:
@@ -117,16 +54,23 @@ def _register_env_providers(cfg: Any, env_values: Any, os_module: Any) -> None:
             "agnes", "openai",
             os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1"), "Agnes AI"
         ),
+        # P0 修复（硬编码/ollama 默认启用根因）：
+        # 原实现 _default_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+        # 总是返回非空值（env 未设也回退到 localhost:11434），导致 ollama 永远被注册，
+        # 即使用户没配置也会尝试连接 → 持续报错（日志中 custom_provider.registered id=ollama）。
+        # 修复：ollama 的 _default_url 设为空串，仅当 env_values（.env）显式配置时才注册。
+        # 其他 provider 的 _default_url 是 SaaS 云端固定端点（非用户自定义），保留默认值正确。
         "OLLAMA_BASE_URL": (
             "ollama", "openai",
-            os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"), "Ollama 本地大模型"
+            "", "Ollama 本地大模型"
         ),
     }
     known_env_keys = list(_KNOWN_ENV_PROVIDERS.keys())
     for env_key, (pid, fmt, _default_url, label) in _KNOWN_ENV_PROVIDERS.items():
         if env_key == "OLLAMA_BASE_URL":
+            # ollama：仅当 .env 显式配置 OLLAMA_BASE_URL 时才注册（_default_url 为空串）
             api_key = "ollama"
-            base_url = env_values.get(env_key, "").strip() or _default_url
+            base_url = env_values.get(env_key, "").strip()
             if not base_url:
                 continue
         else:
@@ -176,6 +120,13 @@ def _register_all_providers(cfg: Any, core: Any, load_provider_key: Any, registe
         key=lambda kv: _provider_sort_key(kv, all_keys_order)
     )
     for pid, p in sorted_providers:
+        # P0 修复（ollama 默认启用根因 2/2）：
+        # 即使旧版本 bug 已把 ollama 写入持久化 config（base_url=localhost:11434），
+        # 这里也要拦住：ollama 是本地服务，必须 OLLAMA_BASE_URL 环境变量显式配置才注册。
+        # 云端 provider（siliconflow/openrouter 等）不受此约束 —— 它们的 URL 是固定的 SaaS 端点。
+        if pid == "ollama" and not os.getenv("OLLAMA_BASE_URL", "").strip():
+            logger.info("webui.skip_ollama_no_env reason=OLLAMA_BASE_URL not set, skipping stale config entry")
+            continue
         key = load_provider_key(pid)
         if key and p.get("enabled", True):
             try:
@@ -221,17 +172,8 @@ def _apply_route_overrides(cfg: Any, core: Any, ROUTE_TABLE: Any) -> None:
 def _restore_chat_model(cfg: Any, core: Any) -> None:
     """恢复上次聊天模型（从 config_service 的 models.chat_model 读取）。
 
-    关键修复：不再调用 set_chat_model()，因为该方法会全局同步所有聊天任务
-    （chat_pro/chat_flash/chat_mini 等）到同一 provider，导致 _apply_route_overrides
-    已恢复的逐路由用户设置被覆盖。例如用户设 chat_pro=agnes、chat=mimo，
-    set_chat_model("mimo") 会把 chat_pro 也覆盖成 mimo。
-
-    正确行为：启动时只恢复 _current_chat_model（影响 GET /models/chat-model 返回值）
-    和 ROUTE_TABLE["chat"] 主路由。其他路由由 _apply_route_overrides 逐条恢复，
-    保留用户的细粒度配置。_apply_route_overrides 在本函数之后执行，可覆盖 chat
-    路由的 client/model，确保持久化配置为最终权威源。
-
-    fallback 时也仅更新 _current_chat_model，不修改 ROUTE_TABLE，避免 sticky fallback。
+    注意：此函数只做"恢复"，不做"持久化"。fallback 时禁止调用 set_chat_model，
+    否则会把 mimo 重新写入 config，覆盖用户原选择，形成 sticky fallback。
     """
     chat_model = cfg.get("models.chat_model")
     if not (isinstance(chat_model, dict) and chat_model.get("provider") and chat_model.get("model_id")):
@@ -239,76 +181,34 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
         return
     provider = chat_model["provider"]
     model_id = chat_model["model_id"]
+    # 检查 ROUTE_TABLE["chat"] 当前值（可能已被 _apply_route_overrides 修改）
     from model_router import ROUTE_TABLE
     current_client = ROUTE_TABLE.get("chat", {}).get("client", "")
     current_model = ROUTE_TABLE.get("chat", {}).get("model", "")
     logger.info("webui.chat_model_restore_attempt saved={}/{} current_route={}/{}",
                 provider, model_id, current_client, current_model)
-
-    # 确保自定义 provider 已注册（不注册则 route 请求会失败）
-    if provider not in ("mimo", "agnes"):
-        _ensure_custom_provider_for_restore(provider, core)
-
-    # 检查 provider 是否可用（已注册且有客户端）
-    # 使用 getattr 安全访问，避免测试 FakeRouter 或非标准 router 缺少属性
-    # agnes 可能通过 _agnes_client（内置 transport）或 _custom_clients（WebUI 注册）存在
-    provider_ok = True
-    custom_clients = getattr(core.router, "_custom_clients", {})
-    if provider == "mimo":
-        provider_ok = bool(getattr(core.router, "_client", None))
-    elif provider == "agnes":
-        provider_ok = (
-            bool(getattr(core.router, "_agnes_client", None))
-            or custom_clients.get("agnes") is not None
+    try:
+        core.router.set_chat_model(provider, model_id)
+        logger.info("webui.chat_model_restored provider={} model={}", provider, model_id)
+    except Exception as e:
+        # 必须捕获 Exception：LLMError 继承 AppException 不在原 (KeyError, ValueError,
+        # AttributeError, OSError) 范围内，自定义 provider 注册失败时会导致启动崩溃
+        logger.warning(
+            "webui.chat_model_restore_failed provider={} model={} "
+            "error={} fallback_to_mimo_in_memory_only", provider, model_id, str(e)
         )
-    else:
-        provider_ok = custom_clients.get(provider) is not None
-
-    if provider_ok:
-        # 只更新 chat 主路由和 _current_chat_model，不触发全局同步
-        ROUTE_TABLE["chat"]["model"] = model_id
-        ROUTE_TABLE["chat"]["client"] = provider
-        # 同步更新 DEFAULT_PROVIDER，使子代理、成本统计等跟随
-        from config import set_default_provider as _set_default_provider
-        _set_default_provider(provider)
-        core.router._current_chat_model = {"provider": provider, "model_id": model_id}
-        logger.info("webui.chat_model_restored provider={} model={} (no_sync, overrides_preserved)",
-                     provider, model_id)
-    else:
-        # provider 不可用：只更新 _current_chat_model 供 API 返回，不污染 ROUTE_TABLE
-        # 请求路由时 _select_client_for_provider 会检测不可用并走 fallback 链
+        # 仅修改内存中的 ROUTE_TABLE，不调用 set_chat_model 避免重新持久化 mimo
+        # 这样用户下次切换模型时，config 中仍是原选择，不会被 sticky mimo 覆盖
         try:
             from model_router import MIMO_MODEL
+            chat_entry = ROUTE_TABLE.get("chat")
+            if chat_entry is not None:
+                chat_entry["model"] = MIMO_MODEL
+                chat_entry["client"] = "mimo"
             core.router._current_chat_model = {"provider": "mimo", "model_id": MIMO_MODEL}
-            logger.info("webui.chat_model_fallback_current_only provider=mimo model={} "
-                        "route_table_preserved={}/{}", MIMO_MODEL, current_client, current_model)
+            logger.info("webui.chat_model_fallback_in_memory provider=mimo model={}", MIMO_MODEL)
         except (ImportError, KeyError, AttributeError):
             logger.debug("server.set_chat_model_fallback_error", exc_info=True)
-
-
-def _ensure_custom_provider_for_restore(provider: str, core: Any) -> None:
-    """为 _restore_chat_model 确保自定义 provider 已注册到 router。"""
-    if provider in getattr(core.router, "_custom_clients", {}):
-        return
-    try:
-        from web.config_service import get_config_service
-        from web._provider_keys import load_provider_key
-        from web.custom_providers import register_into_router
-        cfg = get_config_service()
-        record = cfg.get(f"models.providers.{provider}")
-        if record:
-            api_key = load_provider_key(provider)
-            if api_key:
-                register_into_router(
-                    core.router, provider,
-                    record.get("format", "openai"),
-                    record.get("base_url", ""),
-                    api_key,
-                )
-                logger.info("webui.provider_registered_for_restore provider={}", provider)
-    except Exception as e:
-        logger.warning("webui.provider_register_for_restore_failed provider={} error={}",
-                        provider, str(e))
 
 
 async def _start_user_mcp_servers(core: Any) -> None:
@@ -486,24 +386,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
         await _start_services(app, core)
         logger.info("webui.lifespan.ready")
 
-    # 事件循环延迟监控：每 1s 检测一次，若实际间隔 >2s 说明事件循环被同步操作阻塞
-    # 用于定位记忆编码路径中残留的同步阻塞点
-    async def _loop_lag_monitor() -> None:
-        import time as _time
-        while True:
-            _t0 = _time.monotonic()
-            await asyncio.sleep(1.0)
-            _lag = _time.monotonic() - _t0 - 1.0
-            if _lag > 2.0:
-                logger.warning("event_loop.blocked",
-                               lag_seconds=round(_lag, 1),
-                               hint="事件循环被同步操作阻塞，排查 jieba/sqlite/LLM 同步调用")
-
-    _loop_lag_task = asyncio.create_task(_loop_lag_monitor())
+    # 启动事件循环阻塞 watchdog：检测同步阻塞并打印线程栈定位根因
+    # 根因：后台任务集体卡 257-265s，_spawn timeout 无法取消同步阻塞
+    _stop_watchdog = None
+    try:
+        from core.background_tasks import start_event_loop_watchdog, stop_event_loop_watchdog
+        start_event_loop_watchdog()
+        _stop_watchdog = stop_event_loop_watchdog
+    except Exception as e:
+        logger.warning("webui.watchdog_start_failed error={}", str(e))
 
     yield
 
-    _loop_lag_task.cancel()
+    # 停止 watchdog
+    if _stop_watchdog is not None:
+        try:
+            _stop_watchdog()
+        except Exception:
+            pass
 
     logger.info("webui.lifespan.shutdown")
     await _shutdown_lifespan(app, core, owns_core)
@@ -686,13 +586,12 @@ def create_app() -> FastAPI:
     from web.routers.market import router as market_router
     from web.routers.mail_manage import router as mail_manage_router
     from web.routers.workflows import router as workflows_router
-    from web.routers.workspace import router as workspace_router
 
     for r in (auth_router, chat_router, system_router, agents_router,
               models_router, tools_router, mcp_router, insight_router,
               schedule_router, media_router, health_router, plugins_router,
               setup_router, model_discovery_router, market_router,
-              mail_manage_router, workflows_router, workspace_router, system_public_router):
+              mail_manage_router, workflows_router, system_public_router):
         app.include_router(r, prefix="/api/v1")
 
     from web.ws_hub import router as ws_router

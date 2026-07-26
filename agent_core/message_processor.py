@@ -16,13 +16,15 @@ from datetime import datetime
 from typing import Any, TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
+import openai as _openai_mod  # P0 Task 1.8：用于捕获 BadRequestError/APIError
+
 
 from utils.common import safe_int as _safe_int
 
 from loguru import logger
 
 from config import (MIMO_MODEL, AGENT_CONFIG, build_safe_system_prompt,
-                    SIMPLE_TASK_KEYWORDS, PRO_TASK_KEYWORDS, TTS_ASYNC_MODE,
+                    TTS_ASYNC_MODE,
                     SIMPLE_CHAT_FASTPATH, STREAM_TEXT_PUSH, get_agent_display_name)
 from prompt_builder import build_scene_aware_prompt
 from core.chat_processor import ChatProcessor
@@ -34,8 +36,8 @@ from emotion.emotion_enum import CN_TO_EN, is_unified, ensure_emotion_tag
 from tool_engine.tool_registry import to_openai_tools
 from utils.text_utils import (has_dsml_tool_calls, parse_dsml_tool_calls,
                               humanize, encode_image_to_base64, strip_reasoning,
-                              strip_dsml)
-from utils.llm_cleanup import deduplicate_multi_reply
+                              strip_dsml, ends_with_valid_ending, is_reply_likely_complete)
+from utils.llm_cleanup import deduplicate_multi_reply, merge_continuation
 
 # 从 _shared 导入共享常量, 避免重复定义 (该模块极轻量, 无循环导入风险)
 from agent_core._shared import (
@@ -54,72 +56,93 @@ def _get_temperature(model_cfg: dict | None = None) -> float:
     return get_temperature(default=default)
 
 
-# TTS 自动触发冷却：防止 voice_mode 开启时每条回复都生成 TTS 导致"失控"
-# 仅对 _voice_mode 自动触发生效，force_voice（用户显式要求"发语音"）和工具调用不受限
-_TTS_AUTO_COOLDOWN = 8.0  # 自动触发 TTS 最小间隔（秒）
-# CodeRabbit 复审修复：原模块全局 _last_auto_tts_ts: float 会导致跨用户冷却干扰
-# （用户A触发TTS后，用户B的自动TTS被阻塞8秒）。改为按用户隔离的 dict。
-_last_auto_tts_ts: dict[str, float] = {}
-_TTS_COOLDOWN_MAX_USERS = 1000  # FIFO 上限，防止长期运行内存泄漏
+# ── TTS 触发时机控制（v2：移除冷却，改为智能时机判断） ─────────
+# 设计背景：用户反馈 voice_mode 开启后 TTS "失控"——不分场合地每条都触发语音，
+#   连代码块/URL/子 agent 技术回复也朗读。冷却（8s/30s）治标不治本：
+#   只降频率不解决"该不该发"，且只对主路径生效，子 agent 路径完全没冷却。
+# 新方案：4 个触发点统一过 _decide_tts_trigger，用内容适宜性守卫替代冷却。
+#   - force_voice（用户显式"发语音"）→ 信任用户意图，直接通过
+#   - voice_mode（粘性语音模式）→ 必须通过 _is_suitable_for_voice 内容守卫
+#   - 适合语音：自然人语（闲聊/问候/情感/解释）
+#   - 不适合语音：代码块/URL/文件路径/标签/DSML 残留/极短/超长
 
 
-def _get_tts_cooldown_key() -> str:
-    """从请求上下文获取 TTS 冷却键（按用户隔离）。
+def _is_suitable_for_voice(reply: str) -> bool:
+    """判断回复内容是否适合语音朗读（替代原 _should_auto_tts 守卫）。
 
-    优先使用 user_openid（QQ场景稳定标识），其次 user_id，最后 session_id。
-    无任何标识符时回退到 "_global"（保留原全局行为作为兜底）。
+    设计原则：TTS 适合"自然人语"，不适合"技术内容"。
+    voice_mode 开启后每条都过此守卫，避免代码/URL/路径被朗读导致"失控"。
+    force_voice（用户显式要求发语音）不走此守卫，信任用户选择。
     """
-    try:
-        _ctx = _current_request_ctx.get()
-        if _ctx:
-            return _ctx.user_openid or _ctx.user_id or _ctx.session_id or "_global"
-    except (LookupError, AttributeError) as _e:
-        logger.debug("tts.cooldown_key_fallback", error=str(_e))
-    return "_global"
-
-
-def _check_tts_cooldown(force_voice: bool) -> bool:
-    """检查 TTS 自动触发冷却（按用户隔离）。
-
-    Args:
-        force_voice: 用户显式要求"发语音"，不受冷却限制
-    Returns:
-        True 表示在冷却期内应跳过，False 表示可以触发（并已更新时间戳）
-    """
-    if force_voice:
+    if not reply:
         return False
-    _key = _get_tts_cooldown_key()
-    _now = time.time()
-    _last = _last_auto_tts_ts.get(_key, 0.0)
-    if _now - _last < _TTS_AUTO_COOLDOWN:
-        return True  # 在冷却期内，跳过
-    # FIFO 上限保护：超限时淘汰最旧的条目
-    if len(_last_auto_tts_ts) >= _TTS_COOLDOWN_MAX_USERS:
-        _last_auto_tts_ts.pop(next(iter(_last_auto_tts_ts)), None)
-    _last_auto_tts_ts[_key] = _now
-    return False
+    cleaned = reply.strip()
+    if not cleaned or len(cleaned) < 8:
+        return False  # 极短回复不朗读（原阈值 5 太低）
+    if len(cleaned) > 400:
+        return False  # 超长回复（>400字）不朗读，语音太长体验差
+    # 代码块
+    if '```' in cleaned:
+        return False
+    # 代码特征关键字（def/class/import/from/function/const/return）
+    if any(sig in cleaned for sig in ('def ', 'class ', 'import ', 'from ',
+                                       'function ', 'const ', 'return ')):
+        return False
+    # 大括号出现 ≥2 次（JSON/代码块特征）
+    if cleaned.count('{') >= 2 or cleaned.count('}') >= 2:
+        return False
+    # 单层 JSON 对象特征（如 {"key": "value"}，仅 1 对大括号但明显是结构化数据）
+    if '{"' in cleaned or '": "' in cleaned:
+        return False
+    # 任何 URL 都不朗读（原阈值 url_count>=2 太宽松，含 1 个 URL 即视为技术内容）
+    if 'http://' in cleaned or 'https://' in cleaned:
+        return False
+    # 文件路径特征
+    if any(p in cleaned for p in ('/home/', '/usr/', '/var/', '/etc/', '/tmp/',
+                                   '.py', '.js', '.json', '.md', '.txt', '.sh')):
+        return False
+    # 纯标签内容（如 [emotion:xxx] [sticker:xxx]）
+    if cleaned.startswith('[') and cleaned.endswith(']') and ':' in cleaned:
+        return False
+    # 工具结果 / DSML 残留
+    if any(tag in cleaned for tag in ('<tool_result', '<tool_call',
+                                       '[sticker:', '[emotion:')):
+        return False
+    # 纯数字/纯符号（字母与中文字符占比 < 40% 视为非自然语言）
+    letters = [c for c in cleaned if c.isalpha() or '\u4e00' <= c <= '\u9fff']
+    if len(letters) < len(cleaned) * 0.4:
+        return False
+    return True
 
 
 def _should_auto_tts(reply: str) -> bool:
-    """检查回复内容是否适合自动生成 TTS。
+    """[向后兼容别名] 检查回复内容是否适合自动生成 TTS。
 
-    防止 TTS 失控：跳过不适合语音朗读的内容（代码块/URL/标签/极短文本）。
-    force_voice（用户显式要求"发语音"）不受此守卫限制。
+    保留函数名防止外部引用断裂；内部委托给 _is_suitable_for_voice。
     """
-    if not reply or len(reply.strip()) < 5:
+    return _is_suitable_for_voice(reply)
+
+
+def _decide_tts_trigger(reply: str, *, force_voice: bool, voice_mode: bool,
+                        tts_available: bool, tts_enabled: bool) -> bool:
+    """统一 TTS 触发决策：返回 True 才生成语音。
+
+    4 个触发点（greeting 短路 / 主路径 _build_voice_result / 子 agent 串行 / 子 agent 并行）
+    都过此函数，确保守卫逻辑一致，避免子 agent 路径漏守卫导致"失控"。
+
+    时机判断（替代原冷却机制）：
+      - 既非 force_voice 也非 voice_mode → 不触发
+      - TTS 不可用 / 功能降级关闭 / 回复为空或过短 → 不触发
+      - force_voice（用户显式"发语音"）→ 信任用户意图，直接通过（不受守卫限制）
+      - voice_mode（粘性语音模式）→ 必须通过 _is_suitable_for_voice 内容守卫
+    """
+    if not (force_voice or voice_mode):
         return False
-    cleaned = reply.strip()
-    # 跳过含代码块的内容
-    if '```' in cleaned:
+    if not (tts_available and tts_enabled and reply and len(reply.strip()) > 2):
         return False
-    # 跳过 URL 占比过高的内容
-    url_count = cleaned.count('http://') + cleaned.count('https://')
-    if url_count >= 2:
-        return False
-    # 跳过纯标签内容（如 [emotion:xxx] [sticker:xxx]）
-    if cleaned.startswith('[') and cleaned.endswith(']') and ':' in cleaned:
-        return False
-    return True
+    if force_voice:
+        return True  # 用户显式意图，信任选择
+    return _is_suitable_for_voice(reply)
 
 if TYPE_CHECKING:
     from agent_core._shared import RequestContext
@@ -162,7 +185,9 @@ class MessageProcessorMixin:
     """消息处理相关方法的 Mixin，由 AgentCore 组合使用。"""
 
     # ── Harness 验收循环常量 ──────────────────────────────────
-    MAX_VERIFICATION_TURNS = 8          # 最大循环轮次
+    # 重试机制保留：用于兜底异常截断（max_tokens 截断后续写、工具调用后回复不完整补全）。
+    # 用户明确要求保留重试机制，不得缩减。
+    MAX_VERIFICATION_TURNS = 8          # 最大循环轮次（保留原值，用于兜底截断恢复）
     VERIFICATION_WALL_TIMEOUT = 50      # 墙钟超时（秒）
     MAX_CONSECUTIVE_TOOL_FAILURES = 3   # 连续工具失败上限
     LLM_CALL_TIMEOUT = 30               # 单次 LLM 调用超时
@@ -228,32 +253,15 @@ class MessageProcessorMixin:
 
             # 空回复保护：根据 finish_reason 分类处理
             if not reply or not reply.strip():
-                # length: max_tokens 截断，触发"请继续"重试（最多2次）
+                # P0 重构（用户明确要求"不许截断"）：
+                # 移除 length 截断的"请继续"重试逻辑——该 prompt 会污染上下文，
+                # LLM 在后续轮次回应"继续完成"等元词汇，造成角色出戏。
+                # max_tokens 已提升到 131072，正常情况不会触发 length 截断。
+                # 若仍触发（极端情况），直接降级返回提示，由上层 fallback 接管。
                 if _finish_reason == "length":
-                    for _cont_idx in range(2):
-                        try:
-                            messages.append({"role": "assistant", "content": reply or ""})
-                            messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
-                            _cont_result = await asyncio.wait_for(self.router.route(
-                                task_type, messages, temperature=temperature, max_tokens=max_tokens,
-                                user_openid=user_openid, session_id=session_id,
-                            ), timeout=60)
-                            _cont_reply = _cont_result if isinstance(_cont_result, str) else (_cont_result.choices[0].message.content or "")
-                            _cont_reply = self._clean_reply(_cont_reply)
-                            if _cont_reply and _cont_reply.strip():
-                                trace.info("verification.length_retry_success", retry=_cont_idx)
-                                reply = _cont_reply
-                                break
-                        except Exception as _cont_err:
-                            logger.warning("verification.length_retry_failed",
-                                           retry=_cont_idx, error=str(_cont_err))
-                            break
-                    if reply and reply.strip():
-                        pass  # 重试成功，继续走完整性检测
-                    else:
-                        # 重试失败，用 length 专用兜底
-                        trace.warning("verification.empty_first_reply_length_exhausted")
-                        return get_empty_reply_for_finish_reason("length"), []
+                    trace.warning("verification.empty_first_reply_length_no_retry",
+                                  hint="max_tokens=131072 下仍触发 length 截断，直接降级")
+                    return get_empty_reply_for_finish_reason("length"), []
                 elif _finish_reason == "content_filter":
                     # content_filter：内容被安全过滤，直接返回专用提示
                     trace.warning("verification.empty_first_reply_content_filter")
@@ -268,91 +276,157 @@ class MessageProcessorMixin:
                                   finish_reason=_finish_reason)
                     raise RuntimeError(f"empty_reply: LLM 返回空内容（finish_reason={_finish_reason}），触发 fallback")
 
-            # 截断兜底：循环重试直到回复完整或达到最大重试次数，确保用户永不看到截断
-            # 检测三种情况：
-            # 1. 短回复不以句末标点结尾（如"嗯……让我查一下记忆里 7 月16号 7:00-8:"，26字以冒号结尾）
-            # 2. 长回复最后一行很短且不以句末标点结尾（如列表截断"...3"，max_tokens 截断）
-            # 3. N7: 英文推理泄漏（agnes-2.0-flash 截断时泄漏 "Anyway continuing now" 等英文计划/总结）
-            #    last_line 可能很长（≥10 字符）导致原规则漏判，需额外检测
+            # 截断兜底：清洗英文泄漏 + length 截断重试（用户要求保留重试机制）
+            # P0 修复（用户明确要求"我需要重试机制，但是不要给我提前截断了"）：
+            # 原实现移除了所有重试，导致 finish_reason="length" 时直接 force_close，
+            # 回复被截断 mid-sentence + 追加"。"（用户反复反馈"截断问题又出现了"根因）。
+            # 修复策略（双层）：
+            #   1. finish_reason="length" 时：用 assistant-prefill 续写重试（不追加 user message）
+            #      ——这是用户要求的"兜底异常截断"重试机制
+            #   2. 仍不完整时：用句末标点强制闭合（最后兜底）
+            #   3. 英文推理泄漏：纯文本清洗，不触发 LLM 调用
             from utils.llm_cleanup import has_english_reasoning_leak as _has_eng_leak_fn
             from utils.llm_cleanup import strip_english_reasoning_leak as _strip_eng_leak_fn
-            # 跟踪 for 循环是否判定回复完整，避免 force_close 与 for 循环判定矛盾
             _reply_considered_complete = False
-            for _retry_idx in range(3):
+            _reply_rstripped = reply.rstrip()
+            _ends_with_valid = ends_with_valid_ending(_reply_rstripped)
+            _eng_leak = _has_eng_leak_fn(reply)
+            if _eng_leak:
+                # 英文推理泄漏 → 清洗（纯文本处理，不触发 LLM 调用）
+                reply = _strip_eng_leak_fn(reply, context="verification_loop")
                 _reply_rstripped = reply.rstrip()
-                _ends_with_punct = any(_reply_rstripped.endswith(c) for c in "。！？～…）」】.!?")
-                _eng_leak = _has_eng_leak_fn(reply)
-                _just_cleaned_leak = False
-                if _eng_leak:
-                    # N7: 英文推理泄漏 → 清洗后视为不完整，触发重试获取剩余内容
-                    reply = _strip_eng_leak_fn(reply, context="verification_loop")
-                    _reply_rstripped = reply.rstrip()
-                    _ends_with_punct = any(_reply_rstripped.endswith(c) for c in "。！？～…）」】.!?")
-                    _just_cleaned_leak = True
-                # 完整性判定（根因修复）：
-                # - 短回复(<30字符)视为完整，不强制标点（"好的"/"嗯"等）
-                # - 长回复(>=30字符)必须以句末标点结尾，否则视为截断触发重试
-                # - 移除原 len(last_line)>=10 启发式：该规则导致末行较长的截断回复被误判完整
-                # - 清洗后即使有标点也视为不完整（内容被截断，需重试获取剩余部分）
-                # - finish_reason="length" 表示 max_tokens 截断，即使有标点也需重试
-                #   （仅首轮检查，重试后的 finish_reason 由 route() 内部处理）
-                _length_truncated = (_retry_idx == 0 and _finish_reason == "length")
-                if not _just_cleaned_leak and not _length_truncated and (len(reply) < 30 or _ends_with_punct):
+                _ends_with_valid = ends_with_valid_ending(_reply_rstripped)
+                if not reply.strip():
+                    reply = DEGRADED_REPLY
+                    logger.warning("verification.empty_after_leak_strip_degraded")
                     _reply_considered_complete = True
-                    break  # 回复完整
-                logger.warning("verification.incomplete_reply",
-                               reply_len=len(reply), reply_tail=reply[-15:],
-                               retry=_retry_idx, has_eng_leak=_eng_leak)
+            # 完整性判定（P0 修复：emoji 感知 + 信任 LLM finish_reason="stop"）
+            # 根因：原检查只认 "。！？～…）」】.!?」，角色扮演回复常以 emoji 结尾
+            #       （如 "💕"、"😳💗"），被误判不完整 → 追加 "。" → 产生 "💕。"
+            #       丑陋输出 + false-positive 截断警告（用户反复反馈"截断问题又出现了"）
+            # 修复：
+            #   1. 使用 ends_with_valid_ending() 包含 emoji 判定
+            #   2. finish_reason="stop" + 长回复(>=30字符) → 信任 LLM，视为完整
+            #      （模型风格不以标点结尾是正常的，不应强制追加 "。"）
+            if not _eng_leak and is_reply_likely_complete(reply, _finish_reason):
+                _reply_considered_complete = True
+            elif _finish_reason == "length" and reply.strip() and len(reply) > 10:
+                # P0 修复：finish_reason="length" 时用 assistant-prefill 续写重试
+                # 用户明确要求保留重试机制用于兜底异常截断
+                # 关键：不追加 "请继续完成" 等 user message（会污染上下文），
+                #       只追加 assistant 消息让 LLM 从截断处续写
                 try:
-                    messages.append({"role": "assistant", "content": reply})
-                    messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
-                    result2 = await asyncio.wait_for(self.router.route(
-                        task_type, messages, temperature=temperature, max_tokens=max_tokens,
-                        user_openid=user_openid, session_id=session_id,
-                    ), timeout=60)
-                    reply2 = result2 if isinstance(result2, str) else (result2.choices[0].message.content or "")
-                    reply2 = self._clean_reply(reply2)
-                    if reply2 and len(reply2) > 5:
-                        _reply_lower = reply.lower()
-                        _reply2_lower = reply2.lower()
-                        if _reply2_lower in _reply_lower:
-                            logger.warning("verification.retry_duplicate",
-                                           retry_len=len(reply2))
-                            # 重试重复 = LLM 认为回复已完成（如以 emoji 结尾无标点）
-                            # 视为完整，不再 force_close 添加多余"。"
-                            _reply_considered_complete = True
-                            break  # 重试重复，不再继续
-                        else:
-                            _overlap = 0
-                            _check_len = min(len(reply), len(reply2), 80)
-                            for i in range(_check_len, 10, -1):
-                                if reply[-i:].lower() == reply2[:i].lower():
-                                    _overlap = i
-                                    break
-                            if _overlap > 10:
-                                reply = reply + reply2[_overlap:]
-                            else:
-                                reply = reply + reply2
-                            logger.info("verification.incomplete_retry_success",
-                                        final_len=len(reply), retry=_retry_idx)
+                    _retry_messages = list(messages)
+                    _retry_messages.append({"role": "assistant", "content": reply})
+                    _retry_result = await asyncio.wait_for(
+                        self.router.route(
+                            task_type, _retry_messages,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            user_openid=user_openid, session_id=session_id,
+                        ),
+                        timeout=30,
+                    )
+                    _retry_text = ""
+                    if isinstance(_retry_result, str):
+                        _retry_text = _retry_result
                     else:
-                        break  # 重试返回空或太短
+                        _retry_text = getattr(_retry_result.choices[0].message, "content", "") or ""
+                    _retry_text = self._clean_reply(_retry_text)
+                    if _retry_text and len(_retry_text) > 5:
+                        # 合并续写内容
+                        # P0 修复：merge_continuation 在 utils.llm_cleanup（非 utils.text_utils）
+                        # 原错误导入导致 length_retry 每次都 ImportError → 重试失败 → 截断
+                        # 已在模块顶部 import，无需局部导入
+                        _merged, _action = merge_continuation(
+                            reply, _retry_text, context="verification_length_retry",
+                            assume_tail=True)
+                        if _action != "discarded":
+                            reply = _merged
+                            logger.info("verification.length_retry_success",
+                                        original_len=len(_reply_rstripped),
+                                        final_len=len(reply), action=_action)
+                            _reply_considered_complete = True
+                        else:
+                            logger.warning("verification.length_retry_duplicate",
+                                           retry_len=len(_retry_text))
+                    else:
+                        logger.warning("verification.length_retry_empty",
+                                       finish_reason=_finish_reason)
                 except Exception as e:
-                    logger.warning("verification.incomplete_retry_failed", error=str(e))
-                    break
-            # 最终兜底：仅当 for 循环未判定完整时才用句末标点强制闭合
-            # 根因修复：原逻辑与 for 循环的"完整"判定矛盾——for 循环用 len(last_line)>=10
-            # 误判完整后 break，但此处只查标点又触发 force_close，导致截断回复+"。"
+                    logger.warning("verification.length_retry_failed",
+                                   error=str(e)[:200], finish_reason=_finish_reason)
+            elif _finish_reason is None and reply.strip() and len(reply) > 10 and not ends_with_valid_ending(reply.rstrip()):
+                # P0 修复（qq_group 截断根因）：流式响应未收到 finish_reason
+                # 根因：provider 中途关闭连接不发送 finish_reason chunk，
+                #       _stream_finish_reason 保持 None，content 被静默截断。
+                #       原 _finish_reason is None 时不触发任何重试，直接 force_close。
+                # 修复：当 finish_reason is None 且 content 不以合法标记结尾时，
+                #       视为潜在截断，用 assistant-prefill 续写重试（与 length 相同策略）。
+                # 注意：仅在 content 不以 emoji/标点结尾时触发，避免对正常回复的误判。
+                logger.warning("verification.stream_no_finish_retry",
+                               reply_len=len(reply), finish_reason=_finish_reason)
+                try:
+                    _retry_messages = list(messages)
+                    _retry_messages.append({"role": "assistant", "content": reply})
+                    _retry_result = await asyncio.wait_for(
+                        self.router.route(
+                            task_type, _retry_messages,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            user_openid=user_openid, session_id=session_id,
+                        ),
+                        timeout=30,
+                    )
+                    _retry_text = ""
+                    if isinstance(_retry_result, str):
+                        _retry_text = _retry_result
+                    else:
+                        _retry_text = getattr(_retry_result.choices[0].message, "content", "") or ""
+                    _retry_text = self._clean_reply(_retry_text)
+                    if _retry_text and len(_retry_text) > 5:
+                        # P0 修复：同上，merge_continuation 已在模块顶部从 utils.llm_cleanup 导入
+                        _merged, _action = merge_continuation(
+                            reply, _retry_text, context="verification_no_finish_retry",
+                            assume_tail=True)
+                        if _action != "discarded":
+                            reply = _merged
+                            logger.info("verification.no_finish_retry_success",
+                                        original_len=len(_reply_rstripped),
+                                        final_len=len(reply), action=_action)
+                            _reply_considered_complete = True
+                        else:
+                            # 重试重复 = LLM 认为回复已完成，视为完整
+                            _reply_considered_complete = True
+                    else:
+                        logger.warning("verification.no_finish_retry_empty",
+                                       finish_reason=_finish_reason)
+                except Exception as e:
+                    logger.warning("verification.no_finish_retry_failed",
+                                   error=str(e)[:200], finish_reason=_finish_reason)
+            elif _finish_reason == "length":
+                # length 截断但回复太短无法重试
+                logger.warning("verification.length_too_short_to_retry",
+                               reply_len=len(reply), finish_reason=_finish_reason)
+            # 最终兜底：仅当未判定完整时才处理
+            # P0 修复：不再盲目追加 "。" —— 这会产生 "💕。" 丑陋输出
+            # 改为：仅在回复不以合法标记结尾且较长时追加 "。"（极端兜底）
             if not _reply_considered_complete:
-                # CodeRabbit 复审修复：泄漏清洗后回复可能为空，用降级回复而非"。"
                 if not reply.strip():
                     reply = DEGRADED_REPLY
                     logger.warning("verification.empty_after_leak_strip_degraded")
                 else:
                     _final_rstripped = reply.rstrip()
-                    if not any(_final_rstripped.endswith(c) for c in "。！？～…）」】.!?"):
+                    # P0 修复：使用 emoji 感知的结尾判定
+                    # 如果回复已以 emoji/标点结尾，不再追加 "。"
+                    if not ends_with_valid_ending(_final_rstripped):
+                        # 仅在确实不以任何合法标记结尾时才追加 "。"
+                        # 这是最后的兜底，避免完全无标点的裸文本
                         reply = _final_rstripped + "。"
                         logger.warning("verification.incomplete_force_closed", final_len=len(reply))
+                    else:
+                        # 以合法标记结尾（emoji/标点），无需追加
+                        reply = _final_rstripped
 
             return reply, []
 
@@ -404,15 +478,62 @@ class MessageProcessorMixin:
                        tool_calls=[tc["function"]["name"] for tc in current_tool_calls])
 
         # ── 循环结束：最终 summarize ─────────────────────────
+        # P0 修复：传入 messages（verification loop 已构建的完整上下文，含工具结果 role=tool 消息），
+        # 让 _summarize_results 复用上下文而非凭空 summarize，避免工具调用后 LLM 瞎扯
         return await self._finalize_verification_reply(
             user_input, all_tool_results, last_tool_calls or [],
             current_assistant_content, trace, user_openid, session_id,
+            messages=messages,
         )
 
     async def _process_impl(self, ctx: RequestContext, user_input: str, user_id: str,
                              source: str, user_openid: str, session_id: str,
                              status_callback: Any, image_data: list[dict] | None,
-                             is_master: bool = True) -> ProcessResult:
+                             is_master: bool = True,
+                             system_context: str = "") -> ProcessResult:
+        # P0 新增：system_context 注入（主动问候等内部场景）
+        # 存储在 self 上供 _build_main_messages 使用，不写入 conversation_logs
+        self._system_context = system_context or ""
+        # 前端模式标记解析（搜索/深度思考）—— UI 按钮产生 [Search:...]/[Think:...] 标记，
+        # 后端解析后剥离标记并注入对应能力：Search→强制 web_search 工具指令，Think→升级 chat_pro
+        # P0 修复：不再重写 user_input，避免污染 conversation_logs.user_message
+        # 根因：原实现 user_input = f"请使用 web_search 工具搜索最新信息后回答：{_sq}"
+        #       导致 DB 历史记录出现"请使用 web_search 工具..."等系统指令，
+        #       LLM 在后续轮次回应这些元指令，造成上下文污染。
+        # 修复：剥离 marker 后保留用户原话，模式指令走 system message 注入。
+        self._think_mode = False
+        self._search_mode = False
+        _mode_system_hint = ""  # 模式指令系统提示（不入库）
+        if isinstance(user_input, str):
+            _stripped_ui = user_input.strip()
+            _m_search = re.match(r'^\[Search:\s*(.+?)\]\s*$', _stripped_ui)
+            if _m_search:
+                _sq = _m_search.group(1)
+                self._search_mode = True
+                # 保留用户原话，不重写 user_input
+                user_input = _sq
+                # 模式指令走 system message（仅 LLM 可见，不入库）
+                _mode_system_hint = "本次回复请优先使用 web_search 工具搜索最新信息后回答。"
+            else:
+                _m_think = re.match(r'^\[Think:\s*(.+?)\]\s*$', _stripped_ui)
+                if _m_think:
+                    self._think_mode = True
+                    user_input = _m_think.group(1)
+                    _mode_system_hint = "本次回复请进行更深入的思考，可以分步骤推理。"
+            # P0 新增（Task 1.9）：文档上传标记解析
+            # 前端上传文档后追加 [Doc: /path/to/file] 标记
+            # 后端剥离标记，注入 system message 提示 LLM 使用 document_reader 工具
+            _m_doc = re.search(r'\n?\[Doc:\s*([^\]]+)\]\s*', user_input)
+            if _m_doc:
+                _doc_path = _m_doc.group(1).strip()
+                # 从 user_input 中剥离 [Doc:] 标记（不污染历史记录）
+                user_input = user_input.replace(_m_doc.group(0), "").strip()
+                _doc_hint = f"用户上传了文档：{_doc_path}。请使用 document_reader 工具读取该文档内容后回答用户的问题。"
+                _mode_system_hint = (_mode_system_hint + "\n" + _doc_hint).strip() if _mode_system_hint else _doc_hint
+                logger.info("agent.doc_marker_parsed", doc_path=_doc_path)
+        # 模式指令合并到 system_context（与主动问候等场景共用同一通道）
+        if _mode_system_hint:
+            self._system_context = (self._system_context + "\n" + _mode_system_hint).strip() if self._system_context else _mode_system_hint
         # 初始化 + 安全检查 + 上下文恢复
         trace, session_id, allowed, reason = await self._init_and_restore_context(
             ctx, user_input, user_id, source, status_callback, user_openid, session_id)
@@ -487,21 +608,14 @@ class MessageProcessorMixin:
                 force_voice=force_voice, ctx=ctx,
             )
 
-        # 简单对话快速路径（跳过记忆检索，使用最小上下文）
-        fast_result = await self._try_simple_chat_fast_path(
-            ctx, user_input, clean_input, is_master, image_data, force_voice,
-            session_id, user_openid, source, user_id, status_callback, trace)
-        if fast_result is not None:
-            return fast_result
+        # P0 修复：取消 fastpath 机制（用户明确要求"取消fastpath机制，通道分类性价比太低了"）
+        # 根因：fastpath 把天气/时间等需要工具的问题误判为"简单闲聊"，跳过工具调用 → 瞎扯。
+        #       通道分类（simple vs complex）本身不可靠，且 fast_path 无 tools/memory/verification，
+        #       导致上下文割裂和工具缺失。取消后所有消息统一走主路径（有完整工具+记忆+验收）。
+        # 任务图路由也一并取消（通道分类性价比低，所有消息走主路径由 LLM 自行决定是否调工具）
+        # think/search 模式仍正常工作（通过 system_context 注入模式提示，不影响主路径）
 
-        # 任务图路由
-        graph_result = await self._try_task_graph_route(
-            ctx, user_input, clean_input, chat_targets, force_voice, image_data,
-            is_master, user_id, source, session_id, status_callback, trace)
-        if graph_result is not None:
-            return graph_result
-
-        # 主处理路径：完整记忆检索 + LLM 调用 + 后处理
+        # 主处理路径：完整记忆检索 + LLM 调用 + 后处理（统一入口，不再分流）
         return await self._run_main_process_path(
             ctx, user_input, clean_input, user_id, source, user_openid, session_id,
             status_callback, image_data, is_master, force_voice, chat_targets, trace)
@@ -529,16 +643,35 @@ class MessageProcessorMixin:
             session_id = f"qq_group:{user_openid}:{_orig_suffix}" if _orig_suffix else f"qq_group:{user_openid}"
 
         # 按当前用户恢复历史摘要（群聊多用户上下文隔离）
+        # P0 修复（用户反馈"对话链路阻塞"根因）：
+        # switch_user_context 和 restore_from_db 曾因数据库连接竞争/锁等待阻塞 38 秒
+        # （日志 17:23:16 agent.process.start → 17:23:54 context.restored）。
+        # 修复：给两步分别加超时，超时后降级跳过（宁可上下文不完整也不阻塞主流程）。
         _restore_id = user_openid or user_id
         if _restore_id:
             try:
-                await self.context.switch_user_context(_restore_id)
+                await asyncio.wait_for(
+                    self.context.switch_user_context(_restore_id),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("agent.switch_user_context_timeout",
+                               timeout=5.0, user_id=_restore_id,
+                               hint="锁竞争或事件循环阻塞，跳过用户切换")
             except Exception as e:
                 logger.warning("agent.switch_user_context_failed", error=str(e))
         if _restore_id and self.db:
             try:
-                await self.context.restore_from_db(self.db, user_id=_restore_id,
-                                                    address_term=self.context.current_address_term)
+                await asyncio.wait_for(
+                    self.context.restore_from_db(
+                        self.db, user_id=_restore_id,
+                        address_term=self.context.current_address_term),
+                    timeout=10.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("agent.restore_from_db_timeout",
+                               timeout=10.0, user_id=_restore_id,
+                               hint="数据库查询阻塞，跳过历史摘要恢复")
             except Exception as e:
                 logger.warning("agent.restore_failed", error=str(e))
 
@@ -584,640 +717,17 @@ class MessageProcessorMixin:
         # _build_voice_result 的 5 条件对齐：voice_mode + tts.available +
         # TTS_ASYNC_MODE + is_feature_available("tts") + len(reply) > 2
         # 避免在 TTS 不可用/降级模式/同步模式下无效设 tts_pending
-        # TTS 失控防护：内容守卫 + 冷却守卫
-        if (self._voice_mode and self.tts.available and TTS_ASYNC_MODE
-                and len(reply) > 2
-                and _should_auto_tts(reply)
-                and get_degradation_strategy().is_feature_available("tts")):
-            # CodeRabbit 复审修复：改为按用户隔离的冷却检查（原模块全局会导致跨用户干扰）
-            if _check_tts_cooldown(force_voice=False):
-                logger.debug("tts.greeting_cooldown_skip")
-                return ProcessResult(reply=reply, emotion="greeting")
+        # TTS 时机控制 v2：统一过 _decide_tts_trigger（移除冷却，改为内容适宜性守卫）
+        if (TTS_ASYNC_MODE
+                and _decide_tts_trigger(
+                    reply, force_voice=False, voice_mode=self._voice_mode,
+                    tts_available=self.tts.available,
+                    tts_enabled=get_degradation_strategy().is_feature_available("tts"))):
             return ProcessResult(
                 reply=reply, emotion="greeting",
                 tts_pending=True, tts_text=reply,
             )
         return ProcessResult(reply=reply, emotion="greeting")
-
-    async def _try_simple_chat_fast_path(self, ctx: Any, user_input: Any, clean_input: Any, is_master: Any,
-                                          image_data: Any, force_voice: Any, session_id: Any, user_openid: Any,
-                                          source: Any, user_id: Any, status_callback: Any, trace: Any) -> Any:
-        """简单对话快速路径：跳过记忆检索，使用最小上下文。返回 ProcessResult 或 None。"""
-        if not (SIMPLE_CHAT_FASTPATH and self._is_simple_chat(clean_input)
-                and not image_data and not ("[图片:" in user_input and "已保存到" in user_input)):
-            return None
-
-        trace.info("chat.fast_path", input_preview=clean_input[:50])
-        emotion = detect_emotion(user_input)
-        emotion_hint = build_emotion_hint(emotion)
-        self.context.emotion_hint = emotion_hint
-        ctx.last_user_emotion = emotion.get("primary", "")
-        emotion_label = emotion.get("primary", "")
-        self._update_mental_state_emotion(emotion)
-
-        # 构建最小上下文
-        messages = await self._build_fast_path_messages(user_input, is_master, emotion, emotion_hint, source)
-
-        # LLM 调用
-        reply = await self._call_fast_path_llm(messages, user_openid, session_id, is_master=is_master)
-
-        # 空回复检测：返回 None 走主路径
-        # 根因：agnes-2.0-flash 返回空 content 时，_call_fast_path_llm 可能返回空字符串
-        # （route() 的空 content fallback 未覆盖 finish_reason=stop 的情况）
-        # 修复：空 reply 一律走主路径，避免用户收到空回复
-        if not reply or not reply.strip():
-            logger.warning("chat.fast_path_empty_reply",
-                           provider="agnes", reply_len=len(reply or ""))
-            return None
-
-        # 碎片检测：回复过短且未以句末标点结尾时，认为是 LLM 思考碎片泄漏
-        # 根因：agnes-2.0-flash 对简短输入（如"？"）可能返回思考过程碎片
-        # 如"我有点担心的是——你问「？"，这不是有效回复
-        # 修复：返回 None 让上层走主路径（有 verification 循环，更可靠）
-        if reply and len(reply) < 30:
-            _end = reply[-5:] if len(reply) >= 5 else reply
-            if not any(reply.endswith(c) for c in "。！？～…）」】\n"):
-                logger.warning("chat.fast_path_fragment_detected",
-                               reply_len=len(reply), reply_tail=_end,
-                               reply_preview=reply[:80])
-                return None  # 走主路径
-
-        # 截断检测与重试：回复被截断时自动重试
-        # 优化：只在真正截断时重试（finish_reason=length），避免误判
-        # 阈值提高到500，覆盖大多数正常长回复；英文思维链泄露已由 strip_reasoning 清空
-        if reply and len(reply) < 500:
-            _end = reply[-5:] if len(reply) >= 5 else reply
-            # 英文碎片检测：reply 末尾是连续 4+ 英文字母（如 "ious]"）说明是 LLM 推理泄漏
-            # 此时重试只会重复内容，应直接走主路径（有 verification 循环，更可靠）
-            _tail_english_leak = bool(re.search(r'[A-Za-z]{4,}[\]\)\}\}]?$', reply[-12:]))
-            if _tail_english_leak:
-                logger.warning("chat.fast_path_english_leak",
-                               reply_len=len(reply), reply_tail=_end,
-                               reply_preview=reply[:80])
-                return None  # 走主路径
-            if not any(reply.endswith(c) for c in "。！？～…）」】\n\"'"):
-                logger.warning("chat.fast_path_truncated",
-                               reply_len=len(reply), reply_tail=_end)
-                # 重试一次：追加"请继续完成回复"提示
-                try:
-                    retry_messages = messages.copy()
-                    retry_messages.append({"role": "assistant", "content": reply})
-                    retry_messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
-                    retry_result = await asyncio.wait_for(self.router.route(
-                        "chat", retry_messages, temperature=0.7, max_tokens=4096,
-                        user_openid=user_openid, session_id=session_id,
-                    ), timeout=30)
-                    retry_reply = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
-                    retry_reply = self._clean_reply(retry_reply)
-                    if retry_reply and len(retry_reply) > 5:
-                        # 去重检测：如果 retry_reply 与 reply 高度重叠（>60%），说明模型重复了内容
-                        # 此时只追加非重叠部分，避免文本重复两遍
-                        _reply_lower = reply.lower()
-                        _retry_lower = retry_reply.lower()
-                        # 检测完全重复：retry 完全包含在 reply 中（retry 是 reply 的子串）
-                        # 修复：原 _retry_lower.endswith(_retry_lower[-50:]) 是 bug（自比较恒为 True）
-                        _retry_in_reply = _retry_lower in _reply_lower
-                        # reply 是 retry 的子串 → retry 是 reply 的扩展，应使用 retry 替换 reply
-                        _reply_in_retry = _reply_lower in _retry_lower
-                        if _retry_in_reply:
-                            # retry 完全重复 reply 内容，丢弃 retry
-                            logger.warning("chat.fast_path_retry_duplicate",
-                                           retry_len=len(retry_reply))
-                            # 不拼接，保留原 reply
-                        elif _reply_in_retry:
-                            # retry 是 reply 的扩展（reply 是 retry 的前缀），用 retry 替换 reply
-                            reply = retry_reply
-                            logger.info("chat.fast_path_retry_extended",
-                                        final_len=len(reply))
-                        else:
-                            # 检测前缀重叠：retry_reply 开头部分是否与 reply 结尾部分相同
-                            _overlap = 0
-                            _check_len = min(len(reply), len(retry_reply), 100)
-                            for i in range(_check_len, 10, -1):
-                                if reply[-i:].lower() == retry_reply[:i].lower():
-                                    _overlap = i
-                                    break
-                            if _overlap > 10:
-                                # 去除重叠部分后拼接
-                                reply = reply + retry_reply[_overlap:]
-                            else:
-                                reply = reply + retry_reply
-                            logger.info("chat.fast_path_truncated_retry_success",
-                                        final_len=len(reply))
-                except Exception as e:
-                    logger.warning("chat.fast_path_truncated_retry_failed", error=str(e))
-
-        # 后处理
-        result = await self._finalize_fast_path_reply(
-            reply, user_input, is_master, user_id, source, emotion,
-            emotion_label, ctx, user_openid, session_id, force_voice)
-        trace.info("agent.fast_path.done", reply_preview=result.reply[:100],
-                   reply_len=len(result.reply))
-        return result
-
-    async def _build_fast_path_messages(self, user_input: Any, is_master: Any,
-                                          emotion: Any, emotion_hint: str,
-                                          source: str = "") -> list:
-        """构建快速路径的最小上下文消息列表：系统提示 + 动态提示 + Volatile 层 + 记忆 + 历史。"""
-        # 构建最小上下文：系统提示 + 动态提示 + Volatile 层
-        if is_master:
-            system_prompt = build_scene_aware_prompt(user_input, self.context.current_address_term)
-        else:
-            system_prompt = build_safe_system_prompt()
-        messages = [{"role": "system", "content": system_prompt}]
-
-        if is_master:
-            _dynamic = self.context._build_dynamic_prompt()
-            if _dynamic:
-                messages.append({"role": "system", "content": _dynamic})
-
-        _volatile = self.context._build_time_context()
-        if emotion_hint:
-            _addr = self.context.current_address_term if is_master else "你"
-            _volatile += f"\n[感知到{_addr}的情绪：{emotion_hint}]"
-
-        # 场景标识注入（让 LLM 感知私聊/群聊场景）
-        if source:
-            try:
-                from agent_context import _build_scene_hint
-                scene_hint = _build_scene_hint(source)
-                if scene_hint:
-                    _volatile += f"\n{scene_hint}"
-            except Exception as e:
-                logger.debug("message_processor.scene_hint_failed", error=str(e))
-
-        # 历史对话（非主人不加载，防止看到主人聊天内容）
-        if is_master:
-            # 历史中可能混有子代理回复（通过 agent 元数据标记）
-            # 用 XML 标签包裹子代理回复，让 LLM 知道这是其他 agent 说的，但不会模仿前缀
-            # 根本修复：替代旧的 [小可] 文本前缀（LLM 会模仿），改用结构化标记
-            _agent_display_cache = {}
-            try:
-                from config import get_agent_display_name as _gdn
-                for _n in ('xiaoda', 'xiaoli', 'xiaolang', 'xiaolian', 'xiaoke'):
-                    _agent_display_cache[_n] = _gdn(_n)
-            except Exception:
-                _agent_display_cache = {'xiaoda': '小妲', 'xiaoli': '小莉', 'xiaolang': '小狼',
-                                        'xiaolian': '小涟', 'xiaoke': '小可'}
-            for msg in self.context.get_last_n(10):
-                _content = str(msg.get("content", "")) if msg.get("content") is not None else ""
-                _msg_agent = msg.get("agent")
-                # 子代理回复用 XML 标签包裹，LLM 不会模仿这种格式
-                if _msg_agent and _msg_agent != "xiaoda":
-                    _display = _agent_display_cache.get(_msg_agent, _msg_agent)
-                    _content = f"<previous_agent_reply agent=\"{_msg_agent}\" name=\"{_display}\">{_content}</previous_agent_reply>"
-                m = {"role": msg["role"], "content": _content}
-                messages.append(m)
-
-        # 轻量 FTS + 安抚记忆检索（放在历史之后，靠近用户消息，提高关注度）
-        messages = await self._fast_path_inject_memories(
-            messages, user_input, is_master, emotion)
-
-        # 注入 24h 对话摘要（与 main path 的 build_messages 共享上下文）
-        # 防止 fast path "记忆缺失"——用户刚在 main path 聊过的话题，fast path 也应感知
-        # 与 _build_volatile_content 的逻辑一致：有精确记忆检索时不注入摘要，避免信息冲突
-        if is_master and self.context._restored_summary and not self.context.memory_retrieval:
-            _addr_fp = self.context.current_address_term
-            messages.append({"role": "system", "content": (
-                f"[近期对话摘要（仅供参考，请在需要时引用。当前用户身份：{_addr_fp}。"
-                f"根据当前用户意图独立判断是否需要调用工具）]\n{self.context._restored_summary}"
-            )})
-
-        messages.append({"role": "system", "content": _volatile})
-        messages.append({"role": "user", "content": user_input})
-        return messages
-
-    async def _call_fast_path_llm(self, messages: list, user_openid: Any,
-                                    session_id: Any, is_master: bool = True) -> str:
-        """快速路径 LLM 调用，返回回复文本（失败时返回降级回复）。
-
-        支持 tool call：如果模型决定使用工具，解析并执行，返回执行结果。
-        """
-        _model_cfg = AGENT_CONFIG.get("model", {})
-        reply = ""
-        try:
-            # 获取可用工具列表
-            _tools_list = to_openai_tools()
-            tools = _tools_list if _tools_list else None
-            # 非主人：白名单过滤
-            if not is_master and tools:
-                tools = [t for t in tools if t.get("function", {}).get("name") in self.ALLOWED_NON_MASTER_TOOLS]
-                if not tools:
-                    tools = None
-
-            result = await asyncio.wait_for(self.router.route(
-                "chat", messages,
-                temperature=_get_temperature(_model_cfg),
-                user_openid=user_openid, session_id=session_id,
-                tools=tools,
-            ), timeout=30)
-
-            # 检测并处理 tool call
-            if isinstance(result, str):
-                # DSML 格式 tool call 检测
-                if has_dsml_tool_calls(result) and tools:
-                    dsml_calls = parse_dsml_tool_calls(result, self.tool_repair._allowed_tools)
-                    if dsml_calls:
-                        # 执行工具调用
-                        tool_results, all_failed = await self._execute_fast_path_tools(dsml_calls, user_openid=user_openid, session_id=session_id)
-                        if tool_results and not all_failed:
-                            # 将工具结果追加到消息列表，再次调用 LLM
-                            messages.append({"role": "assistant", "content": result})
-                            messages.append({"role": "user", "content": f"工具执行结果：\n{tool_results}\n\n请根据工具结果回复用户。"})
-                            # 递归调用，但不再传递 tools（避免无限循环）
-                            result2 = await asyncio.wait_for(self.router.route(
-                                "chat", messages,
-                                temperature=_get_temperature(_model_cfg),
-                                user_openid=user_openid, session_id=session_id,
-                            ), timeout=30)
-                            if isinstance(result2, str):
-                                reply = self._clean_reply(result2)
-                            else:
-                                reply = self._clean_reply(result2.choices[0].message.content or "")
-                        elif all_failed:
-                            # 工具全部失败，返回错误提示
-                            reply = "抱歉，工具调用失败了，请稍后再试。"
-                            logger.warning("fast_path.all_tools_failed", tool_results=tool_results)
-                        else:
-                            reply = self._clean_reply(result)
-                    else:
-                        reply = self._clean_reply(result)
-                else:
-                    reply = self._clean_reply(result)
-            else:
-                # OpenAI 格式 tool call 检测
-                msg = result.choices[0].message
-                if msg.tool_calls and tools:
-                    tool_calls = [
-                        {"id": str(tc.id), "type": "function",
-                         "function": {"name": tc.function.name,
-                                      "arguments": str(tc.function.arguments) if tc.function.arguments else "{}"}}
-                        for tc in msg.tool_calls
-                    ]
-                    # 执行工具调用
-                    tool_results, all_failed = await self._execute_fast_path_tools(tool_calls, user_openid=user_openid, session_id=session_id)
-                    if tool_results and not all_failed:
-                        # 将工具结果追加到消息列表，再次调用 LLM
-                        messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": msg.tool_calls})
-                        messages.append({"role": "user", "content": f"工具执行结果：\n{tool_results}\n\n请根据工具结果回复用户。"})
-                        # 递归调用，但不再传递 tools（避免无限循环）
-                        result2 = await self.router.route(
-                            "chat", messages,
-                            temperature=_get_temperature(_model_cfg),
-                            user_openid=user_openid, session_id=session_id,
-                        )
-                        if isinstance(result2, str):
-                            reply = self._clean_reply(result2)
-                        else:
-                            reply = self._clean_reply(result2.choices[0].message.content or "")
-                    elif all_failed:
-                        # 工具全部失败，返回错误提示
-                        reply = "抱歉，工具调用失败了，请稍后再试。"
-                        logger.warning("fast_path.all_tools_failed", tool_results=tool_results)
-                    else:
-                        reply = self._clean_reply(msg.content or "")
-                else:
-                    reply = self._clean_reply(msg.content or "")
-        except Exception as e:
-            logger.warning("agent.fast_path_failed", error=str(e))
-            reply = DEGRADED_REPLY
-
-        # 截断兜底：循环重试直到回复完整或达到最大重试次数，确保用户永不看到截断
-        # N7: 增加 has_english_reasoning_leak 检测，覆盖 agnes-2.0-flash 英文推理泄漏场景
-        if reply and reply.strip():
-            from utils.llm_cleanup import has_english_reasoning_leak as _fp_has_eng_leak
-            from utils.llm_cleanup import strip_english_reasoning_leak as _fp_strip_eng_leak
-            _fp_considered_complete = False
-            for _fp_retry in range(3):
-                _fp_rstripped = reply.rstrip()
-                _fp_ends_punct = any(_fp_rstripped.endswith(c) for c in "。！？～…）」】.!?")
-                _fp_eng_leak = _fp_has_eng_leak(reply)
-                _fp_just_cleaned = False
-                if _fp_eng_leak:
-                    # N7: 英文推理泄漏 → 清洗后视为不完整，触发重试
-                    reply = _fp_strip_eng_leak(reply, context="fast_path")
-                    _fp_rstripped = reply.rstrip()
-                    _fp_ends_punct = any(_fp_rstripped.endswith(c) for c in "。！？～…）」】.!?")
-                    _fp_just_cleaned = True
-                # 完整性判定（根因修复）：移除 len(last_line)>=10 启发式
-                # 短回复(<30字符)视为完整；长回复必须以句末标点结尾
-                if not _fp_just_cleaned and (len(reply) < 30 or _fp_ends_punct):
-                    _fp_considered_complete = True
-                    break  # 回复完整
-                logger.warning("fast_path.incomplete_reply",
-                               reply_len=len(reply), reply_tail=reply[-15:],
-                               retry=_fp_retry, has_eng_leak=_fp_eng_leak)
-                try:
-                    messages.append({"role": "assistant", "content": reply})
-                    messages.append({"role": "user", "content": "请继续完成你的回复，不要重复已说的内容。"})
-                    _fp_result2 = await asyncio.wait_for(self.router.route(
-                        "chat", messages,
-                        temperature=_get_temperature(_model_cfg),
-                        user_openid=user_openid, session_id=session_id,
-                    ), timeout=30)
-                    _fp_reply2 = _fp_result2 if isinstance(_fp_result2, str) else (_fp_result2.choices[0].message.content or "")
-                    _fp_reply2 = self._clean_reply(_fp_reply2)
-                    if _fp_reply2 and len(_fp_reply2) > 5:
-                        _fp_lower1 = reply.lower()
-                        _fp_lower2 = _fp_reply2.lower()
-                        if _fp_lower2 not in _fp_lower1:
-                            reply = reply + _fp_reply2
-                            logger.info("fast_path.incomplete_retry_success",
-                                        final_len=len(reply), retry=_fp_retry)
-                        else:
-                            # 重试重复 = LLM 认为回复已完成，视为完整不再 force_close
-                            _fp_considered_complete = True
-                            break  # 重试重复，不再继续
-                    else:
-                        break  # 重试返回空或太短
-                except Exception as _fp_e:
-                    logger.warning("fast_path.incomplete_retry_failed", error=str(_fp_e))
-                    break
-            # 最终兜底：仅当 for 循环未判定完整时才强制闭合（根因修复：避免与 for 循环判定矛盾）
-            if not _fp_considered_complete:
-                # CodeRabbit 复审修复：泄漏清洗后回复可能为空，用降级回复而非"。"
-                if not reply.strip():
-                    reply = DEGRADED_REPLY
-                    logger.warning("fast_path.empty_after_leak_strip_degraded")
-                else:
-                    _fp_final = reply.rstrip()
-                    if not any(_fp_final.endswith(c) for c in "。！？～…）」】.!?"):
-                        reply = _fp_final + "。"
-                        logger.warning("fast_path.incomplete_force_closed", final_len=len(reply))
-        return reply
-
-    async def _execute_fast_path_tools(self, tool_calls: list[dict],
-                                        user_openid: str = "", session_id: str = "") -> tuple[str, bool]:
-        """执行 fast path 中的工具调用。
-
-        Returns:
-            (result_str, all_failed): 结果摘要字符串 + 是否全部失败
-        """
-        if not tool_calls or not self._tool_call_handler:
-            return "", False
-
-        results = []
-        failed_count = 0
-        for tc in tool_calls:
-            try:
-                func_name = tc.get("function", {}).get("name", "")
-                func_args = tc.get("function", {}).get("arguments", "{}")
-
-                # 解析参数
-                if isinstance(func_args, str):
-                    try:
-                        args_dict = json.loads(func_args)
-                    except json.JSONDecodeError:
-                        args_dict = {}
-                else:
-                    args_dict = func_args
-
-                # 执行工具（user_id 用于工具内部用户隔离，session_id 仅供审计日志）
-                result = await self._tool_call_handler._tool_executor.execute(
-                    func_name, args_dict, user_id=user_openid
-                )
-
-                # 格式化结果
-                if isinstance(result, dict):
-                    result_str = json.dumps(result, ensure_ascii=False)
-                else:
-                    result_str = str(result)
-
-                results.append(f"{func_name}: {result_str[:500]}")
-            except Exception as e:
-                logger.warning(f"fast_path.tool_execute_failed tool={tc.get('function', {}).get('name')} error={str(e)}")
-                results.append(f"{tc.get('function', {}).get('name', 'unknown')}: 执行失败 - {str(e)}")
-                failed_count += 1
-
-        all_failed = failed_count == len(tool_calls)
-        return "\n".join(results) if results else "", all_failed
-
-    async def _finalize_fast_path_reply(self, reply: str, user_input: Any, is_master: Any,
-                                          user_id: Any, source: Any, emotion: Any,
-                                          emotion_label: str, ctx: Any, user_openid: Any,
-                                          session_id: Any, force_voice: Any) -> ProcessResult:
-        """快速路径后处理：隐私扫描、人格校验、上下文记录、情绪标签、语音构建。返回 ProcessResult。"""
-        # 兜底：提取 LLM 伪造的图片 URL（fast-path 通常无工具调用，但 LLM 仍可能伪造图）
-        fab_image_paths, reply = await self._extract_fabricated_images_from_reply(reply)
-
-        # 非主人输出侧隐私扫描
-        if not is_master and reply:
-            safe, alt_reply, _ = self.security.check_output_privacy(reply)
-            if not safe:
-                logger.warning("agent.privacy_leak_blocked", user_id=user_id, reply_preview=reply[:100])
-                reply = alt_reply
-
-        # Persona Critic: 检查 LLM 输出人格一致性（LLM 输出后、发送给用户前）
-        self._apply_persona_critic(reply, user_openid, user_id)
-
-        # 仅主人群聊消息（及非群聊场景）记入记忆
-        _should_remember = is_master or source != "qq_group"
-        if _should_remember:
-            await self.context.add_message("user", user_input)
-            # 降级/错误回复跳过记忆写入，但保留 history 一致性（避免 user 消息无 assistant 回复）
-            if is_degraded_reply(reply):
-                logger.info("agent.skip_memory_degraded_reply", source=source, reply_preview=reply[:60])
-                # 仍写入 history 保持对话连续性
-                await self.context.add_message("assistant", reply[:200])
-            else:
-                # strip emotion tags before storing to memory
-                _clean_for_memory = self.sticker_manager.strip_emotion_tag(reply)
-                await self.context.add_message("assistant", _clean_for_memory)
-                # L5 修复: 捕获本次回复使用的模型名，透传到 conversation_logs.model_used
-                _model_used = self.router.get_current_chat_model().get("model_id", "")
-                self._bg_task_manager.run_background_tasks(
-                    user_input, _clean_for_memory, user_id, source, emotion, [],
-                    session_id=session_id, model_used=_model_used)
-        try:
-            _spawn(self.router.flush_costs())
-        except Exception as e:
-            logger.error("费用统计刷新失败: {}", str(e))
-
-        # 情绪标签
-        if is_unified():
-            reply, ensured_emotion = ensure_emotion_tag(reply)
-            if ensured_emotion.value != emotion_label:
-                emotion_label = ensured_emotion.value
-
-        clean_reply, sticker_path = self.get_sticker_info(reply, ctx.last_user_emotion)
-        # 统一清洗出口（get_sticker_info 已剥 emotion tag，故 strip_emotion=False）
-        clean_reply = self._clean_reply_full(clean_reply, style="xiaoda", strip_emotion=False)
-
-        audio_path, tts_pending, tts_text = await self._build_voice_result(
-            clean_reply, emotion_label, force_voice)
-        if audio_path:
-            clean_reply = clean_reply + "\n\n🎙️ 语音消息已发送～"
-
-        _spawn(self._hook_engine.fire_post_response())
-
-        # 更新持续情绪状态（让 agent 有情绪惯性）
-        try:
-            from emotion.emotion_state import get_emotion_state
-            _intensity_map = {
-                "happy": 0.6, "excited": 0.8, "love": 0.7,
-                "shy": 0.5, "sad": 0.7, "angry": 0.8,
-                "surprised": 0.7, "confused": 0.4, "thinking": 0.3,
-                "playful": 0.6, "moved": 0.7, "anxious": 0.6,
-                "fear": 0.8, "pout": 0.5, "neutral": 0.2,
-            }
-            get_emotion_state().update(emotion_label, _intensity_map.get(emotion_label, 0.5))
-        except Exception as e:
-            logger.debug("emotion_state.update_failed", error=str(e))
-
-        return ProcessResult(reply=clean_reply, emotion=emotion_label, sticker_path=sticker_path,
-                             audio_path=audio_path, tts_pending=tts_pending, tts_text=tts_text,
-                             image_paths=fab_image_paths)
-
-    async def _fast_path_inject_memories(self, messages: Any, user_input: Any, is_master: Any, emotion: Any) -> Any:
-        """快速路径：注入 FTS 记忆和安抚记忆到 messages。"""
-        # 降级检查: L2+ 关闭记忆检索, 直接返回不注入
-        if not get_degradation_strategy().is_feature_available("memory_search"):
-            return messages
-        _is_greeting = bool(re.match(
-            r'^(早[上安]?|中午|下午|晚上|晚安|你好|哈喽|hi|hello|hey)[好呀～~！!。.\s]*$',
-            user_input.strip(), re.IGNORECASE)) and not any(
-            kw in user_input for kw in ("记得", "上次", "以前", "说过", "告诉", "回忆"))
-
-        if is_master and not _is_greeting and self.memory and getattr(self.memory, 'memory', None):
-            try:
-                _fts_mems = await self.memory.memory.search_memories_fts(user_input, limit=10)
-                if _fts_mems:
-                    _mem_lines = []
-                    for m in _fts_mems:
-                        _s = m.get("summary", "")
-                        if not _s:
-                            continue
-                        if re.search(r'(晚上好|早上好|中午好|下午好|晚安|早安)', _s):
-                            continue
-                        _ts = m.get("timestamp", 0)
-                        if _ts:
-                            try:
-                                _d = time.strftime("%m-%d %H:%M", time.localtime(float(_ts)))
-                                _mem_lines.append(f"[{_d}] {_s[:300]}")
-                            except (ValueError, TypeError, OSError):
-                                _mem_lines.append(_s[:300])
-                        else:
-                            _mem_lines.append(_s[:300])
-                    if _mem_lines:
-                        messages.append({
-                            "role": "system",
-                            "content": "[相关长期记忆]\n" + "\n---\n".join(_mem_lines)
-                        })
-            except Exception as e:
-                logger.debug(f"fast_path.fts_failed: {e}")
-
-        # 主动检索 C：情绪触发（轻量版，仅强负面情绪时检索安抚记忆）
-        if is_master and self.memory and emotion.get("valence") == "negative" \
-                and float(emotion.get("intensity", 0.0)) >= 0.5:
-            try:
-                _comfort = await self.memory.retrieve_comfort_memories(limit=1)
-                if _comfort:
-                    _c_lines = []
-                    for m in _comfort:
-                        _s = m.get("summary", "")
-                        if _s:
-                            _c_lines.append(_s[:300])
-                    if _c_lines:
-                        _addr = self.context.current_address_term or "你"
-                        messages.append({
-                            "role": "system",
-                            "content": f"[曾经让{_addr}开心的回忆（温柔陪伴时可以提起）]\n" + "\n".join(_c_lines)
-                        })
-            except Exception as e:
-                logger.debug(f"fast_path.comfort_failed: {e}")
-        return messages
-
-    async def _try_task_graph_route(self, ctx: Any, user_input: Any, clean_input: Any, chat_targets: Any,
-                                     force_voice: Any, image_data: Any, is_master: Any, user_id: Any, source: Any,
-                                     session_id: Any, status_callback: Any, trace: Any) -> Any:
-        """任务图路由路径。返回 ProcessResult 或 None（None 表示继续主路径）。"""
-        if not ("xiaoda" in chat_targets and self._task_graph
-                and not self._is_manual_target(user_input, user_id)
-                and not self._is_simple_task(clean_input)
-                and not force_voice and not image_data
-                and not ("[图片:" in user_input and "已保存到" in user_input)):
-            return None
-
-        try:
-            from task_orchestrator import run_task_graph  # 冷启动优化: 延迟导入
-            graph_result = await run_task_graph(
-                graph=self._task_graph,
-                user_input=clean_input,
-                user_id=user_id,
-                session_id=session_id,
-                status_callback=status_callback,
-                agent_configs=self._agent_route_configs,
-                dispatcher=self.dispatcher,
-            )
-            if graph_result.final_output:
-                emotion = detect_emotion(clean_input)
-                ctx.last_user_emotion = emotion.get("primary", "")
-                # 仅主人群聊消息（及非群聊场景）记入记忆
-                _should_remember = is_master or source != "qq_group"
-                if _should_remember:
-                    # 关键：写入对话历史，否则下一轮上下文丢失
-                    await self.context.add_message("user", clean_input)
-                    # 降级/错误回复不写入对话历史和记忆库，避免污染后续检索
-                    if is_degraded_reply(graph_result.final_output):
-                        logger.info("agent.skip_memory_degraded_reply",
-                                    source=source, reply_preview=graph_result.final_output[:60])
-                    else:
-                        await self.context.add_message("assistant", graph_result.final_output)
-                        self._bg_task_manager.run_background_tasks(
-                            clean_input, graph_result.final_output, user_id, source, emotion, [],
-                            session_id=session_id,
-                        )
-                emotion_label = emotion.get("primary", "")
-                clean_reply = self._finalize_reply(graph_result.final_output, style="xiaoda")
-                sticker_path = None
-                audio_path = None
-                tts_pending = False
-                tts_text = ""
-                # 优先检查工具生成的 TTS（LLM 主动调用 synthesize_voice）
-                tool_audio = _pending_tts_audio.get()
-                if tool_audio is not None:
-                    _pending_tts_audio.set(None)
-                    audio_path = tool_audio
-                elif ((self._voice_mode or force_voice) and self.tts.available
-                        and len(clean_reply) > 2
-                        and get_degradation_strategy().is_feature_available("tts")):
-                    # CodeRabbit 复审修复 #4：补充 tts.available + is_feature_available("tts") 门禁
-                    # 与 _build_voice_result 的 5 条件对齐，避免 TTS 不可用时无效设 tts_pending
-                    # TTS 失控防护：内容守卫 + 冷却守卫（force_voice 不受限）
-                    skip_tts = (not force_voice and not _should_auto_tts(clean_reply))
-                    if not skip_tts and self._voice_mode and not force_voice:
-                        # CodeRabbit 复审修复 #1：改为按用户隔离的冷却检查
-                        if _check_tts_cooldown(force_voice=False):
-                            skip_tts = True
-                    if not skip_tts:
-                        if TTS_ASYNC_MODE:
-                            tts_pending = True
-                            tts_text = self._clean_reply(clean_reply)
-                        else:
-                            try:
-                                target_agent = self.dispatcher.get_agent(graph_result.route_target)
-                                if target_agent:
-                                    audio_path = await target_agent.synthesize(
-                                        self._clean_reply(clean_reply), emotion=emotion_label)
-                            except Exception as e:
-                                logger.warning("agent.routed_tts_failed", error=str(e))
-                if audio_path:
-                    clean_reply = clean_reply + "\n\n🎙️ 语音消息已发送～"
-                return ProcessResult(reply=clean_reply, emotion=emotion_label,
-                                     sticker_path=sticker_path, audio_path=audio_path,
-                                     tts_pending=tts_pending, tts_text=tts_text)
-        except Exception as e:
-            logger.warning("agent.task_graph_failed",
-                           error_type=type(e).__name__, error=str(e))
-            # 区分根因：超时/模型错误/工具错误 等，给用户更有意义的提示
-            if isinstance(e, (TimeoutError, asyncio.TimeoutError)):
-                _hint = "任务处理超时了，请稍后再试～"
-            elif "content_filter" in str(e):
-                _hint = "这个问题暂时无法回答，换个方式试试？"
-            else:
-                _hint = DEGRADED_REPLY
-            return ProcessResult(reply=_hint)
-        return None
 
     async def _run_main_process_path(self, ctx: Any, user_input: Any, clean_input: Any, user_id: Any, source: Any,
                                       user_openid: Any, session_id: Any, status_callback: Any, image_data: Any,
@@ -1289,6 +799,27 @@ class MessageProcessorMixin:
             messages.append({"role": "user", "content": effective_input})
         else:
             messages = self.context.build_messages(effective_input, source=source or "")
+
+        # P0 新增：system_context 注入（主动问候等内部场景）
+        # 根因：nudge_engine/greeting_scheduler 原先把场景提示作为 user_input 传入，
+        #       导致 conversation_logs.user_message 出现"（场景：现在早上...）"等系统提示，
+        #       污染历史记录 + LLM 在后续轮次回应这些元提示。
+        # 修复：场景提示走 system message，user_input 保持中性占位符（如"（主动问候）"），
+        #       仅 LLM 可见，不写入 DB。
+        _sys_ctx = getattr(self, "_system_context", "") or ""
+        if _sys_ctx:
+            # 插入到消息列表的开头（system prompt 之后、history 之前）
+            _sys_msg = {"role": "system", "content": _sys_ctx}
+            # 找到第一个非 system 消息的位置，插入到其前面
+            _insert_idx = 0
+            for i, m in enumerate(messages):
+                if m.get("role") != "system":
+                    _insert_idx = i
+                    break
+                _insert_idx = i + 1
+            messages.insert(_insert_idx, _sys_msg)
+            logger.debug("agent.system_context_injected",
+                         ctx_len=len(_sys_ctx), insert_pos=_insert_idx)
 
         # 图片描述注入
         messages = await self._inject_image_description(messages, user_input, image_data)
@@ -1651,8 +1182,10 @@ class MessageProcessorMixin:
         if has_image and tools:
             tools = None
 
-        # 简单任务时过滤系统级工具
-        tools = ChatProcessor.filter_tools_for_simple_task(tools, clean_input, self._is_simple_task)
+        # P0 修复（用户明确要求"取消对话通道分类机制"）：
+        # 移除 filter_tools_for_simple_task 调用——通道分类性价比太低，
+        # 误判会导致工具被错误过滤（如天气查询被当简单闲聊→工具被移除→瞎扯）。
+        # 所有消息统一保留完整工具列表，由 LLM 自行决定是否调用。
         # 表情包意图时硬移除 delegate_task（CLAUDE.md 规范）
         # 表情包由主体流程自动附带，委托出去会丢失预选表情包和 system message
         if _sticker_intent and tools:
@@ -1693,9 +1226,14 @@ class MessageProcessorMixin:
             logger.info("agent.circuit_breaker_half_open_probe")
 
         _cb_max_tokens = None
-        # Web UI 近似 Hermes 无限流式输出：使用 8192 tokens 上限（可配置）
+        # Web UI 近似 Hermes 无限流式输出：使用 131072 tokens 上限（匹配模型上下文窗口）
+        # P0 重构（用户明确要求"不许截断"）：
+        # 根因：32768 对中文长回复过小，频繁触发 finish_reason="length"，
+        #       原"请继续完成你的回复"重试 prompt 会污染上下文（LLM 回应"继续完成"等元词汇）。
+        # 修复：提升到 131072（mimo/agnes 上下文窗口 128K），从源头消除截断。
+        #       即使模型偶尔生成超长回复，也由 agent_context 压缩机制处理，不再截断重试。
         # QQ 通道保持 None → 走 ROUTE_TABLE 默认值（1500），避免超长回复被 QQ 平台截断
-        _web_max_tokens = _safe_int(os.getenv("WEB_UI_MAX_TOKENS", "8192"), 8192)
+        _web_max_tokens = _safe_int(os.getenv("WEB_UI_MAX_TOKENS", "131072"), 131072)
         if source == "web":
             _cb_max_tokens = _web_max_tokens
         if circuit_state == CircuitState.YELLOW:
@@ -1783,6 +1321,8 @@ class MessageProcessorMixin:
         """构建语音合成结果。返回 (audio_path, tts_pending, tts_text)。
 
         优先级：synthesize_voice 工具生成的音频 > force_voice（一次性）> _voice_mode（自动触发，有守卫）
+
+        TTS 时机控制 v2：统一过 _decide_tts_trigger（移除冷却，改为内容适宜性守卫）
         """
         # 1. 优先检查 LLM 主动调用 synthesize_voice 工具生成的音频
         tool_audio = _pending_tts_audio.get()
@@ -1791,34 +1331,26 @@ class MessageProcessorMixin:
             logger.info("tts.tool_audio_used", audio_path=str(tool_audio))
             return tool_audio, False, ""
 
+        # 2. 统一触发决策（替代原 should_generate_voice + 内容守卫 + 冷却守卫三层判定）
+        if not _decide_tts_trigger(
+                clean_reply, force_voice=force_voice, voice_mode=self._voice_mode,
+                tts_available=self.tts.available,
+                tts_enabled=get_degradation_strategy().is_feature_available("tts")):
+            return None, False, ""
+
+        # 3. 生成（异步 pending 或同步合成）
         audio_path = None
         tts_pending = False
         tts_text = ""
-        should_generate_voice = self._voice_mode or force_voice
-        if (should_generate_voice and self.tts.available and len(clean_reply) > 2
-                and get_degradation_strategy().is_feature_available("tts")):
-            # 内容守卫：跳过不适合语音的内容（代码/URL/标签/极短文本）
-            # force_voice（用户显式"发语音"）不受此守卫限制
-            if not force_voice and not _should_auto_tts(clean_reply):
-                logger.debug("tts.auto_skip_content_guard", reply_len=len(clean_reply))
-                return None, False, ""
-            # 冷却守卫：仅对 _voice_mode 自动触发生效，防止连续消息都生成 TTS 失控
-            # force_voice（用户显式"发语音"）不受冷却限制
-            # CodeRabbit 复审修复 #1：改为按用户隔离的冷却检查（原模块全局会导致跨用户干扰）
-            if self._voice_mode and not force_voice:
-                if _check_tts_cooldown(force_voice=False):
-                    logger.debug("tts.auto_cooldown_skip")
-                    return None, False, ""
-
-            if TTS_ASYNC_MODE:
-                tts_pending = True
-                tts_text = self._clean_reply(clean_reply)
-            else:
-                try:
-                    audio_path = await self.tts.synthesize_xiaoda(
-                        self._clean_reply(clean_reply), emotion=emotion_label)
-                except Exception as e:
-                    logger.warning("agent.tts_failed", error=str(e))
+        if TTS_ASYNC_MODE:
+            tts_pending = True
+            tts_text = self._clean_reply(clean_reply)
+        else:
+            try:
+                audio_path = await self.tts.synthesize_xiaoda(
+                    self._clean_reply(clean_reply), emotion=emotion_label)
+            except Exception as e:
+                logger.warning("agent.tts_failed", error=str(e))
         return audio_path, tts_pending, tts_text
 
     def _parse_verification_result(self, current_result: Any, tools: list[dict] | None) -> tuple:
@@ -1897,16 +1429,22 @@ class MessageProcessorMixin:
                 trace.warning("verification.empty_reply_after_tools", turn=turn_idx)
                 return None, "", None, None  # signal failure → 走 _finalize_verification_reply
             # 截断兜底：循环重试直到回复完整或达到最大重试次数，确保用户永不看到截断
-            # 检测三种情况：
-            # 1. 短回复且只是开场白（如"让我查一下"）
-            # 2. 长回复最后一行很短且不以句末标点结尾（如列表截断"...3"，max_tokens 截断）
-            # 3. N7: 英文推理泄漏（agnes-2.0-flash 截断时泄漏英文计划/总结，last_line 可能很长）
+            # P0 修复（emoji 感知）：原检查只认 ASCII/CJK 标点，角色扮演回复常以 emoji 结尾
+            # （如 "💕"、"😳💗"），被误判不完整 → 追加 "。" → 产生 "💕。" 丑陋输出。
+            # 改用 ends_with_valid_ending() 包含 emoji 判定，避免 false-positive 截断。
             from utils.llm_cleanup import has_english_reasoning_leak as _early_has_eng_leak
             from utils.llm_cleanup import strip_english_reasoning_leak as _early_strip_eng_leak
             _early_considered_complete = False
+            # 获取工具后回复的 finish_reason（用于完整性判定）
+            _early_finish_reason = None
+            if not isinstance(current_result, str):
+                _early_finish_reason = getattr(current_result.choices[0], "finish_reason", None)
+            else:
+                _early_finish_reason = _stream_finish_reason_var.get()
+            # 重试机制保留：工具调用后回复不完整时续写，最多 3 次重试
             for _early_retry in range(3):
                 _early_rstripped = early_reply.rstrip()
-                _early_ends_punct = any(_early_rstripped.endswith(c) for c in "。！？～…）」】.!?")
+                _early_ends_valid = ends_with_valid_ending(_early_rstripped)
                 _early_has_opening = any(kw in early_reply for kw in ["让我", "查一下", "看看", "查查", "找找"])
                 _early_eng_leak = _early_has_eng_leak(early_reply)
                 _early_just_cleaned = False
@@ -1914,23 +1452,27 @@ class MessageProcessorMixin:
                     # N7: 英文推理泄漏 → 清洗后视为不完整，触发重试
                     early_reply = _early_strip_eng_leak(early_reply, context="after_tools")
                     _early_rstripped = early_reply.rstrip()
-                    _early_ends_punct = any(_early_rstripped.endswith(c) for c in "。！？～…）」】.!?")
+                    _early_ends_valid = ends_with_valid_ending(_early_rstripped)
                     _early_just_cleaned = True
-                # 完整性判定（根因修复）：移除 len(last_line)>=10 启发式
-                # 短回复(<30字符)视为完整；长回复必须以句末标点结尾
-                # 清洗后即使有标点也视为不完整（内容被截断，需重试获取剩余部分）
-                # CodeRabbit 复审修复：开场白回复（"让我查一下。"等）即使 <30 字符也不能
-                # 标记为完整——工具结果可能还未展示，需继续走 _need_retry 路径
+                # 完整性判定（P0 修复：emoji 感知 + 信任 LLM finish_reason="stop"）
+                # 根因：原检查只认标点，emoji 结尾被误判不完整 → 追加 "。" → "💕。"
+                # 修复：
+                #   1. 使用 ends_with_valid_ending() 包含 emoji 判定
+                #   2. finish_reason="stop" + 长回复(>=30字符) → 信任 LLM，视为完整
+                #   3. 清洗后即使有标点也视为不完整（内容被截断，需重试获取剩余部分）
+                #   4. 开场白回复（"让我查一下。"等）即使 <30 字符也不能标记为完整
                 _early_complete = not _early_just_cleaned and (
-                    (len(early_reply) < 30 and not _early_has_opening) or _early_ends_punct
+                    (len(early_reply) < 30 and not _early_has_opening and _early_ends_valid)
+                    or (len(early_reply) >= 30 and _early_finish_reason == "stop")
+                    or _early_ends_valid
                 )
                 if _early_complete:
                     _early_considered_complete = True
                     break  # 回复完整
-                # 只有短回复开场白 或 无标点长回复 或 英文泄漏时才重试
+                # 只有短回复开场白 或 无合法结尾长回复 或 英文泄漏时才重试
                 _need_retry = (
                     (len(early_reply) < 80 and _early_has_opening)
-                    or not _early_ends_punct
+                    or not _early_ends_valid
                     or _early_eng_leak
                     or _early_just_cleaned
                 )
@@ -1940,8 +1482,15 @@ class MessageProcessorMixin:
                               reply_len=len(early_reply), reply_preview=early_reply[:50],
                               retry=_early_retry, has_eng_leak=_early_eng_leak)
                 try:
+                    # P0 修复（上下文污染根因）：
+                    # 原实现 messages.append({"role": "user", "content": "请继续给出具体内容..."})
+                    # 把元指令当 user message 注入，LLM 在后续轮次会回应"继续给出具体内容"等元词汇，
+                    # 造成上下文割裂和角色出戏（详见 conversation_logs 2026-07-25 17:46 案例）。
+                    # 修复：改用 assistant-prefill —— 追加已有 early_reply 作为 assistant 消息，
+                    #       让 LLM 从此处续写具体内容，不追加任何 user message。
+                    #       这样元指令不进入 LLM 可见上下文，避免污染。
                     messages.append({"role": "assistant", "content": early_reply})
-                    messages.append({"role": "user", "content": "请继续给出具体内容，不要只说开场白。"})
+                    # 不追加 user message —— assistant-prefill 模式让 LLM 自然续写
                     retry_result = await asyncio.wait_for(
                         self.router.route(
                             task_type, messages, temperature=temperature, max_tokens=max_tokens,
@@ -1952,30 +1501,23 @@ class MessageProcessorMixin:
                     retry_reply = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
                     retry_reply = self._clean_reply(retry_reply)
                     if retry_reply and len(retry_reply) > 10:
-                        _early_lower1 = early_reply.lower()
-                        _early_lower2 = retry_reply.lower()
-                        if _early_lower2 in _early_lower1:
+                        _early_merged, _early_action = merge_continuation(
+                            early_reply, retry_reply, context="after_tools_retry")
+                        if _early_action == "discarded":
                             # 重试重复 = LLM 认为回复已完成，视为完整不再 force_close
                             _early_considered_complete = True
                             break  # 重试重复
-                        _early_overlap = 0
-                        _early_check = min(len(early_reply), len(retry_reply), 80)
-                        for i in range(_early_check, 10, -1):
-                            if early_reply[-i:].lower() == retry_reply[:i].lower():
-                                _early_overlap = i
-                                break
-                        if _early_overlap > 10:
-                            early_reply = early_reply + retry_reply[_early_overlap:]
-                        else:
-                            early_reply = early_reply + retry_reply
+                        early_reply = _early_merged
                         trace.info("verification.incomplete_retry_success_after_tools",
-                                   final_len=len(early_reply), retry=_early_retry)
+                                   final_len=len(early_reply), retry=_early_retry,
+                                   merge_action=_early_action)
                     else:
                         break  # 重试返回空或太短
                 except Exception as e:
                     trace.warning("verification.incomplete_retry_failed_after_tools", error=str(e))
                     break
-            # 最终兜底：仅当 for 循环未判定完整时才强制闭合（根因修复：避免与 for 循环判定矛盾）
+            # 最终兜底：仅当 for 循环未判定完整时才处理
+            # P0 修复：不再盲目追加 "。" —— 使用 emoji 感知的结尾判定
             if not _early_considered_complete:
                 # CodeRabbit 复审修复：泄漏清洗后回复可能为空，用降级回复而非"。"
                 if not early_reply.strip():
@@ -1983,21 +1525,32 @@ class MessageProcessorMixin:
                     trace.warning("verification.empty_after_leak_strip_degraded_after_tools")
                 else:
                     _early_final = early_reply.rstrip()
-                    if not any(_early_final.endswith(c) for c in "。！？～…）」】.!?"):
+                    # P0 修复：使用 emoji 感知的结尾判定
+                    # 如果回复已以 emoji/标点结尾，不再追加 "。"
+                    if not ends_with_valid_ending(_early_final):
                         early_reply = _early_final + "。"
                         trace.warning("verification.incomplete_force_closed_after_tools", final_len=len(early_reply))
+                    else:
+                        early_reply = _early_final
             return None, "", None, early_reply
 
         return current_tool_calls, current_assistant_content, current_reasoning, None
 
     async def _finalize_verification_reply(self, user_input: Any, all_tool_results: Any, last_tool_calls: Any,
-                                            current_assistant_content: Any, trace: Any, user_openid: Any, session_id: Any) -> tuple:
-        """验收循环结束后生成最终回复。"""
+                                            current_assistant_content: Any, trace: Any, user_openid: Any, session_id: Any,
+                                            messages: list[dict] | None = None) -> tuple:
+        """验收循环结束后生成最终回复。
+
+        P0 修复：新增 messages 参数，传入 verification loop 已构建的完整上下文
+        （含 system+history+assistant(tool_calls)+tool(result)），让 _summarize_results
+        复用上下文而非凭空 summarize，避免工具调用后 LLM 瞎扯/出戏。
+        """
         trace.info("verification.summarize_fallback", tool_count=len(all_tool_results))
         if all_tool_results:
             final_reply = await self._tool_call_handler._summarize_results(
                 user_input, all_tool_results, last_tool_calls,
                 trace, user_openid=user_openid, session_id=session_id,
+                messages=messages,
             )
             # 关键修复：_summarize_results 可能返回空（LLM 再次返回空内容），兜底 DEGRADED_REPLY
             if not final_reply or not final_reply.strip():
@@ -2046,144 +1599,50 @@ class MessageProcessorMixin:
         return "".join(full_response)
 
     def _should_escalate_to_pro(self, user_msg: str, tools: list | None) -> tuple[bool, str]:
-        tool_keywords = PRO_TASK_KEYWORDS["tool"]
-        if tools and any(kw in user_msg for kw in tool_keywords):
-            return True, "tool_likely_query"
-
-        negative = PRO_TASK_KEYWORDS["negative"]
-        if any(kw in user_msg for kw in negative) and len(user_msg) > 30:
-            return True, "deep_emotional_content"
-
-        if len(user_msg) > 300:
-            return True, "long_complex_message"
-
+        # P0 修复（用户明确要求"取消对话通道分类机制"）：
+        # 移除基于关键词/长度的通道分类（PRO_TASK_KEYWORDS）——性价比太低且误判多。
+        # 仅保留显式用户意图触发：前端 [Think:] 按钮按下时升级到 chat_pro。
+        # 工具调用、长消息、情感内容等不再通过关键词预判升级，
+        # 由 LLM 在主路径自行决定推理深度（chat 模型已具备足够能力）。
+        if getattr(self, "_think_mode", False):
+            return True, "user_think_mode"
         return False, ""
-
-    def _is_simple_task(self, user_input: str) -> bool:
-        # 否定指令（告诉助手不要做某事）优先判断，属于简单对话，不应路由到子Agent
-        negative_patterns = [
-            r"(?:不|别|不要|不用|不需要|没必要)\s*(?:要|用|调用|查|检查|执行|运行|搜索|搜|找|看)",
-            r"(?:不需要|不用|别)\s*(?:调用|使用)\s*(?:这个|那个|任何)?\s*(?:工具|功能)",
-        ]
-        if any(re.search(pat, user_input) for pat in negative_patterns):
-            return True
-
-        complex_keywords = SIMPLE_TASK_KEYWORDS["complex"]
-        if any(kw in user_input for kw in complex_keywords):
-            return False
-
-        # 对话性消息关键词 — 这些是日常聊天，不是复杂任务
-        chat_keywords = SIMPLE_TASK_KEYWORDS["chat"]
-        if any(kw in user_input for kw in chat_keywords):
-            return True
-
-        cn_chars = sum(1 for c in user_input if '\u4e00' <= c <= '\u9fff')
-        effective_len = cn_chars * 2 + len(user_input) - cn_chars
-        if effective_len <= 20:
-            return True
-        simple_tool_patterns = ["天气", "气温", "时间", "几点", "日期", "星期", "翻译"]
-        return bool(effective_len <= 25 and any(kw in user_input for kw in simple_tool_patterns))
-
-    def _is_simple_chat(self, query: str) -> bool:
-        """Task 9: 判断是否为简单闲聊，可走快速路径（跳过记忆检索）。
-
-        判定规则（满足任一即返回 True）：
-        1. 命中 SIMPLE_TASK_KEYWORDS["chat"] 中的闲聊关键词
-        2. 有效长度（中文×2 + 其他×1）≤ 10
-        但若命中 complex 关键词则返回 False，避免误判。
-        """
-        # 复杂任务关键词优先排除
-        complex_keywords = SIMPLE_TASK_KEYWORDS["complex"]
-        if any(kw in query for kw in complex_keywords):
-            return False
-        # 时间/日期查询排除：包含日期或时间表述的查询通常需要记忆检索
-        import re
-        if re.search(r'\d+[号日月年]|周[一二三四五六日末]|今[天日早晚]|昨[天日]|前天|上周|上个月', query):
-            return False
-        # 闲聊关键词命中
-        chat_keywords = SIMPLE_TASK_KEYWORDS["chat"]
-        if any(kw in query for kw in chat_keywords):
-            return True
-        # 有效长度 ≤ 10 视为简单闲聊
-        cn_chars = sum(1 for c in query if '\u4e00' <= c <= '\u9fff')
-        effective_len = cn_chars * 2 + len(query) - cn_chars
-        if effective_len > 10:
-            return False
-
-        # 短追问场景保护：当前输入很短（如"？""然后呢""继续"），
-        # 若上一轮用户消息是记忆/回忆/复杂查询，则不走 fast_path，
-        # 否则会跳过记忆检索导致用户追问时无法触发 recall。
-        if self._is_followup_after_memory_intent(query):
-            return False
-        return True
-
-    def _is_followup_after_memory_intent(self, query: str) -> bool:
-        """判断当前短输入是否是对上一轮记忆/复杂查询的追问。
-
-        场景：用户问"回忆一下7月17日..."，模型回复不理想，用户发"？"追问。
-        此时 fast_path 会把"？"当闲聊处理，跳过 recall，导致追问永远无法触发记忆检索。
-        """
-        # 短追问标记词：纯标点或极短追问
-        import re
-        _followup_markers = (
-            "？", "?", "！", "!",
-            "然后呢", "接着", "继续", "说下去", "然后",
-            "呢", "嗯", "啊", "哦", "噢", "啥",
-        )
-        stripped = query.strip()
-        # 仅当输入本身就是短追问标记时才检查上下文
-        if stripped not in _followup_markers and not re.fullmatch(r'[？?！!\s]{1,3}', stripped):
-            return False
-
-        # 检查上下文中最近的用户消息是否含记忆/回忆/时间意图
-        try:
-            recent = self.context.get_last_n(6) or []
-        except Exception:
-            return False
-        _memory_intent_keywords = (
-            "回忆", "记得", "记忆", "recall", "上次", "昨天", "上周",
-            "之前", "前天", "几点", "哪个时间", "那天",
-        )
-        # 倒序查找最近一条 user 消息（排除当前这条）
-        for msg in reversed(recent):
-            if msg.get("role") != "user":
-                continue
-            content = str(msg.get("content", ""))
-            if any(kw in content for kw in _memory_intent_keywords):
-                return True
-            # 找到最近一条 user 消息即可，不含记忆意图就不再往前找
-            return False
-        return False
 
     def _detect_voice_intent(self, user_input: str) -> str:
         """检测语音意图：三态返回 'none' / 'on' / 'off'。
 
-        - 'off': 含否定词 + 语音关键词（如"不要发语音了"→关语音）
-        - 'on':  含语音关键词但不含否定词（如"发语音"→开语音）
-        - 'none': 无语音关键词
+        - 'off': 含关闭意图（如"不要发语音了"/"关闭语音"→关语音）
+        - 'on':  含明确"用语音回复"动作意图（如"发语音"/"念给我听"→开语音）
+        - 'none': 无明确语音动作意图
 
-        回归: 生产样本 id=1993 用户说"不要发语音了"但旧逻辑匹配"发语音"→True→TTS 照生成。
+        收紧原则（v2）：必须有"动作意图"才触发 on，单纯提及"语音/声音/说话"不触发。
+        回归案例：用户说"语音识别怎么实现"/"声音大点"/"说话方式怪怪的"被旧关键词
+        "语音"/"声音"/"说话"误匹配 → voice_mode 被永久打开 → TTS 失控。
+        旧案例 id=1993 "不要发语音了"：现 off 关键词优先匹配，避免被 on 的"发语音"误判。
         """
-        voice_keywords = [
-            "语音", "声音", "说话", "朗读", "念给我", "读给我",
-            "用声音", "听你", "听听你", "发语音", "生成语音",
-            "语音回复", "语音消息", "说给我听", "念出来",
-            "tts", "voice",
+        # 强意图：明确的"用语音回复"动作（必须含动作语义：发/用/念/读/说给/开启/打开）
+        on_keywords = [
+            "发语音", "用语音", "语音回复", "语音消息", "语音说",
+            "念给我", "念出来", "读给我听", "说给我听",
+            "开启语音", "打开语音", "语音模式", "开启语音模式",
+            "用声音回复", "用声音说", "语音是开的", "语音打开了",
+            "用tts", "用voice",
         ]
-        negation_prefixes = ["不要", "不用", "别", "关掉", "关闭", "停止", "取消"]
+        # 关闭意图：完整的 off 关键词（不再依赖"否定词前缀 4 字符"检测，更可靠）
+        off_keywords = [
+            "关闭语音", "语音关闭", "关闭语音模式", "语音是关的", "关掉语音",
+            "不要语音", "不用语音", "别发语音", "停止语音",
+            "不要发语音", "别用语音",
+        ]
         q = user_input.lower()
-        # 先找语音关键词，无则 none
-        matched_kw = False
-        for kw in voice_keywords:
-            idx = q.find(kw)
-            if idx == -1:
-                continue
-            matched_kw = True
-            # 检测否定：否定词在语音词前 4 字符范围内
-            prefix = q[max(0, idx - 4):idx]
-            if any(neg in prefix for neg in negation_prefixes):
+        # off 优先检测（避免"不要发语音了"被 on 的"发语音"误匹配）
+        for kw in off_keywords:
+            if kw in q:
                 return "off"
-        return "on" if matched_kw else "none"
+        for kw in on_keywords:
+            if kw in q:
+                return "on"
+        return "none"
 
     def _update_mental_state_emotion(self, emotion: dict) -> None:
         """将检测到的用户情绪更新到 L/M/S 心理状态模型的 S 层.
@@ -2274,12 +1733,44 @@ class MessageProcessorMixin:
             logger.warning("profile_learner.insight_failed",
                            error=str(e), error_type=type(e).__name__)
 
+    # P0 修复（Task 1.7）：MiMo Vision API 已知失败模式
+    # 当模型返回这些字符串时，说明图片识别失败，不应作为合法 description 透传
+    VISION_FAILURE_PATTERNS = (
+        "cannot read image", "unable to read", "i cannot read",
+        "image not readable", "can't read", "无法识别",
+        "图片无法识别", "图片读取失败", "无法读取图片",
+    )
+
     async def _describe_images(self, image_data: list[dict]) -> str:
-        """使用 MiMo Vision API 识别图片内容"""
+        """使用 Vision API 识别图片内容。
+
+        P0 修复（用户要求"主chatLLM是谁图片发给谁，不要硬编mimo"）：
+        - 移除硬编码 `provider="mimo"` 和 `model=MIMO_MODEL`
+        - 改用 `router.get_vision_provider_and_model()` 动态选择：
+          优先用当前主 chat LLM（若 supports_vision），否则从 provider_metadata.json
+          找 vision-capable provider，最后兜底环境变量。
+        - 保留 Task 1.6（安全客户端路径）、1.7（失败模式校验）、1.8（BadRequestError 捕获）
+        """
         try:
-            if not self.router or not self.router._client:
-                logger.warning("agent.vision_no_client")
+            # Task 1.6：走安全客户端路径（含锁 + 懒注册 + LLMError）
+            if not self.router:
+                logger.warning("agent.vision_no_router")
                 return ""
+            # P0 修复：动态选择 vision provider + model（不再硬编码 mimo）
+            _vision_provider, _vision_model = self.router.get_vision_provider_and_model()
+            if not _vision_provider or not _vision_model:
+                logger.warning("agent.vision_no_capable_provider",
+                               hint="主 chat LLM 不支持 vision 且元数据无 vision-capable provider")
+                return ""
+            try:
+                client = await self.router._select_client_for_provider(_vision_provider)
+            except Exception as ce:
+                logger.warning("agent.vision_client_unavailable",
+                               provider=_vision_provider,
+                               error=f"{type(ce).__name__}: {ce}"[:200])
+                return ""
+            logger.info("agent.vision_client_acquired",
+                        provider=_vision_provider, model=_vision_model)
 
             vision_parts = [{"type": "text", "text": "请详细描述这张图片的内容。如果有文字，请完整转录。如果是题目，请给出题目内容。"}]
             for i, img in enumerate(image_data):
@@ -2300,16 +1791,54 @@ class MessageProcessorMixin:
                 logger.warning("agent.vision_no_valid_images")
                 return ""
 
-            response = await self.router._client.chat.completions.create(
-                model=MIMO_MODEL,
-                messages=[{"role": "user", "content": vision_parts}],
-                max_tokens=1024,
-            )
-            description = response.choices[0].message.content.strip()
-            logger.info("agent.image_described", length=len(description))
+            # Task 1.8：优先捕获 BadRequestError，记录具体错误码
+            try:
+                response = await client.chat.completions.create(
+                    model=_vision_model,
+                    messages=[{"role": "user", "content": vision_parts}],
+                    max_tokens=1024,
+                )
+            except _openai_mod.BadRequestError as be:
+                # vision API 的 BadRequestError 通常意味着图片格式/大小问题
+                _status = getattr(be, "response", None)
+                _status_code = _status.status_code if _status is not None else None
+                logger.warning("agent.vision_bad_request",
+                               provider=_vision_provider, model=_vision_model,
+                               status_code=_status_code,
+                               body=str(getattr(be, "body", ""))[:200],
+                               error=f"{type(be).__name__}: {be}"[:200])
+                return ""
+            except _openai_mod.APIError as ae:
+                logger.warning("agent.vision_api_error",
+                               provider=_vision_provider, model=_vision_model,
+                               error=f"{type(ae).__name__}: {ae}"[:200])
+                return ""
+
+            description = (response.choices[0].message.content or "").strip()
+            logger.info("agent.image_described", length=len(description),
+                        provider=_vision_provider, model=_vision_model,
+                        preview=description[:80])
+
+            # Task 1.7：校验响应内容，识别已知失败模式
+            # 根因：Vision API 可能把 "cannot read image" 作为 content 返回，
+            #       原实现不校验直接透传到 system message，导致主聊天 LLM 据此回答"看不清图片"
+            if not description or len(description) < 10:
+                logger.warning("agent.vision_suspicious_response",
+                               reason="too_short", content_preview=description[:100])
+                return ""
+            _desc_lower = description.lower()
+            for pattern in self.VISION_FAILURE_PATTERNS:
+                if pattern in _desc_lower:
+                    logger.warning("agent.vision_suspicious_response",
+                                   reason="failure_pattern_matched",
+                                   pattern=pattern,
+                                   content_preview=description[:100])
+                    return ""  # 走兜底分支
+
             return description
         except Exception as e:
-            logger.warning("agent.image_describe_failed", error=str(e))
+            logger.warning("agent.image_describe_failed",
+                           error=str(e), error_type=type(e).__name__)
             return ""
 
     async def _xiaoda_synthesis_chat(self, prompt: str) -> str:

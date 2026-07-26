@@ -19,6 +19,9 @@ from core.degradation_strategy import get_degradation_strategy
 from core.event_bus import event_bus, AgentEvent, AgentEventType, gen_task_id
 from core.cancel_token import CancelToken, CancellationError
 
+# TTS 时机控制 v2：统一触发决策（避免子 agent 路径漏守卫导致 voice_mode 开启后"失控"）
+from agent_core.message_processor import _decide_tts_trigger
+
 from agent_core._shared import ProcessResult, _current_request_ctx, RequestContext, is_degraded_reply
 
 
@@ -201,8 +204,12 @@ class SubAgentManagerMixin:
         sub_audio_path = None
         sub_tts_pending = False
         sub_tts_text = ""
-        should_generate_voice = self._voice_mode or force_voice
-        if should_generate_voice and len(clean_sub_reply) > 2:
+        # TTS 时机控制 v2：统一过 _decide_tts_trigger（原串行路径完全无守卫，是子 agent
+        # 回复代码/URL 也发语音的根因）。补齐内容守卫 + 降级守卫，与主路径一致。
+        if _decide_tts_trigger(
+                clean_sub_reply, force_voice=force_voice, voice_mode=self._voice_mode,
+                tts_available=self.tts.available,
+                tts_enabled=get_degradation_strategy().is_feature_available("tts")):
             if TTS_ASYNC_MODE:
                 # Task 6: 异步 TTS
                 sub_tts_pending = True
@@ -510,9 +517,12 @@ class SubAgentManagerMixin:
         audio_path = None
         tts_pending = False
         tts_text = ""
-        should_generate_voice = self._voice_mode or force_voice
-        if (should_generate_voice and self.tts.available and len(clean_reply) > 2
-                and get_degradation_strategy().is_feature_available("tts")):
+        # TTS 时机控制 v2：统一过 _decide_tts_trigger（原并行路径缺内容守卫，
+        # voice_mode 开启后子 agent 代码/URL 回复也强制发语音）。与主路径一致。
+        if _decide_tts_trigger(
+                clean_reply, force_voice=force_voice, voice_mode=self._voice_mode,
+                tts_available=self.tts.available,
+                tts_enabled=get_degradation_strategy().is_feature_available("tts")):
             if TTS_ASYNC_MODE:
                 # Task 6: 异步 TTS
                 tts_pending = True
