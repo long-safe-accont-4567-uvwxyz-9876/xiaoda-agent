@@ -565,6 +565,13 @@ def strip_reasoning(text: str) -> str:
     #       若回退后仍过短（极端情况），再回退到原始文本（宁可保留少量推理也不丢回复）。
     cleaned_len = len(text)
     if original_len > 100 and cleaned_len < original_len * 0.3:
+        # 检查清洗后文本是否包含有意义的中文内容（CJK 字符）
+        # 如果清洗后仍有中文，说明英文部分被正确识别为推理并移除，
+        # 不应触发 overstrip 回退（回退会把英文推理重新加回来）
+        _has_cjk = any('\u4e00' <= c <= '\u9fff' for c in text) if text else False
+        if _has_cjk and cleaned_len >= 5:
+            # 清洗结果包含有效中文内容，英文推理被正确移除，无需回退
+            return text
         from loguru import logger
         logger.warning(
             "text_utils.strip_reasoning_overstrip original_len={} cleaned_len={} ratio={:.1%}",
@@ -576,7 +583,18 @@ def strip_reasoning(text: str) -> str:
             logger.info("text_utils.strip_reasoning_overstrip_recovered",
                         recovered_len=_safe_len, strategy="safe_strip")
             return _text_after_safe_strip
-        # 回退 2：安全清洗仍过短，返回原始文本（兜底，绝不返回空或过短内容）
+        # 回退 2：安全清洗仍过短
+        # 区分两种情况：
+        # a) _text_after_safe_strip 为空 → 整段都是推理泄漏，应返回空字符串
+        #    （回退到原始文本会把推理内容原样返回，违背 strip_reasoning 的目的）
+        # b) _text_after_safe_strip 非空但过短 → 安全清洗保留了部分内容但太少，
+        #    此时回退到原始文本（宁可保留少量推理也不丢回复）
+        if not (_text_after_safe_strip or "").strip():
+            # 安全清洗后仅剩空白 → 整段都是推理泄漏，应返回空字符串
+            # （回退到原始文本会把推理内容原样返回，违背 strip_reasoning 的目的）
+            logger.info("text_utils.strip_reasoning_all_reasoning",
+                        original_len=original_len, strategy="return_empty")
+            return ""
         logger.warning("text_utils.strip_reasoning_overstrip_fallback_raw",
                        original_len=original_len, safe_len=_safe_len)
         return text if (text and len(text) >= original_len * 0.3) else _raw_original

@@ -575,7 +575,11 @@ class ModelRouter:
                 ),
                 "timeout": self.TASK_TIMEOUTS.get("chat"),
             })
-        except (OSError, KeyError, ValueError, TypeError) as e:
+        except (OSError, KeyError, ValueError, TypeError, RuntimeError) as e:
+            # CodeRabbit #4 修复：捕获 RuntimeError（config_service 可能抛出的非 OSError/KeyError/ValueError/TypeError）
+            # 根因：原 except 不含 RuntimeError，config_service 抛 RuntimeError 时会向上传播
+            # 到 _restore_chat_model 的 fallback，导致 sticky fallback（mimo 覆盖用户选择）。
+            # 优先保证功能性：persist 失败不应影响内存中的 set_chat_model 已完成的路由切换。
             logger.warning("router.chat_model_persist_failed error={}", str(e))
         logger.info("router.chat_model_changed", provider=provider, model=model_id)
         return {"provider": provider, "model_id": model_id}
@@ -800,7 +804,11 @@ class ModelRouter:
         if provider == "mimo":
             return self._client is not None
         if provider == "agnes":
-            return self._agnes_client is not None
+            # 同时检查 _agnes_client 和 _custom_clients["agnes"]
+            # 根因：用户通过 WebUI 添加 agnes 时，客户端注册到 _custom_clients["agnes"]，
+            # 但旧实现只检查 _agnes_client，导致 fallback 链跳过 agnes。
+            return (self._agnes_client is not None
+                    or "agnes" in getattr(self, "_custom_clients", {}))
         return provider in getattr(self, "_custom_clients", {})
 
     async def _try_fallback_chain(self, e: Exception, task_type: str,
@@ -1004,19 +1012,27 @@ class ModelRouter:
                 client = self._agnes_client
                 # P0：agnes client 懒恢复（防止 refresh_client 把它置 None 后无法自愈）
                 if client is None:
-                    _agnes_key = os.getenv("AGNES_API_KEY", "")
-                    _agnes_url = os.getenv("AGNES_BASE_URL", AGNES_BASE_URL)
-                    if _agnes_key:
-                        try:
-                            _ssrf_check(_agnes_url)
-                            self._agnes_client = AsyncOpenAI(
-                                api_key=_agnes_key, base_url=_agnes_url)
-                            client = self._agnes_client
-                            logger.info("router.agnes_client_lazy_recovered",
-                                        key_hash=_mask_api_key(_agnes_key))
-                        except (ValueError, OSError) as ce:
-                            logger.warning("router.agnes_client_lazy_recover_failed",
-                                           error=str(ce))
+                    # 优先检查 _custom_clients["agnes"]（用户通过 WebUI 注册的 agnes 客户端）
+                    # 根因：旧实现直接走 env var 懒恢复，会绕过 _custom_clients["agnes"]
+                    # 导致用户通过 WebUI 添加 agnes 后，调用仍走 env var 创建的新客户端，
+                    # 而非用户注册的客户端（用户配置的 base_url/api_key 不生效）。
+                    _custom_agnes = getattr(self, "_custom_clients", {}).get("agnes")
+                    if _custom_agnes is not None:
+                        client = _custom_agnes
+                    else:
+                        _agnes_key = os.getenv("AGNES_API_KEY", "")
+                        _agnes_url = os.getenv("AGNES_BASE_URL", AGNES_BASE_URL)
+                        if _agnes_key:
+                            try:
+                                _ssrf_check(_agnes_url)
+                                self._agnes_client = AsyncOpenAI(
+                                    api_key=_agnes_key, base_url=_agnes_url)
+                                client = self._agnes_client
+                                logger.info("router.agnes_client_lazy_recovered",
+                                            key_hash=_mask_api_key(_agnes_key))
+                            except (ValueError, OSError) as ce:
+                                logger.warning("router.agnes_client_lazy_recover_failed",
+                                               error=str(ce))
             elif provider not in ("mimo", "agnes"):
                 custom = getattr(self, "_custom_clients", {}).get(provider)
                 if custom is None:

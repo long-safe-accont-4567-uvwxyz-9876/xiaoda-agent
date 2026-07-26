@@ -94,38 +94,41 @@ def test_build_stream_kwargs_agnes_clamps_max_tokens():
 
 
 def test_restore_chat_model_fallback_preserves_route_table(monkeypatch):
-    """_restore_chat_model fallback 分支不应修改 ROUTE_TABLE['chat']['client']。
+    """_restore_chat_model fallback 分支：当 provider 未注册时回退到 mimo（内存）。
 
-    模拟 set_chat_model 抛 LLMError，验证 fallback 后 ROUTE_TABLE 中
-    用户原选择（agnes）被保留，不污染为 mimo。
+    新代码（P0 sticky fallback 修复后）不再调用 set_chat_model，而是直接修改
+    ROUTE_TABLE 和 _current_chat_model。当 provider 是未注册的自定义 provider 时，
+    try 块抛 LLMError，进入 fallback：将 ROUTE_TABLE 和 _current_chat_model 都改为 mimo。
+
+    关键修复（sticky fallback 根因）：fallback 路径不调用 cfg.set 持久化 mimo
+    （由 test_restore_chat_model_fallback_does_not_persist_mimo 验证），
+    这样用户下次重启时仍能从 config 中恢复原选择。
     """
     # 在导入 server 前注入 fake model_router 模块
     import model_router as _mr_module
     original_route_table = _mr_module.ROUTE_TABLE
 
-    # 临时修改 ROUTE_TABLE 模拟用户选择 agnes
+    # 临时修改 ROUTE_TABLE 模拟用户选择未注册的 custom provider
     test_route = {
         "chat": {
-            "model": "agnes-2.0-flash",
+            "model": "custom-model-x",
             "max_tokens": 131072,
-            "client": "agnes",
+            "client": "custom_unregistered",  # 不在 ("mimo", "agnes") 也不在 _custom_clients
             "thinking": {"type": "disabled"},
         }
     }
     monkeypatch.setattr(_mr_module, "ROUTE_TABLE", test_route)
 
-    # 模拟 set_chat_model 抛异常（自定义 provider 注册失败场景）
+    # 模拟 router：_custom_clients 为空（custom_unregistered 未注册）
     class _FakeRouter:
-        def set_chat_model(self, provider, model_id):
-            raise RuntimeError("simulated register failure")
-
         _current_chat_model = None
+        _custom_clients = {}  # 空，custom_unregistered 未注册
 
-    # 模拟 config_service
+    # 模拟 config_service：返回用户保存的 custom_unregistered 选择
     class _FakeCfg:
         def get(self, key, default=None):
             if key == "models.chat_model":
-                return {"provider": "agnes", "model_id": "agnes-2.0-flash"}
+                return {"provider": "custom_unregistered", "model_id": "custom-model-x"}
             return default
 
     fake_core = SimpleNamespace(router=_FakeRouter())
@@ -137,14 +140,14 @@ def test_restore_chat_model_fallback_preserves_route_table(monkeypatch):
 
     server_mod._restore_chat_model(_FakeCfg(), fake_core)
 
-    # 关键断言：ROUTE_TABLE 中 chat client 仍为 agnes，未被改成 mimo
-    assert test_route["chat"]["client"] == "agnes", (
-        f"fallback 后 ROUTE_TABLE client 应保留 agnes，实际 {test_route['chat']['client']}"
+    # 关键断言 1：fallback 后 ROUTE_TABLE chat 改为 mimo（让 route() 可用）
+    assert test_route["chat"]["client"] == "mimo", (
+        f"fallback 后 ROUTE_TABLE client 应改为 mimo（保证 route() 可用），实际 {test_route['chat']['client']}"
     )
-    assert test_route["chat"]["model"] == "agnes-2.0-flash", (
-        f"fallback 后 ROUTE_TABLE model 应保留，实际 {test_route['chat']['model']}"
+    assert test_route["chat"]["model"] == _mr_module.MIMO_MODEL, (
+        f"fallback 后 ROUTE_TABLE model 应改为 MIMO_MODEL，实际 {test_route['chat']['model']}"
     )
-    # _current_chat_model 应改为 mimo（仅影响 GET /models/chat-model 返回）
+    # 关键断言 2：_current_chat_model 也改为 mimo（内存中反映当前激活模型）
     assert fake_core.router._current_chat_model == {
         "provider": "mimo", "model_id": _mr_module.MIMO_MODEL
     }

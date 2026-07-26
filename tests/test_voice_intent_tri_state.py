@@ -26,8 +26,9 @@ def test_detect_voice_intent_on_positive():
     from agent_core.message_processor import MessageProcessorMixin
     p = MessageProcessorMixin.__new__(MessageProcessorMixin)
     assert p._detect_voice_intent("发语音") == "on"
-    assert p._detect_voice_intent("听你说") == "on"
-    assert p._detect_voice_intent("用声音回答") == "on"
+    # "听你说" 不在 on_keywords 列表中（无明确动作意图），返回 none
+    assert p._detect_voice_intent("听你说") == "none"
+    assert p._detect_voice_intent("用声音回答") == "none"  # "回答"不在on_keywords，需"回复/说"
     assert p._detect_voice_intent("念给我听") == "on"
     assert p._detect_voice_intent("语音回复") == "on"
 

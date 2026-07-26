@@ -36,6 +36,9 @@ def _make_mock_mgr(belief_router=None, dispatch_return="这是小狼的回复", 
     mgr.security = MagicMock()
     mgr.security.is_owner = MagicMock(return_value=True)
     mgr.get_sticker_manager = MagicMock(return_value=MagicMock(available=False))
+    # _dispatch_single_sub_agent 访问 self.tts.available，需提供 mock
+    mgr.tts = MagicMock()
+    mgr.tts.available = False
     return mgr
 
 

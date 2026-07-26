@@ -6,6 +6,8 @@ import sys
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
+from core.app_exception import LLMError
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
@@ -187,8 +189,20 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
     current_model = ROUTE_TABLE.get("chat", {}).get("model", "")
     logger.info("webui.chat_model_restore_attempt saved={}/{} current_route={}/{}",
                 provider, model_id, current_client, current_model)
+    # 直接修改内存中的 ROUTE_TABLE 和 _current_chat_model，不调用 set_chat_model。
+    # set_chat_model 会触发持久化（cfg.set），而 _restore_chat_model 只做"恢复"不做"持久化"，
+    # 否则每次启动都会重新持久化当前模型到 config，覆盖用户的后续切换选择。
+    # 成功路径：直接设置 ROUTE_TABLE["chat"] 和 _current_chat_model
+    # fallback 路径：回退到 mimo，同样只修改内存不持久化
     try:
-        core.router.set_chat_model(provider, model_id)
+        # 检查 provider 是否已注册（自定义 provider 可能未注册）
+        if provider not in ("mimo", "agnes") and provider not in getattr(core.router, '_custom_clients', {}):
+            raise LLMError(f"自定义 provider {provider} 未注册")
+        chat_entry = ROUTE_TABLE.get("chat")
+        if chat_entry is not None:
+            chat_entry["model"] = model_id
+            chat_entry["client"] = provider
+        core.router._current_chat_model = {"provider": provider, "model_id": model_id}
         logger.info("webui.chat_model_restored provider={} model={}", provider, model_id)
     except Exception as e:
         # 必须捕获 Exception：LLMError 继承 AppException 不在原 (KeyError, ValueError,

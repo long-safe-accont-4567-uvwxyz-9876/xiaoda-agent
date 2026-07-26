@@ -2,6 +2,7 @@
 import os
 import time
 from datetime import datetime
+from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -27,6 +28,9 @@ def _make_processor():
     mp.slash_handler = None
     # P1-6: _try_greeting_shortcut 现在会读 _voice_mode（默认 False 保持原行为）
     mp._voice_mode = False
+    # _try_greeting_shortcut 访问 self.tts.available，需提供 mock
+    mp.tts = MagicMock()
+    mp.tts.available = False
     return mp
 
 

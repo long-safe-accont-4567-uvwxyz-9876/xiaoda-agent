@@ -133,13 +133,14 @@ class TestExecuteIntegration:
 
     @pytest.mark.asyncio
     async def test_needs_confirmation_returns_special_marker(self, executor, pm):
-        """端到端：非白名单命令返回 needs_confirmation 标记"""
+        """端到端：非白名单命令返回用户确认提示"""
         pm.set_cwd("/tmp")
         pm.set_whitelist([])
         # cargo build 不匹配 sandbox 危险模式，也不在白名单
         result = await executor.execute("shell_command", {"command": "cargo build"})
         assert not result.success
-        assert "__NEEDS_CONFIRMATION__" in (result.error or "")
+        # execute 将 __NEEDS_CONFIRMATION__ 转换为中文用户确认提示
+        assert "用户确认" in (result.error or ""), f"期望包含'用户确认'，实际: {result.error}"
 
 
 class TestWorkspaceAuditBuffer:
