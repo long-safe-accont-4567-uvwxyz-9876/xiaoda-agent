@@ -65,7 +65,7 @@ async def detect_emotion_llm(
 
     try:
         result = await asyncio.wait_for(
-            router.route("chat_flash", messages, temperature=0.3),
+            router.route("chat", messages, temperature=0.3),
             timeout=LLM_EMOTION_TIMEOUT,
         )
         raw_text = result if isinstance(result, str) else (

@@ -691,7 +691,7 @@ class ABTestRunner:
         self,
         mode: str = "shadow",
         router: Any = None,
-        judge_task_type: str = "chat_flash",
+        judge_task_type: str = "chat",
         response_task_type: str = "chat",
     ) -> None:
         self.mode = mode

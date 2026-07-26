@@ -162,7 +162,7 @@ class SpontaneousRecall:
         try:
             result = await asyncio.wait_for(
                 self.core.router.route(
-                    "chat_flash",
+                    "chat",
                     [
                         {"role": "system", "content": "你是小妲，在独自回忆过去。"},
                         {"role": "user", "content": prompt},

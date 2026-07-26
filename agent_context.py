@@ -441,7 +441,7 @@ class AgentContext:
             # 5s 超时：LLM 总结失败/超时则回退到字符串截断，不拖慢主流程
             result = await asyncio.wait_for(
                 self._router.route(
-                    "chat_flash",
+                    "chat",
                     [
                         {"role": "system", "content": "请将以下对话记录压缩为1-2句话的摘要，保留关键信息和上下文。只输出摘要，不要加任何前缀。"},
                         {"role": "user", "content": text},

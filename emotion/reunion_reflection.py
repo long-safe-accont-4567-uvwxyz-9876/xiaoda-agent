@@ -96,7 +96,7 @@ async def generate_reunion_message(
                 {"role": "user", "content": "（回来了）"},
             ]
             result = await asyncio.wait_for(
-                router.route("chat_flash", messages, temperature=0.8),
+                router.route("chat", messages, temperature=0.8),
                 timeout=10,
             )
             text = result if isinstance(result, str) else (

@@ -1308,7 +1308,7 @@ class MessageProcessorMixin:
             else:
                 try:
                     result = await self.router.route(
-                        "chat_flash", messages, temperature=0.7,
+                        "chat", messages, temperature=0.7,
                         user_openid=user_openid, session_id=session_id,
                     )
                     reply = self._clean_reply(result) if isinstance(result, str) else DEGRADED_REPLY
@@ -1720,7 +1720,7 @@ class MessageProcessorMixin:
 
             # 轻量级 LLM 调用（使用 flash 路由，低成本）
             response = await self.router.route(
-                task_type="chat_flash",
+                task_type="chat",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=512,

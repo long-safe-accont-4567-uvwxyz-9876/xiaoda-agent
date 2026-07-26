@@ -539,6 +539,26 @@ class ModelRouter:
                 "models.chat_model",
                 {"provider": provider, "model_id": model_id},
             )
+            # P0 修复（用户反馈"UI 设置 Agnes 但 chat_flash 还显示 mimo"根因）：
+            # 持久化所有同步过的 task 路由到 webui_overrides.json，避免 WebUI 显示与运行时不一致
+            # 之前只持久化 chat，其他 task（chat_flash/chat_mini/chat_pro 等）保留旧配置，
+            # 导致用户在 WebUI 看到 chat_flash 还是 mimo，误以为没生效
+            for _task_name in _sync_tasks:
+                _entry = ROUTE_TABLE.get(_task_name, {})
+                if not _entry:
+                    continue
+                cfg.set(f"models.routes.{_task_name}", {
+                    "model": _entry.get("model", model_id),
+                    "client": _entry.get("client", provider),
+                    "max_tokens": _entry.get("max_tokens"),
+                    "thinking": bool(
+                        _entry.get("thinking")
+                        and isinstance(_entry.get("thinking"), dict)
+                        and _entry["thinking"].get("type") == "enabled"
+                    ),
+                    "timeout": self.TASK_TIMEOUTS.get(_task_name, 60),
+                })
+            # chat 主路由单独持久化（确保 max_tokens 等字段完整）
             chat_entry = ROUTE_TABLE.get("chat", {})
             cfg.set("models.routes.chat", {
                 "model": model_id,

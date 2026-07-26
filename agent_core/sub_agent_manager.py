@@ -898,7 +898,7 @@ class SubAgentManagerMixin:
                 f"1-2句话即可，不要提及小莉或任何查询过程。"
             )
             reply = await self.router.route(
-                "chat_flash",
+                "chat",
                 [{"role": "user", "content": prompt}],
                 temperature=0.7,
                 max_tokens=1536,
@@ -930,7 +930,7 @@ class SubAgentManagerMixin:
             _ctx.delegate_depth += 1
         try:
             reply = await self.router.route(
-                "chat_flash",
+                "chat",
                 [{"role": "system", "content": build_system_prompt()},
                  {"role": "user", "content": question}],
                 temperature=0.7,
