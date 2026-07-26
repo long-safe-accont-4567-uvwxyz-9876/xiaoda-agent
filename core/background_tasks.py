@@ -370,6 +370,8 @@ class BackgroundTaskManager:
                     "learning_promote",
                     get_preference_pipeline().check_promotion(self.learning_manager))
         except (ImportError, OSError, RuntimeError) as e:
+            # 释放占位：_should_run 已预约但 setup 失败时不释放会导致永久拒绝
+            self._running_scheduled.discard("learning_promote")
             logger.warning("bg.learning_promote_schedule_failed", error=str(e))
 
         # 13. 邮箱 OAuth token 定期刷新（每 2 小时，防止 access/refresh token 过期）
@@ -420,6 +422,9 @@ class BackgroundTaskManager:
         try:
             last_run = await self.db.get_cron_last_run(task_name)
             if last_run is None:
+                # 二次检查：await 期间可能已有并发调用占位（与下方超时分支一致）
+                if task_name in self._running_scheduled:
+                    return False
                 self._running_scheduled.add(task_name)
                 return True
             result = (time.time() - last_run) >= interval_hours * 3600

@@ -544,7 +544,13 @@ class TTSEngine:
         existing = self._inflight.get(cache_key)
         if existing is not None:
             # 等待者被取消不影响合成方（shield 隔离取消传播到 inner future）
-            return await asyncio.shield(existing)
+            # 普通异常转 None：synthesize 返回类型是 Path | None，抛异常不符合契约
+            try:
+                return await asyncio.shield(existing)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                return None
 
         fut = asyncio.get_running_loop().create_future()
         self._inflight[cache_key] = fut
@@ -554,8 +560,14 @@ class TTSEngine:
             )
             fut.set_result(result)
             return result
+        except asyncio.CancelledError:
+            raise
         except BaseException as e:
-            fut.set_exception(e)  # 让等待者拿到同一异常，而不是永久挂起
+            # 让等待者拿到同一异常，而不是永久挂起；
+            # 但公共边界转 None：synthesize 契约是 Path | None，不抛异常
+            fut.set_exception(e)
+            if isinstance(e, Exception):
+                return None
             raise
         finally:
             # 消费 future 异常避免 "exception never retrieved" 告警：

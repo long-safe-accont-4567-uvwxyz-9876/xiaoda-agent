@@ -610,13 +610,21 @@ def _has_any_provider_credential() -> bool:
         cfg = get_config_service()
         for pid in (cfg.get("models.providers", {}) or {}):
             if pid == "ollama":
-                # ollama 不需要 API key，注册时仅看 OLLAMA_BASE_URL；
-                # 这里不把它视为"有凭证"，避免用户残留 ollama 配置时误判非降级
+                # ollama 不需要 API key，由下方第 4 步检查 OLLAMA_BASE_URL
                 continue
             if load_provider_key(pid).strip():
                 return True
     except (ImportError, OSError, ValueError) as e:
         logger.warning("webui.custom_provider_credential_check_failed error={}", str(e))
+
+    # 4. Ollama：不需要 API key，仅看 .env 是否显式配置 OLLAMA_BASE_URL
+    #    （与 _apply_model_overrides 的注册条件一致，Ollama-only 部署不误入降级模式）
+    try:
+        from setup_wizard import _load_env_values
+        if _load_env_values().get("OLLAMA_BASE_URL", "").strip():
+            return True
+    except (ImportError, OSError, ValueError):
+        logger.debug("server.ollama_url_check_failed", exc_info=True)
 
     return False
 

@@ -871,7 +871,7 @@ class ModelRouter:
                     fallback_tools, tool_choice, timeout, user_openid, session_id,
                     extra_headers=extra_headers,
                 )
-            except (RuntimeError, OSError, KeyError, ValueError) as fb_err:
+            except (RuntimeError, OSError, KeyError, ValueError, LLMError) as fb_err:
                 logger.error("router.fallback_failed",
                              fallback_task=fallback_type,
                              error=f"{type(fb_err).__name__}: {fb_err}")
@@ -893,7 +893,7 @@ class ModelRouter:
                         agnes_tools, tool_choice, timeout, user_openid, session_id,
                         extra_headers=extra_headers,
                     )
-            except (RuntimeError, OSError, KeyError, ValueError) as agnes_err:
+            except (RuntimeError, OSError, KeyError, ValueError, LLMError) as agnes_err:
                 logger.error("router.agnes_fallback_failed", error=str(agnes_err))
 
         # 3. 尝试已注册的自定义 provider（SiliconFlow/OpenRouter/ModelScope 等）

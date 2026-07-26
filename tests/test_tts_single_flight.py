@@ -76,8 +76,8 @@ async def test_single_flight_coalesces_20_identical_requests(tmp_path, patched_x
     assert engine._inflight == {}, "in-flight 表结束后应清空"
 
 
-async def test_single_flight_propagates_exception_to_all_waiters(tmp_path, patched_xiaoda_voice):
-    """leader 抛异常时，20 个等待者都拿到同一异常，且 _inflight 已清空、上游只打一次。"""
+async def test_single_flight_returns_none_on_exception(tmp_path, patched_xiaoda_voice):
+    """leader 抛异常时，所有调用者返回 None（Path | None 契约），且 _inflight 已清空、上游只打一次。"""
     engine = _make_engine(tmp_path)
 
     call_count = 0
@@ -102,6 +102,6 @@ async def test_single_flight_propagates_exception_to_all_waiters(tmp_path, patch
     assert call_count == 1, f"上游应只调用一次，实际 {call_count}"
     assert len(gathered) == 20
     for r in gathered:
-        assert isinstance(r, RuntimeError), f"等待者应拿到 RuntimeError，实际 {type(r).__name__}: {r}"
-        assert "upstream boom" in str(r)
+        # CodeRabbit: synthesize 返回类型是 Path | None，异常时返回 None 而非抛异常
+        assert r is None, f"异常时应返回 None，实际 {type(r).__name__}: {r}"
     assert engine._inflight == {}, "异常路径下 in-flight 表也应清空"
