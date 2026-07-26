@@ -484,7 +484,11 @@ _MERGE_OVERLAP_MIN = 10
 
 
 # 合法句末标点：用于判断 original 是否被截断（不以这些结尾 = 可能被截断）
-_SENTENCE_END_CHARS = set("。！？～…）」】.!?,;:、:")
+# CodeRabbit #2 修复：移除逗号/分号/冒号/顿号（非句末标点）
+# 原 implementation 含 ,;:、:，导致以这些结尾的回复被误判完整，截断无法修复
+# CodeRabbit #6 修复：对齐 text_utils._SENTENCE_END_PUNCT 完整字符集
+# 包含引号和右括号变体（' " " ' 》 〉 〕 ｝），避免以这些结尾的回复被误判截断
+_SENTENCE_END_CHARS = set("。！？～…）」】.!?\"'”'）」】》〉〕｝\n")
 
 
 def _looks_truncated(text: str) -> bool:

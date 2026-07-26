@@ -358,6 +358,83 @@ async def _start_services(app: Any, core: Any) -> None:
     app.state.last_emotion = None
 
 
+async def restart_qq_bot_task(app: FastAPI) -> bool:
+    """重启 QQ Bot 任务（用户在 WebUI 更新 QQ 凭证后调用）。
+
+    根因修复（用户反馈"QQ ID/Secret 登录成功后仍显示机器人离线"）：
+    原 _start_services 仅在 WebUI 启动时检查 QQBOT_APP_ID env，用户后填入
+    凭证后不会自动启动 QQ bot 任务。即使 _reload_env_and_cache 更新了
+    os.environ，qq_bot_adapter 模块级 APP_ID/APP_SECRET（import 时一次性
+    读取）仍是旧值（空），导致 run_qq_bot 早期返回 disabled_no_appid。
+
+    修复流程：
+    1. 取消已存在的 qq_task（用旧凭证运行的实例）
+    2. 更新 qq_bot_adapter.APP_ID/APP_SECRET 模块级变量（从 os.environ 读取最新值）
+    3. 检查启用条件（QQBOT_APP_ID + QQBOT_APP_SECRET + ENABLE_QQ_BOT）
+    4. 启动新的 qq_task
+
+    CodeRabbit #2 修复：整个取消+更新+启动序列加 asyncio.Lock 防并发重叠，
+    避免两个同时触发的重启请求产生两个 qq_task 竞争同一个 WebSocket 连接。
+
+    Returns:
+        True 表示已启动新的 QQ bot 任务，False 表示未启动（凭证缺失或禁用）
+    """
+    # CodeRabbit #2: 加锁防并发重叠
+    lock = getattr(app.state, "_qq_restart_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        app.state._qq_restart_lock = lock
+    async with lock:
+        return await _restart_qq_bot_task_inner(app)
+
+
+async def _restart_qq_bot_task_inner(app: FastAPI) -> bool:
+    """restart_qq_bot_task 的实际逻辑（在 Lock 保护下执行）。"""
+    # 1. 取消已存在的 qq_task（用旧凭证运行的实例）
+    old_task = getattr(app.state, "qq_task", None)
+    if old_task and not old_task.done():
+        old_task.cancel()
+        with suppress(asyncio.CancelledError, RuntimeError):
+            await old_task
+        logger.info("webui.qq_bot_old_task_cancelled_for_restart")
+
+    # 2. 更新 qq_bot_adapter 模块级变量（原在 import 时一次性读取，不会感知 env 更新）
+    new_app_id = os.getenv("QQBOT_APP_ID", "").strip()
+    new_app_secret = os.getenv("QQBOT_APP_SECRET", "").strip()
+    try:
+        import qq_bot_adapter
+        qq_bot_adapter.APP_ID = new_app_id
+        qq_bot_adapter.APP_SECRET = new_app_secret
+    except (ImportError, AttributeError) as e:
+        logger.warning("webui.qq_bot_adapter_module_update_failed error={}", str(e))
+        app.state.qq_task = None
+        return False
+
+    # 3. 检查启用条件
+    enable_qq = os.getenv("ENABLE_QQ_BOT", "true").lower() in ("true", "1", "yes")
+    if not new_app_id or not new_app_secret or not enable_qq:
+        logger.info("webui.qq_bot_not_started reason=missing_credentials_or_disabled "
+                    "app_id_set={} secret_set={} enable={}",
+                    bool(new_app_id), bool(new_app_secret), enable_qq)
+        app.state.qq_task = None
+        return False
+
+    # 4. 启动新的 QQ bot 任务
+    try:
+        from config import AGENT_CONFIG
+        from qq_bot_adapter import run_qq_bot
+        core = app.state.core
+        sandbox = AGENT_CONFIG.get("qq_bot", {}).get("is_sandbox", False)
+        new_task = asyncio.create_task(run_qq_bot(core, sandbox=sandbox))
+        app.state.qq_task = new_task
+        logger.info("webui.qq_bot_task_restarted_after_credential_save sandbox={}", sandbox)
+        return True
+    except (ImportError, RuntimeError, AttributeError) as e:
+        logger.error("webui.qq_bot_task_restart_failed error={}", str(e))
+        app.state.qq_task = None
+        return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
     logger.info("webui.lifespan.start")

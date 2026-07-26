@@ -1057,12 +1057,21 @@ def is_reply_likely_complete(reply: str, finish_reason: str | None = None) -> bo
     """判断回复是否大概率完整（不需追加 "。" 或触发续写重试）。
 
     判定规则（按优先级）：
+    0. finish_reason="length" → 始终不完整（token 上限截断必须续写恢复）
     1. finish_reason="stop" 且回复较长（>=30字符）→ 信任 LLM，视为完整
        根因：agnes-2.0-flash 等模型在角色扮演中常不以标点结尾（风格选择），
        finish_reason="stop" 表示 LLM 自己认为说完了，不应强制追加 "。"
-    2. 回复以合法句末标记结尾（标点/emoji）→ 完整
+    2. 回复以合法句末标记结尾（标点/emoji/sticker 标签）→ 完整
     3. 回复较短（<30字符）且不以标点结尾 → 可能不完整（如"让我查一下"）
-    4. 其他情况 → 不完整（需重试或 force-close）
+    4. 长回复（>=30字符）的完整性判定：
+       - finish_reason=None + 超长回复(>=200字符) → 信任（保留功能性）
+       - finish_reason=None + 30-200字符 + 无合法结尾 → 不完整（触发 no_finish_retry）
+       - 其他 finish_reason（"length"/"content_filter"）→ 不完整（需重试或 force-close）
+
+    CodeRabbit #3 修复权衡：
+    原 finish_reason=None 无条件信任 → verification_no_finish_retry 死代码。
+    现分两档：超长(>=200)信任避免误判，中长(30-200)触发重试验证完整性。
+    调用方在重试空/重复时标记为完整，避免 force_close 追加"。"丑陋输出。
 
     Args:
         reply: 回复文本
@@ -1074,6 +1083,13 @@ def is_reply_likely_complete(reply: str, finish_reason: str | None = None) -> bo
     if not reply or not reply.strip():
         return False
     reply_stripped = reply.strip()
+    # 规则 0（CodeRabbit #3 补充）：finish_reason="length" 始终判定不完整
+    # 根因：length 表示 LLM 因 token 上限截断，即使恰好以标点结尾也需要续写恢复，
+    # 否则内容被静默截断（如 "这句话说到一半。但还有后半段" 在 max_tokens 处截断
+    # 恰好落在"。"后 → 原判定 True → 不续写 → 后半段丢失）。
+    # 优先保证功能性：截断必须触发续写重试，无论结尾看起来多么"完整"。
+    if finish_reason == "length":
+        return False
     # 规则 1：finish_reason="stop" + 长回复 → 信任 LLM
     # 根因：模型风格不以标点结尾是正常的，强制追加 "。" 会产生 "💕。" 丑陋输出
     if finish_reason == "stop" and len(reply_stripped) >= 30:
@@ -1085,11 +1101,21 @@ def is_reply_likely_complete(reply: str, finish_reason: str | None = None) -> bo
     if len(reply_stripped) < 30:
         return False
     # 规则 4：长回复（>=30字符）的完整性判定
-    # P0 修复（用户反馈"说话只说一半"根因）：agnes-2.0-flash 流式响应常返回
-    # finish_reason=None（provider 中途关闭连接不发 finish chunk），原判定把 None
-    # 当作"不完整"→ force_close 频繁追加"。"→ 用户感知为截断。
-    # 修复：finish_reason=None 时也信任长回复（>=30字符大概率完整），
-    #       只有明确非 stop/None（如 "length"/"content_filter"）才判定不完整。
+    # CodeRabbit #3 修复（权衡 false-truncation 与 false-trust）：
+    # 原实现 finish_reason=None 时无条件 return True，导致 message_processor.py
+    # 的 verification_no_finish_retry 续写重试路径变成死代码——provider 中途
+    # 关闭连接造成的真实截断永远无法被续写修复。
+    #
+    # 修复策略（优先保证功能性）：
+    # - finish_reason=None + 超长回复(>=200字符) → 信任
+    #   agnes 风格不以标点结尾是正常的，超长回复即便无标点也信任 LLM，
+    #   避免对正常长回复误判为截断（保留原 P0 修复的功能性）。
+    # - finish_reason=None + 30-200字符 + 无合法结尾 → 不信任
+    #   让调用方触发 no_finish_retry 续写重试验证完整性。
+    #   重试空/重复时由调用方标记为完整（LLM 确认完成），避免 force_close
+    #   追加"。"产生丑陋输出（功能性兜底在调用方实现）。
     if finish_reason is None:
-        return True  # 流式未收到 finish chunk，但长回复大概率完整，信任 LLM
+        if len(reply_stripped) >= 200:
+            return True  # 超长回复信任，避免对正常长回复误判
+        return False  # 30-200字符无合法结尾，让调用方触发 no_finish_retry
     return False

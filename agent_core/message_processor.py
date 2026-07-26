@@ -399,8 +399,21 @@ class MessageProcessorMixin:
                             # 重试重复 = LLM 认为回复已完成，视为完整
                             _reply_considered_complete = True
                     else:
-                        logger.warning("verification.no_finish_retry_empty",
-                                       finish_reason=_finish_reason)
+                        # CodeRabbit #3 配套修复：no_finish_retry 返回空 = LLM 确认回复已完成
+                        # 标记为完整，避免 force_close 追加 "。" 产生丑陋输出（保留功能性）
+                        # 根因：原实现仅 log warning 不标记完整 → 落入 force_close 分支
+                        # 追加 "。" → 产生 "X。" 丑陋输出（用户反馈"截断问题"的子因）
+                        #
+                        # CodeRabbit 复审反对：认为空重试不是正面完成证据，应保持 False
+                        # 让 force_close 兜底处理。权衡：
+                        # - 空 = LLM 无续写内容 → 回复实际已完成（功能正确）
+                        # - force_close 追加 "。" → 产生丑陋输出（用户体验下降）
+                        # - 优先保证功能性：空重试 > force_close，故保持 True
+                        # - 若 force_close 行为改善（不再追加"。"），可改为 False
+                        logger.info("verification.no_finish_retry_empty_confirmed_complete",
+                                    finish_reason=_finish_reason, reply_len=len(reply),
+                                    note="empty_retry_means_llm_confirmed_no_continuation")
+                        _reply_considered_complete = True
                 except Exception as e:
                     logger.warning("verification.no_finish_retry_failed",
                                    error=str(e)[:200], finish_reason=_finish_reason)
@@ -1461,10 +1474,16 @@ class MessageProcessorMixin:
                 #   2. finish_reason="stop" + 长回复(>=30字符) → 信任 LLM，视为完整
                 #   3. 清洗后即使有标点也视为不完整（内容被截断，需重试获取剩余部分）
                 #   4. 开场白回复（"让我查一下。"等）即使 <30 字符也不能标记为完整
+                # CodeRabbit #1 修复：移除独立的 `or _early_ends_valid`
+                # 原 implementation 最后一行让前两个 length-specific 条件失效，
+                # 导致短开场白（"让我查一下。"）即使 _early_has_opening=True 也被误判完整
+                # 修复：_early_ends_valid 只在 length-specific 分支中评估
+                #   - 短回复(<30)：非开场白 + 合法结尾 → 完整
+                #   - 长回复(>=30)：finish_reason="stop" 或 合法结尾 → 完整（保留 finish_reason=None 信任）
                 _early_complete = not _early_just_cleaned and (
                     (len(early_reply) < 30 and not _early_has_opening and _early_ends_valid)
                     or (len(early_reply) >= 30 and _early_finish_reason == "stop")
-                    or _early_ends_valid
+                    or (len(early_reply) >= 30 and _early_ends_valid)
                 )
                 if _early_complete:
                     _early_considered_complete = True
@@ -1489,11 +1508,15 @@ class MessageProcessorMixin:
                     # 修复：改用 assistant-prefill —— 追加已有 early_reply 作为 assistant 消息，
                     #       让 LLM 从此处续写具体内容，不追加任何 user message。
                     #       这样元指令不进入 LLM 可见上下文，避免污染。
-                    messages.append({"role": "assistant", "content": early_reply})
+                    # CodeRabbit #4 修复：用副本避免污染 verification loop 共享的 messages
+                    # 原 implementation 直接 messages.append()，导致 early_reply 在多次 retry 中累积
+                    # 对齐 L319-323 length-retry 模式：_retry_messages = list(messages)
+                    _retry_messages = list(messages)
+                    _retry_messages.append({"role": "assistant", "content": early_reply})
                     # 不追加 user message —— assistant-prefill 模式让 LLM 自然续写
                     retry_result = await asyncio.wait_for(
                         self.router.route(
-                            task_type, messages, temperature=temperature, max_tokens=max_tokens,
+                            task_type, _retry_messages, temperature=temperature, max_tokens=max_tokens,
                             user_openid=user_openid, session_id=session_id,
                         ),
                         timeout=self.LLM_CALL_TIMEOUT,

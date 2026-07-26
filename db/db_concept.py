@@ -239,7 +239,8 @@ class ConceptDB:
 
     async def batch_link_recent(self, batch_size: int = 50,
                                  min_shared: int = 3,
-                                 max_per_node: int = 20) -> int:
+                                 max_per_node: int = 20,
+                                 max_edges_per_run: int = 60) -> int:
         """后台 curator：为最近创建的、尚无边的节点批量补建边。
 
         auto_link 在存活节点 >200 时会跳过实时建边，由本方法在后台补建。
@@ -247,10 +248,23 @@ class ConceptDB:
 
         Args:
             max_per_node: 每个节点最多补建的边数（防止热点节点连接过多）
+            max_edges_per_run: 单次 curator 最多写入的边数（N10 修复：
+                限制单次 I/O 占用，避免在 USB 盘上长时间写入饿死 recall
+                等用户路径的 aiosqlite 查询）
 
         Returns:
             补建的边数
         """
+        # CodeRabbit #7：参数校验——拒绝负数和布尔值，避免 LIMIT/切片异常
+        for _name, _val in (("batch_size", batch_size), ("min_shared", min_shared),
+                            ("max_per_node", max_per_node),
+                            ("max_edges_per_run", max_edges_per_run)):
+            if _val is None or (not isinstance(_val, int) or isinstance(_val, bool)) or _val < 0:
+                raise ValueError(f"{_name} 必须非负整数，得到 {_val}")
+        # CodeRabbit #3：max_edges_per_run=0 时不查询不计算，直接返回 0
+        if max_edges_per_run == 0:
+            return 0
+
         # 1. 找出最近创建的、无边节点
         async with self._conn.execute(
             """SELECT cn.id, cn.keys FROM concept_nodes cn
@@ -282,12 +296,37 @@ class ConceptDB:
         if not edge_pairs:
             return 0
 
-        # 4. 批量写入边
+        # N10 修复：单次写入边数上限，避免在 USB 盘上长时间顺序写入饿死
+        # recall 等用户路径。60 条边 × 2（双向）= 120 次 INSERT，在 USB 上约
+        # 2-3s，远低于 30s 超时，给用户路径留足 DB 带宽。
+        # CodeRabbit #7：max_edges_per_run 计数逻辑链接（一条无向边 = 2 次有向
+        # INSERT）。_compute_batch_links 已按 (nid,other),(other,nid) 双向交替
+        # 展开，故按 2 行/链接换算后切片，保证永远在完整逻辑链接边界切断，
+        # 不会出现单向边。原代码直接切 [:max_edges_per_run] 会切到奇数行且
+        # 实际只写 30 链接（与文档承诺的 60 链接=120 INSERT 不符）。
+        max_rows = max_edges_per_run * 2
+        if len(edge_pairs) > max_rows:
+            edge_pairs = edge_pairs[:max_rows]
+
+        # 4. 批量写入边（N10 修复：用 executemany 替代顺序 create_edge）
+        # 原实现 `for src, tgt in edge_pairs: await self.create_edge(...)`
+        # 每条边一次 await + 一次 execute，N 条边 = N 次 RPC 往返。
+        # executemany 单次 RPC 提交全部边，I/O 占用从 N×latency 降到 1×latency。
         now = _now_iso()
-        for src, tgt in edge_pairs:
-            await self.create_edge(src, tgt, "co-occurrence", 1.0, now, auto_commit=False)
+        rows_to_insert = [
+            (src, tgt, "co-occurrence", 1.0, now)
+            for src, tgt in edge_pairs
+        ]
+        await self._conn.executemany(
+            """INSERT OR REPLACE INTO concept_edges
+               (source_id, target_id, relation, weight, created)
+               VALUES (?, ?, ?, ?, ?)""",
+            rows_to_insert,
+        )
         await self._conn.commit()
-        return len(edge_pairs)
+        # CodeRabbit #2: 返回逻辑链接数（一条无向边 = 2 行有向 INSERT），
+        # 与文档"补建的边数"语义一致，而非有向行数
+        return len(edge_pairs) // 2
 
     @staticmethod
     def _compute_batch_links(target_list: list, all_keys_map: dict,
@@ -297,9 +336,13 @@ class ConceptDB:
         CodeRabbit 复审修复：
         - emit 双向边 (nid, other_nid) 和 (other_nid, nid)，匹配 auto_link 的双向行为
         - 添加 max_per_node 参数，每个节点最多 max_per_node 条边，防止热点节点
+        - CodeRabbit #1: 无向对去重——当 A、B 都在 target_list 时，处理 A 遇到 B
+          与处理 B 遇到 A 会产生重复的双向对，用 seen_pairs 跳过已处理的无向对，
+          避免 edge_pairs 膨胀挤占 max_edges_per_run 配额及 max_per_node 双倍消耗。
         """
         pairs = []
         node_edge_count: dict = {}  # 跟踪每个节点的边数
+        seen_pairs: set = set()  # 无向对去重：frozenset({A, B})
         # 预解析所有 keys
         parsed = {}
         for nid, keys_str in all_keys_map.items():
@@ -318,12 +361,17 @@ class ConceptDB:
             for other_nid, other_keys in parsed.items():
                 if other_nid == nid:
                     continue
+                # CodeRabbit #1: 无向对去重——(A,B) 与 (B,A) 视为同一逻辑链接
+                _pair_key = frozenset({nid, other_nid})
+                if _pair_key in seen_pairs:
+                    continue
                 # 检查两个节点是否都未达到 max_per_node 上限
                 if node_edge_count.get(nid, 0) >= max_per_node:
                     break  # nid 已达上限，停止为其找更多边
                 if node_edge_count.get(other_nid, 0) >= max_per_node:
                     continue  # other_nid 已达上限，跳过
                 if len(key_set & other_keys) >= min_shared:
+                    seen_pairs.add(_pair_key)
                     # CodeRabbit: emit 双向边，匹配 auto_link 的双向行为
                     pairs.append((nid, other_nid))
                     pairs.append((other_nid, nid))

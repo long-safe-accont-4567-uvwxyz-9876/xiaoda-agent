@@ -608,6 +608,17 @@ async def save_keys(body: dict) -> Any:
         import asyncio
         _reinit_tasks.append(asyncio.create_task(_background_reinit()))
 
+        # QQ Bot 凭证更新后重启任务（修复：原凭证保存后不重启导致 QQ 显示机器人离线）
+        # 根因：_start_services 仅在 WebUI 启动时检查 QQBOT_APP_ID env，用户后填入
+        # 凭证后 qq_bot_adapter 模块级 APP_ID 仍为空，run_qq_bot 早期返回 disabled_no_appid。
+        # 修复：检测到 QQ 凭证更新时，后台异步重启 QQ bot 任务（更新模块级变量 + 重建 task）。
+        _qq_updated = any(
+            k in updates
+            for k in ("QQBOT_APP_ID", "QQBOT_APP_SECRET", "ENABLE_QQ_BOT")
+        )
+        if _qq_updated:
+            _reinit_tasks.append(asyncio.create_task(_restart_qq_bot_after_save()))
+
         return Envelope(data={"saved": list(updates.keys()), "need_restart": False})
     except Exception as e:
         import traceback
@@ -754,6 +765,31 @@ def _update_config_and_refresh_clients(updates: Any) -> None:
                 logger.info("setup.sub_agents_refreshed", count=n)
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.warning("setup.router_client_refresh_failed error={}", str(e))
+
+
+async def _restart_qq_bot_after_save() -> None:
+    """QQ 凭证保存后异步重启 QQ bot 任务（不阻塞 API 返回）。
+
+    根因修复：用户在 WebUI 填入 QQ ID/Secret 后，原代码仅更新 .env 和 os.environ，
+    但 qq_bot_adapter 模块级 APP_ID/APP_SECRET 仍为空（import 时一次性读取），
+    且 _start_services 不会重新调用，导致 QQ bot 永远不会启动 → QQ 显示机器人离线。
+
+    修复：调用 web.server.restart_qq_bot_task 完成重启流程：
+    1. 取消已存在的 qq_task（旧凭证实例）
+    2. 更新 qq_bot_adapter.APP_ID/APP_SECRET 模块级变量
+    3. 启动新的 qq_task
+    """
+    try:
+        from web.app_ref import get_app
+        from web.server import restart_qq_bot_task
+        _app = get_app()
+        if not _app or not hasattr(_app, "state"):
+            logger.warning("setup.qq_bot_restart_skipped reason=no_app_state")
+            return
+        started = await restart_qq_bot_task(_app)
+        logger.info("setup.qq_bot_restarted after_credential_save started={}", started)
+    except (ImportError, RuntimeError, AttributeError, OSError) as e:
+        logger.warning("setup.qq_bot_restart_failed error={}", str(e))
 
 
 async def _background_reinit() -> None:

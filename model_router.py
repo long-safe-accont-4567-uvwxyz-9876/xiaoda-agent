@@ -199,7 +199,11 @@ def _load_provider_max_tokens_cap() -> dict[str, int | None]:
         v = os.getenv(env_var)
         if v is None:
             return None
-        return _safe_int(v, 0)
+        # CodeRabbit #5 修复：空/无效值返回 None 而非 0
+        # 原 implementation _safe_int(v, 0) 解析失败返回 0，被当作合法 cap
+        # 导致 PROVIDER_MAX_TOKENS_CAP[p] = 0，所有请求 max_tokens=0，LLM 无法生成
+        parsed = _safe_int(v, 0)
+        return parsed if parsed > 0 else None
 
     def _file_cap(provider: str) -> int | None:
         meta = _PROVIDER_CAPS_FROM_FILE.get(provider, {})
@@ -1416,7 +1420,10 @@ class ModelRouter:
                 #       避免污染上下文（LLM 会在后续轮次回应这些元词汇）
                 # Feature flag: TRUNCATION_RETRY_DERECURSE（默认 true）
                 _derecurse = os.getenv("TRUNCATION_RETRY_DERECURSE", "true").lower() in ("true", "1", "yes")
-                if content and len(content) > 10:
+                # CodeRabbit #6 修复：加 messages 非空检查（防御性编程）
+                # _handle_route_response 的 messages 参数是 list[dict] | None = None
+                # 虽然 _route_with_retry 签名是非 Optional，但防御性检查避免潜在 None 触发 AttributeError
+                if messages and content and len(content) > 10:
                     _retry_max_tokens = max_tokens * 2 if max_tokens else None
                     for _retry_round in range(2):  # 最多 2 轮重试
                         try:
