@@ -3,6 +3,7 @@ import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useMessage } from 'naive-ui'
 import { api } from '../../api'
 import { t } from '../../i18n'
+import WorkingDirSelector from '../workspace/WorkingDirSelector.vue'
 
 const props = withDefaults(defineProps<{
   modelValue: string
@@ -27,6 +28,7 @@ const showThink = ref(false)
 const isRecording = ref(false)
 const isTranscribing = ref(false)
 const uploadedImage = ref<{ url: string; name: string } | null>(null)
+const uploadedDoc = ref<{ url: string; name: string; path: string; ext: string } | null>(null)
 const imagePreviewUrl = ref('')
 const recordingTime = ref(0)
 const showLightbox = ref(false)
@@ -77,13 +79,16 @@ function handleKeydown(e: KeyboardEvent) {
 function handleSend() {
   const text = props.modelValue.trim()
   if (!text || props.isLoading || props.disabled) return
-  const options: { search?: boolean; think?: boolean; imageUrl?: string } = {}
+  const options: { search?: boolean; think?: boolean; imageUrl?: string; docPath?: string } = {}
   if (showSearch.value) options.search = true
   if (showThink.value) options.think = true
   if (uploadedImage.value) options.imageUrl = uploadedImage.value.url
+  // P0 新增（Task 1.9）：文档上传 — 传递路径供后端 document_reader 工具使用
+  if (uploadedDoc.value) options.docPath = uploadedDoc.value.path
   emit('send', text, options)
   if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
   uploadedImage.value = null
+  uploadedDoc.value = null
   imagePreviewUrl.value = ''
   showSearch.value = false
   showThink.value = false
@@ -114,16 +119,30 @@ async function onFileSelected(e: Event) {
 }
 
 async function uploadFile(file: File) {
-  if (!file.type.startsWith('image/')) return
+  // P0 修复（Task 1.9）：一键包含所有文件 — 自动检测类型并路由
+  // 图片 → vision API（uploadImage），文档 → document_reader 工具（uploadDoc）
+  // 用户要求"不要添加组件，一键包含所有文件"
+  const isImage = file.type.startsWith('image/')
+  const docExts = ['.pdf', '.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls', '.txt', '.md']
+  const ext = '.' + (file.name.split('.').pop() || '').toLowerCase()
+  const isDoc = !isImage && docExts.includes(ext)
+  if (!isImage && !isDoc) return
   try {
-    if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
-    imagePreviewUrl.value = URL.createObjectURL(file)
-    const result = await api.uploadImage(file)
-    uploadedImage.value = result
+    if (isImage) {
+      if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
+      imagePreviewUrl.value = URL.createObjectURL(file)
+      const result = await api.uploadImage(file)
+      uploadedImage.value = result
+    } else {
+      // 文档上传：不走 vision API，返回路径供 document_reader 工具使用
+      const result = await api.uploadDoc(file)
+      uploadedDoc.value = result
+    }
   } catch {
     if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
     imagePreviewUrl.value = ''
     uploadedImage.value = null
+    uploadedDoc.value = null
   }
 }
 
@@ -131,6 +150,11 @@ function removeImage() {
   if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
   uploadedImage.value = null
   imagePreviewUrl.value = ''
+}
+
+// P0 新增（Task 1.9）：文档附件移除 — 与图片附件独立的清理路径
+function removeDoc() {
+  uploadedDoc.value = null
 }
 
 function openLightbox() {
@@ -277,6 +301,18 @@ watch(() => props.modelValue, () => {
       </div>
     </transition>
 
+    <!-- P0 新增（Task 1.9）：文档附件预览 — 显示文件名+扩展名 chip，可移除 -->
+    <transition name="preview-slide">
+      <div v-if="uploadedDoc" class="doc-preview-area">
+        <div class="doc-chip">
+          <span class="doc-icon">📄</span>
+          <span class="doc-name">{{ uploadedDoc.name }}</span>
+          <span class="doc-ext">{{ uploadedDoc.ext }}</span>
+          <button class="doc-remove-btn" @click="removeDoc" :title="t('promptInput.removeImage')">✕</button>
+        </div>
+      </div>
+    </transition>
+
     <!-- 录音波形区 -->
     <div v-if="isRecording" class="recording-area">
       <div class="recording-indicator"></div>
@@ -309,7 +345,7 @@ watch(() => props.modelValue, () => {
         <input
           ref="fileInputRef"
           type="file"
-          accept="image/*"
+          accept="image/*,.pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.txt,.md"
           style="display: none"
           @change="onFileSelected"
         />
@@ -343,11 +379,14 @@ watch(() => props.modelValue, () => {
           :disabled="disabled"
         >
           🧠
-          <transition name="label-fade">
-            <span v-if="showThink" class="mode-label think-label">Think</span>
-          </transition>
-        </button>
-      </div>
+            <transition name="label-fade">
+              <span v-if="showThink" class="mode-label think-label">Think</span>
+            </transition>
+          </button>
+
+          <!-- 工作目录选择器：紧挨深度思考按钮，授权 Agent 读写指定目录 -->
+          <WorkingDirSelector />
+        </div>
 
       <div class="toolbar-right">
         <!-- 语音按钮（无内容时显示） -->
@@ -426,6 +465,71 @@ watch(() => props.modelValue, () => {
   gap: 8px;
   position: relative;
   padding: 4px 0;
+}
+
+/* P0 新增（Task 1.9）：文档附件预览区 — 复用 image-preview-area 布局 */
+.doc-preview-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  padding: 4px 0;
+}
+
+.doc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: var(--glass-bg, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.12));
+  font-size: 13px;
+  max-width: 280px;
+}
+
+.doc-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.doc-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.doc-ext {
+  font-size: 11px;
+  opacity: 0.7;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.doc-remove-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(217, 106, 95, 0.9);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: 4px;
+  transition: transform 0.15s;
+}
+
+.doc-remove-btn:hover {
+  transform: scale(1.15);
 }
 
 .image-thumb {

@@ -111,10 +111,8 @@ def _patch_start_services_dependencies(monkeypatch) -> None:
         "GreetingScheduler": _FakeGreetingScheduler,
     })
     _install_fake_module(monkeypatch, "plugins.manager", {"PluginManager": _FakePluginManager})
-    # 注意：不替换 tool_engine.tool_registry —— 真实模块的导入会触发
-    # tool_engine/__init__.py 重新执行（from tool_engine.tool_registry import ...），
-    # 替换为空模块会引发 ImportError。由于 _FakePluginManager.discover() 是 no-op，
-    # 真实的 tool_registry 模块仅被赋值给属性，不会被实际调用。
+    # tool_engine.tool_registry（_start_services 内部 import；空模块即可）
+    _install_fake_module(monkeypatch, "tool_engine.tool_registry", {})
 
     # 关闭 QQ Bot 分支
     monkeypatch.delenv("QQBOT_APP_ID", raising=False)

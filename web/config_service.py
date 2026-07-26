@@ -132,7 +132,11 @@ _DEFAULTS: dict[str, Any] = {
         "dnd_periods": [{"start": "23:00", "end": "08:00"}],
     },
     "tts": {"auto_speak": False, "default_voice": "xiaoda"},
-    "ui": {"particles": "medium", "tilt3d": True},
+    "ui": {
+        "particles": "medium",
+        "tilt3d": True,
+        "dendro_cursor_trail": False,  # 鼠标移动拖尾（草粒子轨迹），默认关闭，可在系统设置开启
+    },
     "tools": {},      # {tool_name: {"enabled": false, "max_frequency": 5}}
     "mcp": {},        # {server_name: {command, args, env, agents, enabled}} 用户新增的
     "models": {"providers": {}, "routes": {}},

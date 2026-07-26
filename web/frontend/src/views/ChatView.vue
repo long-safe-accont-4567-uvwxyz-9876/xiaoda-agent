@@ -6,6 +6,7 @@ import { useChatStore } from '../stores/chat'
 import { useAuthStore } from '../stores/auth'
 import { useUiStore } from '../stores/ui'
 import { api, exportSessionDownload } from '../api'
+import { getWsClient } from '../api/ws'
 import { renderMarkdown } from '../utils/markdown'
 import { replaceAgentNames } from '../utils/agentNames'
 import ToolCallCard from '../components/chat/ToolCallCard.vue'
@@ -14,7 +15,8 @@ import SlashPalette from '../components/chat/SlashPalette.vue'
 import PromptInput from '../components/chat/PromptInput.vue'
 import SumeruIcon from '../components/fx/SumeruIcon.vue'
 import ModelSelector from '../components/chat/ModelSelector.vue'
-import WorkingDirSelector from '../components/workspace/WorkingDirSelector.vue'
+import CmdConfirmCard from '../components/workspace/CmdConfirmCard.vue'
+import { useWorkspaceStore } from '../stores/workspace'
 import { t } from '../i18n'
 
 defineOptions({ name: 'ChatView' })
@@ -22,6 +24,7 @@ defineOptions({ name: 'ChatView' })
 const chat = useChatStore()
 const auth = useAuthStore()
 const ui = useUiStore()
+const ws = useWorkspaceStore()
 const message = useMessage()
 const particles = inject<Ref<any>>('particles')
 
@@ -56,8 +59,20 @@ function onGlobalKeydown(e: KeyboardEvent) {
   }
 }
 
+// 命令确认请求 WS 处理：收到后端推送，设置 pendingCmdConfirm 触发卡片渲染
+function onCmdConfirmRequest(data: any) {
+  if (data?.request_id && data?.command) {
+    ws.pendingCmdConfirm = { request_id: data.request_id, command: data.command }
+    nextTick(() => {
+      const el = messagesEl.value
+      if (el) el.scrollTop = el.scrollHeight
+    })
+  }
+}
+
 onMounted(async () => {
   document.addEventListener('keydown', onGlobalKeydown)
+  getWsClient().on('cmd_confirm_request', onCmdConfirmRequest)
   try {
     // 后端命令名自带 "/" 前缀，统一去掉，避免拼接成 "//cmd"
     const raw = await api.getCommands()
@@ -67,6 +82,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onGlobalKeydown)
+  getWsClient().off('cmd_confirm_request', onCmdConfirmRequest)
   if (audioEl) { audioEl.pause(); audioEl.onended = null; audioEl.onerror = null; audioEl.src = ''; audioEl = null }
   playingUrl.value = ''
 })
@@ -149,15 +165,14 @@ function handleSend() {
   autoGrow()
 }
 
-function handlePromptSend(text: string, options: { search?: boolean; think?: boolean; imageUrl?: string }) {
+function handlePromptSend(text: string, options: { search?: boolean; think?: boolean; imageUrl?: string; docPath?: string }) {
   if (!text || chat.isProcessing) return
-  let finalText = text
-  if (options.search) finalText = `[Search: ${text}]`
-  else if (options.think) finalText = `[Think: ${text}]`
-  if (options.imageUrl) {
-    finalText += `\n[Image: ${options.imageUrl}]`
-  }
-  chat.sendMessage(finalText, options.imageUrl)
+  // P0 修复（Task 2.1）：按钮状态走结构化字段，不再嵌入 text 作为 marker
+  // 根因：原实现把 [Search:]/[Think:]/[Image:]/[Doc:] 嵌入 text，
+  //       导致 conversation_logs.user_message 出现 marker，污染历史记录。
+  //       后端解析 marker 后虽剥离，但 Fast path / 重试等路径可能保存原始 text。
+  // 修复：text 保持用户原话，按钮状态作为独立字段发送，后端直接使用结构化字段。
+  chat.sendMessage(text, options)
   inputText.value = ''
   // 发送特效
   const rect = promptInputRef.value?.textareaRef?.getBoundingClientRect()
@@ -275,8 +290,6 @@ const emotionColors: Record<string, string> = {
       <span class="session-label">{{ chat.sessionId }}</span>
     </div>
 
-    <WorkingDirSelector />
-
     <div class="messages-area" ref="messagesEl">
       <div v-if="chat.messages.length === 0" class="empty-state">
         <div class="empty-icon">🌿</div>
@@ -342,6 +355,16 @@ const emotionColors: Record<string, string> = {
         </div>
       </div>
       </transition-group>
+
+      <!-- 命令确认问答卡片：Agent 执行非白名单命令时内联弹出 -->
+      <transition name="msg-fade">
+        <CmdConfirmCard
+          v-if="ws.pendingCmdConfirm"
+          :key="ws.pendingCmdConfirm.request_id"
+          :request-id="ws.pendingCmdConfirm.request_id"
+          :command="ws.pendingCmdConfirm.command"
+        />
+      </transition>
     </div>
 
     <teleport to="body">

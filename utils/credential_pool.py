@@ -328,11 +328,16 @@ class CredentialPool:
                     base_url=base_url,
                 ))
 
-        # Ollama 本地部署，无需真实 API Key，使用占位 Key
-        ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+        # P0 修复：Ollama 仅在用户显式配置时启用（不再默认注册）
+        # 根因：原实现 os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+        #       总是返回默认 URL，导致 ollama 永远被注册进凭证池，
+        #       即使用户没配置 ollama 也会尝试连接 → 持续报错。
+        # 修复：仅当 OLLAMA_BASE_URL 显式设置（非空）时才注册 ollama。
+        #       用户未配置则不启用，避免无意义连接和错误日志。
+        ollama_url = os.getenv("OLLAMA_BASE_URL", "")
         if ollama_url:
             self.add_credential(Credential(
-                api_key="ollama",  # 占位 Key
+                api_key="ollama",  # 占位 Key（ollama 本地部署无需真实 Key）
                 provider="ollama",
                 base_url=ollama_url,
             ))

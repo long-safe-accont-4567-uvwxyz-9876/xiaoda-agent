@@ -148,6 +148,9 @@ class RequestContext:
     delegate_depth: int = 0
     is_master: bool = True
     identity: Any = None  # UserIdentity 运行时身份解析结果
+    # P0 新增：系统上下文提示（主动问候等内部场景）
+    # 注入为 system message，不写入 conversation_logs.user_message
+    system_context: str = ""
 
 
 @dataclass

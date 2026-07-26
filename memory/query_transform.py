@@ -169,7 +169,27 @@ class QueryTransformer:
 
 改写后的查询:"""
 
-        result = await self._call_free_model(prompt, temperature=0.1, max_tokens=100)
+        # CodeRabbit #2: 加 asyncio 层超时防线（httpx 4s 之外的兜底，防止
+        # 客户端重试/连接建立慢导致 retrieve_memories 整体超时）。与 hyde/classify 一致。
+        # CodeRabbit #D: 超时降级为原查询后继续走缓存流程（与 result=None 的正常
+        # 降级一致），避免网络持续慢时每次检索都重复 5s 超时拖慢流水线。
+        #
+        # I3 注释（代码审查一致性）：此处的"降级"与 model_router.py 删除 ImportError
+        # fallback 的"fail-fast"理念相反，但场景不同，不冲突：
+        # - model_router 的 fallback 是"损坏状态降级"——盲拼接 prefill 内容会引入重复
+        #   和人格劫持（事故 ID 2112），故选择 fail-fast 让 ImportError 直接抛出。
+        # - 此处的降级是"功能降级"——原查询本身仍可用作检索输入，仅失去 LLM 改写
+        #   带来的精度提升，不产生损坏状态。缓存原查询还能避免重复超时尖峰。
+        # 两者判断依据是"降级后状态是否损坏"，而非"是否一致"。后续维护者请勿为
+        # 统一理念而删除此处降级。
+        try:
+            result = await asyncio.wait_for(
+                self._call_free_model(prompt, temperature=0.1, max_tokens=100),
+                timeout=5.0,
+            )
+        except TimeoutError:
+            logger.warning("query_transform.rewrite_timeout", query=original_query[:50])
+            result = None  # 走降级路径，final=original_query 并缓存
         final = result if result else original_query
         # G15: 写入缓存（即使降级为原查询也缓存，避免重复调 LLM）
         self._cache_put(self._rewrite_cache, cache_key, final)
@@ -194,7 +214,16 @@ class QueryTransformer:
 
 原始查询: {query}"""
 
-        result = await self._call_free_model(prompt, temperature=0.3, max_tokens=150)
+        # CodeRabbit #2: 加 asyncio 层超时防线，超时降级返回 [query]
+        # CodeRabbit #D: 超时降级后继续走缓存流程（与 result=None 一致）
+        try:
+            result = await asyncio.wait_for(
+                self._call_free_model(prompt, temperature=0.3, max_tokens=150),
+                timeout=5.0,
+            )
+        except TimeoutError:
+            logger.warning("query_transform.expand_timeout", query=query[:50])
+            result = None  # 走降级路径，final=[query] 并缓存
         if result:
             expanded = [line.strip() for line in result.strip().split("\n") if line.strip()]
             final = [query, *expanded[:n]]

@@ -22,6 +22,7 @@ class FailoverReason(Enum):
     SERVER_ERROR = "server_error"                # 服务器错误（5xx）
     PAYLOAD_TOO_LARGE = "payload_too_large"      # 请求体过大
     FORMAT_ERROR = "format_error"                # 格式错误
+    EMPTY_REPLY = "empty_reply"                  # P0 新增：模型返回空 content，不重试直接降级
     UNKNOWN = "unknown"                          # 未知错误
 
 
@@ -57,6 +58,10 @@ RECOVERY_MAP: dict[FailoverReason, RecoveryAction] = {
     FailoverReason.SERVER_ERROR: RecoveryAction.BACKOFF_RETRY,
     FailoverReason.PAYLOAD_TOO_LARGE: RecoveryAction.COMPRESS_CONTEXT,
     FailoverReason.FORMAT_ERROR: RecoveryAction.RETRY,
+    # P0 修复（Task 1.5）：空回复不重试，直接中止触发上层降级
+    # 根因：原实现 empty_content 抛 RuntimeError 被分类为 UNKNOWN（可重试），
+    #       导致 retry_exhausted → fallback 链放大风暴。
+    FailoverReason.EMPTY_REPLY: RecoveryAction.ABORT,
     FailoverReason.UNKNOWN: RecoveryAction.RETRY,
 }
 
@@ -185,12 +190,27 @@ class ErrorClassifier:
             self._match_payload_too_large_by_message,
             self._match_server_error_by_message,
             self._match_format_error_by_message,
+            # P0 新增（Task 1.5）：识别 empty_content 错误，避免触发重试风暴
+            self._match_empty_reply_by_message,
         ):
             reason = matcher(ctx)
             if reason is not None:
                 return reason
 
         return FailoverReason.UNKNOWN
+
+    def _match_empty_reply_by_message(self, ctx: dict) -> FailoverReason | None:
+        """P0 新增（Task 1.5）：识别模型返回空 content 的错误。
+
+        model_router.py 抛出 `RuntimeError(f"empty_content by ...")`，
+        原实现被分类为 UNKNOWN（可重试），导致 retry_exhausted → fallback 风暴。
+        现在识别 "empty_content" 关键词，映射到 EMPTY_REPLY → ABORT。
+        """
+        exc_msg = ctx["exc_msg"]
+        # 关键词匹配（lowercase 后比较）
+        if "empty_content" in exc_msg or "content 为空" in exc_msg:
+            return FailoverReason.EMPTY_REPLY
+        return None
 
     def _match_timeout_by_message(self, ctx: dict) -> FailoverReason | None:
         """超时"""

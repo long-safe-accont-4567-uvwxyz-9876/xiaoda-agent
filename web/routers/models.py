@@ -273,13 +273,8 @@ async def update_route(task: str, body: dict, request: Request) -> Any:
         "timeout": _router_of(request).TASK_TIMEOUTS.get(task),
     })
     # 同步更新 models.chat_model，使 GET /models/chat-model 返回最新值
-    # 关键修复：用 body.provider（用户明确传入）而非 entry.get("client", "mimo")。
-    # 旧逻辑下若 _restore_chat_model fallback 已把 entry["client"] 改成 "mimo"，
-    # 即使 body.provider=agnes，也会持久化 chat_model=mimo，形成 sticky fallback。
-    # 现在以 body.provider 为权威源，未传则保留 entry["client"]（不再默认 mimo）。
     if task == "chat":
-        sync_provider = provider or entry.get("client", "mimo")
-        cfg.set("models.chat_model", {"provider": sync_provider,
+        cfg.set("models.chat_model", {"provider": entry.get("client", "mimo"),
                                        "model_id": entry["model"]})
     await _audit(request, "route.update", json.dumps({task: body}, ensure_ascii=False))
     await _broadcast_changed()
@@ -289,25 +284,20 @@ async def update_route(task: str, body: dict, request: Request) -> Any:
 
 @router.get("/models/chat-model", response_model=Envelope[dict])
 async def get_chat_model(request: Request) -> Any:
-    # 关键修复：优先从 ROUTE_TABLE["chat"] 读取（运行时权威源），
-    # 而非从 config_service 的 models.chat_model 读取。
-    # 原因：models.chat_model 是独立的持久化字段，可能与 models.routes.chat 不同步，
-    # 导致 GET 返回值与实际请求路由不一致（用户看到的模型与实际使用的模型不同）。
-    # ROUTE_TABLE 是 _apply_route_overrides 从 models.routes.* 恢复的，始终与实际路由一致。
-    from model_router import ROUTE_TABLE
-    chat_route = ROUTE_TABLE.get("chat", {})
-    rt_provider = chat_route.get("client", "")
-    rt_model = chat_route.get("model", "")
-    if rt_provider and rt_model:
-        return Envelope(data={"provider": rt_provider, "model_id": rt_model})
-    # 兜底：若 ROUTE_TABLE 尚未初始化（极端情况），从 config_service 读取
     cfg = _cfg(request)
+    # 优先从 config_service 的 models.chat_model 读取（如果存在）
     chat_model = cfg.get("models.chat_model")
     if isinstance(chat_model, dict) and chat_model.get("provider") \
             and chat_model.get("model_id"):
         return Envelope(data={"provider": chat_model["provider"],
                               "model_id": chat_model["model_id"]})
-    return Envelope(data={"provider": "mimo", "model_id": ""})
+    # 否则从 model_router.ROUTE_TABLE["chat"] 读取
+    from model_router import ROUTE_TABLE
+    chat_route = ROUTE_TABLE.get("chat", {})
+    return Envelope(data={
+        "provider": chat_route.get("client", "mimo"),
+        "model_id": chat_route.get("model", ""),
+    })
 
 
 # ── 凭证池状态 ───────────────────────────────────────────────────

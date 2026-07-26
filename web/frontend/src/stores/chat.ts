@@ -232,24 +232,39 @@ export const useChatStore = defineStore('chat', () => {
     pendingTimers.length = 0
   }
 
-  function sendMessage(text: string, imageUrl?: string) {
+  // P0 修复（Task 2.1）：sendMessage 接受 options 参数，按钮状态走结构化字段
+  // 原实现：sendMessage(text, imageUrl?) — 只传 text 和 imageUrl
+  // 新实现：sendMessage(text, options?) — 传 text + options（search/think/imageUrl/docPath）
+  // WS payload 增加 search_mode / think_mode / image_url / doc_path 独立字段，
+  // text 保持用户原话纯净（不再嵌入 [Search:]/[Think:]/[Image:]/[Doc:] marker）
+  function sendMessage(text: string, options?: {
+    search?: boolean; think?: boolean; imageUrl?: string; docPath?: string
+  }) {
     if (!text.trim() || isProcessing.value) return
     const msgId = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-    // 用户消息文本中去掉 [Image: ...] 标记，图片通过 imageUrl 字段单独展示
-    const displayText = text.replace(/\n?\[Image: [^\]]+\]\s*/g, '').trim() || '📷 图片'
+    const imageUrl = options?.imageUrl
+    // 显示文本：用户原话（不再需要剥离 [Image:] marker，因为 text 已纯净）
+    const displayText = text.trim() || (imageUrl ? '📷 图片' : '')
     pushMessage(messages, {
       id: `u-${msgId}`, role: 'user', content: displayText, timestamp: Date.now(),
       imageUrl,
     })
     isProcessing.value = true
     pendingMsgId.value = msgId
-    ws.send({
+    // P0 修复（Task 2.1）：WS payload 走结构化字段，text 保持纯净
+    const payload: Record<string, unknown> = {
       type: 'chat',
       session_id: sessionId.value,
       agent: currentAgent.value,
-      text,
+      text,  // 用户原话，不含任何 marker
       msg_id: msgId,
-    })
+    }
+    // 按钮状态作为独立字段（后端直接使用，不再从 text 解析 marker）
+    if (options?.search) payload.search_mode = true
+    if (options?.think) payload.think_mode = true
+    if (options?.imageUrl) payload.image_url = options.imageUrl
+    if (options?.docPath) payload.doc_path = options.docPath
+    ws.send(payload)
   }
 
   function abort() {
@@ -299,13 +314,13 @@ export const useChatStore = defineStore('chat', () => {
     }
     if (idx < 0) return
     const msg = messages.value[idx]
-    let text = msg.content
+    const text = msg.content
     const imageUrl = msg.imageUrl
-    if (imageUrl) text += `\n[Image: ${imageUrl}]`
+    // P0 修复（Task 2.1）：重试也走结构化字段，不再嵌入 [Image:] marker
     // 移除该条用户消息之后的所有消息（旧回复/错误），重新发送
     messages.value.splice(idx)
     clearMarkdownCache()
-    sendMessage(text, imageUrl)
+    sendMessage(text, imageUrl ? { imageUrl } : undefined)
   }
 
   function clearMessages() {

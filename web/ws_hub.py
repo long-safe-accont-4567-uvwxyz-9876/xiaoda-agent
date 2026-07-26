@@ -352,7 +352,8 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
                                 agent: str = "xiaoda",
                                 status_callback: Any | None=None, app: Any | None=None,
                                 conn_id: str = "", msg_id: str = "",
-                                image_data: list[dict] | None = None) -> dict:
+                                image_data: list[dict] | None = None,
+                                system_context: str = "") -> dict:
     """统一处理入口：主体走 AgentCore.process；子代理直达 dispatcher（R5）。
 
     斜杠命令（/ 开头）始终走主体 process（内部路由到 SlashCommandHandler）。
@@ -412,7 +413,8 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
         result = await core.process(
             user_input=text, user_id=os.getenv("MASTER_QQ_OPENID", "webui"), source="web",
             session_id=session_id, status_callback=status_callback,
-            image_data=image_data)
+            image_data=image_data,
+            system_context=system_context)  # P0 Task 2.1：传递结构化模式提示
         data = serialize_result(result)
     data["agent"] = agent
     data["elapsed_ms"] = int((time.time() - t0) * 1000)
@@ -570,15 +572,35 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
     from web._msg_context import current_msg_id
     token = current_msg_id.set(msg_id)
 
-    # 从文本中提取 [Image: URL] 标记，构建 image_data
+    # P0 修复（Task 2.1）：提取结构化字段（按钮状态走独立字段，不再从 text 解析 marker）
+    # 新客户端发送 search_mode / think_mode / image_url / doc_path 作为独立字段
+    # 旧客户端仍发送 [Search:]/[Think:]/[Image:]/[Doc:] marker，保留向后兼容
+    search_mode = bool(msg.get("search_mode"))
+    think_mode = bool(msg.get("think_mode"))
+    image_url_field = str(msg.get("image_url") or "").strip()
+    doc_path_field = str(msg.get("doc_path") or "").strip()
+
+    # 构建 image_data：优先使用结构化 image_url 字段，兜底解析 [Image:] marker
     image_data = None
-    import re as _re
-    _image_urls = _re.findall(r'\[Image:\s*([^\]]+)\]', text)
-    if _image_urls:
+    image_urls: list[str] = []
+    if image_url_field:
+        image_urls.append(image_url_field)
+    else:
+        # 向后兼容：旧客户端在 text 中嵌入 [Image: URL] marker
+        import re as _re
+        _marker_urls = _re.findall(r'\[Image:\s*([^\]]+)\]', text)
+        if _marker_urls:
+            image_urls.extend(_marker_urls)
+            # 从 text 中剥离 [Image:] marker（保持 text 纯净）
+            text = _re.sub(r'\n?\[Image:\s*[^\]]+\]\s*', '', text).strip()
+            if not text:
+                text = "📷 图片"  # 仅发图片时给一个占位符
+
+    if image_urls:
         from pathlib import Path as _Path
         from utils.text_utils import encode_image_to_base64
         image_data = []
-        for url in _image_urls:
+        for url in image_urls:
             try:
                 # URL 格式: /media/upload/xxx.png → 映射到本地文件
                 local_path = MEDIA_ROOT / "upload" / _Path(url).name
@@ -593,6 +615,20 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
                     logger.warning("ws.image_not_found url={} path={}", url, local_path)
             except (OSError, ValueError, AttributeError) as e:
                 logger.warning("ws.image_load_failed url={} error={}", url, str(e))
+
+    # 构建模式上下文（search_mode / think_mode / doc_path 走 system_context，不污染 text）
+    # 向后兼容：旧客户端的 [Search:]/[Think:]/[Doc:] marker 仍由 message_processor 解析
+    # 新客户端的结构化字段在这里转换为 system_context 传入
+    _structured_mode_hints: list[str] = []
+    if search_mode:
+        _structured_mode_hints.append("本次回复请优先使用 web_search 工具搜索最新信息后回答。")
+    if think_mode:
+        _structured_mode_hints.append("本次回复请进行更深入的思考，可以分步骤推理。")
+    if doc_path_field:
+        _structured_mode_hints.append(
+            f"用户上传了文档：{doc_path_field}。请使用 document_reader 工具读取该文档内容后回答用户的问题。"
+        )
+    _structured_system_context = "\n".join(_structured_mode_hints) if _structured_mode_hints else ""
 
     # Task 7: 流式状态推送回调 —— 受 STREAM_STATUS_PUSH 开关控制
     async def on_status(message: Any) -> None:
@@ -645,7 +681,8 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
                 core, text, session_id=session_id, agent=agent,
                 status_callback=on_status, app=app,
                 conn_id=conn_id, msg_id=msg_id,
-                image_data=image_data)
+                image_data=image_data,
+                system_context=_structured_system_context)  # P0 Task 2.1：结构化模式提示
         finally:
             event_bus.unbind_user(_eb_token)
         # ── S2: VERIFY 阶段 ──

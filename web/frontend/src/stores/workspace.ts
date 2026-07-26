@@ -13,8 +13,23 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const currentPath = ref('')
   const authorizedAt = ref('')
   const whitelist = ref<string[]>([])
+  /** 近期审计日志条目（内存环形缓冲，重启清空） */
+  const auditLog = ref<Array<{
+    timestamp: string
+    action: string
+    target: string
+    cwd: string
+    allowed: boolean
+    reason: string
+  }>>([])
   /** 待确认的命令请求（由工具 needs_confirmation 状态触发） */
   const pendingCmdConfirm = ref<{ request_id: string; command: string } | null>(null)
+  /** 已授权目录列表（localStorage 持久化：曾授权且未在设置页撤销的目录）
+   *  选这些目录时直接切换，不再弹授权确认。后端 confirm 总会重新授权，故前端记录即可。 */
+  const authorizedDirs = ref<string[]>(JSON.parse(localStorage.getItem('ws.authorizedDirs') || '[]'))
+  function _saveAuthorizedDirs() {
+    localStorage.setItem('ws.authorizedDirs', JSON.stringify(authorizedDirs.value))
+  }
 
   /** 加载当前授权状态（从后端） */
   async function loadStatus() {
@@ -40,15 +55,30 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     authorized.value = data.authorized
     currentPath.value = data.path
     authorizedAt.value = data.authorized_at
+    // 记录到已授权目录列表（去重），后续切换该目录无需再弹授权确认
+    if (path && !authorizedDirs.value.includes(path)) {
+      authorizedDirs.value.push(path)
+      _saveAuthorizedDirs()
+    }
+    // CodeRabbit #4：授权上下文变更后清空旧审计日志，避免展示与新目录无关的陈旧条目
+    auditLog.value = []
     return data
   }
 
   /** 撤销授权 */
   async function revoke() {
+    const removed = currentPath.value
     await del('/workspace')
     authorized.value = false
     currentPath.value = ''
     authorizedAt.value = ''
+    // 从已授权目录列表移除：再次进入该目录需重新授权
+    if (removed) {
+      authorizedDirs.value = authorizedDirs.value.filter(p => p !== removed)
+      _saveAuthorizedDirs()
+    }
+    // CodeRabbit #4：撤销后旧审计日志不再相关，清空
+    auditLog.value = []
   }
 
   /** 添加命令到白名单 */
@@ -69,6 +99,17 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return await get<any>(`/workspace/browse${q}`)
   }
 
+  /** 加载审计日志（限制条数，默认 100） */
+  async function loadAudit(limit: number = 100) {
+    try {
+      const data = await get<any>(`/workspace/audit?limit=${limit}`)
+      auditLog.value = data.entries || []
+    } catch {
+      // CodeRabbit #4：加载失败时清空，避免残留陈旧条目被误认为当前状态
+      auditLog.value = []
+    }
+  }
+
   /** 回传命令确认决策 */
   async function confirmCmd(
     requestId: string,
@@ -86,8 +127,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   return {
-    authorized, currentPath, authorizedAt, whitelist, pendingCmdConfirm,
-    loadStatus, loadWhitelist, confirm, revoke,
+    authorized, currentPath, authorizedAt, whitelist, auditLog, pendingCmdConfirm, authorizedDirs,
+    loadStatus, loadWhitelist, loadAudit, confirm, revoke,
     addWhitelist, removeWhitelist, browse, confirmCmd,
   }
 })

@@ -316,6 +316,9 @@ class AIQQBot(botpy.Client):
         # 消息去重缓存：msg_id → 时间戳，保留最近 1 小时
         self._processed_msg_ids: dict[str, float] = {}
         self._MSG_ID_TTL = 3600  # 1 小时
+        # 注：用户明确要求"我发送的内容不需要去重"——
+        # 不做内容级去重（即使网关重连重投递导致重复回复，也不拦截用户手动重发）。
+        # 仅保留 msg_id 级去重（同一 msg_id 的精确重复才拦截）。
         self._agent_initialized = agent is not None and getattr(agent, "_initialized", False)
         # 最近一个私聊用户 openid，主动消息（问候同步）发给该用户
         self._last_c2c_openid: str = os.getenv("NUDGE_USER_OPENID", "")

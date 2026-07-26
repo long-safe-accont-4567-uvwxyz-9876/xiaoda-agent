@@ -306,6 +306,10 @@ class TestEncodeMemoryChildChunks:
         mgr.memory.insert_consolidation_candidate = AsyncMock(return_value=1)
         mgr.memory.mark_candidate_applied = AsyncMock(return_value=None)
         mgr.memory.update_memory_enrichment = AsyncMock(return_value=None)
+        # _do_children 内部调用 self.memory._conn.commit()（批量写入后统一提交）
+        # 必须是 AsyncMock 否则 await 会抛 TypeError: object MagicMock can't be used in 'await'
+        mgr.memory._conn = MagicMock()
+        mgr.memory._conn.commit = AsyncMock(return_value=None)
 
         mgr.vec = MagicMock()
         mgr.vec.upsert = AsyncMock(return_value=True)
@@ -320,6 +324,13 @@ class TestEncodeMemoryChildChunks:
         mgr.distiller = MagicMock()
         mgr.entity_extractor = None
         mgr.entity_store = None
+        # encode_memory 主流程在 line 2604 检查 if self._query_cache:
+        # 缺少该属性会抛 AttributeError → encode_failed
+        mgr._query_cache = None
+        # line 2608 检查 if getattr(self, 'spreading_engine', None)
+        mgr.spreading_engine = None
+        # line 2607 G13 失效扩散 recall 缓存
+        mgr.concept_graph = None
 
         return mgr
 
@@ -349,7 +360,28 @@ class TestEncodeMemoryChildChunks:
                 {"role": "assistant", "content": "好的，我来帮你规划"},
             ]
 
+            # 记录 encode 前的后台任务快照
+            from core.background_tasks import _bg_tasks
+            _before = set(_bg_tasks)
+
             await mgr.encode_memory({"exchanges": exchanges})
+
+            # encode_memory 将 insert_child_chunk 调用放在 fire-and-forget
+            # create_task（_indexing_task）中，不阻塞 encode_memory 返回。
+            # 测试必须等待后台任务完成才能断言 insert_child_chunk.called。
+            # 用快照差集获取本次 encode 创建的新任务，避免等待其他测试的任务。
+            _new_tasks = [t for t in _bg_tasks if t not in _before]
+            # done_callback 可能已将完成的任务从 _bg_tasks 移除，
+            # 但未完成的仍在。补充等待仍在集合中的新任务。
+            if _new_tasks:
+                # CodeRabbit #C: 移除 return_exceptions=True，让 _indexing_task 失败
+                # 直接传播并 fail 测试（而非被静默吞掉，掩盖后台任务异常）
+                await asyncio.wait_for(
+                    asyncio.gather(*_new_tasks),
+                    timeout=5.0,
+                )
+            # 额外让事件循环空转一轮，确保 done_callback 执行完毕
+            await asyncio.sleep(0)
 
             assert mgr.memory.insert_child_chunk.called
             call_count = mgr.memory.insert_child_chunk.call_count

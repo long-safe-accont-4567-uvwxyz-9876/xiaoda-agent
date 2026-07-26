@@ -699,39 +699,11 @@ def load_agent_config() -> dict:
 AGENT_CONFIG = load_agent_config()
 
 # ── 路由关键词常量 ──────────────────────────────────────────────
-# 用于 _is_simple_task：包含这些关键词的消息视为复杂任务
-SIMPLE_TASK_KEYWORDS = {
-    "complex": [
-        "搜索", "查一下", "帮我查", "找一下", "搜一下", "查查", "帮我找",
-        "搜索一下", "查资料", "搜资料", "写代码", "编程", "调试",
-        "研究", "分析", "计算", "执行", "运行", "安装", "部署",
-        "翻译", "转换", "制作", "设计",
-        "怎么看", "怎么弄", "如何", "怎么办", "帮我看", "帮我看看",
-        "检查", "巡检", "测试", "优化", "修复", "bug", "报错",
-        "画", "生成图", "生成视频", "做视频", "画一张", "画个", "画一个",
-        "图片", "视频", "图像", "插画", "海报", "封面",
-        "文生图", "图生图", "文生视频",
-        # 记忆/回顾类：明确的回忆意图，需要检索长期记忆，不能走 fast_path
-        "回忆", "还记得", "还记得吗", "记不记得", "记得", "记住",
-        "上次我们", "上次聊", "上次说", "之前我们", "之前聊", "之前说",
-        "早上", "上午", "下午", "晚上", "昨天", "前天", "上周", "上个月",
-        "几号", "哪天", "什么时候", "那天", "那天",
-    ],
-    "chat": [
-        "这是", "那是", "这个是", "那个是", "不是", "不对", "错了",
-        "你好", "谢谢", "晚安", "早安", "早上好", "晚上好",
-        "哈哈", "嘿嘿", "嗯嗯", "好的", "好吧", "算了",
-        "你知道吗", "告诉你", "跟你说", "我说",
-    ],
-}
-
-# 用于 _should_escalate_to_pro：触发升级到 pro 模型的关键词
-PRO_TASK_KEYWORDS = {
-    "tool": {"天气", "温度", "下雨", "搜索", "查一下", "帮我查",
-             "你还记得", "写代码", "调试", "执行", "计算"},
-    "negative": {"难过", "伤心", "崩溃", "绝望", "痛苦", "焦虑", "害怕",
-                 "孤独", "想哭", "受不了"},
-}
+# P0 修复（用户明确要求"取消对话通道分类机制"）：
+# 已移除 SIMPLE_TASK_KEYWORDS 和 PRO_TASK_KEYWORDS —— 通道分类性价比太低，
+# 误判会导致工具被错误过滤或模型错误升级。所有消息统一走主路径，由 LLM 自行决定。
+# 调用点（_is_simple_task / _is_simple_chat / _should_escalate_to_pro 关键词分支）
+# 已从 message_processor.py 中删除。
 
 # 用于 RouterNode._rule_route：按 Agent 分配的路由关键词
 AGENT_ROUTE_KEYWORDS = {
@@ -858,7 +830,10 @@ TTS_ASYNC_MODE = os.getenv("TTS_ASYNC_MODE", "true").lower() in ("1", "true", "y
 # Task 7: 流式中间状态推送（方案 C1）—— 开启后推送细粒度思考状态
 STREAM_STATUS_PUSH = os.getenv("STREAM_STATUS_PUSH", "false").lower() in ("1", "true", "yes")
 # Task 9: 简单对话快速路径（方案 E）—— 开启后简单闲聊跳过记忆检索
-SIMPLE_CHAT_FASTPATH = os.getenv("SIMPLE_CHAT_FASTPATH", "true").lower() in ("1", "true", "yes")
+# P0：fastpath 机制已彻底取消（用户要求"取消fastpath机制，通道分类性价比太低了"）
+# 环境变量保留读取仅为向后兼容（仍默认 false），但所有调用点已删除，
+# 即使设为 true 也不会触发任何 fastpath 逻辑。
+SIMPLE_CHAT_FASTPATH = os.getenv("SIMPLE_CHAT_FASTPATH", "false").lower() in ("1", "true", "yes")
 
 # P0: WebSocket 流式文本推送 —— LLM 流式调用 + 逐 token 推送
 STREAM_TEXT_PUSH = os.getenv("STREAM_TEXT_PUSH", "true").lower() in ("1", "true", "yes")
@@ -985,7 +960,6 @@ __all__ = [
     "MODEL_NAME",
     "PLUGINS_CONFIG_DIR",
     "PROMPT_CACHING_ENABLED",
-    "PRO_TASK_KEYWORDS",
     "QUERY_EXPAND_COUNT",
     "QUERY_TRANSFORM_ENABLED",
     "INTENT_LLM_CLASSIFY",
@@ -1008,7 +982,6 @@ __all__ = [
     "QUERY_CACHE_MAX_SIZE",
     "QUERY_CACHE_TTL",
     "SIMPLE_CHAT_FASTPATH",
-    "SIMPLE_TASK_KEYWORDS",
     "STICKER_DIR",
     "STREAM_STATUS_PUSH",
     "STREAM_TEXT_PUSH",

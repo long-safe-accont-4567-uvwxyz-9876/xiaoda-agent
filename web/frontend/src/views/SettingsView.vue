@@ -2,11 +2,12 @@
 import { ref, onMounted, computed } from 'vue'
 import {
   NButton, NSwitch, NRadioGroup, NRadioButton, NInput, NModal,
-  NSelect, NSlider, NCheckbox, useMessage,
+  NSelect, NSlider, NCheckbox, NPopconfirm, NTag, useMessage,
 } from 'naive-ui'
 import { get, put, post } from '../api'
 import { useUiStore } from '../stores/ui'
 import { useAuthStore } from '../stores/auth'
+import { useWorkspaceStore } from '../stores/workspace'
 import { useRouter } from 'vue-router'
 import { t, tf, setLang, state as i18nState } from '../i18n'
 import type { Lang } from '../i18n'
@@ -16,7 +17,9 @@ import { sound } from '../utils/sound'
 const message = useMessage()
 const ui = useUiStore()
 const auth = useAuthStore()
+const ws = useWorkspaceStore()
 const router = useRouter()
+const newCmd = ref('')
 
 const permissionMode = ref('')
 const permissionOptions = ref<string[]>([])
@@ -38,6 +41,10 @@ onMounted(async () => {
   } catch (e: any) { message.error(e.message) }
   loadLogs()
   loadLanInfo()
+  // 工作目录授权状态、白名单、审计日志
+  ws.loadStatus()
+  ws.loadWhitelist()
+  ws.loadAudit()
 })
 
 async function loadLanInfo() {
@@ -103,6 +110,42 @@ function logout() {
   router.replace('/login')
 }
 
+// ── 工作目录授权管理 ──────────────────────────────────────
+async function onRevokeWorkspace() {
+  try {
+    await ws.revoke()
+    message.success(t('settings.workspaceRevokeOk'))
+    ws.loadAudit()
+  } catch (e: any) {
+    message.error(e.message || t('settings.workspaceRevokeFailed'))
+  }
+}
+
+async function onAddCmd() {
+  const cmd = newCmd.value.trim()
+  if (!cmd) return
+  try {
+    await ws.addWhitelist(cmd)
+    newCmd.value = ''
+    message.success(t('settings.cmdWhitelistAdded'))
+  } catch (e: any) {
+    message.error(e.message || t('settings.cmdWhitelistAddFailed'))
+  }
+}
+
+async function onRemoveCmd(cmd: string) {
+  try {
+    await ws.removeWhitelist(cmd)
+    message.success(t('settings.cmdWhitelistRemoved'))
+  } catch (e: any) {
+    message.error(e.message || t('settings.cmdWhitelistRemoveFailed'))
+  }
+}
+
+async function onRefreshAudit() {
+  await ws.loadAudit()
+}
+
 const permDesc = computed<Record<string, string>>(() => ({
   default: t('settings.permissionDesc.default'),
   dev: t('settings.permissionDesc.dev'),
@@ -157,6 +200,11 @@ const permDesc = computed<Record<string, string>>(() => ({
         <n-switch :value="ui.dendroCursor" @update:value="(v: boolean) => { ui.setDendroCursor(v); sound.play('toggle') }" />
       </div>
       <p class="brightness-hint">{{ t('settings.dendroCursorHint') }}</p>
+      <div class="setting-row">
+        <span class="s-label">{{ t('settings.dendroCursorTrail') }}</span>
+        <n-switch :value="ui.dendroCursorTrail" @update:value="(v: boolean) => { ui.setDendroCursorTrail(v); sound.play('toggle') }" />
+      </div>
+      <p class="brightness-hint">{{ t('settings.dendroCursorTrailHint') }}</p>
       <div class="setting-row brightness-row">
         <div class="brightness-label">
           <span class="s-label">{{ t('settings.brightness') }}</span>
@@ -205,6 +253,63 @@ const permDesc = computed<Record<string, string>>(() => ({
         </n-radio-button>
       </n-radio-group>
       <p class="perm-desc">{{ permDesc[permissionMode] || '' }}</p>
+    </section></Tilt3D>
+
+    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
+      <h3>{{ t('settings.workspaceAuth') }}</h3>
+      <p class="apikey-desc">{{ t('settings.workspaceAuthDesc') }}</p>
+
+      <!-- 授权状态 -->
+      <template v-if="ws.authorized">
+        <div class="setting-row">
+          <span class="s-label">{{ t('settings.workspaceCurrent') }}</span>
+          <span class="ws-path" :title="ws.currentPath">📁 {{ ws.currentPath }}</span>
+        </div>
+        <div class="setting-row">
+          <span class="s-label">{{ t('settings.workspaceAuthorizedAt') }}</span>
+          <span class="ws-time">{{ ws.authorizedAt || '—' }}</span>
+        </div>
+        <div class="setting-row">
+          <n-popconfirm @positive-click="onRevokeWorkspace">
+            <template #trigger>
+              <n-button type="warning" ghost size="small">{{ t('settings.workspaceRevoke') }}</n-button>
+            </template>
+            {{ t('settings.workspaceRevokeConfirm') }}
+          </n-popconfirm>
+        </div>
+      </template>
+      <template v-else>
+        <p class="perm-desc">{{ t('settings.workspaceUnauthorizedHint') }}</p>
+      </template>
+
+      <!-- 命令白名单 -->
+      <h4 class="sub-title">{{ t('settings.cmdWhitelist') }}</h4>
+      <p class="apikey-desc">{{ t('settings.cmdWhitelistHint') }}</p>
+      <div class="setting-row">
+        <n-input v-model:value="newCmd" :placeholder="t('settings.cmdWhitelistAddPlaceholder')" size="small" style="flex:1" @keyup.enter="onAddCmd" />
+        <n-button size="small" type="primary" @click="onAddCmd">{{ t('settings.cmdWhitelistAdd') }}</n-button>
+      </div>
+      <div v-if="ws.whitelist.length" class="ws-whitelist">
+        <n-tag v-for="cmd in ws.whitelist" :key="cmd" closable size="small" @close="onRemoveCmd(cmd)">{{ cmd }}</n-tag>
+      </div>
+      <p v-else class="perm-desc">{{ t('settings.cmdWhitelistEmpty') }}</p>
+
+      <!-- 审计日志 -->
+      <div class="section-head" style="margin-top:14px">
+        <h4 class="sub-title">{{ t('settings.workspaceAudit') }}</h4>
+        <n-button size="small" @click="onRefreshAudit">{{ t('settings.workspaceAuditRefresh') }}</n-button>
+      </div>
+      <div v-if="ws.auditLog.length" class="ws-audit">
+        <div v-for="(log, i) in ws.auditLog" :key="i" class="audit-entry">
+          <span class="audit-time">{{ log.timestamp }}</span>
+          <n-tag :type="log.allowed ? 'success' : 'error'" size="small">
+            {{ log.allowed ? t('settings.workspaceAuditAllowed') : t('settings.workspaceAuditDenied') }}
+          </n-tag>
+          <span class="audit-action">{{ log.action }}</span>
+          <span class="audit-target" :title="log.target">{{ log.target }}</span>
+        </div>
+      </div>
+      <p v-else class="perm-desc">{{ t('settings.workspaceAuditEmpty') }}</p>
     </section></Tilt3D>
 
     <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
@@ -379,5 +484,77 @@ const permDesc = computed<Record<string, string>>(() => ({
   color: var(--moon-dim);
   margin: 4px 0 0;
   opacity: 0.7;
+}
+
+/* 工作目录授权区块 */
+.sub-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--dendro);
+  margin: 14px 0 4px;
+}
+.ws-path {
+  font-size: 13px;
+  color: var(--moon);
+  font-family: var(--mono, monospace);
+  word-break: break-all;
+  flex: 1;
+  margin-left: 8px;
+}
+.ws-time {
+  font-size: 12.5px;
+  color: var(--moon-dim);
+  font-family: var(--mono, monospace);
+  margin-left: 8px;
+}
+.ws-whitelist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.ws-audit {
+  margin-top: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  padding: 6px 8px;
+}
+.audit-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.audit-entry:last-child { border-bottom: none; }
+.audit-time {
+  color: var(--moon-dim);
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  flex-shrink: 0;
+  width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.audit-action {
+  color: var(--moon);
+  font-family: var(--mono, monospace);
+  flex-shrink: 0;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.audit-target {
+  color: var(--wisdom);
+  font-family: var(--mono, monospace);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

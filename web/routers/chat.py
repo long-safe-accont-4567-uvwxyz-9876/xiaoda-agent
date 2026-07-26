@@ -29,7 +29,12 @@ except ImportError:
     UPLOAD_DIR = Path(__file__).resolve().parent.parent / "media" / "upload"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_DOC_SIZE = 20 * 1024 * 1024  # 20MB
 _ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+# P0 新增（Task 1.9）：文档上传支持 — 与图片上传分离
+# 根因：原 upload-image 端点仅接受 image/*，文档（PDF/DOCX 等）无法上传。
+#       用户说"上传文件不是只上传图片"，文档应走 document_reader 工具，而非 vision API。
+_ALLOWED_DOC_EXTS = {".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls", ".txt", ".md"}
 
 
 def _strip_tags(text: str) -> str:
@@ -212,6 +217,35 @@ async def upload_image(file: UploadFile = File(...)) -> Any:
     dest = UPLOAD_DIR / filename
     dest.write_bytes(content)
     return Envelope(data={"url": f"/media/upload/{filename}", "name": filename})
+
+
+# P0 新增（Task 1.9）：文档上传端点 — 与图片上传分离
+# 根因：用户说"上传文件不是只上传图片"。文档（PDF/DOCX 等）应走 document_reader 工具，
+#       而非 vision API。前端上传文档时调用此端点，后端返回路径，
+#       LLM 通过 document_reader 工具读取内容。
+@router.post("/chat/upload-doc", response_model=Envelope[dict])
+async def upload_doc(file: UploadFile = File(...)) -> Any:
+    """上传文档文件（PDF/DOCX/PPTX/XLSX/TXT/MD）。
+
+    与 upload-image 分离：文档不走 vision API，而是返回路径供 document_reader 工具读取。
+    """
+    content = await file.read()
+    if len(content) > MAX_DOC_SIZE:
+        raise HTTPException(400, "文档大小不能超过 20MB")
+    ext = Path(file.filename or "doc.pdf").suffix.lower() or ".pdf"
+    if ext not in _ALLOWED_DOC_EXTS:
+        raise HTTPException(400, f"不支持的文档格式，仅允许 {', '.join(sorted(_ALLOWED_DOC_EXTS))}")
+    filename = f"{uuid.uuid4().hex[:12]}{ext}"
+    dest = UPLOAD_DIR / filename
+    dest.write_bytes(content)
+    abs_path = str(dest.resolve())
+    logger.info("chat.doc_uploaded name={} size={} path={}", filename, len(content), abs_path)
+    return Envelope(data={
+        "url": f"/media/upload/{filename}",
+        "name": filename,
+        "path": abs_path,  # 供 document_reader 工具使用的绝对路径
+        "ext": ext,
+    })
 
 
 @router.post("/chat/speech-to-text", response_model=Envelope[dict])

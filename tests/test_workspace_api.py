@@ -38,6 +38,10 @@ def pm():
     pm = get_permission_manager()
     pm.clear_cwd()
     pm.set_whitelist([])
+    # 清空审计环形缓冲：全局单例的 _audit_buffer 跨测试保留，
+    # 其他测试（如 test_tool_executor_workspace::test_delete_action_classified）
+    # 写入的条目会污染 test_get_audit_with_entries 的 len 断言。
+    pm.clear_audit_log()
     return pm
 
 

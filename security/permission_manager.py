@@ -424,6 +424,18 @@ class PermissionManager:
         with self._lock:
             self._audit_buffer.append(asdict(entry))
 
+    def clear_audit_log(self) -> None:
+        """清空审计环形缓冲。
+
+        全局单例 PermissionManager 的 ``_audit_buffer`` 跨测试保留，
+        若测试不显式清理，先写入的 audit 条目会污染后续断言
+        （例如 ``test_get_audit_with_entries`` 期望 len==1，
+        实际从 ``test_delete_action_classified`` 遗留 1 条 → len==2）。
+        测试 fixture 应在每用例前调用本方法，保证隔离。
+        """
+        with self._lock:
+            self._audit_buffer.clear()
+
     def get_audit_log(self, limit: int = 100) -> list[dict]:
         """获取审计日志（最近 limit 条）"""
         with self._lock:
