@@ -44,15 +44,25 @@ def _on_bg_task_done(task: asyncio.Task) -> None:
         logger.warning("bg.task_failed error={} task={}", str(exc), task.get_name())
 
 
-def _spawn(coro: Any, timeout: float = 45.0) -> None:
+def _spawn(coro: Any, timeout: float | None = None) -> None:
     """创建 fire-and-forget 后台任务，自动从 _bg_tasks 中移除已完成的任务。
 
     包含耗时监控：任务完成时记录执行时长，超过 30s 发出告警日志。
     包含 loop 保护：同步上下文调用时降级日志而非崩溃。
-    包含超时保护：默认 45s 超时，防止任务卡死阻塞事件循环。
-        根因：auto_note_after_message 曾卡 152s，_encode_task 60s 超时但实际 86.9s
-        （内部同步操作不响应 CancelledError）。外层超时至少能限制卡死时间，
-        避免单个后台任务无限占用事件循环。
+
+    超时约定（默认 None，即不超时）：
+        调用方必须显式判断协程性质后决定是否传 timeout：
+        - 纯网络/纯计算、可安全中断的协程（如 LLM 抽取后只写文件、
+          纯 embed 调用）：显式传 timeout=45，防止卡死阻塞事件循环。
+        - 涉及 DB 写入（尤其 auto_commit=False 批次）的协程**不传**。
+          根因：超时取消只能中断 await 点，若取消落在 commit 之前，
+          已 INSERT 但未 COMMIT 的事务会遗留在连接上，被后续任意一次
+          无关 commit 意外提交（产生脏数据），或随连接关闭被回滚丢失
+          （数据静默消失）。这两种结局都比"任务卡 45s"更难排查。
+
+    历史背景：auto_note_after_message 曾卡 152s，_encode_task 60s 超时但
+        实际 86.9s（内部同步操作不响应 CancelledError）。外层超时只能限制
+        卡死时间，无法保证业务一致性，故默认改为 None，由调用方按需启用。
         注意：timeout 只能取消协程的 await 点，同步阻塞需通过 to_thread 规避。
     """
     task_name = getattr(coro, '__name__', coro.__class__.__name__)
@@ -60,7 +70,10 @@ def _spawn(coro: Any, timeout: float = 45.0) -> None:
 
     async def _wrapped():
         try:
-            await asyncio.wait_for(coro, timeout=timeout)
+            if timeout is None:
+                await coro
+            else:
+                await asyncio.wait_for(coro, timeout=timeout)
         except asyncio.TimeoutError:
             logger.warning("bg.task_timeout name={} timeout={:.0f}s",
                            task_name, timeout)
@@ -110,6 +123,11 @@ class BackgroundTaskManager:
         self.instinct_manager = instinct_manager
         self._conversation_count = 0
         self._conv_count_lock = asyncio.Lock()
+        # 周期任务并发去重：记录正在运行的 task_name
+        # 根因：_should_run 只读 cron_last_run，而 last_run 在任务完成后才写入，
+        # 两条消息并发进入调度时都会判定"该运行"，导致梦境归档/记忆蒸馏/
+        # 概念边补建重复执行（重复写入 + 额外 LLM 调用 + DB I/O 争抢）
+        self._running_scheduled: set[str] = set()
 
     def start_background_task(self, coro: Any) -> None:
         """启动一个 fire-and-forget 后台任务。"""
@@ -300,6 +318,20 @@ class BackgroundTaskManager:
             if should_curate:
                 _spawn(self.instinct_manager.curator_run())
 
+    def _spawn_scheduled(self, task_name: str, coro: Any) -> None:
+        """启动 _should_run 占位过的周期任务，完成后释放占位。
+
+        必须与 _should_run 配对使用：_should_run 返回 True 时已占位，
+        这里保证无论成功/失败/超时都会释放，避免任务永久无法再次调度。
+        """
+        async def _release_after(inner: Any) -> None:
+            try:
+                await inner
+            finally:
+                self._running_scheduled.discard(task_name)
+
+        _spawn(_release_after(coro))
+
     async def _run_scheduled_tasks(self) -> None:
         """会话归档、梦境归档、缓存预热、记忆蒸馏等定时任务。"""
         # 8. 会话自动归档
@@ -308,14 +340,14 @@ class BackgroundTaskManager:
         # 9. 梦境归档（每日一次）
         try:
             if await self._should_run("dream_archive", interval_hours=24):
-                _spawn(self._dream_archive_task())
+                self._spawn_scheduled("dream_archive", self._dream_archive_task())
         except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.dream_archive_schedule_failed", error=str(e))
 
         # 10. 嵌入缓存预热（每 5 分钟）
         try:
             if await self._should_run("warm_embedding_cache", interval_hours=5 / 60):
-                _spawn(self._warm_embedding_cache())
+                self._spawn_scheduled("warm_embedding_cache", self._warm_embedding_cache())
         except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.warm_embedding_cache_schedule_failed", error=str(e))
 
@@ -324,7 +356,7 @@ class BackgroundTaskManager:
             import config
             if getattr(config, "MEMORY_DISTILL_ENABLED", False):
                 if await self._should_run("memory_distill", interval_hours=6):
-                    _spawn(self._distill_memories_task())
+                    self._spawn_scheduled("memory_distill", self._distill_memories_task())
         except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.memory_distill_schedule_failed", error=str(e))
 
@@ -334,21 +366,24 @@ class BackgroundTaskManager:
         try:
             if self.learning_manager and await self._should_run("learning_promote", interval_hours=0.5):
                 from core.preference_pipeline import get_preference_pipeline
-                _spawn(get_preference_pipeline().check_promotion(self.learning_manager))
+                self._spawn_scheduled(
+                    "learning_promote",
+                    get_preference_pipeline().check_promotion(self.learning_manager))
         except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.learning_promote_schedule_failed", error=str(e))
 
         # 13. 邮箱 OAuth token 定期刷新（每 2 小时，防止 access/refresh token 过期）
         try:
             if await self._should_run("mail_token_refresh", interval_hours=2):
-                _spawn(self._refresh_mail_token_task())
+                self._spawn_scheduled("mail_token_refresh", self._refresh_mail_token_task())
         except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.mail_token_refresh_schedule_failed", error=str(e))
 
         # 14. 概念图边补建（每 30 分钟，auto_link 跳过的边由这里补建）
         try:
             if await self._should_run("concept_link_curator", interval_hours=0.5):
-                _spawn(self._concept_link_curator_task())
+                self._spawn_scheduled("concept_link_curator",
+                                      self._concept_link_curator_task())
         except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.concept_link_curator_schedule_failed", error=str(e))
 
@@ -373,14 +408,27 @@ class BackgroundTaskManager:
     _consecutive_failures: dict[str, int] = {}
 
     async def _should_run(self, task_name: str, interval_hours: float) -> bool:
-        """检查周期任务是否应运行（基于 cron_last_run 表）"""
+        """检查周期任务是否应运行（基于 cron_last_run 表）。
+
+        返回 True 时会把 task_name 原子加入 _running_scheduled 占位，
+        调用方必须通过 _spawn_scheduled() 启动任务以保证占位被释放。
+        """
+        # 并发去重：已有同名任务在运行则直接跳过，避免重复执行
+        if task_name in self._running_scheduled:
+            logger.debug("bg.scheduled_task_already_running name={}", task_name)
+            return False
         try:
             last_run = await self.db.get_cron_last_run(task_name)
             if last_run is None:
+                self._running_scheduled.add(task_name)
                 return True
             result = (time.time() - last_run) >= interval_hours * 3600
             if result:
                 self._consecutive_failures.pop(task_name, None)
+                # 二次检查：await 期间可能已有并发调用占位
+                if task_name in self._running_scheduled:
+                    return False
+                self._running_scheduled.add(task_name)
             return result
         except (OSError, RuntimeError):
             count = self._consecutive_failures.get(task_name, 0) + 1

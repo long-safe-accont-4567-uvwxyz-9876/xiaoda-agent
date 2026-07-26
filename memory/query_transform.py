@@ -79,9 +79,16 @@ class QueryTransformer:
         cache.move_to_end(key)
         return result
 
-    def _cache_put(self, cache: OrderedDict, key: str, value: Any) -> None:
-        """G15: 写入缓存，维护 maxsize。"""
-        cache[key] = (value, time.monotonic() + self.TRANSFORM_CACHE_TTL)
+    # 降级结果的短 TTL：LLM 超时/失败时缓存原查询，防止连续超时尖峰，
+    # 但不能按 10 分钟长 TTL 缓存——一次网络抖动会让后续 10 分钟都拿不到
+    # 改写结果，持续降低检索精度。60s 兼顾"防尖峰"与"瞬时故障可恢复"。
+    TRANSFORM_FALLBACK_TTL = 60
+
+    def _cache_put(self, cache: OrderedDict, key: str, value: Any,
+                   ttl: float | None = None) -> None:
+        """G15: 写入缓存，维护 maxsize。ttl 为 None 时用默认 TTL。"""
+        cache[key] = (value, time.monotonic() + (
+            self.TRANSFORM_CACHE_TTL if ttl is None else ttl))
         cache.move_to_end(key)
         if len(cache) > self.TRANSFORM_CACHE_MAXSIZE:
             cache.popitem(last=False)
@@ -192,7 +199,9 @@ class QueryTransformer:
             result = None  # 走降级路径，final=original_query 并缓存
         final = result if result else original_query
         # G15: 写入缓存（即使降级为原查询也缓存，避免重复调 LLM）
-        self._cache_put(self._rewrite_cache, cache_key, final)
+        # 降级结果用短 TTL：瞬时抖动不应把未改写的查询钉住 10 分钟
+        self._cache_put(self._rewrite_cache, cache_key, final,
+                        ttl=None if result else self.TRANSFORM_FALLBACK_TTL)
         return final
 
     async def expand_query(self, query: str, n: int = 3) -> list[str]:
@@ -225,12 +234,25 @@ class QueryTransformer:
             logger.warning("query_transform.expand_timeout", query=query[:50])
             result = None  # 走降级路径，final=[query] 并缓存
         if result:
-            expanded = [line.strip() for line in result.strip().split("\n") if line.strip()]
-            final = [query, *expanded[:n]]
+            # 保序去重 + 过滤原查询：模型常重复输出同一行或复述原问题，
+            # 原实现 [query, *expanded[:n]] 会让重复项挤占检索名额，
+            # 每项都会走一次向量/FTS/Rerank，白耗预算且降低召回多样性
+            seen = {query}
+            unique_expanded: list[str] = []
+            for line in result.strip().split("\n"):
+                line = line.strip()
+                if not line or line in seen:
+                    continue
+                seen.add(line)
+                unique_expanded.append(line)
+                if len(unique_expanded) >= n:
+                    break
+            final = [query, *unique_expanded]
         else:
             final = [query]
-        # G15: 写入缓存
-        self._cache_put(self._expand_cache, cache_key, final)
+        # G15: 写入缓存（降级结果用短 TTL，同 rewrite_query）
+        self._cache_put(self._expand_cache, cache_key, final,
+                        ttl=None if result else self.TRANSFORM_FALLBACK_TTL)
         return list(final)  # 返回副本
 
     async def generate_hyde_document(self, query: str, context: str = "") -> str | None:
@@ -280,10 +302,10 @@ class QueryTransformer:
         if len(query) < 5:
             return "chat"
 
-        for kw in self.CHAT_KEYWORDS:
-            if kw in query:
-                return "chat"
-
+        # 时间判定优先于闲聊判定：
+        # 原顺序先匹配 CHAT_KEYWORDS，导致"我昨天觉得很难过"被归为 chat，
+        # 错过时间优先的记忆检索。含明确时间表达式时时间信号更强，应先返回
+        # temporal，让检索走时间范围路径。
         for kw in self.TEMPORAL_KEYWORDS:
             if kw in query:
                 return "temporal"
@@ -296,6 +318,10 @@ class QueryTransformer:
             return "temporal"
         if _re.search(r"\d{1,2}\s*[点时:：]\s*(\d{1,2})?\s*分?\s*(到|~|-|—)", query):
             return "temporal"
+
+        for kw in self.CHAT_KEYWORDS:
+            if kw in query:
+                return "chat"
 
         for kw in self.MULTIHOP_KEYWORDS:
             if kw in query:

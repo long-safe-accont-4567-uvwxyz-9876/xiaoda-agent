@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import threading
 import traceback
@@ -227,6 +228,30 @@ class ConfigService:
             return json.loads(json.dumps(node))
         return node
 
+    @staticmethod
+    def _detach(value: Any) -> Any:
+        """脱离调用方引用：容器类型做深拷贝，标量原样返回。
+
+        根因：set("ui.items", lst) 后调用方 lst.append(...) 会直接改变
+        服务内存状态，并在下次任意写入时被 _save 持久化（引用污染）。
+        models.* 曾出现同类问题，这里对所有配置段统一防御。
+        """
+        if isinstance(value, (dict, list)):
+            return copy.deepcopy(value)
+        return value
+
+    def _assign(self, path: str, value: Any) -> None:
+        """按点分路径写入 _data（调用方需持锁）。中间节点缺失时创建 _TrackedDict。"""
+        parts = path.split(".")
+        node = self._data
+        for part in parts[:-1]:
+            # setdefault 创建的 dict 也必须是 TrackedDict
+            if part not in node or not isinstance(node[part], dict):
+                child_path = f"{getattr(node, '_track_path', '')}.{part}"
+                node[part] = _TrackedDict(_track_path=child_path)
+            node = node[part]
+        node[parts[-1]] = self._detach(value)
+
     def set(self, path: str, value: Any) -> None:
         """按点分路径设置配置项, 落盘并通知 watcher.
 
@@ -235,15 +260,7 @@ class ConfigService:
             value: 新值
         """
         with self._lock:
-            parts = path.split(".")
-            node = self._data
-            for part in parts[:-1]:
-                # setdefault 创建的 dict 也必须是 TrackedDict
-                if part not in node or not isinstance(node[part], dict):
-                    child_path = f"{getattr(node, '_track_path', '')}.{part}"
-                    node[part] = _TrackedDict(_track_path=child_path)
-                node = node[part]
-            node[parts[-1]] = value
+            self._assign(path, value)
             self._save()
         # 审计日志：models. 路径写入记录简洁 INFO（无堆栈），便于追踪模型配置变更
         if path.startswith("models."):
@@ -262,14 +279,7 @@ class ConfigService:
         """
         with self._lock:
             for path, value in updates.items():
-                parts = path.split(".")
-                node = self._data
-                for part in parts[:-1]:
-                    if part not in node or not isinstance(node[part], dict):
-                        child_path = f"{getattr(node, '_track_path', '')}.{part}"
-                        node[part] = _TrackedDict(_track_path=child_path)
-                    node = node[part]
-                node[parts[-1]] = value
+                self._assign(path, value)
             self._save()
         # 逐路径通知：保证每个路径的 watcher 都收到回调，语义与 set() 一致
         # 只省略了中间的 N-1 次 _save()，通知仍然逐条发送
@@ -288,9 +298,13 @@ class ConfigService:
             parts = path.split(".")
             node = self._data
             for part in parts[:-1]:
-                if part not in node:
+                # 中间节点被标量遮蔽时（如 ui.particles="low" 再删 ui.particles.inner）
+                # 原实现会抛 AttributeError，公共 API 应对不存在的路径安全返回
+                if not isinstance(node, dict) or part not in node:
                     return
                 node = node[part]
+            if not isinstance(node, dict):
+                return
             node.pop(parts[-1], None)
             self._save()
         self._notify(path, None)

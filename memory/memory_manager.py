@@ -2645,6 +2645,10 @@ class MemoryManager:
             # 知识图谱是增强层，可异步补建，不应阻塞记忆编码主流程。
             try:
                 _kg_task = asyncio.create_task(self.kg.auto_extract_and_merge(summary))
+                # 强引用：与索引/实体/蒸馏任务一致加入 _bg_tasks，
+                # 否则任务仅由局部变量持有，可能在完成前被 GC 回收
+                _bg_tasks.add(_kg_task)
+                _kg_task.add_done_callback(_bg_tasks.discard)
                 _kg_task.add_done_callback(_log_task_exception)
             except Exception as e:
                 logger.debug("memory.kg_spawn_failed", error=str(e))

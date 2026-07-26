@@ -1,6 +1,7 @@
 from typing import Any
 from collections.abc import AsyncIterator
 import asyncio
+import hashlib
 import os
 import sys
 from contextlib import asynccontextmanager, suppress
@@ -317,7 +318,9 @@ async def _start_services(app: Any, core: Any) -> None:
     from web.routers.tools import apply_tool_overrides
     from web.ws_hub import manager, start_media_cleanup
 
-    await _apply_model_overrides(core)
+    # _apply_model_overrides 已提到 lifespan 中无条件执行（在降级判定之前），
+    # 保证降级模式下也能注册已保存的自定义 provider / 恢复路由 / 恢复 chat_model。
+    # 这里不再重复调用，避免对 router 做二次注册。
     apply_tool_overrides()
     start_media_cleanup()
     await _start_user_mcp_servers(core)
@@ -360,46 +363,63 @@ async def _start_services(app: Any, core: Any) -> None:
         if instance is not None:
             setattr(app.state, attr_name, instance)
 
-    # QQ Bot
-    qq_task = None
-    if os.getenv("QQBOT_APP_ID", "") and os.getenv("ENABLE_QQ_BOT", "true").lower() in ("true", "1", "yes"):
-        from qq_bot_adapter import run_qq_bot
-        from config import AGENT_CONFIG
-        qq_task = asyncio.create_task(
-            run_qq_bot(core, sandbox=AGENT_CONFIG.get("qq_bot", {}).get("is_sandbox", False)))
-        logger.info("webui.qq_bot_task_started")
-    app.state.qq_task = qq_task
+    # QQ Bot：走统一入口 ensure_qq_bot_task，相同凭证下并发调用（_background_reinit
+    # 与 _start_services 同时触发）会通过指纹合并复用现有 task，避免重复启动抖动
+    await ensure_qq_bot_task(app)
     app.state.last_emotion = None
 
 
-async def restart_qq_bot_task(app: FastAPI) -> bool:
-    """重启 QQ Bot 任务（用户在 WebUI 更新 QQ 凭证后调用）。
+def _qq_credential_fingerprint() -> str:
+    """计算 QQ Bot 凭证指纹：APP_ID + APP_SECRET + ENABLE_QQ_BOT 的 sha256 前 16 位。
 
-    根因修复（用户反馈"QQ ID/Secret 登录成功后仍显示机器人离线"）：
-    原 _start_services 仅在 WebUI 启动时检查 QQBOT_APP_ID env，用户后填入
-    凭证后不会自动启动 QQ bot 任务。即使 _reload_env_and_cache 更新了
-    os.environ，qq_bot_adapter 模块级 APP_ID/APP_SECRET（import 时一次性
-    读取）仍是旧值（空），导致 run_qq_bot 早期返回 disabled_no_appid。
+    用于 ensure_qq_bot_task 的合并判定——相同凭证的并发请求只启动一次 Bot，
+    避免重复"取消→新建"抖动。只记录指纹前缀到日志，不写 secret 原文。
+    """
+    app_id = os.getenv("QQBOT_APP_ID", "").strip()
+    app_secret = os.getenv("QQBOT_APP_SECRET", "").strip()
+    enable = os.getenv("ENABLE_QQ_BOT", "true").strip()
+    raw = f"{app_id}|{app_secret}|{enable}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
-    修复流程：
-    1. 取消已存在的 qq_task（用旧凭证运行的实例）
-    2. 更新 qq_bot_adapter.APP_ID/APP_SECRET 模块级变量（从 os.environ 读取最新值）
-    3. 检查启用条件（QQBOT_APP_ID + QQBOT_APP_SECRET + ENABLE_QQ_BOT）
-    4. 启动新的 qq_task
 
-    CodeRabbit #2 修复：整个取消+更新+启动序列加 asyncio.Lock 防并发重叠，
-    避免两个同时触发的重启请求产生两个 qq_task 竞争同一个 WebSocket 连接。
+async def ensure_qq_bot_task(app: FastAPI, force: bool = False) -> bool:
+    """QQ Bot 任务的统一入口：按凭证指纹合并并发重启请求。
+
+    根因：restart_qq_bot_task 中 asyncio.Lock 仅保证重启流程互斥；每个等待者
+    获得锁后仍会执行"取消当前 task → 新建 task"。没有凭证版本比较、in-flight
+    合并或防抖——20 次相同凭证并发请求会导致 19 次 Bot 启动、18 次刚启动即被取消。
+    用凭证指纹判定：当前存活 task 的指纹与目标一致且非强制时直接复用，不取消不重建。
 
     Returns:
-        True 表示已启动新的 QQ bot 任务，False 表示未启动（凭证缺失或禁用）
+        True 表示已启动新的 QQ bot 任务或复用现有任务，False 表示未启动
     """
-    # CodeRabbit #2: 加锁防并发重叠
+    # 锁的懒创建沿用 restart_qq_bot_task 既有写法，避免模块级状态
     lock = getattr(app.state, "_qq_restart_lock", None)
     if lock is None:
         lock = asyncio.Lock()
         app.state._qq_restart_lock = lock
     async with lock:
-        return await _restart_qq_bot_task_inner(app)
+        target_fp = _qq_credential_fingerprint()
+        current = getattr(app.state, "qq_task", None)
+        applied_fp = getattr(app.state, "_qq_applied_fingerprint", None)
+        # 合并判定：凭证未变且有存活 task → 复用，不取消不重建
+        if not force and current is not None and not current.done() and applied_fp == target_fp:
+            logger.info("webui.qq_bot_reuse_existing fp={}", target_fp)
+            return True
+        started = await _restart_qq_bot_task_inner(app)
+        # 成功创建写回指纹；未启动（凭证缺失/禁用/失败）置 None，
+        # 避免下次同凭证误判"已有存活 task"而跳过真正的启动
+        app.state._qq_applied_fingerprint = target_fp if started else None
+        return started
+
+
+async def restart_qq_bot_task(app: FastAPI) -> bool:
+    """凭证保存路径强制重启的薄封装（force=True 绕过指纹合并）。
+
+    保留此函数名：web/routers/setup.py 在 QQ 凭证保存后调用它，用户改了凭证
+    必须重启（不能复用旧 task），所以走 force 分支。
+    """
+    return await ensure_qq_bot_task(app, force=True)
 
 
 async def _restart_qq_bot_task_inner(app: FastAPI) -> bool:
@@ -463,8 +483,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
         ) from None
 
     # 降级模式：直接读 .env 文件检查 MIMO_API_KEY
-    _mimo = _resolve_env_api_key()
-    if not _mimo:
+    # 根因：原判定只看 MIMO_API_KEY，缺少该 key 时跳过 _start_services，
+    # 从而 _apply_model_overrides 也不执行 —— 已保存的 Agnes / OpenRouter /
+    # SiliconFlow / 自定义 provider 凭证全部失效。这里先无条件执行
+    # _apply_model_overrides（注册自定义 provider、应用路由覆盖、恢复 chat_model），
+    # 再以"任一 provider 凭证是否存在"判定是否进入降级模式。
+    await _apply_model_overrides(core)
+    if not _has_any_provider_credential():
         logger.info("webui.degraded_mode")
         # 初始化空的 plugin/media/scheduler 避免后续 AttributeError
         app.state.plugin_manager = None
@@ -553,6 +578,47 @@ def _resolve_env_api_key() -> str:
                     _mimo = _s.split("=", 1)[1].strip().strip("'\"")
                     break
     return _mimo
+
+
+def _has_any_provider_credential() -> bool:
+    """判断是否持有任一可用 provider 凭证，用于决定是否进入降级模式。
+
+    根因：原 lifespan 仅凭 MIMO_API_KEY 是否存在决定降级，但用户可能保存了
+    Agnes / OpenRouter / SiliconFlow 或自定义 provider 凭证。这些场景下若
+    MIMO_API_KEY 缺失，会一并跳过 _start_services，导致 _apply_model_overrides
+    不执行 —— 自定义 provider 不注册、路由覆盖不应用、models.chat_model 不恢复。
+    任一来源有凭证即视为可用，避免误判降级。
+    """
+    # 1. MiMo：复用现有 .env 解析逻辑，与原 lifespan 旧判定保持一致
+    if _resolve_env_api_key().strip():
+        return True
+
+    # 2. Agnes：从 .env 读取（_apply_model_overrides 实际注册时也走 .env，
+    #    保持判定源与生效源一致，避免"判定为可用但实际未注册"的错配）
+    try:
+        from setup_wizard import _load_env_values
+        if _load_env_values().get("AGNES_API_KEY", "").strip():
+            return True
+    except (ImportError, OSError, ValueError):
+        logger.debug("server.agnes_key_check_failed", exc_info=True)
+
+    # 3. 自定义 provider：复用 config_service 已加载的 providers 配置 +
+    #    load_provider_key 读取凭证文件，不新写 JSON 解析
+    try:
+        from web.config_service import get_config_service
+        from web._provider_keys import load_provider_key
+        cfg = get_config_service()
+        for pid in (cfg.get("models.providers", {}) or {}):
+            if pid == "ollama":
+                # ollama 不需要 API key，注册时仅看 OLLAMA_BASE_URL；
+                # 这里不把它视为"有凭证"，避免用户残留 ollama 配置时误判非降级
+                continue
+            if load_provider_key(pid).strip():
+                return True
+    except (ImportError, OSError, ValueError) as e:
+        logger.warning("webui.custom_provider_credential_check_failed error={}", str(e))
+
+    return False
 
 
 async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:

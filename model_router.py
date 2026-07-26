@@ -956,7 +956,12 @@ class ModelRouter:
                         task=task_type, duration_ms=int((time.time() - _start) * 1000),
                         user_id=user_openid, session_id=session_id)
             return result
-        except (RuntimeError, OSError, KeyError, ValueError, TypeError, _openai_mod.APIError) as e:
+        except (RuntimeError, OSError, KeyError, ValueError, TypeError,
+                _openai_mod.APIError, LLMError) as e:
+            # LLMError 纳入捕获：_select_client_for_provider 在客户端无法恢复时
+            # 抛 LLMError（继承 AppException，不属于 RuntimeError/OSError/ValueError），
+            # 原捕获集合漏掉它 → 主 provider 客户端未初始化时直接抛给上层，
+            # 已配置的 Agnes/自定义 provider 降级链完全不会被触发。
             metrics.inc(f"model_route.{task_type}.failure")
             metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
             metrics.maybe_report()
@@ -1629,7 +1634,10 @@ class ModelRouter:
                     config=config,
                 )
 
-            except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError) as e:
+            except (RuntimeError, OSError, KeyError, ValueError,
+                    _openai_mod.APIError, LLMError) as e:
+                # LLMError：客户端未初始化/无法恢复，重试同一 provider 无意义，
+                # 但必须让它作为 last_error 抛出到 route 的降级链（见 route 的注释）
                 last_error = e
                 should_retry = await self._handle_route_exception(
                     e, provider, task_type, model, attempt,

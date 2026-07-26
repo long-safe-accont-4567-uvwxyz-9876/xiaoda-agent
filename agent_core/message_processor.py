@@ -576,7 +576,9 @@ class MessageProcessorMixin:
                 if _learner.should_run_insight(_xp_uid2):
                     _xp_state = get_xp_system().get_state(_xp_uid2)
                     _lv = _xp_state.level.value if hasattr(_xp_state.level, 'value') else int(_xp_state.level)
-                    _spawn(self._run_profile_insight(_xp_uid2, _lv))
+                    # _run_profile_insight 仅 LLM 调用 + 写 USER.md 文件，无 DB 事务，
+                    # 可安全中断，故显式传 timeout=45 防止卡死阻塞事件循环
+                    _spawn(self._run_profile_insight(_xp_uid2, _lv), timeout=45)
         except Exception as _e:
             logger.warning("profile_learner.record_failed", error=str(_e))
 
@@ -1615,9 +1617,31 @@ class MessageProcessorMixin:
         except Exception as e:
             logger.warning("message_processor.stream_llm_failed: {}", str(e)[:200])
             accumulated = "".join(full_response)
+            # 根因：流式失败时原实现直接回落到 route()，route() 虽内部也走 fallback 链，
+            # 但走的是「重新选主 provider 再失败再 fallback」的完整路径，多一次主调用开销；
+            # 且 stream 路径的 e 已经是真实失败原因，直接喂给 _try_fallback_chain 跳过主重试更高效。
+            # 保留 accumulated 非空时返回部分内容的现有行为，避免重复内容（已推送的 delta 不能撤回）。
             if accumulated:
                 logger.info("message_processor.stream_partial_return len={}", len(accumulated))
                 return accumulated + "\n\n[⚠️ 内容生成中断，以上为已生成的部分]"
+            # 取舍：降级时 stream=False，把流式退化为一次性返回。
+            # 原因：此处再消费一个 fallback provider 的流对象需要重复 stall timeout/finish_reason
+            # 检测逻辑，复杂且易错；非流式返回用户感知仅是「这次没有逐字效果」，可靠性优先。
+            fb_result = await self.router._try_fallback_chain(
+                e, task_type, messages,
+                kwargs.get("temperature", 0.7),
+                False,
+                kwargs.get("tools"),
+                kwargs.get("tool_choice"),
+                kwargs.get("timeout", 60),
+                kwargs.get("user_openid", ""),
+                kwargs.get("session_id", ""),
+                kwargs.get("extra_headers"),
+                original_max_tokens=kwargs.get("max_tokens"),
+            )
+            # 降级返回 str 直接用；返回 None（所有降级目标不可用）才回落到 route() 兜底。
+            if isinstance(fb_result, str) and fb_result:
+                return fb_result
             return await self.router.route(task_type, messages, **kwargs)
         return "".join(full_response)
 

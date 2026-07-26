@@ -592,6 +592,10 @@ async def save_keys(body: dict) -> Any:
             if test_error is not None:
                 return test_error
 
+        # 捕获 QQ 凭证旧值，用于判断保存后是否需要强制重启 QQ Bot
+        _qq_keys = ("QQBOT_APP_ID", "QQBOT_APP_SECRET", "ENABLE_QQ_BOT")
+        _qq_old = {k: os.getenv(k, "") for k in _qq_keys}
+
         # 写入 .env 文件
         _write_env_file(updates, ENV_PATH, ENV_EXAMPLE_PATH, _parse_env_lines, _load_env_values, _write_env)
         _auto_register_providers(updates)
@@ -604,20 +608,20 @@ async def save_keys(body: dict) -> Any:
         # 更新 config 模块变量 + 刷新客户端
         _update_config_and_refresh_clients(updates)
 
-        # 核心重初始化放到后台异步执行，不阻塞 API 返回
-        import asyncio
-        _reinit_tasks.append(asyncio.create_task(_background_reinit()))
-
-        # QQ Bot 凭证更新后重启任务（修复：原凭证保存后不重启导致 QQ 显示机器人离线）
-        # 根因：_start_services 仅在 WebUI 启动时检查 QQBOT_APP_ID env，用户后填入
-        # 凭证后 qq_bot_adapter 模块级 APP_ID 仍为空，run_qq_bot 早期返回 disabled_no_appid。
-        # 修复：检测到 QQ 凭证更新时，后台异步重启 QQ bot 任务（更新模块级变量 + 重建 task）。
-        _qq_updated = any(
-            k in updates
-            for k in ("QQBOT_APP_ID", "QQBOT_APP_SECRET", "ENABLE_QQ_BOT")
+        # 判断 QQ 凭证是否实际变更（仅凭 key 出现在 updates 中不够——用户可能
+        # 重新提交相同值，此时无需 force 重启，ensure_qq_bot_task 的指纹合并
+        # 会复用现有 task）
+        _qq_changed = any(
+            k in updates and updates[k].strip() != _qq_old[k].strip()
+            for k in _qq_keys
         )
-        if _qq_updated:
-            _reinit_tasks.append(asyncio.create_task(_restart_qq_bot_after_save()))
+
+        # 核心重初始化 + QQ Bot 重启串行执行，消除双 Bot 竞态。
+        # 根因：原实现独立创建 _background_reinit 与 _restart_qq_bot_after_save
+        # 两个后台任务，两者各自碰 app.state.qq_task，force 重启可能先于
+        # core.init() 完成导致双 Bot 同时存活。串行化后只 create_task 一次，
+        # _background_reinit 完成后再执行 QQ 重启。
+        _reinit_tasks.append(asyncio.create_task(_reinit_and_maybe_restart_qq(_qq_changed)))
 
         return Envelope(data={"saved": list(updates.keys()), "need_restart": False})
     except Exception as e:
@@ -818,6 +822,24 @@ async def _background_reinit() -> None:
     except Exception as e:
         import traceback
         logger.error("setup.core_reinit_failed error={} traceback={}", str(e), traceback.format_exc())
+    finally:
+        _reinit_tasks[:] = [t for t in _reinit_tasks if not t.done()]
+
+
+async def _reinit_and_maybe_restart_qq(qq_changed: bool) -> None:
+    """串行执行核心重初始化与 QQ Bot 重启，消除双 Bot 竞态。
+
+    根因：save_keys 原实现独立创建 _background_reinit() 与
+    _restart_qq_bot_after_save() 两个后台任务，两者各自碰 app.state.qq_task。
+    即使 Task 4 让两者走同一把锁，执行顺序仍不确定——force 重启可能先于
+    core.init() 完成，导致 _start_services 创建的旧 task 与 force 重启创建的
+    新 task 在取消传播窗口内同时存活。串行化后 _background_reinit 完成再
+    执行 QQ 重启，且只 create_task 一次，从根本上消除竞态。
+    """
+    try:
+        await _background_reinit()
+        if qq_changed:
+            await _restart_qq_bot_after_save()
     finally:
         _reinit_tasks[:] = [t for t in _reinit_tasks if not t.done()]
 
