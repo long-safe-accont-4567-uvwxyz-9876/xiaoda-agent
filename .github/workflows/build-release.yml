@@ -416,11 +416,10 @@ jobs:
           name: ${{ matrix.artifact }}
           path: |
             xiaoda-agent-windows-x64-*-setup.exe
-            xiaoda-agent-windows-x64-*.zip
             xiaoda-agent-windows-x64-*.tar.gz
             xiaoda-agent-linux-x86_64-*.tar.gz
             xiaoda-agent-linux-x86_64-*-install.sh
-          if-no-files-found: warn
+          if-no-files-found: error
 
   docker:
     runs-on: ubuntu-latest
@@ -530,7 +529,6 @@ jobs:
           name: Release v${{ steps.version.outputs.version }}
           files: |
             artifacts/xiaoda-agent-windows-x64-*-setup.exe
-            artifacts/xiaoda-agent-windows-x64-*.zip
             artifacts/xiaoda-agent-windows-x64-*.tar.gz
             artifacts/xiaoda-agent-linux-x86_64-*.tar.gz
             artifacts/xiaoda-agent-linux-x86_64-*-install.sh

@@ -60,6 +60,9 @@ if exist "%~dp0xiaoda-agent.exe" (
 :: Change to the script directory
 cd /d "%~dp0"
 
+:: Ensure logs directory exists (watchdog writes here)
+if not exist "logs" mkdir "logs"
+
 :: Force UTF-8 output encoding (prevents UnicodeEncodeError with GBK on Chinese Windows)
 set PYTHONIOENCODING=utf-8
 

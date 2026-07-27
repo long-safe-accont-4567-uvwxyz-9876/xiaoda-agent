@@ -12,13 +12,12 @@ Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
   !define OUTFILE "xiaoda-agent-windows-x64-v${VERSION}-setup.exe"
 !endif
 OutFile "${OUTFILE}"
-; ── 绿化核心改动：per-user 安装到 LOCALAPPDATA，无需 UAC 管理员权限 ──
-;   1. InstallDir 改为 $LOCALAPPDATA（用户可写，无需 admin）
-;   2. RequestExecutionLevel user（不弹 UAC）
-;   3. InstallDirRegKey 改为 HKCU（当前用户注册表）
-;   4. SetShellVarContext current（快捷方式放当前用户目录）
-;   这样双击安装包不再弹 UAC，且卸载无需管理员权限。
-;   如果用户需要全机器安装，仍可通过右键"以管理员身份运行"升级到 per-machine。
+; ── Per-user 安装优化：无需 UAC，降低权限并隔离用户安装状态 ──
+;   1. InstallDir 使用 $LOCALAPPDATA（当前用户可写）
+;   2. RequestExecutionLevel user（不请求管理员权限）
+;   3. InstallDirRegKey 使用 HKCU（当前用户注册表）
+;   4. SetShellVarContext current（快捷方式写入当前用户目录）
+;   安装与卸载均无需管理员权限，不影响用户数据目录。
 InstallDir "$LOCALAPPDATA\${PRODUCT_NAME}"
 InstallDirRegKey HKCU "Software\${PRODUCT_NAME}" "InstallDir"
 RequestExecutionLevel user
@@ -52,7 +51,7 @@ SetShellVarContext current
 ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "UninstallString"
 ${If} $0 != ""
   ; 检测到旧版 per-machine 安装，提示并调用其 uninstaller
-  MessageBox MB_YESNO|MB_ICONQUESTION "检测到旧版（per-machine）安装于 $0。$\n$\n是否先卸载旧版再继续安装新版（per-user）？$\n（卸载旧版需要管理员权限，若取消请右键本安装包"以管理员身份运行"）" IDYES +2 IDNO skip_legacy_uninstall
+  MessageBox MB_YESNO|MB_ICONQUESTION "检测到旧版（per-machine）安装于 $0。$\n$\n是否先卸载旧版再继续安装新版（per-user）？$\n（卸载旧版需要管理员权限，若取消请右键本安装包$\"以管理员身份运行$\"）" IDYES +2 IDNO skip_legacy_uninstall
   ; P1-7: ExecWait 后检查错误标志，避免 UAC 取消或卸载失败仍继续安装
   ClearErrors
   ExecWait '"$0" /S' ; /S 静默卸载（NSIS 默认 uninstaller 支持）
