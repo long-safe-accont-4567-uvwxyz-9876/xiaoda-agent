@@ -867,6 +867,16 @@ RAG_RERANK_LIMIT = _safe_int(os.getenv("RAG_RERANK_LIMIT"), 50)
 # 污染上下文。闲聊型 query 天然宽松不过滤，非闲聊型按此阈值过滤。
 RAG_MIN_FINAL_SCORE = _safe_float(os.getenv("RAG_MIN_FINAL_SCORE"), 0.15)
 
+# RAG 向量召回绝对距离阈值（治本：源头过滤不相关向量）
+# 根因（TDD test_rag_quality_root_fix 诊断）：原 _hybrid_vec_search 用相对归一化
+# (1 - distance/max_dist) 美化距离，即使最远的向量也接近 1.0 高分，导致
+# Python query 召回亲密内容。改用绝对 L2 距离阈值，distance > 此值的向量
+# 直接丢弃，不进入 RRF 融合。
+# bge-m3 输出已 L2 归一化，distance 范围 0~2：
+#   < 0.8 = 相关, 0.8-1.0 = 弱相关, > 1.0 = 基本无关
+# 默认 1.0：严格过滤，宁可返回空也不注入噪声（用户核心诉求）
+RAG_VEC_MAX_DISTANCE = _safe_float(os.getenv("RAG_VEC_MAX_DISTANCE"), 1.0)
+
 # ── 记忆/情绪阈值 (可环境变量覆盖) ──
 # 情绪触发安慰记忆检索的强度阈值 (0.0~1.0)
 EMOTION_TRIGGER_THRESHOLD = _safe_float(os.getenv("EMOTION_TRIGGER_THRESHOLD"), 0.5)

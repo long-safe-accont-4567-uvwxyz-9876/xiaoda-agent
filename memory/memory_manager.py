@@ -1148,8 +1148,16 @@ class MemoryManager:
                             and m.get("agent_id") == scope.agent_id]
             # 构建 id -> memory 映射，按 distance 排序组装结果
             vec_mem_map = {m["id"]: m for m in vec_mems}
-            # 只用过滤后的距离计算 max_dist，避免被过滤记忆的距离污染归一化
-            filtered_dists = [d for rid, d in vec_results if rid in vec_mem_map]
+
+            # 治本修复（TDD test_rag_quality_root_fix）：
+            # 原 _hybrid_vec_search 用相对归一化 (1 - distance/max_dist) 美化距离，
+            # 即使最远的向量也接近 1.0 高分，导致 Python query 召回亲密内容。
+            # 改用绝对 L2 距离阈值：distance > RAG_VEC_MAX_DISTANCE 的向量直接丢弃，
+            # 不进入 RRF 融合，从源头杜绝噪声。
+            import config as _cfg
+            _max_distance = getattr(_cfg, 'RAG_VEC_MAX_DISTANCE', 1.0)
+            filtered_dists = [d for rid, d in vec_results
+                              if rid in vec_mem_map and d <= _max_distance]
             items = []
             if filtered_dists:
                 if len(filtered_dists) == 1:
@@ -1161,14 +1169,26 @@ class MemoryManager:
             else:
                 _use_normalize = False
                 max_dist = 0.0
+            _filtered_count = 0
             for row_id, distance in vec_results:
                 mem = vec_mem_map.get(row_id)
                 if mem:
+                    # 治本：绝对距离阈值过滤，远距离向量直接丢弃
+                    if distance > _max_distance:
+                        _filtered_count += 1
+                        continue
                     if _use_normalize:
                         mem["score"] = max(0.0, 1.0 - distance / max_dist)
                     else:
                         mem["score"] = max(0.0, 1.0 - distance)
                     items.append(mem)
+            if _filtered_count > 0:
+                logger.info("memory.vec_distance_filtered",
+                            query=query[:50],
+                            total=len(vec_results),
+                            filtered=_filtered_count,
+                            kept=len(items),
+                            max_distance=_max_distance)
             return items
         except Exception as e:
             logger.warning("memory.vec_search_failed", error=str(e))
