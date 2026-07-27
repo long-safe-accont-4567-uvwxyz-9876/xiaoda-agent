@@ -148,7 +148,7 @@ class InstinctManager:
                 # instinct 提取是后台任务，不应阻塞这么久；超时则放弃本次提取。
                 result = await asyncio.wait_for(
                     self.router.route(
-                        task_type="chat_mini",
+                        task_type="chat",
                         messages=messages,
                         temperature=0.3,
                         max_tokens=800,
@@ -259,19 +259,26 @@ class InstinctManager:
             logger.info("instinct.archived_stale", count=count)
         return count
 
-    async def merge_duplicates(self, similarity_threshold: float = 0.92) -> int:
-        """合并语义重复的 Instinct（基于文本相似度）"""
-        if not self._available:
-            return 0
-        cursor = await self.db._conn.execute(
-            """SELECT id, content, confidence, use_count FROM instincts
-               WHERE status='active' ORDER BY confidence DESC"""
-        )
-        rows = await cursor.fetchall()
+    @staticmethod
+    def _compute_duplicates_sync(
+        rows: list, similarity_threshold: float
+    ) -> tuple[set, list, dict, int]:
+        """同步计算重复本能（CPU 密集，必须在线程中运行）。
 
-        if len(rows) < 2:
-            return 0
+        P0 修复（用户反馈"回复特别慢、阻塞"根因）：
+        原实现在 merge_duplicates 中直接做 O(n²) difflib.SequenceMatcher 比较，
+        这是纯 CPU 密集操作，会阻塞 asyncio 事件循环 243 秒（日志证据：
+        bg.task_slow name=curator_run elapsed=243.7s）。
+        修复：将 CPU 密集的比较逻辑抽到独立同步方法，通过 asyncio.to_thread
+        在线程池中执行，不阻塞事件循环。
 
+        Args:
+            rows: DB 查询结果 [(id, content, confidence, use_count), ...]
+            similarity_threshold: 相似度阈值
+
+        Returns:
+            (merged_ids, archive_ids, use_count_increments, merge_count)
+        """
         merged_ids: set[int] = set()
         merge_count = 0
         use_count_increments: dict[int, int] = {}
@@ -295,6 +302,30 @@ class InstinctManager:
                         use_count_increments.get(rows[i]["id"], 0) + rows[j]["use_count"]
                     )
                     merge_count += 1
+        return merged_ids, archive_ids, use_count_increments, merge_count
+
+    async def merge_duplicates(self, similarity_threshold: float = 0.92) -> int:
+        """合并语义重复的 Instinct（基于文本相似度）"""
+        if not self._available:
+            return 0
+        cursor = await self.db._conn.execute(
+            """SELECT id, content, confidence, use_count FROM instincts
+               WHERE status='active' ORDER BY confidence DESC"""
+        )
+        rows = await cursor.fetchall()
+
+        if len(rows) < 2:
+            return 0
+
+        # P0 修复：CPU 密集的 O(n²) 比较放到线程池，不阻塞事件循环
+        # 根因：difflib.SequenceMatcher 是同步 CPU 密集操作，原实现在事件循环中
+        # 直接运行导致 243 秒阻塞（bg.task_slow name=curator_run elapsed=243.7s）。
+        # 通过 asyncio.to_thread 让事件循环保持响应，_spawn 的超时才能真正生效。
+        merged_ids, archive_ids, use_count_increments, merge_count = (
+            await asyncio.to_thread(
+                self._compute_duplicates_sync, rows, similarity_threshold
+            )
+        )
 
         if merge_count > 0:
             if use_count_increments:

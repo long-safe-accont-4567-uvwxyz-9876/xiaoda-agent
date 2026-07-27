@@ -18,6 +18,21 @@ MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
 MIMO_TTS_MODEL = os.getenv("MIMO_TTS_MODEL", "mimo-v2.5-tts-voiceclone")
 
 
+# 全局 TTS 引擎单例（由 bootstrap 初始化时设置，供工具层访问）
+_global_tts_engine: "TTSEngine | None" = None
+
+
+def set_global_tts_engine(engine: "TTSEngine | None") -> None:
+    """设置全局 TTS 引擎单例（bootstrap 初始化后调用）。"""
+    global _global_tts_engine
+    _global_tts_engine = engine
+
+
+def get_tts_engine() -> "TTSEngine | None":
+    """返回全局 TTS 引擎单例（未初始化时返回 None）。"""
+    return _global_tts_engine
+
+
 def _get_mimo_api_key() -> str:
     """动态读取 MIMO_API_KEY，确保 setup 保存后能生效"""
     key = os.getenv("MIMO_API_KEY", "") or MIMO_API_KEY
@@ -360,6 +375,12 @@ class TTSEngine:
         self._available = False
         self._synthesis_cache: OrderedDict[str, Path] = OrderedDict()
         self._cache_index_path: Path | None = None
+        # single-flight 去重表：同一 cache_key 的并发请求复用同一个 future，
+        # 避免缓存未命中时 N 个请求各自打上游
+        self._inflight: dict[str, asyncio.Future[Path | None]] = {}
+        # 上游 TTS API 并发上界，防止突发并发打爆 MiMo 限流（429）
+        # Python 3.11 起 Semaphore 不再绑定 loop，__init__ 中创建安全
+        self._upstream_sem = asyncio.Semaphore(3)
 
     def _load_cache_index(self) -> None:
         """从 JSON 文件加载缓存索引，移除文件不存在的条目"""
@@ -518,6 +539,57 @@ class TTSEngine:
             return cached
         logger.info("tts.cache_miss", key=cache_key)
 
+        # 根因：缓存检查与上游调用之间无锁，20 个相同请求会各自看到 miss 并全部打上游。
+        # single-flight 合并：首个请求执行合成，其余请求 await 同一个 future，上游只被打一次。
+        existing = self._inflight.get(cache_key)
+        if existing is not None:
+            # 等待者被取消不影响合成方（shield 隔离取消传播到 inner future）
+            # 普通异常转 None：synthesize 返回类型是 Path | None，抛异常不符合契约
+            try:
+                return await asyncio.shield(existing)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                return None
+
+        fut = asyncio.get_running_loop().create_future()
+        self._inflight[cache_key] = fut
+        try:
+            result = await self._synthesize_uncached(
+                text, voice, voice_path, style, emotion, output_path, cache_key
+            )
+            fut.set_result(result)
+            return result
+        except asyncio.CancelledError:
+            raise
+        except BaseException as e:
+            # 让等待者拿到同一异常，而不是永久挂起；
+            # 但公共边界转 None：synthesize 契约是 Path | None，不抛异常
+            fut.set_exception(e)
+            if isinstance(e, Exception):
+                return None
+            raise
+        finally:
+            # 消费 future 异常避免 "exception never retrieved" 告警：
+            # fut 此刻必已 done（set_result 或 set_exception 已执行），exception() 安全
+            fut.exception()
+            self._inflight.pop(cache_key, None)
+
+    async def _synthesize_uncached(
+        self,
+        text: str,
+        voice: str,
+        voice_path: Path,
+        style: str,
+        emotion: str,
+        output_path: str | Path | None,
+        cache_key: str,
+    ) -> Path | None:
+        """执行实际的上游 TTS 合成（缓存未命中路径）。
+
+        异常向上抛出而非吞成 None：single-flight 调度方需把同一异常分发给所有等待者，
+        若此处吞异常返回 None，等待者会拿到 None 而非异常，无法区分“无音频”与“上游报错”。
+        """
         try:
             voice_data_url = await _encode_voice_file(voice_path)
         except Exception as e:
@@ -527,7 +599,9 @@ class TTSEngine:
         messages = self._build_tts_messages(voice, text, style, emotion)
 
         try:
-            completion = await self._call_tts_with_retry(voice, voice_data_url, messages)
+            # 并发上界：semaphore 限制同时打上游的请求数，防止突发流量触发 429
+            async with self._upstream_sem:
+                completion = await self._call_tts_with_retry(voice, voice_data_url, messages)
             if completion is None:
                 return None
 
@@ -544,8 +618,10 @@ class TTSEngine:
 
             return self._save_tts_output(audio_bytes, voice, text, output_path, cache_key)
         except Exception as e:
+            # 记录后向上抛出：single-flight 调度方需把同一异常分发给所有等待者，
+            # 此处不能吞异常返回 None，否则等待者拿到 None 而非异常
             logger.error("tts.synthesize_failed voice={} error={}", voice, str(e))
-            return None
+            raise
 
     def _tts_cache_hit(self, cache_key: str) -> Path | None:
         """检查 TTS 合成缓存。命中返回 Path，未命中返回 None。"""

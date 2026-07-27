@@ -309,9 +309,13 @@ class NudgeEngine:
 
             # 通过小妲 agent 生成问候（使用真实 user_id 加载记忆上下文）
             if self._core:
-                # 角色扮演式提示：场景 + 随机风格线索 + 形式线索 + 偶发事件
+                # P0 修复：场景提示走 system_context，不污染 conversation_logs.user_message
+                # 根因：原实现把"（场景：现在早上...）"作为 user_input 传入，
+                #       导致 DB 历史记录出现系统提示，LLM 在后续轮次回应这些元提示。
+                # 修复：场景提示作为 system_context 注入（仅 LLM 可见，不入库），
+                #       user_input 用中性占位符"（主动问候）"。
                 if rare:
-                    user_input = (
+                    scene_prompt = (
                         f'（场景：现在{time_desc}，{address_term}{idle_desc}。'
                         f'你现在的状态：{mood}。'
                         f'今天想玩点不一样的——{rare}。'
@@ -320,7 +324,7 @@ class NudgeEngine:
                         f'就只是一句带着你性格的、普通的话。）'
                     )
                 else:
-                    user_input = (
+                    scene_prompt = (
                         f'（场景：现在{time_desc}，{address_term}{idle_desc}。'
                         f'你现在的状态：{mood}。'
                         f'你想说一句——形式是：{form}。'
@@ -330,8 +334,10 @@ class NudgeEngine:
                         f'不要像 AI 助手那样"主动问候"。'
                         f'就只是一句带着你性格的、普通的话。）'
                     )
-                user_input += recent_hint
-                user_input += memory_hint
+                scene_prompt += recent_hint
+                scene_prompt += memory_hint
+                # user_input 用中性占位符，不污染历史记录
+                user_input_placeholder = "（主动问候）"
                 # 使用真实的 user_id 和 session，让记忆系统能加载用户上下文
                 real_user_id = f"qq_{self._user_openid}"
                 try:
@@ -341,13 +347,14 @@ class NudgeEngine:
                     session_id = ""
                 result = await asyncio.wait_for(
                     self._core.process(
-                        user_input=user_input,
+                        user_input=user_input_placeholder,
                         user_id=real_user_id,
                         source="qq",
                         user_openid=self._user_openid,
                         session_id=session_id,
+                        system_context=scene_prompt,  # P0：场景提示走 system_context
                     ),
-                    timeout=30,
+                    timeout=90,  # P1-4 修复：30→90，与主路径 180s 对齐，避免主动问候被提前截断
                 )
                 greeting = result.reply if hasattr(result, 'reply') else str(result)
             else:
@@ -365,7 +372,7 @@ class NudgeEngine:
                     {"role": "user", "content": user_msg},
                 ]
                 result = await asyncio.wait_for(
-                    self._router.route("chat_flash", messages, temperature=get_temperature(default=0.9)),
+                    self._router.route("chat", messages, temperature=get_temperature(default=0.9)),
                     timeout=30,
                 )
                 greeting = result if isinstance(result, str) else result.choices[0].message.content or ""

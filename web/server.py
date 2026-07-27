@@ -1,10 +1,13 @@
 from typing import Any
 from collections.abc import AsyncIterator
 import asyncio
+import hashlib
 import os
 import sys
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+
+from core.app_exception import LLMError
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -54,16 +57,23 @@ def _register_env_providers(cfg: Any, env_values: Any, os_module: Any) -> None:
             "agnes", "openai",
             os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1"), "Agnes AI"
         ),
+        # P0 修复（硬编码/ollama 默认启用根因）：
+        # 原实现 _default_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+        # 总是返回非空值（env 未设也回退到 localhost:11434），导致 ollama 永远被注册，
+        # 即使用户没配置也会尝试连接 → 持续报错（日志中 custom_provider.registered id=ollama）。
+        # 修复：ollama 的 _default_url 设为空串，仅当 env_values（.env）显式配置时才注册。
+        # 其他 provider 的 _default_url 是 SaaS 云端固定端点（非用户自定义），保留默认值正确。
         "OLLAMA_BASE_URL": (
             "ollama", "openai",
-            os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"), "Ollama 本地大模型"
+            "", "Ollama 本地大模型"
         ),
     }
     known_env_keys = list(_KNOWN_ENV_PROVIDERS.keys())
     for env_key, (pid, fmt, _default_url, label) in _KNOWN_ENV_PROVIDERS.items():
         if env_key == "OLLAMA_BASE_URL":
+            # ollama：仅当 .env 显式配置 OLLAMA_BASE_URL 时才注册（_default_url 为空串）
             api_key = "ollama"
-            base_url = env_values.get(env_key, "").strip() or _default_url
+            base_url = env_values.get(env_key, "").strip()
             if not base_url:
                 continue
         else:
@@ -113,6 +123,13 @@ def _register_all_providers(cfg: Any, core: Any, load_provider_key: Any, registe
         key=lambda kv: _provider_sort_key(kv, all_keys_order)
     )
     for pid, p in sorted_providers:
+        # P0 修复（ollama 默认启用根因 2/2）：
+        # 即使旧版本 bug 已把 ollama 写入持久化 config（base_url=localhost:11434），
+        # 这里也要拦住：ollama 是本地服务，必须 OLLAMA_BASE_URL 环境变量显式配置才注册。
+        # 云端 provider（siliconflow/openrouter 等）不受此约束 —— 它们的 URL 是固定的 SaaS 端点。
+        if pid == "ollama" and not os.getenv("OLLAMA_BASE_URL", "").strip():
+            logger.info("webui.skip_ollama_no_env reason=OLLAMA_BASE_URL not set, skipping stale config entry")
+            continue
         key = load_provider_key(pid)
         if key and p.get("enabled", True):
             try:
@@ -160,13 +177,6 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
 
     注意：此函数只做"恢复"，不做"持久化"。fallback 时禁止调用 set_chat_model，
     否则会把 mimo 重新写入 config，覆盖用户原选择，形成 sticky fallback。
-
-    关键修复：fallback 分支不再修改 ROUTE_TABLE["chat"]["client"]。
-    旧逻辑会把 client 改成 "mimo"，后续 PUT /models/routes/chat 会读取这个内存值
-    并持久化 chat_model=mimo，导致用户明明设置 agnes 却被覆盖成 mimo（sticky fallback）。
-    正确行为：fallback 只更新 _current_chat_model（影响 GET /models/chat-model 返回值），
-    保留 ROUTE_TABLE 中的用户原选择。请求路由时会通过 _select_client_for_provider
-    检测到 agnes 客户端不可用，自然走 fallback 链到 mimo，无需污染 ROUTE_TABLE。
     """
     chat_model = cfg.get("models.chat_model")
     if not (isinstance(chat_model, dict) and chat_model.get("provider") and chat_model.get("model_id")):
@@ -180,25 +190,38 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
     current_model = ROUTE_TABLE.get("chat", {}).get("model", "")
     logger.info("webui.chat_model_restore_attempt saved={}/{} current_route={}/{}",
                 provider, model_id, current_client, current_model)
+    # 直接修改内存中的 ROUTE_TABLE 和 _current_chat_model，不调用 set_chat_model。
+    # set_chat_model 会触发持久化（cfg.set），而 _restore_chat_model 只做"恢复"不做"持久化"，
+    # 否则每次启动都会重新持久化当前模型到 config，覆盖用户的后续切换选择。
+    # 成功路径：直接设置 ROUTE_TABLE["chat"] 和 _current_chat_model
+    # fallback 路径：回退到 mimo，同样只修改内存不持久化
     try:
-        core.router.set_chat_model(provider, model_id)
+        # 检查 provider 是否已注册（自定义 provider 可能未注册）
+        if provider not in ("mimo", "agnes") and provider not in getattr(core.router, '_custom_clients', {}):
+            raise LLMError(f"自定义 provider {provider} 未注册")
+        chat_entry = ROUTE_TABLE.get("chat")
+        if chat_entry is not None:
+            chat_entry["model"] = model_id
+            chat_entry["client"] = provider
+        core.router._current_chat_model = {"provider": provider, "model_id": model_id}
         logger.info("webui.chat_model_restored provider={} model={}", provider, model_id)
     except Exception as e:
         # 必须捕获 Exception：LLMError 继承 AppException 不在原 (KeyError, ValueError,
         # AttributeError, OSError) 范围内，自定义 provider 注册失败时会导致启动崩溃
         logger.warning(
             "webui.chat_model_restore_failed provider={} model={} "
-            "error={} keep_route_table_unchanged", provider, model_id, str(e)
+            "error={} fallback_to_mimo_in_memory_only", provider, model_id, str(e)
         )
-        # 关键修复：只更新 _current_chat_model（GET /models/chat-model 用），
-        # 不修改 ROUTE_TABLE["chat"]["client"]，避免污染用户原选择。
-        # 请求路由时 _select_client_for_provider 会检测客户端不可用并抛 LLMError，
-        # 触发 _try_fallback_chain 走 mimo 降级，无需在此预先污染 ROUTE_TABLE。
+        # 仅修改内存中的 ROUTE_TABLE，不调用 set_chat_model 避免重新持久化 mimo
+        # 这样用户下次切换模型时，config 中仍是原选择，不会被 sticky mimo 覆盖
         try:
             from model_router import MIMO_MODEL
+            chat_entry = ROUTE_TABLE.get("chat")
+            if chat_entry is not None:
+                chat_entry["model"] = MIMO_MODEL
+                chat_entry["client"] = "mimo"
             core.router._current_chat_model = {"provider": "mimo", "model_id": MIMO_MODEL}
-            logger.info("webui.chat_model_fallback_current_only provider=mimo model={} "
-                        "route_table_preserved={}/{}", MIMO_MODEL, current_client, current_model)
+            logger.info("webui.chat_model_fallback_in_memory provider=mimo model={}", MIMO_MODEL)
         except (ImportError, KeyError, AttributeError):
             logger.debug("server.set_chat_model_fallback_error", exc_info=True)
 
@@ -295,7 +318,9 @@ async def _start_services(app: Any, core: Any) -> None:
     from web.routers.tools import apply_tool_overrides
     from web.ws_hub import manager, start_media_cleanup
 
-    await _apply_model_overrides(core)
+    # _apply_model_overrides 已提到 lifespan 中无条件执行（在降级判定之前），
+    # 保证降级模式下也能注册已保存的自定义 provider / 恢复路由 / 恢复 chat_model。
+    # 这里不再重复调用，避免对 router 做二次注册。
     apply_tool_overrides()
     start_media_cleanup()
     await _start_user_mcp_servers(core)
@@ -338,16 +363,110 @@ async def _start_services(app: Any, core: Any) -> None:
         if instance is not None:
             setattr(app.state, attr_name, instance)
 
-    # QQ Bot
-    qq_task = None
-    if os.getenv("QQBOT_APP_ID", "") and os.getenv("ENABLE_QQ_BOT", "true").lower() in ("true", "1", "yes"):
-        from qq_bot_adapter import run_qq_bot
-        from config import AGENT_CONFIG
-        qq_task = asyncio.create_task(
-            run_qq_bot(core, sandbox=AGENT_CONFIG.get("qq_bot", {}).get("is_sandbox", False)))
-        logger.info("webui.qq_bot_task_started")
-    app.state.qq_task = qq_task
+    # QQ Bot：走统一入口 ensure_qq_bot_task，相同凭证下并发调用（_background_reinit
+    # 与 _start_services 同时触发）会通过指纹合并复用现有 task，避免重复启动抖动
+    await ensure_qq_bot_task(app)
     app.state.last_emotion = None
+
+
+def _qq_credential_fingerprint() -> str:
+    """计算 QQ Bot 凭证指纹：APP_ID + APP_SECRET + ENABLE_QQ_BOT 的 sha256 前 16 位。
+
+    用于 ensure_qq_bot_task 的合并判定——相同凭证的并发请求只启动一次 Bot，
+    避免重复"取消→新建"抖动。只记录指纹前缀到日志，不写 secret 原文。
+    """
+    app_id = os.getenv("QQBOT_APP_ID", "").strip()
+    app_secret = os.getenv("QQBOT_APP_SECRET", "").strip()
+    enable = os.getenv("ENABLE_QQ_BOT", "true").strip()
+    raw = f"{app_id}|{app_secret}|{enable}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+async def ensure_qq_bot_task(app: FastAPI, force: bool = False) -> bool:
+    """QQ Bot 任务的统一入口：按凭证指纹合并并发重启请求。
+
+    根因：restart_qq_bot_task 中 asyncio.Lock 仅保证重启流程互斥；每个等待者
+    获得锁后仍会执行"取消当前 task → 新建 task"。没有凭证版本比较、in-flight
+    合并或防抖——20 次相同凭证并发请求会导致 19 次 Bot 启动、18 次刚启动即被取消。
+    用凭证指纹判定：当前存活 task 的指纹与目标一致且非强制时直接复用，不取消不重建。
+
+    Returns:
+        True 表示已启动新的 QQ bot 任务或复用现有任务，False 表示未启动
+    """
+    # 锁的懒创建沿用 restart_qq_bot_task 既有写法，避免模块级状态
+    lock = getattr(app.state, "_qq_restart_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        app.state._qq_restart_lock = lock
+    async with lock:
+        target_fp = _qq_credential_fingerprint()
+        current = getattr(app.state, "qq_task", None)
+        applied_fp = getattr(app.state, "_qq_applied_fingerprint", None)
+        # 合并判定：凭证未变且有存活 task → 复用，不取消不重建
+        if not force and current is not None and not current.done() and applied_fp == target_fp:
+            logger.info("webui.qq_bot_reuse_existing fp={}", target_fp)
+            return True
+        started = await _restart_qq_bot_task_inner(app)
+        # 成功创建写回指纹；未启动（凭证缺失/禁用/失败）置 None，
+        # 避免下次同凭证误判"已有存活 task"而跳过真正的启动
+        app.state._qq_applied_fingerprint = target_fp if started else None
+        return started
+
+
+async def restart_qq_bot_task(app: FastAPI) -> bool:
+    """凭证保存路径强制重启的薄封装（force=True 绕过指纹合并）。
+
+    保留此函数名：web/routers/setup.py 在 QQ 凭证保存后调用它，用户改了凭证
+    必须重启（不能复用旧 task），所以走 force 分支。
+    """
+    return await ensure_qq_bot_task(app, force=True)
+
+
+async def _restart_qq_bot_task_inner(app: FastAPI) -> bool:
+    """restart_qq_bot_task 的实际逻辑（在 Lock 保护下执行）。"""
+    # 1. 取消已存在的 qq_task（用旧凭证运行的实例）
+    old_task = getattr(app.state, "qq_task", None)
+    if old_task and not old_task.done():
+        old_task.cancel()
+        with suppress(asyncio.CancelledError, RuntimeError):
+            await old_task
+        logger.info("webui.qq_bot_old_task_cancelled_for_restart")
+
+    # 2. 更新 qq_bot_adapter 模块级变量（原在 import 时一次性读取，不会感知 env 更新）
+    new_app_id = os.getenv("QQBOT_APP_ID", "").strip()
+    new_app_secret = os.getenv("QQBOT_APP_SECRET", "").strip()
+    try:
+        import qq_bot_adapter
+        qq_bot_adapter.APP_ID = new_app_id
+        qq_bot_adapter.APP_SECRET = new_app_secret
+    except (ImportError, AttributeError) as e:
+        logger.warning("webui.qq_bot_adapter_module_update_failed error={}", str(e))
+        app.state.qq_task = None
+        return False
+
+    # 3. 检查启用条件
+    enable_qq = os.getenv("ENABLE_QQ_BOT", "true").lower() in ("true", "1", "yes")
+    if not new_app_id or not new_app_secret or not enable_qq:
+        logger.info("webui.qq_bot_not_started reason=missing_credentials_or_disabled "
+                    "app_id_set={} secret_set={} enable={}",
+                    bool(new_app_id), bool(new_app_secret), enable_qq)
+        app.state.qq_task = None
+        return False
+
+    # 4. 启动新的 QQ bot 任务
+    try:
+        from config import AGENT_CONFIG
+        from qq_bot_adapter import run_qq_bot
+        core = app.state.core
+        sandbox = AGENT_CONFIG.get("qq_bot", {}).get("is_sandbox", False)
+        new_task = asyncio.create_task(run_qq_bot(core, sandbox=sandbox))
+        app.state.qq_task = new_task
+        logger.info("webui.qq_bot_task_restarted_after_credential_save sandbox={}", sandbox)
+        return True
+    except (ImportError, RuntimeError, AttributeError) as e:
+        logger.error("webui.qq_bot_task_restart_failed error={}", str(e))
+        app.state.qq_task = None
+        return False
 
 
 @asynccontextmanager
@@ -364,8 +483,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
         ) from None
 
     # 降级模式：直接读 .env 文件检查 MIMO_API_KEY
-    _mimo = _resolve_env_api_key()
-    if not _mimo:
+    # 根因：原判定只看 MIMO_API_KEY，缺少该 key 时跳过 _start_services，
+    # 从而 _apply_model_overrides 也不执行 —— 已保存的 Agnes / OpenRouter /
+    # SiliconFlow / 自定义 provider 凭证全部失效。这里先无条件执行
+    # _apply_model_overrides（注册自定义 provider、应用路由覆盖、恢复 chat_model），
+    # 再以"任一 provider 凭证是否存在"判定是否进入降级模式。
+    await _apply_model_overrides(core)
+    if not _has_any_provider_credential():
         logger.info("webui.degraded_mode")
         # 初始化空的 plugin/media/scheduler 避免后续 AttributeError
         app.state.plugin_manager = None
@@ -378,7 +502,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
         await _start_services(app, core)
         logger.info("webui.lifespan.ready")
 
+    # 启动事件循环阻塞 watchdog：检测同步阻塞并打印线程栈定位根因
+    # 根因：后台任务集体卡 257-265s，_spawn timeout 无法取消同步阻塞
+    _stop_watchdog = None
+    try:
+        from core.background_tasks import start_event_loop_watchdog, stop_event_loop_watchdog
+        start_event_loop_watchdog()
+        _stop_watchdog = stop_event_loop_watchdog
+    except Exception as e:
+        logger.warning("webui.watchdog_start_failed error={}", str(e))
+
     yield
+
+    # 停止 watchdog
+    if _stop_watchdog is not None:
+        try:
+            _stop_watchdog()
+        except Exception:
+            pass
 
     logger.info("webui.lifespan.shutdown")
     await _shutdown_lifespan(app, core, owns_core)
@@ -437,6 +578,55 @@ def _resolve_env_api_key() -> str:
                     _mimo = _s.split("=", 1)[1].strip().strip("'\"")
                     break
     return _mimo
+
+
+def _has_any_provider_credential() -> bool:
+    """判断是否持有任一可用 provider 凭证，用于决定是否进入降级模式。
+
+    根因：原 lifespan 仅凭 MIMO_API_KEY 是否存在决定降级，但用户可能保存了
+    Agnes / OpenRouter / SiliconFlow 或自定义 provider 凭证。这些场景下若
+    MIMO_API_KEY 缺失，会一并跳过 _start_services，导致 _apply_model_overrides
+    不执行 —— 自定义 provider 不注册、路由覆盖不应用、models.chat_model 不恢复。
+    任一来源有凭证即视为可用，避免误判降级。
+    """
+    # 1. MiMo：复用现有 .env 解析逻辑，与原 lifespan 旧判定保持一致
+    if _resolve_env_api_key().strip():
+        return True
+
+    # 2. Agnes：从 .env 读取（_apply_model_overrides 实际注册时也走 .env，
+    #    保持判定源与生效源一致，避免"判定为可用但实际未注册"的错配）
+    try:
+        from setup_wizard import _load_env_values
+        if _load_env_values().get("AGNES_API_KEY", "").strip():
+            return True
+    except (ImportError, OSError, ValueError):
+        logger.debug("server.agnes_key_check_failed", exc_info=True)
+
+    # 3. 自定义 provider：复用 config_service 已加载的 providers 配置 +
+    #    load_provider_key 读取凭证文件，不新写 JSON 解析
+    try:
+        from web.config_service import get_config_service
+        from web._provider_keys import load_provider_key
+        cfg = get_config_service()
+        for pid in (cfg.get("models.providers", {}) or {}):
+            if pid == "ollama":
+                # ollama 不需要 API key，由下方第 4 步检查 OLLAMA_BASE_URL
+                continue
+            if load_provider_key(pid).strip():
+                return True
+    except (ImportError, OSError, ValueError) as e:
+        logger.warning("webui.custom_provider_credential_check_failed error={}", str(e))
+
+    # 4. Ollama：不需要 API key，仅看 .env 是否显式配置 OLLAMA_BASE_URL
+    #    （与 _apply_model_overrides 的注册条件一致，Ollama-only 部署不误入降级模式）
+    try:
+        from setup_wizard import _load_env_values
+        if _load_env_values().get("OLLAMA_BASE_URL", "").strip():
+            return True
+    except (ImportError, OSError, ValueError):
+        logger.debug("server.ollama_url_check_failed", exc_info=True)
+
+    return False
 
 
 async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:

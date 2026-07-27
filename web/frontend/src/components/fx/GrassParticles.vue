@@ -17,7 +17,12 @@ let running = false
 let cachedCtx: CanvasRenderingContext2D | null = null
 let mouseX = -9999
 let mouseY = -9999
-let trail: Array<{ x: number; y: number; t: number }> = []
+// 鼠标拖尾：背景同款叶片粒子（少量飘落）
+let trailLeaves: Array<{
+  x: number; y: number; vx: number; vy: number;
+  size: number; rot: number; vrot: number; t: number;
+}> = []
+let lastTrailPos: { x: number; y: number } | null = null
 let burstParticles: Array<{ x: number; y: number; vx: number; vy: number; t: number; rot: number }> = []
 
 const DENSITY: Record<string, number> = { off: 0, low: 12, medium: 36, high: 60 }
@@ -101,17 +106,18 @@ function frame(now: number) {
   const w = c.width, h = c.height
   ctx.clearRect(0, 0, w, h)
 
-  // 鼠标轨迹（淡绿衰减）
-  if (ui.particles !== 'low') {
+  // 鼠标轨迹（草元素叶片拖尾）—— 背景同款叶片，少量飘落，颜色淡
+  if (ui.dendroCursorTrail && trailLeaves.length > 0) {
     const tNow = performance.now()
-    trail = trail.filter(p => tNow - p.t < 600)
-    for (const p of trail) {
-      const a = 1 - (tNow - p.t) / 600
-      ctx.globalAlpha = a * 0.25
-      ctx.fillStyle = '#7fd650'
-      ctx.beginPath()
-      ctx.arc(p.x, p.y, 3 * a, 0, Math.PI * 2)
-      ctx.fill()
+    trailLeaves = trailLeaves.filter(l => tNow - l.t < 1100)
+    for (const l of trailLeaves) {
+      const age = (tNow - l.t) / 1100
+      const a = (1 - age) ** 1.4 * 0.4      // 颜色淡：最高 alpha 0.4
+      l.x += l.vx
+      l.y += l.vy
+      l.vy += 0.02                           // 轻微下落
+      l.rot += l.vrot
+      drawLeaf(ctx, l.x, l.y, l.size, l.rot, a)
     }
   }
 
@@ -159,9 +165,23 @@ function frame(now: number) {
 function onMouse(e: MouseEvent) {
   mouseX = e.clientX
   mouseY = e.clientY
-  if (ui.particles === 'medium' || ui.particles === 'high') {
-    trail.push({ x: e.clientX, y: e.clientY, t: performance.now() })
-    if (trail.length > 40) trail.shift()
+  // 拖尾产生条件：仅看拖尾开关；背景同款叶片，距离过滤控制密度（少量）
+  if (ui.dendroCursorTrail) {
+    // 距离过滤：移动 > 18px 才生成一片叶子，避免密集
+    if (!lastTrailPos || (lastTrailPos.x - e.clientX) ** 2 + (lastTrailPos.y - e.clientY) ** 2 > 324) {
+      trailLeaves.push({
+        x: e.clientX + (Math.random() - 0.5) * 6,
+        y: e.clientY + (Math.random() - 0.5) * 6,
+        vx: (Math.random() - 0.5) * 0.6,
+        vy: -0.2 - Math.random() * 0.4,      // 轻微上飘
+        size: 3 + Math.random() * 3,          // 3-6px 小叶片（同背景）
+        rot: Math.random() * Math.PI * 2,
+        vrot: (Math.random() - 0.5) * 0.1,
+        t: performance.now(),
+      })
+      lastTrailPos = { x: e.clientX, y: e.clientY }
+      if (trailLeaves.length > 22) trailLeaves.shift()   // 少量
+    }
   }
 }
 
@@ -227,19 +247,32 @@ function fpsProbe(now: number) {
 watch(() => ui.particles, () => {
   if (count() > 0 && !glowDot) initGlowDot()
   rebuild()
-  if (count() === 0) stop()
+  // 既无粒子又无拖尾才停止帧循环
+  if (count() === 0 && !ui.dendroCursorTrail) stop()
   else start()
+})
+
+// 拖尾开关变化：开启时确保帧循环运行（trail 需要 rAF 渲染）
+watch(() => ui.dendroCursorTrail, (v) => {
+  if (v) {
+    if (!glowDot) initGlowDot()
+    start()
+  } else if (count() === 0) {
+    stop()
+  }
 })
 
 onMounted(() => {
   window.addEventListener('resize', resize)
   window.addEventListener('mousemove', onMouse, { passive: true })
   document.addEventListener('visibilitychange', onVisibility)
+  // reduced-motion：不再强制 off，保留 particles 设置，拖尾开关独立可控
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    ui.setParticles('off')
-    return
+    if (ui.particles === 'off' && !ui.dendroCursorTrail) return
   }
-  initGlowDot()
+  if (count() > 0 || ui.dendroCursorTrail) {
+    if (!glowDot) initGlowDot()
+  }
   resize()
   start()
   fpsRAF = requestAnimationFrame(fpsProbe)
@@ -255,7 +288,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <canvas v-if="ui.particles !== 'off'" ref="canvasEl" class="grass-particles"></canvas>
+  <canvas v-if="ui.particles !== 'off' || ui.dendroCursorTrail" ref="canvasEl" class="grass-particles"></canvas>
 </template>
 
 <style scoped>
@@ -263,6 +296,6 @@ onBeforeUnmount(() => {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  z-index: 1;
+  z-index: 9999;
 }
 </style>

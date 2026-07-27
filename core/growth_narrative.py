@@ -166,7 +166,7 @@ class GrowthNarrative:
         try:
             result = await asyncio.wait_for(
                 self.core.router.route(
-                    "chat_flash",
+                    "chat",
                     [
                         {"role": "system", "content": "你是小妲，在写每日成长日记。"},
                         {"role": "user", "content": prompt},

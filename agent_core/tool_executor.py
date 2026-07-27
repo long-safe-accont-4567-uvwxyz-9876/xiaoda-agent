@@ -20,6 +20,8 @@ from utils.llm_cleanup import (
     strip_system_leak,
     strip_log_timestamps,
     strip_image_gen_leak,
+    strip_qq_face_tags,
+    strip_english_reasoning_leak,
 )
 from core.degradation_strategy import get_degradation_strategy
 
@@ -446,7 +448,8 @@ class ToolExecutorMixin:
     def _clean_reply_full(self, text: str, *, style: str = "xiaoda",
                           strip_emotion: bool = True) -> str:
         """统一回复清洗出口：strip_dsml → strip_reasoning → strip_system_leak
-        → strip_image_gen_leak → strip_log_timestamps → strip_emotion_tag
+        → strip_image_gen_leak → strip_qq_face_tags → strip_log_timestamps
+        → strip_english_reasoning_leak → strip_emotion_tag
         → humanize → deduplicate → 名称替换。
 
         fast-path / 主路径 else / _finalize_reply 三处统一调用，消除清洗序列漂移。
@@ -463,7 +466,10 @@ class ToolExecutorMixin:
             text = strip_reasoning(text)
             text = strip_system_leak(text, context="clean_reply_full")
             text = strip_image_gen_leak(text, context="clean_reply_full")
+            text = strip_qq_face_tags(text, context="clean_reply_full")
             text = strip_log_timestamps(text, context="clean_reply_full")
+            # N7: 英文推理泄漏清洗（agnes-2.0-flash 长回复截断时泄漏英文计划/总结）
+            text = strip_english_reasoning_leak(text, context="clean_reply_full")
             if strip_emotion:
                 text = self.get_sticker_manager(style).strip_emotion_tag(text)
             text = humanize(text, style=style)

@@ -28,7 +28,7 @@ else
 fi
 
 echo "[4] Agent 服务状态"
-STATUS=$(systemctl is-active qq-agent.service 2>/dev/null)
+STATUS=$(systemctl is-active nahida-web.service 2>/dev/null)
 if [ "$STATUS" = "active" ]; then
     PID=$(pgrep -f qq_bot_adapter | head -1)
     if [ -n "$PID" ]; then
@@ -42,10 +42,10 @@ else
 fi
 
 echo "[5] WebSocket 连接"
-if journalctl -u qq-agent.service --since "5 min ago" --no-pager 2>/dev/null | grep -q "心跳维持启动"; then
+if journalctl -u nahida-web.service --since "5 min ago" --no-pager 2>/dev/null | grep -q "心跳维持启动"; then
     echo "  ✅ WebSocket 已连接"
 else
-    RECENT=$(journalctl -u qq-agent.service --since "5 min ago" --no-pager 2>/dev/null | grep -c "on_closed\|on_error\|Session timed out")
+    RECENT=$(journalctl -u nahida-web.service --since "5 min ago" --no-pager 2>/dev/null | grep -c "on_closed\|on_error\|Session timed out")
     if [ "$RECENT" -gt 3 ]; then
         echo "  ⚠️  WebSocket 不稳定 (${RECENT} 次断连)"
     else

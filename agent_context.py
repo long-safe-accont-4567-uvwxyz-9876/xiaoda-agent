@@ -1,8 +1,70 @@
 import asyncio
 import time
+import re
 from typing import Any
 from collections.abc import Callable
 from loguru import logger
+
+
+# ── 记忆检索格式过滤 ──────────────────────────────────
+# 根因：用户反馈"数据库原文直接蹦出来了"。记忆检索结果直接注入 LLM 时，
+#   携带内部格式标记（[MM-DD HH:MM]、用户说: xxx；小妲回复: yyy），
+#   LLM 回复时模仿这些格式，导致"数据库原文蹦出"。
+# 修复：注入前清洗内部格式标记，转为自然叙事文本。
+
+# 数据库 conversation_logs 的 summary 格式：用户说: xxx；小妲回复: yyy
+_CONV_LOG_USER_RE = re.compile(r'用户说\s*[:：]\s*')
+_CONV_LOG_REPLY_RE = re.compile(r'小妲回复\s*[:：]\s*')
+
+
+def _narrate_conversation_log(summary: str) -> str:
+    """把数据库格式的对话记录转为自然叙事文本，避免 LLM 模仿内部格式。
+
+    数据库格式：用户说: xxx；小妲回复: yyy；用户说: aaa；小妲回复: bbb
+    第一人称叙事格式（LLM 视角：用户=你，小妲=我）：
+              你：xxx
+              我：yyy
+              你：aaa
+              我：bbb
+
+    转为换行分隔的对话格式，去掉"用户说:""小妲回复:"数据库字段名，
+    且用第一人称（小妲=我）让 LLM 把记忆当成自己的亲身经历，而非旁观者复述。
+    """
+    if not summary:
+        return summary
+    text = summary
+    text = _CONV_LOG_USER_RE.sub('你：', text)
+    text = _CONV_LOG_REPLY_RE.sub('我：', text)  # 小妲=我（第一人称视角）
+    # 中文分号分隔的多轮对话转为换行，让 LLM 看到的是对话流而非单行数据库记录
+    text = text.replace('；', '\n').replace(';', '\n')
+    return text.strip()
+
+
+def _relative_time_str(ts: float) -> str:
+    """把时间戳转为自然语言相对时间描述，替代 [MM-DD HH:MM] 内部格式。
+
+    返回如"刚才""今天""昨天""前天""N天前"，避免 LLM 回复时引用 [07-18] 等格式。
+    """
+    try:
+        now = time.time()
+        diff = now - ts
+        if diff < 3600:
+            return "刚才"
+        if diff < 86400:  # 24h
+            hours = int(diff / 3600)
+            return f"{hours}小时前"
+        days = int(diff / 86400)
+        if days == 1:
+            return "昨天"
+        if days == 2:
+            return "前天"
+        if days <= 7:
+            return f"{days}天前"
+        if days <= 30:
+            return f"{days // 7}周前"
+        return f"{days // 30}个月前"
+    except (ValueError, TypeError, OSError):
+        return "之前"
 
 
 def estimate_tokens(text: str) -> int:
@@ -379,7 +441,7 @@ class AgentContext:
             # 5s 超时：LLM 总结失败/超时则回退到字符串截断，不拖慢主流程
             result = await asyncio.wait_for(
                 self._router.route(
-                    "chat_flash",
+                    "chat",
                     [
                         {"role": "system", "content": "请将以下对话记录压缩为1-2句话的摘要，保留关键信息和上下文。只输出摘要，不要加任何前缀。"},
                         {"role": "user", "content": text},
@@ -497,7 +559,10 @@ class AgentContext:
         # 当 memory_retrieval 有记忆时，不注入 _restored_summary，避免信息冲突
         # memory_retrieval 在 volatile 层已注入更精确的记忆，_restored_summary 会引入矛盾信息
         if self._restored_summary and not self.memory_retrieval:
-            parts.append(f"[近期对话摘要（仅供参考，请在需要时引用。当前用户身份：{self.current_address_term}。根据当前用户意图独立判断是否需要调用工具）]\n{self._restored_summary}")
+            # P0 修复（旁观者视角根因）：
+            # 原引导语"仅供参考，请在需要时引用"让 LLM 把摘要当成参考资料而非自己的记忆，
+            # 导致用"这个人""那个人"等第三人称复述。改为第一人称引导，让 LLM 当成自己的经历。
+            parts.append(f"[近期你（小妲）和{self.current_address_term}的对话回忆，这是你亲身经历的事，请用第一人称视角看待]\n{self._restored_summary}")
 
         portrait = self.user_portrait or ""
         if portrait:
@@ -589,13 +654,16 @@ class AgentContext:
 
         parts = []
 
-        # 原始对话记录：直接展示，不截断
+        # 原始对话记录：转为叙事格式，不截断
         if conv_logs:
             conv_lines = []
             for m in conv_logs[:30]:
                 summary = m.get("summary", "")
                 if summary:
-                    conv_lines.append(summary)
+                    # P0 修复（数据库原文蹦出根因）：
+                    # 数据库 summary 格式是"用户说: xxx；小妲回复: yyy"，
+                    # 直接注入会让 LLM 模仿这种格式回复。转为叙事对话格式。
+                    conv_lines.append(_narrate_conversation_log(summary))
             if conv_lines:
                 # 第二重时间锚点：从记忆时间戳推断时间范围，标注在标签属性上
                 # 根因：即使每条 summary 带完整日期，LLM 仍可能被记忆内容里的
@@ -621,10 +689,13 @@ class AgentContext:
                 summary = m.get("summary", "")
                 if summary:
                     ts = m.get("timestamp", 0)
+                    # P0 修复（数据库原文蹦出根因）：
+                    # 原格式 "· [07-18 14:30] 记忆内容" 的 [MM-DD HH:MM] 是内部标记，
+                    # LLM 回复时会直接引用 "[07-18]"。改为自然语言相对时间（如"昨天""前天"）。
                     if ts:
                         try:
-                            _date_str = time.strftime("%m-%d %H:%M", time.localtime(float(ts)))
-                            mem_texts.append(f"· [{_date_str}] {_smart_truncate_summary(summary, 500)}")
+                            _rel_time = _relative_time_str(float(ts))
+                            mem_texts.append(f"·（{_rel_time}）{_smart_truncate_summary(summary, 500)}")
                         except (ValueError, TypeError, OSError):
                             mem_texts.append(f"· {_smart_truncate_summary(summary, 500)}")
                     else:
@@ -641,8 +712,15 @@ class AgentContext:
             # LLM 就从"回忆者"变成"数据处理员"，开始套模版、反问、出戏。
             # 真实的人回忆时，脑子里浮现的是画面本身，没有使用说明。
             # 格式/语言/称谓等规则放在 SOUL.md（小妲永远的性格），不在这里重复。
+            #
+            # P0 修复（旁观者视角根因）：
+            # 原实现只包裹 <memory_retrieval> 标签，LLM 把记忆当成"别人的故事"复述，
+            # 用"这个人""那个人"等第三人称。加一句第一人称引导（非任务指令），
+            # 让 LLM 把记忆当成自己的亲身经历，用"我"回忆。
             return (
                 "<memory_retrieval>\n"
+                "以下是你（小妲）自己亲身经历过的回忆，请用第一人称视角看待，"
+                "把它们当成你自己的记忆而非别人的故事：\n\n"
                 + "\n\n".join(parts) + "\n"
                 + "</memory_retrieval>"
             )
@@ -772,8 +850,17 @@ class AgentContext:
         # 使用传入的称谓，未传则用当前上下文的称谓，再不行默认"爸爸"
         term = address_term or self.current_address_term or "爸爸"
         try:
-            # 按 user_id 过滤，limit 从 20 缩减到 10（实际只用了 10 条）
-            rows = await db.memory.get_recent_conversations(limit=10, user_id=user_id) if user_id else await db.memory.get_recent_conversations(limit=10)
+            # 持续加载近 24 小时对话内容，避免"一上来就把之前发生的事情忘得干干净净"
+            # 复用 get_conversations_by_time_range 方法，limit=50 防止极端情况上下文过长
+            # 每条取前 200 字符 + 最终 summaries[-10:] 截断，实际注入约 2000 字符
+            _now = time.time()
+            try:
+                rows = await db.memory.get_conversations_by_time_range(
+                    start_ts=_now - 86400, end_ts=_now, user_id=user_id, limit=50
+                )
+            except Exception:
+                # 降级：时间范围查询失败时回退到最近 10 条
+                rows = await db.memory.get_recent_conversations(limit=10, user_id=user_id) if user_id else await db.memory.get_recent_conversations(limit=10)
             if not rows:
                 return
 
@@ -783,17 +870,48 @@ class AgentContext:
                 asst_msg = row.get("assistant_reply", "")
                 if not user_msg and not asst_msg:
                     continue
+                # P0 修复（Task 3.2）：空 assistant_reply 不注入历史摘要
+                # 根因：原实现 user 非空 + asst 空 仍被注入，造成"用户说了 → 小妲没回"的上下文割裂
+                # 修复：跳过空回复记录（与 background_tasks.py Task 3.1 配套）
+                if not asst_msg or not asst_msg.strip():
+                    continue
+                # P0 修复（上下文污染根因）：过滤被污染的历史记录
+                # 根因：nudge_engine/greeting_scheduler 旧版本把场景提示作为 user_input 传入，
+                #       导致 conversation_logs.user_message 出现"（场景：现在早上...）"等系统提示。
+                #       这些记录被注入历史摘要后，LLM 在后续轮次会回应这些元提示，造成角色出戏。
+                #       即使新版本已修复（场景提示走 system_context），旧记录仍需过滤。
+                # 过滤模式：
+                #   1. "（场景：" / "(场景：" — 主动问候场景提示泄漏
+                #   2. "（主动问候）" / "(主动问候)" — 占位符（系统内部消息，非真实用户输入）
+                #   3. "请继续完成你的回复" — 截断重试指令泄漏
+                #   4. "请使用 web_search 工具搜索" — 搜索模式指令泄漏
+                if user_msg:
+                    _pollution_markers = (
+                        "（场景：", "(场景：",
+                        "（主动问候）", "(主动问候)",
+                        "请继续完成你的回复",
+                        "请使用 web_search 工具搜索",
+                        "请使用 web_search",
+                    )
+                    if any(user_msg.startswith(m) for m in _pollution_markers):
+                        logger.debug("context.skip_polluted_history",
+                                     user_preview=user_msg[:60])
+                        continue
                 user_preview = user_msg[:200].replace("\n", " ") if user_msg else ""
                 asst_preview = asst_msg[:200].replace("\n", " ") if asst_msg else ""
                 ts = row.get("timestamp", 0)
+                # P0 修复（数据库原文蹦出 + 旁观者视角根因）：
+                # 原格式 "· [07-18 14:30] 爸爸: xxx → 小妲: yyy" 的 [MM-DD HH:MM] 是内部标记，
+                # LLM 回复时会直接引用 "[07-18]"。改为自然语言相对时间（如"昨天""前天"）。
+                # 同时用第一人称（小妲=我）让 LLM 把历史当成自己的经历，而非旁观者复述。
                 if ts:
                     try:
-                        time_str = time.strftime("%m-%d %H:%M", time.localtime(float(ts)))
-                        summaries.append(f"· [{time_str}] {term}: {user_preview} → 小妲: {asst_preview}")
+                        _rel_time = _relative_time_str(float(ts))
+                        summaries.append(f"·（{_rel_time}）{term}说了：{user_preview}；我回应：{asst_preview}")
                     except (ValueError, TypeError, OSError):
-                        summaries.append(f"· {term}: {user_preview} → 小妲: {asst_preview}")
+                        summaries.append(f"· {term}说了：{user_preview}；我回应：{asst_preview}")
                 else:
-                    summaries.append(f"· {term}: {user_preview} → 小妲: {asst_preview}")
+                    summaries.append(f"· {term}说了：{user_preview}；我回应：{asst_preview}")
 
             if summaries:
                 self._restored_summary = "\n".join(summaries[-10:])

@@ -11,10 +11,21 @@ import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
-load_dotenv()
+# P0 修复（Windows 安装包 QQ 离线 bug 根因）：
+# load_dotenv() 无参数时只读取 CWD/.env，Windows 安装包从 C:\Program Files\ 启动时
+# CWD 不是用户目录，而 config.py 已把 .env 放到 ~/.ai-agent/.env（frozen 模式），
+# 导致 APP_ID/APP_SECRET 永远为空 → run_qq_bot 早期返回 disabled_no_appid → QQ 离线。
+# 修复：显式使用 config.ENV_PATH，与 config.py 保持一致。
+try:
+    from config import ENV_PATH as _ENV_PATH
+    load_dotenv(_ENV_PATH, override=True)
+except ImportError:
+    # config 模块不可用时兜底（如独立运行模式），退化为无参数 load_dotenv
+    load_dotenv()
 
 
 from utils.common import safe_int as _safe_int
+from utils.llm_cleanup import strip_qq_face_tags
 
 
 def _safe_float(val, default):
@@ -281,7 +292,13 @@ async def run_qq_bot(agent: "AgentCore", *, sandbox: bool = False) -> None:
 
     内部带指数退避重连；任务被取消时干净退出。
     """
-    if not APP_ID or APP_ID == "your_app_id_here":
+    # P0 修复：实时从 env 读取 APP_ID/APP_SECRET，而非依赖模块级变量。
+    # 根因：模块级 APP_ID 在 import 时一次性读取，若 load_dotenv 未读到 .env（如
+    # Windows 安装包 CWD 不对），APP_ID 永远为空。即使后续 restart_qq_bot_task
+    # 更新了模块级变量，首次启动仍会失败。实时读取 env 确保始终拿到最新值。
+    _app_id = os.getenv("QQBOT_APP_ID", "").strip() or APP_ID
+    _app_secret = os.getenv("QQBOT_APP_SECRET", "").strip() or APP_SECRET
+    if not _app_id or _app_id == "your_app_id_here":
         logger.warning("qq_bot.disabled_no_appid")
         return
     intents = botpy.Intents(public_messages=True)
@@ -289,7 +306,10 @@ async def run_qq_bot(agent: "AgentCore", *, sandbox: bool = False) -> None:
     while True:
         client = AIQQBot(intents=intents, is_sandbox=sandbox, timeout=30, agent=agent)
         try:
-            await client.start(appid=APP_ID, secret=APP_SECRET)
+            # 每次重连都用最新的 env 值（防止凭证更新后仍用旧值）
+            _app_id = os.getenv("QQBOT_APP_ID", "").strip() or APP_ID
+            _app_secret = os.getenv("QQBOT_APP_SECRET", "").strip() or APP_SECRET
+            await client.start(appid=_app_id, secret=_app_secret)
             logger.warning("qq_bot.exited_reconnecting")
             delay = 5
         except asyncio.CancelledError:
@@ -315,6 +335,9 @@ class AIQQBot(botpy.Client):
         # 消息去重缓存：msg_id → 时间戳，保留最近 1 小时
         self._processed_msg_ids: dict[str, float] = {}
         self._MSG_ID_TTL = 3600  # 1 小时
+        # 注：用户明确要求"我发送的内容不需要去重"——
+        # 不做内容级去重（即使网关重连重投递导致重复回复，也不拦截用户手动重发）。
+        # 仅保留 msg_id 级去重（同一 msg_id 的精确重复才拦截）。
         self._agent_initialized = agent is not None and getattr(agent, "_initialized", False)
         # 最近一个私聊用户 openid，主动消息（问候同步）发给该用户
         self._last_c2c_openid: str = os.getenv("NUDGE_USER_OPENID", "")
@@ -595,6 +618,7 @@ class AIQQBot(botpy.Client):
         若消息为空（无文本且无附件）返回 None。
         """
         content = (getattr(message, 'content', None) or "").strip()
+        content = strip_qq_face_tags(content)  # 剥离 QQ 表情标签，防止污染 LLM 上下文被模仿
         image_data, attachment_info = await self._process_message_attachments(message)
         if not content and not attachment_info:
             return None
@@ -642,7 +666,13 @@ class AIQQBot(botpy.Client):
         # 1. 先查内存缓存
         cached_sid = self._c2c_session_cache.get(user_openid)
         cached_ts = self._c2c_session_cache_ts.get(user_openid, 0)
-        if cached_sid and (time.time() - cached_ts < self._c2c_session_cache_ttl):
+        # P1-7 修复：检测 cached_sid 以 "qq_tmp_" 开头时视为缓存失效，跳过缓存继续查 DB。
+        # 根因：DB 超时/异常时返回 qq_tmp_{openid[:16]} 兜底 session_id，该 ID 不存在于
+        # sessions 表，后续 background_tasks 的 UPDATE 零行生效不报错，所有消息都写到
+        # 不存在的 session，上下文永久丢失。检测到 qq_tmp_ 时跳过缓存让下次能恢复真实 session。
+        if (cached_sid
+                and not cached_sid.startswith("qq_tmp_")
+                and (time.time() - cached_ts < self._c2c_session_cache_ttl)):
             return cached_sid
 
         # 2. 缓存未命中，查 DB
@@ -762,6 +792,7 @@ class AIQQBot(botpy.Client):
     async def on_group_at_message_create(self, message: GroupMessage) -> None:
         try:
             content = (getattr(message, 'content', None) or "").strip()
+            content = strip_qq_face_tags(content)  # 剥离 QQ 表情标签，防止污染 LLM 上下文被模仿
 
             image_data, attachment_info = await self._process_message_attachments(message)
 
@@ -1058,6 +1089,59 @@ class AIQQBot(botpy.Client):
         # 最终兜底：返回最小版本
         return tmp_path
 
+    def _split_text_by_bytes(self, text: str, byte_limit: int = 7800) -> list[str]:
+        """按字节上限分割文本，每段不超过 byte_limit 字节。
+
+        P1-6 修复：C2C 流式第 4 段合并后可能远超 QQ API 8000 字节上限，
+        合并后需调用本方法按字节再分割，逐片发送。
+
+        - 短文本（≤ byte_limit 字节）返回单片
+        - 长文本按字节上限切片，优先在换行处切分
+        - 闭合截断处未结束的 markdown 代码块（```）
+
+        Args:
+            text: 原始文本
+            byte_limit: 字节上限，默认 7800（留 200 字节余量给 8000 字节 QQ API 上限）
+
+        Returns:
+            分割后的文本段列表（每段 ≤ byte_limit 字节）
+        """
+        if not text:
+            return []
+        encoded = text.encode('utf-8')
+        if len(encoded) <= byte_limit:
+            return [text]
+
+        from utils.text_utils import _find_char_boundary
+
+        segments: list[str] = []
+        remaining = text
+        while remaining:
+            encoded = remaining.encode('utf-8')
+            if len(encoded) <= byte_limit:
+                segments.append(remaining)
+                break
+
+            # 留 10% 余量避免边界字符是多字节字符
+            safe_limit = int(byte_limit * 0.9)
+            target_chars = _find_char_boundary(remaining, safe_limit)
+            # 优先在换行处切分（向前查找，找到的换行符包含在当前段）
+            search_end = min(len(remaining), target_chars + 100)
+            best_pos = remaining.rfind('\n', max(0, target_chars - 200), search_end)
+            if best_pos == -1 or best_pos < target_chars // 2:
+                best_pos = target_chars
+
+            chunk = remaining[:best_pos]
+            # 闭合未结束的代码块
+            if chunk.count('```') % 2 != 0:
+                chunk = chunk.rstrip() + '\n```'
+                remaining = '```\n' + remaining[best_pos:]
+            else:
+                remaining = remaining[best_pos:]
+            segments.append(chunk)
+
+        return segments
+
     def _split_text_for_streaming(self, text: str, chunk_size: int = 300) -> list[str]:
         """将文本切片为流式发送的段。
 
@@ -1188,9 +1272,19 @@ class AIQQBot(botpy.Client):
         max_segs = QQ_GROUP_MAX_SEGMENTS if is_group else QQ_C2C_MAX_SEGMENTS
         if len(segments) > max_segs:
             merged_tail = "".join(segments[max_segs - 1:])
-            segments = segments[:max_segs - 1] + [merged_tail]
-            logger.info("qq_bot.stream_capped original={} capped={}",
-                        len(segments) + 1 if len(segments) > max_segs else len(segments), max_segs)
+            # P1-6 修复：合并后调用字节分割再逐片发送，避免单条消息超 QQ API 8000 字节上限。
+            # C2C 按 300 字符切片，合并后可能远超 8000 字节（中文 3 字节/字符，
+            # 10 段 * 300 字符 = 9000 字节，已超限）。
+            # 群聊走 split_for_group_passive，每段 ≤ 4000 字节，且 max_segments=4 不会触发本分支。
+            if not is_group:
+                resplit = self._split_text_by_bytes(merged_tail, 7800)
+                segments = segments[:max_segs - 1] + resplit
+                logger.info("qq_bot.stream_capped_resplit original={} final={} max_segs={}",
+                            len(segments) + 1, len(segments), max_segs)
+            else:
+                segments = segments[:max_segs - 1] + [merged_tail]
+                logger.info("qq_bot.stream_capped original={} capped={}",
+                            len(segments) + 1 if len(segments) > max_segs else len(segments), max_segs)
 
         _group_no_proactive = ("被动回复", "超过限制", "无权限", "40034105")
 
@@ -1258,32 +1352,51 @@ class AIQQBot(botpy.Client):
                                    at_segment=i, sent_segments=sent_count,
                                    total_segments=num_segments)
                     remaining = "".join(segments[i:])
-                    try:
-                        ok2 = await _send_segment(remaining)
-                        if ok2:
-                            sent_count += 1
-                            logger.info("qq_bot.stream_quota_recovered_with_merge",
-                                        merged_from=num_segments - i, sent=sent_count,
-                                        ms=round(seg_ms, 1))
-                        else:
-                            logger.error("qq_bot.stream_quota_merge_failed_too",
-                                         remaining_len=len(remaining))
-                    except (TimeoutError, OSError, RuntimeError) as e2:
-                        logger.error("qq_bot.stream_quota_merge_exception",
-                                     error=str(e2), remaining_len=len(remaining))
+                    # P1-6 修复：合并后按字节上限再分割逐片发送，避免单条超 8000 字节被 QQ API 拒绝
+                    if not is_group:
+                        recovery_pieces = self._split_text_by_bytes(remaining, 7800)
+                    else:
+                        recovery_pieces = [remaining]
+                    for piece in recovery_pieces:
+                        try:
+                            ok2 = await _send_segment(piece)
+                            if ok2:
+                                sent_count += 1
+                            else:
+                                logger.error("qq_bot.stream_quota_merge_failed_too",
+                                             remaining_len=len(piece))
+                                break
+                        except (TimeoutError, OSError, RuntimeError) as e2:
+                            logger.error("qq_bot.stream_quota_merge_exception",
+                                         error=str(e2), remaining_len=len(piece))
+                            break
+                    if sent_count > 0:
+                        logger.info("qq_bot.stream_quota_recovered_with_merge",
+                                    merged_from=num_segments - i, sent=sent_count,
+                                    ms=round(seg_ms, 1))
                     return
             except (TimeoutError, OSError, RuntimeError) as e:
                 logger.warning("qq_bot.stream_segment_failed",
                                error=str(e), sent_segments=sent_count)
                 # 异常恢复：合并剩余内容为最终片发送
                 remaining = "".join(segments[i:])
-                try:
-                    await _send_segment(remaining)
+                # P1-6 修复：合并后按字节上限再分割逐片发送，避免单条超 8000 字节被 QQ API 拒绝
+                if not is_group:
+                    recovery_pieces = self._split_text_by_bytes(remaining, 7800)
+                else:
+                    recovery_pieces = [remaining]
+                recovery_sent = 0
+                for piece in recovery_pieces:
+                    try:
+                        await _send_segment(piece)
+                        recovery_sent += 1
+                    except (TimeoutError, OSError, RuntimeError) as e2:
+                        logger.error("qq_bot.stream_final_failed", error=str(e2))
+                        break
+                if recovery_sent > 0:
                     recovery_ms = (time.monotonic() - stream_start) * 1000
                     logger.info("qq_bot.stream_recovery_done",
-                                sent=sent_count + 1, ms=round(recovery_ms, 1))
-                except (TimeoutError, OSError, RuntimeError) as e2:
-                    logger.error("qq_bot.stream_final_failed", error=str(e2))
+                                sent=sent_count + recovery_sent, ms=round(recovery_ms, 1))
                 return
 
         total_ms = (time.monotonic() - stream_start) * 1000
@@ -1447,15 +1560,51 @@ class AIQQBot(botpy.Client):
         is_group = isinstance(message, GroupMessage)
 
         if is_group:
-            # 群聊：单条被动回复，超长用 split_for_group_passive 取第 1 片（无标记截断）
+            # 群聊：用 split_for_group_passive 切片，逐条发送（不只发第 1 片）
+            # P1-5 修复：原版本仅发 segments[0]，segments[1..] 静默丢弃且无截断标记。
+            # 现在遍历全部 segments 逐条发送；若超过 QQ 群 ACK 配额（4 段），
+            # 只发前 4 段，第 4 段末尾追加 "\n（…）" 提示用户内容被截断。
             original_len = len(clean_reply.encode('utf-8'))
             segments = split_for_group_passive(clean_reply)
-            final_text = segments[0]  # 流式禁用时只取第 1 片（短回复不会触发截断）
-            truncated_len = len(final_text.encode('utf-8'))
-            if truncated_len < original_len:
+            group_quota = QQ_GROUP_MAX_SEGMENTS  # ACK 占 1 次，被动回复最多 4 次
+            if len(segments) > group_quota:
+                # 超过配额：只发前 4 段，第 4 段末尾追加截断标记
+                segments = segments[:group_quota]
+                segments[-1] = segments[-1].rstrip() + "\n（…）"
+                logger.info("qq_bot.group_reply_quota_truncated_with_marker",
+                            original_bytes=original_len,
+                            sent_segments=group_quota,
+                            marker="（…）")
+            # 逐条发送所有 segments；最后一段赋给 final_text 走下方 sticker 合并发送路径
+            sent_count = 0
+            for i, seg in enumerate(segments[:-1]):
+                try:
+                    await message.reply(content=seg, msg_seq=_next_msg_seq())
+                    sent_count += 1
+                except (OSError, RuntimeError, ConnectionError) as e:
+                    logger.warning("qq_bot.group_reply_part_failed",
+                                   part_index=i, total_parts=len(segments), error=str(e))
+                    # 失败时合并剩余所有段为单条发送（避免静默丢失）
+                    remaining = "".join(segments[i:])
+                    try:
+                        await message.reply(content=remaining, msg_seq=_next_msg_seq())
+                        sent_count += 1
+                        logger.info("qq_bot.group_reply_merge_recovered",
+                                    merged_from=len(segments) - i)
+                        final_text = ""  # 已全部发完
+                    except (OSError, RuntimeError, ConnectionError) as e2:
+                        logger.error("qq_bot.group_reply_merge_failed",
+                                     error=str(e2), remaining_len=len(remaining))
+                        final_text = segments[-1] + "\n（内容过长部分发送失败）"
+                    break
+            else:
+                # 循环正常结束：前 N-1 段全部发送成功，最后一段走 sticker 合并发送
+                final_text = segments[-1]
+            truncated_len = sum(len(s.encode('utf-8')) for s in segments)
+            if truncated_len < original_len and not (len(segments) == group_quota):
                 logger.info("qq_bot.group_reply_truncated_no_marker",
                             original_bytes=original_len, truncated_bytes=truncated_len,
-                            dropped_segments=len(segments) - 1)
+                            dropped_segments=0)
         else:
             # C2C：保持原分片逻辑
             parts = split_long_reply(clean_reply, MAX_REPLY_LEN)
@@ -1705,7 +1854,10 @@ class AIQQBot(botpy.Client):
 
 
 if __name__ == "__main__":
-    if not APP_ID or APP_ID == "your_app_id_here":
+    # P0 修复：实时从 env 读取（与 run_qq_bot 保持一致，防止模块级变量未更新）
+    _main_app_id = os.getenv("QQBOT_APP_ID", "").strip() or APP_ID
+    _main_app_secret = os.getenv("QQBOT_APP_SECRET", "").strip() or APP_SECRET
+    if not _main_app_id or _main_app_id == "your_app_id_here":
         print("=" * 55)
         print("  请先配置 QQ Bot AppID 和 AppSecret")
         print("")
@@ -1736,7 +1888,10 @@ if __name__ == "__main__":
     while retry_count < MAX_RETRIES:
         try:
             client = AIQQBot(intents=intents, is_sandbox=is_sandbox, timeout=30)
-            client.run(appid=APP_ID, secret=APP_SECRET)
+            # 每次重连都用最新的 env 值（与 run_qq_bot 保持一致）
+            _main_app_id = os.getenv("QQBOT_APP_ID", "").strip() or APP_ID
+            _main_app_secret = os.getenv("QQBOT_APP_SECRET", "").strip() or APP_SECRET
+            client.run(appid=_main_app_id, secret=_main_app_secret)
             retry_count = 0
             logger.warning("qq_bot.exited_normally_restarting")
         except KeyboardInterrupt:

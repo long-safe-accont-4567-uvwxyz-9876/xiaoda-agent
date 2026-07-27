@@ -1,5 +1,7 @@
 from typing import Any
+import asyncio
 import time
+import uuid
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from loguru import logger
 from utils.metrics import metrics
@@ -94,7 +96,36 @@ async def recall(query: str, top_k: int = 8) -> ToolResult:
     _start = time.time()
     try:
         mm = _get_memory_manager()
-        results = await mm.retrieve_memories(query, k=top_k)
+        # N9 修复（2026-07-25 17:48-17:51 生产事故根因）：
+        # recall 调用 retrieve_memories 缺乏自身超时，依赖 tool_executor 的 60s
+        # 兜底。事件循环被同步操作阻塞时，asyncio.wait_for 的 60s 定时器也
+        # 无法及时触发，单次调用最坏阻塞 60s × (1+MAX_RETRIES)=180s 才进入
+        # 降级。此处用 10s 短超时（参考 message_processor._retrieve_memories
+        # 的 8s 目标），超时立即返回友好降级提示，让 LLM 告诉用户"暂时想
+        # 不起来"，而非失去记忆上下文臆造回复导致雪崩。
+        # 不透明请求标识：用于跨日志行关联，不记录 query 原文以避免泄漏用户隐私
+        req_id = uuid.uuid4().hex[:8]
+        try:
+            results = await asyncio.wait_for(
+                mm.retrieve_memories(query, k=top_k),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            metrics.inc("memory.recall.timeout")
+            logger.warning("memory_tool.recall_timeout",
+                           req_id=req_id, query_length=len(query),
+                           timeout=10.0,
+                           elapsed_ms=int((time.time() - _start) * 1000))
+            # 返回 ok 而非 fail：让 LLM 知道记忆系统暂时不可用，应如实告诉
+            # 用户"暂时想不起来"，而非返回错误让 LLM 困惑或进入
+            # is_degraded_reply 路径。LLM 的"暂时想不起来"是合理回复，应被
+            # 写入记忆（这样下次 LLM 知道上次没想起来）。
+            # CodeRabbit 复审 M5 修复：提示内容改为纯人格化语言，不暴露
+            # "超时/10s/系统正忙"等技术细节给 LLM 复述给用户。
+            return ToolResult.ok(
+                "我现在有点恍惚，暂时想不起具体的细节了。请如实告诉用户你"
+                "暂时想不起来，建议用户稍后再问或换个说法。不要编造内容。"
+            )
 
         if not results:
             metrics.inc("memory.recall.miss")

@@ -582,44 +582,6 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
     },
     # ── tools.schedule_tool ──────────────────────────────────────────
     {
-        "name": "create_reminder",
-        "description": (
-            "创建新的提醒。当用户说'帮我设置一个提醒'、'提醒我晚上10点'、"
-            "'每周三提醒我'等创建类指令时使用。"
-            "创建后立即生效，返回新提醒的 ID 和详情。"
-        ),
-        "schema": {
-            "type": "object",
-            "properties": {
-                "time": {
-                    "type": "string",
-                    "description": "提醒时间，HH:MM 格式（如 19:30、08:00）。必填。",
-                },
-                "prompt_hint": {
-                    "type": "string",
-                    "description": "提醒内容/标题（≤200字符）。必填。",
-                },
-                "days": {
-                    "type": "array",
-                    "items": {"type": "integer"},
-                    "description": "星期列表（1=周一...7=周日，如 [1,3,5] 表示每周一三五）。默认每天 [1,2,3,4,5,6,7]。",
-                },
-                "channels": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "推送渠道，默认 ['web']。可选 'web' 或 'qq'。",
-                },
-            },
-            "required": ["time", "prompt_hint"],
-        },
-        "permission": ToolPermission.READ_WRITE,
-        "category": "schedule",
-        "max_frequency": 10,
-        "requires_confirmation": True,
-        "module_path": "tools.schedule_tool",
-        "func_name": "create_reminder",
-    },
-    {
         "name": "list_reminders",
         "description": (
             "查询所有提醒（reminder 类型）。当用户问'晚上有什么任务'、'今天有什么提醒'、"
@@ -714,6 +676,12 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
             "通用搜索(B站+头条)、新闻(头条)、知乎(Bing site:zhihu)、"
             "豆瓣(电影/书籍评分)、B站视频、百度热搜。"
             "scope=auto时自动判断，大多数情况用auto即可。"
+            "\n\n适用场景：用户明确要求查询外部信息时使用，例如："
+            "①时事新闻/热点事件 ②电影/书籍/游戏评分 ③技术资料/教程 ④人物/事物百科 ⑤商品/价格对比。"
+            "\n不适用场景（禁止调用）："
+            "①情感交流/人格询问（如'在你心中我是谁'）②观点/感受询问（如'你觉得...怎么样'）"
+            "③回忆/记忆类问题（如'我们之前聊过什么'）④闲聊/问候 ⑤关于你自己的性格/身份问题。"
+            "这些场景应直接基于你的人格和记忆回答，不需要搜索互联网。"
         ),
         "schema": {
             "type": "object",

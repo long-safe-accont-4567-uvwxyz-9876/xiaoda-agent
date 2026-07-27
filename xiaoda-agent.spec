@@ -114,6 +114,15 @@ hiddenimports = [
     'html2text',
     'lxml.html',
 
+    # HTTP/2 支持（httpx[http2] extra 依赖）
+    # 启用 http2=True 时 httpx 内部 import h2，PyInstaller 静态分析无法
+    # 检测到这个条件导入，需显式声明。h2 依赖 hpack + hyperframe。
+    # 未安装时 utils/http_pool.py 会优雅降级为 HTTP/1.1，但生产环境
+    # 应包含以启用 HTTP/2 多路复用（降低高频 HTTP 调用尾延迟）。
+    'h2',
+    'hpack',
+    'hyperframe',
+
     # Uvicorn internals (often missed by static analysis)
     'uvicorn.logging',
     'uvicorn.loops',
@@ -439,7 +448,7 @@ hiddenimports = [
 ]
 
 # Collect any sub-modules that static analysis might miss
-for pkg in ('openai', 'pydantic', 'starlette', 'anyio', 'uvicorn', 'psutil', 'httpx', 'certifi', 'httpcore', 'pilk', 'PIL', 'webview'):
+for pkg in ('openai', 'pydantic', 'starlette', 'anyio', 'uvicorn', 'psutil', 'httpx', 'certifi', 'httpcore', 'pilk', 'PIL', 'webview', 'h2', 'hpack', 'hyperframe'):
     try:
         hiddenimports += collect_submodules(pkg)
     except Exception:

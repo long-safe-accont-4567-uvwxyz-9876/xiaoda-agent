@@ -106,6 +106,9 @@ class AgentCoreBootstrapper:
         # TTS 引擎（可选）
         try:
             await self.core.tts.init()
+            # 注册全局 TTS 引擎单例，供 synthesize_voice 工具访问
+            from emotion.tts_engine import set_global_tts_engine
+            set_global_tts_engine(self.core.tts)
         except Exception as e:
             logger.warning("agent_core.reinit_tts_failed error={}", str(e))
 

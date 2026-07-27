@@ -127,6 +127,10 @@ def test_set_chat_model_persists_both_chat_model_and_routes_chat():
             def set(self, path, value):
                 captured[path] = value
 
+            def set_many(self, updates):
+                for path, value in updates.items():
+                    captured[path] = value
+
             def get(self, path, default=None):
                 return captured.get(path, default)
 
@@ -179,6 +183,10 @@ def test_set_chat_model_routes_chat_thinking_field_is_bool():
             def set(self, path, value):
                 captured[path] = value
 
+            def set_many(self, updates):
+                for path, value in updates.items():
+                    captured[path] = value
+
         with patch("web.config_service.get_config_service", return_value=FakeCfg()):
             router.set_chat_model("agnes", "agnes-2.0-flash")
 
@@ -201,6 +209,9 @@ def test_restore_chat_model_catches_llm_error():
     回归测试：旧实现 except (KeyError, ValueError, AttributeError, OSError)
     不捕获 LLMError。自定义 provider 注册失败时 set_chat_model 抛 LLMError，
     导致启动崩溃或异常向上传播。
+
+    注意：新实现不再调用 set_chat_model，此测试保留为回归守护，并 patch
+    ROUTE_TABLE 防止污染全局状态（测试隔离）。
     """
     from web.server import _restore_chat_model
     from core.app_exception import LLMError
@@ -209,12 +220,18 @@ def test_restore_chat_model_catches_llm_error():
     cfg.get.return_value = {"provider": "custom-unknown", "model_id": "custom-model"}
 
     core = MagicMock()
-    # set_chat_model 抛 LLMError（自定义 provider 未注册）
+    # set_chat_model 抛 LLMError（自定义 provider 未注册）——新实现不会调用它
     core.router.set_chat_model = MagicMock(side_effect=LLMError("provider 未注册"))
     core.router._current_chat_model = None
+    # 显式设为空 dict，避免 MagicMock 的 _custom_clients.get() 返回真值
+    # 导致走 success 路径污染真实 ROUTE_TABLE
+    core.router._custom_clients = {}
 
-    # 不应抛 LLMError
-    _restore_chat_model(cfg, core)
+    # patch ROUTE_TABLE 防止污染全局状态
+    with patch("model_router.ROUTE_TABLE", {"chat": {"model": "old", "client": "old"}}):
+        with patch("model_router.MIMO_MODEL", "mimo-v2.5"):
+            # 不应抛 LLMError
+            _restore_chat_model(cfg, core)
 
     # 应该走 fallback 路径
     cfg.get.assert_called_with("models.chat_model")
@@ -226,58 +243,60 @@ def test_restore_chat_model_fallback_does_not_persist_mimo():
     回归测试：旧实现 fallback 调用 core.router.set_chat_model("mimo", MIMO_MODEL)
     会触发 set_chat_model 内部的持久化逻辑，把 models.chat_model 覆盖成 mimo，
     形成 sticky fallback —— 用户原选择永远无法恢复。
-    修复后 fallback 只修改内存中的 ROUTE_TABLE，不触发持久化。
+    修复后 _restore_chat_model 完全不调用 set_chat_model，只直接修改
+    ROUTE_TABLE["chat"] 和 _current_chat_model，不触发持久化。
     """
     from web.server import _restore_chat_model
-    from core.app_exception import LLMError
 
     cfg = MagicMock()
     cfg.get.return_value = {"provider": "custom-unknown", "model_id": "custom-model"}
 
     core = MagicMock()
-    # set_chat_model 第一次抛 LLMError（恢复用户选择失败）
-    core.router.set_chat_model = MagicMock(side_effect=LLMError("provider 未注册"))
+    # _restore_chat_model 不再调用 set_chat_model，所以不需要 side_effect
+    core.router.set_chat_model = MagicMock()
     core.router._current_chat_model = None
-
-    # 捕获 fallback 后是否重新持久化
-    set_chat_model_call_count = {"count": 0}
-    original_side_effect = core.router.set_chat_model.side_effect
-
-    def counted_side_effect(*args, **kwargs):
-        set_chat_model_call_count["count"] += 1
-        if original_side_effect:
-            raise original_side_effect
-
-    core.router.set_chat_model.side_effect = counted_side_effect
+    core.router._custom_clients = {}  # provider 不可用
 
     with patch("model_router.ROUTE_TABLE", {"chat": {"model": "old", "client": "old"}}):
         with patch("model_router.MIMO_MODEL", "mimo-v2.5"):
             _restore_chat_model(cfg, core)
 
-    # set_chat_model 应只被调用一次（恢复尝试），fallback 不应再调用
-    assert set_chat_model_call_count["count"] == 1, (
-        "fallback 不应再调用 set_chat_model，否则会重新持久化 mimo 覆盖用户选择"
-    )
+    # set_chat_model 不应被调用（新实现直接修改 ROUTE_TABLE，不走 set_chat_model）
+    core.router.set_chat_model.assert_not_called()
 
-    # 应该直接修改内存中的 ROUTE_TABLE["chat"]
-    from model_router import ROUTE_TABLE
-    # 通过 _current_chat_model 验证 fallback 生效
+    # 应该直接修改内存中的 _current_chat_model（fallback 到 mimo）
     assert core.router._current_chat_model == {"provider": "mimo", "model_id": "mimo-v2.5"}
 
 
 def test_restore_chat_model_success_path():
-    """正常路径：set_chat_model 成功时不应触发 fallback。"""
+    """正常路径：provider 可用时直接修改 ROUTE_TABLE，不调用 set_chat_model。
+
+    新实现：_restore_chat_model 不再调用 set_chat_model（会全局同步覆盖其他路由），
+    而是直接修改 ROUTE_TABLE["chat"] 和 _current_chat_model。
+    """
     from web.server import _restore_chat_model
 
     cfg = MagicMock()
     cfg.get.return_value = {"provider": "agnes", "model_id": "agnes-2.0-flash"}
 
     core = MagicMock()
-    core.router.set_chat_model = MagicMock(return_value={"provider": "agnes", "model_id": "agnes-2.0-flash"})
+    core.router.set_chat_model = MagicMock()
+    core.router._current_chat_model = None
+    core.router._custom_clients = {"agnes": "client"}  # agnes 已注册
+    core.router._agnes_client = MagicMock()  # agnes 内置 transport
 
-    _restore_chat_model(cfg, core)
+    # 捕获 patched dict 引用，断言在 patch 块内进行（测试隔离）
+    patched_rt = {"chat": {"model": "old", "client": "old"}}
+    with patch("model_router.ROUTE_TABLE", patched_rt):
+        _restore_chat_model(cfg, core)
 
-    core.router.set_chat_model.assert_called_once_with("agnes", "agnes-2.0-flash")
+        # set_chat_model 不应被调用（新实现直接修改 ROUTE_TABLE）
+        core.router.set_chat_model.assert_not_called()
+
+        # 应该直接修改 patched ROUTE_TABLE 和 _current_chat_model
+        assert patched_rt["chat"]["model"] == "agnes-2.0-flash"
+        assert patched_rt["chat"]["client"] == "agnes"
+        assert core.router._current_chat_model == {"provider": "agnes", "model_id": "agnes-2.0-flash"}
 
 
 def test_restore_chat_model_no_saved_preference_returns_early():
@@ -293,3 +312,207 @@ def test_restore_chat_model_no_saved_preference_returns_early():
     _restore_chat_model(cfg, core)
 
     core.router.set_chat_model.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────
+# Bug #3: cfg.get("models.*") 返回引用导致 _data 被直接变异污染
+# ─────────────────────────────────────────────────────────────
+
+
+def test_config_service_get_models_returns_deep_copy():
+    """cfg.get("models.*") 必须返回深拷贝，防止调用方通过引用变异 _data。
+
+    根因修复：Python 陷阱 — dict 的 get/[] 返回内部对象的引用。
+    旧实现 cfg.get("models.routes") 返回 _data["models"]["routes"] 的引用，
+    调用方直接修改返回值会污染 _data 而不触发 set()/_save()。
+    随后非 models 路径的 set() 触发 _save() 将污染的 _data 持久化，
+    导致用户设置的 agnes 被神秘覆盖为 mimo。
+
+    修复：get() 对 models. 路径返回 json 深拷贝，切断引用链。
+    """
+    import json
+    import tempfile
+    import os
+    from pathlib import Path
+    from web.config_service import ConfigService
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        json.dump({
+            "models": {
+                "chat_model": {"provider": "agnes", "model_id": "agnes-2.0-flash"},
+                "routes": {"chat": {"model": "agnes-2.0-flash", "client": "agnes"}},
+            }
+        }, f)
+        tmp_path = f.name
+
+    try:
+        cfg = ConfigService(path=Path(tmp_path))
+
+        # 获取引用并尝试变异
+        chat_model = cfg.get("models.chat_model")
+        chat_model["provider"] = "mimo"
+        chat_model["model_id"] = "mimo-v2.5"
+
+        routes = cfg.get("models.routes")
+        routes["chat"]["client"] = "mimo"
+        routes["chat"]["model"] = "mimo-v2.5"
+
+        # 再次获取，应该还是 agnes（深拷贝防护）
+        chat_model_2 = cfg.get("models.chat_model")
+        assert chat_model_2["provider"] == "agnes", (
+            "深拷贝修复失败: 通过引用变异污染了 _data"
+        )
+        assert chat_model_2["model_id"] == "agnes-2.0-flash"
+
+        routes_2 = cfg.get("models.routes")
+        assert routes_2["chat"]["client"] == "agnes", (
+            "深拷贝修复失败: routes.chat 被引用变异污染"
+        )
+        assert routes_2["chat"]["model"] == "agnes-2.0-flash"
+    finally:
+        os.unlink(tmp_path)
+
+
+def test_config_service_get_non_models_returns_reference():
+    """非 models 路径不受深拷贝影响，保持原有行为（性能考虑）。"""
+    import tempfile
+    import os
+    from pathlib import Path
+    from web.config_service import ConfigService
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        import json
+        json.dump({"mail": {"enabled": True, "mode": "off"}}, f)
+        tmp_path = f.name
+
+    try:
+        cfg = ConfigService(path=Path(tmp_path))
+        assert cfg.get("mail.enabled") == True
+        assert cfg.get("mail.mode") == "off"
+    finally:
+        os.unlink(tmp_path)
+
+
+def test_config_service_save_validates_against_route_table():
+    """_save() 在启动完成后验证 _data["models"] 与 ROUTE_TABLE 一致。
+
+    二次防御：即使 _data 被某种未知方式污染，_save() 在写盘前
+    从 ROUTE_TABLE 恢复正确值，防止污染持久化。
+    """
+    import json
+    import tempfile
+    import os
+    from pathlib import Path
+    from web.config_service import ConfigService
+    from model_router import ROUTE_TABLE
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        json.dump({
+            "models": {
+                "chat_model": {"provider": "agnes", "model_id": "agnes-2.0-flash"},
+            }
+        }, f)
+        tmp_path = f.name
+
+    original_chat = dict(ROUTE_TABLE.get("chat", {}))
+    try:
+        ROUTE_TABLE["chat"] = {"model": "agnes-2.0-flash", "client": "agnes",
+                                "max_tokens": 131072, "thinking": {"type": "disabled"}}
+
+        cfg = ConfigService(path=Path(tmp_path))
+        cfg.mark_startup_complete()
+
+        # 模拟 _data 被污染（直接修改内部 _data，绕过 set()）
+        cfg._data["models"]["chat_model"] = {"provider": "mimo", "model_id": "mimo-v2.5"}
+
+        # 触发 _save() — 应该检测到不一致并恢复
+        cfg.set("mail.enabled", True)
+
+        # 验证 _data 已被恢复
+        saved_cm = cfg.get("models.chat_model")
+        assert saved_cm["provider"] == "agnes", (
+            f"_save() 验证失败: _data 被污染后未恢复, got {saved_cm}"
+        )
+        assert saved_cm["model_id"] == "agnes-2.0-flash"
+    finally:
+        os.unlink(tmp_path)
+        ROUTE_TABLE["chat"] = original_chat
+
+
+def test_config_service_save_validates_all_synced_routes():
+    """_save() 一致性验证覆盖所有同步路由，不仅限 chat。
+
+    回归测试：旧实现 _save() 只校验/修复 models.routes.chat，
+    chat_pro/chat_flash 等被污染时不会修复。修复后遍历 ROUTE_TABLE 所有路由。
+    """
+    import json
+    import tempfile
+    import os
+    from pathlib import Path
+    from web.config_service import ConfigService
+    from model_router import ROUTE_TABLE
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        json.dump({
+            "models": {
+                "chat_model": {"provider": "agnes", "model_id": "agnes-2.0-flash"},
+                "routes": {
+                    "chat": {"model": "agnes-2.0-flash", "client": "agnes"},
+                    "chat_pro": {"model": "agnes-2.0-flash", "client": "agnes"},
+                },
+            }
+        }, f)
+        tmp_path = f.name
+
+    original_chat = dict(ROUTE_TABLE.get("chat", {}))
+    original_chat_pro = dict(ROUTE_TABLE.get("chat_pro", {}))
+    try:
+        ROUTE_TABLE["chat"] = {"model": "agnes-2.0-flash", "client": "agnes",
+                                "max_tokens": 131072, "thinking": {"type": "disabled"}}
+        ROUTE_TABLE["chat_pro"] = {"model": "agnes-2.0-pro", "client": "agnes",
+                                    "max_tokens": 131072, "thinking": {"type": "disabled"}}
+
+        cfg = ConfigService(path=Path(tmp_path))
+        cfg.mark_startup_complete()
+
+        # 模拟 chat_pro 路由被污染为 mimo
+        cfg._data["models"]["routes"]["chat_pro"] = {"model": "mimo-v2.5", "client": "mimo"}
+
+        # 触发 _save()
+        cfg.set("mail.enabled", True)
+
+        # chat_pro 应该被恢复为 ROUTE_TABLE 的值
+        saved_pro = cfg.get("models.routes.chat_pro")
+        assert saved_pro["client"] == "agnes", (
+            f"_save() 未修复 chat_pro 路由污染, got {saved_pro}"
+        )
+        assert saved_pro["model"] == "agnes-2.0-pro"
+    finally:
+        os.unlink(tmp_path)
+        ROUTE_TABLE["chat"] = original_chat
+        ROUTE_TABLE["chat_pro"] = original_chat_pro
+
+
+def test_tracked_dict_update_does_not_mutate_caller():
+    """_TrackedDict.update() 不应原地修改调用方传入的 dict。
+
+    回归测试：旧实现 update() 中 `args[0][k] = _wrap_tracked(...)` 会修改调用方的
+    原始 dict，导致引用共享问题。修复后通过 __setitem__ 逐项写入，不影响调用方。
+    """
+    from web.config_service import _TrackedDict
+
+    td = _TrackedDict(_track_path="root")
+    caller_dict = {"key": {"nested": 1}, "plain": "value"}
+
+    td.update(caller_dict)
+
+    # 调用方的 dict 不应被修改（值不应被替换为 _TrackedDict）
+    assert type(caller_dict["key"]) is dict, (
+        "update() 不应原地修改调用方 dict 的值类型"
+    )
+    assert caller_dict["key"] == {"nested": 1}
+    assert caller_dict["plain"] == "value"
+
+    # 但 _TrackedDict 内部应该正确包装
+    assert isinstance(td["key"], _TrackedDict)
+    assert td["plain"] == "value"

@@ -19,10 +19,14 @@ class ChatProcessor:
     """单轮对话主流程处理器。
 
     职责：
-    1. 路由决策（子代理 / TaskGraph / xiaoda 直聊）
+    1. 路由决策（子代理 / xiaoda 直聊）
     2. 上下文构建（记忆/笔记/情绪/视觉）
     3. 模型调用与工具循环
     4. 后处理（媒体提取/情绪标签/表情包/语音）
+
+    P0 修复（用户要求"取消对话通道分类机制"）：
+    已移除 should_use_task_graph / filter_tools_for_simple_task —— 通道分类
+    （simple vs complex / TaskGraph）性价比太低且误判多，所有消息统一走主路径。
     """
 
     def __init__(self, core: Any) -> None:
@@ -47,35 +51,6 @@ class ChatProcessor:
         )
 
     # ── 以下为逐步迁移的辅助方法 ──────────────────────────────────
-
-    @staticmethod
-    def should_use_task_graph(chat_targets: list[str], task_graph: Any, user_input: str,
-                               user_id: str, force_voice: bool,
-                               image_data: Any, clean_input: str,
-                               is_manual_target_fn: Any, is_simple_task_fn: Any) -> bool:
-        """判断是否应使用 TaskGraph 路由。"""
-        return (
-            "xiaoda" in chat_targets
-            and task_graph is not None
-            and not is_manual_target_fn(user_input, user_id)
-            and not is_simple_task_fn(clean_input)
-            and not force_voice
-            and not image_data
-            and not ("[图片:" in user_input and "已保存到" in user_input)
-        )
-
-    @staticmethod
-    def filter_tools_for_simple_task(tools: list[dict] | None,
-                                      clean_input: str,
-                                      is_simple_fn: Any) -> list[dict] | None:
-        """简单任务时过滤掉系统级工具。"""
-        if not tools or not is_simple_fn(clean_input):
-            return tools
-
-        hidden = {"hardware_status", "gpio_control", "i2c_comm",
-                  "service_manage", "network_diag", "dev_assist"}
-        filtered = [t for t in tools if t.get("function", {}).get("name") not in hidden]
-        return filtered if filtered else None
 
     @staticmethod
     def clean_mention_from_input(user_input: str) -> str:

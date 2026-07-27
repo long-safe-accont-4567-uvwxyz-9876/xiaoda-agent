@@ -27,6 +27,8 @@ export const useUiStore = defineStore('ui', () => {
   const soundVolume = ref(sound.getVolume())
   // 草元素光标：小叶片光标，默认开启（触屏设备自动不启用）
   const dendroCursor = ref(localStorage.getItem('ui.dendroCursor') !== 'false')
+  // 鼠标移动拖尾（草粒子轨迹）：默认关闭（Windows 卡顿反馈），独立开关
+  const dendroCursorTrail = ref(localStorage.getItem('ui.dendroCursorTrail') === 'true')
 
   // 亮度控制：0.5 (暗) ~ 1.5 (亮)，默认 1.05（比原来稍亮）
   const autoBrightness = ref(localStorage.getItem(AUTO_KEY) !== 'false') // 默认开启自动
@@ -77,6 +79,7 @@ export const useUiStore = defineStore('ui', () => {
       if (cfg?.ui?.sound_fx !== undefined) { soundFx.value = !!cfg.ui.sound_fx; sound.setEnabled(soundFx.value) }
       if (cfg?.ui?.sound_volume !== undefined) { soundVolume.value = Number(cfg.ui.sound_volume); sound.setVolume(soundVolume.value) }
       if (cfg?.ui?.dendro_cursor !== undefined) { dendroCursor.value = !!cfg.ui.dendro_cursor; localStorage.setItem('ui.dendroCursor', String(dendroCursor.value)) }
+      if (cfg?.ui?.dendro_cursor_trail !== undefined) { dendroCursorTrail.value = !!cfg.ui.dendro_cursor_trail; localStorage.setItem('ui.dendroCursorTrail', String(dendroCursorTrail.value)) }
       loaded.value = true
     } catch { /* 未登录时静默 */ }
     // 应用亮度
@@ -119,12 +122,18 @@ export const useUiStore = defineStore('ui', () => {
     put('/system/config', { path: 'ui.dendro_cursor', value: v }).catch(() => {})
   }
 
+  function setDendroCursorTrail(v: boolean) {
+    dendroCursorTrail.value = v
+    localStorage.setItem('ui.dendroCursorTrail', String(v))
+    put('/system/config', { path: 'ui.dendro_cursor_trail', value: v }).catch(() => {})
+  }
+
   return {
     particles, tilt3d, autoSpeak, loaded,
-    soundFx, soundVolume, dendroCursor,
+    soundFx, soundVolume, dendroCursor, dendroCursorTrail,
     brightness, autoBrightness, manualBrightness,
     loadRemote, setParticles, setTilt3d, setAutoSpeak,
-    setSoundFx, setSoundVolume, setDendroCursor,
+    setSoundFx, setSoundVolume, setDendroCursor, setDendroCursorTrail,
     setAutoBrightness, setManualBrightness, applyBrightness,
     stopAutoCheck,
   }

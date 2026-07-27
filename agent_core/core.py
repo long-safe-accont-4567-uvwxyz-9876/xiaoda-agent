@@ -259,7 +259,8 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
                       session_id: str = "",
                       status_callback: Any=None,
                       image_data: list[dict] | None = None,
-                      is_master: bool = True) -> ProcessResult:
+                      is_master: bool = True,
+                      system_context: str = "") -> ProcessResult:
         """处理用户输入并返回回复结果 (统一入口, 含身份解析与上下文管理).
 
         Args:
@@ -271,6 +272,9 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             status_callback: 状态回调函数
             image_data: 附带图片列表
             is_master: 是否主人 (将被身份解析结果覆盖)
+            system_context: 系统上下文提示（P0 新增）。
+                注入为 system message，不写入 conversation_logs.user_message。
+                用于主动问候等内部场景，避免场景提示污染历史记录。
 
         Returns:
             ProcessResult 包含回复文本与元数据
@@ -298,6 +302,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             is_master=is_master,
         )
         ctx.identity = identity
+        ctx.system_context = system_context  # P0 新增：系统上下文（不入库）
         _ctx_token = _current_request_ctx.set(ctx)
         # 清空证据门禁（请求间隔离，避免跨请求状态泄漏）
         self._hook_engine.reset_evidence_gate()
@@ -309,7 +314,8 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             try:
                 return await asyncio.wait_for(
                     self._process_impl(ctx, user_input, user_id, source, user_openid, session_id,
-                                       status_callback, image_data, is_master),
+                                       status_callback, image_data, is_master,
+                                       system_context=system_context),
                     timeout=_GLOBAL_DEADLINE_SECONDS,
                 )
             except asyncio.TimeoutError:

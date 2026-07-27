@@ -181,6 +181,8 @@ class UserProfileLearner:
         for msg in recent_messages[-20:]:
             role = "用户" if msg.get("role") == "user" else "助手"
             content = str(msg.get("content", ""))[:200]
+            # 注意：无需 escape 用户消息中的 { }，因为下方使用 str.replace() 而非 str.format()
+            # 进行模板插值。原 escape 逻辑（replace {{ }}）会导致双重转义：print({}) → print({{}})
             summary_lines.append(f"{role}: {content}")
         conversation_summary = "\n".join(summary_lines)
 

@@ -228,7 +228,12 @@ class MemoryDB:
 
     async def get_conversations_by_time_range(self, start_ts: float, end_ts: float,
                                                user_id: str = "", limit: int = 50) -> list[dict]:
-        """按时间范围查询 conversation_logs 原始对话。用于时间型回忆查询。"""
+        """按时间范围查询 conversation_logs 原始对话。用于时间型回忆查询。
+
+        CodeRabbit 复审修复：原 ORDER BY timestamp ASC LIMIT ? 在记录数超过 limit 时
+        返回最早的记录而非最新的，导致 restore_from_db 恢复过期对话。
+        改为先 DESC 取最新 limit 条，再反转为时间升序，确保始终返回最近对话。
+        """
         params: list = [start_ts, end_ts]
         where = "WHERE timestamp >= ? AND timestamp <= ?"
         if user_id:
@@ -237,11 +242,14 @@ class MemoryDB:
         params.append(limit)
         cursor = await self._conn.execute(
             f"""SELECT timestamp, user_message, assistant_reply FROM conversation_logs
-                {where} ORDER BY timestamp ASC LIMIT ?""",
+                {where} ORDER BY timestamp DESC LIMIT ?""",
             params,
         )
         rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        result = [dict(r) for r in rows]
+        # 反转为时间升序，保持调用方的时序预期
+        result.reverse()
+        return result
 
     async def search_memories_by_importance(self, min_importance: float = 0.3, limit: int = 10) -> Any:
         cursor = await self._conn.execute(

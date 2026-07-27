@@ -65,6 +65,8 @@ async def detect_emotion_llm(
 
     try:
         result = await asyncio.wait_for(
+            # emotion 是轻量分类任务，用 chat_flash（max_tokens=6144）足够
+            # 原 "chat" 路由 max_tokens=131072，浪费配额且增加延迟
             router.route("chat_flash", messages, temperature=0.3),
             timeout=LLM_EMOTION_TIMEOUT,
         )

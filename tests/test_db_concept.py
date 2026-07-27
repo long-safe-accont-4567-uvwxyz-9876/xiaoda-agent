@@ -212,3 +212,120 @@ async def test_meta_get_set(concept_db):
     await concept_db.set_meta("last_edge_decay", "2026-07-10T12:00:00+08:00")
     val = await concept_db.get_meta("last_edge_decay")
     assert val == "2026-07-10T12:00:00+08:00"
+
+
+@pytest.mark.asyncio
+async def test_batch_link_recent_below_threshold_no_edges(concept_db):
+    """N10 回归测试：batch_link_recent 共享 keys 低于阈值时不建边。
+
+    验证：当节点间共享 keys 数 < min_shared 时，不补建边（linked == 0）。
+    正向用例（建边）由 test_batch_link_recent_executemany_writes_correctly 覆盖。
+    """
+    now = "2026-07-10T12:00:00+08:00"
+    # 节点 A 已有边（不应被 curator 处理）
+    await concept_db.insert_node(
+        id="nodeA", text="Python web 开发",
+        keys=json.dumps(["python", "web", "开发"]),
+        created=now, last_accessed=now, valid_from=now,
+    )
+    await concept_db.create_edge("nodeA", "nodeX", "manual", 1.0, now)
+
+    # 节点 B 无边，共享 3 keys with nodeA → 应被 curator 建边
+    await concept_db.insert_node(
+        id="nodeB", text="Python web 框架",
+        keys=json.dumps(["python", "web", "框架"]),
+        created=now, last_accessed=now, valid_from=now,
+    )
+    # 节点 C 无边，共享 1 key with nodeA → 不应建边（< min_shared=3）
+    await concept_db.insert_node(
+        id="nodeC", text="Java 开发",
+        keys=json.dumps(["java", "开发"]),
+        created=now, last_accessed=now, valid_from=now,
+    )
+
+    # batch_link_recent 只处理无边节点（B 和 C）
+    linked = await concept_db.batch_link_recent(batch_size=10, min_shared=3)
+    # nodeB 与 nodeA 共享 python/web = 2 < 3 → 不建边
+    # nodeB 与 nodeC 共享 0 → 不建边
+    # nodeC 与 nodeA 共享 开发 = 1 < 3 → 不建边
+    # nodeC 与 nodeB 共享 0 → 不建边
+    # 预期 0 条边（所有共享都 < 3）
+    assert linked == 0
+
+
+@pytest.mark.asyncio
+async def test_batch_link_recent_max_edges_limit(concept_db):
+    """N10 修复：max_edges_per_run 限制单次写入边数。
+
+    验证：当潜在逻辑链接数超过 max_edges_per_run 时，只写入 max_edges_per_run
+    对双向边。CodeRabbit #7：max_edges_per_run 计数逻辑链接（一条无向边 =
+    2 次有向 INSERT），切片在完整逻辑链接边界，永不产生单向边。
+    """
+    now = "2026-07-10T12:00:00+08:00"
+    # 创建一个共享很多 keys 的节点群
+    # nodeTarget 与 5 个节点都共享 >= 3 keys → 5×2=10 条双向边
+    await concept_db.insert_node(
+        id="target", text="target node",
+        keys=json.dumps(["k1", "k2", "k3", "k4"]),
+        created=now, last_accessed=now, valid_from=now,
+    )
+    for i in range(5):
+        await concept_db.insert_node(
+            id=f"node{i}", text=f"node {i}",
+            keys=json.dumps(["k1", "k2", "k3", f"unique_{i}"]),
+            created=now, last_accessed=now, valid_from=now,
+        )
+    # target 已有边（不会被 curator 处理），node0-4 无边
+    # 但 batch_link_recent 处理的是"无边节点"，所以 node0-4 是 target
+    # node0-4 互相共享 k1/k2/k3，且都与 target 共享 → 去重后共 15 个逻辑链接
+    # （node0: 5个, node1: 4个新, node2: 3个新, node3: 2个新, node4: 1个新）
+    # max_edges_per_run=5（逻辑链接）→ 切片到 5 对 = 10 行有向边
+    # CodeRabbit #2: 返回值为逻辑链接数，故 linked == 5
+    linked = await concept_db.batch_link_recent(
+        batch_size=10, min_shared=3, max_edges_per_run=5)
+    assert linked == 5, f"max_edges_per_run=5 应写 5 个逻辑链接，实际：{linked}"
+
+    # CodeRabbit #7 双向完整性：每条 (src,tgt) 都应有对应 (tgt,src)
+    async with concept_db._conn.execute(
+        "SELECT source_id, target_id FROM concept_edges WHERE relation='co-occurrence'"
+    ) as cur:
+        rows = await cur.fetchall()
+    edge_set = {(r["source_id"], r["target_id"]) for r in rows}
+    for src, tgt in list(edge_set):
+        assert (tgt, src) in edge_set, (
+            f"单向边泄漏：存在 ({src},{tgt}) 但无反向 ({tgt},{src})")
+
+
+@pytest.mark.asyncio
+async def test_batch_link_recent_executemany_writes_correctly(concept_db):
+    """N10 修复：executemany 批量写入的边数据正确。
+
+    验证 executemany 写入的边与原 create_edge 逐条写入的格式一致：
+    - relation = "co-occurrence"
+    - weight = 1.0
+    - 双向边都存在
+    """
+    now = "2026-07-10T12:00:00+08:00"
+    # 两个无边节点共享 3 keys
+    await concept_db.insert_node(
+        id="node1", text="node1",
+        keys=json.dumps(["a", "b", "c"]),
+        created=now, last_accessed=now, valid_from=now,
+    )
+    await concept_db.insert_node(
+        id="node2", text="node2",
+        keys=json.dumps(["a", "b", "c"]),
+        created=now, last_accessed=now, valid_from=now,
+    )
+
+    linked = await concept_db.batch_link_recent(batch_size=10, min_shared=3)
+    assert linked > 0, "应建边（共享 3 keys）"
+
+    # 验证双向边都存在
+    edges_1 = await concept_db.get_edges("node1")
+    edges_2 = await concept_db.get_edges("node2")
+    assert "node2" in edges_1, "node1→node2 边应存在"
+    assert "node1" in edges_2, "node2→node1 边应存在"
+    # 验证字段正确
+    assert edges_1["node2"]["relation"] == "co-occurrence"
+    assert edges_1["node2"]["weight"] == 1.0

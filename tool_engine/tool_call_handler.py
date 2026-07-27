@@ -297,7 +297,13 @@ class ToolCallHandler:
             final_reply = self._clean_reply(assistant_content)
             trace.info("tool.all_failed_skip_summarize", tool_count=len(tool_results))
         else:
-            final_reply = await self._summarize_results(current_user_input, tool_results, tool_calls, trace, user_openid=user_openid, session_id=session_id)
+            # P0 修复：传入 messages（已含 assistant(tool_calls) + tool(result) 消息），
+            # 让 _summarize_results 复用完整上下文，不再凭空 summarize 导致瞎扯
+            final_reply = await self._summarize_results(
+                current_user_input, tool_results, tool_calls, trace,
+                user_openid=user_openid, session_id=session_id,
+                messages=messages,
+            )
         rc = assistant_msg.get("reasoning_content", "")
         await self._context.add_message("user", current_user_input)
         if is_degraded_reply(final_reply):
@@ -430,7 +436,28 @@ class ToolCallHandler:
 
     async def _summarize_results(self, user_input: str, tool_results: list,
                                   tool_calls: list, trace: Any,
-                                  user_openid: str = "", session_id: str = "") -> str:
+                                  user_openid: str = "", session_id: str = "",
+                                  messages: list[dict] | None = None) -> str:
+        """基于工具结果生成最终回复。
+
+        P0 修复（工具调用后 LLM 瞎扯/出戏 根因）：
+        原实现把 `summary_prompt`（含"用平时聊天的语气""不要用加粗"等元指令）
+        作为 **user message** 注入全新上下文 `[system, user:user_input, user:summary_prompt]`，
+        导致两个严重问题：
+          1. **上下文污染**：元指令作为 user 消息进入 LLM 可见上下文，后续轮次 LLM 会
+             回应"用平时聊天的语气"等元词汇，造成角色出戏（详见 conversation_logs 案例）。
+          2. **上下文割裂**：丢弃了 verification loop 已有的对话历史 + 工具结果
+             （`role: tool` 消息），LLM 失去对话连贯性，凭空 summarize → 瞎扯。
+
+        修复策略（双层）：
+          - 主路径（messages 非空）：复用 verification loop 的 `messages`（已含
+            system+history+assistant(tool_calls)+tool(result)），仅追加一条 **system**
+            角色的简短提示，让 LLM 基于完整上下文 + 工具结果自然续写。
+          - 兜底路径（messages 为空，向后兼容）：保留独立调用，但 `summary_prompt`
+             改为 **system** 角色（不再作为 user 消息污染上下文）。
+
+        硬约束（沿用）：只能基于工具结果回答，不编造。
+        """
         parts = []
         for tc, result in zip(tool_calls, tool_results, strict=False):
             if result.success and result.data:
@@ -448,44 +475,65 @@ class ToolCallHandler:
         if not self._router:
             return combined
 
+        address_term = (self._context.current_address_term
+                        if self._context else "爸爸") or "爸爸"
+
+        # 简短 system 提示（不再作为 user 消息污染上下文）
+        # 设计原则：
+        #   - 只给"基于工具结果回复"的硬约束，不给"用什么语气"等元指令（避免出戏）
+        #   - 语气/格式由 system prompt（SOUL.md/IDENTITY.md）统一管理，不在此重复
+        #   - 要求明确表达，避免模糊表述（如"数据加载完毕"应说明加载了什么）
+        _grounding_hint = (
+            f"[系统提示] 上方工具已返回结果（role=tool 消息）。请基于这些工具结果，"
+            f"用你本来的语气自然回复{address_term}。"
+            f"硬约束：只能基于工具返回的信息回答，不要添加、推测或编造结果中没有的信息；"
+            f"如果工具结果不足以回答，请如实说明。"
+            f"表达要求：先明确说明执行了什么操作，再描述具体结果，避免模糊表述。"
+        )
+
         try:
-            xiaoda_prompt = ""
-            if self._context:
-                xiaoda_prompt = self._context.get_xiaoda_prompt()
-
-            address_term = (self._context.current_address_term
-                            if self._context else "爸爸") or "爸爸"
-            summary_prompt = (
-                f"{address_term}刚才问的是：{user_input}\n\n"
-                f"工具查到结果了！你看看这些信息，帮人家整理一下回复给{address_term}吧～\n\n"
-                f"记住：人家是在跟{address_term}聊天，不是在写报告！\n"
-                "- 用平时聊天的语气说话，就像面对面跟{address_term}说一样\n"
-                "- 绝对不要用 **加粗**、*列表符号*、##标题 这种格式，就纯文字聊天\n"
-                "- 不要用「总体概述」「团队成员汇报」这种官方词儿\n"
-                "- 首先明确说明执行了什么操作，再描述结果，避免模糊表述\n"
-                "- 数据自然地嵌在句子里就行，比如「CPU温度45度呢」「内存用了60%」，要说清楚明确\n"
-                "- 如果信息比较多，分几段说，每段一个话题\n"
-                "- 结尾可以加一句关心的话\n"
-                "⚠️ 硬约束：只能基于以下工具返回的结果回答，绝对不要添加、推测或编造工具结果中没有的信息！\n\n"
-                f"工具返回的结果：\n{combined}"
-            )
-
-            # 独立超时保护：summarize 最多 10s，使用当前主模型（chat）保持一致性
-            # 不再强制使用 chat_flash，避免模型切换导致的 fallback 问题
-            summary = await asyncio.wait_for(
-                self._router.route(
-                    "chat",
-                    [
-                        {"role": "system", "content": xiaoda_prompt},
-                        {"role": "user", "content": user_input},
-                        {"role": "user", "content": summary_prompt},
-                    ],
-                    temperature=0.6,
-                    user_openid=user_openid,
-                    session_id=session_id,
-                ),
-                timeout=10,
-            )
+            if messages is not None and len(messages) > 0:
+                # 主路径：复用 verification loop 上下文（已含工具结果 role=tool 消息）
+                # 仅追加 system 提示，不追加任何 user 消息 → 不污染上下文
+                # 注意：messages 是调用方传入的引用，这里 copy 一份避免修改原列表
+                summarize_messages = list(messages)
+                summarize_messages.append({"role": "system", "content": _grounding_hint})
+                summary = await asyncio.wait_for(
+                    self._router.route(
+                        "chat",
+                        summarize_messages,
+                        temperature=0.6,
+                        user_openid=user_openid,
+                        session_id=session_id,
+                    ),
+                    timeout=10,
+                )
+            else:
+                # 兜底路径（向后兼容，无 messages 时使用）
+                # 修复：summary_prompt 改为 system 角色（原为 user 角色导致污染）
+                xiaoda_prompt = ""
+                if self._context:
+                    xiaoda_prompt = self._context.get_xiaoda_prompt()
+                summary_prompt = (
+                    f"{address_term}刚才问的是：{user_input}\n\n"
+                    f"工具查到结果了！请基于以下结果用你本来的语气回复{address_term}。\n\n"
+                    "⚠️ 硬约束：只能基于以下工具返回的结果回答，绝对不要添加、推测或编造结果中没有的信息！\n\n"
+                    f"工具返回的结果：\n{combined}"
+                )
+                summary = await asyncio.wait_for(
+                    self._router.route(
+                        "chat",
+                        [
+                            {"role": "system", "content": xiaoda_prompt},
+                            {"role": "system", "content": summary_prompt},
+                            {"role": "user", "content": user_input},
+                        ],
+                        temperature=0.6,
+                        user_openid=user_openid,
+                        session_id=session_id,
+                    ),
+                    timeout=10,
+                )
             if isinstance(summary, str) and summary.strip():
                 return self._clean_reply(summary)
         except TimeoutError:

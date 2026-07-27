@@ -79,9 +79,16 @@ class QueryTransformer:
         cache.move_to_end(key)
         return result
 
-    def _cache_put(self, cache: OrderedDict, key: str, value: Any) -> None:
-        """G15: 写入缓存，维护 maxsize。"""
-        cache[key] = (value, time.monotonic() + self.TRANSFORM_CACHE_TTL)
+    # 降级结果的短 TTL：LLM 超时/失败时缓存原查询，防止连续超时尖峰，
+    # 但不能按 10 分钟长 TTL 缓存——一次网络抖动会让后续 10 分钟都拿不到
+    # 改写结果，持续降低检索精度。60s 兼顾"防尖峰"与"瞬时故障可恢复"。
+    TRANSFORM_FALLBACK_TTL = 60
+
+    def _cache_put(self, cache: OrderedDict, key: str, value: Any,
+                   ttl: float | None = None) -> None:
+        """G15: 写入缓存，维护 maxsize。ttl 为 None 时用默认 TTL。"""
+        cache[key] = (value, time.monotonic() + (
+            self.TRANSFORM_CACHE_TTL if ttl is None else ttl))
         cache.move_to_end(key)
         if len(cache) > self.TRANSFORM_CACHE_MAXSIZE:
             cache.popitem(last=False)
@@ -103,6 +110,9 @@ class QueryTransformer:
             return None
         try:
             # G4: 共享 httpx.AsyncClient（连接池复用 + HTTP/2），单次请求级别覆盖 timeout
+            # 修复：15s→4s。根因：检索整体只有 8s 超时，free model 15s 超时远超预算，
+            # 硅基流动慢时 rewrite/expand 卡住 → 8s 超时杀掉整个检索 → 零记忆
+            # 4s：足够免费模型响应（通常 1-2s），慢时快速失败用原始查询兜底
             client = get_shared_client()
             response = await client.post(
                 f"{self._base_url}/chat/completions",
@@ -116,7 +126,7 @@ class QueryTransformer:
                     "Authorization": f"Bearer {self._api_key}",
                     "Content-Type": "application/json",
                 },
-                timeout=httpx.Timeout(15.0),
+                timeout=httpx.Timeout(4.0),
             )
             response.raise_for_status()
             data = response.json()
@@ -166,10 +176,32 @@ class QueryTransformer:
 
 改写后的查询:"""
 
-        result = await self._call_free_model(prompt, temperature=0.1, max_tokens=100)
+        # CodeRabbit #2: 加 asyncio 层超时防线（httpx 4s 之外的兜底，防止
+        # 客户端重试/连接建立慢导致 retrieve_memories 整体超时）。与 hyde/classify 一致。
+        # CodeRabbit #D: 超时降级为原查询后继续走缓存流程（与 result=None 的正常
+        # 降级一致），避免网络持续慢时每次检索都重复 5s 超时拖慢流水线。
+        #
+        # I3 注释（代码审查一致性）：此处的"降级"与 model_router.py 删除 ImportError
+        # fallback 的"fail-fast"理念相反，但场景不同，不冲突：
+        # - model_router 的 fallback 是"损坏状态降级"——盲拼接 prefill 内容会引入重复
+        #   和人格劫持（事故 ID 2112），故选择 fail-fast 让 ImportError 直接抛出。
+        # - 此处的降级是"功能降级"——原查询本身仍可用作检索输入，仅失去 LLM 改写
+        #   带来的精度提升，不产生损坏状态。缓存原查询还能避免重复超时尖峰。
+        # 两者判断依据是"降级后状态是否损坏"，而非"是否一致"。后续维护者请勿为
+        # 统一理念而删除此处降级。
+        try:
+            result = await asyncio.wait_for(
+                self._call_free_model(prompt, temperature=0.1, max_tokens=100),
+                timeout=5.0,
+            )
+        except TimeoutError:
+            logger.warning("query_transform.rewrite_timeout", query=original_query[:50])
+            result = None  # 走降级路径，final=original_query 并缓存
         final = result if result else original_query
         # G15: 写入缓存（即使降级为原查询也缓存，避免重复调 LLM）
-        self._cache_put(self._rewrite_cache, cache_key, final)
+        # 降级结果用短 TTL：瞬时抖动不应把未改写的查询钉住 10 分钟
+        self._cache_put(self._rewrite_cache, cache_key, final,
+                        ttl=None if result else self.TRANSFORM_FALLBACK_TTL)
         return final
 
     async def expand_query(self, query: str, n: int = 3) -> list[str]:
@@ -191,14 +223,36 @@ class QueryTransformer:
 
 原始查询: {query}"""
 
-        result = await self._call_free_model(prompt, temperature=0.3, max_tokens=150)
+        # CodeRabbit #2: 加 asyncio 层超时防线，超时降级返回 [query]
+        # CodeRabbit #D: 超时降级后继续走缓存流程（与 result=None 一致）
+        try:
+            result = await asyncio.wait_for(
+                self._call_free_model(prompt, temperature=0.3, max_tokens=150),
+                timeout=5.0,
+            )
+        except TimeoutError:
+            logger.warning("query_transform.expand_timeout", query=query[:50])
+            result = None  # 走降级路径，final=[query] 并缓存
         if result:
-            expanded = [line.strip() for line in result.strip().split("\n") if line.strip()]
-            final = [query, *expanded[:n]]
+            # 保序去重 + 过滤原查询：模型常重复输出同一行或复述原问题，
+            # 原实现 [query, *expanded[:n]] 会让重复项挤占检索名额，
+            # 每项都会走一次向量/FTS/Rerank，白耗预算且降低召回多样性
+            seen = {query}
+            unique_expanded: list[str] = []
+            for line in result.strip().split("\n"):
+                line = line.strip()
+                if not line or line in seen:
+                    continue
+                seen.add(line)
+                unique_expanded.append(line)
+                if len(unique_expanded) >= n:
+                    break
+            final = [query, *unique_expanded]
         else:
             final = [query]
-        # G15: 写入缓存
-        self._cache_put(self._expand_cache, cache_key, final)
+        # G15: 写入缓存（降级结果用短 TTL，同 rewrite_query）
+        self._cache_put(self._expand_cache, cache_key, final,
+                        ttl=None if result else self.TRANSFORM_FALLBACK_TTL)
         return list(final)  # 返回副本
 
     async def generate_hyde_document(self, query: str, context: str = "") -> str | None:
@@ -248,10 +302,10 @@ class QueryTransformer:
         if len(query) < 5:
             return "chat"
 
-        for kw in self.CHAT_KEYWORDS:
-            if kw in query:
-                return "chat"
-
+        # 时间判定优先于闲聊判定：
+        # 原顺序先匹配 CHAT_KEYWORDS，导致"我昨天觉得很难过"被归为 chat，
+        # 错过时间优先的记忆检索。含明确时间表达式时时间信号更强，应先返回
+        # temporal，让检索走时间范围路径。
         for kw in self.TEMPORAL_KEYWORDS:
             if kw in query:
                 return "temporal"
@@ -264,6 +318,10 @@ class QueryTransformer:
             return "temporal"
         if _re.search(r"\d{1,2}\s*[点时:：]\s*(\d{1,2})?\s*分?\s*(到|~|-|—)", query):
             return "temporal"
+
+        for kw in self.CHAT_KEYWORDS:
+            if kw in query:
+                return "chat"
 
         for kw in self.MULTIHOP_KEYWORDS:
             if kw in query:

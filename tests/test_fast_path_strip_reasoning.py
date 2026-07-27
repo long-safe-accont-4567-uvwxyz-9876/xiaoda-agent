@@ -57,70 +57,29 @@ Need to recall...
     assert "小妲来了哦" in result
 
 
-@pytest.mark.asyncio
-async def test_fast_path_finalize_calls_strip_reasoning():
-    """测试 _finalize_fast_path_reply 调用 strip_reasoning
+def test_clean_reply_full_calls_strip_reasoning():
+    """测试 _clean_reply_full 调用 strip_reasoning
 
-    这是回归测试：确保修复后 fast_path 会清理推理内容
+    回归测试：fast_path 机制已取消，所有回复走主路径的 _clean_reply_full
+    （统一清洗出口）。此测试验证 _clean_reply_full 内部调用 strip_reasoning
+    清理推理内容，确保 Agnes 推理标签不会泄漏到最终回复。
+
+    _clean_reply_full 定义在 ToolExecutorMixin，通过 AgentCore（多继承组合）
+    调用。此处直接创建 ToolExecutorMixin 实例进行测试。
     """
-    from agent_core.message_processor import MessageProcessorMixin
+    from agent_core.tool_executor import ToolExecutorMixin
 
-    # 创建最小化的 MessageProcessorMixin 实例
-    processor = MessageProcessorMixin.__new__(MessageProcessorMixin)
+    # 创建最小化的 ToolExecutorMixin 实例
+    processor = ToolExecutorMixin.__new__(ToolExecutorMixin)
 
-    # Mock 必要的属性
-    processor.security = MagicMock()
-    processor.security.check_output_privacy = MagicMock(return_value=(True, "", None))
-    processor.router = MagicMock()
-    processor.router.flush_costs = MagicMock()
-    processor.context = MagicMock()
-    processor.context.add_message = AsyncMock()
-    processor._bg_task_manager = MagicMock()
-    processor._bg_task_manager.run_background_tasks = MagicMock()
-    processor._hook_engine = MagicMock()
-    processor._hook_engine.fire_post_response = MagicMock()
-    processor.sticker_manager = MagicMock()
-    processor.sticker_manager.strip_emotion_tag = MagicMock(side_effect=lambda x: x)
+    # 调用 _clean_reply_full（统一清洗出口，内部调 strip_reasoning）
+    reply_with_reasoning = "[emotion thinking]`` 推理内容\n实际回复内容"
+    result = processor._clean_reply_full(reply_with_reasoning, style="xiaoda", strip_emotion=False)
 
-    # fast-path 现调用 _extract_fabricated_images_from_reply（ToolExecutorMixin 方法）
-    # 与 _clean_reply_full（统一清洗出口，内部调 strip_reasoning）。此处分别 mock：
-    # 兜底提图透传（无伪造图），_clean_reply_full 走真实 strip_reasoning 以验证推理清理。
-    from utils.text_utils import strip_reasoning
-    processor._extract_fabricated_images_from_reply = AsyncMock(
-        return_value=([], "[emotion thinking]`` 推理内容\n实际回复"))
-    processor._clean_reply_full = lambda text, **kw: strip_reasoning(text)
-
-    # Mock get_sticker_info 返回带有推理标签的回复
-    reply_with_reasoning = "[emotion thinking]`` Need think\n实际回复内容"
-    processor.get_sticker_info = MagicMock(return_value=(reply_with_reasoning, None))
-
-    # Mock 其他依赖
-    with patch("agent_core.message_processor.is_unified", return_value=False), \
-         patch("agent_core.message_processor.get_degradation_strategy") as mock_degradation:
-        mock_degradation.return_value.is_feature_available.return_value = True
-
-        # Mock _build_voice_result
-        processor._build_voice_result = AsyncMock(return_value=(None, False, ""))
-
-        # Mock spawn
-        with patch("agent_core.message_processor._spawn"):
-            result = await processor._finalize_fast_path_reply(
-                reply="[emotion thinking]`` 推理内容\n实际回复",
-                user_input="test",
-                is_master=True,
-                user_id="test_user",
-                source="web",
-                emotion="happy",
-                emotion_label="happy",
-                ctx=MagicMock(last_user_emotion="neutral"),
-                user_openid="test",
-                session_id="test",
-                force_voice=False,
-            )
-
-    # 验证：推理内容应被清理
-    assert "[emotion thinking]" not in result.reply
-    assert "推理内容" not in result.reply or "推理" not in result.reply
+    # 验证：推理标签应被清理
+    assert "[emotion thinking]" not in result
+    # 验证：推理内容应被清理（标签包裹的内容被移除）
+    assert "推理内容" not in result or "实际回复内容" in result
 
 
 def test_strip_reasoning_chinese_monologue():

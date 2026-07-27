@@ -103,6 +103,19 @@ _current_request_ctx: ContextVar[RequestContext | None] = ContextVar(
     "_current_request_ctx", default=None
 )
 
+# 工具生成的 TTS 音频路径（synthesize_voice 工具设置，message_processor 读取后清除）
+# 用于让 LLM 主动调用 TTS 工具后，将音频路径回传到 ProcessResult.audio_path
+_pending_tts_audio: ContextVar[Path | None] = ContextVar(
+    "_pending_tts_audio", default=None
+)
+
+# 流式调用最后一次的 finish_reason（chat_stream 设置，message_processor 读取用于截断检测）
+# CodeRabbit 复审修复：原 self._last_stream_finish_reason 是实例属性，并发流式调用会互相覆盖
+# 改为 ContextVar 实现请求级隔离，每个 asyncio.Task 有独立的 context copy
+_stream_finish_reason_var: ContextVar[str | None] = ContextVar(
+    "_stream_finish_reason", default=None
+)
+
 
 # ── 数据类型 ──────────────────────────────────────────────────
 @dataclass
@@ -135,6 +148,9 @@ class RequestContext:
     delegate_depth: int = 0
     is_master: bool = True
     identity: Any = None  # UserIdentity 运行时身份解析结果
+    # P0 新增：系统上下文提示（主动问候等内部场景）
+    # 注入为 system message，不写入 conversation_logs.user_message
+    system_context: str = ""
 
 
 @dataclass

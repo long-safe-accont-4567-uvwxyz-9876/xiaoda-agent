@@ -18,19 +18,14 @@ if str(PROJECT_ROOT) not in __import__("sys").path:
 
 
 class TestFallbackChainSync:
-    """测试 set_chat_model 时 flash/mini 路由的同步行为。
+    """测试 set_chat_model 时 flash/mini 路由的跨 provider 同步"""
 
-    关键变更（agnes provider 路由 bug 修复）：
-    旧逻辑会把 chat_flash 重置成跨 provider（agnes→mimo, mimo→agnes），
-    导致用户明确选择 agnes 后，agnes 主路由失败时 fallback 链跳到 mimo，
-    返回 mimo-v2.5 回复，与用户配置不符。
+    def test_set_chat_model_agnes_syncs_flash_to_agnes(self):
+        """切换到 agnes 时，chat_flash 应跟随 agnes（用户取消跨 provider 降级）
 
-    新行为：chat_flash 跟随主 provider，跨 provider 降级作为最后手段
-    由 _try_fallback_chain 的 step 4（mimo fallback）处理。
-    """
-
-    def test_set_chat_model_agnes_keeps_flash_with_agnes(self):
-        """切换到 agnes 时，chat_flash 应跟随 agnes（不再跨 provider 重置）"""
+        CodeRabbit #11 + commit a40bc74：用户明确要求取消 chat_flash 跨 provider 降级，
+        所有 task 跟随主 provider。原测试期望 chat_flash 用 mimo 已过时。
+        """
         from model_router import ROUTE_TABLE, ModelRouter
 
         # 模拟初始状态：mimo 为默认
@@ -51,16 +46,16 @@ class TestFallbackChainSync:
             assert ROUTE_TABLE["chat"]["model"] == "agnes-2.0-flash"
             assert ROUTE_TABLE["chat"]["client"] == "agnes"
 
-            # chat_flash 应跟随主 provider (agnes)，不应被重置成 mimo
+            # chat_flash 应跟随 agnes（用户取消跨 provider 降级）
             assert ROUTE_TABLE["chat_flash"]["client"] == "agnes", \
-                "chat_flash 应跟随主 provider (agnes)，跨 provider 降级由 _try_fallback_chain 处理"
+                "chat_flash 应跟随主 provider agnes（用户取消跨 provider 降级）"
             assert ROUTE_TABLE["chat_flash"]["model"] == "agnes-2.0-flash"
         finally:
             ROUTE_TABLE["chat_flash"] = original_flash
             ROUTE_TABLE["chat_mini"] = original_mini
 
-    def test_set_chat_model_mimo_keeps_flash_with_mimo(self):
-        """切换到 mimo 时，chat_flash 应跟随 mimo（不再跨 provider 重置）"""
+    def test_set_chat_model_mimo_syncs_flash_to_mimo(self):
+        """切换到 mimo 时，chat_flash 应跟随 mimo（用户取消跨 provider 降级）"""
         from model_router import ROUTE_TABLE, ModelRouter
 
         original_flash = ROUTE_TABLE["chat_flash"].copy()
@@ -76,9 +71,10 @@ class TestFallbackChainSync:
             ModelRouter.set_chat_model(router, "mimo", "mimo-v2.5")
 
             assert ROUTE_TABLE["chat"]["client"] == "mimo"
-            # chat_flash 应跟随主 provider (mimo)
+            # chat_flash 应跟随 mimo（用户取消跨 provider 降级）
             assert ROUTE_TABLE["chat_flash"]["client"] == "mimo", \
-                "chat_flash 应跟随主 provider (mimo)，跨 provider 降级由 _try_fallback_chain 处理"
+                "chat_flash 应跟随主 provider mimo（用户取消跨 provider 降级）"
+            assert ROUTE_TABLE["chat_flash"]["model"] == "mimo-v2.5"
         finally:
             ROUTE_TABLE["chat_flash"] = original_flash
             ROUTE_TABLE["chat_mini"] = original_mini

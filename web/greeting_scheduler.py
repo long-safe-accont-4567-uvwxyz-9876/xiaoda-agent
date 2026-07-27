@@ -412,9 +412,14 @@ class GreetingScheduler:
                     f'不要像 AI 助手那样"主动问候"。'
                     f'就只是一句带着你性格的、普通的话。）'
                 )
-            user_input = scene + recent_hint
+            # P0 修复：场景提示走 system_context，不污染 conversation_logs.user_message
+            # 根因：原实现把场景提示作为 user_input 传入，导致 DB 历史记录出现系统提示。
+            # 修复：场景提示作为 system_context 注入（仅 LLM 可见，不入库），
+            #       user_input 用中性占位符"（主动问候）"。
+            system_context = scene + recent_hint
             if hint:
-                user_input += f'\n（如果顺嘴能带一句关于「{hint}」的就带，想不到就不带。）'
+                system_context += f'\n（如果顺嘴能带一句关于「{hint}」的就带，想不到就不带。）'
+            user_input_placeholder = "（主动问候）"
 
             try:
                 # 使用真实的 user_id 和 session，让记忆系统能加载用户上下文
@@ -423,11 +428,12 @@ class GreetingScheduler:
                 session_id = session["id"] if session else await self.core.create_session(user_openid)
 
                 result = await self.core.process(
-                    user_input=user_input,
+                    user_input=user_input_placeholder,
                     user_id="webui",
                     source="web",
                     user_openid=user_openid,
                     session_id=session_id,
+                    system_context=system_context,  # P0：场景提示走 system_context
                 )
                 text = result.reply if hasattr(result, 'reply') else str(result)
                 logger.debug("greeting.raw_output attempt={} hint={} raw={}", attempt, hint, text[:200])

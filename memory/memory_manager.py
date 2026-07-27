@@ -15,6 +15,9 @@ from .query_cache import QueryCache
 from .retrieval_assessor import RetrievalAssessor
 from utils.atomic_write import atomic_json_write
 from config import get_agent_display_name
+# CodeRabbit 复审修复：fire-and-forget 任务必须保持强引用，否则 event loop 仅持有弱引用
+# 可能被 GC 回收导致任务中途消失。_bg_tasks 是 core.background_tasks 维护的全局任务集合。
+from core.background_tasks import _bg_tasks
 
 
 def _log_task_exception(task: asyncio.Task) -> None:
@@ -55,12 +58,49 @@ _TEMPORAL_PATTERNS = [
 ]
 
 
+# 中文数字 → 阿拉伯数字映射（用于日期解析）
+_CN_DIGIT = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+             "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def _cn_num_to_int(text: str) -> int | None:
+    """将中文数字（1-31，支持月和日）转为 int。无法解析返回 None。
+
+    支持：一/二/.../九/十/十一/.../十九/二十/.../二十九/三十/三十一
+    """
+    text = text.strip()
+    if not text:
+        return None
+    # 纯阿拉伯数字
+    if text.isdigit():
+        return int(text)
+    # 单字：一~十
+    if text in _CN_DIGIT:
+        return _CN_DIGIT[text]
+    # "十X"：十一=11, 十二=12, ... 十九=19
+    if len(text) == 2 and text[0] == "十" and text[1] in _CN_DIGIT:
+        return 10 + _CN_DIGIT[text[1]]
+    # "X十"：二十=20, 三十=30
+    if len(text) == 2 and text[1] == "十" and text[0] in _CN_DIGIT:
+        return _CN_DIGIT[text[0]] * 10
+    # "X十Y"：二十一=21, 三十一=31
+    if len(text) == 3 and text[1] == "十" and text[0] in _CN_DIGIT and text[2] in _CN_DIGIT:
+        return _CN_DIGIT[text[0]] * 10 + _CN_DIGIT[text[2]]
+    return None
+
+
+# 匹配中文/阿拉伯数字的月日：七月十八号 / 7月18号 / 十二月三十一日
+_CN_DATE_PATTERN = re.compile(
+    r"([一二三四五六七八九十两\d]{1,3})\s*月\s*([一二三四五六七八九十两\d]{1,3})\s*[号日]"
+)
+
+
 def _parse_temporal_query(query: str) -> tuple[float, float] | None:
     """从用户查询中解析时间词，返回 [start_ts, end_ts] 时间戳区间（秒）。
 
     支持的格式：
     1. 相对时间词：刚才/刚刚/N小时前/N分钟前/昨天/前天/大前天/今天/上周/上个月/前几天/最近
-    2. 绝对日期：7月15号/7月15日/12月1号
+    2. 绝对日期：7月15号/7月15日/12月1号/七月十八号/十二月三十一号
     3. 绝对日期+时段：7月15号早上7点/7月15号晚上/今天早上/昨天晚上
     4. 绝对日期+时间范围：7月15号早上7点到8点/7月15号7点到9点
 
@@ -101,23 +141,74 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
         "深夜": (21, 24),
     }
 
-    # 匹配 "N月N号"/"N月N日" 或 "N.N日"/"N.N号"（如 7.16日、7.16号）
-    date_match = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[号日]", query)
-    if not date_match:
-        date_match = re.search(r"(\d{1,2})\.(\d{1,2})\s*[号日]", query)
-    if date_match:
-        month = int(date_match.group(1))
-        day = int(date_match.group(2))
-        year = now.year
-        # 如果月份大于当前月，说明是去年
-        if month > now.month or (month == now.month and day > now.day):
-            year = now.year - 1
-        try:
-            base_date = _datetime.datetime(year, month, day, tzinfo=now.tzinfo)
-        except ValueError:
-            base_date = None
+    # 匹配 "N月N号"/"N月N日"（支持中文数字和阿拉伯数字）/ "N.N日"/"N.N号"
+    # 修复多日期解析 bug：原 re.search 只匹配第一个日期，
+    # 导致"7月18号、19号、20号、21号、22号"只查7月18号一天 → 小妲"想不起来"
+    # 修复中文数字 bug：原正则只匹配阿拉伯数字，"七月十八号"完全匹配不到 → 不走时间检索
+    # 修复省略月份 bug：中文表达"七月十八号、十九号、二十号"后续日期省略月份，需补全
+    # 现在用 finditer 收集所有日期，多日期时返回最早到最晚的合并范围
+    all_date_matches = list(_CN_DATE_PATTERN.finditer(query))
+    # 兼容 "7.16号" 格式
+    _DATE_PATTERN_DOT = re.compile(r"(\d{1,2})\.(\d{1,2})\s*[号日]")
+    all_date_matches += list(_DATE_PATTERN_DOT.finditer(query))
+    # CodeRabbit 复审修复：按源位置排序，确保 last_month/last_match_end 代表最后的文本日期
+    # 避免混合格式（如"7.16号、7月18号"）时 last_match_end 指向中间位置导致纯日扫描重复
+    all_date_matches.sort(key=lambda _m: _m.start())
 
-        if base_date:
+    # 解析完整日期（X月Y号），并记录最后一个月份用于补全省略月份的日期
+    parsed_dates: list[_datetime.datetime] = []
+    last_month: int | None = None  # 跟踪最后出现的月份，用于"十九号、二十号"省略月份的情况
+    last_match_end: int = 0  # 上一个日期匹配的结束位置
+
+    for dm in all_date_matches:
+        m = _cn_num_to_int(dm.group(1))
+        d = _cn_num_to_int(dm.group(2))
+        if m is None or d is None:
+            continue
+        if not (1 <= m <= 12 and 1 <= d <= 31):
+            continue
+        y = now.year
+        if m > now.month or (m == now.month and d > now.day):
+            y = now.year - 1
+        try:
+            parsed_dates.append(_datetime.datetime(y, m, d, tzinfo=now.tzinfo))
+        except ValueError:
+            continue
+        last_month = m
+        last_match_end = dm.end()
+
+    # 扫描省略月份的纯日："十九号" / "20号" / "二十一号"
+    # 仅当已出现过完整日期（last_month 不为 None）时才扫描
+    # 用分隔符 [、,，到~—-] 分隔，取每个分段中的 "X号/X日"
+    if last_month is not None:
+        # 匹配纯日号：十九号 / 20号 / 二十一号（不带"月"或"."前缀）
+        # CodeRabbit 复审修复：加强 _DAY_ONLY_PATTERN，拒绝完整月日表达式中的纯日匹配
+        # (?<!月) 拒绝"7月18号"中的"18号"（前一个字符是"月"）
+        # (?<!\.) 拒绝"7.16号"中的"16号"（前一个字符是"."）
+        _DAY_ONLY_PATTERN = re.compile(
+            r"(?<!月)(?<!\.)([一二三四五六七八九十两\d]{1,3})\s*[号日]"
+        )
+        # 从最后一个完整日期匹配位置之后扫描
+        search_text = query[last_match_end:] if last_match_end else query
+        for dm in _DAY_ONLY_PATTERN.finditer(search_text):
+            d = _cn_num_to_int(dm.group(1))
+            if d is None or not (1 <= d <= 31):
+                continue
+            y = now.year
+            if last_month > now.month or (last_month == now.month and d > now.day):
+                y = now.year - 1
+            try:
+                candidate = _datetime.datetime(y, last_month, d, tzinfo=now.tzinfo)
+                # 避免重复（与已解析日期相同）
+                if candidate not in parsed_dates:
+                    parsed_dates.append(candidate)
+            except ValueError:
+                continue
+
+    if parsed_dates:
+        # 单日期：保持原有精确逻辑（小时范围/时段/整天）
+        if len(parsed_dates) == 1:
+            base_date = parsed_dates[0]
             # 检查是否有具体小时范围："N点到N点"
             hour_range = re.search(r"(\d{1,2})\s*[点时:：]\s*(?:到|~|-|—)\s*(\d{1,2})\s*[点时:：]?", query)
             if hour_range:
@@ -147,6 +238,19 @@ def _parse_temporal_query(query: str) -> tuple[float, float] | None:
             start = base_date.replace(hour=0, minute=0, second=0, microsecond=0)
             end = base_date.replace(hour=23, minute=59, second=59, microsecond=0)
             return start.timestamp(), end.timestamp()
+
+        # 多日期：返回最早日期 0:00 到最晚日期 23:59 的合并范围
+        # 这样能覆盖用户提到的所有日期（如"7月18号到22号"或"7月18号、19号、20号"）
+        parsed_dates.sort()
+        start = parsed_dates[0].replace(hour=0, minute=0, second=0, microsecond=0)
+        end = parsed_dates[-1].replace(hour=23, minute=59, second=59, microsecond=0)
+        logger.info("memory.temporal_multi_date",
+                    count=len(parsed_dates),
+                    start=start.strftime("%Y-%m-%d"),
+                    end=end.strftime("%Y-%m-%d"))
+        return start.timestamp(), end.timestamp()
+
+    # 没有匹配到绝对日期，继续走相对日期逻辑（昨天/今天/上周等）
 
     # ── 3. 相对日期 + 时段："今天早上" / "昨天晚上" ──
     _REL_DATE_MAP = {
@@ -742,7 +846,14 @@ class MemoryManager:
                 async def _child_vec_recall() -> list[int]:
                     if not self.vec or not self.vec.enabled:
                         return []
-                    query_vec = await self.vec.embed(query)
+                    # embed 超时保护：慢则跳过子chunk向量召回，FTS 仍可用
+                    try:
+                        query_vec = await asyncio.wait_for(
+                            self.vec.embed(query), timeout=3.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("memory.child_vec_embed_timeout",
+                                       hint="子chunk embed 超时 3s，跳过")
+                        return []
                     if not query_vec:
                         return []
                     results = await self.vec.search_child(query_vec, top_k=recall_limit)
@@ -952,7 +1063,16 @@ class MemoryManager:
 
         # Reranker 精排
         if use_reranker and self._reranker and self._reranker.available and len(candidates) > k:
-            reranked = await self._hybrid_rerank(query, fused, all_items, k)
+            # 阶段性超时保护：reranker 是优化手段，不应阻塞整体检索
+            # 5s 超时：SiliconFlow 正常 1-3s，慢时快速降级到未排序结果
+            try:
+                reranked = await asyncio.wait_for(
+                    self._hybrid_rerank(query, fused, all_items, k),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("memory.rerank_timeout", hint="reranker 5s 超时，降级到未排序结果")
+                reranked = None
             if reranked:
                 # 对 reranked 也应用 entity boost
                 reranked = await self._apply_entity_boost(query, reranked, scope)
@@ -1001,9 +1121,21 @@ class MemoryManager:
         if not self.vec:
             return []
         try:
-            vec_results = await self.vec.search(
-                query, top_k=k * 2, candidate_ids=candidate_ids, deterministic=True,
-            )
+            # 向量检索 embed 超时保护：SiliconFlow 免费 embed 正常 0.5-2s，
+            # 限流时 6.9s+。3.5s 超时：慢则跳过向量通道，FTS/KG/时间检索仍可用。
+            # 根因：embed 6.9s 直接击穿 retrieve_memories 的 8s 超时，导致小妲"想不起来"。
+            try:
+                vec_results = await asyncio.wait_for(
+                    self.vec.search(
+                        query, top_k=k * 2, candidate_ids=candidate_ids, deterministic=True,
+                    ),
+                    timeout=3.5,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("memory.vec_search_timeout",
+                               hint="向量 embed 超时 3.5s，跳过向量通道",
+                               query=query[:50])
+                return []
             if not vec_results:
                 return []
             vec_ids = [row_id for row_id, _ in vec_results]
@@ -1049,8 +1181,15 @@ class MemoryManager:
         通过 SpreadingActivationEngine 检索 concept_nodes，
         将结果映射回 episodic_memories（通过 source_mem_id）。
         scope 非空时后过滤 user_id/agent_id，防止跨用户记忆泄露。
+
+        MEMORY_RETRIEVAL_DIFFUSION=False 时跳过扩散（精准检索），
+        避免通过概念图找回应被艾宾浩斯遗忘曲线衰减归档的低 importance 记忆。
         """
         if not self.spreading_engine:
+            return []
+        # 精准检索开关：False 时跳过概念图扩散
+        import config
+        if not getattr(config, "MEMORY_RETRIEVAL_DIFFUSION", False):
             return []
         try:
             results = await self.spreading_engine.recall(query, top_k=limit)
@@ -1181,12 +1320,15 @@ class MemoryManager:
     def _is_retrieval_simple(self, query: str) -> bool:
         """A1: 判断查询是否足够简单，可跳过查询变换直接走混合检索
 
+        P0 修复（用户要求"取消对话通道分类机制"）：
+        移除对 SIMPLE_TASK_KEYWORDS 的依赖（已从 config.py 删除）。
+        仅保留基于有效长度的启发式判断——这是检索层的查询变换优化，
+        不影响对话主路径（所有消息仍统一走主路径，由 LLM 自行决定）。
+
         判定规则（按顺序短路）:
         1. 计算有效长度（中文字符 ×2 + 其他字符 ×1），<=15 直接判定为简单
-        2. 命中 SIMPLE_TASK_KEYWORDS["chat"] → 简单
-        3. 命中 SIMPLE_TASK_KEYWORDS["complex"] → 非简单
-        4. 有效长度 <=20 且无复杂关键词 → 简单
-        5. 否则 → 非简单
+        2. 有效长度 <=20 → 简单（中等长度，无需查询变换）
+        3. 否则 → 非简单（长查询需要查询变换提升检索质量）
         """
         if not query:
             return True
@@ -1203,28 +1345,11 @@ class MemoryManager:
         if effective_len <= 15:
             return True
 
-        # 规则 2 & 3：关键词匹配
-        try:
-            from config import SIMPLE_TASK_KEYWORDS
-            chat_keywords = SIMPLE_TASK_KEYWORDS.get("chat", [])
-            complex_keywords = SIMPLE_TASK_KEYWORDS.get("complex", [])
-        except (ImportError, AttributeError):
-            chat_keywords = []
-            complex_keywords = []
-
-        for kw in chat_keywords:
-            if kw in query:
-                return True
-
-        for kw in complex_keywords:
-            if kw in query:
-                return False
-
-        # 规则 4：中等长度且无复杂关键词
+        # 规则 2：中等长度无需查询变换
         if effective_len <= 20:
             return True
 
-        # 规则 5
+        # 规则 3：长查询需要查询变换
         return False
 
     def _suggest_k(self, query: str, default_k: int = 8) -> int:
@@ -1290,17 +1415,29 @@ class MemoryManager:
 
     async def retrieve_memories(self, query: str, k: int = 5, context: str = "",
                                  _retry_attempted: bool = False,
-                                 scope: Any | None = None) -> list[dict]:
+                                 scope: Any | None = None,
+                                 conv_user_id: str = "") -> list[dict]:
+        """检索记忆。
+
+        P0 修复（上下文污染根因）：新增 conv_user_id 参数。
+        根因：_search_conversation_logs 查 conversation_logs 时不过滤 user_id，
+              导致其他用户/会话的原始对话被注入当前上下文（用户反馈
+              "那是之前的数据库里面的原文直接蹦出来了"）。
+        修复：conv_user_id 非空时，_search_conversation_logs 按 user_id 过滤，
+              仅返回当前用户的对话记录。query_cache 也按 user_id 隔离。
+        """
         import config
         if scope is None:
             from memory.scope import Scope
             scope = Scope()
         # 查询语义缓存：命中则直接返回，跳过完整检索流水线
+        # P0 修复：cache key 包含 conv_user_id，防止跨用户缓存污染
         if getattr(config, 'QUERY_CACHE_ENABLED', True):
+            _cache_key = f"{conv_user_id}::{query}" if conv_user_id else query
             logger.debug("memory.retrieve_stage", stage="query_cache_get", query=query[:50])
-            cached = await self._query_cache.get(query)
+            cached = await self._query_cache.get(_cache_key)
             if cached is not None:
-                logger.info("memory.cache_hit", query=query[:100])
+                logger.info("memory.cache_hit", query=query[:100], conv_user_id=conv_user_id)
                 return cached
 
         # 意图路由：按查询意图调整 k 与检索通道（闲聊型跳过 KG/Reranker）
@@ -1323,9 +1460,18 @@ class MemoryManager:
         # 时间实体识别：检测"昨天/前天/上周"等时间词，按时间范围检索
         # 这让小妲能回答"昨天发生了什么"这类纯时间查询
         # 修复：时间检索返回空时不短路，继续走语义检索兜底，避免"不知道/忘记了"
-        logger.debug("memory.retrieve_stage", stage="temporal_search", query=query[:50])
-        temporal_results = await self._try_temporal_search(query, k, scope=scope, include_raw=True)
+        _t_temporal = time.time()
+        temporal_results = await self._try_temporal_search(
+            query, k, scope=scope, include_raw=True, conv_user_id=conv_user_id)
+        _temporal_ms = int((time.time() - _t_temporal) * 1000)
+        if _temporal_ms > 2000:
+            logger.warning("memory.temporal_search_slow",
+                           elapsed_ms=_temporal_ms, query=query[:50])
         if temporal_results:
+            logger.info("memory.temporal_search_hit",
+                        count=len(temporal_results),
+                        elapsed_ms=_temporal_ms,
+                        query=query[:50])
             # 时间检索命中也递增 access_count（与常规检索路径一致）
             hit_ids = [r.get("id") for r in temporal_results if r.get("id")]
             if hit_ids:
@@ -1388,9 +1534,9 @@ class MemoryManager:
             if results:
                 results = self._dedup_by_content_similarity(results)
 
-            # 写入缓存
+            # 写入缓存（P0: 使用 user_id 隔离的 cache key）
             if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
-                await self._query_cache.put(query, results)
+                await self._query_cache.put(_cache_key, results)
             return results
 
         # 查询变换：改写 + 扩展
@@ -1472,9 +1618,9 @@ class MemoryManager:
         if len(results) > _final_k:
             results = results[:_final_k]
 
-        # 写入缓存
+        # 写入缓存（P0: 使用 user_id 隔离的 cache key）
         if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
-            await self._query_cache.put(query, results)
+            await self._query_cache.put(_cache_key, results)
 
         # 检索命中后批量递增 access_count（passive_use）
         # 修复：此前 increment_access_count 从未被调用，导致记忆永远无法进入 PERMANENT 状态
@@ -1491,7 +1637,8 @@ class MemoryManager:
 
     async def _try_temporal_search(self, query: str, k: int,
                                     scope: Any | None = None,
-                                    include_raw: bool = False) -> list[dict] | None:
+                                    include_raw: bool = False,
+                                    conv_user_id: str = "") -> list[dict] | None:
         """时间型查询：直接查 conversation_logs 原始对话。
 
         根本修复：时间查询最需要的是完整的原始对话记录，不是经过 FTS/reranker/CRAG
@@ -1499,6 +1646,8 @@ class MemoryManager:
 
         查找顺序：conversation_logs → episodic_memories（兜底）
         无时间词返回 None（调用方继续走常规语义检索）。
+
+        P0 修复：conv_user_id 非空时按 user_id 过滤，防止跨用户对话泄露。
         """
         if scope is None:
             from memory.scope import Scope
@@ -1512,7 +1661,7 @@ class MemoryManager:
             # 第一优先：直接查 conversation_logs 原始对话（最可靠）
             # 时间查询用户要的是"发生了什么"，原始对话比蒸馏摘要更准确
             _conv_results = await self._search_conversation_logs(
-                start_ts, end_ts, scope, k * 4)
+                start_ts, end_ts, scope, k * 4, conv_user_id=conv_user_id)
             if _conv_results:
                 logger.debug("memory.temporal_convlogs_hit",
                              query=query[:50], count=len(_conv_results))
@@ -1543,17 +1692,22 @@ class MemoryManager:
             return None
 
     async def _search_conversation_logs(self, start_ts: float, end_ts: float,
-                                         scope: Any | None, k: int) -> list[dict]:
+                                         scope: Any | None, k: int,
+                                         conv_user_id: str = "") -> list[dict]:
         """查 conversation_logs 原始对话，格式化为记忆格式返回。
 
-        不做 user_id 过滤（conversation_logs 的 user_id 是 QQ/微信等外部 ID，
-        与 scope.user_id='default' 不匹配），直接按时间范围查全部对话。
+        P0 修复（上下文污染根因）：按 conv_user_id 过滤。
+        根因：原实现不过滤 user_id，导致其他用户/会话的原始对话被注入当前上下文。
+              用户反馈"那是之前的数据库里面的原文直接蹦出来了"——AI 看到了不属于
+              当前用户的对话记录，导致上下文混乱、重复回复、角色出戏。
+        修复：conv_user_id 非空时按 user_id 过滤，仅返回当前用户的对话。
+              conv_user_id 为空时保留原行为（向后兼容，但不应在新代码中使用）。
         """
         import time as _time
         try:
-            # 不传 user_id，查时间范围内的所有对话
+            # P0 修复：按 conv_user_id 过滤，防止跨用户对话泄露
             raw = await self.memory.get_conversations_by_time_range(
-                start_ts, end_ts, user_id="", limit=k
+                start_ts, end_ts, user_id=conv_user_id, limit=k
             )
             if not raw:
                 return []
@@ -1630,54 +1784,73 @@ class MemoryManager:
             return results[:k]
 
     async def _transform_queries(self, query: str, context: str) -> list[str]:
-        """查询变换：rewrite + expand。A2 并行执行，失败降级到 [query]。"""
+        """查询变换：rewrite + expand。A2 并行执行，失败降级到 [query]。
+
+        MEMORY_RETRIEVAL_DIFFUSION=False 时跳过 expand_query（精准检索，搜什么就是什么），
+        只保留 rewrite_query（查询改写优化表述，不是扩散）。
+        """
         import config
         queries = [query]
         if not (self._query_transformer and getattr(config, "QUERY_TRANSFORM_ENABLED", True)):
             return queries
         parallel_transform = getattr(config, "RETRIEVAL_PARALLEL_TRANSFORM", True)
+        # 精准检索开关：False 时跳过 expand_query，只保留 rewrite_query
+        _diffusion_enabled = getattr(config, "MEMORY_RETRIEVAL_DIFFUSION", False)
         try:
             if parallel_transform:
                 # A2: 并行执行 rewrite + expand（各自独立的 LLM 调用）
-                expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2)
+                expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2) if _diffusion_enabled else 0
                 rewrite_task = asyncio.create_task(
                     self._query_transformer.rewrite_query(query, context)
                 )
-                expand_task = asyncio.create_task(
-                    self._query_transformer.expand_query(query, n=expand_count)
-                )
-                rewritten, expanded = await asyncio.gather(
-                    rewrite_task, expand_task, return_exceptions=True
-                )
-                # 异常降级：rewrite 失败用原查询，expand 失败用 [query]
-                if isinstance(rewritten, Exception):
-                    logger.warning("memory.rewrite_failed", error=str(rewritten))
-                    rewritten = query
-                if isinstance(expanded, Exception):
-                    logger.warning("memory.expand_failed", error=str(expanded))
-                    expanded = [query]
-                if not rewritten:
-                    rewritten = query
-                if not expanded:
-                    expanded = [query]
-                if rewritten != query:
-                    logger.debug("memory.query_rewritten",
-                                 original=query[:50], rewritten=rewritten[:50])
-                # 合并：[rewritten] + [q for q in expanded if q != rewritten]
-                merged = [rewritten]
-                for q in expanded:
-                    if q != rewritten:
-                        merged.append(q)
-                queries = merged
-                if len(queries) > 1:
-                    logger.debug("memory.query_expanded", count=len(queries))
+                if expand_count > 0:
+                    expand_task = asyncio.create_task(
+                        self._query_transformer.expand_query(query, n=expand_count)
+                    )
+                    rewritten, expanded = await asyncio.gather(
+                        rewrite_task, expand_task, return_exceptions=True
+                    )
+                    # 异常降级：rewrite 失败用原查询，expand 失败用 [query]
+                    if isinstance(rewritten, Exception):
+                        logger.warning("memory.rewrite_failed", error=str(rewritten))
+                        rewritten = query
+                    if isinstance(expanded, Exception):
+                        logger.warning("memory.expand_failed", error=str(expanded))
+                        expanded = [query]
+                    if not rewritten:
+                        rewritten = query
+                    if not expanded:
+                        expanded = [query]
+                    if rewritten != query:
+                        logger.debug("memory.query_rewritten",
+                                     original=query[:50], rewritten=rewritten[:50])
+                    # 合并：[rewritten] + [q for q in expanded if q != rewritten]
+                    merged = [rewritten]
+                    for q in expanded:
+                        if q != rewritten:
+                            merged.append(q)
+                    queries = merged
+                    if len(queries) > 1:
+                        logger.debug("memory.query_expanded", count=len(queries))
+                else:
+                    # 精准检索：只执行 rewrite，不扩散
+                    rewritten = await rewrite_task
+                    if isinstance(rewritten, Exception):
+                        logger.warning("memory.rewrite_failed", error=str(rewritten))
+                        rewritten = query
+                    if not rewritten:
+                        rewritten = query
+                    if rewritten != query:
+                        logger.debug("memory.query_rewritten",
+                                     original=query[:50], rewritten=rewritten[:50])
+                    queries = [rewritten]
             else:
                 # 串行降级（原有逻辑）
                 rewritten = await self._query_transformer.rewrite_query(query, context)
                 if rewritten and rewritten != query:
                     queries = [rewritten]
                     logger.debug("memory.query_rewritten", original=query[:50], rewritten=rewritten[:50])
-                expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2)
+                expand_count = getattr(config, "QUERY_EXPAND_COUNT", 2) if _diffusion_enabled else 0
                 if expand_count > 0:
                     expanded = await self._query_transformer.expand_query(rewritten, n=expand_count)
                     if expanded and len(expanded) > 1:
@@ -1715,10 +1888,14 @@ class MemoryManager:
         if self._reranker and self._reranker.available and len(all_results) > k:
             try:
                 docs = [r.get("summary", "") for r in all_results]
-                reranked = await self._reranker.rerank(
-                    query=query,
-                    documents=docs,
-                    top_n=k,
+                # 阶段性超时保护：reranker 5s 超时，慢时降级到未排序结果
+                reranked = await asyncio.wait_for(
+                    self._reranker.rerank(
+                        query=query,
+                        documents=docs,
+                        top_n=k,
+                    ),
+                    timeout=5.0,
                 )
                 reranked_results = []
                 for item in reranked:
@@ -2045,7 +2222,8 @@ class MemoryManager:
         scope 非空时使用 scoped FTS 检索，防止跨用户记忆泄露。
         """
         try:
-            _topic_keywords = _extract_topic_keywords(query, top_n=2)
+            # jieba.analyse.extract_tags 是同步 CPU 操作，包到线程池避免阻塞事件循环
+            _topic_keywords = await asyncio.to_thread(_extract_topic_keywords, query, top_n=2)
             if not _topic_keywords:
                 return results
             _existing_ids = {str(r.get("id", "")) for r in results}
@@ -2146,7 +2324,7 @@ class MemoryManager:
             entity_names: list[str] = []
             for r in results[:2]:
                 summary = r.get("summary", "")
-                candidates = _extract_entities(summary)
+                candidates = await asyncio.to_thread(_extract_entities, summary)
                 for word in candidates:
                     if word not in ("用户", "助手", "人家"):
                         entity_names.append(word)
@@ -2180,10 +2358,19 @@ class MemoryManager:
         if not exchanges or len(exchanges) < 2:
             return
 
-        summary = self._generate_summary(exchanges)
+        # 同步操作移到线程池：防止事件循环被阻塞导致所有后台任务卡死
+        # 根因：encode_memory 中 _generate_summary/scan_threats/RuleBasedMemoryExtractor
+        # 等同步操作会阻塞事件循环，导致 asyncio.wait_for 定时器无法及时触发，
+        # 其他后台任务（flush_costs/auto_note/extract_instincts 等）同时卡 60+s
+        _t0 = time.time()
+        summary = await asyncio.to_thread(self._generate_summary, exchanges)
+        _t1 = time.time()
+        if _t1 - _t0 > 2:
+            logger.warning("memory.encode_slow_step", step="generate_summary",
+                           elapsed_ms=int((_t1 - _t0) * 1000))
 
         # 安全过滤
-        validation = validate_memory_content(summary)
+        validation = await asyncio.to_thread(validate_memory_content, summary)
         if validation:
             logger.warning("memory.safety_blocked", reason=validation)
             return
@@ -2192,14 +2379,23 @@ class MemoryManager:
         # （_has_duplicate 只在蒸馏时对 is_raw=0 生效，这里不调用）
 
         # 原有安全扫描（保留兼容）
-        from security.security import SecurityFilter
-        security = self._security_filter or SecurityFilter()
-        threat_result = security.scan_threats(summary, scope="strict")
+        # SecurityFilter() 创建涉及从 USB 盘加载 YAML（_load_patterns），
+        # scan_threats 涉及正则匹配，均为同步阻塞操作，移到线程池
+        _t2 = time.time()
+        def _security_scan():
+            from security.security import SecurityFilter
+            security = self._security_filter or SecurityFilter()
+            return security.scan_threats(summary, scope="strict")
+        threat_result = await asyncio.to_thread(_security_scan)
+        _t3 = time.time()
+        if _t3 - _t2 > 2:
+            logger.warning("memory.encode_slow_step", step="security_scan",
+                           elapsed_ms=int((_t3 - _t2) * 1000))
         if not threat_result.is_safe and threat_result.action == "block":
             logger.warning("memory.security_blocked", threat=threat_result.threat_type)
             return
 
-        importance = self._estimate_importance(exchanges, context)
+        importance = await asyncio.to_thread(self._estimate_importance, exchanges, context)
         emotion = context.get("emotion", {}).get("primary", "")
 
         # 规则提取增强重要性
@@ -2211,11 +2407,15 @@ class MemoryManager:
             elif msg.get("role") == "assistant":
                 assistant_msg += msg.get("content", "") + " "
         rule_extractor = RuleBasedMemoryExtractor()
-        rule_matches = rule_extractor.extract(user_msg, assistant_msg)
+        rule_matches = await asyncio.to_thread(rule_extractor.extract, user_msg, assistant_msg)
         if rule_matches:
             best_rule = max(rule_matches, key=lambda r: r["importance"])
             importance = max(importance, best_rule["importance"])
 
+        _t4 = time.time()
+        logger.info("memory.encode_pre_done",
+                    prep_ms=int((_t4 - _t0) * 1000),
+                    security_ms=int((_t3 - _t2) * 1000))
         try:
             # 写入候选审计表
             candidate_id = await self.memory.insert_consolidation_candidate(
@@ -2225,6 +2425,9 @@ class MemoryManager:
                 confidence=rule_matches[0]["confidence"] if rule_matches else 0.5,
                 importance=importance,
             )
+            _t5 = time.time()
+            logger.info("memory.encode_candidate_done",
+                        candidate_ms=int((_t5 - _t4) * 1000))
 
             # ADD-only: 写入 is_raw=1 的原始记忆（不去重，不覆盖）
             mem_id = await self.memory.insert_episodic_memory(
@@ -2234,6 +2437,9 @@ class MemoryManager:
                 scope=scope,
                 is_raw=1,
             )
+            _t6 = time.time()
+            logger.info("memory.encode_episodic_done",
+                        episodic_ms=int((_t6 - _t5) * 1000), mem_id=mem_id)
 
             # Initialize FSRS state for new memory
             now_ts = time.time()
@@ -2254,45 +2460,97 @@ class MemoryManager:
             if self._governance:
                 try:
                     await self._governance.record_initial_version(mem_id, summary, auto_commit=False)
+                    # CodeRabbit 复审修复：治理版本行必须在调度 _indexing_task 之前提交，
+                    # 否则异步任务失败时治理版本行可能永远不会被提交
+                    await self.memory.commit()
                 except Exception as e:
                     logger.debug("memory.governance_init_failed", error=str(e))
 
-            if self.vec and summary:
-                try:
-                    await self.vec.upsert(mem_id, summary)
-                except Exception as e:
-                    logger.debug("memory.initial_vec_upsert_failed", error=str(e))
+            # ── 索引层（vec + concept_graph + children）改为 fire-and-forget ──
+            # 根因：这些操作涉及 embed API（6.9s）+ auto_link 遍历全部节点 + insert_child_chunk 循环，
+            # 长时间占用共享 aiosqlite 连接，导致其他后台任务（flush_costs/auto_note/extract_instincts）
+            # 的 DB 操作排队等待 45s+ 超时。episodic memory 已写入，索引层是优化层，可异步补建。
+            # 改为 create_task 后，编码主流程立即继续到 entity/distill/save_state 并快速返回，释放 DB 连接。
+            async def _indexing_task() -> None:
+                _it0 = time.time()
+                # 1. vec_upsert（15s 超时）
+                if self.vec and summary:
+                    try:
+                        await asyncio.wait_for(self.vec.upsert(mem_id, summary), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("memory.encode_vec_upsert_timeout",
+                                       hint="vec_upsert 15s 超时，跳过向量索引（episodic 已保存）")
+                    except Exception as e:
+                        logger.debug("memory.initial_vec_upsert_failed", error=str(e))
+                _it1 = time.time()
+                if _it1 - _it0 > 3:
+                    logger.warning("memory.encode_slow_step", step="vec_upsert",
+                                   elapsed_ms=int((_it1 - _it0) * 1000))
 
-            # 双写：同时写入 concept_nodes
-            if self.concept_graph and mem_id:
-                try:
-                    await self.concept_graph.remember(summary, source_mem_id=mem_id)
-                except Exception as e:
-                    logger.debug("memory.concept_dual_write_failed", error=str(e))
+                # 2. concept_graph 双写（15s 超时）
+                if self.concept_graph and mem_id:
+                    try:
+                        await asyncio.wait_for(
+                            self.concept_graph.remember(summary, source_mem_id=mem_id),
+                            timeout=15.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("memory.encode_concept_timeout",
+                                       hint="concept_graph 15s 超时，跳过（lazy_migrate 可补）")
+                    except Exception as e:
+                        logger.debug("memory.concept_dual_write_failed", error=str(e))
+                _it2 = time.time()
+                if _it2 - _it1 > 3:
+                    logger.warning("memory.encode_slow_step", step="concept_graph",
+                                   elapsed_ms=int((_it2 - _it1) * 1000))
 
-            # ── 父子Chunk: 生成并写入子chunk ──
-            import config as _cfg
-            if getattr(_cfg, 'PARENT_CHILD_CHUNK_ENABLED', True):
-                try:
-                    children = self._split_into_children(exchanges, mem_id, summary)
-                    if children and self.vec:
-                        child_items = []
-                        for child in children:
-                            child_id = await self.memory.insert_child_chunk(
-                                parent_id=mem_id,
-                                content=child['content'],
-                                embed_content=child['embed_content'],
-                                chunk_type=child['chunk_type'],
-                                importance=importance * child['weight'],
-                                overlap_hash=child['overlap_hash'],
-                            )
-                            child_items.append((child_id, child['embed_content']))
-                        # 批量嵌入子chunk
-                        await self.vec.batch_upsert_children(child_items)
-                        logger.debug("memory.child_chunks_created",
-                                     parent_id=mem_id, count=len(children))
-                except Exception as e:
-                    logger.debug("memory.child_chunk_failed", error=str(e))
+                # 3. 父子Chunk: 生成并写入子chunk（整体 25s 超时保护）
+                import config as _cfg
+                if getattr(_cfg, 'PARENT_CHILD_CHUNK_ENABLED', True):
+                    try:
+                        async def _do_children():
+                            children = await asyncio.to_thread(
+                                self._split_into_children, exchanges, mem_id, summary)
+                            if not children or not self.vec:
+                                return
+                            # 批量写入：auto_commit=False 避免每条 commit 占用共享连接
+                            child_items = []
+                            for child in children:
+                                child_id = await self.memory.insert_child_chunk(
+                                    parent_id=mem_id,
+                                    content=child['content'],
+                                    embed_content=child['embed_content'],
+                                    chunk_type=child['chunk_type'],
+                                    importance=importance * child['weight'],
+                                    overlap_hash=child['overlap_hash'],
+                                    auto_commit=False,
+                                )
+                                child_items.append((child_id, child['embed_content']))
+                            # 统一提交一次
+                            await self.memory._conn.commit()
+                            # 向量索引（内层 20s 超时）
+                            try:
+                                await asyncio.wait_for(
+                                    self.vec.batch_upsert_children(child_items),
+                                    timeout=20.0)
+                            except asyncio.TimeoutError:
+                                logger.warning("memory.encode_children_timeout",
+                                               hint="batch_upsert_children 20s 超时，跳过子chunk索引")
+                            logger.debug("memory.child_chunks_created",
+                                         parent_id=mem_id, count=len(children))
+                        await asyncio.wait_for(_do_children(), timeout=25.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("memory.encode_children_section_timeout",
+                                       hint="子chunk生成+写入 25s 整体超时，跳过（episodic 已保存）")
+                    except Exception as e:
+                        logger.debug("memory.child_chunk_failed", error=str(e))
+                _it3 = time.time()
+                logger.info("memory.indexing_done",
+                            total_ms=int((_it3 - _it0) * 1000), mem_id=mem_id)
+
+            _idx_task = asyncio.create_task(_indexing_task())
+            _bg_tasks.add(_idx_task)
+            _idx_task.add_done_callback(_bg_tasks.discard)
+            _idx_task.add_done_callback(_log_task_exception)
 
             # ── mem0 SPEC: 异步触发实体提取+链接 ──
             if self.entity_extractor and self.entity_store:
@@ -2300,6 +2558,8 @@ class MemoryManager:
                     _entity_task = asyncio.create_task(
                         self._extract_and_link_entities(mem_id, summary, scope)
                     )
+                    _bg_tasks.add(_entity_task)
+                    _entity_task.add_done_callback(_bg_tasks.discard)
                     def _log_entity_exception(t: asyncio.Task) -> None:
                         if t.cancelled():
                             return
@@ -2316,9 +2576,9 @@ class MemoryManager:
                 role = msg.get("role", "")
                 content = msg.get("content", "")
                 if role == "user" and content:
-                    full_text_parts.append(f"用户说: {content}")
+                    full_text_parts.append(f"你说了：{content}")
                 elif role == "assistant" and content:
-                    full_text_parts.append(f"小妲: {content}")
+                    full_text_parts.append(f"我回应：{content}")
             full_text = "；".join(full_text_parts)[:3000]
 
             if self.distiller:
@@ -2329,6 +2589,8 @@ class MemoryManager:
                             full_text=full_text
                         )
                     )
+                    _bg_tasks.add(_distill_task)
+                    _distill_task.add_done_callback(_bg_tasks.discard)
                     def _log_distill_exception(t: asyncio.Task) -> None:
                         if t.cancelled():
                             return
@@ -2353,7 +2615,8 @@ class MemoryManager:
             if getattr(self, 'spreading_engine', None) and self.spreading_engine:
                 self.spreading_engine.clear_cache()
 
-            self._save_state_json(summary, importance, emotion)
+            # 同步文件写入移到线程池（USB 盘 I/O 可能慢）
+            await asyncio.to_thread(self._save_state_json, summary, importance, emotion)
 
             # fire-and-forget 后台 LLM 结构化提取（不阻塞主流程）
             # 用 GLM-4-9B-0414 提取实体/事件/决策/偏好，完成后更新记忆条目
@@ -2361,6 +2624,8 @@ class MemoryManager:
                 _enrich_task = asyncio.create_task(
                     self._enrich_memory_async(mem_id, exchanges)
                 )
+                _bg_tasks.add(_enrich_task)
+                _enrich_task.add_done_callback(_bg_tasks.discard)
                 def _log_enrich_exception(t: asyncio.Task) -> None:
                     if t.cancelled():
                         return
@@ -2375,10 +2640,18 @@ class MemoryManager:
             logger.warning("memory.encode_failed", error=str(e))
 
         if self.kg and summary:
+            # KG 提取改为 fire-and-forget：auto_extract_and_merge 内部调用 LLM（10s+8s 超时）
+            # + DB merge 操作，直接 await 会阻塞主编码流程 10-20s。
+            # 知识图谱是增强层，可异步补建，不应阻塞记忆编码主流程。
             try:
-                await self.kg.auto_extract_and_merge(summary)
+                _kg_task = asyncio.create_task(self.kg.auto_extract_and_merge(summary))
+                # 强引用：与索引/实体/蒸馏任务一致加入 _bg_tasks，
+                # 否则任务仅由局部变量持有，可能在完成前被 GC 回收
+                _bg_tasks.add(_kg_task)
+                _kg_task.add_done_callback(_bg_tasks.discard)
+                _kg_task.add_done_callback(_log_task_exception)
             except Exception as e:
-                logger.debug("memory.kg_extract_failed", error=str(e))
+                logger.debug("memory.kg_spawn_failed", error=str(e))
 
     async def _extract_and_link_entities(self, memory_id: int, summary: str,
                                           scope: Any) -> None:
@@ -2732,10 +3005,14 @@ class MemoryManager:
                 content = re.sub(r'\[\w+/stickers:[^\]]*\]', '', content)
                 content = content.strip()
             if role == "user" and content:
-                parts.append(f"用户说: {content[:400]}")
+                # P0 修复（数据库原文蹦出 + 旁观者视角根因）：
+                # 原格式 "用户说: xxx" 是数据库字段名格式，LLM 回复时会模仿。
+                # 改为第一人称叙事格式 "你说了：xxx"（用户=你），避免 LLM 直接引用 "用户说:"。
+                parts.append(f"你说了：{content[:400]}")
             elif role == "assistant" and content:
                 # 标记为回复内容，避免被误认为事实性记忆
-                parts.append(f"小妲回复: {content[:400]}")
+                # 第一人称（小妲=我）让 LLM 把记忆当成自己的经历，而非旁观者复述
+                parts.append(f"我回应：{content[:400]}")
 
         total_budget = 1500
         joined = "；".join(parts)

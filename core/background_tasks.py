@@ -19,6 +19,8 @@ from typing import Any, TYPE_CHECKING
 
 from loguru import logger
 
+from utils.metrics import metrics
+
 if TYPE_CHECKING:
     from db.database import DatabaseManager
     from memory.memory_manager import MemoryManager
@@ -42,18 +44,41 @@ def _on_bg_task_done(task: asyncio.Task) -> None:
         logger.warning("bg.task_failed error={} task={}", str(exc), task.get_name())
 
 
-def _spawn(coro: Any) -> None:
+def _spawn(coro: Any, timeout: float | None = None) -> None:
     """创建 fire-and-forget 后台任务，自动从 _bg_tasks 中移除已完成的任务。
 
     包含耗时监控：任务完成时记录执行时长，超过 30s 发出告警日志。
     包含 loop 保护：同步上下文调用时降级日志而非崩溃。
+
+    超时约定（默认 None，即不超时）：
+        调用方必须显式判断协程性质后决定是否传 timeout：
+        - 纯网络/纯计算、可安全中断的协程（如 LLM 抽取后只写文件、
+          纯 embed 调用）：显式传 timeout=45，防止卡死阻塞事件循环。
+        - 涉及 DB 写入（尤其 auto_commit=False 批次）的协程**不传**。
+          根因：超时取消只能中断 await 点，若取消落在 commit 之前，
+          已 INSERT 但未 COMMIT 的事务会遗留在连接上，被后续任意一次
+          无关 commit 意外提交（产生脏数据），或随连接关闭被回滚丢失
+          （数据静默消失）。这两种结局都比"任务卡 45s"更难排查。
+
+    历史背景：auto_note_after_message 曾卡 152s，_encode_task 60s 超时但
+        实际 86.9s（内部同步操作不响应 CancelledError）。外层超时只能限制
+        卡死时间，无法保证业务一致性，故默认改为 None，由调用方按需启用。
+        注意：timeout 只能取消协程的 await 点，同步阻塞需通过 to_thread 规避。
     """
     task_name = getattr(coro, '__name__', coro.__class__.__name__)
     start_time = time.time()
 
     async def _wrapped():
         try:
-            await coro
+            if timeout is None:
+                await coro
+            else:
+                await asyncio.wait_for(coro, timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning("bg.task_timeout name={} timeout={:.0f}s",
+                           task_name, timeout)
+        except Exception as e:
+            logger.warning("bg.task_failed name={} error={}", task_name, str(e)[:200])
         finally:
             elapsed = time.time() - start_time
             if elapsed > 30:
@@ -98,6 +123,11 @@ class BackgroundTaskManager:
         self.instinct_manager = instinct_manager
         self._conversation_count = 0
         self._conv_count_lock = asyncio.Lock()
+        # 周期任务并发去重：记录正在运行的 task_name
+        # 根因：_should_run 只读 cron_last_run，而 last_run 在任务完成后才写入，
+        # 两条消息并发进入调度时都会判定"该运行"，导致梦境归档/记忆蒸馏/
+        # 概念边补建重复执行（重复写入 + 额外 LLM 调用 + DB I/O 争抢）
+        self._running_scheduled: set[str] = set()
 
     def start_background_task(self, coro: Any) -> None:
         """启动一个 fire-and-forget 后台任务。"""
@@ -165,20 +195,40 @@ class BackgroundTaskManager:
         """
         any_write_ok = False
         # 1. 对话日志（不立即 commit）
-        try:
-            await self.db.insert_conversation_log(
-                user_id=user_id,
-                source=source,
-                user_message=user_input,
-                assistant_reply=reply,
-                emotion_label=emotion.get("primary", ""),
-                model_used=model_used,
-                session_id=session_id,
-                auto_commit=False,
-            )
-            any_write_ok = True
-        except (OSError, ValueError, RuntimeError) as e:
-            logger.warning("bg.conversation_log_failed", error=str(e))
+        # P0 修复（Task 3.1）：空回复不入库，避免上下文割裂
+        # 根因：call_failed 时 reply="" 仍写入 conversation_logs，
+        #       agent_context.py:792-801 注入历史时出现"用户说了 → 小妲没回"的割裂
+        # 修复：空回复跳过 insert_conversation_log，仍记录到 errors 表便于排查
+        _is_reply_empty = not reply or not reply.strip()
+        if _is_reply_empty:
+            logger.info("bg.skip_empty_reply",
+                        user_input_preview=user_input[:80] if user_input else "",
+                        source=source, session_id=session_id,
+                        model_used=model_used)
+            # 空回复不入 conversation_logs，仅记录到 journal 便于排查
+            # （errors 表结构不同，避免引入复杂依赖；journal 日志已足够追溯）
+        else:
+            # P0 修复（greeting 占位符污染根因）：
+            # greeting_scheduler 传 user_input="（主动问候）" 占位符，被入库为
+            # conversation_logs.user_message。用户浏览历史时看到系统占位符，且
+            # 即使 _pollution_markers 过滤了历史注入，DB 仍有脏数据。
+            # 修复：入库前把占位符替换为空串，保留 assistant_reply（问候内容）。
+            _GREETING_PLACEHOLDERS = ("（主动问候）", "(主动问候)")
+            _logged_user_input = "" if user_input in _GREETING_PLACEHOLDERS else user_input
+            try:
+                await self.db.insert_conversation_log(
+                    user_id=user_id,
+                    source=source,
+                    user_message=_logged_user_input,
+                    assistant_reply=reply,
+                    emotion_label=emotion.get("primary", ""),
+                    model_used=model_used,
+                    session_id=session_id,
+                    auto_commit=False,
+                )
+                any_write_ok = True
+            except (OSError, ValueError, RuntimeError) as e:
+                logger.warning("bg.conversation_log_failed", error=str(e))
 
         # 2. 会话更新（不立即 commit）
         if session_id:
@@ -198,7 +248,8 @@ class BackgroundTaskManager:
         # 3. 记忆编码（独立，不纳入批量提交，改为 _spawn 避免阻塞持久化任务）
         # 根因：try_idle_encode 涉及 LLM 调用，可能需要几十秒，await 会阻塞整个 _run_persistence_tasks
         # 修复：改为 _spawn（fire-and-forget），与其他后台任务（notebook/instinct）一致
-        if self.memory and len(self.context.history) >= 4:
+        _hist_len = len(self.context.history) if self.context else 0
+        if self.memory and _hist_len >= 4:
             async def _encode_task():
                 try:
                     pre_compressed = await self.context.flush_pre_compressed_buffer()
@@ -208,19 +259,26 @@ class BackgroundTaskManager:
                             if msg.get("role") in ("user", "assistant") and msg.get("content"):
                                 exchanges.insert(0, {"role": msg["role"], "content": msg["content"][:500]})
                     ctx = {"exchanges": exchanges, "emotion": emotion}
+                    logger.info("bg.memory_encode_start", history_len=_hist_len,
+                                exchanges=len(exchanges))
                     # 修复 P2 Bug 11: _encode_task 慢任务（曾 134s）
                     # 根因：try_idle_encode 涉及多次 LLM + embed 调用，无整体超时保护
-                    # 60s 超时：编码单次对话 5-15s，60s 足够；超时则放弃本次编码
+                    # 90s 超时：embed API 慢时各步骤（vec_upsert 15s + concept 15s + children 20s）
+                    # 总和可达 50s+，加上 summary/security/cleanup 需要更多余量。
+                    # 各步骤已有独立超时保护，90s 整体超时是最后兜底。
                     # （记忆编码是后台任务，不影响主响应）
                     await asyncio.wait_for(
                         self.memory.try_idle_encode(ctx, force=True),
-                        timeout=60.0,
+                        timeout=90.0,
                     )
                 except asyncio.TimeoutError:
-                    logger.warning("bg.memory_encode_timeout", hint="记忆编码超时 60s，跳过本次")
+                    logger.warning("bg.memory_encode_timeout", hint="记忆编码超时 90s，跳过本次")
                 except Exception as e:
                     logger.warning("bg.memory_encode_failed", error=str(e))
-            _spawn(_encode_task())
+            _spawn(_encode_task(), timeout=120.0)  # 内部已有 90s 超时，外层 120s 兜底
+        else:
+            logger.debug("bg.memory_encode_skipped", reason="history_too_short",
+                         history_len=_hist_len, need=4)
 
     async def _run_manager_tasks(
         self,
@@ -260,6 +318,20 @@ class BackgroundTaskManager:
             if should_curate:
                 _spawn(self.instinct_manager.curator_run())
 
+    def _spawn_scheduled(self, task_name: str, coro: Any) -> None:
+        """启动 _should_run 占位过的周期任务，完成后释放占位。
+
+        必须与 _should_run 配对使用：_should_run 返回 True 时已占位，
+        这里保证无论成功/失败/超时都会释放，避免任务永久无法再次调度。
+        """
+        async def _release_after(inner: Any) -> None:
+            try:
+                await inner
+            finally:
+                self._running_scheduled.discard(task_name)
+
+        _spawn(_release_after(coro))
+
     async def _run_scheduled_tasks(self) -> None:
         """会话归档、梦境归档、缓存预热、记忆蒸馏等定时任务。"""
         # 8. 会话自动归档
@@ -268,14 +340,14 @@ class BackgroundTaskManager:
         # 9. 梦境归档（每日一次）
         try:
             if await self._should_run("dream_archive", interval_hours=24):
-                _spawn(self._dream_archive_task())
+                self._spawn_scheduled("dream_archive", self._dream_archive_task())
         except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.dream_archive_schedule_failed", error=str(e))
 
         # 10. 嵌入缓存预热（每 5 分钟）
         try:
             if await self._should_run("warm_embedding_cache", interval_hours=5 / 60):
-                _spawn(self._warm_embedding_cache())
+                self._spawn_scheduled("warm_embedding_cache", self._warm_embedding_cache())
         except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.warm_embedding_cache_schedule_failed", error=str(e))
 
@@ -284,7 +356,7 @@ class BackgroundTaskManager:
             import config
             if getattr(config, "MEMORY_DISTILL_ENABLED", False):
                 if await self._should_run("memory_distill", interval_hours=6):
-                    _spawn(self._distill_memories_task())
+                    self._spawn_scheduled("memory_distill", self._distill_memories_task())
         except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.memory_distill_schedule_failed", error=str(e))
 
@@ -294,16 +366,28 @@ class BackgroundTaskManager:
         try:
             if self.learning_manager and await self._should_run("learning_promote", interval_hours=0.5):
                 from core.preference_pipeline import get_preference_pipeline
-                _spawn(get_preference_pipeline().check_promotion(self.learning_manager))
+                self._spawn_scheduled(
+                    "learning_promote",
+                    get_preference_pipeline().check_promotion(self.learning_manager))
         except (ImportError, OSError, RuntimeError) as e:
+            # 释放占位：_should_run 已预约但 setup 失败时不释放会导致永久拒绝
+            self._running_scheduled.discard("learning_promote")
             logger.warning("bg.learning_promote_schedule_failed", error=str(e))
 
         # 13. 邮箱 OAuth token 定期刷新（每 2 小时，防止 access/refresh token 过期）
         try:
             if await self._should_run("mail_token_refresh", interval_hours=2):
-                _spawn(self._refresh_mail_token_task())
+                self._spawn_scheduled("mail_token_refresh", self._refresh_mail_token_task())
         except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.mail_token_refresh_schedule_failed", error=str(e))
+
+        # 14. 概念图边补建（每 30 分钟，auto_link 跳过的边由这里补建）
+        try:
+            if await self._should_run("concept_link_curator", interval_hours=0.5):
+                self._spawn_scheduled("concept_link_curator",
+                                      self._concept_link_curator_task())
+        except (ImportError, OSError, RuntimeError) as e:
+            logger.warning("bg.concept_link_curator_schedule_failed", error=str(e))
 
     async def _auto_archive_sessions(self) -> None:
         try:
@@ -326,14 +410,30 @@ class BackgroundTaskManager:
     _consecutive_failures: dict[str, int] = {}
 
     async def _should_run(self, task_name: str, interval_hours: float) -> bool:
-        """检查周期任务是否应运行（基于 cron_last_run 表）"""
+        """检查周期任务是否应运行（基于 cron_last_run 表）。
+
+        返回 True 时会把 task_name 原子加入 _running_scheduled 占位，
+        调用方必须通过 _spawn_scheduled() 启动任务以保证占位被释放。
+        """
+        # 并发去重：已有同名任务在运行则直接跳过，避免重复执行
+        if task_name in self._running_scheduled:
+            logger.debug("bg.scheduled_task_already_running name={}", task_name)
+            return False
         try:
             last_run = await self.db.get_cron_last_run(task_name)
             if last_run is None:
+                # 二次检查：await 期间可能已有并发调用占位（与下方超时分支一致）
+                if task_name in self._running_scheduled:
+                    return False
+                self._running_scheduled.add(task_name)
                 return True
             result = (time.time() - last_run) >= interval_hours * 3600
             if result:
                 self._consecutive_failures.pop(task_name, None)
+                # 二次检查：await 期间可能已有并发调用占位
+                if task_name in self._running_scheduled:
+                    return False
+                self._running_scheduled.add(task_name)
             return result
         except (OSError, RuntimeError):
             count = self._consecutive_failures.get(task_name, 0) + 1
@@ -397,6 +497,58 @@ class BackgroundTaskManager:
         except (OSError, RuntimeError) as e:
             logger.warning("bg.memory_distill_task_failed", error=str(e))
 
+    async def _concept_link_curator_task(self) -> None:
+        """概念图边补建 curator — 为 auto_link 跳过的节点批量补建 co-occurrence 边。
+
+        当存活概念节点 >200 时，实时 auto_link 会被跳过以避免阻塞事件循环。
+        本任务每 30 分钟运行一次，在后台为无边节点补建边关系。
+
+        N10 根因修复（2026-07-25 17:48-17:51 生产事故根因）：
+        原 batch_size=30 在 1400+ 存活节点场景下，batch_link_recent 需加载
+        全部节点 keys + 顺序写大量边，在 USB 盘上耗时 >45s（日志显示全天
+        每次 bg.task_timeout 45s）。这饱和了 USB I/O 带宽，导致同时段 recall
+        工具的 aiosqlite 查询被饿死 60s+ 才超时，触发降级雪崩。
+        修复：batch_size 30→5（中间值）→ 最终定为 10。单次处理 10 个无边节点，
+        配合 max_edges_per_run=60 限制写入量，I/O 占用控制在 ~10s 内，给 recall
+        等用户路径留出 DB 带宽。（CodeRabbit #4: 文档与最终值 batch_size=10 对齐）
+        """
+        try:
+            if not self.memory or not getattr(self.memory, "concept_graph", None):
+                await self.db.set_cron_last_run("concept_link_curator")
+                return
+            try:
+                # N10: batch_size 30→10（I2 复审调整），配合 batch_link_recent
+                # 内部的 max_edges_per_run=60 限制写入量，确保单次 curator I/O
+                # 占用 <10s，不饿死 recall 等用户路径。
+                # batch_size 只控制查询多少个无边节点（SELECT，I/O 远小于写入），
+                # 真正的 I/O 限制器是 max_edges_per_run=60（限制 INSERT 量）。
+                # batch_size=5 补建速度（240/小时）可能跟不上活跃对话的新节点
+                # 创建；提到 10（480/小时）更安全，仍由 max_edges_per_run 兜底。
+                linked = await asyncio.wait_for(
+                    self.memory.concept_graph.db.batch_link_recent(batch_size=10),
+                    timeout=30.0,
+                )
+                if linked > 0:
+                    logger.info("concept_graph.curator_linked", edges=linked)
+            except asyncio.TimeoutError:
+                # CodeRabbit #5→#A 修正：_run_scheduled_tasks 由每次对话触发
+                # （run_post_message_tasks → _run_scheduled_tasks），_should_run 用
+                # last_run 判断 30 分钟间隔。若超时后不更新 last_run，下次对话会
+                # 立即重试 curator → 再次超时 → USB I/O 雪崩（与 N10 修复目标冲突）。
+                # 故超时也更新 last_run，让 30 分钟内不重试；未完成节点由下次
+                # curator 自然拾起（查询的是"无边节点"，未完成的仍在列表里）。
+                #
+                # I1 观测增强：超时增加 metrics 计数。dashboard 上若
+                # `concept_graph.curator_timeout` 频率上升，说明 I/O 压力回归
+                # （N10 修复目标：单次 curator I/O <10s，30s 超时是最后防线），
+                # 值班可通过 metrics 仪表盘快速感知并干预，避免再次饿死 recall。
+                logger.warning("concept_graph.curator_timeout",
+                               hint="batch_link 30s 超时，30 分钟后下轮重试本批未完成节点")
+                metrics.inc("concept_graph.curator_timeout")
+            await self.db.set_cron_last_run("concept_link_curator")
+        except (OSError, RuntimeError) as e:
+            logger.warning("bg.concept_link_curator_failed", error=str(e))
+
     async def _refresh_mail_token_task(self) -> None:
         """定期刷新邮箱 OAuth token — 每 2 小时调用一次 message +list 触发 auto_refresh，
         防止 access/refresh token 因长期不使用而过期。"""
@@ -451,3 +603,81 @@ class BackgroundTaskManager:
             if not task.done():
                 task.cancel()
         _bg_tasks.clear()
+
+
+# ── 事件循环阻塞 watchdog ──────────────────────────────────
+# 根因：日志显示后台任务集体卡 257-265s（_background_tasks/curator_run/
+#   extract_instincts/auto_note_after_message 同时报 task_slow elapsed=257.9s），
+#   _spawn 的 timeout=45s 无法取消（asyncio.wait_for 只能取消 await 点，
+#   同步阻塞不响应 CancelledError）。说明主事件循环被某个同步操作冻结。
+# 监控：每 5 秒心跳，若延迟 >10s 则打印所有线程栈定位阻塞点。
+_watchdog_task: asyncio.Task | None = None
+
+
+async def event_loop_watchdog() -> None:
+    """事件循环心跳监控：检测同步阻塞并打印线程栈定位根因。
+
+    每 5 秒打个心跳，如果实际延迟超过 10 秒，说明事件循环被同步操作阻塞
+    （如 sqlite 同步 commit、CPU 密集计算、C 扩展 GIL）。此时打印所有线程栈，
+    帮助定位阻塞点。
+    """
+    import sys
+    import traceback as _tb
+    _CHECK_INTERVAL = 5.0
+    _BLOCK_THRESHOLD = 10.0  # 延迟超过 10 秒告警
+    last = time.time()
+    _last_warn = 0.0
+    while True:
+        try:
+            await asyncio.sleep(_CHECK_INTERVAL)
+        except asyncio.CancelledError:
+            return
+        now = time.time()
+        lag = now - last - _CHECK_INTERVAL
+        last = now
+        if lag <= _BLOCK_THRESHOLD:
+            continue
+        # 限频：同一阻塞事件 5 分钟内只告警一次
+        if _last_warn > 0 and now - _last_warn < 300:
+            continue
+        _last_warn = now
+        logger.error(
+            "event_loop.blocked lag={:.1f}s threshold={:.0f}s "
+            "hint=事件循环被同步操作阻塞，打印线程栈定位根因",
+            lag, _BLOCK_THRESHOLD,
+        )
+        try:
+            for tid, frame in sys._current_frames().items():
+                stack_lines = _tb.format_stack(frame)
+                # 只打印最后 40 行，避免日志爆炸
+                tail = stack_lines[-40:] if len(stack_lines) > 40 else stack_lines
+                logger.error(
+                    "event_loop.blocked_thread tid={} stack_tail=\n{}",
+                    tid, ''.join(tail),
+                )
+        except Exception as e:
+            logger.error("event_loop.watchdog_dump_failed error={}", str(e))
+
+
+def start_event_loop_watchdog() -> None:
+    """启动事件循环 watchdog（幂等，重复调用安全）。"""
+    global _watchdog_task
+    if _watchdog_task is not None and not _watchdog_task.done():
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.warning("event_loop.watchdog_no_loop")
+        return
+    _watchdog_task = loop.create_task(event_loop_watchdog())
+    _bg_tasks.add(_watchdog_task)
+    _watchdog_task.add_done_callback(_bg_tasks.discard)
+    logger.info("event_loop.watchdog_started interval=5s threshold=10s")
+
+
+def stop_event_loop_watchdog() -> None:
+    """停止事件循环 watchdog。"""
+    global _watchdog_task
+    if _watchdog_task is not None and not _watchdog_task.done():
+        _watchdog_task.cancel()
+    _watchdog_task = None

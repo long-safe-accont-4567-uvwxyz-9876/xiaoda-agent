@@ -231,6 +231,22 @@ export const api = {
     return body.data as { url: string; name: string }
   },
 
+  // P0 新增（Task 1.9）：文档上传 — 与图片上传分离
+  // 文档（PDF/DOCX 等）走 document_reader 工具，而非 vision API
+  uploadDoc: async (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    const token = localStorage.getItem('token')
+    const res = await fetch(`${BASE}/chat/upload-doc`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: formData,
+    })
+    const body = await res.json()
+    if (!res.ok || !body.ok) throw new Error(body?.error?.message || 'Upload failed')
+    return body.data as { url: string; name: string; path: string; ext: string }
+  },
+
   speechToText: async (file: File) => {
     const formData = new FormData()
     formData.append('file', file)

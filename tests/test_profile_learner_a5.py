@@ -17,6 +17,9 @@ class TestProfileLearnerFormatInjection(unittest.TestCase):
         根因：_INSIGHT_PROMPT_TEMPLATE.format(conversation_summary=...) 中
               conversation_summary 包含 {} 被 .format() 误解析为占位符
         症状：IndexError: Replacement index 0 out of range for positional args tuple
+
+        修复方式：build_insight_prompt 使用 str.replace 而非 .format()，
+        用户消息中的 {} 无需转义，原样保留在 prompt 中。
         """
         recent = [
             {"role": "user", "content": "帮我看看这段 Python 代码 print({}) 有问题吗"},
@@ -25,6 +28,7 @@ class TestProfileLearnerFormatInjection(unittest.TestCase):
         # 修复前会抛出 IndexError
         prompt = UserProfileLearner.build_insight_prompt(recent, xp_level=1)
         self.assertIsNotNone(prompt)
+        # 使用 str.replace 而非 .format()，{} 原样保留
         self.assertIn("print({})", prompt, "用户消息中的 {} 应原样保留在 prompt 中")
 
     def test_build_prompt_with_named_placeholder_in_message(self):
@@ -54,7 +58,7 @@ class TestProfileLearnerFormatInjection(unittest.TestCase):
         ]
         prompt = UserProfileLearner.build_insight_prompt(recent, xp_level=2)
         self.assertIsNotNone(prompt)
-        # 原始 {} 应保留
+        # 使用 str.replace 而非 .format()，原始 {} 原样保留
         self.assertIn("{}", prompt)
 
 

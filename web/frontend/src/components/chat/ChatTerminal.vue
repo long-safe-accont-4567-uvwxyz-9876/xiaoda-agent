@@ -221,7 +221,13 @@ function createSession(shell: string) {
 function mountTerminal(session: TermSession, shell: string, retries = 0) {
   const container = document.getElementById(`term-viewport-${session.id}`)
   if (!container) {
-    if (retries >= 20 || !session.alive) return  // 超过 20 次或会话已关闭则放弃
+    if (retries >= 20 || !session.alive) {
+      // 超过 20 次仍未找到容器：记录告警，便于排查挂载竞态（会话仍存活时才告警）
+      if (retries >= 20 && session.alive) {
+        console.warn('[ChatTerminal] mountTerminal: container not found after 20 retries', session.id)
+      }
+      return
+    }
     setTimeout(() => mountTerminal(session, shell, retries + 1), 50)
     return
   }

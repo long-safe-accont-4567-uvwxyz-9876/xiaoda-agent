@@ -70,8 +70,8 @@ class EntityExtractor:
         if not text or not text.strip():
             return []
 
-        # 第1层：jieba + 规则快抽
-        entities = self._rule_based_extract(text)
+        # 第1层：jieba + 规则快抽（同步 CPU 操作，包到线程池避免阻塞事件循环）
+        entities = await asyncio.to_thread(self._rule_based_extract, text)
 
         # 第2层：低置信度时触发 LLM 精抽
         # 触发条件：jieba 提取 <2 个实体，或 importance > 0.7

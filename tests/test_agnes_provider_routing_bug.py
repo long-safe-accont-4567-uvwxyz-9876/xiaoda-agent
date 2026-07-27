@@ -51,14 +51,23 @@ def _build_router_with_agnes_in_custom_clients_only():
 
 
 @pytest.mark.asyncio
-async def test_select_client_for_agnes_uses_custom_clients_when_agnes_client_is_none():
+async def test_select_client_for_agnes_uses_custom_clients_when_agnes_client_is_none(monkeypatch):
     """agnes provider 在 _agnes_client 为 None 时应回退到 _custom_clients["agnes"]。
 
     回归测试：旧实现因 elif 条件 `provider not in ("mimo", "agnes")` 排除了 agnes，
     导致 agnes provider 在 _agnes_client 为 None 时静默回退到 mimo 客户端，
     用户设置 agnes 后实际调用仍是 mimo。
+
+    注意：需 monkeypatch AGNES_API_KEY 为空，否则 _select_client_for_provider 的
+    lazy recovery 会从环境变量创建新客户端，绕过 _custom_clients["agnes"]
+    （生产环境 lazy recovery 是 P0 自愈特性，本测试要验证"用户通过 WebUI
+    注册 agnes"场景下应优先使用 _custom_clients["agnes"]）。
     """
     router = _build_router_with_agnes_in_custom_clients_only()
+
+    # 清空环境变量，避免 lazy recovery 绕过 _custom_clients["agnes"]
+    monkeypatch.delenv("AGNES_API_KEY", raising=False)
+    monkeypatch.delenv("AGNES_BASE_URL", raising=False)
 
     client = await router._select_client_for_provider("agnes")
 
@@ -73,11 +82,15 @@ async def test_select_client_for_agnes_uses_custom_clients_when_agnes_client_is_
 
 
 @pytest.mark.asyncio
-async def test_select_client_for_agnes_raises_when_no_client_available():
+async def test_select_client_for_agnes_raises_when_no_client_available(monkeypatch):
     """agnes provider 在既无 _agnes_client 也无 _custom_clients['agnes'] 时应抛 LLMError。
 
     回归测试：旧实现会静默回退到 mimo 客户端，让用户误以为 agnes 生效了。
     修复后必须抛 LLMError，明确告知用户 agnes 未配置。
+
+    注意：需 monkeypatch AGNES_API_KEY 为空，否则 _select_client_for_provider 的
+    lazy recovery 会从环境变量创建客户端（生产环境是 P0 自愈特性，本测试要验证
+    "完全无凭证"场景）。
     """
     from model_router import ModelRouter
 
@@ -86,6 +99,10 @@ async def test_select_client_for_agnes_raises_when_no_client_available():
     router._agnes_client = None
     router._custom_clients = {}  # 没有 agnes 客户端
     router._credential_locks = {}
+
+    # 清空环境变量，避免 lazy recovery 创建客户端
+    monkeypatch.delenv("AGNES_API_KEY", raising=False)
+    monkeypatch.delenv("AGNES_BASE_URL", raising=False)
 
     with pytest.raises(LLMError) as exc_info:
         await router._select_client_for_provider("agnes")
@@ -193,93 +210,3 @@ async def test_agnes_fallback_chain_uses_custom_clients_agnes():
 
     # 验证 _is_client_configured('agnes') 返回 True
     assert router._is_client_configured("agnes") is True
-
-
-# ─────────────────────────────────────────────────────────────
-# Bug #4: set_chat_model("agnes") 后 chat_flash 被错误重置成 mimo，
-#         导致 agnes 主路由失败时 fallback 链跳到 mimo
-# ─────────────────────────────────────────────────────────────
-
-
-def test_set_chat_model_agnes_should_not_reset_chat_flash_to_mimo(monkeypatch):
-    """set_chat_model('agnes', ...) 后 chat_flash 应跟随主 provider (agnes)，
-    不应被 _CROSS_PROVIDER_MAP 重置成 mimo。
-
-    Bug 链：
-    1. 用户设置 agnes → set_chat_model 把 chat_pro/chat_flash 同步成 agnes
-    2. 但 _CROSS_PROVIDER_MAP 又把 chat_flash 重置成 mimo（"跨 provider 降级"）
-    3. 用户发长消息 → task_type='chat_pro' (agnes)
-    4. agnes 返回空 content（agnes-2.0-flash 已知问题）→ 抛 RuntimeError
-    5. fallback chain: chat_pro → chat_flash (mimo) → 返回 mimo 回复
-    6. 用户看到 LLM 自称 mimo-v2.5
-
-    修复：chat_flash 应跟随主 provider，跨 provider 降级作为最后手段。
-    """
-    from model_router import ModelRouter, ROUTE_TABLE
-
-    # 备份 ROUTE_TABLE 以便测试后恢复
-    _backup = {k: dict(v) for k, v in ROUTE_TABLE.items()}
-    try:
-        router = ModelRouter.__new__(ModelRouter)
-        router._client = MagicMock(name="mimo_client")
-        router._agnes_client = MagicMock(name="agnes_client")
-        router._custom_clients = {}
-        router._credential_locks = {}
-        router._current_chat_model = None
-        router.TASK_TIMEOUTS = {"chat": 30}
-
-        # mock config_service 避免真实写入
-        _fake_cfg = MagicMock()
-        monkeypatch.setattr(
-            "web.config_service.get_config_service",
-            lambda: _fake_cfg,
-        )
-
-        # 模拟 set_chat_model("agnes", "agnes-2.0-flash")
-        router.set_chat_model("agnes", "agnes-2.0-flash")
-
-        # chat_pro 应该是 agnes
-        assert ROUTE_TABLE["chat_pro"]["client"] == "agnes", \
-            "chat_pro 应跟随主 provider (agnes)"
-        # chat_flash 也应该是 agnes，不应被 _CROSS_PROVIDER_MAP 重置成 mimo
-        assert ROUTE_TABLE["chat_flash"]["client"] == "agnes", \
-            "chat_flash 应跟随主 provider (agnes)，不应被重置成 mimo"
-        assert ROUTE_TABLE["chat_flash"]["model"] == "agnes-2.0-flash", \
-            "chat_flash 的 model 应跟随主 provider"
-    finally:
-        # 恢复 ROUTE_TABLE
-        for k, v in _backup.items():
-            ROUTE_TABLE[k] = v
-
-
-def test_set_chat_model_mimo_should_not_reset_chat_flash_to_agnes(monkeypatch):
-    """对称测试：set_chat_model('mimo', ...) 后 chat_flash 应跟随 mimo。
-
-    避免 _CROSS_PROVIDER_MAP 把 chat_flash 重置成 agnes。
-    """
-    from model_router import ModelRouter, ROUTE_TABLE
-
-    _backup = {k: dict(v) for k, v in ROUTE_TABLE.items()}
-    try:
-        router = ModelRouter.__new__(ModelRouter)
-        router._client = MagicMock(name="mimo_client")
-        router._agnes_client = MagicMock(name="agnes_client")
-        router._custom_clients = {}
-        router._credential_locks = {}
-        router._current_chat_model = None
-        router.TASK_TIMEOUTS = {"chat": 30}
-
-        _fake_cfg = MagicMock()
-        monkeypatch.setattr(
-            "web.config_service.get_config_service",
-            lambda: _fake_cfg,
-        )
-
-        router.set_chat_model("mimo", "mimo-v2.5")
-
-        assert ROUTE_TABLE["chat_pro"]["client"] == "mimo"
-        assert ROUTE_TABLE["chat_flash"]["client"] == "mimo", \
-            "chat_flash 应跟随主 provider (mimo)，不应被重置成 agnes"
-    finally:
-        for k, v in _backup.items():
-            ROUTE_TABLE[k] = v

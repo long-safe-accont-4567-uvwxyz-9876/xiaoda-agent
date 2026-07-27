@@ -22,26 +22,46 @@ def test_agent_context():
     assert msgs[-1]["role"] == "user"
 
 def test_tool_registry():
-    from tool_engine.tool_registry import register_tool, to_openai_tools, clear_tools
-    clear_tools()
-    @register_tool(name="smoke_test", description="test", schema={"type":"object","properties":{"q":{"type":"string"}}}, max_frequency=10)
-    def t(q): return q
-    tools = to_openai_tools()
-    assert any(t["function"]["name"] == "smoke_test" for t in tools)
-    clear_tools()
+    from tool_engine.tool_registry import (register_tool, to_openai_tools,
+                                            clear_tools, get_all_tool_dicts,
+                                            invalidate_schema_cache)
+    import tool_engine.tool_registry as _tr
+    # 保存现有工具注册表，测试结束后恢复。
+    # 原 clear_tools() 会清空全局 _tools，污染后续依赖工具注册的测试
+    # （如 test_tool_executor_workspace::TestExecuteIntegration 找不到 read_file）。
+    saved = get_all_tool_dicts()
+    try:
+        clear_tools()
+        @register_tool(name="smoke_test", description="test", schema={"type":"object","properties":{"q":{"type":"string"}}}, max_frequency=10)
+        def t(q): return q
+        tools = to_openai_tools()
+        assert any(t["function"]["name"] == "smoke_test" for t in tools)
+    finally:
+        # 恢复工具注册表，避免污染其他测试
+        clear_tools()
+        _tr._tools.update(saved)
+        invalidate_schema_cache()
 
 def test_disabled_tool_filtered():
-    from tool_engine.tool_registry import register_tool, to_openai_tools, clear_tools
-    clear_tools()
-    @register_tool(name="disabled", description="off", schema={"type":"object","properties":{}}, max_frequency=0)
-    def t(): pass
-    @register_tool(name="enabled", description="on", schema={"type":"object","properties":{}}, max_frequency=10)
-    def t2(): pass
-    tools = to_openai_tools()
-    names = [t["function"]["name"] for t in tools]
-    assert "disabled" not in names
-    assert "enabled" in names
-    clear_tools()
+    from tool_engine.tool_registry import (register_tool, to_openai_tools,
+                                            clear_tools, get_all_tool_dicts,
+                                            invalidate_schema_cache)
+    import tool_engine.tool_registry as _tr
+    saved = get_all_tool_dicts()
+    try:
+        clear_tools()
+        @register_tool(name="disabled", description="off", schema={"type":"object","properties":{}}, max_frequency=0)
+        def t(): pass
+        @register_tool(name="enabled", description="on", schema={"type":"object","properties":{}}, max_frequency=10)
+        def t2(): pass
+        tools = to_openai_tools()
+        names = [t["function"]["name"] for t in tools]
+        assert "disabled" not in names
+        assert "enabled" in names
+    finally:
+        clear_tools()
+        _tr._tools.update(saved)
+        invalidate_schema_cache()
 
 def test_security_injection_detection():
     from security.security import SecurityFilter

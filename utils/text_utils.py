@@ -247,7 +247,7 @@ def strip_dsml(text: str) -> str:
     # 清理孤立的 </think> 闭合标签（tool_call错配后残留）
     text = re.sub(r'</think>', '', text, flags=re.IGNORECASE)
     # L1 修复: 孤立闭合标签（开标签已被 DSML_LEFTOVER 清除，闭标签残留）
-    text = re.sub(r'</(?:function_calls|function_call|invoke|param|operation|answer)>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'</(?:function_calls|function_call|function|invoke|param|parameter|operation|answer|tool|tool_call)>', '', text, flags=re.IGNORECASE)
     # 清理其他常见的工具调用泄露格式
     # 1. 代码块中的 function_call JSON
     text = re.sub(r'```(?:json)?\s*\{[^}]*?function_call[^}]*?\}\s*```', '', text, flags=re.DOTALL)
@@ -425,11 +425,18 @@ _LEAKED_XML_TAGS_PATTERN = re.compile(
     r'memory_retrieval_empty)[^>]*>',
     re.IGNORECASE,
 )
+# LLM 工具调用方括号标记泄漏：[recall] [operation] [action] 等（独立行）
+# 根因：LLM 把工具调用当正文输出，模仿内部 [recall] 等标记格式
+_LEAKED_TOOL_BRACKET_PATTERN = re.compile(
+    r'^\s*\[(?:recall|operation|action|tool_call|function_call|invoke|tool|action_call|search|memory_search)\]\s*$',
+    re.MULTILINE | re.IGNORECASE,
+)
 # 记忆/系统方括号标记泄漏：LLM 模仿记忆注入格式输出 [相关记忆] 等标记
 # 根因：记忆注入时用方括号标记，LLM 照搬到回复里
 _LEAKED_MEMORY_MARKERS_PATTERN = re.compile(
     r'^\s*\[(?:相关记忆|记忆|memory|memory_retrieval|conversation_logs|'
-    r'系统提示|system|工具结果|tool_result)\]\s*$',
+    r'系统提示|system|工具结果|tool_result|recall|operation|action|tool_call|'
+    r'function_call|invoke|tool|action_call)\]\s*$',
     re.MULTILINE | re.IGNORECASE,
 )
 # 回忆出戏格式化标记：LLM 把记忆当数据处理，用"时间线整理"、"⏰ 约7:09"等格式
@@ -465,6 +472,8 @@ def strip_reasoning(text: str) -> str:
     if not text:
         return text
     original_len = len(text)
+    # 保存原始文本：overstrip 兜底回退用（宁可保留少量推理也不丢失正常回复）
+    _raw_original = text
     
     # 1. 标签包裹的推理
     text = _REASONING_TAG_PATTERN.sub('', text)
@@ -479,6 +488,7 @@ def strip_reasoning(text: str) -> str:
     text = _LEAKED_XML_TAGS_PATTERN.sub('', text)
     # 1d. 记忆/系统方括号标记泄漏清洗：[相关记忆] 等
     text = _LEAKED_MEMORY_MARKERS_PATTERN.sub('', text)
+    text = _LEAKED_TOOL_BRACKET_PATTERN.sub('', text)
     
     # 2. Agnes 模型推理标签
     text = _EMOTION_REASONING_PATTERN.sub('', text)
@@ -499,6 +509,11 @@ def strip_reasoning(text: str) -> str:
     
     # 7. 中文内部独白/推理行
     text = _CHINESE_REASONING_LINE_PATTERN.sub('', text)
+
+    # 保存第 7 步后的状态：标签清洗 + 行级推理清洗已完成，是"安全清洗"的最终产物。
+    # 第 8 步（英文整段/按行英文清洗）较激进，可能误伤含英文的正常回复。
+    # overstrip 回退点：若第 8 步把回复清洗过度，回退到此状态而非返回空。
+    _text_after_safe_strip = text
 
     # 8. 英文整段推理检测（极端兜底，仅处理纯英文推理）
     # 根本解决靠记忆格式叙事化 + SOUL.md 中文约束，让 LLM 自然不输出英文。
@@ -541,14 +556,48 @@ def strip_reasoning(text: str) -> str:
 
     text = text.strip()
     
-    # 过度截断保护
+    # 过度截断保护 + 回退
+    # P0 修复（用户反馈"回复简短/只说一半"根因）：
+    # 原实现仅记录 warning 不回退，导致第 8 步激进清洗把 251 字符回复剥成 3 字符
+    # （日志 text_utils.strip_reasoning_overstrip original_len=251 cleaned_len=3 ratio=1.2%）。
+    # 修复：overstrip 时回退到第 7 步后的安全清洗状态（_text_after_safe_strip），
+    #       保留标签/行级推理清洗，撤销激进的按行英文清洗。
+    #       若回退后仍过短（极端情况），再回退到原始文本（宁可保留少量推理也不丢回复）。
     cleaned_len = len(text)
     if original_len > 100 and cleaned_len < original_len * 0.3:
+        # 检查清洗后文本是否包含有意义的中文内容（CJK 字符）
+        # 如果清洗后仍有中文，说明英文部分被正确识别为推理并移除，
+        # 不应触发 overstrip 回退（回退会把英文推理重新加回来）
+        _has_cjk = any('\u4e00' <= c <= '\u9fff' for c in text) if text else False
+        if _has_cjk and cleaned_len >= 5:
+            # 清洗结果包含有效中文内容，英文推理被正确移除，无需回退
+            return text
         from loguru import logger
         logger.warning(
             "text_utils.strip_reasoning_overstrip original_len={} cleaned_len={} ratio={:.1%}",
             original_len, cleaned_len, cleaned_len / original_len if original_len else 0,
         )
+        # 回退 1：撤销第 8 步激进清洗，回到安全清洗状态
+        _safe_len = len(_text_after_safe_strip or "")
+        if _safe_len >= original_len * 0.3:
+            logger.info("text_utils.strip_reasoning_overstrip_recovered",
+                        recovered_len=_safe_len, strategy="safe_strip")
+            return _text_after_safe_strip
+        # 回退 2：安全清洗仍过短
+        # 区分两种情况：
+        # a) _text_after_safe_strip 为空 → 整段都是推理泄漏，应返回空字符串
+        #    （回退到原始文本会把推理内容原样返回，违背 strip_reasoning 的目的）
+        # b) _text_after_safe_strip 非空但过短 → 安全清洗保留了部分内容但太少，
+        #    此时回退到原始文本（宁可保留少量推理也不丢回复）
+        if not (_text_after_safe_strip or "").strip():
+            # 安全清洗后仅剩空白 → 整段都是推理泄漏，应返回空字符串
+            # （回退到原始文本会把推理内容原样返回，违背 strip_reasoning 的目的）
+            logger.info("text_utils.strip_reasoning_all_reasoning",
+                        original_len=original_len, strategy="return_empty")
+            return ""
+        logger.warning("text_utils.strip_reasoning_overstrip_fallback_raw",
+                       original_len=original_len, safe_len=_safe_len)
+        return text if (text and len(text) >= original_len * 0.3) else _raw_original
     return text
 
 
@@ -939,3 +988,152 @@ def encode_image_to_base64(image_path: str) -> tuple[str, str]:
     mime = _IMAGE_MIME_MAP.get(p.suffix.lower(), "image/jpeg")
     img_b64 = base64.b64encode(p.read_bytes()).decode("ascii")
     return mime, img_b64
+
+
+# ── 回复完整性判定 ──────────────────────────────────────────────
+# P0 修复（用户反复反馈"截断问题又出现了"根因）：
+# 原完整性检查只认 "。！？～…）」】.!?" 等 ASCII/CJK 标点，
+# 但 agnes-2.0-flash / mimo-v2.5 等模型在角色扮演场景中常以 emoji 结尾
+# （如 "💕"、"😳💗"、"💋✨"），这些是合法的句末结束符。
+# 原代码把它们误判为"不完整"→ 追加 "。" → 产生 "💕。" 这种丑陋输出，
+# 同时触发 verification.incomplete_force_closed 警告，让用户以为被截断。
+#
+# 修复：新增 emoji 感知的完整性判定，覆盖常见 emoji 区间。
+
+# 句末标点（ASCII + CJK + 常见中文标点）
+_SENTENCE_END_PUNCT = frozenset("。！？～…）」】.!?\"'”’）」】》〉〕｝\n")
+
+# Emoji 区间正则（覆盖 Unicode 15.0 常见 emoji 范围）
+# 参考：https://unicode.org/Public/emoji/15.0/emoji-data.txt
+_EMOJI_END_PATTERN = re.compile(
+    r'['
+    r'\U0001F600-\U0001F64F'  # Emoticons (😀😁😆...)
+    r'\U0001F300-\U0001F5FF'  # Misc Symbols and Pictographs (🔥💫🌟...)
+    r'\U0001F680-\U0001F6FF'  # Transport and Map (🚀✈️...)
+    r'\U0001F700-\U0001F77F'  # Alchemical Symbols
+    r'\U0001F780-\U0001F7FF'  # Geometric Shapes Extended
+    r'\U0001F800-\U0001F8FF'  # Supplemental Arrows-C
+    r'\U0001F900-\U0001F9FF'  # Supplemental Symbols and Pictographs (🤗🤔...)
+    r'\U0001FA00-\U0001FA6F'  # Chess Symbols
+    r'\U0001FA70-\U0001FAFF'  # Symbols and Pictographs Extended-A (🪄🪅...)
+    r'\U00002600-\U000026FF'  # Misc Symbols (☀️☁️❤️...)
+    r'\U00002700-\U000027BF'  # Dingbats (✨✅❌...)
+    r'\U00002B00-\U00002BFF'  # Misc Symbols and Arrows (⬅️⬆️...)
+    r'\U0000FE0F'             # Variation Selector-16 (emoji presentation)
+    r'\U0000200D'             # Zero Width Joiner (复合 emoji)
+    r'\U0001F1E6-\U0001F1FF'  # Regional Indicator (国旗)
+    r']$'
+)
+
+# P0 修复：表情包/情绪标签结尾判定
+# 根因：回复常以 [sticker:xxx] 或 [emotion:xxx] 结尾（表情包系统标签），
+#       但 ends_with_valid_ending 不识别这些标签 → 被误判为不完整 →
+#       force_close 追加 "。" → 产生 "[sticker:xxx]。" 丑陋输出。
+# 修复：识别 [sticker:...] / [emotion:...] / [emotion:xxx] 等标签为合法句末。
+_TAG_END_PATTERN = re.compile(
+    r'\[(?:sticker|emotion):[^\]]+\]\s*$',
+    re.IGNORECASE,
+)
+
+
+def ends_with_valid_ending(text: str) -> bool:
+    """判断文本是否以合法的句末标记结尾（标点 / emoji / 表情包标签）。
+
+    P0 修复（用户反复反馈"截断问题又出现了"根因）：
+    原检查只认 "。！？～…）」】.!?"，但角色扮演场景中回复常以 emoji 结尾
+    （如 "💕"、"😳💗"、"💋✨"），被误判为不完整 → 追加 "。" → 产生 "💕。"
+    这种丑陋输出，同时触发 false-positive 截断警告。
+
+    P0 修复扩展：表情包标签 [sticker:xxx] / [emotion:xxx] 也是合法句末，
+    否则会产生 "[sticker:xxx]。" 丑陋输出（日志中 4+ 次 force_close 根因）。
+
+    Args:
+        text: 待检查的文本
+
+    Returns:
+        True 表示以合法句末标记结尾（标点/emoji/表情包标签），False 表示可能被截断
+    """
+    if not text:
+        return False
+    rstripped = text.rstrip()
+    if not rstripped:
+        return False  # 纯空白
+    last_char = rstripped[-1]
+    # 1. 标准句末标点
+    if last_char in _SENTENCE_END_PUNCT:
+        return True
+    # 2. Emoji 结尾
+    if _EMOJI_END_PATTERN.search(rstripped):
+        return True
+    # 3. 表情包/情绪标签结尾（[sticker:xxx] / [emotion:xxx]）
+    if _TAG_END_PATTERN.search(rstripped):
+        return True
+    return False
+
+
+def is_reply_likely_complete(reply: str, finish_reason: str | None = None) -> bool:
+    """判断回复是否大概率完整（不需追加 "。" 或触发续写重试）。
+
+    判定规则（按优先级）：
+    0. finish_reason="length" → 始终不完整（token 上限截断必须续写恢复）
+    1. finish_reason="stop" 且回复较长（>=30字符）→ 信任 LLM，视为完整
+       根因：agnes-2.0-flash 等模型在角色扮演中常不以标点结尾（风格选择），
+       finish_reason="stop" 表示 LLM 自己认为说完了，不应强制追加 "。"
+    2. 回复以合法句末标记结尾（标点/emoji/sticker 标签）→ 完整
+    3. 回复较短（<30字符）且不以标点结尾 → 可能不完整（如"让我查一下"）
+    4. 长回复（>=30字符）的完整性判定：
+       - finish_reason=None + 超长回复(>=200字符) → 信任（保留功能性）
+       - finish_reason=None + 30-200字符 + 无合法结尾 → 不完整（触发 no_finish_retry）
+       - 其他 finish_reason（"length"/"content_filter"）→ 不完整（需重试或 force-close）
+
+    CodeRabbit #3 修复权衡：
+    原 finish_reason=None 无条件信任 → verification_no_finish_retry 死代码。
+    现分两档：超长(>=200)信任避免误判，中长(30-200)触发重试验证完整性。
+    调用方在重试空/重复时标记为完整，避免 force_close 追加"。"丑陋输出。
+
+    Args:
+        reply: 回复文本
+        finish_reason: LLM 返回的 finish_reason（"stop"/"length"/"content_filter"/None）
+
+    Returns:
+        True 表示回复完整，False 表示可能被截断需处理
+    """
+    if not reply or not reply.strip():
+        return False
+    reply_stripped = reply.strip()
+    # 规则 0（CodeRabbit #3 补充）：finish_reason="length" 始终判定不完整
+    # 根因：length 表示 LLM 因 token 上限截断，即使恰好以标点结尾也需要续写恢复，
+    # 否则内容被静默截断（如 "这句话说到一半。但还有后半段" 在 max_tokens 处截断
+    # 恰好落在"。"后 → 原判定 True → 不续写 → 后半段丢失）。
+    # 优先保证功能性：截断必须触发续写重试，无论结尾看起来多么"完整"。
+    if finish_reason == "length":
+        return False
+    # 规则 1：finish_reason="stop" + 长回复 → 信任 LLM
+    # 根因：模型风格不以标点结尾是正常的，强制追加 "。" 会产生 "💕。" 丑陋输出
+    if finish_reason == "stop" and len(reply_stripped) >= 30:
+        return True
+    # 规则 2：以合法句末标记结尾
+    if ends_with_valid_ending(reply_stripped):
+        return True
+    # 规则 3：短回复不以标点结尾 → 不完整（可能是开场白"让我查一下"）
+    if len(reply_stripped) < 30:
+        return False
+    # 规则 4：长回复（>=30字符）的完整性判定
+    # CodeRabbit #3 修复（权衡 false-truncation 与 false-trust）：
+    # 原实现 finish_reason=None 时无条件 return True，导致 message_processor.py
+    # 的 verification_no_finish_retry 续写重试路径变成死代码——provider 中途
+    # 关闭连接造成的真实截断永远无法被续写修复。
+    #
+    # 修复策略（优先保证功能性）：
+    # - finish_reason=None + 超长回复(>=200字符) → 信任
+    #   agnes 风格不以标点结尾是正常的，超长回复即便无标点也信任 LLM，
+    #   避免对正常长回复误判为截断（保留原 P0 修复的功能性）。
+    # - finish_reason=None + 30-200字符 + 无合法结尾 → 不信任
+    #   让调用方触发 no_finish_retry 续写重试验证完整性。
+    #   重试空/重复时由调用方标记为完整（LLM 确认完成），避免 force_close
+    #   追加"。"产生丑陋输出（功能性兜底在调用方实现）。
+    if finish_reason is None:
+        if len(reply_stripped) >= 200:
+            return True  # 超长回复信任，避免对正常长回复误判
+        return False  # 30-200字符无合法结尾，让调用方触发 no_finish_retry
+    return False
