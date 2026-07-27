@@ -613,11 +613,12 @@ class AIQQBot(botpy.Client):
             return
 
         # 并发处理消息（per-user 锁保证同一用户串行，不同用户并发）
-        if user_openid not in self._c2c_locks:
-            self._c2c_locks[user_openid] = asyncio.Lock()
+        # 使用 setdefault 避免 Check-Then-Act 竞态条件：
+        # 若多个协程同时检查 user_openid not in locks，可能都创建新锁并互相覆盖
+        lock = self._c2c_locks.setdefault(user_openid, asyncio.Lock())
 
         async def _c2c_reply_with_lock() -> None:
-            async with self._c2c_locks[user_openid]:
+            async with lock:
                 await self._process_c2c_reply(message, user_input, user_id, user_openid, session_id, is_master, image_data)
 
         asyncio.create_task(_c2c_reply_with_lock())
@@ -805,11 +806,12 @@ class AIQQBot(botpy.Client):
         _group_lock_key = getattr(message.author, 'member_openid', '') if hasattr(message, 'author') else ''
         if not _group_lock_key:
             _group_lock_key = "qq_unknown"
-        if _group_lock_key not in self._group_locks:
-            self._group_locks[_group_lock_key] = asyncio.Lock()
+        # 使用 setdefault 避免 Check-Then-Act 竞态条件：
+        # 若多个协程同时检查 _group_lock_key not in locks，可能都创建新锁并互相覆盖
+        lock = self._group_locks.setdefault(_group_lock_key, asyncio.Lock())
 
         async def _group_reply_with_lock() -> None:
-            async with self._group_locks[_group_lock_key]:
+            async with lock:
                 try:
                     content = (getattr(message, 'content', None) or "").strip()
                     content = strip_qq_face_tags(content)  # 剥离 QQ 表情标签，防止污染 LLM 上下文被模仿
