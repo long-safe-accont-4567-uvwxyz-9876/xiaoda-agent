@@ -154,12 +154,6 @@ from agent_core._shared import ProcessResult
 from contextvars import ContextVar as _ContextVar
 _system_context_var: _ContextVar[str] = _ContextVar("_system_context", default="")
 
-# P0-3 修复：记录追加占位符 user 消息前的 history 长度，供 _process_impl 清理。
-# 内部场景（system_context 非空）的占位符（如"（主动问候）"）不应残留在内存 history 中。
-_history_len_before_placeholder_var: _ContextVar[int] = _ContextVar(
-    "_history_len_before_placeholder", default=-1,
-)
-
 
 # ── G1: 问候短路（模块级编译正则，一次编译多次使用） ───────────
 _GREETING_PATTERN = re.compile(
@@ -658,24 +652,6 @@ class MessageProcessorMixin:
             ctx, user_input, clean_input, user_id, source, user_openid, session_id,
             status_callback, image_data, is_master, force_voice, chat_targets, trace)
 
-        # P0-3 修复：内部场景（system_context 非空）清理占位符 user 消息。
-        # nudge_engine 用 "（主动问候）" 占位符调用 process()，_finalize_main_reply
-        # 把它追加到 context.history。若不清理，下一条真实消息会看到
-        # "用户之前说了（主动问候）"，污染上下文。DB 侧由 background_tasks 清空，
-        # 但内存 history 此前未清。
-        if system_context:
-            _len_before = _history_len_before_placeholder_var.get()
-            if _len_before >= 0:
-                _hist = self.context.history
-                # 占位符 user 消息位于 _len_before 索引（_finalize_main_reply 记录）。
-                # 其后可能追加了 assistant 回复，所以不能用 pop() 弹尾部，
-                # 需按索引移除 user 占位符，保留 assistant 回复。
-                if _len_before < len(_hist) and _hist[_len_before].get("role") == "user":
-                    _hist.pop(_len_before)
-                    logger.debug("agent.placeholder_cleaned_from_history",
-                                 placeholder_idx=_len_before,
-                                 remaining_history=len(_hist))
-
         return result
 
     async def _init_and_restore_context(self, ctx: Any, user_input: Any, user_id: Any, source: Any,
@@ -918,10 +894,6 @@ class MessageProcessorMixin:
         _should_remember = is_master or source != "qq_group"
         if _should_remember:
             if not ctx.handled_by_tool_call:
-                # P0-3 修复：记录追加占位符前的 history 长度，供 _process_impl 清理。
-                # 仅在内部场景（system_context 非空）时记录，正常用户消息不清理。
-                if _system_context_var.get():
-                    _history_len_before_placeholder_var.set(len(self.context.history))
                 await self.context.add_message("user", user_input)
                 # 降级/错误回复跳过记忆写入，但保留 history 一致性
                 if is_degraded_reply(reply):
