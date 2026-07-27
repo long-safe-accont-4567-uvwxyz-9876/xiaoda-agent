@@ -369,25 +369,24 @@ jobs:
             Write-Host "NSIS found at: $nsisPath"
             $nsi = Get-Content "scripts/installer.nsi" -Raw
             $nsi = $nsi -replace '\$\{VERSION\}', $version
+            # NSIS 默认期望 UTF-8 with BOM；不带 BOM 时中文注释可能解析异常
             [System.IO.File]::WriteAllText("$PWD\installer.nsi", $nsi, [System.Text.UTF8Encoding]::new($true))
 
             Write-Host "Running NSIS build..."
             & $nsisPath installer.nsi
             if ($LASTEXITCODE -ne 0) {
-              Write-Host "NSIS build failed, falling back to ZIP..."
-              Compress-Archive -Path "dist\xiaoda-agent" -DestinationPath "xiaoda-agent-windows-x64-v${version}.zip"
-            } else {
-              $installerPath = "xiaoda-agent-windows-x64-v${version}-setup.exe"
-              if (Test-Path $installerPath) {
-                Write-Host "Installer created: $installerPath ($([math]::Round((Get-Item $installerPath).Length / 1MB, 1)) MB)"
-              } else {
-                Write-Host "Installer not found, falling back to ZIP..."
-                Compress-Archive -Path "dist\xiaoda-agent" -DestinationPath "xiaoda-agent-windows-x64-v${version}.zip"
-              }
+              Write-Host "##[error]NSIS build failed with exit code $LASTEXITCODE"
+              exit 1
             }
+            $installerPath = "xiaoda-agent-windows-x64-v${version}-setup.exe"
+            if (-not (Test-Path $installerPath)) {
+              Write-Host "##[error]NSIS reported success but installer not found: $installerPath"
+              exit 1
+            }
+            Write-Host "Installer created: $installerPath ($([math]::Round((Get-Item $installerPath).Length / 1MB, 1)) MB)"
           } else {
-            Write-Host "NSIS not found, creating ZIP..."
-            Compress-Archive -Path "dist\xiaoda-agent" -DestinationPath "xiaoda-agent-windows-x64-v${version}.zip"
+            Write-Host "##[error]NSIS (makensis.exe) not found. Install via 'choco install nsis' before this step."
+            exit 1
           }
 
           # Create tar.gz for auto-update (Windows 10 1803+ includes tar)

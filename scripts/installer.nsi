@@ -22,7 +22,6 @@ OutFile "${OUTFILE}"
 InstallDir "$LOCALAPPDATA\${PRODUCT_NAME}"
 InstallDirRegKey HKCU "Software\${PRODUCT_NAME}" "InstallDir"
 RequestExecutionLevel user
-SetShellVarContext current
 SetCompressor /SOLID lzma
 
 !include "MUI2.nsh"
@@ -44,6 +43,8 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_LANGUAGE "English"
 
 Section "MainSection" SEC01
+; per-user 安装: 快捷方式放当前用户目录（必须在 Section 内调用）
+SetShellVarContext current
 ; ── 旧版 per-machine 安装迁移（CodeRabbit 审查发现）──
 ;   检测 HKLM 下的旧版（ProgramFiles 安装），调用其 uninstaller 卸载，
 ;   避免新旧版本并存于不同目录。旧版 uninstaller 需要 admin 权限，
@@ -117,6 +118,8 @@ WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_
 SectionEnd
 
 Section Uninstall
+; per-user 卸载: 清理当前用户快捷方式（必须在 Section 内调用）
+SetShellVarContext current
 ; 关闭正在运行的实例
 nsExec::ExecToStack 'powershell -NoProfile -Command "Stop-Process -Name xiaoda-agent -Force -ErrorAction SilentlyContinue"'
 ; 卸载时保留用户数据（记忆数据库、配置、凭证等）
