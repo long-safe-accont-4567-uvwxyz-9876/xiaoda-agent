@@ -347,6 +347,9 @@ class AIQQBot(botpy.Client):
         # 修复：首次成功后缓存 session_id，避免每条消息都查 DB；session 失效时降级到查 DB。
         # 加固: TTL 过期清理 + FIFO 上限避免长期运行内存无限增长；process 异常时主动失效。
         self._c2c_session_cache: dict[str, str] = {}
+        # per-user asyncio.Lock：同一用户消息串行，不同用户并发（避免堵塞）
+        self._c2c_locks: dict[str, asyncio.Lock] = {}
+        self._group_locks: dict[str, asyncio.Lock] = {}
         self._c2c_session_cache_ttl = 3600  # 缓存有效期 1 小时
         self._c2c_session_cache_ts: dict[str, float] = {}
         # P1-1: 缓存上限，超过时按 FIFO 淘汰最旧条目（防多用户长期运行内存泄漏）
@@ -609,7 +612,15 @@ class AIQQBot(botpy.Client):
         if await self._handle_c2c_quick_commands(content, message, user_openid, user_id):
             return
 
-        await self._process_c2c_reply(message, user_input, user_id, user_openid, session_id, is_master, image_data)
+        # 并发处理消息（per-user 锁保证同一用户串行，不同用户并发）
+        if user_openid not in self._c2c_locks:
+            self._c2c_locks[user_openid] = asyncio.Lock()
+
+        async def _c2c_reply_with_lock() -> None:
+            async with self._c2c_locks[user_openid]:
+                await self._process_c2c_reply(message, user_input, user_id, user_openid, session_id, is_master, image_data)
+
+        asyncio.create_task(_c2c_reply_with_lock())
 
     async def _parse_c2c_message(self, message: C2CMessage) -> tuple[str, list, str, str, str] | None:
         """解析 C2C 消息内容和发送者信息。
@@ -759,7 +770,7 @@ class AIQQBot(botpy.Client):
                                       status_callback=status_notify,
                                       image_data=image_data if image_data else None,
                                       is_master=is_master),
-                    timeout=180,  # 复杂任务（多轮工具调用+重试）需要更长时间，180s 兜底
+                    timeout=120,  # 降低兜底超时，避免长时间堵塞用户消息队列
                 )
             finally:
                 event_bus.unbind_user(token)
@@ -857,7 +868,7 @@ class AIQQBot(botpy.Client):
                                       status_callback=status_notify,
                                       image_data=image_data if image_data else None,
                                       is_master=is_master),
-                    timeout=180,  # 复杂任务（多轮工具调用+重试）需要更长时间，180s 兜底
+                    timeout=120,  # 降低兜底超时，避免长时间堵塞用户消息队列
                 )
             finally:
                 event_bus.unbind_user(token)
