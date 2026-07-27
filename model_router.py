@@ -139,10 +139,6 @@ ROUTE_TABLE = {
     "chat_pro": {"model": _CFG_PRO_MODEL or _CFG_MODEL_NAME, "max_tokens": 131072, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "enabled", "budget_tokens": 4096}},
     # chat_flash：sub_agent 调用（如 xiaoli 转述），需要足够空间避免截断
     "chat_flash": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 6144, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_mini": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 4096, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_mimo": {"model": MIMO_MODEL, "max_tokens": 131072, "client": "mimo", "thinking": {"type": "disabled"}},
-    # chat_ultra：1M 超大窗口，仅子代理临时调用（完整 Spec/源码/长文档分析），用完销毁
-    "chat_ultra": {"model": _CFG_MODEL_NAME, "max_tokens": 1048576, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1024, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 2048, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 4096, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
@@ -152,17 +148,13 @@ ROUTE_TABLE = {
 
 MODEL_PREFERENCES = {
     "mimo": {"label": "MiMo 模式", "desc": "使用小米 MiMo-V2.5 模型"},
-    "mimo-pro": {"label": "MiMo Pro 模式", "desc": "使用小米 MiMo-V2.5-Pro 深度思考"},
-    "mimo-flash": {"label": "MiMo Flash 模式", "desc": "使用小米 MiMo-V2.5 快速响应"},
-    "mimo-mini": {"label": "MiMo Mini 模式", "desc": "使用小米 MiMo-V2.5 轻量任务"},
 }
 
 RETRYABLE_ERRORS = {'timeout', 'rate_limit', 'connection_error'}
 MAX_RETRIES = 1
 FALLBACK_ROUTE = {
     "chat_pro": "chat_flash",
-    "chat_flash": "chat_mini",
-    "chat_mini": "chat_agnes",
+    "chat_flash": "chat_agnes",
 }
 
 # P0 修复：per-provider max_tokens 上限（从配置文件 + 环境变量读取，无硬编码）
@@ -508,8 +500,8 @@ class ModelRouter:
 
         # 全量同步：所有聊天类 + 轻量任务 task_type 都跟随主 provider
         # 用户切换 provider 时，确保所有场景都用目标 provider，不再残留旧 provider
-        _sync_tasks = ("chat_pro", "chat_flash", "chat_mini", "chat_mimo",
-                       "chat_ultra", "emotion_analysis", "tool_result_wrap",
+        _sync_tasks = ("chat_pro", "chat_flash",
+                       "emotion_analysis", "tool_result_wrap",
                        "memory_encoding")
         for _task in _sync_tasks:
             if _task in ROUTE_TABLE:
@@ -654,14 +646,6 @@ class ModelRouter:
         return MODEL_PREFERENCES.get(self._model_preference, {}).get("label", "未知")
 
     def resolve_task_type(self, base_task: str) -> str:
-        if "/" in self._model_preference:
-            return base_task
-        if self._model_preference == "mimo-pro":
-            return "chat_pro"
-        if self._model_preference == "mimo-flash":
-            return "chat_flash"
-        if self._model_preference == "mimo-mini":
-            return "chat_mini"
         return base_task
 
     def _calc_cost(self, prompt_tokens: int, completion_tokens: int,

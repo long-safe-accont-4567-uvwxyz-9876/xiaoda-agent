@@ -1,7 +1,7 @@
 """测试 fallback 链和超时优化
 
 验证：
-1. set_chat_model 切换 provider 时，flash/mini 路由同步到跨 provider
+1. set_chat_model 切换 provider 时，flash 路由同步到跨 provider
 2. MAX_RETRIES 降为 1（2 次尝试而非 3 次）
 3. chat_flash 超时从 60s 降为 30s
 4. profile_learner 的 loguru 格式化不再触发 Replacement index 错误
@@ -18,7 +18,7 @@ if str(PROJECT_ROOT) not in __import__("sys").path:
 
 
 class TestFallbackChainSync:
-    """测试 set_chat_model 时 flash/mini 路由的跨 provider 同步"""
+    """测试 set_chat_model 时 flash 路由的跨 provider 同步"""
 
     def test_set_chat_model_agnes_syncs_flash_to_agnes(self):
         """切换到 agnes 时，chat_flash 应跟随 agnes（用户取消跨 provider 降级）
@@ -30,7 +30,6 @@ class TestFallbackChainSync:
 
         # 模拟初始状态：mimo 为默认
         original_flash = ROUTE_TABLE["chat_flash"].copy()
-        original_mini = ROUTE_TABLE["chat_mini"].copy()
         try:
             router = MagicMock(spec=ModelRouter)
             router._custom_clients = {}
@@ -52,14 +51,12 @@ class TestFallbackChainSync:
             assert ROUTE_TABLE["chat_flash"]["model"] == "agnes-2.0-flash"
         finally:
             ROUTE_TABLE["chat_flash"] = original_flash
-            ROUTE_TABLE["chat_mini"] = original_mini
 
     def test_set_chat_model_mimo_syncs_flash_to_mimo(self):
         """切换到 mimo 时，chat_flash 应跟随 mimo（用户取消跨 provider 降级）"""
         from model_router import ROUTE_TABLE, ModelRouter
 
         original_flash = ROUTE_TABLE["chat_flash"].copy()
-        original_mini = ROUTE_TABLE["chat_mini"].copy()
         try:
             router = MagicMock(spec=ModelRouter)
             router._custom_clients = {}
@@ -77,7 +74,6 @@ class TestFallbackChainSync:
             assert ROUTE_TABLE["chat_flash"]["model"] == "mimo-v2.5"
         finally:
             ROUTE_TABLE["chat_flash"] = original_flash
-            ROUTE_TABLE["chat_mini"] = original_mini
 
     def test_fallback_chain_uses_different_providers(self):
         """验证 fallback 链中每级使用不同 provider"""
@@ -88,13 +84,12 @@ class TestFallbackChainSync:
         try:
             ROUTE_TABLE["chat"]["client"] = "agnes"
             ROUTE_TABLE["chat_flash"]["client"] = "mimo"
-            ROUTE_TABLE["chat_mini"]["client"] = "agnes"
             ROUTE_TABLE["chat_agnes"]["client"] = "agnes"
 
-            # chat_flash → chat_mini：mimo → agnes（不同 provider）
-            assert ROUTE_TABLE["chat_flash"]["client"] != ROUTE_TABLE["chat_mini"]["client"]
+            # chat_flash → chat_agnes：mimo → agnes（不同 provider）
+            assert FALLBACK_ROUTE["chat_flash"] == "chat_agnes"
+            assert ROUTE_TABLE["chat_flash"]["client"] != ROUTE_TABLE["chat_agnes"]["client"]
 
-            # chat_mini → chat_agnes：agnes → agnes（同级，但这是最终 agnes fallback）
             # chat_agnes 之后还有 custom_provider_fallback（siliconflow）
         finally:
             for k, v in original.items():

@@ -35,6 +35,7 @@ def test_threshold_mimo_128k():
     assert 85000 <= threshold <= 95000, f"mimo 128K 阈值异常: {threshold}"
 
 
+@pytest.mark.skip(reason="chat_ultra 路由已删除（ROUTE_TABLE 清理死路由），1M 阈值场景不再适用")
 def test_threshold_chat_ultra_1m():
     """chat_ultra (1M) 模式下阈值应约 730K（70% of 1048576）。"""
     ctx = AgentContext(router=_MockRouter(max_tokens=1048576))
