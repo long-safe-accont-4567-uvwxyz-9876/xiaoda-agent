@@ -18,7 +18,7 @@ from math import sqrt
 from collections import OrderedDict, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from difflib import SequenceMatcher
+from utils.similarity import ratio as text_ratio
 
 import networkx as nx
 from loguru import logger
@@ -265,9 +265,8 @@ class SpreadingActivationEngine:
             node = await self.db.get_node(nid)
             if not node:
                 continue
-            text_sim = SequenceMatcher(
-                None, query.lower(), node.get("text", "").lower()
-            ).ratio()
+            # rapidfuzz text_ratio 返回 0-100，除以 100 转为 0-1（与原 difflib ratio 一致）
+            text_sim = text_ratio(query.lower(), node.get("text", "").lower()) / 100.0
             # 综合分数 = RRF + 文本相似度
             combined = rrf_score + text_sim * 0.1
             reranked.append({"id": nid, "score": combined})

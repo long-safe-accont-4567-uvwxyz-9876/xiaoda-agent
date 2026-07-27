@@ -4,13 +4,6 @@ from loguru import logger
 from db.db_learning import LearningDB
 
 
-CORRECTION_SIGNALS = ["不对", "错了", "不是这样的", "应该是", "你说错了",
-                      "不是", "搞错了", "弄错了", "不对吧", "才不是",
-                      "别瞎说", "胡说", "乱说"]
-FEATURE_SIGNALS = ["能不能", "可不可以", "帮我", "我希望", "要是能",
-                   "如果可以", "想要", "有没有办法", "能不能帮我"]
-
-
 class LearningManager:
     """管理错误反馈、特性诉求等学习信号的记录与归纳。"""
 
@@ -74,20 +67,13 @@ class LearningManager:
 
     async def evaluate_after_conversation(self, user_msg: str, reply: str,
                                            tool_results: list) -> None:
+        """对话后学习评估：记录工具失败事件。
+
+        用户纠正/功能请求信号不靠硬编码词表检测——由 instinct_manager 的
+        extract_instincts LLM 调用统一处理（CORRECT 类型覆盖用户否定场景）。
+        零硬代码。
+        """
         try:
-            for signal in CORRECTION_SIGNALS:
-                if signal in user_msg:
-                    await self.log_correction(user_msg, reply, signal)
-                    break
-
-            for signal in FEATURE_SIGNALS:
-                if signal in user_msg and len(user_msg) > 5:
-                    await self.log_feature_request(
-                        capability=user_msg[:100],
-                        user_context=user_msg[:200],
-                    )
-                    break
-
             for result in tool_results:
                 from tool_engine.tool_registry import ToolResult
                 if isinstance(result, ToolResult) and not result.success:

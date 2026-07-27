@@ -18,7 +18,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from difflib import SequenceMatcher
+from utils.similarity import ratio as text_ratio
 from enum import Enum
 from pathlib import Path
 
@@ -125,7 +125,8 @@ def _similarity(a: str, b: str) -> float:
     """
     if not a or not b:
         return 0.0
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+    # rapidfuzz text_ratio 返回 0-100，除以 100 转为 0-1（与原 difflib ratio 一致）
+    return text_ratio(a.lower(), b.lower()) / 100.0
 
 
 def _tokenize(text: str) -> set[str]:

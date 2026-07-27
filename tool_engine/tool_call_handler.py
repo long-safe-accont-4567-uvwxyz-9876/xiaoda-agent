@@ -513,7 +513,7 @@ class ToolCallHandler:
                 # 修复：summary_prompt 改为 system 角色（原为 user 角色导致污染）
                 xiaoda_prompt = ""
                 if self._context:
-                    xiaoda_prompt = self._context.get_xiaoda_prompt()
+                    xiaoda_prompt = await asyncio.to_thread(self._context.get_xiaoda_prompt)
                 summary_prompt = (
                     f"{address_term}刚才问的是：{user_input}\n\n"
                     f"工具查到结果了！请基于以下结果用你本来的语气回复{address_term}。\n\n"

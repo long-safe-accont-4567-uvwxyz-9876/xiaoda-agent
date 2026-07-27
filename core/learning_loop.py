@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from collections import deque
@@ -36,7 +37,9 @@ class LearningLoop:
         if constraint:
             self._active_constraints.append(constraint)
             self._correction_count += 1
-            self._persist()
+            # 根因修复：_persist 同步 json.dump 写文件，在 async 路径会阻塞事件循环。
+            # 用 asyncio.to_thread 隔离到线程池。
+            await asyncio.to_thread(self._persist)
             logger.info(f"学习闭环: 新约束 → {constraint}")
         return constraint
 

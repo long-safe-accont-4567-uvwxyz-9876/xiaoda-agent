@@ -157,7 +157,9 @@ class DreamConsolidator:
                      f"strengthened={strengthened} total={len(self._memories)}")
 
         # 联动 L/M/S 心理状态: 清理 7 天前 M 层数据
-        self._trigger_mental_state_consolidate()
+        # 根因修复：_trigger_mental_state_consolidate → consolidate_dream → _save
+        # 同步 json.dump 写文件，在 async 路径阻塞事件循环。用 to_thread 隔离。
+        await asyncio.to_thread(self._trigger_mental_state_consolidate)
 
         return {
             "duration_ms": duration,
@@ -315,7 +317,8 @@ class DreamConsolidator:
                 self._memories.pop(mid, None)
 
             # 联动 L/M/S 心理状态: 清理 7 天前 M 层数据
-            self._trigger_mental_state_consolidate()
+            # 根因修复：同步 _save 阻塞事件循环，用 to_thread 隔离（与 consolidate 一致）
+            await asyncio.to_thread(self._trigger_mental_state_consolidate)
 
             return {**stats, "duration_ms": duration}
         except Exception as e:

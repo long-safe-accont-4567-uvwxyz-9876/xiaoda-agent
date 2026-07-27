@@ -1534,6 +1534,20 @@ class MemoryManager:
             if results:
                 results = self._dedup_by_content_similarity(results)
 
+            # 智能最低分过滤：非闲聊型 query 过滤低相关度噪声
+            # 用 rerank_score（纯相关性）而非 final_score（综合分含 R/recency/importance 保底 ~0.22）
+            # （bench_rag_e2e 实测：技术型 query 返回 rerank 0.007 的亲密内容）
+            _min_score = getattr(config, 'RAG_MIN_FINAL_SCORE', 0.15)
+            if intent != "chat" and _min_score > 0 and results:
+                _before = len(results)
+                results = [r for r in results
+                           if float(r.get("rerank_score", 0)) >= _min_score]
+                if len(results) != _before:
+                    logger.info("memory.low_score_filtered",
+                                query=query[:60],
+                                before=_before, after=len(results),
+                                min_score=_min_score)
+
             # 写入缓存（P0: 使用 user_id 隔离的 cache key）
             if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
                 await self._query_cache.put(_cache_key, results)
@@ -1617,6 +1631,21 @@ class MemoryManager:
         _final_k = k + 2 if _has_topic else k
         if len(results) > _final_k:
             results = results[:_final_k]
+
+        # 智能最低分过滤：非闲聊型 query 过滤低相关度噪声（保留话题触发记忆）
+        # 用 rerank_score（纯相关性）而非 final_score（综合分含保底 ~0.22，过滤失效）
+        # （bench_rag_e2e 实测：技术型 query 返回 rerank 0.007 的亲密内容）
+        _min_score = getattr(config, 'RAG_MIN_FINAL_SCORE', 0.15)
+        if intent != "chat" and _min_score > 0 and results:
+            _before = len(results)
+            results = [r for r in results
+                       if float(r.get("rerank_score", 0)) >= _min_score
+                       or r.get("topic_trigger")]
+            if len(results) != _before:
+                logger.info("memory.low_score_filtered",
+                            query=query[:60],
+                            before=_before, after=len(results),
+                            min_score=_min_score)
 
         # 写入缓存（P0: 使用 user_id 隔离的 cache key）
         if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:

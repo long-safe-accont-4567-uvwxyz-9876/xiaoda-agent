@@ -187,12 +187,16 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         """
         bootstrapper = AgentCoreBootstrapper(self)
         await bootstrapper.bootstrap(reinit=reinit)
-        # jieba 后台预热：在事件循环内 fire-and-forget 启动，避免首次对话加载
-        # ~5MB 词典阻塞 1-2 秒（db/fts_utils.py / memory/memory_manager.py 的 lazy import）。
-        # 预热失败不影响 AgentCore 初始化；幂等性由 prewarm_jieba 内部标志保证。
+        # jieba 预热：在 init 完成前确保词典加载完毕。
+        # 根因修复（bench_rag_e2e 实测）：原 create_task fire-and-forget 导致首次检索时
+        # jieba 未就绪，主线程同步加载 ~5MB 词典阻塞事件循环 1.8 秒（心跳 1853ms）。
+        # 改为 await：prewarm_jieba 内部用 asyncio.to_thread 在线程池加载，init 等待但
+        # 不阻塞事件循环；init 总时长增加 ~1-2s，但消除首次对话的严重阻塞。
+        # 幂等性由 prewarm_jieba 内部 _prewarm_started 标志保证。
         try:
             from core.jieba_prewarm import prewarm_jieba
-            self._prewarm_task = asyncio.create_task(prewarm_jieba())
+            await prewarm_jieba()
+            self._prewarm_task = None  # 已完成，shutdown 无需 cancel
         except Exception as e:
             logger.warning("jieba.prewarm_schedule_failed error={}", str(e))
 
@@ -377,7 +381,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         # 获取系统提示词
         system_prompt = ""
         if self.context._system_prompt_loader:
-            system_prompt = self.context._system_prompt_loader()
+            system_prompt = await asyncio.to_thread(self.context._system_prompt_loader)
         elif self.context.system_prompt:
             system_prompt = self.context.system_prompt
 

@@ -571,33 +571,32 @@ class MessageProcessorMixin:
             trace.warning("agent.blocked", reason=reason)
             return ProcessResult(reply="")
 
-        # XP 自动加成（fire-and-forget，不阻塞主流程；基于消息长度）
+        # XP 自动加成 + 用户画像统计（并行 to_thread，不阻塞事件循环）
+        # 根因修复：原同步 add_chat_xp / record_interaction 内部 json.dump 写文件，
+        # 每轮对话阻塞事件循环 ~2-5ms。改用 asyncio.to_thread 隔离到线程池，
+        # 两者并行执行，主流程仅等 max(xp_io, profile_io) ≈ 1ms。
         try:
             from core.xp_system import get_xp_system
+            from core.user_profile_learner import get_user_profile_learner
             _xp_uid = user_openid or user_id
             if _xp_uid:
-                get_xp_system().add_chat_xp(_xp_uid, len(user_input))
-        except Exception as _e:
-            logger.warning("xp.auto_add_failed", error=str(_e))
-
-        # 用户画像学习：记录交互统计 + 周期性 LLM 认知抽取（fire-and-forget）
-        try:
-            from core.user_profile_learner import get_user_profile_learner
-            from core.xp_system import get_xp_system
-            _learner = get_user_profile_learner()
-            _xp_uid2 = user_openid or user_id
-            if _xp_uid2:
+                _xp = get_xp_system()
+                _learner = get_user_profile_learner()
                 _is_deep = len(user_input) > 100
-                _learner.record_interaction(_xp_uid2, len(user_input), is_deep=_is_deep)
+                await asyncio.gather(
+                    asyncio.to_thread(_xp.add_chat_xp, _xp_uid, len(user_input)),
+                    asyncio.to_thread(
+                        _learner.record_interaction, _xp_uid, len(user_input), is_deep=_is_deep),
+                )
                 # 周期性触发 LLM 认知抽取（不阻塞，spawn 后台）
-                if _learner.should_run_insight(_xp_uid2):
-                    _xp_state = get_xp_system().get_state(_xp_uid2)
+                if _learner.should_run_insight(_xp_uid):
+                    _xp_state = _xp.get_state(_xp_uid)
                     _lv = _xp_state.level.value if hasattr(_xp_state.level, 'value') else int(_xp_state.level)
                     # _run_profile_insight 仅 LLM 调用 + 写 USER.md 文件，无 DB 事务，
                     # 可安全中断，故显式传 timeout=45 防止卡死阻塞事件循环
-                    _spawn(self._run_profile_insight(_xp_uid2, _lv), timeout=45)
+                    _spawn(self._run_profile_insight(_xp_uid, _lv), timeout=45)
         except Exception as _e:
-            logger.warning("profile_learner.record_failed", error=str(_e))
+            logger.warning("xp.profile.record_failed", error=str(_e))
 
         # slash 命令
         if self.slash_handler and self.slash_handler.is_slash_command(user_input):
@@ -1076,7 +1075,8 @@ class MessageProcessorMixin:
             _t0 = time.time()
             try:
                 from core.constraint_injector import search_constraint_lessons
-                lessons = search_constraint_lessons(user_input, top_k=3)
+                lessons = await asyncio.to_thread(
+                    search_constraint_lessons, user_input, top_k=3)
                 _elapsed = int((time.time() - _t0) * 1000)
                 if _elapsed > 500:
                     logger.warning("memory.constraint_lessons_slow",

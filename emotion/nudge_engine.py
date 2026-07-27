@@ -284,7 +284,8 @@ class NudgeEngine:
                 from memory.emotional_memory import get_emotional_memory_manager
                 em_mgr = get_emotional_memory_manager()
                 real_user_id = f"qq_{self._user_openid}"
-                recalled = em_mgr.recall(real_user_id, "最近心情", top_k=2)
+                recalled = await asyncio.to_thread(
+                    em_mgr.recall, real_user_id, "最近心情", top_k=2)
                 if recalled:
                     memory_lines = []
                     for mem in recalled[:2]:

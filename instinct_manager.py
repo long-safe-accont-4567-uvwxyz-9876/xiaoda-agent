@@ -1,7 +1,7 @@
 import os
 import time
 import asyncio
-import difflib
+from utils.similarity import ratio as text_ratio
 import httpx
 from loguru import logger
 
@@ -36,14 +36,21 @@ _INVALID_INSTINCT_PATTERNS = [
     _re.compile(r"模型退化|训练数据|上下文过载"),  # 模型自我描述
 ]
 
-EXTRACT_PROMPT = """从以下对话中提取可复用的用户偏好或行为模式。只输出结果，不要解释。
+EXTRACT_PROMPT = """从以下对话中分析用户的偏好和行为模式。只输出结果，不要解释。
 
-严格格式（每行一条，用 | 分隔）：
-模式描述 | 置信度
+做两件事：
+1. 提取可复用的新偏好/行为模式（如果有的话）
+2. 如果用户在否定/纠正已有的判断（如"我不是这样的"、"你记错了"、"那个不对"、"别这样了"、"你搞反了"），指出被否定的内容
+
+严格格式（每行一条，用 | 分隔，第一列标明类型）：
+NEW | 模式描述 | 置信度
+CORRECT | 被否定的内容 | 动作(demote或archive)
 
 示例（不要输出这些，仅作格式参考）：
-用户偏好浓香入味的菜品 | 0.8
-用户倾向于直接处理问题 | 0.75
+NEW | 用户偏好浓香入味的菜品 | 0.8
+CORRECT | 用户喜欢被打断时继续说 | archive
+
+如果没有新偏好或没有否定，对应行省略不输出。
 
 对话内容：
 用户：{user_input}
@@ -177,21 +184,41 @@ class InstinctManager:
 
         rows_to_insert = []
         skipped_duplicates = 0
+        corrections = []  # 用户否定的本能（复用本次 LLM 调用，零额外开销）
         for line in result.strip().splitlines():
             ln = line.strip()
             if ln.startswith(("<tool_call>", "```")):
                 continue
             if "|" not in ln:
                 continue
-            parts = ln.rsplit("|", 1)
-            if len(parts) != 2:
-                continue
-            content = parts[0].strip().lstrip("-").strip()  # 去掉前导 "- "
-            try:
-                confidence = float(parts[1].strip())
-            except ValueError:
-                logger.debug("instinct_manager: skipping line with non-numeric confidence: {!r}", line, exc_info=True)
-                continue
+            parts = [p.strip() for p in ln.split("|")]
+
+            # 新格式：NEW | content | confidence  或  CORRECT | content | action
+            if parts[0] in ("NEW", "CORRECT") and len(parts) >= 3:
+                kind = parts[0]
+                content = parts[1].lstrip("-").strip()
+                third = parts[2]
+                if kind == "CORRECT":
+                    # 用户否定已有本能，收集后批量修正
+                    action = third if third in ("demote", "archive") else "demote"
+                    corrections.append((content, action))
+                    continue
+                # kind == "NEW"，走正常提取流程
+                try:
+                    confidence = float(third)
+                except ValueError:
+                    logger.debug("instinct_manager: skipping NEW line: {!r}", line, exc_info=True)
+                    continue
+            else:
+                # 兼容旧格式（无前缀）：content | confidence
+                content = parts[0].lstrip("-").strip() if parts else ""
+                if len(parts) < 2 or not content:
+                    continue
+                try:
+                    confidence = float(parts[-1])
+                except ValueError:
+                    logger.debug("instinct_manager: skipping line: {!r}", line, exc_info=True)
+                    continue
             confidence = max(0.0, min(1.0, confidence))
 
             # 过滤无效内容
@@ -206,12 +233,9 @@ class InstinctManager:
             # 过滤模板化/非偏好类内容（正则匹配）
             if any(p.search(content) for p in _INVALID_INSTINCT_PATTERNS):
                 continue
-            # 插入前去重：检查是否与已有 active instinct 高度相似（difflib ratio >= 0.75）
-            # 避免"用户喜欢亲密互动"vs"用户偏好亲密互动"这类语义重复无限堆积。
-            # 阈值 0.75 基于生产数据分析：随机 1000 对最高仅 0.667，>=0.75 的才是
-            # 真正语义重复（如"用户偏好强烈的感官刺激"vs"用户偏好直接且强烈的性刺激"=0.75）
+            # 插入前去重：rapidfuzz text_ratio >= 75.0（0-100 刻度，等价旧 difflib 0.75）
             is_duplicate = any(
-                difflib.SequenceMatcher(None, content, ex).ratio() >= 0.75
+                text_ratio(content, ex) >= 75.0
                 for ex in existing_contents
             )
             if is_duplicate:
@@ -219,6 +243,18 @@ class InstinctManager:
                 continue
 
             rows_to_insert.append((content, confidence, session_id, now, now))
+
+        # 处理用户否定的本能（复用本次 LLM 调用，零额外开销、零新工具）
+        for hint, action in corrections:
+            try:
+                correction = await self.correct_instinct(hint, action)
+                if correction:
+                    logger.info(
+                        "instinct.corrected_via_extract",
+                        content=correction["content"][:60], action=correction["action"],
+                    )
+            except Exception:
+                logger.debug("instinct.correct_via_extract_failed", exc_info=True)
 
         if skipped_duplicates > 0:
             logger.info("instinct.dedup_skipped", count=skipped_duplicates, session=session_id)
@@ -261,39 +297,39 @@ class InstinctManager:
         await self.db._conn.commit()
 
     async def archive_stale(self, max_age_days: int = 30) -> int:
-        """归档超过 max_age_days 天未使用，或创建超 max_age_days 天但从未被使用的 Instinct。
+        """归档明确垃圾本能（保守策略，不一刀切）。
 
-        根因修复（2026-07-27 生产事故）：
-        - 原逻辑只按 last_used_at < cutoff 归档，但 INSERT 时 last_used_at = now，
-          导致刚创建的本能 30 天内不会被归档。
-        - get_active_instincts 只取 top 6，剩下 4708 条永远 use_count=0，
-          垃圾无限堆积 → merge_duplicates O(n²) 卡 370 秒。
-        - 修复：额外归档 use_count=0 且 created_at < cutoff 的垃圾本能
-          （创建超过 N 天但从未被使用 = 无价值垃圾）。
+        只归档以下"明确垃圾"：
+        1. content 为空或纯空白
+        2. content 长度 < 5（无意义碎片）
+        3. last_used_at < cutoff（真正长期未使用，默认 30 天）
+
+        不再按 use_count=0 一刀切归档（use_count=0 是 get_active_instincts
+        只取 top 6 的排序副产品，不是垃圾证据）。疑似重复/低价值的不自动处理，
+        由 correct_instinct 在对话内由用户一句话修正。
         """
         if not self._available:
             return 0
         cutoff = time.time() - max_age_days * 86400
-        # 归档两类：(1) last_used_at < cutoff（长期未使用）
-        #          (2) use_count=0 AND created_at < cutoff（创建超 N 天但从未被使用）
         cursor = await self.db._conn.execute(
             """SELECT COUNT(*) FROM instincts WHERE status='active' AND (
-                last_used_at < ? OR (use_count=0 AND created_at < ?)
+                content IS NULL OR TRIM(content) = '' OR LENGTH(content) < 5
+                OR last_used_at < ?
             )""",
-            (cutoff, cutoff)
+            (cutoff,)
         )
         row = await cursor.fetchone()
         count = row[0] if row else 0
-        # 再执行更新
         if count > 0:
             await self.db._conn.execute(
                 """UPDATE instincts SET status='archived' WHERE status='active' AND (
-                    last_used_at < ? OR (use_count=0 AND created_at < ?)
+                    content IS NULL OR TRIM(content) = '' OR LENGTH(content) < 5
+                    OR last_used_at < ?
                 )""",
-                (cutoff, cutoff)
+                (cutoff,)
             )
             await self.db._conn.commit()
-            logger.info("instinct.archived_stale", count=count)
+            logger.info("instinct.archived_garbage", count=count)
         return count
 
     @staticmethod
@@ -327,10 +363,8 @@ class InstinctManager:
             for j in range(i + 1, len(rows)):
                 if rows[j]["id"] in merged_ids:
                     continue
-                ratio = difflib.SequenceMatcher(
-                    None, rows[i]["content"], rows[j]["content"]
-                ).ratio()
-                if ratio >= similarity_threshold:
+                ratio = text_ratio(rows[i]["content"], rows[j]["content"])
+                if ratio >= similarity_threshold * 100:
                     # 保留置信度更高的，归档另一个
                     merged_ids.add(rows[j]["id"])
                     archive_ids.append(rows[j]["id"])
@@ -381,14 +415,79 @@ class InstinctManager:
         return merge_count
 
     async def curator_run(self) -> None:
-        """Curator 一次完整运行：归档过期 + 合并重复"""
+        """Curator 一次完整运行：归档明确垃圾 + 合并高度重复"""
         if not self._available:
             return
-        # 7 天：get_active_instincts 只取 top 6，7 天内未选中的 use_count=0 本能
-        # 视为垃圾归档（每 10 轮对话触发一次 curator，7 天足够 70+ 轮对话筛选）
-        archived = await self.archive_stale(max_age_days=7)
+        # 30 天：只归档真正长期未使用的 + 空/碎片垃圾。
+        # 不再按 use_count=0 一刀切（那是排序副产品，不是垃圾证据）。
+        # 疑似重复/低价值由 correct_instinct 对话内修正。
+        archived = await self.archive_stale(max_age_days=30)
         merged = await self.merge_duplicates()
         logger.info("instinct.curator_done", archived=archived, merged=merged)
+
+    async def correct_instinct(self, instinct_hint: str, action: str = "demote") -> dict | None:
+        """LLM 驱动的本能修正：根据 hint 定位并修正相关本能。
+
+        由 instinct_correct 工具调用（LLM 判断用户否定后主动触发），
+        不靠硬编码词表轮询，零硬代码——语义理解交给 LLM。
+
+        Args:
+            instinct_hint: LLM 提供的被否定本能描述（用户认为错误的那条）
+            action: demote=降权（confidence减半），archive=归档
+
+        Returns:
+            {"corrected": True, "content": str, "action": str,
+             "old_conf": float, "new_conf": float} 或 None（未匹配）
+        """
+        if not self._available:
+            return None
+        hint = (instinct_hint or "").strip()
+        if not hint:
+            return None
+        # 取当前 active top 6（即注入 prompt 的那几条，最可能被否定）
+        instincts = await self.get_active_instincts(limit=6, min_confidence=0.0)
+        if not instincts:
+            return None
+        # 用 rapidfuzz 定位最匹配 hint 的本能（text_ratio 返回 0-100）
+        best_match = None
+        best_score = 0.0
+        for inst in instincts:
+            score = text_ratio(hint, inst["content"])
+            if score > best_score:
+                best_score = score
+                best_match = inst
+        # 相似度阈值：50 表示中等相似（rapidfuzz 0-100 刻度）
+        # 低于此值说明 hint 与所有本能都不够匹配，避免误修正
+        if best_score < 50.0 or best_match is None:
+            return None
+        # 执行修正
+        old_conf = float(best_match["confidence"])
+        new_conf = old_conf * 0.5
+        if action == "archive":
+            await self.db._conn.execute(
+                "UPDATE instincts SET status='archived', confidence=? WHERE id=?",
+                (new_conf, best_match["id"])
+            )
+            result_action = "archived"
+        else:
+            await self.db._conn.execute(
+                "UPDATE instincts SET confidence=? WHERE id=?",
+                (new_conf, best_match["id"])
+            )
+            result_action = "demoted"
+        await self.db._conn.commit()
+        logger.info(
+            "instinct.corrected",
+            content=best_match["content"][:60], action=result_action,
+            old_conf=old_conf, new_conf=new_conf, score=best_score,
+        )
+        return {
+            "corrected": True,
+            "content": best_match["content"],
+            "action": result_action,
+            "old_conf": old_conf,
+            "new_conf": new_conf,
+        }
 
     async def build_instinct_prompt(self) -> str:
         """构建 Instinct 提示文本，用于注入系统提示，同时标记被使用的 Instinct"""

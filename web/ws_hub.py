@@ -395,10 +395,12 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
                 session_id=session_id, trace=trace, ctx=ctx)
             data = serialize_result(result)
             # XP 自动加成：子 agent 路径也需触发 XP（与主路径一致）
+            # 根因修复：add_chat_xp 内部 json.dump 同步写文件，原直接调用阻塞事件循环。
+            # 用 asyncio.to_thread 隔离到线程池，不阻塞事件循环。
             try:
                 from core.xp_system import get_xp_system
                 _xp_uid = os.getenv("MASTER_QQ_OPENID", "webui")  # 统一 XP ID
-                get_xp_system().add_chat_xp(_xp_uid, len(text))
+                await asyncio.to_thread(get_xp_system().add_chat_xp, _xp_uid, len(text))
             except Exception as _e:
                 from loguru import logger as _logger
                 _logger.warning("xp.auto_add_failed", error=str(_e))

@@ -89,16 +89,12 @@ if __name__ == '__main__':
 
 
 class TestArchiveStaleCleansGarbage(unittest.TestCase):
-    """测试 archive_stale 清理从未使用的垃圾本能。
+    """测试 archive_stale 只清明确垃圾，不一刀切。
 
-    根因（2026-07-27 生产事故）：
-    - 本能表 4714 条 active，其中 4702 条 use_count=0（从未被 get_active_instincts 选中）
-    - archive_stale 只按 last_used_at < cutoff(30天) 归档
-    - 但 INSERT 时 last_used_at = now，导致刚创建的本能 30 天内不会被归档
-    - 垃圾无限堆积 → merge_duplicates O(n²) 处理 4714 条卡 370 秒 → 事件循环冻结
-
-    修复：archive_stale 额外归档 use_count=0 且 created_at < cutoff 的本能
-    （创建超过 N 天但从未被使用 = 垃圾）
+    设计原则（2026-07-27 用户反馈后重设计）：
+    - use_count=0 是 get_active_instincts 只取 top 6 的排序副产品，不是垃圾证据
+    - archive_stale 只归档"明确垃圾"：空内容、过短碎片、真正长期未使用
+    - 疑似重复/低价值不自动处理，由 correct_instinct 对话内修正
     """
 
     def setUp(self):
@@ -107,53 +103,52 @@ class TestArchiveStaleCleansGarbage(unittest.TestCase):
         self.manager = InstinctManager(db=self.mock_db, router=self.mock_router)
         self.manager._available = True
 
-    def test_archive_stale_archives_never_used_old_instincts(self):
-        """archive_stale 应归档 use_count=0 且创建超过阈值的本能"""
-        import time as _time
-        now = _time.time()
-
-        # mock DB：第一次 COUNT 查询返回垃圾数量，第二次 UPDATE 返回影响行数
-        # archive_stale 现在的逻辑：先 COUNT 再 UPDATE
-        call_count = {"count": 0}
-
-        async def mock_execute(sql, params=()):
-            call_count["count"] += 1
-            mock_cursor = AsyncMock()
-            if "COUNT" in sql:
-                # row[0] 访问第一列，返回 [42] 模拟 sqlite3.Row
-                mock_cursor.fetchone = AsyncMock(return_value=[42])
-            else:
-                mock_cursor.rowcount = 42
-            return mock_cursor
-
-        self.mock_db._conn.execute = AsyncMock(side_effect=mock_execute)
-        self.mock_db._conn.commit = AsyncMock()
-
-        asyncio.run(self.manager.archive_stale(max_age_days=7))
-
-        # 断言：SQL 应该同时检查 use_count=0（不只是 last_used_at）
-        execute_calls = self.mock_db._conn.execute.call_args_list
-        all_sql = " ".join(str(c) for c in execute_calls)
-        self.assertIn(
-            "use_count", all_sql,
-            f"archive_stale 的 SQL 应包含 use_count=0 条件，实际: {all_sql}"
-        )
-
-    def test_archive_stale_keeps_recently_created_unused(self):
-        """archive_stale 不应归档刚创建的 use_count=0 本能（给它们被使用的机会）"""
-        # 验证 SQL 中有 created_at 条件（控制只归档创建超 N 天的）
+    def test_archive_stale_does_not_use_count_condition(self):
+        """archive_stale 的 SQL 不应包含 use_count 条件（避免一刀切归档）"""
         mock_cursor = AsyncMock()
         mock_cursor.fetchone = AsyncMock(return_value=[0])
         self.mock_db._conn.execute = AsyncMock(return_value=mock_cursor)
         self.mock_db._conn.commit = AsyncMock()
 
-        asyncio.run(self.manager.archive_stale(max_age_days=7))
+        asyncio.run(self.manager.archive_stale(max_age_days=30))
+
+        execute_calls = self.mock_db._conn.execute.call_args_list
+        all_sql = " ".join(str(c) for c in execute_calls)
+        self.assertNotIn(
+            "use_count", all_sql,
+            f"archive_stale 的 SQL 不应包含 use_count 条件（一刀切），实际: {all_sql}"
+        )
+
+    def test_archive_stale_checks_empty_and_short_content(self):
+        """archive_stale 应检查空内容和过短碎片"""
+        mock_cursor = AsyncMock()
+        mock_cursor.fetchone = AsyncMock(return_value=[0])
+        self.mock_db._conn.execute = AsyncMock(return_value=mock_cursor)
+        self.mock_db._conn.commit = AsyncMock()
+
+        asyncio.run(self.manager.archive_stale(max_age_days=30))
 
         execute_calls = self.mock_db._conn.execute.call_args_list
         all_sql = " ".join(str(c) for c in execute_calls)
         self.assertTrue(
-            "created_at" in all_sql or "last_used_at" in all_sql,
-            f"archive_stale 的 SQL 应有时间条件，实际: {all_sql}"
+            "TRIM" in all_sql or "LENGTH" in all_sql,
+            f"archive_stale 的 SQL 应检查空/短内容，实际: {all_sql}"
+        )
+
+    def test_archive_stale_has_last_used_at_condition(self):
+        """archive_stale 应有 last_used_at 时间条件（长期未使用才归档）"""
+        mock_cursor = AsyncMock()
+        mock_cursor.fetchone = AsyncMock(return_value=[0])
+        self.mock_db._conn.execute = AsyncMock(return_value=mock_cursor)
+        self.mock_db._conn.commit = AsyncMock()
+
+        asyncio.run(self.manager.archive_stale(max_age_days=30))
+
+        execute_calls = self.mock_db._conn.execute.call_args_list
+        all_sql = " ".join(str(c) for c in execute_calls)
+        self.assertIn(
+            "last_used_at", all_sql,
+            f"archive_stale 的 SQL 应有 last_used_at 时间条件，实际: {all_sql}"
         )
 
 
@@ -203,3 +198,109 @@ class TestExtractInstinctsDedup(unittest.TestCase):
 
         # 断言：executemany（INSERT）应被调用
         self.mock_db._conn.executemany.assert_called_once()
+
+class TestCorrectInstinct(unittest.TestCase):
+    """测试 LLM 驱动的本能修正：correct_instinct(hint, action)
+
+    设计原则（2026-07-27 用户反馈驱动）：
+    - LLM 在 extract_instincts 里判断用户否定后，调用 correct_instinct 修正
+    - 不靠硬编码词表轮询，零硬代码
+    - 只在当前 active top 6 本能里定位（最可能被否定的）
+    - action 由 LLM 决定：demote=降权，archive=归档
+    """
+
+    def setUp(self):
+        self.mock_db = MagicMock()
+        self.mock_router = MagicMock()
+        self.manager = InstinctManager(db=self.mock_db, router=self.mock_router)
+        self.manager._available = True
+
+    def test_empty_hint_returns_none(self):
+        """空 hint 不触发修正"""
+        result = asyncio.run(self.manager.correct_instinct("", "demote"))
+        self.assertIsNone(result)
+
+    def test_no_match_returns_none(self):
+        """hint 与所有本能都不匹配时，不修正（避免误伤）"""
+        async def mock_get_active(limit=6, min_confidence=0.0):
+            return [{
+                "id": 3,
+                "content": "用户偏好浓香入味的菜品",
+                "confidence": 0.8,
+            }]
+        self.manager.get_active_instincts = mock_get_active
+
+        mock_cursor = AsyncMock()
+        self.mock_db._conn.execute = AsyncMock(return_value=mock_cursor)
+        self.mock_db._conn.commit = AsyncMock()
+
+        result = asyncio.run(self.manager.correct_instinct("用户喜欢被打断时继续说", "demote"))
+
+        self.assertIsNone(result)
+        self.mock_db._conn.execute.assert_not_called()
+
+    def test_demote_action_lowers_confidence(self):
+        """action=demote 时，应降权（confidence *= 0.5）"""
+        async def mock_get_active(limit=6, min_confidence=0.0):
+            return [{
+                "id": 1,
+                "content": "用户喜欢被打断时继续说",
+                "confidence": 0.8,
+            }]
+        self.manager.get_active_instincts = mock_get_active
+
+        mock_cursor = AsyncMock()
+        self.mock_db._conn.execute = AsyncMock(return_value=mock_cursor)
+        self.mock_db._conn.commit = AsyncMock()
+
+        result = asyncio.run(self.manager.correct_instinct("用户喜欢被打断时继续说", "demote"))
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result["corrected"])
+        self.assertEqual(result["action"], "demoted")
+        self.assertAlmostEqual(result["old_conf"], 0.8)
+        self.assertAlmostEqual(result["new_conf"], 0.4)
+        execute_calls = self.mock_db._conn.execute.call_args_list
+        all_sql = " ".join(str(c) for c in execute_calls)
+        self.assertIn("UPDATE instincts SET confidence", all_sql)
+
+    def test_archive_action_archives_instinct(self):
+        """action=archive 时，应归档（status='archived'）"""
+        async def mock_get_active(limit=6, min_confidence=0.0):
+            return [{
+                "id": 2,
+                "content": "用户喜欢被打断时继续说",
+                "confidence": 0.8,
+            }]
+        self.manager.get_active_instincts = mock_get_active
+
+        mock_cursor = AsyncMock()
+        self.mock_db._conn.execute = AsyncMock(return_value=mock_cursor)
+        self.mock_db._conn.commit = AsyncMock()
+
+        result = asyncio.run(self.manager.correct_instinct("用户喜欢被打断时继续说", "archive"))
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["action"], "archived")
+        execute_calls = self.mock_db._conn.execute.call_args_list
+        all_sql = " ".join(str(c) for c in execute_calls)
+        self.assertIn("status='archived'", all_sql)
+
+    def test_default_action_is_demote(self):
+        """不传 action 时，默认 demote"""
+        async def mock_get_active(limit=6, min_confidence=0.0):
+            return [{
+                "id": 1,
+                "content": "用户喜欢被打断时继续说",
+                "confidence": 0.8,
+            }]
+        self.manager.get_active_instincts = mock_get_active
+
+        mock_cursor = AsyncMock()
+        self.mock_db._conn.execute = AsyncMock(return_value=mock_cursor)
+        self.mock_db._conn.commit = AsyncMock()
+
+        result = asyncio.run(self.manager.correct_instinct("用户喜欢被打断时继续说"))
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["action"], "demoted")

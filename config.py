@@ -861,6 +861,12 @@ RAG_IMPORTANCE_WEIGHT = _safe_float(os.getenv("RAG_IMPORTANCE_WEIGHT"), 0.20)
 RAG_RECALL_LIMIT = _safe_int(os.getenv("RAG_RECALL_LIMIT"), 50)
 RAG_RERANK_LIMIT = _safe_int(os.getenv("RAG_RERANK_LIMIT"), 50)
 
+# RAG 最低相关分过滤：final_score 低于此值的结果被视为噪声丢弃
+# 根因（bench_rag_e2e 实测）：技术型 query 在向量库无精确命中时，RRF 融合会
+# 返回 score 0.007-0.07 的完全无关结果（如 Python query 返回亲密内容），
+# 污染上下文。闲聊型 query 天然宽松不过滤，非闲聊型按此阈值过滤。
+RAG_MIN_FINAL_SCORE = _safe_float(os.getenv("RAG_MIN_FINAL_SCORE"), 0.15)
+
 # ── 记忆/情绪阈值 (可环境变量覆盖) ──
 # 情绪触发安慰记忆检索的强度阈值 (0.0~1.0)
 EMOTION_TRIGGER_THRESHOLD = _safe_float(os.getenv("EMOTION_TRIGGER_THRESHOLD"), 0.5)
