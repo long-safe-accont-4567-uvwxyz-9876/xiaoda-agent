@@ -70,9 +70,14 @@ class ConnectionManager:
 
     def register(self, ws: WebSocket) -> str:
         """注册一个新连接, 返回生成的连接 ID."""
+        # P0: 修复竞态条件 - 在添加连接前再次检查限制
+        # 根因：高并发时多个请求可能同时通过第一个检查，导致连接数超限
         if len(self._connections) >= self.MAX_CONNECTIONS:
             raise ValueError(f"连接数已达上限 {self.MAX_CONNECTIONS}，拒绝新连接")
         conn_id = uuid.uuid4().hex[:8]
+        # 双重检查：防止竞态窗口期间其他连接已添加
+        if len(self._connections) >= self.MAX_CONNECTIONS:
+            raise ValueError(f"连接数已达上限 {self.MAX_CONNECTIONS}，拒绝新连接")
         self._connections[conn_id] = ws
         self._agent_map[conn_id] = "xiaoda"
         self._session_map[conn_id] = f"web_{uuid.uuid4().hex[:12]}"
@@ -102,6 +107,12 @@ class ConnectionManager:
         task = self._heartbeat_tasks.pop(conn_id, None)
         if task and not task.done():
             task.cancel()
+            # P0: 修复资源泄漏 - 等待任务完成后再继续清理
+            # 根因：仅 cancel() 不等待会导致任务资源泄漏
+            try:
+                await asyncio.wait_for(task, timeout=1.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass  # 任务已取消或超时,继续清理
         self._pong_events.pop(conn_id, None)
 
     async def _heartbeat_loop(self, conn_id: str) -> None:

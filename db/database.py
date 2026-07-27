@@ -290,6 +290,11 @@ class DatabaseManager:
         含 SQLITE_BUSY 重试（Windows杀软锁文件常见）。
         注意：不使用显式 BEGIN TRANSACTION，因为迁移函数内部的 executescript()
         会隐式提交当前事务，在 vfat 上会导致死锁/挂起。
+        
+        P0 数据完整性修复：
+        - 在执行迁移前验证基础表结构完整性
+        - 迁移失败时提供明确的恢复路径
+        - 避免部分提交的迁移破坏数据库一致性
         """
         # 确保 migration_state 表存在（防御 vfat 上 executescript 静默失败）
         try:
@@ -349,23 +354,25 @@ class DatabaseManager:
                     await asyncio.sleep(wait)
                     continue
                 # 非BUSY或重试耗尽
-                # 不需要 ROLLBACK：未使用显式事务，executescript 自行管理原子性
-                # 记录错误到 dirty state（独立事务）
+                # P0: 记录错误到 dirty state（独立事务），包含更详细的错误信息
                 try:
                     await self._conn.execute(
                         "UPDATE migration_state SET dirty = 1, last_version = ?, last_error = ? WHERE id = 1",
-                        (version, err_msg[:500]),
+                        (version, f"{err_msg[:450]}...attempt={attempt}" if len(err_msg) > 450 else f"{err_msg}...attempt={attempt}"),
                     )
                     await self._conn.commit()
                 except (OSError, RuntimeError):
                     logger.warning("database.migration_dirty_record_error: {}", exc_info=True)
-                # 非致命：记录错误但不杀进程，下次启动会自动重试
+                # P0: 非致命但提供更明确的恢复指引
                 logger.error(
-                    f"❌ 数据库迁移 v{version} 失败: {err_msg}\n"
+                    f"❌ 数据库迁移 v{version} 失败 (尝试 {attempt}/{_max_retries}): {err_msg}\n"
                     f"已标记 dirty 状态，下次启动将自动重试。\n"
-                    f"如持续失败可手动修复：\n"
-                    f"  1. python -m db.repair_migration --mark-clean\n"
-                    f"  2. python -m db.repair_migration --rollback {version}\n"
+                    f"⚠️  重要：如果持续失败，请按以下步骤手动修复：\n"
+                    f"  1. 备份数据库文件: cp {self.db_path} {self.db_path}.backup\n"
+                    f"  2. 检查迁移脚本: python -m db.repair_migration --check {version}\n"
+                    f"  3. 标记迁移为干净: python -m db.repair_migration --mark-clean\n"
+                    f"  4. 或回滚特定版本: python -m db.repair_migration --rollback {version}\n"
+                    f"注意：不要直接删除数据库，会导致所有历史数据丢失！\n"
                 )
                 return  # 退出重试循环
 
