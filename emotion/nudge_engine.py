@@ -354,7 +354,7 @@ class NudgeEngine:
                         session_id=session_id,
                         system_context=scene_prompt,  # P0：场景提示走 system_context
                     ),
-                    timeout=30,
+                    timeout=90,  # P1-4 修复：30→90，与主路径 180s 对齐，避免主动问候被提前截断
                 )
                 greeting = result.reply if hasattr(result, 'reply') else str(result)
             else:

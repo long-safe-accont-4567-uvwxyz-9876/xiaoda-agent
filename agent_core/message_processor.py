@@ -148,6 +148,18 @@ if TYPE_CHECKING:
     from agent_core._shared import RequestContext
 from agent_core._shared import ProcessResult
 
+# P0-2 修复：_system_context 改为 ContextVar，避免单例 AgentCore 并发覆写。
+# 主动问候(nudge_engine)与用户消息并发时，实例属性 self._system_context 互相覆写，
+# 导致场景提示串台。ContextVar 在 asyncio.Task 级别隔离，每个请求读到自己设置的值。
+from contextvars import ContextVar as _ContextVar
+_system_context_var: _ContextVar[str] = _ContextVar("_system_context", default="")
+
+# P0-3 修复：记录追加占位符 user 消息前的 history 长度，供 _process_impl 清理。
+# 内部场景（system_context 非空）的占位符（如"（主动问候）"）不应残留在内存 history 中。
+_history_len_before_placeholder_var: _ContextVar[int] = _ContextVar(
+    "_history_len_before_placeholder", default=-1,
+)
+
 
 # ── G1: 问候短路（模块级编译正则，一次编译多次使用） ───────────
 _GREETING_PATTERN = re.compile(
@@ -308,7 +320,13 @@ class MessageProcessorMixin:
             #   1. 使用 ends_with_valid_ending() 包含 emoji 判定
             #   2. finish_reason="stop" + 长回复(>=30字符) → 信任 LLM，视为完整
             #      （模型风格不以标点结尾是正常的，不应强制追加 "。"）
-            if not _eng_leak and is_reply_likely_complete(reply, _finish_reason):
+            # P1-4 修复：内部场景（system_context 非空，如主动问候）跳过提前完成判定。
+            # 根因：is_reply_likely_complete 对短问候判定"完整"直接接受，或判定"不完整"
+            # 触发 force_close 追加"。"，两种情况都影响主动问候的自然度。
+            # 修复：内部场景直接信任 LLM 输出，不做完整性判定/force_close。
+            if _system_context_var.get():
+                _reply_considered_complete = True
+            elif not _eng_leak and is_reply_likely_complete(reply, _finish_reason):
                 _reply_considered_complete = True
             elif _finish_reason == "length" and reply.strip() and len(reply) > 10:
                 # P0 修复：finish_reason="length" 时用 assistant-prefill 续写重试
@@ -506,7 +524,10 @@ class MessageProcessorMixin:
                              system_context: str = "") -> ProcessResult:
         # P0 新增：system_context 注入（主动问候等内部场景）
         # 存储在 self 上供 _build_main_messages 使用，不写入 conversation_logs
+        # P0-2 修复：同时写入 ContextVar，实现 asyncio.Task 级隔离，避免单例并发覆写。
+        # 保留 self._system_context 赋值作为向后兼容（无其他读取点，但避免意外断裂）。
         self._system_context = system_context or ""
+        _system_context_var.set(system_context or "")
         # 前端模式标记解析（搜索/深度思考）—— UI 按钮产生 [Search:...]/[Think:...] 标记，
         # 后端解析后剥离标记并注入对应能力：Search→强制 web_search 工具指令，Think→升级 chat_pro
         # P0 修复：不再重写 user_input，避免污染 conversation_logs.user_message
@@ -547,6 +568,8 @@ class MessageProcessorMixin:
         # 模式指令合并到 system_context（与主动问候等场景共用同一通道）
         if _mode_system_hint:
             self._system_context = (self._system_context + "\n" + _mode_system_hint).strip() if self._system_context else _mode_system_hint
+            # P0-2：同步到 ContextVar，保持与实例属性一致
+            _system_context_var.set(self._system_context)
         # 初始化 + 安全检查 + 上下文恢复
         trace, session_id, allowed, reason = await self._init_and_restore_context(
             ctx, user_input, user_id, source, status_callback, user_openid, session_id)
@@ -631,9 +654,29 @@ class MessageProcessorMixin:
         # think/search 模式仍正常工作（通过 system_context 注入模式提示，不影响主路径）
 
         # 主处理路径：完整记忆检索 + LLM 调用 + 后处理（统一入口，不再分流）
-        return await self._run_main_process_path(
+        result = await self._run_main_process_path(
             ctx, user_input, clean_input, user_id, source, user_openid, session_id,
             status_callback, image_data, is_master, force_voice, chat_targets, trace)
+
+        # P0-3 修复：内部场景（system_context 非空）清理占位符 user 消息。
+        # nudge_engine 用 "（主动问候）" 占位符调用 process()，_finalize_main_reply
+        # 把它追加到 context.history。若不清理，下一条真实消息会看到
+        # "用户之前说了（主动问候）"，污染上下文。DB 侧由 background_tasks 清空，
+        # 但内存 history 此前未清。
+        if system_context:
+            _len_before = _history_len_before_placeholder_var.get()
+            if _len_before >= 0:
+                _hist = self.context.history
+                # 占位符 user 消息位于 _len_before 索引（_finalize_main_reply 记录）。
+                # 其后可能追加了 assistant 回复，所以不能用 pop() 弹尾部，
+                # 需按索引移除 user 占位符，保留 assistant 回复。
+                if _len_before < len(_hist) and _hist[_len_before].get("role") == "user":
+                    _hist.pop(_len_before)
+                    logger.debug("agent.placeholder_cleaned_from_history",
+                                 placeholder_idx=_len_before,
+                                 remaining_history=len(_hist))
+
+        return result
 
     async def _init_and_restore_context(self, ctx: Any, user_input: Any, user_id: Any, source: Any,
                                          status_callback: Any, user_openid: Any, session_id: Any) -> tuple:
@@ -662,7 +705,10 @@ class MessageProcessorMixin:
         # switch_user_context 和 restore_from_db 曾因数据库连接竞争/锁等待阻塞 38 秒
         # （日志 17:23:16 agent.process.start → 17:23:54 context.restored）。
         # 修复：给两步分别加超时，超时后降级跳过（宁可上下文不完整也不阻塞主流程）。
-        _restore_id = user_openid or user_id
+        # P0-1 修复（QQ 会话恢复键与写库键不一致 → 突然失忆）：
+        # 写库键为 qq_{openid}（qq_bot_adapter.py:628），恢复必须用同一 user_id，
+        # 否则 restore_from_db 用裸 openid 查询 → DB 返回 0 行 → 每次重启后完全失忆。
+        _restore_id = user_id or user_openid
         if _restore_id:
             try:
                 await asyncio.wait_for(
@@ -821,7 +867,8 @@ class MessageProcessorMixin:
         #       污染历史记录 + LLM 在后续轮次回应这些元提示。
         # 修复：场景提示走 system message，user_input 保持中性占位符（如"（主动问候）"），
         #       仅 LLM 可见，不写入 DB。
-        _sys_ctx = getattr(self, "_system_context", "") or ""
+        # P0-2 修复：从 ContextVar 读取（Task 级隔离），而非实例属性（单例并发覆写）
+        _sys_ctx = _system_context_var.get() or ""
         if _sys_ctx:
             # 插入到消息列表的开头（system prompt 之后、history 之前）
             _sys_msg = {"role": "system", "content": _sys_ctx}
@@ -871,6 +918,10 @@ class MessageProcessorMixin:
         _should_remember = is_master or source != "qq_group"
         if _should_remember:
             if not ctx.handled_by_tool_call:
+                # P0-3 修复：记录追加占位符前的 history 长度，供 _process_impl 清理。
+                # 仅在内部场景（system_context 非空）时记录，正常用户消息不清理。
+                if _system_context_var.get():
+                    _history_len_before_placeholder_var.set(len(self.context.history))
                 await self.context.add_message("user", user_input)
                 # 降级/错误回复跳过记忆写入，但保留 history 一致性
                 if is_degraded_reply(reply):
@@ -1482,6 +1533,11 @@ class MessageProcessorMixin:
                 # 修复：_early_ends_valid 只在 length-specific 分支中评估
                 #   - 短回复(<30)：非开场白 + 合法结尾 → 完整
                 #   - 长回复(>=30)：finish_reason="stop" 或 合法结尾 → 完整（保留 finish_reason=None 信任）
+                # P1-4 修复：内部场景（system_context 非空）跳过提前完成判定，
+                # 避免主动问候被 force_close 或误判完整后截断。
+                if _system_context_var.get():
+                    _early_considered_complete = True
+                    break  # 内部场景：信任 LLM 输出，不做完整性判定
                 _early_complete = not _early_just_cleaned and (
                     (len(early_reply) < 30 and not _early_has_opening and _early_ends_valid)
                     or (len(early_reply) >= 30 and _early_finish_reason == "stop")
