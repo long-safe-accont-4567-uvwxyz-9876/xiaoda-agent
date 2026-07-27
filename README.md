@@ -596,18 +596,19 @@ docker-compose -f docker-compose.prod.yml up -d
 
 ***
 
-## 最新更新（v0.5.31）
+## 最新更新（v0.5.32）
 
-> **当前版本**：v0.5.31（详见 `pyproject.toml`；后续版本变更见 `git log`，未在此手动维护）
+> **当前版本**：v0.5.32（详见 `pyproject.toml`；后续版本变更见 `git log`，未在此手动维护）
 
 | 特性 | 说明 |
 |------|------|
-| **情感系统修复** | 兴奋情绪独立识别；害怕/恐惧→FEAR 映射修正 |
-| **主动消息上限** | 跨日重置内存计数器，修复 DB 异常降级后每日上限失效 |
-| **DND 问候盲区** | 用 dnd_end/dnd_start 替代硬编码，支持自定义免打扰时段 |
-| **群聊缓存隔离** | switch_user_context 清除动态提示缓存，避免跨用户数据泄露 |
-| **LLM 超时保护** | 首次调用 + 子代理委托加 asyncio.wait_for 超时 |
-| **138处 pass 治理** | 全部 except Exception:pass 加日志，异常不再静默吞没 |
+| **QQ 上下文失忆修复** | 会话恢复键与写库键统一为 `qq_{openid}`，重启后不再丢历史 |
+| **并发场景隔离** | `_system_context` 改用 ContextVar，主动问候与用户消息不再串场景 |
+| **主动问候截断修复** | 超时 30s→90s，内部场景跳过 early_complete 短回复判定，避免半句问候 |
+| **群聊/C2C 发送完整性** | 长回复全文送达或带截断标记，不再静默丢弃尾部 |
+| **临时 session 失效** | `qq_tmp_` 前缀检测，DB 超时恢复后不再写到不存在的 session |
+| **死路由清理** | 删除 ROUTE_TABLE 中的 chat_mini/chat_mimo/chat_ultra 等无引用遗留 |
+| **MiMo 链接更新** | provider doc_url 更新为有效注册链接 |
 | **Web UI 性能** | token 缓存 + N+1 改 JOIN + SQLite 异步化 |
 | **配置文档完善** | .env.example 补全 13 个遗漏环境变量 |
 | **10轮代码治理** | 安全/泄漏/正确性/异常处理/配置，共修复 50+ 缺陷 |

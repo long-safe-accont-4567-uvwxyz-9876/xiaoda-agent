@@ -23,7 +23,7 @@
       "base_url_default": "https://api.xiaomimimo.com/v1",
       "max_tokens_cap": 131072,
       "default_model": "mimo-v2.5",
-      "doc_url": "https://www.xiaomimimo.com/",
+      "doc_url": "https://platform.xiaomimimo.com?ref=SU5WDZ",
       "doc_note": "mimo-v2.5 官方 max_tokens 上限 131072；当前仅 mimo-v2.5 支持图片理解（Base64 编码传入）",
       "supports_vision": true,
       "supports_tools": true
