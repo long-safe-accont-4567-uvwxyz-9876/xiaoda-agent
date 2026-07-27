@@ -166,7 +166,17 @@ class InstinctManager:
             return
 
         now = time.time()
+        # 查询已有 active instincts 的 content，用于插入前去重
+        # 根因修复：原代码不查重，LLM 每轮措辞略有不同但语义重复的本能被无限 INSERT
+        # （4714 条，99.7% use_count=0）。这里用 difflib 检查相似度，O(new*active) 很快。
+        existing_cursor = await self.db._conn.execute(
+            "SELECT content FROM instincts WHERE status='active'"
+        )
+        existing_rows = await existing_cursor.fetchall()
+        existing_contents = [r["content"] if isinstance(r, dict) else r[0] for r in existing_rows]
+
         rows_to_insert = []
+        skipped_duplicates = 0
         for line in result.strip().splitlines():
             ln = line.strip()
             if ln.startswith(("<tool_call>", "```")):
@@ -196,9 +206,22 @@ class InstinctManager:
             # 过滤模板化/非偏好类内容（正则匹配）
             if any(p.search(content) for p in _INVALID_INSTINCT_PATTERNS):
                 continue
+            # 插入前去重：检查是否与已有 active instinct 高度相似（difflib ratio >= 0.75）
+            # 避免"用户喜欢亲密互动"vs"用户偏好亲密互动"这类语义重复无限堆积。
+            # 阈值 0.75 基于生产数据分析：随机 1000 对最高仅 0.667，>=0.75 的才是
+            # 真正语义重复（如"用户偏好强烈的感官刺激"vs"用户偏好直接且强烈的性刺激"=0.75）
+            is_duplicate = any(
+                difflib.SequenceMatcher(None, content, ex).ratio() >= 0.75
+                for ex in existing_contents
+            )
+            if is_duplicate:
+                skipped_duplicates += 1
+                continue
 
             rows_to_insert.append((content, confidence, session_id, now, now))
 
+        if skipped_duplicates > 0:
+            logger.info("instinct.dedup_skipped", count=skipped_duplicates, session=session_id)
         if rows_to_insert:
             try:
                 await self.db._conn.executemany(
@@ -238,22 +261,36 @@ class InstinctManager:
         await self.db._conn.commit()
 
     async def archive_stale(self, max_age_days: int = 30) -> int:
-        """归档超过 max_age_days 天未使用的 Instinct"""
+        """归档超过 max_age_days 天未使用，或创建超 max_age_days 天但从未被使用的 Instinct。
+
+        根因修复（2026-07-27 生产事故）：
+        - 原逻辑只按 last_used_at < cutoff 归档，但 INSERT 时 last_used_at = now，
+          导致刚创建的本能 30 天内不会被归档。
+        - get_active_instincts 只取 top 6，剩下 4708 条永远 use_count=0，
+          垃圾无限堆积 → merge_duplicates O(n²) 卡 370 秒。
+        - 修复：额外归档 use_count=0 且 created_at < cutoff 的垃圾本能
+          （创建超过 N 天但从未被使用 = 无价值垃圾）。
+        """
         if not self._available:
             return 0
         cutoff = time.time() - max_age_days * 86400
-        # 先查询数量
+        # 归档两类：(1) last_used_at < cutoff（长期未使用）
+        #          (2) use_count=0 AND created_at < cutoff（创建超 N 天但从未被使用）
         cursor = await self.db._conn.execute(
-            "SELECT COUNT(*) FROM instincts WHERE status='active' AND last_used_at < ?",
-            (cutoff,)
+            """SELECT COUNT(*) FROM instincts WHERE status='active' AND (
+                last_used_at < ? OR (use_count=0 AND created_at < ?)
+            )""",
+            (cutoff, cutoff)
         )
         row = await cursor.fetchone()
         count = row[0] if row else 0
         # 再执行更新
         if count > 0:
             await self.db._conn.execute(
-                "UPDATE instincts SET status='archived' WHERE status='active' AND last_used_at < ?",
-                (cutoff,)
+                """UPDATE instincts SET status='archived' WHERE status='active' AND (
+                    last_used_at < ? OR (use_count=0 AND created_at < ?)
+                )""",
+                (cutoff, cutoff)
             )
             await self.db._conn.commit()
             logger.info("instinct.archived_stale", count=count)
@@ -347,7 +384,9 @@ class InstinctManager:
         """Curator 一次完整运行：归档过期 + 合并重复"""
         if not self._available:
             return
-        archived = await self.archive_stale()
+        # 7 天：get_active_instincts 只取 top 6，7 天内未选中的 use_count=0 本能
+        # 视为垃圾归档（每 10 轮对话触发一次 curator，7 天足够 70+ 轮对话筛选）
+        archived = await self.archive_stale(max_age_days=7)
         merged = await self.merge_duplicates()
         logger.info("instinct.curator_done", archived=archived, merged=merged)
 
