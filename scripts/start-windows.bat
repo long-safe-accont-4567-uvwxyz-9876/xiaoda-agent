@@ -69,6 +69,17 @@ set PYTHONIOENCODING=utf-8
 :: Use WEBUI_PORT environment variable with fallback to 8082
 if not defined WEBUI_PORT set "WEBUI_PORT=8082"
 
+:: Check if port is already in use
+netstat -ano | findstr ":%WEBUI_PORT% " | findstr "LISTENING" >nul 2>nul
+if %errorlevel% equ 0 (
+    echo   [WARN] 端口 %WEBUI_PORT% 已被占用！
+    echo   解决方法：
+    echo     1. 关闭占用该端口的程序后重试
+    echo     2. 或设置其他端口：set WEBUI_PORT=8083 ^&^& start-windows.bat
+    echo.
+    goto :pause_exit
+)
+
 :: Start in Web mode by default (first-run will auto-trigger setup wizard)
 echo   Starting Xiaoda Agent...
 echo.
@@ -87,7 +98,10 @@ if /i "%LAUNCH_MODE%"=="--web" (
 :: Check exit code
 if %errorlevel% neq 0 (
     echo.
-    echo   [ERROR] Xiaoda Agent exited with code %errorlevel%
+    echo   [ERROR] Xiaoda Agent 退出，代码 %errorlevel%
+    echo.
+    echo   看门狗已停止自动恢复（可能原因：连续崩溃超阈值/API密钥失效/网络异常）。
+    echo   请运行 doctor.bat 诊断，或查看 logs\watchdog.log 排查。
 )
 
 :pause_exit

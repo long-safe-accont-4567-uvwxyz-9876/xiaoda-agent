@@ -86,6 +86,7 @@ powershell -NoProfile -Command ^
     "  Remove-Item -Recurse -Force ($installDir + '\_internal\web\dist') -ErrorAction SilentlyContinue; " ^
     "  Remove-Item -Recurse -Force ($installDir + '\web\dist') -ErrorAction SilentlyContinue; " ^
     "  Get-ChildItem -Path $updateSrc | Copy-Item -Recurse -Force -Destination $installDir\; " ^
+    "  if (-not (Test-Path ($installDir + '\xiaoda-agent.exe'))) { Write-Host '  Update FAILED: xiaoda-agent.exe missing. Restoring backup...'; foreach ($item in @('.env','config','credentials','data','stickers','xiaoli-stickers','agent-stickers','media','voice_refs','files','memory_state','plugins')) { $src = $backupDir + '\' + $item; if (Test-Path $src) { Copy-Item -Recurse -Force $src ($env:USERPROFILE + '\.ai-agent\') } }; Write-Host '  Backup restored. Please use setup.exe for manual update.'; exit 1 }; " ^
     "  foreach ($item in @('.env', 'config', 'credentials', 'data', 'stickers', 'xiaoli-stickers', 'agent-stickers', 'media', 'voice_refs', 'files', 'memory_state', 'plugins')) { " ^
     "    $src = $backupDir + '\' + $item; " ^
     "    if (Test-Path $src) { Copy-Item -Recurse -Force $src ($env:USERPROFILE + '\.ai-agent\') }; " ^
@@ -101,7 +102,7 @@ powershell -NoProfile -Command ^
     "  exit 0; " ^
     "}" 2>nul
 
-:: Ensure .auto_update flag file exists
-if not exist "%AUTO_UPDATE_FLAG%" type nul > "%AUTO_UPDATE_FLAG%"
+:: 不自动启用自动更新；用户需显式创建 .auto_update 文件来开启
+:: （避免未经用户同意自动覆盖安装）
 
 goto :eof

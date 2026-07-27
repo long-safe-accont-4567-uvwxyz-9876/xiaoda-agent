@@ -25,8 +25,20 @@ SetCompressor /SOLID lzma
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
+!include "WordFunc.nsh"
+!include "WinMessages.nsh"
 !define MUI_ICON "dist\xiaoda-agent\xiaoda-icon.ico"
 !define MUI_UNICON "dist\xiaoda-agent\xiaoda-icon.ico"
+
+; 安装页面自定义文本
+!define MUI_WELCOMEPAGE_TITLE "欢迎使用小妲 Agent 安装程序"
+!define MUI_WELCOMEPAGE_TEXT "本程序将安装小妲 Agent 到你的用户目录（无需管理员权限）。$\n$\n点击「下一步」继续。"
+!define MUI_INSTFILESPAGE_FINISH_HEADER_TEXT "安装完成"
+!define MUI_INSTFILESPAGE_FINISH_HEADER_SUBTEXT "小妲 Agent 已成功安装到你的计算机"
+; 安装完成后可选运行自检
+!define MUI_FINISHPAGE_RUN "$INSTDIR\xiaoda-agent.exe"
+!define MUI_FINISHPAGE_RUN_PARAMETERS "doctor"
+!define MUI_FINISHPAGE_RUN_TEXT "运行自检（推荐）"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -51,7 +63,8 @@ SetShellVarContext current
 ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "UninstallString"
 ${If} $0 != ""
   ; 检测到旧版 per-machine 安装，提示并调用其 uninstaller
-  MessageBox MB_YESNO|MB_ICONQUESTION "检测到旧版（per-machine）安装于 $0。$\n$\n是否先卸载旧版再继续安装新版（per-user）？$\n（卸载旧版需要管理员权限，若取消请右键本安装包$\"以管理员身份运行$\"）" IDYES +2 IDNO skip_legacy_uninstall
+  MessageBox MB_YESNO|MB_ICONQUESTION "检测到旧版（per-machine）安装于 $0。$\n$\n是否先卸载旧版再继续安装新版（per-user）？$\n（卸载旧版需要管理员权限，若取消请右键本安装包$\"以管理员身份运行$\"）" IDYES do_legacy_uninstall IDNO skip_legacy_uninstall
+do_legacy_uninstall:
   ; P1-7: ExecWait 后检查错误标志，避免 UAC 取消或卸载失败仍继续安装
   ClearErrors
   ExecWait '"$0" /S' ; /S 静默卸载（NSIS 默认 uninstaller 支持）
@@ -77,6 +90,8 @@ File /nonfatal "dist\xiaoda-agent\.env.example"
 Delete "$INSTDIR\_internal\config\webui_overrides.json"
 Delete "$INSTDIR\config\webui_overrides.json"
 ; 清理旧版 agent 配置文件（IP 风险名称迁移）
+; per-user 安装下 $COMMONAPPDATA (C:\ProgramData) 可能无写权限，Delete 失败不影响安装
+ClearErrors
 Delete "$COMMONAPPDATA\Xiaoda Agent\config\agents\nahida.json"
 Delete "$COMMONAPPDATA\Xiaoda Agent\config\agents\keli.json"
 Delete "$COMMONAPPDATA\Xiaoda Agent\config\agents\yinlang.json"
@@ -87,6 +102,7 @@ Delete "$APPDATA\Xiaoda Agent\config\agents\keli.json"
 Delete "$APPDATA\Xiaoda Agent\config\agents\yinlang.json"
 Delete "$APPDATA\Xiaoda Agent\config\agents\xilian.json"
 Delete "$APPDATA\Xiaoda Agent\config\agents\nike.json"
+ClearErrors
 CreateShortCut "$DESKTOP\小妲Agent.lnk" "$INSTDIR\xiaoda-agent.exe" "--desktop" "$INSTDIR\xiaoda-icon.ico" 0
 CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
 CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\小妲Agent.lnk" "$INSTDIR\xiaoda-agent.exe" "--desktop" "$INSTDIR\xiaoda-icon.ico" 0
@@ -114,6 +130,18 @@ WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_
 WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "Publisher" "${PRODUCT_PUBLISHER}"
 ; per-user 安装的卸载入口也放当前用户（SetShellVarContext current 已设置）
 WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "InstallLocation" "$INSTDIR"
+; 添加安装目录到用户 PATH（per-user，避免重复添加）
+ReadRegStr $R0 HKCU "Environment" "PATH"
+ClearErrors
+${WordFind} "$R0" "$INSTDIR" "E+1{" $R1
+IfErrors 0 path_already_exists
+  ${If} $R0 == ""
+    WriteRegStr HKCU "Environment" "PATH" "$INSTDIR"
+  ${Else}
+    WriteRegStr HKCU "Environment" "PATH" "$R0;$INSTDIR"
+  ${EndIf}
+  SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment"
+path_already_exists:
 SectionEnd
 
 Section Uninstall
@@ -142,4 +170,10 @@ RMDir /r "$SMPROGRAMS\${PRODUCT_NAME}"
 ; per-user 卸载：清理 HKCU 注册表（与安装段对应）
 DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 DeleteRegKey HKCU "Software\${PRODUCT_NAME}"
+; 从用户 PATH 移除安装目录
+ReadRegStr $R0 HKCU "Environment" "PATH"
+${WordReplace} "$R0" "$INSTDIR;" "" "+" $R1
+${WordReplace} "$R1" ";$INSTDIR" "" "+" $R2
+WriteRegStr HKCU "Environment" "PATH" "$R2"
+SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment"
 SectionEnd

@@ -344,6 +344,13 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Cache NSIS
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: C:\Program Files (x86)\NSIS
+          key: nsis-3-windows-x64
+
       - name: Package (Windows - NSIS Installer)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -359,7 +366,9 @@ jobs:
           Copy-Item "scripts/doctor.bat" "dist/xiaoda-agent/"
           Copy-Item "assets/xiaoda-icon.ico" "dist/xiaoda-agent/xiaoda-icon.ico"
 
-          choco install nsis -y --no-progress
+          if (-not (Test-Path "C:\Program Files (x86)\NSIS\makensis.exe")) {
+            choco install nsis -y --no-progress
+          }
           $nsisPath = "C:\Program Files (x86)\NSIS\makensis.exe"
           if (-not (Test-Path $nsisPath)) {
             $nsisPath = (Get-Command makensis -ErrorAction SilentlyContinue).Source
