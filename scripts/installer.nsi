@@ -60,18 +60,19 @@ SetShellVarContext current
 ;   检测 HKLM 下的旧版（ProgramFiles 安装），调用其 uninstaller 卸载，
 ;   避免新旧版本并存于不同目录。旧版 uninstaller 需要 admin 权限，
 ;   这里用 ExecWait 同步等待卸载完成；若用户未以 admin 运行，跳过迁移。
+;   修复（v0.5.40）：原 MessageBox 每次安装都弹框要求 admin，用户体验差。
+;   改为静默检测：仅在旧版 uninstaller 可访问时静默卸载，失败则跳过继续安装，
+;   不阻塞 per-user 安装流程。用户可事后手动清理旧版。
 ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "UninstallString"
 ${If} $0 != ""
-  ; 检测到旧版 per-machine 安装，提示并调用其 uninstaller
-  MessageBox MB_YESNO|MB_ICONQUESTION "检测到旧版（per-machine）安装于 $0。$\n$\n是否先卸载旧版再继续安装新版（per-user）？$\n（卸载旧版需要管理员权限，若取消请右键本安装包$\"以管理员身份运行$\"）" IDYES do_legacy_uninstall IDNO skip_legacy_uninstall
-do_legacy_uninstall:
-  ; P1-7: ExecWait 后检查错误标志，避免 UAC 取消或卸载失败仍继续安装
+  ; 检测到旧版 per-machine 安装，尝试静默卸载（不弹框，不强制 admin）
   ClearErrors
   ExecWait '"$0" /S' ; /S 静默卸载（NSIS 默认 uninstaller 支持）
-  IfErrors 0 skip_legacy_uninstall
-    MessageBox MB_OK|MB_ICONSTOP "旧版卸载失败（UAC 取消或卸载器异常）。$\n请以管理员身份重试，或先手动卸载旧版再运行本安装包。"
-    Abort
-skip_legacy_uninstall:
+  ${If} ${Errors}
+    ; 旧版卸载失败（需 admin 或卸载器异常）：不阻塞，继续 per-user 安装
+    ClearErrors
+    MessageBox MB_OK|MB_ICONINFORMATION "检测到旧版（per-machine）残留于 $0。$\n$\n新版将安装到用户目录（无需管理员权限）。$\n旧版可在控制面板手动卸载，不影响新版使用。"
+  ${EndIf}
 ${EndIf}
 
 SetOutPath "$INSTDIR"

@@ -39,6 +39,11 @@ powershell -NoProfile -Command ^
     "  $release = Invoke-RestMethod -Uri \"https://api.github.com/repos/$repo/releases/latest\" -TimeoutSec 10; " ^
     "  $latest = $release.tag_name -replace '^v',''; " ^
     "  if ($latest -eq $curVer) { Write-Host '  Already up to date v' + $latest; exit 0 }; " ^
+    "  # 版本号大小比较（治本：避免降级'更新'导致崩溃）" ^
+    "  # 原 bug：仅字符串相等比较，v0.5.4 != v0.5.37 触发下载，但 v0.5.37 < v0.5.4 是降级" ^
+    "  # 用 [Version] 对象比较，仅当 latest > current 才更新" ^
+    "  try { $curVerObj = [Version]$curVer; $latestVerObj = [Version]$latest } catch { Write-Host '  Version parse failed, skipping update'; exit 0 }; " ^
+    "  if ($latestVerObj -le $curVerObj) { Write-Host '  Current v' + $curVer + ' >= latest v' + $latest + ', no update needed'; exit 0 }; " ^
     "  Write-Host '  New version available: v' + $latest + ' (current: v' + $curVer + ')'; " ^
     "$asset = $release.assets | Where-Object { $_.name -like '*windows-x64*.tar.gz' } | Select-Object -First 1; " ^
     "  if (-not $asset) { Write-Host '  No Windows installer found, skipping'; exit 0 }; " ^
