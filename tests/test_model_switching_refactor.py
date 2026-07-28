@@ -183,3 +183,68 @@ def test_config_service_save_does_not_touch_route_table():
     assert "ROUTE_TABLE.items" not in code_only, \
         "_save() 不应再遍历 ROUTE_TABLE（反向同步死代码已删除）"
     assert "restoring _data from ROUTE_TABLE" not in source
+
+
+# ── Task 4: set_chat_model 原子化 ──
+
+@pytest.fixture
+def mock_config_service(monkeypatch):
+    """Mock ConfigService 单例，避免测试污染生产配置文件。"""
+    mock_cfg = MagicMock()
+    mock_cfg.set = MagicMock()
+    # patch get_config_service 返回 mock
+    import web.config_service
+    monkeypatch.setattr(web.config_service, "get_config_service", lambda: mock_cfg)
+    # 同时 patch ModelRouteRegistry._get_cfg 已注入的实例
+    return mock_cfg
+
+
+def test_set_chat_model_rolls_back_on_provider_not_registered(mock_config_service):
+    """set_chat_model 在 provider 未注册时回滚 ROUTE_TABLE。"""
+    from model_router import ModelRouter, ROUTE_TABLE
+    try:
+        router = ModelRouter(api_key="fake")
+    except Exception:
+        pytest.skip("ModelRouter 在测试环境无法初始化")
+    # 注入 mock registry 避免真实持久化
+    from model_router import ModelRouteRegistry
+    router._registry = ModelRouteRegistry(ROUTE_TABLE, config_service=mock_config_service)
+
+    original_model = ROUTE_TABLE["chat"]["model"]
+    original_client = ROUTE_TABLE["chat"]["client"]
+
+    # 尝试切换到未注册的自定义 provider
+    from core.app_exception import LLMError
+    with pytest.raises(LLMError):
+        router.set_chat_model("unknown_provider_xyz", "some-model")
+
+    # ROUTE_TABLE 未被污染（新实现先验证再改状态）
+    assert ROUTE_TABLE["chat"]["model"] == original_model
+    assert ROUTE_TABLE["chat"]["client"] == original_client
+
+
+def test_set_chat_model_persists_all_synced_tasks(mock_config_service):
+    """set_chat_model 成功时通过 Registry 更新所有同步 task。"""
+    from model_router import ModelRouter
+    try:
+        router = ModelRouter(api_key="fake")
+    except Exception:
+        pytest.skip("ModelRouter 在测试环境无法初始化")
+    # mock registry 追踪调用
+    router._registry = MagicMock()
+    router._registry.update_route = MagicMock(return_value={"model": "x", "client": "y"})
+    router._registry.all_tasks = MagicMock(return_value=[
+        "chat", "chat_pro", "chat_flash", "emotion_analysis",
+        "tool_result_wrap", "memory_encoding",
+    ])
+    router._registry.get_task = MagicMock(return_value={
+        "max_tokens": 8192, "thinking": {"type": "disabled"},
+    })
+
+    router.set_chat_model("mimo", "mimo-v2.5")
+
+    # 至少调用了 chat + chat_pro + chat_flash
+    tasks_updated = [c.args[0] for c in router._registry.update_route.call_args_list]
+    assert "chat" in tasks_updated
+    assert "chat_pro" in tasks_updated
+    assert "chat_flash" in tasks_updated
