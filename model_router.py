@@ -446,6 +446,9 @@ class ModelRouter:
 
         self._custom_clients: dict[str, AsyncOpenAI] = {}
         self._register_credential_pool_providers()
+        # 路由表注册中心：ROUTE_TABLE 的唯一读写入口
+        # 启动后 ROUTE_TABLE 模块级变量作为只读快照，所有修改走 _registry
+        self._registry: ModelRouteRegistry = ModelRouteRegistry(ROUTE_TABLE)
         self._current_chat_model: dict | None = None
         self._cache_stats = {
             "total_calls": 0,
@@ -617,91 +620,82 @@ class ModelRouter:
         return self._transports.get(provider)
 
     def set_chat_model(self, provider: str, model_id: str) -> dict:
-        ROUTE_TABLE["chat"]["model"] = model_id
-        ROUTE_TABLE["chat"]["client"] = provider
-        # 同步更新全局 DEFAULT_PROVIDER，使子代理、成本统计等全部跟随
-        _set_default_provider(provider)
+        """切换 chat 主模型，原子化更新所有同步路由。
+
+        通过 ModelRouteRegistry.update_route() 原子化：
+        1. 先验证 provider 可用（已注册），未注册直接抛（此时还没改任何状态）
+        2. 一次性更新 chat + chat_pro + chat_flash 等所有同步 task
+        3. 每条 task 的持久化由 Registry 负责（失败回滚单条 task 内存）
+
+        Args:
+            provider: provider 名称
+            model_id: 模型 ID
+
+        Returns:
+            {"provider": ..., "model_id": ...}
+
+        Raises:
+            LLMError: provider 未注册
+        """
+        # Step 1: 先验证 provider 可用，未注册直接抛（此时还没改任何状态）
         if provider not in ("mimo", "agnes"):
             if provider not in self._custom_clients:
                 self._lazy_register_provider(provider)
             if provider not in self._custom_clients:
                 raise LLMError(f"自定义 provider {provider} 未注册，请先注册客户端")
 
-        # 全量同步：所有聊天类 + 轻量任务 task_type 都跟随主 provider
-        # 用户切换 provider 时，确保所有场景都用目标 provider，不再残留旧 provider
-        _sync_tasks = ("chat_pro", "chat_flash",
+        # Step 2: 同步更新 DEFAULT_PROVIDER（影响子代理、成本统计）
+        _set_default_provider(provider)
+
+        # Step 3: 收集所有需要同步的 task（chat 主路由 + 同步 task）
+        _sync_tasks = ("chat", "chat_pro", "chat_flash",
                        "emotion_analysis", "tool_result_wrap",
                        "memory_encoding")
+
+        # agnes 不支持 thinking，切换到 agnes 时所有 task 禁用 thinking
+        _thinking_for_agnes = {"type": "disabled"}
+
+        # Step 4: 通过 Registry 原子化更新每个 task
+        # Registry.update_route 内部会持久化 + 失败回滚单条 task
+        last_error: Exception | None = None
+        _updated_tasks: list[str] = []
         for _task in _sync_tasks:
-            if _task in ROUTE_TABLE:
-                ROUTE_TABLE[_task]["model"] = model_id
-                ROUTE_TABLE[_task]["client"] = provider
-                # agnes 不支持 thinking，切换到 agnes 时禁用 thinking
-                if provider == "agnes" and "thinking" in ROUTE_TABLE[_task]:
-                    ROUTE_TABLE[_task]["thinking"] = {"type": "disabled"}
-        # P0 修复（用户反馈"UI 设置全部 Agnes，哪来的 Mimo v2.5"根因）：
-        # 删除"chat_flash 跨 provider 降级"逻辑——它强制把 chat_flash 改成不同 provider，
-        # 违背用户明确选择（用户选 agnes 时 chat_flash 被改成 mimo，触发 content_filter，
-        # 导致 14 秒延迟 + verification retry + 工具格式泄漏）。
-        # fallback 多样化应由 FALLBACK_ROUTE 在故障时处理，而非在用户主动切换时改 chat_flash。
-        # if provider in _CROSS_PROVIDER_MAP:
-        #     fb_provider, fb_model = _CROSS_PROVIDER_MAP[provider]
-        #     if "chat_flash" in ROUTE_TABLE:
-        #         ROUTE_TABLE["chat_flash"]["client"] = fb_provider
-        #         ROUTE_TABLE["chat_flash"]["model"] = fb_model
+            if _task not in self._registry.all_tasks():
+                continue
+            # 读取原 entry 拿 max_tokens 和 thinking
+            old_entry = self._registry.get_task(_task) or {}
+            _thinking = _thinking_for_agnes if provider == "agnes" else old_entry.get("thinking")
+            try:
+                self._registry.update_route(
+                    _task,
+                    model_id=model_id,
+                    provider=provider,
+                    max_tokens=old_entry.get("max_tokens"),
+                    thinking=_thinking,
+                    timeout=self.TASK_TIMEOUTS.get(_task),
+                )
+                _updated_tasks.append(_task)
+            except Exception as e:
+                logger.error("router.set_chat_model_task_failed task={} error={}",
+                             _task, str(e))
+                last_error = e
+
         logger.info("router.all_tasks_synced",
                     provider=provider, model=model_id,
-                    synced_tasks=list(_sync_tasks))
+                    synced_tasks=_updated_tasks)
 
-        self._current_chat_model = {"provider": provider, "model_id": model_id}
-        # 持久化到 config_service，以便重启后恢复上次聊天模型
-        # 必须同步写入 models.chat_model 与 models.routes.chat，避免两套数据不同步
-        # 否则 _apply_route_overrides 与 _restore_chat_model 启动顺序会造成覆盖
+        if last_error is not None:
+            raise LLMError(f"切换 chat 模型时部分 task 持久化失败: {last_error}")
+
+        # Step 5: 同步 chat_model 字段到 ConfigService（WebUI 显示用）
         try:
             from web.config_service import get_config_service
             cfg = get_config_service()
-            cfg.set(
-                "models.chat_model",
-                {"provider": provider, "model_id": model_id},
-            )
-            # P0 修复（用户反馈"UI 设置 Agnes 但 chat_flash 还显示 mimo"根因）：
-            # 持久化所有同步过的 task 路由到 webui_overrides.json，避免 WebUI 显示与运行时不一致
-            # 之前只持久化 chat，其他 task（chat_flash/chat_mini/chat_pro 等）保留旧配置，
-            # 导致用户在 WebUI 看到 chat_flash 还是 mimo，误以为没生效
-            for _task_name in _sync_tasks:
-                _entry = ROUTE_TABLE.get(_task_name, {})
-                if not _entry:
-                    continue
-                cfg.set(f"models.routes.{_task_name}", {
-                    "model": _entry.get("model", model_id),
-                    "client": _entry.get("client", provider),
-                    "max_tokens": _entry.get("max_tokens"),
-                    "thinking": bool(
-                        _entry.get("thinking")
-                        and isinstance(_entry.get("thinking"), dict)
-                        and _entry["thinking"].get("type") == "enabled"
-                    ),
-                    "timeout": self.TASK_TIMEOUTS.get(_task_name, 60),
-                })
-            # chat 主路由单独持久化（确保 max_tokens 等字段完整）
-            chat_entry = ROUTE_TABLE.get("chat", {})
-            cfg.set("models.routes.chat", {
-                "model": model_id,
-                "client": provider,
-                "max_tokens": chat_entry.get("max_tokens"),
-                "thinking": bool(
-                    chat_entry.get("thinking")
-                    and isinstance(chat_entry.get("thinking"), dict)
-                    and chat_entry["thinking"].get("type") == "enabled"
-                ),
-                "timeout": self.TASK_TIMEOUTS.get("chat"),
-            })
+            cfg.set("models.chat_model", {"provider": provider, "model_id": model_id})
         except (OSError, KeyError, ValueError, TypeError, RuntimeError) as e:
-            # CodeRabbit #4 修复：捕获 RuntimeError（config_service 可能抛出的非 OSError/KeyError/ValueError/TypeError）
-            # 根因：原 except 不含 RuntimeError，config_service 抛 RuntimeError 时会向上传播
-            # 到 _restore_chat_model 的 fallback，导致 sticky fallback（mimo 覆盖用户选择）。
-            # 优先保证功能性：persist 失败不应影响内存中的 set_chat_model 已完成的路由切换。
             logger.warning("router.chat_model_persist_failed error={}", str(e))
+
+        self._current_chat_model = {"provider": provider, "model_id": model_id}
         logger.info("router.chat_model_changed", provider=provider, model=model_id)
         return {"provider": provider, "model_id": model_id}
 

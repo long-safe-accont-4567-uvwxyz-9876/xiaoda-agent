@@ -113,6 +113,9 @@ def test_set_chat_model_persists_both_chat_model_and_routes_chat():
     router._custom_clients = set()
     router._current_chat_model = None
     router.TASK_TIMEOUTS = {"chat": 60}
+    # 初始化 _registry（新 set_chat_model 依赖它）
+    from model_router import ModelRouteRegistry
+    router._registry = ModelRouteRegistry(ROUTE_TABLE)
     # 模拟 agnes 已注册（避免 _lazy_register_provider 被调用）
     router._custom_clients.add("agnes")
     router._lazy_register_provider = MagicMock()
@@ -174,6 +177,9 @@ def test_set_chat_model_routes_chat_thinking_field_is_bool():
     router._current_chat_model = None
     router.TASK_TIMEOUTS = {"chat": 60}
     router._lazy_register_provider = MagicMock()
+    # 初始化 _registry（新 set_chat_model 依赖它）
+    from model_router import ModelRouteRegistry
+    router._registry = ModelRouteRegistry(ROUTE_TABLE)
 
     original_chat = dict(ROUTE_TABLE["chat"])
     try:
