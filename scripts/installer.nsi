@@ -104,9 +104,13 @@ Delete "$APPDATA\Xiaoda Agent\config\agents\yinlang.json"
 Delete "$APPDATA\Xiaoda Agent\config\agents\xilian.json"
 Delete "$APPDATA\Xiaoda Agent\config\agents\nike.json"
 ClearErrors
-CreateShortCut "$DESKTOP\小妲Agent.lnk" "$INSTDIR\xiaoda-agent.exe" "--desktop" "$INSTDIR\xiaoda-icon.ico" 0
+; 快捷方式必须指向 start-windows.bat（唯一启动入口）：
+;   - 执行更新检查（auto-update.bat）防止用户运行旧版
+;   - 启动看门狗，崩溃时自动重启
+;   - 直接运行 xiaoda-agent.exe 会绕过上述保护，更新后可能崩溃
+CreateShortCut "$DESKTOP\小妲Agent.lnk" "$INSTDIR\start-windows.bat" "--desktop" "$INSTDIR\xiaoda-icon.ico" 0
 CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
-CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\小妲Agent.lnk" "$INSTDIR\xiaoda-agent.exe" "--desktop" "$INSTDIR\xiaoda-icon.ico" 0
+CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\小妲Agent.lnk" "$INSTDIR\start-windows.bat" "--desktop" "$INSTDIR\xiaoda-icon.ico" 0
 CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\卸载.lnk" "$INSTDIR\uninstall.exe"
 ; 创建用户数据目录结构（供用户上传参考音频、表情包等）
 CreateDirectory "$PROFILE\.ai-agent\data\voice_refs"
@@ -126,7 +130,9 @@ WriteUninstaller "$INSTDIR\uninstall.exe"
 ; per-user 安装：注册表写 HKCU 而非 HKLM（无需管理员权限）
 WriteRegStr HKCU "Software\${PRODUCT_NAME}" "InstallDir" "$INSTDIR"
 WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "DisplayName" "${PRODUCT_NAME}"
-WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "UninstallString" "$INSTDIR\uninstall.exe"
+; UninstallString 必须用引号包裹路径，否则路径含空格时
+; "C:\Users\foo\LocalAppData\Xiaoda Agent\uninstall.exe" 会被拆成多个参数
+WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "UninstallString" '"$INSTDIR\uninstall.exe"'
 WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "DisplayVersion" "${PRODUCT_VERSION}"
 WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "Publisher" "${PRODUCT_PUBLISHER}"
 ; per-user 安装的卸载入口也放当前用户（SetShellVarContext current 已设置）
@@ -173,9 +179,16 @@ RMDir /r "$SMPROGRAMS\${PRODUCT_NAME}"
 DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 DeleteRegKey HKCU "Software\${PRODUCT_NAME}"
 ; 从用户 PATH 移除安装目录
+; 处理三种情况：PATH 恰为 $INSTDIR / $INSTDIR;前缀 / ;$INSTDIR 后缀
 ReadRegStr $R0 HKCU "Environment" "PATH"
-${WordReplace} "$R0" "$INSTDIR;" "" "+" $R1
-${WordReplace} "$R1" ";$INSTDIR" "" "+" $R2
-WriteRegStr HKCU "Environment" "PATH" "$R2"
+ClearErrors
+${If} "$R0" == "$INSTDIR"
+  ; PATH 恰好只有安装目录：清空
+  WriteRegStr HKCU "Environment" "PATH" ""
+${Else}
+  ${WordReplace} "$R0" "$INSTDIR;" "" "+" $R1
+  ${WordReplace} "$R1" ";$INSTDIR" "" "+" $R2
+  WriteRegStr HKCU "Environment" "PATH" "$R2"
+${EndIf}
 SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment"
 SectionEnd
