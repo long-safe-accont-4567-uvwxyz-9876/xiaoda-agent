@@ -17,7 +17,8 @@
       "doc_url": "https://docs.agnes-ai.com/",
       "doc_note": "agnes-2.0-flash 官方 max_tokens 上限 65536（2026-07 官方文档确认；超过返回 500 InternalServerError 'max_tokens exceeds the limit of 65536'）。配置取 65535（=上限-1）作为安全裁剪阈值，避免边界值因 SDK/服务端差异偶发 500。",
       "supports_vision": false,
-      "supports_tools": true
+      "supports_tools": true,
+      "builtin": true
     },
     "mimo": {
       "base_url_default": "https://api.xiaomimimo.com/v1",
@@ -27,7 +28,8 @@
       "doc_url": "https://platform.xiaomimimo.com?ref=SU5WDZ",
       "doc_note": "mimo-v2.5 官方 max_tokens 上限 131072；当前仅 mimo-v2.5 支持图片理解（Base64 编码传入）。default_pro_model 为思考增强变体 mimo-v2.5-pro。",
       "supports_vision": true,
-      "supports_tools": true
+      "supports_tools": true,
+      "builtin": true
     },
     "deepseek": {
       "base_url_default": "https://api.deepseek.com/v1",

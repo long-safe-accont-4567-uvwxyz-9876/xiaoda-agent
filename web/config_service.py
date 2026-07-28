@@ -241,16 +241,40 @@ class ConfigService:
             node = node[part]
         node[parts[-1]] = self._detach(value)
 
+    def _get_nested(self, path: str) -> Any:
+        """读取路径的原始值（用于 _save 失败时回滚，不做 models. 深拷贝优化）。
+
+        与 get() 的区别：get() 对 models. 路径返回 json 深拷贝（防引用污染），
+        _get_nested 返回原始引用，调用方需自行深拷贝（回滚场景在锁内，无并发风险）。
+        """
+        node: Any = self._data
+        for part in path.split("."):
+            if not isinstance(node, dict) or part not in node:
+                return None
+            node = node[part]
+        return node
+
     def set(self, path: str, value: Any) -> None:
         """按点分路径设置配置项, 落盘并通知 watcher.
 
         Args:
             path: 点分路径
             value: 新值
+
+        Qodo#2 修复：_save() 失败时回滚 _data，防止内存数据被污染。
+        旧实现 _assign 先改 _data 再 _save，_save 失败时 _data 已是新值，
+        后续任意写入会把污染的 _data 持久化（registry 只回滚 ROUTE_TABLE 不够）。
         """
         with self._lock:
+            old_value = copy.deepcopy(self._get_nested(path))
             self._assign(path, value)
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                # _save 失败：回滚 _data 到旧值，防止内存污染
+                self._assign(path, old_value)
+                logger.error("config_service.set_rollback path={} reason=save_failed", path)
+                raise
         # 审计日志：models. 路径写入记录简洁 INFO（无堆栈），便于追踪模型配置变更
         if path.startswith("models."):
             logger.info("config_service.models_write path={} value={}",
@@ -265,11 +289,23 @@ class ConfigService:
 
         Args:
             updates: {点分路径: 值} 字典
+
+        Qodo#2 修复：_save() 失败时回滚所有已修改路径的 _data。
         """
         with self._lock:
+            # 保存所有路径的旧值（深拷贝），用于 _save 失败时回滚
+            old_values = {p: copy.deepcopy(self._get_nested(p)) for p in updates}
             for path, value in updates.items():
                 self._assign(path, value)
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                # _save 失败：回滚所有已修改路径
+                for path, old in old_values.items():
+                    self._assign(path, old)
+                logger.error("config_service.set_many_rollback paths={} reason=save_failed",
+                             ",".join(updates.keys()))
+                raise
         # 逐路径通知：保证每个路径的 watcher 都收到回调，语义与 set() 一致
         # 只省略了中间的 N-1 次 _save()，通知仍然逐条发送
         if updates:

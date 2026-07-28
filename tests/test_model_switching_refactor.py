@@ -118,8 +118,14 @@ def test_registry_replace_table_bulk_update(fresh_registry):
 
 # ── Task 2: get_default_model_for_provider ──
 
-def test_get_default_model_for_provider_from_metadata():
+def test_get_default_model_for_provider_from_metadata(monkeypatch):
     """从 provider_metadata.json 读默认模型 ID。"""
+    # 清掉可能由 CI/本地环境 export 的环境变量，避免 env 优先级覆盖 metadata 默认值
+    monkeypatch.delenv("MIMO_MODEL_NAME", raising=False)
+    monkeypatch.delenv("AGNES_TEXT_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_MODEL_NAME", raising=False)
+    import config
+    config._PROVIDER_METADATA_CACHE = None
     from config import get_default_model_for_provider
     assert get_default_model_for_provider("mimo") == "mimo-v2.5"
     assert get_default_model_for_provider("agnes") == "agnes-2.0-flash"
@@ -132,10 +138,13 @@ def test_get_default_model_for_provider_env_override(monkeypatch):
     # 清除缓存
     import config
     config._PROVIDER_METADATA_CACHE = None
-    assert config.get_default_model_for_provider("mimo") == "mimo-custom-v9"
-    # 清理
-    monkeypatch.delenv("MIMO_MODEL_NAME", raising=False)
-    config._PROVIDER_METADATA_CACHE = None
+    try:
+        assert config.get_default_model_for_provider("mimo") == "mimo-custom-v9"
+    finally:
+        # 清理：monkeypatch 会自动还原 env，但全局缓存不会自动还原，
+        # 放进 try/finally 避免 assert 失败时缓存不还原污染后续测试
+        monkeypatch.delenv("MIMO_MODEL_NAME", raising=False)
+        config._PROVIDER_METADATA_CACHE = None
 
 
 def test_get_default_model_for_provider_unknown_returns_empty():
@@ -204,7 +213,7 @@ def test_set_chat_model_rolls_back_on_provider_not_registered(mock_config_servic
     from model_router import ModelRouter, ROUTE_TABLE
     try:
         router = ModelRouter(api_key="fake")
-    except Exception:
+    except (ImportError, OSError, ValueError, RuntimeError):
         pytest.skip("ModelRouter 在测试环境无法初始化")
     # 注入 mock registry 避免真实持久化
     from model_router import ModelRouteRegistry
@@ -228,7 +237,7 @@ def test_set_chat_model_persists_all_synced_tasks(mock_config_service):
     from model_router import ModelRouter
     try:
         router = ModelRouter(api_key="fake")
-    except Exception:
+    except (ImportError, OSError, ValueError, RuntimeError):
         pytest.skip("ModelRouter 在测试环境无法初始化")
     # mock registry 追踪调用
     router._registry = MagicMock()
@@ -253,14 +262,22 @@ def test_set_chat_model_persists_all_synced_tasks(mock_config_service):
 # ── Task 5: _restore_chat_model 不硬编码 fallback ──
 
 def test_restore_chat_model_does_not_overwrite_persistence_on_failure(tmp_path, monkeypatch):
-    """_restore_chat_model 失败时不覆盖 ConfigService 持久化值。"""
+    """_restore_chat_model 失败时不覆盖 ConfigService 持久化值。
+
+    CR-7 修复：原测试用 agnes（内置 provider），_restore_chat_model 的
+    `if provider not in builtin and provider not in _custom_clients` 对 agnes
+    不抛错（agnes 在 builtin 集合），走 success 路径，根本不进 fallback 分支。
+    断言"持久化仍是 agnes"是 trivially true（两个分支都不写文件）。
+    修复：改用未注册的自定义 provider "custom_unregistered_x"，真正触发 fallback，
+    断言持久化值未被覆盖 + 内存回退到 DEFAULT_PROVIDER。
+    """
     import json as _json
-    # 准备一个持久化文件，用户已选 agnes
+    # 准备一个持久化文件，用户已选未注册的自定义 provider
     overrides_file = tmp_path / "webui_overrides.json"
     overrides_file.write_text(_json.dumps({
         "models": {
-            "chat_model": {"provider": "agnes", "model_id": "agnes-2.0-flash"},
-            "routes": {"chat": {"model": "agnes-2.0-flash", "client": "agnes",
+            "chat_model": {"provider": "custom_unregistered_x", "model_id": "custom-model-x"},
+            "routes": {"chat": {"model": "custom-model-x", "client": "custom_unregistered_x",
                                 "max_tokens": 8192, "thinking": False, "timeout": 60}},
         }
     }), encoding="utf-8")
@@ -268,23 +285,46 @@ def test_restore_chat_model_does_not_overwrite_persistence_on_failure(tmp_path, 
     from web.config_service import ConfigService
     cfg = ConfigService(path=overrides_file)
 
-    # mock core：agnes provider 未注册（触发 fallback）
+    # mock core：custom provider 未注册（不在 _custom_clients，触发 fallback）
     mock_core = MagicMock()
-    mock_core.router._custom_clients = {}  # agnes 不在已注册列表
+    mock_core.router._custom_clients = {}  # custom_unregistered_x 不在已注册列表
     mock_core.router._current_chat_model = None
+    # _restore_chat_model 会用 ModelRouteRegistry 包装 ROUTE_TABLE（MagicMock 的 _registry 不是真实例）
+    # 这会操作真实 ROUTE_TABLE，需要 try/finally 还原
 
     # mock ConfigService 单例
     import web.config_service
     monkeypatch.setattr(web.config_service, "get_config_service", lambda: cfg)
 
-    # 执行 _restore_chat_model
-    from web.server import _restore_chat_model
-    _restore_chat_model(cfg, mock_core)
+    # 快照 ROUTE_TABLE 用于还原（_restore_chat_model 的 fallback 会改 sync_tasks 内存）
+    from model_router import ROUTE_TABLE
+    _orig_table = copy.deepcopy(ROUTE_TABLE)
+    try:
+        # 执行 _restore_chat_model（应进 fallback 分支：provider 未注册 → 抛 LLMError → 内存回退）
+        from web.server import _restore_chat_model
+        _restore_chat_model(cfg, mock_core)
 
-    # 持久化值仍然是 agnes（未被覆盖为 mimo）
-    saved = _json.loads(overrides_file.read_text(encoding="utf-8"))
-    assert saved["models"]["chat_model"]["provider"] == "agnes"
-    assert saved["models"]["chat_model"]["model_id"] == "agnes-2.0-flash"
+        # 关键断言 1：持久化值仍是 custom_unregistered_x（未被覆盖为 mimo）
+        # 这是 sticky fallback 根因守护——fallback 不许写持久化
+        saved = _json.loads(overrides_file.read_text(encoding="utf-8"))
+        assert saved["models"]["chat_model"]["provider"] == "custom_unregistered_x", (
+            f"持久化值应保留用户选择 custom_unregistered_x，实际 {saved['models']['chat_model']['provider']}"
+        )
+        assert saved["models"]["chat_model"]["model_id"] == "custom-model-x"
+
+        # 关键断言 2：内存回退到 DEFAULT_PROVIDER（_current_chat_model 被设为默认）
+        from config import DEFAULT_PROVIDER, get_default_model_for_provider
+        _expected_fb_model = get_default_model_for_provider(DEFAULT_PROVIDER)
+        assert mock_core.router._current_chat_model == {
+            "provider": DEFAULT_PROVIDER, "model_id": _expected_fb_model,
+        }, (
+            f"内存应回退到 {DEFAULT_PROVIDER}/{_expected_fb_model}，"
+            f"实际 {mock_core.router._current_chat_model}"
+        )
+    finally:
+        # 还原 ROUTE_TABLE（fallback 分支 persist=False 改了 sync_tasks 内存）
+        ROUTE_TABLE.clear()
+        ROUTE_TABLE.update(_orig_table)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -316,9 +356,11 @@ def test_try_fallback_chain_uses_registry_snapshot():
 
 def test_fallback_chain_does_not_pollute_route_table():
     """降级链调用后 ROUTE_TABLE 全局状态不变。"""
-    from unittest.mock import AsyncMock
     from model_router import ModelRouter, ROUTE_TABLE
-    router = ModelRouter(api_key="fake")
+    try:
+        router = ModelRouter(api_key="fake")
+    except (ImportError, OSError, ValueError, RuntimeError):
+        pytest.skip("ModelRouter 在测试环境无法初始化")
     # 初始化 _registry（如果 __init__ 没初始化）
     if not hasattr(router, "_registry"):
         from model_router import ModelRouteRegistry
@@ -401,17 +443,24 @@ def test_apply_route_overrides_cleans_dead_routes(tmp_path):
     for dr in dead_routes:
         assert dr not in ROUTE_TABLE, f"测试前置失败：ROUTE_TABLE 不应有 {dr}"
 
-    from web.server import _apply_route_overrides
-    _apply_route_overrides(cfg, mock_core, ROUTE_TABLE)
+    # 快照 ROUTE_TABLE 用于还原（存活路由 chat 的覆盖会通过 registry.update_route(persist=False)
+    # 改真实 ROUTE_TABLE["chat"]，需在 finally 还原避免污染后续测试）
+    _orig_table = copy.deepcopy(ROUTE_TABLE)
+    try:
+        from web.server import _apply_route_overrides
+        _apply_route_overrides(cfg, mock_core, ROUTE_TABLE)
 
-    # 死路由已从持久化文件删除
-    saved = _json.loads(overrides_file.read_text(encoding="utf-8"))
-    saved_routes = saved["models"]["routes"]
-    assert "chat_mimo" not in saved_routes
-    assert "chat_mini" not in saved_routes
-    assert "chat_ultra" not in saved_routes
-    # 存活路由保留
-    assert "chat" in saved_routes
+        # 死路由已从持久化文件删除
+        saved = _json.loads(overrides_file.read_text(encoding="utf-8"))
+        saved_routes = saved["models"]["routes"]
+        assert "chat_mimo" not in saved_routes
+        assert "chat_mini" not in saved_routes
+        assert "chat_ultra" not in saved_routes
+        # 存活路由保留
+        assert "chat" in saved_routes
+    finally:
+        ROUTE_TABLE.clear()
+        ROUTE_TABLE.update(_orig_table)
 
 
 def test_apply_route_overrides_preserves_valid_routes(tmp_path):
@@ -436,8 +485,9 @@ def test_apply_route_overrides_preserves_valid_routes(tmp_path):
     mock_core.router.TASK_TIMEOUTS = {}
 
     from model_router import ROUTE_TABLE
-    original_chat_model = ROUTE_TABLE["chat"]["model"]
-    original_chat_pro_model = ROUTE_TABLE["chat_pro"]["model"]
+    # 快照整个 entry（包括 max_tokens/thinking），避免硬编码还原 client="mimo" 改错
+    original_chat = copy.deepcopy(ROUTE_TABLE["chat"])
+    original_chat_pro = copy.deepcopy(ROUTE_TABLE["chat_pro"])
     try:
         from web.server import _apply_route_overrides
         _apply_route_overrides(cfg, mock_core, ROUTE_TABLE)
@@ -448,11 +498,9 @@ def test_apply_route_overrides_preserves_valid_routes(tmp_path):
         assert ROUTE_TABLE["chat_pro"]["model"] == "agnes-2.0-flash"
         assert mock_core.router.TASK_TIMEOUTS["chat"] == 90
     finally:
-        # 恢复 ROUTE_TABLE
-        ROUTE_TABLE["chat"]["model"] = original_chat_model
-        ROUTE_TABLE["chat"]["client"] = "mimo"
-        ROUTE_TABLE["chat_pro"]["model"] = original_chat_pro_model
-        ROUTE_TABLE["chat_pro"]["client"] = "mimo"
+        # 整体还原（包括 max_tokens/thinking，不只 model/client）
+        ROUTE_TABLE["chat"] = copy.deepcopy(original_chat)
+        ROUTE_TABLE["chat_pro"] = copy.deepcopy(original_chat_pro)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -505,8 +553,7 @@ def test_update_route_api_persists_via_registry(tmp_path):
     router_obj._registry = ModelRouteRegistry(ROUTE_TABLE, config_service=cfg)
     router_obj.TASK_TIMEOUTS = {"chat": 60}
 
-    original_chat_model = ROUTE_TABLE["chat"]["model"]
-    original_chat_client = ROUTE_TABLE["chat"]["client"]
+    original_chat = copy.deepcopy(ROUTE_TABLE["chat"])
     try:
         # 构造 mock request
         mock_request = MagicMock()
@@ -535,5 +582,5 @@ def test_update_route_api_persists_via_registry(tmp_path):
         assert saved["models"]["chat_model"]["provider"] == "agnes"
         assert saved["models"]["chat_model"]["model_id"] == "agnes-2.0-flash"
     finally:
-        ROUTE_TABLE["chat"]["model"] = original_chat_model
-        ROUTE_TABLE["chat"]["client"] = original_chat_client
+        # 整体还原（包括 max_tokens/thinking，测试写入了 max_tokens=8192, thinking=False）
+        ROUTE_TABLE["chat"] = copy.deepcopy(original_chat)

@@ -14,6 +14,7 @@ Issue: 更变子 Agent 的模型返回 HTTP 500；主 Agent 的模型每次重�
 
 from __future__ import annotations
 
+import copy
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -120,8 +121,9 @@ def test_set_chat_model_persists_both_chat_model_and_routes_chat():
     router._custom_clients.add("agnes")
     router._lazy_register_provider = MagicMock()
 
-    # 保存原始 ROUTE_TABLE["chat"] 状态
-    original_chat = dict(ROUTE_TABLE["chat"])
+    # 快照整个 ROUTE_TABLE（set_chat_model 会改写所有 6 个 sync_tasks：
+    # chat/chat_pro/chat_flash/emotion_analysis/tool_result_wrap/memory_encoding）
+    _orig_table = copy.deepcopy(ROUTE_TABLE)
     try:
         # mock config_service 捕获 set 调用
         captured: dict[str, object] = {}
@@ -160,8 +162,9 @@ def test_set_chat_model_persists_both_chat_model_and_routes_chat():
 
         assert result == {"provider": "agnes", "model_id": "agnes-2.0-flash"}
     finally:
-        # 恢复 ROUTE_TABLE
-        ROUTE_TABLE["chat"] = original_chat
+        # 整体还原 ROUTE_TABLE（finally 只还原 chat 会残留其他 sync_tasks 被改值）
+        ROUTE_TABLE.clear()
+        ROUTE_TABLE.update(_orig_table)
 
 
 def test_set_chat_model_routes_chat_thinking_field_is_bool():
@@ -181,7 +184,7 @@ def test_set_chat_model_routes_chat_thinking_field_is_bool():
     from model_router import ModelRouteRegistry
     router._registry = ModelRouteRegistry(ROUTE_TABLE)
 
-    original_chat = dict(ROUTE_TABLE["chat"])
+    _orig_table = copy.deepcopy(ROUTE_TABLE)
     try:
         captured: dict[str, object] = {}
 
@@ -201,7 +204,9 @@ def test_set_chat_model_routes_chat_thinking_field_is_bool():
         # agnes 切换时 thinking 被禁用
         assert routes_chat["thinking"] is False
     finally:
-        ROUTE_TABLE["chat"] = original_chat
+        # 整体还原 ROUTE_TABLE（set_chat_model 会改写所有 sync_tasks）
+        ROUTE_TABLE.clear()
+        ROUTE_TABLE.update(_orig_table)
 
 
 # ─────────────────────────────────────────────────────────────

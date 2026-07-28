@@ -205,17 +205,16 @@ def test_restore_chat_model_fallback_does_not_persist_mimo(monkeypatch):
 
 
 def test_set_chat_model_persist_catches_generic_exception(monkeypatch):
-    """set_chat_model persist 部分应捕获 Exception，不向上传播触发 sticky fallback。
+    """chat_model 持久化失败时，set_chat_model 应回滚所有 task + DEFAULT_PROVIDER。
 
-    模拟 config_service 抛非 (OSError, KeyError, ValueError, TypeError) 的异常，
-    验证 set_chat_model 仍正常返回，不会传播到 _restore_chat_model 的 fallback。
-
-    新架构（Task 4）：set_chat_model 通过 _registry.update_route 原子化更新。
-    - registry 持有独立的 mock_cfg（不抛异常），保证 routes 持久化成功
-    - set_chat_model 末尾单独调 get_config_service() 同步 models.chat_model，
-      此处抛 RuntimeError 应被 try/except 捕获，不影响返回值
+    CodeRabbit#1 修复：chat_model 写入失败不能只 log warning，否则 routes 已新值
+    但 chat_model 旧值，重启时 _restore_chat_model 用旧值覆盖正确的 routes，
+    导致用户切换的模型在重启后"神秘回退"。
+    新实现：回滚所有 sync task + DEFAULT_PROVIDER，抛 LLMError。
     """
     import model_router as _mr_module
+    from core.app_exception import LLMError
+    import config as _config_mod
 
     # 模拟 config_service 抛 RuntimeError（在 set_chat_model 末尾被调用）
     class _BombCfg:
@@ -242,20 +241,25 @@ def test_set_chat_model_persist_catches_generic_exception(monkeypatch):
     import web.config_service as _cfg_mod
     monkeypatch.setattr(_cfg_mod, "get_config_service", lambda: _BombCfg())
 
-    # 保存原 ROUTE_TABLE 状态以便恢复
+    # 保存原 ROUTE_TABLE + DEFAULT_PROVIDER 状态以便恢复
     original_chat = copy.deepcopy(_mr_module.ROUTE_TABLE["chat"])
     original_chat_flash = copy.deepcopy(_mr_module.ROUTE_TABLE["chat_flash"])
+    original_default = _config_mod.DEFAULT_PROVIDER
     try:
-        # set_chat_model 应捕获末尾的 RuntimeError，不抛出
-        result = _mr_module.ModelRouter.set_chat_model(
-            router, "agnes", "agnes-2.0-flash"
-        )
-        assert result == {"provider": "agnes", "model_id": "agnes-2.0-flash"}
-        # ROUTE_TABLE 应已更新为 agnes（registry 成功更新）
-        assert _mr_module.ROUTE_TABLE["chat"]["client"] == "agnes"
+        # CodeRabbit#1：chat_model 持久化失败应抛 LLMError（回滚后）
+        with pytest.raises(LLMError, match="持久化 chat_model 失败"):
+            _mr_module.ModelRouter.set_chat_model(
+                router, "agnes", "agnes-2.0-flash"
+            )
+        # ROUTE_TABLE 应被回滚到原值（不是 agnes）
+        assert _mr_module.ROUTE_TABLE["chat"]["client"] == original_chat["client"]
+        assert _mr_module.ROUTE_TABLE["chat"]["model"] == original_chat["model"]
+        # DEFAULT_PROVIDER 应被回滚
+        assert _config_mod.DEFAULT_PROVIDER == original_default
     finally:
         _mr_module.ROUTE_TABLE["chat"] = original_chat
         _mr_module.ROUTE_TABLE["chat_flash"] = original_chat_flash
+        _config_mod.set_default_provider(original_default)
 
 
 def test_update_route_chat_uses_body_provider_for_sync(monkeypatch):

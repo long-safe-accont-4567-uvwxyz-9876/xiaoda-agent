@@ -398,10 +398,30 @@ _PROVIDER_METADATA_CACHE: dict | None = None
 
 
 def _load_provider_metadata_cached() -> dict:
-    """加载 provider_metadata.json（带缓存，避免每次调用都读盘）。"""
+    """加载 provider_metadata.json（带缓存，避免每次调用都读盘）。
+
+    CodeRabbit#4 + C2 修复：与 model_router._load_provider_metadata 统一查找顺序——
+      1. 用户配置目录 get_config_dir()/provider_metadata.json（用户可编辑覆盖）
+      2. 打包/源码 config/provider_metadata.json（内置默认值）
+      3. 空字典（极端兜底）
+
+    旧实现只读打包目录，导致用户编辑 ~/.ai-agent/config/provider_metadata.json 后
+    model_router（读用户目录）与 config.get_default_model_for_provider（读打包目录）
+    返回不同模型 ID，产生两套真相源，启动 fallback 时拿到错误模型。
+    """
     global _PROVIDER_METADATA_CACHE
     if _PROVIDER_METADATA_CACHE is not None:
         return _PROVIDER_METADATA_CACHE
+    # 1. 用户配置目录（用户可编辑覆盖）
+    try:
+        user_path = get_config_dir() / "provider_metadata.json"
+        if user_path.exists():
+            with open(user_path, "r", encoding="utf-8") as fp:
+                _PROVIDER_METADATA_CACHE = json.load(fp)
+                return _PROVIDER_METADATA_CACHE
+    except (OSError, ValueError) as e:
+        logger.warning("config.provider_metadata_user_load_failed error={}", str(e))
+    # 2. 打包/源码目录（内置默认值）
     try:
         meta_path = Path(__file__).resolve().parent / "config" / "provider_metadata.json"
         if meta_path.exists():
@@ -410,6 +430,8 @@ def _load_provider_metadata_cached() -> dict:
                 return _PROVIDER_METADATA_CACHE
     except (OSError, ValueError) as e:
         logger.warning("config.provider_metadata_load_failed error={}", str(e))
+    # 3. 极端兜底
+    logger.error("config.provider_metadata_all_load_failed using empty dict")
     _PROVIDER_METADATA_CACHE = {}
     return _PROVIDER_METADATA_CACHE
 
@@ -447,6 +469,39 @@ def get_default_model_for_provider(provider: str) -> str:
         return provider_meta.get("default_model", "") or ""
     # 3. 未知 provider
     return ""
+
+
+# ── 内置 Provider 集合（从 provider_metadata.json 派生，无硬编码）──
+# N-2 修复：原代码多处硬编码 ("mimo", "agnes") 判断是否为内置 provider，
+# 新增第三个内置 provider 时需改多处代码。改为从 metadata 的 builtin: true 字段派生。
+# 带 _BUILTIN_PROVIDERS_CACHE 避免每次调用都解析 metadata。
+_BUILTIN_PROVIDERS_CACHE: frozenset[str] | None = None
+
+
+def get_builtin_providers() -> frozenset[str]:
+    """返回内置 provider 集合（从 provider_metadata.json 的 builtin: true 字段派生）。
+
+    内置 provider 指有内置 transport 代码支持的 provider（如 mimo/agnes），
+    不需要通过 _custom_clients 注册即可使用。新增内置 provider 时，
+    只需在 provider_metadata.json 标记 builtin: true，无需改代码。
+
+    Returns:
+        内置 provider 名称的 frozenset，至少包含 "mimo"（最终兜底）
+    """
+    global _BUILTIN_PROVIDERS_CACHE
+    if _BUILTIN_PROVIDERS_CACHE is not None:
+        return _BUILTIN_PROVIDERS_CACHE
+    meta = _load_provider_metadata_cached()
+    providers = meta.get("providers", {}) if isinstance(meta, dict) else {}
+    builtin = set()
+    if isinstance(providers, dict):
+        for pid, pmeta in providers.items():
+            if isinstance(pmeta, dict) and pmeta.get("builtin", False):
+                builtin.add(pid)
+    # mimo 是最终兜底，必须包含（即使 metadata 异常未标记也保留）
+    builtin.add("mimo")
+    _BUILTIN_PROVIDERS_CACHE = frozenset(builtin)
+    return _BUILTIN_PROVIDERS_CACHE
 
 
 MIMO_MODEL = get_default_model_for_provider("mimo")
