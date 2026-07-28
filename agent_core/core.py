@@ -95,6 +95,13 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         self._shared_blackboard_cleanup_task = None
         self.context = AgentContext(system_prompt_loader=build_system_prompt, router=self.router, security_filter=self.security)
         self.context.shared_blackboard = self._shared_blackboard
+        # 全局上下文锁：保护 AgentContext 单例不被并发请求覆写
+        # 根因：AgentContext 是单例，switch_user_context 切换共享 self.history。
+        # 不同用户并发请求时，A 的 build_messages/add_message 可能读到/写入 B 的 history，
+        # 导致信息混乱（A 看到B的对话）和失忆（history 被覆盖后丢失）。
+        # 修复：在 _process_impl 期间持有此锁，确保同一时间只有一个请求修改 context。
+        # 对个人 bot 无感知（QQ per-user 锁本就串行同一用户消息）。
+        self._context_lock = asyncio.Lock()
         self.tool_executor = ToolExecutor(db=self.db)
         self.tool_repair = ToolCallRepair(
             allowed_tool_names=set(t["function"]["name"] for t in to_openai_tools())
@@ -317,7 +324,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         try:
             try:
                 return await asyncio.wait_for(
-                    self._process_impl(ctx, user_input, user_id, source, user_openid, session_id,
+                    self._process_impl_locked(ctx, user_input, user_id, source, user_openid, session_id,
                                        status_callback, image_data, is_master,
                                        system_context=system_context),
                     timeout=_GLOBAL_DEADLINE_SECONDS,
@@ -334,6 +341,30 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
                 )
         finally:
             _current_request_ctx.reset(_ctx_token)
+
+    async def _process_impl_locked(self, ctx: RequestContext, user_input: str, user_id: str,
+                                   source: str, user_openid: str, session_id: str,
+                                   status_callback: Any, image_data: list[dict] | None,
+                                   is_master: bool = True,
+                                   system_context: str = "") -> ProcessResult:
+        """_process_impl 的线程安全包装：持有 _context_lock 防止 AgentContext 并发覆写。
+
+        根因：AgentContext 是单例，switch_user_context 会切换共享的 self.history。
+        若用户 A 和用户 B 的请求并发执行：
+          1. A 调用 switch_user_context("qq_A") → history = A 的
+          2. A 调用 build_messages → 读取 history（正确）
+          3. B 调用 switch_user_context("qq_B") → history 被覆盖成 B 的
+          4. A 调用 add_message → 往 B 的 history 里写 A 的消息！
+        这就是"信息混乱"+"失忆"的根因。
+
+        修复：全局锁确保同一时间只有一个请求操作 AgentContext。
+        对个人 bot 无感知（QQ per-user 锁本就串行同一用户消息，
+        不同用户并发场景罕见，串行处理 LLM 调用不会比并发慢太多）。
+        """
+        async with self._context_lock:
+            return await self._process_impl(ctx, user_input, user_id, source, user_openid, session_id,
+                                            status_callback, image_data, is_master,
+                                            system_context=system_context)
 
     async def process_text(self, user_input: str, user_openid: str = "cli", session_id: str = "cli") -> str:
         """处理纯文本输入并直接返回回复字符串 (CLI/Web 便捷入口)."""
