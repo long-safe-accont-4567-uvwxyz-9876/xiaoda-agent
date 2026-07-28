@@ -356,15 +356,45 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
-          $ErrorActionPreference = "Continue"
+          # 严格模式：copy/验证失败立即退出，不再静默吞掉错误
+          $ErrorActionPreference = "Stop"
 
           Set-Content -Path "dist/xiaoda-agent/.version" -Value $version -NoNewline
           New-Item -Path "dist/xiaoda-agent/.auto_update" -ItemType File -Force
-          Copy-Item "scripts/start-windows.bat" "dist/xiaoda-agent/"
-          Copy-Item "scripts/auto-update.bat" "dist/xiaoda-agent/"
-          Copy-Item "scripts/open-browser.ps1" "dist/xiaoda-agent/"
-          Copy-Item "scripts/doctor.bat" "dist/xiaoda-agent/"
-          Copy-Item "assets/xiaoda-icon.ico" "dist/xiaoda-agent/xiaoda-icon.ico"
+
+          # 复制启动脚本到 dist（NSIS File /r 会打包这些文件）
+          # 修复（v0.5.41）：原 ErrorActionPreference=Continue 会让 copy 失败被静默吞掉，
+          # 导致 bat 脚本缺失但 step 仍显示 success，setup.exe 里没有 bat
+          $requiredScripts = @(
+            @{ src = "scripts/start-windows.bat"; dst = "dist/xiaoda-agent/start-windows.bat" },
+            @{ src = "scripts/auto-update.bat";  dst = "dist/xiaoda-agent/auto-update.bat" },
+            @{ src = "scripts/open-browser.ps1"; dst = "dist/xiaoda-agent/open-browser.ps1" },
+            @{ src = "scripts/doctor.bat";       dst = "dist/xiaoda-agent/doctor.bat" }
+          )
+          foreach ($s in $requiredScripts) {
+            if (-not (Test-Path $s.src)) {
+              Write-Host "##[error]Required script not found: $($s.src)"
+              exit 1
+            }
+            Copy-Item $s.src $s.dst -Force
+            if (-not (Test-Path $s.dst)) {
+              Write-Host "##[error]Failed to copy $($s.src) to $($s.dst)"
+              exit 1
+            }
+            Write-Host "  ✓ $($s.src) -> $($s.dst)"
+          }
+          Copy-Item "assets/xiaoda-icon.ico" "dist/xiaoda-agent/xiaoda-icon.ico" -Force
+
+          # 验证 dist 里的 bat 脚本（NSIS 打包前）
+          Write-Host ""
+          Write-Host "=== dist/xiaoda-agent/ 启动脚本验证 ==="
+          $batFiles = Get-ChildItem "dist/xiaoda-agent/*.bat" -ErrorAction SilentlyContinue
+          if ($batFiles.Count -lt 3) {
+            Write-Host "##[error]Expected 3 .bat files in dist, found $($batFiles.Count)"
+            Get-ChildItem "dist/xiaoda-agent/" | Format-Table Name, Length
+            exit 1
+          }
+          $batFiles | ForEach-Object { Write-Host "  ✓ $($_.Name) ($($_.Length) bytes)" }
 
           if (-not (Test-Path "C:\Program Files (x86)\NSIS\makensis.exe")) {
             choco install nsis -y --no-progress
@@ -542,3 +572,41 @@ jobs:
             artifacts/xiaoda-agent-linux-x86_64-*.tar.gz
             artifacts/xiaoda-agent-linux-x86_64-*-install.sh
             artifacts/*.sha256
+
+      - name: Sync release to Gitee (国内镜像)
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "GITEE_TOKEN secret not set, skipping gitee sync"
+            exit 0
+          fi
+          REPO="liu-runfe/xiaoda-agent"
+          echo "=== 创建 gitee release v$VERSION ==="
+          RELEASE_RESP=$(curl -s -X POST "https://gitee.com/api/v5/repos/$REPO/releases" \
+            -H "Content-Type: application/json;charset=UTF-8" \
+            -d "{\"access_token\":\"$GITEE_TOKEN\",\"tag_name\":\"v$VERSION\",\"name\":\"Release v$VERSION\",\"body\":\"Release v$VERSION (GitHub 镜像，国内下载更快)\",\"target_commitish\":\"main\"}")
+          RELEASE_ID=$(echo "$RELEASE_RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+          if [ -z "$RELEASE_ID" ]; then
+            echo "创建 gitee release 失败: $RELEASE_RESP"
+            exit 0
+          fi
+          echo "gitee release ID: $RELEASE_ID"
+          echo "=== 上传 assets 到 gitee ==="
+          cd artifacts
+          for f in xiaoda-agent-windows-x64-*-setup.exe \
+                   xiaoda-agent-windows-x64-*.tar.gz \
+                   xiaoda-agent-linux-x86_64-*.tar.gz \
+                   xiaoda-agent-linux-x86_64-*-install.sh \
+                   *.sha256; do
+            [ -f "$f" ] || continue
+            echo "上传: $f ($(du -h "$f" | cut -f1))"
+            curl -s -X POST "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/attach_files" \
+              -H "Content-Type: multipart/form-data" \
+              -F "access_token=$GITEE_TOKEN" \
+              -F "file=@$f" > /dev/null 2>&1 && echo "  ✓ 成功" || echo "  ✗ 失败"
+          done
+          echo "=== gitee release 完成 ==="
+          echo "https://gitee.com/$REPO/releases/$RELEASE_ID"
