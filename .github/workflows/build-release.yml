@@ -368,6 +368,7 @@ jobs:
           $requiredScripts = @(
             @{ src = "scripts/start-windows.bat"; dst = "dist/xiaoda-agent/start-windows.bat" },
             @{ src = "scripts/auto-update.bat";  dst = "dist/xiaoda-agent/auto-update.bat" },
+            @{ src = "scripts/auto-update.ps1";  dst = "dist/xiaoda-agent/auto-update.ps1" },
             @{ src = "scripts/open-browser.ps1"; dst = "dist/xiaoda-agent/open-browser.ps1" },
             @{ src = "scripts/doctor.bat";       dst = "dist/xiaoda-agent/doctor.bat" }
           )
