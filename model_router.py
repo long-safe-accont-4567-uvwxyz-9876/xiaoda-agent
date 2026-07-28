@@ -15,6 +15,7 @@ from utils.metrics import metrics
 from config import AGNES_BASE_URL, AGNES_TEXT_MODEL, PROMPT_CACHING_ENABLED
 from config import MODEL_NAME as _CFG_MODEL_NAME, PRO_MODEL_NAME as _CFG_PRO_MODEL
 from config import FLASH_MODEL_NAME as _CFG_FLASH_MODEL, DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
+from config import MIMO_MODEL as _CFG_MIMO_MODEL
 from config import set_default_provider as _set_default_provider
 from transports import ProviderTransport, MiMoTransport, AgnesTransport
 from utils.prompt_caching import apply_cache_control
@@ -93,8 +94,14 @@ def _load_provider_base_url(provider: str, env_var: str) -> str:
     return ""
 
 
-MIMO_MODEL = os.getenv("MIMO_MODEL_NAME", "mimo-v2.5")
-MIMO_PRO_MODEL = os.getenv("MIMO_PRO_MODEL_NAME", "mimo-v2.5-pro")
+# MIMO_MODEL/MIMO_PRO_MODEL 从 config.py + provider_metadata.json 读取（不再硬编码）
+# 保留模块级变量名以兼容 `from model_router import MIMO_MODEL` 的调用方
+MIMO_MODEL = _CFG_MIMO_MODEL
+# MIMO_PRO_MODEL：环境变量优先，否则从 provider_metadata.json 的 mimo.default_pro_model 读
+_mimo_meta = _PROVIDER_CAPS_FROM_FILE.get("mimo", {}) if isinstance(_PROVIDER_CAPS_FROM_FILE, dict) else {}
+MIMO_PRO_MODEL = os.getenv("MIMO_PRO_MODEL_NAME", "")
+if not MIMO_PRO_MODEL and isinstance(_mimo_meta, dict):
+    MIMO_PRO_MODEL = _mimo_meta.get("default_pro_model", "")
 # P0 修复：MIMO_BASE_URL 从 provider_metadata.json 读取（不再硬编码 "https://api.xiaomimimo.com/v1"）
 MIMO_BASE_URL = _load_provider_base_url("mimo", "MIMO_BASE_URL")
 MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")

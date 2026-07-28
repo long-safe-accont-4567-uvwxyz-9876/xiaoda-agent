@@ -386,7 +386,66 @@ DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"
 # MIMO_API_KEY：先用 get_secret 解密 enc:v1: 密文，再交给 protect_credential 做内存态保护
 MIMO_API_KEY = protect_credential(get_secret("MIMO_API_KEY", ""))
 MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
-MIMO_MODEL = os.getenv("MIMO_MODEL_NAME", "mimo-v2.5")
+
+# ── 默认模型解析（从 provider_metadata.json 读，无硬编码）──
+# 用户约束：默认用 MiMo，但模型 ID 不在代码里硬编码
+# 优先级：环境变量 > provider_metadata.json > 空串
+_PROVIDER_METADATA_CACHE: dict | None = None
+
+
+def _load_provider_metadata_cached() -> dict:
+    """加载 provider_metadata.json（带缓存，避免每次调用都读盘）。"""
+    global _PROVIDER_METADATA_CACHE
+    if _PROVIDER_METADATA_CACHE is not None:
+        return _PROVIDER_METADATA_CACHE
+    try:
+        meta_path = Path(__file__).resolve().parent / "config" / "provider_metadata.json"
+        if meta_path.exists():
+            with open(meta_path, "r", encoding="utf-8") as fp:
+                _PROVIDER_METADATA_CACHE = json.load(fp)
+                return _PROVIDER_METADATA_CACHE
+    except (OSError, ValueError) as e:
+        logger.warning("config.provider_metadata_load_failed error={}", str(e))
+    _PROVIDER_METADATA_CACHE = {}
+    return _PROVIDER_METADATA_CACHE
+
+
+def get_default_model_for_provider(provider: str) -> str:
+    """返回指定 provider 的默认模型 ID。
+
+    优先级：
+      1. 环境变量 {PROVIDER}_MODEL_NAME / {PROVIDER}_TEXT_MODEL（最高）
+      2. provider_metadata.json 中 providers.{provider}.default_model
+      3. 空串（调用方负责兜底）
+
+    Args:
+        provider: provider 名称（如 "mimo", "agnes"）
+
+    Returns:
+        默认模型 ID 字符串，未知 provider 返回空串
+    """
+    provider_lower = provider.strip().lower()
+    # 1. 环境变量（兼容已有的 MIMO_MODEL_NAME / AGNES_TEXT_MODEL）
+    env_var_map = {
+        "mimo": "MIMO_MODEL_NAME",
+        "agnes": "AGNES_TEXT_MODEL",
+        "deepseek": "DEEPSEEK_MODEL_NAME",
+    }
+    env_var = env_var_map.get(provider_lower, f"{provider_lower.upper()}_MODEL_NAME")
+    env_val = os.getenv(env_var, "").strip()
+    if env_val:
+        return env_val
+    # 2. provider_metadata.json
+    meta = _load_provider_metadata_cached()
+    providers = meta.get("providers", {}) if isinstance(meta, dict) else {}
+    provider_meta = providers.get(provider_lower, {})
+    if isinstance(provider_meta, dict):
+        return provider_meta.get("default_model", "") or ""
+    # 3. 未知 provider
+    return ""
+
+
+MIMO_MODEL = get_default_model_for_provider("mimo")
 
 # ── 反代客户端 IP 解析 ──
 # 默认 False：使用 TCP 对端 request.client.host（最安全）。
@@ -410,17 +469,12 @@ def set_default_provider(provider: str) -> None:
     DEFAULT_PROVIDER = provider.strip().lower()
 
 # ── Provider → 默认模型映射 ──
-# 当 MODEL_NAME 未在 .env 中显式设置时，根据 DEFAULT_PROVIDER 自动选择
-_PROVIDER_DEFAULT_MODELS: dict[str, str] = {
-    "mimo": "mimo-v2.5",
-    "siliconflow": "deepseek-ai/DeepSeek-V3-0324",
-    "deepseek": "deepseek-chat",
-    "agnes": "agnes-v1",
-}
+# 当 MODEL_NAME 未在 .env 中显式设置时，根据 DEFAULT_PROVIDER 从
+# provider_metadata.json 动态读取默认模型（不再硬编码在代码里）
 if os.getenv("MODEL_NAME"):
     MODEL_NAME = os.getenv("MODEL_NAME")
 else:
-    MODEL_NAME = _PROVIDER_DEFAULT_MODELS.get(DEFAULT_PROVIDER, "mimo-v2.5")
+    MODEL_NAME = get_default_model_for_provider(DEFAULT_PROVIDER)
 PRO_MODEL_NAME = os.getenv("PRO_MODEL_NAME", "")
 FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "")
 
@@ -428,7 +482,7 @@ FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "")
 # Agnes AI 配置（在 get_provider_config 之前定义，避免前向引用）
 AGNES_API_KEY = get_secret("AGNES_API_KEY", "")
 AGNES_BASE_URL = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
-AGNES_TEXT_MODEL = os.getenv("AGNES_TEXT_MODEL", "agnes-2.0-flash")
+AGNES_TEXT_MODEL = get_default_model_for_provider("agnes")
 AGNES_IMAGE_MODEL = os.getenv("AGNES_IMAGE_MODEL", "agnes-image-2.1-flash")
 AGNES_VIDEO_MODEL = os.getenv("AGNES_VIDEO_MODEL", "agnes-video-v2.0")
 
