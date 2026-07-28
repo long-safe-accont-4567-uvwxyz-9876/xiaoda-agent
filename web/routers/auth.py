@@ -342,14 +342,17 @@ async def logout(user_id: str = Depends(get_current_user), request: Request = No
     if auth.startswith("Bearer "):
         token = auth[7:]
         _revoke_token(token)
-        _tokens.pop(token, None)
+        with _tokens_lock:
+            _tokens.pop(token, None)
     return Envelope(data=None)
 
 
 @router.post("/auth/revoke-all", response_model=Envelope[None])
 async def revoke_all(user_id: str = Depends(get_current_user)) -> Any:
     """撤销所有 token（改密码后强制全量重新登录）。"""
-    for token in list(_tokens.keys()):
+    with _tokens_lock:
+        all_tokens = list(_tokens.keys())
+        _tokens.clear()
+    for token in all_tokens:
         _revoke_token(token)
-    _tokens.clear()
     return Envelope(data=None)
