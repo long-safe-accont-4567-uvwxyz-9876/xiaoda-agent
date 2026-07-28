@@ -219,8 +219,9 @@ def _init_user_resources() -> None:
     if not bundled_config.exists():
         return
 
-    user_config_dir = _KIOXIA_BASE / "config"
-    user_config_dir.mkdir(parents=True, exist_ok=True)
+    # 使用统一的 CONFIG_DIR（与 AGENT_CONFIG_PATH / AGENTS_CONFIG_DIR 同源），
+    # 确保 frozen 模式下配置写入和读取路径一致（Qodo 审查发现）
+    user_config_dir = CONFIG_DIR
 
     _init_agent_json5(bundled_config, user_config_dir)
     _init_agents_subdir(bundled_config, user_config_dir)
@@ -357,7 +358,11 @@ def _ensure_workspace() -> None:
 
 
 # 路径定义必须在 _ensure_workspace() 之前：迁移逻辑引用这些变量
-AGENT_CONFIG_PATH = (_KIOXIA_BASE / "config" / "agent.json5") if (_KIOXIA_BASE / "config").exists() else _FALLBACK_BASE / "agent.json5"
+# 统一 CONFIG_DIR：初始化写入、AGENT_CONFIG_PATH 读取、AGENTS_CONFIG_DIR 都从此派生，
+# 确保 KIOXIA 只读时回退到同一 fallback 路径（Qodo 审查发现：原 AGENT_CONFIG_PATH
+# fallback 是 _FALLBACK_BASE/agent.json5，与写入的 _FALLBACK_BASE/config/agent.json5 不一致）
+CONFIG_DIR = _resolve_data_path(_KIOXIA_BASE / "config", _FALLBACK_BASE / "config")
+AGENT_CONFIG_PATH = CONFIG_DIR / "agent.json5"
 STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "stickers", _FALLBACK_BASE / "stickers")
 XIAOLI_STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "xiaoli-stickers", _FALLBACK_BASE / "xiaoli-stickers")
 # 通用智能体表情包根目录：每个子智能体的表情包存放在 {AGENT_STICKER_BASE}/{agent_name}/
@@ -372,9 +377,8 @@ MEMORY_STATE_DIR = _resolve_data_path(_KIOXIA_BASE / "memory_state", _FALLBACK_B
 # 插件配置目录
 PLUGINS_CONFIG_DIR = _resolve_data_path(_KIOXIA_BASE / "plugins", _FALLBACK_BASE / "plugins")
 # 子 Agent 配置目录（人格文件、配置 JSON）
-AGENTS_CONFIG_DIR = _KIOXIA_BASE / "config" / "agents"
-if not AGENTS_CONFIG_DIR.exists():
-    AGENTS_CONFIG_DIR = _FALLBACK_BASE / "config" / "agents"
+# 从统一 CONFIG_DIR 派生，确保与 AGENT_CONFIG_PATH 和 _init_user_resources 同源
+AGENTS_CONFIG_DIR = CONFIG_DIR / "agents"
 AGENTS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 # 在路径定义后执行初始化：frozen 模式下的资源复制和数据迁移引用上方变量
@@ -940,6 +944,8 @@ MCP_SERVERS = {
 __all__ = [
     "AGENTS_CONFIG_DIR",
     "AGENT_CONFIG",
+    "AGENT_CONFIG_PATH",
+    "CONFIG_DIR",
     "AGENT_ROUTE_KEYWORDS",
     "AGENT_STICKER_BASE",
     "AGENT_TASK_MAP",

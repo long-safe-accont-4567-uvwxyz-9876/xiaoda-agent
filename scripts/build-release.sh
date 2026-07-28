@@ -117,7 +117,7 @@ do_build() {
 
     # --- Write version stamp into dist directory --------------------------------
     echo -n "$version" > "$dist_dir/.version"
-    echo -n "enabled" > "$dist_dir/.auto_update"
+    # 不创建 .auto_update：自动更新必须由用户显式启用（与 CI 和 auto-update.bat 设计一致）
     info "Version stamp: $dist_dir/.version ($version)"
 
     # --- Create the distribution package ---------------------------------------
@@ -155,10 +155,14 @@ do_build() {
         local zip_name="${pkg_name}.zip"
 
         info "Copying Windows launcher bat into dist directory..."
-        cp "$SCRIPT_DIR/start-windows.bat" "$dist_dir/start-windows.bat"
-        cp "$SCRIPT_DIR/auto-update.bat" "$dist_dir/auto-update.bat"
-        cp "$SCRIPT_DIR/open-browser.ps1" "$dist_dir/open-browser.ps1"
-        cp "$SCRIPT_DIR/doctor.bat" "$dist_dir/doctor.bat"
+        # 与 CI 保持一致的 5 个启动脚本清单，本地构建也不能漏掉 auto-update.ps1
+        local _win_scripts=("start-windows.bat" "auto-update.bat" "auto-update.ps1" "open-browser.ps1" "doctor.bat")
+        for _s in "${_win_scripts[@]}"; do
+            if [ ! -f "$SCRIPT_DIR/$_s" ]; then
+                die "Required Windows script not found: $SCRIPT_DIR/$_s"
+            fi
+            cp "$SCRIPT_DIR/$_s" "$dist_dir/$_s"
+        done
 
         # Copy icon file for NSIS
         cp "$PROJECT_ROOT/assets/xiaoda-icon.ico" "$dist_dir/xiaoda-icon.ico"

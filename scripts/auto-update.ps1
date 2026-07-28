@@ -2,6 +2,15 @@
 #   Xiaoda Agent - Auto-Update Script (PowerShell)
 #   Checks GitHub Release for new versions
 #   Called by auto-update.bat
+#
+#   原子更新协议（v0.5.45 重写）：
+#     1. 下载 + SHA256 校验
+#     2. 解压后校验候选目录包含全部关键文件
+#     3. 备份用户数据 + 整个安装目录
+#     4. 停止旧进程 → 覆盖安装目录
+#     5. 校验安装后的关键文件齐全
+#     6. 任何步骤失败 → 从备份恢复安装目录，不写新版本号
+#     7. 全部成功 → 写 .version，清理临时文件
 # ============================================
 
 param(
@@ -12,8 +21,35 @@ param(
     [string]$InstallDir = ""
 )
 
+# 严格模式：任何未捕获异常都进入 catch 块执行回滚
+$ErrorActionPreference = "Stop"
+
 # Check if auto-update is enabled
 if (-not (Test-Path $FlagFile)) { exit 0 }
+
+# CodeRabbit 审查：per-user named mutex 保证更新事务串行化
+# 两个同时启动的更新共享临时/备份路径，会互相删工作文件导致回滚失效
+$updateMutex = [System.Threading.Mutex]::new($false, 'Global\xiaoda-agent-update-mutex')
+$updateMutexAcquired = $false
+try {
+    if (-not $updateMutex.WaitOne(0)) {
+        Write-Host "  Another update is already running, skipping."
+        exit 0
+    }
+    $updateMutexAcquired = $true
+} catch {
+    Write-Host "  Warning: could not acquire update mutex, proceeding without serialization."
+}
+
+# 关键文件清单：解压后和安装后都必须存在，缺一则判定更新失败
+$criticalFiles = @('xiaoda-agent.exe', 'start-windows.bat', 'auto-update.bat', 'auto-update.ps1', 'doctor.bat')
+
+# 用户数据子目录清单：备份和恢复时使用
+$userDataItems = @('.env', 'config', 'credentials', 'data', 'stickers', 'xiaoli-stickers', 'agent-stickers', 'media', 'voice_refs', 'files', 'memory_state', 'plugins')
+
+# 程序目录备份：失败时用于完整回滚（区别于用户数据备份）
+$programBackupDir = $null
+$rolledBack = $false
 
 try {
     $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -TimeoutSec 10
@@ -49,10 +85,12 @@ try {
         exit 0
     }
 
+    # ── Step 1: 下载 ──
     Write-Host "  Downloading $($asset.name) ..."
     $tmp = [System.IO.Path]::GetTempPath() + '\' + $asset.name
     Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmp -TimeoutSec 120
 
+    # ── Step 2: SHA256 校验 ──
     Write-Host "  Download complete, verifying SHA256..."
     $sha256Url = $asset.browser_download_url + '.sha256'
     $sha256File = $tmp + '.sha256'
@@ -77,28 +115,63 @@ try {
         }
     }
 
+    # ── Step 3: 解压并检查 tar 退出码 ──
     Write-Host "  Download complete, extracting..."
     $extractDir = [System.IO.Path]::GetTempPath() + '\xiaoda-agent-update'
     if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
     New-Item -ItemType Directory -Path $extractDir | Out-Null
     if (Get-Command tar -ErrorAction SilentlyContinue) {
         tar xzf $tmp -C $extractDir
+        # 必须显式检查 $LASTEXITCODE：tar 解压失败（磁盘满、压缩包损坏）时
+        # PowerShell 不会抛异常，但 $LASTEXITCODE 非 0。
+        # 原bug：未检查导致后续 copy 把残缺文件写入安装目录，程序损坏。
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  Update FAILED: tar extraction failed with exit code $LASTEXITCODE"
+            Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
+            Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+            exit 1
+        }
     } else {
         Write-Host "  Error: tar command not available. Windows 10 1803+ required for auto-update."
         exit 1
     }
 
+    # ── Step 4: 校验候选目录关键文件齐全 ──
+    $srcDir = Get-ChildItem -Path $extractDir -Directory | Select-Object -First 1
+    $updateSrc = if ($srcDir) { $srcDir.FullName } else { $extractDir }
+    foreach ($file in $criticalFiles) {
+        if (-not (Test-Path (Join-Path $updateSrc $file))) {
+            Write-Host "  Update FAILED: candidate missing critical file: $file"
+            Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
+            Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+            exit 1
+        }
+    }
+    Write-Host "  Candidate validated: all $($criticalFiles.Count) critical files present"
+
+    # ── Step 5: 备份用户数据 + 整个安装目录 ──
     Write-Host "  Backing up configuration..."
     $backupDir = [System.IO.Path]::GetTempPath() + 'xiaoda-agent-backup-v' + $CurrentVersion
     if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir | Out-Null }
-    foreach ($item in @('.env', 'config', 'credentials', 'data', 'stickers', 'xiaoli-stickers', 'agent-stickers', 'media', 'voice_refs', 'files', 'memory_state', 'plugins')) {
+    foreach ($item in $userDataItems) {
         $src = $env:USERPROFILE + '\.ai-agent\' + $item
         if (Test-Path $src) { Copy-Item -Recurse -Force $src $backupDir\ }
     }
 
+    # 程序目录完整备份：复制失败时用于回滚，避免半更新状态损坏安装
+    # CodeRabbit 审查：$programBackupReady 标志确保只有完整备份才能触发回滚，
+    # 防止 Copy-Item 中途失败后 catch 块用不完整的备份恢复导致安装损坏
+    $programBackupDir = [System.IO.Path]::GetTempPath() + 'xiaoda-agent-program-backup-v' + $CurrentVersion
+    $programBackupReady = $false
+    if (Test-Path $programBackupDir) { Remove-Item -Recurse -Force $programBackupDir }
+    if (Test-Path $installDir) {
+        Copy-Item -Recurse -Force $installDir $programBackupDir
+        $programBackupReady = $true
+        Write-Host "  Program directory backed up to $programBackupDir"
+    }
+
+    # ── Step 6: 停止旧进程并覆盖安装目录 ──
     Write-Host "  Installing update..."
-    $srcDir = Get-ChildItem -Path $extractDir -Directory | Select-Object -First 1
-    $updateSrc = if ($srcDir) { $srcDir.FullName } else { $extractDir }
     $proc = Get-Process -Name 'xiaoda-agent' -ErrorAction SilentlyContinue
     if ($proc) {
         Write-Host "  Stopping running instance..."
@@ -109,9 +182,32 @@ try {
     Remove-Item -Recurse -Force ($installDir + '\web\dist') -ErrorAction SilentlyContinue
     Get-ChildItem -Path $updateSrc | Copy-Item -Recurse -Force -Destination $installDir\
 
+    # ── Step 7: 校验安装后关键文件齐全 ──
+    # xiaoda-agent.exe 是主程序入口，必须显式校验（也是版本写入的前置条件）
     if (-not (Test-Path ($installDir + '\xiaoda-agent.exe'))) {
         Write-Host "  Update FAILED: xiaoda-agent.exe missing. Restoring backup..."
-        foreach ($item in @('.env','config','credentials','data','stickers','xiaoli-stickers','agent-stickers','media','voice_refs','files','memory_state','plugins')) {
+        $rolledBack = $true
+    } else {
+        foreach ($file in $criticalFiles) {
+            if (-not (Test-Path ($installDir + '\' + $file))) {
+                Write-Host "  Update FAILED: install missing critical file: $file. Restoring backup..."
+                $rolledBack = $true
+                break
+            }
+        }
+    }
+
+    if ($rolledBack) {
+        # 从程序目录备份完整恢复，避免半更新状态损坏安装
+        if ($programBackupReady -and (Test-Path $programBackupDir)) {
+            $restoredSrc = Join-Path $programBackupDir (Split-Path $installDir -Leaf)
+            if (-not (Test-Path $restoredSrc)) { $restoredSrc = $programBackupDir }
+            Remove-Item -Recurse -Force $installDir -ErrorAction SilentlyContinue
+            Copy-Item -Recurse -Force $restoredSrc (Split-Path $installDir -Parent)
+            Write-Host "  Program directory restored from backup."
+        }
+        # 用户数据也恢复（避免新版本格式不兼容）
+        foreach ($item in $userDataItems) {
             $src = $backupDir + '\' + $item
             if (Test-Path $src) { Copy-Item -Recurse -Force $src ($env:USERPROFILE + '\.ai-agent\') }
         }
@@ -119,18 +215,41 @@ try {
         exit 1
     }
 
-    foreach ($item in @('.env', 'config', 'credentials', 'data', 'stickers', 'xiaoli-stickers', 'agent-stickers', 'media', 'voice_refs', 'files', 'memory_state', 'plugins')) {
+    # ── Step 8: 恢复用户数据（成功路径）──
+    foreach ($item in $userDataItems) {
         $src = $backupDir + '\' + $item
         if (Test-Path $src) { Copy-Item -Recurse -Force $src ($env:USERPROFILE + '\.ai-agent\') }
     }
 
+    # ── Step 9: 仅在校验全部通过后写版本号 ──
+    # 顺序至关重要：Test-Path 校验在前，Set-Content 在后。
+    # 原bug：版本号先于校验写入，导致 .version 与实际程序不一致。
     Set-Content -Path $VerFile -Value $latest -NoNewline
     Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
     Remove-Item -Force $tmp -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $backupDir -ErrorAction SilentlyContinue
+    if ($programBackupReady -and (Test-Path $programBackupDir)) {
+        Remove-Item -Recurse -Force $programBackupDir -ErrorAction SilentlyContinue
+    }
     Write-Host ""
     Write-Host "  Update complete! v$latest"
+    if ($updateMutexAcquired) { $updateMutex.ReleaseMutex() }
 } catch {
     Write-Host "  Update check failed: $($_.Exception.Message)"
+    # 兜底回滚：异常路径下若已备份程序目录，尝试恢复
+    if (-not $rolledBack -and $programBackupReady -and (Test-Path $programBackupDir) -and (Test-Path $installDir)) {
+        Write-Host "  Attempting rollback from program backup..."
+        try {
+            $restoredSrc = Join-Path $programBackupDir (Split-Path $installDir -Leaf)
+            if (-not (Test-Path $restoredSrc)) { $restoredSrc = $programBackupDir }
+            Remove-Item -Recurse -Force $installDir -ErrorAction SilentlyContinue
+            Copy-Item -Recurse -Force $restoredSrc (Split-Path $installDir -Parent)
+            Write-Host "  Rollback complete."
+        } catch {
+            Write-Host "  Rollback failed: $($_.Exception.Message)"
+        }
+    }
+    # 自动更新失败不应阻塞启动（用户可下次再试或手动 setup.exe）
+    if ($updateMutexAcquired) { $updateMutex.ReleaseMutex() }
     exit 0
 }
