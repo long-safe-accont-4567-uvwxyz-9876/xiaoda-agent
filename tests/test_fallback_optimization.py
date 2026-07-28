@@ -8,6 +8,7 @@
 5. 后台任务 _spawn 添加耗时监控日志
 """
 import asyncio
+import copy
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from pathlib import Path
@@ -26,10 +27,11 @@ class TestFallbackChainSync:
         CodeRabbit #11 + commit a40bc74：用户明确要求取消 chat_flash 跨 provider 降级，
         所有 task 跟随主 provider。原测试期望 chat_flash 用 mimo 已过时。
         """
-        from model_router import ROUTE_TABLE, ModelRouter
+        from model_router import ROUTE_TABLE, ModelRouter, ModelRouteRegistry
 
         # 模拟初始状态：mimo 为默认
-        original_flash = ROUTE_TABLE["chat_flash"].copy()
+        original_flash = copy.deepcopy(ROUTE_TABLE["chat_flash"])
+        original_chat = copy.deepcopy(ROUTE_TABLE["chat"])
         try:
             router = MagicMock(spec=ModelRouter)
             router._custom_clients = {}
@@ -37,9 +39,14 @@ class TestFallbackChainSync:
             router._lazy_register_provider = MagicMock()
             # set_chat_model 持久化时会读取 TASK_TIMEOUTS，需显式提供
             router.TASK_TIMEOUTS = {"chat": 60}
+            # Task 4: set_chat_model 通过 _registry 原子化更新，需提供真实 registry
+            mock_cfg = MagicMock()
+            router._registry = ModelRouteRegistry(ROUTE_TABLE, config_service=mock_cfg)
 
-            # 调用 set_chat_model 切换到 agnes
-            ModelRouter.set_chat_model(router, "agnes", "agnes-2.0-flash")
+            # patch 掉 set_chat_model 末尾的 cfg.set("models.chat_model", ...) 持久化
+            with patch("web.config_service.get_config_service", return_value=mock_cfg):
+                # 调用 set_chat_model 切换到 agnes
+                ModelRouter.set_chat_model(router, "agnes", "agnes-2.0-flash")
 
             # chat 路由应更新为 agnes
             assert ROUTE_TABLE["chat"]["model"] == "agnes-2.0-flash"
@@ -51,12 +58,14 @@ class TestFallbackChainSync:
             assert ROUTE_TABLE["chat_flash"]["model"] == "agnes-2.0-flash"
         finally:
             ROUTE_TABLE["chat_flash"] = original_flash
+            ROUTE_TABLE["chat"] = original_chat
 
     def test_set_chat_model_mimo_syncs_flash_to_mimo(self):
         """切换到 mimo 时，chat_flash 应跟随 mimo（用户取消跨 provider 降级）"""
-        from model_router import ROUTE_TABLE, ModelRouter
+        from model_router import ROUTE_TABLE, ModelRouter, ModelRouteRegistry
 
-        original_flash = ROUTE_TABLE["chat_flash"].copy()
+        original_flash = copy.deepcopy(ROUTE_TABLE["chat_flash"])
+        original_chat = copy.deepcopy(ROUTE_TABLE["chat"])
         try:
             router = MagicMock(spec=ModelRouter)
             router._custom_clients = {}
@@ -64,8 +73,12 @@ class TestFallbackChainSync:
             router._lazy_register_provider = MagicMock()
             # set_chat_model 持久化时会读取 TASK_TIMEOUTS，需显式提供
             router.TASK_TIMEOUTS = {"chat": 60}
+            # Task 4: set_chat_model 通过 _registry 原子化更新，需提供真实 registry
+            mock_cfg = MagicMock()
+            router._registry = ModelRouteRegistry(ROUTE_TABLE, config_service=mock_cfg)
 
-            ModelRouter.set_chat_model(router, "mimo", "mimo-v2.5")
+            with patch("web.config_service.get_config_service", return_value=mock_cfg):
+                ModelRouter.set_chat_model(router, "mimo", "mimo-v2.5")
 
             assert ROUTE_TABLE["chat"]["client"] == "mimo"
             # chat_flash 应跟随 mimo（用户取消跨 provider 降级）
@@ -74,6 +87,7 @@ class TestFallbackChainSync:
             assert ROUTE_TABLE["chat_flash"]["model"] == "mimo-v2.5"
         finally:
             ROUTE_TABLE["chat_flash"] = original_flash
+            ROUTE_TABLE["chat"] = original_chat
 
     def test_fallback_chain_uses_different_providers(self):
         """验证 fallback 链中每级使用不同 provider"""

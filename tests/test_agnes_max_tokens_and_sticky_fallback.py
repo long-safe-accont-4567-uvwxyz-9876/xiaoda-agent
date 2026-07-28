@@ -7,9 +7,11 @@
 """
 from __future__ import annotations
 
+import copy
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -207,18 +209,15 @@ def test_set_chat_model_persist_catches_generic_exception(monkeypatch):
 
     模拟 config_service 抛非 (OSError, KeyError, ValueError, TypeError) 的异常，
     验证 set_chat_model 仍正常返回，不会传播到 _restore_chat_model 的 fallback。
+
+    新架构（Task 4）：set_chat_model 通过 _registry.update_route 原子化更新。
+    - registry 持有独立的 mock_cfg（不抛异常），保证 routes 持久化成功
+    - set_chat_model 末尾单独调 get_config_service() 同步 models.chat_model，
+      此处抛 RuntimeError 应被 try/except 捕获，不影响返回值
     """
     import model_router as _mr_module
 
-    class _FakeRouter:
-        def __init__(self):
-            self._custom_clients = {}
-            self.TASK_TIMEOUTS = {"chat": 60}
-            self._current_chat_model = None
-
-    router = _FakeRouter()
-
-    # 模拟 config_service 抛 RuntimeError（不在原 except 范围内）
+    # 模拟 config_service 抛 RuntimeError（在 set_chat_model 末尾被调用）
     class _BombCfg:
         def set(self, key, value):
             raise RuntimeError("simulated config service failure")
@@ -226,17 +225,37 @@ def test_set_chat_model_persist_catches_generic_exception(monkeypatch):
         def get(self, key, default=None):
             return default
 
-    # 用 monkeypatch 替换 web.config_service.get_config_service
+    # registry 持有不抛异常的 mock cfg，保证 update_route 成功
+    safe_cfg = MagicMock()
+    router = MagicMock(spec=_mr_module.ModelRouter)
+    router._custom_clients = {}
+    router._current_chat_model = None
+    router._lazy_register_provider = MagicMock()
+    router.TASK_TIMEOUTS = {"chat": 60, "chat_pro": 60, "chat_flash": 30,
+                            "emotion_analysis": 10, "tool_result_wrap": 30,
+                            "memory_encoding": 30}
+    router._registry = _mr_module.ModelRouteRegistry(
+        _mr_module.ROUTE_TABLE, config_service=safe_cfg
+    )
+
+    # set_chat_model 末尾调 get_config_service() 返回 _BombCfg
     import web.config_service as _cfg_mod
     monkeypatch.setattr(_cfg_mod, "get_config_service", lambda: _BombCfg())
 
-    # set_chat_model 应捕获 Exception，不抛出
-    result = _mr_module.ModelRouter.set_chat_model(
-        router, "agnes", "agnes-2.0-flash"
-    )
-    assert result == {"provider": "agnes", "model_id": "agnes-2.0-flash"}
-    # ROUTE_TABLE 应已更新为 agnes
-    assert _mr_module.ROUTE_TABLE["chat"]["client"] == "agnes"
+    # 保存原 ROUTE_TABLE 状态以便恢复
+    original_chat = copy.deepcopy(_mr_module.ROUTE_TABLE["chat"])
+    original_chat_flash = copy.deepcopy(_mr_module.ROUTE_TABLE["chat_flash"])
+    try:
+        # set_chat_model 应捕获末尾的 RuntimeError，不抛出
+        result = _mr_module.ModelRouter.set_chat_model(
+            router, "agnes", "agnes-2.0-flash"
+        )
+        assert result == {"provider": "agnes", "model_id": "agnes-2.0-flash"}
+        # ROUTE_TABLE 应已更新为 agnes（registry 成功更新）
+        assert _mr_module.ROUTE_TABLE["chat"]["client"] == "agnes"
+    finally:
+        _mr_module.ROUTE_TABLE["chat"] = original_chat
+        _mr_module.ROUTE_TABLE["chat_flash"] = original_chat_flash
 
 
 def test_update_route_chat_uses_body_provider_for_sync(monkeypatch):

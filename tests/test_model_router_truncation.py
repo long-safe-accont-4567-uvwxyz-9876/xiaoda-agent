@@ -174,6 +174,9 @@ async def test_fallback_max_tokens_passthrough():
     router.TASK_TIMEOUTS = {"chat": 30}
     router._check_cache_health = lambda: None
     router._last_cache_warning = 0.0
+    # Task 6: _try_fallback_chain 通过 _registry.snapshot_task 读取降级配置
+    from model_router import ModelRouteRegistry
+    router._registry = ModelRouteRegistry(ROUTE_TABLE)
 
     # 记录 fallback 调用时的 max_tokens
     received_max_tokens = []

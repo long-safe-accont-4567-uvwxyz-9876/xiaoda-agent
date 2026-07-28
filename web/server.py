@@ -146,13 +146,24 @@ def _register_all_providers(cfg: Any, core: Any, load_provider_key: Any, registe
 
 
 def _apply_route_overrides(cfg: Any, core: Any, ROUTE_TABLE: Any) -> None:
-    """应用路由表覆盖（model/client/max_tokens/thinking/timeout）。"""
+    """应用路由表覆盖（model/client/max_tokens/thinking/timeout）。
+
+    同时清理持久化文件中 ROUTE_TABLE 已不存在的死路由（如 chat_mimo/chat_mini/chat_ultra）。
+    旧版本曾使用这些 task，升级后 ROUTE_TABLE 删除了它们，但持久化文件残留，
+    导致 WebUI 显示僵尸路由并每次启动都尝试应用无效覆盖。
+    """
     routes_config = cfg.get("models.routes", {}) or {}
     logger.info("webui.route_overrides_start total_tasks={}", len(routes_config))
-    for task, o in routes_config.items():
+    dead_routes: list[str] = []
+    for task, o in list(routes_config.items()):
         entry = ROUTE_TABLE.get(task)
-        if not entry or not isinstance(o, dict):
-            logger.warning("webui.route_override_skip task={} reason=no_entry_or_invalid", task)
+        if not entry:
+            # 死路由：ROUTE_TABLE 中已删除，但持久化文件还有
+            dead_routes.append(task)
+            logger.info("webui.route_override_dead task={} reason=not_in_route_table", task)
+            continue
+        if not isinstance(o, dict):
+            logger.warning("webui.route_override_skip task={} reason=invalid", task)
             continue
         if o.get("model"):
             entry["model"] = o["model"]
@@ -171,12 +182,27 @@ def _apply_route_overrides(cfg: Any, core: Any, ROUTE_TABLE: Any) -> None:
         if o.get("timeout"):
             core.router.TASK_TIMEOUTS[task] = o["timeout"]
 
+    # 清理死路由：从持久化文件删除 ROUTE_TABLE 中已不存在的 task
+    if dead_routes:
+        for dr in dead_routes:
+            try:
+                cfg.delete(f"models.routes.{dr}")
+                logger.info("webui.dead_route_cleaned task={}", dr)
+            except (KeyError, AttributeError, OSError, ValueError) as e:
+                logger.warning("webui.dead_route_clean_failed task={} error={}",
+                               dr, str(e))
+        logger.info("webui.dead_routes_cleaned count={}", len(dead_routes))
+
 
 def _restore_chat_model(cfg: Any, core: Any) -> None:
     """恢复上次聊天模型（从 config_service 的 models.chat_model 读取）。
 
-    注意：此函数只做"恢复"，不做"持久化"。fallback 时禁止调用 set_chat_model，
-    否则会把 mimo 重新写入 config，覆盖用户原选择，形成 sticky fallback。
+    设计原则（用户约束）：
+    - 持久化的用户选择是真相源，失败时**绝不覆盖**
+    - 仅修改内存中的 ROUTE_TABLE 和 _current_chat_model
+    - 失败时内存回退到 provider_metadata.json 的默认模型（不持久化）
+      下次启动会重新尝试恢复用户选择
+    - 不硬编码任何模型 ID，默认值从 get_default_model_for_provider() 读
     """
     chat_model = cfg.get("models.chat_model")
     if not (isinstance(chat_model, dict) and chat_model.get("provider") and chat_model.get("model_id")):
@@ -190,11 +216,6 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
     current_model = ROUTE_TABLE.get("chat", {}).get("model", "")
     logger.info("webui.chat_model_restore_attempt saved={}/{} current_route={}/{}",
                 provider, model_id, current_client, current_model)
-    # 直接修改内存中的 ROUTE_TABLE 和 _current_chat_model，不调用 set_chat_model。
-    # set_chat_model 会触发持久化（cfg.set），而 _restore_chat_model 只做"恢复"不做"持久化"，
-    # 否则每次启动都会重新持久化当前模型到 config，覆盖用户的后续切换选择。
-    # 成功路径：直接设置 ROUTE_TABLE["chat"] 和 _current_chat_model
-    # fallback 路径：回退到 mimo，同样只修改内存不持久化
     try:
         # 检查 provider 是否已注册（自定义 provider 可能未注册）
         if provider not in ("mimo", "agnes") and provider not in getattr(core.router, '_custom_clients', {}):
@@ -206,24 +227,33 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
         core.router._current_chat_model = {"provider": provider, "model_id": model_id}
         logger.info("webui.chat_model_restored provider={} model={}", provider, model_id)
     except Exception as e:
-        # 必须捕获 Exception：LLMError 继承 AppException 不在原 (KeyError, ValueError,
-        # AttributeError, OSError) 范围内，自定义 provider 注册失败时会导致启动崩溃
+        # 关键：失败时不覆盖持久化，仅内存回退到默认模型
         logger.warning(
             "webui.chat_model_restore_failed provider={} model={} "
-            "error={} fallback_to_mimo_in_memory_only", provider, model_id, str(e)
+            "error={} fallback_to_default_in_memory_only_persistence_untouched",
+            provider, model_id, str(e)
         )
-        # 仅修改内存中的 ROUTE_TABLE，不调用 set_chat_model 避免重新持久化 mimo
-        # 这样用户下次切换模型时，config 中仍是原选择，不会被 sticky mimo 覆盖
         try:
-            from model_router import MIMO_MODEL
+            # 从 provider_metadata.json 读默认模型（不硬编码）
+            from config import get_default_model_for_provider, DEFAULT_PROVIDER
+            fallback_provider = DEFAULT_PROVIDER  # 通常为 "mimo"
+            fallback_model = get_default_model_for_provider(fallback_provider)
+            if not fallback_model:
+                # 极端兜底：直接用 ROUTE_TABLE 当前值（不修改）
+                logger.error("webui.chat_model_fallback_no_default_model provider={}",
+                             fallback_provider)
+                return
             chat_entry = ROUTE_TABLE.get("chat")
             if chat_entry is not None:
-                chat_entry["model"] = MIMO_MODEL
-                chat_entry["client"] = "mimo"
-            core.router._current_chat_model = {"provider": "mimo", "model_id": MIMO_MODEL}
-            logger.info("webui.chat_model_fallback_in_memory provider=mimo model={}", MIMO_MODEL)
-        except (ImportError, KeyError, AttributeError):
-            logger.debug("server.set_chat_model_fallback_error", exc_info=True)
+                chat_entry["model"] = fallback_model
+                chat_entry["client"] = fallback_provider
+            core.router._current_chat_model = {
+                "provider": fallback_provider, "model_id": fallback_model,
+            }
+            logger.info("webui.chat_model_fallback_in_memory provider={} model={}",
+                        fallback_provider, fallback_model)
+        except (ImportError, KeyError, AttributeError) as inner_e:
+            logger.error("webui.set_chat_model_fallback_error error={}", str(inner_e))
 
 
 async def _start_user_mcp_servers(core: Any) -> None:

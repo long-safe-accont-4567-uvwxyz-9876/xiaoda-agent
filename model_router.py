@@ -286,8 +286,12 @@ class ModelRouteRegistry:
 
     def __init__(self, initial_table: dict | None = None,
                  config_service: Any = None) -> None:
-        # 深拷贝初始表，避免共享引用
-        self._table: dict[str, dict] = copy.deepcopy(initial_table) if initial_table else {}
+        # 直接引用传入的 table（不深拷贝）：
+        # 生产中传入 ROUTE_TABLE，registry._table 就是 ROUTE_TABLE 本身，
+        # update_route 修改 self._table[task] 即修改 ROUTE_TABLE[task]，
+        # 保证 route() 读 ROUTE_TABLE 时拿到最新值（避免 registry 与 ROUTE_TABLE 脱节）。
+        # 测试中传入局部 dict，修改不影响全局；如需隔离，调用方自行深拷贝后传入。
+        self._table: dict[str, dict] = initial_table if initial_table is not None else {}
         # 延迟加载 ConfigService：测试时可注入 mock，生产时从 get_config_service() 取
         self._cfg = config_service
 
@@ -944,11 +948,14 @@ class ModelRouter:
         _is_content_filter = "content_filter" in str(e) or "content_policy" in str(e)
         _original_provider = ""
         try:
-            _original_provider = ROUTE_TABLE.get(task_type, {}).get("client", _CFG_DEFAULT_PROVIDER)
+            # Task 6: 通过 registry 快照读取，避免降级链污染全局 ROUTE_TABLE
+            _orig_entry = self._registry.get_task(task_type) or {}
+            _original_provider = _orig_entry.get("client", _CFG_DEFAULT_PROVIDER)
         except Exception:
             pass
         while fallback_type:
-            fallback_config = ROUTE_TABLE.get(fallback_type)
+            # Task 6: 用 registry 快照（深拷贝），降级期间修改不影响全局 ROUTE_TABLE
+            fallback_config = self._registry.snapshot_task(fallback_type)
             fallback_provider = fallback_config.get("client", _CFG_DEFAULT_PROVIDER) if fallback_config else _CFG_DEFAULT_PROVIDER
             # content_filter 时跳过同 provider（同样的过滤模型会再次拦截）
             if _is_content_filter and fallback_provider == _original_provider:
@@ -986,7 +993,8 @@ class ModelRouter:
         # 2. 尝试 Agnes 作为最终降级
         if task_type not in ("chat_agnes",) and self._is_client_configured("agnes"):
             try:
-                agnes_config = ROUTE_TABLE.get("chat_agnes")
+                # Task 6: 用 registry 快照读取 chat_agnes，避免污染全局
+                agnes_config = self._registry.snapshot_task("chat_agnes")
                 if agnes_config:
                     logger.warning("router.agnes_fallback", original_task=task_type)
                     agnes_tools = self._filter_tools_for_model(tools, agnes_config.get("model", ""))

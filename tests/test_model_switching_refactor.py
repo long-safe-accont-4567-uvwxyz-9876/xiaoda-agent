@@ -14,7 +14,7 @@ import copy
 import json
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -248,3 +248,292 @@ def test_set_chat_model_persists_all_synced_tasks(mock_config_service):
     assert "chat" in tasks_updated
     assert "chat_pro" in tasks_updated
     assert "chat_flash" in tasks_updated
+
+
+# ── Task 5: _restore_chat_model 不硬编码 fallback ──
+
+def test_restore_chat_model_does_not_overwrite_persistence_on_failure(tmp_path, monkeypatch):
+    """_restore_chat_model 失败时不覆盖 ConfigService 持久化值。"""
+    import json as _json
+    # 准备一个持久化文件，用户已选 agnes
+    overrides_file = tmp_path / "webui_overrides.json"
+    overrides_file.write_text(_json.dumps({
+        "models": {
+            "chat_model": {"provider": "agnes", "model_id": "agnes-2.0-flash"},
+            "routes": {"chat": {"model": "agnes-2.0-flash", "client": "agnes",
+                                "max_tokens": 8192, "thinking": False, "timeout": 60}},
+        }
+    }), encoding="utf-8")
+
+    from web.config_service import ConfigService
+    cfg = ConfigService(path=overrides_file)
+
+    # mock core：agnes provider 未注册（触发 fallback）
+    mock_core = MagicMock()
+    mock_core.router._custom_clients = {}  # agnes 不在已注册列表
+    mock_core.router._current_chat_model = None
+
+    # mock ConfigService 单例
+    import web.config_service
+    monkeypatch.setattr(web.config_service, "get_config_service", lambda: cfg)
+
+    # 执行 _restore_chat_model
+    from web.server import _restore_chat_model
+    _restore_chat_model(cfg, mock_core)
+
+    # 持久化值仍然是 agnes（未被覆盖为 mimo）
+    saved = _json.loads(overrides_file.read_text(encoding="utf-8"))
+    assert saved["models"]["chat_model"]["provider"] == "agnes"
+    assert saved["models"]["chat_model"]["model_id"] == "agnes-2.0-flash"
+
+
+# ─────────────────────────────────────────────────────────────
+# Task 6: _try_fallback_chain 不污染全局 ROUTE_TABLE
+# ─────────────────────────────────────────────────────────────
+
+
+def test_try_fallback_chain_uses_registry_snapshot():
+    """_try_fallback_chain 应通过 self._registry.snapshot_task() 读取降级配置，
+    而非直接读 ROUTE_TABLE（避免降级期间修改污染全局状态）。
+
+    源码守护测试：确保重构落地，不会回退到旧实现。
+    """
+    import inspect
+    from model_router import ModelRouter
+    source = inspect.getsource(ModelRouter._try_fallback_chain)
+    # 不应直接读 ROUTE_TABLE.get（应走 registry 快照）
+    assert "ROUTE_TABLE.get(fallback_type)" not in source, (
+        "_try_fallback_chain 应改用 self._registry.snapshot_task(fallback_type)，"
+        "而非 ROUTE_TABLE.get(fallback_type)"
+    )
+    assert "ROUTE_TABLE.get(\"chat_agnes\")" not in source
+    assert "ROUTE_TABLE.get('chat_agnes')" not in source
+    # 应使用 registry 快照
+    assert "self._registry.snapshot_task" in source or "self._registry.get_task" in source, (
+        "_try_fallback_chain 应通过 self._registry.snapshot_task/get_task 读取降级配置"
+    )
+
+
+def test_fallback_chain_does_not_pollute_route_table():
+    """降级链调用后 ROUTE_TABLE 全局状态不变。"""
+    from unittest.mock import AsyncMock
+    from model_router import ModelRouter, ROUTE_TABLE
+    router = ModelRouter(api_key="fake")
+    # 初始化 _registry（如果 __init__ 没初始化）
+    if not hasattr(router, "_registry"):
+        from model_router import ModelRouteRegistry
+        router._registry = ModelRouteRegistry(ROUTE_TABLE)
+
+    original_chat = copy.deepcopy(ROUTE_TABLE["chat"])
+    original_chat_flash = copy.deepcopy(ROUTE_TABLE["chat_flash"])
+
+    # mock _route_with_retry 返回成功（避免真实 LLM 调用）——用 AsyncMock 因为被 await
+    router._route_with_retry = AsyncMock(return_value="fake_response")
+    router._filter_tools_for_model = MagicMock(return_value=[])
+    router._is_client_configured = MagicMock(return_value=True)
+
+    import asyncio
+    fake_error = Exception("simulated LLM failure")
+    async def _run():
+        await router._try_fallback_chain(
+            fake_error, "chat", [], 0.7, False, None, None, 60,
+            "user1", "session1", None, original_max_tokens=8192,
+        )
+    asyncio.run(_run())
+
+    # ROUTE_TABLE 未被污染（降级链读取的是 registry 快照深拷贝）
+    assert ROUTE_TABLE["chat"] == original_chat
+    assert ROUTE_TABLE["chat_flash"] == original_chat_flash
+
+
+def test_fallback_chain_agnes_uses_snapshot():
+    """agnes 降级路径也应通过 registry 快照读取 chat_agnes 配置。"""
+    import inspect
+    from model_router import ModelRouter
+    source = inspect.getsource(ModelRouter._try_fallback_chain)
+    # 检查 agnes_config 的赋值来源
+    assert "agnes_config = self._registry.snapshot_task" in source or \
+           "agnes_config = self._registry.get_task" in source, (
+        "agnes_config 应通过 self._registry.snapshot_task/get_task 读取"
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# Task 7: 启动时清理死路由
+# ─────────────────────────────────────────────────────────────
+
+
+def test_apply_route_overrides_cleans_dead_routes(tmp_path):
+    """启动时清理持久化文件中 ROUTE_TABLE 已不存在的死路由。
+
+    回归场景：旧版本曾使用 chat_mimo/chat_mini/chat_ultra 等 task，升级后
+    ROUTE_TABLE 已删除这些条目，但持久化文件 webui_overrides.json 还残留，
+    导致 WebUI 显示僵尸路由让用户困惑，且每次启动都尝试应用无效覆盖。
+
+    修复：_apply_route_overrides 检测 ROUTE_TABLE 中不存在的 task，从持久化文件删除。
+    """
+    import json as _json
+    overrides_file = tmp_path / "webui_overrides.json"
+    overrides_file.write_text(_json.dumps({
+        "models": {
+            "routes": {
+                "chat": {"model": "mimo-v2.5", "client": "mimo",
+                         "max_tokens": 131072, "thinking": False, "timeout": 60},
+                "chat_mimo": {"model": "mimo-v2.5", "client": "mimo",
+                              "max_tokens": 131072, "thinking": False, "timeout": 60},
+                "chat_mini": {"model": "mimo-v2.5", "client": "mimo",
+                              "max_tokens": 4096, "thinking": False, "timeout": 60},
+                "chat_ultra": {"model": "mimo-v2.5", "client": "mimo",
+                               "max_tokens": 1048576, "thinking": False, "timeout": 60},
+            }
+        }
+    }), encoding="utf-8")
+
+    from web.config_service import ConfigService
+    cfg = ConfigService(path=overrides_file)
+
+    mock_core = MagicMock()
+    mock_core.router.TASK_TIMEOUTS = {}
+
+    from model_router import ROUTE_TABLE
+    # 确保 ROUTE_TABLE 中没有 chat_mimo/chat_mini/chat_ultra
+    dead_routes = ("chat_mimo", "chat_mini", "chat_ultra")
+    for dr in dead_routes:
+        assert dr not in ROUTE_TABLE, f"测试前置失败：ROUTE_TABLE 不应有 {dr}"
+
+    from web.server import _apply_route_overrides
+    _apply_route_overrides(cfg, mock_core, ROUTE_TABLE)
+
+    # 死路由已从持久化文件删除
+    saved = _json.loads(overrides_file.read_text(encoding="utf-8"))
+    saved_routes = saved["models"]["routes"]
+    assert "chat_mimo" not in saved_routes
+    assert "chat_mini" not in saved_routes
+    assert "chat_ultra" not in saved_routes
+    # 存活路由保留
+    assert "chat" in saved_routes
+
+
+def test_apply_route_overrides_preserves_valid_routes(tmp_path):
+    """死路由清理不影响存活路由的覆盖应用。"""
+    import json as _json
+    overrides_file = tmp_path / "webui_overrides.json"
+    overrides_file.write_text(_json.dumps({
+        "models": {
+            "routes": {
+                "chat": {"model": "agnes-2.0-flash", "client": "agnes",
+                         "max_tokens": 8192, "thinking": False, "timeout": 90},
+                "chat_pro": {"model": "agnes-2.0-flash", "client": "agnes",
+                             "max_tokens": 8192, "thinking": True, "timeout": 90},
+            }
+        }
+    }), encoding="utf-8")
+
+    from web.config_service import ConfigService
+    cfg = ConfigService(path=overrides_file)
+
+    mock_core = MagicMock()
+    mock_core.router.TASK_TIMEOUTS = {}
+
+    from model_router import ROUTE_TABLE
+    original_chat_model = ROUTE_TABLE["chat"]["model"]
+    original_chat_pro_model = ROUTE_TABLE["chat_pro"]["model"]
+    try:
+        from web.server import _apply_route_overrides
+        _apply_route_overrides(cfg, mock_core, ROUTE_TABLE)
+
+        # 存活路由的覆盖已应用
+        assert ROUTE_TABLE["chat"]["model"] == "agnes-2.0-flash"
+        assert ROUTE_TABLE["chat"]["client"] == "agnes"
+        assert ROUTE_TABLE["chat_pro"]["model"] == "agnes-2.0-flash"
+        assert mock_core.router.TASK_TIMEOUTS["chat"] == 90
+    finally:
+        # 恢复 ROUTE_TABLE
+        ROUTE_TABLE["chat"]["model"] = original_chat_model
+        ROUTE_TABLE["chat"]["client"] = "mimo"
+        ROUTE_TABLE["chat_pro"]["model"] = original_chat_pro_model
+        ROUTE_TABLE["chat_pro"]["client"] = "mimo"
+
+
+# ─────────────────────────────────────────────────────────────
+# Task 8: web/routers/models.py update_route 走 Registry
+# ─────────────────────────────────────────────────────────────
+
+
+def test_update_route_api_uses_registry():
+    """WebUI update_route API 应通过 Registry 更新，不直接改 ROUTE_TABLE[task]。
+
+    源码守护测试：确保 API 重构落地，不会回退到直接修改 ROUTE_TABLE。
+    旧实现 `entry = ROUTE_TABLE[task]; entry["model"] = ...` 直接修改全局 dict，
+    失败时不回滚，且持久化与内存可能不一致。新实现通过 registry.update_route 原子化。
+    """
+    import inspect
+    from web.routers.models import update_route
+    source = inspect.getsource(update_route)
+    # 不应直接赋值修改 ROUTE_TABLE[task] 的字段（检查赋值语句，避免误匹配 final_entry["model"] 读取）
+    assert "entry[\"model\"] =" not in source, (
+        "update_route 不应直接赋值 entry[\"model\"]，应通过 registry.update_route()"
+    )
+    assert "entry['model'] =" not in source
+    assert "entry[\"client\"] =" not in source
+    assert "entry['client'] =" not in source
+    assert "entry[\"max_tokens\"] =" not in source
+    assert "entry[\"thinking\"] =" not in source
+    # 应调用 registry
+    assert "_registry" in source, (
+        "update_route 应通过 core.router._registry.update_route() 原子化更新"
+    )
+    assert "registry.update_route" in source
+
+
+def test_update_route_api_persists_via_registry(tmp_path):
+    """update_route 通过 Registry 更新后，ConfigService 持久化被调用。"""
+    import json as _json
+    overrides_file = tmp_path / "webui_overrides.json"
+    # 预置 agnes provider，避免被 "provider 不存在" 拦截
+    overrides_file.write_text(_json.dumps({
+        "models": {"routes": {}, "providers": {"agnes": {"label": "Agnes"}}}
+    }), encoding="utf-8")
+
+    from web.config_service import ConfigService
+    cfg = ConfigService(path=overrides_file)
+
+    from model_router import ModelRouter, ROUTE_TABLE
+    from model_router import ModelRouteRegistry
+    # 构造一个真实的 router 实例，registry 持有 cfg
+    router_obj = ModelRouter.__new__(ModelRouter)
+    router_obj._registry = ModelRouteRegistry(ROUTE_TABLE, config_service=cfg)
+    router_obj.TASK_TIMEOUTS = {"chat": 60}
+
+    original_chat_model = ROUTE_TABLE["chat"]["model"]
+    original_chat_client = ROUTE_TABLE["chat"]["client"]
+    try:
+        # 构造 mock request
+        mock_request = MagicMock()
+        mock_request.app.state.core.router = router_obj
+
+        # patch _cfg 返回我们的 cfg，_router_of 返回 router_obj
+        with patch("web.routers.models._cfg", return_value=cfg), \
+             patch("web.routers.models._router_of", return_value=router_obj), \
+             patch("web.routers.models._audit", new_callable=AsyncMock), \
+             patch("web.routers.models._broadcast_changed", new_callable=AsyncMock):
+            from web.routers.models import update_route
+            import asyncio
+            asyncio.run(update_route("chat", {
+                "model": "agnes-2.0-flash", "provider": "agnes",
+                "max_tokens": 8192, "thinking": False, "timeout": 90,
+            }, mock_request))
+
+        # 内存已更新
+        assert ROUTE_TABLE["chat"]["model"] == "agnes-2.0-flash"
+        assert ROUTE_TABLE["chat"]["client"] == "agnes"
+        # 持久化已写入
+        saved = _json.loads(overrides_file.read_text(encoding="utf-8"))
+        assert saved["models"]["routes"]["chat"]["model"] == "agnes-2.0-flash"
+        assert saved["models"]["routes"]["chat"]["client"] == "agnes"
+        # task == chat 时同步 models.chat_model
+        assert saved["models"]["chat_model"]["provider"] == "agnes"
+        assert saved["models"]["chat_model"]["model_id"] == "agnes-2.0-flash"
+    finally:
+        ROUTE_TABLE["chat"]["model"] = original_chat_model
+        ROUTE_TABLE["chat"]["client"] = original_chat_client
