@@ -114,3 +114,31 @@ def test_registry_replace_table_bulk_update(fresh_registry):
     assert reg.get_task("chat_pro")["client"] == "agnes"
     # replace_table 不触发持久化（启动时用，持久化由调用方负责）
     assert not mock_cfg.set.called
+
+
+# ── Task 2: get_default_model_for_provider ──
+
+def test_get_default_model_for_provider_from_metadata():
+    """从 provider_metadata.json 读默认模型 ID。"""
+    from config import get_default_model_for_provider
+    assert get_default_model_for_provider("mimo") == "mimo-v2.5"
+    assert get_default_model_for_provider("agnes") == "agnes-2.0-flash"
+    assert get_default_model_for_provider("deepseek") == "deepseek-chat"
+
+
+def test_get_default_model_for_provider_env_override(monkeypatch):
+    """环境变量优先级最高。"""
+    monkeypatch.setenv("MIMO_MODEL_NAME", "mimo-custom-v9")
+    # 清除缓存
+    import config
+    config._PROVIDER_METADATA_CACHE = None
+    assert config.get_default_model_for_provider("mimo") == "mimo-custom-v9"
+    # 清理
+    monkeypatch.delenv("MIMO_MODEL_NAME", raising=False)
+    config._PROVIDER_METADATA_CACHE = None
+
+
+def test_get_default_model_for_provider_unknown_returns_empty():
+    """未知 provider 返回空串（不抛异常）。"""
+    from config import get_default_model_for_provider
+    assert get_default_model_for_provider("unknown_provider_xxx") == ""
