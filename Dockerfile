@@ -36,12 +36,18 @@ COPY --from=builder /install /usr/local
 # 项目代码
 COPY . .
 
+# 注入版本号：.version 在 .gitignore 中，COPY . . 不会包含它
+# 从 pyproject.toml 读取版本号写入 .version（与 CI 打包行为一致）
+RUN VERSION=$(grep -m1 '^version\s*=' pyproject.toml | sed 's/.*"\(.*\)".*/\1/') \
+    && echo -n "$VERSION" > .version
+
 # 从 Stage 1 复制前端构建产物（web/dist 在 .gitignore 中，COPY . . 不包含它）
 COPY --from=frontend-builder /build/web/dist web/dist
 
 # 复制辅助脚本
 COPY scripts/doctor.sh scripts/doctor.sh
-RUN chmod +x scripts/doctor.sh
+COPY scripts/start-linux.sh scripts/start-linux.sh
+RUN chmod +x scripts/doctor.sh scripts/start-linux.sh
 
 # 从 Stage 1 复制 agently-cli（邮箱 OAuth 工具）
 # 复制 node 二进制和 agently-cli npm 包（run.js 需要 node）

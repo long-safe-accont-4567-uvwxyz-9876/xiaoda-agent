@@ -73,20 +73,29 @@ ENVEOF
         info "已创建 .env 配置文件（请编辑填入 API Key）"
     fi
 
-    # 创建用户数据目录
-    mkdir -p "$HOME/.ai-agent/data/voice_refs" \
+    # 创建用户数据目录（与 config.py 中 _resolve_data_path 的目录结构对齐）
+    mkdir -p "$HOME/.ai-agent/data/db" \
+             "$HOME/.ai-agent/data/logs" \
+             "$HOME/.ai-agent/data/credentials" \
+             "$HOME/.ai-agent/data/config" \
+             "$HOME/.ai-agent/data/config/workspace" \
+             "$HOME/.ai-agent/data/config/agents" \
              "$HOME/.ai-agent/data/stickers" \
              "$HOME/.ai-agent/data/xiaoli-stickers" \
              "$HOME/.ai-agent/data/agent-stickers" \
              "$HOME/.ai-agent/data/media" \
-             "$HOME/.ai-agent/data/files"
+             "$HOME/.ai-agent/data/files" \
+             "$HOME/.ai-agent/data/voice_refs" \
+             "$HOME/.ai-agent/data/memory_state" \
+             "$HOME/.ai-agent/data/plugins" \
+             "$HOME/.ai-agent/data/workspace"
     info "用户数据目录已创建"
 }
 
 # ── 创建 systemd 服务 ─────────────────────────────────────
 setup_service() {
     if [ ! -d /etc/systemd/system ]; then
-        warn "未检测到 systemd，跳过服务创建。请手动运行: python3 $INSTALL_DIR/agent.py --web"
+        warn "未检测到 systemd，跳过服务创建。请手动运行: bash $INSTALL_DIR/scripts/start-linux.sh --web"
         return
     fi
 
@@ -98,7 +107,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/.venv/bin/python $INSTALL_DIR/agent.py --web --host 0.0.0.0 --port \${WEBUI_PORT:-8082}
+ExecStart=$INSTALL_DIR/scripts/start-linux.sh --web --host 0.0.0.0 --port \${WEBUI_PORT:-8082}
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
@@ -157,7 +166,9 @@ main() {
     echo "  访问地址: http://localhost:8082"
     echo "  配置文件: $INSTALL_DIR/.env"
     echo "  服务管理: sudo systemctl {start|stop|restart|status} $SERVICE_NAME"
-    echo "  自检工具: $INSTALL_DIR/scripts/doctor.sh"
+    echo "  手动启动: bash $INSTALL_DIR/scripts/start-linux.sh --web"
+    echo "  自检工具: bash $INSTALL_DIR/scripts/doctor.sh"
+    echo "  启用自动更新: touch $INSTALL_DIR/.auto_update"
     echo ""
 }
 

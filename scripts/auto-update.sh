@@ -1,7 +1,8 @@
 #!/bin/bash
 # =============================================================================
-#  Xiaoda Agent — Auto-Update Script
-#  检查 GitHub Release 最新版本，自动下载更新
+#  Xiaoda Agent — Auto-Update Script (Linux)
+#  原子更新协议：校验候选包 → 备份安装目录 → 复制 → 校验关键文件 → 写版本号
+#  任何步骤失败都会回滚到备份，不会留下半更新状态
 # =============================================================================
 set -euo pipefail
 
@@ -10,6 +11,7 @@ GITHUB_API="https://api.github.com/repos/${REPO}"
 INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION_FILE="${INSTALL_DIR}/.version"
 AUTO_UPDATE_FLAG="${INSTALL_DIR}/.auto_update"
+LOCK_FILE="/tmp/xiaoda-agent-update.lock"
 
 bold()  { printf '\033[1m%s\033[0m' "$*"; }
 green() { printf '\033[32m%s\033[0m' "$*"; }
@@ -18,6 +20,14 @@ yellow(){ printf '\033[33m%s\033[0m' "$*"; }
 
 # 检查是否开启自动更新
 if [ ! -f "$AUTO_UPDATE_FLAG" ]; then
+    exit 0
+fi
+
+# ── 并发锁：flock 串行化更新事务 ──────────────────────────
+# 两个同时启动的更新共享临时/备份路径，会互相删工作文件导致回滚失效
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    echo "  $(yellow "另一个更新进程正在运行，跳过")"
     exit 0
 fi
 
@@ -81,7 +91,7 @@ if [ -z "$DOWNLOAD_URL" ]; then
     exit 0
 fi
 
-# 下载更新
+# ── 下载更新 ──────────────────────────────────────────────
 TMP_DIR=$(mktemp -d)
 FILENAME="$(basename "$DOWNLOAD_URL")"
 echo "  下载中: ${FILENAME} ..."
@@ -113,8 +123,40 @@ fi
 
 echo "  下载完成，开始更新..."
 
-# 备份当前版本
+# ── 解压到候选目录（不直接覆盖安装目录）────────────────────
+EXTRACT_DIR="${TMP_DIR}/extract"
+mkdir -p "$EXTRACT_DIR"
+if ! tar xzf "${TMP_DIR}/${FILENAME}" -C "$EXTRACT_DIR" 2>&1; then
+    echo "  $(red "解压失败，中止更新")"
+    rm -rf "$TMP_DIR"
+    exit 1
+fi
+
+# 确定候选源目录
+CANDIDATE_DIR="$EXTRACT_DIR"
+if [ -d "${EXTRACT_DIR}/xiaoda-agent" ]; then
+    CANDIDATE_DIR="${EXTRACT_DIR}/xiaoda-agent"
+fi
+
+# ── 校验候选包关键文件 ────────────────────────────────────
+# 候选包必须包含这些关键文件，否则视为不完整
+CRITICAL_FILES="agent.py .version scripts/auto-update.sh scripts/doctor.sh scripts/start-linux.sh"
+MISSING_FILES=""
+for cf in $CRITICAL_FILES; do
+    if [ ! -e "${CANDIDATE_DIR}/${cf}" ]; then
+        MISSING_FILES="${MISSING_FILES} ${cf}"
+    fi
+done
+if [ -n "$MISSING_FILES" ]; then
+    echo "  $(red "候选包缺少关键文件:${MISSING_FILES}，中止更新")"
+    rm -rf "$TMP_DIR"
+    exit 1
+fi
+echo "  $(green "候选包校验通过")"
+
+# ── 备份安装目录 ──────────────────────────────────────────
 BACKUP_DIR="$(mktemp -d)/xiaoda-agent-backup-v${CURRENT_VERSION:-unknown}"
+BACKUP_READY=false
 mkdir -p "$BACKUP_DIR"
 
 # 停止运行中的实例（排除自身 PID）
@@ -123,33 +165,77 @@ SELF_PID=$$
 pkill -f "agent.py" 2>/dev/null || true
 sleep 1
 
-# 备份关键文件（.env, config, credentials, data, stickers, voice_refs 等）
-for item in .env config credentials data stickers xiaoli-stickers agent-stickers media voice_refs files memory_state plugins; do
-    if [ -e "${INSTALL_DIR}/${item}" ]; then
-        cp -r "${INSTALL_DIR}/${item}" "$BACKUP_DIR/"
-    fi
-done
-
-# 解压更新
-if [ "$EXT" = "tar.gz" ]; then
-    mkdir -p "${TMP_DIR}/extract"
-    tar xzf "${TMP_DIR}/${FILENAME}" -C "${TMP_DIR}/extract"
-    # 检查 xiaoda-agent 子目录是否存在，不存在则使用 extract 根目录
-    if [ -d "${TMP_DIR}/extract/xiaoda-agent" ]; then
-        cp -rf "${TMP_DIR}/extract/xiaoda-agent/." "${INSTALL_DIR}/"
+# 备份整个安装目录
+if [ -d "$INSTALL_DIR" ]; then
+    if cp -a "$INSTALL_DIR/." "$BACKUP_DIR/" 2>/dev/null; then
+        BACKUP_READY=true
+        echo "  $(green "安装目录已备份到 ${BACKUP_DIR}")"
     else
-        cp -rf "${TMP_DIR}/extract/." "${INSTALL_DIR}/"
+        echo "  $(red "备份失败，中止更新（安装目录未被修改）")"
+        rm -rf "$TMP_DIR" "$BACKUP_DIR"
+        exit 1
     fi
 fi
 
-# 恢复用户配置
-for item in .env config credentials data stickers xiaoli-stickers agent-stickers media voice_refs files memory_state plugins; do
-    if [ -e "$BACKUP_DIR/$item" ]; then
-        cp -rf "$BACKUP_DIR/$item" "${INSTALL_DIR}/"
+# ── 原子更新：复制候选包到安装目录 ────────────────────────
+UPDATE_FAILED=false
+# 使用 rsync 风格的覆盖：先复制新文件，再删除旧文件
+# cp -a 保留权限和时间戳
+if ! cp -a "${CANDIDATE_DIR}/." "${INSTALL_DIR}/" 2>&1; then
+    echo "  $(red "复制更新文件失败")"
+    UPDATE_FAILED=true
+fi
+
+# 校验安装后关键文件
+if [ "$UPDATE_FAILED" = "false" ]; then
+    for cf in $CRITICAL_FILES; do
+        if [ ! -e "${INSTALL_DIR}/${cf}" ]; then
+            echo "  $(red "更新后关键文件缺失: ${cf}")"
+            UPDATE_FAILED=true
+            break
+        fi
+    done
+fi
+
+# ── 失败回滚 / 成功提交 ───────────────────────────────────
+if [ "$UPDATE_FAILED" = "true" ]; then
+    echo "  $(red "更新失败，开始回滚...")"
+    if [ "$BACKUP_READY" = "true" ] && [ -d "$BACKUP_DIR" ]; then
+        # 恢复备份
+        cp -a "${BACKUP_DIR}/." "${INSTALL_DIR}/" 2>/dev/null || true
+        # 校验回滚后关键文件
+        ROLLBACK_OK=true
+        for cf in agent.py .version; do
+            if [ ! -e "${INSTALL_DIR}/${cf}" ]; then
+                ROLLBACK_OK=false
+                break
+            fi
+        done
+        if [ "$ROLLBACK_OK" = "true" ]; then
+            echo "  $(green "已回滚到 v${CURRENT_VERSION:-unknown}")"
+        else
+            echo "  $(red "回滚后关键文件仍缺失！请手动重新安装")"
+            echo "  备份目录: ${BACKUP_DIR}"
+            rm -rf "$TMP_DIR"
+            exit 1
+        fi
+    else
+        echo "  $(red "无可用备份，无法回滚！请手动重新安装")"
+        rm -rf "$TMP_DIR"
+        exit 1
+    fi
+    rm -rf "$TMP_DIR" "$BACKUP_DIR"
+    exit 1
+fi
+
+# 恢复用户配置（.env, data, credentials 等不在候选包中的文件）
+for item in .env config credentials data stickers xiaoli-stickers agent-stickers media voice_refs files memory_state plugins workspace; do
+    if [ -e "$BACKUP_DIR/$item" ] && [ ! -e "${INSTALL_DIR}/${item}" ]; then
+        cp -a "$BACKUP_DIR/$item" "${INSTALL_DIR}/" 2>/dev/null || true
     fi
 done
 
-# 更新版本号
+# ── 仅在所有校验成功后写版本号 ────────────────────────────
 echo "$LATEST_VERSION" > "$VERSION_FILE"
 
 # 清理

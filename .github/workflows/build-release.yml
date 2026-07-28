@@ -450,8 +450,10 @@ jobs:
           mkdir -p dist/xiaoda-agent/scripts
           cp scripts/auto-update.sh dist/xiaoda-agent/scripts/
           cp scripts/doctor.sh dist/xiaoda-agent/scripts/
+          cp scripts/start-linux.sh dist/xiaoda-agent/scripts/
           chmod +x dist/xiaoda-agent/scripts/auto-update.sh
           chmod +x dist/xiaoda-agent/scripts/doctor.sh
+          chmod +x dist/xiaoda-agent/scripts/start-linux.sh
           tar -czf xiaoda-agent-linux-x86_64-v${VERSION}.tar.gz -C dist xiaoda-agent
 
           # 打包 Linux 安装脚本
@@ -506,11 +508,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
+      - name: Set up QEMU (multi-arch build)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image (multi-arch)
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/${{ github.repository_owner }}/xiaoda-agent:latest
             ghcr.io/${{ github.repository_owner }}/xiaoda-agent:v${{ steps.version.outputs.version }}
