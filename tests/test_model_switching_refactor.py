@@ -142,3 +142,44 @@ def test_get_default_model_for_provider_unknown_returns_empty():
     """未知 provider 返回空串（不抛异常）。"""
     from config import get_default_model_for_provider
     assert get_default_model_for_provider("unknown_provider_xxx") == ""
+
+
+# ── Task 3: 删除 _save() 反向同步死代码 ──
+
+def test_config_service_no_mark_startup_complete_method():
+    """ConfigService 不再有 mark_startup_complete 方法（已删除）。"""
+    from web.config_service import ConfigService
+    assert not hasattr(ConfigService, "mark_startup_complete"), \
+        "mark_startup_complete 应该已删除（死代码）"
+
+
+def test_config_service_no_startup_complete_field():
+    """ConfigService 实例不再有 _startup_complete 字段。"""
+    from web.config_service import ConfigService
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        svc = ConfigService(path=tmp_path)
+        assert not hasattr(svc, "_startup_complete"), \
+            "_startup_complete 字段应该已删除"
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def test_config_service_save_does_not_touch_route_table():
+    """_save() 不得反向从 ROUTE_TABLE 恢复 _data（已删除该逻辑）。"""
+    import inspect
+    from web.config_service import ConfigService
+    source = inspect.getsource(ConfigService._save)
+    # 不应再实际导入或调用 ROUTE_TABLE（注释中提及不算）
+    # 移除注释行后检查
+    import re
+    code_only = re.sub(r'#.*', '', source)
+    assert "from model_router import ROUTE_TABLE" not in code_only, \
+        "_save() 不应再导入 ROUTE_TABLE（反向同步死代码已删除）"
+    assert "ROUTE_TABLE.get" not in code_only, \
+        "_save() 不应再调用 ROUTE_TABLE.get（反向同步死代码已删除）"
+    assert "ROUTE_TABLE.items" not in code_only, \
+        "_save() 不应再遍历 ROUTE_TABLE（反向同步死代码已删除）"
+    assert "restoring _data from ROUTE_TABLE" not in source
