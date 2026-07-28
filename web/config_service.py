@@ -169,18 +169,7 @@ class ConfigService:
         # 使用 TrackedDict 包装 _data，捕获所有直接变异操作
         self._data: dict[str, Any] = _wrap_tracked(json.loads(json.dumps(_DEFAULTS)), "root")
         self._watchers: dict[str, list[Callable[[Any], None]]] = {}
-        self._startup_complete: bool = False  # 启动完成后启用 _save 一致性验证
         self._load()
-
-    def mark_startup_complete(self) -> None:
-        """标记启动完成，启用 _save() 一致性验证。
-
-        在 _sync_current_chat_model 结束后由 server.py 调用。
-        启动期间 _save() 不做一致性验证（ROUTE_TABLE 尚未从持久化恢复），
-        避免误判：启动时 ROUTE_TABLE 默认为 mimo，但 _data 已从磁盘加载 agnes。
-        """
-        self._startup_complete = True
-        logger.info("config_service.startup_complete validation_enabled=True")
 
     def _load(self) -> None:
         if self._path.exists():
@@ -310,62 +299,11 @@ class ConfigService:
         self._notify(path, None)
 
     def _save(self) -> None:
-        # 二次防御: 启动完成后，验证 _data["models"] 与 ROUTE_TABLE 一致
-        # 如果 _data 被污染（如通过引用变异），在写盘前从 ROUTE_TABLE 恢复
-        if self._startup_complete:
-            try:
-                from model_router import ROUTE_TABLE
-                models = self._data.get("models", {})
-                saved_routes = models.get("routes", {})
-                repaired_tasks: list[str] = []
-                # 遍历 ROUTE_TABLE 中所有路由，与 _data 持久化的 routes 对比
-                # 覆盖 chat + 所有同步路由（chat_pro/chat_flash/...），不仅限 chat
-                for task, rt_entry in ROUTE_TABLE.items():
-                    if not isinstance(rt_entry, dict):
-                        continue
-                    rt_provider = rt_entry.get("client", "")
-                    rt_model = rt_entry.get("model", "")
-                    if not rt_provider or not rt_model:
-                        continue
-                    saved_rc = saved_routes.get(task)
-                    if isinstance(saved_rc, dict) and (
-                        saved_rc.get("client") != rt_provider
-                        or saved_rc.get("model") != rt_model):
-                        # 检测到不一致：从 ROUTE_TABLE 恢复
-                        repaired_tasks.append(task)
-                        saved_routes[task] = {
-                            "model": rt_model,
-                            "client": rt_provider,
-                            "max_tokens": rt_entry.get("max_tokens"),
-                            "thinking": bool(
-                                rt_entry.get("thinking")
-                                and isinstance(rt_entry.get("thinking"), dict)
-                                and rt_entry["thinking"].get("type") == "enabled"
-                            ),
-                        }
-                # 同步 chat_model 字段与 ROUTE_TABLE["chat"] 一致
-                chat_route = ROUTE_TABLE.get("chat", {})
-                rt_provider = chat_route.get("client", "")
-                rt_model = chat_route.get("model", "")
-                if rt_provider and rt_model:
-                    saved_cm = models.get("chat_model", {})
-                    if isinstance(saved_cm, dict) and (
-                        saved_cm.get("provider") != rt_provider
-                        or saved_cm.get("model_id") != rt_model):
-                        repaired_tasks.append("chat_model")
-                        models["chat_model"] = {"provider": rt_provider, "model_id": rt_model}
-                if repaired_tasks:
-                    logger.warning(
-                        "config_service.save_inconsistency_repair "
-                        "repaired_tasks={} route_table_chat={}/{} — "
-                        "restoring _data from ROUTE_TABLE before save",
-                        repaired_tasks, rt_provider, rt_model,
-                    )
-            except ImportError:
-                pass  # model_router 不可用（如测试环境）
-            except Exception as e:
-                logger.debug("config_service.save_validation_error error={}", str(e))
-
+        # _save 只做原子写盘，不再反向同步 ROUTE_TABLE。
+        # 历史背景：原实现从 ROUTE_TABLE 反向恢复 _data（防止引用变异污染），
+        # 但 mark_startup_complete 从未在生产中调用，该逻辑是死代码。
+        # 重构后：ROUTE_TABLE 由 ModelRouteRegistry 管理，所有修改走原子入口，
+        # ConfigService 是唯一真相源，不需要反向同步。
         try:
             from utils.atomic_write import atomic_write
             self._path.parent.mkdir(parents=True, exist_ok=True)
