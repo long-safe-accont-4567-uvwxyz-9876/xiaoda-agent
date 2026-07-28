@@ -590,9 +590,23 @@ def clear_display_name_cache(name: str | None = None):
 
 
 def agent_names() -> list[str]:
-    """返回所有 agent key（通过扫描 config/agents/ 目录）。"""
-    return [
+    """返回所有 agent key（通过扫描 config/agents/ 目录）。
+
+    AGENTS_CONFIG_DIR 可能指向外置存储（KIOXIA_DATA_DIR），若该目录为空
+    （用户未在外置存储放置 agent 配置），回退到源码 config/agents/ 目录。
+    agent 配置文件是源码资源，应始终能被找到，避免 display name / CLI 列表
+    在外置存储未初始化时全部失效。
+    """
+    names = [
         fp.stem for fp in AGENTS_CONFIG_DIR.glob("*.json")
+        if fp.stem and not fp.stem.startswith("_")
+    ]
+    if names:
+        return names
+    # 外置存储为空时回退到源码目录（agent 配置是源码资源，非用户数据）
+    _src_agents_dir = Path(__file__).resolve().parent / "config" / "agents"
+    return [
+        fp.stem for fp in _src_agents_dir.glob("*.json")
         if fp.stem and not fp.stem.startswith("_")
     ]
 
