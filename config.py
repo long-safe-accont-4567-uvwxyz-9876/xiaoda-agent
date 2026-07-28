@@ -219,8 +219,9 @@ def _init_user_resources() -> None:
     if not bundled_config.exists():
         return
 
-    user_config_dir = _KIOXIA_BASE / "config"
-    user_config_dir.mkdir(parents=True, exist_ok=True)
+    # 使用 _resolve_data_path 确保 KIOXIA 外置盘不可写时回退到用户目录，
+    # 避免 frozen 模式下配置写入失败（原bug：直写 _KIOXIA_BASE 无可写性检测）
+    user_config_dir = _resolve_data_path(_KIOXIA_BASE / "config", _FALLBACK_BASE / "config")
 
     _init_agent_json5(bundled_config, user_config_dir)
     _init_agents_subdir(bundled_config, user_config_dir)
@@ -372,10 +373,9 @@ MEMORY_STATE_DIR = _resolve_data_path(_KIOXIA_BASE / "memory_state", _FALLBACK_B
 # 插件配置目录
 PLUGINS_CONFIG_DIR = _resolve_data_path(_KIOXIA_BASE / "plugins", _FALLBACK_BASE / "plugins")
 # 子 Agent 配置目录（人格文件、配置 JSON）
-AGENTS_CONFIG_DIR = _KIOXIA_BASE / "config" / "agents"
-if not AGENTS_CONFIG_DIR.exists():
-    AGENTS_CONFIG_DIR = _FALLBACK_BASE / "config" / "agents"
-AGENTS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+# 使用 _resolve_data_path 确保 frozen 模式下 KIOXIA 不可写时回退到用户目录，
+# 与 DATA_DIR/LOG_DIR 等保持一致的可写性回退策略
+AGENTS_CONFIG_DIR = _resolve_data_path(_KIOXIA_BASE / "config" / "agents", _FALLBACK_BASE / "config" / "agents")
 
 # 在路径定义后执行初始化：frozen 模式下的资源复制和数据迁移引用上方变量
 _ensure_workspace()

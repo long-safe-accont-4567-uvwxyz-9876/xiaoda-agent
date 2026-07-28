@@ -117,7 +117,7 @@ do_build() {
 
     # --- Write version stamp into dist directory --------------------------------
     echo -n "$version" > "$dist_dir/.version"
-    echo -n "enabled" > "$dist_dir/.auto_update"
+    # 不创建 .auto_update：自动更新必须由用户显式启用（与 CI 和 auto-update.bat 设计一致）
     info "Version stamp: $dist_dir/.version ($version)"
 
     # --- Create the distribution package ---------------------------------------
