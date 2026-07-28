@@ -356,11 +356,7 @@ def _ensure_workspace() -> None:
     _KIOXIA_AVAILABLE = (_KIOXIA_BASE / "db").exists()
 
 
-# 在路径解析前执行初始化，确保 frozen 模式下的资源复制和数据迁移正常进行
-# 原始代码在模块顶层直接调用 _init_user_resources()，此处保持相同行为
-_ensure_workspace()
-
-
+# 路径定义必须在 _ensure_workspace() 之前：迁移逻辑引用这些变量
 AGENT_CONFIG_PATH = (_KIOXIA_BASE / "config" / "agent.json5") if (_KIOXIA_BASE / "config").exists() else _FALLBACK_BASE / "agent.json5"
 STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "stickers", _FALLBACK_BASE / "stickers")
 XIAOLI_STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "xiaoli-stickers", _FALLBACK_BASE / "xiaoli-stickers")
@@ -380,6 +376,9 @@ AGENTS_CONFIG_DIR = _KIOXIA_BASE / "config" / "agents"
 if not AGENTS_CONFIG_DIR.exists():
     AGENTS_CONFIG_DIR = _FALLBACK_BASE / "config" / "agents"
 AGENTS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+# 在路径定义后执行初始化：frozen 模式下的资源复制和数据迁移引用上方变量
+_ensure_workspace()
 
 DEEPSEEK_API_KEY = get_secret("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
