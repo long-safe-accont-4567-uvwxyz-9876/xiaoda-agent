@@ -116,13 +116,16 @@ class MemoryDB:
             from db.fts_utils import _tokenize_for_fts
             tokenized = _tokenize_for_fts(new_summary)
             if tokenized.strip():
+                # INSERT OR REPLACE 保证原子性：失败时旧索引条目仍在，不会导致 FTS 不可搜索
+                await self._conn.execute(
+                    "INSERT OR REPLACE INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
+                    (mem_id, tokenized),
+                )
+            else:
+                # 新摘要分词为空，删除旧索引避免 stale 条目
                 await self._conn.execute(
                     "DELETE FROM episodic_memory_fts WHERE id = ?",
                     (mem_id,),
-                )
-                await self._conn.execute(
-                    "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
-                    (mem_id, tokenized),
                 )
         except Exception as e:
             from loguru import logger
@@ -145,13 +148,15 @@ class MemoryDB:
             from db.fts_utils import _tokenize_for_fts
             tokenized = _tokenize_for_fts(new_summary)
             if tokenized.strip():
+                # INSERT OR REPLACE 保证原子性：失败时旧索引条目仍在
+                await self._conn.execute(
+                    "INSERT OR REPLACE INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
+                    (mem_id, tokenized),
+                )
+            else:
                 await self._conn.execute(
                     "DELETE FROM episodic_memory_fts WHERE id = ?",
                     (mem_id,),
-                )
-                await self._conn.execute(
-                    "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
-                    (mem_id, tokenized),
                 )
         except Exception as e:
             from loguru import logger
@@ -948,16 +953,18 @@ class MemoryDB:
                     from db.fts_utils import _tokenize_for_fts
                     tokens = _tokenize_for_fts(summary)
                     if tokens.strip():
+                        # INSERT OR REPLACE 保证原子性：失败时旧索引条目仍在
+                        await self._conn.execute(
+                            "INSERT OR REPLACE INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
+                            (memory_id, tokens),
+                        )
+                    else:
                         await self._conn.execute(
                             "DELETE FROM episodic_memory_fts WHERE id = ?",
                             (memory_id,),
                         )
-                        await self._conn.execute(
-                            "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
-                            (memory_id, tokens),
-                        )
-                        if auto_commit:
-                            await self._conn.commit()
+                    if auto_commit:
+                        await self._conn.commit()
                 except Exception as e:
                     from loguru import logger
                     logger.debug("db_memory.fts_update_failed", error=str(e))

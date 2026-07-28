@@ -105,3 +105,45 @@ async def test_single_flight_returns_none_on_exception(tmp_path, patched_xiaoda_
         # CodeRabbit: synthesize 返回类型是 Path | None，异常时返回 None 而非抛异常
         assert r is None, f"异常时应返回 None，实际 {type(r).__name__}: {r}"
     assert engine._inflight == {}, "异常路径下 in-flight 表也应清空"
+
+
+async def test_single_flight_cancelled_error_cleans_up_inflight(tmp_path, patched_xiaoda_voice):
+    """CancelledError 时 _inflight 必须清理，否则后续相同文本的请求永久挂起。
+
+    根因：原代码 finally 块中 fut.exception() 对未 done 的 future 抛 InvalidStateError，
+    导致 _inflight.pop 不执行，残留的 orphaned future 使后续请求 await shield 永久阻塞。
+    修复：CancelledError 时先 cancel future，finally 中安全处理未 done 的 future。
+    """
+    engine = _make_engine(tmp_path)
+
+    async def fake_upstream(voice, voice_data_url, messages):
+        # 模拟长时间上游调用，让外部有足够时间取消
+        await asyncio.sleep(5)
+        return _make_completion()
+
+    async def fake_encode(path):
+        return "data:audio/wav;base64,AAAA"
+
+    with patch.object(engine, "_call_tts_with_retry", AsyncMock(side_effect=fake_upstream)), \
+         patch.object(tts_engine, "_encode_voice_file", AsyncMock(side_effect=fake_encode)):
+        # 启动合成并在 0.1s 后取消
+        task = asyncio.create_task(engine.synthesize_xiaoda("取消测试文本"))
+        await asyncio.sleep(0.1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    # 关键断言：_inflight 必须为空，否则后续请求会永久挂起
+    assert engine._inflight == {}, f"CancelledError 后 _inflight 应清空，实际残留 {engine._inflight}"
+
+    # 验证后续请求不会挂起：新请求应正常执行
+    async def fake_upstream_2(voice, voice_data_url, messages):
+        return _make_completion()
+
+    with patch.object(engine, "_call_tts_with_retry", AsyncMock(side_effect=fake_upstream_2)), \
+         patch.object(tts_engine, "_encode_voice_file", AsyncMock(side_effect=fake_encode)):
+        result = await asyncio.wait_for(
+            engine.synthesize_xiaoda("取消测试文本"),
+            timeout=2.0,
+        )
+    assert isinstance(result, Path), f"取消后重试应成功，实际 {type(result)}"

@@ -561,6 +561,10 @@ class TTSEngine:
             fut.set_result(result)
             return result
         except asyncio.CancelledError:
+            # CancelledError 时 future 尚未 done，必须设置异常让等待者收到通知，
+            # 否则等待 asyncio.shield(fut) 的请求会永久挂起。
+            if not fut.done():
+                fut.cancel()
             raise
         except BaseException as e:
             # 让等待者拿到同一异常，而不是永久挂起；
@@ -570,9 +574,12 @@ class TTSEngine:
                 return None
             raise
         finally:
-            # 消费 future 异常避免 "exception never retrieved" 告警：
-            # fut 此刻必已 done（set_result 或 set_exception 已执行），exception() 安全
-            fut.exception()
+            # 消费 future 异常避免 "exception never retrieved" 告警
+            if fut.done():
+                try:
+                    fut.exception()
+                except (asyncio.CancelledError, asyncio.InvalidStateError):
+                    pass
             self._inflight.pop(cache_key, None)
 
     async def _synthesize_uncached(
