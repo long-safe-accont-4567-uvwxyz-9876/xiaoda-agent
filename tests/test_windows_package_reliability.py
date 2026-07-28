@@ -91,9 +91,13 @@ def test_ci_linux_packages_start_script():
 
 
 def test_linux_updater_uses_flock_for_serialization():
-    """Linux 自动更新应使用 flock 串行化（和 Windows mutex 对齐）"""
+    """Linux 自动更新应使用 flock 串行化覆盖完整更新事务（和 Windows mutex 对齐）"""
     updater = read_project_file("scripts/auto-update.sh")
     assert "flock" in updater
+    # flock 必须在下载之前获取（覆盖完整事务）
+    flock_idx = updater.index("flock -n 9")
+    download_idx = updater.index("curl -Lf --progress-bar")
+    assert flock_idx < download_idx
 
 
 def test_linux_updater_checks_tar_exit_code():
@@ -101,7 +105,7 @@ def test_linux_updater_checks_tar_exit_code():
     updater = read_project_file("scripts/auto-update.sh")
     assert "tar xzf" in updater
     # tar 失败时应中止（set -euo pipefail + if ! tar ...）
-    assert "if ! tar" in updater or "tar xzf" in updater
+    assert "if ! tar" in updater
 
 
 def test_linux_updater_writes_version_only_after_validation():
@@ -148,6 +152,12 @@ def test_linux_install_service_uses_start_script():
     installer = read_project_file("scripts/install-linux.sh")
     assert "start-linux.sh" in installer
     assert "ExecStart=$INSTALL_DIR/scripts/start-linux.sh" in installer
+    # 不应直接用 python agent.py 作为 ExecStart（绕过更新检查和看门狗）
+    assert "ExecStart=$INSTALL_DIR/.venv/bin/python" not in installer
+    # systemd 不支持 ${VAR:-default} 扩展，应使用 ${WEBUI_PORT}
+    assert "WEBUI_PORT:-8082" not in installer
+    # 看门狗达到上限后 exit 0，systemd 需配置 RestartPreventExitStatus
+    assert "RestartPreventExitStatus" in installer
 
 
 def test_dockerfile_injects_version():
@@ -158,9 +168,38 @@ def test_dockerfile_injects_version():
 
 
 def test_docker_build_supports_multi_arch():
-    """Docker 构建应支持 amd64 + arm64"""
+    """Docker 构建应支持 amd64 + arm64，且 QEMU/Buildx 在 docker job 内"""
     workflow = read_project_file(".github/workflows/build-release.yml")
     docker_section = workflow[workflow.index("  docker:"):]
     assert "linux/amd64" in docker_section
     assert "linux/arm64" in docker_section
     assert "setup-qemu-action" in docker_section
+    assert "setup-buildx-action" in docker_section
+    # platforms 必须在 build-push-action 步骤中
+    assert "platforms: linux/amd64,linux/arm64" in docker_section
+
+
+def test_linux_watchdog_exits_zero_on_max_restarts():
+    """看门狗达到 MAX_RESTARTS 后应 exit 0，否则 systemd 会继续重启"""
+    start_script = read_project_file("scripts/start-linux.sh")
+    # 定位到"达到 MAX_RESTARTS 后停止重启"的退出路径
+    stop_idx = start_script.index("停止重启")
+    exit_block = start_script[stop_idx:stop_idx + 300]
+    assert "exit 0" in exit_block
+    # 不应使用 exit $exit_code（非零退出码会导致 systemd 重启）
+    assert "exit $exit_code" not in exit_block
+
+
+def test_linux_updater_lock_path_is_install_specific():
+    """auto-update.sh 锁路径应基于 INSTALL_DIR 哈希，不是固定 /tmp 路径"""
+    updater = read_project_file("scripts/auto-update.sh")
+    # 不应是固定路径（多个安装会互相阻塞）
+    assert 'LOCK_FILE="/tmp/xiaoda-agent-update.lock"' not in updater
+    # 应基于 INSTALL_DIR 生成唯一路径
+    assert "md5sum" in updater or "INSTALL_DIR" in updater.split("LOCK_FILE=")[1].split("\n")[0]
+
+
+def test_linux_updater_excludes_venv_from_backup():
+    """auto-update.sh 备份应排除 .venv 以节省时间和空间"""
+    updater = read_project_file("scripts/auto-update.sh")
+    assert "exclude='.venv'" in updater or "--exclude" in updater

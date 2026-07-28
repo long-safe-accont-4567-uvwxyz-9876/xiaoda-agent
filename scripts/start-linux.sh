@@ -59,7 +59,9 @@ watchdog() {
             if [ $restart_count -ge $MAX_RESTARTS ]; then
                 echo "[start] 看门狗：${MAX_RESTARTS} 次崩溃在 ${RESTART_WINDOW} 秒内，停止重启"
                 echo "[start] 请运行 ${SCRIPT_DIR}/doctor.sh 诊断问题"
-                exit $exit_code
+                # 必须退出码 0：systemd Restart=on-failure 会对非零退出码重启，
+                # 导致看门狗的"放弃"机制失效（重启并清零计数）
+                exit 0
             fi
 
             echo "[start] 进程退出 (code=${exit_code})，${restart_count}/${MAX_RESTARTS} 次重启，3 秒后重试..."

@@ -11,7 +11,7 @@ GITHUB_API="https://api.github.com/repos/${REPO}"
 INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION_FILE="${INSTALL_DIR}/.version"
 AUTO_UPDATE_FLAG="${INSTALL_DIR}/.auto_update"
-LOCK_FILE="/tmp/xiaoda-agent-update.lock"
+LOCK_FILE="${TMPDIR:-/tmp}/xiaoda-agent-update-$(printf '%s' "$INSTALL_DIR" | md5sum | cut -d' ' -f1).lock"
 
 bold()  { printf '\033[1m%s\033[0m' "$*"; }
 green() { printf '\033[32m%s\033[0m' "$*"; }
@@ -155,6 +155,8 @@ fi
 echo "  $(green "候选包校验通过")"
 
 # ── 备份安装目录 ──────────────────────────────────────────
+# 只备份安装目录内的文件（程序代码 + .env + .version + scripts/）
+# 用户数据在 ~/.ai-agent/data/，不在安装目录中，无需备份
 BACKUP_DIR="$(mktemp -d)/xiaoda-agent-backup-v${CURRENT_VERSION:-unknown}"
 BACKUP_READY=false
 mkdir -p "$BACKUP_DIR"
@@ -165,21 +167,35 @@ SELF_PID=$$
 pkill -f "agent.py" 2>/dev/null || true
 sleep 1
 
-# 备份整个安装目录
+# 备份安装目录（排除 .venv 以节省时间和空间）
 if [ -d "$INSTALL_DIR" ]; then
-    if cp -a "$INSTALL_DIR/." "$BACKUP_DIR/" 2>/dev/null; then
-        BACKUP_READY=true
-        echo "  $(green "安装目录已备份到 ${BACKUP_DIR}")"
+    # 使用 rsync 排除 .venv，如果 rsync 不存在则回退到 cp
+    if command -v rsync &>/dev/null; then
+        if rsync -a --exclude='.venv' "$INSTALL_DIR/." "$BACKUP_DIR/" 2>/dev/null; then
+            BACKUP_READY=true
+            echo "  $(green "安装目录已备份到 ${BACKUP_DIR}")"
+        else
+            echo "  $(red "备份失败，中止更新（安装目录未被修改）")"
+            rm -rf "$TMP_DIR" "$BACKUP_DIR"
+            exit 1
+        fi
     else
-        echo "  $(red "备份失败，中止更新（安装目录未被修改）")"
-        rm -rf "$TMP_DIR" "$BACKUP_DIR"
-        exit 1
+        # 回退：cp -a 全量备份（含 .venv）
+        if cp -a "$INSTALL_DIR/." "$BACKUP_DIR/" 2>/dev/null; then
+            BACKUP_READY=true
+            echo "  $(green "安装目录已备份到 ${BACKUP_DIR}")"
+        else
+            echo "  $(red "备份失败，中止更新（安装目录未被修改）")"
+            rm -rf "$TMP_DIR" "$BACKUP_DIR"
+            exit 1
+        fi
     fi
 fi
 
 # ── 原子更新：复制候选包到安装目录 ────────────────────────
 UPDATE_FAILED=false
-# 使用 rsync 风格的覆盖：先复制新文件，再删除旧文件
+# 注意：cp -a 仅覆盖复制，不删除候选包中不存在的旧文件
+# 用户数据目录（.env, data, credentials 等）不在候选包中，不受影响
 # cp -a 保留权限和时间戳
 if ! cp -a "${CANDIDATE_DIR}/." "${INSTALL_DIR}/" 2>&1; then
     echo "  $(red "复制更新文件失败")"
@@ -228,12 +244,12 @@ if [ "$UPDATE_FAILED" = "true" ]; then
     exit 1
 fi
 
-# 恢复用户配置（.env, data, credentials 等不在候选包中的文件）
-for item in .env config credentials data stickers xiaoli-stickers agent-stickers media voice_refs files memory_state plugins workspace; do
-    if [ -e "$BACKUP_DIR/$item" ] && [ ! -e "${INSTALL_DIR}/${item}" ]; then
-        cp -a "$BACKUP_DIR/$item" "${INSTALL_DIR}/" 2>/dev/null || true
-    fi
-done
+# 恢复用户配置（.env 在安装目录，其他用户数据在 ~/.ai-agent/data/）
+# config.py 在 Linux 上将 data/credentials/config 等路由到 ~/.ai-agent/data/
+# 这些不在候选包中，更新不会覆盖它们；此处仅恢复 .env（安装目录内）
+if [ -e "$BACKUP_DIR/.env" ] && [ ! -e "${INSTALL_DIR}/.env" ]; then
+    cp -a "$BACKUP_DIR/.env" "${INSTALL_DIR}/" 2>/dev/null || true
+fi
 
 # ── 仅在所有校验成功后写版本号 ────────────────────────────
 echo "$LATEST_VERSION" > "$VERSION_FILE"

@@ -107,9 +107,11 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/scripts/start-linux.sh --web --host 0.0.0.0 --port \${WEBUI_PORT:-8082}
+ExecStart=$INSTALL_DIR/scripts/start-linux.sh --web --host 0.0.0.0 --port \${WEBUI_PORT}
 Restart=on-failure
 RestartSec=5
+# 看门狗达到 MAX_RESTARTS 后 exit 0 停止重启，systemd 不应对 exit 0 重启
+RestartPreventExitStatus=0
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=$INSTALL_DIR/.env
 
