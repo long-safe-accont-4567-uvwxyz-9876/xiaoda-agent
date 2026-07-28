@@ -305,10 +305,12 @@ class ToolCallHandler:
                 messages=messages,
             )
         rc = assistant_msg.get("reasoning_content", "")
-        await self._context.add_message("user", current_user_input)
+        # 降级/错误回复不入 history 也不入记忆库（与主对话、子代理路径一致），
+        # 同时跳过 user 消息避免未配对断档
         if is_degraded_reply(final_reply):
-            logger.info("tool_handler.skip_memory_degraded_reply", reply_preview=final_reply[:60])
+            logger.info("tool_handler.skip_degraded_reply_not_in_history", reply_preview=final_reply[:60])
         else:
+            await self._context.add_message("user", current_user_input)
             await self._context.add_message("assistant", final_reply,
                                      reasoning_content=rc if rc else None)
         return final_reply, tool_results

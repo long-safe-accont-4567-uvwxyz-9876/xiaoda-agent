@@ -893,12 +893,14 @@ class MessageProcessorMixin:
         _should_remember = is_master or source != "qq_group"
         if _should_remember:
             if not ctx.handled_by_tool_call:
-                await self.context.add_message("user", user_input)
-                # 降级/错误回复跳过记忆写入，但保留 history 一致性
+                # 降级/错误回复既不入记忆库也不入对话历史，
+                # 否则 build_messages() 会让 LLM 在后续轮次看到系统内部状态，
+                # 导致 LLM 模仿降级语气或基于假历史编造上下文。
+                # 同时跳过 user 消息，避免留下未配对的 user 消息造成上下文断档。
                 if is_degraded_reply(reply):
-                    logger.info("agent.skip_memory_degraded_reply", source=source, reply_preview=reply[:60])
-                    await self.context.add_message("assistant", reply[:200])
+                    logger.info("agent.skip_degraded_reply_not_in_history", source=source, reply_preview=reply[:60])
                 else:
+                    await self.context.add_message("user", user_input)
                     rc = self.router.pop_reasoning_content()
                     # strip emotion tags before storing to memory
                     _clean_for_memory = self.sticker_manager.strip_emotion_tag(reply)
