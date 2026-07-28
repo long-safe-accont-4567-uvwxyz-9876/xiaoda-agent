@@ -39,52 +39,55 @@ if exist "%~dp0xiaoda-agent.exe" (
 :: 切换到脚本所在目录
 cd /d "%~dp0"
 
-if defined EXE_PATH (
-    :: 打包后的 exe 模式
-    echo   [i] 使用打包版本: !EXE_PATH!
-    echo.
-    "!EXE_PATH!" doctor !ARGS!
-    set EXITCODE=%errorlevel%
-) else (
-    :: 开发模式: 直接用 python 运行
-    where python >nul 2>nul
-    if %errorlevel% equ 0 (
-        set "PY_CMD=python"
-    ) else (
-        where py >nul 2>nul
-        if %errorlevel% equ 0 (
-            set "PY_CMD=py"
-        ) else (
-            echo   [ERROR] 未找到 xiaoda-agent.exe 也未找到 python
-            echo.
-            echo   请确认:
-            echo     1. 已通过安装程序安装 Xiaoda Agent
-            echo     2. 或在开发环境运行 (需要 python)
-            echo.
-            pause
-            exit /b 1
-        )
-    )
+if not defined EXE_PATH goto :dev_mode
 
-    :: 查找 agent.py
-    set "AGENT_PY=%~dp0..\agent.py"
-    if not exist "!AGENT_PY!" set "AGENT_PY=%~dp0agent.py"
-    if not exist "!AGENT_PY!" (
-        echo   [ERROR] 未找到 agent.py
-        echo   查找位置: !AGENT_PY!
+:: 打包后的 exe 模式
+echo   [i] 使用打包版本: !EXE_PATH!
+echo.
+"!EXE_PATH!" doctor !ARGS!
+set EXITCODE=!errorlevel!
+goto :doctor_done
+
+:dev_mode
+:: 开发模式: 直接用 python 运行
+where python >nul 2>nul
+if %errorlevel% equ 0 (
+    set "PY_CMD=python"
+) else (
+    where py >nul 2>nul
+    if %errorlevel% equ 0 (
+        set "PY_CMD=py"
+    ) else (
+        echo   [ERROR] 未找到 xiaoda-agent.exe 也未找到 python
+        echo.
+        echo   请确认:
+        echo     1. 已通过安装程序安装 Xiaoda Agent
+        echo     2. 或在开发环境运行 (需要 python)
+        echo.
         pause
         exit /b 1
     )
-
-    echo   [i] 使用开发模式: !PY_CMD! !AGENT_PY!
-    echo.
-    "!PY_CMD!" "!AGENT_PY!" doctor !ARGS!
-    set EXITCODE=%errorlevel%
 )
 
+:: 查找 agent.py
+set "AGENT_PY=%~dp0..\agent.py"
+if not exist "!AGENT_PY!" set "AGENT_PY=%~dp0agent.py"
+if not exist "!AGENT_PY!" (
+    echo   [ERROR] 未找到 agent.py
+    echo   查找位置: !AGENT_PY!
+    pause
+    exit /b 1
+)
+
+echo   [i] 使用开发模式: !PY_CMD! !AGENT_PY!
+echo.
+"!PY_CMD!" "!AGENT_PY!" doctor !ARGS!
+set EXITCODE=!errorlevel!
+
+:doctor_done
 echo.
 if !EXITCODE! equ 0 (
-    echo   [OK] 自检全部通过 ✓
+    echo   [OK] 自检全部通过
 ) else (
     echo   [FAIL] 自检发现问题, 退出码 !EXITCODE!
     echo.
