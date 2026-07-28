@@ -1,5 +1,6 @@
 from typing import Any, ClassVar
 from collections.abc import AsyncIterator
+import copy
 import hashlib
 import os
 import time
@@ -259,6 +260,127 @@ def _ssrf_check(url: str) -> None:
             logger.warning("router.ssrf_blocked url={} reason={}", url, reason)
     except (ValueError, OSError) as e:
         logger.debug("router.ssrf_check_skip url={} error={}", url, str(e))
+
+
+class ModelRouteRegistry:
+    """路由表注册中心：ROUTE_TABLE 的唯一读写入口。
+
+    设计原则：
+    - 启动后 _table 是只读快照，所有修改必须走 update_route()
+    - update_route() 是原子操作：构造新 entry → 写内存 → 持久化 → 失败回滚
+    - get_task/snapshot_task 返回深拷贝，防引用污染
+    - replace_table 用于启动时一次性填充（不持久化，由调用方负责）
+
+    这样保证：
+    1. 用户改过的配置不会被降级链/fallback 路径覆盖
+    2. 持久化失败不留半成品状态
+    3. 降级链读取的是独立快照，修改不影响全局
+    """
+
+    def __init__(self, initial_table: dict | None = None,
+                 config_service: Any = None) -> None:
+        # 深拷贝初始表，避免共享引用
+        self._table: dict[str, dict] = copy.deepcopy(initial_table) if initial_table else {}
+        # 延迟加载 ConfigService：测试时可注入 mock，生产时从 get_config_service() 取
+        self._cfg = config_service
+
+    def _get_cfg(self) -> Any:
+        """延迟获取 ConfigService 实例（避免循环导入）。"""
+        if self._cfg is not None:
+            return self._cfg
+        try:
+            from web.config_service import get_config_service
+            self._cfg = get_config_service()
+        except (ImportError, RuntimeError) as e:
+            logger.warning("registry.config_service_unavailable error={}", str(e))
+            self._cfg = None
+        return self._cfg
+
+    def get_task(self, task: str) -> dict | None:
+        """返回指定 task 路由的深拷贝（调用方修改不影响内部状态）。"""
+        entry = self._table.get(task)
+        return copy.deepcopy(entry) if entry is not None else None
+
+    def snapshot_task(self, task: str) -> dict | None:
+        """同 get_task，语义上表示"用于构造 fallback 的快照"。"""
+        return self.get_task(task)
+
+    def all_tasks(self) -> list[str]:
+        """返回所有 task 名称。"""
+        return list(self._table.keys())
+
+    def replace_table(self, new_table: dict) -> None:
+        """启动时一次性替换整个表（不触发持久化）。
+
+        用于 _apply_route_overrides：从 ConfigService 加载用户配置后，
+        用持久化值覆盖默认 ROUTE_TABLE。持久化由调用方决定（启动时一般不写回）。
+        """
+        self._table = copy.deepcopy(new_table)
+
+    def update_route(self, task: str, model_id: str, provider: str,
+                     max_tokens: int | None = None,
+                     thinking: dict | None = None,
+                     timeout: int | None = None,
+                     persist: bool = True) -> dict:
+        """原子地更新路由：内存 + 持久化。
+
+        Args:
+            task: 路由 task 名称（如 "chat", "chat_pro"）
+            model_id: 模型 ID
+            provider: provider 名称
+            max_tokens: 可选，max_tokens 上限
+            thinking: 可选，{"type": "enabled"|"disabled", "budget_tokens": ...}
+            timeout: 可选，超时秒数
+            persist: 是否持久化到 ConfigService（启动恢复时设为 False）
+
+        Returns:
+            新的路由 entry（深拷贝）
+
+        Raises:
+            KeyError: task 不存在
+            RuntimeError: 持久化失败（内存已回滚）
+        """
+        if task not in self._table:
+            raise KeyError(f"未知路由 task: {task}")
+
+        # 保留旧值用于回滚
+        old_entry = copy.deepcopy(self._table[task])
+
+        # 构造新 entry
+        new_entry = copy.deepcopy(old_entry)
+        new_entry["model"] = model_id
+        new_entry["client"] = provider
+        if max_tokens is not None:
+            new_entry["max_tokens"] = max_tokens
+        if thinking is not None:
+            new_entry["thinking"] = copy.deepcopy(thinking)
+
+        # 写内存
+        self._table[task] = new_entry
+
+        # 持久化（失败回滚）
+        if persist:
+            cfg = self._get_cfg()
+            if cfg is not None:
+                try:
+                    cfg.set(f"models.routes.{task}", {
+                        "model": model_id,
+                        "client": provider,
+                        "max_tokens": new_entry.get("max_tokens"),
+                        "thinking": bool(
+                            thinking and isinstance(thinking, dict)
+                            and thinking.get("type") == "enabled"
+                        ),
+                        "timeout": timeout if timeout is not None else 60,
+                    })
+                except Exception as e:
+                    # 回滚内存
+                    self._table[task] = old_entry
+                    logger.error("registry.update_route_persist_failed task={} error={}",
+                                 task, str(e))
+                    raise RuntimeError(f"持久化路由 {task} 失败: {e}") from e
+
+        return copy.deepcopy(new_entry)
 
 
 class ModelRouter:
