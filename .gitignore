@@ -53,3 +53,4 @@ _test.py
 config/credential_salt.bin
 logs/
 xiaoda_agent.egg-info/
+.worktrees/
