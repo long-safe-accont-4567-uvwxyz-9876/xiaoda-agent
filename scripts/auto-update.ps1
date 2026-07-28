@@ -27,6 +27,20 @@ $ErrorActionPreference = "Stop"
 # Check if auto-update is enabled
 if (-not (Test-Path $FlagFile)) { exit 0 }
 
+# CodeRabbit 审查：per-user named mutex 保证更新事务串行化
+# 两个同时启动的更新共享临时/备份路径，会互相删工作文件导致回滚失效
+$updateMutex = [System.Threading.Mutex]::new($false, 'Global\xiaoda-agent-update-mutex')
+$updateMutexAcquired = $false
+try {
+    if (-not $updateMutex.WaitOne(0)) {
+        Write-Host "  Another update is already running, skipping."
+        exit 0
+    }
+    $updateMutexAcquired = $true
+} catch {
+    Write-Host "  Warning: could not acquire update mutex, proceeding without serialization."
+}
+
 # 关键文件清单：解压后和安装后都必须存在，缺一则判定更新失败
 $criticalFiles = @('xiaoda-agent.exe', 'start-windows.bat', 'auto-update.bat', 'auto-update.ps1', 'doctor.bat')
 
@@ -145,10 +159,14 @@ try {
     }
 
     # 程序目录完整备份：复制失败时用于回滚，避免半更新状态损坏安装
+    # CodeRabbit 审查：$programBackupReady 标志确保只有完整备份才能触发回滚，
+    # 防止 Copy-Item 中途失败后 catch 块用不完整的备份恢复导致安装损坏
     $programBackupDir = [System.IO.Path]::GetTempPath() + 'xiaoda-agent-program-backup-v' + $CurrentVersion
+    $programBackupReady = $false
     if (Test-Path $programBackupDir) { Remove-Item -Recurse -Force $programBackupDir }
     if (Test-Path $installDir) {
         Copy-Item -Recurse -Force $installDir $programBackupDir
+        $programBackupReady = $true
         Write-Host "  Program directory backed up to $programBackupDir"
     }
 
@@ -181,7 +199,7 @@ try {
 
     if ($rolledBack) {
         # 从程序目录备份完整恢复，避免半更新状态损坏安装
-        if ($programBackupDir -and (Test-Path $programBackupDir)) {
+        if ($programBackupReady -and (Test-Path $programBackupDir)) {
             $restoredSrc = Join-Path $programBackupDir (Split-Path $installDir -Leaf)
             if (-not (Test-Path $restoredSrc)) { $restoredSrc = $programBackupDir }
             Remove-Item -Recurse -Force $installDir -ErrorAction SilentlyContinue
@@ -210,15 +228,16 @@ try {
     Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
     Remove-Item -Force $tmp -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $backupDir -ErrorAction SilentlyContinue
-    if ($programBackupDir -and (Test-Path $programBackupDir)) {
+    if ($programBackupReady -and (Test-Path $programBackupDir)) {
         Remove-Item -Recurse -Force $programBackupDir -ErrorAction SilentlyContinue
     }
     Write-Host ""
     Write-Host "  Update complete! v$latest"
+    if ($updateMutexAcquired) { $updateMutex.ReleaseMutex() }
 } catch {
     Write-Host "  Update check failed: $($_.Exception.Message)"
     # 兜底回滚：异常路径下若已备份程序目录，尝试恢复
-    if (-not $rolledBack -and $programBackupDir -and (Test-Path $programBackupDir) -and (Test-Path $installDir)) {
+    if (-not $rolledBack -and $programBackupReady -and (Test-Path $programBackupDir) -and (Test-Path $installDir)) {
         Write-Host "  Attempting rollback from program backup..."
         try {
             $restoredSrc = Join-Path $programBackupDir (Split-Path $installDir -Leaf)
@@ -231,5 +250,6 @@ try {
         }
     }
     # 自动更新失败不应阻塞启动（用户可下次再试或手动 setup.exe）
+    if ($updateMutexAcquired) { $updateMutex.ReleaseMutex() }
     exit 0
 }

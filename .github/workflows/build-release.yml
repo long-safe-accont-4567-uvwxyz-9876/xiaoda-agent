@@ -544,6 +544,13 @@ jobs:
       contents: write
 
     steps:
+      # CodeRabbit 审查：release job 需要 checkout 源码才能读取 pyproject.toml
+      # 否则 workflow_dispatch 时 SOURCE_VERSION 为空，版本校验永远失败
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
