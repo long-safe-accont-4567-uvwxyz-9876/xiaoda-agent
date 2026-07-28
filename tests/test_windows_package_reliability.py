@@ -59,8 +59,12 @@ def test_update_writes_version_only_after_install_validation():
 def test_frozen_config_writes_use_resolved_writable_directory():
     config_source = read_project_file("config.py")
 
-    assert '_resolve_data_path(_KIOXIA_BASE / "config"' in config_source
-    assert "AGENTS_CONFIG_DIR = _resolve_data_path(" in config_source
+    # CONFIG_DIR 统一使用 _resolve_data_path，确保 KIOXIA 只读时回退一致
+    assert 'CONFIG_DIR = _resolve_data_path(_KIOXIA_BASE / "config"' in config_source
+    # AGENT_CONFIG_PATH 和 AGENTS_CONFIG_DIR 都从 CONFIG_DIR 派生，
+    # 不再各自独立判断路径（Qodo 审查：避免读写路径不一致）
+    assert "AGENT_CONFIG_PATH = CONFIG_DIR / " in config_source
+    assert "AGENTS_CONFIG_DIR = CONFIG_DIR / " in config_source
 
 
 def test_manual_release_version_is_checked_against_source():
