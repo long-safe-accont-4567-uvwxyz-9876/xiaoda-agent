@@ -862,10 +862,44 @@ class MemoryManager:
                     child_ids = [r["id"] for r in results]
                     return await self.memory.get_child_parent_ids(child_ids)
 
-                child_fts_results, child_vec_parent_ids = await asyncio.gather(
-                    self.memory.search_child_fts(query, recall_limit),
-                    _child_vec_recall(),
-                )
+                # return_exceptions=True：两个独立检索任务互不取消。
+                # 修复 RuntimeWarning: coroutine '_child_vec_recall' was never awaited：
+                # 原实现 search_child_fts 抛异常时 gather 立即取消 _child_vec_recall，
+                # 若 _child_vec_recall 尚未被 event loop 调度，coroutine 被创建后
+                # 未 await 即被丢弃 → Python RuntimeWarning + 记忆检索逻辑未执行。
+                # return_exceptions=True 让两个 task 都完成执行，异常作为结果返回。
+                #
+                # 协程泄漏防御：先创建协程对象再传入 gather。
+                # 若 gather 因参数非 awaitable（如测试中 mock 返回 MagicMock）在
+                # 同步阶段抛异常，已创建的协程未被调度 → 手动 close 避免 RuntimeWarning。
+                _child_fts_coro = self.memory.search_child_fts(query, recall_limit)
+                _child_vec_coro = _child_vec_recall()
+                try:
+                    _child_results = await asyncio.gather(
+                        _child_fts_coro,
+                        _child_vec_coro,
+                        return_exceptions=True,
+                    )
+                except Exception:
+                    # gather 同步阶段失败（参数非 awaitable），
+                    # 关闭未调度的协程避免 "was never awaited" 警告
+                    for _c in (_child_fts_coro, _child_vec_coro):
+                        if asyncio.iscoroutine(_c):
+                            _c.close()
+                    raise
+                # 分别处理异常：一个检索通道失败不影响另一个的结果
+                if isinstance(_child_results[0], Exception):
+                    logger.debug("memory.child_fts_failed",
+                                 error=f"{type(_child_results[0]).__name__}: {_child_results[0]}")
+                    child_fts_results = []
+                else:
+                    child_fts_results = _child_results[0]
+                if isinstance(_child_results[1], Exception):
+                    logger.debug("memory.child_vec_recall_failed",
+                                 error=f"{type(_child_results[1]).__name__}: {_child_results[1]}")
+                    child_vec_parent_ids = []
+                else:
+                    child_vec_parent_ids = _child_results[1]
 
                 # 合并 parent_ids（去重）
                 parent_ids: set[int] = set()

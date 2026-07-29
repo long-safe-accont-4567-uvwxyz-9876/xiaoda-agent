@@ -54,7 +54,15 @@ async def memory_db(tmp_path):
 
     yield memory_db, db_path
 
-    await conn.close()
+    # 清理：关闭所有打开的 aiosqlite 连接，避免 ResourceWarning
+    # 修复：db_manager.init() 内部也创建了 aiosqlite 连接（self._conn），
+    # 若不关闭，连接对象被 GC 时触发 ResourceWarning +
+    # PytestUnhandledThreadExceptionWarning（_connection_worker_thread 后台线程异常）
+    try:
+        await conn.close()
+    except Exception:
+        pass
+    await db_manager.close()
 
 
 @pytest.mark.asyncio
