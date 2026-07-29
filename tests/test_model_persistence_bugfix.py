@@ -121,8 +121,8 @@ def test_set_chat_model_persists_both_chat_model_and_routes_chat():
     router._custom_clients.add("agnes")
     router._lazy_register_provider = MagicMock()
 
-    # 快照整个 ROUTE_TABLE（set_chat_model 会改写所有 6 个 sync_tasks：
-    # chat/chat_pro/chat_flash/emotion_analysis/tool_result_wrap/memory_encoding）
+    # 快照整个 ROUTE_TABLE（set_chat_model 会改写所有 4 个 sync_tasks：
+    # chat/emotion_analysis/tool_result_wrap/memory_encoding）
     _orig_table = copy.deepcopy(ROUTE_TABLE)
     try:
         # mock config_service 捕获 set 调用

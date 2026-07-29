@@ -13,12 +13,14 @@ from loguru import logger
 from db.db_analytics import AnalyticsDB
 from utils.metrics import metrics
 from config import AGNES_BASE_URL, AGNES_TEXT_MODEL, PROMPT_CACHING_ENABLED
-from config import MODEL_NAME as _CFG_MODEL_NAME, PRO_MODEL_NAME as _CFG_PRO_MODEL
+from config import MODEL_NAME as _CFG_MODEL_NAME
 from config import FLASH_MODEL_NAME as _CFG_FLASH_MODEL, DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
 from config import MIMO_MODEL as _CFG_MIMO_MODEL
 from config import set_default_provider as _set_default_provider
 from config import get_builtin_providers as _get_builtin_providers
 from transports import ProviderTransport, MiMoTransport, AgnesTransport
+# 根因修复：agnes API connect=5s 过短导致 APIConnectionError，统一从 agnes_transport 引入共享 httpx 配置
+from transports.agnes_transport import _get_agnes_http_client, AGNES_HTTP_TIMEOUT, close_agnes_shared_client
 from utils.prompt_caching import apply_cache_control
 from utils.error_classifier import ErrorClassifier, RecoveryAction
 from utils.credential_pool import get_credential_pool
@@ -145,9 +147,6 @@ ROUTE_TABLE = {
     # chat 主路由：128K 上限，支撑长时间连贯对话，搭配滑动窗口+摘要压缩避免退化
     # 不再锁死 8192，避免长会话频繁截断历史导致记忆断裂
     "chat": {"model": _CFG_MODEL_NAME, "max_tokens": 131072, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_pro": {"model": _CFG_PRO_MODEL or _CFG_MODEL_NAME, "max_tokens": 131072, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "enabled", "budget_tokens": 4096}},
-    # chat_flash：sub_agent 调用（如 xiaoli 转述），需要足够空间避免截断
-    "chat_flash": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 6144, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1024, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 2048, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 4096, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
@@ -161,13 +160,14 @@ MODEL_PREFERENCES = {
 
 RETRYABLE_ERRORS = {'timeout', 'rate_limit', 'connection_error'}
 MAX_RETRIES = 1
+# chat_pro/chat_flash 已合并进 chat（同一 provider 同一 model，无区分意义）
+# 降级链：chat 失败 → chat_agnes（agnes provider 作为独立兜底）
 FALLBACK_ROUTE = {
-    "chat_pro": "chat_flash",
-    "chat_flash": "chat_agnes",
+    "chat": "chat_agnes",
 }
 
 # P0 修复：per-provider max_tokens 上限（从配置文件 + 环境变量读取，无硬编码）
-# 根因：ROUTE_TABLE 中 chat/chat_pro/chat_agnes/chat_mimo 都设了 131072，
+# 根因：ROUTE_TABLE 中 chat/chat_agnes/chat_mimo 都设了 131072，
 #       但 agnes-2.0-flash 实际上限是 65536，超过会返回 500 InternalServerError
 #       "max_tokens exceeds the limit of 65536"（日志中 286 次错误根因）。
 #       之前的"一刀切"提升 max_tokens 到 131072 反而打破了 agnes provider。
@@ -353,7 +353,7 @@ class ModelRouteRegistry:
         """原子地更新路由：内存 + 持久化。
 
         Args:
-            task: 路由 task 名称（如 "chat", "chat_pro"）
+            task: 路由 task 名称（如 "chat"）
             model_id: 模型 ID
             provider: provider 名称
             max_tokens: 可选，max_tokens 上限
@@ -430,12 +430,13 @@ class ModelRouter:
     _DEFAULT_TIMEOUTS: ClassVar[dict[str, int]] = {
         "emotion_analysis": 10,
         "emotion": 10,
-        "chat_flash": 30,
         "chat": 60,
-        "chat_pro": 60,
         "tool_call": 60,
         "image_gen": 90,
     }
+    # 后台 LLM task 集合：这些 task 调 LLM 但不直接面向用户，
+    # 必须让路于主 chat（task_type="chat"），避免并发竞争 agnes API。
+    _BG_LLM_TASKS: ClassVar[set[str]] = {"memory_encoding", "emotion_analysis", "tool_result_wrap"}
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None,
                  api_key_2: str | None = None, db: Any=None) -> None:
@@ -476,7 +477,15 @@ class ModelRouter:
                 logger.debug("router.agnes_key_pool_load_failed", exc_info=True)
         _agnes_url = os.getenv("AGNES_BASE_URL", AGNES_BASE_URL)
         _ssrf_check(_agnes_url)  # SSRF 防护：校验 base_url
-        self._agnes_client = AsyncOpenAI(api_key=_agnes_key, base_url=_agnes_url) if _agnes_key else None
+        self._agnes_client = (
+            AsyncOpenAI(
+                api_key=_agnes_key,
+                base_url=_agnes_url,
+                http_client=_get_agnes_http_client(),
+                timeout=AGNES_HTTP_TIMEOUT,
+                max_retries=0,
+            ) if _agnes_key else None
+        )
 
         self._custom_clients: dict[str, AsyncOpenAI] = {}
         self._register_credential_pool_providers()
@@ -484,6 +493,15 @@ class ModelRouter:
         # 启动后 ROUTE_TABLE 模块级变量作为只读快照，所有修改走 _registry
         self._registry: ModelRouteRegistry = ModelRouteRegistry(ROUTE_TABLE)
         self._current_chat_model: dict | None = None
+        # 主 chat 优先机制：后台 LLM 任务让路，避免并发竞争 agnes API
+        # 根因：agnes API 对同 key 并发请求严重排队（实测并发3→32s，串行→19s），
+        #       后台 LLM 任务（memory_encoding/emotion_analysis/instinct 等）和主 chat
+        #       并发调 agnes → 主 chat 60s 超时 → retry → 83s 阻塞。
+        # 修复：主 chat 期间 _chat_idle.clear()，后台 LLM 任务 await _chat_idle.wait() 让路；
+        #       后台任务之间用 _bg_llm_semaphore(1) 串行，彻底消除并发竞争。
+        self._chat_idle = asyncio.Event()
+        self._chat_idle.set()  # 初始空闲
+        self._bg_llm_semaphore = asyncio.Semaphore(1)
         self._cache_stats = {
             "total_calls": 0,
             "hit_tokens": 0,
@@ -569,8 +587,7 @@ class ModelRouter:
         后续通过 Setup 页面保存的新 Key 不会自动生效。此方法从当前
         os.environ 重新读取 Key 并重建客户端，使新配置立即生效。
         """
-        old_mimo = self._client
-        old_agnes = self._agnes_client
+        old_mimo = self._client  # 旧 MiMo 客户端（独立 httpx，替换后 close 释放连接）
 
         new_mimo_key = os.getenv("MIMO_API_KEY", "")
         new_mimo_url = os.getenv("MIMO_BASE_URL", MIMO_BASE_URL)
@@ -587,7 +604,13 @@ class ModelRouter:
         new_agnes_url = os.getenv("AGNES_BASE_URL", AGNES_BASE_URL)
         if new_agnes_key:
             _ssrf_check(new_agnes_url)  # SSRF 防护：校验 base_url
-            self._agnes_client = AsyncOpenAI(api_key=new_agnes_key, base_url=new_agnes_url)
+            self._agnes_client = AsyncOpenAI(
+                api_key=new_agnes_key,
+                base_url=new_agnes_url,
+                http_client=_get_agnes_http_client(),
+                timeout=AGNES_HTTP_TIMEOUT,
+                max_retries=0,
+            )
             logger.info("router.agnes_client_refreshed",
                         key_len=len(new_agnes_key),
                         key_hash=_mask_api_key(new_agnes_key))
@@ -595,10 +618,13 @@ class ModelRouter:
             self._agnes_client = None
 
         # 关闭旧客户端释放连接
+        # CodeRabbit 修复：old_agnes 注入了共享 httpx client（_get_agnes_http_client），
+        # 调用其 .close() 会连带关闭共享 client，影响新 self._agnes_client（同样复用共享
+        # client）。共享 client 生命周期归 agnes_transport 模块统一管理（close_agnes_shared_client），
+        # 这里只关闭独立的 old_mimo（未注入共享 httpx，SDK 自建 client）。
         _old_clients: list = []
-        for old in (old_mimo, old_agnes):
-            if old is not None and old not in (self._client, self._agnes_client):
-                _old_clients.append(old)
+        if old_mimo is not None and old_mimo is not self._client:
+            _old_clients.append(old_mimo)
         if _old_clients:
             try:
                 import asyncio
@@ -695,7 +721,8 @@ class ModelRouter:
         _old_default_provider = _config_mod.DEFAULT_PROVIDER
 
         # Step 3: 收集所有需要同步的 task（chat 主路由 + 同步 task）
-        _sync_tasks = ("chat", "chat_pro", "chat_flash",
+        # chat_pro/chat_flash 已合并进 chat
+        _sync_tasks = ("chat",
                        "emotion_analysis", "tool_result_wrap",
                        "memory_encoding")
 
@@ -956,23 +983,35 @@ class ModelRouter:
         await self._flush_cost_buffer()
 
     async def close(self) -> None:
-        """关闭所有 AsyncOpenAI 客户端, 释放 TCP 连接."""
-        for client in (self._client, self._agnes_client):
-            if client is not None:
-                try:
-                    await client.close()
-                except (RuntimeError, OSError, _openai_mod.APIError):
-                    logger.debug("model_router.close_client_error", exc_info=True)
-        self._client = None
-        self._agnes_client = None
-        # 关闭自定义 provider 客户端
-        for cp_client in list(getattr(self, "_custom_clients", {}).values()):
+        """关闭所有 AsyncOpenAI 客户端, 释放 TCP 连接.
+
+        CodeRabbit 修复：注入共享 httpx client 的 agnes wrapper 不调用 ``.close()`` ——
+        ``.close()`` 会连带关闭共享 httpx client，影响其他复用该 client 的实例。
+        共享 agnes client 由 ``close_agnes_shared_client()`` 统一关闭；MiMo 与非 agnes
+        自定义 provider 客户端（未注入共享 httpx，SDK 自建 client）独立 close。
+        """
+        if self._client is not None:
             try:
-                await cp_client.close()
+                await self._client.close()
             except (RuntimeError, OSError, _openai_mod.APIError):
-                logger.debug("model_router.close_custom_client_error", exc_info=True)
+                logger.debug("model_router.close_client_error", exc_info=True)
+        self._client = None
+        # 关闭自定义 provider 客户端（跳过 agnes：它复用共享 httpx client，由下方统一关闭）
         if hasattr(self, "_custom_clients"):
+            for cp_name, cp_client in list(self._custom_clients.items()):
+                if cp_name == "agnes":
+                    continue
+                try:
+                    await cp_client.close()
+                except (RuntimeError, OSError, _openai_mod.APIError):
+                    logger.debug("model_router.close_custom_client_error", exc_info=True)
             self._custom_clients.clear()
+        # agnes 共享 httpx client：统一关闭一次（应用退出时调用，此时无在途请求）
+        try:
+            await close_agnes_shared_client()
+        except (RuntimeError, OSError):
+            logger.debug("model_router.close_agnes_shared_client_error", exc_info=True)
+        self._agnes_client = None
 
     @staticmethod
     def _apply_caching_headers(extra_headers: dict | None) -> dict | None:
@@ -1022,7 +1061,7 @@ class ModelRouter:
         # 1. 降级到更便宜的模型
         fallback_type = FALLBACK_ROUTE.get(task_type)
         # P0 修复：content_filter 触发时跳过同 provider 的 fallback 目标
-        # 根因：chat_flash (mimo) content_filter → fallback 到 chat_mini (也是 mimo) → 再次 content_filter
+        # 根因：同 provider 的 fallback 目标会再次触发 content_filter
         # 浪费一次调用 + 触发 verification retry，导致 14 秒延迟
         # 修复：content_filter 时跳过同 provider 的 fallback，直接到不同 provider（如 agnes）
         _is_content_filter = "content_filter" in str(e) or "content_policy" in str(e)
@@ -1141,6 +1180,22 @@ class ModelRouter:
         if timeout is None:
             timeout = self.TASK_TIMEOUTS.get(task_type, 30)
 
+        # === 主 chat 优先：后台 LLM 任务让路 ===
+        # 主 chat (task_type="chat") 执行期间 _chat_idle.clear()，
+        # 后台 LLM 任务 (_BG_LLM_TASKS) await _chat_idle.wait() 自动让路。
+        # 后台任务之间用 _bg_llm_semaphore(1) 串行，彻底消除 agnes 并发竞争。
+        _is_bg_llm = task_type in self._BG_LLM_TASKS
+        if _is_bg_llm:
+            await self._chat_idle.wait()
+            await self._bg_llm_semaphore.acquire()
+            try:
+                await self._chat_idle.wait()  # 拿到 semaphore 后再次确认主 chat 空闲
+            except BaseException:
+                self._bg_llm_semaphore.release()
+                raise
+        elif task_type == "chat":
+            self._chat_idle.clear()
+
         self._cache_stats["total_calls"] += 1
         extra_headers = self._apply_caching_headers(extra_headers)
 
@@ -1169,10 +1224,15 @@ class ModelRouter:
             metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
             metrics.maybe_report()
             # 结构化日志：LLM 调用失败
+            # 根因修复：APIConnectionError 的真实 httpx 异常（ConnectTimeout/DNS/TLS）存在 __cause__ 中，
+            # 只记 str(e)="Connection error." 无法定位。补记 cause_type/cause_msg 实现可观测性。
+            _cause = e.__cause__ if e.__cause__ else (e.__context__ if e.__context__ else None)
             logger.warning("llm.call_failed", event="llm_call", model=config.get("model", ""),
                            task=task_type, duration_ms=int((time.time() - _start) * 1000),
                            user_id=user_openid, session_id=session_id,
-                           error=f"{type(e).__name__}: {e}")
+                           error=f"{type(e).__name__}: {e}",
+                           cause_type=type(_cause).__name__ if _cause else "",
+                           cause_msg=str(_cause)[:300] if _cause else "")
             fb_result = await self._try_fallback_chain(
                 e, task_type, messages, temperature, stream,
                 tools, tool_choice, timeout, user_openid, session_id, extra_headers,
@@ -1187,6 +1247,13 @@ class ModelRouter:
                 error_code=ErrorCodeEnum.E_LLM001,
                 cause=e,
             ) from e
+        finally:
+            # 释放让路资源：主 chat 完成后 set event 唤醒后台任务；
+            # 后台任务完成后 release semaphore 让下一个后台任务执行。
+            if _is_bg_llm:
+                self._bg_llm_semaphore.release()
+            elif task_type == "chat":
+                self._chat_idle.set()
 
     def _apply_prompt_caching(self, provider: str, messages: list[dict]) -> list[dict]:
         """应用 Prompt Caching（MiMo 直接启用；其他 provider 在 PROMPT_CACHING_ENABLED 时尝试）。"""
@@ -1234,7 +1301,12 @@ class ModelRouter:
                             try:
                                 _ssrf_check(_agnes_url)
                                 self._agnes_client = AsyncOpenAI(
-                                    api_key=_agnes_key, base_url=_agnes_url)
+                                    api_key=_agnes_key,
+                                    base_url=_agnes_url,
+                                    http_client=_get_agnes_http_client(),
+                                    timeout=AGNES_HTTP_TIMEOUT,
+                                    max_retries=0,
+                                )
                                 client = self._agnes_client
                                 logger.info("router.agnes_client_lazy_recovered",
                                             key_hash=_mask_api_key(_agnes_key))
@@ -1844,10 +1916,22 @@ class ModelRouter:
                             key_len=len(new_cred.api_key),
                             key_hash=_mask_api_key(new_cred.api_key))
                 # 更新客户端使用新凭证
-                new_client = AsyncOpenAI(
-                    api_key=new_cred.api_key,
-                    base_url=new_cred.base_url or (MIMO_BASE_URL if provider == "mimo" else AGNES_BASE_URL),
-                )
+                # agnes 复用共享 httpx client + connect=15s 配置（根因修复）；
+                # mimo 保持默认（不在本次 APIConnectionError 根因范围）
+                _new_base = new_cred.base_url or (MIMO_BASE_URL if provider == "mimo" else AGNES_BASE_URL)
+                if provider == "agnes":
+                    new_client = AsyncOpenAI(
+                        api_key=new_cred.api_key,
+                        base_url=_new_base,
+                        http_client=_get_agnes_http_client(),
+                        timeout=AGNES_HTTP_TIMEOUT,
+                        max_retries=0,
+                    )
+                else:
+                    new_client = AsyncOpenAI(
+                        api_key=new_cred.api_key,
+                        base_url=_new_base,
+                    )
                 if provider == "mimo":
                     self._client = new_client
                 else:

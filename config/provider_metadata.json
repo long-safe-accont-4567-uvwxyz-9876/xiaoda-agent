@@ -11,7 +11,7 @@
   },
   "providers": {
     "agnes": {
-      "base_url_default": "https://apihub.agnes-ai.com/v1",
+      "base_url_default": "https://apihub.agnes-ai.cn/v1",
       "max_tokens_cap": 65535,
       "default_model": "agnes-2.0-flash",
       "doc_url": "https://docs.agnes-ai.com/",

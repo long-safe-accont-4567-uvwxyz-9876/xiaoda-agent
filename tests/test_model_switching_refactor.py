@@ -242,21 +242,24 @@ def test_set_chat_model_persists_all_synced_tasks(mock_config_service):
     # mock registry 追踪调用
     router._registry = MagicMock()
     router._registry.update_route = MagicMock(return_value={"model": "x", "client": "y"})
-    router._registry.all_tasks = MagicMock(return_value=[
-        "chat", "chat_pro", "chat_flash", "emotion_analysis",
-        "tool_result_wrap", "memory_encoding",
-    ])
+    # chat_pro/chat_flash 已合并进 chat，sync_tasks 只剩 4 个 task
+    _sync_tasks = ("chat", "emotion_analysis", "tool_result_wrap", "memory_encoding")
+    router._registry.all_tasks = MagicMock(return_value=list(_sync_tasks))
     router._registry.get_task = MagicMock(return_value={
         "max_tokens": 8192, "thinking": {"type": "disabled"},
     })
 
     router.set_chat_model("mimo", "mimo-v2.5")
 
-    # 至少调用了 chat + chat_pro + chat_flash
+    # sync_tasks 只含 ("chat", "emotion_analysis", "tool_result_wrap", "memory_encoding")，
+    # chat_pro/chat_flash 已合并进 chat，不再单独同步
     tasks_updated = [c.args[0] for c in router._registry.update_route.call_args_list]
+    assert set(tasks_updated) == set(_sync_tasks), (
+        f"应只同步 {_sync_tasks}，实际同步了 {tasks_updated}"
+    )
     assert "chat" in tasks_updated
-    assert "chat_pro" in tasks_updated
-    assert "chat_flash" in tasks_updated
+    assert "chat_pro" not in tasks_updated
+    assert "chat_flash" not in tasks_updated
 
 
 # ── Task 5: _restore_chat_model 不硬编码 fallback ──
@@ -366,8 +369,9 @@ def test_fallback_chain_does_not_pollute_route_table():
         from model_router import ModelRouteRegistry
         router._registry = ModelRouteRegistry(ROUTE_TABLE)
 
+    # 降级链：chat → chat_agnes（chat_pro/chat_flash 已合并进 chat）
     original_chat = copy.deepcopy(ROUTE_TABLE["chat"])
-    original_chat_flash = copy.deepcopy(ROUTE_TABLE["chat_flash"])
+    original_chat_agnes = copy.deepcopy(ROUTE_TABLE["chat_agnes"])
 
     # mock _route_with_retry 返回成功（避免真实 LLM 调用）——用 AsyncMock 因为被 await
     router._route_with_retry = AsyncMock(return_value="fake_response")
@@ -385,7 +389,7 @@ def test_fallback_chain_does_not_pollute_route_table():
 
     # ROUTE_TABLE 未被污染（降级链读取的是 registry 快照深拷贝）
     assert ROUTE_TABLE["chat"] == original_chat
-    assert ROUTE_TABLE["chat_flash"] == original_chat_flash
+    assert ROUTE_TABLE["chat_agnes"] == original_chat_agnes
 
 
 def test_fallback_chain_agnes_uses_snapshot():
@@ -472,8 +476,8 @@ def test_apply_route_overrides_preserves_valid_routes(tmp_path):
             "routes": {
                 "chat": {"model": "agnes-2.0-flash", "client": "agnes",
                          "max_tokens": 8192, "thinking": False, "timeout": 90},
-                "chat_pro": {"model": "agnes-2.0-flash", "client": "agnes",
-                             "max_tokens": 8192, "thinking": True, "timeout": 90},
+                "chat_agnes": {"model": "agnes-2.0-flash", "client": "agnes",
+                               "max_tokens": 8192, "thinking": False, "timeout": 90},
             }
         }
     }), encoding="utf-8")
@@ -486,8 +490,9 @@ def test_apply_route_overrides_preserves_valid_routes(tmp_path):
 
     from model_router import ROUTE_TABLE
     # 快照整个 entry（包括 max_tokens/thinking），避免硬编码还原 client="mimo" 改错
+    # chat_pro/chat_flash 已合并进 chat，改用 chat_agnes 作为第二个存活路由
     original_chat = copy.deepcopy(ROUTE_TABLE["chat"])
-    original_chat_pro = copy.deepcopy(ROUTE_TABLE["chat_pro"])
+    original_chat_agnes = copy.deepcopy(ROUTE_TABLE["chat_agnes"])
     try:
         from web.server import _apply_route_overrides
         _apply_route_overrides(cfg, mock_core, ROUTE_TABLE)
@@ -495,12 +500,12 @@ def test_apply_route_overrides_preserves_valid_routes(tmp_path):
         # 存活路由的覆盖已应用
         assert ROUTE_TABLE["chat"]["model"] == "agnes-2.0-flash"
         assert ROUTE_TABLE["chat"]["client"] == "agnes"
-        assert ROUTE_TABLE["chat_pro"]["model"] == "agnes-2.0-flash"
+        assert ROUTE_TABLE["chat_agnes"]["model"] == "agnes-2.0-flash"
         assert mock_core.router.TASK_TIMEOUTS["chat"] == 90
     finally:
         # 整体还原（包括 max_tokens/thinking，不只 model/client）
         ROUTE_TABLE["chat"] = copy.deepcopy(original_chat)
-        ROUTE_TABLE["chat_pro"] = copy.deepcopy(original_chat_pro)
+        ROUTE_TABLE["chat_agnes"] = copy.deepcopy(original_chat_agnes)
 
 
 # ─────────────────────────────────────────────────────────────

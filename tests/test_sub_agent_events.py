@@ -32,6 +32,10 @@ def _make_mock_mgr(belief_router=None, dispatch_return="这是小狼的回复", 
     mgr._bg_task_manager = MagicMock()
     mgr._bg_task_manager.run_background_tasks = MagicMock()
     mgr._voice_mode = False
+    # _dispatch_single_sub_agent 透传 model_used 到 run_background_tasks，
+    # 需提供 mock router（生产代码合法依赖，测试应正确 mock 而非让生产代码兜底）
+    mgr.router = MagicMock()
+    mgr.router.get_current_chat_model = MagicMock(return_value={"model_id": "test-model"})
     mgr._finalize_reply = MagicMock(side_effect=lambda x, **kw: x)
     mgr.security = MagicMock()
     mgr.security.is_owner = MagicMock(return_value=True)

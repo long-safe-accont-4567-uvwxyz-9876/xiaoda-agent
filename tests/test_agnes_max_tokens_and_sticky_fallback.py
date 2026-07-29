@@ -230,7 +230,7 @@ def test_set_chat_model_persist_catches_generic_exception(monkeypatch):
     router._custom_clients = {}
     router._current_chat_model = None
     router._lazy_register_provider = MagicMock()
-    router.TASK_TIMEOUTS = {"chat": 60, "chat_pro": 60, "chat_flash": 30,
+    router.TASK_TIMEOUTS = {"chat": 60,
                             "emotion_analysis": 10, "tool_result_wrap": 30,
                             "memory_encoding": 30}
     router._registry = _mr_module.ModelRouteRegistry(
@@ -242,8 +242,8 @@ def test_set_chat_model_persist_catches_generic_exception(monkeypatch):
     monkeypatch.setattr(_cfg_mod, "get_config_service", lambda: _BombCfg())
 
     # 保存原 ROUTE_TABLE + DEFAULT_PROVIDER 状态以便恢复
+    # chat_pro/chat_flash 已合并进 chat，不再单独快照/还原
     original_chat = copy.deepcopy(_mr_module.ROUTE_TABLE["chat"])
-    original_chat_flash = copy.deepcopy(_mr_module.ROUTE_TABLE["chat_flash"])
     original_default = _config_mod.DEFAULT_PROVIDER
     try:
         # CodeRabbit#1：chat_model 持久化失败应抛 LLMError（回滚后）
@@ -258,7 +258,6 @@ def test_set_chat_model_persist_catches_generic_exception(monkeypatch):
         assert _config_mod.DEFAULT_PROVIDER == original_default
     finally:
         _mr_module.ROUTE_TABLE["chat"] = original_chat
-        _mr_module.ROUTE_TABLE["chat_flash"] = original_chat_flash
         _config_mod.set_default_provider(original_default)
 
 

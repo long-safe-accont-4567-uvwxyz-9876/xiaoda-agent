@@ -15,6 +15,39 @@ class KnowledgeDB:
     async def commit(self) -> None:
         await self._conn.commit()
 
+    async def _sync_entity_fts(self, name: str) -> None:
+        """应用层同步实体到 FTS 索引（替代已废弃的触发器）。
+
+        表类型澄清（CodeRabbit finding 误判修正 2026-07-29）：
+        knowledge_entities_fts 是 **contentful** FTS5 表（DDL: fts5(id UNINDEXED, name_index)，
+        无 content=""），非 contentless。contentful 表支持普通 DELETE。
+        历史触发器失败的原因是触发器用了 FTS5 'delete' 命令，而 'delete' 命令在含 UNINDEXED 列的
+        表上始终报 SQL logic error（实测 SQLite 3.40.1）。修复：DROP 触发器，改应用层普通 DELETE+INSERT。
+        CodeRabbit 误判为 contentless 表建议改用 'delete' 命令，但实测 'delete' 命令在 UNINDEXED 列上报错，
+        普通 DELETE 才是正确做法。
+        用 name（UNIQUE）查 rowid+id，兼容 insert/upsert 两种路径。FTS rowid 与主表 rowid 对齐。
+        """
+        cur = await self._conn.execute(
+            "SELECT rowid, id FROM knowledge_entities WHERE name=?", (name,))
+        row = await cur.fetchone()
+        if row is None:
+            return
+        rowid, entity_id = row[0], row[1]
+        await self._conn.execute(
+            "DELETE FROM knowledge_entities_fts WHERE rowid=?", (rowid,))
+        await self._conn.execute(
+            "INSERT INTO knowledge_entities_fts(rowid, id, name_index) VALUES(?, ?, ?)",
+            (rowid, entity_id, name),
+        )
+
+    async def _delete_entity_fts_by_rowid(self, rowid: int) -> None:
+        """按主表 rowid 删除 FTS 索引条目（删除实体前调用）。
+
+        contentful FTS5 表支持普通 DELETE（见 _sync_entity_fts 表类型澄清）。
+        """
+        await self._conn.execute(
+            "DELETE FROM knowledge_entities_fts WHERE rowid=?", (rowid,))
+
     async def insert_knowledge_entity(self, entity_id: str, name: str,
                                        kind: str = "", observations: list | None = None,
                                        auto_commit: bool = True) -> None:
@@ -24,6 +57,8 @@ class KnowledgeDB:
                VALUES (?, ?, ?, ?, ?)""",
             (entity_id, name, kind, obs_json, time.time()),
         )
+        # FTS 同步（应用层维护，替代已 DROP 的触发器）
+        await self._sync_entity_fts(name)
         if auto_commit:
             await self._conn.commit()
 
@@ -49,6 +84,8 @@ class KnowledgeDB:
                    updated_at=excluded.updated_at""",
             (entity_id, name, kind, obs_json, now),
         )
+        # FTS 同步（应用层维护，替代已 DROP 的触发器；name 是 UNIQUE，按 name 查 rowid）
+        await self._sync_entity_fts(name)
         if auto_commit:
             await self._conn.commit()
 
@@ -100,7 +137,9 @@ class KnowledgeDB:
                 if rows:
                     return [dict(r) for r in rows]
             except Exception as e:
-                logger.warning(f"knowledge.fts_search_failed, fallback to LIKE: {e}")
+                # 规则：FTS5 检索失败降级到 LIKE 即 bug 信号，必须 ERROR + degradation_triggered
+                logger.error("degradation_triggered knowledge.fts_search_failed "
+                             "fallback=LIKE error={}", str(e))
 
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         cursor = await self._conn.execute(
@@ -113,6 +152,12 @@ class KnowledgeDB:
         return [dict(r) for r in rows]
 
     async def delete_knowledge_entity(self, name: str, auto_commit: bool = True) -> bool:
+        # 先按 rowid 删 FTS（主表删除后查不到 rowid）
+        cur = await self._conn.execute(
+            "SELECT rowid FROM knowledge_entities WHERE name=?", (name,))
+        row = await cur.fetchone()
+        if row is not None:
+            await self._delete_entity_fts_by_rowid(row[0])
         # 级联清理引用该实体的关系
         await self._conn.execute(
             "DELETE FROM knowledge_relations WHERE from_entity=? OR to_entity=?",
@@ -214,21 +259,56 @@ class KnowledgeDB:
                 if auto_commit:
                     await self._conn.commit()
             except Exception as update_err:
-                # FTS5 触发器或并发写锁可能引发 "SQL logic error"
-                # 降级 1：只更新 updated_at，跳过 observations（避免触发 FTS5 触发器）
-                logger.warning("kg.merge_entity_update_failed name={} error={} → 降级为轻量更新",
-                              name, str(update_err))
+                # CodeRabbit 修复：auto_commit=False 表示调用方拥有事务（如 write_transaction
+                # 内的批量写入）。此时 rollback 会回滚调用方整个事务（破坏其他已写入数据），
+                # retry/lite fallback 同样在调用方事务上执行未授权写入。正确行为：直接传播
+                # 原始失败，由调用方的 write_transaction 统一 rollback。
+                if not auto_commit:
+                    logger.error("kg.merge_entity_update_failed_caller_txn "
+                                 "name={} error={} action=propagate_to_caller_txn",
+                                 name, str(update_err))
+                    raise
+                # auto_commit=True：内部 owned 事务，可安全 rollback + retry + lite fallback
+                # 根因：aiosqlite 单连接共享事务状态，并发的 auto_commit=False 长事务
+                # （如 _do_children 批量写入）超时/异常时未 rollback，脏事务残留在连接上，
+                # 导致本 UPDATE 在脏事务中执行 → "SQL logic error"。
+                # 修复：先 rollback 清理脏事务，再重试一次。rollback 后连接恢复干净状态。
+                # 规则：触发重试/降级即视为 bug，必须 ERROR + degradation_triggered 告警
+                logger.error("degradation_triggered kg.merge_entity_update_failed "
+                             "name={} error={} action=rollback_and_retry",
+                             name, str(update_err))
+                try:
+                    await self._conn.rollback()
+                except Exception:
+                    pass
+                # 重试：连接已清理，应该能成功
+                _retry_ok = False
                 try:
                     await self._conn.execute(
-                        "UPDATE knowledge_entities SET updated_at=? WHERE name=?",
-                        (time.time(), name),
+                        "UPDATE knowledge_entities SET kind=?, observations=?, updated_at=? WHERE name=?",
+                        (kind or existing.get("kind", ""), json.dumps(merged, ensure_ascii=False), time.time(), name),
                     )
                     if auto_commit:
                         await self._conn.commit()
-                except Exception as lite_err:
-                    # 降级 2：连轻量更新也失败，记录但不抛出（merge_entities 已包 try/except）
-                    logger.error("kg.merge_entity_lite_update_failed name={} error={}",
-                                 name, str(lite_err))
+                    _retry_ok = True
+                except Exception as retry_err:
+                    logger.error("degradation_triggered kg.merge_entity_retry_failed "
+                                 "name={} error={}", name, str(retry_err))
+                if not _retry_ok:
+                    # 最终降级：只更新 updated_at（不触碰 observations）
+                    # 规则：降级触发即 bug，记录 degradation_triggered
+                    logger.error("degradation_triggered kg.merge_entity_fallback_to_lite_update "
+                                 "name={} reason=retry_failed", name)
+                    try:
+                        await self._conn.execute(
+                            "UPDATE knowledge_entities SET updated_at=? WHERE name=?",
+                            (time.time(), name),
+                        )
+                        if auto_commit:
+                            await self._conn.commit()
+                    except Exception as lite_err:
+                        logger.error("degradation_triggered kg.merge_entity_lite_update_failed "
+                                     "name={} error={}", name, str(lite_err))
         else:
             entity_id = entity.get("id", f"ENT-{uuid.uuid4().hex[:12]}")
             await self.insert_knowledge_entity(entity_id, name, kind, new_obs,
@@ -299,6 +379,12 @@ class KnowledgeDB:
 
     async def cleanup_stale(self, days: int = 30, auto_commit: bool = True) -> int:
         cutoff = time.time() - days * 86400
+        # 先批量删 FTS（按主表 rowid，触发器已废弃由应用层维护）
+        await self._conn.execute(
+            "DELETE FROM knowledge_entities_fts WHERE rowid IN "
+            "(SELECT rowid FROM knowledge_entities WHERE updated_at < ?)",
+            (cutoff,),
+        )
         cursor = await self._conn.execute(
             "DELETE FROM knowledge_entities WHERE updated_at < ?", (cutoff,)
         )

@@ -1251,10 +1251,12 @@ class MessageProcessorMixin:
         QQ 通道保持 ROUTE_TABLE 默认值（平台消息长度有限制）。
         """
         should_escalate, reason = self._should_escalate_to_pro(user_input, tools)
-        base_task = "chat_pro" if should_escalate else "chat"
+        # chat_pro 已合并进 chat（agnes 不支持 thinking，升级无意义）
+        base_task = "chat"
         task_type = self.router.resolve_task_type(base_task)
         if should_escalate:
-            trace.info("chat.escalated_to_pro", reason=reason)
+            trace.info("chat.escalate_skipped_merged", reason=reason,
+                       hint="chat_pro merged into chat, agnes disables thinking")
 
         _model_cfg = AGENT_CONFIG.get("model", {})
         circuit_state = self._circuit_breaker.check(self._cognitive_state)

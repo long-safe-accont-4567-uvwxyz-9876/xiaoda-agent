@@ -46,7 +46,7 @@ def _get_agnes_openai_client() -> Any:
     if _agnes_openai_client is None:
         from openai import AsyncOpenAI
         _key = os.getenv("AGNES_API_KEY", "")
-        _url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
+        _url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1")
         _agnes_openai_client = AsyncOpenAI(api_key=_key, base_url=_url)
     return _agnes_openai_client
 
@@ -166,7 +166,7 @@ async def agnes_video_generate(prompt: str, seconds: float = 5, fps: int = 24) -
 
         client = _get_agnes_http_client()
         _agnes_key = os.getenv("AGNES_API_KEY", "")
-        _agnes_url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
+        _agnes_url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1")
 
         video_id, data = await _agnes_create_video_task(
             client, _agnes_url, _agnes_key, prompt, seconds, fps

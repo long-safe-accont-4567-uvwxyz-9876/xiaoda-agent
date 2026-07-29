@@ -540,7 +540,7 @@ FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "")
 
 # Agnes AI 配置（在 get_provider_config 之前定义，避免前向引用）
 AGNES_API_KEY = get_secret("AGNES_API_KEY", "")
-AGNES_BASE_URL = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
+AGNES_BASE_URL = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1")
 AGNES_TEXT_MODEL = get_default_model_for_provider("agnes")
 AGNES_IMAGE_MODEL = os.getenv("AGNES_IMAGE_MODEL", "agnes-image-2.1-flash")
 AGNES_VIDEO_MODEL = os.getenv("AGNES_VIDEO_MODEL", "agnes-video-v2.0")
@@ -1052,7 +1052,10 @@ def _resolve_command(name: str) -> str:
 MCP_SERVERS = {
     "git": {
         "command": _resolve_command("uvx"),
-        "args": ["mcp-server-git", "--repository", str(Path.home() / "Desktop")],
+        # 根因修复：uvx 默认解析到最新 mcp 版本，但 mcp 2.0.0 移除了 Server.list_tools() 装饰器 API，
+        # 导致 mcp-server-git 2026.7.10 子进程在 initialize 前瞬崩（AttributeError）。
+        # 用 --with "mcp<2" 钉版本到 1.x，已实测 8s 内完成握手并返回 12 个 git 工具。
+        "args": ["--with", "mcp<2", "mcp-server-git", "--repository", str(Path.home() / "Desktop")],
         "env": {"UV_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple"},
         "agents": ["xiaolang"],  # which agents can use this MCP server's tools
     },

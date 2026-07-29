@@ -275,8 +275,7 @@ async def update_route(task: str, body: dict, request: Request) -> Any:
     thinking = None
     if "thinking" in body:
         # CR-Major-3 修复：budget_tokens 保留原 entry 的值，不硬编码 2048。
-        # ROUTE_TABLE 默认 chat_pro.thinking.budget_tokens=4096，旧实现恢复时硬编码 2048，
-        # 导致重启后 thinking budget 减半。
+        # 旧实现恢复时硬编码 2048，导致重启后 thinking budget 减半。
         _orig_thinking = current_entry.get("thinking") or {}
         _orig_budget = (_orig_thinking.get("budget_tokens", 4096)
                         if isinstance(_orig_thinking, dict) else 4096)

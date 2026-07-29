@@ -1,9 +1,9 @@
 """测试 fallback 链和超时优化
 
 验证：
-1. set_chat_model 切换 provider 时，flash 路由同步到跨 provider
+1. fallback 降级链 chat → chat_agnes 使用不同 provider
 2. MAX_RETRIES 降为 1（2 次尝试而非 3 次）
-3. chat_flash 超时从 60s 降为 30s
+3. chat 超时为 60s
 4. profile_learner 的 loguru 格式化不再触发 Replacement index 错误
 5. 后台任务 _spawn 添加耗时监控日志
 """
@@ -19,92 +19,31 @@ if str(PROJECT_ROOT) not in __import__("sys").path:
 
 
 class TestFallbackChainSync:
-    """测试 set_chat_model 时 flash 路由的跨 provider 同步"""
-
-    def test_set_chat_model_agnes_syncs_flash_to_agnes(self):
-        """切换到 agnes 时，chat_flash 应跟随 agnes（用户取消跨 provider 降级）
-
-        CodeRabbit #11 + commit a40bc74：用户明确要求取消 chat_flash 跨 provider 降级，
-        所有 task 跟随主 provider。原测试期望 chat_flash 用 mimo 已过时。
-        """
-        from model_router import ROUTE_TABLE, ModelRouter, ModelRouteRegistry
-
-        # 模拟初始状态：mimo 为默认
-        original_flash = copy.deepcopy(ROUTE_TABLE["chat_flash"])
-        original_chat = copy.deepcopy(ROUTE_TABLE["chat"])
-        try:
-            router = MagicMock(spec=ModelRouter)
-            router._custom_clients = {}
-            router._current_chat_model = None
-            router._lazy_register_provider = MagicMock()
-            # set_chat_model 持久化时会读取 TASK_TIMEOUTS，需显式提供
-            router.TASK_TIMEOUTS = {"chat": 60}
-            # Task 4: set_chat_model 通过 _registry 原子化更新，需提供真实 registry
-            mock_cfg = MagicMock()
-            router._registry = ModelRouteRegistry(ROUTE_TABLE, config_service=mock_cfg)
-
-            # patch 掉 set_chat_model 末尾的 cfg.set("models.chat_model", ...) 持久化
-            with patch("web.config_service.get_config_service", return_value=mock_cfg):
-                # 调用 set_chat_model 切换到 agnes
-                ModelRouter.set_chat_model(router, "agnes", "agnes-2.0-flash")
-
-            # chat 路由应更新为 agnes
-            assert ROUTE_TABLE["chat"]["model"] == "agnes-2.0-flash"
-            assert ROUTE_TABLE["chat"]["client"] == "agnes"
-
-            # chat_flash 应跟随 agnes（用户取消跨 provider 降级）
-            assert ROUTE_TABLE["chat_flash"]["client"] == "agnes", \
-                "chat_flash 应跟随主 provider agnes（用户取消跨 provider 降级）"
-            assert ROUTE_TABLE["chat_flash"]["model"] == "agnes-2.0-flash"
-        finally:
-            ROUTE_TABLE["chat_flash"] = original_flash
-            ROUTE_TABLE["chat"] = original_chat
-
-    def test_set_chat_model_mimo_syncs_flash_to_mimo(self):
-        """切换到 mimo 时，chat_flash 应跟随 mimo（用户取消跨 provider 降级）"""
-        from model_router import ROUTE_TABLE, ModelRouter, ModelRouteRegistry
-
-        original_flash = copy.deepcopy(ROUTE_TABLE["chat_flash"])
-        original_chat = copy.deepcopy(ROUTE_TABLE["chat"])
-        try:
-            router = MagicMock(spec=ModelRouter)
-            router._custom_clients = {}
-            router._current_chat_model = None
-            router._lazy_register_provider = MagicMock()
-            # set_chat_model 持久化时会读取 TASK_TIMEOUTS，需显式提供
-            router.TASK_TIMEOUTS = {"chat": 60}
-            # Task 4: set_chat_model 通过 _registry 原子化更新，需提供真实 registry
-            mock_cfg = MagicMock()
-            router._registry = ModelRouteRegistry(ROUTE_TABLE, config_service=mock_cfg)
-
-            with patch("web.config_service.get_config_service", return_value=mock_cfg):
-                ModelRouter.set_chat_model(router, "mimo", "mimo-v2.5")
-
-            assert ROUTE_TABLE["chat"]["client"] == "mimo"
-            # chat_flash 应跟随 mimo（用户取消跨 provider 降级）
-            assert ROUTE_TABLE["chat_flash"]["client"] == "mimo", \
-                "chat_flash 应跟随主 provider mimo（用户取消跨 provider 降级）"
-            assert ROUTE_TABLE["chat_flash"]["model"] == "mimo-v2.5"
-        finally:
-            ROUTE_TABLE["chat_flash"] = original_flash
-            ROUTE_TABLE["chat"] = original_chat
+    """测试 fallback 降级链的 provider 隔离"""
 
     def test_fallback_chain_uses_different_providers(self):
-        """验证 fallback 链中每级使用不同 provider"""
-        from model_router import ROUTE_TABLE, FALLBACK_ROUTE
+        """验证 fallback 链 chat → chat_agnes 使用不同 provider
 
-        # 模拟 agnes 作为主 provider 的场景
+        chat_pro/chat_flash 已合并进 chat（同一 provider 同一 model，无区分意义），
+        降级链精简为 chat → chat_agnes。chat 走 DEFAULT_PROVIDER，
+        chat_agnes 走 agnes provider，确保主路由失败时切换到独立 provider 兜底。
+        """
+        from model_router import ROUTE_TABLE, FALLBACK_ROUTE
+        from config import DEFAULT_PROVIDER
+
+        # 模拟 chat 主路由使用 DEFAULT_PROVIDER 的场景
         original = {k: v.copy() for k, v in ROUTE_TABLE.items()}
         try:
-            ROUTE_TABLE["chat"]["client"] = "agnes"
-            ROUTE_TABLE["chat_flash"]["client"] = "mimo"
+            ROUTE_TABLE["chat"]["client"] = DEFAULT_PROVIDER
             ROUTE_TABLE["chat_agnes"]["client"] = "agnes"
 
-            # chat_flash → chat_agnes：mimo → agnes（不同 provider）
-            assert FALLBACK_ROUTE["chat_flash"] == "chat_agnes"
-            assert ROUTE_TABLE["chat_flash"]["client"] != ROUTE_TABLE["chat_agnes"]["client"]
+            # 降级链：chat → chat_agnes
+            assert FALLBACK_ROUTE["chat"] == "chat_agnes"
 
-            # chat_agnes 之后还有 custom_provider_fallback（siliconflow）
+            # chat 与 chat_agnes 应使用不同 provider（主路由失败时切到独立 provider）
+            assert ROUTE_TABLE["chat"]["client"] != ROUTE_TABLE["chat_agnes"]["client"], \
+                "chat 与 chat_agnes 应使用不同 provider，否则降级无意义"
+            assert ROUTE_TABLE["chat_agnes"]["client"] == "agnes"
         finally:
             for k, v in original.items():
                 ROUTE_TABLE[k] = v
@@ -117,12 +56,6 @@ class TestRetryAndTimeoutReduction:
         """MAX_RETRIES 应为 1（最多 2 次尝试）"""
         from model_router import MAX_RETRIES
         assert MAX_RETRIES == 1, f"MAX_RETRIES 应为 1，当前为 {MAX_RETRIES}"
-
-    def test_chat_flash_timeout_is_30s(self):
-        """chat_flash 超时应为 30 秒"""
-        from model_router import ModelRouter
-        assert ModelRouter._DEFAULT_TIMEOUTS["chat_flash"] == 30, \
-            f"chat_flash 超时应为 30s，当前为 {ModelRouter._DEFAULT_TIMEOUTS.get('chat_flash')}"
 
     def test_chat_timeout_is_60s(self):
         """chat 超时应为 60 秒（从 90s 降低）"""
@@ -227,12 +160,6 @@ class TestTruncationDetection:
         from model_router import ROUTE_TABLE
         assert ROUTE_TABLE["chat"]["max_tokens"] >= 2048, \
             f"chat max_tokens 应 >= 2048，当前为 {ROUTE_TABLE['chat']['max_tokens']}"
-
-    def test_chat_flash_max_tokens_increased(self):
-        """chat_flash 路由的 max_tokens 应从 1000 提升到 1200"""
-        from model_router import ROUTE_TABLE
-        assert ROUTE_TABLE["chat_flash"]["max_tokens"] >= 1200, \
-            f"chat_flash max_tokens 应 >= 1200，当前为 {ROUTE_TABLE['chat_flash']['max_tokens']}"
 
     def test_fast_path_logs_reply_len(self):
         """fast_path.done 日志应包含 reply_len 字段"""

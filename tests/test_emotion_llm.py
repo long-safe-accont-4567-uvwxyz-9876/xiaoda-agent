@@ -235,7 +235,7 @@ class TestDetectEmotionLlm:
         response = '{"primary": "平静", "P": 0.0, "A": 0.0, "D": 0.5, "needs": [], "style": ""}'
         router = MockRouter(response)
         await detect_emotion_llm("你好", router=router)
-        assert router.last_route_name == "chat_flash"
+        assert router.last_route_name == "emotion_analysis"
         assert router.last_temperature == pytest.approx(0.3)
 
     async def test_router_receives_messages_with_user_content(self):

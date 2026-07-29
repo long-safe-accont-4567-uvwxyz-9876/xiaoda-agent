@@ -343,7 +343,7 @@ async def _test_deepseek(key_value: str) -> tuple[bool, str]:
 
 async def _test_agnes(key_value: str) -> tuple[bool, str]:
     """测试 Agnes AI API Key。"""
-    _agnes_url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
+    _agnes_url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1")
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.get(
@@ -868,7 +868,9 @@ _KNOWN_PROVIDERS = {
     },
     "AGNES_API_KEY": {
         "id": "agnes", "label": "Agnes AI", "format": "openai",
-        "base_url": "https://apihub.agnes-ai.com/v1",
+        # CodeRabbit 一致性修复：与 setup.py:346 / config.py:543 / server.py:58 一致，
+        # 用 AGNES_BASE_URL env 作为单一来源，私有化部署时 env 覆盖默认值
+        "base_url": os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1"),
     },
     "OLLAMA_BASE_URL": {
         "id": "ollama", "label": "Ollama 本地大模型", "format": "openai",

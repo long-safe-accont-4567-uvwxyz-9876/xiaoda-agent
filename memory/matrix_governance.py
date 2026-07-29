@@ -683,7 +683,7 @@ class ABTestRunner:
         mode: shadow / canary / ramp
         router: 可选 ModelRouter 实例. 注入后 canary 阶段真实调用 LLM 评分;
                 不注入时 canary 返回占位结果 (向后兼容, CI 无 router 也能跑).
-        judge_task_type: LLM-as-Judge 调用的 task_type (默认 chat_flash 控制成本)
+        judge_task_type: LLM-as-Judge 调用的 task_type (默认 chat 控制成本)
         response_task_type: 候选矩阵生成回复的 task_type (默认 chat)
     """
 

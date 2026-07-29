@@ -118,6 +118,40 @@ def test_strip_dsml_mixed_content():
     assert "invoke name" not in result
 
 
+# ========== 未闭合 DSML 泄漏测试（日志实测泄露场景）==========
+
+# 2026-07-29 13:03 日志实测泄露：LLM 把 tool_call 输出为 DSML 文本，
+# 无任何闭合标签，直接泄漏给用户。strip_dsml 的 DSML_OPEN_ONLY_PATTERN 必须兜住。
+UNCLOSED_DSML_TOOL_CALLS = (
+    '<｜｜DSML｜｜tool_calls>\n'
+    '<｜｜DSML｜｜invoke name="shell_command">\n'
+    '<｜｜DSML｜｜parameter name="command" string="true">cd /home/oran'
+)
+
+
+def test_strip_dsml_unclosed_tool_calls_leak():
+    """未闭合的 <｜｜DSML｜｜tool_calls> 块（日志实测泄露）必须被完全清除。
+
+    根因：LLM 把 tool_call 输出为 DSML 文本而非结构化 tool_calls 字段，
+    且无闭合标签。DSML_PATTERN 要求闭合标签不匹配，
+    必须由 DSML_OPEN_ONLY_PATTERN 清除开标签到文本末尾的全部内容。
+    """
+    from utils.text_utils import strip_dsml
+    result = strip_dsml(UNCLOSED_DSML_TOOL_CALLS)
+    assert result == "", f"未闭合 DSML 泄漏未被清除: {result[:200]!r}"
+
+
+def test_strip_dsml_unclosed_tool_calls_preserves_prefix():
+    """正常文本前缀 + 未闭合 DSML：保留前缀，清除泄漏到末尾。"""
+    from utils.text_utils import strip_dsml
+    mixed = "好的，我来执行。\n" + UNCLOSED_DSML_TOOL_CALLS
+    result = strip_dsml(mixed)
+    assert "好的，我来执行。" in result, f"正常前缀被误删: {result!r}"
+    assert "DSML" not in result, f"DSML 标签泄漏: {result[:200]!r}"
+    assert "shell_command" not in result, f"工具名泄漏: {result[:200]!r}"
+    assert "cd /home" not in result, f"命令参数泄漏: {result[:200]!r}"
+
+
 # ========== has_dsml_tool_calls 测试 ==========
 
 def test_has_dsml_single_pipe():

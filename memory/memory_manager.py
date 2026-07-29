@@ -846,14 +846,11 @@ class MemoryManager:
                 async def _child_vec_recall() -> list[int]:
                     if not self.vec or not self.vec.enabled:
                         return []
-                    # embed 超时保护：慢则跳过子chunk向量召回，FTS 仍可用
-                    try:
-                        query_vec = await asyncio.wait_for(
-                            self.vec.embed(query), timeout=3.0)
-                    except asyncio.TimeoutError:
-                        logger.warning("memory.child_vec_embed_timeout",
-                                       hint="子chunk embed 超时 3s，跳过")
-                        return []
+                    # 根因修复（2026-07-29）：移除外层 3s wait_for 超时（治标）。
+                    # embed client 已配 connect=15s + max_retries=0 + 共享 httpx client，
+                    # 内层 embed 有 10s 单次超时 + 重试保护。原外层 3s 必然先于内层 10s 触发，
+                    # 导致 embed 重试机制完全失效，网络抖动时子chunk向量召回被错误跳过。
+                    query_vec = await self.vec.embed(query)
                     if not query_vec:
                         return []
                     results = await self.vec.search_child(query_vec, top_k=recall_limit)
@@ -1097,16 +1094,11 @@ class MemoryManager:
 
         # Reranker 精排
         if use_reranker and self._reranker and self._reranker.available and len(candidates) > k:
-            # 阶段性超时保护：reranker 是优化手段，不应阻塞整体检索
-            # 5s 超时：SiliconFlow 正常 1-3s，慢时快速降级到未排序结果
-            try:
-                reranked = await asyncio.wait_for(
-                    self._hybrid_rerank(query, fused, all_items, k),
-                    timeout=5.0,
-                )
-            except asyncio.TimeoutError:
-                logger.warning("memory.rerank_timeout", hint="reranker 5s 超时，降级到未排序结果")
-                reranked = None
+            # 根因修复（2026-07-29）：移除外层 5s wait_for 超时（治标）。
+            # reranker 已用共享 httpx client（connect=15s）+ 单次请求 5s timeout，
+            # _hybrid_rerank 内部有 try/except 返回 None（失败降级到 RRF 排序）。
+            # 原外层 5s 与内层 5s 双层超时，外层必然先触发，reranker 实际耗时被截断。
+            reranked = await self._hybrid_rerank(query, fused, all_items, k)
             if reranked:
                 # 对 reranked 也应用 entity boost
                 reranked = await self._apply_entity_boost(query, reranked, scope)
@@ -1155,21 +1147,14 @@ class MemoryManager:
         if not self.vec:
             return []
         try:
-            # 向量检索 embed 超时保护：SiliconFlow 免费 embed 正常 0.5-2s，
-            # 限流时 6.9s+。3.5s 超时：慢则跳过向量通道，FTS/KG/时间检索仍可用。
-            # 根因：embed 6.9s 直接击穿 retrieve_memories 的 8s 超时，导致小妲"想不起来"。
-            try:
-                vec_results = await asyncio.wait_for(
-                    self.vec.search(
-                        query, top_k=k * 2, candidate_ids=candidate_ids, deterministic=True,
-                    ),
-                    timeout=3.5,
-                )
-            except asyncio.TimeoutError:
-                logger.warning("memory.vec_search_timeout",
-                               hint="向量 embed 超时 3.5s，跳过向量通道",
-                               query=query[:50])
-                return []
+            # 根因修复（2026-07-29）：移除外层 3.5s wait_for 超时（治标）。
+            # embed client 已配 connect=15s + max_retries=0，vec.search 内部调 embed
+            # （有 10s 单次超时 + 重试保护）+ 本地 sqlite_vec 搜索（毫秒级）。
+            # 原 3.5s 超时在 embed 慢时必然先触发，导致向量通道被跳过 → "想不起来"。
+            # 注：原注释"embed 6.9s 击穿 8s"的根因正是 connect=5s 过短，现已修复。
+            vec_results = await self.vec.search(
+                query, top_k=k * 2, candidate_ids=candidate_ids, deterministic=True,
+            )
             if not vec_results:
                 return []
             vec_ids = [row_id for row_id, _ in vec_results]
@@ -2053,7 +2038,7 @@ class MemoryManager:
                 min_importance=0.4, limit=k, scope=scope
             )
         except Exception as e:
-            logger.warning("memory.fallback_search_failed", error=str(e))
+            logger.error("degradation_triggered memory.fallback_search_failed error={}", str(e))
             return []
 
     async def _apply_fsrs_scoring(self, results: list[dict]) -> list[dict]:
@@ -2442,55 +2427,68 @@ class MemoryManager:
             return
 
         # 同步操作移到线程池：防止事件循环被阻塞导致所有后台任务卡死
-        # 根因：encode_memory 中 _generate_summary/scan_threats/RuleBasedMemoryExtractor
-        # 等同步操作会阻塞事件循环，导致 asyncio.wait_for 定时器无法及时触发，
-        # 其他后台任务（flush_costs/auto_note/extract_instincts 等）同时卡 60+s
+        # 根因修复：原代码 5 个 to_thread 串行执行（_generate_summary/validate_memory/
+        # security_scan/_estimate_importance/rule_extractor），线程池满时每个排队等待，
+        # 总排队时间 = 5 × 单次排队，导致 _encode_task 卡 90s 超时（13:07:04 案例：
+        # bg.memory_encode_start 后无 encode_pre_done，_generate_summary 在 to_thread
+        # 排队等待 ~90s）。合并为 1 个 to_thread 后只占 1 个线程，5 个操作在线程内
+        # 串行执行（纯 CPU <1s），排队时间降为 1 × 单次排队，大幅降低线程池争用。
         _t0 = time.time()
-        summary = await asyncio.to_thread(self._generate_summary, exchanges)
-        _t1 = time.time()
-        if _t1 - _t0 > 2:
-            logger.warning("memory.encode_slow_step", step="generate_summary",
-                           elapsed_ms=int((_t1 - _t0) * 1000))
+        emotion = context.get("emotion", {}).get("primary", "")
 
-        # 安全过滤
-        validation = await asyncio.to_thread(validate_memory_content, summary)
+        def _prep_encode():
+            """单线程完成所有同步预处理：摘要→安全过滤→安全扫描→重要性→规则提取。
+
+            返回 (summary, validation, threat, importance, rule_matches,
+                   gen_secs, sec_secs)；validation/threat 非空时后续字段为 None。
+            """
+            _s0 = time.time()
+            summary = self._generate_summary(exchanges)
+            _s1 = time.time()
+            validation = validate_memory_content(summary)
+            if validation:
+                return summary, validation, None, 0.0, [], _s1 - _s0, 0.0
+            _s2 = time.time()
+            from security.security import SecurityFilter
+            security = self._security_filter or SecurityFilter()
+            threat = security.scan_threats(summary, scope="strict")
+            _s3 = time.time()
+            if not threat.is_safe and threat.action == "block":
+                return summary, validation, threat, 0.0, [], _s1 - _s0, _s3 - _s2
+            importance = self._estimate_importance(exchanges, context)
+            # 规则提取增强重要性
+            user_msg = ""
+            assistant_msg = ""
+            for msg in exchanges[-6:]:
+                if msg.get("role") == "user":
+                    user_msg += msg.get("content", "") + " "
+                elif msg.get("role") == "assistant":
+                    assistant_msg += msg.get("content", "") + " "
+            rule_extractor = RuleBasedMemoryExtractor()
+            rule_matches = rule_extractor.extract(user_msg, assistant_msg)
+            return summary, validation, threat, importance, rule_matches, _s1 - _s0, _s3 - _s2
+
+        summary, validation, threat_result, importance, rule_matches, _gen_secs, _sec_secs = \
+            await asyncio.to_thread(_prep_encode)
+        _t1 = time.time()
+        # 诊断：to_thread 总耗时（含排队）vs 各步骤纯执行时间
+        # 若 total >> gen+sec，说明 to_thread 线程池排队（线程池被并发检索等占用）
+        if _t1 - _t0 > 2:
+            logger.warning("memory.encode_slow_step",
+                           step="prep_encode_total",
+                           total_ms=int((_t1 - _t0) * 1000),
+                           generate_summary_ms=int(_gen_secs * 1000),
+                           security_scan_ms=int(_sec_secs * 1000),
+                           hint="to_thread 线程池排队或同步操作慢")
+
         if validation:
             logger.warning("memory.safety_blocked", reason=validation)
             return
 
-        # ADD-only: 原始记忆不去重，直接写入
-        # （_has_duplicate 只在蒸馏时对 is_raw=0 生效，这里不调用）
-
-        # 原有安全扫描（保留兼容）
-        # SecurityFilter() 创建涉及从 USB 盘加载 YAML（_load_patterns），
-        # scan_threats 涉及正则匹配，均为同步阻塞操作，移到线程池
-        _t2 = time.time()
-        def _security_scan():
-            from security.security import SecurityFilter
-            security = self._security_filter or SecurityFilter()
-            return security.scan_threats(summary, scope="strict")
-        threat_result = await asyncio.to_thread(_security_scan)
-        _t3 = time.time()
-        if _t3 - _t2 > 2:
-            logger.warning("memory.encode_slow_step", step="security_scan",
-                           elapsed_ms=int((_t3 - _t2) * 1000))
         if not threat_result.is_safe and threat_result.action == "block":
             logger.warning("memory.security_blocked", threat=threat_result.threat_type)
             return
 
-        importance = await asyncio.to_thread(self._estimate_importance, exchanges, context)
-        emotion = context.get("emotion", {}).get("primary", "")
-
-        # 规则提取增强重要性
-        user_msg = ""
-        assistant_msg = ""
-        for msg in exchanges[-6:]:
-            if msg.get("role") == "user":
-                user_msg += msg.get("content", "") + " "
-            elif msg.get("role") == "assistant":
-                assistant_msg += msg.get("content", "") + " "
-        rule_extractor = RuleBasedMemoryExtractor()
-        rule_matches = await asyncio.to_thread(rule_extractor.extract, user_msg, assistant_msg)
         if rule_matches:
             best_rule = max(rule_matches, key=lambda r: r["importance"])
             importance = max(importance, best_rule["importance"])
@@ -2498,7 +2496,7 @@ class MemoryManager:
         _t4 = time.time()
         logger.info("memory.encode_pre_done",
                     prep_ms=int((_t4 - _t0) * 1000),
-                    security_ms=int((_t3 - _t2) * 1000))
+                    security_ms=int(_sec_secs * 1000))
         try:
             # 写入候选审计表
             candidate_id = await self.memory.insert_consolidation_candidate(
@@ -2541,11 +2539,13 @@ class MemoryManager:
 
             # ContextNest A3: 记录初始版本哈希链 (tamper-evident)
             if self._governance:
+                # CodeRabbit 复审修复：治理版本行必须在调度 _indexing_task 之前提交，
+                # 否则异步任务失败时治理版本行可能永远不会被提交。
+                # 根因修复：用 db.write_transaction() 串行化多语句写事务，async with 退出时
+                # 即 commit（在 _indexing_task 调度前）；异常/取消由 finally shield(rollback)。
                 try:
-                    await self._governance.record_initial_version(mem_id, summary, auto_commit=False)
-                    # CodeRabbit 复审修复：治理版本行必须在调度 _indexing_task 之前提交，
-                    # 否则异步任务失败时治理版本行可能永远不会被提交
-                    await self.memory.commit()
+                    async with self.db.write_transaction():
+                        await self._governance.record_initial_version(mem_id, summary, auto_commit=False)
                 except Exception as e:
                     logger.debug("memory.governance_init_failed", error=str(e))
 
@@ -2561,8 +2561,8 @@ class MemoryManager:
                     try:
                         await asyncio.wait_for(self.vec.upsert(mem_id, summary), timeout=15.0)
                     except asyncio.TimeoutError:
-                        logger.warning("memory.encode_vec_upsert_timeout",
-                                       hint="vec_upsert 15s 超时，跳过向量索引（episodic 已保存）")
+                        logger.error("degradation_triggered memory.encode_vec_upsert_timeout "
+                                     "hint=vec_upsert 15s 超时，跳过向量索引（episodic 已保存）")
                     except Exception as e:
                         logger.debug("memory.initial_vec_upsert_failed", error=str(e))
                 _it1 = time.time()
@@ -2577,8 +2577,8 @@ class MemoryManager:
                             self.concept_graph.remember(summary, source_mem_id=mem_id),
                             timeout=15.0)
                     except asyncio.TimeoutError:
-                        logger.warning("memory.encode_concept_timeout",
-                                       hint="concept_graph 15s 超时，跳过（lazy_migrate 可补）")
+                        logger.error("degradation_triggered memory.encode_concept_timeout "
+                                     "hint=concept_graph 15s 超时，跳过（lazy_migrate 可补）")
                     except Exception as e:
                         logger.debug("memory.concept_dual_write_failed", error=str(e))
                 _it2 = time.time()
@@ -2596,34 +2596,44 @@ class MemoryManager:
                             if not children or not self.vec:
                                 return
                             # 批量写入：auto_commit=False 避免每条 commit 占用共享连接
+                            # 根因修复：必须用 try/finally 保证事务总是被 commit 或 rollback。
+                            # aiosqlite 单连接共享事务状态，若 asyncio.wait_for 超时取消本协程，
+                            # 未提交的 INSERT 事务会残留在连接上，后续任意协程的 DB 操作
+                            # （如 merge_entity UPDATE）会在脏事务中执行 → "SQL logic error"。
+                            # CancelledError 是 BaseException 子类，用 finally 确保捕获。
                             child_items = []
-                            for child in children:
-                                child_id = await self.memory.insert_child_chunk(
-                                    parent_id=mem_id,
-                                    content=child['content'],
-                                    embed_content=child['embed_content'],
-                                    chunk_type=child['chunk_type'],
-                                    importance=importance * child['weight'],
-                                    overlap_hash=child['overlap_hash'],
-                                    auto_commit=False,
-                                )
-                                child_items.append((child_id, child['embed_content']))
-                            # 统一提交一次
-                            await self.memory._conn.commit()
-                            # 向量索引（内层 20s 超时）
+                            # 根因修复：用 db.write_transaction() 串行化多语句写事务。
+                            # 原版手动 commit + finally shield(rollback) 只防取消，无法防止
+                            # 与并发持久化任务（_run_persistence_tasks）共享连接事务状态交叉。
+                            # write_transaction 的 asyncio.Lock 从源头杜绝交叉，commit/rollback
+                            # 统一由上下文管理器处理。外层 wait_for(25s) 超时 cancel 时，
+                            # finally 的 shield(rollback) 受保护完成，CancelledError 继续传播。
+                            async with self.db.write_transaction():
+                                for child in children:
+                                    child_id = await self.memory.insert_child_chunk(
+                                        parent_id=mem_id,
+                                        content=child['content'],
+                                        embed_content=child['embed_content'],
+                                        chunk_type=child['chunk_type'],
+                                        importance=importance * child['weight'],
+                                        overlap_hash=child['overlap_hash'],
+                                        auto_commit=False,
+                                    )
+                                    child_items.append((child_id, child['embed_content']))
+                            # 向量索引（内层 20s 超时，DB 事务已关闭，不影响连接）
                             try:
                                 await asyncio.wait_for(
                                     self.vec.batch_upsert_children(child_items),
                                     timeout=20.0)
                             except asyncio.TimeoutError:
-                                logger.warning("memory.encode_children_timeout",
-                                               hint="batch_upsert_children 20s 超时，跳过子chunk索引")
+                                logger.error("degradation_triggered memory.encode_children_timeout "
+                                             "hint=batch_upsert_children 20s 超时，跳过子chunk索引")
                             logger.debug("memory.child_chunks_created",
                                          parent_id=mem_id, count=len(children))
                         await asyncio.wait_for(_do_children(), timeout=25.0)
                     except asyncio.TimeoutError:
-                        logger.warning("memory.encode_children_section_timeout",
-                                       hint="子chunk生成+写入 25s 整体超时，跳过（episodic 已保存）")
+                        logger.error("degradation_triggered memory.encode_children_section_timeout "
+                                     "hint=子chunk生成+写入 25s 整体超时，跳过（episodic 已保存）")
                     except Exception as e:
                         logger.debug("memory.child_chunk_failed", error=str(e))
                 _it3 = time.time()
@@ -2983,7 +2993,8 @@ class MemoryManager:
             if getattr(self, 'spreading_engine', None) and self.spreading_engine:
                 self.spreading_engine.clear_cache()
         except Exception as e:
-            logger.warning("memory.fallback_save_failed", raw_id=raw_id, error=str(e))
+            logger.error("degradation_triggered memory.fallback_save_failed raw_id={} error={}",
+                         raw_id, str(e))
 
     async def _find_similar_knowledge(self, summary: str,
                                        scope: Any) -> dict | None:
@@ -3151,8 +3162,11 @@ class MemoryManager:
                 overlap_hash = hashlib.sha256(overlap.encode()).hexdigest()[:8]
                 text = f"{overlap}…{text}"
 
-            # Contextual Retrieval: 注入父摘要前缀到 embed_content（始终注入，用于向量检索）
-            if parent_summary:
+            # Contextual Retrieval: 注入父摘要前缀到 embed_content（受 CONTEXTUAL_RETRIEVAL_ENABLED 控制）
+            # Bug 修复：原版读取 contextual 标志后未使用，"始终注入"导致与 enrich 路径
+            # （_split_into_enrich_children 受同一开关控制）行为不一致——用户设
+            # CONTEXTUAL_RETRIEVAL_ENABLED=false 时本函数仍注入前缀。现尊重开关，与 enrich 路径一致。
+            if contextual and parent_summary:
                 embed_content = f"[上下文: {parent_summary[:80]}] {text}"
             else:
                 embed_content = text
@@ -3407,12 +3421,14 @@ class MemoryManager:
                 return 0
 
             # 写入摘要表 + 标记原记忆为已蒸馏（同一事务，避免重复蒸馏）
+            # 根因修复：用 db.write_transaction() 串行化多语句写事务，失败/取消由 finally
+            # shield(rollback) 统一处理，异常传播到外层 except 记录并 return 0。
             memory_ids = [c["id"] for c in candidates if c.get("id") is not None]
-            await self.memory.insert_memory_summary(
-                summary_text=summary, memory_count=len(candidates), auto_commit=False,
-            )
-            await self.memory.mark_memories_distilled(memory_ids, auto_commit=False)
-            await self.memory.commit()
+            async with self.db.write_transaction():
+                await self.memory.insert_memory_summary(
+                    summary_text=summary, memory_count=len(candidates), auto_commit=False,
+                )
+                await self.memory.mark_memories_distilled(memory_ids, auto_commit=False)
 
             logger.info("memory.distilled",
                         count=len(candidates),

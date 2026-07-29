@@ -1,157 +1,183 @@
 """测试 BackgroundTaskManager._run_persistence_tasks 的批量提交优化。
 
-验证 v3 spec P0-2：insert_conversation_log 与 update_session 合并为单次 commit，
-减少 aiosqlite 线程切换次数。try_idle_encode 不纳入批量提交。
+验证 insert_conversation_log 与 update_session 在同一 write_transaction 内执行
+（单事务串行化提交），根治并发脏事务。try_idle_encode 不纳入批量提交。
+
+架构变更（CodeRabbit 事务锁根因修复）：原版手动 insert+update+commit，现改为
+db.write_transaction() 上下文管理器统一管理 commit/rollback。测试用 _TxnTracker
+跟踪事务进入/提交次数，替代直接断言 db.commit（commit 已内聚到 write_transaction）。
 """
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import asyncio
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock
 
 from core.background_tasks import BackgroundTaskManager
 
 
-def _make_manager(*, memory_enabled: bool = False) -> tuple[BackgroundTaskManager, AsyncMock, AsyncMock]:
-    """构造一个仅持有 mock 依赖的 BackgroundTaskManager。
+class _TxnTracker:
+    """跟踪 write_transaction 的进入/提交/回滚次数。
 
-    - db: AsyncMock，提供 insert_conversation_log / update_session / commit
-    - context: MagicMock，history 设为空列表以跳过记忆编码分支（聚焦 db 批量提交）
-    - memory: AsyncMock，提供 try_idle_encode（仅当 memory_enabled=True 时传入）
+    替代直接 mock db.commit：commit 已内聚到 write_transaction 的 __aexit__，
+    测试通过 entered/committed/rolled_back 验证事务语义而非具体 commit 调用。
     """
+    def __init__(self):
+        self.entered = 0
+        self.committed = 0
+        self.rolled_back = 0
+
+    @asynccontextmanager
+    async def write_transaction(self):
+        self.entered += 1
+        try:
+            yield MagicMock()  # 模拟 conn，本测试不直接操作连接
+            self.committed += 1
+        except Exception:
+            self.rolled_back += 1
+            raise
+
+
+def _make_manager(*, memory_enabled: bool = False):
+    """构造仅持有 mock 依赖的 BackgroundTaskManager。"""
     db = AsyncMock()
     db.insert_conversation_log = AsyncMock(return_value=None)
     db.update_session = AsyncMock(return_value=None)
-    db.commit = AsyncMock(return_value=None)
+    # AsyncMock 无法模拟 async context manager，用真实跟踪器替代 write_transaction
+    db._txn = _TxnTracker()
+    db.write_transaction = db._txn.write_transaction
 
     context = MagicMock()
     context.history = []  # 空历史，跳过记忆编码分支
 
     memory = AsyncMock() if memory_enabled else None
-
     manager = BackgroundTaskManager(db=db, context=context, memory=memory)
     return manager, db, memory
 
 
 @pytest.mark.asyncio
-async def test_both_writes_success_commit_once():
-    """场景一：两个写入均成功 → commit 恰好调用一次（而非两次）。"""
+async def test_both_writes_success_single_transaction():
+    """场景一：两个写入均成功 → 单事务（entered=1, committed=1），两条 auto_commit=False。"""
     manager, db, _ = _make_manager()
 
     await manager._run_persistence_tasks(
-        user_input="你好",
-        reply="你好呀",
-        user_id="u1",
-        source="qq",
-        emotion={"primary": "happy"},
-        session_id="s1",
+        user_input="你好", reply="你好呀", user_id="u1", source="qq",
+        emotion={"primary": "happy"}, session_id="s1",
     )
 
-    # commit 应只被调用一次
-    assert db.commit.await_count == 1, "commit 应被调用恰好一次"
-    assert db.commit.await_count != 2, "不应每次写入都 commit"
+    # 单事务：进入一次、提交一次（批量合并，非两次独立事务）
+    assert db._txn.entered == 1, "应进入单次 write_transaction"
+    assert db._txn.committed == 1, "应提交一次"
+    assert db._txn.rolled_back == 0
 
-    # insert_conversation_log 被调用且 auto_commit=False
     db.insert_conversation_log.assert_awaited_once()
     _, kwargs = db.insert_conversation_log.call_args
-    assert kwargs.get("auto_commit") is False, "insert_conversation_log 应传 auto_commit=False"
+    assert kwargs.get("auto_commit") is False, "insert 应传 auto_commit=False"
 
-    # update_session 被调用且 auto_commit=False
     db.update_session.assert_awaited_once()
     _, kwargs = db.update_session.call_args
-    assert kwargs.get("auto_commit") is False, "update_session 应传 auto_commit=False"
+    assert kwargs.get("auto_commit") is False, "update 应传 auto_commit=False"
 
 
 @pytest.mark.asyncio
-async def test_update_session_fails_commit_still_called():
-    """场景二：update_session 抛异常但 conversation_log 成功 → commit 仍被调用一次。"""
+async def test_update_session_fails_transaction_still_commits_insert():
+    """场景二：update_session 抛异常但 conversation_log 成功 → 事务仍提交（保留 insert）。
+
+    根因：两条写入独立，update 失败不应回滚已成功的 insert。原版靠捕获异常继续，
+    现由 write_transaction 正常退出 commit（inner except 吞掉 update 异常）。
+    """
     manager, db, _ = _make_manager()
     db.update_session = AsyncMock(side_effect=RuntimeError("db locked"))
 
     await manager._run_persistence_tasks(
-        user_input="在吗",
-        reply="在的",
-        user_id="u1",
-        source="qq",
-        emotion={"primary": "calm"},
-        session_id="s1",
+        user_input="在吗", reply="在的", user_id="u1", source="qq",
+        emotion={"primary": "calm"}, session_id="s1",
     )
 
-    # conversation_log 成功 → commit 仍应被调用一次
     assert db.insert_conversation_log.await_count == 1
     assert db.update_session.await_count == 1
-    assert db.commit.await_count == 1, "conversation_log 成功时 commit 仍应被调用一次"
+    # insert 成功 → 事务正常提交（committed=1），不回滚
+    assert db._txn.entered == 1
+    assert db._txn.committed == 1, "insert 成功时事务应提交（保留 insert 数据）"
+    assert db._txn.rolled_back == 0
 
 
 @pytest.mark.asyncio
-async def test_both_writes_fail_commit_not_called():
-    """场景三：两个写入都失败 → commit 不被调用（避免空 commit）。"""
+async def test_both_writes_fail_transaction_commits_empty():
+    """场景三：两个写入都失败 → 事务进入一次、提交空事务（无数据写入）。
+
+    架构变更说明：原版 both-fail 时 rollback（清脏事务）。现 write_transaction 的
+    asyncio.Lock 从源头杜绝并发脏事务，both-fail 时 commit 空事务（等价 no-op，
+    无数据写入）更简单且正确。关键不变量：无 partial data 残留。
+    """
     manager, db, _ = _make_manager()
     db.insert_conversation_log = AsyncMock(side_effect=RuntimeError("disk full"))
     db.update_session = AsyncMock(side_effect=RuntimeError("disk full"))
 
     await manager._run_persistence_tasks(
-        user_input="hi",
-        reply="hello",
-        user_id="u1",
-        source="qq",
-        emotion={"primary": "neutral"},
-        session_id="s1",
+        user_input="hi", reply="hello", user_id="u1", source="qq",
+        emotion={"primary": "neutral"}, session_id="s1",
     )
 
-    # 两个写入均失败 → commit 不应被调用
+    # 两条写入均被尝试
     assert db.insert_conversation_log.await_count == 1
     assert db.update_session.await_count == 1
-    assert db.commit.await_count == 0, "两个写入都失败时不应调用 commit"
+    # 事务进入一次；异常被 inner except 吞掉，正常退出 → 空提交（无数据）
+    assert db._txn.entered == 1
+    assert db._txn.committed == 1, "both-fail 时空 commit（无数据，等价 rollback）"
+    assert db._txn.rolled_back == 0, "inner except 吞掉异常，未传播到 write_transaction"
 
 
 @pytest.mark.asyncio
 async def test_no_session_id_skips_update_session():
-    """场景四：session_id 为空 → 不调用 update_session，但 conversation_log 成功仍触发一次 commit。"""
+    """场景四：session_id 为空 → 不调用 update_session，单事务提交 insert。"""
     manager, db, _ = _make_manager()
 
     await manager._run_persistence_tasks(
-        user_input="hi",
-        reply="hello",
-        user_id="u1",
-        source="cli",
-        emotion={"primary": "neutral"},
-        session_id="",
+        user_input="hi", reply="hello", user_id="u1", source="cli",
+        emotion={"primary": "neutral"}, session_id="",
     )
 
     db.insert_conversation_log.assert_awaited_once()
     db.update_session.assert_not_called()
-    assert db.commit.await_count == 1, "conversation_log 成功应触发一次 commit"
+    assert db._txn.entered == 1
+    assert db._txn.committed == 1, "insert 成功应触发一次事务提交"
 
 
 @pytest.mark.asyncio
-async def test_memory_encode_not_affected_by_batch_commit():
-    """场景五：history 足够长时 try_idle_encode 仍被调用，且独立于批量 commit。
+async def test_memory_encode_not_affected_by_batch_transaction():
+    """场景五：history 足够长时 try_idle_encode 仍被调用，且独立于批量事务。
 
-    验证 try_idle_encode 不纳入批量提交（不传 auto_commit，commit 次数仍为 1）。
-    
-    注意：由于 try_idle_encode 使用 _spawn (fire-and-forget)，测试无法直接检测其调用。
-    此测试主要验证 commit 次数不受记忆编码影响。
+    验证 try_idle_encode 不纳入批量提交（fire-and-forget，不影响 write_transaction 次数）。
+    CodeRabbit F3: 同步等待 spawn 的 fire-and-forget 任务，断言 memory 编码被实际调用，
+    而非仅靠事务计数间接推断。
     """
+    from core.background_tasks import _bg_tasks
     manager, db, memory = _make_manager(memory_enabled=True)
-    # 设置足够长的 history 以触发记忆编码分支
     manager.context.history = ["x"] * 5
     manager.context.get_last_n = MagicMock(return_value=[("q", "a")] * 3)
+    # _encode_task 内部 await flush_pre_compressed_buffer()，需为 AsyncMock 否则 await 抛 TypeError
+    manager.context.flush_pre_compressed_buffer = AsyncMock(return_value=[])
 
+    _before = set(_bg_tasks)
     await manager._run_persistence_tasks(
-        user_input="记住这些",
-        reply="好的",
-        user_id="u1",
-        source="qq",
-        emotion={"primary": "happy"},
-        session_id="s1",
+        user_input="记住这些", reply="好的", user_id="u1", source="qq",
+        emotion={"primary": "happy"}, session_id="s1",
     )
 
-    # 记忆编码使用 _spawn (fire-and-forget)，无法在测试中直接检测
-    # 主要验证 commit 不受记忆编码影响
-    # commit 仍只被调用一次（记忆编码不增加 commit）
-    assert db.commit.await_count == 1, "commit 应仅被调用一次，不受记忆编码影响"
+    # 同步等待 fire-and-forget 记忆编码任务完成，确保 try_idle_encode 已被调用
+    _new_tasks = _bg_tasks - _before
+    if _new_tasks:
+        await asyncio.gather(*_new_tasks, return_exceptions=True)
+
+    # 持久化事务仍只进入一次（记忆编码独立 fire-and-forget）
+    assert db._txn.entered == 1, "持久化事务应仅一次，不受记忆编码影响"
+    assert db._txn.committed == 1
+    memory.try_idle_encode.assert_awaited_once()
 
 
 if __name__ == "__main__":

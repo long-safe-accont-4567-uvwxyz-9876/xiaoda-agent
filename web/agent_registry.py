@@ -247,6 +247,13 @@ class AgentRegistry:
                         old_model = agent.config.model
                         old_base_url = agent.config.base_url
                         self._apply_fields(agent.config, data)
+                        # CodeRabbit 一致性修复：已知 provider 的 base_url 必须以 env 为准
+                        # （私有化部署），防止 xiaoke.json 硬编码覆盖 AGNES_BASE_URL 等 env。
+                        # json 的 base_url 仅作默认值；env 设置后始终优先。
+                        # 同时持久化 api_key_env，避免 json 与 env 解析结果不一致。
+                        if agent.config.provider in self._KNOWN_PROVIDERS:
+                            agent.config.base_url, agent.config.api_key_env = self._resolve_provider_info(
+                                agent.config.provider)
                         # 如果 provider/model/base_url 变了，重建客户端
                         if (agent.config.provider != old_provider
                                 or agent.config.model != old_model
@@ -758,7 +765,7 @@ class AgentRegistry:
         "siliconflow": ("SILICONFLOW_API_KEY", "https://api.siliconflow.cn/v1"),
         "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
         "modelscope": ("MODELSCOPE_ACCESS_TOKEN", "https://api-inference.modelscope.cn/v1"),
-        "agnes": ("AGNES_API_KEY", "https://apihub.agnes-ai.com/v1"),
+        "agnes": ("AGNES_API_KEY", "https://apihub.agnes-ai.cn/v1"),
     }
 
     @classmethod

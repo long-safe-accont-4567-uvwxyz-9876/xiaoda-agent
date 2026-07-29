@@ -1,6 +1,7 @@
 """Agnes Transport - 适配 Agnes AI API"""
 import os
 import asyncio
+import httpx
 from openai import AsyncOpenAI
 from transports.base import ProviderTransport, TransportResponse
 
@@ -8,6 +9,53 @@ from transports.base import ProviderTransport, TransportResponse
 # 直接调用 transport.chat() 的路径（绕过 model_router._build_route_kwargs）
 # 必须在此处 clamp，否则会触发 agnes 服务端 500 错误并进入 fallback 链
 AGNES_MAX_TOKENS_LIMIT = 65535  # 留 1 token 余量
+
+# 根因修复：SDK 默认 connect=5.0 对跨网（经 Cloudflare）的 agnes API 过短，
+# 网络抖动期 TCP+TLS 握手 5s 内无法完成 → APIConnectionError（实测 09:24-10:55 爆发 60 次）。
+# 调整为 connect=15s 给握手 3 倍余量；max_retries=0 禁用 SDK 内部盲重试（对连接错误无效且放大延迟），
+# 重试控制权统一交回 model_router（保留重试路径作为安全网，正常不触发）。
+# 共享 httpx.AsyncClient 配置连接池 keepalive，避免 stale 连接复用导致首次请求失败。
+AGNES_HTTP_TIMEOUT = httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=10.0)
+AGNES_HTTP_LIMITS = httpx.Limits(
+    max_connections=100,
+    max_keepalive_connections=20,
+    keepalive_expiry=30.0,
+)
+
+# 模块级共享 httpx client：所有 AgnesTransport 实例复用同一连接池，
+# 避免每次 new AsyncOpenAI 自建 client 导致连接池碎片化。
+_agnes_http_client: httpx.AsyncClient | None = None
+
+
+def _get_agnes_http_client() -> httpx.AsyncClient:
+    """返回共享的 httpx.AsyncClient，惰性初始化。"""
+    global _agnes_http_client
+    if _agnes_http_client is None or _agnes_http_client.is_closed:
+        _agnes_http_client = httpx.AsyncClient(
+            timeout=AGNES_HTTP_TIMEOUT,
+            limits=AGNES_HTTP_LIMITS,
+            http2=False,  # agnes API 无需 HTTP/2，避免 h2 协商开销
+        )
+    return _agnes_http_client
+
+
+async def close_agnes_shared_client() -> None:
+    """关闭共享的 Agnes httpx client（应用退出时调用）。
+
+    幂等：多次调用安全。关闭后再次 :func:`_get_agnes_http_client` 会重建实例。
+
+    CodeRabbit 修复：共享 client 的关闭所有权归本模块，而非各 AsyncOpenAI wrapper。
+    wrapper 调用 ``.close()`` 会连带关闭注入的共享 httpx client，影响其他复用该 client
+    的实例（包括 ``refresh_client`` 新建的 agnes_client —— 它复用同一共享 client）。
+    应用退出时由本函数统一关闭一次，wrapper 自身不关闭共享 client。
+    """
+    global _agnes_http_client
+    if _agnes_http_client is not None and not _agnes_http_client.is_closed:
+        try:
+            await _agnes_http_client.aclose()
+        except Exception:
+            pass
+    _agnes_http_client = None
 
 
 def _clamp_agnes_max_tokens(max_tokens: int) -> int:
@@ -24,8 +72,17 @@ class AgnesTransport(ProviderTransport):
         """初始化 Agnes 传输适配器。"""
         # 从 os.getenv() 实时读取，避免使用 config 模块级冻结变量
         _key = os.getenv("AGNES_API_KEY", "")
-        _url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
-        self._client = AsyncOpenAI(api_key=_key, base_url=_url) if _key else None
+        _url = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1")
+        if _key:
+            self._client = AsyncOpenAI(
+                api_key=_key,
+                base_url=_url,
+                http_client=_get_agnes_http_client(),
+                timeout=AGNES_HTTP_TIMEOUT,
+                max_retries=0,  # 禁用 SDK 内部盲重试，由 model_router 统一控制重试
+            )
+        else:
+            self._client = None
 
     @property
     def provider_name(self) -> str:

@@ -55,7 +55,9 @@ def _register_env_providers(cfg: Any, env_values: Any, os_module: Any) -> None:
         ),
         "AGNES_API_KEY": (
             "agnes", "openai",
-            os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1"), "Agnes AI"
+            # CodeRabbit 一致性修复：用已解析的 env_values（.env）而非进程级 os.getenv，
+            # 与 _register_env_providers 的 env_values 来源一致；env_values 未设时回退默认值
+            (env_values.get("AGNES_BASE_URL") or "https://apihub.agnes-ai.cn/v1").strip(), "Agnes AI"
         ),
         # P0 修复（硬编码/ollama 默认启用根因）：
         # 原实现 _default_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
@@ -242,8 +244,8 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
       下次启动会重新尝试恢复用户选择
     - 不硬编码任何模型 ID，默认值从 get_default_model_for_provider() 读
 
-    C1 修复：失败回退覆盖所有 sync task（chat/chat_pro/chat_flash/...），
-    旧实现只回退 chat，导致 chat_pro/chat_flash 仍指向未注册 provider，
+    C1 修复：失败回退覆盖所有 sync task（chat/emotion_analysis/...），
+    旧实现只回退 chat，导致其他 sync task 仍指向未注册 provider，
     调用时抛 LLMError 必须依赖 fallback 链兜底，延迟和错误率上升。
     """
     chat_model = cfg.get("models.chat_model")
@@ -296,7 +298,8 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
                              fallback_provider)
                 return
             # C1 修复：回退所有 sync task，不只 chat
-            _sync_tasks = ("chat", "chat_pro", "chat_flash",
+            # chat_pro/chat_flash 已合并进 chat
+            _sync_tasks = ("chat",
                            "emotion_analysis", "tool_result_wrap",
                            "memory_encoding")
             _thinking_for_default = {"type": "disabled"}
@@ -815,8 +818,11 @@ def create_app() -> FastAPI:
             if response.status_code >= 400:
                 _sla.inc_error(f"http_{response.status_code}", request.url.path)
         response.headers["X-Trace-Id"] = _trace_id
-        response.headers["Content-Security-Policy"] = "frame-ancestors 'self' http://127.0.0.1:*"
-        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        # CodeRabbit 安全修复：frame-ancestors 收紧到 splash 实际端口。
+        # splash HTTP 服务固定绑定 127.0.0.1:18089（agent.py:_start_splash_server），
+        # 原 :* 通配允许任意本地端口 iframe，存在本地 clickjacking 风险。
+        # 现仅允许 'self' + splash 源（127.0.0.1:18089 / localhost:18089）。
+        response.headers["Content-Security-Policy"] = "frame-ancestors 'self' http://127.0.0.1:18089 http://localhost:18089"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
@@ -851,12 +857,14 @@ def create_app() -> FastAPI:
     from web.routers.market import router as market_router
     from web.routers.mail_manage import router as mail_manage_router
     from web.routers.workflows import router as workflows_router
+    from web.routers.workspace import router as workspace_router
 
     for r in (auth_router, chat_router, system_router, agents_router,
               models_router, tools_router, mcp_router, insight_router,
               schedule_router, media_router, health_router, plugins_router,
               setup_router, model_discovery_router, market_router,
-              mail_manage_router, workflows_router, system_public_router):
+              mail_manage_router, workflows_router, workspace_router,
+              system_public_router):
         app.include_router(r, prefix="/api/v1")
 
     from web.ws_hub import router as ws_router

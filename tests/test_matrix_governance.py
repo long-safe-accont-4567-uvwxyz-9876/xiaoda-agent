@@ -445,14 +445,14 @@ async def test_l6_llm_judge_injection():
                     assert task_type == "chat", f"生成回复 task_type 应为 chat, 实际 {task_type}"
                     return f"这是 case {self.call_count} 的回复内容"
                 # 评分 (judge_task_type)
-                assert task_type == "chat_flash", f"评分 task_type 应为 chat_flash, 实际 {task_type}"
+                assert task_type == "chat", f"评分 task_type 应为 chat, 实际 {task_type}"
                 return '{"score": 4, "reason": "回复切题"}'
 
         mock_router = MockRouter()
         runner = ABTestRunner(
             mode="canary",
             router=mock_router,
-            judge_task_type="chat_flash",
+            judge_task_type="chat",
             response_task_type="chat",
         )
         assert runner.router is mock_router

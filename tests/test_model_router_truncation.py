@@ -192,7 +192,7 @@ async def test_fallback_max_tokens_passthrough():
     # 触发 fallback 链：original_max_tokens=32768
     test_error = RuntimeError("main call failed")
     await router._try_fallback_chain(
-        test_error, "chat_pro", [{"role": "user", "content": "test"}],
+        test_error, "chat", [{"role": "user", "content": "test"}],
         0.7, False, None, None, 30, "user1", "session1", None,
         original_max_tokens=32768,
     )
