@@ -581,14 +581,26 @@ class AIQQBot(botpy.Client):
         return image_data, attachment_info
 
     async def on_group_add_robot(self, event: Any) -> None:
-        """机器人被拉入群时，自动将拉入者绑定为主人。"""
+        """机器人被拉入群时，仅记录审计日志，不自动绑定任何用户为主人。
+
+        安全策略 (P0)：
+        旧实现会调用 ``_save_master_openid(op_openid)``，导致任意一个把机器人
+        拉进群的 QQ 用户立即获得主人权限，绕过所有高危操作的人工确认并
+        篡改 ``.env`` 的 ``MASTER_QQ_OPENID``。这与 v0.4.25 修复的"首个私聊者
+        自动绑主"同源但更严重，因为群添加是任何用户都能触发的低门槛动作。
+
+        正确做法：仅记录事件（便于运营审计），引导用户通过 Setup Wizard
+        显式录入主人 openid；任何场景下都不应在代码路径中自动将调用方
+        视为主人。
+        """
         op_openid = getattr(event, "op_member_openid", "")
         group_openid = getattr(event, "group_openid", "")
-        if not op_openid:
-            logger.warning("qq_bot.group_add_robot.no_openid", group=group_openid)
-            return
-        logger.info("qq_bot.group_add_robot", group=group_openid, op_openid=op_openid)
-        _save_master_openid(op_openid)
+        logger.info("qq_bot.group_add_robot.noop",
+                    group=group_openid, op_openid=op_openid,
+                    reason="auto-bind disabled for security; configure "
+                           "MASTER_QQ_OPENID via Setup Wizard")
+        # 注意：有意省略 _save_master_openid(op_openid)。任何"自动绑主"路径
+        # 都是 fail-open 安全风险，必须 fail-closed（仅在显式配置下放行）。
 
     async def on_c2c_message_create(self, message: C2CMessage) -> None:
         parsed = await self._parse_c2c_message(message)
@@ -826,7 +838,7 @@ class AIQQBot(botpy.Client):
                     logger.info("qq_bot.group_message", user_id=user_id, openid=member_openid, content=user_input[:80])
 
                     # 主人识别：对比 member_openid 与 MASTER_QQ_OPENID（逗号分隔多值）
-                    # on_group_add_robot 已自动绑定拉群者的 member_openid
+                    # 主人身份只能通过 Setup Wizard 显式配置，运行时不会自动绑定。
                     master_raw = os.getenv("MASTER_QQ_OPENID", "").strip()
                     master_ids = [x.strip() for x in master_raw.split(",") if x.strip()]
                     is_master = bool(master_ids) and member_openid in master_ids
