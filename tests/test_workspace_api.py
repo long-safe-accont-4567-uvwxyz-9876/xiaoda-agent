@@ -22,15 +22,39 @@ def D(r):
 
 @pytest.fixture
 def app():
-    """最小 FastAPI app，仅挂载 workspace 路由（避免全量 app 启动开销）"""
+    """最小 FastAPI app，仅挂载 workspace 路由（避免全量 app 启动开销）
+
+    为测试 workspace 业务逻辑，覆盖 get_current_user 依赖返回测试用户。
+    认证保护本身由 TestWorkspaceAuthProtection 单独验证。
+    """
     app = FastAPI()
     app.include_router(workspace_router, prefix="/api/v1")
+
+    def _fake_user():
+        return "test_user"
+
+    from web.routers.workspace import get_current_user as _gc_u
+    app.dependency_overrides[_gc_u] = _fake_user
     return app
 
 
 @pytest.fixture
 def client(app):
     return TestClient(app)
+
+
+# ── 独立的未覆盖 app fixture（用于验证认证保护） ──────────────
+@pytest.fixture
+def bare_app():
+    """不覆盖认证依赖的纯净 app — 用于验证 401 保护生效"""
+    app = FastAPI()
+    app.include_router(workspace_router, prefix="/api/v1")
+    return app
+
+
+@pytest.fixture
+def bare_client(bare_app):
+    return TestClient(bare_app)
 
 
 @pytest.fixture
@@ -180,3 +204,68 @@ class TestAuditEndpoint:
         entries = D(r)["entries"]
         assert len(entries) == 1
         assert entries[0]["action"] == "read"
+
+
+class TestWorkspaceAuthProtection:
+    """验证 workspace 所有端点必须认证 — 未登录返回 401。
+
+    这是对安全修复的回归测试：原代码 workspace 路由缺少认证依赖，
+    导致任意未认证用户可浏览服务器目录、设置工作目录、操作命令白名单。
+    """
+
+    def test_get_workspace_requires_auth(self, bare_client):
+        """未认证读取 workspace 状态 → 401"""
+        r = bare_client.get("/api/v1/workspace")
+        assert r.status_code == 401, (
+            "workspace GET 端点未加认证保护：未携带 Bearer token 也能访问"
+        )
+
+    def test_confirm_workspace_requires_auth(self, bare_client, tmp_path):
+        """未认证设置授权工作目录（/ 根路径攻击）→ 401"""
+        r = bare_client.post("/api/v1/workspace/confirm", json={"path": str(tmp_path)})
+        assert r.status_code == 401, (
+            "workspace /confirm 端点未加认证保护：未认证可设置任意工作目录"
+        )
+
+    def test_revoke_workspace_requires_auth(self, bare_client):
+        """未认证撤销工作目录授权 → 401"""
+        r = bare_client.delete("/api/v1/workspace")
+        assert r.status_code == 401
+
+    def test_browse_directory_requires_auth(self, bare_client, tmp_path):
+        """未认证目录浏览（信息泄露：枚举 /etc 等敏感路径）→ 401"""
+        r = bare_client.get("/api/v1/workspace/browse", params={"path": str(tmp_path)})
+        assert r.status_code == 401, (
+            "workspace /browse 端点未加认证保护：未认证可枚举服务器目录结构"
+        )
+
+    def test_get_whitelist_requires_auth(self, bare_client):
+        """未认证获取命令白名单 → 401"""
+        r = bare_client.get("/api/v1/workspace/whitelist")
+        assert r.status_code == 401
+
+    def test_add_whitelist_requires_auth(self, bare_client):
+        """未认证添加命令白名单 → 401"""
+        r = bare_client.post("/api/v1/workspace/whitelist", json={"command": "rm"})
+        assert r.status_code == 401, (
+            "workspace /whitelist POST 未加认证保护：未认证可添加 rm 等危险命令到白名单"
+        )
+
+    def test_remove_whitelist_requires_auth(self, bare_client):
+        """未认证删除白名单项 → 401"""
+        r = bare_client.delete("/api/v1/workspace/whitelist/git")
+        assert r.status_code == 401
+
+    def test_confirm_cmd_requires_auth(self, bare_client):
+        """未认证通过命令确认 → 401"""
+        r = bare_client.post("/api/v1/workspace/confirm_cmd", json={
+            "request_id": "attacker-req", "decision": "allow",
+        })
+        assert r.status_code == 401, (
+            "workspace /confirm_cmd 未加认证保护：未认证可通过待确认的危险命令"
+        )
+
+    def test_audit_requires_auth(self, bare_client):
+        """未认证读取审计日志 → 401"""
+        r = bare_client.get("/api/v1/workspace/audit")
+        assert r.status_code == 401
