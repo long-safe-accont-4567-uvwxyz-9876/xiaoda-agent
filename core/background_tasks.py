@@ -415,25 +415,23 @@ class BackgroundTaskManager:
         返回 True 时会把 task_name 原子加入 _running_scheduled 占位，
         调用方必须通过 _spawn_scheduled() 启动任务以保证占位被释放。
         """
-        # 并发去重：已有同名任务在运行则直接跳过，避免重复执行
+        # 并发去重：原子 check-and-add，防止 await 期间并发调用穿透
         if task_name in self._running_scheduled:
             logger.debug("bg.scheduled_task_already_running name={}", task_name)
             return False
+        # 先占位，await 期间的其他调用会被上面的 in 检查拦截
+        # 如果后续判断不应运行，会在 finally 逻辑中释放
+        self._running_scheduled.add(task_name)
         try:
             last_run = await self.db.get_cron_last_run(task_name)
             if last_run is None:
-                # 二次检查：await 期间可能已有并发调用占位（与下方超时分支一致）
-                if task_name in self._running_scheduled:
-                    return False
-                self._running_scheduled.add(task_name)
                 return True
             result = (time.time() - last_run) >= interval_hours * 3600
             if result:
                 self._consecutive_failures.pop(task_name, None)
-                # 二次检查：await 期间可能已有并发调用占位
-                if task_name in self._running_scheduled:
-                    return False
-                self._running_scheduled.add(task_name)
+                return True
+            # 不应运行：释放占位
+            self._running_scheduled.discard(task_name)
             return result
         except (OSError, RuntimeError):
             count = self._consecutive_failures.get(task_name, 0) + 1
@@ -444,6 +442,8 @@ class BackgroundTaskManager:
                 logger.warning(f"periodic_task_degraded: task={task_name}, consecutive_failures={count}")
             else:
                 logger.warning(f"periodic_task_db_error: task={task_name}")
+            # DB 错误：释放占位，允许下次重试
+            self._running_scheduled.discard(task_name)
             return False
 
     async def _dream_archive_task(self) -> None:
