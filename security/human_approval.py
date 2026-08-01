@@ -469,3 +469,84 @@ class IMApprovalChannel:
                 if not user_reqs:
                     self._pending_by_user.pop(user_id, None)
             return True
+
+
+# ── Approver 适配层 — 对接 tool_engine/approver.py ──────────────
+# 借鉴 OpenWorker coworker/permissions.py 的 Approver 回调设计，
+# 将 HumanApprovalGate 适配为 Approver 协议，供 ToolExecutor 使用。
+
+
+class HumanApprovalApprover:
+    """将 HumanApprovalGate 适配为 Approver 协议。
+
+    用法：
+        gate = get_approval_gate()
+        approver = HumanApprovalApprover(gate, user_id="u1")
+        executor = ToolExecutor(db=db, approver=approver)
+
+    流程：
+    1. 高危操作 → 调用 gate.request() 发起审批
+    2. 等待 gate.wait_for_decision() 获取用户决定
+    3. 用户确认 → 返回 ONCE（下次仍需审批）
+    4. 用户可选择 "永久允许" → 返回 ALWAYS_TOOL
+    5. 用户拒绝 → 返回 DENY
+    """
+
+    def __init__(self, gate: HumanApprovalGate, user_id: str = "",
+                 default_timeout: float = 300.0) -> None:
+        self._gate = gate
+        self._user_id = user_id
+        self._default_timeout = default_timeout
+
+    async def approve(self, request) -> "ApprovalDecision":
+        """实现 Approver 协议 — 委托给 HumanApprovalGate。"""
+        # 延迟导入避免循环依赖
+        from tool_engine.approver import ApprovalDecision, ApprovalOutcome
+
+        # 非高危操作直接放行
+        if not self._gate.is_high_risk(request.tool_name):
+            return ApprovalDecision(
+                outcome=ApprovalOutcome.ONCE,
+                reason="low risk, auto-approved",
+            )
+
+        # 发起审批请求
+        risk_level = self._gate.get_risk_level(request.tool_name)
+        req = await self._gate.request(
+            user_id=self._user_id,
+            operation=request.tool_name,
+            args=request.arguments,
+            risk_level=risk_level,
+            reason=request.reason or f"高危操作需要确认：{request.tool_name}",
+            timeout=self._default_timeout,
+        )
+
+        # 白名单用户自动通过
+        if req.status == ApprovalStatus.AUTO_APPROVED:
+            return ApprovalDecision(
+                outcome=ApprovalOutcome.ALWAYS_TOOL,
+                reason="auto-approved (owner whitelist)",
+                metadata={"request_id": req.id},
+            )
+
+        # 等待用户决定
+        result = await self._gate.wait_for_decision(req.id)
+
+        if result.status == ApprovalStatus.APPROVED:
+            return ApprovalDecision(
+                outcome=ApprovalOutcome.ONCE,
+                reason="user approved",
+                metadata={"request_id": req.id, "decided_by": result.decided_by},
+            )
+        elif result.status == ApprovalStatus.TIMEOUT:
+            return ApprovalDecision(
+                outcome=ApprovalOutcome.DENY,
+                reason="审批超时，自动拒绝",
+                metadata={"request_id": req.id},
+            )
+        else:
+            return ApprovalDecision(
+                outcome=ApprovalOutcome.DENY,
+                reason=result.reason or "用户拒绝",
+                metadata={"request_id": req.id},
+            )

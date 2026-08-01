@@ -6,6 +6,14 @@ import inspect
 from loguru import logger
 
 from .tool_registry import get_tool, ToolResult, resolve_tool_func
+from .approver import (
+    Approver,
+    DefaultApprover,
+    SessionApprover,
+    ApprovalRequest,
+    ApprovalDecision,
+    ApprovalOutcome,
+)
 from utils.metrics import metrics
 
 # 敏感参数关键词，匹配到的参数值会被屏蔽
@@ -54,12 +62,18 @@ class ToolExecutor:
     FAILURE_STREAK_THRESHOLD: int = 5
     FAILURE_STREAK_RESET_SECONDS: int = 300  # 5 分钟后半开恢复
 
-    def __init__(self, db: Any | None=None) -> None:
+    def __init__(self, db: Any | None=None, approver: Approver | None=None) -> None:
         self.db = db
+        self._approver = approver or DefaultApprover()
         self._call_counts: dict[str, list[float]] = {}
         self._global_timeout: float = self.TOOL_TIMEOUTS["default"]
         self._failure_streaks: dict[str, int] = {}
         self._failure_first_time: dict[str, float] = {}
+
+    @property
+    def approver(self) -> Approver:
+        """获取当前审批器实例。"""
+        return self._approver
 
     def _is_retryable_error(self, error: str) -> bool:
         """检查错误是否为瞬时错误，值得重试."""
@@ -130,6 +144,31 @@ class ToolExecutor:
             logger.warning("tool_executor.workspace_blocked", tool=tool_name, reason=ws_err)
             return ToolResult.fail(ws_err)
 
+        # ── Approver 审批检查（借鉴 OpenWorker TurnEngine 的 out-of-band 审批）──
+        # 在沙箱和工作目录检查通过后、实际执行前检查审批器。
+        # 不传 approver 时 DefaultApprover 直接返回 ONCE（放行），不影响原有逻辑。
+        approval_req = ApprovalRequest(
+            tool_name=tool_name,
+            arguments=arguments,
+            risk_level=self._get_tool_risk_level(tool_name),
+            user_id=user_id,
+        )
+        try:
+            approval_decision = await self._approver.approve(approval_req)
+        except Exception as e:
+            logger.warning("tool_executor.approver_error", tool=tool_name, error=str(e))
+            approval_decision = ApprovalDecision(
+                outcome=ApprovalOutcome.ONCE,
+                reason=f"approver error, defaulting to ONCE: {e}",
+            )
+
+        if approval_decision.outcome == ApprovalOutcome.DENY:
+            logger.info("tool_executor.approval_denied",
+                        tool=tool_name, reason=approval_decision.reason)
+            return ToolResult.fail(
+                f"操作「{tool_name}」已被拒绝执行：{approval_decision.reason}"
+            )
+
         _start = time.time()
         # S3: 重试机制 — 瞬时错误自动重试 + 指数退避
         attempt = 0
@@ -197,6 +236,19 @@ class ToolExecutor:
             return False
         timestamps.append(now)
         return True
+
+    def _get_tool_risk_level(self, tool_name: str) -> str:
+        """根据工具权限级别返回风险等级字符串（供 Approver 使用）。"""
+        tool = get_tool(tool_name)
+        if not tool:
+            return "low"
+        from .tool_registry import ToolPermission
+        perm = tool.get("permission", ToolPermission.READ_ONLY)
+        if perm == ToolPermission.EXECUTE:
+            return "high"
+        if perm == ToolPermission.READ_WRITE:
+            return "medium"
+        return "low"
 
     # ── 沙箱安全检查 ─────────────────────────────────────────────
     # 需要检查 URL 的网络工具

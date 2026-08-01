@@ -247,6 +247,96 @@ class ContextCompressor:
         """获取压缩统计"""
         return dict(self._stats)
 
+    # ── P1-3: 自动压缩集成（借鉴 OpenWorker compaction.py 的 token 阈值触发）──
+
+    # 默认触发阈值：上下文窗口的 80%（与 OpenWorker DEFAULT_THRESHOLD_PCT 一致）
+    DEFAULT_THRESHOLD_PCT = 0.8
+    # 默认 token 上限（防止超大窗口模型压缩过晚）
+    DEFAULT_CAP_TOKENS = 250_000
+    # 默认上下文窗口大小（未知模型时的回退值）
+    DEFAULT_CONTEXT_WINDOW = 128_000
+
+    @staticmethod
+    def estimate_tokens(messages: list[dict]) -> int:
+        """估算消息列表的 token 数量（chars/4 粗略估算）。
+
+        借鉴 OpenWorker compaction.py 的 estimate_tokens 函数。
+        """
+        import json as _json
+        total = 0
+        for msg in messages:
+            try:
+                total += len(_json.dumps(msg, default=str, ensure_ascii=False))
+            except (TypeError, ValueError):
+                total += len(str(msg))
+        return total // 4
+
+    @classmethod
+    def trigger_tokens(cls, context_window: int | None = None,
+                       threshold_pct: float = DEFAULT_THRESHOLD_PCT,
+                       cap_tokens: int = DEFAULT_CAP_TOKENS) -> int:
+        """计算触发压缩的 token 阈值。
+
+        借鉴 OpenWorker compaction.py 的 trigger_tokens 函数。
+        """
+        window = context_window or cls.DEFAULT_CONTEXT_WINDOW
+        return min(int(threshold_pct * window), int(cap_tokens))
+
+    @classmethod
+    def should_compact(cls, token_count: int,
+                       context_window: int | None = None,
+                       threshold_pct: float = DEFAULT_THRESHOLD_PCT,
+                       cap_tokens: int = DEFAULT_CAP_TOKENS) -> bool:
+        """判断是否应该触发自动压缩。
+
+        Args:
+            token_count: 当前上下文的 token 数量
+            context_window: 模型上下文窗口大小（None 使用默认值）
+            threshold_pct: 触发阈值百分比（默认 0.8）
+            cap_tokens: token 上限（默认 250000）
+
+        Returns:
+            是否应该触发压缩
+        """
+        threshold = cls.trigger_tokens(context_window, threshold_pct, cap_tokens)
+        return token_count >= threshold
+
+    def auto_compact_if_needed(self, messages: list[dict],
+                               context_window: int | None = None,
+                               threshold_pct: float = DEFAULT_THRESHOLD_PCT,
+                               cap_tokens: int = DEFAULT_CAP_TOKENS) -> tuple[bool, list[dict], int]:
+        """如果 token 数量超过阈值，自动压缩对话历史。
+
+        借鉴 OpenWorker compaction.py 的 token 阈值自动触发机制。
+        在 agent_core/message_processor.py 构造 prompt 前调用。
+
+        Args:
+            messages: 当前消息列表
+            context_window: 模型上下文窗口大小
+            threshold_pct: 触发阈值百分比
+            cap_tokens: token 上限
+
+        Returns:
+            (was_compacted, messages, tokens_saved) 元组
+            - was_compacted: 是否触发了压缩
+            - messages: 压缩后（或原始）的消息列表
+            - tokens_saved: 节省的 token 数量
+        """
+        token_count = self.estimate_tokens(messages)
+        if not self.should_compact(token_count, context_window, threshold_pct, cap_tokens):
+            return False, messages, 0
+
+        # 触发压缩
+        result = self.compress_history(messages)
+        if result.tokens_saved > 0:
+            logger.info("ccr.auto_compact_triggered",
+                        original_tokens=token_count,
+                        tokens_saved=result.tokens_saved,
+                        threshold=self.trigger_tokens(context_window, threshold_pct, cap_tokens))
+            return True, result.messages, result.tokens_saved
+
+        return False, messages, 0
+
 
 # 全局压缩器实例
 _default_compressor: ContextCompressor | None = None

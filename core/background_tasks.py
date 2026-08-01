@@ -21,6 +21,7 @@ from typing import Any, TYPE_CHECKING
 from loguru import logger
 
 from utils.metrics import metrics
+from core.self_wake import SelfWakeManager, WakeTrigger, get_self_wake_manager
 
 if TYPE_CHECKING:
     from db.database import DatabaseManager
@@ -129,6 +130,10 @@ class BackgroundTaskManager:
         # 两条消息并发进入调度时都会判定"该运行"，导致梦境归档/记忆蒸馏/
         # 概念边补建重复执行（重复写入 + 额外 LLM 调用 + DB I/O 争抢）
         self._running_scheduled: set[str] = set()
+        # ── Self-Wake 集成（借鉴 OpenWorker selfwake.py）──
+        # 将部分常驻循环改为事件驱动，减少无谓的 CPU 占用。
+        # 不使用 SelfWake 的模块继续走原有 _should_run 逻辑（向后兼容）。
+        self._self_wake: SelfWakeManager = get_self_wake_manager()
 
     def start_background_task(self, coro: Any) -> None:
         """启动一个 fire-and-forget 后台任务。"""
@@ -397,6 +402,16 @@ class BackgroundTaskManager:
                                       self._concept_link_curator_task())
         except (ImportError, OSError, RuntimeError) as e:
             logger.warning("bg.concept_link_curator_schedule_failed", error=str(e))
+
+        # ── Self-Wake 检查（借鉴 OpenWorker selfwake.py）──
+        # 检查到期唤醒并触发回调，不阻塞主调度流程。
+        # 与 _should_run 逻辑并行，不替代原有调度。
+        try:
+            due_records = self._self_wake.check_due()
+            for record in due_records:
+                _spawn(self._self_wake.fire(record.id))
+        except Exception as e:
+            logger.debug("bg.selfwake_check_failed", error=str(e))
 
     async def _auto_archive_sessions(self) -> None:
         try:

@@ -16,12 +16,44 @@ from loguru import logger
 
 
 class PermissionMode(Enum):
-    """权限模式"""
-    DEFAULT = "default"    # 默认：安全威胁按置信度决定 block/warn
-    DEV = "dev"            # 开发模式：block 降级为 warn，只读查询放行
-    STRICT = "strict"      # 严格模式：所有威胁 block，修改性工具需确认
-    BYPASS = "bypass"      # 绕过模式：跳过所有安全检查（兼容旧代码）
-    GOAT = "goat"          # 梭哈模式：全部权限开放，最大自由度
+    """权限模式 — 借鉴 OpenWorker coworker/permissions.py 的五态设计。
+
+    原有模式（向后兼容）：
+    - DEFAULT: 安全威胁按置信度决定 block/warn
+    - DEV: 开发模式，block 降级为 warn
+    - STRICT: 严格模式，所有威胁 block
+    - BYPASS: 绕过模式，跳过所有安全检查
+    - GOAT: 梭哈模式，全部权限开放
+
+    新增模式（借鉴 OpenWorker）：
+    - DISCUSS: 只读对话模式，只允许只读工具，不允许写/执行
+    - PLAN: 规划模式，可以规划但不能执行写操作
+    - INTERACTIVE: 交互式确认模式，写/执行操作需用户审批
+    - AUTO: 全自动模式，跳过审批但仍受路径范围限制
+    - CUSTOM: 自定义模式，交互式 + 配置的 auto_allow 工具白名单
+    """
+    DEFAULT = "default"        # 默认：安全威胁按置信度决定 block/warn
+    DEV = "dev"                # 开发模式：block 降级为 warn，只读查询放行
+    STRICT = "strict"          # 严格模式：所有威胁 block，修改性工具需确认
+    BYPASS = "bypass"          # 绕过模式：跳过所有安全检查（兼容旧代码）
+    GOAT = "goat"              # 梭哈模式：全部权限开放，最大自由度
+    # ── 新增：借鉴 OpenWorker 五态 ──
+    DISCUSS = "discuss"        # 只读对话：只允许只读工具
+    PLAN = "plan"              # 规划模式：只读 + 规划，不执行写操作
+    INTERACTIVE = "interactive"  # 交互式：写/执行操作需用户审批
+    AUTO = "auto"              # 全自动：跳过审批，但仍受路径范围限制
+    CUSTOM = "custom"          # 自定义：交互式 + auto_allow 工具白名单
+
+
+# ── 新增：借鉴 OpenWorker 的只读模式集合 ──
+# DISCUSS 和 PLAN 共享只读门控，区别在于 PLAN 额外驱动 agent 走规划流程
+READ_ONLY_MODES = frozenset({PermissionMode.DISCUSS, PermissionMode.PLAN})
+
+# ── 新增：借鉴 OpenWorker 的审批跳过模式 ──
+# AUTO 和 BYPASS/GOAT 模式跳过审批
+AUTO_APPROVE_MODES = frozenset({
+    PermissionMode.AUTO, PermissionMode.BYPASS, PermissionMode.GOAT
+})
 
 
 # 敏感操作工具列表（strict 模式下需要确认）
@@ -113,6 +145,8 @@ class PermissionManager:
         self._cwd_authorized: bool = False           # 是否已授权
         self._cmd_whitelist: set[str] = set()        # 用户命令白名单（命令名，非完整命令行）
         self._audit_buffer: deque = deque(maxlen=200)  # 审计环形缓冲（不落盘，重启清空）
+        # ── 新增：CUSTOM 模式的 auto_allow 工具白名单（借鉴 OpenWorker）──
+        self._auto_allow_tools: set[str] = set()
 
     @staticmethod
     def _init_mode_from_env() -> PermissionMode:
@@ -178,6 +212,29 @@ class PermissionManager:
         """是否严格模式"""
         return self._mode == PermissionMode.STRICT
 
+    # ── 新增：CUSTOM 模式 auto_allow 工具管理（借鉴 OpenWorker）──
+
+    def add_auto_allow_tool(self, tool_name: str) -> None:
+        """添加工具到 auto_allow 白名单（CUSTOM 模式下自动放行）。"""
+        with self._lock:
+            self._auto_allow_tools.add(tool_name)
+            logger.info("permission_manager.auto_allow_added", tool=tool_name)
+
+    def remove_auto_allow_tool(self, tool_name: str) -> None:
+        """从 auto_allow 白名单移除工具。"""
+        with self._lock:
+            self._auto_allow_tools.discard(tool_name)
+
+    def get_auto_allow_tools(self) -> list[str]:
+        """获取 auto_allow 白名单。"""
+        with self._lock:
+            return sorted(self._auto_allow_tools)
+
+    def set_auto_allow_tools(self, tools: list[str]) -> None:
+        """批量设置 auto_allow 白名单。"""
+        with self._lock:
+            self._auto_allow_tools = set(tools)
+
     def check_goat_dangerous_command(self, command: str) -> tuple[bool, str]:
         """梭哈模式防傻检查：拦截明显致命的 shell 命令
 
@@ -202,6 +259,16 @@ class PermissionManager:
         Returns:
             (allowed, reason) 元组
         """
+        # ── 新增模式：DISCUSS/PLAN 只读门控（借鉴 OpenWorker）──
+        if self._mode in READ_ONLY_MODES:
+            # 获取工具权限级别
+            from tool_engine.tool_registry import get_tool, ToolPermission
+            tool = get_tool(tool_name)
+            if tool:
+                perm = tool.get("permission", ToolPermission.READ_ONLY)
+                if perm != ToolPermission.READ_ONLY:
+                    return False, f"{self._mode.value} 模式是只读的，不允许执行 {tool_name}"
+
         # GOAT 模式：全部放行，但对 shell 命令做防傻检查
         if self._mode == PermissionMode.GOAT:
             if tool_name == "shell_command" and tool_input:
@@ -222,9 +289,41 @@ class PermissionManager:
                         return False, reason
             return True, ""
 
+        # ── 新增模式：AUTO 全自动放行（但仍受路径范围限制）──
+        if self._mode == PermissionMode.AUTO:
+            if tool_name == "shell_command" and tool_input:
+                cmd = tool_input.get("command", "")
+                if cmd:
+                    is_dangerous, reason = self.check_goat_dangerous_command(cmd)
+                    if is_dangerous:
+                        return False, reason
+            return True, ""
+
+        # ── 新增模式：CUSTOM 交互式 + auto_allow 白名单 ──
+        if self._mode == PermissionMode.CUSTOM:
+            if tool_name in self._auto_allow_tools:
+                return True, "auto-allowed by config"
+            # 非 auto_allow 的工具走 INTERACTIVE 逻辑
+            # 降级到 STRICT 检查
+            if tool_name in _SENSITIVE_TOOLS:
+                return False, f"自定义模式下 {tool_name} 需要确认"
+
         # STRICT 模式：敏感工具需要确认
         if self._mode == PermissionMode.STRICT and tool_name in _SENSITIVE_TOOLS:
             return False, f"严格模式下 {tool_name} 需要确认"
+
+        # ── 新增模式：INTERACTIVE 交互式确认 ──
+        if self._mode == PermissionMode.INTERACTIVE:
+            # 只读工具直接放行
+            from tool_engine.tool_registry import get_tool, ToolPermission
+            tool = get_tool(tool_name)
+            if tool:
+                perm = tool.get("permission", ToolPermission.READ_ONLY)
+                if perm == ToolPermission.READ_ONLY:
+                    return True, ""
+            # 写/执行工具需要确认
+            if tool_name in _SENSITIVE_TOOLS:
+                return False, f"交互式模式下 {tool_name} 需要用户确认"
 
         return True, ""
 

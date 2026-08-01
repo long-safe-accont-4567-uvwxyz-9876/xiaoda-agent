@@ -41,7 +41,12 @@ def _get_local_now() -> datetime:
 
 
 class MemoryRecallScheduler:
-    """定时回忆任务调度器。"""
+    """定时回忆任务调度器。
+
+    调度策略（借鉴 OpenWorker automation/scheduler.py）：
+    - run-once-catch-up: 如果上次错过（服务停机期间），启动时补跑一次
+    - skip-on-overlap: 如果上次的还没跑完，跳过本次
+    """
 
     TICK_SECONDS = 300  # 每 5 分钟检查一次
     RECALL_INTERVAL_HOURS = 3.0      # 默认每 3 小时回忆一次
@@ -53,9 +58,24 @@ class MemoryRecallScheduler:
 
     CRON_TASK_NAME = "memory_recall"
 
-    def __init__(self, core: AgentCore) -> None:
+    def __init__(self, core: AgentCore, *,
+                 catch_up: bool = True,
+                 skip_on_overlap: bool = True) -> None:
+        """初始化回忆调度器。
+
+        Args:
+            core: AgentCore 实例
+            catch_up: 如果上次错过（服务停机期间），启动时补跑一次。
+                      借鉴 OpenWorker automation/scheduler.py 的 run-once-catch-up。
+            skip_on_overlap: 如果上次的还没跑完，跳过本次。
+                             借鉴 OpenWorker automation/scheduler.py 的 skip-on-overlap。
+        """
         self.core = core
         self._task: asyncio.Task | None = None
+        self._catch_up = catch_up
+        self._skip_on_overlap = skip_on_overlap
+        self._is_running = False  # overlap guard
+        self._catchup_done = False
 
     def start(self) -> None:
         if self._task is None:
@@ -74,8 +94,24 @@ class MemoryRecallScheduler:
             logger.info("memory_recall_scheduler.stopped")
 
     async def _loop(self) -> None:
-        """主循环：每 TICK_SECONDS 秒检查一次是否该触发回忆。"""
-        # 启动后等 60s 再首次检查，避免与服务启动初期资源争抢
+        """主循环：每 TICK_SECONDS 秒检查一次是否该触发回忆。
+
+        借鉴 OpenWorker automation/scheduler.py：
+        - 首次循环执行 catch-up（补跑服务停机期间错过的任务）
+        - 后续按正常 TICK 间隔运行
+        """
+        # catch-up：首次启动时检查是否错过了回忆周期
+        if self._catch_up and not self._catchup_done:
+            try:
+                await self._catchup_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning("memory_recall_scheduler.catchup_error", error=str(e))
+            finally:
+                self._catchup_done = True
+
+        # 启动后等 60s 再首次正常检查，避免与服务启动初期资源争抢
         await asyncio.sleep(60)
         while True:
             try:
@@ -85,6 +121,23 @@ class MemoryRecallScheduler:
             except Exception as e:
                 logger.warning("memory_recall_scheduler.tick_error", error=str(e))
             await asyncio.sleep(self.TICK_SECONDS)
+
+    async def _catchup_tick(self) -> None:
+        """catch-up 逻辑：如果上次回忆距今超过间隔，立即补跑一次。
+
+        借鉴 OpenWorker automation/scheduler.py 的 run-once-catch-up 策略。
+        """
+        try:
+            last_run = await self.core.db.get_cron_last_run(self.CRON_TASK_NAME)
+            if last_run is not None:
+                elapsed_hours = (time.time() - last_run) / 3600.0
+                if elapsed_hours >= self.RECALL_INTERVAL_HOURS:
+                    logger.info("memory_recall_scheduler.catchup_triggered",
+                                elapsed_hours=round(elapsed_hours, 1))
+                    await self._run_recall()
+        except Exception as e:
+            logger.debug("memory_recall_scheduler.catchup_check_failed",
+                         error=str(e))
 
     def _is_dnd(self) -> bool:
         """凌晨 DND 时段（0:00-7:00）跳过回忆任务。"""
@@ -109,27 +162,46 @@ class MemoryRecallScheduler:
         if self._is_dnd():
             return
 
+        # skip-on-overlap：如果上次的还没跑完，跳过本次
+        # 借鉴 OpenWorker automation/scheduler.py 的 skip-on-overlap 策略
+        if self._skip_on_overlap and self._is_running:
+            logger.debug("memory_recall_scheduler.skip_overlap")
+            return
+
         # 间隔检查
         if not await self._should_run():
             return
 
-        # MemoryManager 未就绪时跳过（但更新 cron_last_run 避免短时间内反复检查）
-        if not self.core.memory:
-            logger.debug("memory_recall_scheduler.skip_no_memory_manager")
-            try:
-                await self.core.db.set_cron_last_run(self.CRON_TASK_NAME)
-            except Exception:
-                logger.debug("memory_recall_scheduler.cron_last_run_set_failed", exc_info=True)
+        await self._run_recall()
+
+    async def _run_recall(self) -> None:
+        """执行回忆任务的实际逻辑。
+
+        从 _tick 中提取，供 catch-up 和正常调度共用。
+        """
+        # skip-on-overlap guard
+        if self._skip_on_overlap and self._is_running:
+            logger.debug("memory_recall_scheduler.skip_overlap_in_run")
             return
+        self._is_running = True
 
-        # 读取 config 覆盖默认参数（方便运行时调整）
-        import config
-        hours_back = float(getattr(config, "RECALL_HOURS_BACK", self.HOURS_BACK))
-        min_importance = float(getattr(config, "RECALL_MIN_IMPORTANCE", self.MIN_IMPORTANCE))
-        min_memories = int(getattr(config, "RECALL_MIN_MEMORIES", self.MIN_MEMORIES))
-
-        # 执行回忆任务
         try:
+            # MemoryManager 未就绪时跳过（但更新 cron_last_run 避免短时间内反复检查）
+            if not self.core.memory:
+                logger.debug("memory_recall_scheduler.skip_no_memory_manager")
+                try:
+                    await self.core.db.set_cron_last_run(self.CRON_TASK_NAME)
+                except Exception:
+                    logger.debug("memory_recall_scheduler.cron_last_run_set_failed", exc_info=True)
+                return
+
+            # 读取 config 覆盖默认参数（方便运行时调整）
+            import config
+            hours_back = float(getattr(config, "RECALL_HOURS_BACK", self.HOURS_BACK))
+            min_importance = float(getattr(config, "RECALL_MIN_IMPORTANCE", self.MIN_IMPORTANCE))
+            min_memories = int(getattr(config, "RECALL_MIN_MEMORIES", self.MIN_MEMORIES))
+
+            # 执行回忆任务
             processed = await self.core.memory.run_scheduled_recall(
                 hours_back=hours_back,
                 min_importance=min_importance,
@@ -150,3 +222,5 @@ class MemoryRecallScheduler:
                 await self.core.db.set_cron_last_run(self.CRON_TASK_NAME)
             except Exception:
                 logger.debug("recall_scheduler.cron_last_run_failed", exc_info=True)
+        finally:
+            self._is_running = False
