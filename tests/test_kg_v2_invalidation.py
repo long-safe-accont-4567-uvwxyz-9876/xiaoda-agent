@@ -93,6 +93,39 @@ async def test_merge_relation_v2_supersedes_old_fact(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_invalidate_relation_preserves_semantic_timestamps(tmp_path):
+    """回归: invalidate_relation 必须保留调用方传入的 invalid_at/expired_at，
+    而不是静默替换为 time.time()，否则批量超驰时所有关系的失效时间戳会被抹平。"""
+    manager = DatabaseManager(tmp_path / "inv.db")
+    await manager.init()
+    db = KnowledgeDBV2(manager._conn)
+
+    await db.insert_entity_v2("ENT-u", "用户", "人物", [], "")
+    await db.insert_entity_v2("ENT-b", "篮球", "概念", [], "")
+    await db.insert_episode("EP-old", "旧对话", "summary", 1000.0, time.time())
+    await db.insert_relation_v2("REL-1", "用户", "喜欢", "篮球", "用户喜欢篮球", "EP-old", 1000.0)
+
+    semantic_invalid_at = 2000.0
+    semantic_expired_at = 2001.0
+    await db.invalidate_relation(
+        "REL-1",
+        invalid_at=semantic_invalid_at,
+        expired_at=semantic_expired_at,
+    )
+
+    cur = await manager._conn.execute(
+        "SELECT invalid_at, expired_at, is_current FROM kg_relations_v2 WHERE id=?",
+        ("REL-1",),
+    )
+    row = await cur.fetchone()
+    assert row is not None
+    assert row["is_current"] == 0
+    assert row["invalid_at"] == semantic_invalid_at
+    assert row["expired_at"] == semantic_expired_at
+    await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_merge_relation_v2_deduplicates_identical_fact(tmp_path):
     """相同事实不重复插入，仅追加 episode 引用。"""
     manager = DatabaseManager(tmp_path / "dedup.db")

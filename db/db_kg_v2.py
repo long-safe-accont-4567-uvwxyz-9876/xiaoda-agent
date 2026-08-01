@@ -191,12 +191,19 @@ class KnowledgeDBV2:
         expired_at: float,
         auto_commit: bool = True,
     ) -> None:
-        """标记关系失效。"""
+        """标记关系失效。
+
+        修复: 原实现忽略了调用方传入的 invalid_at/expired_at，
+        始终以 time.time() 写入，导致批量超驰时所有关系的失效时间戳
+        被抹平为同一时刻，丢失语义时间线（例如"用户2000.0时刻改打网球"
+        vs 更早的"1500.0时刻改过篮球"会被混成同一秒失效）。
+        """
+        now = time.time()
         await self._conn.execute(
             """UPDATE kg_relations_v2
                SET invalid_at=?, expired_at=?, is_current=0, updated_at=?
                WHERE id=?""",
-            (invalid_at, expired_at, time.time(), rel_id),
+            (invalid_at, expired_at, now, rel_id),
         )
         if auto_commit:
             await self._conn.commit()
