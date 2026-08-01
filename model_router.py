@@ -436,7 +436,9 @@ class ModelRouter:
     }
     # 后台 LLM task 集合：这些 task 调 LLM 但不直接面向用户，
     # 必须让路于主 chat（task_type="chat"），避免并发竞争 agnes API。
-    _BG_LLM_TASKS: ClassVar[set[str]] = {"memory_encoding", "emotion_analysis", "tool_result_wrap"}
+    _BG_LLM_TASKS: ClassVar[set[str]] = {
+        "memory_encoding", "emotion_analysis", "tool_result_wrap", "entity_extraction",
+    }
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None,
                  api_key_2: str | None = None, db: Any=None) -> None:
@@ -502,6 +504,8 @@ class ModelRouter:
         self._chat_idle = asyncio.Event()
         self._chat_idle.set()  # 初始空闲
         self._bg_llm_semaphore = asyncio.Semaphore(1)
+        self._llm_call_gate = asyncio.Lock()
+        self._active_bg_llm_tasks: set[asyncio.Task] = set()
         self._cache_stats = {
             "total_calls": 0,
             "hit_tokens": 0,
@@ -1185,6 +1189,7 @@ class ModelRouter:
         # 后台 LLM 任务 (_BG_LLM_TASKS) await _chat_idle.wait() 自动让路。
         # 后台任务之间用 _bg_llm_semaphore(1) 串行，彻底消除 agnes 并发竞争。
         _is_bg_llm = task_type in self._BG_LLM_TASKS
+        _current_task = asyncio.current_task()
         if _is_bg_llm:
             await self._chat_idle.wait()
             await self._bg_llm_semaphore.acquire()
@@ -1195,17 +1200,25 @@ class ModelRouter:
                 raise
         elif task_type == "chat":
             self._chat_idle.clear()
+            for _bg_task in tuple(self._active_bg_llm_tasks):
+                if _bg_task is not _current_task and not _bg_task.done():
+                    _bg_task.cancel()
+            await asyncio.sleep(0)
+
+        if _is_bg_llm and _current_task is not None:
+            self._active_bg_llm_tasks.add(_current_task)
 
         self._cache_stats["total_calls"] += 1
         extra_headers = self._apply_caching_headers(extra_headers)
 
         _start = time.time()
         try:
-            result = await self._route_with_retry(
-                task_type, config, messages, temperature, mt, stream,
-                tools, tool_choice, timeout, user_openid, session_id,
-                extra_headers=extra_headers,
-            )
+            async with self._llm_call_gate:
+                result = await self._route_with_retry(
+                    task_type, config, messages, temperature, mt, stream,
+                    tools, tool_choice, timeout, user_openid, session_id,
+                    extra_headers=extra_headers,
+                )
             metrics.inc(f"model_route.{task_type}.success")
             metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
             metrics.maybe_report()
@@ -1251,6 +1264,8 @@ class ModelRouter:
             # 释放让路资源：主 chat 完成后 set event 唤醒后台任务；
             # 后台任务完成后 release semaphore 让下一个后台任务执行。
             if _is_bg_llm:
+                if _current_task is not None:
+                    self._active_bg_llm_tasks.discard(_current_task)
                 self._bg_llm_semaphore.release()
             elif task_type == "chat":
                 self._chat_idle.set()

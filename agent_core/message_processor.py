@@ -12,6 +12,7 @@ import random
 import re
 import time
 import tempfile
+from collections import OrderedDict
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
 from zoneinfo import ZoneInfo
@@ -198,6 +199,30 @@ class MessageProcessorMixin:
     MAX_CONSECUTIVE_TOOL_FAILURES = 3   # 连续工具失败上限
     LLM_CALL_TIMEOUT = 30               # 单次 LLM 调用超时
 
+    # ── 跨对话回复去重（模型层面去重机制） ──────────────────
+    # 根因：agnes-2.0-flash 在相似上下文（如角色扮演）下会生成高度相似的回复，
+    #   如"像被电流贯穿一样瞬间僵住！手指死死抓着床单"在 5 次对话中出现 4 次。
+    #   上下文虽含 assistant 历史回复，但模型未有效利用来避免重复。
+    # 修复：维护每个 session 最近 N 条回复，新回复与之比较相似度，
+    #   超阈值则追加"请用完全不同的表达方式"重试一次。
+    REPLY_DEDUP_MAX = 5                 # 每 session 保留最近 5 条回复用于去重
+    REPLY_DEDUP_THRESHOLD = 75.0        # rapidfuzz 0-100 刻度，>=75 视为重复
+    REPLY_DEDUP_RETRY_TIMEOUT = 15      # 去重重试超时（秒）
+    # P0 修复（内存泄漏根因）：session_id 含日期(SES-YYYYMMDD-...)，每天新增 key。
+    # 原实现 _recent_replies: dict 的 session key 永不清理，长期运行无限增长 →
+    # 内存泄漏 → 渐进退化。改为 OrderedDict + LRU，超过 cap 淘汰最久未访问的 session。
+    #
+    # cap 取值评估（确保不导致去重能力受限）：
+    #   - c2c 场景：通常 1-5 个活跃用户，每用户 1 session
+    #   - 群聊场景：session_id=qq_group:{openid}:...，每群活跃用户一个 session
+    #     多群 + 大群可能 100+ 活跃 session
+    #   - 取 256 覆盖群聊大群场景，正常使用永不触发淘汰 → 去重能力不受限
+    #   - 内存上限：256 session × 5 reply × ~200字符 ≈ 256KB，完全可控
+    #   - 极端场景（>256 活跃 session）LRU 淘汰最久未访问者，该用户下次对话
+    #     去重历史为空重新积累，是 graceful 行为而非功能损坏
+    REPLY_DEDUP_SESSION_CAP = 256       # 最大缓存 session 数，LRU 淘汰
+    _recent_replies: "OrderedDict[str, list[str]]" = OrderedDict()  # session_id -> [reply1, ...]
+
     # ── 非主人工具白名单（信息查询 + 基础交互） ─────────────────
     ALLOWED_NON_MASTER_TOOLS: frozenset[str] = frozenset({
         # 搜索 / 信息
@@ -337,7 +362,7 @@ class MessageProcessorMixin:
                             max_tokens=max_tokens,
                             user_openid=user_openid, session_id=session_id,
                         ),
-                        timeout=30,
+                        timeout=15,
                     )
                     _retry_text = ""
                     if isinstance(_retry_result, str):
@@ -388,7 +413,7 @@ class MessageProcessorMixin:
                             max_tokens=max_tokens,
                             user_openid=user_openid, session_id=session_id,
                         ),
-                        timeout=30,
+                        timeout=15,
                     )
                     _retry_text = ""
                     if isinstance(_retry_result, str):
@@ -1328,6 +1353,18 @@ class MessageProcessorMixin:
                 raise RuntimeError("empty_reply_guard: verification loop 返回空回复")
             logger.info("agent.got_reply", length=len(reply), preview=reply[:80],
                         tool_count=len(tool_results))
+            # ── 跨对话回复去重（模型层面去重机制） ──
+            # 检测新回复与最近 N 条回复的相似度，超阈值则重试一次
+            # P0 修复：移除 `not tool_results` 门控条件
+            # 根因：诊断日志证实"在吗"类问候回复 tool_cnt=1（情绪/贴纸工具）被跳过去重，
+            #   而数据库里"在的呢～""像被电流贯穿"等重复恰是问候/角色扮演回复——
+            #   这类最易重复的回复却被排除在去重之外，导致去重对最严重场景完全失效。
+            # reply 是 LLM 最终回复文本，与是否调用工具无关，应统一参与去重。
+            if reply and len(reply) > 20:
+                reply = await self._dedup_reply_against_recent(
+                    reply, messages, task_type, _model_cfg,
+                    _cb_max_tokens, user_openid, session_id, trace,
+                )
             if circuit_state == CircuitState.HALF_OPEN:
                 self._circuit_breaker.on_half_open_success(self._cognitive_state)
             else:
@@ -1358,6 +1395,123 @@ class MessageProcessorMixin:
                     logger.debug(f"agent.flash_fallback: {e}")
                     reply = DEGRADED_REPLY
         return reply, tool_results
+
+    def _dedup_buf(self, sess: str) -> list[str]:
+        """获取 session 的去重缓冲（LRU 维护 + 上限淘汰）。
+
+        根因：_recent_replies 原为 dict，session_id 含日期(SES-YYYYMMDD-...)每天
+        新增 key 且永不清理 → 长期运行内存泄漏 → 渐进退化。
+        修复：OrderedDict + LRU，访问时 move_to_end 提到最近，超过
+        REPLY_DEDUP_SESSION_CAP 时 popitem(last=False) 淘汰最久未访问的 session。
+        """
+        _dd = self._recent_replies
+        buf = _dd.setdefault(sess, [])
+        _dd.move_to_end(sess)
+        while len(_dd) > self.REPLY_DEDUP_SESSION_CAP:
+            _dd.popitem(last=False)
+        return buf
+
+    async def _dedup_reply_against_recent(
+        self, reply: str, messages: Any, task_type: Any, _model_cfg: Any,
+        _cb_max_tokens: Any, user_openid: Any, session_id: Any, trace: Any,
+    ) -> str:
+        """跨对话回复去重：检测新回复与最近回复的相似度，重复则重试一次。
+
+        根因：agnes-2.0-flash 在相似上下文下生成高度相似回复（如"像被电流贯穿
+        一样瞬间僵住"在 5 次对话中出现 4 次）。上下文虽含历史回复，但模型未
+        有效利用来避免重复。
+
+        机制：
+        1. 维护每 session 最近 REPLY_DEDUP_MAX 条回复（内存缓存）
+        2. 新回复与之比较 rapidfuzz 相似度
+        3. 超阈值则追加 system message 要求"完全不同的表达"重试一次
+        4. 重试后仍相似 → 用原文（不无限重试，避免阻塞）
+        5. 无论用哪个，都更新缓存
+        """
+        from utils.similarity import ratio as text_ratio
+
+        _sess = session_id or user_openid or "_default"
+        recent = self._dedup_buf(_sess)  # LRU 维护 + 上限淘汰
+
+        # 诊断（临时）：记录去重执行状态，定位"去重未触发"根因
+        logger.info(f"reply.dedup_probe | sess={_sess[:24]} | recent_cnt={len(recent)} | reply_preview={reply[:40]}")
+
+        # 无历史回复，直接记录并返回
+        if not recent:
+            recent.append(reply)
+            return reply
+
+        # 计算与最近回复的最大相似度
+        max_sim = max(text_ratio(reply, r) for r in recent)
+        logger.info(f"reply.dedup_check | sess={_sess[:20]} | max_sim={max_sim:.1f} | recent_cnt={len(recent)}")
+
+        if max_sim < self.REPLY_DEDUP_THRESHOLD:
+            # 不重复，记录并返回（保持最近 N 条）
+            _buf = self._dedup_buf(_sess)
+            _buf.append(reply)
+            if len(_buf) > self.REPLY_DEDUP_MAX:
+                del _buf[: len(_buf) - self.REPLY_DEDUP_MAX]
+            return reply
+
+        # 重复了，重试一次
+        trace.warning("reply.duplicate_detected",
+                      max_similarity=round(max_sim, 1),
+                      recent_count=len(recent),
+                      preview=reply[:60])
+
+        try:
+            _retry_messages = list(messages) + [{
+                "role": "system",
+                "content": (
+                    f"你刚才的回复与之前说过的内容相似度高达{max_sim:.0f}%，"
+                    "几乎是一模一样的话。请用完全不同的措辞、句式和描写角度重新回复，"
+                    "不要重复之前用过的任何描写（如'像被电流贯穿''手指死死抓着床单'等），"
+                    "换一种全新的表达方式。"
+                ),
+            }]
+            _retry_result = await asyncio.wait_for(
+                self.router.route(
+                    task_type, _retry_messages,
+                    temperature=min(_get_temperature(_model_cfg) + 0.2, 1.5),
+                    max_tokens=_cb_max_tokens,
+                    user_openid=user_openid, session_id=session_id,
+                ),
+                timeout=self.REPLY_DEDUP_RETRY_TIMEOUT,
+            )
+            _retry_reply = ""
+            if isinstance(_retry_result, str):
+                _retry_reply = self._clean_reply(_retry_result)
+            else:
+                _retry_reply = getattr(
+                    _retry_result.choices[0].message, "content", "") or ""
+                _retry_reply = self._clean_reply(_retry_reply)
+
+            if _retry_reply and len(_retry_reply) > 20:
+                _retry_sim = max(text_ratio(_retry_reply, r) for r in recent)
+                if _retry_sim < self.REPLY_DEDUP_THRESHOLD:
+                    # 重试成功，不重复了
+                    trace.info("reply.duplicate_retry_success",
+                               original_sim=round(max_sim, 1),
+                               retry_sim=round(_retry_sim, 1))
+                    _buf = self._dedup_buf(_sess)
+                    _buf.append(_retry_reply)
+                    if len(_buf) > self.REPLY_DEDUP_MAX:
+                        del _buf[: len(_buf) - self.REPLY_DEDUP_MAX]
+                    return _retry_reply
+                else:
+                    trace.warning("reply.duplicate_retry_still_similar",
+                                  retry_sim=round(_retry_sim, 1))
+            else:
+                trace.warning("reply.duplicate_retry_empty_or_short")
+        except Exception as e:
+            trace.warning("reply.duplicate_retry_failed", error=str(e)[:200])
+
+        # 重试失败或仍重复，用原文（不无限重试）
+        _buf = self._dedup_buf(_sess)
+        _buf.append(reply)
+        if len(_buf) > self.REPLY_DEDUP_MAX:
+            del _buf[: len(_buf) - self.REPLY_DEDUP_MAX]
+        return reply
 
     async def _build_voice_result(self, clean_reply: Any, emotion_label: Any, force_voice: Any) -> tuple:
         """构建语音合成结果。返回 (audio_path, tts_pending, tts_text)。
@@ -1799,7 +1953,7 @@ class MessageProcessorMixin:
 
             # 轻量级 LLM 调用（使用 flash 路由，低成本）
             response = await self.router.route(
-                task_type="chat",
+                task_type="memory_encoding",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=512,

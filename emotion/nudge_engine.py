@@ -373,7 +373,7 @@ class NudgeEngine:
                     {"role": "user", "content": user_msg},
                 ]
                 result = await asyncio.wait_for(
-                    self._router.route("chat", messages, temperature=get_temperature(default=0.9)),
+                    self._router.route("memory_encoding", messages, temperature=get_temperature(default=0.9)),
                     timeout=30,
                 )
                 greeting = result if isinstance(result, str) else result.choices[0].message.content or ""
