@@ -41,7 +41,7 @@ def _fire_and_forget(coro) -> asyncio.Task:
 try:
     from config import ENABLE_J_SPACE_HOOKS
     if ENABLE_J_SPACE_HOOKS:
-        from core.behavioral_signal import BehavioralSignalStream
+        from core.behavioral_health import BehavioralSignalStream
         _signal_stream: "BehavioralSignalStream | None" = None
     else:
         _signal_stream = None
@@ -265,7 +265,10 @@ class AgentIntrospector:
             logger.debug(f"Introspect.health_scorer_failed: {e!r}")
         # 回退: doctor/behavioral_health.py 的 BehavioralHealthMonitor
         try:
-            from doctor.behavioral_health import get_behavioral_health_monitor
+            try:
+                from doctor.behavioral_health import get_behavioral_health_monitor
+            except ImportError:
+                return
             monitor = get_behavioral_health_monitor()
             report = monitor.get_health_report()
             bhs = float(report.get("behavioral_health_score", 1.0))

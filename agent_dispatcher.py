@@ -1,29 +1,32 @@
-import json
 import asyncio
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
-from openai import AsyncOpenAI
 
 from loguru import logger
-from tool_engine.tool_registry import to_openai_tools
-from tool_engine.tool_executor import ToolExecutor, ToolResult
-from tool_engine.tool_repair import ToolCallRepair
-from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_dsml, strip_reasoning, humanize
-from utils.llm_cleanup import deduplicate_multi_reply
-from emotion.tts_engine import TTSEngine
-from emotion.emoji_config import get_status_msg
-from tool_engine.tool_guardrails import get_tool_guardrails
-from utils.credential_pool import CredentialPool
-from core.message import AgentMessage
+from openai import AsyncOpenAI
+
 from config import get_agent_display_name
+from core.message import AgentMessage
+from emotion.emoji_config import get_status_msg
+from emotion.tts_engine import TTSEngine
+from tool_engine.tool_executor import ToolExecutor, ToolResult
+from tool_engine.tool_guardrails import get_tool_guardrails
+from tool_engine.tool_registry import to_openai_tools
+from tool_engine.tool_repair import ToolCallRepair
+from utils.credential_pool import CredentialPool
+from utils.llm_cleanup import deduplicate_multi_reply
+from utils.text_utils import has_dsml_tool_calls, humanize, parse_dsml_tool_calls, strip_dsml, strip_reasoning
 
 # J-Space Hook: 干预闭环
 try:
     from config import ENABLE_J_SPACE_HOOKS
+
     if ENABLE_J_SPACE_HOOKS:
-        from core.behavioral_signal import BehavioralSignalStream
+        from core.behavioral_health import BehavioralSignalStream
         from core.intervention_loop import InterventionLoop
+
         _signal_stream: BehavioralSignalStream | None = None
         _intervention_loop: InterventionLoop | None = None
     else:
@@ -36,9 +39,11 @@ except ImportError:
 
 # ── ToolCallExtractor 统一接口 ──────────────────────────────
 
+
 @dataclass
 class ExtractedToolCall:
     """统一的工具调用结构，无论来源是标准 tool_calls 还是 DSML 文本。"""
+
     id: str
     name: str
     arguments_json: str  # JSON string
@@ -102,9 +107,9 @@ class DsmlExtractor:
 
 # 子代理禁止使用的工具列表（借鉴 Hermes delegate_tool.py）
 DELEGATE_BLOCKED_TOOLS = {
-    "delegate_task",      # 禁止递归委托
-    "send_message",       # 禁止跨平台消息
-    "memory_write",       # 禁止共享记忆写入
+    "delegate_task",  # 禁止递归委托
+    "send_message",  # 禁止跨平台消息
+    "memory_write",  # 禁止共享记忆写入
     "agnes_video_generate",  # 视频生成耗时过长
 }
 
@@ -126,36 +131,43 @@ class SubAgentConfig:
     mcp_servers: list[str] = field(default_factory=list)
     max_spawn_depth: int = 1  # 子代理最大嵌套深度
     # 增强配置字段
-    max_turns: int | None = None           # 最大对话轮数
-    effort: str | None = None              # 思考努力程度: "low"/"medium"/"high"
-    permission_mode: str | None = None     # 权限模式: "default"/"dev"/"strict"
-    memory_scope: str | None = None        # 记忆作用域: "shared"/"isolated"
-    background: bool = False               # 是否后台运行
-    wallpaper: str = ""                    # 聊天背景板 URL（/assets/... 或上传后的 /media/...）
-    sticker_dir: str = ""                  # 表情包目录路径（为空则自动推导）
-    allowed_paths: list[str] = field(default_factory=list)    # 允许修改的路径白名单（glob 模式）
+    max_turns: int | None = None  # 最大对话轮数
+    effort: str | None = None  # 思考努力程度: "low"/"medium"/"high"
+    permission_mode: str | None = None  # 权限模式: "default"/"dev"/"strict"
+    memory_scope: str | None = None  # 记忆作用域: "shared"/"isolated"
+    background: bool = False  # 是否后台运行
+    wallpaper: str = ""  # 聊天背景板 URL（/assets/... 或上传后的 /media/...）
+    sticker_dir: str = ""  # 表情包目录路径（为空则自动推导）
+    allowed_paths: list[str] = field(default_factory=list)  # 允许修改的路径白名单（glob 模式）
     forbidden_paths: list[str] = field(default_factory=list)  # 禁止修改的路径黑名单
 
 
 def _read_env_key(env_var: str) -> str:
     """读取环境变量或 .env 文件中的配置值（委托给共享模块）。"""
     from utils.env_reader import read_env_key
+
     return read_env_key(env_var)
 
 
 def _is_tool_unsupported_error(error_str: str) -> bool:
     """判断错误是否表示模型不支持工具调用（委托给共享模块）。"""
     from utils.env_reader import is_tool_unsupported_error
+
     return is_tool_unsupported_error(error_str)
 
 
 class SubAgent:
     """单个子 Agent 实例，封装客户端、配置与调用逻辑。"""
-    def __init__(self, config: SubAgentConfig, tts: TTSEngine,
-                 tool_executor: ToolExecutor | None = None,
-                 tool_repair: ToolCallRepair | None = None,
-                 delegate_callback: Any | None=None,
-                 core: Any | None=None) -> None:
+
+    def __init__(
+        self,
+        config: SubAgentConfig,
+        tts: TTSEngine,
+        tool_executor: ToolExecutor | None = None,
+        tool_repair: ToolCallRepair | None = None,
+        delegate_callback: Any | None = None,
+        core: Any | None = None,
+    ) -> None:
         self.config = config
         self._tts = tts
         self._tool_executor = tool_executor
@@ -182,14 +194,18 @@ class SubAgent:
             # 探活已禁用：max_tokens=1 在某些 API 上会被拒绝，
             # 而 4 个子 Agent 串行探活会消耗配额/触发限流。
             # 实际调用时如果 Key 无效会自然报错，无需提前探活。
-            logger.info("sub_agent.initialized", name=self.config.name,
-                        provider=self.config.provider, model=self.config.model)
+            logger.info(
+                "sub_agent.initialized", name=self.config.name, provider=self.config.provider, model=self.config.model
+            )
         else:
             # 客户端创建失败（API Key 未找到或 base_url 缺失），
             # 标记为降级模式：仍注册但实际调用时回退到主 Agent
             self._degraded = True
-            logger.warning("sub_agent.degraded_no_client", name=self.config.name,
-                           reason="api_key_missing" if not _read_env_key(self.config.api_key_env) else "no_base_url")
+            logger.warning(
+                "sub_agent.degraded_no_client",
+                name=self.config.name,
+                reason="api_key_missing" if not _read_env_key(self.config.api_key_env) else "no_base_url",
+            )
 
     def _load_personality(self) -> None:
         """加载人格文件并应用全局名称替换。"""
@@ -204,6 +220,7 @@ class SubAgent:
 
         # 全局替换所有 agent 原名为 display_name（统一机制）
         from config import apply_agent_name_replacements
+
         self._personality = apply_agent_name_replacements(self._personality)
 
         # effort 思考努力程度提示
@@ -234,24 +251,24 @@ class SubAgent:
                 logger.debug("agent_dispatcher.close_client_error", exc_info=True)
             self._client = None
 
-    async def reload_model_config(self, provider: str, model: str,
-                                  base_url: str, api_key_env: str) -> bool:
+    async def reload_model_config(self, provider: str, model: str, base_url: str, api_key_env: str) -> bool:
         """热重载模型配置：用新配置创建客户端并原子替换，不重新运行启动探活。
 
         用于一键切换子 Agent 模型时避免服务重启。
         """
         api_key = _read_env_key(api_key_env)
         if not api_key or not base_url:
-            logger.warning("sub_agent.reload_failed",
-                           name=self.config.name,
-                           reason="missing_api_key_or_base_url",
-                           api_key_env=api_key_env)
+            logger.warning(
+                "sub_agent.reload_failed",
+                name=self.config.name,
+                reason="missing_api_key_or_base_url",
+                api_key_env=api_key_env,
+            )
             return False
         try:
             new_client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         except (ValueError, OSError, RuntimeError) as e:
-            logger.warning("sub_agent.reload_client_failed",
-                           name=self.config.name, error=str(e)[:200])
+            logger.warning("sub_agent.reload_client_failed", name=self.config.name, error=str(e)[:200])
             return False
         # 原子替换：先就位再切，避免半成品状态
         self._client = new_client
@@ -261,8 +278,7 @@ class SubAgent:
         self.config.api_key_env = api_key_env
         self._initialized = True
         self._degraded = False  # 清除降级标记：新 Key 已就位，允许调用
-        logger.info("sub_agent.model_reloaded",
-                    name=self.config.name, provider=provider, model=model)
+        logger.info("sub_agent.model_reloaded", name=self.config.name, provider=provider, model=model)
         return True
 
     @property
@@ -282,56 +298,60 @@ class SubAgent:
         tools = [t for t in all_tools if t["function"]["name"] not in excluded]
 
         # 子代理专属工具：submit_memory（受控记忆提交，实例方法拦截执行）
-        tools.append({
-            "type": "function",
-            "function": {
-                "name": "submit_memory",
-                "description": "向主记忆提交重要观察（单次任务最多 3 次）",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "key_points": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "关键观察点列表",
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": "submit_memory",
+                    "description": "向主记忆提交重要观察（单次任务最多 3 次）",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "key_points": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "关键观察点列表",
+                            },
+                            "importance": {
+                                "type": "integer",
+                                "description": "重要程度(0-4)，默认 3，最大 4",
+                                "default": 3,
+                                "maximum": 4,
+                            },
                         },
-                        "importance": {
-                            "type": "integer",
-                            "description": "重要程度(0-4)，默认 3，最大 4",
-                            "default": 3,
-                            "maximum": 4,
-                        },
+                        "required": ["key_points"],
                     },
-                    "required": ["key_points"],
                 },
-            },
-        })
+            }
+        )
 
         # 子代理专属工具：send_message_to_agent（子代理间直接通信，实例方法拦截执行）
-        tools.append({
-            "type": "function",
-            "function": {
-                "name": "send_message_to_agent",
-                "description": f"直接向另一个子代理发消息获取响应（无需通过{get_agent_display_name('xiaoda')}中转）",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "target_agent": {
-                            "type": "string",
-                            "description": "要联系的小伙伴名字",
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": "send_message_to_agent",
+                    "description": f"直接向另一个子代理发消息获取响应（无需通过{get_agent_display_name('xiaoda')}中转）",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_agent": {
+                                "type": "string",
+                                "description": "要联系的小伙伴名字",
+                            },
+                            "message": {
+                                "type": "string",
+                                "description": "要发送的消息内容",
+                            },
                         },
-                        "message": {
-                            "type": "string",
-                            "description": "要发送的消息内容",
-                        },
+                        "required": ["target_agent", "message"],
                     },
-                    "required": ["target_agent", "message"],
                 },
-            },
-        })
+            }
+        )
 
         # Add MCP tools if available
-        if hasattr(self._core, '_mcp_manager') and self._core._mcp_manager:
+        if hasattr(self._core, "_mcp_manager") and self._core._mcp_manager:
             mcp_server_names = self.config.mcp_servers
             if mcp_server_names:
                 mcp_tools = self._core._mcp_manager.get_tools_for_agent(mcp_server_names)
@@ -348,7 +368,14 @@ class SubAgent:
         names.add("send_message_to_agent")  # 子代理专属工具：子代理间直接通信
         return names
 
-    async def chat(self, message: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "") -> str:
+    async def chat(
+        self,
+        message: str,
+        context: str = "",
+        status_callback: Any | None = None,
+        address_term: str = "爸爸",
+        extra_system_prompt: str = "",
+    ) -> str:
         # 降级模式下尝试自动恢复：用最新环境变量中的 Key 重建客户端
         if self._degraded:
             api_key = _read_env_key(self.config.api_key_env)
@@ -424,8 +451,7 @@ class SubAgent:
         if _signal_stream is not None:
             try:
                 success_score = 1.0 if success else 0.0
-                await _signal_stream.emit(
-                    f"agent_{self.config.name}_success", success_score, "agent_dispatcher")
+                await _signal_stream.emit(f"agent_{self.config.name}_success", success_score, "agent_dispatcher")
             except Exception:
                 logger.debug("agent_dispatcher.signal_emit_failed")
 
@@ -436,22 +462,22 @@ class SubAgent:
     async def _handle_tool_result(self, tool_name: str, result: ToolResult) -> str:
         result_text = ""
         from core.delegation import DelegationRequest
+
         delegation_req = None
         if result.success and isinstance(result.data, DelegationRequest):
             delegation_req = result.data
         elif result.success and isinstance(result.data, AgentMessage) and result.data.is_delegate_request():
             # 优先用 AgentMessage 结构化协议识别
-            delegation_req = DelegationRequest(
-                type="xiaoda", question=result.data.content, delegator=self.config.name
-            )
+            delegation_req = DelegationRequest(type="xiaoda", question=result.data.content, delegator=self.config.name)
         elif result.success and isinstance(result.data, str) and result.data.startswith("[NAHIDA_PENDING]"):
             # fallback: 旧字符串匹配（过渡期保留）
             import logging
+
             logging.getLogger(__name__).warning(
                 "使用废弃的 [NAHIDA_PENDING] 字符串匹配识别委托，请迁移到 AgentMessage 协议"
             )
             delegation_req = DelegationRequest(
-                type="xiaoda", question=result.data[len("[NAHIDA_PENDING]"):], delegator=self.config.name
+                type="xiaoda", question=result.data[len("[NAHIDA_PENDING]") :], delegator=self.config.name
             )
 
         if delegation_req and delegation_req.type == "xiaoda":
@@ -459,6 +485,7 @@ class SubAgent:
             if self._delegate_callback:
                 # 委托深度检查：超过 2 层直接返回兜底回复，防止无限循环
                 from agent_core import _current_request_ctx
+
                 _ctx = _current_request_ctx.get()
                 if _ctx and _ctx.delegate_depth >= 2:
                     logger.warning("delegate.depth_exceeded", depth=_ctx.delegate_depth, from_agent=self.config.name)
@@ -469,7 +496,9 @@ class SubAgent:
             else:
                 result_text = "主Agent现在不在...先自己想想办法吧！"
         elif result.success:
-            result_text = json.dumps(result.data, ensure_ascii=False) if not isinstance(result.data, str) else result.data
+            result_text = (
+                json.dumps(result.data, ensure_ascii=False) if not isinstance(result.data, str) else result.data
+            )
         else:
             result_text = f"错误: {result.error}"
         if len(result_text) > 4000:
@@ -478,11 +507,23 @@ class SubAgent:
 
     def _is_reasoning_model(self) -> bool:
         model = self.config.model.lower()
-        return any(kw in model for kw in [
-            "v4-flash", "v4-pro", "v3", "reasoner", "r1",
-            "nex-n2", "nex-agi", "thinking", "o1", "o3", "o4",
-            "agnes",  # agnes 系列模型默认开启推理模式
-        ])
+        return any(
+            kw in model
+            for kw in [
+                "v4-flash",
+                "v4-pro",
+                "v3",
+                "reasoner",
+                "r1",
+                "nex-n2",
+                "nex-agi",
+                "thinking",
+                "o1",
+                "o3",
+                "o4",
+                "agnes",  # agnes 系列模型默认开启推理模式
+            ]
+        )
 
     def _build_dsml_tool_prompt(self) -> str:
         tools = self._filtered_tools()
@@ -494,11 +535,10 @@ class SubAgent:
             params = f.get("parameters", {}).get("properties", {})
             required = f.get("parameters", {}).get("required", [])
             param_desc = ", ".join(
-                f'{k}({", ".join(str(x) for x in v.get("enum", []))})' if "enum" in v else k
-                for k, v in params.items()
+                f"{k}({', '.join(str(x) for x in v.get('enum', []))})" if "enum" in v else k for k, v in params.items()
             )
             req_mark = "必填" if required else ""
-            lines.append(f'- {f["name"]}({param_desc}) {req_mark}: {f.get("description", "")}')
+            lines.append(f"- {f['name']}({param_desc}) {req_mark}: {f.get('description', '')}")
         lines.append("""
 调用格式示例:
 <｜｜DSML｜｜tool_calls>
@@ -517,8 +557,9 @@ class SubAgent:
         tool_names = self._filtered_tool_names()
         # 超时配置从 config 读取 (支持环境变量覆盖)
         import config as _cfg
-        api_timeout = getattr(_cfg, 'SUB_AGENT_API_TIMEOUT', 60)
-        total_timeout = getattr(_cfg, 'SUB_AGENT_TOTAL_TIMEOUT', 150)
+
+        api_timeout = getattr(_cfg, "SUB_AGENT_API_TIMEOUT", 60)
+        total_timeout = getattr(_cfg, "SUB_AGENT_TOTAL_TIMEOUT", 150)
         total_deadline = asyncio.get_running_loop().time() + total_timeout
         is_reasoning = self._is_reasoning_model()
 
@@ -580,9 +621,9 @@ class SubAgent:
             return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
         return await self._summarize_after_tools(working, api_timeout, remaining)
 
-    def _inject_dsml_if_needed(self, working: list[dict], tools: list[dict] | None,
-                                is_reasoning: bool,
-                                tool_names: list[str]) -> list[dict] | None:
+    def _inject_dsml_if_needed(
+        self, working: list[dict], tools: list[dict] | None, is_reasoning: bool, tool_names: list[str]
+    ) -> list[dict] | None:
         """推理模型注入 DSML 工具提示并禁用原生 tools; 非推理模型保持原样返回 tools"""
         if is_reasoning and tools:
             dsml_prompt = self._build_dsml_tool_prompt()
@@ -594,16 +635,18 @@ class SubAgent:
             tools = None
         return tools
 
-    async def _call_llm_one_round(self, working: list[dict], tools: list[dict] | None,
-                                  remaining: float, round_idx: int) -> Any:
+    async def _call_llm_one_round(
+        self, working: list[dict], tools: list[dict] | None, remaining: float, round_idx: int
+    ) -> Any:
         """单轮调用 LLM API; 超时返回用户可见的提示字符串, 成功返回响应对象
 
         超时重试: 网络抖动导致首次超时时, 用半超时值重试一次 (工业标准做法).
         重试也超时才返回错误提示.
         """
         import config as _cfg
-        api_timeout = getattr(_cfg, 'SUB_AGENT_API_TIMEOUT', 60)
-        retry_count = getattr(_cfg, 'SUB_AGENT_API_RETRY', 1)
+
+        api_timeout = getattr(_cfg, "SUB_AGENT_API_TIMEOUT", 60)
+        retry_count = getattr(_cfg, "SUB_AGENT_API_RETRY", 1)
         loop = asyncio.get_running_loop()
 
         for attempt in range(max(retry_count, 0) + 1):
@@ -620,6 +663,7 @@ class SubAgent:
                 if self.config.provider == "agnes":
                     # 读取 ROUTE_TABLE 中 chat 任务的 thinking 配置（全局开关）
                     from model_router import ROUTE_TABLE
+
                     chat_config = ROUTE_TABLE.get("chat", {})
                     # 修复：必须检查 type == "enabled"，而非 "is not None"
                     # 否则 thinking={"type":"disabled"} 时 is not None 返回 True，反而开启 thinking
@@ -627,6 +671,7 @@ class SubAgent:
                     thinking_enabled = _thinking_cfg.get("type") == "enabled"
                     extra_body = {"chat_template_kwargs": {"enable_thinking": thinking_enabled}}
                 from config import get_temperature
+
                 response = await asyncio.wait_for(
                     self._client.chat.completions.create(
                         model=self.config.model,
@@ -640,20 +685,28 @@ class SubAgent:
                     timeout=cur_timeout,
                 )
                 elapsed = loop.time() - t0
-                logger.info("sub_agent.api_ok", name=self.config.name,
-                            round=round_idx, attempt=attempt, elapsed=f"{elapsed:.1f}s",
-                            thinking=extra_body.get("chat_template_kwargs", {}).get("enable_thinking") if extra_body else None)
+                logger.info(
+                    "sub_agent.api_ok",
+                    name=self.config.name,
+                    round=round_idx,
+                    attempt=attempt,
+                    elapsed=f"{elapsed:.1f}s",
+                    thinking=extra_body.get("chat_template_kwargs", {}).get("enable_thinking") if extra_body else None,
+                )
                 return response
             except TimeoutError:
                 if attempt < retry_count:
-                    logger.warning("sub_agent.api_timeout_retry",
-                                   name=self.config.name, round=round_idx,
-                                   attempt=attempt, next_timeout=f"{cur_timeout/2:.1f}s")
+                    logger.warning(
+                        "sub_agent.api_timeout_retry",
+                        name=self.config.name,
+                        round=round_idx,
+                        attempt=attempt,
+                        next_timeout=f"{cur_timeout / 2:.1f}s",
+                    )
                     # 更新 remaining (扣除已等待时间)
                     remaining -= cur_timeout
                     continue
-                logger.warning("sub_agent.api_timeout", name=self.config.name,
-                               round=round_idx, attempts=attempt + 1)
+                logger.warning("sub_agent.api_timeout", name=self.config.name, round=round_idx, attempts=attempt + 1)
                 return f"{self.config.display_name}思考时间太长了，请稍后再试吧～"
         # 防御性兜底: retry_count 为负数时 for 循环不执行, 确保始终有返回值
         return f"{self.config.display_name}思考时间太长了，请稍后再试吧～"
@@ -669,11 +722,9 @@ class SubAgent:
                 timeout=120,
             )
         except TimeoutError:
-            logger.warning("sub_agent.tool_gather_timeout name={} count={}",
-                           self.config.name, len(extracted))
+            logger.warning("sub_agent.tool_gather_timeout name={} count={}", self.config.name, len(extracted))
             for tc in extracted:
-                working.append({"role": "tool", "tool_call_id": tc.id,
-                                "content": "错误: 工具执行超时"})
+                working.append({"role": "tool", "tool_call_id": tc.id, "content": "错误: 工具执行超时"})
             return
 
         for tc, r in zip(extracted, tool_results, strict=False):
@@ -691,8 +742,7 @@ class SubAgent:
             "role": "assistant",
             "content": clean_content,
             "tool_calls": [
-                {"id": tc.id, "type": "function",
-                 "function": {"name": tc.name, "arguments": tc.arguments_json}}
+                {"id": tc.id, "type": "function", "function": {"name": tc.name, "arguments": tc.arguments_json}}
                 for tc in extracted
             ],
         }
@@ -719,9 +769,7 @@ class SubAgent:
 
         # 过滤被禁止的工具
         if tool_name in DELEGATE_BLOCKED_TOOLS:
-            tool_result_content = json.dumps({
-                "error": f"工具 {tool_name} 在子代理中被禁止使用"
-            }, ensure_ascii=False)
+            tool_result_content = json.dumps({"error": f"工具 {tool_name} 在子代理中被禁止使用"}, ensure_ascii=False)
             return {"tool_call_id": tc.id, "content": tool_result_content}
 
         # 子代理专属工具：submit_memory（实例方法拦截，不走全局 executor）
@@ -751,8 +799,7 @@ class SubAgent:
         result = await self._tool_executor.execute(tool_name, args)
 
         # 记录工具调用到护栏
-        await guardrails.record_call(tool_name, args, result.success,
-                               str(result.data)[:100] if result.data else "")
+        await guardrails.record_call(tool_name, args, result.success, str(result.data)[:100] if result.data else "")
 
         result_text = await self._handle_tool_result(tool_name, result)
 
@@ -762,35 +809,38 @@ class SubAgent:
 
         return {"tool_call_id": tc.id, "content": result_text}
 
-    async def _summarize_after_tools(self, working: list[dict], api_timeout: int,
-                                       remaining: float) -> str:
+    async def _summarize_after_tools(self, working: list[dict], api_timeout: int, remaining: float) -> str:
         """达到最大轮次后：若有未消化的 tool 结果，让 LLM 做一次总结回复。
 
         超时或异常时降级返回 tool 内容的前若干行，避免完全无响应。
         """
         last_tool = working[-1] if working else {}
         if isinstance(last_tool, dict) and last_tool.get("role") == "tool":
-            working.append({
-                "role": "system",
-                "content": f"你已经调用了工具并拿到了结果。现在请基于工具返回的数据，用{self.config.display_name}的风格做总结回复。\n\n"
-                f"回复结构要求：\n"
-                f"1. 首先明确说明执行了什么操作（如「搜索了XX」「查看了XX」），不要用「数据加载完毕」这种模糊表述\n"
-                f"2. 然后用自然语言描述关键结果，数据要清楚明确\n"
-                f"3. 最后可以加一句个性化评论\n\n"
-                f"不要只复制原始数据，要用自然语言解释关键信息。如果数据有异常要指出。",
-            })
+            working.append(
+                {
+                    "role": "system",
+                    "content": f"你已经调用了工具并拿到了结果。现在请基于工具返回的数据，用{self.config.display_name}的风格做总结回复。\n\n"
+                    f"回复结构要求：\n"
+                    f"1. 首先明确说明执行了什么操作（如「搜索了XX」「查看了XX」），不要用「数据加载完毕」这种模糊表述\n"
+                    f"2. 然后用自然语言描述关键结果，数据要清楚明确\n"
+                    f"3. 最后可以加一句个性化评论\n\n"
+                    f"不要只复制原始数据，要用自然语言解释关键信息。如果数据有异常要指出。",
+                }
+            )
 
         try:
             # 为 agnes 模型读取全局 thinking 配置
             extra_body = None
             if self.config.provider == "agnes":
                 from model_router import ROUTE_TABLE
+
                 chat_config = ROUTE_TABLE.get("chat", {})
                 # 修复：必须检查 type == "enabled"，而非 "is not None"
                 _thinking_cfg = chat_config.get("thinking") or {}
                 thinking_enabled = _thinking_cfg.get("type") == "enabled"
                 extra_body = {"chat_template_kwargs": {"enable_thinking": thinking_enabled}}
             from config import get_temperature
+
             response = await asyncio.wait_for(
                 self._client.chat.completions.create(
                     model=self.config.model,
@@ -820,6 +870,7 @@ class SubAgent:
                     return formatted
                 return raw_content
             return f"{self.config.display_name}现在有点累了...等会儿再来吧！💤"
+
     async def submit_memory(self, key_points: list[str], importance: int = 3) -> str:
         """子代理向主记忆提交关键信息（受控写入）"""
         # 频率限制：单次任务最多 3 次
@@ -916,21 +967,25 @@ class SubAgent:
 # RouterEngine agent name → task_type 反向映射
 # 用于 classify_task 委托 RouterEngine 后保持返回格式一致（task_type 字符串）
 _AGENT_TO_TASK_TYPE = {
-    "xiaolang": "debug",       # 编程/调试/系统
-    "xiaoke": "research",      # 学术研究
-    "xiaolian": "info_search", # 信息搜索
-    "xiaoli": "emotional",     # 情感陪伴
-    "xiaoda": "memory",        # 记忆检索/主Agent
+    "xiaolang": "debug",  # 编程/调试/系统
+    "xiaoke": "research",  # 学术研究
+    "xiaolian": "info_search",  # 信息搜索
+    "xiaoli": "emotional",  # 情感陪伴
+    "xiaoda": "memory",  # 记忆检索/主Agent
 }
 
 
 class AgentDispatcher:
     """管理多个子 Agent 的注册、调度与降级调用。"""
-    def __init__(self, tts: TTSEngine,
-                 tool_executor: ToolExecutor | None = None,
-                 tool_repair: ToolCallRepair | None = None,
-                 delegate_callback: Any | None=None,
-                 core: Any | None=None) -> None:
+
+    def __init__(
+        self,
+        tts: TTSEngine,
+        tool_executor: ToolExecutor | None = None,
+        tool_repair: ToolCallRepair | None = None,
+        delegate_callback: Any | None = None,
+        core: Any | None = None,
+    ) -> None:
         self._tts = tts
         self._tool_executor = tool_executor
         self._tool_repair = tool_repair
@@ -976,13 +1031,21 @@ class AgentDispatcher:
     async def close(self) -> None:
         """关闭所有 SubAgent 的 AsyncOpenAI 客户端."""
         for agent in self._agents.values():
-            if hasattr(agent, 'close'):
+            if hasattr(agent, "close"):
                 try:
                     await agent.close()
                 except (OSError, RuntimeError):
                     logger.debug("agent_dispatcher.close_sub_agent_error", exc_info=True)
 
-    async def dispatch_single(self, name: str, task: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "") -> str | None:
+    async def dispatch_single(
+        self,
+        name: str,
+        task: str,
+        context: str = "",
+        status_callback: Any | None = None,
+        address_term: str = "爸爸",
+        extra_system_prompt: str = "",
+    ) -> str | None:
         """单子代理调度（原 dispatch 方法）。
 
         保留为独立方法以与并行调度（SubAgentManagerMixin.parallel_dispatch）区分；
@@ -992,7 +1055,13 @@ class AgentDispatcher:
         if not agent:
             logger.warning("dispatcher.agent_not_found", name=name)
             return None
-        return await agent.chat(task, context=context, status_callback=status_callback, address_term=address_term, extra_system_prompt=extra_system_prompt)
+        return await agent.chat(
+            task,
+            context=context,
+            status_callback=status_callback,
+            address_term=address_term,
+            extra_system_prompt=extra_system_prompt,
+        )
 
     # 向后兼容别名：保留 dispatch 指向 dispatch_single
     dispatch = dispatch_single
@@ -1001,10 +1070,7 @@ class AgentDispatcher:
         return self._agents.get(name)
 
     def list_agents(self) -> list[dict]:
-        return [
-            {"name": name, "display_name": agent.config.display_name}
-            for name, agent in self._agents.items()
-        ]
+        return [{"name": name, "display_name": agent.config.display_name} for name, agent in self._agents.items()]
 
     @property
     def agent_names(self) -> list[str]:
@@ -1061,20 +1127,18 @@ class AgentDispatcher:
             fallback = default
             try:
                 from core.agent_work_record import get_work_recorder
-                available_agents = [n for n, a in self._agents.items()
-                                    if a and a.available and n != target]
+
+                available_agents = [n for n, a in self._agents.items() if a and a.available and n != target]
                 if available_agents:
-                    best = get_work_recorder().get_best_agent(
-                        available_agents, task_type=task_type)
+                    best = get_work_recorder().get_best_agent(available_agents, task_type=task_type)
                     if best:
                         fallback = best
             except (ImportError, AttributeError, TypeError):
                 pass  # work_record 不可用时使用默认路由
             if fallback != target:
-                logger.info("agent.task_route_fallback",
-                            task_type=task_type,
-                            requested_target=target,
-                            fallback_target=fallback)
+                logger.info(
+                    "agent.task_route_fallback", task_type=task_type, requested_target=target, fallback_target=fallback
+                )
                 return fallback
 
         logger.info("agent.task_route", task_type=task_type, target=target)
@@ -1094,8 +1158,7 @@ class AgentDispatcher:
         if config_path.exists():
             try:
                 mtime = config_path.stat().st_mtime
-                if (self._routing_config_cache
-                        and self._routing_config_cache[0] == mtime):
+                if self._routing_config_cache and self._routing_config_cache[0] == mtime:
                     return self._routing_config_cache[1]
                 with open(config_path, encoding="utf-8") as f:
                     result = json.load(f)
@@ -1125,6 +1188,7 @@ class AgentDispatcher:
         """
         if self._router_engine is None:
             from core.router_engine import RouterEngine
+
             self._router_engine = RouterEngine()
         return self._router_engine
 
@@ -1164,7 +1228,10 @@ class AgentDispatcher:
             (["安全", "security", "漏洞", "加密", "权限", "认证"], "security"),
             (["测试", "test", "pytest", "单测", "覆盖率"], "test"),
             (["搜索", "查询", "查找", "search", "browse", "网页"], "info_search"),
-            (["回忆", "记得", "记忆", "recall", "remember", "记得吗", "上次", "昨天", "前几天", "上周", "上周"], "memory"),
+            (
+                ["回忆", "记得", "记忆", "recall", "remember", "记得吗", "上次", "昨天", "前几天", "上周", "上周"],
+                "memory",
+            ),
             (["硬件", "gpio", "i2c", "传感器", "摄像头", "hardware"], "hardware"),
             (["难过", "开心", "生气", "焦虑", "陪伴", "聊天", "求安慰"], "emotional"),
         ]
@@ -1231,12 +1298,10 @@ class AgentDispatcher:
 
         # 无精确匹配 → 各领域独立路由后去重（直接查配置，不检查可用性）
         routing = self._load_routing_config()
-        targets = list(dict.fromkeys(
-            routing.get(tt, routing.get("general", "xiaoli")) for tt in task_types))
+        targets = list(dict.fromkeys(routing.get(tt, routing.get("general", "xiaoli")) for tt in task_types))
         if len(targets) == 1:
             return {"targets": targets, "mode": "single", "synthesizer": "", "verifier": ""}
-        return {"targets": targets, "mode": "parallel_fanout",
-                "synthesizer": "xiaoda", "verifier": ""}
+        return {"targets": targets, "mode": "parallel_fanout", "synthesizer": "xiaoda", "verifier": ""}
 
     def _load_routing_v2_config(self) -> dict:
         """从 config/agent_routing_v2.json 加载多域路由配置。"""

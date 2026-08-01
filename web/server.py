@@ -870,9 +870,13 @@ def create_app() -> FastAPI:
     from web.ws_hub import router as ws_router
     app.include_router(ws_router)
 
-    from core.sla_exporter import get_sla_exporter
-    _sla = get_sla_exporter()
-    app.state.sla_exporter = _sla
+    # sla_exporter 模块已删除, 可选加载
+    try:
+        from core.sla_exporter import get_sla_exporter
+        _sla = get_sla_exporter()
+        app.state.sla_exporter = _sla
+    except ImportError:
+        app.state.sla_exporter = None
 
     # Prometheus /metrics 端点 (P1-4): 三层优先级控制注册
     # 优先级 (高 -> 低):

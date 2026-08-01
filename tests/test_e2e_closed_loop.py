@@ -11,8 +11,8 @@
 """
 import pytest
 import asyncio
-from core.behavioral_signal import BehavioralSignalStream
-from core.behavioral_direction import DirectionVector, DirectionRegistry
+from core.behavioral_health import BehavioralSignalStream
+from core.behavioral_health import DirectionVector, DirectionRegistry
 from core.intervention_loop import InterventionRule, InterventionLoop
 
 

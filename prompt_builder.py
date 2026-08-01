@@ -253,7 +253,7 @@ _BUCKET_LRU_LEVEL: dict[str, str] = {
 #     * emotional:   USER.md=7 (用户偏好, 个性化情感)
 #     * learning:    USER.md=6 (个性化教学)
 #
-# 复杂度对齐 (观测/优化工具, memory/prompt_complexity.py):
+# 复杂度对齐 (辅助观测):
 #   - 用于发现排序异常 (倒挂/集中/不匹配), 供人工审查参考
 #   - 不自动改矩阵: 功能性设计优先, 复杂度对齐作为辅助观测
 import re as _re

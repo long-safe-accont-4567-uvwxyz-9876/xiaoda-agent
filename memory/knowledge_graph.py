@@ -433,6 +433,7 @@ class KnowledgeGraph:
 
         # OntoLearner B1: 复杂度评分, 跳过高复杂度摘要的 KG 提取
         # 论文实证: 失败模式与本体复杂度正相关 (非模型大小)
+        # 模块已删除, 默认总是提取
         try:
             from memory.ontology_complexity import should_extract
             import config as _cfg
@@ -443,6 +444,8 @@ class KnowledgeGraph:
                              total=round(_score.total, 3),
                              detail=_score.detail)
                 return
+        except ImportError:
+            pass  # 模块已删除, 默认提取
         except Exception as e:
             logger.debug("kg.complexity_check_failed", error=str(e))
 

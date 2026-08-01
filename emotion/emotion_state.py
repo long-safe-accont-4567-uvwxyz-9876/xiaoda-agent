@@ -107,7 +107,7 @@ class EmotionState:
         try:
             from config import ENABLE_J_SPACE_HOOKS
             if ENABLE_J_SPACE_HOOKS:
-                from core.behavioral_direction import DirectionVector
+                from core.behavioral_health import DirectionVector
                 # 应用 emotion_offset 方向
                 emotion_offset = context.get("emotion_offset", 0.0) if context else 0.0
                 if emotion_offset != 0.0:

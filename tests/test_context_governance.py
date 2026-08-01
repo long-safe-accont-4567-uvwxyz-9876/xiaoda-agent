@@ -251,66 +251,7 @@ async def test_audit_and_hash_chain(tmp_path):
             "tamper_detected": True}
 
 
-# ── T3: 复杂度评分器验证 + KG 跳过效果 ──────────────────────
-
-async def test_complexity_scorer():
-    """T3: 验证本体复杂度评分器能区分简单/复杂摘要, 高复杂度被跳过。"""
-    from memory.ontology_complexity import score_complexity, should_extract
-
-    # 简单摘要 — 清晰的单实体单关系
-    simple_cases = [
-        "用户喜欢吃枣椰蜜糖",
-        "讨论了 PLC 编程方案",
-        "用户决定采用 Python 3.12",
-        "小妲今天很开心",
-    ]
-    # 复杂摘要 — 多实体/多关系/抽象词堆砌/超长
-    complex_cases = [
-        # 超长 + 多实体 + 多从句
-        "今天讨论了很多事情，包括PLC编程、Python开发、数据库设计、前端架构、"
-        "运维部署、安全审计、性能优化、团队协作、项目管理、需求分析、测试策略、"
-        "代码评审、文档编写、上线发布、监控告警、故障排查、容量规划、成本控制等等，"
-        "并且可能也许大概还有一些其他方面的事情也需要考虑",
-        # 抽象词密集
-        "那个东西大概也许可能是一些事情，差不多可能也许觉得认为一些方面的问题",
-        "",
-    ]
-
-    print("  T3.1 简单摘要评分 (应全部 should_skip=False):")
-    simple_scores = []
-    for s in simple_cases:
-        sc = score_complexity(s)
-        simple_scores.append(sc.total)
-        print(f"    [{sc.total:.3f}] skip={sc.should_skip} | {s[:30]}")
-        assert not sc.should_skip, f"简单摘要被误判为复杂: {s}"
-
-    print("  T3.2 复杂摘要评分 (应触发跳过或高分):")
-    complex_scores = []
-    for s in complex_cases:
-        sc = score_complexity(s)
-        complex_scores.append(sc.total)
-        print(f"    [{sc.total:.3f}] skip={sc.should_skip} | {s[:30]}")
-
-    # 空字符串必须跳过
-    assert score_complexity("").should_skip, "空字符串未跳过"
-    # 超长摘要应得分较高
-    long_score = score_complexity(complex_cases[0])
-    assert long_score.total > 0.3, f"超长摘要得分过低: {long_score.total}"
-    # 简单摘要平均分应低于复杂摘要
-    simple_avg = sum(simple_scores) / len(simple_scores)
-    complex_avg = sum(c for c in complex_scores if c is not None) / max(1, len(complex_scores))
-    print(f"  T3.3 简单平均={simple_avg:.3f} < 复杂平均={complex_avg:.3f}")
-    assert simple_avg < complex_avg, "简单/复杂区分失败"
-
-    # should_extract 决策
-    do_extract, _ = should_extract("用户喜欢枣椰蜜糖")
-    assert do_extract, "简单摘要应允许提取"
-    do_extract_empty, _ = should_extract("")
-    assert not do_extract_empty, "空摘要应跳过"
-    print("  T3.4 should_extract 决策: 简单=允许, 空=跳过 ✓")
-
-    return {"simple_avg": simple_avg, "complex_avg": complex_avg,
-            "empty_skipped": True}
+# ── T3: (已删除, ontology_complexity 模块已移除) ──────────────
 
 
 # ── T4: 检索质量 + 回归 ──────────────────────────────────
@@ -449,15 +390,8 @@ async def run_all_tests():
         results["T2"] = {"error": str(e)}
         print(f"  结果: FAIL - {e}")
 
-    print("\n[T3] 本体复杂度评分器验证 (OntoLearner)")
-    try:
-        results["T3"] = await test_complexity_scorer()
-        metrics["complexity_simple_avg"] = results["T3"]["simple_avg"]
-        metrics["complexity_complex_avg"] = results["T3"]["complex_avg"]
-        print("  结果: PASS")
-    except Exception as e:
-        results["T3"] = {"error": str(e)}
-        print(f"  结果: FAIL - {e}")
+    print("\n[T3] 本体复杂度评分器验证 (OntoLearner) — 已跳过 (模块已删除)")
+    results["T3"] = {"skipped": True}
 
     print("\n[T4] 确定性 selector + 回归兼容性")
     try:
@@ -487,16 +421,12 @@ async def run_all_tests():
         print(f"{'T2 重建条数':<32}{metrics['reconstructed']:>12}{'3':>16}")
     if "tamper_detected" in metrics:
         print(f"{'T2 篡改检出':<32}{metrics['tamper_detected']:>12}{'1=检出':>16}")
-    if "complexity_simple_avg" in metrics:
-        print(f"{'T3 简单摘要复杂度均值':<32}{metrics['complexity_simple_avg']:>12.3f}{'<复杂均值':>16}")
-    if "complexity_complex_avg" in metrics:
-        print(f"{'T3 复杂摘要复杂度均值':<32}{metrics['complexity_complex_avg']:>12.3f}{'>简单均值':>16}")
     if "selector_pass_rate" in metrics:
         print(f"{'T4 selector 解析通过率':<32}{metrics['selector_pass_rate']:>12.0%}{'≥85%':>16}")
     print("-" * 60)
 
     passed = sum(1 for k in ["T1", "T2", "T3", "T4"] if "error" not in results.get(k, {}))
-    print(f"\n  测试通过: {passed}/4 轮")
+    print(f"\n  测试通过: {passed}/4 轮 (T3 已跳过)")
     return metrics, results
 
 

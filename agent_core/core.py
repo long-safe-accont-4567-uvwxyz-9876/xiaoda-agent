@@ -323,12 +323,20 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         _GLOBAL_DEADLINE_SECONDS = 170
         try:
             try:
-                return await asyncio.wait_for(
+                # Phase 3b: 记忆主动注入 — 用最近对话内容做 side-query, 选出相关记忆注入
+                await self._inject_relevant_memories(user_input, user_id, ctx)
+
+                result = await asyncio.wait_for(
                     self._process_impl_locked(ctx, user_input, user_id, source, user_openid, session_id,
                                        status_callback, image_data, is_master,
                                        system_context=system_context),
                     timeout=_GLOBAL_DEADLINE_SECONDS,
                 )
+
+                # Phase 3c: PostResponse 记忆提取 — 从对话中提取用户偏好/情感事实
+                await self._extract_memories_from_dialogue(user_input, result.reply, user_id, ctx)
+
+                return result
             except asyncio.TimeoutError:
                 logger.error("agent.global_deadline_exceeded",
                              user_id=user_id, source=source,
@@ -397,6 +405,132 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
     def get_voice_mode(self) -> bool:
         """返回当前语音模式是否开启."""
         return self._voice_mode
+
+    async def _inject_relevant_memories(self, user_input: str, user_id: str,
+                                          ctx: RequestContext) -> None:
+        """Phase 3b: 记忆主动注入 — 每次请求开始时注入相关记忆.
+
+        用用户输入做 side-query, 选出最多 3-5 条相关记忆注入到 ctx 中。
+        失败时降级为关键词匹配, 再失败则跳过 (不影响主流程)。
+        """
+        try:
+            if not self.memory:
+                return
+            # 限制注入频率: 只在对话历史足够长时注入
+            history = getattr(self.context, "history", None) or []
+            if len(history) < 2:
+                return
+
+            # 尝试语义检索记忆
+            memories = []
+            try:
+                retrieved = await asyncio.wait_for(
+                    self.memory.retrieve_relevant(user_input, top_k=5),
+                    timeout=5.0,
+                )
+                if retrieved:
+                    memories = retrieved[:5]
+            except asyncio.TimeoutError:
+                logger.debug("memory.injection_timeout, fallback to keyword")
+                # 降级: 关键词匹配
+                try:
+                    memories = await self.memory.search_by_keyword(user_input, limit=3)
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.debug(f"memory.injection_failed: {e}")
+
+            if memories:
+                # 注入到 ctx 的 system_context 中
+                memory_text = "\n".join(
+                    f"- {m.get('summary', m.get('content', ''))[:100]}"
+                    for m in memories if isinstance(m, dict)
+                )
+                if memory_text:
+                    existing = ctx.system_context or ""
+                    ctx.system_context = f"{existing}\n[相关记忆]\n{memory_text}".strip()
+                    logger.debug("memory.injected", count=len(memories))
+        except Exception as e:
+            logger.debug(f"memory.injection_skipped: {e}")
+
+    async def _extract_memories_from_dialogue(self, user_input: str, reply: str,
+                                                user_id: str, ctx: RequestContext) -> None:
+        """Phase 3c: PostResponse 记忆提取 — 从对话中提取用户偏好/情感事实.
+
+        用 LLM 从用户输入+回复中提取可持久化的记忆, 去重后写入。
+        失败时跳过 (不影响主流程)。
+        """
+        try:
+            if not self.memory or not reply:
+                return
+            # 只对足够长的对话提取 (太短的对话信息量不足)
+            if len(user_input) < 10:
+                return
+
+            # 构建提取 prompt
+            extract_prompt = (
+                f"从以下对话中提取值得长期记住的用户偏好或情感事实（最多2条）。\n"
+                f"只提取明确的事实, 不要推测。\n"
+                f"格式: 每条一行, 用简洁的陈述句。\n\n"
+                f"用户: {user_input[:200]}\n"
+                f"回复: {reply[:200]}\n\n"
+                f"提取结果（JSON数组, 如 [\"用户喜欢Python\", \"用户今天心情不错\"]）:"
+            )
+
+            extracted_text = ""
+            try:
+                response = await asyncio.wait_for(
+                    self.router.route("memory_encoding",
+                        [{"role": "user", "content": extract_prompt}],
+                        temperature=0.1, max_tokens=200),
+                    timeout=10.0,
+                )
+                if isinstance(response, str):
+                    extracted_text = response.strip()
+                elif hasattr(response, "choices") and response.choices:
+                    extracted_text = response.choices[0].message.content.strip()
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.debug(f"memory.extraction_llm_failed: {e}")
+                return
+
+            if not extracted_text:
+                return
+
+            # 解析提取结果
+            import json as _json
+            try:
+                # 尝试直接解析
+                facts = _json.loads(extracted_text)
+            except _json.JSONDecodeError:
+                # 尝试提取 JSON 数组
+                match = re.search(r'\[.*?\]', extracted_text, re.DOTALL)
+                if match:
+                    try:
+                        facts = _json.loads(match.group(0))
+                    except _json.JSONDecodeError:
+                        return
+                else:
+                    return
+
+            if not isinstance(facts, list) or not facts:
+                return
+
+            # 去重后写入记忆
+            for fact in facts[:2]:
+                if not isinstance(fact, str) or len(fact) < 3:
+                    continue
+                try:
+                    await self.memory.add_episodic(
+                        summary=fact[:200],
+                        importance=0.4,
+                        source="dialogue_extraction",
+                        user_id=user_id,
+                    )
+                    logger.debug("memory.extracted_and_stored", fact=fact[:50])
+                except Exception as e:
+                    logger.debug(f"memory.store_failed: {e}")
+        except Exception as e:
+            logger.debug(f"memory.extraction_skipped: {e}")
 
     async def set_permission_mode(self, mode: str) -> None:
         """设置权限模式"""

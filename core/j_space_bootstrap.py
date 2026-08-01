@@ -9,8 +9,8 @@ J-Space 架构优化启动初始化。
 """
 from loguru import logger
 from config import ENABLE_J_SPACE_HOOKS, DIRECTION_REGISTRY_PATH, SIGNAL_STREAM_MAX_HISTORY
-from core.behavioral_signal import BehavioralSignalStream
-from core.behavioral_direction import DirectionVector, DirectionRegistry
+from core.behavioral_health import BehavioralSignalStream
+from core.behavioral_health import DirectionVector, DirectionRegistry
 from core.intervention_loop import InterventionRule, InterventionLoop
 from agent_core.structured_blackboard import StructuredBlackboard
 from core.enhanced_router import EnhancedBeliefRouter

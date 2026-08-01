@@ -17,7 +17,31 @@ from emotion.emotion_enum import CN_TO_EN
 from utils.text_utils import humanize, strip_dsml, strip_reasoning
 from core.degradation_strategy import get_degradation_strategy
 from core.event_bus import event_bus, AgentEvent, AgentEventType, gen_task_id
-from core.cancel_token import CancelToken, CancellationError
+
+# cancel_token 模块已删除, 内联简单替代
+try:
+    from core.cancel_token import CancelToken, CancellationError
+except ImportError:
+    class CancellationError(Exception):
+        """任务被取消"""
+        pass
+
+    class CancelToken:
+        """简化的 CancelToken 替代 (原 core/cancel_token.py 已删除)"""
+        def __init__(self, timeout: float | None = None) -> None:
+            self._cancelled = False
+            self._reason = ""
+
+        def check(self) -> None:
+            if self._cancelled:
+                raise CancellationError(self._reason)
+
+        def cancel(self, reason: str = "") -> None:
+            self._cancelled = True
+            self._reason = reason
+
+        def cleanup(self) -> None:
+            pass
 
 # TTS 时机控制 v2：统一触发决策（避免子 agent 路径漏守卫导致 voice_mode 开启后"失控"）
 from agent_core.message_processor import _decide_tts_trigger
@@ -246,8 +270,7 @@ class SubAgentManagerMixin:
         例如：用户问"分别让小莉和小狼回答"，可同时调用两个子代理。
 
         所有传入任务视为无依赖，用 ``asyncio.gather`` 并发执行（Windows Proactor
-        上 ``asyncio.create_task`` 存在已知问题，``gather`` 更兼容）。未来若需依赖
-        检测，可在此处接入 ``core/parallel_dag.py`` 的 ToolDAG 构建 DAG。
+        上 ``asyncio.create_task`` 存在已知问题，``gather`` 更兼容）。
 
         :param targets_inputs: [(target_name, input_text), ...]
         :returns: 每个 target 的 ProcessResult 列表（顺序与输入一致）

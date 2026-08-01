@@ -14,8 +14,8 @@
 """
 from loguru import logger
 
-from core.behavioral_signal import BehavioralSignalStream
-from core.behavioral_direction import DirectionRegistry
+from core.behavioral_health import BehavioralSignalStream
+from core.behavioral_health import DirectionRegistry
 from config import AGENT_TASK_MAP
 
 

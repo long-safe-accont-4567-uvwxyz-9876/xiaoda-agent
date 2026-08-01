@@ -76,7 +76,10 @@ class SelfDiagnostic:
     async def _check_error_rate(self) -> SelfReport | None:
         """检查错误率"""
         try:
-            from core.slo_tracker import get_slo_tracker
+            try:
+                from core.slo_tracker import get_slo_tracker
+            except ImportError:
+                return None
             slo = get_slo_tracker()
             err_rate = slo.error_rate()
             target = slo.target.error_rate
@@ -101,7 +104,10 @@ class SelfDiagnostic:
     async def _check_response_time(self) -> SelfReport | None:
         """检查响应时间"""
         try:
-            from core.slo_tracker import get_slo_tracker
+            try:
+                from core.slo_tracker import get_slo_tracker
+            except ImportError:
+                return None
             slo = get_slo_tracker()
             p99 = slo.p99_latency()
             target = slo.target.p99_latency_ms
@@ -145,7 +151,10 @@ class SelfDiagnostic:
     async def _check_active_state(self) -> SelfReport | None:
         """检查活跃状态 (是否进入 zombie)"""
         try:
-            from doctor.behavioral_health import get_behavioral_health
+            try:
+                from doctor.behavioral_health import get_behavioral_health
+            except ImportError:
+                return None
             bh = get_behavioral_health()
             score = bh.score()
             if score and score.get("level") == "critical":

@@ -222,10 +222,16 @@ class ContextCompressor:
             ccr_key = self._make_ccr_key(summary_text)
             self._cache_original(ccr_key, "\n".join(summary_parts))
 
+            # Phase 3a: 保留用户情绪变化轨迹
+            emotion_trajectory = self._build_emotion_trajectory(to_compress)
+            emotion_section = ""
+            if emotion_trajectory:
+                emotion_section = f"\n[用户情绪变化轨迹] {emotion_trajectory}"
+
             compressed_msg = {
                 "role": "system",
                 "content": (
-                    SUMMARY_PREFIX + "\n" + summary_text[:500] + "\n"
+                    SUMMARY_PREFIX + "\n" + summary_text[:500] + emotion_section + "\n"
                     f"[可通过 retrieve_context 工具检索完整历史，key={ccr_key}]"
                 ),
             }
@@ -242,6 +248,41 @@ class ContextCompressor:
             )
 
         return CompressionResult(messages=messages)
+
+    def _build_emotion_trajectory(self, messages: list[dict]) -> str:
+        """Phase 3a: 从对话历史中提取用户情绪变化轨迹"""
+        emotions: list[str] = []
+        try:
+            from emotion.emotion_simple import detect_emotion
+        except ImportError:
+            return ""
+
+        for msg in messages:
+            if msg.get("role") != "user":
+                continue
+            content = str(msg.get("content", ""))
+            if not content or len(content) < 2:
+                continue
+            try:
+                result = detect_emotion(content)
+                primary = result.get("primary", "")
+                if primary:
+                    emotions.append(primary)
+            except Exception:
+                continue
+
+        if not emotions:
+            return ""
+
+        # 生成轨迹描述
+        unique_emotions = []
+        for e in emotions:
+            if e not in unique_emotions:
+                unique_emotions.append(e)
+
+        if len(unique_emotions) == 1:
+            return f"用户整体情绪: {unique_emotions[0]}"
+        return f"用户情绪从{unique_emotions[0]}变化到{unique_emotions[-1]}（经过: {'→'.join(unique_emotions[:5])}）"
 
     def get_stats(self) -> dict:
         """获取压缩统计"""
