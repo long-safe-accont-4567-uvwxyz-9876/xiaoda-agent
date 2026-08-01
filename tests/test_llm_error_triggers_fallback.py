@@ -29,8 +29,11 @@ def _make_router() -> ModelRouter:
     依赖外部状态且与本测试无关。route() 仅访问 _cache_stats 与
     _apply_caching_headers（静态方法），故只补这两个即可。
     """
+    from model_router import ModelRouteRegistry, ROUTE_TABLE
     router = ModelRouter.__new__(ModelRouter)
     router._cache_stats = {"total_calls": 0, "hit_tokens": 0, "miss_tokens": 0}
+    # route() 走 registry.get_task_ref，需要 _registry 已初始化
+    router._registry = ModelRouteRegistry(ROUTE_TABLE)
     return router
 
 

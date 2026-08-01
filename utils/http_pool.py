@@ -47,7 +47,12 @@ def get_shared_client() -> httpx.AsyncClient:
     特性：
     - ``max_connections=50``, ``max_keepalive_connections=20``, ``keepalive_expiry=30s``
     - HTTP/2 启用（多路复用，需 h2 包；未安装时优雅降级为 HTTP/1.1）
-    - 默认 timeout 30s（connect 5s），单次请求可通过 ``timeout=`` 参数覆盖
+    - 默认 timeout 30s（connect 15s），单次请求可通过 ``timeout=`` 参数覆盖
+
+    根因修复（2026-07-29）：connect 5s → 15s。原 5s 对跨网 SiliconFlow API 过短，
+    网络抖动期 TCP+TLS 握手失败导致 reranker/query_transform/distiller 调用慢，
+    触发 memory_manager 多处外层 wait_for 超时（治标）。connect=15s 给握手 3 倍余量，
+    与 agnes API 客户端保持一致，从根因消除外层超时兜底的必要性。
 
     Returns:
         httpx.AsyncClient: 共享 client（如已关闭则自动重建）
@@ -70,7 +75,7 @@ def get_shared_client() -> httpx.AsyncClient:
                 max_keepalive_connections=20,
                 keepalive_expiry=30,
             ),
-            timeout=httpx.Timeout(30.0, connect=5.0),
+            timeout=httpx.Timeout(30.0, connect=15.0),
             http2=http2_enabled,
         )
     return _shared_client

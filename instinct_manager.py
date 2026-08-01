@@ -153,9 +153,11 @@ class InstinctManager:
                 # 根因：原代码 router.route 无超时，主模型卡住会让 extract_instincts
                 # 阻塞 30-53s（日志 bg.task_slow name=extract_instincts elapsed=30-53s）。
                 # instinct 提取是后台任务，不应阻塞这么久；超时则放弃本次提取。
+                # task_type 用 memory_encoding（后台任务），让 route() 的 _chat_idle 机制
+                # 使其自动让路于主 chat，避免和主对话并发竞争 agnes API（并发排队根因）。
                 result = await asyncio.wait_for(
                     self.router.route(
-                        task_type="chat",
+                        task_type="memory_encoding",
                         messages=messages,
                         temperature=0.3,
                         max_tokens=800,

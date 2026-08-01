@@ -166,6 +166,7 @@ class SubAgentManagerMixin:
             self._bg_task_manager.run_background_tasks(
                 clean_input, sub_reply, user_id, source, emotion, [],
                 session_id=session_id,
+                model_used=self.router.get_current_chat_model().get("model_id", ""),
             )
 
         emotion_label = emotion.get("primary", "")
@@ -340,9 +341,11 @@ class SubAgentManagerMixin:
         all_replies = "\n\n".join(
             [f"【{r['display_name']}】\n{r['reply']}" for r in intermediate]
         )
+        # model_used 由调用方传入（依赖注入）：此处已持有 self.router
+        _parallel_model_used = self.router.get_current_chat_model().get("model_id", "")
         return await self._finalize_parallel_reply(
             all_replies, clean_input, user_id, source, session_id, force_voice, _ctx,
-            intermediate=intermediate,
+            intermediate=intermediate, model_used=_parallel_model_used,
         )
 
     async def _parallel_run_one(self, t: str, sub_tasks: dict[str, str], sub_context: str,
@@ -463,11 +466,15 @@ class SubAgentManagerMixin:
     async def _finalize_parallel_reply(self, all_replies: str, clean_input: str,
                                         user_id: str, source: str, session_id: str,
                                         force_voice: bool, _ctx: Any,
-                                        intermediate: list[dict] | None = None) -> ProcessResult:
+                                        intermediate: list[dict] | None = None,
+                                        model_used: str = "") -> ProcessResult:
         """并行子代理结果收尾：情绪检测、表情包选择、TTS 语音合成。
 
         并行结果直接使用，跳过小妲重新总结（SynthesisNode 已负责综合）。
         表情包优先使用子代理专属表情包管理器，降级到小妲的。
+
+        model_used 由调用方传入（依赖注入）：调用方 _dispatch_parallel_sub_agents
+        已持有 self.router，避免本方法直接够取 router 导致单测桩需额外 mock。
         """
         emotion = detect_emotion(clean_input)
         if _ctx:
@@ -475,6 +482,7 @@ class SubAgentManagerMixin:
         self._bg_task_manager.run_background_tasks(
             clean_input, all_replies, user_id, source, emotion, [],
             session_id=session_id,
+            model_used=model_used,
         )
 
         emotion_label = emotion.get("primary", "")

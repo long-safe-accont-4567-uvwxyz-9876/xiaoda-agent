@@ -10,7 +10,7 @@
     "call_xiaoda",
     "call_xiaoli"
   ],
-  "base_url": "https://apihub.agnes-ai.com/v1",
+  "base_url": "https://apihub.agnes-ai.cn/v1",
   "api_key_env": "AGNES_API_KEY",
   "capabilities": [
     "coding",

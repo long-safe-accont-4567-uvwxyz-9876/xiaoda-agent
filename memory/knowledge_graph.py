@@ -11,13 +11,13 @@ from db.db_knowledge import KnowledgeDB
 ENTITY_EXTRACT_PROMPT = """从以下对话摘要中提取关键实体和关系，只提取最显著的3-5个。
 
 严格输出JSON，不要添加任何其他文字。格式如下：
-{{"entities": [{{"name": "实体名", "kind": "人物/游戏/地点/概念/物品", "observations": ["观察1"]}}], "relations": [{{"from_entity": "实体A", "relation_type": "关系类型", "to_entity": "实体B"}}]}}
+{"entities": [{"name": "实体名", "kind": "人物/游戏/地点/概念/物品", "observations": ["观察1"]}], "relations": [{"from_entity": "实体A", "relation_type": "关系类型", "to_entity": "实体B"}]}
 
 规则：
 1. 只提取明确提及的实体，不要推测
 2. observations 是关于实体的具体描述
 3. relation_type 使用简洁的动词短语，如"喜欢"、"属于"、"住在"
-4. 如果没有明确的实体和关系，返回 {{"entities": [], "relations": []}}
+4. 如果没有明确的实体和关系，返回 {"entities": [], "relations": []}
 
 对话摘要：
 {summary}"""
@@ -41,9 +41,18 @@ def _clean_json_response(text: str) -> str:
 
 def _repair_json(text: str) -> str:
     """修复 LLM 输出中常见的 JSON 语法错误。"""
+    # 修复双花括号: 只删外层一对 {{ }}，保留嵌套与字符串值内的 {{}}
+    # CodeRabbit 修复：全局 {{ → { 会破坏字符串值内的 {{template}}（如 observations）。
+    # LLM 复制 prompt 示例时只会把整个 JSON 用 {{}} 包裹（外层一对），嵌套不会出现 {{}}，
+    # 因此只删外层一对足够处理 139 次失败根因，且不破坏字符串内容。
+    text = re.sub(r'^(\s*)\{\{', r'\1{', text, count=1)
+    text = re.sub(r'\}\}(\s*)$', r'}\1', text, count=1)
     # 修复多余逗号: },, → },
     text = re.sub(r'},\s*,', '},', text)
     text = re.sub(r',\s*,', ',', text)
+    # 修复尾逗号: ,} → } 和 ,] → ]
+    text = re.sub(r',\s*}', '}', text)
+    text = re.sub(r',\s*]', ']', text)
     # 修复缺少逗号: "key":"val" "key2" → "key":"val","key2"
     text = re.sub(r'"\s+(")', r',\1', text)
     # 修复 } 后面缺少逗号直接跟 { : }{ → },{

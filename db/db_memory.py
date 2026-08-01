@@ -14,6 +14,14 @@ class MemoryDB:
     async def commit(self) -> None:
         await self._conn.commit()
 
+    async def rollback(self) -> None:
+        """回滚当前事务。用于 auto_commit=False 批量操作失败时清理脏事务状态。
+
+        根因：aiosqlite 单连接共享事务状态，auto_commit=False 操作若不 commit/rollback，
+        事务会残留在连接上，后续协程的 DB 操作在脏事务中执行 → "SQL logic error"。
+        """
+        await self._conn.rollback()
+
     async def migrate_add_source_column(self) -> None:
         """迁移：为旧库的 episodic_memories 表添加 source 列（已存在则忽略）"""
         try:

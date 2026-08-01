@@ -112,6 +112,34 @@ async def _patched_send_heart(self, interval: Any) -> None:
 
 BotWebSocket._send_heart = _patched_send_heart
 
+# Patch: on_closed 时处理 session 失效码（4009 等），强制 IDENTIFY 重连
+# 根因：botpy _INVALID_RECONNECT_CODE=[9001,9005] 不含 4009(Session timed out)，
+#   导致 4009 后 session_id 未清空 → 重连用 ws_resume → RESUME 已超时 session 无效
+#   → QQ 网关接受连接但不推送消息 → bot 在线却收不到任何用户消息（严重阻塞）。
+#   实测：07-28 16:20 起 每30分钟 4009+ws_resume，从未 ws_identify，消息零接收。
+# 修复：4009/4007 时清空 session_id，重连走 ws_identify 重建 session（QQ 官方要求）。
+# CodeRabbit 修复：4008 是限频（rate limited），session 仍有效，应保留 session_id
+#   走 ws_resume（RESUME）。原实现把 4008 纳入 _SESSION_INVALID_CODES 清空 session_id
+#   → 重连走 ws_identify → 丢失未 ACK 的消息（RESUME 本可恢复）。
+_original_on_closed = BotWebSocket.on_closed
+
+async def _patched_on_closed(self, close_status_code: Any, close_msg: Any) -> Any:
+    _SESSION_INVALID_CODES = {4007, 4009}  # session 失效，必须重新 IDENTIFY
+    _botpy_log = __import__("botpy.logging", fromlist=["get_logger"]).get_logger()
+    if close_status_code in _SESSION_INVALID_CODES:
+        _botpy_log.warning(
+            f"[botpy] session失效(code={close_status_code})，清空session强制IDENTIFY重连")
+        self._session["session_id"] = ""
+        self._session["last_seq"] = 0
+    elif close_status_code == 4008:
+        # 4008 限频：session 仍有效，保留 session_id 走 RESUME（不丢未 ACK 消息）
+        # botpy 自带 session_interval backoff，不强行 sleep 避免与重连机制冲突
+        _botpy_log.warning(
+            f"[botpy] 限频(code=4008)，保留session走RESUME，等待botpy backoff重连")
+    await _original_on_closed(self, close_status_code, close_msg)
+
+BotWebSocket.on_closed = _patched_on_closed
+
 from botpy.client import Client as _BotpyClient
 
 _original_pool_init = _BotpyClient._pool_init

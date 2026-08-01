@@ -9,6 +9,7 @@ structlog>=24.0.0
 
 # ── HTTP 客户端 ──
 httpx[http2]>=0.27.0
+requests>=2.31.0
 
 # ── 图像处理 ──
 Pillow>=10.4.0
@@ -25,6 +26,9 @@ pilk>=0.2.4
 # ── 系统监控 ──
 psutil>=6.0.0
 
+# ── 配置热重载: watchdog 监听 config/ 文件变更，缺失时降级为无热重载 ──
+watchdog>=4.0.0
+
 # ── 可观测性: Prometheus 指标导出 (/metrics 端点) ──
 prometheus-client>=0.20.0
 
@@ -40,12 +44,18 @@ pyyaml>=6.0
 cryptography>=43.0.0
 certifi>=2024.7.0
 
+# ── 向量检索: sqlite-vec 提供子chunk向量召回，缺失时降级为纯FTS ──
+sqlite-vec>=0.1.0
+
 # ── QQ Bot ──
 qq-botpy>=1.2.1
 
 # ── 搜索（可选，需 TAVILY_API_KEY）──
 # tavily-python>=0.5.0
 # primp>=0.7.0
+
+# ── HTML 解析: 搜索工具（知乎/网页提取）依赖 lxml，无 try-except 保护 ──
+lxml>=5.0.0
 
 # ── 文档处理 ──
 pdfplumber>=0.11.9
@@ -65,3 +75,8 @@ networkx>=3.2
 
 # ── JSON5 配置文件解析 ──
 json5>=0.9.0
+
+# ── 可选: 硬件/视觉（按需安装，代码内 try-except 延迟 import）──
+# opencv-python-headless>=4.8.0   # 图像识别（utils/vision_service.py）
+# ncnn>=1.0.0                     # NPU 推理（utils/npu_inference.py，ARM 开发板）
+# smbus2>=0.4.0                   # I2C 硬件通信（tools/hardware_tools.py，开发板传感器）

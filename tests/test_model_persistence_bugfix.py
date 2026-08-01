@@ -14,6 +14,7 @@ Issue: 更变子 Agent 的模型返回 HTTP 500；主 Agent 的模型每次重�
 
 from __future__ import annotations
 
+import copy
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -120,8 +121,9 @@ def test_set_chat_model_persists_both_chat_model_and_routes_chat():
     router._custom_clients.add("agnes")
     router._lazy_register_provider = MagicMock()
 
-    # 保存原始 ROUTE_TABLE["chat"] 状态
-    original_chat = dict(ROUTE_TABLE["chat"])
+    # 快照整个 ROUTE_TABLE（set_chat_model 会改写所有 4 个 sync_tasks：
+    # chat/emotion_analysis/tool_result_wrap/memory_encoding）
+    _orig_table = copy.deepcopy(ROUTE_TABLE)
     try:
         # mock config_service 捕获 set 调用
         captured: dict[str, object] = {}
@@ -160,8 +162,9 @@ def test_set_chat_model_persists_both_chat_model_and_routes_chat():
 
         assert result == {"provider": "agnes", "model_id": "agnes-2.0-flash"}
     finally:
-        # 恢复 ROUTE_TABLE
-        ROUTE_TABLE["chat"] = original_chat
+        # 整体还原 ROUTE_TABLE（finally 只还原 chat 会残留其他 sync_tasks 被改值）
+        ROUTE_TABLE.clear()
+        ROUTE_TABLE.update(_orig_table)
 
 
 def test_set_chat_model_routes_chat_thinking_field_is_bool():
@@ -181,7 +184,7 @@ def test_set_chat_model_routes_chat_thinking_field_is_bool():
     from model_router import ModelRouteRegistry
     router._registry = ModelRouteRegistry(ROUTE_TABLE)
 
-    original_chat = dict(ROUTE_TABLE["chat"])
+    _orig_table = copy.deepcopy(ROUTE_TABLE)
     try:
         captured: dict[str, object] = {}
 
@@ -201,7 +204,9 @@ def test_set_chat_model_routes_chat_thinking_field_is_bool():
         # agnes 切换时 thinking 被禁用
         assert routes_chat["thinking"] is False
     finally:
-        ROUTE_TABLE["chat"] = original_chat
+        # 整体还原 ROUTE_TABLE（set_chat_model 会改写所有 sync_tasks）
+        ROUTE_TABLE.clear()
+        ROUTE_TABLE.update(_orig_table)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -251,6 +256,10 @@ def test_restore_chat_model_fallback_does_not_persist_mimo():
     形成 sticky fallback —— 用户原选择永远无法恢复。
     修复后 _restore_chat_model 完全不调用 set_chat_model，只直接修改
     ROUTE_TABLE["chat"] 和 _current_chat_model，不触发持久化。
+
+    注意：fallback 模型不再硬编码为 "mimo-v2.5"，而是从
+    config.get_default_model_for_provider(DEFAULT_PROVIDER) 动态读取
+    （用户约束：默认用 MiMo，但模型 ID 不在代码里硬编码）。
     """
     from web.server import _restore_chat_model
 
@@ -263,15 +272,22 @@ def test_restore_chat_model_fallback_does_not_persist_mimo():
     core.router._current_chat_model = None
     core.router._custom_clients = {}  # provider 不可用
 
+    # 动态读取预期 fallback 值（不再硬编码 "mimo-v2.5"）
+    from config import DEFAULT_PROVIDER, get_default_model_for_provider
+    expected_provider = DEFAULT_PROVIDER
+    expected_model = get_default_model_for_provider(DEFAULT_PROVIDER)
+    assert expected_model, "测试前置失败：provider_metadata.json 必须配置 mimo 的 default_model"
+
     with patch("model_router.ROUTE_TABLE", {"chat": {"model": "old", "client": "old"}}):
-        with patch("model_router.MIMO_MODEL", "mimo-v2.5"):
-            _restore_chat_model(cfg, core)
+        _restore_chat_model(cfg, core)
 
     # set_chat_model 不应被调用（新实现直接修改 ROUTE_TABLE，不走 set_chat_model）
     core.router.set_chat_model.assert_not_called()
 
-    # 应该直接修改内存中的 _current_chat_model（fallback 到 mimo）
-    assert core.router._current_chat_model == {"provider": "mimo", "model_id": "mimo-v2.5"}
+    # 应该直接修改内存中的 _current_chat_model（fallback 到动态默认模型）
+    assert core.router._current_chat_model == {
+        "provider": expected_provider, "model_id": expected_model,
+    }
 
 
 def test_restore_chat_model_success_path():

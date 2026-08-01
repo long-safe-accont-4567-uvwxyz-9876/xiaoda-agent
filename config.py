@@ -398,10 +398,30 @@ _PROVIDER_METADATA_CACHE: dict | None = None
 
 
 def _load_provider_metadata_cached() -> dict:
-    """加载 provider_metadata.json（带缓存，避免每次调用都读盘）。"""
+    """加载 provider_metadata.json（带缓存，避免每次调用都读盘）。
+
+    CodeRabbit#4 + C2 修复：与 model_router._load_provider_metadata 统一查找顺序——
+      1. 用户配置目录 get_config_dir()/provider_metadata.json（用户可编辑覆盖）
+      2. 打包/源码 config/provider_metadata.json（内置默认值）
+      3. 空字典（极端兜底）
+
+    旧实现只读打包目录，导致用户编辑 ~/.ai-agent/config/provider_metadata.json 后
+    model_router（读用户目录）与 config.get_default_model_for_provider（读打包目录）
+    返回不同模型 ID，产生两套真相源，启动 fallback 时拿到错误模型。
+    """
     global _PROVIDER_METADATA_CACHE
     if _PROVIDER_METADATA_CACHE is not None:
         return _PROVIDER_METADATA_CACHE
+    # 1. 用户配置目录（用户可编辑覆盖）
+    try:
+        user_path = get_config_dir() / "provider_metadata.json"
+        if user_path.exists():
+            with open(user_path, "r", encoding="utf-8") as fp:
+                _PROVIDER_METADATA_CACHE = json.load(fp)
+                return _PROVIDER_METADATA_CACHE
+    except (OSError, ValueError) as e:
+        logger.warning("config.provider_metadata_user_load_failed error={}", str(e))
+    # 2. 打包/源码目录（内置默认值）
     try:
         meta_path = Path(__file__).resolve().parent / "config" / "provider_metadata.json"
         if meta_path.exists():
@@ -410,6 +430,8 @@ def _load_provider_metadata_cached() -> dict:
                 return _PROVIDER_METADATA_CACHE
     except (OSError, ValueError) as e:
         logger.warning("config.provider_metadata_load_failed error={}", str(e))
+    # 3. 极端兜底
+    logger.error("config.provider_metadata_all_load_failed using empty dict")
     _PROVIDER_METADATA_CACHE = {}
     return _PROVIDER_METADATA_CACHE
 
@@ -449,6 +471,39 @@ def get_default_model_for_provider(provider: str) -> str:
     return ""
 
 
+# ── 内置 Provider 集合（从 provider_metadata.json 派生，无硬编码）──
+# N-2 修复：原代码多处硬编码 ("mimo", "agnes") 判断是否为内置 provider，
+# 新增第三个内置 provider 时需改多处代码。改为从 metadata 的 builtin: true 字段派生。
+# 带 _BUILTIN_PROVIDERS_CACHE 避免每次调用都解析 metadata。
+_BUILTIN_PROVIDERS_CACHE: frozenset[str] | None = None
+
+
+def get_builtin_providers() -> frozenset[str]:
+    """返回内置 provider 集合（从 provider_metadata.json 的 builtin: true 字段派生）。
+
+    内置 provider 指有内置 transport 代码支持的 provider（如 mimo/agnes），
+    不需要通过 _custom_clients 注册即可使用。新增内置 provider 时，
+    只需在 provider_metadata.json 标记 builtin: true，无需改代码。
+
+    Returns:
+        内置 provider 名称的 frozenset，至少包含 "mimo"（最终兜底）
+    """
+    global _BUILTIN_PROVIDERS_CACHE
+    if _BUILTIN_PROVIDERS_CACHE is not None:
+        return _BUILTIN_PROVIDERS_CACHE
+    meta = _load_provider_metadata_cached()
+    providers = meta.get("providers", {}) if isinstance(meta, dict) else {}
+    builtin = set()
+    if isinstance(providers, dict):
+        for pid, pmeta in providers.items():
+            if isinstance(pmeta, dict) and pmeta.get("builtin", False):
+                builtin.add(pid)
+    # mimo 是最终兜底，必须包含（即使 metadata 异常未标记也保留）
+    builtin.add("mimo")
+    _BUILTIN_PROVIDERS_CACHE = frozenset(builtin)
+    return _BUILTIN_PROVIDERS_CACHE
+
+
 MIMO_MODEL = get_default_model_for_provider("mimo")
 
 # ── 反代客户端 IP 解析 ──
@@ -485,7 +540,7 @@ FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "")
 
 # Agnes AI 配置（在 get_provider_config 之前定义，避免前向引用）
 AGNES_API_KEY = get_secret("AGNES_API_KEY", "")
-AGNES_BASE_URL = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
+AGNES_BASE_URL = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1")
 AGNES_TEXT_MODEL = get_default_model_for_provider("agnes")
 AGNES_IMAGE_MODEL = os.getenv("AGNES_IMAGE_MODEL", "agnes-image-2.1-flash")
 AGNES_VIDEO_MODEL = os.getenv("AGNES_VIDEO_MODEL", "agnes-video-v2.0")
@@ -535,9 +590,23 @@ def clear_display_name_cache(name: str | None = None):
 
 
 def agent_names() -> list[str]:
-    """返回所有 agent key（通过扫描 config/agents/ 目录）。"""
-    return [
+    """返回所有 agent key（通过扫描 config/agents/ 目录）。
+
+    AGENTS_CONFIG_DIR 可能指向外置存储（KIOXIA_DATA_DIR），若该目录为空
+    （用户未在外置存储放置 agent 配置），回退到源码 config/agents/ 目录。
+    agent 配置文件是源码资源，应始终能被找到，避免 display name / CLI 列表
+    在外置存储未初始化时全部失效。
+    """
+    names = [
         fp.stem for fp in AGENTS_CONFIG_DIR.glob("*.json")
+        if fp.stem and not fp.stem.startswith("_")
+    ]
+    if names:
+        return names
+    # 外置存储为空时回退到源码目录（agent 配置是源码资源，非用户数据）
+    _src_agents_dir = Path(__file__).resolve().parent / "config" / "agents"
+    return [
+        fp.stem for fp in _src_agents_dir.glob("*.json")
         if fp.stem and not fp.stem.startswith("_")
     ]
 
@@ -983,7 +1052,10 @@ def _resolve_command(name: str) -> str:
 MCP_SERVERS = {
     "git": {
         "command": _resolve_command("uvx"),
-        "args": ["mcp-server-git", "--repository", str(Path.home() / "Desktop")],
+        # 根因修复：uvx 默认解析到最新 mcp 版本，但 mcp 2.0.0 移除了 Server.list_tools() 装饰器 API，
+        # 导致 mcp-server-git 2026.7.10 子进程在 initialize 前瞬崩（AttributeError）。
+        # 用 --with "mcp<2" 钉版本到 1.x，已实测 8s 内完成握手并返回 12 个 git 工具。
+        "args": ["--with", "mcp<2", "mcp-server-git", "--repository", str(Path.home() / "Desktop")],
         "env": {"UV_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple"},
         "agents": ["xiaolang"],  # which agents can use this MCP server's tools
     },

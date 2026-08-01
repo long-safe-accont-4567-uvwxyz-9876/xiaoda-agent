@@ -45,3 +45,25 @@ def temp_db_path(tmp_path) -> Path:
 def temp_config_path(tmp_path) -> Path:
     """返回临时配置文件路径"""
     return tmp_path / "test_config.yaml"
+
+
+@pytest.fixture(autouse=True)
+def _restore_module_global_state():
+    """自动还原模块级全局状态，防止测试间污染。
+
+    CodeRabbit#12 + Qodo#12 根治修复：ModelRouter.set_chat_model 末尾调用
+    _set_default_provider(provider) 改写进程级 config.DEFAULT_PROVIDER。
+    若测试 finally 只还原 ROUTE_TABLE 不还原 DEFAULT_PROVIDER，后续测试读到
+    被污染的 provider（如 agnes），导致 _restore_chat_model fallback 断言
+    "应回退到 mimo" 失败（实际回退到被污染的 agnes）。
+
+    本 fixture 在每个测试结束后检测并还原 DEFAULT_PROVIDER，覆盖所有
+    4 个涉及 set_chat_model 的测试文件（test_model_switching_refactor /
+    test_model_persistence_bugfix / test_fallback_optimization /
+    test_agnes_max_tokens_and_sticky_fallback），无需逐个测试手写还原。
+    """
+    import config as _cfg_mod
+    _orig_default_provider = _cfg_mod.DEFAULT_PROVIDER
+    yield
+    if _cfg_mod.DEFAULT_PROVIDER != _orig_default_provider:
+        _cfg_mod.set_default_provider(_orig_default_provider)

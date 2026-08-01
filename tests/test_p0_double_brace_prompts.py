@@ -18,6 +18,59 @@ def _has_double_braces(text: str) -> list[str]:
     return re.findall(r"\{\{|\}\}", text)
 
 
+# ---------- P0-0: ENTITY_EXTRACT_PROMPT (V1) ----------
+
+def test_entity_extract_prompt_v1_no_double_braces():
+    """V1 ENTITY_EXTRACT_PROMPT 不应含 {{}} 转义。
+
+    根因：V1 prompt 残留 {{}} 导致 LLM 输出 {{"entities": []}}，
+    json.loads 在 char 1 处失败，触发 kg.extract_json_error 139 次。
+    V2 已修复且有测试守护，V1 此前遗漏，本次补齐。
+    """
+    from memory.knowledge_graph import ENTITY_EXTRACT_PROMPT
+
+    offenders = _has_double_braces(ENTITY_EXTRACT_PROMPT)
+    assert not offenders, (
+        f"ENTITY_EXTRACT_PROMPT (V1) 仍含双花括号（str.replace 不处理转义）: {offenders}"
+    )
+
+
+def test_entity_extract_prompt_v1_has_valid_json_example():
+    """V1 ENTITY_EXTRACT_PROMPT 必须包含合法的 JSON 示例（单花括号）。
+
+    CodeRabbit F1: 用 json.loads 验证示例结构，而非独立 substring 检查——
+    substring 无法区分 ``{"entities": []}``（合法）与 ``{{entities}}``（非法但 substring
+    仍可能命中），结构化解析才能确保 LLM 看到的是可被 json.loads 接受的合法 JSON。
+    """
+    import json
+    import re
+    from memory.knowledge_graph import ENTITY_EXTRACT_PROMPT
+
+    # 匹配单层花括号（无嵌套）且含 entities + relations 的 JSON 示例
+    match = re.search(r'\{[^{}]*"entities"[^{}]*"relations"[^{}]*\}', ENTITY_EXTRACT_PROMPT)
+    assert match is not None, "ENTITY_EXTRACT_PROMPT 缺少含 entities+relations 的合法 JSON 示例"
+    parsed = json.loads(match.group(0))
+    assert "entities" in parsed, f"JSON 示例缺少 entities 字段: {parsed}"
+    assert "relations" in parsed, f"JSON 示例缺少 relations 字段: {parsed}"
+
+
+def test_entity_extract_prompt_v1_replace_works():
+    """模拟实际调用: str.replace 后 V1 prompt 应合法（无双花括号残留）。
+
+    CodeRabbit F2: 先断言模板含 ``{summary}`` 占位符（确保 replace 有目标），再断言
+    替换后的 summary 内容出现在 prompt 中，保留原有占位符/双花括号检查。
+    """
+    from memory.knowledge_graph import ENTITY_EXTRACT_PROMPT
+
+    assert "{summary}" in ENTITY_EXTRACT_PROMPT, "ENTITY_EXTRACT_PROMPT 缺少 {summary} 占位符"
+    summary = "用户今天聊了打篮球和看动漫的事情"
+    prompt = ENTITY_EXTRACT_PROMPT.replace("{summary}", summary[:500])
+
+    assert "{summary}" not in prompt
+    assert summary in prompt, "替换后 summary 内容应出现在 prompt 中"
+    assert not _has_double_braces(prompt), f"replace 后仍残留双花括号: {prompt[:200]}"
+
+
 # ---------- P0-1: ENTITY_EXTRACT_PROMPT_V2 ----------
 
 def test_entity_extract_prompt_v2_no_double_braces():

@@ -18,10 +18,22 @@ except ImportError:
     HAS_SQLITE_VEC = False
 
 try:
-    from openai import AsyncOpenAI
+    from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, APIStatusError
     HAS_OPENAI = True
 except ImportError:
     HAS_OPENAI = False
+    AsyncOpenAI = None  # type: ignore
+    APITimeoutError = TimeoutError  # type: ignore
+    APIConnectionError = ConnectionError  # type: ignore
+    APIStatusError = Exception  # type: ignore
+
+# 根因修复（2026-07-29）：embed client 复用全局共享 httpx client + connect=15s + max_retries=0
+# 原 AsyncOpenAI(api_key, base_url) 未传 timeout，SDK 默认 connect=5s 对跨网 SiliconFlow
+# embed API 过短，网络抖动期握手失败 → embed 慢 → 触发 memory_manager 外层 3s/3.5s 超时兜底（治标）。
+# 与 agnes API / http_pool 共享 client 保持同款根因修复，从源头消除外层超时的必要性。
+from utils.http_pool import get_shared_client as _get_embed_shared_client
+import httpx as _httpx_embed
+_EMBED_HTTP_TIMEOUT = _httpx_embed.Timeout(connect=15.0, read=30.0, write=10.0, pool=10.0)
 
 
 class EmbedCache:
@@ -109,6 +121,9 @@ class VectorStore:
             self._embed_client = AsyncOpenAI(
                 api_key=embed_api_key,
                 base_url=embed_base_url or "https://api.siliconflow.cn/v1",
+                http_client=_get_embed_shared_client(),
+                timeout=_EMBED_HTTP_TIMEOUT,
+                max_retries=0,  # 禁用 SDK 内部盲重试，连接错误重试无效且放大延迟
             )
 
     @property
@@ -228,18 +243,21 @@ class VectorStore:
                     self._vec_conn = None
 
         await asyncio.to_thread(_do_close)
-        # 关闭 AsyncOpenAI 客户端，防止资源泄漏
-        if self._embed_client:
-            try:
-                await self._embed_client.close()
-            except Exception as e:
-                logger.debug("vector_store.embed_client_close_failed", error=str(e))
+        # CodeRabbit 修复：不关闭 _embed_client，因为它复用全局共享 httpx client
+        # （_get_embed_shared_client）。关闭 _embed_client 会关闭共享 httpx client，
+        # 影响其他 VectorStore 实例。共享 client 生命周期由 close_shared_client() 统一管理。
+        # AsyncOpenAI 实例本身无其他需清理的资源（底层 httpx 由共享池管理）。
         if self._cache.stats["size"] > 0:
             logger.info("vector_store.cache_stats", **self._cache.stats)
 
     async def embed(self, text: str) -> list[float]:
         """生成文本的嵌入向量，优先使用缓存，失败时自动重试。"""
-        if not self._embed_client:
+        # CodeRabbit 修复：close() 后 _closed=True，但 _embed_client 复用全局共享 httpx
+        # client 不会被 close() 置空。若不检查 _closed，close() 后仍会发起 embed 请求，
+        # 违反生命周期契约。与文件内其他方法（_vec_conn 操作）的 _closed 守卫一致。
+        # 生命周期契约：close_shared_client() 必须在所有 VectorStore.close() 完成且
+        # 无在途 embed 请求后调用（由应用关闭顺序保证）。
+        if self._closed or not self._embed_client:
             return []
 
         cached = self._cache.get(text)
@@ -249,16 +267,15 @@ class VectorStore:
         max_retries = 2
         for attempt in range(max_retries + 1):
             try:
-                # 修复 _encode_task 慢任务（59-80s）根因：embeddings.create 无超时保护
-                # 根因：远程嵌入 API 卡住时，原代码会无限等待；3 次重试 × 20s = 60s+，
-                # 导致 bg.task_slow name=_encode_task elapsed=59-80s 告警。
-                # 10s 超时：嵌入 API 正常 0.5-2s，10s 足够；超时则重试或放弃，不让单条记忆编码阻塞后台任务。
-                response = await asyncio.wait_for(
-                    self._embed_client.embeddings.create(
-                        model=self._embed_model,
-                        input=text,
-                    ),
-                    timeout=10.0,
+                # CodeRabbit 修复：移除 asyncio.wait_for(timeout=10.0)。
+                # 原内层 10s 超时与 _EMBED_HTTP_TIMEOUT(connect=15s) 冲突——
+                # connect 15s 期间内层 10s 会先触发，导致 connect 永远用不满 15s，
+                # 且 httpx 层超时保护被 wait_for 截断失效。
+                # 现由 httpx _EMBED_HTTP_TIMEOUT(connect=15, read=30, write=10, pool=10) 统一保护。
+                # embed API 正常 0.5-2s，connect=15s 覆盖网络抖动，无需应用层 wait_for。
+                response = await self._embed_client.embeddings.create(
+                    model=self._embed_model,
+                    input=text,
                 )
                 vec = response.data[0].embedding
                 # Auto-detect dimensions from first API response
@@ -269,12 +286,25 @@ class VectorStore:
                     logger.warning("vector_store.dimension_mismatch", expected=self._dimensions, actual=len(vec))
                 self._cache.put(text, vec)
                 return vec
-            except asyncio.TimeoutError:
+            except (APITimeoutError, APIConnectionError) as e:
+                # 瞬时错误：超时/连接错误，重试有效（网络抖动可能恢复）
                 if attempt < max_retries:
-                    logger.warning("vector_store.embed_timeout_retry", attempt=attempt + 1)
+                    logger.warning("vector_store.embed_transient_retry",
+                                   attempt=attempt + 1, error=str(e))
                     await asyncio.sleep(1)
                     continue
-                logger.warning("vector_store.embed_timeout_final", attempts=max_retries + 1)
+                logger.warning("vector_store.embed_transient_final",
+                               error=str(e), attempts=max_retries + 1)
+                return []
+            except APIStatusError as e:
+                # HTTP 状态错误：5xx 重试，4xx（认证/验证/限流）立即放弃不重试
+                if hasattr(e, 'status_code') and e.status_code >= 500 and attempt < max_retries:
+                    logger.warning("vector_store.embed_5xx_retry",
+                                   attempt=attempt + 1, status=e.status_code)
+                    await asyncio.sleep(1)
+                    continue
+                logger.warning("vector_store.embed_status_error",
+                               status=getattr(e, 'status_code', 0), error=str(e))
                 return []
             except Exception as e:
                 if attempt < max_retries:

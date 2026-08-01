@@ -208,7 +208,7 @@ class ErrorRulePipeline:
         if result is None and self.router is not None:
             try:
                 result = await self.router.route(
-                    task_type="chat", messages=messages,
+                    task_type="memory_encoding", messages=messages,
                     temperature=0.3, max_tokens=512,
                 )
             except Exception as e:

@@ -174,6 +174,9 @@ async def test_fallback_max_tokens_passthrough():
     router.TASK_TIMEOUTS = {"chat": 30}
     router._check_cache_health = lambda: None
     router._last_cache_warning = 0.0
+    # Task 6: _try_fallback_chain 通过 _registry.snapshot_task 读取降级配置
+    from model_router import ModelRouteRegistry
+    router._registry = ModelRouteRegistry(ROUTE_TABLE)
 
     # 记录 fallback 调用时的 max_tokens
     received_max_tokens = []
@@ -189,7 +192,7 @@ async def test_fallback_max_tokens_passthrough():
     # 触发 fallback 链：original_max_tokens=32768
     test_error = RuntimeError("main call failed")
     await router._try_fallback_chain(
-        test_error, "chat_pro", [{"role": "user", "content": "test"}],
+        test_error, "chat", [{"role": "user", "content": "test"}],
         0.7, False, None, None, 30, "user1", "session1", None,
         original_max_tokens=32768,
     )

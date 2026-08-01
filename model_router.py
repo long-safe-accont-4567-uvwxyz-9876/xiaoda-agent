@@ -13,11 +13,14 @@ from loguru import logger
 from db.db_analytics import AnalyticsDB
 from utils.metrics import metrics
 from config import AGNES_BASE_URL, AGNES_TEXT_MODEL, PROMPT_CACHING_ENABLED
-from config import MODEL_NAME as _CFG_MODEL_NAME, PRO_MODEL_NAME as _CFG_PRO_MODEL
+from config import MODEL_NAME as _CFG_MODEL_NAME
 from config import FLASH_MODEL_NAME as _CFG_FLASH_MODEL, DEFAULT_PROVIDER as _CFG_DEFAULT_PROVIDER
 from config import MIMO_MODEL as _CFG_MIMO_MODEL
 from config import set_default_provider as _set_default_provider
+from config import get_builtin_providers as _get_builtin_providers
 from transports import ProviderTransport, MiMoTransport, AgnesTransport
+# 根因修复：agnes API connect=5s 过短导致 APIConnectionError，统一从 agnes_transport 引入共享 httpx 配置
+from transports.agnes_transport import _get_agnes_http_client, AGNES_HTTP_TIMEOUT, close_agnes_shared_client
 from utils.prompt_caching import apply_cache_control
 from utils.error_classifier import ErrorClassifier, RecoveryAction
 from utils.credential_pool import get_credential_pool
@@ -144,9 +147,6 @@ ROUTE_TABLE = {
     # chat 主路由：128K 上限，支撑长时间连贯对话，搭配滑动窗口+摘要压缩避免退化
     # 不再锁死 8192，避免长会话频繁截断历史导致记忆断裂
     "chat": {"model": _CFG_MODEL_NAME, "max_tokens": 131072, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
-    "chat_pro": {"model": _CFG_PRO_MODEL or _CFG_MODEL_NAME, "max_tokens": 131072, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "enabled", "budget_tokens": 4096}},
-    # chat_flash：sub_agent 调用（如 xiaoli 转述），需要足够空间避免截断
-    "chat_flash": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 6144, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "emotion_analysis": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 1024, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "tool_result_wrap": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 2048, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
     "memory_encoding": {"model": _CFG_FLASH_MODEL or _CFG_MODEL_NAME, "max_tokens": 4096, "client": _CFG_DEFAULT_PROVIDER, "thinking": {"type": "disabled"}},
@@ -160,13 +160,14 @@ MODEL_PREFERENCES = {
 
 RETRYABLE_ERRORS = {'timeout', 'rate_limit', 'connection_error'}
 MAX_RETRIES = 1
+# chat_pro/chat_flash 已合并进 chat（同一 provider 同一 model，无区分意义）
+# 降级链：chat 失败 → chat_agnes（agnes provider 作为独立兜底）
 FALLBACK_ROUTE = {
-    "chat_pro": "chat_flash",
-    "chat_flash": "chat_agnes",
+    "chat": "chat_agnes",
 }
 
 # P0 修复：per-provider max_tokens 上限（从配置文件 + 环境变量读取，无硬编码）
-# 根因：ROUTE_TABLE 中 chat/chat_pro/chat_agnes/chat_mimo 都设了 131072，
+# 根因：ROUTE_TABLE 中 chat/chat_agnes/chat_mimo 都设了 131072，
 #       但 agnes-2.0-flash 实际上限是 65536，超过会返回 500 InternalServerError
 #       "max_tokens exceeds the limit of 65536"（日志中 286 次错误根因）。
 #       之前的"一刀切"提升 max_tokens 到 131072 反而打破了 agnes provider。
@@ -286,8 +287,12 @@ class ModelRouteRegistry:
 
     def __init__(self, initial_table: dict | None = None,
                  config_service: Any = None) -> None:
-        # 深拷贝初始表，避免共享引用
-        self._table: dict[str, dict] = copy.deepcopy(initial_table) if initial_table else {}
+        # 直接引用传入的 table（不深拷贝）：
+        # 生产中传入 ROUTE_TABLE，registry._table 就是 ROUTE_TABLE 本身，
+        # update_route 修改 self._table[task] 即修改 ROUTE_TABLE[task]，
+        # 保证 route() 读 ROUTE_TABLE 时拿到最新值（避免 registry 与 ROUTE_TABLE 脱节）。
+        # 测试中传入局部 dict，修改不影响全局；如需隔离，调用方自行深拷贝后传入。
+        self._table: dict[str, dict] = initial_table if initial_table is not None else {}
         # 延迟加载 ConfigService：测试时可注入 mock，生产时从 get_config_service() 取
         self._cfg = config_service
 
@@ -321,8 +326,24 @@ class ModelRouteRegistry:
 
         用于 _apply_route_overrides：从 ConfigService 加载用户配置后，
         用持久化值覆盖默认 ROUTE_TABLE。持久化由调用方决定（启动时一般不写回）。
+
+        CodeRabbit#5 修复：保持 self._table 的对象身份不变（clear + update），
+        而非重新赋值 self._table = new_dict。生产中 self._table 就是模块级
+        ROUTE_TABLE 本身，route()/chat_stream() 等请求路径仍直接读 ROUTE_TABLE；
+        若 here 重新赋值，registry 后续 update_route 作用于新 dict，而请求路径
+        还在读旧 ROUTE_TABLE → 数据脱节，用户改的配置对在途请求不可见。
         """
-        self._table = copy.deepcopy(new_table)
+        self._table.clear()
+        self._table.update(copy.deepcopy(new_table))
+
+    def get_task_ref(self, task: str) -> dict | None:
+        """返回指定 task 路由的**引用**（不深拷贝）。
+
+        供热路径 route()/chat_stream()/get_max_tokens_for_task 使用，避免每次
+        调用都深拷贝（深拷贝虽是微秒级，但 chat 热路径每秒可能数十次调用）。
+        调用方承诺只读不改返回的 dict；修改请走 update_route()。
+        """
+        return self._table.get(task)
 
     def update_route(self, task: str, model_id: str, provider: str,
                      max_tokens: int | None = None,
@@ -332,7 +353,7 @@ class ModelRouteRegistry:
         """原子地更新路由：内存 + 持久化。
 
         Args:
-            task: 路由 task 名称（如 "chat", "chat_pro"）
+            task: 路由 task 名称（如 "chat"）
             model_id: 模型 ID
             provider: provider 名称
             max_tokens: 可选，max_tokens 上限
@@ -361,6 +382,10 @@ class ModelRouteRegistry:
             new_entry["max_tokens"] = max_tokens
         if thinking is not None:
             new_entry["thinking"] = copy.deepcopy(thinking)
+        # CodeRabbit#7 修复：timeout 也合并进 new_entry，
+        # 这样持久化时 new_entry.get("timeout") 能拿到有效值
+        if timeout is not None:
+            new_entry["timeout"] = timeout
 
         # 写内存
         self._table[task] = new_entry
@@ -370,15 +395,24 @@ class ModelRouteRegistry:
             cfg = self._get_cfg()
             if cfg is not None:
                 try:
+                    # CodeRabbit#3+#9 + Qodo#3 修复：持久化用 new_entry 的有效值。
+                    # new_entry 已在上方合并了 old_entry（max_tokens/thinking/timeout 继承自旧值），
+                    # 所以这里直接序列化 new_entry 即可，不会再把 omitted 误存为 false/60。
+                    _effective_thinking = new_entry.get("thinking")
+                    _thinking_bool = bool(
+                        _effective_thinking and isinstance(_effective_thinking, dict)
+                        and _effective_thinking.get("type") == "enabled"
+                    )
+                    # timeout：new_entry 已继承 old_entry.timeout；若 new_entry 无则用入参兜底
+                    _effective_timeout = new_entry.get("timeout")
+                    if _effective_timeout is None and timeout is not None:
+                        _effective_timeout = timeout
                     cfg.set(f"models.routes.{task}", {
-                        "model": model_id,
-                        "client": provider,
+                        "model": new_entry["model"],
+                        "client": new_entry["client"],
                         "max_tokens": new_entry.get("max_tokens"),
-                        "thinking": bool(
-                            thinking and isinstance(thinking, dict)
-                            and thinking.get("type") == "enabled"
-                        ),
-                        "timeout": timeout if timeout is not None else 60,
+                        "thinking": _thinking_bool,
+                        "timeout": _effective_timeout,
                     })
                 except Exception as e:
                     # 回滚内存
@@ -396,11 +430,14 @@ class ModelRouter:
     _DEFAULT_TIMEOUTS: ClassVar[dict[str, int]] = {
         "emotion_analysis": 10,
         "emotion": 10,
-        "chat_flash": 30,
         "chat": 60,
-        "chat_pro": 60,
         "tool_call": 60,
         "image_gen": 90,
+    }
+    # 后台 LLM task 集合：这些 task 调 LLM 但不直接面向用户，
+    # 必须让路于主 chat（task_type="chat"），避免并发竞争 agnes API。
+    _BG_LLM_TASKS: ClassVar[set[str]] = {
+        "memory_encoding", "emotion_analysis", "tool_result_wrap", "entity_extraction",
     }
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None,
@@ -442,7 +479,15 @@ class ModelRouter:
                 logger.debug("router.agnes_key_pool_load_failed", exc_info=True)
         _agnes_url = os.getenv("AGNES_BASE_URL", AGNES_BASE_URL)
         _ssrf_check(_agnes_url)  # SSRF 防护：校验 base_url
-        self._agnes_client = AsyncOpenAI(api_key=_agnes_key, base_url=_agnes_url) if _agnes_key else None
+        self._agnes_client = (
+            AsyncOpenAI(
+                api_key=_agnes_key,
+                base_url=_agnes_url,
+                http_client=_get_agnes_http_client(),
+                timeout=AGNES_HTTP_TIMEOUT,
+                max_retries=0,
+            ) if _agnes_key else None
+        )
 
         self._custom_clients: dict[str, AsyncOpenAI] = {}
         self._register_credential_pool_providers()
@@ -450,6 +495,17 @@ class ModelRouter:
         # 启动后 ROUTE_TABLE 模块级变量作为只读快照，所有修改走 _registry
         self._registry: ModelRouteRegistry = ModelRouteRegistry(ROUTE_TABLE)
         self._current_chat_model: dict | None = None
+        # 主 chat 优先机制：后台 LLM 任务让路，避免并发竞争 agnes API
+        # 根因：agnes API 对同 key 并发请求严重排队（实测并发3→32s，串行→19s），
+        #       后台 LLM 任务（memory_encoding/emotion_analysis/instinct 等）和主 chat
+        #       并发调 agnes → 主 chat 60s 超时 → retry → 83s 阻塞。
+        # 修复：主 chat 期间 _chat_idle.clear()，后台 LLM 任务 await _chat_idle.wait() 让路；
+        #       后台任务之间用 _bg_llm_semaphore(1) 串行，彻底消除并发竞争。
+        self._chat_idle = asyncio.Event()
+        self._chat_idle.set()  # 初始空闲
+        self._bg_llm_semaphore = asyncio.Semaphore(1)
+        self._llm_call_gate = asyncio.Lock()
+        self._active_bg_llm_tasks: set[asyncio.Task] = set()
         self._cache_stats = {
             "total_calls": 0,
             "hit_tokens": 0,
@@ -535,8 +591,7 @@ class ModelRouter:
         后续通过 Setup 页面保存的新 Key 不会自动生效。此方法从当前
         os.environ 重新读取 Key 并重建客户端，使新配置立即生效。
         """
-        old_mimo = self._client
-        old_agnes = self._agnes_client
+        old_mimo = self._client  # 旧 MiMo 客户端（独立 httpx，替换后 close 释放连接）
 
         new_mimo_key = os.getenv("MIMO_API_KEY", "")
         new_mimo_url = os.getenv("MIMO_BASE_URL", MIMO_BASE_URL)
@@ -553,7 +608,13 @@ class ModelRouter:
         new_agnes_url = os.getenv("AGNES_BASE_URL", AGNES_BASE_URL)
         if new_agnes_key:
             _ssrf_check(new_agnes_url)  # SSRF 防护：校验 base_url
-            self._agnes_client = AsyncOpenAI(api_key=new_agnes_key, base_url=new_agnes_url)
+            self._agnes_client = AsyncOpenAI(
+                api_key=new_agnes_key,
+                base_url=new_agnes_url,
+                http_client=_get_agnes_http_client(),
+                timeout=AGNES_HTTP_TIMEOUT,
+                max_retries=0,
+            )
             logger.info("router.agnes_client_refreshed",
                         key_len=len(new_agnes_key),
                         key_hash=_mask_api_key(new_agnes_key))
@@ -561,10 +622,13 @@ class ModelRouter:
             self._agnes_client = None
 
         # 关闭旧客户端释放连接
+        # CodeRabbit 修复：old_agnes 注入了共享 httpx client（_get_agnes_http_client），
+        # 调用其 .close() 会连带关闭共享 client，影响新 self._agnes_client（同样复用共享
+        # client）。共享 client 生命周期归 agnes_transport 模块统一管理（close_agnes_shared_client），
+        # 这里只关闭独立的 old_mimo（未注入共享 httpx，SDK 自建 client）。
         _old_clients: list = []
-        for old in (old_mimo, old_agnes):
-            if old is not None and old not in (self._client, self._agnes_client):
-                _old_clients.append(old)
+        if old_mimo is not None and old_mimo is not self._client:
+            _old_clients.append(old_mimo)
         if _old_clients:
             try:
                 import asyncio
@@ -622,10 +686,20 @@ class ModelRouter:
     def set_chat_model(self, provider: str, model_id: str) -> dict:
         """切换 chat 主模型，原子化更新所有同步路由。
 
-        通过 ModelRouteRegistry.update_route() 原子化：
+        真正的 all-or-nothing 事务（CodeRabbit#1 + Qodo#1 修复）：
         1. 先验证 provider 可用（已注册），未注册直接抛（此时还没改任何状态）
-        2. 一次性更新 chat + chat_pro + chat_flash 等所有同步 task
-        3. 每条 task 的持久化由 Registry 负责（失败回滚单条 task 内存）
+        2. 暂存所有 sync task 旧值快照 + DEFAULT_PROVIDER 旧值
+        3. 逐个原子更新所有 sync task（每个 update_route 内部内存+持久化原子）
+        4. 任一 task 失败：回滚所有已更新 task（内存+持久化），DEFAULT_PROVIDER 未改无需回滚
+        5. 全部 task 成功后才发布 DEFAULT_PROVIDER 和 models.chat_model
+        6. chat_model 写入失败也要回滚 Step 3 + DEFAULT_PROVIDER
+
+        旧实现缺陷（已修复）：
+        - Step 2 提前改 DEFAULT_PROVIDER，失败时不回滚 → 子代理/成本统计走错 provider
+        - Step 5 独立写 chat_model，失败时不回滚 Step 4 → routes 新值但 chat_model 旧值
+          重启时 _restore_chat_model 用旧 chat_model 覆盖正确的 ROUTE_TABLE["chat"]
+        - timeout 用 self.TASK_TIMEOUTS.get(_task) 读取运行时值，可能固化误改；
+          现在用 old_entry.get("timeout") 保留原持久化值
 
         Args:
             provider: provider 名称
@@ -635,35 +709,38 @@ class ModelRouter:
             {"provider": ..., "model_id": ...}
 
         Raises:
-            LLMError: provider 未注册
+            LLMError: provider 未注册，或事务回滚后重新抛出
         """
         # Step 1: 先验证 provider 可用，未注册直接抛（此时还没改任何状态）
-        if provider not in ("mimo", "agnes"):
+        # N-2 修复：内置 provider 集合从 provider_metadata.json 派生，不硬编码
+        if provider not in _get_builtin_providers():
             if provider not in self._custom_clients:
                 self._lazy_register_provider(provider)
             if provider not in self._custom_clients:
                 raise LLMError(f"自定义 provider {provider} 未注册，请先注册客户端")
 
-        # Step 2: 同步更新 DEFAULT_PROVIDER（影响子代理、成本统计）
-        _set_default_provider(provider)
+        # Step 2: 保存 DEFAULT_PROVIDER 当前值用于失败回滚
+        # 注意：必须用 config.DEFAULT_PROVIDER 实时读取，不能用模块级 import 快照
+        import config as _config_mod
+        _old_default_provider = _config_mod.DEFAULT_PROVIDER
 
         # Step 3: 收集所有需要同步的 task（chat 主路由 + 同步 task）
-        _sync_tasks = ("chat", "chat_pro", "chat_flash",
+        # chat_pro/chat_flash 已合并进 chat
+        _sync_tasks = ("chat",
                        "emotion_analysis", "tool_result_wrap",
                        "memory_encoding")
 
         # agnes 不支持 thinking，切换到 agnes 时所有 task 禁用 thinking
         _thinking_for_agnes = {"type": "disabled"}
 
-        # Step 4: 通过 Registry 原子化更新每个 task
-        # Registry.update_route 内部会持久化 + 失败回滚单条 task
-        last_error: Exception | None = None
+        # Step 4: 暂存快照 + 逐个原子更新（任一失败回滚所有已提交 task）
         _updated_tasks: list[str] = []
+        _snapshots: dict[str, dict | None] = {}
         for _task in _sync_tasks:
             if _task not in self._registry.all_tasks():
                 continue
-            # 读取原 entry 拿 max_tokens 和 thinking
             old_entry = self._registry.get_task(_task) or {}
+            _snapshots[_task] = old_entry
             _thinking = _thinking_for_agnes if provider == "agnes" else old_entry.get("thinking")
             try:
                 self._registry.update_route(
@@ -672,28 +749,66 @@ class ModelRouter:
                     provider=provider,
                     max_tokens=old_entry.get("max_tokens"),
                     thinking=_thinking,
-                    timeout=self.TASK_TIMEOUTS.get(_task),
+                    timeout=old_entry.get("timeout"),  # Qodo#3: 保留原 timeout，不用 TASK_TIMEOUTS
                 )
                 _updated_tasks.append(_task)
             except Exception as e:
+                # 失败回滚所有已更新 task（内存 + 持久化）
                 logger.error("router.set_chat_model_task_failed task={} error={}",
                              _task, str(e))
-                last_error = e
+                for _done_task in _updated_tasks:
+                    _old = _snapshots.get(_done_task) or {}
+                    try:
+                        self._registry.update_route(
+                            _done_task,
+                            model_id=_old.get("model", ""),
+                            provider=_old.get("client", ""),
+                            max_tokens=_old.get("max_tokens"),
+                            thinking=_old.get("thinking"),
+                            timeout=_old.get("timeout"),
+                        )
+                    except Exception as rollback_err:
+                        logger.error("router.set_chat_model_rollback_failed task={} error={}",
+                                     _done_task, str(rollback_err))
+                # DEFAULT_PROVIDER 未改，无需回滚
+                raise LLMError(
+                    f"切换 chat 模型时 task {_task} 失败，已回滚 {_updated_tasks}: {e}"
+                ) from e
 
         logger.info("router.all_tasks_synced",
                     provider=provider, model=model_id,
                     synced_tasks=_updated_tasks)
 
-        if last_error is not None:
-            raise LLMError(f"切换 chat 模型时部分 task 持久化失败: {last_error}")
+        # Step 5: 所有 task 成功后才发布 DEFAULT_PROVIDER
+        # （之前未改，失败无需回滚；放在这里保证 routes 与 provider 同步切换）
+        _set_default_provider(provider)
 
-        # Step 5: 同步 chat_model 字段到 ConfigService（WebUI 显示用）
+        # Step 6: 同步 chat_model 字段到 ConfigService（WebUI 显示用）
+        # CodeRabbit#1 修复：chat_model 写入失败时回滚 Step 4 的所有 task + DEFAULT_PROVIDER
         try:
             from web.config_service import get_config_service
             cfg = get_config_service()
             cfg.set("models.chat_model", {"provider": provider, "model_id": model_id})
-        except (OSError, KeyError, ValueError, TypeError, RuntimeError) as e:
-            logger.warning("router.chat_model_persist_failed error={}", str(e))
+        except Exception as e:
+            logger.error("router.chat_model_persist_failed error={} rolling_back_tasks={}",
+                         str(e), _updated_tasks)
+            for _done_task in _updated_tasks:
+                _old = _snapshots.get(_done_task) or {}
+                try:
+                    self._registry.update_route(
+                        _done_task,
+                        model_id=_old.get("model", ""),
+                        provider=_old.get("client", ""),
+                        max_tokens=_old.get("max_tokens"),
+                        thinking=_old.get("thinking"),
+                        timeout=_old.get("timeout"),
+                    )
+                except Exception as rollback_err:
+                    logger.error("router.set_chat_model_chat_model_rollback_failed task={} error={}",
+                                 _done_task, str(rollback_err))
+            # DEFAULT_PROVIDER 也要回滚
+            _set_default_provider(_old_default_provider)
+            raise LLMError(f"持久化 chat_model 失败，已回滚所有 task 和 DEFAULT_PROVIDER: {e}") from e
 
         self._current_chat_model = {"provider": provider, "model_id": model_id}
         logger.info("router.chat_model_changed", provider=provider, model=model_id)
@@ -710,7 +825,7 @@ class ModelRouter:
         用于 AgentContext 动态计算压缩阈值，避免硬编码不分模型的问题。
         若 task_type 不存在或字段缺失，返回保守兜底值 60000。
         """
-        cfg = ROUTE_TABLE.get(task_type) or ROUTE_TABLE.get("chat", {})
+        cfg = self._registry.get_task_ref(task_type) or self._registry.get_task_ref("chat") or {}
         return int(cfg.get("max_tokens", 60000))
 
     def get_active_max_tokens(self) -> int:
@@ -872,23 +987,35 @@ class ModelRouter:
         await self._flush_cost_buffer()
 
     async def close(self) -> None:
-        """关闭所有 AsyncOpenAI 客户端, 释放 TCP 连接."""
-        for client in (self._client, self._agnes_client):
-            if client is not None:
-                try:
-                    await client.close()
-                except (RuntimeError, OSError, _openai_mod.APIError):
-                    logger.debug("model_router.close_client_error", exc_info=True)
-        self._client = None
-        self._agnes_client = None
-        # 关闭自定义 provider 客户端
-        for cp_client in list(getattr(self, "_custom_clients", {}).values()):
+        """关闭所有 AsyncOpenAI 客户端, 释放 TCP 连接.
+
+        CodeRabbit 修复：注入共享 httpx client 的 agnes wrapper 不调用 ``.close()`` ——
+        ``.close()`` 会连带关闭共享 httpx client，影响其他复用该 client 的实例。
+        共享 agnes client 由 ``close_agnes_shared_client()`` 统一关闭；MiMo 与非 agnes
+        自定义 provider 客户端（未注入共享 httpx，SDK 自建 client）独立 close。
+        """
+        if self._client is not None:
             try:
-                await cp_client.close()
+                await self._client.close()
             except (RuntimeError, OSError, _openai_mod.APIError):
-                logger.debug("model_router.close_custom_client_error", exc_info=True)
+                logger.debug("model_router.close_client_error", exc_info=True)
+        self._client = None
+        # 关闭自定义 provider 客户端（跳过 agnes：它复用共享 httpx client，由下方统一关闭）
         if hasattr(self, "_custom_clients"):
+            for cp_name, cp_client in list(self._custom_clients.items()):
+                if cp_name == "agnes":
+                    continue
+                try:
+                    await cp_client.close()
+                except (RuntimeError, OSError, _openai_mod.APIError):
+                    logger.debug("model_router.close_custom_client_error", exc_info=True)
             self._custom_clients.clear()
+        # agnes 共享 httpx client：统一关闭一次（应用退出时调用，此时无在途请求）
+        try:
+            await close_agnes_shared_client()
+        except (RuntimeError, OSError):
+            logger.debug("model_router.close_agnes_shared_client_error", exc_info=True)
+        self._agnes_client = None
 
     @staticmethod
     def _apply_caching_headers(extra_headers: dict | None) -> dict | None:
@@ -938,17 +1065,20 @@ class ModelRouter:
         # 1. 降级到更便宜的模型
         fallback_type = FALLBACK_ROUTE.get(task_type)
         # P0 修复：content_filter 触发时跳过同 provider 的 fallback 目标
-        # 根因：chat_flash (mimo) content_filter → fallback 到 chat_mini (也是 mimo) → 再次 content_filter
+        # 根因：同 provider 的 fallback 目标会再次触发 content_filter
         # 浪费一次调用 + 触发 verification retry，导致 14 秒延迟
         # 修复：content_filter 时跳过同 provider 的 fallback，直接到不同 provider（如 agnes）
         _is_content_filter = "content_filter" in str(e) or "content_policy" in str(e)
         _original_provider = ""
         try:
-            _original_provider = ROUTE_TABLE.get(task_type, {}).get("client", _CFG_DEFAULT_PROVIDER)
+            # Task 6: 通过 registry 快照读取，避免降级链污染全局 ROUTE_TABLE
+            _orig_entry = self._registry.get_task(task_type) or {}
+            _original_provider = _orig_entry.get("client", _CFG_DEFAULT_PROVIDER)
         except Exception:
             pass
         while fallback_type:
-            fallback_config = ROUTE_TABLE.get(fallback_type)
+            # Task 6: 用 registry 快照（深拷贝），降级期间修改不影响全局 ROUTE_TABLE
+            fallback_config = self._registry.snapshot_task(fallback_type)
             fallback_provider = fallback_config.get("client", _CFG_DEFAULT_PROVIDER) if fallback_config else _CFG_DEFAULT_PROVIDER
             # content_filter 时跳过同 provider（同样的过滤模型会再次拦截）
             if _is_content_filter and fallback_provider == _original_provider:
@@ -986,7 +1116,8 @@ class ModelRouter:
         # 2. 尝试 Agnes 作为最终降级
         if task_type not in ("chat_agnes",) and self._is_client_configured("agnes"):
             try:
-                agnes_config = ROUTE_TABLE.get("chat_agnes")
+                # Task 6: 用 registry 快照读取 chat_agnes，避免污染全局
+                agnes_config = self._registry.snapshot_task("chat_agnes")
                 if agnes_config:
                     logger.warning("router.agnes_fallback", original_task=task_type)
                     agnes_tools = self._filter_tools_for_model(tools, agnes_config.get("model", ""))
@@ -1024,7 +1155,11 @@ class ModelRouter:
                         user_openid, session_id,
                         extra_headers=extra_headers,
                     )
-                except (RuntimeError, OSError, KeyError, ValueError) as cp_err:
+                except (RuntimeError, OSError, KeyError, ValueError, LLMError) as cp_err:
+                    # CR-Major-2 修复：补 LLMError 捕获。
+                    # _route_with_retry 内部 _select_client_for_provider 在 client 未初始化时
+                    # 抛 LLMError（继承 AppException，不属于 RuntimeError/OSError/ValueError），
+                    # 原捕获集合漏掉它 → 自定义 provider fallback 链提前终止，异常逃逸到 route()。
                     logger.error("router.custom_provider_fallback_failed",
                                  provider=cp_name, error=str(cp_err))
                     continue
@@ -1040,21 +1175,50 @@ class ModelRouter:
                     session_id: str = "",
                     extra_headers: dict | None = None) -> str | object:
         """路由入口：主路由 → 多级 fallback 链。"""
-        config = ROUTE_TABLE.get(task_type, ROUTE_TABLE["chat"])
+        # CodeRabbit#5 + M5 修复：走 registry.get_task_ref 而非直接读 ROUTE_TABLE。
+        # get_task_ref 返回引用（不深拷贝），供热路径使用；replace_table 已保持对象身份，
+        # 所以 registry._table 与 ROUTE_TABLE 永远是同一对象，读哪个都行，
+        # 但走 registry 是语义上的唯一入口，未来若 registry 改实现也不用改 route()。
+        config = self._registry.get_task_ref(task_type) or self._registry.get_task_ref("chat") or {}
         mt = max_tokens or config.get("max_tokens", 4096)
         if timeout is None:
             timeout = self.TASK_TIMEOUTS.get(task_type, 30)
+
+        # === 主 chat 优先：后台 LLM 任务让路 ===
+        # 主 chat (task_type="chat") 执行期间 _chat_idle.clear()，
+        # 后台 LLM 任务 (_BG_LLM_TASKS) await _chat_idle.wait() 自动让路。
+        # 后台任务之间用 _bg_llm_semaphore(1) 串行，彻底消除 agnes 并发竞争。
+        _is_bg_llm = task_type in self._BG_LLM_TASKS
+        _current_task = asyncio.current_task()
+        if _is_bg_llm:
+            await self._chat_idle.wait()
+            await self._bg_llm_semaphore.acquire()
+            try:
+                await self._chat_idle.wait()  # 拿到 semaphore 后再次确认主 chat 空闲
+            except BaseException:
+                self._bg_llm_semaphore.release()
+                raise
+        elif task_type == "chat":
+            self._chat_idle.clear()
+            for _bg_task in tuple(self._active_bg_llm_tasks):
+                if _bg_task is not _current_task and not _bg_task.done():
+                    _bg_task.cancel()
+            await asyncio.sleep(0)
+
+        if _is_bg_llm and _current_task is not None:
+            self._active_bg_llm_tasks.add(_current_task)
 
         self._cache_stats["total_calls"] += 1
         extra_headers = self._apply_caching_headers(extra_headers)
 
         _start = time.time()
         try:
-            result = await self._route_with_retry(
-                task_type, config, messages, temperature, mt, stream,
-                tools, tool_choice, timeout, user_openid, session_id,
-                extra_headers=extra_headers,
-            )
+            async with self._llm_call_gate:
+                result = await self._route_with_retry(
+                    task_type, config, messages, temperature, mt, stream,
+                    tools, tool_choice, timeout, user_openid, session_id,
+                    extra_headers=extra_headers,
+                )
             metrics.inc(f"model_route.{task_type}.success")
             metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
             metrics.maybe_report()
@@ -1073,10 +1237,15 @@ class ModelRouter:
             metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
             metrics.maybe_report()
             # 结构化日志：LLM 调用失败
+            # 根因修复：APIConnectionError 的真实 httpx 异常（ConnectTimeout/DNS/TLS）存在 __cause__ 中，
+            # 只记 str(e)="Connection error." 无法定位。补记 cause_type/cause_msg 实现可观测性。
+            _cause = e.__cause__ if e.__cause__ else (e.__context__ if e.__context__ else None)
             logger.warning("llm.call_failed", event="llm_call", model=config.get("model", ""),
                            task=task_type, duration_ms=int((time.time() - _start) * 1000),
                            user_id=user_openid, session_id=session_id,
-                           error=f"{type(e).__name__}: {e}")
+                           error=f"{type(e).__name__}: {e}",
+                           cause_type=type(_cause).__name__ if _cause else "",
+                           cause_msg=str(_cause)[:300] if _cause else "")
             fb_result = await self._try_fallback_chain(
                 e, task_type, messages, temperature, stream,
                 tools, tool_choice, timeout, user_openid, session_id, extra_headers,
@@ -1091,6 +1260,15 @@ class ModelRouter:
                 error_code=ErrorCodeEnum.E_LLM001,
                 cause=e,
             ) from e
+        finally:
+            # 释放让路资源：主 chat 完成后 set event 唤醒后台任务；
+            # 后台任务完成后 release semaphore 让下一个后台任务执行。
+            if _is_bg_llm:
+                if _current_task is not None:
+                    self._active_bg_llm_tasks.discard(_current_task)
+                self._bg_llm_semaphore.release()
+            elif task_type == "chat":
+                self._chat_idle.set()
 
     def _apply_prompt_caching(self, provider: str, messages: list[dict]) -> list[dict]:
         """应用 Prompt Caching（MiMo 直接启用；其他 provider 在 PROMPT_CACHING_ENABLED 时尝试）。"""
@@ -1138,14 +1316,21 @@ class ModelRouter:
                             try:
                                 _ssrf_check(_agnes_url)
                                 self._agnes_client = AsyncOpenAI(
-                                    api_key=_agnes_key, base_url=_agnes_url)
+                                    api_key=_agnes_key,
+                                    base_url=_agnes_url,
+                                    http_client=_get_agnes_http_client(),
+                                    timeout=AGNES_HTTP_TIMEOUT,
+                                    max_retries=0,
+                                )
                                 client = self._agnes_client
                                 logger.info("router.agnes_client_lazy_recovered",
                                             key_hash=_mask_api_key(_agnes_key))
                             except (ValueError, OSError) as ce:
                                 logger.warning("router.agnes_client_lazy_recover_failed",
                                                error=str(ce))
-            elif provider not in ("mimo", "agnes"):
+            # N-2 修复收尾：内置 provider 集合从 provider_metadata.json 派生，不硬编码
+            # （line 20 已 import _get_builtin_providers，line 686/1319 同款用法）
+            elif provider not in _get_builtin_providers():
                 custom = getattr(self, "_custom_clients", {}).get(provider)
                 if custom is None:
                     # 懒注册：从 config_service 恢复未注册的自定义 provider
@@ -1199,7 +1384,7 @@ class ModelRouter:
         _main_provider = ""
         _main_model = ""
         try:
-            _chat_cfg = ROUTE_TABLE.get("chat", {})
+            _chat_cfg = self._registry.get_task_ref("chat") or {}
             _main_provider = str(_chat_cfg.get("client", ""))
             _main_model = str(_chat_cfg.get("model", ""))
         except (KeyError, AttributeError):
@@ -1220,7 +1405,7 @@ class ModelRouter:
                     if _m:
                         # 校验该 provider 是否已注册（有 client 可用）
                         try:
-                            if _p in ("mimo", "agnes") or _p in getattr(self, "_custom_clients", {}):
+                            if _p in _get_builtin_providers() or _p in getattr(self, "_custom_clients", {}):
                                 return _p, _m
                         except Exception:
                             pass
@@ -1290,8 +1475,20 @@ class ModelRouter:
           2. verification loop 无法检测 finish_reason="length"（max_tokens 截断）
           3. 截断重试机制完全失效（用户反复反馈"截断问题又出现了"根因）
         修复：在流结束时捕获最后一个 chunk 的 finish_reason，写入 ContextVar。
+
+        CR-Major-1 修复（fallback 链缺失 + 流式 usage 漏算）：
+        原实现在重试耗尽后直接 raise last_error，不调用 _try_fallback_chain。
+        流式调用是用户主要交互方式（QQ/WebUI），主 provider 故障时整条链路断了，
+        已配置的 Agnes/自定义 provider 降级完全不会被触发。
+        同时原实现不传 stream_options.include_usage，provider 不返回 usage，
+        流式调用费用统计漏算（用户反馈"流式调用不计费"根因）。
+        修复：
+          1. 重试耗尽后调用 _try_fallback_chain；fallback 返回字符串时包装成
+             async generator yield 出去，保证调用方语义一致。
+          2. 传 stream_options={"include_usage": True}，捕获最后一个 chunk 的 usage
+             并调 _record_stream_usage 记录费用。
         """
-        config = ROUTE_TABLE.get(task_type, ROUTE_TABLE["chat"])
+        config = self._registry.get_task_ref(task_type) or self._registry.get_task_ref("chat") or {}
         model = config["model"]
         mt = max_tokens or config.get("max_tokens", 4096)
         provider = config.get("client", _CFG_DEFAULT_PROVIDER)
@@ -1305,6 +1502,10 @@ class ModelRouter:
         stream = None
         last_error = None
         _stream_finish_reason: str | None = None
+        # CR-Major-1: 在循环外初始化，except 分支才能安全引用（stall timeout 日志需要）
+        _stall_timeout = float(os.getenv("LLM_STREAM_STALL_TIMEOUT", "15"))
+        _chunk_count = 0
+        _stream_usage: Any = None
 
         for attempt in range(MAX_RETRIES + 1):
             try:
@@ -1313,6 +1514,11 @@ class ModelRouter:
                     model, messages, temperature, mt, True,
                     tools, tool_choice, extra_headers, config, provider,
                 )
+                # CR-Major-1 修复：stream_options include_usage，让 provider 在最后一个
+                # chunk 返回 usage，供 _record_stream_usage 记录费用。
+                # 不加此参数时流式调用 usage 为 None，费用统计漏算（用户反馈"流式调用
+                # 不计费"根因）。OpenAI 兼容端点均支持，不支持时 provider 忽略此字段。
+                kwargs["stream_options"] = {"include_usage": True}
                 stream = await asyncio.wait_for(
                     client.chat.completions.create(**kwargs),
                     timeout=timeout,
@@ -1323,8 +1529,9 @@ class ModelRouter:
                 # 循环会正常结束（无异常），content 被静默截断，
                 # _stream_finish_reason 保持 None → 不触发 length retry → 用户看到截断回复。
                 # 修复：用 asyncio.wait_for 包装每个 chunk 的读取，15 秒无新 chunk → TimeoutError
-                _stall_timeout = float(os.getenv("LLM_STREAM_STALL_TIMEOUT", "15"))
+                # _stall_timeout 已在循环外初始化（except 分支需引用）
                 _chunk_count = 0
+                _stream_usage = None
                 while True:
                     try:
                         chunk = await asyncio.wait_for(
@@ -1334,6 +1541,10 @@ class ModelRouter:
                     except StopAsyncIteration:
                         break  # 流正常结束
                     _chunk_count += 1
+                    # CR-Major-1：捕获 usage（最后一个 chunk 才有，include_usage=True 时）
+                    _chunk_usage = getattr(chunk, "usage", None)
+                    if _chunk_usage is not None:
+                        _stream_usage = _chunk_usage
                     try:
                         _choice = chunk.choices[0]
                     except (AttributeError, IndexError):
@@ -1365,6 +1576,16 @@ class ModelRouter:
                                        model=model, task=task_type,
                                        max_tokens=mt, provider=provider,
                                        finish_reason=_stream_finish_reason)
+                # CR-Major-1：流式 usage 记录费用（include_usage=True 时 _stream_usage 非空）
+                if _stream_usage is not None:
+                    try:
+                        await self._record_stream_usage(
+                            task_type, model, type("R", (), {"usage": _stream_usage})(),
+                            user_openid=user_openid, session_id=session_id,
+                            provider=provider,
+                        )
+                    except (AttributeError, TypeError, OSError) as _ue:
+                        logger.debug("router.stream_usage_record_skip: {}", _ue)
                 metrics.inc(f"model_route.{task_type}.success")
                 metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
                 metrics.maybe_report()
@@ -1374,7 +1595,9 @@ class ModelRouter:
                             finish_reason=_stream_finish_reason)
                 return
             except (RuntimeError, OSError, KeyError, ValueError, _openai_mod.APIError,
-                    asyncio.TimeoutError) as e:
+                    asyncio.TimeoutError, LLMError) as e:
+                # CR-Major-1：补 LLMError 捕获，_select_client_for_provider 抛 LLMError 时
+                # 也走重试/降级，而非直接传播给上层流式消费者（与 route() 的 except 集合对齐）。
                 # P0 修复：捕获 stall timeout（asyncio.TimeoutError）
                 # 根因：stream stall timeout 触发时抛出 asyncio.TimeoutError，
                 # 原异常处理器不捕获此类型，导致流未被正确关闭 + 异常直接传播。
@@ -1397,10 +1620,61 @@ class ModelRouter:
                 if not should_retry:
                     break
 
+        # CR-Major-1 修复：重试耗尽后调用 fallback 链，而非直接 raise。
+        # 流式调用是用户主要交互方式，主 provider 故障时应降级到 Agnes/自定义 provider。
+        # fallback 链返回字符串时（非流式降级结果），包装成 async generator yield 出去，
+        # 保证调用方 `async for chunk in chat_stream(...)` 语义一致。
         metrics.inc(f"model_route.{task_type}.failure")
         metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
         metrics.maybe_report()
-        raise last_error or LLMError("流式调用失败")
+        if last_error is None:
+            # 理论不可达（循环至少跑一次，失败才有 last_error）；防御性兜底
+            raise LLMError("流式调用失败：未知错误（last_error 未设置）")
+        logger.warning("llm.stream_fallback_attempt", event="llm_stream_fallback",
+                       model=model, task=task_type, provider=provider,
+                       error=f"{type(last_error).__name__}: {last_error}"[:200])
+        try:
+            # fallback 链 stream=True 时返回流对象；stream=False 返回字符串
+            # 这里传 stream=True 让 fallback 也走流式（若目标 provider 支持）
+            fb_result = await self._try_fallback_chain(
+                last_error, task_type, messages, temperature, True,
+                tools, tool_choice, timeout, user_openid, session_id,
+                extra_headers, original_max_tokens=mt,
+            )
+        except (RuntimeError, OSError, LLMError) as fb_err:
+            logger.error("llm.stream_fallback_failed error={}", str(fb_err)[:200])
+            fb_result = None
+        if fb_result is not None:
+            # fallback 返回字符串（_route_with_retry stream=False 路径，或 provider 不支持流式）
+            # 包装成 async generator yield 出去，保证调用方语义一致
+            if isinstance(fb_result, str):
+                yield fb_result
+                return
+            # fallback 返回流对象（stream=True 路径），透传其 chunks
+            if hasattr(fb_result, "__aiter__"):
+                async for _fb_chunk in fb_result:
+                    _fb_choices = getattr(_fb_chunk, "choices", None)
+                    _fb_delta = None
+                    if _fb_choices:
+                        try:
+                            _fb_delta = getattr(_fb_choices[0], "delta", None)
+                        except (IndexError, AttributeError):
+                            _fb_delta = None
+                    if _fb_delta is not None:
+                        _fb_content = getattr(_fb_delta, "content", None)
+                        if _fb_content:
+                            yield _fb_content
+                return
+            # 其他类型（如 response 对象）直接 yield 字符串形式
+            yield str(fb_result)
+            return
+        # 所有降级目标均不可用，抛出明确异常（与 route() 语义一致）
+        raise LLMError(
+            f"流式调用所有降级目标均不可用 (task={task_type}): "
+            f"{type(last_error).__name__}: {last_error}",
+            error_code=ErrorCodeEnum.E_LLM001,
+            cause=last_error,
+        ) from last_error
 
     @staticmethod
     def _classify_error(exc: Exception) -> str:
@@ -1657,10 +1931,22 @@ class ModelRouter:
                             key_len=len(new_cred.api_key),
                             key_hash=_mask_api_key(new_cred.api_key))
                 # 更新客户端使用新凭证
-                new_client = AsyncOpenAI(
-                    api_key=new_cred.api_key,
-                    base_url=new_cred.base_url or (MIMO_BASE_URL if provider == "mimo" else AGNES_BASE_URL),
-                )
+                # agnes 复用共享 httpx client + connect=15s 配置（根因修复）；
+                # mimo 保持默认（不在本次 APIConnectionError 根因范围）
+                _new_base = new_cred.base_url or (MIMO_BASE_URL if provider == "mimo" else AGNES_BASE_URL)
+                if provider == "agnes":
+                    new_client = AsyncOpenAI(
+                        api_key=new_cred.api_key,
+                        base_url=_new_base,
+                        http_client=_get_agnes_http_client(),
+                        timeout=AGNES_HTTP_TIMEOUT,
+                        max_retries=0,
+                    )
+                else:
+                    new_client = AsyncOpenAI(
+                        api_key=new_cred.api_key,
+                        base_url=_new_base,
+                    )
                 if provider == "mimo":
                     self._client = new_client
                 else:
@@ -1768,7 +2054,8 @@ class ModelRouter:
 
         注意：此方法仅用于截断续写场景，常规路由请使用 route()。
         """
-        config = ROUTE_TABLE.get(task_type, ROUTE_TABLE["chat"])
+        # 统一走 registry 入口（语义一致；registry._table 即 ROUTE_TABLE，性能无差异）
+        config = self._registry.get_task_ref(task_type) or self._registry.get_task_ref("chat") or {}
         model = config["model"]
         provider = config.get("client", _CFG_DEFAULT_PROVIDER)
         mt = max_tokens or config.get("max_tokens", 4096)

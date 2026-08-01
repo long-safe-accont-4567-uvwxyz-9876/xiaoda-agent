@@ -101,6 +101,10 @@ class MCPClient:
         self._next_id: int = 1
         self._pending: dict[int, asyncio.Future] = {}
         self._read_task: asyncio.Task | None = None
+        # stderr 读取 task：子进程崩溃时（如 mcp 2.0.0 API 不兼容 AttributeError），
+        # 真实错误堆栈写入 stderr，若不读取会丢失，应用日志只见 "no response" 症状。
+        # 读取并记录 stderr 是可观测性修复，不改变启动成功/失败判定。
+        self._stderr_task: asyncio.Task | None = None
         self._available: bool = False
         self._tool_names: set[str] = set()
         self._registered_names: set[str] = set()  # prefixed names in tool_registry
@@ -191,6 +195,8 @@ class MCPClient:
 
             # Start reading loop
             self._read_task = asyncio.create_task(self._read_loop())
+            # 启动 stderr 读取 task，确保子进程崩溃堆栈被记录而非丢失
+            self._stderr_task = asyncio.create_task(self._read_stderr_loop())
 
             await self._do_handshake()
 
@@ -262,12 +268,10 @@ class MCPClient:
                 fut.cancel()
         self._pending.clear()
 
-        if self._read_task and not self._read_task.done():
-            self._read_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._read_task
-            self._read_task = None
-
+        # CodeRabbit 修复：先关 stdin + 等进程终止，让 stderr reader drain 完剩余输出，
+        # 再兜底 cancel _stderr_task。原顺序先 cancel _stderr_task 再等进程终止，导致
+        # 子进程崩溃时 stderr 末尾的真实异常堆栈（readline 未及读取）被 cancel 丢弃，
+        # 应用日志只见 "initialize failed" 症状而无法定位真凶。
         if self._process and self._process.returncode is None:
             try:
                 self._process.stdin.close()
@@ -279,6 +283,23 @@ class MCPClient:
             except TimeoutError:
                 self._process.kill()
                 await self._process.wait()
+
+        # stderr reader：进程终止后会读到 EOF 自然退出；给 bounded timeout 让其 drain，
+        # 超时则 cancel 兜底（避免异常 reader 阻塞 stop()）。
+        if self._stderr_task and not self._stderr_task.done():
+            try:
+                await asyncio.wait_for(self._stderr_task, timeout=2.0)
+            except (TimeoutError, asyncio.CancelledError):
+                self._stderr_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._stderr_task
+            self._stderr_task = None
+
+        if self._read_task and not self._read_task.done():
+            self._read_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._read_task
+            self._read_task = None
 
         self._process = None
 
@@ -572,6 +593,34 @@ class MCPClient:
                 if not fut.done():
                     fut.set_result(None)
             self._pending.clear()
+
+    async def _read_stderr_loop(self) -> None:
+        """持续读取子进程 stderr 并按行记录。
+
+        根因修复：MCP server 子进程崩溃时（如 mcp 2.0.0 与 mcp-server-git 不兼容），
+        真实异常堆栈（AttributeError 等）写入 stderr 管道。若不 drain，应用日志只见
+        `initialize failed: no response` 症状，无法定位真凶。本方法把 stderr 暴露到
+        应用日志，属于可观测性修复，不改变启动成功/失败判定。
+        """
+        try:
+            # CodeRabbit 修复：读到 EOF（readline 返回空）才退出，而非依赖 returncode。
+            # 原条件 `returncode is None` 在进程退出但 stderr 仍有 buffered 数据时会提前
+            # 退出，丢失末尾的真实崩溃堆栈。进程终止后 stderr 最终会 EOF，循环自然结束。
+            while self._process:
+                line_bytes = await self._process.stderr.readline()
+                if not line_bytes:
+                    break  # EOF — server closed stderr（含进程终止后的尾部数据）
+                line = line_bytes.decode(errors="replace").rstrip()
+                if not line:
+                    continue
+                # 子进程 stderr 通常是 Python/Node 堆栈或运行日志，用 warning 级记录
+                logger.warning("mcp_client.server_stderr",
+                               server=self.server_name, line=line[:500])
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.debug("mcp_client.stderr_read_error",
+                         server=self.server_name, error=str(e))
 
     # ── tool registration ───────────────────────────────────────
 

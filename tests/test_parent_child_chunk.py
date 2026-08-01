@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import os
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -42,13 +43,16 @@ class TestSplitIntoChildren:
         assert all(c["chunk_type"] == "segment" for c in children)
 
     def test_contextual_retrieval_prefix(self):
-        """测试 Contextual Retrieval 前缀注入"""
+        """测试 Contextual Retrieval 前缀注入（开关开启时）"""
         mgr = self._make_manager()
         exchanges = [{"role": "user", "content": "测试内容"}]
         parent_summary = "这是一段父摘要"
 
-        children = mgr._split_into_children(exchanges, parent_id=1,
-                                             parent_summary=parent_summary)
+        # 显式开启 CONTEXTUAL_RETRIEVAL_ENABLED，避免依赖运行环境
+        # （.env 可能设为 false，_split_into_children 尊重开关不注入前缀 → 测试误判失败）
+        with patch("config.CONTEXTUAL_RETRIEVAL_ENABLED", True):
+            children = mgr._split_into_children(exchanges, parent_id=1,
+                                                 parent_summary=parent_summary)
         assert len(children) == 1
         # embed_content 应包含上下文前缀
         assert "[上下文:" in children[0]["embed_content"]
@@ -331,6 +335,12 @@ class TestEncodeMemoryChildChunks:
         mgr.spreading_engine = None
         # line 2607 G13 失效扩散 recall 缓存
         mgr.concept_graph = None
+        # _indexing_task 用 self.db.write_transaction() 串行化子chunk写入（事务锁架构）
+        @asynccontextmanager
+        async def _write_txn():
+            yield MagicMock()
+        mgr.db = MagicMock()
+        mgr.db.write_transaction = _write_txn
 
         return mgr
 

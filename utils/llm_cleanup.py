@@ -657,10 +657,32 @@ def merge_continuation(
         #   - 原回复以合法句末标记结尾（可能完整）→ 丢弃无重叠续写（避免重复）
         # 代价：截断场景可能引入少量重复，但比截断更可接受——用户明确反馈截断比重复严重。
         if _looks_truncated(original):
+            # P0 修复（用户反馈"语不达意"根因）：
+            # 原 implementation 无脑拼接 original + continuation，但当续写太短
+            # （如 13 字节）且原文较长（如 172 字节）时，13 字节是 LLM 重新生成
+            # 的（不是真正的尾巴），拼接处语义断裂 → "语不达意"。
+            # 事故证据：22:07:42 original=172B（截断在"今天的这"）+ continuation=13B
+            #   = 185B 拼接结果，衔接不上 → 用户投诉"语不达意"。
+            # 修复：续写太短（< 20 字节）且原文足够长（>= 80 字节）时，丢弃续写
+            #   直接用原文——截断在"这"比拼接 13 字节无意义内容更好。
+            #   原文太短（< 80 字节）时仍拼接（截断太短必须补全）。
+            # 注意：用 UTF-8 字节数比较（与日志 original_len/continuation_len 对齐，
+            # 中文 1 字符 = 3 字节，len() 返回字符数会导致阈值偏差）。
+            _cont_bytes = len(continuation.encode("utf-8"))
+            _orig_bytes = len(original.encode("utf-8"))
+            _MIN_CONT_BYTES = 20      # < 20 字节 ≈ 6 个中文字 = LLM 无实质续写
+            _MIN_ORIG_BYTES_FOR_DROP = 80  # >= 80 字节 ≈ 26 个中文字 = 原文已足够长
+            if _cont_bytes < _MIN_CONT_BYTES and _orig_bytes >= _MIN_ORIG_BYTES_FOR_DROP:
+                logger.info("llm_cleanup.merge_continuation.short_continuation_discarded",
+                            context=context, original_len=_orig_bytes,
+                            continuation_len=_cont_bytes,
+                            note="continuation_too_short_keep_truncated_original")
+                metrics.inc("llm.merge_continuation.short_continuation_discarded")
+                return original, "discarded"
             merged = original + continuation
             logger.warning("llm_cleanup.merge_continuation.truncated_appended",
-                           context=context, original_len=len(original),
-                           continuation_len=len(continuation),
+                           context=context, original_len=_orig_bytes,
+                           continuation_len=_cont_bytes,
                            note="original_truncated_append_to_recover")
             metrics.inc("llm.merge_continuation.truncated_appended")
             return merged, "appended"

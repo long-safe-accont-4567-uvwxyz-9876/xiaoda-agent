@@ -549,7 +549,7 @@ def _ensure_custom_provider(provider: str, router_obj: Any) -> None:
         "siliconflow": ("SILICONFLOW_API_KEY", "https://api.siliconflow.cn/v1"),
         "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
         "modelscope": ("MODELSCOPE_ACCESS_TOKEN", "https://api-inference.modelscope.cn/v1"),
-        "agnes": ("AGNES_API_KEY", os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")),
+        "agnes": ("AGNES_API_KEY", os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1")),
     }
 
     if provider in _ENV_FALLBACK:

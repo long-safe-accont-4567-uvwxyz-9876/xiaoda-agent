@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import time
 from typing import Any, TYPE_CHECKING
 
@@ -215,35 +216,43 @@ class BackgroundTaskManager:
             # 修复：入库前把占位符替换为空串，保留 assistant_reply（问候内容）。
             _GREETING_PLACEHOLDERS = ("（主动问候）", "(主动问候)")
             _logged_user_input = "" if user_input in _GREETING_PLACEHOLDERS else user_input
+            # 1+2. 对话日志 + 会话更新：同一写事务，串行化防并发脏事务
+            # 根因修复：原版 insert(auto_commit=False)+update(auto_commit=False)+commit()
+            # 序列与并发的 memory encode 任务共享 aiosqlite 单连接事务状态，互相
+            # commit/rollback → 脏事务/数据丢失/卡顿58s（shield(rollback)/readonly_conn
+            # 只治标）。改用 db.write_transaction() 用 asyncio.Lock 串行化所有多语句写事务，
+            # 从源头杜绝交叉。任一写入成功即 commit；两条均失败时 commit 空事务（无数据，
+            # 仅清空事务状态，等价 rollback 且更简单）。未捕获异常由 write_transaction 的
+            # finally 自动 shield(rollback)。
             try:
-                await self.db.insert_conversation_log(
-                    user_id=user_id,
-                    source=source,
-                    user_message=_logged_user_input,
-                    assistant_reply=reply,
-                    emotion_label=emotion.get("primary", ""),
-                    model_used=model_used,
-                    session_id=session_id,
-                    auto_commit=False,
-                )
-                any_write_ok = True
-            except (OSError, ValueError, RuntimeError) as e:
-                logger.warning("bg.conversation_log_failed", error=str(e))
-
-        # 2. 会话更新（不立即 commit）
-        if session_id:
-            try:
-                await self.db.update_session(session_id, auto_commit=False)
-                any_write_ok = True
-            except (KeyError, OSError, RuntimeError) as e:
-                logger.warning("bg.session_update_failed", error=str(e))
-
-        # 批量提交：仅在有写入成功时调用一次 commit
-        if any_write_ok:
-            try:
-                await self.db.commit()
-            except (OSError, RuntimeError) as e:
-                logger.warning("bg.batch_commit_failed", error=str(e))
+                async with self.db.write_transaction():
+                    try:
+                        await self.db.insert_conversation_log(
+                            user_id=user_id,
+                            source=source,
+                            user_message=_logged_user_input,
+                            assistant_reply=reply,
+                            emotion_label=emotion.get("primary", ""),
+                            model_used=model_used,
+                            session_id=session_id,
+                            auto_commit=False,
+                        )
+                        any_write_ok = True
+                    # CodeRabbit 修复：补充 sqlite3.Error（aiosqlite 抛 sqlite3 异常子类：
+                    # OperationalError/IntegrityError 等），否则 DB 错误会传播到 write_transaction
+                    # 触发回滚、跳过 update_session，丢失原"两条独立、任一成功即提交"语义
+                    except (OSError, ValueError, RuntimeError, sqlite3.Error) as e:
+                        logger.error("degradation_triggered bg.conversation_log_failed error={}", str(e))
+                    # 2. 会话更新（同一事务内，不单独 commit）
+                    if session_id:
+                        try:
+                            await self.db.update_session(session_id, auto_commit=False)
+                            any_write_ok = True
+                        except (KeyError, OSError, RuntimeError, sqlite3.Error) as e:
+                            logger.error("degradation_triggered bg.session_update_failed error={}", str(e))
+            except Exception as e:
+                # write_transaction 内部已 shield(rollback)，这里仅记录未预期异常
+                logger.error("bg.persistence_txn_failed error={}", str(e))
 
         # 3. 记忆编码（独立，不纳入批量提交，改为 _spawn 避免阻塞持久化任务）
         # 根因：try_idle_encode 涉及 LLM 调用，可能需要几十秒，await 会阻塞整个 _run_persistence_tasks

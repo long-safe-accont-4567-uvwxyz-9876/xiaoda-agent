@@ -241,7 +241,7 @@ async def list_routes(request: Request) -> Any:
 
 @router.put("/models/routes/{task}", response_model=Envelope[dict])
 async def update_route(task: str, body: dict, request: Request) -> Any:
-    from model_router import ROUTE_TABLE
+    from model_router import ROUTE_TABLE, ModelRouter
     if task not in ROUTE_TABLE:
         raise HTTPException(404, f"未知路由任务 {task}")
     cfg = _cfg(request)
@@ -249,37 +249,72 @@ async def update_route(task: str, body: dict, request: Request) -> Any:
     if provider and provider not in ("mimo",) \
             and not cfg.get(f"models.providers.{provider}"):
         raise HTTPException(400, f"provider {provider} 不存在")
-    entry = ROUTE_TABLE[task]
-    if body.get("model"):
-        entry["model"] = str(body["model"])
-    if provider:
-        entry["client"] = provider
-    if body.get("max_tokens"):
-        entry["max_tokens"] = max(64, min(int(body["max_tokens"]), 32768))
+
+    router_obj = _router_of(request)
+    registry = router_obj._registry  # ModelRouter.__init__ 保证 _registry 已初始化
+
+    # CodeRabbit#5 + m8 修复：走 registry.get_task_ref 而非直接读 ROUTE_TABLE[task]，
+    # 保证 replace_table 后语义一致（虽然 replace_table 已保持对象身份，仍统一入口）。
+    current_entry = registry.get_task_ref(task) or {}
+    model_id = str(body["model"]) if body.get("model") else current_entry.get("model", "")
+    final_provider = provider or current_entry.get("client", "mimo")
+
+    # CodeRabbit Nit: int 转换加 try/except 返回 400 而非让 ValueError 变成 500
+    try:
+        max_tokens = int(body["max_tokens"]) if body.get("max_tokens") else None
+        timeout = int(body["timeout"]) if body.get("timeout") else None
+    except (TypeError, ValueError):
+        raise HTTPException(400, "max_tokens/timeout 必须为整数") from None
+
+    # CodeRabbit#14 + C3 修复：max_tokens clamp 用 PROVIDER_MAX_TOKENS_CAP 动态裁剪，
+    # 不再硬编码 32768。旧实现把 chat 路由的 131072 压到 32768，严重退化为默认值。
+    # _cap_max_tokens(provider) 返回该 provider 的上限（无 cap 时返回原值），下限保留 64。
+    if max_tokens is not None:
+        max_tokens = max(64, ModelRouter._cap_max_tokens(max_tokens, final_provider))
+
+    thinking = None
     if "thinking" in body:
+        # CR-Major-3 修复：budget_tokens 保留原 entry 的值，不硬编码 2048。
+        # 旧实现恢复时硬编码 2048，导致重启后 thinking budget 减半。
+        _orig_thinking = current_entry.get("thinking") or {}
+        _orig_budget = (_orig_thinking.get("budget_tokens", 4096)
+                        if isinstance(_orig_thinking, dict) else 4096)
         if body["thinking"]:
-            entry["thinking"] = {"type": "enabled", "budget_tokens": 2048}
+            thinking = {"type": "enabled", "budget_tokens": _orig_budget}
         else:
-            entry["thinking"] = {"type": "disabled"}
+            thinking = {"type": "disabled"}
         import structlog
-        structlog.get_logger().info("route.thinking_updated", task=task, thinking=entry.get("thinking"))
-    if body.get("timeout"):
-        _router_of(request).TASK_TIMEOUTS[task] = max(5, min(int(body["timeout"]), 600))
-    # 持久化覆盖（重启后由 apply_model_overrides 恢复）
-    cfg.set(f"models.routes.{task}", {
-        "model": entry["model"], "client": entry.get("client", "mimo"),
-        "max_tokens": entry.get("max_tokens"),
-        "thinking": bool(entry.get("thinking") and entry["thinking"].get("type") == "enabled"),
-        "timeout": _router_of(request).TASK_TIMEOUTS.get(task),
-    })
+        structlog.get_logger().info("route.thinking_updated", task=task, thinking=thinking)
+    # Qodo#4 修复：timeout 先 clamp 再传 registry，保证运行时与持久化用同一个验证值
+    if timeout is not None:
+        timeout = max(5, min(timeout, 600))
+
+    # 通过 Registry 原子化更新（内存 + 持久化，失败回滚）
+    try:
+        registry.update_route(
+            task, model_id=model_id, provider=final_provider,
+            max_tokens=max_tokens, thinking=thinking, timeout=timeout,
+        )
+    except KeyError as e:
+        raise HTTPException(404, f"未知路由任务 {task}: {e}") from None
+    except Exception as e:
+        raise HTTPException(500, f"路由更新失败: {e}") from None
+
+    # Qodo#5 修复：TASK_TIMEOUTS 在 registry 持久化成功后才修改，
+    # 失败时（上面抛 HTTPException）不修改运行时 timeout，保持原值
+    if timeout is not None:
+        router_obj.TASK_TIMEOUTS[task] = timeout
+
     # 同步更新 models.chat_model，使 GET /models/chat-model 返回最新值
     if task == "chat":
-        cfg.set("models.chat_model", {"provider": entry.get("client", "mimo"),
-                                       "model_id": entry["model"]})
+        final_entry = registry.get_task_ref(task) or {}
+        cfg.set("models.chat_model", {"provider": final_entry.get("client", "mimo"),
+                                       "model_id": final_entry["model"]})
     await _audit(request, "route.update", json.dumps({task: body}, ensure_ascii=False))
     await _broadcast_changed()
-    return Envelope(data={"task": task, "model": entry["model"],
-                          "provider": entry.get("client", "mimo")})
+    final_entry = registry.get_task_ref(task) or {}
+    return Envelope(data={"task": task, "model": final_entry["model"],
+                          "provider": final_entry.get("client", "mimo")})
 
 
 @router.get("/models/chat-model", response_model=Envelope[dict])

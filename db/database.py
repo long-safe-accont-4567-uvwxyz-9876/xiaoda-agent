@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import json
 import sys
 import time
@@ -23,7 +25,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 20
+CURRENT_SCHEMA_VERSION = 21
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -63,6 +65,15 @@ class DatabaseManager:
         self.db_path = Path(db_path) if db_path else DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: aiosqlite.Connection | None = None
+        # 独立只读连接：供主请求关键路径(restore_from_db)使用，WAL模式下只读连接
+        # 不被写阻塞，永不受主连接脏事务/长操作影响(上下文丢失根因修复)
+        self._readonly_conn: aiosqlite.Connection | None = None
+        # 写事务串行化锁：aiosqlite 单连接共享事务状态，多个后台任务并发执行
+        # auto_commit=False 多语句序列时，A 的 commit() 会提交 B 未完成的半事务，
+        # B 的 rollback() 会回滚 A 已写的数据 → 脏事务/数据丢失/SQL logic error
+        # （历史"上下文丢失/卡顿58s"的真正根因）。所有多语句写事务必须经过
+        # write_transaction() 获取此锁，单语句 auto_commit=True 操作无需加锁（aiosqlite 原子）。
+        self._write_tx_lock: asyncio.Lock = asyncio.Lock()
         self.memory: MemoryDB | None = None
         self.notebook: NotebookDB | None = None
         self.learning: LearningDB | None = None
@@ -146,6 +157,26 @@ class DatabaseManager:
         self.analytics = AnalyticsDB(self._conn)
         self.temporal = TemporalMemoryDB(self._conn)
         self.kg_v2 = KnowledgeDBV2(self._conn)
+        # 初始化独立只读连接(供 restore_from_db 使用)
+        # WAL 模式下只读连接可与主连接并发读，永不被写事务阻塞
+        # CodeRabbit 修复：init() 可能被重复调用，先关闭旧 _readonly_conn 防止连接泄漏
+        if self._readonly_conn is not None:
+            try:
+                await self._readonly_conn.close()
+            except (OSError, RuntimeError):
+                logger.debug("database.init_close_old_readonly_error", exc_info=True)
+            self._readonly_conn = None
+        try:
+            self._readonly_conn = await aiosqlite.connect(
+                f"file:{self.db_path}?mode=ro", uri=True)
+            self._readonly_conn.row_factory = aiosqlite.Row
+            await self._readonly_conn.execute("PRAGMA query_only=1")
+            await self._readonly_conn.execute("PRAGMA busy_timeout=2000")
+            logger.info("database.readonly_conn_ready")
+        except Exception as e:
+            # 只读连接初始化失败不阻塞启动，restore 回退到主连接(保留原行为)
+            logger.warning("database.readonly_conn_init_failed", error=str(e))
+            self._readonly_conn = None
         logger.info("database.ready", path=str(self.db_path))
 
     async def _apply_composite_indexes(self) -> None:
@@ -169,10 +200,103 @@ class DatabaseManager:
             except (OSError, RuntimeError) as e:
                 logger.warning(f"database.commit_failed: {e}")
 
+    async def rollback(self) -> None:
+        """回滚当前事务，清理脏事务残留。
+
+        根因：aiosqlite 单连接共享事务状态，auto_commit=False 操作异常/超时未 rollback
+        会残留脏事务，导致后续 DB 操作在脏事务上卡死 58s(上下文丢失/卡顿根因)。
+        所有 auto_commit=False 路径失败时必须调用此方法。
+        """
+        if self._conn:
+            try:
+                await self._conn.rollback()
+            except (OSError, RuntimeError) as e:
+                logger.warning(f"database.rollback_failed: {e}")
+
+    @contextlib.asynccontextmanager
+    async def write_transaction(self):
+        """串行化多语句写事务，根治并发脏事务。
+
+        根因：aiosqlite 单条连接共享事务状态。两个后台任务并发执行
+        auto_commit=False 多语句序列时，A 的 commit() 会提交 B 未完成的半事务，
+        或 B 的 rollback() 会回滚 A 已写的数据 → 脏事务/数据丢失/SQL logic error
+        （历史"上下文丢失/大面积卡顿58s"的真正根因，shield(rollback)/readonly_conn
+        只是治标）。本方法用 asyncio.Lock 串行化所有多语句写事务，从源头杜绝交叉。
+
+        语义：
+        - 进入时获取 _write_tx_lock，标记 _committed=False
+        - yield 连接给调用方执行多条 auto_commit=False 写语句
+        - 正常退出 → commit() + _committed=True
+        - 异常/取消/超时 → asyncio.shield(rollback())（cancel 传播但 rollback 不中断）
+        - finally 释放锁
+
+        单语句 auto_commit=True 操作无需本方法（aiosqlite 单条 execute 自身原子）。
+        """
+        async with self._write_tx_lock:
+            _committed = False
+            try:
+                yield self._conn
+                await self._conn.commit()
+                _committed = True
+            finally:
+                if not _committed:
+                    try:
+                        await asyncio.shield(self._conn.rollback())
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.warning(f"database.write_transaction_rollback_failed: {e}")
+
+    async def get_conversations_readonly(self, start_ts: float, end_ts: float,
+                                          user_id: str = "", limit: int = 50) -> list[dict]:
+        """用独立只读连接查询最近对话，供 restore_from_db 使用。
+
+        根因修复：restore_from_db 原用主连接查询，当主连接被后台任务脏事务/长操作占用时
+        排队超时 10s → 上下文丢失 → 牛头不对马嘴。改用独立只读连接，WAL 模式下只读
+        不被写阻塞，永不受主连接状态影响。只读连接失败时回退主连接(不破坏原行为)。
+
+        CodeRabbit 修复：原 `conn = self._readonly_conn or self._conn` 在只读连接
+        存在但执行失败(连接断开/数据库锁)时不回退主连接。改为先尝试只读连接，
+        失败则回退主连接重试，保证查询可用性。
+        """
+        params: list = [start_ts, end_ts]
+        where = "WHERE timestamp >= ? AND timestamp <= ?"
+        if user_id:
+            where += " AND user_id = ?"
+            params.append(user_id)
+        params.append(limit)
+        sql = (
+            f"SELECT timestamp, user_message, assistant_reply FROM conversation_logs "
+            f"{where} ORDER BY timestamp DESC LIMIT ?"
+        )
+        # 优先只读连接，失败回退主连接
+        if self._readonly_conn is not None:
+            try:
+                cursor = await self._readonly_conn.execute(sql, params)
+                rows = await cursor.fetchall()
+                result = [dict(r) for r in rows]
+                result.reverse()
+                return result
+            except Exception as e:
+                logger.warning("database.readonly_query_failed_fallback_to_main",
+                               error=str(e))
+        # 回退主连接（只读连接不可用或查询失败）
+        cursor = await self._conn.execute(sql, params)
+        rows = await cursor.fetchall()
+        result = [dict(r) for r in rows]
+        result.reverse()
+        return result
+
     async def close(self) -> None:
         if self._conn:
             await self._conn.close()
             self._conn = None
+        if self._readonly_conn:
+            try:
+                await self._readonly_conn.close()
+            except (OSError, RuntimeError):
+                pass
+            self._readonly_conn = None
 
     async def _run_migrations(self) -> None:
         """按 version 顺序执行所有数据库迁移。每个迁移独立事务，失败时 fail-fast 阻止启动。"""
@@ -277,6 +401,7 @@ class DatabaseManager:
             (18, "distill_status_column", self._migrate_v18),
             (19, "episodic_memories.updated_at+touch_trigger", self._migrate_v19),
             (20, "greeting_schedules.user_id_column", self._migrate_v20),
+            (21, "knowledge_entities_fts_trigger_drop", self._migrate_v21),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -1049,6 +1174,47 @@ class DatabaseManager:
         else:
             logger.info("database.migration_v20_skipped_column_exists")
 
+    async def _migrate_v21(self) -> None:
+        """v21: 废弃 knowledge_entities_fts 触发器，改应用层维护 FTS。
+
+        根因：contentless FTS5 表 knowledge_entities_fts 的 'delete' 命令在 SQLite 3.40
+        始终报 SQL logic error（即使列值完全匹配）。原触发器 knowledge_entities_fts_au/ad
+        用 old.id (TEXT) 当 FTS5 delete 的 rowid 参数，而 knowledge_entities.id 是 TEXT
+        PRIMARY KEY、rowid 是隐式 INTEGER，两者无关 → delete 永远找不到行 → 报错。
+        merge_entity 的 UPDATE 因此触发 FTS delete 失败 → 两级降级全失败 → observations
+        写不进去 → 称呼等关键信息错乱残留（爸爸/大哥哥/老公大人混用）。
+
+        修复：
+        1. DROP 三个 FTS 触发器（改由 db_knowledge.py 应用层用普通 DELETE+INSERT 维护，
+           普通 DELETE 在 contentless FTS5 上可用）
+        2. 重建 FTS 内容，使 FTS rowid 与主表 rowid 对齐（原有 117 实体仅 56 进了 FTS，
+           62 个缺失含「小妲」；缺失实体 UPDATE 时触发器 delete 也报错）
+        """
+        await self._conn.execute("DROP TRIGGER IF EXISTS knowledge_entities_fts_ai")
+        await self._conn.execute("DROP TRIGGER IF EXISTS knowledge_entities_fts_ad")
+        await self._conn.execute("DROP TRIGGER IF EXISTS knowledge_entities_fts_au")
+        # 重建 FTS 内容：rowid 与主表对齐 + _tokenize_for_fts 预分词
+        # 应用层 _sync_entity_fts 也按 rowid + tokenized name 维护，必须保持一致。
+        await self._conn.execute("DELETE FROM knowledge_entities_fts")
+        # CodeRabbit 根因修复：原版用 `SELECT rowid, id, name FROM knowledge_entities`
+        # 直接 INSERT 原始 name。实测 FTS5 unicode61 不会按字符切分 CJK，原始 '小妲'
+        # 变成单个不透明 token，MATCH '妲' 命中为 0，字符级搜索全部失效（v5 已分词，
+        # v21 重建若用原始 name 会回退退化）。必须与 _migrate_v5/_sync_entity_fts 一致，
+        # 用 _tokenize_for_fts 预分词（jieba 分词后空格连接），FTS5 才能按词建可检索索引。
+        from db.fts_utils import _tokenize_for_fts
+        cursor = await self._conn.execute("SELECT rowid, id, name FROM knowledge_entities")
+        rows = await cursor.fetchall()
+        for row in rows:
+            _rowid, _id, _name = row[0], row[1], row[2]
+            _name_index = _tokenize_for_fts(_name) if _name else ""
+            await self._conn.execute(
+                "INSERT INTO knowledge_entities_fts(rowid, id, name_index) VALUES(?, ?, ?)",
+                (_rowid, _id, _name_index),
+            )
+        logger.info("database.migration_v21", desc="knowledge_entities_fts_trigger_drop",
+                    rows=len(rows),
+                    hint="FTS 改应用层维护 + _tokenize_for_fts 预分词，修复 SQL logic error 致称呼错乱")
+
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")
 
@@ -1391,10 +1557,14 @@ class DatabaseManager:
         # 非 fat 文件系统：创建 FTS5 触发器
         # 注意：每个触发器必须是一个完整的 SQL 语句，包含 BEGIN...END
         try:
-            # v1 triggers (knowledge_entities)
-            await self._conn.execute("""CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ai AFTER INSERT ON knowledge_entities BEGIN INSERT INTO knowledge_entities_fts(id, name_index) VALUES (new.id, new.name); END""")
-            await self._conn.execute("""CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_ad AFTER DELETE ON knowledge_entities BEGIN INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index) VALUES ('delete', old.id, old.name); END""")
-            await self._conn.execute("""CREATE TRIGGER IF NOT EXISTS knowledge_entities_fts_au AFTER UPDATE ON knowledge_entities BEGIN INSERT INTO knowledge_entities_fts(knowledge_entities_fts, id, name_index) VALUES ('delete', old.id, old.name); INSERT INTO knowledge_entities_fts(id, name_index) VALUES (new.id, new.name); END""")
+            # knowledge_entities_fts 触发器已废弃，改应用层维护（db_knowledge._sync_entity_fts）。
+            # 根因：contentless FTS5 的 'delete' 命令在 SQLite 3.40 始终报 SQL logic error
+            # （即使列值完全匹配），坏触发器导致 merge_entity UPDATE 失败 → observations
+            # 写不进 → 称呼信息错乱残留（爸爸/大哥哥/老公大人混用）。
+            # FTS rowid 与主表 rowid 对齐，由应用层 DELETE+INSERT 维护（普通 DELETE 可用）。
+            # 每次启动主动 DROP，防止历史版本创建的坏触发器残留。
+            for _trig in ("knowledge_entities_fts_ai", "knowledge_entities_fts_ad", "knowledge_entities_fts_au"):
+                await self._conn.execute(f"DROP TRIGGER IF EXISTS {_trig}")
             # v2 triggers: DROP first to replace any prior broken versions on upgrade
             for trig in ["kg_entities_v2_fts_ai", "kg_entities_v2_fts_ad", "kg_entities_v2_fts_au",
                          "kg_relations_v2_fts_ai", "kg_relations_v2_fts_ad", "kg_relations_v2_fts_au"]:
@@ -1550,20 +1720,30 @@ class DatabaseManager:
                                 emotion_label: str = "", model_used: str = "",
                                 session_id: str = "", cost_usd: float = 0,
                                 cache_hit: int = 0, cache_miss: int = 0) -> None:
-        await self.insert_conversation_log(
-            user_id=user_id, source=source,
-            user_message=user_message, assistant_reply=assistant_reply,
-            emotion_label=emotion_label, model_used=model_used,
-            session_id=session_id,
-            auto_commit=False,
-        )
-        if session_id:
-            await self.update_session(
-                session_id, cost_usd=cost_usd,
-                cache_hit=cache_hit, cache_miss=cache_miss,
+        # 事务保护：auto_commit=False 批量操作，失败时 rollback 防止脏事务残留
+        _log_committed = False
+        try:
+            await self.insert_conversation_log(
+                user_id=user_id, source=source,
+                user_message=user_message, assistant_reply=assistant_reply,
+                emotion_label=emotion_label, model_used=model_used,
+                session_id=session_id,
                 auto_commit=False,
             )
-        await self._conn.commit()
+            if session_id:
+                await self.update_session(
+                    session_id, cost_usd=cost_usd,
+                    cache_hit=cache_hit, cache_miss=cache_miss,
+                    auto_commit=False,
+                )
+            await self._conn.commit()
+            _log_committed = True
+        finally:
+            if not _log_committed:
+                try:
+                    await self._conn.rollback()
+                except Exception:
+                    pass
 
     async def cleanup_expired_data(self, auto_commit: bool = True) -> dict[str, int]:
         """按 cleanup_config 表中的策略清理过期数据。返回各表删除行数。"""

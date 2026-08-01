@@ -101,12 +101,18 @@ class ErrorClassifier:
             backoff_seconds=backoff,
         )
 
+        # 根因修复：APIConnectionError 的真实 httpx 异常（ConnectTimeout/DNS/TLS）存在 __cause__ 中，
+        # 只记 error_type="APIConnectionError" 无法定位是真连接超时还是 DNS 还是 TLS。
+        # 补记 cause_type/cause_msg，下次发生可一眼定位根因。
+        _cause = exc.__cause__ if exc.__cause__ else (exc.__context__ if exc.__context__ else None)
         logger.warning("error_classifier.classified",
                        reason=reason.value,
                        action=action.value,
                        retryable=is_retryable,
                        backoff=f"{backoff:.1f}s",
-                       error_type=type(exc).__name__)
+                       error_type=type(exc).__name__,
+                       cause_type=type(_cause).__name__ if _cause else "",
+                       cause_msg=str(_cause)[:300] if _cause else "")
 
         return classified
 

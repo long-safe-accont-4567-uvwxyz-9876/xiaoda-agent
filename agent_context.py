@@ -320,9 +320,7 @@ class AgentContext:
         剩余 70% 用于 history。
 
         - mimo chat (128K): 阈值约 90K
-        - mimo chat_pro (128K): 阈值约 90K
         - chat_ultra (1M): 阈值约 730K
-        - chat_flash (6K): 阈值约 4K（很激进，但匹配模型实际能力）
         - router 不可用: 回退 FALLBACK_MAX_HISTORY_TOKENS (60000)
         """
         if not self._router or not hasattr(self._router, "get_active_max_tokens"):
@@ -855,7 +853,9 @@ class AgentContext:
             # 每条取前 200 字符 + 最终 summaries[-10:] 截断，实际注入约 2000 字符
             _now = time.time()
             try:
-                rows = await db.memory.get_conversations_by_time_range(
+                # 根因修复：用独立只读连接查询，避免主连接被后台任务脏事务/长操作占用时
+                # 排队超时(10s)导致上下文丢失(牛头不对马嘴)。WAL只读连接永不被写阻塞。
+                rows = await db.get_conversations_readonly(
                     start_ts=_now - 86400, end_ts=_now, user_id=user_id, limit=50
                 )
             except Exception:

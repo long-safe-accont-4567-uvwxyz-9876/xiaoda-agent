@@ -55,7 +55,9 @@ def _register_env_providers(cfg: Any, env_values: Any, os_module: Any) -> None:
         ),
         "AGNES_API_KEY": (
             "agnes", "openai",
-            os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1"), "Agnes AI"
+            # CodeRabbit 一致性修复：用已解析的 env_values（.env）而非进程级 os.getenv，
+            # 与 _register_env_providers 的 env_values 来源一致；env_values 未设时回退默认值
+            (env_values.get("AGNES_BASE_URL") or "https://apihub.agnes-ai.cn/v1").strip(), "Agnes AI"
         ),
         # P0 修复（硬编码/ollama 默认启用根因）：
         # 原实现 _default_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
@@ -146,37 +148,105 @@ def _register_all_providers(cfg: Any, core: Any, load_provider_key: Any, registe
 
 
 def _apply_route_overrides(cfg: Any, core: Any, ROUTE_TABLE: Any) -> None:
-    """应用路由表覆盖（model/client/max_tokens/thinking/timeout）。"""
+    """应用路由表覆盖（model/client/max_tokens/thinking/timeout）。
+
+    同时清理持久化文件中 ROUTE_TABLE 已不存在的死路由（如 chat_mimo/chat_mini/chat_ultra）。
+    旧版本曾使用这些 task，升级后 ROUTE_TABLE 删除了它们，但持久化文件残留，
+    导致 WebUI 显示僵尸路由并每次启动都尝试应用无效覆盖。
+
+    CodeRabbit#5 + C4 + M9 + CR-Major-3 修复：
+    - 走 registry.update_route(persist=False) 而非直接改 ROUTE_TABLE 引用，
+      保证所有修改走原子入口（registry 是 ROUTE_TABLE 的唯一读写入口）。
+    - thinking budget_tokens 保留原 entry 值，不硬编码 2048。
+    - provider 未注册时跳过该路由的 client 字段，避免写入死路由。
+    """
     routes_config = cfg.get("models.routes", {}) or {}
     logger.info("webui.route_overrides_start total_tasks={}", len(routes_config))
-    for task, o in routes_config.items():
+    # CodeRabbit#5 + C4 修复：走 registry 原子入口而非直接改 ROUTE_TABLE 引用。
+    # 测试场景 core.router 可能是 MagicMock，此时用临时 registry 包装 ROUTE_TABLE；
+    # 生产中 core.router._registry 是 ModelRouteRegistry 实例，直接复用。
+    from model_router import ModelRouteRegistry
+    registry = getattr(core.router, '_registry', None)
+    if not isinstance(registry, ModelRouteRegistry):
+        registry = ModelRouteRegistry(ROUTE_TABLE)
+    dead_routes: list[str] = []
+    for task, o in list(routes_config.items()):
         entry = ROUTE_TABLE.get(task)
-        if not entry or not isinstance(o, dict):
-            logger.warning("webui.route_override_skip task={} reason=no_entry_or_invalid", task)
+        if not entry:
+            # 死路由：ROUTE_TABLE 中已删除，但持久化文件还有
+            dead_routes.append(task)
+            logger.info("webui.route_override_dead task={} reason=not_in_route_table", task)
             continue
-        if o.get("model"):
-            entry["model"] = o["model"]
-        if o.get("client"):
-            entry["client"] = o["client"]
-        if o.get("max_tokens"):
-            entry["max_tokens"] = o["max_tokens"]
+        if not isinstance(o, dict):
+            logger.warning("webui.route_override_skip task={} reason=invalid", task)
+            continue
+        # 读取持久化值，未提供的字段用原 entry 兜底
+        _model = o.get("model") or entry.get("model", "")
+        _client = o.get("client") or entry.get("client", "")
+        _max_tokens = o.get("max_tokens") or entry.get("max_tokens")
+        # CR-Major-3 修复：thinking 恢复时保留原 budget_tokens，不硬编码 2048
+        _orig_thinking = entry.get("thinking") or {}
+        _orig_budget = (_orig_thinking.get("budget_tokens", 4096)
+                        if isinstance(_orig_thinking, dict) else 4096)
         if "thinking" in o:
-            original_thinking = entry.get("thinking")
             if o["thinking"]:
-                entry["thinking"] = {"type": "enabled", "budget_tokens": 2048}
+                _thinking = {"type": "enabled", "budget_tokens": _orig_budget}
             else:
-                entry["thinking"] = {"type": "disabled"}
-            logger.info("webui.thinking_loaded task={} original={} new={}",
-                        task, original_thinking, entry.get("thinking"))
-        if o.get("timeout"):
-            core.router.TASK_TIMEOUTS[task] = o["timeout"]
+                _thinking = {"type": "disabled"}
+            logger.info("webui.thinking_loaded task={} budget_tokens={}",
+                        task, _orig_budget)
+        else:
+            _thinking = entry.get("thinking")
+        _timeout = o.get("timeout") or entry.get("timeout")
+        # M9 修复：校验 provider 是否已注册，未注册则保留原 client（避免死路由）
+        # N-2 修复：内置 provider 集合从 provider_metadata.json 派生，不硬编码
+        from config import get_builtin_providers as _get_builtin_providers
+        if _client and _client not in _get_builtin_providers():
+            _registered = (_client in getattr(core.router, "_custom_clients", {})
+                           or _client in getattr(core.router, "_transports", {}))
+            if not _registered:
+                logger.warning("webui.route_override_provider_unregistered task={} provider={} "
+                               "keeping_original_client={}",
+                               task, _client, entry.get("client", ""))
+                _client = entry.get("client", "")
+        # 走 registry 原子入口（persist=False：启动恢复不写回，避免无谓 IO）
+        try:
+            registry.update_route(
+                task, model_id=_model, provider=_client,
+                max_tokens=_max_tokens, thinking=_thinking,
+                timeout=_timeout, persist=False,
+            )
+        except (KeyError, RuntimeError) as e:
+            logger.warning("webui.route_override_apply_failed task={} error={}",
+                           task, str(e))
+        if _timeout:
+            core.router.TASK_TIMEOUTS[task] = _timeout
+
+    # 清理死路由：从持久化文件删除 ROUTE_TABLE 中已不存在的 task
+    if dead_routes:
+        for dr in dead_routes:
+            try:
+                cfg.delete(f"models.routes.{dr}")
+                logger.info("webui.dead_route_cleaned task={}", dr)
+            except (KeyError, AttributeError, OSError, ValueError) as e:
+                logger.warning("webui.dead_route_clean_failed task={} error={}",
+                               dr, str(e))
+        logger.info("webui.dead_routes_cleaned count={}", len(dead_routes))
 
 
 def _restore_chat_model(cfg: Any, core: Any) -> None:
     """恢复上次聊天模型（从 config_service 的 models.chat_model 读取）。
 
-    注意：此函数只做"恢复"，不做"持久化"。fallback 时禁止调用 set_chat_model，
-    否则会把 mimo 重新写入 config，覆盖用户原选择，形成 sticky fallback。
+    设计原则（用户约束）：
+    - 持久化的用户选择是真相源，失败时**绝不覆盖持久化**
+    - 仅修改内存中的 ROUTE_TABLE 和 _current_chat_model
+    - 失败时内存回退到 provider_metadata.json 的默认模型（不持久化）
+      下次启动会重新尝试恢复用户选择
+    - 不硬编码任何模型 ID，默认值从 get_default_model_for_provider() 读
+
+    C1 修复：失败回退覆盖所有 sync task（chat/emotion_analysis/...），
+    旧实现只回退 chat，导致其他 sync task 仍指向未注册 provider，
+    调用时抛 LLMError 必须依赖 fallback 链兜底，延迟和错误率上升。
     """
     chat_model = cfg.get("models.chat_model")
     if not (isinstance(chat_model, dict) and chat_model.get("provider") and chat_model.get("model_id")):
@@ -184,46 +254,79 @@ def _restore_chat_model(cfg: Any, core: Any) -> None:
         return
     provider = chat_model["provider"]
     model_id = chat_model["model_id"]
-    # 检查 ROUTE_TABLE["chat"] 当前值（可能已被 _apply_route_overrides 修改）
-    from model_router import ROUTE_TABLE
-    current_client = ROUTE_TABLE.get("chat", {}).get("client", "")
-    current_model = ROUTE_TABLE.get("chat", {}).get("model", "")
+    from model_router import ModelRouteRegistry, ROUTE_TABLE
+    # 测试场景 core.router 可能是 MagicMock，用临时 registry；生产用真实实例
+    registry = getattr(core.router, '_registry', None)
+    if not isinstance(registry, ModelRouteRegistry):
+        registry = ModelRouteRegistry(ROUTE_TABLE)
+    # 检查 ROUTE_TABLE["chat"] 当前值（已被 _apply_route_overrides 修改过）
+    current_client = (registry.get_task_ref("chat") or {}).get("client", "")
+    current_model = (registry.get_task_ref("chat") or {}).get("model", "")
     logger.info("webui.chat_model_restore_attempt saved={}/{} current_route={}/{}",
                 provider, model_id, current_client, current_model)
-    # 直接修改内存中的 ROUTE_TABLE 和 _current_chat_model，不调用 set_chat_model。
-    # set_chat_model 会触发持久化（cfg.set），而 _restore_chat_model 只做"恢复"不做"持久化"，
-    # 否则每次启动都会重新持久化当前模型到 config，覆盖用户的后续切换选择。
-    # 成功路径：直接设置 ROUTE_TABLE["chat"] 和 _current_chat_model
-    # fallback 路径：回退到 mimo，同样只修改内存不持久化
     try:
         # 检查 provider 是否已注册（自定义 provider 可能未注册）
-        if provider not in ("mimo", "agnes") and provider not in getattr(core.router, '_custom_clients', {}):
+        # N-2 修复：内置 provider 集合从 provider_metadata.json 派生，不硬编码
+        from config import get_builtin_providers as _get_builtin_providers
+        if provider not in _get_builtin_providers() and provider not in getattr(core.router, '_custom_clients', {}):
             raise LLMError(f"自定义 provider {provider} 未注册")
-        chat_entry = ROUTE_TABLE.get("chat")
-        if chat_entry is not None:
-            chat_entry["model"] = model_id
-            chat_entry["client"] = provider
+        # 成功路径：用 registry.update_route 把 chat_model 写入 ROUTE_TABLE["chat"]
+        # （其他 sync task 由 _apply_route_overrides 负责；这里只确保 chat 与用户选择一致）
+        try:
+            registry.update_route(
+                "chat", model_id=model_id, provider=provider, persist=False,
+            )
+        except (KeyError, RuntimeError) as route_err:
+            logger.warning("webui.chat_model_restore_route_failed error={}", str(route_err))
         core.router._current_chat_model = {"provider": provider, "model_id": model_id}
         logger.info("webui.chat_model_restored provider={} model={}", provider, model_id)
     except Exception as e:
-        # 必须捕获 Exception：LLMError 继承 AppException 不在原 (KeyError, ValueError,
-        # AttributeError, OSError) 范围内，自定义 provider 注册失败时会导致启动崩溃
+        # 关键：失败时不覆盖持久化，仅内存回退所有 sync task 到默认 provider
         logger.warning(
             "webui.chat_model_restore_failed provider={} model={} "
-            "error={} fallback_to_mimo_in_memory_only", provider, model_id, str(e)
+            "error={} fallback_all_sync_tasks_to_default_in_memory_only_persistence_untouched",
+            provider, model_id, str(e)
         )
-        # 仅修改内存中的 ROUTE_TABLE，不调用 set_chat_model 避免重新持久化 mimo
-        # 这样用户下次切换模型时，config 中仍是原选择，不会被 sticky mimo 覆盖
         try:
-            from model_router import MIMO_MODEL
-            chat_entry = ROUTE_TABLE.get("chat")
-            if chat_entry is not None:
-                chat_entry["model"] = MIMO_MODEL
-                chat_entry["client"] = "mimo"
-            core.router._current_chat_model = {"provider": "mimo", "model_id": MIMO_MODEL}
-            logger.info("webui.chat_model_fallback_in_memory provider=mimo model={}", MIMO_MODEL)
-        except (ImportError, KeyError, AttributeError):
-            logger.debug("server.set_chat_model_fallback_error", exc_info=True)
+            from config import get_default_model_for_provider
+            import config as _config_mod
+            fallback_provider = _config_mod.DEFAULT_PROVIDER or "mimo"
+            fallback_model = get_default_model_for_provider(fallback_provider)
+            if not fallback_model:
+                # 极端兜底：直接用 ROUTE_TABLE 当前值（不修改）
+                logger.error("webui.chat_model_fallback_no_default_model provider={}",
+                             fallback_provider)
+                return
+            # C1 修复：回退所有 sync task，不只 chat
+            # chat_pro/chat_flash 已合并进 chat
+            _sync_tasks = ("chat",
+                           "emotion_analysis", "tool_result_wrap",
+                           "memory_encoding")
+            _thinking_for_default = {"type": "disabled"}
+            for _task in _sync_tasks:
+                _old = registry.get_task(_task) or {}
+                try:
+                    registry.update_route(
+                        _task,
+                        model_id=fallback_model,
+                        provider=fallback_provider,
+                        max_tokens=_old.get("max_tokens"),
+                        thinking=_thinking_for_default,
+                        timeout=_old.get("timeout"),
+                        persist=False,  # 不覆盖持久化，下次启动重试用户选择
+                    )
+                except (KeyError, RuntimeError) as route_err:
+                    logger.warning("webui.chat_model_fallback_task_failed task={} error={}",
+                                   _task, str(route_err))
+            core.router._current_chat_model = {
+                "provider": fallback_provider, "model_id": fallback_model,
+            }
+            logger.info("webui.chat_model_fallback_in_memory provider={} model={} tasks={}",
+                        fallback_provider, fallback_model, _sync_tasks)
+        except Exception as inner_e:
+            # CodeRabbit Nit: 内层 except 改 Exception，防止 metadata I/O/JSON 解析失败逃逸
+            # 导致 WebUI 启动崩溃（原只捕 ImportError/KeyError/AttributeError）
+            logger.error("webui.set_chat_model_fallback_error error={}", str(inner_e))
 
 
 async def _start_user_mcp_servers(core: Any) -> None:
@@ -715,8 +818,11 @@ def create_app() -> FastAPI:
             if response.status_code >= 400:
                 _sla.inc_error(f"http_{response.status_code}", request.url.path)
         response.headers["X-Trace-Id"] = _trace_id
-        response.headers["Content-Security-Policy"] = "frame-ancestors 'self' http://127.0.0.1:*"
-        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        # CodeRabbit 安全修复：frame-ancestors 收紧到 splash 实际端口。
+        # splash HTTP 服务固定绑定 127.0.0.1:18089（agent.py:_start_splash_server），
+        # 原 :* 通配允许任意本地端口 iframe，存在本地 clickjacking 风险。
+        # 现仅允许 'self' + splash 源（127.0.0.1:18089 / localhost:18089）。
+        response.headers["Content-Security-Policy"] = "frame-ancestors 'self' http://127.0.0.1:18089 http://localhost:18089"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
@@ -751,12 +857,14 @@ def create_app() -> FastAPI:
     from web.routers.market import router as market_router
     from web.routers.mail_manage import router as mail_manage_router
     from web.routers.workflows import router as workflows_router
+    from web.routers.workspace import router as workspace_router
 
     for r in (auth_router, chat_router, system_router, agents_router,
               models_router, tools_router, mcp_router, insight_router,
               schedule_router, media_router, health_router, plugins_router,
               setup_router, model_discovery_router, market_router,
-              mail_manage_router, workflows_router, system_public_router):
+              mail_manage_router, workflows_router, workspace_router,
+              system_public_router):
         app.include_router(r, prefix="/api/v1")
 
     from web.ws_hub import router as ws_router

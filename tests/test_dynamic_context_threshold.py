@@ -44,18 +44,6 @@ def test_threshold_chat_ultra_1m():
     assert 700000 <= threshold <= 800000, f"chat_ultra 1M 阈值异常: {threshold}"
 
 
-def test_threshold_chat_flash_6k():
-    """chat_flash (6K) 模式下阈值会受 FALLBACK_MAX_HISTORY_TOKENS 兜底保护。
-
-    chat_flash 实际 max_tokens=6144，70% 仅 4300，但兜底值 60000 会顶上。
-    这避免了极端小窗口导致过度压缩。
-    """
-    ctx = AgentContext(router=_MockRouter(max_tokens=6144))
-    threshold = ctx._get_dynamic_max_tokens()
-    # 应不低于 FALLBACK_MAX_HISTORY_TOKENS=60000
-    assert threshold == 60000, f"chat_flash 阈值应受兜底保护: {threshold}"
-
-
 def test_threshold_no_router_fallback():
     """router 为 None 时回退到 FALLBACK_MAX_HISTORY_TOKENS=60000。"""
     ctx = AgentContext(router=None)
