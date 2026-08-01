@@ -73,12 +73,14 @@ class WakeRecord:
     @property
     def is_due(self) -> bool:
         """是否已到触发条件。"""
+        if self.state == WakeState.DUE:
+            return True
         if self.state != WakeState.PENDING:
             return False
         if self.trigger == WakeTrigger.TIMER:
             return time.time() >= self.fire_at
-        # COMPLETION 和 EVENT 通过 mark_due 显式标记
-        return self.state == WakeState.DUE
+        # COMPLETION 和 EVENT 通过 complete_job/fire_event 显式标记为 DUE
+        return False
 
 
 class SelfWakeManager:
@@ -168,7 +170,7 @@ class SelfWakeManager:
         return record
 
     def check_due(self) -> list[WakeRecord]:
-        """检查所有到期的唤醒记录（TIMER 模式）。
+        """检查所有到期的唤醒记录（TIMER/COMPLETION/EVENT 模式）。
 
         Returns:
             到期的 WakeRecord 列表（不含已 fired 的）。
@@ -176,15 +178,20 @@ class SelfWakeManager:
         now = time.time()
         due = []
         for record in self._records.values():
-            if record.state != WakeState.PENDING:
+            if record.state == WakeState.FIRED:
                 continue
             if record.is_expired:
                 record.state = WakeState.FIRED
                 continue
-            if record.trigger == WakeTrigger.TIMER and now >= record.fire_at:
-                record.state = WakeState.DUE
+            # 已被 complete_job/fire_event 标记为 DUE 的记录
+            if record.state == WakeState.DUE:
                 due.append(record)
-            elif record.state == WakeState.DUE:
+                continue
+            # TIMER 模式：检查是否到时
+            if (record.state == WakeState.PENDING
+                    and record.trigger == WakeTrigger.TIMER
+                    and now >= record.fire_at):
+                record.state = WakeState.DUE
                 due.append(record)
         return due
 

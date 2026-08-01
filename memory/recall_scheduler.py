@@ -126,7 +126,12 @@ class MemoryRecallScheduler:
         """catch-up 逻辑：如果上次回忆距今超过间隔，立即补跑一次。
 
         借鉴 OpenWorker automation/scheduler.py 的 run-once-catch-up 策略。
+        注意：catch-up 同样受 DND 门控，避免凌晨重启时触发耗时任务。
         """
+        # DND 时段跳过 catch-up（与 _tick 保持一致）
+        if self._is_dnd():
+            logger.debug("memory_recall_scheduler.catchup_skipped_dnd")
+            return
         try:
             last_run = await self.core.db.get_cron_last_run(self.CRON_TASK_NAME)
             if last_run is not None:

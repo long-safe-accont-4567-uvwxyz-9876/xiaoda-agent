@@ -196,3 +196,60 @@ class TestAutoAllowTools:
         pm.add_auto_allow_tool("apple")
         result = pm.get_auto_allow_tools()
         assert result == sorted(result)
+
+
+class TestInteractiveWriteToolFix:
+    """Qodo Bug #2 修复验证：INTERACTIVE/CUSTOM 模式拦截所有写/执行工具。"""
+
+    @pytest.fixture
+    def pm(self):
+        return PermissionManager()
+
+    def test_interactive_blocks_unknown_write_tool(self, pm):
+        """INTERACTIVE 模式应拦截不在 _SENSITIVE_TOOLS 中的写工具。"""
+        pm.set_mode(PermissionMode.INTERACTIVE)
+        # remember/delete_reminder 是 READ_WRITE 但可能不在 _SENSITIVE_TOOLS
+        # 模拟一个未注册的写工具
+        from unittest.mock import patch
+        with patch("tool_engine.tool_registry.get_tool") as mock_get:
+            mock_get.return_value = {"permission": "read_write"}
+            allowed, reason = pm.check_tool_permission("remember")
+            assert not allowed
+            assert "确认" in reason
+
+    def test_interactive_blocks_execute_tool(self, pm):
+        """INTERACTIVE 模式应拦截 EXECUTE 权限工具。"""
+        pm.set_mode(PermissionMode.INTERACTIVE)
+        from unittest.mock import patch
+        with patch("tool_engine.tool_registry.get_tool") as mock_get:
+            mock_get.return_value = {"permission": "execute"}
+            allowed, reason = pm.check_tool_permission("some_exec_tool")
+            assert not allowed
+            assert "确认" in reason
+
+    def test_interactive_allows_unknown_tool_no_metadata(self, pm):
+        """INTERACTIVE 模式下工具无元数据且不在敏感名单时放行。"""
+        pm.set_mode(PermissionMode.INTERACTIVE)
+        from unittest.mock import patch
+        with patch("tool_engine.tool_registry.get_tool") as mock_get:
+            mock_get.return_value = None
+            allowed, _ = pm.check_tool_permission("totally_unknown_tool")
+            assert allowed
+
+    def test_custom_blocks_write_tool_not_in_sensitive(self, pm):
+        """CUSTOM 模式应拦截不在 _SENSITIVE_TOOLS 且不在 auto_allow 中的写工具。"""
+        pm.set_mode(PermissionMode.CUSTOM)
+        from unittest.mock import patch
+        with patch("tool_engine.tool_registry.get_tool") as mock_get:
+            mock_get.return_value = {"permission": "read_write"}
+            allowed, reason = pm.check_tool_permission("remember")
+            assert not allowed
+            assert "确认" in reason
+
+    def test_custom_auto_allow_overrides_write_check(self, pm):
+        """CUSTOM 模式 auto_allow 中的工具即使 READ_WRITE 也放行。"""
+        pm.set_mode(PermissionMode.CUSTOM)
+        pm.add_auto_allow_tool("remember")
+        allowed, reason = pm.check_tool_permission("remember")
+        assert allowed
+        assert "auto-allowed" in reason

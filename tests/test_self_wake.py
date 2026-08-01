@@ -403,3 +403,92 @@ class TestGetSelfWakeManager:
         m1 = get_self_wake_manager()
         m2 = get_self_wake_manager()
         assert m1 is m2
+
+
+class TestSelfWakeDueFix:
+    """Qodo Bug #1 修复验证：DUE 状态的记录能被 check_due() 返回。"""
+
+    @pytest.mark.asyncio
+    async def test_due_record_from_complete_job_returned_by_check_due(self):
+        """complete_job 标记为 DUE 的记录应被 check_due 返回。"""
+        manager = SelfWakeManager()
+        called = False
+
+        async def cb():
+            nonlocal called
+            called = True
+
+        manager.register(
+            trigger=WakeTrigger.COMPLETION,
+            callback=cb,
+            job_id="job_001",
+        )
+        # 标记为 DUE
+        manager.complete_job("job_001")
+        # check_due 应返回 DUE 记录
+        due = manager.check_due()
+        assert len(due) == 1
+        assert due[0].state == WakeState.DUE
+        # fire 后回调执行
+        await manager.fire(due[0].id)
+        assert called
+
+    @pytest.mark.asyncio
+    async def test_due_record_from_fire_event_returned_by_check_due(self):
+        """fire_event 标记为 DUE 的记录应被 check_due 返回。"""
+        manager = SelfWakeManager()
+        called = False
+
+        async def cb():
+            nonlocal called
+            called = True
+
+        manager.register(
+            trigger=WakeTrigger.EVENT,
+            callback=cb,
+            event_key="incoming_msg",
+        )
+        manager.fire_event("incoming_msg")
+        due = manager.check_due()
+        assert len(due) == 1
+        assert due[0].state == WakeState.DUE
+        await manager.fire(due[0].id)
+        assert called
+
+    @pytest.mark.asyncio
+    async def test_is_due_true_for_due_state(self):
+        """WakeRecord.is_due 对 DUE 状态返回 True。"""
+        async def cb():
+            pass
+
+        manager = SelfWakeManager()
+        record = manager.register(
+            trigger=WakeTrigger.COMPLETION,
+            callback=cb,
+            job_id="job_002",
+        )
+        assert not record.is_due
+        manager.complete_job("job_002")
+        assert record.state == WakeState.DUE
+        assert record.is_due
+
+    @pytest.mark.asyncio
+    async def test_mixed_due_and_timer_records(self):
+        """混合 DUE（COMPLETION）和到时 TIMER 记录都应被 check_due 返回。"""
+        manager = SelfWakeManager()
+
+        async def cb1():
+            pass
+
+        async def cb2():
+            pass
+
+        r1 = manager.register(WakeTrigger.COMPLETION, cb1, job_id="j1")
+        r2 = manager.register(WakeTrigger.TIMER, cb2, timeout_seconds=-1)
+
+        manager.complete_job("j1")
+        due = manager.check_due()
+        assert len(due) == 2
+        ids = {d.id for d in due}
+        assert r1.id in ids
+        assert r2.id in ids

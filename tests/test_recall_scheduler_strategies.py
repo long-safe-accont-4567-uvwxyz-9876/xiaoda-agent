@@ -153,3 +153,39 @@ class TestRecallSchedulerBackwardCompat:
         assert scheduler._task is None
         assert scheduler.TICK_SECONDS == 300
         assert scheduler.RECALL_INTERVAL_HOURS == 3.0
+
+
+class TestCatchUpDNDFix:
+    """Qodo Bug #3 修复验证：catch-up 路径受 DND 门控。"""
+
+    @pytest.mark.asyncio
+    async def test_catchup_skipped_during_dnd(self):
+        """DND 时段 catch-up 不触发"""
+        last_run = time.time() - 10 * 3600
+        core = FakeCore(last_run=last_run, memory=MagicMock())
+        core.memory.run_scheduled_recall = AsyncMock(return_value=5)
+
+        scheduler = MemoryRecallScheduler(core, catch_up=True, skip_on_overlap=True)
+
+        # 模拟 DND 时段
+        with patch.object(scheduler, '_is_dnd', return_value=True):
+            await scheduler._catchup_tick()
+
+        # DND 时段不触发回忆任务
+        core.memory.run_scheduled_recall.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_catchup_runs_outside_dnd(self):
+        """非 DND 时段 catch-up 正常触发"""
+        last_run = time.time() - 10 * 3600
+        core = FakeCore(last_run=last_run, memory=MagicMock())
+        core.memory.run_scheduled_recall = AsyncMock(return_value=5)
+
+        scheduler = MemoryRecallScheduler(core, catch_up=True, skip_on_overlap=True)
+
+        # 模拟非 DND 时段
+        with patch.object(scheduler, '_is_dnd', return_value=False):
+            await scheduler._catchup_tick()
+
+        # 非 DND 时段正常触发
+        core.memory.run_scheduled_recall.assert_called_once()

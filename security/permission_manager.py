@@ -303,10 +303,19 @@ class PermissionManager:
         if self._mode == PermissionMode.CUSTOM:
             if tool_name in self._auto_allow_tools:
                 return True, "auto-allowed by config"
-            # 非 auto_allow 的工具走 INTERACTIVE 逻辑
-            # 降级到 STRICT 检查
+            # 非 auto_allow 的工具：READ_ONLY 放行，READ_WRITE/EXECUTE 需确认
+            from tool_engine.tool_registry import get_tool, ToolPermission
+            tool = get_tool(tool_name)
+            if tool:
+                perm = tool.get("permission", ToolPermission.READ_ONLY)
+                if perm == ToolPermission.READ_ONLY:
+                    return True, ""
+                perm_label = perm.value if hasattr(perm, "value") else str(perm)
+                return False, f"自定义模式下 {tool_name}（{perm_label}）需要用户确认"
+            # 未知工具回退到 _SENSITIVE_TOOLS
             if tool_name in _SENSITIVE_TOOLS:
                 return False, f"自定义模式下 {tool_name} 需要确认"
+            return True, ""
 
         # STRICT 模式：敏感工具需要确认
         if self._mode == PermissionMode.STRICT and tool_name in _SENSITIVE_TOOLS:
@@ -321,7 +330,10 @@ class PermissionManager:
                 perm = tool.get("permission", ToolPermission.READ_ONLY)
                 if perm == ToolPermission.READ_ONLY:
                     return True, ""
-            # 写/执行工具需要确认
+                # READ_WRITE/EXECUTE 工具需要确认
+                perm_label = perm.value if hasattr(perm, "value") else str(perm)
+                return False, f"交互式模式下 {tool_name}（{perm_label}）需要用户确认"
+            # 未知工具回退到 _SENSITIVE_TOOLS
             if tool_name in _SENSITIVE_TOOLS:
                 return False, f"交互式模式下 {tool_name} 需要用户确认"
 

@@ -19,8 +19,11 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from collections.abc import Callable
+
+if TYPE_CHECKING:
+    from tool_engine.approver import ApprovalOutcome
 
 from loguru import logger
 
@@ -498,7 +501,7 @@ class HumanApprovalApprover:
         self._user_id = user_id
         self._default_timeout = default_timeout
 
-    async def approve(self, request) -> "ApprovalDecision":
+    async def approve(self, request) -> "ApprovalOutcome":
         """实现 Approver 协议 — 委托给 HumanApprovalGate。"""
         # 延迟导入避免循环依赖
         from tool_engine.approver import ApprovalDecision, ApprovalOutcome
