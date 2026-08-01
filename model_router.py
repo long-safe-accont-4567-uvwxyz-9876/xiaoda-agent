@@ -1190,13 +1190,18 @@ class ModelRouter:
         # 后台任务之间用 _bg_llm_semaphore(1) 串行，彻底消除 agnes 并发竞争。
         _is_bg_llm = task_type in self._BG_LLM_TASKS
         _current_task = asyncio.current_task()
+        _sem_acquired = False
         if _is_bg_llm:
             await self._chat_idle.wait()
             await self._bg_llm_semaphore.acquire()
+            _sem_acquired = True
             try:
                 await self._chat_idle.wait()  # 拿到 semaphore 后再次确认主 chat 空闲
             except BaseException:
-                self._bg_llm_semaphore.release()
+                # 被主 chat 抢占取消时，只释放一次 semaphore，标记已释放
+                if _sem_acquired:
+                    self._bg_llm_semaphore.release()
+                    _sem_acquired = False
                 raise
         elif task_type == "chat":
             self._chat_idle.clear()
@@ -1263,10 +1268,14 @@ class ModelRouter:
         finally:
             # 释放让路资源：主 chat 完成后 set event 唤醒后台任务；
             # 后台任务完成后 release semaphore 让下一个后台任务执行。
+            # 修复：用 _sem_acquired 标记防止重复释放 semaphore（主 chat 抢占取消时
+            # except BaseException 已释放，finally 不应二次释放导致信号量计数溢出）。
             if _is_bg_llm:
                 if _current_task is not None:
                     self._active_bg_llm_tasks.discard(_current_task)
-                self._bg_llm_semaphore.release()
+                if _sem_acquired:
+                    self._bg_llm_semaphore.release()
+                    _sem_acquired = False
             elif task_type == "chat":
                 self._chat_idle.set()
 
