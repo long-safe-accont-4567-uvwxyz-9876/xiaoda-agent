@@ -157,10 +157,18 @@ class ToolExecutor:
             approval_decision = await self._approver.approve(approval_req)
         except Exception as e:
             logger.warning("tool_executor.approver_error", tool=tool_name, error=str(e))
-            approval_decision = ApprovalDecision(
-                outcome=ApprovalOutcome.ONCE,
-                reason=f"approver error, defaulting to ONCE: {e}",
-            )
+            # Fail-closed：高风险工具（EXECUTE 权限，如 shell_command）approver 异常时拒绝，
+            # 避免审批器故障导致危险操作放行；低/中风险工具放行以保证可用性。
+            if approval_req.risk_level == "high":
+                approval_decision = ApprovalDecision(
+                    outcome=ApprovalOutcome.DENY,
+                    reason=f"approver error on high-risk tool, failing closed: {e}",
+                )
+            else:
+                approval_decision = ApprovalDecision(
+                    outcome=ApprovalOutcome.ONCE,
+                    reason=f"approver error, defaulting to ONCE: {e}",
+                )
 
         if approval_decision.outcome == ApprovalOutcome.DENY:
             logger.info("tool_executor.approval_denied",

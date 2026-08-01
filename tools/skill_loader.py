@@ -191,6 +191,8 @@ class SkillLoader:
             except (OSError, UnicodeDecodeError) as e:
                 logger.warning("skill_loader.load_body_failed",
                                name=name, error=str(e))
+                # 不标记 _loaded，下次 load() 重试，避免失败被永久缓存为空 instructions
+                return skill
 
         skill._loaded = True
         logger.debug("skill_loader.loaded", name=name)
