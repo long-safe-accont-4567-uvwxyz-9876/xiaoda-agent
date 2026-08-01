@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 import copy
 import hashlib
 import os
+import threading
 import time
 import asyncio
 import contextvars
@@ -295,6 +296,9 @@ class ModelRouteRegistry:
         self._table: dict[str, dict] = initial_table if initial_table is not None else {}
         # 延迟加载 ConfigService：测试时可注入 mock，生产时从 get_config_service() 取
         self._cfg = config_service
+        # 并发保护：update_route / replace_table 的写操作需要互斥，
+        # 防止多线程同时更新同一路由时，回滚操作覆盖其他线程的成功写入。
+        self._lock = threading.Lock()
 
     def _get_cfg(self) -> Any:
         """延迟获取 ConfigService 实例（避免循环导入）。"""
@@ -333,8 +337,9 @@ class ModelRouteRegistry:
         若 here 重新赋值，registry 后续 update_route 作用于新 dict，而请求路径
         还在读旧 ROUTE_TABLE → 数据脱节，用户改的配置对在途请求不可见。
         """
-        self._table.clear()
-        self._table.update(copy.deepcopy(new_table))
+        with self._lock:
+            self._table.clear()
+            self._table.update(copy.deepcopy(new_table))
 
     def get_task_ref(self, task: str) -> dict | None:
         """返回指定 task 路由的**引用**（不深拷贝）。
@@ -368,60 +373,61 @@ class ModelRouteRegistry:
             KeyError: task 不存在
             RuntimeError: 持久化失败（内存已回滚）
         """
-        if task not in self._table:
-            raise KeyError(f"未知路由 task: {task}")
+        with self._lock:
+            if task not in self._table:
+                raise KeyError(f"未知路由 task: {task}")
 
-        # 保留旧值用于回滚
-        old_entry = copy.deepcopy(self._table[task])
+            # 保留旧值用于回滚
+            old_entry = copy.deepcopy(self._table[task])
 
-        # 构造新 entry
-        new_entry = copy.deepcopy(old_entry)
-        new_entry["model"] = model_id
-        new_entry["client"] = provider
-        if max_tokens is not None:
-            new_entry["max_tokens"] = max_tokens
-        if thinking is not None:
-            new_entry["thinking"] = copy.deepcopy(thinking)
-        # CodeRabbit#7 修复：timeout 也合并进 new_entry，
-        # 这样持久化时 new_entry.get("timeout") 能拿到有效值
-        if timeout is not None:
-            new_entry["timeout"] = timeout
+            # 构造新 entry
+            new_entry = copy.deepcopy(old_entry)
+            new_entry["model"] = model_id
+            new_entry["client"] = provider
+            if max_tokens is not None:
+                new_entry["max_tokens"] = max_tokens
+            if thinking is not None:
+                new_entry["thinking"] = copy.deepcopy(thinking)
+            # CodeRabbit#7 修复：timeout 也合并进 new_entry，
+            # 这样持久化时 new_entry.get("timeout") 能拿到有效值
+            if timeout is not None:
+                new_entry["timeout"] = timeout
 
-        # 写内存
-        self._table[task] = new_entry
+            # 写内存
+            self._table[task] = new_entry
 
-        # 持久化（失败回滚）
-        if persist:
-            cfg = self._get_cfg()
-            if cfg is not None:
-                try:
-                    # CodeRabbit#3+#9 + Qodo#3 修复：持久化用 new_entry 的有效值。
-                    # new_entry 已在上方合并了 old_entry（max_tokens/thinking/timeout 继承自旧值），
-                    # 所以这里直接序列化 new_entry 即可，不会再把 omitted 误存为 false/60。
-                    _effective_thinking = new_entry.get("thinking")
-                    _thinking_bool = bool(
-                        _effective_thinking and isinstance(_effective_thinking, dict)
-                        and _effective_thinking.get("type") == "enabled"
-                    )
-                    # timeout：new_entry 已继承 old_entry.timeout；若 new_entry 无则用入参兜底
-                    _effective_timeout = new_entry.get("timeout")
-                    if _effective_timeout is None and timeout is not None:
-                        _effective_timeout = timeout
-                    cfg.set(f"models.routes.{task}", {
-                        "model": new_entry["model"],
-                        "client": new_entry["client"],
-                        "max_tokens": new_entry.get("max_tokens"),
-                        "thinking": _thinking_bool,
-                        "timeout": _effective_timeout,
-                    })
-                except Exception as e:
-                    # 回滚内存
-                    self._table[task] = old_entry
-                    logger.error("registry.update_route_persist_failed task={} error={}",
-                                 task, str(e))
-                    raise RuntimeError(f"持久化路由 {task} 失败: {e}") from e
+            # 持久化（失败回滚）
+            if persist:
+                cfg = self._get_cfg()
+                if cfg is not None:
+                    try:
+                        # CodeRabbit#3+#9 + Qodo#3 修复：持久化用 new_entry 的有效值。
+                        # new_entry 已在上方合并了 old_entry（max_tokens/thinking/timeout 继承自旧值），
+                        # 所以这里直接序列化 new_entry 即可，不会再把 omitted 误存为 false/60。
+                        _effective_thinking = new_entry.get("thinking")
+                        _thinking_bool = bool(
+                            _effective_thinking and isinstance(_effective_thinking, dict)
+                            and _effective_thinking.get("type") == "enabled"
+                        )
+                        # timeout：new_entry 已继承 old_entry.timeout；若 new_entry 无则用入参兜底
+                        _effective_timeout = new_entry.get("timeout")
+                        if _effective_timeout is None and timeout is not None:
+                            _effective_timeout = timeout
+                        cfg.set(f"models.routes.{task}", {
+                            "model": new_entry["model"],
+                            "client": new_entry["client"],
+                            "max_tokens": new_entry.get("max_tokens"),
+                            "thinking": _thinking_bool,
+                            "timeout": _effective_timeout,
+                        })
+                    except Exception as e:
+                        # 回滚内存
+                        self._table[task] = old_entry
+                        logger.error("registry.update_route_persist_failed task={} error={}",
+                                     task, str(e))
+                        raise RuntimeError(f"持久化路由 {task} 失败: {e}") from e
 
-        return copy.deepcopy(new_entry)
+            return copy.deepcopy(new_entry)
 
 
 class ModelRouter:
@@ -824,9 +830,17 @@ class ModelRouter:
 
         用于 AgentContext 动态计算压缩阈值，避免硬编码不分模型的问题。
         若 task_type 不存在或字段缺失，返回保守兜底值 60000。
+        若持久化配置中 max_tokens 为非法非数字字符串，同样返回兜底值，避免 ValueError
+        导致 LLM 调用链彻底崩溃。
         """
         cfg = self._registry.get_task_ref(task_type) or self._registry.get_task_ref("chat") or {}
-        return int(cfg.get("max_tokens", 60000))
+        mt = cfg.get("max_tokens", 60000)
+        try:
+            return int(mt)
+        except (TypeError, ValueError):
+            logger.warning("router.get_max_tokens_invalid task={} value={} fallback=60000",
+                           task_type, mt)
+            return 60000
 
     def get_active_max_tokens(self) -> int:
         """获取当前激活模型偏好的实际上下文窗口大小。

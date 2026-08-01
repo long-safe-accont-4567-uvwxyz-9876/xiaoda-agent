@@ -589,3 +589,83 @@ def test_update_route_api_persists_via_registry(tmp_path):
     finally:
         # 整体还原（包括 max_tokens/thinking，测试写入了 max_tokens=8192, thinking=False）
         ROUTE_TABLE["chat"] = copy.deepcopy(original_chat)
+
+
+# ─────────────────────────────────────────────────────────────
+# 提交后正确性检查：高影响缺陷修复回归测试
+# ─────────────────────────────────────────────────────────────
+
+
+def test_registry_concurrent_update_rollback_does_not_overwrite_success(fresh_registry):
+    """并发场景：线程 A persist 失败回滚时，不得覆盖线程 B 的成功写入。
+
+    根因：旧实现 update_route 无锁，回滚操作 self._table[task] = old_entry
+    可能覆盖另一个线程在期间的合法更新，导致内存与持久化状态不一致。
+    修复：ModelRouteRegistry 引入 threading.Lock，整个 读-改-写-回滚 事务串行化。
+    """
+    import concurrent.futures
+    reg, mock_cfg = fresh_registry
+
+    # 调度策略：让部分线程 persist 失败，部分成功
+    # 使用 call_count 决定第几次调用失败
+    _call_count = [0]
+
+    def _conditional_fail(path, value):
+        idx = _call_count[0]
+        _call_count[0] = idx + 1
+        # 每第 3 次调用失败（模拟磁盘满等 IO 错误）
+        if idx % 3 == 0:
+            raise RuntimeError(f"disk full #{idx}")
+
+    mock_cfg.set.side_effect = _conditional_fail
+
+    def worker(i):
+        model_name = f"concurrent-model-{i}"
+        try:
+            reg.update_route("chat", model_id=model_name, provider="mimo")
+            return ("ok", model_name)
+        except RuntimeError:
+            return ("fail", model_name)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(worker, i) for i in range(24)]
+        results = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+    ok_models = [m for status, m in results if status == "ok"]
+    final_model = reg.get_task("chat")["model"]
+
+    # 只要有成功更新，最终结果就必须是某次成功更新的值（不能被失败线程回滚到旧值）
+    if ok_models:
+        assert final_model in ok_models, (
+            f"最终结果 {final_model} 不在成功更新列表 {ok_models} 中，"
+            "说明失败线程的回滚覆盖了后续成功写入"
+        )
+    # 若全部失败，最终结果也应是某次回滚后的合法状态（此处为初始值或某次回滚值）
+    # 但关键是不允许出现 "持久化与内存不一致" 的中间态。
+
+
+def test_get_max_tokens_for_task_invalid_string_returns_fallback():
+    """max_tokens 为非法非数字字符串时，不得抛出 ValueError，应返回兜底值 60000。
+
+    根因：旧实现 `return int(cfg.get("max_tokens", 60000))` 在配置被手动篡改或
+    旧版本遗留非数字字符串时会直接崩溃，导致 LLM 调用链彻底中断。
+    修复：int() 转换包装 try/except，异常时返回 60000 并记录警告日志。
+    """
+    from model_router import ModelRouteRegistry, ModelRouter
+    # 构造一个 max_tokens 为非法字符串的 registry
+    bad_table = {
+        "chat": {"model": "x", "max_tokens": "not_a_number", "client": "mimo",
+                 "thinking": {"type": "disabled"}},
+    }
+    reg = ModelRouteRegistry(bad_table)
+    router = ModelRouter.__new__(ModelRouter)
+    router._registry = reg
+
+    # 不应抛异常
+    mt = router.get_max_tokens_for_task("chat")
+    assert mt == 60000, f"非法 max_tokens 应回退到 60000，实际得到 {mt}"
+
+    # 同样测试 float 字符串（int('123.45') 也会 ValueError）
+    bad_table["chat"]["max_tokens"] = "123.45"
+    mt2 = router.get_max_tokens_for_task("chat")
+    assert mt2 == 60000, f"float 字符串 max_tokens 应回退到 60000，实际得到 {mt2}"
