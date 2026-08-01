@@ -336,6 +336,13 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ inputs.version }}"
             VERSION="${VERSION#v}"
+            # workflow_dispatch version must match pyproject.toml: 防止手动输入版本号
+            # 与源码不一致，导致 release tag 与实际构建版本脱节
+            SOURCE_VERSION=$(grep -m1 '^version\s*=' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
+            if [ "$VERSION" != "$SOURCE_VERSION" ]; then
+              echo "##[error]workflow_dispatch version must match pyproject.toml: input=$VERSION source=$SOURCE_VERSION"
+              exit 1
+            fi
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
@@ -360,7 +367,8 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           Set-Content -Path "dist/xiaoda-agent/.version" -Value $version -NoNewline
-          New-Item -Path "dist/xiaoda-agent/.auto_update" -ItemType File -Force
+          # 不创建 .auto_update：自动更新必须由用户显式启用（与 auto-update.bat 设计一致）
+          # 用户创建 %INSTALL_DIR%\.auto_update 文件后才开启自动更新检查
 
           # 复制启动脚本到 dist（NSIS File /r 会打包这些文件）
           # 修复（v0.5.41）：原 ErrorActionPreference=Continue 会让 copy 失败被静默吞掉，
@@ -438,12 +446,14 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           echo -n "$VERSION" > dist/xiaoda-agent/.version
-          touch dist/xiaoda-agent/.auto_update
+          # 不创建 .auto_update：自动更新必须由用户显式启用（与 Windows 包行为一致）
           mkdir -p dist/xiaoda-agent/scripts
           cp scripts/auto-update.sh dist/xiaoda-agent/scripts/
           cp scripts/doctor.sh dist/xiaoda-agent/scripts/
+          cp scripts/start-linux.sh dist/xiaoda-agent/scripts/
           chmod +x dist/xiaoda-agent/scripts/auto-update.sh
           chmod +x dist/xiaoda-agent/scripts/doctor.sh
+          chmod +x dist/xiaoda-agent/scripts/start-linux.sh
           tar -czf xiaoda-agent-linux-x86_64-v${VERSION}.tar.gz -C dist xiaoda-agent
 
           # 打包 Linux 安装脚本
@@ -477,6 +487,13 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ inputs.version }}"
             VERSION="${VERSION#v}"
+            # workflow_dispatch version must match pyproject.toml: 防止手动输入版本号
+            # 与源码不一致，导致 release tag 与实际构建版本脱节
+            SOURCE_VERSION=$(grep -m1 '^version\s*=' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
+            if [ "$VERSION" != "$SOURCE_VERSION" ]; then
+              echo "##[error]workflow_dispatch version must match pyproject.toml: input=$VERSION source=$SOURCE_VERSION"
+              exit 1
+            fi
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
@@ -491,11 +508,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
+      - name: Set up QEMU (multi-arch build)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image (multi-arch)
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/${{ github.repository_owner }}/xiaoda-agent:latest
             ghcr.io/${{ github.repository_owner }}/xiaoda-agent:v${{ steps.version.outputs.version }}
@@ -529,6 +553,13 @@ jobs:
       contents: write
 
     steps:
+      # CodeRabbit 审查：release job 需要 checkout 源码才能读取 pyproject.toml
+      # 否则 workflow_dispatch 时 SOURCE_VERSION 为空，版本校验永远失败
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -555,6 +586,13 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ inputs.version }}"
             VERSION="${VERSION#v}"
+            # workflow_dispatch version must match pyproject.toml: 防止手动输入版本号
+            # 与源码不一致，导致 release tag 与实际构建版本脱节
+            SOURCE_VERSION=$(grep -m1 '^version\s*=' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
+            if [ "$VERSION" != "$SOURCE_VERSION" ]; then
+              echo "##[error]workflow_dispatch version must match pyproject.toml: input=$VERSION source=$SOURCE_VERSION"
+              exit 1
+            fi
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else

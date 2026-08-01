@@ -50,12 +50,16 @@ goto :doctor_done
 
 :dev_mode
 :: 开发模式: 直接用 python 运行
+:: 注意：必须用 !errorlevel! 而非 %errorlevel%
+::   cmd 在解析整个 if-else 块时一次性展开 %errorlevel%（parse-time），
+::   导致第二个 where py 的结果被第一个 where python 的 errorlevel 覆盖。
+::   延迟扩展 !errorlevel! 在运行时取值，才能反映上一条命令的真实退出码。
 where python >nul 2>nul
-if %errorlevel% equ 0 (
+if !errorlevel! equ 0 (
     set "PY_CMD=python"
 ) else (
     where py >nul 2>nul
-    if %errorlevel% equ 0 (
+    if !errorlevel! equ 0 (
         set "PY_CMD=py"
     ) else (
         echo   [ERROR] 未找到 xiaoda-agent.exe 也未找到 python
