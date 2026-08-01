@@ -540,35 +540,43 @@ class BackgroundTaskManager:
             if not self.memory or not getattr(self.memory, "concept_graph", None):
                 await self.db.set_cron_last_run("concept_link_curator")
                 return
+            _curator_t0 = time.time()
             try:
-                # N10: batch_size 30→10（I2 复审调整），配合 batch_link_recent
-                # 内部的 max_edges_per_run=60 限制写入量，确保单次 curator I/O
-                # 占用 <10s，不饿死 recall 等用户路径。
-                # batch_size 只控制查询多少个无边节点（SELECT，I/O 远小于写入），
-                # 真正的 I/O 限制器是 max_edges_per_run=60（限制 INSERT 量）。
-                # batch_size=5 补建速度（240/小时）可能跟不上活跃对话的新节点
-                # 创建；提到 10（480/小时）更安全，仍由 max_edges_per_run 兜底。
-                linked = await asyncio.wait_for(
-                    self.memory.concept_graph.db.batch_link_recent(batch_size=10),
-                    timeout=30.0,
-                )
-                if linked > 0:
-                    logger.info("concept_graph.curator_linked", edges=linked)
+                # P0 根治（07-31 21:11 生产事故根因）：
+                # 根因：ConceptDB(self.db._conn) 共享主 aiosqlite 连接，curator 的
+                # executemany+commit 在 USB 盘上慢（30s+），阻塞主连接的所有 await，
+                # 导致 memory encode/extract_instincts 等后台任务集体卡 60s+。
+                # aiosqlite 单连接单线程串行执行，curator 的慢写独占连接线程，
+                # 其他协程的 DB 操作排队等待 → 事件循环表面冻结。
+                # 修复：curator 创建独立 aiosqlite 连接（WAL+busy_timeout），写操作
+                # 在独立连接的线程执行，不占用主连接的 await，事件循环不冻结。
+                # WAL 模式支持多连接并发，busy_timeout=5000 处理偶发写锁竞争。
+                import aiosqlite
+                from db.db_concept import ConceptDB
+                _curator_conn = await aiosqlite.connect(str(self.db.db_path))
+                _curator_conn.row_factory = aiosqlite.Row
+                await _curator_conn.execute("PRAGMA journal_mode=WAL")
+                await _curator_conn.execute("PRAGMA busy_timeout=5000")
+                try:
+                    _curator_concept_db = ConceptDB(_curator_conn)
+                    # N10: batch_size 30→10，配合 max_edges_per_run=60 限制写入量
+                    linked = await asyncio.wait_for(
+                        _curator_concept_db.batch_link_recent(batch_size=10),
+                        timeout=30.0,
+                    )
+                    if linked > 0:
+                        logger.info("concept_graph.curator_linked", edges=linked)
+                finally:
+                    await _curator_conn.close()
             except asyncio.TimeoutError:
-                # CodeRabbit #5→#A 修正：_run_scheduled_tasks 由每次对话触发
-                # （run_post_message_tasks → _run_scheduled_tasks），_should_run 用
-                # last_run 判断 30 分钟间隔。若超时后不更新 last_run，下次对话会
-                # 立即重试 curator → 再次超时 → USB I/O 雪崩（与 N10 修复目标冲突）。
-                # 故超时也更新 last_run，让 30 分钟内不重试；未完成节点由下次
-                # curator 自然拾起（查询的是"无边节点"，未完成的仍在列表里）。
-                #
-                # I1 观测增强：超时增加 metrics 计数。dashboard 上若
-                # `concept_graph.curator_timeout` 频率上升，说明 I/O 压力回归
-                # （N10 修复目标：单次 curator I/O <10s，30s 超时是最后防线），
-                # 值班可通过 metrics 仪表盘快速感知并干预，避免再次饿死 recall。
+                # CodeRabbit #5→#A 修正：超时也更新 last_run，30 分钟内不重试，
+                # 避免连续超时 → USB I/O 雪崩。未完成节点由下次 curator 拾起。
                 logger.warning("concept_graph.curator_timeout",
                                hint="batch_link 30s 超时，30 分钟后下轮重试本批未完成节点")
                 metrics.inc("concept_graph.curator_timeout")
+            _curator_ms = int((time.time() - _curator_t0) * 1000)
+            if _curator_ms > 10000:
+                logger.warning(f"concept_graph.curator_slow elapsed_ms={_curator_ms}")
             await self.db.set_cron_last_run("concept_link_curator")
         except (OSError, RuntimeError) as e:
             logger.warning("bg.concept_link_curator_failed", error=str(e))

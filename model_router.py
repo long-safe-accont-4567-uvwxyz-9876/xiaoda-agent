@@ -1190,7 +1190,14 @@ class ModelRouter:
         # 后台任务之间用 _bg_llm_semaphore(1) 串行，彻底消除 agnes 并发竞争。
         _is_bg_llm = task_type in self._BG_LLM_TASKS
         _current_task = asyncio.current_task()
+        _preempt_wait_start = time.time()
         if _is_bg_llm:
+            # 可观测性：后台任务进入让路等待（量化让路触发频率与等待时长）
+            _chat_busy = not self._chat_idle.is_set()
+            _pending_bg = len(self._active_bg_llm_tasks)
+            if _chat_busy or _pending_bg > 0:
+                logger.info("router.bg_llm_yield_enter", task=task_type,
+                            chat_busy=_chat_busy, pending_bg=_pending_bg)
             await self._chat_idle.wait()
             await self._bg_llm_semaphore.acquire()
             try:
@@ -1198,12 +1205,27 @@ class ModelRouter:
             except BaseException:
                 self._bg_llm_semaphore.release()
                 raise
+            # 量化让路等待时长（从进入到拿到 semaphore 并确认 chat 空闲）
+            _yield_ms = int((time.time() - _preempt_wait_start) * 1000)
+            if _yield_ms > 50:  # >50ms 说明真的让路了
+                logger.info("router.bg_llm_yield_done", task=task_type,
+                            yield_ms=_yield_ms)
+                metrics.observe("router.bg_llm_yield_ms", _yield_ms)
         elif task_type == "chat":
             self._chat_idle.clear()
+            # 可观测性：主 chat 抢占——取消所有未完成的后台 LLM 任务
+            _cancelled = 0
             for _bg_task in tuple(self._active_bg_llm_tasks):
                 if _bg_task is not _current_task and not _bg_task.done():
                     _bg_task.cancel()
+                    _cancelled += 1
             await asyncio.sleep(0)
+            if _cancelled > 0:
+                logger.warning("router.chat_preempt_cancelled",
+                               cancelled_bg=_cancelled,
+                               remaining_bg=len(self._active_bg_llm_tasks))
+                metrics.inc("router.chat_preempt_count")
+                metrics.observe("router.chat_preempt_cancelled_n", _cancelled)
 
         if _is_bg_llm and _current_task is not None:
             self._active_bg_llm_tasks.add(_current_task)

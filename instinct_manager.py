@@ -146,7 +146,9 @@ class InstinctManager:
         messages = [{"role": "user", "content": prompt}]
 
         # 优先调用硅基流动免费模型，失败则降级到 router
+        _llm_t0 = time.time()
         result = await self._call_free_model(messages, temperature=0.3, max_tokens=800)
+        _free_ms = int((time.time() - _llm_t0) * 1000)
         if result is None:
             try:
                 # 修复 P0-2 同类 bug：降级路由加 10s 超时保护
@@ -155,6 +157,7 @@ class InstinctManager:
                 # instinct 提取是后台任务，不应阻塞这么久；超时则放弃本次提取。
                 # task_type 用 memory_encoding（后台任务），让 route() 的 _chat_idle 机制
                 # 使其自动让路于主 chat，避免和主对话并发竞争 agnes API（并发排队根因）。
+                _route_t0 = time.time()
                 result = await asyncio.wait_for(
                     self.router.route(
                         task_type="memory_encoding",
@@ -164,6 +167,9 @@ class InstinctManager:
                     ),
                     timeout=10.0,
                 )
+                _route_ms = int((time.time() - _route_t0) * 1000)
+                if _route_ms > 5000:
+                    logger.warning(f"instinct.route_slow elapsed_ms={_route_ms} free_ms={_free_ms}")
             except asyncio.TimeoutError:
                 logger.warning("instinct.extract_router_timeout, skip this round")
                 return
@@ -178,6 +184,7 @@ class InstinctManager:
         # 查询已有 active instincts 的 content，用于插入前去重
         # 根因修复：原代码不查重，LLM 每轮措辞略有不同但语义重复的本能被无限 INSERT
         # （4714 条，99.7% use_count=0）。这里用 difflib 检查相似度，O(new*active) 很快。
+        _db_t0 = time.time()
         existing_cursor = await self.db._conn.execute(
             "SELECT content FROM instincts WHERE status='active'"
         )
@@ -269,6 +276,9 @@ class InstinctManager:
                     rows_to_insert,
                 )
                 await self.db._conn.commit()
+                _db_ms = int((time.time() - _db_t0) * 1000)
+                if _db_ms > 2000:
+                    logger.warning(f"instinct.db_slow elapsed_ms={_db_ms} active_count={len(existing_contents)}")
                 logger.info("instinct.extracted", count=len(rows_to_insert), session=session_id)
             except Exception as e:
                 logger.debug("instinct.insert_failed", error=str(e))
