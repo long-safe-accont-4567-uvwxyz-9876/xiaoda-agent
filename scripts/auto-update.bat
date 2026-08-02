@@ -19,8 +19,8 @@ if "%INSTALL_DIR:~-1%"=="\" set "INSTALL_DIR=%INSTALL_DIR:~0,-1%"
 set "VERSION_FILE=%INSTALL_DIR%\.version"
 set "AUTO_UPDATE_FLAG=%INSTALL_DIR%\.auto_update"
 
-:: Check if auto-update is enabled
-if not exist "%AUTO_UPDATE_FLAG%" goto :eof
+:: 手动更新脚本：用户双击本文件（或「检查更新」快捷方式）时才执行
+:: 启动主程序时不再自动调用本脚本 —— 启动与更新是两个独立操作
 
 :: Get current version
 set "CURRENT_VERSION="
@@ -29,12 +29,12 @@ if exist "%VERSION_FILE%" (
 )
 
 :: Check for updates using PowerShell (delegated to .ps1 to avoid cmd escaping hell)
-echo   Checking for updates...
+echo   正在检查更新...
 
 set "PS1_PATH=%~dp0auto-update.ps1"
 if not exist "%PS1_PATH%" (
     echo   [ERROR] auto-update.ps1 not found: %PS1_PATH%
-    goto :eof
+    goto :pause_end
 )
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1_PATH%" ^
@@ -44,7 +44,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1_PATH%" ^
     -VerFile "%VERSION_FILE%" ^
     -InstallDir "%INSTALL_DIR%"
 
-:: 不自动启用自动更新；用户需显式创建 .auto_update 文件来开启
-:: （避免未经用户同意自动覆盖安装）
-
+:pause_end
+echo.
+pause
 goto :eof

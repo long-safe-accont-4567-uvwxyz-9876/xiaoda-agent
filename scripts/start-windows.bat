@@ -50,11 +50,7 @@ echo   =     Xiaoda Agent            =
 echo   ================================
 echo.
 
-:: Auto-update check (if enabled)
-if exist "%~dp0auto-update.bat" (
-    call "%~dp0auto-update.bat"
-)
-
+:: 启动时不检查更新 —— 更新是独立操作，请双击「检查更新」快捷方式或 auto-update.bat
 :: Find the executable
 :: Onedir build: exe is either in same dir as this bat, or in dist\xiaoda-agent\
 set "EXE_PATH="
@@ -81,8 +77,11 @@ if not exist "logs" mkdir "logs"
 :: Force UTF-8 output encoding (prevents UnicodeEncodeError with GBK on Chinese Windows)
 set PYTHONIOENCODING=utf-8
 
-:: Use WEBUI_PORT environment variable with fallback to 8082
-if not defined WEBUI_PORT set "WEBUI_PORT=8082"
+:: 安装包强制 8082 端口（无条件覆盖，避免继承开发机的 WEBUI_PORT 环境变量）
+:: 开发环境请直接 `python agent.py --web --port 8080`，不走此 bat
+:: 如需临时改端口：set WEBUI_PORT=8090 && start-windows.bat（在子 shell 里 set 无效，
+::   需编辑本行或用 cmd /c "set WEBUI_PORT=8090 && start-windows.bat"）
+set "WEBUI_PORT=8082"
 
 :: Check if port is already in use
 netstat -ano | findstr ":%WEBUI_PORT% " | findstr "LISTENING" >nul 2>nul

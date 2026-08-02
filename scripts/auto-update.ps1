@@ -24,8 +24,9 @@ param(
 # 严格模式：任何未捕获异常都进入 catch 块执行回滚
 $ErrorActionPreference = "Stop"
 
-# Check if auto-update is enabled
-if (-not (Test-Path $FlagFile)) { exit 0 }
+# 更新改为手动触发（用户双击 auto-update.bat 或「检查更新」快捷方式）
+# 不再检查 .auto_update 标志文件 —— 用户主动运行本脚本即视为同意更新
+# $FlagFile 参数保留是为了向后兼容旧版 auto-update.bat 的传参，不再起门控作用
 
 # CodeRabbit 审查：per-user named mutex 保证更新事务串行化
 # 两个同时启动的更新共享临时/备份路径，会互相删工作文件导致回滚失效
