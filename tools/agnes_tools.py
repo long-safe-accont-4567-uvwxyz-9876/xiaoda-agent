@@ -77,6 +77,53 @@ async def close_agnes_clients() -> None:
         _agnes_http_client = None
 
 
+def _parse_agnes_error(e: Exception) -> tuple[str, str, int]:
+    """解析 agnes API 错误，返回 (error_code, error_message, status_code)。
+
+    openai SDK 的 BadRequestError/RateLimitError/APIStatusError 携带 body 字段，
+    结构为 {'error': {'code': '...', 'message': '...', 'type': '...'}}。
+    旧实现 logger.error("agnes.image_generate_failed", error=str(e)) 用关键字参数
+    传 error，但 loguru format 未渲染 extra 字段 → journalctl 里只剩事件名，无错误
+    详情，导致 content_policy_violation 等关键错误无法诊断。
+    """
+    error_code = ""
+    error_msg = str(e)
+    status_code = getattr(e, "status_code", 0) or 0
+    # 优先从 body 字段提取（openai SDK 标准属性）
+    body = getattr(e, "body", None)
+    if isinstance(body, dict):
+        err_obj = body.get("error", body)
+        if isinstance(err_obj, dict):
+            error_code = err_obj.get("code", "") or err_obj.get("type", "")
+            error_msg = err_obj.get("message", "") or error_msg
+    # 兜底：从 response 解析
+    if not error_code and hasattr(e, "response"):
+        try:
+            rbody = e.response.json()
+            err_obj = rbody.get("error", rbody) if isinstance(rbody, dict) else {}
+            if isinstance(err_obj, dict):
+                error_code = error_code or err_obj.get("code", "") or err_obj.get("type", "")
+                error_msg = err_obj.get("message", "") or error_msg
+        except Exception:
+            pass
+    return error_code, error_msg, status_code
+
+
+def _friendly_image_error(error_code: str, error_msg: str) -> str:
+    """把 agnes 错误码翻译成对用户/LLM 有用的提示。"""
+    if error_code == "content_policy_violation":
+        return (
+            "图片被 Agnes 内容策略拒绝（请避免使用版权角色名、名人名或敏感描述，"
+            "改用纯外貌描述，例如把'原神的纳西妲'改成'绿发绿衣的萝莉少女'）。"
+            f"原始原因：{error_msg}"
+        )
+    if error_code in ("rate_limit_exceeded", "rate_limit"):
+        return "图片生成频率超限，请稍后再试。"
+    if error_code in ("invalid_image_size", "invalid_request_error"):
+        return f"图片参数有误：{error_msg}"
+    return f"图片生成失败[{error_code or 'unknown'}]：{error_msg}"
+
+
 @register_tool(
     name="agnes_image_generate",
     description="使用 AI 生成图片。支持文生图和图生图。当用户要求生成、画、绘制图片时必须调用此工具，不要用文字描述生成过程或假装已生成。",
@@ -132,8 +179,14 @@ async def agnes_image_generate(prompt: str, image_url: str = "",
 
         return ToolResult.ok("\n".join(results) if results else "图片生成完成但无结果")
     except Exception as e:
-        logger.error("agnes.image_generate_failed", error=str(e))
-        return ToolResult.fail(f"图片生成失败: {e}")
+        code, msg, status = _parse_agnes_error(e)
+        # f-string 确保错误详情进日志（旧 logger.error("...", error=str(e)) 的 extra 字段
+        # loguru format 不渲染，导致 journalctl 里只剩事件名，content_policy_violation 无法诊断）
+        logger.error(
+            f"agnes.image_generate_failed code={code} status={status} "
+            f"prompt={prompt[:100]!r} msg={msg}"
+        )
+        return ToolResult.fail(_friendly_image_error(code, msg))
 
 
 @register_tool(
@@ -178,8 +231,17 @@ async def agnes_video_generate(prompt: str, seconds: float = 5, fps: int = 24) -
             client, _agnes_url, _agnes_key, video_id
         )
     except Exception as e:
-        logger.error("agnes.video_generate_failed", error=str(e))
-        return ToolResult.fail(f"视频生成失败: {e}")
+        code, msg, status = _parse_agnes_error(e)
+        logger.error(
+            f"agnes.video_generate_failed code={code} status={status} "
+            f"prompt={prompt[:100]!r} msg={msg}"
+        )
+        if code == "content_policy_violation":
+            return ToolResult.fail(
+                "视频被 Agnes 内容策略拒绝（请避免版权角色名/名人名/敏感描述，改用纯外貌描述）。"
+                f"原始原因：{msg}"
+            )
+        return ToolResult.fail(f"视频生成失败[{code or 'unknown'}]：{msg}")
 
 
 async def _agnes_create_video_task(

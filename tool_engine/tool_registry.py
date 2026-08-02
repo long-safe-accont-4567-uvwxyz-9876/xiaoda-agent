@@ -68,11 +68,12 @@ _SOURCE_PRIORITY: dict[str, int] = {
     "sdk_mcp": 30,
 }
 
-# 分类优先级：对话/情感/记忆 > 文件/代码 > 系统/网络
+# 分类优先级：对话/情感/记忆/创作 > 文件/代码 > 系统/网络
 _CATEGORY_PRIORITY: dict[str, int] = {
     "emotion": 95,
     "memory": 90,
     "conversation": 85,
+    "creative": 85,
     "knowledge": 80,
     "file": 60,
     "code": 55,
