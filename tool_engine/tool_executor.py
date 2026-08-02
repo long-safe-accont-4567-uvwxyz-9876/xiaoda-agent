@@ -5,7 +5,7 @@ import time
 import inspect
 from loguru import logger
 
-from .tool_registry import get_tool, ToolResult, resolve_tool_func
+from .tool_registry import get_tool, ToolResult, resolve_tool_func, is_tool_enabled
 from .approver import (
     Approver,
     DefaultApprover,
@@ -87,7 +87,7 @@ class ToolExecutor:
             logger.warning("tool_executor.not_found", tool=tool_name)
             return ToolResult.fail(f"还没有学会「{tool_name}」这个技能呢……")
 
-        if tool.get("enabled") is False:
+        if not is_tool_enabled(tool_name):
             logger.warning("tool_executor.disabled", tool=tool_name)
             return ToolResult.fail(f"「{tool_name}」已被管理员全局停用了呢～")
 

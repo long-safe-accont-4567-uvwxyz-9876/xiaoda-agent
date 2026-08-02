@@ -342,6 +342,23 @@ def invalidate_tool_cache() -> None:
         _schema_cache = None
 
 
+def is_tool_enabled(name: str) -> bool:
+    """判断工具是否处于启用状态（含 webui_overrides 中的禁用配置）。
+
+    供 ``to_openai_tools`` 和 ``ToolExecutor`` 统一使用，确保懒加载或 MCP
+    后注册的工具也能被 WebUI 禁用配置正确拦截。
+    """
+    tool = _tools.get(name)
+    if tool is None:
+        return False
+    if tool.get("enabled") is False:
+        return False
+    o = _webui_tool_overrides.get(name)
+    if isinstance(o, dict) and o.get("enabled") is False:
+        return False
+    return True
+
+
 def to_openai_tools() -> list[dict]:
     """生成 OpenAI function-calling 格式的工具列表 (带缓存，受上限限制)."""
     global _schema_cache
@@ -352,14 +369,12 @@ def to_openai_tools() -> list[dict]:
     metrics.inc("tool_registry.schema_cache.miss")
 
     enabled = []
-    for t in _tools.values():
+    # 使用 list() 快照迭代，避免并发注册工具时触发
+    # RuntimeError: dictionary changed size during iteration
+    for t in list(_tools.values()):
         if t.get("max_frequency", 0) == 0:
             continue
-        if t.get("enabled") is False:
-            continue
-        # 检查 webui_overrides 中的禁用配置（解决懒加载/MCP 后注册工具未被 apply_tool_overrides 覆盖的问题）
-        o = _webui_tool_overrides.get(t["name"])
-        if isinstance(o, dict) and o.get("enabled") is False:
+        if not is_tool_enabled(t["name"]):
             continue
         enabled.append(t)
 

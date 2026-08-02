@@ -131,5 +131,101 @@ def test_lazy_resolve_failure_returns_fail():
         unregister_tool(tool_name)
 
 
+def test_webui_override_blocks_executor_for_late_registered_tool():
+    """WebUI 禁用的工具，即使 apply_tool_overrides 之后才注册，execute 也必须拒绝。
+
+    场景：MCP 或懒加载工具在启动期 apply_tool_overrides 执行后才注册，此时
+    工具 dict 的 enabled 字段未被覆写，只有 _webui_tool_overrides 中保存了禁用
+    配置。to_openai_tools 会过滤掉它，但 LLM 仍可能通过上下文/注入直接调用工具名。
+    ToolExecutor 必须同样依据 _webui_tool_overrides 拒绝执行，否则管理员禁用的
+    工具仍会被执行。
+    """
+    import tool_engine.tool_registry as _registry
+    from tool_engine.tool_registry import (
+        register_tool, unregister_tool, set_tool_overrides,
+        ToolPermission, to_openai_tools,
+    )
+    from tool_engine.tool_executor import ToolExecutor
+
+    tool_name = "_test_override_late_disabled"
+    old_overrides = dict(_registry._webui_tool_overrides)
+    # 先设置 webui override 禁用，再注册工具（模拟 late registration）
+    set_tool_overrides({tool_name: {"enabled": False}})
+
+    @register_tool(
+        name=tool_name,
+        description="测试 webui override 禁用后注册的工具",
+        schema={"type": "object", "properties": {}},
+        permission=ToolPermission.READ_ONLY,
+    )
+    def _tool_impl():
+        from tool_engine.tool_registry import ToolResult
+        return ToolResult.ok("should not run")
+
+    try:
+        tool = _registry.get_tool(tool_name)
+        assert tool is not None
+        # 关键：late registered 工具的 dict 自身没有 enabled=False
+        assert tool.get("enabled") is not False
+
+        # to_openai_tools 应将其过滤
+        openai_names = {t["function"]["name"] for t in to_openai_tools()}
+        assert tool_name not in openai_names
+
+        # ToolExecutor 也应拒绝执行，而不是实际运行
+        executor = ToolExecutor(db=None)
+        result = asyncio.run(executor.execute(tool_name, {}))
+        assert not result.success, f"被禁用的工具不应执行: {result.data}"
+        assert "停用" in result.error
+    finally:
+        set_tool_overrides(old_overrides)
+        unregister_tool(tool_name)
+
+
+def test_to_openai_tools_concurrent_registration_safe():
+    """to_openai_tools 在并发注册新工具时不应因字典扩容而崩溃。"""
+    import threading
+    from tool_engine.tool_registry import register_tool, to_openai_tools, unregister_tool, ToolPermission
+
+    errors: list[Exception] = []
+    barrier = threading.Barrier(2)
+
+    def _register_many():
+        barrier.wait()
+        for i in range(30):
+            try:
+                @register_tool(
+                    name=f"_test_concurrent_{i}",
+                    description="并发注册测试工具",
+                    schema={"type": "object", "properties": {}},
+                    permission=ToolPermission.READ_ONLY,
+                )
+                def _impl():
+                    from tool_engine.tool_registry import ToolResult
+                    return ToolResult.ok("ok")
+            except Exception as e:
+                errors.append(e)
+
+    def _iterate_many():
+        barrier.wait()
+        for _ in range(60):
+            try:
+                to_openai_tools()
+            except RuntimeError as e:
+                errors.append(e)
+
+    t1 = threading.Thread(target=_register_many)
+    t2 = threading.Thread(target=_iterate_many)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    for i in range(30):
+        unregister_tool(f"_test_concurrent_{i}")
+
+    assert not errors, f"并发迭代期间出现错误: {errors[:3]}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-x"])
