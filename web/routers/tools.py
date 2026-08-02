@@ -54,8 +54,10 @@ def list_tools_meta() -> list[dict]:
 
 def apply_tool_overrides() -> None:
     """启动时调用：把 webui_overrides 中的工具设置应用到 registry。"""
-    from tool_engine.tool_registry import get_tool
+    from tool_engine.tool_registry import get_tool, set_tool_overrides
     overrides = _cfg().get("tools", {}) or {}
+    # 保存全局 overrides，让 to_openai_tools() 过滤时能查到（解决懒加载/MCP 后注册工具的问题）
+    set_tool_overrides(overrides)
     for name, o in overrides.items():
         tool = get_tool(name)
         if not tool or not isinstance(o, dict):
@@ -75,8 +77,7 @@ async def get_tools() -> Any:
 
 @router.put("/tools/{name}", response_model=Envelope[dict])
 async def update_tool(name: str, body: dict, request: Request) -> Any:
-    from tool_engine.tool_registry import get_tool, to_openai_tools
-    to_openai_tools()
+    from tool_engine.tool_registry import get_tool, invalidate_tool_cache
     tool = get_tool(name)
     if not tool:
         raise HTTPException(404, f"工具 {name} 不存在")
@@ -93,6 +94,9 @@ async def update_tool(name: str, body: dict, request: Request) -> Any:
         tool["requires_confirmation"] = bool(body["requires_confirmation"])
         override["requires_confirmation"] = bool(body["requires_confirmation"])
     cfg.set(f"tools.{name}", override)
+    # 更新全局 overrides 并清空 schema 缓存，让 to_openai_tools() 下次调用时反映最新配置
+    from tool_engine.tool_registry import set_tool_overrides
+    set_tool_overrides(_cfg().get("tools", {}) or {})
     core = request.app.state.core
     await core.db.insert_audit_log("webui.tools.update", "webui",
                                    json.dumps({name: body}, ensure_ascii=False))

@@ -50,6 +50,11 @@ _schema_cache: list | None = None
 _schema_version: int = 0
 _schema_lock = threading.Lock()
 
+# webui_overrides 中的工具配置（enabled/max_frequency 等）。
+# 解决懒加载/MCP 后注册的工具在 apply_tool_overrides() 执行时还没注册的问题：
+# to_openai_tools() 过滤时直接查此 dict，不依赖预先回写的 enabled 字段。
+_webui_tool_overrides: dict[str, dict] = {}
+
 # ── 工具数量上限管理 ──────────────────────────────────────
 # 聊天 agent 优先保证对话流畅，工具不宜过多（DeepSeek function calling 舒适区间）
 MAX_ENABLED_TOOLS = 60
@@ -318,6 +323,25 @@ def _tool_priority(tool: dict) -> int:
     return source_score + cat_score
 
 
+def set_tool_overrides(overrides: dict) -> None:
+    """设置 webui 工具 overrides，并清空 schema 缓存。
+
+    由 web.routers.tools.apply_tool_overrides() 和 PUT /tools/{name} 调用。
+    to_openai_tools() 过滤时直接查此 dict，确保懒加载/MCP 后注册的工具也能正确应用禁用配置。
+    """
+    global _webui_tool_overrides, _schema_cache
+    _webui_tool_overrides = overrides or {}
+    with _schema_lock:
+        _schema_cache = None
+
+
+def invalidate_tool_cache() -> None:
+    """清空工具 schema 缓存，下次 to_openai_tools() 调用时重新计算。"""
+    global _schema_cache
+    with _schema_lock:
+        _schema_cache = None
+
+
 def to_openai_tools() -> list[dict]:
     """生成 OpenAI function-calling 格式的工具列表 (带缓存，受上限限制)."""
     global _schema_cache
@@ -332,6 +356,10 @@ def to_openai_tools() -> list[dict]:
         if t.get("max_frequency", 0) == 0:
             continue
         if t.get("enabled") is False:
+            continue
+        # 检查 webui_overrides 中的禁用配置（解决懒加载/MCP 后注册工具未被 apply_tool_overrides 覆盖的问题）
+        o = _webui_tool_overrides.get(t["name"])
+        if isinstance(o, dict) and o.get("enabled") is False:
             continue
         enabled.append(t)
 
