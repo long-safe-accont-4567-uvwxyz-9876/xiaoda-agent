@@ -79,7 +79,7 @@ async def close_agnes_clients() -> None:
 
 @register_tool(
     name="agnes_image_generate",
-    description="使用 AI 生成图片。支持文生图和图生图。",
+    description="使用 AI 生成图片。支持文生图和图生图。当用户要求生成、画、绘制图片时必须调用此工具，不要用文字描述生成过程或假装已生成。",
     schema={
         "type": "object",
         "properties": {

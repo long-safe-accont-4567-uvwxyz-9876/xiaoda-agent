@@ -1265,9 +1265,9 @@ class MessageProcessorMixin:
 
         _tools_list = to_openai_tools()
         tools = _tools_list if _tools_list else None
-        has_image = image_data or ("[图片:" in user_input and "已保存到" in user_input)
-        if has_image and tools:
-            tools = None
+        # 有图片时也保留完整工具列表——用户可能发参考图+要求生成图片（图生图场景），
+        # 禁用工具会导致 agnes_image_generate 无法调用，LLM 只能用文字"假装"已生成。
+        # 让 LLM 自行决定是否调用工具，符合下方"统一保留完整工具列表"的原则。
 
         # P0 修复（用户明确要求"取消对话通道分类机制"）：
         # 移除 filter_tools_for_simple_task 调用——通道分类性价比太低，
