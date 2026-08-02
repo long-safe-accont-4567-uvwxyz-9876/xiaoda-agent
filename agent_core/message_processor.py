@@ -590,8 +590,12 @@ class MessageProcessorMixin:
             # P0-2：同步到 ContextVar，保持与实例属性一致
             _system_context_var.set(self._system_context)
         # 初始化 + 安全检查 + 上下文恢复
+        _stage_t0 = time.time()
         trace, session_id, allowed, reason = await self._init_and_restore_context(
             ctx, user_input, user_id, source, status_callback, user_openid, session_id)
+        _stage_restore_ms = int((time.time() - _stage_t0) * 1000)
+        if _stage_restore_ms > 1000:
+            logger.warning(f"agent.stage_slow stage=init_restore elapsed_ms={_stage_restore_ms}")
         if not allowed:
             trace.warning("agent.blocked", reason=reason)
             return ProcessResult(reply="")
@@ -634,6 +638,7 @@ class MessageProcessorMixin:
             trace.info("agent.greeting_shortcut_hit", keyword=user_input[:20])
             return greeting_result
 
+        _stage_t1 = time.time()
         chat_targets = await self._parse_chat_target(user_input, user_id)
         clean_input = ChatProcessor.clean_mention_from_input(user_input)
 
@@ -672,9 +677,14 @@ class MessageProcessorMixin:
         # think/search 模式仍正常工作（通过 system_context 注入模式提示，不影响主路径）
 
         # 主处理路径：完整记忆检索 + LLM 调用 + 后处理（统一入口，不再分流）
+        _stage_t2 = time.time()
         result = await self._run_main_process_path(
             ctx, user_input, clean_input, user_id, source, user_openid, session_id,
             status_callback, image_data, is_master, force_voice, chat_targets, trace)
+        _stage_main_ms = int((time.time() - _stage_t2) * 1000)
+        if _stage_main_ms > 5000:
+            _pre_ms = int((_stage_t2 - _stage_t1) * 1000)
+            logger.warning(f"agent.stage_slow stage=main_path elapsed_ms={_stage_main_ms} pre_main_ms={_pre_ms} restore_ms={_stage_restore_ms}")
 
         return result
 
@@ -795,12 +805,20 @@ class MessageProcessorMixin:
                                       is_master: Any, force_voice: Any, chat_targets: Any, trace: Any) -> Any:
         """主处理路径：完整记忆检索 + LLM 调用 + 后处理。"""
         # 记忆检索阶段
+        _mp_t0 = time.time()
         emotion, emotion_label = await self._setup_main_emotion_and_memory(
             user_input, clean_input, chat_targets, is_master, ctx)
+        _mp_memory_ms = int((time.time() - _mp_t0) * 1000)
+        if _mp_memory_ms > 3000:
+            logger.warning(f"agent.stage_slow stage=memory_retrieval elapsed_ms={_mp_memory_ms}")
 
         # 消息构建阶段
+        _mp_t1 = time.time()
         messages, _pre_picked_sticker, tools = await self._build_main_messages(
             user_input, is_master, image_data, clean_input, emotion, user_id, source)
+        _mp_build_ms = int((time.time() - _mp_t1) * 1000)
+        if _mp_build_ms > 2000:
+            logger.warning(f"agent.stage_slow stage=build_messages elapsed_ms={_mp_build_ms}")
 
         # 任务类型解析与熔断器检查
         early_result, task_type, _cb_max_tokens, circuit_state, _model_cfg = \
@@ -809,10 +827,14 @@ class MessageProcessorMixin:
             return early_result
 
         # 主 LLM 调用 + 验收循环
+        _mp_t2 = time.time()
         is_owner = self.security.is_owner(user_id)
         reply, tool_results = await self._call_main_llm_with_verification(
             messages, tools, task_type, _model_cfg, _cb_max_tokens, circuit_state,
             status_callback, user_openid, session_id, trace, ctx, user_input, is_owner)
+        _mp_llm_ms = int((time.time() - _mp_t2) * 1000)
+        if _mp_llm_ms > 5000:
+            logger.warning(f"agent.stage_slow stage=llm_verify elapsed_ms={_mp_llm_ms} memory_ms={_mp_memory_ms} build_ms={_mp_build_ms}")
 
         # 后处理阶段（含媒体提取与隐私扫描）
         return await self._finalize_main_reply(

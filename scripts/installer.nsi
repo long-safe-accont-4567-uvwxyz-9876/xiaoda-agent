@@ -85,7 +85,8 @@ RMDir /r "$INSTDIR\web\dist"
 File /r "dist\xiaoda-agent\*.*"
 ; Explicitly include dotfiles (NSIS *.* may skip files starting with .)
 File "dist\xiaoda-agent\.version"
-; .auto_update 使用 /nonfatal：CI 不再默认创建此文件，用户需手动创建以启用自动更新
+; .auto_update 标志已废弃：更新改为手动触发（auto-update.bat 独立运行）
+; 保留 /nonfatal 以兼容旧构建目录，CI 不再生成此文件
 File /nonfatal "dist\xiaoda-agent\.auto_update"
 File /nonfatal "dist\xiaoda-agent\.env.example"
 ; 安装后清理可能残留的敏感文件（旧版升级时 .env 可能被保留）
@@ -106,12 +107,14 @@ Delete "$APPDATA\Xiaoda Agent\config\agents\xilian.json"
 Delete "$APPDATA\Xiaoda Agent\config\agents\nike.json"
 ClearErrors
 ; 快捷方式必须指向 start-windows.bat（唯一启动入口）：
-;   - 执行更新检查（auto-update.bat）防止用户运行旧版
 ;   - 启动看门狗，崩溃时自动重启
-;   - 直接运行 xiaoda-agent.exe 会绕过上述保护，更新后可能崩溃
+;   - 更新检查已分离到独立的「检查更新」快捷方式，启动时不再自动检查
+;   - 直接运行 xiaoda-agent.exe 会绕过看门狗保护，更新后可能崩溃
 CreateShortCut "$DESKTOP\小妲Agent.lnk" "$INSTDIR\start-windows.bat" "--desktop" "$INSTDIR\xiaoda-icon.ico" 0
 CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
 CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\小妲Agent.lnk" "$INSTDIR\start-windows.bat" "--desktop" "$INSTDIR\xiaoda-icon.ico" 0
+; 「检查更新」独立快捷方式 —— 启动主程序不再自动检查更新，用户需手动点此快捷方式
+CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\检查更新.lnk" "$INSTDIR\auto-update.bat" "" "$INSTDIR\xiaoda-icon.ico" 0
 CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\卸载.lnk" "$INSTDIR\uninstall.exe"
 ; 创建用户数据目录结构（供用户上传参考音频、表情包等）
 CreateDirectory "$PROFILE\.ai-agent\data\voice_refs"
