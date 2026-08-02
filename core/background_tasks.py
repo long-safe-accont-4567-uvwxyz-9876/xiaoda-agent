@@ -410,8 +410,10 @@ class BackgroundTaskManager:
             due_records = self._self_wake.check_due()
             for record in due_records:
                 _spawn(self._self_wake.fire(record.id))
-        except Exception as e:
-            logger.debug("bg.selfwake_check_failed", error=str(e))
+            # 清理已触发的记录，防止长时间运行内存泄漏（7×24 bot 场景）
+            self._self_wake.cleanup_fired()
+        except (ImportError, OSError, RuntimeError) as e:
+            logger.warning("bg.selfwake_check_failed", error=str(e))
 
     async def _auto_archive_sessions(self) -> None:
         try:

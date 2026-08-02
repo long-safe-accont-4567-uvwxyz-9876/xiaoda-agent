@@ -84,7 +84,7 @@ class TestSessionApprover:
     async def test_command_whitelist(self):
         """ALWAYS_COMMAND 决策后续相同命令自动放行"""
         approver = SessionApprover()
-        approver.allow_command("git status")
+        approver.allow_command("shell_command", "git status")
 
         req = ApprovalRequest(
             tool_name="shell_command",
@@ -92,6 +92,21 @@ class TestSessionApprover:
         )
         decision = await approver.approve(req)
         assert decision.outcome == ApprovalOutcome.ALWAYS_COMMAND
+
+    @pytest.mark.asyncio
+    async def test_command_whitelist_scoped_to_tool(self):
+        """命令白名单绑定工具名，工具 A 批准的命令不被工具 B 复用"""
+        approver = SessionApprover()
+        approver.allow_command("shell_command", "ls")
+
+        # 不同工具用相同命令不应命中白名单
+        req_other = ApprovalRequest(
+            tool_name="python_executor",
+            arguments={"code": "ls"},
+        )
+        decision = await approver.approve(req_other)
+        # 应委托内层（DefaultApprover 返回 ONCE），而非命中 ALWAYS_COMMAND
+        assert decision.outcome == ApprovalOutcome.ONCE
 
     @pytest.mark.asyncio
     async def test_delegates_to_inner_when_not_allowed(self):
@@ -141,17 +156,17 @@ class TestSessionApprover:
     async def test_revoke_command(self):
         """撤销命令白名单"""
         approver = SessionApprover()
-        approver.allow_command("ls -la")
-        assert approver.is_command_allowed("ls -la")
-        approver.revoke_command("ls -la")
-        assert not approver.is_command_allowed("ls -la")
+        approver.allow_command("shell_command", "ls -la")
+        assert approver.is_command_allowed("shell_command", "ls -la")
+        approver.revoke_command("shell_command", "ls -la")
+        assert not approver.is_command_allowed("shell_command", "ls -la")
 
     @pytest.mark.asyncio
     async def test_empty_command_not_whitelisted(self):
         """空命令不加入白名单"""
         approver = SessionApprover()
-        approver.allow_command("")
-        assert not approver.is_command_allowed("")
+        approver.allow_command("shell_command", "")
+        assert not approver.is_command_allowed("shell_command", "")
 
 
 class TestApproverProtocol:

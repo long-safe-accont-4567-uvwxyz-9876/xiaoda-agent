@@ -122,7 +122,6 @@ class SelfWakeManager:
 
     def __init__(self) -> None:
         self._records: dict[str, WakeRecord] = {}
-        self._lock = asyncio.Lock()
 
     def register(
         self,
@@ -149,14 +148,21 @@ class SelfWakeManager:
         """
         record_id = uuid.uuid4().hex[:16]
         fire_at = 0.0
-        if trigger == WakeTrigger.TIMER and timeout_seconds is not None:
+        timeout_at = 0.0
+        if trigger == WakeTrigger.TIMER:
+            # TIMER 模式必须指定 timeout_seconds，否则 fire_at=0 会立即触发
+            if timeout_seconds is None:
+                raise ValueError("timeout_seconds is required for TIMER trigger")
             fire_at = time.time() + timeout_seconds
+            # TIMER 记录在触发时间后 5 分钟未执行则过期清理，避免堆积
+            timeout_at = fire_at + 300.0
 
         record = WakeRecord(
             id=record_id,
             trigger=trigger,
             callback=callback,
             fire_at=fire_at,
+            timeout_at=timeout_at,
             job_id=job_id,
             event_key=event_key,
             note=note,
@@ -180,12 +186,15 @@ class SelfWakeManager:
         for record in self._records.values():
             if record.state == WakeState.FIRED:
                 continue
-            if record.is_expired:
-                record.state = WakeState.FIRED
-                continue
-            # 已被 complete_job/fire_event 标记为 DUE 的记录
+            # 已被 complete_job/fire_event 标记为 DUE 的记录优先处理
+            # （即使已过期也先触发，避免回调被静默跳过）
             if record.state == WakeState.DUE:
                 due.append(record)
+                continue
+            if record.is_expired:
+                record.state = WakeState.FIRED
+                logger.debug("selfwake.expired_skipped",
+                              id=record.id, trigger=record.trigger.value)
                 continue
             # TIMER 模式：检查是否到时
             if (record.state == WakeState.PENDING

@@ -268,6 +268,9 @@ class PermissionManager:
                 perm = tool.get("permission", ToolPermission.READ_ONLY)
                 if perm != ToolPermission.READ_ONLY:
                     return False, f"{self._mode.value} 模式是只读的，不允许执行 {tool_name}"
+            elif tool_name in _SENSITIVE_TOOLS:
+                # 未注册的敏感工具（如工具注册失败）也必须拒绝，与 INTERACTIVE/CUSTOM 模式一致
+                return False, f"{self._mode.value} 模式是只读的，不允许执行 {tool_name}"
 
         # GOAT 模式：全部放行，但对 shell 命令做防傻检查
         if self._mode == PermissionMode.GOAT:

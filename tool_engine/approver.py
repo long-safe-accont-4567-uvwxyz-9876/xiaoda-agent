@@ -116,32 +116,37 @@ class SessionApprover:
         """
         self._inner = inner or DefaultApprover()
         self._allowed_tools: set[str] = set()
-        self._allowed_commands: set[str] = set()
+        # 命令白名单绑定 (tool_name, command) 对，防止跨工具授权泄漏
+        # （工具 A 批准的命令不应被工具 B 复用）
+        self._allowed_commands: set[tuple[str, str]] = set()
 
     def allow_tool(self, tool_name: str) -> None:
         """将会话内的工具加入白名单（对应 ALWAYS_TOOL 决策）。"""
         self._allowed_tools.add(tool_name)
 
-    def allow_command(self, command: str) -> None:
-        """将会话内的具体命令加入白名单（对应 ALWAYS_COMMAND 决策）。"""
+    def allow_command(self, tool_name: str, command: str) -> None:
+        """将会话内的具体命令加入白名单（对应 ALWAYS_COMMAND 决策）。
+
+        绑定 tool_name + command 对，防止工具 A 批准的命令被工具 B 复用。
+        """
         if command:
-            self._allowed_commands.add(command)
+            self._allowed_commands.add((tool_name, command))
 
     def revoke_tool(self, tool_name: str) -> None:
         """撤销工具的会话级白名单。"""
         self._allowed_tools.discard(tool_name)
 
-    def revoke_command(self, command: str) -> None:
+    def revoke_command(self, tool_name: str, command: str) -> None:
         """撤销命令的会话级白名单。"""
-        self._allowed_commands.discard(command)
+        self._allowed_commands.discard((tool_name, command))
 
     def is_tool_allowed(self, tool_name: str) -> bool:
         """检查工具是否在会话白名单中。"""
         return tool_name in self._allowed_tools
 
-    def is_command_allowed(self, command: str) -> bool:
+    def is_command_allowed(self, tool_name: str, command: str) -> bool:
         """检查命令是否在会话白名单中。"""
-        return command in self._allowed_commands
+        return (tool_name, command) in self._allowed_commands
 
     async def approve(self, request: ApprovalRequest) -> ApprovalDecision:
         """审批逻辑：先查会话白名单，未命中则委托内层。"""
@@ -151,9 +156,9 @@ class SessionApprover:
                 outcome=ApprovalOutcome.ALWAYS_TOOL,
                 reason=f"tool {request.tool_name} already approved for session",
             )
-        # 检查命令级白名单（仅对 shell 类工具）
+        # 检查命令级白名单（绑定 tool_name，防止跨工具复用）
         command = request.arguments.get("command") or request.arguments.get("code") or ""
-        if command and command in self._allowed_commands:
+        if command and (request.tool_name, command) in self._allowed_commands:
             return ApprovalDecision(
                 outcome=ApprovalOutcome.ALWAYS_COMMAND,
                 reason=f"command already approved for session",
@@ -164,5 +169,5 @@ class SessionApprover:
         if decision.outcome == ApprovalOutcome.ALWAYS_TOOL:
             self.allow_tool(request.tool_name)
         elif decision.outcome == ApprovalOutcome.ALWAYS_COMMAND and command:
-            self.allow_command(command)
+            self.allow_command(request.tool_name, command)
         return decision

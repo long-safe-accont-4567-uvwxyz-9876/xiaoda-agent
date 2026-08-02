@@ -173,9 +173,13 @@ class ToolExecutor:
         if approval_decision.outcome == ApprovalOutcome.DENY:
             logger.info("tool_executor.approval_denied",
                         tool=tool_name, reason=approval_decision.reason)
-            return ToolResult.fail(
+            denial_result = ToolResult.fail(
                 f"操作「{tool_name}」已被拒绝执行：{approval_decision.reason}"
             )
+            # 拒绝的操作也写审计日志，保证安全溯源链完整
+            if self.db:
+                await self._write_audit_log(tool_name, arguments, denial_result, user_id)
+            return denial_result
 
         _start = time.time()
         # S3: 重试机制 — 瞬时错误自动重试 + 指数退避
