@@ -371,3 +371,109 @@ async def test_query_uses_index_learnings_status_created(tmp_db: DatabaseManager
     plan_text = " | ".join(plans)
     assert _uses_index(plans), f"未走索引: {plan_text}"
     assert "idx_lrn_status_created" in plan_text, f"未走预期复合索引: {plan_text}"
+
+
+# ============================================================
+# write_transaction 回归测试 (P0: 数据完整性 + 崩溃路径)
+#
+# 修复前缺陷:
+#   1. 未初始化 (_conn is None) 时进入事务 → yield None 给调用方,
+#      随后 await self._conn.commit() 抛 AttributeError, finally 块中
+#      self._conn.rollback() 再次 AttributeError, 掩盖原始异常。
+#   2. close() 未获取 _write_tx_lock, 可能在 yield→commit 之间把
+#      _conn 置空, 导致 commit/rollback 点处 AttributeError。
+#   3. yield 体中抛业务异常时, 若 _conn 恰好为 None, rollback 会
+#      在 finally 中再抛异常, 业务异常被丢失。
+# ============================================================
+
+async def test_write_transaction_raises_before_yield_when_uninitialized():
+    """修复验证 #1: 未 init() 时 write_transaction 应在 yield 前抛 RuntimeError,
+    不会把 None 当连接暴露给调用方。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = DatabaseManager(db_path=os.path.join(tmpdir, "x.db"))
+        # 故意不 await db.init() → _conn 仍为 None
+        saw_body = False
+        with pytest.raises(RuntimeError, match="connection not initialized"):
+            async with db.write_transaction() as conn:
+                # 如果执行到这里, 说明 yield 了一个(空)连接 → 未通过
+                saw_body = True
+                _ = conn.execute("SELECT 1")
+        assert saw_body is False, (
+            "write_transaction 在抛错前 yield 了 None 连接, "
+            "调用方能访问到无效句柄 (修复前缺陷)")
+
+
+async def test_write_transaction_commit_persists(tmp_db: DatabaseManager):
+    """修复验证 #2: 正常路径 commit 成功, 数据被持久化 (非回归, 语义基线)"""
+    async with tmp_db.write_transaction() as conn:
+        await conn.execute(
+            "INSERT INTO learnings "
+            "(learning_id, category, priority, status, area, summary, "
+            " source, pattern_key, recurrence_count, first_seen, last_seen, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("LRN-TX1", "bug", "high", "pending", "test", "sum",
+             "manual", "", 1, 1.0, 1.0, 1.0),
+        )
+    # 事务外查询: 数据必须已持久化
+    cur = await tmp_db._conn.execute(
+        "SELECT COUNT(*) FROM learnings WHERE learning_id=?",
+        ("LRN-TX1",),
+    )
+    (n,) = await cur.fetchone()
+    assert n == 1, "write_transaction 正常退出后未 commit"
+
+
+async def test_write_transaction_exception_rolls_back(tmp_db: DatabaseManager):
+    """修复验证 #3: 体中抛异常时回滚, 不留下半写数据。"""
+    # 先写基线行 (在事务外, 保证独立)
+    await tmp_db._conn.execute(
+        "INSERT INTO learnings "
+        "(learning_id, category, priority, status, area, summary, "
+        " source, pattern_key, recurrence_count, first_seen, last_seen, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("LRN-BASE", "bug", "low", "resolved", "test", "base",
+         "manual", "", 0, 0.0, 0.0, 0.0),
+    )
+    await tmp_db._conn.commit()
+
+    with pytest.raises(ValueError, match="boom"):
+        async with tmp_db.write_transaction() as conn:
+            await conn.execute(
+                "INSERT INTO learnings "
+                "(learning_id, category, priority, status, area, summary, "
+                " source, pattern_key, recurrence_count, first_seen, last_seen, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("LRN-TX2", "bug", "high", "pending", "test", "tx2",
+                 "manual", "", 1, 2.0, 2.0, 2.0),
+            )
+            raise ValueError("boom")  # 触发回滚
+
+    # 验证: 基线行存在, 事务内行不存在
+    cur = await tmp_db._conn.execute(
+        "SELECT learning_id FROM learnings ORDER BY created_at",
+    )
+    rows = [r[0] for r in await cur.fetchall()]
+    assert "LRN-BASE" in rows, "基线行被错误回滚"
+    assert "LRN-TX2" not in rows, "异常事务中的 INSERT 未被回滚 (数据脏写!)"
+
+
+async def test_write_transaction_close_during_body_no_crash(tmp_db: DatabaseManager):
+    """修复验证 #4: 模拟 close() 在事务体中把 _conn 置 None, finally 不应再抛。
+    模拟并发 close() 把 self._conn 置空 (不真正 close 以免影响其他测试清理)。"""
+    saved_conn = tmp_db._conn  # 先保存以便手动恢复 (tmp_db fixture 需用它关闭)
+    saw_exception = False
+    try:
+        with pytest.raises(RuntimeError, match="injected for test"):
+            async with tmp_db.write_transaction() as conn:
+                # 模拟并发 db.close() 把 _conn 设为 None (同时清理 readonly_conn 保持一致)
+                tmp_db._conn = None
+                tmp_db._readonly_conn = None
+                raise RuntimeError("injected for test")
+        # 如果 pytest.raises 不满足, 下面断言不执行; 满足则这里断言 finally 没再抛
+        saw_exception = True
+    finally:
+        # 恢复 saved_conn, 保证 fixture 中的 await db.close() 有东西可关
+        tmp_db._conn = saved_conn
+    assert saw_exception, (
+        "finally 块里对 None 连接调用 rollback 时抛了 AttributeError, "
+        "覆盖/替换了业务的 RuntimeError")

@@ -118,8 +118,29 @@ def _open_validated(resolved: str, mode: str = "r", encoding: str | None = "utf-
     先打开文件获取 fd，再通过 /proc/self/fd 读取 fd 的真实路径，
     确保打开的文件与验证时路径一致。如果不一致则关闭并拒绝。
     """
+    # 根据 mode 构造正确的 os.open 标志 (关键修复: O_CREAT + O_TRUNC 之前缺失)
+    # 二进制标志 ("b") / 文本标志 ("t") 不影响 os.open, 仅由 fdopen 处理
+    base_mode = mode.replace("b", "").replace("t", "")
+    has_plus = "+" in base_mode
+    core_mode = base_mode.replace("+", "")
+
+    if core_mode == "r":
+        flags = os.O_RDWR if has_plus else os.O_RDONLY
+    elif core_mode == "w":
+        flags = os.O_RDWR if has_plus else os.O_WRONLY
+        flags |= os.O_CREAT | os.O_TRUNC  # 修复: 新建 + 截断 (缺失时导致静默数据损坏)
+    elif core_mode == "a":
+        flags = os.O_RDWR if has_plus else os.O_WRONLY
+        flags |= os.O_CREAT | os.O_APPEND
+    elif core_mode == "x":
+        flags = os.O_RDWR if has_plus else os.O_WRONLY
+        flags |= os.O_CREAT | os.O_EXCL
+    else:
+        # 无法识别的模式，回退到安全默认: 只读 (避免意外写入)
+        flags = os.O_RDONLY
+
     try:
-        fd = os.open(resolved, os.O_RDONLY if "r" in mode else os.O_RDWR)
+        fd = os.open(resolved, flags)
     except FileNotFoundError:
         raise
     except OSError as e:

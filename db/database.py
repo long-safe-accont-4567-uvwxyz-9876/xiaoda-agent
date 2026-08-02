@@ -235,11 +235,17 @@ class DatabaseManager:
         async with self._write_tx_lock:
             _committed = False
             try:
+                if self._conn is None:
+                    raise RuntimeError("database connection not initialized (call init() first)")
                 yield self._conn
-                await self._conn.commit()
-                _committed = True
+                # 防御性 None 检查: close() 未获取 _write_tx_lock, 可能并发
+                # 地在 yield 与 commit 之间把 self._conn 置空。若连接已被关闭/清空,
+                # 跳过 commit 以免 AttributeError 掩盖真实业务异常。
+                if self._conn is not None:
+                    await self._conn.commit()
+                    _committed = True
             finally:
-                if not _committed:
+                if not _committed and self._conn is not None:
                     try:
                         await asyncio.shield(self._conn.rollback())
                     except asyncio.CancelledError:
