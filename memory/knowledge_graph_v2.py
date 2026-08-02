@@ -8,6 +8,7 @@
 """
 import asyncio
 import json
+import re
 import time
 import uuid
 from typing import Any
@@ -15,6 +16,19 @@ from typing import Any
 from loguru import logger
 
 from memory.knowledge_graph import KnowledgeGraph, _clean_json_response, _repair_json, _normalize_json_keys
+
+
+def _safe_format(template: str, **kwargs: str) -> str:
+    """单通占位符替换，免疫链式注入。
+
+    与 str.replace 链式调用不同，本方法在单次正则扫描中完成所有 {key} 替换，
+    即使替换值本身包含 {another_key} 也不会被二次替换。
+    防止知识图谱实体摘要中的花括号内容被误替换导致数据损坏。
+    """
+    def _replacer(match: re.Match) -> str:
+        key = match.group(1)
+        return kwargs.get(key, match.group(0))
+    return re.sub(r'\{(\w+)\}', _replacer, template)
 
 
 ENTITY_EXTRACT_PROMPT_V2 = """从以下对话摘要中提取关键实体和关系，只提取最显著的3-5个。
@@ -82,7 +96,7 @@ class KnowledgeGraphV2(KnowledgeGraph):
             return {"entities": [], "relations": []}
         try:
             # 防御性加固：summary 来自 LLM 输出可能含 {} 字符
-            prompt = ENTITY_EXTRACT_PROMPT_V2.replace("{summary}", summary[:500])
+            prompt = _safe_format(ENTITY_EXTRACT_PROMPT_V2, summary=summary[:500])
             messages = [
                 {"role": "system", "content": "你是一个知识提取助手，只输出纯JSON，不要输出任何其他内容，不要用markdown代码块包裹。"},
                 {"role": "user", "content": prompt},
@@ -219,12 +233,12 @@ class KnowledgeGraphV2(KnowledgeGraph):
         self, old_summary: str, new_observations: list, entity_name: str
     ) -> str:
         """LLM 重写 summary。"""
-        # 防御性加固：参数可能含 {} 字符
-        prompt = (
-            SUMMARY_REWRITE_PROMPT
-            .replace("{old_summary}", old_summary)
-            .replace("{new_observations}", ", ".join(new_observations))
-            .replace("{entity_name}", entity_name)
+        # 防御性加固：使用 _safe_format 单通替换，防止摘要中的花括号占位符被二次替换
+        prompt = _safe_format(
+            SUMMARY_REWRITE_PROMPT,
+            old_summary=old_summary,
+            new_observations=", ".join(new_observations),
+            entity_name=entity_name,
         )
         messages = [{"role": "user", "content": prompt}]
         result = await self._call_free_model(messages, temperature=0.3, max_tokens=512)
@@ -349,11 +363,11 @@ class KnowledgeGraphV2(KnowledgeGraph):
             facts_list = "\n".join(
                 f"{i}. {f}" for i, f in enumerate(existing_facts)
             )
-            # 防御性加固：new_fact/existing_facts_list 可能含 {} 字符
-            prompt = (
-                CONTRADICTION_PROMPT
-                .replace("{new_fact}", new_fact)
-                .replace("{existing_facts_list}", facts_list)
+            # 防御性加固：使用 _safe_format 单通替换，防止事实中的花括号占位符被二次替换
+            prompt = _safe_format(
+                CONTRADICTION_PROMPT,
+                new_fact=new_fact,
+                existing_facts_list=facts_list,
             )
             messages = [{"role": "user", "content": prompt}]
             result = await self._call_free_model(messages, temperature=0.0, max_tokens=200)
