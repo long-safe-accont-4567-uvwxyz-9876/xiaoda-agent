@@ -220,13 +220,16 @@ class Watchdog:
         """W2: 启动主进程，返回是否成功。"""
         self.log.info("watchdog.start_main cmd=%s", " ".join(self.cmd))
         try:
-            # I4: 重定向 stdio，避免子进程继承父进程的标准输入输出
+            # stdout/stderr 不重定向：子进程继承父进程控制台，主程序日志
+            # 实时显示到 cmd 窗口（与最开始的版本一致）。
+            # 主程序的文件 sink（logs/agent.log）仍独立落盘，互不影响。
+            # 仅 stdin 用 DEVNULL（子进程不需要输入）。
+            # 注：原 a449d21 的 I4 改成 stdout/stderr=DEVNULL 把主程序
+            # DEBUG 日志和崩溃 traceback 全丢了，导致诊断黑箱，已撤销。
             self._proc = subprocess.Popen(
                 self.cmd,
                 cwd=self.cwd,
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
             )
             self.log.info("watchdog.started pid=%d", self._proc.pid)
             return True
