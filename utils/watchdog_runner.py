@@ -375,19 +375,47 @@ def run_watchdog_cli(argv: list[str] | None = None) -> int:
     p.add_argument("--log-file", type=str, default="")
     args = p.parse_args(argv)
 
-    # 构造要守护的命令（与 agent.py 直接运行保持一致）
+    cfg = build_watchdog_config(args)
+    cwd = str(Path(__file__).parent.parent)
+
+    return Watchdog(cfg["cmd"], cwd, cfg).run()
+
+
+# ──────────────────────────────────────────────────────────────
+# 配置构造（提取自 run_watchdog_cli，便于测试）
+# ──────────────────────────────────────────────────────────────
+
+# 监听通配地址 → 探活必须用 loopback。
+# 0.0.0.0 / :: / "" 是"监听所有网卡"的通配地址，不是有效的客户端连接目标。
+# Windows 上 http://0.0.0.0:port 的请求会失败，导致 watchdog 误判冻结→无限重启。
+# 探活是本地行为，server 监听通配地址时 loopback 一定能连上。
+_WILDCARD_HOSTS = {"0.0.0.0", "::", "", "::0"}
+
+
+def _ping_host(listen_host: str) -> str:
+    """返回探活用的 host：监听通配地址时用 127.0.0.1，否则用原地址。"""
+    if listen_host in _WILDCARD_HOSTS:
+        return "127.0.0.1"
+    return listen_host
+
+
+def build_watchdog_config(args: argparse.Namespace) -> dict:
+    """根据解析后的参数构造 watchdog 配置字典（含 cmd、ping_url 等）。
+
+    提取自 run_watchdog_cli，便于单元测试 ping_url 的 loopback 不变量。
+    主进程启动命令保留原始 --host（server 监听 0.0.0.0 是合理的，允许局域网访问），
+    但 ping_url 强制用 loopback（探活永远是本地行为）。
+    """
     if getattr(sys, "frozen", False):
-        # PyInstaller exe 模式
         exe = sys.executable
         cmd = [exe, f"--{args.mode}", "--host", args.host, "--port", str(args.port)]
     else:
         cmd = [sys.executable, "agent.py", f"--{args.mode}",
                "--host", args.host, "--port", str(args.port)]
 
-    cwd = str(Path(__file__).parent.parent)
-
     cfg = dict(DEFAULTS)
-    cfg["ping_url"] = f"http://{args.host}:{args.port}/api/v1/ping"
+    cfg["cmd"] = cmd
+    cfg["ping_url"] = f"http://{_ping_host(args.host)}:{args.port}/api/v1/ping"
     cfg["host"] = args.host
     cfg["port"] = args.port
     cfg["check_interval"] = args.check_interval
@@ -395,5 +423,4 @@ def run_watchdog_cli(argv: list[str] | None = None) -> int:
     cfg["max_restarts"] = args.max_restarts
     cfg["ping_retries"] = args.ping_retries
     cfg["log_file"] = args.log_file
-
-    return Watchdog(cmd, cwd, cfg).run()
+    return cfg
