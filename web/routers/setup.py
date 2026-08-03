@@ -152,7 +152,6 @@ async def get_first_run() -> Any:
         user_md = WORKSPACE_DIR / "USER.md"
         if user_md.exists():
             content = user_md.read_text(encoding="utf-8-sig")
-            # 检查称呼和姓名字段是否已填写（不是占位符）
             import re as _re
             addr = _re.search(r'-\s*称呼[：:]\s*(.+)', content)
             name = _re.search(r'-\s*姓名[：:]\s*(.+)', content)
@@ -164,6 +163,7 @@ async def get_first_run() -> Any:
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
         logger.debug("setup.profile_check_failed: {}", exc, exc_info=True)
 
+    logger.info("setup.first_run_result first_run={} profile_done={}", first_run, profile_done)
     return Envelope(data={"first_run": first_run, "profile_done": profile_done})
 
 

@@ -51,6 +51,26 @@ def _setup_windows_event_loop() -> None:
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
+def _handle_first_run_mode(args) -> None:
+    """首次运行时按启动模式选择配置引导方式。
+
+    - web/desktop 模式：降级启动 WebUI，由 /setup 页面引导配置
+      desktop 模式 stdin 通常不可交互（watchdog 设为 DEVNULL），CLI 向导
+      的 input() 永远 EOFError，无法接收输入；且向导打印的"必填项未配置"
+      警告会误导用户以为"报错卡死，没进首次配置界面"。
+    - CLI 模式：启动交互式向导 wizard_main()
+    """
+    if args.web or args.desktop:
+        print("\n  [!] 检测到首次运行，将以降级模式启动 WebUI")
+        print("      请在界面中完成 API Key 配置\n")
+    else:
+        print("\n  [!] 检测到首次运行，启动配置向导...\n")
+        from setup_wizard import main as wizard_main, ENV_PATH
+        wizard_main()
+        # 向导完成后重新加载 .env
+        load_dotenv(ENV_PATH, override=True)
+
+
 def main() -> None:
     # Windows: 使用 SelectorEventLoop 加速 aiosqlite 线程切换（ProactorEventLoop 慢 3-5 倍）
     # 必须早于任何 asyncio/uvicorn 调用，确保 _run_web/_run_desktop/_run_cli 三路径均生效
@@ -133,16 +153,9 @@ def main() -> None:
             # 重新加载 .env 使默认值生效
             load_dotenv(ENV_PATH, override=True)
 
-        if args.web:
-            # Web 模式下不弹出 CLI 向导，由 WebUI /setup 页面引导配置
-            print("\n  [!] 检测到首次运行，将以降级模式启动 WebUI")
-            print("      请在浏览器中打开 WebUI 完成 API Key 配置\n")
-        else:
-            print("\n  [!] 检测到首次运行，启动配置向导...\n")
-            from setup_wizard import main as wizard_main
-            wizard_main()
-            # 向导完成后重新加载 .env
-            load_dotenv(ENV_PATH, override=True)
+        # 按启动模式选择配置引导：web/desktop 走 WebUI /setup 页面，
+        # CLI 模式走交互式向导。desktop 模式 stdin 不可交互，必须走 WebUI。
+        _handle_first_run_mode(args)
 
     if args.desktop:
         _run_desktop(args.host, args.port)

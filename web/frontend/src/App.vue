@@ -101,7 +101,11 @@ onMounted(async () => {
       return
     }
   } catch {
-    // 检测失败，继续正常流程
+    // 检测失败：fail-open 到向导（用户需求："检测出错就进首次配置程序"）
+    // 宁可多进一次配置向导，也不要漏配导致主界面报错卡死
+    router.replace('/setup')
+    booting.value = false
+    return
   }
   // 2. 非首次运行：未登录则跳转登录页（已登录的直接进主界面）
   if (!auth.isLoggedIn) {
