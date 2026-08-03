@@ -26,6 +26,11 @@ class KnowledgeDB:
         CodeRabbit 误判为 contentless 表建议改用 'delete' 命令，但实测 'delete' 命令在 UNINDEXED 列上报错，
         普通 DELETE 才是正确做法。
         用 name（UNIQUE）查 rowid+id，兼容 insert/upsert 两种路径。FTS rowid 与主表 rowid 对齐。
+
+        Bug 修复：必须对 name 预分词后再写入 FTS（与 v21 迁移 _migrate_v21 一致）。
+        根因：FTS5 unicode61 分词器不切分 CJK 字符，原始 '小妲' 变成单个不透明 token，
+        MATCH '妲' 命中为 0。v21 迁移用 _tokenize_for_fts(jieba) 预分词解决了历史数据，
+        但 _sync_entity_fts 每次写入仍用原始 name，新增/更新的中文实体 FTS 搜索继续失效。
         """
         cur = await self._conn.execute(
             "SELECT rowid, id FROM knowledge_entities WHERE name=?", (name,))
@@ -33,12 +38,16 @@ class KnowledgeDB:
         if row is None:
             return
         rowid, entity_id = row[0], row[1]
+        # 预分词（与 database._migrate_v21 保持一致，修复中文实体搜索失效）
+        from db.fts_utils import _tokenize_for_fts
+        name_index = _tokenize_for_fts(name) if name else ""
         await self._conn.execute(
             "DELETE FROM knowledge_entities_fts WHERE rowid=?", (rowid,))
-        await self._conn.execute(
-            "INSERT INTO knowledge_entities_fts(rowid, id, name_index) VALUES(?, ?, ?)",
-            (rowid, entity_id, name),
-        )
+        if name_index.strip():
+            await self._conn.execute(
+                "INSERT INTO knowledge_entities_fts(rowid, id, name_index) VALUES(?, ?, ?)",
+                (rowid, entity_id, name_index),
+            )
 
     async def _delete_entity_fts_by_rowid(self, rowid: int) -> None:
         """按主表 rowid 删除 FTS 索引条目（删除实体前调用）。

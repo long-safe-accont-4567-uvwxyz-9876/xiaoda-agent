@@ -26,7 +26,15 @@ def _tokenize_for_fts(text: str) -> str:
 
 
 def _extract_fts_keywords(text: str, *, min_length: int = 2) -> list[str]:
-    """提取关键词用于 FTS5 索引和查询，jieba 优先，n-gram 降级"""
+    """提取关键词用于 FTS5 索引和查询，jieba 优先，n-gram 降级。
+
+    CJK 单字补全：jieba 对不在词典中的 CJK 词（如"妲己"）切成单字，
+    被 min_length=2 过滤后索引/查询都丢失这些字。修复：CJK 文本在
+    jieba 分词后，对被丢弃的单字补入 bigram（2-gram），确保子串可检索。
+    例如"妲己传说" → jieba 输出 ["妲","己","传说"] → min_length=2 保留
+    ["传说"] → 补入 bigram ["妲己","己传","传说"] → 去重后
+    ["传说","妲己","己传"]，搜"妲己"即可命中。
+    """
     has_cjk = bool(_CJK_RANGE.search(text))
     if has_cjk:
         try:
@@ -45,15 +53,47 @@ def _extract_fts_keywords(text: str, *, min_length: int = 2) -> list[str]:
         if len(tok) >= min_length and tok not in seen:
             seen.add(tok)
             result.append(tok)
+
+    # CJK bigram 补全：对被 min_length 过滤掉的单字，补入相邻字组成的 bigram，
+    # 确保不在 jieba 词典中的 CJK 词（如"妲己"）仍可通过 bigram 检索到。
+    # 仅在 CJK 模式下补全，非 CJK 文本不需要（英文不存在"字内空格"问题）。
+    if has_cjk and min_length >= 2:
+        for i in range(len(text) - 1):
+            bigram = text[i:i+2]
+            if _CJK_RANGE.search(bigram) and bigram not in seen:
+                seen.add(bigram)
+                result.append(bigram)
+        # 单字 CJK 补全：文本仅含单个 CJK 字符时无法生成 bigram，
+        # 但仍需存入索引（否则搜"王"永远找不到名为"王"的实体）。
+        if len(text) == 1 and _CJK_RANGE.search(text) and text not in seen:
+            seen.add(text)
+            result.append(text)
+
     return result
 
 
 def _build_fts_query(query: str) -> str:
-    """构建 FTS5 MATCH 查询字符串，关键词 OR 连接"""
-    tokens = _extract_fts_keywords(query)
+    """构建 FTS5 MATCH 查询字符串，关键词 OR 连接。
+
+    CJK 单字修复：jieba 对某些词切分为单字（如"妲己"→["妲","己"]），
+    原 min_length=2 会全部过滤，导致 FTS 查询返回空字符串、搜索静默无结果。
+    修复：CJK 查询使用 min_length=1 保留单字 token，并为单字 CJK token
+    添加前缀通配符（不加引号，FTS5 对 CJK 前缀匹配需无引号才能生效）。
+    例如搜"妲"生成 "妲*"，可匹配以"妲"开头的多字 token（如"妲己"）。
+    对于不以该字开头的 token（如搜"己"无法匹配"小妲己"），由调用方
+    降级到 LIKE 搜索兜底。
+    """
+    has_cjk = bool(_CJK_RANGE.search(query))
+    min_len = 1 if has_cjk else 2
+    tokens = _extract_fts_keywords(query, min_length=min_len)
     quoted = []
     for token in tokens:
         cleaned = _FTS_SPECIAL.sub(" ", token).strip()
-        if cleaned:
+        if not cleaned:
+            continue
+        # CJK 单字 token：不加引号 + 前缀通配符，让 FTS5 能匹配以该字开头的多字 token
+        if has_cjk and len(cleaned) == 1 and _CJK_RANGE.search(cleaned):
+            quoted.append(f"{cleaned}*")
+        else:
             quoted.append(f'"{cleaned}"')
     return " OR ".join(quoted) if quoted else ""
