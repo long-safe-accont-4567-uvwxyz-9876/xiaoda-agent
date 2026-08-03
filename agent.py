@@ -54,15 +54,19 @@ def _setup_windows_event_loop() -> None:
 def _handle_first_run_mode(args) -> None:
     """首次运行时按启动模式选择配置引导方式。
 
-    - web/desktop 模式：降级启动 WebUI，由 /setup 页面引导配置
-      desktop 模式 stdin 通常不可交互（watchdog 设为 DEVNULL），CLI 向导
-      的 input() 永远 EOFError，无法接收输入；且向导打印的"必填项未配置"
-      警告会误导用户以为"报错卡死，没进首次配置界面"。
+    - desktop 模式：启动 pywebview 独立窗口，窗口内 WebUI 自动跳转 /setup
+      页面引导配置。desktop 模式 stdin 不可交互（watchdog 设为 DEVNULL），
+      CLI 向导的 input() 永远 EOFError，无法接收输入；且向导打印的"必填项
+      未配置"警告会误导用户以为"报错卡死，没进首次配置界面"。
+    - web 模式：启动 Web UI（浏览器），/setup 页面引导配置
     - CLI 模式：启动交互式向导 wizard_main()
     """
-    if args.web or args.desktop:
-        print("\n  [!] 检测到首次运行，将以降级模式启动 WebUI")
-        print("      请在界面中完成 API Key 配置\n")
+    if args.desktop:
+        print("\n  [!] 检测到首次运行，将启动独立窗口")
+        print("      请在窗口内完成 API Key 配置\n")
+    elif args.web:
+        print("\n  [!] 检测到首次运行，将启动 Web UI")
+        print("      请在浏览器中完成 API Key 配置\n")
     else:
         print("\n  [!] 检测到首次运行，启动配置向导...\n")
         from setup_wizard import main as wizard_main, ENV_PATH
@@ -129,6 +133,9 @@ def main() -> None:
         wizard_main()
         return
 
+    # 首次运行检测：只有 4 个必填 API Key 未配置时才进 setup 向导。
+    # 其他异常（可选功能报错、网络问题等）是正常的，不强制跳 setup——
+    # 有些功能不需要，报错是正常的，不能一刀切把用户踢进配置界面。
     from setup_wizard import is_first_run, ENV_PATH, ENV_EXAMPLE_PATH
     if is_first_run():
         # 确保 .env 文件存在（从 .env.example 复制），这样 WebUI Setup 页面能读取默认值

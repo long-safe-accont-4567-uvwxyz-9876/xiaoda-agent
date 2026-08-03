@@ -142,8 +142,10 @@ async def get_first_run() -> Any:
                 first_run = not (set(required_keys) <= configured)
             except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
                 logger.debug("setup.env_read_failed: {}", exc, exc_info=True)
-                # 检测出错也进向导（fail-open：宁可多进一次向导，不要漏配卡死）
-                first_run = True
+                # .env 读取失败不代表 key 没配（可能是文件锁/编码等临时问题），
+                # 不强制跳 setup——只有明确检测到 key 为空才跳。
+                # 其他异常是正常的，有些功能不需要，报错是正常的。
+                first_run = False
 
     # 2. 检测用户资料是否已配置（USER.md 存在且有实际填写的称呼和姓名）
     profile_done = False
