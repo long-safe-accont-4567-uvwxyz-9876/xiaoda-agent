@@ -91,13 +91,16 @@ class TestToolOverridesConsistency:
         """agnes_image_generate 必须在工具列表中（当未被禁用时）。
 
         防止工具截断导致图片生成功能失效的 P0 bug 回归。
+        根因修复：agnes_image_generate 归入 creative 分类（优先级 85），
+        与 conversation 同级，高于 general（10），工具总数超 MAX_ENABLED_TOOLS
+        时不会被截断。此测试用真实分类验证该不变量。
         """
-        # 注册足够多的工具来触发截断
+        # 注册足够多的 general 工具来触发截断
         for i in range(MAX_ENABLED_TOOLS + 10):
             _register_tool(f"tool_{i:03d}", category="general")
 
-        # agnes_image_generate 优先级最低（general=10），容易被截断
-        _register_tool("agnes_image_generate", category="general")
+        # agnes_image_generate 用 creative 分类（与 manifest 一致，优先级 85）
+        _register_tool("agnes_image_generate", category="creative")
 
         # 不设置任何 overrides
         set_tool_overrides({})
@@ -105,8 +108,25 @@ class TestToolOverridesConsistency:
         tools = to_openai_tools()
         names = [t["function"]["name"] for t in tools]
         assert "agnes_image_generate" in names, (
-            "agnes_image_generate 被截断了！工具总数超过上限时图片生成功能失效。"
+            "agnes_image_generate 被截断了！creative 分类未生效，工具总数超过上限时图片生成功能失效。"
             f" 工具数={len(_tools)}, 上限={MAX_ENABLED_TOOLS}, 返回={len(tools)}"
+        )
+
+    def test_general_tool_is_truncated_when_over_limit(self):
+        """对照：general 分类的工具在超限时确实会被截断（验证截断机制本身有效）。
+
+        这证明上面的测试不是因为截断失效而通过，而是因为 creative 优先级够高。
+        """
+        # general 工具数量远超上限
+        for i in range(MAX_ENABLED_TOOLS + 10):
+            _register_tool(f"gen_tool_{i:03d}", category="general")
+
+        set_tool_overrides({})
+
+        tools = to_openai_tools()
+        # 截断后返回数 == 上限
+        assert len(tools) == MAX_ENABLED_TOOLS, (
+            f"截断机制失效：返回 {len(tools)} 个工具，上限 {MAX_ENABLED_TOOLS}"
         )
 
     def test_put_tool_updates_overrides_and_cache(self):

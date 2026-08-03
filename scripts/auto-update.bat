@@ -5,7 +5,8 @@ setlocal enabledelayedexpansion
 :: ============================================
 ::   Xiaoda Agent - Auto-Update Script
 ::   Checks GitHub Release for new versions
-::   Delegates logic to auto-update.ps1 (avoids cmd escaping issues with inline PowerShell)
+::   Delegates logic to auto-update.ps1
+::   (avoids cmd escaping issues with inline PowerShell)
 :: ============================================
 
 if defined GITHUB_REPO (
@@ -19,8 +20,9 @@ if "%INSTALL_DIR:~-1%"=="\" set "INSTALL_DIR=%INSTALL_DIR:~0,-1%"
 set "VERSION_FILE=%INSTALL_DIR%\.version"
 set "AUTO_UPDATE_FLAG=%INSTALL_DIR%\.auto_update"
 
-:: 手动更新脚本：用户双击本文件（或「检查更新」快捷方式）时才执行
-:: 启动主程序时不再自动调用本脚本 —— 启动与更新是两个独立操作
+:: Manual update script: runs only when user double-clicks this file
+::   (or the "Check Update" shortcut). The main launcher does NOT call
+::   this script. Launch and update are separate operations.
 
 :: Get current version
 set "CURRENT_VERSION="
@@ -28,8 +30,8 @@ if exist "%VERSION_FILE%" (
     set /p CURRENT_VERSION=<"%VERSION_FILE%"
 )
 
-:: Check for updates using PowerShell (delegated to .ps1 to avoid cmd escaping hell)
-echo   正在检查更新...
+:: Check for updates via PowerShell (delegated to .ps1 to avoid cmd escaping hell)
+echo   Checking for updates...
 
 set "PS1_PATH=%~dp0auto-update.ps1"
 if not exist "%PS1_PATH%" (

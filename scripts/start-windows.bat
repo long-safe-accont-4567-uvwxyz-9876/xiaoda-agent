@@ -6,10 +6,9 @@ setlocal
 ::   Xiaoda Agent - Windows Launcher
 :: ============================================
 
-:: Handle Ctrl+C gracefully
-:: 默认 --web 模式（用系统浏览器，更轻量，避免 WebView2 子进程吃 GPU）
-:: --desktop 模式会拉起 msedgewebview2.exe 子进程，在高刷新率屏幕上可能卡顿
-:: --desktop 需要 WebView2 Runtime，未安装时自动回退 --web（系统浏览器）
+:: Default: --web mode (system browser, lighter; avoids WebView2 GPU usage)
+:: --desktop launches msedgewebview2.exe and may stutter on high-refresh screens
+:: --desktop requires WebView2 Runtime; auto-fallback to --web if missing
 set "LAUNCH_MODE=--web"
 if "%~1"=="" goto :main
 if /i "%~1"=="--web" goto :main
@@ -17,15 +16,15 @@ if /i "%~1"=="--desktop" goto :check_desktop
 goto :usage
 
 :check_desktop
-rem 检测 WebView2 Runtime（per-machine + per-user 两个注册表位置）
+rem Detect WebView2 Runtime (per-machine + per-user registry locations)
 set "WEBVIEW2_OK="
 reg query "HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" /v pv >nul 2>nul && set "WEBVIEW2_OK=1"
 reg query "HKCU\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" /v pv >nul 2>nul && set "WEBVIEW2_OK=1"
 if defined WEBVIEW2_OK (
     set "LAUNCH_MODE=--desktop"
 ) else (
-    echo   [WARN] 未检测到 WebView2 Runtime，自动回退到 Web 模式
-    echo   如需桌面原生窗口，请安装 Microsoft Edge WebView2 Runtime:
+    echo   [WARN] WebView2 Runtime not found, falling back to Web mode
+    echo   To use a native desktop window, install Microsoft Edge WebView2 Runtime:
     echo     https://developer.microsoft.com/microsoft-edge/webview2/
     echo.
     set "LAUNCH_MODE=--web"
@@ -43,16 +42,14 @@ echo.
 goto :eof
 
 :main
-:: Banner
 echo.
 echo   ================================
 echo   =     Xiaoda Agent            =
 echo   ================================
 echo.
 
-:: 启动时不检查更新 —— 更新是独立操作，请双击「检查更新」快捷方式或 auto-update.bat
-:: Find the executable
-:: Onedir build: exe is either in same dir as this bat, or in dist\xiaoda-agent\
+:: No update check on launch. Update is a separate action:
+::   double-click the "Check Update" shortcut or run auto-update.bat
 set "EXE_PATH="
 if exist "%~dp0xiaoda-agent.exe" (
     set "EXE_PATH=%~dp0xiaoda-agent.exe"
@@ -68,54 +65,46 @@ if exist "%~dp0xiaoda-agent.exe" (
     goto :pause_exit
 )
 
-:: Change to the script directory
 cd /d "%~dp0"
 
-:: Ensure logs directory exists (watchdog writes here)
 if not exist "logs" mkdir "logs"
 
-:: Force UTF-8 output encoding (prevents UnicodeEncodeError with GBK on Chinese Windows)
+:: Force UTF-8 IO for the Python process (prevents UnicodeEncodeError under GBK)
 set PYTHONIOENCODING=utf-8
 
-:: 安装包强制 8082 端口（无条件覆盖，避免继承开发机的 WEBUI_PORT 环境变量）
-:: 开发环境请直接 `python agent.py --web --port 8080`，不走此 bat
-:: 如需临时改端口：set WEBUI_PORT=8090 && start-windows.bat（在子 shell 里 set 无效，
-::   需编辑本行或用 cmd /c "set WEBUI_PORT=8090 && start-windows.bat"）
+:: Installer forces port 8082 (overrides inherited WEBUI_PORT from dev machine)
+:: Dev: run `python agent.py --web --port 8080` directly, not via this bat
 set "WEBUI_PORT=8082"
 
-:: Check if port is already in use
 netstat -ano | findstr ":%WEBUI_PORT% " | findstr "LISTENING" >nul 2>nul
 if %errorlevel% equ 0 (
-    echo   [WARN] 端口 %WEBUI_PORT% 已被占用！
-    echo   解决方法：
-    echo     1. 关闭占用该端口的程序后重试
-    echo     2. 或设置其他端口：set WEBUI_PORT=8083 ^&^& start-windows.bat
+    echo   [WARN] Port %WEBUI_PORT% is already in use!
+    echo   Options:
+    echo     1. Close the program using that port and retry
+    echo     2. Or use another port: set WEBUI_PORT=8083 ^&^& start-windows.bat
     echo.
     goto :pause_exit
 )
 
-:: Start in Web mode by default (first-run will auto-trigger setup wizard)
 echo   Starting Xiaoda Agent...
 echo.
 
-:: Launch browser once server is ready (only in --web mode; --desktop uses pywebview native window)
 if /i "%LAUNCH_MODE%"=="--web" (
     if exist "%~dp0open-browser.ps1" (
         start "" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0open-browser.ps1" -Port %WEBUI_PORT%
     )
 )
 
-:: Run via watchdog (auto-restart on freeze/crash)
-:: 看门狗模式：卡死超过 60s 或进程崩溃自动重启；20次/10分钟超限后停止自动恢复
+:: Watchdog mode: auto-restart on freeze (>60s) or crash; stops after 20 restarts/600s
 "%EXE_PATH%" watchdog --mode %LAUNCH_MODE:--=% --port %WEBUI_PORT% --log-file "%~dp0logs\watchdog.log"
 
-:: Check exit code
 if %errorlevel% neq 0 (
     echo.
-    echo   [ERROR] Xiaoda Agent 退出，代码 %errorlevel%
+    echo   [ERROR] Xiaoda Agent exited with code %errorlevel%
     echo.
-    echo   看门狗已停止自动恢复（可能原因：连续崩溃超阈值/API密钥失效/网络异常）。
-    echo   请运行 doctor.bat 诊断，或查看 logs\watchdog.log 排查。
+    echo   Watchdog stopped auto-recovery. Possible causes: repeated crashes,
+    echo   invalid API key, or network issue.
+    echo   Run doctor.bat to diagnose, or check logs\watchdog.log.
 )
 
 :pause_exit

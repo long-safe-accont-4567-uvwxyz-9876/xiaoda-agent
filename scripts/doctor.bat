@@ -4,29 +4,28 @@ chcp 65001 >nul
 
 :: ============================================
 ::   Xiaoda Agent - Doctor Self-Check
-::   一键自检脚本 (零 API 调用, <2s)
-::   双击运行即可
+::   Zero API calls, completes in <2s
+::   Double-click to run
 :: ============================================
 
-:: Banner
 echo.
 echo   ==========================================
 echo   ^|   Xiaoda Agent Doctor Self-Check       ^|
-echo   ^|   零 API 调用, 2 秒内完成              ^|
+echo   ^|   Zero API calls, finishes in ~2s      ^|
 echo   ==========================================
 echo.
 
-:: 解析参数 (支持 --json / --fix / 无参数)
+:: Parse args (--json / --fix / none)
 set "ARGS="
 if /i "%~1"=="--json" set "ARGS=--json"
 if /i "%~1"=="json" set "ARGS=--json"
 if /i "%~1"=="--fix" set "ARGS=--fix"
 if /i "%~1"=="fix" set "ARGS=--fix"
 
-:: 强制 UTF-8 输出编码 (防止中文 Windows GBK 报错)
+:: Force UTF-8 IO for the Python process (prevents errors on Chinese Windows)
 set PYTHONIOENCODING=utf-8
 
-:: 查找可执行文件
+:: Locate the executable
 set "EXE_PATH="
 if exist "%~dp0xiaoda-agent.exe" (
     set "EXE_PATH=%~dp0xiaoda-agent.exe"
@@ -36,24 +35,24 @@ if exist "%~dp0xiaoda-agent.exe" (
     set "EXE_PATH=%~dp0..\xiaoda-agent.exe"
 )
 
-:: 切换到脚本所在目录
 cd /d "%~dp0"
 
 if not defined EXE_PATH goto :dev_mode
 
-:: 打包后的 exe 模式
-echo   [i] 使用打包版本: !EXE_PATH!
+:: Packaged exe mode
+echo   [i] Using packaged build: !EXE_PATH!
 echo.
 "!EXE_PATH!" doctor !ARGS!
 set EXITCODE=!errorlevel!
 goto :doctor_done
 
 :dev_mode
-:: 开发模式: 直接用 python 运行
-:: 注意：必须用 !errorlevel! 而非 %errorlevel%
-::   cmd 在解析整个 if-else 块时一次性展开 %errorlevel%（parse-time），
-::   导致第二个 where py 的结果被第一个 where python 的 errorlevel 覆盖。
-::   延迟扩展 !errorlevel! 在运行时取值，才能反映上一条命令的真实退出码。
+:: Dev mode: run via python directly
+:: Note: must use !errorlevel! not %errorlevel%
+::   cmd expands %errorlevel% at parse time for the whole if-else block,
+::   so the second `where py` result would be overwritten by the first
+::   `where python` errorlevel. Delayed expansion !errorlevel! reads at
+::   runtime to reflect the real exit code of the previous command.
 where python >nul 2>nul
 if !errorlevel! equ 0 (
     set "PY_CMD=python"
@@ -62,28 +61,28 @@ if !errorlevel! equ 0 (
     if !errorlevel! equ 0 (
         set "PY_CMD=py"
     ) else (
-        echo   [ERROR] 未找到 xiaoda-agent.exe 也未找到 python
+        echo   [ERROR] Neither xiaoda-agent.exe nor python was found
         echo.
-        echo   请确认:
-        echo     1. 已通过安装程序安装 Xiaoda Agent
-        echo     2. 或在开发环境运行 (需要 python)
+        echo   Please confirm:
+        echo     1. Xiaoda Agent is installed via the installer
+        echo     2. Or run in dev environment (requires python)
         echo.
         pause
         exit /b 1
     )
 )
 
-:: 查找 agent.py
+:: Locate agent.py
 set "AGENT_PY=%~dp0..\agent.py"
 if not exist "!AGENT_PY!" set "AGENT_PY=%~dp0agent.py"
 if not exist "!AGENT_PY!" (
-    echo   [ERROR] 未找到 agent.py
-    echo   查找位置: !AGENT_PY!
+    echo   [ERROR] agent.py not found
+    echo   Searched: !AGENT_PY!
     pause
     exit /b 1
 )
 
-echo   [i] 使用开发模式: !PY_CMD! !AGENT_PY!
+echo   [i] Using dev mode: !PY_CMD! !AGENT_PY!
 echo.
 "!PY_CMD!" "!AGENT_PY!" doctor !ARGS!
 set EXITCODE=!errorlevel!
@@ -91,13 +90,13 @@ set EXITCODE=!errorlevel!
 :doctor_done
 echo.
 if !EXITCODE! equ 0 (
-    echo   [OK] 自检全部通过
+    echo   [OK] All self-checks passed
 ) else (
-    echo   [FAIL] 自检发现问题, 退出码 !EXITCODE!
+    echo   [FAIL] Self-check found issues, exit code !EXITCODE!
     echo.
-    echo   提示:
-    echo     · 运行 doctor.bat fix  可尝试自动修复
-    echo     · 运行 doctor.bat json 可获取 JSON 格式报告
+    echo   Tips:
+    echo     - Run "doctor.bat fix"  to attempt auto-repair
+    echo     - Run "doctor.bat json" for a JSON report
 )
 echo.
 pause
