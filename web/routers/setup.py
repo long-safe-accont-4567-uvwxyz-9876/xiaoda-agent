@@ -67,7 +67,7 @@ def _mask_key_value(val: str) -> str:
 
 
 async def _is_first_run_or_authenticated(request: Request) -> str:
-    """认证依赖：首次运行（.env 不存在或 MIMO_API_KEY 为空）时允许无认证访问；
+    """认证依赖：首次运行（.env 不存在或任一必填 key 为空）时允许无认证访问；
     非首次运行时必须携带有效 Bearer Token。返回用户标识。
 
     安全策略：fail-closed。若 is_first_run() 因文件锁、导入错误、.env 解析
@@ -97,7 +97,7 @@ _AUTH_DEPS = [Depends(_is_first_run_or_authenticated)]
 
 @router.get("/setup/first-run", response_model=Envelope[dict])
 async def get_first_run() -> Any:
-    """检测是否首次运行（.env 不存在或 MIMO_API_KEY 为空），
+    """检测是否首次运行（.env 不存在或任一必填 key 为空），
     以及用户资料是否已配置。"""
     # 1. 检测 API Key 是否已配置
     first_run = True
@@ -118,15 +118,32 @@ async def get_first_run() -> Any:
             first_run = True
         else:
             try:
+                # 必填 key 全部配齐才视为非首次运行（与 is_first_run 保持一致）。
+                # 旧实现只查 MIMO_API_KEY，漏配 QQBOT/EMBED 时 first_run=False，
+                # 向导不触发，主程序报错卡死。
+                # 硬编码此列表作为兜底（setup_wizard 导入失败时才走到这里），
+                # 与 setup_wizard.REQUIRED_KEYS 保持同步。
+                required_keys = (
+                    "MIMO_API_KEY",
+                    "QQBOT_APP_ID",
+                    "QQBOT_APP_SECRET",
+                    "EMBED_API_KEY",
+                )
+                configured = set()
                 with open(env_path, encoding="utf-8", errors="ignore") as f:
                     for line in f:
-                        if line.strip().startswith("MIMO_API_KEY="):
-                            val = line.strip().split("=", 1)[1].strip().strip("'\"")
-                            if val:
-                                first_run = False
-                                break
+                        line = line.strip()
+                        for k in required_keys:
+                            if line.startswith(k + "="):
+                                val = line.split("=", 1)[1].strip().strip("'\"")
+                                if val:
+                                    configured.add(k)
+                # 4 个必填项都配齐才不是首次运行
+                first_run = not (set(required_keys) <= configured)
             except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
                 logger.debug("setup.env_read_failed: {}", exc, exc_info=True)
+                # 检测出错也进向导（fail-open：宁可多进一次向导，不要漏配卡死）
+                first_run = True
 
     # 2. 检测用户资料是否已配置（USER.md 存在且有实际填写的称呼和姓名）
     profile_done = False

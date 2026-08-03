@@ -353,12 +353,22 @@ def _print_summary(configured: dict) -> None:
 
 
 def is_first_run() -> bool:
-    """检测是否为首次运行（.env 不存在或必填 key 未配置）"""
+    """检测是否为首次运行（.env 不存在或任一必填 key 未配置）。
+
+    必填项见 REQUIRED_KEYS（MIMO_API_KEY / QQBOT_APP_ID / QQBOT_APP_SECRET /
+    EMBED_API_KEY）。任一为空都进入首次配置，避免漏配导致主程序启动后
+    报错"没有填"卡死。
+
+    旧 bug：只检查 MIMO_API_KEY，用户填了 MIMO 但漏配 QQBOT/EMBED 时
+    返回 False，向导不触发，主程序到用这些 API 处直接报错卡死。
+    """
     if not os.path.exists(ENV_PATH):
         return True
     vals = _load_env_values()
-    # MIMO_API_KEY 是最核心的必填项
-    return bool(not vals.get("MIMO_API_KEY", "").strip())
+    for item in REQUIRED_KEYS:
+        if not vals.get(item["key"], "").strip():
+            return True
+    return False
 
 
 def main() -> None:
