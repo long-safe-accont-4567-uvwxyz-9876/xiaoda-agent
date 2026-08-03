@@ -171,6 +171,15 @@ BLOCKED_COMMANDS = {
 
 # 危险命令模式（正则，不区分大小写）
 _DANGEROUS_PATTERNS = [
+    # ── 解释器内联执行（绕过白名单执行任意代码）──
+    # 即使 python/bash 被加入白名单，-c/-e/-i 等内联执行方式仍一律拦截
+    # 触发场景：用户将 python/bash 加入白名单后，攻击者通过 -c/-e 执行任意命令
+    # 注意：flag 后紧跟 =、空白+引号 或 非空白 三类形式，覆盖 -c "..."、-c'...'、-c=...、-c...
+    #       shell 家族长词优先（避免 ba 抢先匹配 bash 的前缀）
+    r'\b(python\d?|python3|pypy|perl|ruby|node)\s+-[a-zA-Z]*[ceir][a-zA-Z]*(?:=|\s+(?=["\'])|\s+[^\s=])',
+    r'\b(busybox|bash|zsh|ksh|dash|fish|tcsh|csh|ash)\s+-[a-zA-Z]*c[a-zA-Z]*(?:=|\s+(?=["\'])|\s+[^\s=])',
+    r'\beval\s+["\']',
+    r'\bexec\s+[a-zA-Z]',
     # rm -rf 任意路径（不只是根目录）
     r'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+|--recursive\s+--force\s+)\S+',
     # fork bomb 变体
