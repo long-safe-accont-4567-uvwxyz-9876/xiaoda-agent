@@ -617,6 +617,69 @@ class ILinkClient:
         logger.info("ilink.cdn_upload.ok param_len={}", len(param))
         return param
 
+    async def send_media_message(
+        self, to_user_id: str, context_token: str, text: str, image_path: str
+    ) -> dict:
+        """发送文字+图片合并消息（表情包）。
+
+        完整流程：getuploadurl → AES-128-ECB 加密 → CDN 上传 →
+        sendmessage 的 item_list 同时含 text_item 与 image_item。
+
+        Args:
+            to_user_id: 接收方用户 ID
+            context_token: 会话上下文 token
+            text: 文本内容（可为空串，仅发图）
+            image_path: 本地图片文件路径（表情包）
+
+        Returns:
+            字典包含:
+                - ret (int): 返回码，0 表示成功
+
+        Raises:
+            FileNotFoundError: image_path 不存在
+            SessionExpiredError: ret == -14
+            httpx.HTTPError: 网络错误
+            RuntimeError: 上传/发送失败（含 ret != 0）
+        """
+        with open(image_path, "rb") as f:
+            raw_bytes = f.read()
+        aes_key = os.urandom(16)
+        upload_param, filekey, encrypted = await self._get_upload_url(
+            to_user_id, raw_bytes, aes_key
+        )
+        encrypted_param = await self._upload_to_cdn(upload_param, filekey, encrypted)
+
+        data = {
+            "msg": {
+                "from_user_id": "",
+                "to_user_id": to_user_id,
+                "client_id": f"bot-{uuid.uuid4().hex[:16]}",
+                "message_type": 2,
+                "message_state": 2,
+                "context_token": context_token,
+                "item_list": [
+                    {"type": 1, "text_item": {"text": text}},
+                    {
+                        "type": 2,
+                        "image_item": {
+                            "media": {
+                                "encrypt_query_param": encrypted_param,
+                                "aes_key": base64.b64encode(aes_key).decode("ascii"),
+                                "encrypt_type": 0,
+                            }
+                        },
+                    },
+                ],
+            }
+        }
+        payload = await self._post("/ilink/bot/sendmessage", data=data)
+        ret = payload.get("ret", RET_OK)
+        logger.info(
+            "ilink.send_media_message.ok to={} text_len={} img_len={} ret={}",
+            to_user_id, len(text), len(raw_bytes), ret,
+        )
+        return {"ret": ret}
+
     # ------------------------------------------------------------------
     # API: 输入状态
     # ------------------------------------------------------------------

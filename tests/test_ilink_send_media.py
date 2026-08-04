@@ -89,3 +89,45 @@ def test_upload_to_cdn_returns_encrypted_param():
     assert "/upload" in fake.calls[0]["url"]
     assert "encrypted_query_param=UP123" in fake.calls[0]["url"]
     assert fake.calls[0]["content"] == b"\x00" * 16
+
+
+def test_send_media_message_sends_text_and_image_merged(tmp_path):
+    """图文合并：一条消息的 item_list 同时含 text 和 image_item。"""
+    img = tmp_path / "sticker.png"
+    img.write_bytes(PNG_BYTES)
+    # 顺序：getuploadurl → CDN upload → sendmessage
+    fake = FakeAsyncClient([{"upload_param": "UP123"}, {"ret": 0}])
+    client = ILinkClient(bot_token="tok", client=fake)
+    result = asyncio.run(
+        client.send_media_message("user@im.wechat", "ctx_tok", "你好～", str(img))
+    )
+    assert result == {"ret": 0}
+
+    # 3 次调用：getuploadurl, CDN upload, sendmessage
+    assert len(fake.calls) == 3
+    assert "/ilink/bot/getuploadurl" in fake.calls[0]["url"]
+    assert "/upload" in fake.calls[1]["url"]
+
+    msg = fake.calls[2]["json"]["msg"]
+    assert msg["from_user_id"] == ""
+    assert msg["client_id"]
+    assert msg["message_type"] == 2
+    assert msg["message_state"] == 2
+    items = msg["item_list"]
+    assert items[0]["type"] == 1
+    assert items[0]["text_item"]["text"] == "你好～"
+    assert items[1]["type"] == 2
+    media = items[1]["image_item"]["media"]
+    assert media["encrypt_query_param"] == "encrypted-param-value"
+    assert media["encrypt_type"] == 0
+
+
+def test_send_media_message_missing_file_raises(tmp_path):
+    """图片不存在时抛异常（由调用方回退纯文本）。"""
+    fake = FakeAsyncClient([{"ret": 0}])
+    client = ILinkClient(bot_token="tok", client=fake)
+    try:
+        asyncio.run(client.send_media_message("u", "t", "hi", "/nonexistent.png"))
+        assert False, "应抛出 FileNotFoundError"
+    except FileNotFoundError:
+        pass
