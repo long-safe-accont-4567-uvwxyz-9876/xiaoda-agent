@@ -108,8 +108,10 @@ class DatabaseManager:
         self._conn = await aiosqlite.connect(str(self.db_path))
         self._conn.row_factory = aiosqlite.Row
         # busy_timeout 必须最先设置，防止后续 PRAGMA 因锁竞争失败
+        # 5000→15000：greeting_scheduler/memory_encoding/portrait 等后台任务并发写入时，
+        # 5s 不够等待锁释放，导致 create_session 失败 → QQ 消息处理中断，用户收不到回复
         try:
-            await self._conn.execute("PRAGMA busy_timeout=5000")
+            await self._conn.execute("PRAGMA busy_timeout=15000")
         except (OSError, RuntimeError) as e:
             logger.warning(f"PRAGMA busy_timeout 失败: {e}")
         # vfat/exfat 不支持 WAL 共享内存和 FTS5 delete 命令，必须用 DELETE 模式

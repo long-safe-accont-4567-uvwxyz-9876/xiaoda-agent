@@ -3,6 +3,7 @@ import os
 import sys
 import asyncio
 import base64
+import sqlite3
 import threading
 import time
 import random
@@ -496,10 +497,21 @@ class AIQQBot(botpy.Client):
         if self.nudge_engine:
             self.nudge_engine.poke()
 
-    async def on_error(self, error: Any) -> None:
+    async def on_error(self, event_name: Any, *args: Any, **kwargs: Any) -> None:
+        """botpy 事件处理出错时的回调。
+
+        botpy _run_event 出错时调用 self.on_error(event_name, *args, **kwargs)，
+        旧签名 (self, error) 只接受 1 个参数导致 TypeError，异常被吞掉
+        （"Task exception was never retrieved"），消息处理静默失败。
+        """
         import traceback
         tb = traceback.format_exc()
-        logger.error("qq_bot.ws_error", error=str(error)[:200], traceback=tb[:500] if tb and tb != "NoneType: None\n" else "")
+        logger.error(
+            "qq_bot.event_error",
+            event=str(event_name)[:100],
+            error=str(args[0])[:200] if args else "",
+            traceback=tb[:500] if tb and tb != "NoneType: None\n" else "",
+        )
 
     async def on_close(self, close_status_code: Any, close_msg: Any) -> None:
         logger.warning("qq_bot.ws_closed", code=close_status_code, msg=str(close_msg)[:100])
@@ -715,10 +727,11 @@ class AIQQBot(botpy.Client):
             return cached_sid
 
         # 2. 缓存未命中，查 DB
+        # timeout=20s 略大于 busy_timeout(15s)，确保 SQLite 有足够时间等待锁释放
         try:
             session = await asyncio.wait_for(
                 self.agent.get_session(user_openid),
-                timeout=5.0,
+                timeout=20.0,
             )
             if session:
                 sid = session["id"]
@@ -727,17 +740,17 @@ class AIQQBot(botpy.Client):
             # 没有活跃会话，创建新会话
             sid = await asyncio.wait_for(
                 self.agent.create_session(user_openid),
-                timeout=5.0,
+                timeout=20.0,
             )
             self._set_c2c_session_cache(user_openid, sid)
             return sid
-        except TimeoutError:
-            logger.warning("qq_bot.c2c_session_timeout openid={}, retrying", user_openid)
-            # 超时后重试一次（DB 锁通常是短暂的）
+        except (TimeoutError, sqlite3.OperationalError) as e:
+            logger.warning("qq_bot.c2c_session_db_error openid={} error={}, retrying", user_openid, str(e)[:100])
+            # DB 锁/超时后重试一次（锁通常是短暂的）
             try:
                 session = await asyncio.wait_for(
                     self.agent.get_session(user_openid),
-                    timeout=10.0,
+                    timeout=20.0,
                 )
                 if session:
                     sid = session["id"]
@@ -745,13 +758,13 @@ class AIQQBot(botpy.Client):
                     return sid
                 sid = await asyncio.wait_for(
                     self.agent.create_session(user_openid),
-                    timeout=10.0,
+                    timeout=20.0,
                 )
                 self._set_c2c_session_cache(user_openid, sid)
                 return sid
-            except TimeoutError:
-                logger.error("qq_bot.c2c_session_timeout_retry openid={}", user_openid)
-                # 关键修复：DB 超时时返回临时 session_id，保证消息不丢失
+            except (TimeoutError, sqlite3.OperationalError) as e2:
+                logger.error("qq_bot.c2c_session_db_error_retry openid={} error={}", user_openid, str(e2)[:100])
+                # 关键修复：DB 超时/锁时返回临时 session_id，保证消息不丢失
                 # 后续 agent.process 仍能执行，仅持久化能力受影响
                 fallback_sid = f"qq_tmp_{user_openid[:16]}"
                 return fallback_sid
