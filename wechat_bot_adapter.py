@@ -357,6 +357,18 @@ class WeChatBotAdapter:
         user_id = f"wechat_{from_user_id}" if from_user_id else "wechat_unknown"
         logger.info("wechat_bot.text_msg user_id={} text={}", user_id, text[:80])
 
+        # ACK：处理前立即发送"收到啦，正在想"（对齐 QQ 行为）
+        try:
+            from emotion.emoji_config import get_ack_message
+            ack_text = get_ack_message("xiaoda")
+            await self.send_message(
+                ack_text,
+                to_user_id=from_user_id,
+                context_token=context_token,
+            )
+        except Exception as e:
+            logger.warning("wechat_bot.ack_send_failed error={}", str(e)[:200])
+
         try:
             result = await asyncio.wait_for(
                 self._core.process(
