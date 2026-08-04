@@ -402,12 +402,25 @@ class WeChatBotAdapter:
             return
 
         reply = getattr(result, "reply", "") or ""
-        if reply:
-            await self.send_message(
+        if not reply:
+            return
+        sticker_path = getattr(result, "sticker_path", None) or ""
+        # 有 emotion 表情包 → 图文合并发送；失败回退纯文本
+        if sticker_path and Path(sticker_path).exists():
+            sent = await self.send_media_message(
                 reply,
+                sticker_path,
                 to_user_id=from_user_id,
                 context_token=context_token,
             )
+            if sent:
+                return
+            logger.warning("wechat_bot.sticker_send_failed fallback_to_text")
+        await self.send_message(
+            reply,
+            to_user_id=from_user_id,
+            context_token=context_token,
+        )
 
     # ------------------------------------------------------------------
     # 发送消息
@@ -487,10 +500,52 @@ class WeChatBotAdapter:
             logger.error("wechat_bot.send_error error={}", str(e)[:200])
             return False
 
-    async def send_sticker(self, sticker_path: str) -> bool:
-        """发送微信表情包（暂未实现）
+    async def send_media_message(
+        self,
+        content: str,
+        image_path: str,
+        to_user_id: str = "",
+        context_token: str = "",
+    ) -> bool:
+        """发送文字+图片合并消息（表情包）。
 
-        TODO: 上传图片到微信 CDN → 发送图片消息
+        Args:
+            content: 文本内容（可为空串，仅发图）
+            image_path: 本地图片路径
+            to_user_id: 目标用户（为空用缓存）
+            context_token: 会话 token（为空用缓存）
+
+        Returns:
+            是否发送成功
+        """
+        if self._ilink_client is None:
+            logger.warning("wechat_bot.send_media_no_client content={}", content[:40])
+            return False
+        target_user = to_user_id or self._last_from_user_id
+        target_token = context_token or self._last_context_token
+        if not target_user:
+            logger.warning("wechat_bot.send_media_no_user_id")
+            return False
+        try:
+            result = await self._ilink_client.send_media_message(
+                target_user, target_token, content, image_path
+            )
+            return result.get("ret", 0) == 0
+        except SessionExpiredError:
+            logger.warning("wechat_bot.send_media_session_expired")
+            self._expired = True
+            self._connected = False
+            self._clear_credentials()
+            return False
+        except Exception as e:
+            logger.error(
+                "wechat_bot.send_media_error error={} type={}",
+                str(e)[:200], type(e).__name__,
+            )
+            return False
+
+    async def send_sticker(self, sticker_path: str) -> bool:
+        """发送微信表情包（仅图片，无文字）。
 
         Args:
             sticker_path: 表情包文件路径
@@ -498,8 +553,7 @@ class WeChatBotAdapter:
         Returns:
             是否发送成功
         """
-        logger.debug("wechat_bot.send_sticker_not_implemented path={}", sticker_path)
-        return False
+        return await self.send_media_message("", sticker_path)
 
     async def send_voice(self, audio_path: str) -> bool:
         """发送微信语音消息（暂未实现）
