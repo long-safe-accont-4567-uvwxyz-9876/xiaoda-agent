@@ -79,9 +79,18 @@ async def get_status(request: Request) -> Any:
             qq_connected = True
     except Exception as exc:
         logger.debug("system.qq_status_check_failed: {}", exc, exc_info=True)
+    wechat_connected = False
+    try:
+        import wechat_bot_adapter
+        bot = wechat_bot_adapter._ACTIVE_BOT
+        if bot is not None and not bot.is_closed():
+            wechat_connected = True
+    except Exception as exc:
+        logger.debug("system.wechat_status_check_failed: {}", exc, exc_info=True)
     return Envelope(data=SystemStatus(
         uptime=time.time() - _start_time,
         qq_connected=qq_connected,
+        wechat_connected=wechat_connected,
         active_sessions=active,
         version=_read_version(),
         permission_mode=get_permission_manager().mode.value,

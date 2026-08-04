@@ -12,6 +12,7 @@ import { useRouter } from 'vue-router'
 import { t, tf, setLang, state as i18nState } from '../i18n'
 import type { Lang } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import WeChatConnectPanel from '../components/WeChatConnectPanel.vue'
 import { sound } from '../utils/sound'
 
 const message = useMessage()
@@ -339,6 +340,8 @@ const permDesc = computed<Record<string, string>>(() => ({
       <p class="perm-desc" v-if="!lanInfo!.lan_urls?.length">{{ t('settings.noLanIp') }}</p>
       <p class="perm-desc" v-else>{{ t('settings.clickToCopy') }}</p>
     </section></Tilt3D>
+
+    <WeChatConnectPanel />
 
     <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
       <h3>{{ t('settings.apiKeyConfig') }}</h3>
