@@ -113,6 +113,17 @@ class WeChatBotAdapter:
         - 设置 _ACTIVE_BOT = self（对齐 qq_bot_adapter 的模式）
         """
         global _ACTIVE_BOT
+        # guard：停掉已有活跃实例，避免多个 poll_task 并存导致同一消息被多次
+        # 接收/处理（"消息重复 N 次"根因：旧实例的 _poll_task 不会被新实例自动取消，
+        # _start_polling 的幂等只对同一实例生效，跨实例无效）
+        if _ACTIVE_BOT is not None and _ACTIVE_BOT is not self and not _ACTIVE_BOT.is_closed():
+            logger.info("wechat_bot.start_stopping_existing")
+            try:
+                await _ACTIVE_BOT.stop()
+            except Exception as e:
+                logger.warning(
+                    "wechat_bot.start_stop_existing_failed error={}", str(e)[:200],
+                )
         _ACTIVE_BOT = self
         self._running = True
         self._closed = False
