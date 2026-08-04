@@ -25,6 +25,7 @@ import hashlib
 import os
 import random
 import struct
+import urllib.parse
 import uuid
 from typing import Any, Optional
 
@@ -592,10 +593,10 @@ class ILinkClient:
 
     async def _upload_to_cdn(self, upload_param: str, filekey: str, encrypted: bytes) -> str:
         """上传加密数据到 CDN，返回 x-encrypted-param（后续 sendmessage 引用）。"""
-        url = (
-            f"{ILINK_CDN_URL}/upload"
-            f"?encrypted_query_param={upload_param}&filekey={filekey}"
+        query = urllib.parse.urlencode(
+            {"encrypted_query_param": upload_param, "filekey": filekey}
         )
+        url = f"{ILINK_CDN_URL}/upload?{query}"
         try:
             response = await self._client.post(
                 url,
@@ -614,6 +615,8 @@ class ILinkClient:
                 f"iLink CDN upload HTTP {response.status_code}: {response.text[:120]}"
             )
         param = response.headers.get("x-encrypted-param", "")
+        if not param:
+            raise RuntimeError("iLink CDN upload missing x-encrypted-param")
         logger.info("ilink.cdn_upload.ok param_len={}", len(param))
         return param
 

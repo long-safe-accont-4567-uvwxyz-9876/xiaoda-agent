@@ -1,6 +1,5 @@
 """wechat_bot_adapter ACK 与表情包行为测试"""
 import asyncio
-from pathlib import Path
 
 from wechat_bot_adapter import WeChatBotAdapter
 
@@ -90,7 +89,7 @@ def test_reply_sticker_failure_falls_back_to_text(tmp_path):
     img.write_bytes(b"fake-png-bytes")
     core = FakeCore(FakeResult("回复", sticker_path=str(img)))
     adapter = _make_adapter(core)
-    # 让 send_media_message 抛异常
+    # 让底层 client 抛异常
     async def boom(*a, **k):
         raise RuntimeError("upload failed")
     adapter._ilink_client.send_media_message = boom
