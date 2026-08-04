@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import random
 import struct
@@ -29,6 +30,9 @@ from typing import Any, Optional
 
 import httpx
 from loguru import logger
+
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import padding
 
 
 # ============================================================================
@@ -546,6 +550,72 @@ class ILinkClient:
                 to_user_id, len(text), len(context_token),
             )
             raise
+
+    @staticmethod
+    def _aes_ecb_encrypt(data: bytes, key: bytes) -> bytes:
+        """AES-128-ECB + PKCS7 加密（iLink 媒体上传协议）。"""
+        padder = padding.PKCS7(128).padder()
+        padded = padder.update(data) + padder.finalize()
+        cipher = Cipher(algorithms.AES(key), modes.ECB())
+        encryptor = cipher.encryptor()
+        return encryptor.update(padded) + encryptor.finalize()
+
+    async def _get_upload_url(
+        self, to_user_id: str, raw_bytes: bytes, aes_key: bytes
+    ) -> tuple[str, str, bytes]:
+        """获取 CDN 上传参数并预加密，返回 (upload_param, filekey, encrypted)。
+
+        Args:
+            to_user_id: 目标用户 ID
+            raw_bytes: 图片明文二进制
+            aes_key: 随机 16 字节 AES 密钥
+
+        Returns:
+            (upload_param, filekey, encrypted): 上传参数、文件标识、加密后数据
+        """
+        encrypted = self._aes_ecb_encrypt(raw_bytes, aes_key)
+        filekey = os.urandom(16).hex()
+        data = {
+            "filekey": filekey,
+            "media_type": 1,  # IMAGE
+            "to_user_id": to_user_id,
+            "rawsize": len(raw_bytes),
+            "rawfilemd5": hashlib.md5(raw_bytes).hexdigest(),
+            "filesize": len(encrypted),
+            "no_need_thumb": True,  # 表情包无需缩略图
+            "aeskey": aes_key.hex(),
+        }
+        payload = await self._post("/ilink/bot/getuploadurl", data=data)
+        upload_param = payload.get("upload_param", "")
+        logger.info("ilink.get_upload_url.ok to={} upload_param_len={}", to_user_id, len(upload_param))
+        return upload_param, filekey, encrypted
+
+    async def _upload_to_cdn(self, upload_param: str, filekey: str, encrypted: bytes) -> str:
+        """上传加密数据到 CDN，返回 x-encrypted-param（后续 sendmessage 引用）。"""
+        url = (
+            f"{ILINK_CDN_URL}/upload"
+            f"?encrypted_query_param={upload_param}&filekey={filekey}"
+        )
+        try:
+            response = await self._client.post(
+                url,
+                content=encrypted,
+                headers={"Content-Type": "application/octet-stream"},
+            )
+        except httpx.HTTPError as e:
+            logger.error("ilink.cdn_upload.http_error url={} error={}", url, str(e)[:200])
+            raise
+        if response.status_code != 200:
+            logger.error(
+                "ilink.cdn_upload.bad_status status={} body={}",
+                response.status_code, response.text[:200],
+            )
+            raise RuntimeError(
+                f"iLink CDN upload HTTP {response.status_code}: {response.text[:120]}"
+            )
+        param = response.headers.get("x-encrypted-param", "")
+        logger.info("ilink.cdn_upload.ok param_len={}", len(param))
+        return param
 
     # ------------------------------------------------------------------
     # API: 输入状态
