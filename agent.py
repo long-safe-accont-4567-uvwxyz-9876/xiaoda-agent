@@ -64,7 +64,9 @@ def _handle_first_run_mode(args) -> None:
     if args.desktop:
         print("\n  [!] 检测到首次运行，将启动独立窗口")
         print("      请在窗口内完成 API Key 配置\n")
-    elif args.web:
+    elif args.web or os.getenv("WEB_UI_ENABLED", "").lower() in ("true", "1", "yes"):
+        # 与 main() 最终启动判断一致：WEB_UI_ENABLED=true 时也走 Web UI（Docker 常见），
+        # 避免首次运行错误走 CLI 向导（stdin 不可交互时 EOFError 卡死）
         print("\n  [!] 检测到首次运行，将启动 Web UI")
         print("      请在浏览器中完成 API Key 配置\n")
     else:

@@ -727,11 +727,13 @@ class AIQQBot(botpy.Client):
             return cached_sid
 
         # 2. 缓存未命中，查 DB
-        # timeout=20s 略大于 busy_timeout(15s)，确保 SQLite 有足够时间等待锁释放
+        # 总截止时间 20s（略大于 busy_timeout 15s），所有尝试共享此额度，
+        # 避免重试时重置超时导致总延迟达 40s（CodeRabbit finding）
+        deadline = time.monotonic() + 20.0
         try:
             session = await asyncio.wait_for(
                 self.agent.get_session(user_openid),
-                timeout=20.0,
+                timeout=max(deadline - time.monotonic(), 0.1),
             )
             if session:
                 sid = session["id"]
@@ -740,25 +742,33 @@ class AIQQBot(botpy.Client):
             # 没有活跃会话，创建新会话
             sid = await asyncio.wait_for(
                 self.agent.create_session(user_openid),
-                timeout=20.0,
+                timeout=max(deadline - time.monotonic(), 0.1),
             )
             self._set_c2c_session_cache(user_openid, sid)
             return sid
         except (TimeoutError, sqlite3.OperationalError) as e:
             logger.warning("qq_bot.c2c_session_db_error openid={} error={}, retrying", user_openid, str(e)[:100])
-            # DB 锁/超时后重试一次（锁通常是短暂的）
+            # DB 锁/超时后用剩余时间重试一次（锁通常是短暂的）
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.error("qq_bot.c2c_session_deadline_exhausted openid={}", user_openid)
+                return f"qq_tmp_{user_openid[:16]}"
             try:
                 session = await asyncio.wait_for(
                     self.agent.get_session(user_openid),
-                    timeout=20.0,
+                    timeout=remaining,
                 )
                 if session:
                     sid = session["id"]
                     self._set_c2c_session_cache(user_openid, sid)
                     return sid
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    logger.error("qq_bot.c2c_session_deadline_exhausted openid={}", user_openid)
+                    return f"qq_tmp_{user_openid[:16]}"
                 sid = await asyncio.wait_for(
                     self.agent.create_session(user_openid),
-                    timeout=20.0,
+                    timeout=remaining,
                 )
                 self._set_c2c_session_cache(user_openid, sid)
                 return sid
