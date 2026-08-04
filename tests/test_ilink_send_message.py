@@ -35,8 +35,11 @@ class FakeAsyncClient:
 
     async def post(self, url, json=None, headers=None, timeout=None):
         self.calls.append({"url": url, "json": json, "headers": headers})
-        payload = self._payloads.pop(0) if self._payloads else {"ret": 0}
-        return FakeResponse(payload)
+        item = self._payloads.pop(0) if self._payloads else {"ret": 0}
+        # 支持注入异常（模拟超时/会话过期/服务端错误）
+        if isinstance(item, Exception):
+            raise item
+        return FakeResponse(item if isinstance(item, dict) else {"ret": 0})
 
     async def aclose(self):
         pass
@@ -99,3 +102,57 @@ def test_send_message_ok_returns_ret_zero():
     client = ILinkClient(client=fake)
     result = asyncio.run(client.send_message("u", "t", "hi"))
     assert result == {"ret": 0}
+
+
+# ── verify_token / send_test_message ──────────────────────────────────────
+# 登录后无 context_token，发消息会 ret=-2；改为 getupdates 短超时探测 token。
+
+def test_verify_token_ok_via_ret_zero():
+    """getupdates 返回 ret=0 → token 有效。"""
+    fake = FakeAsyncClient([{"ret": 0, "msgs": [], "get_updates_buf": ""}])
+    client = ILinkClient(bot_token="tok", client=fake)
+    ok, msg = asyncio.run(client.verify_token())
+    assert ok is True and msg == "ok"
+    # 请求体格式与 get_updates 一致
+    assert fake.calls[0]["json"]["get_updates_buf"] == ""
+
+
+def test_verify_token_ok_via_timeout():
+    """getupdates 超时 → 服务端 hold 连接 = 认证通过 = token 有效。"""
+    import httpx
+    fake = FakeAsyncClient([httpx.TimeoutException("timeout")])
+    client = ILinkClient(bot_token="tok", client=fake)
+    ok, msg = asyncio.run(client.verify_token())
+    assert ok is True and msg == "ok"
+
+
+def test_verify_token_session_expired():
+    """ret=-14 → token 被识别但会话过期（token 本身有效）。"""
+    from ilink_client import SessionExpiredError
+    fake = FakeAsyncClient([SessionExpiredError()])
+    client = ILinkClient(bot_token="tok", client=fake)
+    ok, msg = asyncio.run(client.verify_token())
+    assert ok is True and msg == "session_expired"
+
+
+def test_verify_token_invalid():
+    """服务端拒绝（ret=-2 等）→ token 无效。"""
+    fake = FakeAsyncClient([RuntimeError("iLink ret=-2: prepare failed")])
+    client = ILinkClient(bot_token="bad_tok", client=fake)
+    ok, msg = asyncio.run(client.verify_token())
+    assert ok is False
+
+
+def test_send_test_message_does_not_send_message():
+    """send_test_message 改用 verify_token（getupdates 探测），不再发消息。
+
+    旧实现发 context_token="" 的消息必然 ret=-2（prepare failed），
+    这是登录验证报错的根因。
+    """
+    fake = FakeAsyncClient([{"ret": 0}])
+    client = ILinkClient(bot_token="tok", client=fake)
+    ok, _ = asyncio.run(client.send_test_message("tok", "user@im"))
+    assert ok is True
+    # 只调了 getupdates，绝不能调 sendmessage
+    assert all("/getupdates" in c["url"] for c in fake.calls)
+    assert not any("/sendmessage" in c["url"] for c in fake.calls)

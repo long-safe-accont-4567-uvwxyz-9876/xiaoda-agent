@@ -351,4 +351,13 @@ async def get_wechat_status() -> Any:
                 connected = True
     except Exception:
         pass
+    # 若无活跃 bot（轮询未启动或服务重启后），检查凭证文件：
+    # 凭证存在即视为已登录，前端显示已连接状态（可断开重连），避免刷新后状态丢失
+    if not connected and not expired:
+        try:
+            from wechat_bot_adapter import CREDENTIALS_PATH
+            if CREDENTIALS_PATH.exists():
+                connected = True
+        except Exception:
+            pass
     return Envelope(data={"connected": connected, "expired": expired})

@@ -469,6 +469,9 @@ async def _start_services(app: Any, core: Any) -> None:
     # QQ Bot：走统一入口 ensure_qq_bot_task，相同凭证下并发调用（_background_reinit
     # 与 _start_services 同时触发）会通过指纹合并复用现有 task，避免重复启动抖动
     await ensure_qq_bot_task(app)
+    # 微信 Bot：若有凭证自动启动长轮询（凭证由 WebUI 扫码登录保存）
+    # 服务重启后自动恢复，保持登录状态；无凭证时静默跳过
+    await _ensure_wechat_bot_task(app)
     app.state.last_emotion = None
 
 
@@ -570,6 +573,32 @@ async def _restart_qq_bot_task_inner(app: FastAPI) -> bool:
         logger.error("webui.qq_bot_task_restart_failed error={}", str(e))
         app.state.qq_task = None
         return False
+
+
+async def _ensure_wechat_bot_task(app: FastAPI) -> None:
+    """若有微信凭证，自动启动 WeChatBotAdapter 长轮询。
+
+    凭证由 WebUI 扫码登录后保存到 ~/.ai-agent/wechat_credentials.json。
+    服务重启后自动恢复轮询，保持登录状态。启动失败不阻塞 WebUI（仅警告日志），
+    用户可在设置页重新扫码登录。
+    """
+    try:
+        from wechat_bot_adapter import WeChatBotAdapter, CREDENTIALS_PATH
+        if not CREDENTIALS_PATH.exists():
+            return
+        core = app.state.core
+        adapter = WeChatBotAdapter(
+            db=core.db, router=core.router, api=None,
+            user_openid="", core=core,
+        )
+        await adapter.start()
+        app.state.wechat_bot = adapter
+        logger.info("webui.wechat_bot_auto_started")
+    except Exception as e:
+        logger.warning(
+            "webui.wechat_bot_auto_start_failed error={} type={}",
+            str(e)[:200], type(e).__name__,
+        )
 
 
 @asynccontextmanager

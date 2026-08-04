@@ -161,6 +161,10 @@ async function fetchQrcode() {
 // ── 轮询扫码状态 ──────────────────────────────────────────
 async function pollStatus() {
   if (!qrcodeId.value) return
+  // guard：已确认/已连接后忽略残留的轮询响应
+  // stopPolling 清除定时器，但已发出的在途请求仍会返回 confirmed，
+  // 若不拦截会重复触发 message.success（"登录成功出现10次"根因）
+  if (state.value === 'confirmed' || state.value === 'connected') return
   try {
     const data = await get<{ status: string }>(
       '/wechat/qrcode-status?qrcode_id=' + encodeURIComponent(qrcodeId.value),

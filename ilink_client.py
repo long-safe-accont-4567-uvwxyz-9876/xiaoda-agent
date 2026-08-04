@@ -628,54 +628,65 @@ class ILinkClient:
     # API: 测试消息（登录验证）
     # ------------------------------------------------------------------
 
-    async def send_test_message(self, bot_token: str, user_id: str) -> tuple[bool, str]:
-        """使用给定 bot_token 发送测试消息，用于验证登录是否成功。
+    async def verify_token(self) -> tuple[bool, str]:
+        """验证 bot_token 有效性（不发消息）。
 
-        使用独立的 bot_token 参数（不依赖 self._bot_token），适合在扫码登录
-        完成后立即验证 token 有效性。发送一条简短测试文本到指定 user_id。
-        由于此时尚无有效 context_token，传入空字符串尝试发送。
-
-        Args:
-            bot_token: 待验证的 bot_token
-            user_id: 测试消息接收方用户 ID
+        登录刚完成时还没有入站消息，没有 context_token，此时调 send_message
+        会因 context_token 为空被服务端拒绝（ret=-2 prepare failed）。
+        改用 getupdates 短超时(2s)探测 token：服务端认证通过会 hold 连接
+        等消息（超时即代表认证通过）；认证失败会立即返回错误。
 
         Returns:
             tuple[bool, str]:
-                - (True, "ok") 表示发送成功
-                - (False, error_msg) 表示发送失败，error_msg 描述失败原因
-
-        Note:
-            本方法不会抛出异常，所有错误均通过返回值传递，
-            方便调用方在登录流程中做 try/except 之外的判断。
+                - (True, "ok") token 有效（getupdates 返回 ret=0 或超时=hold）
+                - (True, "session_expired") token 被识别但会话过期(-14)，
+                  仍说明 token 本身有效，只是需重新登录
+                - (False, error_msg) token 无效或网络错误
         """
-        logger.info("ilink.send_test_message.start user={} token_len={}", user_id, len(bot_token))
         try:
-            result = await self.send_message(
-                to_user_id=user_id,
-                context_token="",
-                text="iLink Bot 已上线，登录验证成功。",
+            await self._post(
+                "/ilink/bot/getupdates",
+                data={"get_updates_buf": ""},
+                timeout=2.0,
             )
-            ret = result.get("ret", RET_OK)
-            if ret == RET_OK:
-                logger.info("ilink.send_test_message.ok user={}", user_id)
-                return True, "ok"
-            logger.warning("ilink.send_test_message.bad_ret user={} ret={}", user_id, ret)
-            return False, f"ret={ret}"
-        except SessionExpiredError as e:
-            logger.warning("ilink.send_test_message.session_expired user={}", user_id)
-            return False, "session_expired"
-        except httpx.TimeoutException as e:
-            logger.warning("ilink.send_test_message.timeout user={} error={}", user_id, str(e)[:200])
-            return False, f"timeout: {e}"
-        except httpx.HTTPError as e:
-            logger.warning("ilink.send_test_message.http_error user={} error={}", user_id, str(e)[:200])
-            return False, f"http_error: {e}"
+            # ret=0：token 有效，且本次没有新消息
+            logger.info("ilink.verify_token.ok")
+            return True, "ok"
+        except httpx.TimeoutException:
+            # 超时 = 服务端 hold 连接等消息 = 认证通过（token 有效）
+            logger.info("ilink.verify_token.ok_via_timeout")
+            return True, "ok"
+        except SessionExpiredError:
+            # -14：token 被服务端识别但会话过期（token 格式有效，需重新登录）
+            logger.info("ilink.verify_token.session_expired")
+            return True, "session_expired"
         except Exception as e:
             logger.warning(
-                "ilink.send_test_message.failed user={} error={} type={}",
-                user_id, str(e)[:200], type(e).__name__,
+                "ilink.verify_token.failed error={} type={}",
+                str(e)[:200], type(e).__name__,
             )
-            return False, f"{type(e).__name__}: {e}"
+            return False, f"{type(e).__name__}: {str(e)[:120]}"
+
+    async def send_test_message(self, bot_token: str, user_id: str) -> tuple[bool, str]:
+        """验证登录是否成功（通过 token 探测，不发消息）。
+
+        登录刚完成时无 context_token，发消息会 ret=-2（prepare failed）。
+        改为调用 verify_token 用 getupdates 短超时探测 bot_token 有效性。
+
+        Args:
+            bot_token: 待验证的 bot_token（兼容签名，实际用 self._bot_token）
+            user_id: 测试用户 ID（兼容签名，探测不依赖此字段）
+
+        Returns:
+            tuple[bool, str]:
+                - (True, "ok") token 有效
+                - (False, error_msg) token 无效或网络错误
+
+        Note:
+            不抛异常，所有错误经返回值传递，方便登录流程调用。
+        """
+        logger.info("ilink.send_test_message.start user={} token_len={}", user_id, len(bot_token))
+        return await self.verify_token()
 
 
 # ============================================================================
