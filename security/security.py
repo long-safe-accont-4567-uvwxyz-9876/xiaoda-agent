@@ -176,6 +176,8 @@ class SecurityFilter:
         self._address_term_cache: str = ""
         self._address_term_ts: float = 0.0
         self._ADDRESS_TERM_TTL: float = 60.0
+        # 速率限制清理时间戳（初始化避免首次 _check_rate 立即触发全量清理）
+        self._last_cleanup_time: float = time.time()
         self._load_patterns()
         if not self.owner_ids:
             logger.warning("security.no_owner_configured",
@@ -462,9 +464,14 @@ class SecurityFilter:
         return True
 
     def _cleanup_stale_users(self, now: float) -> None:
-        """清理超过 5 分钟未活跃的用户频率记录。"""
+        """清理超过 5 分钟未活跃的用户频率记录。
+
+        修复：仅删除 timestamps 列表非空 且 最近一次时间戳距今 > 300s 的用户。
+        空列表（timestamps 被 60s 滑窗过滤清空）不能视为"stale"，否则会在首次清理时
+        误删全部活跃用户 → 速率限制永久失效（直到用户下次新请求才能重建状态）。
+        """
         stale = [uid for uid, ts in self._call_timestamps.items()
-                 if not ts or now - ts[-1] > 300]
+                 if ts and now - ts[-1] > 300]
         for uid in stale:
             del self._call_timestamps[uid]
 
