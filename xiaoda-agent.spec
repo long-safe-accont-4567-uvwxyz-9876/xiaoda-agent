@@ -459,20 +459,10 @@ hiddenimports = [
     'prompt_toolkit.layout',
     'prompt_toolkit.layout.controls',
     'prompt_toolkit.styles',
-
-    # Textual TUI（动态 import，需显式声明）
-    'textual',
-    'textual.app',
-    'textual.screen',
-    'textual.widgets',
-    'textual.containers',
-    'textual.widgets._listview',
-    'markdown_it',
-    'markdown_it.port',
 ]
 
 # Collect any sub-modules that static analysis might miss
-for pkg in ('openai', 'pydantic', 'starlette', 'anyio', 'uvicorn', 'psutil', 'httpx', 'certifi', 'httpcore', 'pilk', 'PIL', 'webview', 'h2', 'hpack', 'hyperframe', 'prompt_toolkit', 'textual'):
+for pkg in ('openai', 'pydantic', 'starlette', 'anyio', 'uvicorn', 'psutil', 'httpx', 'certifi', 'httpcore', 'pilk', 'PIL', 'webview', 'h2', 'hpack', 'hyperframe', 'prompt_toolkit'):
     try:
         hiddenimports += collect_submodules(pkg)
     except Exception:

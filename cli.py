@@ -22,18 +22,6 @@ logger.add(
 import cli_client
 import contextlib
 
-from cli_common import (
-    status_translate,
-    get_model_info,
-    command_entries,
-    address_term,
-)
-
-# 兼容别名：保持现有调用点不变（Textual 用 STYLE，降级路径用 _C 类）
-_status_translate = status_translate
-_get_model_info = get_model_info
-_command_entries = command_entries
-
 # ── prompt_toolkit 支持（/ 弹出下拉 + 菜单选择）──────────────
 # 缺失时优雅回退到 readline 路径，不崩溃（旧安装包兼容）。
 try:
@@ -273,6 +261,34 @@ NAHIDA_FAREWELLS = [
     "白草净华，愿爸爸一切安好～🌿",
 ]
 
+STATUS_MAP = {
+    "thinking": "🌿 小妲正在想……",
+    "route": "✨ 人家在看看交给谁比较好～",
+    "tool": "🌿 小妲正在查资料～",
+    "search": "🔍 人家帮你搜一下～",
+    "weather": "🌤️ 人家看看天气怎么样～",
+    "browse": "🌐 人家去网上看看～",
+    "shell": "💻 人家在跑命令～",
+    "python": "🐍 人家在算东西～",
+    "camera": "📷 人家看看摄像头～",
+    "xiaoda_done": "🌿 小妲整理好了！",
+    "xiaoli_done": "💥 小莉完成啦！",
+    "xiaolian_done": "🌸 小涟完成啦！",
+    "xiaolang_done": "🎮 小狼完成啦！",
+    "xiaoke_done": "🔮 小可完成啦！",
+    "done": "✅ 搞定啦～",
+}
+
+# IP-safe: 动态从 config/agents/*.json 读取 display_name，避免硬编码原名
+try:
+    from config import get_agent_display_name, agent_names
+    from emotion.emoji_config import get_ack_message
+    AGENT_NAMES = {name: get_agent_display_name(name) for name in agent_names()}
+    # ACK 消息使用自定义配置（随心即言）
+    STATUS_MAP["thinking"] = get_ack_message("xiaoda")
+except ImportError:
+    AGENT_NAMES = {"xiaoda": "小妲", "xiaoli": "小莉", "xiaolian": "小涟", "xiaolang": "小狼", "xiaoke": "小可"}
+
 NAHIDA_ASCII = (
     "     _   _____    __  __________  ___ \n"
     "    / | / /   |  / / / /  _/ __ \\/   |\n"
@@ -286,8 +302,26 @@ LEAF_LINE = "🌿  世  界  的  记  忆  ，  由  我  来  守  护  🌿"
 # ── 命令列表：与 WebUI 完全对齐 ──
 # 统一来源：slash_commands.COMMAND_DESCRIPTIONS / OWNER_ONLY_COMMANDS
 # （WebUI 斜杠命令面板正是通过 slash_commands.list_commands() 读取同一份数据，
-#   保证 CLI 与 WebUI 展示的命令、描述、归属永远一致，不再各自维护硬编码列表。
-#   实现见 cli_common.command_entries()，此处通过 _command_entries 别名复用。）
+#   保证 CLI 与 WebUI 展示的命令、描述、归属永远一致，不再各自维护硬编码列表。）
+def _command_entries() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """返回 (公共命令, 主人专属命令) 两组 (命令, 描述)，顺序与 WebUI 一致。"""
+    from slash_commands import COMMAND_DESCRIPTIONS, OWNER_ONLY_COMMANDS
+    public, owner = [], []
+    for name, desc in COMMAND_DESCRIPTIONS.items():
+        (owner if name in OWNER_ONLY_COMMANDS else public).append((name, desc))
+    return public, owner
+
+
+def _get_model_info(token: str = "") -> str:
+    """返回当前聊天模型显示名，从主进程远程读取（与 WebUI 单一数据源同步）。
+
+    旧实现直接读本地 ROUTE_TABLE（.env 默认 mimo-v2.5），不反映 WebUI 切换后的
+    模型。CLI 不再自建 AgentCore，改为远程读取 POST /models/chat-model 的当前值，
+    天然与 WebUI 共享同一份模型状态。
+    """
+    if token:
+        return cli_client.get_chat_model_label(token)
+    return "mimo-v2.5"
 
 
 def _typewriter(text: str, delay: float | None = None) -> None:
@@ -312,6 +346,36 @@ def _typewriter(text: str, delay: float | None = None) -> None:
     print()
 
 
+def _status_translate(msg: str) -> str:
+    low = msg.lower()
+    for key, val in STATUS_MAP.items():
+        if key in low:
+            return val
+    for eng, chn in AGENT_NAMES.items():
+        if eng in low:
+            return f"✨ 人家让{chn}帮忙看看～"
+    if "路由" in msg or "route" in low:
+        return "✨ 人家在看看交给谁比较好～"
+    if "正在使用" in msg or "使用" in msg:
+        tool_hints = {
+            "搜索": "🔍 人家帮你搜一下～",
+            "天气": "🌤️ 人家看看天气～",
+            "网页": "🌐 人家去网上看看～",
+            "命令": "💻 人家在跑命令～",
+            "python": "🐍 人家在算东西～",
+            "摄像": "📷 人家看看摄像头～",
+        }
+        for hint, val in tool_hints.items():
+            if hint in msg:
+                return val
+        return "🌿 小妲正在忙～"
+    if "完成" in msg or "done" in low:
+        return "✅ 搞定啦～"
+    if "正在" in msg:
+        return f"🌿 {msg}"
+    return f"🌿 {msg}"
+
+
 class CLIInterface:
     """命令行交互界面：作为主进程（nahida-web）的客户端，共享同一 AgentCore。
 
@@ -326,8 +390,19 @@ class CLIInterface:
         self._ws: cli_client.WSClient | None = None
 
     def _address_term(self) -> str:
-        """获取当前用户称呼（实现见 cli_common.address_term）。"""
-        return address_term()
+        """获取当前用户称呼。
+
+        从 USER.md 的"- 称呼：xxx"动态读取（可在设置页修改）；未设置时兜底"朋友"
+        （与设置页占位符"留空则默认「朋友」"一致），不硬编码某种称呼。
+        """
+        try:
+            from agent_core.core import AgentCore
+            term = AgentCore.read_address_term_from_user_md()
+            if term:
+                return term
+        except ImportError:
+            pass
+        return "朋友"
 
     def _init_prompt_session(self) -> None:
         """初始化 prompt_toolkit 会话（含历史、自动建议、斜杠补全）。"""
