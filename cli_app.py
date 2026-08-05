@@ -16,23 +16,6 @@ import cli_client
 from cli_common import STYLE, status_translate
 
 
-def collect_reply(events: list[dict], msg_id: str) -> tuple[str, str | None]:
-    """从 WS 事件流收集最终回复与错误（纯函数，便于测试）。
-
-    返回 (final_reply, error_message)。error 优先于 final。
-    """
-    final = ""
-    error: str | None = None
-    for evt in events:
-        mtype = evt.get("type")
-        if mtype == "error" and evt.get("msg_id") == msg_id:
-            error = evt.get("message") or "主进程处理出错"
-            break
-        if mtype == "final" and evt.get("msg_id") == msg_id:
-            final = evt.get("reply") or ""
-    return final, error
-
-
 def build_command_groups() -> list[dict]:
     """从 slash_commands 权威数据源生成斜杠命令面板的分组数据。"""
     from slash_commands import COMMAND_DESCRIPTIONS, COMMAND_ALIASES, COMMAND_META
@@ -125,24 +108,45 @@ class XiaodaApp(App):
         self._token = ""
         self._ws: cli_client.WSClient | None = None
 
-    def connect_main_process(self, on_status) -> bool:
-        """确保主进程可用并建立 WS 连接。失败返回 False（不闪退）。"""
-        if not cli_client.ensure_main_process(on_status=on_status):
-            return False
+    def on_mount(self) -> None:
+        """应用挂载后启动后台 worker 建立主进程连接。"""
+        self.run_worker(self._connect_main_process(self._report_status), exclusive=True)
+
+    def _report_status(self, text: str) -> None:
+        """把连接状态写入聊天视图（须在主循环线程调用）。"""
+        try:
+            chat = self.query_one("#chat", ChatView)
+            chat.add_status(text)
+        except Exception:
+            pass
+
+    async def _connect_main_process(self, on_status) -> None:
+        """异步连接主进程（在 Textual 主循环内跑，阻塞部分 offload 到线程）。
+
+        on_status 回调可能从 ``asyncio.to_thread`` 的 worker 线程触发，因此对
+        widget 的访问要用 ``call_from_thread`` 切回主循环，保证线程安全、不卡 UI。
+        """
+        import cli_client
+
+        def safe_on_status(text: str) -> None:
+            self.call_from_thread(on_status, text)
+
+        ok = await asyncio.to_thread(cli_client.ensure_main_process, safe_on_status)
+        if not ok:
+            on_status("主进程不可达，请检查服务状态")
+            return
         import os
         pwd = os.getenv("WEBUI_PASSWORD", "") or ""
         try:
-            self._token = cli_client.fetch_token(password=pwd)
+            self._token = await asyncio.to_thread(cli_client.fetch_token, pwd)
         except RuntimeError as e:
             on_status(f"获取 token 失败: {str(e)[:80]}")
-            return False
+            return
         self._ws = cli_client.WSClient(self._token)
         try:
-            asyncio.get_event_loop().run_until_complete(self._ws.connect())
+            await self._ws.connect()
         except Exception as e:
             on_status(f"连接主进程失败: {str(e)[:80]}")
-            return False
-        return True
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
