@@ -51,6 +51,8 @@ const errorMsg = ref('')
 // 轮询定时器与连续失败计数（网络抖动时不刷屏报错）
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let pollFailCount = 0
+// 轮询在途标记：防止慢响应时 setInterval 触发重叠轮询、乱序覆盖状态
+let pollInFlight = false
 const POLL_INTERVAL = 2000
 const POLL_MAX_FAIL = 5
 
@@ -116,6 +118,7 @@ function stopPolling() {
     pollTimer = null
   }
   pollFailCount = 0
+  pollInFlight = false
 }
 
 function startPolling() {
@@ -162,11 +165,14 @@ async function fetchQrcode() {
 
 // ── 轮询扫码状态 ──────────────────────────────────────────
 async function pollStatus() {
+  // guard：上一轮轮询仍在途时跳过本次，避免 overlap 导致响应乱序覆盖状态
+  if (pollInFlight) return
   if (!qrcodeId.value) return
   // guard：已确认/已连接后忽略残留的轮询响应
   // stopPolling 清除定时器，但已发出的在途请求仍会返回 confirmed，
   // 若不拦截会重复触发 message.success（"登录成功出现10次"根因）
   if (state.value === 'confirmed' || state.value === 'connected') return
+  pollInFlight = true
   try {
     const data = await get<{ status: string }>(
       '/wechat/qrcode-status?qrcode_id=' + encodeURIComponent(qrcodeId.value),
@@ -194,6 +200,8 @@ async function pollStatus() {
       state.value = 'error'
       message.error(errorMsg.value)
     }
+  } finally {
+    pollInFlight = false
   }
 }
 
