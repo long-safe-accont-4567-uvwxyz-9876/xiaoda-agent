@@ -161,8 +161,12 @@ def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
     if kioxia_env:
         # 显式配置外置盘：盘未挂载（base 目录不存在）则直接回退，不创建幻影目录
         if not (kioxia_path.exists() or kioxia_path.parent.exists()):
-            print(f"[config] WARNING: KIOXIA_DATA_DIR={kioxia_env} not available, "
-                  f"falling back to {fallback_path}")
+            # 静默回退，不向控制台打印警告：外置盘未挂载是常见状态，
+            # 每次启动刷屏会让用户误以为出错。仅记 debug 日志便于排查。
+            logger.debug(
+                "config.data_path_unavailable kioxia_env={} fallback={}",
+                kioxia_env, fallback_path,
+            )
             return _ensure_fallback(fallback_path)
     try:
         kioxia_path.mkdir(parents=True, exist_ok=True)
