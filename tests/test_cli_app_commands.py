@@ -19,3 +19,11 @@ def test_build_command_groups_aliases_annotated():
         for it in g["items"]:
             if it["name"] == "/model":
                 assert it["aliases"] == ["/m"]
+
+
+def test_every_command_has_group():
+    from slash_commands import COMMAND_DESCRIPTIONS
+
+    all_names = {it["name"] for g in build_command_groups() for it in g["items"]}
+    for name in COMMAND_DESCRIPTIONS:
+        assert name in all_names, f"命令 {name} 未出现在任何分组中"

@@ -9,10 +9,28 @@ from __future__ import annotations
 import asyncio
 
 from textual.app import App, ComposeResult
-from textual.containers import Container, VerticalScroll
-from textual.widgets import Footer, Header, Input, Label, Static
+from textual.containers import VerticalScroll
+from textual.widgets import Footer, Input, Static
 
-from cli_common import STYLE
+import cli_client
+from cli_common import STYLE, status_translate
+
+
+def collect_reply(events: list[dict], msg_id: str) -> tuple[str, str | None]:
+    """从 WS 事件流收集最终回复与错误（纯函数，便于测试）。
+
+    返回 (final_reply, error_message)。error 优先于 final。
+    """
+    final = ""
+    error: str | None = None
+    for evt in events:
+        mtype = evt.get("type")
+        if mtype == "error" and evt.get("msg_id") == msg_id:
+            error = evt.get("message") or "主进程处理出错"
+            break
+        if mtype == "final" and evt.get("msg_id") == msg_id:
+            final = evt.get("reply") or ""
+    return final, error
 
 
 def build_command_groups() -> list[dict]:
@@ -85,7 +103,7 @@ class XiaodaApp(App):
         border: round {STYLE['border']};
         background: {STYLE['panel']};
     }}
-    Message.msg {{
+    .msg {{
         margin: 0 1;
     }}
     .user {{ color: {STYLE['user']}; }}
@@ -102,20 +120,60 @@ class XiaodaApp(App):
 
     BINDINGS = [("ctrl+c", "quit", "退出")]
 
-    def on_mount(self) -> None:
-        self.set_interval(0.1, self._noop)
+    def __init__(self) -> None:
+        super().__init__()
+        self._token = ""
+        self._ws: cli_client.WSClient | None = None
 
-    def _noop(self) -> None:
-        pass
+    def connect_main_process(self, on_status) -> bool:
+        """确保主进程可用并建立 WS 连接。失败返回 False（不闪退）。"""
+        if not cli_client.ensure_main_process(on_status=on_status):
+            return False
+        import os
+        pwd = os.getenv("WEBUI_PASSWORD", "") or ""
+        try:
+            self._token = cli_client.fetch_token(password=pwd)
+        except RuntimeError as e:
+            on_status(f"获取 token 失败: {str(e)[:80]}")
+            return False
+        self._ws = cli_client.WSClient(self._token)
+        try:
+            asyncio.get_event_loop().run_until_complete(self._ws.connect())
+        except Exception as e:
+            on_status(f"连接主进程失败: {str(e)[:80]}")
+            return False
+        return True
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         if not text:
             return
         chat = self.query_one("#chat", ChatView)
-        chat.add_user(text)
         event.input.value = ""
         if text in ("exit", "quit"):
             self.exit()
+            return
+        chat.add_user(text)
+        if text.startswith("/"):
+            self._dispatch_slash(text, chat)
         else:
-            chat.add_assistant(f"（占位回复）：{text}")
+            asyncio.create_task(self._send_chat(text, chat))
+
+    def _dispatch_slash(self, text: str, chat: ChatView) -> None:
+        """简单斜杠命令本地占位（命令面板与真实调用在 Task 4/5 接入）。"""
+        if text == "/help":
+            chat.add_assistant("在输入框输入 / 打开命令面板选择命令。")
+            return
+        chat.add_assistant(f"（{text} 结果待接入）")
+
+    async def _send_chat(self, text: str, chat: ChatView) -> None:
+        if self._ws is None:
+            chat.add_status("尚未连接主进程")
+            return
+        try:
+            reply = await self._ws.chat(
+                text, status_callback=lambda s: chat.add_status(status_translate(s)))
+        except Exception as e:
+            chat.add_status(f"连接异常:{str(e)[:80]}")
+            return
+        chat.add_assistant(reply)
