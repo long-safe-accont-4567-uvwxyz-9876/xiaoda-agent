@@ -216,6 +216,9 @@ ROUTE_TABLE = {
                    "presence_penalty": 0.3, "frequency_penalty": 0.0},
 }
 
+# 模型偏好 label 表（默认 provider 展示用）。
+# 已废弃的 mimo-pro/mimo-flash/mimo-mini 预设已被移除——模型切换统一走动态
+# provider/模型（对齐 WebUI 模型选择 button），不再支持预设字符串切换。
 MODEL_PREFERENCES = {
     "mimo": {"label": "MiMo 模式", "desc": "使用小米 MiMo-V2.5 模型"},
 }
@@ -327,6 +330,26 @@ _CROSS_PROVIDER_MAP: dict[str, tuple[str, str]] = _load_cross_provider_map()
 
 # 请求级隔离的 reasoning_content，避免并发请求间共享状态
 _reasoning_content_var = contextvars.ContextVar('reasoning_content', default='')
+
+
+def list_discovered_model_ids() -> list[str]:
+    """返回所有已发现模型的 'provider/model' 标识（供 CLI /model 参数补全）。
+
+    与 GET /models/discover 一致，动态枚举（非硬编码）。模型发现缓存为空时返回空列表。
+    """
+    ids: list[str] = []
+    try:
+        from web.routers.model_discovery import _cache as _disc_cache
+        _data = (_disc_cache.get("data") or []) if _disc_cache else []
+        for _pg in _data:
+            _provider = _pg.get("provider", "")
+            for _m in (_pg.get("models") or []):
+                _mid = _m.get("id", "")
+                if _provider and _mid:
+                    ids.append(f"{_provider}/{_mid}")
+    except (ImportError, KeyError, ValueError, OSError):
+        logger.debug("router.discovered_model_ids_failed", exc_info=True)
+    return sorted(ids)
 
 
 def _ssrf_check(url: str) -> None:
@@ -910,8 +933,9 @@ class ModelRouter:
     def get_active_max_tokens(self) -> int:
         """获取当前激活模型偏好的实际上下文窗口大小。
 
-        根据 _model_preference（mimo/mimo-pro/mimo-flash/mimo-mini/custom）解析对应 task_type，
-        再从 ROUTE_TABLE 取 max_tokens。供 AgentContext 动态压缩阈值使用。
+        直接解析 chat 主路由的 max_tokens（模型切换统一走动态 provider/模型，
+        已废弃的 mimo-pro/mimo-flash/mimo-mini 预设不再参与 task_type 解析）。
+        供 AgentContext 动态压缩阈值使用。
         """
         task_type = self.resolve_task_type("chat")
         return self.get_max_tokens_for_task(task_type)
@@ -961,6 +985,38 @@ class ModelRouter:
         if "/" in self._model_preference:
             return self._model_preference.split("/", 1)[1]
         return MODEL_PREFERENCES.get(self._model_preference, {}).get("label", "未知")
+
+    def list_models(self) -> dict:
+        """动态列出当前模型与所有已发现 provider 的模型（对齐 WebUI 模型选择 button）。
+
+        模型清单从模型发现缓存动态读取（非硬编码，与 GET /models/discover 一致）。
+        """
+        providers: list[dict] = []
+        try:
+            from web.routers.model_discovery import _cache as _disc_cache
+            _data = (_disc_cache.get("data") or []) if _disc_cache else []
+            for _pg in _data:
+                _provider = _pg.get("provider", "")
+                _models = _pg.get("models", []) or []
+                if not _provider or not _models:
+                    continue
+                providers.append({
+                    "provider": _provider,
+                    "label": _pg.get("label", _provider),
+                    "models": [
+                        {"id": m.get("id", ""),
+                         "display_name": m.get("display_name") or m.get("id", ""),
+                         "free": bool(m.get("free"))}
+                        for m in _models
+                    ],
+                })
+        except (ImportError, KeyError, ValueError, OSError):
+            logger.debug("router.list_models_discovery_failed", exc_info=True)
+        return {
+            "current": self._model_preference,
+            "current_label": self.get_model_preference_label(),
+            "providers": providers,
+        }
 
     def resolve_task_type(self, base_task: str) -> str:
         return base_task

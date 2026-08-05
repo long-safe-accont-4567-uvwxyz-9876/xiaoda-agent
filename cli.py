@@ -24,7 +24,7 @@ logger.add(
 from agent_core import AgentCore
 from agent_core.user_cli import CLIUser
 from core.event_bus import event_bus
-from model_router import ROUTE_TABLE, MODEL_PREFERENCES
+from model_router import ROUTE_TABLE
 import contextlib
 
 # ── readline 支持 ──────────────────────────────────────────
@@ -39,6 +39,74 @@ try:
     atexit.register(lambda: readline.write_history_file(_HIST_FILE))
 except ImportError:
     pass  # readline 不可用时静默降级
+
+
+# ── 斜杠命令 TAB 补全（openclaw 风格：两级补全） ──────────────
+# 第一级：命令名补全（输入 / 后按 Tab 列出候选命令）
+# 第二级：参数补全（输入 /cmd 加空格后，按 Tab 补全该命令的合法参数，
+#         参数候选来自 slash_commands.COMMAND_META 的 arg_completions）
+def _all_command_names() -> list[str]:
+    names = ["/help", "/exit", "/quit"]
+    try:
+        from slash_commands import COMMAND_DESCRIPTIONS
+        names.extend(COMMAND_DESCRIPTIONS.keys())
+    except ImportError:
+        pass
+    return sorted(set(names))
+
+
+def _argument_completions(command: str, partial: str) -> list[str]:
+    """返回命令的参数级补全候选（第二级补全）。
+
+    /model 参数为动态（provider/模型），从模型发现缓存实时补全，对齐 WebUI 模型选择 button。
+    """
+    if command == "/model":
+        return _model_arg_completions(partial)
+    try:
+        from slash_commands import get_argument_completions
+        return get_argument_completions(command, partial)
+    except ImportError:
+        return []
+
+
+def _model_arg_completions(partial: str) -> list[str]:
+    """/model 参数补全：动态枚举已发现模型（provider/模型）。"""
+    try:
+        from model_router import list_discovered_model_ids
+        opts = list_discovered_model_ids()
+    except Exception:
+        opts = []
+    return [o for o in opts if o.startswith(partial)]
+
+
+try:
+    import readline as _rl
+    _ALL_CMDS = _all_command_names()
+
+    def _cli_completer(text: str, state: int) -> str | None:
+        line = _rl.get_line_buffer().lstrip()
+        # 仅对斜杠命令做补全
+        if not line.startswith("/"):
+            return None
+        parts = line.split(maxsplit=1)
+        if len(parts) == 1:
+            # 第一级：命令名补全
+            matches = [c for c in _ALL_CMDS if c.startswith(text)]
+        else:
+            # 第二级：参数补全（先解析别名到规范命令）
+            command = parts[0]
+            try:
+                from slash_commands import resolve_command
+                command = resolve_command(command)
+            except ImportError:
+                pass
+            matches = _argument_completions(command, text)
+        return matches[state] if state < len(matches) else None
+
+    _rl.set_completer(_cli_completer)
+    _rl.parse_and_bind("tab: complete")
+except ImportError:
+    pass  # 无 readline 时静默降级（Windows 原生终端）
 
 
 # ── 颜色支持（Windows 自动检测 + NO_COLOR / FORCE_COLOR） ─────
@@ -151,30 +219,24 @@ NAHIDA_ASCII = (
 
 LEAF_LINE = "🌿  世  界  的  记  忆  ，  由  我  来  守  护  🌿"
 
-HELP_PUBLIC = [
-    ("💰", "/cost [7d]", "查看API消耗"),
-    ("📊", "/status", "查看Agent状态"),
-    ("🧹", "/forget", "清除短期对话记忆"),
-    ("📚", "/learn", "查看学习记录"),
-    ("📓", "/note", "查看笔记本"),
-    ("🖥️", "/hw", "查看香橙派硬件状态"),
-    ("📷", "/cam", "拍照并分析画面"),
-    ("⚙️", "/sys", "查看系统运行状态"),
-    ("🩺", "/doctor [json|fix]", "运行自检（零 API 调用, <2s）"),
-    ("❓", "/help", "显示此帮助"),
-]
-
-HELP_OWNER = [
-    ("🤖", "/model [mimo|mimo-pro]", "切换模型模式"),
-    ("🔄", "/reset", "重置对话上下文"),
-    ("🎙️", "/voice [on|off]", "切换语音模式"),
-    ("🎭", "/agent [名称]", "切换对话目标Agent"),
-]
+# ── 命令列表：与 WebUI 完全对齐 ──
+# 统一来源：slash_commands.COMMAND_DESCRIPTIONS / OWNER_ONLY_COMMANDS
+# （WebUI 斜杠命令面板正是通过 slash_commands.list_commands() 读取同一份数据，
+#   保证 CLI 与 WebUI 展示的命令、描述、归属永远一致，不再各自维护硬编码列表。）
+def _command_entries() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """返回 (公共命令, 主人专属命令) 两组 (命令, 描述)，顺序与 WebUI 一致。"""
+    from slash_commands import COMMAND_DESCRIPTIONS, OWNER_ONLY_COMMANDS
+    public, owner = [], []
+    for name, desc in COMMAND_DESCRIPTIONS.items():
+        (owner if name in OWNER_ONLY_COMMANDS else public).append((name, desc))
+    return public, owner
 
 
 def _get_model_info() -> str:
     model_id = ROUTE_TABLE.get("chat", {}).get("model", "mimo-v2.5")
-    _pref = MODEL_PREFERENCES.get("mimo", {}).get("label", "MiMo")
+    provider = ROUTE_TABLE.get("chat", {}).get("client", "")
+    if provider and provider != "mimo":
+        return f"{provider}/{model_id}"
     return f"{model_id}"
 
 
@@ -278,7 +340,8 @@ class CLIInterface:
         print(f"  {_C.DIM}+------------------------------------------------+{_C.RST}")
         print()
         print(f"  {_C.CYAN}💬 直接输入消息跟小妲聊天{_C.RST}")
-        print(f"  {_C.CYAN}📋 /help 查看所有命令{_C.RST}")
+        print(f"  {_C.CYAN}📋 /help 查看所有命令 · / 后按 Tab 补全命令{_C.RST}")
+        print(f"  {_C.CYAN}🧠 /model 切换模型 · /reset 重置 · /agent 切换子代理{_C.RST}")
         print(f"  {_C.CYAN}🚪 exit 或 Ctrl+C 退出{_C.RST}")
         print()
 
@@ -286,14 +349,68 @@ class CLIInterface:
         print(f"  {_C.LGREEN}{_C.BOLD}{greeting}{_C.RST}\n")
 
     def _print_help(self) -> None:
+        """命令帮助：与 WebUI 斜杠命令面板完全一致（统一来源 COMMAND_DESCRIPTIONS）。"""
+        public, owner = _command_entries()
         print(f"\n  {_C.LGREEN}{_C.BOLD}🌿 小妲的命令列表{_C.RST}\n")
         print(f"  {_C.LYELLOW}── 公共命令 ──{_C.RST}")
-        for emoji, cmd, desc in HELP_PUBLIC:
-            print(f"  {emoji} {_C.CYAN}{cmd:<24}{_C.RST} {desc}")
-        print(f"\n  {_C.LYELLOW}── 主人专属 ──{_C.RST}")
-        for emoji, cmd, desc in HELP_OWNER:
-            print(f"  {emoji} {_C.LMAGENTA}{cmd:<24}{_C.RST} {desc}")
+        for name, desc in public:
+            print(f"  {_C.CYAN}{name:<40}{_C.RST} {desc}")
+        print(f"\n  {_C.LYELLOW}── 主人专属 👑 ──{_C.RST}")
+        for name, desc in owner:
+            print(f"  {_C.LMAGENTA}{name:<40}{_C.RST} {desc}")
+        print(f"\n  {_C.DIM}💡 输入 / 后按 Tab 可补全命令{_C.RST}")
         print()
+
+    def _print_command_result(self, cmd: str, result: str) -> None:
+        """以统一格式输出命令执行结果。"""
+        print()
+        for line in str(result).split("\n"):
+            print(f"  {_C.LEAF}🌿{_C.RST} {line}")
+        print()
+
+    def _print_unknown(self, cmd: str) -> None:
+        print(f"\n  {_C.LYELLOW}嗯？人家不认识「{cmd}」这个命令呢～{_C.RST}")
+        print(f"  {_C.DIM}💡 输入 /help 查看所有命令，/ 后按 Tab 可补全{_C.RST}")
+        print()
+
+    def _dispatch_slash_command(self, text: str) -> None:
+        """分发斜杠命令，返回后命令视为已消耗（不发往 bot）。
+
+        - /help → 展示命令列表（与 WebUI 同源）
+        - 其余 → 交给 bot.slash_handler（覆盖 /model /reset /agent /voice 等全部命令）
+        - 未识别命令 → 提示帮助
+        命令集与 WebUI 完全一致（COMMAND_DESCRIPTIONS + OWNER_ONLY_COMMANDS）。
+        """
+        stripped = text.strip()
+        cmd = stripped.split(maxsplit=1)[0].lower() if stripped else ""
+        if stripped.startswith("//"):
+            # 转义斜杠：作为普通消息发送
+            return
+        if cmd == "/help":
+            self._print_help()
+            return
+
+        handler = getattr(self.bot, "slash_handler", None)
+        if handler is None:
+            self._print_unknown(cmd)
+            return
+        # CLI 是主人的本地终端：放行 owner-only 命令（与 process() source="cli" 主人判定一致）
+        try:
+            handler._force_owner = True
+        except Exception:
+            pass
+        try:
+            result = self._loop.run_until_complete(
+                handler.handle(stripped, user_id="cli_owner")
+            )
+        except Exception as e:
+            logger.error("cli.slash_dispatch_error", command=cmd, error=str(e))
+            print(f"\n  {_C.LYELLOW}执行 {cmd} 时出了点问题：{str(e)[:100]}{_C.RST}\n")
+            return
+        if result is None:
+            self._print_unknown(cmd)
+            return
+        self._print_command_result(cmd, result)
 
     def _check_qq_bot(self) -> Any:
         try:
@@ -337,13 +454,16 @@ class CLIInterface:
             if not user_input:
                 continue
 
-            if user_input.lower() in ("exit", "quit", "q"):
+            if user_input.lower() in ("exit", "quit", "q", "/exit", "/quit"):
                 farewell = random.choice(NAHIDA_FAREWELLS).replace("爸爸", self._address_term())
                 print(f"\n  {_C.LGREEN}{farewell}{_C.RST}\n")
                 break
 
-            if user_input.strip() == "/help":
-                self._print_help()
+            # 斜杠命令：本地 + slash_handler 统一分发（openclaw 风格）
+            if user_input.startswith("//"):
+                user_input = user_input[1:]  # 转义斜杠：作为普通消息发送
+            elif user_input.startswith("/"):
+                self._dispatch_slash_command(user_input)
                 continue
 
             try:
