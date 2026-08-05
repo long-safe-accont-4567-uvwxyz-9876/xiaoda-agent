@@ -308,7 +308,11 @@ class CLIInterface:
         self._ws: cli_client.WSClient | None = None
 
     def _address_term(self) -> str:
-        """获取当前用户称呼，优先从 USER.md 读取，兜底"爸爸"。"""
+        """获取当前用户称呼。
+
+        从 USER.md 的"- 称呼：xxx"动态读取（可在设置页修改）；未设置时兜底"朋友"
+        （与设置页占位符"留空则默认「朋友」"一致），不硬编码某种称呼。
+        """
         try:
             from agent_core.core import AgentCore
             term = AgentCore.read_address_term_from_user_md()
@@ -316,7 +320,7 @@ class CLIInterface:
                 return term
         except ImportError:
             pass
-        return "爸爸"
+        return "朋友"
 
     # ── 主进程连接 ────────────────────────────────────────────
     def _connect_main_process(self) -> bool:

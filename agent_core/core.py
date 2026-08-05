@@ -240,8 +240,8 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         return None
 
     def _build_owner_identity(self) -> UserIdentity:
-        """构建主人身份，address_term 从 USER.md 读取，兜底"爸爸"。"""
-        addr = self.read_address_term_from_user_md() or "爸爸"
+        """构建主人身份，address_term 从 USER.md 读取，兜底"朋友"（对齐设置页默认）。"""
+        addr = self.read_address_term_from_user_md() or "朋友"
         return UserIdentity(is_owner=True, display_name="爸爸", address_term=addr)
 
     def _resolve_identity(self, user_id: str, user_openid: str = "",
