@@ -19,7 +19,7 @@ from typing import Any, Optional
 
 from loguru import logger
 
-from ilink_client import ILinkClient, SessionExpiredError
+from ilink_client import ILinkClient, SessionExpiredError, ILinkRetError
 
 
 # ============================================================================
@@ -28,6 +28,90 @@ from ilink_client import ILinkClient, SessionExpiredError
 
 # 凭证文件路径：与 config.py 的 ~/.ai-agent/ 目录约定一致
 CREDENTIALS_PATH = Path.home() / ".ai-agent" / "wechat_credentials.json"
+
+
+# ============================================================================
+# 模块级凭证操作（供路由层直接调用，无需创建 adapter 实例）
+# ============================================================================
+
+def save_credentials(bot_token: str, ilink_bot_id: str, ilink_user_id: str, baseurl: str) -> None:
+    """保存凭证到 ~/.ai-agent/wechat_credentials.json
+
+    模块级函数，供路由层直接调用，无需创建 WeChatBotAdapter 实例。
+
+    Args:
+        bot_token: iLink Bearer token
+        ilink_bot_id: 登录后的 bot ID
+        ilink_user_id: 登录后的 user ID
+        baseurl: 服务端下发的活跃 base URL
+    """
+    try:
+        CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        data = {
+            "bot_token": bot_token,
+            "ilink_bot_id": ilink_bot_id,
+            "ilink_user_id": ilink_user_id,
+            "baseurl": baseurl,
+        }
+        # 原子写入 + 限制权限：先写临时文件 chmod 0600，再 replace 覆盖，
+        # 避免明文 token 权限过宽、且失败时留下半截文件。
+        tmp_path = CREDENTIALS_PATH.with_suffix(".json.tmp")
+        tmp_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        os.chmod(tmp_path, 0o600)
+        tmp_path.replace(CREDENTIALS_PATH)
+        logger.info("wechat_bot.credentials_saved path={}", CREDENTIALS_PATH)
+    except Exception as e:
+        logger.error(
+            "wechat_bot.credentials_save_failed error={}",
+            str(e)[:200],
+        )
+        raise
+
+
+def load_credentials() -> Optional[dict]:
+    """从 ~/.ai-agent/wechat_credentials.json 加载凭证
+
+    模块级函数，供路由层直接调用，无需创建 WeChatBotAdapter 实例。
+
+    Returns:
+        凭证字典（含 bot_token/ilink_bot_id/ilink_user_id/baseurl），
+        文件不存在或无效时返回 None
+    """
+    if not CREDENTIALS_PATH.exists():
+        return None
+    try:
+        data = json.loads(CREDENTIALS_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
+        bot_token = data.get("bot_token", "")
+        if not bot_token:
+            return None
+        return data
+    except Exception as e:
+        logger.error(
+            "wechat_bot.credentials_load_failed error={}",
+            str(e)[:200],
+        )
+        return None
+
+
+def clear_credentials() -> None:
+    """删除凭证文件
+
+    模块级函数，供路由层直接调用，无需创建 WeChatBotAdapter 实例。
+    """
+    try:
+        if CREDENTIALS_PATH.exists():
+            CREDENTIALS_PATH.unlink()
+            logger.info("wechat_bot.credentials_cleared path={}", CREDENTIALS_PATH)
+    except Exception as e:
+        logger.warning(
+            "wechat_bot.credentials_clear_failed error={}",
+            str(e)[:200],
+        )
 
 # iLink 默认服务端地址（登录后可能被 baseurl 覆盖）
 ILINK_DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
@@ -273,15 +357,21 @@ class WeChatBotAdapter:
         - 处理 SessionExpiredError（ret: -14）：清除凭证，设置 _expired=True，停止轮询
         - 每条消息调用 _process_message(msg) 处理（用 asyncio.create_task 避免阻塞轮询）
         - 更新 cursor（get_updates_buf）
+        - 错误重试使用指数退避（1s→2s→4s→8s，最大30s）
         """
         if self._ilink_client is None:
             logger.warning("wechat_bot.poll_no_client")
             return
 
         logger.info("wechat_bot.poll_started")
+        _backoff = 1.0  # 初始退避时间 1 秒
+        _max_backoff = 30.0  # 最大退避时间
         while self._running and not self._expired:
             try:
                 result = await self._ilink_client.get_updates(self._cursor)
+                # 成功轮询：重置退避
+                if _backoff > 1.0:
+                    _backoff = 1.0
             except SessionExpiredError:
                 # 会话过期：清除凭证，标记过期，停止轮询
                 logger.warning("wechat_bot.session_expired clearing_credentials")
@@ -293,12 +383,14 @@ class WeChatBotAdapter:
                 logger.info("wechat_bot.poll_cancelled")
                 raise
             except Exception as e:
-                # 网络错误等：退避后重试
+                # 网络错误等：指数退避后重试
                 logger.error(
-                    "wechat_bot.poll_error error={} retry_in=5s",
-                    str(e)[:200],
+                    "wechat_bot.poll_error error={} retry_in={:.0f}s",
+                    str(e)[:200], _backoff,
                 )
-                await asyncio.sleep(5)
+                await asyncio.sleep(_backoff)
+                # 指数退避：1→2→4→8→16→30（封顶）
+                _backoff = min(_backoff * 2, _max_backoff)
                 continue
 
             # 更新游标（get_updates_buf）：为空时保留原游标，避免重放历史消息
@@ -313,10 +405,14 @@ class WeChatBotAdapter:
 
             # 分发消息（用 asyncio.create_task 避免阻塞轮询）
             msgs = result.get("msgs", []) or []
-            for msg in msgs:
-                task = asyncio.create_task(self._process_message(msg))
-                self._msg_tasks.add(task)
-                task.add_done_callback(self._on_msg_task_done)
+            if msgs:
+                for msg in msgs:
+                    task = asyncio.create_task(self._process_message(msg))
+                    self._msg_tasks.add(task)
+                    task.add_done_callback(self._on_msg_task_done)
+            else:
+                # 无消息时短暂 sleep，避免紧密循环
+                await asyncio.sleep(0.5)
 
         logger.info(
             "wechat_bot.poll_stopped expired={} running={}",
@@ -551,6 +647,11 @@ class WeChatBotAdapter:
         Returns:
             是否发送成功
         """
+        # 目前仅支持文本消息，拒绝不支持的 msg_type
+        if msg_type != "text":
+            logger.warning("wechat_bot.send_unsupported_msg_type type={}", msg_type)
+            return False
+
         if self._ilink_client is None:
             logger.warning("wechat_bot.send_no_client content={}", content[:80])
             return False
@@ -577,12 +678,12 @@ class WeChatBotAdapter:
             self._connected = False
             self._clear_credentials()
             return False
-        except Exception as e:
+        except ILinkRetError as e:
             # ret=-2: context_token 过期/无效。AgentCore 处理最长 120s，
             # 期间用户若发了新消息，_last_context_token 已更新为最新，
             # 用它重试一次可能恢复投递（覆盖"处理慢导致 token 过期"场景）。
             if (
-                "ret=-2" in str(e)
+                e.ret == -2
                 and self._last_context_token
                 and self._last_context_token != target_token
             ):
@@ -605,6 +706,12 @@ class WeChatBotAdapter:
                         target_user[:16], str(e2)[:200],
                     )
                     return False
+            logger.error(
+                "wechat_bot.send_error ret={} error={}",
+                e.ret, str(e)[:200],
+            )
+            return False
+        except Exception as e:
             logger.error("wechat_bot.send_error error={}", str(e)[:200])
             return False
 
@@ -683,7 +790,7 @@ class WeChatBotAdapter:
         return False
 
     # ------------------------------------------------------------------
-    # 凭证持久化
+    # 凭证持久化（委托给模块级函数，供路由层直接使用）
     # ------------------------------------------------------------------
 
     def _save_credentials(
@@ -693,77 +800,16 @@ class WeChatBotAdapter:
         ilink_user_id: str,
         baseurl: str,
     ) -> None:
-        """保存凭证到 ~/.ai-agent/wechat_credentials.json
-
-        Args:
-            bot_token: iLink Bearer token
-            ilink_bot_id: 登录后的 bot ID
-            ilink_user_id: 登录后的 user ID
-            baseurl: 服务端下发的活跃 base URL
-        """
-        try:
-            CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            data = {
-                "bot_token": bot_token,
-                "ilink_bot_id": ilink_bot_id,
-                "ilink_user_id": ilink_user_id,
-                "baseurl": baseurl,
-            }
-            # 原子写入 + 限制权限：先写临时文件 chmod 0600，再 replace 覆盖，
-            # 避免明文 token 权限过宽、且失败时留下半截文件。
-            tmp_path = CREDENTIALS_PATH.with_suffix(".json.tmp")
-            tmp_path.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            os.chmod(tmp_path, 0o600)
-            tmp_path.replace(CREDENTIALS_PATH)
-            logger.info("wechat_bot.credentials_saved path={}", CREDENTIALS_PATH)
-        except Exception as e:
-            logger.error(
-                "wechat_bot.credentials_save_failed error={}",
-                str(e)[:200],
-            )
-            # 必须重新抛出：调用方（/wechat/qrcode-status 的 try/except）依赖
-            # 异常来返回 SAVE_FAILED。吞掉异常会导致凭证写失败时仍误报
-            # confirmed，后续 /wechat/start 才因 NO_CREDENTIALS 失败。
-            raise
+        """保存凭证到 ~/.ai-agent/wechat_credentials.json（委托给模块级函数）"""
+        save_credentials(bot_token, ilink_bot_id, ilink_user_id, baseurl)
 
     def _load_credentials(self) -> Optional[dict]:
-        """从 ~/.ai-agent/wechat_credentials.json 加载凭证
-
-        Returns:
-            凭证字典（含 bot_token/ilink_bot_id/ilink_user_id/baseurl），
-            文件不存在或无效时返回 None
-        """
-        if not CREDENTIALS_PATH.exists():
-            return None
-        try:
-            data = json.loads(CREDENTIALS_PATH.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                return None
-            bot_token = data.get("bot_token", "")
-            if not bot_token:
-                return None
-            return data
-        except Exception as e:
-            logger.error(
-                "wechat_bot.credentials_load_failed error={}",
-                str(e)[:200],
-            )
-            return None
+        """从 ~/.ai-agent/wechat_credentials.json 加载凭证（委托给模块级函数）"""
+        return load_credentials()
 
     def _clear_credentials(self) -> None:
-        """删除凭证文件"""
-        try:
-            if CREDENTIALS_PATH.exists():
-                CREDENTIALS_PATH.unlink()
-                logger.info("wechat_bot.credentials_cleared path={}", CREDENTIALS_PATH)
-        except Exception as e:
-            logger.warning(
-                "wechat_bot.credentials_clear_failed error={}",
-                str(e)[:200],
-            )
+        """删除凭证文件（委托给模块级函数）"""
+        clear_credentials()
 
     # ------------------------------------------------------------------
     # 状态属性

@@ -98,6 +98,30 @@ class SessionExpiredError(Exception):
         return self.message
 
 
+class ILinkRetError(RuntimeError):
+    """iLink 业务错误异常，携带 ret 码供上层精确判断。
+
+    当服务端返回 ret != 0 且 ret != -14 时抛出。
+    调用方可通过 e.ret 直接判断错误类型，无需解析字符串。
+
+    Attributes:
+        ret: iLink 服务端返回的 ret 码
+        payload: 完整的响应 payload（调试用）
+    """
+
+    def __init__(self, ret: int, payload: dict | None = None) -> None:
+        message = f"iLink ret={ret}"
+        if payload:
+            message += f": {str(payload)[:200]}"
+        super().__init__(message)
+        self.message = message
+        self.ret = ret
+        self.payload = payload or {}
+
+    def __str__(self) -> str:
+        return self.message
+
+
 class ILinkClient:
     """微信 iLink Bot API HTTP 客户端
 
@@ -325,7 +349,7 @@ class ILinkClient:
                 raise SessionExpiredError()
             if ret != RET_OK:
                 logger.warning("ilink.post.bad_ret url={} ret={} payload={}", url, ret, str(payload)[:300])
-                raise RuntimeError(f"iLink ret={ret}: {str(payload)[:200]}")
+                raise ILinkRetError(ret=ret, payload=payload)
         logger.debug("ilink.post.ok url={} ret={}", url, ret)
         return payload
 

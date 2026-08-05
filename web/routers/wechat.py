@@ -24,6 +24,7 @@ from loguru import logger
 from web.schemas import Envelope
 from web.routers.auth import get_current_user
 from ilink_client import ILinkClient
+from wechat_bot_adapter import save_credentials, load_credentials, clear_credentials
 
 # 需认证的路由：所有端点默认走 get_current_user 依赖
 router = APIRouter(tags=["wechat"], dependencies=[Depends(get_current_user)])
@@ -38,8 +39,8 @@ _lifecycle_lock = asyncio.Lock()
 def _build_adapter(request: Request) -> Any:
     """从 app.state.core 构造 WeChatBotAdapter 实例（不启动）。
 
-    用于需要调用 _save_credentials / _load_credentials 等实例方法的场景。
-    传入 core 以便 start() 时复用已初始化的 AgentCore。
+    用于需要创建完整 adapter 实例的场景（如 /wechat/start 启动轮询）。
+    凭证操作（save/load/clear）应直接使用模块级函数，无需创建 adapter。
     """
     from wechat_bot_adapter import WeChatBotAdapter
     core = request.app.state.core
@@ -179,8 +180,7 @@ async def get_qrcode_status(
             baseurl = ""
         # 保存凭证，供后续 /wechat/start 加载
         try:
-            adapter = _build_adapter(request)
-            adapter._save_credentials(bot_token, ilink_bot_id, ilink_user_id, baseurl)
+            save_credentials(bot_token, ilink_bot_id, ilink_user_id, baseurl)
         except Exception as e:
             logger.error(
                 "wechat.qrcode.save_credentials_failed error={}",
@@ -211,8 +211,7 @@ async def test_connection(request: Request) -> Any:
     """测试微信 Bot 连接——从凭证文件加载 bot_token 并发送测试消息。"""
     # 加载凭证
     try:
-        adapter = _build_adapter(request)
-        creds = adapter._load_credentials()
+        creds = load_credentials()
     except Exception as e:
         logger.error(
             "wechat.test.load_credentials_failed error={}",
@@ -307,7 +306,7 @@ async def start_bot(request: Request) -> Any:
             )
 
         # 预检凭证是否存在（start() 内部也会加载，但提前给出明确错误更友好）
-        creds = adapter._load_credentials()
+        creds = load_credentials()
         if not creds:
             return Envelope(
                 ok=False,
@@ -353,10 +352,7 @@ async def stop_bot(request: Request) -> Any:
 
         # 清除凭证文件（无论 bot 是否存在都清除，确保登出干净）
         try:
-            from wechat_bot_adapter import CREDENTIALS_PATH
-            if CREDENTIALS_PATH.exists():
-                CREDENTIALS_PATH.unlink()
-                logger.info("wechat.credentials.cleared path={}", CREDENTIALS_PATH)
+            clear_credentials()
         except Exception as e:
             logger.warning(
                 "wechat.credentials.clear_failed error={}",
@@ -397,8 +393,8 @@ async def get_wechat_status() -> Any:
     # 凭证存在即视为已登录，前端显示已连接状态（可断开重连），避免刷新后状态丢失
     if not connected and not expired:
         try:
-            from wechat_bot_adapter import CREDENTIALS_PATH
-            if CREDENTIALS_PATH.exists():
+            creds = load_credentials()
+            if creds:
                 connected = True
         except Exception:
             pass
