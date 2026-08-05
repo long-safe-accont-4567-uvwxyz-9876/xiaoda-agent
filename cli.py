@@ -22,6 +22,24 @@ logger.add(
 import cli_client
 import contextlib
 
+# ── prompt_toolkit 支持（/ 弹出下拉 + 菜单选择）──────────────
+# 缺失时优雅回退到 readline 路径，不崩溃（旧安装包兼容）。
+try:
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+    from prompt_toolkit.completion import Completer, Completion
+    from prompt_toolkit.formatted_text import ANSI
+    from prompt_toolkit.history import FileHistory
+    _HAS_PROMPT_TOOLKIT = True
+except ImportError:
+    _HAS_PROMPT_TOOLKIT = False
+
+try:
+    from cli_menu import MenuItem, select_from_menu
+    _HAS_MENU = True
+except ImportError:
+    _HAS_MENU = False
+
 # ── readline 支持 ──────────────────────────────────────────
 try:
     import readline
@@ -51,6 +69,9 @@ def _all_command_names() -> list[str]:
     return sorted(set(names))
 
 
+_ALL_CMD_NAMES = _all_command_names()  # 与 WebUI 同源（COMMAND_DESCRIPTIONS + 别名）
+
+
 def _argument_completions(command: str, partial: str) -> list[str]:
     """返回命令的参数级补全候选（第二级补全）。
 
@@ -73,6 +94,50 @@ def _model_arg_completions(partial: str) -> list[str]:
     except Exception:
         opts = []
     return [o for o in opts if o.startswith(partial)]
+
+
+class _SlashCompleter(Completer):
+    """斜杠命令补全：/ 输入即弹出命令下拉，命令后跟空格补全参数。
+
+    命令名来源与 WebUI 同源（slash_commands.COMMAND_DESCRIPTIONS + 别名）。
+    /model 参数动态从模型发现缓存实时补全，其余命令用 slash_commands 声明式参数。
+    """
+
+    def _arg_completions(self, command: str, partial: str) -> list[str]:
+        if command == "/model":
+            try:
+                from model_router import list_discovered_model_ids
+                opts = list_discovered_model_ids()
+            except Exception:
+                opts = []
+        else:
+            try:
+                from slash_commands import get_argument_completions
+                opts = get_argument_completions(command, partial)
+            except ImportError:
+                opts = []
+        return [o for o in opts if o.startswith(partial)]
+
+    def get_completions(self, document, complete_event):
+        line = document.current_line_before_cursor.lstrip()
+        if not line.startswith("/"):
+            return
+        parts = line.split(maxsplit=1)
+        word = document.get_word_before_cursor(WORD=True)
+        start = -len(word) if word else 0
+        if len(parts) == 1:
+            for name in _ALL_CMD_NAMES:
+                if word and name.startswith(word) and name != word:
+                    yield Completion(name, start_position=start)
+        else:
+            command = parts[0]
+            try:
+                from slash_commands import resolve_command
+                command = resolve_command(command)
+            except ImportError:
+                pass
+            for cand in self._arg_completions(command, word):
+                yield Completion(cand, start_position=start)
 
 
 try:
@@ -322,6 +387,93 @@ class CLIInterface:
             pass
         return "朋友"
 
+    def _init_prompt_session(self) -> None:
+        """初始化 prompt_toolkit 会话（含历史、自动建议、斜杠补全）。"""
+        if not _HAS_PROMPT_TOOLKIT:
+            self._session = None
+            return
+        hist_path = os.path.expanduser("~/.ai-agent/cli_history")
+        self._session = PromptSession(
+            history=FileHistory(hist_path),
+            auto_suggest=AutoSuggestFromHistory(),
+            completer=_SlashCompleter(_ALL_CMD_NAMES),
+            complete_while_typing=True,
+        )
+
+    def _menu_fixed(self, cmd: str, choices: list[str]) -> str | None:
+        """固定参数多步命令：从 choices 单选，返回完整命令。"""
+        items = [MenuItem(label=v, value=f"{cmd} {v}") for v in choices]
+        return select_from_menu(f"{cmd} · 选择参数", items)
+
+    def _menu_model(self) -> str | None:
+        """/model 多步：先选 provider，再选该 provider 下模型。失败返回 None。"""
+        providers = cli_client.discover_models(self._token)
+        if not providers:
+            print(f"\n  {_C.LYELLOW}模型选项加载失败，请手动输入 /model provider/模型{_C.RST}")
+            return None
+        p_items = []
+        for p in providers:
+            pid = p.get("provider") or p.get("id") or ""
+            if not pid:
+                continue
+            models = p.get("models") or []
+            p_items.append(MenuItem(
+                label=str(p.get("label") or pid),
+                value=pid,
+                description=f"{len(models)} 个模型",
+            ))
+        pid = select_from_menu("/model · 选择模型提供方", p_items)
+        if pid is None:
+            return None
+        provider = next(
+            (p for p in providers if (p.get("provider") or p.get("id")) == pid), None)
+        models = (provider or {}).get("models") or []
+        m_items = [
+            MenuItem(
+                label=str(m.get("display_name") or m.get("id") or ""),
+                value=f"{pid}/{m['id']}",
+            )
+            for m in models if m.get("id")
+        ]
+        picked = select_from_menu(f"/model · {pid} 选择模型", m_items)
+        if picked is None:
+            return None
+        return f"/model {picked}"
+
+    def _menu_agent(self) -> str | None:
+        """/agent 多步：从代理列表单选。失败返回 None。"""
+        agents = cli_client.list_agents(self._token)
+        if not agents:
+            print(f"\n  {_C.LYELLOW}代理列表加载失败，请手动输入 /agent 名称{_C.RST}")
+            return None
+        items = [
+            MenuItem(label=str(a.get("display_name") or a.get("name") or ""),
+                     value=str(a["name"]))
+            for a in agents if a.get("name")
+        ]
+        picked = select_from_menu("/agent · 选择子代理", items)
+        if picked is None:
+            return None
+        return f"/agent {picked}"
+
+    def _try_expand_multistep(self, cmd: str, arg: str) -> str | None:
+        """多步命令无参数时弹菜单，返回完整命令；否则返回 None（不展开）。"""
+        if arg.strip() or not _HAS_MENU:
+            return None
+        if cmd == "/model":
+            return self._menu_model()
+        if cmd == "/agent":
+            return self._menu_agent()
+        if cmd == "/voice":
+            return self._menu_fixed("/voice", ["on", "off"])
+        if cmd == "/doctor":
+            return self._menu_fixed("/doctor", ["json", "fix"])
+        if cmd == "/cost":
+            return self._menu_fixed("/cost", ["7d"])
+        if cmd == "/cam":
+            return self._menu_fixed("/cam", ["snap"])
+        return None
+
     # ── 主进程连接 ────────────────────────────────────────────
     def _connect_main_process(self) -> bool:
         """确保主进程可用并建立连接。失败时打印原因并返回 False（不闪退）。"""
@@ -430,17 +582,24 @@ class CLIInterface:
     def _dispatch_slash_command(self, text: str) -> None:
         """分发斜杠命令：/help 本地展示，其余交给主进程共享 AgentCore 处理。
 
-        主进程 core.process() 内部会识别斜杠命令并返回结果（不调用 LLM），
-        因此 CLI 无需本地 AgentCore 即可复用全部命令（/model /reset /agent 等），
-        其结果状态与 WebUI 完全一致。
+        多步命令（/model /agent /voice /doctor /cost /cam）在无参数时先弹菜单选择，
+        拼接完整命令后发送；有参数则直接发送。主进程 core.process() 内部识别并
+        执行命令，故 CLI 无需本地 AgentCore。
         """
         stripped = text.strip()
-        cmd = stripped.split(maxsplit=1)[0].lower() if stripped else ""
         if stripped.startswith("//"):
             return  # 转义斜杠：作为普通消息发送
-        if cmd == "/help":
+        cmd, _, arg = stripped.partition(" ")
+        cmd_l = cmd.lower()
+        if cmd_l == "/help":
             self._print_help()
             return
+        # 多步命令：无参数时弹出菜单选择
+        if not arg.strip():
+            expanded = self._try_expand_multistep(cmd_l, arg)
+            if expanded is not None:
+                stripped = expanded
+                cmd = stripped.split(maxsplit=1)[0].lower()
         if self._ws is None:
             self._print_unknown(cmd)
             return
@@ -482,11 +641,15 @@ class CLIInterface:
         if not self._connect_main_process():
             return
         self._print_welcome()
+        self._init_prompt_session()
 
         while True:
             try:
                 prompt = f"  {_C.GREEN}{_C.BOLD}🌿 {self._address_term()}:{_C.RST} "
-                user_input = input(prompt).strip()
+                if self._session is not None:
+                    user_input = self._session.prompt(message=ANSI(prompt)).strip()
+                else:
+                    user_input = input(prompt).strip()
             except (EOFError, KeyboardInterrupt):
                 farewell = random.choice(NAHIDA_FAREWELLS).replace("爸爸", self._address_term())
                 print(f"\n  {_C.LGREEN}{farewell}{_C.RST}\n")
