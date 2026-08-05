@@ -979,12 +979,20 @@ class ModelRouter:
         return False
 
     def get_model_preference(self) -> str:
-        return self._model_preference
+        """返回当前聊天模型的 'provider/model' 标识。
+
+        以 get_current_chat_model() 为单一数据源（set_chat_model 是 CLI 与 WebUI 共用的
+        唯一切换入口），保证 WebUI 切换后 CLI 展示实时同步（一变都变）。
+        """
+        _cur = self.get_current_chat_model()
+        _p = _cur.get("provider", "") or ""
+        _m = _cur.get("model_id", "") or ""
+        return f"{_p}/{_m}" if _p and _m else (_m or self._model_preference)
 
     def get_model_preference_label(self) -> str:
-        if "/" in self._model_preference:
-            return self._model_preference.split("/", 1)[1]
-        return MODEL_PREFERENCES.get(self._model_preference, {}).get("label", "未知")
+        """返回当前聊天模型的显示名（以实际模型为准，与 WebUI 同步）。"""
+        _m = (self.get_current_chat_model().get("model_id", "") or "")
+        return _m or MODEL_PREFERENCES.get(self._model_preference, {}).get("label", "未知")
 
     def list_models(self) -> dict:
         """动态列出当前模型与所有已发现 provider 的模型（对齐 WebUI 模型选择 button）。
@@ -1012,9 +1020,16 @@ class ModelRouter:
                 })
         except (ImportError, KeyError, ValueError, OSError):
             logger.debug("router.list_models_discovery_failed", exc_info=True)
+        # 当前模型以 get_current_chat_model() 为准：set_chat_model 是 CLI 与 WebUI
+        # 共用的唯一切换入口，统一维护 _current_chat_model / registry / DEFAULT_PROVIDER /
+        # models.chat_model 持久化。这样无论 CLI 还是 WebUI 切换，/model 与模型选择 button
+        # 都实时反映同一模型（"一变都变"），避免 _model_preference 在 WebUI 切换后残留旧值。
+        _current = self.get_current_chat_model()
+        _cp = _current.get("provider", "") or ""
+        _cm = _current.get("model_id", "") or ""
         return {
-            "current": self._model_preference,
-            "current_label": self.get_model_preference_label(),
+            "current": f"{_cp}/{_cm}" if _cp and _cm else (_cm or "未知"),
+            "current_label": _cm or "未知",
             "providers": providers,
         }
 

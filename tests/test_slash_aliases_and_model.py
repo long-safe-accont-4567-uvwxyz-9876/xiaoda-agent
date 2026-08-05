@@ -262,6 +262,57 @@ def test_list_discovered_model_ids_empty_cache():
         assert list_discovered_model_ids() == []
 
 
+def test_list_models_current_reflects_chat_model_not_preference():
+    """list_models 的当前模型应来自 get_current_chat_model（CLI 与 WebUI 一变都变）。
+
+    模拟 WebUI 通过 set_chat_model 切换模型（仅更新 _current_chat_model，遗留字段
+    _model_preference 保持在旧值）：list_models 应显示实际切换后的模型，而非旧偏好。
+    """
+    from model_router import ModelRouter
+    # 用 object.__new__ 避免重型初始化，只测 list_models 的当前模型推导逻辑
+    router = object.__new__(ModelRouter)
+    router._current_chat_model = {"provider": "agnes", "model_id": "agnes-2.0-flash"}
+    router._model_preference = "mimo"  # 遗留字段残留旧值（模拟 WebUI 切换后未更新）
+    info = router.list_models()
+    assert info["current"] == "agnes/agnes-2.0-flash"
+    assert info["current_label"] == "agnes-2.0-flash"
+
+
+def test_list_models_current_falls_back_when_no_chat_model():
+    """_current_chat_model 未初始化时回退到默认路由模型。"""
+    from model_router import ModelRouter, ROUTE_TABLE
+    router = object.__new__(ModelRouter)
+    router._current_chat_model = None
+    info = router.list_models()
+    expected_id = ROUTE_TABLE.get("chat", {}).get("model", "")
+    assert info["current"] == expected_id or info["current"].endswith(expected_id)
+    assert info["current_label"] == expected_id
+
+
+def test_preference_getters_reflect_webui_chat_model_switch():
+    """get_model_preference / get_model_preference_label 反映实际模型（WebUI 切换后同步）。"""
+    from model_router import ModelRouter
+    router = object.__new__(ModelRouter)
+    # 模拟 WebUI 通过 set_chat_model 切换（_current_chat_model 更新，_model_preference 残留旧值）
+    router._current_chat_model = {"provider": "agnes", "model_id": "agnes-2.0-flash"}
+    router._model_preference = "mimo"
+    assert router.get_model_preference() == "agnes/agnes-2.0-flash"
+    assert router.get_model_preference_label() == "agnes-2.0-flash"
+
+
+def test_preference_getters_fallback_when_no_chat_model():
+    """_current_chat_model 未初始化时回退，不抛异常。"""
+    from model_router import ModelRouter
+    router = object.__new__(ModelRouter)
+    router._current_chat_model = None
+    router._model_preference = "mimo"
+    # 回退到默认路由模型，label 为实际 model_id 或兜底标签
+    pref = router.get_model_preference()
+    label = router.get_model_preference_label()
+    assert isinstance(pref, str) and pref
+    assert isinstance(label, str) and label
+
+
 # ── CLI 两级补全 ──────────────────────────────────────────
 
 def _complete(line: str, text: str) -> list[str]:
