@@ -127,9 +127,11 @@ function startPolling() {
 async function checkStatus() {
   state.value = 'checking'
   try {
-    const data = await get<{ connected?: boolean }>('/wechat/status')
+    const data = await get<{ connected?: boolean; expired?: boolean }>('/wechat/status')
     if (data?.connected) {
       state.value = 'connected'
+    } else if (data?.expired) {
+      state.value = 'expired'
     } else {
       state.value = 'idle'
     }
@@ -233,7 +235,13 @@ async function startBot() {
 async function disconnect() {
   stopPolling()
   try {
-    await post('/wechat/stop')
+    const data = await post<{ success?: boolean }>('/wechat/stop')
+    if (data?.success === false) {
+      // 后端软失败（ok=true 但 success=false）：保留已连接状态，提示失败
+      errorMsg.value = t('wechat.disconnectFailed')
+      message.error(errorMsg.value)
+      return
+    }
     state.value = 'idle'
     qrcodeId.value = ''
     qrcodeUrl.value = ''

@@ -88,6 +88,9 @@ class WeChatBotAdapter:
         self._expired = False
         self._poll_task: Optional[asyncio.Task] = None
 
+        # 消息处理任务集合：持有强引用避免被 GC 回收，stop() 时统一取消
+        self._msg_tasks: set[asyncio.Task] = set()
+
         # 长轮询游标（首次为空字符串，后续传入上次返回的 get_updates_buf）
         self._cursor: str = ""
 
@@ -158,8 +161,16 @@ class WeChatBotAdapter:
         if creds:
             # 有凭证：直接初始化 ILinkClient 并启动轮询
             try:
+                baseurl = creds.get("baseurl") or ""
+                if baseurl and not baseurl.lower().startswith("https://"):
+                    # 拒绝非 HTTPS 地址，避免 Bearer token 明文传输
+                    logger.warning(
+                        "wechat_bot.rejected_non_https_baseurl url={}",
+                        baseurl[:200],
+                    )
+                    baseurl = ""
                 self._ilink_client = ILinkClient(
-                    base_url=creds.get("baseurl") or ILINK_DEFAULT_BASE_URL,
+                    base_url=baseurl or ILINK_DEFAULT_BASE_URL,
                     bot_token=creds.get("bot_token", ""),
                 )
                 self._connected = True
@@ -207,6 +218,20 @@ class WeChatBotAdapter:
                     str(e)[:200],
                 )
             self._poll_task = None
+
+        # 取消未完成的消息处理任务（best-effort，避免断开后仍跑 AgentCore 至 120s）
+        if self._msg_tasks:
+            for task in list(self._msg_tasks):
+                if not task.done():
+                    task.cancel()
+            try:
+                await asyncio.gather(*self._msg_tasks, return_exceptions=True)
+            except Exception as e:
+                logger.warning(
+                    "wechat_bot.msg_task_cancel_error error={}",
+                    str(e)[:200],
+                )
+            self._msg_tasks.clear()
 
         # 关闭 ILinkClient
         if self._ilink_client is not None:
@@ -263,8 +288,10 @@ class WeChatBotAdapter:
                 await asyncio.sleep(5)
                 continue
 
-            # 更新游标（get_updates_buf）
-            self._cursor = result.get("cursor", "") or ""
+            # 更新游标（get_updates_buf）：为空时保留原游标，避免重放历史消息
+            next_cursor = result.get("cursor", "") or ""
+            if next_cursor:
+                self._cursor = next_cursor
 
             # 更新上下文 token（用于后续 send_message）
             ctx_token = result.get("context_token", "") or ""
@@ -274,7 +301,9 @@ class WeChatBotAdapter:
             # 分发消息（用 asyncio.create_task 避免阻塞轮询）
             msgs = result.get("msgs", []) or []
             for msg in msgs:
-                asyncio.create_task(self._process_message(msg))
+                task = asyncio.create_task(self._process_message(msg))
+                self._msg_tasks.add(task)
+                task.add_done_callback(self._on_msg_task_done)
 
         logger.info(
             "wechat_bot.poll_stopped expired={} running={}",
@@ -317,11 +346,16 @@ class WeChatBotAdapter:
             return
 
         for item in item_list:
+            if not isinstance(item, dict):
+                logger.warning("wechat_bot.item_not_dict item={}", str(item)[:120])
+                continue
             item_type = item.get("type", 0)
             if item_type == 1:
                 # 文本消息：提取 text_item.text
                 text_item = item.get("text_item", {}) or {}
-                text = text_item.get("text", "").strip()
+                if not isinstance(text_item, dict):
+                    continue
+                text = (text_item.get("text") or "").strip()
                 if not text:
                     continue
                 await self._handle_text_message(text, from_user_id, context_token)
@@ -462,6 +496,21 @@ class WeChatBotAdapter:
             logger.info(
                 "wechat_bot.no_sticker_use_text user_id={} has_sticker={}",
                 user_id, bool(sticker_path),
+            )
+
+    def _on_msg_task_done(self, task: asyncio.Task) -> None:
+        """消息处理任务完成回调：从集合移除并记录未捕获异常。
+
+        若任务被 GC 回收，异常会静默丢失；这里显式取出异常并记录。
+        """
+        self._msg_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "wechat_bot.msg_task_failed error={}",
+                str(exc)[:200],
             )
 
     # ------------------------------------------------------------------
@@ -640,23 +689,32 @@ class WeChatBotAdapter:
             baseurl: 服务端下发的活跃 base URL
         """
         try:
-            CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             data = {
                 "bot_token": bot_token,
                 "ilink_bot_id": ilink_bot_id,
                 "ilink_user_id": ilink_user_id,
                 "baseurl": baseurl,
             }
-            CREDENTIALS_PATH.write_text(
+            # 原子写入 + 限制权限：先写临时文件 chmod 0600，再 replace 覆盖，
+            # 避免明文 token 权限过宽、且失败时留下半截文件。
+            tmp_path = CREDENTIALS_PATH.with_suffix(".json.tmp")
+            tmp_path.write_text(
                 json.dumps(data, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            os.chmod(tmp_path, 0o600)
+            tmp_path.replace(CREDENTIALS_PATH)
             logger.info("wechat_bot.credentials_saved path={}", CREDENTIALS_PATH)
         except Exception as e:
             logger.error(
                 "wechat_bot.credentials_save_failed error={}",
                 str(e)[:200],
             )
+            # 必须重新抛出：调用方（/wechat/qrcode-status 的 try/except）依赖
+            # 异常来返回 SAVE_FAILED。吞掉异常会导致凭证写失败时仍误报
+            # confirmed，后续 /wechat/start 才因 NO_CREDENTIALS 失败。
+            raise
 
     def _load_credentials(self) -> Optional[dict]:
         """从 ~/.ai-agent/wechat_credentials.json 加载凭证

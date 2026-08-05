@@ -83,7 +83,14 @@ async def get_status(request: Request) -> Any:
     try:
         import wechat_bot_adapter
         bot = wechat_bot_adapter._ACTIVE_BOT
-        if bot is not None and not bot.is_closed():
+        # 与 /wechat/status 语义一致：只有已连接、未关闭、未过期才算在线。
+        # 避免"无凭证/初始化失败/会话过期"三种状态误报已连接。
+        if (
+            bot is not None
+            and not bot.is_closed()
+            and getattr(bot, "_connected", False)
+            and not getattr(bot, "_expired", False)
+        ):
             wechat_connected = True
     except Exception as exc:
         logger.debug("system.wechat_status_check_failed: {}", exc, exc_info=True)

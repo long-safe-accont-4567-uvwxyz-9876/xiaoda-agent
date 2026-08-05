@@ -15,6 +15,7 @@ HTTP 端点，供 WebUI 前端调用。
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -28,6 +29,10 @@ from ilink_client import ILinkClient
 router = APIRouter(tags=["wechat"], dependencies=[Depends(get_current_user)])
 # 公开路由：仅 /wechat/status，供前端在未登录时探测连接状态
 public_router = APIRouter(tags=["wechat"])
+
+# 生命周期锁：串行化 start/stop 对 app.state.wechat_bot 的修改，
+# 避免并发请求在 await 点交错导致旧 adapter 被误清、轮询任务失控。
+_lifecycle_lock = asyncio.Lock()
 
 
 def _build_adapter(request: Request) -> Any:
@@ -90,6 +95,15 @@ async def generate_qrcode(request: Request) -> Any:
             qr = await client.get_qrcode()
         qrcode_id = qr.get("qrcode_id", "")
         qrcode_url = qr.get("qrcode_url", "")
+        if not qrcode_id or not qrcode_url:
+            logger.error(
+                "wechat.qrcode.empty_response has_id={} has_url={}",
+                bool(qrcode_id), bool(qrcode_url),
+            )
+            return Envelope(
+                ok=False,
+                error={"code": "QRCODE_FAILED", "message": "上游未返回有效二维码，请稍后重试"},
+            )
         # 存储在 app.state 中，供调试或后续逻辑参考
         request.app.state.wechat_qrcode_id = qrcode_id
         logger.info("wechat.qrcode.generated id={}", qrcode_id[:32])
@@ -146,6 +160,23 @@ async def get_qrcode_status(
         ilink_bot_id = status_result.get("ilink_bot_id", "")
         ilink_user_id = status_result.get("ilink_user_id", "")
         baseurl = status_result.get("baseurl", "")
+        # 凭证不完整时不落盘，避免 /wechat/start 拿到空 token 却误报已连接
+        if not bot_token or not ilink_user_id:
+            logger.error(
+                "wechat.qrcode.confirmed_incomplete has_token={} has_user={}",
+                bool(bot_token), bool(ilink_user_id),
+            )
+            return Envelope(
+                ok=False,
+                error={"code": "INVALID_CREDENTIALS", "message": "登录返回的凭证不完整，请重新扫码"},
+            )
+        # 仅接受 HTTPS baseurl，非 HTTPS 用官方默认域名
+        if baseurl and not baseurl.lower().startswith("https://"):
+            logger.warning(
+                "wechat.qrcode.rejected_non_https_baseurl url={}",
+                baseurl[:200],
+            )
+            baseurl = ""
         # 保存凭证，供后续 /wechat/start 加载
         try:
             adapter = _build_adapter(request)
@@ -206,10 +237,10 @@ async def test_connection(request: Request) -> Any:
             error={"code": "INVALID_CREDENTIALS", "message": "凭证不完整（缺少 bot_token 或 ilink_user_id）"},
         )
 
-    # 用凭证中的 baseurl 初始化 ILinkClient（无 baseurl 时走默认）
+    # 用凭证中的 baseurl 初始化 ILinkClient（无 baseurl 或非 HTTPS 时走默认）
     baseurl = creds.get("baseurl", "")
     kwargs: dict[str, Any] = {"bot_token": bot_token}
-    if baseurl:
+    if baseurl and baseurl.lower().startswith("https://"):
         kwargs["base_url"] = baseurl
 
     try:
@@ -241,88 +272,90 @@ async def start_bot(request: Request) -> Any:
     从凭证文件加载凭证，创建 WeChatBotAdapter 并调用 start()。
     start() 内部会加载凭证、初始化 ILinkClient、启动长轮询任务。
     """
-    # 先停止已有的 bot 实例（避免重复轮询）
-    existing = getattr(request.app.state, "wechat_bot", None)
-    if existing is not None:
+    async with _lifecycle_lock:
+        # 先停止已有的 bot 实例（避免重复轮询）
+        existing = getattr(request.app.state, "wechat_bot", None)
+        if existing is not None:
+            try:
+                await existing.stop()
+            except Exception as e:
+                logger.warning(
+                    "wechat.start.stop_existing_failed error={}",
+                    str(e)[:200],
+                )
+            request.app.state.wechat_bot = None
+
         try:
-            await existing.stop()
+            adapter = _build_adapter(request)
         except Exception as e:
-            logger.warning(
-                "wechat.start.stop_existing_failed error={}",
-                str(e)[:200],
+            logger.error(
+                "wechat.start.build_adapter_failed error={}",
+                str(e)[:200], exc_info=True,
             )
-        request.app.state.wechat_bot = None
+            return Envelope(
+                ok=False,
+                error={"code": "INIT_FAILED", "message": f"适配器初始化失败: {e}"},
+            )
 
-    try:
-        adapter = _build_adapter(request)
-    except Exception as e:
-        logger.error(
-            "wechat.start.build_adapter_failed error={}",
-            str(e)[:200], exc_info=True,
-        )
-        return Envelope(
-            ok=False,
-            error={"code": "INIT_FAILED", "message": f"适配器初始化失败: {e}"},
-        )
+        # 预检凭证是否存在（start() 内部也会加载，但提前给出明确错误更友好）
+        creds = adapter._load_credentials()
+        if not creds:
+            return Envelope(
+                ok=False,
+                error={"code": "NO_CREDENTIALS", "message": "未找到微信凭证，请先扫码登录"},
+            )
 
-    # 预检凭证是否存在（start() 内部也会加载，但提前给出明确错误更友好）
-    creds = adapter._load_credentials()
-    if not creds:
-        return Envelope(
-            ok=False,
-            error={"code": "NO_CREDENTIALS", "message": "未找到微信凭证，请先扫码登录"},
-        )
-
-    try:
-        await adapter.start()
-        request.app.state.wechat_bot = adapter
-        logger.info("wechat.bot.started")
-        return Envelope(data={"success": True})
-    except Exception as e:
-        logger.error(
-            "wechat.start.failed error={} type={}",
-            str(e)[:200], type(e).__name__, exc_info=True,
-        )
-        return Envelope(
-            ok=False,
-            error={"code": "START_FAILED", "message": f"启动失败: {e}"},
-        )
+        try:
+            await adapter.start()
+            request.app.state.wechat_bot = adapter
+            logger.info("wechat.bot.started")
+            return Envelope(data={"success": True})
+        except Exception as e:
+            logger.error(
+                "wechat.start.failed error={} type={}",
+                str(e)[:200], type(e).__name__, exc_info=True,
+            )
+            return Envelope(
+                ok=False,
+                error={"code": "START_FAILED", "message": f"启动失败: {e}"},
+            )
 
 
 @router.post("/wechat/stop", response_model=Envelope[dict])
 async def stop_bot(request: Request) -> Any:
     """停止微信消息轮询并清除凭证文件。"""
-    bot = getattr(request.app.state, "wechat_bot", None)
-    success = True
+    async with _lifecycle_lock:
+        bot = getattr(request.app.state, "wechat_bot", None)
+        success = True
 
-    if bot is not None:
+        if bot is not None:
+            try:
+                await bot.stop()
+                logger.info("wechat.bot.stopped")
+            except Exception as e:
+                logger.error(
+                    "wechat.stop.failed error={}",
+                    str(e)[:200], exc_info=True,
+                )
+                success = False
+            request.app.state.wechat_bot = None
+        else:
+            logger.info("wechat.stop.no_active_bot")
+
+        # 清除凭证文件（无论 bot 是否存在都清除，确保登出干净）
         try:
-            await bot.stop()
-            logger.info("wechat.bot.stopped")
+            from wechat_bot_adapter import CREDENTIALS_PATH
+            if CREDENTIALS_PATH.exists():
+                CREDENTIALS_PATH.unlink()
+                logger.info("wechat.credentials.cleared path={}", CREDENTIALS_PATH)
         except Exception as e:
-            logger.error(
-                "wechat.stop.failed error={}",
-                str(e)[:200], exc_info=True,
+            logger.warning(
+                "wechat.credentials.clear_failed error={}",
+                str(e)[:200],
             )
-            success = False
-        request.app.state.wechat_bot = None
-    else:
-        logger.info("wechat.stop.no_active_bot")
+            # 凭证清除失败不改变 success（bot 已停止是主要操作）
 
-    # 清除凭证文件（无论 bot 是否存在都清除，确保登出干净）
-    try:
-        from wechat_bot_adapter import CREDENTIALS_PATH
-        if CREDENTIALS_PATH.exists():
-            CREDENTIALS_PATH.unlink()
-            logger.info("wechat.credentials.cleared path={}", CREDENTIALS_PATH)
-    except Exception as e:
-        logger.warning(
-            "wechat.credentials.clear_failed error={}",
-            str(e)[:200],
-        )
-        # 凭证清除失败不改变 success（bot 已停止是主要操作）
-
-    return Envelope(data={"success": success})
+        return Envelope(data={"success": success})
 
 
 # ---------------------------------------------------------------------------

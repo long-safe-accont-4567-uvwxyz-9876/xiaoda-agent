@@ -65,6 +65,19 @@ QR_STATUS_CONFIRMED = "confirmed"
 QR_STATUS_EXPIRED = "expired"
 
 
+def _normalize_base_url(url: str) -> str:
+    """仅允许 HTTPS 的 iLink 服务端地址，非 HTTPS 时回退官方默认域名。
+
+    防止 Bearer bot_token 通过明文 HTTP 传输（CWE-319）。
+    """
+    url = (url or "").strip().rstrip("/")
+    if url.lower().startswith("https://"):
+        return url
+    if url:
+        logger.warning("ilink.client.rejected_non_https_url url={}", url[:200])
+    return ILINK_BASE_URL
+
+
 class SessionExpiredError(Exception):
     """iLink 会话过期异常。
 
@@ -126,7 +139,7 @@ class ILinkClient:
             client: 可选的外部 httpx.AsyncClient（连接池复用场景），
                     未提供时内部自建（首次请求时惰性创建）
         """
-        self._base_url = base_url.rstrip("/")
+        self._base_url = _normalize_base_url(base_url)
         self._bot_token = bot_token
         self._timeout = timeout
         # 外部注入的 client（共享连接池）；为 None 时使用内部自建的 _owned_client
@@ -195,7 +208,7 @@ class ILinkClient:
         """
         if not base_url:
             return
-        self._active_base_url = base_url.rstrip("/")
+        self._active_base_url = _normalize_base_url(base_url)
         logger.info("ilink.client.base_url_updated url={}", self._active_base_url)
 
     @property
