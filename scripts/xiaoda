@@ -17,13 +17,19 @@ else
     PYTHON="$(command -v python3 || echo python3)"
 fi
 
+# 强制 UTF-8 输出，避免终端编码问题
+export PYTHONIOENCODING=utf-8
+
+# 打包版：优先使用 PyInstaller 冻结的 xiaoda-agent 可执行文件（bundle 内无 agent.py）
+if [ -x "${INSTALL_DIR}/xiaoda-agent" ]; then
+    exec "${INSTALL_DIR}/xiaoda-agent" --cli
+fi
+
+# 源码版：回退到 venv/python 运行 agent.py --cli
 if [ ! -f "${INSTALL_DIR}/agent.py" ]; then
     echo "[错误] 未找到 agent.py: ${INSTALL_DIR}/agent.py" >&2
     echo "      请确认安装目录正确。" >&2
     exit 1
 fi
-
-# 强制 UTF-8 输出，避免终端编码问题
-export PYTHONIOENCODING=utf-8
 
 exec "$PYTHON" "${INSTALL_DIR}/agent.py" --cli

@@ -104,8 +104,15 @@ async function selectModel(provider: string, model: ModelInfo) {
       message.warning(t('modelSelector.noToolSupport'))
     }
   } catch (e: any) {
-    // 失败时回滚到后端真实值，避免乐观更新显示错误模型
-    await fetchCurrentModel()
+    // 失败时回滚到当前活跃 Agent 的真实模型，避免乐观更新显示错误模型。
+    // 子 Agent 从 agentsStore 恢复；主体小妲才读后端 /models/chat-model。
+    const agent = chat.currentAgent
+    if (agent && agent !== 'xiaoda') {
+      await agentsStore.load()
+      syncCurrentModelFromStore()
+    } else {
+      await fetchCurrentModel()
+    }
     message.error(e.message || t('modelSelector.switchFailed'))
   } finally {
     switching = false

@@ -74,6 +74,26 @@ _ALL_CMD_NAMES = _all_command_names()  # 与 WebUI 同源（COMMAND_DESCRIPTIONS
 # 多步命令：无参数时弹出菜单选择，Esc 取消不误发裸命令
 _MULTI_STEP_COMMANDS = {"/model", "/agent", "/voice", "/doctor", "/cost", "/cam"}
 
+# /model 参数补全缓存：客户端模式下 CLI 进程内没有模型路由缓存，需从主进程
+# discover_models 拉取后在这里维护，供补全作本地查询（避免每次敲 Tab 都发 HTTP）。
+_MODEL_ARG_CACHE: list[str] = []
+
+
+def _refresh_model_arg_cache(token: str) -> None:
+    """连接主进程成功后刷新 /model 参数补全缓存（provider/模型 完整串）。"""
+    global _MODEL_ARG_CACHE
+    providers = cli_client.discover_models(token)
+    ids: list[str] = []
+    for p in providers:
+        pid = p.get("provider") or p.get("id") or ""
+        if not pid:
+            continue
+        for m in (p.get("models") or []):
+            mid = m.get("id")
+            if mid:
+                ids.append(f"{pid}/{mid}")
+    _MODEL_ARG_CACHE = ids
+
 
 def _argument_completions(command: str, partial: str) -> list[str]:
     """返回命令的参数级补全候选（第二级补全）。
@@ -90,13 +110,8 @@ def _argument_completions(command: str, partial: str) -> list[str]:
 
 
 def _model_arg_completions(partial: str) -> list[str]:
-    """/model 参数补全：动态枚举已发现模型（provider/模型）。"""
-    try:
-        from model_router import list_discovered_model_ids
-        opts = list_discovered_model_ids()
-    except Exception:
-        opts = []
-    return [o for o in opts if o.startswith(partial)]
+    """/model 参数补全：使用主进程导出的模型缓存（provider/模型）。"""
+    return [o for o in _MODEL_ARG_CACHE if o.startswith(partial)]
 
 
 class _SlashCompleter(Completer):
@@ -108,11 +123,8 @@ class _SlashCompleter(Completer):
 
     def _arg_completions(self, command: str, partial: str) -> list[str]:
         if command == "/model":
-            try:
-                from model_router import list_discovered_model_ids
-                opts = list_discovered_model_ids()
-            except Exception:
-                opts = []
+            # 客户端模式下用主进程导出的模型缓存，避免读到 CLI 进程本地空缓存
+            opts = _model_arg_completions(partial)
         else:
             try:
                 from slash_commands import get_argument_completions
@@ -128,18 +140,20 @@ class _SlashCompleter(Completer):
         parts = line.split(maxsplit=1)
         word = document.get_word_before_cursor(WORD=True)
         start = -len(word) if word else 0
-        if len(parts) == 1:
+        if len(parts) == 1 and not line[-1:].isspace():
             for name in _ALL_CMD_NAMES:
                 if word and name.startswith(word) and name != word:
                     yield Completion(name, start_position=start)
         else:
             command = parts[0]
+            # 命令后跟尾随空格也算进入参数补全（partial 为空串）
+            partial = word if len(parts) > 1 else ""
             try:
                 from slash_commands import resolve_command
                 command = resolve_command(command)
             except ImportError:
                 pass
-            for cand in self._arg_completions(command, word):
+            for cand in self._arg_completions(command, partial):
                 yield Completion(cand, start_position=start)
 
 
@@ -646,6 +660,8 @@ class CLIInterface:
     def run(self) -> None:
         if not self._connect_main_process():
             return
+        # 拉取 /model 补全缓存（在输入循环外刷新，补全路径保持本地查询）
+        _refresh_model_arg_cache(self._token)
         self._print_welcome()
         self._init_prompt_session()
 

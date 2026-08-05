@@ -231,6 +231,10 @@ def fetch_token(host: str | None = None, port: int | None = None,
             _body = json.loads(resp.read().decode("utf-8"))
     except _ue.HTTPError as e:
         raise RuntimeError(f"认证失败: HTTP {e.code}") from e
+    except (_ue.URLError, TimeoutError, OSError, ValueError) as e:
+        # 端口可达但服务未就绪/超时/JSON 解析失败等：统一包成 RuntimeError，
+        # 供上层一次捕获并返回 False，避免 CLI 在“不闪退”路径上直接崩溃。
+        raise RuntimeError(f"连接主进程失败: {str(e)[:120]}") from e
     data = _body.get("data") or {}
     token = data.get("token") or ""
     if not token:
@@ -342,6 +346,10 @@ class WSClient:
             except json.JSONDecodeError:
                 continue
             mtype = evt.get("type", "")
+            if mtype == "ping":
+                # 服务端心跳：必须在心跳超时前回 pong，否则长回复期间连接被服务端关闭
+                await self._ws.send(json.dumps({"type": "pong"}))
+                continue
             if mtype == "final" and evt.get("msg_id") == msg_id:
                 return evt.get("reply") or ""
             if mtype == "error" and evt.get("msg_id") == msg_id:
