@@ -1,0 +1,29 @@
+#!/bin/bash
+# =============================================================================
+#  Xiaoda Agent — Linux CLI 入口
+#  用法：xiaoda            # 进入 CLI 交互界面
+#  安装脚本会把本脚本软链到 /usr/local/bin 或加入 PATH，终端直接输入 `xiaoda` 即可
+# =============================================================================
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# 本脚本位于安装目录的 scripts/ 下
+INSTALL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Python 解释器：优先用 venv，其次用系统 python3
+if [ -x "${INSTALL_DIR}/.venv/bin/python" ]; then
+    PYTHON="${INSTALL_DIR}/.venv/bin/python"
+else
+    PYTHON="$(command -v python3 || echo python3)"
+fi
+
+if [ ! -f "${INSTALL_DIR}/agent.py" ]; then
+    echo "[错误] 未找到 agent.py: ${INSTALL_DIR}/agent.py" >&2
+    echo "      请确认安装目录正确。" >&2
+    exit 1
+fi
+
+# 强制 UTF-8 输出，避免终端编码问题
+export PYTHONIOENCODING=utf-8
+
+exec "$PYTHON" "${INSTALL_DIR}/agent.py" --cli

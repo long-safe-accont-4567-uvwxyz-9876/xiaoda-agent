@@ -133,6 +133,19 @@ do_build() {
         local tar_name="${pkg_name}.tar.gz"
         local run_name="${pkg_name}.run"
 
+        info "Copying Linux startup/CLI scripts into dist..."
+        # 与 CI 保持一致：start-linux.sh / doctor.sh / auto-update.sh / xiaoda
+        # 必须打进 dist，否则 install-linux.sh 的 systemd 服务与 xiaoda 命令会失效
+        local _linux_scripts=("start-linux.sh" "doctor.sh" "auto-update.sh" "xiaoda")
+        mkdir -p "$dist_dir/scripts"
+        for _s in "${_linux_scripts[@]}"; do
+            if [ ! -f "$SCRIPT_DIR/$_s" ]; then
+                die "Required Linux script not found: $SCRIPT_DIR/$_s"
+            fi
+            cp "$SCRIPT_DIR/$_s" "$dist_dir/scripts/$_s"
+            chmod +x "$dist_dir/scripts/$_s"
+        done
+
         info "Creating tar.gz archive..."
         tar czf "$tar_name" xiaoda-agent
 

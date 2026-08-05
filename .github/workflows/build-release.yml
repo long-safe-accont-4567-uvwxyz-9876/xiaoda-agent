@@ -451,9 +451,11 @@ jobs:
           cp scripts/auto-update.sh dist/xiaoda-agent/scripts/
           cp scripts/doctor.sh dist/xiaoda-agent/scripts/
           cp scripts/start-linux.sh dist/xiaoda-agent/scripts/
+          cp scripts/xiaoda dist/xiaoda-agent/scripts/
           chmod +x dist/xiaoda-agent/scripts/auto-update.sh
           chmod +x dist/xiaoda-agent/scripts/doctor.sh
           chmod +x dist/xiaoda-agent/scripts/start-linux.sh
+          chmod +x dist/xiaoda-agent/scripts/xiaoda
           tar -czf xiaoda-agent-linux-x86_64-v${VERSION}.tar.gz -C dist xiaoda-agent
 
           # 打包 Linux 安装脚本

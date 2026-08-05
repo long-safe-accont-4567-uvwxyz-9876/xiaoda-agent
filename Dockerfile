@@ -47,7 +47,10 @@ COPY --from=frontend-builder /build/web/dist web/dist
 # 复制辅助脚本
 COPY scripts/doctor.sh scripts/doctor.sh
 COPY scripts/start-linux.sh scripts/start-linux.sh
-RUN chmod +x scripts/doctor.sh scripts/start-linux.sh
+COPY scripts/xiaoda scripts/xiaoda
+RUN chmod +x scripts/doctor.sh scripts/start-linux.sh scripts/xiaoda
+# 注册 xiaoda CLI 命令到 PATH：容器内直接 `xiaoda` 进入 CLI（或 docker exec -it xiaoda-agent xiaoda）
+RUN ln -sf /app/scripts/xiaoda /usr/local/bin/xiaoda
 
 # 从 Stage 1 复制 agently-cli（邮箱 OAuth 工具）
 # 复制 node 二进制和 agently-cli npm 包（run.js 需要 node）

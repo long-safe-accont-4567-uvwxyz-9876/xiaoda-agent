@@ -92,6 +92,45 @@ ENVEOF
     info "用户数据目录已创建"
 }
 
+# ── 配置 xiaoda CLI 命令到 PATH ───────────────────────────
+setup_cli_command() {
+    local cli="$INSTALL_DIR/scripts/xiaoda"
+
+    # 安装包可能未包含 scripts/xiaoda（旧包或未重新打包），此时不应中止安装，
+    # 仅提示用户手动处理即可。
+    if [ ! -f "$cli" ]; then
+        warn "未找到 CLI 入口脚本: $cli（安装包可能未打包 scripts/）"
+        warn "请先重新打包安装包，或手动运行: python $INSTALL_DIR/agent.py --cli"
+        return
+    fi
+    chmod +x "$cli"
+
+    # 优先尝试 /usr/local/bin（免改用户 shell 配置，全局可用）
+    if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+        ln -sf "$cli" /usr/local/bin/xiaoda
+        info "已创建命令: /usr/local/bin/xiaoda"
+        return
+    fi
+
+    # 需要 sudo 时写入 /usr/local/bin
+    if [ -d /usr/local/bin ] && sudo -n true 2>/dev/null; then
+        sudo ln -sf "$cli" /usr/local/bin/xiaoda
+        info "已创建命令: /usr/local/bin/xiaoda"
+        return
+    fi
+
+    # 兜底：把安装目录的 scripts 加入 ~/.bashrc 的 PATH
+    local bashrc="$HOME/.bashrc"
+    local line="export PATH=\"$INSTALL_DIR/scripts:\$PATH\""
+    if [ -f "$bashrc" ] && ! grep -qF "$INSTALL_DIR/scripts" "$bashrc"; then
+        echo "$line" >> "$bashrc"
+        info "已将 $INSTALL_DIR/scripts 加入 ~/.bashrc 的 PATH"
+    else
+        warn "未自动配置 PATH，请手动执行: export PATH=\"$INSTALL_DIR/scripts:\$PATH\""
+        warn "或: sudo ln -sf $cli /usr/local/bin/xiaoda"
+    fi
+}
+
 # ── 创建 systemd 服务 ─────────────────────────────────────
 setup_service() {
     if [ ! -d /etc/systemd/system ]; then
@@ -160,6 +199,7 @@ main() {
 
     info "安装包: $tarball"
     install_agent "$tarball"
+    setup_cli_command
     setup_service
 
     echo ""
@@ -168,6 +208,7 @@ main() {
     echo "  访问地址: http://localhost:8082"
     echo "  配置文件: $INSTALL_DIR/.env"
     echo "  服务管理: sudo systemctl {start|stop|restart|status} $SERVICE_NAME"
+    echo "  CLI 命令: xiaoda        （若新终端仍提示 command not found，先执行 source ~/.bashrc）"
     echo "  手动启动: bash $INSTALL_DIR/scripts/start-linux.sh --web"
     echo "  自检工具: bash $INSTALL_DIR/scripts/doctor.sh"
     echo "  启用自动更新: touch $INSTALL_DIR/.auto_update"
