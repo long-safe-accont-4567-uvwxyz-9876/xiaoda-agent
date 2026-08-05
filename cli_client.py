@@ -182,6 +182,38 @@ def get_chat_model_label(token: str, host: str | None = None,
     return model_id or "mimo-v2.5"
 
 
+def discover_models(token: str, host: str | None = None, port: int | None = None,
+                    timeout: float = 15.0) -> list[dict]:
+    """从主进程拉取已发现模型（provider 分组列表）。
+
+    GET /api/v1/models/discover 返回 Envelope(data=[{provider,label,models:[...]}, ...])。
+    失败或结构不符时返回空列表，由调用方回退为手动输入。
+    """
+    try:
+        data = _http_get_json("/api/v1/models/discover", token, host, port, timeout)
+        providers = data.get("data")
+        return providers if isinstance(providers, list) else []
+    except Exception:
+        logger.debug("cli_client.discover_models_error", exc_info=True)
+        return []
+
+
+def list_agents(token: str, host: str | None = None, port: int | None = None,
+                timeout: float = 15.0) -> list[dict]:
+    """从主进程拉取代理列表。
+
+    GET /api/v1/agents 返回 Envelope(data=[{name,display_name,...}, ...])。
+    失败或结构不符时返回空列表。
+    """
+    try:
+        data = _http_get_json("/api/v1/agents", token, host, port, timeout)
+        agents = data.get("data")
+        return agents if isinstance(agents, list) else []
+    except Exception:
+        logger.debug("cli_client.list_agents_error", exc_info=True)
+        return []
+
+
 class WSClient:
     """主进程 WebSocket 客户端：发送对话并等待最终回复。
 
