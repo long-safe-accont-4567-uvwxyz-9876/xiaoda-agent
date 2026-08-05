@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -363,14 +364,22 @@ class WeChatBotAdapter:
             logger.warning("wechat_bot.poll_no_client")
             return
 
-        logger.info("wechat_bot.poll_started")
+        logger.info("wechat_bot.poll_started cursor_len={}", len(self._cursor))
         _backoff = 1.0  # 初始退避时间 1 秒
         _max_backoff = 30.0  # 最大退避时间
+        _poll_count = 0
         while self._running and not self._expired:
+            _poll_count += 1
+            _t0 = time.time()
             try:
                 result = await self._ilink_client.get_updates(self._cursor)
+                _elapsed_ms = int((time.time() - _t0) * 1000)
                 # 成功轮询：重置退避
                 if _backoff > 1.0:
+                    logger.info(
+                        "wechat_bot.poll_recovered after_backoff={:.0f}s",
+                        _backoff,
+                    )
                     _backoff = 1.0
             except SessionExpiredError:
                 # 会话过期：清除凭证，标记过期，停止轮询
@@ -385,8 +394,8 @@ class WeChatBotAdapter:
             except Exception as e:
                 # 网络错误等：指数退避后重试
                 logger.error(
-                    "wechat_bot.poll_error error={} retry_in={:.0f}s",
-                    str(e)[:200], _backoff,
+                    "wechat_bot.poll_error error={} retry_in={:.0f}s poll_count={}",
+                    str(e)[:200], _backoff, _poll_count,
                 )
                 await asyncio.sleep(_backoff)
                 # 指数退避：1→2→4→8→16→30（封顶）
@@ -406,6 +415,10 @@ class WeChatBotAdapter:
             # 分发消息（用 asyncio.create_task 避免阻塞轮询）
             msgs = result.get("msgs", []) or []
             if msgs:
+                logger.info(
+                    "wechat_bot.poll_received poll_count={} elapsed_ms={} msg_count={} cursor_len={}",
+                    _poll_count, _elapsed_ms, len(msgs), len(next_cursor),
+                )
                 for msg in msgs:
                     task = asyncio.create_task(self._process_message(msg))
                     self._msg_tasks.add(task)
@@ -415,9 +428,10 @@ class WeChatBotAdapter:
                 await asyncio.sleep(0.5)
 
         logger.info(
-            "wechat_bot.poll_stopped expired={} running={}",
+            "wechat_bot.poll_stopped expired={} running={} total_polls={}",
             self._expired,
             self._running,
+            _poll_count,
         )
 
     # ------------------------------------------------------------------
@@ -442,6 +456,13 @@ class WeChatBotAdapter:
 
         from_user_id = msg.get("from_user_id", "") or ""
         context_token = msg.get("context_token", "") or ""
+        msg_id = msg.get("msg_id", "") or ""
+
+        logger.info(
+            "wechat_bot.msg_received from_user={} msg_id={} ctx_token_len={} item_count={}",
+            from_user_id[:16], msg_id[:12], len(context_token),
+            len(msg.get("item_list", []) or []),
+        )
 
         # 缓存上下文（send_message 回复时使用）
         if from_user_id:
@@ -463,9 +484,17 @@ class WeChatBotAdapter:
                 # 文本消息：提取 text_item.text
                 text_item = item.get("text_item", {}) or {}
                 if not isinstance(text_item, dict):
+                    logger.warning(
+                        "wechat_bot.text_item_not_dict from_user={}",
+                        from_user_id[:16],
+                    )
                     continue
                 text = (text_item.get("text") or "").strip()
                 if not text:
+                    logger.debug(
+                        "wechat_bot.empty_text_content from_user={}",
+                        from_user_id[:16],
+                    )
                     continue
                 await self._handle_text_message(text, from_user_id, context_token)
             elif item_type == 2:
@@ -662,23 +691,33 @@ class WeChatBotAdapter:
             logger.warning("wechat_bot.send_no_user_id content={}", content[:80])
             return False
 
+        _t0 = time.time()
+        logger.debug(
+            "wechat_bot.send_start to={} content_len={} token_len={} msg_type={}",
+            target_user[:16], len(content), len(target_token), msg_type,
+        )
         try:
             result = await self._ilink_client.send_message(
                 target_user, target_token, content
             )
             ret = result.get("ret", 0)
+            _elapsed_ms = int((time.time() - _t0) * 1000)
             logger.info(
-                "wechat_bot.send_message_result to={} ret={} content_len={}",
-                target_user[:16], ret, len(content),
+                "wechat_bot.send_message_result to={} ret={} content_len={} elapsed_ms={}",
+                target_user[:16], ret, len(content), _elapsed_ms,
             )
             return ret == 0
         except SessionExpiredError:
-            logger.warning("wechat_bot.send_session_expired")
+            logger.warning(
+                "wechat_bot.send_session_expired elapsed_ms={}",
+                int((time.time() - _t0) * 1000),
+            )
             self._expired = True
             self._connected = False
             self._clear_credentials()
             return False
         except ILinkRetError as e:
+            _elapsed_ms = int((time.time() - _t0) * 1000)
             # ret=-2: context_token 过期/无效。AgentCore 处理最长 120s，
             # 期间用户若发了新消息，_last_context_token 已更新为最新，
             # 用它重试一次可能恢复投递（覆盖"处理慢导致 token 过期"场景）。
@@ -689,30 +728,46 @@ class WeChatBotAdapter:
             ):
                 logger.info(
                     "wechat_bot.send_retry_with_cached_token user={} "
-                    "stale_token_len={} cached_token_len={}",
+                    "stale_token_len={} cached_token_len={} elapsed_ms={}",
                     target_user[:16], len(target_token), len(self._last_context_token),
+                    _elapsed_ms,
                 )
+                _rt0 = time.time()
                 try:
                     result = await self._ilink_client.send_message(
                         target_user, self._last_context_token, content
                     )
                     ret = result.get("ret", 0)
+                    _retry_ms = int((time.time() - _rt0) * 1000)
                     if ret == 0:
-                        logger.info("wechat_bot.send_retry_ok user={}", target_user[:16])
+                        logger.info(
+                            "wechat_bot.send_retry_ok user={} retry_elapsed_ms={}",
+                            target_user[:16], _retry_ms,
+                        )
+                    else:
+                        logger.warning(
+                            "wechat_bot.send_retry_failed_ret_nonzero user={} ret={} retry_elapsed_ms={}",
+                            target_user[:16], ret, _retry_ms,
+                        )
                     return ret == 0
                 except Exception as e2:
                     logger.error(
-                        "wechat_bot.send_retry_failed user={} error={}",
+                        "wechat_bot.send_retry_failed user={} error={} retry_elapsed_ms={}",
                         target_user[:16], str(e2)[:200],
+                        int((time.time() - _rt0) * 1000),
                     )
                     return False
             logger.error(
-                "wechat_bot.send_error ret={} error={}",
-                e.ret, str(e)[:200],
+                "wechat_bot.send_error ret={} error={} elapsed_ms={}",
+                e.ret, str(e)[:200], _elapsed_ms,
             )
             return False
         except Exception as e:
-            logger.error("wechat_bot.send_error error={}", str(e)[:200])
+            logger.error(
+                "wechat_bot.send_error error={} elapsed_ms={}",
+                str(e)[:200],
+                int((time.time() - _t0) * 1000),
+            )
             return False
 
     async def send_media_message(

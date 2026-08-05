@@ -26,6 +26,7 @@ import asyncio
 import os
 import random
 import struct
+import time
 import urllib.parse
 import uuid
 from typing import Any, Optional
@@ -319,38 +320,57 @@ class ILinkClient:
         headers = self._build_headers(bot_token)
         req_timeout = httpx.Timeout(timeout if timeout is not None else self._timeout)
         logger.debug("ilink.post url={} body_keys={}", url, list(body.keys()))
+        _t0 = time.time()
         try:
             response = await self._client.post(url, json=body, headers=headers, timeout=req_timeout)
         except httpx.TimeoutException as e:
-            logger.error("ilink.post.timeout url={} error={}", url, str(e)[:200])
+            _elapsed_ms = int((time.time() - _t0) * 1000)
+            logger.error(
+                "ilink.post.timeout url={} elapsed_ms={} error={}",
+                url, _elapsed_ms, str(e)[:200],
+            )
             raise
         except httpx.HTTPError as e:
-            logger.error("ilink.post.http_error url={} error={}", url, str(e)[:200])
+            _elapsed_ms = int((time.time() - _t0) * 1000)
+            logger.error(
+                "ilink.post.http_error url={} elapsed_ms={} error={}",
+                url, _elapsed_ms, str(e)[:200],
+            )
             raise
 
+        _elapsed_ms = int((time.time() - _t0) * 1000)
         if response.status_code != 200:
             logger.error(
-                "ilink.post.bad_status url={} status={} body={}",
-                url, response.status_code, response.text[:300],
+                "ilink.post.bad_status url={} status={} elapsed_ms={} body={}",
+                url, response.status_code, _elapsed_ms, response.text[:300],
             )
             raise RuntimeError(f"iLink HTTP {response.status_code}: {response.text[:200]}")
 
         try:
             payload = response.json()
         except Exception as e:
-            logger.error("ilink.post.json_parse_failed url={} error={} body={}", url, str(e)[:200], response.text[:300])
+            logger.error(
+                "ilink.post.json_parse_failed url={} elapsed_ms={} error={} body={}",
+                url, _elapsed_ms, str(e)[:200], response.text[:300],
+            )
             raise RuntimeError(f"iLink 响应解析失败: {e}") from e
 
         # 检查 ret 码（部分接口无 ret 字段，跳过检查）
         ret = payload.get("ret")
         if ret is not None:
             if ret == RET_SESSION_EXPIRED:
-                logger.warning("ilink.session_expired url={}", url)
+                logger.warning(
+                    "ilink.session_expired url={} elapsed_ms={}",
+                    url, _elapsed_ms,
+                )
                 raise SessionExpiredError()
             if ret != RET_OK:
-                logger.warning("ilink.post.bad_ret url={} ret={} payload={}", url, ret, str(payload)[:300])
+                logger.warning(
+                    "ilink.post.bad_ret url={} ret={} elapsed_ms={} payload={}",
+                    url, ret, _elapsed_ms, str(payload)[:300],
+                )
                 raise ILinkRetError(ret=ret, payload=payload)
-        logger.debug("ilink.post.ok url={} ret={}", url, ret)
+        logger.debug("ilink.post.ok url={} ret={} elapsed_ms={}", url, ret, _elapsed_ms)
         return payload
 
     async def _get(
@@ -375,31 +395,47 @@ class ILinkClient:
         url = f"{self._active_base_url}{path}"
         req_timeout = httpx.Timeout(timeout if timeout is not None else self._timeout)
         logger.debug("ilink.get url={} params={}", url, params)
+        _t0 = time.time()
         try:
             response = await self._client.get(
                 url, params=params, headers=headers, timeout=req_timeout,
             )
         except httpx.TimeoutException as e:
-            logger.error("ilink.get.timeout url={} error={}", url, str(e)[:200])
+            _elapsed_ms = int((time.time() - _t0) * 1000)
+            logger.error(
+                "ilink.get.timeout url={} elapsed_ms={} error={}",
+                url, _elapsed_ms, str(e)[:200],
+            )
             raise
         except httpx.HTTPError as e:
-            logger.error("ilink.get.http_error url={} error={}", url, str(e)[:200])
+            _elapsed_ms = int((time.time() - _t0) * 1000)
+            logger.error(
+                "ilink.get.http_error url={} elapsed_ms={} error={}",
+                url, _elapsed_ms, str(e)[:200],
+            )
             raise
 
+        _elapsed_ms = int((time.time() - _t0) * 1000)
         if response.status_code != 200:
             logger.error(
-                "ilink.get.bad_status url={} status={} body={}",
-                url, response.status_code, response.text[:300],
+                "ilink.get.bad_status url={} status={} elapsed_ms={} body={}",
+                url, response.status_code, _elapsed_ms, response.text[:300],
             )
             raise RuntimeError(f"iLink HTTP {response.status_code}: {response.text[:200]}")
 
         try:
             payload = response.json()
         except Exception as e:
-            logger.error("ilink.get.json_parse_failed url={} error={} body={}", url, str(e)[:200], response.text[:300])
+            logger.error(
+                "ilink.get.json_parse_failed url={} elapsed_ms={} error={} body={}",
+                url, _elapsed_ms, str(e)[:200], response.text[:300],
+            )
             raise RuntimeError(f"iLink 响应解析失败: {e}") from e
 
-        logger.debug("ilink.get.ok url={} payload_keys={}", url, list(payload.keys()) if isinstance(payload, dict) else "n/a")
+        logger.debug(
+            "ilink.get.ok url={} elapsed_ms={} payload_keys={}",
+            url, _elapsed_ms, list(payload.keys()) if isinstance(payload, dict) else "n/a",
+        )
         return payload
 
     # ------------------------------------------------------------------
