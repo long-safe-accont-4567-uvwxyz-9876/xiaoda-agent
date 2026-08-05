@@ -144,48 +144,51 @@ def get_config_dir() -> Path:
 def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
     """解析数据路径，优先使用 KIOXIA 外置存储，失败时降级到 fallback。
 
-    仅当显式设置了 KIOXIA_DATA_DIR 时才尝试外置盘；未设置时直接走 fallback，
-    行为确定。修复：默认 _KIOXIA_BASE=~/.ai-agent/data 时，原逻辑用
-    kioxia_path.parent.exists() 判断，会因 ~/.ai-agent/data 是否恰好存在而在
-    ~/.ai-agent/<sub> 与 ~/.ai-agent/data/<sub> 之间翻转，导致数据孤立。
+    规则：
+    - 显式设置 KIOXIA_DATA_DIR 时：仅当外置盘已挂载（base 目录存在）才使用，
+      否则回退到 fallback。
+    - 未设置 KIOXIA_DATA_DIR 时：_KIOXIA_BASE 默认即 ~/.ai-agent/data，
+      作为数据根直接使用 kioxia_path（~/.ai-agent/data/<sub>），位置稳定，
+      与更新脚本的备份清单（~/.ai-agent\data）一致，避免数据被备份遗漏。
 
-    注意：fallback_path 必须与 kioxia_path 结构一致（如都是 .../db），
-    避免首次/二次启动路径翻转导致数据孤立。
+    修复：原逻辑用 kioxia_path.parent.exists() 判断，未设 env 时默认
+    _KIOXIA_BASE=~/.ai-agent/data，会因 ~/.ai-agent/data 是否恰好存在而在
+    ~/.ai-agent/data/<sub> 与 ~/.ai-agent/<sub> 之间翻转，导致数据孤立。
+
+    注意：fallback_path 必须与 kioxia_path 结构一致（如都是 .../db）。
     """
     kioxia_env = os.getenv("KIOXIA_DATA_DIR", "")
-    if not kioxia_env:
-        # 未配置外置盘：直接使用 fallback，行为确定、不与 KIOXIA 分支翻转
-        try:
-            fallback_path.mkdir(parents=True, exist_ok=True)
-        except (OSError, PermissionError):
-            import tempfile
-            fallback_path = Path(tempfile.gettempdir()) / "xiaoda-agent" / fallback_path.name
-            fallback_path.mkdir(parents=True, exist_ok=True)
-        return fallback_path
+    if kioxia_env:
+        # 显式配置外置盘：盘未挂载（base 目录不存在）则直接回退，不创建幻影目录
+        if not (kioxia_path.exists() or kioxia_path.parent.exists()):
+            print(f"[config] WARNING: KIOXIA_DATA_DIR={kioxia_env} not available, "
+                  f"falling back to {fallback_path}")
+            return _ensure_fallback(fallback_path)
     try:
-        if kioxia_path.exists() or kioxia_path.parent.exists():
-            kioxia_path.mkdir(parents=True, exist_ok=True)
-            # 运行时只读检测：尝试写入临时文件验证文件系统是否可写
-            # 修复：FAT 文件系统错误导致 remount 只读时，os.access(W_OK) 仍返回 True
-            # 因此需要实际写入测试文件
-            _probe = kioxia_path / ".write_probe"
-            try:
-                _probe.write_text("probe", encoding="utf-8")
-                _probe.unlink(missing_ok=True)
-                logger.debug("config.data_path_writable path=%s", kioxia_path)
-            except (OSError, PermissionError):
-                logger.warning("config.data_path_readonly path=%s", kioxia_path)
-                raise OSError(f"Filesystem is read-only: {kioxia_path}")
-            return kioxia_path
+        kioxia_path.mkdir(parents=True, exist_ok=True)
+        # 运行时只读检测：尝试写入临时文件验证文件系统是否可写
+        # 修复：FAT 文件系统错误导致 remount 只读时，os.access(W_OK) 仍返回 True
+        # 因此需要实际写入测试文件
+        _probe = kioxia_path / ".write_probe"
+        try:
+            _probe.write_text("probe", encoding="utf-8")
+            _probe.unlink(missing_ok=True)
+            logger.debug("config.data_path_writable path=%s", kioxia_path)
+        except (OSError, PermissionError):
+            logger.warning("config.data_path_readonly path=%s", kioxia_path)
+            raise OSError(f"Filesystem is read-only: {kioxia_path}")
+        return kioxia_path
     except (OSError, PermissionError):
         logger.debug("config.data_path_resolve_failed", exc_info=True)
-    # 外置盘未挂载或不可写时降级到 fallback，并输出警告
-    print(f"[config] WARNING: KIOXIA_DATA_DIR={kioxia_env} not available, "
-          f"falling back to {fallback_path}")
+    # 主路径不可用，回退到 fallback
+    return _ensure_fallback(fallback_path)
+
+
+def _ensure_fallback(fallback_path: Path) -> Path:
+    """确保 fallback 目录存在并可写，连 fallback 都失败时使用临时目录。"""
     try:
         fallback_path.mkdir(parents=True, exist_ok=True)
     except (OSError, PermissionError):
-        # 连 fallback 都失败，使用临时目录
         import tempfile
         fallback_path = Path(tempfile.gettempdir()) / "xiaoda-agent" / fallback_path.name
         fallback_path.mkdir(parents=True, exist_ok=True)
@@ -363,10 +366,12 @@ def _ensure_workspace() -> None:
         _migrate_old_data(_exe_base / "memory_state", MEMORY_STATE_DIR, "memory_state")
         _migrate_old_data(_exe_base / "plugins", PLUGINS_CONFIG_DIR, "plugins")
 
-    # 是否实际使用 KIOXIA 外置盘：以 DATA_DIR 是否落在 _KIOXIA_BASE/db 为准。
+    # 是否实际使用外置盘：仅当显式配置 KIOXIA_DATA_DIR 且 DATA_DIR 落在其上时。
     # 修复：原 (_KIOXIA_BASE/"db").exists() 在未设 KIOXIA_DATA_DIR 时查询
-    # ~/.ai-agent/data/db，与 DATA_DIR(~/.ai-agent/db) 矛盾。
-    _KIOXIA_AVAILABLE = (DATA_DIR == _KIOXIA_BASE / "db")
+    # ~/.ai-agent/data/db，与 DATA_DIR 实际位置可能矛盾。
+    _KIOXIA_AVAILABLE = bool(os.getenv("KIOXIA_DATA_DIR", "")) and (
+        DATA_DIR == _KIOXIA_BASE / "db"
+    )
 
 
 # 路径定义必须在 _ensure_workspace() 之前：迁移逻辑引用这些变量
