@@ -20,8 +20,9 @@ fi
 # 强制 UTF-8 输出，避免终端编码问题
 export PYTHONIOENCODING=utf-8
 
-# 打包版：优先使用 PyInstaller 冻结的 xiaoda-agent 可执行文件（bundle 内无 agent.py）
-if [ -x "${INSTALL_DIR}/xiaoda-agent" ]; then
+# 打包版：优先使用 PyInstaller 冻结的 xiaoda-agent 可执行文件（bundle 内无 agent.py）。
+# 用 -f 限定为普通文件，避免源码目录下同名子目录（如残留的 xiaoda-agent/）被误判为打包产物。
+if [ -f "${INSTALL_DIR}/xiaoda-agent" ] && [ -x "${INSTALL_DIR}/xiaoda-agent" ]; then
     exec "${INSTALL_DIR}/xiaoda-agent" --cli
 fi
 
