@@ -5,8 +5,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
 import asyncio
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 from instinct_manager import InstinctManager
+
+
+def _mock_write_tx(conn):
+    """构造一个 async context manager，模拟 db.write_transaction() 产出 conn。"""
+    async def _gen():
+        yield conn
+    return asynccontextmanager(_gen)
 
 
 class TestInstinctManager(unittest.TestCase):
@@ -57,16 +65,16 @@ class TestInstinctManager(unittest.TestCase):
         mock_conn.execute = AsyncMock(return_value=mock_cursor)
         self.mock_db._conn = mock_conn
         self.mock_db.db_path = "/tmp/test_instinct.db"
-        # mock 独立连接（INSERT+commit 走独立连接，不阻塞主连接）
+        # mock write_transaction（INSERT 走主连接 write_transaction，不阻塞主连接）
         mock_w_conn = AsyncMock()
-        with patch("aiosqlite.connect", new=AsyncMock(return_value=mock_w_conn)):
-            asyncio.run(
+        self.mock_db.write_transaction = _mock_write_tx(mock_w_conn)
+        asyncio.run(
                 self.manager.extract_instincts("你好", "你好！", "session_1")
             )
 
         # 验证 router.route 被调用（免费模型禁用后降级到 router）
         self.mock_router.route.assert_called_once()
-        # 验证独立连接的 executemany 被调用（INSERT 走独立连接，不阻塞主连接）
+        # 验证 write_transaction 产出的连接 executemany 被调用（INSERT 走主连接事务）
         mock_w_conn.executemany.assert_called_once()
         inserted_rows = mock_w_conn.executemany.call_args[0][1]
         self.assertGreaterEqual(len(inserted_rows), 3)
@@ -83,8 +91,8 @@ class TestInstinctManager(unittest.TestCase):
         self.mock_db._conn = mock_conn
         self.mock_db.db_path = "/tmp/test_instinct.db"
         mock_w_conn = AsyncMock()
-        with patch("aiosqlite.connect", new=AsyncMock(return_value=mock_w_conn)):
-            asyncio.run(
+        self.mock_db.write_transaction = _mock_write_tx(mock_w_conn)
+        asyncio.run(
                 self.manager.extract_instincts("你好", "你好！", "session_1")
             )
 
@@ -187,13 +195,11 @@ class TestExtractInstinctsDedup(unittest.TestCase):
             {"content": "用户偏好亲密互动"},
         ])
         self.mock_db._conn.execute = AsyncMock(return_value=mock_cursor)
-        mock_w_conn = AsyncMock()
-        with patch("aiosqlite.connect", new=AsyncMock(return_value=mock_w_conn)) as _mock_connect:
-            asyncio.run(self.manager.extract_instincts("测试输入", "测试回复", "session1"))
+        self.mock_db.write_transaction = MagicMock()
+        asyncio.run(self.manager.extract_instincts("测试输入", "测试回复", "session1"))
 
-        # 断言：新本能与已有相似 → rows_to_insert 为空 → 不创建独立连接、不 INSERT
-        _mock_connect.assert_not_called()
-        mock_w_conn.executemany.assert_not_called()
+        # 断言：新本能与已有相似 → rows_to_insert 为空 → 不进入 write_transaction、不 INSERT
+        self.mock_db.write_transaction.assert_not_called()
 
     def test_extract_inserts_genuinely_new(self):
         """当新本能与已有 active instinct 不相似时，应正常 INSERT"""
@@ -203,10 +209,10 @@ class TestExtractInstinctsDedup(unittest.TestCase):
         ])
         self.mock_db._conn.execute = AsyncMock(return_value=mock_cursor)
         mock_w_conn = AsyncMock()
-        with patch("aiosqlite.connect", new=AsyncMock(return_value=mock_w_conn)):
-            asyncio.run(self.manager.extract_instincts("测试输入", "测试回复", "session1"))
+        self.mock_db.write_transaction = _mock_write_tx(mock_w_conn)
+        asyncio.run(self.manager.extract_instincts("测试输入", "测试回复", "session1"))
 
-        # 断言：独立连接的 executemany（INSERT）应被调用
+        # 断言：write_transaction 产出的连接 executemany（INSERT）应被调用
         mock_w_conn.executemany.assert_called_once()
 
 class TestCorrectInstinct(unittest.TestCase):

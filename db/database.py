@@ -1796,18 +1796,14 @@ class DatabaseManager:
     async def cleanup_expired_data(self, auto_commit: bool = True) -> dict[str, int]:
         """按 cleanup_config 表中的策略清理过期数据。返回各表删除行数。
 
-        P0 根治（2026-08-04 实证阻塞根因）：
-        原实现用主连接 self._conn 执行 DELETE + commit，aiosqlite 单连接单线程，
-        cleanup 期间独占主连接线程 → 主路径所有 DB 操作排队 → 事件循环冻结。
-        日志铁证：22:11:03 收到 QQ 消息 → 主连接被 cleanup 占用 → 22:11:48 cleanup
-        完成（45秒静默期）→ 消息处理才继续 → llm_verify 77秒 → 用户感知严重阻塞。
-        nudge_engine 后台 _tick 每 24h 触发一次，服务重启后首次 tick 即命中，
-        恰好撞上消息处理。
-
-        修复：改用独立 aiosqlite 连接执行 DELETE + commit，与主连接完全隔离。
-        WAL 支持多连接并发，busy_timeout 处理偶发写锁竞争，synchronous=NORMAL
-        让 commit 不 fsync（WAL 仅 checkpoint 时 fsync），把 cleanup 从阻塞主循环
-        降为后台静默执行。与 instinct_manager / background_tasks 的修复模式一致。
+        P0 根治（2026-08-05 rework）：
+        1) 用独立 aiosqlite 连接执行（与主连接隔离），避免 cleanup 的长 DELETE 拖慢
+           主路径的读/写（主连接命中"独占线程"的 45s 静默期历史阻塞根因）。
+        2) 每删一张表立即 commit（逐表提交），释放 SQLite 单写锁。
+           原实现所有表的 DELETE 合并在一个长事务里、最后才 commit，长时间独占总写锁，
+           与 instinct/记忆编码等并发写时 → 其他写者等锁超时 "database is locked"
+           （14:37:45 实证）。逐表提交让写锁在每个 DELETE 之间释放，锁竞争降为短暂可容忍。
+        WAL 支持多连接并发，synchronous=NORMAL 让 commit 不 fsync（WAL 仅 checkpoint 时 fsync）。
         """
         import aiosqlite as _aiosqlite
         result: dict[str, int] = {}
@@ -1820,7 +1816,9 @@ class DatabaseManager:
             _w_conn = await _aiosqlite.connect(str(self.db_path))
             _w_conn.row_factory = _aiosqlite.Row
             await _w_conn.execute("PRAGMA journal_mode=WAL")
-            await _w_conn.execute("PRAGMA busy_timeout=5000")
+            # busy_timeout 5000→20000：与主连接一致，避免后台 cleanup 与主连接/
+            # instinct/curator 并发写时 5s 等锁不够 → "database is locked"（14:37:45 实证）。
+            await _w_conn.execute("PRAGMA busy_timeout=20000")
             await _w_conn.execute("PRAGMA synchronous=NORMAL")
             await _w_conn.execute("PRAGMA cache_size=-20000")
             await _w_conn.execute("PRAGMA temp_store=MEMORY")
@@ -1857,6 +1855,16 @@ class DatabaseManager:
                     if deleted > 0:
                         logger.info("database.cleanup", table=table_name,
                                     deleted=deleted, retention_days=retention_days)
+                    # 根治（2026-08-05）：每删一张表立即 commit，释放写锁。
+                    # 原实现所有表的 DELETE 合并在一个长事务里，最后才 commit，
+                    # 长时间独占总写锁 → 并发写（instinct/记忆编码/主路径）等锁超时
+                    # "database is locked"（14:37:45 实证）。逐表提交让写锁在每个
+                    # DELETE 之间释放，其他写者得以插入，锁竞争降为短暂、可容忍。
+                    if auto_commit:
+                        try:
+                            await _w_conn.commit()
+                        except (OSError, RuntimeError) as e:
+                            logger.warning(f"database.cleanup_commit_failed table={table_name} error={e}")
                 except (OSError, RuntimeError) as e:
                     logger.warning("database.cleanup_failed", table=table_name, error=str(e))
                     result[table_name] = 0

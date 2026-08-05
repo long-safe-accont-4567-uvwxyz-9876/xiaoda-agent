@@ -550,32 +550,17 @@ class BackgroundTaskManager:
                 return
             _curator_t0 = time.time()
             try:
-                # P0 根治（07-31 21:11 生产事故根因）：
-                # 根因：ConceptDB(self.db._conn) 共享主 aiosqlite 连接，curator 的
-                # executemany+commit 在 USB 盘上慢（30s+），阻塞主连接的所有 await，
-                # 导致 memory encode/extract_instincts 等后台任务集体卡 60s+。
-                # aiosqlite 单连接单线程串行执行，curator 的慢写独占连接线程，
-                # 其他协程的 DB 操作排队等待 → 事件循环表面冻结。
-                # 修复：curator 创建独立 aiosqlite 连接（WAL+busy_timeout），写操作
-                # 在独立连接的线程执行，不占用主连接的 await，事件循环不冻结。
-                # WAL 模式支持多连接并发，busy_timeout=5000 处理偶发写锁竞争。
-                import aiosqlite
+                # 根治（2026-08-05 rework）：收敛到主连接 write_transaction，删除独立写连接。
+                # 根因复盘：历史"独立连接"方案用 separate aiosqlite 连接 + ConceptDB 写概念图，
+                # 与主连接/instinct 并发写时争抢 SQLite 单写锁 → "database is locked"（14:37:45
+                # 实证）。提高 busy_timeout（5s→20s）只是让写等待而非失败，锁竞争仍在（治标）。
+                # 根治：所有写统一走主连接 + write_transaction() 的 asyncio.Lock 串行化 → 只剩
+                # 一个写者，跨连接写锁无从谈起。batch_size=10 有界 + synchronous=NORMAL 不 fsync，
+                # 本批写已毫秒级，不再有历史"30s+ 独占主连接线程"问题（那是 synchronous=FULL 的
+                # fsync 导致，已修）。batch_link_recent 内部 commit，外层 commit 为幂等空操作。
                 from db.db_concept import ConceptDB
-                _curator_conn = await aiosqlite.connect(str(self.db.db_path))
-                _curator_conn.row_factory = aiosqlite.Row
-                await _curator_conn.execute("PRAGMA journal_mode=WAL")
-                await _curator_conn.execute("PRAGMA busy_timeout=5000")
-                # P0 根治（2026-08-04 实证）：原独立连接漏设 synchronous=NORMAL，用默认
-                # synchronous=FULL，每次 commit 都 fsync WAL；USB 盘 fsync 物理耗时 50-101s
-                # （日志 concept_graph.curator_slow elapsed_ms=101506 + curator_timeout），
-                # 与 instinct extract 并发时 I/O 饱和，连锁触发 memory.retrieve_timeout →
-                # wechat_bot.process_timeout。补齐与主连接（db/database.py:127）一致的
-                # PRAGMA，synchronous=NORMAL 让 commit 不 fsync（WAL 仅 checkpoint 时 fsync）。
-                await _curator_conn.execute("PRAGMA synchronous=NORMAL")
-                await _curator_conn.execute("PRAGMA cache_size=-20000")    # ~20MB
-                await _curator_conn.execute("PRAGMA temp_store=MEMORY")
-                try:
-                    _curator_concept_db = ConceptDB(_curator_conn)
+                async with self.db.write_transaction():
+                    _curator_concept_db = ConceptDB(self.db._conn)
                     # N10: batch_size 30→10，配合 max_edges_per_run=60 限制写入量
                     linked = await asyncio.wait_for(
                         _curator_concept_db.batch_link_recent(batch_size=10),
@@ -583,8 +568,6 @@ class BackgroundTaskManager:
                     )
                     if linked > 0:
                         logger.info("concept_graph.curator_linked", edges=linked)
-                finally:
-                    await _curator_conn.close()
             except asyncio.TimeoutError:
                 # CodeRabbit #5→#A 修正：超时也更新 last_run，30 分钟内不重试，
                 # 避免连续超时 → USB I/O 雪崩。未完成节点由下次 curator 拾起。
