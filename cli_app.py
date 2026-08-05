@@ -328,15 +328,31 @@ class XiaodaApp(App):
         self.push_screen(SlashPanel(on_select=on_select))
 
     def _dispatch_slash(self, text: str, chat: ChatView) -> None:
-        """简单斜杠命令本地占位（命令面板与真实调用在 Task 4/5 接入）。"""
+        """执行斜杠命令：多步命令走二级面板，其余经 WS 聊天通道真实执行。"""
         cmd = text.split()[0] if text.split() else text
         if cmd in self._MULTI_STEP:
             self.run_worker(self._open_multistep(cmd, chat), exclusive=False)
             return
-        if text == "/help":
-            chat.add_assistant("在输入框输入 / 打开命令面板选择命令。")
+        if cmd == "/help":
+            chat.add_assistant(
+                "在输入框输入 / 打开命令面板选择命令；或直接输入斜杠命令（如 /status、/reset、/model）执行。")
             return
-        chat.add_assistant(f"（{text} 结果待接入）")
+        self.run_worker(self._send_slash(text, chat), exclusive=False)
+
+    async def _send_slash(self, text: str, chat: ChatView) -> None:
+        """把斜杠命令当聊天消息经 WS 发给主进程共享 AgentCore 真实执行。
+
+        不走 HTTP /api/v1/commands/run（该端点不存在），而是复用 WSClient.chat。
+        """
+        if self._ws is None:
+            chat.add_status("尚未连接主进程")
+            return
+        try:
+            reply = await self._ws.chat(text)
+        except Exception as e:
+            chat.add_status(f"命令执行失败: {str(e)[:80]}")
+            return
+        chat.add_assistant(reply)
 
     async def _open_multistep(self, cmd: str, chat: ChatView) -> None:
         """拉取多步命令的二级数据并弹出选择面板（真实执行在 Task 6 接入）。"""
@@ -350,12 +366,12 @@ class XiaodaApp(App):
             agents = await asyncio.to_thread(cli_client.list_agents, self._token)
             self.push_screen(_MultiStepPanel(
                 "/agent · 选择子代理", agent_items(agents),
-                lambda name: chat.add_assistant(f"（切换子代理 {name}，待接入）")))
+                lambda name: self.run_worker(self._send_slash(f"/agent {name}", chat), exclusive=False)))
         else:
             opts = [(v, v) for v in fixed_arg_items(cmd)]
             self.push_screen(_MultiStepPanel(
                 f"{cmd} · 选择参数", opts,
-                lambda v: chat.add_assistant(f"（执行 {cmd} {v}，待接入）")))
+                lambda v: self.run_worker(self._send_slash(f"{cmd} {v}", chat), exclusive=False)))
 
     def _open_model_models(self, chat: ChatView, providers, pid: str) -> None:
         """/model 二级：某 provider 下选择具体模型。"""
@@ -366,7 +382,7 @@ class XiaodaApp(App):
             return
         self.push_screen(_MultiStepPanel(
             f"/model · {pid}", mopts,
-            lambda mid: chat.add_assistant(f"（切换模型 {pid}/{mid}，待接入）")))
+            lambda mid: self.run_worker(self._send_slash(f"/model {pid}/{mid}", chat), exclusive=False)))
 
     async def _send_chat(self, text: str, chat: ChatView) -> None:
         if self._ws is None:
