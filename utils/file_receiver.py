@@ -224,6 +224,7 @@ class FileReceiver:
                 with opener.open(req, timeout=30) as resp:
                     tmp_fd, tmp_path = tempfile.mkstemp()
                     total_size = 0
+                    tmp_file_closed = False
                     try:
                         while True:
                             chunk = resp.read(65536)  # 64KB 分块读取
@@ -231,14 +232,23 @@ class FileReceiver:
                                 break
                             total_size += len(chunk)
                             if total_size > self.MAX_FILE_SIZE:
-                                os.close(tmp_fd)
-                                os.unlink(tmp_path)
+                                # 资源泄漏修复：确保关闭并删除临时文件
+                                try:
+                                    os.close(tmp_fd)
+                                    tmp_file_closed = True
+                                finally:
+                                    os.unlink(tmp_path)
                                 return None, total_size
                             os.write(tmp_fd, chunk)
                         os.close(tmp_fd)
+                        tmp_file_closed = True
                     except Exception:
-                        os.close(tmp_fd)
-                        os.unlink(tmp_path)
+                        # 资源泄漏修复：异常路径必须清理临时文件
+                        if not tmp_file_closed:
+                            try:
+                                os.close(tmp_fd)
+                            finally:
+                                os.unlink(tmp_path)
                         raise
                 return tmp_path, total_size
 

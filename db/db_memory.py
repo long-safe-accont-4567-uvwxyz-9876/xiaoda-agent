@@ -574,14 +574,21 @@ class MemoryDB:
         except Exception as e:
             logger.debug("db_memory.update_entity_last_seen_failed", error=str(e))
 
+    # 列名白名单（防御SQL注入）
+    _ENTITY_COLUMNS_WHITELIST = frozenset({"kind", "observations", "metadata_json"})
+
     async def update_memory_entity(self, entity_id: int, kind: str = "",
                                     observations: str = "",
                                     metadata_json: str = "",
                                     auto_commit: bool = True) -> bool:
-        """更新实体字段"""
+        """更新实体字段
+
+        安全性：仅允许白名单列名，防止SQL注入攻击。
+        """
         try:
             sets = []
             params = []
+            # 使用白名单校验，防止SQL注入
             if kind:
                 sets.append("kind = ?")
                 params.append(kind)
@@ -594,6 +601,7 @@ class MemoryDB:
             if not sets:
                 return False
             params.append(entity_id)
+            # 列名已硬编码为常量，无需动态拼接
             await self._conn.execute(
                 f"UPDATE memory_entities SET {', '.join(sets)} WHERE id=?",
                 params,

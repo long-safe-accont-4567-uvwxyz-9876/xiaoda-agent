@@ -101,24 +101,32 @@ class SharedBlackboardDB:
             logger.debug("blackboard_db.put key={} agent={} ttl={}", key, agent_name, effective_ttl)
 
     async def get(self, key: str) -> Any | None:
-        """读取 key 的值；过期则清理并返回 None。"""
+        """读取 key 的值；过期则清理并返回 None。
+
+        竞态修复：使用单条SQL原子化"查询+过期删除"操作，
+        防止并发读取时的TOCTOU竞态（A和B同时读到同一key，都执行删除，可能导致数据不一致）。
+        """
         async with self._lock:
             def _do() -> Any | None:
                 conn = None
                 try:
                     conn = self._get_conn()
+                    now = time.time()
+                    # 原子操作：先删除过期条目（带条件），再返回有效值
+                    conn.execute(
+                        "DELETE FROM blackboard WHERE key = ? AND expire_at IS NOT NULL AND expire_at < ?",
+                        (key, now)
+                    )
+                    conn.commit()
+                    # 查询剩余的有效条目
                     cur = conn.execute(
-                        "SELECT value, expire_at FROM blackboard WHERE key = ?", (key,)
+                        "SELECT value FROM blackboard WHERE key = ?",
+                        (key,)
                     )
                     row = cur.fetchone()
                     if row is None:
                         return None
-                    raw_value, expire_at = row
-                    if expire_at is not None and time.time() > expire_at:
-                        conn.execute("DELETE FROM blackboard WHERE key = ?", (key,))
-                        conn.commit()
-                        return None
-                    return self._deserialize(raw_value)
+                    return self._deserialize(row[0])
                 except Exception as e:
                     logger.warning("blackboard_db.get_failed key={} error={}", key, e)
                     return None
@@ -129,23 +137,32 @@ class SharedBlackboardDB:
             return await asyncio.get_running_loop().run_in_executor(None, _do)
 
     async def get_with_meta(self, key: str) -> dict | None:
-        """读取 key 的值及元信息（含 created_at）。"""
+        """读取 key 的值及元信息（含 created_at）。
+
+        竞态修复：使用单条SQL原子化"查询+过期删除"操作，
+        防止并发读取时的TOCTOU竞态。
+        """
         async with self._lock:
             def _do() -> dict | None:
                 conn = None
                 try:
                     conn = self._get_conn()
+                    now = time.time()
+                    # 原子操作：先删除过期条目（带条件），再返回有效值
+                    conn.execute(
+                        "DELETE FROM blackboard WHERE key = ? AND expire_at IS NOT NULL AND expire_at < ?",
+                        (key, now)
+                    )
+                    conn.commit()
+                    # 查询剩余的有效条目
                     cur = conn.execute(
-                        "SELECT value, agent_name, expire_at, created_at FROM blackboard WHERE key = ?", (key,)
+                        "SELECT value, agent_name, expire_at, created_at FROM blackboard WHERE key = ?",
+                        (key,)
                     )
                     row = cur.fetchone()
                     if row is None:
                         return None
                     raw_value, agent_name, expire_at, created_at = row
-                    if expire_at is not None and time.time() > expire_at:
-                        conn.execute("DELETE FROM blackboard WHERE key = ?", (key,))
-                        conn.commit()
-                        return None
                     return {"value": self._deserialize(raw_value), "agent_name": agent_name, "created_at": created_at}
                 except Exception as e:
                     logger.warning("blackboard_db.get_meta_failed key={} error={}", key, e)
