@@ -71,6 +71,9 @@ def _all_command_names() -> list[str]:
 
 _ALL_CMD_NAMES = _all_command_names()  # 与 WebUI 同源（COMMAND_DESCRIPTIONS + 别名）
 
+# 多步命令：无参数时弹出菜单选择，Esc 取消不误发裸命令
+_MULTI_STEP_COMMANDS = {"/model", "/agent", "/voice", "/doctor", "/cost", "/cam"}
+
 
 def _argument_completions(command: str, partial: str) -> list[str]:
     """返回命令的参数级补全候选（第二级补全）。
@@ -396,7 +399,7 @@ class CLIInterface:
         self._session = PromptSession(
             history=FileHistory(hist_path),
             auto_suggest=AutoSuggestFromHistory(),
-            completer=_SlashCompleter(_ALL_CMD_NAMES),
+            completer=_SlashCompleter(),
             complete_while_typing=True,
         )
 
@@ -600,6 +603,9 @@ class CLIInterface:
             if expanded is not None:
                 stripped = expanded
                 cmd = stripped.split(maxsplit=1)[0].lower()
+            elif _HAS_MENU and cmd_l in _MULTI_STEP_COMMANDS:
+                # 多步命令：用户 Esc 取消或选项加载失败（已打印提示），不误发裸命令
+                return
         if self._ws is None:
             self._print_unknown(cmd)
             return

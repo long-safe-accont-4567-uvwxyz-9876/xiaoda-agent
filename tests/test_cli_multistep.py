@@ -53,3 +53,11 @@ def test_try_expand_skips_when_arg_present(monkeypatch):
     obj = _make_cli()
     monkeypatch.setattr(cli, "select_from_menu", lambda *a, **k: None)
     assert obj._try_expand_multistep("/model", "siliconflow/Qwen2.5") is None
+
+
+def test_multistep_cancel_does_not_send(monkeypatch):
+    obj = cli.CLIInterface.__new__(cli.CLIInterface)
+    obj._ws = object()  # 若误发，chat() 会 AttributeError
+    monkeypatch.setattr(cli.CLIInterface, "_try_expand_multistep", lambda self, cmd, arg: None)
+    monkeypatch.setattr(cli, "_HAS_MENU", True)
+    obj._dispatch_slash_command("/model")  # 修复后不应调用 chat()
