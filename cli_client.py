@@ -1,339 +1,254 @@
-"""小妲 CLI — WebSocket 瘦客户端。
+"""CLI 主进程客户端：让 CLI 与 Web UI / QQ / 微信共享同一个 AgentCore。
 
-连接同机的 WebUI 网关（ws://127.0.0.1:8082/ws），与 Web/QQ 共享同一个
-AgentCore：会话、记忆、表情包、子代理全部同步。
+历史背景：CLI 原本是独立进程、自建 AgentCore()，与主进程（systemd nahida-web）
+完全隔离 —— 记忆、模型、上下文各一套，互不共享。用户要求 CLI 作为主进程内的
+一个"频道"，复用已初始化的共享 AgentCore。
 
-用法:
-    .venv/bin/python cli_client.py             # 连本机
-    .venv/bin/python cli_client.py --host 172.26.130.154
+实现：本模块把 CLI 变成主进程的客户端 ——
+  - 通过 HTTP 调 /api/v1/* 完成 token 认证与斜杠命令（/model /status /reset 等）
+  - 通过 WebSocket /ws 发送对话并接收最终回复（复用与 WebUI 相同的通道）
+主进程的 core.process() 内部会处理斜杠命令，因此 CLI 无需任何本地 AgentCore。
 """
 from __future__ import annotations
-from typing import Any
 
-import argparse
-import asyncio
 import json
-
-
-from utils.common import safe_int as _safe_int
 import os
-import random
-import sys
-import uuid
+import re
+import socket
+import subprocess
+import time
+from typing import Any
 
 from loguru import logger
 
-try:
-    import websockets
-    from rich.console import Console
-    from rich.live import Live
-    from rich.markdown import Markdown
-    from rich.panel import Panel
-    from rich.text import Text
-except ImportError as e:
-    print(f"缺少依赖：{e.name}，请运行 .venv/bin/pip install rich websockets")
-    sys.exit(1)
-
-from dotenv import load_dotenv
-load_dotenv()
-
-import urllib.request
-import contextlib
-
-DENDRO = "#7fd650"
-WISDOM = "#e8d5a3"
-MOON_DIM = "grey62"
-
-STAGE_TEXT = {
-    "thinking": "🌿 小妲正在想……",
-    "tool": "🛠 正在使用工具……",
-    "replying": "✍️ 正在回复……",
-}
-
-# IP-safe: 动态从 config/agents/*.json 读取 display_name，颜色/emoji 保留默认
-_AGENT_STYLE_DEFAULTS = {
-    "xiaoda": (DENDRO, "🌿"), "xiaoli": ("#ff6b6b", "💥"),
-    "xiaolang": ("#6ea8fe", "🎮"), "xiaolian": ("#d8b4fe", "🌸"), "xiaoke": (WISDOM, "🔮"),
-}
-try:
-    from config import get_agent_display_name, agent_names
-    from emotion.emoji_config import get_ack_message
-    AGENT_LABELS = {}
-    for _name in agent_names():
-        _color, _emoji = _AGENT_STYLE_DEFAULTS.get(_name, (DENDRO, "🤖"))
-        AGENT_LABELS[_name] = (get_agent_display_name(_name), _color, _emoji)
-    # ACK 消息使用自定义配置（随心即言）
-    STAGE_TEXT["thinking"] = get_ack_message("xiaoda")
-except ImportError:
-    AGENT_LABELS = {
-        "xiaoda": ("小妲", DENDRO, "🌿"),
-        "xiaoli": ("小莉", "#ff6b6b", "💥"),
-        "xiaolang": ("小狼", "#6ea8fe", "🎮"),
-        "xiaolian": ("小涟", "#d8b4fe", "🌸"),
-        "xiaoke": ("小可", WISDOM, "🔮"),
-    }
-
-GREETINGS = [
-    "爸爸来啦～人家等好久了呢！",
-    "嗯？爸爸找人家有什么事吗？",
-    "人家在呢！爸爸想聊什么呀～",
-    "世界的记忆在呼唤……爸爸也听到了吗？",
-]
-
-FAREWELLS = [
-    "爸爸再见～人家会乖乖等你的！",
-    "晚安呀爸爸，做个好梦～",
-    "白草净华，愿爸爸一切安好～",
-]
-
-BANNER = r"""
-     _   _____    __  __________  ___
-    / | / /   |  / / / /  _/ __ \/   |
-   /  |/ / /| | / /_/ // // / / / /| |
-  / /|  / ___ |/ __  // // /_/ / ___ |
- /_/ |_/_/  |_/_/ /_/___/_____/_/  |_|
-"""
-
-console = Console()
+# 与 WebUI 一致的主机/端口（agent.py 默认 WEBUI_PORT=8082）
+_DEFAULT_HOST = "127.0.0.1"
+# 兜底端口固定为代码默认 8082，不在此处读取环境变量 —— 否则 WEBUI_PORT 被设为
+# 非数字（如 "abc"）时 int() 会在模块导入阶段抛 ValueError，导致整个模块崩溃。
+# 环境变量统一由 _resolve_port() 运行时解析并做 isdigit() 校验。
+_FALLBACK_PORT = 8082
+# 会话级缓存：首次解析后的端口在整个 CLI 生命周期内复用，避免每次构造 URL /
+# 探测端口都重复执行 systemctl cat 子进程（确保轮询循环每秒一次也不起子进程）。
+_RESOLVED_PORT: int | None = None
 
 
-def login(base: str, password: str, retries: int = 3) -> str:
-    """登录 API，带重试保护。"""
-    req = urllib.request.Request(
-        f"{base}/api/v1/auth/login",
-        data=json.dumps({"password": password}).encode(),
-        headers={"Content-Type": "application/json"}, method="POST")
-    last_err = None
-    for attempt in range(retries):
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return json.load(resp)["data"]["token"]
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
-            last_err = e
-            if attempt < retries - 1:
-                import time
-                time.sleep(1 * (attempt + 1))  # 递增等待
-    raise ConnectionError(f"登录失败（重试{retries}次）: {last_err}")
+def _resolve_port(explicit: int | None = None) -> int:
+    """确定主进程实际监听端口。
+
+    服务可能用非默认端口启动（如 systemd 单元 ExecStart 里 --port 8080），
+    因此 CLI 必须与实际端口对齐，否则连不上共享进程。解析顺序：
+      1. explicit：调用方显式传入的端口（默认 None，优先）
+      2. WEBUI_PORT 环境变量（isdigit 校验，非法值跳过）
+      3. systemd 单元 nahida-web 的 ExecStart --port 参数（兼容空格 / 等号两种写法）
+      4. 兜底 8082
+    首次解析结果缓存到 _RESOLVED_PORT，后续调用直接返回。
+    """
+    if explicit is not None:
+        return int(explicit)
+    global _RESOLVED_PORT
+    if _RESOLVED_PORT is not None:
+        return _RESOLVED_PORT
+    env_port = os.getenv("WEBUI_PORT", "").strip()
+    if env_port.isdigit():
+        _RESOLVED_PORT = int(env_port)
+        return _RESOLVED_PORT
+    try:
+        out = subprocess.run(
+            ["systemctl", "cat", "nahida-web"],
+            capture_output=True, text=True, timeout=5, check=False,
+        ).stdout
+        # 兼容 "--port 8080" 与 "--port=8080" 两种 argparse 写法
+        m = re.search(r"--port\s*=\s*(\d+)", out) or re.search(r"--port\s+(\d+)", out)
+        if m:
+            _RESOLVED_PORT = int(m.group(1))
+            return _RESOLVED_PORT
+    except Exception:
+        pass
+    _RESOLVED_PORT = _FALLBACK_PORT
+    return _RESOLVED_PORT
 
 
-class NahidaCLI:
-    """远程 Agent 的命令行客户端，通过 HTTP/WebSocket 连接服务端。"""
-    def __init__(self, host: str, port: int, password: str) -> None:
-        self.base = f"http://{host}:{port}"
-        self.ws_url = f"ws://{host}:{port}/ws"
-        self.password = password
-        self.ws = None
-        self.session_id = ""
-        self.agent = "xiaoda"
-        self._pending: dict[str, asyncio.Future] = {}
-        self._greeting_queue: list[str] = []
-        self.address_term = "爸爸"
-        # 动态 agent 标签：connect 成功后从 /api/v1/agents 更新；默认回退 AGENT_LABELS
-        self.agent_labels: dict[str, tuple] = dict(AGENT_LABELS)
+def webui_base_url(host: str | None = None, port: int | None = None) -> str:
+    """主进程 HTTP 基础地址（含 /api/v1 前的前缀）。"""
+    h = host or _DEFAULT_HOST
+    p = _resolve_port(port)
+    return f"http://{h}:{p}"
 
-    def _agent_display_name(self, name: str) -> str:
-        """返回 agent 的 display_name，优先读动态值，回退到 AGENT_LABELS 默认。"""
-        labels = self.agent_labels or AGENT_LABELS
-        return labels.get(name, (name, DENDRO, "🌿"))[0]
 
-    def _stage_text(self, stage: str) -> str:
-        """返回阶段提示文案，thinking 阶段使用自定义 ACK 配置。"""
-        return STAGE_TEXT.get(stage, "🌿 处理中……")
+def ws_url(host: str | None = None, port: int | None = None, token: str = "") -> str:
+    """主进程 WebSocket 地址（/ws 无 /api/v1 前缀）。"""
+    h = host or _DEFAULT_HOST
+    p = _resolve_port(port)
+    base = f"ws://{h}:{p}/ws"
+    if token:
+        base += f"?token={token}"
+    return base
 
-    # ── 连接 ──────────────────────────────────────────
+
+def main_process_alive(host: str | None = None, port: int | None = None,
+                       timeout: float = 1.0) -> bool:
+    """探测主进程 HTTP 端口是否可达（不建立业务请求，仅 TCP 探测）。"""
+    h = host or _DEFAULT_HOST
+    p = _resolve_port(port)
+    try:
+        with socket.create_connection((h, p), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def ensure_main_process(on_status: Any = None) -> bool:
+    """确保主进程（systemd nahida-web）已运行。
+
+    - 未运行 → 尝试 systemctl start nahida-web 自动拉起
+    - 启动后轮询等待端口就绪
+    - 仍不可达 → 返回 False（由调用方报错，不闪退）
+    """
+    if main_process_alive():
+        return True
+    if on_status:
+        on_status("主进程未运行，正在启动 nahida-web 服务...")
+    try:
+        subprocess.run(
+            ["sudo", "systemctl", "start", "nahida-web"],
+            capture_output=True, timeout=30, check=False,
+        )
+    except Exception as e:
+        logger.debug("cli_client.ensure_start_error", exc_info=True)
+        if on_status:
+            on_status(f"启动命令执行失败: {str(e)[:100]}")
+        return False
+    # 轮询等待端口就绪（最多 30s）
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if main_process_alive(timeout=1.0):
+            if on_status:
+                on_status("主进程已启动 ✓")
+            return True
+        time.sleep(1)
+    if on_status:
+        on_status("主进程启动后仍不可达，请检查 nahida-web 服务状态")
+    return False
+
+
+def fetch_token(host: str | None = None, port: int | None = None,
+                password: str = "") -> str:
+    """从主进程获取访问 token（本机无密码时 POST /auth/login 直接签发）。
+
+    LoginRequest.password 为必填字段，故始终携带（可为空串）。无密码时主进程
+    直接签发；若 .env 配置了 WEBUI_PASSWORD 则需正确密码，失败抛 RuntimeError。
+    """
+    import urllib.error as _ue
+    import urllib.request as _ur
+    url = webui_base_url(host, port) + "/api/v1/auth/login"
+    body = json.dumps({"password": password}).encode("utf-8")
+    req = _ur.Request(
+        url, data=body, headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with _ur.urlopen(req, timeout=10) as resp:
+            _body = json.loads(resp.read().decode("utf-8"))
+    except _ue.HTTPError as e:
+        raise RuntimeError(f"认证失败: HTTP {e.code}") from e
+    data = _body.get("data") or {}
+    token = data.get("token") or ""
+    if not token:
+        raise RuntimeError("主进程未返回登录 token")
+    return token
+
+
+def _http_get_json(path: str, token: str, host: str | None = None,
+                   port: int | None = None, timeout: float = 15.0) -> Any:
+    import urllib.request as _ur
+    url = webui_base_url(host, port) + path
+    req = _ur.Request(url, headers={"Authorization": f"Bearer {token}"})
+    with _ur.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def get_chat_model_label(token: str, host: str | None = None,
+                         port: int | None = None) -> str:
+    """远程读取当前聊天模型显示名（对齐 WebUI，单一数据源）。"""
+    try:
+        data = _http_get_json("/api/v1/models/chat-model", token, host, port)
+        d = data.get("data") or {}
+    except Exception:
+        return "mimo-v2.5"
+    provider = d.get("provider", "") or ""
+    model_id = d.get("model_id", "") or ""
+    if provider and provider != "mimo":
+        return f"{provider}/{model_id}"
+    return model_id or "mimo-v2.5"
+
+
+class WSClient:
+    """主进程 WebSocket 客户端：发送对话并等待最终回复。
+
+    协议与 WebUI 前端完全一致（见 web/ws_hub.py 的 /ws 端点）：
+      - 发送 {"type":"chat","text":...,"msg_id":...}
+      - 接收 {"type":"final","reply":...}（最终回复）
+      - 接收 {"type":"status"/"stream_text"/"tool_status"}（中间状态，可选显示）
+    """
+
+    def __init__(self, token: str, host: str | None = None,
+                 port: int | None = None) -> None:
+        import websockets
+        self._websockets = websockets
+        self._url = ws_url(host, port, token)
+        self._host = host
+        self._port = port
+        self._token = token
+        self._ws: Any = None
+        self._session_id = f"cli_{int(time.time() * 1000)}"
 
     async def connect(self) -> None:
-        token = await asyncio.to_thread(login, self.base, self.password)
-        self.ws = await websockets.connect(
-            f"{self.ws_url}?token={token}", ping_interval=20, max_size=4 * 2**20)
-        hello = json.loads(await self.ws.recv())
-        self.session_id = hello.get("session_id", "")
-        _listener_task = asyncio.create_task(self._listener())
-        # 拉取用户称呼，用于问候语和输入提示符
         try:
-            req = urllib.request.Request(
-                f"{self.base}/api/v1/setup/user-profile",
-                headers={"Authorization": f"Bearer {token}"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.load(resp).get("data", {})
-                term = data.get("address_term", "")
-                if term and not term.startswith("（"):
-                    self.address_term = term
-        except Exception:
-            logger.debug("cli_client.user_profile_fetch_failed", exc_info=True)
-        # 拉取各 agent 的 display_name，更新 agent_labels（覆盖默认值）
-        try:
-            req = urllib.request.Request(
-                f"{self.base}/api/v1/agents",
-                headers={"Authorization": f"Bearer {token}"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                agents = json.load(resp).get("data", []) or []
-            for item in agents:
-                name = item.get("name", "")
-                dn = item.get("display_name", "")
-                if name and dn and name in self.agent_labels:
-                    _, color, icon = self.agent_labels[name]
-                    self.agent_labels[name] = (dn, color, icon)
-        except Exception:
-            logger.debug("cli_client.agents_fetch_failed", exc_info=True)
-
-    _status_handler = None
-
-    async def _listener(self) -> None:
-        try:
-            async for raw in self.ws:
-                event = json.loads(raw)
-                etype = event.get("type", "")
-                if etype == "greeting":
-                    self._greeting_queue.append(event.get("text", ""))
-                elif etype in ("final", "error"):
-                    fut = self._pending.get(event.get("msg_id", ""))
-                    if fut and not fut.done():
-                        fut.set_result(event)
-                elif etype == "status" and self._status_handler:
-                    self._status_handler(event)
-        except Exception:
-            logger.debug("cli_client.listener_failed", exc_info=True)
-
-    # ── 对话 ──────────────────────────────────────────
-
-    async def chat(self, text: str, on_status: Any) -> dict:
-        msg_id = uuid.uuid4().hex[:8]
-        fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._pending[msg_id] = fut
-        self._status_handler = on_status
-        await self.ws.send(json.dumps({
-            "type": "chat", "session_id": self.session_id,
-            "agent": self.agent, "text": text, "msg_id": msg_id}))
-        try:
-            return await asyncio.wait_for(fut, timeout=300)
-        finally:
-            self._pending.pop(msg_id, None)
-            self._status_handler = None
-
-    async def set_agent(self, agent: str) -> None:
-        self.agent = agent
-        await self.ws.send(json.dumps({"type": "set_agent", "agent": agent}))
-
-    # ── 渲染 ──────────────────────────────────────────
-
-    def print_banner(self) -> None:
-        console.print(Text(BANNER, style=f"bold {DENDRO}"))
-        console.print(Text("  🌿  世 界 的 记 忆 ， 由 我 来 守 护  🌿", style=WISDOM))
-        console.print()
-        label, color, icon = self.agent_labels[self.agent]
-        console.print(Panel(
-            Text(random.choice(GREETINGS).replace("爸爸", self.address_term), style="white"),
-            title=f"{icon} {label}", title_align="left",
-            border_style=color, expand=False, padding=(0, 2)))
-        console.print(Text(
-            "  /agent 切换智能体 · /agents 列表 · /quit 退出 · 其他 / 命令透传后端",
-            style=MOON_DIM))
-        console.print()
-
-    def render_reply(self, event: dict) -> None:
-        agent = event.get("agent") or self.agent
-        label, color, icon = self.agent_labels.get(agent, (agent, DENDRO, "🌿"))
-        reply = event.get("reply", "")
-        emotion = event.get("emotion", "")
-        sub = []
-        if emotion:
-            sub.append(f"情绪 {emotion}")
-        if event.get("sticker_url"):
-            sub.append(f"表情包 {self.base}{event['sticker_url']}")
-        if event.get("audio_url"):
-            sub.append(f"语音 {self.base}{event['audio_url']}")
-        for u in event.get("image_urls") or []:
-            sub.append(f"图片 {self.base}{u}")
-        subtitle = " · ".join(sub) if sub else None
-        console.print(Panel(
-            Markdown(reply), title=f"{icon} {label}", title_align="left",
-            subtitle=subtitle, subtitle_align="right",
-            border_style=color, padding=(0, 2)))
-
-    def drain_greetings(self) -> None:
-        while self._greeting_queue:
-            text = self._greeting_queue.pop(0)
-            console.print(Panel(
-                Text(text, style="white"), title="💌 主动问候", title_align="left",
-                border_style=WISDOM, expand=False, padding=(0, 2)))
-
-    # ── 主循环 ────────────────────────────────────────
-
-    async def run(self) -> None:
-        try:
-            await self.connect()
+            self._ws = await self._websockets.connect(
+                self._url, open_timeout=10, ping_interval=None)
         except Exception as e:
-            console.print(Panel(
-                Text(f"连不上网关（{self.ws_url}）\n{e}\n\n"
-                     f"请确认 WebUI 服务已启动：systemctl status xiaoda-web",
-                     style="red"), border_style="red"))
-            return
-        self.print_banner()
+            raise RuntimeError(f"连接主进程失败: {str(e)[:120]}") from e
 
-        while True:
-            self.drain_greetings()
+    async def close(self) -> None:
+        if self._ws is not None:
             try:
-                label, color, icon = self.agent_labels.get(self.agent, (self.agent, DENDRO, "🌿"))
-                user_input = await asyncio.to_thread(
-                    console.input, f"[bold {color}]{self.address_term} ›[/] ")
-            except (EOFError, KeyboardInterrupt):
-                break
-            user_input = user_input.strip()
-            if not user_input:
+                await self._ws.close()
+            except Exception:
+                logger.debug("cli_client.ws_close_error", exc_info=True)
+            self._ws = None
+
+    async def _recv_until_final(self, msg_id: str,
+                                status_callback: Any = None) -> str:
+        """读取事件直到收到 msg_id 对应的 final，返回 reply。
+
+        不设超时：与旧 CLI 的 bot.process() 一致，长回复不被打断。
+        """
+        while True:
+            raw = await self._ws.recv()
+            try:
+                evt = json.loads(raw)
+            except json.JSONDecodeError:
                 continue
-            if user_input in ("/quit", "/exit", "exit", "quit"):
-                break
-            if user_input == "/agents":
-                for name, (label, color, icon) in self.agent_labels.items():
-                    marker = "▶" if name == self.agent else " "
-                    console.print(f"  {marker} {icon} [bold {color}]{label}[/] ({name})")
-                continue
-            if user_input.startswith("/agent"):
-                arg = user_input.removeprefix("/agent").strip()
-                if arg in self.agent_labels:
-                    await self.set_agent(arg)
-                    label, color, icon = self.agent_labels[arg]
-                    console.print(Text(f"  {icon} 现在由 {label} 接管对话", style=color))
-                else:
-                    console.print(Text(f"  可选：{' / '.join(self.agent_labels)}", style=MOON_DIM))
-                continue
+            mtype = evt.get("type", "")
+            if mtype == "final" and evt.get("msg_id") == msg_id:
+                return evt.get("reply") or ""
+            if mtype == "error" and evt.get("msg_id") == msg_id:
+                raise RuntimeError(evt.get("message", "主进程处理出错"))
+            if status_callback and mtype in ("status", "stream_text", "tool_status"):
+                text = evt.get("text") or evt.get("delta") or evt.get("label") or ""
+                if text:
+                    try:
+                        await status_callback(text)
+                    except Exception:
+                        pass
 
-            status_line = Text(self._stage_text("thinking"), style=MOON_DIM)
-            with Live(status_line, console=console, refresh_per_second=8,
-                      transient=True) as live:
-                def on_status(event: Any) -> None:
-                    stage = event.get("stage", "")
-                    text = event.get("text") or self._stage_text(stage)
-                    live.update(Text(text, style=MOON_DIM))
-                try:
-                    event = await self.chat(user_input, on_status)
-                except TimeoutError:
-                    console.print(Text("  ⏱ 等待超时了……", style="red"))
-                    continue
-            if event.get("type") == "error":
-                console.print(Text(f"  ✗ {event.get('message', '出错了')}", style="red"))
-            else:
-                self.render_reply(event)
-
-        console.print()
-        console.print(Panel(
-            Text(random.choice(FAREWELLS).replace("爸爸", self.address_term), style="white"),
-            title=f"🌿 {self._agent_display_name(self.agent)}", title_align="left",
-            border_style=DENDRO, expand=False, padding=(0, 2)))
-        if self.ws:
-            await self.ws.close()
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="AI Agent CLI（连接 WebUI 网关）")
-    parser.add_argument("--host", default=os.getenv("WEBUI_HOST_CLI", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=_safe_int(os.getenv("WEBUI_PORT", "8082"), 8082))
-    parser.add_argument("--password", default=os.getenv("WEBUI_PASSWORD", ""))
-    args = parser.parse_args()
-    with contextlib.suppress(KeyboardInterrupt):
-        asyncio.run(NahidaCLI(args.host, args.port, args.password).run())
-
-
-if __name__ == "__main__":
-    main()
+    async def chat(self, text: str, status_callback: Any = None) -> str:
+        """发送一条消息，返回最终回复。斜杠命令由主进程共享 AgentCore 处理。"""
+        if self._ws is None:
+            raise RuntimeError("未连接到主进程")
+        msg_id = f"cli_{int(time.time() * 1000)}_{os.getpid()}"
+        await self._ws.send(json.dumps({
+            "type": "chat", "text": text, "msg_id": msg_id,
+            "session_id": self._session_id,
+        }))
+        return await self._recv_until_final(msg_id, status_callback)

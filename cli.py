@@ -1,10 +1,8 @@
-from typing import Any
 import os
 import sys
 import time
 import random
 import asyncio
-import subprocess
 from loguru import logger
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -21,10 +19,7 @@ logger.add(
     level="WARNING",
 )
 
-from agent_core import AgentCore
-from agent_core.user_cli import CLIUser
-from core.event_bus import event_bus
-from model_router import ROUTE_TABLE
+import cli_client
 import contextlib
 
 # ── readline 支持 ──────────────────────────────────────────
@@ -235,30 +230,16 @@ def _command_entries() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     return public, owner
 
 
-def _get_model_info(router: Any = None) -> str:
-    """返回当前聊天模型显示名，优先读 router 的实际模型（与 WebUI 同步）。
+def _get_model_info(token: str = "") -> str:
+    """返回当前聊天模型显示名，从主进程远程读取（与 WebUI 单一数据源同步）。
 
-    旧实现直接读静态 ROUTE_TABLE（.env 默认 mimo-v2.5），不反映 WebUI 切换后
-    的模型。现改为以 router.get_current_chat_model() 为单一数据源（set_chat_model
-    是 CLI 与 WebUI 共用的唯一切换入口，CLI 启动时 _restore_saved_model 已恢复
-    持久化值），保证 CLI 与 WebUI「一变都变」。
+    旧实现直接读本地 ROUTE_TABLE（.env 默认 mimo-v2.5），不反映 WebUI 切换后的
+    模型。CLI 不再自建 AgentCore，改为远程读取 POST /models/chat-model 的当前值，
+    天然与 WebUI 共享同一份模型状态。
     """
-    _cur = None
-    if router is not None:
-        try:
-            _cur = router.get_current_chat_model()
-        except Exception:
-            _cur = None
-    if not _cur:
-        _cur = {
-            "provider": ROUTE_TABLE.get("chat", {}).get("client", ""),
-            "model_id": ROUTE_TABLE.get("chat", {}).get("model", "mimo-v2.5"),
-        }
-    provider = _cur.get("provider", "") or ""
-    model_id = _cur.get("model_id", "") or ""
-    if provider and provider != "mimo":
-        return f"{provider}/{model_id}"
-    return model_id or "mimo-v2.5"
+    if token:
+        return cli_client.get_chat_model_label(token)
+    return "mimo-v2.5"
 
 
 def _typewriter(text: str, delay: float | None = None) -> None:
@@ -314,51 +295,71 @@ def _status_translate(msg: str) -> str:
 
 
 class CLIInterface:
-    """命令行交互界面，封装 AgentCore 的本地终端对话循环。"""
+    """命令行交互界面：作为主进程（nahida-web）的客户端，共享同一 AgentCore。
+
+    不再自建 AgentCore，而是通过 HTTP（token 认证 + 斜杠命令）与 WebSocket
+    （对话）连接主进程，复用其已初始化的 AgentCore —— 与 Web UI / QQ / 微信
+    同一进程，记忆、模型、上下文天然共享。
+    """
 
     def __init__(self) -> None:
-        self.bot = AgentCore()
         self._loop = asyncio.new_event_loop()
+        self._token = ""
+        self._ws: cli_client.WSClient | None = None
 
     def _address_term(self) -> str:
         """获取当前用户称呼，优先从 USER.md 读取，兜底"爸爸"。"""
-        term = self.bot.read_address_term_from_user_md()
-        return term or self.bot.context.current_address_term or "爸爸"
-
-    async def _init(self) -> None:
-        await self.bot.init()
-        self._restore_saved_model()
-        logger.info("cli.initialized")
-
-    def _restore_saved_model(self) -> None:
-        """恢复上次持久化的聊天模型（一并再同步）。
-
-        CLI 与 WebUI 是两个独立进程：WebUI 通过 set_chat_model 把模型持久化到
-        config_service 的 models.chat_model，并只在 web.server 启动时用
-        _restore_chat_model 恢复。CLI 进程没有该恢复逻辑，导致欢迎界面显示默认
-        模型（mimo-v2.5）而非 WebUI 实际切换的模型。这里从同一持久化来源恢复
-        _current_chat_model，实现 CLI 与 WebUI「一变都变」。
-        """
         try:
-            from web.config_service import get_config_service
-            chat_model = get_config_service().get("models.chat_model")
-            if not (isinstance(chat_model, dict)
-                    and chat_model.get("provider") and chat_model.get("model_id")):
-                return
-            router = getattr(self.bot, "router", None)
-            if router is None:
-                return
-            router._current_chat_model = {
-                "provider": chat_model["provider"],
-                "model_id": chat_model["model_id"],
-            }
-            logger.info("cli.saved_model_restored provider={} model={}",
-                        chat_model["provider"], chat_model["model_id"])
-        except Exception:
-            logger.debug("cli.saved_model_restore_failed", exc_info=True)
+            from agent_core.core import AgentCore
+            term = AgentCore.read_address_term_from_user_md()
+            if term:
+                return term
+        except ImportError:
+            pass
+        return "爸爸"
+
+    # ── 主进程连接 ────────────────────────────────────────────
+    def _connect_main_process(self) -> bool:
+        """确保主进程可用并建立连接。失败时打印原因并返回 False（不闪退）。"""
+        def status(msg: str) -> None:
+            print(f"  {_C.DIM}{_C.LYELLOW}{msg}{_C.RST}")
+
+        if not cli_client.ensure_main_process(on_status=status):
+            print()
+            print(f"  {_C.LYELLOW}主进程不可用，CLI 无法连接。请检查 nahida-web 服务状态。{_C.RST}")
+            return False
+
+        # 获取 token。优先用 .env 的 WEBUI_PASSWORD（cli.py 顶部已 load_dotenv），
+        # 避免每次启动都手动输入密码；未配置密码时直接签发，显式传入覆盖。
+        pwd = os.getenv("WEBUI_PASSWORD", "") or ""
+        try:
+            self._token = cli_client.fetch_token(password=pwd)
+        except RuntimeError as e:
+            if any(tag in str(e) for tag in ("401", "403", "422")):
+                try:
+                    import getpass
+                    pwd = getpass.getpass("请输入 WebUI 访问密码: ")
+                except Exception:
+                    pwd = ""
+                try:
+                    self._token = cli_client.fetch_token(password=pwd)
+                except Exception as e2:
+                    print(f"\n  {_C.LYELLOW}认证失败: {str(e2)[:100]}{_C.RST}")
+                    return False
+            else:
+                print(f"\n  {_C.LYELLOW}获取主进程 token 失败: {str(e)[:100]}{_C.RST}")
+                return False
+
+        self._ws = cli_client.WSClient(self._token)
+        try:
+            self._loop.run_until_complete(self._ws.connect())
+        except Exception as e:
+            print(f"\n  {_C.LYELLOW}连接主进程失败: {str(e)[:100]}{_C.RST}")
+            return False
+        return True
 
     def _print_welcome(self) -> None:
-        model_id = _get_model_info(getattr(self.bot, "router", None))
+        model_id = _get_model_info(self._token)
 
         ascii_lines = NAHIDA_ASCII.split("\n")
         while ascii_lines and not ascii_lines[-1].strip():
@@ -423,72 +424,59 @@ class CLIInterface:
         print()
 
     def _dispatch_slash_command(self, text: str) -> None:
-        """分发斜杠命令，返回后命令视为已消耗（不发往 bot）。
+        """分发斜杠命令：/help 本地展示，其余交给主进程共享 AgentCore 处理。
 
-        - /help → 展示命令列表（与 WebUI 同源）
-        - 其余 → 交给 bot.slash_handler（覆盖 /model /reset /agent /voice 等全部命令）
-        - 未识别命令 → 提示帮助
-        命令集与 WebUI 完全一致（COMMAND_DESCRIPTIONS + OWNER_ONLY_COMMANDS）。
+        主进程 core.process() 内部会识别斜杠命令并返回结果（不调用 LLM），
+        因此 CLI 无需本地 AgentCore 即可复用全部命令（/model /reset /agent 等），
+        其结果状态与 WebUI 完全一致。
         """
         stripped = text.strip()
         cmd = stripped.split(maxsplit=1)[0].lower() if stripped else ""
         if stripped.startswith("//"):
-            # 转义斜杠：作为普通消息发送
-            return
+            return  # 转义斜杠：作为普通消息发送
         if cmd == "/help":
             self._print_help()
             return
-
-        handler = getattr(self.bot, "slash_handler", None)
-        if handler is None:
+        if self._ws is None:
             self._print_unknown(cmd)
             return
-        # CLI 是主人的本地终端：放行 owner-only 命令（与 process() source="cli" 主人判定一致）
         try:
-            handler._force_owner = True
-        except Exception:
-            pass
-        try:
-            result = self._loop.run_until_complete(
-                handler.handle(stripped, user_id="cli_owner")
-            )
+            result = self._loop.run_until_complete(self._ws.chat(stripped))
         except Exception as e:
             logger.error("cli.slash_dispatch_error", command=cmd, error=str(e))
             print(f"\n  {_C.LYELLOW}执行 {cmd} 时出了点问题：{str(e)[:100]}{_C.RST}\n")
             return
-        if result is None:
+        if result is None or not str(result).strip():
             self._print_unknown(cmd)
             return
         self._print_command_result(cmd, result)
 
-    def _check_qq_bot(self) -> Any:
-        try:
-            r = subprocess.run(["systemctl", "is-active", "nahida-web"],
-                               capture_output=True, text=True, timeout=5, check=False)
-            return r.stdout.strip() == "active"
-        except Exception:
-            logger.debug("cli.qq_bot_check_error", exc_info=True)
-            return False
+    def _send_message(self, user_input: str) -> None:
+        """发送普通消息到主进程，并显示最终回复。"""
+        if self._ws is None:
+            print(f"\n  {_C.LYELLOW}小妲: 尚未连接主进程，请重新启动 CLI。{_C.RST}")
+            return
 
-    def _ensure_service(self) -> None:
-        if not self._check_qq_bot():
-            print(f"  {_C.LYELLOW}QQ Bot 服务未运行，正在启动...{_C.RST}")
-            try:
-                subprocess.run(["sudo", "systemctl", "start", "nahida-web"],
-                               capture_output=True, timeout=30, check=False)
-                time.sleep(2)
-                if self._check_qq_bot():
-                    print(f"  {_C.LGREEN}QQ Bot 服务已启动 ✓{_C.RST}")
-                else:
-                    print(f"  {_C.LYELLOW}QQ Bot 服务启动失败，CLI 可正常使用{_C.RST}")
-            except Exception:
-                logger.debug("cli.qq_bot_start_error", exc_info=True)
-                print(f"  {_C.LYELLOW}无法启动 QQ Bot 服务，CLI 可正常使用{_C.RST}")
-            print()
+        async def status_notify(msg: str) -> None:
+            translated = _status_translate(msg)
+            print(f"  {_C.DIM}{_C.LYELLOW}{translated}{_C.RST}")
+
+        try:
+            reply = self._loop.run_until_complete(
+                self._ws.chat(user_input, status_callback=status_notify)
+            )
+        except Exception as e:
+            logger.error("cli.chat_error", error=str(e))
+            print(f"\n  {_C.LYELLOW}小妲: 嗯……出了点小问题：{str(e)[:100]}{_C.RST}")
+            return
+        print()
+        label = f"  {_C.LGREEN}{_C.BOLD}🌿 小妲:{_C.RST} "
+        sys.stdout.write(label)
+        _typewriter(reply)
 
     def run(self) -> None:
-        self._ensure_service()
-        self._loop.run_until_complete(self._init())
+        if not self._connect_main_process():
+            return
         self._print_welcome()
 
         while True:
@@ -508,45 +496,21 @@ class CLIInterface:
                 print(f"\n  {_C.LGREEN}{farewell}{_C.RST}\n")
                 break
 
-            # 斜杠命令：本地 + slash_handler 统一分发（openclaw 风格）
+            # 转义斜杠：作为普通消息发送
             if user_input.startswith("//"):
-                user_input = user_input[1:]  # 转义斜杠：作为普通消息发送
+                user_input = user_input[1:]
             elif user_input.startswith("/"):
                 self._dispatch_slash_command(user_input)
                 continue
 
+            self._send_message(user_input)
+
+        # 主循环退出时关闭 WebSocket 连接
+        if self._ws is not None:
             try:
-                async def status_notify(msg: str) -> None:
-                    translated = _status_translate(msg)
-                    print(f"  {_C.DIM}{_C.LYELLOW}{translated}{_C.RST}")
-
-                token = event_bus.bind_user(CLIUser())
-                try:
-                    result = self._loop.run_until_complete(
-                        self.bot.process(user_input, user_id="cli_owner", source="cli",
-                                         status_callback=status_notify)
-                    )
-                finally:
-                    event_bus.unbind_user(token)
-
-                print()
-                label = f"  {_C.LGREEN}{_C.BOLD}🌿 小妲:{_C.RST} "
-                sys.stdout.write(label)
-                _typewriter(result.reply)
-
-                if result.sticker_path:
-                    print(f"  {_C.LMAGENTA}🎨 [表情包: {result.sticker_path.name}]{_C.RST}")
-
+                self._loop.run_until_complete(self._ws.close())
             except Exception as e:
-                logger.error("cli.process_error", error=str(e))
-                print(f"\n  {_C.LYELLOW}小妲: 嗯……出了点小问题：{str(e)[:100]}{_C.RST}")
-
-        # 主循环退出时安全关闭
-        try:
-            self._loop.run_until_complete(self.bot.shutdown())
-        except Exception as e:
-            logger.warning("cli.shutdown_error", error=str(e))
-
+                logger.warning("cli.ws_close_error", error=str(e))
         self._loop.close()
 
 
