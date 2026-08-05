@@ -9,8 +9,9 @@ from __future__ import annotations
 import asyncio
 
 from textual.app import App, ComposeResult
-from textual.containers import VerticalScroll
-from textual.widgets import Footer, Input, Static
+from textual.containers import Container, VerticalScroll
+from textual.screen import ModalScreen
+from textual.widgets import Footer, Input, ListView, Static
 
 import cli_client
 from cli_common import STYLE, status_translate
@@ -50,6 +51,70 @@ def build_command_groups() -> list[dict]:
         if items:
             result.append({"group": group_label[gid], "items": items})
     return result
+
+
+class SlashPanel(ModalScreen):
+    """斜杠命令面板：搜索 + 分组 + 鼠标点击/键盘选择。"""
+
+    def __init__(self, on_select) -> None:
+        super().__init__()
+        self._on_select = on_select
+        self._groups = build_command_groups()
+        self._filter = ""
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Static("🌿 小妲的命令面板（输入搜索 / 点击或回车执行）", id="panel-title"),
+            Input(placeholder="搜索命令…", id="panel-search"),
+            ListView(id="panel-list"),
+            id="panel",
+        )
+
+    CSS = f"""
+    #panel {{
+        width: 60%;
+        height: 70%;
+        border: round {STYLE['border']};
+        background: {STYLE['panel']};
+        color: {STYLE['assistant']};
+        padding: 1 2;
+    }}
+    #panel-title {{ color: {STYLE['gold']}; text-align: center; }}
+    .group-label {{ color: {STYLE['leaf']}; text-style: underline; }}
+    #panel-list {{ height: 1fr; }}
+    """
+
+    def set_filter(self, text: str) -> None:
+        self._filter = (text or "").strip().lstrip("/")
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        from textual.widgets import ListItem
+        list_view = self.query_one("#panel-list", ListView)
+        list_view.clear()
+        for g in self._groups:
+            items = g["items"]
+            if self._filter:
+                items = [it for it in items if self._filter in it["name"] or self._filter in it["description"]]
+            if not items:
+                continue
+            list_view.append(ListItem(Static(f"""  {g['group']}  """, classes="group-label")))
+            for it in items:
+                label = it["name"]
+                if it["aliases"]:
+                    label += f"  ({'/'.join(it['aliases'])})"
+                item = ListItem(Static(f"  {label}  —  {it['description']}"))
+                item.data = it
+                list_view.append(item)
+
+    def visible_count(self) -> int:
+        return len(self.query_one("#panel-list", ListView).children)
+
+    def on_list_view_selected(self, event) -> None:
+        item = event.item
+        data = getattr(item, "data", None)
+        if data:
+            self._on_select(data["name"], self)
 
 
 class ChatView(VerticalScroll):
@@ -159,9 +224,16 @@ class XiaodaApp(App):
             return
         chat.add_user(text)
         if text.startswith("/"):
-            self._dispatch_slash(text, chat)
+            self._open_slash_panel(chat)
         else:
             asyncio.create_task(self._send_chat(text, chat))
+
+    def _open_slash_panel(self, chat: ChatView) -> None:
+        def on_select(cmd: str, panel: SlashPanel) -> None:
+            panel.dismiss()
+            self._dispatch_slash(cmd, chat)
+
+        self.push_screen(SlashPanel(on_select=on_select))
 
     def _dispatch_slash(self, text: str, chat: ChatView) -> None:
         """简单斜杠命令本地占位（命令面板与真实调用在 Task 4/5 接入）。"""
