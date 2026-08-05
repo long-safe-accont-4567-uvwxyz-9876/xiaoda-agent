@@ -127,6 +127,7 @@ class _MultiStepPanel(ModalScreen):
         item = event.item
         data = getattr(item, "data", None)
         if data:
+            self.dismiss()
             self._on_select(data["value"])
 
     @staticmethod

@@ -1,4 +1,56 @@
-from cli_app import fixed_arg_items, model_providers, model_items, agent_items
+import pytest
+from textual.widgets import ListView
+
+from cli_app import _MultiStepPanel, fixed_arg_items, model_providers, model_items, agent_items
+
+
+@pytest.mark.asyncio
+async def test_multistep_panel_dismisses_on_select():
+    """选中二级面板项即回调并关闭自身，不残留叠层。"""
+    from cli_app import XiaodaApp
+
+    app = XiaodaApp()
+    selected = []
+    async with app.run_test() as pilot:
+        panel = _MultiStepPanel(
+            "测试", [("value-1", "值1"), ("value-2", "值2")],
+            lambda v: selected.append(v),
+        )
+        await app.push_screen(panel)
+        await pilot.pause()
+        assert app.screen is panel
+        panel.query_one("#multistep-list", ListView).focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert selected == ["value-1"]
+        assert panel not in app.screen_stack
+        assert app.screen is not panel
+
+
+@pytest.mark.asyncio
+async def test_model_two_level_no_stacking(monkeypatch):
+    """/model provider 面板选中后关闭原生面板，再 push 模型面板，不叠两层。"""
+    import cli_client
+    from cli_app import XiaodaApp
+
+    providers = [{
+        "provider": "openai", "label": "OpenAI",
+        "models": [{"id": "gpt-4o", "display_name": "GPT-4o"}],
+    }]
+    monkeypatch.setattr(cli_client, "discover_models", lambda token: providers)
+    app = XiaodaApp()
+    async with app.run_test() as pilot:
+        await app._open_multistep("/model", app.query_one("#chat"))
+        await pilot.pause()
+        provider_panel = app.screen
+        assert isinstance(provider_panel, _MultiStepPanel)
+        provider_panel.query_one("#multistep-list", ListView).focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        # provider 面板已关闭，当前为模型面板，且只叠了一层
+        assert provider_panel not in app.screen_stack
+        assert isinstance(app.screen, _MultiStepPanel)
+        assert app.screen is not provider_panel
 
 
 def test_fixed_arg_items_from_meta():
