@@ -1,7 +1,6 @@
 from typing import Any
 import asyncio
 import json
-import os
 import shutil
 import time
 from loguru import logger
@@ -45,6 +44,52 @@ COMMAND_DESCRIPTIONS = {
     "/compress": "手动压缩上下文",
 }
 
+# 命令别名：短别名 → 规范斜杠命令（借鉴 openclaw 的 aliases 设计，一级快捷别名）
+COMMAND_ALIASES: dict[str, str] = {
+    "/m": "/model",
+    "/v": "/voice",
+    "/d": "/doctor",
+    "/s": "/status",
+    "/h": "/help",
+}
+
+# 声明式命令元数据（借鉴 openclaw TUI_COMMAND_ROWS）：
+#   usage / arg_completions —— 供 CLI 参数级自动补全与 /help 用法说明。
+# 注意：COMMAND_DESCRIPTIONS 仍是命令名+描述的权威来源（WebUI/CLI 帮助均依赖），
+#       此处只做增量声明，不破坏既有接口。
+# /model 参数为动态（provider/模型），arg_completions 由 CLI 从模型发现缓存实时补全。
+COMMAND_META: dict[str, dict] = {
+    "/model": {
+        "usage": "/model [provider/模型] 查看或切换模型",
+        "arg_completions": [],
+    },
+    "/voice": {"usage": "/voice [on|off]", "arg_completions": ["on", "off"]},
+    "/doctor": {"usage": "/doctor [json|fix]", "arg_completions": ["json", "fix"]},
+    "/self": {"usage": "/self [json]", "arg_completions": ["json"]},
+    "/cost": {"usage": "/cost [7d]", "arg_completions": ["7d"]},
+    "/cam": {"usage": "/cam [snap]", "arg_completions": ["snap"]},
+    "/agent": {"usage": "/agent [名称]", "arg_completions": []},
+    "/wf": {"usage": "/wf <工作流ID>", "arg_completions": []},
+}
+
+
+def resolve_command(input_text: str) -> str:
+    """解析用户输入的第一个 token 为规范斜杠命令（应用别名）。"""
+    parts = input_text.strip().split(maxsplit=1)
+    if not parts:
+        return ""
+    raw = parts[0].lower()
+    return COMMAND_ALIASES.get(raw, raw)
+
+
+def get_argument_completions(command: str, partial: str = "") -> list[str]:
+    """返回命令的参数级补全候选（openclaw 风格），供 CLI 输入框补全。"""
+    meta = COMMAND_META.get(command)
+    if not meta:
+        return []
+    opts = meta.get("arg_completions", []) or []
+    return [o for o in opts if o.startswith(partial)]
+
 
 def list_commands() -> list[dict]:
     """供 Web UI 斜杠命令自动补全使用。"""
@@ -69,6 +114,9 @@ class SlashCommandHandler:
         self._security = security
         self._agent = agent
         self._start_time = time.time()
+        # CLI 本地终端天然受主机隔离保护，可将此置 True 以放行 owner-only 命令
+        # （与 process() 中 source="cli" → 主人身份的判定一致）
+        self._force_owner = False
 
     def is_slash_command(self, text: str) -> bool:
         stripped = text.strip()
@@ -77,17 +125,22 @@ class SlashCommandHandler:
         return not stripped.startswith("//")
 
     def is_owner_command(self, command: str) -> bool:
-        return command.split()[0] in OWNER_ONLY_COMMANDS
+        resolved = resolve_command(command)
+        return resolved in OWNER_ONLY_COMMANDS
 
     def _is_owner(self, user_id: str) -> bool:
+        if self._force_owner:
+            return True
         return self._security and self._security.is_owner(user_id)
 
     async def handle(self, text: str, user_id: str = "") -> str | None:
         parts = text.strip().split(maxsplit=1)
-        command = parts[0].lower()
+        raw = parts[0].lower()
+        command = COMMAND_ALIASES.get(raw, raw)
         args = parts[1].strip() if len(parts) > 1 else ""
 
-        if self.is_owner_command(command) and (self._security is None or not self._security.is_owner(user_id)):
+        # 别名解析后再做 owner 校验，避免 /m 等别名绕过主人权限
+        if command in OWNER_ONLY_COMMANDS and not self._force_owner and (self._security is None or not self._security.is_owner(user_id)):
             return "这个命令只有主人才能用哦～"
 
         handlers = {
@@ -199,63 +252,39 @@ class SlashCommandHandler:
         if not self._router:
             return "路由器还没准备好呢～"
 
-        # MiMo 预设
-        if args in ("mimo",):
-            self._router.set_model_preference("mimo")
-            if self._agent and hasattr(self._agent, 'klee'):
-                self._agent.klee.set_preferred_provider("mimo")
-            return "已切换到 MiMo 模式 🍊（使用小米 MiMo-V2.5）"
-        if args in ("mimo-pro", "pro", "mimo_pro"):
-            self._router.set_model_preference("mimo-pro")
-            if self._agent and hasattr(self._agent, 'klee'):
-                self._agent.klee.set_preferred_provider("mimo")
-            return "已切换到 MiMo Pro 模式 🧠（使用小米 MiMo-V2.5-Pro 深度思考）"
-        if args in ("mimo-flash", "flash", "mimo_flash"):
-            self._router.set_model_preference("mimo-flash")
-            return "已切换到 MiMo Flash 模式 ⚡（使用小米 MiMo-V2.5 快速响应）"
-        if args in ("mimo-mini", "mini", "mimo_mini"):
-            self._router.set_model_preference("mimo-mini")
-            return "已切换到 MiMo Mini 模式 🐣（使用小米 MiMo-V2.5 轻量任务）"
-        # 第三方模型 provider/model_id 格式
+        # 动态模型清单：从模型发现缓存读取所有 provider 的模型（对齐 WebUI 模型选择 button）
+        info = self._router.list_models()
+
+        # 指定 provider/model 切换（对齐 WebUI button 的 POST /models/chat-model）
         if "/" in args:
-            parts = args.split("/", 1)
-            provider = parts[0]
-            model_id = parts[1]
-            ok = self._router.set_model_preference(args)
-            if ok is False:
-                return f"切换失败：不支持 {provider}/{model_id}"
-            return f"已切换到 {model_id}（{provider}）"
-        # 无参数：显示当前模型和可用第三方
-        _pref = self._router.get_model_preference()
-        label = self._router.get_model_preference_label()
-        lines = [f"当前: {label}"]
-        lines.append("预设: /model [mimo|mimo-pro|mimo-flash|mimo-mini]")
-        third_party = []
-        if os.environ.get("SILICONFLOW_API_KEY", ""):
-            third_party.append("siliconflow")
-        if os.environ.get("OPENROUTER_API_KEY", ""):
-            third_party.append("openrouter")
-        if third_party:
-            lines.append("第三方模型:")
-            # 尝试从模型发现缓存中读取具体模型名
-            cache_available = False
+            provider, model_id = args.split("/", 1)
+            provider = provider.strip()
+            model_id = model_id.strip()
+            if not provider or not model_id:
+                return "用法: /model <provider>/<模型>\n例如: /model agnes/agnes-2.0-flash"
             try:
-                from web.routers.model_discovery import _cache as discovery_cache
-                cache_data = discovery_cache.get("data")
-                if cache_data:
-                    for pg in cache_data:
-                        provider = pg.get("provider", "")
-                        models = pg.get("models", [])
-                        if provider in third_party and models:
-                            cache_available = True
-                            model_names = [m["display_name"] for m in models[:6]]
-                            suffix = "..." if len(models) > 6 else ""
-                            lines.append(f"  {provider}: {', '.join(model_names)}{suffix}")
-            except (KeyError, ValueError, OSError, json.JSONDecodeError):
-                logger.debug("slash.cache_read_error", exc_info=True)
-            if not cache_available:
-                for tp in third_party:
-                    lines.append(f"  · {tp}: 已配置（使用 /model {tp}/模型名 切换）")
+                self._router.set_chat_model(provider, model_id)
+            except Exception as e:
+                logger.warning("slash.model_switch_failed provider={} model={} error={}",
+                               provider, model_id, str(e))
+                return f"切换 {model_id} 失败：{str(e)[:100]}"
+            self._router.set_model_preference(f"{provider}/{model_id}")
+            if self._agent and hasattr(self._agent, 'klee'):
+                self._agent.klee.set_preferred_provider(provider)
+            return f"已切换到 {model_id}（{provider}）"
+
+        # 无参数：显示当前模型 + 所有可用模型（对齐 button 弹窗）
+        lines = [f"当前: {info['current_label']}"]
+        if info["providers"]:
+            lines.append("可用模型（用法: /model <provider>/<模型>）:")
+            for pg in info["providers"]:
+                label = pg.get("label") or pg["provider"]
+                lines.append(f"  {label}:")
+                for m in pg["models"]:
+                    badge = " 🆓" if m.get("free") else ""
+                    lines.append(f"    · {m['display_name']} ({pg['provider']}/{m['id']}){badge}")
+        else:
+            lines.append("模型列表尚未加载（可在 WebUI 设置页发现模型后重试）")
         return "\n".join(lines)
 
     async def _cmd_forget(self, args: str, user_id: str) -> str:
@@ -754,7 +783,7 @@ class SlashCommandHandler:
         return prompt + "\n\n请立即执行此工作流。"
 
     async def _cmd_help(self, args: str, user_id: str) -> str:
-        is_owner = self._security and self._security.is_owner(user_id)
+        is_owner = self._force_owner or (self._security and self._security.is_owner(user_id))
 
         lines = ["🌿 小妲的命令列表\n"]
 
@@ -777,7 +806,7 @@ class SlashCommandHandler:
         ]
 
         owner_cmds = [
-            ("/model [mimo|mimo-pro|mimo-flash|mimo-mini]", "切换模型模式"),
+            ("/model [provider/模型]", "切换模型（对齐 WebUI 模型选择 button）"),
             ("/reset", "重置对话上下文"),
             ("/compress", "手动压缩上下文"),
             ("/voice [on|off]", "切换语音模式"),
