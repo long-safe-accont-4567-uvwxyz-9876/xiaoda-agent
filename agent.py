@@ -119,10 +119,13 @@ def _resolved_mode(args) -> str:
     """
     if args.desktop:
         return "desktop"
-    if args.web or os.getenv("WEB_UI_ENABLED", "").lower() in ("true", "1", "yes"):
+    if args.web:
         return "web"
     if args.cli:
         return "cli"
+    # 显式参数优先于环境变量：--cli 已返回，这里才读 WEB_UI_ENABLED（Docker 常见）
+    if os.getenv("WEB_UI_ENABLED", "").lower() in ("true", "1", "yes"):
+        return "web"
     if _is_packaged_windows():
         return "desktop" if _webview2_installed() else "web"
     return "cli"
@@ -135,6 +138,7 @@ def _should_watchdog_software_window(args) -> bool:
 
 def _open_browser_in_background(host: str, port: int) -> None:
     """后台线程延时打开系统浏览器（WebView2 缺失回退到 Web 模式时使用）。"""
+    import socket
     import threading
     import time
     import webbrowser
@@ -142,11 +146,15 @@ def _open_browser_in_background(host: str, port: int) -> None:
     url = f"http://{display_host}:{port}"
 
     def _open() -> None:
-        time.sleep(3)  # 等服务就绪
-        try:
-            webbrowser.open(url)
-        except Exception:
-            pass
+        # 轮询监听端口，等服务就绪后再打开浏览器，避免过早打开出现连接失败页
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection((display_host, port), timeout=1):
+                    webbrowser.open(url)
+                    return
+            except OSError:
+                time.sleep(0.5)
 
     threading.Thread(target=_open, daemon=True).start()
 
