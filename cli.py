@@ -3,6 +3,7 @@ import sys
 import time
 import random
 import asyncio
+import threading
 from loguru import logger
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -386,8 +387,16 @@ class CLIInterface:
 
     def __init__(self) -> None:
         self._loop = asyncio.new_event_loop()
+        # WS 心跳守护线程：CLI 空闲（prompt 等待输入）时事件循环仍持续运行，
+        # 及时响应服务端 keepalive ping，避免长空闲后连接被服务端超时关闭。
+        self._loop_thread = threading.Thread(target=self._loop.run_forever, daemon=True)
+        self._loop_thread.start()
         self._token = ""
         self._ws: cli_client.WSClient | None = None
+
+    def _run_coro(self, coro):
+        """在后台驱动的 self._loop 上执行协程并阻塞等待结果（线程安全）。"""
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
 
     def _address_term(self) -> str:
         """获取当前用户称呼。
@@ -525,7 +534,7 @@ class CLIInterface:
 
         self._ws = cli_client.WSClient(self._token)
         try:
-            self._loop.run_until_complete(self._ws.connect())
+            self._run_coro(self._ws.connect())
         except Exception as e:
             print(f"\n  {_C.LYELLOW}连接主进程失败: {str(e)[:100]}{_C.RST}")
             return False
@@ -624,7 +633,7 @@ class CLIInterface:
             self._print_unknown(cmd)
             return
         try:
-            result = self._loop.run_until_complete(self._ws.chat(stripped))
+            result = self._run_coro(self._ws.chat(stripped))
         except Exception as e:
             logger.error("cli.slash_dispatch_error", command=cmd, error=str(e))
             print(f"\n  {_C.LYELLOW}执行 {cmd} 时出了点问题：{str(e)[:100]}{_C.RST}\n")
@@ -645,7 +654,7 @@ class CLIInterface:
             print(f"  {_C.DIM}{_C.LYELLOW}{translated}{_C.RST}")
 
         try:
-            reply = self._loop.run_until_complete(
+            reply = self._run_coro(
                 self._ws.chat(user_input, status_callback=status_notify)
             )
         except Exception as e:
@@ -694,13 +703,18 @@ class CLIInterface:
 
             self._send_message(user_input)
 
-        # 主循环退出时关闭 WebSocket 连接
+        # 主循环退出时关闭 WebSocket 连接并停止后台事件循环线程
         if self._ws is not None:
             try:
-                self._loop.run_until_complete(self._ws.close())
+                self._run_coro(self._ws.close())
             except Exception as e:
                 logger.warning("cli.ws_close_error", error=str(e))
-        self._loop.close()
+        try:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._loop_thread.join(timeout=2)
+            self._loop.close()
+        except Exception as e:
+            logger.warning("cli.loop_close_error", error=str(e))
 
 
 def main() -> None:
