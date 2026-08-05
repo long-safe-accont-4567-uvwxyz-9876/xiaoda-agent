@@ -143,6 +143,8 @@ async def test_no_session_id_skips_update_session():
     )
 
     db.insert_conversation_log.assert_awaited_once()
+    _, kwargs = db.insert_conversation_log.call_args
+    assert kwargs.get("session_id") == "u1", "空 session_id 应用 user_id 兜底写入 conversation_logs"
     db.update_session.assert_not_called()
     assert db._txn.entered == 1
     assert db._txn.committed == 1, "insert 成功应触发一次事务提交"

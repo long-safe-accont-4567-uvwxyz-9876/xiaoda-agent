@@ -214,12 +214,15 @@ class BackgroundTaskManager:
             # 空回复不入 conversation_logs，仅记录到 journal 便于排查
             # （errors 表结构不同，避免引入复杂依赖；journal 日志已足够追溯）
         else:
-            # 治本修复（2026-08-05）：空 session_id 用 user_id 兜底。
+            # 治本修复（2026-08-05）：空 session_id 用 user_id 兜底写入 conversation_logs。
             # 根因：微信 bot 不传 session_id（session_id=""），写入 conversation_logs 后
             #   WebUI 会话列表 WHERE session_id != '' 过滤掉 → 微信聊天记录不显示。
-            # 修复：空 session_id 用 user_id 作为会话标识，确保 WebUI 能显示微信会话。
-            if not session_id and user_id:
-                session_id = user_id
+            # 修复：空 session_id 用 user_id 作为会话标识写入 conversation_logs，确保 WebUI
+            #   能显示微信会话；但 update_session 仍只应在存在真实 session_id 时调用，避免
+            #   CLI 等无会话来源把 user_id 当作 session 去更新，破坏会话隔离并导致测试回归。
+            _effective_session_id = session_id
+            if not _effective_session_id and user_id:
+                _effective_session_id = user_id
             # P0 修复（greeting 占位符污染根因）：
             # greeting_scheduler 传 user_input="（主动问候）" 占位符，被入库为
             # conversation_logs.user_message。用户浏览历史时看到系统占位符，且
@@ -245,7 +248,7 @@ class BackgroundTaskManager:
                             assistant_reply=reply,
                             emotion_label=emotion.get("primary", ""),
                             model_used=model_used,
-                            session_id=session_id,
+                            session_id=_effective_session_id,
                             auto_commit=False,
                         )
                         any_write_ok = True
