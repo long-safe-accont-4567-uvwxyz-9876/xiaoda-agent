@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import sqlite3
 import sys
 import time
 from typing import Any
@@ -1595,6 +1596,51 @@ class DatabaseManager:
         if auto_commit:
             await self._conn.commit()
 
+    async def get_recent_replies(self, user_id: str, source: str = "",
+                                  limit: int = 5) -> list[str]:
+        """查询指定用户最近的回复（跨对话去重，替代易失的内存缓存）。
+
+        根因修复（用户反馈"每段对话80%一样"）：
+          原去重机制依赖内存变量 _recent_replies，存在两个致命问题：
+          1. 服务重启后内存清空 → 去重历史丢失 → 对相同输入生成相同回复
+          2. 去 key 用 session_id，而 session_id 不稳定：
+             - 微信 adapter 根本没传 session_id（空串）
+             - QQ c2c 的 session_id 每小时换一次（SES-YYYYMMDD-XXXXX）
+             → key 频繁变化 → 内存缓存命中失败 → 去重失效
+          修复：从 conversation_logs 按 user_id（稳定标识 wechat_xxx/qq_xxx）查询
+                最近 N 条非空回复，确保重启后/换 session 后去重状态不丢失。
+
+        Args:
+            user_id: 稳定用户标识（wechat_{openid} / qq_{openid}），与写库时的 user_id 一致
+            source: 消息来源过滤（qq_c2c/wechat_c2c 等），空串则不限来源
+            limit: 返回最近 N 条回复（按时间倒序，最新在前）
+
+        Returns:
+            回复文本列表（最新在前），查询失败返回空列表（降级跳过去重，不阻塞主流程）
+        """
+        try:
+            if source:
+                cursor = await self._conn.execute(
+                    "SELECT assistant_reply FROM conversation_logs "
+                    "WHERE user_id=? AND source=? AND assistant_reply != '' "
+                    "ORDER BY timestamp DESC LIMIT ?",
+                    (user_id, source, limit),
+                )
+            else:
+                cursor = await self._conn.execute(
+                    "SELECT assistant_reply FROM conversation_logs "
+                    "WHERE user_id=? AND assistant_reply != '' "
+                    "ORDER BY timestamp DESC LIMIT ?",
+                    (user_id, limit),
+                )
+            rows = await cursor.fetchall()
+            # rows 按 timestamp DESC，最新在前；返回时保持最新在前
+            return [row[0] for row in rows if row[0]]
+        except (OSError, RuntimeError, sqlite3.Error) as e:
+            logger.warning("database.get_recent_replies_failed user_id={} error={}",
+                           user_id[:24] if user_id else "", str(e)[:200])
+            return []
+
     async def insert_audit_log(self, event_type: str, user_id: str = "", detail: str = "",
                                 auto_commit: bool = True) -> None:
         await self._conn.execute(
@@ -1748,53 +1794,90 @@ class DatabaseManager:
                     pass
 
     async def cleanup_expired_data(self, auto_commit: bool = True) -> dict[str, int]:
-        """按 cleanup_config 表中的策略清理过期数据。返回各表删除行数。"""
+        """按 cleanup_config 表中的策略清理过期数据。返回各表删除行数。
+
+        P0 根治（2026-08-04 实证阻塞根因）：
+        原实现用主连接 self._conn 执行 DELETE + commit，aiosqlite 单连接单线程，
+        cleanup 期间独占主连接线程 → 主路径所有 DB 操作排队 → 事件循环冻结。
+        日志铁证：22:11:03 收到 QQ 消息 → 主连接被 cleanup 占用 → 22:11:48 cleanup
+        完成（45秒静默期）→ 消息处理才继续 → llm_verify 77秒 → 用户感知严重阻塞。
+        nudge_engine 后台 _tick 每 24h 触发一次，服务重启后首次 tick 即命中，
+        恰好撞上消息处理。
+
+        修复：改用独立 aiosqlite 连接执行 DELETE + commit，与主连接完全隔离。
+        WAL 支持多连接并发，busy_timeout 处理偶发写锁竞争，synchronous=NORMAL
+        让 commit 不 fsync（WAL 仅 checkpoint 时 fsync），把 cleanup 从阻塞主循环
+        降为后台静默执行。与 instinct_manager / background_tasks 的修复模式一致。
+        """
+        import aiosqlite as _aiosqlite
         result: dict[str, int] = {}
-        if not self._conn:
+        if not self.db_path:
             return result
+
+        _cleanup_t0 = time.time()
+        _w_conn = None
         try:
-            cursor = await self._conn.execute(
-                "SELECT table_name, retention_days, date_column FROM cleanup_config WHERE enabled=1"
-            )
-            configs = await cursor.fetchall()
-        except (OSError, ValueError):
-            logger.debug("database.cleanup_config_read_error: {}", exc_info=True)
-            return result
-
-        now = time.time()
-        for row in configs:
-            table_name = row["table_name"]
-            retention_days = row["retention_days"]
-            date_column = row["date_column"]
-            cutoff = now - retention_days * 86400
+            _w_conn = await _aiosqlite.connect(str(self.db_path))
+            _w_conn.row_factory = _aiosqlite.Row
+            await _w_conn.execute("PRAGMA journal_mode=WAL")
+            await _w_conn.execute("PRAGMA busy_timeout=5000")
+            await _w_conn.execute("PRAGMA synchronous=NORMAL")
+            await _w_conn.execute("PRAGMA cache_size=-20000")
+            await _w_conn.execute("PRAGMA temp_store=MEMORY")
             try:
-                # 白名单校验表名和列名，防止 SQL 注入
-                import re
-                if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
-                    logger.warning("database.cleanup_invalid_table", table=table_name)
-                    continue
-                if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', date_column):
-                    logger.warning("database.cleanup_invalid_column", column=date_column)
-                    continue
-                del_cursor = await self._conn.execute(
-                    f'DELETE FROM "{table_name}" WHERE "{date_column}" < ? AND "{date_column}" > 0',
-                    (cutoff,),
+                cursor = await _w_conn.execute(
+                    "SELECT table_name, retention_days, date_column FROM cleanup_config WHERE enabled=1"
                 )
-                deleted = del_cursor.rowcount
-                result[table_name] = deleted
-                if deleted > 0:
-                    logger.info("database.cleanup", table=table_name,
-                                deleted=deleted, retention_days=retention_days)
-            except (OSError, RuntimeError) as e:
-                logger.warning("database.cleanup_failed", table=table_name, error=str(e))
-                result[table_name] = 0
+                configs = await cursor.fetchall()
+            except (OSError, ValueError):
+                logger.debug("database.cleanup_config_read_error: {}", exc_info=True)
+                return result
 
-        if auto_commit:
-            try:
-                await self._conn.commit()
-            except (OSError, RuntimeError) as e:
-                logger.warning(f"清理过期数据提交事务失败: {e}")
-        return result
+            now = time.time()
+            for row in configs:
+                table_name = row["table_name"]
+                retention_days = row["retention_days"]
+                date_column = row["date_column"]
+                cutoff = now - retention_days * 86400
+                try:
+                    # 白名单校验表名和列名，防止 SQL 注入
+                    import re
+                    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
+                        logger.warning("database.cleanup_invalid_table", table=table_name)
+                        continue
+                    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', date_column):
+                        logger.warning("database.cleanup_invalid_column", column=date_column)
+                        continue
+                    del_cursor = await _w_conn.execute(
+                        f'DELETE FROM "{table_name}" WHERE "{date_column}" < ? AND "{date_column}" > 0',
+                        (cutoff,),
+                    )
+                    deleted = del_cursor.rowcount
+                    result[table_name] = deleted
+                    if deleted > 0:
+                        logger.info("database.cleanup", table=table_name,
+                                    deleted=deleted, retention_days=retention_days)
+                except (OSError, RuntimeError) as e:
+                    logger.warning("database.cleanup_failed", table=table_name, error=str(e))
+                    result[table_name] = 0
+
+            if auto_commit:
+                try:
+                    await _w_conn.commit()
+                except (OSError, RuntimeError) as e:
+                    logger.warning(f"清理过期数据提交事务失败: {e}")
+
+            _cleanup_ms = int((time.time() - _cleanup_t0) * 1000)
+            if _cleanup_ms > 2000:
+                logger.warning("database.cleanup_slow elapsed_ms={}", _cleanup_ms)
+            return result
+        except Exception as e:
+            logger.warning("database.cleanup_conn_failed error={}", str(e))
+            return result
+        finally:
+            if _w_conn is not None:
+                with contextlib.suppress(Exception):
+                    await _w_conn.close()
 
     # ── SessionStoreProtocol 实现 ──────────────────────────────────
 

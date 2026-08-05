@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import asyncio
 import os
 import random
 import struct
@@ -563,8 +564,8 @@ class ILinkClient:
 
     async def _get_upload_url(
         self, to_user_id: str, raw_bytes: bytes, aes_key: bytes
-    ) -> tuple[str, str, bytes]:
-        """获取 CDN 上传参数并预加密，返回 (upload_param, filekey, encrypted)。
+    ) -> tuple[str, str, str, bytes]:
+        """获取 CDN 上传参数并预加密，返回 (upload_param, upload_full_url, filekey, encrypted)。
 
         Args:
             to_user_id: 目标用户 ID
@@ -572,7 +573,9 @@ class ILinkClient:
             aes_key: 随机 16 字节 AES 密钥
 
         Returns:
-            (upload_param, filekey, encrypted): 上传参数、文件标识、加密后数据
+            (upload_param, upload_full_url, filekey, encrypted):
+                上传参数、服务端返回的完整上传 URL（可为空）、文件标识、加密后数据。
+                upload_full_url 优先于 upload_param 用于 CDN 上传（对齐官方 SDK）。
         """
         encrypted = self._aes_ecb_encrypt(raw_bytes, aes_key)
         filekey = os.urandom(16).hex()
@@ -588,15 +591,28 @@ class ILinkClient:
         }
         payload = await self._post("/ilink/bot/getuploadurl", data=data)
         upload_param = payload.get("upload_param", "")
-        logger.info("ilink.get_upload_url.ok to={} upload_param_len={}", to_user_id, len(upload_param))
-        return upload_param, filekey, encrypted
-
-    async def _upload_to_cdn(self, upload_param: str, filekey: str, encrypted: bytes) -> str:
-        """上传加密数据到 CDN，返回 x-encrypted-param（后续 sendmessage 引用）。"""
-        query = urllib.parse.urlencode(
-            {"encrypted_query_param": upload_param, "filekey": filekey}
+        upload_full_url = (payload.get("upload_full_url") or "").strip()
+        logger.info(
+            "ilink.get_upload_url.ok to={} upload_param_len={} full_url_len={}",
+            to_user_id, len(upload_param), len(upload_full_url),
         )
-        url = f"{ILINK_CDN_URL}/upload?{query}"
+        return upload_param, upload_full_url, filekey, encrypted
+
+    async def _upload_to_cdn(
+        self, upload_param: str, upload_full_url: str, filekey: str, encrypted: bytes
+    ) -> str:
+        """上传加密数据到 CDN，返回 x-encrypted-param（后续 sendmessage 引用）。
+
+        优先使用服务端返回的 upload_full_url（官方 SDK 行为）；仅在服务端
+        未返回时，才回退到 upload_param 拼接的固定 CDN URL。
+        """
+        if upload_full_url:
+            url = upload_full_url
+        else:
+            query = urllib.parse.urlencode(
+                {"encrypted_query_param": upload_param, "filekey": filekey}
+            )
+            url = f"{ILINK_CDN_URL}/upload?{query}"
         try:
             response = await self._client.post(
                 url,
@@ -617,16 +633,24 @@ class ILinkClient:
         param = response.headers.get("x-encrypted-param", "")
         if not param:
             raise RuntimeError("iLink CDN upload missing x-encrypted-param")
-        logger.info("ilink.cdn_upload.ok param_len={}", len(param))
+        logger.info("ilink.cdn_upload.ok param_len={} used_full_url={}", len(param), bool(upload_full_url))
         return param
 
     async def send_media_message(
         self, to_user_id: str, context_token: str, text: str, image_path: str
     ) -> dict:
-        """发送文字+图片合并消息（表情包）。
+        """发送文字+图片消息（表情包）。
 
         完整流程：getuploadurl → AES-128-ECB 加密 → CDN 上传 →
-        sendmessage 的 item_list 同时含 text_item 与 image_item。
+        sendmessage 分两条独立消息发送（文本一条、图片一条）。
+
+        对齐官方 @tencent-weixin/openclaw-weixin 的 sendMediaItems 实现：
+        - 文本与图片分别作为独立请求发送，item_list 仅含单项。
+          合并多条 item_list 会被服务端拒绝（ret=-2 invalid arguments）。
+        - 出站 image_item 不含 aeskey 字段（该字段仅用于入站图片），
+          只在 media.aes_key 携带 base64(hex字符串) 密钥。
+        - media.aes_key 采用"hex 字符串的 ASCII 字节 base64"编码（官方
+          Buffer.from(hex).toString('base64')），而非原始 16 字节 base64。
 
         Args:
             to_user_id: 接收方用户 ID
@@ -636,7 +660,7 @@ class ILinkClient:
 
         Returns:
             字典包含:
-                - ret (int): 返回码，0 表示成功
+                - ret (int): 图片消息返回码，0 表示成功
 
         Raises:
             FileNotFoundError: image_path 不存在
@@ -644,39 +668,60 @@ class ILinkClient:
             httpx.HTTPError: 网络错误
             RuntimeError: 上传/发送失败（含 ret != 0）
         """
-        with open(image_path, "rb") as f:
-            raw_bytes = f.read()
+        # 治本修复（2026-08-05 用户"治标不治本"反馈）：同步文件读取 → asyncio.to_thread。
+        # 根因：open(image_path, "rb").read() 是同步 IO，阻塞事件循环。
+        #   sticker 发送期间事件循环被阻塞 → 并发的其他消息处理被卡住
+        #   （用户连续发消息时第二条被第一条的 sticker IO 阻塞）。
+        #   USB 盘上图片读取偶发慢（43KB 图片实测 100-500ms）。
+        # asyncio.to_thread 在线程池执行文件读取，不阻塞事件循环。
+        from pathlib import Path as _Path
+        raw_bytes = await asyncio.to_thread(_Path(image_path).read_bytes)
         aes_key = os.urandom(16)
-        upload_param, filekey, encrypted = await self._get_upload_url(
+        upload_param, upload_full_url, filekey, encrypted = await self._get_upload_url(
             to_user_id, raw_bytes, aes_key
         )
-        encrypted_param = await self._upload_to_cdn(upload_param, filekey, encrypted)
+        encrypted_param = await self._upload_to_cdn(
+            upload_param, upload_full_url, filekey, encrypted
+        )
 
-        data = {
-            "msg": {
-                "from_user_id": "",
-                "to_user_id": to_user_id,
-                "client_id": f"bot-{uuid.uuid4().hex[:16]}",
-                "message_type": 2,
-                "message_state": 2,
-                "context_token": context_token,
-                "item_list": [
-                    {"type": 1, "text_item": {"text": text}},
-                    {
-                        "type": 2,
-                        "image_item": {
-                            "media": {
-                                "encrypt_query_param": encrypted_param,
-                                "aes_key": base64.b64encode(aes_key).decode("ascii"),
-                                "encrypt_type": 0,
-                            }
-                        },
-                    },
-                ],
+        async def _send_single(item_list: list[dict]) -> int:
+            """发送单条 item_list 消息，返回 ret 码。"""
+            data = {
+                "msg": {
+                    "from_user_id": "",
+                    "to_user_id": to_user_id,
+                    "client_id": f"bot-{uuid.uuid4().hex[:16]}",
+                    "message_type": 2,
+                    "message_state": 2,
+                    "context_token": context_token,
+                    "item_list": item_list,
+                }
             }
-        }
-        payload = await self._post("/ilink/bot/sendmessage", data=data)
-        ret = payload.get("ret", RET_OK)
+            payload = await self._post("/ilink/bot/sendmessage", data=data)
+            return payload.get("ret", RET_OK)
+
+        # 文本与图片分开发送（官方 sendMediaItems 行为：item_list 仅含单项）
+        if text:
+            await _send_single([{"type": 1, "text_item": {"text": text}}])
+        ret = await _send_single([
+            {
+                "type": 2,
+                "image_item": {
+                    "media": {
+                        "encrypt_query_param": encrypted_param,
+                        # 官方格式：hex 字符串的 ASCII 字节 base64
+                        # （等价 Buffer.from(hexstr).toString('base64')）
+                        "aes_key": base64.b64encode(
+                            aes_key.hex().encode("ascii")
+                        ).decode("ascii"),
+                        # 官方 SDK 必填字段，缺失会导致 sendmessage 返回
+                        # ret=-2 "invalid arguments"（表情包发送失败根因）
+                        "encrypt_type": 1,
+                    },
+                    "mid_size": len(encrypted),
+                },
+            }
+        ])
         logger.info(
             "ilink.send_media_message.ok to={} text_len={} img_len={} ret={}",
             to_user_id, len(text), len(raw_bytes), ret,

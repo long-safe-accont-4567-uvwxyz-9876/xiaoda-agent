@@ -53,8 +53,8 @@ def test_file_sinks_have_enqueue_true(isolated_logger):
         setup_logging()
     file_enqueues, _stderr_enqueues = _classify_handlers()
 
-    assert len(file_enqueues) == 2, (
-        f"应有 2 个文件 sink，实际 {len(file_enqueues)}"
+    assert len(file_enqueues) == 3, (
+        f"应有 3 个文件 sink，实际 {len(file_enqueues)}"
     )
     assert all(file_enqueues), (
         f"所有文件 sink 应启用 enqueue，实际 {file_enqueues}"

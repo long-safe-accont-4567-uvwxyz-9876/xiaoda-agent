@@ -416,6 +416,60 @@ async def set_temperature(request: Request) -> Any:
     return Envelope(data={"temperature": value})
 
 
+@router.get("/models/frequency_penalty", response_model=Envelope[dict])
+async def get_frequency_penalty(request: Request) -> Any:
+    """获取当前 frequency_penalty 设置（优先 webui_overrides，回退默认 1.0）。"""
+    cfg = _cfg(request)
+    override = cfg.get("models.frequency_penalty")
+    default = 1.0
+    value = override if override is not None else default
+    return Envelope(data={"frequency_penalty": value, "source": "override" if override is not None else "default"})
+
+
+@router.put("/models/frequency_penalty", response_model=Envelope[dict])
+async def set_frequency_penalty(request: Request) -> Any:
+    """设置 frequency_penalty（0.0-2.0），写入 webui_overrides.json 热生效。"""
+    body = await request.json()
+    value = body.get("frequency_penalty")
+    if value is None or not isinstance(value, (int, float)):
+        raise HTTPException(400, "frequency_penalty must be a number")
+    value = round(float(value), 2)
+    if not (0.0 <= value <= 2.0):
+        raise HTTPException(400, "frequency_penalty must be between 0.0 and 2.0")
+    cfg = _cfg(request)
+    cfg.set("models.frequency_penalty", value)
+    await _audit(request, "frequency_penalty.set", f"frequency_penalty={value}")
+    await _broadcast_changed()
+    return Envelope(data={"frequency_penalty": value})
+
+
+@router.get("/models/presence_penalty", response_model=Envelope[dict])
+async def get_presence_penalty_api(request: Request) -> Any:
+    """获取当前 presence_penalty 设置（优先 webui_overrides，回退默认 1.0）。"""
+    cfg = _cfg(request)
+    override = cfg.get("models.presence_penalty")
+    default = 1.0
+    value = override if override is not None else default
+    return Envelope(data={"presence_penalty": value, "source": "override" if override is not None else "default"})
+
+
+@router.put("/models/presence_penalty", response_model=Envelope[dict])
+async def set_presence_penalty_api(request: Request) -> Any:
+    """设置 presence_penalty（0.0-2.0），写入 webui_overrides.json 热生效。"""
+    body = await request.json()
+    value = body.get("presence_penalty")
+    if value is None or not isinstance(value, (int, float)):
+        raise HTTPException(400, "presence_penalty must be a number")
+    value = round(float(value), 2)
+    if not (0.0 <= value <= 2.0):
+        raise HTTPException(400, "presence_penalty must be between 0.0 and 2.0")
+    cfg = _cfg(request)
+    cfg.set("models.presence_penalty", value)
+    await _audit(request, "presence_penalty.set", f"presence_penalty={value}")
+    await _broadcast_changed()
+    return Envelope(data={"presence_penalty": value})
+
+
 # ── 用量统计 ─────────────────────────────────────────────────────
 
 

@@ -50,7 +50,7 @@ class TestSetupLoggingTestMode:
     """测试 setup_logging() 在 TEST_MODE 下的行为。"""
 
     def test_normal_mode_adds_file_sinks(self):
-        """正常模式（无 TEST_MODE）：应添加 2 个文件 sink（JSON + 文本）。"""
+        """正常模式（无 TEST_MODE）：应添加 3 个文件 sink（JSON + 文本 + 诊断）。"""
         from utils.logging_config import setup_logging
 
         with mock.patch.dict(os.environ, {}, clear=False):
@@ -60,10 +60,10 @@ class TestSetupLoggingTestMode:
 
         file_sink_count = _count_file_sinks()
         total = _count_total_handlers()
-        # 正常模式：stderr(1) + JSON文件(1) + 文本文件(1) = 3
-        assert total == 3, f"正常模式应有 3 个 handler，实际 {total}：{_get_handler_sink_types()}"
-        assert file_sink_count == 2, (
-            f"正常模式应有 2 个文件 sink，实际 {file_sink_count}：{_get_handler_sink_types()}"
+        # 正常模式：stderr(1) + JSON文件(1) + 文本文件(1) + 诊断文件(1) = 4
+        assert total == 4, f"正常模式应有 4 个 handler，实际 {total}：{_get_handler_sink_types()}"
+        assert file_sink_count == 3, (
+            f"正常模式应有 3 个文件 sink，实际 {file_sink_count}：{_get_handler_sink_types()}"
         )
 
     def test_test_mode_skips_file_sinks(self):
@@ -102,8 +102,8 @@ class TestSetupLoggingTestMode:
         with mock.patch.dict(os.environ, {"TEST_MODE": mode_value}, clear=False):
             setup_logging()
 
-        assert _count_file_sinks() == 2, (
-            f"TEST_MODE={mode_value!r} 应保持正常模式（2 个文件 sink），"
+        assert _count_file_sinks() == 3, (
+            f"TEST_MODE={mode_value!r} 应保持正常模式（3 个文件 sink），"
             f"实际 {_count_file_sinks()}：{_get_handler_sink_types()}"
         )
 

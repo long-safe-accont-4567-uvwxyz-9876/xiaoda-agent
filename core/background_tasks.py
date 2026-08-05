@@ -214,6 +214,12 @@ class BackgroundTaskManager:
             # 空回复不入 conversation_logs，仅记录到 journal 便于排查
             # （errors 表结构不同，避免引入复杂依赖；journal 日志已足够追溯）
         else:
+            # 治本修复（2026-08-05）：空 session_id 用 user_id 兜底。
+            # 根因：微信 bot 不传 session_id（session_id=""），写入 conversation_logs 后
+            #   WebUI 会话列表 WHERE session_id != '' 过滤掉 → 微信聊天记录不显示。
+            # 修复：空 session_id 用 user_id 作为会话标识，确保 WebUI 能显示微信会话。
+            if not session_id and user_id:
+                session_id = user_id
             # P0 修复（greeting 占位符污染根因）：
             # greeting_scheduler 传 user_input="（主动问候）" 占位符，被入库为
             # conversation_logs.user_message。用户浏览历史时看到系统占位符，且
@@ -559,6 +565,15 @@ class BackgroundTaskManager:
                 _curator_conn.row_factory = aiosqlite.Row
                 await _curator_conn.execute("PRAGMA journal_mode=WAL")
                 await _curator_conn.execute("PRAGMA busy_timeout=5000")
+                # P0 根治（2026-08-04 实证）：原独立连接漏设 synchronous=NORMAL，用默认
+                # synchronous=FULL，每次 commit 都 fsync WAL；USB 盘 fsync 物理耗时 50-101s
+                # （日志 concept_graph.curator_slow elapsed_ms=101506 + curator_timeout），
+                # 与 instinct extract 并发时 I/O 饱和，连锁触发 memory.retrieve_timeout →
+                # wechat_bot.process_timeout。补齐与主连接（db/database.py:127）一致的
+                # PRAGMA，synchronous=NORMAL 让 commit 不 fsync（WAL 仅 checkpoint 时 fsync）。
+                await _curator_conn.execute("PRAGMA synchronous=NORMAL")
+                await _curator_conn.execute("PRAGMA cache_size=-20000")    # ~20MB
+                await _curator_conn.execute("PRAGMA temp_store=MEMORY")
                 try:
                     _curator_concept_db = ConceptDB(_curator_conn)
                     # N10: batch_size 30→10，配合 max_edges_per_run=60 限制写入量

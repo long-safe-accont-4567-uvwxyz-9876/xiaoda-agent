@@ -1455,7 +1455,8 @@ class MemoryManager:
     async def retrieve_memories(self, query: str, k: int = 5, context: str = "",
                                  _retry_attempted: bool = False,
                                  scope: Any | None = None,
-                                 conv_user_id: str = "") -> list[dict]:
+                                 conv_user_id: str = "",
+                                 apply_min_score: bool = True) -> list[dict]:
         """检索记忆。
 
         P0 修复（上下文污染根因）：新增 conv_user_id 参数。
@@ -1464,6 +1465,14 @@ class MemoryManager:
               "那是之前的数据库里面的原文直接蹦出来了"）。
         修复：conv_user_id 非空时，_search_conversation_logs 按 user_id 过滤，
               仅返回当前用户的对话记录。query_cache 也按 user_id 隔离。
+
+        回忆工具失效根因（2026-08-05）：RAG_MIN_FINAL_SCORE 的 rerank 过滤
+        会把"亲亲流程"等个人/亲密记忆（rerank 0.007-0.1，低于 0.15）整段
+        清空，导致 recall 工具返回空、助手"想不起来"。该过滤的本意是给
+        主动注入上下文去噪（避免技术型 query 注入无关亲密内容），但 recall
+        工具是用户显式发起的回忆请求，应返回检索到的记忆由模型判断相关性，
+        不应被该过滤清空。故新增 apply_min_score：默认 True（主动注入保持
+        去噪），recall 工具传 False 跳过该过滤。
         """
         import config
         if scope is None:
@@ -1577,7 +1586,7 @@ class MemoryManager:
             # 用 rerank_score（纯相关性）而非 final_score（综合分含 R/recency/importance 保底 ~0.22）
             # （bench_rag_e2e 实测：技术型 query 返回 rerank 0.007 的亲密内容）
             _min_score = getattr(config, 'RAG_MIN_FINAL_SCORE', 0.15)
-            if intent != "chat" and _min_score > 0 and results:
+            if apply_min_score and intent != "chat" and _min_score > 0 and results:
                 _before = len(results)
                 results = [r for r in results
                            if float(r.get("rerank_score", 0)) >= _min_score]
@@ -1675,7 +1684,7 @@ class MemoryManager:
         # 用 rerank_score（纯相关性）而非 final_score（综合分含保底 ~0.22，过滤失效）
         # （bench_rag_e2e 实测：技术型 query 返回 rerank 0.007 的亲密内容）
         _min_score = getattr(config, 'RAG_MIN_FINAL_SCORE', 0.15)
-        if intent != "chat" and _min_score > 0 and results:
+        if apply_min_score and intent != "chat" and _min_score > 0 and results:
             _before = len(results)
             results = [r for r in results
                        if float(r.get("rerank_score", 0)) >= _min_score
@@ -1687,8 +1696,15 @@ class MemoryManager:
                             min_score=_min_score)
 
         # 写入缓存（P0: 使用 user_id 隔离的 cache key）
+        # 治本修复（2026-08-05）：put 改 fire-and-forget。
+        # 根因：_query_cache.put 内部调 embed API（网络 1-2s），await 阻塞检索返回。
+        # 缓存写入不影响当前检索结果，无需让用户等待。
         if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
-            await self._query_cache.put(_cache_key, results)
+            _bg = asyncio.create_task(
+                self._query_cache.put(_cache_key, results),
+                name=f"query_cache_put_{int(time.time()*1000)}"
+            )
+            _bg.add_done_callback(_log_task_exception)
 
         # 检索命中后批量递增 access_count（passive_use）
         # 修复：此前 increment_access_count 从未被调用，导致记忆永远无法进入 PERMANENT 状态

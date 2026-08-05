@@ -99,14 +99,18 @@ export default {
     language: '界面语言',
     languageDesc: '选择 UI 显示语言',
     permissionMode: '全局权限模式',
-    permissionDesc: {
-      default: '默认 — 危险操作需要确认',
-      dev: '开发 — 放宽部分写权限，只读查询放行',
-      strict: '严格 — 拒绝一切写/执行类工具',
-      bypass: '绕过 — 跳过所有安全检查（兼容模式）',
-      goat: '梭哈 — 全部权限开放，最大自由度 ⚡',
+    // 面向用户只暴露 3 档（按权限从高到低），禁用"默认/开发/严格"措辞。
+    permissionLabel: {
+      goat: '随心',
+      default: '护航',
+      strict: '谨慎',
     },
-    permSwitched: (mode: string) => `权限模式已切换为 ${mode.toUpperCase()} ✓ 即时生效`,
+    permissionDesc: {
+      goat: '随心 — 全部权限开放，无需确认，最大自由度 ⚡',
+      default: '护航 — 日常陪伴，危险操作会先跟你确认',
+      strict: '谨慎 — 只看不写，拒绝一切写/执行操作',
+    },
+    permSwitched: (mode: string) => `权限模式已切换为「${mode}」✓ 即时生效`,
     workspaceAuth: '工作目录',
     workspaceAuthDesc: '切换 Agent 当前对话所在的工作目录。切换后 Agent 在该目录内读写文件、执行命令；不切换则默认在默认目录对话。',
     workspaceCurrent: '当前工作目录',

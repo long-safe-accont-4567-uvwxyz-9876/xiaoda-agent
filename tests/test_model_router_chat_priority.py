@@ -21,7 +21,6 @@ async def test_chat_and_background_llm_never_enter_provider_concurrently(monkeyp
     router._chat_idle = asyncio.Event()
     router._chat_idle.set()
     router._bg_llm_semaphore = asyncio.Semaphore(1)
-    router._llm_call_gate = asyncio.Lock()
     router._active_bg_llm_tasks = set()
     router._apply_caching_headers = lambda headers: headers
     active = 0
@@ -70,7 +69,6 @@ async def test_chat_cancels_active_background_llm_and_enters_provider(monkeypatc
     router._chat_idle = asyncio.Event()
     router._chat_idle.set()
     router._bg_llm_semaphore = asyncio.Semaphore(1)
-    router._llm_call_gate = asyncio.Lock()
     router._active_bg_llm_tasks = set()
     router._apply_caching_headers = lambda headers: headers
     background_started = asyncio.Event()
@@ -140,7 +138,6 @@ async def test_background_cancelled_before_sem_acquire_does_not_leak_semaphore(m
     router._chat_idle = asyncio.Event()
     router._chat_idle.set()
     router._bg_llm_semaphore = asyncio.Semaphore(1)
-    router._llm_call_gate = asyncio.Lock()
     router._active_bg_llm_tasks = set()
     router._apply_caching_headers = lambda headers: headers
 

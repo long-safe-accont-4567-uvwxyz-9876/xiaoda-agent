@@ -12,8 +12,24 @@ from __future__ import annotations
 
 from typing import ClassVar
 import re
+import threading
 from pathlib import Path
 from loguru import logger
+
+# 治本修复（2026-08-05 用户"治标不治本"反馈）：jieba 后台预热。
+# 根因：jieba 首次 initialize 加载词典耗时 1s（实测 1.052s），
+#   constraint_lessons 首次调用触发 jieba 惰性初始化 → 阻塞 1s。
+#   日志 memory.constraint_lessons_slow elapsed_ms=1047 铁证。
+# 治本：模块加载时启动 daemon 线程后台预热 jieba，不阻塞模块加载，
+#   首次 search_rag 调用时 jieba 已就绪，消除 1s 阻塞。
+def _warmup_jieba() -> None:
+    try:
+        import jieba
+        jieba.initialize()
+    except Exception:
+        pass
+
+threading.Thread(target=_warmup_jieba, daemon=True, name="jieba-warmup").start()
 
 # Token 预算（按字符数估算，中文约 1 字符 = 0.5 token）
 _ALWAYS_BUDGET = 600   # ~300 token

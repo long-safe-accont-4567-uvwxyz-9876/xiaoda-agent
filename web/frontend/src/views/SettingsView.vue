@@ -148,11 +148,14 @@ async function onRefreshAudit() {
 }
 
 const permDesc = computed<Record<string, string>>(() => ({
-  default: t('settings.permissionDesc.default'),
-  dev: t('settings.permissionDesc.dev'),
-  strict: t('settings.permissionDesc.strict'),
-  bypass: t('settings.permissionDesc.bypass'),
   goat: t('settings.permissionDesc.goat'),
+  default: t('settings.permissionDesc.default'),
+  strict: t('settings.permissionDesc.strict'),
+}))
+const permLabel = computed<Record<string, string>>(() => ({
+  goat: t('settings.permissionLabel.goat'),
+  default: t('settings.permissionLabel.default'),
+  strict: t('settings.permissionLabel.strict'),
 }))
 </script>
 
@@ -250,7 +253,7 @@ const permDesc = computed<Record<string, string>>(() => ({
       <h3>{{ t('settings.permissionMode') }}</h3>
       <n-radio-group :value="permissionMode" @update:value="setPermMode">
         <n-radio-button v-for="m in permissionOptions" :key="m" :value="m">
-          {{ m.toUpperCase() }}
+          {{ permLabel[m] || m }}
         </n-radio-button>
       </n-radio-group>
       <p class="perm-desc">{{ permDesc[permissionMode] || '' }}</p>

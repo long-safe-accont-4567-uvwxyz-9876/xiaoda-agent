@@ -1451,8 +1451,16 @@ class AIQQBot(botpy.Client):
             except (TimeoutError, OSError, RuntimeError) as e:
                 logger.warning("qq_bot.stream_segment_failed",
                                error=str(e), sent_segments=sent_count)
-                # 异常恢复：合并剩余内容为最终片发送
-                remaining = "".join(segments[i:])
+                # 异常恢复：合并剩余内容为最终片发送。
+                # P0 治本修复（大量文本重复发送根因）：
+                #   - TimeoutError：请求已发出但响应超时，QQ 服务端可能已接收当前段，
+                #     重发会重复 → 跳过当前段（segments[i+1:]），宁可丢一段也不重复。
+                #   - OSError/RuntimeError：连接错误，当前段可能没发出 → 重发含当前段（segments[i:]），
+                #     避免丢失。重复只在超时场景发生，连接错误场景不会重复。
+                if isinstance(e, TimeoutError):
+                    remaining = "".join(segments[i+1:])
+                else:
+                    remaining = "".join(segments[i:])
                 # P1-6 修复：合并后按字节上限再分割逐片发送，避免单条超 8000 字节被 QQ API 拒绝
                 if not is_group:
                     recovery_pieces = self._split_text_by_bytes(remaining, 7800)
@@ -1657,8 +1665,14 @@ class AIQQBot(botpy.Client):
                 except (OSError, RuntimeError, ConnectionError) as e:
                     logger.warning("qq_bot.group_reply_part_failed",
                                    part_index=i, total_parts=len(segments), error=str(e))
-                    # 失败时合并剩余所有段为单条发送（避免静默丢失）
-                    remaining = "".join(segments[i:])
+                    # 失败时合并剩余段为单条发送（避免静默丢失）。
+                    # P0 治本修复（重复发送根因，与流式路径同构）：
+                    #   TimeoutError 跳过当前段（可能已发，避免重复）；
+                    #   其他异常重发含当前段（可能没发，避免丢失）。
+                    if isinstance(e, TimeoutError):
+                        remaining = "".join(segments[i+1:])
+                    else:
+                        remaining = "".join(segments[i:])
                     try:
                         await message.reply(content=remaining, msg_seq=_next_msg_seq())
                         sent_count += 1
@@ -1697,8 +1711,14 @@ class AIQQBot(botpy.Client):
                     except (OSError, RuntimeError, ConnectionError) as e:
                         logger.warning("qq_bot.long_reply_part_failed_merging",
                                        part_index=i, total_parts=len(parts), error=str(e))
-                        # 合并剩余所有段（含当前失败的段 + 之后所有段 + 最后一段）
-                        remaining = "".join(parts[i:])
+                        # 合并剩余段为单条发送。
+                        # P0 治本修复（重复发送根因，与流式/群聊路径同构）：
+                        #   TimeoutError 跳过当前段（可能已发，避免重复）；
+                        #   其他异常重发含当前段（可能没发，避免丢失）。
+                        if isinstance(e, TimeoutError):
+                            remaining = "".join(parts[i+1:])
+                        else:
+                            remaining = "".join(parts[i:])
                         try:
                             await message.reply(content=remaining, msg_seq=_next_msg_seq())
                             logger.info("qq_bot.long_reply_merge_recovered",

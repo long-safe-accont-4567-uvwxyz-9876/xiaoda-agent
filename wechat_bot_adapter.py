@@ -361,14 +361,26 @@ class WeChatBotAdapter:
         try:
             from emotion.emoji_config import get_ack_message
             ack_text = get_ack_message("xiaoda")
-            await self.send_message(
+            logger.info(
+                "wechat_bot.sending_ack to_user={} ack_text={}",
+                from_user_id[:16], ack_text[:40],
+            )
+            ack_sent = await self.send_message(
                 ack_text,
                 to_user_id=from_user_id,
                 context_token=context_token,
             )
+            logger.info(
+                "wechat_bot.ack_sent to_user={} sent={}",
+                from_user_id[:16], ack_sent,
+            )
         except Exception as e:
             logger.warning("wechat_bot.ack_send_failed error={}", str(e)[:200])
 
+        logger.info(
+            "wechat_bot.calling_core_process user_id={} text_len={}",
+            user_id, len(text),
+        )
         try:
             result = await asyncio.wait_for(
                 self._core.process(
@@ -403,24 +415,54 @@ class WeChatBotAdapter:
 
         reply = getattr(result, "reply", "") or ""
         if not reply:
+            logger.info("wechat_bot.reply_empty user_id={}", user_id)
             return
         sticker_path = getattr(result, "sticker_path", None) or ""
-        # 有 emotion 表情包 → 图文合并发送；失败回退纯文本
-        if sticker_path and Path(sticker_path).exists():
-            sent = await self.send_media_message(
-                reply,
-                sticker_path,
-                to_user_id=from_user_id,
-                context_token=context_token,
-            )
-            if sent:
-                return
-            logger.warning("wechat_bot.sticker_send_failed fallback_to_text")
-        await self.send_message(
+        logger.info(
+            "wechat_bot.reply_ready user_id={} reply_len={} has_sticker={} sticker_path={}",
+            user_id, len(reply), bool(sticker_path), sticker_path,
+        )
+        # 先发文本回复（保证用户一定能看到回复）
+        logger.info(
+            "wechat_bot.sending_text_reply user_id={} reply_len={}",
+            user_id, len(reply),
+        )
+        text_sent = await self.send_message(
             reply,
             to_user_id=from_user_id,
             context_token=context_token,
         )
+        logger.info(
+            "wechat_bot.text_reply_sent user_id={} sent={}",
+            user_id, text_sent,
+        )
+        # 再发表情包（纯图，独立消息）：失败不回退文本，避免重复发送
+        if sticker_path and Path(sticker_path).exists():
+            logger.info(
+                "wechat_bot.sticker_send_try user_id={} sticker_path={}",
+                user_id, sticker_path,
+            )
+            sticker_sent = await self.send_media_message(
+                "",
+                sticker_path,
+                to_user_id=from_user_id,
+                context_token=context_token,
+            )
+            if sticker_sent:
+                logger.info(
+                    "wechat_bot.sticker_sent user_id={} reply_len={}",
+                    user_id, len(reply),
+                )
+            else:
+                logger.warning(
+                    "wechat_bot.sticker_send_failed user_id={}",
+                    user_id,
+                )
+        else:
+            logger.info(
+                "wechat_bot.no_sticker_use_text user_id={} has_sticker={}",
+                user_id, bool(sticker_path),
+            )
 
     # ------------------------------------------------------------------
     # 发送消息
@@ -462,6 +504,10 @@ class WeChatBotAdapter:
                 target_user, target_token, content
             )
             ret = result.get("ret", 0)
+            logger.info(
+                "wechat_bot.send_message_result to={} ret={} content_len={}",
+                target_user[:16], ret, len(content),
+            )
             return ret == 0
         except SessionExpiredError:
             logger.warning("wechat_bot.send_session_expired")
@@ -530,7 +576,12 @@ class WeChatBotAdapter:
             result = await self._ilink_client.send_media_message(
                 target_user, target_token, content, image_path
             )
-            return result.get("ret", 0) == 0
+            ret = result.get("ret", 0)
+            logger.info(
+                "wechat_bot.send_media_result to={} ret={} image_path={} content_len={}",
+                target_user[:16], ret, image_path, len(content),
+            )
+            return ret == 0
         except SessionExpiredError:
             logger.warning("wechat_bot.send_media_session_expired")
             self._expired = True
@@ -539,8 +590,8 @@ class WeChatBotAdapter:
             return False
         except Exception as e:
             logger.error(
-                "wechat_bot.send_media_error error={} type={}",
-                str(e)[:200], type(e).__name__,
+                "wechat_bot.send_media_error error={} type={} image_path={}",
+                str(e)[:200], type(e).__name__, image_path,
             )
             return False
 

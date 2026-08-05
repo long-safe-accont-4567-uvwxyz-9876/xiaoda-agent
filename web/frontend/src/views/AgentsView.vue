@@ -261,6 +261,7 @@ async function openEditor(agent: any | null) {
       base_url: '', api_key_env: '', route_description: '', capabilities: [],
       voice_ref: null, max_turns: 8, effort: 'medium',
       permission_mode: 'default', memory_scope: 'shared', wallpaper: '',
+      ack_messages: [],
     }
     personality.value = ''
     permissions.value = { tools: {}, mcp_servers: {}, is_main: false }
@@ -643,6 +644,15 @@ async function uploadVoiceForAgent() {
         <n-tab-pane name="personality" :tab="t('agentsView.personality')">
           <n-input v-model:value="personality" type="textarea" :rows="14"
                    :placeholder="t('agentsView.personalityPh')" />
+        </n-tab-pane>
+
+        <n-tab-pane name="ack" tab="随心即言" v-if="isMain">
+          <div style="margin-bottom: 12px; color: var(--text-secondary); font-size: 13px;">
+            自定义收到消息时的提示语。每条一行，发送时随机选一条。留空则使用默认"小妲收到啦，正在想～🌿"。
+            <br>提示：如果文本中包含 agent 原名（如"纳西妲"），会自动替换为当前显示名；不含则原样输出。
+          </div>
+          <n-dynamic-tags v-model:value="editing.ack_messages" type="success"
+                          :max="20" />
         </n-tab-pane>
 
         <n-tab-pane name="test" :tab="t('agentsView.test')" v-if="!isCreate">

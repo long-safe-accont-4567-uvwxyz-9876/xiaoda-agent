@@ -3,6 +3,7 @@ import asyncio
 import fnmatch
 import json
 import re
+import time
 from pathlib import Path
 
 from loguru import logger
@@ -262,9 +263,18 @@ class ToolCallHandler:
             if has_important:
                 await self._notify_status(f"{get_status_msg(self._agent_name, 'using', '、'.join(display_names[:3]), self._personality_file)}{'等' if len(display_names) > 3 else ''}")
 
+        _concurrent_count = len(tool_calls)
+        _exec_start = time.time()
+        logger.info("tool.concurrent_exec_start",
+                    count=_concurrent_count,
+                    tools=[tc["function"]["name"] for tc in tool_calls])
         exec_tasks = [self._execute_single_tool(tc, trace, user_id=user_id, safe_mode=safe_mode)
                       for tc in tool_calls]
         exec_results = await asyncio.gather(*exec_tasks, return_exceptions=True)
+        _exec_elapsed = round(time.time() - _exec_start, 2)
+        logger.info("tool.concurrent_exec_done",
+                    count=_concurrent_count, elapsed=_exec_elapsed,
+                    tools=[tc["function"]["name"] for tc in tool_calls])
         for idx, er in enumerate(exec_results):
             if isinstance(er, Exception):
                 trace.warning("tool.exec_exception", error=str(er)[:200])
@@ -363,14 +373,20 @@ class ToolCallHandler:
 
             # 优先使用带钩子的工具执行回调，否则直接执行
             await self._notify_tool_status(t_name, "started")
+            _tool_start = time.time()
             try:
                 if self._tool_execute_callback:
                     result = await self._tool_execute_callback(t_name, t_args, user_id=user_id, safe_mode=safe_mode)
                 else:
                     result = await self._tool_executor.execute(t_name, t_args, safe_mode=safe_mode)
             except Exception as e:
+                _tool_elapsed = round(time.time() - _tool_start, 2)
+                logger.warning("tool.exec_failed", tool=t_name, elapsed=_tool_elapsed, error=str(e)[:100])
                 await self._notify_tool_status(t_name, "failed", detail=str(e)[:100])
                 raise
+
+            _tool_elapsed = round(time.time() - _tool_start, 2)
+            logger.info("tool.exec_done", tool=t_name, elapsed=_tool_elapsed, success=result.success)
 
             # 处理委托请求（DelegationRequest dataclass 或旧格式字符串前缀）
             result = await self._handle_delegation(result)
@@ -439,7 +455,8 @@ class ToolCallHandler:
     async def _summarize_results(self, user_input: str, tool_results: list,
                                   tool_calls: list, trace: Any,
                                   user_openid: str = "", session_id: str = "",
-                                  messages: list[dict] | None = None) -> str:
+                                  messages: list[dict] | None = None,
+                                  assistant_content: str = "") -> str:
         """基于工具结果生成最终回复。
 
         P0 修复（工具调用后 LLM 瞎扯/出戏 根因）：
@@ -543,4 +560,14 @@ class ToolCallHandler:
         except Exception as e:
             trace.error("tool.summarize_failed", error=str(e))
 
-        return _strip_tool_metadata(smart_truncate(combined, 2000))
+        # P0 修复：summarize 超时/失败时绝不返回原始工具结果当回复。
+        # 原实现 return smart_truncate(combined) → 把 B站搜索结果原文（标题/链接/摘要）
+        # 直接倒给用户，还追加"——人家说到一半啦"标记，体验极差。
+        # 修复优先级：LLM 已生成文本 > 友好降级提示，绝不返回原始工具数据。
+        if assistant_content and assistant_content.strip():
+            _cleaned = self._clean_reply(assistant_content)
+            if _cleaned.strip():
+                trace.info("tool.summarize_fallback_assistant_content")
+                return _cleaned
+        trace.warning("tool.summarize_fallback_degraded")
+        return DEGRADED_REPLY

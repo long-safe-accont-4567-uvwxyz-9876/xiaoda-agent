@@ -5,7 +5,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from instinct_manager import InstinctManager
 
 
@@ -50,20 +50,25 @@ class TestInstinctManager(unittest.TestCase):
 
         # 模拟 router.route 返回
         self.mock_router.route = AsyncMock(return_value=llm_response)
-        # 模拟数据库连接
+        # mock 主连接（SELECT 去重查询用）
         mock_conn = AsyncMock()
+        mock_cursor = AsyncMock()
+        mock_cursor.fetchall = AsyncMock(return_value=[])  # 无已有本能
+        mock_conn.execute = AsyncMock(return_value=mock_cursor)
         self.mock_db._conn = mock_conn
-
-        # 调用 extract_instincts
-        asyncio.run(
-            self.manager.extract_instincts("你好", "你好！", "session_1")
-        )
+        self.mock_db.db_path = "/tmp/test_instinct.db"
+        # mock 独立连接（INSERT+commit 走独立连接，不阻塞主连接）
+        mock_w_conn = AsyncMock()
+        with patch("aiosqlite.connect", new=AsyncMock(return_value=mock_w_conn)):
+            asyncio.run(
+                self.manager.extract_instincts("你好", "你好！", "session_1")
+            )
 
         # 验证 router.route 被调用（免费模型禁用后降级到 router）
         self.mock_router.route.assert_called_once()
-        # 验证数据库批量插入被调用，且包含3条有效行
-        mock_conn.executemany.assert_called_once()
-        inserted_rows = mock_conn.executemany.call_args[0][1]
+        # 验证独立连接的 executemany 被调用（INSERT 走独立连接，不阻塞主连接）
+        mock_w_conn.executemany.assert_called_once()
+        inserted_rows = mock_w_conn.executemany.call_args[0][1]
         self.assertGreaterEqual(len(inserted_rows), 3)
 
     def test_parse_instinct_response_low_confidence_filtered(self):
@@ -72,15 +77,20 @@ class TestInstinctManager(unittest.TestCase):
 
         self.mock_router.route = AsyncMock(return_value=llm_response)
         mock_conn = AsyncMock()
+        mock_cursor = AsyncMock()
+        mock_cursor.fetchall = AsyncMock(return_value=[])
+        mock_conn.execute = AsyncMock(return_value=mock_cursor)
         self.mock_db._conn = mock_conn
-
-        asyncio.run(
-            self.manager.extract_instincts("你好", "你好！", "session_1")
-        )
+        self.mock_db.db_path = "/tmp/test_instinct.db"
+        mock_w_conn = AsyncMock()
+        with patch("aiosqlite.connect", new=AsyncMock(return_value=mock_w_conn)):
+            asyncio.run(
+                self.manager.extract_instincts("你好", "你好！", "session_1")
+            )
 
         # 只插入高置信度的（0.9 >= 0.5），低置信度（0.3 < 0.5）被过滤
-        mock_conn.executemany.assert_called_once()
-        inserted_rows = mock_conn.executemany.call_args[0][1]
+        mock_w_conn.executemany.assert_called_once()
+        inserted_rows = mock_w_conn.executemany.call_args[0][1]
         self.assertEqual(len(inserted_rows), 1)
 
 
@@ -165,6 +175,7 @@ class TestExtractInstinctsDedup(unittest.TestCase):
         self.mock_router = MagicMock()
         self.manager = InstinctManager(db=self.mock_db, router=self.mock_router)
         self.manager._available = True
+        self.mock_db.db_path = "/tmp/test_instinct.db"
         # mock 免费模型返回固定结果，跳过 LLM 调用
         self.manager._call_free_model = AsyncMock(return_value="用户喜欢亲密互动|0.8")
 
@@ -176,13 +187,13 @@ class TestExtractInstinctsDedup(unittest.TestCase):
             {"content": "用户偏好亲密互动"},
         ])
         self.mock_db._conn.execute = AsyncMock(return_value=mock_cursor)
-        self.mock_db._conn.executemany = AsyncMock()
-        self.mock_db._conn.commit = AsyncMock()
+        mock_w_conn = AsyncMock()
+        with patch("aiosqlite.connect", new=AsyncMock(return_value=mock_w_conn)) as _mock_connect:
+            asyncio.run(self.manager.extract_instincts("测试输入", "测试回复", "session1"))
 
-        asyncio.run(self.manager.extract_instincts("测试输入", "测试回复", "session1"))
-
-        # 断言：executemany（INSERT）不应被调用，因为新本能与已有本能相似
-        self.mock_db._conn.executemany.assert_not_called()
+        # 断言：新本能与已有相似 → rows_to_insert 为空 → 不创建独立连接、不 INSERT
+        _mock_connect.assert_not_called()
+        mock_w_conn.executemany.assert_not_called()
 
     def test_extract_inserts_genuinely_new(self):
         """当新本能与已有 active instinct 不相似时，应正常 INSERT"""
@@ -191,13 +202,12 @@ class TestExtractInstinctsDedup(unittest.TestCase):
             {"content": "用户重视承诺，厌恶言而无信"},  # 完全不同的话题
         ])
         self.mock_db._conn.execute = AsyncMock(return_value=mock_cursor)
-        self.mock_db._conn.executemany = AsyncMock()
-        self.mock_db._conn.commit = AsyncMock()
+        mock_w_conn = AsyncMock()
+        with patch("aiosqlite.connect", new=AsyncMock(return_value=mock_w_conn)):
+            asyncio.run(self.manager.extract_instincts("测试输入", "测试回复", "session1"))
 
-        asyncio.run(self.manager.extract_instincts("测试输入", "测试回复", "session1"))
-
-        # 断言：executemany（INSERT）应被调用
-        self.mock_db._conn.executemany.assert_called_once()
+        # 断言：独立连接的 executemany（INSERT）应被调用
+        mock_w_conn.executemany.assert_called_once()
 
 class TestCorrectInstinct(unittest.TestCase):
     """测试 LLM 驱动的本能修正：correct_instinct(hint, action)

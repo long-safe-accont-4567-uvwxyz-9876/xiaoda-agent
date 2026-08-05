@@ -31,9 +31,17 @@ except ImportError:
 # 原 AsyncOpenAI(api_key, base_url) 未传 timeout，SDK 默认 connect=5s 对跨网 SiliconFlow
 # embed API 过短，网络抖动期握手失败 → embed 慢 → 触发 memory_manager 外层 3s/3.5s 超时兜底（治标）。
 # 与 agnes API / http_pool 共享 client 保持同款根因修复，从源头消除外层超时的必要性。
+#
+# 治本修复（2026-08-05 用户"治标不治本"反馈）：read 30→5。
+# 根因：embed API 正常 0.5-2s，但偶发网络波动时 read=30s 等 30s 才超时。
+#   配合 max_retries=2（3次尝试）+ sleep(1) 重试间隔 = 最坏 30+1+30+1+30=92s。
+#   外层 asyncio.wait_for(timeout=2.0) cancel 后，httpx 底层连接不立即释放，
+#   占用连接池资源 → 后续请求也慢 → 向量检索 1.2-8s 波动（日志铁证）。
+# read=5s 治本：embed 正常 0.5-2s，5s 覆盖+3s 余量；偶发慢 5s 快速失败，
+#   不依赖外层 cancel，从源头消除连接池污染。
 from utils.http_pool import get_shared_client as _get_embed_shared_client
 import httpx as _httpx_embed
-_EMBED_HTTP_TIMEOUT = _httpx_embed.Timeout(connect=15.0, read=30.0, write=10.0, pool=10.0)
+_EMBED_HTTP_TIMEOUT = _httpx_embed.Timeout(connect=15.0, read=5.0, write=10.0, pool=10.0)
 
 
 class EmbedCache:
@@ -264,14 +272,20 @@ class VectorStore:
         if cached:
             return cached
 
-        max_retries = 2
+        # 治本修复（2026-08-05 用户"治标不治本"反馈）：max_retries 2→1。
+        # 根因：embed 偶发慢时重试也慢（网络波动不会 1s 内恢复），
+        #   read=5s + 重试2次 = 最坏 5+1+5+1+5=17s，远超外层 wait_for(2s) 兜底。
+        #   重试叠加延迟与 agnes timeout 重试同理，偶发慢重试无意义。
+        # 重试1次：给瞬时抖动一次机会，但不无限叠加。最坏 5+1+5=11s。
+        # 配合 read=5s，正常 embed 0.5-2s 不受影响，偶发慢快速失败。
+        max_retries = 1
         for attempt in range(max_retries + 1):
             try:
                 # CodeRabbit 修复：移除 asyncio.wait_for(timeout=10.0)。
                 # 原内层 10s 超时与 _EMBED_HTTP_TIMEOUT(connect=15s) 冲突——
                 # connect 15s 期间内层 10s 会先触发，导致 connect 永远用不满 15s，
                 # 且 httpx 层超时保护被 wait_for 截断失效。
-                # 现由 httpx _EMBED_HTTP_TIMEOUT(connect=15, read=30, write=10, pool=10) 统一保护。
+                # 现由 httpx _EMBED_HTTP_TIMEOUT(connect=15, read=5, write=10, pool=10) 统一保护。
                 # embed API 正常 0.5-2s，connect=15s 覆盖网络抖动，无需应用层 wait_for。
                 response = await self._embed_client.embeddings.create(
                     model=self._embed_model,

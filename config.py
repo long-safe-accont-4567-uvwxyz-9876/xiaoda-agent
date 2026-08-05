@@ -623,6 +623,30 @@ def get_temperature(default: float = 0.7) -> float:
     return default
 
 
+def get_frequency_penalty(default: float = 1.0) -> float:
+    """读取全局 frequency_penalty：优先 webui_overrides，回退 default。"""
+    try:
+        from web.config_service import get_config_service
+        override = get_config_service().get("models.frequency_penalty")
+        if override is not None:
+            return float(override)
+    except Exception:
+        logger.debug("get_frequency_penalty.webui_read_failed")
+    return default
+
+
+def get_presence_penalty(default: float = 1.0) -> float:
+    """读取全局 presence_penalty：优先 webui_overrides，回退 default。"""
+    try:
+        from web.config_service import get_config_service
+        override = get_config_service().get("models.presence_penalty")
+        if override is not None:
+            return float(override)
+    except Exception:
+        logger.debug("get_presence_penalty.webui_read_failed")
+    return default
+
+
 def get_agent_display_name(name: str) -> str:
     """读取 agent 的 display_name（从 config/agents/{name}.json）。
 

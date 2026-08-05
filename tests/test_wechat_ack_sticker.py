@@ -56,19 +56,20 @@ def test_ack_sent_before_process():
     assert "收到啦" in first_text or "正在想" in first_text
 
 
-def test_reply_with_sticker_sends_merged(tmp_path):
-    """有 sticker_path 时走图文合并，且 ACK 单独发。"""
+def test_reply_with_sticker_sends_text_and_media(tmp_path):
+    """有 sticker_path 时：文本先发，表情包作为纯图独立发送。"""
     img = tmp_path / "s.png"
     img.write_bytes(b"fake-png-bytes")
     core = FakeCore(FakeResult("回复", sticker_path=str(img)))
     adapter = _make_adapter(core)
     asyncio.run(adapter._handle_text_message("你好", "user@im.wechat", "ctx_tok"))
-    # ACK 单独文本发送
+    # ACK + 文本回复
     assert adapter._ilink_client.sent
-    # 图文合并发送
+    assert adapter._ilink_client.sent[-1][2] == "回复"
+    # 表情包纯图发送（text 为空）
     assert adapter._ilink_client.media_sent
     _, _, text, path = adapter._ilink_client.media_sent[0]
-    assert text == "回复"
+    assert text == ""
     assert path == str(img)
 
 
@@ -83,8 +84,8 @@ def test_reply_without_sticker_sends_text(tmp_path):
     assert not adapter._ilink_client.media_sent
 
 
-def test_reply_sticker_failure_falls_back_to_text(tmp_path):
-    """图文合并失败时回退纯文本，不阻塞回复。"""
+def test_reply_sticker_failure_still_has_text(tmp_path):
+    """表情包发送失败时文本已先发，不阻塞、不重复回退。"""
     img = tmp_path / "s.png"
     img.write_bytes(b"fake-png-bytes")
     core = FakeCore(FakeResult("回复", sticker_path=str(img)))
@@ -94,8 +95,38 @@ def test_reply_sticker_failure_falls_back_to_text(tmp_path):
         raise RuntimeError("upload failed")
     adapter._ilink_client.send_media_message = boom
     asyncio.run(adapter._handle_text_message("你好", "user@im.wechat", "ctx_tok"))
-    # 回退纯文本（最后一条是文本回复）
+    # 文本回复已先发（ACK + 文本 = 2 条），不重复回退
     assert adapter._ilink_client.sent[-1][2] == "回复"
+    assert len(adapter._ilink_client.sent) == 2
+
+
+def test_reply_sticker_nonzero_ret_still_has_text(tmp_path):
+    """表情包返回 ret!=0（非抛异常）时文本已先发，不回退。"""
+    img = tmp_path / "s.png"
+    img.write_bytes(b"fake-png-bytes")
+    core = FakeCore(FakeResult("回复", sticker_path=str(img)))
+    adapter = _make_adapter(core)
+    # 底层返回 ret=1（失败），不抛异常
+    async def fail_ret(*a, **k):
+        return {"ret": 1}
+    adapter._ilink_client.send_media_message = fail_ret
+    asyncio.run(adapter._handle_text_message("你好", "user@im.wechat", "ctx_tok"))
+    # 文本回复已先发，不回退重复
+    assert adapter._ilink_client.sent[-1][2] == "回复"
+    assert len(adapter._ilink_client.sent) == 2
+
+
+def test_reply_sticker_success_sends_text_then_media(tmp_path):
+    """表情包成功：文本（ACK+回复）与表情包均发送。"""
+    img = tmp_path / "s.png"
+    img.write_bytes(b"fake-png-bytes")
+    core = FakeCore(FakeResult("回复", sticker_path=str(img)))
+    adapter = _make_adapter(core)
+    asyncio.run(adapter._handle_text_message("你好", "user@im.wechat", "ctx_tok"))
+    # ACK + 文本回复两条文本，表情包独立一条
+    assert len(adapter._ilink_client.sent) == 2
+    assert adapter._ilink_client.sent[-1][2] == "回复"
+    assert len(adapter._ilink_client.media_sent) == 1
 
 
 def test_send_sticker_delegates_to_media(tmp_path):

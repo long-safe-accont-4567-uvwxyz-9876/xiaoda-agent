@@ -107,7 +107,7 @@ async def recall(query: str, top_k: int = 8) -> ToolResult:
         req_id = uuid.uuid4().hex[:8]
         try:
             results = await asyncio.wait_for(
-                mm.retrieve_memories(query, k=top_k),
+                mm.retrieve_memories(query, k=top_k, apply_min_score=False),
                 timeout=10.0,
             )
         except asyncio.TimeoutError:

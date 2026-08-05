@@ -1362,7 +1362,15 @@ def build_system_prompt(extra_context: str = "", address_term: str = "爸爸",
     except Exception as e:
         logger.debug("prompt_builder.j_space_direction_hook_failed", error=str(e))
     from config import apply_agent_name_replacements
-    return apply_agent_name_replacements(system_prompt)
+    _final_prompt = apply_agent_name_replacements(system_prompt)
+    # 技能系统诊断：记录系统提示词 token 数（与 to_openai_tools 的 tools_tokens 配对，
+    # 两者之和即发给 LLM 的固定开销，技能系统的渐进式披露可压缩此开销）
+    _cn = sum(1 for c in _final_prompt if '\u4e00' <= c <= '\u9fff')
+    _en = len(_final_prompt) - _cn
+    _prompt_tokens = int(_cn * 1.5 + _en * 0.25)
+    logger.info("prompt_builder.system_prompt_tokens",
+                tokens_est=_prompt_tokens, length=len(_final_prompt))
+    return _final_prompt
 
 
 def _build_workspace_sections(address_term: str) -> list[str]:

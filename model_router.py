@@ -158,7 +158,14 @@ MODEL_PREFERENCES = {
     "mimo": {"label": "MiMo 模式", "desc": "使用小米 MiMo-V2.5 模型"},
 }
 
-RETRYABLE_ERRORS = {'timeout', 'rate_limit', 'connection_error'}
+# P0 修复（2026-08-05 用户要求"10秒内响应"）：移除 'timeout'。
+# 根因：agnes APITimeoutError 被错误分类为 connection_error（APITimeoutError 是
+#   APIConnectionError 子类，已在 error_classifier 修复检查顺序）→ 触发重试 →
+#   30s+30s=60s 阻塞（日志 main_path=67214ms 铁证）。
+# 移除 timeout 后：agnes 超时直接降级，不双倍等待。agnes 正常 6-7s，read=8s
+# 覆盖正常耗时；偶发超时降级返回提示，比等 60s 好。
+# connection_error 保留重试（握手失败重试有意义，且 connect 慢的情况少见）。
+RETRYABLE_ERRORS = {'rate_limit', 'connection_error'}
 MAX_RETRIES = 1
 # chat_pro/chat_flash 已合并进 chat（同一 provider 同一 model，无区分意义）
 # 降级链：chat 失败 → chat_agnes（agnes provider 作为独立兜底）
@@ -430,8 +437,14 @@ class ModelRouter:
     _DEFAULT_TIMEOUTS: ClassVar[dict[str, int]] = {
         "emotion_analysis": 10,
         "emotion": 10,
-        "chat": 60,
-        "tool_call": 60,
+        # P0 修复（2026-08-04 实证阻塞）：60→30。
+        # 根因：agnes 正常 6-7s 响应，但事件循环被 DB 操作偶发阻塞时，
+        # agnes HTTP 响应收不到 → asyncio.wait_for(create, timeout=60) 等 60s 才超时 →
+        # retry 再 30s = 90s+ 阻塞（日志 22:53:37 llm_verify=83196ms 铁证）。
+        # 降到 30s：agnes 正常 9s 完成（6s 响应+3s 处理），30s 余量足够；
+        # 慢时 30s 快速失败 + retry，最坏 60s 而非 120s。
+        "chat": 30,
+        "tool_call": 30,
         "image_gen": 90,
     }
     # 后台 LLM task 集合：这些 task 调 LLM 但不直接面向用户，
@@ -504,7 +517,11 @@ class ModelRouter:
         self._chat_idle = asyncio.Event()
         self._chat_idle.set()  # 初始空闲
         self._bg_llm_semaphore = asyncio.Semaphore(1)
-        self._llm_call_gate = asyncio.Lock()
+        # 用户硬约束（2026-08-04）：删除全局 _llm_call_gate 锁。
+        # 根因：全局锁让所有 provider 的 LLM 调用串行，主 chat 调用 agnes 时，
+        # 即使是不同 provider 的调用也被阻塞 → 阻塞级联。
+        # 改为 per-provider 锁（复用 _get_credential_lock），agnes 调用之间串行
+        # （agnes 不支持并发），但不阻塞其他 provider。详见 _route_with_retry。
         self._active_bg_llm_tasks: set[asyncio.Task] = set()
         self._cache_stats = {
             "total_calls": 0,
@@ -1062,6 +1079,24 @@ class ModelRouter:
               起点太小 → 截断续写翻倍序列 1000→2000→...→128000 需 7 次递归。
         修复：fallback 时取 max(original_max_tokens, fallback_default)。
         """
+        # 治本修复（2026-08-05 用户"治标不治本"反馈）：timeout 错误跳过整个 fallback 链。
+        # 根因：agnes-2.0-flash 服务端强制 thinking，正常响应 6-7s（实测铁证）。
+        #   read timeout 触发后，fallback 链会再调同 provider 的 agnes（不同 task_type），
+        #   agnes 慢时 fallback 也慢 → 8s+8s=16s 双倍延迟（日志 llm_verify=9012ms 铁证）。
+        #   timeout 意味着服务端慢，同 provider fallback 再调一次必然也慢，纯叠加延迟。
+        # 修复：timeout 错误直接返回 None，不执行 fallback，由上层降级返回提示。
+        #   避免双倍等待，最坏单次 timeout 即降级，而非 timeout×2。
+        try:
+            _classified_for_fb = self._error_classifier.classify(e)
+            if _classified_for_fb.reason.value == "timeout":
+                logger.warning("router.fallback_skip_timeout",
+                               task=task_type,
+                               reason="timeout: same provider fallback would double latency",
+                               error=f"{type(e).__name__}: {e}")
+                return None
+        except Exception:
+            pass
+
         # 1. 降级到更便宜的模型
         fallback_type = FALLBACK_ROUTE.get(task_type)
         # P0 修复：content_filter 触发时跳过同 provider 的 fallback 目标
@@ -1076,10 +1111,23 @@ class ModelRouter:
             _original_provider = _orig_entry.get("client", _CFG_DEFAULT_PROVIDER)
         except Exception:
             pass
+        # 用户硬约束（2026-08-04）：禁止自动切换模型/provider。
+        # 用户在 WebUI 切换到哪个 provider，就一直用该 provider，失败也不跨 provider 兜底。
+        # 同 provider 内的重试（_route_with_retry）保留，不算"切换"。
+        # 跨 provider fallback 只会叠加延迟（再调一次别的 API）并违背用户意图，故全部跳过。
         while fallback_type:
             # Task 6: 用 registry 快照（深拷贝），降级期间修改不影响全局 ROUTE_TABLE
             fallback_config = self._registry.snapshot_task(fallback_type)
             fallback_provider = fallback_config.get("client", _CFG_DEFAULT_PROVIDER) if fallback_config else _CFG_DEFAULT_PROVIDER
+            # 禁止跨 provider 切换：fallback 目标 provider 必须与原 provider 一致
+            if fallback_provider != _original_provider:
+                logger.info("router.fallback_skip_cross_provider",
+                            original_task=task_type, fallback_task=fallback_type,
+                            original_provider=_original_provider,
+                            fallback_provider=fallback_provider,
+                            reason="user_disabled_cross_provider_fallback")
+                fallback_type = FALLBACK_ROUTE.get(fallback_type)
+                continue
             # content_filter 时跳过同 provider（同样的过滤模型会再次拦截）
             if _is_content_filter and fallback_provider == _original_provider:
                 logger.warning("router.fallback_skip_same_provider",
@@ -1114,7 +1162,9 @@ class ModelRouter:
                              error=f"{type(fb_err).__name__}: {fb_err}")
 
         # 2. 尝试 Agnes 作为最终降级
-        if task_type not in ("chat_agnes",) and self._is_client_configured("agnes"):
+        # 用户硬约束：禁止跨 provider 切换。仅当原 provider 本就是 agnes 时才允许
+        # 走 agnes 内部的 chat_agnes task（同 provider，不算切换）。
+        if _original_provider == "agnes" and task_type not in ("chat_agnes",) and self._is_client_configured("agnes"):
             try:
                 # Task 6: 用 registry 快照读取 chat_agnes，避免污染全局
                 agnes_config = self._registry.snapshot_task("chat_agnes")
@@ -1135,8 +1185,12 @@ class ModelRouter:
                 logger.error("router.agnes_fallback_failed", error=str(agnes_err))
 
         # 3. 尝试已注册的自定义 provider（SiliconFlow/OpenRouter/ModelScope 等）
+        # 用户硬约束：禁止跨 provider 切换。仅当原 provider 本就是该自定义 provider 时才执行。
         if task_type.startswith("chat") and self._custom_clients:
             for cp_name, _cp_client in list(self._custom_clients.items()):
+                # 跨 provider 切换一律跳过
+                if cp_name != _original_provider:
+                    continue
                 try:
                     cp_model = self._get_custom_provider_default_model(cp_name)
                     if not cp_model:
@@ -1235,12 +1289,11 @@ class ModelRouter:
 
         _start = time.time()
         try:
-            async with self._llm_call_gate:
-                result = await self._route_with_retry(
-                    task_type, config, messages, temperature, mt, stream,
-                    tools, tool_choice, timeout, user_openid, session_id,
-                    extra_headers=extra_headers,
-                )
+            result = await self._route_with_retry(
+                task_type, config, messages, temperature, mt, stream,
+                tools, tool_choice, timeout, user_openid, session_id,
+                extra_headers=extra_headers,
+            )
             metrics.inc(f"model_route.{task_type}.success")
             metrics.observe(f"model_route.{task_type}.duration", time.time() - _start)
             metrics.maybe_report()
@@ -1541,43 +1594,47 @@ class ModelRouter:
                 # 不加此参数时流式调用 usage 为 None，费用统计漏算（用户反馈"流式调用
                 # 不计费"根因）。OpenAI 兼容端点均支持，不支持时 provider 忽略此字段。
                 kwargs["stream_options"] = {"include_usage": True}
-                stream = await asyncio.wait_for(
-                    client.chat.completions.create(**kwargs),
-                    timeout=timeout,
-                )
-                # P0 修复（qq_group 截断根因）：添加 stall timeout 检测死流
-                # 根因：原实现在 async for chunk in stream 中无 stall timeout，
-                # 如果 provider 中途关闭连接且不发送 finish_reason chunk，
-                # 循环会正常结束（无异常），content 被静默截断，
-                # _stream_finish_reason 保持 None → 不触发 length retry → 用户看到截断回复。
-                # 修复：用 asyncio.wait_for 包装每个 chunk 的读取，15 秒无新 chunk → TimeoutError
-                # _stall_timeout 已在循环外初始化（except 分支需引用）
-                _chunk_count = 0
-                _stream_usage = None
-                while True:
-                    try:
-                        chunk = await asyncio.wait_for(
-                            stream.__anext__(),
-                            timeout=_stall_timeout,
-                        )
-                    except StopAsyncIteration:
-                        break  # 流正常结束
-                    _chunk_count += 1
-                    # CR-Major-1：捕获 usage（最后一个 chunk 才有，include_usage=True 时）
-                    _chunk_usage = getattr(chunk, "usage", None)
-                    if _chunk_usage is not None:
-                        _stream_usage = _chunk_usage
-                    try:
-                        _choice = chunk.choices[0]
-                    except (AttributeError, IndexError):
-                        continue
-                    # P0 修复：捕获 finish_reason（最后一个 chunk 才有）
-                    _chunk_fr = getattr(_choice, "finish_reason", None)
-                    if _chunk_fr:
-                        _stream_finish_reason = _chunk_fr
-                    delta = getattr(_choice.delta, "content", None)
-                    if delta:
-                        yield delta
+                # per-provider 锁：agnes 不支持并发，create + stream 消费期间持锁，
+                # 保证同 provider 的流式调用串行；不同 provider 之间不互斥。
+                # 替代已删除的全局 _llm_call_gate（全局锁会阻塞所有 provider）。
+                async with self._get_credential_lock(provider):
+                    stream = await asyncio.wait_for(
+                        client.chat.completions.create(**kwargs),
+                        timeout=timeout,
+                    )
+                    # P0 修复（qq_group 截断根因）：添加 stall timeout 检测死流
+                    # 根因：原实现在 async for chunk in stream 中无 stall timeout，
+                    # 如果 provider 中途关闭连接且不发送 finish_reason chunk，
+                    # 循环会正常结束（无异常），content 被静默截断，
+                    # _stream_finish_reason 保持 None → 不触发 length retry → 用户看到截断回复。
+                    # 修复：用 asyncio.wait_for 包装每个 chunk 的读取，15 秒无新 chunk → TimeoutError
+                    # _stall_timeout 已在循环外初始化（except 分支需引用）
+                    _chunk_count = 0
+                    _stream_usage = None
+                    while True:
+                        try:
+                            chunk = await asyncio.wait_for(
+                                stream.__anext__(),
+                                timeout=_stall_timeout,
+                            )
+                        except StopAsyncIteration:
+                            break  # 流正常结束
+                        _chunk_count += 1
+                        # CR-Major-1：捕获 usage（最后一个 chunk 才有，include_usage=True 时）
+                        _chunk_usage = getattr(chunk, "usage", None)
+                        if _chunk_usage is not None:
+                            _stream_usage = _chunk_usage
+                        try:
+                            _choice = chunk.choices[0]
+                        except (AttributeError, IndexError):
+                            continue
+                        # P0 修复：捕获 finish_reason（最后一个 chunk 才有）
+                        _chunk_fr = getattr(_choice, "finish_reason", None)
+                        if _chunk_fr:
+                            _stream_finish_reason = _chunk_fr
+                        delta = getattr(_choice.delta, "content", None)
+                        if delta:
+                            yield delta
                 # P0 修复：流结束后检测是否收到 finish_reason
                 # 如果未收到，说明 provider 可能中途关闭连接（死流），content 可能被截断
                 if not _stream_finish_reason:
@@ -1735,11 +1792,23 @@ class ModelRouter:
         #   - presence_penalty 仅对条件模式重复有效，对结构化内容重复无效
         #   - frequency_penalty 论文未测试，作为合理启发式保留
         #   - stop 序列 + 后处理清洗是 API 调用场景下的必要兜底
-        fp = config.get("frequency_penalty", 0.3)
+        fp = config.get("frequency_penalty", 1.0)
+        # 优先 WebUI 全局设置（models.frequency_penalty），回退模型配置
+        try:
+            from config import get_frequency_penalty
+            fp = get_frequency_penalty(default=fp)
+        except Exception:
+            pass
         if fp:
             kwargs["frequency_penalty"] = fp
         # 论文验证有效值为 1.2，对条件模式重复有效；对结构化重复效果有限但无副作用
         pp = config.get("presence_penalty", 1.0)
+        # 优先 WebUI 全局设置（models.presence_penalty），回退模型配置
+        try:
+            from config import get_presence_penalty
+            pp = get_presence_penalty(default=pp)
+        except Exception:
+            pass
         if pp:
             kwargs["presence_penalty"] = pp
         # 退化兜底停止序列：当模型开始输出工具定义泄露时立即停止
@@ -2003,11 +2072,14 @@ class ModelRouter:
 
         if attempt < MAX_RETRIES:
             backoff = classified.backoff_seconds if classified.backoff_seconds > 0 else 1 * (attempt + 1)
-            logger.warning("router.retry", task=task_type, model=model,
-                           attempt=attempt + 1, reason=classified.reason.value,
-                           action=classified.action.value,
-                           backoff=f"{backoff:.1f}s",
-                           error=f"{type(e).__name__}: {e}")
+            # P0 修复（2026-08-05）：loguru extra 字段在当前日志格式下不打印，
+            # 导致 router.retry 只显示 event name，看不到 reason/error。
+            # 改为 f-string 写入 message，确保 agnes 失败原因可见。
+            logger.warning(
+                f"router.retry task={task_type} model={model} "
+                f"attempt={attempt + 1} reason={classified.reason.value} "
+                f"action={classified.action.value} backoff={backoff:.1f}s "
+                f"error={type(e).__name__}: {e}")
             await asyncio.sleep(backoff)
             return True
         logger.error("router.retry_exhausted", task=task_type, model=model,
@@ -2038,10 +2110,13 @@ class ModelRouter:
                     tools, tool_choice, extra_headers, config, provider,
                 )
 
-                response = await asyncio.wait_for(
-                    client.chat.completions.create(**kwargs),
-                    timeout=timeout,
-                )
+                # per-provider 锁：agnes 不支持并发，同 provider 的 create 串行；
+                # 不同 provider 之间不互斥（替代已删除的全局 _llm_call_gate）。
+                async with self._get_credential_lock(provider):
+                    response = await asyncio.wait_for(
+                        client.chat.completions.create(**kwargs),
+                        timeout=timeout,
+                    )
                 return await self._handle_route_response(
                     response, task_type, model, stream,
                     user_openid, session_id, provider, tools,
@@ -2092,10 +2167,12 @@ class ModelRouter:
                 model, messages, temperature, mt, False,
                 None, None, None, config, provider,
             )
-            response = await asyncio.wait_for(
-                client.chat.completions.create(**kwargs),
-                timeout=timeout,
-            )
+            # per-provider 锁：agnes 不支持并发，同 provider create 串行
+            async with self._get_credential_lock(provider):
+                response = await asyncio.wait_for(
+                    client.chat.completions.create(**kwargs),
+                    timeout=timeout,
+                )
             self._track_cache(response)
             logger.info("llm.continuation_call", model=model, task=task_type,
                         user_id=user_openid, session_id=session_id,

@@ -252,9 +252,12 @@ async def put_config(body: dict, request: Request) -> Any:
 @router.get("/system/permission-mode", response_model=Envelope[dict])
 async def get_permission_mode() -> Any:
     from security.permission_manager import get_permission_manager, PermissionMode
+    # 面向用户只暴露 3 档（按权限从高到低），底层枚举保留兼容性。
+    # 命名禁用"默认/开发/严格"，前端用中文标签：随心 / 护航 / 谨慎。
+    _user_facing_modes = [PermissionMode.GOAT, PermissionMode.DEFAULT, PermissionMode.STRICT]
     return Envelope(data={
         "mode": get_permission_manager().mode.value,
-        "options": [m.value for m in PermissionMode],
+        "options": [m.value for m in _user_facing_modes],
     })
 
 

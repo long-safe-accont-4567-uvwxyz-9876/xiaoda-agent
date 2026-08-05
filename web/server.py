@@ -634,6 +634,76 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
         await _start_services(app, core)
         logger.info("webui.lifespan.ready")
 
+        # 治本修复（2026-08-05 用户"治标不治本"反馈）：预热 agnes + embed 连接。
+        # 根因：httpx keepalive 连接过期后首次调用需重新 TCP+TLS 握手 6s，
+        #   agnes 首次冷启动 12.5s（握手6s + thinking6.5s），12s timeout 卡边缘 →
+        #   TimeoutError → 用户收不到回复（日志铁证）。
+        # 预热：服务启动时后台 HEAD 请求建立连接，首次对话连接已热（0s 握手）。
+        # keepalive_expiry=300s 保持连接热，正常对话间隔内不过期。
+        async def _prewarm_connections() -> None:
+            import os as _os
+            import httpx as _httpx
+            # 预热 agnes
+            try:
+                _agnes_url = _os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1")
+                from transports.agnes_transport import _get_agnes_http_client
+                _c = _get_agnes_http_client()
+                await _c.head(_agnes_url, timeout=_httpx.Timeout(10.0))
+                logger.info("agnes.prewarm_done")
+            except Exception as _e:
+                logger.debug("agnes.prewarm_failed: {}", _e)
+            # 预热 embed (siliconflow)
+            try:
+                _embed_url = _os.getenv("EMBEDDING_BASE_URL", _os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1"))
+                from utils.http_pool import get_shared_client as _get_sc
+                _c2 = _get_sc()
+                await _c2.head(_embed_url, timeout=_httpx.Timeout(10.0))
+                logger.info("embed.prewarm_done")
+            except Exception as _e:
+                logger.debug("embed.prewarm_failed: {}", _e)
+            # 治本修复（2026-08-05）：预热 XPSystem + MentalState + jieba + constraint
+            # 根因：日志铁证 10:10:18 XPSystem.load → 10:10:25 router.decision，中间 7s 空白。
+            #   XPSystem/MentalState/constraint 单例首次调用触发从 USB 盘（KIOXIA）同步读取
+            #   xp_state.json（26 用户）/ mental_state.json / constraint_lessons.json，
+            #   USB 盘 IO 慢，首次加载 7s 阻塞主消息流程。
+            # 预热：服务启动时后台 to_thread 触发单例初始化，加载到内存。
+            #   首次对话时单例已就绪（<1ms），消除 7s 阻塞。
+            #   配合 message_processor.py 的 fire-and-forget，双保险。
+            async def _prewarm_local_singletons() -> None:
+                import asyncio as _aio
+                async def _warm_xp():
+                    try:
+                        from core.xp_system import get_xp_system
+                        _xp = get_xp_system()
+                        # 触发 _load() 加载到内存
+                        await _aio.to_thread(lambda: _xp.get_state("prewarm"))
+                        logger.info("xp.prewarm_done")
+                    except Exception as _e:
+                        logger.debug("xp.prewarm_failed: {}", _e)
+                async def _warm_mental():
+                    try:
+                        from core.mental_state import get_mental_state_manager
+                        _mgr = get_mental_state_manager()
+                        # 触发 _load_or_init() 加载到内存
+                        await _aio.to_thread(lambda: _mgr.state)
+                        logger.info("mental.prewarm_done")
+                    except Exception as _e:
+                        logger.debug("mental.prewarm_failed: {}", _e)
+                async def _warm_constraint():
+                    try:
+                        from core.constraint_injector import search_constraint_lessons
+                        await _aio.to_thread(search_constraint_lessons, "预热", top_k=1)
+                        logger.info("constraint.prewarm_done")
+                    except Exception as _e:
+                        logger.debug("constraint.prewarm_failed: {}", _e)
+                await _aio.gather(_warm_xp(), _warm_mental(), _warm_constraint())
+            # fire-and-forget：不阻塞服务启动，单例后台预热到内存
+            # message_processor.py 的 fire-and-forget 已兜底，即使预热未完成主流程也不阻塞
+            asyncio.create_task(_prewarm_local_singletons())
+
+        import asyncio as _asyncio
+        _asyncio.create_task(_prewarm_connections())
+
     # 启动事件循环阻塞 watchdog：检测同步阻塞并打印线程栈定位根因
     # 根因：后台任务集体卡 257-265s，_spawn timeout 无法取消同步阻塞
     _stop_watchdog = None

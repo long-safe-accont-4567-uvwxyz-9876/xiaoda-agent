@@ -179,6 +179,63 @@ class TestCallAndParseVerificationLLM:
         assert result == (None, "", None, None)
 
 
+class TestVerificationRetryWallClockGuard:
+    """测试工具后回复完整性重试循环受墙钟硬约束（P0 阻塞修复 2026-08-04）。
+
+    根因：原实现重试循环用固定 timeout=LLM_CALL_TIMEOUT(30s) 且不检查剩余时间，
+    3 次重试最多 90s，远超 VERIFICATION_WALL_TIMEOUT(50s)，日志实测 llm_verify
+    74-89s，导致 main_path 97s + wechat_bot.process_timeout 连锁超时。
+    修复：每轮重试前检查 remaining，<3s 则 break；timeout 用 min(LLM_CALL_TIMEOUT, remaining)。
+    """
+
+    @pytest.mark.asyncio
+    async def test_retry_loop_stops_when_wall_clock_exhausted(self):
+        """墙钟时间耗尽时，重试循环立即停止，不再调用 LLM 重试。
+
+        场景：工具调用后 LLM 返回短开场白"让我查一下"（触发 incomplete retry），
+        但墙钟剩余 <3s。修复前会继续 30s 重试导致超出墙钟；修复后立即 break。
+        """
+        from agent_core.message_processor import MessageProcessorMixin
+
+        proc = _make_processor()
+        trace = MagicMock()
+
+        # 工具调用后 LLM 返回短开场白（触发 incomplete retry 路径）
+        mock_result = MagicMock()
+        mock_result.choices = [MagicMock()]
+        mock_result.choices[0].message.content = "让我查一下"
+        mock_result.choices[0].finish_reason = "stop"
+
+        proc._parse_verification_result = MagicMock(
+            return_value=(None, "让我查一下", None))
+        proc._clean_reply = MagicMock(
+            side_effect=lambda x: x if isinstance(x, str) else "")
+        proc.router.route = AsyncMock(return_value=mock_result)
+
+        # loop_start 使主调用 remaining≈4s（执行），重试循环 remaining=2s（<3 break）
+        loop_start = time.time() - 46
+        _time_calls = [loop_start + 46, loop_start + 48]
+
+        with patch('time.time',
+                   side_effect=lambda: _time_calls.pop(0) if _time_calls else loop_start + 49):
+            result = await MessageProcessorMixin._call_and_parse_verification_llm(
+                proc, [], None, "chat", 0.7, 1024,
+                "uid", "sid", trace, 0, loop_start,
+            )
+
+        # 核心断言：主调用 1 次，重试未调用（墙钟耗尽 break）
+        assert proc.router.route.call_count == 1, \
+            "墙钟耗尽时不应触发重试 LLM 调用"
+        # 返回 force_close 后的 early_reply，重试循环未执行
+        assert result[3] is not None, "应返回 early_reply 而非 None"
+        assert "让我查一下" in result[3]
+        # 确认墙钟耗尽警告已记录
+        _warn_names = [c.args[0] if c.args else c[0]
+                       for c in trace.warning.call_args_list]
+        assert "verification.incomplete_retry_no_time_left" in _warn_names, \
+            "墙钟耗尽时应记录 incomplete_retry_no_time_left 警告"
+
+
 class TestFinalizeVerificationReply:
     """测试 _finalize_verification_reply 降级兜底逻辑。"""
 

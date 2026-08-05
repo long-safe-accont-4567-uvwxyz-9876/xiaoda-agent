@@ -7,8 +7,6 @@ from loguru import logger
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from security.ssrf_guard import validate_url as _ssrf_validate_url
 
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
-
 # 搜索结果缓存：5分钟TTL + LRU 上限
 _search_cache: "OrderedDict[str, tuple[float, Any]]" = OrderedDict()
 _SEARCH_CACHE_TTL = 300.0  # 5分钟
@@ -31,12 +29,22 @@ def _get_primp_client() -> Any:
 
 
 def _get_tavily_client() -> Any:
-    """懒初始化并返回 TavilyClient 单例（API Key 存在时）。"""
+    """懒初始化并返回 TavilyClient 单例（API Key 存在时）。
+
+    动态读取 env（而非模块级常量），避免因 import 顺序导致 .env 尚未加载
+    而读不到 key（config.load_dotenv 在模块导入期执行）。
+    """
     global _tavily_client
-    if _tavily_client is None and TAVILY_API_KEY:
+    key = os.getenv("TAVILY_API_KEY", "")
+    if _tavily_client is None and key:
         from tavily import TavilyClient
-        _tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
+        _tavily_client = TavilyClient(api_key=key)
     return _tavily_client
+
+
+def _tavily_available() -> bool:
+    """动态检测 Tavily 是否可用（API Key 存在）。"""
+    return bool(os.getenv("TAVILY_API_KEY", ""))
 
 
 def _bing_search_sync(query: str, max_results: int = 8) -> list[dict]:
@@ -95,7 +103,7 @@ def _bing_search_sync(query: str, max_results: int = 8) -> list[dict]:
 def _tavily_search_sync(query: str, max_results: int = 6, search_depth: str = "basic",
                         news: bool = False) -> tuple[list[dict], str]:
     """Tavily 搜索。返回 (results, answer)；news=True 走新闻通道（近30天）。"""
-    if not TAVILY_API_KEY:
+    if not _tavily_available():
         return [], ""
     client = _get_tavily_client()
     if client is None:
@@ -169,14 +177,18 @@ async def _do_search(query: str, max_results: int = 8,
 
     优先级：
     1. 时效性查询 → Tavily 新闻（带日期+AI摘要）
-    2. Bing 抓取（免费，重试一次）
-    3. Tavily basic（兜底）
+    2. Tavily basic（质量高、带AI摘要，对中文专有名词/游戏术语匹配准确）
+    3. Bing 抓取（免费兜底）
+
+    修复说明：原实现 Bing 优先，但 Bing 中文搜索会把"纳西妲"（原神角色）
+    匹配成"纳西族"返回无关结果，且 Bing 返回非空结果后不再触发 Tavily 兜底，
+    导致 LLM 拿到无关内容反复搜索直至超时降级。改为 Tavily 优先。
     """
     time_sensitive = _is_time_sensitive(query)
     logger.info("web_search.do_search query={} fresh={}", query[:40], time_sensitive)
 
     # 1. 时效性查询 → Tavily 新闻优先（带日期+AI摘要）
-    if time_sensitive and use_tavily and TAVILY_API_KEY:
+    if time_sensitive and use_tavily and _tavily_available():
         try:
             results, answer = await asyncio.to_thread(
                 _tavily_search_sync, query, max_results, "basic", True)
@@ -185,7 +197,17 @@ async def _do_search(query: str, max_results: int = 8,
         except Exception as e:
             logger.warning("tavily.news_failed error={}", repr(e)[:150])
 
-    # 2. Bing 抓取（免费）
+    # 2. Tavily basic 优先（质量高、带AI摘要，中文专有名词比 Bing 准）
+    if use_tavily and _tavily_available():
+        try:
+            results, answer = await asyncio.to_thread(
+                _tavily_search_sync, query, max_results, "basic", False)
+            if results:
+                return _dedup_results(results), "Tavily", answer
+        except Exception as e:
+            logger.warning("tavily.primary_failed error={}", repr(e)[:150])
+
+    # 3. Bing 抓取（免费兜底）
     results = await asyncio.to_thread(_bing_search_sync, query, max_results)
     if results:
         return _dedup_results(results), "Bing", ""
@@ -194,16 +216,6 @@ async def _do_search(query: str, max_results: int = 8,
     results = await asyncio.to_thread(_bing_search_sync, query, max_results)
     if results:
         return _dedup_results(results), "Bing", ""
-
-    # 3. Tavily basic 兜底
-    if use_tavily and TAVILY_API_KEY:
-        try:
-            results, answer = await asyncio.to_thread(
-                _tavily_search_sync, query, max_results, "basic", time_sensitive)
-            if results:
-                return _dedup_results(results), "Tavily", answer
-        except Exception as e:
-            logger.warning("tavily.fallback_failed error={}", repr(e)[:150])
 
     return [], "", ""
 

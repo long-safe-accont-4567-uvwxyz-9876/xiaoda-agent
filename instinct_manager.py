@@ -268,18 +268,42 @@ class InstinctManager:
         if skipped_duplicates > 0:
             logger.info("instinct.dedup_skipped", count=skipped_duplicates, session=session_id)
         if rows_to_insert:
+            # P0 根治（阻塞根因 2026-08-04 实证修复）：INSERT+commit 改用独立 aiosqlite 连接
+            # 根因复盘（基于 /media/orangepi/KIOXIA/nahida-data/logs/agent.log 实证）：
+            #   1) 原实现用主连接 self.db._conn 做 executemany+commit，aiosqlite 单连接单线程
+            #      串行，commit 独占主连接线程 → 主路径所有 DB 操作排队 → 事件循环冻结。
+            #   2) 第一轮"独立连接"修复（见 git 历史）漏设 synchronous=NORMAL，连接用默认
+            #      synchronous=FULL，每次 commit 都 fsync WAL 文件；USB 盘 fsync 物理耗时
+            #      50-99s（日志 instinct.db_slow elapsed_ms=99540 active_count=5641），
+            #      导致 20:16:48 instinct/concept/_release_after 同时 100s+，连锁触发
+            #      memory.retrieve_timeout → wechat_bot.process_timeout → qq_bot.c2c_timeout。
+            # 根治：与主连接（db/database.py:127）完全一致的 PRAGMA 组合，尤其
+            #   synchronous=NORMAL（WAL 模式下 commit 不 fsync，只在 checkpoint fsync），
+            #   把 commit 从 fsync-bound 降为毫秒级。辅以 cache_size/temp_store 进一步
+            #   降 I/O。WAL 支持多连接并发，busy_timeout 处理偶发写锁竞争。
+            import aiosqlite as _aiosqlite
             try:
-                await self.db._conn.executemany(
-                    """INSERT INTO instincts
-                       (content, confidence, source_session, status, created_at, last_used_at, use_count)
-                       VALUES (?, ?, ?, 'active', ?, ?, 0)""",
-                    rows_to_insert,
-                )
-                await self.db._conn.commit()
-                _db_ms = int((time.time() - _db_t0) * 1000)
-                if _db_ms > 2000:
-                    logger.warning(f"instinct.db_slow elapsed_ms={_db_ms} active_count={len(existing_contents)}")
-                logger.info("instinct.extracted", count=len(rows_to_insert), session=session_id)
+                _w_conn = await _aiosqlite.connect(str(self.db.db_path))
+                _w_conn.row_factory = _aiosqlite.Row
+                await _w_conn.execute("PRAGMA journal_mode=WAL")
+                await _w_conn.execute("PRAGMA busy_timeout=5000")
+                await _w_conn.execute("PRAGMA synchronous=NORMAL")
+                await _w_conn.execute("PRAGMA cache_size=-20000")    # ~20MB
+                await _w_conn.execute("PRAGMA temp_store=MEMORY")
+                try:
+                    await _w_conn.executemany(
+                        """INSERT INTO instincts
+                           (content, confidence, source_session, status, created_at, last_used_at, use_count)
+                           VALUES (?, ?, ?, 'active', ?, ?, 0)""",
+                        rows_to_insert,
+                    )
+                    await _w_conn.commit()
+                    _db_ms = int((time.time() - _db_t0) * 1000)
+                    if _db_ms > 2000:
+                        logger.warning(f"instinct.db_slow elapsed_ms={_db_ms} active_count={len(existing_contents)}")
+                    logger.info("instinct.extracted", count=len(rows_to_insert), session=session_id)
+                finally:
+                    await _w_conn.close()
             except Exception as e:
                 logger.debug("instinct.insert_failed", error=str(e))
 
