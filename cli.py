@@ -23,9 +23,6 @@ import cli_client
 import contextlib
 
 from cli_common import (
-    STYLE,
-    STATUS_MAP,
-    AGENT_NAMES,
     status_translate,
     get_model_info,
     command_entries,

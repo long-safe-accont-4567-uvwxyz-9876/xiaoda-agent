@@ -39,6 +39,7 @@ async def test_model_two_level_no_stacking(monkeypatch):
     }]
     monkeypatch.setattr(cli_client, "discover_models", lambda token: providers)
     app = XiaodaApp()
+    app._ws = object()  # 已连接状态，供多步面板正常弹出（连接守卫）
     async with app.run_test() as pilot:
         await app._open_multistep("/model", app.query_one("#chat"))
         await pilot.pause()

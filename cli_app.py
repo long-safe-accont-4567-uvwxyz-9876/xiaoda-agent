@@ -14,7 +14,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Footer, Input, ListView, Static
 
 import cli_client
-from cli_common import STYLE, status_translate
+from cli_common import STYLE, status_translate, address_term
 
 
 def build_command_groups() -> list[dict]:
@@ -209,7 +209,7 @@ class ChatView(VerticalScroll):
     """消息流：追加用户/助手/状态消息。"""
 
     def add_user(self, text: str) -> None:
-        self.mount(Static(f"🌿 你: {text}", classes="msg user"))
+        self.mount(Static(f"🌿 {address_term()}: {text}", classes="msg user"))
 
     def add_assistant(self, text: str) -> None:
         self.mount(Static(f"小妲: {text}", classes="msg assistant"))
@@ -251,7 +251,7 @@ class XiaodaApp(App):
     def compose(self) -> ComposeResult:
         yield Static("⚜ 小妲 · 白草净华", id="header")
         yield ChatView(id="chat")
-        yield Input(placeholder="🌿 爸爸: 输入 / 打开命令面板…", id="input")
+        yield Input(placeholder=f"🌿 {address_term()}: 输入 / 打开命令面板…", id="input")
         yield Footer()
 
     BINDINGS = [("ctrl+c", "quit", "退出")]
@@ -281,7 +281,6 @@ class XiaodaApp(App):
         on_status 回调可能从 ``asyncio.to_thread`` 的 worker 线程触发，因此对
         widget 的访问要用 ``call_from_thread`` 切回主循环，保证线程安全、不卡 UI。
         """
-        import cli_client
 
         def safe_on_status(text: str) -> None:
             self.call_from_thread(on_status, text)
@@ -356,6 +355,9 @@ class XiaodaApp(App):
 
     async def _open_multistep(self, cmd: str, chat: ChatView) -> None:
         """拉取多步命令的二级数据并弹出选择面板（真实执行在 Task 6 接入）。"""
+        if self._ws is None:
+            chat.add_status("尚未连接主进程")
+            return
         if cmd == "/model":
             providers = await asyncio.to_thread(cli_client.discover_models, self._token)
             opts = model_providers(providers)
