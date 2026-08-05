@@ -284,9 +284,18 @@ def _launch_by_mode(args) -> None:
 
 
 def _run_cli() -> None:
+    """CLI 入口：Textual 可用且为交互终端时走 TUI，否则降级 prompt_toolkit CLI。"""
+    from cli_common import cli_should_use_tui
+    if cli_should_use_tui():
+        try:
+            from cli_app import XiaodaApp
+            XiaodaApp().run()
+            return
+        except Exception:
+            # TUI 启动异常时回退到经典 CLI，不闪退
+            pass
     from cli import CLIInterface
-    cli = CLIInterface()
-    cli.run()
+    CLIInterface().run()
 
 
 def _is_running_in_docker() -> bool:
