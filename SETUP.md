@@ -100,7 +100,7 @@ Embedding 用于情景记忆的语义检索，让 AI 能记住并回忆之前的
 
 | API | 用途 | 获取地址 | 不配置的影响 |
 |-----|------|---------|------------|
-| **Agnes AI** | 图像/视频生成 | [https://agnes-ai.com](https://agnes-ai.com) → 注册 → API Keys | 无法生成图片和视频 |
+| **Agnes AI** | 图像/视频生成 | [https://agnes-ai.cn](https://agnes-ai.cn) → 注册 → API Keys | 无法生成图片和视频 |
 | **Tavily** | AI 搜索引擎 | [https://tavily.com](https://tavily.com) → 注册 → API Keys | 搜索功能降级为 DuckDuckGo |
 | **ImgBB** | 图片上传 | [https://api.imgbb.com](https://api.imgbb.com) → 注册 → API Key | 无法上传图片到外链 |
 | **WolframAlpha** | 知识计算 | [https://products.wolframalpha.com/api/](https://products.wolframalpha.com/api/) → Get AppID | 无法使用精确数学/科学计算 |

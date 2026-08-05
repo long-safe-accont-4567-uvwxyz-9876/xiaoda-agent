@@ -84,6 +84,68 @@ _PROVIDER_METADATA: dict = _load_provider_metadata()
 _PROVIDER_CAPS_FROM_FILE: dict = _PROVIDER_METADATA.get("providers", {}) if isinstance(_PROVIDER_METADATA, dict) else {}
 
 
+# ── Ollama 模型名映射（真实代理转发本地 Ollama 的配套翻译机制） ──
+# 背景：路由会把工作流/云平台（如硅基流动）写死的模型名（如 "deepseek-ai/DeepSeek-V3-0324"）
+# 直接透传给 provider。本地 Ollama 只有用户 own 的模型，云模型名不存在会报 "model not found"。
+# 因此在把请求真正转发给本地 Ollama（OLLAMA_BASE_URL，如 http://localhost:11434/v1）之前，
+# 先做"翻译（映射）"：把云模型名映射为用户本地实际 pull 的模型名。
+# 配置来源（无硬编码）：config/provider_metadata.json 的 ollama.model_name_map + ollama.default_model，
+# 用户可编辑，也可用环境变量覆盖（见下方 _OLLAMA_MODEL_MAP_OVERRIDE）。
+def _load_ollama_model_map() -> tuple[dict, str]:
+    """从 provider_metadata.json + 环境变量加载 Ollama 模型名映射。"""
+    _meta = _PROVIDER_CAPS_FROM_FILE.get("ollama", {}) if isinstance(_PROVIDER_CAPS_FROM_FILE, dict) else {}
+    _map: dict = {}
+    _default = ""
+    if isinstance(_meta, dict):
+        _mm = _meta.get("model_name_map")
+        if isinstance(_mm, dict):
+            # 过滤以下划线开头的元字段（如 "_comment"）
+            _map = {k: v for k, v in _mm.items() if not k.startswith("_")}
+        _default = str(_meta.get("default_model", "") or "")
+    # 环境变量覆盖：OLLAMA_MODEL_MAP 为 JSON 字典，OLLAMA_DEFAULT_MODEL 为单个模型名
+    _env_map = os.getenv("OLLAMA_MODEL_MAP", "").strip()
+    if _env_map:
+        try:
+            import json as _json
+            _parsed = _json.loads(_env_map)
+            if isinstance(_parsed, dict):
+                _map = {k: v for k, v in _parsed.items() if isinstance(v, str) and v}
+        except (ValueError, TypeError):
+            logger.warning("router.ollama_model_map_env_invalid raw={}", _env_map)
+    _env_default = os.getenv("OLLAMA_DEFAULT_MODEL", "").strip()
+    if _env_default:
+        _default = _env_default
+    return _map, _default
+
+
+_OLLAMA_MODEL_MAP, _OLLAMA_DEFAULT_MODEL = _load_ollama_model_map()
+
+
+def translate_model_for_provider(provider: str, model: str) -> str:
+    """把工作流/云平台模型名翻译为该 provider 实际使用的模型名。
+
+    仅对 Ollama 生效（本地模型名与云平台模型名不一致时会报 "model not found"）：
+      1. 精确命中 model_name_map → 用映射后的本地模型名
+      2. 形如 "org/model" 的云模型名（含 "/"，非本地模型）→ 用用户配置的 default_model
+      3. 其余原样透传（用户可直接填本地模型名，如 "qwen2.5"）
+    其他 provider 一律原样返回，不做任何改动。
+    """
+    if provider != "ollama":
+        return model
+    if not model:
+        return _OLLAMA_DEFAULT_MODEL or model
+    _mapped = _OLLAMA_MODEL_MAP.get(model)
+    if _mapped:
+        if _mapped != model:
+            logger.debug("router.ollama_model_mapped from={} to={}", model, _mapped)
+        return _mapped
+    if "/" in model and _OLLAMA_DEFAULT_MODEL:
+        # 云平台风格模型名（含组织/前缀，如 "deepseek-ai/DeepSeek-V3-0324"）通常不是本地模型
+        logger.info("router.ollama_model_fallback from={} to={}", model, _OLLAMA_DEFAULT_MODEL)
+        return _OLLAMA_DEFAULT_MODEL
+    return model
+
+
 def _load_provider_base_url(provider: str, env_var: str) -> str:
     """从环境变量 + provider_metadata.json 加载 provider base_url（无硬编码）。"""
     _env = os.getenv(env_var, "")
@@ -187,7 +249,7 @@ FALLBACK_ROUTE = {
 #        该文件标注了每个值的 doc_url + doc_note（官方文档链接 + 溯源说明）
 #     3. None（不裁剪，安全兜底）
 #   官方文档溯源：
-#     - agnes-2.0-flash: 65536（https://docs.agnes-ai.com/，超过返回 500）
+#     - agnes-2.0-flash: 65536（https://docs.agnes-ai.cn/，超过返回 500）
 #     - mimo-v2.5:       131072（https://www.xiaomimimo.com/）
 #     - ollama:          视本地模型而定，默认不裁剪
 #
@@ -858,7 +920,7 @@ class ModelRouter:
     # 注意：这些是 fallback 值，当 provider 的 default_model 为空时使用
     # 建议通过 /models/health-check 端点定期验证这些模型ID是否仍然可用
     _CUSTOM_PROVIDER_DEFAULT_MODELS: ClassVar[dict[str, str]] = {
-        "ollama": "qwen2.5",
+        "ollama": "qwen2.5:latest",
         "siliconflow": "THUDM/GLM-4-9B-0414",
         "openrouter": "openrouter/free",
         "modelscope": "Qwen/Qwen3-8B",
@@ -1510,8 +1572,10 @@ class ModelRouter:
         """构造流式调用 kwargs。"""
         # P0 修复：按 provider 上限裁剪 max_tokens（agnes 上限 65536）
         mt = ModelRouter._cap_max_tokens(mt, provider)
+        # Ollama 模型名翻译：把工作流/云模型名映射为本地实际模型名（真实代理核心配套）
+        _send_model = translate_model_for_provider(provider, model)
         kwargs = {
-            "model": model,
+            "model": _send_model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": mt,
@@ -1777,8 +1841,11 @@ class ModelRouter:
         """构造非流式/流式路由调用的 kwargs。"""
         # P0 修复：按 provider 上限裁剪 max_tokens（agnes 上限 65536）
         max_tokens = ModelRouter._cap_max_tokens(max_tokens, provider)
+        # Ollama 模型名翻译：把工作流/云模型名映射为本地实际模型名，
+        # 避免请求转发到本地 Ollama 时因模型不存在报错（真实代理的核心配套）。
+        _send_model = translate_model_for_provider(provider, model)
         kwargs = {
-            "model": model,
+            "model": _send_model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
