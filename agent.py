@@ -51,7 +51,7 @@ def _setup_windows_event_loop() -> None:
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
-def _handle_first_run_mode(args) -> None:
+def _handle_first_run_mode(mode: str) -> None:
     """首次运行时按启动模式选择配置引导方式。
 
     - desktop 模式：启动 pywebview 独立窗口，窗口内 WebUI 自动跳转 /setup
@@ -61,11 +61,11 @@ def _handle_first_run_mode(args) -> None:
     - web 模式：启动 Web UI（浏览器），/setup 页面引导配置
     - CLI 模式：启动交互式向导 wizard_main()
     """
-    if args.desktop:
+    if mode == "desktop":
         print("\n  [!] 检测到首次运行，将启动独立窗口")
         print("      请在窗口内完成 API Key 配置\n")
-    elif args.web or os.getenv("WEB_UI_ENABLED", "").lower() in ("true", "1", "yes"):
-        # 与 main() 最终启动判断一致：WEB_UI_ENABLED=true 时也走 Web UI（Docker 常见），
+    elif mode == "web":
+        # 与 _resolved_mode() 判断一致：WEB_UI_ENABLED=true 时也走 Web UI（Docker 常见），
         # 避免首次运行错误走 CLI 向导（stdin 不可交互时 EOFError 卡死）
         print("\n  [!] 检测到首次运行，将启动 Web UI")
         print("      请在浏览器中完成 API Key 配置\n")
@@ -75,6 +75,80 @@ def _handle_first_run_mode(args) -> None:
         wizard_main()
         # 向导完成后重新加载 .env
         load_dotenv(ENV_PATH, override=True)
+
+
+def _is_packaged_windows() -> bool:
+    """是否为 PyInstaller 打包的 Windows exe。"""
+    return sys.platform == "win32" and getattr(sys, "frozen", False)
+
+
+def _webview2_installed() -> bool:
+    """检测 Microsoft Edge WebView2 Runtime 是否安装（与 start-windows.bat 逻辑一致）。
+
+    桌面模式（pywebview）依赖 WebView2，缺失时回退到 Web 浏览器模式。
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+        _guid = (r"SOFTWARE\Microsoft\EdgeUpdate\Clients"
+                 r"\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}")
+        _guid_wow = (r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients"
+                     r"\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}")
+        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            for key in (_guid_wow, _guid):
+                try:
+                    with winreg.OpenKey(hive, key) as k:
+                        winreg.QueryValueEx(k, "pv")
+                        return True
+                except OSError:
+                    continue
+    except Exception:
+        pass
+    return False
+
+
+def _resolved_mode(args) -> str:
+    """解析最终启动模式（desktop / web / cli）。
+
+    - 显式参数优先：--desktop / --web / --cli
+    - 其次 WEB_UI_ENABLED 环境变量（Docker 常见）
+    - 打包的 Windows exe 双击（无任何参数）：默认桌面原生窗口，
+      WebView2 缺失时回退浏览器 —— 这是「软件窗口」入口
+    - 其余（开发/Docker/Linux）默认 CLI
+    """
+    if args.desktop:
+        return "desktop"
+    if args.web or os.getenv("WEB_UI_ENABLED", "").lower() in ("true", "1", "yes"):
+        return "web"
+    if args.cli:
+        return "cli"
+    if _is_packaged_windows():
+        return "desktop" if _webview2_installed() else "web"
+    return "cli"
+
+
+def _should_watchdog_software_window(args) -> bool:
+    """双击 exe（无任何模式参数）且为打包的 Windows 程序时，走看门狗软件窗口。"""
+    return _is_packaged_windows() and not (args.desktop or args.web or args.cli)
+
+
+def _open_browser_in_background(host: str, port: int) -> None:
+    """后台线程延时打开系统浏览器（WebView2 缺失回退到 Web 模式时使用）。"""
+    import threading
+    import time
+    import webbrowser
+    display_host = "localhost" if host in ("0.0.0.0", "::", "") else host
+    url = f"http://{display_host}:{port}"
+
+    def _open() -> None:
+        time.sleep(3)  # 等服务就绪
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+
+    threading.Thread(target=_open, daemon=True).start()
 
 
 def main() -> None:
@@ -104,6 +178,7 @@ def main() -> None:
     # 默认模式参数
     parser.add_argument("--web", action="store_true", help="启动 Web UI 模式")
     parser.add_argument("--desktop", action="store_true", help="启动桌面模式（pywebview 原生窗口）")
+    parser.add_argument("--cli", action="store_true", help="启动 CLI 交互界面")
     parser.add_argument("--port", type=int, default=_safe_int(os.getenv("WEBUI_PORT", "8082"), 8082), help="Web UI 端口")
     parser.add_argument("--host", type=str, default=os.getenv("WEBUI_HOST", "127.0.0.1"), help="Web UI 监听地址")
     parser.add_argument("--setup", action="store_true", help="运行配置向导")
@@ -162,13 +237,39 @@ def main() -> None:
             # 重新加载 .env 使默认值生效
             load_dotenv(ENV_PATH, override=True)
 
-        # 按启动模式选择配置引导：web/desktop 走 WebUI /setup 页面，
+        # 按解析出的启动模式选择配置引导：web/desktop 走 WebUI /setup 页面，
         # CLI 模式走交互式向导。desktop 模式 stdin 不可交互，必须走 WebUI。
-        _handle_first_run_mode(args)
+        _handle_first_run_mode(_resolved_mode(args))
 
-    if args.desktop:
+    # 启动路由（含双击 exe 默认的看门狗软件窗口）
+    _launch_by_mode(args)
+
+
+def _launch_by_mode(args) -> None:
+    """按解析出的模式启动主程序。
+
+    双击打包后的 Windows exe（无任何参数）时，默认进入「软件窗口」：
+    以看门狗方式守护主进程（崩溃/卡死 60s 自动重启），WebView2 缺失时
+    回退到浏览器。命令行显式指定 --desktop/--web/--cli 时直接启动对应模式。
+    """
+    mode = _resolved_mode(args)
+
+    if _should_watchdog_software_window(args):
+        if mode == "web":
+            # WebView2 缺失回退到浏览器：后台延时打开默认浏览器
+            _open_browser_in_background(args.host, args.port)
+        from utils.watchdog_runner import run_watchdog_cli
+        wd_argv = [
+            "--port", str(args.port),
+            "--host", args.host,
+            "--mode", mode,
+            "--log-file", os.path.join("logs", "watchdog.log"),
+        ]
+        sys.exit(run_watchdog_cli(wd_argv))
+
+    if mode == "desktop":
         _run_desktop(args.host, args.port)
-    elif args.web or os.getenv("WEB_UI_ENABLED", "").lower() in ("true", "1", "yes"):
+    elif mode == "web":
         _run_web(args.host, args.port)
     else:
         _run_cli()

@@ -106,13 +106,15 @@ Delete "$APPDATA\Xiaoda Agent\config\agents\yinlang.json"
 Delete "$APPDATA\Xiaoda Agent\config\agents\xilian.json"
 Delete "$APPDATA\Xiaoda Agent\config\agents\nike.json"
 ClearErrors
-; 快捷方式必须指向 start-windows.bat（唯一启动入口）：
-;   - 启动看门狗，崩溃时自动重启
+; 主快捷方式直接指向 xiaoda-agent.exe（软件窗口入口）：
+;   - exe 双击默认启动桌面原生窗口，内部已带看门狗，崩溃/卡死时自动重启
+;   - WebView2 缺失时自动回退到浏览器
 ;   - 更新检查已分离到独立的「检查更新」快捷方式，启动时不再自动检查
-;   - 直接运行 xiaoda-agent.exe 会绕过看门狗保护，更新后可能崩溃
-CreateShortCut "$DESKTOP\小妲Agent.lnk" "$INSTDIR\start-windows.bat" "--desktop" "$INSTDIR\xiaoda-icon.ico" 0
+CreateShortCut "$DESKTOP\小妲Agent.lnk" "$INSTDIR\xiaoda-agent.exe" "" "$INSTDIR\xiaoda-icon.ico" 0
 CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
-CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\小妲Agent.lnk" "$INSTDIR\start-windows.bat" "--desktop" "$INSTDIR\xiaoda-icon.ico" 0
+CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\小妲Agent.lnk" "$INSTDIR\xiaoda-agent.exe" "" "$INSTDIR\xiaoda-icon.ico" 0
+; CLI 命令行入口：双击进入 CLI 界面（安装目录已加入 PATH，cmd 输入 `xiaoda` 亦可进入）
+CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\CLI命令行.lnk" "$INSTDIR\xiaoda.bat" "" "$INSTDIR\xiaoda-icon.ico" 0
 ; 「检查更新」独立快捷方式 —— 启动主程序不再自动检查更新，用户需手动点此快捷方式
 CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\检查更新.lnk" "$INSTDIR\auto-update.bat" "" "$INSTDIR\xiaoda-icon.ico" 0
 CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\卸载.lnk" "$INSTDIR\uninstall.exe"
@@ -168,7 +170,7 @@ Delete "$INSTDIR\xiaoda-icon.ico"
 Delete "$INSTDIR\.version"
 Delete "$INSTDIR\.auto_update"
 Delete "$INSTDIR\.env.example"
-Delete "$INSTDIR\start-windows.bat"
+Delete "$INSTDIR\xiaoda.bat"
 Delete "$INSTDIR\auto-update.bat"
 Delete "$INSTDIR\auto-update.ps1"
 Delete "$INSTDIR\open-browser.ps1"

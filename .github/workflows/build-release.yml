@@ -374,7 +374,7 @@ jobs:
           # 修复（v0.5.41）：原 ErrorActionPreference=Continue 会让 copy 失败被静默吞掉，
           # 导致 bat 脚本缺失但 step 仍显示 success，setup.exe 里没有 bat
           $requiredScripts = @(
-            @{ src = "scripts/start-windows.bat"; dst = "dist/xiaoda-agent/start-windows.bat" },
+            @{ src = "scripts/xiaoda.bat";      dst = "dist/xiaoda-agent/xiaoda.bat" },
             @{ src = "scripts/auto-update.bat";  dst = "dist/xiaoda-agent/auto-update.bat" },
             @{ src = "scripts/auto-update.ps1";  dst = "dist/xiaoda-agent/auto-update.ps1" },
             @{ src = "scripts/open-browser.ps1"; dst = "dist/xiaoda-agent/open-browser.ps1" },
