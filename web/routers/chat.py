@@ -143,11 +143,27 @@ async def get_messages(session_id: str, request: Request,
 
 @router.delete("/sessions/{session_id}", response_model=Envelope[dict])
 async def delete_session(session_id: str, request: Request) -> Any:
+    """删除会话（原子事务）。
+
+    与 list_sessions / get_messages 的匹配逻辑保持一致：
+    若存在 session_id 记录则按 session_id 删，否则回退到 user_id 匹配。
+    使用 write_transaction 串行化写入，避免 auto_commit 分裂导致的
+    部分成功（日志已落盘但审计未写入）或并发脏写。
+    """
     core = request.app.state.core
-    await core.db.execute(
-        "DELETE FROM conversation_logs WHERE session_id=?", (session_id,))
-    await core.db.insert_audit_log("webui.session.delete", "webui", session_id)
-    await core.db.commit()
+    async with core.db.write_transaction():
+        # 优先按 session_id 精确删除；若无命中（例如微信等通道 session_id 为空，
+        # 仅依赖 user_id 存储），则回退到 user_id 匹配
+        cur = await core.db._conn.execute(
+            "DELETE FROM conversation_logs WHERE session_id=?", (session_id,))
+        if cur.rowcount == 0:
+            await core.db._conn.execute(
+                "DELETE FROM conversation_logs WHERE user_id=?", (session_id,))
+        await core.db._conn.execute(
+            """INSERT INTO audit_logs (timestamp, event_type, user_id, detail)
+               VALUES (?, ?, ?, ?)""",
+            (time.time(), "webui.session.delete", "webui", session_id),
+        )
     return Envelope(data={"deleted": session_id})
 
 
