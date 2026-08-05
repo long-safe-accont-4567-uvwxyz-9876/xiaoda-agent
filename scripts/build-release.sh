@@ -156,7 +156,7 @@ do_build() {
 
         info "Copying Windows launcher bat into dist directory..."
         # 与 CI 保持一致的 5 个启动脚本清单，本地构建也不能漏掉 auto-update.ps1
-        local _win_scripts=("start-windows.bat" "auto-update.bat" "auto-update.ps1" "open-browser.ps1" "doctor.bat")
+        local _win_scripts=("xiaoda.bat" "auto-update.bat" "auto-update.ps1" "open-browser.ps1" "doctor.bat")
         for _s in "${_win_scripts[@]}"; do
             if [ ! -f "$SCRIPT_DIR/$_s" ]; then
                 die "Required Windows script not found: $SCRIPT_DIR/$_s"
