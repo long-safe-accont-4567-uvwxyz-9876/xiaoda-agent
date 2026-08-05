@@ -103,31 +103,47 @@ setup_cli_command() {
         warn "请先重新打包安装包，或手动运行: python $INSTALL_DIR/agent.py --cli"
         return
     fi
-    chmod +x "$cli"
 
-    # 优先尝试 /usr/local/bin（免改用户 shell 配置，全局可用）
-    if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
-        ln -sf "$cli" /usr/local/bin/xiaoda
-        info "已创建命令: /usr/local/bin/xiaoda"
+    # 容错：chmod/ln 失败仅告警，绝不中止安装（set -euo pipefail 下需显式守护）
+    if ! chmod +x "$cli" 2>/dev/null; then
+        warn "无法设置 $cli 可执行权限，请手动运行: chmod +x $cli"
         return
     fi
 
-    # 需要 sudo 时写入 /usr/local/bin
+    # 已注册到 /usr/local/bin：软链成功即视为完成
+    if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+        if ln -sf "$cli" /usr/local/bin/xiaoda 2>/dev/null; then
+            info "已创建命令: /usr/local/bin/xiaoda"
+            return
+        fi
+        warn "写入 /usr/local/bin 失败，尝试其他方式"
+    fi
+
+    # 需要 sudo 时写入 /usr/local/bin（sudo -n true 不保证 sudo ln 必成功，故对 ln 单独容错）
     if [ -d /usr/local/bin ] && sudo -n true 2>/dev/null; then
-        sudo ln -sf "$cli" /usr/local/bin/xiaoda
-        info "已创建命令: /usr/local/bin/xiaoda"
-        return
+        if sudo -n ln -sf "$cli" /usr/local/bin/xiaoda 2>/dev/null; then
+            info "已创建命令: /usr/local/bin/xiaoda"
+            return
+        fi
+        warn "sudo 写入 /usr/local/bin 失败，尝试其他方式"
     fi
 
     # 兜底：把安装目录的 scripts 加入 ~/.bashrc 的 PATH
     local bashrc="$HOME/.bashrc"
     local line="export PATH=\"$INSTALL_DIR/scripts:\$PATH\""
-    if [ -f "$bashrc" ] && ! grep -qF "$INSTALL_DIR/scripts" "$bashrc"; then
-        echo "$line" >> "$bashrc"
+    if grep -qF "$INSTALL_DIR/scripts" "$bashrc" 2>/dev/null; then
+        info "PATH 已包含 $INSTALL_DIR/scripts"
+        return
+    fi
+    if [ ! -f "$bashrc" ]; then
+        warn "未找到 ~/.bashrc，无法自动配置 PATH"
+        warn "请手动执行: export PATH=\"$INSTALL_DIR/scripts:\$PATH\""
+        return
+    fi
+    if echo "$line" >> "$bashrc" 2>/dev/null; then
         info "已将 $INSTALL_DIR/scripts 加入 ~/.bashrc 的 PATH"
     else
-        warn "未自动配置 PATH，请手动执行: export PATH=\"$INSTALL_DIR/scripts:\$PATH\""
-        warn "或: sudo ln -sf $cli /usr/local/bin/xiaoda"
+        warn "写入 ~/.bashrc 失败，请手动执行: export PATH=\"$INSTALL_DIR/scripts:\$PATH\""
     fi
 }
 
