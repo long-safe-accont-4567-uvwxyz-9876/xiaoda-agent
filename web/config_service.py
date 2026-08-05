@@ -275,10 +275,11 @@ class ConfigService:
                 self._assign(path, old_value)
                 logger.error("config_service.set_rollback path={} reason=save_failed", path)
                 raise
-        # 审计日志：models. 路径写入记录简洁 INFO（无堆栈），便于追踪模型配置变更
+        # 审计日志：models. 路径写入。含调用栈，用于定位模型配置被反复覆盖为 mimo 的根因。
         if path.startswith("models."):
-            logger.info("config_service.models_write path={} value={}",
-                        path, str(value)[:100])
+            _stack = "".join(traceback.format_stack(limit=12)[:-1])
+            logger.info("config_service.models_write path={} value={} stack=\n{}",
+                        path, str(value)[:100], _stack)
         self._notify(path, value)
 
     def set_many(self, updates: dict[str, Any]) -> None:
@@ -312,8 +313,9 @@ class ConfigService:
             # 对 models. 路径记录审计日志
             models_paths = [p for p in updates if p.startswith("models.")]
             if models_paths:
-                logger.info("config_service.models_batch_write paths={}",
-                            ",".join(models_paths))
+                _stack = "".join(traceback.format_stack(limit=12)[:-1])
+                logger.info("config_service.models_batch_write paths={} stack=\n{}",
+                            ",".join(models_paths), _stack)
             for path, value in updates.items():
                 self._notify(path, value)
 

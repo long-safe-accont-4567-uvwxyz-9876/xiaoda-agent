@@ -235,12 +235,30 @@ def _command_entries() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     return public, owner
 
 
-def _get_model_info() -> str:
-    model_id = ROUTE_TABLE.get("chat", {}).get("model", "mimo-v2.5")
-    provider = ROUTE_TABLE.get("chat", {}).get("client", "")
+def _get_model_info(router: Any = None) -> str:
+    """返回当前聊天模型显示名，优先读 router 的实际模型（与 WebUI 同步）。
+
+    旧实现直接读静态 ROUTE_TABLE（.env 默认 mimo-v2.5），不反映 WebUI 切换后
+    的模型。现改为以 router.get_current_chat_model() 为单一数据源（set_chat_model
+    是 CLI 与 WebUI 共用的唯一切换入口，CLI 启动时 _restore_saved_model 已恢复
+    持久化值），保证 CLI 与 WebUI「一变都变」。
+    """
+    _cur = None
+    if router is not None:
+        try:
+            _cur = router.get_current_chat_model()
+        except Exception:
+            _cur = None
+    if not _cur:
+        _cur = {
+            "provider": ROUTE_TABLE.get("chat", {}).get("client", ""),
+            "model_id": ROUTE_TABLE.get("chat", {}).get("model", "mimo-v2.5"),
+        }
+    provider = _cur.get("provider", "") or ""
+    model_id = _cur.get("model_id", "") or ""
     if provider and provider != "mimo":
         return f"{provider}/{model_id}"
-    return f"{model_id}"
+    return model_id or "mimo-v2.5"
 
 
 def _typewriter(text: str, delay: float | None = None) -> None:
@@ -309,10 +327,38 @@ class CLIInterface:
 
     async def _init(self) -> None:
         await self.bot.init()
+        self._restore_saved_model()
         logger.info("cli.initialized")
 
+    def _restore_saved_model(self) -> None:
+        """恢复上次持久化的聊天模型（一并再同步）。
+
+        CLI 与 WebUI 是两个独立进程：WebUI 通过 set_chat_model 把模型持久化到
+        config_service 的 models.chat_model，并只在 web.server 启动时用
+        _restore_chat_model 恢复。CLI 进程没有该恢复逻辑，导致欢迎界面显示默认
+        模型（mimo-v2.5）而非 WebUI 实际切换的模型。这里从同一持久化来源恢复
+        _current_chat_model，实现 CLI 与 WebUI「一变都变」。
+        """
+        try:
+            from web.config_service import get_config_service
+            chat_model = get_config_service().get("models.chat_model")
+            if not (isinstance(chat_model, dict)
+                    and chat_model.get("provider") and chat_model.get("model_id")):
+                return
+            router = getattr(self.bot, "router", None)
+            if router is None:
+                return
+            router._current_chat_model = {
+                "provider": chat_model["provider"],
+                "model_id": chat_model["model_id"],
+            }
+            logger.info("cli.saved_model_restored provider={} model={}",
+                        chat_model["provider"], chat_model["model_id"])
+        except Exception:
+            logger.debug("cli.saved_model_restore_failed", exc_info=True)
+
     def _print_welcome(self) -> None:
-        model_id = _get_model_info()
+        model_id = _get_model_info(getattr(self.bot, "router", None))
 
         ascii_lines = NAHIDA_ASCII.split("\n")
         while ascii_lines and not ascii_lines[-1].strip():
@@ -417,7 +463,7 @@ class CLIInterface:
 
     def _check_qq_bot(self) -> Any:
         try:
-            r = subprocess.run(["systemctl", "is-active", "qq-agent"],
+            r = subprocess.run(["systemctl", "is-active", "nahida-web"],
                                capture_output=True, text=True, timeout=5, check=False)
             return r.stdout.strip() == "active"
         except Exception:
@@ -428,7 +474,7 @@ class CLIInterface:
         if not self._check_qq_bot():
             print(f"  {_C.LYELLOW}QQ Bot 服务未运行，正在启动...{_C.RST}")
             try:
-                subprocess.run(["sudo", "systemctl", "start", "qq-agent"],
+                subprocess.run(["sudo", "systemctl", "start", "nahida-web"],
                                capture_output=True, timeout=30, check=False)
                 time.sleep(2)
                 if self._check_qq_bot():

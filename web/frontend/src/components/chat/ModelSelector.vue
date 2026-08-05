@@ -69,10 +69,24 @@ function isCurrent(provider: string, modelId: string): boolean {
   return provider === currentModel.value.provider && modelId === currentModel.value.model_id
 }
 
+// 切换锁：防止单次选择触发重复 POST（历史 bug：一次点击引发 request storm，
+// 竞态下最后一次写覆盖用户选择，导致模型反复被改回 mimo）。切换期间忽略重复点击。
+let switching = false
+
 async function selectModel(provider: string, model: ModelInfo) {
+  if (switching) return
   if (isCurrent(provider, model.id)) {
     showPopover.value = false
     return
+  }
+  switching = true
+  // 立即关闭弹层，移除可点击目标，避免用户在切换期间再次点击造成重复请求
+  showPopover.value = false
+  // 乐观更新 UI，让选择即时生效（避免用户因无响应而反复点击）
+  currentModel.value = {
+    provider,
+    model_id: model.id,
+    label: buildModelLabel(provider, model.id)
   }
   try {
     const agent = chat.currentAgent
@@ -85,18 +99,16 @@ async function selectModel(provider: string, model: ModelInfo) {
       // 主体小妲活跃：更新 ROUTE_TABLE["chat"]
       await post('/models/chat-model', { provider, model_id: model.id })
     }
-    currentModel.value = {
-      provider,
-      model_id: model.id,
-      label: buildModelLabel(provider, model.id)
-    }
-    showPopover.value = false
     emit('change', provider, model.id)
     if (!model.tool_calling) {
       message.warning(t('modelSelector.noToolSupport'))
     }
   } catch (e: any) {
+    // 失败时回滚到后端真实值，避免乐观更新显示错误模型
+    await fetchCurrentModel()
     message.error(e.message || t('modelSelector.switchFailed'))
+  } finally {
+    switching = false
   }
 }
 

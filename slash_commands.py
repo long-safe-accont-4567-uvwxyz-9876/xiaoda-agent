@@ -530,20 +530,19 @@ class SlashCommandHandler:
             lines.append("✅ 错误监控: 未启用")
         try:
             result = await asyncio.create_subprocess_exec(
-                "systemctl", "is-active", "qq-agent",
+                "systemctl", "is-active", "nahida-web",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             stdout_bytes, _ = await asyncio.wait_for(result.communicate(), timeout=5)
             status = stdout_bytes.decode().strip() or "未知"
             status_icon = "🟢" if status == "active" else "🔴"
-            lines.append(f"{status_icon} qq-agent: {status}")
+            lines.append(f"{status_icon} nahida-web: {status}")
         except (OSError, RuntimeError):
-            lines.append("🔘 qq-agent: 状态未知")
+            lines.append("🔘 nahida-web: 状态未知")
         if self._router:
             label = self._router.get_model_preference_label()
-            from model_router import ROUTE_TABLE
-            model_id = ROUTE_TABLE.get("chat", {}).get("model", "unknown")
-            lines.append(f"🤖 当前模型: {label} ({model_id})")
+            pref = self._router.get_model_preference()
+            lines.append(f"🤖 当前模型: {label} ({pref})")
         return "\n".join(lines)
 
     async def _cmd_cam(self, args: str, user_id: str) -> str:
