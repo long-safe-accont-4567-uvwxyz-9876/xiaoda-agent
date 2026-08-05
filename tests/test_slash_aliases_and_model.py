@@ -22,6 +22,16 @@ from slash_commands import (
     resolve_command,
 )
 
+# readline 仅在部分平台可用（Windows 原生终端无 readline）。cli._cli_completer 只在
+# readline 存在时才定义，_complete 也依赖 readline；缺省时跳过 CLI 补全相关测试。
+try:
+    import readline as _rtl  # noqa: F401
+    _HAS_READLINE = True
+except ImportError:
+    _HAS_READLINE = False
+
+_skip_no_readline = pytest.mark.skipif(not _HAS_READLINE, reason="readline unavailable")
+
 
 # ── 别名映射 ──────────────────────────────────────────────
 
@@ -55,6 +65,19 @@ def test_resolve_command_case_and_args():
     """resolve_command 应忽略大小写并丢弃参数。"""
     assert resolve_command("/M foo bar") == "/model"
     assert resolve_command("/MODEL") == "/model"
+
+
+def test_resolve_command_empty_input():
+    """空/纯空白输入不应抛 IndexError（CodeRabbit resolve_command 空输入 bug 回归）。"""
+    assert resolve_command("") == ""
+    assert resolve_command("   ") == ""
+    assert resolve_command("\n\t") == ""
+
+
+def test_resolve_command_no_index_error_for_ownership():
+    """is_owner_command 对空输入应返回 False 而不抛异常。"""
+    handler = SlashCommandHandler()
+    assert handler.is_owner_command("") is False
 
 
 def test_is_owner_command_with_alias():
@@ -150,6 +173,21 @@ async def test_cmd_model_switch_valid():
     assert "已切换到 agnes-2.0-flash（agnes）" in result
     router.set_chat_model.assert_called_once_with("agnes", "agnes-2.0-flash")
     router.set_model_preference.assert_called_once_with("agnes/agnes-2.0-flash")
+
+
+def test_set_model_preference_does_not_requery_switch():
+    """set_model_preference("provider/model") 不应再触发 set_chat_model（QODO 双重切换 bug 回归）。
+
+    set_chat_model 是 CLI 与 WebUI 共用的唯一切换入口，_cmd_model 已先调用；
+    set_model_preference 只应记录偏好标记，避免模型被切换两次。
+    """
+    from model_router import ModelRouter
+    router = object.__new__(ModelRouter)
+    router._model_preference = "mimo"
+    router.set_chat_model = MagicMock()
+    assert router.set_model_preference("agnes/agnes-2.0-flash") is True
+    router.set_chat_model.assert_not_called()
+    assert router._model_preference == "agnes/agnes-2.0-flash"
 
 
 @pytest.mark.asyncio
@@ -250,7 +288,7 @@ def test_list_discovered_model_ids():
         {"provider": "agnes", "models": [{"id": "agnes-2.0-flash"}]},
         {"provider": "mimo", "models": [{"id": "mimo-v2.5"}, {"id": "mimo-v2.5-pro"}]},
     ]}
-    with patch("web.routers.model_discovery._cache", fake_cache):
+    with patch("web._discovery_cache._cache", fake_cache):
         ids = list_discovered_model_ids()
     assert ids == ["agnes/agnes-2.0-flash", "mimo/mimo-v2.5", "mimo/mimo-v2.5-pro"]
 
@@ -258,7 +296,7 @@ def test_list_discovered_model_ids():
 def test_list_discovered_model_ids_empty_cache():
     """发现缓存为空时返回空列表。"""
     from model_router import list_discovered_model_ids
-    with patch("web.routers.model_discovery._cache", {"data": None}):
+    with patch("web._discovery_cache._cache", {"data": None}):
         assert list_discovered_model_ids() == []
 
 
@@ -341,10 +379,31 @@ def test_completer_level1_command_name():
     assert "/model" in matches
 
 
+@_skip_no_readline
+def test_completer_level1_suggests_aliases():
+    """命令名补全应包含别名（/m /v /d /s /h）。"""
+    matches = _complete("/m", "/m")
+    assert "/m" in matches
+
+
 def test_completer_level2_argument():
     """第二级：参数补全（/voice o → on/off）。"""
     matches = _complete("/voice o", "o")
     assert matches == ["on", "off"]
+
+
+@_skip_no_readline
+def test_completer_level2_argument_after_trailing_space():
+    """/model <空格> 后应触发参数补全而非命令名补全（CodeRabbit 尾随空格 bug 回归）。"""
+    from model_router import list_discovered_model_ids
+    fake_cache = {"data": [
+        {"provider": "agnes", "models": [{"id": "agnes-2.0-flash"}]},
+    ]}
+    with patch("web._discovery_cache._cache", fake_cache):
+        matches = _complete("/model ", "")
+    # 尾随空格后应返回动态模型 id，而非命令名候选
+    assert matches == ["agnes/agnes-2.0-flash"]
+    assert "/model" not in matches
 
 
 def test_completer_level2_model_dynamic():
@@ -354,7 +413,7 @@ def test_completer_level2_model_dynamic():
         {"provider": "agnes", "models": [{"id": "agnes-2.0-flash"}]},
         {"provider": "mimo", "models": [{"id": "mimo-v2.5"}]},
     ]}
-    with patch("web.routers.model_discovery._cache", fake_cache):
+    with patch("web._discovery_cache._cache", fake_cache):
         matches = _complete("/model agn", "agn")
     assert matches == ["agnes/agnes-2.0-flash"]
 

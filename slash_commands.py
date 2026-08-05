@@ -75,7 +75,10 @@ COMMAND_META: dict[str, dict] = {
 
 def resolve_command(input_text: str) -> str:
     """解析用户输入的第一个 token 为规范斜杠命令（应用别名）。"""
-    raw = input_text.strip().split(maxsplit=1)[0].lower()
+    parts = input_text.strip().split(maxsplit=1)
+    if not parts:
+        return ""
+    raw = parts[0].lower()
     return COMMAND_ALIASES.get(raw, raw)
 
 

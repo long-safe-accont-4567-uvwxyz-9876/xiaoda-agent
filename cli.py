@@ -48,8 +48,9 @@ except ImportError:
 def _all_command_names() -> list[str]:
     names = ["/help", "/exit", "/quit"]
     try:
-        from slash_commands import COMMAND_DESCRIPTIONS
+        from slash_commands import COMMAND_ALIASES, COMMAND_DESCRIPTIONS
         names.extend(COMMAND_DESCRIPTIONS.keys())
+        names.extend(COMMAND_ALIASES.keys())
     except ImportError:
         pass
     return sorted(set(names))
@@ -89,7 +90,9 @@ try:
         if not line.startswith("/"):
             return None
         parts = line.split(maxsplit=1)
-        if len(parts) == 1:
+        # split(maxsplit=1) 会丢弃尾随空格（如 "/model " → ["/model"]），
+        # 需显式判断命令后是否还有内容，否则 "/model <Tab>" 会误入命令名补全分支。
+        if len(parts) == 1 and not line[len(parts[0]):]:
             # 第一级：命令名补全
             matches = [c for c in _ALL_CMDS if c.startswith(text)]
         else:

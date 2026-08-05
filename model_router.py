@@ -339,7 +339,7 @@ def list_discovered_model_ids() -> list[str]:
     """
     ids: list[str] = []
     try:
-        from web.routers.model_discovery import _cache as _disc_cache
+        from web._discovery_cache import _cache as _disc_cache
         _data = (_disc_cache.get("data") or []) if _disc_cache else []
         for _pg in _data:
             _provider = _pg.get("provider", "")
@@ -971,8 +971,9 @@ class ModelRouter:
             logger.info("router.preference_changed", preference=preference)
             return True
         if "/" in preference:
-            provider, model_id = preference.split("/", 1)
-            self.set_chat_model(provider, model_id)
+            # 仅记录偏好标记，不再调用 set_chat_model 触发切换。
+            # set_chat_model 是 CLI 与 WebUI 共用的唯一切换入口（_cmd_model 已先调用），
+            # 此处再切换会造成双重执行（QODO #1）：重复落盘/路由更新、增加失败概率。
             self._model_preference = preference
             logger.info("router.preference_changed", preference=preference)
             return True
@@ -1001,7 +1002,7 @@ class ModelRouter:
         """
         providers: list[dict] = []
         try:
-            from web.routers.model_discovery import _cache as _disc_cache
+            from web._discovery_cache import _cache as _disc_cache
             _data = (_disc_cache.get("data") or []) if _disc_cache else []
             for _pg in _data:
                 _provider = _pg.get("provider", "")
