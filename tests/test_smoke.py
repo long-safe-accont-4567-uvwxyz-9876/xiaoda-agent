@@ -17,7 +17,8 @@ def test_agent_context():
     ctx = AgentContext()
     asyncio.run(ctx.add_message("user", "hello"))
     asyncio.run(ctx.add_message("assistant", "hi"))
-    msgs = ctx.build_messages("test")
+    # build_messages 为 async，需 await 拿到消息列表
+    msgs = asyncio.run(ctx.build_messages("test"))
     assert msgs[0]["role"] == "system"
     assert msgs[-1]["role"] == "user"
 

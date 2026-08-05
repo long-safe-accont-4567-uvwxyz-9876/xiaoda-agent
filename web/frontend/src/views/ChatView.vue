@@ -398,7 +398,7 @@ const emotionColors: Record<string, string> = {
                @click="switchSession(s.session_id)">
             <div class="session-title">
               <span class="session-source" :class="s.source">{{
-                s.source === 'qq' ? 'QQ' : s.source === 'cli' ? 'CLI' : 'Web' }}</span>
+                s.source === 'qq' ? 'QQ' : s.source === 'cli' ? 'CLI' : s.source === 'wechat' ? '微信' : 'Web' }}</span>
               {{ replaceAgentNames(s.title || s.session_id) }}
             </div>
             <div class="session-meta">

@@ -109,12 +109,11 @@ def humanize(text: str, style: str = "xiaoda") -> str:
     return text.strip()
 
 
-TRUNCATION_MARKERS = [
-    "\n——人家还有好多话想说呢，下次继续聊～",
-    "\n——先说到这里吧，剩下的下次告诉你～",
-    "\n——嗯……话有点长，剩下的让人家慢慢说～",
-    "\n——人家说到一半啦，等下次再继续吧～",
-]
+# P0 修复：已删除 TRUNCATION_MARKERS（人格化截断标记）。
+# 原实现 smart_truncate 在工具结果截断后追加"——人家说到一半啦，等下次再继续吧～"
+# 等人格化话语，污染工具结果 → LLM 把它当搜索结果的一部分 → 回复混入这句话。
+# 工具结果截断必须返回干净文本，不能追加任何人格化内容。
+# 回复超长应走 split_long_reply 分段发送，而非截断+标记。
 
 # L1 修复: ｜{1,2} 同时匹配双竖线 <｜｜DSML｜｜> 和单竖线 <｜DSML｜> 变体
 # 同时覆盖 tool_calls 和 function_calls 两种标签名
@@ -861,8 +860,11 @@ def smart_truncate(text: str, max_len: int = QQ_MSG_BYTE_LIMIT) -> str:
     if truncated.count('```') % 2 != 0:
         truncated += '\n```'
 
-    marker = random.choice(TRUNCATION_MARKERS)
-    truncated += marker
+    # P0 修复：不再追加人格化截断标记（原 TRUNCATION_MARKERS）。
+    # 工具结果截断必须返回干净文本，避免污染 LLM 上下文。
+    # 用中性省略号提示截断，不附加任何人格化话语。
+    if not truncated.endswith(('…', '...', '。', '！', '？', '```')):
+        truncated += ' […]'
 
     return truncated
 

@@ -268,14 +268,23 @@ class InstinctManager:
         if skipped_duplicates > 0:
             logger.info("instinct.dedup_skipped", count=skipped_duplicates, session=session_id)
         if rows_to_insert:
+            # 根治（2026-08-05 rework）：收敛到主连接 write_transaction，删除独立写连接。
+            # 根因复盘：历史"独立连接"方案用 separate aiosqlite 连接写 instincts，与主连接/
+            # curator 等并发写时争抢 SQLite 单写锁 → "database is locked"（14:37:45 实证）。
+            # 提高 busy_timeout（5s→20s）只是让写等待而非失败，锁竞争仍在（治标）。
+            # 根治：所有写统一走主连接 + write_transaction() 的 asyncio.Lock 串行化。
+            #   - 只剩一个写者（主连接），跨连接写锁无从谈起 → database is locked 消失。
+            #   - aiosqlite 主连接在独立后台线程执行，串行化写不冻结事件循环（只排队）。
+            #   - 关键读路径（restore_from_db）已走独立 readonly 连接，不被本写阻塞。
+            #   - write_transaction 正常退出 commit，异常/取消自动 rollback，无脏事务。
             try:
-                await self.db._conn.executemany(
-                    """INSERT INTO instincts
-                       (content, confidence, source_session, status, created_at, last_used_at, use_count)
-                       VALUES (?, ?, ?, 'active', ?, ?, 0)""",
-                    rows_to_insert,
-                )
-                await self.db._conn.commit()
+                async with self.db.write_transaction() as _conn:
+                    await _conn.executemany(
+                        """INSERT INTO instincts
+                           (content, confidence, source_session, status, created_at, last_used_at, use_count)
+                           VALUES (?, ?, ?, 'active', ?, ?, 0)""",
+                        rows_to_insert,
+                    )
                 _db_ms = int((time.time() - _db_t0) * 1000)
                 if _db_ms > 2000:
                     logger.warning(f"instinct.db_slow elapsed_ms={_db_ms} active_count={len(existing_contents)}")

@@ -393,6 +393,8 @@ class AgentRegistry:
         # 加载小妲持久化的 voice_ref / display_name
         if "voice_ref" in xiaoda_cfg:
             main["voice_ref"] = xiaoda_cfg["voice_ref"]
+        # 随心即言 ACK 自定义回复：从 xiaoda.json 加载供前端 NDynamicTags 编辑
+        main["ack_messages"] = xiaoda_cfg.get("ack_messages", [])
         if xiaoda_cfg.get("display_name"):
             main["display_name"] = xiaoda_cfg["display_name"]
             MAIN_AGENT_META["display_name"] = xiaoda_cfg["display_name"]
@@ -516,7 +518,12 @@ class AgentRegistry:
                 from web.config_service import get_config_service
                 get_config_service().set("ui.main_wallpaper", data["wallpaper"])
             personality_text = data.pop("personality_text", None)
-            if personality_text is not None:
+            # P0 修复（2026-08-04）：空字符串保护。
+            # 前端 save() 总传 personality_text（即使为空），原 `is not None` 判断
+            # 让空串触发 write_text("") → 写入 3字节 BOM → 人格文件被清空 →
+            # 下次读取返回空 → 前端 personality.value="" → 再次保存又写空 → 循环。
+            # 改为非空才写入，杜绝误清空。
+            if personality_text is not None and personality_text.strip():
                 from config import reverse_agent_name_replacements, WORKSPACE_DIR
                 personality_text = reverse_agent_name_replacements(personality_text)
                 soul_path = WORKSPACE_DIR / "SOUL.md"
@@ -524,6 +531,9 @@ class AgentRegistry:
             # voice_ref 更新
             if "voice_ref" in data:
                 self._save_xiaoda_field("voice_ref", data["voice_ref"])
+            # 随心即言 ACK 自定义回复：持久化到 xiaoda.json（get_ack_message 读取）
+            if "ack_messages" in data:
+                self._save_xiaoda_field("ack_messages", data["ack_messages"])
             # display_name 更新：持久化 + 旧名加入 deprecated_names + 同步 MAIN_AGENT_META
             if "display_name" in data and data["display_name"]:
                 old_dn = self._load_xiaoda_cfg().get("display_name", "")
@@ -584,7 +594,7 @@ class AgentRegistry:
                     agent.config.base_url, agent.config.api_key_env)
             except Exception:
                 logger.debug("registry.model_reload_error", exc_info=True)
-        if personality_text is not None:
+        if personality_text is not None and personality_text.strip():
             from config import reverse_agent_name_replacements
             personality_text = reverse_agent_name_replacements(personality_text)
             # 解析人格文件路径：优先用已有路径，否则创建新路径
@@ -739,6 +749,10 @@ class AgentRegistry:
 
     async def set_personality(self, name: str, text: str) -> None:
         """设置 Agent 的人格文本，写入文件并重新初始化。保存时还原 display_name 为原名。"""
+        # P0 修复（2026-08-04）：空文本保护，防止误清空人格文件（写入 3字节 BOM）。
+        if not text or not text.strip():
+            logger.warning("registry.set_personality_empty_skipped name={}", name)
+            return
         from config import reverse_agent_name_replacements
         text = reverse_agent_name_replacements(text)
         if name == "xiaoda":

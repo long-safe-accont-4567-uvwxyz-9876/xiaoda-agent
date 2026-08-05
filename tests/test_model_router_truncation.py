@@ -151,12 +151,13 @@ async def test_finish_reason_detection_stop():
 
 @pytest.mark.asyncio
 async def test_fallback_max_tokens_passthrough():
-    """Task 1.3: fallback 链透传 original_max_tokens。
+    """Task 1.3: 同 provider fallback 链透传 original_max_tokens。
 
-    模拟 Web UI 传入 32768，触发 fallback 后 max_tokens 不低于 32768。
+    用户硬约束（2026-08-04）：禁止跨 provider 自动切换模型。
+    本测试验证：原 provider 与 fallback provider 一致时（同 provider 内的 task 降级），
+    max_tokens 仍正确透传（≥ original_max_tokens）。
     """
     from model_router import ModelRouter
-    from model_router import ROUTE_TABLE
 
     router = ModelRouter.__new__(ModelRouter)
     router._client = MagicMock()
@@ -174,9 +175,13 @@ async def test_fallback_max_tokens_passthrough():
     router.TASK_TIMEOUTS = {"chat": 30}
     router._check_cache_health = lambda: None
     router._last_cache_warning = 0.0
-    # Task 6: _try_fallback_chain 通过 _registry.snapshot_task 读取降级配置
-    from model_router import ModelRouteRegistry
-    router._registry = ModelRouteRegistry(ROUTE_TABLE)
+
+    # mock registry：原 task（chat）与 fallback task（chat_agnes）都是 agnes provider，
+    # 即同 provider 内的 task 降级（不算跨 provider 切换），应被允许执行。
+    _registry = MagicMock()
+    _registry.get_task = lambda t: {"client": "agnes", "model": "agnes-2.0-flash", "max_tokens": 131072}
+    _registry.snapshot_task = lambda t: {"client": "agnes", "model": "agnes-2.0-flash", "max_tokens": 2000}
+    router._registry = _registry
 
     # 记录 fallback 调用时的 max_tokens
     received_max_tokens = []
@@ -197,14 +202,67 @@ async def test_fallback_max_tokens_passthrough():
         original_max_tokens=32768,
     )
 
-    # 验证：所有 fallback 调用的 max_tokens 都 ≥ 32768
-    assert len(received_max_tokens) > 0, "未触发任何 fallback"
+    # 验证：同 provider fallback 被触发，max_tokens 全部 ≥ 32768
+    assert len(received_max_tokens) > 0, "同 provider fallback 未触发"
     for task_type, mt in received_max_tokens:
         assert mt >= 32768, \
             f"fallback {task_type} 的 max_tokens={mt} 被压缩（应 ≥ 32768）"
-    print(f"✅ Task 1.3 验证通过：{len(received_max_tokens)} 次 fallback 调用，max_tokens 全部 ≥ 32768")
+    print(f"✅ Task 1.3 验证通过：{len(received_max_tokens)} 次同 provider fallback，max_tokens 全部 ≥ 32768")
     for task_type, mt in received_max_tokens:
         print(f"   - {task_type}: max_tokens={mt}")
+
+
+@pytest.mark.asyncio
+async def test_cross_provider_fallback_disabled():
+    """用户硬约束（2026-08-04）：禁止跨 provider 自动切换模型。
+
+    原 provider（如 mimo）失败时，不得 fallback 到 agnes/自定义 provider。
+    验证：跨 provider fallback 全部被跳过，_route_with_retry 不被调用。
+    """
+    from model_router import ModelRouter
+
+    router = ModelRouter.__new__(ModelRouter)
+    router._client = MagicMock()
+    router._agnes_client = MagicMock()
+    router._custom_clients = {"siliconflow": MagicMock()}
+    router._cache_stats = {"total_calls": 0, "hit_tokens": 0, "miss_tokens": 0}
+    router._credential_locks = {}
+    router._apply_prompt_caching = lambda p, m: m
+    router._filter_tools_for_model = lambda t, m: t
+    router._is_client_configured = lambda p: True
+    router._select_client_for_provider = AsyncMock(return_value=router._client)
+    router._track_cache = lambda r: None
+    router._build_route_kwargs = MagicMock(return_value={"model": "test"})
+    router._get_custom_provider_default_model = lambda p: "test-model"
+    router.TASK_TIMEOUTS = {"chat": 30}
+    router._check_cache_health = lambda: None
+    router._last_cache_warning = 0.0
+
+    # mock registry：原 task（chat）是 mimo，fallback task（chat_agnes）是 agnes → 跨 provider
+    _registry = MagicMock()
+    _registry.get_task = lambda t: {"client": "mimo", "model": "mimo-v2.5", "max_tokens": 131072}
+    _registry.snapshot_task = lambda t: {"client": "agnes", "model": "agnes-2.0-flash", "max_tokens": 2000}
+    router._registry = _registry
+
+    received_calls = []
+
+    async def _mock_route_with_retry(task_type, *args, **kwargs):
+        received_calls.append(task_type)
+        raise RuntimeError("should not reach")
+
+    router._route_with_retry = _mock_route_with_retry
+
+    test_error = RuntimeError("main call failed")
+    result = await router._try_fallback_chain(
+        test_error, "chat", [{"role": "user", "content": "test"}],
+        0.7, False, None, None, 30, "user1", "session1", None,
+        original_max_tokens=32768,
+    )
+
+    # 验证：跨 provider fallback 被全部跳过，未触发任何 _route_with_retry 调用
+    assert result is None, "跨 provider fallback 应返回 None"
+    assert len(received_calls) == 0, f"跨 provider fallback 不应执行，但调用了: {received_calls}"
+    print("✅ 跨 provider fallback 已禁用：mimo 失败不会切换到 agnes/自定义 provider")
 
 
 @pytest.mark.asyncio

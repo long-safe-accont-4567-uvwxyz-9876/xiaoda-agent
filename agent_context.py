@@ -229,8 +229,14 @@ class AgentContext:
             self._compressed_summary = self._compressed_summary[-self.MAX_COMPRESSED_SUMMARY_LEN:]
 
         max_history_tokens = self._get_dynamic_max_tokens()
-        if not self.history or self._history_tokens() <= max_history_tokens:
+        _before_tokens = self._history_tokens()
+        if not self.history or _before_tokens <= max_history_tokens:
             return
+
+        logger.info("context.compress_triggered",
+                    before_tokens=_before_tokens,
+                    max_tokens=max_history_tokens,
+                    history_len=len(self.history))
 
         target_tokens = int(max_history_tokens * self.COMPRESS_TARGET_RATIO)
 
@@ -275,14 +281,22 @@ class AgentContext:
                         if len(self._compressed_summary) > self.MAX_COMPRESSED_SUMMARY_LEN:
                             self._compressed_summary = self._compressed_summary[-self.MAX_COMPRESSED_SUMMARY_LEN:]
                         self._compress_count += 1
+                        _after_tokens = self._history_tokens()
                         logger.info("context.compressed_with_ccr", round=_round + 1,
-                                    tokens=self._history_tokens(), target=target_tokens,
+                                    before_tokens=_before_tokens,
+                                    after_tokens=_after_tokens,
+                                    saved_tokens=_before_tokens - _after_tokens,
+                                    target=target_tokens,
                                     max_tokens=max_history_tokens, keep_recent=keep_recent)
+                        _before_tokens = _after_tokens
                         continue
                 except Exception as e:
                     logger.debug("context.ccr_compress_failed", error=str(e))
 
             # 回退到原有压缩逻辑
+            logger.warning("context.fallback_compress", round=_round + 1,
+                           reason="ccr_unavailable_or_failed",
+                           before_tokens=_before_tokens, target=target_tokens)
             compress_count = max(1, int(len(compressible) * self.COMPRESS_TARGET_RATIO))
             to_compress = compressible[:compress_count]
             remaining_compressible = compressible[compress_count:]
@@ -311,6 +325,14 @@ class AgentContext:
             if len(self._pre_compressed_buffer) < self.MAX_PRE_COMPRESSED_BUFFER:
                 self._pre_compressed_buffer.append(removed)
             logger.debug("context.force_trimmed", role=removed["role"], preview=removed["content"][:40])
+
+        _final_tokens = self._history_tokens()
+        logger.info("context.trim_complete",
+                    before_tokens=_before_tokens,
+                    after_tokens=_final_tokens,
+                    saved_tokens=_before_tokens - _final_tokens,
+                    compress_count=self._compress_count,
+                    history_len=len(self.history))
 
     def _get_dynamic_max_tokens(self) -> int:
         """动态计算 history 的最大允许 token 数。
@@ -643,7 +665,10 @@ class AgentContext:
         """
         if not self.memory_retrieval:
             return ('<memory_retrieval empty="true">\n'
-                    '没有找到相关记忆。请如实告知用户你不记得了，不要编造任何过去的事。\n'
+                    '当前主动检索未直接命中相关记忆。\n'
+                    '如果用户是在询问过去发生的事（如"记得吗""上次""昨天/之前""那时"），'
+                    '请先调用 recall 工具做回忆检索，依据检索结果回答，不要直接说"不记得"。\n'
+                    '只有当 recall 也确认没有相关记忆时，才如实告诉用户不记得，绝不能编造。\n'
                     '</memory_retrieval>')
 
         # 区分原始对话记录和蒸馏记忆
@@ -723,7 +748,10 @@ class AgentContext:
                 + "</memory_retrieval>"
             )
         return ('<memory_retrieval empty="true">\n'
-                '没有找到相关记忆。请如实告知用户你不记得了，不要编造任何过去的事。\n'
+                '当前主动检索未直接命中相关记忆。\n'
+                    '如果用户是在询问过去发生的事（如"记得吗""上次""昨天/之前""那时"），'
+                    '请先调用 recall 工具做回忆检索，依据检索结果回答，不要直接说"不记得"。\n'
+                    '只有当 recall 也确认没有相关记忆时，才如实告诉用户不记得，绝不能编造。\n'
                 '</memory_retrieval>')
 
     def _build_volatile_content(self, source: str, exclude_memory: bool = False) -> str:
@@ -780,8 +808,14 @@ class AgentContext:
 
         return "\n".join(volatile_parts) if volatile_parts else ""
 
-    def build_messages(self, user_input: str, source: str = "") -> list[dict]:
-        stable_content = self._build_stable_content(user_input)
+    async def build_messages(self, user_input: str, source: str = "") -> list[dict]:
+        # P0 根源修复（2026-08-05）：_build_stable_content → build_scene_aware_prompt
+        # → _load_cached_modules 同步 stat + read_text 读 USB 盘 7+ 文件（SOUL.md 等）。
+        # USB 盘偶发 IO 卡住时，同步 IO 在事件循环线程冻结 91s（event_loop.blocked lag=91.1s
+        # + memory_retrieval 96s + cancel_delay 76s）。watchdog 因自身在事件循环内无法抓栈。
+        # 根源修复：用 asyncio.to_thread 把整条同步文件 IO 链移到线程池，不阻塞事件循环。
+        # USB 盘 IO 卡住只影响线程池线程，事件循环继续调度其他 task（cancel 能即时生效）。
+        stable_content = await asyncio.to_thread(self._build_stable_content, user_input)
 
         # === Context 层（按项目/用户缓存，偶尔变化）===
         context_parts = []

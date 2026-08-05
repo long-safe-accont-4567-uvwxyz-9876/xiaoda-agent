@@ -66,9 +66,13 @@ RECOVERY_MAP: dict[FailoverReason, RecoveryAction] = {
 }
 
 # 可重试的错误类型
+# P0 修复（2026-08-05 用户要求"10秒内响应"）：移除 TIMEOUT。
+# 根因：agnes APITimeoutError 重试 → 8s+8s=16s 阻塞（日志 main_path=67214ms 铁证，
+#   其中 llm_verify=59094ms 是两次 30s 超时叠加）。agnes 慢时重试也慢，重试无意义。
+#   超时直接降级（is_retryable=False → router raise → DEGRADED_REPLY），
+#   保证 10s 内必有响应。connection_error 保留（握手失败重试有意义）。
 RETRYABLE_REASONS = {
     FailoverReason.RATE_LIMIT,
-    FailoverReason.TIMEOUT,
     FailoverReason.CONNECTION_ERROR,
     FailoverReason.SERVER_ERROR,
     FailoverReason.FORMAT_ERROR,
@@ -167,10 +171,14 @@ class ErrorClassifier:
                     return FailoverReason.RATE_LIMIT
                 if status_code and 500 <= status_code < 600:
                     return FailoverReason.SERVER_ERROR
+            if isinstance(exc, openai.APITimeoutError):
+                # P0 修复（2026-08-05）：APITimeoutError 是 APIConnectionError 的子类，
+                # 必须在父类之前检查，否则永远被分类为 CONNECTION_ERROR → 触发重试 →
+                # 60s+ 阻塞（日志 reason=connection_error error=APITimeoutError 铁证）。
+                # 正确分类为 TIMEOUT 后，配合 RETRYABLE_ERRORS 移除 timeout，超时直接降级。
+                return FailoverReason.TIMEOUT
             if isinstance(exc, openai.APIConnectionError):
                 return FailoverReason.CONNECTION_ERROR
-            if isinstance(exc, openai.APITimeoutError):
-                return FailoverReason.TIMEOUT
         except (AttributeError, TypeError):
             pass
 

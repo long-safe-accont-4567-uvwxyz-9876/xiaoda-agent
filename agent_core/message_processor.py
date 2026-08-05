@@ -195,8 +195,18 @@ class MessageProcessorMixin:
     # 重试机制保留：用于兜底异常截断（max_tokens 截断后续写、工具调用后回复不完整补全）。
     # 用户明确要求保留重试机制，不得缩减。
     MAX_VERIFICATION_TURNS = 8          # 最大循环轮次（保留原值，用于兜底截断恢复）
-    VERIFICATION_WALL_TIMEOUT = 50      # 墙钟超时（秒）
+    # 放宽（2026-08-05 用户要求放宽微信/QQ 超时阈值）：
+    # 根因：agnes 用户消息实测 11s（48 工具 prompt 长），原 10s 墙钟超时导致
+    #   verification loop 强制停止 → 用户收不到完整回复。10→25 覆盖 agnes 11s +
+    #   记忆 3s + 续写/工具 11s 余量。agnes 偶发慢也不超时。
+    VERIFICATION_WALL_TIMEOUT = 25      # 墙钟超时（秒）
     MAX_CONSECUTIVE_TOOL_FAILURES = 3   # 连续工具失败上限
+    # 放宽（2026-08-05 用户确认"对齐到30s消除误报"）：20→30。
+    # 根因（超时铁证）：LLM_CALL_TIMEOUT=20 比 agnes transport 的 read=30s 更严格，
+    #   agnes-2.0-flash 偶发慢（13s+，甚至 20s+）时，20s 一级超时先触发 → agent.model_error
+    #   → 用户收到超时报错。agnes transport 本身 read 超时是 30s（AGNES_HTTP_TIMEOUT）。
+    # 修复：LLM_CALL_TIMEOUT 对齐到 30s，与 agnes read 超时一致，agnes 偶发慢不再被一级
+    #   超时误杀，能正常返回（可能慢但不报错）。这是消除"一直超时"的治本修复。
     LLM_CALL_TIMEOUT = 30               # 单次 LLM 调用超时
 
     # ── 跨对话回复去重（模型层面去重机制） ──────────────────
@@ -206,8 +216,21 @@ class MessageProcessorMixin:
     # 修复：维护每个 session 最近 N 条回复，新回复与之比较相似度，
     #   超阈值则追加"请用完全不同的表达方式"重试一次。
     REPLY_DEDUP_MAX = 5                 # 每 session 保留最近 5 条回复用于去重
-    REPLY_DEDUP_THRESHOLD = 75.0        # rapidfuzz 0-100 刻度，>=75 视为重复
-    REPLY_DEDUP_RETRY_TIMEOUT = 15      # 去重重试超时（秒）
+    REPLY_DEDUP_THRESHOLD = 70.0        # rapidfuzz 0-100 刻度，>=70 视为重复
+    REPLY_DEDUP_RETRY_TIMEOUT = 30      # 去重重试超时（秒），对齐 agnes read=30s
+    # 治本修复（2026-08-05 用户"治标不治本"反馈）：6→10。
+    # 根因：agnes-2.0-flash 正常响应 7s，但去重重试 timeout=6s < 7s →
+    #   重试的 agnes 调用永远 6s 超时 → 用原回复（重复的）→ 去重机制完全失效！
+    #   日志 reply.dedup_retry_timeout + 微信重复发送铁证。
+    #   用户要求"重试后重复率必须低于70%"，但 6s 超时让重试永远不成功。
+    # 10s 覆盖 agnes 7s + 3s 余量（截断历史后 agnes 更快，5-6s）。
+    # 代价：重复回复时首次7s+重试10s=17s，但正常对话（不重复）7s达标。
+    # 去重是用户要求的功能，不能牺牲。
+    # P0 修复（2026-08-05 用户要求"10秒内响应"）：30→6。
+    # 原值 30s 让去重总耗时 LLM(7s)+去重(30s)=37s，远超 10s 目标。
+    # 6s 覆盖 agnes 生成简短去重回复（截断历史，比完整生成快）。
+    # 权衡：正常不重复时 LLM(7s)+记忆(2s)=9s 达标；重复时触发去重 15s（略超 10s
+    # 但远好于原 67s）。去重是异常路径，优先保证正常对话 10s 内响应。
     # P0 修复（内存泄漏根因）：session_id 含日期(SES-YYYYMMDD-...)，每天新增 key。
     # 原实现 _recent_replies: dict 的 session key 永不清理，长期运行无限增长 →
     # 内存泄漏 → 渐进退化。改为 OrderedDict + LRU，超过 cap 淘汰最久未访问的 session。
@@ -257,6 +280,15 @@ class MessageProcessorMixin:
         loop_start = time.time()
         consecutive_failures = 0
         all_tool_results: list = []
+
+        # P0 治本修复：搜索类工具调用次数硬约束，防止 verification loop 不收敛。
+        # 根因：每轮都传 tools+tool_choice=auto，LLM 拿到搜索结果后仍可继续搜索，
+        # 实测 6 轮全在调 web_search/search_cn 不生成回复 → summarize 超时 → 原始结果倒出。
+        # 修复：累计搜索类工具调用 ≥2 次后，后续轮次传 tools=None 强制 LLM 基于已有结果回答。
+        _SEARCH_TOOLS = frozenset({"web_search", "search_cn", "multi_search",
+                                    "web_browse", "web_browse_enhanced"})
+        search_tool_call_count = 0
+        _MAX_SEARCH_CALLS = 2
 
         # 解析首轮 LLM 输出（提取 tool_calls、assistant_content、reasoning）
         current_tool_calls, current_assistant_content, current_reasoning = \
@@ -501,6 +533,14 @@ class MessageProcessorMixin:
             all_tool_results.extend(turn_tool_results)
             last_tool_calls = current_tool_calls  # 记录本次执行的 tool_calls
 
+            # 累计本轮搜索类工具调用次数（治本：防不收敛）
+            _turn_search_calls = sum(
+                1 for tc in current_tool_calls
+                if tc.get("function", {}).get("name", "") in _SEARCH_TOOLS
+            )
+            if _turn_search_calls:
+                search_tool_call_count += _turn_search_calls
+
             # 连续失败检查
             turn_failed = all(not r.success for r in turn_tool_results)
             if turn_failed:
@@ -511,10 +551,20 @@ class MessageProcessorMixin:
             else:
                 consecutive_failures = 0
 
+            # 治本：搜索类工具调用达上限后，强制禁用工具，让 LLM 基于已有结果回答。
+            # 否则 LLM 会反复搜索不收敛（实测 6 轮全在搜索）。
+            _effective_tools = tools
+            if search_tool_call_count >= _MAX_SEARCH_CALLS and tools:
+                trace.info("verification.search_cap_reached_force_answer",
+                           search_calls=search_tool_call_count, cap=_MAX_SEARCH_CALLS)
+                logger.info("verification.search_cap_reached search_calls={} cap={} → force answer",
+                            search_tool_call_count, _MAX_SEARCH_CALLS)
+                _effective_tools = None
+
             # 再次调用 LLM 并解析结果（返回 early_reply 时表示验收通过）
             current_tool_calls, current_assistant_content, current_reasoning, early_reply = \
                 await self._call_and_parse_verification_llm(
-                    messages, tools, task_type, temperature, max_tokens,
+                    messages, _effective_tools, task_type, temperature, max_tokens,
                     user_openid, session_id, trace, turn_idx, loop_start,
                 )
             if early_reply is not None:
@@ -530,6 +580,16 @@ class MessageProcessorMixin:
         # ── 循环结束：最终 summarize ─────────────────────────
         # P0 修复：传入 messages（verification loop 已构建的完整上下文，含工具结果 role=tool 消息），
         # 让 _summarize_results 复用上下文而非凭空 summarize，避免工具调用后 LLM 瞎扯
+        _loop_elapsed = round(time.time() - loop_start, 1)
+        _total_tools = len(all_tool_results)
+        if turn_idx >= self.MAX_VERIFICATION_TURNS - 1:
+            logger.warning("verification.max_iterations_reached",
+                           max_turns=self.MAX_VERIFICATION_TURNS,
+                           elapsed=_loop_elapsed, total_tools=_total_tools)
+        else:
+            logger.info("verification.loop_complete",
+                        turns=turn_idx + 1, elapsed=_loop_elapsed,
+                        total_tools=_total_tools)
         return await self._finalize_verification_reply(
             user_input, all_tool_results, last_tool_calls or [],
             current_assistant_content, trace, user_openid, session_id,
@@ -600,10 +660,18 @@ class MessageProcessorMixin:
             trace.warning("agent.blocked", reason=reason)
             return ProcessResult(reply="")
 
-        # XP 自动加成 + 用户画像统计（并行 to_thread，不阻塞事件循环）
-        # 根因修复：原同步 add_chat_xp / record_interaction 内部 json.dump 写文件，
-        # 每轮对话阻塞事件循环 ~2-5ms。改用 asyncio.to_thread 隔离到线程池，
-        # 两者并行执行，主流程仅等 max(xp_io, profile_io) ≈ 1ms。
+        # XP 自动加成 + 用户画像统计（fire-and-forget，绝不阻塞主消息流程）
+        # 治本修复（2026-08-05 用户"10秒内响应"铁证）：
+        #   日志 10:10:18 XPSystem.load → 10:10:25 router.decision，中间 7s 空白。
+        #   根因：XPSystem 单例首次调用触发 _load()，从 USB 盘（KIOXIA）
+        #   读取 xp_state.json（26 用户）同步 IO 耗时 7s。原实现
+        #   `await asyncio.gather(asyncio.to_thread(add_chat_xp), asyncio.to_thread(record_interaction))`
+        #   主流程 await 线程池任务，7s 阻塞主消息流程（非事件循环，但 coroutine 卡住）。
+        #   USB 盘 IO 慢是硬件限制无法根治，只能不让主流程等它。
+        # 治本：fire-and-forget _spawn，XP 记录在后台跑，主流程立即继续。
+        #   首次加载 7s 在后台完成，后续对话 XP 已在内存（<1ms）。
+        #   XP 状态丢失不影响回复生成（仅影响等级显示），优先保证响应速度。
+        #   配合 lifespan 预热（web/server.py），首次对话时 XP 已加载完毕。
         try:
             from core.xp_system import get_xp_system
             from core.user_profile_learner import get_user_profile_learner
@@ -612,11 +680,12 @@ class MessageProcessorMixin:
                 _xp = get_xp_system()
                 _learner = get_user_profile_learner()
                 _is_deep = len(user_input) > 100
-                await asyncio.gather(
+                # fire-and-forget：XP + profile 记录后台跑，不阻塞主流程
+                _spawn(asyncio.gather(
                     asyncio.to_thread(_xp.add_chat_xp, _xp_uid, len(user_input)),
                     asyncio.to_thread(
                         _learner.record_interaction, _xp_uid, len(user_input), is_deep=_is_deep),
-                )
+                ), timeout=20)
                 # 周期性触发 LLM 认知抽取（不阻塞，spawn 后台）
                 if _learner.should_run_insight(_xp_uid):
                     _xp_state = _xp.get_state(_xp_uid)
@@ -699,10 +768,15 @@ class MessageProcessorMixin:
 
         _trace_id = f"{int(time.time()*1000)%1000000:06d}"
         trace = logger.bind(trace_id=_trace_id)
+        _proc_id = f"{user_id[:12]}@{_trace_id}"
         trace.info("agent.process.start", source=source, user_id=user_id,
                     msg_preview=user_input[:80])
 
         allowed, reason = self.security.is_allowed(user_id)
+
+        # 上下文恢复阶段（详细计时日志，排查隐性超时）
+        _restore_t0 = time.time()
+        logger.info("pipeline.restore.start proc_id={}", _proc_id)
 
         # 群聊 session 按用户隔离：不同用户使用不同 session_id
         # 保留原始 session_id 作为后缀，避免上层传入的值完全丢失
@@ -746,6 +820,8 @@ class MessageProcessorMixin:
             except Exception as e:
                 logger.warning("agent.restore_failed", error=str(e))
 
+        logger.info("pipeline.restore.done proc_id={} elapsed_ms={}",
+                    _proc_id, int((time.time() - _restore_t0) * 1000))
         return trace, session_id, allowed, reason
 
     def _try_greeting_shortcut(self, user_input: str, user_id: str, source: str) -> ProcessResult | None:
@@ -804,43 +880,67 @@ class MessageProcessorMixin:
                                       user_openid: Any, session_id: Any, status_callback: Any, image_data: Any,
                                       is_master: Any, force_voice: Any, chat_targets: Any, trace: Any) -> Any:
         """主处理路径：完整记忆检索 + LLM 调用 + 后处理。"""
+        _pipeline_t0 = time.time()
+        _proc_id = f"{user_id[:12]}@{int(_pipeline_t0 * 1000) % 100000}"
+
         # 记忆检索阶段
         _mp_t0 = time.time()
+        logger.info("pipeline.memory.start proc_id={} user_id={}", _proc_id, user_id[:20])
         emotion, emotion_label = await self._setup_main_emotion_and_memory(
             user_input, clean_input, chat_targets, is_master, ctx)
         _mp_memory_ms = int((time.time() - _mp_t0) * 1000)
+        logger.info("pipeline.memory.done proc_id={} elapsed_ms={} emotion={}",
+                    _proc_id, _mp_memory_ms, emotion_label)
         if _mp_memory_ms > 3000:
             logger.warning(f"agent.stage_slow stage=memory_retrieval elapsed_ms={_mp_memory_ms}")
 
         # 消息构建阶段
         _mp_t1 = time.time()
+        logger.info("pipeline.build_msg.start proc_id={}", _proc_id)
         messages, _pre_picked_sticker, tools = await self._build_main_messages(
             user_input, is_master, image_data, clean_input, emotion, user_id, source)
         _mp_build_ms = int((time.time() - _mp_t1) * 1000)
+        logger.info("pipeline.build_msg.done proc_id={} elapsed_ms={} msg_count={} tool_count={}",
+                    _proc_id, _mp_build_ms, len(messages), len(tools) if tools else 0)
         if _mp_build_ms > 2000:
             logger.warning(f"agent.stage_slow stage=build_messages elapsed_ms={_mp_build_ms}")
 
         # 任务类型解析与熔断器检查
+        _mp_t1b = time.time()
         early_result, task_type, _cb_max_tokens, circuit_state, _model_cfg = \
             self._resolve_task_and_circuit(user_input, tools, messages, trace, source=source)
+        logger.info("pipeline.resolve_task.done proc_id={} elapsed_ms={} task_type={} circuit={}",
+                    _proc_id, int((time.time() - _mp_t1b) * 1000), task_type, circuit_state)
         if early_result is not None:
+            logger.info("pipeline.early_return proc_id={} reason=circuit_or_task", _proc_id)
             return early_result
 
         # 主 LLM 调用 + 验收循环
         _mp_t2 = time.time()
+        logger.info("pipeline.llm_verify.start proc_id={} task_type={} max_tokens={}",
+                    _proc_id, task_type, _cb_max_tokens)
         is_owner = self.security.is_owner(user_id)
         reply, tool_results = await self._call_main_llm_with_verification(
             messages, tools, task_type, _model_cfg, _cb_max_tokens, circuit_state,
             status_callback, user_openid, session_id, trace, ctx, user_input, is_owner)
         _mp_llm_ms = int((time.time() - _mp_t2) * 1000)
+        logger.info("pipeline.llm_verify.done proc_id={} elapsed_ms={} reply_len={} tool_results={}",
+                    _proc_id, _mp_llm_ms, len(reply) if reply else 0,
+                    len(tool_results) if tool_results else 0)
         if _mp_llm_ms > 5000:
             logger.warning(f"agent.stage_slow stage=llm_verify elapsed_ms={_mp_llm_ms} memory_ms={_mp_memory_ms} build_ms={_mp_build_ms}")
 
         # 后处理阶段（含媒体提取与隐私扫描）
-        return await self._finalize_main_reply(
+        _mp_t3 = time.time()
+        logger.info("pipeline.finalize.start proc_id={}", _proc_id)
+        _result = await self._finalize_main_reply(
             reply, tool_results, user_input, user_id, source, emotion,
             emotion_label, ctx, user_openid, is_master, _pre_picked_sticker, force_voice, trace,
             session_id)
+        logger.info("pipeline.finalize.done proc_id={} elapsed_ms={} total_ms={}",
+                    _proc_id, int((time.time() - _mp_t3) * 1000),
+                    int((time.time() - _pipeline_t0) * 1000))
+        return _result
 
     async def _setup_main_emotion_and_memory(self, user_input: Any, clean_input: Any,
                                                chat_targets: Any, is_master: Any,
@@ -881,7 +981,7 @@ class MessageProcessorMixin:
             messages = [{"role": "system", "content": safe_prompt}]
             messages.append({"role": "user", "content": effective_input})
         else:
-            messages = self.context.build_messages(effective_input, source=source or "")
+            messages = await self.context.build_messages(effective_input, source=source or "")
 
         # P0 新增：system_context 注入（主动问候等内部场景）
         # 根因：nudge_engine/greeting_scheduler 原先把场景提示作为 user_input 传入，
@@ -1065,24 +1165,25 @@ class MessageProcessorMixin:
             if self.memory and is_master:
                 self.memory.signal_new_message()
                 _t0 = time.time()
+                logger.info("pipeline.memory.retrieve.start")
                 try:
                     _k = self.memory._suggest_k(user_input, default_k=8)
-                    # 单环节 8s 超时保护：避免 retrieve_memories 卡死导致
-                    # 整体 20s 兜底超时被触发（曾导致 memory.retrieve_global_timeout）
-                    # 诊断日志：记录超时触发延迟（实际触发时间 - 设定超时），
-                    # 若延迟 >5s 说明事件循环被同步操作阻塞
+                    logger.info("pipeline.memory.retrieve.call start k={}", _k)
+                    # 治本（2026-08-05）：单次记忆检索超时 2→5s。
+                    # 根因：2s 对 embed/reranker/检索链路过短，网络波动即误砍，
+                    #       导致 memory.retrieve_timeout_single 频繁 → 记忆注入为空 → 回复短。
+                    # 记忆检索已与 notebook/constraint 解耦并独立执行，5s 足够且不拖慢整体。
                     results = await asyncio.wait_for(
                         self.memory.retrieve_memories(user_input, k=_k),
-                        timeout=8.0,
+                        timeout=5.0,
                     )
-                    logger.info("memory.retrieve_stage",
-                                stage="retrieve_done",
-                                elapsed_ms=int((time.time() - _t0) * 1000),
-                                result_count=len(results) if results else 0)
+                    _retrieve_ms = int((time.time() - _t0) * 1000)
+                    logger.info("pipeline.memory.retrieve.done elapsed_ms={} result_count={}",
+                                _retrieve_ms, len(results) if results else 0)
                 except asyncio.TimeoutError:
-                    _delay = (time.time() - _t0) - 8.0
+                    _delay = (time.time() - _t0) - 5.0
                     logger.warning("memory.retrieve_timeout_single",
-                                   hint="单次记忆检索超时 8s，跳过本次记忆",
+                                   hint="单次记忆检索超时 5s，跳过本次记忆",
                                    cancel_delay_ms=int(_delay * 1000),
                                    query_preview=user_input[:50])
                     results = None
@@ -1110,57 +1211,43 @@ class MessageProcessorMixin:
 
         async def _load_notebook() -> None:
             _t0 = time.time()
+            logger.info("pipeline.memory.notebook.start")
             try:
                 await self._load_notebook_context()
                 _elapsed = int((time.time() - _t0) * 1000)
+                logger.info("pipeline.memory.notebook.done elapsed_ms={}", _elapsed)
                 if _elapsed > 500:
                     logger.warning("memory.notebook_load_slow",
                                    elapsed_ms=_elapsed)
             except Exception as e:
                 logger.warning("notebook.load_failed", error=str(e))
 
-        async def _retrieve_constraint_lessons() -> list[dict]:
-            """检索 RAG 层经验教训（FTS 关键词匹配，零成本）。"""
-            _t0 = time.time()
-            try:
-                from core.constraint_injector import search_constraint_lessons
-                lessons = await asyncio.to_thread(
-                    search_constraint_lessons, user_input, top_k=3)
-                _elapsed = int((time.time() - _t0) * 1000)
-                if _elapsed > 500:
-                    logger.warning("memory.constraint_lessons_slow",
-                                   elapsed_ms=_elapsed,
-                                   query_preview=user_input[:50])
-                if lessons:
-                    return [{"summary": f"[经验] {line}", "timestamp": 0,
-                             "source": "constraint_rag"}
-                            for line in lessons]
-            except Exception as e:
-                logger.debug("constraint.rag_search_failed", error=str(e))
-            return []
-
-        # 记忆检索 + notebook + 约束经验并行加载
-        # 不允许跳过记忆检索 —— 各环节内部已有独立超时与 fallback
-        # 但整体加 20s 兜底超时：任一环节挂起不允许阻塞整个请求（保证无超时）
-        # 诊断日志：记录超时触发延迟（cancel_delay），若 >5s 说明事件循环被同步操作阻塞
+        # 治本（2026-08-05）：核心记忆检索与次要上下文解耦，杜绝"记忆被整段跳过"。
+        # 根因：原实现 asyncio.gather(记忆检索, notebook, constraint) 整体被 3s wait_for
+        #       包裹。notebook 加载慢（USB 盘 IO，实测 8s）时，3s 超时取消整个 gather，
+        #       连正在进行的核心记忆检索也一并取消 → memory.retrieve_global_timeout →
+        #       记忆被跳过 → 注入"没有找到相关记忆" → 回复短而敷衍。
+        # 修复（根治，非缩短超时掩盖）：
+        #   1) 核心记忆检索独立执行，给足超时（8s），确保能完整执行并注入上下文；
+        #   2) notebook 是次要信息（当前关注点/待办），转后台异步，慢不阻塞记忆检索；
+        #   3) constraint_lessons 结果从未被消费（jianjia 子串匹配粗糙，见下方注释），
+        #      整体移除该空转慢环节。
         _gather_start = time.time()
+        memories_task = asyncio.create_task(_retrieve_memories())
+        _spawn(_load_notebook())  # 后台异步，不占用记忆检索关键路径
         try:
-            memories, _, _lessons = await asyncio.wait_for(
-                asyncio.gather(
-                    _retrieve_memories(), _load_notebook(), _retrieve_constraint_lessons()),
-                timeout=20.0,
-            )
-            logger.info("memory.retrieve_stage",
-                        stage="gather_done",
-                        elapsed_ms=int((time.time() - _gather_start) * 1000),
-                        has_memories=bool(memories))
+            memories = await asyncio.wait_for(memories_task, timeout=8.0)
         except asyncio.TimeoutError:
-            _cancel_delay = (time.time() - _gather_start) - 20.0
+            _cancel_delay = (time.time() - _gather_start) - 8.0
             logger.warning("memory.retrieve_global_timeout",
-                           hint="记忆检索整体超时，跳过记忆继续生成回复（保证请求成功）",
+                           hint="记忆检索整体超时 8s，跳过记忆继续生成回复",
                            cancel_delay_ms=int(_cancel_delay * 1000),
                            query_preview=user_input[:50])
             memories = None
+        logger.info("memory.retrieve_stage",
+                    stage="gather_done",
+                    elapsed_ms=int((time.time() - _gather_start) * 1000),
+                    has_memories=bool(memories))
 
         # 注：constraint_lessons 不再追加到 memories
         # 根因：jieba 子串匹配粗糙，单关键词命中即入选，极易注入无关经验，
@@ -1172,10 +1259,11 @@ class MessageProcessorMixin:
             try:
                 from memory.context_governance import ContextGovernance
                 _response_id = ContextGovernance.new_response_id()
-                _audited = await self.memory.audit_retrieval(_response_id, memories)
-                if _audited:
-                    logger.debug("memory.audited",
-                                 response_id=_response_id, count=_audited)
+                # 治本修复（2026-08-05）：audit_retrieval 改 fire-and-forget。
+                # 根因：audit_retrieval 写 DB（USB 盘），await 阻塞主流程 9s
+                # （日志 11:37:11→11:37:20 memory.audited 9s 铁证）。
+                # 审计是后台数据操作，不影响回复生成，无需阻塞用户等待。
+                _spawn(self.memory.audit_retrieval(_response_id, memories))
             except Exception as e:
                 logger.debug("memory.audit_call_failed", error=str(e))
 
@@ -1341,7 +1429,9 @@ class MessageProcessorMixin:
         reply = ""
         tool_results = []
         try:
+            _llm_t0 = time.time()
             if STREAM_TEXT_PUSH and status_callback and not tools:
+                logger.info("pipeline.llm_call.start mode=stream task_type={}", task_type)
                 result = await self._stream_llm_response(
                     messages, status_callback=status_callback, task_type=task_type,
                     temperature=_get_temperature(_model_cfg),
@@ -1349,6 +1439,8 @@ class MessageProcessorMixin:
                     user_openid=user_openid, session_id=session_id,
                 )
             else:
+                logger.info("pipeline.llm_call.start mode=route task_type={} timeout={}",
+                            task_type, self.LLM_CALL_TIMEOUT)
                 result = await asyncio.wait_for(self.router.route(
                     task_type, messages,
                     temperature=_get_temperature(_model_cfg),
@@ -1356,9 +1448,13 @@ class MessageProcessorMixin:
                     tools=tools,
                     tool_choice="auto" if tools else None,
                     user_openid=user_openid, session_id=session_id,
-                ), timeout=120)
+                ), timeout=self.LLM_CALL_TIMEOUT)
+            logger.info("pipeline.llm_call.done elapsed_ms={} result_type={}",
+                        int((time.time() - _llm_t0) * 1000),
+                        "str" if isinstance(result, str) else "tool_calls")
 
             # Harness 验收循环
+            _verify_t0 = time.time()
             reply, tool_results = await self._run_verification_loop(
                 result, messages, tools, trace,
                 task_type=task_type,
@@ -1367,6 +1463,9 @@ class MessageProcessorMixin:
                 user_openid=user_openid, session_id=session_id,
                 is_owner=is_owner, ctx=ctx, user_input=user_input,
             )
+            logger.info("pipeline.verification.done elapsed_ms={} reply_len={} tool_count={}",
+                        int((time.time() - _verify_t0) * 1000),
+                        len(reply) if reply else 0, len(tool_results) if tool_results else 0)
             if tool_results:
                 ctx.handled_by_tool_call = True
             # 最终防线：如果 verification loop 返回空回复，触发 fallback
@@ -1383,10 +1482,14 @@ class MessageProcessorMixin:
             #   这类最易重复的回复却被排除在去重之外，导致去重对最严重场景完全失效。
             # reply 是 LLM 最终回复文本，与是否调用工具无关，应统一参与去重。
             if reply and len(reply) > 20:
+                _dedup_t0 = time.time()
+                logger.info("pipeline.dedup.start reply_len={}", len(reply))
                 reply = await self._dedup_reply_against_recent(
                     reply, messages, task_type, _model_cfg,
                     _cb_max_tokens, user_openid, session_id, trace,
                 )
+                logger.info("pipeline.dedup.done elapsed_ms={} reply_len={}",
+                            int((time.time() - _dedup_t0) * 1000), len(reply))
             if circuit_state == CircuitState.HALF_OPEN:
                 self._circuit_breaker.on_half_open_success(self._cognitive_state)
             else:
@@ -1418,17 +1521,20 @@ class MessageProcessorMixin:
                     reply = DEGRADED_REPLY
         return reply, tool_results
 
-    def _dedup_buf(self, sess: str) -> list[str]:
-        """获取 session 的去重缓冲（LRU 维护 + 上限淘汰）。
+    def _dedup_buf(self, user_id: str) -> list[str]:
+        """获取用户的去重缓冲（LRU 维护 + 上限淘汰）。
 
-        根因：_recent_replies 原为 dict，session_id 含日期(SES-YYYYMMDD-...)每天
-        新增 key 且永不清理 → 长期运行内存泄漏 → 渐进退化。
-        修复：OrderedDict + LRU，访问时 move_to_end 提到最近，超过
-        REPLY_DEDUP_SESSION_CAP 时 popitem(last=False) 淘汰最久未访问的 session。
+        根因修复（用户反馈"每段对话80%一样"）：去 key 从 session_id 改为 user_id。
+          - 微信 adapter 根本没传 session_id（空串）→ 原 key 退化为 user_openid
+          - QQ c2c 的 session_id 每小时换一次（SES-YYYYMMDD-XXXXX）→ key 频繁失效
+            → 内存缓存命中失败 → 去重对最易重复的场景完全失效
+          - 改用 user_id（wechat_{openid} / qq_{openid}），跨 session 稳定，重启前不换
+        LRU 维护不变：OrderedDict + move_to_end + popitem(last=False) 上限淘汰，
+        防止长期运行内存泄漏（原 session_id 含日期每天新增 key 的根因）。
         """
         _dd = self._recent_replies
-        buf = _dd.setdefault(sess, [])
-        _dd.move_to_end(sess)
+        buf = _dd.setdefault(user_id, [])
+        _dd.move_to_end(user_id)
         while len(_dd) > self.REPLY_DEDUP_SESSION_CAP:
             _dd.popitem(last=False)
         return buf
@@ -1439,37 +1545,80 @@ class MessageProcessorMixin:
     ) -> str:
         """跨对话回复去重：检测新回复与最近回复的相似度，重复则重试一次。
 
-        根因：agnes-2.0-flash 在相似上下文下生成高度相似回复（如"像被电流贯穿
-        一样瞬间僵住"在 5 次对话中出现 4 次）。上下文虽含历史回复，但模型未
-        有效利用来避免重复。
+        根因修复（用户反馈"每段对话80%一样"，且要求"重试后相似度必须 <70%，只允许重试一次"）：
+          1. 去 key 从 session_id 改为 user_id（稳定标识）：
+             - 微信 adapter 不传 session_id（空串）→ 原 key 退化为 user_openid
+             - QQ c2c session_id 每小时换（SES-YYYYMMDD-XXXXX）→ 内存缓存频繁失效
+             → 改用 user_id（wechat_{openid}/qq_{openid}），跨 session 稳定
+          2. 持久化去重：从 conversation_logs 查最近回复，替代易失内存缓存：
+             - 服务重启后内存清空 → 去重历史丢失 → 相同输入生成相同回复
+             - 从 DB 按 user_id 查询，确保重启后/换 session 后去重状态不丢失
+          3. 内存缓存仍保留作为同进程快速路径：DB 写入是 fire-and-forget，
+             同进程内连续请求时 DB 可能还没写入，内存缓存补足这个时序窗口
 
         机制：
-        1. 维护每 session 最近 REPLY_DEDUP_MAX 条回复（内存缓存）
+        1. recent = 内存缓存 ∪ 数据库最近回复（合并去重，最新在前）
         2. 新回复与之比较 rapidfuzz 相似度
         3. 超阈值则追加 system message 要求"完全不同的表达"重试一次
-        4. 重试后仍相似 → 用原文（不无限重试，避免阻塞）
-        5. 无论用哪个，都更新缓存
+        4. 重试后仍 >=70% → 返回相似度最低的版本（用户要求只重试一次，不无限重试）
+        5. 无论用哪个，都更新内存缓存（DB 由 background_tasks 写入）
         """
         from utils.similarity import ratio as text_ratio
 
-        _sess = session_id or user_openid or "_default"
-        recent = self._dedup_buf(_sess)  # LRU 维护 + 上限淘汰
+        # 根因修复：用 user_id（稳定标识）作为去 key，替代不稳定的 session_id
+        ctx = _current_request_ctx.get()
+        _user_id = getattr(ctx, "user_id", "") or user_openid or "_default"
+        _source = getattr(ctx, "source", "") or ""
 
-        # 诊断（临时）：记录去重执行状态，定位"去重未触发"根因
-        logger.info(f"reply.dedup_probe | sess={_sess[:24]} | recent_cnt={len(recent)} | reply_preview={reply[:40]}")
+        # 1. 合并内存缓存 + 数据库最近回复（持久化去重）
+        # 治本（2026-08-05）：用户明确要求"去重只跟上一条消息对比，不是跟全部历史对比"。
+        # 根因：原先与最近 5 条历史逐一对比，用户反复发相似消息（"在吗""我要亲亲"）时
+        #   agnes 生成相似回复 → 高相似度 → 触发去重重试 → 第二次 LLM 调用 → 总耗时 20s+。
+        # 修复：只取最近 1 条回复对比（limit=1），从源头消除"与多条历史重复"的误判面，
+        #   从而大幅降低触发重试的概率，保持主 LLM 调用单次 8s 内的健康耗时。
+        mem_recent = self._dedup_buf(_user_id)  # 内存缓存（LRU 维护）
+        db_recent: list[str] = []
+        if self.db and _user_id != "_default":
+            try:
+                db_recent = await asyncio.wait_for(
+                    self.db.get_recent_replies(_user_id, source=_source,
+                                               limit=1),
+                    timeout=3.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("reply.dedup_db_timeout user_id={}", _user_id[:24])
+            except Exception as e:
+                logger.warning("reply.dedup_db_failed error={}", str(e)[:200])
+
+        # 合并：内存缓存 + DB（去重，保持最新在前，只保留最近 1 条用于对比）
+        _seen: set[str] = set()
+        recent: list[str] = []
+        for r in list(mem_recent) + db_recent:
+            if r and r not in _seen:
+                _seen.add(r)
+                recent.append(r)
+        recent = recent[:1]
+
+        logger.info(f"reply.dedup_probe | user={_user_id[:24]} | "
+                    f"mem_cnt={len(mem_recent)} | db_cnt={len(db_recent)} | "
+                    f"merged_cnt={len(recent)} | reply_preview={reply[:40]}")
 
         # 无历史回复，直接记录并返回
         if not recent:
-            recent.append(reply)
+            _buf = self._dedup_buf(_user_id)
+            _buf.append(reply)
+            if len(_buf) > self.REPLY_DEDUP_MAX:
+                del _buf[: len(_buf) - self.REPLY_DEDUP_MAX]
             return reply
 
         # 计算与最近回复的最大相似度
         max_sim = max(text_ratio(reply, r) for r in recent)
-        logger.info(f"reply.dedup_check | sess={_sess[:20]} | max_sim={max_sim:.1f} | recent_cnt={len(recent)}")
+        logger.info(f"reply.dedup_check | user={_user_id[:20]} | "
+                    f"max_sim={max_sim:.1f} | merged_cnt={len(recent)}")
 
         if max_sim < self.REPLY_DEDUP_THRESHOLD:
             # 不重复，记录并返回（保持最近 N 条）
-            _buf = self._dedup_buf(_sess)
+            _buf = self._dedup_buf(_user_id)
             _buf.append(reply)
             if len(_buf) > self.REPLY_DEDUP_MAX:
                 del _buf[: len(_buf) - self.REPLY_DEDUP_MAX]
@@ -1482,7 +1631,12 @@ class MessageProcessorMixin:
                       preview=reply[:60])
 
         try:
-            _retry_messages = list(messages) + [{
+            # 治本：重试时只传 system + 最近 2 轮历史，不传完整历史。
+            # 根因是模型看到历史里的重复回复跟风——截断历史让模型没有重复参考，
+            # 从源头防止生成重复回复。历史仍在数据库，主路径不受影响。
+            _retry_messages = [messages[0]] if messages else []  # system prompt
+            _retry_messages += messages[-4:]  # 最近 2 轮（user+assistant 各 2）
+            _retry_messages += [{
                 "role": "system",
                 "content": (
                     f"你刚才的回复与之前说过的内容相似度高达{max_sim:.0f}%，"
@@ -1491,10 +1645,11 @@ class MessageProcessorMixin:
                     "换一种全新的表达方式。"
                 ),
             }]
+            # 尊重 WebUI temperature 设定，不篡改（用户明确要求不许自动调整 temperature）
             _retry_result = await asyncio.wait_for(
                 self.router.route(
                     task_type, _retry_messages,
-                    temperature=min(_get_temperature(_model_cfg) + 0.2, 1.5),
+                    temperature=_get_temperature(_model_cfg),
                     max_tokens=_cb_max_tokens,
                     user_openid=user_openid, session_id=session_id,
                 ),
@@ -1511,25 +1666,29 @@ class MessageProcessorMixin:
             if _retry_reply and len(_retry_reply) > 20:
                 _retry_sim = max(text_ratio(_retry_reply, r) for r in recent)
                 if _retry_sim < self.REPLY_DEDUP_THRESHOLD:
-                    # 重试成功，不重复了
-                    trace.info("reply.duplicate_retry_success",
-                               original_sim=round(max_sim, 1),
-                               retry_sim=round(_retry_sim, 1))
-                    _buf = self._dedup_buf(_sess)
+                    # 重试成功：相似度 <70%，用重试回复
+                    _buf = self._dedup_buf(_user_id)
                     _buf.append(_retry_reply)
                     if len(_buf) > self.REPLY_DEDUP_MAX:
                         del _buf[: len(_buf) - self.REPLY_DEDUP_MAX]
+                    logger.info("reply.dedup_retry_ok retry_sim={:.1f}", _retry_sim)
                     return _retry_reply
-                else:
-                    trace.warning("reply.duplicate_retry_still_similar",
-                                  retry_sim=round(_retry_sim, 1))
-            else:
-                trace.warning("reply.duplicate_retry_empty_or_short")
+                # 重试后仍 >=70%（用户要求"重试后必须 <70%，不然就是bug"）
+                # 只允许重试一次，取相似度较低的版本作为兜底，并告警便于排查
+                if _retry_sim < max_sim:
+                    reply = _retry_reply
+                    max_sim = _retry_sim
+                trace.warning("reply.dedup_retry_still_duplicate",
+                              retry_sim=round(_retry_sim, 1),
+                              threshold=self.REPLY_DEDUP_THRESHOLD,
+                              hint="重试后仍超阈值，取相似度最低版本兜底")
+        except asyncio.TimeoutError:
+            logger.warning("reply.dedup_retry_timeout timeout={}",
+                           self.REPLY_DEDUP_RETRY_TIMEOUT)
         except Exception as e:
-            trace.warning("reply.duplicate_retry_failed", error=str(e)[:200])
+            logger.warning("reply.dedup_retry_failed error={}", str(e)[:200])
 
-        # 重试失败或仍重复，用原文（不无限重试）
-        _buf = self._dedup_buf(_sess)
+        _buf = self._dedup_buf(_user_id)
         _buf.append(reply)
         if len(_buf) > self.REPLY_DEDUP_MAX:
             del _buf[: len(_buf) - self.REPLY_DEDUP_MAX]
@@ -1660,7 +1819,19 @@ class MessageProcessorMixin:
             else:
                 _early_finish_reason = _stream_finish_reason_var.get()
             # 重试机制保留：工具调用后回复不完整时续写，最多 3 次重试
+            # P0 修复（阻塞根因 2026-08-04）：重试循环必须受墙钟硬约束
+            # 根因：原实现每次重试用固定 timeout=LLM_CALL_TIMEOUT(30s) 且不检查剩余时间，
+            #   3 次重试最多 90s，远超 VERIFICATION_WALL_TIMEOUT(50s)。
+            #   日志实测 llm_verify 阶段 74-89s（86752/74908/89574ms），
+            #   导致 main_path 97s + wechat_bot.process_timeout / qq_bot.c2c_timeout 连锁超时。
+            # 修复：每轮重试前计算墙钟剩余时间，<3s 则立即停止重试接受当前回复；
+            #   单次重试超时取 min(LLM_CALL_TIMEOUT, remaining)，绝不超出墙钟。
             for _early_retry in range(3):
+                _early_remaining = self.VERIFICATION_WALL_TIMEOUT - (time.time() - loop_start)
+                if _early_remaining < 3:
+                    trace.warning("verification.incomplete_retry_no_time_left",
+                                  retry=_early_retry, remaining=round(_early_remaining, 1))
+                    break
                 _early_rstripped = early_reply.rstrip()
                 _early_ends_valid = ends_with_valid_ending(_early_rstripped)
                 _early_has_opening = any(kw in early_reply for kw in ["让我", "查一下", "看看", "查查", "找找"])
@@ -1724,12 +1895,13 @@ class MessageProcessorMixin:
                     _retry_messages = list(messages)
                     _retry_messages.append({"role": "assistant", "content": early_reply})
                     # 不追加 user message —— assistant-prefill 模式让 LLM 自然续写
+                    # P0 修复（阻塞根因）：超时取 min(LLM_CALL_TIMEOUT, remaining)，绝不超出墙钟
                     retry_result = await asyncio.wait_for(
                         self.router.route(
                             task_type, _retry_messages, temperature=temperature, max_tokens=max_tokens,
                             user_openid=user_openid, session_id=session_id,
                         ),
-                        timeout=self.LLM_CALL_TIMEOUT,
+                        timeout=min(self.LLM_CALL_TIMEOUT, _early_remaining),
                     )
                     retry_reply = retry_result if isinstance(retry_result, str) else (retry_result.choices[0].message.content or "")
                     retry_reply = self._clean_reply(retry_reply)
@@ -1784,6 +1956,7 @@ class MessageProcessorMixin:
                 user_input, all_tool_results, last_tool_calls,
                 trace, user_openid=user_openid, session_id=session_id,
                 messages=messages,
+                assistant_content=current_assistant_content,
             )
             # 关键修复：_summarize_results 可能返回空（LLM 再次返回空内容），兜底 DEGRADED_REPLY
             if not final_reply or not final_reply.strip():

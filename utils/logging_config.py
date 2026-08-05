@@ -5,6 +5,36 @@ from loguru import logger
 from config import LOG_DIR
 
 
+# ── 诊断日志 key 列表 ──────────────────────────────────
+# 这 4 个模块的诊断日志路由到 logs/diagnostics.log，方便单独排查：
+#   1. 上下文压缩 (context.*)     2. 工具循环 (verification.*)
+#   3. 工具并发 (tool.*)           4. 技能系统 (tool_registry.* / prompt_builder.*)
+#
+# WARNING 级别：需要关注的问题（到达上限/压缩回退/工具失败）
+# INFO    级别：正常运行信息（压缩触发/循环完成/工具执行/注册统计）
+_DIAGNOSTIC_PREFIXES = (
+    "context.compress_triggered",
+    "context.compressed_with_ccr",
+    "context.fallback_compress",
+    "context.trim_complete",
+    "verification.max_iterations_reached",
+    "verification.loop_complete",
+    "tool.concurrent_exec_start",
+    "tool.concurrent_exec_done",
+    "tool.exec_done",
+    "tool.exec_failed",
+    "tool_registry.builtin_registered",
+    "tool_registry.to_openai_tools",
+    "prompt_builder.system_prompt_tokens",
+)
+
+
+def _is_diagnostic(record: dict) -> bool:
+    """判断日志是否属于诊断日志（按 message 前缀匹配）。"""
+    msg = record.get("message", "")
+    return any(msg.startswith(prefix) for prefix in _DIAGNOSTIC_PREFIXES)
+
+
 def _trace_id_patcher(record):
     """loguru patcher：自动将 contextvars 中的 trace_id 注入每条日志。
 
@@ -156,6 +186,23 @@ def setup_logging() -> None:
                 encoding="utf-8",
                 enqueue=True,  # 异步队列写入，避免事件循环阻塞
                 catch=True,  # 防御：sink 写入异常时不崩溃 logger（USB 盘掉线/只读等场景）
+            )
+            _added_sink_ids.append(_sid)
+
+            # 诊断日志文件：只输出 4 大模块的诊断日志，方便单独排查
+            #   - WARNING 级别：max_iterations_reached / fallback_compress / exec_failed
+            #   - INFO    级别：compress_triggered / loop_complete / concurrent_exec / to_openai_tools 等
+            diag_log_path = log_dir / "diagnostics.log"
+            _sid = logger.add(
+                str(diag_log_path),
+                format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
+                filter=_is_diagnostic,
+                rotation="10 MB",
+                retention="30 days",
+                level="DEBUG",
+                encoding="utf-8",
+                enqueue=True,
+                catch=True,
             )
             _added_sink_ids.append(_sid)
         except (OSError, PermissionError) as e:

@@ -54,3 +54,6 @@ config/credential_salt.bin
 logs/
 xiaoda_agent.egg-info/
 .worktrees/
+
+# 测试泄漏到仓库根目录的 mock 产物（MagicMock 的 db_path 残留）
+<MagicMock*

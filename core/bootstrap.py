@@ -466,16 +466,82 @@ class AgentCoreBootstrapper:
         _prov_cfg = _get_provider_config(_DEFAULT_PROVIDER)
         _agent_model = _PRO_MODEL or _MODEL_NAME
 
+        # P0 修复（2026-08-04 实证）：启动时从 config/agents/{name}.json 读取持久化的
+        # provider/model/base_url/api_key_env，否则硬编码 _DEFAULT_PROVIDER 会覆盖
+        # 用户通过 WebUI 切换的模型选择 → 重启后子 agent 被重置到默认 mimo。
+        # 根因：update() 已持久化到文件（文件里确为 agnes），但 _register_sub_agents
+        # 从未读取该文件，一直用 _DEFAULT_PROVIDER 构造 SubAgentConfig。
+        import json as _json
+
+        def _load_persisted(_name: str) -> dict:
+            """读取 config/agents/{name}.json 持久化配置；缺失字段返回空。"""
+            _fp = _agents_dir / f"{_name}.json"
+            try:
+                if _fp.exists():
+                    return _json.loads(_fp.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                logger.debug("bootstrap.agent_persist_load_failed name={}", _name, exc_info=True)
+            return {}
+
+        def _resolved_provider(_name: str) -> str:
+            return _load_persisted(_name).get("provider") or _DEFAULT_PROVIDER
+
+        def _resolved_model(_name: str) -> str:
+            return _load_persisted(_name).get("model") or _agent_model
+
+        def _resolved_base_url(_name: str) -> str:
+            _p = _load_persisted(_name)
+            if _p.get("base_url"):
+                return _p["base_url"]
+            # provider 变更后自动解析 base_url/api_key_env，与 update() 逻辑一致
+            _prov = _p.get("provider") or _DEFAULT_PROVIDER
+            try:
+                _cfg = _get_provider_config(_prov)
+                return _cfg["base_url"]
+            except (KeyError, ValueError):
+                return _prov_cfg["base_url"]
+
+        def _resolved_api_key_env(_name: str) -> str:
+            _p = _load_persisted(_name)
+            if _p.get("api_key_env"):
+                return _p["api_key_env"]
+            _prov = _p.get("provider") or _DEFAULT_PROVIDER
+            try:
+                _cfg = _get_provider_config(_prov)
+                return _cfg["api_key_env"]
+            except (KeyError, ValueError):
+                return _prov_cfg["api_key_env"]
+
+        # P0 修复（2026-08-04）：确保 nahida-data 的 personality 文件有完整内容。
+        # 运行时 _load_personality（agent_dispatcher.py:194）直接读 agent.config.personality_file
+        # （nahida-data 路径），不经过 _resolve_personality_path。若文件被空内容覆盖（3字节 BOM），
+        # read_text 返回空 → 降级为兜底 "你是{display_name}。" → 用户自定义人格丢失。
+        # 修复：启动时检查文件，空了就从源码 config/agents/ 恢复；有内容则保留用户自定义。
+        import shutil as _shutil
+        _src_agents_dir = Path(__file__).resolve().parent.parent / "config" / "agents"
+
+        def _ensure_personality_file(_name: str) -> str:
+            _target = _agents_dir / f"{_name}_personality.md"
+            if _target.exists() and _target.stat().st_size > 3:
+                return str(_target)  # 用户已有内容，保留
+            _src = _src_agents_dir / f"{_name}_personality.md"
+            if _src.exists():
+                _agents_dir.mkdir(parents=True, exist_ok=True)
+                _shutil.copy2(_src, _target)
+                logger.info("bootstrap.personality_restored name={} bytes={}",
+                            _name, _target.stat().st_size)
+            return str(_target)
+
         xiaoli_config = SubAgentConfig(
             name="xiaoli",
             display_name=get_agent_display_name("xiaoli"),
-            provider=_DEFAULT_PROVIDER,
-            model=_agent_model,
-            personality_file=str(_agents_dir / "xiaoli_personality.md"),
+            provider=_resolved_provider("xiaoli"),
+            model=_resolved_model("xiaoli"),
+            personality_file=_ensure_personality_file("xiaoli"),
             voice_ref="xiaoli",
             excluded_tools={"call_xiaoli", "shell_command", "python_executor", "write_file", "search_files", "read_file", "list_files", "web_browse", "document_reader", "multi_search", "wolfram_query"},
-            base_url=_prov_cfg["base_url"],
-            api_key_env=_prov_cfg["api_key_env"],
+            base_url=_resolved_base_url("xiaoli"),
+            api_key_env=_resolved_api_key_env("xiaoli"),
             capabilities=["chat", "play", "fun"],
             route_description="日常聊天、玩耍、轻松有趣的对话",
             sticker_dir=str(XIAOLI_STICKER_DIR),
@@ -484,13 +550,13 @@ class AgentCoreBootstrapper:
         xiaolang_config = SubAgentConfig(
             name="xiaolang",
             display_name=get_agent_display_name("xiaolang"),
-            provider=_DEFAULT_PROVIDER,
-            model=_agent_model,
-            personality_file=str(_agents_dir / "xiaolang_personality.md"),
+            provider=_resolved_provider("xiaolang"),
+            model=_resolved_model("xiaolang"),
+            personality_file=_ensure_personality_file("xiaolang"),
             voice_ref=None,
             excluded_tools={"call_xiaoli", "call_xiaoda", "delegate_task"},
-            base_url=_prov_cfg["base_url"],
-            api_key_env=_prov_cfg["api_key_env"],
+            base_url=_resolved_base_url("xiaolang"),
+            api_key_env=_resolved_api_key_env("xiaolang"),
             capabilities=["coding", "debug", "script", "programming", "hardware", "system", "devops"],
             route_description="编程、代码编写、调试、技术问题、硬件控制、系统运维、开发辅助",
             mcp_servers=["git", "github"],
@@ -499,13 +565,13 @@ class AgentCoreBootstrapper:
         xiaolian_config = SubAgentConfig(
             name="xiaolian",
             display_name=get_agent_display_name("xiaolian"),
-            provider=_DEFAULT_PROVIDER,
-            model=_agent_model,
-            personality_file=str(_agents_dir / "xiaolian_personality.md"),
+            provider=_resolved_provider("xiaolian"),
+            model=_resolved_model("xiaolian"),
+            personality_file=_ensure_personality_file("xiaolian"),
             voice_ref=None,
             excluded_tools={"call_xiaoli", "call_xiaoda", "delegate_task", "shell_command", "python_executor", "write_file"},
-            base_url=_prov_cfg["base_url"],
-            api_key_env=_prov_cfg["api_key_env"],
+            base_url=_resolved_base_url("xiaolian"),
+            api_key_env=_resolved_api_key_env("xiaolian"),
             capabilities=["search", "lookup", "query", "explore", "discover"],
             route_description="搜索信息、查询资料、探索发现",
         )
@@ -513,13 +579,13 @@ class AgentCoreBootstrapper:
         xiaoke_config = SubAgentConfig(
             name="xiaoke",
             display_name=get_agent_display_name("xiaoke"),
-            provider=_DEFAULT_PROVIDER,
-            model=_agent_model,
-            personality_file=str(_agents_dir / "xiaoke_personality.md"),
+            provider=_resolved_provider("xiaoke"),
+            model=_resolved_model("xiaoke"),
+            personality_file=_ensure_personality_file("xiaoke"),
             voice_ref=None,
             excluded_tools={"call_xiaoli", "call_xiaoda", "delegate_task", "shell_command", "write_file"},
-            base_url=_prov_cfg["base_url"],
-            api_key_env=_prov_cfg["api_key_env"],
+            base_url=_resolved_base_url("xiaoke"),
+            api_key_env=_resolved_api_key_env("xiaoke"),
             capabilities=["research", "analysis", "study", "academic"],
             route_description="研究分析、学术思考、深度解读",
         )

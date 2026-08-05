@@ -73,7 +73,12 @@ def get_shared_client() -> httpx.AsyncClient:
             limits=httpx.Limits(
                 max_connections=50,
                 max_keepalive_connections=20,
-                keepalive_expiry=30,
+                # 治本修复（2026-08-05）：30→300。与 agnes_transport 保持一致。
+                # 根因：embed API 共用此 client，keepalive=30s 过期后重新握手 6s，
+                #   导致 embed 首次冷启动慢 → memory retrieval 超时。
+                #   日志 memory.retrieve_timeout_single 铁证。
+                # 300s 覆盖正常对话间隔，连接保持热，embed 0.1s（无握手）。
+                keepalive_expiry=300,
             ),
             timeout=httpx.Timeout(30.0, connect=15.0),
             http2=http2_enabled,

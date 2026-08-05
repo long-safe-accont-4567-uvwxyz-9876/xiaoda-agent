@@ -71,17 +71,18 @@ async def list_sessions(request: Request) -> Any:
         rows = await core.db.fetch_all(
             "SELECT cl.session_id, cl.cnt, cl.created, cl.updated, cl.source, "
             "  (SELECT user_message FROM conversation_logs cl2 "
-            "   WHERE cl2.session_id = cl.session_id "
+            "   WHERE COALESCE(NULLIF(cl2.session_id, ''), cl2.user_id) = cl.session_id "
             "   ORDER BY cl2.timestamp ASC LIMIT 1) AS first_message, "
             "  (SELECT assistant_reply FROM conversation_logs cl3 "
-            "   WHERE cl3.session_id = cl.session_id "
+            "   WHERE COALESCE(NULLIF(cl3.session_id, ''), cl3.user_id) = cl.session_id "
             "   ORDER BY cl3.timestamp DESC LIMIT 1) AS last_reply "
             "FROM ("
-            "  SELECT session_id, COUNT(*) AS cnt, MIN(timestamp) AS created, "
+            "  SELECT COALESCE(NULLIF(session_id, ''), user_id) AS session_id, "
+            "    COUNT(*) AS cnt, MIN(timestamp) AS created, "
             "    MAX(timestamp) AS updated, MIN(source) AS source "
             "  FROM conversation_logs "
-            "  WHERE session_id != '' "
-            "  GROUP BY session_id "
+            "  WHERE session_id != '' OR user_id != '' "
+            "  GROUP BY COALESCE(NULLIF(session_id, ''), user_id) "
             "  ORDER BY updated DESC "
             "  LIMIT 50"
             ") cl")
@@ -115,7 +116,8 @@ async def get_messages(session_id: str, request: Request,
     core = request.app.state.core
     messages: list[MessageItem] = []
     try:
-        cond = "session_id=?"
+        # 治本修复：空 session_id 的记录用 user_id 匹配（微信 bot 不传 session_id）
+        cond = "COALESCE(NULLIF(session_id, ''), user_id)=?"
         params: tuple = (session_id,)
         if before:
             cond += " AND timestamp<?"

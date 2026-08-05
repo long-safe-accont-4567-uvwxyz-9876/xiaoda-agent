@@ -12,6 +12,7 @@ import { useRouter } from 'vue-router'
 import { t, tf, setLang, state as i18nState } from '../i18n'
 import type { Lang } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
+import WeChatConnectPanel from '../components/WeChatConnectPanel.vue'
 import { sound } from '../utils/sound'
 
 const message = useMessage()
@@ -147,11 +148,14 @@ async function onRefreshAudit() {
 }
 
 const permDesc = computed<Record<string, string>>(() => ({
-  default: t('settings.permissionDesc.default'),
-  dev: t('settings.permissionDesc.dev'),
-  strict: t('settings.permissionDesc.strict'),
-  bypass: t('settings.permissionDesc.bypass'),
   goat: t('settings.permissionDesc.goat'),
+  default: t('settings.permissionDesc.default'),
+  strict: t('settings.permissionDesc.strict'),
+}))
+const permLabel = computed<Record<string, string>>(() => ({
+  goat: t('settings.permissionLabel.goat'),
+  default: t('settings.permissionLabel.default'),
+  strict: t('settings.permissionLabel.strict'),
 }))
 </script>
 
@@ -249,7 +253,7 @@ const permDesc = computed<Record<string, string>>(() => ({
       <h3>{{ t('settings.permissionMode') }}</h3>
       <n-radio-group :value="permissionMode" @update:value="setPermMode">
         <n-radio-button v-for="m in permissionOptions" :key="m" :value="m">
-          {{ m.toUpperCase() }}
+          {{ permLabel[m] || m }}
         </n-radio-button>
       </n-radio-group>
       <p class="perm-desc">{{ permDesc[permissionMode] || '' }}</p>
@@ -339,6 +343,8 @@ const permDesc = computed<Record<string, string>>(() => ({
       <p class="perm-desc" v-if="!lanInfo!.lan_urls?.length">{{ t('settings.noLanIp') }}</p>
       <p class="perm-desc" v-else>{{ t('settings.clickToCopy') }}</p>
     </section></Tilt3D>
+
+    <WeChatConnectPanel />
 
     <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
       <h3>{{ t('settings.apiKeyConfig') }}</h3>

@@ -200,7 +200,7 @@ async def get_keys() -> Any:
             {"key": "DEEPSEEK_API_KEY", "label": "DeepSeek API 密钥", "desc": "DeepSeek 大模型 API 密钥", "url": "https://platform.deepseek.com", "url_desc": "注册 → API Keys"},
             {"key": "OPENROUTER_API_KEY", "label": "OpenRouter API 密钥", "desc": "OpenRouter API 密钥", "url": "https://openrouter.ai", "url_desc": "注册 → API Keys"},
             {"key": "WOLFRAMALPHA_API_KEY", "label": "WolframAlpha 知识计算密钥", "desc": "知识计算引擎", "url": "https://products.wolframalpha.com/api/", "url_desc": "注册 → Get AppID"},
-            {"key": "AGNES_API_KEY", "label": "Agnes AI 图像/视频密钥", "desc": "图片生成和视频生成的核心依赖", "url": "https://agnes-ai.com", "url_desc": "注册 → API Keys"},
+            {"key": "AGNES_API_KEY", "label": "Agnes AI 图像/视频密钥", "desc": "图片生成和视频生成的核心依赖", "url": "https://agnes-ai.cn", "url_desc": "注册 → API Keys"},
             {"key": "GITHUB_PERSONAL_ACCESS_TOKEN", "label": "GitHub 个人访问令牌", "desc": "GitHub MCP Server 所需", "url": "https://github.com/settings/tokens", "url_desc": "Generate new token"},
             {"key": "MODELSCOPE_ACCESS_TOKEN", "label": "魔搭 Access Token", "desc": "魔搭 ModelScope 免费模型发现", "url": "https://modelscope.cn", "url_desc": "注册 → 个人中心 → 访问令牌"},
         ]
@@ -481,15 +481,10 @@ async def _test_ollama(base_url: str) -> tuple[bool, str]:
     _path = _parsed.path.rstrip("/")
     if not _path.endswith("/v1"):
         base_url = f"{base_url.rstrip('/')}/v1"
-    # SSRF 防护：校验 URL 不指向内网/元数据服务
+    # SSRF 防护：校验 URL 不指向内网/元数据服务。
     # Ollama 是本地/容器内部署，允许 localhost / 127.0.0.1 / host.docker.internal
-    from security.ssrf_guard import validate_url
-    _hostname = (_parsed.hostname or "").lower().rstrip(".")
-    _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "ip6-localhost",
-                    "host.docker.internal", "host.minikube.internal"}
-    if _hostname in _LOCAL_HOSTS:
-        pass  # 本地/容器内 Ollama 服务，跳过 SSRF 检查
-    else:
+    from security.ssrf_guard import validate_url, is_local_host
+    if not is_local_host(base_url):
         allowed, reason = validate_url(base_url)
         if not allowed:
             return False, f"URL 安全检查失败: {reason}"

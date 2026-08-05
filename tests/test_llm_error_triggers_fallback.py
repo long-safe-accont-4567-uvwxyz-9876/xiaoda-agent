@@ -39,7 +39,6 @@ def _make_router() -> ModelRouter:
     router._chat_idle = asyncio.Event()
     router._chat_idle.set()  # 初始空闲
     router._bg_llm_semaphore = asyncio.Semaphore(1)
-    router._llm_call_gate = asyncio.Lock()
     router._active_bg_llm_tasks = set()
     return router
 

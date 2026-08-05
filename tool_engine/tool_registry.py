@@ -3,6 +3,7 @@ from typing import Any
 from enum import Enum
 import threading
 
+from loguru import logger
 from utils.metrics import metrics
 
 
@@ -246,6 +247,11 @@ def register_builtin_tools_lazy() -> None:
             version=entry.get("version", ""),
         )
 
+    logger.info("tool_registry.builtin_registered",
+                total_registered=len(_tools),
+                builtin_manifest=len(BUILTIN_TOOLS),
+                max_enabled=MAX_ENABLED_TOOLS)
+
 
 def resolve_tool_func(tool: dict) -> tuple[Any, str]:
     """解析并返回工具的可调用 func。
@@ -380,6 +386,20 @@ def to_openai_tools() -> list[dict]:
 
     if len(enabled) > MAX_ENABLED_TOOLS:
         metrics.inc("tool_registry.tools_capped")
+
+    # 技能系统诊断：记录工具描述 token 数和注册/启用统计
+    import json as _json
+    _tools_json = _json.dumps(result, ensure_ascii=False)
+    # 粗略估算 token：中文 1.5，英文 0.25
+    _cn = sum(1 for c in _tools_json if '\u4e00' <= c <= '\u9fff')
+    _en = len(_tools_json) - _cn
+    _tools_tokens = int(_cn * 1.5 + _en * 0.25)
+    logger.info("tool_registry.to_openai_tools",
+                total_registered=len(_tools),
+                enabled_count=len(enabled),
+                returned_count=len(result),
+                max_enabled=MAX_ENABLED_TOOLS,
+                tools_tokens_est=_tools_tokens)
 
     with _schema_lock:
         _schema_cache = result

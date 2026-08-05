@@ -20,6 +20,22 @@ from config import get_agent_display_name
 from core.background_tasks import _bg_tasks
 
 
+def _stage_log(stage: str, t0: float, query: str = "") -> None:
+    """记录检索子阶段耗时（诊断阻塞根因用）。
+
+    日志剥离结构化字段时，用 INFO 单条消息也能看到每个子阶段耗时，
+    便于定位记忆检索 5s 超时里到底哪一步（embed/rerank/DB）最慢。
+    """
+    _ms = int((time.time() - t0) * 1000)
+    # 仅记录 >50ms 的阶段，避免刷屏；>1000ms 用 WARNING 突出
+    if _ms > 1000:
+        logger.warning("memory.retrieve_stage_cost stage={} elapsed_ms={} query={}",
+                       stage, _ms, (query or "")[:40])
+    elif _ms > 50:
+        logger.info("memory.retrieve_stage_cost stage={} elapsed_ms={} query={}",
+                    stage, _ms, (query or "")[:40])
+
+
 def _log_task_exception(task: asyncio.Task) -> None:
     """Log unhandled exceptions from fire-and-forget tasks."""
     if task.cancelled():
@@ -1098,7 +1114,9 @@ class MemoryManager:
             # reranker 已用共享 httpx client（connect=15s）+ 单次请求 5s timeout，
             # _hybrid_rerank 内部有 try/except 返回 None（失败降级到 RRF 排序）。
             # 原外层 5s 与内层 5s 双层超时，外层必然先触发，reranker 实际耗时被截断。
+            __st = time.time()
             reranked = await self._hybrid_rerank(query, fused, all_items, k)
+            _stage_log("hybrid_rerank", __st, query)
             if reranked:
                 # 对 reranked 也应用 entity boost
                 reranked = await self._apply_entity_boost(query, reranked, scope)
@@ -1152,9 +1170,11 @@ class MemoryManager:
             # （有 10s 单次超时 + 重试保护）+ 本地 sqlite_vec 搜索（毫秒级）。
             # 原 3.5s 超时在 embed 慢时必然先触发，导致向量通道被跳过 → "想不起来"。
             # 注：原注释"embed 6.9s 击穿 8s"的根因正是 connect=5s 过短，现已修复。
+            __st = time.time()
             vec_results = await self.vec.search(
                 query, top_k=k * 2, candidate_ids=candidate_ids, deterministic=True,
             )
+            _stage_log("vec_embed_search", __st, query)
             if not vec_results:
                 return []
             vec_ids = [row_id for row_id, _ in vec_results]
@@ -1455,7 +1475,8 @@ class MemoryManager:
     async def retrieve_memories(self, query: str, k: int = 5, context: str = "",
                                  _retry_attempted: bool = False,
                                  scope: Any | None = None,
-                                 conv_user_id: str = "") -> list[dict]:
+                                 conv_user_id: str = "",
+                                 apply_min_score: bool = True) -> list[dict]:
         """检索记忆。
 
         P0 修复（上下文污染根因）：新增 conv_user_id 参数。
@@ -1464,6 +1485,14 @@ class MemoryManager:
               "那是之前的数据库里面的原文直接蹦出来了"）。
         修复：conv_user_id 非空时，_search_conversation_logs 按 user_id 过滤，
               仅返回当前用户的对话记录。query_cache 也按 user_id 隔离。
+
+        回忆工具失效根因（2026-08-05）：RAG_MIN_FINAL_SCORE 的 rerank 过滤
+        会把"亲亲流程"等个人/亲密记忆（rerank 0.007-0.1，低于 0.15）整段
+        清空，导致 recall 工具返回空、助手"想不起来"。该过滤的本意是给
+        主动注入上下文去噪（避免技术型 query 注入无关亲密内容），但 recall
+        工具是用户显式发起的回忆请求，应返回检索到的记忆由模型判断相关性，
+        不应被该过滤清空。故新增 apply_min_score：默认 True（主动注入保持
+        去噪），recall 工具传 False 跳过该过滤。
         """
         import config
         if scope is None:
@@ -1577,7 +1606,7 @@ class MemoryManager:
             # 用 rerank_score（纯相关性）而非 final_score（综合分含 R/recency/importance 保底 ~0.22）
             # （bench_rag_e2e 实测：技术型 query 返回 rerank 0.007 的亲密内容）
             _min_score = getattr(config, 'RAG_MIN_FINAL_SCORE', 0.15)
-            if intent != "chat" and _min_score > 0 and results:
+            if apply_min_score and intent != "chat" and _min_score > 0 and results:
                 _before = len(results)
                 results = [r for r in results
                            if float(r.get("rerank_score", 0)) >= _min_score]
@@ -1593,31 +1622,43 @@ class MemoryManager:
             return results
 
         # 查询变换：改写 + 扩展
+        __st = time.time()
         queries = await self._transform_queries(query, context)
+        _stage_log("transform_queries", __st, query)
 
         # 多查询检索
         if getattr(config, "RETRIEVAL_PARALLEL_SEARCH", True) and len(queries) > 1:
+            __st = time.time()
             all_results = await self._multi_query_parallel_search(queries, query, k, scope=scope)
+            _stage_log("multi_query_search", __st, query)
         else:
+            __st = time.time()
             all_results = await self._multi_query_serial_search(queries, k, scope=scope)
+            _stage_log("multi_query_search", __st, query)
         results = all_results
 
         # 降级：纯向量检索
         if not results:
+            __st = time.time()
             results = await self._vector_fallback_search(query, k, scope=scope)
+            _stage_log("vector_fallback", __st, query)
 
         # 注：移除 importance fallback（同上，会注入"重要但无关"的记忆）
         # 空结果如实返回空，由模型调 recall 工具或如实说"不记得"
 
         # 流体记忆评分（艾宾浩斯遗忘曲线 + 访问强化）
+        __st = time.time()
         results = await self._apply_fsrs_scoring(results)
+        _stage_log("fsrs_scoring", __st, query)
 
         # 保留实体提取用于评分增强，但不再后置追加候选
         # （KG 召回已前移到 retrieve_memories_hybrid 的并行召回阶段，统一走 RRF + Reranker）
         query_entities: set[str] = set()
         if self.kg:
             try:
+                __st = time.time()
                 query_entities = await self.kg.get_query_entities(query)
+                _stage_log("kg_query_entities", __st, query)
             except Exception as e:
                 logger.debug("memory.query_entities_failed", error=str(e))
 
@@ -1675,7 +1716,7 @@ class MemoryManager:
         # 用 rerank_score（纯相关性）而非 final_score（综合分含保底 ~0.22，过滤失效）
         # （bench_rag_e2e 实测：技术型 query 返回 rerank 0.007 的亲密内容）
         _min_score = getattr(config, 'RAG_MIN_FINAL_SCORE', 0.15)
-        if intent != "chat" and _min_score > 0 and results:
+        if apply_min_score and intent != "chat" and _min_score > 0 and results:
             _before = len(results)
             results = [r for r in results
                        if float(r.get("rerank_score", 0)) >= _min_score
@@ -1687,8 +1728,15 @@ class MemoryManager:
                             min_score=_min_score)
 
         # 写入缓存（P0: 使用 user_id 隔离的 cache key）
+        # 治本修复（2026-08-05）：put 改 fire-and-forget。
+        # 根因：_query_cache.put 内部调 embed API（网络 1-2s），await 阻塞检索返回。
+        # 缓存写入不影响当前检索结果，无需让用户等待。
         if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
-            await self._query_cache.put(_cache_key, results)
+            _bg = asyncio.create_task(
+                self._query_cache.put(_cache_key, results),
+                name=f"query_cache_put_{int(time.time()*1000)}"
+            )
+            _bg.add_done_callback(_log_task_exception)
 
         # 检索命中后批量递增 access_count（passive_use）
         # 修复：此前 increment_access_count 从未被调用，导致记忆永远无法进入 PERMANENT 状态

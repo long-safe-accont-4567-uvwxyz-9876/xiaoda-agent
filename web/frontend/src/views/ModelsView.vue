@@ -94,6 +94,8 @@ async function loadAll() {
     discoveredModels.value = dm
     renderChart()
     loadTemperature()
+    loadFreqPenalty()
+    loadPresPenalty()
   } catch (e: any) {
     message.error(e.message)
   }
@@ -257,6 +259,96 @@ function setTempPreset(val: number) {
   temperature.value = val
   _doSaveTemperature()
 }
+
+// Frequency Penalty 控制
+const freqPenalty = ref(1.0)
+const freqSource = ref<'override' | 'default'>('default')
+const freqLoading = ref(false)
+let _freqSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+const freqPresets = [
+  { label: '关闭', value: 0.0, desc: '不惩罚重复' },
+  { label: '轻度', value: 0.3, desc: '轻微惩罚' },
+  { label: '标准', value: 1.0, desc: '默认推荐' },
+  { label: '强力', value: 1.5, desc: '强惩罚重复' },
+  { label: '极限', value: 2.0, desc: '最大惩罚' },
+]
+
+async function loadFreqPenalty() {
+  try {
+    const res = await get<any>('/models/frequency_penalty')
+    freqPenalty.value = res.frequency_penalty ?? 1.0
+    freqSource.value = res.source ?? 'default'
+  } catch { /* use default */ }
+}
+
+async function _doSaveFreqPenalty() {
+  freqLoading.value = true
+  try {
+    const res = await put<any>('/models/frequency_penalty', { frequency_penalty: freqPenalty.value })
+    freqPenalty.value = res.frequency_penalty
+    freqSource.value = 'override'
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    freqLoading.value = false
+  }
+}
+
+function onFreqChange() {
+  if (_freqSaveTimer) clearTimeout(_freqSaveTimer)
+  _freqSaveTimer = setTimeout(_doSaveFreqPenalty, 400)
+}
+
+function setFreqPreset(val: number) {
+  freqPenalty.value = val
+  _doSaveFreqPenalty()
+}
+
+// Presence Penalty 控制
+const presPenalty = ref(1.0)
+const presSource = ref<'override' | 'default'>('default')
+const presLoading = ref(false)
+let _presSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+const presPresets = [
+  { label: '关闭', value: 0.0, desc: '不惩罚新 token' },
+  { label: '轻度', value: 0.3, desc: '轻微惩罚' },
+  { label: '标准', value: 1.0, desc: '默认推荐' },
+  { label: '强力', value: 1.5, desc: '强惩罚' },
+  { label: '极限', value: 2.0, desc: '最大惩罚' },
+]
+
+async function loadPresPenalty() {
+  try {
+    const res = await get<any>('/models/presence_penalty')
+    presPenalty.value = res.presence_penalty ?? 1.0
+    presSource.value = res.source ?? 'default'
+  } catch { /* use default */ }
+}
+
+async function _doSavePresPenalty() {
+  presLoading.value = true
+  try {
+    const res = await put<any>('/models/presence_penalty', { presence_penalty: presPenalty.value })
+    presPenalty.value = res.presence_penalty
+    presSource.value = 'override'
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    presLoading.value = false
+  }
+}
+
+function onPresChange() {
+  if (_presSaveTimer) clearTimeout(_presSaveTimer)
+  _presSaveTimer = setTimeout(_doSavePresPenalty, 400)
+}
+
+function setPresPreset(val: number) {
+  presPenalty.value = val
+  _doSavePresPenalty()
+}
 </script>
 
 <template>
@@ -381,6 +473,44 @@ function setTempPreset(val: number) {
         <n-button v-for="p in tempPresets" :key="p.value" size="tiny" quaternary
                   :type="Math.abs(temperature - p.value) < 0.03 ? 'primary' : 'default'"
                   @click="setTempPreset(p.value)">
+          {{ p.label }} {{ p.value }}
+        </n-button>
+      </div>
+    </section>
+    </Tilt3D>
+
+    <Tilt3D :max-x="4" :max-y="6">
+    <section class="glass-panel section">
+      <h3>Frequency Penalty 调节 <span class="hint">惩罚已出现 token 的重复频率，越高越抑制套模板重复 <span v-if="freqLoading" class="temp-saving">保存中...</span></span></h3>
+      <div class="temp-row">
+        <span class="temp-val">{{ freqPenalty.toFixed(2) }}</span>
+        <n-slider :value="freqPenalty" :min="0" :max="2" :step="0.05"
+                  :tooltip="false" style="flex:1; margin: 0 16px;"
+                  @update:value="(v: number) => { freqPenalty = v; onFreqChange() }" />
+      </div>
+      <div class="temp-presets">
+        <n-button v-for="p in freqPresets" :key="p.value" size="tiny" quaternary
+                  :type="Math.abs(freqPenalty - p.value) < 0.03 ? 'primary' : 'default'"
+                  @click="setFreqPreset(p.value)">
+          {{ p.label }} {{ p.value }}
+        </n-button>
+      </div>
+    </section>
+    </Tilt3D>
+
+    <Tilt3D :max-x="4" :max-y="6">
+    <section class="glass-panel section">
+      <h3>Presence Penalty 调节 <span class="hint">惩罚已出现 token 的再次生成，越高越抑制条件模式重复 <span v-if="presLoading" class="temp-saving">保存中...</span></span></h3>
+      <div class="temp-row">
+        <span class="temp-val">{{ presPenalty.toFixed(2) }}</span>
+        <n-slider :value="presPenalty" :min="0" :max="2" :step="0.05"
+                  :tooltip="false" style="flex:1; margin: 0 16px;"
+                  @update:value="(v: number) => { presPenalty = v; onPresChange() }" />
+      </div>
+      <div class="temp-presets">
+        <n-button v-for="p in presPresets" :key="p.value" size="tiny" quaternary
+                  :type="Math.abs(presPenalty - p.value) < 0.03 ? 'primary' : 'default'"
+                  @click="setPresPreset(p.value)">
           {{ p.label }} {{ p.value }}
         </n-button>
       </div>

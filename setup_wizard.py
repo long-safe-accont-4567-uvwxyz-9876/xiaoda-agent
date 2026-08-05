@@ -179,7 +179,7 @@ OPTIONAL_KEYS = [
         "key": "AGNES_API_KEY",
         "label": "Agnes AI 图像/视频密钥 ⭐强烈建议",
         "desc": "图片生成和视频生成的核心依赖，不配置则无法使用图片/视频生成功能",
-        "url": "https://agnes-ai.com",
+        "url": "https://agnes-ai.cn",
         "url_desc": "注册 → API Keys",
     },
     {

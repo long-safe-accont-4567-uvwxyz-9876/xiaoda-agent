@@ -15,11 +15,25 @@ AGNES_MAX_TOKENS_LIMIT = 65535  # 留 1 token 余量
 # 调整为 connect=15s 给握手 3 倍余量；max_retries=0 禁用 SDK 内部盲重试（对连接错误无效且放大延迟），
 # 重试控制权统一交回 model_router（保留重试路径作为安全网，正常不触发）。
 # 共享 httpx.AsyncClient 配置连接池 keepalive，避免 stale 连接复用导致首次请求失败。
-AGNES_HTTP_TIMEOUT = httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=10.0)
+#
+# 治本修复（2026-08-05 用户"治标不治本"反馈）：read 8→15。
+# 根因（实测铁证）：agnes-2.0-flash 服务端强制 thinking，所有 enable_thinking=False
+#   参数变体（chat_template_kwargs / enable_thinking / thinking.type=disabled）均无效，
+#   全部返回 reasoning_content，正常响应 6-7s（POST /chat/completions 实测 6.98s）。
+#   这是 agnes API 的硬约束，客户端无法关闭。
+# read=15s 卡边缘：agnes 直接测试 6.5-13s 波动，偶发 13s+ → 15s timeout 超时。
+# read=30s 治本：覆盖 agnes 偶发慢 13s + 17s 余量，正常调用永不超时。
+AGNES_HTTP_TIMEOUT = httpx.Timeout(connect=15.0, read=30.0, write=15.0, pool=10.0)
 AGNES_HTTP_LIMITS = httpx.Limits(
     max_connections=100,
     max_keepalive_connections=20,
-    keepalive_expiry=30.0,
+    # 治本修复（2026-08-05 用户"治标不治本"反馈）：30→300。
+    # 根因：keepalive_expiry=30s，用户 30s 内无消息 → 连接关闭 →
+    #   下次请求重新 TCP+TLS 握手 6s + agnes thinking 6.5s = 12.5s（实测铁证）。
+    #   12s timeout 卡边缘 → TimeoutError → 用户收不到回复。
+    # 300s（5分钟）覆盖用户正常对话间隔，连接保持热，首次调用 6.5s（无握手）。
+    # 配合启动预热（lifespan 中 ping agnes），彻底消除握手延迟。
+    keepalive_expiry=300.0,
 )
 
 # 模块级共享 httpx client：所有 AgnesTransport 实例复用同一连接池，
@@ -31,10 +45,21 @@ def _get_agnes_http_client() -> httpx.AsyncClient:
     """返回共享的 httpx.AsyncClient，惰性初始化。"""
     global _agnes_http_client
     if _agnes_http_client is None or _agnes_http_client.is_closed:
+        # P0 修复（2026-08-05 agnes 超时根因）：强制 IPv4（local_address='0.0.0.0'）。
+        # 根因：本机 DNS 解析 agnes 返回 IPv6（2408:8752:...）+ IPv4（116.162.25.57），
+        # 但本机 IPv6 路由不通（socket AF_INET6 connect 立即 OSError）。httpx 默认
+        # happy-eyeballs 优先 IPv6 → IPv6 失败后 IPv4 回退卡住 → ConnectTimeout 10s+。
+        # 实测：默认 httpx 超时；强制 IPv4 后 0.42s 成功（code=301）。
+        # 这就是 agnes "偶发超时"的真正根因——不是 API 慢，是 IPv6 路由问题。
+        # 修复：local_address='0.0.0.0' 绑定 IPv4，跳过 IPv6 直连 IPv4。
+        _agnes_transport = httpx.AsyncHTTPTransport(
+            http2=False,  # agnes API 无需 HTTP/2，避免 h2 协商开销
+            local_address="0.0.0.0",  # 强制 IPv4，绕过不可用的 IPv6 路由
+        )
         _agnes_http_client = httpx.AsyncClient(
             timeout=AGNES_HTTP_TIMEOUT,
             limits=AGNES_HTTP_LIMITS,
-            http2=False,  # agnes API 无需 HTTP/2，避免 h2 协商开销
+            transport=_agnes_transport,
         )
     return _agnes_http_client
 

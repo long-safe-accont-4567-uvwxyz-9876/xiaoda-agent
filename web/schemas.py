@@ -57,6 +57,7 @@ class MessageItem(BaseModel):
 class SystemStatus(BaseModel):
     uptime: float
     qq_connected: bool
+    wechat_connected: bool = False
     active_sessions: int
     version: str
     permission_mode: str

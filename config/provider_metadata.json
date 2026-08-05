@@ -14,7 +14,7 @@
       "base_url_default": "https://apihub.agnes-ai.cn/v1",
       "max_tokens_cap": 65535,
       "default_model": "agnes-2.0-flash",
-      "doc_url": "https://docs.agnes-ai.com/",
+      "doc_url": "https://docs.agnes-ai.cn/",
       "doc_note": "agnes-2.0-flash 官方 max_tokens 上限 65536（2026-07 官方文档确认；超过返回 500 InternalServerError 'max_tokens exceeds the limit of 65536'）。配置取 65535（=上限-1）作为安全裁剪阈值，避免边界值因 SDK/服务端差异偶发 500。",
       "supports_vision": false,
       "supports_tools": true,
@@ -70,9 +70,14 @@
     "ollama": {
       "base_url_default": "",
       "max_tokens_cap": null,
-      "default_model": "",
+      "default_model": "qwen2.5:latest",
+      "model_name_map": {
+        "_comment": "工作流/云平台(如硅基流动)写死的模型名 → 本地 Ollama 实际模型名 的映射。请求模型名精确命中时使用映射值；含 / 的云模型名(如 deepseek-ai/DeepSeek-V3-0324)会自动回退到 default_model。请按你本地 pull 的实际模型名修改。也可用环境变量 OLLAMA_MODEL_MAP(JSON)/OLLAMA_DEFAULT_MODEL 覆盖",
+        "deepseek-ai/DeepSeek-V3-0324": "qwen2.5:latest",
+        "deepseek-chat": "qwen2.5:latest"
+      },
       "doc_url": "https://ollama.com/",
-      "doc_note": "Ollama 本地部署，无固定上限（视本地模型而定）。仅当 OLLAMA_BASE_URL 环境变量显式配置时才启用，不默认注册",
+      "doc_note": "Ollama 本地部署，无固定上限（视本地模型而定）。模型名映射机制：路由把工作流/云模型名翻译为本地模型名后再真实转发给本地 Ollama（OLLAMA_BASE_URL，如 http://localhost:11434/v1），避免 model not found。default_model 是云模型名（含 / 的 org/model 名）回退到的本地模型。仅当 OLLAMA_BASE_URL 环境变量显式配置时才启用，不默认注册",
       "supports_vision": false,
       "supports_tools": true
     }

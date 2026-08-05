@@ -121,62 +121,78 @@ def get_credentials_dir() -> Path:
     return fallback
 
 def get_config_dir() -> Path:
-    """获取配置目录（用于 webui_overrides.json 等可写配置）。
+    """获取配置目录（用于 provider_metadata.json、webui_overrides.json 等可写配置）。
 
-    frozen 模式下使用用户目录 ~/.ai-agent/config/，
-    避免写入 C:\\Program Files\\ 等需要管理员权限的目录。
+    统一返回 CONFIG_DIR，与 agent.json5 / AGENTS_CONFIG_DIR 同源，避免 U 盘
+    生效时 get_config_dir（旧实现硬编码 ~/.ai-agent/config）与 CONFIG_DIR
+    （KIOXIA 优先）拆到两个位置。frozen 下若旧安装目录有配置而 CONFIG_DIR
+    为空，则迁移到 CONFIG_DIR。
     """
     if getattr(sys, 'frozen', False):
-        user_config = Path.home() / ".ai-agent" / "config"
-        # 迁移：如果旧安装目录有配置文件但用户目录没有，复制过来
+        # 迁移：旧安装目录（含更新前写入的用户配置）有文件而 CONFIG_DIR 尚无
+        # agent.json5 时复制，避免"更新安装包丢配置"。
         old_config = get_base_dir() / "config"
-        if old_config.exists() and not user_config.exists():
+        if old_config.exists() and any(old_config.iterdir()):
             try:
-                shutil.copytree(old_config, user_config, dirs_exist_ok=True)
+                if not (CONFIG_DIR / "agent.json5").exists():
+                    shutil.copytree(old_config, CONFIG_DIR, dirs_exist_ok=True)
+                    logger.debug("config.dir_migrated_to=%s", CONFIG_DIR)
             except (OSError, shutil.Error) as e:
                 logger.debug("config.dir_migrate_failed: %s", e)
-        user_config.mkdir(parents=True, exist_ok=True)
-        return user_config
-    # Docker 环境：使用 KIOXIA_DATA_DIR（volume 挂载的持久化目录）
-    kioxia = os.getenv("KIOXIA_DATA_DIR", "")
-    if kioxia:
-        config_dir = Path(kioxia) / "config"
-        config_dir.mkdir(parents=True, exist_ok=True)
-        return config_dir
-    return get_base_dir() / "config"
+    return CONFIG_DIR
 
 def _resolve_data_path(kioxia_path: Path, fallback_path: Path) -> Path:
     """解析数据路径，优先使用 KIOXIA 外置存储，失败时降级到 fallback。
 
-    注意：fallback_path 必须与 kioxia_path 结构一致（如都是 .../db），
-    避免首次/二次启动路径翻转导致数据孤立。
+    规则：
+    - 显式设置 KIOXIA_DATA_DIR 时：仅当外置盘已挂载（base 目录存在）才使用，
+      否则回退到 fallback。
+    - 未设置 KIOXIA_DATA_DIR 时：_KIOXIA_BASE 默认即 ~/.ai-agent/data，
+      作为数据根直接使用 kioxia_path（~/.ai-agent/data/<sub>），位置稳定，
+      与更新脚本的备份清单（~/.ai-agent\data）一致，避免数据被备份遗漏。
+
+    修复：原逻辑用 kioxia_path.parent.exists() 判断，未设 env 时默认
+    _KIOXIA_BASE=~/.ai-agent/data，会因 ~/.ai-agent/data 是否恰好存在而在
+    ~/.ai-agent/data/<sub> 与 ~/.ai-agent/<sub> 之间翻转，导致数据孤立。
+
+    注意：fallback_path 必须与 kioxia_path 结构一致（如都是 .../db）。
     """
     kioxia_env = os.getenv("KIOXIA_DATA_DIR", "")
+    if kioxia_env:
+        # 显式配置外置盘：盘未挂载（base 目录不存在）则直接回退，不创建幻影目录
+        if not (kioxia_path.exists() or kioxia_path.parent.exists()):
+            # 静默回退，不向控制台打印警告：外置盘未挂载是常见状态，
+            # 每次启动刷屏会让用户误以为出错。仅记 debug 日志便于排查。
+            logger.debug(
+                "config.data_path_unavailable kioxia_env={} fallback={}",
+                kioxia_env, fallback_path,
+            )
+            return _ensure_fallback(fallback_path)
     try:
-        if kioxia_path.exists() or kioxia_path.parent.exists():
-            kioxia_path.mkdir(parents=True, exist_ok=True)
-            # 运行时只读检测：尝试写入临时文件验证文件系统是否可写
-            # 修复：FAT 文件系统错误导致 remount 只读时，os.access(W_OK) 仍返回 True
-            # 因此需要实际写入测试文件
-            _probe = kioxia_path / ".write_probe"
-            try:
-                _probe.write_text("probe", encoding="utf-8")
-                _probe.unlink(missing_ok=True)
-                logger.debug("config.data_path_writable path=%s", kioxia_path)
-            except (OSError, PermissionError):
-                logger.warning("config.data_path_readonly path=%s", kioxia_path)
-                raise OSError(f"Filesystem is read-only: {kioxia_path}")
-            return kioxia_path
+        kioxia_path.mkdir(parents=True, exist_ok=True)
+        # 运行时只读检测：尝试写入临时文件验证文件系统是否可写
+        # 修复：FAT 文件系统错误导致 remount 只读时，os.access(W_OK) 仍返回 True
+        # 因此需要实际写入测试文件
+        _probe = kioxia_path / ".write_probe"
+        try:
+            _probe.write_text("probe", encoding="utf-8")
+            _probe.unlink(missing_ok=True)
+            logger.debug("config.data_path_writable path=%s", kioxia_path)
+        except (OSError, PermissionError):
+            logger.warning("config.data_path_readonly path=%s", kioxia_path)
+            raise OSError(f"Filesystem is read-only: {kioxia_path}")
+        return kioxia_path
     except (OSError, PermissionError):
         logger.debug("config.data_path_resolve_failed", exc_info=True)
-    # 外置盘未挂载或不可写时降级到 fallback，并输出警告
-    if kioxia_env:
-        print(f"[config] WARNING: KIOXIA_DATA_DIR={kioxia_env} not available, "
-              f"falling back to {fallback_path}")
+    # 主路径不可用，回退到 fallback
+    return _ensure_fallback(fallback_path)
+
+
+def _ensure_fallback(fallback_path: Path) -> Path:
+    """确保 fallback 目录存在并可写，连 fallback 都失败时使用临时目录。"""
     try:
         fallback_path.mkdir(parents=True, exist_ok=True)
     except (OSError, PermissionError):
-        # 连 fallback 都失败，使用临时目录
         import tempfile
         fallback_path = Path(tempfile.gettempdir()) / "xiaoda-agent" / fallback_path.name
         fallback_path.mkdir(parents=True, exist_ok=True)
@@ -354,7 +370,12 @@ def _ensure_workspace() -> None:
         _migrate_old_data(_exe_base / "memory_state", MEMORY_STATE_DIR, "memory_state")
         _migrate_old_data(_exe_base / "plugins", PLUGINS_CONFIG_DIR, "plugins")
 
-    _KIOXIA_AVAILABLE = (_KIOXIA_BASE / "db").exists()
+    # 是否实际使用外置盘：仅当显式配置 KIOXIA_DATA_DIR 且 DATA_DIR 落在其上时。
+    # 修复：原 (_KIOXIA_BASE/"db").exists() 在未设 KIOXIA_DATA_DIR 时查询
+    # ~/.ai-agent/data/db，与 DATA_DIR 实际位置可能矛盾。
+    _KIOXIA_AVAILABLE = bool(os.getenv("KIOXIA_DATA_DIR", "")) and (
+        DATA_DIR == _KIOXIA_BASE / "db"
+    )
 
 
 # 路径定义必须在 _ensure_workspace() 之前：迁移逻辑引用这些变量
@@ -620,6 +641,30 @@ def get_temperature(default: float = 0.7) -> float:
             return float(override)
     except Exception:
         logger.debug("get_global_temperature.webui_read_failed")
+    return default
+
+
+def get_frequency_penalty(default: float = 1.0) -> float:
+    """读取全局 frequency_penalty：优先 webui_overrides，回退 default。"""
+    try:
+        from web.config_service import get_config_service
+        override = get_config_service().get("models.frequency_penalty")
+        if override is not None:
+            return float(override)
+    except Exception:
+        logger.debug("get_frequency_penalty.webui_read_failed")
+    return default
+
+
+def get_presence_penalty(default: float = 1.0) -> float:
+    """读取全局 presence_penalty：优先 webui_overrides，回退 default。"""
+    try:
+        from web.config_service import get_config_service
+        override = get_config_service().get("models.presence_penalty")
+        if override is not None:
+            return float(override)
+    except Exception:
+        logger.debug("get_presence_penalty.webui_read_failed")
     return default
 
 

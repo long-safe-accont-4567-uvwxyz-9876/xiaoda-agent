@@ -99,11 +99,14 @@ async def create_provider(body: dict, request: Request) -> Any:
         raise HTTPException(400, "format 必须是 openai 或 anthropic")
     if not base_url.startswith(("http://", "https://")):
         raise HTTPException(400, "base_url 必须是 http(s) URL")
-    # SSRF 防护：校验 URL 不指向内网/元数据服务
-    from security.ssrf_guard import validate_url
-    allowed, reason = validate_url(base_url)
-    if not allowed:
-        raise HTTPException(400, f"base_url 安全检查失败: {reason}")
+    # SSRF 防护：校验 URL 不指向内网/元数据服务。
+    # 本地/容器内受信服务（如 Ollama localhost:11434）显式配置时放行，
+    # 与 setup 向导的 _test_ollama 本地豁免保持一致。
+    from security.ssrf_guard import validate_url, is_local_host
+    if not is_local_host(base_url):
+        allowed, reason = validate_url(base_url)
+        if not allowed:
+            raise HTTPException(400, f"base_url 安全检查失败: {reason}")
     cfg = _cfg(request)
     if pid in (cfg.get("models.providers", {}) or {}):
         raise HTTPException(400, f"provider {pid} 已存在")
@@ -140,6 +143,16 @@ async def update_provider(pid: str, body: dict, request: Request) -> Any:
     for f in ("label", "format", "base_url", "default_model", "enabled"):
         if f in body and body[f] is not None:
             record[f] = body[f]
+    # base_url 变更时同样做 SSRF 校验（本地服务如 Ollama 放行）
+    if "base_url" in body and body["base_url"]:
+        from security.ssrf_guard import validate_url, is_local_host
+        _burl = str(body["base_url"]).strip()
+        if not _burl.startswith(("http://", "https://")):
+            raise HTTPException(400, "base_url 必须是 http(s) URL")
+        if not is_local_host(_burl):
+            allowed, reason = validate_url(_burl)
+            if not allowed:
+                raise HTTPException(400, f"base_url 安全检查失败: {reason}")
     cfg.set(f"models.providers.{pid}", record)
     key = load_provider_key(pid)
     if key:
@@ -414,6 +427,60 @@ async def set_temperature(request: Request) -> Any:
     await _audit(request, "temperature.set", f"temperature={value}")
     await _broadcast_changed()
     return Envelope(data={"temperature": value})
+
+
+@router.get("/models/frequency_penalty", response_model=Envelope[dict])
+async def get_frequency_penalty(request: Request) -> Any:
+    """获取当前 frequency_penalty 设置（优先 webui_overrides，回退默认 1.0）。"""
+    cfg = _cfg(request)
+    override = cfg.get("models.frequency_penalty")
+    default = 1.0
+    value = override if override is not None else default
+    return Envelope(data={"frequency_penalty": value, "source": "override" if override is not None else "default"})
+
+
+@router.put("/models/frequency_penalty", response_model=Envelope[dict])
+async def set_frequency_penalty(request: Request) -> Any:
+    """设置 frequency_penalty（0.0-2.0），写入 webui_overrides.json 热生效。"""
+    body = await request.json()
+    value = body.get("frequency_penalty")
+    if value is None or not isinstance(value, (int, float)):
+        raise HTTPException(400, "frequency_penalty must be a number")
+    value = round(float(value), 2)
+    if not (0.0 <= value <= 2.0):
+        raise HTTPException(400, "frequency_penalty must be between 0.0 and 2.0")
+    cfg = _cfg(request)
+    cfg.set("models.frequency_penalty", value)
+    await _audit(request, "frequency_penalty.set", f"frequency_penalty={value}")
+    await _broadcast_changed()
+    return Envelope(data={"frequency_penalty": value})
+
+
+@router.get("/models/presence_penalty", response_model=Envelope[dict])
+async def get_presence_penalty_api(request: Request) -> Any:
+    """获取当前 presence_penalty 设置（优先 webui_overrides，回退默认 1.0）。"""
+    cfg = _cfg(request)
+    override = cfg.get("models.presence_penalty")
+    default = 1.0
+    value = override if override is not None else default
+    return Envelope(data={"presence_penalty": value, "source": "override" if override is not None else "default"})
+
+
+@router.put("/models/presence_penalty", response_model=Envelope[dict])
+async def set_presence_penalty_api(request: Request) -> Any:
+    """设置 presence_penalty（0.0-2.0），写入 webui_overrides.json 热生效。"""
+    body = await request.json()
+    value = body.get("presence_penalty")
+    if value is None or not isinstance(value, (int, float)):
+        raise HTTPException(400, "presence_penalty must be a number")
+    value = round(float(value), 2)
+    if not (0.0 <= value <= 2.0):
+        raise HTTPException(400, "presence_penalty must be between 0.0 and 2.0")
+    cfg = _cfg(request)
+    cfg.set("models.presence_penalty", value)
+    await _audit(request, "presence_penalty.set", f"presence_penalty={value}")
+    await _broadcast_changed()
+    return Envelope(data={"presence_penalty": value})
 
 
 # ── 用量统计 ─────────────────────────────────────────────────────
