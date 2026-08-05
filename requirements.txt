@@ -21,6 +21,9 @@ numpy>=1.26.0
 # ── CLI 美化 ──
 rich>=13.9.0
 
+# ── Textual TUI（cli_app.py 使用；缺失时降级到 prompt_toolkit CLI）──
+textual>=0.80.0
+
 # ── CLI 交互补全（/ 弹出下拉 + 多步菜单选择）──
 prompt-toolkit>=3.0.0
 
