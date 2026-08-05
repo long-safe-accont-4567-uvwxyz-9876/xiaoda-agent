@@ -118,12 +118,25 @@ def test_verify_token_ok_via_ret_zero():
 
 
 def test_verify_token_ok_via_timeout():
-    """getupdates 超时 → 服务端 hold 连接 = 认证通过 = token 有效。"""
+    """getupdates 读超时 → 服务端 hold 连接 = 认证通过 = token 有效。
+
+    仅 ReadTimeout 代表服务端已认证并 hold 连接；Connect/Write/Pool
+    超时是网络层故障，必须判为失败。
+    """
     import httpx
-    fake = FakeAsyncClient([httpx.TimeoutException("timeout")])
+    fake = FakeAsyncClient([httpx.ReadTimeout("read timeout")])
     client = ILinkClient(bot_token="tok", client=fake)
     ok, msg = asyncio.run(client.verify_token())
     assert ok is True and msg == "ok"
+
+
+def test_verify_token_connect_timeout_is_failure():
+    """getupdates 连接超时 → 未到达服务端，不能当作认证通过。"""
+    import httpx
+    fake = FakeAsyncClient([httpx.ConnectTimeout("connect timeout")])
+    client = ILinkClient(bot_token="tok", client=fake)
+    ok, msg = asyncio.run(client.verify_token())
+    assert ok is False
 
 
 def test_verify_token_session_expired():

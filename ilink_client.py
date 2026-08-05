@@ -846,8 +846,10 @@ class ILinkClient:
             # ret=0：token 有效，且本次没有新消息
             logger.info("ilink.verify_token.ok")
             return True, "ok"
-        except httpx.TimeoutException:
-            # 超时 = 服务端 hold 连接等消息 = 认证通过（token 有效）
+        except httpx.ReadTimeout:
+            # 读超时 = 服务端 hold 连接等消息 = 认证通过（token 有效）。
+            # 仅捕获 ReadTimeout：Connect/Write/PoolTimeout 不代表认证通过，
+            # 它们可能是网络不可达/连接池耗尽，若误判为 ok 会掩盖真实故障。
             logger.info("ilink.verify_token.ok_via_timeout")
             return True, "ok"
         except SessionExpiredError:

@@ -592,8 +592,20 @@ async def _ensure_wechat_bot_task(app: FastAPI) -> None:
             user_openid="", core=core,
         )
         await adapter.start()
-        app.state.wechat_bot = adapter
-        logger.info("webui.wechat_bot_auto_started")
+        # 仅当适配器真正连接上且轮询已启动时才记录为活跃并打成功日志。
+        # start() 内部会吞掉 ILinkClient 初始化/轮询失败并返回正常，
+        # 也可能因凭证文件为空 token 而"看似成功"。若未就绪仍挂到
+        # app.state.wechat_bot，会把一个无效适配器误报为已恢复连接。
+        connected = getattr(adapter, "_connected", False)
+        poller = getattr(adapter, "_poll_task", None)
+        if connected and poller is not None and not poller.done():
+            app.state.wechat_bot = adapter
+            logger.info("webui.wechat_bot_auto_started")
+        else:
+            logger.warning(
+                "webui.wechat_bot_auto_start_not_ready connected={} has_poller={}",
+                connected, poller is not None,
+            )
     except Exception as e:
         logger.warning(
             "webui.wechat_bot_auto_start_failed error={} type={}",
@@ -872,6 +884,15 @@ async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
                 await obj.stop()
             except (RuntimeError, OSError):
                 logger.debug(f"server.{attr}_stop_error", exc_info=True)
+    # 停止微信长轮询（避免 poller/ILinkClient 在 graceful shutdown 期间无人管理）
+    wechat_bot = getattr(app.state, "wechat_bot", None)
+    if wechat_bot is not None:
+        try:
+            await wechat_bot.stop()
+            logger.info("webui.wechat_bot_stopped")
+        except (RuntimeError, OSError, asyncio.CancelledError):
+            logger.debug("server.wechat_bot_stop_error", exc_info=True)
+        app.state.wechat_bot = None
     if owns_core:
         try:
             await core.shutdown()

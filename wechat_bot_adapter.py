@@ -36,6 +36,10 @@ ILINK_DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
 # 供同进程内主动消息入口使用）
 _ACTIVE_BOT: "WeChatBotAdapter | None" = None
 
+# 串行化 start() 中活跃实例的 check→stop→assign 过渡，
+# 避免并发 start() 交错产生多个 poller 或覆盖未停止的旧实例。
+_START_LOCK: "asyncio.Lock" = asyncio.Lock()
+
 
 class WeChatBotAdapter:
     """微信 Bot 适配器（iLink 协议）
@@ -116,18 +120,27 @@ class WeChatBotAdapter:
         - 设置 _ACTIVE_BOT = self（对齐 qq_bot_adapter 的模式）
         """
         global _ACTIVE_BOT
-        # guard：停掉已有活跃实例，避免多个 poll_task 并存导致同一消息被多次
-        # 接收/处理（"消息重复 N 次"根因：旧实例的 _poll_task 不会被新实例自动取消，
-        # _start_polling 的幂等只对同一实例生效，跨实例无效）
-        if _ACTIVE_BOT is not None and _ACTIVE_BOT is not self and not _ACTIVE_BOT.is_closed():
-            logger.info("wechat_bot.start_stopping_existing")
-            try:
-                await _ACTIVE_BOT.stop()
-            except Exception as e:
-                logger.warning(
-                    "wechat_bot.start_stop_existing_failed error={}", str(e)[:200],
-                )
-        _ACTIVE_BOT = self
+        # 串行化活跃实例的 check→stop→assign 过渡：并发 start() 交错会产生
+        # 多个 poll_task 或覆盖未停止的旧实例（"消息重复 N 次"根因之一）。
+        async with _START_LOCK:
+            # 幂等：同一实例已在运行则直接返回，避免重复建 poller / 覆盖 client
+            if _ACTIVE_BOT is self and self._running and not self._closed:
+                logger.info("wechat_bot.start_already_running")
+                return
+            if _ACTIVE_BOT is not None and _ACTIVE_BOT is not self and not _ACTIVE_BOT.is_closed():
+                logger.info("wechat_bot.start_stopping_existing")
+                try:
+                    await _ACTIVE_BOT.stop()
+                except Exception as e:
+                    logger.warning(
+                        "wechat_bot.start_stop_existing_failed error={}",
+                        str(e)[:200],
+                    )
+                    # 旧实例未完全停止：不覆盖活跃引用，避免新旧 poller 并存
+                    raise RuntimeError(
+                        "failed to stop previous wechat bot instance"
+                    ) from e
+            _ACTIVE_BOT = self
         self._running = True
         self._closed = False
 

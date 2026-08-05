@@ -254,6 +254,15 @@ async def test_connection(request: Request) -> Any:
         return Envelope(data={"success": False, "error": str(e)[:200]})
 
     if ok:
+        # session_expired：token 被识别但会话过期，不能算连接成功
+        if msg == "session_expired":
+            logger.warning(
+                "wechat.test.session_expired user={}",
+                ilink_user_id[:16],
+            )
+            return Envelope(
+                data={"success": False, "error": "会话已过期，请重新扫码登录"},
+            )
         logger.info("wechat.test.success user={}", ilink_user_id[:16])
         return Envelope(data={"success": True})
     logger.warning("wechat.test.failed user={} msg={}", ilink_user_id[:16], msg)
