@@ -16,6 +16,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import time
 from typing import Any
 
@@ -97,37 +98,116 @@ def main_process_alive(host: str | None = None, port: int | None = None,
         return False
 
 
-def ensure_main_process(on_status: Any = None) -> bool:
-    """确保主进程（systemd nahida-web）已运行。
+def _main_process_cmd(port: int) -> list[str]:
+    """构造主进程启动命令（跨平台）。
 
-    - 未运行 → 尝试 systemctl start nahida-web 自动拉起
-    - 启动后轮询等待端口就绪
-    - 仍不可达 → 返回 False（由调用方报错，不闪退）
+    主进程就是 agent 的 Web 模式（WebUI），与 CLI 同属一个安装：
+      - 打包（PyInstaller frozen）：复用当前可执行文件，加 --web
+      - 源码/开发：用当前 python 解释器运行同目录 agent.py --web
+    macOS 无官方安装包但可跑源码，走同一源码分支。
+    显式 --host 127.0.0.1 保证本机 CLI 一定能连上（不受 WEBUI_HOST 影响）。
     """
-    if main_process_alive():
-        return True
-    if on_status:
-        on_status("主进程未运行，正在启动 nahida-web 服务...")
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--web", "--host", "127.0.0.1", "--port", str(port)]
+    agent_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.py")
+    return [sys.executable, agent_py, "--web", "--host", "127.0.0.1", "--port", str(port)]
+
+
+def _launch_detached(cmd: list[str]) -> bool:
+    """脱离当前终端后台启动主进程，返回是否成功拉起（子进程存活）。
+
+    - Windows：DETACHED_PROCESS + 新进程组 + 不弹控制台
+    - POSIX（Linux/macOS）：start_new_session 脱离控制终端，进程不随 CLI 退出而终止
+    日志丢弃（stdout/stderr 指向 DEVNULL），避免阻塞；WebUI 日志仍可查。
+    """
     try:
-        subprocess.run(
-            ["sudo", "systemctl", "start", "nahida-web"],
-            capture_output=True, timeout=30, check=False,
-        )
-    except Exception as e:
-        logger.debug("cli_client.ensure_start_error", exc_info=True)
-        if on_status:
-            on_status(f"启动命令执行失败: {str(e)[:100]}")
+        if os.name == "nt":
+            creationflags = (
+                subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+                | subprocess.CREATE_NO_WINDOW
+            )
+            proc = subprocess.Popen(
+                cmd, creationflags=creationflags,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        else:
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        return proc.poll() is None
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.debug("cli_client.launch_detached_error", exc_info=True)
         return False
-    # 轮询等待端口就绪（最多 30s）
-    deadline = time.time() + 30
+
+
+def _try_systemd_start(on_status: Any = None) -> bool:
+    """尝试用 systemd 托管服务拉起主进程（仅 Linux）。
+
+    返回命令是否执行成功；是否真正就绪由后续端口轮询验证。
+    systemctl/sudo 任一缺失（如 Docker、最小系统）则跳过，返回 False。
+    """
+    import shutil
+    if not sys.platform.startswith("linux") or not shutil.which("systemctl"):
+        return False
+    cmd = ["systemctl", "start", "nahida-web"]
+    if shutil.which("sudo"):
+        cmd = ["sudo"] + cmd
+    try:
+        subprocess.run(cmd, capture_output=True, timeout=30, check=False)
+        return True
+    except Exception as e:
+        logger.debug("cli_client.systemd_start_error", exc_info=True)
+        if on_status:
+            on_status(f"systemd 启动失败: {str(e)[:80]}")
+        return False
+
+
+def _wait_main_process_alive(port: int, on_status: Any = None,
+                             timeout: float = 30.0) -> bool:
+    """轮询等待主进程端口就绪（最多 timeout 秒）。"""
+    deadline = time.time() + timeout
     while time.time() < deadline:
-        if main_process_alive(timeout=1.0):
+        if main_process_alive(port=port, timeout=1.0):
             if on_status:
                 on_status("主进程已启动 ✓")
             return True
         time.sleep(1)
+    return False
+
+
+def ensure_main_process(on_status: Any = None) -> bool:
+    """确保主进程（WebUI）已运行，跨平台自动拉起。
+
+    - 探测端口：已运行则直接返回
+    - Linux：优先 systemd 托管服务（崩溃自动重启/开机自启）；失效则直接后台拉起
+    - Windows/macOS：直接后台拉起主进程（脱离终端，不弹控制台）
+    - 拉起后轮询等待端口就绪；仍不可达返回 False（由调用方报错，不闪退）
+    """
+    if main_process_alive():
+        return True
     if on_status:
-        on_status("主进程启动后仍不可达，请检查 nahida-web 服务状态")
+        on_status("主进程未运行，正在自动启动...")
+    port = _resolve_port()
+
+    # Linux 优先 systemd（服务托管，自动重启/自启）
+    if sys.platform.startswith("linux") and _try_systemd_start(on_status):
+        if _wait_main_process_alive(port, on_status):
+            return True
+        if on_status:
+            on_status("systemd 服务未就绪，尝试直接拉起主进程...")
+
+    # Windows/macOS，或 systemd 不可用：后台直接拉起主进程
+    if _launch_detached(_main_process_cmd(port)):
+        if _wait_main_process_alive(port, on_status):
+            return True
+    else:
+        if on_status:
+            on_status("主进程拉起失败，请检查安装是否完整")
+
+    if on_status:
+        on_status("主进程启动后仍不可达，请检查服务状态或端口占用")
     return False
 
 

@@ -485,7 +485,7 @@ class CLIInterface:
 
         if not cli_client.ensure_main_process(on_status=status):
             print()
-            print(f"  {_C.LYELLOW}主进程不可用，CLI 无法连接。请检查 nahida-web 服务状态。{_C.RST}")
+            print(f"  {_C.LYELLOW}主进程不可用，CLI 无法连接。请检查主进程（WebUI）是否已启动。{_C.RST}")
             return False
 
         # 获取 token。优先用 .env 的 WEBUI_PASSWORD（cli.py 顶部已 load_dotenv），
