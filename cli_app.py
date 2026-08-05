@@ -84,6 +84,9 @@ class SlashPanel(ModalScreen):
     #panel-list {{ height: 1fr; }}
     """
 
+    def on_input_changed(self, event) -> None:
+        self.set_filter(event.value)
+
     def set_filter(self, text: str) -> None:
         self._filter = (text or "").strip().lstrip("/")
         self._rebuild()
@@ -214,6 +217,8 @@ class XiaodaApp(App):
             on_status(f"连接主进程失败: {str(e)[:80]}")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        if getattr(event.input, "id", None) == "panel-search":
+            return
         text = event.value.strip()
         if not text:
             return
