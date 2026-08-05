@@ -53,6 +53,90 @@ def build_command_groups() -> list[dict]:
     return result
 
 
+def fixed_arg_items(command: str) -> list[str]:
+    """固定参数命令的多步选项（来自 COMMAND_META.arg_completions）。"""
+    from slash_commands import COMMAND_META
+    meta = COMMAND_META.get(command, {})
+    return list(meta.get("arg_completions") or [])
+
+
+def model_providers(providers: list[dict]) -> list[tuple[str, str]]:
+    """discover_models 结果 → [(provider, label)]。跳过无 provider/id 的项。"""
+    out: list[tuple[str, str]] = []
+    for p in providers:
+        pid = p.get("provider") or p.get("id") or ""
+        if not pid:
+            continue
+        out.append((pid, p.get("label") or pid))
+    return out
+
+
+def model_items(models: list) -> list[tuple[str, str]]:
+    """provider 下 models → [(model_id, display)]，用 display_name 或 label 或 id。"""
+    out: list[tuple[str, str]] = []
+    for m in (models or []):
+        mid = m.get("id")
+        if mid:
+            out.append((mid, m.get("display_name") or m.get("label") or mid))
+    return out
+
+
+def agent_items(agents: list[dict]) -> list[tuple[str, str]]:
+    """list_agents 结果 → [(name, display_name)]。"""
+    out: list[tuple[str, str]] = []
+    for a in (agents or []):
+        name = a.get("name")
+        if name:
+            out.append((name, a.get("display_name") or name))
+    return out
+
+
+class _MultiStepPanel(ModalScreen):
+    """多步命令二级选择面板：展示 (label, value) 列表，选中后回调 on_select(value)。"""
+
+    def __init__(self, title: str, options, on_select) -> None:
+        super().__init__()
+        self._title = title
+        self._options = list(options)
+        self._on_select = on_select
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Static(self._title, id="panel-title"),
+            ListView(
+                *[self._make_item(label, value) for value, label in self._options],
+                id="multistep-list",
+            ),
+            id="panel",
+        )
+
+    CSS = f"""
+    #panel {{
+        width: 60%;
+        height: 50%;
+        border: round {STYLE['border']};
+        background: {STYLE['panel']};
+        color: {STYLE['assistant']};
+        padding: 1 2;
+    }}
+    #panel-title {{ color: {STYLE['gold']}; text-align: center; }}
+    #multistep-list {{ height: 1fr; }}
+    """
+
+    def on_list_view_selected(self, event) -> None:
+        item = event.item
+        data = getattr(item, "data", None)
+        if data:
+            self._on_select(data["value"])
+
+    @staticmethod
+    def _make_item(label: str, value: str):
+        from textual.widgets import ListItem
+        item = ListItem(Static(f"  {label}  ({value})"))
+        item.data = {"value": value}
+        return item
+
+
 class SlashPanel(ModalScreen):
     """斜杠命令面板：搜索 + 分组 + 鼠标点击/键盘选择。"""
 
@@ -171,6 +255,8 @@ class XiaodaApp(App):
 
     BINDINGS = [("ctrl+c", "quit", "退出")]
 
+    _MULTI_STEP = {"/model", "/agent", "/voice", "/doctor", "/cost", "/cam"}
+
     def __init__(self) -> None:
         super().__init__()
         self._token = ""
@@ -242,10 +328,44 @@ class XiaodaApp(App):
 
     def _dispatch_slash(self, text: str, chat: ChatView) -> None:
         """简单斜杠命令本地占位（命令面板与真实调用在 Task 4/5 接入）。"""
+        cmd = text.split()[0] if text.split() else text
+        if cmd in self._MULTI_STEP:
+            self.run_worker(self._open_multistep(cmd, chat), exclusive=False)
+            return
         if text == "/help":
             chat.add_assistant("在输入框输入 / 打开命令面板选择命令。")
             return
         chat.add_assistant(f"（{text} 结果待接入）")
+
+    async def _open_multistep(self, cmd: str, chat: ChatView) -> None:
+        """拉取多步命令的二级数据并弹出选择面板（真实执行在 Task 6 接入）。"""
+        if cmd == "/model":
+            providers = await asyncio.to_thread(cli_client.discover_models, self._token)
+            opts = model_providers(providers)
+            self.push_screen(_MultiStepPanel(
+                "/model · 选择提供方", opts,
+                lambda pid: self._open_model_models(chat, providers, pid)))
+        elif cmd == "/agent":
+            agents = await asyncio.to_thread(cli_client.list_agents, self._token)
+            self.push_screen(_MultiStepPanel(
+                "/agent · 选择子代理", agent_items(agents),
+                lambda name: chat.add_assistant(f"（切换子代理 {name}，待接入）")))
+        else:
+            opts = [(v, v) for v in fixed_arg_items(cmd)]
+            self.push_screen(_MultiStepPanel(
+                f"{cmd} · 选择参数", opts,
+                lambda v: chat.add_assistant(f"（执行 {cmd} {v}，待接入）")))
+
+    def _open_model_models(self, chat: ChatView, providers, pid: str) -> None:
+        """/model 二级：某 provider 下选择具体模型。"""
+        target = next((p for p in providers if (p.get("provider") or p.get("id")) == pid), None)
+        mopts = model_items(target.get("models") if target else [])
+        if not mopts:
+            chat.add_status("该模型提供方无可用模型")
+            return
+        self.push_screen(_MultiStepPanel(
+            f"/model · {pid}", mopts,
+            lambda mid: chat.add_assistant(f"（切换模型 {pid}/{mid}，待接入）")))
 
     async def _send_chat(self, text: str, chat: ChatView) -> None:
         if self._ws is None:
