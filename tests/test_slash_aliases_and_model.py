@@ -395,26 +395,19 @@ def test_completer_level2_argument():
 @_skip_no_readline
 def test_completer_level2_argument_after_trailing_space():
     """/model <空格> 后应触发参数补全而非命令名补全（CodeRabbit 尾随空格 bug 回归）。"""
-    from model_router import list_discovered_model_ids
-    fake_cache = {"data": [
-        {"provider": "agnes", "models": [{"id": "agnes-2.0-flash"}]},
-    ]}
-    with patch("web._discovery_cache._cache", fake_cache):
-        matches = _complete("/model ", "")
+    import cli
+    cli._MODEL_ARG_CACHE = ["agnes/agnes-2.0-flash"]
+    matches = _complete("/model ", "")
     # 尾随空格后应返回动态模型 id，而非命令名候选
     assert matches == ["agnes/agnes-2.0-flash"]
     assert "/model" not in matches
 
 
 def test_completer_level2_model_dynamic():
-    """/model 参数补全应走动态模型发现。"""
-    from model_router import list_discovered_model_ids
-    fake_cache = {"data": [
-        {"provider": "agnes", "models": [{"id": "agnes-2.0-flash"}]},
-        {"provider": "mimo", "models": [{"id": "mimo-v2.5"}]},
-    ]}
-    with patch("web._discovery_cache._cache", fake_cache):
-        matches = _complete("/model agn", "agn")
+    """/model 参数补全应走主进程导出的动态模型缓存。"""
+    import cli
+    cli._MODEL_ARG_CACHE = ["agnes/agnes-2.0-flash", "mimo/mimo-v2.5"]
+    matches = _complete("/model agn", "agn")
     assert matches == ["agnes/agnes-2.0-flash"]
 
 
