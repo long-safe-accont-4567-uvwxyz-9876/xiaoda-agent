@@ -446,10 +446,23 @@ hiddenimports = [
     'web._provider_keys',
     'web.error_handler',
     'web.middleware.rate_limit',
+
+    # CLI 交互输入（prompt_toolkit 动态 import，需显式声明）
+    'prompt_toolkit',
+    'prompt_toolkit.application',
+    'prompt_toolkit.auto_suggest',
+    'prompt_toolkit.completion',
+    'prompt_toolkit.filters',
+    'prompt_toolkit.formatted_text',
+    'prompt_toolkit.history',
+    'prompt_toolkit.key_binding',
+    'prompt_toolkit.layout',
+    'prompt_toolkit.layout.controls',
+    'prompt_toolkit.styles',
 ]
 
 # Collect any sub-modules that static analysis might miss
-for pkg in ('openai', 'pydantic', 'starlette', 'anyio', 'uvicorn', 'psutil', 'httpx', 'certifi', 'httpcore', 'pilk', 'PIL', 'webview', 'h2', 'hpack', 'hyperframe'):
+for pkg in ('openai', 'pydantic', 'starlette', 'anyio', 'uvicorn', 'psutil', 'httpx', 'certifi', 'httpcore', 'pilk', 'PIL', 'webview', 'h2', 'hpack', 'hyperframe', 'prompt_toolkit'):
     try:
         hiddenimports += collect_submodules(pkg)
     except Exception:
