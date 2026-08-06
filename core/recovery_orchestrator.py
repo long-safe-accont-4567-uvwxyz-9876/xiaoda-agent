@@ -334,7 +334,9 @@ class RecoveryOrchestrator:
             for cb in diag._callbacks:
                 try:
                     if asyncio.iscoroutinefunction(cb):
-                        _diag_cb = asyncio.create_task(cb(report))
+                        # 同类副作用修复：裸 create_task 无强引用会被 GC 回收导致回调丢失
+                        from core.background_tasks import _spawn
+                        _spawn(cb(report))
                     else:
                         cb(report)
                 except Exception:

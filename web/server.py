@@ -711,10 +711,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
                 await _aio.gather(_warm_xp(), _warm_mental(), _warm_constraint())
             # fire-and-forget：不阻塞服务启动，单例后台预热到内存
             # message_processor.py 的 fire-and-forget 已兜底，即使预热未完成主流程也不阻塞
-            asyncio.create_task(_prewarm_local_singletons())
+            # 同类副作用修复：用 _spawn 跟踪，避免任务被 GC 回收导致预热丢失
+            from core.background_tasks import _spawn
+            _spawn(_prewarm_local_singletons())
 
         import asyncio as _asyncio
-        _asyncio.create_task(_prewarm_connections())
+        _spawn(_prewarm_connections())
 
     # 启动事件循环阻塞 watchdog：检测同步阻塞并打印线程栈定位根因
     # 根因：后台任务集体卡 257-265s，_spawn timeout 无法取消同步阻塞

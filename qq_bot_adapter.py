@@ -660,7 +660,10 @@ class AIQQBot(botpy.Client):
             async with self._c2c_locks[user_openid]:
                 await self._process_c2c_reply(message, user_input, user_id, user_openid, session_id, is_master, image_data)
 
-        asyncio.create_task(_c2c_reply_with_lock())
+        # 同类副作用修复：裸 create_task 无强引用会被 GC 回收导致回复丢失，
+        # 改 _spawn（跟踪引用 + 完成回收），保证用户一定收到回复。
+        from core.background_tasks import _spawn
+        _spawn(_c2c_reply_with_lock())
 
     async def _parse_c2c_message(self, message: C2CMessage) -> tuple[str, list, str, str, str] | None:
         """解析 C2C 消息内容和发送者信息。
@@ -954,7 +957,9 @@ class AIQQBot(botpy.Client):
                         logger.error(f"qq_bot.group_fallback_reply_failed: {e2}")
 
 
-        asyncio.create_task(_group_reply_with_lock())
+        # 同类副作用修复：裸 create_task 无强引用会被 GC 回收导致回复丢失。
+        from core.background_tasks import _spawn
+        _spawn(_group_reply_with_lock())
     async def _send_reply_with_media(self, message: Any, reply: str,
                                       image_path: Path | None = None,
                                       image_url: str | None = None) -> None:

@@ -742,8 +742,10 @@ class ModelRouter:
                         return_exceptions=True,
                     )
 
-                task = loop.create_task(_close_old())
-                task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+                # 同类副作用修复：裸 create_task 无强引用会被 GC 回收导致
+                # 旧客户端未关闭（连接泄漏）。用 _spawn 跟踪。
+                from core.background_tasks import _spawn
+                _spawn(_close_old())
             except RuntimeError:
                 pass
 

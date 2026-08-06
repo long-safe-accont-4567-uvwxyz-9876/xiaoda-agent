@@ -4,6 +4,7 @@ import time
 import random
 import asyncio
 import threading
+from collections.abc import Callable
 from loguru import logger
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -40,6 +41,12 @@ try:
     _HAS_MENU = True
 except ImportError:
     _HAS_MENU = False
+
+try:
+    from cli_palette import CommandPalette, PaletteNode
+    _HAS_PALETTE = True
+except ImportError:
+    _HAS_PALETTE = False
 
 # ── readline 支持 ──────────────────────────────────────────
 try:
@@ -426,6 +433,84 @@ class CLIInterface:
             complete_while_typing=True,
         )
 
+    def _palette_nodes(self) -> list[PaletteNode]:
+        """构建命令面板节点树（与 WebUI 同源 COMMAND_DESCRIPTIONS，不分主人/公共）。
+
+        多步命令（/model、/agent、/voice 等）通过 loader 懒加载二级选项，
+        选中后返回完整命令字符串，全程在面板内完成，不误发裸命令。
+        """
+        from slash_commands import COMMAND_DESCRIPTIONS
+
+        # 固定参数二级选项
+        def _fixed(cmd: str, choices: list[str]) -> Callable[[], list[PaletteNode]]:
+            def _load() -> list[PaletteNode]:
+                return [PaletteNode(label=v, result=f"{cmd} {v}") for v in choices]
+            return _load
+
+        # /model：先 provider，再该 provider 下模型
+        def _load_model() -> list[PaletteNode]:
+            providers = cli_client.discover_models(self._token)
+            out: list[PaletteNode] = []
+            for p in providers:
+                pid = p.get("provider") or p.get("id") or ""
+                if not pid:
+                    continue
+                models = [m for m in (p.get("models") or []) if m.get("id")]
+                out.append(PaletteNode(
+                    label=str(p.get("label") or pid),
+                    description=f"{len(models)} 个模型",
+                    children=[
+                        PaletteNode(
+                            label=str(m.get("display_name") or m.get("id") or ""),
+                            result=f"/model {pid}/{m['id']}",
+                        )
+                        for m in models
+                    ],
+                ))
+            return out
+
+        # /agent：代理列表
+        def _load_agent() -> list[PaletteNode]:
+            agents = cli_client.list_agents(self._token)
+            return [
+                PaletteNode(
+                    label=str(a.get("display_name") or a.get("name") or ""),
+                    result=f"/agent {a['name']}",
+                )
+                for a in agents if a.get("name")
+            ]
+
+        multistep_loaders = {
+            "/model": _load_model,
+            "/agent": _load_agent,
+            "/voice": _fixed("/voice", ["on", "off"]),
+            "/doctor": _fixed("/doctor", ["json", "fix"]),
+            "/cost": _fixed("/cost", ["7d"]),
+            "/cam": _fixed("/cam", ["snap"]),
+        }
+
+        nodes: list[PaletteNode] = []
+        for name, desc in COMMAND_DESCRIPTIONS.items():
+            loader = multistep_loaders.get(name)
+            nodes.append(PaletteNode(
+                label=name,
+                description=desc,
+                loader=loader,
+            ))
+        return nodes
+
+    def _run_palette(self, prompt: str) -> str | None:
+        """运行下拉命令面板，返回用户最终输入（或 None 取消）。"""
+        if not _HAS_PALETTE:
+            return None
+        hist_path = os.path.expanduser("~/.ai-agent/cli_history")
+        palette = CommandPalette(
+            prompt=prompt,
+            nodes=self._palette_nodes(),
+            history_path=hist_path,
+        )
+        return palette.prompt()
+
     def _menu_fixed(self, cmd: str, choices: list[str]) -> str | None:
         """固定参数多步命令：从 choices 单选，返回完整命令。"""
         items = [MenuItem(label=v, value=f"{cmd} {v}") for v in choices]
@@ -572,7 +657,7 @@ class CLIInterface:
         print(f"  {_C.DIM}+------------------------------------------------+{_C.RST}")
         print()
         print(f"  {_C.CYAN}💬 直接输入消息跟小妲聊天{_C.RST}")
-        print(f"  {_C.CYAN}📋 /help 查看所有命令 · / 后按 Tab 补全命令{_C.RST}")
+        print(f"  {_C.CYAN}📋 /help 查看所有命令 · 输入 / 即弹出命令面板{_C.RST}")
         print(f"  {_C.CYAN}🧠 /model 切换模型 · /reset 重置 · /agent 切换子代理{_C.RST}")
         print(f"  {_C.CYAN}🚪 exit 或 Ctrl+C 退出{_C.RST}")
         print()
@@ -602,7 +687,7 @@ class CLIInterface:
 
     def _print_unknown(self, cmd: str) -> None:
         print(f"\n  {_C.LYELLOW}嗯？人家不认识「{cmd}」这个命令呢～{_C.RST}")
-        print(f"  {_C.DIM}💡 输入 /help 查看所有命令，/ 后按 Tab 可补全{_C.RST}")
+        print(f"  {_C.DIM}💡 输入 /help 查看所有命令，输入 / 即弹出命令面板{_C.RST}")
         print()
 
     def _dispatch_slash_command(self, text: str) -> None:
@@ -677,7 +762,14 @@ class CLIInterface:
         while True:
             try:
                 prompt = f"  {_C.GREEN}{_C.BOLD}🌿 {self._address_term()}:{_C.RST} "
-                if self._session is not None:
+                if _HAS_PALETTE:
+                    # 下拉命令面板：输入 / 即弹面板，多步命令面板内二级选择
+                    user_input = self._run_palette(prompt)
+                    if user_input is None:
+                        # 未开面板时 Esc 取消 → 视为空输入
+                        user_input = ""
+                    user_input = user_input.strip()
+                elif self._session is not None:
                     user_input = self._session.prompt(message=ANSI(prompt)).strip()
                 else:
                     user_input = input(prompt).strip()

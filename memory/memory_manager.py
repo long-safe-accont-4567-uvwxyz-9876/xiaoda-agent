@@ -17,7 +17,7 @@ from utils.atomic_write import atomic_json_write
 from config import get_agent_display_name
 # CodeRabbit 复审修复：fire-and-forget 任务必须保持强引用，否则 event loop 仅持有弱引用
 # 可能被 GC 回收导致任务中途消失。_bg_tasks 是 core.background_tasks 维护的全局任务集合。
-from core.background_tasks import _bg_tasks
+from core.background_tasks import _bg_tasks, _spawn
 
 
 def _stage_log(stage: str, t0: float, query: str = "") -> None:
@@ -1543,11 +1543,7 @@ class MemoryManager:
             # 时间检索命中也递增 access_count（与常规检索路径一致）
             hit_ids = [r.get("id") for r in temporal_results if r.get("id")]
             if hit_ids:
-                _bg = asyncio.create_task(
-                    self._batch_touch_memories(hit_ids),
-                    name=f"touch_temporal_{int(time.time()*1000)}"
-                )
-                _bg.add_done_callback(_log_task_exception)
+                _spawn(self._batch_touch_memories(hit_ids))
             return temporal_results
 
         # A1: 智能短路 - 简单查询跳过查询变换，直接走混合检索
@@ -1732,11 +1728,7 @@ class MemoryManager:
         # 根因：_query_cache.put 内部调 embed API（网络 1-2s），await 阻塞检索返回。
         # 缓存写入不影响当前检索结果，无需让用户等待。
         if getattr(config, 'QUERY_CACHE_ENABLED', True) and results:
-            _bg = asyncio.create_task(
-                self._query_cache.put(_cache_key, results),
-                name=f"query_cache_put_{int(time.time()*1000)}"
-            )
-            _bg.add_done_callback(_log_task_exception)
+            _spawn(self._query_cache.put(_cache_key, results))
 
         # 检索命中后批量递增 access_count（passive_use）
         # 修复：此前 increment_access_count 从未被调用，导致记忆永远无法进入 PERMANENT 状态
@@ -1744,11 +1736,7 @@ class MemoryManager:
         if results:
             hit_ids = [r.get("id") for r in results if r.get("id")]
             if hit_ids:
-                _bg = asyncio.create_task(
-                    self._batch_touch_memories(hit_ids),
-                    name=f"touch_memories_{int(time.time()*1000)}"
-                )
-                _bg.add_done_callback(_log_task_exception)
+                _spawn(self._batch_touch_memories(hit_ids))
         return results
 
     async def _try_temporal_search(self, query: str, k: int,
@@ -2157,11 +2145,7 @@ class MemoryManager:
 
         # 异步批量迁移 phase（fire-and-forget，不阻塞检索返回）
         if _migration_needed:
-            _bg = asyncio.create_task(
-                self._batch_migrate_phase(_migration_needed),
-                name=f"fsrs_migrate_{int(now*1000)}"
-            )
-            _bg.add_done_callback(_log_task_exception)
+            _spawn(self._batch_migrate_phase(_migration_needed))
         return filtered
 
     async def _batch_migrate_phase(self, migrations: list[tuple[int, str, float, float, float, int]]) -> None:
@@ -2958,11 +2942,7 @@ class MemoryManager:
                             full_text=_captured_full_text,
                         )
 
-                    try:
-                        _bg = asyncio.create_task(_retry_distill())
-                        _bg.add_done_callback(_log_task_exception)
-                    except RuntimeError:
-                        logger.warning("memory.distill_retry_no_loop", raw_id=raw_id)
+                    _spawn(_retry_distill())
                 else:
                     logger.warning("memory.distill_exhausted_retries", raw_id=raw_id)
                     await self._save_fallback_raw(raw_id, summary, full_text)
@@ -3012,11 +2992,7 @@ class MemoryManager:
                         full_text=_captured_full_text,
                     )
 
-                try:
-                    _bg = asyncio.create_task(_retry_distill_exc())
-                    _bg.add_done_callback(_log_task_exception)
-                except RuntimeError:
-                    logger.warning("memory.distill_retry_no_loop", raw_id=raw_id)
+                _spawn(_retry_distill_exc())
             else:
                 await self._save_fallback_raw(raw_id, summary, full_text)
 

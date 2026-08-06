@@ -263,7 +263,10 @@ def _push_levelup_event(user_id: str, old_level: XPLevel,
             f"{int(old_level)}->{int(new_level)} ({new_label}) xp={int(xp)}"
         )
         return
-    _xp_event = loop.create_task(manager.broadcast(event))
+    # 同类副作用修复：裸 create_task 无强引用会被 GC 回收导致广播丢失，
+    # 改 _spawn（跟踪引用 + 完成回收 + 异常捕获），保证事件送达且不阻塞调用方。
+    from core.background_tasks import _spawn
+    _spawn(manager.broadcast(event))
     logger.info(
         f"XPSystem.levelup user={user_id} "
         f"{int(old_level)}->{int(new_level)} ({new_label}) xp={int(xp)}"

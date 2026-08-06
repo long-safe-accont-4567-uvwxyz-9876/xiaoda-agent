@@ -14,6 +14,13 @@ current_msg_id: contextvars.ContextVar[str] = contextvars.ContextVar("ws_msg_id"
 
 async def emit_tool_event(phase: str, tool_name: str, arguments: dict | None = None,
                           ok: bool | None = None, elapsed_ms: int | None = None) -> None:
+    """工具事件可视化推送。
+
+    修复：本函数绝不在工具执行路径上 await 广播。慢/挂起 WebSocket 连接会让
+    broadcast 阻塞数秒，直接拖慢工具本身（实测 list_stickers 在 WebUI 连接存在时
+    被拖到 10s，进而吃掉验证循环墙钟导致降级）。
+    用 _spawn 后台推送：任务被跟踪引用（不丢失、不被 GC），事件仍会送达，仅异步。
+    """
     try:
         from web.ws_hub import manager
         if manager.active_count == 0:
@@ -24,7 +31,7 @@ async def emit_tool_event(phase: str, tool_name: str, arguments: dict | None = N
                 preview = json.dumps(arguments, ensure_ascii=False)[:200]
             except Exception:
                 preview = str(arguments)[:200]
-        await manager.broadcast({
+        event = {
             "type": "tool_event",
             "msg_id": current_msg_id.get(),
             "phase": phase,
@@ -32,6 +39,9 @@ async def emit_tool_event(phase: str, tool_name: str, arguments: dict | None = N
             "args_preview": preview,
             "ok": ok,
             "elapsed_ms": elapsed_ms,
-        })
+        }
+        # fire-and-forget：可视化推送不阻塞工具执行；_spawn 保证任务被跟踪不丢
+        from core.background_tasks import _spawn
+        _spawn(manager.broadcast(event))
     except Exception:
         logger.debug("tool_events.emit_error", exc_info=True)

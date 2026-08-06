@@ -485,9 +485,10 @@ class TTSEngine:
         # 关闭旧客户端释放连接
         if old_client is not None and old_client is not self._client:
             try:
-                import asyncio
-                loop = asyncio.get_running_loop()
-                _bg_close = loop.create_task(old_client.close())
+                # 同类副作用修复：裸 create_task 无强引用会被 GC 回收导致
+                # 旧客户端未关闭（连接泄漏）。用 _spawn 跟踪。
+                from core.background_tasks import _spawn
+                _spawn(old_client.close())
             except RuntimeError:
                 pass
 

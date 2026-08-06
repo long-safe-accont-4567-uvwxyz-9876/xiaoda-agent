@@ -39,12 +39,16 @@ class ToolExecutorMixin:
                                         user_input: str = "") -> ToolResult:
         """带钩子的工具执行"""
         from tool_engine.tool_registry import ToolResult
+        import time as _time
+        _t0 = _time.time()
 
         # PreToolUse 钩子
         hook_result = await self._hook_engine.fire_pre_tool_use(
             tool_name=tool_name, arguments=arguments,
             user_input=user_input, safe_mode=safe_mode
         )
+        logger.info("tool.exec_stage", tool=tool_name, stage="pre_tool_use",
+                    ms=int((_time.time() - _t0) * 1000))
         if not hook_result.allowed:
             return ToolResult.fail(hook_result.reason or "工具执行被安全策略阻止")
 
@@ -52,13 +56,14 @@ class ToolExecutorMixin:
         actual_args = hook_result.modified_args or arguments
 
         # WebUI 工具过程可视化（无 WebUI 时为 no-op）
-        import time as _time
         _tool_t0 = _time.time()
         try:
             from web.tool_events import emit_tool_event
             await emit_tool_event("start", tool_name, actual_args)
         except Exception as e:
             logger.debug(f"WebUI工具事件(start)发送失败，非关键: {e}")
+        logger.info("tool.exec_stage", tool=tool_name, stage="emit_start",
+                    ms=int((_time.time() - _tool_t0) * 1000))
 
         # 工具护栏检查
         from tool_engine.tool_guardrails import get_tool_guardrails
@@ -77,7 +82,11 @@ class ToolExecutorMixin:
         # 执行工具
         # Task 7: 流式状态推送 —— 工具执行前通知
         await self._notify_status(f"正在使用工具: {tool_name}")
+        logger.info("tool.exec_stage", tool=tool_name, stage="guardrails",
+                    ms=int((_time.time() - _t0) * 1000))
         result = await self.tool_executor.execute(tool_name, actual_args, user_id, safe_mode)
+        logger.info("tool.exec_stage", tool=tool_name, stage="execute",
+                    ms=int((_time.time() - _t0) * 1000))
 
         # 工具调用后更新认知状态（is_tool=True）
         if result.success:

@@ -67,6 +67,13 @@ class ConnectionManager:
         # G5: 心跳状态 —— pong 事件 + 每连接心跳协程
         self._pong_events: dict[str, asyncio.Event] = {}
         self._heartbeat_tasks: dict[str, asyncio.Task] = {}
+        # 治本修复：每连接有界发送队列 + 独立写入任务。
+        # 根因：send_to/broadcast 直接 await ws.send_json，慢/挂起连接会阻塞调用方
+        # （如工具执行路径），导致工具被拖慢、吃掉验证循环墙钟 → 降级。
+        # 改为入队即返回，写入由后台任务串行执行，可视化推送不再阻塞主流程。
+        self._send_queues: dict[str, asyncio.Queue] = {}
+        self._writer_tasks: dict[str, asyncio.Task] = {}
+        self._SEND_QUEUE_MAX = 64  # 有界队列上限；溢出的连接视为过慢并关闭
 
     def register(self, ws: WebSocket) -> str:
         """注册一个新连接, 返回生成的连接 ID."""
@@ -80,6 +87,10 @@ class ConnectionManager:
         self._pong_events[conn_id] = asyncio.Event()
         self._heartbeat_tasks[conn_id] = asyncio.create_task(
             self._heartbeat_loop(conn_id))
+        # 治本：初始化发送队列 + 独立写入任务
+        self._send_queues[conn_id] = asyncio.Queue(maxsize=self._SEND_QUEUE_MAX)
+        self._writer_tasks[conn_id] = asyncio.create_task(
+            self._writer_loop(conn_id))
         return conn_id
 
     async def unregister(self, conn_id: str) -> None:
@@ -103,6 +114,11 @@ class ConnectionManager:
         if task and not task.done():
             task.cancel()
         self._pong_events.pop(conn_id, None)
+        # 治本：取消写入任务 + 清理发送队列
+        wtask = self._writer_tasks.pop(conn_id, None)
+        if wtask and not wtask.done():
+            wtask.cancel()
+        self._send_queues.pop(conn_id, None)
 
     async def _heartbeat_loop(self, conn_id: str) -> None:
         """G5: 每个连接的心跳协程 - 30s ping + 10s pong 超时.
@@ -138,52 +154,74 @@ class ConnectionManager:
                 await self.unregister(conn_id)
                 return
 
-    async def send_to(self, conn_id: str, event: dict) -> None:
-        """向指定连接发送事件, 失败则注销该连接."""
-        ws = self._connections.get(conn_id)
-        if ws:
+    def _enqueue(self, conn_id: str, event: dict) -> bool:
+        """非阻塞入队一个事件；连接不存在返回 False。
+
+        队列满（连接过慢）时：丢弃最旧的事件为新事件腾位，而非注销连接。
+        这样最新/关键消息（如最终回复）仍能送达，不牺牲功能性；被丢弃的只是
+        过期可视化推送。
+        """
+        if conn_id not in self._connections:
+            return False
+        q = self._send_queues.get(conn_id)
+        if q is None:
+            return False
+        try:
+            q.put_nowait(event)
+        except asyncio.QueueFull:
             try:
-                await ws.send_json(event)
-            except (RuntimeError, OSError):
-                logger.debug("ws.send_error conn_id={}", conn_id, exc_info=True)
-                await self.unregister(conn_id)
+                q.get_nowait()  # 丢最旧，保最新
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                logger.warning("ws.send_queue_overflow conn_id={}", conn_id)
+                return False
+        return True
+
+    async def send_to(self, conn_id: str, event: dict) -> None:
+        """向指定连接发送事件（非阻塞入队；过慢连接关闭）.
+
+        治本修复：不再直接 await ws.send_json，而是入有界队列由写入任务串行发送，
+        避免慢/挂起连接阻塞调用方（工具执行路径等关键路径）。
+        """
+        if not self._enqueue(conn_id, event):
+            await self.unregister(conn_id)
 
     async def broadcast(self, event: dict) -> None:
-        """G2: 向所有活跃连接广播事件（fire-and-forget 扇出 + 5s 超时背压）.
+        """向所有活跃连接广播事件（非阻塞入队；过慢连接关闭）.
 
-        慢连接不再阻塞快连接：所有连接并发发送，5s 超时后取消并清理慢连接。
-        失败连接由 _safe_send 清理。
+        治本修复：入队即返回，写入由各连接后台任务执行，单条慢连接不再拖累
+        调用方（工具执行路径）与其它连接。
         """
-        if not self._connections:
-            return
-        # task -> conn_id 映射，便于超时后查找慢连接
-        tasks = {
-            asyncio.create_task(self._safe_send(cid, event)): cid
-            for cid in list(self._connections)
-        }
-        if not tasks:
-            return
-        done, pending = await asyncio.wait(tasks, timeout=BROADCAST_TIMEOUT)
-        # 清理超时的慢连接：取消任务 + unregister
-        for t in pending:
-            cid = tasks[t]
-            t.cancel()
-            logger.warning("ws.broadcast_timeout conn_id={}", cid)
-            await self.unregister(cid)
+        for cid in list(self._connections):
+            if not self._enqueue(cid, event):
+                await self.unregister(cid)
 
-    async def _safe_send(self, conn_id: str, event: dict) -> None:
-        """G2: 安全发送，失败时清理连接（内部方法）.
-
-        包裹 send_to 语义：发送失败则 unregister，避免失败连接残留。
-        """
-        ws = self._connections.get(conn_id)
-        if ws is None:
+    async def _writer_loop(self, conn_id: str) -> None:
+        """每连接写入任务：串行发送队列中的事件，失败则注销连接."""
+        q = self._send_queues.get(conn_id)
+        if q is None:
             return
-        try:
-            await ws.send_json(event)
-        except Exception as e:
-            logger.warning("ws.send_failed conn_id={} error={}", conn_id, str(e))
-            await self.unregister(conn_id)
+        while True:
+            try:
+                event = await q.get()
+            except asyncio.CancelledError:
+                return
+            ws = self._connections.get(conn_id)
+            if ws is None:
+                return
+            try:
+                await ws.send_json(event)
+            except (RuntimeError, OSError) as e:
+                logger.debug("ws.send_error conn_id={} error={}", conn_id, str(e))
+                # 先把本任务从 writer_tasks 摘除，避免 unregister 自取消冲突
+                self._writer_tasks.pop(conn_id, None)
+                await self.unregister(conn_id)
+                return
+            finally:
+                q.task_done()
 
     @property
     def active_count(self) -> int:
@@ -338,7 +376,9 @@ async def _resolve_pending_tts(core: Any, agent: str, result: Any, data: dict,
     if conn_id and msg_id:
         # WebSocket：启动后台合成任务，先返回 audio_pending
         data["audio_pending"] = True
-        _tts_bg = asyncio.create_task(_async_tts_task(
+        # 同类副作用修复：裸 create_task 无强引用会被 GC 回收导致音频丢失
+        from core.background_tasks import _spawn
+        _spawn(_async_tts_task(
             core, agent, result.tts_text, result.emotion, conn_id, msg_id))
     else:
         # HTTP 端点等无 WS 连接：同步合成回退
