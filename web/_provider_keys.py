@@ -53,20 +53,24 @@ def _decode_key(encoded: str) -> str | None:
     """凭证解密读取，失败返回 None。
 
     解码优先级（向后兼容旧版本文件格式）：
-    1. credential_vault enc:v1: 加密格式（新版本推荐）
+    1. credential_vault 加密格式（enc:v1: / enc:v2:dpapi:，新版本推荐）
     2. 旧版 base64 编码（自动迁移到 credential_vault）
     3. 返回 None 表示无法识别（调用方按明文兜底）
+
+    enc:v2:dpapi: 前缀的值（Windows + pywin32 环境写入）统一交给
+    credential_vault.decrypt() 处理——该函数同时支持 v1/v2 两种格式，
+    且对非 enc: 前缀的明文直接透传，不会误伤其他格式。
     """
-    # 1. 优先尝试 credential_vault 解密（识别 enc:v1: 前缀）
-    try:
-        from security.credential_vault import is_encrypted, decrypt, DecryptionError
-        if is_encrypted(encoded):
+    # 1. 优先尝试 credential_vault 解密（识别 enc:v1: / enc:v2:dpapi: 前缀）
+    if isinstance(encoded, str) and encoded.startswith("enc:"):
+        try:
+            from security.credential_vault import decrypt, DecryptionError
             try:
                 return decrypt(encoded)
             except DecryptionError:
                 return None
-    except Exception:
-        logger.debug("provider_keys.vault_import_error", exc_info=True)
+        except Exception:
+            logger.debug("provider_keys.vault_import_error", exc_info=True)
 
     # 2. 兼容旧版 base64 编码
     import base64

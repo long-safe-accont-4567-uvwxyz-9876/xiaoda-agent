@@ -12,10 +12,11 @@ def read_env_key(env_var: str) -> str:
     """读取环境变量或 .env 文件中的配置值。
 
     优先从 os.environ 读取，不存在时从 .env 文件逐行扫描。
+    enc: 前缀的密文（credential_vault 加密格式）会自动解密。
     """
     key = os.environ.get(env_var, "")
     if key:
-        return key
+        return _maybe_decrypt(key)
     try:
         from config import ENV_PATH
         env_path = Path(ENV_PATH)
@@ -24,8 +25,23 @@ def read_env_key(env_var: str) -> str:
     if env_path.exists():
         for line in env_path.read_text(encoding="utf-8-sig").splitlines():
             if line.startswith(f"{env_var}="):
-                return line.split("=", 1)[1].strip()
+                return _maybe_decrypt(line.split("=", 1)[1].strip())
     return ""
+
+
+def _maybe_decrypt(value: str) -> str:
+    """若值为 enc: 前缀的密文则解密，否则原样返回（向后兼容）。
+
+    解密失败（机器不匹配 / pywin32 缺失 / 数据损坏）时返回原值，
+    保持旧行为：调用方拿到的仍是 .env 中的原始内容。
+    """
+    if not isinstance(value, str) or not value.startswith("enc:"):
+        return value
+    try:
+        from security.credential_vault import decrypt
+        return decrypt(value)
+    except Exception:
+        return value
 
 
 def is_tool_unsupported_error(error_str: str) -> bool:
