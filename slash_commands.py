@@ -533,10 +533,24 @@ class SlashCommandHandler:
                 "systemctl", "is-active", "nahida-web",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
-            stdout_bytes, _ = await asyncio.wait_for(result.communicate(), timeout=5)
-            status = stdout_bytes.decode().strip() or "未知"
-            status_icon = "🟢" if status == "active" else "🔴"
-            lines.append(f"{status_icon} nahida-web: {status}")
+            try:
+                stdout_bytes, _ = await asyncio.wait_for(result.communicate(), timeout=5)
+                status = stdout_bytes.decode().strip() or "未知"
+                status_icon = "🟢" if status == "active" else "🔴"
+                lines.append(f"{status_icon} nahida-web: {status}")
+            except asyncio.TimeoutError:
+                # 超时: wait_for 只取消 communicate()，不会终止子进程；
+                # 需显式 kill + wait 回收，避免 systemctl 残留运行/管道泄漏
+                logger.debug("slash.sys_systemctl_timeout")
+                try:
+                    result.kill()
+                except ProcessLookupError:
+                    pass
+                try:
+                    await asyncio.wait_for(result.wait(), timeout=2)
+                except (asyncio.TimeoutError, ProcessLookupError):
+                    pass
+                lines.append("🔘 nahida-web: 状态未知（超时）")
         except (OSError, RuntimeError):
             lines.append("🔘 nahida-web: 状态未知")
         if self._router:
