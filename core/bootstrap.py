@@ -559,7 +559,8 @@ class AgentCoreBootstrapper:
             api_key_env=_resolved_api_key_env("xiaolang"),
             capabilities=["coding", "debug", "script", "programming", "hardware", "system", "devops"],
             route_description="编程、代码编写、调试、技术问题、硬件控制、系统运维、开发辅助",
-            mcp_servers=["git", "github"],
+            # 默认关闭 git/github MCP：首次安装不再自动启用（需在 WebUI 权限矩阵按需开启）
+            mcp_servers=[],
         )
         await core.dispatcher.register(xiaolang_config)
         xiaolian_config = SubAgentConfig(
@@ -780,10 +781,21 @@ class AgentCoreBootstrapper:
 
         core = self.core
 
+        # 只启动被某个已注册 agent 引用的 MCP server（默认关闭 git/github：
+        # 无 agent 启用则不启动，避免首次安装默认空跑无用子进程）
+        referenced: set[str] = set()
+        for _agent in getattr(getattr(core, "dispatcher", None), "_agents", {}).values():
+            _cfg = getattr(_agent, "config", None)
+            if _cfg is not None:
+                referenced.update(getattr(_cfg, "mcp_servers", None) or [])
+
         # 合并配置文件中的 MCP 服务器 + 市场安装的 MCP 服务器
         all_servers: dict[str, Any] = {}
         if MCP_SERVERS:
-            all_servers.update(MCP_SERVERS)
+            # 内置 server（git/github）仅在被 agent 引用时启动
+            for _sname, _scfg in MCP_SERVERS.items():
+                if _sname in referenced:
+                    all_servers[_sname] = _scfg
 
         # 加载市场安装的 MCP 配置（mcp_configs/*.json）
         mcp_configs_dir = WORKSPACE_DIR / "mcp_configs"
