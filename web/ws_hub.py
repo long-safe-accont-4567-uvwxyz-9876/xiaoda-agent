@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import asyncio
+import contextvars
 import json
 import os
 import platform
@@ -51,6 +52,21 @@ try:
     MEDIA_ROOT = MEDIA_DIR
 except ImportError:
     MEDIA_ROOT = Path(__file__).resolve().parent / "media"
+
+# 当前消息处理会话（ContextVar）：随 asyncio.create_task 传播到工具执行链，
+# 供命令确认等带身份的事件定位发起连接，避免广播给无关客户端。
+_current_session: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "xiaoda_current_session", default="")
+
+
+def set_current_session(session_id: str) -> None:
+    """在当前异步上下文中记录正在处理的会话 ID。"""
+    _current_session.set(session_id or "")
+
+
+def current_session_id() -> str:
+    """读取当前异步上下文中的会话 ID（无会话时为空串）。"""
+    return _current_session.get()
 
 
 class ConnectionManager:
@@ -198,6 +214,19 @@ class ConnectionManager:
         for cid in list(self._connections):
             if not self._enqueue(cid, event):
                 await self.unregister(cid)
+
+    async def send_to_session(self, session_id: str, event: dict) -> None:
+        """仅向指定会话的连接发送事件（无匹配连接时静默忽略）.
+
+        用于命令确认等带身份的事件：只通知发起会话对应连接，
+        避免无关客户端收到请求。会话由 set_session 维护在 _session_map。
+        """
+        if not session_id:
+            return
+        for cid, sid in list(self._session_map.items()):
+            if sid == session_id and cid in self._connections:
+                if not self._enqueue(cid, event):
+                    await self.unregister(cid)
 
     async def _writer_loop(self, conn_id: str) -> None:
         """每连接写入任务：串行发送队列中的事件，失败则注销连接."""
@@ -399,6 +428,8 @@ async def process_and_serialize(core: Any, text: str, session_id: str,
     斜杠命令（/ 开头）始终走主体 process（内部路由到 SlashCommandHandler）。
     Task 6: 当 TTS_ASYNC_MODE 开启且结果标记 tts_pending 时，启动后台合成任务。
     """
+    # 记录当前会话到异步上下文：工具执行链（命令确认等）可据此定位发起连接
+    set_current_session(session_id)
     t0 = time.time()
     if agent != "xiaoda" and not text.strip().startswith("/"):
         registry = getattr(app.state, "agent_registry", None) if app else None

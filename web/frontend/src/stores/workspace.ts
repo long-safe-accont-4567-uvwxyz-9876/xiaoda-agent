@@ -23,7 +23,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     reason: string
   }>>([])
   /** 待确认的命令请求（由工具 needs_confirmation 状态触发） */
-  const pendingCmdConfirm = ref<{ request_id: string; command: string } | null>(null)
+  const pendingCmdConfirm = ref<{ request_id: string; command: string; session_id: string } | null>(null)
   /** 已授权目录列表（localStorage 持久化：曾授权且未在设置页撤销的目录）
    *  选这些目录时直接切换，不再弹授权确认。后端 confirm 总会重新授权，故前端记录即可。 */
   const authorizedDirs = ref<string[]>(JSON.parse(localStorage.getItem('ws.authorizedDirs') || '[]'))
@@ -116,12 +116,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     decision: 'allow' | 'allow_once' | 'deny',
     addToWhitelist: boolean,
     command: string = '',
+    sessionId: string = '',
   ) {
     await post('/workspace/confirm_cmd', {
       request_id: requestId,
       decision,
       add_to_whitelist: addToWhitelist,
       command,
+      session_id: sessionId,
     })
     pendingCmdConfirm.value = null
   }

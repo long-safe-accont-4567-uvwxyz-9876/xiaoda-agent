@@ -35,12 +35,24 @@ class ConfirmCmdBody(BaseModel):
     decision: str  # "allow" / "allow_once" / "deny"
     add_to_whitelist: bool = False
     command: str = ""
+    session_id: str = ""  # 发起确认请求的会话（前端从 WS 消息回显），用于身份校验
 
 
-# ── 命令确认决策暂存（request_id → decision） ──────────────
-# 简化实现：内存映射，工具层通过 request_id 查询决策
-# 完整实现后续可用 asyncio.Event 或 WebSocket 双向通信
-_pending_cmd_decisions: dict[str, str] = {}
+# ── 命令确认决策暂存（request_id → 决策记录） ───────────────
+# 简化实现：内存映射，工具层通过 request_id 查询决策。
+# 记录中携带发起会话 session_id：confirm_cmd 必须由同一会话回传，
+# 避免无关客户端（其它标签页/LAN 连接）替他人决定命令放行/拒绝。
+_pending_cmd_decisions: dict[str, dict] = {}
+
+
+def register_cmd_decision_scope(request_id: str, session_id: str) -> None:
+    """登记命令确认请求的发起会话（供 confirm_cmd 身份校验）。"""
+    _pending_cmd_decisions[request_id] = {"session_id": session_id or "", "decision": ""}
+
+
+def discard_cmd_decision_scope(request_id: str) -> None:
+    """丢弃未决的确认请求（超时未决策时清理，防止内存泄漏与迟到决策）。"""
+    _pending_cmd_decisions.pop(request_id, None)
 
 
 def _persist_workspace(cwd: str, authorized_at: str = "") -> None:
@@ -161,12 +173,24 @@ async def confirm_cmd(body: ConfirmCmdBody):
 
     前端 CmdConfirmDialog 用户选择后调用。
     决策存入 _pending_cmd_decisions，工具层通过 request_id 查询。
+    身份校验：请求若带发起会话，则必须与发起会话一致，否则拒绝
+    （防止无关客户端替他人决定命令放行/拒绝）。
     """
+    rec = _pending_cmd_decisions.get(body.request_id)
+    if rec is None:
+        logger.warning("workspace.cmd_confirm_unknown_request", request_id=body.request_id)
+        return Envelope(data={"status": "unknown_request"})
+    initiator = rec.get("session_id", "")
+    if initiator and body.session_id != initiator:
+        logger.warning("workspace.cmd_confirm_session_mismatch",
+                       request_id=body.request_id,
+                       initiator=initiator, caller=body.session_id)
+        raise HTTPException(status_code=403, detail="确认请求仅能由发起会话回传")
     if body.decision in ("allow", "allow_once") and body.add_to_whitelist and body.command:
         pm = get_permission_manager()
         pm.add_to_whitelist(body.command)
         _persist_whitelist(pm.get_whitelist())
-    _pending_cmd_decisions[body.request_id] = body.decision
+    rec["decision"] = body.decision
     logger.info("workspace.cmd_confirmed",
                 request_id=body.request_id, decision=body.decision,
                 add_to_whitelist=body.add_to_whitelist)
@@ -175,7 +199,13 @@ async def confirm_cmd(body: ConfirmCmdBody):
 
 def get_pending_cmd_decision(request_id: str) -> str | None:
     """工具层查询命令确认决策（None 表示尚未决策）"""
-    return _pending_cmd_decisions.pop(request_id, None)
+    rec = _pending_cmd_decisions.get(request_id)
+    if rec is None:
+        return None
+    decision = rec.get("decision") or None
+    if decision is not None:
+        _pending_cmd_decisions.pop(request_id, None)
+    return decision
 
 
 # ── 审计日志端点 ───────────────────────────────────────────

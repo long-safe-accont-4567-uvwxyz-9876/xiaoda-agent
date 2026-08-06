@@ -115,20 +115,41 @@ class ToolExecutor:
 
         返回 "allow"/"allow_once"（放行）| "deny"（拒绝）| "timeout"（超时未决策）。
         命令交由调用方决定执行或拒绝，不再以"先失败"方式返回给 LLM。
+
+        身份路由：从当前异步上下文读取发起会话，确认请求只推送给该会话对应
+        连接（无会话时回退广播），并把发起会话绑定到决策记录，由 confirm_cmd
+        校验回传身份，防止无关客户端替他人决定命令放行/拒绝。
         """
         import uuid as _uuid
         req_id = _uuid.uuid4().hex[:16]
+        try:
+            from web.ws_hub import current_session_id
+            session_id = current_session_id()
+        except Exception:
+            session_id = ""
+        # 登记发起会话到决策记录（confirm_cmd 身份校验依据）
+        try:
+            from web.routers.workspace import register_cmd_decision_scope
+            register_cmd_decision_scope(req_id, session_id)
+        except Exception as _e:
+            logger.debug("tool_executor.cmd_scope_register_failed", error=str(_e))
         logger.info("tool_executor.needs_confirmation",
-                    tool=tool_name, command=cmd[:200], request_id=req_id)
+                    tool=tool_name, command=cmd[:200], request_id=req_id,
+                    session_id=session_id)
         # 推送 WS 消息到前端，触发命令确认问答卡片（非阻塞）
+        payload = {
+            "type": "cmd_confirm_request",
+            "request_id": req_id,
+            "command": cmd[:500],
+            "tool": tool_name,
+            "session_id": session_id,
+        }
         try:
             from web.ws_hub import manager as _ws_manager
-            await _ws_manager.broadcast({
-                "type": "cmd_confirm_request",
-                "request_id": req_id,
-                "command": cmd[:500],
-                "tool": tool_name,
-            })
+            if session_id:
+                await _ws_manager.send_to_session(session_id, payload)
+            else:
+                await _ws_manager.broadcast(payload)
         except Exception as _e:
             logger.warning("tool_executor.cmd_confirm_push_failed", error=str(_e))
         # 异步等待用户决策（最多 CMD_CONFIRM_TIMEOUT 秒），期间不阻塞事件循环
@@ -144,6 +165,12 @@ class ToolExecutor:
                             request_id=req_id, decision=decision)
                 return decision
             await asyncio.sleep(0.1)
+        # 超时：清理决策记录，防止内存泄漏与迟到的越权决策
+        try:
+            from web.routers.workspace import discard_cmd_decision_scope
+            discard_cmd_decision_scope(req_id)
+        except Exception as _e:
+            logger.debug("tool_executor.cmd_scope_discard_failed", error=str(_e))
         logger.warning("tool_executor.cmd_confirm_timeout", tool=tool_name)
         return "timeout"
 

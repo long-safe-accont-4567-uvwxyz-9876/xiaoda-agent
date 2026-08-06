@@ -12,7 +12,9 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from security.permission_manager import get_permission_manager
-from web.routers.workspace import router as workspace_router
+from web.routers.workspace import (router as workspace_router,
+                                    register_cmd_decision_scope,
+                                    _pending_cmd_decisions)
 
 
 def D(r):
@@ -125,8 +127,17 @@ class TestWhitelistEndpoints:
         assert "axios" not in wl
 
 
+@pytest.fixture(autouse=True)
+def _clean_cmd_scopes():
+    """每个测试前清空命令确认决策记录（模块级全局字典跨测试保留）。"""
+    _pending_cmd_decisions.clear()
+    yield
+    _pending_cmd_decisions.clear()
+
+
 class TestConfirmCmdEndpoint:
     def test_deny_decision(self, client, pm):
+        register_cmd_decision_scope("req1", "")
         r = client.post("/api/v1/workspace/confirm_cmd", json={
             "request_id": "req1",
             "decision": "deny",
@@ -135,6 +146,7 @@ class TestConfirmCmdEndpoint:
         assert D(r)["decision"] == "deny"
 
     def test_allow_once(self, client, pm):
+        register_cmd_decision_scope("req2", "")
         r = client.post("/api/v1/workspace/confirm_cmd", json={
             "request_id": "req2",
             "decision": "allow_once",
@@ -142,6 +154,7 @@ class TestConfirmCmdEndpoint:
         assert r.status_code == 200
 
     def test_allow_with_whitelist(self, client, pm):
+        register_cmd_decision_scope("req3", "")
         r = client.post("/api/v1/workspace/confirm_cmd", json={
             "request_id": "req3",
             "decision": "allow",
@@ -153,6 +166,7 @@ class TestConfirmCmdEndpoint:
 
     def test_pending_decision_consumed(self, client, pm):
         from web.routers.workspace import get_pending_cmd_decision
+        register_cmd_decision_scope("req4", "")
         client.post("/api/v1/workspace/confirm_cmd", json={
             "request_id": "req4",
             "decision": "allow_once",
@@ -161,6 +175,39 @@ class TestConfirmCmdEndpoint:
         assert get_pending_cmd_decision("req4") == "allow_once"
         # 第二次查询返回 None（已消费）
         assert get_pending_cmd_decision("req4") is None
+
+    def test_unknown_request_rejected(self, client, pm):
+        """未登记 scope 的确认请求应被拒绝（防止伪造 request_id）。"""
+        r = client.post("/api/v1/workspace/confirm_cmd", json={
+            "request_id": "ghost",
+            "decision": "allow_once",
+        })
+        assert r.status_code == 200
+        assert D(r)["status"] == "unknown_request"
+
+    def test_session_mismatch_rejected(self, client, pm):
+        """非发起会话回传决策应返回 403，且决策不被记录。"""
+        from web.routers.workspace import get_pending_cmd_decision
+        register_cmd_decision_scope("req5", "session-A")
+        r = client.post("/api/v1/workspace/confirm_cmd", json={
+            "request_id": "req5",
+            "decision": "allow",
+            "session_id": "session-B",
+        })
+        assert r.status_code == 403
+        assert get_pending_cmd_decision("req5") is None
+
+    def test_session_match_accepted(self, client, pm):
+        """发起会话回传决策应被接受。"""
+        from web.routers.workspace import get_pending_cmd_decision
+        register_cmd_decision_scope("req6", "session-A")
+        r = client.post("/api/v1/workspace/confirm_cmd", json={
+            "request_id": "req6",
+            "decision": "allow_once",
+            "session_id": "session-A",
+        })
+        assert r.status_code == 200
+        assert get_pending_cmd_decision("req6") == "allow_once"
 
 
 class TestAuditEndpoint:

@@ -62,7 +62,11 @@ function onGlobalKeydown(e: KeyboardEvent) {
 // 命令确认请求 WS 处理：收到后端推送，设置 pendingCmdConfirm 触发卡片渲染
 function onCmdConfirmRequest(data: any) {
   if (data?.request_id && data?.command) {
-    ws.pendingCmdConfirm = { request_id: data.request_id, command: data.command }
+    ws.pendingCmdConfirm = {
+      request_id: data.request_id,
+      command: data.command,
+      session_id: data.session_id || '',
+    }
     nextTick(() => {
       const el = messagesEl.value
       if (el) el.scrollTop = el.scrollHeight
@@ -368,6 +372,7 @@ const emotionColors: Record<string, string> = {
           :key="ws.pendingCmdConfirm.request_id"
           :request-id="ws.pendingCmdConfirm.request_id"
           :command="ws.pendingCmdConfirm.command"
+          :session-id="ws.pendingCmdConfirm.session_id"
         />
       </transition>
     </div>

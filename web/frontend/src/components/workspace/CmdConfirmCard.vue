@@ -16,6 +16,7 @@ import { sound } from '../../utils/sound'
 const props = defineProps<{
   requestId: string
   command: string
+  sessionId?: string
 }>()
 
 const ws = useWorkspaceStore()
@@ -31,7 +32,7 @@ async function decide(d: 'deny' | 'allow_once' | 'allow', addToWhitelist: boolea
   try {
     // 延迟回传，让用户先看到决策结果（1.2s），再调 confirmCmd 清空卡片
     await new Promise(r => setTimeout(r, 1200))
-    await ws.confirmCmd(props.requestId, d, addToWhitelist, props.command)
+    await ws.confirmCmd(props.requestId, d, addToWhitelist, props.command, props.sessionId || '')
   } catch (e: any) {
     decided.value = null  // 失败时恢复按钮，允许重试
     message.error(e.message || t('settings.cmdConfirmFailed'))
