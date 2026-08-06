@@ -132,15 +132,16 @@ class TestExecuteIntegration:
         assert "工作目录" in result.error
 
     @pytest.mark.asyncio
-    async def test_needs_confirmation_returns_special_marker(self, executor, pm):
-        """端到端：非白名单命令返回用户确认提示"""
+    async def test_needs_confirmation_deny_returns_user_decision(self, executor, pm):
+        """端到端：非白名单命令需确认，用户拒绝 → 返回用户决策失败（非系统故障）"""
         pm.set_cwd("/tmp")
         pm.set_whitelist([])
+        executor._decision_provider = lambda rid: "deny"
         # cargo build 不匹配 sandbox 危险模式，也不在白名单
         result = await executor.execute("shell_command", {"command": "cargo build"})
         assert not result.success
-        # execute 将 __NEEDS_CONFIRMATION__ 转换为中文用户确认提示
-        assert "用户确认" in (result.error or ""), f"期望包含'用户确认'，实际: {result.error}"
+        assert result.user_decision is True
+        assert "拒绝" in (result.error or "")
 
 
 class TestWorkspaceAuditBuffer:

@@ -165,6 +165,15 @@ class PermissionManager:
         if env_val in ("1", "true", "yes"):
             return PermissionMode.DEV
 
+        # 环境变量未显式设置 → 读持久化文件（webui 上次切换的模式）
+        persisted = _load_persisted_mode()
+        if persisted is not None:
+            logger.info(
+                "permission_manager.using_persisted_mode",
+                mode=persisted.value,
+            )
+            return persisted
+
         # 未显式配置 → 默认 DEFAULT 并打印提示
         logger.info(
             "permission_manager.using_default_mode",
@@ -195,6 +204,8 @@ class PermissionManager:
                 "permission_manager.mode_changed",
                 old=old.value, new=mode.value,
             )
+        # 落盘：切换到哪档就持久化哪档，重启后仍生效（尽力而为，失败不阻断）
+        _persist_mode(mode)
 
     def is_dev_mode(self) -> bool:
         """是否开发模式"""
@@ -480,11 +491,23 @@ class PermissionManager:
             - 黑名单命中 → (False, reason, False)  永远拒绝
             - 白名单命中 → (True, "", False)        放行
             - 都未命中 → (False, "需用户确认", True) 弹窗
+            - 高权限模式（GOAT/BYPASS/AUTO）→ 非黑名单命令直接放行（不弹确认）
         """
         if not command.strip():
             return False, "命令为空", False
 
         sub_cmds = self._split_compound_command(command)
+        # 高权限模式：黑名单始终生效，其余命令直接放行（无需确认）
+        if self._mode in AUTO_APPROVE_MODES:
+            for sub in sub_cmds:
+                for pattern in _GOAT_DANGEROUS_SHELL_RE:
+                    if pattern.search(sub):
+                        reason = f"危险命令被拦截：{pattern.pattern}"
+                        logger.critical("permission_manager.workspace_dangerous_blocked",
+                                        pattern=pattern.pattern, command=sub[:200])
+                        return False, reason, False
+            return True, "", False
+
         needs_conf_flag = False
         for sub in sub_cmds:
             # 1. 黑名单始终生效（复用 _GOAT_DANGEROUS_SHELL_RE，不论 PermissionMode）
@@ -555,6 +578,59 @@ class PermissionManager:
         with self._lock:
             entries = list(self._audit_buffer)
         return entries[-limit:]
+
+
+# ── 权限模式持久化 ────────────────────────────────────────
+# webui 切换的权限模式只驻内存，重启后被环境变量/默认值覆盖，
+# 导致用户"选了随心(goat)却重启后失效"。这里把模式落盘，
+# 初始化时优先环境变量，其次读盘，最后默认 DEFAULT。
+# 测试可用 AGENT_PERMISSION_FILE 指向临时文件，避免污染真实配置。
+_PERMISSION_FILE = os.getenv("AGENT_PERMISSION_FILE", "")
+
+
+def _permission_file_path() -> str:
+    """解析权限模式持久化文件路径（惰性，避免模块导入期 IO/循环依赖）。"""
+    if _PERMISSION_FILE:
+        return _PERMISSION_FILE
+    try:
+        from config import get_config_dir
+        return str(get_config_dir() / "permission_mode.json")
+    except Exception:
+        return ""
+
+
+def _load_persisted_mode() -> PermissionMode | None:
+    """从磁盘读取持久化的权限模式；无文件/解析失败返回 None（不阻塞）。"""
+    path = _permission_file_path()
+    if not path:
+        return None
+    import json
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        mode = (data or {}).get("mode", "").strip().lower()
+        if mode:
+            return PermissionMode(mode)
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        logger.debug("permission_manager.load_persisted_failed path=%s err=%s", path, e)
+    return None
+
+
+def _persist_mode(mode: PermissionMode) -> None:
+    """把权限模式写入磁盘（尽力而为，失败仅记 debug，不阻断主流程）。"""
+    path = _permission_file_path()
+    if not path:
+        return
+    import json
+    try:
+        from pathlib import Path
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"mode": mode.value}, f, ensure_ascii=False)
+    except Exception as e:
+        logger.debug("permission_manager.persist_failed path=%s err=%s", path, e)
 
 
 # ── 全局单例 ──────────────────────────────────────────────

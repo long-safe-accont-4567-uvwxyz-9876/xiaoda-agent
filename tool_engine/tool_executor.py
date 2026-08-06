@@ -62,14 +62,23 @@ class ToolExecutor:
     RETRY_MAX_DELAY: float = 5.0
     FAILURE_STREAK_THRESHOLD: int = 5
     FAILURE_STREAK_RESET_SECONDS: int = 300  # 5 分钟后半开恢复
+    # 命令确认等待超时（秒）：用户未在期限内确认则按"拒绝"处理
+    CMD_CONFIRM_TIMEOUT: float = 60.0
 
-    def __init__(self, db: Any | None=None, approver: Approver | None=None) -> None:
+    def __init__(self, db: Any | None=None, approver: Approver | None=None,
+                 cmd_confirm_timeout: float | None = None,
+                 decision_provider: Any | None = None) -> None:
         self.db = db
         self._approver = approver or DefaultApprover()
         self._call_counts: dict[str, list[float]] = {}
         self._global_timeout: float = self.TOOL_TIMEOUTS["default"]
         self._failure_streaks: dict[str, int] = {}
         self._failure_first_time: dict[str, float] = {}
+        # 命令确认参数：decision_provider(request_id)->str|None 可注入（测试用），
+        # 默认走 web.routers.workspace.get_pending_cmd_decision（前端确认结果）。
+        self._cmd_confirm_timeout = cmd_confirm_timeout if cmd_confirm_timeout is not None \
+            else self.CMD_CONFIRM_TIMEOUT
+        self._decision_provider = decision_provider
         # 专用线程池：同步工具在线程中执行。与全局默认 executor 隔离，
         # 避免后台任务（记忆编码/本能提取等）的同步阻塞调用占满默认线程池，
         # 导致工具执行在其后排队数十秒（真实案例：计算器 88s 延迟）。
@@ -89,6 +98,54 @@ class ToolExecutor:
         """检查错误是否为瞬时错误，值得重试."""
         error_lower = (error or "").lower()
         return any(keyword in error_lower for keyword in self.RETRYABLE_ERRORS)
+
+    async def _get_cmd_decision(self, request_id: str) -> str | None:
+        """查询命令确认决策（None 表示尚未决策）。
+
+        默认从 web.routers.workspace 的前端确认结果队列读取；
+        测试可注入 decision_provider 覆盖。
+        """
+        if self._decision_provider is not None:
+            return self._decision_provider(request_id)
+        from web.routers.workspace import get_pending_cmd_decision
+        return get_pending_cmd_decision(request_id)
+
+    async def _await_cmd_confirmation(self, cmd: str, tool_name: str) -> str:
+        """暂停-确认-继续：推送确认卡片并等待用户决策。
+
+        返回 "allow"/"allow_once"（放行）| "deny"（拒绝）| "timeout"（超时未决策）。
+        命令交由调用方决定执行或拒绝，不再以"先失败"方式返回给 LLM。
+        """
+        import uuid as _uuid
+        req_id = _uuid.uuid4().hex[:16]
+        logger.info("tool_executor.needs_confirmation",
+                    tool=tool_name, command=cmd[:200], request_id=req_id)
+        # 推送 WS 消息到前端，触发命令确认问答卡片（非阻塞）
+        try:
+            from web.ws_hub import manager as _ws_manager
+            await _ws_manager.broadcast({
+                "type": "cmd_confirm_request",
+                "request_id": req_id,
+                "command": cmd[:500],
+                "tool": tool_name,
+            })
+        except Exception as _e:
+            logger.warning("tool_executor.cmd_confirm_push_failed", error=str(_e))
+        # 异步等待用户决策（最多 CMD_CONFIRM_TIMEOUT 秒），期间不阻塞事件循环
+        deadline = time.time() + self._cmd_confirm_timeout
+        while time.time() < deadline:
+            try:
+                decision = await self._get_cmd_decision(req_id)
+            except Exception as _e:
+                logger.warning("tool_executor.cmd_decision_lookup_failed", error=str(_e))
+                decision = None
+            if decision is not None:
+                logger.info("tool_executor.cmd_decision_received",
+                            request_id=req_id, decision=decision)
+                return decision
+            await asyncio.sleep(0.1)
+        logger.warning("tool_executor.cmd_confirm_timeout", tool=tool_name)
+        return "timeout"
 
     async def execute(self, tool_name: str, arguments: dict,
                       user_id: str = "", safe_mode: bool = False) -> ToolResult:
@@ -130,29 +187,22 @@ class ToolExecutor:
         if ws_err:
             if ws_err.startswith("__NEEDS_CONFIRMATION__:"):
                 cmd = ws_err[len("__NEEDS_CONFIRMATION__:"):]
-                # 生成 request_id 供前端卡片匹配
-                import uuid as _uuid
-                req_id = _uuid.uuid4().hex[:16]
-                logger.info("tool_executor.needs_confirmation",
-                            tool=tool_name, command=cmd[:200], request_id=req_id)
-                # 推送 WS 消息到前端，触发命令确认问答卡片（非阻塞）
-                try:
-                    from web.ws_hub import manager as _ws_manager
-                    await _ws_manager.broadcast({
-                        "type": "cmd_confirm_request",
-                        "request_id": req_id,
-                        "command": cmd[:500],
-                        "tool": tool_name,
-                    })
-                except Exception as _e:
-                    logger.warning("tool_executor.cmd_confirm_push_failed", error=str(_e))
-                # 不阻塞工具执行：返回提示给 LLM，用户在卡片确认后白名单更新，LLM 可重新调用
-                return ToolResult.fail(
-                    f"命令需要用户确认：{cmd[:200]}（已在聊天界面弹出确认卡片，request_id={req_id}）。"
-                    "请告知用户在聊天界面确认该命令，确认后可重新执行。"
-                )
-            logger.warning("tool_executor.workspace_blocked", tool=tool_name, reason=ws_err)
-            return ToolResult.fail(ws_err)
+                # 暂停-确认-继续：不直接失败，推送确认卡片并等待用户决策。
+                # 确认后继续执行并返回真实结果给 LLM；拒绝/超时则作为用户决策失败返回。
+                decision = await self._await_cmd_confirmation(cmd, tool_name)
+                if decision == "deny":
+                    logger.info("tool_executor.cmd_denied", command=cmd[:200])
+                    return ToolResult.fail(
+                        f"命令已被用户拒绝执行：{cmd[:200]}", user_decision=True)
+                if decision == "timeout":
+                    logger.warning("tool_executor.cmd_timeout_denied", command=cmd[:200])
+                    return ToolResult.fail(
+                        f"命令确认超时（{int(self._cmd_confirm_timeout)}秒），未执行：{cmd[:200]}",
+                        user_decision=True)
+                # decision in ("allow", "allow_once") → 放行，继续执行
+            else:
+                logger.warning("tool_executor.workspace_blocked", tool=tool_name, reason=ws_err)
+                return ToolResult.fail(ws_err)
 
         # ── Approver 审批检查（借鉴 OpenWorker TurnEngine 的 out-of-band 审批）──
         # 在沙箱和工作目录检查通过后、实际执行前检查审批器。
@@ -385,7 +435,12 @@ class ToolExecutor:
 
         # shell 工具：命令必须在白名单（黑名单始终生效）
         if tool_name in self._WORKSPACE_SHELL_TOOLS:
-            if not pm.is_cwd_authorized():
+            # 高权限模式（GOAT/BYPASS/AUTO）跳过"未授权工作目录"墙：
+            # 随心模式是最高权限，绝大多数命令可直接执行，无需先授权目录。
+            # is_command_allowed 内部对高权限模式已放行非黑名单命令。
+            from security.permission_manager import AUTO_APPROVE_MODES
+            _high_perm = pm.mode in AUTO_APPROVE_MODES
+            if not _high_perm and not pm.is_cwd_authorized():
                 pm.add_audit_entry(AuditEntry(
                     timestamp=_dt.now().isoformat(timespec="seconds"),
                     action="exec",

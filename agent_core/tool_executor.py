@@ -89,9 +89,11 @@ class ToolExecutorMixin:
                     ms=int((_time.time() - _t0) * 1000))
 
         # 工具调用后更新认知状态（is_tool=True）
+        # 用户决策失败（拒绝/超时未确认）不是系统故障，不计入熔断器，
+        # 避免每次需要确认的命令都推高工具失败率导致"系统繁忙"降级。
         if result.success:
             self._circuit_breaker.on_success(self._cognitive_state, is_tool=True)
-        else:
+        elif not getattr(result, "user_decision", False):
             self._circuit_breaker.on_failure(self._cognitive_state, is_tool=True)
 
         try:

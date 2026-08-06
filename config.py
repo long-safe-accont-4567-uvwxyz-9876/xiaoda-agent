@@ -975,6 +975,10 @@ QUERY_CACHE_ENABLED = os.getenv("QUERY_CACHE_ENABLED", "true").lower() in ("1", 
 QUERY_CACHE_THRESHOLD = float(os.getenv("QUERY_CACHE_THRESHOLD", "0.88"))
 QUERY_CACHE_MAX_SIZE = _safe_int(os.getenv("QUERY_CACHE_MAX_SIZE"), 256)
 QUERY_CACHE_TTL = _safe_int(os.getenv("QUERY_CACHE_TTL"), 300)
+# 单次记忆检索超时（秒）。主路径记忆检索在 LLM 调用前被 await，属串行瓶颈；
+# 过低会误砍仍在进行的 embed/rerank（USB 盘慢时 5s 常超，导致记忆注入为空、回复短），
+# 过高则拖慢整体回复。默认 8s：给予慢速存储足够余量，同时控制最坏延迟。
+MEMORY_RETRIEVE_TIMEOUT = _safe_float(os.getenv("MEMORY_RETRIEVE_TIMEOUT"), 8.0)
 
 # ── 父子Chunk RAG 优化 ──
 PARENT_CHILD_CHUNK_ENABLED = os.getenv("PARENT_CHILD_CHUNK_ENABLED", "true").lower() in ("1", "true", "yes")

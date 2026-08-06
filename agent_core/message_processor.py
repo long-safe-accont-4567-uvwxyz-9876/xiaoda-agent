@@ -1172,18 +1172,23 @@ class MessageProcessorMixin:
                     # 治本（2026-08-05）：单次记忆检索超时 2→5s。
                     # 根因：2s 对 embed/reranker/检索链路过短，网络波动即误砍，
                     #       导致 memory.retrieve_timeout_single 频繁 → 记忆注入为空 → 回复短。
-                    # 记忆检索已与 notebook/constraint 解耦并独立执行，5s 足够且不拖慢整体。
+                    # 记忆检索已与 notebook/constraint 解耦并独立执行。
+                    # (2026-08-06) 超时改为 config.MEMORY_RETRIEVE_TIMEOUT（默认 8s）：
+                    #   USB 盘慢时 5s 仍频繁误砍（今日 66 次 retrieve_timeout_single），
+                    #   8s 给慢速存储足够余量，同时控制最坏延迟（LLM 前串行 await）。
+                    import config as _cfg
+                    _mem_timeout = float(getattr(_cfg, "MEMORY_RETRIEVE_TIMEOUT", 8.0))
                     results = await asyncio.wait_for(
                         self.memory.retrieve_memories(user_input, k=_k),
-                        timeout=5.0,
+                        timeout=_mem_timeout,
                     )
                     _retrieve_ms = int((time.time() - _t0) * 1000)
                     logger.info("pipeline.memory.retrieve.done elapsed_ms={} result_count={}",
                                 _retrieve_ms, len(results) if results else 0)
                 except asyncio.TimeoutError:
-                    _delay = (time.time() - _t0) - 5.0
+                    _delay = (time.time() - _t0) - _mem_timeout
                     logger.warning("memory.retrieve_timeout_single",
-                                   hint="单次记忆检索超时 5s，跳过本次记忆",
+                                   hint=f"单次记忆检索超时 {_mem_timeout}s，跳过本次记忆",
                                    cancel_delay_ms=int(_delay * 1000),
                                    query_preview=user_input[:50])
                     results = None

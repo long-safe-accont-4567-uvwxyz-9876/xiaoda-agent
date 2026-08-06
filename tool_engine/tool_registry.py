@@ -19,6 +19,9 @@ class ToolResult:
     success: bool
     data: Any = None
     error: str = ""
+    # 用户决策失败标记：True 表示失败源于用户拒绝/未确认（非系统故障），
+    # 熔断器不应把它计入工具故障率，避免误触发"系统繁忙"降级。
+    user_decision: bool = False
 
     @classmethod
     def ok(cls, data: Any, **kwargs: Any) -> "ToolResult":
@@ -34,16 +37,17 @@ class ToolResult:
         return cls(success=True, data=data, **kwargs)
 
     @classmethod
-    def fail(cls, error: str) -> "ToolResult":
+    def fail(cls, error: str, **kwargs: Any) -> "ToolResult":
         """构造失败结果.
 
         Args:
             error: 错误描述
+            **kwargs: 额外字段（如 user_decision=True 标记用户决策失败）
 
         Returns:
             标记为失败的 ToolResult
         """
-        return cls(success=False, error=error)
+        return cls(success=False, error=error, **kwargs)
 
 
 _tools: dict[str, dict] = {}
