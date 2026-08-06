@@ -2,7 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import {
   NButton, NSwitch, NRadioGroup, NRadioButton, NInput, NModal,
-  NSelect, NSlider, NCheckbox, NPopconfirm, NTag, useMessage,
+  NSelect, NSlider, NCheckbox, NPopconfirm, NTag, NTabs, NTabPane, useMessage,
 } from 'naive-ui'
 import { get, put, post } from '../api'
 import { useUiStore } from '../stores/ui'
@@ -21,6 +21,7 @@ const auth = useAuthStore()
 const ws = useWorkspaceStore()
 const router = useRouter()
 const newCmd = ref('')
+const activeTab = ref('appearance')
 
 const permissionMode = ref('')
 const permissionOptions = ref<string[]>([])
@@ -163,218 +164,235 @@ const permLabel = computed<Record<string, string>>(() => ({
   <div class="settings-view">
     <h2 class="view-title">{{ t('settings.title') }}</h2>
 
-    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
-      <h3>{{ t('settings.appearance') }}</h3>
-      <div class="setting-row">
-        <span class="s-label">{{ t('settings.particles') }}</span>
-        <n-radio-group :value="ui.particles" @update:value="ui.setParticles">
-          <n-radio-button value="off">{{ t('settings.particlesOff') }}</n-radio-button>
-          <n-radio-button value="low">{{ t('settings.particlesLow') }}</n-radio-button>
-          <n-radio-button value="medium">{{ t('settings.particlesMedium') }}</n-radio-button>
-          <n-radio-button value="high">{{ t('settings.particlesHigh') }}</n-radio-button>
-        </n-radio-group>
-      </div>
-      <div class="setting-row">
-        <span class="s-label">{{ t('settings.tilt3d') }}</span>
-        <n-switch :value="ui.tilt3d" @update:value="ui.setTilt3d" />
-      </div>
-      <div class="setting-row">
-        <span class="s-label">{{ t('settings.autoSpeak') }}</span>
-        <n-switch :value="ui.autoSpeak" @update:value="(v: boolean) => ui.setAutoSpeak(v).then(() => message.success(t('success'))).catch((e: any) => message.error(e.message))" />
-      </div>
-      <div class="setting-row">
-        <span class="s-label">{{ t('settings.soundFx') }}</span>
-        <div class="soundfx-controls">
-          <n-switch :value="ui.soundFx" @update:value="(v: boolean) => { ui.setSoundFx(v); sound.play('toggle') }" />
-          <n-slider
-            :value="ui.soundVolume"
-            :min="0"
-            :max="1"
-            :step="0.05"
-            :disabled="!ui.soundFx"
-            style="width: 160px; margin-left: 12px"
-            @update:value="ui.setSoundVolume"
-            @dragend="() => sound.play('receive')"
-          />
-        </div>
-      </div>
-      <p class="brightness-hint">{{ t('settings.soundFxHint') }}</p>
-      <div class="setting-row">
-        <span class="s-label">{{ t('settings.dendroCursor') }}</span>
-        <n-switch :value="ui.dendroCursor" @update:value="(v: boolean) => { ui.setDendroCursor(v); sound.play('toggle') }" />
-      </div>
-      <p class="brightness-hint">{{ t('settings.dendroCursorHint') }}</p>
-      <div class="setting-row">
-        <span class="s-label">{{ t('settings.dendroCursorTrail') }}</span>
-        <n-switch :value="ui.dendroCursorTrail" @update:value="(v: boolean) => { ui.setDendroCursorTrail(v); sound.play('toggle') }" />
-      </div>
-      <p class="brightness-hint">{{ t('settings.dendroCursorTrailHint') }}</p>
-      <div class="setting-row brightness-row">
-        <div class="brightness-label">
-          <span class="s-label">{{ t('settings.brightness') }}</span>
-          <span class="brightness-value">{{ Math.round(ui.brightness * 100) }}%</span>
-        </div>
-        <div class="brightness-controls">
-          <n-switch :value="ui.autoBrightness" @update:value="ui.setAutoBrightness">
-            <template #checked>{{ t('settings.autoBrightness') }}</template>
-            <template #unchecked>{{ t('settings.manualBrightness') }}</template>
-          </n-switch>
-          <n-slider
-            :value="ui.manualBrightness"
-            :min="0.5"
-            :max="1.5"
-            :step="0.05"
-            :disabled="ui.autoBrightness"
-            style="width: 200px; margin-left: 12px"
-            @update:value="ui.setManualBrightness"
-          />
-        </div>
-      </div>
-      <p class="brightness-hint" v-if="ui.autoBrightness">
-        {{ t('settings.brightnessAutoHint') }}
-      </p>
-      <p class="brightness-hint" v-else>
-        {{ t('settings.brightnessManualHint') }}
-      </p>
-    </section></Tilt3D>
+    <n-tabs type="line" animated v-model:value="activeTab">
+      <!-- 外观与语言 -->
+      <n-tab-pane name="appearance" :tab="t('settings.tabs.appearance')">
+        <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
+          <h3>{{ t('settings.appearance') }}</h3>
+          <div class="setting-row">
+            <span class="s-label">{{ t('settings.particles') }}</span>
+            <n-radio-group :value="ui.particles" @update:value="ui.setParticles">
+              <n-radio-button value="off">{{ t('settings.particlesOff') }}</n-radio-button>
+              <n-radio-button value="low">{{ t('settings.particlesLow') }}</n-radio-button>
+              <n-radio-button value="medium">{{ t('settings.particlesMedium') }}</n-radio-button>
+              <n-radio-button value="high">{{ t('settings.particlesHigh') }}</n-radio-button>
+            </n-radio-group>
+          </div>
+          <div class="setting-row">
+            <span class="s-label">{{ t('settings.tilt3d') }}</span>
+            <n-switch :value="ui.tilt3d" @update:value="ui.setTilt3d" />
+          </div>
+          <div class="setting-row">
+            <span class="s-label">{{ t('settings.autoSpeak') }}</span>
+            <n-switch :value="ui.autoSpeak" @update:value="(v: boolean) => ui.setAutoSpeak(v).then(() => message.success(t('success'))).catch((e: any) => message.error(e.message))" />
+          </div>
+          <div class="setting-row">
+            <span class="s-label">{{ t('settings.soundFx') }}</span>
+            <div class="soundfx-controls">
+              <n-switch :value="ui.soundFx" @update:value="(v: boolean) => { ui.setSoundFx(v); sound.play('toggle') }" />
+              <n-slider
+                :value="ui.soundVolume"
+                :min="0"
+                :max="1"
+                :step="0.05"
+                :disabled="!ui.soundFx"
+                style="width: 160px; margin-left: 12px"
+                @update:value="ui.setSoundVolume"
+                @dragend="() => sound.play('receive')"
+              />
+            </div>
+          </div>
+          <p class="brightness-hint">{{ t('settings.soundFxHint') }}</p>
+          <div class="setting-row">
+            <span class="s-label">{{ t('settings.dendroCursor') }}</span>
+            <n-switch :value="ui.dendroCursor" @update:value="(v: boolean) => { ui.setDendroCursor(v); sound.play('toggle') }" />
+          </div>
+          <p class="brightness-hint">{{ t('settings.dendroCursorHint') }}</p>
+          <div class="setting-row">
+            <span class="s-label">{{ t('settings.dendroCursorTrail') }}</span>
+            <n-switch :value="ui.dendroCursorTrail" @update:value="(v: boolean) => { ui.setDendroCursorTrail(v); sound.play('toggle') }" />
+          </div>
+          <p class="brightness-hint">{{ t('settings.dendroCursorTrailHint') }}</p>
+          <div class="setting-row brightness-row">
+            <div class="brightness-label">
+              <span class="s-label">{{ t('settings.brightness') }}</span>
+              <span class="brightness-value">{{ Math.round(ui.brightness * 100) }}%</span>
+            </div>
+            <div class="brightness-controls">
+              <n-switch :value="ui.autoBrightness" @update:value="ui.setAutoBrightness">
+                <template #checked>{{ t('settings.autoBrightness') }}</template>
+                <template #unchecked>{{ t('settings.manualBrightness') }}</template>
+              </n-switch>
+              <n-slider
+                :value="ui.manualBrightness"
+                :min="0.5"
+                :max="1.5"
+                :step="0.05"
+                :disabled="ui.autoBrightness"
+                style="width: 200px; margin-left: 12px"
+                @update:value="ui.setManualBrightness"
+              />
+            </div>
+          </div>
+          <p class="brightness-hint" v-if="ui.autoBrightness">
+            {{ t('settings.brightnessAutoHint') }}
+          </p>
+          <p class="brightness-hint" v-else>
+            {{ t('settings.brightnessManualHint') }}
+          </p>
+        </section></Tilt3D>
 
-    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
-      <h3>{{ t('settings.language') }}</h3>
-      <div class="setting-row">
-        <span class="s-label">{{ t('settings.languageDesc') }}</span>
-        <n-radio-group :value="i18nState.lang" @update:value="(v: Lang) => { setLang(v); message.success(t('success')) }">
-          <n-radio-button value="zh">中文</n-radio-button>
-          <n-radio-button value="en">English</n-radio-button>
-        </n-radio-group>
-      </div>
-    </section></Tilt3D>
+        <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
+          <h3>{{ t('settings.language') }}</h3>
+          <div class="setting-row">
+            <span class="s-label">{{ t('settings.languageDesc') }}</span>
+            <n-radio-group :value="i18nState.lang" @update:value="(v: Lang) => { setLang(v); message.success(t('success')) }">
+              <n-radio-button value="zh">中文</n-radio-button>
+              <n-radio-button value="en">English</n-radio-button>
+            </n-radio-group>
+          </div>
+        </section></Tilt3D>
+      </n-tab-pane>
 
-    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
-      <h3>{{ t('settings.permissionMode') }}</h3>
-      <n-radio-group :value="permissionMode" @update:value="setPermMode">
-        <n-radio-button v-for="m in permissionOptions" :key="m" :value="m">
-          {{ permLabel[m] || m }}
-        </n-radio-button>
-      </n-radio-group>
-      <p class="perm-desc">{{ permDesc[permissionMode] || '' }}</p>
-    </section></Tilt3D>
+      <!-- 权限与工作目录 -->
+      <n-tab-pane name="permission" :tab="t('settings.tabs.permission')">
+        <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
+          <h3>{{ t('settings.permissionMode') }}</h3>
+          <n-radio-group :value="permissionMode" @update:value="setPermMode">
+            <n-radio-button v-for="m in permissionOptions" :key="m" :value="m">
+              {{ permLabel[m] || m }}
+            </n-radio-button>
+          </n-radio-group>
+          <p class="perm-desc">{{ permDesc[permissionMode] || '' }}</p>
+        </section></Tilt3D>
 
-    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
-      <h3>{{ t('settings.workspaceAuth') }}</h3>
-      <p class="apikey-desc">{{ t('settings.workspaceAuthDesc') }}</p>
+        <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
+          <h3>{{ t('settings.workspaceAuth') }}</h3>
+          <p class="apikey-desc">{{ t('settings.workspaceAuthDesc') }}</p>
 
-      <!-- 授权状态 -->
-      <template v-if="ws.authorized">
-        <div class="setting-row">
-          <span class="s-label">{{ t('settings.workspaceCurrent') }}</span>
-          <span class="ws-path" :title="ws.currentPath">📁 {{ ws.currentPath }}</span>
-        </div>
-        <div class="setting-row">
-          <span class="s-label">{{ t('settings.workspaceAuthorizedAt') }}</span>
-          <span class="ws-time">{{ ws.authorizedAt || '—' }}</span>
-        </div>
-        <div class="setting-row">
-          <n-popconfirm @positive-click="onRevokeWorkspace">
-            <template #trigger>
-              <n-button type="warning" ghost size="small">{{ t('settings.workspaceRevoke') }}</n-button>
-            </template>
-            {{ t('settings.workspaceRevokeConfirm') }}
-          </n-popconfirm>
-        </div>
-      </template>
-      <template v-else>
-        <p class="perm-desc">{{ t('settings.workspaceUnauthorizedHint') }}</p>
-      </template>
+          <!-- 授权状态 -->
+          <template v-if="ws.authorized">
+            <div class="setting-row">
+              <span class="s-label">{{ t('settings.workspaceCurrent') }}</span>
+              <span class="ws-path" :title="ws.currentPath">📁 {{ ws.currentPath }}</span>
+            </div>
+            <div class="setting-row">
+              <span class="s-label">{{ t('settings.workspaceAuthorizedAt') }}</span>
+              <span class="ws-time">{{ ws.authorizedAt || '—' }}</span>
+            </div>
+            <div class="setting-row">
+              <n-popconfirm @positive-click="onRevokeWorkspace">
+                <template #trigger>
+                  <n-button type="warning" ghost size="small">{{ t('settings.workspaceRevoke') }}</n-button>
+                </template>
+                {{ t('settings.workspaceRevokeConfirm') }}
+              </n-popconfirm>
+            </div>
+          </template>
+          <template v-else>
+            <p class="perm-desc">{{ t('settings.workspaceUnauthorizedHint') }}</p>
+          </template>
 
-      <!-- 命令白名单 -->
-      <h4 class="sub-title">{{ t('settings.cmdWhitelist') }}</h4>
-      <p class="apikey-desc">{{ t('settings.cmdWhitelistHint') }}</p>
-      <div class="setting-row">
-        <n-input v-model:value="newCmd" :placeholder="t('settings.cmdWhitelistAddPlaceholder')" size="small" style="flex:1" @keyup.enter="onAddCmd" />
-        <n-button size="small" type="primary" @click="onAddCmd">{{ t('settings.cmdWhitelistAdd') }}</n-button>
-      </div>
-      <div v-if="ws.whitelist.length" class="ws-whitelist">
-        <n-tag v-for="cmd in ws.whitelist" :key="cmd" closable size="small" @close="onRemoveCmd(cmd)">{{ cmd }}</n-tag>
-      </div>
-      <p v-else class="perm-desc">{{ t('settings.cmdWhitelistEmpty') }}</p>
+          <!-- 命令白名单 -->
+          <h4 class="sub-title">{{ t('settings.cmdWhitelist') }}</h4>
+          <p class="apikey-desc">{{ t('settings.cmdWhitelistHint') }}</p>
+          <div class="setting-row">
+            <n-input v-model:value="newCmd" :placeholder="t('settings.cmdWhitelistAddPlaceholder')" size="small" style="flex:1" @keyup.enter="onAddCmd" />
+            <n-button size="small" type="primary" @click="onAddCmd">{{ t('settings.cmdWhitelistAdd') }}</n-button>
+          </div>
+          <div v-if="ws.whitelist.length" class="ws-whitelist">
+            <n-tag v-for="cmd in ws.whitelist" :key="cmd" closable size="small" @close="onRemoveCmd(cmd)">{{ cmd }}</n-tag>
+          </div>
+          <p v-else class="perm-desc">{{ t('settings.cmdWhitelistEmpty') }}</p>
 
-      <!-- 审计日志 -->
-      <div class="section-head" style="margin-top:14px">
-        <h4 class="sub-title">{{ t('settings.workspaceAudit') }}</h4>
-        <n-button size="small" @click="onRefreshAudit">{{ t('settings.workspaceAuditRefresh') }}</n-button>
-      </div>
-      <div v-if="ws.auditLog.length" class="ws-audit">
-        <div v-for="(log, i) in ws.auditLog" :key="i" class="audit-entry">
-          <span class="audit-time">{{ log.timestamp }}</span>
-          <n-tag :type="log.allowed ? 'success' : 'error'" size="small">
-            {{ log.allowed ? t('settings.workspaceAuditAllowed') : t('settings.workspaceAuditDenied') }}
-          </n-tag>
-          <span class="audit-action">{{ log.action }}</span>
-          <span class="audit-target" :title="log.target">{{ log.target }}</span>
-        </div>
-      </div>
-      <p v-else class="perm-desc">{{ t('settings.workspaceAuditEmpty') }}</p>
-    </section></Tilt3D>
+          <!-- 审计日志 -->
+          <div class="section-head" style="margin-top:14px">
+            <h4 class="sub-title">{{ t('settings.workspaceAudit') }}</h4>
+            <n-button size="small" @click="onRefreshAudit">{{ t('settings.workspaceAuditRefresh') }}</n-button>
+          </div>
+          <div v-if="ws.auditLog.length" class="ws-audit">
+            <div v-for="(log, i) in ws.auditLog" :key="i" class="audit-entry">
+              <span class="audit-time">{{ log.timestamp }}</span>
+              <n-tag :type="log.allowed ? 'success' : 'error'" size="small">
+                {{ log.allowed ? t('settings.workspaceAuditAllowed') : t('settings.workspaceAuditDenied') }}
+              </n-tag>
+              <span class="audit-action">{{ log.action }}</span>
+              <span class="audit-target" :title="log.target">{{ log.target }}</span>
+            </div>
+          </div>
+          <p v-else class="perm-desc">{{ t('settings.workspaceAuditEmpty') }}</p>
+        </section></Tilt3D>
+      </n-tab-pane>
 
-    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
-      <div class="section-head">
-        <h3>{{ t('settings.logViewer') }}</h3>
-        <div class="log-ops">
-          <n-select v-model:value="logLevel" :options="['INFO', 'WARNING', 'ERROR'].map(l => ({ label: l, value: l }))"
-                    :placeholder="t('settings.logLevel')" clearable size="small" style="width: 120px"
-                    @update:value="loadLogs" />
-          <n-button size="small" :loading="logLoading" @click="loadLogs">{{ t('refresh') }}</n-button>
-        </div>
-      </div>
-      <pre class="log-box">{{ logs.join('\n') || t('settings.logEmpty') }}</pre>
-    </section></Tilt3D>
+      <!-- 连接与访问 -->
+      <n-tab-pane name="connection" :tab="t('settings.tabs.connection')">
+        <Tilt3D v-if="lanInfo" :max-x="4" :max-y="6"><section class="glass-panel section">
+          <h3>{{ t('settings.lanAccess') }}</h3>
+          <p class="apikey-desc">{{ t('settings.lanDesc') }}</p>
+          <div class="setting-row">
+            <span class="s-label">{{ t('settings.localhost') }}</span>
+            <span class="url-link" @click="copyUrl(lanInfo!.localhost)">{{ lanInfo!.localhost }}</span>
+          </div>
+          <div class="setting-row" v-for="url in lanInfo!.lan_urls" :key="url">
+            <span class="s-label">{{ t('settings.phoneAccess') }}</span>
+            <span class="url-link" @click="copyUrl(url)">{{ url }}</span>
+          </div>
+          <p class="perm-desc" v-if="!lanInfo!.lan_urls?.length">{{ t('settings.noLanIp') }}</p>
+          <p class="perm-desc" v-else>{{ t('settings.clickToCopy') }}</p>
+        </section></Tilt3D>
 
-    <Tilt3D v-if="lanInfo" :max-x="4" :max-y="6"><section class="glass-panel section">
-      <h3>{{ t('settings.lanAccess') }}</h3>
-      <p class="apikey-desc">{{ t('settings.lanDesc') }}</p>
-      <div class="setting-row">
-        <span class="s-label">{{ t('settings.localhost') }}</span>
-        <span class="url-link" @click="copyUrl(lanInfo!.localhost)">{{ lanInfo!.localhost }}</span>
-      </div>
-      <div class="setting-row" v-for="url in lanInfo!.lan_urls" :key="url">
-        <span class="s-label">{{ t('settings.phoneAccess') }}</span>
-        <span class="url-link" @click="copyUrl(url)">{{ url }}</span>
-      </div>
-      <p class="perm-desc" v-if="!lanInfo!.lan_urls?.length">{{ t('settings.noLanIp') }}</p>
-      <p class="perm-desc" v-else>{{ t('settings.clickToCopy') }}</p>
-    </section></Tilt3D>
+        <WeChatConnectPanel />
+      </n-tab-pane>
 
-    <WeChatConnectPanel />
+      <!-- 账号与资料 -->
+      <n-tab-pane name="account" :tab="t('settings.tabs.account')">
+        <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
+          <h3>{{ t('settings.apiKeyConfig') }}</h3>
+          <p class="apikey-desc">{{ t('settings.apiKeyDesc') }}</p>
+          <div class="setting-row">
+            <span class="s-label">{{ t('settings.openApiKeyWizard') }}</span>
+            <n-button type="primary" secondary @click="router.push('/setup')">{{ t('settings.openApiKeyBtn') }}</n-button>
+          </div>
+        </section></Tilt3D>
 
-    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
-      <h3>{{ t('settings.apiKeyConfig') }}</h3>
-      <p class="apikey-desc">{{ t('settings.apiKeyDesc') }}</p>
-      <div class="setting-row">
-        <span class="s-label">{{ t('settings.openApiKeyWizard') }}</span>
-        <n-button type="primary" secondary @click="router.push('/setup')">{{ t('settings.openApiKeyBtn') }}</n-button>
-      </div>
-    </section></Tilt3D>
+        <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
+          <h3>{{ t('settings.userProfile') }}</h3>
+          <p class="apikey-desc">{{ t('settings.userProfileDesc') }}</p>
+          <div class="setting-row">
+            <span class="s-label">{{ t('settings.editProfile') }}</span>
+            <n-button type="primary" secondary @click="router.push('/setup/profile')">{{ t('settings.editProfileBtn') }}</n-button>
+          </div>
+        </section></Tilt3D>
+      </n-tab-pane>
 
-    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
-      <h3>{{ t('settings.userProfile') }}</h3>
-      <p class="apikey-desc">{{ t('settings.userProfileDesc') }}</p>
-      <div class="setting-row">
-        <span class="s-label">{{ t('settings.editProfile') }}</span>
-        <n-button type="primary" secondary @click="router.push('/setup/profile')">{{ t('settings.editProfileBtn') }}</n-button>
-      </div>
-    </section></Tilt3D>
+      <!-- 系统与日志 -->
+      <n-tab-pane name="system" :tab="t('settings.tabs.system')">
+        <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
+          <div class="section-head">
+            <h3>{{ t('settings.logViewer') }}</h3>
+            <div class="log-ops">
+              <n-select v-model:value="logLevel" :options="['INFO', 'WARNING', 'ERROR'].map(l => ({ label: l, value: l }))"
+                        :placeholder="t('settings.logLevel')" clearable size="small" style="width: 120px"
+                        @update:value="loadLogs" />
+              <n-button size="small" :loading="logLoading" @click="loadLogs">{{ t('refresh') }}</n-button>
+            </div>
+          </div>
+          <pre class="log-box">{{ logs.join('\n') || t('settings.logEmpty') }}</pre>
+        </section></Tilt3D>
 
-    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section danger">
-      <h3>{{ t('settings.dangerZone') }}</h3>
-      <div class="setting-row">
-        <span class="s-label">{{ t('settings.restartService') }}</span>
-        <n-button type="error" secondary @click="showRestart = true">{{ t('settings.restartBtn') }}</n-button>
-      </div>
-      <div class="setting-row">
-        <span class="s-label">{{ t('settings.logout') }}</span>
-        <n-button secondary @click="logout">{{ t('settings.logoutBtn') }}</n-button>
-      </div>
-    </section></Tilt3D>
+        <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section danger">
+          <h3>{{ t('settings.dangerZone') }}</h3>
+          <div class="setting-row">
+            <span class="s-label">{{ t('settings.restartService') }}</span>
+            <n-button type="error" secondary @click="showRestart = true">{{ t('settings.restartBtn') }}</n-button>
+          </div>
+          <div class="setting-row">
+            <span class="s-label">{{ t('settings.logout') }}</span>
+            <n-button secondary @click="logout">{{ t('settings.logoutBtn') }}</n-button>
+          </div>
+        </section></Tilt3D>
+      </n-tab-pane>
+    </n-tabs>
 
     <n-modal v-model:show="showRestart" preset="card" :title="t('settings.restartConfirmTitle')"
              style="width: min(420px, 94vw)">

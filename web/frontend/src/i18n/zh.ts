@@ -77,6 +77,13 @@ export default {
   // 系统设置页
   settings: {
     title: '⚙️ 系统设置',
+    tabs: {
+      appearance: '外观与语言',
+      permission: '权限与工作目录',
+      connection: '连接与访问',
+      account: '账号与资料',
+      system: '系统与日志',
+    },
     appearance: '界面与特效',
     particles: '草元素粒子密度',
     particlesOff: '关',

@@ -77,6 +77,13 @@ export default {
   // Settings page
   settings: {
     title: '⚙️ Settings',
+    tabs: {
+      appearance: 'Appearance & Language',
+      permission: 'Permission & Workspace',
+      connection: 'Connection & Access',
+      account: 'Account & Profile',
+      system: 'System & Logs',
+    },
     appearance: 'Appearance & Effects',
     particles: 'Dendro Particle Density',
     particlesOff: 'Off',
