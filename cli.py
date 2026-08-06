@@ -625,6 +625,50 @@ class CLIInterface:
             return False
         return True
 
+    @staticmethod
+    def _is_ws_closed_error(e: Exception) -> bool:
+        """判断异常是否为 WebSocket 连接被服务端关闭。
+
+        主进程（nahida-web）重启/更新时 ExecStartPre 用 fuser -k 8080/tcp 杀掉旧进程，
+        旧 WS 连接被 1000 正常关闭，websockets 抛出 ConnectionClosed* 异常。
+        CLI 需识别该异常以触发自动重连。
+        """
+        try:
+            import websockets
+            return isinstance(e, websockets.exceptions.ConnectionClosed)
+        except ImportError:
+            return False
+
+    def _reconnect_main_process(self) -> bool:
+        """主进程重启后重建 WS 连接（根治连接失效后 CLI 永久不可用）。"""
+        print(f"\n  {_C.DIM}{_C.LYELLOW}主进程连接已断开，正在重连…{_C.RST}")
+        if self._ws is not None:
+            try:
+                self._run_coro(self._ws.close())
+            except Exception:
+                pass
+            self._ws = None
+        ok = self._connect_main_process()
+        if ok:
+            print(f"  {_C.DIM}{_C.LGREEN}✓ 重连成功{_C.RST}")
+        return ok
+
+    def _ws_chat_with_reconnect(self, text: str, status_callback: Callable | None = None) -> str:
+        """发送消息到主进程；连接被服务端关闭时自动重连并重试一次。
+
+        主进程重启会以 1000 关闭旧 WS 连接（见 _is_ws_closed_error），此前 CLI
+        只在启动时连接一次，重启后连接静默失效，用户下次发消息才报
+        "received 1000 (OK)" 错误。此处识别 ConnectionClosed 后自动重连并重试。
+        """
+        try:
+            return self._run_coro(self._ws.chat(text, status_callback=status_callback))
+        except Exception as e:
+            if not self._is_ws_closed_error(e):
+                raise
+            if not self._reconnect_main_process():
+                raise RuntimeError("主进程连接已断开，重连失败") from e
+            return self._run_coro(self._ws.chat(text, status_callback=status_callback))
+
     def _print_welcome(self) -> None:
         model_id = _get_model_info(self._token)
 
@@ -718,7 +762,7 @@ class CLIInterface:
             self._print_unknown(cmd)
             return
         try:
-            result = self._run_coro(self._ws.chat(stripped))
+            result = self._ws_chat_with_reconnect(stripped)
         except Exception as e:
             logger.error("cli.slash_dispatch_error", command=cmd, error=str(e))
             print(f"\n  {_C.LYELLOW}执行 {cmd} 时出了点问题：{str(e)[:100]}{_C.RST}\n")
@@ -739,8 +783,8 @@ class CLIInterface:
             print(f"  {_C.DIM}{_C.LYELLOW}{translated}{_C.RST}")
 
         try:
-            reply = self._run_coro(
-                self._ws.chat(user_input, status_callback=status_notify)
+            reply = self._ws_chat_with_reconnect(
+                user_input, status_callback=status_notify
             )
         except Exception as e:
             logger.error("cli.chat_error", error=str(e))
