@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 
-def _make_processor(cap: int) -> "MessageProcessorMixin":
+def _make_processor(cap: int):
     """构造仅持有 LRU 所需属性的裸 mixin。"""
     from agent_core.message_processor import MessageProcessorMixin
 
