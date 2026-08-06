@@ -53,7 +53,9 @@ class TestRound1UnitSmoke:
         """验证 Harness 验收循环常量值。"""
         from agent_core.message_processor import MessageProcessorMixin
         assert MessageProcessorMixin.MAX_VERIFICATION_TURNS == 8
-        assert MessageProcessorMixin.VERIFICATION_WALL_TIMEOUT == 50
+        # 2026-08-04（commit 36a103e）：为根治 recall 工具失效，墙钟超时 50→25s，
+        # 与 LLM_CALL_TIMEOUT=30 分工：25s 墙钟先行兜底，避免工具循环拖垮主响应。
+        assert MessageProcessorMixin.VERIFICATION_WALL_TIMEOUT == 25
         assert MessageProcessorMixin.MAX_CONSECUTIVE_TOOL_FAILURES == 3
         assert MessageProcessorMixin.LLM_CALL_TIMEOUT == 30
 

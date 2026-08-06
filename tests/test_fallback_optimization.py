@@ -57,11 +57,15 @@ class TestRetryAndTimeoutReduction:
         from model_router import MAX_RETRIES
         assert MAX_RETRIES == 1, f"MAX_RETRIES 应为 1，当前为 {MAX_RETRIES}"
 
-    def test_chat_timeout_is_60s(self):
-        """chat 超时应为 60 秒（从 90s 降低）"""
+    def test_chat_timeout_is_30s(self):
+        """chat 超时应为 30 秒（从 90s → 60s → 30s 渐进收紧）。
+
+        2026-08-04 起：为根治超时失败问题，chat 超时收至 30s，
+        与 agnes transport 的 read=30s 对齐，避免外层兜底与内层超时叠加。
+        """
         from model_router import ModelRouter
-        assert ModelRouter._DEFAULT_TIMEOUTS["chat"] == 60, \
-            f"chat 超时应为 60s，当前为 {ModelRouter._DEFAULT_TIMEOUTS.get('chat')}"
+        assert ModelRouter._DEFAULT_TIMEOUTS["chat"] == 30, \
+            f"chat 超时应为 30s，当前为 {ModelRouter._DEFAULT_TIMEOUTS.get('chat')}"
 
 
 class TestProfileLearnerFormatBug:

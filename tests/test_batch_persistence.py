@@ -133,8 +133,14 @@ async def test_both_writes_fail_transaction_commits_empty():
 
 
 @pytest.mark.asyncio
-async def test_no_session_id_skips_update_session():
-    """场景四：session_id 为空 → 不调用 update_session，单事务提交 insert。"""
+async def test_empty_session_id_falls_back_to_user_id():
+    """场景四：session_id 为空 → 兜底为 user_id，insert/update 均使用兜底值。
+
+    2026-08-05 治本修复：微信 bot 不传 session_id（session_id=""），写入
+    conversation_logs 后 WebUI 会话列表 WHERE session_id != '' 过滤掉 → 微信
+    聊天记录不显示。修复后空 session_id 用 user_id 作为会话标识。
+    原"空 session_id 跳过 update_session"语义已废弃。
+    """
     manager, db, _ = _make_manager()
 
     await manager._run_persistence_tasks(
@@ -143,7 +149,14 @@ async def test_no_session_id_skips_update_session():
     )
 
     db.insert_conversation_log.assert_awaited_once()
-    db.update_session.assert_not_called()
+    _, kwargs = db.insert_conversation_log.call_args
+    assert kwargs.get("session_id") == "u1", \
+        f"空 session_id 应兜底为 user_id，实际为 {kwargs.get('session_id')!r}"
+
+    # 兜底后 session_id 非空 → update_session 正常调用（单事务内）
+    db.update_session.assert_awaited_once()
+    _, kwargs = db.update_session.call_args
+    assert kwargs.get("auto_commit") is False, "update 应传 auto_commit=False"
     assert db._txn.entered == 1
     assert db._txn.committed == 1, "insert 成功应触发一次事务提交"
 

@@ -36,7 +36,8 @@ async def test_build_main_messages_reads_from_context_var_not_instance():
 
     proc = MagicMock()
     proc.context = MagicMock()
-    proc.context.build_messages = MagicMock(return_value=[
+    # _build_main_messages 内部 await context.build_messages(...)，需 AsyncMock
+    proc.context.build_messages = AsyncMock(return_value=[
         {"role": "system", "content": "base prompt"},
         {"role": "user", "content": "hello"},
     ])

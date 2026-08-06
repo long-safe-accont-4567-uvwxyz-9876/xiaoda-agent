@@ -45,7 +45,7 @@ def get_shared_client() -> httpx.AsyncClient:
     """获取全局共享 httpx.AsyncClient 单例.
 
     特性：
-    - ``max_connections=50``, ``max_keepalive_connections=20``, ``keepalive_expiry=30s``
+    - ``max_connections=50``, ``max_keepalive_connections=20``, ``keepalive_expiry=300s``
     - HTTP/2 启用（多路复用，需 h2 包；未安装时优雅降级为 HTTP/1.1）
     - 默认 timeout 30s（connect 15s），单次请求可通过 ``timeout=`` 参数覆盖
 

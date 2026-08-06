@@ -10,19 +10,12 @@ EOFError，向导无法接收输入；且 cmd 里"必填项未配置"警告会�
 import agent
 
 
-class _Args:
-    """模拟 argparse 的 args 对象。"""
-    def __init__(self, web=False, desktop=False):
-        self.web = web
-        self.desktop = desktop
-
-
 def test_desktop_first_run_skips_cli_wizard(monkeypatch):
     """desktop 模式首次运行不应启动 CLI 向导（stdin 不可交互）。"""
     wizard_calls = []
     monkeypatch.setattr("setup_wizard.main", lambda: wizard_calls.append(1))
 
-    agent._handle_first_run_mode(_Args(desktop=True))
+    agent._handle_first_run_mode("desktop")
 
     assert wizard_calls == [], "desktop 模式不应启动 CLI 向导"
 
@@ -32,7 +25,7 @@ def test_web_first_run_skips_cli_wizard(monkeypatch):
     wizard_calls = []
     monkeypatch.setattr("setup_wizard.main", lambda: wizard_calls.append(1))
 
-    agent._handle_first_run_mode(_Args(web=True))
+    agent._handle_first_run_mode("web")
 
     assert wizard_calls == [], "web 模式不应启动 CLI 向导"
 
@@ -43,6 +36,6 @@ def test_cli_first_run_uses_wizard(monkeypatch):
     monkeypatch.setattr("setup_wizard.main", lambda: wizard_calls.append(1))
     monkeypatch.setattr("agent.load_dotenv", lambda *a, **k: None)
 
-    agent._handle_first_run_mode(_Args())
+    agent._handle_first_run_mode("cli")
 
     assert wizard_calls == [1], "CLI 模式应启动交互向导"

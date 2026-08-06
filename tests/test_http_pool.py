@@ -46,7 +46,10 @@ async def test_shared_client_has_pool_limits():
         pool = client._transport._pool
         assert pool._max_connections == 50
         assert pool._max_keepalive_connections == 20
-        assert pool._keepalive_expiry == 30
+        # 2026-08-05 起：keepalive 30→300s（治本修复，与 agnes_transport 对齐）。
+        # 根因：embed API 共用此 client，keepalive=30s 过期后重新握手 6s，
+        #   导致 embed 首次冷启动慢 → memory retrieval 超时。
+        assert pool._keepalive_expiry == 300
     finally:
         await close_shared_client()
 
