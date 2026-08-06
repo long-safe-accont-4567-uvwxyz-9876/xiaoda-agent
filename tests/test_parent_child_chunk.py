@@ -325,7 +325,12 @@ class TestEncodeMemoryChildChunks:
         mgr._security_filter = None
         mgr._last_encode_time = 0
         mgr._pending_encode = False
+        # distill 必须成功：若 distill 失败会触发 _spawn(_retry_distill_exc) 重试任务
+        # （内部 await asyncio.sleep(30)），该任务进入 _bg_tasks 后会让
+        # test_encode_creates_child_chunks 的"等待本次 encode 新任务"快照超时。
+        # 33d8f8b 起 _spawn 统一跟踪后台任务（旧 create_task 不进入 _bg_tasks）。
         mgr.distiller = MagicMock()
+        mgr.distiller.distill = AsyncMock(return_value="提炼后的知识摘要")
         mgr.entity_extractor = None
         mgr.entity_store = None
         # encode_memory 主流程在 line 2604 检查 if self._query_cache:
