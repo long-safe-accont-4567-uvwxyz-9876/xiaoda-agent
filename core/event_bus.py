@@ -101,17 +101,14 @@ class AgentEventBus:
         如果没有绑定 User（比如初始化阶段），静默忽略。
         User.deliver() 异常不中断调用方。
 
-        治本修复：deliver 改为后台 fire-and-forget，绝不在关键路径（如工具执行）
-        上 await 投递。根因：慢/挂起的投递通道（QQ 网络发送 / WebSocket）会让
-        emit 阻塞数秒，拖慢工具本身、吃掉验证循环墙钟 → 降级。
+        deliver 保持同步 await：emit 的"投递即送达"契约不变（子代理/工具事件
+        需要可靠送达）。慢投递通道（WebSocket/QQ）在传输层已改为非阻塞
+        （ws_hub 有界队列 / qq 后台 _spawn），因此此处 await 不会阻塞关键路径。
         """
         user = _current_user.get()
         if user is None:
             return
-        # 治本：用 _spawn（跟踪任务引用 + 完成回收 + 异常捕获）后台投递，
-        # 事件不会因任务被 GC 丢失，也绝不在关键路径（工具执行）上阻塞。
-        from core.background_tasks import _spawn
-        _spawn(_deliver(user, event))
+        await _deliver(user, event)
 
 
 async def _deliver(user: "UserBase", event: AgentEvent) -> None:
