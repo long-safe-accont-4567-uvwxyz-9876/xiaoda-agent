@@ -25,6 +25,20 @@ def _ensure_tools_registered():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _isolate_permission_state(tmp_path, monkeypatch):
+    """隔离权限持久化状态：set_mode() 会落盘，测试需避免污染真实配置，
+    并确保每次测试从 DEFAULT 档位出发（不继承其他测试写入的 GOAT/BYPASS）。"""
+    import security.permission_manager as m
+    monkeypatch.setattr(m, "_PERMISSION_FILE", str(tmp_path / "permission_mode.json"))
+    pm = m.get_permission_manager()
+    pm.set_mode(m.PermissionMode.DEFAULT)
+    pm.clear_cwd()
+    pm.set_whitelist([])
+    pm.clear_audit_log()
+    yield
+
+
 @pytest.fixture
 def executor():
     return ToolExecutor()

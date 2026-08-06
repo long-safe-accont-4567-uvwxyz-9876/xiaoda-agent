@@ -199,6 +199,14 @@ class ToolExecutor:
                     return ToolResult.fail(
                         f"命令确认超时（{int(self._cmd_confirm_timeout)}秒），未执行：{cmd[:200]}",
                         user_decision=True)
+                # Fail-closed：只放行明确的 allow/allow_once，其余未知值一律拒绝，
+                # 避免畸形决策（如 "error"）意外授权命令执行。
+                if decision not in ("allow", "allow_once"):
+                    logger.warning("tool_executor.cmd_invalid_decision",
+                                   decision=decision, command=cmd[:200])
+                    return ToolResult.fail(
+                        f"命令确认结果无效，未执行：{cmd[:200]}",
+                        user_decision=True)
                 # decision in ("allow", "allow_once") → 放行，继续执行
             else:
                 logger.warning("tool_executor.workspace_blocked", tool=tool_name, reason=ws_err)

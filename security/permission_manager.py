@@ -204,8 +204,10 @@ class PermissionManager:
                 "permission_manager.mode_changed",
                 old=old.value, new=mode.value,
             )
-        # 落盘：切换到哪档就持久化哪档，重启后仍生效（尽力而为，失败不阻断）
-        _persist_mode(mode)
+            # 落盘：切换到哪档就持久化哪档，重启后仍生效（尽力而为，失败不阻断）。
+            # 放在锁内：内存态更新与磁盘写入串行化，避免并发 set_mode 时
+            # 磁盘残留旧的高权限档位（如内存已回 DEFAULT 而磁盘仍是 GOAT，重启恢复高权限）。
+            _persist_mode(mode)
 
     def is_dev_mode(self) -> bool:
         """是否开发模式"""

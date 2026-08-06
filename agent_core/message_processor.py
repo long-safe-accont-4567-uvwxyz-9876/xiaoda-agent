@@ -1157,6 +1157,10 @@ class MessageProcessorMixin:
     async def _retrieve_main_memories(self, user_input: Any, is_master: Any, emotion: Any) -> Any:
         """主路径记忆检索（含情绪触发的安抚记忆）与 notebook 加载并行。"""
         _retrieve_start = time.time()
+        # 记忆检索超时（秒）在此统一解析一次，内层检索与外层 gather 复用同一值，
+        # 避免配置 MEMORY_RETRIEVE_TIMEOUT > 8 时被外层写死的 8s 硬顶（日志口径不一致）。
+        import config as _cfg
+        _mem_timeout = float(getattr(_cfg, "MEMORY_RETRIEVE_TIMEOUT", 8.0))
 
         async def _retrieve_memories() -> Any:
             # 降级检查: L2+ 关闭记忆检索, 跳过以减少负载
@@ -1176,8 +1180,6 @@ class MessageProcessorMixin:
                     # (2026-08-06) 超时改为 config.MEMORY_RETRIEVE_TIMEOUT（默认 8s）：
                     #   USB 盘慢时 5s 仍频繁误砍（今日 66 次 retrieve_timeout_single），
                     #   8s 给慢速存储足够余量，同时控制最坏延迟（LLM 前串行 await）。
-                    import config as _cfg
-                    _mem_timeout = float(getattr(_cfg, "MEMORY_RETRIEVE_TIMEOUT", 8.0))
                     results = await asyncio.wait_for(
                         self.memory.retrieve_memories(user_input, k=_k),
                         timeout=_mem_timeout,
@@ -1241,11 +1243,11 @@ class MessageProcessorMixin:
         memories_task = asyncio.create_task(_retrieve_memories())
         _spawn(_load_notebook())  # 后台异步，不占用记忆检索关键路径
         try:
-            memories = await asyncio.wait_for(memories_task, timeout=8.0)
+            memories = await asyncio.wait_for(memories_task, timeout=_mem_timeout)
         except asyncio.TimeoutError:
-            _cancel_delay = (time.time() - _gather_start) - 8.0
+            _cancel_delay = (time.time() - _gather_start) - _mem_timeout
             logger.warning("memory.retrieve_global_timeout",
-                           hint="记忆检索整体超时 8s，跳过记忆继续生成回复",
+                           hint=f"记忆检索整体超时 {_mem_timeout}s，跳过记忆继续生成回复",
                            cancel_delay_ms=int(_cancel_delay * 1000),
                            query_preview=user_input[:50])
             memories = None

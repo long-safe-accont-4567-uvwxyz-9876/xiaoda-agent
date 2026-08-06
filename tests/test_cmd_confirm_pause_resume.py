@@ -21,6 +21,26 @@ def _ensure_tools_registered():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _isolate_permission_state(tmp_path, monkeypatch):
+    """隔离权限持久化状态，避免测试污染真实配置或互相继承权限档位。
+
+    set_mode() 现在会落盘（permission_mode.json）。不隔离的话：
+    - 测试会改写开发者真实的权限模式；
+    - 新建 PermissionManager() 时从磁盘读到上次测试写入的档位（如 GOAT），
+      导致期望 DEFAULT 行为的测试失败。
+    此 fixture 把持久化文件指向临时目录，并把全局管理器重置为 DEFAULT。
+    """
+    import security.permission_manager as m
+    monkeypatch.setattr(m, "_PERMISSION_FILE", str(tmp_path / "permission_mode.json"))
+    pm = m.get_permission_manager()
+    pm.set_mode(m.PermissionMode.DEFAULT)
+    pm.clear_cwd()
+    pm.set_whitelist([])
+    pm.clear_audit_log()
+    yield
+
+
 @pytest.fixture
 def pm():
     return PermissionManager()
@@ -126,11 +146,14 @@ class TestExecuteConfirmPauseResume:
 
     @pytest.mark.asyncio
     async def test_allow_proceeds_past_confirmation(self, executor, global_pm):
-        """确认放行后，命令不再以“需确认”失败，而是继续执行。"""
+        """确认放行后，命令不再以“需确认”失败，而是继续执行并返回真实输出。"""
         global_pm.set_cwd("/tmp")
         global_pm.set_whitelist([])
         executor._decision_provider = lambda rid: "allow"
         result = await executor.execute("shell_command", {"command": "echo confirm-proceed"})
+        # 核心行为：放行后命令真实执行成功，且输出包含预期内容
+        assert result.success, f"确认放行后命令应成功执行: {result.error}"
+        assert "confirm-proceed" in str(result.data)
         # 不应是“需确认/拒绝/超时”的用户决策失败
         assert not getattr(result, "user_decision", False), f"不应标记用户决策失败: {result.error}"
         assert "确认" not in (result.error or "")

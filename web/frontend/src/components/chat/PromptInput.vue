@@ -253,8 +253,11 @@ async function startRecording() {
     isRecording.value = false
     // 区分常见的麦克风失败原因，给出可操作提示（不再静默失败）
     const name = e?.name || ''
-    if (name === 'NotAllowedError' || name === 'SecurityError') {
+    if (name === 'NotAllowedError') {
       message.error(t('promptInput.voicePermissionDenied'))
+    } else if (name === 'SecurityError') {
+      // 非安全上下文/页面策略拦截，与用户拒绝授权不同，提示无法开始录音
+      message.error(t('promptInput.voiceStartFailed'))
     } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
       message.error(t('promptInput.voiceNoDevice'))
     } else {
