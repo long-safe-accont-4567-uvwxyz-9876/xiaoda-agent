@@ -172,8 +172,12 @@ export class WsClient {
         // 保留 reconnectAttempts 使指数退避连续；重连失败时 onclose 会再次调度，
         // 形成真正的"无限重连"链路。
         this._open(freshToken)
+      } else {
+        // 无 token（已登出/未登录）：无法再发起重连，复位重连态并广播断线，
+        // 避免 _reconnecting 永久为 true 导致状态灯卡黄
+        this._reconnecting = false
+        this.emit({ type: 'ws_disconnected' })
       }
-      // token 不存在时不重连，用户需重新登录
     }, delay)
   }
 }

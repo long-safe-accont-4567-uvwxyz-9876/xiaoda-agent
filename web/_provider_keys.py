@@ -60,9 +60,11 @@ def _decode_key(encoded: str) -> str | None:
     enc:v2:dpapi: 前缀的值（Windows + pywin32 环境写入）统一交给
     credential_vault.decrypt() 处理——该函数同时支持 v1/v2 两种格式，
     且对非 enc: 前缀的明文直接透传，不会误伤其他格式。
+    仅接受已知的 enc: 前缀；未知格式（如 enc:v3:）decrypt() 会原样透传，
+    这里直接拒绝，避免密文被当作有效 key 由 load_provider_key 重新持久化。
     """
     # 1. 优先尝试 credential_vault 解密（识别 enc:v1: / enc:v2:dpapi: 前缀）
-    if isinstance(encoded, str) and encoded.startswith("enc:"):
+    if isinstance(encoded, str) and encoded.startswith(("enc:v1:", "enc:v2:dpapi:")):
         try:
             from security.credential_vault import decrypt, DecryptionError
             try:

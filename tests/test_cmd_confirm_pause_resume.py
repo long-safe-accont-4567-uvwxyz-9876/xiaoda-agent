@@ -145,9 +145,9 @@ class TestExecuteConfirmPauseResume:
         assert "超时" in (result.error or "")
 
     @pytest.mark.asyncio
-    async def test_allow_proceeds_past_confirmation(self, executor, global_pm):
+    async def test_allow_proceeds_past_confirmation(self, executor, global_pm, tmp_path):
         """确认放行后，命令不再以“需确认”失败，而是继续执行并返回真实输出。"""
-        global_pm.set_cwd("/tmp")
+        global_pm.set_cwd(str(tmp_path))
         global_pm.set_whitelist([])
         executor._decision_provider = lambda rid: "allow"
         result = await executor.execute("shell_command", {"command": "echo confirm-proceed"})

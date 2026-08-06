@@ -49,6 +49,16 @@ def test_decode_key_dpapi_prefix():
         assert _decode_key(enc) == PLAIN
 
 
+def test_decode_key_unknown_enc_prefix_rejected():
+    """未知 enc: 前缀（如 enc:v3:）不应被当作有效 key 返回。
+
+    decrypt() 对不认识的 enc: 前缀会原样透传，若 _decode_key 照单全收，
+    load_provider_key 会把密文当作有效 key 重新加密持久化。此处必须拒绝。
+    """
+    assert _decode_key("enc:v3:not-a-real-ciphertext") is None
+    assert _decode_key("enc:v9:Zm9v") is None
+
+
 def test_decode_key_dpapi_unavailable_returns_none():
     """无 pywin32 时 DPAPI 密文无法解密，返回 None（凭证不可识别）。"""
     with patch.object(cv.sys, "platform", "win32"), \

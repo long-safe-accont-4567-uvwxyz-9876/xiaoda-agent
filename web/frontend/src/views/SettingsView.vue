@@ -164,7 +164,7 @@ const permLabel = computed<Record<string, string>>(() => ({
   <div class="settings-view">
     <h2 class="view-title">{{ t('settings.title') }}</h2>
 
-    <n-tabs type="line" animated v-model:value="activeTab">
+    <n-tabs type="line" animated display-directive="show" v-model:value="activeTab">
       <!-- 外观与语言 -->
       <n-tab-pane name="appearance" :tab="t('settings.tabs.appearance')">
         <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
