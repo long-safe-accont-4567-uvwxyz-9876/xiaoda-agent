@@ -9,9 +9,6 @@
   "excluded_tools": [
     "call_xiaoli",
     "document_reader",
-    "gpio_control",
-    "hardware_status",
-    "i2c_comm",
     "list_files",
     "mcp_git_git_add",
     "mcp_git_git_branch",
@@ -52,7 +49,6 @@
     "mcp_github_update_issue",
     "mcp_github_update_pull_request_branch",
     "multi_search",
-    "pwm_control",
     "python_executor",
     "read_file",
     "search_files",

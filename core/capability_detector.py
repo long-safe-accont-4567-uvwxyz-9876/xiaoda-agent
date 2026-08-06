@@ -69,11 +69,6 @@ class CapabilityProfile:
 
         # 可用工具（根据硬件能力动态列出）
         tools = []
-        if self.has_gpio:
-            tools.append("gpio_control(引脚控制)")
-        if self.has_i2c:
-            tools.append("i2c_comm(I2C通信)")
-        tools.append("hardware_status(硬件监控)")
         tools.append("service_manage(服务管理)")
         tools.append("network_diag(网络诊断)")
         tools.append("dev_assist(开发辅助)")

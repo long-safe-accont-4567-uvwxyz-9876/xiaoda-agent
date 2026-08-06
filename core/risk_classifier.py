@@ -52,7 +52,7 @@ class RiskClassifier:
         # 只读/查询类工具
         "recall", "web_search", "web_browse", "search_cn", "get_weather",
         "get_current_time", "calculator", "list_files", "search_files",
-        "hardware_status", "document_reader", "wolfram_query", "nudge_greeting",
+        "document_reader", "wolfram_query", "nudge_greeting",
     }
 
     def classify(self, tool_name: str, params: dict) -> RiskLevel:

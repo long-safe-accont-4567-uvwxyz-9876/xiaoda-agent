@@ -217,7 +217,7 @@ def test_config_files_have_path_whitelist():
             "forbidden_count_min": 2,
         },
         "xiaolang.json": {
-            "allowed": ["tools/hardware_tools.py", "tools/system_tools.py"],
+            "allowed": ["tools/system_tools.py"],
             "forbidden_count_min": 2,
         },
     }

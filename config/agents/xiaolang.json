@@ -34,7 +34,6 @@
   "background": false,
   "wallpaper": "/assets/wallpapers/xiaolang.jpg",
   "allowed_paths": [
-    "tools/hardware_tools.py",
     "tools/system_tools.py"
   ],
   "forbidden_paths": [

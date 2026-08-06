@@ -140,7 +140,7 @@ class TestToolRegistryCompleteness:
         tool_names = {t.name for t in all_tools}
         # 验证之前遗漏的 6 个工具模块已注册
         _expected_modules = {
-            "agnes_tools", "hardware_tools", "system_tools",
+            "agnes_tools", "system_tools",
             "vision_tools", "memory_tool", "nudge_tool",
         }
         # 这些模块中的工具名应该存在
@@ -153,11 +153,6 @@ class TestToolRegistryCompleteness:
         # agnes_tools 模块应注册了至少一个工具
         import tools.agnes_tools as mod
         assert hasattr(mod, "__file__")
-
-    def test_hardware_tools_registered(self):
-        from tool_engine.tool_registry import _tools
-        hw_names = [name for name in _tools if "hardware" in name.lower() or "gpio" in name.lower() or "i2c" in name.lower()]
-        assert len(hw_names) > 0, f"hardware_tools 应注册工具，当前工具列表: {list(_tools.keys())}"
 
     def test_system_tools_registered(self):
         from tool_engine.tool_registry import _tools

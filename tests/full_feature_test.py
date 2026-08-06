@@ -63,7 +63,7 @@ async def main():
     key_tools = ["shell_command", "web_search", "read_file", "write_file",
                  "agnes_image_generate", "agnes_video_generate", "remember", "recall",
                  "python_executor", "web_browse", "nudge_greeting", "calculator",
-                 "camera_capture", "vision_analyze", "gpio_control"]
+                 "camera_capture", "vision_analyze"]
     for t in key_tools:
         record(f"工具 {t}", t in tool_names)
 
