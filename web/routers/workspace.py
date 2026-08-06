@@ -11,14 +11,19 @@ import os
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from pydantic import BaseModel
 
 from security.permission_manager import get_permission_manager, AuditEntry
+from web.routers.auth import get_current_user
 from web.schemas import Envelope
 
-router = APIRouter(prefix="/workspace", tags=["workspace"])
+router = APIRouter(
+    prefix="/workspace",
+    tags=["workspace"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 # ── 请求模型 ───────────────────────────────────────────────
@@ -110,20 +115,65 @@ async def revoke_workspace():
 
 
 @router.get("/browse")
-async def browse_directory(path: str = ""):
-    """列出目录下的子目录（用于 DirectoryPickerDialog 浏览）"""
-    target = path or os.path.expanduser("~")
-    if not os.path.isdir(target):
-        raise HTTPException(status_code=400, detail=f"不是目录：{target}")
+async def browse_directory(path: str = "", _user: str = Depends(get_current_user)):
+    """列出目录下的子目录（用于 DirectoryPickerDialog 浏览）
+
+    安全约束（防御纵深，认证后仍强制执行）：
+    - 禁止访问敏感系统路径 (/etc, /root, /proc, /sys 等)
+    - 禁止跟随符号链接越界（realpath 解析后再次校验）
+    - 仅允许浏览用户可合理访问的目录（~、项目目录、/tmp）
+    """
+    raw_target = path or os.path.expanduser("~")
+
+    # 解析绝对路径 + realpath（跟随符号链接），防止 ../../ 或 symlink 越界
     try:
-        entries = os.listdir(target)
+        expanded = os.path.abspath(os.path.expanduser(raw_target))
+        resolved = os.path.realpath(expanded)
+    except (OSError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"路径无效：{e!s}")
+
+    # 敏感路径黑名单（即使认证用户也不应浏览这些系统目录）
+    _SENSITIVE_PREFIXES = (
+        "/etc/", "/root/", "/proc/", "/sys/", "/dev/",
+        "/var/lib/", "/var/run/", "/var/log/",
+        "/boot/", "/usr/lib/", "/usr/lib64/", "/usr/libexec/",
+        "/srv/", "/opt/sudoers",
+    )
+    _SENSITIVE_EXACT = {
+        "/etc", "/root", "/proc", "/sys", "/dev",
+        "/boot", "/var", "/srv",
+    }
+    home_dir = os.path.realpath(os.path.expanduser("~"))
+    allowed_bases = [home_dir, "/tmp", "/var/tmp"]
+    # 项目根目录
+    _project_root = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if os.path.isdir(_project_root):
+        allowed_bases.append(_project_root)
+
+    if resolved in _SENSITIVE_EXACT or any(
+        resolved.startswith(p) for p in _SENSITIVE_PREFIXES
+    ):
+        raise HTTPException(status_code=403, detail=f"禁止访问系统目录：{resolved}")
+
+    # 必须在允许的基础目录内（~、项目目录、/tmp）
+    in_allowed = any(
+        resolved == base or resolved.startswith(base + os.sep)
+        for base in allowed_bases
+    )
+    if not in_allowed:
+        raise HTTPException(status_code=403, detail=f"目录不在允许的浏览范围内")
+
+    if not os.path.isdir(resolved):
+        raise HTTPException(status_code=400, detail=f"不是目录：{raw_target}")
+    try:
+        entries = os.listdir(resolved)
     except PermissionError:
-        raise HTTPException(status_code=403, detail=f"无权限访问：{target}")
-    dirs = sorted([e for e in entries if os.path.isdir(os.path.join(target, e))])
-    parent = os.path.dirname(target)
+        raise HTTPException(status_code=403, detail=f"无权限访问：{resolved}")
+    dirs = sorted([e for e in entries if os.path.isdir(os.path.join(resolved, e))])
+    parent = os.path.dirname(resolved)
     return Envelope(data={
-        "current": target,
-        "parent": parent if parent and parent != target else None,
+        "current": resolved,
+        "parent": parent if parent and parent != resolved else None,
         "dirs": dirs,
     })
 
