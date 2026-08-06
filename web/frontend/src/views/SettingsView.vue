@@ -2,7 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import {
   NButton, NSwitch, NRadioGroup, NRadioButton, NInput, NModal,
-  NSelect, NSlider, NCheckbox, NPopconfirm, NTag, useMessage,
+  NSelect, NSlider, NCheckbox, NCheckboxGroup, NPopconfirm, NTag, useMessage,
 } from 'naive-ui'
 import { get, put, post } from '../api'
 import { useUiStore } from '../stores/ui'
@@ -32,6 +32,14 @@ const restartConfirmText = ref('')
 const showGoatConfirm = ref(false)
 const goatConfirmChecked = ref(false)
 const lanInfo = ref<{ localhost: string; lan_urls: string[]; port: number } | null>(null)
+// 多平台共用上下文：可选平台列表（web/cli/qq/wechat）
+const sharedPlatforms = ref<string[]>([])
+const sharedPlatformOptions = [
+  { label: t('settings.sharedContextWeb'), value: 'web' },
+  { label: t('settings.sharedContextCli'), value: 'cli' },
+  { label: t('settings.sharedContextQq'), value: 'qq' },
+  { label: t('settings.sharedContextWechat'), value: 'wechat' },
+]
 
 onMounted(async () => {
   await ui.loadRemote()
@@ -42,11 +50,25 @@ onMounted(async () => {
   } catch (e: any) { message.error(e.message) }
   loadLogs()
   loadLanInfo()
+  // 多平台共用上下文：加载已勾选的平台
+  try {
+    const cfg = await get('/system/config')
+    sharedPlatforms.value = Array.isArray(cfg?.context?.shared_platforms) ? cfg.context.shared_platforms : []
+  } catch { /* 忽略加载失败 */ }
   // 工作目录授权状态、白名单、审计日志
   ws.loadStatus()
   ws.loadWhitelist()
   ws.loadAudit()
 })
+
+async function saveSharedPlatforms() {
+  try {
+    await put('/system/config', { path: 'context.shared_platforms', value: [...sharedPlatforms.value] })
+    message.success(t('settings.sharedContextSaved'))
+  } catch (e: any) {
+    message.error(e.message || t('settings.sharedContextSaveFailed'))
+  }
+}
 
 async function loadLanInfo() {
   try {
@@ -257,6 +279,19 @@ const permLabel = computed<Record<string, string>>(() => ({
         </n-radio-button>
       </n-radio-group>
       <p class="perm-desc">{{ permDesc[permissionMode] || '' }}</p>
+    </section></Tilt3D>
+
+    <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">
+      <h3>{{ t('settings.sharedContext') }}</h3>
+      <p class="apikey-desc">{{ t('settings.sharedContextDesc') }}</p>
+      <div class="setting-row">
+        <n-checkbox-group :value="sharedPlatforms" @update:value="(v: string[]) => { sharedPlatforms = v; saveSharedPlatforms() }">
+          <n-checkbox v-for="opt in sharedPlatformOptions" :key="opt.value" :value="opt.value">
+            {{ opt.label }}
+          </n-checkbox>
+        </n-checkbox-group>
+      </div>
+      <p class="brightness-hint">{{ t('settings.sharedContextHint') }}</p>
     </section></Tilt3D>
 
     <Tilt3D :max-x="4" :max-y="6"><section class="glass-panel section">

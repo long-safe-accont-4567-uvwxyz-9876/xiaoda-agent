@@ -183,6 +183,15 @@ export default {
     goatConfirmCheckbox: '我已了解风险，确认开启梭哈模式',
     goatConfirmBtn: '确认开启',
     goatEnabled: '梭哈模式已开启 ✓ 全部权限开放',
+    sharedContext: '多平台共用上下文',
+    sharedContextDesc: '选择要共用同一份对话上下文的平台。开启后，这些平台会读到彼此的历史对话（默认关闭，各平台独立会话）。',
+    sharedContextWeb: 'Web UI',
+    sharedContextCli: '命令行',
+    sharedContextQq: 'QQ',
+    sharedContextWechat: '微信',
+    sharedContextHint: 'QQ 群聊中非主人的对话始终独立，不会纳入共享。',
+    sharedContextSaved: '多平台共用上下文已更新 ✓',
+    sharedContextSaveFailed: '保存失败，请重试',
   },
 
   // 聊天页

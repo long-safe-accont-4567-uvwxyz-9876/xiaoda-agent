@@ -7,73 +7,72 @@ UserIdentity）已抽取到 agent_core._shared, 由各子模块共享导入, 避
 """
 from __future__ import annotations
 
-import os
 import asyncio
 import json
+import os
 import re
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+
+from agent_context import AgentContext
 
 # 共享常量与数据类型 — 从 _shared 导入并 re-export, 保持向后兼容
 from agent_core._shared import (
     DEGRADED_REPLY,
-    _current_request_ctx,
     ProcessResult,
     RequestContext,
     UserIdentity,
+    _current_request_ctx,
 )
-
-from config import (STICKER_DIR, XIAOLI_STICKER_DIR, FILE_DIR,
-                    build_system_prompt)
-from model_router import ModelRouter
-from agent_context import AgentContext
 from agent_core.shared_blackboard import SharedBlackboard
-from db.database import DatabaseManager
-from security.security import SecurityFilter
-from tool_engine.tool_registry import to_openai_tools
-from tool_engine.tool_executor import ToolExecutor
-from tool_engine.tool_repair import ToolCallRepair
-from memory.memory_manager import MemoryManager
-from utils.result_wrapper import ResultWrapper
-from emotion.portrait_manager import PortraitManager
-from memory.notebook_manager import NotebookManager
-from memory.learning_manager import LearningManager
-from slash_commands import SlashCommandHandler
-from core.lazy_loader import LazyLoader
-from tool_engine.tool_call_handler import ToolCallHandler
-from xiaoli_agent import XiaoliAgent
-from emotion.tts_engine import TTSEngine
 from agent_dispatcher import AgentDispatcher
-from tool_engine.mcp_client import MCPManager
-from utils.credential_pool import get_credential_pool
-from utils.error_classifier import ErrorClassifier
+from config import FILE_DIR, STICKER_DIR, XIAOLI_STICKER_DIR, build_system_prompt
+from core.lazy_loader import LazyLoader
+from db.database import DatabaseManager
+from emotion.portrait_manager import PortraitManager
+from emotion.tts_engine import TTSEngine
 from hooks import get_hook_engine
+from memory.learning_manager import LearningManager
+from memory.memory_manager import MemoryManager
+from memory.notebook_manager import NotebookManager
+from model_router import ModelRouter
+from security.security import SecurityFilter
+from slash_commands import SlashCommandHandler
+from tool_engine.mcp_client import MCPManager
+from tool_engine.tool_call_handler import ToolCallHandler
+from tool_engine.tool_executor import ToolExecutor
 
 # 内置工具懒注册：由 tool_engine/__init__.py 在包导入时完成，
 # 此处不再重复调用 register_builtin_tools_lazy()（函数本身幂等，但避免冗余调用）
-from tool_engine.tool_registry import register_builtin_tools_lazy  # noqa: F401 — 保持向后兼容
+from tool_engine.tool_registry import (
+    register_builtin_tools_lazy,  # noqa: F401 — 保持向后兼容
+    to_openai_tools,
+)
+from tool_engine.tool_repair import ToolCallRepair
+from utils.credential_pool import get_credential_pool
+from utils.error_classifier import ErrorClassifier
+from utils.result_wrapper import ResultWrapper
+from xiaoli_agent import XiaoliAgent
 
 if TYPE_CHECKING:
-    from task_orchestrator import TaskGraph
     from instinct_manager import InstinctManager
-
-from core.background_tasks import BackgroundTaskManager
-from core.bootstrap import AgentCoreBootstrapper
-from core.router_engine import RouterEngine
-from core.chat_processor import ChatProcessor
-from core.tool_orchestrator import ToolOrchestrator
-from core.circuit_breaker import CognitiveState, CircuitBreaker
-from core.failure_trigger import FailureTrigger
-from utils.smart_error_handler import SmartErrorHandler
-
+    from task_orchestrator import TaskGraph
 
 # 各 Mixin 从 agent_core._shared 导入共享类型, 不再依赖 agent_core.core 完成初始化,
 # 因此可以安全导入 Mixin (不再有循环导入风险).
 from agent_core.message_processor import MessageProcessorMixin
-from agent_core.tool_executor import ToolExecutorMixin
 from agent_core.sub_agent_manager import SubAgentManagerMixin
+from agent_core.tool_executor import ToolExecutorMixin
+from core.background_tasks import BackgroundTaskManager
+from core.bootstrap import AgentCoreBootstrapper
+from core.chat_processor import ChatProcessor
+from core.circuit_breaker import CircuitBreaker, CognitiveState
+from core.failure_trigger import FailureTrigger
+from core.router_engine import RouterEngine
+from core.tool_orchestrator import ToolOrchestrator
+from utils.smart_error_handler import SmartErrorHandler
 
 
 class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
@@ -264,6 +263,37 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             return self._build_owner_identity()
         return UserIdentity(is_owner=False, display_name="朋友", address_term="朋友")
 
+    def _resolve_shared_context_id(self, user_id: str, source: str, is_master: bool) -> str:
+        """跨平台共用上下文：把共享平台的 user_id 统一映射为一个共享上下文键。
+
+        规则：
+        - 未配置（shared_platforms 为空）→ 返回原 user_id（各平台独立会话）。
+        - QQ 群聊非主人（is_master=False）→ 保持原 user_id，不纳入共享。
+        - 其余平台若在 shared_platforms 中 → 返回统一共享键
+          ``shared_context:{shared_key}``，使该平台与其他共享平台读同一份历史。
+
+        Args:
+            user_id: 当前用户标识
+            source: 消息来源（web/cli/qq_c2c/qq_group/wechat_c2c 等）
+            is_master: 是否主人（仅群聊场景用于隔离非主人）
+        """
+        try:
+            if source == "qq_group" and not is_master:
+                return user_id
+            from web.config_service import get_config_service
+            cfg = get_config_service()
+            platforms = cfg.get("context.shared_platforms", []) or []
+            if not platforms:
+                return user_id
+            platform = (source or "").split("_")[0]
+            if platform not in platforms:
+                return user_id
+            shared_key = cfg.get("context.shared_key", "shared") or "shared"
+            return f"shared_context:{shared_key}"
+        except Exception:
+            # 配置读取失败时保持原行为（各平台独立），绝不阻断主流程
+            return user_id
+
     async def process(self, user_input: str, user_id: str = "qq_user",
                       source: str = "qq",
                       user_openid: str = "",
@@ -303,6 +333,10 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         is_master = identity.is_owner
         # 设置上下文的动态称谓
         self.context.current_address_term = identity.address_term
+        # 跨平台共用上下文：若当前 source 平台被配置为共享上下文且非"群聊非主人"，
+        # 将 user_id 重映射为统一共享键，使该平台与其他共享平台读/写同一份历史。
+        # 身份(is_master/称谓)已在上面用原始 user_id 解析完成，不受重映射影响。
+        user_id = self._resolve_shared_context_id(user_id, source, is_master)
 
         ctx = RequestContext(
             session_id=session_id,
@@ -406,8 +440,9 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
 
     async def get_context_usage(self) -> dict:
         """获取当前上下文窗口使用情况"""
-        from memory.context_usage import compute_context_usage
         from dataclasses import asdict
+
+        from memory.context_usage import compute_context_usage
 
         # 获取系统提示词
         system_prompt = ""

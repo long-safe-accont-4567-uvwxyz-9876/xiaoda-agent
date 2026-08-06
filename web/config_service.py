@@ -9,12 +9,11 @@ import copy
 import json
 import threading
 import traceback
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
 from loguru import logger
-
 
 # ── 调试: TrackedDict 捕获所有直接变异 ──────────────────────────
 # 历史背景: 配置文件在运行时被神秘覆盖为 mimo，根因调查阶段用 TrackedDict
@@ -153,6 +152,14 @@ _DEFAULTS: dict[str, Any] = {
         "max_per_day": 50,
         "dnd_start": 0,  # 免打扰开始小时（0-23），0=不启用 DND
         "dnd_end": 0,    # 免打扰结束小时（0-23），与 dnd_start 相同=不启用
+    },
+    # 多平台共用上下文：默认关闭（shared_platforms 为空 → 各平台独立会话）。
+    # shared_platforms 为参与共享的平台名列表（web/cli/qq/wechat），
+    # 被选中的平台在恢复/写入历史时统一映射到 shared_key 对应的共享上下文键，
+    # 从而跨平台读同一份历史。QQ 群聊非主人对话始终独立，不纳入共享。
+    "context": {
+        "shared_platforms": [],
+        "shared_key": "shared",
     },
 }
 

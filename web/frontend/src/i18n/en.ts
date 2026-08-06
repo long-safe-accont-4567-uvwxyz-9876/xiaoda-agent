@@ -182,6 +182,15 @@ export default {
     goatConfirmCheckbox: 'I understand the risks, confirm GOAT mode',
     goatConfirmBtn: 'Confirm Enable',
     goatEnabled: 'GOAT mode enabled ✓ All permissions open',
+    sharedContext: 'Shared context across platforms',
+    sharedContextDesc: 'Choose platforms that share the same conversation context. When enabled, these platforms read each other\'s chat history (off by default; each platform keeps its own session).',
+    sharedContextWeb: 'Web UI',
+    sharedContextCli: 'CLI',
+    sharedContextQq: 'QQ',
+    sharedContextWechat: 'WeChat',
+    sharedContextHint: 'Non-owner conversations in QQ group chats stay independent and are never shared.',
+    sharedContextSaved: 'Shared context updated ✓',
+    sharedContextSaveFailed: 'Save failed, please retry',
   },
 
   // Chat page
