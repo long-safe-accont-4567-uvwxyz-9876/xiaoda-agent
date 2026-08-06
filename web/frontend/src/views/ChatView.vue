@@ -264,9 +264,14 @@ function fmtTime(ts: number): string {
   return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
 
+// 17 类情绪标签（与 emotion_enum / emotion_simple / sticker 物理目录对齐）
 const emotionColors: Record<string, string> = {
-  '喜悦': '#7fd650', '悲伤': '#60a5fa', '愤怒': '#f87171', '焦虑': '#fbbf24',
-  '害羞': '#f9a8d4', '好奇': '#a78bfa', '思考': '#67e8f9', '恐惧': '#94a3b8', '平静': '#9ca3af',
+  '喜悦': '#7fd650', '兴奋': '#fb923c', '喜爱': '#ec4899',
+  '害羞': '#f9a8d4', '悲伤': '#60a5fa', '愤怒': '#f87171',
+  '惊讶': '#22d3ee', '困惑': '#a78bfa', '思考': '#67e8f9',
+  '调皮': '#f472b6', '感动': '#fbbf24', '平静': '#9ca3af',
+  '焦虑': '#fbbf24', '恐惧': '#94a3b8', '好奇': '#a78bfa',
+  '撒娇': '#f9a8d4', '问候': '#34d399',
 }
 </script>
 

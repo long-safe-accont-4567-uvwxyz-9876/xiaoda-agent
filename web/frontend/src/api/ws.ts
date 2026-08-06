@@ -19,6 +19,9 @@ export class WsClient {
 
   get unauthorized() { return this._unauthorized }
 
+  // 是否处于"已断开、正在后台重连"状态（供三态连接灯区分 绿/黄/红）
+  get reconnecting() { return this._reconnecting }
+
   connect(token: string) {
     // 幂等：已连接且有效时，不重复断开重连（避免登录时 auth.login + AppLayout 重复调用导致竞态）
     if (this.ws && this.ws.readyState === WebSocket.OPEN && this.connected) {
@@ -138,11 +141,8 @@ export class WsClient {
   }
 
   private scheduleReconnect() {
-    if (this.reconnectAttempts >= 20) {
-      // 放弃重连：复位标志，避免 _reconnecting 永久为 true 阻塞后续手动 connect
-      this._reconnecting = false
-      return
-    }
+    // 无限后台重连：不设重试次数上限，避免服务重启/长断线后连接"永久放弃"、
+    // 状态灯永远卡在红色无法自愈。延迟指数退避、封顶 30s，重连即探测是否能 ping 通。
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), this.maxReconnectDelay)
     this.reconnectAttempts++
     this.reconnectTimer = setTimeout(() => {

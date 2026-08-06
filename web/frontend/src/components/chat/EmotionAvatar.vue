@@ -7,17 +7,25 @@ import { t } from '../../i18n'
 const chat = useChatStore()
 const router = useRouter()
 
-// 9 类情绪 → 表现（资产暂缺时用光环色 + emoji 角标占位，切换逻辑真实接 emotion 字段）
+// 17 类情绪 → 表现（资产暂缺时用光环色 + emoji 角标占位，切换逻辑真实接 emotion 字段）
 const EMOTIONS: Record<string, { color: string; emoji: string }> = {
   '喜悦': { color: '#7fd650', emoji: '😊' },
+  '兴奋': { color: '#fb923c', emoji: '🤩' },
+  '喜爱': { color: '#ec4899', emoji: '😍' },
+  '害羞': { color: '#f9a8d4', emoji: '😳' },
   '悲伤': { color: '#60a5fa', emoji: '😢' },
   '愤怒': { color: '#f87171', emoji: '😠' },
-  '焦虑': { color: '#fbbf24', emoji: '😰' },
-  '害羞': { color: '#f9a8d4', emoji: '😳' },
-  '好奇': { color: '#a78bfa', emoji: '🤔' },
+  '惊讶': { color: '#22d3ee', emoji: '😲' },
+  '困惑': { color: '#a78bfa', emoji: '😕' },
   '思考': { color: '#67e8f9', emoji: '💭' },
-  '恐惧': { color: '#94a3b8', emoji: '😨' },
+  '调皮': { color: '#f472b6', emoji: '😜' },
+  '感动': { color: '#fbbf24', emoji: '🥹' },
   '平静': { color: '#9ca3af', emoji: '🌿' },
+  '焦虑': { color: '#fbbf24', emoji: '😰' },
+  '恐惧': { color: '#94a3b8', emoji: '😨' },
+  '好奇': { color: '#a78bfa', emoji: '🤔' },
+  '撒娇': { color: '#f9a8d4', emoji: '🥺' },
+  '问候': { color: '#34d399', emoji: '👋' },
 }
 
 const current = computed(() => EMOTIONS[chat.lastEmotion] || EMOTIONS['平静'])

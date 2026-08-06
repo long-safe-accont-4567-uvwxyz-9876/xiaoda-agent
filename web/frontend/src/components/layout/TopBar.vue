@@ -67,8 +67,11 @@ const stageText: Record<string, string> = {
 
     <div class="topbar-right">
       <EmotionAvatar />
-      <span class="status-dot" :class="chat.wsConnected ? 'green' : 'red'"
-            :title="chat.wsConnected ? t('topBar.connected') : t('topBar.reconnecting') + '...'"></span>
+      <!-- 三态连接灯：绿=已连接 / 黄=重连中 / 红=已断开（无限后台重连中） -->
+      <span class="status-dot"
+            :class="chat.wsConnected ? 'green' : (chat.wsReconnecting ? 'yellow' : 'red')"
+            :title="chat.wsConnected ? t('topBar.connected')
+                   : (chat.wsReconnecting ? t('topBar.reconnecting') + '...' : t('topBar.disconnected'))"></span>
     </div>
   </header>
 </template>
@@ -198,6 +201,7 @@ const stageText: Record<string, string> = {
   border-radius: 50%;
 }
 .status-dot.green { background: var(--dendro); box-shadow: 0 0 8px var(--dendro); }
+.status-dot.yellow { background: var(--wisdom, #f0c05a); box-shadow: 0 0 8px var(--wisdom, #f0c05a); animation: breathe 1.2s ease-in-out infinite; }
 .status-dot.red { background: var(--alert); box-shadow: 0 0 8px var(--alert); }
 
 @keyframes breathe {

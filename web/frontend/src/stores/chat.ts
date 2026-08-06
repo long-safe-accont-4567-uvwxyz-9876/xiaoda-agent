@@ -48,14 +48,14 @@ export const useChatStore = defineStore('chat', () => {
   const isProcessing = ref(false)
   const currentStage = ref('')
   const statusText = ref('')
+  const ws = getWsClient()
   const wsConnected = ref(false)
+  const wsReconnecting = ref(ws.reconnecting)
   const lastEmotion = ref('平静')
   const pendingMsgId = ref('')
   const greetingPing = ref(0)  // 问候到达脉冲（GrassParticles 蒲公英雨）
 
   const pendingTimers: ReturnType<typeof setTimeout>[] = []
-
-  const ws = getWsClient()
 
   // 初始化时主动同步 WS 状态（避免竞态：WS 在 chat store 初始化前已连接，ws_connected 事件被错过）
   if (ws.connected) {
@@ -64,6 +64,7 @@ export const useChatStore = defineStore('chat', () => {
 
   const onConnected = (e: WsEvent) => {
     wsConnected.value = true
+    wsReconnecting.value = false
     // 重连后恢复会话与 agent（不丢状态）
     if (sessionId.value) {
       ws.send({ type: 'set_session', session_id: sessionId.value })
@@ -74,9 +75,10 @@ export const useChatStore = defineStore('chat', () => {
       ws.send({ type: 'set_agent', agent: currentAgent.value })
     }
   }
-  const onWsConnected = () => { wsConnected.value = true }
+  const onWsConnected = () => { wsConnected.value = true; wsReconnecting.value = false }
   const onWsDisconnected = () => {
     wsConnected.value = false
+    wsReconnecting.value = ws.reconnecting
     if (isProcessing.value) {
       isProcessing.value = false
       currentStage.value = ''
@@ -344,7 +346,7 @@ export const useChatStore = defineStore('chat', () => {
 
   return {
     messages, currentAgent, sessionId, isProcessing, currentStage, statusText,
-    wsConnected, lastEmotion, greetingPing,
+    wsConnected, wsReconnecting, lastEmotion, greetingPing,
     sendMessage, abort, setAgent, newSession, loadSession,
     deleteMessage, retryLast, clearMessages, cleanup,
   }

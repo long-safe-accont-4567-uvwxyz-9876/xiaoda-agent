@@ -207,8 +207,15 @@ async function toggleRecording() {
 }
 
 async function startRecording() {
+  // 非安全上下文（HTTP + 局域网 IP）navigator.mediaDevices 为 undefined，无法录音。
+  // 明确检测并提示，避免"点击无反应"。getUserMedia 失败也不再静默吞错。
+  const md = navigator.mediaDevices
+  if (!md || typeof md.getUserMedia !== 'function') {
+    message.error(t('promptInput.voiceUnsupported'))
+    return
+  }
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    const stream = await md.getUserMedia({ audio: true })
     mediaRecorder = new MediaRecorder(stream)
     audioChunks = []
     mediaRecorder.ondataavailable = (e) => {
@@ -242,8 +249,17 @@ async function startRecording() {
     recordingTimer = setInterval(() => {
       recordingTime.value++
     }, 1000)
-  } catch {
+  } catch (e: any) {
     isRecording.value = false
+    // 区分常见的麦克风失败原因，给出可操作提示（不再静默失败）
+    const name = e?.name || ''
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      message.error(t('promptInput.voicePermissionDenied'))
+    } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+      message.error(t('promptInput.voiceNoDevice'))
+    } else {
+      message.error(t('promptInput.voiceStartFailed'))
+    }
   }
 }
 
