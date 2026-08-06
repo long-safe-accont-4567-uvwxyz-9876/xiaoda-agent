@@ -3,6 +3,7 @@ import asyncio
 import json
 import time
 import inspect
+from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
 
 from .tool_registry import get_tool, ToolResult, resolve_tool_func
@@ -69,6 +70,15 @@ class ToolExecutor:
         self._global_timeout: float = self.TOOL_TIMEOUTS["default"]
         self._failure_streaks: dict[str, int] = {}
         self._failure_first_time: dict[str, float] = {}
+        # 专用线程池：同步工具在线程中执行。与全局默认 executor 隔离，
+        # 避免后台任务（记忆编码/本能提取等）的同步阻塞调用占满默认线程池，
+        # 导致工具执行在其后排队数十秒（真实案例：计算器 88s 延迟）。
+        self._tool_threadpool: ThreadPoolExecutor = ThreadPoolExecutor(
+            max_workers=8, thread_name_prefix="tool-exec")
+
+    def close(self) -> None:
+        """释放专用线程池（进程退出时调用，避免线程泄漏）。"""
+        self._tool_threadpool.shutdown(wait=False, cancel_futures=False)
 
     @property
     def approver(self) -> Approver:
@@ -281,6 +291,27 @@ class ToolExecutor:
     # 受 workspace 授权约束的 shell 工具（命令必须在白名单/不在黑名单）
     _WORKSPACE_SHELL_TOOLS: ClassVar[set[str]] = {"shell_command", "python_executor"}
 
+    @staticmethod
+    def _extract_file_path(tool_name: str, arguments: dict) -> str:
+        """提取文件类工具的目标路径，兼容不同工具的参数命名。
+
+        - 常规工具：path / file_path / dir
+        - write_file：input_str 为 "路径|||内容" 格式，取 ||| 前的路径
+        - search_files：pattern 为搜索模式，取目录部分
+        """
+        raw = (arguments.get("path") or arguments.get("file_path")
+               or arguments.get("dir") or "")
+        if raw:
+            return raw
+        if tool_name == "write_file":
+            input_str = arguments.get("input_str") or ""
+            return (input_str.split("|||", 1)[0] if "|||" in input_str else "").strip()
+        if tool_name == "search_files":
+            pattern = arguments.get("pattern") or ""
+            import os as _os
+            return _os.path.dirname(pattern) or "."
+        return ""
+
     def _enforce_sandbox(self, tool_name: str, arguments: dict) -> str | None:
         """工具执行前沙箱检查。返回 None 表示放行，返回字符串为拒绝原因。"""
         from security.sandbox_config import check_domain_allowed, check_path_allowed, get_default_sandbox
@@ -296,7 +327,7 @@ class ToolExecutor:
 
         # 文件工具：检查路径参数
         if tool_name in self._FILE_TOOLS:
-            path = arguments.get("path") or arguments.get("file_path") or arguments.get("dir") or ""
+            path = self._extract_file_path(tool_name, arguments)
             if path:
                 allowed, reason = check_path_allowed(path, sandbox)
                 if not allowed:
@@ -307,8 +338,13 @@ class ToolExecutor:
             cmd = arguments.get("command") or arguments.get("code") or ""
             if cmd and sandbox.network.block_private_ips:
                 # 阻止明显的危险命令
-                dangerous = ("rm -rf /", "mkfs", "dd if=", ":(){ :|:& };:", "wget.*|.*sh",
-                             "curl.*|.*sh", "chmod 777 /", "chown root")
+                # 注意：wget/curl 的检测必须匹配"下载后管道给 shell"（如 `wget URL | sh`），
+                # 不能用 "wget.*|.*sh" —— 该正则会被拆成 `.*sh`，误匹配任何含 "sh" 的命令
+                # （真实案例：`echo shell_ok` 被误伤）。用 `\|\s*(sh|bash)` 限定管道符
+                # 后必须跟 shell 解释器，而非任意含 "sh" 的词。
+                dangerous = ("rm -rf /", "mkfs", "dd if=", ":(){ :|:& };:",
+                             r"wget.*\|\s*(sh|bash)\b", r"curl.*\|\s*(sh|bash)\b",
+                             "chmod 777 /", "chown root")
                 import re as _re
                 for d in dangerous:
                     if _re.search(d, cmd):
@@ -331,7 +367,7 @@ class ToolExecutor:
 
         # 文件工具：路径必须在 cwd 内
         if tool_name in self._WORKSPACE_FILE_TOOLS:
-            path = arguments.get("path") or arguments.get("file_path") or arguments.get("dir") or ""
+            path = self._extract_file_path(tool_name, arguments)
             allowed, reason = pm.is_path_allowed(path)
             # 写入审计缓冲：cwd 始终记录当前工作目录（含未授权情况，便于追溯）
             action = self._classify_file_action(tool_name)
@@ -434,8 +470,13 @@ class ToolExecutor:
                     timeout=timeout,
                 )
             else:
+                # 同步工具在专用线程池中执行，避免与后台任务争用默认线程池
+                # run_in_executor 只接受位置参数，用 functools.partial 绑定关键字参数
+                from functools import partial
+                _fn = partial(func, **call_args) if call_args else func
                 result = await asyncio.wait_for(
-                    asyncio.to_thread(func, **call_args) if call_args else asyncio.to_thread(func),
+                    asyncio.get_running_loop().run_in_executor(
+                        self._tool_threadpool, _fn),
                     timeout=timeout,
                 )
 
