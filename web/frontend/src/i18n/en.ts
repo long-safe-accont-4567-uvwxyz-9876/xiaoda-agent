@@ -81,7 +81,7 @@ export default {
       appearance: 'Appearance & Language',
       permission: 'Permission & Workspace',
       connection: 'Connection & Access',
-      account: 'Account & Profile',
+      account: 'API Key & User Profile',
       system: 'System & Logs',
     },
     appearance: 'Appearance & Effects',
