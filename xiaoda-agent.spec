@@ -254,7 +254,6 @@ hiddenimports = [
     'tools.code_tools_v2',
     'tools.document_tools',
     'tools.file_tools_v2',
-    'tools.hardware_tools',
     'tools.mail_tools',
     'tools.memory_tool',
     'tools.multi_search_tools',

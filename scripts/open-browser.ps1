@@ -1,5 +1,6 @@
 # open-browser.ps1 — Poll the server and open the browser when ready
-# Called by start-windows.bat in the background
+# 历史脚本：原由 start-windows.bat 调用。新设计中 exe 内置 _open_browser_in_background
+# （agent.py）已接管此逻辑，first-run 路由由前端处理。保留此脚本作为备用方案。
 # Compatible with PowerShell 5.x (Windows built-in) and PowerShell 7+
 
 param(

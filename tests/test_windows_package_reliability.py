@@ -8,11 +8,15 @@ def read_project_file(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
-def test_windows_package_uses_launcher_for_shortcuts():
+def test_windows_package_uses_exe_for_shortcuts():
+    """新设计：快捷方式直接指向 xiaoda-agent.exe（内部已带看门狗，崩溃/卡死自动重启）。
+    start-windows.bat 包装层已被 exe 一体化取代，不再打包。"""
     installer = read_project_file("scripts/installer.nsi")
 
-    assert 'CreateShortCut "$DESKTOP\\小妲Agent.lnk" "$INSTDIR\\start-windows.bat" "--desktop"' in installer
-    assert 'CreateShortCut "$SMPROGRAMS\\${PRODUCT_NAME}\\小妲Agent.lnk" "$INSTDIR\\start-windows.bat" "--desktop"' in installer
+    assert 'CreateShortCut "$DESKTOP\\小妲Agent.lnk" "$INSTDIR\\xiaoda-agent.exe"' in installer
+    assert 'CreateShortCut "$SMPROGRAMS\\${PRODUCT_NAME}\\小妲Agent.lnk" "$INSTDIR\\xiaoda-agent.exe"' in installer
+    # 旧包装层不应再被打包/引用
+    assert "start-windows.bat" not in installer
 
 
 def test_all_windows_packaging_paths_include_update_ps1():

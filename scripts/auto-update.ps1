@@ -43,7 +43,8 @@ try {
 }
 
 # 关键文件清单：解压后和安装后都必须存在，缺一则判定更新失败
-$criticalFiles = @('xiaoda-agent.exe', 'start-windows.bat', 'auto-update.bat', 'auto-update.ps1', 'doctor.bat')
+# 注：start-windows.bat 已移除——看门狗逻辑内置于 exe，快捷方式直接指向 xiaoda-agent.exe
+$criticalFiles = @('xiaoda-agent.exe', 'auto-update.bat', 'auto-update.ps1', 'doctor.bat')
 
 # 用户数据子目录清单：备份和恢复时使用
 $userDataItems = @('.env', 'config', 'credentials', 'data', 'stickers', 'xiaoli-stickers', 'agent-stickers', 'media', 'voice_refs', 'files', 'memory_state', 'plugins')
