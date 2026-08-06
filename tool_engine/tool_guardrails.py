@@ -57,10 +57,10 @@ _TOOL_VALIDATION_RULES: dict[str, dict] = {
         ],
     },
     "document_reader": {
-        "required": ["file_path"],
+        "required": ["path"],
         "checks": [
-            ("file_path", "non_empty_str", "文件路径不能为空"),
-            ("file_path", "no_path_traversal", "文件路径包含非法遍历"),
+            ("path", "non_empty_str", "文件路径不能为空"),
+            ("path", "no_path_traversal", "文件路径包含非法遍历"),
         ],
     },
     "list_files": {

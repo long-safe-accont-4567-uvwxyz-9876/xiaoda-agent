@@ -119,7 +119,17 @@ def _open_validated(resolved: str, mode: str = "r", encoding: str | None = "utf-
     确保打开的文件与验证时路径一致。如果不一致则关闭并拒绝。
     """
     try:
-        fd = os.open(resolved, os.O_RDONLY if "r" in mode else os.O_RDWR)
+        # 读模式用 O_RDONLY；写模式用 O_RDWR|O_CREAT 以支持创建新文件，
+        # 并按 mode 追加 O_APPEND（追加）或 O_TRUNC（截断）。
+        if "r" in mode and "+" not in mode:
+            flags = os.O_RDONLY
+        else:
+            flags = os.O_RDWR | os.O_CREAT
+            if "a" in mode:
+                flags |= os.O_APPEND
+            elif "w" in mode:
+                flags |= os.O_TRUNC
+        fd = os.open(resolved, flags)
     except FileNotFoundError:
         raise
     except OSError as e:
