@@ -937,14 +937,22 @@ class MemoryManager:
                 logger.debug("memory.child_recall_failed", error=str(e))
                 return []
 
+        # 每通道独立计时（并行执行，各通道耗时互不影响，日志定位最慢通道）
+        async def _timed(channel: str, coro: Any) -> Any:
+            _ch_st = time.time()
+            try:
+                return await coro
+            finally:
+                _stage_log(f"channel_{channel}", _ch_st, query)
+
         fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items = await asyncio.gather(
-            self._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter),
-            self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=is_raw_filter, scope=scope),
-            _kg_recall(),
-            _child_recall(),
-            self._spreading_recall(query, recall_limit, scope=scope),
-            self._entity_recall(query, scope, recall_limit),
-            _kg_v2_recall(),
+            _timed("fts", self._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter)),
+            _timed("vec", self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=is_raw_filter, scope=scope)),
+            _timed("kg", _kg_recall()),
+            _timed("child", _child_recall()),
+            _timed("spreading", self._spreading_recall(query, recall_limit, scope=scope)),
+            _timed("entity", self._entity_recall(query, scope, recall_limit)),
+            _timed("kg_v2", _kg_v2_recall()),
         )
 
         # 空通道自动剔除: 七路都空则 fallback 查原始记忆（蒸馏失败时兜底）
@@ -1622,15 +1630,23 @@ class MemoryManager:
         queries = await self._transform_queries(query, context)
         _stage_log("transform_queries", __st, query)
 
-        # 多查询检索
-        if getattr(config, "RETRIEVAL_PARALLEL_SEARCH", True) and len(queries) > 1:
-            __st = time.time()
-            all_results = await self._multi_query_parallel_search(queries, query, k, scope=scope)
-            _stage_log("multi_query_search", __st, query)
+        # 多查询检索：仅当查询变换产生多个查询时才走 multi_query 包装。
+        # 单查询（查询变换被关闭/降级时返回 [query]）直接混合检索，
+        # 避免包装层产生误导性的 multi_query_search 耗时日志。
+        if len(queries) > 1:
+            if getattr(config, "RETRIEVAL_PARALLEL_SEARCH", True):
+                __st = time.time()
+                all_results = await self._multi_query_parallel_search(queries, query, k, scope=scope)
+                _stage_log("multi_query_search", __st, query)
+            else:
+                __st = time.time()
+                all_results = await self._multi_query_serial_search(queries, k, scope=scope)
+                _stage_log("multi_query_search", __st, query)
         else:
-            __st = time.time()
-            all_results = await self._multi_query_serial_search(queries, k, scope=scope)
-            _stage_log("multi_query_search", __st, query)
+            # 单查询直接混合检索（与包装层行为一致：use_reranker/use_kg 默认 True，
+            # 闲聊型查询同样走全量 Reranker + KG + CRAG，保证主战场记忆检索质量）
+            all_results = await self.retrieve_memories_hybrid(
+                query, k=k, scope=scope)
         results = all_results
 
         # 降级：纯向量检索

@@ -98,6 +98,8 @@ class KnowledgeGraph:
         self._query_entity_cache: dict[str, tuple[set[str], float]] = {}
         # P0-2: 简单的 LRU 顺序记录（按访问时间），用于淘汰
         self._query_entity_lru: list[str] = []
+        # 规则提取器（jieba，<10ms）用于实体前置短路，避免对无实体查询调用 LLM
+        self._rule_extractor: Any = None
 
     def set_db(self, db: Any) -> None:
         self._db = db
@@ -286,6 +288,21 @@ class KnowledgeGraph:
                 except ValueError:
                     pass
 
+        # 规则前置短路：jieba 规则提取（<10ms，且比 LLM 更激进）为空 → 查询无实体，
+        # 直接返回空集并跳过 LLM 调用（规则为空时 LLM 提取必然也为空，结果完全一致）。
+        # 仅闲聊问候/纯情绪类查询（如「你好啊」「我饿了」）触发，省 0.4~6s 免费模型耗时。
+        result_set: set[str] = set()
+        try:
+            from memory.entity_extractor import EntityExtractor
+            if self._rule_extractor is None:
+                self._rule_extractor = EntityExtractor(router=None)
+            if not await self._rule_extractor.extract(query, importance=0.0):
+                logger.debug("kg.query_entities_rule_empty_skip_llm", query=query[:50])
+                self._cache_query_entities(query, result_set, now)
+                return result_set
+        except Exception:
+            logger.debug("kg.query_entities_rule_check_failed", exc_info=True)
+
         try:
             entities = await self.extract_from_summary(query)
             result_set = {ent.get("name", "") for ent in entities.get("entities", [])
@@ -295,13 +312,17 @@ class KnowledgeGraph:
             result_set = set()
 
         # P0-2: 写入缓存（即使是空集也缓存，避免重复调用 LLM 浪费）
-        self._query_entity_cache[query] = (result_set, now + self.QUERY_ENTITY_CACHE_TTL)
+        self._cache_query_entities(query, result_set, now)
+        return result_set
+
+    def _cache_query_entities(self, query: str, entities_set: set[str], now: float) -> None:
+        """写入 query 实体缓存（含 LRU 淘汰）。"""
+        self._query_entity_cache[query] = (entities_set, now + self.QUERY_ENTITY_CACHE_TTL)
         self._query_entity_lru.append(query)
         # LRU 淘汰
         while len(self._query_entity_lru) > self.QUERY_ENTITY_CACHE_MAX:
             oldest = self._query_entity_lru.pop(0)
             self._query_entity_cache.pop(oldest, None)
-        return result_set
 
     async def get_relevance_boost_fast(self, query_entities: set[str],
                                          memory_entities_list: list[list[str]]) -> list[float]:
