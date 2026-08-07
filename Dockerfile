@@ -3,7 +3,7 @@ FROM node:20-slim AS frontend-builder
 WORKDIR /build
 COPY web/frontend/package*.json web/frontend/
 RUN cd web/frontend && npm ci --no-audit --no-fund \
-    --fetch-retries=5 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=120000
+    --fetch-retries=3 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=30000
 COPY web/frontend/ web/frontend/
 RUN cd web/frontend && npm run build
 
