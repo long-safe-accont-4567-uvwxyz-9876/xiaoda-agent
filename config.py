@@ -315,16 +315,23 @@ def _init_workspace_templates(bundled_config: Path) -> None:
         target_name = item.name[:-4] if item.name.endswith('.tpl') else item.name
         target = WORKSPACE_DIR / target_name
         # 强制更新文件总是覆盖，用户编辑文件不覆盖
-        # SOUL.md 特殊处理：如果包含旧名（nahida），强制更新
+        # SOUL.md 是用户人格文件，永不自动覆盖：
+        #   - 已存在：无论内容（含旧名 nahida/纳西妲）都不覆盖，
+        #     防止升级/部署流程用模板覆盖用户调教好的人格（曾导致人格漂移事故）
+        #   - 缺失：仅全新安装（workspace 目录完全为空）时用模板兜底，否则警告跳过
         should_copy = target_name in _force_update_files or not target.exists()
-        if not should_copy and target_name == "SOUL.md" and target.exists():
-            try:
-                old_content = target.read_text(encoding="utf-8")
-                if "nahida" in old_content.lower() or "纳西妲" in old_content:
+        if target_name == "SOUL.md":
+            if target.exists():
+                should_copy = False
+            else:
+                try:
+                    workspace_empty = not any(WORKSPACE_DIR.iterdir())
+                except OSError:
+                    workspace_empty = True
+                if workspace_empty:
                     should_copy = True
-                    print("[config] Updating outdated SOUL.md (contains old name)")
-            except (OSError, UnicodeDecodeError):
-                logger.debug("config.soul_md_check_failed", exc_info=True)
+                else:
+                    logger.warning("config.soul_md_missing_skipped")
         if should_copy:
             try:
                 shutil.copy2(item, target)

@@ -1482,19 +1482,17 @@ class ModelRouter:
                 self._chat_idle.set()
 
     def _apply_prompt_caching(self, provider: str, messages: list[dict]) -> list[dict]:
-        """应用 Prompt Caching（MiMo 直接启用；其他 provider 在 PROMPT_CACHING_ENABLED 时尝试）。"""
-        if provider == "mimo":
-            return apply_cache_control(messages)
-        if not PROMPT_CACHING_ENABLED:
+        """应用 Prompt Caching（仅 Anthropic 兼容接口）。
+
+        P0 修复（2026-08-07 人格漂移根因）：apply_cache_control 会把 system
+        content 转为 Anthropic 格式 list（[{"type":"text","text":...,"cache_control":...}]）。
+        OpenAI 兼容接口（agnes/openrouter/siliconflow 等）的 content 必须是字符串，
+        收到 list 格式会导致服务端忽略该 system 消息 → LLM 退回出厂默认人格
+        （agnese 自称 "Agnes, by Sapiens AI"）。仅 mimo（Anthropic 兼容）可用。
+        """
+        if provider != "mimo":
             return messages
-        # P6: 对硅基流动/Qwen 等 OpenAI 兼容端点尝试启用 cache_control，
-        # 不支持时由 API 端返回 400，下方的错误处理会静默降级。
-        try:
-            messages = apply_cache_control(messages)
-            logger.debug("router.cache_control_applied provider={}", provider)
-        except (KeyError, ValueError, TypeError) as ce:
-            logger.debug("router.cache_control_skip provider={} error={}", provider, str(ce))
-        return messages
+        return apply_cache_control(messages)
 
     async def _select_client_for_provider(self, provider: str) -> Any:
         """选择指定 provider 的客户端（含懒注册和凭证锁）。无可用客户端时 raise LLMError。

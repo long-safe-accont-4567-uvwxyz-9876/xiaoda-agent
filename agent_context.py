@@ -909,6 +909,17 @@ class AgentContext:
                 # 修复：跳过空回复记录（与 background_tasks.py Task 3.1 配套）
                 if not asst_msg or not asst_msg.strip():
                     continue
+                # P0 修复（人格崩溃期污染过滤）：跳过 Agnes/艾格妮丝 出厂默认自介泄漏
+                # 根因：SOUL.md 被自动覆盖（混入"小莉下属"段、丢失记忆铁律）期间，LLM 误认
+                #   身份为"Agnes/艾格妮丝"（Sapiens AI 出厂默认人格），回复写库后会被本函数
+                #   原文注入（"这是你亲身经历的事"），导致 LLM 惯性继续扮演 Agnes。
+                # 修复：过滤含出厂自介标记的回复记录（2026-08-07 人格漂移事故）。
+                _agnes_markers = ("我是 Agnes", "我是艾格妮丝", "由 Sapiens AI", "Sapiens AI 开发",
+                                  "小妲姐姐是另一个助手", "小妲姐姐创造出来的", "艾格妮丝（Agnes）")
+                if any(m in asst_msg for m in _agnes_markers):
+                    logger.warning("context.skip_agnes_pollution",
+                                   asst_preview=asst_msg[:60])
+                    continue
                 # P0 修复（上下文污染根因）：过滤被污染的历史记录
                 # 根因：nudge_engine/greeting_scheduler 旧版本把场景提示作为 user_input 传入，
                 #       导致 conversation_logs.user_message 出现"（场景：现在早上...）"等系统提示。
