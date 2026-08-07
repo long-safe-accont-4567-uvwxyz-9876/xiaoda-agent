@@ -26,15 +26,20 @@ def _tokenize_for_fts(text: str) -> str:
 
 
 def _extract_fts_keywords(text: str, *, min_length: int = 2) -> list[str]:
-    """提取关键词用于 FTS5 索引和查询，jieba 优先，n-gram 降级"""
+    """提取关键词用于 FTS5 索引和查询，jieba 优先，n-gram 降级
+
+    CJK 单字也保留（"你是谁"→你/是/谁）：索引与查询两侧同规则，
+    否则纯单字短查询（你是谁/陪着我）分词后全部被过滤，FTS 短路返回空。
+    英文/数字 token 仍按 min_length=2 过滤，避免 "a"/"to" 等高频词噪音。
+    """
     has_cjk = bool(_CJK_RANGE.search(text))
     if has_cjk:
         try:
             import jieba
             raw_tokens = jieba.lcut_for_search(text)
         except ImportError:
-            # n-gram 降级
-            raw_tokens = [text[i:i+n] for n in range(2, 5) for i in range(len(text)-n+1)]
+            # n-gram 降级（含单字 gram，与 jieba 路径的单字保留保持一致）
+            raw_tokens = [text[i:i+n] for n in range(1, 5) for i in range(len(text)-n+1)]
     else:
         raw_tokens = _KEYWORD_SPLIT.split(text.lower())
 
@@ -42,7 +47,11 @@ def _extract_fts_keywords(text: str, *, min_length: int = 2) -> list[str]:
     result = []
     for token in raw_tokens:
         tok = token.strip()
-        if len(tok) >= min_length and tok not in seen:
+        if not tok:
+            continue
+        # 纯 CJK 单字（如 "你"）放行；其余 token 仍需 min_length
+        effective_min = 1 if (len(tok) == 1 and _CJK_RANGE.fullmatch(tok)) else min_length
+        if len(tok) >= effective_min and tok not in seen:
             seen.add(tok)
             result.append(tok)
     return result

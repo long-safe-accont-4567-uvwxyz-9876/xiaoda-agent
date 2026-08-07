@@ -450,6 +450,7 @@ class DatabaseManager:
             (19, "episodic_memories.updated_at+touch_trigger", self._migrate_v19),
             (20, "greeting_schedules.user_id_column", self._migrate_v20),
             (21, "knowledge_entities_fts_trigger_drop", self._migrate_v21),
+            (22, "fts_single_char_rebuild", self._migrate_v22),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -1262,6 +1263,44 @@ class DatabaseManager:
         logger.info("database.migration_v21", desc="knowledge_entities_fts_trigger_drop",
                     rows=len(rows),
                     hint="FTS 改应用层维护 + _tokenize_for_fts 预分词，修复 SQL logic error 致称呼错乱")
+
+    async def _migrate_v22(self) -> None:
+        """v22: 重建 episodic/memory_entities FTS 索引——CJK 单字进入索引。
+
+        根因：fts_utils._extract_fts_keywords 用 min_length=2 过滤单字，纯单字短查询
+        （"你是谁"/"陪着我"）分词后全部被过滤，_build_fts_query 返回空 → FTS 短路。
+        修复侧（fts_utils）已放行 CJK 单字；本迁移用新 tokenizer 重建存量索引，
+        否则已入库记忆的单字在 FTS 里仍命中为 0，单字查询对存量数据依旧无效。
+        """
+        from db.fts_utils import _tokenize_for_fts
+        # 1. episodic_memory_fts（无触发器，应用层手动维护）
+        await self._conn.execute("DELETE FROM episodic_memory_fts")
+        cursor = await self._conn.execute("SELECT id, summary FROM episodic_memories")
+        rows = await cursor.fetchall()
+        for row in rows:
+            tokenized = _tokenize_for_fts(row[1])
+            if tokenized.strip():
+                await self._conn.execute(
+                    "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
+                    (row[0], tokenized),
+                )
+        # 2. memory_entities_fts：触发器改用应用层手动维护（与 v21 同一策略），
+        #    避免重建时触发器双重写入（ai 触发器用原始 name，非预分词）。
+        await self._conn.execute("DROP TRIGGER IF EXISTS memory_entities_fts_ai")
+        await self._conn.execute("DROP TRIGGER IF EXISTS memory_entities_fts_ad")
+        await self._conn.execute("DROP TRIGGER IF EXISTS memory_entities_fts_au")
+        await self._conn.execute("DELETE FROM memory_entities_fts")
+        cursor2 = await self._conn.execute("SELECT id, name FROM memory_entities")
+        rows2 = await cursor2.fetchall()
+        for row in rows2:
+            tokenized = _tokenize_for_fts(row["name"]) if row["name"] else ""
+            if tokenized.strip():
+                await self._conn.execute(
+                    "INSERT INTO memory_entities_fts(id, name_index) VALUES(?, ?)",
+                    (row["id"], tokenized),
+                )
+        logger.info("database.migration_v22", desc="fts_single_char_rebuild",
+                    episodic=len(rows), entities=len(rows2))
 
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")

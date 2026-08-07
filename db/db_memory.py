@@ -105,7 +105,7 @@ class MemoryDB:
             return []
         # 参数化占位符，防止 SQL 注入
         placeholders = ",".join("?" * len(ids))
-        cursor = await self._conn.execute(
+        cursor = await self._read_conn().execute(
             f"SELECT * FROM episodic_memories WHERE id IN ({placeholders})",
             ids,
         )
@@ -272,7 +272,7 @@ class MemoryDB:
         return result
 
     async def search_memories_by_importance(self, min_importance: float = 0.3, limit: int = 10) -> Any:
-        cursor = await self._conn.execute(
+        cursor = await self._read_conn().execute(
             """SELECT * FROM episodic_memories
                WHERE importance >= ?
                ORDER BY timestamp DESC LIMIT ?""",
@@ -352,7 +352,7 @@ class MemoryDB:
                 where_extra = " AND em.is_raw = ?"
                 params.append(is_raw)
             params.append(limit)
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 f"""SELECT em.*, bm25(episodic_memory_fts) AS score
                    FROM episodic_memory_fts
                    JOIN episodic_memories em ON em.id = episodic_memory_fts.id
@@ -446,7 +446,7 @@ class MemoryDB:
             if is_raw is not None:
                 where_extra = " AND is_raw = ?"
                 params.append(is_raw)
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 f"SELECT COUNT(*) as cnt FROM episodic_memories "
                 f"WHERE user_id = ? AND agent_id = ? "
                 f"AND session_id != 'archived'{where_extra}",
@@ -643,7 +643,7 @@ class MemoryDB:
     async def get_entity_memory_links(self, entity_id: int) -> list[dict]:
         """按实体 ID 查询反向链接的记忆 ID 列表"""
         try:
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 "SELECT * FROM entity_memory_links WHERE entity_id=? ORDER BY created_at DESC",
                 (entity_id,),
             )
@@ -717,7 +717,7 @@ class MemoryDB:
             import json
             conditions = " OR ".join(["entities LIKE ?" for _ in entity_names])
             params = [f'%"{e}"%' for e in entity_names]
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 f"""SELECT * FROM episodic_memories
                    WHERE session_id != 'archived' AND ({conditions})
                    ORDER BY importance DESC, timestamp DESC LIMIT ?""",
@@ -1366,7 +1366,7 @@ class MemoryDB:
 
     async def get_children_by_parent(self, parent_id: int) -> list[dict]:
         """获取指定父chunk的所有子chunk。"""
-        cursor = await self._conn.execute(
+        cursor = await self._read_conn().execute(
             "SELECT * FROM memory_child_chunks WHERE parent_id=? ORDER BY id",
             (parent_id,),
         )
