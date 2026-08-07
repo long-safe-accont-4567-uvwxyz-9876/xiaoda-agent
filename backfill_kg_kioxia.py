@@ -10,7 +10,8 @@ import aiosqlite
 from db.db_knowledge import KnowledgeDB
 from memory.knowledge_graph import KnowledgeGraph
 
-DB_PATH = "/media/orangepi/KIOXIA/xiaoda-data/db/agent.db"
+# 优先使用 KIOXIA_DATA_DIR 环境变量（与运行时一致），旧目录名 xiaoda-data 已更名 nahida-data
+DB_PATH = os.path.join(os.getenv("KIOXIA_DATA_DIR", "/media/orangepi/KIOXIA/nahida-data"), "db", "agent.db")
 SF_KEY = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
 
 
