@@ -1143,20 +1143,24 @@ def _build_user_md(fields: dict) -> str:
     return "\n".join(lines)
 
 
-def _is_template_section(name: str) -> bool:
+def _is_template_section(name: str, addr: str = "用户") -> bool:
     """判断 USER.md 的 ``## `` 区块是否为 ``_build_user_md`` 重建的模板区块。
 
     模板区块：固定的 ``偏好设置`` / ``历史交互要点``，以及动态标题的
-    ``## {称呼}信息``（如 ``## 爸爸信息``、旧格式 ``## 用户信息``）。
+    ``## {称呼}信息``（如 ``## 爸爸信息``；默认称呼为 ``用户``，
+    兼容旧格式 ``## 用户信息``）。
     其余区块（免责协议、XP 动态认知等）由系统或外部写入，必须保留。
+
+    注意：只能精确匹配 ``{addr}信息`` 这一个标题。用 ``endswith("信息")``
+    会把 ``## 账户信息`` 等非模板区块误判为模板并永久删除。
     """
     name = name.strip()
     if name in ("偏好设置", "历史交互要点"):
         return True
-    return name.endswith("信息")
+    return name == f"{addr}信息"
 
 
-def _preserve_extra_sections(old_content: str, new_content: str) -> str:
+def _preserve_extra_sections(old_content: str, new_content: str, addr: str = "用户") -> str:
     """重建 USER.md 时保留非模板区块，避免丢失系统数据。
 
     ``_build_user_md`` 只重建模板区块（用户信息/偏好设置/历史交互要点）。
@@ -1168,7 +1172,7 @@ def _preserve_extra_sections(old_content: str, new_content: str) -> str:
     extra_blocks = []
     for m in _re.finditer(r'^##\s+(.+?)\s*$\n(.*?)(?=^## |\Z)', old_content, _re.MULTILINE | _re.DOTALL):
         name = m.group(1)
-        if not _is_template_section(name):
+        if not _is_template_section(name, addr):
             block = m.group(0).rstrip("\n")
             if block.strip():
                 extra_blocks.append(block)
@@ -1237,7 +1241,7 @@ async def save_user_profile(body: dict) -> Any:
             old_content = user_md_path.read_text(encoding="utf-8-sig")
         except (OSError, PermissionError, FileNotFoundError) as exc:
             logger.debug("setup.user_md_read_for_preserve_failed: {}", exc, exc_info=True)
-    content = _preserve_extra_sections(old_content, content)
+    content = _preserve_extra_sections(old_content, content, fields.get("address_term") or "用户")
     user_md_path.write_text(content, encoding="utf-8-sig")
 
     # 清除 system prompt 缓存，使修改立即生效

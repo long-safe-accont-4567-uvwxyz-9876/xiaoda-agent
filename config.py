@@ -92,12 +92,17 @@ def _get_fallback_base() -> Path:
 _FALLBACK_BASE = _get_fallback_base()
 
 
-def _migrate_old_data(old_dir: Path, new_dir: Path, name: str) -> None:
+def _migrate_old_data(old_dir: Path, new_dir: Path, name: str, ignore_names: tuple[str, ...] = ()) -> None:
     """将旧目录的数据迁移到新目录（仅首次）。
     用于从 exe 目录迁移到用户目录，解决更新安装包导致数据丢失的问题。
     """
-    if new_dir.exists() and any(new_dir.iterdir()):
-        return  # 新目录已有数据，跳过
+    if new_dir.exists():
+        # 忽略新目录中已存在（且属于另一迁移目标）的子目录后再判空。
+        # 例：WORKSPACE_DIR 顶层 mkdir 会预先创建 CONFIG_DIR/workspace，
+        # 若直接判空会误判 CONFIG_DIR 非空而跳过 config 迁移（数据丢失）。
+        entries = [e for e in new_dir.iterdir() if e.name not in ignore_names]
+        if entries:
+            return  # 新目录已有数据，跳过
     if not old_dir.exists() or not any(old_dir.iterdir()):
         return  # 旧目录无数据，跳过
     try:
@@ -370,10 +375,13 @@ def _ensure_workspace() -> None:
 
     # 配置目录迁移：升级前 CONFIG_DIR 跟随 KIOXIA_DATA_DIR（未设时 ~/.ai-agent/data/config）；
     # 现在固定到 ~/.ai-agent/config，旧配置需迁移（新目录为空时才会执行）。
+    # ignore workspace：WORKSPACE_DIR 顶层 mkdir 已创建 CONFIG_DIR/workspace，
+    # 需忽略该子目录后再判空，否则 agent.json5/agents 等旧配置永远不会迁移。
     _migrate_old_data(
         Path(os.path.expanduser("~/.ai-agent/data/config")),
         CONFIG_DIR,
         "config",
+        ignore_names=("workspace",),
     )
 
     # ── 数据迁移：frozen 模式下从 exe 目录迁移到用户目录 ──
