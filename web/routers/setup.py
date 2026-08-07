@@ -89,10 +89,66 @@ async def _is_first_run_or_authenticated(request: Request) -> str:
     return await get_current_user(request)
 
 
+def _is_profile_done() -> bool:
+    """用户资料是否已完成（USER.md 中称呼与姓名均已实际填写）。
+
+    与 ``get_first_run`` 的 profile_done 判定保持一致，供认证依赖复用，
+    避免两处判定漂移（CodeRabbit 关注点）。
+    """
+    try:
+        import re as _re_local
+        from config import WORKSPACE_DIR
+        user_md = WORKSPACE_DIR / "USER.md"
+        if not user_md.exists():
+            return False
+        content = user_md.read_text(encoding="utf-8-sig")
+        addr = _re_local.search(r'-\s*称呼[：:]\s*(.+)', content)
+        name = _re_local.search(r'-\s*姓名[：:]\s*(.+)', content)
+        if addr and name:
+            addr_val = addr.group(1).strip()
+            name_val = name.group(1).strip()
+            if addr_val and not addr_val.startswith("（") and name_val and not name_val.startswith("（"):
+                return True
+    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
+        logger.debug("setup.profile_done_check_failed: {}", exc, exc_info=True)
+    return False
+
+
+async def _profile_endpoint_access(request: Request) -> str:
+    """认证依赖：用户资料页端点。
+
+    向导未完成（首次运行 或 用户资料未完成）时允许无认证访问，
+    向导完成后必须携带有效 Bearer Token。
+
+    根治 profileSave 401：用户保存必填 key 后 ``is_first_run()`` 立即变
+    False，但前端仍停留在向导的 profile 步骤；若此时要求 token，设置了
+    WEBUI_PASSWORD 的机器上 ``login('')`` 拿不到 token（浏览器也无有效
+    token），保存资料必然 401。资料页只读写 USER.md（非敏感），故在
+    profile 完成前保持免认证，与"向导流程完整性"语义一致。
+    """
+    try:
+        from setup_wizard import is_first_run
+        first_run = is_first_run()
+    except Exception as e:
+        logger.error("setup.profile_auth_check_failed error={} -> deny", str(e))
+        raise HTTPException(
+            status_code=503,
+            detail="Setup availability check failed. Configure .env manually or contact admin."
+        )
+    if first_run:
+        return "setup"
+    if not _is_profile_done():
+        return "setup"
+    return await get_current_user(request)
+
+
 router = APIRouter(tags=["setup"])
 
 # 需要认证的端点共享的依赖列表（首次运行时免认证）
 _AUTH_DEPS = [Depends(_is_first_run_or_authenticated)]
+
+# 用户资料端点专用依赖：向导未完成（首次运行或资料未完成）时免认证
+_PROFILE_DEPS = [Depends(_profile_endpoint_access)]
 
 
 @router.get("/setup/first-run", response_model=Envelope[dict])
@@ -148,22 +204,8 @@ async def get_first_run() -> Any:
                 first_run = False
 
     # 2. 检测用户资料是否已配置（USER.md 存在且有实际填写的称呼和姓名）
-    profile_done = False
-    try:
-        from config import WORKSPACE_DIR
-        user_md = WORKSPACE_DIR / "USER.md"
-        if user_md.exists():
-            content = user_md.read_text(encoding="utf-8-sig")
-            import re as _re
-            addr = _re.search(r'-\s*称呼[：:]\s*(.+)', content)
-            name = _re.search(r'-\s*姓名[：:]\s*(.+)', content)
-            if addr and name:
-                addr_val = addr.group(1).strip()
-                name_val = name.group(1).strip()
-                if addr_val and not addr_val.startswith("（") and name_val and not name_val.startswith("（"):
-                    profile_done = True
-    except (OSError, KeyError, ValueError, RuntimeError, TypeError) as exc:
-        logger.debug("setup.profile_check_failed: {}", exc, exc_info=True)
+    # 复用 _is_profile_done()，与认证依赖判定保持单一来源，避免逻辑漂移
+    profile_done = _is_profile_done()
 
     logger.info("setup.first_run_result first_run={} profile_done={}", first_run, profile_done)
     return Envelope(data={"first_run": first_run, "profile_done": profile_done})
@@ -1143,7 +1185,45 @@ def _build_user_md(fields: dict) -> str:
     return "\n".join(lines)
 
 
-@router.get("/setup/user-profile", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
+def _is_template_section(name: str, addr: str = "用户") -> bool:
+    """判断 USER.md 的 ``## `` 区块是否为 ``_build_user_md`` 重建的模板区块。
+
+    模板区块：固定的 ``偏好设置`` / ``历史交互要点``，以及动态标题的
+    ``## {称呼}信息``（如 ``## 爸爸信息``；默认称呼为 ``用户``，
+    兼容旧格式 ``## 用户信息``）。
+    其余区块（免责协议、XP 动态认知等）由系统或外部写入，必须保留。
+
+    注意：只能精确匹配 ``{addr}信息`` 这一个标题。用 ``endswith("信息")``
+    会把 ``## 账户信息`` 等非模板区块误判为模板并永久删除。
+    """
+    name = name.strip()
+    if name in ("偏好设置", "历史交互要点"):
+        return True
+    return name == f"{addr}信息"
+
+
+def _preserve_extra_sections(old_content: str, new_content: str, addr: str = "用户") -> str:
+    """重建 USER.md 时保留非模板区块，避免丢失系统数据。
+
+    ``_build_user_md`` 只重建模板区块（用户信息/偏好设置/历史交互要点）。
+    若直接整体覆盖 USER.md，会删除 ``## 法律与声明``（免责协议状态）与
+    ``## XP 动态认知`` 等系统写入的区块，导致用户重新同意协议等副作用。
+    """
+    if not old_content:
+        return new_content
+    extra_blocks = []
+    for m in _re.finditer(r'^##\s+(.+?)\s*$\n(.*?)(?=^## |\Z)', old_content, _re.MULTILINE | _re.DOTALL):
+        name = m.group(1)
+        if not _is_template_section(name, addr):
+            block = m.group(0).rstrip("\n")
+            if block.strip():
+                extra_blocks.append(block)
+    if not extra_blocks:
+        return new_content
+    return new_content.rstrip("\n") + "\n\n" + "\n\n".join(extra_blocks) + "\n"
+
+
+@router.get("/setup/user-profile", response_model=Envelope[dict], dependencies=_PROFILE_DEPS)
 async def get_user_profile() -> Any:
     """读取 USER.md 内容并返回结构化字段"""
     from config import WORKSPACE_DIR
@@ -1174,7 +1254,7 @@ async def get_user_profile() -> Any:
     return Envelope(data=fields)
 
 
-@router.post("/setup/user-profile", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
+@router.post("/setup/user-profile", response_model=Envelope[dict], dependencies=_PROFILE_DEPS)
 async def save_user_profile(body: dict) -> Any:
     """保存用户资料到 USER.md"""
     from config import WORKSPACE_DIR
@@ -1197,6 +1277,13 @@ async def save_user_profile(body: dict) -> Any:
 
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     user_md_path = WORKSPACE_DIR / "USER.md"
+    old_content = ""
+    if user_md_path.exists():
+        try:
+            old_content = user_md_path.read_text(encoding="utf-8-sig")
+        except (OSError, PermissionError, FileNotFoundError) as exc:
+            logger.debug("setup.user_md_read_for_preserve_failed: {}", exc, exc_info=True)
+    content = _preserve_extra_sections(old_content, content, fields.get("address_term") or "用户")
     user_md_path.write_text(content, encoding="utf-8-sig")
 
     # 清除 system prompt 缓存，使修改立即生效

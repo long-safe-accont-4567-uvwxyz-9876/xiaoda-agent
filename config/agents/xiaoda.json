@@ -12,7 +12,7 @@
   "model": "",
   "base_url": "",
   "api_key_env": "MIMO_API_KEY",
-  "personality_file": "config/agents/xiaoda_personality.md",
+  "personality_file": "xiaoda_personality.md",
   "voice_ref": "xiaoda/xiaoda_hq",
   "excluded_tools": [
     "mcp_git_git_add",

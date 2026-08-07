@@ -3,14 +3,15 @@ import asyncio
 import os
 import time
 
-from dotenv import load_dotenv
-load_dotenv()
-
 import aiosqlite
 from db.db_knowledge import KnowledgeDB
 from memory.knowledge_graph import KnowledgeGraph
 
-DB_PATH = "/media/orangepi/KIOXIA/xiaoda-data/db/agent.db"
+# 数据库路径以 config.py 运行时解析为准（KIOXIA_DATA_DIR 挂载/降级/默认值
+# 均由 _resolve_data_path 统一处理），脚本不再硬编码任何盘符路径。
+from config import DATA_DIR
+
+DB_PATH = DATA_DIR / "agent.db"
 SF_KEY = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
 
 

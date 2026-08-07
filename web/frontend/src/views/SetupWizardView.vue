@@ -232,7 +232,18 @@ async function handleSave() {
       } catch {
         // 登录失败不影响跳转
       }
-      router.replace('/setup/profile')
+      // 仅首次配置（用户资料未完成）时引导填写资料；
+      // 非首次只是修改 API Key 时不再自动弹出资料页，避免反复打扰。
+      let profileDone = localStorage.getItem('xiaoda_profile_done') === 'true'
+      if (!profileDone) {
+        try {
+          const fr = await api.getSetupFirstRun()
+          profileDone = !!fr?.profile_done
+        } catch {
+          // 检测失败时按 localStorage 判定结果处理
+        }
+      }
+      router.replace(profileDone ? '/' : '/setup/profile')
     }
   } catch (e: any) {
     // Check for KEY_TEST_FAILED error

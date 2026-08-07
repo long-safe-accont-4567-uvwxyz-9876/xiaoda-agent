@@ -8,7 +8,7 @@ interface ApiEnvelope<T> {
   error?: { code: string; message: string }
 }
 
-async function request<T>(path: string, options?: RequestInit, confirm = false): Promise<T> {
+async function request<T>(path: string, options?: RequestInit, confirm = false, _retried = false): Promise<T> {
   const token = localStorage.getItem('token')
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -22,6 +22,24 @@ async function request<T>(path: string, options?: RequestInit, confirm = false):
   })
   if (res.status === 401) {
     localStorage.removeItem('token')
+    // token 失效时静默重登（私网无密码环境后端自动签发新 token）并重试一次，
+    // 避免滑动续期/过期导致设置页保存被弹回登录页打断流程
+    if (!_retried && path !== '/auth/login') {
+      try {
+        const loginRes = await fetch(`${BASE}/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: '' }),
+        })
+        const loginBody = await loginRes.json()
+        if (loginRes.ok && loginBody?.ok && loginBody.data?.token) {
+          localStorage.setItem('token', loginBody.data.token)
+          return request<T>(path, options, confirm, true)
+        }
+      } catch {
+        // 静默失败，走登录页引导
+      }
+    }
     if (!location.hash.includes('login')) location.hash = '#/login'
     throw new Error(t('login.tokenExpired'))
   }
@@ -114,81 +132,24 @@ export const api = {
     return body.data
   },
 
-  // Setup wizard APIs (no token required — first-run before login)
+  // Setup wizard APIs（首次运行时后端免认证；非首次需 token，统一走 request()
+  // 以自动处理 X-New-Token 滑动续期，token 失效时引导重新登录而非裸 401 报错）
   getSetupFirstRun: () => {
     return fetch(`${BASE}/setup/first-run`).then(r => r.json()).then(b => b.data)
   },
 
-  getSetupKeys: async () => {
-    try {
-      const token = localStorage.getItem('token')
-      const r = await fetch(`${BASE}/setup/keys`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      })
-      const b = await r.json()
-      if (!r.ok || !b.ok) {
-        throw new Error(b?.error?.message || `HTTP ${r.status}`)
-      }
-      return b.data as { keys: any[] }
-    } catch (e: any) {
-      throw new Error(e.message || 'Failed to load setup keys')
-    }
-  },
+  getSetupKeys: () => get<{ keys: any[] }>('/setup/keys'),
 
-  testSetupKey: (keyName: string, keyValue: string, extra?: Record<string, string>) => {
-    const token = localStorage.getItem('token')
-    return fetch(`${BASE}/setup/test-key`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ key_name: keyName, key_value: keyValue, ...(extra ? { extra } : {}) }),
-    }).then(r => r.json()).then(b => {
-      if (!b.ok) throw new Error(b.error?.message || 'Test failed')
-      return b.data as { success: boolean; message: string }
-    })
-  },
+  testSetupKey: (keyName: string, keyValue: string, extra?: Record<string, string>) =>
+    post<{ success: boolean; message: string }>('/setup/test-key', { key_name: keyName, key_value: keyValue, ...(extra ? { extra } : {}) }),
 
-  saveSetupKeys: (keys: Record<string, string>, testRequired = false) => {
-    const token = localStorage.getItem('token')
-    return fetch(`${BASE}/setup/keys`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ keys, test_required: testRequired }),
-    }).then(r => r.json().then(b => ({ status: r.status, body: b }))).then(({ status, body }) => {
-      if (status >= 400 || !body.ok) throw new Error(body.error?.message || `Save failed (HTTP ${status})`)
-      return body.data
-    })
-  },
+  saveSetupKeys: (keys: Record<string, string>, testRequired = false) =>
+    post<unknown>('/setup/keys', { keys, test_required: testRequired }),
 
-  getSetupUserProfile: async () => {
-    const token = localStorage.getItem('token')
-    const r = await fetch(`${BASE}/setup/user-profile`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
-    const b = await r.json()
-    if (!r.ok || !b.ok) throw new Error(b?.error?.message || `HTTP ${r.status}`)
-    return b.data as Record<string, string>
-  },
+  getSetupUserProfile: () => get<Record<string, string>>('/setup/user-profile'),
 
-  saveSetupUserProfile: (fields: Record<string, string>) => {
-    const token = localStorage.getItem('token')
-    return fetch(`${BASE}/setup/user-profile`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(fields),
-    }).then(r => r.json().then(b => ({ status: r.status, body: b }))).then(({ status, body }) => {
-      if (status >= 400 || !body.ok) throw new Error(body.error?.message || `Save failed (HTTP ${status})`)
-      return body.data
-    })
-  },
+  saveSetupUserProfile: (fields: Record<string, string>) =>
+    post<unknown>('/setup/user-profile', fields),
 
   // Custom provider (needs auth)
   createProvider: (data: { id: string; label: string; format: string; base_url: string; default_model: string; api_key: string }) =>
