@@ -1,17 +1,30 @@
 #!/bin/bash
-# 数据根目录：与运行时 config.py 一致，优先 KIOXIA_DATA_DIR，空值回退默认路径
-DATA_ROOT="${KIOXIA_DATA_DIR:-/media/orangepi/KIOXIA/nahida-data}"
-DB_DIR="$DATA_ROOT/db"
-LOG_DIR="$DATA_ROOT/logs"
+# 数据路径统一从 config.py 运行时解析读取（U盘挂载/降级/默认值由
+# _resolve_data_path 处理），脚本不硬编码任何盘符路径。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PY_BIN="$PROJECT_ROOT/.venv/bin/python"
+[ -x "$PY_BIN" ] || PY_BIN=python3
+eval "$(cd "$PROJECT_ROOT" && "$PY_BIN" -c '
+import os
+from config import DATA_DIR, LOG_DIR
+# 判定是否正在使用外置盘：仅当显式配置 KIOXIA_DATA_DIR 且 DATA_DIR
+# 落在该路径下（_resolve_data_path 已确认挂载成功）才算使用外置盘
+kioxia_env = os.getenv("KIOXIA_DATA_DIR", "")
+using_kioxia = bool(kioxia_env) and str(DATA_DIR).startswith(kioxia_env)
+print(f"DB_DIR={DATA_DIR}")
+print(f"LOG_DIR={LOG_DIR}")
+print(f"USING_KIOXIA={using_kioxia}")
+')"
 
 echo "=== 小妲 AI Agent 健康检查 ==="
 echo ""
 
 echo "[1] KIOXIA U盘挂载"
-if mountpoint -q /media/orangepi/KIOXIA; then
-    echo "  ✅ 已挂载"
+if [ "$USING_KIOXIA" = "True" ]; then
+    echo "  ✅ 已挂载，数据库使用外置盘 ($DB_DIR)"
 else
-    echo "  ❌ 未挂载！请检查U盘连接"
+    echo "  ❌ 未挂载！数据库已降级到系统盘"
     exit 1
 fi
 
