@@ -9,6 +9,8 @@ import time
 import inspect
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
@@ -220,6 +222,30 @@ class TestRound3E2ESmoke:
 
 class TestSceneAwareV2:
     """场景感知 v2 新功能验证：加权混合检测 + 签名缓存 + 场景粘性。"""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_workspace(self, tmp_path, monkeypatch):
+        """场景感知测试隔离 workspace：临时目录写入模块文件。
+
+        不依赖真实用户 ~/.ai-agent/config/workspace（CI 全新 runner 上为空，
+        build_scene_aware_prompt 加载不到任何模块会提前返回，缓存统计
+        misses 恒为 0，导致 test_scene_cache_hit 断言失败）。
+        """
+        import config as _cfg
+        import prompt_builder as _pb
+
+        ws = tmp_path / "workspace"
+        ws.mkdir(parents=True, exist_ok=True)
+        for name in ("AGENTS.md", "SOUL.md", "IDENTITY.md", "TOOLS.md",
+                     "USER.md", "MEMORY.md", "HEARTBEAT.md"):
+            (ws / name).write_text(f"# {name}\n\n测试隔离内容。\n", encoding="utf-8")
+
+        monkeypatch.setattr(_cfg, "WORKSPACE_DIR", ws)
+        _pb._module_cache.clear()
+        _pb._module_cache_mtimes = None
+        _pb.reset_scene_cache()
+        yield ws
+        _pb.reset_scene_cache()
 
     def test_blended_detection_single_scene(self):
         """单一场景输入应返回该场景权重=1.0"""
