@@ -63,8 +63,9 @@ def test_update_writes_version_only_after_install_validation():
 def test_frozen_config_writes_use_resolved_writable_directory():
     config_source = read_project_file("config.py")
 
-    # CONFIG_DIR 统一使用 _resolve_data_path，确保 KIOXIA 只读时回退一致
-    assert 'CONFIG_DIR = _resolve_data_path(_KIOXIA_BASE / "config"' in config_source
+    # CONFIG_DIR 固定系统盘用户目录（不随 KIOXIA_DATA_DIR 走）：
+    # agent.json5/人格 MD 等配置文件避免 U 盘 IO 拖慢请求，只有数据库 DATA_DIR 保留 U 盘
+    assert 'CONFIG_DIR = Path.home() / ".ai-agent" / "config"' in config_source
     # AGENT_CONFIG_PATH 和 AGENTS_CONFIG_DIR 都从 CONFIG_DIR 派生，
     # 不再各自独立判断路径（Qodo 审查：避免读写路径不一致）
     assert "AGENT_CONFIG_PATH = CONFIG_DIR / " in config_source
