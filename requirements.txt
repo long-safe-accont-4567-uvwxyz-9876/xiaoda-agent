@@ -29,6 +29,8 @@ pilk>=0.2.4
 
 # ── 系统监控 ──
 psutil>=6.0.0
+# ── Linux 发行版识别（prompt_builder/web 系统信息，缺失时降级 platform.platform）──
+distro>=1.9.0
 
 # ── 配置热重载: watchdog 监听 config/ 文件变更，缺失时降级为无热重载 ──
 watchdog>=4.0.0
