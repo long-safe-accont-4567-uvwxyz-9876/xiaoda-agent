@@ -11,14 +11,16 @@ import os
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 from pydantic import BaseModel
 
 from security.permission_manager import get_permission_manager, AuditEntry
+from web.routers.auth import get_current_user
 from web.schemas import Envelope
 
-router = APIRouter(prefix="/workspace", tags=["workspace"])
+router = APIRouter(prefix="/workspace", tags=["workspace"],
+                   dependencies=[Depends(get_current_user)])
 
 
 # ── 请求模型 ───────────────────────────────────────────────
@@ -123,8 +125,16 @@ async def revoke_workspace():
 
 @router.get("/browse")
 async def browse_directory(path: str = ""):
-    """列出目录下的子目录（用于 DirectoryPickerDialog 浏览）"""
-    target = path or os.path.expanduser("~")
+    """列出目录下的子目录（用于 DirectoryPickerDialog 浏览）
+
+    使用 realpath 规范化路径，解析符号链接与相对路径(..)段，
+    保证 current/parent 返回真实路径，避免前端显示路径与实际权限不一致。
+    """
+    raw_target = path or os.path.expanduser("~")
+    try:
+        target = os.path.realpath(raw_target)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=400, detail=f"路径解析失败：{raw_target}")
     if not os.path.isdir(target):
         raise HTTPException(status_code=400, detail=f"不是目录：{target}")
     try:
