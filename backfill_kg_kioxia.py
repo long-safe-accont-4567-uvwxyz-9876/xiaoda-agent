@@ -11,7 +11,9 @@ from db.db_knowledge import KnowledgeDB
 from memory.knowledge_graph import KnowledgeGraph
 
 # 优先使用 KIOXIA_DATA_DIR 环境变量（与运行时一致），旧目录名 xiaoda-data 已更名 nahida-data
-DB_PATH = os.path.join(os.getenv("KIOXIA_DATA_DIR", "/media/orangepi/KIOXIA/nahida-data"), "db", "agent.db")
+# 空字符串视为未设置：os.getenv 第二参在变量存在但为空时不会生效，需 or 回退默认值
+data_dir = os.getenv("KIOXIA_DATA_DIR") or "/media/orangepi/KIOXIA/nahida-data"
+DB_PATH = os.path.join(data_dir, "db", "agent.db")
 SF_KEY = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("EMBED_API_KEY", "")
 
 

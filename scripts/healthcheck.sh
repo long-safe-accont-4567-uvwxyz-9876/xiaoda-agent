@@ -1,4 +1,9 @@
 #!/bin/bash
+# 数据根目录：与运行时 config.py 一致，优先 KIOXIA_DATA_DIR，空值回退默认路径
+DATA_ROOT="${KIOXIA_DATA_DIR:-/media/orangepi/KIOXIA/nahida-data}"
+DB_DIR="$DATA_ROOT/db"
+LOG_DIR="$DATA_ROOT/logs"
+
 echo "=== 小妲 AI Agent 健康检查 ==="
 echo ""
 
@@ -11,8 +16,8 @@ else
 fi
 
 echo "[2] 数据库目录"
-if [ -d "/media/orangepi/KIOXIA/nahida-data/db" ]; then
-    DB_SIZE=$(du -sh /media/orangepi/KIOXIA/nahida-data/db/ | cut -f1)
+if [ -d "$DB_DIR" ]; then
+    DB_SIZE=$(du -sh "$DB_DIR/" | cut -f1)
     echo "  ✅ 存在 (${DB_SIZE})"
 else
     echo "  ❌ 不存在！"
@@ -20,7 +25,7 @@ else
 fi
 
 echo "[3] 数据库文件"
-if [ -f "/media/orangepi/KIOXIA/nahida-data/db/agent.db" ]; then
+if [ -f "$DB_DIR/agent.db" ]; then
     echo "  ✅ agent.db 存在"
 else
     echo "  ❌ agent.db 不存在！"
@@ -54,8 +59,8 @@ else
 fi
 
 echo "[6] 日志目录"
-if [ -d "/media/orangepi/KIOXIA/nahida-data/logs" ]; then
-    LOG_COUNT=$(ls /media/orangepi/KIOXIA/nahida-data/logs/*.json 2>/dev/null | wc -l)
+if [ -d "$LOG_DIR" ]; then
+    LOG_COUNT=$(find "$LOG_DIR" -maxdepth 1 -type f -name '*.json' -printf '.' | wc -c)
     echo "  ✅ 存在 (${LOG_COUNT} 个日志文件)"
 else
     echo "  ❌ 不存在！"

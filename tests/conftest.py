@@ -25,10 +25,17 @@ def _isolate_permission_persistence(tmp_path, monkeypatch):
     用户配置）。部分测试用独立 PermissionManager 实例（test_permission_mode_
     five_states）或全局单例（test_e2e_functional）切换模式且未重定向落盘，
     会导致完整套件跑完后覆盖用户配置（如 custom 被改成 default）。
-    这里统一重定向 _PERMISSION_FILE，测试结束后自动恢复。
+    这里统一重定向 _PERMISSION_FILE，并保存/恢复全局单例内存态模式，
+    避免测试间权限模式相互污染，测试结束后自动恢复。
     """
     import security.permission_manager as _pm
     monkeypatch.setattr(_pm, "_PERMISSION_FILE", str(tmp_path / "permission_mode.json"))
+    pm = _pm.get_permission_manager()
+    saved_mode = pm.mode
+    try:
+        yield
+    finally:
+        pm.set_mode(saved_mode)
 
 
 @pytest.fixture
