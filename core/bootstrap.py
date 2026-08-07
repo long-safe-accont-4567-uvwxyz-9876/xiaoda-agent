@@ -269,16 +269,20 @@ class AgentCoreBootstrapper:
         core.router.set_db(core.db, analytics=core.db.analytics)
         embed_api_key = os.getenv("EMBED_API_KEY", "")
         embed_base_url = os.getenv("EMBED_BASE_URL", "https://api.siliconflow.cn/v1")
+        # 本地推理模式（EMBED_MODE=local）不依赖 API Key，同样创建向量存储
+        embed_mode = os.getenv("EMBED_MODE", "remote")
         core._vec_store = None
-        if embed_api_key:
+        if embed_mode == "local" or embed_api_key:
             try:
                 core._vec_store = VectorStore(
                     db_path=str(core.db.db_path.parent / (core.db.db_path.stem + "_vec.db")),
                     embed_api_key=embed_api_key,
                     embed_base_url=embed_base_url,
+                    embed_mode=embed_mode,
                 )
                 await core._vec_store.init()
-                logger.info("vector_store.enabled")
+                logger.info("vector_store.enabled" +
+                            (f" mode={embed_mode}" if embed_mode == "local" else ""))
             except Exception as e:
                 logger.warning(f"vector_store.init_failed: {e}")
                 core._vec_store = None

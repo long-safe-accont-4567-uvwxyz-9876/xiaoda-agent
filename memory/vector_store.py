@@ -107,13 +107,22 @@ class VectorStore:
 
     def __init__(self, db_path: str | Path, embed_api_key: str = "",
                  embed_base_url: str = "", embed_model: str = "BAAI/bge-m3",
-                 dimensions: int = 0) -> None:
-        """初始化向量存储。"""
+                 dimensions: int = 0, embed_mode: str = "",
+                 local_model_dir: str = "", local_query_prefix: str = "") -> None:
+        """初始化向量存储。
+
+        embed_mode: "local" 走香橙派本地 onnxruntime 推理（BGE-small-zh-v1.5），
+                    默认 "remote" 走远程 API（向后兼容）。
+        """
         self._db_path = str(db_path)
         self._embed_api_key = embed_api_key
         self._embed_base_url = embed_base_url
         self._embed_model = embed_model
         self._dimensions = dimensions
+        self._embed_mode = embed_mode or os.getenv("EMBED_MODE", "remote")
+        self._local_model_dir = local_model_dir or os.getenv("LOCAL_EMBED_MODEL_DIR", "")
+        self._local_query_prefix = local_query_prefix or os.getenv("LOCAL_EMBED_QUERY_PREFIX", "")
+        self._local_provider = None
         self._initialized = False
         self._closed = False
         self._lock = threading.Lock()
@@ -128,7 +137,19 @@ class VectorStore:
         _embed_concurrency = _safe_int(os.getenv("VECTOR_EMBED_CONCURRENCY", "8"), 8)
         self._embed_semaphore = asyncio.Semaphore(_embed_concurrency)
 
-        if HAS_OPENAI and embed_api_key:
+        if self._embed_mode == "local":
+            # 本地推理：不依赖远程 API Key / 网络，模型加载为懒加载
+            try:
+                from memory.local_embed import LocalEmbeddingProvider
+                self._local_provider = LocalEmbeddingProvider(
+                    self._local_model_dir,
+                    query_prefix=self._local_query_prefix,
+                )
+                logger.info("vector_store.local_embed_enabled model_dir={}", self._local_model_dir)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("vector_store.local_embed_init_failed error={}", str(e))
+                self._local_provider = None
+        elif HAS_OPENAI and embed_api_key:
             self._embed_client = AsyncOpenAI(
                 api_key=embed_api_key,
                 base_url=embed_base_url or "https://api.siliconflow.cn/v1",
@@ -185,10 +206,16 @@ class VectorStore:
 
                     # 维度策略：
                     # - 显式配置（dimensions > 0）时直接使用
+                    # - 本地推理模式：用本地模型输出维度（BGE-small-zh-v1.5 = 512）
                     # - 未配置时查表已有维度；表不存在则用 1024 兜底
                     # 修复 P0：原代码硬编码 1024 且首次 INSERT 时 _dimensions 竞态写入，
                     # 维度不匹配时 INSERT 永久失败。
-                    if self._dimensions > 0:
+                    if self._embed_mode == "local" and self._local_provider is not None:
+                        # 懒加载时此处同步加载（首次使用），拿到真实维度
+                        self._local_provider.load()
+                        dims = self._local_provider.dimensions or 512
+                        self._dimensions = dims
+                    elif self._dimensions > 0:
                         dims = self._dimensions
                     else:
                         try:
@@ -209,6 +236,29 @@ class VectorStore:
                             dims = 1024
                         # 固化检测到的维度，避免并发首 INSERT 竞态
                         self._dimensions = dims
+
+                    # local 模式：表已存在但维度与本地模型不一致（如 1024→512）时，
+                    # 不能原地改表结构，INSERT 会静默失败。检测到不匹配直接报错，
+                    # 由迁移脚本（scripts/rebuild_vec_local.py）重建表并重新向量化。
+                    if self._embed_mode == "local" and self._local_provider is not None:
+                        try:
+                            row = conn.execute(
+                                "SELECT embedding FROM memories_vec LIMIT 1"
+                            ).fetchone()
+                            if row is not None and row[0] is not None:
+                                import struct
+                                raw = row[0]
+                                if isinstance(raw, (bytes, bytearray)):
+                                    existing_dims = len(raw) // 4
+                                else:
+                                    existing_dims = dims
+                                if existing_dims != dims:
+                                    raise RuntimeError(
+                                        f"memories_vec dims={existing_dims} != local embed dims={dims}；"
+                                        "请先运行 scripts/rebuild_vec_local.py 重建向量库"
+                                    )
+                        except sqlite3.OperationalError:
+                            pass  # 表不存在（首次初始化），正常创建
 
                     conn.execute(f"""
                         CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec
@@ -254,6 +304,10 @@ class VectorStore:
                     self._vec_conn = None
 
         await asyncio.to_thread(_do_close)
+        # 本地推理 Provider：释放 ONNX session 与 tokenizer
+        if self._local_provider is not None:
+            self._local_provider.close()
+            self._local_provider = None
         # CodeRabbit 修复：不关闭 _embed_client，因为它复用全局共享 httpx client
         # （_get_embed_shared_client）。关闭 _embed_client 会关闭共享 httpx client，
         # 影响其他 VectorStore 实例。共享 client 生命周期由 close_shared_client() 统一管理。
@@ -271,7 +325,9 @@ class VectorStore:
         # 违反生命周期契约。与文件内其他方法（_vec_conn 操作）的 _closed 守卫一致。
         # 生命周期契约：close_shared_client() 必须在所有 VectorStore.close() 完成且
         # 无在途 embed 请求后调用（由应用关闭顺序保证）。
-        if self._closed or not self._embed_client:
+        if self._closed:
+            return []
+        if self._embed_mode != "local" and not self._embed_client:
             return []
 
         cached = self._cache.get(text)
@@ -303,7 +359,17 @@ class VectorStore:
             self._inflight.pop(text, None)
 
     async def _do_embed(self, text: str) -> list[float]:
-        """实际发起 embed API 请求（含重试）。"""
+        """实际生成嵌入向量（本地推理或远程 API，含重试）。"""
+        # 本地推理（香橙派 onnxruntime CPU）：CPU 密集，走 to_thread 不阻塞事件循环；
+        # 无网络依赖、无重试必要，失败即返回空（调用方均有兜底）。
+        if self._embed_mode == "local":
+            if self._local_provider is None:
+                return []
+            vec = await asyncio.to_thread(self._local_provider.embed, text)
+            if vec and self._dimensions and len(vec) != self._dimensions:
+                logger.warning("vector_store.dimension_mismatch",
+                               expected=self._dimensions, actual=len(vec))
+            return vec
         # 治本修复（2026-08-05 用户"治标不治本"反馈）：max_retries 2→1。
         # 根因：embed 偶发慢时重试也慢（网络波动不会 1s 内恢复），
         #   read=5s + 重试2次 = 最坏 5+1+5+1+5=17s，远超外层 wait_for(2s) 兜底。
