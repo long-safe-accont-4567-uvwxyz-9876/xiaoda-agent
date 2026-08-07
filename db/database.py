@@ -69,6 +69,13 @@ class DatabaseManager:
         # 独立只读连接：供主请求关键路径(restore_from_db)使用，WAL模式下只读连接
         # 不被写阻塞，永不受主连接脏事务/长操作影响(上下文丢失根因修复)
         self._readonly_conn: aiosqlite.Connection | None = None
+        # 只读连接池：记忆检索 7 路通道并发时若全部排队同一个主连接(self._conn，
+        # aiosqlite 单连接串行执行器)，总耗时 = 各通道耗时之和（实测 7.4s=73+1018+
+        # 5541+762 之和铁证）。为检索分流到独立只读连接，让通道真正并行，
+        # 总耗时收敛到最慢通道（P0 性能根因修复 2026-08-07）。
+        self._read_pool: list[aiosqlite.Connection] = []
+        self._read_idx = 0
+        self._READ_POOL_SIZE = 4
         # 写事务串行化锁：aiosqlite 单连接共享事务状态，多个后台任务并发执行
         # auto_commit=False 多语句序列时，A 的 commit() 会提交 B 未完成的半事务，
         # B 的 rollback() 会回滚 A 已写的数据 → 脏事务/数据丢失/SQL logic error
@@ -180,6 +187,30 @@ class DatabaseManager:
             # 只读连接初始化失败不阻塞启动，restore 回退到主连接(保留原行为)
             logger.warning("database.readonly_conn_init_failed", error=str(e))
             self._readonly_conn = None
+        # 只读连接池（检索并发分流）：WAL 下多连接可并发读
+        # 幂等：重复 init() 先关闭旧池
+        if self._read_pool:
+            for _c in self._read_pool:
+                try:
+                    await _c.close()
+                except (OSError, RuntimeError):
+                    pass
+            self._read_pool = []
+        for _ in range(self._READ_POOL_SIZE):
+            try:
+                _rc = await aiosqlite.connect(f"file:{self.db_path}?mode=ro", uri=True)
+                _rc.row_factory = aiosqlite.Row
+                await _rc.execute("PRAGMA query_only=1")
+                await _rc.execute("PRAGMA busy_timeout=5000")
+                self._read_pool.append(_rc)
+            except Exception as e:
+                logger.warning("database.read_pool_conn_failed", error=str(e))
+                break
+        self._read_idx = 0
+        if self._read_pool:
+            logger.info("database.read_pool_ready", size=len(self._read_pool))
+        if self.memory is not None:
+            self.memory._read_pool = self._read_pool
         logger.info("database.ready", path=str(self.db_path))
 
     async def _apply_composite_indexes(self) -> None:
@@ -300,6 +331,20 @@ class DatabaseManager:
             except (OSError, RuntimeError):
                 pass
             self._readonly_conn = None
+        for _rc in self._read_pool:
+            try:
+                await _rc.close()
+            except (OSError, RuntimeError):
+                pass
+        self._read_pool = []
+
+    def get_read_conn(self) -> aiosqlite.Connection:
+        """从只读连接池取一个连接（round-robin）。池空时回退主连接（保留原行为）。"""
+        if not self._read_pool:
+            return self._conn
+        conn = self._read_pool[self._read_idx % len(self._read_pool)]
+        self._read_idx += 1
+        return conn
 
     async def _run_migrations(self) -> None:
         """按 version 顺序执行所有数据库迁移。每个迁移独立事务，失败时 fail-fast 阻止启动。"""

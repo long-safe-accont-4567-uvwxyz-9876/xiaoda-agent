@@ -10,6 +10,18 @@ class MemoryDB:
     def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn
         conn.row_factory = aiosqlite.Row
+        # 只读连接池（由 DatabaseManager.init 注入）：检索方法分流使用，
+        # 避免 7 路检索通道排队同一个主连接导致总耗时=各通道之和
+        self._read_pool: list[aiosqlite.Connection] = []
+        self._read_idx = 0
+
+    def _read_conn(self) -> aiosqlite.Connection:
+        """取只读连接（round-robin），池空时回退主连接（保留原行为）。"""
+        if not self._read_pool:
+            return self._conn
+        conn = self._read_pool[self._read_idx % len(self._read_pool)]
+        self._read_idx += 1
+        return conn
 
     async def commit(self) -> None:
         await self._conn.commit()
@@ -81,7 +93,7 @@ class MemoryDB:
         return mem_id
 
     async def get_memory_by_id(self, memory_id: int) -> dict | None:
-        cursor = await self._conn.execute(
+        cursor = await self._read_conn().execute(
             "SELECT * FROM episodic_memories WHERE id=?", (memory_id,)
         )
         row = await cursor.fetchone()
@@ -279,7 +291,7 @@ class MemoryDB:
         """
         if scope is None:
             return await self.search_memories_by_importance(min_importance, limit)
-        cursor = await self._conn.execute(
+        cursor = await self._read_conn().execute(
             """SELECT * FROM episodic_memories
                WHERE importance >= ?
                  AND user_id = ? AND agent_id = ?
@@ -297,7 +309,7 @@ class MemoryDB:
         if not fts_query:
             return []
         try:
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 """SELECT em.*, bm25(episodic_memory_fts) AS score
                    FROM episodic_memory_fts
                    JOIN episodic_memories em ON em.id = episodic_memory_fts.id
@@ -412,7 +424,7 @@ class MemoryDB:
                 where_extra = " AND is_raw = ?"
                 params.append(is_raw)
             params.append(limit)
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 f"""SELECT * FROM episodic_memories
                    WHERE id IN ({placeholders})
                      AND user_id = ? AND agent_id = ?
@@ -749,7 +761,7 @@ class MemoryDB:
             conditions = " OR ".join(["entities LIKE ?" for _ in entity_names])
             params = [f'%"{e}"%' for e in entity_names]
             params.extend([scope.user_id, scope.agent_id])
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 f"""SELECT * FROM episodic_memories
                    WHERE session_id != 'archived'
                      AND ({conditions})
@@ -842,7 +854,7 @@ class MemoryDB:
         await self.delete_memory(memory_id, auto_commit=auto_commit)
 
     async def get_episodic_recent(self, limit: int = 50) -> Any:
-        cursor = await self._conn.execute(
+        cursor = await self._read_conn().execute(
             """SELECT * FROM episodic_memories
                ORDER BY timestamp DESC LIMIT ?""",
             (limit,),
@@ -851,13 +863,13 @@ class MemoryDB:
         return [dict(r) for r in rows]
 
     async def get_episodic_count(self) -> int:
-        cursor = await self._conn.execute("SELECT COUNT(*) as cnt FROM episodic_memories")
+        cursor = await self._read_conn().execute("SELECT COUNT(*) as cnt FROM episodic_memories")
         row = await cursor.fetchone()
         return row["cnt"] if row else 0
 
     async def get_unmigrated_memories(self, limit: int = 50) -> list[dict]:
         """获取未迁移到 concept_nodes 的记忆"""
-        async with self._conn.execute(
+        async with self._read_conn().execute(
             """SELECT em.id, em.summary FROM episodic_memories em
                WHERE em.id NOT IN (SELECT source_mem_id FROM concept_nodes
                                    WHERE source_mem_id IS NOT NULL)
@@ -1116,7 +1128,7 @@ class MemoryDB:
     async def get_memory_summaries(self, limit: int = 5) -> list[dict]:
         """获取最近的蒸馏摘要（按时间降序）"""
         try:
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 """SELECT id, summary_text, created_at, memory_count
                    FROM memory_summaries
                    ORDER BY created_at DESC LIMIT ?""",
@@ -1345,7 +1357,7 @@ class MemoryDB:
         if not child_ids:
             return []
         placeholders = ",".join("?" * len(child_ids))
-        cursor = await self._conn.execute(
+        cursor = await self._read_conn().execute(
             f"SELECT DISTINCT parent_id FROM memory_child_chunks WHERE id IN ({placeholders})",
             child_ids,
         )

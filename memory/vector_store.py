@@ -120,6 +120,9 @@ class VectorStore:
         self._embed_client = None
         self._vec_conn = None
         self._cache = EmbedCache(max_size=512)
+        # 单飞（single-flight）：同一文本并发调用 embed 时只发一次 API 请求，
+        # 其余协程共享结果，避免 7 路检索通道并发时重复 embed 放大延迟/限流
+        self._inflight: dict[str, asyncio.Future] = {}
 
         # 并发嵌入限制（避免 API 限流），可通过环境变量配置
         _embed_concurrency = _safe_int(os.getenv("VECTOR_EMBED_CONCURRENCY", "8"), 8)
@@ -259,7 +262,10 @@ class VectorStore:
             logger.info("vector_store.cache_stats", **self._cache.stats)
 
     async def embed(self, text: str) -> list[float]:
-        """生成文本的嵌入向量，优先使用缓存，失败时自动重试。"""
+        """生成文本的嵌入向量，优先使用缓存，失败时自动重试。
+
+        单飞（single-flight）：同一文本的并发调用共享一次 API 请求。
+        """
         # CodeRabbit 修复：close() 后 _closed=True，但 _embed_client 复用全局共享 httpx
         # client 不会被 close() 置空。若不检查 _closed，close() 后仍会发起 embed 请求，
         # 违反生命周期契约。与文件内其他方法（_vec_conn 操作）的 _closed 守卫一致。
@@ -272,6 +278,32 @@ class VectorStore:
         if cached:
             return cached
 
+        # 单飞：已有同文本在途请求则直接共享结果，不重复打 API
+        inflight = self._inflight.get(text)
+        if inflight is not None:
+            try:
+                return await asyncio.shield(inflight)
+            except Exception:
+                return []
+
+        future = asyncio.get_running_loop().create_future()
+        self._inflight[text] = future
+        try:
+            vec = await self._do_embed(text)
+            if vec:
+                self._cache.put(text, vec)
+            future.set_result(vec)
+            return vec
+        except Exception as e:
+            # 等待者同样拿到空结果（不传播异常，调用方均有兜底）
+            future.set_result([])
+            logger.warning("vector_store.embed_singleflight_failed", error=str(e))
+            return []
+        finally:
+            self._inflight.pop(text, None)
+
+    async def _do_embed(self, text: str) -> list[float]:
+        """实际发起 embed API 请求（含重试）。"""
         # 治本修复（2026-08-05 用户"治标不治本"反馈）：max_retries 2→1。
         # 根因：embed 偶发慢时重试也慢（网络波动不会 1s 内恢复），
         #   read=5s + 重试2次 = 最坏 5+1+5+1+5=17s，远超外层 wait_for(2s) 兜底。
@@ -298,7 +330,6 @@ class VectorStore:
                     logger.info("vector_store.dimensions_detected", dimensions=self._dimensions)
                 elif vec and len(vec) != self._dimensions:
                     logger.warning("vector_store.dimension_mismatch", expected=self._dimensions, actual=len(vec))
-                self._cache.put(text, vec)
                 return vec
             except (APITimeoutError, APIConnectionError) as e:
                 # 瞬时错误：超时/连接错误，重试有效（网络抖动可能恢复）
