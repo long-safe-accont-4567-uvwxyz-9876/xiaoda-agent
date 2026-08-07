@@ -17,6 +17,20 @@ os.environ.setdefault("AGENT_DEV_MODE", "1")
 os.environ.setdefault("TEST_MODE", "true")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_permission_persistence(tmp_path, monkeypatch):
+    """全局隔离权限模式落盘：任何测试 set_mode() 都写入临时文件。
+
+    set_mode() 会把模式持久化到 get_config_dir()/permission_mode.json（真实
+    用户配置）。部分测试用独立 PermissionManager 实例（test_permission_mode_
+    five_states）或全局单例（test_e2e_functional）切换模式且未重定向落盘，
+    会导致完整套件跑完后覆盖用户配置（如 custom 被改成 default）。
+    这里统一重定向 _PERMISSION_FILE，测试结束后自动恢复。
+    """
+    import security.permission_manager as _pm
+    monkeypatch.setattr(_pm, "_PERMISSION_FILE", str(tmp_path / "permission_mode.json"))
+
+
 @pytest.fixture
 def project_root() -> Path:
     """返回项目根目录路径"""

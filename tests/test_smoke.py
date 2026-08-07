@@ -1,6 +1,29 @@
 """最小回归测试集 - 验证核心导入和对象创建"""
 import asyncio
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _dev_mode_for_smoke(tmp_path, monkeypatch):
+    """test_smoke 安全测试按"开发板模式"断言（安全威胁 warn 不 block）。
+
+    全局权限单例的模式由 conftest 的 AGENT_DEV_MODE=1 初始化为 DEV，但其他
+    测试（如 test_tool_executor_workspace 的 autouse fixture）会 set_mode()
+    把单例内存模式切成 DEFAULT 且不恢复，导致本文件依赖 warn 的断言失败。
+
+    这里每个测试前强制切回 DEV，并重定向落盘路径避免覆盖真实配置；
+    结束后恢复原模式（写入临时文件，不污染磁盘）。
+    """
+    import security.permission_manager as _pm
+    monkeypatch.setattr(_pm, "_PERMISSION_FILE", str(tmp_path / "permission_mode.json"))
+    pm = _pm.get_permission_manager()
+    saved = pm.mode
+    pm.set_mode(_pm.PermissionMode.DEV)
+    yield
+    pm.set_mode(saved)
+
+
 def test_core_imports():
     from agent_core import RequestContext
     from agent_context import AgentContext
