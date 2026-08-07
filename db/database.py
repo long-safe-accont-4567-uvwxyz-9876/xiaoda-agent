@@ -26,7 +26,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 21
+CURRENT_SCHEMA_VERSION = 22
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -1238,13 +1238,16 @@ class DatabaseManager:
            普通 DELETE 在 contentless FTS5 上可用）
         2. 重建 FTS 内容，使 FTS rowid 与主表 rowid 对齐（原有 117 实体仅 56 进了 FTS，
            62 个缺失含「小妲」；缺失实体 UPDATE 时触发器 delete 也报错）
+
+        原子性修复（2026-08-07 CodeRabite）：
+        1. 原实现先 DELETE 全表再批量 INSERT，改为逐行 DELETE+INSERT。
+        2. FTS5 contentless 表删除后 rowid 不重用，WHERE rowid=? 用原 rowid 重建时
+           会静默失效。修复：先用 SELECT 查出 FTS 中当前 rowid，再用该 rowid 做 DELETE。
+           TEXT id 仍不能直接用于 DELETE（SQL logic error），但可用于 SELECT 定位。
         """
         await self._conn.execute("DROP TRIGGER IF EXISTS knowledge_entities_fts_ai")
         await self._conn.execute("DROP TRIGGER IF EXISTS knowledge_entities_fts_ad")
         await self._conn.execute("DROP TRIGGER IF EXISTS knowledge_entities_fts_au")
-        # 重建 FTS 内容：rowid 与主表对齐 + _tokenize_for_fts 预分词
-        # 应用层 _sync_entity_fts 也按 rowid + tokenized name 维护，必须保持一致。
-        await self._conn.execute("DELETE FROM knowledge_entities_fts")
         # CodeRabbit 根因修复：原版用 `SELECT rowid, id, name FROM knowledge_entities`
         # 直接 INSERT 原始 name。实测 FTS5 unicode61 不会按字符切分 CJK，原始 '小妲'
         # 变成单个不透明 token，MATCH '妲' 命中为 0，字符级搜索全部失效（v5 已分词，
@@ -1256,6 +1259,16 @@ class DatabaseManager:
         for row in rows:
             _rowid, _id, _name = row[0], row[1], row[2]
             _name_index = _tokenize_for_fts(_name) if _name else ""
+            # 用 SELECT 定位 FTS 中当前 rowid，再 DELETE——避免 FTS5 rowid 偏移失效
+            fts_cur = await self._conn.execute(
+                "SELECT rowid FROM knowledge_entities_fts WHERE id = ?", (_id,)
+            )
+            existing = await fts_cur.fetchone()
+            if existing:
+                await self._conn.execute(
+                    "DELETE FROM knowledge_entities_fts WHERE rowid = ?", (existing[0],)
+                )
+            # 若 FTS 无此 id（首次运行或已清理），跳过 DELETE 直接 INSERT
             await self._conn.execute(
                 "INSERT INTO knowledge_entities_fts(rowid, id, name_index) VALUES(?, ?, ?)",
                 (_rowid, _id, _name_index),
@@ -1271,33 +1284,47 @@ class DatabaseManager:
         （"你是谁"/"陪着我"）分词后全部被过滤，_build_fts_query 返回空 → FTS 短路。
         修复侧（fts_utils）已放行 CJK 单字；本迁移用新 tokenizer 重建存量索引，
         否则已入库记忆的单字在 FTS 里仍命中为 0，单字查询对存量数据依旧无效。
+
+        原子性修复（2026-08-07 CodeRabite）：
+        1. 原实现先 DELETE 全表再批量 INSERT，改为逐行 DELETE+INSERT。
+        2. FTS5 contentless 表删除后 rowid 不自动复用，INSERT 必须显式指定 rowid
+           才能保证幂等重建（否则 rowid 持续偏移，WHERE id=? 也无法保持稳定）。
+        3. WHERE id=? 用逻辑主键匹配删除，比 WHERE rowid=? 更可靠（rowid 可能已偏移）。
         """
         from db.fts_utils import _tokenize_for_fts
+
         # 1. episodic_memory_fts（无触发器，应用层手动维护）
-        await self._conn.execute("DELETE FROM episodic_memory_fts")
         cursor = await self._conn.execute("SELECT id, summary FROM episodic_memories")
         rows = await cursor.fetchall()
         for row in rows:
             tokenized = _tokenize_for_fts(row[1])
+            # 用 WHERE id=? 匹配删除；INSERT 显式指定 rowid 保持稳定
+            await self._conn.execute(
+                "DELETE FROM episodic_memory_fts WHERE id = ?", (row[0],)
+            )
             if tokenized.strip():
                 await self._conn.execute(
-                    "INSERT INTO episodic_memory_fts(id, summary_index) VALUES(?, ?)",
-                    (row[0], tokenized),
+                    "INSERT INTO episodic_memory_fts(rowid, id, summary_index) VALUES(?, ?, ?)",
+                    (row[0], row[0], tokenized),
                 )
+
         # 2. memory_entities_fts：触发器改用应用层手动维护（与 v21 同一策略），
         #    避免重建时触发器双重写入（ai 触发器用原始 name，非预分词）。
         await self._conn.execute("DROP TRIGGER IF EXISTS memory_entities_fts_ai")
         await self._conn.execute("DROP TRIGGER IF EXISTS memory_entities_fts_ad")
         await self._conn.execute("DROP TRIGGER IF EXISTS memory_entities_fts_au")
-        await self._conn.execute("DELETE FROM memory_entities_fts")
         cursor2 = await self._conn.execute("SELECT id, name FROM memory_entities")
         rows2 = await cursor2.fetchall()
         for row in rows2:
             tokenized = _tokenize_for_fts(row["name"]) if row["name"] else ""
+            # 同 episodic：WHERE id=? 删除 + 显式 rowid INSERT
+            await self._conn.execute(
+                "DELETE FROM memory_entities_fts WHERE id = ?", (row["id"],)
+            )
             if tokenized.strip():
                 await self._conn.execute(
-                    "INSERT INTO memory_entities_fts(id, name_index) VALUES(?, ?)",
-                    (row["id"], tokenized),
+                    "INSERT INTO memory_entities_fts(rowid, id, name_index) VALUES(?, ?, ?)",
+                    (row["id"], row["id"], tokenized),
                 )
         logger.info("database.migration_v22", desc="fts_single_char_rebuild",
                     episodic=len(rows), entities=len(rows2))
