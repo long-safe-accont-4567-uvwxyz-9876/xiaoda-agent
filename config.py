@@ -200,7 +200,12 @@ def _ensure_fallback(fallback_path: Path) -> Path:
 
 DATA_DIR = _resolve_data_path(_KIOXIA_BASE / "db", _FALLBACK_BASE / "db")
 LOG_DIR = _resolve_data_path(_KIOXIA_BASE / "logs", _FALLBACK_BASE / "logs")
-WORKSPACE_DIR = _resolve_data_path(_KIOXIA_BASE / "config" / "workspace", _FALLBACK_BASE / "config" / "workspace")
+# MD 文件（workspace）固定存放到系统盘用户目录，不再随 KIOXIA_DATA_DIR 走：
+# USER.md/MEMORY.md/HEARTBEAT.md 每次请求都会读取注入提示词，放 U 盘会拖慢响应。
+# 数据库（DATA_DIR）仍按 KIOXIA_DATA_DIR 解析——只有数据库用 U 盘。
+# 所有模式（dev/frozen/远程）统一该路径，与项目根 config/workspace（git 模板源）分离。
+WORKSPACE_DIR = Path.home() / ".ai-agent" / "config" / "workspace"
+WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 CREDENTIALS_DIR = get_credentials_dir()
 
 
@@ -354,6 +359,23 @@ def _ensure_workspace() -> None:
 
     _init_user_resources()
 
+    # workspace 数据目录迁移：升级前 WORKSPACE_DIR 跟随 KIOXIA_DATA_DIR 解析，
+    # 未设 KIOXIA_DATA_DIR 时落在 ~/.ai-agent/data/config/workspace；现在固定到
+    # ~/.ai-agent/config/workspace，旧数据需迁移（新目录为空时才会执行，安全幂等）。
+    _migrate_old_data(
+        Path(os.path.expanduser("~/.ai-agent/data/config/workspace")),
+        WORKSPACE_DIR,
+        "workspace",
+    )
+
+    # 配置目录迁移：升级前 CONFIG_DIR 跟随 KIOXIA_DATA_DIR（未设时 ~/.ai-agent/data/config）；
+    # 现在固定到 ~/.ai-agent/config，旧配置需迁移（新目录为空时才会执行）。
+    _migrate_old_data(
+        Path(os.path.expanduser("~/.ai-agent/data/config")),
+        CONFIG_DIR,
+        "config",
+    )
+
     # ── 数据迁移：frozen 模式下从 exe 目录迁移到用户目录 ──
     # 解决更新安装包导致数据丢失（"刷机"）的问题
     if getattr(sys, 'frozen', False):
@@ -382,7 +404,12 @@ def _ensure_workspace() -> None:
 # 统一 CONFIG_DIR：初始化写入、AGENT_CONFIG_PATH 读取、AGENTS_CONFIG_DIR 都从此派生，
 # 确保 KIOXIA 只读时回退到同一 fallback 路径（Qodo 审查发现：原 AGENT_CONFIG_PATH
 # fallback 是 _FALLBACK_BASE/agent.json5，与写入的 _FALLBACK_BASE/config/agent.json5 不一致）
-CONFIG_DIR = _resolve_data_path(_KIOXIA_BASE / "config", _FALLBACK_BASE / "config")
+# 配置目录固定存放到系统盘用户目录，不再随 KIOXIA_DATA_DIR 走：
+# agent.json5 / webui_overrides / permission_mode / security_patterns / agents(人格 MD+JSON)
+# 都是每次请求或高频读取的小文件，放 U 盘会拖慢响应并因 USB IO 卡住引发事件循环冻结
+# （见 agent_context.build_messages 的 P0 修复注释）。只有数据库（DATA_DIR）保留 U 盘。
+CONFIG_DIR = Path.home() / ".ai-agent" / "config"
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 AGENT_CONFIG_PATH = CONFIG_DIR / "agent.json5"
 STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "stickers", _FALLBACK_BASE / "stickers")
 XIAOLI_STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "xiaoli-stickers", _FALLBACK_BASE / "xiaoli-stickers")

@@ -1143,6 +1143,40 @@ def _build_user_md(fields: dict) -> str:
     return "\n".join(lines)
 
 
+def _is_template_section(name: str) -> bool:
+    """判断 USER.md 的 ``## `` 区块是否为 ``_build_user_md`` 重建的模板区块。
+
+    模板区块：固定的 ``偏好设置`` / ``历史交互要点``，以及动态标题的
+    ``## {称呼}信息``（如 ``## 爸爸信息``、旧格式 ``## 用户信息``）。
+    其余区块（免责协议、XP 动态认知等）由系统或外部写入，必须保留。
+    """
+    name = name.strip()
+    if name in ("偏好设置", "历史交互要点"):
+        return True
+    return name.endswith("信息")
+
+
+def _preserve_extra_sections(old_content: str, new_content: str) -> str:
+    """重建 USER.md 时保留非模板区块，避免丢失系统数据。
+
+    ``_build_user_md`` 只重建模板区块（用户信息/偏好设置/历史交互要点）。
+    若直接整体覆盖 USER.md，会删除 ``## 法律与声明``（免责协议状态）与
+    ``## XP 动态认知`` 等系统写入的区块，导致用户重新同意协议等副作用。
+    """
+    if not old_content:
+        return new_content
+    extra_blocks = []
+    for m in _re.finditer(r'^##\s+(.+?)\s*$\n(.*?)(?=^## |\Z)', old_content, _re.MULTILINE | _re.DOTALL):
+        name = m.group(1)
+        if not _is_template_section(name):
+            block = m.group(0).rstrip("\n")
+            if block.strip():
+                extra_blocks.append(block)
+    if not extra_blocks:
+        return new_content
+    return new_content.rstrip("\n") + "\n\n" + "\n\n".join(extra_blocks) + "\n"
+
+
 @router.get("/setup/user-profile", response_model=Envelope[dict], dependencies=_AUTH_DEPS)
 async def get_user_profile() -> Any:
     """读取 USER.md 内容并返回结构化字段"""
@@ -1197,6 +1231,13 @@ async def save_user_profile(body: dict) -> Any:
 
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     user_md_path = WORKSPACE_DIR / "USER.md"
+    old_content = ""
+    if user_md_path.exists():
+        try:
+            old_content = user_md_path.read_text(encoding="utf-8-sig")
+        except (OSError, PermissionError, FileNotFoundError) as exc:
+            logger.debug("setup.user_md_read_for_preserve_failed: {}", exc, exc_info=True)
+    content = _preserve_extra_sections(old_content, content)
     user_md_path.write_text(content, encoding="utf-8-sig")
 
     # 清除 system prompt 缓存，使修改立即生效
