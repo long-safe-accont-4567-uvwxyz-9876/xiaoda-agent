@@ -112,18 +112,53 @@ def _migrate_old_data(old_dir: Path, new_dir: Path, name: str, ignore_names: tup
         import logging
         logging.getLogger(__name__).warning("config.migrate_failed name=%s error=%s", name, e)
 
-def get_credentials_dir() -> Path:
-    """获取凭证目录。优先使用 KIOXIA 外置存储，否则使用可执行文件同级 credentials/。"""
-    kioxia_cred = _KIOXIA_BASE / "credentials"
+
+def _merge_dir(old_dir: Path, new_dir: Path, name: str) -> None:
+    """按子项合并旧目录数据到新目录（幂等）。
+
+    与 _migrate_old_data 的区别：后者要求新目录整体为空才迁移，若目标目录
+    已有旧内容（如 ~/.ai-agent/voice_refs 遗留 keli/nahida），旧目录独有的
+    子项（如 U 盘的 xiaoda/xiaoli）会被整体跳过而永久丢失。
+    本函数逐个子项复制缺失项，两种来源的内容能合并共存。
+    """
     try:
-        if kioxia_cred.exists() or kioxia_cred.parent.exists():
-            kioxia_cred.mkdir(parents=True, exist_ok=True)
-            return kioxia_cred
+        if not old_dir.exists() or not any(old_dir.iterdir()):
+            return  # 旧目录无数据，跳过
+        new_dir.mkdir(parents=True, exist_ok=True)
+        _copied = 0
+        for item in old_dir.iterdir():
+            target = new_dir / item.name
+            if target.exists():
+                continue  # 目标已有同名项，保留（不覆盖用户新数据）
+            if item.is_dir():
+                shutil.copytree(item, target)
+            else:
+                shutil.copy2(item, target)
+            _copied += 1
+        if _copied:
+            print(f"[config] {name} merged {_copied} items from {old_dir} to {new_dir}")
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("config.merge_failed name=%s error=%s", name, e)
+
+def get_credentials_dir() -> Path:
+    """获取凭证目录（固定系统盘 ~/.ai-agent/credentials）。
+
+    6c11c84 迁移遗漏修复：凭证（provider API Key / webui_secret / revoked_tokens）
+    每次 API 调用与登录鉴权都会热读，且 U 盘拔出即丢失全部 Key 与登录态。
+    原实现优先 KIOXIA（_KIOXIA_BASE/credentials），违背"仅数据库用 U 盘"政策，
+    改为固定系统盘；旧 U 盘/旧默认位置数据由 _ensure_workspace 幂等迁移一次。
+    """
+    cred_dir = Path.home() / ".ai-agent" / "credentials"
+    try:
+        cred_dir.mkdir(parents=True, exist_ok=True)
+        return cred_dir
     except (OSError, PermissionError):
         logger.debug("config.credentials_dir_setup_failed", exc_info=True)
-    fallback = _FALLBACK_BASE / "credentials"
-    fallback.mkdir(parents=True, exist_ok=True)
-    return fallback
+        import tempfile
+        cred_dir = Path(tempfile.gettempdir()) / "xiaoda-agent" / "credentials"
+        cred_dir.mkdir(parents=True, exist_ok=True)
+        return cred_dir
 
 def get_config_dir() -> Path:
     """获取配置目录（用于 provider_metadata.json、webui_overrides.json 等可写配置）。
@@ -391,6 +426,23 @@ def _ensure_workspace() -> None:
         ignore_names=("workspace",),
     )
 
+    # ── 6c11c84 迁移遗漏补全：小体积热路径目录从 U 盘/旧默认位置迁到系统盘 ──
+    # 升级前 STICKER_DIR/VOICE_REF_DIR/MEMORY_STATE_DIR/PLUGINS_CONFIG_DIR/CREDENTIALS
+    # 跟随 KIOXIA_DATA_DIR（U 盘）或旧默认 ~/.ai-agent/data；现在固定系统盘。
+    # _KIOXIA_BASE 未设 env 时即 ~/.ai-agent/data，两种来源一并覆盖。
+    # 用"按子项合并"而非整体跳过：目标目录可能已有旧内容（如 ~/.ai-agent/voice_refs
+    # 遗留 keli/nahida），整体跳过会导致 U 盘独有子目录（xiaoda/xiaoli）永不迁移。
+    for _sub, _name in (
+        ("credentials", "credentials"),
+        ("stickers", "stickers"),
+        ("xiaoli-stickers", "xiaoli-stickers"),
+        ("agent-stickers", "agent-stickers"),
+        ("voice_refs", "voice_refs"),
+        ("memory_state", "memory_state"),
+        ("plugins", "plugins"),
+    ):
+        _merge_dir(_KIOXIA_BASE / _sub, Path.home() / ".ai-agent" / _name, _name)
+
     # ── 数据迁移：frozen 模式下从 exe 目录迁移到用户目录 ──
     # 解决更新安装包导致数据丢失（"刷机"）的问题
     if getattr(sys, 'frozen', False):
@@ -426,19 +478,30 @@ def _ensure_workspace() -> None:
 CONFIG_DIR = Path.home() / ".ai-agent" / "config"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 AGENT_CONFIG_PATH = CONFIG_DIR / "agent.json5"
-STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "stickers", _FALLBACK_BASE / "stickers")
-XIAOLI_STICKER_DIR = _resolve_data_path(_KIOXIA_BASE / "xiaoli-stickers", _FALLBACK_BASE / "xiaoli-stickers")
+# ── 6c11c84 迁移遗漏补全：小体积热路径目录固定系统盘，仅数据库与大体积内容用 U 盘 ──
+# 每轮回复都要列表情包目录/读参考音频/读记忆状态/读插件配置，放 U 盘会拖慢响应
+# 且 U 盘拔出即失效（与 WORKSPACE_DIR/CONFIG_DIR 同一政策）。旧 U 盘数据由
+# _ensure_workspace() 幂等迁移到系统盘；大体积内容（files/media/tts_cache/logs）
+# 仍留在 U 盘（系统盘仅剩 3.8G，eMMC 空间有限）。
+STICKER_DIR = Path.home() / ".ai-agent" / "stickers"
+STICKER_DIR.mkdir(parents=True, exist_ok=True)
+XIAOLI_STICKER_DIR = Path.home() / ".ai-agent" / "xiaoli-stickers"
+XIAOLI_STICKER_DIR.mkdir(parents=True, exist_ok=True)
 # 通用智能体表情包根目录：每个子智能体的表情包存放在 {AGENT_STICKER_BASE}/{agent_name}/
-AGENT_STICKER_BASE = _resolve_data_path(_KIOXIA_BASE / "agent-stickers", _FALLBACK_BASE / "agent-stickers")
+AGENT_STICKER_BASE = Path.home() / ".ai-agent" / "agent-stickers"
+AGENT_STICKER_BASE.mkdir(parents=True, exist_ok=True)
 FILE_DIR = _resolve_data_path(_KIOXIA_BASE / "files", _FALLBACK_BASE / "files")
 # 媒体目录（用户上传图片、生成的 TTS/图片/视频、壁纸等可写资源）
 MEDIA_DIR = _resolve_data_path(_KIOXIA_BASE / "media", _FALLBACK_BASE / "media")
-# 参考音频目录（用户上传的 TTS 参考音频，按 agent 分子目录）
-VOICE_REF_DIR = _resolve_data_path(_KIOXIA_BASE / "voice_refs", _FALLBACK_BASE / "voice_refs")
-# 记忆状态目录（记忆编码状态等运行时可写数据）
-MEMORY_STATE_DIR = _resolve_data_path(_KIOXIA_BASE / "memory_state", _FALLBACK_BASE / "memory_state")
-# 插件配置目录
-PLUGINS_CONFIG_DIR = _resolve_data_path(_KIOXIA_BASE / "plugins", _FALLBACK_BASE / "plugins")
+# 参考音频目录（用户上传的 TTS 参考音频，按 agent 分子目录）——每次 TTS 热读，迁系统盘
+VOICE_REF_DIR = Path.home() / ".ai-agent" / "voice_refs"
+VOICE_REF_DIR.mkdir(parents=True, exist_ok=True)
+# 记忆状态目录（记忆编码状态等运行时可写数据）——高频读写，迁系统盘
+MEMORY_STATE_DIR = Path.home() / ".ai-agent" / "memory_state"
+MEMORY_STATE_DIR.mkdir(parents=True, exist_ok=True)
+# 插件配置目录——启动与鉴权读取，迁系统盘
+PLUGINS_CONFIG_DIR = Path.home() / ".ai-agent" / "plugins"
+PLUGINS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 # 子 Agent 配置目录（人格文件、配置 JSON）
 # 从统一 CONFIG_DIR 派生，确保与 AGENT_CONFIG_PATH 和 _init_user_resources 同源
 AGENTS_CONFIG_DIR = CONFIG_DIR / "agents"
