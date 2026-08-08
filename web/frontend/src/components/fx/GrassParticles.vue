@@ -126,8 +126,8 @@ function frame(now: number) {
     p.drift += 0.004
     p.x += p.vx + Math.sin(p.drift) * 0.3
     p.y += p.vy + Math.cos(p.drift * 0.7) * 0.15
-    // 鼠标斥力
-    const dx = p.x - mouseX, dy = p.y - mouseY
+    // 鼠标斥力（鼠标坐标是 CSS 像素，粒子是 canvas 内部坐标，需换算）
+    const dx = p.x - mouseX * RENDER_SCALE, dy = p.y - mouseY * RENDER_SCALE
     const d2 = dx * dx + dy * dy
     if (d2 < 6400 && d2 > 1) {
       const f = (80 - Math.sqrt(d2)) / 80 * 0.8

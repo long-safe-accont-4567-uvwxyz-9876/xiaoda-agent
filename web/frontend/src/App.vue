@@ -63,16 +63,24 @@ function stopWatermarkGuard() {
   document.removeEventListener('visibilitychange', onVisibilityChange)
 }
 
-// 简单 GPU 能力检测：如果 canvas getContext('webgl') 失败或 renderer 包含 SwiftShader/llvmpipe，标记为低性能
+// GPU 能力检测：
+// 1. WebGL 不可用 → 低性能
+// 2. 软件渲染（SwiftShader/llvmpipe/...）→ 低性能
+// 3. 集成显卡/核显（Intel UHD/Iris/HD、AMD 纯 Radeon Graphics）→ 低性能：
+//    Chromium 的 backdrop-filter 实时模糊 + Canvas/WebGL 全屏动画在核显上
+//    极易把 GPU 占满（独显机型可正常流畅运行，不做降级）
 function detectLowGpu() {
   try {
     const canvas = document.createElement('canvas')
     const gl = (canvas.getContext('webgl') || canvas.getContext('experimental-webgl')) as WebGLRenderingContext | null
     if (!gl) return true
     const debugInfo = gl.getExtension('WEBGL_debug_renderer_info')
-    const renderer = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : ''
-    // SwiftShader / llvmpipe / 软件渲染标记为低性能
+    const renderer = debugInfo ? String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)) : ''
+    // 软件渲染标记为低性能
     if (/swiftshader|llvmpipe|software|microsoft basic/i.test(renderer)) return true
+    // 核显/集成 GPU 标记为低性能（GPU 满载重灾区）
+    if (/intel.*(uhd|iris|hd graphics)/i.test(renderer)) return true
+    if (/^amd radeon(\(tm\))? graphics$/i.test(renderer.trim())) return true
     return false
   } catch {
     return false

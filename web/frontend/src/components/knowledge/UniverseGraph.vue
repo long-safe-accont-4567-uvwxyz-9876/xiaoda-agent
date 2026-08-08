@@ -496,6 +496,8 @@ function startStarLoop() {
   if (starRAF) return
   const loop = () => {
     if (destroyed) return
+    // 窗口隐藏/最小化：浏览器通常自动暂停 rAF，这里显式兜底
+    if (document.hidden) return
     for (const layer of starLayers) {
       layer.points.rotation.y += layer.speed
       layer.points.rotation.x += layer.speed * 0.3
@@ -667,6 +669,8 @@ const selectedRelations = computed(() => {
 onMounted(() => {
   webglUnavailable.value = !detectWebGL()
   ws.on('knowledge_graph_changed', onGraphChanged)
+  // 窗口隐藏/最小化：显式暂停 3d-force-graph 引擎（防 WebView2 rAF 节流边缘情况）
+  document.addEventListener('visibilitychange', onVisibility)
 
   // ResizeObserver：模态由 display 切换，容器尺寸从 0 变非 0 时再初始化
   if (containerEl.value) {
@@ -681,9 +685,17 @@ onMounted(() => {
   }
 })
 
+function onVisibility() {
+  const g = graph.value
+  if (!g) return
+  if (document.hidden) g.pauseAnimation()
+  else g.resumeAnimation()
+}
+
 onBeforeUnmount(() => {
   destroyed = true
   ws.off('knowledge_graph_changed', onGraphChanged)
+  document.removeEventListener('visibilitychange', onVisibility)
   if (idleTimer) clearTimeout(idleTimer)
   if (retryTimer) clearTimeout(retryTimer)
   if (debounceTimer) clearTimeout(debounceTimer)

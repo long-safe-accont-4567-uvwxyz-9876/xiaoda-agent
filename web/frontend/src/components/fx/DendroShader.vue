@@ -113,6 +113,8 @@ function init() {
 function animate() {
   raf = requestAnimationFrame(animate)
   if (!renderer || !scene || !camera || !mesh || !clock) return
+  // 窗口隐藏/最小化：浏览器通常自动暂停 rAF，这里显式兜底跳过渲染
+  if (document.hidden) return
 
   const material = mesh.material as THREE.ShaderMaterial
   material.uniforms.time.value = clock.getElapsedTime()

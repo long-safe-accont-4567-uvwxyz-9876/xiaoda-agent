@@ -21,10 +21,21 @@
     var(--shadow-sm, 0 2px 8px rgba(0, 0, 0, 0.3));
 }
 
-/* 弱 GPU 设备降级：移除 backdrop-filter，避免 GPU 过载 */
+/* 弱 GPU 设备（含核显）降级：blur 从 10-16px 降档到 4px，保留玻璃质感但
+   大幅降低 backdrop-filter 实时模糊开销（模糊半径小 → 采样 kernel 与重算成本骤降）；
+   背景不透明度同步提升补偿清晰度。 */
 body.low-gpu .glass-panel {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
+  backdrop-filter: blur(4px) !important;
+  -webkit-backdrop-filter: blur(4px) !important;
+  background: rgba(20, 40, 28, 0.62) !important;
+}
+/* 常驻/高频组件统一降档（TopBar/SideBar 常驻，ModelSelector/终端 FAB 弹层） */
+body.low-gpu .topbar,
+body.low-gpu .sidebar,
+body.low-gpu .model-panel,
+body.low-gpu .term-fab {
+  backdrop-filter: blur(4px) !important;
+  -webkit-backdrop-filter: blur(4px) !important;
 }
 
 .glass-panel-hover:hover {

@@ -114,6 +114,7 @@ function enable() {
   window.addEventListener('pointerup', onUp, { passive: true })
   document.documentElement.addEventListener('mouseleave', onLeave)
   document.documentElement.addEventListener('mouseenter', onEnter)
+  document.addEventListener('visibilitychange', onVisibility)
   raf = requestAnimationFrame(loop)
 }
 
@@ -128,7 +129,18 @@ function disable() {
   window.removeEventListener('pointerup', onUp)
   document.documentElement.removeEventListener('mouseleave', onLeave)
   document.documentElement.removeEventListener('mouseenter', onEnter)
+  document.removeEventListener('visibilitychange', onVisibility)
   cancelAnimationFrame(raf)
+}
+
+// 窗口隐藏/最小化时停 rAF（浏览器通常自动节流，这里显式兜底，防 WebView2 边缘情况）
+function onVisibility() {
+  if (document.hidden) {
+    cancelAnimationFrame(raf)
+    raf = 0
+  } else if (active.value && !raf) {
+    raf = requestAnimationFrame(loop)
+  }
 }
 
 onMounted(() => {
