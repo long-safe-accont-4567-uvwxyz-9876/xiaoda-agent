@@ -62,6 +62,17 @@ def _detect_fs_type(path: Path) -> str:
 class DatabaseManager:
     """管理 SQLite 数据库连接与各子 DB 模块的生命周期。"""
 
+    def _db_ro_uri(self) -> str:
+        """生成 SQLite 只读连接 URI（跨平台安全）。
+
+        Windows 路径含盘符+反斜杠（C:\\data\\agent.db），若用 f"file:{path}" 拼接，
+        SQLite URI 会把 "C:" 解析为 authority 导致连接失败 → 读池/只读连接失效 →
+        检索回退主写连接（本次阻塞修复在 Windows 上失效）。Path.as_uri() 生成
+        file:///C:/data/agent.db 标准形式；Linux 生成 file:///home/...，统一安全。
+        """
+        p = self.db_path if self.db_path.is_absolute() else self.db_path.resolve()
+        return p.as_uri() + "?mode=ro"
+
     def __init__(self, db_path: str | Path | None = None) -> None:
         self.db_path = Path(db_path) if db_path else DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -184,7 +195,7 @@ class DatabaseManager:
             self._readonly_conn = None
         try:
             self._readonly_conn = await aiosqlite.connect(
-                f"file:{self.db_path}?mode=ro", uri=True)
+                self._db_ro_uri(), uri=True)
             self._readonly_conn.row_factory = aiosqlite.Row
             await self._readonly_conn.execute("PRAGMA query_only=1")
             await self._readonly_conn.execute("PRAGMA busy_timeout=2000")
@@ -204,7 +215,7 @@ class DatabaseManager:
             self._read_pool = []
         for _ in range(self._READ_POOL_SIZE):
             try:
-                _rc = await aiosqlite.connect(f"file:{self.db_path}?mode=ro", uri=True)
+                _rc = await aiosqlite.connect(self._db_ro_uri(), uri=True)
                 _rc.row_factory = aiosqlite.Row
                 await _rc.execute("PRAGMA query_only=1")
                 # 6000（原 5000）：检索 7 路通道并发 + 后台任务共享只读池，
