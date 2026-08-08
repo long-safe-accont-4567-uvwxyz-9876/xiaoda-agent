@@ -26,6 +26,71 @@ router = APIRouter(tags=["local-deploy"], dependencies=[Depends(get_current_user
 _DEVICE_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
 _DEVICE_CACHE_TTL = 300.0
 
+# CPU 占用采样（/proc/stat 差值法，跨调用计算）
+_CPU_SAMPLE: dict[str, Any] = {"ts": 0.0, "total": 0, "idle": 0}
+
+
+def _cpu_stats() -> dict:
+    """CPU 性能与实时占用：核数 / 频率 / 占用百分比（/proc/stat 差值）。"""
+    stats: dict[str, Any] = {"cores": None, "freq_mhz": None, "usage_pct": None}
+    try:
+        stats["cores"] = os.cpu_count() or 0
+    except Exception:  # noqa: BLE001
+        pass
+    # 频率：/proc/cpuinfo "cpu MHz" → cpufreq sysfs（kHz）→ 未知
+    try:
+        with open("/proc/cpuinfo", "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if line.startswith("cpu MHz"):
+                    stats["freq_mhz"] = round(float(line.split(":")[1].strip()))
+                    break
+    except (OSError, ValueError):  # noqa: BLE001
+        pass
+    if not stats["freq_mhz"]:
+        # 额定频率：cpuinfo_max_freq（性能规格）优先，回退当前频率
+        try:
+            for i in range(64):
+                for f in ("cpuinfo_max_freq", "cpuinfo_cur_freq"):
+                    p = f"/sys/devices/system/cpu/cpu{i}/cpufreq/{f}"
+                    if os.path.exists(p):
+                        with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                            stats["freq_mhz"] = round(int(fh.read().strip()) / 1000)
+                        break
+                if stats["freq_mhz"]:
+                    break
+        except (OSError, ValueError):  # noqa: BLE001
+            pass
+    # 占用百分比：两次采样间 (1 - idle/total) × 100
+    try:
+        with open("/proc/stat", "r", encoding="utf-8", errors="ignore") as f:
+            parts = f.readline().split()
+        nums = [int(x) for x in parts[1:]]
+        idle = nums[3] + (nums[4] if len(nums) > 4 else 0)
+        total = sum(nums)
+        now = time.monotonic()
+        prev = _CPU_SAMPLE
+        if prev["total"] and (now - prev["ts"]) > 0.2:
+            dt = total - prev["total"]
+            di = idle - prev["idle"]
+            if dt > 0:
+                stats["usage_pct"] = round((1 - di / dt) * 100, 1)
+        _CPU_SAMPLE.update(ts=now, total=total, idle=idle)
+    except (OSError, ValueError):  # noqa: BLE001
+        pass
+    return stats
+
+
+def _npu_stats(vs: Any) -> dict:
+    """NPU 实时状态（常驻流 / 占用 / 最近推理耗时），从向量库 provider 读取。"""
+    d = {"resident": False, "busy": False, "last_call_ms": None, "calls": 0}
+    try:
+        prov = getattr(vs, "_local_provider", None)
+        if prov is not None and hasattr(prov, "npu_stats"):
+            d.update(prov.npu_stats())
+    except Exception as e:  # noqa: BLE001
+        logger.warning("local_deploy.npu_stats_failed error={}", str(e))
+    return d
+
 
 def _detect_cpu_model() -> str:
     """读取 CPU 型号：Linux 依次尝试 model name / Hardware / 设备树 / Processor。"""
@@ -161,9 +226,18 @@ def _fallback_status() -> dict:
 
 @router.get("/local-deploy/devices", response_model=Envelope[dict])
 async def local_deploy_devices(request: Request) -> Any:
-    """算力设备检测：CPU / NPU / GPU 探测结果 + 当前持久化设备。"""
+    """算力设备检测：CPU / NPU / GPU 探测结果 + 当前持久化设备 + 实时占用。"""
     data = _detect_devices()
     data["runtime_backend"] = os.getenv("LOCAL_EMBED_BACKEND", "auto")
+    vs = _get_vector_store(request)
+    # 附加实时性能/占用数据（不做 5 分钟缓存，保持页面 5s 轮询下的新鲜度）
+    for dev in data.get("devices", []):
+        if dev["id"] == "cpu":
+            dev["stats"] = _cpu_stats()
+        elif dev["id"] == "npu":
+            dev["stats"] = _npu_stats(vs)
+        else:
+            dev["stats"] = {"status": "unavailable"}
     return Envelope(data=data)
 
 

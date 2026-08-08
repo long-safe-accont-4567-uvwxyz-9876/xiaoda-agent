@@ -112,6 +112,9 @@ class NpuEmbeddingProvider:
         self._load_lock = threading.Lock()
         self._io_lock = threading.Lock()
         self._pending = b""
+        self._busy = False
+        self._last_ms = 0.0
+        self._calls = 0
 
     # ── 加载 ──────────────────────────────────────────────
 
@@ -122,6 +125,21 @@ class NpuEmbeddingProvider:
     @property
     def dimensions(self) -> int:
         return self._dimensions
+
+    @property
+    def busy(self) -> bool:
+        """当前是否有推理任务在占用 NPU 流。"""
+        return self._busy
+
+    @property
+    def last_call_ms(self) -> float:
+        """最近一次 NPU 推理耗时（毫秒，0 = 尚无调用）。"""
+        return self._last_ms
+
+    @property
+    def call_count(self) -> int:
+        """NPU 累计推理次数。"""
+        return self._calls
 
     def load(self) -> bool:
         if self._loaded:
@@ -396,6 +414,15 @@ class AdaptiveEmbeddingProvider:
     def embed(self, text: str) -> list[float]:
         batch = self.encode_batch([text])
         return batch[0] if batch else []
+
+    def npu_stats(self) -> dict:
+        """NPU 实时状态（供算力设备检测页展示占用/性能）。"""
+        return {
+            "resident": self._npu.ready,
+            "busy": self._npu.busy,
+            "last_call_ms": self._npu.last_call_ms,
+            "calls": self._npu.call_count,
+        }
 
     def close(self) -> None:
         self._npu.close()

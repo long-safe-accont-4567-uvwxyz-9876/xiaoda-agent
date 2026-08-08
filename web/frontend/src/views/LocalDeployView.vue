@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { NButton, NTag, NSelect, NModal, useMessage, type SelectOption } from 'naive-ui'
+import { ref, computed, onMounted, onBeforeUnmount, h } from 'vue'
+import { NButton, NTag, NSelect, NModal, NTabs, NTabPane, useMessage, type SelectOption } from 'naive-ui'
 import { get, post } from '../api'
 import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
@@ -84,6 +84,23 @@ const deviceOptions = computed<SelectOption[]>(() =>
     dev: d,
   })),
 )
+
+// 设备卡状态：使用中 / 空闲 / 不可用
+function devStatusClass(d: any) {
+  if (d.id === currentDevice.value) return 'on'
+  return d.available ? 'idle' : 'off'
+}
+function devStatusText(d: any) {
+  if (d.id === currentDevice.value) return t('localDeployView.deviceInUse')
+  return d.available ? t('localDeployView.deviceIdle') : t('localDeployView.deviceUnavailable')
+}
+// 部署页设备下拉：两行渲染（名称 · 型号 / 描述）
+function renderDeviceLabel(option: any) {
+  return h('div', { class: 'device-option' }, [
+    h('span', { class: 'device-option-name' }, option.label as string),
+    option.dev?.desc ? h('span', { class: 'device-option-desc' }, option.dev.desc as string) : null,
+  ])
+}
 
 async function refreshDevices() {
   devicesLoading.value = true
@@ -171,21 +188,24 @@ onBeforeUnmount(() => { if (timer) window.clearInterval(timer) })
                 <n-tag :type="running ? 'success' : 'default'" size="small">
                   {{ running ? t('localDeployView.localRunning') : t('localDeployView.localStopped') }}
                 </n-tag>
-                <span v-if="mode === 'local'" class="backend-hint">
-                  {{ backend === 'cpu' ? t('localDeployView.backendCpu') : t('localDeployView.backendNpu') }}
-                </span>
-                <span v-if="mode === 'local'" class="device-pick">
-                  <span class="device-pick-label">{{ t('localDeployView.devicePick') }}</span>
-                  <n-select
-                    :value="currentDevice"
-                    :options="deviceOptions"
-                    :loading="devicesLoading"
-                    :disabled="devicesLoading"
-                    size="small"
-                    placeholder="CPU / NPU"
-                    class="device-pick-select"
-                    @update:value="onDeviceChange"
-                  />
+                <span v-if="mode === 'local'" class="backend-row">
+                  <span class="backend-hint">
+                    {{ backend === 'cpu' ? t('localDeployView.backendCpu') : t('localDeployView.backendNpu') }}
+                  </span>
+                  <span class="device-pick">
+                    <span class="device-pick-label">{{ t('localDeployView.devicePick') }}</span>
+                    <n-select
+                      :value="currentDevice"
+                      :options="deviceOptions"
+                      :loading="devicesLoading"
+                      :disabled="devicesLoading"
+                      size="small"
+                      placeholder="CPU / NPU"
+                      class="device-pick-select"
+                      :render-label="renderDeviceLabel"
+                      @update:value="onDeviceChange"
+                    />
+                  </span>
                 </span>
                 <n-button v-if="mode === 'local'" size="small" type="primary"
                           :loading="loading" :disabled="running" @click.stop="startEngine">
@@ -227,11 +247,41 @@ onBeforeUnmount(() => { if (timer) window.clearInterval(timer) })
                  class="device-card" :class="{ available: d.available, active: d.id === currentDevice }">
               <div class="dev-head">
                 <span class="dev-name">{{ d.name }}</span>
-                <n-tag v-if="d.id === currentDevice" type="success" size="small">✓ {{ t('localDeployView.currentDevice') }}</n-tag>
-                <n-tag v-else-if="!d.available" type="default" size="small">{{ t('localDeployView.deviceUnavailable') }}</n-tag>
+                <span class="dev-status" :class="devStatusClass(d)">
+                  <span class="status-dot"></span>
+                  {{ devStatusText(d) }}
+                </span>
               </div>
               <div class="dev-model">{{ d.model }}</div>
-              <div class="dev-desc">{{ d.desc }}</div>
+
+              <!-- CPU：性能数据 + 实时占用 -->
+              <div v-if="d.id === 'cpu' && d.stats" class="dev-stats">
+                <div class="stat-line">
+                  {{ t('localDeployView.cores') }}: {{ d.stats.cores ?? '—' }}
+                  <span class="stat-sep">·</span>
+                  {{ t('localDeployView.freq') }}: {{ d.stats.freq_mhz ?? '—' }} MHz
+                </div>
+                <div class="usage-bar">
+                  <div class="usage-fill" :style="{ width: (d.stats.usage_pct ?? 0) + '%' }"></div>
+                </div>
+                <div class="stat-line usage-text">
+                  {{ t('localDeployView.usage') }}: {{ d.stats.usage_pct ?? '—' }}%
+                </div>
+              </div>
+
+              <!-- NPU：算力 + 常驻流状态 + 最近推理 -->
+              <div v-else-if="d.id === 'npu' && d.stats" class="dev-stats">
+                <div class="stat-line">
+                  3 TOPS INT8
+                  <span class="stat-sep">·</span>
+                  {{ d.stats.resident ? t('localDeployView.npuResident') : t('localDeployView.npuNotResident') }}
+                </div>
+                <div class="stat-line">
+                  {{ t('localDeployView.lastCall') }}: {{ d.stats.last_call_ms != null ? d.stats.last_call_ms + ' ms' : '—' }}
+                  <span class="stat-sep">·</span>
+                  {{ t('localDeployView.callCount') }}: {{ d.stats.calls ?? 0 }}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -347,6 +397,12 @@ onBeforeUnmount(() => { if (timer) window.clearInterval(timer) })
   color: var(--moon-dim);
   opacity: 0.8;
 }
+.backend-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
 .must-start {
   margin: 8px 0 0;
   font-size: 12px;
@@ -430,11 +486,86 @@ onBeforeUnmount(() => { if (timer) window.clearInterval(timer) })
   opacity: 0.9;
   word-break: break-all;
 }
-.dev-desc {
+.dev-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  flex-shrink: 0;
+}
+.dev-status.on {
+  color: var(--dendro, #7fd650);
+}
+.dev-status.on .status-dot {
+  background: var(--dendro, #7fd650);
+  box-shadow: 0 0 6px rgba(127, 214, 80, 0.6);
+}
+.dev-status.idle {
+  color: var(--moon-dim);
+  opacity: 0.85;
+}
+.dev-status.idle .status-dot {
+  background: rgba(127, 214, 80, 0.45);
+}
+.dev-status.off {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+/* 设备卡性能 / 占用数据 */
+.dev-stats {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.09);
+}
+.stat-line {
   font-size: 11.5px;
   color: var(--moon-dim);
-  line-height: 1.6;
-  opacity: 0.72;
+  opacity: 0.85;
+  line-height: 1.7;
+  word-break: break-all;
+}
+.stat-sep {
+  margin: 0 4px;
+  opacity: 0.5;
+}
+.usage-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  margin: 6px 0 2px;
+}
+.usage-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, rgba(127, 214, 80, 0.5), var(--dendro, #7fd650));
+  transition: width 0.6s ease;
+}
+.usage-text {
+  font-size: 11px;
+}
+
+/* 部署页设备下拉：两行渲染（名称 · 型号 / 描述） */
+.device-option {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+  padding: 2px 0;
+}
+.device-option-name {
+  font-size: 13px;
+}
+.device-option-desc {
+  font-size: 11px;
+  color: var(--moon-dim);
+  opacity: 0.7;
 }
 .runtime-hint {
   margin-top: 16px;
