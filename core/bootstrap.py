@@ -270,8 +270,9 @@ class AgentCoreBootstrapper:
         embed_api_key = os.getenv("EMBED_API_KEY", "")
         embed_base_url = os.getenv("EMBED_BASE_URL", "https://api.siliconflow.cn/v1")
         # 本地推理模式（EMBED_MODE=local）不依赖 API Key，同样创建向量存储
+        # 默认 local：安装包首次运行直接启用内置本地 BGE 模型（无 API Key 也可用）
         # WebUI 本地部署页持久化的引擎模式优先（webui_overrides.json local_deploy.mode）
-        embed_mode = os.getenv("EMBED_MODE", "remote")
+        embed_mode = os.getenv("EMBED_MODE", "local")
         try:
             import json as _json
             from config import get_config_dir
@@ -297,8 +298,25 @@ class AgentCoreBootstrapper:
                 logger.info("vector_store.enabled" +
                             (f" mode={embed_mode}" if embed_mode == "local" else ""))
             except Exception as e:
-                logger.warning(f"vector_store.init_failed: {e}")
-                core._vec_store = None
+                # 老用户升级保护：本地库维度不匹配（如旧远程库 1024 维 vs 本地 512 维）等
+                # local 初始化失败时，若配置了远程 API Key 则自动回退 remote，避免向量记忆失效
+                if embed_mode == "local" and embed_api_key:
+                    logger.warning("vector_store.local_init_failed_fallback_remote error={}", str(e))
+                    try:
+                        core._vec_store = VectorStore(
+                            db_path=str(core.db.db_path.parent / (core.db.db_path.stem + "_vec.db")),
+                            embed_api_key=embed_api_key,
+                            embed_base_url=embed_base_url,
+                            embed_mode="remote",
+                        )
+                        await core._vec_store.init()
+                        logger.info("vector_store.enabled mode=remote (fallback)")
+                    except Exception as e2:
+                        logger.warning(f"vector_store.init_failed: {e2}")
+                        core._vec_store = None
+                else:
+                    logger.warning(f"vector_store.init_failed: {e}")
+                    core._vec_store = None
 
     # ── 认知系统 ──────────────────────────────────────────
 

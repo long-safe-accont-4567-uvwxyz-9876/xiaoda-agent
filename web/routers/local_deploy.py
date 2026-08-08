@@ -29,7 +29,7 @@ def _get_vector_store(request: Request) -> Any:
 def _fallback_status() -> dict:
     """向量库不可用时返回的环境状态（只读，页面仍可展示）。"""
     return {
-        "mode": os.getenv("EMBED_MODE", "remote"),
+        "mode": os.getenv("EMBED_MODE", "local"),
         "engine_running": False,
         "backend": os.getenv("LOCAL_EMBED_BACKEND", "auto"),
         "api_configured": bool(

@@ -135,7 +135,7 @@ class VectorStore:
         self._embed_base_url = embed_base_url
         self._embed_model = embed_model
         self._dimensions = dimensions
-        self._embed_mode = embed_mode or os.getenv("EMBED_MODE", "remote")
+        self._embed_mode = embed_mode or os.getenv("EMBED_MODE", "local")
         self._local_model_dir = local_model_dir or _default_local_model_dir()
         self._local_query_prefix = local_query_prefix or os.getenv("LOCAL_EMBED_QUERY_PREFIX", "")
         self._local_provider = None
