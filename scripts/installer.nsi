@@ -35,10 +35,12 @@ SetCompressor /SOLID lzma
 !define MUI_WELCOMEPAGE_TEXT "本程序将安装小妲 Agent 到你的用户目录（无需管理员权限）。$\n$\n点击「下一步」继续。"
 !define MUI_INSTFILESPAGE_FINISH_HEADER_TEXT "安装完成"
 !define MUI_INSTFILESPAGE_FINISH_HEADER_SUBTEXT "小妲 Agent 已成功安装到你的计算机"
-; 安装完成后可选运行自检
-!define MUI_FINISHPAGE_RUN "$INSTDIR\xiaoda-agent.exe"
-!define MUI_FINISHPAGE_RUN_PARAMETERS "doctor"
-!define MUI_FINISHPAGE_RUN_TEXT "运行自检（推荐）"
+; 安装完成后可选运行自检：用 doctor.bat（详细输出 + chcp 65001 防中文乱码），
+; 加 --launch：自检结束自动启动主程序（v0.5.60 修复：原直接跑 exe doctor，
+; 无 pause 导致窗口一闪而过，也不会自动启动）
+!define MUI_FINISHPAGE_RUN "$INSTDIR\doctor.bat"
+!define MUI_FINISHPAGE_RUN_PARAMETERS "--launch"
+!define MUI_FINISHPAGE_RUN_TEXT "运行自检并启动（推荐）"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -132,7 +134,30 @@ WriteIniStr "$INSTDIR\${PRODUCT_NAME}.url" "InternetShortcut" "URL" "https://git
 SectionEnd
 
 Section -Post
+; ── 创建卸载程序 ──
+; 卡顿根因（v0.5.60 修复）：本安装包解压后 600MB+ / 数千个文件（PyInstaller 依赖
+; + 前端 assets + 95MB 本地模型 + onnxruntime），WriteUninstaller 需把全部已装
+; 文件清单写入 uninstall.exe，再被 Windows Defender 实时扫描，可能耗时 1-2 分钟，
+; 界面看起来像"卡死在最后一步"。处理：
+;   1) 先删旧 uninstall.exe：升级安装时旧文件可能被占用/杀软锁定 → WriteUninstaller
+;      会一直等待，先删除可避免真卡死
+;   2) 失败重试一次
+;   3) DetailPrint 明确提示，让用户知道这一步在做什么而不是"假死"
+ClearErrors
+Delete "$INSTDIR\uninstall.exe"
+${If} ${Errors}
+  DetailPrint "[i] 旧卸载程序被占用，等待后重试..."
+  Sleep 2000
+  Delete "$INSTDIR\uninstall.exe"
+${EndIf}
+DetailPrint "[i] 正在创建卸载程序（需扫描已装文件，首次约 1-2 分钟，请稍候）..."
 WriteUninstaller "$INSTDIR\uninstall.exe"
+${If} ${Errors}
+  DetailPrint "[!] 卸载程序创建失败，3 秒后重试..."
+  Sleep 3000
+  WriteUninstaller "$INSTDIR\uninstall.exe"
+${EndIf}
+DetailPrint "[i] 卸载程序创建完成"
 ; per-user 安装：注册表写 HKCU 而非 HKLM（无需管理员权限）
 WriteRegStr HKCU "Software\${PRODUCT_NAME}" "InstallDir" "$INSTDIR"
 WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "DisplayName" "${PRODUCT_NAME}"

@@ -15,12 +15,15 @@ echo   ^|   Zero API calls, finishes in ~2s      ^|
 echo   ==========================================
 echo.
 
-:: Parse args (--json / --fix / none)
+:: Parse args (--json / --fix / --launch / none)
 set "ARGS="
+set "LAUNCH=0"
 if /i "%~1"=="--json" set "ARGS=--json"
 if /i "%~1"=="json" set "ARGS=--json"
 if /i "%~1"=="--fix" set "ARGS=--fix"
 if /i "%~1"=="fix" set "ARGS=--fix"
+if /i "%~1"=="--launch" set "LAUNCH=1"
+if /i "%~1"=="launch" set "LAUNCH=1"
 
 :: Force UTF-8 IO for the Python process (prevents errors on Chinese Windows)
 set PYTHONIOENCODING=utf-8
@@ -99,5 +102,28 @@ if !EXITCODE! equ 0 (
     echo     - Run "doctor.bat json" for a JSON report
 )
 echo.
+
+:: --launch 模式（安装完成页"运行自检并启动"）：
+:: 自检结束后自动启动主程序，窗口 8 秒后自动关闭，不阻塞用户。
+if "!LAUNCH!"=="1" (
+    if defined EXE_PATH (
+        echo   [i] Self-check finished, starting Xiaoda Agent...
+        echo.
+        start "" "!EXE_PATH!"
+        if !errorlevel! equ 0 (
+            echo   [OK] Xiaoda Agent is starting up.
+        ) else (
+            echo   [FAIL] Failed to start Xiaoda Agent, please run "xiaoda.bat" manually.
+        )
+    ) else (
+        echo   [WARN] Packaged executable not found, skipping auto-launch.
+        echo         Please run "xiaoda.bat" to start Xiaoda Agent.
+    )
+    echo.
+    echo   This window will close automatically in 8 seconds...
+    timeout /t 8 /nobreak >nul
+    exit /b !EXITCODE!
+)
+
 pause
 exit /b !EXITCODE!
