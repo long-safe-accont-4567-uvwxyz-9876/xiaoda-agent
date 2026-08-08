@@ -92,8 +92,12 @@ for _script in ('xiaoda.bat', 'auto-update.bat', 'auto-update.ps1', 'open-browse
 
 # ---------------------------------------------------------------------------
 # Collect data files from packages that ship non-Python assets
+# onnxruntime/tokenizers 显式收集（不依赖 hooks-contrib 自动 hook 兜底）：
+# - onnxruntime: capi DLL/SO 必须进包，否则本地 embed 在打包版静默降级远程 API
+# - tokenizers: Rust 扩展（tokenizers*.pyd/.so）+ 少量数据文件
 # ---------------------------------------------------------------------------
-for pkg in ('jieba', 'psutil', 'certifi', 'openai', 'PIL', 'sqlite_vec', 'webview'):
+for pkg in ('jieba', 'psutil', 'certifi', 'openai', 'PIL', 'sqlite_vec', 'webview',
+            'onnxruntime', 'tokenizers'):
     try:
         datas += collect_data_files(pkg)
     except Exception:
@@ -111,6 +115,10 @@ hiddenimports = [
     'openai',
     'pydantic',
     'jieba',
+    # 本地 embedding 运行时（local_embed.py 顶层 import；显式声明双保险）
+    'onnxruntime',
+    'onnxruntime.capi',
+    'tokenizers',
     'pilk',
     'yaml',
     'pdfplumber',
@@ -474,11 +482,16 @@ for pkg in ('openai', 'pydantic', 'starlette', 'anyio', 'uvicorn', 'psutil', 'ht
 
 # 确保 pilk 的 C 扩展二进制（_pilk.so/.pyd）被正确打包
 # pilk 在 try/except 中懒加载，PyInstaller 静态分析容易漏掉 C 扩展
+# onnxruntime: capi 下的 onnxruntime.dll/.so 用 collect_dynamic_libs 强制进 binaries
+#              （仅 collect_data_files 可能被当 data 处理，加载路径不一致导致失败）
+# tokenizers: Rust 扩展二进制（tokenizers*.pyd/.so）双保险收集
 binaries = []
 try:
     from PyInstaller.utils.hooks import collect_dynamic_libs
     binaries += collect_dynamic_libs('pilk')
     binaries += collect_dynamic_libs('sqlite_vec')
+    binaries += collect_dynamic_libs('onnxruntime')
+    binaries += collect_dynamic_libs('tokenizers')
 except Exception:
     pass
 

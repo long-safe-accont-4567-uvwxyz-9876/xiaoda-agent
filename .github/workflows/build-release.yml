@@ -213,6 +213,54 @@ jobs:
           fi
           echo "Pillow C extension verified OK"
 
+      - name: Verify onnxruntime & tokenizers bundled (local embed)
+        shell: bash
+        run: |
+          # 本地向量模型（bge-small-zh-v1.5）是安装包核心功能，onnxruntime DLL/SO、
+          # tokenizers Rust 扩展、模型文件三者缺一不可；缺失时本地 embed 会静默
+          # 降级远程 API，用户无法察觉。此步骤做强制打包验证。
+          echo "=== Checking onnxruntime native library bundled ==="
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ORT=$(find dist/xiaoda-agent -name "onnxruntime*.dll" -print -quit)
+          else
+            ORT=$(find dist/xiaoda-agent -name "libonnxruntime*.so*" -print -quit)
+          fi
+          if [ -z "$ORT" ]; then
+            echo "FATAL: onnxruntime native library NOT bundled! Local embed silently falls back to remote API."
+            find dist/xiaoda-agent -iname "*onnxruntime*" 2>/dev/null | head -20 || true
+            exit 1
+          fi
+          echo "OK: onnxruntime native library found:"
+          ls -lh "$ORT"
+
+          echo ""
+          echo "=== Checking tokenizers Rust extension bundled ==="
+          TOK=$(find dist/xiaoda-agent \( -name "tokenizers*.pyd" -o -name "tokenizers*.so" \) 2>/dev/null | head -3)
+          if [ -z "$TOK" ]; then
+            echo "FATAL: tokenizers Rust extension NOT bundled!"
+            find dist/xiaoda-agent -iname "*tokenizers*" 2>/dev/null | head -20 || true
+            exit 1
+          fi
+          echo "OK: tokenizers Rust extension found:"
+          echo "$TOK" | while read -r f; do ls -lh "$f"; done
+
+          echo ""
+          echo "=== Checking local BGE model bundled ==="
+          MODEL=$(find dist/xiaoda-agent -path "*models/bge-small-zh-v1.5/onnx/model.onnx" -print -quit)
+          if [ -z "$MODEL" ]; then
+            echo "FATAL: bundled BGE model (onnx/model.onnx) NOT found!"
+            exit 1
+          fi
+          TOKJSON=$(find dist/xiaoda-agent -path "*models/bge-small-zh-v1.5/tokenizer.json" -print -quit)
+          if [ -z "$TOKJSON" ]; then
+            echo "FATAL: bundled BGE tokenizer.json NOT found!"
+            exit 1
+          fi
+          echo "OK: BGE model bundled:"
+          ls -lh "$MODEL" "$TOKJSON"
+          echo ""
+          echo "Local embed bundle verified OK"
+
       - name: Ensure assets bundled in dist
         shell: bash
         run: |

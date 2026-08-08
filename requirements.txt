@@ -16,7 +16,9 @@ Pillow>=10.4.0
 qrcode>=7.4.0
 
 # ── 数值计算 ──
-numpy>=1.26.0
+# numpy<3：onnxruntime 1.19+ 已支持 numpy 2.x（板端实测 1.28.0+numpy 2.4.6），
+# 但 numpy 3.x 尚未验证 ABI 兼容，锁上界防止未来漂移导致本地 embed 静默失效。
+numpy>=1.26.0,<3
 
 # ── CLI 美化 ──
 rich>=13.9.0
@@ -55,8 +57,10 @@ sqlite-vec>=0.1.0
 
 # ── 本地 Embedding（本地推理模式 EMBED_MODE=local 必需；缺失时降级远程 API）──
 # onnxruntime: CPU 推理 BGE-small-zh-v1.5（Windows 打包默认 CPU 推理）
+# 锁定 <2.0：onnxruntime 1.19 起才兼容 numpy 2.x；1.17/1.18 与 numpy 2 有 ABI 冲突，
+# 无上界会让 CI 装到任意版本，一旦破坏性版本发布，安装包本地模型会静默失效。
 # tokenizers: BGE 官方 tokenizer.json 加载（无需 transformers/torch）
-onnxruntime>=1.17.0
+onnxruntime>=1.19.0,<2.0
 tokenizers>=0.19.0
 
 # ── QQ Bot ──
