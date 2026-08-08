@@ -49,7 +49,7 @@ const stageText: Record<string, string> = {
       >
         <span class="chip-avatar">
           <img v-if="a.wallpaper" :src="a.wallpaper" class="chip-avatar-img"
-               @error="($event: Event) => { ($event.target as HTMLImageElement).style.display = 'none' }" />
+               @error="onAvatarError" />
           <template v-if="!a.wallpaper">{{ a.display_name.slice(0, 1) }}</template>
         </span>
         <span class="chip-name">{{ a.display_name }}</span>

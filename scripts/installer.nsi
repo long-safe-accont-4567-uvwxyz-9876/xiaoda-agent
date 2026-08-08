@@ -82,6 +82,43 @@ SetOverwrite on
 ; 关闭正在运行的实例，避免文件被锁定导致安装失败
 nsExec::ExecToStack 'powershell -NoProfile -Command "Stop-Process -Name xiaoda-agent -Force -ErrorAction SilentlyContinue"'
 ; 安装前清理旧的前端文件，避免 vite hash 文件名导致的缓存问题
+; ── v0.5.60 修复：RMDir 删除旧 dist 前，先备份旧版壁纸到用户媒体目录 ──
+; 旧架构（v0.5.5x）壁纸存在 exe 目录 web/dist/assets/wallpapers/，升级时若
+; 直接 RMDir 删除，用户自定义壁纸会永久丢失（config.py 启动迁移也找不到源）。
+; 这里复制到 $PROFILE\.ai-agent\media\wallpapers（与 MEDIA_DIR 一致），
+; 只复制目标不存在的文件，不覆盖用户已有壁纸。
+StrCpy $R2 "$INSTDIR\_internal\web\dist\assets\wallpapers"
+StrCpy $R3 "$PROFILE\.ai-agent\media\wallpapers"
+${If} ${FileExists} "$R2\*.*"
+  CreateDirectory "$R3"
+  FindFirst $R0 $R1 "$R2\*.*"
+  ${DoWhile} $R1 != ""
+    ${If} $R1 != "."
+    ${AndIf} $R1 != ".."
+      ${IfNot} ${FileExists} "$R3\$R1"
+        CopyFiles /SILENT "$R2\$R1" "$R3"
+      ${EndIf}
+    ${EndIf}
+    FindNext $R0 $R1
+  ${Loop}
+  FindClose $R0
+${EndIf}
+; 兼容旧版直接把 dist 放在安装根目录的结构
+StrCpy $R2 "$INSTDIR\web\dist\assets\wallpapers"
+${If} ${FileExists} "$R2\*.*"
+  CreateDirectory "$R3"
+  FindFirst $R0 $R1 "$R2\*.*"
+  ${DoWhile} $R1 != ""
+    ${If} $R1 != "."
+    ${AndIf} $R1 != ".."
+      ${IfNot} ${FileExists} "$R3\$R1"
+        CopyFiles /SILENT "$R2\$R1" "$R3"
+      ${EndIf}
+    ${EndIf}
+    FindNext $R0 $R1
+  ${Loop}
+  FindClose $R0
+${EndIf}
 RMDir /r "$INSTDIR\_internal\web\dist"
 RMDir /r "$INSTDIR\web\dist"
 File /r "dist\xiaoda-agent\*.*"

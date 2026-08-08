@@ -69,7 +69,8 @@ BUILTIN_EXCLUDED_TOOLS: dict[str, set[str]] = {
     "xiaolian": {"call_xiaoli", "call_xiaoda", "shell_command", "python_executor", "write_file"},
     "xiaoke": {"call_xiaoli", "call_xiaoda", "shell_command", "write_file"},
 }
-# 内置 Agent 默认背景板（统一使用无IP风险的 webui_background.jpg，用户可在 WebUI 自行更换）
+# 内置 Agent 默认壁纸（头像与壁纸同源：每 agent 一张专属图，首次安装即生效；
+# 用户可在 WebUI 自行更换。旧注释"统一 webui_background.jpg"为过期描述，已修正）
 DEFAULT_WALLPAPERS = {
     "xiaoda": "/media/wallpapers/xiaoda.jpg",
     "xiaoli": "/media/wallpapers/xiaoli.jpg",
@@ -79,6 +80,26 @@ DEFAULT_WALLPAPERS = {
 }
 # webui_background.jpg 也放到 media 路径，供 AgentBackdrop.vue DEFAULT_BG 使用
 _DEFAULT_BG_NAME = "webui_background.jpg"
+
+# 旧版 wallpaper 路径归一化（v0.5.60 修复）：
+# 旧架构壁纸是 vite 静态资源，配置里存 /assets/wallpapers/xxx.jpg、/assets/webui_background.jpg；
+# 新版壁纸是用户数据，走 /media/wallpapers/xxx.jpg（MEDIA_DIR，持久稳定）。
+# 配置残留旧路径会污染 API 返回：头像与背景各取所值导致不一致、升级后旧路径
+# 随 build 失效看起来像"壁纸被覆盖"。统一归一化为 /media/... 再返回/持久化。
+_WALLPAPER_ALIASES = (
+    ("/assets/wallpapers/", "/media/wallpapers/"),
+    ("/assets/", "/media/wallpapers/"),
+)
+
+
+def _normalize_wallpaper(url: str) -> str:
+    """将旧版壁纸路径归一化为 /media/wallpapers/...（用户媒体目录）。"""
+    if not url:
+        return url
+    for old, new in _WALLPAPER_ALIASES:
+        if url.startswith(old):
+            return new + url[len(old):]
+    return url
 
 
 def _ensure_default_wallpapers() -> None:
@@ -405,7 +426,7 @@ class AgentRegistry:
             from web.config_service import get_config_service
             wp = get_config_service().get("ui.main_wallpaper")
             if wp:
-                main["wallpaper"] = wp
+                main["wallpaper"] = _normalize_wallpaper(wp)
         except Exception:
             logger.debug("registry.wallpaper_error", exc_info=True)
         out = [main]
@@ -516,7 +537,7 @@ class AgentRegistry:
         if name == "xiaoda":
             if data.get("wallpaper"):
                 from web.config_service import get_config_service
-                get_config_service().set("ui.main_wallpaper", data["wallpaper"])
+                get_config_service().set("ui.main_wallpaper", _normalize_wallpaper(data["wallpaper"]))
             personality_text = data.pop("personality_text", None)
             # P0 修复（2026-08-04）：空字符串保护。
             # 前端 save() 总传 personality_text（即使为空），原 `is not None` 判断

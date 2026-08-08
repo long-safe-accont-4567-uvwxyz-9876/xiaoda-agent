@@ -455,6 +455,14 @@ def _ensure_workspace() -> None:
         _migrate_old_data(_exe_base / "agent-stickers", AGENT_STICKER_BASE, "agent-stickers")
         _migrate_old_data(_exe_base / "files", FILE_DIR, "files")
         _migrate_old_data(_exe_base / "media", MEDIA_DIR, "media")
+        # 旧版（v0.5.5x 静态资源架构）壁纸存放在 exe 目录 web/dist/assets/wallpapers/，
+        # 新版改为用户数据目录 MEDIA_DIR/wallpapers/（避免安装包覆盖/升级丢失）。
+        # 新目录已有壁纸（非空）时自动跳过，不覆盖用户自定义壁纸。
+        _migrate_old_data(
+            _exe_base / "web" / "dist" / "assets" / "wallpapers",
+            MEDIA_DIR / "wallpapers",
+            "wallpapers",
+        )
         _migrate_old_data(_exe_base / "voice_refs", VOICE_REF_DIR, "voice_refs")
         _migrate_old_data(_exe_base / "memory_state", MEMORY_STATE_DIR, "memory_state")
         _migrate_old_data(_exe_base / "plugins", PLUGINS_CONFIG_DIR, "plugins")
