@@ -491,7 +491,7 @@ _MERGE_OVERLAP_MIN = 10
 # 2830 事故修复：加入 ASCII ~ (0x7E) 与 〜 (U+301C) —— 颜文字/中文软语气常以
 # ASCII ~ 结尾（如 (•̀ᴗ•́)و~、"好呀~"），旧集合只有全角 ～ (U+FF5E)，
 # 导致 _looks_truncated 误判截断 → 假重试 → merge_continuation 拼接重复。
-_SENTENCE_END_CHARS = set("。！？～…）」】.!?\"'”'）」】》〉〕｝\n~〜")
+_SENTENCE_END_CHARS = set("。！？～…）」】.!?\"'”’）」】》〉〕｝\n~〜")
 
 
 def _looks_truncated(text: str) -> bool:

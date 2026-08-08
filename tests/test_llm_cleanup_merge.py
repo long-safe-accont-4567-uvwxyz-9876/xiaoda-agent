@@ -389,3 +389,110 @@ class TestKaomojiEndingRegression:
             original, continuation, context="prefill_tail", assume_tail=True)
         assert action == "appended", f"真尾巴应拼接，实际：{action}"
         assert merged == original + continuation
+
+
+class TestRightSingleQuoteEndingRegression:
+    """U+2019 (RIGHT SINGLE QUOTATION MARK ’) 结尾误判回归测试。
+
+    Bug 根因：llm_cleanup._SENTENCE_END_CHARS 第14位把正确的 U+2019 (’) 错写为
+    重复的 ASCII 单引号 U+0027 (')，导致与 text_utils._SENTENCE_END_PUNCT 不一致。
+
+    事故链条（与 2830 相同模式）：
+    - 英文对话/引用回复以 That's it’ 或 Don’t’ 结尾（排版用 U+2019 右单引号）
+    - _looks_truncated 不认 U+2019 → 误判截断 → 返回 True
+    - merge_continuation assume_tail 分支走 truncated_appended → 直接拼接
+      original + continuation → 当 LLM 重生成完整回复时产生重复内容
+    - 同时 text_utils.ends_with_valid_ending 正确识别 → 与 _looks_truncated
+      结论矛盾 → verification_loop 行为不一致（接受完整但 merge 又拼接）
+    """
+
+    def test_u2019_right_single_quote_no_duplication(self):
+        """original 以 U+2019 (’) 结尾 + 无重叠续写 → discarded（不拼接重复）。
+
+        修复前：_SENTENCE_END_CHARS 缺少 U+2019 → _looks_truncated=True →
+        truncated_appended 直接拼接 → 重复内容。
+        修复后：U+2019 被正确识别为合法句末标点 → 视为完整 → 丢弃无重叠续写。
+        """
+        # 典型英文引用场景：用 U+2019 作为排版右单引号（而非 ASCII apostrophe）
+        original = "She looked at him and softly whispered, I'll always be here\u2019"
+        # 验证结尾字符确实是 U+2019（避免测试写错）
+        assert original.endswith("\u2019"), f"测试前提失败：结尾字符是 U+{ord(original[-1]):04X}"
+        # LLM 重试返回重生成的完整回复（与 original 不重叠、非子串）
+        continuation = (
+            "She gazed at him tenderly and murmured, I will truly stay by your side always\u2019"
+        )
+        merged, action = merge_continuation(
+            original, continuation, context="u2019_quote_bug", assume_tail=True)
+        # original 以合法句末标记结尾 → 视为完整 → 丢弃无重叠续写避免重复
+        assert action == "discarded", \
+            f"U+2019 结尾应视为完整丢弃续写，实际：{action}（_looks_truncated 误判截断？）"
+        assert merged == original
+        # 关键断言：两段相似内容不被拼接在一起
+        assert "She looked at him" in merged
+        assert "She gazed at him tenderly" not in merged  # continuation 不出现
+
+    def test_u2019_and_ascii_apostrophe_both_recognized(self):
+        """U+2019 (’) 与 ASCII ' (') 都应被正确识别为合法句末标记。
+
+        两个集合必须都包含两种引号的常见变体，避免修复后又漏判其他变体。
+        """
+        from utils.llm_cleanup import _looks_truncated
+        from utils.text_utils import ends_with_valid_ending, _SENTENCE_END_PUNCT
+        from utils.llm_cleanup import _SENTENCE_END_CHARS
+
+        # 集合一致性：两种引号变体都必须同时存在于两个模块
+        for name, cp in [("ASCII '", 0x0027), ("U+2018 ‘", 0x2018), ("U+2019 ’", 0x2019)]:
+            c = chr(cp)
+            # 注意：text_utils._SENTENCE_END_PUNCT 目前只收录了 U+2019，
+            # 未收录 U+2018（左单引号通常不用作结尾）。只验证存在性。
+            if c in _SENTENCE_END_PUNCT:
+                assert c in _SENTENCE_END_CHARS, \
+                    f"集合不一致：{name}(U+{cp:04X}) 存在于 text_utils 但缺失于 llm_cleanup"
+
+        # 实际行为验证（U+2019）
+        text_u2019 = "That\u2019s what she said\u2019"
+        assert ends_with_valid_ending(text_u2019), \
+            "text_utils.ends_with_valid_ending 应识别 U+2019 结尾"
+        assert not _looks_truncated(text_u2019), \
+            "llm_cleanup._looks_truncated 不应把 U+2019 结尾判为截断"
+
+        # ASCII apostrophe（确保修复不影响原有的 ASCII 引号识别）
+        text_ascii = "That's all she wrote'"
+        assert ends_with_valid_ending(text_ascii), \
+            "text_utils.ends_with_valid_ending 应识别 ASCII ' 结尾"
+        assert not _looks_truncated(text_ascii), \
+            "llm_cleanup._looks_truncated 不应把 ASCII ' 结尾判为截断"
+
+    def test_regression_u2019_merge_does_not_duplicate_similar_regeneration(self):
+        """完整缺陷链回归：U+2019 结尾 + 相似重生成 → 不拼接重复。
+
+        模拟生产中与 2830 事故完全相同的触发链：
+        1. 回复以 U+2019 ’ 结尾 → _looks_truncated 误判 True（修复前）
+        2. 触发 no_finish_retry → LLM 返回内容高度相似的完整重生成（漏过
+           substring/overlap 检测，但 _looks_like_regeneration 可能命中）
+        3. 修复后：无论 Fix B 是否命中，最终都不应出现两份重复主体
+        """
+        original = (
+            "In the quiet evening, Alex closed the book and thought to himself, "
+            "\u201cThis is where the story ends\u2019"
+        )  # 左双引号 U+201C + 内容 + 右单引号 U+2019 结尾
+        assert original.endswith("\u2019"), "测试前提：结尾必须是 U+2019"
+        # 重生成：复述相同故事开头 + 略有不同结尾（语序调整漏过精确子串匹配）
+        continuation = (
+            "As night fell quietly, Alex shut the book and reflected to himself, "
+            "\u201cThis truly is the end of the tale\u2019"
+        )
+        merged, action = merge_continuation(
+            original, continuation, context="u2019_full_chain", assume_tail=True)
+        # 关键安全断言：不包含两份"Alex closed/shut the book"主体的拼接
+        first_body = "Alex closed the book"
+        second_body = "Alex shut the book"
+        both_present = (first_body in merged) and (second_body in merged)
+        # 如果两者都出现且 action 是 appended 就是缺陷（重复拼接）
+        if both_present:
+            assert action != "appended", \
+                (f"缺陷复现：U+2019 结尾触发误判 → truncated_appended 拼接了两份相似内容！"
+                 f" action={action}, merged 同时包含 '{first_body}' 与 '{second_body}'")
+        # 内容不重复（只应保留一份原始故事或重生成故事，不拼接两者）
+        occurrences = sum([1 for s in ["quiet evening", "night fell quietly"] if s in merged])
+        assert occurrences == 1, f"场景描述出现 {occurrences} 次（应为 1 次）：{merged!r}"
