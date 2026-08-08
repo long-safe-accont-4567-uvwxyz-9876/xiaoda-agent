@@ -38,6 +38,9 @@ SEQ = 512
 HID = 512
 VEC_BYTES = HID * 4          # 512 float32
 INPUT_BYTES = 3 * SEQ * 4    # 6144：input_ids/attention_mask/token_type_ids 各 512×int32
+# 单批最大条数：NPU 流串行（_io_lock），大批（32 条 3.7s）占流会让检索
+# embed 排队撞 8s 检索超时线；8 条/批 ≈ 0.9s，检索插队亚秒级
+_MAX_NPU_BATCH = 8
 
 
 def _default_runner() -> str:
@@ -221,29 +224,43 @@ class NpuEmbeddingProvider:
         return struct.pack(f"<{len(flat)}i", *flat)
 
     def encode_batch(self, texts: list[str]) -> list[list[float]]:
-        """批量向量化（同步，阻塞等待 NPU，调用方应经 to_thread 执行）。"""
+        """批量向量化（同步，阻塞等待 NPU，调用方应经 to_thread 执行）。
+
+        内部按 _MAX_NPU_BATCH（默认 8）拆小批：NPU 流（_io_lock）串行，
+        大批（32 条实测 3.7s）长时间占流会让检索路径的 embed 排队撞
+        8s 检索超时线。拆小批后单批 ≤1s，检索 embed 插队等待降到亚秒级
+        （v0.5.62：与 CPU 拆批同策略，全 NPU 模式下后台编码不拖垮检索）。
+        """
         if not texts:
             return []
         if not self._loaded and not self.load():
             return []
-        try:
-            payload = self._tokenize(texts)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("npu_embed.tokenize_failed error={}", str(e))
-            return []
-        # 重试一次：子进程异常退出时重启
-        for attempt in (0, 1):
+        out: list[list[float]] = []
+        for i in range(0, len(texts), _MAX_NPU_BATCH):
+            chunk = texts[i:i + _MAX_NPU_BATCH]
             try:
-                return self._infer(payload, len(texts))
+                payload = self._tokenize(chunk)
             except Exception as e:  # noqa: BLE001
-                logger.warning("npu_embed.infer_failed attempt={} error={}",
-                               attempt, str(e))
-                self._restart()
-        return []
+                logger.warning("npu_embed.tokenize_failed error={}", str(e))
+                continue
+            # 重试一次：子进程异常退出时重启
+            for attempt in (0, 1):
+                try:
+                    vecs = self._infer(payload, len(chunk))
+                    out.extend(vecs)
+                    break
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("npu_embed.infer_failed attempt={} error={}",
+                                   attempt, str(e))
+                    self._restart()
+            else:
+                return []
+        return out
 
     def _infer(self, payload: bytes, n: int) -> list[list[float]]:
         with self._io_lock:
             assert self._proc and self._proc.stdin and self._proc.stdout
+            _t0 = time.monotonic()
             self._proc.stdin.write(payload)
             self._proc.stdin.flush()
             need = n * VEC_BYTES
@@ -254,6 +271,9 @@ class NpuEmbeddingProvider:
                     raise RuntimeError("runner stdout closed")
                 data += chunk
             self._pending = data[need:]
+            # 更新 NPU 实时统计（npu_stats / 算力设备检测页展示）
+            self._last_ms = (time.monotonic() - _t0) * 1000
+            self._calls += 1
         out: list[list[float]] = []
         for i in range(n):
             out.append(list(struct.unpack(f"<{HID}f", data[i * VEC_BYTES:(i + 1) * VEC_BYTES])))
@@ -314,7 +334,7 @@ class AdaptiveEmbeddingProvider:
     def __init__(self, model_dir: str | Path, *,
                  query_prefix: str = "", max_length: int = 512,
                  threshold: int = 0, runner_path: str = "", nbg_path: str = "") -> None:
-        self._threshold = int(threshold or os.getenv("LOCAL_EMBED_THRESHOLD", "256"))
+        self._threshold = int(threshold or os.getenv("LOCAL_EMBED_THRESHOLD", "0"))
         self._cpu = LocalEmbeddingProvider(model_dir, query_prefix=query_prefix,
                                            max_length=max_length)
         self._npu = NpuEmbeddingProvider(model_dir, query_prefix=query_prefix,
