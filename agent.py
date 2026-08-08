@@ -85,6 +85,11 @@ def _is_packaged_windows() -> bool:
 # 单实例互斥句柄池：持有 Windows Mutex 句柄防止被 GC 释放（进程退出时 OS 自动回收）
 _SINGLE_INSTANCE_HANDLES: list[Any] = []
 
+# 已有实例运行时的退出码：watchdog 检测到主进程以该码退出时停止重启并退出自身，
+# 避免"已有 desktop 实例在跑、watchdog spawn 的主进程拿锁失败 exit(0)"被误判为
+# 崩溃而无限重启（watchdog_runner.py 中 _EXIT_ALREADY_RUNNING 对应）。
+_EXIT_ALREADY_RUNNING = 77
+
 
 def _acquire_single_instance(name: str) -> bool:
     """Windows 命名 Mutex 单实例互斥（跨进程）。
@@ -249,7 +254,10 @@ def main() -> None:
         _lock_name = None
     if _lock_name and not _acquire_single_instance(_lock_name):
         _notify_already_running()
-        sys.exit(0)
+        # 用专用退出码（77）而非 0：watchdog 模式下本进程可能是 watchdog spawn
+        # 的主进程，若以 0 退出会被 watchdog 误判为崩溃而无限重启；77 让
+        # watchdog 识别为"已有实例"并停止重启。
+        sys.exit(_EXIT_ALREADY_RUNNING)
 
     # watchdog 子命令: 以看门狗模式守护主进程
     if args.command == "watchdog":

@@ -36,6 +36,12 @@ except ImportError:
 # ──────────────────────────────────────────────────────────────
 # 默认配置
 # ──────────────────────────────────────────────────────────────
+
+# 主进程"已有实例在运行"专用退出码（与 agent.py _EXIT_ALREADY_RUNNING 一致）：
+# 单实例锁生效时，watchdog spawn 的主进程若拿锁失败会以该码退出，
+# 看门狗识别后停止重启并退出自身，避免无限重启循环。
+_EXIT_ALREADY_RUNNING = 77
+
 DEFAULTS = {
     "ping_url": "http://127.0.0.1:8082/api/v1/ping",
     "host": "127.0.0.1",         # 端口释放检测用
@@ -348,6 +354,14 @@ class Watchdog:
             if self._proc is not None and self._proc.poll() is not None:
                 exit_code = self._proc.poll()
                 self.log.error("watchdog.proc_exited exit_code=%d", exit_code)
+                if exit_code == _EXIT_ALREADY_RUNNING:
+                    # 主进程以专用退出码 77 退出 = 已有 desktop 实例在运行
+                    # （单实例锁生效），不是崩溃。继续重启只会无限循环，
+                    # 看门狗自身退出，把运行权留给已有实例。
+                    self.log.warning(
+                        "watchdog.already_running — 已有实例在运行，看门狗退出"
+                    )
+                    break
                 if not self._restart("proc_exited"):
                     break
                 last_ok = time.time()
