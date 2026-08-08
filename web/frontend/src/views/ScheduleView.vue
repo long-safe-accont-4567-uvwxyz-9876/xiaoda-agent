@@ -116,8 +116,9 @@ async function testFire(channels: string[] = ['web']) {
       message.warning(r.message || t('scheduleView.allChannelsFailed'))
     } else {
       for (const [ch, res] of Object.entries<any>(r.channels || {})) {
-        if (res.ok) message.success(`${ch === 'qq' ? 'QQ' : 'Web'} ${t('scheduleView.delivered')}：「${r.text}」`)
-        else message.error(`${ch === 'qq' ? 'QQ' : 'Web'} ${t('scheduleView.channelFailed')}: ${res.error || t('scheduleView.unknownReason')}`)
+        const chName = ch === 'qq' ? 'QQ' : ch === 'wechat' ? '微信' : 'Web'
+        if (res.ok) message.success(`${chName} ${t('scheduleView.delivered')}：「${r.text}」`)
+        else message.error(`${chName} ${t('scheduleView.channelFailed')}: ${res.error || t('scheduleView.unknownReason')}`)
       }
     }
     history.value = await get<any[]>('/schedule/history?days=7')
@@ -162,6 +163,7 @@ const reasonLabel: Record<string, string> = {
         </label>
         <n-button size="small" :loading="testing" @click="testFire(['web'])">{{ t('scheduleView.testWeb') }}</n-button>
         <n-button size="small" :loading="testing" @click="testFire(['qq'])">📱 {{ t('scheduleView.testQQ') }}</n-button>
+        <n-button size="small" :loading="testing" @click="testFire(['wechat'])">💬 {{ t('scheduleView.testWechat') }}</n-button>
       </div>
     </section></Tilt3D>
 
@@ -263,6 +265,7 @@ const reasonLabel: Record<string, string> = {
           <n-checkbox-group v-model:value="form.channels">
             <n-checkbox value="web" label="Web" />
             <n-checkbox value="qq" label="QQ" />
+            <n-checkbox value="wechat" label="微信" />
           </n-checkbox-group>
         </n-form-item>
       </n-form>

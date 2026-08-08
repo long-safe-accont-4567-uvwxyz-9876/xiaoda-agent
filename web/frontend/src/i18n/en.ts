@@ -794,6 +794,7 @@ export default {
     dailyLimit: 'Daily limit',
     testWeb: '💌 Test Web',
     testQQ: 'Test send QQ',
+    testWechat: '💬 Test WeChat',
     plans: 'Greeting plans',
     addPlan: 'Add plan',
     edit: 'Edit',

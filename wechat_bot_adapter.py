@@ -121,6 +121,30 @@ ILINK_DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
 # 供同进程内主动消息入口使用）
 _ACTIVE_BOT: "WeChatBotAdapter | None" = None
 
+
+async def send_proactive_message(text: str) -> bool:
+    """向最近微信私聊用户主动发一条消息（供 web/greeting_scheduler 等调用）。
+
+    微信 iLink 协议要求 context_token 才能路由消息，该 token 只能在
+    bot 轮询收到用户消息时缓存。因此主动发送依赖活跃 bot 实例
+    （_ACTIVE_BOT 已缓存最近 _last_from_user_id / _last_context_token）。
+
+    Raises:
+        RuntimeError: bot 未启动 / 尚未收到过用户消息（无 context_token）
+    """
+    bot = _ACTIVE_BOT
+    if bot is None or bot.is_closed():
+        raise RuntimeError("微信 client 未连接（请先在 WebUI 扫码登录并启动微信 Bot）")
+    if not bot._last_context_token or not bot._last_from_user_id:
+        raise RuntimeError(
+            "还没有可用的微信用户上下文（等用户先在微信上发一条消息，Bot 收到后才能主动回复）"
+        )
+    ok = await bot.send_message(text)
+    if not ok:
+        raise RuntimeError("微信消息发送失败（ret != 0）")
+    logger.info("wechat_bot.proactive_sent to={} text={}", bot._last_from_user_id[:16], text[:40])
+    return True
+
 # 串行化 start() 中活跃实例的 check→stop→assign 过渡，
 # 避免并发 start() 交错产生多个 poller 或覆盖未停止的旧实例。
 _START_LOCK: "asyncio.Lock" = asyncio.Lock()

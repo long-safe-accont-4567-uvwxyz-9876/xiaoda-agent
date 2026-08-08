@@ -795,6 +795,7 @@ export default {
     dailyLimit: '每日上限',
     testWeb: '💌 试发到 Web',
     testQQ: '试发 QQ',
+    testWechat: '💬 试发微信',
     plans: '问候计划',
     addPlan: '新增计划',
     edit: '编辑',

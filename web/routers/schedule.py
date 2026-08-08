@@ -98,8 +98,8 @@ def _validate_schedule(body: dict) -> dict:
     if not isinstance(days, list) or not all(isinstance(d, int) and 1 <= d <= 7 for d in days):
         raise HTTPException(400, "days 必须是 1~7 的整数数组")
     channels = body.get("channels") or ["web"]
-    if not all(c in ("web", "qq") for c in channels):
-        raise HTTPException(400, "channels 仅支持 web/qq")
+    if not all(c in ("web", "qq", "wechat") for c in channels):
+        raise HTTPException(400, "channels 仅支持 web/qq/wechat")
     rec = {
         "type": stype,
         "days": json.dumps(sorted(set(days))),

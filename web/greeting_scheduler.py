@@ -238,6 +238,9 @@ class GreetingScheduler:
             elif ch == "qq":
                 err = await self._send_qq(text)
                 report["qq"] = {"ok": err is None, "error": err}
+            elif ch == "wechat":
+                err = await self._send_wechat(text)
+                report["wechat"] = {"ok": err is None, "error": err}
         delivered = [c for c, r in report.items() if r["ok"]]
         await self.core.db.execute(
             "INSERT INTO greeting_log(schedule_id, fired_at, content, channel, reason) "
@@ -477,4 +480,14 @@ class GreetingScheduler:
             return None
         except Exception as e:
             logger.warning("greeting.qq_send_failed error={}", str(e))
+            return str(e)[:120]
+
+    async def _send_wechat(self, text: str) -> str | None:
+        """发微信主动消息。成功返回 None，失败返回错误描述（供测试接口回显）。"""
+        try:
+            from wechat_bot_adapter import send_proactive_message
+            await send_proactive_message(text)
+            return None
+        except Exception as e:
+            logger.warning("greeting.wechat_send_failed error={}", str(e))
             return str(e)[:120]
