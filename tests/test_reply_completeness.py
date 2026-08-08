@@ -31,7 +31,7 @@ PROJ_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJ_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJ_ROOT))
 
-from utils.text_utils import is_reply_likely_complete
+from utils.text_utils import is_reply_likely_complete, ends_with_valid_ending
 
 
 class TestReplyLikelyComplete:
@@ -158,3 +158,28 @@ class TestReplyLikelyComplete:
         # content_filter + 中长回复 + 无结尾 → False（让调用方处理）
         reply = "嗯…让我想想哦，今天天气真好，我们一起出去玩吧，好不好嘛，你说呢"
         assert is_reply_likely_complete(reply, "content_filter") is False
+
+    # ── 事故 2830 回归：颜文字/波浪线结尾判定 ──
+
+    def test_kaomoji_wave_ending_is_complete(self):
+        """颜文字/波浪线结尾 → 完整（生产事故 2830 根因）。
+
+        2830 事故：回复以 (•̀ᴗ•́)و~ 结尾，ASCII ~ (0x7E) 与全角 ～ (U+FF5E)
+        是不同字符，旧判定不识别 ASCII ~ → 误判不完整 → 触发假重试 →
+        merge_continuation 拼接完整重生成 → 重复内容。
+        """
+        # ASCII ~ 结尾（2830 事故原文结尾）
+        assert ends_with_valid_ending("收到啦～爸爸的第2条测试消息人家看到啦(•̀ᴗ•́)و~") is True
+        # 全角波浪线 / 波浪号变体
+        assert ends_with_valid_ending("好呀～") is True
+        assert ends_with_valid_ending("好呀〜") is True
+        # 颜文字手部结尾（(•̀ᴗ•́)و 无尾部波浪线）
+        assert ends_with_valid_ending("人家等着哦(•̀ᴗ•́)و") is True
+        # 完整判定链：finish_reason=None + 颜文字结尾 → 完整（不再触发假重试）
+        assert is_reply_likely_complete(
+            "收到啦～爸爸的第2条测试消息人家看到啦(•̀ᴗ•́)و~", None) is True
+
+    def test_genuine_truncation_still_incomplete(self):
+        """真截断（无句末标记）仍判定不完整——修复不破坏截断检测。"""
+        assert ends_with_valid_ending("嗯…让我想想哦，今天天气真好") is False
+        assert ends_with_valid_ending("等我查一下") is False

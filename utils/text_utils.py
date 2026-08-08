@@ -1051,7 +1051,11 @@ def encode_image_to_base64(image_path: str) -> tuple[str, str]:
 # 修复：新增 emoji 感知的完整性判定，覆盖常见 emoji 区间。
 
 # 句末标点（ASCII + CJK + 常见中文标点）
-_SENTENCE_END_PUNCT = frozenset("。！？～…）」】.!?\"'”’）」】》〉〕｝\n")
+# 2830 事故修复：加入 ASCII ~ (0x7E) 与 〜 (U+301C) —— 颜文字/中文软语气常以
+# ASCII ~ 结尾（如 (•̀ᴗ•́)و~、"好呀~"），旧集合只有全角 ～ (U+FF5E)，
+# 导致 ends_with_valid_ending 误判不完整 → 触发假重试 → merge_continuation
+# 拼接完整重生成 → 重复内容（DB reply 2829/2830）。
+_SENTENCE_END_PUNCT = frozenset("。！？～…）」】.!?\"'”’）」】》〉〕｝\n~〜")
 
 # Emoji 区间正则（覆盖 Unicode 15.0 常见 emoji 范围）
 # 参考：https://unicode.org/Public/emoji/15.0/emoji-data.txt
@@ -1117,6 +1121,11 @@ def ends_with_valid_ending(text: str) -> bool:
         return True
     # 3. 表情包/情绪标签结尾（[sticker:xxx] / [emotion:xxx]）
     if _TAG_END_PATTERN.search(rstripped):
+        return True
+    # 4. 颜文字手部结尾（(•̀ᴗ•́)و、(๑˃̵ᴗ˂̵)و 等）：و 前是右括号 → 完整
+    # 2830 事故配套：ASCII ~ / 〜 已加入 _SENTENCE_END_PUNCT，此处兜底无尾部
+    # 波浪线的纯手部颜文字结尾（结束字符恰为阿拉伯字母 و）。
+    if last_char == "و" and len(rstripped) >= 2 and rstripped[-2] in ")）":
         return True
     return False
 

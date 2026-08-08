@@ -488,7 +488,10 @@ _MERGE_OVERLAP_MIN = 10
 # 原 implementation 含 ,;:、:，导致以这些结尾的回复被误判完整，截断无法修复
 # CodeRabbit #6 修复：对齐 text_utils._SENTENCE_END_PUNCT 完整字符集
 # 包含引号和右括号变体（' " " ' 》 〉 〕 ｝），避免以这些结尾的回复被误判截断
-_SENTENCE_END_CHARS = set("。！？～…）」】.!?\"'”'）」】》〉〕｝\n")
+# 2830 事故修复：加入 ASCII ~ (0x7E) 与 〜 (U+301C) —— 颜文字/中文软语气常以
+# ASCII ~ 结尾（如 (•̀ᴗ•́)و~、"好呀~"），旧集合只有全角 ～ (U+FF5E)，
+# 导致 _looks_truncated 误判截断 → 假重试 → merge_continuation 拼接重复。
+_SENTENCE_END_CHARS = set("。！？～…）」】.!?\"'”'）」】》〉〕｝\n~〜")
 
 
 def _looks_truncated(text: str) -> bool:
@@ -523,7 +526,42 @@ def _looks_truncated(text: str) -> bool:
     # 标签结尾（[sticker:xxx] / [emotion:xxx]）
     if last in "]）":
         return False
+    # 颜文字手部结尾（(•̀ᴗ•́)و、(๑˃̵ᴗ˂̵)و 等）：و 前是右括号 → 完整
+    # 2830 事故配套：ASCII ~ 已在 _SENTENCE_END_CHARS 覆盖，此处兜底无尾部波浪线的
+    # 纯手部颜文字结尾（结束字符恰为阿拉伯字母 و）。
+    if last == "و" and len(rstripped) >= 2 and rstripped[-2] in ")）":
+        return False
     return True
+
+
+def _looks_like_regeneration(original: str, continuation: str) -> bool:
+    """检测 continuation 是否是 LLM 重生成的完整回复（而非截断尾巴）。
+
+    2830 事故（2026-08-08，DB reply 2829/2830）配套兜底：
+    original 以颜文字结尾被误判截断后触发重试，LLM 重新生成的完整回复与
+    original 主体内容高度相似——但并非逐字重复，漏过 merge_continuation 的
+    子串/边界重叠检测，最终 truncated_appended 直接拼接出重复内容。
+
+    判定依据：重生成的回复会复述 original 的主体内容，真尾巴是全新内容。
+    用字符 bigram 重合率量化相似度（continuation 前 2/3 与 original 比较，
+    真尾巴是增量内容，重合率天然低；重生成则大面积重合）。
+
+    Returns:
+        True 表示 continuation 疑似完整重生成（应替换而非拼接）
+    """
+    if not original or not continuation:
+        return False
+    o = original.strip()
+    c = continuation.strip()
+    # 过短的文本不做相似度判定（真尾巴也可能恰好短）
+    if len(o) < 12 or len(c) < 12:
+        return False
+    probe = c[: max(len(c) * 2 // 3, 1)]
+    o_bigrams = {o[i:i + 2] for i in range(len(o) - 1)}
+    p_bigrams = {probe[i:i + 2] for i in range(len(probe) - 1)}
+    if not o_bigrams or not p_bigrams:
+        return False
+    return len(o_bigrams & p_bigrams) / len(o_bigrams) >= 0.25
 
 
 def merge_continuation(
@@ -678,6 +716,19 @@ def merge_continuation(
                             continuation_len=_cont_bytes,
                             note="continuation_too_short_keep_truncated_original")
                 metrics.inc("llm.merge_continuation.short_continuation_discarded")
+                return original, "discarded"
+            # Fix B（2830 事故兜底）：continuation 若是 LLM 重生成的完整回复
+            # （与 original 主体高度相似但非逐字重复，漏过上方子串/重叠检测），
+            # 拼接只会产生重复内容 → 替换为较长者，而非 appended。
+            if _looks_like_regeneration(original, continuation):
+                logger.warning("llm_cleanup.merge_continuation.regeneration_detected",
+                               context=context, original_len=_orig_bytes,
+                               continuation_len=_cont_bytes,
+                               note="similar_regeneration_replace_not_append")
+                if _cont_bytes >= _orig_bytes:
+                    metrics.inc("llm.merge_continuation.replaced")
+                    return continuation, "replaced"
+                metrics.inc("llm.merge_continuation.discarded")
                 return original, "discarded"
             merged = original + continuation
             logger.warning("llm_cleanup.merge_continuation.truncated_appended",

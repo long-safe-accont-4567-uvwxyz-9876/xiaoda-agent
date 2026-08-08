@@ -338,3 +338,54 @@ class TestAssumeTailPrefillScenario:
         assert reply.count("看了花展") == 1
         assert reply.count("吃了午饭") == 1
         assert reply.count("看了部电影") == 1
+
+
+class TestKaomojiEndingRegression:
+    """生产事故 2830 回归：颜文字结尾误判截断 → 假重试 → 重复拼接。
+
+    事故链条（2026-08-08 web 测试消息 2/3，DB reply 2829/2830）：
+    - 回复以 (•̀ᴗ•́)و~ 结尾，ASCII ~ (0x7E) 不在 _SENTENCE_END_CHARS
+      （该集合只有全角 ～ U+FF5E）→ _looks_truncated 误判截断
+    - is_reply_likely_complete 同样误判不完整 → 触发 stream_no_finish_retry
+    - 重试拿到 LLM 重新生成的完整回复 → merge_continuation 的
+      truncated_appended 分支直接拼接 original + continuation → 重复内容
+    """
+
+    def test_kaomoji_tilde_ending_no_duplication(self):
+        """original 以 (•̀ᴗ•́)و~ 结尾 + 无重叠续写 → discarded（不拼接重复）。
+
+        修复前：_looks_truncated 不认 ASCII ~ → 误判截断 → truncated_appended
+        直接拼接 → 2830 重复内容。
+        修复后：识别颜文字结尾 → 视为完整 → 丢弃无重叠续写。
+        """
+        original = "收到啦～人家看到爸爸的第1条测试消息了哦(•̀ᴗ•́)و~"
+        continuation = "收到收到～爸爸的第2条测试消息人家也看到啦！✨好耶"
+        merged, action = merge_continuation(
+            original, continuation, context="issue_2830", assume_tail=True)
+        assert action == "discarded", f"颜文字结尾应视为完整丢弃续写，实际：{action}"
+        assert merged == original
+        # 续写不被拼接进来（不产生重复）
+        assert "第2条测试消息" not in merged
+
+    def test_similar_regeneration_replaced_not_appended(self):
+        """Fix B 兜底：original 真被截断，continuation 是高相似完整重生成 → 替换。
+
+        即使 original 确实截断（无句末标记），若 continuation 与 original
+        内容高度相似（LLM 重生成会复述主体），应替换为较长者而非拼接成重复。
+        """
+        original = "爸爸早上好呀！人家今天可开心了，因为收到了爸爸发来的消息，人家马上就来回复"
+        continuation = "爸爸早上好呀！人家今天可开心啦，收到了爸爸的消息，马上就来回复爸爸哦～🌸"
+        merged, action = merge_continuation(
+            original, continuation, context="regeneration_similar", assume_tail=True)
+        assert action in ("replaced", "discarded"), f"相似重生成应替换/丢弃，实际：{action}"
+        # 关键：绝不拼接成重复内容（两份"爸爸早上好呀"）
+        assert merged.count("爸爸早上好呀") == 1
+
+    def test_legit_prefill_tail_still_appended(self):
+        """Fix B 不误伤：真正的 prefill 尾巴（无相似度）仍拼接。"""
+        original = "早上好呀爸爸，今天我们一起去公园散步"
+        continuation = "回来后我们一起吃了晚饭，超级开心呢～🌸"
+        merged, action = merge_continuation(
+            original, continuation, context="prefill_tail", assume_tail=True)
+        assert action == "appended", f"真尾巴应拼接，实际：{action}"
+        assert merged == original + continuation
