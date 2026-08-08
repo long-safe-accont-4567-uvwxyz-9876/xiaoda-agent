@@ -638,6 +638,13 @@ def _run_desktop(host: str, port: int) -> None:
     # sessions"，localStorage/cookie 每次启动全部清空。后果：资料完成标记
     # xiaoda_profile_done 与登录 token 每次重启即丢 → 资料编辑页每次启动都弹出、
     # 每次启动都要求重新登录。显式关闭并持久化到 ~/.ai-agent/webview。
+    # 注：不在此处做"失败降级重试"——storage_path 失败时若回退到
+    # 默认存储（private_mode=True），localStorage 会被清空，资料完成
+    # 标记丢失，资料编辑页每次启动弹出（v0.5.62 修复的 bug 会回归）。
+    # storage_path 并发失败的根因是"多进程共用同一 userDataFolder"，
+    # 已由 main() 的单实例互斥锁（XiaodaAgent_Main/Watchdog）根治；
+    # 万一仍失败（权限/目录损坏），应显式抛错写入 crash.log 供诊断，
+    # 而不是静默降级掩盖问题。
     _webview_storage = Path.home() / ".ai-agent" / "webview"
     try:
         _webview_storage.mkdir(parents=True, exist_ok=True)
