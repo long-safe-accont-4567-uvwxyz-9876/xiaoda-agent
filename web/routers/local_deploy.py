@@ -31,12 +31,35 @@ _CPU_SAMPLE: dict[str, Any] = {"ts": 0.0, "total": 0, "idle": 0}
 
 
 def _cpu_stats() -> dict:
-    """CPU 性能与实时占用：核数 / 频率 / 占用百分比（/proc/stat 差值）。"""
+    """CPU 性能与实时占用：核数 / 频率 / 占用百分比。
+
+    Linux 用 /proc 差值法；Windows/macOS 用 psutil（跨平台采样）。
+    """
     stats: dict[str, Any] = {"cores": None, "freq_mhz": None, "usage_pct": None}
     try:
         stats["cores"] = os.cpu_count() or 0
     except Exception:  # noqa: BLE001
         pass
+
+    if platform.system() != "Linux":
+        # Windows/macOS：psutil.cpu_freq() / cpu_percent() 跨平台可用
+        try:
+            import psutil as _ps
+        except ImportError:  # noqa: BLE001
+            return stats
+        try:
+            freq = _ps.cpu_freq()
+            if freq is not None and freq.current:
+                stats["freq_mhz"] = round(freq.current)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            # interval=None：非阻塞，首次调用返回 0.0，后续轮询（5s）取到真实值
+            stats["usage_pct"] = round(_ps.cpu_percent(interval=None), 1)
+        except Exception:  # noqa: BLE001
+            pass
+        return stats
+
     # 频率：/proc/cpuinfo "cpu MHz" → cpufreq sysfs（kHz）→ 未知
     try:
         with open("/proc/cpuinfo", "r", encoding="utf-8", errors="ignore") as f:
@@ -93,7 +116,8 @@ def _npu_stats(vs: Any) -> dict:
 
 
 def _detect_cpu_model() -> str:
-    """读取 CPU 型号：Linux 依次尝试 model name / Hardware / 设备树 / Processor。"""
+    """读取 CPU 型号：Linux 依次尝试 model name / Hardware / 设备树 / Processor；
+    Windows 用 PowerShell CIM 拿型号（如 "12th Gen Intel(R) Core(TM) i7-12700H"）。"""
     if platform.system() == "Linux":
         try:
             with open("/proc/cpuinfo", "r", encoding="utf-8", errors="ignore") as f:
@@ -116,28 +140,65 @@ def _detect_cpu_model() -> str:
                     pass
         except OSError:
             pass
+    if platform.system() == "Windows":
+        # 零开销兜底：PROCESSOR_IDENTIFIER（"Intel64 Family 6 ..."）
+        pid = os.environ.get("PROCESSOR_IDENTIFIER", "")
+        try:
+            import subprocess
+            ps = ("powershell -NoProfile -Command "
+                  '"Get-CimInstance Win32_Processor | Select-Object -ExpandProperty Name"')
+            out = subprocess.run(ps, capture_output=True, text=True, timeout=15, check=False).stdout
+            name = next((ln.strip() for ln in out.splitlines() if ln.strip()), "")
+            if name:
+                return name
+        except (OSError, subprocess.SubprocessError):  # noqa: BLE001
+            pass
+        return pid or platform.processor() or "CPU"
     return platform.processor() or "CPU"
 
 
 def _detect_gpu_model() -> str:
-    """检测 GPU：Linux 用 lspci 查 VGA/3D 控制器，无 lspci 返回空串（未检测到）。"""
-    if platform.system() != "Linux":
-        return ""
+    """检测 GPU 型号：Linux 用 lspci 查 VGA/3D 控制器；Windows 用 PowerShell CIM
+    枚举显卡控制器（不依赖 nvidia-smi——它默认不在 PATH）。"""
+    if platform.system() == "Linux":
+        import subprocess
+        try:
+            out = subprocess.run(
+                ["lspci"], capture_output=True, text=True, timeout=5, check=False,
+            ).stdout
+            for line in out.splitlines():
+                low = line.lower()
+                if "vga" in low or "3d controller" in low or "display controller" in low:
+                    # 提取设备名：lspci 行形如 "01:00.0 VGA compatible controller: NVIDIA ..."
+                    seg = line.split(":", 2)[-1].strip()
+                    seg = re.sub(r"^VGA compatible controller:\s*", "", seg)
+                    seg = re.sub(r"^3D controller:\s*", "", seg)
+                    return seg.strip() or "GPU"
+            return ""
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    if platform.system() == "Windows":
+        return _detect_gpu_model_windows()
+    return ""
+
+
+def _detect_gpu_model_windows() -> str:
+    """Windows：Get-CimInstance Win32_VideoController 枚举显卡（含核显+独显）。
+
+    优先独立显卡（NVIDIA / AMD Radeon / GeForce），其次 Intel 核显，最后任意。
+    """
     import subprocess
     try:
-        out = subprocess.run(
-            ["lspci"], capture_output=True, text=True, timeout=5, check=False,
-        ).stdout
-        for line in out.splitlines():
-            low = line.lower()
-            if "vga" in low or "3d controller" in low or "display controller" in low:
-                # 提取设备名：lspci 行形如 "01:00.0 VGA compatible controller: NVIDIA ..."
-                seg = line.split(":", 2)[-1].strip()
-                seg = re.sub(r"^VGA compatible controller:\s*", "", seg)
-                seg = re.sub(r"^3D controller:\s*", "", seg)
-                return seg.strip() or "GPU"
-        return ""
-    except (OSError, subprocess.SubprocessError):
+        ps = ("powershell -NoProfile -Command "
+              '"Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"')
+        out = subprocess.run(ps, capture_output=True, text=True, timeout=15, check=False).stdout
+        names = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        if not names:
+            return ""
+        prefer = [n for n in names
+                  if any(k in n.lower() for k in ("nvidia", "radeon", "amd", "geforce", "rtx", "gtx"))]
+        return (prefer or names)[0]
+    except (OSError, subprocess.SubprocessError):  # noqa: BLE001
         return ""
 
 

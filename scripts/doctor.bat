@@ -121,7 +121,9 @@ if "!LAUNCH!"=="1" (
     )
     echo.
     echo   This window will close automatically in 8 seconds...
-    timeout /t 8 /nobreak >nul
+    :: 用 ping 延迟而非 timeout：安装完成页（ShellExecute）等无输入环境
+    :: 下 timeout 会报 "Input redirection is not supported"（v0.5.62 修复）
+    ping 127.0.0.1 -n 9 >nul
     exit /b !EXITCODE!
 )
 

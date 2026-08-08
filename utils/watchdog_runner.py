@@ -226,11 +226,26 @@ class Watchdog:
             # 仅 stdin 用 DEVNULL（子进程不需要输入）。
             # 注：原 a449d21 的 I4 改成 stdout/stderr=DEVNULL 把主程序
             # DEBUG 日志和崩溃 traceback 全丢了，导致诊断黑箱，已撤销。
-            self._proc = subprocess.Popen(
-                self.cmd,
-                cwd=self.cwd,
-                stdin=subprocess.DEVNULL,
-            )
+            if sys.platform == "win32" and self.cmd:
+                # Windows 安装目录含空格（如 "D:\Xiaoda Agent\xiaoda-agent.exe"）时，
+                # 仅靠 CreateProcess 命令行解析（lpApplicationName=None）可能把
+                # exe 完整路径误当作 positional 参数传给主程序，argparse 报
+                # "invalid choice: 'D:\Xiaoda Agent\xiaoda-agent.exe'" 后主进程
+                # 立即退出（exit_code=0），watchdog 陷入无限重启。
+                # 显式 executable= 指定程序（lpApplicationName），命令行只传
+                # 参数列表，彻底规避空格路径/引号解析问题（v0.5.62 修复）。
+                self._proc = subprocess.Popen(
+                    list(self.cmd[1:]),
+                    executable=self.cmd[0],
+                    cwd=self.cwd,
+                    stdin=subprocess.DEVNULL,
+                )
+            else:
+                self._proc = subprocess.Popen(
+                    self.cmd,
+                    cwd=self.cwd,
+                    stdin=subprocess.DEVNULL,
+                )
             self.log.info("watchdog.started pid=%d", self._proc.pid)
             return True
         except Exception as e:
