@@ -15,6 +15,7 @@ import os
 import struct
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,33 @@ def _default_nbg() -> str:
         "NPU_NBG",
         "/media/orangepi/KIOXIA/nahida-data/npu/bge_npu_kit/npu_input/bge_small_zh.nb",
     )
+
+
+def probe_npu(runner_path: str = "", timeout_s: float = 15.0) -> bool:
+    """探测本机 NPU（VIP9000）是否可用。
+
+    通过 runner 的 --probe 模式验证（vip_init 成功 = NPU 设备/驱动可用）。
+    runner 文件不存在（如纯 CPU 机器 / Windows 打包版）直接返回 False。
+    成功退出码 0 → True；失败/超时/异常 → False。调用方据此自动降级纯 CPU。
+    """
+    path = Path(runner_path or _default_runner())
+    if not path.exists():
+        logger.info("npu_probe.skipped runner_missing={}", str(path))
+        return False
+    try:
+        proc = subprocess.run(
+            ["sudo", "-n", str(path), "--probe", "--quiet"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout_s,
+            check=False,
+        )
+        ok = proc.returncode == 0
+        logger.info("npu_probe.result ok={} rc={}", ok, proc.returncode)
+        return ok
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.warning("npu_probe.failed error={}", str(e))
+        return False
 
 
 class NpuEmbeddingProvider:
@@ -130,8 +158,10 @@ class NpuEmbeddingProvider:
             stdout=subprocess.PIPE,
             stderr=self._stderr_f,
         )
-        # 逐块读 stdout 直到 magic，之前内容（VIPLite 版本横幅）全部丢弃
+        # 逐块读 stdout 直到 magic，之前内容（VIPLite 版本横幅）全部丢弃；
+        # 加超时兜底：runner 初始化挂起（如 NPU 设备忙/驱动异常）时不阻塞服务
         buf = b""
+        deadline = time.monotonic() + self._timeout_s
         while True:
             chunk = self._proc.stdout.read1(4096)  # type: ignore[union-attr]
             if not chunk:
@@ -141,6 +171,10 @@ class NpuEmbeddingProvider:
             if idx >= 0:
                 self._pending = buf[idx + len(MAGIC):]
                 return
+            if time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"runner magic timeout after {self._timeout_s:.0f}s")
+        # (超时抛出后由 load() 捕获，Adaptive 层探测已先排除大部分无 NPU 场景)
 
     # ── 推理 ──────────────────────────────────────────────
 
@@ -290,7 +324,14 @@ class AdaptiveEmbeddingProvider:
                     raise FileNotFoundError(f"tokenizer.json not found: {tok_path}")
                 self._tokenizer = Tokenizer.from_file(str(tok_path))
                 cpu_ok = self._cpu.load()
-                npu_ok = self._npu.load()
+                # NPU 探测短路：无 NPU / runner 缺失 / 权限不足（sudo 不可用）→
+                # 不 spawn 常驻进程，自动降级纯 CPU（CPU 为兜底必须可用）
+                if cpu_ok and probe_npu(runner_path=self._npu._runner_path):
+                    npu_ok = self._npu.load()
+                else:
+                    npu_ok = False
+                    self._npu._load_error = (
+                        "npu_probe_failed" if cpu_ok else "cpu_unavailable")
                 self._dimensions = self._cpu.dimensions or self._npu.dimensions or HID
                 self._loaded = cpu_ok  # CPU 为兜底，必须可用
                 if not cpu_ok:
@@ -299,6 +340,10 @@ class AdaptiveEmbeddingProvider:
                 else:
                     logger.info("adaptive_embed.ready threshold={} npu_ok={} dims={}",
                                 self._threshold, npu_ok, self._dimensions)
+                    if not npu_ok:
+                        logger.warning(
+                            "adaptive_embed.no_npu_fallback cpu_only=True "
+                            "error={}", self._npu._load_error)
                 return self._loaded
             except Exception as e:  # noqa: BLE001
                 self._load_error = str(e)

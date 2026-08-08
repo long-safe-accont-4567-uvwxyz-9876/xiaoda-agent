@@ -5,6 +5,12 @@
  * 用法:
  *   ./bge_npu_runner <nbg> <input.bin> <output.bin> [--batch N] [--seq 512] [--quiet]
  *   ./bge_npu_runner <nbg> --serve [--seq 512] [--quiet]
+ *   ./bge_npu_runner --probe [--quiet]
+ *
+ * --probe 探测模式: 仅初始化 VIPLite（验证 NPU 设备/驱动可用性），
+ *   成功后立即退出（退出码 0 = NPU 可用；非 0 = 无 NPU/驱动异常）。
+ *   供 Python 端启动时探测：无 NPU 的机器自动降级为纯 CPU 推理。
+ *   注意 --probe 需要 root 权限（与 --serve 相同，经 sudo 调用）。
  *
  * input.bin 布局: N × (3 × seq × 4) 字节，每条为三个 int32[seq] 行优先:
  *   input_ids, attention_mask, token_type_ids （与 gen_bge_calib.py 的 .dat 一致）
@@ -197,7 +203,7 @@ int main(int argc, char **argv)
 {
     const char *nbg_path = NULL, *in_path = NULL, *out_path = NULL;
     uint32_t batch = 1, seq = SEQ_DEFAULT;
-    int quiet = 0, dump_full = 0, serve = 0;
+    int quiet = 0, dump_full = 0, serve = 0, probe = 0;
     uint32_t n_in = 0, n_out = 0;
     float *full_out = NULL, *vec_out = NULL;
     for (int a = 1; a < argc; a++) {
@@ -206,10 +212,21 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[a], "--quiet")) quiet = 1;
         else if (!strcmp(argv[a], "--dump-full")) dump_full = 1;
         else if (!strcmp(argv[a], "--serve")) serve = 1;
+        else if (!strcmp(argv[a], "--probe")) probe = 1;
         else if (!nbg_path) nbg_path = argv[a];
         else if (!in_path) in_path = argv[a];
         else if (!out_path) out_path = argv[a];
         else { fprintf(stderr, "too many args\n"); return 2; }
+    }
+    if (probe) {
+        /* 探测模式：只验证 NPU 设备/驱动可用（vip_init），成功后立即退出 */
+        if (vip_init() != VIP_SUCCESS) {
+            fprintf(stderr, "probe: vip_init failed (no NPU or driver error)\n");
+            return 1;
+        }
+        vip_destroy();
+        if (!quiet) fprintf(stderr, "probe: npu_ok\n");
+        return 0;
     }
     if (!nbg_path || (!serve && (!in_path || !out_path))) {
         fprintf(stderr, "Usage: %s <nbg> <input.bin> <output.bin> [--batch N] [--seq 512] [--quiet]\n", argv[0]);

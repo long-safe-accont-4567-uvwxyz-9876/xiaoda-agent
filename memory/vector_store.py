@@ -146,11 +146,15 @@ class VectorStore:
 
         if self._embed_mode == "local":
             # 本地推理：不依赖远程 API Key / 网络，模型加载为懒加载。
-            # 后端由 LOCAL_EMBED_BACKEND 选择：默认 "cpu"（onnxruntime），
-            # "npu" 走 VIP9000 NPU（scripts/npu/bge_npu_runner --serve 常驻子进程）。
+            # 后端由 LOCAL_EMBED_BACKEND 选择：
+            #   auto（默认）→ AdaptiveEmbeddingProvider 启动时探测 NPU，
+            #     有 VIP9000 走长短自适应（短文本 CPU / 长文本 NPU 常驻子进程），
+            #     无 NPU（纯 CPU 机器/Windows 打包版/无 sudo）自动降级全 CPU；
+            #   npu → 强制走自适应（探测失败仍降级 CPU）；
+            #   cpu → 显式纯 CPU（onnxruntime）。
             try:
-                backend = os.getenv("LOCAL_EMBED_BACKEND", "cpu")
-                if backend == "npu":
+                backend = os.getenv("LOCAL_EMBED_BACKEND", "auto")
+                if backend in ("npu", "auto"):
                     from memory.npu_embed import AdaptiveEmbeddingProvider
                     self._local_provider = AdaptiveEmbeddingProvider(
                         self._local_model_dir,
