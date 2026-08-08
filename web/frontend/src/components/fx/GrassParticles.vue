@@ -32,6 +32,26 @@ const GLOW_SIZE = 48
 const GLOW_CORE_R = 8
 let glowDot: HTMLCanvasElement | null = null
 
+// 治本：叶片预渲染成离屏精灵贴图。经典实现每帧用 bezierCurveTo 重描路径再填充，
+// 路径细分+填充是 canvas 最贵的操作（36片×30fps≈上千次/秒光栅化），直接空转核显。
+// 改为一次性烘焙成精灵，每帧只做廉价 drawImage 贴图，视觉完全一致但 GPU 负载骤降。
+const LEAF_SIZE = 32  // 精灵基准尺寸（预留 margin 防旋转裁剪）
+let leafSprite: HTMLCanvasElement | null = null
+
+function initLeafSprite() {
+  leafSprite = document.createElement('canvas')
+  leafSprite.width = LEAF_SIZE * 2
+  leafSprite.height = LEAF_SIZE * 2
+  const g = leafSprite.getContext('2d')!
+  g.translate(LEAF_SIZE, LEAF_SIZE)
+  g.fillStyle = '#7fd650'
+  g.beginPath()
+  g.moveTo(0, -LEAF_SIZE)
+  g.bezierCurveTo(LEAF_SIZE * 0.8, -LEAF_SIZE * 0.3, LEAF_SIZE * 0.8, LEAF_SIZE * 0.5, 0, LEAF_SIZE)
+  g.bezierCurveTo(-LEAF_SIZE * 0.8, LEAF_SIZE * 0.5, -LEAF_SIZE * 0.8, -LEAF_SIZE * 0.3, 0, -LEAF_SIZE)
+  g.fill()
+} // 路径只在初始化烘焙一次，之后零路径开销
+
 function initGlowDot() {
   glowDot = document.createElement('canvas')
   glowDot.width = GLOW_SIZE
@@ -81,16 +101,13 @@ function rebuild() {
 }
 
 function drawLeaf(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, rot: number, alpha: number) {
+  if (!leafSprite) return
+  const scale = size / LEAF_SIZE
   ctx.save()
   ctx.translate(x, y)
   ctx.rotate(rot)
   ctx.globalAlpha = alpha
-  ctx.fillStyle = '#7fd650'
-  ctx.beginPath()
-  ctx.moveTo(0, -size)
-  ctx.bezierCurveTo(size * 0.8, -size * 0.3, size * 0.8, size * 0.5, 0, size)
-  ctx.bezierCurveTo(-size * 0.8, size * 0.5, -size * 0.8, -size * 0.3, 0, -size)
-  ctx.fill()
+  ctx.drawImage(leafSprite, -LEAF_SIZE * scale, -LEAF_SIZE * scale, LEAF_SIZE * 2 * scale, LEAF_SIZE * 2 * scale)
   ctx.restore()
 }
 
@@ -245,7 +262,7 @@ function fpsProbe(now: number) {
 }
 
 watch(() => ui.particles, () => {
-  if (count() > 0 && !glowDot) initGlowDot()
+  if (!glowDot) { initGlowDot(); initLeafSprite() }
   rebuild()
   // 既无粒子又无拖尾才停止帧循环
   if (count() === 0 && !ui.dendroCursorTrail) stop()
@@ -255,7 +272,7 @@ watch(() => ui.particles, () => {
 // 拖尾开关变化：开启时确保帧循环运行（trail 需要 rAF 渲染）
 watch(() => ui.dendroCursorTrail, (v) => {
   if (v) {
-    if (!glowDot) initGlowDot()
+    if (!glowDot) { initGlowDot(); initLeafSprite() }
     start()
   } else if (count() === 0) {
     stop()
@@ -271,7 +288,7 @@ onMounted(() => {
     if (ui.particles === 'off' && !ui.dendroCursorTrail) return
   }
   if (count() > 0 || ui.dendroCursorTrail) {
-    if (!glowDot) initGlowDot()
+    if (!glowDot) { initGlowDot(); initLeafSprite() }
   }
   resize()
   start()

@@ -63,28 +63,41 @@ function stopWatermarkGuard() {
   document.removeEventListener('visibilitychange', onVisibilityChange)
 }
 
-// GPU 能力检测：
-// 1. WebGL 不可用 → 低性能
-// 2. 软件渲染（SwiftShader/llvmpipe/...）→ 低性能
-// 3. 集成显卡/核显（Intel UHD/Iris/HD、AMD 纯 Radeon Graphics）→ 低性能：
-//    Chromium 的 backdrop-filter 实时模糊 + Canvas/WebGL 全屏动画在核显上
-//    极易把 GPU 占满（独显机型可正常流畅运行，不做降级）
-function detectLowGpu() {
+// GPU 自适应降级（治本方案）：
+// 不再按"是不是核显"出身一刀切（那会冤枉高配核显、漏掉低配独显）。
+// 改为实际渲染帧率决定 + 软件渲染快速兜底。仅软件渲染（必降）立即降级，
+// 其余启动后实测 2 秒渲染帧率，跑得动保持满特效，跑不动才降。
+function detectSwiftshaderRenderer() {
   try {
     const canvas = document.createElement('canvas')
     const gl = (canvas.getContext('webgl') || canvas.getContext('experimental-webgl')) as WebGLRenderingContext | null
     if (!gl) return true
     const debugInfo = gl.getExtension('WEBGL_debug_renderer_info')
     const renderer = debugInfo ? String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)) : ''
-    // 软件渲染标记为低性能
-    if (/swiftshader|llvmpipe|software|microsoft basic/i.test(renderer)) return true
-    // 核显/集成 GPU 标记为低性能（GPU 满载重灾区）
-    if (/intel.*(uhd|iris|hd graphics)/i.test(renderer)) return true
-    if (/^amd radeon(\(tm\))? graphics$/i.test(renderer.trim())) return true
-    return false
+    return /swiftshader|llvmpipe|software|microsoft basic/i.test(renderer)
   } catch {
     return false
   }
+}
+
+// 运行时实测帧率：启动后采样 frameCount 帧，均值 < lowFps 判定为低性能。
+// 不看出身、不冤枉高配核显，也不漏掉真正跑不动的独显。
+function measureRuntimeFps(frameCount = 90, lowFps = 30): Promise<boolean> {
+  return new Promise((resolve) => {
+    let frames = 0
+    let start = 0
+    const tick = (now: number) => {
+      if (!start) start = now
+      frames++
+      if (frames >= frameCount) {
+        const fps = frames / ((now - start) / 1000)
+        resolve(fps < lowFps)
+        return
+      }
+      requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  })
 }
 
 onMounted(async () => {
@@ -122,9 +135,14 @@ onMounted(async () => {
   // 启动署名水印防删除守护
   startWatermarkGuard()
 
-  // 弱 GPU 设备降级：移除 backdrop-filter
-  if (detectLowGpu()) {
+  // 弱 GPU 自适应降级：软件渲染必降（快速兜底），其余按运行时实测帧率决定
+  // （治本：不看出身，跑得动满特效，跑不动才降）
+  if (detectSwiftshaderRenderer()) {
     document.body.classList.add('low-gpu')
+  } else {
+    measureRuntimeFps().then((low) => {
+      if (low) document.body.classList.add('low-gpu')
+    })
   }
 
   // 草元素音效：首次手势解锁 AudioContext（浏览器自动播放策略）
