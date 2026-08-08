@@ -69,14 +69,14 @@ BUILTIN_EXCLUDED_TOOLS: dict[str, set[str]] = {
     "xiaolian": {"call_xiaoli", "call_xiaoda", "shell_command", "python_executor", "write_file"},
     "xiaoke": {"call_xiaoli", "call_xiaoda", "shell_command", "write_file"},
 }
-# 内置 Agent 默认壁纸（头像与壁纸同源：每 agent 一张专属图，首次安装即生效；
-# 用户可在 WebUI 自行更换。旧注释"统一 webui_background.jpg"为过期描述，已修正）
+# 内置 Agent 默认壁纸（所有角色统一使用默认风景图 webui_background.jpg；
+# 安装包只允许默认风景图存在，不再提供角色专属图；用户可在 WebUI 自行更换）
 DEFAULT_WALLPAPERS = {
-    "xiaoda": "/media/wallpapers/xiaoda.jpg",
-    "xiaoli": "/media/wallpapers/xiaoli.jpg",
-    "xiaolang": "/media/wallpapers/xiaolang.jpg",
-    "xiaolian": "/media/wallpapers/xiaolian.jpg",
-    "xiaoke": "/media/wallpapers/xiaoke.jpg",
+    "xiaoda": "/media/wallpapers/webui_background.jpg",
+    "xiaoli": "/media/wallpapers/webui_background.jpg",
+    "xiaolang": "/media/wallpapers/webui_background.jpg",
+    "xiaolian": "/media/wallpapers/webui_background.jpg",
+    "xiaoke": "/media/wallpapers/webui_background.jpg",
 }
 # webui_background.jpg 也放到 media 路径，供 AgentBackdrop.vue DEFAULT_BG 使用
 _DEFAULT_BG_NAME = "webui_background.jpg"
