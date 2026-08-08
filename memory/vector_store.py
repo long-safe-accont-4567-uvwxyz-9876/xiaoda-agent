@@ -129,6 +129,13 @@ class VectorStore:
         self._embed_client = None
         self._vec_conn = None
         self._cache = EmbedCache(max_size=512)
+        # numpy 内存暴力索引（可选，VECTOR_BRUTE_ENABLED=1 启用）：
+        # BLAS 点积精确暴力 KNN（与 sqlite-vec 同 L2 度量，结果 100% 一致），
+        # 13761×512 仅 23MB 常驻内存，4.5ms/次（SQLite 暴力 33.5ms）。
+        # SQLite 仍是唯一数据源，本索引是加速副本，失败自动回退 SQLite。
+        self._brute: Any = None
+        self._brute_enabled = os.getenv("VECTOR_BRUTE_ENABLED", "0") == "1"
+        self._brute_base_dir = ""
         # 单飞（single-flight）：同一文本并发调用 embed 时只发一次 API 请求，
         # 其余协程共享结果，避免 7 路检索通道并发时重复 embed 放大延迟/限流
         self._inflight: dict[str, asyncio.Future] = {}
@@ -138,14 +145,25 @@ class VectorStore:
         self._embed_semaphore = asyncio.Semaphore(_embed_concurrency)
 
         if self._embed_mode == "local":
-            # 本地推理：不依赖远程 API Key / 网络，模型加载为懒加载
+            # 本地推理：不依赖远程 API Key / 网络，模型加载为懒加载。
+            # 后端由 LOCAL_EMBED_BACKEND 选择：默认 "cpu"（onnxruntime），
+            # "npu" 走 VIP9000 NPU（scripts/npu/bge_npu_runner --serve 常驻子进程）。
             try:
-                from memory.local_embed import LocalEmbeddingProvider
-                self._local_provider = LocalEmbeddingProvider(
-                    self._local_model_dir,
-                    query_prefix=self._local_query_prefix,
-                )
-                logger.info("vector_store.local_embed_enabled model_dir={}", self._local_model_dir)
+                backend = os.getenv("LOCAL_EMBED_BACKEND", "cpu")
+                if backend == "npu":
+                    from memory.npu_embed import AdaptiveEmbeddingProvider
+                    self._local_provider = AdaptiveEmbeddingProvider(
+                        self._local_model_dir,
+                        query_prefix=self._local_query_prefix,
+                    )
+                else:
+                    from memory.local_embed import LocalEmbeddingProvider
+                    self._local_provider = LocalEmbeddingProvider(
+                        self._local_model_dir,
+                        query_prefix=self._local_query_prefix,
+                    )
+                logger.info("vector_store.local_embed_enabled backend={} model_dir={}",
+                            backend, self._local_model_dir)
             except Exception as e:  # noqa: BLE001
                 logger.warning("vector_store.local_embed_init_failed error={}", str(e))
                 self._local_provider = None
@@ -292,6 +310,34 @@ class VectorStore:
         pragma_desc = "DELETE+cache" if is_fat else "WAL+cache+mmap"
         logger.info("vector_store.ready", pragmas=pragma_desc)
 
+        # numpy 内存暴力索引（VECTOR_BRUTE_ENABLED=1 时启用）：
+        # 优先从磁盘恢复（{db_stem}_brute/），失败则从 SQLite 全量重建。
+        # 加载是 CPU/IO 密集，走 to_thread；失败置 None 回退 SQLite 暴力 KNN。
+        if self._brute_enabled:
+            from memory.numpy_index import NumpyBruteIndex
+            base_dir = Path(self._db_path).parent / (Path(self._db_path).stem + "_brute")
+            self._brute_base_dir = str(base_dir)
+            self._brute = NumpyBruteIndex(dim=self._dimensions, base_dir=base_dir)
+
+            def _load_brute() -> None:
+                with self._lock:
+                    if self._closed:
+                        return
+                    if not self._brute.load():
+                        self._brute.load_from_db(self._vec_conn)
+
+            try:
+                await asyncio.to_thread(_load_brute)
+                if self._brute.ready:
+                    logger.info("vector_store.brute_ready", base_dir=self._brute_base_dir)
+                else:
+                    logger.warning("vector_store.brute_unavailable error={}",
+                                   getattr(self._brute, "_load_error", ""))
+                    self._brute = None
+            except Exception as e:  # noqa: BLE001
+                logger.warning("vector_store.brute_init_failed error={}", str(e))
+                self._brute = None
+
     async def close(self) -> None:
         def _do_close() -> None:
             """在后台线程中关闭 SQLite 连接。"""
@@ -312,6 +358,14 @@ class VectorStore:
         # （_get_embed_shared_client）。关闭 _embed_client 会关闭共享 httpx client，
         # 影响其他 VectorStore 实例。共享 client 生命周期由 close_shared_client() 统一管理。
         # AsyncOpenAI 实例本身无其他需清理的资源（底层 httpx 由共享池管理）。
+        # numpy 内存暴力索引：关闭前保存（若启用且已加载）
+        if self._brute is not None:
+            try:
+                self._brute.save()
+                self._brute.close()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("vector_store.brute_close_failed error={}", str(e))
+            self._brute = None
         if self._cache.stats["size"] > 0:
             logger.info("vector_store.cache_stats", **self._cache.stats)
 
@@ -463,6 +517,9 @@ class VectorStore:
                         [row_id, vec_json],
                     )
                     self._vec_conn.commit()
+                    # 双写 HNSW 加速索引（同锁内保证与 SQLite 顺序一致）
+                    if self._brute is not None:
+                        self._brute.upsert("memories_vec", row_id, vec)
                     return True
                 except Exception as e:
                     try:
@@ -494,6 +551,9 @@ class VectorStore:
                         (child_id, vec_json),
                     )
                     self._vec_conn.commit()
+                    # 双写 HNSW 加速索引
+                    if self._brute is not None:
+                        self._brute.upsert("memories_child_vec", child_id, vec)
                 except Exception as e:
                     logger.warning("vector_store.upsert_child_failed", row_id=child_id, error=str(e))
 
@@ -537,6 +597,9 @@ class VectorStore:
                             "INSERT OR REPLACE INTO memories_child_vec (rowid, embedding) VALUES (?, vec_f32(?))",
                             (cid, vec_json),
                         )
+                        # 双写内存暴力索引（事务内逐条同步，保证一致）
+                        if self._brute is not None:
+                            self._brute.upsert("memories_child_vec", cid, vec)
                     self._vec_conn.commit()
                 except Exception as e:
                     try:
@@ -560,6 +623,9 @@ class VectorStore:
                 try:
                     self._vec_conn.execute("DELETE FROM memories_vec WHERE rowid=?", [row_id])
                     self._vec_conn.commit()
+                    # 双写 HNSW 加速索引（mark_deleted 排除该节点）
+                    if self._brute is not None:
+                        self._brute.delete("memories_vec", row_id)
                     return True
                 except Exception as e:
                     logger.warning("vector_store.delete_failed", row_id=row_id, error=str(e))
@@ -586,6 +652,9 @@ class VectorStore:
                         "DELETE FROM memories_child_vec WHERE rowid=?", (child_id,)
                     )
                     self._vec_conn.commit()
+                    # 双写 HNSW 加速索引
+                    if self._brute is not None:
+                        self._brute.delete("memories_child_vec", child_id)
                 except Exception as e:
                     logger.warning("vector_store.delete_child_failed", row_id=child_id, error=str(e))
 
@@ -649,6 +718,9 @@ class VectorStore:
                                 [row_id, vec_json],
                             )
                             success += 1
+                            # 双写 HNSW 加速索引
+                            if self._brute is not None:
+                                self._brute.upsert("memories_vec", row_id, vec)
                         except Exception as e:
                             logger.warning("vector_store.batch_upsert_item_failed", row_id=row_id, error=str(e))
                     if success > 0:
@@ -699,6 +771,15 @@ class VectorStore:
             with self._lock:
                 if self._closed:
                     return []
+                # HNSW 加速路径：None=索引不可用/失败 → 回退 SQLite；[]=无匹配
+                if self._brute is not None:
+                    brute_res = self._brute.search(
+                        "memories_vec", vec, top_k,
+                        candidate_ids=candidate_ids,
+                        ef=max(fetch_k, top_k),
+                    )
+                    if brute_res is not None:
+                        return brute_res[:top_k]
                 # sqlite-vec 的 vec0 KNN 只允许 ORDER BY distance (不允许 , rowid)
                 # 所以 tie-breaking 在 Python 层做: 按 (distance, rowid) 稳定排序
                 if candidate_ids is not None:
@@ -743,6 +824,12 @@ class VectorStore:
             with self._lock:
                 if self._closed:
                     return []
+                # 内存暴力加速路径：None=不可用/失败 → 回退 SQLite
+                if self._brute is not None:
+                    brute_res = self._brute.search(
+                        "memories_child_vec", query_vec, top_k, ef=top_k * 2)
+                    if brute_res is not None:
+                        return [{"id": r[0], "distance": r[1]} for r in brute_res]
                 rows = self._vec_conn.execute(
                     "SELECT rowid, distance FROM memories_child_vec "
                     "WHERE embedding MATCH vec_f32(?) AND k=? "
@@ -808,6 +895,16 @@ class VectorStore:
                 with self._lock:
                     if self._closed:
                         return []
+                    # 内存暴力加速路径：None=不可用/失败 → 回退 SQLite
+                    if self._brute is not None:
+                        brute_res = self._brute.search(
+                            "memories_vec", mixed, k,
+                            candidate_ids=cand_int,
+                            ef=k * 2,
+                        )
+                        if brute_res is not None:
+                            return [{"rowid": r[0], "distance": r[1]}
+                                    for r in brute_res[:k]]
                     if cand_int is not None:
                         cand_set = set(cand_int)
                         oversample = min(k * 6, len(cand_set) + k * 2)
@@ -862,6 +959,9 @@ class VectorStore:
                         [row_id, vec_json],
                     )
                     self._vec_conn.commit()
+                    # 双写 HNSW 加速索引
+                    if self._brute is not None:
+                        self._brute.upsert("kg_entities_vec", row_id, vec)
                     return True
                 except Exception as e:
                     try:
@@ -899,6 +999,9 @@ class VectorStore:
                         [row_id, vec_json],
                     )
                     self._vec_conn.commit()
+                    # 双写 HNSW 加速索引
+                    if self._brute is not None:
+                        self._brute.upsert("kg_relations_vec", row_id, vec)
                     return True
                 except Exception as e:
                     try:
@@ -924,6 +1027,12 @@ class VectorStore:
             with self._lock:
                 if self._closed:
                     return []
+                # 内存暴力加速路径：None=不可用/失败 → 回退 SQLite
+                if self._brute is not None:
+                    brute_res = self._brute.search(
+                        "kg_entities_vec", vec, top_k, ef=top_k * 2)
+                    if brute_res is not None:
+                        return brute_res
                 rows = self._vec_conn.execute(
                     "SELECT rowid, distance FROM kg_entities_vec "
                     "WHERE embedding MATCH vec_f32(?) AND k=? "
@@ -954,6 +1063,12 @@ class VectorStore:
             with self._lock:
                 if self._closed:
                     return []
+                # 内存暴力加速路径：None=不可用/失败 → 回退 SQLite
+                if self._brute is not None:
+                    brute_res = self._brute.search(
+                        "kg_relations_vec", vec, top_k, ef=top_k * 2)
+                    if brute_res is not None:
+                        return brute_res
                 rows = self._vec_conn.execute(
                     "SELECT rowid, distance FROM kg_relations_vec "
                     "WHERE embedding MATCH vec_f32(?) AND k=? "
