@@ -162,7 +162,8 @@ _DEFAULTS: dict[str, Any] = {
         "shared_key": "shared",
     },
     # 本地部署：embedding 引擎模式（""=跟随 env EMBED_MODE；local/remote=用户显式选择）
-    "local_deploy": {"mode": ""},
+    # device：算力设备（""=跟随 LOCAL_EMBED_BACKEND/auto；cpu/npu=用户显式选择，重启生效）
+    "local_deploy": {"mode": "", "device": ""},
 }
 
 

@@ -283,6 +283,10 @@ class AgentCoreBootstrapper:
                 if isinstance(_ld, dict) and _ld.get("mode") in ("local", "remote"):
                     embed_mode = _ld["mode"]
                     logger.info("bootstrap.local_deploy_mode_applied mode={}", embed_mode)
+                # 算力设备持久化：WebUI「本地部署 → 算力设备检测」选择后重启生效
+                if isinstance(_ld, dict) and _ld.get("device") in ("cpu", "npu"):
+                    os.environ["LOCAL_EMBED_BACKEND"] = _ld["device"]
+                    logger.info("bootstrap.local_deploy_device_applied device={}", _ld["device"])
         except Exception as e:  # noqa: BLE001
             logger.debug("bootstrap.local_deploy_mode_read_failed error={}", str(e))
         core._vec_store = None

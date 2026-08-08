@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { NButton, NTag, useMessage } from 'naive-ui'
+import { NButton, NTag, NSelect, NModal, useMessage, type SelectOption } from 'naive-ui'
 import { get, post } from '../api'
 import { t } from '../i18n'
+import Tilt3D from '../components/fx/Tilt3D.vue'
 
 const message = useMessage()
 
+const activeTab = ref('deploy')
+
+// ── 部署页：引擎状态 ──────────────────────────────────
 const status = ref<any>(null)
 const logs = ref<string[]>([])
 const loading = ref(false)
@@ -63,9 +67,70 @@ async function stopEngine() {
   refreshLogs()
 }
 
+// ── 算力设备检测 ─────────────────────────────────────
+const devices = ref<any[]>([])
+const currentDevice = ref('')
+const runtimeBackend = ref('auto')
+const deviceLogs = ref<string[]>([])
+const devicesLoading = ref(false)
+const showDeviceConfirm = ref(false)
+const pendingDevice = ref<any>(null)
+
+const deviceOptions = computed<SelectOption[]>(() =>
+  devices.value.map(d => ({
+    label: `${d.name} · ${d.model}`,
+    value: d.id,
+    disabled: !d.available,
+    dev: d,
+  })),
+)
+
+async function refreshDevices() {
+  devicesLoading.value = true
+  try {
+    const r = await get<any>('/local-deploy/devices')
+    devices.value = r.devices || []
+    currentDevice.value = r.current || ''
+    runtimeBackend.value = r.runtime_backend || 'auto'
+  } catch { /* 静默 */ } finally {
+    devicesLoading.value = false
+  }
+}
+async function refreshDeviceLogs() {
+  try { deviceLogs.value = await get('/local-deploy/logs?limit=80&topic=device') } catch { /* 静默 */ }
+}
+
+function onDeviceChange(val: string) {
+  if (!val || val === currentDevice.value) return
+  const d = devices.value.find(x => x.id === val)
+  if (!d?.available) return
+  pendingDevice.value = d
+  showDeviceConfirm.value = true
+}
+
+async function confirmDeviceSwitch() {
+  const d = pendingDevice.value
+  if (!d) return
+  showDeviceConfirm.value = false
+  devicesLoading.value = true
+  try {
+    await post('/local-deploy/device', { device: d.id })
+    message.success(t('localDeployView.deviceSaved'))
+    currentDevice.value = d.id
+    message.warning(t('localDeployView.deviceRestarting'))
+    // 重启服务：X-Confirm 头由 api.post 的 confirm 参数携带
+    setTimeout(() => { post('/system/restart', {}, true).catch(() => {}) }, 1200)
+  } catch (e: any) {
+    message.error(e?.message || t('localDeployView.switchFailed'))
+    await refreshDevices()
+  } finally {
+    devicesLoading.value = false
+  }
+}
+
 onMounted(async () => {
-  await Promise.all([refreshStatus(), refreshLogs()])
-  timer = window.setInterval(() => { refreshStatus(); refreshLogs() }, 5000)
+  await Promise.all([refreshStatus(), refreshLogs(), refreshDevices(), refreshDeviceLogs()])
+  timer = window.setInterval(() => { refreshStatus(); refreshLogs(); refreshDevices(); refreshDeviceLogs() }, 5000)
 })
 onBeforeUnmount(() => { if (timer) window.clearInterval(timer) })
 </script>
@@ -77,57 +142,130 @@ onBeforeUnmount(() => { if (timer) window.clearInterval(timer) })
     </div>
     <p class="view-sub">{{ t('localDeployView.subtitle') }}</p>
 
-    <section class="glass-panel section engine-section">
-      <h3 class="section-title">⚙️ {{ t('localDeployView.engine') }}</h3>
+    <n-tabs type="line" animated display-directive="show" v-model:value="activeTab">
+      <!-- 部署 -->
+      <n-tab-pane name="deploy" :tab="t('localDeployView.tabDeploy')">
+        <Tilt3D :max-x="4" :max-y="6">
+        <section class="glass-panel section engine-section">
+          <h3 class="section-title">⚙️ {{ t('localDeployView.engine') }}</h3>
 
-      <div class="engine-card" :class="{ active: mode === 'remote' }"
-           :aria-disabled="loading" @click="setMode('remote')">
-        <div class="radio-dot" :class="{ on: mode === 'remote' }"></div>
-        <div class="engine-info">
-          <div class="engine-title">☁️ {{ t('localDeployView.apiMode') }}</div>
-          <div class="engine-desc">{{ t('localDeployView.apiDesc') }}</div>
-          <n-tag :type="apiConfigured ? 'success' : 'warning'" size="small">
-            {{ apiConfigured ? t('localDeployView.apiConfigured') : t('localDeployView.apiNotConfigured') }}
-          </n-tag>
-        </div>
-      </div>
-
-      <div class="engine-card" :class="{ active: mode === 'local' }"
-           :aria-disabled="loading" @click="setMode('local')">
-        <div class="radio-dot" :class="{ on: mode === 'local' }"></div>
-        <div class="engine-info">
-          <div class="engine-title">🖥️ {{ t('localDeployView.localMode') }}</div>
-          <div class="engine-desc">{{ t('localDeployView.localDesc') }}</div>
-          <div class="local-controls">
-            <n-tag :type="running ? 'success' : 'default'" size="small">
-              {{ running ? t('localDeployView.localRunning') : t('localDeployView.localStopped') }}
-            </n-tag>
-            <span v-if="mode === 'local'" class="backend-hint">
-              {{ backend === 'cpu' ? t('localDeployView.backendCpu') : t('localDeployView.backendNpu') }}
-            </span>
-            <n-button v-if="mode === 'local'" size="small" type="primary"
-                      :loading="loading" :disabled="running" @click.stop="startEngine">
-              ▶ {{ t('localDeployView.startBtn') }}
-            </n-button>
-            <n-button v-if="mode === 'local'" size="small" type="warning"
-                      :loading="loading" :disabled="!running" @click.stop="stopEngine">
-              ⏹ {{ t('localDeployView.stopBtn') }}
-            </n-button>
+          <div class="engine-card" :class="{ active: mode === 'remote' }"
+               :aria-disabled="loading" @click="setMode('remote')">
+            <div class="radio-dot" :class="{ on: mode === 'remote' }"></div>
+            <div class="engine-info">
+              <div class="engine-title">☁️ {{ t('localDeployView.apiMode') }}</div>
+              <div class="engine-desc">{{ t('localDeployView.apiDesc') }}</div>
+              <n-tag :type="apiConfigured ? 'success' : 'warning'" size="small">
+                {{ apiConfigured ? t('localDeployView.apiConfigured') : t('localDeployView.apiNotConfigured') }}
+              </n-tag>
+            </div>
           </div>
-          <p v-if="mode === 'local' && !running" class="must-start">
-            ⚠️ {{ t('localDeployView.mustStartFirst') }}
-          </p>
-        </div>
-      </div>
-    </section>
 
-    <section class="glass-panel section log-section">
-      <h3 class="section-title">📜 {{ t('localDeployView.logs') }}</h3>
-      <div class="log-box">
-        <div v-for="(ln, i) in logs" :key="i" class="log-line">{{ ln }}</div>
-        <div v-if="!logs.length" class="log-empty">{{ t('localDeployView.noLogs') }}</div>
-      </div>
-    </section>
+          <div class="engine-card" :class="{ active: mode === 'local' }"
+               :aria-disabled="loading" @click="setMode('local')">
+            <div class="radio-dot" :class="{ on: mode === 'local' }"></div>
+            <div class="engine-info">
+              <div class="engine-title">🖥️ {{ t('localDeployView.localMode') }}</div>
+              <div class="engine-desc">{{ t('localDeployView.localDesc') }}</div>
+              <div class="local-controls">
+                <n-tag :type="running ? 'success' : 'default'" size="small">
+                  {{ running ? t('localDeployView.localRunning') : t('localDeployView.localStopped') }}
+                </n-tag>
+                <span v-if="mode === 'local'" class="backend-hint">
+                  {{ backend === 'cpu' ? t('localDeployView.backendCpu') : t('localDeployView.backendNpu') }}
+                </span>
+                <span v-if="mode === 'local'" class="device-pick">
+                  <span class="device-pick-label">{{ t('localDeployView.devicePick') }}</span>
+                  <n-select
+                    :value="currentDevice"
+                    :options="deviceOptions"
+                    :loading="devicesLoading"
+                    :disabled="devicesLoading"
+                    size="small"
+                    placeholder="CPU / NPU"
+                    class="device-pick-select"
+                    @update:value="onDeviceChange"
+                  />
+                </span>
+                <n-button v-if="mode === 'local'" size="small" type="primary"
+                          :loading="loading" :disabled="running" @click.stop="startEngine">
+                  ▶ {{ t('localDeployView.startBtn') }}
+                </n-button>
+                <n-button v-if="mode === 'local'" size="small" type="warning"
+                          :loading="loading" :disabled="!running" @click.stop="stopEngine">
+                  ⏹ {{ t('localDeployView.stopBtn') }}
+                </n-button>
+              </div>
+              <p v-if="mode === 'local' && !running" class="must-start">
+                ⚠️ {{ t('localDeployView.mustStartFirst') }}
+              </p>
+            </div>
+          </div>
+        </section>
+        </Tilt3D>
+
+        <Tilt3D :max-x="4" :max-y="6">
+        <section class="glass-panel section log-section">
+          <h3 class="section-title">📜 {{ t('localDeployView.logs') }}</h3>
+          <div class="log-box">
+            <div v-for="(ln, i) in logs" :key="i" class="log-line">{{ ln }}</div>
+            <div v-if="!logs.length" class="log-empty">{{ t('localDeployView.noLogs') }}</div>
+          </div>
+        </section>
+        </Tilt3D>
+      </n-tab-pane>
+
+      <!-- 算力设备检测 -->
+      <n-tab-pane name="devices" :tab="t('localDeployView.tabDevices')">
+        <Tilt3D :max-x="4" :max-y="6">
+        <section class="glass-panel section device-section">
+          <h3 class="section-title">🔍 {{ t('localDeployView.devicesTitle') }}</h3>
+          <p class="view-sub">{{ t('localDeployView.devicesDesc') }}</p>
+
+          <div class="device-list">
+            <div v-for="d in devices" :key="d.id"
+                 class="device-card" :class="{ available: d.available, active: d.id === currentDevice }">
+              <div class="dev-head">
+                <span class="dev-name">{{ d.name }}</span>
+                <n-tag v-if="d.id === currentDevice" type="success" size="small">✓ {{ t('localDeployView.currentDevice') }}</n-tag>
+                <n-tag v-else-if="!d.available" type="default" size="small">{{ t('localDeployView.deviceUnavailable') }}</n-tag>
+              </div>
+              <div class="dev-model">{{ d.model }}</div>
+              <div class="dev-desc">{{ d.desc }}</div>
+            </div>
+          </div>
+
+          <div class="runtime-hint">
+            {{ t('localDeployView.runtimeBackend') }}: <code>{{ runtimeBackend }}</code>
+            <span class="restart-tag">{{ t('localDeployView.restartRequired') }}</span>
+          </div>
+        </section>
+        </Tilt3D>
+
+        <Tilt3D :max-x="4" :max-y="6">
+        <section class="glass-panel section log-section">
+          <h3 class="section-title">📜 {{ t('localDeployView.deviceLogs') }}</h3>
+          <div class="log-box">
+            <div v-for="(ln, i) in deviceLogs" :key="i" class="log-line">{{ ln }}</div>
+            <div v-if="!deviceLogs.length" class="log-empty">{{ t('localDeployView.noLogs') }}</div>
+          </div>
+        </section>
+        </Tilt3D>
+      </n-tab-pane>
+    </n-tabs>
+
+    <!-- 设备切换确认弹窗 -->
+    <n-modal
+      v-model:show="showDeviceConfirm"
+      preset="dialog"
+      type="warning"
+      :title="t('localDeployView.switchDeviceConfirmTitle')"
+      :content="t('localDeployView.switchDeviceConfirmDesc')(pendingDevice?.name || '')"
+      :positive-text="t('ok')"
+      :negative-text="t('cancel')"
+      @positive-click="confirmDeviceSwitch"
+      @negative-click="showDeviceConfirm = false"
+    />
   </div>
 </template>
 
@@ -236,5 +374,90 @@ onBeforeUnmount(() => { if (timer) window.clearInterval(timer) })
   text-align: center;
   padding-top: 90px;
   font-size: 12px;
+}
+
+/* 算力设备检测 */
+.device-section .view-sub {
+  margin-bottom: 14px;
+}
+.device-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--moon-dim);
+  opacity: 0.9;
+}
+.device-pick-label {
+  white-space: nowrap;
+}
+.device-pick-select {
+  min-width: 150px;
+}
+.device-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 12px;
+}
+.device-card {
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.02);
+  transition: border-color 0.25s, background 0.25s;
+}
+.device-card.available {
+  border-color: rgba(127, 214, 80, 0.28);
+}
+.device-card.active {
+  border-color: var(--dendro, #7fd650);
+  background: linear-gradient(90deg, rgba(127, 214, 80, 0.10), rgba(127, 214, 80, 0.02));
+}
+.dev-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.dev-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.dev-model {
+  font-size: 12.5px;
+  color: var(--moon-dim);
+  margin-bottom: 6px;
+  opacity: 0.9;
+  word-break: break-all;
+}
+.dev-desc {
+  font-size: 11.5px;
+  color: var(--moon-dim);
+  line-height: 1.6;
+  opacity: 0.72;
+}
+.runtime-hint {
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--moon-dim);
+  opacity: 0.85;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.runtime-hint code {
+  background: rgba(8, 18, 13, 0.72);
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  color: var(--dendro, #7fd650);
+}
+.restart-tag {
+  border: 1px solid #e6c26a;
+  color: #e6c26a;
+  border-radius: 6px;
+  padding: 1px 8px;
+  font-size: 11px;
 }
 </style>
