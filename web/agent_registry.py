@@ -103,25 +103,26 @@ def _normalize_wallpaper(url: str) -> str:
 
 
 def _ensure_default_wallpapers() -> None:
-    """首次启动时，将默认壁纸从源目录复制到 MEDIA_DIR/wallpapers/。
+    """确保 MEDIA_DIR/wallpapers/ 中的默认壁纸与安装包内置一致（统一为 711KB 默认风景图）。
 
     源目录优先级：
     1. web/frontend/public/assets/wallpapers/（dev 模式，agent 壁纸）
     2. web/frontend/public/assets/（dev 模式，webui_background.jpg）
     3. web/dist/assets/wallpapers/（vite build 产物）
-    4. _MEIPASS（PyInstaller 打包）
+    4. web/dist/assets/
+    5. _MEIPASS（PyInstaller 打包）
+
+    覆盖策略（仅针对默认文件名 {agent}.jpg / webui_background.jpg）：
+    - 文件缺失 → 从安装包复制；
+    - 文件已存在但大小与安装包内置不一致（旧版安装包残留的角色图等）→ 用内置覆盖；
+    - 用户通过 WebUI 上传的壁纸为 {agent}_{时间戳}.jpg，不在 needed 集合内，永不被覆盖。
     """
     target_dir = MEDIA_DIR / "wallpapers"
-    # 收集所有需要确保存在的默认壁纸文件名
+    # 收集所有需要确保存在的默认壁纸文件名（不含用户上传的带时间戳文件）
     needed: set[str] = set()
     for url in DEFAULT_WALLPAPERS.values():
         needed.add(Path(url).name)
     needed.add(_DEFAULT_BG_NAME)
-
-    # 检查哪些已存在
-    missing = [f for f in needed if not (target_dir / f).exists()]
-    if not missing:
-        return
 
     # 所有可能的源目录（webui_background.jpg 在 assets/ 根目录，其他在 wallpapers/）
     meipass = getattr(sys, "_MEIPASS", None)
@@ -136,19 +137,34 @@ def _ensure_default_wallpapers() -> None:
 
     target_dir.mkdir(parents=True, exist_ok=True)
     copied = 0
-    for fname in missing:
+    replaced = 0
+    for fname in needed:
+        src: Path | None = None
         for src_dir in search_dirs:
-            src = src_dir / fname
-            if src.exists():
-                try:
-                    shutil.copy2(src, target_dir / fname)
-                    copied += 1
-                except OSError as e:
-                    logger.debug("agent_registry.wallpaper_copy_failed {}: {}", fname, e)
+            p = src_dir / fname
+            if p.exists():
+                src = p
                 break
+        if src is None:
+            continue
+        target = target_dir / fname
+        if not target.exists():
+            try:
+                shutil.copy2(src, target)
+                copied += 1
+            except OSError as e:
+                logger.debug("agent_registry.wallpaper_copy_failed {}: {}", fname, e)
+            continue
+        # 已存在但与安装包内置大小不一致（如旧版安装包残留的角色图）→ 覆盖为默认
+        try:
+            if target.stat().st_size != src.stat().st_size:
+                shutil.copy2(src, target)
+                replaced += 1
+        except OSError:
+            pass
 
-    if copied:
-        logger.info("agent_registry.wallpaper_init: copied {} defaults to {}", copied, target_dir)
+    if copied or replaced:
+        logger.info("agent_registry.wallpaper_init: copied={} replaced={} defaults in {}", copied, replaced, target_dir)
 
 
 _ensure_default_wallpapers()
