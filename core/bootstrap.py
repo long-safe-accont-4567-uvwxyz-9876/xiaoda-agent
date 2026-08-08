@@ -270,7 +270,20 @@ class AgentCoreBootstrapper:
         embed_api_key = os.getenv("EMBED_API_KEY", "")
         embed_base_url = os.getenv("EMBED_BASE_URL", "https://api.siliconflow.cn/v1")
         # 本地推理模式（EMBED_MODE=local）不依赖 API Key，同样创建向量存储
+        # WebUI 本地部署页持久化的引擎模式优先（webui_overrides.json local_deploy.mode）
         embed_mode = os.getenv("EMBED_MODE", "remote")
+        try:
+            import json as _json
+            from config import get_config_dir
+            _ov_path = Path(get_config_dir()) / "webui_overrides.json"
+            if _ov_path.exists():
+                _ov = _json.loads(_ov_path.read_text(encoding="utf-8"))
+                _ld = (_ov or {}).get("local_deploy", {})
+                if isinstance(_ld, dict) and _ld.get("mode") in ("local", "remote"):
+                    embed_mode = _ld["mode"]
+                    logger.info("bootstrap.local_deploy_mode_applied mode={}", embed_mode)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("bootstrap.local_deploy_mode_read_failed error={}", str(e))
         core._vec_store = None
         if embed_mode == "local" or embed_api_key:
             try:

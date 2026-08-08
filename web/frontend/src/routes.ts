@@ -28,6 +28,7 @@ export const routes: RouteRecordRaw[] = [
       { path: 'schedule', name: 'schedule', component: () => import('./views/ScheduleView.vue') },
       { path: 'media', name: 'media', component: () => import('./views/MediaView.vue') },
       { path: 'health', name: 'health', component: () => import('./views/HealthView.vue') },
+      { path: 'local-deploy', name: 'local-deploy', component: () => import('./views/LocalDeployView.vue') },
       { path: 'dashboard', name: 'dashboard', component: () => import('./views/DashboardView.vue') },
       { path: 'settings/agents', name: 'agents', component: () => import('./views/AgentsView.vue') },
       { path: 'settings/models', name: 'models', component: () => import('./views/ModelsView.vue') },

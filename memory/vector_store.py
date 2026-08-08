@@ -168,33 +168,141 @@ class VectorStore:
             #     无 NPU（纯 CPU 机器/Windows 打包版/无 sudo）自动降级全 CPU；
             #   npu → 强制走自适应（探测失败仍降级 CPU）；
             #   cpu → 显式纯 CPU（onnxruntime）。
-            try:
-                backend = os.getenv("LOCAL_EMBED_BACKEND", "auto")
-                if backend in ("npu", "auto"):
-                    from memory.npu_embed import AdaptiveEmbeddingProvider
-                    self._local_provider = AdaptiveEmbeddingProvider(
-                        self._local_model_dir,
-                        query_prefix=self._local_query_prefix,
-                    )
-                else:
-                    from memory.local_embed import LocalEmbeddingProvider
-                    self._local_provider = LocalEmbeddingProvider(
-                        self._local_model_dir,
-                        query_prefix=self._local_query_prefix,
-                    )
+            self._local_provider = self._build_local_provider()
+            if self._local_provider is not None:
                 logger.info("vector_store.local_embed_enabled backend={} model_dir={}",
-                            backend, self._local_model_dir)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("vector_store.local_embed_init_failed error={}", str(e))
-                self._local_provider = None
-        elif HAS_OPENAI and embed_api_key:
-            self._embed_client = AsyncOpenAI(
-                api_key=embed_api_key,
-                base_url=embed_base_url or "https://api.siliconflow.cn/v1",
-                http_client=_get_embed_shared_client(),
-                timeout=_EMBED_HTTP_TIMEOUT,
-                max_retries=0,  # 禁用 SDK 内部盲重试，连接错误重试无效且放大延迟
+                            os.getenv("LOCAL_EMBED_BACKEND", "auto"), self._local_model_dir)
+            else:
+                logger.warning("vector_store.local_embed_init_failed provider=None")
+        elif HAS_OPENAI and self._embed_api_key:
+            self._embed_client = self._build_remote_client()
+
+    # ── embedding 引擎构建 / 热切换（WebUI 本地部署页）──────────
+
+    def _build_local_provider(self) -> Any:
+        """按 LOCAL_EMBED_BACKEND 构建本地 embedding provider（幂等）。"""
+        try:
+            backend = os.getenv("LOCAL_EMBED_BACKEND", "auto")
+            if backend in ("npu", "auto"):
+                from memory.npu_embed import AdaptiveEmbeddingProvider
+                return AdaptiveEmbeddingProvider(
+                    self._local_model_dir,
+                    query_prefix=self._local_query_prefix,
+                )
+            from memory.local_embed import LocalEmbeddingProvider
+            return LocalEmbeddingProvider(
+                self._local_model_dir,
+                query_prefix=self._local_query_prefix,
             )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("vector_store.local_embed_build_failed error={}", str(e))
+            return None
+
+    def _build_remote_client(self) -> Any:
+        """构建远程 OpenAI 兼容 embedding client（硅基流动默认，幂等）。"""
+        if not HAS_OPENAI or not self._embed_api_key:
+            return None
+        return AsyncOpenAI(
+            api_key=self._embed_api_key,
+            base_url=self._embed_base_url or "https://api.siliconflow.cn/v1",
+            http_client=_get_embed_shared_client(),
+            timeout=_EMBED_HTTP_TIMEOUT,
+            max_retries=0,  # 禁用 SDK 内部盲重试，连接错误重试无效且放大延迟
+        )
+
+    def embed_engine_status(self) -> dict:
+        """当前 embedding 引擎状态（WebUI 本地部署页展示）。"""
+        provider = self._local_provider
+        running = False
+        if provider is not None:
+            try:
+                running = bool(getattr(provider, "ready", False))
+            except Exception:  # noqa: BLE001
+                running = False
+        return {
+            "mode": self._embed_mode,
+            "engine_running": running,
+            "backend": os.getenv("LOCAL_EMBED_BACKEND", "auto"),
+            "api_configured": bool(
+                self._embed_api_key or os.getenv("SILICONFLOW_API_KEY", "")),
+            "model_dir": self._local_model_dir,
+            "dimensions": self._dimensions,
+        }
+
+    def set_embed_mode(self, mode: str) -> dict:
+        """运行时切换 embedding 引擎（local=本地模型 / remote=远程 API）。
+
+        幂等：目标模式与当前一致时直接返回现状。切换时释放旧本地引擎资源
+        （onnxruntime session / NPU 常驻进程）；远程 client 由共享 httpx
+        连接池管理，仅释放引用。构建失败自动回退另一模式并告警。
+        """
+        mode = (mode or "remote").strip().lower()
+        if mode not in ("local", "remote"):
+            mode = "remote"
+        with self._lock:
+            if mode == self._embed_mode:
+                return self.embed_engine_status()
+            old_provider = self._local_provider
+            self._local_provider = None
+            self._embed_client = None
+            if old_provider is not None:
+                try:
+                    old_provider.close()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("vector_store.embed_mode_old_provider_close_failed error={}", str(e))
+            self._embed_mode = mode
+            if mode == "local":
+                provider = self._build_local_provider()
+                if provider is not None:
+                    self._local_provider = provider
+                    logger.info("vector_store.embed_mode_switched mode=local")
+                else:
+                    logger.warning("vector_store.embed_mode_switch_failed fallback=remote")
+                    self._embed_mode = "remote"
+                    self._embed_client = self._build_remote_client()
+            else:
+                client = self._build_remote_client()
+                if client is not None:
+                    self._embed_client = client
+                    logger.info("vector_store.embed_mode_switched mode=remote")
+                else:
+                    logger.warning("vector_store.embed_mode_switch_failed fallback=local")
+                    self._embed_mode = "local"
+                    self._local_provider = self._build_local_provider()
+            return self.embed_engine_status()
+
+    def start_local_engine(self) -> dict:
+        """启动本地 embedding 引擎：确保 local 模式 + 预加载模型（含 NPU 探测）。
+
+        WebUI 本地部署页"启动"按钮：使用本地模型前必须先启动。
+        """
+        with self._lock:
+            if self._embed_mode != "local":
+                self._embed_mode = "local"
+            if self._local_provider is None:
+                self._local_provider = self._build_local_provider()
+            provider = self._local_provider
+            if provider is not None:
+                try:
+                    ok = provider.load()  # 幂等：已加载直接返回 True
+                except Exception as e:  # noqa: BLE001
+                    ok = False
+                    logger.warning("vector_store.local_engine_start_failed error={}", str(e))
+                if ok:
+                    logger.info("vector_store.local_engine_started")
+            return self.embed_engine_status()
+
+    def stop_local_engine(self) -> dict:
+        """停止本地 embedding 引擎：释放 onnxruntime session / NPU 常驻进程。"""
+        with self._lock:
+            if self._local_provider is not None:
+                try:
+                    self._local_provider.close()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("vector_store.local_engine_stop_failed error={}", str(e))
+            self._local_provider = None
+            logger.info("vector_store.local_engine_stopped")
+            return self.embed_engine_status()
 
     @property
     def ready(self) -> bool:

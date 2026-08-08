@@ -1,10 +1,12 @@
 """首次配置检测守护测试。
 
-防止 P0 bug 回归：is_first_run() 只检查 MIMO_API_KEY，漏检其他 3 个必填项
-（QQBOT_APP_ID/QQBOT_APP_SECRET/EMBED_API_KEY），导致用户填了 MIMO 但漏配
-其他时，向导不触发，主程序启动后报错"没有填"卡死。
+防止 P0 bug 回归：is_first_run() 只检查 MIMO_API_KEY，漏检其他必填项
+（QQBOT_APP_ID/QQBOT_APP_SECRET），导致用户填了 MIMO 但漏配其他时，
+向导不触发，主程序启动后报错"没有填"卡死。
 
-用户需求：4 个必填 API 任一没填 / 检测出错 → 进入首次配置程序。
+必填项：MIMO_API_KEY / QQBOT_APP_ID / QQBOT_APP_SECRET / SILICONFLOW_API_KEY。
+EMBED_API_KEY 在迁移本地向量模型（NPU/CPU 内置 BGE）后已改为选填，
+为空不再进入首次配置（用户需求：仅真实必填 API 参与判定）。
 """
 import os
 import setup_wizard
@@ -49,24 +51,41 @@ def test_first_run_when_qqbot_secret_missing(monkeypatch):
     assert setup_wizard.is_first_run() is True
 
 
-def test_first_run_when_embed_missing(monkeypatch):
-    """EMBED_API_KEY 为空 → 首次运行（记忆向量检索必需）。"""
+def test_first_run_when_sf_missing(monkeypatch):
+    """SILICONFLOW_API_KEY 为空 → 首次运行（免费模型发现/重排序核心依赖）。"""
     _set_env_state(monkeypatch, env_exists=True, vals={
         "MIMO_API_KEY": "sk-mimo-xxx",
         "QQBOT_APP_ID": "12345",
         "QQBOT_APP_SECRET": "secret",
-        "EMBED_API_KEY": "",          # 空
+        "SILICONFLOW_API_KEY": "",   # 空
     })
-    assert setup_wizard.is_first_run() is True
+    assert setup_wizard.is_first_run() is True, (
+        "SILICONFLOW_API_KEY 为必填，为空应进入首次配置"
+    )
+
+
+def test_not_first_run_when_embed_missing(monkeypatch):
+    """EMBED_API_KEY 为空 → 不再是首次运行（本地向量模型已内置，选填项）。"""
+    _set_env_state(monkeypatch, env_exists=True, vals={
+        "MIMO_API_KEY": "sk-mimo-xxx",
+        "QQBOT_APP_ID": "12345",
+        "QQBOT_APP_SECRET": "secret",
+        "SILICONFLOW_API_KEY": "sk-sf-xxx",
+        "EMBED_API_KEY": "",          # 空（选填，不应阻塞向导完成）
+    })
+    assert setup_wizard.is_first_run() is False, (
+        "本地向量模型内置后 EMBED_API_KEY 为选填，为空不应强制跳转 setup"
+    )
 
 
 def test_not_first_run_when_all_required_set(monkeypatch):
-    """4 个必填项都有值 → 不是首次运行。"""
+    """全部必填项（含 SILICONFLOW_API_KEY）都有值 → 不是首次运行。"""
     _set_env_state(monkeypatch, env_exists=True, vals={
         "MIMO_API_KEY": "sk-mimo-xxx",
         "QQBOT_APP_ID": "12345",
         "QQBOT_APP_SECRET": "secret",
-        "EMBED_API_KEY": "embed-key",
+        "SILICONFLOW_API_KEY": "sk-sf-xxx",
+        "EMBED_API_KEY": "",          # 选填，缺省不影响
     })
     assert setup_wizard.is_first_run() is False
 

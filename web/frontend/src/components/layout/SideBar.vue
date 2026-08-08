@@ -20,6 +20,7 @@ const navItems = [
   { icon: 'media', labelKey: 'nav.media', route: '/media' },
   { icon: 'health', labelKey: 'nav.health', route: '/health' },
   { icon: 'dashboard', labelKey: 'nav.dashboard', route: '/dashboard' },
+  { icon: 'chip', labelKey: 'nav.localDeploy', route: '/local-deploy' },
   { icon: 'settings', labelKey: 'nav.settings', route: '/settings/system' },
   { icon: 'alert', labelKey: 'nav.disclaimer', route: '/disclaimer' },
 ]

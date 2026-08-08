@@ -1,0 +1,240 @@
+<script setup lang="ts">
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { NButton, NTag, useMessage } from 'naive-ui'
+import { get, post } from '../api'
+import { t } from '../i18n'
+
+const message = useMessage()
+
+const status = ref<any>(null)
+const logs = ref<string[]>([])
+const loading = ref(false)
+let timer: number | null = null
+
+const mode = computed(() => status.value?.mode ?? 'remote')
+const running = computed(() => status.value?.engine_running ?? false)
+const backend = computed(() => status.value?.backend ?? 'auto')
+const apiConfigured = computed(() => status.value?.api_configured ?? false)
+
+async function refreshStatus() {
+  try { status.value = await get('/local-deploy/status') } catch { /* 向量库未就绪时静默 */ }
+}
+async function refreshLogs() {
+  try { logs.value = await get('/local-deploy/logs?limit=80') } catch { /* 静默 */ }
+}
+
+async function setMode(m: string) {
+  if (m === mode.value) return
+  loading.value = true
+  try {
+    status.value = await post('/local-deploy/mode', { mode: m })
+    message.success(t('localDeployView.switchSuccess'))
+  } catch (e: any) {
+    message.error(t('localDeployView.switchFailed') + (e?.message ? `：${e.message}` : ''))
+  } finally {
+    loading.value = false
+  }
+  refreshLogs()
+}
+
+async function startEngine() {
+  loading.value = true
+  try {
+    status.value = await post('/local-deploy/start')
+    message.success(t('localDeployView.startDone'))
+  } catch (e: any) {
+    message.error(t('localDeployView.startFailed') + (e?.message ? `：${e.message}` : ''))
+  } finally {
+    loading.value = false
+  }
+  refreshLogs()
+}
+
+async function stopEngine() {
+  loading.value = true
+  try {
+    status.value = await post('/local-deploy/stop')
+    message.success(t('localDeployView.stopDone'))
+  } catch (e: any) {
+    message.error(t('localDeployView.stopFailed') + (e?.message ? `：${e.message}` : ''))
+  } finally {
+    loading.value = false
+  }
+  refreshLogs()
+}
+
+onMounted(async () => {
+  await Promise.all([refreshStatus(), refreshLogs()])
+  timer = window.setInterval(() => { refreshStatus(); refreshLogs() }, 5000)
+})
+onBeforeUnmount(() => { if (timer) window.clearInterval(timer) })
+</script>
+
+<template>
+  <div class="local-deploy-view">
+    <div class="view-header">
+      <h2>🖥️ {{ t('localDeployView.title') }}</h2>
+    </div>
+    <p class="view-sub">{{ t('localDeployView.subtitle') }}</p>
+
+    <section class="glass-panel section engine-section">
+      <h3 class="section-title">⚙️ {{ t('localDeployView.engine') }}</h3>
+
+      <div class="engine-card" :class="{ active: mode === 'remote' }"
+           :aria-disabled="loading" @click="setMode('remote')">
+        <div class="radio-dot" :class="{ on: mode === 'remote' }"></div>
+        <div class="engine-info">
+          <div class="engine-title">☁️ {{ t('localDeployView.apiMode') }}</div>
+          <div class="engine-desc">{{ t('localDeployView.apiDesc') }}</div>
+          <n-tag :type="apiConfigured ? 'success' : 'warning'" size="small">
+            {{ apiConfigured ? t('localDeployView.apiConfigured') : t('localDeployView.apiNotConfigured') }}
+          </n-tag>
+        </div>
+      </div>
+
+      <div class="engine-card" :class="{ active: mode === 'local' }"
+           :aria-disabled="loading" @click="setMode('local')">
+        <div class="radio-dot" :class="{ on: mode === 'local' }"></div>
+        <div class="engine-info">
+          <div class="engine-title">🖥️ {{ t('localDeployView.localMode') }}</div>
+          <div class="engine-desc">{{ t('localDeployView.localDesc') }}</div>
+          <div class="local-controls">
+            <n-tag :type="running ? 'success' : 'default'" size="small">
+              {{ running ? t('localDeployView.localRunning') : t('localDeployView.localStopped') }}
+            </n-tag>
+            <span v-if="mode === 'local'" class="backend-hint">
+              {{ backend === 'cpu' ? t('localDeployView.backendCpu') : t('localDeployView.backendNpu') }}
+            </span>
+            <n-button v-if="mode === 'local'" size="small" type="primary"
+                      :loading="loading" :disabled="running" @click.stop="startEngine">
+              ▶ {{ t('localDeployView.startBtn') }}
+            </n-button>
+            <n-button v-if="mode === 'local'" size="small" type="warning"
+                      :loading="loading" :disabled="!running" @click.stop="stopEngine">
+              ⏹ {{ t('localDeployView.stopBtn') }}
+            </n-button>
+          </div>
+          <p v-if="mode === 'local' && !running" class="must-start">
+            ⚠️ {{ t('localDeployView.mustStartFirst') }}
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="glass-panel section log-section">
+      <h3 class="section-title">📜 {{ t('localDeployView.logs') }}</h3>
+      <div class="log-box">
+        <div v-for="(ln, i) in logs" :key="i" class="log-line">{{ ln }}</div>
+        <div v-if="!logs.length" class="log-empty">{{ t('localDeployView.noLogs') }}</div>
+      </div>
+    </section>
+  </div>
+</template>
+
+<style scoped>
+.local-deploy-view {
+  padding: 20px 24px;
+  max-width: 880px;
+  margin: 0 auto;
+}
+.view-header h2 {
+  margin: 0;
+  font-family: 'Noto Serif SC', serif;
+  font-weight: 700;
+}
+.view-sub {
+  margin: 6px 0 18px;
+  color: var(--moon-dim);
+  font-size: 13px;
+  opacity: 0.75;
+}
+.section {
+  padding: 18px 20px;
+  margin-bottom: 18px;
+  border-radius: 14px;
+}
+.section-title {
+  margin: 0 0 14px;
+  font-size: 15px;
+  color: var(--dendro, #7fd650);
+}
+
+.engine-card {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  margin-bottom: 12px;
+  cursor: pointer;
+  transition: border-color 0.25s, background 0.25s, transform 0.25s;
+}
+.engine-card:hover {
+  border-color: rgba(127, 214, 80, 0.45);
+  transform: translateX(3px);
+}
+.engine-card.active {
+  border-color: var(--dendro, #7fd650);
+  background: linear-gradient(90deg, rgba(127, 214, 80, 0.10), rgba(127, 214, 80, 0.02));
+}
+.engine-card[aria-disabled='true'] { cursor: not-allowed; opacity: 0.7; }
+
+.radio-dot {
+  width: 16px;
+  height: 16px;
+  margin-top: 3px;
+  border-radius: 50%;
+  border: 2px solid rgba(232, 213, 163, 0.45);
+  flex-shrink: 0;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.radio-dot.on {
+  border-color: var(--dendro, #7fd650);
+  box-shadow: inset 0 0 0 3px rgba(15, 31, 23, 0.9), 0 0 0 1px var(--dendro, #7fd650);
+}
+
+.engine-info { flex: 1; }
+.engine-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.engine-desc { font-size: 12px; color: var(--moon-dim); margin-bottom: 8px; line-height: 1.6; opacity: 0.8; }
+
+.local-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.backend-hint {
+  font-size: 12px;
+  color: var(--moon-dim);
+  opacity: 0.8;
+}
+.must-start {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #e6c26a;
+}
+
+.log-box {
+  background: rgba(8, 18, 13, 0.72);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  height: 260px;
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+.log-line {
+  color: rgba(190, 214, 200, 0.85);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.log-empty {
+  color: rgba(190, 214, 200, 0.35);
+  text-align: center;
+  padding-top: 90px;
+  font-size: 12px;
+}
+</style>
