@@ -9,6 +9,7 @@
 from __future__ import annotations
 from typing import Any, ClassVar
 
+import hashlib
 import json
 import shutil
 import sys
@@ -103,7 +104,11 @@ def _normalize_wallpaper(url: str) -> str:
 
 
 def _ensure_default_wallpapers() -> None:
-    """确保 MEDIA_DIR/wallpapers/ 中的默认壁纸与安装包内置一致（统一为 711KB 默认风景图）。
+    """确保 MEDIA_DIR/wallpapers/ 中的默认壁纸与安装包内置一致。
+
+    仅管理"默认壁纸文件名"（来自 DEFAULT_WALLPAPERS 配置的 {agent}.jpg 与
+    webui_background.jpg）。用户通过 WebUI 上传的壁纸始终命名为
+    {agent}_{时间戳}.jpg，不在管理范围内，天然不会被触碰。
 
     源目录优先级：
     1. web/frontend/public/assets/wallpapers/（dev 模式，agent 壁纸）
@@ -112,12 +117,27 @@ def _ensure_default_wallpapers() -> None:
     4. web/dist/assets/
     5. _MEIPASS（PyInstaller 打包）
 
-    覆盖策略（仅针对默认文件名 {agent}.jpg / webui_background.jpg）：
-    - 文件缺失 → 从安装包复制；
-    - 文件已存在但大小与安装包内置不一致（旧版安装包残留的角色图等）→ 用内置覆盖；
-    - 用户通过 WebUI 上传的壁纸为 {agent}_{时间戳}.jpg，不在 needed 集合内，永不被覆盖。
+    覆盖策略（非硬编码，依据配置与文件系统事实）：
+    - 默认文件缺失 → 从安装包内置复制（首次安装生效）；
+    - 默认文件已存在但与安装包内置内容不一致（如旧版安装包残留的旧角色图）→
+      用内置内容覆盖，修复升级安装后仍加载旧图的问题；
+    - 某 agent 已存在用户上传的壁纸文件（{agent}_*.jpg）→ 用户已自行配置壁纸，
+      跳过该 agent 默认文件的覆盖，绝不覆盖用户配置。
     """
     target_dir = MEDIA_DIR / "wallpapers"
+
+    def _md5(p: Path) -> str:
+        """计算文件内容哈希，用于判断与安装包内置是否一致。"""
+        h = hashlib.md5()
+        with p.open("rb") as f:
+            for chunk in iter(lambda: f.read(1 << 16), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def _has_user_upload(name: str) -> bool:
+        """是否存在该 agent 的 WebUI 上传壁纸（{name}_{时间戳}.jpg）。"""
+        return any(target_dir.glob(f"{name}_*.*"))
+
     # 收集所有需要确保存在的默认壁纸文件名（不含用户上传的带时间戳文件）
     needed: set[str] = set()
     for url in DEFAULT_WALLPAPERS.values():
@@ -148,6 +168,8 @@ def _ensure_default_wallpapers() -> None:
         if src is None:
             continue
         target = target_dir / fname
+        agent_name = Path(fname).stem  # 默认文件名 → 对应 agent（webui_background 无对应 agent）
+        user_configured = agent_name != "webui_background" and _has_user_upload(agent_name)
         if not target.exists():
             try:
                 shutil.copy2(src, target)
@@ -155,9 +177,12 @@ def _ensure_default_wallpapers() -> None:
             except OSError as e:
                 logger.debug("agent_registry.wallpaper_copy_failed {}: {}", fname, e)
             continue
-        # 已存在但与安装包内置大小不一致（如旧版安装包残留的角色图）→ 覆盖为默认
+        # 用户已上传过该 agent 的壁纸 → 其默认文件不再覆盖，用户配置优先
+        if user_configured:
+            continue
+        # 已存在但与安装包内置内容不一致（如旧版安装包残留的角色图）→ 用内置覆盖
         try:
-            if target.stat().st_size != src.stat().st_size:
+            if _md5(target) != _md5(src):
                 shutil.copy2(src, target)
                 replaced += 1
         except OSError:
