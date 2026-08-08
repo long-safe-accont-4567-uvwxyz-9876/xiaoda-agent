@@ -72,7 +72,7 @@
   "permission_mode": null,
   "memory_scope": null,
   "background": false,
-  "wallpaper": "/assets/wallpapers/xiaolian.jpg",
+  "wallpaper": "/assets/webui_background.jpg",
   "allowed_paths": [
     "tools/web_browse_tools.py",
     "tools/web_browse_enhanced.py"
