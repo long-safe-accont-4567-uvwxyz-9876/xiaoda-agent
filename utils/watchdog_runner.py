@@ -232,26 +232,25 @@ class Watchdog:
             # 仅 stdin 用 DEVNULL（子进程不需要输入）。
             # 注：原 a449d21 的 I4 改成 stdout/stderr=DEVNULL 把主程序
             # DEBUG 日志和崩溃 traceback 全丢了，导致诊断黑箱，已撤销。
-            if sys.platform == "win32" and self.cmd:
-                # Windows 安装目录含空格（如 "D:\Xiaoda Agent\xiaoda-agent.exe"）时，
-                # 仅靠 CreateProcess 命令行解析（lpApplicationName=None）可能把
-                # exe 完整路径误当作 positional 参数传给主程序，argparse 报
-                # "invalid choice: 'D:\Xiaoda Agent\xiaoda-agent.exe'" 后主进程
-                # 立即退出（exit_code=0），watchdog 陷入无限重启。
-                # 显式 executable= 指定程序（lpApplicationName），命令行只传
-                # 参数列表，彻底规避空格路径/引号解析问题（v0.5.62 修复）。
-                self._proc = subprocess.Popen(
-                    list(self.cmd[1:]),
-                    executable=self.cmd[0],
-                    cwd=self.cwd,
-                    stdin=subprocess.DEVNULL,
-                )
-            else:
-                self._proc = subprocess.Popen(
-                    self.cmd,
-                    cwd=self.cwd,
-                    stdin=subprocess.DEVNULL,
-                )
+            #
+            # 注（v0.5.64 回退）：v0.5.62 曾改用
+            #   Popen(list(cmd[1:]), executable=cmd[0], ...)
+            # 想规避安装目录空格（"D:\Xiaoda Agent\..."）。但 Windows 上
+            # subprocess 提供 executable= 时，lpApplicationName 用 executable、
+            # 而 lpCommandLine 只由 args 生成（Python 文档明确），即命令行
+            # 变成 "--desktop --host ..."，不含 exe 路径。PyInstaller bootloader
+            # 从 lpCommandLine 解析 sys.argv 时把第一个 token "--desktop" 当作
+            # argv[0]（程序名），argparse 收到的 sys.argv[1:] 因此丢掉了
+            # --desktop → 主进程不进入 desktop 模式，反而再次走看门狗分支，
+            # 嵌套启动看门狗 → 进程爆炸/端口争抢/无限重启（表现为"双击
+            # 无法启动"，0.5.59 正常、0.5.62 异常、手动 --desktop 正常）。
+            # cmd 是 list，Popen 会经 list2cmdline 自动给带空格的 exe 路径
+            # 加引号，CreateProcess 能正确解析（0.5.59 实测正常），回退之。
+            self._proc = subprocess.Popen(
+                self.cmd,
+                cwd=self.cwd,
+                stdin=subprocess.DEVNULL,
+            )
             self.log.info("watchdog.started pid=%d", self._proc.pid)
             return True
         except Exception as e:
