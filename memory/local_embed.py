@@ -21,6 +21,10 @@ from typing import Any
 
 from loguru import logger
 
+# 单批最大条数：onnxruntime 单会话串行推理，大批次长时间占会话
+# 会让检索路径的 embed 排队（32 条实测 6.5s），拆小批缩短排队窗口
+_MAX_EMBED_BATCH = 8
+
 # onnxruntime / tokenizers 为可选依赖：未安装时 Provider 降级不可用，
 # vector_store 保持远程 API 路径，不强制本地推理。
 try:
@@ -152,30 +156,41 @@ class LocalEmbeddingProvider:
         return cls_vec / norm
 
     def encode_batch(self, texts: list[str]) -> list[list[float]]:
-        """批量向量化（同步，CPU 密集，调用方应经 to_thread 执行）。"""
+        """批量向量化（同步，CPU 密集，调用方应经 to_thread 执行）。
+
+        内部按 EMBED_MAX_BATCH（默认 8）拆小批：onnxruntime 单会话只能串行
+        推理，32 条大批实测 6.5s 长时间占用会话，检索路径的 embed 排队 6s+
+        撞 8s 检索超时线（首条消息后台批量编码 + 检索并发时）。拆小批后
+        单批 ≤1s，检索 embed 排队窗口大幅缩短（v0.5.62 修复）。
+        """
         if not texts:
             return []
         if not self._loaded and not self.load():
             return []
         try:
-            input_ids, attention, types = self._tokenize(texts)
-            outputs = self._session.run(
-                None,
-                {
-                    "input_ids": input_ids,
-                    "attention_mask": attention,
-                    "token_type_ids": types,
-                },
-            )
-            # 输出可能是 last_hidden_state（B,S,H）或已池化向量（B,H）
-            out = outputs[0]
-            if out.ndim == 3:
-                vecs = self._pool_cls(out)
-            else:
-                norm = np.linalg.norm(out, axis=1, keepdims=True)
-                norm[norm == 0] = 1.0
-                vecs = out / norm
-            return [v.tolist() for v in vecs]
+            out: list[list[float]] = []
+            step = _MAX_EMBED_BATCH
+            for i in range(0, len(texts), step):
+                chunk = texts[i:i + step]
+                input_ids, attention, types = self._tokenize(chunk)
+                outputs = self._session.run(
+                    None,
+                    {
+                        "input_ids": input_ids,
+                        "attention_mask": attention,
+                        "token_type_ids": types,
+                    },
+                )
+                # 输出可能是 last_hidden_state（B,S,H）或已池化向量（B,H）
+                o = outputs[0]
+                if o.ndim == 3:
+                    vecs = self._pool_cls(o)
+                else:
+                    norm = np.linalg.norm(o, axis=1, keepdims=True)
+                    norm[norm == 0] = 1.0
+                    vecs = o / norm
+                out.extend(v.tolist() for v in vecs)
+            return out
         except Exception as e:  # noqa: BLE001
             logger.warning("local_embed.encode_failed error={}", str(e))
             return []

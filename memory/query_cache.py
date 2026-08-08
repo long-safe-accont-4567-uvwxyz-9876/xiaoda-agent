@@ -58,13 +58,16 @@ class QueryCache:
     async def _embed(self, text: str) -> list[float] | None:
         """生成文本嵌入向量；不可用或失败返回 None。
 
-        设 8s 超时：embedding API 卡住时跳过缓存查询（不跳过记忆检索，
-        只跳过缓存环节，后续检索环节继续执行）。
+        设 1.5s 短超时：embedding 排队时（首条消息后台批量编码占满
+        onnxruntime 会话/线程池，单批可 6.5s）快速跳过缓存查询，不阻塞
+        检索主路径——缓存是可选优化，miss 走完整检索流水线即可。
+        （v0.5.62 修复：原 8s 超时下 cache embed 排队 6.36s + 检索通道
+        1.63s 恰好撞 8s 超时线，首条消息必超时熔断。）
         """
         if not self._embed_func:
             return None
         try:
-            vec = await asyncio.wait_for(self._embed_func(text), timeout=8.0)
+            vec = await asyncio.wait_for(self._embed_func(text), timeout=1.5)
         except asyncio.TimeoutError:
             logger.warning("query_cache.embed_timeout", text_preview=text[:50])
             return None
