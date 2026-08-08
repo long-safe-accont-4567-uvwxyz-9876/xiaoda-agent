@@ -75,7 +75,7 @@ class DatabaseManager:
         # 总耗时收敛到最慢通道（P0 性能根因修复 2026-08-07）。
         self._read_pool: list[aiosqlite.Connection] = []
         self._read_idx = 0
-        self._READ_POOL_SIZE = 4
+        self._READ_POOL_SIZE = 8
         # 写事务串行化锁：aiosqlite 单连接共享事务状态，多个后台任务并发执行
         # auto_commit=False 多语句序列时，A 的 commit() 会提交 B 未完成的半事务，
         # B 的 rollback() 会回滚 A 已写的数据 → 脏事务/数据丢失/SQL logic error
@@ -139,6 +139,12 @@ class DatabaseManager:
         # mmap 在 vfat 上不可靠，仅在非 fat 文件系统启用
         if not self._is_fat_fs:
             pragmas.append("PRAGMA mmap_size=67108864")  # 64MB
+            # WAL checkpoint 阈值 1000→10000 页（4MB→40MB）：
+            # agent.db 位于 U 盘时，每 4MB 触发一次 checkpoint 会在外置盘上
+            # 频繁写回 208MB 主库 + fsync，造成检索/写入偶发秒级阻塞（连锁排队根因）。
+            # 40MB 阈值把 checkpoint 频率降到 1/10，仅在写入高峰后触发一次，大幅减少对
+            # U 盘 IO 的周期干扰。
+            pragmas.append("PRAGMA wal_autocheckpoint=10000")
         for pragma_sql in pragmas:
             try:
                 await self._conn.execute(pragma_sql)
@@ -201,7 +207,10 @@ class DatabaseManager:
                 _rc = await aiosqlite.connect(f"file:{self.db_path}?mode=ro", uri=True)
                 _rc.row_factory = aiosqlite.Row
                 await _rc.execute("PRAGMA query_only=1")
-                await _rc.execute("PRAGMA busy_timeout=5000")
+                # 6000（原 5000）：检索 7 路通道并发 + 后台任务共享只读池，
+                # 适度放宽锁等待避免偶发失败；仍 < 检索超时 8s，防止超时取消后
+                # 孤儿 SQL 长时间占用连接线程（导致后续 DB 操作连锁排队）
+                await _rc.execute("PRAGMA busy_timeout=6000")
                 self._read_pool.append(_rc)
             except Exception as e:
                 logger.warning("database.read_pool_conn_failed", error=str(e))

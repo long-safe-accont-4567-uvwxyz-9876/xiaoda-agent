@@ -945,6 +945,8 @@ class MemoryManager:
             finally:
                 _stage_log(f"channel_{channel}", _ch_st, query)
 
+        logger.info("memory.gather_start", query=query[:30])
+
         fts_items, vec_items, kg_items, child_items, spread_items, entity_items, kg_v2_items = await asyncio.gather(
             _timed("fts", self._hybrid_fts_search_scoped(query, recall_limit, scope, is_raw_filter)),
             _timed("vec", self._hybrid_vec_search(query, recall_limit, candidate_ids=candidate_ids, is_raw=is_raw_filter, scope=scope)),

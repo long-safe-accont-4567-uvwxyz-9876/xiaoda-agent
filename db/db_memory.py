@@ -390,7 +390,9 @@ class MemoryDB:
                 where_extra = " AND is_raw = ?"
                 params.append(is_raw)
             params.append(limit)
-            cursor = await self._conn.execute(
+            # 2026-08-08 阻塞根因修复：原用写连接 _conn，后台写事务占用时
+            # 时间检索排队数秒 → 首条消息 8s 全空白超时。改读连接池，与 FTS/实体一致。
+            cursor = await self._read_conn().execute(
                 f"""SELECT * FROM episodic_memories
                    WHERE timestamp >= ? AND timestamp < ?
                      AND user_id = ? AND agent_id = ?
@@ -1329,13 +1331,19 @@ class MemoryDB:
         return child_id
 
     async def search_child_fts(self, query: str, limit: int = 20) -> list[dict]:
-        """子chunk FTS5全文检索，返回包含 parent_id 的记录列表。"""
+        """子chunk FTS5全文检索，返回包含 parent_id 的记录列表。
+
+        2026-08-08 阻塞根因修复：原用主写连接 _conn 执行 SELECT，后台写事务
+        （instinct 提取 / 记忆索引等 write_transaction）长时间占用写连接时，
+        child 通道 FTS 查询排队 7-8s → 检索整体超时。改走读连接池，
+        WAL 模式下读不被写阻塞，与 fts/vec 通道行为一致。
+        """
         from db.fts_utils import _build_fts_query
         fts_query = _build_fts_query(query)
         if not fts_query:
             return []
         try:
-            cursor = await self._conn.execute(
+            cursor = await self._read_conn().execute(
                 """SELECT mc.id, mc.parent_id, mc.content, mc.chunk_type, mc.importance,
                           bm25(memory_child_chunks_fts) as score
                    FROM memory_child_chunks_fts fts

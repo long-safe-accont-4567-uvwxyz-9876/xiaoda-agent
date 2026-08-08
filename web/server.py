@@ -708,7 +708,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
                         logger.info("constraint.prewarm_done")
                     except Exception as _e:
                         logger.debug("constraint.prewarm_failed: {}", _e)
-                await _aio.gather(_warm_xp(), _warm_mental(), _warm_constraint())
+                # 治本修复（2026-08-08）：预热本地 NPU/CPU embedding provider。
+                # 根因：embed.prewarm_done 只预热了远程 siliconflow 的 HTTP 连接，
+                #   本地模式（AdaptiveEmbeddingProvider）从未 load()。首条消息
+                #   QueryCache.get → vec.embed → encode_batch 首次触发 load()：
+                #   tokenizer + onnxruntime session + probe_npu + NPU 常驻进程
+                #   ≈ 6s（U 盘读模型 + ARM 初始化）→ 检索 8s 硬超时 →
+                #   全链路 31.7s 阻塞（日志铁证 16:23:03→09 空白）。
+                #   启动时后台预热，首条消息 embed <10ms。
+                async def _warm_local_embed():
+                    try:
+                        _vec = getattr(getattr(core, "memory", None), "vec", None)
+                        if _vec is None or getattr(_vec, "_embed_mode", "") != "local":
+                            return
+                        status = await _aio.to_thread(_vec.start_local_engine)
+                        if status.get("engine_running"):
+                            logger.info("local_embed.prewarm_done")
+                        else:
+                            logger.debug("local_embed.prewarm_not_ready status={}", status)
+                    except Exception as _e:
+                        logger.debug("local_embed.prewarm_failed: {}", _e)
+                await _aio.gather(_warm_xp(), _warm_mental(), _warm_constraint(),
+                                  _warm_local_embed())
             # fire-and-forget：不阻塞服务启动，单例后台预热到内存
             # message_processor.py 的 fire-and-forget 已兜底，即使预热未完成主流程也不阻塞
             # 同类副作用修复：用 _spawn 跟踪，避免任务被 GC 回收导致预热丢失

@@ -349,6 +349,10 @@ class VectorStore:
                     conn.execute("PRAGMA cache_size=-20000")
                     if not is_fat:
                         conn.execute("PRAGMA mmap_size=67108864")
+                        # WAL checkpoint 阈值 1000→10000 页（4MB→40MB）：
+                        # 与 database.py 主连接一致，避免 agent_vec.db 每 4MB
+                        # checkpoint 写回外置盘（U 盘）造成 vec 检索/写入偶发阻塞。
+                        conn.execute("PRAGMA wal_autocheckpoint=10000")
 
                     # 维度策略：
                     # - 显式配置（dimensions > 0）时直接使用
