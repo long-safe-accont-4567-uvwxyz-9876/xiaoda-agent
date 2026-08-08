@@ -124,11 +124,11 @@ REQUIRED_KEYS = [
         "url_desc": "同一页面的 AppSecret",
     },
     {
-        "key": "EMBED_API_KEY",
-        "label": "向量嵌入 API 密钥",
-        "desc": "硅基流动嵌入模型密钥（记忆向量检索必需）",
+        "key": "SILICONFLOW_API_KEY",
+        "label": "硅基流动 API 密钥",
+        "desc": "硅基流动 API 密钥（免费模型发现 + 重排序 + 查询改写；向量嵌入自动复用）",
         "url": "https://cloud.siliconflow.cn/i/iM5RmeWc",
-        "url_desc": "注册 → API Keys → 复制",
+        "url_desc": "注册 → API Keys",
     },
 ]
 
@@ -148,11 +148,11 @@ OPTIONAL_KEYS = [
         "url_desc": "注册 → API Keys",
     },
     {
-        "key": "SILICONFLOW_API_KEY",
-        "label": "SiliconFlow API 密钥",
-        "desc": "硅基流动 API 密钥（向量检索 + 免费模型发现）",
+        "key": "EMBED_API_KEY",
+        "label": "向量嵌入 API 密钥（选填）",
+        "desc": "远程向量嵌入密钥。默认使用本地内置 BGE 模型（NPU/CPU 推理），仅当 EMBED_MODE=remote 或需要硅基流动嵌入时才需填写",
         "url": "https://cloud.siliconflow.cn/i/iM5RmeWc",
-        "url_desc": "注册 → API Keys",
+        "url_desc": "注册 → API Keys → 复制",
     },
     {
         "key": "DEEPSEEK_API_KEY",
@@ -356,11 +356,15 @@ def is_first_run() -> bool:
     """检测是否为首次运行（.env 不存在或任一必填 key 未配置）。
 
     必填项见 REQUIRED_KEYS（MIMO_API_KEY / QQBOT_APP_ID / QQBOT_APP_SECRET /
-    EMBED_API_KEY）。任一为空都进入首次配置，避免漏配导致主程序启动后
+    SILICONFLOW_API_KEY）。任一为空都进入首次配置，避免漏配导致主程序启动后
     报错"没有填"卡死。
 
-    旧 bug：只检查 MIMO_API_KEY，用户填了 MIMO 但漏配 QQBOT/EMBED 时
-    返回 False，向导不触发，主程序到用这些 API 处直接报错卡死。
+    注：EMBED_API_KEY 原为必填；迁移本地向量模型（NPU/CPU 内置 BGE）后
+    已改为选填（见 OPTIONAL_KEYS），远程嵌入需求由 SILICONFLOW_API_KEY
+    兜底，缺失时降级本地推理，不再阻塞向导完成。
+
+    旧 bug：只检查 MIMO_API_KEY，用户填了 MIMO 但漏配 QQBOT 时返回 False，
+    向导不触发，主程序到用这些 API 处直接报错卡死。
     """
     if not os.path.exists(ENV_PATH):
         return True

@@ -1,6 +1,7 @@
 from typing import Any
 import json
 import os
+import sys
 import asyncio
 import hashlib
 import threading
@@ -102,24 +103,55 @@ class EmbedCache:
         }
 
 
+def _default_local_model_dir() -> str:
+    """本地向量模型目录解析（优先级：env LOCAL_EMBED_MODEL_DIR > 项目内 models/ > 空）。
+
+    项目内路径兼容 PyInstaller onedir 打包（sys._MEIPASS）：
+    Windows 安装包内置 bge-small-zh-v1.5（onnx + tokenizer），
+    开箱即用、默认 CPU 推理；外部环境仍可用 env 显式指定模型目录。
+    """
+    d = os.getenv("LOCAL_EMBED_MODEL_DIR", "").strip()
+    if d:
+        return d
+    base = getattr(sys, "_MEIPASS", None) or Path(__file__).resolve().parent.parent
+    p = Path(base) / "models" / "bge-small-zh-v1.5"
+    return str(p) if p.exists() else ""
+
+
 class VectorStore:
     """基于 SQLite-vec 的向量存储，支持嵌入、写入、删除和相似度搜索。"""
 
     def __init__(self, db_path: str | Path, embed_api_key: str = "",
                  embed_base_url: str = "", embed_model: str = "BAAI/bge-m3",
-                 dimensions: int = 0) -> None:
-        """初始化向量存储。"""
+                 dimensions: int = 0, embed_mode: str = "",
+                 local_model_dir: str = "", local_query_prefix: str = "") -> None:
+        """初始化向量存储。
+
+        embed_mode: "local" 走香橙派本地 onnxruntime 推理（BGE-small-zh-v1.5），
+                    默认 "remote" 走远程 API（向后兼容）。
+        """
         self._db_path = str(db_path)
         self._embed_api_key = embed_api_key
         self._embed_base_url = embed_base_url
         self._embed_model = embed_model
         self._dimensions = dimensions
+        self._embed_mode = embed_mode or os.getenv("EMBED_MODE", "local")
+        self._local_model_dir = local_model_dir or _default_local_model_dir()
+        self._local_query_prefix = local_query_prefix or os.getenv("LOCAL_EMBED_QUERY_PREFIX", "")
+        self._local_provider = None
         self._initialized = False
         self._closed = False
         self._lock = threading.Lock()
         self._embed_client = None
         self._vec_conn = None
         self._cache = EmbedCache(max_size=512)
+        # numpy 内存暴力索引（可选，VECTOR_BRUTE_ENABLED=1 启用）：
+        # BLAS 点积精确暴力 KNN（与 sqlite-vec 同 L2 度量，结果 100% 一致），
+        # 13761×512 仅 23MB 常驻内存，4.5ms/次（SQLite 暴力 33.5ms）。
+        # SQLite 仍是唯一数据源，本索引是加速副本，失败自动回退 SQLite。
+        self._brute: Any = None
+        self._brute_enabled = os.getenv("VECTOR_BRUTE_ENABLED", "0") == "1"
+        self._brute_base_dir = ""
         # 单飞（single-flight）：同一文本并发调用 embed 时只发一次 API 请求，
         # 其余协程共享结果，避免 7 路检索通道并发时重复 embed 放大延迟/限流
         self._inflight: dict[str, asyncio.Future] = {}
@@ -128,14 +160,149 @@ class VectorStore:
         _embed_concurrency = _safe_int(os.getenv("VECTOR_EMBED_CONCURRENCY", "8"), 8)
         self._embed_semaphore = asyncio.Semaphore(_embed_concurrency)
 
-        if HAS_OPENAI and embed_api_key:
-            self._embed_client = AsyncOpenAI(
-                api_key=embed_api_key,
-                base_url=embed_base_url or "https://api.siliconflow.cn/v1",
-                http_client=_get_embed_shared_client(),
-                timeout=_EMBED_HTTP_TIMEOUT,
-                max_retries=0,  # 禁用 SDK 内部盲重试，连接错误重试无效且放大延迟
+        if self._embed_mode == "local":
+            # 本地推理：不依赖远程 API Key / 网络，模型加载为懒加载。
+            # 后端由 LOCAL_EMBED_BACKEND 选择：
+            #   auto（默认）→ AdaptiveEmbeddingProvider 启动时探测 NPU，
+            #     有 VIP9000 走长短自适应（短文本 CPU / 长文本 NPU 常驻子进程），
+            #     无 NPU（纯 CPU 机器/Windows 打包版/无 sudo）自动降级全 CPU；
+            #   npu → 强制走自适应（探测失败仍降级 CPU）；
+            #   cpu → 显式纯 CPU（onnxruntime）。
+            self._local_provider = self._build_local_provider()
+            if self._local_provider is not None:
+                logger.info("vector_store.local_embed_enabled backend={} model_dir={}",
+                            os.getenv("LOCAL_EMBED_BACKEND", "auto"), self._local_model_dir)
+            else:
+                logger.warning("vector_store.local_embed_init_failed provider=None")
+        elif HAS_OPENAI and self._embed_api_key:
+            self._embed_client = self._build_remote_client()
+
+    # ── embedding 引擎构建 / 热切换（WebUI 本地部署页）──────────
+
+    def _build_local_provider(self) -> Any:
+        """按 LOCAL_EMBED_BACKEND 构建本地 embedding provider（幂等）。"""
+        try:
+            backend = os.getenv("LOCAL_EMBED_BACKEND", "auto")
+            if backend in ("npu", "auto"):
+                from memory.npu_embed import AdaptiveEmbeddingProvider
+                return AdaptiveEmbeddingProvider(
+                    self._local_model_dir,
+                    query_prefix=self._local_query_prefix,
+                )
+            from memory.local_embed import LocalEmbeddingProvider
+            return LocalEmbeddingProvider(
+                self._local_model_dir,
+                query_prefix=self._local_query_prefix,
             )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("vector_store.local_embed_build_failed error={}", str(e))
+            return None
+
+    def _build_remote_client(self) -> Any:
+        """构建远程 OpenAI 兼容 embedding client（硅基流动默认，幂等）。"""
+        if not HAS_OPENAI or not self._embed_api_key:
+            return None
+        return AsyncOpenAI(
+            api_key=self._embed_api_key,
+            base_url=self._embed_base_url or "https://api.siliconflow.cn/v1",
+            http_client=_get_embed_shared_client(),
+            timeout=_EMBED_HTTP_TIMEOUT,
+            max_retries=0,  # 禁用 SDK 内部盲重试，连接错误重试无效且放大延迟
+        )
+
+    def embed_engine_status(self) -> dict:
+        """当前 embedding 引擎状态（WebUI 本地部署页展示）。"""
+        provider = self._local_provider
+        running = False
+        if provider is not None:
+            try:
+                running = bool(getattr(provider, "ready", False))
+            except Exception:  # noqa: BLE001
+                running = False
+        return {
+            "mode": self._embed_mode,
+            "engine_running": running,
+            "backend": os.getenv("LOCAL_EMBED_BACKEND", "auto"),
+            "api_configured": bool(
+                self._embed_api_key or os.getenv("SILICONFLOW_API_KEY", "")),
+            "model_dir": self._local_model_dir,
+            "dimensions": self._dimensions,
+        }
+
+    def set_embed_mode(self, mode: str) -> dict:
+        """运行时切换 embedding 引擎（local=本地模型 / remote=远程 API）。
+
+        幂等：目标模式与当前一致时直接返回现状。切换时释放旧本地引擎资源
+        （onnxruntime session / NPU 常驻进程）；远程 client 由共享 httpx
+        连接池管理，仅释放引用。构建失败自动回退另一模式并告警。
+        """
+        mode = (mode or "remote").strip().lower()
+        if mode not in ("local", "remote"):
+            mode = "remote"
+        with self._lock:
+            if mode == self._embed_mode:
+                return self.embed_engine_status()
+            old_provider = self._local_provider
+            self._local_provider = None
+            self._embed_client = None
+            if old_provider is not None:
+                try:
+                    old_provider.close()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("vector_store.embed_mode_old_provider_close_failed error={}", str(e))
+            self._embed_mode = mode
+            if mode == "local":
+                provider = self._build_local_provider()
+                if provider is not None:
+                    self._local_provider = provider
+                    logger.info("vector_store.embed_mode_switched mode=local")
+                else:
+                    logger.warning("vector_store.embed_mode_switch_failed fallback=remote")
+                    self._embed_mode = "remote"
+                    self._embed_client = self._build_remote_client()
+            else:
+                client = self._build_remote_client()
+                if client is not None:
+                    self._embed_client = client
+                    logger.info("vector_store.embed_mode_switched mode=remote")
+                else:
+                    logger.warning("vector_store.embed_mode_switch_failed fallback=local")
+                    self._embed_mode = "local"
+                    self._local_provider = self._build_local_provider()
+            return self.embed_engine_status()
+
+    def start_local_engine(self) -> dict:
+        """启动本地 embedding 引擎：确保 local 模式 + 预加载模型（含 NPU 探测）。
+
+        WebUI 本地部署页"启动"按钮：使用本地模型前必须先启动。
+        """
+        with self._lock:
+            if self._embed_mode != "local":
+                self._embed_mode = "local"
+            if self._local_provider is None:
+                self._local_provider = self._build_local_provider()
+            provider = self._local_provider
+            if provider is not None:
+                try:
+                    ok = provider.load()  # 幂等：已加载直接返回 True
+                except Exception as e:  # noqa: BLE001
+                    ok = False
+                    logger.warning("vector_store.local_engine_start_failed error={}", str(e))
+                if ok:
+                    logger.info("vector_store.local_engine_started")
+            return self.embed_engine_status()
+
+    def stop_local_engine(self) -> dict:
+        """停止本地 embedding 引擎：释放 onnxruntime session / NPU 常驻进程。"""
+        with self._lock:
+            if self._local_provider is not None:
+                try:
+                    self._local_provider.close()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("vector_store.local_engine_stop_failed error={}", str(e))
+            self._local_provider = None
+            logger.info("vector_store.local_engine_stopped")
+            return self.embed_engine_status()
 
     @property
     def ready(self) -> bool:
@@ -185,10 +352,16 @@ class VectorStore:
 
                     # 维度策略：
                     # - 显式配置（dimensions > 0）时直接使用
+                    # - 本地推理模式：用本地模型输出维度（BGE-small-zh-v1.5 = 512）
                     # - 未配置时查表已有维度；表不存在则用 1024 兜底
                     # 修复 P0：原代码硬编码 1024 且首次 INSERT 时 _dimensions 竞态写入，
                     # 维度不匹配时 INSERT 永久失败。
-                    if self._dimensions > 0:
+                    if self._embed_mode == "local" and self._local_provider is not None:
+                        # 懒加载时此处同步加载（首次使用），拿到真实维度
+                        self._local_provider.load()
+                        dims = self._local_provider.dimensions or 512
+                        self._dimensions = dims
+                    elif self._dimensions > 0:
                         dims = self._dimensions
                     else:
                         try:
@@ -209,6 +382,29 @@ class VectorStore:
                             dims = 1024
                         # 固化检测到的维度，避免并发首 INSERT 竞态
                         self._dimensions = dims
+
+                    # local 模式：表已存在但维度与本地模型不一致（如 1024→512）时，
+                    # 不能原地改表结构，INSERT 会静默失败。检测到不匹配直接报错，
+                    # 由迁移脚本（scripts/rebuild_vec_local.py）重建表并重新向量化。
+                    if self._embed_mode == "local" and self._local_provider is not None:
+                        try:
+                            row = conn.execute(
+                                "SELECT embedding FROM memories_vec LIMIT 1"
+                            ).fetchone()
+                            if row is not None and row[0] is not None:
+                                import struct
+                                raw = row[0]
+                                if isinstance(raw, (bytes, bytearray)):
+                                    existing_dims = len(raw) // 4
+                                else:
+                                    existing_dims = dims
+                                if existing_dims != dims:
+                                    raise RuntimeError(
+                                        f"memories_vec dims={existing_dims} != local embed dims={dims}；"
+                                        "请先运行 scripts/rebuild_vec_local.py 重建向量库"
+                                    )
+                        except sqlite3.OperationalError:
+                            pass  # 表不存在（首次初始化），正常创建
 
                     conn.execute(f"""
                         CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec
@@ -242,6 +438,34 @@ class VectorStore:
         pragma_desc = "DELETE+cache" if is_fat else "WAL+cache+mmap"
         logger.info("vector_store.ready", pragmas=pragma_desc)
 
+        # numpy 内存暴力索引（VECTOR_BRUTE_ENABLED=1 时启用）：
+        # 优先从磁盘恢复（{db_stem}_brute/），失败则从 SQLite 全量重建。
+        # 加载是 CPU/IO 密集，走 to_thread；失败置 None 回退 SQLite 暴力 KNN。
+        if self._brute_enabled:
+            from memory.numpy_index import NumpyBruteIndex
+            base_dir = Path(self._db_path).parent / (Path(self._db_path).stem + "_brute")
+            self._brute_base_dir = str(base_dir)
+            self._brute = NumpyBruteIndex(dim=self._dimensions, base_dir=base_dir)
+
+            def _load_brute() -> None:
+                with self._lock:
+                    if self._closed:
+                        return
+                    if not self._brute.load():
+                        self._brute.load_from_db(self._vec_conn)
+
+            try:
+                await asyncio.to_thread(_load_brute)
+                if self._brute.ready:
+                    logger.info("vector_store.brute_ready", base_dir=self._brute_base_dir)
+                else:
+                    logger.warning("vector_store.brute_unavailable error={}",
+                                   getattr(self._brute, "_load_error", ""))
+                    self._brute = None
+            except Exception as e:  # noqa: BLE001
+                logger.warning("vector_store.brute_init_failed error={}", str(e))
+                self._brute = None
+
     async def close(self) -> None:
         def _do_close() -> None:
             """在后台线程中关闭 SQLite 连接。"""
@@ -254,10 +478,22 @@ class VectorStore:
                     self._vec_conn = None
 
         await asyncio.to_thread(_do_close)
+        # 本地推理 Provider：释放 ONNX session 与 tokenizer
+        if self._local_provider is not None:
+            self._local_provider.close()
+            self._local_provider = None
         # CodeRabbit 修复：不关闭 _embed_client，因为它复用全局共享 httpx client
         # （_get_embed_shared_client）。关闭 _embed_client 会关闭共享 httpx client，
         # 影响其他 VectorStore 实例。共享 client 生命周期由 close_shared_client() 统一管理。
         # AsyncOpenAI 实例本身无其他需清理的资源（底层 httpx 由共享池管理）。
+        # numpy 内存暴力索引：关闭前保存（若启用且已加载）
+        if self._brute is not None:
+            try:
+                self._brute.save()
+                self._brute.close()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("vector_store.brute_close_failed error={}", str(e))
+            self._brute = None
         if self._cache.stats["size"] > 0:
             logger.info("vector_store.cache_stats", **self._cache.stats)
 
@@ -271,7 +507,9 @@ class VectorStore:
         # 违反生命周期契约。与文件内其他方法（_vec_conn 操作）的 _closed 守卫一致。
         # 生命周期契约：close_shared_client() 必须在所有 VectorStore.close() 完成且
         # 无在途 embed 请求后调用（由应用关闭顺序保证）。
-        if self._closed or not self._embed_client:
+        if self._closed:
+            return []
+        if self._embed_mode != "local" and not self._embed_client:
             return []
 
         cached = self._cache.get(text)
@@ -303,7 +541,17 @@ class VectorStore:
             self._inflight.pop(text, None)
 
     async def _do_embed(self, text: str) -> list[float]:
-        """实际发起 embed API 请求（含重试）。"""
+        """实际生成嵌入向量（本地推理或远程 API，含重试）。"""
+        # 本地推理（香橙派 onnxruntime CPU）：CPU 密集，走 to_thread 不阻塞事件循环；
+        # 无网络依赖、无重试必要，失败即返回空（调用方均有兜底）。
+        if self._embed_mode == "local":
+            if self._local_provider is None:
+                return []
+            vec = await asyncio.to_thread(self._local_provider.embed, text)
+            if vec and self._dimensions and len(vec) != self._dimensions:
+                logger.warning("vector_store.dimension_mismatch",
+                               expected=self._dimensions, actual=len(vec))
+            return vec
         # 治本修复（2026-08-05 用户"治标不治本"反馈）：max_retries 2→1。
         # 根因：embed 偶发慢时重试也慢（网络波动不会 1s 内恢复），
         #   read=5s + 重试2次 = 最坏 5+1+5+1+5=17s，远超外层 wait_for(2s) 兜底。
@@ -397,6 +645,9 @@ class VectorStore:
                         [row_id, vec_json],
                     )
                     self._vec_conn.commit()
+                    # 双写 HNSW 加速索引（同锁内保证与 SQLite 顺序一致）
+                    if self._brute is not None:
+                        self._brute.upsert("memories_vec", row_id, vec)
                     return True
                 except Exception as e:
                     try:
@@ -428,6 +679,9 @@ class VectorStore:
                         (child_id, vec_json),
                     )
                     self._vec_conn.commit()
+                    # 双写 HNSW 加速索引
+                    if self._brute is not None:
+                        self._brute.upsert("memories_child_vec", child_id, vec)
                 except Exception as e:
                     logger.warning("vector_store.upsert_child_failed", row_id=child_id, error=str(e))
 
@@ -471,6 +725,9 @@ class VectorStore:
                             "INSERT OR REPLACE INTO memories_child_vec (rowid, embedding) VALUES (?, vec_f32(?))",
                             (cid, vec_json),
                         )
+                        # 双写内存暴力索引（事务内逐条同步，保证一致）
+                        if self._brute is not None:
+                            self._brute.upsert("memories_child_vec", cid, vec)
                     self._vec_conn.commit()
                 except Exception as e:
                     try:
@@ -494,6 +751,9 @@ class VectorStore:
                 try:
                     self._vec_conn.execute("DELETE FROM memories_vec WHERE rowid=?", [row_id])
                     self._vec_conn.commit()
+                    # 双写 HNSW 加速索引（mark_deleted 排除该节点）
+                    if self._brute is not None:
+                        self._brute.delete("memories_vec", row_id)
                     return True
                 except Exception as e:
                     logger.warning("vector_store.delete_failed", row_id=row_id, error=str(e))
@@ -520,6 +780,9 @@ class VectorStore:
                         "DELETE FROM memories_child_vec WHERE rowid=?", (child_id,)
                     )
                     self._vec_conn.commit()
+                    # 双写 HNSW 加速索引
+                    if self._brute is not None:
+                        self._brute.delete("memories_child_vec", child_id)
                 except Exception as e:
                     logger.warning("vector_store.delete_child_failed", row_id=child_id, error=str(e))
 
@@ -583,6 +846,9 @@ class VectorStore:
                                 [row_id, vec_json],
                             )
                             success += 1
+                            # 双写 HNSW 加速索引
+                            if self._brute is not None:
+                                self._brute.upsert("memories_vec", row_id, vec)
                         except Exception as e:
                             logger.warning("vector_store.batch_upsert_item_failed", row_id=row_id, error=str(e))
                     if success > 0:
@@ -633,6 +899,15 @@ class VectorStore:
             with self._lock:
                 if self._closed:
                     return []
+                # HNSW 加速路径：None=索引不可用/失败 → 回退 SQLite；[]=无匹配
+                if self._brute is not None:
+                    brute_res = self._brute.search(
+                        "memories_vec", vec, top_k,
+                        candidate_ids=candidate_ids,
+                        ef=max(fetch_k, top_k),
+                    )
+                    if brute_res is not None:
+                        return brute_res[:top_k]
                 # sqlite-vec 的 vec0 KNN 只允许 ORDER BY distance (不允许 , rowid)
                 # 所以 tie-breaking 在 Python 层做: 按 (distance, rowid) 稳定排序
                 if candidate_ids is not None:
@@ -677,6 +952,12 @@ class VectorStore:
             with self._lock:
                 if self._closed:
                     return []
+                # 内存暴力加速路径：None=不可用/失败 → 回退 SQLite
+                if self._brute is not None:
+                    brute_res = self._brute.search(
+                        "memories_child_vec", query_vec, top_k, ef=top_k * 2)
+                    if brute_res is not None:
+                        return [{"id": r[0], "distance": r[1]} for r in brute_res]
                 rows = self._vec_conn.execute(
                     "SELECT rowid, distance FROM memories_child_vec "
                     "WHERE embedding MATCH vec_f32(?) AND k=? "
@@ -742,6 +1023,16 @@ class VectorStore:
                 with self._lock:
                     if self._closed:
                         return []
+                    # 内存暴力加速路径：None=不可用/失败 → 回退 SQLite
+                    if self._brute is not None:
+                        brute_res = self._brute.search(
+                            "memories_vec", mixed, k,
+                            candidate_ids=cand_int,
+                            ef=k * 2,
+                        )
+                        if brute_res is not None:
+                            return [{"rowid": r[0], "distance": r[1]}
+                                    for r in brute_res[:k]]
                     if cand_int is not None:
                         cand_set = set(cand_int)
                         oversample = min(k * 6, len(cand_set) + k * 2)
@@ -796,6 +1087,9 @@ class VectorStore:
                         [row_id, vec_json],
                     )
                     self._vec_conn.commit()
+                    # 双写 HNSW 加速索引
+                    if self._brute is not None:
+                        self._brute.upsert("kg_entities_vec", row_id, vec)
                     return True
                 except Exception as e:
                     try:
@@ -833,6 +1127,9 @@ class VectorStore:
                         [row_id, vec_json],
                     )
                     self._vec_conn.commit()
+                    # 双写 HNSW 加速索引
+                    if self._brute is not None:
+                        self._brute.upsert("kg_relations_vec", row_id, vec)
                     return True
                 except Exception as e:
                     try:
@@ -858,6 +1155,12 @@ class VectorStore:
             with self._lock:
                 if self._closed:
                     return []
+                # 内存暴力加速路径：None=不可用/失败 → 回退 SQLite
+                if self._brute is not None:
+                    brute_res = self._brute.search(
+                        "kg_entities_vec", vec, top_k, ef=top_k * 2)
+                    if brute_res is not None:
+                        return brute_res
                 rows = self._vec_conn.execute(
                     "SELECT rowid, distance FROM kg_entities_vec "
                     "WHERE embedding MATCH vec_f32(?) AND k=? "
@@ -888,6 +1191,12 @@ class VectorStore:
             with self._lock:
                 if self._closed:
                     return []
+                # 内存暴力加速路径：None=不可用/失败 → 回退 SQLite
+                if self._brute is not None:
+                    brute_res = self._brute.search(
+                        "kg_relations_vec", vec, top_k, ef=top_k * 2)
+                    if brute_res is not None:
+                        return brute_res
                 rows = self._vec_conn.execute(
                     "SELECT rowid, distance FROM kg_relations_vec "
                     "WHERE embedding MATCH vec_f32(?) AND k=? "

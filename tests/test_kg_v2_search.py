@@ -23,7 +23,9 @@ def mock_vec_store():
 
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
-    store = VectorStore(path, embed_api_key="fake-key")
+    # 显式 remote：避免测试继承 .env 的 EMBED_MODE=local（本地模型 512 维
+    # 与测试 mock 的 1024 维向量不匹配导致 upsert 失败），隔离环境副作用
+    store = VectorStore(path, embed_api_key="fake-key", embed_mode="remote")
     return store, path
 
 

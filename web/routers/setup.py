@@ -175,15 +175,17 @@ async def get_first_run() -> Any:
         else:
             try:
                 # 必填 key 全部配齐才视为非首次运行（与 is_first_run 保持一致）。
-                # 旧实现只查 MIMO_API_KEY，漏配 QQBOT/EMBED 时 first_run=False，
+                # 旧实现只查 MIMO_API_KEY，漏配 QQBOT 时 first_run=False，
                 # 向导不触发，主程序报错卡死。
+                # EMBED_API_KEY 迁移本地向量模型后已改为选填，SILICONFLOW_API_KEY
+                # 承担必填地位（免费模型发现/重排序/查询改写核心依赖）。
                 # 硬编码此列表作为兜底（setup_wizard 导入失败时才走到这里），
                 # 与 setup_wizard.REQUIRED_KEYS 保持同步。
                 required_keys = (
                     "MIMO_API_KEY",
                     "QQBOT_APP_ID",
                     "QQBOT_APP_SECRET",
-                    "EMBED_API_KEY",
+                    "SILICONFLOW_API_KEY",
                 )
                 configured = set()
                 with open(env_path, encoding="utf-8", errors="ignore") as f:
@@ -228,17 +230,17 @@ async def get_keys() -> Any:
         logger.info("setup.keys.import_ok")
     except (OSError, KeyError, ValueError, RuntimeError, TypeError) as e:
         logger.error("setup.keys.import_failed error={}", str(e))
-        # 降级：返回硬编码的 key 列表
+        # 降级：返回硬编码的 key 列表（与 setup_wizard.REQUIRED_KEYS 同步；
+        # EMBED_API_KEY 本地向量模型迁移后为选填）
         REQUIRED_KEYS = [
             {"key": "MIMO_API_KEY", "label": "MiMo API 密钥", "desc": "小米 MiMo 大模型 API 密钥", "url": "https://platform.xiaomimimo.com?ref=SU5WDZ", "url_desc": "注册 → 控制台 → API Keys"},
             {"key": "QQBOT_APP_ID", "label": "QQ Bot App ID", "desc": "QQ 机器人应用 ID", "url": "https://q.qq.com", "url_desc": "创建机器人应用 → 获取 AppID"},
             {"key": "QQBOT_APP_SECRET", "label": "QQ Bot App Secret", "desc": "QQ 机器人应用密钥", "url": "https://q.qq.com", "url_desc": "同一页面的 AppSecret"},
-            {"key": "EMBED_API_KEY", "label": "向量嵌入 API 密钥", "desc": "硅基流动嵌入模型密钥", "url": "https://cloud.siliconflow.cn/i/iM5RmeWc", "url_desc": "注册 → API Keys → 复制"},
+            {"key": "SILICONFLOW_API_KEY", "label": "SiliconFlow API 密钥", "desc": "硅基流动 API 密钥", "url": "https://cloud.siliconflow.cn/i/iM5RmeWc", "url_desc": "注册 → API Keys"},
         ]
         OPTIONAL_KEYS = [
             {"key": "WEBUI_PASSWORD", "label": "Web UI 密码", "desc": "留空则无需密码登录", "url": "", "url_desc": ""},
             {"key": "TAVILY_API_KEY", "label": "Tavily 搜索 API 密钥", "desc": "AI 搜索引擎", "url": "https://tavily.com", "url_desc": "注册 → API Keys"},
-            {"key": "SILICONFLOW_API_KEY", "label": "SiliconFlow API 密钥", "desc": "硅基流动 API 密钥", "url": "https://cloud.siliconflow.cn/i/iM5RmeWc", "url_desc": "注册 → API Keys"},
             {"key": "DEEPSEEK_API_KEY", "label": "DeepSeek API 密钥", "desc": "DeepSeek 大模型 API 密钥", "url": "https://platform.deepseek.com", "url_desc": "注册 → API Keys"},
             {"key": "OPENROUTER_API_KEY", "label": "OpenRouter API 密钥", "desc": "OpenRouter API 密钥", "url": "https://openrouter.ai", "url_desc": "注册 → API Keys"},
             {"key": "WOLFRAMALPHA_API_KEY", "label": "WolframAlpha 知识计算密钥", "desc": "知识计算引擎", "url": "https://products.wolframalpha.com/api/", "url_desc": "注册 → Get AppID"},
