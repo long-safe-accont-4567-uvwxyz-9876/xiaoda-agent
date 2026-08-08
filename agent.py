@@ -574,7 +574,21 @@ def _run_desktop(host: str, port: int) -> None:
 
     # 7. 启动 pywebview（主线程阻塞）
     #    WebView2 reflow 激活逻辑已移至 splash.js 本地执行，避免 Python 注入 JS 的 SyntaxError
-    webview.start(debug=False)
+    # 根治（v0.5.62）：关闭 private 模式并固定存储目录到用户目录。
+    # pywebview 默认 private_mode=True —— 官方文档明示 "nothing is stored between
+    # sessions"，localStorage/cookie 每次启动全部清空。后果：资料完成标记
+    # xiaoda_profile_done 与登录 token 每次重启即丢 → 资料编辑页每次启动都弹出、
+    # 每次启动都要求重新登录。显式关闭并持久化到 ~/.ai-agent/webview。
+    _webview_storage = Path.home() / ".ai-agent" / "webview"
+    try:
+        _webview_storage.mkdir(parents=True, exist_ok=True)
+    except OSError:  # 目录创建失败（权限异常）时回退默认临时存储，不阻塞启动
+        _webview_storage = None
+    webview.start(
+        debug=False,
+        private_mode=False,
+        storage_path=str(_webview_storage) if _webview_storage else None,
+    )
 
     # 窗口关闭后退出进程
     os._exit(0)
