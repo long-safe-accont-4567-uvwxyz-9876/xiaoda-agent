@@ -37,6 +37,7 @@ class CommandState:
     line_buf: str = ""
     exit_code: int = -1
     event: asyncio.Event = field(default_factory=asyncio.Event)
+    loop: asyncio.AbstractEventLoop | None = None
 
 
 _pending_cmd: CommandState | None = None
@@ -80,7 +81,7 @@ async def execute_on_pty(
                 _pending_cmd = None
 
     marker_id = uuid.uuid4().hex[:10]
-    state = CommandState(marker_id=marker_id)
+    state = CommandState(marker_id=marker_id, loop=asyncio.get_running_loop())
     with _pending_lock:
         _pending_cmd = state
 
@@ -143,6 +144,20 @@ async def execute_on_pty(
     return True, output
 
 
+def _safe_set_event(state: CommandState) -> None:
+    """线程安全地设置 asyncio.Event。
+
+    feed_output 可能在后台线程（Windows pipe reader）或事件循环线程
+   （Unix add_reader 回调）中被调用。asyncio.Event.set() 不是线程安全的，
+    必须通过 loop.call_soon_threadsafe 调度到事件循环线程执行，否则可能
+    导致事件丢失或事件循环状态损坏。
+    """
+    if state.loop is not None:
+        state.loop.call_soon_threadsafe(state.event.set)
+    else:
+        state.event.set()
+
+
 def feed_output(text: str) -> None:
     """PTY 读取器每读到一块输出时调用，内部按行缓冲并检测标记。"""
     with _pending_lock:
@@ -179,7 +194,7 @@ def feed_output(text: str) -> None:
                 state.exit_code = -1
             if state.exit_code != 0:
                 state.output_lines.append(f"[exit code: {state.exit_code}]")
-            state.event.set()
+            _safe_set_event(state)
             return
 
         state.output_lines.append(clean)
@@ -208,7 +223,7 @@ def feed_output(text: str) -> None:
                 state.output_lines.append(f"[exit code: {state.exit_code}]")
             state.collecting = False
             state.line_buf = ""
-            state.event.set()
+            _safe_set_event(state)
 
 
 # 向后兼容：保留旧接口名
