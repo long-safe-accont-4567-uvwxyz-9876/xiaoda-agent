@@ -15,7 +15,7 @@
   /* Glass panel */
   --glass-bg: rgba(20, 40, 28, 0.45);
   --glass-border: rgba(143, 229, 96, 0.18);
-  --glass-blur: 14px;
+  --glass-blur: 8px;
   --glass-radius: 16px;
 
   /* Backdrop tint overlay (shared by LoginView & AgentBackdrop) */

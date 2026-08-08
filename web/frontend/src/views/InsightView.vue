@@ -594,14 +594,14 @@ function fmtTs(ts: number): string {
           <span class="emo-sub">{{ t('insightView.lastEmotionDesc') }}</span>
         </div></Tilt3D>
         <div class="chart-row">
-          <div class="glass-panel chart-box">
+          <Tilt3D :max-x="4" :max-y="6" class="glass-panel chart-box">
             <h4>{{ t('insightView.emotionRiver7d') }}</h4>
             <div ref="emotionChartEl" class="chart"></div>
-          </div>
-          <div class="glass-panel chart-box small">
+          </Tilt3D>
+          <Tilt3D :max-x="4" :max-y="6" class="glass-panel chart-box small">
             <h4>{{ t('insightView.todayDist') }}</h4>
             <div ref="pieChartEl" class="chart"></div>
-          </div>
+          </Tilt3D>
         </div>
       </n-tab-pane>
 
@@ -633,11 +633,11 @@ function fmtTs(ts: number): string {
           {{ t('insightView.newMemories') }} {{ todayData.stats.memories || 0 }} {{ t('insightView.itemsUnit') }}
         </div></Tilt3D>
         <div class="timeline">
-          <div v-for="(item, i) in todayData.items" :key="i" class="timeline-item">
+          <Tilt3D v-for="(item, i) in todayData.items" :key="i" :max-x="4" :max-y="6" class="timeline-item">
             <span class="tl-time">{{ fmtTs(item.ts) }}</span>
             <span class="tl-icon">{{ kindIcon[item.kind] || '·' }}</span>
             <span class="tl-text">{{ item.text || item.event_type }}</span>
-          </div>
+          </Tilt3D>
           <div v-if="!todayData.items.length" class="empty-state">
             <p>{{ t('insightView.noEvents') }}</p>
           </div>

@@ -149,7 +149,7 @@ body.low-gpu .term-fab {
   position: absolute;
   inset: -40%;
   background: var(--gradient-aurora, linear-gradient(120deg, rgba(143,229,96,0.14), rgba(79,214,165,0.10) 50%, rgba(232,213,163,0.12)));
-  filter: blur(40px);
+  filter: blur(20px);
   animation: auroraDrift 26s ease-in-out infinite alternate;
   pointer-events: none;
 }

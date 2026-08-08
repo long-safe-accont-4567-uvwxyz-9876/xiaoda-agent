@@ -335,9 +335,9 @@ function onMcpTabChange(tab: string) {
             </div>
           </div>
           </Tilt3D>
-          <div v-if="!servers.length" class="empty-state glass-panel">
+          <Tilt3D v-if="!servers.length" :max-x="4" :max-y="6" class="empty-state glass-panel">
             <p>{{ t('mcpView.noMcp') }}</p>
-          </div>
+          </Tilt3D>
         </div>
 
         <n-modal v-model:show="showForm" preset="card"
