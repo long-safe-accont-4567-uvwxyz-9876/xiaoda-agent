@@ -71,7 +71,7 @@
   "permission_mode": null,
   "memory_scope": null,
   "background": false,
-  "wallpaper": "/assets/webui_background.jpg",
+  "wallpaper": "/assets/wallpapers/xiaoli.jpg",
   "allowed_paths": [
     "assets/stickers/xiaoli/*",
     "config/agents/xiaoli_personality.md"

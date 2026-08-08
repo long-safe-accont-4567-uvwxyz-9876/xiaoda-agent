@@ -73,7 +73,7 @@
   "permission_mode": null,
   "memory_scope": null,
   "background": false,
-  "wallpaper": "/assets/webui_background.jpg",
+  "wallpaper": "/assets/wallpapers/xiaoke.jpg",
   "allowed_paths": [
     "tools/code_tools_v2.py",
     "tools/file_tools_v2.py"

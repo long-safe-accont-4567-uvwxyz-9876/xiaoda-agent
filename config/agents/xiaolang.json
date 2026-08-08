@@ -32,7 +32,7 @@
   "permission_mode": null,
   "memory_scope": null,
   "background": false,
-  "wallpaper": "/assets/webui_background.jpg",
+  "wallpaper": "/assets/wallpapers/xiaolang.jpg",
   "allowed_paths": [
     "tools/system_tools.py"
   ],
