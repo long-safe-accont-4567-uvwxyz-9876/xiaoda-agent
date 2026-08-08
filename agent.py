@@ -82,6 +82,49 @@ def _is_packaged_windows() -> bool:
     return sys.platform == "win32" and getattr(sys, "frozen", False)
 
 
+# 单实例互斥句柄池：持有 Windows Mutex 句柄防止被 GC 释放（进程退出时 OS 自动回收）
+_SINGLE_INSTANCE_HANDLES: list[Any] = []
+
+
+def _acquire_single_instance(name: str) -> bool:
+    """Windows 命名 Mutex 单实例互斥（跨进程）。
+
+    返回 True 表示本进程是该名称下唯一的实例；False 表示已有实例在运行。
+    非 Windows 平台不做限制（Linux 由 systemd/端口检测机制管理）。
+    检测失败时放行（不因锁问题阻塞启动）。
+    """
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        _ERROR_ALREADY_EXISTS = 183
+        h = ctypes.windll.kernel32.CreateMutexW(None, False, name)
+        if not h:
+            return True  # 创建失败，放行
+        if ctypes.windll.kernel32.GetLastError() == _ERROR_ALREADY_EXISTS:
+            ctypes.windll.kernel32.CloseHandle(h)
+            return False
+        _SINGLE_INSTANCE_HANDLES.append(h)
+        return True
+    except (OSError, AttributeError):
+        return True
+
+
+def _notify_already_running() -> None:
+    """已有实例在运行时弹窗提示（Windows），避免用户以为程序没启动。"""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                None,
+                "小妲 Agent 已在运行中。\n如果看不到窗口，请先关闭现有进程再重新启动。",
+                "小妲 Agent",
+                0x40,  # MB_ICONINFORMATION
+            )
+        except (OSError, AttributeError):
+            pass
+
+
 def _webview2_installed() -> bool:
     """检测 Microsoft Edge WebView2 Runtime 是否安装（与 start-windows.bat 逻辑一致）。
 
@@ -191,6 +234,22 @@ def main() -> None:
     parser.add_argument("--host", type=str, default=os.getenv("WEBUI_HOST", "127.0.0.1"), help="Web UI 监听地址")
     parser.add_argument("--setup", action="store_true", help="运行配置向导")
     args = parser.parse_args()
+
+    # 单实例互斥（Windows）：防止多次双击/多启动入口导致多个 watchdog 或
+    # desktop 主进程并存——并发争抢 8082 端口、WebView2 数据目录锁冲突，
+    # 表现为"程序没启动"且 watchdog 无限重启（v0.5.62 实测日志：同一秒
+    # 4 个看门狗 + 3 个主进程并存）。
+    # 加锁角色：watchdog（含双击 exe 默认路径）和 --desktop 主进程。
+    # web/cli 模式多实例无害，不加锁。
+    if args.command == "watchdog" or _should_watchdog_software_window(args):
+        _lock_name = "XiaodaAgent_Watchdog"
+    elif args.desktop:
+        _lock_name = "XiaodaAgent_Main"
+    else:
+        _lock_name = None
+    if _lock_name and not _acquire_single_instance(_lock_name):
+        _notify_already_running()
+        sys.exit(0)
 
     # watchdog 子命令: 以看门狗模式守护主进程
     if args.command == "watchdog":
