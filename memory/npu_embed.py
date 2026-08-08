@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import struct
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -61,6 +62,11 @@ def probe_npu(runner_path: str = "", timeout_s: float = 15.0) -> bool:
     成功退出码 0 → True；失败/超时/异常 → False。调用方据此自动降级纯 CPU。
     """
     path = Path(runner_path or _default_runner())
+    # 非 Linux 平台（Windows/macOS）无 VIP9000：直接判定不可用，不 spawn runner。
+    # 兼容 Windows 打包版：默认 CPU 推理，绝不尝试执行 aarch64 runner。
+    if not sys.platform.startswith("linux"):
+        logger.info("npu_probe.skipped platform={}", sys.platform)
+        return False
     if not path.exists():
         logger.info("npu_probe.skipped runner_missing={}", str(path))
         return False

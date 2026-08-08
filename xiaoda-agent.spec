@@ -76,6 +76,11 @@ for _vfile in ('.version', '.auto_update'):
 # assets/ directory (icons and other resources)
 datas += _tree_datas(os.path.join(SPECPATH, 'assets'), 'assets')
 
+# models/bge-small-zh-v1.5/ (本地向量模型：onnx + tokenizer.json，
+# Windows 安装包内置、默认 CPU 推理；有 VIP9000 的 Linux 板端走 NPU 常驻流)
+datas += _tree_datas(os.path.join(SPECPATH, 'models', 'bge-small-zh-v1.5'),
+                     os.path.join('models', 'bge-small-zh-v1.5'))
+
 # Windows launch scripts (bundled by CI, but also declare here for local builds)
 # 清单与 .github/workflows/build-release.yml 和 scripts/build-release.sh 保持一致
 for _script in ('xiaoda.bat', 'auto-update.bat', 'auto-update.ps1', 'open-browser.ps1', 'doctor.bat'):

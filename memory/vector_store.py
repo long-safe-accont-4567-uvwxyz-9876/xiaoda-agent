@@ -1,6 +1,7 @@
 from typing import Any
 import json
 import os
+import sys
 import asyncio
 import hashlib
 import threading
@@ -102,6 +103,21 @@ class EmbedCache:
         }
 
 
+def _default_local_model_dir() -> str:
+    """本地向量模型目录解析（优先级：env LOCAL_EMBED_MODEL_DIR > 项目内 models/ > 空）。
+
+    项目内路径兼容 PyInstaller onedir 打包（sys._MEIPASS）：
+    Windows 安装包内置 bge-small-zh-v1.5（onnx + tokenizer），
+    开箱即用、默认 CPU 推理；外部环境仍可用 env 显式指定模型目录。
+    """
+    d = os.getenv("LOCAL_EMBED_MODEL_DIR", "").strip()
+    if d:
+        return d
+    base = getattr(sys, "_MEIPASS", None) or Path(__file__).resolve().parent.parent
+    p = Path(base) / "models" / "bge-small-zh-v1.5"
+    return str(p) if p.exists() else ""
+
+
 class VectorStore:
     """基于 SQLite-vec 的向量存储，支持嵌入、写入、删除和相似度搜索。"""
 
@@ -120,7 +136,7 @@ class VectorStore:
         self._embed_model = embed_model
         self._dimensions = dimensions
         self._embed_mode = embed_mode or os.getenv("EMBED_MODE", "remote")
-        self._local_model_dir = local_model_dir or os.getenv("LOCAL_EMBED_MODEL_DIR", "")
+        self._local_model_dir = local_model_dir or _default_local_model_dir()
         self._local_query_prefix = local_query_prefix or os.getenv("LOCAL_EMBED_QUERY_PREFIX", "")
         self._local_provider = None
         self._initialized = False

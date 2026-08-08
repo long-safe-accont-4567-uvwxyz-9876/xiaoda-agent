@@ -53,6 +53,12 @@ certifi>=2024.7.0
 # ── 向量检索: sqlite-vec 提供子chunk向量召回，缺失时降级为纯FTS ──
 sqlite-vec>=0.1.0
 
+# ── 本地 Embedding（本地推理模式 EMBED_MODE=local 必需；缺失时降级远程 API）──
+# onnxruntime: CPU 推理 BGE-small-zh-v1.5（Windows 打包默认 CPU 推理）
+# tokenizers: BGE 官方 tokenizer.json 加载（无需 transformers/torch）
+onnxruntime>=1.17.0
+tokenizers>=0.19.0
+
 # ── QQ Bot ──
 qq-botpy>=1.2.1
 
