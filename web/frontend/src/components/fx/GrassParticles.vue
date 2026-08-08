@@ -27,11 +27,6 @@ let burstParticles: Array<{ x: number; y: number; vx: number; vy: number; t: num
 
 const DENSITY: Record<string, number> = { off: 0, low: 12, medium: 36, high: 60 }
 const FRAME_MS = 1000 / 30
-// 渲染降采样：canvas 按 0.5x 内部分辨率绘制，CSS 拉伸显示，fill rate 降 4 倍。
-// 粒子是小光点/叶片，视觉几乎无感。粒子坐标直接用内部尺寸（spawn 用 w/h），
-// clearRect 用内部 w/h 正好清空整个画布；不能用 setTransform 缩放（会连累
-// clearRect 只清左上 1/4，粒子残留堆积）。
-const RENDER_SCALE = 0.5
 
 const GLOW_SIZE = 48
 const GLOW_CORE_R = 8
@@ -72,8 +67,8 @@ function spawn(w: number, h: number): P {
 function resize() {
   const c = canvasEl.value
   if (!c) return
-  c.width = Math.max(1, Math.floor(window.innerWidth * RENDER_SCALE))
-  c.height = Math.max(1, Math.floor(window.innerHeight * RENDER_SCALE))
+  c.width = window.innerWidth
+  c.height = window.innerHeight
   cachedCtx = c.getContext('2d')
   rebuild()
 }
@@ -131,8 +126,8 @@ function frame(now: number) {
     p.drift += 0.004
     p.x += p.vx + Math.sin(p.drift) * 0.3
     p.y += p.vy + Math.cos(p.drift * 0.7) * 0.15
-    // 鼠标斥力（鼠标坐标是 CSS 像素，粒子是 canvas 内部坐标，需换算）
-    const dx = p.x - mouseX * RENDER_SCALE, dy = p.y - mouseY * RENDER_SCALE
+    // 鼠标斥力
+    const dx = p.x - mouseX, dy = p.y - mouseY
     const d2 = dx * dx + dy * dy
     if (d2 < 6400 && d2 > 1) {
       const f = (80 - Math.sqrt(d2)) / 80 * 0.8
@@ -175,8 +170,8 @@ function onMouse(e: MouseEvent) {
     // 距离过滤：移动 > 18px 才生成一片叶子，避免密集
     if (!lastTrailPos || (lastTrailPos.x - e.clientX) ** 2 + (lastTrailPos.y - e.clientY) ** 2 > 324) {
       trailLeaves.push({
-        x: (e.clientX + (Math.random() - 0.5) * 6) * RENDER_SCALE,
-        y: (e.clientY + (Math.random() - 0.5) * 6) * RENDER_SCALE,
+        x: e.clientX + (Math.random() - 0.5) * 6,
+        y: e.clientY + (Math.random() - 0.5) * 6,
         vx: (Math.random() - 0.5) * 0.6,
         vy: -0.2 - Math.random() * 0.4,      // 轻微上飘
         size: 3 + Math.random() * 3,          // 3-6px 小叶片（同背景）
@@ -206,10 +201,8 @@ function stop() {
   cancelAnimationFrame(raf)
 }
 
-/** 对外：从某坐标爆发叶子（发送消息特效）x,y 为 CSS 像素 */
+/** 对外：从某坐标爆发叶子（发送消息特效） */
 function burst(x: number, y: number, n = 10) {
-  x *= RENDER_SCALE
-  y *= RENDER_SCALE
   for (let i = 0; i < n; i++) {
     const ang = Math.random() * Math.PI * 2
     const speed = 1 + Math.random() * 3
@@ -222,7 +215,7 @@ function burst(x: number, y: number, n = 10) {
 
 /** 对外：右上蒲公英雨（问候推送） */
 function dandelionRain() {
-  const w = window.innerWidth * RENDER_SCALE
+  const w = window.innerWidth
   for (let i = 0; i < 16; i++) {
     burstParticles.push({
       x: w - Math.random() * w * 0.4, y: -10 - Math.random() * 60,
