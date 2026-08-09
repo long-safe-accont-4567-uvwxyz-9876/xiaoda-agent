@@ -118,18 +118,22 @@ do_build() {
     # --- Verify CLI interactive modules bundled ---------------------------------
     # cli_palette / cli_menu 在 cli.py 中是 try/except 守卫导入，PyInstaller 静态
     # 分析可能漏掉；未打包会导致打包版 CLI 静默回退到基础输入，命令面板/滚动失效。
+    # PyInstaller 6.x onedir 下 PYZ 归档嵌入主可执行文件的 CArchive（条目 PYZ.pyz），
+    # dist 下没有独立 .pyz 文件；需用 pyi-archive_viewer 打开内嵌 PYZ.pyz 检查模块清单。
     info "Verifying CLI interactive modules bundled..."
-    local pyz_file
-    pyz_file=$(find "$dist_dir" -name "*.pyz" -print -quit 2>/dev/null || true)
-    if [ -z "$pyz_file" ]; then
-        die "PYZ archive not found in build output: $dist_dir"
+    local exe_file
+    exe_file=$(find "$dist_dir" -maxdepth 1 -type f \
+        \( -name "xiaoda-agent" -o -name "xiaoda-agent.exe" \) \
+        -print -quit 2>/dev/null || true)
+    if [ -z "$exe_file" ]; then
+        die "Executable not found in build output: $dist_dir"
     fi
     if ! command -v pyi-archive_viewer >/dev/null 2>&1; then
         die "pyi-archive_viewer not found (is PyInstaller installed?)"
     fi
-    pyi-archive_viewer -l "$pyz_file" > /tmp/pyz_contents.txt
+    printf 'O PYZ.pyz\nq\n' | pyi-archive_viewer "$exe_file" > /tmp/pyz_contents.txt
     for _m in cli_palette cli_menu prompt_toolkit; do
-        if grep -q "$_m" /tmp/pyz_contents.txt; then
+        if grep -q "'$_m" /tmp/pyz_contents.txt; then
             green "  ✓ $_m bundled"
         else
             die "Module $_m NOT bundled! Interactive slash-command panel/menu will be disabled."
