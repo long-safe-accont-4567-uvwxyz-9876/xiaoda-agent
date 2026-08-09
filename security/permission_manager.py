@@ -61,6 +61,7 @@ _SENSITIVE_TOOLS = {
     "shell_command", "execute_code", "python_executor",
     "write_file", "edit_file", "create_file",
     "agnes_image", "agnes_video",
+    "profile_set", "profile_forget",
 }
 
 # ── 防傻机制：即使用梭哈模式也会拦截的危险操作 ──────────────

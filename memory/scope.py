@@ -6,6 +6,7 @@
 - agent_id: Agent 标识（xiaoda/xiaoli/xiaolian/xiaoke）
 """
 from dataclasses import dataclass
+from contextvars import ContextVar, Token
 
 
 @dataclass
@@ -20,6 +21,7 @@ class Scope:
     user_id: str = "default"
     session_id: str = "user"
     agent_id: str = "xiaoda"
+    request_id: str = ""
 
     def to_sql_filter(self, table: str = "episodic_memories") -> str:
         """生成 SQL WHERE 子句（user_id + agent_id 过滤）。
@@ -54,3 +56,25 @@ class Scope:
         """
         where = f"{table}.user_id = ? AND {table}.agent_id = ?"
         return where, [self.user_id, self.agent_id]
+
+
+_current_scope: ContextVar[Scope | None] = ContextVar("memory_scope", default=None)
+
+
+def bind_scope(scope: Scope) -> Token:
+    return _current_scope.set(scope)
+
+
+def reset_scope(token: Token) -> None:
+    _current_scope.reset(token)
+
+
+def current_scope() -> Scope:
+    scope = _current_scope.get()
+    if scope is None:
+        raise RuntimeError("memory request scope is not bound")
+    return scope
+
+
+def current_scope_or_default() -> Scope:
+    return _current_scope.get() or Scope()

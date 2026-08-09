@@ -131,5 +131,39 @@ def test_lazy_resolve_failure_returns_fail():
         unregister_tool(tool_name)
 
 
+def test_sub_agents_do_not_receive_profile_tools_without_agent_scope_binding():
+    from agent_dispatcher import SubAgentConfig, SubAgent
+
+    agent = object.__new__(SubAgent)
+    agent._tool_executor = object()
+    agent.config = SubAgentConfig(name="xiaoli", display_name="小莉", provider="test", model="test")
+
+    names = agent._filtered_tool_names()
+    assert not {"profile_get", "profile_set", "profile_history", "profile_forget"} & names
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_rejects_fabricated_profile_tool_call():
+    from agent_dispatcher import ExtractedToolCall, SubAgentConfig, SubAgent
+
+    class Executor:
+        called = False
+
+        async def execute(self, name, arguments):
+            self.called = True
+            raise AssertionError("blocked tool reached executor")
+
+    agent = object.__new__(SubAgent)
+    agent._tool_executor = Executor()
+    agent._tool_repair = None
+    agent.config = SubAgentConfig(name="xiaoli", display_name="小莉", provider="test", model="test")
+    call = ExtractedToolCall(id="call-1", name="profile_get", arguments_json='{"namespace":"finance","field_key":"purchase_budget"}')
+
+    result = await agent._exec_one_tool_call(call)
+
+    assert "禁止" in result["content"]
+    assert agent._tool_executor.called is False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-x"])

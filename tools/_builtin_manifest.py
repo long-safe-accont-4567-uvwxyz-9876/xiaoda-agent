@@ -392,6 +392,73 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
         "module_path": "tools.agnes_tools",
         "func_name": "agnes_video_generate",
     },
+    # ── tools.profile_tool ───────────────────────────────────────────
+    {
+        "name": "profile_get",
+        "description": "精确读取当前用户的一个结构化档案字段",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "namespace": {"type": "string"},
+                "field_key": {"type": "string"},
+            },
+            "required": ["namespace", "field_key"],
+        },
+        "permission": ToolPermission.READ_ONLY,
+        "category": "memory",
+        "module_path": "tools.profile_tool",
+        "func_name": "profile_get",
+    },
+    {
+        "name": "profile_set",
+        "description": "提交当前用户的结构化档案候选，由确定性策略校验后写入",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "namespace": {"type": "string"},
+                "field_key": {"type": "string"},
+                "value": {},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            },
+            "required": ["namespace", "field_key", "value", "confidence"],
+        },
+        "permission": ToolPermission.READ_WRITE,
+        "category": "memory",
+        "module_path": "tools.profile_tool",
+        "func_name": "profile_set",
+    },
+    {
+        "name": "profile_history",
+        "description": "读取当前用户一个结构化档案字段的历史版本",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "namespace": {"type": "string"},
+                "field_key": {"type": "string"},
+            },
+            "required": ["namespace", "field_key"],
+        },
+        "permission": ToolPermission.READ_ONLY,
+        "category": "memory",
+        "module_path": "tools.profile_tool",
+        "func_name": "profile_history",
+    },
+    {
+        "name": "profile_forget",
+        "description": "撤销当前用户一个结构化档案字段的当前值，并保留审计历史",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "namespace": {"type": "string"},
+                "field_key": {"type": "string"},
+            },
+            "required": ["namespace", "field_key"],
+        },
+        "permission": ToolPermission.READ_WRITE,
+        "category": "memory",
+        "module_path": "tools.profile_tool",
+        "func_name": "profile_forget",
+    },
     # ── tools.memory_tool ────────────────────────────────────────────
     {
         "name": "remember",

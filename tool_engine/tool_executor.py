@@ -239,6 +239,12 @@ class ToolExecutor:
                 logger.warning("tool_executor.workspace_blocked", tool=tool_name, reason=ws_err)
                 return ToolResult.fail(ws_err)
 
+        from security.permission_manager import get_permission_manager
+        permission_allowed, permission_reason = get_permission_manager().check_tool_permission(tool_name)
+        if not permission_allowed:
+            logger.info("tool_executor.permission_mode_blocked", tool=tool_name, reason=permission_reason)
+            return ToolResult.fail(permission_reason, user_decision=True)
+
         # ── Approver 审批检查（借鉴 OpenWorker TurnEngine 的 out-of-band 审批）──
         # 在沙箱和工作目录检查通过后、实际执行前检查审批器。
         # 不传 approver 时 DefaultApprover 直接返回 ONCE（放行），不影响原有逻辑。

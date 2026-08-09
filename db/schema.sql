@@ -127,6 +127,48 @@ CREATE TABLE IF NOT EXISTS user_portrait (
     created_at REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS profile_fields (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    field_key TEXT NOT NULL,
+    value_json TEXT NOT NULL,
+    value_type TEXT NOT NULL,
+    valid_from REAL NOT NULL,
+    valid_to REAL,
+    learned_at REAL NOT NULL,
+    expired_at REAL,
+    superseded_by INTEGER,
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    FOREIGN KEY (superseded_by) REFERENCES profile_fields(id)
+);
+
+CREATE TABLE IF NOT EXISTS profile_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    field_key TEXT NOT NULL,
+    candidate_json TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    status TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    field_id INTEGER,
+    recorded_at REAL NOT NULL,
+    FOREIGN KEY (field_id) REFERENCES profile_fields(id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_profile_events_idempotency
+ON profile_events(user_id, agent_id, namespace, field_key, source_type, source_id)
+WHERE status = 'accepted';
+
 -- 笔记本条目
 CREATE TABLE IF NOT EXISTS notebook_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

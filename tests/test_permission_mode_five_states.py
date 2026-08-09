@@ -119,6 +119,20 @@ class TestCheckToolPermissionNewModes:
         allowed, reason = pm.check_tool_permission("web_search")
         assert allowed
 
+    @pytest.mark.parametrize("tool_name", ["profile_set", "profile_forget"])
+    def test_strict_mode_requires_confirmation_for_profile_mutations(self, pm, tool_name):
+        pm.set_mode(PermissionMode.STRICT)
+        allowed, reason = pm.check_tool_permission(tool_name)
+        assert not allowed
+        assert "需要确认" in reason
+
+    @pytest.mark.parametrize("tool_name", ["profile_set", "profile_forget"])
+    def test_auto_mode_allows_profile_mutations(self, pm, tool_name):
+        pm.set_mode(PermissionMode.AUTO)
+        allowed, reason = pm.check_tool_permission(tool_name)
+        assert allowed
+        assert reason == ""
+
     def test_plan_mode_blocks_write(self, pm):
         """PLAN 模式阻止写操作"""
         pm.set_mode(PermissionMode.PLAN)
@@ -253,3 +267,34 @@ class TestInteractiveWriteToolFix:
         allowed, reason = pm.check_tool_permission("remember")
         assert allowed
         assert "auto-allowed" in reason
+
+@pytest.mark.asyncio
+async def test_tool_executor_fails_closed_when_strict_profile_confirmation_is_unavailable():
+    from tool_engine.tool_executor import ToolExecutor
+    from tool_engine.tool_registry import ToolPermission, register_tool, unregister_tool
+
+    called = False
+
+    async def mutation():
+        nonlocal called
+        called = True
+        return "mutated"
+
+    register_tool(
+        name="profile_set",
+        description="test profile mutation",
+        schema={"type": "object", "properties": {}},
+        permission=ToolPermission.READ_WRITE,
+    )(mutation)
+    pm = get_permission_manager()
+    old_mode = pm.mode
+    pm.set_mode(PermissionMode.STRICT)
+    try:
+        result = await ToolExecutor().execute("profile_set", {})
+    finally:
+        pm.set_mode(old_mode)
+        unregister_tool("profile_set")
+
+    assert result.success is False
+    assert "需要确认" in result.error
+    assert called is False

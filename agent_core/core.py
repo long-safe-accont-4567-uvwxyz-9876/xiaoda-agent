@@ -325,6 +325,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
 
         # 运行时身份解析：基于稳定标识决定称谓，不依赖消息内容
         identity = self._resolve_identity(user_id, user_openid, source=source)
+        principal_id = user_id
         # 用身份解析结果覆盖 is_master（更准确，兼容旧调用方仍传 is_master）
         if is_master != identity.is_owner:
             logger.debug("agent.is_master_overridden",
@@ -349,6 +350,16 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         ctx.identity = identity
         ctx.system_context = system_context  # P0 新增：系统上下文（不入库）
         _ctx_token = _current_request_ctx.set(ctx)
+        from memory.scope import Scope, bind_scope, reset_scope
+        import uuid
+        _scope_token = bind_scope(
+            Scope(
+                user_id=principal_id or "default",
+                session_id=session_id or "user",
+                agent_id="xiaoda",
+                request_id=uuid.uuid4().hex,
+            )
+        )
         # 清空证据门禁（请求间隔离，避免跨请求状态泄漏）
         self._hook_engine.reset_evidence_gate()
         # 全局截止时间保护：保证每个请求必返回回复，不允许超时。
@@ -374,6 +385,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
                     emotion="apologetic",
                 )
         finally:
+            reset_scope(_scope_token)
             _current_request_ctx.reset(_ctx_token)
 
     async def _process_impl_locked(self, ctx: RequestContext, user_input: str, user_id: str,

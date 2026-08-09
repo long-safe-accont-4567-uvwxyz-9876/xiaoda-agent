@@ -142,6 +142,7 @@ class AgentContext:
         self.pending_tasks: list[str] | None = None
         self.xiaoli_context: str | None = None
         self.learned_rules: str | None = None
+        self.profile_context_provider: Any | None = None
         # 三层提示架构
         self.instinct_prompt: str = ""  # Instinct 提示（stable 层）
         self._last_message_time: float = 0.0
@@ -865,6 +866,19 @@ class AgentContext:
                          memory_len=len(memory_content),
                          memory_preview=memory_content[:200].replace('\n', ' '),
                          has_conv_log="<conversation_logs>" in memory_content)
+
+        if self.profile_context_provider is not None:
+            try:
+                from memory.scope import current_scope
+                profile_content = await self.profile_context_provider.select(
+                    current_scope(), user_input
+                )
+                if profile_content:
+                    messages.append({"role": "user", "content": profile_content})
+            except RuntimeError:
+                pass
+            except Exception as e:
+                logger.warning("agent_context.profile_context_failed", error=str(e))
 
         messages.append({"role": "user", "content": user_input})
         return messages

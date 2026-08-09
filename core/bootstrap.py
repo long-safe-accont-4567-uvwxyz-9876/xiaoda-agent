@@ -398,6 +398,10 @@ class AgentCoreBootstrapper:
         # 注入 MemoryManager 到 memory_tool，修复记忆工具不可用问题
         from tools import memory_tool
         memory_tool.bind(core.memory)
+        from tools import profile_tool
+        profile_tool.bind(core.db.profiles)
+        from core.profile_context import ProfileContextProvider
+        core.context.profile_context_provider = ProfileContextProvider(core.db.profiles)
         # 注入 core 到 schedule_tool，让 Agent 能查询/修改/删除提醒
         from tools import schedule_tool
         schedule_tool.bind(core)

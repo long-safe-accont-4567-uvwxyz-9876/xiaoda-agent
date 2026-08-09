@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+from contextvars import ContextVar
 import json
 import sqlite3
 import sys
@@ -16,6 +17,7 @@ from .db_knowledge import KnowledgeDB
 from .db_kg_v2 import KnowledgeDBV2
 from .db_analytics import AnalyticsDB
 from .db_temporal_memory import TemporalMemoryDB
+from .profile_store import ProfileStore
 from .index_manager import build_default_index_manager
 from .session_store import (
     SessionInfo,
@@ -26,7 +28,7 @@ from .session_store import (
 
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "agent.db"
-CURRENT_SCHEMA_VERSION = 21
+CURRENT_SCHEMA_VERSION = 24
 
 
 def _detect_fs_type(path: Path) -> str:
@@ -80,6 +82,7 @@ class DatabaseManager:
         # 独立只读连接：供主请求关键路径(restore_from_db)使用，WAL模式下只读连接
         # 不被写阻塞，永不受主连接脏事务/长操作影响(上下文丢失根因修复)
         self._readonly_conn: aiosqlite.Connection | None = None
+        self._profile_conn: aiosqlite.Connection | None = None
         # 只读连接池：记忆检索 7 路通道并发时若全部排队同一个主连接(self._conn，
         # aiosqlite 单连接串行执行器)，总耗时 = 各通道耗时之和（实测 7.4s=73+1018+
         # 5541+762 之和铁证）。为检索分流到独立只读连接，让通道真正并行，
@@ -93,16 +96,28 @@ class DatabaseManager:
         # （历史"上下文丢失/卡顿58s"的真正根因）。所有多语句写事务必须经过
         # write_transaction() 获取此锁，单语句 auto_commit=True 操作无需加锁（aiosqlite 原子）。
         self._write_tx_lock: asyncio.Lock = asyncio.Lock()
+        self._write_tx_active: ContextVar[bool] = ContextVar(
+            f"database_write_tx_active_{id(self)}", default=False
+        )
+        self._profile_write_lock: asyncio.Lock = asyncio.Lock()
         self.memory: MemoryDB | None = None
         self.notebook: NotebookDB | None = None
         self.learning: LearningDB | None = None
         self.knowledge: KnowledgeDB | None = None
         self.analytics: AnalyticsDB | None = None
         self.temporal: TemporalMemoryDB | None = None
+        self.profiles: ProfileStore | None = None
         self.kg_v2: KnowledgeDBV2 | None = None
 
     async def init(self) -> None:
         # 幂等性：如果已有活跃连接，先关闭旧连接再创建新连接
+        if self._profile_conn is not None:
+            try:
+                await self._profile_conn.close()
+            except (OSError, RuntimeError):
+                logger.debug("database.init_close_old_profile_connection_error", exc_info=True)
+            self._profile_conn = None
+            self.profiles = None
         if self._conn is not None:
             try:
                 await self._conn.close()
@@ -182,7 +197,12 @@ class DatabaseManager:
         self.learning = LearningDB(self._conn)
         self.knowledge = KnowledgeDB(self._conn)
         self.analytics = AnalyticsDB(self._conn)
-        self.temporal = TemporalMemoryDB(self._conn)
+        self.temporal = TemporalMemoryDB(self._conn, self.write_transaction)
+        self._profile_conn = await aiosqlite.connect(str(self.db_path))
+        self._profile_conn.row_factory = aiosqlite.Row
+        await self._profile_conn.execute("PRAGMA busy_timeout=15000")
+        await self._profile_conn.execute("PRAGMA foreign_keys=ON")
+        self.profiles = ProfileStore(self._profile_conn, self.profile_write_transaction)
         self.kg_v2 = KnowledgeDBV2(self._conn)
         # 初始化独立只读连接(供 restore_from_db 使用)
         # WAL 模式下只读连接可与主连接并发读，永不被写事务阻塞
@@ -287,6 +307,7 @@ class DatabaseManager:
         单语句 auto_commit=True 操作无需本方法（aiosqlite 单条 execute 自身原子）。
         """
         async with self._write_tx_lock:
+            token = self._write_tx_active.set(True)
             _committed = False
             try:
                 yield self._conn
@@ -300,6 +321,19 @@ class DatabaseManager:
                         raise
                     except Exception as e:
                         logger.warning(f"database.write_transaction_rollback_failed: {e}")
+                self._write_tx_active.reset(token)
+
+    @contextlib.asynccontextmanager
+    async def profile_write_transaction(self):
+        async with self._profile_write_lock:
+            committed = False
+            try:
+                yield self._profile_conn
+                await self._profile_conn.commit()
+                committed = True
+            finally:
+                if not committed:
+                    await asyncio.shield(self._profile_conn.rollback())
 
     async def get_conversations_readonly(self, start_ts: float, end_ts: float,
                                           user_id: str = "", limit: int = 50) -> list[dict]:
@@ -342,6 +376,9 @@ class DatabaseManager:
         return result
 
     async def close(self) -> None:
+        if self._profile_conn:
+            await self._profile_conn.close()
+            self._profile_conn = None
         if self._conn:
             await self._conn.close()
             self._conn = None
@@ -471,6 +508,8 @@ class DatabaseManager:
             (20, "greeting_schedules.user_id_column", self._migrate_v20),
             (21, "knowledge_entities_fts_trigger_drop", self._migrate_v21),
             (22, "fts_single_char_rebuild", self._migrate_v22),
+            (23, "bitemporal_profile_fields", self._migrate_v23),
+            (24, "profile_event_idempotency", self._migrate_v24),
         ]
         for version, desc, migrate_fn in migrations:
             if current < version:
@@ -553,7 +592,6 @@ class DatabaseManager:
                     await self._conn.commit()
                 except (OSError, RuntimeError):
                     logger.warning("database.migration_dirty_record_error: {}", exc_info=True)
-                # 非致命：记录错误但不杀进程，下次启动会自动重试
                 logger.error(
                     f"❌ 数据库迁移 v{version} 失败: {err_msg}\n"
                     f"已标记 dirty 状态，下次启动将自动重试。\n"
@@ -561,7 +599,9 @@ class DatabaseManager:
                     f"  1. python -m db.repair_migration --mark-clean\n"
                     f"  2. python -m db.repair_migration --rollback {version}\n"
                 )
-                return  # 退出重试循环
+                raise RuntimeError(
+                    f"数据库迁移 v{version} 失败，已标记 dirty，初始化已中止: {err_msg}"
+                ) from e
 
     async def _migrate_v1(self) -> None:
         """v1: knowledge_relations 新增时间字段（valid_from/valid_to/confidence）。"""
@@ -1322,6 +1362,70 @@ class DatabaseManager:
         logger.info("database.migration_v22", desc="fts_single_char_rebuild",
                     episodic=len(rows), entities=len(rows2))
 
+    async def _migrate_v23(self) -> None:
+        await self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS profile_fields (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                namespace TEXT NOT NULL,
+                field_key TEXT NOT NULL,
+                value_json TEXT NOT NULL,
+                value_type TEXT NOT NULL,
+                valid_from REAL NOT NULL,
+                valid_to REAL,
+                learned_at REAL NOT NULL,
+                expired_at REAL,
+                superseded_by INTEGER,
+                source_type TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY (superseded_by) REFERENCES profile_fields(id)
+            )
+        """)
+        await self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_profile_fields_current
+            ON profile_fields(user_id, agent_id, namespace, field_key, expired_at)
+        """)
+        await self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_profile_fields_as_of
+            ON profile_fields(user_id, agent_id, namespace, field_key,
+                              valid_from, valid_to, learned_at, expired_at)
+        """)
+        await self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS profile_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                namespace TEXT NOT NULL,
+                field_key TEXT NOT NULL,
+                candidate_json TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                status TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                field_id INTEGER,
+                recorded_at REAL NOT NULL,
+                FOREIGN KEY (field_id) REFERENCES profile_fields(id)
+            )
+        """)
+        await self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_profile_events_scope
+            ON profile_events(user_id, agent_id, recorded_at)
+        """)
+
+    async def _migrate_v24(self) -> None:
+        await self._conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_profile_events_idempotency
+            ON profile_events(
+                user_id, agent_id, namespace, field_key, source_type, source_id
+            )
+            WHERE status = 'accepted'
+        """)
+
     # SQL 注入防护：允许的 SQL 前缀白名单（仅 SELECT / PRAGMA 只读操作）
     _READONLY_PREFIXES = ("SELECT", "PRAGMA")
 
@@ -1343,9 +1447,12 @@ class DatabaseManager:
 
     async def execute(self, sql: str, params: tuple = (), auto_commit: bool = True) -> int:
         """通用写语句。INSERT 返回 lastrowid，UPDATE/DELETE 返回 rowcount。"""
-        cur = await self._conn.execute(sql, params)
         if auto_commit:
-            await self._conn.commit()
+            async with self._write_tx_lock:
+                cur = await self._conn.execute(sql, params)
+                await self._conn.commit()
+        else:
+            cur = await self._conn.execute(sql, params)
         # INSERT 返回 lastrowid，UPDATE/DELETE 返回 rowcount
         if sql.strip().upper().startswith("INSERT"):
             return cur.lastrowid or 0
@@ -1860,21 +1967,19 @@ class DatabaseManager:
     async def set_cron_last_run(self, task_name: str, ts: float | None = None,
                                  auto_commit: bool = True) -> None:
         ts = ts or time.time()
-        await self._conn.execute(
-            """INSERT OR REPLACE INTO cron_last_run (task_name, last_run) VALUES (?, ?)""",
-            (task_name, ts),
-        )
-        if auto_commit:
-            await self._conn.commit()
+        sql = "INSERT OR REPLACE INTO cron_last_run (task_name, last_run) VALUES (?, ?)"
+        if not auto_commit or self._write_tx_active.get():
+            await self._conn.execute(sql, (task_name, ts))
+            return
+        async with self.write_transaction() as conn:
+            await conn.execute(sql, (task_name, ts))
 
     async def log_conversation(self, user_id: str, source: str,
                                 user_message: str, assistant_reply: str,
                                 emotion_label: str = "", model_used: str = "",
                                 session_id: str = "", cost_usd: float = 0,
                                 cache_hit: int = 0, cache_miss: int = 0) -> None:
-        # 事务保护：auto_commit=False 批量操作，失败时 rollback 防止脏事务残留
-        _log_committed = False
-        try:
+        async with self.write_transaction():
             await self.insert_conversation_log(
                 user_id=user_id, source=source,
                 user_message=user_message, assistant_reply=assistant_reply,
@@ -1888,14 +1993,6 @@ class DatabaseManager:
                     cache_hit=cache_hit, cache_miss=cache_miss,
                     auto_commit=False,
                 )
-            await self._conn.commit()
-            _log_committed = True
-        finally:
-            if not _log_committed:
-                try:
-                    await self._conn.rollback()
-                except Exception:
-                    pass
 
     async def cleanup_expired_data(self, auto_commit: bool = True) -> dict[str, int]:
         """按 cleanup_config 表中的策略清理过期数据。返回各表删除行数。

@@ -278,7 +278,7 @@ class SubAgent:
         if not self._tool_executor:
             return None
         all_tools = to_openai_tools()
-        excluded = self.config.excluded_tools
+        excluded = self.config.excluded_tools | {"profile_get", "profile_set", "profile_history", "profile_forget"}
         tools = [t for t in all_tools if t["function"]["name"] not in excluded]
 
         # 子代理专属工具：submit_memory（受控记忆提交，实例方法拦截执行）
@@ -342,7 +342,7 @@ class SubAgent:
     def _filtered_tool_names(self) -> set[str]:
         if not self._tool_executor:
             return set()
-        excluded = self.config.excluded_tools
+        excluded = self.config.excluded_tools | {"profile_get", "profile_set", "profile_history", "profile_forget"}
         names = {t["function"]["name"] for t in to_openai_tools() if t["function"]["name"] not in excluded}
         names.add("submit_memory")  # 子代理专属工具
         names.add("send_message_to_agent")  # 子代理专属工具：子代理间直接通信
@@ -716,6 +716,15 @@ class SubAgent:
                 args_str = repaired
 
         args = tc.parse_arguments()
+
+        if tool_name not in self._filtered_tool_names():
+            return {
+                "tool_call_id": tc.id,
+                "content": json.dumps(
+                    {"error": f"工具 {tool_name} 未授权或在子代理中被禁止使用"},
+                    ensure_ascii=False,
+                ),
+            }
 
         # 过滤被禁止的工具
         if tool_name in DELEGATE_BLOCKED_TOOLS:
