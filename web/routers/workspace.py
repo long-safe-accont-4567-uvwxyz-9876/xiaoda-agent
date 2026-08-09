@@ -11,14 +11,16 @@ import os
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from loguru import logger
 from pydantic import BaseModel
 
 from security.permission_manager import get_permission_manager, AuditEntry
 from web.schemas import Envelope
+from web.routers.auth import get_current_user
 
-router = APIRouter(prefix="/workspace", tags=["workspace"])
+router = APIRouter(prefix="/workspace", tags=["workspace"],
+                   dependencies=[Depends(get_current_user)])
 
 
 # ── 请求模型 ───────────────────────────────────────────────
@@ -121,10 +123,28 @@ async def revoke_workspace():
     return Envelope(data={"authorized": False})
 
 
+# 浏览目录禁止列表：防止通过 browse 端点枚举系统敏感目录
+_BROWSE_BLOCKED_DIRS = frozenset({
+    "/etc", "/root", "/proc", "/sys", "/dev", "/run", "/var/run",
+    "/boot", "/lost+found", "/snap", "/srv",
+})
+
+
 @router.get("/browse")
 async def browse_directory(path: str = ""):
     """列出目录下的子目录（用于 DirectoryPickerDialog 浏览）"""
     target = path or os.path.expanduser("~")
+    # 路径安全：解析真实路径并检查是否在禁止列表中
+    try:
+        real_target = os.path.realpath(target)
+    except OSError:
+        real_target = target
+    if real_target in _BROWSE_BLOCKED_DIRS:
+        raise HTTPException(status_code=403, detail=f"不允许浏览系统敏感目录：{real_target}")
+    # 防止浏览禁止列表的子目录（如 /etc/shadow 虽然是文件不会被列出，但 /etc/ssh 会被）
+    for blocked in _BROWSE_BLOCKED_DIRS:
+        if real_target.startswith(blocked + "/"):
+            raise HTTPException(status_code=403, detail=f"不允许浏览系统敏感目录下的内容")
     if not os.path.isdir(target):
         raise HTTPException(status_code=400, detail=f"不是目录：{target}")
     try:

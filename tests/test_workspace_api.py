@@ -24,10 +24,16 @@ def D(r):
 
 @pytest.fixture
 def app():
-    """最小 FastAPI app，仅挂载 workspace 路由（避免全量 app 启动开销）"""
-    app = FastAPI()
-    app.include_router(workspace_router, prefix="/api/v1")
-    return app
+    """最小 FastAPI app，仅挂载 workspace 路由（避免全量 app 启动开销）
+
+    测试环境绕过 auth 依赖：用 override_dependencies 替换 get_current_user。
+    """
+    from web.routers.auth import get_current_user
+    _app = FastAPI()
+    _app.include_router(workspace_router, prefix="/api/v1")
+    # 测试环境：绕过认证
+    _app.dependency_overrides[get_current_user] = lambda: "test_user"
+    return _app
 
 
 @pytest.fixture
@@ -97,6 +103,28 @@ class TestWorkspaceEndpoints:
         r = client.get("/api/v1/workspace/browse", params={"path": str(sub)})
         assert r.status_code == 200
         assert D(r)["parent"] is not None
+
+    def test_browse_blocked_system_dir_etc(self, client):
+        """P1 安全修复：/etc 等系统敏感目录应被 browse 端点拒绝"""
+        r = client.get("/api/v1/workspace/browse", params={"path": "/etc"})
+        assert r.status_code == 403
+
+    def test_browse_blocked_system_dir_root(self, client):
+        """P1 安全修复：/root 目录应被 browse 端点拒绝"""
+        r = client.get("/api/v1/workspace/browse", params={"path": "/root"})
+        assert r.status_code == 403
+
+    def test_browse_blocked_system_subdir(self, client):
+        """P1 安全修复：系统敏感目录的子目录也应被拒绝"""
+        r = client.get("/api/v1/workspace/browse", params={"path": "/etc/ssh"})
+        assert r.status_code == 403
+
+    def test_browse_allowed_user_dir(self, client, tmp_path):
+        """用户临时目录应允许浏览"""
+        (tmp_path / "subdir").mkdir()
+        r = client.get("/api/v1/workspace/browse", params={"path": str(tmp_path)})
+        assert r.status_code == 200
+        assert "subdir" in D(r)["dirs"]
 
 
 class TestWhitelistEndpoints:
