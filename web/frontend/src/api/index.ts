@@ -8,7 +8,7 @@ interface ApiEnvelope<T> {
   error?: { code: string; message: string }
 }
 
-async function request<T>(path: string, options?: RequestInit, confirm = false, _retried = false): Promise<T> {
+async function request<T>(path: string, options?: RequestInit, confirm = false): Promise<T> {
   const token = localStorage.getItem('token')
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -22,24 +22,9 @@ async function request<T>(path: string, options?: RequestInit, confirm = false, 
   })
   if (res.status === 401) {
     localStorage.removeItem('token')
-    // token 失效时静默重登（私网无密码环境后端自动签发新 token）并重试一次，
-    // 避免滑动续期/过期导致设置页保存被弹回登录页打断流程
-    if (!_retried && path !== '/auth/login') {
-      try {
-        const loginRes = await fetch(`${BASE}/auth/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: '' }),
-        })
-        const loginBody = await loginRes.json()
-        if (loginRes.ok && loginBody?.ok && loginBody.data?.token) {
-          localStorage.setItem('token', loginBody.data.token)
-          return request<T>(path, options, confirm, true)
-        }
-      } catch {
-        // 静默失败，走登录页引导
-      }
-    }
+    // token 失效/未登录时一律引导到登录页（无密码环境同样需要点击"进入"，
+    // 不做静默空密码重登——那样会绕过登录页）。设置页保存场景的 401 已由
+    // 后端 profile 端点免认证（_profile_endpoint_access）根治，无需前端兜底。
     if (!location.hash.includes('login')) location.hash = '#/login'
     throw new Error(t('login.tokenExpired'))
   }
