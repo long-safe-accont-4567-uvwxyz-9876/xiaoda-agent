@@ -471,6 +471,12 @@ hiddenimports = [
     'prompt_toolkit.layout',
     'prompt_toolkit.layout.controls',
     'prompt_toolkit.styles',
+
+    # CLI 交互式斜杠命令面板/菜单（cli.py 中为 try/except 守卫导入，
+    # PyInstaller 静态分析可能漏掉，需显式声明——缺失会导致打包版 CLI
+    # 回退到基础输入，命令面板/滚动全部失效）
+    'cli_palette',
+    'cli_menu',
 ]
 
 # Collect any sub-modules that static analysis might miss

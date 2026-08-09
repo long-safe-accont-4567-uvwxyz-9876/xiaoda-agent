@@ -2,6 +2,7 @@
 
 供 cli.py 的多步斜杠命令逐步选择（/model 选 provider→模型、/agent 选代理等）。
 方向键 ↑/↓ 或 k/j 移动，Enter 确认，Esc/Ctrl+C 取消。样式与 nahida 配色一致。
+选项多于可视区时自动滚动（滚动跟随选中项，超出屏幕也能看到当前选择）。
 """
 from __future__ import annotations
 
@@ -34,6 +35,16 @@ _MENU_STYLE = Style([
 ])
 
 
+def _menu_max_rows() -> int:
+    """可视区行数：按终端高度扣除标题/提示/留白（不可用时兜底 12）。"""
+    try:
+        import shutil
+        lines = shutil.get_terminal_size().lines
+        return max(6, lines - 4)
+    except Exception:
+        return 12
+
+
 def select_from_menu(title: str, options: list[MenuItem], hint: str = "") -> str | None:
     """交互式单选菜单。
 
@@ -46,11 +57,26 @@ def select_from_menu(title: str, options: list[MenuItem], hint: str = "") -> str
     """
     if not options:
         return None
-    state: dict[str, Any] = {"index": 0, "result": None}
+    state: dict[str, Any] = {"index": 0, "result": None, "scroll": 0, "max_rows": _menu_max_rows()}
+
+    def _adjust_scroll() -> None:
+        """保持选中项在可视区内：超出上/下边界即平移。"""
+        total = len(options)
+        if total <= state["max_rows"]:
+            state["scroll"] = 0
+            return
+        if state["index"] < state["scroll"]:
+            state["scroll"] = state["index"]
+        elif state["index"] >= state["scroll"] + state["max_rows"]:
+            state["scroll"] = state["index"] - state["max_rows"] + 1
 
     def render() -> list[tuple[str, str]]:
         lines: list[tuple[str, str]] = [("class:menu.title", f"{title}\n")]
-        for i, opt in enumerate(options):
+        total = len(options)
+        start = state["scroll"]
+        end = min(start + state["max_rows"], total)
+        for i in range(start, end):
+            opt = options[i]
             marker = "→" if i == state["index"] else " "
             line = f"  {marker} {opt.display()}"
             if opt.description:
@@ -58,7 +84,11 @@ def select_from_menu(title: str, options: list[MenuItem], hint: str = "") -> str
             cls = "class:menu.current" if i == state["index"] else "class:menu.item"
             lines.append((cls, f"{line}\n"))
         bottom = hint or "（↑/↓ 或 k/j 移动 · Enter 确认 · Esc 取消）"
-        lines.append(("class:menu.hint", f"\n{bottom}"))
+        if end < total:
+            # 底部还有未显示的选项：提示可继续滚动
+            lines.append(("class:menu.hint", f"\n  ··· 还有 {total - end} 项，继续 ↓"))
+        else:
+            lines.append(("class:menu.hint", f"\n{bottom}"))
         return lines
 
     kb = KeyBindings()
@@ -67,11 +97,13 @@ def select_from_menu(title: str, options: list[MenuItem], hint: str = "") -> str
     @kb.add("k")
     def _up(_event: Any) -> None:
         state["index"] = (state["index"] - 1) % len(options)
+        _adjust_scroll()
 
     @kb.add("down")
     @kb.add("j")
     def _down(_event: Any) -> None:
         state["index"] = (state["index"] + 1) % len(options)
+        _adjust_scroll()
 
     @kb.add("enter")
     def _confirm(event: Any) -> None:

@@ -496,6 +496,9 @@ class CLIInterface:
                 label=name,
                 description=desc,
                 loader=loader,
+                # 单步命令（无 loader）直接返回命令自身：
+                # 否则 is_leaf=False 且无 loader，选中后 Enter 被 _activate 静默丢弃。
+                result=None if loader else name,
             ))
         return nodes
 

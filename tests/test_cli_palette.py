@@ -111,3 +111,52 @@ def test_activation_without_children_does_not_fire():
     p._root_nodes[2].loader = lambda: []
     p._activate(2)
     assert p._result is None
+
+
+def test_activate_no_match_returns_raw_text():
+    """输入带参数的完整命令/未知命令（无匹配项）时，回车直接发送原文。"""
+    p = _palette("/status 全部")
+    p._stack = [p._root_nodes]
+    p._index = 0
+    p._activate(0)
+    assert p._result == "/status 全部"
+
+
+def test_adjust_scroll_follows_selection():
+    """命令多于可视区时，滚动偏移跟随选中项，选中项始终可见。"""
+    nodes = [PaletteNode(label=f"/cmd{i:02d}", result=f"/cmd{i:02d}") for i in range(30)]
+    p = CommandPalette(prompt="> ", nodes=nodes)
+    p._open = True
+    p._stack = [p._root_nodes]
+    p._max_rows = 10
+    # 下移 25 次 → index 25
+    p._index = 0
+    for _ in range(25):
+        p._index = (p._index + 1) % 30
+        p._adjust_scroll()
+    assert p._index == 25
+    assert p._scroll <= p._index < p._scroll + 10
+    assert p._scroll == 16
+    # 上移回顶 → index 0，scroll 归零
+    for _ in range(25):
+        p._index = (p._index - 1) % 30
+        p._adjust_scroll()
+    assert p._index == 0 and p._scroll == 0
+
+
+def test_render_panel_clips_to_visible_window():
+    """渲染只输出可视窗口行，超出部分不输出且带"还有 N 项"滚动提示。"""
+    nodes = [PaletteNode(label=f"/cmd{i:02d}", result=f"/cmd{i:02d}") for i in range(30)]
+    p = CommandPalette(prompt="> ", nodes=nodes)
+    p._open = True
+    p._stack = [p._root_nodes]
+    p._index = 20
+    p._scroll = 11
+    p._max_rows = 10
+    rows = p._render_panel()
+    # 标题 1 + 可视 10 + 滚动提示 1
+    assert len(rows) == 12
+    assert any("还有 9 项" in r[1] for r in rows)
+    rendered = "".join(r[1] for r in rows)
+    assert "/cmd11" in rendered and "/cmd20" in rendered
+    assert "/cmd00" not in rendered and "/cmd29" not in rendered

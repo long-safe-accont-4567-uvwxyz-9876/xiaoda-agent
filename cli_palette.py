@@ -87,6 +87,9 @@ class CommandPalette:
         self._open = False
         self._result: str | None = None
         self._app: Application | None = None
+        # 滚动：命令多于可视区时记录顶部偏移，选中项移动时自动跟随，超出屏幕也可见
+        self._scroll = 0
+        self._max_rows = 10  # 命令列表可视行数（不含标题行/滚动提示行）
 
     # ── 状态辅助 ────────────────────────────────────────────
     def _current_nodes(self) -> list[PaletteNode]:
@@ -104,6 +107,29 @@ class CommandPalette:
                 return [n for n in nodes if n.label.startswith(text)]
         return nodes
 
+    def _adjust_scroll(self) -> None:
+        """选中项移动后把滚动偏移钳制到可视区，保证选中项始终可见。
+
+        命令数不超过可视区时不滚动；超过时选中项越出上/下边界即整体平移。
+        """
+        total = len(self._visible_nodes())
+        if total <= self._max_rows:
+            self._scroll = 0
+            return
+        if self._index < self._scroll:
+            self._scroll = self._index
+        elif self._index >= self._scroll + self._max_rows:
+            self._scroll = self._index - self._max_rows + 1
+
+    def _panel_height(self) -> int:
+        """面板总高度：标题 1 行 + 可视命令（≤_max_rows）+ 溢出时滚动提示 1 行。"""
+        vis = len(self._visible_nodes())
+        if vis == 0:
+            return 2  # 标题 + "无匹配命令"提示
+        if vis <= self._max_rows:
+            return 1 + vis
+        return 2 + self._max_rows
+
     def _panel_visible(self) -> bool:
         return self._open and self._current_text().startswith("/")
 
@@ -118,6 +144,7 @@ class CommandPalette:
                 vis = self._visible_nodes()
                 if vis:
                     self._index = (self._index - 1) % len(vis)
+                    self._adjust_scroll()
                     self._app.invalidate()
             else:
                 self._buffer.cursor_up()
@@ -129,6 +156,7 @@ class CommandPalette:
                 vis = self._visible_nodes()
                 if vis:
                     self._index = (self._index + 1) % len(vis)
+                    self._adjust_scroll()
                     self._app.invalidate()
             else:
                 self._buffer.cursor_down()
@@ -174,17 +202,24 @@ class CommandPalette:
                 self._open = True
                 self._stack = [self._root_nodes]
                 self._index = 0
+                self._scroll = 0
         else:
             # 删除 / 后回到普通输入
             self._open = False
             self._stack = []
             self._index = 0
+            self._scroll = 0
         if self._app:
             self._app.invalidate()
 
     def _activate(self, index: int) -> None:
         vis = self._visible_nodes()
         if not vis:
+            # 无匹配项（如输入了带参数的完整命令 /cmd xxx 或未知命令）：
+            # 视为用户显式输入，直接返回原文，避免 Enter 被吞导致命令发不出去。
+            self._result = self._current_text()
+            if self._app:
+                self._app.exit()
             return
         node = vis[index % len(vis)]
         if node.is_leaf:
@@ -203,6 +238,7 @@ class CommandPalette:
             return
         self._stack.append(children)
         self._index = 0
+        self._scroll = 0
         if self._app:
             self._app.invalidate()
 
@@ -213,13 +249,22 @@ class CommandPalette:
         lines: list[tuple[str, str]] = [("class:palette.title", f"{self._title}\n")]
         vis = self._visible_nodes()
         if not vis:
-            lines.append(("class:palette.item", "  （无匹配命令）\n"))
-        for i, node in enumerate(vis):
-            cur = i == self._index % max(len(vis), 1)
+            lines.append(("class:palette.item", "  （无匹配命令，回车直接发送）\n"))
+            return lines
+        total = len(vis)
+        start = self._scroll
+        end = min(start + self._max_rows, total)
+        for i in range(start, end):
+            node = vis[i]
+            cur = i == self._index % max(total, 1)
             marker = "→" if cur else " "
             cls = "class:palette.current" if cur else "class:palette.item"
             desc = f"   · {node.description}" if node.description else ""
             lines.append((cls, f"  {marker} {node.label}{desc}\n"))
+        if end < total:
+            # 底部还有未显示的命令：提示可继续滚动
+            remaining = total - end
+            lines.append(("class:palette.hint", f"  ··· 还有 {remaining} 项，继续 ↓\n"))
         return lines
 
     def _layout(self) -> Layout:
@@ -236,8 +281,9 @@ class CommandPalette:
             Window(
                 FormattedTextControl(self._render_panel),
                 style="class:palette",
-                # 高度 = 标题 1 行 + 命令行数；上限 12 行，超出自动向上滚动（光标在底部）
-                height=lambda: min(1 + len(self._visible_nodes()), 12),
+                # 高度 = 标题 1 行 + 可视命令（≤_max_rows）+ 溢出时滚动提示 1 行；
+                # 命令多于可视区时面板固定高度，选中项移动驱动 _scroll 平移内容。
+                height=self._panel_height,
             ),
             Window(height=1, char="-"),
         ])
@@ -262,6 +308,7 @@ class CommandPalette:
         self._open = False
         self._stack = []
         self._index = 0
+        self._scroll = 0
         self._result: str | None = None
 
         self._app = Application(

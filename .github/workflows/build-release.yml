@@ -261,6 +261,37 @@ jobs:
           echo ""
           echo "Local embed bundle verified OK"
 
+      - name: Verify CLI modules bundled (interactive slash commands)
+        shell: bash
+        run: |
+          # cli_palette / cli_menu 在 cli.py 中是 try/except 守卫导入，PyInstaller
+          # 静态分析可能漏掉；若未打包会静默回退到基础输入，命令面板/滚动全部失效。
+          # 此步骤强制验证 PYZ 归档中确实包含这两个模块 + prompt_toolkit。
+          echo "=== Locating PYZ archive ==="
+          PYZ=$(find dist/xiaoda-agent -name "*.pyz" -print -quit 2>/dev/null)
+          if [ -z "$PYZ" ]; then
+            echo "FATAL: PYZ archive not found in build output!"
+            exit 1
+          fi
+          echo "PYZ: $PYZ"
+          pyi-archive_viewer -l "$PYZ" > /tmp/pyz_contents.txt
+          echo "=== Checking cli_palette / cli_menu / prompt_toolkit ==="
+          MISSING=0
+          for m in cli_palette cli_menu prompt_toolkit; do
+            if grep -q "$m" /tmp/pyz_contents.txt; then
+              echo "OK: $m bundled"
+            else
+              echo "FATAL: $m NOT bundled! Interactive slash-command panel/menu will be disabled."
+              MISSING=1
+            fi
+          done
+          if [ $MISSING -eq 1 ]; then
+            echo "--- PYZ 中与 cli 相关的条目： ---"
+            grep -i "cli" /tmp/pyz_contents.txt | head -20 || true
+            exit 1
+          fi
+          echo "CLI interactive modules verified OK"
+
       - name: Ensure assets bundled in dist
         shell: bash
         run: |
