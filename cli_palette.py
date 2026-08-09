@@ -161,6 +161,14 @@ class CommandPalette:
             else:
                 self._buffer.cursor_down()
 
+        @kb.add("c-c")
+        @kb.add("<sigint>")
+        def _ctrl_c(event: Any) -> None:
+            # 真实终端 Ctrl+C 产生 SIGINT，prompt_toolkit 会转成 <sigint> 按键事件；
+            # 默认绑定对 <sigint> 是忽略（无反应），导致 CLI 无法退出。
+            # 这里显式抛出 KeyboardInterrupt，由 CLI 主循环捕获后打印告别语退出。
+            raise KeyboardInterrupt
+
         @kb.add("enter")
         def _enter(event: Any) -> None:
             if self._panel_visible():

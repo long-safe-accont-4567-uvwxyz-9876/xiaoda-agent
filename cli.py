@@ -425,12 +425,23 @@ class CLIInterface:
         if not _HAS_PROMPT_TOOLKIT:
             self._session = None
             return
+        # 真实终端 Ctrl+C 产生 SIGINT，prompt_toolkit 默认转成 <sigint> 事件且忽略，
+        # 导致无法退出。显式绑定 c-c/<sigint> 抛 KeyboardInterrupt，由主循环捕获退出。
+        from prompt_toolkit.key_binding import KeyBindings
+        sigint_bindings = KeyBindings()
+
+        @sigint_bindings.add("c-c")
+        @sigint_bindings.add("<sigint>")
+        def _sigint(_event) -> None:
+            raise KeyboardInterrupt
+
         hist_path = os.path.expanduser("~/.ai-agent/cli_history")
         self._session = PromptSession(
             history=FileHistory(hist_path),
             auto_suggest=AutoSuggestFromHistory(),
             completer=_SlashCompleter(),
             complete_while_typing=True,
+            key_bindings=sigint_bindings,
         )
 
     def _palette_nodes(self) -> list[PaletteNode]:

@@ -160,3 +160,21 @@ def test_render_panel_clips_to_visible_window():
     rendered = "".join(r[1] for r in rows)
     assert "/cmd11" in rendered and "/cmd20" in rendered
     assert "/cmd00" not in rendered and "/cmd29" not in rendered
+
+
+def test_sigint_and_ctrl_c_bindings_raise_keyboard_interrupt():
+    """真实终端 Ctrl+C 产生 SIGINT，prompt_toolkit 转成 <sigint> 事件且默认忽略。
+
+    若缺少 c-c/<sigint> 绑定，CLI 将无法退出（按 Ctrl+C 无反应）。
+    回归测试：绑定必须存在且触发 KeyboardInterrupt（由主循环捕获退出）。
+    """
+    from prompt_toolkit.key_binding.key_bindings import KeyBindings
+    from prompt_toolkit.keys import Keys
+
+    p = CommandPalette(prompt="> ", nodes=_nodes())
+    kb = p._build_key_bindings()
+    assert isinstance(kb, KeyBindings)
+
+    # get_bindings_for_keys 返回可处理该按键的绑定；为空说明未绑定
+    assert kb.get_bindings_for_keys((Keys.SIGINT,)), "缺少 <sigint> 绑定：真实终端 Ctrl+C 将无反应"
+    assert kb.get_bindings_for_keys((Keys.ControlC,)), "缺少 c-c 绑定"

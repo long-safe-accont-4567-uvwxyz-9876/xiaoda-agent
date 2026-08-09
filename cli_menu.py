@@ -112,7 +112,10 @@ def select_from_menu(title: str, options: list[MenuItem], hint: str = "") -> str
 
     @kb.add("escape")
     @kb.add("c-c")
+    @kb.add("<sigint>")
     def _cancel(event: Any) -> None:
+        # 真实终端 Ctrl+C 产生 SIGINT，prompt_toolkit 转成 <sigint> 按键事件；
+        # 默认绑定会忽略它。与 c-c 一致：取消菜单返回 None，不发送命令。
         event.app.exit()
 
     app = Application(
