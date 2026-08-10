@@ -103,6 +103,34 @@ async def test_truncation_retry_no_recursion():
 
 
 @pytest.mark.asyncio
+async def test_truncation_retry_deduplicates_regenerated_prefix():
+    from model_router import ModelRouter
+
+    router = ModelRouter.__new__(ModelRouter)
+    router._cache_stats = {"total_calls": 0, "hit_tokens": 0, "miss_tokens": 0}
+    router._credential_pool = MagicMock()
+    router._credential_pool.report_success = AsyncMock()
+    router._check_cache_health = lambda: None
+    router._last_cache_warning = 0.0
+    original = "这是长度超过十个字符的前半段内容"
+    regenerated = original + "，这是后半段完成内容。"
+    router._route_for_continuation = AsyncMock(
+        return_value=_make_response(regenerated, finish_reason="stop")
+    )
+
+    result = await router._handle_route_response(
+        _make_response(original, finish_reason="length"),
+        "chat", "test-model", False, "user1", "session1", "mimo", None,
+        messages=[{"role": "user", "content": "test"}],
+        temperature=0.7, max_tokens=1000,
+        config={"model": "test-model", "thinking": {"type": "disabled"}},
+    )
+
+    assert result == regenerated
+    assert result.count(original) == 1
+
+
+@pytest.mark.asyncio
 async def test_finish_reason_detection_stop():
     """Task 1.2: finish_reason="stop" 时正确 break。"""
     from model_router import ModelRouter

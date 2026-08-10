@@ -18,6 +18,7 @@ credentials/
 *.key
 *.secret
 .superpowers-skills
+.superpowers/
 state/
 .trae/
 config/webui_overrides.json
@@ -29,7 +30,8 @@ tests/benchmark_results.json
 # Build artifacts
 build/
 dist/
-web/dist/
+!web/dist/
+!web/dist/**
 botpy.log.*
 market/.cache
 assets/stickers/*

@@ -5,6 +5,7 @@ import uuid
 from tool_engine.tool_registry import register_tool, ToolPermission, ToolResult
 from loguru import logger
 from utils.metrics import metrics
+from memory.scope import current_scope_or_default
 
 # 模块级 MemoryManager 单例（由 agent_core.init() 注入）
 _memory_manager = None
@@ -45,12 +46,11 @@ async def remember(content: str, tags: str = "", importance: float = 0.5) -> Too
     try:
         mm = _get_memory_manager()
         # 使用 MemoryManager.memory.insert_episodic_memory 写入
-        from memory.scope import Scope
         mem_id = await mm.memory.insert_episodic_memory(
             summary=content,
             importance=importance,
             emotion_label=tags.split(",")[0].strip() if tags else "",
-            scope=Scope(),
+            scope=current_scope_or_default(),
             is_raw=1,
         )
 
@@ -107,7 +107,12 @@ async def recall(query: str, top_k: int = 8) -> ToolResult:
         req_id = uuid.uuid4().hex[:8]
         try:
             results = await asyncio.wait_for(
-                mm.retrieve_memories(query, k=top_k, apply_min_score=False),
+                mm.retrieve_memories(
+                    query,
+                    k=top_k,
+                    apply_min_score=False,
+                    scope=current_scope_or_default(),
+                ),
                 timeout=10.0,
             )
         except asyncio.TimeoutError:
@@ -208,7 +213,7 @@ async def forget(query: str) -> ToolResult:
     try:
         mm = _get_memory_manager()
         # 先检索定位记忆
-        results = await mm.retrieve_memories(query, k=1)
+        results = await mm.retrieve_memories(query, k=1, scope=current_scope_or_default())
         if not results:
             return ToolResult.ok("没有找到相关记忆")
 

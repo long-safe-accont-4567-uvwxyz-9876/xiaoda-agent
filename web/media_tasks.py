@@ -41,7 +41,9 @@ class MediaTaskQueue:
 
     async def stop(self) -> None:
         if self._worker:
-            self._worker.cancel()
+            worker = self._worker
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
             self._worker = None
 
     # ── 提交与查询 ───────────────────────────────────────

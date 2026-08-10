@@ -99,6 +99,7 @@ class TestCRAGSkipsChatIntent:
         """闲聊型查询应跳过 CRAG 评估，避免不必要的低置信度告警"""
         from memory.memory_manager import MemoryManager
         from memory.retrieval_assessor import RetrievalAssessor
+        from memory.scope import Scope
 
         mgr = MemoryManager.__new__(MemoryManager)
         mgr._assessor = RetrievalAssessor()
@@ -119,7 +120,10 @@ class TestCRAGSkipsChatIntent:
         import config
         with patch("config.QUERY_CACHE_ENABLED", True), \
              patch("config.RETRIEVAL_SMART_SKIP", True):
-            await mgr.retrieve_memories("你好啊")
+            await mgr.retrieve_memories(
+                "你好啊",
+                scope=Scope(user_id="test-user", agent_id="xiaoda"),
+            )
 
         # 闲聊型查询不应触发 CRAG 评估
         # 因为闲聊查询不需要精确检索，CRAG 评估会产生不必要的低置信度告警

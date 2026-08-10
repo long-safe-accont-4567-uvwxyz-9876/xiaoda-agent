@@ -27,6 +27,8 @@ from agent_core._shared import (
     _current_request_ctx,
 )
 from agent_core.shared_blackboard import SharedBlackboard
+from agent_core.conversation_session import ConversationSession
+from agent_core.principal import ChannelIdentity, Principal, PrincipalResolver
 from agent_dispatcher import AgentDispatcher
 from config import FILE_DIR, STICKER_DIR, XIAOLI_STICKER_DIR, build_system_prompt
 from core.lazy_loader import LazyLoader
@@ -88,6 +90,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         _master_qq = [x.strip() for x in _master_qq if x.strip()]
         _owner_ids = list(dict.fromkeys(_owner_ids + _master_qq))  # 去重保序
         self.security = SecurityFilter(owner_ids=_owner_ids)
+        self._principal_resolver = PrincipalResolver(self.security)
         # 子代理 A2A 共享黑板（在 context 创建前初始化，并注入 context 供子代理访问）
         self._shared_blackboard = SharedBlackboard()
         # 后台周期清理任务引用（bootstrap 中创建，shutdown 中取消）
@@ -243,6 +246,30 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         addr = self.read_address_term_from_user_md() or "朋友"
         return UserIdentity(is_owner=True, display_name="爸爸", address_term=addr)
 
+    def _resolve_principal(self, user_id: str, user_openid: str = "",
+                           source: str = "") -> Principal:
+        resolver = PrincipalResolver(
+            self.security,
+            owner_address_term=self.read_address_term_from_user_md() or "爸爸",
+        )
+        return resolver.resolve(ChannelIdentity(
+            source=source,
+            user_id=user_id,
+            subject_id=user_openid or user_id,
+        ))
+
+    def _build_conversation_session(self, principal: Principal, context_id: str,
+                                    session_id: str, source: str,
+                                    channel_subject_id: str) -> ConversationSession:
+        return ConversationSession.create(
+            principal=principal,
+            context_id=context_id,
+            session_id=session_id,
+            agent_id="xiaoda",
+            source=source,
+            channel_subject_id=channel_subject_id,
+        )
+
     def _resolve_identity(self, user_id: str, user_openid: str = "",
                           source: str = "") -> UserIdentity:
         """运行时身份解析：基于 openID/UID 稳定标识判断用户身份，不依赖消息内容。
@@ -251,17 +278,12 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         - QQ 群聊（source == "qq_group"）：严格按 owner_ids 判断，区分主人/非主人
         - 其他来源（web、cli、qq_c2c 等）：默认主人，使用完整提示词
         """
-        # 非 QQ 群聊场景默认主人（webui/cli/单聊等均为爸爸本人使用）
-        if source != "qq_group":
-            return self._build_owner_identity()
-        # QQ 群聊场景：基于 openID 严格判断
-        check_id = user_openid or user_id
-        if not check_id:
-            return self._build_owner_identity()
-        is_owner = self.security.is_owner(check_id)
-        if is_owner:
-            return self._build_owner_identity()
-        return UserIdentity(is_owner=False, display_name="朋友", address_term="朋友")
+        principal = self._resolve_principal(user_id, user_openid, source)
+        return UserIdentity(
+            is_owner=principal.is_owner,
+            display_name=principal.display_name,
+            address_term=principal.address_term,
+        )
 
     def _resolve_shared_context_id(self, user_id: str, source: str, is_master: bool) -> str:
         """跨平台共用上下文：把共享平台的 user_id 统一映射为一个共享上下文键。
@@ -324,8 +346,19 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             return ProcessResult(reply=DEGRADED_REPLY)
 
         # 运行时身份解析：基于稳定标识决定称谓，不依赖消息内容
-        identity = self._resolve_identity(user_id, user_openid, source=source)
-        principal_id = user_id
+        principal = self._resolve_principal(user_id, user_openid, source=source)
+        logger.bind(
+            principal_id=principal.principal_id,
+            source=source,
+            is_owner=principal.is_owner,
+            channel_subject_present=bool(user_openid or user_id),
+        ).info("agent.principal_resolved")
+        identity = UserIdentity(
+            is_owner=principal.is_owner,
+            display_name=principal.display_name,
+            address_term=principal.address_term,
+        )
+        principal_id = principal.principal_id
         # 用身份解析结果覆盖 is_master（更准确，兼容旧调用方仍传 is_master）
         if is_master != identity.is_owner:
             logger.debug("agent.is_master_overridden",
@@ -338,6 +371,28 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         # 将 user_id 重映射为统一共享键，使该平台与其他共享平台读/写同一份历史。
         # 身份(is_master/称谓)已在上面用原始 user_id 解析完成，不受重映射影响。
         user_id = self._resolve_shared_context_id(user_id, source, is_master)
+        conversation_session = self._build_conversation_session(
+            principal=principal,
+            context_id=user_id,
+            session_id=session_id,
+            source=source,
+            channel_subject_id=user_openid or principal_id,
+        )
+        import uuid
+        request_id = uuid.uuid4().hex
+        memory_scope = conversation_session.memory_scope(request_id)
+        logger.bind(
+            principal_id=principal.principal_id,
+            context_id=conversation_session.context_id,
+            session_id=conversation_session.session_id,
+            agent_id=conversation_session.agent_id,
+            source=source,
+            is_owner=principal.is_owner,
+            scope_user_id=memory_scope.user_id,
+            scope_session_id=memory_scope.session_id,
+            scope_agent_id=memory_scope.agent_id,
+            request_id=memory_scope.request_id,
+        ).info("agent.session_bound")
 
         ctx = RequestContext(
             session_id=session_id,
@@ -348,18 +403,12 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
             is_master=is_master,
         )
         ctx.identity = identity
+        ctx.principal = principal
+        ctx.conversation_session = conversation_session
         ctx.system_context = system_context  # P0 新增：系统上下文（不入库）
         _ctx_token = _current_request_ctx.set(ctx)
-        from memory.scope import Scope, bind_scope, reset_scope
-        import uuid
-        _scope_token = bind_scope(
-            Scope(
-                user_id=principal_id or "default",
-                session_id=session_id or "user",
-                agent_id="xiaoda",
-                request_id=uuid.uuid4().hex,
-            )
-        )
+        from memory.scope import bind_scope, reset_scope
+        _scope_token = bind_scope(memory_scope)
         # 清空证据门禁（请求间隔离，避免跨请求状态泄漏）
         self._hook_engine.reset_evidence_gate()
         # 全局截止时间保护：保证每个请求必返回回复，不允许超时。
@@ -540,13 +589,9 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
     async def _shutdown_cancel_background_tasks(self) -> None:
         """取消所有后台任务。"""
         try:
-            bg_tasks = BackgroundTaskManager.get_bg_tasks()
-            for task in list(bg_tasks):
-                if not task.done():
-                    task.cancel()
-            if bg_tasks:
-                await asyncio.gather(*bg_tasks, return_exceptions=True)
-            BackgroundTaskManager.clear_bg_tasks()
+            manager = getattr(self, "_bg_task_manager", None)
+            if manager is not None:
+                await manager.cancel_background_tasks()
         except Exception as e:
             logger.warning("shutdown.cancel_bg_tasks_failed", error=str(e))
 

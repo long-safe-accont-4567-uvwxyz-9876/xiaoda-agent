@@ -135,6 +135,7 @@ class VectorStore:
         self._embed_base_url = embed_base_url
         self._embed_model = embed_model
         self._dimensions = dimensions
+        self._dimensions_explicit = dimensions > 0
         self._embed_mode = embed_mode or os.getenv("EMBED_MODE", "local")
         self._local_model_dir = local_model_dir or _default_local_model_dir()
         self._local_query_prefix = local_query_prefix or os.getenv("LOCAL_EMBED_QUERY_PREFIX", "")
@@ -360,13 +361,13 @@ class VectorStore:
                     # - 未配置时查表已有维度；表不存在则用 1024 兜底
                     # 修复 P0：原代码硬编码 1024 且首次 INSERT 时 _dimensions 竞态写入，
                     # 维度不匹配时 INSERT 永久失败。
-                    if self._embed_mode == "local" and self._local_provider is not None:
+                    if self._dimensions > 0:
+                        dims = self._dimensions
+                    elif self._embed_mode == "local" and self._local_provider is not None:
                         # 懒加载时此处同步加载（首次使用），拿到真实维度
                         self._local_provider.load()
                         dims = self._local_provider.dimensions or 512
                         self._dimensions = dims
-                    elif self._dimensions > 0:
-                        dims = self._dimensions
                     else:
                         try:
                             row = conn.execute(
@@ -390,7 +391,7 @@ class VectorStore:
                     # local 模式：表已存在但维度与本地模型不一致（如 1024→512）时，
                     # 不能原地改表结构，INSERT 会静默失败。检测到不匹配直接报错，
                     # 由迁移脚本（scripts/rebuild_vec_local.py）重建表并重新向量化。
-                    if self._embed_mode == "local" and self._local_provider is not None:
+                    if self._embed_mode == "local" and self._local_provider is not None and not self._dimensions_explicit:
                         try:
                             row = conn.execute(
                                 "SELECT embedding FROM memories_vec LIMIT 1"

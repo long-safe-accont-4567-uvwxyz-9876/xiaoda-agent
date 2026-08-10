@@ -271,6 +271,7 @@ hiddenimports = [
     'tools.memory_tool',
     'tools.multi_search_tools',
     'tools.nudge_tool',
+    'tools.secrets_tool',
     'tools.system_tools',
     'tools.vision_tools',
     'tools.web_browse_tools',

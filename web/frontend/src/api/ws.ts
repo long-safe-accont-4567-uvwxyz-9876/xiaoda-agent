@@ -44,6 +44,11 @@ export class WsClient {
     this._open(token)
   }
 
+  reconnect(token: string) {
+    this.disconnect()
+    this.connect(token)
+  }
+
   // 仅建立连接，不触碰重连状态/计数：供 connect() 与后台重连复用。
   // 后台重连（scheduleReconnect）必须走这里而非 connect()——
   // connect() 会重置 _intentionalDisconnect/reconnectAttempts，导致
@@ -116,10 +121,12 @@ export class WsClient {
     this.connected = false
   }
 
-  send(data: Record<string, unknown>) {
+  send(data: Record<string, unknown>): boolean {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data))
+      return true
     }
+    return false
   }
 
   on(type: string, handler: (data: WsEvent) => void) {

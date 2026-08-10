@@ -21,23 +21,13 @@ error() { echo -e "${RED}[✗]${NC} $*"; exit 1; }
 # ── 检查依赖 ──────────────────────────────────────────────
 check_deps() {
     local missing=()
-    for cmd in python3 pip3; do
+    for cmd in tar; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
     if [ ${#missing[@]} -gt 0 ]; then
-        error "缺少依赖: ${missing[*]}。请先安装 Python 3.11+"
+        error "缺少依赖: ${missing[*]}"
     fi
-
-    # 检查 Python 版本 >= 3.11
-    local pyver
-    pyver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-    local major minor
-    major=$(echo "$pyver" | cut -d. -f1)
-    minor=$(echo "$pyver" | cut -d. -f2)
-    if [ "$major" -lt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -lt 11 ]; }; then
-        error "需要 Python >= 3.11，当前: $pyver"
-    fi
-    info "Python $pyver"
+    info "安装依赖检查通过"
 }
 
 # ── 解压安装 ──────────────────────────────────────────────
@@ -48,17 +38,8 @@ install_agent() {
     tar -xzf "$tarball" -C "$INSTALL_DIR" --strip-components=1
     info "解压到 $INSTALL_DIR"
 
-    # 创建 Python 虚拟环境
-    if [ ! -d "$INSTALL_DIR/.venv" ]; then
-        python3 -m venv "$INSTALL_DIR/.venv"
-        info "已创建 Python 虚拟环境"
-    fi
-
-    # 安装 Python 依赖到 venv
-    if [ -f "$INSTALL_DIR/requirements.txt" ]; then
-        "$INSTALL_DIR/.venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" --quiet 2>/dev/null || \
-            "$INSTALL_DIR/.venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" 2>&1 | tail -5
-        info "Python 依赖已安装"
+    if [ ! -x "$INSTALL_DIR/xiaoda-agent" ]; then
+        error "安装包缺少可执行文件: $INSTALL_DIR/xiaoda-agent"
     fi
 
     # 创建 .env（如果不存在）

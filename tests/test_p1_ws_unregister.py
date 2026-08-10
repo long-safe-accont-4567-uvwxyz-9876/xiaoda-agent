@@ -138,5 +138,65 @@ async def test_unregister_idempotent():
     await mgr.unregister("nonexistent")
 
 
+@pytest.mark.asyncio
+async def test_same_message_id_is_isolated_per_connection():
+    mgr = _make_manager()
+    conn_a = mgr.register(_make_ws())
+    conn_b = mgr.register(_make_ws())
+    task_a = asyncio.create_task(asyncio.Event().wait())
+    task_b = asyncio.create_task(asyncio.Event().wait())
+
+    mgr.track_message_task(conn_a, "same", task_a)
+    mgr.track_message_task(conn_b, "same", task_b)
+
+    assert mgr.get_message_task(conn_a, "same") is task_a
+    assert mgr.get_message_task(conn_b, "same") is task_b
+    await mgr.cancel_message_task(conn_a, "same")
+    assert task_a.cancelled()
+    assert not task_b.cancelled()
+
+    await mgr.unregister(conn_a)
+    await mgr.unregister(conn_b)
+
+
+@pytest.mark.asyncio
+async def test_unregister_cancels_only_owned_message_tasks():
+    mgr = _make_manager()
+    conn_a = mgr.register(_make_ws())
+    conn_b = mgr.register(_make_ws())
+    task_a = asyncio.create_task(asyncio.Event().wait())
+    task_b = asyncio.create_task(asyncio.Event().wait())
+    mgr.track_message_task(conn_a, "a", task_a)
+    mgr.track_message_task(conn_b, "b", task_b)
+
+    await mgr.unregister(conn_a)
+
+    assert task_a.cancelled()
+    assert not task_b.cancelled()
+    assert mgr.get_message_task(conn_b, "b") is task_b
+    await mgr.unregister(conn_b)
+
+
+@pytest.mark.asyncio
+async def test_manager_shutdown_drains_all_connections_and_tasks():
+    mgr = _make_manager()
+    ws_a = _make_ws()
+    ws_b = _make_ws()
+    conn_a = mgr.register(ws_a)
+    conn_b = mgr.register(ws_b)
+    task_a = asyncio.create_task(asyncio.Event().wait())
+    task_b = asyncio.create_task(asyncio.Event().wait())
+    mgr.track_message_task(conn_a, "a", task_a)
+    mgr.track_message_task(conn_b, "b", task_b)
+
+    await mgr.shutdown()
+
+    assert task_a.cancelled() and task_b.cancelled()
+    assert not mgr._connections
+    assert not mgr._tasks
+    ws_a.close.assert_awaited_once()
+    ws_b.close.assert_awaited_once()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

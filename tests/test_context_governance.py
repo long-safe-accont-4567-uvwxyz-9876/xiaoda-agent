@@ -107,6 +107,7 @@ async def test_determinism_jaccard(tmp_path):
     vs = VectorStore(db_path, embed_api_key="", embed_model="dummy", dimensions=4)
     # 不调 init (无需真实嵌入), 直接测 search 的确定性逻辑
     await vs.init()
+    assert vs._dimensions == 4
 
     # 注入 5 条向量 (用确定性 dummy 向量, 不依赖 API)
     # 注意: _vec_conn 是 sqlite3.Connection (非 aiosqlite), execute 同步返回 Cursor

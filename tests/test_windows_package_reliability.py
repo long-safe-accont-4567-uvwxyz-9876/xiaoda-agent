@@ -208,3 +208,91 @@ def test_linux_updater_excludes_venv_from_backup():
     """auto-update.sh 备份应排除 .venv 以节省时间和空间"""
     updater = read_project_file("scripts/auto-update.sh")
     assert "exclude='.venv'" in updater or "--exclude" in updater
+
+
+def test_linux_frozen_launcher_uses_bundled_executable():
+    start_script = read_project_file("scripts/start-linux.sh")
+    assert '${INSTALL_DIR}/xiaoda-agent' in start_script
+    executable_idx = start_script.index('${INSTALL_DIR}/xiaoda-agent')
+    source_fallback_idx = start_script.index('${INSTALL_DIR}/agent.py')
+    assert executable_idx < source_fallback_idx
+
+
+def test_linux_updater_accepts_frozen_bundle_contract():
+    updater = read_project_file("scripts/auto-update.sh")
+    critical_line = next(line for line in updater.splitlines() if line.startswith("CRITICAL_FILES="))
+    assert "xiaoda-agent" in critical_line
+    assert "agent.py" not in critical_line
+
+
+def test_linux_updater_rejects_release_downgrades():
+    updater = read_project_file("scripts/auto-update.sh")
+    assert "sort -V" in updater
+    assert 'LATEST_VERSION" != "$CURRENT_VERSION' in updater
+
+
+def test_local_run_package_starts_with_installer_shebang():
+    release_script = read_project_file("scripts/build-release.sh")
+    marker_idx = release_script.index("__ARCHIVE__")
+    installer_idx = release_script.index('cat "$SCRIPT_DIR/install-linux.sh"')
+    assert installer_idx < marker_idx
+
+
+def test_release_waits_for_test_job():
+    workflow = read_project_file(".github/workflows/build-release.yml")
+    assert "continue-on-error: true" not in workflow[workflow.index("  test:"):workflow.index("  release:")]
+    assert "needs: [build, test]" in workflow
+
+
+def test_linux_operational_scripts_use_installed_service_name():
+    paths = [
+        "scripts/start.sh",
+        "scripts/healthcheck.sh",
+        "scripts/block_watchdog.sh",
+        "scripts/block_watchdog2.sh",
+        "slash_commands.py",
+    ]
+    for path in paths:
+        content = read_project_file(path)
+        assert "nahida-web" not in content, path
+        assert "xiaoda-agent" in content, path
+
+
+def test_pyinstaller_bundles_all_builtin_lazy_tool_modules():
+    spec = read_project_file("xiaoda-agent.spec")
+    manifest = read_project_file("tools/_builtin_manifest.py")
+    assert '"module_path": "tools.secrets_tool"' in manifest
+    assert "'tools.secrets_tool'" in spec
+
+
+def test_frozen_linux_installer_does_not_require_python_toolchain():
+    installer = read_project_file("scripts/install-linux.sh")
+    assert "pip3" not in installer
+    assert "python3 -m venv" not in installer
+
+
+def test_local_release_build_rebuilds_and_validates_frontend():
+    release_script = read_project_file("scripts/build-release.sh")
+    pyinstaller_idx = release_script.index("pyinstaller xiaoda-agent.spec")
+    frontend_build_idx = release_script.index("npm run build")
+    frontend_check_idx = release_script.index("web/dist/index.html")
+    assert frontend_build_idx < pyinstaller_idx
+    assert frontend_check_idx < pyinstaller_idx
+
+
+def test_built_frontend_assets_are_not_gitignored():
+    gitignore = read_project_file(".gitignore")
+    assert "\nweb/dist/\n" not in gitignore
+    assert "!web/dist/**" in gitignore
+
+
+def test_ci_publishes_documented_linux_run_installer():
+    workflow = read_project_file(".github/workflows/build-release.yml")
+    assert "xiaoda-agent-linux-x86_64-v${VERSION}.run" in workflow
+    release_files = workflow[workflow.index("      - name: Create GitHub Release"):]
+    assert "artifacts/xiaoda-agent-linux-x86_64-*.run" in release_files
+
+
+def test_ci_tag_version_must_match_source_version():
+    workflow = read_project_file(".github/workflows/build-release.yml")
+    assert workflow.count('tag version must match pyproject.toml') >= 3

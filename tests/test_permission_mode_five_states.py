@@ -268,6 +268,7 @@ class TestInteractiveWriteToolFix:
         assert allowed
         assert "auto-allowed" in reason
 
+
 @pytest.mark.asyncio
 async def test_tool_executor_fails_closed_when_strict_profile_confirmation_is_unavailable():
     from tool_engine.tool_executor import ToolExecutor

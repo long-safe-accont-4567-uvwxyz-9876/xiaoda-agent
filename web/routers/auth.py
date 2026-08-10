@@ -53,6 +53,8 @@ _rate_limit_lock = Lock()
 # 已撤销 token 内存缓存，避免每次请求都读文件
 _revoked_cache: set[str] = set()
 _revoked_cache_mtime: float = 0.0
+_token_epoch: int | None = None
+_token_epoch_lock = Lock()
 
 
 def _get_secret_path() -> Path:
@@ -87,12 +89,49 @@ def _get_revoked_path() -> Path:
     return get_credentials_dir() / "revoked_tokens.json"
 
 
+def _get_token_epoch_path() -> Path:
+    from config import get_credentials_dir
+    return get_credentials_dir() / "token_epoch"
+
+
+def _load_token_epoch() -> int:
+    global _token_epoch
+    with _token_epoch_lock:
+        if _token_epoch is None:
+            path = _get_token_epoch_path()
+            try:
+                _token_epoch = int(path.read_text(encoding="utf-8").strip()) if path.exists() else 0
+            except (OSError, ValueError):
+                _token_epoch = 0
+        return _token_epoch
+
+
+def _increment_token_epoch() -> int:
+    global _token_epoch
+    with _token_epoch_lock:
+        current = _token_epoch
+        if current is None:
+            path = _get_token_epoch_path()
+            try:
+                current = int(path.read_text(encoding="utf-8").strip()) if path.exists() else 0
+            except (OSError, ValueError):
+                current = 0
+        _token_epoch = current + 1
+        path = _get_token_epoch_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(_token_epoch), encoding="utf-8")
+        return _token_epoch
+
+
 def _extract_expiry(token: str) -> float:
     """从 token 中提取过期时间。"""
     try:
         decoded = base64.urlsafe_b64decode(token.encode()).decode()
-        parts = decoded.rsplit(".", 2)
-        return float(parts[0]) if len(parts) == 3 else 0.0
+        parts = decoded.rsplit(".", 3)
+        if len(parts) == 4:
+            return float(parts[0])
+        legacy_parts = decoded.rsplit(".", 2)
+        return float(legacy_parts[0]) if len(legacy_parts) == 3 else 0.0
     except Exception as exc:
         logger.debug("auth.extract_expiry_failed: {}", exc, exc_info=True)
         return 0.0
@@ -155,7 +194,8 @@ def _cleanup_expired_tokens() -> None:
 def _issue_token() -> tuple[str, float]:
     expiry = time.time() + 7 * 86400  # 7 days
     nonce = secrets.token_hex(8)
-    payload = f"{expiry}.{nonce}"
+    epoch = _load_token_epoch()
+    payload = f"{expiry}.{nonce}.{epoch}"
     sig = hmac.new(_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
     token = base64.urlsafe_b64encode(f"{payload}.{sig}".encode()).decode()
     with _tokens_lock:
@@ -171,14 +211,16 @@ def _validate_token(token: str) -> bool:
     """Validate token via HMAC signature + revocation check."""
     try:
         decoded = base64.urlsafe_b64decode(token.encode()).decode()
-        parts = decoded.rsplit(".", 2)
-        if len(parts) != 3:
+        parts = decoded.rsplit(".", 3)
+        if len(parts) != 4:
             return False
-        expiry_str, nonce, sig = parts
+        expiry_str, nonce, epoch_str, sig = parts
         expiry = float(expiry_str)
         if expiry < time.time():
             return False
-        payload = f"{expiry_str}.{nonce}"
+        if int(epoch_str) != _load_token_epoch():
+            return False
+        payload = f"{expiry_str}.{nonce}.{epoch_str}"
         expected_sig = hmac.new(_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig, expected_sig):
             return False
@@ -188,6 +230,8 @@ def _validate_token(token: str) -> bool:
         with _tokens_lock:
             _tokens[token] = expiry
             _tokens.move_to_end(token)
+            while len(_tokens) > _TOKENS_MAX_SIZE:
+                _tokens.popitem(last=False)
         return True
     except Exception as exc:
         logger.debug("auth.validate_token_failed: {}", exc, exc_info=True)
@@ -349,6 +393,7 @@ async def logout(user_id: str = Depends(get_current_user), request: Request = No
 @router.post("/auth/revoke-all", response_model=Envelope[None])
 async def revoke_all(user_id: str = Depends(get_current_user)) -> Any:
     """撤销所有 token（改密码后强制全量重新登录）。"""
+    _increment_token_epoch()
     for token in list(_tokens.keys()):
         _revoke_token(token)
     _tokens.clear()

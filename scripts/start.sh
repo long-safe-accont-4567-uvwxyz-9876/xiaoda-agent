@@ -30,14 +30,14 @@ fi
 if [ "$MODE" = "web" ]; then
     echo "正在启动小妲 Agent Web UI..."
     # 尝试启动 QQ Bot 服务（如果已配置 systemd）
-    if systemctl list-unit-files | grep -q nahida-web; then
-        sudo systemctl start nahida-web 2>/dev/null || true
+    if systemctl list-unit-files | grep -q xiaoda-agent; then
+        sudo systemctl start xiaoda-agent 2>/dev/null || true
         sleep 2
-        STATUS=$(sudo systemctl is-active nahida-web 2>/dev/null || echo "unknown")
+        STATUS=$(sudo systemctl is-active xiaoda-agent 2>/dev/null || echo "unknown")
         if [ "$STATUS" = "active" ]; then
             echo "QQ Bot 服务已启动 ✓"
         else
-            echo "QQ Bot 服务未启动，请检查: sudo journalctl -u nahida-web"
+            echo "QQ Bot 服务未启动，请检查: sudo journalctl -u xiaoda-agent"
         fi
     fi
 
@@ -50,8 +50,8 @@ if [ "$MODE" = "web" ]; then
 else
     echo "正在启动小妲 Agent CLI..."
     # 尝试启动 QQ Bot 服务
-    if systemctl list-unit-files | grep -q nahida-web; then
-        sudo systemctl start nahida-web 2>/dev/null || true
+    if systemctl list-unit-files | grep -q xiaoda-agent; then
+        sudo systemctl start xiaoda-agent 2>/dev/null || true
     fi
     echo ""
     exec $PYTHON cli.py

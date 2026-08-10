@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 import struct
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
@@ -30,6 +29,7 @@ except ImportError:  # pragma: no cover
     Tokenizer = None  # type: ignore
     HAS_NPU_EMBED_DEPS = False
 
+from local_ai.devices.vip_probe import probe_vip_backend  # noqa: E402
 from memory.local_embed import LocalEmbeddingProvider  # noqa: E402
 
 # runner 流协议常量（与 bge_npu_runner.c --serve 一致）
@@ -58,35 +58,17 @@ def _default_nbg() -> str:
 
 
 def probe_npu(runner_path: str = "", timeout_s: float = 15.0) -> bool:
-    """探测本机 NPU（VIP9000）是否可用。
+    """探测本机 VIP 后端是否可用。
 
     通过 runner 的 --probe 模式验证（vip_init 成功 = NPU 设备/驱动可用）。
     runner 文件不存在（如纯 CPU 机器 / Windows 打包版）直接返回 False。
-    成功退出码 0 → True；失败/超时/异常 → False。调用方据此自动降级纯 CPU。
+    成功退出码 0 → True；失败/超时/异常 → False。型号与算力规格不作推断。
     """
     path = Path(runner_path or _default_runner())
-    # 非 Linux 平台（Windows/macOS）无 VIP9000：直接判定不可用，不 spawn runner。
-    # 兼容 Windows 打包版：默认 CPU 推理，绝不尝试执行 aarch64 runner。
-    if not sys.platform.startswith("linux"):
-        logger.info("npu_probe.skipped platform={}", sys.platform)
-        return False
-    if not path.exists():
-        logger.info("npu_probe.skipped runner_missing={}", str(path))
-        return False
-    try:
-        proc = subprocess.run(
-            ["sudo", "-n", str(path), "--probe", "--quiet"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=timeout_s,
-            check=False,
-        )
-        ok = proc.returncode == 0
-        logger.info("npu_probe.result ok={} rc={}", ok, proc.returncode)
-        return ok
-    except (subprocess.TimeoutExpired, OSError) as e:
-        logger.warning("npu_probe.failed error={}", str(e))
-        return False
+    device = probe_vip_backend(str(path), timeout_s=timeout_s)
+    ok = device is not None
+    logger.info("npu_probe.result ok={} runner={}", ok, str(path))
+    return ok
 
 
 class NpuEmbeddingProvider:

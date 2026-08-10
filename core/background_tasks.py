@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import sqlite3
 import time
 from typing import Any, TYPE_CHECKING
@@ -34,6 +35,9 @@ if TYPE_CHECKING:
 
 # 全局后台任务集合，用于跟踪和清理
 _bg_tasks: set[asyncio.Task] = set()
+_task_owner_var: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "background_task_owner", default=None,
+)
 
 
 def _on_bg_task_done(task: asyncio.Task) -> None:
@@ -46,7 +50,8 @@ def _on_bg_task_done(task: asyncio.Task) -> None:
         logger.warning("bg.task_failed error={} task={}", str(exc), task.get_name())
 
 
-def _spawn(coro: Any, timeout: float | None = None) -> None:
+def _spawn(coro: Any, timeout: float | None = None,
+           owner: BackgroundTaskManager | None = None) -> asyncio.Task | None:
     """创建 fire-and-forget 后台任务，自动从 _bg_tasks 中移除已完成的任务。
 
     包含耗时监控：任务完成时记录执行时长，超过 30s 发出告警日志。
@@ -69,8 +74,10 @@ def _spawn(coro: Any, timeout: float | None = None) -> None:
     """
     task_name = getattr(coro, '__name__', coro.__class__.__name__)
     start_time = time.time()
+    task_owner = owner or _task_owner_var.get()
 
     async def _wrapped():
+        owner_token = _task_owner_var.set(task_owner)
         try:
             if timeout is None:
                 await coro
@@ -82,6 +89,7 @@ def _spawn(coro: Any, timeout: float | None = None) -> None:
         except Exception as e:
             logger.warning("bg.task_failed name={} error={}", task_name, str(e)[:200])
         finally:
+            _task_owner_var.reset(owner_token)
             elapsed = time.time() - start_time
             if elapsed > 30:
                 logger.warning("bg.task_slow name={} elapsed={:.1f}s", task_name, elapsed)
@@ -94,10 +102,14 @@ def _spawn(coro: Any, timeout: float | None = None) -> None:
         logger.error("bg.spawn_no_loop: cannot create task without running event loop, "
                      "task={} will be dropped", task_name)
         coro.close()
-        return
+        return None
     task = loop.create_task(_wrapped())
     _bg_tasks.add(task)
     task.add_done_callback(_on_bg_task_done)
+    if task_owner is not None:
+        task_owner._owned_tasks.add(task)
+        task.add_done_callback(task_owner._owned_tasks.discard)
+    return task
 
 
 class BackgroundTaskManager:
@@ -125,6 +137,7 @@ class BackgroundTaskManager:
         self.instinct_manager = instinct_manager
         self._conversation_count = 0
         self._conv_count_lock = asyncio.Lock()
+        self._owned_tasks: set[asyncio.Task] = set()
         # 周期任务并发去重：记录正在运行的 task_name
         # 根因：_should_run 只读 cron_last_run，而 last_run 在任务完成后才写入，
         # 两条消息并发进入调度时都会判定"该运行"，导致梦境归档/记忆蒸馏/
@@ -137,7 +150,22 @@ class BackgroundTaskManager:
 
     def start_background_task(self, coro: Any) -> None:
         """启动一个 fire-and-forget 后台任务。"""
-        _spawn(coro)
+        self._spawn(coro)
+
+    def _spawn(self, coro: Any, timeout: float | None = None) -> None:
+        _spawn(coro, timeout=timeout, owner=self)
+
+    def get_owned_tasks(self) -> set[asyncio.Task]:
+        return set(self._owned_tasks)
+
+    async def cancel_background_tasks(self) -> None:
+        tasks = list(self._owned_tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._owned_tasks.clear()
 
     def run_background_tasks(
         self,
@@ -155,7 +183,7 @@ class BackgroundTaskManager:
         model_used: 本次回复实际使用的 LLM 模型名，透传到 insert_conversation_log，
         便于后续追溯每条对话使用的模型（排查模型输出质量问题/降级链路分析）。
         """
-        _spawn(
+        self._spawn(
             self._background_tasks(
                 user_input, reply, user_id, source, emotion, tool_results,
                 session_id=session_id, model_used=model_used,
@@ -174,7 +202,7 @@ class BackgroundTaskManager:
         model_used: str = "",
     ) -> None:
         # 持久化任务独立 fire-and-forget，避免 DB 长事务阻塞其他后台任务启动
-        _spawn(
+        self._spawn(
             self._run_persistence_tasks(
                 user_input, reply, user_id, source, emotion, session_id,
                 model_used=model_used,
@@ -295,7 +323,7 @@ class BackgroundTaskManager:
                     logger.warning("bg.memory_encode_timeout", hint="记忆编码超时 90s，跳过本次")
                 except Exception as e:
                     logger.warning("bg.memory_encode_failed", error=str(e))
-            _spawn(_encode_task(), timeout=120.0)  # 内部已有 90s 超时，外层 120s 兜底
+            self._spawn(_encode_task(), timeout=120.0)  # 内部已有 90s 超时，外层 120s 兜底
         else:
             logger.debug("bg.memory_encode_skipped", reason="history_too_short",
                          history_len=_hist_len, need=4)
@@ -310,7 +338,7 @@ class BackgroundTaskManager:
         """笔记、画像、学习、本能等管理器任务。"""
         # 4. 笔记自动提取
         if self.notebook_manager:
-            _spawn(self.notebook_manager.auto_note_after_message(
+            self._spawn(self.notebook_manager.auto_note_after_message(
                 user_input, reply, address_term=self.context.current_address_term))
 
         # 5. 画像标记脏 + 冷启动
@@ -318,17 +346,17 @@ class BackgroundTaskManager:
             self.portrait_manager.mark_dirty()
 
         if self.portrait_manager and len(self.context.history) >= 4:
-            _spawn(self._portrait_cold_start())
+            self._spawn(self._portrait_cold_start())
 
         # 6. 学习评估
         if self.learning_manager:
-            _spawn(
+            self._spawn(
                 self.learning_manager.evaluate_after_conversation(user_input, reply, tool_results)
             )
 
         # 7. 本能提取 + curator
         if self.instinct_manager:
-            _spawn(
+            self._spawn(
                 self.instinct_manager.extract_instincts(user_input, reply, session_id)
             )
             # 每 10 轮对话运行一次 curator（归档过期 + 合并重复）
@@ -336,7 +364,7 @@ class BackgroundTaskManager:
                 self._conversation_count += 1
                 should_curate = self._conversation_count % 10 == 0
             if should_curate:
-                _spawn(self.instinct_manager.curator_run())
+                self._spawn(self.instinct_manager.curator_run())
 
     def _spawn_scheduled(self, task_name: str, coro: Any) -> None:
         """启动 _should_run 占位过的周期任务，完成后释放占位。
@@ -350,12 +378,12 @@ class BackgroundTaskManager:
             finally:
                 self._running_scheduled.discard(task_name)
 
-        _spawn(_release_after(coro))
+        self._spawn(_release_after(coro))
 
     async def _run_scheduled_tasks(self) -> None:
         """会话归档、梦境归档、缓存预热、记忆蒸馏等定时任务。"""
         # 8. 会话自动归档
-        _spawn(self._auto_archive_sessions())
+        self._spawn(self._auto_archive_sessions())
 
         # 9. 梦境归档（每日一次）
         try:
@@ -415,7 +443,7 @@ class BackgroundTaskManager:
         try:
             due_records = self._self_wake.check_due()
             for record in due_records:
-                _spawn(self._self_wake.fire(record.id))
+                self._spawn(self._self_wake.fire(record.id))
             # 清理已触发的记录，防止长时间运行内存泄漏（7×24 bot 场景）
             self._self_wake.cleanup_fired()
         except (ImportError, OSError, RuntimeError) as e:
@@ -557,13 +585,15 @@ class BackgroundTaskManager:
                 # 根治：所有写统一走主连接 + write_transaction() 的 asyncio.Lock 串行化 → 只剩
                 # 一个写者，跨连接写锁无从谈起。batch_size=10 有界 + synchronous=NORMAL 不 fsync，
                 # 本批写已毫秒级，不再有历史"30s+ 独占主连接线程"问题（那是 synchronous=FULL 的
-                # fsync 导致，已修）。batch_link_recent 内部 commit，外层 commit 为幂等空操作。
+                # fsync 导致，已修）。提交由外层 write_transaction 统一负责。
                 from db.db_concept import ConceptDB
                 async with self.db.write_transaction():
                     _curator_concept_db = ConceptDB(self.db._conn)
                     # N10: batch_size 30→10，配合 max_edges_per_run=60 限制写入量
                     linked = await asyncio.wait_for(
-                        _curator_concept_db.batch_link_recent(batch_size=10),
+                        _curator_concept_db.batch_link_recent(
+                            batch_size=10, auto_commit=False,
+                        ),
                         timeout=30.0,
                     )
                     if linked > 0:

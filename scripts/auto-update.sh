@@ -54,6 +54,11 @@ if [ -z "$LATEST_VERSION" ]; then
 fi
 
 # 版本比较
+if [ -n "$CURRENT_VERSION" ] && [ "$LATEST_VERSION" != "$CURRENT_VERSION" ] && \
+   [ "$(printf '%s\n%s\n' "$LATEST_VERSION" "$CURRENT_VERSION" | sort -V | tail -n 1)" = "$CURRENT_VERSION" ]; then
+    echo "  $(green "当前版本 v${CURRENT_VERSION} 不低于 Release v${LATEST_VERSION}")"
+    exit 0
+fi
 if [ "$LATEST_VERSION" = "$CURRENT_VERSION" ]; then
     echo "  $(green "已是最新版本 v${LATEST_VERSION}")"
     exit 0
@@ -140,7 +145,7 @@ fi
 
 # ── 校验候选包关键文件 ────────────────────────────────────
 # 候选包必须包含这些关键文件，否则视为不完整
-CRITICAL_FILES="agent.py .version scripts/auto-update.sh scripts/doctor.sh scripts/start-linux.sh"
+CRITICAL_FILES="xiaoda-agent .version scripts/auto-update.sh scripts/doctor.sh scripts/start-linux.sh"
 MISSING_FILES=""
 for cf in $CRITICAL_FILES; do
     if [ ! -e "${CANDIDATE_DIR}/${cf}" ]; then

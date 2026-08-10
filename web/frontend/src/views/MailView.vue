@@ -71,6 +71,7 @@ const saving = ref(false)
 // 自动保存（debounce）：config 变化后延迟 400ms 自动 PUT
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 let authCheckTimer: ReturnType<typeof setTimeout> | null = null
+let savePending = false
 let initialized = false  // 防止首次 loadConfig 触发自动保存
 
 // 免打扰小时选项（0-23，起止相同=不启用）
@@ -251,7 +252,10 @@ async function loadInbox() {
 }
 
 async function saveConfig() {
-  if (saving.value) return  // 防止重复提交
+  if (saving.value) {
+    savePending = true
+    return
+  }
   saving.value = true
   try {
     await put('/mail/config', {
@@ -269,6 +273,10 @@ async function saveConfig() {
     message.error(e.message || t('mailView.loadFailed'))
   } finally {
     saving.value = false
+    if (savePending) {
+      savePending = false
+      await saveConfig()
+    }
   }
 }
 

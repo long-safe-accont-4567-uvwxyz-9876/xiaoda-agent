@@ -8,7 +8,7 @@ TIER_AT=0; GATHER_AT=0; LAST_DUMP=0
 dump_and_reset() {
   local reason="$1" TS PID
   TS=$(date +%Y%m%d_%H%M%S)
-  PID=$(systemctl show -p MainPID --value nahida-web)
+  PID=$(systemctl show -p MainPID --value xiaoda-agent)
   {
     echo "=== $reason at $TS pid=$PID ==="
     echo "=== py-spy dump (暂停) ==="
@@ -16,7 +16,7 @@ dump_and_reset() {
     echo "=== py-spy dump (非阻塞) ==="
     sudo -n /home/orangepi/ai-agent/.venv/bin/py-spy dump --pid "$PID" --nonblocking 2>&1
   } > "/tmp/dumps/${reason}_${TS}.dump"
-  journalctl -u nahida-web.service --since "-3 min" --no-pager > "/tmp/dumps/${reason}_${TS}.log" 2>&1
+  journalctl -u xiaoda-agent.service --since "-3 min" --no-pager > "/tmp/dumps/${reason}_${TS}.log" 2>&1
   echo "${reason} $TS" >> /tmp/dumps/watchdog.log
 }
 while true; do
@@ -28,7 +28,7 @@ while true; do
       *memory.gather_start*) GATHER_AT=$now ;;
       *channel_*|*memory.retrieve_global_timeout*) GATHER_AT=0 ;;
     esac
-  done < <(journalctl -u nahida-web.service --since "-4 sec" --no-pager -o cat 2>/dev/null)
+  done < <(journalctl -u xiaoda-agent.service --since "-4 sec" --no-pager -o cat 2>/dev/null)
   if [ "$TIER_AT" -ne 0 ] && [ $((now - TIER_AT)) -ge 6 ] && [ $((now - LAST_DUMP)) -ge 20 ]; then
     dump_and_reset "tier_stuck"; LAST_DUMP=$now; TIER_AT=0
   elif [ "$GATHER_AT" -ne 0 ] && [ $((now - GATHER_AT)) -ge 6 ] && [ $((now - LAST_DUMP)) -ge 20 ]; then

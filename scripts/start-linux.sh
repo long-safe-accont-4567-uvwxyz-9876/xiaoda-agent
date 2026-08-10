@@ -38,7 +38,11 @@ watchdog() {
     while true; do
         # 启动 agent
         echo "[start] 启动 Xiaoda Agent..."
-        "$PYTHON" "${INSTALL_DIR}/agent.py" "$@" || {
+        if [ -x "${INSTALL_DIR}/xiaoda-agent" ]; then
+            "${INSTALL_DIR}/xiaoda-agent" "$@"
+        else
+            "$PYTHON" "${INSTALL_DIR}/agent.py" "$@"
+        fi || {
             exit_code=$?
             now=$(date +%s)
 

@@ -9,6 +9,15 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isLoggedIn = computed(() => !!token.value && Date.now() / 1000 < expiresAt.value)
 
+  function onAuthRenewed(event: Event) {
+    const detail = (event as CustomEvent<{ token: string; expiresAt: number }>).detail
+    token.value = detail.token
+    if (detail.expiresAt) expiresAt.value = detail.expiresAt
+    getWsClient().reconnect(detail.token)
+  }
+
+  window.addEventListener('xiaoda-auth-renewed', onAuthRenewed)
+
   async function login(password: string) {
     const data = await api.login(password)
     token.value = data.token

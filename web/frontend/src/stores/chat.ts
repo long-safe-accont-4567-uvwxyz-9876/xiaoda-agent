@@ -43,6 +43,7 @@ function pushMessage(messages: Ref<Message[]>, msg: Message) {
 
 export const useChatStore = defineStore('chat', () => {
   const messages = ref<Message[]>([])
+  let loadSessionGeneration = 0
   const currentAgent = ref('xiaoda')
   const sessionId = ref('')
   const isProcessing = ref(false)
@@ -247,12 +248,6 @@ export const useChatStore = defineStore('chat', () => {
     const imageUrl = options?.imageUrl
     // 显示文本：用户原话（不再需要剥离 [Image:] marker，因为 text 已纯净）
     const displayText = text.trim() || (imageUrl ? '📷 图片' : '')
-    pushMessage(messages, {
-      id: `u-${msgId}`, role: 'user', content: displayText, timestamp: Date.now(),
-      imageUrl,
-    })
-    isProcessing.value = true
-    pendingMsgId.value = msgId
     // P0 修复（Task 2.1）：WS payload 走结构化字段，text 保持纯净
     const payload: Record<string, unknown> = {
       type: 'chat',
@@ -266,7 +261,13 @@ export const useChatStore = defineStore('chat', () => {
     if (options?.think) payload.think_mode = true
     if (options?.imageUrl) payload.image_url = options.imageUrl
     if (options?.docPath) payload.doc_path = options.docPath
-    ws.send(payload)
+    if (!ws.send(payload)) return
+    pushMessage(messages, {
+      id: `u-${msgId}`, role: 'user', content: displayText, timestamp: Date.now(),
+      imageUrl,
+    })
+    isProcessing.value = true
+    pendingMsgId.value = msgId
   }
 
   function abort() {
@@ -293,6 +294,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function newSession() {
+    loadSessionGeneration++
     const data = await api.createSession()
     sessionId.value = data.session_id
     ws.send({ type: 'set_session', session_id: data.session_id })
@@ -331,9 +333,11 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function loadSession(sid: string) {
+    const generation = ++loadSessionGeneration
     sessionId.value = sid
     ws.send({ type: 'set_session', session_id: sid })
     const history = await api.getMessages(sid)
+    if (generation !== loadSessionGeneration || sessionId.value !== sid) return
     clearMarkdownCache()
     messages.value = history.map(h => ({
       id: `h-${h.id}`,

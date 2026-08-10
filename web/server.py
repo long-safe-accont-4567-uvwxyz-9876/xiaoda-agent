@@ -868,6 +868,10 @@ def _has_any_provider_credential() -> bool:
 
 async def _shutdown_lifespan(app: FastAPI, core: Any, owns_core: bool) -> None:
     """关闭服务与资源: qq_task / 插件 / 调度器 / media / core"""
+    from web.ws_hub import manager, stop_media_cleanup
+
+    await stop_media_cleanup()
+    await manager.shutdown()
     qq_task = getattr(app.state, "qq_task", None)
     if qq_task:
         qq_task.cancel()

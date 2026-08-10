@@ -31,7 +31,12 @@ async function request<T>(path: string, options?: RequestInit, confirm = false):
   // 滑动续期：后端在响应头返回新 token 时自动替换本地存储
   const newToken = res.headers.get('X-New-Token')
   if (newToken) {
+    const newExpiry = res.headers.get('X-New-Token-Expiry')
     localStorage.setItem('token', newToken)
+    if (newExpiry) localStorage.setItem('expires_at', newExpiry)
+    window.dispatchEvent(new CustomEvent('xiaoda-auth-renewed', {
+      detail: { token: newToken, expiresAt: Number(newExpiry) || 0 },
+    }))
   }
   let body: ApiEnvelope<T>
   try {

@@ -14,6 +14,10 @@ const status = ref<any>(null)
 const logs = ref<string[]>([])
 const loading = ref(false)
 let timer: number | null = null
+let disposed = false
+let pollRunning = false
+let statusGeneration = 0
+let devicesGeneration = 0
 
 const mode = computed(() => status.value?.mode ?? 'remote')
 const running = computed(() => status.value?.engine_running ?? false)
@@ -21,17 +25,26 @@ const backend = computed(() => status.value?.backend ?? 'auto')
 const apiConfigured = computed(() => status.value?.api_configured ?? false)
 
 async function refreshStatus() {
-  try { status.value = await get('/local-deploy/status') } catch { /* 向量库未就绪时静默 */ }
+  const generation = ++statusGeneration
+  try {
+    const next = await get('/local-deploy/status')
+    if (!disposed && generation === statusGeneration && !loading.value) status.value = next
+  } catch { /* 向量库未就绪时静默 */ }
 }
 async function refreshLogs() {
-  try { logs.value = await get('/local-deploy/logs?limit=80') } catch { /* 静默 */ }
+  try {
+    const next = await get<string[]>('/local-deploy/logs?limit=80')
+    if (!disposed) logs.value = next
+  } catch { /* 静默 */ }
 }
 
 async function setMode(m: string) {
   if (m === mode.value) return
   loading.value = true
+  statusGeneration++
   try {
-    status.value = await post('/local-deploy/mode', { mode: m })
+    const next = await post('/local-deploy/mode', { mode: m })
+    if (!disposed) status.value = next
     message.success(t('localDeployView.switchSuccess'))
   } catch (e: any) {
     message.error(t('localDeployView.switchFailed') + (e?.message ? `：${e.message}` : ''))
@@ -43,8 +56,10 @@ async function setMode(m: string) {
 
 async function startEngine() {
   loading.value = true
+  statusGeneration++
   try {
-    status.value = await post('/local-deploy/start')
+    const next = await post('/local-deploy/start')
+    if (!disposed) status.value = next
     message.success(t('localDeployView.startDone'))
   } catch (e: any) {
     message.error(t('localDeployView.startFailed') + (e?.message ? `：${e.message}` : ''))
@@ -56,8 +71,10 @@ async function startEngine() {
 
 async function stopEngine() {
   loading.value = true
+  statusGeneration++
   try {
-    status.value = await post('/local-deploy/stop')
+    const next = await post('/local-deploy/stop')
+    if (!disposed) status.value = next
     message.success(t('localDeployView.stopDone'))
   } catch (e: any) {
     message.error(t('localDeployView.stopFailed') + (e?.message ? `：${e.message}` : ''))
@@ -103,9 +120,11 @@ function renderDeviceLabel(option: any) {
 }
 
 async function refreshDevices() {
+  const generation = ++devicesGeneration
   devicesLoading.value = true
   try {
     const r = await get<any>('/local-deploy/devices')
+    if (disposed || generation !== devicesGeneration) return
     devices.value = r.devices || []
     currentDevice.value = r.current || ''
     runtimeBackend.value = r.runtime_backend || 'auto'
@@ -114,7 +133,10 @@ async function refreshDevices() {
   }
 }
 async function refreshDeviceLogs() {
-  try { deviceLogs.value = await get('/local-deploy/logs?limit=80&topic=device') } catch { /* 静默 */ }
+  try {
+    const next = await get<string[]>('/local-deploy/logs?limit=80&topic=device')
+    if (!disposed) deviceLogs.value = next
+  } catch { /* 静默 */ }
 }
 
 function onDeviceChange(val: string) {
@@ -130,6 +152,7 @@ async function confirmDeviceSwitch() {
   if (!d) return
   showDeviceConfirm.value = false
   devicesLoading.value = true
+  devicesGeneration++
   try {
     await post('/local-deploy/device', { device: d.id })
     message.success(t('localDeployView.deviceSaved'))
@@ -145,11 +168,27 @@ async function confirmDeviceSwitch() {
   }
 }
 
+async function poll() {
+  if (disposed || pollRunning) return
+  pollRunning = true
+  try {
+    await Promise.all([refreshStatus(), refreshLogs(), refreshDevices(), refreshDeviceLogs()])
+  } finally {
+    pollRunning = false
+  }
+}
+
 onMounted(async () => {
-  await Promise.all([refreshStatus(), refreshLogs(), refreshDevices(), refreshDeviceLogs()])
-  timer = window.setInterval(() => { refreshStatus(); refreshLogs(); refreshDevices(); refreshDeviceLogs() }, 5000)
+  await poll()
+  if (!disposed) timer = window.setInterval(poll, 5000)
 })
-onBeforeUnmount(() => { if (timer) window.clearInterval(timer) })
+onBeforeUnmount(() => {
+  disposed = true
+  statusGeneration++
+  devicesGeneration++
+  if (timer !== null) window.clearInterval(timer)
+  timer = null
+})
 </script>
 
 <template>

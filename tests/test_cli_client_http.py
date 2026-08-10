@@ -1,4 +1,5 @@
 import sys
+from types import SimpleNamespace
 
 import cli_client
 
@@ -49,6 +50,34 @@ def test_ensure_main_process_detached_failure(monkeypatch):
 def test_launch_detached_missing_binary_returns_false():
     # 不存在的可执行文件：Popen 抛 OSError → 返回 False（不崩溃）
     assert cli_client._launch_detached(["/nonexistent/definitely-not-a-real-bin"]) is False
+
+
+def test_resolve_port_reads_installed_systemd_service(monkeypatch):
+    calls = []
+    monkeypatch.delenv("WEBUI_PORT", raising=False)
+    monkeypatch.setattr(cli_client, "_RESOLVED_PORT", None)
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return SimpleNamespace(stdout="ExecStart=/opt/xiaoda-agent --port 8091")
+
+    monkeypatch.setattr(cli_client.subprocess, "run", run)
+    assert cli_client._resolve_port() == 8091
+    assert calls == [["systemctl", "cat", "xiaoda-agent"]]
+
+
+def test_systemd_start_uses_installed_service_and_reports_failure(monkeypatch):
+    calls = []
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/systemctl" if name == "systemctl" else None)
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return SimpleNamespace(returncode=5, stderr=b"unit not found")
+
+    monkeypatch.setattr(cli_client.subprocess, "run", run)
+    assert cli_client._try_systemd_start() is False
+    assert calls == [["systemctl", "start", "xiaoda-agent"]]
 
 
 def test_discover_models_parses_provider_list(monkeypatch):

@@ -240,7 +240,17 @@ class ToolExecutor:
                 return ToolResult.fail(ws_err)
 
         from security.permission_manager import get_permission_manager
-        permission_allowed, permission_reason = get_permission_manager().check_tool_permission(tool_name)
+        permission_allowed, permission_reason = get_permission_manager().check_tool_permission(
+            tool_name, arguments
+        )
+        logger.bind(
+            tool=tool_name,
+            user_id=user_id,
+            argument_keys=sorted(str(key) for key in arguments),
+            argument_count=len(arguments),
+            allowed=permission_allowed,
+            has_reason=bool(permission_reason),
+        ).info("tool.permission_checked")
         if not permission_allowed:
             logger.info("tool_executor.permission_mode_blocked", tool=tool_name, reason=permission_reason)
             return ToolResult.fail(permission_reason, user_decision=True)

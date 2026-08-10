@@ -1,9 +1,9 @@
-"""本地 Embedding Provider — onnxruntime CPU 推理 BGE-small-zh-v1.5。
+"""本地 Embedding Provider — onnxruntime 多设备推理 BGE-small-zh-v1.5。
 
 香橙派本地向量化（先 CPU 后 NPU，2026-08-07 决策）：
 - 模型：Xenova/bge-small-zh-v1.5 ONNX（fp32，512 维，CPU 阶段）
         onnx/model_int8.onnx（INT8，后续 NPU 阶段替换 provider 即可）
-- 推理：onnxruntime CPUExecutionProvider；CPU 推理走 to_thread，不阻塞事件循环
+- 推理：按 RuntimeProfile binding 各建独立 Session，失败时按清单顺序降级
 - 分词：tokenizers.Tokenizer.from_file（加载 tokenizer.json，无需 transformers/torch）
 - 池化：CLS 池化 + L2 归一化（BGE 官方要求，输出可直接做点积/余弦相似度）
 
@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+
+from local_ai.contracts import RuntimeProfile
 
 # 单批最大条数：onnxruntime 单会话串行推理，大批次长时间占会话
 # 会让检索路径的 embed 排队（32 条实测 6.5s），拆小批缩短排队窗口
@@ -51,16 +53,64 @@ class LocalEmbeddingProvider:
     """
 
     def __init__(self, model_dir: str | Path, *,
-                 query_prefix: str = "", max_length: int = 512) -> None:
+                 query_prefix: str = "", max_length: int = 512,
+                 providers: list[str] | None = None,
+                 provider_options: list[dict[str, Any]] | None = None,
+                 bindings: list[dict[str, Any]] | None = None,
+                 disable_fallback: bool = False) -> None:
         self._model_dir = Path(model_dir)
         self._query_prefix = query_prefix
         self._max_length = max_length
+        self._providers = list(providers) if providers is not None else None
+        self._provider_options = (
+            list(provider_options) if provider_options is not None else None
+        )
+        self._bindings = [dict(binding) for binding in bindings or ()]
+        self._disable_fallback = disable_fallback
+        self._sessions: list[tuple[dict[str, Any], Any]] = []
+        self._active_session_index = 0
         self._session: Any = None
         self._tokenizer: Any = None
         self._dimensions: int = 0
         self._load_lock = threading.Lock()
         self._loaded = False
         self._load_error: str = ""
+
+    @classmethod
+    def from_runtime_profile(
+        cls,
+        model_dir: str | Path,
+        profile: RuntimeProfile,
+        *,
+        query_prefix: str = "",
+        max_length: int = 512,
+    ) -> LocalEmbeddingProvider:
+        fallback_bindings = profile.options.get("fallback_bindings", ())
+        primary_options = {
+            key: value
+            for key, value in profile.options.items()
+            if key not in {
+                "fallback_bindings",
+                "fallback_providers",
+                "provider_options",
+                "providers",
+            }
+        }
+        bindings = [
+            {
+                "device_id": profile.device_id,
+                "provider": profile.provider,
+                "provider_options": primary_options,
+            },
+            *(dict(binding) for binding in fallback_bindings),
+        ]
+        return cls(
+            model_dir,
+            query_prefix=query_prefix,
+            max_length=max_length,
+            bindings=bindings,
+            disable_fallback=True,
+        )
 
     # ── 加载 ──────────────────────────────────────────────
 
@@ -73,6 +123,39 @@ class LocalEmbeddingProvider:
     def dimensions(self) -> int:
         """输出向量维度（加载后为 512；未加载为 0）。"""
         return self._dimensions
+
+    @property
+    def active_binding(self) -> dict[str, Any] | None:
+        if not self._loaded or not self._sessions:
+            return None
+        return dict(self._sessions[self._active_session_index][0])
+
+    def _session_options(self, providers: list[str], disable_fallback: bool) -> Any:
+        session_options = ort.SessionOptions()
+        if "DmlExecutionProvider" in providers:
+            session_options.enable_mem_pattern = False
+            session_options.execution_mode = ort.ORT_SEQUENTIAL
+        if disable_fallback and providers != ["CPUExecutionProvider"]:
+            session_options.add_session_config_entry(
+                "session.disable_cpu_ep_fallback", "1"
+            )
+        return session_options
+
+    def _create_session(
+        self,
+        onnx_path: Path,
+        providers: list[str],
+        provider_options: list[dict[str, Any]] | None,
+        *,
+        disable_fallback: bool,
+    ) -> Any:
+        session_kwargs: dict[str, Any] = {
+            "sess_options": self._session_options(providers, disable_fallback),
+            "providers": providers,
+        }
+        if provider_options is not None:
+            session_kwargs["provider_options"] = provider_options
+        return ort.InferenceSession(str(onnx_path), **session_kwargs)
 
     def load(self) -> bool:
         """加载 ONNX session 与 tokenizer（幂等，带锁）。
@@ -98,25 +181,71 @@ class LocalEmbeddingProvider:
                 if not tokenizer_path.exists():
                     raise FileNotFoundError(f"tokenizer.json not found in {self._model_dir}")
 
-                # 单线程推理（板子 CPU 推理，多线程不加速反而抖动）
-                self._session = ort.InferenceSession(
-                    str(onnx_path),
-                    providers=["CPUExecutionProvider"],
-                    sess_options=ort.SessionOptions(),
-                )
-                self._tokenizer = Tokenizer.from_file(str(tokenizer_path))
-                # 维度：从模型输出形状检测（B, S, H）取 H
-                out_shape = self._session.get_outputs()[0].shape
+                sessions: list[tuple[dict[str, Any], Any]] = []
+                session: Any = None
+                if self._bindings:
+                    for binding in self._bindings:
+                        provider = binding["provider"]
+                        try:
+                            session = self._create_session(
+                                onnx_path,
+                                [provider],
+                                [dict(binding["provider_options"])],
+                                disable_fallback=True,
+                            )
+                            active_providers = list(session.get_providers())
+                            if active_providers != [provider]:
+                                raise RuntimeError(
+                                    f"active providers {active_providers} do not equal {[provider]}"
+                                )
+                            sessions.append((binding, session))
+                        except Exception as error:  # noqa: BLE001
+                            logger.warning(
+                                "local_embed.binding_load_failed device_id={} provider={} error={}",
+                                binding["device_id"],
+                                provider,
+                                str(error),
+                            )
+                    if not sessions:
+                        raise RuntimeError("no manifest binding could create a session")
+                    session = sessions[0][1]
+                else:
+                    providers = self._providers or ["CPUExecutionProvider"]
+                    session = self._create_session(
+                        onnx_path,
+                        providers,
+                        self._provider_options,
+                        disable_fallback=self._disable_fallback,
+                    )
+                    if self._disable_fallback:
+                        active_providers = list(session.get_providers())
+                        if active_providers != providers:
+                            raise RuntimeError(
+                                f"active providers {active_providers} do not equal {providers}"
+                            )
+                tokenizer = Tokenizer.from_file(str(tokenizer_path))
+                out_shape = session.get_outputs()[0].shape
                 hidden = getattr(out_shape[-1], "dim_value", None)
-                self._dimensions = int(hidden) if hidden else 512
-                if self._dimensions <= 0:
-                    self._dimensions = 512
+                dimensions = int(hidden) if hidden else 512
+                if dimensions <= 0:
+                    dimensions = 512
+                self._sessions = sessions
+                self._active_session_index = 0
+                self._session = session
+                self._tokenizer = tokenizer
+                self._dimensions = dimensions
                 self._loaded = True
                 logger.info("local_embed.ready", model=str(onnx_path),
                             dims=self._dimensions,
                             providers=self._session.get_providers())
                 return True
             except Exception as e:  # noqa: BLE001
+                self._session = None
+                self._sessions = []
+                self._tokenizer = None
+                self._active_session_index = 0
+                self._dimensions = 0
+                self._loaded = False
                 self._load_error = str(e)
                 logger.warning("local_embed.load_failed error={}", str(e))
                 return False
@@ -173,14 +302,35 @@ class LocalEmbeddingProvider:
             for i in range(0, len(texts), step):
                 chunk = texts[i:i + step]
                 input_ids, attention, types = self._tokenize(chunk)
-                outputs = self._session.run(
-                    None,
-                    {
-                        "input_ids": input_ids,
-                        "attention_mask": attention,
-                        "token_type_ids": types,
-                    },
-                )
+                feeds = {
+                    "input_ids": input_ids,
+                    "attention_mask": attention,
+                    "token_type_ids": types,
+                }
+                if self._sessions:
+                    outputs = None
+                    last_error = None
+                    for session_index in range(
+                        self._active_session_index, len(self._sessions)
+                    ):
+                        binding, session = self._sessions[session_index]
+                        try:
+                            outputs = session.run(None, feeds)
+                            self._active_session_index = session_index
+                            self._session = session
+                            break
+                        except Exception as error:  # noqa: BLE001
+                            last_error = error
+                            logger.warning(
+                                "local_embed.binding_run_failed device_id={} provider={} error={}",
+                                binding["device_id"],
+                                binding["provider"],
+                                str(error),
+                            )
+                    if outputs is None:
+                        raise RuntimeError("all manifest binding sessions failed") from last_error
+                else:
+                    outputs = self._session.run(None, feeds)
                 # 输出可能是 last_hidden_state（B,S,H）或已池化向量（B,H）
                 o = outputs[0]
                 if o.ndim == 3:
@@ -203,5 +353,7 @@ class LocalEmbeddingProvider:
     def close(self) -> None:
         """释放推理会话（进程退出时调用，非必须）。"""
         self._session = None
+        self._sessions = []
+        self._active_session_index = 0
         self._tokenizer = None
         self._loaded = False

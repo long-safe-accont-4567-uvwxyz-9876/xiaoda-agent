@@ -22,6 +22,7 @@ from transports import ProviderTransport, MiMoTransport, AgnesTransport
 # 根因修复：agnes API connect=5s 过短导致 APIConnectionError，统一从 agnes_transport 引入共享 httpx 配置
 from transports.agnes_transport import _get_agnes_http_client, AGNES_HTTP_TIMEOUT, close_agnes_shared_client
 from utils.prompt_caching import apply_cache_control
+from utils.llm_cleanup import merge_continuation
 from utils.error_classifier import ErrorClassifier, RecoveryAction
 from utils.credential_pool import get_credential_pool
 from security.ssrf_guard import validate_url as _ssrf_validate_url
@@ -1717,9 +1718,11 @@ class ModelRouter:
         _stall_timeout = float(os.getenv("LLM_STREAM_STALL_TIMEOUT", "15"))
         _chunk_count = 0
         _stream_usage: Any = None
+        _content_yielded = False
 
         for attempt in range(MAX_RETRIES + 1):
             try:
+                _stream_finish_reason = None
                 client = await self._select_client_for_provider(provider)
                 kwargs = self._build_route_kwargs(
                     model, messages, temperature, mt, True,
@@ -1770,6 +1773,7 @@ class ModelRouter:
                             _stream_finish_reason = _chunk_fr
                         delta = getattr(_choice.delta, "content", None)
                         if delta:
+                            _content_yielded = True
                             yield delta
                 # P0 修复：流结束后检测是否收到 finish_reason
                 # 如果未收到，说明 provider 可能中途关闭连接（死流），content 可能被截断
@@ -1822,6 +1826,8 @@ class ModelRouter:
                     with contextlib.suppress(AttributeError, OSError):
                         await stream.close()
                     stream = None
+                if _content_yielded:
+                    raise
                 # stall timeout 特殊处理：记录诊断日志
                 if isinstance(e, asyncio.TimeoutError):
                     logger.warning("llm.stream_stall_timeout",
@@ -2088,12 +2094,15 @@ class ModelRouter:
                                 _retry_finish = getattr(retry_result, "choices", [{}])
                                 _retry_finish = getattr(_retry_finish[0], "finish_reason", None) if _retry_finish else None
                             if retry_content and len(retry_content) > 5:
-                                content = content + retry_content
+                                content, _merge_action = merge_continuation(
+                                    content, retry_content, assume_tail=True,
+                                )
                                 logger.info("llm.truncated_retry_success",
                                             final_len=len(content), model=model,
                                             retry_round=_retry_round + 1,
                                             finish_reason=_retry_finish,
                                             derecurse=_derecurse,
+                                            merge_action=_merge_action,
                                             method="assistant_prefill")
                                 # 检查是否仍然截断（基于真实 finish_reason 判断）
                                 if _retry_finish != "length":

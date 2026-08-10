@@ -1,0 +1,680 @@
+from __future__ import annotations
+
+import platform
+import sys
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
+from typing import Any
+
+from local_ai.contracts import (
+    CatalogModel,
+    ComputeDevice,
+    DeviceState,
+    ExecutionBackend,
+    RuntimeProfile,
+)
+from local_ai.devices.ort_providers import OrtProviderProbe
+from local_ai.devices.system_probe import probe_system_devices
+
+
+class IncompatibleBackendError(RuntimeError):
+    pass
+
+
+class InvalidResourceRequirementsError(ValueError):
+    pass
+
+
+def _provider_device_id(provider: str) -> str:
+    if provider == "CPUExecutionProvider":
+        return "cpu:0"
+    suffix = provider.removesuffix("ExecutionProvider").casefold()
+    return f"ort:{suffix}"
+
+
+def _string_values(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Sequence):
+        return tuple(item for item in value if isinstance(item, str))
+    return ()
+
+
+def _allowed(compatibility: Mapping[str, Any], *keys: str) -> tuple[str, ...]:
+    for key in keys:
+        values = _string_values(compatibility.get(key))
+        if values:
+            return values
+    return ()
+
+
+def _resource_requirements(model: CatalogModel) -> tuple[int, int, int, int]:
+    requirements = model.runtime_requirements
+    for key in ("minimum_memory", "min_memory", "recommended_memory"):
+        value = requirements.get(key)
+        if value is not None and (type(value) is not int or value < 0):
+            raise InvalidResourceRequirementsError(
+                f"{key} must be a non-negative integer"
+            )
+        if type(value) is int and value > 0:
+            raise InvalidResourceRequirementsError(
+                f"{key} is ambiguous; use typed RAM/VRAM requirements"
+            )
+    values: dict[str, int] = {}
+    for key in (
+        "minimum_ram",
+        "recommended_ram",
+        "minimum_vram",
+        "recommended_vram",
+    ):
+        value = requirements.get(key, 0)
+        if type(value) is not int or value < 0:
+            raise InvalidResourceRequirementsError(
+                f"{key} must be a non-negative integer"
+            )
+        values[key] = value
+    return (
+        values["minimum_ram"],
+        max(values["recommended_ram"], values["minimum_ram"]),
+        values["minimum_vram"],
+        max(values["recommended_vram"], values["minimum_vram"]),
+    )
+
+
+def _host_architecture() -> str:
+    aliases = {"amd64": "x86_64", "arm64": "aarch64", "x64": "x86_64"}
+    machine = platform.machine().strip()
+    return aliases.get(machine.casefold(), machine or "unknown")
+
+
+def _host_platform() -> str:
+    target = sys.platform.casefold()
+    if target.startswith("linux"):
+        return "linux"
+    if target.startswith("win"):
+        return "windows"
+    return target or "unknown"
+
+
+def _provider_vendor(provider: str) -> str | None:
+    return {
+        "CUDAExecutionProvider": "nvidia",
+        "TensorrtExecutionProvider": "nvidia",
+        "ROCMExecutionProvider": "amd",
+    }.get(provider)
+
+
+def _hardware_for_backend(
+    devices: list[ComputeDevice], backend: ExecutionBackend
+) -> list[ComputeDevice]:
+    vendor = _provider_vendor(backend.provider)
+    if vendor is not None:
+        return [
+            device
+            for device in devices
+            if device.kind == "gpu" and device.evidence.get("vendor") == vendor
+        ]
+    if backend.provider == "DmlExecutionProvider":
+        return [device for device in devices if device.kind == "gpu"]
+    return []
+
+
+def _backend_for_hardware(
+    backend: ExecutionBackend, hardware: ComputeDevice
+) -> ExecutionBackend | None:
+    if hardware.evidence.get("identity_persistent") is False:
+        return None
+    if backend.provider in {
+        "CUDAExecutionProvider",
+        "TensorrtExecutionProvider",
+        "ROCMExecutionProvider",
+        "DmlExecutionProvider",
+    }:
+        provider_ordinals = hardware.evidence.get("provider_ordinals")
+        if not isinstance(provider_ordinals, Mapping):
+            return None
+        device_id = provider_ordinals.get(backend.provider)
+        if type(device_id) is not int or device_id < 0:
+            return None
+        return replace(backend, options={**backend.options, "device_id": device_id})
+    return backend
+
+
+def _is_real_gpu(device: ComputeDevice) -> bool:
+    return (
+        device.kind == "gpu"
+        and device.evidence.get("identity_persistent") is not False
+    )
+
+
+def _canonical_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return tuple(
+            (key, _canonical_value(item))
+            for key, item in sorted(value.items())
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return tuple(_canonical_value(item) for item in value)
+    return value
+
+
+def _binding_key(backend: ExecutionBackend) -> tuple[Any, ...]:
+    return (
+        backend.runtime.value,
+        backend.provider,
+        _canonical_value(backend.options),
+    )
+
+
+class DeviceRegistry:
+    def __init__(
+        self,
+        *,
+        ort_module: Any | None = None,
+        system_probe: Callable[[], list[ComputeDevice]] = probe_system_devices,
+    ) -> None:
+        if ort_module is None:
+            import onnxruntime as ort_module
+
+        self._provider_probe = OrtProviderProbe(ort_module)
+        self._system_probe = system_probe
+        self._devices: tuple[ComputeDevice, ...] | None = None
+        self._backends: dict[tuple[Any, ...], ExecutionBackend] = {}
+
+    def scan(self, force: bool = False) -> list[ComputeDevice]:
+        if self._devices is not None and not force:
+            return list(self._devices)
+        previous_devices = self._devices or ()
+        previous_backends = self._backends
+        system_devices = list(self._system_probe())
+        available_providers = self._provider_probe.list_available()
+        current_providers = set(available_providers)
+        cpu = next((device for device in system_devices if device.kind == "cpu"), None)
+        if cpu is None and "CPUExecutionProvider" in current_providers:
+            cpu = ComputeDevice(
+                id="cpu:0",
+                name="CPU",
+                kind="cpu",
+                architecture=_host_architecture(),
+                state=DeviceState.AVAILABLE,
+                memory_total=0,
+                memory_available=0,
+                system={"platform": _host_platform()},
+                evidence={"source": "onnxruntime"},
+            )
+            system_devices.append(cpu)
+        verified: list[ExecutionBackend] = []
+        for provider in available_providers:
+            prototype = ExecutionBackend(
+                runtime="ort",
+                provider=provider,
+                healthy=False,
+            )
+            if provider == "CPUExecutionProvider":
+                verified.append(self._provider_probe.verify(provider))
+                continue
+            vendor = _provider_vendor(provider)
+            if vendor is not None or provider == "DmlExecutionProvider":
+                bound_backends = []
+                for hardware in _hardware_for_backend(system_devices, prototype):
+                    bound = _backend_for_hardware(prototype, hardware)
+                    if bound is not None:
+                        bound_backends.append(
+                            self._provider_probe.verify(provider, dict(bound.options))
+                        )
+                verified.extend(bound_backends)
+                if provider == "DmlExecutionProvider" and not bound_backends:
+                    verified.append(self._provider_probe.verify(provider))
+                continue
+            verified.append(self._provider_probe.verify(provider))
+        disappeared = [
+            replace(
+                backend,
+                healthy=False,
+                evidence={**backend.evidence, "reason": "provider_disappeared"},
+            )
+            for backend in previous_backends.values()
+            if backend.provider not in current_providers
+        ]
+        verified.extend(disappeared)
+        self._backends = {}
+        for backend in verified:
+            self._backends[_binding_key(backend)] = backend
+        disappeared_providers = {backend.provider for backend in disappeared}
+        current_backends = [
+            backend
+            for backend in verified
+            if backend.provider not in disappeared_providers
+        ]
+        devices = self._attach_backends(system_devices, cpu, current_backends)
+        retained_ids = {device.id for device in devices}
+        for device in previous_devices:
+            if not _is_real_gpu(device):
+                continue
+            retained_backends = tuple(
+                replace(
+                    backend,
+                    healthy=False,
+                    evidence={**backend.evidence, "reason": "provider_disappeared"},
+                )
+                for backend in device.backends
+                if backend.provider in disappeared_providers
+            )
+            if retained_backends:
+                if device.id in retained_ids:
+                    retained_index = next(
+                        index
+                        for index, current in enumerate(devices)
+                        if current.id == device.id
+                    )
+                    current = devices[retained_index]
+                    merged_backends = current.backends + retained_backends
+                    devices[retained_index] = replace(
+                        current,
+                        state=(
+                            DeviceState.AVAILABLE
+                            if any(backend.healthy for backend in merged_backends)
+                            else DeviceState.DEGRADED
+                        ),
+                        backends=merged_backends,
+                    )
+                else:
+                    devices.append(
+                        replace(
+                            device,
+                            state=DeviceState.UNAVAILABLE,
+                            backends=retained_backends,
+                        )
+                    )
+                    retained_ids.add(device.id)
+        current_hardware_ids = {device.id for device in system_devices}
+        for device in previous_devices:
+            if not _is_real_gpu(device) or device.id in current_hardware_ids:
+                continue
+            retained_backends = tuple(
+                replace(
+                    backend,
+                    healthy=False,
+                    evidence={**backend.evidence, "reason": "device_disappeared"},
+                )
+                for backend in device.backends
+                if backend.provider in current_providers
+            )
+            if not retained_backends:
+                continue
+            retained_index = next(
+                (
+                    index
+                    for index, current in enumerate(devices)
+                    if current.id == device.id
+                ),
+                None,
+            )
+            if retained_index is None:
+                devices.append(
+                    replace(
+                        device,
+                        state=DeviceState.UNAVAILABLE,
+                        backends=retained_backends,
+                    )
+                )
+                continue
+            current = devices[retained_index]
+            existing_bindings = {
+                _binding_key(backend)
+                for backend in current.backends
+            }
+            merged_backends = current.backends + tuple(
+                backend
+                for backend in retained_backends
+                if _binding_key(backend) not in existing_bindings
+            )
+            devices[retained_index] = replace(
+                current,
+                state=DeviceState.UNAVAILABLE,
+                backends=merged_backends,
+            )
+        self._devices = tuple(devices)
+        return list(self._devices)
+
+    def _attach_backends(
+        self,
+        system_devices: list[ComputeDevice],
+        cpu: ComputeDevice | None,
+        backends: list[ExecutionBackend],
+    ) -> list[ComputeDevice]:
+        devices: list[ComputeDevice] = []
+        attached_ids: set[str] = set()
+        for backend in backends:
+            if backend.provider == "CPUExecutionProvider" and cpu is not None:
+                devices.append(replace(cpu, backends=cpu.backends + (backend,)))
+                attached_ids.add(cpu.id)
+                continue
+            hardware_devices = _hardware_for_backend(system_devices, backend)
+            if hardware_devices:
+                attached_backend = False
+                for hardware in hardware_devices:
+                    bound_backend = _backend_for_hardware(backend, hardware)
+                    if bound_backend is None or bound_backend.options != backend.options:
+                        continue
+                    existing_index = next(
+                        (
+                            index
+                            for index, device in enumerate(devices)
+                            if device.id == hardware.id
+                        ),
+                        None,
+                    )
+                    attached = replace(
+                        hardware,
+                        backends=hardware.backends + (bound_backend,),
+                        state=(
+                            hardware.state
+                            if backend.healthy
+                            else DeviceState.DEGRADED
+                        ),
+                    )
+                    if existing_index is None:
+                        devices.append(attached)
+                    else:
+                        merged_backends = (
+                            devices[existing_index].backends + (bound_backend,)
+                        )
+                        devices[existing_index] = replace(
+                            devices[existing_index],
+                            state=(
+                                DeviceState.AVAILABLE
+                                if any(item.healthy for item in merged_backends)
+                                else DeviceState.DEGRADED
+                            ),
+                            backends=merged_backends,
+                        )
+                    attached_ids.add(hardware.id)
+                    attached_backend = True
+                if attached_backend:
+                    continue
+            if _provider_vendor(backend.provider) is not None or (
+                backend.provider == "DmlExecutionProvider" and backend.options
+            ):
+                continue
+            devices.append(
+                ComputeDevice(
+                    id=(
+                        "ort:dml:default"
+                        if backend.provider == "DmlExecutionProvider"
+                        else _provider_device_id(backend.provider)
+                    ),
+                    name=(
+                        "DirectML default adapter"
+                        if backend.provider == "DmlExecutionProvider"
+                        else backend.provider
+                    ),
+                    kind="accelerator",
+                    architecture=(
+                        _host_architecture()
+                        if backend.provider == "DmlExecutionProvider"
+                        else "unknown"
+                    ),
+                    state=(
+                        DeviceState.AVAILABLE if backend.healthy else DeviceState.DEGRADED
+                    ),
+                    memory_total=0,
+                    memory_available=0,
+                    backends=(backend,),
+                    system={
+                        "platform": (
+                            "windows"
+                            if backend.provider == "DmlExecutionProvider"
+                            else _host_platform()
+                        )
+                    },
+                    evidence=(
+                        {
+                            "source": "onnxruntime_default_adapter",
+                            "identity_persistent": False,
+                        }
+                        if backend.provider == "DmlExecutionProvider"
+                        else {"source": "onnxruntime"}
+                    ),
+                )
+            )
+        devices.extend(
+            device
+            for device in system_devices
+            if device is not cpu and device.id not in attached_ids
+        )
+        if cpu is not None and not any(device.id == cpu.id for device in devices):
+            devices.append(cpu)
+        return devices
+
+    def backend(
+        self,
+        provider: str,
+        device_id: int | None = None,
+    ) -> ExecutionBackend:
+        if self._devices is None:
+            self.scan()
+        bindings = [
+            item
+            for item in self._backends.values()
+            if item.provider == provider
+        ]
+        if not bindings:
+            raise IncompatibleBackendError(f"backend is unavailable: {provider}")
+        if device_id is None:
+            if len(bindings) == 1:
+                return bindings[0]
+            available_device_ids = tuple(
+                binding.options.get("device_id")
+                for binding in bindings
+                if type(binding.options.get("device_id")) is int
+            )
+            raise IncompatibleBackendError(
+                f"backend is ambiguous: {provider}; "
+                f"available device_id values: {available_device_ids}"
+            )
+        matches = [
+            binding
+            for binding in bindings
+            if type(device_id) is int
+            and type(binding.options.get("device_id")) is int
+            and binding.options["device_id"] == device_id
+        ]
+        if len(matches) != 1:
+            raise IncompatibleBackendError(
+                f"backend is unavailable: {provider} device_id={device_id!r}"
+            )
+        return matches[0]
+
+    def recommend(
+        self,
+        model: CatalogModel,
+        override: str | None = None,
+    ) -> RuntimeProfile:
+        minimum_ram, recommended_ram, minimum_vram, recommended_vram = (
+            _resource_requirements(model)
+        )
+        devices = self.scan()
+        host_ram_available = max(
+            (
+                device.memory_available
+                for device in devices
+                if device.kind == "cpu" and device.state is DeviceState.AVAILABLE
+            ),
+            default=0,
+        )
+        candidates = [
+            (device, backend)
+            for device in devices
+            for backend in device.backends
+            if self._compatible(
+                model,
+                device,
+                backend,
+                host_ram_available=host_ram_available,
+                minimum_ram=minimum_ram,
+                minimum_vram=minimum_vram,
+            )
+        ]
+        if override is not None:
+            candidates = [
+                item
+                for item in candidates
+                if item[0].id == override
+                and item[0].evidence.get("identity_persistent") is not False
+            ]
+        if not candidates:
+            target = f" for override {override}" if override is not None else ""
+            raise IncompatibleBackendError(f"no compatible backend{target}")
+        candidates.sort(
+            key=lambda item: (
+                host_ram_available < recommended_ram,
+                self._vram_available(item[0]) < recommended_vram,
+                item[1].provider == "CPUExecutionProvider",
+                -item[0].memory_available,
+            )
+        )
+        device, backend = candidates[0]
+        fallback_bindings = self._fallback_bindings(
+            model,
+            device,
+            backend,
+            candidates,
+            host_ram_available=host_ram_available,
+            minimum_ram=minimum_ram,
+            minimum_vram=minimum_vram,
+        )
+        providers = (backend.provider,) + tuple(
+            binding[1].provider for binding in fallback_bindings
+        )
+        provider_options = (backend.options,) + tuple(
+            binding[1].options for binding in fallback_bindings
+        )
+        fallback_providers = tuple(
+            dict.fromkeys(binding[1].provider for binding in fallback_bindings)
+        )
+        options = dict(backend.options)
+        if fallback_bindings:
+            options["fallback_bindings"] = tuple(
+                {
+                    "device_id": fallback_device.id,
+                    "provider": fallback_backend.provider,
+                    "provider_options": fallback_backend.options,
+                }
+                for fallback_device, fallback_backend in fallback_bindings
+            )
+        if fallback_providers:
+            options["fallback_providers"] = fallback_providers
+        if len(providers) > 1:
+            options["providers"] = providers
+            options["provider_options"] = provider_options
+        return RuntimeProfile(
+            runtime=backend.runtime,
+            device_id=device.id,
+            provider=backend.provider,
+            options=options,
+            estimated_ram=minimum_ram,
+            estimated_vram=minimum_vram,
+            allow_fallback=len(providers) > 1,
+        )
+
+    @staticmethod
+    def _vram_available(device: ComputeDevice) -> int:
+        return device.memory_available if device.kind in {"gpu", "accelerator"} else 0
+
+    @staticmethod
+    def _fallback_providers(model: CatalogModel, provider: str) -> tuple[str, ...]:
+        providers = _allowed(
+            model.compatibility,
+            "providers",
+            "execution_providers",
+        )
+        try:
+            selected_index = providers.index(provider)
+        except ValueError:
+            return ()
+        return providers[selected_index + 1 :]
+
+    def _fallback_bindings(
+        self,
+        model: CatalogModel,
+        selected_device: ComputeDevice,
+        backend: ExecutionBackend,
+        candidates: list[tuple[ComputeDevice, ExecutionBackend]],
+        *,
+        host_ram_available: int,
+        minimum_ram: int,
+        minimum_vram: int,
+    ) -> tuple[tuple[ComputeDevice, ExecutionBackend], ...]:
+        provider_order = (
+            backend.provider,
+            *self._fallback_providers(model, backend.provider),
+        )
+        ordered: list[tuple[ComputeDevice, ExecutionBackend]] = []
+        for provider in provider_order:
+            matching = [
+                (candidate_device, candidate_backend)
+                for candidate_device, candidate_backend in candidates
+                if candidate_backend.provider == provider
+                and not (
+                    candidate_device.id == selected_device.id
+                    and candidate_backend == backend
+                )
+                and self._compatible(
+                    model,
+                    candidate_device,
+                    candidate_backend,
+                    host_ram_available=host_ram_available,
+                    minimum_ram=minimum_ram,
+                    minimum_vram=minimum_vram,
+                )
+            ]
+            matching.sort(key=lambda item: -item[0].memory_available)
+            ordered.extend(matching)
+        return tuple(ordered)
+
+    @staticmethod
+    def _compatible(
+        model: CatalogModel,
+        device: ComputeDevice,
+        backend: ExecutionBackend,
+        *,
+        host_ram_available: int,
+        minimum_ram: int,
+        minimum_vram: int,
+    ) -> bool:
+        if not backend.healthy or device.state is not DeviceState.AVAILABLE:
+            return False
+        compatibility = model.compatibility
+        architectures = _allowed(compatibility, "architectures", "architecture")
+        providers = _allowed(compatibility, "providers", "execution_providers")
+        runtimes = _allowed(compatibility, "runtimes", "runtime")
+        purposes = _allowed(compatibility, "purposes", "purpose")
+        precisions = _allowed(compatibility, "precisions", "precision")
+        platform = device.system.get("platform")
+        platforms = _allowed(compatibility, "platforms", "os")
+        architecture = (
+            _host_architecture()
+            if device.architecture == "unknown" and backend.runtime.value.startswith("ort")
+            else device.architecture
+        )
+        if architectures and architecture not in architectures:
+            return False
+        if providers and backend.provider not in providers:
+            return False
+        if runtimes and backend.runtime.value not in runtimes:
+            return False
+        if purposes and model.purpose.value not in purposes:
+            return False
+        if backend.purposes and model.purpose not in backend.purposes:
+            return False
+        if platforms and platform not in platforms:
+            return False
+        if precisions and model.quantization and model.quantization not in precisions:
+            return False
+        if backend.precisions and model.quantization and model.quantization not in backend.precisions:
+            return False
+        return (
+            host_ram_available >= minimum_ram
+            and DeviceRegistry._vram_available(device) >= minimum_vram
+        )

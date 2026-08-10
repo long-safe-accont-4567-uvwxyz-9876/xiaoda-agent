@@ -1,6 +1,6 @@
 """CLI 主进程客户端：让 CLI 与 Web UI / QQ / 微信共享同一个 AgentCore。
 
-历史背景：CLI 原本是独立进程、自建 AgentCore()，与主进程（systemd nahida-web）
+历史背景：CLI 原本是独立进程、自建 AgentCore()，与主进程（systemd xiaoda-agent）
 完全隔离 —— 记忆、模型、上下文各一套，互不共享。用户要求 CLI 作为主进程内的
 一个"频道"，复用已初始化的共享 AgentCore。
 
@@ -28,6 +28,7 @@ _DEFAULT_HOST = "127.0.0.1"
 # 非数字（如 "abc"）时 int() 会在模块导入阶段抛 ValueError，导致整个模块崩溃。
 # 环境变量统一由 _resolve_port() 运行时解析并做 isdigit() 校验。
 _FALLBACK_PORT = 8082
+_SYSTEMD_SERVICE = "xiaoda-agent"
 # 会话级缓存：首次解析后的端口在整个 CLI 生命周期内复用，避免每次构造 URL /
 # 探测端口都重复执行 systemctl cat 子进程（确保轮询循环每秒一次也不起子进程）。
 _RESOLVED_PORT: int | None = None
@@ -40,7 +41,7 @@ def _resolve_port(explicit: int | None = None) -> int:
     因此 CLI 必须与实际端口对齐，否则连不上共享进程。解析顺序：
       1. explicit：调用方显式传入的端口（默认 None，优先）
       2. WEBUI_PORT 环境变量（isdigit 校验，非法值跳过）
-      3. systemd 单元 nahida-web 的 ExecStart --port 参数（兼容空格 / 等号两种写法）
+      3. systemd 单元 xiaoda-agent 的 ExecStart --port 参数（兼容空格 / 等号两种写法）
       4. 兜底 8082
     首次解析结果缓存到 _RESOLVED_PORT，后续调用直接返回。
     """
@@ -55,7 +56,7 @@ def _resolve_port(explicit: int | None = None) -> int:
         return _RESOLVED_PORT
     try:
         out = subprocess.run(
-            ["systemctl", "cat", "nahida-web"],
+            ["systemctl", "cat", _SYSTEMD_SERVICE],
             capture_output=True, text=True, timeout=5, check=False,
         ).stdout
         # 兼容 "--port 8080" 与 "--port=8080" 两种 argparse 写法
@@ -151,12 +152,19 @@ def _try_systemd_start(on_status: Any = None) -> bool:
     import shutil
     if not sys.platform.startswith("linux") or not shutil.which("systemctl"):
         return False
-    cmd = ["systemctl", "start", "nahida-web"]
+    cmd = ["systemctl", "start", _SYSTEMD_SERVICE]
     if shutil.which("sudo"):
         cmd = ["sudo"] + cmd
     try:
-        subprocess.run(cmd, capture_output=True, timeout=30, check=False)
-        return True
+        result = subprocess.run(cmd, capture_output=True, timeout=30, check=False)
+        if result.returncode == 0:
+            return True
+        if on_status:
+            stderr = getattr(result, "stderr", b"")
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode(errors="replace")
+            on_status(f"systemd 启动失败: {str(stderr).strip()[:80]}")
+        return False
     except Exception as e:
         logger.debug("cli_client.systemd_start_error", exc_info=True)
         if on_status:
@@ -328,7 +336,7 @@ class WSClient:
     async def close(self) -> None:
         if self._ws is not None:
             try:
-                await self._ws.close()
+                await asyncio.wait_for(self._ws.close(), timeout=5)
             except Exception:
                 logger.debug("cli_client.ws_close_error", exc_info=True)
             self._ws = None

@@ -60,6 +60,7 @@ interface TermSession {
 
 const sessions = ref<TermSession[]>([])
 const activeSessionId = ref('')
+let disposed = false
 
 const activeSession = computed(() =>
   sessions.value.find(s => s.id === activeSessionId.value) || null
@@ -166,13 +167,17 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  disposed = true
   ws.off('terminal_output', onTerminalOutput)
   ws.off('terminal_exit', onTerminalExit)
   document.removeEventListener('keydown', _onDocKeyDown)
   for (const s of sessions.value) {
+    s.alive = false
+    ws.send({ type: 'terminal_kill', term_sid: s.id })
     s.resizeObserver?.disconnect()
     s.terminal.dispose()
   }
+  sessions.value.splice(0)
 })
 
 // ── 会话管理 ──
@@ -214,11 +219,12 @@ function createSession(shell: string) {
 
   // 挂载到 DOM（等 nextTick 后找到容器）
   nextTick(() => {
-    mountTerminal(session, shell)
+    if (!disposed && session.alive) mountTerminal(session, shell)
   })
 }
 
 function mountTerminal(session: TermSession, shell: string, retries = 0) {
+  if (disposed || !session.alive) return
   const container = document.getElementById(`term-viewport-${session.id}`)
   if (!container) {
     if (retries >= 20 || !session.alive) {
@@ -237,7 +243,7 @@ function mountTerminal(session: TermSession, shell: string, retries = 0) {
   // 双重延迟确保容器尺寸稳定（DOM 渲染 + CSS 布局完成）
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      if (!session.alive) return
+      if (disposed || !session.alive) return
       session.fitAddon.fit()
 
       const dims = session.fitAddon.proposeDimensions()

@@ -100,6 +100,26 @@ do_build() {
         die "Spec file not found: $spec_file"
     fi
 
+    # --- Build frontend ---------------------------------------------------------
+    local frontend_dir="$PROJECT_ROOT/web/frontend"
+    info "Building Web UI..."
+    if [ ! -f "$frontend_dir/package.json" ]; then
+        die "Frontend package.json not found: $frontend_dir/package.json"
+    fi
+    if ! command -v npm >/dev/null 2>&1; then
+        die "npm not found. Node.js is required to build the Web UI."
+    fi
+    cd "$frontend_dir"
+    if [ -f package-lock.json ]; then
+        npm ci
+    else
+        npm install
+    fi
+    npm run build
+    if [ ! -f "$PROJECT_ROOT/web/dist/index.html" ]; then
+        die "Frontend build output missing: web/dist/index.html"
+    fi
+
     # --- Run PyInstaller -------------------------------------------------------
     info "Running PyInstaller..."
     cd "$PROJECT_ROOT"
@@ -176,8 +196,9 @@ do_build() {
         tar czf "$tar_name" xiaoda-agent
 
         info "Creating self-extracting installer..."
-        echo '__ARCHIVE__' > "$output_dir/$run_name"
-        cat "$SCRIPT_DIR/install-linux.sh" "$tar_name" >> "$output_dir/$run_name"
+        cat "$SCRIPT_DIR/install-linux.sh" > "$output_dir/$run_name"
+        echo '__ARCHIVE__' >> "$output_dir/$run_name"
+        cat "$tar_name" >> "$output_dir/$run_name"
         chmod +x "$output_dir/$run_name"
 
         # Clean up intermediate tar.gz

@@ -240,7 +240,8 @@ class ConceptDB:
     async def batch_link_recent(self, batch_size: int = 50,
                                  min_shared: int = 3,
                                  max_per_node: int = 20,
-                                 max_edges_per_run: int = 60) -> int:
+                                 max_edges_per_run: int = 60,
+                                 auto_commit: bool = True) -> int:
         """后台 curator：为最近创建的、尚无边的节点批量补建边。
 
         auto_link 在存活节点 >200 时会跳过实时建边，由本方法在后台补建。
@@ -323,7 +324,8 @@ class ConceptDB:
                VALUES (?, ?, ?, ?, ?)""",
             rows_to_insert,
         )
-        await self._conn.commit()
+        if auto_commit:
+            await self._conn.commit()
         # CodeRabbit #2: 返回逻辑链接数（一条无向边 = 2 行有向 INSERT），
         # 与文档"补建的边数"语义一致，而非有向行数
         return len(edge_pairs) // 2

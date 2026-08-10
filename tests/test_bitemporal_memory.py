@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 
 import pytest
@@ -208,6 +209,85 @@ async def test_supersede_fact_closes_system_time_and_only_known_valid_time(tmp_p
         "SELECT valid_to, expired_at FROM memory_facts WHERE id = ?", (unknown_old_id,)
     )
     assert unknown_old == {"valid_to": None, "expired_at": 50.0}
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_supersede_waits_for_existing_write_transaction(tmp_path):
+    manager = DatabaseManager(tmp_path / "supersede-lock.db")
+    await manager.init()
+    old_id = await manager.execute(
+        """INSERT INTO memory_facts
+           (subject, predicate, object, learned_at, status, fact_hash, created_at, updated_at)
+           VALUES ('user', 'city', 'Paris', 10, 'active', 'lock-old', 10, 10)"""
+    )
+    new_id = await manager.execute(
+        """INSERT INTO memory_facts
+           (subject, predicate, object, learned_at, status, fact_hash, created_at, updated_at)
+           VALUES ('user', 'city', 'Berlin', 20, 'active', 'lock-new', 20, 20)"""
+    )
+    transaction_started = asyncio.Event()
+    release_transaction = asyncio.Event()
+
+    async def hold_transaction():
+        async with manager.write_transaction() as conn:
+            await conn.execute(
+                "INSERT INTO cron_last_run (task_name, last_run) VALUES ('lock-owner', 1)"
+            )
+            transaction_started.set()
+            await release_transaction.wait()
+
+    holder = asyncio.create_task(hold_transaction())
+    await transaction_started.wait()
+    supersede = asyncio.create_task(
+        manager.temporal.supersede_fact(old_id, new_id, known_at=30.0)
+    )
+    await asyncio.sleep(0)
+    assert not supersede.done()
+    release_transaction.set()
+    await holder
+    await supersede
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_auto_commit_waits_for_and_cannot_commit_another_transaction(tmp_path):
+    manager = DatabaseManager(tmp_path / "auto-commit-lock.db")
+    await manager.init()
+    transaction_started = asyncio.Event()
+    release_transaction = asyncio.Event()
+
+    async def failing_transaction():
+        with pytest.raises(RuntimeError, match="force rollback"):
+            async with manager.write_transaction() as conn:
+                await conn.execute(
+                    "INSERT INTO cron_last_run (task_name, last_run) VALUES ('rollback-owner', 1)"
+                )
+                transaction_started.set()
+                await release_transaction.wait()
+                raise RuntimeError("force rollback")
+
+    owner = asyncio.create_task(failing_transaction())
+    await transaction_started.wait()
+    independent = asyncio.create_task(
+        manager.execute(
+            "INSERT INTO cron_last_run (task_name, last_run) VALUES ('independent', 2)"
+        )
+    )
+    await asyncio.sleep(0)
+    assert not independent.done()
+    release_transaction.set()
+    await owner
+    await independent
+
+    rolled_back = await manager.fetch_one(
+        "SELECT task_name FROM cron_last_run WHERE task_name = 'rollback-owner'"
+    )
+    committed = await manager.fetch_one(
+        "SELECT task_name FROM cron_last_run WHERE task_name = 'independent'"
+    )
+    assert rolled_back is None
+    assert committed == {"task_name": "independent"}
     await manager.close()
 
 

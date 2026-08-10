@@ -79,7 +79,7 @@ class ConnectionManager:
         self._connections: dict[str, WebSocket] = {}
         self._agent_map: dict[str, str] = {}      # conn_id -> 当前受话 agent
         self._session_map: dict[str, str] = {}    # conn_id -> session_id
-        self._tasks: dict[str, asyncio.Task] = {}  # msg_id -> 处理任务（abort 用）
+        self._tasks: dict[tuple[str, str], asyncio.Task] = {}
         # G5: 心跳状态 —— pong 事件 + 每连接心跳协程
         self._pong_events: dict[str, asyncio.Event] = {}
         self._heartbeat_tasks: dict[str, asyncio.Task] = {}
@@ -135,6 +135,48 @@ class ConnectionManager:
         if wtask and not wtask.done():
             wtask.cancel()
         self._send_queues.pop(conn_id, None)
+        await self.cancel_connection_tasks(conn_id)
+
+    def track_message_task(self, conn_id: str, msg_id: str, task: asyncio.Task) -> None:
+        key = (conn_id, msg_id)
+        self._tasks[key] = task
+
+        def _discard(done_task: asyncio.Task) -> None:
+            if self._tasks.get(key) is done_task:
+                self._tasks.pop(key, None)
+
+        task.add_done_callback(_discard)
+
+    def get_message_task(self, conn_id: str, msg_id: str) -> asyncio.Task | None:
+        return self._tasks.get((conn_id, msg_id))
+
+    async def cancel_message_task(self, conn_id: str, msg_id: str) -> None:
+        task = self.get_message_task(conn_id, msg_id)
+        if task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def cancel_connection_tasks(self, conn_id: str) -> None:
+        tasks = [
+            task for (owner, _), task in self._tasks.items()
+            if owner == conn_id
+        ]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def shutdown(self) -> None:
+        for conn_id in list(self._connections):
+            await self.unregister(conn_id)
+        remaining = list(self._tasks.values())
+        for task in remaining:
+            if not task.done():
+                task.cancel()
+        if remaining:
+            await asyncio.gather(*remaining, return_exceptions=True)
+        self._tasks.clear()
 
     async def _heartbeat_loop(self, conn_id: str) -> None:
         """G5: 每个连接的心跳协程 - 30s ping + 10s pong 超时.
@@ -341,6 +383,15 @@ def start_media_cleanup() -> None:
     logger.info("ws.media_cleanup_started",
                 max_age_hours=_MEDIA_MAX_AGE_SECONDS // 3600,
                 interval_minutes=_MEDIA_CLEANUP_INTERVAL_SECONDS // 60)
+
+
+async def stop_media_cleanup() -> None:
+    global _MEDIA_CLEANUP_TASK
+    task = _MEDIA_CLEANUP_TASK
+    _MEDIA_CLEANUP_TASK = None
+    if task is not None and not task.done():
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 def serialize_result(result: Any) -> dict:
@@ -556,8 +607,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
             elif mtype == "chat":
                 msg_id = str(msg.get("msg_id") or uuid.uuid4().hex[:8])
                 task = asyncio.create_task(_handle_chat(conn_id, msg, msg_id, ws))
-                manager._tasks[msg_id] = task
-                task.add_done_callback(lambda _t, m=msg_id: manager._tasks.pop(m, None))
+                manager.track_message_task(conn_id, msg_id, task)
 
             elif mtype == "terminal_start":
                 term_sid = str(msg.get("term_sid") or uuid.uuid4().hex[:8])
@@ -582,9 +632,9 @@ async def websocket_endpoint(ws: WebSocket, token: str = "") -> None:
                 _handle_terminal_kill(conn_id, msg)
 
             elif mtype == "abort":
-                task = manager._tasks.get(str(msg.get("msg_id") or ""))
-                if task and not task.done():
-                    task.cancel()
+                await manager.cancel_message_task(
+                    conn_id, str(msg.get("msg_id") or "")
+                )
 
     except WebSocketDisconnect:
         logger.info("ws.disconnected conn_id={}", conn_id)

@@ -425,6 +425,11 @@ jobs:
             fi
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
+            SOURCE_VERSION=$(grep -m1 '^version\s*=' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
+            if [ "$VERSION" != "$SOURCE_VERSION" ]; then
+              echo "##[error]tag version must match pyproject.toml: tag=$VERSION source=$SOURCE_VERSION"
+              exit 1
+            fi
           else
             # main branch push — read from pyproject.toml (pure bash, no Python dependency)
             VERSION=$(grep -m1 '^version\s*=' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
@@ -541,6 +546,10 @@ jobs:
           # 打包 Linux 安装脚本
           cp scripts/install-linux.sh xiaoda-agent-linux-x86_64-v${VERSION}-install.sh
           chmod +x xiaoda-agent-linux-x86_64-v${VERSION}-install.sh
+          cat scripts/install-linux.sh > xiaoda-agent-linux-x86_64-v${VERSION}.run
+          echo '__ARCHIVE__' >> xiaoda-agent-linux-x86_64-v${VERSION}.run
+          cat xiaoda-agent-linux-x86_64-v${VERSION}.tar.gz >> xiaoda-agent-linux-x86_64-v${VERSION}.run
+          chmod +x xiaoda-agent-linux-x86_64-v${VERSION}.run
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -551,6 +560,7 @@ jobs:
             xiaoda-agent-windows-x64-*.tar.gz
             xiaoda-agent-linux-x86_64-*.tar.gz
             xiaoda-agent-linux-x86_64-*-install.sh
+            xiaoda-agent-linux-x86_64-*.run
           if-no-files-found: error
 
   docker:
@@ -578,6 +588,11 @@ jobs:
             fi
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
+            SOURCE_VERSION=$(grep -m1 '^version\s*=' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
+            if [ "$VERSION" != "$SOURCE_VERSION" ]; then
+              echo "##[error]tag version must match pyproject.toml: tag=$VERSION source=$SOURCE_VERSION"
+              exit 1
+            fi
           else
             VERSION=$(grep -m1 '^version\s*=' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
           fi
@@ -614,7 +629,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Install system dependencies
@@ -628,7 +642,7 @@ jobs:
       - run: python -m pytest tests/ -x -q --timeout=60 --durations=30 -k "not e2e_real_scenario"
 
   release:
-    needs: [build]
+    needs: [build, test]
     # Only create release on tag push or manual dispatch, NOT on main branch push
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -656,7 +670,7 @@ jobs:
         shell: bash
         run: |
           cd artifacts
-          for f in xiaoda-agent-*.tar.gz xiaoda-agent-*.zip xiaoda-agent-*-setup.exe xiaoda-agent-*-install.sh; do
+          for f in xiaoda-agent-*.tar.gz xiaoda-agent-*.zip xiaoda-agent-*-setup.exe xiaoda-agent-*-install.sh xiaoda-agent-*.run; do
             [ -f "$f" ] && sha256sum "$f" > "${f}.sha256"
           done
           echo "--- SHA256 checksums ---"
@@ -678,6 +692,11 @@ jobs:
             fi
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
+            SOURCE_VERSION=$(grep -m1 '^version\s*=' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
+            if [ "$VERSION" != "$SOURCE_VERSION" ]; then
+              echo "##[error]tag version must match pyproject.toml: tag=$VERSION source=$SOURCE_VERSION"
+              exit 1
+            fi
           else
             VERSION=$(grep -m1 '^version\s*=' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
           fi
@@ -693,6 +712,7 @@ jobs:
             artifacts/xiaoda-agent-windows-x64-*.tar.gz
             artifacts/xiaoda-agent-linux-x86_64-*.tar.gz
             artifacts/xiaoda-agent-linux-x86_64-*-install.sh
+            artifacts/xiaoda-agent-linux-x86_64-*.run
             artifacts/*.sha256
 
       - name: Sync release to Gitee (国内镜像)

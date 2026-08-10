@@ -70,12 +70,12 @@ class ToolExecutorMixin:
         guardrails = get_tool_guardrails()
 
         # L1/L2/L3 参数验证（在循环检测之前）
-        valid, reason = guardrails.validate_args(tool_name, arguments)
+        valid, reason = guardrails.validate_args(tool_name, actual_args)
         if not valid:
             logger.warning("tool.validation_failed", tool=tool_name, reason=reason)
             return ToolResult.fail(f"参数验证失败: {reason}")
 
-        action, guard_msg = await guardrails.check(tool_name, arguments)
+        action, guard_msg = await guardrails.check(tool_name, actual_args)
         if action == "halt":
             return ToolResult.fail(guard_msg)
 
@@ -104,7 +104,7 @@ class ToolExecutorMixin:
             logger.debug(f"WebUI工具事件(end)发送失败，非关键: {e}")
 
         # 记录工具调用到护栏
-        await guardrails.record_call(tool_name, arguments, result.success,
+        await guardrails.record_call(tool_name, actual_args, result.success,
                                str(result.data)[:100] if result.data else "")
 
         # PostToolUse 钩子

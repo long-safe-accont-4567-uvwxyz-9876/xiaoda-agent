@@ -1,9 +1,12 @@
 """MemoryManager 单元测试 —— 聚焦初始化、retrieve_memories、缓存、错误兜底与空结果处理。"""
 from __future__ import annotations
 
+import asyncio
 import time
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
+
+from memory.scope import Scope
 
 
 # ── 辅助：安全构造 MemoryManager（隔离重量级依赖） ──
@@ -92,6 +95,41 @@ class TestSignalNewMessage:
         after = time.time()
 
         assert before <= mm._last_message_time <= after
+        assert mm._pending_encode is True
+
+
+class TestIdleEncodeSignalOwnership:
+    @pytest.mark.asyncio
+    async def test_message_arriving_during_encode_remains_pending(self):
+        mm = _make_memory_manager()
+        mm.ENCODE_COOLDOWN = 0
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def encode(context, scope=None):
+            started.set()
+            await release.wait()
+
+        mm.encode_memory = encode
+        mm.signal_new_message()
+        task = asyncio.create_task(mm.try_idle_encode({}, force=True, scope=Scope()))
+        await started.wait()
+        mm.signal_new_message()
+        release.set()
+        await task
+
+        assert mm._pending_encode is True
+
+    @pytest.mark.asyncio
+    async def test_failed_encode_remains_pending(self):
+        mm = _make_memory_manager()
+        mm.ENCODE_COOLDOWN = 0
+        mm.signal_new_message()
+        mm.encode_memory = AsyncMock(side_effect=RuntimeError("encode failed"))
+
+        with pytest.raises(RuntimeError, match="encode failed"):
+            await mm.try_idle_encode({}, force=True, scope=Scope())
+
         assert mm._pending_encode is True
 
 

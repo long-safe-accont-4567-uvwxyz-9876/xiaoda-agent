@@ -919,7 +919,8 @@ class MessageProcessorMixin:
         _mp_t2 = time.time()
         logger.info("pipeline.llm_verify.start proc_id={} task_type={} max_tokens={}",
                     _proc_id, task_type, _cb_max_tokens)
-        is_owner = self.security.is_owner(user_id)
+        principal = getattr(ctx, "principal", None)
+        is_owner = principal.is_owner if principal is not None else ctx.is_master
         reply, tool_results = await self._call_main_llm_with_verification(
             messages, tools, task_type, _model_cfg, _cb_max_tokens, circuit_state,
             status_callback, user_openid, session_id, trace, ctx, user_input, is_owner)
@@ -1180,8 +1181,15 @@ class MessageProcessorMixin:
                     # (2026-08-06) 超时改为 config.MEMORY_RETRIEVE_TIMEOUT（默认 8s）：
                     #   USB 盘慢时 5s 仍频繁误砍（今日 66 次 retrieve_timeout_single），
                     #   8s 给慢速存储足够余量，同时控制最坏延迟（LLM 前串行 await）。
+                    from memory.scope import current_scope
+                    memory_scope = current_scope()
                     results = await asyncio.wait_for(
-                        self.memory.retrieve_memories(user_input, k=_k),
+                        self.memory.retrieve_memories(
+                            user_input,
+                            k=_k,
+                            scope=memory_scope,
+                            conv_user_id=memory_scope.user_id,
+                        ),
                         timeout=_mem_timeout,
                     )
                     _retrieve_ms = int((time.time() - _t0) * 1000)

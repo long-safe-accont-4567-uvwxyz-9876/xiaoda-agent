@@ -1,22 +1,24 @@
-import json
 import asyncio
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
-from openai import AsyncOpenAI
 
 from loguru import logger
-from tool_engine.tool_registry import to_openai_tools
-from tool_engine.tool_executor import ToolExecutor, ToolResult
-from tool_engine.tool_repair import ToolCallRepair
-from utils.text_utils import has_dsml_tool_calls, parse_dsml_tool_calls, strip_dsml, strip_reasoning, humanize
-from utils.llm_cleanup import deduplicate_multi_reply
-from emotion.tts_engine import TTSEngine
-from emotion.emoji_config import get_status_msg
-from tool_engine.tool_guardrails import get_tool_guardrails
-from utils.credential_pool import CredentialPool
-from core.message import AgentMessage
+from openai import AsyncOpenAI
+
 from config import get_agent_display_name
+from core.message import AgentMessage
+from emotion.emoji_config import get_status_msg
+from emotion.tts_engine import TTSEngine
+from tool_engine.tool_call_handler import _extract_path_from_args
+from tool_engine.tool_executor import ToolExecutor, ToolResult
+from tool_engine.tool_guardrails import get_tool_guardrails
+from tool_engine.tool_registry import to_openai_tools
+from tool_engine.tool_repair import ToolCallRepair
+from utils.credential_pool import CredentialPool
+from utils.llm_cleanup import deduplicate_multi_reply
+from utils.text_utils import has_dsml_tool_calls, humanize, parse_dsml_tool_calls, strip_dsml, strip_reasoning
 
 # J-Space Hook: 干预闭环
 try:
@@ -100,6 +102,24 @@ class DsmlExtractor:
         ]
 
 
+@runtime_checkable
+class ResourceBackend(Protocol):
+    def read(self, path: str) -> str:
+        ...
+
+    def write(self, path: str, content: str) -> None:
+        ...
+
+    def edit(self, path: str, old: str, new: str) -> None:
+        ...
+
+    def glob(self, pattern: str) -> list[str]:
+        ...
+
+    def grep(self, pattern: str, path: str = "/") -> list[str]:
+        ...
+
+
 # 子代理禁止使用的工具列表（借鉴 Hermes delegate_tool.py）
 DELEGATE_BLOCKED_TOOLS = {
     "delegate_task",      # 禁止递归委托
@@ -107,6 +127,12 @@ DELEGATE_BLOCKED_TOOLS = {
     "memory_write",       # 禁止共享记忆写入
     "agnes_video_generate",  # 视频生成耗时过长
 }
+
+_RESOURCE_PATH_TOOLS = {"list_files", "read_file", "write_file", "search_files", "delete_file", "edit_file", "create_file", "document_reader"}
+
+
+def _safe_log_path(path: str) -> str:
+    return path.replace("\r", " ").replace("\n", " ").replace("\x00", " ")[:200]
 
 
 @dataclass
@@ -348,7 +374,7 @@ class SubAgent:
         names.add("send_message_to_agent")  # 子代理专属工具：子代理间直接通信
         return names
 
-    async def chat(self, message: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "") -> str:
+    async def chat(self, message: str, context: str = "", status_callback: Any | None=None, address_term: str = "爸爸", extra_system_prompt: str = "", invocation: Any | None = None) -> str:
         # 降级模式下尝试自动恢复：用最新环境变量中的 Key 重建客户端
         if self._degraded:
             api_key = _read_env_key(self.config.api_key_env)
@@ -394,6 +420,9 @@ class SubAgent:
         ]
 
         tools = self._filtered_tools()
+        if invocation is not None:
+            allowed_tools = set(invocation.allowed_tools)
+            tools = [tool for tool in tools or [] if tool["function"]["name"] in allowed_tools] or None
 
         # J-Space Hook: 干预前评估
         if _intervention_loop is not None:
@@ -409,13 +438,13 @@ class SubAgent:
         response: str | None = None
         success = False
         try:
-            response = await self._chat_loop(messages, tools)
+            response = await self._chat_loop(messages, tools, invocation=invocation)
             success = True
         except (TimeoutError, OSError, RuntimeError, ValueError) as e:
             logger.warning("sub_agent.chat_failed name={} error={}", self.config.name, str(e))
             if tools and _is_tool_unsupported_error(str(e)):
                 try:
-                    response = await self._chat_loop(messages, None)
+                    response = await self._chat_loop(messages, None, invocation=invocation)
                     success = True
                 except (TimeoutError, OSError, RuntimeError, ValueError) as e2:
                     logger.warning("sub_agent.fallback_failed name={} error={}", self.config.name, str(e2))
@@ -484,8 +513,10 @@ class SubAgent:
             "agnes",  # agnes 系列模型默认开启推理模式
         ])
 
-    def _build_dsml_tool_prompt(self) -> str:
+    def _build_dsml_tool_prompt(self, allowed_tools: set[str] | None = None) -> str:
         tools = self._filtered_tools()
+        if allowed_tools is not None:
+            tools = [tool for tool in tools or [] if tool["function"]["name"] in allowed_tools]
         if not tools:
             return ""
         lines = ["你可以使用以下工具，调用时必须使用DSML格式："]
@@ -510,11 +541,13 @@ class SubAgent:
 重要：需要调用工具时必须使用上述DSML格式，不要用其他格式。不需要调用工具时直接回复即可。""")
         return "\n".join(lines)
 
-    async def _chat_loop(self, messages: list[dict], tools: list[dict] | None) -> str:
+    async def _chat_loop(self, messages: list[dict], tools: list[dict] | None, invocation: Any | None = None) -> str:
         """主循环：调用 LLM → 提取工具调用 → 执行 → 反馈，最多 max_rounds 轮。"""
         max_rounds = self.config.max_turns if self.config.max_turns is not None else 5
         working = list(messages)
         tool_names = self._filtered_tool_names()
+        if invocation is not None:
+            tool_names &= set(invocation.allowed_tools)
         # 超时配置从 config 读取 (支持环境变量覆盖)
         import config as _cfg
         api_timeout = getattr(_cfg, 'SUB_AGENT_API_TIMEOUT', 60)
@@ -572,7 +605,7 @@ class SubAgent:
             working.append(self._build_assistant_msg(msg, extracted, is_dsml))
 
             # 统一执行工具调用
-            await self._execute_round_tool_calls(extracted, working)
+            await self._execute_round_tool_calls(extracted, working, invocation=invocation)
 
         # 达到最大轮次：让 LLM 基于已有工具结果做总结回复
         remaining = total_deadline - asyncio.get_running_loop().time()
@@ -585,7 +618,7 @@ class SubAgent:
                                 tool_names: list[str]) -> list[dict] | None:
         """推理模型注入 DSML 工具提示并禁用原生 tools; 非推理模型保持原样返回 tools"""
         if is_reasoning and tools:
-            dsml_prompt = self._build_dsml_tool_prompt()
+            dsml_prompt = self._build_dsml_tool_prompt(allowed_tools=set(tool_names))
             if dsml_prompt and working and working[0]["role"] == "system":
                 working[0] = {
                     "role": "system",
@@ -658,12 +691,12 @@ class SubAgent:
         # 防御性兜底: retry_count 为负数时 for 循环不执行, 确保始终有返回值
         return f"{self.config.display_name}思考时间太长了，请稍后再试吧～"
 
-    async def _execute_round_tool_calls(self, extracted: Any, working: list[dict]) -> None:
+    async def _execute_round_tool_calls(self, extracted: Any, working: list[dict], invocation: Any | None = None) -> None:
         """并行执行本轮工具调用, 将结果 (含错误) 追加到 working"""
         try:
             tool_results = await asyncio.wait_for(
                 asyncio.gather(
-                    *[self._exec_one_tool_call(tc) for tc in extracted],
+                    *[self._exec_one_tool_call(tc, invocation=invocation) for tc in extracted],
                     return_exceptions=True,
                 ),
                 timeout=120,
@@ -700,7 +733,7 @@ class SubAgent:
             assistant_msg["reasoning_content"] = msg_rc
         return assistant_msg
 
-    async def _exec_one_tool_call(self, tc: Any) -> dict:
+    async def _exec_one_tool_call(self, tc: Any, invocation: Any | None = None) -> dict:
         """执行单个工具调用：风暴检测 → 截断修复 → 护栏检查 → 执行 → 后处理。"""
         tool_name = tc.name
         args_str = tc.arguments_json
@@ -716,6 +749,69 @@ class SubAgent:
                 args_str = repaired
 
         args = tc.parse_arguments()
+
+        if invocation is not None and tool_name not in invocation.allowed_tools:
+            return {"tool_call_id": tc.id, "content": json.dumps({"error": f"工具 {tool_name} 未授权"}, ensure_ascii=False)}
+
+        if invocation is not None and tool_name == "send_message_to_agent":
+            return {"tool_call_id": tc.id, "content": json.dumps({"error": "结构化隔离调用禁止嵌套代理通信"}, ensure_ascii=False)}
+
+        if invocation is not None and tool_name in _RESOURCE_PATH_TOOLS:
+            import fnmatch
+
+            path = _extract_path_from_args(tool_name, args)
+            if tool_name == "search_files":
+                path = args.get("pattern", "")
+            path = path.replace("\\", "/") if isinstance(path, str) else ""
+            if not path:
+                logger.warning(
+                    "sub_agent.path_policy_denied",
+                    target=invocation.target,
+                    request_id=invocation.request_id or "",
+                    tool=tool_name,
+                    reason="missing_path",
+                    path="",
+                    allowed_pattern_count=len(invocation.allowed_paths),
+                    forbidden_pattern_count=len(invocation.forbidden_paths),
+                )
+                return {"tool_call_id": tc.id, "content": json.dumps({"error": f"工具 {tool_name} 缺少路径，路径策略拒绝执行"}, ensure_ascii=False)}
+            path_parts = path.split("/")
+            is_windows_absolute = len(path) >= 3 and path[0].isalpha() and path[1:3] == ":/"
+            if path.startswith(("/", "~")) or is_windows_absolute or any(part == ".." for part in path_parts) or "\x00" in path:
+                logger.warning(
+                    "sub_agent.path_policy_denied",
+                    target=invocation.target,
+                    request_id=invocation.request_id or "",
+                    tool=tool_name,
+                    reason="unsafe_path",
+                    path=_safe_log_path(path),
+                    allowed_pattern_count=len(invocation.allowed_paths),
+                    forbidden_pattern_count=len(invocation.forbidden_paths),
+                )
+                return {"tool_call_id": tc.id, "content": json.dumps({"error": f"路径策略拒绝不安全路径 {path}"}, ensure_ascii=False)}
+            if invocation.allowed_paths or invocation.forbidden_paths:
+                forbidden = any(fnmatch.fnmatch(path, pattern) for pattern in invocation.forbidden_paths)
+                allowed = not invocation.allowed_paths or any(fnmatch.fnmatch(path, pattern) for pattern in invocation.allowed_paths)
+                if forbidden or not allowed:
+                    logger.warning(
+                        "sub_agent.path_policy_denied",
+                        target=invocation.target,
+                        request_id=invocation.request_id or "",
+                        tool=tool_name,
+                        reason="forbidden_pattern" if forbidden else "not_allowed",
+                        path=_safe_log_path(path),
+                        allowed_pattern_count=len(invocation.allowed_paths),
+                        forbidden_pattern_count=len(invocation.forbidden_paths),
+                    )
+                    return {"tool_call_id": tc.id, "content": json.dumps({"error": f"路径策略拒绝访问 {path}"}, ensure_ascii=False)}
+
+        if invocation is not None and invocation.permission_mode == "strict":
+            from tool_engine.tool_registry import ToolPermission, get_tool
+
+            registered_tool = get_tool(tool_name)
+            permission = registered_tool.get("permission", ToolPermission.READ_ONLY) if registered_tool else None
+            if permission != ToolPermission.READ_ONLY:
+                return {"tool_call_id": tc.id, "content": json.dumps({"error": f"strict 模式拒绝执行工具 {tool_name}"}, ensure_ascii=False)}
 
         if tool_name not in self._filtered_tool_names():
             return {
@@ -997,11 +1093,75 @@ class AgentDispatcher:
         保留为独立方法以与并行调度（SubAgentManagerMixin.parallel_dispatch）区分；
         ``dispatch`` 仍作为向后兼容别名指向本方法。
         """
-        agent = self._agents.get(name)
+        from agent_core.subagents import SubAgentInvocation
+
+        invocation = SubAgentInvocation(target=name, task=task, context=context)
+        agent = self._agents.get(invocation.target)
         if not agent:
-            logger.warning("dispatcher.agent_not_found", name=name)
+            logger.warning("dispatcher.agent_not_found", name=invocation.target)
             return None
-        return await agent.chat(task, context=context, status_callback=status_callback, address_term=address_term, extra_system_prompt=extra_system_prompt)
+        return await self._chat_with_scope(
+            agent,
+            invocation.task,
+            context=invocation.context,
+            status_callback=status_callback,
+            address_term=address_term,
+            extra_system_prompt=extra_system_prompt,
+        )
+
+    async def _chat_with_scope(self, agent: SubAgent, message: str, **kwargs: Any) -> str:
+        from memory.scope import Scope, bind_scope, current_scope_or_default, reset_scope
+
+        parent = current_scope_or_default()
+        invocation = kwargs.get("invocation")
+        isolated = agent.config.memory_scope == "isolated"
+        session_id = f"{parent.session_id}:{agent.config.name}" if isolated else parent.session_id
+        agent_id = agent.config.name if isolated else parent.agent_id
+        request_id = invocation.request_id if invocation is not None and invocation.request_id else f"{parent.request_id}:{agent.config.name}"
+        token = bind_scope(Scope(user_id=parent.user_id, session_id=session_id, agent_id=agent_id, request_id=request_id))
+        try:
+            return await agent.chat(message, **kwargs)
+        finally:
+            reset_scope(token)
+
+    async def dispatch_invocation(self, invocation: Any, status_callback: Any | None = None, address_term: str = "爸爸", extra_system_prompt: str = "") -> Any:
+        from agent_core.subagents import SubAgentInvocation, SubAgentInvocationResult
+
+        if not isinstance(invocation, SubAgentInvocation):
+            raise TypeError("invocation must be SubAgentInvocation")
+        agent = self._agents.get(invocation.target)
+        if not agent:
+            return SubAgentInvocationResult(target=invocation.target, status="unavailable", error_code="SUB_AGENT_UNAVAILABLE", error_message="agent unavailable")
+        try:
+            report = await asyncio.wait_for(
+                self._chat_with_scope(
+                    agent,
+                    invocation.task,
+                    context=invocation.context,
+                    status_callback=status_callback,
+                    address_term=address_term,
+                    extra_system_prompt=extra_system_prompt,
+                    invocation=invocation,
+                ),
+                timeout=invocation.timeout_seconds,
+            )
+        except asyncio.CancelledError:
+            return SubAgentInvocationResult(target=invocation.target, status="cancelled", error_code="SUB_AGENT_CANCELLED", error_message="agent invocation cancelled")
+        except TimeoutError:
+            logger.warning(
+                "dispatcher.invocation_timeout",
+                target=invocation.target,
+                request_id=invocation.request_id or "",
+                timeout_seconds=invocation.timeout_seconds,
+                memory_scope=agent.config.memory_scope or "shared",
+            )
+            return SubAgentInvocationResult(target=invocation.target, status="timeout", error_code="SUB_AGENT_TIMEOUT", error_message="agent invocation timed out")
+        except Exception:
+            logger.exception("dispatcher.invocation_failed", name=invocation.target)
+            return SubAgentInvocationResult(target=invocation.target, status="failed", error_code="SUB_AGENT_EXECUTION_FAILED", error_message="agent invocation failed")
+        if not isinstance(report, str) or not report.strip():
+            return SubAgentInvocationResult(target=invocation.target, status="failed", error_code="SUB_AGENT_EMPTY_RESULT", error_message="agent returned no final report")
+        return SubAgentInvocationResult.completed(target=invocation.target, final_report=report)
 
     # 向后兼容别名：保留 dispatch 指向 dispatch_single
     dispatch = dispatch_single

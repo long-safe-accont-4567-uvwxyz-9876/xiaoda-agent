@@ -7,6 +7,7 @@
 修复后：事件循环由后台守护线程 `run_forever` 持续驱动，WS 操作经
 `asyncio.run_coroutine_threadsafe` 提交，空闲期也能响应心跳。
 """
+import asyncio
 import time
 
 import websockets
@@ -54,7 +55,7 @@ def test_cli_ws_keepalive_survives_idle():
 
         async def _stop():
             server.close()
-            await server.wait_closed()
+            await asyncio.wait_for(server.wait_closed(), timeout=5)
 
         c._run_coro(_stop())
         c._loop.call_soon_threadsafe(c._loop.stop)

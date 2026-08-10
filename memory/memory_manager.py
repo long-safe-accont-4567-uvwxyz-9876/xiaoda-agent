@@ -526,6 +526,7 @@ class MemoryManager:
         self._last_message_time: float = 0
         self._last_encode_time: float = 0
         self._pending_encode = False
+        self._encode_generation = 0
         self._last_lazy_migrate_ts: float = 0
         # P3 记忆蒸馏器（使用硅基流动免费模型，失败降级到 router）
         self.distiller = MemoryDistiller(router=router)
@@ -691,6 +692,7 @@ class MemoryManager:
 
     def signal_new_message(self) -> None:
         self._last_message_time = time.time()
+        self._encode_generation += 1
         self._pending_encode = True
 
     async def retrieve_memories_hybrid(self, query: str, k: int = 5,
@@ -1505,18 +1507,45 @@ class MemoryManager:
         去噪），recall 工具传 False 跳过该过滤。
         """
         import config
+        scope_source = "explicit"
         if scope is None:
-            from memory.scope import Scope
-            scope = Scope()
+            from memory.scope import current_scope
+            scope = current_scope()
+            scope_source = "bound"
+        logger.bind(
+            scope_user_id=scope.user_id,
+            scope_session_id=scope.session_id,
+            scope_agent_id=scope.agent_id,
+            request_id=scope.request_id,
+            scope_source=scope_source,
+            conv_user_filter_present=bool(conv_user_id),
+            requested_k=k,
+        ).info("memory.scope_resolved")
         # 查询语义缓存：命中则直接返回，跳过完整检索流水线
-        # P0 修复：cache key 包含 conv_user_id，防止跨用户缓存污染
+        _scope_cache_prefix = f"{scope.user_id}::{scope.agent_id}"
         if getattr(config, 'QUERY_CACHE_ENABLED', True):
-            _cache_key = f"{conv_user_id}::{query}" if conv_user_id else query
+            _cache_key = f"{_scope_cache_prefix}::{conv_user_id}::{query}"
+            logger.bind(
+                scope_user_id=scope.user_id,
+                scope_agent_id=scope.agent_id,
+                request_id=scope.request_id,
+                conv_user_filter_present=bool(conv_user_id),
+            ).debug("memory.cache_lookup")
             logger.debug("memory.retrieve_stage", stage="query_cache_get", query=query[:50])
             cached = await self._query_cache.get(_cache_key)
             if cached is not None:
-                logger.info("memory.cache_hit", query=query[:100], conv_user_id=conv_user_id)
+                logger.bind(
+                    scope_user_id=scope.user_id,
+                    scope_agent_id=scope.agent_id,
+                    request_id=scope.request_id,
+                    result_count=len(cached),
+                ).info("memory.cache_hit")
                 return cached
+            logger.bind(
+                scope_user_id=scope.user_id,
+                scope_agent_id=scope.agent_id,
+                request_id=scope.request_id,
+            ).debug("memory.cache_miss")
 
         # 意图路由：按查询意图调整 k 与检索通道（闲聊型跳过 KG/Reranker）
         # A4 根本修复：移除外层 asyncio.wait_for，因为 query_transform.py 内部已有超时控制
@@ -2745,7 +2774,6 @@ class MemoryManager:
                     logger.debug("memory.distill_spawn_failed", error=str(e))
 
             self._last_encode_time = time.time()
-            self._pending_encode = False
             logger.info("memory.encoded", summary=summary[:80], importance=importance, is_raw=1)
 
             # 冷启动路由: 新记忆写入后失效计数缓存, 下次检索立即感知档位变化
@@ -3400,7 +3428,8 @@ class MemoryManager:
 
         return min(importance, 1.0)
 
-    async def try_idle_encode(self, context: dict, force: bool = False) -> None:
+    async def try_idle_encode(self, context: dict, force: bool = False,
+                              scope: Any | None = None) -> None:
         now = time.time()
         if not force and not self._pending_encode:
             return
@@ -3409,8 +3438,16 @@ class MemoryManager:
         if now - self._last_encode_time < self.ENCODE_COOLDOWN:
             return
 
-        self._pending_encode = False
-        await self.encode_memory(context)
+        generation = self._encode_generation
+        try:
+            if scope is None:
+                from memory.scope import current_scope
+                scope = current_scope()
+            await self.encode_memory(context, scope=scope)
+        except BaseException:
+            self._pending_encode = True
+            raise
+        self._pending_encode = self._encode_generation != generation
 
     def _save_state_json(self, summary: str, importance: float, emotion: str) -> None:
         """原子写入记忆状态到 JSON 文件"""

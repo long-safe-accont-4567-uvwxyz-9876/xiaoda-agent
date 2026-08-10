@@ -249,10 +249,8 @@ async function copyText(text: string) {
 
 function resend(msg: { content: string; imageUrl?: string }) {
   if (chat.isProcessing) return
-  let text = msg.content
   const imageUrl = msg.imageUrl
-  if (imageUrl) text += `\n[Image: ${imageUrl}]`
-  chat.sendMessage(text, imageUrl)
+  chat.sendMessage(msg.content, imageUrl ? { imageUrl } : undefined)
 }
 
 function clearAll() {
