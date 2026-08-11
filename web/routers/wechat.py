@@ -190,9 +190,8 @@ async def get_qrcode_status(
                 ok=False,
                 error={"code": "SAVE_FAILED", "message": f"凭证保存失败: {e}"},
             )
+        # W6：不回传 bot_token——敏感凭证已落盘，前端无需且不应持有明文 token。
         data: dict[str, Any] = {"status": st}
-        if bot_token:
-            data["bot_token"] = bot_token
         if baseurl:
             data["baseurl"] = baseurl
         return Envelope(data=data)
@@ -208,7 +207,12 @@ async def get_qrcode_status(
 
 @router.post("/wechat/test", response_model=Envelope[dict])
 async def test_connection(request: Request) -> Any:
-    """测试微信 Bot 连接——从凭证文件加载 bot_token 并发送测试消息。"""
+    """测试微信 Bot 连接——从凭证文件加载 bot_token 并发送测试消息。
+
+    W9：统一失败协议——所有可预期失败（凭证缺失/无效/测试失败）一律返回
+    data: { success: False, error: msg }（前端软失败分支），仅真正异常才用
+    Envelope ok=False 包装，避免三种错误表达并存。
+    """
     # 加载凭证
     try:
         creds = load_credentials()
@@ -218,22 +222,19 @@ async def test_connection(request: Request) -> Any:
             str(e)[:200], exc_info=True,
         )
         return Envelope(
-            ok=False,
-            error={"code": "LOAD_FAILED", "message": f"加载凭证失败: {e}"},
+            data={"success": False, "error": f"加载凭证失败: {e}"},
         )
 
     if not creds:
         return Envelope(
-            ok=False,
-            error={"code": "NO_CREDENTIALS", "message": "未找到微信凭证，请先扫码登录"},
+            data={"success": False, "error": "未找到微信凭证，请先扫码登录"},
         )
 
     bot_token = creds.get("bot_token", "")
     ilink_user_id = creds.get("ilink_user_id", "")
     if not bot_token or not ilink_user_id:
         return Envelope(
-            ok=False,
-            error={"code": "INVALID_CREDENTIALS", "message": "凭证不完整（缺少 bot_token 或 ilink_user_id）"},
+            data={"success": False, "error": "凭证不完整（缺少 bot_token 或 ilink_user_id）"},
         )
 
     # 用凭证中的 baseurl 初始化 ILinkClient（无 baseurl 或非 HTTPS 时走默认）
@@ -373,12 +374,19 @@ async def get_wechat_status() -> Any:
     """微信 Bot 连接状态查询（无需认证）。
 
     供前端在未登录时也能探测微信 Bot 是否在线。
-    返回 { connected: bool, expired: bool }：
-      - connected=True：bot 活跃且未关闭、未过期
-      - expired=True：bot 存在但会话已过期（需重新扫码）
+    返回 { connected: bool, expired: bool, init_failed: bool }：
+      - connected=True：bot 活跃且真实连接（_connected），或凭证存在可启动
+      - expired=True：bot 存在但会话已确认过期（需重新扫码）
+      - init_failed=True：AgentCore 初始化失败（故障可见）
+
+    W8：口径统一——活跃实例以 _connected 网络状态为准（会话过期重试期间
+    显示未连接而非误报在线）；凭证 fallback 仅用于无活跃实例的场景
+    （服务重启后），避免覆盖活跃实例的过期/断开状态。
     """
     connected = False
     expired = False
+    init_failed = False
+    bot = None
     try:
         import wechat_bot_adapter
         bot = wechat_bot_adapter._ACTIVE_BOT
@@ -386,16 +394,20 @@ async def get_wechat_status() -> Any:
             if getattr(bot, "_expired", False):
                 expired = True
             else:
-                connected = True
+                connected = bool(getattr(bot, "_connected", False))
+            init_failed = bool(getattr(bot, "_init_failed", False))
     except Exception:
         pass
-    # 若无活跃 bot（轮询未启动或服务重启后），检查凭证文件：
-    # 凭证存在即视为已登录，前端显示已连接状态（可断开重连），避免刷新后状态丢失
-    if not connected and not expired:
+    # 无活跃实例（轮询未启动或服务重启后）：凭证存在即视为已登录（可一键启动），
+    # 避免刷新后状态丢失；仅当没有任何 bot 实例时才 fallback。
+    if bot is None and not connected and not expired:
         try:
-            creds = load_credentials()
-            if creds:
+            if load_credentials():
                 connected = True
         except Exception:
             pass
-    return Envelope(data={"connected": connected, "expired": expired})
+    return Envelope(data={
+        "connected": connected,
+        "expired": expired,
+        "init_failed": init_failed,
+    })

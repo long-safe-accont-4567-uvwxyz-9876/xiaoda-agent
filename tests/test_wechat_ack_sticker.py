@@ -39,7 +39,8 @@ def _make_adapter(core, sticker_path=None):
     adapter._core = core
     adapter._ilink_client = FakeClient()
     adapter._last_from_user_id = "user@im.wechat"
-    adapter._last_context_token = "ctx_tok"
+    # W4 修复后 context token 按用户隔离（_ctx_by_user），替代原 _last_context_token
+    adapter._ctx_by_user = {"user@im.wechat": "ctx_tok"}
     adapter._expired = False
     return adapter
 
@@ -135,7 +136,6 @@ def test_send_sticker_delegates_to_media(tmp_path):
     img.write_bytes(b"fake-png-bytes")
     adapter = _make_adapter(FakeCore(None))
     adapter._last_from_user_id = "user@im.wechat"
-    adapter._last_context_token = "ctx_tok"
     ok = asyncio.run(adapter.send_sticker(str(img)))
     assert ok is True
     assert len(adapter._ilink_client.media_sent) == 1

@@ -37,7 +37,6 @@ TARGET_ROOT_FILES = [
     'cli.py', 'cli_client.py', 'config.py', 'hooks.py', 'instinct_manager.py',
     'xiaoli_agent.py', 'model_router.py', 'qq_bot_adapter.py', 'setup_wizard.py',
     'slash_commands.py', 'task_orchestrator.py', 'prompt_builder.py',
-    'backfill_kg_kioxia.py',
 ]
 # scripts/ 目录下需要处理的文件 (排除已加入 TARGET_DIRS 后重复)
 SCRIPTS_FILES = {'generate_requirements_lock.py'}

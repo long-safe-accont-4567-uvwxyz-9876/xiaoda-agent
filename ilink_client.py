@@ -898,11 +898,24 @@ class ILinkClient:
                 - (False, error_msg) token 无效或网络错误
         """
         try:
-            await self._post(
+            payload = await self._post(
                 "/ilink/bot/getupdates",
                 data={"get_updates_buf": ""},
                 timeout=2.0,
             )
+            # Q7 修复：空游标探测会推进服务端消息游标（消费已积压消息）——
+            # 将返回的新游标持久化到 ~/.ai-agent/wechat_cursor.json（与
+            # wechat_bot_adapter 同路径），供后续长轮询接续，避免消息被
+            # 探测消费后丢失或按旧游标重放（重复处理）。
+            next_cursor = payload.get("get_updates_buf", "") or ""
+            if next_cursor:
+                self._persist_verify_cursor(next_cursor)
+            msgs = payload.get("msgs", []) or []
+            if msgs:
+                logger.info(
+                    "ilink.verify_token.consumed_pending_msgs count={} cursor_len={}",
+                    len(msgs), len(next_cursor),
+                )
             # ret=0：token 有效，且本次没有新消息
             logger.info("ilink.verify_token.ok")
             return True, "ok"
@@ -922,6 +935,35 @@ class ILinkClient:
                 str(e)[:200], type(e).__name__,
             )
             return False, f"{type(e).__name__}: {str(e)[:120]}"
+
+    @staticmethod
+    def _persist_verify_cursor(cursor: str) -> None:
+        """持久化 verify_token 探测后推进的服务端游标。
+
+        探测用空游标 getupdates，服务端会把这些消息标记已投递并推进游标；
+        若不持久化，后续轮询按旧游标拉取会重放历史消息（重复处理）或丢消息。
+        路径与 wechat_bot_adapter._cursor_path 保持一致（凭证同目录）。
+        """
+        if not cursor:
+            return
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+
+            cursor_path = _Path.home() / ".ai-agent" / "wechat_cursor.json"
+            cursor_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = cursor_path.with_suffix(".tmp")
+            tmp.write_text(
+                _json.dumps({"cursor": cursor}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            tmp.replace(cursor_path)
+            logger.info("ilink.verify_cursor_persisted len={}", len(cursor))
+        except Exception as e:
+            logger.warning(
+                "ilink.verify_cursor_persist_failed error={}",
+                str(e)[:120],
+            )
 
     async def send_test_message(self, bot_token: str, user_id: str) -> tuple[bool, str]:
         """验证登录是否成功（通过 token 探测，不发消息）。

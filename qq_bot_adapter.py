@@ -175,39 +175,15 @@ async def _patched_pool_init(self, token: Any, session_interval: Any) -> Any:
     while not self._closed:
         _botpy_log.debug("[botpy] 会话循环检查...")
         try:
+            # multi_run 是 async def，返回的协程对象恒为 truthy——
+            # 原 `if coroutine: ... else: 重新登录` 的 else 分支永不执行（死代码）。
+            # Q2 修复：删除死分支，直接 await；连接中断后由 bot_connect 内部
+            # ws 重连机制（RESUME/IDENTIFY）接管，外层仅维持循环与异常退避。
             coroutine = self._connection.multi_run(session_interval)
             if self.ret_coro:
                 return coroutine
-            if coroutine:
-                await coroutine
-                recon_attempts = 0
-            else:
-                recon_attempts += 1
-                delay = min(5 * (2 ** min(recon_attempts - 1, 4)), max_recon_delay)
-                _botpy_log.warning(f"[botpy] session丢失，{delay}秒后重新登录 (第{recon_attempts}次)")
-
-                if recon_attempts > 10:
-                    _botpy_log.error("[botpy] 重连次数过多，放弃重连")
-                    await self.close()
-                    return None
-
-                await asyncio.sleep(delay)
-
-                try:
-                    await self._bot_login(token)
-                    for i in range(self._ws_ap["shards"]):
-                        session = {
-                            "session_id": "",
-                            "last_seq": 0,
-                            "intent": self.intents,
-                            "token": token,
-                            "url": self._ws_ap["url"],
-                            "shards": {"shard_id": i, "shard_count": self._ws_ap["shards"]},
-                        }
-                        self._connection.add(session)
-                    _botpy_log.info("[botpy] 重新登录成功，恢复会话")
-                except (OSError, RuntimeError, ConnectionError) as login_err:
-                    _botpy_log.error(f"[botpy] 重新登录失败: {login_err}")
+            await coroutine
+            recon_attempts = 0
         except KeyboardInterrupt:
             _botpy_log.info("[botpy] 服务强行停止!")
             return None
@@ -863,6 +839,11 @@ class AIQQBot(botpy.Client):
             self._group_locks[_group_lock_key] = asyncio.Lock()
 
         async def _group_reply_with_lock() -> None:
+            # Q5 修复：user_id/user_input 定义于 try 块内，_process_message_attachments
+            # 等步骤抛异常时 TimeoutError/error 分支引用它们会 NameError——
+            # 在闭包入口预置默认值，保证异常分支可安全引用（对齐 c2c 的参数绑定）。
+            user_id = "qq_unknown"
+            user_input = ""
             async with self._group_locks[_group_lock_key]:
                 try:
                     content = (getattr(message, 'content', None) or "").strip()
@@ -922,7 +903,13 @@ class AIQQBot(botpy.Client):
                     # 绑定 QQUser 到 EventBus（群聊也需要子代理事件投递）
                     async def _group_reply(content: str, msg_seq: int = 0) -> None:
                         await message.reply(content=content, msg_seq=msg_seq)
-                    qq_user = QQUser(reply_fn=_group_reply, msg_seq_fn=_next_msg_seq)
+                    # Q1 修复：群聊被动回复配额 5 次/5 分钟，ACK+4 片回复已占满 5 次，
+                    # SUB_STARTED 通知会击穿配额触发 40034105 → 群聊禁用开始通知。
+                    qq_user = QQUser(
+                        reply_fn=_group_reply,
+                        msg_seq_fn=_next_msg_seq,
+                        notify_started=False,
+                    )
                     token = event_bus.bind_user(qq_user)
                     try:
                         result = await asyncio.wait_for(
@@ -1016,53 +1003,29 @@ class AIQQBot(botpy.Client):
                 logger.debug("qq_bot.fallback_reply_failed", error=str(_e))
 
     async def _upload_c2c_base64(self, openid: str, image_path: Path, file_type: int = 1) -> str:
-        from botpy.http import Route
-
-        compressed_path: Path | None = None
-        try:
-            def _read() -> Any:
-                nonlocal compressed_path
-                # 图片类型且文件过大时压缩
-                path_to_upload = image_path
-                if file_type == 1 and image_path.stat().st_size > 800_000:
-                    compressed_path = self._compress_image(image_path)
-                    path_to_upload = compressed_path
-                with open(path_to_upload, "rb") as f:
-                    return base64.b64encode(f.read()).decode()
-
-            file_data = await asyncio.to_thread(_read)
-            payload = {
-                "openid": openid,
-                "file_type": file_type,
-                "file_data": file_data,
-                "srv_send_msg": False,
-            }
-            route = Route("POST", "/v2/users/{openid}/files", openid=openid)
-            # 重试最多3次，每次间隔递增
-            last_err = None
-            for attempt in range(3):
-                try:
-                    result = await self.api._http.request(route, json=payload)
-                    file_info = result.get("file_info", "") if isinstance(result, dict) else result.file_info
-                    if not file_info:
-                        raise RuntimeError(f"C2C文件上传返回空file_info (openid={openid})")
-                    return file_info
-                except (OSError, RuntimeError, ConnectionError, TimeoutError) as e:
-                    last_err = e
-                    if attempt < 2:
-                        wait = (attempt + 1) * 3
-                        logger.warning("qq_bot.upload_retry", attempt=attempt + 1, wait=wait, error=str(e))
-                        await asyncio.sleep(wait)
-            raise last_err
-        finally:
-            if compressed_path is not None:
-                try:
-                    compressed_path.unlink()
-                    logger.info("qq_bot.temp_file_cleaned", path=str(compressed_path))
-                except OSError as e:
-                    logger.warning(f"qq_bot.temp_file_cleanup_failed: {e}")
+        return await self._upload_base64(openid, image_path, file_type, group=False)
 
     async def _upload_group_base64(self, group_openid: str, image_path: Path, file_type: int = 1) -> str:
+        return await self._upload_base64(group_openid, image_path, file_type, group=True)
+
+    async def _upload_base64(self, target: str, image_path: Path, file_type: int = 1,
+                             *, group: bool = False) -> str:
+        """上传 base64 文件到 QQ 文件接口（C2C/群聊共用，Q6 去重）。
+
+        图片类型（file_type=1）且文件 >800KB 时自动压缩；临时文件由 finally 清理。
+
+        Args:
+            target: C2C 的 openid 或群聊的 group_openid
+            image_path: 本地文件路径
+            file_type: 1=图片 2=视频 3=语音
+            group: True=群文件接口 /v2/groups/...，False=C2C 接口 /v2/users/...
+
+        Returns:
+            file_info 字符串
+
+        Raises:
+            RuntimeError: 3 次重试后仍失败
+        """
         from botpy.http import Route
 
         compressed_path: Path | None = None
@@ -1078,21 +1041,33 @@ class AIQQBot(botpy.Client):
                     return base64.b64encode(f.read()).decode()
 
             file_data = await asyncio.to_thread(_read)
-            payload = {
-                "group_openid": group_openid,
-                "file_type": file_type,
-                "file_data": file_data,
-                "srv_send_msg": False,
-            }
-            route = Route("POST", "/v2/groups/{group_openid}/files", group_openid=group_openid)
-            # 重试最多3次，每次间隔递增
-            last_err = None
+            if group:
+                payload = {
+                    "group_openid": target,
+                    "file_type": file_type,
+                    "file_data": file_data,
+                    "srv_send_msg": False,
+                }
+                route = Route("POST", "/v2/groups/{group_openid}/files", group_openid=target)
+                desc = "群文件上传"
+            else:
+                payload = {
+                    "openid": target,
+                    "file_type": file_type,
+                    "file_data": file_data,
+                    "srv_send_msg": False,
+                }
+                route = Route("POST", "/v2/users/{openid}/files", openid=target)
+                desc = "C2C文件上传"
+            # 重试最多3次，每次间隔递增；失败统一抛带原因的错误（原 raise last_err 依赖
+            # 循环必然赋值的隐式约定，改为显式 RuntimeError 更健壮）
+            last_err: BaseException | None = None
             for attempt in range(3):
                 try:
                     result = await self.api._http.request(route, json=payload)
                     file_info = result.get("file_info", "") if isinstance(result, dict) else result.file_info
                     if not file_info:
-                        raise RuntimeError(f"群文件上传返回空file_info (group_openid={group_openid})")
+                        raise RuntimeError(f"{desc}返回空file_info (target={target})")
                     return file_info
                 except (OSError, RuntimeError, ConnectionError, TimeoutError) as e:
                     last_err = e
@@ -1100,7 +1075,7 @@ class AIQQBot(botpy.Client):
                         wait = (attempt + 1) * 3
                         logger.warning("qq_bot.upload_retry", attempt=attempt + 1, wait=wait, error=str(e))
                         await asyncio.sleep(wait)
-            raise last_err
+            raise RuntimeError(f"{desc}失败（已重试3次）") from last_err
         finally:
             if compressed_path is not None:
                 try:
@@ -1431,10 +1406,8 @@ class AIQQBot(botpy.Client):
                                    total_segments=num_segments)
                     remaining = "".join(segments[i:])
                     # P1-6 修复：合并后按字节上限再分割逐片发送，避免单条超 8000 字节被 QQ API 拒绝
-                    if not is_group:
-                        recovery_pieces = self._split_text_by_bytes(remaining, 7800)
-                    else:
-                        recovery_pieces = [remaining]
+                    # Q4 修复：群聊 recovery 也重切——原合并为单条可能超限，统一按字节重切
+                    recovery_pieces = self._split_text_by_bytes(remaining, 7800)
                     for piece in recovery_pieces:
                         try:
                             ok2 = await _send_segment(piece)
@@ -1467,10 +1440,8 @@ class AIQQBot(botpy.Client):
                 else:
                     remaining = "".join(segments[i:])
                 # P1-6 修复：合并后按字节上限再分割逐片发送，避免单条超 8000 字节被 QQ API 拒绝
-                if not is_group:
-                    recovery_pieces = self._split_text_by_bytes(remaining, 7800)
-                else:
-                    recovery_pieces = [remaining]
+                # Q4 修复：群聊 recovery 也重切——原合并为单条可能超限，统一按字节重切
+                recovery_pieces = self._split_text_by_bytes(remaining, 7800)
                 recovery_sent = 0
                 for piece in recovery_pieces:
                     try:
@@ -1534,7 +1505,18 @@ class AIQQBot(botpy.Client):
         max_segs = QQ_GROUP_MAX_SEGMENTS if is_group else QQ_C2C_MAX_SEGMENTS
         if len(segments) > max_segs:
             merged_tail = "".join(segments[max_segs - 1:])
-            segments = segments[:max_segs - 1] + [merged_tail]
+            # Q3 修复：合并后按字节上限重切分，避免单条超 QQ API 8000 字节上限被拒绝
+            #（与 _send_streaming_reply 对齐；群聊 split_for_group_passive 每段 ≤4000
+            #  字节且 max_segs=4 不触发本分支，仅 C2C 需要重切）
+            if not is_group:
+                resplit = self._split_text_by_bytes(merged_tail, 7800)
+                segments = segments[:max_segs - 1] + resplit
+                logger.info("qq_bot.stream_sticker_capped_resplit original={} final={} max_segs={}",
+                            len(segments) + 1, len(segments), max_segs)
+            else:
+                segments = segments[:max_segs - 1] + [merged_tail]
+                logger.info("qq_bot.stream_sticker_capped original={} capped={}",
+                            len(segments) + 1 if len(segments) > max_segs else len(segments), max_segs)
 
         if len(segments) <= 1:
             # 短回复：文字+表情包合并为一条消息发送

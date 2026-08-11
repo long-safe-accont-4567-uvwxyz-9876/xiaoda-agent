@@ -19,19 +19,25 @@ class QQUser(UserBase):
     Args:
         reply_fn: QQ 消息回复函数，签名为 async (content: str, msg_seq: int) -> None
         msg_seq_fn: 获取下一个 msg_seq 的函数
+        notify_started: 是否发送 SUB_STARTED 通知（群聊需传 False——被动回复配额
+            5 次/5 分钟，ACK + 4 片回复已占满，SUB_STARTED 会击穿上限触发 40034105）
     """
 
     def __init__(
         self,
         reply_fn: Callable[[str, int], Awaitable[None]],
         msg_seq_fn: Callable[[], int],
+        notify_started: bool = True,
     ) -> None:
         self._reply_fn = reply_fn
         self._msg_seq_fn = msg_seq_fn
+        self._notify_started = notify_started
 
     async def deliver(self, event: AgentEvent) -> None:
         # 仅 SUB_STARTED 发送消息，其余事件静默
         if event.type != AgentEventType.SUB_STARTED:
+            return
+        if not self._notify_started:
             return
         display = event.data.get("display_name") or AGENT_DISPLAY.get(event.agent, event.agent)
         content = f"🔄 {display}正在思考..."

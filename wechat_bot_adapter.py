@@ -135,7 +135,12 @@ async def send_proactive_message(text: str) -> bool:
     bot = _ACTIVE_BOT
     if bot is None or bot.is_closed():
         raise RuntimeError("微信 client 未连接（请先在 WebUI 扫码登录并启动微信 Bot）")
-    if not bot._last_context_token or not bot._last_from_user_id:
+    if not bot._last_from_user_id:
+        raise RuntimeError(
+            "还没有可用的微信用户上下文（等用户先在微信上发一条消息，Bot 收到后才能主动回复）"
+        )
+    target_token = bot._ctx_by_user.get(bot._last_from_user_id, "")
+    if not target_token:
         raise RuntimeError(
             "还没有可用的微信用户上下文（等用户先在微信上发一条消息，Bot 收到后才能主动回复）"
         )
@@ -199,22 +204,92 @@ class WeChatBotAdapter:
         self._closed = False
         self._connected = False
         self._expired = False
+        self._init_failed = False  # W7：AgentCore.init() 失败状态，供 /wechat/status 暴露
         self._poll_task: Optional[asyncio.Task] = None
 
         # 消息处理任务集合：持有强引用避免被 GC 回收，stop() 时统一取消
         self._msg_tasks: set[asyncio.Task] = set()
 
         # 长轮询游标（首次为空字符串，后续传入上次返回的 get_updates_buf）
-        self._cursor: str = ""
+        # 持久化到凭证同目录：进程重启后恢复游标，避免服务端重放历史消息。
+        self._cursor: str = self._load_cursor()
 
         # 最近一条消息的上下文（send_message 回复时使用）
-        self._last_context_token: str = ""
+        # W1 修复：改为 per-user 映射，避免多用户并发覆盖导致串话/发错人。
+        self._ctx_by_user: dict[str, str] = {}
         self._last_from_user_id: str = ""
+
+        # 消息去重缓存：msg_id → 时间戳，保留最近 1 小时（对齐 qq_bot_adapter）。
+        # 仅做 msg_id 级去重（同一 msg_id 的精确重复才拦截），不做内容级去重。
+        self._processed_msg_ids: dict[str, float] = {}
+        self._MSG_ID_TTL = 3600  # 1 小时
+
+        # W3：per-user 串行锁——同一用户消息串行处理，不同用户并发（对齐 qq_bot_adapter）。
+        # 防止同用户连发消息时并发调用 AgentCore 导致会话上下文竞争、回复乱序。
+        self._user_locks: dict[str, asyncio.Lock] = {}
+        self._user_locks_ts: dict[str, float] = {}
+        self._USER_LOCK_TTL = 3600  # 锁缓存 1 小时，超时清理避免长期运行内存增长
+
+        # W5：会话过期（ret=-14）自动恢复——服务端瞬时状态时指数退避重试，
+        # 连续多次失败才判定 token 真正失效。避免一次抖动就清凭证强制人工重扫码。
+        self._expire_retries = 0
+        self._MAX_EXPIRE_RETRIES = 3
 
         logger.info(
             "wechat_bot.init user={}",
             user_openid[:8] if user_openid else "unknown",
         )
+
+    # ------------------------------------------------------------------
+    # 消息去重与游标持久化
+    # ------------------------------------------------------------------
+
+    def _is_duplicate_msg(self, msg_id: str) -> bool:
+        """msg_id 级去重：同一 msg_id 的精确重复才拦截（对齐 qq_bot_adapter）。
+
+        网络抖动重试/进程重启后服务端重放时，防止同一消息被处理多次
+        （每次处理都会发 ACK + 回复，token 成本翻倍）。
+        """
+        now = time.time()
+        expired = [k for k, ts in self._processed_msg_ids.items() if now - ts > self._MSG_ID_TTL]
+        for k in expired:
+            del self._processed_msg_ids[k]
+        if msg_id in self._processed_msg_ids:
+            return True
+        self._processed_msg_ids[msg_id] = now
+        return False
+
+    @staticmethod
+    def _cursor_path() -> Path:
+        """游标持久化文件路径（与凭证同目录，复用 0600 目录）。"""
+        return CREDENTIALS_PATH.with_name("wechat_cursor.json")
+
+    def _load_cursor(self) -> str:
+        try:
+            path = self._cursor_path()
+            if path.exists():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                cursor = data.get("cursor", "") or ""
+                if cursor:
+                    logger.info("wechat_bot.cursor_loaded len={}", len(cursor))
+                    return cursor
+        except Exception as e:
+            logger.warning("wechat_bot.cursor_load_failed error={}", str(e)[:120])
+        return ""
+
+    def _save_cursor(self) -> None:
+        if not self._cursor:
+            return
+        try:
+            path = self._cursor_path()
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(
+                json.dumps({"cursor": self._cursor}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+        except Exception as e:
+            logger.warning("wechat_bot.cursor_save_failed error={}", str(e)[:120])
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -231,6 +306,9 @@ class WeChatBotAdapter:
         global _ACTIVE_BOT
         # 串行化活跃实例的 check→stop→assign 过渡：并发 start() 交错会产生
         # 多个 poll_task 或覆盖未停止的旧实例（"消息重复 N 次"根因之一）。
+        # W2 修复：_running/_closed 状态赋值必须在锁内完成——
+        # 否则并发 start 时旧实例被 stop 后，锁外代码会把 _closed 覆盖回 False，
+        # 继续拉起来第二个 poller（同凭证同游标 → 同条消息双份 ACK + 双份回复）。
         async with _START_LOCK:
             # 幂等：同一实例已在运行则直接返回，避免重复建 poller / 覆盖 client
             if _ACTIVE_BOT is self and self._running and not self._closed:
@@ -250,8 +328,8 @@ class WeChatBotAdapter:
                         "failed to stop previous wechat bot instance"
                     ) from e
             _ACTIVE_BOT = self
-        self._running = True
-        self._closed = False
+            self._running = True
+            self._closed = False
 
         # 确保 AgentCore 已初始化（未注入时尝试自建）
         if self._core is None:
@@ -271,12 +349,20 @@ class WeChatBotAdapter:
                 await self._core.init()
                 logger.info("wechat_bot.agent_core_initialized")
             except Exception as e:
+                # W7 修复：记录失败状态并在 /wechat/status 暴露，故障可见。
                 # 不重抛，避免阻断适配器启动（与 qq_bot_adapter.on_ready 策略一致）
                 logger.error(
                     "wechat_bot.agent_core_init_failed error={}",
                     str(e)[:200],
                     exc_info=True,
                 )
+                self._init_failed = True
+
+        # W2：并发 stop() 可能在锁外 await 期间被调用（新实例接管），
+        # 若已被停止则中断启动，绝不再拉起 poller。
+        if self._closed:
+            logger.info("wechat_bot.start_aborted_stopped_concurrently")
+            return
 
         # 加载凭证
         creds = self._load_credentials()
@@ -398,20 +484,48 @@ class WeChatBotAdapter:
             try:
                 result = await self._ilink_client.get_updates(self._cursor)
                 _elapsed_ms = int((time.time() - _t0) * 1000)
-                # 成功轮询：重置退避
+                # 成功轮询：重置退避与会话过期计数
                 if _backoff > 1.0:
                     logger.info(
                         "wechat_bot.poll_recovered after_backoff={:.0f}s",
                         _backoff,
                     )
                     _backoff = 1.0
+                if self._expire_retries:
+                    logger.info(
+                        "wechat_bot.session_expired_recovered retries={}",
+                        self._expire_retries,
+                    )
+                    self._expire_retries = 0
+                self._expired = False
+                self._connected = True
             except SessionExpiredError:
-                # 会话过期：清除凭证，标记过期，停止轮询
-                logger.warning("wechat_bot.session_expired clearing_credentials")
-                self._expired = True
+                # 会话过期（ret=-14）：token 可能已失效，但也可能是服务端瞬时状态。
+                # W5：不立即清凭证——指数退避重试（5s→10s→20s→…封顶60s），
+                # 连续 MAX_EXPIRE_RETRIES 次失败才判定真正过期：清凭证、停止轮询、
+                # 等待 WebUI 重新扫码。瞬时抖动时自动恢复，避免 bot 无故掉线。
+                self._expire_retries += 1
                 self._connected = False
-                self._clear_credentials()
-                break
+                if self._expire_retries >= self._MAX_EXPIRE_RETRIES:
+                    logger.error(
+                        "wechat_bot.session_expired_confirmed retries={} "
+                        "clearing_credentials",
+                        self._expire_retries,
+                    )
+                    self._expired = True
+                    self._clear_credentials()
+                    break
+                delay = min(
+                    5 * (2 ** (self._expire_retries - 1)),
+                    60.0,
+                )
+                logger.warning(
+                    "wechat_bot.session_expired_retry retry={} retry_in={:.0f}s",
+                    self._expire_retries,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
             except asyncio.CancelledError:
                 logger.info("wechat_bot.poll_cancelled")
                 raise
@@ -426,15 +540,17 @@ class WeChatBotAdapter:
                 _backoff = min(_backoff * 2, _max_backoff)
                 continue
 
-            # 更新游标（get_updates_buf）：为空时保留原游标，避免重放历史消息
+            # 更新游标（get_updates_buf）：为空时保留原游标，避免重放历史消息。
+            # W1：持久化游标，进程重启后恢复，避免服务端按空游标重放历史消息。
             next_cursor = result.get("cursor", "") or ""
             if next_cursor:
                 self._cursor = next_cursor
+                self._save_cursor()
 
-            # 更新上下文 token（用于后续 send_message）
+            # 更新上下文 token（用于后续 send_message）——绑定最近用户
             ctx_token = result.get("context_token", "") or ""
-            if ctx_token:
-                self._last_context_token = ctx_token
+            if ctx_token and self._last_from_user_id:
+                self._ctx_by_user[self._last_from_user_id] = ctx_token
 
             # 分发消息（用 asyncio.create_task 避免阻塞轮询）
             msgs = result.get("msgs", []) or []
@@ -488,11 +604,53 @@ class WeChatBotAdapter:
             len(msg.get("item_list", []) or []),
         )
 
-        # 缓存上下文（send_message 回复时使用）
+        # W1：msg_id 级去重——网关重放/重试导致的重复消息直接丢弃，
+        # 避免重复 ACK + 重复回复。无 msg_id 时退化为不拦截（保守）。
+        if msg_id and self._is_duplicate_msg(msg_id):
+            logger.info(
+                "wechat_bot.msg_duplicate_dropped from_user={} msg_id={}",
+                from_user_id[:16], msg_id[:12],
+            )
+            return
+
+        # 缓存上下文（send_message 回复时使用）——per-user 隔离（W4 修复）
         if from_user_id:
             self._last_from_user_id = from_user_id
-        if context_token:
-            self._last_context_token = context_token
+            if context_token:
+                self._ctx_by_user[from_user_id] = context_token
+        elif context_token and self._last_from_user_id:
+            # 消息未带 from_user_id 时兜底：沿用最近用户（仅更新 token）
+            self._ctx_by_user[self._last_from_user_id] = context_token
+
+        # W3：per-user 串行锁——同一用户的消息串行处理，不同用户并发。
+        # 防止同用户连发消息时并发调用 AgentCore（会话/记忆上下文竞争、回复乱序）。
+        if from_user_id:
+            async with self._user_lock(from_user_id):
+                await self._process_message_locked(msg, from_user_id)
+        else:
+            await self._process_message_locked(msg, from_user_id)
+
+    def _user_lock(self, user_id: str) -> asyncio.Lock:
+        """获取（并按需创建）指定用户的串行锁，附带 TTL 清理。"""
+        now = time.time()
+        # 定期清理过期锁，避免长期运行内存线性增长
+        if len(self._user_locks) > 128:
+            expired = [
+                k for k, ts in self._user_locks_ts.items() if now - ts > self._USER_LOCK_TTL
+            ]
+            for k in expired:
+                self._user_locks.pop(k, None)
+                self._user_locks_ts.pop(k, None)
+        lock = self._user_locks.get(user_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._user_locks[user_id] = lock
+        self._user_locks_ts[user_id] = now
+        return lock
+
+    async def _process_message_locked(self, msg: dict, from_user_id: str) -> None:
+        """持有 per-user 锁时处理消息（原 _process_message 主体）。"""
+        context_token = msg.get("context_token", "") or ""
 
         item_list = msg.get("item_list", []) or []
         if not item_list:
@@ -710,7 +868,7 @@ class WeChatBotAdapter:
             return False
 
         target_user = to_user_id or self._last_from_user_id
-        target_token = context_token or self._last_context_token
+        target_token = context_token or self._ctx_by_user.get(target_user, "")
         if not target_user:
             logger.warning("wechat_bot.send_no_user_id content={}", content[:80])
             return False
@@ -732,34 +890,36 @@ class WeChatBotAdapter:
             )
             return ret == 0
         except SessionExpiredError:
+            # W5：不立即清除凭证——可能是服务端瞬时状态，poll 循环会指数退避重试，
+            # 连续失败后才判定真正过期并清凭证。这里仅标记未连接，等待 poll 判定。
             logger.warning(
-                "wechat_bot.send_session_expired elapsed_ms={}",
+                "wechat_bot.send_session_expired elapsed_ms={} "
+                "pending_poll_recovery",
                 int((time.time() - _t0) * 1000),
             )
-            self._expired = True
             self._connected = False
-            self._clear_credentials()
             return False
         except ILinkRetError as e:
             _elapsed_ms = int((time.time() - _t0) * 1000)
             # ret=-2: context_token 过期/无效。AgentCore 处理最长 120s，
-            # 期间用户若发了新消息，_last_context_token 已更新为最新，
+            # 期间用户若发了新消息，per-user 缓存的 token 已更新为最新，
             # 用它重试一次可能恢复投递（覆盖"处理慢导致 token 过期"场景）。
+            cached_token = self._ctx_by_user.get(target_user, "")
             if (
                 e.ret == -2
-                and self._last_context_token
-                and self._last_context_token != target_token
+                and cached_token
+                and cached_token != target_token
             ):
                 logger.info(
                     "wechat_bot.send_retry_with_cached_token user={} "
                     "stale_token_len={} cached_token_len={} elapsed_ms={}",
-                    target_user[:16], len(target_token), len(self._last_context_token),
+                    target_user[:16], len(target_token), len(cached_token),
                     _elapsed_ms,
                 )
                 _rt0 = time.time()
                 try:
                     result = await self._ilink_client.send_message(
-                        target_user, self._last_context_token, content
+                        target_user, cached_token, content
                     )
                     ret = result.get("ret", 0)
                     _retry_ms = int((time.time() - _rt0) * 1000)
@@ -816,7 +976,7 @@ class WeChatBotAdapter:
             logger.warning("wechat_bot.send_media_no_client content={}", content[:40])
             return False
         target_user = to_user_id or self._last_from_user_id
-        target_token = context_token or self._last_context_token
+        target_token = context_token or self._ctx_by_user.get(target_user, "")
         if not target_user:
             logger.warning("wechat_bot.send_media_no_user_id")
             return False
