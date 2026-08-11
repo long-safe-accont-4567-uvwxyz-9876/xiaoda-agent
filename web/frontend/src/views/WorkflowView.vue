@@ -182,7 +182,12 @@ async function testWorkflow() {
   testing.value = true
   try {
     const result = await api.previewWorkflow(editing.value.id)
-    chatStore.sendMessage(result.prompt || JSON.stringify(result))
+    chatStore.sendMessage({
+      text: result.prompt || JSON.stringify(result),
+      search: false,
+      think: false,
+      attachments: [],
+    })
     router.push('/')
     message.success(t('workflowView.sentToChat'))
   } catch (e: any) { message.error(e.message) }

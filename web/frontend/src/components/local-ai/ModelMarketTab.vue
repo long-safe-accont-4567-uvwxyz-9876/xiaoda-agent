@@ -14,16 +14,19 @@ const selected = ref<CatalogEntry | null>(null)
 const destination = ref('')
 const showStorage = ref(false)
 const showDetail = ref(false)
+let chooseGeneration = 0
 const filtered = computed(() => store.catalog.filter(model => (!purpose.value || model.purpose === purpose.value) && `${model.id} ${model.repository}`.toLowerCase().includes(query.value.toLowerCase())))
 const purposeOptions = [{ label: '对话', value: 'chat' }, { label: '向量', value: 'embedding' }, { label: '重排', value: 'reranker' }]
 
 async function choose(model: CatalogEntry) {
+  const generation = ++chooseGeneration
   selected.value = model
   destination.value = ''
   showDetail.value = false
   if (store.defaultStorage) {
     try {
       const validation = await store.validateStorage(store.defaultStorage, model.download_size)
+      if (generation !== chooseGeneration) return
       if (validation.writable && !validation.error) {
         destination.value = validation.path
         showDetail.value = true
@@ -31,9 +34,11 @@ async function choose(model: CatalogEntry) {
       }
       message.warning(validation.error || validation.reason || '默认目录不可用，请重新选择')
     } catch (error) {
+      if (generation !== chooseGeneration) return
       message.warning(error instanceof Error ? error.message : String(error))
     }
   }
+  if (generation !== chooseGeneration) return
   showStorage.value = true
 }
 

@@ -1,152 +1,20 @@
-# SDD Progress Ledger — 微信 ACK 与表情包系统 (2026-08-04)
+# WebUI experience optimization progress
+Baseline: 77 tests passed; working tree snapshot /tmp/webui-experience-baseline.patch
 
-Plan: docs/superpowers/plans/2026-08-04-wechat-ack-sticker.md
-Base commit: 4825b70 (HEAD)
-Branch: feat/wechat-bot-ilink
+## Plan: 2026-08-09 Local AI Platform（续）
 
-## Tasks
+- [x] Task 8–11：按既有台账完成并复审通过
+- [x] Task 12：VectorStore 与 Memory 集成（生产实例装配、缓存 generation 隔离、停止实例无静默回退；28 项指定回归 + 53 项实例回归；复审通过）
+- [x] Task 13：Provider Catalog 单一权威（已有实施与验证证据，待最终整体复核）
+- [x] Task 14：完整协议 Transports（二审通过，98 项相关回归）
+- [ ] Task 15：Provider 原子接入与路由校验（整改已落地，待最终复审确认）
+- [ ] Task 16：ModelRouter Local Transport 迁移
+- [x] Task 17：Local AI REST 与 WebSocket API（已有实施与验证证据，待最终整体复核）
+- [x] Task 18：Local AI Pinia Store 与 API Client（已有实施与验证证据，待最终整体复核）
+- [x] Task 19：五标签本地部署 UI（已有实施与验证证据，待最终整体复核）
+- [ ] Task 20：统一 Provider 接入 UI
+- [ ] Task 21：跨平台 Runtime 打包
+- [ ] Task 22：运维与用户文档
+- [ ] Task 23：全项目验证、兼容性清理与端到端验收
 
-- [x] Task 1: ilink_client AES 加密 + CDN 上传原语 (commits 4825b70..cc4e902, review clean)
-- [x] Task 2: ilink_client send_media_message 图文合并 (commits cc4e902..d854bb1, review clean)
-- [x] Task 3: wechat_bot_adapter ACK 发送 (commits d854bb1..94cb298, review clean)
-- [x] Task 4: wechat_bot_adapter 表情包图文合并 + send_sticker (commits 94cb298..ed4953b, review clean)
-- [x] Task 5: 全量回归 (27 passed, 0 failed)
-- [x] 全部任务完成
-- [x] Final Review + Fix (commit b6c190c: CDN 空头抛异常 + URL 编码, 10 passed)
-
-## Completion Log
-
-- 2026-08-04 全部 5 任务完成，27 passed
-- 2026-08-04 Final Review: 2 Important (CDN 空头不触发回退、upload_param 未编码) + Minor 清理，已在 commit b6c190c 修复，10 passed
-
-## Minor 项（供最终审查权衡）
-
-- Task 1: tests/test_ilink_send_media.py 末尾无换行；docstring 声称校验 rawfilemd5/filesize 但断言未覆盖；upload_param 未 URL 编码（边缘，服务端下发值）
-- Task 2: tests/test_ilink_send_media.py 末尾无换行；未断言 media.aes_key 为 base64
-- Task 3: tests/test_wechat_ack_sticker.py 未使用 `from pathlib import Path`；末尾无换行；ACK 失败路径未测
-- Task 4: tests/test_wechat_ack_sticker.py:93 注释「让 send_media_message 抛异常」不准确（实为底层 client 抛异常），建议改为「让底层 client 抛异常」
-
-- (empty)
-## Plan: 2026-08-05 CLI 交互式斜杠命令 (prompt_toolkit)
-Base: f7ee7c1 · Branch: feat/cli-shared-process
-
-- [x] Task 1: 声明 prompt_toolkit 依赖 + spec hiddenimports (f7ee7c1..4c29675, review clean)
-- [x] Task 2: cli_client discover_models / list_agents + 单测 (4c29675..7035460, review clean)
-  - Minor: tests/test_cli_client_http.py 末尾缺换行；brief 命令需 .venv/bin/python
-- [x] Task 3: cli_menu 菜单选择器 + 单测 (7035460..5a020c1, review clean)
-  - Minor: cli_menu.py / test_cli_menu.py 末尾缺换行
-- [x] Task 4: cli.py 集成 prompt_toolkit + 补全 + 多步菜单 (5a020c1..5059ccd → fix cab8f1a, review clean after fix)
-  - Critical/Important 修复: _SlashCompleter() 无参构造；多步菜单 Esc 取消不误发 (cab8f1a)
-  - 5 passed (tests/test_cli_multistep.py) + py_compile ok
-  - Minor: Step 11 手动 TTY 验收待执行
-- [x] 最终整体审查 (b30a156..cab8f1a): Ready to merge, 无 Critical/Important 代码问题
-  - Important: Step 11 手动 TTY 验收待执行（发布前）
-  - Minor: 多处文件缺尾换行；_MULTI_STEP_COMMANDS 硬编码；_model_arg_completions 与 _SlashCompleter 逻辑重复；_menu_model 空列表无提示
-
-## Plan: 2026-08-05 Textual 重构 CLI 为可点击富文本 TUI
-Base: 2e52fee · Branch: feat/cli-shared-process
-
-- [x] Task 1: cli_common 共享助手 + textual 依赖 (2e52fee..9031e94, review clean)
-  - Minor: cli.py 未使用导入 STYLE/STATUS_MAP/AGENT_NAMES；test_cli_common.py 未使用导入 STATUS_MAP/AGENT_NAMES；cli_common.py/test_cli_common.py 末尾缺换行
-- [x] Task 2: cli_app.py Textual App 骨架 + 命令分组 (9031e94..e1e23cc, review clean)
-  - Minor: Message.msg CSS 选择器无效（用 Static 非 Message）；无全命令覆盖回归测试；未用导入 asyncio/Container/Header/Label；set_interval noop 空转；文件末尾缺换行
-  - 交给 Task 3：修 Message.msg 选择器为 .msg、加 test_every_command_has_group、删未用导入与 noop 定时器
-- [x] Task 3: 主进程连接 + 聊天区渲染 (e1e23cc..cdf4dc2, Important #1/#2 fixed in 8d5e1ea, review clean)
-  - Important 修复: 连接改异步 run_worker (on_mount)，阻塞 offload to_thread；删 collect_reply + test_cli_app_chat.py
-  - Minor: cli_app.py:129 函数内重复 import cli_client；_send_chat 用裸 create_task 未用 run_worker；_report_status 异常静默吞
-- [x] Task 4: 斜杠命令面板（搜索/分组/鼠标点击）(8d5e1ea..d40841c, Critical #1/#2 fixed in 1368d0b, review clean)
-  - Critical 修复: #panel-search 挂 on_input_changed 实时过滤；on_input_submitted 顶部守卫 panel-search 冒泡
-  - Minor: 面板搜索框 Enter 不选中高亮项（守卫副作用，可后续在守卫处触发 on_select）；test_cli_app_panel.py 末尾缺换行
-- [x] Task 5: 多步命令二级面板 (1368d0b..6aae9ed, Important fixed in 3a54663, review clean)
-  - Important 修复: _MultiStepPanel 选中先 dismiss 再回调；/model 两级不叠栈
-  - Minor: _open_model_models mopts 空仅 add_status；run_worker exclusive=False 并发风险；_MULTI_STEP 无 arg_completions 渲染空面板；test_cli_app_multistep.py 末尾缺换行
-- [x] Task 6: 真实斜杠命令执行 + 美术打磨 (3a54663..0d58020, review clean)
-  - 裁决落地: 弃 HTTP /api/v1/commands/run（不存在），改 async _send_slash 走 WSClient.chat；多步最终项发完整命令串；/help 本地；CSS 统一 STYLE
-  - Minor: test_cli_app_exec.py 仅测未连接分支，happy path 需 mock _ws；文件末尾缺换行；_send_slash 无 status_callback（与 cli.py 斜杠路径一致）
-- [x] Task 7: TUI 入口判定 + textual 打包 (0d58020..982ed57, review clean)
-- [x] 最终整体审查 (2e52fee..be0dded): 0 Critical / 1 Important / ~10 Minor
-  - Important #1 已修复: TUI 用户称谓硬编码"爸爸/你"→ 接入 address_term() 动态读取（commit be0dded）
-  - M1 已修复: _open_multistep 加未连接守卫防空面板；M2 删除 cli.py 未用导入；M3 删除 cli_app 重复 import（commit be0dded）
-  - 41 passed（修复后复测）
-  - Minor 裁定 accept-as-is: 缺尾换行、test_cli_app_exec happy path 未测、_send_slash 无 status_callback
-  - Minor 裁定 fix-later: Header 未显示模型/连接状态（spec §3.1 偏差 M8）、_send_chat 裸 create_task、_report_status 静默吞异常、面板搜索 Enter 不选中高亮项、_MULTI_STEP 两处硬编码重复
-
-## Plan: 2026-08-09 Local AI Platform
-Base: 5737490 · Branch: main · Execution: current worktree with user consent
-
-- [x] Task 1: Local AI Domain Contracts (uncommitted by user constraint, review clean; 123 passed)
-- [x] Task 2: Cross-Platform Hardware Probes (uncommitted by user constraint, review clean; 91 passed)
-  - Minor: VIP probe evidence currently preserves all strict-JSON fields; consider a bounded schema when the runner protocol is formalized.
-- [x] Task 3: ONNX Execution Provider Registry (uncommitted by user constraint, review clean; 194 passed)
-  - 方案 A：重扫中消失设备保留为 UNAVAILABLE，backend 不健康且推荐拒绝；实例生命周期留 Task 11。
-  - Windows 使用 CIM VideoController；Linux NVIDIA 使用 nvidia-smi CSV；Linux AMD 使用 /sys/class/drm PCI/sysfs 证据。
-  - CUDA、ROCm、DirectML backend 绑定所有匹配的真实 GPU，多卡写入独立 device_id；无硬件证据时保留 unknown 设备且不借用资源。
-  - 新资源契约仅接受类型化 RAM/VRAM；旧通用正值明确拒绝并报告，`RuntimeProfile` 拆分 estimated_ram/estimated_vram。
-  - 同一 GPU 多 backend 状态合同：任一 backend 健康即 AVAILABLE；全部 backend 不健康才为 DEGRADED；自动推荐只选择 healthy binding。
-  - 切片 1：运行时设备索引稳定绑定；RuntimeProfile 输出健康兼容的有序 providers/provider_options；Embedding 可直接消费运行配置。
-  - 切片 1 RED 为 `3 failed, 39 passed`；GREEN 后定向 `45 passed`，Local AI 回归 `141 passed`；Task 3 仍保持未完成。
-  - 切片 2：RuntimeProfile 输出逐设备 fallback_bindings；Embedding 映射对应 providers/provider_options；DirectML probe/load 使用关闭内存模式与顺序执行。
-  - 切片 2 五个红绿循环均有失败证据；Local AI 回归 `153 passed`，Task 3 仍保持未完成。
-  - 方案 A Session 修复：每个 manifest binding 使用独立 Session；当前调用失败立即重试下一 Session；成功后提升 active binding；忽略非 manifest fallback 旁路；创建时校验 provider 激活。
-  - Session 修复 RED 为 `3 failed, 54 passed`；GREEN 后定向 `57 passed`，Local AI 回归 `156 passed`；Task 3 仍保持未完成。
-  - 方案 A 弱证据身份门禁：Windows 弱证据使用规范化哈希且 `identity_persistent=false`，禁止物理 backend 绑定和手动 override；完整 PNP 身份标记为持久。
-  - 身份门禁 RED 为 `4 failed`；GREEN 后定向 `5 passed`，Local AI 回归 `162 passed`；Ruff、compileall、diff check 与四文件诊断通过。
-  - ROCm card 批次按 PCI Bus 原子映射；任一 card 畸形、重复或批次非法则整批为空，避免部分 ordinal 错配。
-  - ROCm 批次修复完成两轮 RED/GREEN；定向回归 `80 passed`，Local AI 回归 `165 passed`；Ruff、compileall、diff check 与两文件诊断通过。
-  - 精确状态合同 RED 为 `2 failed, 62 deselected`；GREEN 后 Local AI 回归 `167 passed`；Ruff、compileall、diff check 通过，编辑器诊断因路径访问限制未计为成功。
-  - 多卡消失恢复：仅保留 kind=gpu 且 identity_persistent!=False 的真实 GPU；default/ephemeral 排除；单卡消失为 UNAVAILABLE，复现恢复且不重复。
-  - 多卡 RED 为 `1 failed, 1 passed`（StopIteration）；精确状态报告纠偏 RED 为 `2 failed`；GREEN 后 registry `69 passed`，Ruff/diff check 通过。
-- [x] Task 4: Versioned Curated Catalog (uncommitted by user constraint, review clean; 207 passed)
-  - 严格 JSON schema：schema_version=1、remote_catalog_url (HTTPS 或 null)、models 数组。
-  - 不可变 revision（7-64 hex）、每个文件 path/size>0/64 位 SHA256、download_size 必须等于文件大小之和。
-  - 拒绝空 license、重复 model ID、重复 file path、未知字段和错误类型。
-  - 默认市场隐藏超过 5 GiB 模型；advanced=True 显示全部；purpose/max_download_bytes 过滤。
-  - 目录以空数组发布，附 remote_catalog_url 接缝，不虚构任何 ModelScope 元数据。
-  - 修复 contracts.py 中 CatalogFile.from_dict 缺失字段抛 KeyError→ValueError。
-  - 修复 curated.py ruff I001 import 排序。
-- [x] Task 5: ModelScope Repository Adapter (uncommitted by user constraint, review clean; 260 passed)
-  - `ModelScopeRepository.list_files(repository, revision, token) -> list[RemoteFile]`：httpx 分页、Bearer auth、SSRF 防护。
-  - `ModelScopeRepository.inspect(repository, revision, token) -> CatalogInspection`：识别 ORT GenAI chat、embedding、reranker 布局。
-  - revision 验证与 contracts 一致（7-64 hex）；拒绝 main/master/latest。
-  - SSRF：IP 字面量直接检查；生产模式 DNS 解析 fail-closed；测试模式（自定义 transport）跳过 DNS。
-  - 目的不从仓库名猜测，只从实际配置文件识别。
-  - 未知布局 → `runnable=False`，`state="requires_configuration"`，附 missing 列表。
-  - evidence 递归冻结为不可变 MappingProxyType/tuple。
-  - Minor（供最终审查权衡）：无 DNS fail-closed 直接测试（需 mock socket）；`inspect` broad except 吞 SSRF ValueError（设计选择，best-effort API）。
-- [x] Task 6: Server Storage Picker and Policy (uncommitted by user constraint, review clean; 296 passed)
-  - `StoragePolicy.list_directory(path) -> DirectoryListing`：根目录/子目录浏览，过滤非目录，拒绝 traversal/forbidden。
-  - `StoragePolicy.validate_destination(path, required_bytes) -> StorageValidation`：可写性、磁盘空间、符号链接逃逸检查，不自动持久化。
-  - `StoragePolicy.get_default()/set_default(path)`：显式持久化，set_default 先校验再写入 resolved 绝对路径。
-  - REST API：`GET/POST /api/v1/local-ai/storage`、`GET/PUT /api/v1/local-ai/storage/default`，全部强制鉴权。
-  - dataclass `to_dict()` 与 contracts 模式一致；路由不导入私有函数。
-  - Minor（供最终审查权衡）：`restricted_roots` 配置默认值未接线（前向钩子）；`to_dict()` 手写未复用 `_Record` 基类；`_symlink_escapes_parent_tree` 仅检查最终组件（保守设计）。
-- [x] Task 7: Persistent Model Registry (uncommitted by user constraint, review clean after concurrency fixes; 42 database tests + 296 Local AI regression passed)
-  - 原子注册：ID/目录检查与 INSERT 位于同一串行写事务，竞争失败稳定映射领域异常。
-  - 裸 `LocalAIDB` 回退事务增加实例锁，覆盖 BEGIN IMMEDIATE、提交与回滚；三类并发测试通过。
-- [x] Task 8: Resumable Download Manager (uncommitted by user constraint, review clean after fix; 16 download tests + contracts/registry regression passed)
-  - 修复：symlink 逃逸阻断、Range 200 回退单调进度、并发 start 幂等、206 Content-Range 校验、完整 partial 直接原子完成。
-- [x] Task 9: Standard ORT Embedding and Reranker Runtimes (uncommitted by user constraint, review clean after score-shape fix; 20 tests passed)
-  - 修复：Reranker 仅接受 `(B,)` 或 `(B,1)` logits；非法 rank、尾维及 batch 数不匹配统一抛 `RuntimeValidationError`。
-  - 非阻塞后续：真实模型端到端、会话运行降级和缺依赖路径可在 Task 11/23 补充覆盖。
-- [x] Task 10: ONNX Runtime GenAI Chat Runtime (uncommitted by user constraint, review clean after two fix rounds; 75 tests passed)
-  - 对齐 ORT GenAI 0.15.2 `Config`/`append_tokens` API，完善取消、解码与所有部分初始化资源清理路径。
-  - CPU 零 provider options；CUDA/DML 按当前 wheel 实际能力结构化拒绝，禁止虚假加速声明。
-  - 发布矩阵覆盖 Windows x64、Linux x86_64、Linux ARM64，并由冻结可执行文件执行真实最小 Model smoke。
-- [x] Task 11: Instance Manager and Runtime Registry (uncommitted by user constraint, concurrency review clean; 281 passed)
-  - 每模型锁串行同模型生命周期，不同模型可独立启动；profile 选择、override、route 依赖、设备丢失与恢复均有测试覆盖。
-  - 取消阻塞中的同步 start 时等待 worker 完成；若已启动则在传播取消前停止 runtime，shutdown 保持 runtime 先于数据库关闭。
-  - health 刷新与 stop 通过每模型锁线性化，不再用旧快照复活幽灵实例。
-  - stop 期间登记 stopping 状态，同步 route 绑定被结构化拒绝，不改变现有调用接口。
-  - 并发终审 RED 为 `3 failed, 18 passed`；GREEN 后定向 `21 passed`，扩大回归 `281 passed`；Ruff、compileall、diff check 通过。
-- [ ] Task 12: VectorStore and Memory Integration
-- [ ] Task 13: Provider Catalog as Single Authority
-- [ ] Task 14: Complete Protocol Transports
-- [ ] Task 15: Atomic Provider Onboarding and Route Validation
-- [ ] Task 16: ModelRouter Local Transport Migration
-- [ ] Task 17: Local AI REST and WebSocket API
-- [ ] Task 18: Local AI Pinia Store and API Client
-- [ ] Task 19: Five-Tab Local Deployment UI
-- [ ] Task 20: Unified Provider Onboarding UI
-- [ ] Task 21: Cross-Platform Runtime Packaging
-- [ ] Task 22: Operator and User Documentation
-- [ ] Task 23: Full Verification and Compatibility Cleanup
+2026-08-11: Local AI Platform (docs/superpowers/plans/2026-08-09-local-ai-platform.md) Task 13 Provider Catalog / 14 Protocol Transports / 15 Atomic Provider Onboarding implemented; Task 15 second review (Spec PASS / Quality conditional FAIL) raised N1-N4; N1 builtin availability fixed via _provider_ready + _is_client_configured, N2 dead is_local_host exemption removed, N3 dead _save_key_and_register removed, N4 server key write made atomic (setup/model_discovery ProviderService migration recorded as boundary). Final: 143 focused + 21 provider-compat tests green, ruff/compileall/git-diff-check clean. Awaiting focused acceptance.

@@ -2,12 +2,15 @@
 import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useMessage } from 'naive-ui'
 import { api } from '../../api'
+import { getWsClient } from '../../api/ws'
 import { t } from '../../i18n'
+import type { ChatRequestSnapshot } from '../../stores/chat'
 import WorkingDirSelector from '../workspace/WorkingDirSelector.vue'
 
 const props = withDefaults(defineProps<{
   modelValue: string
   isLoading: boolean
+  connected: boolean
   disabled?: boolean
   placeholder?: string
 }>(), {
@@ -17,7 +20,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
-  'send': [text: string, options: { search?: boolean; think?: boolean; imageUrl?: string }]
+  'send': [request: ChatRequestSnapshot]
   'abort': []
 }>()
 
@@ -30,6 +33,8 @@ const isTranscribing = ref(false)
 const uploadedImage = ref<{ url: string; name: string } | null>(null)
 const uploadedDoc = ref<{ url: string; name: string; path: string; ext: string } | null>(null)
 const imagePreviewUrl = ref('')
+const uploadState = ref<'idle' | 'uploading' | 'error'>('idle')
+const statusKey = ref('')
 const recordingTime = ref(0)
 const showLightbox = ref(false)
 
@@ -41,7 +46,17 @@ let mediaRecorder: MediaRecorder | null = null
 let audioChunks: Blob[] = []
 let recordingTimer: ReturnType<typeof setInterval> | null = null
 
-const hasContent = computed(() => props.modelValue.trim().length > 0)
+const hasAttachment = computed(() => uploadedImage.value !== null || uploadedDoc.value !== null)
+const hasSendableContent = computed(() => props.modelValue.trim().length > 0 || hasAttachment.value)
+const canSend = computed(() =>
+  hasSendableContent.value && uploadState.value !== 'uploading' &&
+  !props.isLoading && props.connected && !props.disabled,
+)
+const statusText = computed(() => {
+  if (uploadState.value === 'uploading') return t('promptInput.uploading')
+  if (!props.connected) return t('promptInput.disconnectedDraftKept')
+  return statusKey.value ? t(statusKey.value) : ''
+})
 
 const currentPlaceholder = computed(() => {
   if (showSearch.value) return t('promptInput.searchWeb') + '...'
@@ -67,7 +82,7 @@ function focus() {
   textareaRef.value?.focus()
 }
 
-defineExpose({ focus, textareaRef })
+defineExpose({ focus, textareaRef, clearSubmittedDraft })
 
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -77,15 +92,19 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 function handleSend() {
-  const text = props.modelValue.trim()
-  if (!text || props.isLoading || props.disabled) return
-  const options: { search?: boolean; think?: boolean; imageUrl?: string; docPath?: string } = {}
-  if (showSearch.value) options.search = true
-  if (showThink.value) options.think = true
-  if (uploadedImage.value) options.imageUrl = uploadedImage.value.url
-  // P0 新增（Task 1.9）：文档上传 — 传递路径供后端 document_reader 工具使用
-  if (uploadedDoc.value) options.docPath = uploadedDoc.value.path
-  emit('send', text, options)
+  if (!canSend.value) return
+  const request: ChatRequestSnapshot = {
+    text: props.modelValue.trim(),
+    search: showSearch.value,
+    think: showThink.value,
+    attachments: [],
+  }
+  if (uploadedImage.value) request.attachments.push({ kind: 'image', ...uploadedImage.value })
+  if (uploadedDoc.value) request.attachments.push({ kind: 'document', ...uploadedDoc.value })
+  emit('send', request)
+}
+
+function clearSubmittedDraft() {
   if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
   uploadedImage.value = null
   uploadedDoc.value = null
@@ -93,6 +112,10 @@ function handleSend() {
   showSearch.value = false
   showThink.value = false
   nextTick(() => autoGrow())
+}
+
+function retryConnection() {
+  statusKey.value = getWsClient().retry() ? 'promptInput.reconnecting' : 'promptInput.disconnectedDraftKept'
 }
 
 function toggleSearch() {
@@ -126,7 +149,13 @@ async function uploadFile(file: File) {
   const docExts = ['.pdf', '.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls', '.txt', '.md']
   const ext = '.' + (file.name.split('.').pop() || '').toLowerCase()
   const isDoc = !isImage && docExts.includes(ext)
-  if (!isImage && !isDoc) return
+  if (!isImage && !isDoc) {
+    uploadState.value = 'error'
+    statusKey.value = 'promptInput.unsupportedFile'
+    return
+  }
+  uploadState.value = 'uploading'
+  statusKey.value = ''
   try {
     if (isImage) {
       if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
@@ -138,11 +167,14 @@ async function uploadFile(file: File) {
       const result = await api.uploadDoc(file)
       uploadedDoc.value = result
     }
+    uploadState.value = 'idle'
   } catch {
     if (imagePreviewUrl.value) URL.revokeObjectURL(imagePreviewUrl.value)
     imagePreviewUrl.value = ''
     uploadedImage.value = null
     uploadedDoc.value = null
+    uploadState.value = 'error'
+    statusKey.value = 'promptInput.uploadFailed'
   }
 }
 
@@ -316,7 +348,7 @@ watch(() => props.modelValue, () => {
         <div class="image-thumb" @click="openLightbox">
           <img :src="imagePreviewUrl || uploadedImage?.url" :alt="t('chatView.preview')" />
         </div>
-        <button class="image-remove" @click="removeImage" :title="t('promptInput.removeImage')">✕</button>
+        <button class="image-remove" @click="removeImage" :title="t('promptInput.removeImage')" :aria-label="t('promptInput.removeImage')">✕</button>
       </div>
     </transition>
 
@@ -327,7 +359,7 @@ watch(() => props.modelValue, () => {
           <span class="doc-icon">📄</span>
           <span class="doc-name">{{ uploadedDoc.name }}</span>
           <span class="doc-ext">{{ uploadedDoc.ext }}</span>
-          <button class="doc-remove-btn" @click="removeDoc" :title="t('promptInput.removeImage')">✕</button>
+          <button class="doc-remove-btn" @click="removeDoc" :title="t('promptInput.removeDocument')" :aria-label="t('promptInput.removeDocument')">✕</button>
         </div>
       </div>
     </transition>
@@ -358,7 +390,7 @@ watch(() => props.modelValue, () => {
     <div class="prompt-toolbar">
       <div class="toolbar-left">
         <!-- 附件上传 -->
-        <button class="tool-btn" :title="t('promptInput.uploadImage')" @click="triggerFileInput" :disabled="disabled">
+        <button class="tool-btn" :title="t('promptInput.uploadAttachment')" :aria-label="t('promptInput.uploadAttachment')" @click="triggerFileInput" :disabled="disabled || uploadState === 'uploading'">
           📎
         </button>
         <input
@@ -377,6 +409,7 @@ watch(() => props.modelValue, () => {
           class="tool-btn"
           :class="{ active: showSearch, 'search-active': showSearch }"
           :title="t('promptInput.searchWeb')"
+          :aria-label="t('promptInput.searchWeb')"
           @click="toggleSearch"
           :disabled="disabled"
         >
@@ -394,6 +427,7 @@ watch(() => props.modelValue, () => {
           class="tool-btn"
           :class="{ active: showThink, 'think-active': showThink }"
           :title="t('promptInput.deepThink')"
+          :aria-label="t('promptInput.deepThink')"
           @click="toggleThink"
           :disabled="disabled"
         >
@@ -410,10 +444,11 @@ watch(() => props.modelValue, () => {
       <div class="toolbar-right">
         <!-- 语音按钮（无内容时显示） -->
         <button
-          v-if="!hasContent && !isLoading"
+          v-if="!hasSendableContent && !isLoading"
           class="tool-btn ghost"
           :class="{ 'is-transcribing': isTranscribing }"
           :title="t('promptInput.voiceInput')"
+          :aria-label="t('promptInput.voiceInput')"
           @click="toggleRecording"
           :disabled="disabled || isTranscribing"
           :loading="isTranscribing"
@@ -424,11 +459,12 @@ watch(() => props.modelValue, () => {
 
         <!-- 发送按钮（有内容时显示） -->
         <button
-          v-if="hasContent && !isLoading"
+          v-if="hasSendableContent && !isLoading"
           class="send-btn dendro-btn"
           @click="handleSend"
-          :disabled="disabled"
+          :disabled="!canSend"
           :title="t('promptInput.send')"
+          :aria-label="t('promptInput.send')"
         >
           ↑
         </button>
@@ -439,10 +475,18 @@ watch(() => props.modelValue, () => {
           class="stop-btn"
           @click="emit('abort')"
           :title="t('promptInput.abort')"
+          :aria-label="t('promptInput.abort')"
         >
           ⏹
         </button>
       </div>
+    </div>
+
+    <div v-if="statusText" class="prompt-status" role="status" aria-live="polite">
+      <span>{{ statusText }}</span>
+      <button v-if="!connected" class="reconnect-btn" @click="retryConnection" :aria-label="t('promptInput.reconnect')">
+        {{ t('promptInput.reconnect') }}
+      </button>
     </div>
 
     <!-- Lightbox -->

@@ -115,3 +115,32 @@ async def test_web_adapter_binds_web_user_during_process():
         # 清理 manager 全局状态（_handle_chat 会写入 _session_map）
         manager._session_map.pop(conn_id, None)
         manager._agent_map.pop(conn_id, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("attachment", "expected_text"),
+    [
+        ({"image_url": "/media/upload/sample.png"}, "📷 图片"),
+        ({"doc_path": "/tmp/sample.pdf"}, "📄 sample.pdf"),
+    ],
+)
+async def test_web_adapter_processes_attachment_only_messages(attachment, expected_text):
+    from web.ws_hub import _handle_chat, manager
+
+    fake_core = MagicMock()
+    fake_core.process = AsyncMock(return_value=ProcessResult(reply="已处理"))
+    fake_app = MagicMock()
+    fake_app.state.core = fake_core
+    ws = MagicMock()
+    ws.scope = {"app": fake_app}
+    conn_id = "test_attachment_only_conn"
+    msg = {"text": "", "agent": "xiaoda", "session_id": "test_sess", **attachment}
+
+    try:
+        await _handle_chat(conn_id, msg, "test_attachment_only", ws)
+        fake_core.process.assert_awaited_once()
+        assert fake_core.process.await_args.kwargs["user_input"] == expected_text
+    finally:
+        manager._session_map.pop(conn_id, None)
+        manager._agent_map.pop(conn_id, None)

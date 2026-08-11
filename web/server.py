@@ -113,7 +113,8 @@ def _ensure_provider_key_file(pid: Any, api_key: Any, os_module: Any) -> None:
         raw = fp.read_text(encoding="utf-8").strip()
         existing = _decode_key(raw) or raw if raw else ""
     if existing != api_key:
-        fp.write_text(_encode_key(api_key) + "\n", encoding="utf-8")
+        from utils.atomic_write import atomic_write
+        atomic_write(fp, _encode_key(api_key) + "\n", encoding="utf-8", mode=0o600)
         with suppress(OSError):
             os.chmod(fp, 0o600)
 

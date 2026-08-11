@@ -30,7 +30,27 @@ export interface Message {
   agent?: string
   timestamp: number
   imageUrl?: string  // 用户上传的图片 URL（用于气泡内显示预览）
+  request?: ChatRequestSnapshot
 }
+
+export interface ChatAttachmentSnapshot {
+  kind: 'image' | 'document'
+  url: string
+  name: string
+  path?: string
+  ext?: string
+}
+
+export interface ChatRequestSnapshot {
+  text: string
+  search: boolean
+  think: boolean
+  attachments: ChatAttachmentSnapshot[]
+}
+
+export type ChatSendResult =
+  | { ok: true; msgId: string }
+  | { ok: false; reason: 'EMPTY_REQUEST' | 'PROCESSING' | 'DISCONNECTED' }
 
 const MAX_MESSAGES = 1000
 
@@ -235,39 +255,46 @@ export const useChatStore = defineStore('chat', () => {
     pendingTimers.length = 0
   }
 
-  // P0 修复（Task 2.1）：sendMessage 接受 options 参数，按钮状态走结构化字段
-  // 原实现：sendMessage(text, imageUrl?) — 只传 text 和 imageUrl
-  // 新实现：sendMessage(text, options?) — 传 text + options（search/think/imageUrl/docPath）
-  // WS payload 增加 search_mode / think_mode / image_url / doc_path 独立字段，
-  // text 保持用户原话纯净（不再嵌入 [Search:]/[Think:]/[Image:]/[Doc:] marker）
-  function sendMessage(text: string, options?: {
-    search?: boolean; think?: boolean; imageUrl?: string; docPath?: string
-  }) {
-    if (!text.trim() || isProcessing.value) return
+  function sendMessage(request: ChatRequestSnapshot): ChatSendResult {
+    if (!request.text.trim() && request.attachments.length === 0) {
+      return { ok: false, reason: 'EMPTY_REQUEST' }
+    }
+    if (isProcessing.value) return { ok: false, reason: 'PROCESSING' }
     const msgId = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-    const imageUrl = options?.imageUrl
-    // 显示文本：用户原话（不再需要剥离 [Image:] marker，因为 text 已纯净）
-    const displayText = text.trim() || (imageUrl ? '📷 图片' : '')
-    // P0 修复（Task 2.1）：WS payload 走结构化字段，text 保持纯净
+    const image = request.attachments.find(attachment => attachment.kind === 'image')
+    const document = request.attachments.find(attachment => attachment.kind === 'document')
+    const displayText = request.text.trim() || (image ? '📷 图片' : `📄 ${document?.name || ''}`)
     const payload: Record<string, unknown> = {
       type: 'chat',
       session_id: sessionId.value,
       agent: currentAgent.value,
-      text,  // 用户原话，不含任何 marker
+      text: request.text,
       msg_id: msgId,
     }
-    // 按钮状态作为独立字段（后端直接使用，不再从 text 解析 marker）
-    if (options?.search) payload.search_mode = true
-    if (options?.think) payload.think_mode = true
-    if (options?.imageUrl) payload.image_url = options.imageUrl
-    if (options?.docPath) payload.doc_path = options.docPath
-    if (!ws.send(payload)) return
+    if (request.search) payload.search_mode = true
+    if (request.think) payload.think_mode = true
+    if (image) payload.image_url = image.url
+    if (document?.path) payload.doc_path = document.path
+    if (!wsConnected.value || !ws.send(payload)) {
+      return { ok: false, reason: 'DISCONNECTED' }
+    }
     pushMessage(messages, {
       id: `u-${msgId}`, role: 'user', content: displayText, timestamp: Date.now(),
-      imageUrl,
+      imageUrl: image?.url,
+      request: {
+        ...request,
+        attachments: request.attachments.map(attachment => ({ ...attachment })),
+      },
     })
     isProcessing.value = true
     pendingMsgId.value = msgId
+    return { ok: true, msgId }
+  }
+
+  function retryMessage(messageId: string): ChatSendResult {
+    const message = messages.value.find(item => item.id === messageId)
+    if (!message?.request) return { ok: false, reason: 'EMPTY_REQUEST' }
+    return sendMessage(message.request)
   }
 
   function abort() {
@@ -308,23 +335,17 @@ export const useChatStore = defineStore('chat', () => {
     if (i >= 0) messages.value.splice(i, 1)
   }
 
-  /** 重试：移除最后一条助手回复，重发最后一条用户消息 */
-  function retryLast() {
-    if (isProcessing.value) return
+  /** 重试：重发最后一条用户消息 */
+  function retryLast(): ChatSendResult {
+    if (isProcessing.value) return { ok: false, reason: 'PROCESSING' }
     // 反向查找最后一条用户消息的原始下标（避免 [...arr].reverse() 拷贝）
     let idx = -1
     for (let i = messages.value.length - 1; i >= 0; i--) {
       if (messages.value[i].role === 'user') { idx = i; break }
     }
-    if (idx < 0) return
+    if (idx < 0) return { ok: false, reason: 'EMPTY_REQUEST' }
     const msg = messages.value[idx]
-    const text = msg.content
-    const imageUrl = msg.imageUrl
-    // P0 修复（Task 2.1）：重试也走结构化字段，不再嵌入 [Image:] marker
-    // 移除该条用户消息之后的所有消息（旧回复/错误），重新发送
-    messages.value.splice(idx)
-    clearMarkdownCache()
-    sendMessage(text, imageUrl ? { imageUrl } : undefined)
+    return retryMessage(msg.id)
   }
 
   function clearMessages() {
@@ -351,7 +372,7 @@ export const useChatStore = defineStore('chat', () => {
   return {
     messages, currentAgent, sessionId, isProcessing, currentStage, statusText,
     wsConnected, wsReconnecting, lastEmotion, greetingPing,
-    sendMessage, abort, setAgent, newSession, loadSession,
+    sendMessage, retryMessage, abort, setAgent, newSession, loadSession,
     deleteMessage, retryLast, clearMessages, cleanup,
   }
 })

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import {
-  NButton, NSwitch, NModal, NForm, NFormItem, NInput, NInputNumber,
-  NSelect, NTag, NPopconfirm, NRadioGroup, NRadio, NSlider, useMessage,
+  NButton, NSwitch, NInputNumber, NSelect, NTag, NPopconfirm, NSlider, useMessage,
 } from 'naive-ui'
-import draggable from 'vuedraggable'
-import { get, post, put, del } from '../api'
+import { get, post, put } from '../api'
+import type { ProviderDefinition } from '../api/providers'
+import ProviderWizard from '../components/models/ProviderWizard.vue'
+import { useProvidersStore } from '../stores/providers'
 import { t } from '../i18n'
 import Tilt3D from '../components/fx/Tilt3D.vue'
 import * as echarts from 'echarts/core'
@@ -17,14 +18,14 @@ echarts.use([BarChart, GridComponent, TooltipComponent, LegendComponent, CanvasR
 
 const message = useMessage()
 
-const providers = ref<any[]>([])
+const providersStore = useProvidersStore()
+const providers = computed(() => providersStore.providers)
 const routes = ref<Record<string, any>>({})
 const fallback = ref<Record<string, string>>({})
 const credentials = ref<any[]>([])
 const usage = ref<any>({ series: [], total: {} })
-const showProviderForm = ref(false)
-const providerForm = ref<any>({})
-const isCreateProvider = ref(false)
+const providerWizardOpen = ref(false)
+const editingProvider = ref<ProviderDefinition | null>(null)
 const testResults = ref<Record<string, any>>({})
 const testingId = ref('')
 const chartEl = ref<HTMLElement | null>(null)
@@ -62,13 +63,8 @@ function onRouteModelChange(r: any, modelId: string) {
   }
 }
 
-const builtinProviders = computed(() => providers.value.filter(p => p.builtin))
-const customProviders = computed({
-  get: () => providers.value.filter(p => !p.builtin),
-  set: (val: any[]) => {
-    providers.value = [...builtinProviders.value, ...val]
-  },
-})
+const builtinProviders = computed(() => providersStore.builtinProviders)
+const customProviders = computed(() => providersStore.customProviders)
 
 onMounted(loadAll)
 
@@ -80,13 +76,13 @@ onBeforeUnmount(() => {
 async function loadAll() {
   try {
     const [p, r, c, u, dm] = await Promise.all([
-      get<any[]>('/models/providers'),
+      providersStore.loadProviders(),
       get('/models/routes'),
       get<any[]>('/models/credentials/status'),
       get('/models/usage?days=7'),
       get<any[]>('/models/discover').catch(() => []),
     ])
-    providers.value = p
+    void p
     routes.value = r.routes
     fallback.value = r.fallback
     credentials.value = c
@@ -123,37 +119,14 @@ function renderChart() {
   })
 }
 
-function openProviderForm(p: any | null) {
-  isCreateProvider.value = !p
-  providerForm.value = p
-    ? { ...p, api_key: '' }
-    : { id: '', label: '', format: 'openai', base_url: '', default_model: '', api_key: '' }
-  showProviderForm.value = true
-}
-
-async function saveProvider() {
-  try {
-    if (isCreateProvider.value) {
-      await post('/models/providers', providerForm.value)
-      message.success(t('modelsView.providerCreated'))
-    } else {
-      await put(`/models/providers/${providerForm.value.id}`, providerForm.value)
-      if (providerForm.value.api_key) {
-        await post(`/models/providers/${providerForm.value.id}/key`,
-          { api_key: providerForm.value.api_key })
-      }
-      message.success(t('modelsView.providerUpdated'))
-    }
-    showProviderForm.value = false
-    await loadAll()
-  } catch (e: any) {
-    message.error(e.message)
-  }
+function openProviderForm(provider: ProviderDefinition | null) {
+  editingProvider.value = provider
+  providerWizardOpen.value = true
 }
 
 async function removeProvider(id: string) {
   try {
-    await del(`/models/providers/${id}`, true)
+    await providersStore.deleteProvider(id)
     message.success(t('modelsView.deleted'))
     await loadAll()
   } catch (e: any) {
@@ -199,17 +172,6 @@ async function testRoute(task: string) {
     testResults.value[`route:${task}`] = { ok: false, error: e.message }
   } finally {
     testingId.value = ''
-  }
-}
-
-async function onDragEnd() {
-  try {
-    const order = customProviders.value.map(p => p.id)
-    await post('/models/providers/reorder', { order })
-    message.success(t('modelsView.providerOrderUpdated'))
-  } catch (e: any) {
-    message.error(e.message)
-    await loadAll()
   }
 }
 
@@ -365,8 +327,8 @@ function setPresPreset(val: number) {
         <div v-for="p in builtinProviders" :key="p.id" class="provider-row">
           <div class="provider-info">
             <span class="p-label">{{ p.label }}</span>
-            <n-tag size="small" :type="p.format === 'anthropic' ? 'warning' : 'info'" :bordered="false">
-              {{ p.format === 'anthropic' ? t('modelsView.anthropicCompat') : t('modelsView.openaiCompat') }}
+            <n-tag size="small" :type="p.protocol === 'anthropic' ? 'warning' : 'info'" :bordered="false">
+              {{ p.protocol }}
             </n-tag>
             <n-tag v-if="p.builtin" size="small" :bordered="false">{{ t('modelsView.builtin') }}</n-tag>
             <span class="p-url">{{ p.base_url }}</span>
@@ -380,24 +342,13 @@ function setPresPreset(val: number) {
             <n-button size="tiny" :loading="testingId === p.id" @click="testProvider(p.id)">{{ t('modelsView.test') }}</n-button>
           </div>
         </div>
-        <draggable
-          v-model="customProviders"
-          item-key="id"
-          :disabled="false"
-          handle=".drag-handle"
-          @end="onDragEnd"
-        >
-          <template #item="{ element: p }">
-            <div class="provider-row">
+        <div v-for="p in customProviders" :key="p.id" class="provider-row">
               <div class="provider-info">
-                <span class="drag-handle" :title="t('modelsView.dragSort')">☰</span>
                 <span class="p-label">{{ p.label }}</span>
-                <n-tag size="small" :type="p.format === 'anthropic' ? 'warning' : 'info'" :bordered="false">
-                  {{ p.format === 'anthropic' ? t('modelsView.anthropicCompat') : t('modelsView.openaiCompat') }}
+                <n-tag size="small" :type="p.protocol === 'anthropic' ? 'warning' : 'info'" :bordered="false">
+                  {{ p.protocol }}
                 </n-tag>
-                <n-tag v-if="p.builtin" size="small" :bordered="false">{{ t('modelsView.builtin') }}</n-tag>
                 <span class="p-url">{{ p.base_url }}</span>
-                <span class="p-key">{{ p.key_masked || t('modelsView.noKey') }}</span>
               </div>
               <div class="provider-ops">
                 <span v-if="testResults[p.id]" class="test-badge"
@@ -412,8 +363,6 @@ function setPresPreset(val: number) {
                 </n-popconfirm>
               </div>
             </div>
-          </template>
-        </draggable>
       </div>
     </section>
     </Tilt3D>
@@ -548,40 +497,7 @@ function setPresPreset(val: number) {
     </section>
     </Tilt3D>
 
-    <n-modal v-model:show="showProviderForm" preset="card"
-             :title="isCreateProvider ? t('modelsView.newProvider') : `${t('modelsView.editDot')}${providerForm.id}`"
-             style="width: min(560px, 94vw)">
-      <n-form label-placement="left" label-width="110">
-        <n-form-item label="id" v-if="isCreateProvider">
-          <n-input v-model:value="providerForm.id" :placeholder="t('modelsView.idPh')" />
-        </n-form-item>
-        <n-form-item :label="t('modelsView.nameLabel')">
-          <n-input v-model:value="providerForm.label" />
-        </n-form-item>
-        <n-form-item :label="t('modelsView.formatLabel')">
-          <n-radio-group v-model:value="providerForm.format">
-            <n-radio value="openai">{{ t('modelsView.openaiCompat') }}</n-radio>
-            <n-radio value="anthropic">{{ t('modelsView.anthropicCompat') }}</n-radio>
-          </n-radio-group>
-        </n-form-item>
-        <n-form-item label="base_url">
-          <n-input v-model:value="providerForm.base_url" placeholder="https://..." />
-        </n-form-item>
-        <n-form-item :label="t('modelsView.defaultModelLabel')">
-          <n-input v-model:value="providerForm.default_model" :placeholder="t('modelsView.modelIdPh')" />
-        </n-form-item>
-        <n-form-item label="API Key">
-          <n-input v-model:value="providerForm.api_key" type="password" show-password-on="click"
-                   :placeholder="t('modelsView.keyPh')" />
-        </n-form-item>
-      </n-form>
-      <template #footer>
-        <div style="display:flex; justify-content:flex-end; gap:10px">
-          <n-button @click="showProviderForm = false">{{ t('cancel') }}</n-button>
-          <n-button type="primary" @click="saveProvider">{{ t('modelsView.saveRegister') }}</n-button>
-        </div>
-      </template>
-    </n-modal>
+    <provider-wizard v-model:show="providerWizardOpen" :provider="editingProvider" @saved="loadAll" />
   </div>
 </template>
 

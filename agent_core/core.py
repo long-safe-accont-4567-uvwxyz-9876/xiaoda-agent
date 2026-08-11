@@ -110,6 +110,7 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         )
         self.result_wrapper = ResultWrapper(router=self.router)
         self.memory: MemoryManager | None = None
+        self.local_ai_instances: Any | None = None
         self.portrait_manager: PortraitManager | None = None
         self.notebook_manager: NotebookManager | None = None
         self.learning_manager: LearningManager | None = None
@@ -541,11 +542,19 @@ class AgentCore(MessageProcessorMixin, ToolExecutorMixin, SubAgentManagerMixin):
         await self._shutdown_close_component('dispatcher', 'dispatcher_close')
         await self._shutdown_close_agnes_clients()
         await self._shutdown_close_component('_vec_store', 'vec_store_close')
+        await self._shutdown_local_ai_instances()
         await self._shutdown_close_component('tts', 'tts_close')
         await self._shutdown_close_component('db', 'db_close')
         await self._shutdown_flush_mental_state()
         await self._shutdown_close_shared_http_client()
         logger.info("agent_core.shutdown_complete")
+
+    async def _shutdown_local_ai_instances(self) -> None:
+        try:
+            if self.local_ai_instances is not None:
+                await self.local_ai_instances.shutdown()
+        except Exception as e:
+            logger.warning("shutdown.local_ai_instances_failed", error=str(e))
 
     async def _shutdown_close_shared_http_client(self) -> None:
         """G4: 关闭全局共享 httpx.AsyncClient（连接池复用单例）.

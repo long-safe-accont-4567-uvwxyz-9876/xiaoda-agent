@@ -1,25 +1,21 @@
 """模型与凭证路由（R4/R13）：provider CRUD、路由表热改、凭证池状态、用量统计。"""
 from __future__ import annotations
-from typing import Any
 
 import json
-import os
 import time
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
-from web.schemas import Envelope
-from web.routers.auth import get_current_user
 # 缓存与凭证读写抽到独立模块, 避免与 web.routers.model_discovery / model_router 互相导入
 from web._discovery_cache import invalidate_discovery_cache
 from web._provider_keys import (
-    _get_cred_dir,
-    _key_file,
     _mask,
     load_provider_key,
 )
-import contextlib
+from web.routers.auth import get_current_user
+from web.schemas import Envelope
 
 router = APIRouter(tags=["models"], dependencies=[Depends(get_current_user)])
 
@@ -99,14 +95,10 @@ async def create_provider(body: dict, request: Request) -> Any:
         raise HTTPException(400, "format 必须是 openai 或 anthropic")
     if not base_url.startswith(("http://", "https://")):
         raise HTTPException(400, "base_url 必须是 http(s) URL")
-    # SSRF 防护：校验 URL 不指向内网/元数据服务。
-    # 本地/容器内受信服务（如 Ollama localhost:11434）显式配置时放行，
-    # 与 setup 向导的 _test_ollama 本地豁免保持一致。
-    from security.ssrf_guard import validate_url, is_local_host
-    if not is_local_host(base_url):
-        allowed, reason = validate_url(base_url)
-        if not allowed:
-            raise HTTPException(400, f"base_url 安全检查失败: {reason}")
+    from security.ssrf_guard import validate_url
+    allowed, reason = validate_url(base_url)
+    if not allowed:
+        raise HTTPException(400, f"base_url 安全检查失败: {reason}")
     api_key = (body.get("api_key") or "").strip()
     if not api_key:
         raise HTTPException(400, "api_key 不能为空")
@@ -180,18 +172,6 @@ async def delete_provider(pid: str, request: Request) -> Any:
     return Envelope(data={"deleted": pid})
 
 
-def _save_key_and_register(request: Request, pid: str, fmt: str,
-                           base_url: str, api_key: str) -> None:
-    _get_cred_dir().mkdir(parents=True, exist_ok=True)
-    fp = _key_file(pid)
-    from web._provider_keys import _encode_key
-    fp.write_text(_encode_key(api_key) + "\n", encoding="utf-8")
-    with contextlib.suppress(OSError):
-        os.chmod(fp, 0o600)
-    from web.custom_providers import register_into_router
-    register_into_router(_router_of(request), pid, fmt, base_url, api_key)
-
-
 @router.post("/models/providers/{pid}/key", response_model=Envelope[dict])
 async def set_provider_key(pid: str, body: dict, request: Request) -> Any:
     api_key = (body.get("api_key") or "").strip()
@@ -241,7 +221,7 @@ async def reorder_providers(body: dict, request: Request) -> Any:
 
 @router.get("/models/routes", response_model=Envelope[dict])
 async def list_routes(request: Request) -> Any:
-    from model_router import ROUTE_TABLE, FALLBACK_ROUTE
+    from model_router import FALLBACK_ROUTE, ROUTE_TABLE
     routes = {}
     for task, c in ROUTE_TABLE.items():
         routes[task] = {

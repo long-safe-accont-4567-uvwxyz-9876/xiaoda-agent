@@ -13,7 +13,7 @@ async function rescan() {
 
 <template>
   <div>
-    <div class="device-toolbar"><span>仅展示后端实际探测到的设备与运行提供程序</span><n-button :loading="store.loading" @click="rescan">重新扫描</n-button></div>
+    <div class="device-toolbar"><span>仅展示后端实际探测到的设备与运行提供程序</span><n-button :loading="store.rescanning" @click="rescan">重新扫描</n-button></div>
     <div class="device-grid">
       <article v-for="device in store.devices" :key="device.id" class="glass-panel device-card">
         <div class="device-head"><div><strong>{{ device.name }}</strong><span>{{ device.kind }} · {{ device.architecture }}</span></div><n-tag :type="device.state === 'available' ? 'success' : device.state === 'degraded' ? 'warning' : 'error'">{{ device.state }}</n-tag></div>

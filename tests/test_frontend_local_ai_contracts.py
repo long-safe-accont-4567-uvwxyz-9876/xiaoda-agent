@@ -76,6 +76,7 @@ def test_local_ai_store_request_id_falls_back_without_random_uuid(tmp_path):
             if (!first || !second || first === second) {{
               throw new Error('缺少安全上下文时未生成唯一 request ID')
             }}
+            process.exit(0)
             """
         ),
         encoding="utf-8",
@@ -96,6 +97,318 @@ def test_local_ai_store_uses_generation_safe_loads():
     assert "let loadGeneration = 0" in store
     assert "const generation = ++loadGeneration" in store
     assert "generation !== loadGeneration" in store
+
+
+def test_local_ai_store_refreshes_models_when_download_completes(tmp_path):
+    entry = tmp_path / "local-ai-completed-download.ts"
+    bundle = tmp_path / "local-ai-completed-download.mjs"
+    frontend = ROOT / "web/frontend"
+    (tmp_path / "node_modules").symlink_to(frontend / "node_modules", target_is_directory=True)
+    entry.write_text(
+        textwrap.dedent(
+            f"""
+            globalThis.localStorage = {{ getItem: () => null, setItem: () => {{}}, removeItem: () => {{}} }}
+            globalThis.location = {{ protocol: 'http:', host: 'localhost', hash: '' }}
+            const {{ createPinia, setActivePinia }} = await import('pinia')
+            const {{ localAiApi }} = await import({str(ROOT / 'web/frontend/src/api/localAi.ts')!r})
+            const {{ useLocalAiStore }} = await import({str(ROOT / 'web/frontend/src/stores/localAi.ts')!r})
+            const {{ getWsClient }} = await import({str(ROOT / 'web/frontend/src/api/ws.ts')!r})
+
+            let modelLoads = 0
+            Object.assign(localAiApi, {{
+              loadModels: async () => {{
+                modelLoads += 1
+                return [{{ id: 'installed:model', purpose: 'chat', validation_state: 'valid', removable: true }}]
+              }},
+            }})
+            setActivePinia(createPinia())
+            const store = useLocalAiStore()
+            store.connectWebSocket()
+            getWsClient().emit({{
+              type: 'local_ai_download_updated',
+              download: {{
+                id: 'download:one', model_id: 'installed:model', destination: '/models',
+                state: 'completed', bytes_downloaded: 1, total_bytes: 1,
+              }},
+            }})
+            await new Promise(resolve => setTimeout(resolve, 0))
+            if (modelLoads !== 1 || !store.modelsById['installed:model']) {{
+              throw new Error('下载完成后未刷新已安装模型')
+            }}
+            process.exit(0)
+            """
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        cwd=frontend,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = subprocess.run(["node", str(bundle)], cwd=frontend, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_completed_download_model_refresh_cannot_be_overwritten_by_older_load(tmp_path):
+    entry = tmp_path / "local-ai-model-refresh-race.ts"
+    bundle = tmp_path / "local-ai-model-refresh-race.mjs"
+    frontend = ROOT / "web/frontend"
+    (tmp_path / "node_modules").symlink_to(frontend / "node_modules", target_is_directory=True)
+    entry.write_text(
+        textwrap.dedent(
+            f"""
+            globalThis.localStorage = {{ getItem: () => null, setItem: () => {{}}, removeItem: () => {{}} }}
+            globalThis.location = {{ protocol: 'http:', host: 'localhost', hash: '' }}
+            const {{ createPinia, setActivePinia }} = await import('pinia')
+            const {{ localAiApi }} = await import({str(ROOT / 'web/frontend/src/api/localAi.ts')!r})
+            const {{ useLocalAiStore }} = await import({str(ROOT / 'web/frontend/src/stores/localAi.ts')!r})
+            const {{ getWsClient }} = await import({str(ROOT / 'web/frontend/src/api/ws.ts')!r})
+
+            const modelLoads = []
+            Object.assign(localAiApi, {{
+              loadDevices: async () => [],
+              loadCatalog: async () => [],
+              loadModels: () => new Promise(resolve => modelLoads.push(resolve)),
+              loadDownloads: async () => [],
+              loadInstances: async () => [],
+              loadDefaultStorage: async () => ({{ default_model_root: '/models' }}),
+            }})
+            setActivePinia(createPinia())
+            const store = useLocalAiStore()
+            store.connectWebSocket()
+            const loading = store.load()
+            getWsClient().emit({{
+              type: 'local_ai_download_updated',
+              download: {{
+                id: 'download:one', model_id: 'new:model', destination: '/models',
+                state: 'completed', bytes_downloaded: 1, total_bytes: 1,
+              }},
+            }})
+            modelLoads[1]([{{ id: 'new:model', purpose: 'chat', validation_state: 'valid', removable: true }}])
+            await new Promise(resolve => setTimeout(resolve, 0))
+            modelLoads[0]([{{ id: 'old:model', purpose: 'chat', validation_state: 'valid', removable: true }}])
+            await loading
+            if (!store.modelsById['new:model'] || store.modelsById['old:model']) {{
+              throw new Error('较旧 load 快照覆盖了下载完成后的模型刷新')
+            }}
+            process.exit(0)
+            """
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        cwd=frontend,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = subprocess.run(["node", str(bundle)], cwd=frontend, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_completed_download_model_refresh_failure_is_visible(tmp_path):
+    entry = tmp_path / "local-ai-model-refresh-error.ts"
+    bundle = tmp_path / "local-ai-model-refresh-error.mjs"
+    frontend = ROOT / "web/frontend"
+    (tmp_path / "node_modules").symlink_to(frontend / "node_modules", target_is_directory=True)
+    entry.write_text(
+        textwrap.dedent(
+            f"""
+            globalThis.localStorage = {{ getItem: () => null, setItem: () => {{}}, removeItem: () => {{}} }}
+            globalThis.location = {{ protocol: 'http:', host: 'localhost', hash: '' }}
+            const {{ createPinia, setActivePinia }} = await import('pinia')
+            const {{ localAiApi }} = await import({str(ROOT / 'web/frontend/src/api/localAi.ts')!r})
+            const {{ useLocalAiStore }} = await import({str(ROOT / 'web/frontend/src/stores/localAi.ts')!r})
+            const {{ getWsClient }} = await import({str(ROOT / 'web/frontend/src/api/ws.ts')!r})
+
+            Object.assign(localAiApi, {{ loadModels: async () => {{ throw new Error('模型刷新失败') }} }})
+            setActivePinia(createPinia())
+            const store = useLocalAiStore()
+            store.connectWebSocket()
+            getWsClient().emit({{
+              type: 'local_ai_download_updated',
+              download: {{
+                id: 'download:one', model_id: 'new:model', destination: '/models',
+                state: 'completed', bytes_downloaded: 1, total_bytes: 1,
+              }},
+            }})
+            await new Promise(resolve => setTimeout(resolve, 0))
+            if (store.error !== '模型刷新失败') {{
+              throw new Error(`模型刷新错误不可见: ${{store.error}}`)
+            }}
+            process.exit(0)
+            """
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        cwd=frontend,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = subprocess.run(["node", str(bundle)], cwd=frontend, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_local_ai_store_tracks_rescan_loading_independently(tmp_path):
+    entry = tmp_path / "local-ai-rescan-loading.ts"
+    bundle = tmp_path / "local-ai-rescan-loading.mjs"
+    frontend = ROOT / "web/frontend"
+    (tmp_path / "node_modules").symlink_to(frontend / "node_modules", target_is_directory=True)
+    entry.write_text(
+        textwrap.dedent(
+            f"""
+            globalThis.localStorage = {{ getItem: () => null, setItem: () => {{}}, removeItem: () => {{}} }}
+            globalThis.location = {{ protocol: 'http:', host: 'localhost', hash: '' }}
+            const {{ createPinia, setActivePinia }} = await import('pinia')
+            const {{ localAiApi }} = await import({str(ROOT / 'web/frontend/src/api/localAi.ts')!r})
+            const {{ useLocalAiStore }} = await import({str(ROOT / 'web/frontend/src/stores/localAi.ts')!r})
+
+            let resolveRescan
+            Object.assign(localAiApi, {{
+              rescanDevices: () => new Promise(resolve => {{ resolveRescan = resolve }}),
+            }})
+            setActivePinia(createPinia())
+            const store = useLocalAiStore()
+            const rescanning = store.rescan()
+            if (!store.rescanning || store.loading) {{
+              throw new Error('重新扫描未使用独立 loading 状态')
+            }}
+            resolveRescan([])
+            await rescanning
+            if (store.rescanning || store.loading) {{
+              throw new Error('重新扫描完成后 loading 状态未复位')
+            }}
+            process.exit(0)
+            """
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        cwd=frontend,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = subprocess.run(["node", str(bundle)], cwd=frontend, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_rescan_result_cannot_be_overwritten_by_older_load(tmp_path):
+    entry = tmp_path / "local-ai-rescan-load-race.ts"
+    bundle = tmp_path / "local-ai-rescan-load-race.mjs"
+    frontend = ROOT / "web/frontend"
+    (tmp_path / "node_modules").symlink_to(frontend / "node_modules", target_is_directory=True)
+    entry.write_text(
+        textwrap.dedent(
+            f"""
+            globalThis.localStorage = {{ getItem: () => null, setItem: () => {{}}, removeItem: () => {{}} }}
+            globalThis.location = {{ protocol: 'http:', host: 'localhost', hash: '' }}
+            const {{ createPinia, setActivePinia }} = await import('pinia')
+            const {{ localAiApi }} = await import({str(ROOT / 'web/frontend/src/api/localAi.ts')!r})
+            const {{ useLocalAiStore }} = await import({str(ROOT / 'web/frontend/src/stores/localAi.ts')!r})
+
+            let resolveLoadDevices
+            Object.assign(localAiApi, {{
+              loadDevices: () => new Promise(resolve => {{ resolveLoadDevices = resolve }}),
+              loadCatalog: async () => [],
+              loadModels: async () => [],
+              loadDownloads: async () => [],
+              loadInstances: async () => [],
+              loadDefaultStorage: async () => ({{ default_model_root: '/models' }}),
+              rescanDevices: async () => [{{
+                id: 'device:one', name: 'rescan-new', kind: 'cpu', architecture: 'x64', state: 'available',
+                memory_total: 1, memory_available: 1, backends: [], system: {{}}, evidence: {{}},
+              }}],
+            }})
+            setActivePinia(createPinia())
+            const store = useLocalAiStore()
+            const loading = store.load()
+            await store.rescan()
+            resolveLoadDevices([{{
+              id: 'device:one', name: 'load-old', kind: 'cpu', architecture: 'x64', state: 'available',
+              memory_total: 1, memory_available: 1, backends: [], system: {{}}, evidence: {{}},
+            }}])
+            await loading
+            if (store.devicesById['device:one']?.name !== 'rescan-new') {{
+              throw new Error('较旧 load 快照覆盖了重新扫描结果')
+            }}
+            process.exit(0)
+            """
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        cwd=frontend,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = subprocess.run(["node", str(bundle)], cwd=frontend, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_rescan_loading_settles_when_newer_load_supersedes_result(tmp_path):
+    entry = tmp_path / "local-ai-rescan-loading-race.ts"
+    bundle = tmp_path / "local-ai-rescan-loading-race.mjs"
+    frontend = ROOT / "web/frontend"
+    (tmp_path / "node_modules").symlink_to(frontend / "node_modules", target_is_directory=True)
+    entry.write_text(
+        textwrap.dedent(
+            f"""
+            globalThis.localStorage = {{ getItem: () => null, setItem: () => {{}}, removeItem: () => {{}} }}
+            globalThis.location = {{ protocol: 'http:', host: 'localhost', hash: '' }}
+            const {{ createPinia, setActivePinia }} = await import('pinia')
+            const {{ localAiApi }} = await import({str(ROOT / 'web/frontend/src/api/localAi.ts')!r})
+            const {{ useLocalAiStore }} = await import({str(ROOT / 'web/frontend/src/stores/localAi.ts')!r})
+
+            let resolveRescan
+            Object.assign(localAiApi, {{
+              loadDevices: async () => [],
+              loadCatalog: async () => [],
+              loadModels: async () => [],
+              loadDownloads: async () => [],
+              loadInstances: async () => [],
+              loadDefaultStorage: async () => ({{ default_model_root: '/models' }}),
+              rescanDevices: () => new Promise(resolve => {{ resolveRescan = resolve }}),
+            }})
+            setActivePinia(createPinia())
+            const store = useLocalAiStore()
+            const rescanning = store.rescan()
+            await store.load()
+            resolveRescan([])
+            await rescanning
+            if (store.rescanning) {{
+              throw new Error('被较新 load 取代后重新扫描状态未复位')
+            }}
+            process.exit(0)
+            """
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        cwd=frontend,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = subprocess.run(["node", str(bundle)], cwd=frontend, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_compute_devices_tab_uses_rescan_loading_state():
+    component = source("web/frontend/src/components/local-ai/ComputeDevicesTab.vue")
+
+    assert ':loading="store.rescanning"' in component
+    assert ':loading="store.loading"' not in component
 
 
 def test_local_ai_store_preserves_websocket_updates_during_load():
@@ -326,6 +639,59 @@ def test_model_market_validates_saved_default_for_each_download_before_use():
     assert "store.validateStorage(store.defaultStorage, model.download_size)" in market
     assert "validation.writable && !validation.error" in market
     assert "showStorage.value = true" in market
+
+
+def test_model_market_ignores_stale_choose_validation(tmp_path):
+    frontend = ROOT / "web/frontend"
+    component = source("web/frontend/src/components/local-ai/ModelMarketTab.vue")
+    script = component.split('<script setup lang="ts">', 1)[1].split("</script>", 1)[0]
+    script = script.replace("'../../stores/localAi'", repr(str(ROOT / "web/frontend/src/stores/localAi.ts")))
+    script = script.replace("import ModelDetailDrawer from './ModelDetailDrawer.vue'", "")
+    script = script.replace("import StoragePickerDialog from './StoragePickerDialog.vue'", "")
+    script = script.replace("const message = useMessage()", "const message = { warning: () => undefined }")
+    script = script.replace("async function choose", "export async function choose")
+    script += "\nexport { selected, destination, showStorage, showDetail, store }\n"
+    instrumented = tmp_path / "ModelMarketTab.instrumented.ts"
+    entry = tmp_path / "model-market-choose-race.ts"
+    bundle = tmp_path / "model-market-choose-race.mjs"
+    (tmp_path / "node_modules").symlink_to(frontend / "node_modules", target_is_directory=True)
+    instrumented.write_text(script, encoding="utf-8")
+    entry.write_text(
+        textwrap.dedent(
+            f"""
+            globalThis.localStorage = {{ getItem: () => null, setItem: () => {{}}, removeItem: () => {{}} }}
+            globalThis.location = {{ protocol: 'http:', host: 'localhost', hash: '' }}
+            const {{ createPinia, setActivePinia }} = await import('pinia')
+            setActivePinia(createPinia())
+            const market = await import({str(instrumented)!r})
+            const validations = []
+            market.store.defaultStorage = '/models'
+            market.store.validateStorage = () => new Promise(resolve => validations.push(resolve))
+            const modelA = {{ id: 'model:a', repository: 'a', purpose: 'chat', download_size: 1 }}
+            const modelB = {{ id: 'model:b', repository: 'b', purpose: 'chat', download_size: 2 }}
+            const chooseA = market.choose(modelA)
+            const chooseB = market.choose(modelB)
+            validations[1]({{ path: '/b', writable: true }})
+            await chooseB
+            validations[0]({{ path: '/a', writable: true }})
+            await chooseA
+            if (market.selected.value?.id !== 'model:b' || market.destination.value !== '/b') {{
+              throw new Error('较旧 choose 校验结果串入了当前模型')
+            }}
+            process.exit(0)
+            """
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [str(frontend / "node_modules/.bin/esbuild"), str(entry), "--bundle", "--platform=node", "--format=esm", f"--outfile={bundle}"],
+        cwd=frontend,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = subprocess.run(["node", str(bundle)], cwd=frontend, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_deployments_tab_filters_stopped_instances_from_cards_and_empty_state():

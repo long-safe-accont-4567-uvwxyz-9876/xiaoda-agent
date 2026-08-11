@@ -693,8 +693,12 @@ def _verify_response(data: dict, msg_id: str, agent: str) -> None:
 
 async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> None:
     text = (msg.get("text") or "").strip()
-    if not text:
+    image_url_field = str(msg.get("image_url") or "").strip()
+    doc_path_field = str(msg.get("doc_path") or "").strip()
+    if not text and not image_url_field and not doc_path_field:
         return
+    if not text:
+        text = "📷 图片" if image_url_field else f"📄 {Path(doc_path_field).name}"
     agent = str(msg.get("agent") or manager._agent_map.get(conn_id, "xiaoda"))
     session_id = str(msg.get("session_id") or
                      manager._session_map.get(conn_id) or f"web_{uuid.uuid4().hex[:12]}")
@@ -710,8 +714,6 @@ async def _handle_chat(conn_id: str, msg: dict, msg_id: str, ws: WebSocket) -> N
     # 旧客户端仍发送 [Search:]/[Think:]/[Image:]/[Doc:] marker，保留向后兼容
     search_mode = bool(msg.get("search_mode"))
     think_mode = bool(msg.get("think_mode"))
-    image_url_field = str(msg.get("image_url") or "").strip()
-    doc_path_field = str(msg.get("doc_path") or "").strip()
 
     # 构建 image_data：优先使用结构化 image_url 字段，兜底解析 [Image:] marker
     image_data = None

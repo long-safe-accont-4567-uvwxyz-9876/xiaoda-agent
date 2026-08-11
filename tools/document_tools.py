@@ -158,9 +158,23 @@ def _read_xlsx(path: str) -> ToolResult:
         return ToolResult.fail(f"XLSX读取错误: {e!s}")
 
 
+def _read_text(path: str) -> ToolResult:
+    try:
+        target = os.path.expanduser(path)
+        allowed, resolved, reason = _validate_path(target, mode="read")
+        if not allowed:
+            return ToolResult.fail(f"路径访问被拒绝: {reason}")
+        if not os.path.exists(resolved):
+            return ToolResult.fail(f"文件不存在: {path}")
+        content = Path(resolved).read_text(encoding="utf-8-sig")
+        return ToolResult.ok(content[:5000])
+    except Exception as e:
+        return ToolResult.fail(f"文本读取错误: {e!s}")
+
+
 @register_tool(
     name="document_reader",
-    description="读取文档内容。支持 PDF、DOCX、PPTX、XLSX 格式。输入文件路径。",
+    description="读取文档内容。支持 PDF、DOCX、PPTX、XLSX、TXT、MD 格式。输入文件路径。",
     schema={
         "type": "object",
         "properties": {
@@ -182,6 +196,8 @@ def document_reader(path: str) -> ToolResult:
         '.ppt': _read_pptx,
         '.xlsx': _read_xlsx,
         '.xls': _read_xlsx,
+        '.txt': _read_text,
+        '.md': _read_text,
     }
     reader = readers.get(ext)
     if not reader:

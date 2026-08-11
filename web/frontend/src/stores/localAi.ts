@@ -43,8 +43,11 @@ export const useLocalAiStore = defineStore('localAi', () => {
   const instancesById = ref<Record<string, ModelInstance>>({})
   const defaultStorage = ref('')
   const loading = ref(false)
+  const rescanning = ref(false)
   const error = ref<string | null>(null)
   let loadGeneration = 0
+  let deviceGeneration = 0
+  let modelGeneration = 0
   let listening = false
   let loadingUpdates = { devices: new Set<string>(), downloads: new Set<string>(), instances: new Set<string>() }
 
@@ -64,6 +67,18 @@ export const useLocalAiStore = defineStore('localAi', () => {
 
   function upsertInstance(instance: ModelInstance) {
     instancesById.value = { ...instancesById.value, [instance.id]: instance }
+  }
+
+  async function refreshModels() {
+    const generation = ++modelGeneration
+    error.value = null
+    try {
+      const nextModels = await localAiApi.loadModels()
+      if (generation === modelGeneration) modelsById.value = indexById(nextModels)
+    } catch (cause) {
+      if (generation === modelGeneration) error.value = cause instanceof Error ? cause.message : String(cause)
+      throw cause
+    }
   }
 
   function eventResource<T>(event: WsEvent, key: string): T | null {
@@ -87,6 +102,7 @@ export const useLocalAiStore = defineStore('localAi', () => {
     if (download) {
       if (loading.value) loadingUpdates.downloads.add(download.id)
       upsertDownload(download)
+      if (download.state === 'completed') void refreshModels().catch(() => undefined)
     }
   }
   const onInstanceUpdated = (event: LocalAiWsEvent) => {
@@ -99,6 +115,8 @@ export const useLocalAiStore = defineStore('localAi', () => {
 
   async function load() {
     const generation = ++loadGeneration
+    const currentDeviceGeneration = ++deviceGeneration
+    const currentModelGeneration = ++modelGeneration
     if (!loading.value) {
       loadingUpdates = { devices: new Set(), downloads: new Set(), instances: new Set() }
     }
@@ -114,9 +132,11 @@ export const useLocalAiStore = defineStore('localAi', () => {
         localAiApi.loadDefaultStorage(),
       ])
       if (generation !== loadGeneration) return
-      devicesById.value = reconcileSnapshot(nextDevices, devicesById.value, loadingUpdates.devices)
+      if (currentDeviceGeneration === deviceGeneration) {
+        devicesById.value = reconcileSnapshot(nextDevices, devicesById.value, loadingUpdates.devices)
+      }
       catalogById.value = indexById(nextCatalog)
-      modelsById.value = indexById(nextModels)
+      if (currentModelGeneration === modelGeneration) modelsById.value = indexById(nextModels)
       downloadsById.value = reconcileSnapshot(nextDownloads, downloadsById.value, loadingUpdates.downloads)
       instancesById.value = reconcileSnapshot(nextInstances, instancesById.value, loadingUpdates.instances)
       defaultStorage.value = storage.default_model_root
@@ -130,7 +150,14 @@ export const useLocalAiStore = defineStore('localAi', () => {
   }
 
   async function rescan() {
-    devicesById.value = indexById(await localAiApi.rescanDevices())
+    const generation = ++deviceGeneration
+    rescanning.value = true
+    try {
+      const nextDevices = await localAiApi.rescanDevices()
+      if (generation === deviceGeneration) devicesById.value = indexById(nextDevices)
+    } finally {
+      rescanning.value = false
+    }
   }
 
   async function download(request: DownloadRequest) {
@@ -191,9 +218,9 @@ export const useLocalAiStore = defineStore('localAi', () => {
 
   return {
     devicesById, catalogById, modelsById, downloadsById, instancesById,
-    devices, catalog, models, downloads, instances, defaultStorage, loading, error,
+    devices, catalog, models, downloads, instances, defaultStorage, loading, rescanning, error,
     load, rescan, download, pause, resume, cancel, start, stop, remove,
-    browseStorage, validateStorage, saveDefaultStorage,
+    refreshModels, browseStorage, validateStorage, saveDefaultStorage,
     createRequestId, upsertDevice, upsertDownload, upsertInstance, connectWebSocket, disconnectWebSocket,
   }
 })

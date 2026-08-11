@@ -881,6 +881,14 @@ def test_builtin_route_rejects_missing_runtime_client(service):
     assert provider_service.validate_route("mimo", "mimo-v2.5") == "unavailable"
 
 
+def test_builtin_route_accepts_configured_runtime_client(service):
+    provider_service, _, _, runtime = service
+    runtime._client = object()
+    runtime._is_client_configured = lambda provider: provider == "mimo"
+
+    assert provider_service.validate_route("mimo", "mimo-v2.5") is None
+
+
 def test_route_update_unknown_provider_returns_404(service, monkeypatch):
     provider_service, config, _, runtime = service
     app = FastAPI()

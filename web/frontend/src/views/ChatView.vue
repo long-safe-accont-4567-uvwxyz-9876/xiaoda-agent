@@ -3,6 +3,7 @@ import { ref, nextTick, watch, onMounted, onBeforeUnmount, onDeactivated, comput
 import type { Ref } from 'vue'
 import { NDrawer, NDrawerContent, NButton, NPopconfirm, useMessage } from 'naive-ui'
 import { useChatStore } from '../stores/chat'
+import type { ChatRequestSnapshot } from '../stores/chat'
 import { useAuthStore } from '../stores/auth'
 import { useUiStore } from '../stores/ui'
 import { api, exportSessionDownload } from '../api'
@@ -159,9 +160,14 @@ async function speak(msg: { content: string; audioUrl?: string }) {
 }
 
 function handleSend() {
-  const text = inputText.value.trim()
-  if (!text || chat.isProcessing) return
-  chat.sendMessage(text)
+  const request: ChatRequestSnapshot = {
+    text: inputText.value.trim(),
+    search: false,
+    think: false,
+    attachments: [],
+  }
+  const result = chat.sendMessage(request)
+  if (!result.ok) return
   inputText.value = ''
   // 发送特效：从输入框爆叶子
   const rect = promptInputRef.value?.textareaRef?.getBoundingClientRect()
@@ -169,15 +175,14 @@ function handleSend() {
   autoGrow()
 }
 
-function handlePromptSend(text: string, options: { search?: boolean; think?: boolean; imageUrl?: string; docPath?: string }) {
-  if (!text || chat.isProcessing) return
-  // P0 修复（Task 2.1）：按钮状态走结构化字段，不再嵌入 text 作为 marker
-  // 根因：原实现把 [Search:]/[Think:]/[Image:]/[Doc:] 嵌入 text，
-  //       导致 conversation_logs.user_message 出现 marker，污染历史记录。
-  //       后端解析 marker 后虽剥离，但 Fast path / 重试等路径可能保存原始 text。
-  // 修复：text 保持用户原话，按钮状态作为独立字段发送，后端直接使用结构化字段。
-  chat.sendMessage(text, options)
+function handlePromptSend(request: ChatRequestSnapshot) {
+  const result = chat.sendMessage(request)
+  if (!result.ok) {
+    if (result.reason === 'DISCONNECTED') message.warning(t('promptInput.disconnectedDraftKept'))
+    return
+  }
   inputText.value = ''
+  promptInputRef.value?.clearSubmittedDraft()
   // 发送特效
   const rect = promptInputRef.value?.textareaRef?.getBoundingClientRect()
   if (rect) particles?.value?.burst?.(rect.left + rect.width / 2, rect.top, 10)
@@ -247,10 +252,12 @@ async function copyText(text: string) {
   }
 }
 
-function resend(msg: { content: string; imageUrl?: string }) {
+function resend(msg: { id: string }) {
   if (chat.isProcessing) return
-  const imageUrl = msg.imageUrl
-  chat.sendMessage(msg.content, imageUrl ? { imageUrl } : undefined)
+  const result = chat.retryMessage(msg.id)
+  if (!result.ok && result.reason === 'DISCONNECTED') {
+    message.warning(t('promptInput.disconnectedDraftKept'))
+  }
 }
 
 function clearAll() {
@@ -391,6 +398,7 @@ const emotionColors: Record<string, string> = {
         ref="promptInputRef"
         v-model="inputText"
         :is-loading="chat.isProcessing"
+        :connected="chat.wsConnected"
         :placeholder="t('chatView.inputPlaceholder')"
         @send="handlePromptSend"
         @abort="chat.abort()"

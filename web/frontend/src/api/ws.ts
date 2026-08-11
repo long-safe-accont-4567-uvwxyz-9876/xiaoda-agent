@@ -53,6 +53,13 @@ export class WsClient {
     this.connect(token)
   }
 
+  retry(): boolean {
+    const token = localStorage.getItem('token')
+    if (!token) return false
+    this.connect(token)
+    return true
+  }
+
   // 仅建立连接，不触碰重连状态/计数：供 connect() 与后台重连复用。
   // 后台重连（scheduleReconnect）必须走这里而非 connect()——
   // connect() 会重置 _intentionalDisconnect/reconnectAttempts，导致
@@ -127,8 +134,12 @@ export class WsClient {
 
   send(data: Record<string, unknown>): boolean {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(data))
-      return true
+      try {
+        this.ws.send(JSON.stringify(data))
+        return true
+      } catch {
+        return false
+      }
     }
     return false
   }

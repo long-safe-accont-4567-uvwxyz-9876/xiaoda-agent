@@ -193,12 +193,19 @@ class ProviderService:
         record = self.config.get(f"models.providers.{provider_id}") or {}
         if not definition.builtin and not record.get("enabled", True):
             return "disabled"
-        if provider_id not in self._runtime_clients():
+        if not self._provider_ready(definition):
             return "unavailable"
         report = self._reports.get(provider_id)
         if report and report.models and model_id not in report.models:
             return "model"
         return None
+
+    def _provider_ready(self, definition: ProviderDefinition) -> bool:
+        if definition.builtin:
+            checker = getattr(self.runtime_router, "_is_client_configured", None)
+            if checker is not None:
+                return bool(checker(definition.id))
+        return definition.id in self._runtime_clients()
 
     async def _stage(self, definition: ProviderDefinition, credential: str) -> tuple[CapabilityReport, Any]:
         report = await self.test(self._record(definition), {"api_key": credential})

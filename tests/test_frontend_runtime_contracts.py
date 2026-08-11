@@ -14,6 +14,14 @@ def test_websocket_send_reports_delivery_failure():
     assert "return false" in ws
 
 
+def test_websocket_send_converts_transport_exceptions_to_failure():
+    ws = source("web/frontend/src/api/ws.ts")
+    send = ws[ws.index("send(data: Record<string, unknown>): boolean"):ws.index("  on(type:")]
+    assert "try {" in send
+    assert "catch" in send
+    assert send.index("this.ws.send") < send.index("catch") < send.rindex("return false")
+
+
 def test_chat_returns_structured_failure_before_mutating_messages():
     chat = source("web/frontend/src/stores/chat.ts")
     assert "export type ChatSendResult" in chat
